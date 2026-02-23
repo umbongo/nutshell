@@ -1,0 +1,11 @@
+# Compiled binary
+*.exe
+
+# Runtime configuration (may contain encrypted credentials)
+settings.ini
+
+# Session log files
+*.log
+
+# Claude Code project data
+.claude/
