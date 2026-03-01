@@ -6,15 +6,26 @@
 - [x] Interface overhaul (`interface1`) — all 7 tasks shipped, README updated, branch merged to main.
 - [x] Bug: Tooltip popup too small — switched to `TextWrapOff` so popup expands to content width.
 - [x] Bug: Tab indicator boxes inconsistent — both "L" badge and connection dot are now uniform 16×16 boxes.
-- [x] Feature: Session manager window (`session-manager`) — two-column window with profile list, CRUD, and connect.
+- [x] Feature: Session manager window (`session-manager`) — two-column window with profile list, CRUD, connect, merged to main.
 
 ---
 
-## Bug: Tab elements disjointed
+## Feature: Tab strip overhaul
+**Branch:** `tab-strip-overhaul`
 **Status:** Open
-**Context:** In the tab strip, the session name, "L" badge, and connection dot are laid out as separate loose elements. When multiple sessions are open it is hard to tell which indicators belong to which tab.
-**Root cause area:** `NewSessionTab` in `internal/ui/tab.go` — the HBox `[tabBtn, lBadge, indicator]` has no visible boundary separating one tab's elements from the next.
-**Acceptance:** Each tab's session name, "L" badge, and connection dot are visually grouped inside a single bordered or padded box, so each session's indicators are clearly associated with its name.
+
+### Prerequisites
+- Create and switch to branch `tab-strip-overhaul` before making any changes.
+- Use TDD: write a failing test first, then implement, then verify the test passes.
+- Update README.md development-status table and any affected docs after all tests pass.
+
+### Tasks
+- [ ] 1. Wrap each tab's session name, "L" badge, and connection dot inside a single bordered box so all three elements are visually grouped and clearly separated from neighbouring tabs.
+- [ ] 2. The "L" letter inside the logging badge must always be rendered in black (visible on both the active green and inactive grey backgrounds).
+- [ ] 3. Remove the right-click context menu from the tab strip entirely (no "Start Logging" / "Stop Logging" popup).
+- [ ] 4. Clicking the logging light ("L" badge) toggles logging on/off directly — active becomes inactive, inactive becomes active.
+- [ ] 5. Draw a separator line between the tab strip and the session output area.
+- [ ] 6. The left `<` and right `>` arrow buttons in the toolbar move focus to the previous/next session tab respectively.
 
 ---
 
@@ -36,26 +47,6 @@
 
 ---
 
-## Feature: Session manager window
-**Branch:** `session-manager`
-**Status:** Complete — awaiting merge to main.
-
-### Prerequisites
-- Create and switch to branch `session-manager` before making any changes.
-- Use TDD: write a failing test first, then implement, then verify the test passes.
-- Update README.md development-status table and any affected docs after all tests pass.
-
-### Tasks
-- [x] 1. Replace the `+` / connect dialog with a two-column session manager window (equal width columns).
-- [x] 2. Left column — scrollable list of all saved profiles; clicking a profile selects it.
-- [x] 3. Right column — "New connection" form: session name, hostname, port, username, password, key path.
-- [x] 4. "Connect" button — opens the selected saved profile **or** the filled-in new-connection form as a session tab.
-- [x] 5. "Save" button — persists a new or edited connection to the profile list in config; list refreshes immediately.
-- [x] 6. "Delete" button — removes the selected saved profile after confirmation; list refreshes immediately.
-- [x] 7. "Edit" button — populates the right-column form with the selected profile's details for modification.
-- [x] 8. Ensure profiles are persisted to `settings.ini` and survive application restart.
-
----
 
 ## Feature: Interface overhaul (branch `interface1`)
 **Branch:** `interface1` *(merged and deleted)*
