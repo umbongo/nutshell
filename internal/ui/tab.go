@@ -83,7 +83,7 @@ func NewSessionTab(profile config.Profile, cfg *config.Config, window fyne.Windo
 
 	// Stroke-only border rectangle; transparent fill so content shows through.
 	tabBorder := canvas.NewRectangle(color.Transparent)
-	tabBorder.StrokeColor = theme.DisabledColor()
+	tabBorder.StrokeColor = theme.ForegroundColor()
 	tabBorder.StrokeWidth = 1
 	tabBorder.CornerRadius = 4
 
