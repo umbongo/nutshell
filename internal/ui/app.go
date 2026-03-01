@@ -2,6 +2,8 @@ package ui
 
 import (
 	"conga.ssh/internal/config"
+	"log"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
@@ -142,8 +144,32 @@ func (a *App) openSession(profile config.Profile) {
 		}
 	}
 
+	rightClicker := newRightClickDetector(func(pos fyne.Position) {
+		logMenu := fyne.NewMenu(
+			"",
+			fyne.NewMenuItem("Start Logging", func() {
+				if err := tab.logger.Start(); err != nil {
+					log.Printf("failed to start logger: %v", err)
+				}
+			}),
+		)
+		if tab.logger != nil && tab.logger.IsEnabled() {
+			logMenu.Items[0].Label = "Stop Logging"
+			logMenu.Items[0].Action = func() {
+				tab.logger.Stop()
+			}
+		}
+
+		c := a.window.Canvas()
+		widget.NewPopUpMenu(logMenu, c).ShowAtPosition(pos)
+	})
+
+	// Append the right-click overlay to the existing tabContainer (which already
+	// holds the HBox visual layer and the tab button from NewSessionTab).
+	tab.tabContainer.(*fyne.Container).Add(rightClicker)
+
 	a.sessions = append(a.sessions, tab)
-	a.tabHBox.Add(tab.tabBtn)
+	a.tabHBox.Add(tab.tabContainer)
 	a.tabHBox.Refresh()
 	a.selectSessionByTab(tab)
 	tab.Connect()
@@ -190,7 +216,7 @@ func (a *App) removeSession(idx int) {
 		return
 	}
 	tab := a.sessions[idx]
-	a.tabHBox.Remove(tab.tabBtn)
+	a.tabHBox.Remove(tab.tabContainer)
 	a.tabHBox.Refresh()
 	a.sessions = append(a.sessions[:idx], a.sessions[idx+1:]...)
 

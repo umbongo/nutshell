@@ -10,8 +10,12 @@ import (
 )
 
 func TestExpandLogFormat_AllPlaceholders(t *testing.T) {
+	l := &SessionLogger{
+		logFormat: "{date}_{time}_{host}.log",
+		host:      "myserver",
+	}
 	ts := time.Date(2024, 3, 15, 9, 5, 7, 0, time.UTC)
-	got := expandLogFormat("{date}_{time}_{host}.log", "myserver", ts)
+	got := l.expandLogFormat(ts)
 	want := "2024-03-15_09-05-07_myserver.log"
 	if got != want {
 		t.Errorf("expandLogFormat = %q, want %q", got, want)
@@ -19,8 +23,12 @@ func TestExpandLogFormat_AllPlaceholders(t *testing.T) {
 }
 
 func TestExpandLogFormat_HostSanitised(t *testing.T) {
+	l := &SessionLogger{
+		logFormat: "{host}.log",
+		host:      "10.0.0.1:22",
+	}
 	ts := time.Now()
-	got := expandLogFormat("{host}.log", "10.0.0.1:22", ts)
+	got := l.expandLogFormat(ts)
 	if strings.Contains(got, ":") {
 		t.Errorf("expandLogFormat did not sanitise colon in host: %q", got)
 	}

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -18,10 +19,13 @@ type SessionConfig struct {
 	Password            string
 	KeyPath             string // path to private key file; used when AuthType is key
 	HostKeyVerification bool
+	KnownHostsPath      string                                                         // path to known_hosts file; required when HostKeyVerification is true
+	HostKeyChangedFn    func(host string, old, new ssh.PublicKey) bool                 // called when a stored host key has changed
 }
 
 // Session represents a single SSH connection and PTY session.
 type Session struct {
+	mu      sync.Mutex
 	config  SessionConfig
 	client  *ssh.Client
 	session *ssh.Session
@@ -51,11 +55,12 @@ func (s *Session) IsConnected() bool {
 // Returns an error if the connection or authentication fails.
 func (s *Session) Connect() error {
 	hostKeyCallback := ssh.InsecureIgnoreHostKey()
-	if s.config.HostKeyVerification {
-		// TOFU host key verification is handled at a higher level via known hosts.
-		// For now, use a permissive callback when verification is enabled
-		// until the known hosts manager is wired in (Phase 2).
-		hostKeyCallback = ssh.InsecureIgnoreHostKey()
+	if s.config.HostKeyVerification && s.config.KnownHostsPath != "" {
+		cb, err := TOFUCallback(s.config.KnownHostsPath, s.config.HostKeyChangedFn)
+		if err != nil {
+			return fmt.Errorf("host key verification setup: %w", err)
+		}
+		hostKeyCallback = cb
 	}
 
 	authMethods := []ssh.AuthMethod{
@@ -151,6 +156,8 @@ func (s *Session) StartPTY(termType string, width, height int) (*PTYPipes, error
 
 // ResizePTY sends a window resize signal to the remote PTY.
 func (s *Session) ResizePTY(width, height int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.session == nil {
 		return nil
 	}
@@ -159,6 +166,8 @@ func (s *Session) ResizePTY(width, height int) error {
 
 // Close cleanly terminates the SSH session and connection.
 func (s *Session) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.session != nil {
 		s.session.Close()
 		s.session = nil
@@ -168,4 +177,3 @@ func (s *Session) Close() {
 		s.client = nil
 	}
 }
-

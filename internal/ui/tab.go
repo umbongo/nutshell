@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"io"
 	"log"
 	"math"
@@ -9,13 +10,14 @@ import (
 
 	"conga.ssh/internal/config"
 	internalssh "conga.ssh/internal/ssh"
-	fyneterm "github.com/fyne-io/terminal"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-	"image/color"
+	fyneterm "github.com/fyne-io/terminal"
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // SessionTab manages a single SSH session and its terminal widget.
@@ -28,6 +30,8 @@ type SessionTab struct {
 	onContentChange func(fyne.CanvasObject) // called when content changes (e.g. error view)
 	onZoom          func(delta float32)     // called when Ctrl+Scroll detected; set by App
 	tabBtn          *widget.Button
+	tabContainer    fyne.CanvasObject
+	statusIndicator *canvas.Rectangle
 	scrollWrapper   *ctrlScrollWrapper
 	logger          *SessionLogger
 	window          fyne.Window
@@ -47,25 +51,63 @@ func NewSessionTab(profile config.Profile, cfg *config.Config, window fyne.Windo
 	t.Terminal = term
 	t.setupTerminal(term)
 
-	sessionCfg := internalssh.SessionConfig{
-		Host:                profile.Host,
-		Port:                profile.Port,
-		Username:            profile.Username,
-		Password:            profile.Password,
-		KeyPath:             profile.KeyPath,
-		HostKeyVerification: cfg.Settings.HostKeyVerification,
-	}
-	t.session = internalssh.NewSession(sessionCfg)
+	t.session = internalssh.NewSession(t.buildSessionConfig())
 
 	t.scrollWrapper = newCtrlScrollWrapper(func(delta float32) {
 		if t.onZoom != nil {
 			t.onZoom(delta)
 		}
 	})
-	t.content = container.NewStack(term, t.scrollWrapper)
-	t.tabBtn = widget.NewButton(tabLabel(profile), nil) // OnTapped set by App
+	scrollableTerm := container.NewVScroll(term)
+	t.content = container.NewStack(scrollableTerm, t.scrollWrapper)
+	indicator := canvas.NewRectangle(theme.WarningColor())
+	indicator.CornerRadius = 5
+	indicator.SetMinSize(fyne.NewSize(10, 10))
+	// The button carries the session name as its label; placing it in an HBox
+	// alongside the indicator avoids the "opaque button covers hidden label" problem
+	// that occurs when stacking an empty button on top of a separate label widget.
+	t.tabBtn = widget.NewButton(tabLabel(profile), nil)
+	t.tabBtn.Importance = widget.LowImportance
+	// The right-click overlay is appended by openSession once the detector is built.
+	t.tabContainer = container.NewStack(
+		container.NewHBox(indicator, t.tabBtn),
+	)
+	t.statusIndicator = indicator
 
 	return t
+}
+
+// buildSessionConfig constructs an internalssh.SessionConfig for this tab's profile,
+// including a TOFU host-key-changed dialog when host key verification is enabled.
+func (st *SessionTab) buildSessionConfig() internalssh.SessionConfig {
+	cfg := internalssh.SessionConfig{
+		Host:                st.Profile.Host,
+		Port:                st.Profile.Port,
+		Username:            st.Profile.Username,
+		Password:            st.Profile.Password,
+		KeyPath:             st.Profile.KeyPath,
+		HostKeyVerification: st.cfg.Settings.HostKeyVerification,
+		KnownHostsPath:      st.cfg.KnownHostsPath,
+	}
+	if st.cfg.Settings.HostKeyVerification {
+		win := st.window
+		cfg.HostKeyChangedFn = func(host string, old, new gossh.PublicKey) bool {
+			done := make(chan bool, 1)
+			fyne.Do(func() {
+				msg := fmt.Sprintf(
+					"The host key for %s has changed!\n\nStored fingerprint:\n  %s\n\nPresented fingerprint:\n  %s\n\nThis may indicate a security issue (man-in-the-middle attack). Accept the new key?",
+					host,
+					gossh.FingerprintSHA256(old),
+					gossh.FingerprintSHA256(new),
+				)
+				dialog.ShowConfirm("Host Key Changed", msg, func(ok bool) {
+					done <- ok
+				}, win)
+			})
+			return <-done
+		}
+	}
+	return cfg
 }
 
 // setupTerminal registers the ReadWriter configurator on the terminal widget.
@@ -112,13 +154,16 @@ func (st *SessionTab) connectAsync() {
 	stopResize := make(chan struct{})
 	go func() {
 		var lastCols, lastRows int
+		cell := canvas.NewText("M", color.White)
+		cell.TextStyle.Monospace = true
+
 		ticker := time.NewTicker(50 * time.Millisecond)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
 				size := st.Terminal.Size()
-				cols, rows := termDimensions(size)
+				cols, rows := termDimensions(size, cell)
 				if cols > 0 && rows > 0 && (cols != lastCols || rows != lastRows) {
 					lastCols, lastRows = cols, rows
 					_ = st.session.ResizePTY(cols, rows)
@@ -129,10 +174,12 @@ func (st *SessionTab) connectAsync() {
 		}
 	}()
 
+	st.SetStatus(theme.SuccessColor())
 	st.Terminal.RunWithConnection(pipes.Stdin, pipes.Stdout)
 	close(stopResize)
 
 	// Remote shell exited (e.g. user typed "exit") — close the tab.
+	st.SetStatus(theme.ErrorColor())
 	st.Close()
 	if st.onClose != nil {
 		st.onClose()
@@ -140,6 +187,7 @@ func (st *SessionTab) connectAsync() {
 }
 
 func (st *SessionTab) showError(msg string) {
+	st.SetStatus(theme.ErrorColor())
 	errLabel := widget.NewLabel(msg)
 	errLabel.Wrapping = fyne.TextWrapWord
 
@@ -153,16 +201,10 @@ func (st *SessionTab) showError(msg string) {
 		st.Terminal = newTerm
 		st.setupTerminal(newTerm)
 
-		newSession := internalssh.NewSession(internalssh.SessionConfig{
-			Host:                st.Profile.Host,
-			Port:                st.Profile.Port,
-			Username:            st.Profile.Username,
-			Password:            st.Profile.Password,
-			KeyPath:             st.Profile.KeyPath,
-			HostKeyVerification: st.cfg.Settings.HostKeyVerification,
-		})
+		newSession := internalssh.NewSession(st.buildSessionConfig())
 		st.session = newSession
-		st.setContent(container.NewStack(newTerm, st.scrollWrapper))
+		scrollableTerm := container.NewVScroll(newTerm)
+		st.setContent(container.NewStack(scrollableTerm, st.scrollWrapper))
 		go st.connectAsync()
 	})
 
@@ -186,6 +228,15 @@ func (st *SessionTab) setContent(c fyne.CanvasObject) {
 	if st.onContentChange != nil {
 		st.onContentChange(c)
 	}
+}
+
+// SetStatus updates the color of the tab's status indicator.
+func (st *SessionTab) SetStatus(c color.Color) {
+	if st.statusIndicator == nil {
+		return
+	}
+	st.statusIndicator.FillColor = c
+	st.statusIndicator.Refresh()
 }
 
 // Close terminates the SSH session and any active log file.
@@ -234,9 +285,7 @@ func (w *ctrlScrollWrapper) CreateRenderer() fyne.WidgetRenderer {
 
 // termDimensions calculates the terminal grid size (cols, rows) from a pixel size,
 // using the same formula as fyne-io/terminal's guessCellSize.
-func termDimensions(size fyne.Size) (cols, rows int) {
-	cell := canvas.NewText("M", color.White)
-	cell.TextStyle.Monospace = true
+func termDimensions(size fyne.Size, cell *canvas.Text) (cols, rows int) {
 	cs := cell.MinSize()
 	if cs.Width <= 0 || cs.Height <= 0 {
 		return 0, 0

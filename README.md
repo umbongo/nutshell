@@ -110,8 +110,8 @@ conga.ssh/
 | Phase | Status | Scope |
 |---|---|---|
 | Phase 1 | ✅ Complete | SSH connection, Fyne GUI shell, VT100 terminal, password auth |
-| Phase 2 | ✅ Complete | Session/profile management, encrypted storage, SSH key auth |
-| Phase 3 | Pending | Logging, paste enhancements, font/colour/scrollback settings |
+| Phase 2 | ✅ Complete | Session/profile management, encrypted storage, SSH key auth, TOFU host key verification |
+| Phase 3 | ✅ Complete | Logging, paste enhancements, font/colour/scrollback settings |
 | Phase 4 | Pending | Final integration testing, polish, release |
 
 See [PRD.md](PRD.md) for full requirements.

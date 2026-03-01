@@ -12,34 +12,79 @@ import (
 
 // SessionLogger writes terminal output to a log file, stripping ANSI escape sequences.
 type SessionLogger struct {
-	file    *os.File
-	enabled bool
+	file      *os.File
+	enabled   bool
+	logDir    string
+	logFormat string
+	host      string
+	stripper  *ansiStripper
 }
 
 // NewSessionLogger creates a SessionLogger. If enabled is false, all operations are no-ops.
 func NewSessionLogger(enabled bool, logDir, logFormat, host string) (*SessionLogger, error) {
-	if !enabled {
-		return &SessionLogger{enabled: false}, nil
+	l := &SessionLogger{
+		enabled:   false, // Start() will set this to true if enabled
+		logDir:    logDir,
+		logFormat: logFormat,
+		host:      host,
+		stripper:  &ansiStripper{},
 	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return nil, fmt.Errorf("creating log directory: %w", err)
+	if enabled {
+		if err := l.Start(); err != nil {
+			return nil, err
+		}
 	}
-	filename := expandLogFormat(logFormat, host, time.Now())
-	path := filepath.Join(logDir, filename)
+	return l, nil
+}
+
+// IsEnabled returns true if logging is currently active.
+func (l *SessionLogger) IsEnabled() bool {
+	if l == nil {
+		return false
+	}
+	return l.enabled
+}
+
+// Start opens the log file and starts writing to it.
+func (l *SessionLogger) Start() error {
+	if l.enabled {
+		return nil
+	}
+	if err := os.MkdirAll(l.logDir, 0755); err != nil {
+		return fmt.Errorf("creating log directory: %w", err)
+	}
+	filename := l.expandLogFormat(time.Now())
+	path := filepath.Join(l.logDir, filename)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("opening log file: %w", err)
+		return fmt.Errorf("opening log file: %w", err)
 	}
-	return &SessionLogger{file: f, enabled: true}, nil
+	l.file = f
+	l.stripper.setWriter(f)
+	l.enabled = true
+	return nil
+}
+
+// Stop closes the log file and stops writing.
+func (l *SessionLogger) Stop() {
+	if !l.enabled {
+		return
+	}
+	l.stripper.setWriter(nil)
+	if l.file != nil {
+		_ = l.file.Close()
+		l.file = nil
+	}
+	l.enabled = false
 }
 
 // WrapReader wraps r so that all bytes read are also tee'd (ANSI-stripped) to the log file.
 // Safe to call on a nil receiver; returns r unchanged if logging is disabled.
 func (l *SessionLogger) WrapReader(r io.Reader) io.Reader {
-	if l == nil || !l.enabled || l.file == nil {
+	if l == nil {
 		return r
 	}
-	return io.TeeReader(r, &ansiStripper{w: l.file})
+	return io.TeeReader(r, l.stripper)
 }
 
 // Close closes the underlying log file.
@@ -54,21 +99,21 @@ func (l *SessionLogger) Close() {
 }
 
 // expandLogFormat replaces {date}, {time}, {host} placeholders with actual values.
-func expandLogFormat(format, host string, t time.Time) string {
+func (l *SessionLogger) expandLogFormat(t time.Time) string {
 	r := strings.NewReplacer(
 		"{date}", t.Format("2006-01-02"),
 		"{time}", t.Format("15-04-05"),
-		"{host}", sanitiseFilename(host),
+		"{host}", l.sanitiseFilename(),
 	)
-	return r.Replace(format)
+	return r.Replace(l.logFormat)
 }
 
 // sanitiseFilename replaces characters unsafe in filenames with underscores.
-func sanitiseFilename(s string) string {
+func (l *SessionLogger) sanitiseFilename() string {
 	return strings.NewReplacer(
 		":", "_", "/", "_", "\\", "_", "*", "_",
 		"?", "_", "\"", "_", "<", "_", ">", "_", "|", "_",
-	).Replace(s)
+	).Replace(l.host)
 }
 
 // ansiEscapeRe matches ANSI/VT escape sequences and bare carriage returns.
@@ -80,6 +125,9 @@ type ansiStripper struct {
 }
 
 func (a *ansiStripper) Write(p []byte) (int, error) {
+	if a.w == nil {
+		return len(p), nil
+	}
 	cleaned := ansiEscapeRe.ReplaceAll(p, nil)
 	if len(cleaned) > 0 {
 		if _, err := a.w.Write(cleaned); err != nil {
@@ -88,4 +136,8 @@ func (a *ansiStripper) Write(p []byte) (int, error) {
 	}
 	// Return original length so TeeReader doesn't see a short write.
 	return len(p), nil
+}
+
+func (a *ansiStripper) setWriter(w io.Writer) {
+	a.w = w
 }

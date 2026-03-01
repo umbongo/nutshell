@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"conga.ssh/internal/crypto"
@@ -48,10 +49,11 @@ type Profile struct {
 
 // Config holds the full application configuration.
 type Config struct {
-	Settings Settings
-	path     string
-	file     *ini.File
-	key      []byte // AES-GCM key for encrypting passwords; nil means no encryption
+	Settings       Settings
+	KnownHostsPath string // path to the known_hosts file; derived from Settings path at load time
+	path           string
+	file           *ini.File
+	key            []byte // AES-GCM key for encrypting passwords; nil means no encryption
 }
 
 func newSettings() Settings {
@@ -73,9 +75,10 @@ func newSettings() Settings {
 // key is the AES-GCM encryption key used for profile passwords; pass nil to disable encryption.
 func Load(path string, key []byte) (*Config, error) {
 	cfg := &Config{
-		Settings: newSettings(),
-		path:     path,
-		key:      key,
+		Settings:       newSettings(),
+		KnownHostsPath: filepath.Join(filepath.Dir(path), "known_hosts"),
+		path:           path,
+		key:            key,
 	}
 
 	if _, err := os.Stat(path); os.IsNotExist(err) {
