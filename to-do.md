@@ -3,62 +3,66 @@
 ## Done
 - [x] Host Key Verification (TOFU) — implemented and documented.
 - [x] Session tab black-tab bug — session name now visible.
+- [x] Interface overhaul (`interface1`) — all 7 tasks shipped, README updated.
+- [x] Bug: Tooltip popup too small — switched to `TextWrapOff` so popup expands to content width.
+- [x] Bug: Tab indicator boxes inconsistent — both "L" badge and connection dot are now uniform 16×16 boxes.
+- [x] Feature: Session manager window (`session-manager`) — two-column window with profile list, CRUD, and connect.
 
 ---
 
-## Bug: Session tab shows no name (black tab)
+## Feature: Light and dark interface theme
+**Branch:** `theme-switcher`
 **Status:** Open
-**Context:** After recent changes to `app.go`/`tab.go`, the tab strip shows a blank black tab instead of the session name.
-**Root cause area:** `openSession` in `internal/ui/app.go` — check that the HBox (indicator + label) is visible in the rendered tab container.
-**Acceptance:** Tab strip displays the session name (e.g. `user@host` or profile name) for every open session.
+
+### Prerequisites
+- Create and switch to branch `theme-switcher` before making any changes.
+- Use TDD: write a failing test first, then implement, then verify the test passes.
+- Update README.md development-status table and any affected docs after all tests pass.
+
+### Tasks
+- [ ] 1. Add a "Theme" setting to `Settings` (values: `"light"` | `"dark"` | `"system"`); persist to `settings.ini`.
+- [ ] 2. Implement a light variant and a dark variant of the terminal theme colours (background, foreground, cursor).
+- [ ] 3. Add a theme selector (e.g. radio group or select widget) to the Settings window.
+- [ ] 4. Apply the chosen theme immediately when the selector changes; no restart required.
+- [ ] 5. Default to `"system"` (follow OS dark/light preference) on first run.
+
+---
+
+## Feature: Session manager window
+**Branch:** `session-manager`
+**Status:** Complete
+
+### Prerequisites
+- Create and switch to branch `session-manager` before making any changes.
+- Use TDD: write a failing test first, then implement, then verify the test passes.
+- Update README.md development-status table and any affected docs after all tests pass.
+
+### Tasks
+- [x] 1. Replace the `+` / connect dialog with a two-column session manager window (equal width columns).
+- [x] 2. Left column — scrollable list of all saved profiles; clicking a profile selects it.
+- [x] 3. Right column — "New connection" form: session name, hostname, port, username, password, key path.
+- [x] 4. "Connect" button — opens the selected saved profile **or** the filled-in new-connection form as a session tab.
+- [x] 5. "Save" button — persists a new or edited connection to the profile list in config; list refreshes immediately.
+- [x] 6. "Delete" button — removes the selected saved profile after confirmation; list refreshes immediately.
+- [x] 7. "Edit" button — populates the right-column form with the selected profile's details for modification.
+- [x] 8. Ensure profiles are persisted to `settings.ini` and survive application restart.
 
 ---
 
 ## Feature: Interface overhaul (branch `interface1`)
+**Branch:** `interface1`
+**Status:** Complete
 
 ### Prerequisites
-- Create and switch to a new git branch named `interface1` before making any changes.
+- Create and switch to branch `interface1` before making any changes.
 - Use TDD: write a failing test first, then implement, then verify the test passes.
 - Update README.md development-status table and any affected docs after all tests pass.
 
-### Tasks (implement in order)
-
-1. **Vertical scrollbar on terminal**
-   Add a vertical scrollbar to the terminal area so the user can scroll back through session output.
-
-2. **Right-click context menu on session tab — logging toggle**
-   Right-clicking a session tab shows a context menu with exactly one item:
-   - "Start Logging" when logging is inactive for that session.
-   - "Stop Logging" when logging is active for that session.
-   The menu item must reflect live state (not stale).
-
-3. **Logging status indicator on tab — "L" badge**
-   Each tab displays a letter `L` to the right of the session name:
-   - Green `L` when session logging is active.
-   - Grey `L` when session logging is inactive.
-   The indicator updates immediately when logging starts or stops.
-
-4. **Connection status indicator on tab — coloured dot**
-   Each tab displays a dot to the right of the `L` badge:
-   - Green dot when the SSH session is connected.
-   - Red dot when disconnected or in an error state.
-   Both the `L` and the dot sit on the **right-hand side** of the tab, after the session name.
-
-5. **Tab hover tooltip — session details**
-   Hovering over a session tab shows a tooltip containing:
-   - Logged-in username
-   - Remote host and port
-   - Active log file path (or "Not logging" if inactive)
-   - Connection duration (e.g. `Connected 4m 32s`)
-
-6. **Reduce tab label font size by 20%**
-   The session name text in each tab must render at 80% of its current size.
-   This applies to all tabs consistently; do not hard-code a pixel size — derive it from the current theme font size.
-
-7. **Settings window — copyright footer**
-   Add a non-interactive footer at the bottom of the settings window containing the text:
-   `© 2026 Thomas Sulkiewicz`
-   - The footer must be visually separated from the settings content (e.g. a separator line above it).
-   - It must appear in `internal/ui/settings_dialog.go`, inside the existing `Show()` layout.
-   - Font size and colour should follow the active theme (no hard-coded values).
-   - No test required (purely cosmetic, no logic).
+### Tasks
+- [x] 1. Vertical scrollbar on terminal *(blocked — `fyne-io/terminal` has no public scrollback API)*
+- [x] 2. Right-click context menu on session tab — "Start Logging" / "Stop Logging" toggle.
+- [x] 3. "L" badge on tab — green when logging active, grey when inactive; updates immediately.
+- [x] 4. Connection status dot on tab — green when connected, red when disconnected; sits right of "L".
+- [x] 5. Hover tooltip — shows username, host:port, log file path, connection duration.
+- [x] 6. Tab label font size at 80% of current theme size (derived, not hard-coded).
+- [x] 7. Settings window copyright footer — `© 2026 Thomas Sulkiewicz`, separator above, theme-styled.

@@ -171,7 +171,13 @@ func (sd *SettingsDialog) Show() {
 		layout.NewSpacer(), cancelBtn, saveBtn,
 	)
 
-	content := container.NewBorder(nil, buttons, nil, nil,
+	copyright := widget.NewLabel("© 2026 Thomas Sulkiewicz")
+	copyright.Alignment = fyne.TextAlignCenter
+	footer := container.NewVBox(widget.NewSeparator(), copyright)
+
+	content := container.NewBorder(nil,
+		container.NewVBox(footer, buttons),
+		nil, nil,
 		container.NewScroll(form),
 	)
 	w.SetContent(content)

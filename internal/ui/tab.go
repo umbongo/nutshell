@@ -29,13 +29,17 @@ type SessionTab struct {
 	onClose         func()
 	onContentChange func(fyne.CanvasObject) // called when content changes (e.g. error view)
 	onZoom          func(delta float32)     // called when Ctrl+Scroll detected; set by App
-	tabBtn          *widget.Button
+	tabBtn          *tabLabel
 	tabContainer    fyne.CanvasObject
 	statusIndicator *canvas.Rectangle
+	loggingLabel    *fyne.Container  // "L" badge container placed in the HBox
+	loggingBg       *canvas.Rectangle // coloured background of the "L" badge
 	scrollWrapper   *ctrlScrollWrapper
 	logger          *SessionLogger
 	window          fyne.Window
 	cfg             *config.Config
+	connectedAt     time.Time
+	connected       bool
 }
 
 // NewSessionTab creates a new tab for the given profile.
@@ -60,19 +64,34 @@ func NewSessionTab(profile config.Profile, cfg *config.Config, window fyne.Windo
 	})
 	scrollableTerm := container.NewVScroll(term)
 	t.content = container.NewStack(scrollableTerm, t.scrollWrapper)
+
+	// Both indicators share the same fixed size so they look visually uniform.
+	const indicatorSize = float32(16)
+
+	// Status dot — coloured square on the right of the tab.
 	indicator := canvas.NewRectangle(theme.WarningColor())
-	indicator.CornerRadius = 5
-	indicator.SetMinSize(fyne.NewSize(10, 10))
-	// The button carries the session name as its label; placing it in an HBox
-	// alongside the indicator avoids the "opaque button covers hidden label" problem
-	// that occurs when stacking an empty button on top of a separate label widget.
-	t.tabBtn = widget.NewButton(tabLabel(profile), nil)
-	t.tabBtn.Importance = widget.LowImportance
+	indicator.CornerRadius = 3
+	indicator.SetMinSize(fyne.NewSize(indicatorSize, indicatorSize))
+
+	// "L" badge — fixed-size box matching the connection dot, containing a centred "L".
+	lBg := canvas.NewRectangle(theme.DisabledColor())
+	lBg.CornerRadius = 3
+	lBg.SetMinSize(fyne.NewSize(indicatorSize, indicatorSize))
+	lTxt := canvas.NewText("L", theme.BackgroundColor())
+	lTxt.TextSize = 10
+	lTxt.Alignment = fyne.TextAlignCenter
+	lBadge := container.NewStack(lBg, container.NewCenter(lTxt))
+
+	// The tab button carries the session name. It is the leftmost element in the
+	// HBox so the L badge and status dot appear on the right of the session name.
+	t.tabBtn = newTabLabel(profileLabel(profile))
 	// The right-click overlay is appended by openSession once the detector is built.
 	t.tabContainer = container.NewStack(
-		container.NewHBox(indicator, t.tabBtn),
+		container.NewHBox(t.tabBtn, lBadge, indicator),
 	)
 	t.statusIndicator = indicator
+	t.loggingLabel = lBadge
+	t.loggingBg = lBg
 
 	return t
 }
@@ -175,10 +194,13 @@ func (st *SessionTab) connectAsync() {
 	}()
 
 	st.SetStatus(theme.SuccessColor())
+	st.connected = true
+	st.connectedAt = time.Now()
 	st.Terminal.RunWithConnection(pipes.Stdin, pipes.Stdout)
 	close(stopResize)
 
 	// Remote shell exited (e.g. user typed "exit") — close the tab.
+	st.connected = false
 	st.SetStatus(theme.ErrorColor())
 	st.Close()
 	if st.onClose != nil {
@@ -230,13 +252,41 @@ func (st *SessionTab) setContent(c fyne.CanvasObject) {
 	}
 }
 
-// SetStatus updates the color of the tab's status indicator.
+// SetStatus updates the color of the tab's connection status dot.
 func (st *SessionTab) SetStatus(c color.Color) {
 	if st.statusIndicator == nil {
 		return
 	}
 	st.statusIndicator.FillColor = c
 	st.statusIndicator.Refresh()
+}
+
+// SetLoggingState updates the "L" badge background colour to reflect logging state.
+// Green when active, grey when inactive.
+func (st *SessionTab) SetLoggingState(active bool) {
+	if st.loggingBg == nil {
+		return
+	}
+	if active {
+		st.loggingBg.FillColor = theme.SuccessColor()
+	} else {
+		st.loggingBg.FillColor = theme.DisabledColor()
+	}
+	st.loggingBg.Refresh()
+}
+
+// tooltipText returns the formatted tooltip string for the tab hover.
+func (st *SessionTab) tooltipText() string {
+	logPath := "Not logging"
+	if p := st.logger.LogPath(); p != "" {
+		logPath = p
+	}
+	duration := "Not connected"
+	if st.connected && !st.connectedAt.IsZero() {
+		duration = "Connected " + formatDuration(time.Since(st.connectedAt))
+	}
+	return fmt.Sprintf("User: %s\nHost: %s:%d\nLog: %s\n%s",
+		st.Profile.Username, st.Profile.Host, st.Profile.Port, logPath, duration)
 }
 
 // Close terminates the SSH session and any active log file.
@@ -247,12 +297,109 @@ func (st *SessionTab) Close() {
 	st.logger.Close()
 }
 
-func tabLabel(p config.Profile) string {
+func profileLabel(p config.Profile) string {
 	if p.Name != "" {
 		return p.Name
 	}
 	return fmt.Sprintf("%s@%s", p.Username, p.Host)
 }
+
+// formatDuration converts d to a human-readable string such as "4m 32s".
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	s := int(d.Seconds()) % 60
+	if h > 0 {
+		return fmt.Sprintf("%dh %dm %ds", h, m, s)
+	}
+	if m > 0 {
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	return fmt.Sprintf("%ds", s)
+}
+
+// ── tabLabel ─────────────────────────────────────────────────────────────────
+//
+// tabLabel is a lightweight clickable label that renders at 80 % of the theme
+// font size. It is used as the session-name button in the tab strip.
+
+type tabLabel struct {
+	widget.BaseWidget
+	Importance widget.ButtonImportance
+	OnTapped   func()
+	text       string
+}
+
+func newTabLabel(text string) *tabLabel {
+	l := &tabLabel{text: text, Importance: widget.LowImportance}
+	l.ExtendBaseWidget(l)
+	return l
+}
+
+// TextSize returns the label's font size: 80 % of the current theme text size.
+func (l *tabLabel) TextSize() float32 {
+	return theme.TextSize() * 0.8
+}
+
+func (l *tabLabel) Tapped(*fyne.PointEvent) {
+	if l.OnTapped != nil {
+		l.OnTapped()
+	}
+}
+
+func (l *tabLabel) CreateRenderer() fyne.WidgetRenderer {
+	txt := canvas.NewText(l.text, theme.ForegroundColor())
+	txt.TextSize = l.TextSize()
+	bg := canvas.NewRectangle(color.Transparent)
+	return &tabLabelRenderer{lbl: l, txt: txt, bg: bg}
+}
+
+type tabLabelRenderer struct {
+	lbl *tabLabel
+	txt *canvas.Text
+	bg  *canvas.Rectangle
+}
+
+func (r *tabLabelRenderer) Layout(size fyne.Size) {
+	r.bg.Move(fyne.NewPos(0, 0))
+	r.bg.Resize(size)
+	pad := theme.InnerPadding()
+	textH := r.txt.MinSize().Height
+	r.txt.Move(fyne.NewPos(pad, (size.Height-textH)/2))
+	r.txt.Resize(fyne.NewSize(size.Width-2*pad, textH))
+}
+
+func (r *tabLabelRenderer) MinSize() fyne.Size {
+	r.txt.Text = r.lbl.text
+	r.txt.TextSize = r.lbl.TextSize()
+	inner := r.txt.MinSize()
+	pad := theme.InnerPadding()
+	return fyne.NewSize(inner.Width+2*pad, inner.Height+pad)
+}
+
+func (r *tabLabelRenderer) Refresh() {
+	r.txt.Text = r.lbl.text
+	r.txt.TextSize = r.lbl.TextSize()
+	switch r.lbl.Importance {
+	case widget.HighImportance:
+		r.bg.FillColor = theme.PrimaryColor()
+		r.txt.Color = theme.BackgroundColor()
+	default:
+		r.bg.FillColor = color.Transparent
+		r.txt.Color = theme.ForegroundColor()
+	}
+	r.txt.Refresh()
+	r.bg.Refresh()
+}
+
+func (r *tabLabelRenderer) Destroy() {}
+
+func (r *tabLabelRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.bg, r.txt}
+}
+
+// ── ctrlScrollWrapper ─────────────────────────────────────────────────────────
 
 // ctrlScrollWrapper is a transparent, full-size overlay widget placed on top of the
 // terminal. It intercepts scroll events: Ctrl+Scroll zooms the font; plain scroll

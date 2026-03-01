@@ -121,10 +121,9 @@ func (a *App) registerShortcuts() {
 }
 
 func (a *App) openConnectDialog() {
-	d := NewConnectDialog(a.window, a.cfg, func(profile config.Profile) {
+	NewSessionManager(a.window, a.fyneApp, a.cfg, func(profile config.Profile) {
 		a.openSession(profile)
-	})
-	d.Show()
+	}).Show()
 }
 
 func (a *App) openSession(profile config.Profile) {
@@ -144,25 +143,32 @@ func (a *App) openSession(profile config.Profile) {
 		}
 	}
 
-	rightClicker := newRightClickDetector(func(pos fyne.Position) {
-		logMenu := fyne.NewMenu(
-			"",
-			fyne.NewMenuItem("Start Logging", func() {
-				if err := tab.logger.Start(); err != nil {
-					log.Printf("failed to start logger: %v", err)
+	rightClicker := newRightClickDetector(
+		func(pos fyne.Position) {
+			logMenu := fyne.NewMenu(
+				"",
+				fyne.NewMenuItem("Start Logging", func() {
+					if err := tab.logger.Start(); err != nil {
+						log.Printf("failed to start logger: %v", err)
+					} else {
+						tab.SetLoggingState(true)
+					}
+				}),
+			)
+			if tab.logger != nil && tab.logger.IsEnabled() {
+				logMenu.Items[0].Label = "Stop Logging"
+				logMenu.Items[0].Action = func() {
+					tab.logger.Stop()
+					tab.SetLoggingState(false)
 				}
-			}),
-		)
-		if tab.logger != nil && tab.logger.IsEnabled() {
-			logMenu.Items[0].Label = "Stop Logging"
-			logMenu.Items[0].Action = func() {
-				tab.logger.Stop()
 			}
-		}
 
-		c := a.window.Canvas()
-		widget.NewPopUpMenu(logMenu, c).ShowAtPosition(pos)
-	})
+			c := a.window.Canvas()
+			widget.NewPopUpMenu(logMenu, c).ShowAtPosition(pos)
+		},
+		func() string { return tab.tooltipText() },
+		a.window.Canvas(),
+	)
 
 	// Append the right-click overlay to the existing tabContainer (which already
 	// holds the HBox visual layer and the tab button from NewSessionTab).

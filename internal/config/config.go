@@ -122,6 +122,9 @@ func (c *Config) Save() error {
 
 // Profiles returns all saved connection profiles.
 func (c *Config) Profiles() []Profile {
+	if c.file == nil {
+		return nil
+	}
 	var profiles []Profile
 	for _, sec := range c.file.Sections() {
 		if !strings.HasPrefix(sec.Name(), "profile:") {
@@ -154,6 +157,9 @@ func (c *Config) Profiles() []Profile {
 // SaveProfile adds or updates a profile in the config. Call Save() to persist.
 // Passwords are encrypted with the machine key if one was provided at Load time.
 func (c *Config) SaveProfile(p Profile) {
+	if c.file == nil {
+		c.file = ini.Empty()
+	}
 	storedPassword := p.Password
 	if c.key != nil && p.Password != "" {
 		if enc, err := crypto.Encrypt(p.Password, c.key); err == nil {
@@ -174,6 +180,9 @@ func (c *Config) SaveProfile(p Profile) {
 
 // DeleteProfile removes a profile by name. Call Save() to persist.
 func (c *Config) DeleteProfile(name string) {
+	if c.file == nil {
+		return
+	}
 	c.file.DeleteSection("profile:" + name)
 }
 

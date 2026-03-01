@@ -87,6 +87,14 @@ func (l *SessionLogger) WrapReader(r io.Reader) io.Reader {
 	return io.TeeReader(r, l.stripper)
 }
 
+// LogPath returns the path of the active log file, or "" if not logging.
+func (l *SessionLogger) LogPath() string {
+	if l == nil || l.file == nil {
+		return ""
+	}
+	return l.file.Name()
+}
+
 // Close closes the underlying log file.
 func (l *SessionLogger) Close() {
 	if l == nil {
