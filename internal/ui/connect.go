@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	"conga.ssh/internal/config"
 	"fyne.io/fyne/v2"
@@ -54,7 +55,7 @@ func (sm *SessionManager) Show() {
 	mw.Resize(fyne.NewSize(720, 480))
 	mw.CenterOnScreen()
 
-	// ── Right column: connection form ────────────────────────────────────────
+	// ── Left column: new connection form ──────────────────────────────────────
 
 	nameEntry := widget.NewEntry()
 	nameEntry.SetPlaceHolder("Profile name")
@@ -106,7 +107,7 @@ func (sm *SessionManager) Show() {
 		)
 	}
 
-	// populateForm fills the right column from a saved profile.
+	// populateForm fills the left column form from a saved profile.
 	populateForm := func(p config.Profile) {
 		nameEntry.SetText(p.Name)
 		hostEntry.SetText(p.Host)
@@ -122,29 +123,75 @@ func (sm *SessionManager) Show() {
 		}
 	}
 
-	// ── Left column: saved profiles list ─────────────────────────────────────
+	// saveProfBtn is wired after refreshList is defined.
+	saveProfBtn := widget.NewButton("Save Profile", nil)
+
+	leftColContent := container.NewBorder(nil, saveProfBtn, nil, nil, container.NewScroll(form))
+	leftCard := widget.NewCard("New Connection", "", leftColContent)
+
+	// ── Right column: saved profiles list ─────────────────────────────────────
 
 	var profiles []config.Profile
 	selectedIdx := -1
+	var profileBtns []*widget.Button
+	profileVBox := container.NewVBox()
 
-	list := widget.NewList(
-		func() int { return len(profiles) },
-		func() fyne.CanvasObject { return widget.NewLabel("") },
-		func(id widget.ListItemID, obj fyne.CanvasObject) {
-			obj.(*widget.Label).SetText(profiles[id].Name)
-		},
-	)
+	// lastClick tracks timing for double-click detection across list rebuilds.
+	var lastClickTime time.Time
+	var lastClickIdx int = -1
 
-	refreshList := func() {
+	var refreshList func()
+
+	refreshList = func() {
 		profiles = sm.cfg.Profiles()
 		selectedIdx = -1
-		list.UnselectAll()
-		list.Refresh()
+		profileBtns = nil
+		profileVBox.Objects = nil
+
+		for i, p := range profiles {
+			idx := i
+			prof := p
+			btn := widget.NewButton(prof.Name, nil)
+			btn.Importance = widget.LowImportance
+			btn.Alignment = widget.ButtonAlignLeading
+			btn.OnTapped = func() {
+				now := time.Now()
+				if idx == lastClickIdx && now.Sub(lastClickTime) < 350*time.Millisecond {
+					// Double-click: connect immediately and close.
+					mw.Close()
+					sm.onConnect(prof)
+					return
+				}
+				lastClickTime = now
+				lastClickIdx = idx
+
+				// Single click: select and populate the connection form.
+				selectedIdx = idx
+				populateForm(prof)
+				for j, b := range profileBtns {
+					if j == idx {
+						b.Importance = widget.HighImportance
+					} else {
+						b.Importance = widget.LowImportance
+					}
+					b.Refresh()
+				}
+			}
+			profileBtns = append(profileBtns, btn)
+			profileVBox.Objects = append(profileVBox.Objects, btn)
+		}
+		profileVBox.Refresh()
 	}
 
-	list.OnSelected = func(id widget.ListItemID) {
-		selectedIdx = int(id)
-		populateForm(profiles[id])
+	saveProfBtn.OnTapped = func() {
+		p := buildProfile()
+		if p.Name == "" {
+			dialog.ShowInformation("Save Profile", "Please enter a profile name.", mw)
+			return
+		}
+		sm.cfg.SaveProfile(p)
+		_ = sm.cfg.Save()
+		refreshList()
 	}
 
 	editBtn := widget.NewButton("Edit", func() {
@@ -173,32 +220,13 @@ func (sm *SessionManager) Show() {
 
 	refreshList()
 
-	listTitle := widget.NewLabel("Saved Profiles")
-	listTitle.TextStyle.Bold = true
 	listActions := container.NewHBox(editBtn, deleteBtn)
-	leftCol := container.NewBorder(listTitle, listActions, nil, nil, list)
+	rightColContent := container.NewBorder(nil, listActions, nil, nil, container.NewVScroll(profileVBox))
+	rightCard := widget.NewCard("Saved Sessions", "", rightColContent)
 
-	// ── Right column layout ───────────────────────────────────────────────────
+	// ── Body: left = new connection, right = saved sessions ───────────────────
 
-	formTitle := widget.NewLabel("Connection Details")
-	formTitle.TextStyle.Bold = true
-
-	saveProfBtn := widget.NewButton("Save Profile", func() {
-		p := buildProfile()
-		if p.Name == "" {
-			dialog.ShowInformation("Save Profile", "Please enter a profile name.", mw)
-			return
-		}
-		sm.cfg.SaveProfile(p)
-		_ = sm.cfg.Save()
-		refreshList()
-	})
-
-	rightCol := container.NewBorder(formTitle, saveProfBtn, nil, nil, container.NewScroll(form))
-
-	// ── Body: two equal columns ───────────────────────────────────────────────
-
-	body := container.NewGridWithColumns(2, leftCol, rightCol)
+	body := container.NewGridWithColumns(2, leftCard, rightCard)
 
 	// ── Footer: Cancel + Connect ──────────────────────────────────────────────
 

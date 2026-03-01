@@ -3,10 +3,18 @@
 ## Done
 - [x] Host Key Verification (TOFU) — implemented and documented.
 - [x] Session tab black-tab bug — session name now visible.
-- [x] Interface overhaul (`interface1`) — all 7 tasks shipped, README updated.
+- [x] Interface overhaul (`interface1`) — all 7 tasks shipped, README updated, branch merged to main.
 - [x] Bug: Tooltip popup too small — switched to `TextWrapOff` so popup expands to content width.
 - [x] Bug: Tab indicator boxes inconsistent — both "L" badge and connection dot are now uniform 16×16 boxes.
 - [x] Feature: Session manager window (`session-manager`) — two-column window with profile list, CRUD, and connect.
+
+---
+
+## Bug: Tab elements disjointed
+**Status:** Open
+**Context:** In the tab strip, the session name, "L" badge, and connection dot are laid out as separate loose elements. When multiple sessions are open it is hard to tell which indicators belong to which tab.
+**Root cause area:** `NewSessionTab` in `internal/ui/tab.go` — the HBox `[tabBtn, lBadge, indicator]` has no visible boundary separating one tab's elements from the next.
+**Acceptance:** Each tab's session name, "L" badge, and connection dot are visually grouped inside a single bordered or padded box, so each session's indicators are clearly associated with its name.
 
 ---
 
@@ -20,7 +28,7 @@
 - Update README.md development-status table and any affected docs after all tests pass.
 
 ### Tasks
-- [ ] 1. Add a "Theme" setting to `Settings` (values: `"light"` | `"dark"` | `"system"`); persist to `settings.ini`.
+- [ ] 1. Add a `Theme` setting to `Settings` (values: `"light"` | `"dark"` | `"system"`); persist to `settings.ini`.
 - [ ] 2. Implement a light variant and a dark variant of the terminal theme colours (background, foreground, cursor).
 - [ ] 3. Add a theme selector (e.g. radio group or select widget) to the Settings window.
 - [ ] 4. Apply the chosen theme immediately when the selector changes; no restart required.
@@ -30,7 +38,7 @@
 
 ## Feature: Session manager window
 **Branch:** `session-manager`
-**Status:** Complete
+**Status:** Complete — awaiting merge to main.
 
 ### Prerequisites
 - Create and switch to branch `session-manager` before making any changes.
@@ -50,13 +58,8 @@
 ---
 
 ## Feature: Interface overhaul (branch `interface1`)
-**Branch:** `interface1`
+**Branch:** `interface1` *(merged and deleted)*
 **Status:** Complete
-
-### Prerequisites
-- Create and switch to branch `interface1` before making any changes.
-- Use TDD: write a failing test first, then implement, then verify the test passes.
-- Update README.md development-status table and any affected docs after all tests pass.
 
 ### Tasks
 - [x] 1. Vertical scrollbar on terminal *(blocked — `fyne-io/terminal` has no public scrollback API)*
