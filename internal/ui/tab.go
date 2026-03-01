@@ -31,9 +31,10 @@ type SessionTab struct {
 	onZoom          func(delta float32)     // called when Ctrl+Scroll detected; set by App
 	tabBtn          *tabLabel
 	tabContainer    fyne.CanvasObject
+	tabHBox         *fyne.Container   // inner HBox: [tabBtn, loggingLabel, statusIndicator]
+	tabBorder       *canvas.Rectangle // stroke-only border around the tab
 	statusIndicator *canvas.Rectangle
-	loggingLabel    *fyne.Container  // "L" badge container placed in the HBox
-	loggingBg       *canvas.Rectangle // coloured background of the "L" badge
+	loggingLabel    *loggingBadge // tappable "L" badge — wired by App
 	scrollWrapper   *ctrlScrollWrapper
 	logger          *SessionLogger
 	window          fyne.Window
@@ -65,33 +66,35 @@ func NewSessionTab(profile config.Profile, cfg *config.Config, window fyne.Windo
 	scrollableTerm := container.NewVScroll(term)
 	t.content = container.NewStack(scrollableTerm, t.scrollWrapper)
 
-	// Both indicators share the same fixed size so they look visually uniform.
 	const indicatorSize = float32(16)
 
-	// Status dot — coloured square on the right of the tab.
+	// Connection status dot — coloured square on the right of the tab.
 	indicator := canvas.NewRectangle(theme.WarningColor())
 	indicator.CornerRadius = 3
 	indicator.SetMinSize(fyne.NewSize(indicatorSize, indicatorSize))
 
-	// "L" badge — fixed-size box matching the connection dot, containing a centred "L".
-	lBg := canvas.NewRectangle(theme.DisabledColor())
-	lBg.CornerRadius = 3
-	lBg.SetMinSize(fyne.NewSize(indicatorSize, indicatorSize))
-	lTxt := canvas.NewText("L", theme.BackgroundColor())
-	lTxt.TextSize = 10
-	lTxt.Alignment = fyne.TextAlignCenter
-	lBadge := container.NewStack(lBg, container.NewCenter(lTxt))
+	// Logging badge — tappable; "L" is always black so it reads on any background.
+	lBadge := newLoggingBadge()
 
-	// The tab button carries the session name. It is the leftmost element in the
-	// HBox so the L badge and status dot appear on the right of the session name.
 	t.tabBtn = newTabLabel(profileLabel(profile))
-	// The right-click overlay is appended by openSession once the detector is built.
-	t.tabContainer = container.NewStack(
-		container.NewHBox(t.tabBtn, lBadge, indicator),
-	)
+
+	// Inner HBox: [session name] [L badge] [connection dot].
+	hbox := container.NewHBox(t.tabBtn, lBadge, indicator)
+
+	// Stroke-only border rectangle; transparent fill so content shows through.
+	tabBorder := canvas.NewRectangle(color.Transparent)
+	tabBorder.StrokeColor = theme.DisabledColor()
+	tabBorder.StrokeWidth = 1
+	tabBorder.CornerRadius = 4
+
+	// borderBox groups the visual layers; hover overlay is appended later by openSession.
+	borderBox := container.NewStack(tabBorder, container.NewPadded(hbox))
+	t.tabContainer = container.NewStack(borderBox)
+
 	t.statusIndicator = indicator
 	t.loggingLabel = lBadge
-	t.loggingBg = lBg
+	t.tabBorder = tabBorder
+	t.tabHBox = hbox
 
 	return t
 }
@@ -261,18 +264,12 @@ func (st *SessionTab) SetStatus(c color.Color) {
 	st.statusIndicator.Refresh()
 }
 
-// SetLoggingState updates the "L" badge background colour to reflect logging state.
-// Green when active, grey when inactive.
+// SetLoggingState updates the "L" badge to reflect the current logging state.
 func (st *SessionTab) SetLoggingState(active bool) {
-	if st.loggingBg == nil {
+	if st.loggingLabel == nil {
 		return
 	}
-	if active {
-		st.loggingBg.FillColor = theme.SuccessColor()
-	} else {
-		st.loggingBg.FillColor = theme.DisabledColor()
-	}
-	st.loggingBg.Refresh()
+	st.loggingLabel.SetActive(active)
 }
 
 // tooltipText returns the formatted tooltip string for the tab hover.
@@ -317,6 +314,57 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dm %ds", m, s)
 	}
 	return fmt.Sprintf("%ds", s)
+}
+
+// ── loggingBadge ─────────────────────────────────────────────────────────────
+//
+// loggingBadge is a tappable fixed-size square showing "L" in black on a
+// coloured background: green when active, grey when inactive.
+// OnTapped is wired by App.openSession to toggle the logger.
+
+type loggingBadge struct {
+	widget.BaseWidget
+	OnTapped func()
+	bg       *canvas.Rectangle
+	lTxt     *canvas.Text
+}
+
+const logBadgeSize = float32(16)
+
+func newLoggingBadge() *loggingBadge {
+	b := &loggingBadge{
+		bg:   canvas.NewRectangle(theme.DisabledColor()),
+		lTxt: canvas.NewText("L", color.Black),
+	}
+	b.bg.CornerRadius = 3
+	b.bg.SetMinSize(fyne.NewSize(logBadgeSize, logBadgeSize))
+	b.lTxt.TextSize = 10
+	b.lTxt.Alignment = fyne.TextAlignCenter
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *loggingBadge) Tapped(*fyne.PointEvent) {
+	if b.OnTapped != nil {
+		b.OnTapped()
+	}
+}
+
+// SetActive switches the background between success-green (active) and
+// disabled-grey (inactive). The "L" text colour is always black.
+func (b *loggingBadge) SetActive(active bool) {
+	if active {
+		b.bg.FillColor = theme.SuccessColor()
+	} else {
+		b.bg.FillColor = theme.DisabledColor()
+	}
+	b.bg.Refresh()
+}
+
+func (b *loggingBadge) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(
+		container.NewStack(b.bg, container.NewCenter(b.lTxt)),
+	)
 }
 
 // ── tabLabel ─────────────────────────────────────────────────────────────────

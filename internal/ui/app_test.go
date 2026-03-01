@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestApp builds a minimal App using the headless Fyne test driver so that
-// no real window or connect dialog is shown during tests.
 func newTestApp(cfg *config.Config) *App {
 	a := test.NewApp()
 	w := test.NewWindow(nil)
@@ -30,24 +28,45 @@ func newTestApp(cfg *config.Config) *App {
 }
 
 func TestApp_OpenSession_PreservesTabContainer(t *testing.T) {
-	cfg := &config.Config{}
-	app := newTestApp(cfg)
+	app := newTestApp(&config.Config{})
+	app.openSession(config.Profile{Name: "Test"})
 
-	profile := config.Profile{Name: "Test"}
-	app.openSession(profile)
-
-	require.Len(t, app.sessions, 1, "should have one session")
+	require.Len(t, app.sessions, 1)
 	tab := app.sessions[0]
 
 	stack, ok := tab.tabContainer.(*fyne.Container)
-	require.True(t, ok, "tab container should be a *fyne.Container")
+	require.True(t, ok, "tabContainer should be *fyne.Container")
 
-	// The stack should contain:
-	// 1. HBox with the status indicator and tab button (session name label)
-	// 2. The right-click detector overlay (added by openSession)
-	assert.Len(t, stack.Objects, 2, "stack should have two children")
-
-	// First child is the HBox container holding the indicator and labelled button.
+	// Stack: [0] border box, [1] hover overlay added by openSession.
+	assert.Len(t, stack.Objects, 2)
 	_, ok = stack.Objects[0].(*fyne.Container)
-	assert.True(t, ok, "first child should be the HBox container")
+	assert.True(t, ok, "first child should be the border container")
+}
+
+// Task 6: navigatePrev/navigateNext switch the active session.
+func TestApp_NavigatePrev_MovesToPreviousSession(t *testing.T) {
+	a := newTestApp(&config.Config{})
+	a.openSession(config.Profile{Name: "S1"})
+	a.openSession(config.Profile{Name: "S2"})
+	a.openSession(config.Profile{Name: "S3"})
+
+	a.selectSession(2)
+	a.navigatePrev()
+	assert.Equal(t, 1, a.activeIdx)
+	a.navigatePrev()
+	assert.Equal(t, 0, a.activeIdx)
+	a.navigatePrev() // already at first
+	assert.Equal(t, 0, a.activeIdx)
+}
+
+func TestApp_NavigateNext_MovesToNextSession(t *testing.T) {
+	a := newTestApp(&config.Config{})
+	a.openSession(config.Profile{Name: "S1"})
+	a.openSession(config.Profile{Name: "S2"})
+
+	a.selectSession(0)
+	a.navigateNext()
+	assert.Equal(t, 1, a.activeIdx)
+	a.navigateNext() // already at last
+	assert.Equal(t, 1, a.activeIdx)
 }

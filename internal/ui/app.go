@@ -12,7 +12,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-const tabScrollStep = float32(120)
 
 // App is the top-level application controller.
 type App struct {
@@ -65,19 +64,10 @@ func (a *App) buildUI() {
 	plusBtn := widget.NewButton("", func() { a.openConnectDialog() })
 	plusBtn.SetIcon(theme.ContentAddIcon())
 
-	leftArrow := widget.NewButton("", func() {
-		a.tabScroll.Offset.X -= tabScrollStep
-		if a.tabScroll.Offset.X < 0 {
-			a.tabScroll.Offset.X = 0
-		}
-		a.tabScroll.Refresh()
-	})
+	leftArrow := widget.NewButton("", func() { a.navigatePrev() })
 	leftArrow.SetIcon(theme.NavigateBackIcon())
 
-	rightArrow := widget.NewButton("", func() {
-		a.tabScroll.Offset.X += tabScrollStep
-		a.tabScroll.Refresh()
-	})
+	rightArrow := widget.NewButton("", func() { a.navigateNext() })
 	rightArrow.SetIcon(theme.NavigateNextIcon())
 
 	settingsBtn := widget.NewButton("", func() {
@@ -90,7 +80,9 @@ func (a *App) buildUI() {
 	rightSide := container.NewHBox(rightArrow, settingsBtn)
 	header := container.NewBorder(nil, nil, leftSide, rightSide, a.tabScroll)
 
-	content := container.NewBorder(header, nil, nil, nil, a.contentArea)
+	// Separator line between the tab strip and the session content area.
+	topSection := container.NewVBox(header, widget.NewSeparator())
+	content := container.NewBorder(topSection, nil, nil, nil, a.contentArea)
 	a.window.SetContent(content)
 
 	a.window.SetOnClosed(func() {
@@ -143,36 +135,29 @@ func (a *App) openSession(profile config.Profile) {
 		}
 	}
 
-	rightClicker := newRightClickDetector(
-		func(pos fyne.Position) {
-			logMenu := fyne.NewMenu(
-				"",
-				fyne.NewMenuItem("Start Logging", func() {
-					if err := tab.logger.Start(); err != nil {
-						log.Printf("failed to start logger: %v", err)
-					} else {
-						tab.SetLoggingState(true)
-					}
-				}),
-			)
-			if tab.logger != nil && tab.logger.IsEnabled() {
-				logMenu.Items[0].Label = "Stop Logging"
-				logMenu.Items[0].Action = func() {
-					tab.logger.Stop()
-					tab.SetLoggingState(false)
-				}
+	// Tapping the logging badge toggles logging on/off.
+	tab.loggingLabel.OnTapped = func() {
+		if tab.logger == nil {
+			return
+		}
+		if tab.logger.IsEnabled() {
+			tab.logger.Stop()
+			tab.SetLoggingState(false)
+		} else {
+			if err := tab.logger.Start(); err != nil {
+				log.Printf("failed to start logger: %v", err)
+			} else {
+				tab.SetLoggingState(true)
 			}
+		}
+	}
 
-			c := a.window.Canvas()
-			widget.NewPopUpMenu(logMenu, c).ShowAtPosition(pos)
-		},
+	// Hover overlay: shows tooltip; no right-click menu.
+	overlay := newTabHoverOverlay(
 		func() string { return tab.tooltipText() },
 		a.window.Canvas(),
 	)
-
-	// Append the right-click overlay to the existing tabContainer (which already
-	// holds the HBox visual layer and the tab button from NewSessionTab).
-	tab.tabContainer.(*fyne.Container).Add(rightClicker)
+	tab.tabContainer.(*fyne.Container).Add(overlay)
 
 	a.sessions = append(a.sessions, tab)
 	a.tabHBox.Add(tab.tabContainer)
@@ -214,6 +199,20 @@ func (a *App) removeSessionByTab(tab *SessionTab) {
 			a.removeSession(i)
 			return
 		}
+	}
+}
+
+// navigatePrev selects the session to the left of the current one.
+func (a *App) navigatePrev() {
+	if a.activeIdx > 0 {
+		a.selectSession(a.activeIdx - 1)
+	}
+}
+
+// navigateNext selects the session to the right of the current one.
+func (a *App) navigateNext() {
+	if a.activeIdx < len(a.sessions)-1 {
+		a.selectSession(a.activeIdx + 1)
 	}
 }
 

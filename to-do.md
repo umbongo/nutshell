@@ -7,25 +7,21 @@
 - [x] Bug: Tooltip popup too small — switched to `TextWrapOff` so popup expands to content width.
 - [x] Bug: Tab indicator boxes inconsistent — both "L" badge and connection dot are now uniform 16×16 boxes.
 - [x] Feature: Session manager window (`session-manager`) — two-column window with profile list, CRUD, connect, merged to main.
+- [x] Feature: Tab strip overhaul (`tab-strip-overhaul`) — bordered tabs, black L, click-to-toggle logging, separator, arrow-key session navigation.
 
 ---
 
 ## Feature: Tab strip overhaul
 **Branch:** `tab-strip-overhaul`
-**Status:** Open
-
-### Prerequisites
-- Create and switch to branch `tab-strip-overhaul` before making any changes.
-- Use TDD: write a failing test first, then implement, then verify the test passes.
-- Update README.md development-status table and any affected docs after all tests pass.
+**Status:** Complete — awaiting merge to main.
 
 ### Tasks
-- [ ] 1. Wrap each tab's session name, "L" badge, and connection dot inside a single bordered box so all three elements are visually grouped and clearly separated from neighbouring tabs.
-- [ ] 2. The "L" letter inside the logging badge must always be rendered in black (visible on both the active green and inactive grey backgrounds).
-- [ ] 3. Remove the right-click context menu from the tab strip entirely (no "Start Logging" / "Stop Logging" popup).
-- [ ] 4. Clicking the logging light ("L" badge) toggles logging on/off directly — active becomes inactive, inactive becomes active.
-- [ ] 5. Draw a separator line between the tab strip and the session output area.
-- [ ] 6. The left `<` and right `>` arrow buttons in the toolbar move focus to the previous/next session tab respectively.
+- [x] 1. Wrap each tab's session name, "L" badge, and connection dot inside a single bordered box.
+- [x] 2. The "L" letter inside the logging badge is always rendered in black.
+- [x] 3. Remove the right-click context menu from the tab strip entirely.
+- [x] 4. Clicking the logging light ("L" badge) toggles logging on/off directly.
+- [x] 5. Draw a separator line between the tab strip and the session output area.
+- [x] 6. The left `<` and right `>` arrow buttons move focus to the previous/next session tab.
 
 ---
 

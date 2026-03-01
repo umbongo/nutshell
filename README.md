@@ -8,7 +8,8 @@ A lightweight SSH terminal client for Windows 11, built with Go and Fyne. No adm
 - **VT100 terminal emulation** with colour support and 3000-line scrollback buffer
 - **Password and SSH key authentication** — password is the default, key auth available per profile
 - **Encrypted credential storage** — AES-GCM encryption with machine-derived keys
-- **Session logging** — toggle on/off via right-click tab menu; green "L" badge shows live logging state
+- **Session logging** — click the "L" badge on any tab to toggle logging on/off instantly; green = active, grey = inactive
+- **Tab strip** — each session grouped in a bordered box; separator line below the strip; `<`/`>` buttons navigate between sessions
 - **Tab status indicators** — colour-coded connection dot and hover tooltip (user, host, log path, connection duration)
 - **Smart paste** — confirmation dialog with optional per-line delay (default 350ms)
 - **Customisable appearance** — font, font size, foreground/background colours with presets and colour picker
@@ -114,6 +115,7 @@ conga.ssh/
 | Phase 2 | ✅ Complete | Session/profile management, encrypted storage, SSH key auth, TOFU host key verification |
 | Phase 3 | ✅ Complete | Logging, paste enhancements, font/colour/scrollback settings |
 | Phase 4 | ✅ Complete | Tab UI overhaul: L badge, connection dot, hover tooltip, 80% tab font, settings footer |
+| Phase 5 | ✅ Complete | Session manager window; tab strip overhaul: bordered tabs, black L, click-to-toggle logging, separator, session navigation |
 
 See [PRD.md](PRD.md) for full requirements.
 

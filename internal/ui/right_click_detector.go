@@ -9,35 +9,25 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-type rightClickDetector struct {
+// tabHoverOverlay is a transparent full-size overlay placed over each tab.
+// It shows a tooltip popup on hover; right-click is intentionally not handled.
+type tabHoverOverlay struct {
 	widget.BaseWidget
-	onRightTapped func(pos fyne.Position)
-	tooltipFn     func() string
-	canvas        fyne.Canvas
-	popup         *widget.PopUp
+	tooltipFn func() string
+	canvas    fyne.Canvas
+	popup     *widget.PopUp
 }
 
-func newRightClickDetector(
-	onRightTapped func(pos fyne.Position),
-	tooltipFn func() string,
-	c fyne.Canvas,
-) *rightClickDetector {
-	d := &rightClickDetector{
-		onRightTapped: onRightTapped,
-		tooltipFn:     tooltipFn,
-		canvas:        c,
+func newTabHoverOverlay(tooltipFn func() string, c fyne.Canvas) *tabHoverOverlay {
+	d := &tabHoverOverlay{
+		tooltipFn: tooltipFn,
+		canvas:    c,
 	}
 	d.ExtendBaseWidget(d)
 	return d
 }
 
-func (d *rightClickDetector) TappedSecondary(p *fyne.PointEvent) {
-	if d.onRightTapped != nil {
-		d.onRightTapped(p.AbsolutePosition)
-	}
-}
-
-func (d *rightClickDetector) MouseIn(ev *desktop.MouseEvent) {
+func (d *tabHoverOverlay) MouseIn(ev *desktop.MouseEvent) {
 	if d.tooltipFn == nil || d.canvas == nil {
 		return
 	}
@@ -47,16 +37,16 @@ func (d *rightClickDetector) MouseIn(ev *desktop.MouseEvent) {
 	d.popup.ShowAtPosition(ev.AbsolutePosition)
 }
 
-func (d *rightClickDetector) MouseMoved(*desktop.MouseEvent) {}
+func (d *tabHoverOverlay) MouseMoved(*desktop.MouseEvent) {}
 
-func (d *rightClickDetector) MouseOut() {
+func (d *tabHoverOverlay) MouseOut() {
 	if d.popup != nil {
 		d.popup.Hide()
 		d.popup = nil
 	}
 }
 
-func (d *rightClickDetector) CreateRenderer() fyne.WidgetRenderer {
+func (d *tabHoverOverlay) CreateRenderer() fyne.WidgetRenderer {
 	r := &canvas.Rectangle{FillColor: color.Transparent}
 	return widget.NewSimpleRenderer(r)
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image/color"
 	"testing"
 
 	"conga.ssh/internal/config"
@@ -27,74 +28,82 @@ func newTestSessionTab(t *testing.T) (*SessionTab, fyne.Window) {
 
 func TestNewSessionTab(t *testing.T) {
 	tab, _ := newTestSessionTab(t)
-
-	assert.NotNil(t, tab.tabContainer, "tab container should not be nil")
-	assert.NotNil(t, tab.tabBtn, "tab button should not be nil")
-	assert.NotNil(t, tab.statusIndicator, "status indicator should not be nil")
+	assert.NotNil(t, tab.tabContainer)
+	assert.NotNil(t, tab.tabBtn)
+	assert.NotNil(t, tab.statusIndicator)
 }
 
-// Task 3: L badge field exists and is initialised.
+// Task 1: Tab container exposes a border rectangle with a visible stroke.
+func TestSessionTab_TabHasBorder(t *testing.T) {
+	tab, _ := newTestSessionTab(t)
+	require.NotNil(t, tab.tabBorder)
+	assert.Greater(t, tab.tabBorder.StrokeWidth, float32(0))
+}
+
+// Task 2: "L" text is always black regardless of logging state.
+func TestSessionTab_LoggingBadgeLabelIsBlack(t *testing.T) {
+	tab, _ := newTestSessionTab(t)
+	tab.SetLoggingState(false)
+	assert.Equal(t, color.Black, tab.loggingLabel.lTxt.Color)
+	tab.SetLoggingState(true)
+	assert.Equal(t, color.Black, tab.loggingLabel.lTxt.Color)
+}
+
+// Task 3/4: loggingLabel exists and implements fyne.Tappable.
 func TestNewSessionTab_HasLoggingLabel(t *testing.T) {
 	tab, _ := newTestSessionTab(t)
-	assert.NotNil(t, tab.loggingLabel, "loggingLabel should not be nil")
+	assert.NotNil(t, tab.loggingLabel)
 }
 
-// Task 3: SetLoggingState changes the badge background colour.
+func TestSessionTab_LoggingBadgeIsTappable(t *testing.T) {
+	tab, _ := newTestSessionTab(t)
+	var obj fyne.CanvasObject = tab.loggingLabel
+	_, ok := obj.(fyne.Tappable)
+	assert.True(t, ok)
+}
+
+// SetLoggingState changes the badge background colour.
 func TestSessionTab_SetLoggingState_UpdatesColor(t *testing.T) {
 	tab, _ := newTestSessionTab(t)
-
 	tab.SetLoggingState(true)
-	assert.Equal(t, theme.SuccessColor(), tab.loggingBg.FillColor,
-		"active logging should be green")
-
+	assert.Equal(t, theme.SuccessColor(), tab.loggingLabel.bg.FillColor)
 	tab.SetLoggingState(false)
-	assert.Equal(t, theme.DisabledColor(), tab.loggingBg.FillColor,
-		"inactive logging should be grey")
+	assert.Equal(t, theme.DisabledColor(), tab.loggingLabel.bg.FillColor)
 }
 
-// Task 3+4: HBox is [tabBtn, loggingBadge, statusIndicator].
+// HBox order: [tabBtn, loggingBadge, statusIndicator].
 func TestSessionTab_TabHBoxOrder(t *testing.T) {
 	tab, _ := newTestSessionTab(t)
 
-	c, ok := tab.tabContainer.(*fyne.Container)
-	require.True(t, ok, "tabContainer should be a *fyne.Container")
+	_, ok := tab.tabContainer.(*fyne.Container)
+	require.True(t, ok)
+	require.NotNil(t, tab.tabHBox)
+	require.Len(t, tab.tabHBox.Objects, 3)
 
-	hbox, ok := c.Objects[0].(*fyne.Container)
-	require.True(t, ok, "first child of tabContainer should be the HBox *fyne.Container")
-	require.Len(t, hbox.Objects, 3, "HBox should have 3 children: tabBtn, loggingBadge, statusIndicator")
-
-	assert.Equal(t, tab.tabBtn, hbox.Objects[0], "first HBox item should be tabBtn")
-	// Second item is the L badge container.
-	_, ok = hbox.Objects[1].(*fyne.Container)
-	assert.True(t, ok, "second HBox item should be the logging badge *fyne.Container")
-	assert.Equal(t, tab.statusIndicator, hbox.Objects[2], "third HBox item should be statusIndicator")
+	assert.Equal(t, tab.tabBtn, tab.tabHBox.Objects[0])
+	_, ok = tab.tabHBox.Objects[1].(*loggingBadge)
+	assert.True(t, ok, "second HBox item should be *loggingBadge")
+	assert.Equal(t, tab.statusIndicator, tab.tabHBox.Objects[2])
 }
 
-// Task 6: tabLabel renders text at 80 % of the theme font size.
+// tabLabel renders text at 80% of theme font size.
 func TestTabLabel_TextSizeIsEightyPercent(t *testing.T) {
 	test.NewApp()
 	lbl := newTabLabel("hello")
-	expected := theme.TextSize() * 0.8
-	assert.InDelta(t, float64(expected), float64(lbl.TextSize()), 0.01,
-		"tab label text size should be 80%% of the theme size")
+	assert.InDelta(t, float64(theme.TextSize()*0.8), float64(lbl.TextSize()), 0.01)
 }
 
-// Task 5: tooltipText contains the expected fields.
+// tooltipText contains expected fields.
 func TestSessionTab_TooltipText(t *testing.T) {
 	test.NewApp()
 	w := test.NewWindow(nil)
 	defer w.Close()
-	profile := config.Profile{
-		Name:     "Test",
-		Username: "alice",
-		Host:     "example.com",
-		Port:     2222,
-	}
-	tab := NewSessionTab(profile, &config.Config{}, w, func() {})
-
+	tab := NewSessionTab(config.Profile{
+		Name: "Test", Username: "alice", Host: "example.com", Port: 2222,
+	}, &config.Config{}, w, func() {})
 	text := tab.tooltipText()
-	assert.Contains(t, text, "alice", "tooltip should contain username")
-	assert.Contains(t, text, "example.com", "tooltip should contain host")
-	assert.Contains(t, text, "2222", "tooltip should contain port")
-	assert.Contains(t, text, "Not logging", "tooltip should indicate no active log")
+	assert.Contains(t, text, "alice")
+	assert.Contains(t, text, "example.com")
+	assert.Contains(t, text, "2222")
+	assert.Contains(t, text, "Not logging")
 }
