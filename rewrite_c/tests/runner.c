@@ -98,6 +98,18 @@ int test_config_save_null(void);
 /* test_session_manager.c */
 int test_profile_struct(void);
 
+/* test_settings.c */
+int test_settings_validate_defaults(void);
+int test_settings_validate_font_size_low(void);
+int test_settings_validate_font_size_high(void);
+int test_settings_validate_scrollback_low(void);
+int test_settings_validate_scrollback_high(void);
+int test_settings_validate_paste_delay_neg(void);
+int test_settings_validate_paste_delay_high(void);
+int test_settings_validate_empty_font(void);
+int test_settings_validate_null(void);
+int test_settings_validate_via_load(void);
+
 /* test_crypto.c */
 int test_crypto_roundtrip_basic(void);
 int test_crypto_roundtrip_empty(void);
@@ -268,6 +280,18 @@ int main(void) {
 
     /* Session Manager */
     failed += test_profile_struct();
+
+    /* Settings Validation */
+    failed += test_settings_validate_defaults();
+    failed += test_settings_validate_font_size_low();
+    failed += test_settings_validate_font_size_high();
+    failed += test_settings_validate_scrollback_low();
+    failed += test_settings_validate_scrollback_high();
+    failed += test_settings_validate_paste_delay_neg();
+    failed += test_settings_validate_paste_delay_high();
+    failed += test_settings_validate_empty_font();
+    failed += test_settings_validate_null();
+    failed += test_settings_validate_via_load();
 
     printf("\n--- Crypto ---\n");
     failed += test_crypto_roundtrip_basic();
