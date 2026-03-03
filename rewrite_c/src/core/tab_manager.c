@@ -1,0 +1,91 @@
+#include "tab_manager.h"
+#include <string.h>
+#include <stdio.h>
+
+void tabmgr_init(TabManager *m)
+{
+    memset(m, 0, sizeof(TabManager));
+    m->active_index = -1;
+    m->next_id      = 1;
+}
+
+int tabmgr_add(TabManager *m, const char *title, void *user_data)
+{
+    if (m->count >= TABS_MAX) return -1;
+    int idx = m->count++;
+    snprintf(m->tabs[idx].title, sizeof(m->tabs[idx].title), "%s",
+             title ? title : "");
+    m->tabs[idx].user_data = user_data;
+    m->tabs[idx].status    = TAB_IDLE;
+    m->tabs[idx].id        = m->next_id++;
+    if (m->active_index < 0) m->active_index = 0;
+    return idx;
+}
+
+void tabmgr_remove(TabManager *m, int index)
+{
+    if (index < 0 || index >= m->count) return;
+
+    for (int i = index; i < m->count - 1; i++) {
+        m->tabs[i] = m->tabs[i + 1];
+    }
+    m->count--;
+
+    if (m->count == 0) {
+        m->active_index = -1;
+    } else if (m->active_index >= m->count) {
+        m->active_index = m->count - 1;
+    } else if (m->active_index == index) {
+        /* Closed tab was active: prefer the previous one */
+        if (m->active_index > 0) m->active_index--;
+        /* else stay at 0 — the old tab[1] is now tab[0] */
+    }
+}
+
+void tabmgr_set_active(TabManager *m, int index)
+{
+    if (index < 0 || index >= m->count) return;
+    m->active_index = index;
+}
+
+int tabmgr_get_active(const TabManager *m)
+{
+    return m->active_index;
+}
+
+void *tabmgr_get_user_data(const TabManager *m, int index)
+{
+    if (index < 0 || index >= m->count) return NULL;
+    return m->tabs[index].user_data;
+}
+
+void tabmgr_set_status(TabManager *m, int index, TabStatus status)
+{
+    if (index < 0 || index >= m->count) return;
+    m->tabs[index].status = status;
+}
+
+TabStatus tabmgr_get_status(const TabManager *m, int index)
+{
+    if (index < 0 || index >= m->count) return TAB_IDLE;
+    return m->tabs[index].status;
+}
+
+int tabmgr_count(const TabManager *m)
+{
+    return m->count;
+}
+
+int tabmgr_get_id(const TabManager *m, int index)
+{
+    if (index < 0 || index >= m->count) return -1;
+    return m->tabs[index].id;
+}
+
+int tabmgr_find(const TabManager *m, void *user_data)
+{
+    for (int i = 0; i < m->count; i++) {
+        if (m->tabs[i].user_data == user_data) return i;
+    }
+    return -1;
+}

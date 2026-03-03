@@ -105,6 +105,22 @@ int test_config_save_null(void);
 /* test_session_manager.c */
 int test_profile_struct(void);
 
+/* test_tabs.c */
+int test_tabmgr_init(void);
+int test_tabmgr_add_first(void);
+int test_tabmgr_add_multiple(void);
+int test_tabmgr_switch(void);
+int test_tabmgr_remove_middle(void);
+int test_tabmgr_remove_last_tab(void);
+int test_tabmgr_switch_invalid(void);
+int test_tabmgr_remove_invalid(void);
+int test_tabmgr_active_no_tabs(void);
+int test_tabmgr_max_capacity(void);
+int test_tabmgr_close_active_tab(void);
+int test_tabmgr_reopen_no_id_collision(void);
+int test_tabmgr_status_independence(void);
+int test_tabmgr_find(void);
+
 /* test_settings.c */
 int test_settings_validate_defaults(void);
 int test_settings_validate_font_size_low(void);
@@ -294,6 +310,22 @@ int main(void) {
 
     /* Session Manager */
     failed += test_profile_struct();
+
+    /* Tab Manager */
+    failed += test_tabmgr_init();
+    failed += test_tabmgr_add_first();
+    failed += test_tabmgr_add_multiple();
+    failed += test_tabmgr_switch();
+    failed += test_tabmgr_remove_middle();
+    failed += test_tabmgr_remove_last_tab();
+    failed += test_tabmgr_switch_invalid();
+    failed += test_tabmgr_remove_invalid();
+    failed += test_tabmgr_active_no_tabs();
+    failed += test_tabmgr_max_capacity();
+    failed += test_tabmgr_close_active_tab();
+    failed += test_tabmgr_reopen_no_id_collision();
+    failed += test_tabmgr_status_independence();
+    failed += test_tabmgr_find();
 
     /* Settings Validation */
     failed += test_settings_validate_defaults();

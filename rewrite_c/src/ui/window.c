@@ -287,7 +287,7 @@ static void on_session_connect(const Profile *info) {
     int term_w = rc.right;
     int term_h = rc.bottom - TAB_HEIGHT;
     if (term_h < 1) term_h = 1;
-    
+
     int cols = 80;
     int rows = 24;
     if (g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
@@ -296,17 +296,18 @@ static void on_session_connect(const Profile *info) {
     }
 
     char msg[512];
-    snprintf(msg, sizeof(msg), "Connecting to %s@%s:%d...\r\n", 
-             info->username[0] ? info->username : "user", 
-             info->host[0] ? info->host : "localhost", 
+    snprintf(msg, sizeof(msg), "Connecting to %s@%s:%d...\r\n",
+             info->username[0] ? info->username : "user",
+             info->host[0] ? info->host : "localhost",
              info->port);
 
     Session *s = create_session(rows, cols, msg);
     char title[32];
     snprintf(title, sizeof(title), "%s", info->name[0] ? info->name : (info->host[0] ? info->host : "Session"));
-    
+
     int idx = tabs_add(g_hwndTabs, title, s);
     tabs_set_active(g_hwndTabs, idx);
+    tabs_set_status(g_hwndTabs, idx, TAB_CONNECTING);
 
     /* Initiate Connection */
     s->ssh = ssh_session_new();
@@ -314,6 +315,7 @@ static void on_session_connect(const Profile *info) {
         char err[512];
         snprintf(err, sizeof(err), "Connection failed: %s\r\n", s->ssh->last_error);
         term_process(s->term, err, strlen(err));
+        tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
         return;
     }
 
@@ -401,6 +403,7 @@ static void on_session_connect(const Profile *info) {
 
     if (auth_rc != 0) {
         term_process(s->term, "Authentication failed.\r\n", 24);
+        tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
         return;
     }
 
@@ -411,6 +414,9 @@ static void on_session_connect(const Profile *info) {
         ssh_session_set_blocking(s->ssh, false); /* Non-blocking for I/O loop */
         term_process(s->term, "Connected.\r\n", 12);
         s->session_log = open_session_log(info->host);
+        tabs_set_status(g_hwndTabs, idx, TAB_CONNECTED);
+    } else {
+        tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
     }
 }
 
@@ -605,6 +611,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             term_process(s->term, "\r\n[Connection Closed]\r\n", 23);
                             ssh_channel_free(s->channel);
                             s->channel = NULL;
+                            int tidx = tabs_find(g_hwndTabs, s);
+                            if (tidx >= 0)
+                                tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
                             InvalidateRect(hwnd, NULL, FALSE);
                         }
                     }
@@ -684,6 +693,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_KEYDOWN: {
+            /* Ctrl+T — new tab */
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == (WPARAM)'T') {
+                on_tab_new();
+                return 0;
+            }
             /* Ctrl+V — paste with confirmation */
             if ((GetKeyState(VK_CONTROL) & 0x8000) &&
                 (wParam == (WPARAM)'V' || wParam == (WPARAM)0x56)) {
