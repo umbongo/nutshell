@@ -313,8 +313,12 @@ static void on_session_connect(const Profile *info) {
     s->ssh = ssh_session_new();
     if (ssh_connect(s->ssh, info->host, info->port) != 0) {
         char err[512];
-        snprintf(err, sizeof(err), "Connection failed: %s\r\n", s->ssh->last_error);
+        snprintf(err, sizeof(err), "Cannot connect to %s:%d\n\n%s",
+                 info->host, info->port, s->ssh->last_error);
         term_process(s->term, err, strlen(err));
+        term_process(s->term, "\r\n", 2);
+        MessageBoxA(GetParent(g_hwndTabs), err,
+                    "Connection Error", MB_OK | MB_ICONERROR);
         tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
         return;
     }
@@ -402,7 +406,14 @@ static void on_session_connect(const Profile *info) {
     }
 
     if (auth_rc != 0) {
-        term_process(s->term, "Authentication failed.\r\n", 24);
+        char auth_err[256];
+        snprintf(auth_err, sizeof(auth_err),
+                 "Authentication failed for %s@%s.",
+                 info->username, info->host);
+        term_process(s->term, auth_err, strlen(auth_err));
+        term_process(s->term, "\r\n", 2);
+        MessageBoxA(GetParent(g_hwndTabs), auth_err,
+                    "Authentication Error", MB_OK | MB_ICONERROR);
         tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
         return;
     }
@@ -419,6 +430,13 @@ static void on_session_connect(const Profile *info) {
                               (unsigned long long)GetTickCount64());
         tabs_set_status(g_hwndTabs, idx, TAB_CONNECTED);
     } else {
+        char ch_err[256];
+        snprintf(ch_err, sizeof(ch_err),
+                 "Could not open SSH channel to %s.", info->host);
+        term_process(s->term, ch_err, strlen(ch_err));
+        term_process(s->term, "\r\n", 2);
+        MessageBoxA(GetParent(g_hwndTabs), ch_err,
+                    "Channel Error", MB_OK | MB_ICONERROR);
         tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
     }
 }
@@ -576,7 +594,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     switch (msg) {
         case WM_CREATE:
             g_config = config_load("config.json");
-            if (!g_config) g_config = config_new_default();
+            if (!g_config) {
+                MessageBoxA(hwnd,
+                    "Could not load config.json.\n\nStarting with default settings.",
+                    "Configuration Warning", MB_OK | MB_ICONWARNING);
+                g_config = config_new_default();
+            }
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;
             tabs_init(g_hInst);
