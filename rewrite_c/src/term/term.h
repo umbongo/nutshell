@@ -59,27 +59,43 @@ typedef struct {
 typedef struct {
     int rows;
     int cols;
-    
-    TermRow **lines; // Ring buffer of TermRow*
+
+    TermRow **lines; /* Ring buffer of TermRow* */
     int lines_capacity;
     int lines_count;
     int lines_start;
-    
+
     int scrollback_offset;
     int max_scrollback;
-    
+
     TermCursor cursor;
     TermAttr current_attr;
 
     TermState state;
     int csi_params[TERM_MAX_CSI_PARAMS];
     int csi_param_count;
+    bool csi_private;     /* true when CSI sequence has '?' prefix */
     char osc_buffer[256];
     int osc_len;
     TermCursor saved_cursor;
 
     uint32_t utf8_codepoint;
     int utf8_remaining;
+
+    /* Window title (set by OSC 0/2) */
+    char title[128];
+
+    /* Terminal modes */
+    bool app_cursor_keys; /* ?1h/l  — application cursor key sequences */
+    bool insert_mode;     /* 4h/l   — insert vs. replace mode           */
+
+    /* Alternate screen buffer (?1049h/l) */
+    bool alt_screen_active;
+    TermRow  **primary_lines;
+    int        primary_lines_capacity;
+    int        primary_lines_count;
+    int        primary_lines_start;
+    TermCursor primary_cursor;
 } Terminal;
 
 Terminal *term_init(int rows, int cols, int max_scrollback);
@@ -87,6 +103,8 @@ void term_free(Terminal *term);
 void term_resize(Terminal *term, int rows, int cols);
 void term_process(Terminal *term, const char *data, size_t len);
 void term_scroll(Terminal *term);
+void term_alt_screen_enter(Terminal *term);
+void term_alt_screen_exit(Terminal *term);
 
 /* Convert an xterm 256-colour palette index to 0xRRGGBB.
  * Indices 0-15:   standard ANSI colours.

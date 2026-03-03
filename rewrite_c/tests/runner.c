@@ -199,6 +199,23 @@ int test_term_resize_reflow(void);
 int test_term_resize_cursor_edge(void);
 int test_term_utf8(void);
 
+/* test_vt_sequences.c */
+int test_vt_osc_title_0(void);
+int test_vt_osc_title_2(void);
+int test_vt_osc_st_terminator(void);
+int test_vt_dectcem_show(void);
+int test_vt_dectcem_hide(void);
+int test_vt_alt_screen_enter(void);
+int test_vt_alt_screen_exit(void);
+int test_vt_app_cursor_enable(void);
+int test_vt_app_cursor_disable(void);
+int test_vt_insert_mode_enable(void);
+int test_vt_insert_mode_disable(void);
+int test_vt_osc_no_terminator(void);
+int test_vt_unknown_private_mode(void);
+int test_vt_osc_special_chars(void);
+int test_vt_alt_screen_isolation(void);
+
 /* test_color.c */
 int test_color256_palette_ansi(void);
 int test_color256_palette_cube(void);
@@ -413,6 +430,23 @@ int main(void) {
     failed += test_term_sgr_flags();
     failed += test_term_resize_basic();
     failed += test_term_utf8();
+
+    printf("\n--- VT Sequences ---\n");
+    failed += test_vt_osc_title_0();
+    failed += test_vt_osc_title_2();
+    failed += test_vt_osc_st_terminator();
+    failed += test_vt_dectcem_show();
+    failed += test_vt_dectcem_hide();
+    failed += test_vt_alt_screen_enter();
+    failed += test_vt_alt_screen_exit();
+    failed += test_vt_app_cursor_enable();
+    failed += test_vt_app_cursor_disable();
+    failed += test_vt_insert_mode_enable();
+    failed += test_vt_insert_mode_disable();
+    failed += test_vt_osc_no_terminator();
+    failed += test_vt_unknown_private_mode();
+    failed += test_vt_osc_special_chars();
+    failed += test_vt_alt_screen_isolation();
 
     printf("\n--- Color ---\n");
     failed += test_color256_palette_ansi();

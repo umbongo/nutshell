@@ -1,4 +1,5 @@
 #include "term.h"
+#include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -69,6 +70,12 @@ static void term_put_char(Terminal *term, uint32_t c) {
 
     TermRow *row = get_screen_row(term, term->cursor.row);
     if (row) {
+        if (term->insert_mode) {
+            /* Shift cells from cursor rightwards by one, dropping the last */
+            for (int i = term->cols - 1; i > term->cursor.col; i--)
+                row->cells[i] = row->cells[i - 1];
+            if (row->len < term->cols) row->len++;
+        }
         row->cells[term->cursor.col].codepoint = c;
         row->cells[term->cursor.col].attr = term->current_attr;
         row->dirty = true;
@@ -232,6 +239,48 @@ static void handle_sgr(Terminal *term) {
     }
 }
 
+/* ---- OSC / Private-mode helpers ------------------------------------------ */
+
+static void process_osc(Terminal *term)
+{
+    /* OSC buffer format: "Ps;Pt" where Ps is numeric code, Pt is text */
+    int semi = -1;
+    for (int i = 0; i < term->osc_len; i++) {
+        if (term->osc_buffer[i] == ';') { semi = i; break; }
+    }
+    if (semi < 0) goto osc_done;
+
+    /* Parse numeric code */
+    int code = 0;
+    for (int i = 0; i < semi; i++) {
+        if (term->osc_buffer[i] < '0' || term->osc_buffer[i] > '9') goto osc_done;
+        code = code * 10 + (term->osc_buffer[i] - '0');
+    }
+
+    if (code == 0 || code == 2) {
+        const char *text = term->osc_buffer + semi + 1;
+        (void)snprintf(term->title, sizeof(term->title), "%s", text);
+    }
+osc_done:
+    term->osc_len = 0;
+    term->osc_buffer[0] = '\0';
+}
+
+static void handle_private_mode(Terminal *term, bool set)
+{
+    int mode = (term->csi_param_count > 0) ? term->csi_params[0] : 0;
+    switch (mode) {
+        case 1:    term->app_cursor_keys = set; break;
+        case 25:   term->cursor.visible  = set; break;
+        case 1049: if (set) term_alt_screen_enter(term);
+                   else     term_alt_screen_exit(term);
+                   break;
+        default:   break; /* ignore unknown private modes */
+    }
+}
+
+/* --------------------------------------------------------------------------- */
+
 static void handle_csi(Terminal *term, char final) {
     int n, m;
     switch (final) {
@@ -329,11 +378,17 @@ static void handle_csi(Terminal *term, char final) {
             term->cursor.row = n - 1;
             clamp_cursor(term);
             break;
+        case 'h': /* SM — Set Mode (non-private) */
+            if (get_param(term, 0, 0) == 4) term->insert_mode = true;
+            break;
+        case 'l': /* RM — Reset Mode (non-private) */
+            if (get_param(term, 0, 0) == 4) term->insert_mode = false;
+            break;
         case '~': /* VT220 keys */
             n = get_param(term, 0, 0);
-            if (n == 1) term->cursor.col = 0; // Home
-            else if (n == 4) term->cursor.col = term->cols - 1; // End
-            // 2=Ins, 3=Del, 5=PgUp, 6=PgDn - ignored for now
+            if (n == 1) term->cursor.col = 0; /* Home */
+            else if (n == 4) term->cursor.col = term->cols - 1; /* End */
+            /* 2=Ins, 3=Del, 5=PgUp, 6=PgDn - ignored for now */
             break;
     }
 }
@@ -373,18 +428,21 @@ void term_process(Terminal *term, const char *data, size_t len) {
                 if (c == '[') {
                     term->state = TERM_STATE_CSI;
                     term->csi_param_count = 0;
-                    term->csi_params[0] = 0; // Init first param
+                    term->csi_params[0] = 0;
+                    term->csi_private = false;
                 } else if (c == ']') {
                     term->state = TERM_STATE_OSC;
                     term->osc_len = 0;
+                    term->osc_buffer[0] = '\0';
                 } else {
-                    // TODO: Handle other ESC sequences (like ( ) for charset)
                     term->state = TERM_STATE_NORMAL;
                 }
                 break;
 
             case TERM_STATE_CSI:
-                if (isdigit(c)) {
+                if (c == '?') {
+                    term->csi_private = true;
+                } else if (isdigit(c)) {
                     if (term->csi_param_count == 0) term->csi_param_count = 1;
                     int *p = &term->csi_params[term->csi_param_count - 1];
                     *p = (*p * 10) + (c - '0');
@@ -394,15 +452,23 @@ void term_process(Terminal *term, const char *data, size_t len) {
                         term->csi_params[term->csi_param_count - 1] = 0;
                     }
                 } else if (c >= 0x40 && c <= 0x7E) {
-                    handle_csi(term, (char)c);
+                    if (term->csi_private && (c == 'h' || c == 'l')) {
+                        handle_private_mode(term, c == 'h');
+                    } else {
+                        handle_csi(term, (char)c);
+                    }
+                    term->csi_private = false;
                     term->state = TERM_STATE_NORMAL;
                 }
                 break;
 
             case TERM_STATE_OSC:
-                if (c == 0x07 || c == 0x1B) { // BEL or ESC ends OSC
-                    // TODO: Handle OSC payload (title, etc)
+                if (c == 0x07) { /* BEL terminates OSC */
+                    process_osc(term);
                     term->state = TERM_STATE_NORMAL;
+                } else if (c == 0x1B) { /* ESC starts ST (ESC \) — process OSC now */
+                    process_osc(term);
+                    term->state = TERM_STATE_ESC; /* consume the following '\' */
                 } else {
                     if (term->osc_len < 255) {
                         term->osc_buffer[term->osc_len++] = (char)c;

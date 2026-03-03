@@ -51,14 +51,21 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
 
     term->state = TERM_STATE_NORMAL;
     term->csi_param_count = 0;
+    term->csi_private = false;
     term->osc_len = 0;
-    
+
     term->saved_cursor.row = 0;
     term->saved_cursor.col = 0;
     term->saved_cursor.visible = true;
 
     term->utf8_codepoint = 0;
     term->utf8_remaining = 0;
+
+    term->title[0]         = '\0';
+    term->app_cursor_keys  = false;
+    term->insert_mode      = false;
+    term->alt_screen_active = false;
+    term->primary_lines    = NULL;
 
     term->lines = xcalloc((size_t)term->lines_capacity, sizeof(TermRow *));
     
@@ -73,12 +80,17 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
 
 void term_free(Terminal *term) {
     if (!term) return;
-    
+
     if (term->lines) {
-        for (int i = 0; i < term->lines_capacity; i++) {
+        for (int i = 0; i < term->lines_capacity; i++)
             term_row_free(term->lines[i]);
-        }
         free(term->lines);
+    }
+    /* When alt screen is active, primary_lines holds the saved primary buffer */
+    if (term->primary_lines) {
+        for (int i = 0; i < term->primary_lines_capacity; i++)
+            term_row_free(term->primary_lines[i]);
+        free(term->primary_lines);
     }
     free(term);
 }
@@ -211,14 +223,59 @@ void term_resize(Terminal *term, int rows, int cols) {
 
 void term_scroll(Terminal *term) {
     if (term->lines_count < term->lines_capacity) {
-        // Buffer not full: append new line
+        /* Buffer not full: append new line */
         int new_idx = (term->lines_start + term->lines_count) % term->lines_capacity;
         term_row_fill(term->lines[new_idx], term->cols, term->current_attr);
         term->lines_count++;
     } else {
-        // Buffer full: recycle oldest line
+        /* Buffer full: recycle oldest line */
         int recycle_idx = term->lines_start;
         term_row_fill(term->lines[recycle_idx], term->cols, term->current_attr);
         term->lines_start = (term->lines_start + 1) % term->lines_capacity;
     }
+}
+
+void term_alt_screen_enter(Terminal *term)
+{
+    if (!term || term->alt_screen_active) return;
+
+    /* Save primary buffer state */
+    term->primary_lines           = term->lines;
+    term->primary_lines_capacity  = term->lines_capacity;
+    term->primary_lines_count     = term->lines_count;
+    term->primary_lines_start     = term->lines_start;
+    term->primary_cursor          = term->cursor;
+
+    /* Allocate a fresh alt-screen buffer (rows only, no scrollback) */
+    int cap = term->rows;
+    term->lines = xcalloc((size_t)cap, sizeof(TermRow *));
+    for (int i = 0; i < cap; i++) {
+        term->lines[i] = term_row_alloc(term->cols);
+        term_row_fill(term->lines[i], term->cols, term->current_attr);
+    }
+    term->lines_capacity  = cap;
+    term->lines_count     = cap;
+    term->lines_start     = 0;
+    term->cursor.row      = 0;
+    term->cursor.col      = 0;
+    term->alt_screen_active = true;
+}
+
+void term_alt_screen_exit(Terminal *term)
+{
+    if (!term || !term->alt_screen_active) return;
+
+    /* Free the alt-screen lines */
+    for (int i = 0; i < term->lines_capacity; i++)
+        term_row_free(term->lines[i]);
+    free(term->lines);
+
+    /* Restore primary buffer */
+    term->lines           = term->primary_lines;
+    term->lines_capacity  = term->primary_lines_capacity;
+    term->lines_count     = term->primary_lines_count;
+    term->lines_start     = term->primary_lines_start;
+    term->cursor          = term->primary_cursor;
+    term->primary_lines   = NULL;
+    term->alt_screen_active = false;
 }
