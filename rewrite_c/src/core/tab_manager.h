@@ -44,7 +44,7 @@ TabStatus tabmgr_get_status  (const TabManager *m, int index);
 int       tabmgr_count       (const TabManager *m);
 int       tabmgr_get_id      (const TabManager *m, int index);
 /* Find by user_data pointer; returns index or -1. */
-int       tabmgr_find        (const TabManager *m, void *user_data);
+int       tabmgr_find        (const TabManager *m, const void *user_data);
 /* Store connection info (username, host, connect timestamp) in a tab entry. */
 void      tabmgr_set_connect_info(TabManager *m, int index,
                                    const char *username, const char *host,

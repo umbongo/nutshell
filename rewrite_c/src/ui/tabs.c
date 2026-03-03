@@ -98,7 +98,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_NOTIFY: {
-            NMHDR *nmhdr = (NMHDR *)lParam;
+            const NMHDR *nmhdr = (const NMHDR *)lParam;
             if (data && data->hTooltip && nmhdr->hwndFrom == data->hTooltip &&
                 (nmhdr->code == TTN_GETDISPINFOA || nmhdr->code == TTN_NEEDTEXTA)) {
                 NMTTDISPINFOA *ttt = (NMTTDISPINFOA *)lParam;

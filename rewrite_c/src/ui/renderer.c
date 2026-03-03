@@ -68,7 +68,7 @@ static TermRow *get_visible_row(Terminal *term, int screen_row) {
     return term->lines[physical_idx];
 }
 
-void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, RECT *paintRect) {
+void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const RECT *paintRect) {
     if (!r || !term) return;
 
     HFONT oldFont = SelectObject(hdc, r->hFont);

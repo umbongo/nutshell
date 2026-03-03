@@ -249,7 +249,7 @@ static FILE *open_session_log(const char *hostname)
                         ? g_config->settings.log_format
                         : "%Y-%m-%d_%H-%M-%S";
     time_t now = time(NULL);
-    struct tm *t = localtime(&now);
+    const struct tm *t = localtime(&now);
     char ts[64];
     if (t) {
 #pragma GCC diagnostic push

@@ -163,11 +163,7 @@ void term_resize(Terminal *term, int rows, int cols) {
                 new_cursor_col = current_new_col_idx;
             }
 
-            /* Skip empty cells at end of line if we want, but for simplicity copy all up to cols */
-            /* Actually, we only care about cells up to old_row->len or term->cols */
-            if (c >= term->cols) break;
-
-            TermCell *cell = &old_row->cells[c];
+            const TermCell *cell = &old_row->cells[c];
             
             /* Append to new buffer */
             new_lines[current_new_row_idx]->cells[current_new_col_idx] = *cell;

@@ -82,7 +82,7 @@ int tabmgr_get_id(const TabManager *m, int index)
     return m->tabs[index].id;
 }
 
-int tabmgr_find(const TabManager *m, void *user_data)
+int tabmgr_find(const TabManager *m, const void *user_data)
 {
     for (int i = 0; i < m->count; i++) {
         if (m->tabs[i].user_data == user_data) return i;
