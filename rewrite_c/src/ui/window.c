@@ -10,6 +10,7 @@
 #include "config.h"
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include "resource.h"
 #include "session_manager.h"
 #include "settings_dlg.h"
@@ -28,6 +29,7 @@ typedef struct Session {
     Terminal *term;
     SshSession *ssh;
     SSHChannel *channel;
+    FILE *session_log;   /* NULL when logging disabled */
     struct Session *next;
 } Session;
 
@@ -58,6 +60,7 @@ static Session *create_session(int rows, int cols, const char *msg) {
     s->term = term_init(rows, cols, 3000);
     s->ssh = NULL;
     s->channel = NULL;
+    s->session_log = NULL;
     s->next = g_session_list;
     g_session_list = s;
     term_process(s->term, msg, strlen(msg));
@@ -68,6 +71,7 @@ static void free_session(Session *s) {
     if (s) {
         if (s->channel) ssh_channel_free(s->channel);
         if (s->ssh) ssh_session_free(s->ssh);
+        if (s->session_log) fclose(s->session_log);
         term_free(s->term);
         free(s);
     }
@@ -216,6 +220,67 @@ static int prompt_passphrase(HWND parent, char *out, int out_size)
     return 0;
 }
 
+/* Open a timestamped session log file under log_dir.
+ * Returns NULL if logging_enabled is false or on any error.
+ * Caller is responsible for fclose(). */
+static FILE *open_session_log(const char *hostname)
+{
+    if (!g_config || !g_config->settings.logging_enabled) return NULL;
+
+    /* Determine log directory — default to %APPDATA%\sshclient\logs */
+    char log_dir[MAX_PATH];
+    if (g_config->settings.log_dir[0] != '\0') {
+        (void)snprintf(log_dir, sizeof(log_dir), "%s",
+                       g_config->settings.log_dir);
+    } else {
+        char appdata[MAX_PATH];
+        if (GetEnvironmentVariableA("APPDATA", appdata, sizeof(appdata)) == 0) {
+            (void)snprintf(appdata, sizeof(appdata), ".");
+        }
+        (void)snprintf(log_dir, sizeof(log_dir), "%s\\sshclient\\logs",
+                       appdata);
+    }
+
+    /* Create the directory (OK if already exists) */
+    CreateDirectoryA(log_dir, NULL);
+
+    /* Format timestamp using log_format from config */
+    const char *fmt = g_config->settings.log_format[0]
+                        ? g_config->settings.log_format
+                        : "%Y-%m-%d_%H-%M-%S";
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    char ts[64];
+    if (t) {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+        strftime(ts, sizeof(ts), fmt, t);
+#pragma GCC diagnostic pop
+    } else {
+        (void)snprintf(ts, sizeof(ts), "unknown");
+    }
+
+    /* Sanitise hostname for use as a filename component */
+    char safe_host[64];
+    size_t hi = 0u;
+    for (const char *p = hostname; *p && hi < sizeof(safe_host) - 1u; p++) {
+        char c = *p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '.') {
+            safe_host[hi++] = c;
+        } else {
+            safe_host[hi++] = '_';
+        }
+    }
+    safe_host[hi] = '\0';
+
+    char path[MAX_PATH];
+    (void)snprintf(path, sizeof(path), "%s\\%s_%s.log",
+                   log_dir, ts, safe_host);
+
+    return fopen(path, "a");
+}
+
 static void on_session_connect(const Profile *info) {
     RECT rc;
     GetClientRect(GetParent(g_hwndTabs), &rc);
@@ -345,6 +410,7 @@ static void on_session_connect(const Profile *info) {
         ssh_pty_shell(s->channel);
         ssh_session_set_blocking(s->ssh, false); /* Non-blocking for I/O loop */
         term_process(s->term, "Connected.\r\n", 12);
+        s->session_log = open_session_log(info->host);
     }
 }
 
@@ -530,7 +596,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 Session *s = g_session_list;
                 while (s) {
                     if (s->channel) {
-                        int poll_rc = ssh_io_poll(s->channel, s->term);
+                        int poll_rc = ssh_io_poll(s->channel, s->term,
+                                                      s->session_log);
                         if (poll_rc > 0) {
                             InvalidateRect(hwnd, NULL, FALSE);
                         } else if (poll_rc == -2) {

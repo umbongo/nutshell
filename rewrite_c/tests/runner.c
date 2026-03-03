@@ -35,6 +35,13 @@ int test_str_starts_with_null(void);
 int test_str_ends_with_yes(void);
 int test_str_ends_with_no(void);
 int test_str_ends_with_null(void);
+int test_ansi_strip_plain(void);
+int test_ansi_strip_sgr_reset(void);
+int test_ansi_strip_colour(void);
+int test_ansi_strip_osc_title(void);
+int test_ansi_strip_cr_removed(void);
+int test_ansi_strip_empty(void);
+int test_ansi_strip_null_dst(void);
 
 /* test_logger.c */
 int test_logger_init_stderr_only(void);
@@ -217,6 +224,13 @@ int main(void) {
     failed += test_str_ends_with_yes();
     failed += test_str_ends_with_no();
     failed += test_str_ends_with_null();
+    failed += test_ansi_strip_plain();
+    failed += test_ansi_strip_sgr_reset();
+    failed += test_ansi_strip_colour();
+    failed += test_ansi_strip_osc_title();
+    failed += test_ansi_strip_cr_removed();
+    failed += test_ansi_strip_empty();
+    failed += test_ansi_strip_null_dst();
     failed += test_logger_init_stderr_only();
     failed += test_logger_creates_file();
     failed += test_logger_file_contains_message();
