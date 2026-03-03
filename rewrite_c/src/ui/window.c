@@ -592,7 +592,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                               ? g_config->settings.font : "Consolas",
                           g_config->settings.font_size > 0
                               ? g_config->settings.font_size : 12);
-            
+            renderer_apply_theme(hwnd, g_renderer.defaultBg);
+
             /* Start I/O Timer (10ms) */
             SetTimer(hwnd, 1, 10, NULL);
             

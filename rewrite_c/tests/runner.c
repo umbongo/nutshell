@@ -199,6 +199,16 @@ int test_term_resize_reflow(void);
 int test_term_resize_cursor_edge(void);
 int test_term_utf8(void);
 
+/* test_theme.c */
+int test_theme_dark_background(void);
+int test_theme_light_background(void);
+int test_theme_mid_gray(void);
+int test_theme_luminance_red(void);
+int test_theme_luminance_green(void);
+int test_theme_luminance_blue(void);
+int test_theme_pure_black(void);
+int test_theme_pure_white(void);
+
 /* test_vt_sequences.c */
 int test_vt_osc_title_0(void);
 int test_vt_osc_title_2(void);
@@ -447,6 +457,16 @@ int main(void) {
     failed += test_vt_unknown_private_mode();
     failed += test_vt_osc_special_chars();
     failed += test_vt_alt_screen_isolation();
+
+    printf("\n--- Theme ---\n");
+    failed += test_theme_dark_background();
+    failed += test_theme_light_background();
+    failed += test_theme_mid_gray();
+    failed += test_theme_luminance_red();
+    failed += test_theme_luminance_green();
+    failed += test_theme_luminance_blue();
+    failed += test_theme_pure_black();
+    failed += test_theme_pure_white();
 
     printf("\n--- Color ---\n");
     failed += test_color256_palette_ansi();

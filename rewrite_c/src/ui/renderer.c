@@ -1,7 +1,15 @@
 #include "renderer.h"
+#include "theme.h"
 #include <stdio.h>
 
 #ifdef _WIN32
+#include <dwmapi.h>
+
+/* DWMWA_USE_IMMERSIVE_DARK_MODE is attribute 20 (Windows 10 2004+).
+ * Define it here so we can compile against older SDK headers. */
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
 
 static COLORREF to_colorref(uint32_t rgb) {
     /* TermAttr stores 0xRRGGBB, Windows uses 0x00BBGGRR */
@@ -106,6 +114,18 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, RECT *pai
     }
 
     SelectObject(hdc, oldFont);
+}
+
+void renderer_apply_theme(HWND hwnd, COLORREF bg_colorref)
+{
+    /* Convert COLORREF (0x00BBGGRR) to 0x00RRGGBB for theme_is_dark */
+    unsigned int r = (unsigned int)( bg_colorref        & 0xFF);
+    unsigned int g = (unsigned int)((bg_colorref >>  8) & 0xFF);
+    unsigned int b = (unsigned int)((bg_colorref >> 16) & 0xFF);
+    unsigned int bg_rgb = (r << 16) | (g << 8) | b;
+    BOOL dark = theme_is_dark(bg_rgb) ? TRUE : FALSE;
+    /* DwmSetWindowAttribute silently fails on older Windows versions — that is fine. */
+    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 }
 
 #endif
