@@ -361,6 +361,97 @@ static void on_settings_clicked(void) {
     settings_dlg_show(GetParent(g_hwndTabs), g_config);
 }
 
+/* ---- Paste helper -------------------------------------------------------- */
+
+/* Send clipboard text to the active session, with multi-line confirmation
+ * when content is longer than PASTE_CONFIRM_THRESHOLD bytes or contains a
+ * newline.  Lines are separated by paste_delay_ms milliseconds. */
+#define PASTE_CONFIRM_THRESHOLD 64
+
+static void do_paste(HWND hwnd)
+{
+    if (!g_active_session || !g_active_session->channel) return;
+
+    if (!IsClipboardFormatAvailable(CF_TEXT)) return;
+    if (!OpenClipboard(hwnd)) return;
+
+    HANDLE hClip = GetClipboardData(CF_TEXT);
+    if (!hClip) { CloseClipboard(); return; }
+
+    const char *raw = (const char *)GlobalLock(hClip);
+    if (!raw) { CloseClipboard(); return; }
+
+    size_t raw_len = strlen(raw);
+
+    /* Count newlines */
+    int line_count = 0;
+    for (size_t i = 0; i < raw_len; i++) {
+        if (raw[i] == '\n') line_count++;
+    }
+
+    /* Ask for confirmation when content is large or multi-line */
+    int confirmed = 1;
+    if (raw_len > PASTE_CONFIRM_THRESHOLD || line_count > 0) {
+        char msg[512];
+        /* Build a preview: first 80 printable chars */
+        char preview[81];
+        int pi = 0;
+        for (size_t i = 0; i < raw_len && pi < 80; i++) {
+            char c = raw[i];
+            if (c == '\r') continue;
+            preview[pi++] = (c == '\n') ? ' ' : c;
+        }
+        preview[pi] = '\0';
+
+        (void)snprintf(msg, sizeof(msg),
+            "Paste %d line%s (%zu chars)?\n\nPreview:\n%.80s%s",
+            line_count + 1,
+            line_count == 1 ? "" : "s",
+            raw_len,
+            preview,
+            raw_len > 80 ? "..." : "");
+
+        int ans = MessageBoxA(hwnd, msg, "Confirm Paste",
+                              MB_YESNO | MB_ICONQUESTION);
+        confirmed = (ans == IDYES);
+    }
+
+    if (confirmed) {
+        int delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
+
+        /* Send line by line, applying inter-line delay */
+        const char *p = raw;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            size_t chunk;
+            if (nl) {
+                chunk = (size_t)(nl - p) + 1u; /* include the '\n' */
+            } else {
+                chunk = strlen(p);
+            }
+
+            /* Skip bare \r characters */
+            for (size_t i = 0; i < chunk; i++) {
+                if (p[i] != '\r') {
+                    ssh_channel_write(g_active_session->channel, &p[i], 1);
+                }
+            }
+
+            p += chunk;
+
+            /* Apply delay between lines (not after the last chunk) */
+            if (nl && *p && delay_ms > 0) {
+                Sleep((DWORD)delay_ms);
+            }
+        }
+        g_active_session->term->scrollback_offset = 0;
+        InvalidateRect(hwnd, NULL, FALSE);
+    }
+
+    GlobalUnlock(hClip);
+    CloseClipboard();
+}
+
 /* ---- Zoom helper --------------------------------------------------------- */
 
 /* Reinitialise the renderer at a new font size, then resize all terminals.
@@ -510,6 +601,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                      if (idx >= 0) on_tab_close(idx, g_active_session);
                      return 0;
                 }
+                if (c == 0x16) { /* Ctrl+V — handled via do_paste in WM_KEYDOWN */
+                    return 0;
+                }
                 if (g_active_session->channel) {
                     ssh_channel_write(g_active_session->channel, &c, 1);
                 } else {
@@ -523,6 +617,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_KEYDOWN: {
+            /* Ctrl+V — paste with confirmation */
+            if ((GetKeyState(VK_CONTROL) & 0x8000) &&
+                (wParam == (WPARAM)'V' || wParam == (WPARAM)0x56)) {
+                do_paste(hwnd);
+                return 0;
+            }
+            /* Shift+Insert — alternative paste shortcut */
+            if ((GetKeyState(VK_SHIFT) & 0x8000) && wParam == VK_INSERT) {
+                do_paste(hwnd);
+                return 0;
+            }
             /* Ctrl+= / Ctrl+- zoom keyboard shortcuts */
             if (GetKeyState(VK_CONTROL) & 0x8000) {
                 if (wParam == VK_OEM_PLUS || wParam == (WPARAM)'=') {
