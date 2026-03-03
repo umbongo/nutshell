@@ -361,6 +361,51 @@ static void on_settings_clicked(void) {
     settings_dlg_show(GetParent(g_hwndTabs), g_config);
 }
 
+/* ---- Zoom helper --------------------------------------------------------- */
+
+/* Reinitialise the renderer at a new font size, then resize all terminals.
+ * delta is typically +1 or -1. */
+static void apply_zoom(HWND hwnd, int delta)
+{
+    int sz = g_config->settings.font_size + delta;
+    if (sz < 6)  sz = 6;
+    if (sz > 72) sz = 72;
+    if (sz == g_config->settings.font_size) return;
+
+    g_config->settings.font_size = sz;
+
+    renderer_free(&g_renderer);
+    renderer_init(&g_renderer, g_config->settings.font, sz);
+
+    /* Recalculate terminal dimensions based on new character size */
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    int width  = rc.right;
+    int height = rc.bottom;
+
+    if (g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
+        int term_h = height - TAB_HEIGHT;
+        if (term_h < 1) term_h = 1;
+        int cols = width / g_renderer.charWidth;
+        int rows = term_h / g_renderer.charHeight;
+        if (cols < 1) cols = 1;
+        if (rows < 1) rows = 1;
+
+        Session *s = g_session_list;
+        while (s) {
+            if (s->term &&
+                (cols != s->term->cols || rows != s->term->rows)) {
+                term_resize(s->term, rows, cols);
+                if (s->channel)
+                    ssh_pty_resize(s->channel, cols, rows);
+            }
+            s = s->next;
+        }
+    }
+
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
@@ -376,7 +421,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             g_hwndTabs = tabs_create(hwnd, 0, 0, rc.right, TAB_HEIGHT);
             tabs_set_callbacks(g_hwndTabs, on_tab_select, on_tab_new, on_tab_close, on_settings_clicked);
             
-            renderer_init(&g_renderer, "Consolas", 12);
+            renderer_init(&g_renderer,
+                          g_config->settings.font[0]
+                              ? g_config->settings.font : "Consolas",
+                          g_config->settings.font_size > 0
+                              ? g_config->settings.font_size : 12);
             
             /* Start I/O Timer (10ms) */
             SetTimer(hwnd, 1, 10, NULL);
@@ -474,6 +523,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_KEYDOWN: {
+            /* Ctrl+= / Ctrl+- zoom keyboard shortcuts */
+            if (GetKeyState(VK_CONTROL) & 0x8000) {
+                if (wParam == VK_OEM_PLUS || wParam == (WPARAM)'=') {
+                    apply_zoom(hwnd, 1);
+                    return 0;
+                }
+                if (wParam == VK_OEM_MINUS || wParam == (WPARAM)'-') {
+                    apply_zoom(hwnd, -1);
+                    return 0;
+                }
+            }
             if (g_active_session && g_active_session->term) {
                 const char *seq = NULL;
                 switch (wParam) {
@@ -507,6 +567,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     g_active_session->term->scrollback_offset = 0;
                     InvalidateRect(hwnd, NULL, FALSE);
                 }
+            }
+            return 0;
+        }
+
+        case WM_MOUSEWHEEL: {
+            /* Ctrl+Scroll zooms the font */
+            if (GetKeyState(VK_CONTROL) & 0x8000) {
+                int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                apply_zoom(hwnd, delta > 0 ? 1 : -1);
+                return 0;
+            }
+            /* Plain scroll: move scrollback */
+            if (g_active_session && g_active_session->term) {
+                int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                if (delta > 0) {
+                    if (g_active_session->term->scrollback_offset <
+                            g_active_session->term->max_scrollback)
+                        g_active_session->term->scrollback_offset++;
+                } else {
+                    if (g_active_session->term->scrollback_offset > 0)
+                        g_active_session->term->scrollback_offset--;
+                }
+                InvalidateRect(hwnd, NULL, FALSE);
             }
             return 0;
         }
