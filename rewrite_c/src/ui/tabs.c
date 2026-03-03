@@ -312,8 +312,14 @@ int tabs_add(HWND hwnd, const char *title, void *user_data)
 {
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!data) return -1;
+    int prev_active = data->m.active_index; /* -1 when no tabs existed yet */
     int idx = tabmgr_add(&data->m, title, user_data);
     InvalidateRect(hwnd, NULL, FALSE);
+    /* First tab: tabmgr_add sets active_index=0 automatically, but
+     * tabs_set_active() will see active_index==idx and return early without
+     * firing on_select.  Fire it here so g_active_session gets set. */
+    if (prev_active < 0 && data->m.active_index == idx && data->on_select)
+        data->on_select(idx, data->m.tabs[idx].user_data);
     return idx;
 }
 
