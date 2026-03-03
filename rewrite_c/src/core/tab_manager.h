@@ -15,10 +15,14 @@ typedef enum {
 } TabStatus;
 
 typedef struct {
-    char      title[64];
-    void     *user_data;
-    TabStatus  status;
-    int        id;   /* monotonically increasing unique id */
+    char               title[64];
+    void              *user_data;
+    TabStatus          status;
+    int                id;            /* monotonically increasing unique id */
+    /* Connection info used by tooltips */
+    char               username[64];
+    char               host[128];
+    unsigned long long connect_ms;    /* millisecond timestamp at connect; 0 = not set */
 } TabEntry;
 
 typedef struct {
@@ -41,5 +45,9 @@ int       tabmgr_count       (const TabManager *m);
 int       tabmgr_get_id      (const TabManager *m, int index);
 /* Find by user_data pointer; returns index or -1. */
 int       tabmgr_find        (const TabManager *m, void *user_data);
+/* Store connection info (username, host, connect timestamp) in a tab entry. */
+void      tabmgr_set_connect_info(TabManager *m, int index,
+                                   const char *username, const char *host,
+                                   unsigned long long connect_ms);
 
 #endif

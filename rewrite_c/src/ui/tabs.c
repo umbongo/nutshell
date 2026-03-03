@@ -1,7 +1,9 @@
 #include "tabs.h"
 #include "xmalloc.h"
 #include "logger.h"
+#include "tooltip.h"
 #include <stdio.h>
+#include <commctrl.h>
 
 #ifdef _WIN32
 
@@ -27,6 +29,7 @@ typedef struct TabControlData {
     TabSettingsCallback on_settings;
 
     HFONT hFont;
+    HWND  hTooltip;  /* Win32 tooltip control */
 } TabControlData;
 
 /* Return the COLORREF for a connection-status dot */
@@ -59,15 +62,74 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                                      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                                      CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                      VARIABLE_PITCH | FF_SWISS, "Segoe UI");
+
+            /* Create tooltip control — one tool covers the entire tab strip */
+            data->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
+                                            WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
+                                            0, 0, 0, 0,
+                                            hwnd, NULL, GetModuleHandle(NULL), NULL);
+            if (data->hTooltip) {
+                TOOLINFO ti = {0};
+                ti.cbSize   = sizeof(TOOLINFO);
+                ti.uFlags   = TTF_SUBCLASS | TTF_IDISHWND;
+                ti.hwnd     = hwnd;
+                ti.uId      = (UINT_PTR)hwnd;
+                ti.lpszText = LPSTR_TEXTCALLBACK;
+                GetClientRect(hwnd, &ti.rect);
+                SendMessage(data->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+            }
             return 0;
         }
 
         case WM_DESTROY:
             if (data) {
-                if (data->hFont) DeleteObject(data->hFont);
+                if (data->hFont)    DeleteObject(data->hFont);
+                if (data->hTooltip) DestroyWindow(data->hTooltip);
                 free(data);
             }
             return 0;
+
+        case WM_MOUSEMOVE:
+            /* Relay mouse moves to the tooltip control so it can trigger */
+            if (data && data->hTooltip) {
+                MSG msg2 = {hwnd, WM_MOUSEMOVE, wParam, lParam, 0, {0, 0}};
+                SendMessage(data->hTooltip, TTM_RELAYEVENT, 0, (LPARAM)&msg2);
+            }
+            return 0;
+
+        case WM_NOTIFY: {
+            NMHDR *nmhdr = (NMHDR *)lParam;
+            if (data && data->hTooltip && nmhdr->hwndFrom == data->hTooltip &&
+                (nmhdr->code == TTN_GETDISPINFOA || nmhdr->code == TTN_NEEDTEXTA)) {
+                NMTTDISPINFOA *ttt = (NMTTDISPINFOA *)lParam;
+                /* Determine which tab is under the cursor */
+                POINT pt;
+                GetCursorPos(&pt);
+                ScreenToClient(hwnd, &pt);
+                int tx = TAB_START_X;
+                int tab_idx = -1;
+                for (int i = 0; i < data->m.count; i++) {
+                    if (pt.x >= tx && pt.x <= tx + TAB_W) { tab_idx = i; break; }
+                    tx += TAB_W + TAB_GAP;
+                }
+                if (tab_idx >= 0) {
+                    TabEntry *e = &data->m.tabs[tab_idx];
+                    unsigned long elapsed = 0;
+                    if (e->connect_ms > 0) {
+                        ULONGLONG now_ms = GetTickCount64();
+                        elapsed = (unsigned long)((now_ms - e->connect_ms) / 1000ULL);
+                    }
+                    static char tip_buf[256];
+                    tooltip_build_text(e->status, e->host, e->username,
+                                       elapsed, NULL, tip_buf, sizeof(tip_buf));
+                    ttt->lpszText = tip_buf;
+                } else {
+                    ttt->lpszText = "";
+                }
+                return 0;
+            }
+            break;
+        }
 
         case WM_PAINT: {
             PAINTSTRUCT ps;
@@ -330,6 +392,15 @@ int tabs_find(HWND hwnd, void *user_data)
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!data) return -1;
     return tabmgr_find(&data->m, user_data);
+}
+
+void tabs_set_connect_info(HWND hwnd, int index,
+                           const char *username, const char *host,
+                           unsigned long long connect_ms)
+{
+    TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!data) return;
+    tabmgr_set_connect_info(&data->m, index, username, host, connect_ms);
 }
 
 #endif

@@ -28,6 +28,10 @@ void      tabs_set_status (HWND hwnd, int index, TabStatus status);
 TabStatus tabs_get_status (HWND hwnd, int index);
 /* Returns the index of the tab whose user_data equals the given pointer, or -1. */
 int       tabs_find       (HWND hwnd, void *user_data);
+/* Store username / host / connect_ms in a tab for use by tooltips. */
+void      tabs_set_connect_info(HWND hwnd, int index,
+                                const char *username, const char *host,
+                                unsigned long long connect_ms);
 
 #endif
 #endif

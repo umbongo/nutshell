@@ -414,6 +414,9 @@ static void on_session_connect(const Profile *info) {
         ssh_session_set_blocking(s->ssh, false); /* Non-blocking for I/O loop */
         term_process(s->term, "Connected.\r\n", 12);
         s->session_log = open_session_log(info->host);
+        tabs_set_connect_info(g_hwndTabs, idx,
+                              info->username, info->host,
+                              (unsigned long long)GetTickCount64());
         tabs_set_status(g_hwndTabs, idx, TAB_CONNECTED);
     } else {
         tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);

@@ -89,3 +89,14 @@ int tabmgr_find(const TabManager *m, void *user_data)
     }
     return -1;
 }
+
+void tabmgr_set_connect_info(TabManager *m, int index,
+                              const char *username, const char *host,
+                              unsigned long long connect_ms)
+{
+    if (index < 0 || index >= m->count) return;
+    TabEntry *e = &m->tabs[index];
+    snprintf(e->username, sizeof(e->username), "%s", username ? username : "");
+    snprintf(e->host,     sizeof(e->host),     "%s", host     ? host     : "");
+    e->connect_ms = connect_ms;
+}

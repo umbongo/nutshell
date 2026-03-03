@@ -121,6 +121,17 @@ int test_tabmgr_reopen_no_id_collision(void);
 int test_tabmgr_status_independence(void);
 int test_tabmgr_find(void);
 
+/* test_tooltip.c */
+int test_tooltip_format_3661(void);
+int test_tooltip_format_59(void);
+int test_tooltip_format_zero(void);
+int test_tooltip_format_90(void);
+int test_tooltip_connected(void);
+int test_tooltip_disconnected(void);
+int test_tooltip_with_log(void);
+int test_tooltip_null_buf(void);
+int test_tooltip_long_hostname(void);
+
 /* test_settings.c */
 int test_settings_validate_defaults(void);
 int test_settings_validate_font_size_low(void);
@@ -326,6 +337,17 @@ int main(void) {
     failed += test_tabmgr_reopen_no_id_collision();
     failed += test_tabmgr_status_independence();
     failed += test_tabmgr_find();
+
+    /* Tooltip */
+    failed += test_tooltip_format_3661();
+    failed += test_tooltip_format_59();
+    failed += test_tooltip_format_zero();
+    failed += test_tooltip_format_90();
+    failed += test_tooltip_connected();
+    failed += test_tooltip_disconnected();
+    failed += test_tooltip_with_log();
+    failed += test_tooltip_null_buf();
+    failed += test_tooltip_long_hostname();
 
     /* Settings Validation */
     failed += test_settings_validate_defaults();
