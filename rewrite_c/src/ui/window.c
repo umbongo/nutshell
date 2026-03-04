@@ -683,15 +683,38 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-            
+
             if (g_active_session && g_active_session->term) {
                 renderer_draw(&g_renderer, hdc, g_active_session->term, 0, TAB_HEIGHT, &ps.rcPaint);
+
+                /* Fill gutter areas not covered by complete character cells.
+                 * Integer division floors cols/rows, leaving a residual strip
+                 * at the right and bottom that must be explicitly cleared to
+                 * avoid stale pixels after a resize. */
+                RECT client;
+                GetClientRect(hwnd, &client);
+                HBRUSH bg = CreateSolidBrush(g_renderer.defaultBg);
+
+                int text_bottom = TAB_HEIGHT +
+                    g_active_session->term->rows * g_renderer.charHeight;
+                if (text_bottom < client.bottom) {
+                    RECT r = { 0, text_bottom, client.right, client.bottom };
+                    FillRect(hdc, &r, bg);
+                }
+
+                int text_right = g_active_session->term->cols * g_renderer.charWidth;
+                if (text_right < client.right) {
+                    RECT r = { text_right, TAB_HEIGHT, client.right, text_bottom };
+                    FillRect(hdc, &r, bg);
+                }
+
+                DeleteObject(bg);
             } else {
-                HBRUSH brush = CreateSolidBrush(RGB(242, 242, 242));
+                HBRUSH brush = CreateSolidBrush(g_renderer.defaultBg);
                 FillRect(hdc, &ps.rcPaint, brush);
                 DeleteObject(brush);
             }
-            
+
             EndPaint(hwnd, &ps);
             return 0;
         }
