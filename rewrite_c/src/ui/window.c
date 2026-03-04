@@ -18,18 +18,32 @@
 #include "ssh_pty.h"
 #include "ssh_io.h"
 #include "knownhosts.h"
+#include "log_format.h"
 
 static const char *CLASS_NAME = "CongaSSH_Window";
 static const char *APP_TITLE = "Conga.SSH";
 
 #define TAB_HEIGHT 32
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
+#define WM_CONN_DONE            (WM_USER + 2)
+
+typedef enum { CONN_IDLE, CONN_CONNECTING } ConnState;
 
 typedef struct Session {
-    Terminal *term;
+    Terminal   *term;
     SshSession *ssh;
     SSHChannel *channel;
-    FILE *session_log;   /* NULL when logging disabled */
+    FILE       *session_log;   /* NULL when logging disabled */
+    /* Connection thread state */
+    ConnState       conn_state;
+    volatile int    conn_cancelled;
+    HANDLE          conn_thread;
+    HWND            conn_hwnd;      /* main window HWND for PostMessage */
+    Profile         conn_profile;  /* copy of profile for thread */
+    int             conn_result;   /* 0=ok, 1=tcp/ssh, 2=auth, 3=channel */
+    char            conn_error[512];
+    ULONGLONG       conn_start_ms;
+    int             conn_dots;     /* dots appended so far */
     struct Session *next;
 } Session;
 
@@ -55,20 +69,32 @@ static HINSTANCE g_hInst = NULL;
 static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 
-static Session *create_session(int rows, int cols, const char *msg) {
+static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
     s->term = term_init(rows, cols, 3000);
     s->ssh = NULL;
     s->channel = NULL;
     s->session_log = NULL;
+    s->conn_state = CONN_IDLE;
+    s->conn_cancelled = 0;
+    s->conn_thread = NULL;
+    s->conn_hwnd = NULL;
+    s->conn_result = 0;
+    s->conn_error[0] = '\0';
+    s->conn_start_ms = 0;
+    s->conn_dots = 0;
     s->next = g_session_list;
     g_session_list = s;
-    term_process(s->term, msg, strlen(msg));
     return s;
 }
 
 static void free_session(Session *s) {
     if (s) {
+        if (s->conn_thread) {
+            s->conn_cancelled = 1;
+            WaitForSingleObject(s->conn_thread, 30000);
+            CloseHandle(s->conn_thread);
+        }
         if (s->channel) ssh_channel_free(s->channel);
         if (s->ssh) ssh_session_free(s->ssh);
         if (s->session_log) fclose(s->session_log);
@@ -89,7 +115,14 @@ static void on_tab_select(int index, void *user_data) {
 
 static void on_tab_close(int index, void *user_data) {
     Session *s = (Session *)user_data;
-    
+
+    if (s->conn_state == CONN_CONNECTING) {
+        MessageBoxA(GetParent(g_hwndTabs),
+                    "Connection in progress. Please wait.",
+                    "Close Tab", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
     /* Remove from linked list */
     if (g_session_list == s) {
         g_session_list = s->next;
@@ -220,6 +253,15 @@ static int prompt_passphrase(HWND parent, char *out, int out_size)
     return 0;
 }
 
+/* Return the directory that contains the running executable. */
+static void get_exe_dir(char *buf, size_t n)
+{
+    GetModuleFileNameA(NULL, buf, (DWORD)n);
+    char *last = strrchr(buf, '\\');
+    if (last) *last = '\0';
+    else if (n > 0) buf[0] = '\0';
+}
+
 /* Open a timestamped session log file under log_dir.
  * Returns NULL if logging_enabled is false or on any error.
  * Caller is responsible for fclose(). */
@@ -233,12 +275,9 @@ static FILE *open_session_log(const char *hostname)
         (void)snprintf(log_dir, sizeof(log_dir), "%s",
                        g_config->settings.log_dir);
     } else {
-        char appdata[MAX_PATH];
-        if (GetEnvironmentVariableA("APPDATA", appdata, sizeof(appdata)) == 0) {
-            (void)snprintf(appdata, sizeof(appdata), ".");
-        }
-        (void)snprintf(log_dir, sizeof(log_dir), "%s\\sshclient\\logs",
-                       appdata);
+        get_exe_dir(log_dir, sizeof(log_dir));
+        if (log_dir[0] == '\0')
+            (void)snprintf(log_dir, sizeof(log_dir), ".");
     }
 
     /* Create the directory (OK if already exists) */
@@ -281,6 +320,132 @@ static FILE *open_session_log(const char *hostname)
     return fopen(path, "a");
 }
 
+/* ---- Background connection thread --------------------------------------- */
+
+static DWORD WINAPI connection_thread(LPVOID param)
+{
+    Session *s = (Session *)param;
+    const Profile *info = &s->conn_profile;
+    HWND hwnd = s->conn_hwnd;
+
+#define CONN_FAIL(code) \
+    do { s->conn_result = (code); \
+         PostMessage(hwnd, WM_CONN_DONE, 0, (LPARAM)s); return 0; } while(0)
+
+    /* TCP connect + SSH handshake */
+    s->ssh = ssh_session_new();
+    if (ssh_connect(s->ssh, info->host, info->port) != 0) {
+        snprintf(s->conn_error, sizeof(s->conn_error),
+                 "Cannot connect to %s:%d\n\n%s",
+                 info->host, info->port, s->ssh->last_error);
+        CONN_FAIL(1);
+    }
+
+    if (s->conn_cancelled) { snprintf(s->conn_error, sizeof(s->conn_error), "Cancelled."); CONN_FAIL(1); }
+
+    /* TOFU host key verification (MessageBoxA is thread-safe on Win32) */
+    {
+        size_t key_len = 0;
+        int    key_type = 0;
+        const char *key = libssh2_session_hostkey(s->ssh->session, &key_len, &key_type);
+        if (!key || key_len == 0) {
+            snprintf(s->conn_error, sizeof(s->conn_error), "Could not retrieve host key.");
+            CONN_FAIL(1);
+        }
+
+        char kh_path[MAX_PATH];
+        get_knownhosts_path(kh_path, sizeof(kh_path));
+
+        KnownHosts kh;
+        if (knownhosts_init(&kh, s->ssh->session, kh_path) == KNOWNHOSTS_OK) {
+            char fingerprint[128];
+            int tofu = knownhosts_check(&kh, info->host, info->port,
+                                        key, key_len,
+                                        fingerprint, sizeof(fingerprint));
+            if (tofu == KNOWNHOSTS_NEW || tofu == KNOWNHOSTS_MISMATCH) {
+                char dlg_msg[1024];
+                const char *title;
+                UINT icon;
+                if (tofu == KNOWNHOSTS_NEW) {
+                    snprintf(dlg_msg, sizeof(dlg_msg),
+                        "The authenticity of host '%s:%d' can't be established.\n\n"
+                        "Host key fingerprint:\n%s\n\n"
+                        "Do you want to trust this host and continue connecting?",
+                        info->host, info->port, fingerprint);
+                    title = "Unknown Host";
+                    icon  = MB_ICONWARNING;
+                } else {
+                    snprintf(dlg_msg, sizeof(dlg_msg),
+                        "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\n\n"
+                        "Host: %s:%d\nNew fingerprint:\n%s\n\n"
+                        "This may indicate a MitM attack.\n"
+                        "Connect anyway and update the stored key?",
+                        info->host, info->port, fingerprint);
+                    title = "Host Key Changed!";
+                    icon  = MB_ICONSTOP;
+                }
+                int ans = MessageBoxA(hwnd, dlg_msg, title, (UINT)MB_YESNO | icon);
+                if (ans == IDYES) {
+                    knownhosts_add(&kh, info->host, info->port, key, key_len);
+                } else {
+                    snprintf(s->conn_error, sizeof(s->conn_error), "Connection aborted by user.");
+                    knownhosts_free(&kh);
+                    CONN_FAIL(1);
+                }
+            }
+            knownhosts_free(&kh);
+        }
+    }
+
+    if (s->conn_cancelled) { snprintf(s->conn_error, sizeof(s->conn_error), "Cancelled."); CONN_FAIL(1); }
+
+    /* Authentication */
+    int auth_rc = -1;
+    if (info->auth_type == AUTH_KEY) {
+        auth_rc = ssh_auth_key(s->ssh, info->username, info->key_path, info->password);
+        if (auth_rc != 0) {
+            char passphrase[256];
+            memset(passphrase, 0, sizeof(passphrase));
+            if (prompt_passphrase(hwnd, passphrase, (int)sizeof(passphrase))) {
+                auth_rc = ssh_auth_key(s->ssh, info->username, info->key_path, passphrase);
+                if (auth_rc == 0) {
+                    strncpy(s->ssh->cached_passphrase, passphrase,
+                            sizeof(s->ssh->cached_passphrase) - 1u);
+                    s->ssh->cached_passphrase[sizeof(s->ssh->cached_passphrase) - 1u] = '\0';
+                }
+            }
+            SecureZeroMemory(passphrase, sizeof(passphrase));
+        }
+    } else {
+        auth_rc = ssh_auth_password(s->ssh, info->username, info->password);
+    }
+
+    if (auth_rc != 0) {
+        snprintf(s->conn_error, sizeof(s->conn_error),
+                 "Authentication failed for %s@%s.", info->username, info->host);
+        CONN_FAIL(2);
+    }
+
+    if (s->conn_cancelled) { snprintf(s->conn_error, sizeof(s->conn_error), "Cancelled."); CONN_FAIL(2); }
+
+    /* Open channel, request PTY, start shell */
+    s->channel = ssh_channel_open(s->ssh);
+    if (!s->channel) {
+        snprintf(s->conn_error, sizeof(s->conn_error),
+                 "Could not open SSH channel to %s.", info->host);
+        CONN_FAIL(3);
+    }
+    ssh_pty_request(s->channel, "xterm", s->term->cols, s->term->rows);
+    ssh_pty_shell(s->channel);
+    ssh_session_set_blocking(s->ssh, false); /* non-blocking for I/O loop */
+
+    s->conn_result = 0;
+    PostMessage(hwnd, WM_CONN_DONE, 0, (LPARAM)s);
+    return 0;
+
+#undef CONN_FAIL
+}
+
 static void on_session_connect(const Profile *info) {
     RECT rc;
     GetClientRect(GetParent(g_hwndTabs), &rc);
@@ -295,149 +460,33 @@ static void on_session_connect(const Profile *info) {
         rows = term_h / g_renderer.charHeight;
     }
 
-    char msg[512];
-    snprintf(msg, sizeof(msg), "Connecting to %s@%s:%d...\r\n",
-             info->username[0] ? info->username : "user",
-             info->host[0] ? info->host : "localhost",
-             info->port);
+    /* Open the tab immediately so the user sees activity at once */
+    Session *s = create_session(rows, cols);
+    term_process(s->term, "Connecting", 10); /* dots appended by 500ms timer */
 
-    Session *s = create_session(rows, cols, msg);
     char title[32];
-    snprintf(title, sizeof(title), "%s", info->name[0] ? info->name : (info->host[0] ? info->host : "Session"));
+    snprintf(title, sizeof(title), "%s",
+             info->name[0] ? info->name : (info->host[0] ? info->host : "Session"));
 
     int idx = tabs_add(g_hwndTabs, title, s);
     tabs_set_active(g_hwndTabs, idx);
     tabs_set_status(g_hwndTabs, idx, TAB_CONNECTING);
+    InvalidateRect(GetParent(g_hwndTabs), NULL, FALSE);
 
-    /* Initiate Connection */
-    s->ssh = ssh_session_new();
-    if (ssh_connect(s->ssh, info->host, info->port) != 0) {
-        char err[512];
-        snprintf(err, sizeof(err), "Cannot connect to %s:%d\n\n%s",
-                 info->host, info->port, s->ssh->last_error);
-        term_process(s->term, err, strlen(err));
-        term_process(s->term, "\r\n", 2);
-        MessageBoxA(GetParent(g_hwndTabs), err,
-                    "Connection Error", MB_OK | MB_ICONERROR);
+    /* Store state for the worker thread */
+    s->conn_state    = CONN_CONNECTING;
+    s->conn_profile  = *info;
+    s->conn_result   = 0;
+    s->conn_error[0] = '\0';
+    s->conn_start_ms = GetTickCount64();
+    s->conn_dots     = 0;
+    s->conn_hwnd     = GetParent(g_hwndTabs);
+
+    s->conn_thread = CreateThread(NULL, 0, connection_thread, s, 0, NULL);
+    if (!s->conn_thread) {
+        term_process(s->term, "\r\nFailed to start connection thread.\r\n", 38);
         tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
-        return;
-    }
-
-    /* ---- TOFU host key verification ---- */
-    {
-        size_t key_len = 0;
-        int key_type = 0;
-        const char *key = libssh2_session_hostkey(s->ssh->session, &key_len, &key_type);
-        if (!key || key_len == 0) {
-            term_process(s->term, "Error: could not retrieve host key.\r\n", 38);
-            return;
-        }
-
-        char kh_path[MAX_PATH];
-        get_knownhosts_path(kh_path, sizeof(kh_path));
-
-        KnownHosts kh;
-        if (knownhosts_init(&kh, s->ssh->session, kh_path) != KNOWNHOSTS_OK) {
-            term_process(s->term, "Warning: could not open known_hosts file.\r\n", 43);
-            /* Non-fatal — continue without TOFU */
-        } else {
-            char fingerprint[128];
-            int tofu = knownhosts_check(&kh, info->host, info->port,
-                                         key, key_len,
-                                         fingerprint, sizeof(fingerprint));
-            if (tofu == KNOWNHOSTS_NEW) {
-                char dlg_msg[512];
-                snprintf(dlg_msg, sizeof(dlg_msg),
-                    "The authenticity of host '%s:%d' can't be established.\n\n"
-                    "Host key fingerprint:\n%s\n\n"
-                    "Do you want to trust this host and continue connecting?",
-                    info->host, info->port, fingerprint);
-                int ans = MessageBoxA(GetParent(g_hwndTabs), dlg_msg,
-                                      "Unknown Host", MB_YESNO | MB_ICONWARNING);
-                if (ans == IDYES) {
-                    knownhosts_add(&kh, info->host, info->port, key, key_len);
-                } else {
-                    term_process(s->term, "Connection aborted by user.\r\n", 29);
-                    knownhosts_free(&kh);
-                    return;
-                }
-            } else if (tofu == KNOWNHOSTS_MISMATCH) {
-                char dlg_msg[512];
-                snprintf(dlg_msg, sizeof(dlg_msg),
-                    "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\n\n"
-                    "Host: %s:%d\nNew fingerprint:\n%s\n\n"
-                    "This may indicate a MitM attack.\n"
-                    "Connect anyway and update the stored key?",
-                    info->host, info->port, fingerprint);
-                int ans = MessageBoxA(GetParent(g_hwndTabs), dlg_msg,
-                                      "Host Key Changed!", MB_YESNO | MB_ICONSTOP);
-                if (ans == IDYES) {
-                    knownhosts_add(&kh, info->host, info->port, key, key_len);
-                } else {
-                    term_process(s->term, "Connection aborted: host key mismatch.\r\n", 40);
-                    knownhosts_free(&kh);
-                    return;
-                }
-            }
-            knownhosts_free(&kh);
-        }
-    }
-
-    int auth_rc = -1;
-    if (info->auth_type == AUTH_KEY) {
-        auth_rc = ssh_auth_key(s->ssh, info->username, info->key_path, info->password);
-        if (auth_rc != 0) {
-            /* Key auth failed — may need passphrase.  Prompt and retry once. */
-            char passphrase[256];
-            memset(passphrase, 0, sizeof(passphrase));
-            if (prompt_passphrase(GetParent(g_hwndTabs), passphrase, (int)sizeof(passphrase))) {
-                auth_rc = ssh_auth_key(s->ssh, info->username, info->key_path, passphrase);
-                if (auth_rc == 0) {
-                    /* Cache passphrase in session memory (never written to disk) */
-                    strncpy(s->ssh->cached_passphrase, passphrase,
-                            sizeof(s->ssh->cached_passphrase) - 1u);
-                    s->ssh->cached_passphrase[sizeof(s->ssh->cached_passphrase) - 1u] = '\0';
-                }
-            }
-            SecureZeroMemory(passphrase, sizeof(passphrase));
-        }
-    } else {
-        auth_rc = ssh_auth_password(s->ssh, info->username, info->password);
-    }
-
-    if (auth_rc != 0) {
-        char auth_err[256];
-        snprintf(auth_err, sizeof(auth_err),
-                 "Authentication failed for %s@%s.",
-                 info->username, info->host);
-        term_process(s->term, auth_err, strlen(auth_err));
-        term_process(s->term, "\r\n", 2);
-        MessageBoxA(GetParent(g_hwndTabs), auth_err,
-                    "Authentication Error", MB_OK | MB_ICONERROR);
-        tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
-        return;
-    }
-
-    s->channel = ssh_channel_open(s->ssh);
-    if (s->channel) {
-        ssh_pty_request(s->channel, "xterm", cols, rows);
-        ssh_pty_shell(s->channel);
-        ssh_session_set_blocking(s->ssh, false); /* Non-blocking for I/O loop */
-        term_process(s->term, "Connected.\r\n", 12);
-        s->session_log = open_session_log(info->host);
-        tabs_set_connect_info(g_hwndTabs, idx,
-                              info->username, info->host,
-                              (unsigned long long)GetTickCount64());
-        tabs_set_status(g_hwndTabs, idx, TAB_CONNECTED);
-    } else {
-        char ch_err[256];
-        snprintf(ch_err, sizeof(ch_err),
-                 "Could not open SSH channel to %s.", info->host);
-        term_process(s->term, ch_err, strlen(ch_err));
-        term_process(s->term, "\r\n", 2);
-        MessageBoxA(GetParent(g_hwndTabs), ch_err,
-                    "Channel Error", MB_OK | MB_ICONERROR);
-        tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
+        s->conn_state = CONN_IDLE;
     }
 }
 
@@ -445,13 +494,64 @@ static void on_tab_new(void) {
     Profile p;
     memset(&p, 0, sizeof(Profile));
 
-    if (SessionManager_Show(g_hInst, GetParent(g_hwndTabs), &p)) {
+    if (SessionManager_Show(g_hInst, GetParent(g_hwndTabs), g_config, "config.json", &p)) {
         on_session_connect(&p);
     }
 }
 
+static COLORREF parse_hex_color(const char *hex, COLORREF fallback)
+{
+    unsigned int r = 0, g = 0, b = 0;
+    if (!hex || hex[0] != '#' || strlen(hex) < 7) return fallback;
+    if (sscanf(hex + 1, "%02x%02x%02x", &r, &g, &b) != 3) return fallback;
+    return RGB((BYTE)r, (BYTE)g, (BYTE)b);
+}
+
+static void apply_config_colors(void)
+{
+    g_renderer.defaultFg = parse_hex_color(
+        g_config->settings.foreground_colour, RGB(204, 204, 204));
+    g_renderer.defaultBg = parse_hex_color(
+        g_config->settings.background_colour, RGB(12, 12, 12));
+}
+
 static void on_settings_clicked(void) {
-    settings_dlg_show(GetParent(g_hwndTabs), g_config);
+    HWND parent = GetParent(g_hwndTabs);
+    settings_dlg_show(parent, g_config);
+    apply_config_colors();
+    renderer_apply_theme(parent, g_renderer.defaultBg);
+    InvalidateRect(parent, NULL, FALSE);
+}
+
+static void on_log_toggle(int index, void *user_data) {
+    Session *s = (Session *)user_data;
+    if (!s) return;
+    int tidx = tabs_find(g_hwndTabs, s);
+    if (tidx < 0) return;
+
+    if (s->session_log) {
+        /* Logging is on — turn it off */
+        fclose(s->session_log);
+        s->session_log = NULL;
+        tabs_set_logging(g_hwndTabs, tidx, 0);
+    } else {
+        /* Logging is off — turn it on */
+        char dir_buf[MAX_PATH];
+        const char *dir;
+        if (g_config && g_config->settings.log_dir[0]) {
+            dir = g_config->settings.log_dir;
+        } else {
+            get_exe_dir(dir_buf, sizeof(dir_buf));
+            dir = dir_buf[0] ? dir_buf : ".";
+        }
+        char path[512];
+        log_format_filename(s->conn_profile.name, dir, path, sizeof(path));
+        s->session_log = fopen(path, "a");
+        if (s->session_log) {
+            tabs_set_logging(g_hwndTabs, tidx, 1);
+        }
+    }
+    (void)index;
 }
 
 /* ---- Paste helper -------------------------------------------------------- */
@@ -545,49 +645,72 @@ static void do_paste(HWND hwnd)
     CloseClipboard();
 }
 
+/* ---- Cell-snapping helpers ----------------------------------------------- */
+#include "snap.h"
+#include "zoom.h"
+#include "connect_anim.h"
+
+/* Return total non-client pixel size (border + title bar) for hwnd. */
+static void get_nc_size(HWND hwnd, int *nc_w, int *nc_h)
+{
+    RECT nc = {0, 0, 0, 0};
+    AdjustWindowRectEx(&nc,
+                       (DWORD)GetWindowLong(hwnd, GWL_STYLE),
+                       FALSE,
+                       (DWORD)GetWindowLong(hwnd, GWL_EXSTYLE));
+    *nc_w = nc.right  - nc.left;
+    *nc_h = nc.bottom - nc.top;
+}
+
 /* ---- Zoom helper --------------------------------------------------------- */
 
-/* Reinitialise the renderer at a new font size, then resize all terminals.
+/* Reinitialise the renderer at a new font size, keeping the window the same
+ * size.  We loop through candidate sizes in the zoom direction and pick the
+ * first one whose character metrics divide the client area evenly (no gutter).
  * delta is typically +1 or -1. */
 static void apply_zoom(HWND hwnd, int delta)
 {
-    int sz = g_config->settings.font_size + delta;
-    if (sz < 6)  sz = 6;
-    if (sz > 72) sz = 72;
-    if (sz == g_config->settings.font_size) return;
-
-    g_config->settings.font_size = sz;
-
-    renderer_free(&g_renderer);
-    renderer_init(&g_renderer, g_config->settings.font, sz);
-
-    /* Recalculate terminal dimensions based on new character size */
     RECT rc;
     GetClientRect(hwnd, &rc);
-    int width  = rc.right;
-    int height = rc.bottom;
+    int client_w = rc.right;
+    int term_h   = rc.bottom - TAB_HEIGHT;
+    if (term_h < 1) term_h = 1;
 
-    if (g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
-        int term_h = height - TAB_HEIGHT;
-        if (term_h < 1) term_h = 1;
-        int cols = width / g_renderer.charWidth;
-        int rows = term_h / g_renderer.charHeight;
-        if (cols < 1) cols = 1;
-        if (rows < 1) rows = 1;
+    int cur = g_config->settings.font_size;
 
-        Session *s = g_session_list;
-        while (s) {
-            if (s->term &&
-                (cols != s->term->cols || rows != s->term->rows)) {
-                term_resize(s->term, rows, cols);
-                if (s->channel)
-                    ssh_pty_resize(s->channel, cols, rows);
-            }
-            s = s->next;
+    /* Try all valid sizes in the zoom direction (6-72) looking for an exact
+     * fit.  If none exists, fall back to the next adjacent size to ensure
+     * zoom always moves in the requested direction. */
+    int fallback = -1;
+    for (int step = 1; step <= 66; step++) {
+        int sz = cur + delta * step;
+        if (sz < 6 || sz > 72) break;
+
+        if (fallback < 0) fallback = sz;   /* first candidate in range */
+
+        /* Measure char metrics at candidate size using a temp renderer. */
+        Renderer tmp = {0};
+        renderer_init(&tmp, g_config->settings.font, sz);
+        int cw = tmp.charWidth;
+        int ch = tmp.charHeight;
+        renderer_free(&tmp);
+
+        if (zoom_font_fits(client_w, term_h, cw, ch)) {
+            fallback = sz;   /* prefer exact fit */
+            break;
         }
     }
 
-    InvalidateRect(hwnd, NULL, FALSE);
+    if (fallback >= 6 && fallback <= 72) {
+        g_config->settings.font_size = fallback;
+        renderer_free(&g_renderer);
+        renderer_init(&g_renderer, g_config->settings.font, fallback);
+
+        /* Send synthetic WM_SIZE so terminals resize to new cols/rows. */
+        SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
+                    MAKELPARAM(rc.right, rc.bottom));
+        InvalidateRect(hwnd, NULL, FALSE);
+    }
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -608,27 +731,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             GetClientRect(hwnd, &rc);
             
             g_hwndTabs = tabs_create(hwnd, 0, 0, rc.right, TAB_HEIGHT);
-            tabs_set_callbacks(g_hwndTabs, on_tab_select, on_tab_new, on_tab_close, on_settings_clicked);
+            tabs_set_callbacks(g_hwndTabs, on_tab_select, on_tab_new, on_tab_close, on_settings_clicked, on_log_toggle);
             
             renderer_init(&g_renderer,
                           g_config->settings.font[0]
                               ? g_config->settings.font : "Consolas",
                           g_config->settings.font_size > 0
                               ? g_config->settings.font_size : 12);
+            apply_config_colors();
             renderer_apply_theme(hwnd, g_renderer.defaultBg);
 
-            /* Start I/O Timer (10ms) */
-            SetTimer(hwnd, 1, 10, NULL);
+            /* Start I/O timer (10ms) and animation timer (500ms) */
+            SetTimer(hwnd, 1, 10,  NULL);
+            SetTimer(hwnd, 2, 500, NULL);
             
             PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
             return 0;
 
         case WM_TIMER:
             if (wParam == 1) {
-                /* Poll all active sessions */
+                /* Poll connected sessions only (skip those still connecting) */
                 Session *s = g_session_list;
                 while (s) {
-                    if (s->channel) {
+                    if (s->channel && s->conn_state == CONN_IDLE) {
                         int poll_rc = ssh_io_poll(s->channel, s->term,
                                                       s->session_log);
                         if (poll_rc > 0) {
@@ -646,12 +771,88 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                     s = s->next;
                 }
+            } else if (wParam == 2) {
+                /* 500ms animation: append dots to each connecting session */
+                BOOL needs_repaint = FALSE;
+                Session *s = g_session_list;
+                while (s) {
+                    if (s->conn_state == CONN_CONNECTING) {
+                        ULONGLONG now_ms = GetTickCount64();
+                        unsigned long elapsed =
+                            (unsigned long)(now_ms - s->conn_start_ms);
+                        int expected = connect_anim_dots(elapsed, 500, 20);
+                        for (int i = s->conn_dots; i < expected; i++) {
+                            term_process(s->term, ".", 1);
+                        }
+                        if (expected > s->conn_dots) {
+                            s->conn_dots = expected;
+                            needs_repaint = TRUE;
+                        }
+                    }
+                    s = s->next;
+                }
+                if (needs_repaint) InvalidateRect(hwnd, NULL, FALSE);
             }
             return 0;
 
         case WM_SHOW_SESSION_MANAGER:
             on_tab_new();
             return 0;
+
+        case WM_CONN_DONE: {
+            Session *s = (Session *)lParam;
+            s->conn_state = CONN_IDLE;
+            CloseHandle(s->conn_thread);
+            s->conn_thread = NULL;
+
+            int tidx = tabs_find(g_hwndTabs, s);
+            if (s->conn_result != 0) {
+                char errmsg[600];
+                snprintf(errmsg, sizeof(errmsg), "\r\n%s\r\n", s->conn_error);
+                term_process(s->term, errmsg, strlen(errmsg));
+                MessageBoxA(hwnd, s->conn_error, "Connection Error",
+                            MB_OK | MB_ICONERROR);
+                if (tidx >= 0)
+                    tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
+            } else {
+                term_process(s->term, "\r\nConnected.\r\n", 14);
+                s->session_log = open_session_log(s->conn_profile.host);
+                if (tidx >= 0) {
+                    tabs_set_connect_info(g_hwndTabs, tidx,
+                                         s->conn_profile.username,
+                                         s->conn_profile.host,
+                                         (unsigned long long)GetTickCount64());
+                    tabs_set_status(g_hwndTabs, tidx, TAB_CONNECTED);
+                }
+            }
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+
+        case WM_SIZING: {
+            /* Snap the proposed window rect to whole character cells. */
+            if (g_renderer.charWidth <= 0 || g_renderer.charHeight <= 0)
+                break;
+
+            RECT *wr = (RECT *)lParam;
+            int nc_w, nc_h;
+            get_nc_size(hwnd, &nc_w, &nc_h);
+
+            int client_w = (wr->right  - wr->left) - nc_w;
+            int client_h = (wr->bottom - wr->top)  - nc_h;
+
+            int snapped_w, snapped_h;
+            snap_calc(client_w, client_h,
+                      g_renderer.charWidth, g_renderer.charHeight,
+                      nc_w, nc_h, TAB_HEIGHT,
+                      NULL, NULL, &snapped_w, &snapped_h);
+
+            int l = (int)wr->left, t = (int)wr->top,
+                r = (int)wr->right, b = (int)wr->bottom;
+            snap_adjust(&l, &t, &r, &b, snapped_w, snapped_h, (int)wParam);
+            wr->left = l; wr->top = t; wr->right = r; wr->bottom = b;
+            return TRUE;
+        }
 
         case WM_SIZE: {
             int width = LOWORD(lParam);

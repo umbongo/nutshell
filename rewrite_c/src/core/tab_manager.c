@@ -82,6 +82,16 @@ int tabmgr_get_id(const TabManager *m, int index)
     return m->tabs[index].id;
 }
 
+int tabmgr_navigate(TabManager *m, int delta)
+{
+    if (m->count == 0) return -1;
+    int idx = m->active_index + delta;
+    idx = idx % m->count;
+    if (idx < 0) idx += m->count;
+    m->active_index = idx;
+    return idx;
+}
+
 int tabmgr_find(const TabManager *m, const void *user_data)
 {
     for (int i = 0; i < m->count; i++) {
@@ -99,4 +109,16 @@ void tabmgr_set_connect_info(TabManager *m, int index,
     snprintf(e->username, sizeof(e->username), "%s", username ? username : "");
     snprintf(e->host,     sizeof(e->host),     "%s", host     ? host     : "");
     e->connect_ms = connect_ms;
+}
+
+void tabmgr_set_logging(TabManager *m, int index, int logging)
+{
+    if (index < 0 || index >= m->count) return;
+    m->tabs[index].logging = logging;
+}
+
+int tabmgr_get_logging(const TabManager *m, int index)
+{
+    if (index < 0 || index >= m->count) return 0;
+    return m->tabs[index].logging;
 }

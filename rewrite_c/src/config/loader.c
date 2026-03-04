@@ -90,7 +90,7 @@ void config_default_settings(Settings *s)
     memset(s, 0, sizeof(*s));
     field_copy(s->font,                 sizeof(s->font),                 "Consolas");
     s->font_size        = 12;
-    s->scrollback_lines = 3000;
+    s->scrollback_lines = 10000;
     s->paste_delay_ms   = 350;
     s->logging_enabled  = 0;
     field_copy(s->log_format,           sizeof(s->log_format),           "%Y-%m-%d_%H-%M-%S");

@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+int _tf_failed = 0;
+int _tf_run = 0;
+
 /* Forward declarations from test files */
 /* test_vector.c */
 int test_vector_init(void);
@@ -120,6 +123,13 @@ int test_tabmgr_close_active_tab(void);
 int test_tabmgr_reopen_no_id_collision(void);
 int test_tabmgr_status_independence(void);
 int test_tabmgr_find(void);
+int test_tabmgr_navigate_right(void);
+int test_tabmgr_navigate_left(void);
+int test_tabmgr_navigate_wrap_right(void);
+int test_tabmgr_navigate_wrap_left(void);
+int test_tabmgr_navigate_single_tab(void);
+int test_tabmgr_navigate_no_tabs(void);
+int test_tabmgr_navigate_zero_delta(void);
 
 /* test_tooltip.c */
 int test_tooltip_format_3661(void);
@@ -131,6 +141,11 @@ int test_tooltip_disconnected(void);
 int test_tooltip_with_log(void);
 int test_tooltip_null_buf(void);
 int test_tooltip_long_hostname(void);
+int test_tooltip_name_first_line(void);
+int test_tooltip_null_name(void);
+int test_tooltip_empty_name(void);
+int test_tooltip_logging_enabled(void);
+int test_tooltip_logging_disabled(void);
 
 /* test_settings.c */
 int test_settings_validate_defaults(void);
@@ -225,6 +240,76 @@ int test_vt_osc_no_terminator(void);
 int test_vt_unknown_private_mode(void);
 int test_vt_osc_special_chars(void);
 int test_vt_alt_screen_isolation(void);
+
+/* test_connect_anim.c */
+int test_anim_dots_zero_elapsed(void);
+int test_anim_dots_just_under_interval(void);
+int test_anim_dots_exactly_one_interval(void);
+int test_anim_dots_multiple_intervals(void);
+int test_anim_dots_clamped_to_max(void);
+int test_anim_dots_large_interval(void);
+int test_anim_dots_zero_interval(void);
+int test_anim_dots_max_zero(void);
+int test_anim_text_zero_dots(void);
+int test_anim_text_one_dot(void);
+int test_anim_text_three_dots(void);
+int test_anim_text_buf_just_fits_prefix(void);
+int test_anim_text_dots_truncated_by_buf(void);
+int test_anim_text_null_buf(void);
+int test_anim_text_zero_size(void);
+int test_anim_text_small_buf_truncates_prefix(void);
+int test_anim_text_single_byte_buf(void);
+
+/* test_zoom.c */
+int test_zoom_exact_fit(void);
+int test_zoom_odd_cell_sizes(void);
+int test_zoom_unit_cells(void);
+int test_zoom_large_window(void);
+int test_zoom_hgutter(void);
+int test_zoom_vgutter(void);
+int test_zoom_both_gutters(void);
+int test_zoom_zero_char_w(void);
+int test_zoom_zero_char_h(void);
+int test_zoom_zero_client_w(void);
+int test_zoom_zero_term_h(void);
+
+/* test_snap.c */
+int test_snap_calc_exact_fit(void);
+int test_snap_calc_right_gutter(void);
+int test_snap_calc_bottom_gutter(void);
+int test_snap_calc_both_gutters(void);
+int test_snap_calc_odd_cell_size(void);
+int test_snap_calc_zoom_in(void);
+int test_snap_calc_zoom_out(void);
+int test_snap_calc_null_outputs(void);
+int test_snap_calc_min_cols_clamp(void);
+int test_snap_calc_min_rows_clamp(void);
+int test_snap_calc_negative_term_h(void);
+int test_snap_calc_zero_client_w(void);
+int test_snap_adjust_bottom_right(void);
+int test_snap_adjust_top_left(void);
+int test_snap_adjust_left(void);
+int test_snap_adjust_right(void);
+int test_snap_adjust_top(void);
+int test_snap_adjust_bottom(void);
+int test_snap_adjust_top_right(void);
+int test_snap_adjust_bottom_left(void);
+int test_snap_adjust_no_change_when_exact(void);
+int test_snap_roundtrip_bottomright(void);
+int test_snap_roundtrip_topleft(void);
+
+/* test_log_format.c */
+int test_logfmt_basic_name(void);
+int test_logfmt_spaces_to_underscores(void);
+int test_logfmt_empty_dir(void);
+int test_logfmt_null_dir(void);
+int test_logfmt_timestamp_format(void);
+int test_logfmt_long_name(void);
+int test_logfmt_null_name(void);
+int test_logfmt_empty_name(void);
+int test_logfmt_null_buf(void);
+int test_logfmt_zero_bufsize(void);
+int test_logfmt_special_chars(void);
 
 /* test_color.c */
 int test_color256_palette_ansi(void);
@@ -364,6 +449,13 @@ int main(void) {
     failed += test_tabmgr_reopen_no_id_collision();
     failed += test_tabmgr_status_independence();
     failed += test_tabmgr_find();
+    failed += test_tabmgr_navigate_right();
+    failed += test_tabmgr_navigate_left();
+    failed += test_tabmgr_navigate_wrap_right();
+    failed += test_tabmgr_navigate_wrap_left();
+    failed += test_tabmgr_navigate_single_tab();
+    failed += test_tabmgr_navigate_no_tabs();
+    failed += test_tabmgr_navigate_zero_delta();
 
     /* Tooltip */
     failed += test_tooltip_format_3661();
@@ -375,6 +467,11 @@ int main(void) {
     failed += test_tooltip_with_log();
     failed += test_tooltip_null_buf();
     failed += test_tooltip_long_hostname();
+    failed += test_tooltip_name_first_line();
+    failed += test_tooltip_null_name();
+    failed += test_tooltip_empty_name();
+    failed += test_tooltip_logging_enabled();
+    failed += test_tooltip_logging_disabled();
 
     /* Settings Validation */
     failed += test_settings_validate_defaults();
@@ -486,6 +583,76 @@ int main(void) {
     failed += test_color_256_oob();
     failed += test_color_rgb_black();
     failed += test_color_rgb_white();
+
+    printf("\n--- Connect Animation ---\n");
+    failed += test_anim_dots_zero_elapsed();
+    failed += test_anim_dots_just_under_interval();
+    failed += test_anim_dots_exactly_one_interval();
+    failed += test_anim_dots_multiple_intervals();
+    failed += test_anim_dots_clamped_to_max();
+    failed += test_anim_dots_large_interval();
+    failed += test_anim_dots_zero_interval();
+    failed += test_anim_dots_max_zero();
+    failed += test_anim_text_zero_dots();
+    failed += test_anim_text_one_dot();
+    failed += test_anim_text_three_dots();
+    failed += test_anim_text_buf_just_fits_prefix();
+    failed += test_anim_text_dots_truncated_by_buf();
+    failed += test_anim_text_null_buf();
+    failed += test_anim_text_zero_size();
+    failed += test_anim_text_small_buf_truncates_prefix();
+    failed += test_anim_text_single_byte_buf();
+
+    printf("\n--- Zoom ---\n");
+    failed += test_zoom_exact_fit();
+    failed += test_zoom_odd_cell_sizes();
+    failed += test_zoom_unit_cells();
+    failed += test_zoom_large_window();
+    failed += test_zoom_hgutter();
+    failed += test_zoom_vgutter();
+    failed += test_zoom_both_gutters();
+    failed += test_zoom_zero_char_w();
+    failed += test_zoom_zero_char_h();
+    failed += test_zoom_zero_client_w();
+    failed += test_zoom_zero_term_h();
+
+    printf("\n--- Snap ---\n");
+    failed += test_snap_calc_exact_fit();
+    failed += test_snap_calc_right_gutter();
+    failed += test_snap_calc_bottom_gutter();
+    failed += test_snap_calc_both_gutters();
+    failed += test_snap_calc_odd_cell_size();
+    failed += test_snap_calc_zoom_in();
+    failed += test_snap_calc_zoom_out();
+    failed += test_snap_calc_null_outputs();
+    failed += test_snap_calc_min_cols_clamp();
+    failed += test_snap_calc_min_rows_clamp();
+    failed += test_snap_calc_negative_term_h();
+    failed += test_snap_calc_zero_client_w();
+    failed += test_snap_adjust_bottom_right();
+    failed += test_snap_adjust_top_left();
+    failed += test_snap_adjust_left();
+    failed += test_snap_adjust_right();
+    failed += test_snap_adjust_top();
+    failed += test_snap_adjust_bottom();
+    failed += test_snap_adjust_top_right();
+    failed += test_snap_adjust_bottom_left();
+    failed += test_snap_adjust_no_change_when_exact();
+    failed += test_snap_roundtrip_bottomright();
+    failed += test_snap_roundtrip_topleft();
+
+    printf("\n--- Log Format ---\n");
+    failed += test_logfmt_basic_name();
+    failed += test_logfmt_spaces_to_underscores();
+    failed += test_logfmt_empty_dir();
+    failed += test_logfmt_null_dir();
+    failed += test_logfmt_timestamp_format();
+    failed += test_logfmt_long_name();
+    failed += test_logfmt_null_name();
+    failed += test_logfmt_empty_name();
+    failed += test_logfmt_null_buf();
+    failed += test_logfmt_zero_bufsize();
+    failed += test_logfmt_special_chars();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

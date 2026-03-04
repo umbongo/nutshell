@@ -1,0 +1,51 @@
+#include <windows.h>
+#include "resource.h"
+
+/*
+ * Two-column session manager:
+ *   Left  (x=4..187):   saved session list + New / Edit / Delete
+ *   Right (x=191..466): connection form + Save / Connect / Cancel
+ *
+ * Dialog units:  470 wide × 185 tall
+ * At 96 DPI / MS Shell Dlg 8pt this is roughly 705 × 300 px.
+ */
+IDD_SESSION_MANAGER DIALOGEX 0, 0, 470, 185
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Session Manager"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    /* ---- Left column: saved sessions ---- */
+    GROUPBOX        "Sessions",         -1,             4,   4, 183, 177
+    LISTBOX         IDC_LIST_SESSIONS,                 12,  18, 167, 143, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "New",              IDC_BTN_NEW,   12, 163,  47,  14
+    PUSHBUTTON      "Edit",             IDC_BTN_EDIT,  65, 163,  47,  14
+    PUSHBUTTON      "Delete",           IDC_BTN_DELETE,128, 163,  55,  14
+
+    /* ---- Right column: connection form ---- */
+    GROUPBOX        "Connection",       -1,           191,   4, 275, 177
+
+    LTEXT           "Name:",            -1,           198,  18,  35,   8
+    EDITTEXT        IDC_EDIT_NAME,                    237,  16, 221,  14, ES_AUTOHSCROLL
+
+    LTEXT           "Host:",            -1,           198,  36,  35,   8
+    EDITTEXT        IDC_EDIT_HOST,                    237,  34, 142,  14, ES_AUTOHSCROLL
+    LTEXT           "Port:",            -1,           384,  36,  22,   8
+    EDITTEXT        IDC_EDIT_PORT,                    409,  34,  49,  14, ES_AUTOHSCROLL | ES_NUMBER
+
+    LTEXT           "User:",            -1,           198,  54,  35,   8
+    EDITTEXT        IDC_EDIT_USER,                    237,  52, 221,  14, ES_AUTOHSCROLL
+
+    LTEXT           "Auth:",            -1,           198,  72,  35,   8
+    COMBOBOX        IDC_COMBO_AUTH,                   237,  70, 221,  40, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    LTEXT           "Pass:",            -1,           198,  92,  35,   8
+    EDITTEXT        IDC_EDIT_PASS,                    237,  90, 221,  14, ES_PASSWORD | ES_AUTOHSCROLL
+
+    LTEXT           "Key:",             IDC_STATIC_KEY,198, 112,  35,   8
+    EDITTEXT        IDC_EDIT_KEYPATH,                 237, 110, 199,  14, ES_AUTOHSCROLL
+    PUSHBUTTON      "...", IDC_BTN_BROWSE_KEY,        438, 110,  20,  14
+
+    PUSHBUTTON      "Save",             IDC_BTN_SAVE, 198, 132,  50,  14
+    DEFPUSHBUTTON   "Connect",          IDOK,         352, 132,  55,  14
+    PUSHBUTTON      "Cancel",           IDCANCEL,     411, 132,  55,  14
+END

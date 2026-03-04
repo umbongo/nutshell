@@ -4,6 +4,7 @@
 #include <string.h>
 
 #ifdef _WIN32
+#include <commctrl.h>
 
 /* ---- Control IDs -------------------------------------------------------- */
 
@@ -16,6 +17,8 @@
 #define IDC_BG_SWATCH       1007
 #define IDC_BG_CHOOSE       1008
 #define IDC_LOG_CHECK       1009
+#define IDC_LOG_DIR_EDIT    1010
+#define IDC_LOG_FMT_EDIT    1011
 
 static const char *SETTINGS_CLASS = "CongaSSH_Settings";
 
@@ -29,6 +32,7 @@ typedef struct {
     HBRUSH   hBgBrush;
     HWND     hFgSwatch;
     HWND     hBgSwatch;
+    HWND     hTooltip;
 } SettingsDlgData;
 
 /* ---- Colour helpers ------------------------------------------------------ */
@@ -164,6 +168,38 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                             ? BST_CHECKED : BST_UNCHECKED, 0);
         }
 
+        /* Row 8: Log directory */
+        make_label(hwnd, "Log Directory:", lx, 270, lw);
+        make_edit(hwnd, nd->cfg->settings.log_dir,
+                  ex, 270, ew, (HMENU)IDC_LOG_DIR_EDIT);
+
+        /* Row 9: Log name format */
+        make_label(hwnd, "Log Name Format:", lx, 305, lw);
+        make_edit(hwnd, nd->cfg->settings.log_format,
+                  ex, 305, ew, (HMENU)IDC_LOG_FMT_EDIT);
+
+        /* Tooltip on the log format edit: list strftime specifiers */
+        nd->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
+            WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP | TTS_BALLOON,
+            0, 0, 0, 0, hwnd, NULL, NULL, NULL);
+        if (nd->hTooltip) {
+            TOOLINFO ti;
+            memset(&ti, 0, sizeof(ti));
+            ti.cbSize   = sizeof(TOOLINFO);
+            ti.uFlags   = TTF_IDISHWND | TTF_SUBCLASS;
+            ti.hwnd     = hwnd;
+            ti.uId      = (UINT_PTR)GetDlgItem(hwnd, IDC_LOG_FMT_EDIT);
+            ti.lpszText = "%Y  4-digit year (e.g. 2026)\r\n"
+                          "%m  month (01-12)\r\n"
+                          "%d  day   (01-31)\r\n"
+                          "%H  hour  (00-23)\r\n"
+                          "%M  minute (00-59)\r\n"
+                          "%S  second (00-59)\r\n"
+                          "Example: session-%Y%m%d_%H%M%S";
+            SendMessage(nd->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+            SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)300);
+        }
+
         /* Footer separator */
         CreateWindow("STATIC", "",
             WS_VISIBLE | WS_CHILD | SS_ETCHEDHORZ,
@@ -264,6 +300,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                 (SendDlgItemMessage(hwnd, IDC_LOG_CHECK,
                                     BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
 
+            /* Log directory & format */
+            GetDlgItemText(hwnd, IDC_LOG_DIR_EDIT,
+                           s->log_dir, (int)sizeof(s->log_dir));
+            GetDlgItemText(hwnd, IDC_LOG_FMT_EDIT,
+                           s->log_format, (int)sizeof(s->log_format));
+
             /* Colours */
             colorref_to_hex(d->fg, s->foreground_colour,
                             sizeof(s->foreground_colour));
@@ -287,6 +329,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         if (d) {
             if (d->hFgBrush) DeleteObject(d->hFgBrush);
             if (d->hBgBrush) DeleteObject(d->hBgBrush);
+            if (d->hTooltip) DestroyWindow(d->hTooltip);
             free(d);
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)NULL);
         }
@@ -325,7 +368,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
     HWND hwnd = CreateWindowEx(
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 480, 460,
+        CW_USEDEFAULT, CW_USEDEFAULT, 480, 530,
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {

@@ -1,7 +1,12 @@
-# Compiled binary
+# Build artefacts
+*.o
+*.a
 *.exe
+*.obj
+rewrite_c/build/
 
 # Runtime configuration (may contain encrypted credentials)
+config.json
 settings.ini
 
 # Session log files
@@ -9,3 +14,8 @@ settings.ini
 
 # Claude Code project data
 .claude/
+
+# Editor files
+*.swp
+*~
+golang/

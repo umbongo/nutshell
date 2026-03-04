@@ -224,3 +224,108 @@ int test_tabmgr_find(void)
     ASSERT_EQ(tabmgr_find(&m, (void *)999), -1);
     TEST_END();
 }
+
+/* =========================================================================
+ * tabmgr_navigate — positive tests
+ * ========================================================================= */
+
+/* Navigate right from first → second. */
+int test_tabmgr_navigate_right(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "A", (void *)1);
+    tabmgr_add(&m, "B", (void *)2);
+    tabmgr_add(&m, "C", (void *)3);
+    tabmgr_set_active(&m, 0);
+    ASSERT_EQ(tabmgr_navigate(&m, 1), 1);
+    ASSERT_EQ(tabmgr_get_active(&m), 1);
+    TEST_END();
+}
+
+/* Navigate left from second → first. */
+int test_tabmgr_navigate_left(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "A", (void *)1);
+    tabmgr_add(&m, "B", (void *)2);
+    tabmgr_add(&m, "C", (void *)3);
+    tabmgr_set_active(&m, 1);
+    ASSERT_EQ(tabmgr_navigate(&m, -1), 0);
+    ASSERT_EQ(tabmgr_get_active(&m), 0);
+    TEST_END();
+}
+
+/* Wrap right: last → first. */
+int test_tabmgr_navigate_wrap_right(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "A", (void *)1);
+    tabmgr_add(&m, "B", (void *)2);
+    tabmgr_add(&m, "C", (void *)3);
+    tabmgr_set_active(&m, 2);
+    ASSERT_EQ(tabmgr_navigate(&m, 1), 0);
+    ASSERT_EQ(tabmgr_get_active(&m), 0);
+    TEST_END();
+}
+
+/* Wrap left: first → last. */
+int test_tabmgr_navigate_wrap_left(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "A", (void *)1);
+    tabmgr_add(&m, "B", (void *)2);
+    tabmgr_add(&m, "C", (void *)3);
+    tabmgr_set_active(&m, 0);
+    ASSERT_EQ(tabmgr_navigate(&m, -1), 2);
+    ASSERT_EQ(tabmgr_get_active(&m), 2);
+    TEST_END();
+}
+
+/* Single tab stays put. */
+int test_tabmgr_navigate_single_tab(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "Only", (void *)1);
+    ASSERT_EQ(tabmgr_navigate(&m, 1), 0);
+    ASSERT_EQ(tabmgr_navigate(&m, -1), 0);
+    TEST_END();
+}
+
+/* =========================================================================
+ * tabmgr_navigate — negative / edge-case tests
+ * ========================================================================= */
+
+/* No tabs → returns -1. */
+int test_tabmgr_navigate_no_tabs(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    ASSERT_EQ(tabmgr_navigate(&m, 1), -1);
+    ASSERT_EQ(tabmgr_navigate(&m, -1), -1);
+    TEST_END();
+}
+
+/* delta=0 → no change, returns current active. */
+int test_tabmgr_navigate_zero_delta(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "A", (void *)1);
+    tabmgr_add(&m, "B", (void *)2);
+    tabmgr_set_active(&m, 1);
+    ASSERT_EQ(tabmgr_navigate(&m, 0), 1);
+    ASSERT_EQ(tabmgr_get_active(&m), 1);
+    TEST_END();
+}

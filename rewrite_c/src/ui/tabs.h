@@ -10,16 +10,18 @@ typedef void (*TabSelectCallback)(int index, void *user_data);
 typedef void (*TabNewCallback)(void);
 typedef void (*TabCloseCallback)(int index, void *user_data);
 typedef void (*TabSettingsCallback)(void);
+typedef void (*TabLogToggleCallback)(int index, void *user_data);
 
 void      tabs_init       (HINSTANCE hInstance);
 HWND      tabs_create     (HWND parent, int x, int y, int width, int height);
 int       tabs_add        (HWND hwnd, const char *title, void *user_data);
 void      tabs_remove     (HWND hwnd, int index);
 void      tabs_set_callbacks(HWND hwnd,
-                             TabSelectCallback  on_select,
-                             TabNewCallback     on_new,
-                             TabCloseCallback   on_close,
-                             TabSettingsCallback on_settings);
+                             TabSelectCallback   on_select,
+                             TabNewCallback      on_new,
+                             TabCloseCallback    on_close,
+                             TabSettingsCallback  on_settings,
+                             TabLogToggleCallback on_log_toggle);
 void      tabs_clear      (HWND hwnd);
 void      tabs_set_active (HWND hwnd, int index);
 int       tabs_get_active (HWND hwnd);
@@ -32,6 +34,8 @@ int       tabs_find       (HWND hwnd, void *user_data);
 void      tabs_set_connect_info(HWND hwnd, int index,
                                 const char *username, const char *host,
                                 unsigned long long connect_ms);
+void      tabs_set_logging(HWND hwnd, int index, int logging);
+int       tabs_get_logging(HWND hwnd, int index);
 
 #endif
 #endif

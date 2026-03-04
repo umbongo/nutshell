@@ -23,6 +23,7 @@ typedef struct {
     char               username[64];
     char               host[128];
     unsigned long long connect_ms;    /* millisecond timestamp at connect; 0 = not set */
+    int                logging;       /* 1 = session logging active */
 } TabEntry;
 
 typedef struct {
@@ -45,9 +46,14 @@ int       tabmgr_count       (const TabManager *m);
 int       tabmgr_get_id      (const TabManager *m, int index);
 /* Find by user_data pointer; returns index or -1. */
 int       tabmgr_find        (const TabManager *m, const void *user_data);
+/* Navigate to the next/prev tab.  delta = -1 (left) or +1 (right).
+ * Wraps around.  Returns new active_index, or -1 if no tabs. */
+int       tabmgr_navigate     (TabManager *m, int delta);
 /* Store connection info (username, host, connect timestamp) in a tab entry. */
 void      tabmgr_set_connect_info(TabManager *m, int index,
                                    const char *username, const char *host,
                                    unsigned long long connect_ms);
+void      tabmgr_set_logging   (TabManager *m, int index, int logging);
+int       tabmgr_get_logging   (const TabManager *m, int index);
 
 #endif

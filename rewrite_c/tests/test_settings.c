@@ -15,7 +15,7 @@ int test_settings_validate_defaults(void)
     settings_validate(&s);
     ASSERT_STR_EQ(s.font, "Consolas");
     ASSERT_EQ(s.font_size, 12);
-    ASSERT_EQ(s.scrollback_lines, 3000);
+    ASSERT_EQ(s.scrollback_lines, 10000);
     ASSERT_EQ(s.paste_delay_ms, 350);
     TEST_END();
 }
