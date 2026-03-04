@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define TMP_CFG "/tmp/conga_test_config.json"
+#define TMP_CFG "/tmp/nutshell_test_config.json"
 
 /* ============================================================
  * Settings defaults
@@ -16,12 +16,12 @@ int test_config_default_settings(void)
     Settings s;
     config_default_settings(&s);
     ASSERT_STR_EQ(s.font, "Consolas");
-    ASSERT_EQ(s.font_size, 12);
+    ASSERT_EQ(s.font_size, 10);
     ASSERT_EQ(s.scrollback_lines, 10000);
     ASSERT_EQ(s.paste_delay_ms, 350);
     ASSERT_EQ(s.logging_enabled, 0);
-    ASSERT_STR_EQ(s.foreground_colour, "#0C0C0C");
-    ASSERT_STR_EQ(s.background_colour, "#F2F2F2");
+    ASSERT_STR_EQ(s.foreground_colour, "#FFFFFF");
+    ASSERT_STR_EQ(s.background_colour, "#000000");
     ASSERT_STR_EQ(s.host_key_verification, "tofu");
     TEST_END();
 }
@@ -75,7 +75,7 @@ int test_config_load_null_path(void)
 int test_config_load_nonexistent(void)
 {
     TEST_BEGIN();
-    Config *cfg = config_load("/tmp/does_not_exist_conga_xyz.json");
+    Config *cfg = config_load("/tmp/does_not_exist_nutshell_xyz.json");
     ASSERT_NULL(cfg);
     TEST_END();
 }

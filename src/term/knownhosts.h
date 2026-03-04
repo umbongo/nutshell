@@ -1,5 +1,5 @@
-#ifndef CONGA_KNOWNHOSTS_H
-#define CONGA_KNOWNHOSTS_H
+#ifndef NUTSHELL_KNOWNHOSTS_H
+#define NUTSHELL_KNOWNHOSTS_H
 
 #include <stddef.h>
 #include <libssh2.h>
@@ -53,4 +53,4 @@ int knownhosts_add(KnownHosts *kh,
  */
 void knownhosts_free(KnownHosts *kh);
 
-#endif /* CONGA_KNOWNHOSTS_H */
+#endif /* NUTSHELL_KNOWNHOSTS_H */

@@ -1,5 +1,5 @@
-#ifndef CONGA_CORE_SNAP_H
-#define CONGA_CORE_SNAP_H
+#ifndef NUTSHELL_CORE_SNAP_H
+#define NUTSHELL_CORE_SNAP_H
 
 /*
  * Pure arithmetic helpers for snapping a window to whole terminal-cell

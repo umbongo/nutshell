@@ -1,7 +1,7 @@
-# Product Requirements Document: Conga-C
+# Product Requirements Document: Nutshell
 
 ## 1. Overview
-Conga-C is a native C rewrite of the Conga SSH client. The goal is to produce a lightweight, high-performance SSH client with a tabbed interface, mirroring the functionality of the original Go application but with a minimal memory footprint and zero runtime dependencies (other than the OS and essential crypto libraries).
+Nutshell is a lightweight native C SSH client for Windows. The goal is to produce a lightweight, high-performance SSH client with a tabbed interface, mirroring the functionality of the original Go application but with a minimal memory footprint and zero runtime dependencies (other than the OS and essential crypto libraries).
 
 ## 2. Core Features
 
@@ -30,7 +30,7 @@ Conga-C is a native C rewrite of the Conga SSH client. The goal is to produce a 
 
 #### Window
 -   **Initial size**: 1024 x 680 px, centred on screen.
--   **Title**: "Conga.SSH".
+-   **Title**: "Nutshell".
 -   **Layout**: Header (toolbar + tab strip) → separator → content area (terminal or error).
 
 #### Theme & Colours
@@ -137,7 +137,7 @@ Decisions locked in during implementation. Do not revisit without a clear reason
 -   Test runner (`tests/runner.c`) uses explicit forward declarations — no test-discovery magic.
 
 ### 5.6. Build System
--   `make` → cross-compiles core to `build/win/libconga_core.a` (Windows static lib). Will become `conga.exe` in Phase 5.
+-   `make` → cross-compiles core to `build/win/libnutshell_core.a` (Windows static lib). Will become `nutshell.exe` in Phase 5.
 -   `make test` → compiles and runs the test suite natively on Linux with ASan + UBSan.
 -   `make debug` → builds the test runner without running it (for use with `gdb`).
 -   `make lint` → cppcheck with `--error-exitcode=1`; a warning is a build failure.

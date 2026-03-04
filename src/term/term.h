@@ -1,5 +1,5 @@
-#ifndef CONGA_TERM_TERM_H
-#define CONGA_TERM_TERM_H
+#ifndef NUTSHELL_TERM_TERM_H
+#define NUTSHELL_TERM_TERM_H
 
 #include <stdint.h>
 #include <stdbool.h>

@@ -7,7 +7,7 @@
 
 #ifdef _WIN32
 
-static const char *TABS_CLASS_NAME = "CongaSSH_Tabs";
+static const char *TABS_CLASS_NAME = "Nutshell_Tabs";
 
 /* ---- Layout constants ---------------------------------------------------- */
 #define TAB_H_PAD   4     /* vertical padding above/below tab */

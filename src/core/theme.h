@@ -1,5 +1,5 @@
-#ifndef CONGA_THEME_H
-#define CONGA_THEME_H
+#ifndef NUTSHELL_THEME_H
+#define NUTSHELL_THEME_H
 
 /* Pure, portable theme helpers (no Win32 dependency).
  *

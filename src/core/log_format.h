@@ -1,5 +1,5 @@
-#ifndef CONGA_CORE_LOG_FORMAT_H
-#define CONGA_CORE_LOG_FORMAT_H
+#ifndef NUTSHELL_CORE_LOG_FORMAT_H
+#define NUTSHELL_CORE_LOG_FORMAT_H
 
 #include <stddef.h>
 

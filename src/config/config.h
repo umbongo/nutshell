@@ -1,5 +1,5 @@
-#ifndef CONGA_CONFIG_H
-#define CONGA_CONFIG_H
+#ifndef NUTSHELL_CONFIG_H
+#define NUTSHELL_CONFIG_H
 
 #include <stddef.h>
 

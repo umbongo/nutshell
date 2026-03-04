@@ -1,6 +1,6 @@
-# Conga-C
+# Nutshell v1.3
 
-A native C rewrite of the Conga SSH client, focusing on performance, minimal dependencies, and native OS integration.
+A lightweight native C SSH client for Windows, focusing on performance, minimal dependencies, and native OS integration.
 
 ## Features
 
@@ -9,11 +9,12 @@ A native C rewrite of the Conga SSH client, focusing on performance, minimal dep
 - Password and SSH key authentication with passphrase prompt and retry
 - AES-256-GCM password encryption in `config.json` (PBKDF2-SHA256 machine key, OpenSSL)
 - TOFU host key verification via libssh2 known_hosts API (first-connect dialog, mismatch warning)
-- PTY resize on window resize and zoom (Ctrl+=/-, Ctrl+Scroll, gutter-free fit)
+- PTY resize on window resize and zoom (Ctrl+=/-, Ctrl+Scroll; discrete sizes 6/8/10/12/14/16/18/20)
 - Paste confirmation dialog with inter-line delay (configurable threshold and delay)
 - Session file logging with ANSI strip, configurable directory (default: exe dir) and strftime name format
-- Settings dialog (font, colours with swatches, scrollback 10,000 default, paste delay, logging, log format tooltip)
+- Settings dialog: font/size from curated comboboxes, 10 built-in colour schemes with swatch preview, scrollback (10,000 default), paste delay, logging, log format tooltip
 - Session manager with SSH key file browse button ("..."), double-click to connect
+- Vertical scrollbar tracking scrollback position (Win64-safe, uses `GetScrollInfo` for full 32-bit range)
 - Dynamic light/dark title bar (DWM, BT.709 luminance, applied on settings change)
 - Hover tooltips on tabs (table format: name, host, user, status/duration, logging; [L] footnote)
 - Error dialogs for connection/auth failures
@@ -22,9 +23,9 @@ A native C rewrite of the Conga SSH client, focusing on performance, minimal dep
 ## Directory Structure
 
 ```
-rewrite_c/
+.
 ├── src/
-│   ├── core/       # xmalloc, vector, string_utils, logger, tab_manager, theme, tooltip
+│   ├── core/       # xmalloc, vector, string_utils, logger, tab_manager, theme, tooltip, snap, zoom, connect_anim, log_format
 │   ├── config/     # JSON tokenizer, JSON parser, config loader, ssh_io
 │   ├── crypto/     # AES-256-GCM password encryption (OpenSSL)
 │   ├── term/       # Terminal emulator (buffer, parser) + SSH (session, channel, PTY, knownhosts)
@@ -72,15 +73,23 @@ To build with AddressSanitizer + UndefinedBehaviorSanitizer:
 make debug
 ```
 
+To build a size-optimised release compressed with UPX:
+
+```bash
+make release
+```
+
+(Requires `upx` — `sudo apt install upx`. Reduces the exe from ~5.4 MB to ~1.5 MB.)
+
 ### Memory Audit (Windows)
 
 To run Dr. Memory on the Windows release build:
 
 1.  Build the executable: `make`
-2.  Transfer `build/win/congassh.exe` to a Windows machine.
+2.  Transfer `build/win/nutshell.exe` to a Windows machine.
 3.  Run with Dr. Memory:
     ```cmd
-    drmemory.exe -- congassh.exe
+    drmemory.exe -- nutshell.exe
     ```
 
 ## Development Guidelines
@@ -111,5 +120,8 @@ If you are an AI assistant helping with this codebase, please observe the follow
 11. **Module layout**: SSH code lives in `src/term/` (ssh_session.c, ssh_channel.c, ssh_pty.c, knownhosts.c), not a separate `src/ssh/` directory. Crypto is in `src/crypto/`. Tab management logic is in `src/core/tab_manager.c`; the owner-drawn tab strip UI is in `src/ui/tabs.c`.
 12. **libssh2 macros**: `libssh2_channel_open_session`, `libssh2_session_init`, and `libssh2_channel_write` are **macros** in the real libssh2 header. `src/term/libssh2.h` is a stub used only for test builds — the real header comes from vcpkg at `~/vcpkg/installed/x64-mingw-gcc-static/`.
 13. **Resize reflow**: `TermRow.len` tracks actual written content width. When reflowing on resize, always loop to `row->len`, not `term->cols`, to avoid copying trailing empty cells that cause spurious wraps.
+16. **Discrete font sizes**: Allowed sizes are `{6, 8, 10, 12, 14, 16, 18, 20}` — defined in three places that must stay in sync: `k_allowed_sizes[]` in `window.c`, `k_font_sizes[]` in `settings.c`, and `k_allowed_sizes[]` in `loader.c`. `settings_validate()` snaps any out-of-set value to the nearest allowed size (not a range clamp).
+17. **Colour defaults**: Default terminal colours are white-on-black (`fg=#FFFFFF, bg=#000000`) matching the "Default" colour scheme in `settings.c`. `COLOR_DEFAULT` fg/bg mode means the renderer substitutes the configured scheme colours; hardcoded colour values in `buffer.c`/`parser.c` are only set for `COLOR_ANSI16`/`COLOR_256`/`COLOR_RGB` cells.
+18. **Scrollbar**: `update_scrollbar()` in `window.c` syncs a Win32 vertical scrollbar to the active terminal. Use `GetScrollInfo(SIF_TRACKPOS)` for `WM_VSCROLL` — never `HIWORD(wParam)`, which silently truncates to 16 bits and breaks scrollback > 65535 lines.
 14. **Config path caveat**: `config.json` is loaded relative to CWD, which can change after `GetOpenFileNameA` file dialogs. See `vulnerabilities.md` M-8 for details. The long-term fix is to resolve to an absolute path at startup using `get_exe_dir()`.
 15. **Security**: See `vulnerabilities.md` for known security issues ranked by severity. The most critical are password encryption key derivation (C-1/C-2) and TOFU broken for non-RSA keys (H-4).

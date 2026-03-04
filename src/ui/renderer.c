@@ -40,8 +40,8 @@ void renderer_init(Renderer *r, const char *fontName, int fontSize) {
     SelectObject(hdc, oldFont);
     ReleaseDC(NULL, hdc);
 
-    r->defaultFg = RGB(204, 204, 204); /* #CCCCCC */
-    r->defaultBg = RGB(12, 12, 12);    /* #0C0C0C */
+    r->defaultFg = RGB(0,   0,   0);   /* #000000 — overridden by apply_config_colors() */
+    r->defaultBg = RGB(255, 255, 255); /* #FFFFFF — overridden by apply_config_colors() */
 }
 
 void renderer_free(Renderer *r) {

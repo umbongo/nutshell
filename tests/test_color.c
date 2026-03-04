@@ -107,7 +107,7 @@ int test_color_rgb_bg(void) {
     TEST_END();
 }
 
-/* ---- SGR 0 resets extended colours to ANSI16 ----------------------------- */
+/* ---- SGR 0 resets to COLOR_DEFAULT --------------------------------------- */
 
 int test_color_sgr_reset(void) {
     TEST_BEGIN();
@@ -118,12 +118,42 @@ int test_color_sgr_reset(void) {
     ASSERT_EQ(t->current_attr.fg_mode, COLOR_256);
 
     feed(t, "\033[0m");
-    ASSERT_EQ(t->current_attr.fg_mode,  COLOR_ANSI16);
+    ASSERT_EQ(t->current_attr.fg_mode,  COLOR_DEFAULT);
     ASSERT_EQ(t->current_attr.fg_index, 0);
-    ASSERT_EQ(t->current_attr.bg_mode,  COLOR_ANSI16);
+    ASSERT_EQ(t->current_attr.bg_mode,  COLOR_DEFAULT);
+    ASSERT_EQ(t->current_attr.fg,       0u);
 
-    /* fg should be default after reset */
-    ASSERT_EQ(t->current_attr.fg, 0x0C0C0Cu);
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- SGR 39 / 49 restore COLOR_DEFAULT fg / bg --------------------------- */
+
+int test_color_sgr_default_fg(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    /* Set explicit fg, then restore default */
+    feed(t, "\033[31m");   /* red */
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_ANSI16);
+    feed(t, "\033[39m");   /* default fg */
+    ASSERT_EQ(t->current_attr.fg_mode,  COLOR_DEFAULT);
+    ASSERT_EQ(t->current_attr.fg_index, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_sgr_default_bg(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    /* Set explicit bg, then restore default */
+    feed(t, "\033[41m");   /* red bg */
+    ASSERT_EQ(t->current_attr.bg_mode, COLOR_ANSI16);
+    feed(t, "\033[49m");   /* default bg */
+    ASSERT_EQ(t->current_attr.bg_mode,  COLOR_DEFAULT);
+    ASSERT_EQ(t->current_attr.bg_index, 0);
 
     term_free(t);
     TEST_END();

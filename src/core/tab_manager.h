@@ -1,5 +1,5 @@
-#ifndef CONGA_TAB_MANAGER_H
-#define CONGA_TAB_MANAGER_H
+#ifndef NUTSHELL_TAB_MANAGER_H
+#define NUTSHELL_TAB_MANAGER_H
 
 /* Pure, portable tab-manager logic (no Win32 dependency).
  * Provides the data model behind the Win32 tab-strip widget in tabs.c,

@@ -20,8 +20,8 @@
 #include "knownhosts.h"
 #include "log_format.h"
 
-static const char *CLASS_NAME = "CongaSSH_Window";
-static const char *APP_TITLE = "Conga.SSH";
+static const char *CLASS_NAME = "Nutshell_Window";
+static const char *APP_TITLE = "Nutshell";
 
 #define TAB_HEIGHT 32
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
@@ -70,6 +70,7 @@ static HINSTANCE g_hInst = NULL;
 static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
+static void update_scrollbar(HWND hwnd); /* forward declaration */
 
 static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
@@ -110,10 +111,9 @@ static void free_session(Session *s) {
 static void on_tab_select(int index, void *user_data) {
     (void)index;
     g_active_session = (Session *)user_data;
-    /* Redraw terminal area */
     HWND hParent = GetParent(g_hwndTabs);
+    update_scrollbar(hParent);
     InvalidateRect(hParent, NULL, FALSE);
-    /* Ensure main window has focus to capture keys */
     SetFocus(hParent);
 }
 
@@ -205,7 +205,7 @@ static int prompt_passphrase(HWND parent, char *out, int out_size)
         memset(&wc, 0, sizeof(wc));
         wc.lpfnWndProc   = pass_wnd_proc;
         wc.hInstance     = g_hInst;
-        wc.lpszClassName = "CongaPassDlg";
+        wc.lpszClassName = "NutshellPassDlg";
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
         RegisterClassA(&wc);
@@ -217,7 +217,7 @@ static int prompt_passphrase(HWND parent, char *out, int out_size)
 
     HWND hwnd = CreateWindowExA(
         WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-        "CongaPassDlg", "SSH Key Passphrase",
+        "NutshellPassDlg", "SSH Key Passphrase",
         WS_POPUP | WS_CAPTION | WS_SYSMENU,
         0, 0, 296, 128,
         parent, NULL, g_hInst, &ctx);
@@ -543,16 +543,27 @@ static COLORREF parse_hex_color(const char *hex, COLORREF fallback)
 static void apply_config_colors(void)
 {
     g_renderer.defaultFg = parse_hex_color(
-        g_config->settings.foreground_colour, RGB(204, 204, 204));
+        g_config->settings.foreground_colour, RGB(0, 0, 0));
     g_renderer.defaultBg = parse_hex_color(
-        g_config->settings.background_colour, RGB(12, 12, 12));
+        g_config->settings.background_colour, RGB(255, 255, 255));
 }
 
 static void on_settings_clicked(void) {
     HWND parent = GetParent(g_hwndTabs);
     settings_dlg_show(parent, g_config);
+
+    /* Reinitialise renderer — font or size may have changed */
+    renderer_free(&g_renderer);
+    renderer_init(&g_renderer, g_config->settings.font,
+                  g_config->settings.font_size);
     apply_config_colors();
     renderer_apply_theme(parent, g_renderer.defaultBg);
+
+    /* Resize all terminals to the new character grid */
+    RECT rc;
+    GetClientRect(parent, &rc);
+    SendMessage(parent, WM_SIZE, SIZE_RESTORED,
+                MAKELPARAM(rc.right, rc.bottom));
     InvalidateRect(parent, NULL, FALSE);
 }
 
@@ -678,6 +689,40 @@ static void do_paste(HWND hwnd)
     CloseClipboard();
 }
 
+/* ---- Scrollbar helper ---------------------------------------------------- */
+
+/* Sync the window's vertical scrollbar to the active terminal's state.
+ * Scrollbar: top = oldest lines, bottom = newest (live view).
+ * nPos = lines_count - rows - scrollback_offset  (first visible line index).
+ *
+ * Win64 note: SCROLLINFO fields are 32-bit (int/UINT) regardless of target
+ * arch.  nTrackPos is an *output* field — SetScrollInfo ignores it. */
+static void update_scrollbar(HWND hwnd)
+{
+    SCROLLINFO si;
+    si.cbSize = sizeof(SCROLLINFO);
+    si.fMask  = SIF_ALL;
+
+    if (!g_active_session || !g_active_session->term) {
+        si.nMin  = si.nMax = si.nPos = 0;
+        si.nPage = 1;
+        SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+        return;
+    }
+
+    Terminal *t = g_active_session->term;
+    int total = t->lines_count;
+    int rows  = (t->rows > 0) ? t->rows : 1;
+    int nPos  = (total > rows) ? (total - rows - t->scrollback_offset) : 0;
+    if (nPos < 0) nPos = 0;
+
+    si.nMin  = 0;
+    si.nMax  = (total > 1) ? (total - 1) : 0;
+    si.nPage = (UINT)rows;
+    si.nPos  = nPos;
+    SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+}
+
 /* ---- Cell-snapping helpers ----------------------------------------------- */
 #include "snap.h"
 #include "zoom.h"
@@ -697,53 +742,44 @@ static void get_nc_size(HWND hwnd, int *nc_w, int *nc_h)
 
 /* ---- Zoom helper --------------------------------------------------------- */
 
-/* Reinitialise the renderer at a new font size, keeping the window the same
- * size.  We loop through candidate sizes in the zoom direction and pick the
- * first one whose character metrics divide the client area evenly (no gutter).
- * delta is typically +1 or -1. */
+/* Allowed discrete font sizes — must match k_font_sizes in settings.c and
+ * k_allowed_sizes in loader.c. */
+static const int k_allowed_sizes[] = { 6, 8, 10, 12, 14, 16, 18, 20 };
+#define NUM_ALLOWED_SIZES ((int)(sizeof(k_allowed_sizes) / sizeof(k_allowed_sizes[0])))
+
+/* Step to the next/previous discrete font size.
+ * delta is +1 (zoom in / larger) or -1 (zoom out / smaller). */
 static void apply_zoom(HWND hwnd, int delta)
 {
-    RECT rc;
-    GetClientRect(hwnd, &rc);
-    int client_w = rc.right;
-    int term_h   = rc.bottom - TAB_HEIGHT;
-    if (term_h < 1) term_h = 1;
-
     int cur = g_config->settings.font_size;
 
-    /* Try all valid sizes in the zoom direction (6-72) looking for an exact
-     * fit.  If none exists, fall back to the next adjacent size to ensure
-     * zoom always moves in the requested direction. */
-    int fallback = -1;
-    for (int step = 1; step <= 66; step++) {
-        int sz = cur + delta * step;
-        if (sz < 6 || sz > 72) break;
-
-        if (fallback < 0) fallback = sz;   /* first candidate in range */
-
-        /* Measure char metrics at candidate size using a temp renderer. */
-        Renderer tmp = {0};
-        renderer_init(&tmp, g_config->settings.font, sz);
-        int cw = tmp.charWidth;
-        int ch = tmp.charHeight;
-        renderer_free(&tmp);
-
-        if (zoom_font_fits(client_w, term_h, cw, ch)) {
-            fallback = sz;   /* prefer exact fit */
-            break;
-        }
+    /* Find the index of the largest allowed size <= cur. */
+    int idx = 0;
+    for (int i = 0; i < NUM_ALLOWED_SIZES; i++) {
+        if (k_allowed_sizes[i] <= cur)
+            idx = i;
     }
 
-    if (fallback >= 6 && fallback <= 72) {
-        g_config->settings.font_size = fallback;
-        renderer_free(&g_renderer);
-        renderer_init(&g_renderer, g_config->settings.font, fallback);
+    int next_idx = idx + delta;
+    if (next_idx < 0 || next_idx >= NUM_ALLOWED_SIZES)
+        return;  /* already at min/max */
 
-        /* Send synthetic WM_SIZE so terminals resize to new cols/rows. */
-        SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
-                    MAKELPARAM(rc.right, rc.bottom));
-        InvalidateRect(hwnd, NULL, FALSE);
-    }
+    int new_size = k_allowed_sizes[next_idx];
+    if (new_size == cur)
+        return;
+
+    g_config->settings.font_size = new_size;
+    renderer_free(&g_renderer);
+    renderer_init(&g_renderer, g_config->settings.font, new_size);
+    apply_config_colors();
+    renderer_apply_theme(hwnd, g_renderer.defaultBg);
+
+    /* Send synthetic WM_SIZE so terminals resize to the new character grid. */
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
+                MAKELPARAM(rc.right, rc.bottom));
+    InvalidateRect(hwnd, NULL, FALSE);
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -810,6 +846,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         int poll_rc = ssh_io_poll(s->channel, s->term,
                                                       s->session_log);
                         if (poll_rc > 0) {
+                            update_scrollbar(hwnd);
                             InvalidateRect(hwnd, NULL, FALSE);
                         } else if (poll_rc == -2) {
                             /* EOF */
@@ -888,6 +925,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                      s->session_log ? 1 : 0);
                 }
             }
+            update_scrollbar(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
@@ -900,6 +938,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             RECT *wr = (RECT *)lParam;
             int nc_w, nc_h;
             get_nc_size(hwnd, &nc_w, &nc_h);
+            /* AdjustWindowRectEx does not account for WS_VSCROLL */
+            nc_w += GetSystemMetrics(SM_CXVSCROLL);
 
             int client_w = (wr->right  - wr->left) - nc_w;
             int client_h = (wr->bottom - wr->top)  - nc_h;
@@ -920,15 +960,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_SIZE: {
             int width = LOWORD(lParam);
             int height = HIWORD(lParam);
-            
+
             if (g_hwndTabs) {
                 SetWindowPos(g_hwndTabs, NULL, 0, 0, width, TAB_HEIGHT, SWP_NOZORDER);
             }
-            
+
             if (g_active_session && g_active_session->term && g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
                 int term_h = height - TAB_HEIGHT;
                 if (term_h < 1) term_h = 1;
-                
+
                 int cols = width / g_renderer.charWidth;
                 int rows = term_h / g_renderer.charHeight;
                 if (cols < 1) cols = 1;
@@ -941,6 +981,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     InvalidateRect(hwnd, NULL, FALSE);
                 }
             }
+            update_scrollbar(hwnd);
             return 0;
         }
 
@@ -1049,12 +1090,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     case VK_PRIOR: /* Page Up */
                         if (g_active_session->term->scrollback_offset < g_active_session->term->max_scrollback) {
                             g_active_session->term->scrollback_offset++;
+                            update_scrollbar(hwnd);
                             InvalidateRect(hwnd, NULL, FALSE);
                         }
                         return 0;
                     case VK_NEXT:  /* Page Down */
                         if (g_active_session->term->scrollback_offset > 0) {
                             g_active_session->term->scrollback_offset--;
+                            update_scrollbar(hwnd);
                             InvalidateRect(hwnd, NULL, FALSE);
                         }
                         return 0;
@@ -1090,8 +1133,45 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     if (g_active_session->term->scrollback_offset > 0)
                         g_active_session->term->scrollback_offset--;
                 }
+                update_scrollbar(hwnd);
                 InvalidateRect(hwnd, NULL, FALSE);
             }
+            return 0;
+        }
+
+        case WM_VSCROLL: {
+            if (!g_active_session || !g_active_session->term) return 0;
+            Terminal *t = g_active_session->term;
+            int max_off = (t->lines_count > t->rows) ? (t->lines_count - t->rows) : 0;
+            if (max_off > t->max_scrollback) max_off = t->max_scrollback;
+            int off = t->scrollback_offset;
+            switch (LOWORD(wParam)) {
+            case SB_LINEUP:       off++; break;
+            case SB_LINEDOWN:     off--; break;
+            case SB_PAGEUP:       off += t->rows; break;
+            case SB_PAGEDOWN:     off -= t->rows; break;
+            case SB_TOP:          off = max_off; break;
+            case SB_BOTTOM:       off = 0; break;
+            case SB_THUMBTRACK:
+            case SB_THUMBPOSITION: {
+                /* Win64: HIWORD(wParam) only gives 16-bit precision (0-65535).
+                 * GetScrollInfo(SIF_TRACKPOS) returns the full 32-bit nTrackPos,
+                 * which is correct for deep buffers where nPos can exceed 65535. */
+                SCROLLINFO si;
+                si.cbSize = sizeof(SCROLLINFO);
+                si.fMask  = SIF_TRACKPOS;
+                GetScrollInfo(hwnd, SB_VERT, &si);
+                /* nPos = lines_count - rows - off  =>  off = lines_count - rows - nPos */
+                off = t->lines_count - t->rows - si.nTrackPos;
+                break;
+            }
+            default: return 0;
+            }
+            if (off < 0) off = 0;
+            if (off > max_off) off = max_off;
+            t->scrollback_offset = off;
+            update_scrollbar(hwnd);
+            InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
 
@@ -1144,7 +1224,7 @@ void ui_init(HINSTANCE instance) {
         0,
         CLASS_NAME,
         APP_TITLE,
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_VSCROLL,
         x, y, winW, winH,
         NULL, NULL, instance, NULL
     );

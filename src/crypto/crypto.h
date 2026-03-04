@@ -1,5 +1,5 @@
-#ifndef CONGA_CRYPTO_H
-#define CONGA_CRYPTO_H
+#ifndef NUTSHELL_CRYPTO_H
+#define NUTSHELL_CRYPTO_H
 
 #include <stddef.h>
 #include <stdbool.h>
@@ -53,4 +53,4 @@ int crypto_decrypt(const char *blob, char *out, size_t out_size);
  */
 bool crypto_is_encrypted(const char *s);
 
-#endif /* CONGA_CRYPTO_H */
+#endif /* NUTSHELL_CRYPTO_H */

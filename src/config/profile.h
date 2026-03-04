@@ -1,5 +1,5 @@
-#ifndef CONGA_CONFIG_PROFILE_H
-#define CONGA_CONFIG_PROFILE_H
+#ifndef NUTSHELL_CONFIG_PROFILE_H
+#define NUTSHELL_CONFIG_PROFILE_H
 
 #ifdef _WIN32
 #include <windows.h>

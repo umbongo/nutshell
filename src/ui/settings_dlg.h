@@ -1,5 +1,5 @@
-#ifndef CONGA_SETTINGS_DLG_H
-#define CONGA_SETTINGS_DLG_H
+#ifndef NUTSHELL_SETTINGS_DLG_H
+#define NUTSHELL_SETTINGS_DLG_H
 
 #ifdef _WIN32
 #include <windows.h>

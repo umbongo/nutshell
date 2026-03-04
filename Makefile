@@ -1,12 +1,14 @@
-# Makefile for Conga-C
+# Makefile for Nutshell
 
 CC = x86_64-w64-mingw32-gcc
 WINDRES = x86_64-w64-mingw32-windres
 VCPKG_LIB = $(HOME)/vcpkg/installed/x64-mingw-gcc-static/lib
 VCPKG_INC = $(HOME)/vcpkg/installed/x64-mingw-gcc-static/include
 CFLAGS = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow -Wformat=2 -Wconversion \
+         -Os -ffunction-sections -fdata-sections -flto \
          -Isrc -Isrc/core -Isrc/config -Isrc/crypto -I$(VCPKG_INC) -Isrc/term -Isrc/ssh -Isrc/ui
-LDFLAGS = -mwindows -L$(VCPKG_LIB) -lssh2 -lssl -lcrypto -lzlib -lcrypt32 -lbcrypt \
+LDFLAGS = -mwindows -Os -flto -Wl,--gc-sections -s \
+          -L$(VCPKG_LIB) -lssh2 -lssl -lcrypto -lzlib -lcrypt32 -lbcrypt \
           -lws2_32 -lgdi32 -luser32 -lcomctl32 -ldwmapi
 
 # Source directories
@@ -16,14 +18,14 @@ SRC_DIRS = src src/core src/config src/crypto src/term src/ssh src/ui
 SRCS = $(foreach dir,$(SRC_DIRS),$(wildcard $(dir)/*.c))
 
 # Resources
-RC_SRCS = src/ui/resource.rc
+RC_SRCS = src/ui/resource.rc src/ui/nutshell.rc
 
 # Object files
 OBJS = $(SRCS:.c=.o) $(RC_SRCS:.rc=.o)
 
 # Build directory and target
 BUILD_DIR = build/win
-TARGET = $(BUILD_DIR)/congassh.exe
+TARGET = $(BUILD_DIR)/nutshell.exe
 
 # Test configuration (Native Linux)
 TEST_CC = gcc
@@ -68,9 +70,12 @@ TEST_SRCS = $(APP_SRCS) $(TEST_IMPL_SRCS)
 TEST_TARGET = build/test_runner
 
 
-.PHONY: all clean test lint debug
+.PHONY: all clean test lint debug release
 
 all: $(TARGET)
+
+release: $(TARGET)
+	upx --best --lzma $(TARGET)
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)

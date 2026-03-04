@@ -1,5 +1,5 @@
-#ifndef CONGA_CORE_LOGGER_H
-#define CONGA_CORE_LOGGER_H
+#ifndef NUTSHELL_CORE_LOGGER_H
+#define NUTSHELL_CORE_LOGGER_H
 
 typedef enum {
     LOG_LEVEL_DEBUG,

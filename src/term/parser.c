@@ -121,10 +121,10 @@ static int get_param(Terminal *term, int idx, int default_val) {
 
 /* Helper: full SGR reset of all colour and style fields. */
 static void sgr_reset(Terminal *term) {
-    term->current_attr.fg      = 0x0C0C0C;
-    term->current_attr.bg      = 0xF2F2F2;
-    term->current_attr.fg_mode  = COLOR_ANSI16;
-    term->current_attr.bg_mode  = COLOR_ANSI16;
+    term->current_attr.fg       = 0;
+    term->current_attr.bg       = 0;
+    term->current_attr.fg_mode  = COLOR_DEFAULT;
+    term->current_attr.bg_mode  = COLOR_DEFAULT;
     term->current_attr.fg_index = 0;
     term->current_attr.bg_index = 0;
     term->current_attr.flags    = 0;
@@ -154,9 +154,9 @@ static void handle_sgr(Terminal *term) {
                 term->current_attr.fg       = PALETTE[p - 30];
                 break;
             case 39: /* default fg */
-                term->current_attr.fg_mode  = COLOR_ANSI16;
+                term->current_attr.fg_mode  = COLOR_DEFAULT;
                 term->current_attr.fg_index = 0;
-                term->current_attr.fg       = 0x0C0C0C;
+                term->current_attr.fg       = 0;
                 break;
 
             /* Classic 16-colour background (40-47, 100-107) */
@@ -166,9 +166,9 @@ static void handle_sgr(Terminal *term) {
                 term->current_attr.bg       = PALETTE[p - 40];
                 break;
             case 49: /* default bg */
-                term->current_attr.bg_mode  = COLOR_ANSI16;
+                term->current_attr.bg_mode  = COLOR_DEFAULT;
                 term->current_attr.bg_index = 0;
-                term->current_attr.bg       = 0xF2F2F2;
+                term->current_attr.bg       = 0;
                 break;
 
             /* Bright foreground (90-97) */

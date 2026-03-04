@@ -1,5 +1,5 @@
-#ifndef CONGA_CORE_XMALLOC_H
-#define CONGA_CORE_XMALLOC_H
+#ifndef NUTSHELL_CORE_XMALLOC_H
+#define NUTSHELL_CORE_XMALLOC_H
 
 #include <stddef.h>
 

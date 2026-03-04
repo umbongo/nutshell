@@ -44,10 +44,8 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->cursor.visible = true;
     
     memset(&term->current_attr, 0, sizeof(TermAttr));
-    term->current_attr.fg      = 0x0C0C0C; /* default near-black */
-    term->current_attr.bg      = 0xF2F2F2; /* default light grey */
-    term->current_attr.fg_mode = COLOR_ANSI16;
-    term->current_attr.bg_mode = COLOR_ANSI16;
+    /* fg_mode = COLOR_DEFAULT (0) and bg_mode = COLOR_DEFAULT (0) from memset —
+     * the renderer will substitute the configured scheme colours. */
 
     term->state = TERM_STATE_NORMAL;
     term->csi_param_count = 0;

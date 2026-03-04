@@ -3,7 +3,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#define TMP_VAL "/tmp/conga_test_validate.json"
+#define TMP_VAL "/tmp/nutshell_test_validate.json"
 
 /* ---- settings_validate: valid defaults pass through unchanged ------------ */
 
@@ -14,7 +14,7 @@ int test_settings_validate_defaults(void)
     config_default_settings(&s);
     settings_validate(&s);
     ASSERT_STR_EQ(s.font, "Consolas");
-    ASSERT_EQ(s.font_size, 12);
+    ASSERT_EQ(s.font_size, 10);
     ASSERT_EQ(s.scrollback_lines, 10000);
     ASSERT_EQ(s.paste_delay_ms, 350);
     TEST_END();
@@ -40,7 +40,53 @@ int test_settings_validate_font_size_high(void)
     config_default_settings(&s);
     s.font_size = 999;
     settings_validate(&s);
-    ASSERT_EQ(s.font_size, 72);
+    ASSERT_EQ(s.font_size, 20);
+    TEST_END();
+}
+
+/* ---- font_size snaps to nearest allowed size (6,8,10,12,14,16,18,20) ---- */
+
+int test_settings_validate_font_size_snap_7(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.font_size = 7;
+    settings_validate(&s);
+    ASSERT_EQ(s.font_size, 6);  /* distance 1 to 6, distance 1 to 8: first wins */
+    TEST_END();
+}
+
+int test_settings_validate_font_size_snap_9(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.font_size = 9;
+    settings_validate(&s);
+    ASSERT_EQ(s.font_size, 8);  /* distance 1 to 8, distance 1 to 10: first wins */
+    TEST_END();
+}
+
+int test_settings_validate_font_size_snap_15(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.font_size = 15;
+    settings_validate(&s);
+    ASSERT_EQ(s.font_size, 14); /* distance 1 to 14, distance 1 to 16: first wins */
+    TEST_END();
+}
+
+int test_settings_validate_font_size_snap_19(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.font_size = 19;
+    settings_validate(&s);
+    ASSERT_EQ(s.font_size, 18); /* distance 1 to 18, distance 1 to 20: first wins */
     TEST_END();
 }
 

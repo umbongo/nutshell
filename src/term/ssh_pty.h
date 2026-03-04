@@ -1,5 +1,5 @@
-#ifndef CONGA_SSH_PTY_H
-#define CONGA_SSH_PTY_H
+#ifndef NUTSHELL_SSH_PTY_H
+#define NUTSHELL_SSH_PTY_H
 
 #include "ssh_channel.h"
 

@@ -1,5 +1,5 @@
-#ifndef CONGA_CONFIG_JSON_PARSER_H
-#define CONGA_CONFIG_JSON_PARSER_H
+#ifndef NUTSHELL_CONFIG_JSON_PARSER_H
+#define NUTSHELL_CONFIG_JSON_PARSER_H
 
 #include "../core/vector.h"
 

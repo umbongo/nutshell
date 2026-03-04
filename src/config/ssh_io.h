@@ -1,5 +1,5 @@
-#ifndef CONGA_SSH_IO_H
-#define CONGA_SSH_IO_H
+#ifndef NUTSHELL_SSH_IO_H
+#define NUTSHELL_SSH_IO_H
 #include "ssh_channel.h"
 #include "../term/term.h"
 #include <stdio.h>

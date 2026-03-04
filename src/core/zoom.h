@@ -1,5 +1,5 @@
-#ifndef CONGA_CORE_ZOOM_H
-#define CONGA_CORE_ZOOM_H
+#ifndef NUTSHELL_CORE_ZOOM_H
+#define NUTSHELL_CORE_ZOOM_H
 
 /*
  * zoom_font_fits — check whether a font's cell metrics divide the

@@ -1,5 +1,5 @@
-#ifndef CONGA_TOOLTIP_H
-#define CONGA_TOOLTIP_H
+#ifndef NUTSHELL_TOOLTIP_H
+#define NUTSHELL_TOOLTIP_H
 
 #include "tab_manager.h"   /* TabStatus */
 #include <stddef.h>

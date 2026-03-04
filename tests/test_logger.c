@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define TEST_LOG_PATH "/tmp/conga_test_logger.txt"
+#define TEST_LOG_PATH "/tmp/nutshell_test_logger.txt"
 
 static void cleanup(void)
 {

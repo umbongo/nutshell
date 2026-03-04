@@ -1,5 +1,5 @@
-#ifndef CONGA_SSH_SESSION_H
-#define CONGA_SSH_SESSION_H
+#ifndef NUTSHELL_SSH_SESSION_H
+#define NUTSHELL_SSH_SESSION_H
 
 #include <stdbool.h>
 

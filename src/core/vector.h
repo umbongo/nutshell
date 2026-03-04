@@ -1,5 +1,5 @@
-#ifndef CONGA_CORE_VECTOR_H
-#define CONGA_CORE_VECTOR_H
+#ifndef NUTSHELL_CORE_VECTOR_H
+#define NUTSHELL_CORE_VECTOR_H
 
 #include <stddef.h>
 

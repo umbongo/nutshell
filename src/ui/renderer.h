@@ -1,5 +1,5 @@
-#ifndef CONGA_RENDERER_H
-#define CONGA_RENDERER_H
+#ifndef NUTSHELL_RENDERER_H
+#define NUTSHELL_RENDERER_H
 
 #include <stdbool.h>
 #include <stdint.h>

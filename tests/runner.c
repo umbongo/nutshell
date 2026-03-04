@@ -151,6 +151,10 @@ int test_tooltip_logging_disabled(void);
 int test_settings_validate_defaults(void);
 int test_settings_validate_font_size_low(void);
 int test_settings_validate_font_size_high(void);
+int test_settings_validate_font_size_snap_7(void);
+int test_settings_validate_font_size_snap_9(void);
+int test_settings_validate_font_size_snap_15(void);
+int test_settings_validate_font_size_snap_19(void);
 int test_settings_validate_scrollback_low(void);
 int test_settings_validate_scrollback_high(void);
 int test_settings_validate_paste_delay_neg(void);
@@ -298,6 +302,23 @@ int test_snap_adjust_no_change_when_exact(void);
 int test_snap_roundtrip_bottomright(void);
 int test_snap_roundtrip_topleft(void);
 
+/* test_scrollbar.c */
+int test_sb_npos_at_bottom(void);
+int test_sb_npos_scrolled_back(void);
+int test_sb_npos_at_top(void);
+int test_sb_npos_no_content(void);
+int test_sb_npos_clamp_negative(void);
+int test_sb_max_off_normal(void);
+int test_sb_max_off_capped(void);
+int test_sb_max_off_no_scrollback(void);
+int test_sb_max_off_zero_setting(void);
+int test_sb_offset_from_npos_bottom(void);
+int test_sb_offset_from_npos_top(void);
+int test_sb_offset_from_npos_mid(void);
+int test_sb_roundtrip(void);
+int test_sb_roundtrip_extremes(void);
+int test_sb_npos_exceeds_word(void);
+
 /* test_log_format.c */
 int test_logfmt_basic_name(void);
 int test_logfmt_spaces_to_underscores(void);
@@ -327,6 +348,8 @@ int test_color_rgb_short_param(void);
 int test_color_256_oob(void);
 int test_color_rgb_black(void);
 int test_color_rgb_white(void);
+int test_color_sgr_default_fg(void);
+int test_color_sgr_default_bg(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -477,6 +500,10 @@ int main(void) {
     failed += test_settings_validate_defaults();
     failed += test_settings_validate_font_size_low();
     failed += test_settings_validate_font_size_high();
+    failed += test_settings_validate_font_size_snap_7();
+    failed += test_settings_validate_font_size_snap_9();
+    failed += test_settings_validate_font_size_snap_15();
+    failed += test_settings_validate_font_size_snap_19();
     failed += test_settings_validate_scrollback_low();
     failed += test_settings_validate_scrollback_high();
     failed += test_settings_validate_paste_delay_neg();
@@ -583,6 +610,8 @@ int main(void) {
     failed += test_color_256_oob();
     failed += test_color_rgb_black();
     failed += test_color_rgb_white();
+    failed += test_color_sgr_default_fg();
+    failed += test_color_sgr_default_bg();
 
     printf("\n--- Connect Animation ---\n");
     failed += test_anim_dots_zero_elapsed();
@@ -640,6 +669,23 @@ int main(void) {
     failed += test_snap_adjust_no_change_when_exact();
     failed += test_snap_roundtrip_bottomright();
     failed += test_snap_roundtrip_topleft();
+
+    printf("\n--- Scrollbar ---\n");
+    failed += test_sb_npos_at_bottom();
+    failed += test_sb_npos_scrolled_back();
+    failed += test_sb_npos_at_top();
+    failed += test_sb_npos_no_content();
+    failed += test_sb_npos_clamp_negative();
+    failed += test_sb_max_off_normal();
+    failed += test_sb_max_off_capped();
+    failed += test_sb_max_off_no_scrollback();
+    failed += test_sb_max_off_zero_setting();
+    failed += test_sb_offset_from_npos_bottom();
+    failed += test_sb_offset_from_npos_top();
+    failed += test_sb_offset_from_npos_mid();
+    failed += test_sb_roundtrip();
+    failed += test_sb_roundtrip_extremes();
+    failed += test_sb_npos_exceeds_word();
 
     printf("\n--- Log Format ---\n");
     failed += test_logfmt_basic_name();

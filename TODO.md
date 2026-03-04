@@ -42,6 +42,13 @@ All planned phases are **complete**. 258 tests pass, build clean, lint clean.
 | 6 | Tab tooltip: table format with Host/User/Status/Logging + [L] footnote |
 | 7 | Default scrollback: 10,000 lines (was 3,000) |
 | 8 | Foreground/background colour: parse_hex_color + apply_config_colors wired in WM_CREATE and settings |
+| 9 | Settings dialog: font + size → curated comboboxes; colour picker → 10 built-in schemes with swatch preview; MS Shell Dlg font applied to all controls |
+| 10 | Zoom: discrete sizes {6,8,10,12,14,16,18,20} instead of arbitrary 6–72 range; settings_validate() snaps to nearest |
+| 11 | Vertical scrollbar: update_scrollbar() synced to active terminal; Win64-safe via GetScrollInfo (full 32-bit nTrackPos) |
+| 12 | COLOR_DEFAULT fg/bg mode: terminal reset/init uses COLOR_DEFAULT (0); renderer substitutes configured scheme colours |
+| 13 | Default colours: white-on-black (#FFFFFF/#000000), default font size 10pt |
+| 14 | Build size: -Os -flto -Wl,--gc-sections -s; make release target with UPX (5.4 MB → 1.5 MB) |
+| 15 | 279 tests (was 258): test_scrollbar.c covers scrollbar arithmetic including Win64 >65535 nPos round-trips |
 
 ## Outstanding (Not Started)
 

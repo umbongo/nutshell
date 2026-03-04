@@ -106,7 +106,7 @@ int test_kh_new_host_returns_new(void)
 {
     TEST_BEGIN();
     KnownHosts kh;
-    ASSERT_EQ(setup_kh(&kh, "conga_kh_test1.txt"), KNOWNHOSTS_OK);
+    ASSERT_EQ(setup_kh(&kh, "nutshell_kh_test1.txt"), KNOWNHOSTS_OK);
 
     int rc = knownhosts_check(&kh, "newhost.example.com", 22,
                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
@@ -120,7 +120,7 @@ int test_kh_add_then_check_ok(void)
 {
     TEST_BEGIN();
     KnownHosts kh;
-    ASSERT_EQ(setup_kh(&kh, "conga_kh_test2.txt"), KNOWNHOSTS_OK);
+    ASSERT_EQ(setup_kh(&kh, "nutshell_kh_test2.txt"), KNOWNHOSTS_OK);
 
     ASSERT_EQ(knownhosts_add(&kh, "myhost.example.com", 22,
                               (const char *)TEST_KEY_A, TEST_KEY_A_LEN),
@@ -138,7 +138,7 @@ int test_kh_mismatch(void)
     TEST_BEGIN();
     init_key_b();
     KnownHosts kh;
-    ASSERT_EQ(setup_kh(&kh, "conga_kh_test3.txt"), KNOWNHOSTS_OK);
+    ASSERT_EQ(setup_kh(&kh, "nutshell_kh_test3.txt"), KNOWNHOSTS_OK);
 
     ASSERT_EQ(knownhosts_add(&kh, "mismatch.example.com", 22,
                               (const char *)TEST_KEY_A, TEST_KEY_A_LEN),
@@ -155,7 +155,7 @@ int test_kh_fingerprint_populated(void)
 {
     TEST_BEGIN();
     KnownHosts kh;
-    ASSERT_EQ(setup_kh(&kh, "conga_kh_test4.txt"), KNOWNHOSTS_OK);
+    ASSERT_EQ(setup_kh(&kh, "nutshell_kh_test4.txt"), KNOWNHOSTS_OK);
 
     char fp[128];
     fp[0] = '\0';
@@ -172,7 +172,7 @@ int test_kh_file_created_on_add(void)
 {
     TEST_BEGIN();
     char path[256];
-    tmp_path(path, sizeof(path), "conga_kh_test5.txt");
+    tmp_path(path, sizeof(path), "nutshell_kh_test5.txt");
     UNLINK(path);
 
     KnownHosts kh;
@@ -193,7 +193,7 @@ int test_kh_multiple_hosts(void)
     TEST_BEGIN();
     init_key_b();
     KnownHosts kh;
-    ASSERT_EQ(setup_kh(&kh, "conga_kh_test6.txt"), KNOWNHOSTS_OK);
+    ASSERT_EQ(setup_kh(&kh, "nutshell_kh_test6.txt"), KNOWNHOSTS_OK);
 
     ASSERT_EQ(knownhosts_add(&kh, "host1.example.com", 22,
                               (const char *)TEST_KEY_A, TEST_KEY_A_LEN), KNOWNHOSTS_OK);
@@ -244,7 +244,7 @@ int test_kh_key_rotation(void)
     TEST_BEGIN();
     init_key_b();
     KnownHosts kh;
-    ASSERT_EQ(setup_kh(&kh, "conga_kh_test7.txt"), KNOWNHOSTS_OK);
+    ASSERT_EQ(setup_kh(&kh, "nutshell_kh_test7.txt"), KNOWNHOSTS_OK);
 
     /* Add key A, then update to key B */
     ASSERT_EQ(knownhosts_add(&kh, "rotate.example.com", 22,

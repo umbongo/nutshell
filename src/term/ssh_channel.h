@@ -1,5 +1,5 @@
-#ifndef CONGA_SSH_CHANNEL_H
-#define CONGA_SSH_CHANNEL_H
+#ifndef NUTSHELL_SSH_CHANNEL_H
+#define NUTSHELL_SSH_CHANNEL_H
 
 #include "ssh_session.h"
 #include <libssh2.h>

@@ -1,5 +1,5 @@
-#ifndef CONGA_UI_SESSION_MANAGER_H
-#define CONGA_UI_SESSION_MANAGER_H
+#ifndef NUTSHELL_UI_SESSION_MANAGER_H
+#define NUTSHELL_UI_SESSION_MANAGER_H
 
 #include <windows.h>
 #include "../config/profile.h"

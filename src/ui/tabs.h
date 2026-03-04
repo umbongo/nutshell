@@ -1,5 +1,5 @@
-#ifndef CONGA_TABS_H
-#define CONGA_TABS_H
+#ifndef NUTSHELL_TABS_H
+#define NUTSHELL_TABS_H
 
 #include "tab_manager.h"   /* TabStatus, TabEntry, TabManager, TABS_MAX */
 

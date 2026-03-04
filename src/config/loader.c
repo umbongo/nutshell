@@ -84,14 +84,30 @@ static void field_copy(char *dst, size_t dst_size, const char *src)
 
 /* ---- Public API ----------------------------------------------------------- */
 
+/* Allowed discrete font sizes — must match k_font_sizes in settings.c and
+ * k_allowed_sizes in window.c. */
+static const int k_allowed_sizes[] = { 6, 8, 10, 12, 14, 16, 18, 20 };
+#define NUM_ALLOWED_SIZES ((int)(sizeof(k_allowed_sizes) / sizeof(k_allowed_sizes[0])))
+
 void settings_validate(Settings *s)
 {
     if (!s) return;
     if (s->font[0] == '\0') {
         (void)snprintf(s->font, sizeof(s->font), "%s", "Consolas");
     }
-    if (s->font_size < 6)  s->font_size = 6;
-    if (s->font_size > 72) s->font_size = 72;
+    /* Snap font_size to nearest allowed discrete size */
+    {
+        int best = k_allowed_sizes[0];
+        int best_dist = abs(s->font_size - best);
+        for (int i = 1; i < NUM_ALLOWED_SIZES; i++) {
+            int dist = abs(s->font_size - k_allowed_sizes[i]);
+            if (dist < best_dist) {
+                best = k_allowed_sizes[i];
+                best_dist = dist;
+            }
+        }
+        s->font_size = best;
+    }
     if (s->scrollback_lines < 100)    s->scrollback_lines = 100;
     if (s->scrollback_lines > 50000)  s->scrollback_lines = 50000;
     if (s->paste_delay_ms < 0)    s->paste_delay_ms = 0;
@@ -102,14 +118,14 @@ void config_default_settings(Settings *s)
 {
     memset(s, 0, sizeof(*s));
     field_copy(s->font,                 sizeof(s->font),                 "Consolas");
-    s->font_size        = 12;
+    s->font_size        = 10;
     s->scrollback_lines = 10000;
     s->paste_delay_ms   = 350;
     s->logging_enabled  = 0;
     field_copy(s->log_format,           sizeof(s->log_format),           "%Y-%m-%d_%H-%M-%S");
     field_copy(s->host_key_verification,sizeof(s->host_key_verification),"tofu");
-    field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#0C0C0C");
-    field_copy(s->background_colour,    sizeof(s->background_colour),    "#F2F2F2");
+    field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#FFFFFF");
+    field_copy(s->background_colour,    sizeof(s->background_colour),    "#000000");
 }
 
 Profile *config_profile_new(void)
