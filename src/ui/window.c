@@ -333,7 +333,7 @@ static FILE *open_session_log(const char *hostname)
     (void)snprintf(path, sizeof(path), "%s\\%s_%s.log",
                    log_dir, ts, safe_host);
 
-    return fopen(path, "a");
+    return fopen(path, "ab");
 }
 
 /* ---- Background connection thread --------------------------------------- */
@@ -579,7 +579,7 @@ static void on_log_toggle(int index, void *user_data) {
         }
         char path[512];
         log_format_filename(s->conn_profile.name, dir, path, sizeof(path));
-        s->session_log = fopen(path, "a");
+        s->session_log = fopen(path, "ab");
         if (s->session_log) {
             tabs_set_logging(g_hwndTabs, tidx, 1);
         }
@@ -883,6 +883,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                          s->conn_profile.host,
                                          (unsigned long long)GetTickCount64());
                     tabs_set_status(g_hwndTabs, tidx, TAB_CONNECTED);
+                    /* Sync L indicator with actual logging state */
+                    tabs_set_logging(g_hwndTabs, tidx,
+                                     s->session_log ? 1 : 0);
                 }
             }
             InvalidateRect(hwnd, NULL, FALSE);
