@@ -761,14 +761,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 else
                     (void)snprintf(g_config_path, sizeof(g_config_path),
                                    "config.json");
-            }
 
-            g_config = config_load(g_config_path);
-            if (!g_config) {
-                MessageBoxA(hwnd,
-                    "Could not load config.json.\n\nStarting with default settings.",
-                    "Configuration Warning", MB_OK | MB_ICONWARNING);
-                g_config = config_new_default();
+                g_config = config_load(g_config_path);
+                if (!g_config) {
+                    MessageBoxA(hwnd,
+                        "Could not load config.json.\n\nStarting with default settings.",
+                        "Configuration Warning", MB_OK | MB_ICONWARNING);
+                    g_config = config_new_default();
+                }
+
+                /* Default log_dir to the exe directory when not set */
+                if (g_config->settings.log_dir[0] == '\0' && exe_dir[0] != '\0')
+                    (void)snprintf(g_config->settings.log_dir,
+                                   sizeof(g_config->settings.log_dir),
+                                   "%s", exe_dir);
             }
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;
