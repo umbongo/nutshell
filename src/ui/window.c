@@ -44,6 +44,7 @@ typedef struct Session {
     char            conn_error[512];
     ULONGLONG       conn_start_ms;
     int             conn_dots;     /* dots appended so far */
+    CRITICAL_SECTION conn_cs;      /* H-1: guards conn_result/conn_error/ssh/channel */
     struct Session *next;
 } Session;
 
@@ -68,6 +69,7 @@ static Config *g_config = NULL;
 static HINSTANCE g_hInst = NULL;
 static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
+static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
 
 static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
@@ -83,6 +85,7 @@ static Session *create_session(int rows, int cols) {
     s->conn_error[0] = '\0';
     s->conn_start_ms = 0;
     s->conn_dots = 0;
+    InitializeCriticalSection(&s->conn_cs);  /* H-1 */
     s->next = g_session_list;
     g_session_list = s;
     return s;
@@ -95,6 +98,7 @@ static void free_session(Session *s) {
             WaitForSingleObject(s->conn_thread, 30000);
             CloseHandle(s->conn_thread);
         }
+        DeleteCriticalSection(&s->conn_cs);  /* H-1 */
         if (s->channel) ssh_channel_free(s->channel);
         if (s->ssh) ssh_session_free(s->ssh);
         if (s->session_log) fclose(s->session_log);
@@ -250,6 +254,8 @@ static int prompt_passphrase(HWND parent, char *out, int out_size)
         SecureZeroMemory(ctx.buf, sizeof(ctx.buf));
         return 1;
     }
+    /* M-5: zero passphrase buffer on cancellation too */
+    SecureZeroMemory(ctx.buf, sizeof(ctx.buf));
     return 0;
 }
 
@@ -283,10 +289,20 @@ static FILE *open_session_log(const char *hostname)
     /* Create the directory (OK if already exists) */
     CreateDirectoryA(log_dir, NULL);
 
-    /* Format timestamp using log_format from config */
-    const char *fmt = g_config->settings.log_format[0]
-                        ? g_config->settings.log_format
-                        : "%Y-%m-%d_%H-%M-%S";
+    /* M-6: validate log_format against a whitelist of safe strftime specifiers
+     * before passing a user-controlled string to strftime. */
+    static const char ALLOWED_SPECS[] = "YymdHMSjAaBbpZz%";
+    const char *raw_fmt = g_config->settings.log_format[0]
+                            ? g_config->settings.log_format
+                            : "%Y-%m-%d_%H-%M-%S";
+    int fmt_ok = 1;
+    for (const char *q = raw_fmt; *q; q++) {
+        if (*q == '%') {
+            q++;
+            if (!*q || !strchr(ALLOWED_SPECS, *q)) { fmt_ok = 0; break; }
+        }
+    }
+    const char *fmt = fmt_ok ? raw_fmt : "%Y-%m-%d_%H-%M-%S";
     time_t now = time(NULL);
     const struct tm *t = localtime(&now);
     char ts[64];
@@ -328,8 +344,11 @@ static DWORD WINAPI connection_thread(LPVOID param)
     const Profile *info = &s->conn_profile;
     HWND hwnd = s->conn_hwnd;
 
+/* H-1: guard conn_result/conn_error writes with conn_cs before posting. */
 #define CONN_FAIL(code) \
-    do { s->conn_result = (code); \
+    do { EnterCriticalSection(&s->conn_cs); \
+         s->conn_result = (code); \
+         LeaveCriticalSection(&s->conn_cs); \
          PostMessage(hwnd, WM_CONN_DONE, 0, (LPARAM)s); return 0; } while(0)
 
     /* TCP connect + SSH handshake */
@@ -386,7 +405,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
                 }
                 int ans = MessageBoxA(hwnd, dlg_msg, title, (UINT)MB_YESNO | icon);
                 if (ans == IDYES) {
-                    knownhosts_add(&kh, info->host, info->port, key, key_len);
+                    knownhosts_add(&kh, info->host, info->port, key, key_len, key_type);
                 } else {
                     snprintf(s->conn_error, sizeof(s->conn_error), "Connection aborted by user.");
                     knownhosts_free(&kh);
@@ -439,7 +458,12 @@ static DWORD WINAPI connection_thread(LPVOID param)
     ssh_pty_shell(s->channel);
     ssh_session_set_blocking(s->ssh, false); /* non-blocking for I/O loop */
 
+    /* H-3: zero plaintext password from memory once auth is complete */
+    SecureZeroMemory(s->conn_profile.password, sizeof(s->conn_profile.password));
+
+    EnterCriticalSection(&s->conn_cs);  /* H-1 */
     s->conn_result = 0;
+    LeaveCriticalSection(&s->conn_cs);
     PostMessage(hwnd, WM_CONN_DONE, 0, (LPARAM)s);
     return 0;
 
@@ -469,6 +493,15 @@ static void on_session_connect(const Profile *info) {
              info->name[0] ? info->name : (info->host[0] ? info->host : "Session"));
 
     int idx = tabs_add(g_hwndTabs, title, s);
+    if (idx < 0) {
+        /* I-3: tab limit reached — clean up and notify user */
+        MessageBoxA(GetParent(g_hwndTabs),
+                    "Maximum number of tabs reached.",
+                    "Tab Limit", MB_OK | MB_ICONINFORMATION);
+        if (g_session_list == s) g_session_list = s->next;
+        free_session(s);
+        return;
+    }
     tabs_set_active(g_hwndTabs, idx);
     tabs_set_status(g_hwndTabs, idx, TAB_CONNECTING);
     InvalidateRect(GetParent(g_hwndTabs), NULL, FALSE);
@@ -494,7 +527,7 @@ static void on_tab_new(void) {
     Profile p;
     memset(&p, 0, sizeof(Profile));
 
-    if (SessionManager_Show(g_hInst, GetParent(g_hwndTabs), g_config, "config.json", &p)) {
+    if (SessionManager_Show(g_hInst, GetParent(g_hwndTabs), g_config, g_config_path, &p)) {
         on_session_connect(&p);
     }
 }
@@ -716,7 +749,16 @@ static void apply_zoom(HWND hwnd, int delta)
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
-            g_config = config_load("config.json");
+            /* M-8: resolve config.json to an absolute path at startup so
+             * GetOpenFileNameA (file browse dialogs) cannot change CWD and
+             * cause saves to go to the wrong directory. */
+            get_exe_dir(g_config_path, sizeof(g_config_path) - 12u);
+            if (g_config_path[0] != '\0')
+                strncat(g_config_path, "\\config.json", 12u);
+            else
+                strncpy(g_config_path, "config.json", sizeof(g_config_path) - 1u);
+
+            g_config = config_load(g_config_path);
             if (!g_config) {
                 MessageBoxA(hwnd,
                     "Could not load config.json.\n\nStarting with default settings.",
@@ -805,12 +847,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             CloseHandle(s->conn_thread);
             s->conn_thread = NULL;
 
+            /* H-1: read shared fields under the lock */
+            EnterCriticalSection(&s->conn_cs);
+            int conn_result  = s->conn_result;
+            char conn_error[512];
+            memcpy(conn_error, s->conn_error, sizeof(conn_error));
+            LeaveCriticalSection(&s->conn_cs);
+
             int tidx = tabs_find(g_hwndTabs, s);
-            if (s->conn_result != 0) {
+            if (conn_result != 0) {
                 char errmsg[600];
-                snprintf(errmsg, sizeof(errmsg), "\r\n%s\r\n", s->conn_error);
+                snprintf(errmsg, sizeof(errmsg), "\r\n%s\r\n", conn_error);
                 term_process(s->term, errmsg, strlen(errmsg));
-                MessageBoxA(hwnd, s->conn_error, "Connection Error",
+                MessageBoxA(hwnd, conn_error, "Connection Error",
                             MB_OK | MB_ICONERROR);
                 if (tidx >= 0)
                     tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);

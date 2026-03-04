@@ -78,9 +78,28 @@ int knownhosts_check(KnownHosts *kh,
     }
 }
 
+/* H-4: map libssh2_session_hostkey() type to LIBSSH2_KNOWNHOST_KEY_* flag. */
+static int map_key_type(int libssh2_hostkey_type)
+{
+    switch (libssh2_hostkey_type) {
+        case LIBSSH2_HOSTKEY_TYPE_RSA:       return LIBSSH2_KNOWNHOST_KEY_SSHRSA;
+        case LIBSSH2_HOSTKEY_TYPE_DSS:       return LIBSSH2_KNOWNHOST_KEY_SSHDSS;
+#ifdef LIBSSH2_HOSTKEY_TYPE_ECDSA_256
+        case LIBSSH2_HOSTKEY_TYPE_ECDSA_256: return LIBSSH2_KNOWNHOST_KEY_ECDSA_256;
+        case LIBSSH2_HOSTKEY_TYPE_ECDSA_384: return LIBSSH2_KNOWNHOST_KEY_ECDSA_384;
+        case LIBSSH2_HOSTKEY_TYPE_ECDSA_521: return LIBSSH2_KNOWNHOST_KEY_ECDSA_521;
+#endif
+#ifdef LIBSSH2_HOSTKEY_TYPE_ED25519
+        case LIBSSH2_HOSTKEY_TYPE_ED25519:   return LIBSSH2_KNOWNHOST_KEY_ED25519;
+#endif
+        default:                             return LIBSSH2_KNOWNHOST_KEY_SSHRSA;
+    }
+}
+
 int knownhosts_add(KnownHosts *kh,
                    const char *host, int port,
-                   const char *key, size_t key_len)
+                   const char *key, size_t key_len,
+                   int key_type)
 {
     if (!kh || !kh->store || !host || !key || key_len == 0u) return KNOWNHOSTS_ERROR;
 
@@ -109,7 +128,7 @@ int knownhosts_add(KnownHosts *kh,
         NULL, 0,                 /* comment, comment_len */
         LIBSSH2_KNOWNHOST_TYPE_PLAIN |
         LIBSSH2_KNOWNHOST_KEYENC_RAW |
-        LIBSSH2_KNOWNHOST_KEY_SSHRSA,
+        map_key_type(key_type),  /* H-4: use actual key type */
         NULL);                   /* struct libssh2_knownhost ** store_handle */
 
     if (rc != 0) return KNOWNHOSTS_ERROR;

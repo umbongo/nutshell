@@ -38,12 +38,14 @@ int knownhosts_check(KnownHosts *kh,
 
 /*
  * knownhosts_add — store host:port → key and persist to disk.
+ * key_type is the value returned by libssh2_session_hostkey() (LIBSSH2_HOSTKEY_TYPE_*).
  * Existing entry for the same host:port is replaced (handles key rotation).
  * Returns KNOWNHOSTS_OK or KNOWNHOSTS_ERROR.
  */
 int knownhosts_add(KnownHosts *kh,
                    const char *host, int port,
-                   const char *key, size_t key_len);
+                   const char *key, size_t key_len,
+                   int key_type);
 
 /*
  * knownhosts_free — release all resources held by kh.

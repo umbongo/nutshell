@@ -5,11 +5,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 /* ---- File I/O helper ------------------------------------------------------ */
 
+/* M-3: reject config files larger than 1 MB to prevent abuse. */
+#define MAX_CONFIG_FILE_SIZE (1024L * 1024L)
+
 /* Read entire file at path into a heap buffer (null-terminated).
- * Returns NULL if the file cannot be opened or read.
+ * Returns NULL if the file cannot be opened, read, or exceeds the size limit.
  * Caller must free() the returned pointer. */
 static char *read_file(const char *path)
 {
@@ -22,7 +28,7 @@ static char *read_file(const char *path)
         return NULL;
     }
     long sz = ftell(f);
-    if (sz < 0) {
+    if (sz < 0 || sz > MAX_CONFIG_FILE_SIZE) {  /* M-3: size limit */
         fclose(f);
         return NULL;
     }
@@ -50,7 +56,14 @@ static void fprint_json_str(FILE *f, const char *s)
             case '\n': fputs("\\n",  f); break;
             case '\r': fputs("\\r",  f); break;
             case '\t': fputs("\\t",  f); break;
-            default:   fputc((int)c, f); break;
+            default:
+                if (c < 0x20) {
+                    /* L-3: escape control characters below 0x20 per RFC 8259 */
+                    fprintf(f, "\\u%04x", (unsigned int)c);
+                } else {
+                    fputc((int)c, f);
+                }
+                break;
         }
     }
     fputc('"', f);
@@ -112,8 +125,9 @@ void config_profile_free(Profile *p)
     if (!p) {
         return;
     }
-    /* Zero password field before freeing (security hygiene). */
-    memset(p->password, 0, sizeof(p->password));
+    /* L-1: use volatile zero so the compiler cannot elide the wipe. */
+    volatile char *vp = p->password;
+    for (size_t i = 0; i < sizeof(p->password); i++) vp[i] = 0;
     free(p);
 }
 
@@ -251,8 +265,16 @@ int config_save(const Config *cfg, const char *path)
         return -1;
     }
 
-    FILE *f = fopen(path, "w");
+    /* M-4: write to a temp file first, then atomically replace the target.
+     * This prevents data loss if the process crashes mid-write. */
+    size_t plen = strlen(path);
+    char *tmp_path = xmalloc(plen + 5u);
+    memcpy(tmp_path, path, plen);
+    memcpy(tmp_path + plen, ".tmp", 5u);
+
+    FILE *f = fopen(tmp_path, "w");
     if (!f) {
+        free(tmp_path);
         return -1;
     }
 
@@ -322,5 +344,13 @@ int config_save(const Config *cfg, const char *path)
 
     fputs("  ]\n}\n", f);
     fclose(f);
-    return 0;
+
+    /* Atomically replace the real config file with the completed temp file. */
+#ifdef _WIN32
+    int moved = MoveFileExA(tmp_path, path, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
+#else
+    int moved = rename(tmp_path, path);
+#endif
+    free(tmp_path);
+    return moved;
 }

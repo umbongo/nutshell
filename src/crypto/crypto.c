@@ -3,6 +3,7 @@
 #endif
 #include "crypto.h"
 #include <string.h>
+#include <stdlib.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
@@ -15,13 +16,23 @@
 
 /* ---- Constants ----------------------------------------------------------- */
 
-#define NONCE_LEN   12
-#define TAG_LEN     16
-#define KEY_LEN     32
+#define NONCE_LEN      12
+#define TAG_LEN        16
+#define KEY_LEN        32
+#define SALT_LEN       16   /* C-1: per-blob random PBKDF2 salt */
 
 /* PBKDF2 parameters */
-static const char PBKDF2_SALT[] = "CongaSSH-v1";
+static const char PBKDF2_SALT[] = "CongaSSH-v1";  /* used by crypto_derive_key only */
 #define PBKDF2_ITER 100000
+
+/* ---- Portable secret-zeroing --------------------------------------------- */
+
+/* L-1: volatile prevents the compiler from eliding the zero wipe. */
+static void secure_zero(void *p, size_t n)
+{
+    volatile unsigned char *vp = (volatile unsigned char *)p;
+    while (n--) *vp++ = 0;
+}
 
 /* ---- Base64 helpers ------------------------------------------------------- */
 
@@ -68,6 +79,39 @@ static size_t b64_decode(const char *src, size_t src_len,
     return (size_t)len;
 }
 
+/* ---- Key material helper -------------------------------------------------- */
+
+/* M-2: Read machine-specific key material.  Returns 0 on success, -1 if the
+ * material could not be obtained (buf is zeroed and empty on failure). */
+static int get_key_material(char *buf, size_t buf_size)
+{
+    buf[0] = '\0';
+
+#ifdef _WIN32
+    HKEY hKey;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+                      "SOFTWARE\\Microsoft\\Cryptography",
+                      0, KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
+        DWORD type = REG_SZ;
+        DWORD sz = (DWORD)(buf_size - 1u);
+        /* M-2: check return value; null-terminate on success only */
+        LONG rc_reg = RegQueryValueExA(hKey, "MachineGuid", NULL, &type,
+                                       (BYTE *)buf, &sz);
+        RegCloseKey(hKey);
+        if (rc_reg == ERROR_SUCCESS) {
+            buf[sz] = '\0';
+        } else {
+            buf[0] = '\0';
+        }
+    }
+#else
+    gethostname(buf, buf_size - 1u);
+    buf[buf_size - 1u] = '\0';
+#endif
+
+    return (buf[0] != '\0') ? 0 : -1;
+}
+
 /* ---- Key derivation ------------------------------------------------------- */
 
 int crypto_derive_key(unsigned char key[32])
@@ -75,36 +119,19 @@ int crypto_derive_key(unsigned char key[32])
     if (!key) return CRYPTO_ERR_ARGS;
 
     char material[512];
-    material[0] = '\0';
-
-#ifdef _WIN32
-    /* Read MachineGuid from the registry */
-    HKEY hKey;
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
-                      "SOFTWARE\\Microsoft\\Cryptography",
-                      0, KEY_READ | KEY_WOW64_64KEY, &hKey) == ERROR_SUCCESS) {
-        DWORD type = REG_SZ;
-        DWORD sz = (DWORD)(sizeof(material) - 1u);
-        RegQueryValueExA(hKey, "MachineGuid", NULL, &type,
-                         (BYTE *)material, &sz);
-        RegCloseKey(hKey);
-    }
-#else
-    gethostname(material, sizeof(material) - 1u);
-    material[sizeof(material) - 1u] = '\0';
-#endif
-
-    if (material[0] == '\0') return CRYPTO_ERR_KEY;
+    if (get_key_material(material, sizeof(material)) != 0)
+        return CRYPTO_ERR_KEY;
 
     int rc = PKCS5_PBKDF2_HMAC(material, (int)strlen(material),
                                  (const unsigned char *)PBKDF2_SALT,
                                  (int)(sizeof(PBKDF2_SALT) - 1u),
                                  PBKDF2_ITER, EVP_sha256(),
                                  KEY_LEN, key);
+    secure_zero(material, sizeof(material));
     return (rc == 1) ? CRYPTO_OK : CRYPTO_ERR_KEY;
 }
 
-/* ---- Encrypt ------------------------------------------------------------- */
+/* ---- Encrypt with external key ------------------------------------------- */
 
 int crypto_encrypt_with_key(const unsigned char key[32], const char *plaintext,
                              char *out, size_t out_size)
@@ -112,6 +139,8 @@ int crypto_encrypt_with_key(const unsigned char key[32], const char *plaintext,
     if (!key || !plaintext || !out || out_size == 0u) return CRYPTO_ERR_ARGS;
 
     size_t pt_len = strlen(plaintext);
+    /* M-1 + L-2: reject unreasonably large inputs */
+    if (pt_len > 65536u) return CRYPTO_ERR_ARGS;
 
     /* Verify output buffer is large enough */
     size_t raw_len   = NONCE_LEN + pt_len + TAG_LEN;
@@ -162,7 +191,7 @@ done:
     return CRYPTO_OK;
 }
 
-/* ---- Decrypt ------------------------------------------------------------- */
+/* ---- Decrypt with external key ------------------------------------------- */
 
 int crypto_decrypt_with_key(const unsigned char key[32], const char *blob,
                              char *out, size_t out_size)
@@ -195,47 +224,188 @@ int crypto_decrypt_with_key(const unsigned char key[32], const char *blob,
     int pt_len = 0, final_len = 0;
     if (!ctx) { free(raw); return CRYPTO_ERR_DECRYPT; }
 
-    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) goto done;
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, NONCE_LEN, NULL) != 1) goto done;
-    if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) goto done;
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) goto dec_done;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, NONCE_LEN, NULL) != 1) goto dec_done;
+    if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) goto dec_done;
     if (EVP_DecryptUpdate(ctx, (unsigned char *)out, &pt_len,
-                          ciphertext, (int)ct_len) != 1) goto done;
-    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, TAG_LEN, tag) != 1) goto done;
-    if (EVP_DecryptFinal_ex(ctx, (unsigned char *)out + pt_len, &final_len) != 1) goto done;
+                          ciphertext, (int)ct_len) != 1) goto dec_done;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, TAG_LEN, tag) != 1) goto dec_done;
+    if (EVP_DecryptFinal_ex(ctx, (unsigned char *)out + pt_len, &final_len) != 1) goto dec_done;
     pt_len += final_len;
     out[pt_len] = '\0';
     ok = 1;
 
-done:
+dec_done:
     EVP_CIPHER_CTX_free(ctx);
     free(raw);
     if (!ok) {
-        memset(out, 0, out_size);
+        secure_zero(out, out_size);   /* L-1 */
         return CRYPTO_ERR_DECRYPT;
     }
     return CRYPTO_OK;
 }
 
-/* ---- High-level wrappers ------------------------------------------------- */
+/* ---- High-level wrappers with per-blob random salt (C-1) ----------------- */
 
+/*
+ * crypto_encrypt — derive a per-blob random salt, derive a key from
+ * machine material + that salt, then AES-256-GCM encrypt.
+ * Blob format: CRYPTO_ENC_PREFIX + base64(salt[16] || nonce[12] || ct || tag[16])
+ */
 int crypto_encrypt(const char *plaintext, char *out, size_t out_size)
 {
+    if (!plaintext || !out || out_size == 0u) return CRYPTO_ERR_ARGS;
+
+    size_t pt_len = strlen(plaintext);
+    /* M-1 + L-2: reject unreasonably large inputs */
+    if (pt_len > 65536u) return CRYPTO_ERR_ARGS;
+
+    /* Get machine-specific key material */
+    char material[512];
+    if (get_key_material(material, sizeof(material)) != 0)
+        return CRYPTO_ERR_KEY;
+
+    /* C-1: generate a fresh random salt for this encryption */
+    unsigned char salt[SALT_LEN];
+    if (RAND_bytes(salt, (int)sizeof(salt)) != 1) {
+        secure_zero(material, sizeof(material));
+        return CRYPTO_ERR_RAND;
+    }
+
+    /* Derive key from machine material + random salt */
     unsigned char key[KEY_LEN];
-    int rc = crypto_derive_key(key);
-    if (rc != CRYPTO_OK) return rc;
-    rc = crypto_encrypt_with_key(key, plaintext, out, out_size);
-    memset(key, 0, sizeof(key));
-    return rc;
+    int krc = PKCS5_PBKDF2_HMAC(material, (int)strlen(material),
+                                  salt, (int)sizeof(salt),
+                                  PBKDF2_ITER, EVP_sha256(),
+                                  KEY_LEN, key);
+    secure_zero(material, sizeof(material));
+    if (krc != 1) return CRYPTO_ERR_KEY;
+
+    /* Build raw buffer: salt || nonce || ciphertext || tag */
+    size_t raw_len    = SALT_LEN + NONCE_LEN + pt_len + TAG_LEN;
+    size_t b64_len    = b64_enc_size(raw_len);
+    size_t prefix_len = strlen(CRYPTO_ENC_PREFIX);
+    if (out_size < prefix_len + b64_len) {
+        secure_zero(key, sizeof(key));
+        return CRYPTO_ERR_BUFSIZE;
+    }
+
+    unsigned char nonce[NONCE_LEN];
+    if (RAND_bytes(nonce, NONCE_LEN) != 1) {
+        secure_zero(key, sizeof(key));
+        return CRYPTO_ERR_RAND;
+    }
+
+    unsigned char *raw = (unsigned char *)malloc(raw_len);
+    if (!raw) { secure_zero(key, sizeof(key)); return CRYPTO_ERR_ENCRYPT; }
+
+    memcpy(raw, salt, SALT_LEN);
+    memcpy(raw + SALT_LEN, nonce, NONCE_LEN);
+    unsigned char *ciphertext = raw + SALT_LEN + NONCE_LEN;
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    int ok = 0, ct_len = 0, final_len = 0;
+    if (!ctx) { free(raw); secure_zero(key, sizeof(key)); return CRYPTO_ERR_ENCRYPT; }
+
+    if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) goto enc_done;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, NONCE_LEN, NULL) != 1) goto enc_done;
+    if (EVP_EncryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) goto enc_done;
+    if (EVP_EncryptUpdate(ctx, ciphertext, &ct_len,
+                          (const unsigned char *)plaintext, (int)pt_len) != 1) goto enc_done;
+    if (EVP_EncryptFinal_ex(ctx, ciphertext + ct_len, &final_len) != 1) goto enc_done;
+    ct_len += final_len;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, TAG_LEN,
+                             raw + SALT_LEN + NONCE_LEN + (size_t)ct_len) != 1) goto enc_done;
+    ok = 1;
+
+enc_done:
+    EVP_CIPHER_CTX_free(ctx);
+    secure_zero(key, sizeof(key));
+    if (!ok) { free(raw); return CRYPTO_ERR_ENCRYPT; }
+
+    /* Write: prefix + base64(salt || nonce || ct || tag) */
+    memcpy(out, CRYPTO_ENC_PREFIX, prefix_len);
+    size_t actual_raw = SALT_LEN + NONCE_LEN + (size_t)ct_len + TAG_LEN;
+    size_t b64_written = b64_encode(raw, actual_raw,
+                                     out + prefix_len, out_size - prefix_len);
+    free(raw);
+    return (b64_written == 0u) ? CRYPTO_ERR_B64 : CRYPTO_OK;
 }
 
+/*
+ * crypto_decrypt — decode the per-blob salt, re-derive key, then decrypt.
+ * Handles blobs written by crypto_encrypt() only (with embedded salt).
+ * Blobs written by crypto_encrypt_with_key() use a different code path.
+ */
 int crypto_decrypt(const char *blob, char *out, size_t out_size)
 {
+    if (!blob || !out || out_size == 0u) return CRYPTO_ERR_ARGS;
+
+    size_t prefix_len = strlen(CRYPTO_ENC_PREFIX);
+    if (strncmp(blob, CRYPTO_ENC_PREFIX, prefix_len) != 0) return CRYPTO_ERR_ARGS;
+
+    const char *b64 = blob + prefix_len;
+    size_t b64_len  = strlen(b64);
+    if (b64_len == 0u) return CRYPTO_ERR_B64;
+
+    size_t raw_max = b64_dec_max(b64_len);
+    unsigned char *raw = (unsigned char *)malloc(raw_max);
+    if (!raw) return CRYPTO_ERR_DECRYPT;
+
+    size_t raw_len = b64_decode(b64, b64_len, raw, raw_max);
+    /* Need at least salt + nonce + tag */
+    if (raw_len < (size_t)(SALT_LEN + NONCE_LEN + TAG_LEN)) {
+        free(raw);
+        return CRYPTO_ERR_B64;
+    }
+
+    unsigned char *salt       = raw;
+    unsigned char *nonce      = raw + SALT_LEN;
+    size_t ct_len             = raw_len - SALT_LEN - NONCE_LEN - TAG_LEN;
+    unsigned char *ciphertext = raw + SALT_LEN + NONCE_LEN;
+    unsigned char *tag        = raw + SALT_LEN + NONCE_LEN + ct_len;
+
+    if (out_size < ct_len + 1u) { free(raw); return CRYPTO_ERR_BUFSIZE; }
+
+    /* Derive key from machine material + blob's embedded salt */
+    char material[512];
+    if (get_key_material(material, sizeof(material)) != 0) {
+        free(raw);
+        return CRYPTO_ERR_KEY;
+    }
+
     unsigned char key[KEY_LEN];
-    int rc = crypto_derive_key(key);
-    if (rc != CRYPTO_OK) return rc;
-    rc = crypto_decrypt_with_key(key, blob, out, out_size);
-    memset(key, 0, sizeof(key));
-    return rc;
+    int krc = PKCS5_PBKDF2_HMAC(material, (int)strlen(material),
+                                  salt, SALT_LEN,
+                                  PBKDF2_ITER, EVP_sha256(),
+                                  KEY_LEN, key);
+    secure_zero(material, sizeof(material));
+    if (krc != 1) { free(raw); return CRYPTO_ERR_KEY; }
+
+    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
+    int ok = 0, pt_len = 0, final_len = 0;
+    if (!ctx) { secure_zero(key, sizeof(key)); free(raw); return CRYPTO_ERR_DECRYPT; }
+
+    if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) goto dec_done;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, NONCE_LEN, NULL) != 1) goto dec_done;
+    if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, nonce) != 1) goto dec_done;
+    if (EVP_DecryptUpdate(ctx, (unsigned char *)out, &pt_len,
+                          ciphertext, (int)ct_len) != 1) goto dec_done;
+    if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, TAG_LEN, tag) != 1) goto dec_done;
+    if (EVP_DecryptFinal_ex(ctx, (unsigned char *)out + pt_len, &final_len) != 1) goto dec_done;
+    pt_len += final_len;
+    out[pt_len] = '\0';
+    ok = 1;
+
+dec_done:
+    EVP_CIPHER_CTX_free(ctx);
+    secure_zero(key, sizeof(key));
+    free(raw);
+    if (!ok) {
+        secure_zero(out, out_size);   /* L-1 */
+        return CRYPTO_ERR_DECRYPT;
+    }
+    return CRYPTO_OK;
 }
 
 /* ---- Predicate ----------------------------------------------------------- */

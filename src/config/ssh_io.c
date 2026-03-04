@@ -25,7 +25,7 @@ int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file) {
     if (!channel || !term) return -1;
 
     char buf[4096];
-    int total_read = 0;
+    size_t total_read = 0;  /* L-5: use size_t to avoid int overflow */
     int loops = 0;
     const int MAX_LOOPS = 10;
 
@@ -37,7 +37,7 @@ int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file) {
         if (rc > 0) {
             term_process(term, buf, (size_t)rc);
             log_chunk(log_file, buf, (size_t)rc);
-            total_read += (int)rc;
+            total_read += (size_t)rc;
             work_done = 1;
         } else if (rc == LIBSSH2_ERROR_EAGAIN || rc == 0) {
             if (libssh2_channel_eof(channel->channel)) return -2; /* EOF */
@@ -50,7 +50,7 @@ int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file) {
         if (rc > 0) {
             term_process(term, buf, (size_t)rc);
             log_chunk(log_file, buf, (size_t)rc);
-            total_read += (int)rc;
+            total_read += (size_t)rc;
             work_done = 1;
         }
 

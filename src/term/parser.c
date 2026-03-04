@@ -444,8 +444,12 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     term->csi_private = true;
                 } else if (isdigit(c)) {
                     if (term->csi_param_count == 0) term->csi_param_count = 1;
-                    int *p = &term->csi_params[term->csi_param_count - 1];
-                    *p = (*p * 10) + (c - '0');
+                    /* L-4: explicit bounds check before array access */
+                    if (term->csi_param_count > 0 &&
+                            term->csi_param_count <= TERM_MAX_CSI_PARAMS) {
+                        int *p = &term->csi_params[term->csi_param_count - 1];
+                        *p = (*p * 10) + (c - '0');
+                    }
                 } else if (c == ';') {
                     if (term->csi_param_count < TERM_MAX_CSI_PARAMS) {
                         term->csi_param_count++;
