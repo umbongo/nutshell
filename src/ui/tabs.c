@@ -10,7 +10,6 @@
 static const char *TABS_CLASS_NAME = "CongaSSH_Tabs";
 
 /* ---- Layout constants ---------------------------------------------------- */
-#define TAB_W       120   /* width of each tab */
 #define TAB_H_PAD   4     /* vertical padding above/below tab */
 #define BTN_SIZE    24    /* all non-tab buttons are 24×24 squares */
 #define TAB_START_X 36    /* x where first tab begins: 4 + BTN_SIZE + 8 */
@@ -20,6 +19,21 @@ static const char *TABS_CLASS_NAME = "CongaSSH_Tabs";
 #define INDICATOR_W  12   /* indicator width: 50% wider than original 8 */
 #define INDICATOR_GAP 3   /* equal gap: before status, between, after log */
 #define CLOSE_SIZE  12    /* ✕ button size */
+/* Fixed pixel overhead per tab: left-side indicators + right-side close btn */
+#define TAB_OVERHEAD (INDICATOR_GAP + INDICATOR_W + INDICATOR_GAP \
+                      + INDICATOR_W + INDICATOR_GAP + CLOSE_SIZE + 10)
+#define TAB_MIN_W   80    /* minimum tab width */
+
+/* Return the pixel width needed to show title in full. */
+static int tab_w(HDC hdc, const char *title)
+{
+    SIZE sz = {0, 0};
+    if (title && title[0])
+        GetTextExtentPoint32A(hdc, title, (int)strlen(title), &sz);
+    int w = sz.cx + TAB_OVERHEAD;
+    return w < TAB_MIN_W ? TAB_MIN_W : w;
+}
+
 /* 15% darker than inactive tabs RGB(230,230,230) → RGB(196,196,196) */
 #define BTN_COLOR   RGB(196, 196, 196)
 
@@ -81,6 +95,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 ti.lpszText = LPSTR_TEXTCALLBACK;
                 GetClientRect(hwnd, &ti.rect);
                 SendMessage(data->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+                /* Enable multiline tooltips (needed for \n to render) */
+                SendMessage(data->hTooltip, TTM_SETMAXTIPWIDTH, 0, 500);
             }
             return 0;
         }
@@ -110,12 +126,17 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 POINT pt;
                 GetCursorPos(&pt);
                 ScreenToClient(hwnd, &pt);
+                HDC hdc_m = GetDC(hwnd);
+                HFONT hOldF = (HFONT)SelectObject(hdc_m, data->hFont);
                 int tx = TAB_START_X;
                 int tab_idx = -1;
                 for (int i = 0; i < data->m.count; i++) {
-                    if (pt.x >= tx && pt.x <= tx + TAB_W) { tab_idx = i; break; }
-                    tx += TAB_W + TAB_GAP;
+                    int tw = tab_w(hdc_m, data->m.tabs[i].title);
+                    if (pt.x >= tx && pt.x <= tx + tw) { tab_idx = i; break; }
+                    tx += tw + TAB_GAP;
                 }
+                SelectObject(hdc_m, hOldF);
+                ReleaseDC(hwnd, hdc_m);
                 /* Check if cursor is over right-side buttons */
                 RECT rcClient;
                 GetClientRect(hwnd, &rcClient);
@@ -183,7 +204,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int x    = TAB_START_X;
 
             for (int i = 0; i < data->m.count; i++) {
-                RECT rcTab = {x, tabY, x + TAB_W, tabY + tabH};
+                int tw = tab_w(hMemDC, data->m.tabs[i].title);
+                RECT rcTab = {x, tabY, x + tw, tabY + tabH};
 
                 /* Background & border */
                 HPEN hPen = CreatePen(PS_SOLID, 1, RGB(180, 180, 180));
@@ -256,10 +278,10 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                                 + INDICATOR_W + INDICATOR_GAP; /* after status + log */
                 rcText.right -= CLOSE_SIZE + 6; /* before close button */
                 DrawText(hMemDC, data->m.tabs[i].title, -1, &rcText,
-                         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                         DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
                 /* ---- ✕ close button ---- */
-                int closeX = x + TAB_W - CLOSE_SIZE - 4;
+                int closeX = x + tw - CLOSE_SIZE - 4;
                 int closeY = tabY + (tabH - CLOSE_SIZE) / 2;
                 RECT rcClose = {closeX, closeY, closeX + CLOSE_SIZE, closeY + CLOSE_SIZE};
                 SetTextColor(hMemDC, RGB(120, 120, 120));
@@ -267,7 +289,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                          DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 SetTextColor(hMemDC, RGB(0, 0, 0));
 
-                x += TAB_W + TAB_GAP;
+                x += tw + TAB_GAP;
             }
 
             /* ---- Right-side buttons: [◀][▶][⚙] ---- */
@@ -357,10 +379,16 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int tabY = TAB_H_PAD / 2;
             int x = TAB_START_X;
 
+            HDC hdc_ht = GetDC(hwnd);
+            HFONT hOldHt = (HFONT)SelectObject(hdc_ht, data->hFont);
+
             for (int i = 0; i < data->m.count; i++) {
-                if (mx >= x && mx <= x + TAB_W) {
+                int tw = tab_w(hdc_ht, data->m.tabs[i].title);
+                if (mx >= x && mx <= x + tw) {
+                    SelectObject(hdc_ht, hOldHt);
+                    ReleaseDC(hwnd, hdc_ht);
                     /* Check ✕ close button first */
-                    int closeX = x + TAB_W - CLOSE_SIZE - 4;
+                    int closeX = x + tw - CLOSE_SIZE - 4;
                     int closeY = tabY + (tabH - CLOSE_SIZE) / 2;
                     if (mx >= closeX && mx <= closeX + CLOSE_SIZE &&
                         my >= closeY && my <= closeY + CLOSE_SIZE) {
@@ -389,8 +417,10 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     }
                     return 0;
                 }
-                x += TAB_W + TAB_GAP;
+                x += tw + TAB_GAP;
             }
+            SelectObject(hdc_ht, hOldHt);
+            ReleaseDC(hwnd, hdc_ht);
             return 0;
         }
     }

@@ -42,12 +42,15 @@ void tooltip_build_text(TabStatus status,
     }
 
     if (status == TAB_DISCONNECTED || status == TAB_IDLE) {
-        (void)snprintf(buf, n, "%s\nStatus:   %s\n\n[L] = toggle session logging",
+        (void)snprintf(buf, n,
+                       "Name:    %s\n"
+                       "Status:  %s\n\n"
+                       "[L] = toggle session logging",
                        nm, state_str);
         return;
     }
 
-    /* Connected / Connecting: table format */
+    /* Connected / Connecting */
     char dur[32];
     tooltip_format_duration(elapsed_secs, dur, sizeof(dur));
 
@@ -56,11 +59,11 @@ void tooltip_build_text(TabStatus status,
     const char *log_str = (log_path && log_path[0]) ? "enabled" : "disabled";
 
     (void)snprintf(buf, n,
-                   "%s\n"
-                   "Host:     %s\n"
-                   "User:     %s\n"
-                   "Status:   %s (%s)\n"
-                   "Logging:  %s\n\n"
+                   "Name:    %s\n"
+                   "Host:    %s\n"
+                   "User:    %s\n"
+                   "Status:  %s (%s)\n"
+                   "Logging: %s\n\n"
                    "[L] = toggle session logging",
                    nm, h, u, state_str, dur, log_str);
 }

@@ -12,10 +12,6 @@
 #include <fcntl.h>   /* fcntl, F_GETFL, F_SETFL, O_NONBLOCK */
 #include <errno.h>
 #define closesocket close
-#define WSAStartup(a,b) (void)0
-#define WSACleanup() (void)0
-typedef int WSADATA;
-#define MAKEWORD(a,b) 0
 typedef int SOCKET;
 #define INVALID_SOCKET (-1)
 #endif
@@ -34,12 +30,6 @@ static void secure_zero(void *p, size_t n)
 SshSession *ssh_session_new(void) {
     SshSession *s = xcalloc(1, sizeof(SshSession));
     s->socket = INVALID_SOCKET;
-
-    WSADATA wsadata;
-    memset(&wsadata, 0, sizeof(wsadata));
-    WSAStartup(MAKEWORD(2, 2), &wsadata);
-    (void)wsadata;
-
     s->session = libssh2_session_init();
     if (!s->session) {
         free(s);
@@ -60,9 +50,6 @@ void ssh_session_free(SshSession *s) {
         closesocket(s->socket);
     }
     free(s);
-#ifdef _WIN32
-    WSACleanup();
-#endif
 }
 
 int ssh_connect(SshSession *s, const char *host, int port) {

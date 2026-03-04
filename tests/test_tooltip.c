@@ -55,7 +55,7 @@ int test_tooltip_connected(void)
     ASSERT_TRUE(strstr(buf, "User:") != NULL);
     ASSERT_TRUE(strstr(buf, "tom") != NULL);
     ASSERT_TRUE(strstr(buf, "1m 30s") != NULL);
-    ASSERT_TRUE(strstr(buf, "Logging:  disabled") != NULL);
+    ASSERT_TRUE(strstr(buf, "Logging: disabled") != NULL);
     ASSERT_TRUE(strstr(buf, "[L] = toggle session logging") != NULL);
     TEST_END();
 }
@@ -89,7 +89,7 @@ int test_tooltip_with_log(void)
     ASSERT_TRUE(strstr(buf, "host.com") != NULL);
     ASSERT_TRUE(strstr(buf, "User:") != NULL);
     ASSERT_TRUE(strstr(buf, "alice") != NULL);
-    ASSERT_TRUE(strstr(buf, "Logging:  enabled") != NULL);
+    ASSERT_TRUE(strstr(buf, "Logging: enabled") != NULL);
     TEST_END();
 }
 
@@ -129,8 +129,9 @@ int test_tooltip_name_first_line(void)
     tooltip_build_text(TAB_CONNECTED, "MySession",
                        "host.com", "bob",
                        120, NULL, buf, sizeof(buf));
-    /* Name should be the very first thing in the output */
-    ASSERT_TRUE(strncmp(buf, "MySession", 9) == 0);
+    /* Name label should be the very first thing in the output */
+    ASSERT_TRUE(strncmp(buf, "Name:", 5) == 0);
+    ASSERT_TRUE(strstr(buf, "MySession") != NULL);
     TEST_END();
 }
 
@@ -169,7 +170,7 @@ int test_tooltip_logging_enabled(void)
     tooltip_build_text(TAB_CONNECTED, "Srv",
                        "host.com", "alice",
                        60, "/tmp/session.log", buf, sizeof(buf));
-    ASSERT_TRUE(strstr(buf, "Logging:  enabled") != NULL);
+    ASSERT_TRUE(strstr(buf, "Logging: enabled") != NULL);
     TEST_END();
 }
 
@@ -180,6 +181,6 @@ int test_tooltip_logging_disabled(void)
     tooltip_build_text(TAB_CONNECTED, "Srv",
                        "host.com", "alice",
                        60, NULL, buf, sizeof(buf));
-    ASSERT_TRUE(strstr(buf, "Logging:  disabled") != NULL);
+    ASSERT_TRUE(strstr(buf, "Logging: disabled") != NULL);
     TEST_END();
 }
