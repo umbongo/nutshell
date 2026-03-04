@@ -3,7 +3,7 @@
 *.a
 *.exe
 *.obj
-rewrite_c/build/
+build/
 
 # Runtime configuration (may contain encrypted credentials)
 config.json
@@ -18,4 +18,3 @@ settings.ini
 # Editor files
 *.swp
 *~
-golang/
