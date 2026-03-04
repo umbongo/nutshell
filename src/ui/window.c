@@ -752,11 +752,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* M-8: resolve config.json to an absolute path at startup so
              * GetOpenFileNameA (file browse dialogs) cannot change CWD and
              * cause saves to go to the wrong directory. */
-            get_exe_dir(g_config_path, sizeof(g_config_path) - 12u);
-            if (g_config_path[0] != '\0')
-                strncat(g_config_path, "\\config.json", 12u);
-            else
-                strncpy(g_config_path, "config.json", sizeof(g_config_path) - 1u);
+            {
+                char exe_dir[MAX_PATH];
+                get_exe_dir(exe_dir, sizeof(exe_dir));
+                if (exe_dir[0] != '\0')
+                    (void)snprintf(g_config_path, sizeof(g_config_path),
+                                   "%s\\config.json", exe_dir);
+                else
+                    (void)snprintf(g_config_path, sizeof(g_config_path),
+                                   "config.json");
+            }
 
             g_config = config_load(g_config_path);
             if (!g_config) {

@@ -101,7 +101,7 @@ int ssh_connect(SshSession *s, const char *host, int port) {
         /* Switch to non-blocking so we can timeout the connect. */
 #ifdef _WIN32
         u_long nb = 1;
-        ioctlsocket(sock, FIONBIO, &nb);
+        ioctlsocket(sock, (long)FIONBIO, &nb);
 #else
         int fl = fcntl(sock, F_GETFL, 0);
         fcntl(sock, F_SETFL, fl | O_NONBLOCK);
@@ -141,7 +141,7 @@ int ssh_connect(SshSession *s, const char *host, int port) {
             /* Restore blocking mode. */
 #ifdef _WIN32
             u_long nb2 = 0;
-            ioctlsocket(sock, FIONBIO, &nb2);
+            ioctlsocket(sock, (long)FIONBIO, &nb2);
 #else
             fcntl(sock, F_SETFL, fl & ~O_NONBLOCK);
 #endif
