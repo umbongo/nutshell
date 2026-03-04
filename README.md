@@ -49,37 +49,22 @@ A lightweight native C SSH client for Windows, focusing on performance, minimal 
 -   vcpkg with the custom `x64-mingw-gcc-static` triplet for MinGW-targeted OpenSSL and libssh2 (see `~/vcpkg/custom-triplets/`)
 
 ### Building
-Run the makefile from the root directory:
-
-```bash
-make
-```
-
-To run tests:
-
-```bash
-make test
-```
-
-To run static analysis:
-
-```bash
-make lint
-```
-
-To build with AddressSanitizer + UndefinedBehaviorSanitizer:
-
-```bash
-make debug
-```
-
-To build a size-optimised release compressed with UPX:
+Always use `make release` for the distributable build — it compiles with size optimisations and compresses with UPX (~1.5 MB):
 
 ```bash
 make release
 ```
 
-(Requires `upx` — `sudo apt install upx`. Reduces the exe from ~5.4 MB to ~1.5 MB.)
+Requires `upx` (`sudo apt install upx`). Use plain `make` only if you need an uncompressed binary for debugging.
+
+| Command | Purpose |
+|---------|---------|
+| `make release` | **Recommended** — optimised + UPX compressed (~1.5 MB) |
+| `make` | Uncompressed build (~5.4 MB), useful for debugging |
+| `make test` | Run unit tests (native Linux) |
+| `make lint` | Static analysis with cppcheck |
+| `make debug` | Build with AddressSanitizer + UndefinedBehaviorSanitizer |
+| `make clean` | Remove all build artefacts |
 
 ### Memory Audit (Windows)
 
