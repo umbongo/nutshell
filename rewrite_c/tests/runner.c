@@ -439,6 +439,8 @@ int main(void) {
     failed += test_term_extended_moves();
     failed += test_term_sgr_flags();
     failed += test_term_resize_basic();
+    failed += test_term_resize_reflow();
+    failed += test_term_resize_cursor_edge();
     failed += test_term_utf8();
 
     printf("\n--- VT Sequences ---\n");

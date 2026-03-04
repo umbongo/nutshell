@@ -749,11 +749,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (g_active_session && g_active_session->term) {
                 const char *seq = NULL;
+                bool app_keys = g_active_session->term->app_cursor_keys;
                 switch (wParam) {
-                    case VK_UP:    seq = "\x1B[A"; break;
-                    case VK_DOWN:  seq = "\x1B[B"; break;
-                    case VK_RIGHT: seq = "\x1B[C"; break;
-                    case VK_LEFT:  seq = "\x1B[D"; break;
+                    case VK_UP:    seq = app_keys ? "\x1BOA" : "\x1B[A"; break;
+                    case VK_DOWN:  seq = app_keys ? "\x1BOB" : "\x1B[B"; break;
+                    case VK_RIGHT: seq = app_keys ? "\x1BOC" : "\x1B[C"; break;
+                    case VK_LEFT:  seq = app_keys ? "\x1BOD" : "\x1B[D"; break;
                     case VK_HOME:  seq = "\x1B[H"; break;
                     case VK_END:   seq = "\x1B[4~"; break; /* VT sequence for End */
                     case VK_DELETE: seq = "\x1B[3~"; break;

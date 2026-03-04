@@ -155,8 +155,13 @@ void term_resize(Terminal *term, int rows, int cols) {
              break; 
         }
 
+        /* Only copy actual content cells — trailing empty cells (codepoint==0 beyond
+         * the row's written length) must not be reflowed, as they would create
+         * spurious wraps and incorrect row counts when resizing. */
+        int cell_limit = old_row->len < term->cols ? old_row->len : term->cols;
+
         /* Copy cells */
-        for (int c = 0; c < term->cols; c++) {
+        for (int c = 0; c < cell_limit; c++) {
             /* Check if we hit the cursor position */
             if (i == cursor_logical_idx && c == old_cursor_col) {
                 new_cursor_row = current_new_row_idx;
@@ -164,13 +169,13 @@ void term_resize(Terminal *term, int rows, int cols) {
             }
 
             const TermCell *cell = &old_row->cells[c];
-            
+
             /* Append to new buffer */
             new_lines[current_new_row_idx]->cells[current_new_col_idx] = *cell;
             new_lines[current_new_row_idx]->len = current_new_col_idx + 1;
-            
+
             current_new_col_idx++;
-            
+
             /* Wrap if we hit new width */
             if (current_new_col_idx >= cols) {
                 current_new_row_idx++;
@@ -180,8 +185,8 @@ void term_resize(Terminal *term, int rows, int cols) {
             }
         }
 
-        /* Check if cursor was at/past the end of the line (not caught in loop) */
-        if (i == cursor_logical_idx && old_cursor_col >= term->cols) {
+        /* Check if cursor was at/past the content end (not caught in loop) */
+        if (i == cursor_logical_idx && old_cursor_col >= cell_limit) {
             new_cursor_row = current_new_row_idx;
             new_cursor_col = current_new_col_idx;
         }
