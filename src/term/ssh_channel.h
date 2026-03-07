@@ -6,6 +6,7 @@
 
 typedef struct {
     LIBSSH2_CHANNEL *channel;
+    SshSession *ssh;          /* back-pointer for waitsocket in writes */
     int last_cols;
     int last_rows;
 } SSHChannel;

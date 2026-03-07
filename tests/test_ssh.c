@@ -75,6 +75,7 @@ int test_pty_resize_dedup(void) {
      * any libssh2 call, the fake pointer never gets dereferenced. */
     SSHChannel ch;
     ch.channel   = (LIBSSH2_CHANNEL *)(void *)1; /* sentinel – must not be NULL */
+    ch.ssh       = NULL;
     ch.last_cols = 80;
     ch.last_rows = 24;
 
@@ -94,6 +95,7 @@ int test_pty_resize_initial_state(void) {
      * Resizing to any real size with a NULL channel must return -1. */
     SSHChannel ch;
     ch.channel   = NULL;
+    ch.ssh       = NULL;
     ch.last_cols = 0;
     ch.last_rows = 0;
 
