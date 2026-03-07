@@ -72,6 +72,19 @@ static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
 static void update_scrollbar(HWND hwnd); /* forward declaration */
+static void paste_cancel(void);          /* forward declaration */
+
+/* ---- Paste state machine (timer-driven, non-blocking) ------------------- */
+#define PASTE_TIMER_ID 3
+
+typedef struct {
+    char  *buf;       /* malloc'd copy of clipboard text */
+    char  *pos;       /* current read position within buf */
+    HWND   hwnd;      /* window to repaint */
+    int    delay_ms;  /* inter-line delay */
+} PasteState;
+
+static PasteState g_paste = {0};
 
 static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
@@ -111,6 +124,7 @@ static void free_session(Session *s) {
 
 static void on_tab_select(int index, void *user_data) {
     (void)index;
+    paste_cancel(); /* stop pasting into the old session */
     g_active_session = (Session *)user_data;
     HWND hParent = GetParent(g_hwndTabs);
     update_scrollbar(hParent);
@@ -603,12 +617,58 @@ static void on_log_toggle(int index, void *user_data) {
 
 /* Send clipboard text to the active session, with multi-line confirmation
  * when content is longer than PASTE_CONFIRM_THRESHOLD bytes or contains a
- * newline.  Lines are separated by paste_delay_ms milliseconds. */
+ * newline.  Lines are separated by paste_delay_ms milliseconds via a
+ * non-blocking WM_TIMER so the UI stays responsive. */
 #define PASTE_CONFIRM_THRESHOLD 64
+
+/* Send one line from g_paste.pos, advance pos past the '\n'.
+ * Returns true if there is more data to send. */
+static bool paste_send_next_line(void)
+{
+    if (!g_paste.buf || !g_paste.pos || !*g_paste.pos) return false;
+    if (!g_active_session || !g_active_session->channel) return false;
+
+    const char *p = g_paste.pos;
+    const char *nl = strchr(p, '\n');
+    size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
+
+    for (size_t i = 0; i < chunk; i++) {
+        if (p[i] != '\r')
+            ssh_channel_write(g_active_session->channel, &p[i], 1);
+    }
+
+    g_paste.pos += chunk;
+    return *g_paste.pos != '\0';
+}
+
+/* Cancel any in-progress paste and free state */
+static void paste_cancel(void)
+{
+    if (g_paste.buf) {
+        KillTimer(g_paste.hwnd, PASTE_TIMER_ID);
+        free(g_paste.buf);
+        g_paste.buf = NULL;
+        g_paste.pos = NULL;
+    }
+}
+
+/* Called by WM_TIMER when wParam == PASTE_TIMER_ID */
+static void paste_timer_tick(void)
+{
+    bool more = paste_send_next_line();
+    if (g_active_session && g_active_session->term) {
+        g_active_session->term->scrollback_offset = 0;
+        InvalidateRect(g_paste.hwnd, NULL, FALSE);
+    }
+    if (!more) paste_cancel();
+}
 
 static void do_paste(HWND hwnd)
 {
     if (!g_active_session || !g_active_session->channel) return;
+
+    /* Cancel any in-progress paste */
+    paste_cancel();
 
     if (!IsClipboardFormatAvailable(CF_TEXT)) return;
     if (!OpenClipboard(hwnd)) return;
@@ -640,33 +700,39 @@ static void do_paste(HWND hwnd)
     if (confirmed) {
         int delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
 
-        /* Send line by line, applying inter-line delay */
-        const char *p = raw;
-        while (*p) {
-            const char *nl = strchr(p, '\n');
-            size_t chunk;
-            if (nl) {
-                chunk = (size_t)(nl - p) + 1u; /* include the '\n' */
-            } else {
-                chunk = strlen(p);
-            }
-
-            /* Skip bare \r characters */
-            for (size_t i = 0; i < chunk; i++) {
-                if (p[i] != '\r') {
-                    ssh_channel_write(g_active_session->channel, &p[i], 1);
+        /* Single line or no delay: send everything immediately */
+        if (line_count == 0 || delay_ms <= 0) {
+            const char *p = raw;
+            while (*p) {
+                const char *nl = strchr(p, '\n');
+                size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
+                for (size_t i = 0; i < chunk; i++) {
+                    if (p[i] != '\r')
+                        ssh_channel_write(g_active_session->channel, &p[i], 1);
                 }
+                p += chunk;
             }
+            g_active_session->term->scrollback_offset = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+        } else {
+            /* Multi-line with delay: use timer-driven paste */
+            g_paste.buf = _strdup(raw);
+            g_paste.pos = g_paste.buf;
+            g_paste.hwnd = hwnd;
+            g_paste.delay_ms = delay_ms;
 
-            p += chunk;
+            /* Send the first line immediately */
+            paste_send_next_line();
+            g_active_session->term->scrollback_offset = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
 
-            /* Apply delay between lines (not after the last chunk) */
-            if (nl && *p && delay_ms > 0) {
-                Sleep((DWORD)delay_ms);
+            /* Start timer for remaining lines */
+            if (g_paste.pos && *g_paste.pos) {
+                SetTimer(hwnd, PASTE_TIMER_ID, (UINT)delay_ms, NULL);
+            } else {
+                paste_cancel();
             }
         }
-        g_active_session->term->scrollback_offset = 0;
-        InvalidateRect(hwnd, NULL, FALSE);
     }
 
     GlobalUnlock(hClip);
@@ -866,6 +932,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     s = s->next;
                 }
                 if (needs_repaint) InvalidateRect(hwnd, NULL, FALSE);
+            } else if (wParam == PASTE_TIMER_ID) {
+                paste_timer_tick();
             }
             return 0;
 
