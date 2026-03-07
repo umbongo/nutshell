@@ -1,4 +1,5 @@
 #include "settings_dlg.h"
+#include "ai_prompt.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,9 @@
 #define IDC_LOG_DIR_EDIT    1010
 #define IDC_LOG_FMT_EDIT    1011
 #define IDC_SCHEME_COMBO    1012
+#define IDC_AI_PROVIDER_COMBO 1013
+#define IDC_AI_KEY_EDIT     1014
+#define IDC_AI_URL_LABEL    1015
 
 static const char *SETTINGS_CLASS = "Nutshell_Settings";
 
@@ -63,6 +67,15 @@ static const ColorScheme k_schemes[] = {
     { "Classic Dark",    "#FFFFFF", "#000000" },
 };
 #define NUM_SCHEMES ((int)(sizeof(k_schemes) / sizeof(k_schemes[0])))
+
+/* ---- AI provider list --------------------------------------------------- */
+
+static const char * const k_ai_providers[] = {
+    "deepseek",
+    "openai",
+    "anthropic",
+};
+#define NUM_AI_PROVIDERS ((int)(sizeof(k_ai_providers) / sizeof(k_ai_providers[0])))
 
 /* ---- Dialog state ------------------------------------------------------- */
 
@@ -286,6 +299,39 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)300);
         }
 
+        /* Row 10: AI Provider */
+        make_label(hwnd, "AI Provider:", lx, 385, lw);
+        {
+            HWND hAi = make_combo(hwnd, ex, 385, ew, 120, (HMENU)IDC_AI_PROVIDER_COMBO);
+            int sel = 0;
+            for (int i = 0; i < NUM_AI_PROVIDERS; i++) {
+                SendMessage(hAi, CB_ADDSTRING, 0, (LPARAM)k_ai_providers[i]);
+                if (_stricmp(nd->cfg->settings.ai_provider,
+                             k_ai_providers[i]) == 0)
+                    sel = i;
+            }
+            SendMessage(hAi, CB_SETCURSEL, (WPARAM)sel, 0);
+        }
+
+        /* Row 11: AI API Key */
+        make_label(hwnd, "AI API Key:", lx, 420, lw);
+        {
+            HWND hKey = CreateWindow("EDIT",
+                nd->cfg->settings.ai_api_key,
+                WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
+                ex, 420, ew, 23, hwnd, (HMENU)IDC_AI_KEY_EDIT, NULL, NULL);
+            (void)hKey;
+        }
+
+        /* Row 12: AI Base URL (read-only, derived from provider) */
+        make_label(hwnd, "AI Base URL:", lx, 450, lw);
+        {
+            const char *url = ai_provider_url(nd->cfg->settings.ai_provider);
+            CreateWindow("STATIC", url ? url : "(unknown provider)",
+                WS_VISIBLE | WS_CHILD | SS_LEFT,
+                ex, 452, ew, 18, hwnd, (HMENU)IDC_AI_URL_LABEL, NULL, NULL);
+        }
+
         /* Footer separator */
         CreateWindow("STATIC", "",
             WS_VISIBLE | WS_CHILD | SS_ETCHEDHORZ,
@@ -335,6 +381,19 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+
+        case IDC_AI_PROVIDER_COMBO:
+            /* Update base URL label when provider changes */
+            if (HIWORD(wParam) == CBN_SELCHANGE && d) {
+                int sel = (int)SendDlgItemMessage(hwnd, IDC_AI_PROVIDER_COMBO,
+                                                  CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < NUM_AI_PROVIDERS) {
+                    const char *url = ai_provider_url(k_ai_providers[sel]);
+                    SetDlgItemText(hwnd, IDC_AI_URL_LABEL,
+                                   url ? url : "(unknown provider)");
+                }
+            }
+            break;
 
         case IDC_SCHEME_COMBO:
             /* Live preview: update swatches when selection changes */
@@ -396,6 +455,21 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                            s->log_dir, (int)sizeof(s->log_dir));
             GetDlgItemText(hwnd, IDC_LOG_FMT_EDIT,
                            s->log_format, (int)sizeof(s->log_format));
+
+            /* AI provider from combo */
+            {
+                int sel = (int)SendDlgItemMessage(hwnd, IDC_AI_PROVIDER_COMBO,
+                                                  CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < NUM_AI_PROVIDERS) {
+                    strncpy(s->ai_provider, k_ai_providers[sel],
+                            sizeof(s->ai_provider) - 1);
+                    s->ai_provider[sizeof(s->ai_provider) - 1] = '\0';
+                }
+            }
+
+            /* AI API key */
+            GetDlgItemText(hwnd, IDC_AI_KEY_EDIT,
+                           s->ai_api_key, (int)sizeof(s->ai_api_key));
 
             /* Colours from selected scheme (tracked in d->fg / d->bg) */
             colorref_to_hex(d->fg, s->foreground_colour,
@@ -460,7 +534,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
     HWND hwnd = CreateWindowEx(
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 480, 530,
+        CW_USEDEFAULT, CW_USEDEFAULT, 480, 600,
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {

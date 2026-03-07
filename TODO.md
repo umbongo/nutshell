@@ -52,4 +52,7 @@ All planned phases are **complete**. 258 tests pass, build clean, lint clean.
 
 ## Outstanding (Not Started)
 
-All planned phases and follow-up tasks are **complete**. 304 tests pass.
+| # | Task |
+|---|------|
+| 1 | Custom AI provider: allow specifying a custom API base URL instead of only the built-in providers |
+| 2 | OAuth login for AI providers: allow signing in to Gemini, OpenAI, and Claude via subscription account instead of requiring an API key |

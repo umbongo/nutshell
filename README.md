@@ -1,4 +1,4 @@
-# Nutshell v1.3
+# Nutshell v1.4
 
 A lightweight native C SSH client for Windows, focusing on performance, minimal dependencies, and native OS integration.
 
@@ -17,6 +17,14 @@ A lightweight native C SSH client for Windows, focusing on performance, minimal 
 - Vertical scrollbar tracking scrollback position (Win64-safe, uses `GetScrollInfo` for full 32-bit range)
 - Dynamic light/dark title bar (DWM, BT.709 luminance, applied on settings change)
 - Hover tooltips on tabs (table format: name, host, user, status/duration, logging; [L] footnote)
+- AI chat assistant — reads terminal context and can execute commands via SSH
+  - Tab bar AI button (green when configured, grey when not)
+  - Non-modal chat window with conversation history
+  - Terminal context (last 50 rows) sent with each message
+  - Command execution via `[EXEC]cmd[/EXEC]` markers with user confirmation dialog
+  - Supports DeepSeek (default), OpenAI, and Anthropic providers
+  - API key encrypted at rest with AES-256-GCM (same as passwords)
+  - Background thread for async API calls (non-blocking UI)
 - Error dialogs for connection/auth failures
 - Foreground/background colours applied from settings immediately without restart
 
@@ -25,11 +33,11 @@ A lightweight native C SSH client for Windows, focusing on performance, minimal 
 ```
 .
 ├── src/
-│   ├── core/       # xmalloc, vector, string_utils, logger, tab_manager, theme, tooltip, snap, zoom, connect_anim, log_format
+│   ├── core/       # xmalloc, vector, string_utils, logger, tab_manager, theme, tooltip, snap, zoom, connect_anim, log_format, ai_prompt, ai_http, term_extract
 │   ├── config/     # JSON tokenizer, JSON parser, config loader, ssh_io
 │   ├── crypto/     # AES-256-GCM password encryption (OpenSSL)
 │   ├── term/       # Terminal emulator (buffer, parser) + SSH (session, channel, PTY, knownhosts)
-│   ├── ui/         # Win32 UI — renderer, tabs, window, session manager, settings dialog
+│   ├── ui/         # Win32 UI — renderer, tabs, window, session manager, settings dialog, ai_chat, ai_http_win
 │   └── main.c
 ├── tests/          # Unit tests (TDD — tests written before implementation)
 ├── build/          # Build artefacts (gitignored)
@@ -108,5 +116,7 @@ If you are an AI assistant helping with this codebase, please observe the follow
 16. **Discrete font sizes**: Allowed sizes are `{6, 8, 10, 12, 14, 16, 18, 20}` — defined in three places that must stay in sync: `k_allowed_sizes[]` in `window.c`, `k_font_sizes[]` in `settings.c`, and `k_allowed_sizes[]` in `loader.c`. `settings_validate()` snaps any out-of-set value to the nearest allowed size (not a range clamp).
 17. **Colour defaults**: Default terminal colours are white-on-black (`fg=#FFFFFF, bg=#000000`) matching the "Default" colour scheme in `settings.c`. `COLOR_DEFAULT` fg/bg mode means the renderer substitutes the configured scheme colours; hardcoded colour values in `buffer.c`/`parser.c` are only set for `COLOR_ANSI16`/`COLOR_256`/`COLOR_RGB` cells.
 18. **Scrollbar**: `update_scrollbar()` in `window.c` syncs a Win32 vertical scrollbar to the active terminal. Use `GetScrollInfo(SIF_TRACKPOS)` for `WM_VSCROLL` — never `HIWORD(wParam)`, which silently truncates to 16 bits and breaks scrollback > 65535 lines.
-14. **Config path caveat**: `config.json` is loaded relative to CWD, which can change after `GetOpenFileNameA` file dialogs. See `vulnerabilities.md` M-8 for details. The long-term fix is to resolve to an absolute path at startup using `get_exe_dir()`.
+14. **AI integration architecture**: AI code is split into portable core (`src/core/ai_prompt.c`, `src/core/ai_http.c`, `src/core/term_extract.c`) and Win32 UI (`src/ui/ai_chat.c`, `src/ui/ai_http_win.c`). Core files are testable on Linux; UI files are excluded from test builds via the `NON_TEST_SRCS` pattern in the Makefile. The AI uses an OpenAI-compatible chat completion API (DeepSeek default). Conversations use `AiConversation` struct with role-tagged messages. Commands are extracted via `[EXEC]cmd[/EXEC]` markers. The HTTP client uses WinHTTP on Windows.
+15. **Two config.h files**: `include/config.h` is used by the Windows cross-compile; `src/config/config.h` is used by native test builds. Both must be kept in sync when modifying the `Settings` struct.
+16. **Config path caveat**: `config.json` is loaded relative to CWD, which can change after `GetOpenFileNameA` file dialogs. See `vulnerabilities.md` M-8 for details. The long-term fix is to resolve to an absolute path at startup using `get_exe_dir()`.
 15. **Security**: See `vulnerabilities.md` for known security issues ranked by severity. The most critical are password encryption key derivation (C-1/C-2) and TOFU broken for non-RSA keys (H-4).

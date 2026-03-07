@@ -126,6 +126,8 @@ void config_default_settings(Settings *s)
     field_copy(s->host_key_verification,sizeof(s->host_key_verification),"tofu");
     field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#000000");
     field_copy(s->background_colour,    sizeof(s->background_colour),    "#FFFFFF");
+    field_copy(s->ai_provider,          sizeof(s->ai_provider),          "deepseek");
+    /* ai_api_key defaults to empty (already zeroed by memset) */
 }
 
 Profile *config_profile_new(void)
@@ -220,6 +222,20 @@ Config *config_load(const char *path)
         }
         if ((sv = json_obj_str(jset, "background_colour"))) {
             field_copy(s->background_colour, sizeof(s->background_colour), sv);
+        }
+        if ((sv = json_obj_str(jset, "ai_provider"))) {
+            field_copy(s->ai_provider, sizeof(s->ai_provider), sv);
+        }
+        if ((sv = json_obj_str(jset, "ai_api_key"))) {
+            if (crypto_is_encrypted(sv)) {
+                char plaintext[256];
+                if (crypto_decrypt(sv, plaintext, sizeof(plaintext)) == CRYPTO_OK) {
+                    field_copy(s->ai_api_key, sizeof(s->ai_api_key), plaintext);
+                    memset(plaintext, 0, sizeof(plaintext));
+                }
+            } else {
+                field_copy(s->ai_api_key, sizeof(s->ai_api_key), sv);
+            }
         }
         settings_validate(s);
     }
@@ -319,6 +335,12 @@ int config_save(const Config *cfg, const char *path)
     fputs(",\n", f);
     fputs("    \"background_colour\": ", f);
     fprint_json_str(f, s->background_colour);
+    fputs(",\n", f);
+    fputs("    \"ai_provider\": ", f);
+    fprint_json_str(f, s->ai_provider);
+    fputs(",\n", f);
+    fputs("    \"ai_api_key\": ", f);
+    fprint_json_str(f, s->ai_api_key);
     fputs("\n  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);

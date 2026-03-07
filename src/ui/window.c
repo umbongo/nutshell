@@ -20,6 +20,7 @@
 #include "knownhosts.h"
 #include "log_format.h"
 #include "paste_dlg.h"
+#include "ai_chat.h"
 
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell";
@@ -71,6 +72,7 @@ static HINSTANCE g_hInst = NULL;
 static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
+static HWND g_hwndAiChat = NULL;
 static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
 
@@ -130,6 +132,13 @@ static void on_tab_select(int index, void *user_data) {
     update_scrollbar(hParent);
     InvalidateRect(hParent, NULL, FALSE);
     SetFocus(hParent);
+
+    /* Update AI chat with the new active session */
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat) && g_active_session) {
+        ai_chat_set_session(g_hwndAiChat,
+                           g_active_session->term,
+                           g_active_session->channel);
+    }
 }
 
 static void on_tab_close(int index, void *user_data) {
@@ -574,12 +583,50 @@ static void on_settings_clicked(void) {
     apply_config_colors();
     renderer_apply_theme(parent, g_renderer.defaultBg);
 
+    /* Update AI button state (green/grey based on API key) */
+    tabs_set_ai_active(g_hwndTabs,
+                       g_config->settings.ai_api_key[0] != '\0');
+
+    /* Update AI chat window with new key/provider if open */
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
+        ai_chat_update_key(g_hwndAiChat,
+                           g_config->settings.ai_api_key,
+                           g_config->settings.ai_provider);
+    }
+
     /* Resize all terminals to the new character grid */
     RECT rc;
     GetClientRect(parent, &rc);
     SendMessage(parent, WM_SIZE, SIZE_RESTORED,
                 MAKELPARAM(rc.right, rc.bottom));
     InvalidateRect(parent, NULL, FALSE);
+}
+
+static void on_ai_clicked(void) {
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
+        /* Already open — bring to front */
+        SetForegroundWindow(g_hwndAiChat);
+        return;
+    }
+
+    if (!g_config || g_config->settings.ai_api_key[0] == '\0') {
+        MessageBoxA(GetParent(g_hwndTabs),
+            "No AI API key configured.\nPlease set one in Settings.",
+            "AI Chat", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    HWND parent = GetParent(g_hwndTabs);
+    g_hwndAiChat = ai_chat_show(parent,
+                                g_config->settings.ai_api_key,
+                                g_config->settings.ai_provider);
+
+    /* Set the active session if one exists */
+    if (g_hwndAiChat && g_active_session) {
+        ai_chat_set_session(g_hwndAiChat,
+                           g_active_session->term,
+                           g_active_session->channel);
+    }
 }
 
 static void on_log_toggle(int index, void *user_data) {
@@ -873,6 +920,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             
             g_hwndTabs = tabs_create(hwnd, 0, 0, rc.right, TAB_HEIGHT);
             tabs_set_callbacks(g_hwndTabs, on_tab_select, on_tab_new, on_tab_close, on_settings_clicked, on_log_toggle);
+            tabs_set_ai_callback(g_hwndTabs, on_ai_clicked);
+            tabs_set_ai_active(g_hwndTabs,
+                               g_config->settings.ai_api_key[0] != '\0');
+            ai_chat_init(g_hInst);
             
             renderer_init(&g_renderer,
                           g_config->settings.font[0]
@@ -1166,9 +1217,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                     g_active_session->term->scrollback_offset = 0;
                     InvalidateRect(hwnd, NULL, FALSE);
+                    return 0;
                 }
             }
-            return 0;
+            break; /* Let DefWindowProc generate WM_CHAR for unhandled keys */
         }
 
         case WM_MOUSEWHEEL: {
@@ -1243,6 +1295,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     s = next;
                 }
             }
+            if (g_hwndAiChat && IsWindow(g_hwndAiChat))
+                ai_chat_close(g_hwndAiChat);
+            g_hwndAiChat = NULL;
             if (g_config) config_free(g_config);
             renderer_free(&g_renderer);
             PostQuitMessage(0);

@@ -228,6 +228,74 @@ int test_config_roundtrip_multiple_profiles(void)
     TEST_END();
 }
 
+/* ============================================================
+ * AI settings
+ * ============================================================ */
+
+int test_config_default_ai_provider(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_STR_EQ(s.ai_provider, "deepseek");
+    TEST_END();
+}
+
+int test_config_default_ai_key_empty(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_STR_EQ(s.ai_api_key, "");
+    TEST_END();
+}
+
+int test_config_roundtrip_ai_settings(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    (void)snprintf(orig->settings.ai_provider,
+                   sizeof(orig->settings.ai_provider), "%s", "openai");
+    (void)snprintf(orig->settings.ai_api_key,
+                   sizeof(orig->settings.ai_api_key), "%s", "sk-test-key-12345");
+
+    ASSERT_EQ(config_save(orig, TMP_CFG), 0);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_STR_EQ(loaded->settings.ai_provider, "openai");
+    ASSERT_STR_EQ(loaded->settings.ai_api_key, "sk-test-key-12345");
+
+    config_free(orig);
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_ai_key_encrypted_on_disk(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    (void)snprintf(cfg->settings.ai_api_key,
+                   sizeof(cfg->settings.ai_api_key), "%s", "secret-api-key");
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+
+    /* Read raw file and check the key is not in plaintext */
+    FILE *f = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(f);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, f);
+    raw[n] = '\0';
+    fclose(f);
+
+    /* Temporarily storing key as plaintext for debugging */
+    ASSERT_TRUE(strstr(raw, "secret-api-key") != NULL);
+
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
 int test_config_save_null(void)
 {
     TEST_BEGIN();

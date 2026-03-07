@@ -19,6 +19,8 @@ typedef struct {
     char host_key_verification[CFG_STR_MAX];
     char foreground_colour[CFG_STR_MAX];
     char background_colour[CFG_STR_MAX];
+    char ai_provider[CFG_STR_MAX];
+    char ai_api_key[CFG_STR_MAX];
 } Settings;
 
 typedef struct {

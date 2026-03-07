@@ -104,6 +104,10 @@ int test_config_roundtrip_settings(void);
 int test_config_roundtrip_profile(void);
 int test_config_roundtrip_multiple_profiles(void);
 int test_config_save_null(void);
+int test_config_default_ai_provider(void);
+int test_config_default_ai_key_empty(void);
+int test_config_roundtrip_ai_settings(void);
+int test_config_ai_key_encrypted_on_disk(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -376,6 +380,49 @@ int test_cc_repeated_resize(void);
 int test_cc_scrollback_resize(void);
 int test_cc_write_after_resize(void);
 
+/* test_ai_http.c */
+int test_ai_http_response_free_null(void);
+int test_ai_http_response_free_allocated(void);
+int test_ai_http_stub_conversation_flow(void);
+int test_ai_http_stub_error_response(void);
+
+/* test_ai_prompt.c */
+int test_ai_conv_init(void);
+int test_ai_conv_add_user(void);
+int test_ai_conv_add_full(void);
+int test_ai_conv_null_safety(void);
+int test_ai_build_body_basic(void);
+int test_ai_build_body_escapes(void);
+int test_ai_build_body_overflow(void);
+int test_ai_build_body_null(void);
+int test_ai_parse_response_basic(void);
+int test_ai_parse_response_empty_choices(void);
+int test_ai_parse_response_malformed(void);
+int test_ai_extract_command_found(void);
+int test_ai_extract_command_none(void);
+int test_ai_extract_command_no_end(void);
+int test_ai_extract_command_empty(void);
+int test_ai_extract_command_null(void);
+int test_ai_provider_url_deepseek(void);
+int test_ai_provider_url_openai(void);
+int test_ai_provider_url_unknown(void);
+int test_ai_provider_model_deepseek(void);
+int test_ai_system_prompt_with_terminal(void);
+int test_ai_system_prompt_no_terminal(void);
+
+/* test_term_extract.c */
+int test_extract_empty_term(void);
+int test_extract_single_line(void);
+int test_extract_multi_line(void);
+int test_extract_trims_trailing_spaces(void);
+int test_extract_utf8_codepoint(void);
+int test_extract_buf_too_small(void);
+int test_extract_null_safety(void);
+int test_extract_last_n_basic(void);
+int test_extract_last_n_with_scrollback(void);
+int test_extract_last_n_exceeds_total(void);
+int test_extract_last_n_zero(void);
+
 /* test_color.c */
 int test_color256_palette_ansi(void);
 int test_color256_palette_cube(void);
@@ -497,6 +544,10 @@ int main(void) {
     failed += test_config_roundtrip_profile();
     failed += test_config_roundtrip_multiple_profiles();
     failed += test_config_save_null();
+    failed += test_config_default_ai_provider();
+    failed += test_config_default_ai_key_empty();
+    failed += test_config_roundtrip_ai_settings();
+    failed += test_config_ai_key_encrypted_on_disk();
 
     /* Session Manager */
     failed += test_profile_struct();
@@ -682,6 +733,49 @@ int main(void) {
     failed += test_dirty_null_safety();
     failed += test_dirty_multi_write_clear();
     failed += test_dirty_alt_screen();
+
+    printf("\n--- AI HTTP ---\n");
+    failed += test_ai_http_response_free_null();
+    failed += test_ai_http_response_free_allocated();
+    failed += test_ai_http_stub_conversation_flow();
+    failed += test_ai_http_stub_error_response();
+
+    printf("\n--- AI Prompt ---\n");
+    failed += test_ai_conv_init();
+    failed += test_ai_conv_add_user();
+    failed += test_ai_conv_add_full();
+    failed += test_ai_conv_null_safety();
+    failed += test_ai_build_body_basic();
+    failed += test_ai_build_body_escapes();
+    failed += test_ai_build_body_overflow();
+    failed += test_ai_build_body_null();
+    failed += test_ai_parse_response_basic();
+    failed += test_ai_parse_response_empty_choices();
+    failed += test_ai_parse_response_malformed();
+    failed += test_ai_extract_command_found();
+    failed += test_ai_extract_command_none();
+    failed += test_ai_extract_command_no_end();
+    failed += test_ai_extract_command_empty();
+    failed += test_ai_extract_command_null();
+    failed += test_ai_provider_url_deepseek();
+    failed += test_ai_provider_url_openai();
+    failed += test_ai_provider_url_unknown();
+    failed += test_ai_provider_model_deepseek();
+    failed += test_ai_system_prompt_with_terminal();
+    failed += test_ai_system_prompt_no_terminal();
+
+    printf("\n--- Term Extract ---\n");
+    failed += test_extract_empty_term();
+    failed += test_extract_single_line();
+    failed += test_extract_multi_line();
+    failed += test_extract_trims_trailing_spaces();
+    failed += test_extract_utf8_codepoint();
+    failed += test_extract_buf_too_small();
+    failed += test_extract_null_safety();
+    failed += test_extract_last_n_basic();
+    failed += test_extract_last_n_with_scrollback();
+    failed += test_extract_last_n_exceeds_total();
+    failed += test_extract_last_n_zero();
 
     printf("\n--- Color ---\n");
     failed += test_color256_palette_ansi();

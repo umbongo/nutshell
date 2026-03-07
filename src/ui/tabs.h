@@ -11,6 +11,7 @@ typedef void (*TabNewCallback)(void);
 typedef void (*TabCloseCallback)(int index, void *user_data);
 typedef void (*TabSettingsCallback)(void);
 typedef void (*TabLogToggleCallback)(int index, void *user_data);
+typedef void (*TabAiCallback)(void);
 
 void      tabs_init       (HINSTANCE hInstance);
 HWND      tabs_create     (HWND parent, int x, int y, int width, int height);
@@ -36,6 +37,8 @@ void      tabs_set_connect_info(HWND hwnd, int index,
                                 unsigned long long connect_ms);
 void      tabs_set_logging(HWND hwnd, int index, int logging);
 int       tabs_get_logging(HWND hwnd, int index);
+void      tabs_set_ai_callback(HWND hwnd, TabAiCallback on_ai);
+void      tabs_set_ai_active(HWND hwnd, int active);
 
 #endif
 #endif

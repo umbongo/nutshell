@@ -45,9 +45,11 @@ typedef struct TabControlData {
     TabCloseCallback     on_close;
     TabSettingsCallback  on_settings;
     TabLogToggleCallback on_log_toggle;
+    TabAiCallback        on_ai;
 
     HFONT hFont;
     HWND  hTooltip;  /* Win32 tooltip control */
+    int   ai_active; /* 1 = API key configured → green, 0 = grey */
 } TabControlData;
 
 /* Return the COLORREF for a connection-status dot */
@@ -141,10 +143,13 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 RECT rcClient;
                 GetClientRect(hwnd, &rcClient);
                 int cogX   = rcClient.right - BTN_SIZE - 4;
-                int rightX = cogX - BTN_SIZE - BTN_GAP;
+                int aiX    = cogX - BTN_SIZE - BTN_GAP;
+                int rightX = aiX - BTN_SIZE - BTN_GAP;
                 int leftX  = rightX - BTN_SIZE - BTN_GAP;
                 if (pt.x >= cogX && pt.x <= cogX + BTN_SIZE) {
                     ttt->lpszText = (LPSTR)"Settings";
+                } else if (pt.x >= aiX && pt.x <= aiX + BTN_SIZE) {
+                    ttt->lpszText = (LPSTR)"AI Chat";
                 } else if (pt.x >= leftX && pt.x <= leftX + BTN_SIZE) {
                     ttt->lpszText = (LPSTR)"Previous tab";
                 } else if (pt.x >= rightX && pt.x <= rightX + BTN_SIZE) {
@@ -292,10 +297,11 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 x += tw + TAB_GAP;
             }
 
-            /* ---- Right-side buttons: [◀][▶][⚙] ---- */
+            /* ---- Right-side buttons: [◀][▶][AI][⚙] ---- */
             {
                 int cogX   = rcClient.right - BTN_SIZE - 4;
-                int rightX = cogX - BTN_SIZE - BTN_GAP;
+                int aiX    = cogX - BTN_SIZE - BTN_GAP;
+                int rightX = aiX - BTN_SIZE - BTN_GAP;
                 int leftX  = rightX - BTN_SIZE - BTN_GAP;
 
                 HBRUSH rBtnBrush = CreateSolidBrush(BTN_COLOR);
@@ -313,6 +319,25 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     FillRect(hMemDC, &rcRight, rBtnBrush);
                     DrawTextW(hMemDC, L"\x25B6", -1, &rcRight,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
+                /* AI button */
+                if (aiX > x) {
+                    RECT rcAi = {aiX, btnY, aiX + BTN_SIZE, btnY + BTN_SIZE};
+                    FillRect(hMemDC, &rcAi, rBtnBrush);
+                    COLORREF aiCol = data->ai_active
+                                   ? RGB(0, 160, 80)      /* green when connected */
+                                   : RGB(160, 160, 160);   /* grey when not */
+                    SetTextColor(hMemDC, aiCol);
+                    HFONT hAiFont = CreateFont(-10, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                               VARIABLE_PITCH | FF_SWISS, "Segoe UI");
+                    HFONT hPrevAi = (HFONT)SelectObject(hMemDC, hAiFont);
+                    DrawText(hMemDC, "AI", 2, &rcAi,
+                             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hMemDC, hPrevAi);
+                    DeleteObject(hAiFont);
+                    SetTextColor(hMemDC, RGB(0, 0, 0));
                 }
                 /* ⚙ Cog (settings) */
                 if (cogX > x) {
@@ -344,15 +369,20 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 return 0;
             }
 
-            /* Hit test right-side buttons: [◀][▶][⚙] */
+            /* Hit test right-side buttons: [◀][▶][AI][⚙] */
             RECT rcClient;
             GetClientRect(hwnd, &rcClient);
             int cogX   = rcClient.right - BTN_SIZE - 4;
-            int rightX = cogX - BTN_SIZE - BTN_GAP;
+            int aiX    = cogX - BTN_SIZE - BTN_GAP;
+            int rightX = aiX - BTN_SIZE - BTN_GAP;
             int leftX  = rightX - BTN_SIZE - BTN_GAP;
 
             if (mx >= cogX && mx <= cogX + BTN_SIZE) {
                 if (data->on_settings) data->on_settings();
+                return 0;
+            }
+            if (mx >= aiX && mx <= aiX + BTN_SIZE) {
+                if (data->on_ai) data->on_ai();
                 return 0;
             }
             if (mx >= leftX && mx <= leftX + BTN_SIZE) {
@@ -566,6 +596,21 @@ int tabs_get_logging(HWND hwnd, int index)
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!data) return 0;
     return tabmgr_get_logging(&data->m, index);
+}
+
+void tabs_set_ai_callback(HWND hwnd, TabAiCallback on_ai)
+{
+    TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!data) return;
+    data->on_ai = on_ai;
+}
+
+void tabs_set_ai_active(HWND hwnd, int active)
+{
+    TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!data) return;
+    data->ai_active = active;
+    InvalidateRect(hwnd, NULL, FALSE);
 }
 
 #endif
