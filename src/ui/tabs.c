@@ -285,8 +285,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 int closeY = tabY + (tabH - CLOSE_SIZE) / 2;
                 RECT rcClose = {closeX, closeY, closeX + CLOSE_SIZE, closeY + CLOSE_SIZE};
                 SetTextColor(hMemDC, RGB(120, 120, 120));
-                DrawText(hMemDC, "\xD7", -1, &rcClose,
-                         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                DrawTextW(hMemDC, L"\x00D7", -1, &rcClose,
+                          DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 SetTextColor(hMemDC, RGB(0, 0, 0));
 
                 x += tw + TAB_GAP;
