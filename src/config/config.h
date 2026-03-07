@@ -21,6 +21,8 @@ typedef struct {
     char background_colour[CFG_STR_MAX];
     char ai_provider[CFG_STR_MAX];
     char ai_api_key[CFG_STR_MAX];
+    char ai_custom_url[CFG_STR_MAX];
+    char ai_custom_model[CFG_STR_MAX];
 } Settings;
 
 typedef struct {

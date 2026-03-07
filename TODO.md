@@ -54,5 +54,5 @@ All planned phases are **complete**. 258 tests pass, build clean, lint clean.
 
 | # | Task |
 |---|------|
-| 1 | Custom AI provider: allow specifying a custom API base URL instead of only the built-in providers |
-| 2 | OAuth login for AI providers: allow signing in to Gemini, OpenAI, and Claude via subscription account instead of requiring an API key |
+| ~~1~~ | ~~Custom AI provider~~ — **Done**: "custom" provider with editable URL + model fields in settings (supports Ollama, LM Studio, LocalAI, etc.) |
+| ~~2~~ | ~~OAuth login~~ — **Replaced** by custom URL + model: API providers require API keys, not OAuth; custom endpoint covers local/self-hosted LLMs |

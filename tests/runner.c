@@ -108,6 +108,18 @@ int test_config_default_ai_provider(void);
 int test_config_default_ai_key_empty(void);
 int test_config_roundtrip_ai_settings(void);
 int test_config_ai_key_encrypted_on_disk(void);
+int test_config_custom_provider_defaults(void);
+int test_config_roundtrip_custom_provider(void);
+int test_config_validate_null(void);
+int test_config_validate_font_size_snap(void);
+int test_config_validate_scrollback_clamp(void);
+int test_config_validate_paste_delay_clamp(void);
+int test_config_validate_empty_font(void);
+int test_config_load_realistic(void);
+int test_config_load_missing_ai_fields(void);
+int test_config_load_unknown_fields(void);
+int test_config_load_out_of_range(void);
+int test_config_roundtrip_all_fields(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -403,6 +415,9 @@ int test_ai_extract_command_none(void);
 int test_ai_extract_command_no_end(void);
 int test_ai_extract_command_empty(void);
 int test_ai_extract_command_null(void);
+int test_ai_extract_command_with_context(void);
+int test_ai_extract_command_multiword(void);
+int test_ai_extract_command_truncated(void);
 int test_ai_provider_url_deepseek(void);
 int test_ai_provider_url_openai(void);
 int test_ai_provider_url_unknown(void);
@@ -422,6 +437,13 @@ int test_extract_last_n_basic(void);
 int test_extract_last_n_with_scrollback(void);
 int test_extract_last_n_exceeds_total(void);
 int test_extract_last_n_zero(void);
+
+/* test_channel_write.c */
+int test_channel_write_immediate_success(void);
+int test_channel_write_eagain_then_success(void);
+int test_channel_write_eagain_exhausted(void);
+int test_channel_write_null_channel(void);
+int test_channel_write_enter_is_cr(void);
 
 /* test_color.c */
 int test_color256_palette_ansi(void);
@@ -548,6 +570,18 @@ int main(void) {
     failed += test_config_default_ai_key_empty();
     failed += test_config_roundtrip_ai_settings();
     failed += test_config_ai_key_encrypted_on_disk();
+    failed += test_config_custom_provider_defaults();
+    failed += test_config_roundtrip_custom_provider();
+    failed += test_config_validate_null();
+    failed += test_config_validate_font_size_snap();
+    failed += test_config_validate_scrollback_clamp();
+    failed += test_config_validate_paste_delay_clamp();
+    failed += test_config_validate_empty_font();
+    failed += test_config_load_realistic();
+    failed += test_config_load_missing_ai_fields();
+    failed += test_config_load_unknown_fields();
+    failed += test_config_load_out_of_range();
+    failed += test_config_roundtrip_all_fields();
 
     /* Session Manager */
     failed += test_profile_struct();
@@ -757,6 +791,9 @@ int main(void) {
     failed += test_ai_extract_command_no_end();
     failed += test_ai_extract_command_empty();
     failed += test_ai_extract_command_null();
+    failed += test_ai_extract_command_with_context();
+    failed += test_ai_extract_command_multiword();
+    failed += test_ai_extract_command_truncated();
     failed += test_ai_provider_url_deepseek();
     failed += test_ai_provider_url_openai();
     failed += test_ai_provider_url_unknown();
@@ -776,6 +813,13 @@ int main(void) {
     failed += test_extract_last_n_with_scrollback();
     failed += test_extract_last_n_exceeds_total();
     failed += test_extract_last_n_zero();
+
+    printf("\n--- Channel Write ---\n");
+    failed += test_channel_write_immediate_success();
+    failed += test_channel_write_eagain_then_success();
+    failed += test_channel_write_eagain_exhausted();
+    failed += test_channel_write_null_channel();
+    failed += test_channel_write_enter_is_cr();
 
     printf("\n--- Color ---\n");
     failed += test_color256_palette_ansi();

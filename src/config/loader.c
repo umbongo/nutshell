@@ -226,6 +226,12 @@ Config *config_load(const char *path)
         if ((sv = json_obj_str(jset, "ai_provider"))) {
             field_copy(s->ai_provider, sizeof(s->ai_provider), sv);
         }
+        if ((sv = json_obj_str(jset, "ai_custom_url"))) {
+            field_copy(s->ai_custom_url, sizeof(s->ai_custom_url), sv);
+        }
+        if ((sv = json_obj_str(jset, "ai_custom_model"))) {
+            field_copy(s->ai_custom_model, sizeof(s->ai_custom_model), sv);
+        }
         if ((sv = json_obj_str(jset, "ai_api_key"))) {
             if (crypto_is_encrypted(sv)) {
                 char plaintext[256];
@@ -338,6 +344,12 @@ int config_save(const Config *cfg, const char *path)
     fputs(",\n", f);
     fputs("    \"ai_provider\": ", f);
     fprint_json_str(f, s->ai_provider);
+    fputs(",\n", f);
+    fputs("    \"ai_custom_url\": ", f);
+    fprint_json_str(f, s->ai_custom_url);
+    fputs(",\n", f);
+    fputs("    \"ai_custom_model\": ", f);
+    fprint_json_str(f, s->ai_custom_model);
     fputs(",\n", f);
     fputs("    \"ai_api_key\": ", f);
     fprint_json_str(f, s->ai_api_key);

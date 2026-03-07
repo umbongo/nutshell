@@ -591,7 +591,9 @@ static void on_settings_clicked(void) {
     if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
         ai_chat_update_key(g_hwndAiChat,
                            g_config->settings.ai_api_key,
-                           g_config->settings.ai_provider);
+                           g_config->settings.ai_provider,
+                           g_config->settings.ai_custom_url,
+                           g_config->settings.ai_custom_model);
     }
 
     /* Resize all terminals to the new character grid */
@@ -619,7 +621,9 @@ static void on_ai_clicked(void) {
     HWND parent = GetParent(g_hwndTabs);
     g_hwndAiChat = ai_chat_show(parent,
                                 g_config->settings.ai_api_key,
-                                g_config->settings.ai_provider);
+                                g_config->settings.ai_provider,
+                                g_config->settings.ai_custom_url,
+                                g_config->settings.ai_custom_model);
 
     /* Set the active session if one exists */
     if (g_hwndAiChat && g_active_session) {

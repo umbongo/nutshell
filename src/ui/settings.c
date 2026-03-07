@@ -22,6 +22,8 @@
 #define IDC_AI_PROVIDER_COMBO 1013
 #define IDC_AI_KEY_EDIT     1014
 #define IDC_AI_URL_LABEL    1015
+#define IDC_AI_CUSTOM_URL   1016
+#define IDC_AI_CUSTOM_MODEL 1017
 
 static const char *SETTINGS_CLASS = "Nutshell_Settings";
 
@@ -74,6 +76,7 @@ static const char * const k_ai_providers[] = {
     "deepseek",
     "openai",
     "anthropic",
+    "custom",
 };
 #define NUM_AI_PROVIDERS ((int)(sizeof(k_ai_providers) / sizeof(k_ai_providers[0])))
 
@@ -323,13 +326,43 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             (void)hKey;
         }
 
-        /* Row 12: AI Base URL (read-only, derived from provider) */
+        /* Row 12: AI Base URL (read-only label for built-in, editable for custom) */
         make_label(hwnd, "AI Base URL:", lx, 450, lw);
         {
+            int is_custom = (_stricmp(nd->cfg->settings.ai_provider, "custom") == 0);
             const char *url = ai_provider_url(nd->cfg->settings.ai_provider);
-            CreateWindow("STATIC", url ? url : "(unknown provider)",
+            /* Read-only label for built-in providers */
+            CreateWindow("STATIC", url ? url : "(custom)",
                 WS_VISIBLE | WS_CHILD | SS_LEFT,
                 ex, 452, ew, 18, hwnd, (HMENU)IDC_AI_URL_LABEL, NULL, NULL);
+            /* Editable URL field for custom provider */
+            {
+                HWND hUrl = CreateWindow("EDIT",
+                    nd->cfg->settings.ai_custom_url,
+                    WS_CHILD | WS_BORDER | ES_AUTOHSCROLL |
+                    (is_custom ? WS_VISIBLE : 0),
+                    ex, 450, ew, 23, hwnd, (HMENU)IDC_AI_CUSTOM_URL, NULL, NULL);
+                (void)hUrl;
+            }
+            /* Show label or edit depending on provider */
+            ShowWindow(GetDlgItem(hwnd, IDC_AI_URL_LABEL), is_custom ? SW_HIDE : SW_SHOW);
+        }
+
+        /* Row 13: AI Model (only visible for custom provider) */
+        make_label(hwnd, "AI Model:", lx, 480, lw);
+        {
+            int is_custom = (_stricmp(nd->cfg->settings.ai_provider, "custom") == 0);
+            HWND hModel = CreateWindow("EDIT",
+                nd->cfg->settings.ai_custom_model,
+                WS_CHILD | WS_BORDER | ES_AUTOHSCROLL |
+                (is_custom ? WS_VISIBLE : 0),
+                ex, 480, ew, 23, hwnd, (HMENU)IDC_AI_CUSTOM_MODEL, NULL, NULL);
+            (void)hModel;
+            /* Hide model label when not custom */
+            if (!is_custom) {
+                HWND hLbl = FindWindowEx(hwnd, NULL, "STATIC", "AI Model:");
+                if (hLbl) ShowWindow(hLbl, SW_HIDE);
+            }
         }
 
         /* Footer separator */
@@ -383,14 +416,27 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         switch (LOWORD(wParam)) {
 
         case IDC_AI_PROVIDER_COMBO:
-            /* Update base URL label when provider changes */
+            /* Update base URL label / custom fields when provider changes */
             if (HIWORD(wParam) == CBN_SELCHANGE && d) {
                 int sel = (int)SendDlgItemMessage(hwnd, IDC_AI_PROVIDER_COMBO,
                                                   CB_GETCURSEL, 0, 0);
                 if (sel >= 0 && sel < NUM_AI_PROVIDERS) {
+                    int is_custom = (_stricmp(k_ai_providers[sel], "custom") == 0);
                     const char *url = ai_provider_url(k_ai_providers[sel]);
                     SetDlgItemText(hwnd, IDC_AI_URL_LABEL,
-                                   url ? url : "(unknown provider)");
+                                   url ? url : "(custom)");
+                    /* Toggle visibility: label vs editable fields */
+                    ShowWindow(GetDlgItem(hwnd, IDC_AI_URL_LABEL),
+                               is_custom ? SW_HIDE : SW_SHOW);
+                    ShowWindow(GetDlgItem(hwnd, IDC_AI_CUSTOM_URL),
+                               is_custom ? SW_SHOW : SW_HIDE);
+                    ShowWindow(GetDlgItem(hwnd, IDC_AI_CUSTOM_MODEL),
+                               is_custom ? SW_SHOW : SW_HIDE);
+                    /* Show/hide model label */
+                    {
+                        HWND hLbl = FindWindowEx(hwnd, NULL, "STATIC", "AI Model:");
+                        if (hLbl) ShowWindow(hLbl, is_custom ? SW_SHOW : SW_HIDE);
+                    }
                 }
             }
             break;
@@ -471,6 +517,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             GetDlgItemText(hwnd, IDC_AI_KEY_EDIT,
                            s->ai_api_key, (int)sizeof(s->ai_api_key));
 
+            /* AI custom URL and model */
+            GetDlgItemText(hwnd, IDC_AI_CUSTOM_URL,
+                           s->ai_custom_url, (int)sizeof(s->ai_custom_url));
+            GetDlgItemText(hwnd, IDC_AI_CUSTOM_MODEL,
+                           s->ai_custom_model, (int)sizeof(s->ai_custom_model));
+
             /* Colours from selected scheme (tracked in d->fg / d->bg) */
             colorref_to_hex(d->fg, s->foreground_colour,
                             sizeof(s->foreground_colour));
@@ -534,7 +586,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
     HWND hwnd = CreateWindowEx(
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 480, 600,
+        CW_USEDEFAULT, CW_USEDEFAULT, 480, 640,
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {

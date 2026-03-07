@@ -213,6 +213,39 @@ int test_ai_system_prompt_with_terminal(void) {
     TEST_END();
 }
 
+int test_ai_extract_command_with_context(void) {
+    TEST_BEGIN();
+    /* Realistic AI response with explanation before the command */
+    const char *resp =
+        "I'll check the disk usage for you.\n\n"
+        "[EXEC]df -h[/EXEC]\n\n"
+        "This will show all mounted filesystems.";
+    char cmd[256];
+    ASSERT_EQ(ai_extract_command(resp, cmd, sizeof(cmd)), 1);
+    ASSERT_STR_EQ(cmd, "df -h");
+    TEST_END();
+}
+
+int test_ai_extract_command_multiword(void) {
+    TEST_BEGIN();
+    /* Command with pipes and arguments */
+    const char *resp = "Let me find large files.\n[EXEC]find / -size +100M -type f 2>/dev/null[/EXEC]";
+    char cmd[256];
+    ASSERT_EQ(ai_extract_command(resp, cmd, sizeof(cmd)), 1);
+    ASSERT_STR_EQ(cmd, "find / -size +100M -type f 2>/dev/null");
+    TEST_END();
+}
+
+int test_ai_extract_command_truncated(void) {
+    TEST_BEGIN();
+    /* Command too long for output buffer — truncated but still found */
+    const char *resp = "[EXEC]echo hello world[/EXEC]";
+    char cmd[8]; /* only room for 7 chars + NUL */
+    ASSERT_EQ(ai_extract_command(resp, cmd, sizeof(cmd)), 1);
+    ASSERT_STR_EQ(cmd, "echo he"); /* truncated to fit */
+    TEST_END();
+}
+
 int test_ai_system_prompt_no_terminal(void) {
     TEST_BEGIN();
     char buf[2048];

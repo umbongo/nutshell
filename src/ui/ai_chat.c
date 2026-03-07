@@ -35,6 +35,8 @@ typedef struct {
     AiConversation conv;
     char api_key[256];
     char provider[64];
+    char custom_url[256];
+    char custom_model[256];
 
     /* Active session references */
     Terminal   *active_term;
@@ -66,10 +68,13 @@ static unsigned __stdcall ai_thread_proc(void *arg)
 
     char api_key_copy[256];
     char provider_copy[64];
+    char custom_url_copy[256];
     strncpy(api_key_copy, d->api_key, sizeof(api_key_copy) - 1);
     api_key_copy[sizeof(api_key_copy) - 1] = '\0';
     strncpy(provider_copy, d->provider, sizeof(provider_copy) - 1);
     provider_copy[sizeof(provider_copy) - 1] = '\0';
+    strncpy(custom_url_copy, d->custom_url, sizeof(custom_url_copy) - 1);
+    custom_url_copy[sizeof(custom_url_copy) - 1] = '\0';
 
     LeaveCriticalSection(&d->cs);
 
@@ -81,8 +86,10 @@ static unsigned __stdcall ai_thread_proc(void *arg)
 
     /* Make HTTP request */
     const char *url = ai_provider_url(provider_copy);
+    if (!url && strcmp(provider_copy, "custom") == 0 && custom_url_copy[0])
+        url = custom_url_copy;
     if (!url) {
-        PostMessage(d->hwnd, WM_AI_RESPONSE, 0, (LPARAM)_strdup("Error: unknown AI provider"));
+        PostMessage(d->hwnd, WM_AI_RESPONSE, 0, (LPARAM)_strdup("Error: unknown AI provider (set a custom URL for custom provider)"));
         d->busy = 0;
         return 0;
     }
@@ -184,9 +191,9 @@ static void execute_command(AiChatData *d, const char *cmd)
 {
     if (!d || !d->active_channel || !cmd || !cmd[0]) return;
 
-    /* Send command + newline to SSH channel */
+    /* Send command + CR to SSH channel (CR = Enter key, same as WM_CHAR) */
     ssh_channel_write(d->active_channel, cmd, (size_t)strlen(cmd));
-    ssh_channel_write(d->active_channel, "\n", 1);
+    ssh_channel_write(d->active_channel, "\r", 1);
 
     chat_append(d->hDisplay, "[Executed: ");
     chat_append(d->hDisplay, cmd);
@@ -357,7 +364,8 @@ void ai_chat_init(HINSTANCE hInstance)
     RegisterClassEx(&wc);
 }
 
-HWND ai_chat_show(HWND parent, const char *api_key, const char *provider)
+HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
+                  const char *custom_url, const char *custom_model)
 {
     AiChatData *d = (AiChatData *)calloc(1, sizeof(AiChatData));
     if (!d) return NULL;
@@ -368,9 +376,16 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider)
         strncpy(d->api_key, api_key, sizeof(d->api_key) - 1);
     if (provider)
         strncpy(d->provider, provider, sizeof(d->provider) - 1);
+    if (custom_url)
+        strncpy(d->custom_url, custom_url, sizeof(d->custom_url) - 1);
+    if (custom_model)
+        strncpy(d->custom_model, custom_model, sizeof(d->custom_model) - 1);
 
-    /* Initialize conversation with the provider's default model */
+    /* Initialize conversation with the provider's default model,
+     * or custom model if provider is "custom" */
     const char *model = ai_provider_model(provider);
+    if (!model && custom_model && custom_model[0])
+        model = custom_model;
     ai_conv_init(&d->conv, model ? model : "deepseek-chat");
 
     HWND hwnd = CreateWindowEx(
@@ -396,7 +411,8 @@ void ai_chat_set_session(HWND hwnd, Terminal *term, SSHChannel *channel)
     d->active_channel = channel;
 }
 
-void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider)
+void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
+                        const char *custom_url, const char *custom_model)
 {
     if (!hwnd) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -405,9 +421,15 @@ void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider)
     EnterCriticalSection(&d->cs);
     if (api_key)
         snprintf(d->api_key, sizeof(d->api_key), "%s", api_key);
+    if (custom_url)
+        snprintf(d->custom_url, sizeof(d->custom_url), "%s", custom_url);
+    if (custom_model)
+        snprintf(d->custom_model, sizeof(d->custom_model), "%s", custom_model);
     if (provider) {
         snprintf(d->provider, sizeof(d->provider), "%s", provider);
         const char *model = ai_provider_model(provider);
+        if (!model && custom_model && custom_model[0])
+            model = custom_model;
         if (model)
             snprintf(d->conv.model, sizeof(d->conv.model), "%s", model);
     }
