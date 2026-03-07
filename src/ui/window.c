@@ -19,6 +19,7 @@
 #include "ssh_io.h"
 #include "knownhosts.h"
 #include "log_format.h"
+#include "paste_dlg.h"
 
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell";
@@ -629,28 +630,11 @@ static void do_paste(HWND hwnd)
     /* Ask for confirmation when content is large or multi-line */
     int confirmed = 1;
     if (raw_len > PASTE_CONFIRM_THRESHOLD || line_count > 0) {
-        char msg[512];
-        /* Build a preview: first 80 printable chars */
-        char preview[81];
-        int pi = 0;
-        for (size_t i = 0; i < raw_len && pi < 80; i++) {
-            char c = raw[i];
-            if (c == '\r') continue;
-            preview[pi++] = (c == '\n') ? ' ' : c;
-        }
-        preview[pi] = '\0';
-
-        (void)snprintf(msg, sizeof(msg),
-            "Paste %d line%s (%zu chars)?\n\nPreview:\n%.80s%s",
-            line_count + 1,
-            line_count == 1 ? "" : "s",
-            raw_len,
-            preview,
-            raw_len > 80 ? "..." : "");
-
-        int ans = MessageBoxA(hwnd, msg, "Confirm Paste",
-                              MB_YESNO | MB_ICONQUESTION);
-        confirmed = (ans == IDYES);
+        confirmed = paste_preview_show(hwnd, raw,
+            g_config->settings.foreground_colour,
+            g_config->settings.background_colour,
+            g_config->settings.font,
+            g_config->settings.font_size);
     }
 
     if (confirmed) {

@@ -56,3 +56,4 @@ All planned phases are **complete**. 258 tests pass, build clean, lint clean.
 - [ ] Dr. Memory audit on Windows release build
 - [ ] Server compatibility matrix: OpenSSH 8.x/9.x, Dropbear, Windows OpenSSH
 - [ ] Address items in `vulnerabilities.md`
+- [ ] Paste preview: show all lines to be pasted in a scrollable confirmation window before pasting; apply `paste_delay_ms` between lines during the actual paste

@@ -147,6 +147,22 @@ int test_tooltip_empty_name(void);
 int test_tooltip_logging_enabled(void);
 int test_tooltip_logging_disabled(void);
 
+/* test_paste_preview.c */
+int test_paste_format_lines_single(void);
+int test_paste_format_lines_multi(void);
+int test_paste_format_lines_crlf(void);
+int test_paste_format_lines_trailing_newline(void);
+int test_paste_format_lines_no_trailing_newline(void);
+int test_paste_format_lines_empty(void);
+int test_paste_format_lines_null(void);
+int test_paste_format_lines_blank_lines(void);
+int test_paste_format_lines_long_line(void);
+int test_paste_line_free_null(void);
+int test_paste_build_summary_single(void);
+int test_paste_build_summary_multi(void);
+int test_paste_build_summary_null_buf(void);
+int test_paste_build_summary_small_buf(void);
+
 /* test_settings.c */
 int test_settings_validate_defaults(void);
 int test_settings_validate_font_size_low(void);
@@ -495,6 +511,23 @@ int main(void) {
     failed += test_tooltip_empty_name();
     failed += test_tooltip_logging_enabled();
     failed += test_tooltip_logging_disabled();
+
+    /* Paste Preview */
+    printf("\n--- Paste Preview ---\n");
+    failed += test_paste_format_lines_single();
+    failed += test_paste_format_lines_multi();
+    failed += test_paste_format_lines_crlf();
+    failed += test_paste_format_lines_trailing_newline();
+    failed += test_paste_format_lines_no_trailing_newline();
+    failed += test_paste_format_lines_empty();
+    failed += test_paste_format_lines_null();
+    failed += test_paste_format_lines_blank_lines();
+    failed += test_paste_format_lines_long_line();
+    failed += test_paste_line_free_null();
+    failed += test_paste_build_summary_single();
+    failed += test_paste_build_summary_multi();
+    failed += test_paste_build_summary_null_buf();
+    failed += test_paste_build_summary_small_buf();
 
     /* Settings Validation */
     failed += test_settings_validate_defaults();
