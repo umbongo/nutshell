@@ -78,10 +78,11 @@ static void paste_cancel(void);          /* forward declaration */
 #define PASTE_TIMER_ID 3
 
 typedef struct {
-    char  *buf;       /* malloc'd copy of clipboard text */
-    char  *pos;       /* current read position within buf */
-    HWND   hwnd;      /* window to repaint */
-    int    delay_ms;  /* inter-line delay */
+    char       *buf;       /* malloc'd copy of clipboard text */
+    char       *pos;       /* current read position within buf */
+    HWND        hwnd;      /* window to repaint */
+    int         delay_ms;  /* inter-line delay */
+    SSHChannel *channel;   /* target channel (paste continues across tab switches) */
 } PasteState;
 
 static PasteState g_paste = {0};
@@ -124,7 +125,6 @@ static void free_session(Session *s) {
 
 static void on_tab_select(int index, void *user_data) {
     (void)index;
-    paste_cancel(); /* stop pasting into the old session */
     g_active_session = (Session *)user_data;
     HWND hParent = GetParent(g_hwndTabs);
     update_scrollbar(hParent);
@@ -626,7 +626,7 @@ static void on_log_toggle(int index, void *user_data) {
 static bool paste_send_next_line(void)
 {
     if (!g_paste.buf || !g_paste.pos || !*g_paste.pos) return false;
-    if (!g_active_session || !g_active_session->channel) return false;
+    if (!g_paste.channel) return false;
 
     const char *p = g_paste.pos;
     const char *nl = strchr(p, '\n');
@@ -634,7 +634,7 @@ static bool paste_send_next_line(void)
 
     for (size_t i = 0; i < chunk; i++) {
         if (p[i] != '\r')
-            ssh_channel_write(g_active_session->channel, &p[i], 1);
+            ssh_channel_write(g_paste.channel, &p[i], 1);
     }
 
     g_paste.pos += chunk;
@@ -649,6 +649,7 @@ static void paste_cancel(void)
         free(g_paste.buf);
         g_paste.buf = NULL;
         g_paste.pos = NULL;
+        g_paste.channel = NULL;
     }
 }
 
@@ -720,6 +721,7 @@ static void do_paste(HWND hwnd)
             g_paste.pos = g_paste.buf;
             g_paste.hwnd = hwnd;
             g_paste.delay_ms = delay_ms;
+            g_paste.channel = g_active_session->channel;
 
             /* Send the first line immediately */
             paste_send_next_line();
@@ -900,6 +902,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             InvalidateRect(hwnd, NULL, FALSE);
                         } else if (poll_rc == -2) {
                             /* EOF */
+                            if (g_paste.channel == s->channel)
+                                paste_cancel();
                             term_process(s->term, "\r\n[Connection Closed]\r\n", 23);
                             ssh_channel_free(s->channel);
                             s->channel = NULL;
