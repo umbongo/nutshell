@@ -20,8 +20,8 @@ int test_config_default_settings(void)
     ASSERT_EQ(s.scrollback_lines, 10000);
     ASSERT_EQ(s.paste_delay_ms, 350);
     ASSERT_EQ(s.logging_enabled, 0);
-    ASSERT_STR_EQ(s.foreground_colour, "#FFFFFF");
-    ASSERT_STR_EQ(s.background_colour, "#000000");
+    ASSERT_STR_EQ(s.foreground_colour, "#000000");
+    ASSERT_STR_EQ(s.background_colour, "#FFFFFF");
     ASSERT_STR_EQ(s.host_key_verification, "tofu");
     TEST_END();
 }

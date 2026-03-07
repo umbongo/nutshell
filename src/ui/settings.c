@@ -51,7 +51,7 @@ typedef struct { const char *name; const char *fg; const char *bg; } ColorScheme
 
 /* 10 curated terminal colour presets.  Scheme 0 is the application default. */
 static const ColorScheme k_schemes[] = {
-    { "Default",         "#FFFFFF", "#000000" },
+    { "Default",         "#000000", "#FFFFFF" },
     { "Solarized Dark",  "#839496", "#002B36" },
     { "Solarized Light", "#657B83", "#FDF6E3" },
     { "Dracula",         "#F8F8F2", "#282A36" },
@@ -60,7 +60,7 @@ static const ColorScheme k_schemes[] = {
     { "One Dark",        "#ABB2BF", "#282C34" },
     { "Gruvbox Dark",    "#EBDBB2", "#282828" },
     { "Cobalt Blue",     "#FFFFFF", "#002240" },
-    { "Pure Light",      "#000000", "#FFFFFF" },
+    { "Classic Dark",    "#FFFFFF", "#000000" },
 };
 #define NUM_SCHEMES ((int)(sizeof(k_schemes) / sizeof(k_schemes[0])))
 

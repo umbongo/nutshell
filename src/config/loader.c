@@ -124,8 +124,8 @@ void config_default_settings(Settings *s)
     s->logging_enabled  = 0;
     field_copy(s->log_format,           sizeof(s->log_format),           "%Y-%m-%d_%H-%M-%S");
     field_copy(s->host_key_verification,sizeof(s->host_key_verification),"tofu");
-    field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#FFFFFF");
-    field_copy(s->background_colour,    sizeof(s->background_colour),    "#000000");
+    field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#000000");
+    field_copy(s->background_colour,    sizeof(s->background_colour),    "#FFFFFF");
 }
 
 Profile *config_profile_new(void)

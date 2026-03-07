@@ -361,6 +361,21 @@ int test_dirty_null_safety(void);
 int test_dirty_multi_write_clear(void);
 int test_dirty_alt_screen(void);
 
+/* test_color_consistency.c */
+int test_cc_default_is_pure_light(void);
+int test_cc_init_cells_color_default(void);
+int test_cc_resize_preserves_color_default(void);
+int test_cc_resize_shrink_grow(void);
+int test_cc_scroll_new_row_color_default(void);
+int test_cc_erase_display_color_default(void);
+int test_cc_erase_line_color_default(void);
+int test_cc_alt_screen_color_default(void);
+int test_cc_sgr_reset_color_default(void);
+int test_cc_config_roundtrip_pure_light(void);
+int test_cc_repeated_resize(void);
+int test_cc_scrollback_resize(void);
+int test_cc_write_after_resize(void);
+
 /* test_color.c */
 int test_color256_palette_ansi(void);
 int test_color256_palette_cube(void);
@@ -639,6 +654,21 @@ int main(void) {
     failed += test_theme_luminance_blue();
     failed += test_theme_pure_black();
     failed += test_theme_pure_white();
+
+    printf("\n--- Color Consistency ---\n");
+    failed += test_cc_default_is_pure_light();
+    failed += test_cc_init_cells_color_default();
+    failed += test_cc_resize_preserves_color_default();
+    failed += test_cc_resize_shrink_grow();
+    failed += test_cc_scroll_new_row_color_default();
+    failed += test_cc_erase_display_color_default();
+    failed += test_cc_erase_line_color_default();
+    failed += test_cc_alt_screen_color_default();
+    failed += test_cc_sgr_reset_color_default();
+    failed += test_cc_config_roundtrip_pure_light();
+    failed += test_cc_repeated_resize();
+    failed += test_cc_scrollback_resize();
+    failed += test_cc_write_after_resize();
 
     printf("\n--- Dirty Tracking ---\n");
     failed += test_dirty_init_all_dirty();
