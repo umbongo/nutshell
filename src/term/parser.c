@@ -398,6 +398,8 @@ static void handle_csi(Terminal *term, char final) {
 void term_process(Terminal *term, const char *data, size_t len) {
     if (!term || !data) return;
 
+    int prev_cursor_row = term->cursor.row;
+
     for (size_t i = 0; i < len; i++) {
         unsigned char c = (unsigned char)data[i];
 
@@ -480,6 +482,18 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     }
                 }
                 break;
+        }
+    }
+
+    /* If the cursor moved to a different row, mark the old row dirty
+     * so the renderer erases the old cursor block. */
+    if (term->cursor.row != prev_cursor_row) {
+        int screen_top = (term->lines_count >= term->rows)
+                         ? (term->lines_count - term->rows) : 0;
+        int logical_old = screen_top + prev_cursor_row;
+        if (logical_old >= 0 && logical_old < term->lines_count) {
+            int phys = (term->lines_start + logical_old) % term->lines_capacity;
+            term->lines[phys]->dirty = true;
         }
     }
 }

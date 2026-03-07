@@ -74,18 +74,23 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
     HFONT oldFont = SelectObject(hdc, r->hFont);
     SetBkMode(hdc, OPAQUE);
 
+    int cursor_row = term->cursor.visible ? term->cursor.row : -1;
+
     for (int row_idx = 0; row_idx < term->rows; row_idx++) {
         int py = y + row_idx * r->charHeight;
-        
+
         /* Skip rows outside paint rect */
         if (py + r->charHeight < paintRect->top || py > paintRect->bottom) continue;
 
         TermRow *row = get_visible_row(term, row_idx);
         if (!row) continue;
 
+        /* Skip clean rows that don't contain the cursor */
+        if (!row->dirty && row_idx != cursor_row) continue;
+
         for (int col_idx = 0; col_idx < term->cols; col_idx++) {
             int px = x + col_idx * r->charWidth;
-            
+
             /* Skip cols outside paint rect */
             if (px + r->charWidth < paintRect->left || px > paintRect->right) continue;
 
@@ -96,7 +101,7 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             /* Resolve colors: COLOR_DEFAULT means use the terminal's configured default. */
             COLORREF fg = (cell->attr.fg_mode == COLOR_DEFAULT) ? r->defaultFg : to_colorref(cell->attr.fg);
             COLORREF bg = (cell->attr.bg_mode == COLOR_DEFAULT) ? r->defaultBg : to_colorref(cell->attr.bg);
-            
+
             /* Handle reverse video and cursor */
             bool reverse = (cell->attr.flags & TERM_ATTR_REVERSE) ||
                            (term->cursor.visible && term->cursor.row == row_idx && term->cursor.col == col_idx);
@@ -111,6 +116,8 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             RECT cellRect = {px, py, px + r->charWidth, py + r->charHeight};
             ExtTextOutW(hdc, px, py, ETO_OPAQUE | ETO_CLIPPED, &cellRect, &wch, 1, NULL);
         }
+
+        row->dirty = false;
     }
 
     SelectObject(hdc, oldFont);

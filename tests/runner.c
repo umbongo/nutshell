@@ -348,6 +348,19 @@ int test_logfmt_null_buf(void);
 int test_logfmt_zero_bufsize(void);
 int test_logfmt_special_chars(void);
 
+/* test_dirty.c */
+int test_dirty_init_all_dirty(void);
+int test_dirty_clear_all(void);
+int test_dirty_put_char(void);
+int test_dirty_only_written_row(void);
+int test_dirty_erase_display(void);
+int test_dirty_erase_line(void);
+int test_dirty_scroll(void);
+int test_dirty_resize(void);
+int test_dirty_null_safety(void);
+int test_dirty_multi_write_clear(void);
+int test_dirty_alt_screen(void);
+
 /* test_color.c */
 int test_color256_palette_ansi(void);
 int test_color256_palette_cube(void);
@@ -626,6 +639,19 @@ int main(void) {
     failed += test_theme_luminance_blue();
     failed += test_theme_pure_black();
     failed += test_theme_pure_white();
+
+    printf("\n--- Dirty Tracking ---\n");
+    failed += test_dirty_init_all_dirty();
+    failed += test_dirty_clear_all();
+    failed += test_dirty_put_char();
+    failed += test_dirty_only_written_row();
+    failed += test_dirty_erase_display();
+    failed += test_dirty_erase_line();
+    failed += test_dirty_scroll();
+    failed += test_dirty_resize();
+    failed += test_dirty_null_safety();
+    failed += test_dirty_multi_write_clear();
+    failed += test_dirty_alt_screen();
 
     printf("\n--- Color ---\n");
     failed += test_color256_palette_ansi();

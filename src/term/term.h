@@ -113,4 +113,10 @@ void term_alt_screen_exit(Terminal *term);
  */
 uint32_t color256_to_rgb(uint8_t index);
 
+/* Clear the dirty flag on all visible rows.  Call after painting. */
+void term_clear_dirty(Terminal *term);
+
+/* Return true if any visible row has its dirty flag set. */
+bool term_has_dirty_rows(Terminal *term);
+
 #endif
