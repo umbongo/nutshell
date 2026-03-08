@@ -1,6 +1,6 @@
 # To-Do List
 
-All planned phases are **complete**. 258 tests pass, build clean, lint clean.
+All planned phases are **complete**. 391 tests pass, build clean, lint clean.
 
 ---
 
@@ -29,6 +29,8 @@ All planned phases are **complete**. 258 tests pass, build clean, lint clean.
 | 19. Light/Dark Theme (P3-02) | DwmSetWindowAttribute, BT.709 luminance in `theme.c` |
 | 20. Error Dialogs (P3-04/05) | MessageBox for connection/auth failures, double-click connect in session manager |
 | 21. Final Audit | Zero lint warnings, app_cursor_keys respected in keyboard handler |
+| 22. AI Integration | AI chat assistant — terminal context, prompt builder, HTTP client, settings UI, tab bar button, chat window |
+| 23. Onyx Synapse UI | 4 themed colour schemes, themed tabs/dialogs/AI chat, owner-drawn buttons, config migration |
 
 ## Follow-Up Fixes (Post-Audit)
 
@@ -46,7 +48,7 @@ All planned phases are **complete**. 258 tests pass, build clean, lint clean.
 | 10 | Zoom: discrete sizes {6,8,10,12,14,16,18,20} instead of arbitrary 6–72 range; settings_validate() snaps to nearest |
 | 11 | Vertical scrollbar: update_scrollbar() synced to active terminal; Win64-safe via GetScrollInfo (full 32-bit nTrackPos) |
 | 12 | COLOR_DEFAULT fg/bg mode: terminal reset/init uses COLOR_DEFAULT (0); renderer substitutes configured scheme colours |
-| 13 | Default colours: white-on-black (#FFFFFF/#000000), default font size 10pt |
+| 13 | Default colours: Onyx Synapse (#E0E0E0/#121212), default font size 10pt |
 | 14 | Build size: -Os -flto -Wl,--gc-sections -s; make release target with UPX (5.4 MB → 1.5 MB) |
 | 15 | 279 tests (was 258): test_scrollbar.c covers scrollbar arithmetic including Win64 >65535 nPos round-trips |
 

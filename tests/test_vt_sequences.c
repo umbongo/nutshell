@@ -221,3 +221,24 @@ int test_vt_alt_screen_isolation(void)
     term_free(t);
     TEST_END();
 }
+
+/* Regression: man/less sets SGR attrs in alt screen; after exit, current_attr
+ * must be reset to defaults so new text doesn't inherit the alt screen colors. */
+int test_vt_alt_screen_resets_attr(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    /* Enter alt screen */
+    term_process(t, "\033[?1049h", 8);
+    /* Set a background color (SGR 42 = green bg) */
+    term_process(t, "\033[42m", 5);
+    ASSERT_TRUE(t->current_attr.bg_mode != COLOR_DEFAULT);
+    /* Exit alt screen */
+    term_process(t, "\033[?1049l", 8);
+    /* current_attr should be reset to defaults */
+    ASSERT_EQ(t->current_attr.bg_mode, COLOR_DEFAULT);
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_DEFAULT);
+    ASSERT_EQ(t->current_attr.flags, 0);
+    term_free(t);
+    TEST_END();
+}

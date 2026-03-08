@@ -24,6 +24,18 @@ int ai_http_post(const char *url, const char *auth_header,
                  const char *body, size_t body_len,
                  AiHttpResponse *resp);
 
+/*
+ * Synchronous HTTP GET — designed to be called from a background thread.
+ * url:         full endpoint URL
+ * headers:     NULL-terminated array of raw header strings
+ *              (e.g. {"Authorization: Bearer sk-xxx", NULL}), may be NULL
+ * resp:        output response struct
+ *
+ * Returns 0 on success (check resp->status_code), -1 on transport error.
+ */
+int ai_http_get(const char *url, const char * const *headers,
+                AiHttpResponse *resp);
+
 /* Free the response body. Safe to call with NULL body. */
 void ai_http_response_free(AiHttpResponse *resp);
 

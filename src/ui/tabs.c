@@ -1,4 +1,6 @@
 #include "tabs.h"
+#include "app_font.h"
+#include "ui_theme.h"
 #include "xmalloc.h"
 #include "logger.h"
 #include "tooltip.h"
@@ -23,6 +25,7 @@ static const char *TABS_CLASS_NAME = "Nutshell_Tabs";
 #define TAB_OVERHEAD (INDICATOR_GAP + INDICATOR_W + INDICATOR_GAP \
                       + INDICATOR_W + INDICATOR_GAP + CLOSE_SIZE + 10)
 #define TAB_MIN_W   80    /* minimum tab width */
+#define ACCENT_BAR_H 3    /* accent bar height at bottom of active tab */
 
 /* Return the pixel width needed to show title in full. */
 static int tab_w(HDC hdc, const char *title)
@@ -33,9 +36,6 @@ static int tab_w(HDC hdc, const char *title)
     int w = sz.cx + TAB_OVERHEAD;
     return w < TAB_MIN_W ? TAB_MIN_W : w;
 }
-
-/* 15% darker than inactive tabs RGB(230,230,230) → RGB(196,196,196) */
-#define BTN_COLOR   RGB(196, 196, 196)
 
 typedef struct TabControlData {
     TabManager m;
@@ -48,9 +48,18 @@ typedef struct TabControlData {
     TabAiCallback        on_ai;
 
     HFONT hFont;
-    HWND  hTooltip;  /* Win32 tooltip control */
-    int   ai_active; /* 1 = API key configured → green, 0 = grey */
+    HFONT hSmallFont;  /* cached small font for indicator labels */
+    HWND  hTooltip;    /* Win32 tooltip control */
+    int   ai_active;   /* 1 = API key configured -> green, 0 = grey */
+    char  font_name[64];
+    const ThemeColors *theme;
 } TabControlData;
+
+/* Convert 0xRRGGBB to COLORREF (0x00BBGGRR) */
+static COLORREF tc(unsigned int rgb)
+{
+    return RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+}
 
 /* Return the COLORREF for a connection-status dot */
 static COLORREF status_color(TabStatus s)
@@ -64,6 +73,28 @@ static COLORREF status_color(TabStatus s)
     }
 }
 
+/* (Re-)create hFont and hSmallFont from font_name.  Deletes any previous. */
+static void tabs_create_fonts(TabControlData *data, HWND hwnd)
+{
+    if (data->hFont)      { DeleteObject(data->hFont);      data->hFont = NULL; }
+    if (data->hSmallFont) { DeleteObject(data->hSmallFont); data->hSmallFont = NULL; }
+
+    HDC hdc = GetDC(hwnd);
+    int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
+    ReleaseDC(hwnd, hdc);
+
+    int h = -MulDiv(APP_FONT_UI_SIZE, logPixelsY, 72);
+    data->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                              FIXED_PITCH | FF_MODERN, data->font_name);
+    /* Small bold font for indicator labels ("L", "AI") */
+    data->hSmallFont = CreateFont(-10, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                   DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                   FIXED_PITCH | FF_MODERN, data->font_name);
+}
+
 static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -74,14 +105,9 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             tabmgr_init(&data->m);
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
 
-            HDC hdc = GetDC(hwnd);
-            int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
-            ReleaseDC(hwnd, hdc);
-            int height = -MulDiv(9, logPixelsY, 72);
-            data->hFont = CreateFont(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                     VARIABLE_PITCH | FF_SWISS, "Segoe UI");
+            (void)snprintf(data->font_name, sizeof(data->font_name),
+                           "%s", APP_FONT_DEFAULT);
+            tabs_create_fonts(data, hwnd);
 
             /* Create tooltip control — one tool covers the entire tab strip */
             data->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
@@ -105,8 +131,9 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         case WM_DESTROY:
             if (data) {
-                if (data->hFont)    DeleteObject(data->hFont);
-                if (data->hTooltip) DestroyWindow(data->hTooltip);
+                if (data->hFont)      DeleteObject(data->hFont);
+                if (data->hSmallFont) DeleteObject(data->hSmallFont);
+                if (data->hTooltip)   DestroyWindow(data->hTooltip);
                 free(data);
             }
             return 0;
@@ -139,21 +166,12 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 }
                 SelectObject(hdc_m, hOldF);
                 ReleaseDC(hwnd, hdc_m);
-                /* Check if cursor is over right-side buttons */
+                /* Check if cursor is over any button */
                 RECT rcClient;
                 GetClientRect(hwnd, &rcClient);
-                int cogX   = rcClient.right - BTN_SIZE - 4;
-                int aiX    = cogX - BTN_SIZE - BTN_GAP;
-                int rightX = aiX - BTN_SIZE - BTN_GAP;
-                int leftX  = rightX - BTN_SIZE - BTN_GAP;
-                if (pt.x >= cogX && pt.x <= cogX + BTN_SIZE) {
-                    ttt->lpszText = (LPSTR)"Settings";
-                } else if (pt.x >= aiX && pt.x <= aiX + BTN_SIZE) {
-                    ttt->lpszText = (LPSTR)"AI Chat";
-                } else if (pt.x >= leftX && pt.x <= leftX + BTN_SIZE) {
-                    ttt->lpszText = (LPSTR)"Previous tab";
-                } else if (pt.x >= rightX && pt.x <= rightX + BTN_SIZE) {
-                    ttt->lpszText = (LPSTR)"Next tab";
+                const char *btn_tip = tabs_btn_tooltip_at(pt.x, rcClient.right);
+                if (btn_tip) {
+                    ttt->lpszText = (LPSTR)btn_tip;
                 } else if (tab_idx >= 0) {
                     TabEntry *e = &data->m.tabs[tab_idx];
                     unsigned long elapsed = 0;
@@ -182,26 +200,41 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             RECT rcClient;
             GetClientRect(hwnd, &rcClient);
 
-            /* Double buffering */
-            HDC hMemDC = CreateCompatibleDC(hdc);
-            HBITMAP hBitmap = CreateCompatibleBitmap(hdc, rcClient.right, rcClient.bottom);
-            HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemDC, hBitmap);
+            /* Theme colours (fallback to light neutral if no theme set) */
+            const ThemeColors *t = data->theme;
+            COLORREF cBg       = t ? tc(t->bg_secondary) : RGB(242, 242, 242);
+            COLORREF cTabAct   = t ? tc(t->bg_primary)   : RGB(255, 255, 255);
+            COLORREF cTabInact = t ? tc(t->bg_secondary)  : RGB(230, 230, 230);
+            COLORREF cBorder   = t ? tc(t->border)        : RGB(180, 180, 180);
+            COLORREF cText     = t ? tc(t->text_main)     : RGB(0, 0, 0);
+            COLORREF cDim      = t ? tc(t->text_dim)      : RGB(120, 120, 120);
+            COLORREF cAccent   = t ? tc(t->accent)        : RGB(0, 122, 255);
+            COLORREF cBtn      = t ? tc(t->bg_secondary)  : RGB(196, 196, 196);
 
             /* Background */
-            HBRUSH bgBrush = CreateSolidBrush(RGB(242, 242, 242));
-            FillRect(hMemDC, &rcClient, bgBrush);
+            HBRUSH bgBrush = CreateSolidBrush(cBg);
+            FillRect(hdc, &rcClient, bgBrush);
             DeleteObject(bgBrush);
 
-            HFONT hOldFont = (HFONT)SelectObject(hMemDC, data->hFont);
-            SetBkMode(hMemDC, TRANSPARENT);
+            HFONT hOldFont = (HFONT)SelectObject(hdc, data->hFont);
+            SetBkMode(hdc, TRANSPARENT);
 
             /* ---- [+] Add button ---- */
             int btnY = (rcClient.bottom - BTN_SIZE) / 2;
             RECT rcAdd = {4, btnY, 4 + BTN_SIZE, btnY + BTN_SIZE};
-            HBRUSH btnBrush = CreateSolidBrush(BTN_COLOR);
-            FillRect(hMemDC, &rcAdd, btnBrush);
-            DeleteObject(btnBrush);
-            DrawText(hMemDC, "+", -1, &rcAdd, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            {
+                HPEN hPen = CreatePen(PS_SOLID, 1, cBorder);
+                HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+                HBRUSH hBr = CreateSolidBrush(cBtn);
+                HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hBr);
+                RoundRect(hdc, rcAdd.left, rcAdd.top, rcAdd.right, rcAdd.bottom, 4, 4);
+                SelectObject(hdc, hOldBr);
+                SelectObject(hdc, hOldPen);
+                DeleteObject(hBr);
+                DeleteObject(hPen);
+            }
+            SetTextColor(hdc, cText);
+            DrawText(hdc, "+", -1, &rcAdd, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
             /* ---- Tabs ---- */
             int tabH = rcClient.bottom - TAB_H_PAD;
@@ -209,23 +242,31 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int x    = TAB_START_X;
 
             for (int i = 0; i < data->m.count; i++) {
-                int tw = tab_w(hMemDC, data->m.tabs[i].title);
+                int tw = tab_w(hdc, data->m.tabs[i].title);
                 RECT rcTab = {x, tabY, x + tw, tabY + tabH};
 
                 /* Background & border */
-                HPEN hPen = CreatePen(PS_SOLID, 1, RGB(180, 180, 180));
-                HPEN hOldPen = (HPEN)SelectObject(hMemDC, hPen);
-                HBRUSH hTabBrush = (i == data->m.active_index)
-                                   ? CreateSolidBrush(RGB(255, 255, 255))
-                                   : CreateSolidBrush(RGB(230, 230, 230));
-                HBRUSH hOldBrush = (HBRUSH)SelectObject(hMemDC, hTabBrush);
+                int is_active = (i == data->m.active_index);
+                HPEN hPen = CreatePen(PS_SOLID, 1, cBorder);
+                HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
+                HBRUSH hTabBrush = CreateSolidBrush(is_active ? cTabAct : cTabInact);
+                HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hTabBrush);
 
-                RoundRect(hMemDC, rcTab.left, rcTab.top, rcTab.right, rcTab.bottom, 6, 6);
+                RoundRect(hdc, rcTab.left, rcTab.top, rcTab.right, rcTab.bottom, 6, 6);
 
-                SelectObject(hMemDC, hOldBrush);
-                SelectObject(hMemDC, hOldPen);
+                SelectObject(hdc, hOldBrush);
+                SelectObject(hdc, hOldPen);
                 DeleteObject(hTabBrush);
                 DeleteObject(hPen);
+
+                /* Accent bar at bottom of active tab */
+                if (is_active) {
+                    RECT rcBar = {rcTab.left + 3, rcTab.bottom - ACCENT_BAR_H,
+                                  rcTab.right - 3, rcTab.bottom};
+                    HBRUSH hAccent = CreateSolidBrush(cAccent);
+                    FillRect(hdc, &rcBar, hAccent);
+                    DeleteObject(hAccent);
+                }
 
                 /* Indicator dimensions: full inner height minus 3 px top+bottom */
                 int indicH = tabH - 6;
@@ -237,11 +278,11 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 {
                     HBRUSH sBrush = CreateSolidBrush(status_color(data->m.tabs[i].status));
                     HPEN sPen     = CreatePen(PS_SOLID, 1, status_color(data->m.tabs[i].status));
-                    HPEN hOldSPen  = (HPEN)SelectObject(hMemDC, sPen);
-                    HBRUSH hOldSBr = (HBRUSH)SelectObject(hMemDC, sBrush);
-                    RoundRect(hMemDC, indX, indY, indX + INDICATOR_W, indY + indicH, 3, 3);
-                    SelectObject(hMemDC, hOldSBr);
-                    SelectObject(hMemDC, hOldSPen);
+                    HPEN hOldSPen  = (HPEN)SelectObject(hdc, sPen);
+                    HBRUSH hOldSBr = (HBRUSH)SelectObject(hdc, sBrush);
+                    RoundRect(hdc, indX, indY, indX + INDICATOR_W, indY + indicH, 3, 3);
+                    SelectObject(hdc, hOldSBr);
+                    SelectObject(hdc, hOldSPen);
                     DeleteObject(sBrush);
                     DeleteObject(sPen);
                 }
@@ -255,44 +296,38 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                                     : RGB(180, 180, 180); /* gray when off */
                     HBRUSH lBrush = CreateSolidBrush(logCol);
                     HPEN lPen     = CreatePen(PS_SOLID, 1, logCol);
-                    HPEN hOldLPen  = (HPEN)SelectObject(hMemDC, lPen);
-                    HBRUSH hOldLBr = (HBRUSH)SelectObject(hMemDC, lBrush);
-                    RoundRect(hMemDC, logX, logY, logX + INDICATOR_W, logY + indicH, 3, 3);
-                    SelectObject(hMemDC, hOldLBr);
-                    SelectObject(hMemDC, hOldLPen);
+                    HPEN hOldLPen  = (HPEN)SelectObject(hdc, lPen);
+                    HBRUSH hOldLBr = (HBRUSH)SelectObject(hdc, lBrush);
+                    RoundRect(hdc, logX, logY, logX + INDICATOR_W, logY + indicH, 3, 3);
+                    SelectObject(hdc, hOldLBr);
+                    SelectObject(hdc, hOldLPen);
                     DeleteObject(lBrush);
                     DeleteObject(lPen);
 
-                    /* "L" label — scaled to indicator height */
-                    int fh = -(indicH * 7 / 10);  /* ~70% of indicator height */
-                    HFONT hSmall = CreateFont(fh, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                              VARIABLE_PITCH | FF_SWISS, "Segoe UI");
-                    HFONT hPrevFont = (HFONT)SelectObject(hMemDC, hSmall);
-                    SetTextColor(hMemDC, RGB(0, 0, 0));
+                    /* "L" label — use cached small font */
+                    HFONT hPrevFont = (HFONT)SelectObject(hdc, data->hSmallFont);
+                    SetTextColor(hdc, cText);
                     RECT rcL = {logX, logY, logX + INDICATOR_W, logY + indicH};
-                    DrawText(hMemDC, "L", 1, &rcL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hMemDC, hPrevFont);
-                    DeleteObject(hSmall);
+                    DrawText(hdc, "L", 1, &rcL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, hPrevFont);
                 }
 
                 /* ---- Title text ---- */
+                SetTextColor(hdc, cText);
                 RECT rcText = rcTab;
                 rcText.left  += INDICATOR_GAP + INDICATOR_W + INDICATOR_GAP
                                 + INDICATOR_W + INDICATOR_GAP; /* after status + log */
                 rcText.right -= CLOSE_SIZE + 6; /* before close button */
-                DrawText(hMemDC, data->m.tabs[i].title, -1, &rcText,
+                DrawText(hdc, data->m.tabs[i].title, -1, &rcText,
                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
                 /* ---- ✕ close button ---- */
                 int closeX = x + tw - CLOSE_SIZE - 4;
                 int closeY = tabY + (tabH - CLOSE_SIZE) / 2;
                 RECT rcClose = {closeX, closeY, closeX + CLOSE_SIZE, closeY + CLOSE_SIZE};
-                SetTextColor(hMemDC, RGB(120, 120, 120));
-                DrawTextW(hMemDC, L"\x00D7", -1, &rcClose,
+                SetTextColor(hdc, cDim);
+                DrawTextW(hdc, L"\x00D7", -1, &rcClose,
                           DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SetTextColor(hMemDC, RGB(0, 0, 0));
 
                 x += tw + TAB_GAP;
             }
@@ -304,57 +339,54 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 int rightX = aiX - BTN_SIZE - BTN_GAP;
                 int leftX  = rightX - BTN_SIZE - BTN_GAP;
 
-                HBRUSH rBtnBrush = CreateSolidBrush(BTN_COLOR);
+                HBRUSH rBtnBrush = CreateSolidBrush(cBtn);
+                HPEN rBtnPen = CreatePen(PS_SOLID, 1, cBorder);
+                HPEN hOldBtnPen = (HPEN)SelectObject(hdc, rBtnPen);
+                HBRUSH hOldBtnBr = (HBRUSH)SelectObject(hdc, rBtnBrush);
 
                 /* ◀ Left arrow */
                 if (leftX > x) {
                     RECT rcLeft = {leftX, btnY, leftX + BTN_SIZE, btnY + BTN_SIZE};
-                    FillRect(hMemDC, &rcLeft, rBtnBrush);
-                    DrawTextW(hMemDC, L"\x25C0", -1, &rcLeft,
+                    RoundRect(hdc, rcLeft.left, rcLeft.top, rcLeft.right, rcLeft.bottom, 4, 4);
+                    SetTextColor(hdc, cDim);
+                    DrawTextW(hdc, L"\x25C0", -1, &rcLeft,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 }
                 /* ▶ Right arrow */
                 if (rightX > x) {
                     RECT rcRight = {rightX, btnY, rightX + BTN_SIZE, btnY + BTN_SIZE};
-                    FillRect(hMemDC, &rcRight, rBtnBrush);
-                    DrawTextW(hMemDC, L"\x25B6", -1, &rcRight,
+                    RoundRect(hdc, rcRight.left, rcRight.top, rcRight.right, rcRight.bottom, 4, 4);
+                    SetTextColor(hdc, cDim);
+                    DrawTextW(hdc, L"\x25B6", -1, &rcRight,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 }
                 /* AI button */
                 if (aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + BTN_SIZE, btnY + BTN_SIZE};
-                    FillRect(hMemDC, &rcAi, rBtnBrush);
-                    COLORREF aiCol = data->ai_active
-                                   ? RGB(0, 160, 80)      /* green when connected */
-                                   : RGB(160, 160, 160);   /* grey when not */
-                    SetTextColor(hMemDC, aiCol);
-                    HFONT hAiFont = CreateFont(-10, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                               VARIABLE_PITCH | FF_SWISS, "Segoe UI");
-                    HFONT hPrevAi = (HFONT)SelectObject(hMemDC, hAiFont);
-                    DrawText(hMemDC, "AI", 2, &rcAi,
+                    RoundRect(hdc, rcAi.left, rcAi.top, rcAi.right, rcAi.bottom, 4, 4);
+                    COLORREF aiCol = data->ai_active ? RGB(0, 180, 0) : cDim;
+                    SetTextColor(hdc, aiCol);
+                    HFONT hPrevAi = (HFONT)SelectObject(hdc, data->hSmallFont);
+                    DrawText(hdc, "AI", 2, &rcAi,
                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hMemDC, hPrevAi);
-                    DeleteObject(hAiFont);
-                    SetTextColor(hMemDC, RGB(0, 0, 0));
+                    SelectObject(hdc, hPrevAi);
                 }
                 /* ⚙ Cog (settings) */
                 if (cogX > x) {
                     RECT rcCog = {cogX, btnY, cogX + BTN_SIZE, btnY + BTN_SIZE};
-                    FillRect(hMemDC, &rcCog, rBtnBrush);
-                    DrawTextW(hMemDC, L"\x2699", -1, &rcCog,
+                    RoundRect(hdc, rcCog.left, rcCog.top, rcCog.right, rcCog.bottom, 4, 4);
+                    SetTextColor(hdc, cDim);
+                    DrawTextW(hdc, L"\x2699", -1, &rcCog,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 }
 
+                SelectObject(hdc, hOldBtnBr);
+                SelectObject(hdc, hOldBtnPen);
                 DeleteObject(rBtnBrush);
+                DeleteObject(rBtnPen);
             }
 
-            SelectObject(hMemDC, hOldFont);
-            BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, hMemDC, 0, 0, SRCCOPY);
-            SelectObject(hMemDC, hOldBitmap);
-            DeleteObject(hBitmap);
-            DeleteDC(hMemDC);
+            SelectObject(hdc, hOldFont);
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -610,6 +642,23 @@ void tabs_set_ai_active(HWND hwnd, int active)
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!data) return;
     data->ai_active = active;
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+void tabs_set_font(HWND hwnd, const char *font_name)
+{
+    TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!data || !font_name) return;
+    (void)snprintf(data->font_name, sizeof(data->font_name), "%s", font_name);
+    tabs_create_fonts(data, hwnd);
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+void tabs_set_theme(HWND hwnd, const ThemeColors *theme)
+{
+    TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!data) return;
+    data->theme = theme;
     InvalidateRect(hwnd, NULL, FALSE);
 }
 

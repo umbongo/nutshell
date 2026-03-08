@@ -329,3 +329,79 @@ int test_tabmgr_navigate_zero_delta(void)
     ASSERT_EQ(tabmgr_get_active(&m), 1);
     TEST_END();
 }
+
+/* =========================================================================
+ * tabs_btn_tooltip_at — button tooltip text for hit-test positions
+ * ========================================================================= */
+
+/* [+] button occupies x=[4, 28). Clicking in that range → "Session Manager" */
+int test_tabs_btn_tooltip_add(void)
+{
+    TEST_BEGIN();
+    const char *tip = tabs_btn_tooltip_at(10, 400);
+    ASSERT_NOT_NULL(tip);
+    ASSERT_STR_EQ(tip, "Session Manager");
+    /* Left edge */
+    tip = tabs_btn_tooltip_at(4, 400);
+    ASSERT_NOT_NULL(tip);
+    ASSERT_STR_EQ(tip, "Session Manager");
+    TEST_END();
+}
+
+/* Right-side buttons: with client_width=400:
+ *   cogX=372, aiX=346, rightX=320, leftX=294 */
+int test_tabs_btn_tooltip_settings(void)
+{
+    TEST_BEGIN();
+    const char *tip = tabs_btn_tooltip_at(380, 400);
+    ASSERT_NOT_NULL(tip);
+    ASSERT_STR_EQ(tip, "Settings");
+    TEST_END();
+}
+
+int test_tabs_btn_tooltip_ai(void)
+{
+    TEST_BEGIN();
+    const char *tip = tabs_btn_tooltip_at(350, 400);
+    ASSERT_NOT_NULL(tip);
+    ASSERT_STR_EQ(tip, "AI Chat");
+    TEST_END();
+}
+
+int test_tabs_btn_tooltip_prev(void)
+{
+    TEST_BEGIN();
+    const char *tip = tabs_btn_tooltip_at(300, 400);
+    ASSERT_NOT_NULL(tip);
+    ASSERT_STR_EQ(tip, "Previous tab");
+    TEST_END();
+}
+
+int test_tabs_btn_tooltip_next(void)
+{
+    TEST_BEGIN();
+    const char *tip = tabs_btn_tooltip_at(325, 400);
+    ASSERT_NOT_NULL(tip);
+    ASSERT_STR_EQ(tip, "Next tab");
+    TEST_END();
+}
+
+/* Position between buttons → NULL */
+int test_tabs_btn_tooltip_gap(void)
+{
+    TEST_BEGIN();
+    /* Between [+] and tabs area, but past [+] button */
+    const char *tip = tabs_btn_tooltip_at(200, 400);
+    ASSERT_NULL(tip);
+    TEST_END();
+}
+
+/* Edge: x just past [+] button → NULL */
+int test_tabs_btn_tooltip_past_add(void)
+{
+    TEST_BEGIN();
+    /* BTN_SIZE=24, so [+] goes from 4 to 28. x=29 is past it. */
+    const char *tip = tabs_btn_tooltip_at(29, 400);
+    ASSERT_NULL(tip);
+    TEST_END();
+}

@@ -232,6 +232,15 @@ void term_scroll(Terminal *term) {
         term_row_fill(term->lines[recycle_idx], term->cols, term->current_attr);
         term->lines_start = (term->lines_start + 1) % term->lines_capacity;
     }
+
+    /* Mark all visible rows dirty: each screen position now maps to a
+     * different logical row, so the renderer must repaint every row. */
+    int vis_start = term->lines_count - term->rows;
+    if (vis_start < 0) vis_start = 0;
+    for (int i = vis_start; i < term->lines_count; i++) {
+        int idx = (term->lines_start + i) % term->lines_capacity;
+        term->lines[idx]->dirty = true;
+    }
 }
 
 void term_clear_dirty(Terminal *term)
@@ -299,6 +308,10 @@ void term_alt_screen_exit(Terminal *term)
     term->cursor          = term->primary_cursor;
     term->primary_lines   = NULL;
     term->alt_screen_active = false;
+
+    /* Reset SGR attributes so text after alt screen exit uses defaults,
+     * not whatever colors the alt-screen application (e.g. man/less) set. */
+    memset(&term->current_attr, 0, sizeof(term->current_attr));
 
     /* Mark all restored rows dirty — screen content changed completely. */
     for (int i = 0; i < term->lines_count; i++) {

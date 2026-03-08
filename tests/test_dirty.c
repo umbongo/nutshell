@@ -142,6 +142,35 @@ int test_dirty_multi_write_clear(void)
     TEST_END();
 }
 
+/* ---- Scroll marks ALL visible rows dirty (not just the new row) --------- */
+
+int test_dirty_scroll_all_visible(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 100);
+    /* Fill all 4 rows with content so they're used */
+    feed(t, "row0\nrow1\nrow2\nrow3");
+    term_clear_dirty(t);
+    /* Verify all rows are clean */
+    for (int i = 0; i < t->rows; i++) {
+        int logical = t->lines_count - t->rows + i;
+        int phys = (t->lines_start + logical) % t->lines_capacity;
+        ASSERT_FALSE(t->lines[phys]->dirty);
+    }
+    /* Scroll once — all visible rows must become dirty because each
+     * screen position now maps to a different logical row */
+    term_scroll(t);
+    int dirty_count = 0;
+    for (int i = 0; i < t->rows; i++) {
+        int logical = t->lines_count - t->rows + i;
+        int phys = (t->lines_start + logical) % t->lines_capacity;
+        if (t->lines[phys]->dirty) dirty_count++;
+    }
+    ASSERT_EQ(dirty_count, t->rows);
+    term_free(t);
+    TEST_END();
+}
+
 /* ---- Alt screen enter/exit marks dirty ---------------------------------- */
 
 int test_dirty_alt_screen(void)

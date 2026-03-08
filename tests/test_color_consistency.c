@@ -28,8 +28,9 @@ int test_cc_default_is_pure_light(void)
     TEST_BEGIN();
     Settings s;
     config_default_settings(&s);
-    ASSERT_STR_EQ(s.foreground_colour, "#000000");
-    ASSERT_STR_EQ(s.background_colour, "#FFFFFF");
+    ASSERT_STR_EQ(s.foreground_colour, "#E0E0E0");
+    ASSERT_STR_EQ(s.background_colour, "#121212");
+    ASSERT_STR_EQ(s.colour_scheme, "Onyx Synapse");
     TEST_END();
 }
 
@@ -198,16 +199,18 @@ int test_cc_config_roundtrip_pure_light(void)
     TEST_BEGIN();
     Config *cfg = config_new_default();
     ASSERT_NOT_NULL(cfg);
-    ASSERT_STR_EQ(cfg->settings.foreground_colour, "#000000");
-    ASSERT_STR_EQ(cfg->settings.background_colour, "#FFFFFF");
+    ASSERT_STR_EQ(cfg->settings.foreground_colour, "#E0E0E0");
+    ASSERT_STR_EQ(cfg->settings.background_colour, "#121212");
+    ASSERT_STR_EQ(cfg->settings.colour_scheme, "Onyx Synapse");
 
     int rc = config_save(cfg, TMP_CFG_CC);
     ASSERT_EQ(rc, 0);
 
     Config *loaded = config_load(TMP_CFG_CC);
     ASSERT_NOT_NULL(loaded);
-    ASSERT_STR_EQ(loaded->settings.foreground_colour, "#000000");
-    ASSERT_STR_EQ(loaded->settings.background_colour, "#FFFFFF");
+    ASSERT_STR_EQ(loaded->settings.foreground_colour, "#E0E0E0");
+    ASSERT_STR_EQ(loaded->settings.background_colour, "#121212");
+    ASSERT_STR_EQ(loaded->settings.colour_scheme, "Onyx Synapse");
 
     config_free(cfg);
     config_free(loaded);

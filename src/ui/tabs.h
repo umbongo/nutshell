@@ -2,6 +2,7 @@
 #define NUTSHELL_TABS_H
 
 #include "tab_manager.h"   /* TabStatus, TabEntry, TabManager, TABS_MAX */
+#include "ui_theme.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -39,6 +40,10 @@ void      tabs_set_logging(HWND hwnd, int index, int logging);
 int       tabs_get_logging(HWND hwnd, int index);
 void      tabs_set_ai_callback(HWND hwnd, TabAiCallback on_ai);
 void      tabs_set_ai_active(HWND hwnd, int active);
+/* Update tab strip font to match the given family (at UI_SIZE). */
+void      tabs_set_font(HWND hwnd, const char *font_name);
+/* Set the colour theme for the tab strip. */
+void      tabs_set_theme(HWND hwnd, const ThemeColors *theme);
 
 #endif
 #endif

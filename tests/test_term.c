@@ -57,7 +57,7 @@ int test_term_parser(void) {
     term_process(term, "\x1B[31mRed", 8);
     TermCell c = get_cell(term, 1, 0);
     ASSERT_EQ(c.codepoint, 'R');
-    ASSERT_EQ(c.attr.fg, 0x800000); // Red from palette (index 1)
+    ASSERT_EQ(c.attr.fg, 0xCC3333); // Red from palette (index 1)
     
     // 4. Cursor Movement (Up 1)
     term_process(term, "\x1B[A", 3);
@@ -78,7 +78,7 @@ int test_term_parser(void) {
     term_process(term, "2mGreen", 7);
     TermCell c2 = get_cell(term, 0, 0); // 'G'
     ASSERT_EQ(c2.codepoint, 'G');
-    ASSERT_EQ(c2.attr.fg, 0x008000); // Green (32)
+    ASSERT_EQ(c2.attr.fg, 0x4CB84C); // Green (32)
 
     // 8. Tab Character
     term->cursor.col = 0;
@@ -94,7 +94,7 @@ int test_term_parser(void) {
     term_process(term, "\x1B[2K", 4);
     // Check cell has Red BG
     TermCell bce_cell = get_cell(term, term->cursor.row, 0);
-    ASSERT_EQ(bce_cell.attr.bg, 0x800000);
+    ASSERT_EQ(bce_cell.attr.bg, 0xCC3333);
 
     term_free(term);
 
@@ -280,12 +280,131 @@ int test_term_resize_cursor_edge(void) {
 int test_term_utf8(void) {
     TEST_BEGIN();
     Terminal *t = term_init(24, 80, 100);
-    
+
     // Euro sign €: E2 82 AC
     term_process(t, "\xE2\x82\xAC", 3);
-    
+
     ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0x20AC);
-    
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_sgr_bold_off(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\x1B[1m", 4);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_BOLD, TERM_ATTR_BOLD);
+
+    term_process(t, "\x1B[22m", 5);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_BOLD, 0);
+    ASSERT_EQ(t->current_attr.flags, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_sgr_underline_off(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\x1B[4m", 4);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_UNDERLINE, TERM_ATTR_UNDERLINE);
+
+    term_process(t, "\x1B[24m", 5);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_UNDERLINE, 0);
+    ASSERT_EQ(t->current_attr.flags, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_sgr_blink_off(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\x1B[5m", 4);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_BLINK, TERM_ATTR_BLINK);
+
+    term_process(t, "\x1B[25m", 5);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_BLINK, 0);
+    ASSERT_EQ(t->current_attr.flags, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_sgr_reverse_off(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\x1B[7m", 4);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_REVERSE, TERM_ATTR_REVERSE);
+
+    term_process(t, "\x1B[27m", 5);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_REVERSE, 0);
+    ASSERT_EQ(t->current_attr.flags, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_sgr_selective_off(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    /* Set bold + underline */
+    term_process(t, "\x1B[1;4m", 6);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_BOLD, TERM_ATTR_BOLD);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_UNDERLINE, TERM_ATTR_UNDERLINE);
+
+    /* Turn off bold only — underline should remain */
+    term_process(t, "\x1B[22m", 5);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_BOLD, 0);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_UNDERLINE, TERM_ATTR_UNDERLINE);
+
+    /* Turn off underline — flags should be zero */
+    term_process(t, "\x1B[24m", 5);
+    ASSERT_EQ(t->current_attr.flags, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_sgr_reverse_off_man_scenario(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    /* Simulate less: reverse on, write text, reverse off, write text */
+    term_process(t, "\x1B[7m" "standout" "\x1B[27m" "normal", 25);
+
+    /* 's' at col 0 should have reverse set */
+    TermCell s_cell = get_cell(t, 0, 0);
+    ASSERT_EQ(s_cell.attr.flags & TERM_ATTR_REVERSE, TERM_ATTR_REVERSE);
+
+    /* 'n' at col 8 should NOT have reverse */
+    TermCell n_cell = get_cell(t, 0, 8);
+    ASSERT_EQ(n_cell.attr.flags & TERM_ATTR_REVERSE, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_sgr_reset_after_turnoff(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\x1B[7m", 4);
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_REVERSE, TERM_ATTR_REVERSE);
+
+    term_process(t, "\x1B[27m", 5);
+    ASSERT_EQ(t->current_attr.flags, 0);
+
+    /* Full reset on already-cleared flags is a no-op */
+    term_process(t, "\x1B[0m", 4);
+    ASSERT_EQ(t->current_attr.flags, 0);
+
     term_free(t);
     TEST_END();
 }

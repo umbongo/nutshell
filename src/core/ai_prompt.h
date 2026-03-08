@@ -27,6 +27,9 @@ typedef struct {
 /* Initialize a conversation (zeroes and sets model). */
 void ai_conv_init(AiConversation *conv, const char *model);
 
+/* Reset a conversation: clear all messages but keep the model. */
+void ai_conv_reset(AiConversation *conv);
+
 /* Add a message. Returns 0 on success, -1 if full. */
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
 
@@ -48,6 +51,12 @@ int ai_parse_response(const char *json, char *content_out, size_t content_size);
  * Returns 1 if found, 0 otherwise. */
 int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size);
 
+/* Extract up to max_cmds commands from [EXEC]...[/EXEC] markers.
+ * Each command is written into cmds[i] (each of cmd_size bytes).
+ * Returns the number of commands found (0 if none). */
+int ai_extract_commands(const char *response, char cmds[][1024],
+                        int max_cmds);
+
 /* Get the API endpoint URL for a provider name.
  * Returns NULL for unknown providers. */
 const char *ai_provider_url(const char *provider);
@@ -55,5 +64,35 @@ const char *ai_provider_url(const char *provider);
 /* Get the default model name for a provider.
  * Returns NULL for unknown providers. */
 const char *ai_provider_model(const char *provider);
+
+/* Get a NULL-terminated array of model names for a provider.
+ * Returns NULL for unknown/custom providers. */
+const char * const *ai_provider_models(const char *provider);
+
+/* Get the models list API endpoint URL for a provider.
+ * Returns NULL for unknown/custom providers. */
+const char *ai_provider_models_url(const char *provider);
+
+/* Build a confirmation dialog string listing all commands for batch approval.
+ * cmds: array of command strings, ncmds: count.
+ * Returns bytes written (excluding NUL), or 0 on error. */
+size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
+                              char *buf, size_t buf_size);
+
+/* Check if a shell command is read-only (does not modify files or system state).
+ * Returns 1 if read-only, 0 if the command may write/modify. */
+int ai_command_is_readonly(const char *cmd);
+
+/* Key action for AI chat input field. */
+typedef enum {
+    AI_INPUT_SEND,       /* Enter without Shift: send message */
+    AI_INPUT_NEWLINE,    /* Shift+Enter: insert newline */
+    AI_INPUT_PASSTHROUGH /* Not Enter: pass to default handler */
+} AiInputAction;
+
+/* Decide what to do when a key is pressed in the AI chat input.
+ * is_enter: 1 if VK_RETURN/Enter, 0 otherwise.
+ * shift_held: 1 if Shift is down, 0 otherwise. */
+AiInputAction ai_input_key_action(int is_enter, int shift_held);
 
 #endif /* NUTSHELL_AI_PROMPT_H */

@@ -1,4 +1,4 @@
-# Nutshell v1.4
+# Nutshell v1.5
 
 A lightweight native C SSH client for Windows, focusing on performance, minimal dependencies, and native OS integration.
 
@@ -12,16 +12,20 @@ A lightweight native C SSH client for Windows, focusing on performance, minimal 
 - PTY resize on window resize and zoom (Ctrl+=/-, Ctrl+Scroll; discrete sizes 6/8/10/12/14/16/18/20)
 - Paste confirmation dialog with inter-line delay (configurable threshold and delay)
 - Session file logging with ANSI strip, configurable directory (default: exe dir) and strftime name format
-- Settings dialog: font/size from curated comboboxes, 10 built-in colour schemes with swatch preview, scrollback (10,000 default), paste delay, logging, log format tooltip
+- Onyx Synapse UI — 4 themed colour schemes (Onyx Synapse, Onyx Light, Sage & Sand, Moss & Mist) with consistently themed tabs, dialogs, and owner-drawn buttons
+- Settings dialog: font/size from curated comboboxes, colour scheme picker, scrollback (10,000 default), paste delay, logging, log format tooltip
 - Session manager with SSH key file browse button ("..."), double-click to connect
 - Vertical scrollbar tracking scrollback position (Win64-safe, uses `GetScrollInfo` for full 32-bit range)
 - Dynamic light/dark title bar (DWM, BT.709 luminance, applied on settings change)
 - Hover tooltips on tabs (table format: name, host, user, status/duration, logging; [L] footnote)
 - AI chat assistant — reads terminal context and can execute commands via SSH
   - Tab bar AI button (green when configured, grey when not)
-  - Non-modal chat window with conversation history
+  - Non-modal chat window with conversation history and coloured text (user/AI/ops)
+  - Multiline input: **Enter** sends, **Shift+Enter** inserts a newline
+  - Batch command approval: all commands shown in a single dialog, executed with configurable paste delay
+  - Multi-command execution with auto-continue after commands complete
   - Terminal context (last 50 rows) sent with each message
-  - Command execution via `[EXEC]cmd[/EXEC]` markers with user confirmation dialog
+  - Command execution via `[EXEC]cmd[/EXEC]` markers
   - Supports DeepSeek (default), OpenAI, and Anthropic providers
   - API key encrypted at rest with AES-256-GCM (same as passwords)
   - Background thread for async API calls (non-blocking UI)
@@ -33,11 +37,11 @@ A lightweight native C SSH client for Windows, focusing on performance, minimal 
 ```
 .
 ├── src/
-│   ├── core/       # xmalloc, vector, string_utils, logger, tab_manager, theme, tooltip, snap, zoom, connect_anim, log_format, ai_prompt, ai_http, term_extract
+│   ├── core/       # xmalloc, vector, string_utils, logger, tab_manager, theme, ui_theme, tooltip, snap, zoom, connect_anim, log_format, ai_prompt, ai_http, term_extract
 │   ├── config/     # JSON tokenizer, JSON parser, config loader, ssh_io
 │   ├── crypto/     # AES-256-GCM password encryption (OpenSSL)
 │   ├── term/       # Terminal emulator (buffer, parser) + SSH (session, channel, PTY, knownhosts)
-│   ├── ui/         # Win32 UI — renderer, tabs, window, session manager, settings dialog, ai_chat, ai_http_win
+│   ├── ui/         # Win32 UI — renderer, tabs, window, session manager, settings dialog, ai_chat, ai_http_win, themed_button
 │   └── main.c
 ├── tests/          # Unit tests (TDD — tests written before implementation)
 ├── build/          # Build artefacts (gitignored)
@@ -114,7 +118,8 @@ If you are an AI assistant helping with this codebase, please observe the follow
 12. **libssh2 macros**: `libssh2_channel_open_session`, `libssh2_session_init`, and `libssh2_channel_write` are **macros** in the real libssh2 header. `src/term/libssh2.h` is a stub used only for test builds — the real header comes from vcpkg at `~/vcpkg/installed/x64-mingw-gcc-static/`.
 13. **Resize reflow**: `TermRow.len` tracks actual written content width. When reflowing on resize, always loop to `row->len`, not `term->cols`, to avoid copying trailing empty cells that cause spurious wraps.
 16. **Discrete font sizes**: Allowed sizes are `{6, 8, 10, 12, 14, 16, 18, 20}` — defined in three places that must stay in sync: `k_allowed_sizes[]` in `window.c`, `k_font_sizes[]` in `settings.c`, and `k_allowed_sizes[]` in `loader.c`. `settings_validate()` snaps any out-of-set value to the nearest allowed size (not a range clamp).
-17. **Colour defaults**: Default terminal colours are white-on-black (`fg=#FFFFFF, bg=#000000`) matching the "Default" colour scheme in `settings.c`. `COLOR_DEFAULT` fg/bg mode means the renderer substitutes the configured scheme colours; hardcoded colour values in `buffer.c`/`parser.c` are only set for `COLOR_ANSI16`/`COLOR_256`/`COLOR_RGB` cells.
+17. **Colour defaults**: Default terminal colours are `fg=#E0E0E0, bg=#121212` matching the "Onyx Synapse" colour scheme. `COLOR_DEFAULT` fg/bg mode means the renderer substitutes the configured scheme colours; hardcoded colour values in `buffer.c`/`parser.c` are only set for `COLOR_ANSI16`/`COLOR_256`/`COLOR_RGB` cells.
+19. **UI theming**: All UI chrome (tabs, settings, session manager, AI chat) is themed via `ThemeColors` from `src/core/ui_theme.{c,h}`. Use `WM_CTLCOLORDLG`, `WM_CTLCOLORSTATIC`, `WM_CTLCOLOREDIT`, `WM_CTLCOLORLISTBOX` to paint dialog backgrounds and control colours. Buttons use `BS_OWNERDRAW` with `draw_themed_button()` from `themed_button.h`. The theme is looked up by name from config (`colour_scheme` field) via `ui_theme_find()` + `ui_theme_get()`.
 18. **Scrollbar**: `update_scrollbar()` in `window.c` syncs a Win32 vertical scrollbar to the active terminal. Use `GetScrollInfo(SIF_TRACKPOS)` for `WM_VSCROLL` — never `HIWORD(wParam)`, which silently truncates to 16 bits and breaks scrollback > 65535 lines.
 14. **AI integration architecture**: AI code is split into portable core (`src/core/ai_prompt.c`, `src/core/ai_http.c`, `src/core/term_extract.c`) and Win32 UI (`src/ui/ai_chat.c`, `src/ui/ai_http_win.c`). Core files are testable on Linux; UI files are excluded from test builds via the `NON_TEST_SRCS` pattern in the Makefile. The AI uses an OpenAI-compatible chat completion API (DeepSeek default). Conversations use `AiConversation` struct with role-tagged messages. Commands are extracted via `[EXEC]cmd[/EXEC]` markers. The HTTP client uses WinHTTP on Windows.
 15. **Two config.h files**: `include/config.h` is used by the Windows cross-compile; `src/config/config.h` is used by native test builds. Both must be kept in sync when modifying the `Settings` struct.

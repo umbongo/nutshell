@@ -187,6 +187,136 @@ int ai_http_post(const char *url, const char *auth_header,
     return 0;
 }
 
+int ai_http_get(const char *url, const char * const *headers,
+                AiHttpResponse *resp)
+{
+    if (!resp) return -1;
+    memset(resp, 0, sizeof(*resp));
+
+    if (!url) {
+        snprintf(resp->error, sizeof(resp->error), "NULL url");
+        return -1;
+    }
+
+    wchar_t host[256], path[1024];
+    int port, use_ssl;
+    if (parse_url(url, host, 256, path, 1024, &port, &use_ssl) != 0) {
+        snprintf(resp->error, sizeof(resp->error), "Invalid URL");
+        return -1;
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"Nutshell/1.0",
+                                     WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                     WINHTTP_NO_PROXY_NAME,
+                                     WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed");
+        return -1;
+    }
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host, (INTERNET_PORT)port, 0);
+    if (!hConnect) {
+        snprintf(resp->error, sizeof(resp->error), "WinHttpConnect failed");
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
+    DWORD flags = use_ssl ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path,
+                                            NULL, WINHTTP_NO_REFERER,
+                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                            flags);
+    if (!hRequest) {
+        snprintf(resp->error, sizeof(resp->error), "WinHttpOpenRequest failed");
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
+    /* Add all caller-supplied headers */
+    if (headers) {
+        for (int i = 0; headers[i]; i++) {
+            wchar_t hdr_w[600];
+            int len = MultiByteToWideChar(CP_UTF8, 0, headers[i], -1, hdr_w, 590);
+            if (len > 0) {
+                /* Append \r\n if not already present */
+                size_t wlen = (size_t)(len - 1);
+                if (wlen + 2 < 600) {
+                    hdr_w[wlen]     = L'\r';
+                    hdr_w[wlen + 1] = L'\n';
+                    hdr_w[wlen + 2] = L'\0';
+                }
+                WinHttpAddRequestHeaders(hRequest, hdr_w, (DWORD)-1,
+                                         WINHTTP_ADDREQ_FLAG_ADD);
+            }
+        }
+    }
+
+    BOOL sent = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                   WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+    if (!sent) {
+        snprintf(resp->error, sizeof(resp->error), "WinHttpSendRequest failed: %lu",
+                 GetLastError());
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
+    if (!WinHttpReceiveResponse(hRequest, NULL)) {
+        snprintf(resp->error, sizeof(resp->error), "WinHttpReceiveResponse failed");
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
+    DWORD status = 0, sz = sizeof(status);
+    WinHttpQueryHeaders(hRequest,
+        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
+    resp->status_code = (int)status;
+
+    size_t total = 0;
+    size_t cap = 4096;
+    char *buf = malloc(cap);
+    if (!buf) {
+        snprintf(resp->error, sizeof(resp->error), "Out of memory");
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
+    DWORD bytes_read;
+    for (;;) {
+        DWORD avail = 0;
+        if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
+        if (avail == 0) break;
+
+        if (total + avail + 1 > cap) {
+            cap = (total + avail + 1) * 2;
+            char *nb = realloc(buf, cap);
+            if (!nb) { free(buf); buf = NULL; break; }
+            buf = nb;
+        }
+
+        if (!WinHttpReadData(hRequest, buf + total, avail, &bytes_read)) break;
+        total += bytes_read;
+    }
+
+    if (buf) {
+        buf[total] = '\0';
+        resp->body = buf;
+        resp->body_len = total;
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return 0;
+}
+
 #else /* !_WIN32 — stub for non-Windows builds */
 
 int ai_http_post(const char *url, const char *auth_header,
@@ -194,6 +324,16 @@ int ai_http_post(const char *url, const char *auth_header,
                  AiHttpResponse *resp)
 {
     (void)url; (void)auth_header; (void)body; (void)body_len;
+    if (!resp) return -1;
+    memset(resp, 0, sizeof(*resp));
+    snprintf(resp->error, sizeof(resp->error), "HTTP not available on this platform");
+    return -1;
+}
+
+int ai_http_get(const char *url, const char * const *headers,
+                AiHttpResponse *resp)
+{
+    (void)url; (void)headers;
     if (!resp) return -1;
     memset(resp, 0, sizeof(*resp));
     snprintf(resp->error, sizeof(resp->error), "HTTP not available on this platform");

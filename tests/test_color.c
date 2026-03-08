@@ -11,14 +11,14 @@ static void feed(Terminal *t, const char *s) {
 
 int test_color256_palette_ansi(void) {
     TEST_BEGIN();
-    /* Indices 0-15 must match the standard ANSI palette */
+    /* Indices 0-15 must match the ANSI palette (brightened for dark bg) */
     ASSERT_EQ(color256_to_rgb(0),  0x000000u); /* black        */
-    ASSERT_EQ(color256_to_rgb(1),  0x800000u); /* dark red     */
-    ASSERT_EQ(color256_to_rgb(2),  0x008000u); /* dark green   */
+    ASSERT_EQ(color256_to_rgb(1),  0xCC3333u); /* red          */
+    ASSERT_EQ(color256_to_rgb(2),  0x4CB84Cu); /* green        */
     ASSERT_EQ(color256_to_rgb(7),  0xC0C0C0u); /* light grey   */
     ASSERT_EQ(color256_to_rgb(8),  0x808080u); /* dark grey    */
-    ASSERT_EQ(color256_to_rgb(9),  0xFF0000u); /* bright red   */
-    ASSERT_EQ(color256_to_rgb(10), 0x00FF00u); /* bright green */
+    ASSERT_EQ(color256_to_rgb(9),  0xFF5555u); /* bright red   */
+    ASSERT_EQ(color256_to_rgb(10), 0x55FF55u); /* bright green */
     ASSERT_EQ(color256_to_rgb(15), 0xFFFFFFu); /* white        */
     TEST_END();
 }

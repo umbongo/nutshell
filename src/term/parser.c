@@ -3,10 +3,12 @@
 #include <string.h>
 #include <ctype.h>
 
-/* Standard ANSI Palette (indices 0-15) */
+/* Standard ANSI Palette (indices 0-15)
+ * Normal colours (0-7) are brightened from classic CGA values so that
+ * blue, red, magenta, and green remain legible on dark backgrounds. */
 static const uint32_t PALETTE[16] = {
-    0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080, 0x008080, 0xC0C0C0, /* 0-7  */
-    0x808080, 0xFF0000, 0x00FF00, 0xFFFF00, 0x0000FF, 0xFF00FF, 0x00FFFF, 0xFFFFFF  /* 8-15 */
+    0x000000, 0xCC3333, 0x4CB84C, 0xCCAA33, 0x5C7FD6, 0xB266CC, 0x44BBBB, 0xC0C0C0, /* 0-7  */
+    0x808080, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5599FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF  /* 8-15 */
 };
 
 /* Convert an xterm 256-colour palette index to 0xRRGGBB. */
@@ -146,6 +148,11 @@ static void handle_sgr(Terminal *term) {
             case 4: term->current_attr.flags |= TERM_ATTR_UNDERLINE;  break;
             case 5: term->current_attr.flags |= TERM_ATTR_BLINK;      break;
             case 7: term->current_attr.flags |= TERM_ATTR_REVERSE;    break;
+
+            case 22: term->current_attr.flags &= (uint8_t)~TERM_ATTR_BOLD;      break;
+            case 24: term->current_attr.flags &= (uint8_t)~TERM_ATTR_UNDERLINE;  break;
+            case 25: term->current_attr.flags &= (uint8_t)~TERM_ATTR_BLINK;      break;
+            case 27: term->current_attr.flags &= (uint8_t)~TERM_ATTR_REVERSE;    break;
 
             /* Classic 16-colour foreground (30-37, 90-97) */
             case 30: case 31: case 32: case 33: case 34: case 35: case 36: case 37:

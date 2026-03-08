@@ -46,6 +46,16 @@ The AI feature is split into testable core and Win32-only UI:
 - Commands are marked with `[EXEC]cmd[/EXEC]` in AI responses and require user confirmation via MessageBox before execution.
 - API keys are encrypted at rest using the same AES-256-GCM scheme as SSH passwords.
 
+## UI Theming (Onyx Synapse)
+
+- All UI chrome is themed via `ThemeColors` from `src/core/ui_theme.{c,h}`. 4 themes: Onyx Synapse (dark), Onyx Light, Sage & Sand (dark), Moss & Mist (light).
+- Theme is selected by name in config (`colour_scheme` field), looked up via `ui_theme_find()` + `ui_theme_get()`.
+- Use `WM_CTLCOLORDLG`, `WM_CTLCOLORSTATIC`, `WM_CTLCOLOREDIT`, `WM_CTLCOLORLISTBOX` to paint dialog/control backgrounds and text. Each dialog stores its own `HBRUSH` handles, freed in `WM_DESTROY`.
+- Buttons use `BS_OWNERDRAW` + `WM_DRAWITEM` with shared `draw_themed_button()` from `src/ui/themed_button.h`. Primary buttons (Save, Connect, Send) get accent colour; secondary buttons get bg_secondary.
+- For resource-based dialogs (session manager), set `BS_OWNERDRAW` at runtime in `WM_INITDIALOG` by modifying the button's `GWL_STYLE`.
+- Tab strip theming: `tabs_set_theme()` stores a `ThemeColors*` and uses it in WM_PAINT. Active tab gets a 3px accent bar at the bottom.
+- Dialog background brush: set `wc.hbrBackground = NULL` in WNDCLASS for custom-painted windows; resource dialogs use `WM_CTLCOLORDLG` to return a custom brush.
+
 ## Testing Conventions
 
 - TDD: write tests first, then implement.

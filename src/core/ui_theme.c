@@ -1,0 +1,71 @@
+#include "ui_theme.h"
+#include <string.h>
+
+static const ThemeColors k_themes[NUM_UI_THEMES] = {
+    {
+        "Onyx Synapse",
+        0x121212, /* bg_primary  */
+        0x1E1E1E, /* bg_secondary */
+        0x007AFF, /* accent       */
+        0xE0E0E0, /* text_main    */
+        0x888888, /* text_dim     */
+        0x2A2A2A, /* border       */
+        0xE0E0E0, /* terminal_fg  */
+        0x121212, /* terminal_bg  */
+    },
+    {
+        "Onyx Light",
+        0xF5F5F7, /* bg_primary  */
+        0xFFFFFF, /* bg_secondary */
+        0x007AFF, /* accent       */
+        0x1D1D1F, /* text_main    */
+        0x86868B, /* text_dim     */
+        0xDCDCE0, /* border       */
+        0x1D1D1F, /* terminal_fg  */
+        0xF5F5F7, /* terminal_bg  */
+    },
+    {
+        "Sage & Sand",
+        0x2B2D24, /* bg_primary  */
+        0x353730, /* bg_secondary */
+        0xA3B18A, /* accent       */
+        0xEAE7DC, /* text_main    */
+        0xA09E93, /* text_dim     */
+        0x3F4138, /* border       */
+        0xEAE7DC, /* terminal_fg  */
+        0x2B2D24, /* terminal_bg  */
+    },
+    {
+        "Moss & Mist",
+        0xF1F3F0, /* bg_primary  */
+        0xFFFFFF, /* bg_secondary */
+        0x84A98C, /* accent       */
+        0x354F52, /* text_main    */
+        0x6B8A8D, /* text_dim     */
+        0xD5D8D3, /* border       */
+        0x354F52, /* terminal_fg  */
+        0xF1F3F0, /* terminal_bg  */
+    },
+};
+
+const ThemeColors *ui_theme_get(int index)
+{
+    if (index < 0 || index >= NUM_UI_THEMES)
+        return &k_themes[0];
+    return &k_themes[index];
+}
+
+int ui_theme_find(const char *name)
+{
+    if (!name) return 0;
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        if (strcmp(k_themes[i].name, name) == 0)
+            return i;
+    }
+    return 0;
+}
+
+const char *ui_theme_name(int index)
+{
+    return ui_theme_get(index)->name;
+}

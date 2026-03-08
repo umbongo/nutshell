@@ -13,7 +13,7 @@ int test_settings_validate_defaults(void)
     Settings s;
     config_default_settings(&s);
     settings_validate(&s);
-    ASSERT_STR_EQ(s.font, "Consolas");
+    ASSERT_STR_EQ(s.font, "Cascadia Code");
     ASSERT_EQ(s.font_size, 10);
     ASSERT_EQ(s.scrollback_lines, 10000);
     ASSERT_EQ(s.paste_delay_ms, 350);
@@ -147,7 +147,7 @@ int test_settings_validate_empty_font(void)
     config_default_settings(&s);
     s.font[0] = '\0';
     settings_validate(&s);
-    ASSERT_STR_EQ(s.font, "Consolas");
+    ASSERT_STR_EQ(s.font, "Cascadia Code");
     TEST_END();
 }
 

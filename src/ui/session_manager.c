@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 #include "session_manager.h"
+#include "../core/app_font.h"
+#include "../core/ui_theme.h"
+#include "themed_button.h"
 #include "../config/profile.h"
 #include "../config/config.h"
 #include "../core/vector.h"
@@ -15,6 +18,10 @@ typedef struct {
     const char *config_path;
     Profile    *out_profile;
     int         edit_idx;   /* -1 = new entry; >= 0 = index in cfg->profiles */
+    HFONT       hDlgFont;
+    const ThemeColors *theme;
+    HBRUSH      hBrBgPrimary;
+    HBRUSH      hBrBgSecondary;
 } SessMgrState;
 
 /* ---- Helpers ---- */
@@ -114,6 +121,48 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         SendMessageA(hCombo, CB_ADDSTRING, 0, (LPARAM)"Password");
         SendMessageA(hCombo, CB_ADDSTRING, 0, (LPARAM)"SSH Key");
         SendMessage (hCombo, CB_SETCURSEL, 0, 0);
+
+        /* Apply configured font at UI size to all child controls */
+        {
+            HDC hdc = GetDC(hwnd);
+            int h = -MulDiv(APP_FONT_UI_SIZE, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+            ReleaseDC(hwnd, hdc);
+            st->hDlgFont = CreateFont(
+                h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
+                st->cfg->settings.font);
+            if (st->hDlgFont) {
+                HWND hChild = NULL;
+                while ((hChild = FindWindowEx(hwnd, hChild, NULL, NULL)) != NULL)
+                    SendMessage(hChild, WM_SETFONT, (WPARAM)st->hDlgFont, TRUE);
+            }
+        }
+
+        /* Theme: look up from config, create brushes, apply title bar + borders */
+        {
+            int idx = ui_theme_find(st->cfg->settings.colour_scheme);
+            st->theme = ui_theme_get(idx);
+            st->hBrBgPrimary   = CreateSolidBrush(theme_cr(st->theme->bg_primary));
+            st->hBrBgSecondary = CreateSolidBrush(theme_cr(st->theme->bg_secondary));
+            themed_apply_title_bar(hwnd, st->theme);
+            themed_apply_borders(hwnd, st->theme);
+
+            /* Convert buttons to owner-drawn */
+            static const int btn_ids[] = {
+                IDC_BTN_NEW, IDC_BTN_EDIT, IDC_BTN_DELETE,
+                IDC_BTN_SAVE, IDC_BTN_BROWSE_KEY, IDOK, IDCANCEL
+            };
+            for (int i = 0; i < (int)(sizeof(btn_ids)/sizeof(btn_ids[0])); i++) {
+                HWND hBtn = GetDlgItem(hwnd, btn_ids[i]);
+                if (hBtn) {
+                    LONG style = GetWindowLong(hBtn, GWL_STYLE);
+                    style = (style & ~(BS_DEFPUSHBUTTON | BS_PUSHBUTTON)) | BS_OWNERDRAW;
+                    SetWindowLong(hBtn, GWL_STYLE, style);
+                    InvalidateRect(hBtn, NULL, TRUE);
+                }
+            }
+        }
 
         list_rebuild(GetDlgItem(hwnd, IDC_LIST_SESSIONS), st->cfg);
         form_clear(hwnd);
@@ -286,6 +335,51 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         }
         break;
     }
+
+    case WM_DRAWITEM:
+        if (st && st->theme) {
+            LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
+            int is_primary = ((int)dis->CtlID == IDOK);
+            draw_themed_button(dis, st->theme, is_primary);
+            return TRUE;
+        }
+        break;
+
+    case WM_CTLCOLORDLG:
+        if (st && st->theme) return (INT_PTR)st->hBrBgPrimary;
+        break;
+
+    case WM_CTLCOLORSTATIC:
+        if (st && st->theme) {
+            SetTextColor((HDC)wParam, theme_cr(st->theme->text_main));
+            SetBkColor((HDC)wParam, theme_cr(st->theme->bg_primary));
+            return (INT_PTR)st->hBrBgPrimary;
+        }
+        break;
+
+    case WM_CTLCOLOREDIT:
+        if (st && st->theme) {
+            SetTextColor((HDC)wParam, theme_cr(st->theme->text_main));
+            SetBkColor((HDC)wParam, theme_cr(st->theme->bg_secondary));
+            return (INT_PTR)st->hBrBgSecondary;
+        }
+        break;
+
+    case WM_CTLCOLORLISTBOX:
+        if (st && st->theme) {
+            SetTextColor((HDC)wParam, theme_cr(st->theme->text_main));
+            SetBkColor((HDC)wParam, theme_cr(st->theme->bg_secondary));
+            return (INT_PTR)st->hBrBgSecondary;
+        }
+        break;
+
+    case WM_DESTROY:
+        if (st) {
+            if (st->hDlgFont)      DeleteObject(st->hDlgFont);
+            if (st->hBrBgPrimary)   DeleteObject(st->hBrBgPrimary);
+            if (st->hBrBgSecondary) DeleteObject(st->hBrBgSecondary);
+        }
+        break;
     }
     return FALSE;
 }

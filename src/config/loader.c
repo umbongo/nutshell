@@ -1,4 +1,6 @@
 #include "config.h"
+#include "app_font.h"
+#include "ui_theme.h"
 #include "json_parser.h"
 #include "xmalloc.h"
 #include "crypto.h"
@@ -84,30 +86,13 @@ static void field_copy(char *dst, size_t dst_size, const char *src)
 
 /* ---- Public API ----------------------------------------------------------- */
 
-/* Allowed discrete font sizes — must match k_font_sizes in settings.c and
- * k_allowed_sizes in window.c. */
-static const int k_allowed_sizes[] = { 6, 8, 10, 12, 14, 16, 18, 20 };
-#define NUM_ALLOWED_SIZES ((int)(sizeof(k_allowed_sizes) / sizeof(k_allowed_sizes[0])))
-
 void settings_validate(Settings *s)
 {
     if (!s) return;
     if (s->font[0] == '\0') {
-        (void)snprintf(s->font, sizeof(s->font), "%s", "Consolas");
+        (void)snprintf(s->font, sizeof(s->font), "%s", APP_FONT_DEFAULT);
     }
-    /* Snap font_size to nearest allowed discrete size */
-    {
-        int best = k_allowed_sizes[0];
-        int best_dist = abs(s->font_size - best);
-        for (int i = 1; i < NUM_ALLOWED_SIZES; i++) {
-            int dist = abs(s->font_size - k_allowed_sizes[i]);
-            if (dist < best_dist) {
-                best = k_allowed_sizes[i];
-                best_dist = dist;
-            }
-        }
-        s->font_size = best;
-    }
+    s->font_size = app_font_snap_size(s->font_size);
     if (s->scrollback_lines < 100)    s->scrollback_lines = 100;
     if (s->scrollback_lines > 50000)  s->scrollback_lines = 50000;
     if (s->paste_delay_ms < 0)    s->paste_delay_ms = 0;
@@ -117,15 +102,16 @@ void settings_validate(Settings *s)
 void config_default_settings(Settings *s)
 {
     memset(s, 0, sizeof(*s));
-    field_copy(s->font,                 sizeof(s->font),                 "Consolas");
-    s->font_size        = 10;
+    field_copy(s->font,                 sizeof(s->font),                 APP_FONT_DEFAULT);
+    s->font_size        = APP_FONT_DEFAULT_SIZE;
     s->scrollback_lines = 10000;
     s->paste_delay_ms   = 350;
     s->logging_enabled  = 0;
     field_copy(s->log_format,           sizeof(s->log_format),           "%Y-%m-%d_%H-%M-%S");
     field_copy(s->host_key_verification,sizeof(s->host_key_verification),"tofu");
-    field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#000000");
-    field_copy(s->background_colour,    sizeof(s->background_colour),    "#FFFFFF");
+    field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#E0E0E0");
+    field_copy(s->background_colour,    sizeof(s->background_colour),    "#121212");
+    field_copy(s->colour_scheme,        sizeof(s->colour_scheme),        "Onyx Synapse");
     field_copy(s->ai_provider,          sizeof(s->ai_provider),          "deepseek");
     /* ai_api_key defaults to empty (already zeroed by memset) */
 }
@@ -222,6 +208,15 @@ Config *config_load(const char *path)
         }
         if ((sv = json_obj_str(jset, "background_colour"))) {
             field_copy(s->background_colour, sizeof(s->background_colour), sv);
+        }
+        if ((sv = json_obj_str(jset, "colour_scheme"))) {
+            field_copy(s->colour_scheme, sizeof(s->colour_scheme), sv);
+        }
+        /* Migration: if no colour_scheme was set (legacy config), derive
+         * from the default theme and set the scheme name. */
+        if (s->colour_scheme[0] == '\0') {
+            const ThemeColors *def = ui_theme_get(0);
+            field_copy(s->colour_scheme, sizeof(s->colour_scheme), def->name);
         }
         if ((sv = json_obj_str(jset, "ai_provider"))) {
             field_copy(s->ai_provider, sizeof(s->ai_provider), sv);
@@ -342,6 +337,9 @@ int config_save(const Config *cfg, const char *path)
     fputs("    \"background_colour\": ", f);
     fprint_json_str(f, s->background_colour);
     fputs(",\n", f);
+    fputs("    \"colour_scheme\": ", f);
+    fprint_json_str(f, s->colour_scheme);
+    fputs(",\n", f);
     fputs("    \"ai_provider\": ", f);
     fprint_json_str(f, s->ai_provider);
     fputs(",\n", f);
@@ -352,7 +350,16 @@ int config_save(const Config *cfg, const char *path)
     fprint_json_str(f, s->ai_custom_model);
     fputs(",\n", f);
     fputs("    \"ai_api_key\": ", f);
-    fprint_json_str(f, s->ai_api_key);
+    if (s->ai_api_key[0] != '\0') {
+        char enc_key[512];
+        if (crypto_encrypt(s->ai_api_key, enc_key, sizeof(enc_key)) == CRYPTO_OK) {
+            fprint_json_str(f, enc_key);
+        } else {
+            fprint_json_str(f, ""); /* write empty on encrypt failure */
+        }
+    } else {
+        fprint_json_str(f, "");
+    }
     fputs("\n  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);

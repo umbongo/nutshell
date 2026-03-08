@@ -10,9 +10,12 @@
 void ai_chat_init(HINSTANCE hInstance);
 
 /* Show the AI chat window. If already open, brings to front.
- * api_key, provider, custom_url, custom_model are copied. */
+ * api_key, provider, custom_url, custom_model, font_name, colour_scheme copied.
+ * paste_delay_ms: inter-command delay when executing batched commands. */
 HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
-                  const char *custom_url, const char *custom_model);
+                  const char *custom_url, const char *custom_model,
+                  int paste_delay_ms, const char *font_name,
+                  const char *colour_scheme);
 
 /* Update the active session the AI interacts with. */
 void ai_chat_set_session(HWND hwnd, Terminal *term, SSHChannel *channel);

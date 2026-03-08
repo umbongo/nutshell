@@ -21,6 +21,9 @@
 #include "log_format.h"
 #include "paste_dlg.h"
 #include "ai_chat.h"
+#include "selection.h"
+#include "app_font.h"
+#include "ui_theme.h"
 
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell";
@@ -73,8 +76,22 @@ static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
 static HWND g_hwndAiChat = NULL;
+static const ThemeColors *g_theme = NULL;
 static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
+
+/* Invalidate only the terminal area (below the tab strip), not the tabs. */
+static void invalidate_terminal(HWND hwnd)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    rc.top = TAB_HEIGHT;
+    InvalidateRect(hwnd, &rc, FALSE);
+}
+
+/* Paint cooldown: cap repaints at ~60fps to prevent thrashing on heavy output */
+#define PAINT_COOLDOWN_MS 16
+static DWORD g_last_paint_tick;
 
 /* ---- Paste state machine (timer-driven, non-blocking) ------------------- */
 #define PASTE_TIMER_ID 3
@@ -88,6 +105,7 @@ typedef struct {
 } PasteState;
 
 static PasteState g_paste = {0};
+static Selection g_selection = {0};
 
 static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
@@ -130,7 +148,7 @@ static void on_tab_select(int index, void *user_data) {
     g_active_session = (Session *)user_data;
     HWND hParent = GetParent(g_hwndTabs);
     update_scrollbar(hParent);
-    InvalidateRect(hParent, NULL, FALSE);
+    invalidate_terminal(hParent);
     SetFocus(hParent);
 
     /* Update AI chat with the new active session */
@@ -171,8 +189,8 @@ static void on_tab_close(int index, void *user_data) {
     free_session(s);
     tabs_remove(g_hwndTabs, index);
     
-    /* Force repaint of window to clear terminal area if no session active */
-    InvalidateRect(GetParent(g_hwndTabs), NULL, FALSE);
+    /* Force repaint of terminal area after tab close */
+    invalidate_terminal(GetParent(g_hwndTabs));
 }
 
 /* ---- Passphrase prompt --------------------------------------------------- */
@@ -528,7 +546,7 @@ static void on_session_connect(const Profile *info) {
     }
     tabs_set_active(g_hwndTabs, idx);
     tabs_set_status(g_hwndTabs, idx, TAB_CONNECTING);
-    InvalidateRect(GetParent(g_hwndTabs), NULL, FALSE);
+    invalidate_terminal(GetParent(g_hwndTabs));
 
     /* Store state for the worker thread */
     s->conn_state    = CONN_CONNECTING;
@@ -566,15 +584,30 @@ static COLORREF parse_hex_color(const char *hex, COLORREF fallback)
 
 static void apply_config_colors(void)
 {
-    g_renderer.defaultFg = parse_hex_color(
-        g_config->settings.foreground_colour, RGB(0, 0, 0));
-    g_renderer.defaultBg = parse_hex_color(
-        g_config->settings.background_colour, RGB(255, 255, 255));
+    if (g_theme) {
+        /* Use theme terminal colours as the base, overridden by explicit config */
+        unsigned int tfg = g_theme->terminal_fg;
+        unsigned int tbg = g_theme->terminal_bg;
+        g_renderer.defaultFg = RGB((tfg >> 16) & 0xFF, (tfg >> 8) & 0xFF, tfg & 0xFF);
+        g_renderer.defaultBg = RGB((tbg >> 16) & 0xFF, (tbg >> 8) & 0xFF, tbg & 0xFF);
+    } else {
+        g_renderer.defaultFg = parse_hex_color(
+            g_config->settings.foreground_colour, RGB(0, 0, 0));
+        g_renderer.defaultBg = parse_hex_color(
+            g_config->settings.background_colour, RGB(255, 255, 255));
+    }
 }
 
 static void on_settings_clicked(void) {
     HWND parent = GetParent(g_hwndTabs);
     settings_dlg_show(parent, g_config);
+
+    /* Reload theme from config (colour scheme may have changed) */
+    {
+        int idx = ui_theme_find(g_config->settings.colour_scheme);
+        g_theme = ui_theme_get(idx);
+        tabs_set_theme(g_hwndTabs, g_theme);
+    }
 
     /* Reinitialise renderer — font or size may have changed */
     renderer_free(&g_renderer);
@@ -582,6 +615,9 @@ static void on_settings_clicked(void) {
                   g_config->settings.font_size);
     apply_config_colors();
     renderer_apply_theme(parent, g_renderer.defaultBg);
+
+    /* Update tab strip font (may have changed) */
+    tabs_set_font(g_hwndTabs, g_config->settings.font);
 
     /* Update AI button state (green/grey based on API key) */
     tabs_set_ai_active(g_hwndTabs,
@@ -601,13 +637,20 @@ static void on_settings_clicked(void) {
     GetClientRect(parent, &rc);
     SendMessage(parent, WM_SIZE, SIZE_RESTORED,
                 MAKELPARAM(rc.right, rc.bottom));
-    InvalidateRect(parent, NULL, FALSE);
+    InvalidateRect(parent, NULL, TRUE);
+    /* Force tab strip to repaint with new theme */
+    InvalidateRect(g_hwndTabs, NULL, TRUE);
 }
 
 static void on_ai_clicked(void) {
     if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
-        /* Already open — bring to front */
-        SetForegroundWindow(g_hwndAiChat);
+        /* Already open — toggle: hide if visible, show if hidden */
+        if (IsWindowVisible(g_hwndAiChat)) {
+            ShowWindow(g_hwndAiChat, SW_HIDE);
+        } else {
+            ShowWindow(g_hwndAiChat, SW_SHOW);
+            SetForegroundWindow(g_hwndAiChat);
+        }
         return;
     }
 
@@ -623,7 +666,10 @@ static void on_ai_clicked(void) {
                                 g_config->settings.ai_api_key,
                                 g_config->settings.ai_provider,
                                 g_config->settings.ai_custom_url,
-                                g_config->settings.ai_custom_model);
+                                g_config->settings.ai_custom_model,
+                                g_config->settings.paste_delay_ms,
+                                g_config->settings.font,
+                                g_config->settings.colour_scheme);
 
     /* Set the active session if one exists */
     if (g_hwndAiChat && g_active_session) {
@@ -710,7 +756,7 @@ static void paste_timer_tick(void)
     bool more = paste_send_next_line();
     if (g_active_session && g_active_session->term) {
         g_active_session->term->scrollback_offset = 0;
-        InvalidateRect(g_paste.hwnd, NULL, FALSE);
+        invalidate_terminal(g_paste.hwnd);
     }
     if (!more) paste_cancel();
 }
@@ -739,15 +785,12 @@ static void do_paste(HWND hwnd)
         if (raw[i] == '\n') line_count++;
     }
 
-    /* Ask for confirmation when content is large or multi-line */
-    int confirmed = 1;
-    if (raw_len > PASTE_CONFIRM_THRESHOLD || line_count > 0) {
-        confirmed = paste_preview_show(hwnd, raw,
-            g_config->settings.foreground_colour,
-            g_config->settings.background_colour,
-            g_config->settings.font,
-            g_config->settings.font_size);
-    }
+    /* Always ask for confirmation before pasting */
+    int confirmed = paste_preview_show(hwnd, raw,
+        g_config->settings.foreground_colour,
+        g_config->settings.background_colour,
+        g_config->settings.font,
+        g_config->settings.font_size);
 
     if (confirmed) {
         int delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
@@ -765,7 +808,7 @@ static void do_paste(HWND hwnd)
                 p += chunk;
             }
             g_active_session->term->scrollback_offset = 0;
-            InvalidateRect(hwnd, NULL, FALSE);
+            invalidate_terminal(hwnd);
         } else {
             /* Multi-line with delay: use timer-driven paste */
             g_paste.buf = _strdup(raw);
@@ -777,7 +820,7 @@ static void do_paste(HWND hwnd)
             /* Send the first line immediately */
             paste_send_next_line();
             g_active_session->term->scrollback_offset = 0;
-            InvalidateRect(hwnd, NULL, FALSE);
+            invalidate_terminal(hwnd);
 
             /* Start timer for remaining lines */
             if (g_paste.pos && *g_paste.pos) {
@@ -845,29 +888,12 @@ static void get_nc_size(HWND hwnd, int *nc_w, int *nc_h)
 
 /* ---- Zoom helper --------------------------------------------------------- */
 
-/* Allowed discrete font sizes — must match k_font_sizes in settings.c and
- * k_allowed_sizes in loader.c. */
-static const int k_allowed_sizes[] = { 6, 8, 10, 12, 14, 16, 18, 20 };
-#define NUM_ALLOWED_SIZES ((int)(sizeof(k_allowed_sizes) / sizeof(k_allowed_sizes[0])))
-
 /* Step to the next/previous discrete font size.
  * delta is +1 (zoom in / larger) or -1 (zoom out / smaller). */
 static void apply_zoom(HWND hwnd, int delta)
 {
     int cur = g_config->settings.font_size;
-
-    /* Find the index of the largest allowed size <= cur. */
-    int idx = 0;
-    for (int i = 0; i < NUM_ALLOWED_SIZES; i++) {
-        if (k_allowed_sizes[i] <= cur)
-            idx = i;
-    }
-
-    int next_idx = idx + delta;
-    if (next_idx < 0 || next_idx >= NUM_ALLOWED_SIZES)
-        return;  /* already at min/max */
-
-    int new_size = k_allowed_sizes[next_idx];
+    int new_size = app_font_zoom(cur, delta);
     if (new_size == cur)
         return;
 
@@ -882,7 +908,7 @@ static void apply_zoom(HWND hwnd, int delta)
     GetClientRect(hwnd, &rc);
     SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
                 MAKELPARAM(rc.right, rc.bottom));
-    InvalidateRect(hwnd, NULL, FALSE);
+    invalidate_terminal(hwnd);
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -917,21 +943,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;
+
+            /* Look up colour theme from config */
+            {
+                int idx = ui_theme_find(g_config->settings.colour_scheme);
+                g_theme = ui_theme_get(idx);
+            }
+
             tabs_init(g_hInst);
-            
+
             RECT rc;
             GetClientRect(hwnd, &rc);
-            
+
             g_hwndTabs = tabs_create(hwnd, 0, 0, rc.right, TAB_HEIGHT);
             tabs_set_callbacks(g_hwndTabs, on_tab_select, on_tab_new, on_tab_close, on_settings_clicked, on_log_toggle);
             tabs_set_ai_callback(g_hwndTabs, on_ai_clicked);
             tabs_set_ai_active(g_hwndTabs,
                                g_config->settings.ai_api_key[0] != '\0');
+            tabs_set_theme(g_hwndTabs, g_theme);
             ai_chat_init(g_hInst);
-            
+
             renderer_init(&g_renderer,
                           g_config->settings.font[0]
-                              ? g_config->settings.font : "Consolas",
+                              ? g_config->settings.font : "Cascadia Code",
                           g_config->settings.font_size > 0
                               ? g_config->settings.font_size : 12);
             apply_config_colors();
@@ -952,10 +986,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     if (s->channel && s->conn_state == CONN_IDLE) {
                         int poll_rc = ssh_io_poll(s->channel, s->term,
                                                       s->session_log);
-                        if (poll_rc > 0) {
+                        if (poll_rc > 0)
                             update_scrollbar(hwnd);
-                            InvalidateRect(hwnd, NULL, FALSE);
-                        } else if (poll_rc == -2) {
+                        if (poll_rc == -2) {
                             /* EOF */
                             if (g_paste.channel == s->channel)
                                 paste_cancel();
@@ -965,7 +998,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             int tidx = tabs_find(g_hwndTabs, s);
                             if (tidx >= 0)
                                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
-                            InvalidateRect(hwnd, NULL, FALSE);
+                        }
+                        if (term_has_dirty_rows(s->term)) {
+                            DWORD now = GetTickCount();
+                            if (now - g_last_paint_tick >= PAINT_COOLDOWN_MS) {
+                                invalidate_terminal(hwnd);
+                                g_last_paint_tick = now;
+                            }
                         }
                     }
                     s = s->next;
@@ -990,7 +1029,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                     s = s->next;
                 }
-                if (needs_repaint) InvalidateRect(hwnd, NULL, FALSE);
+                if (needs_repaint) invalidate_terminal(hwnd);
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();
             }
@@ -1037,7 +1076,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
             update_scrollbar(hwnd);
-            InvalidateRect(hwnd, NULL, FALSE);
+            invalidate_terminal(hwnd);
             return 0;
         }
 
@@ -1089,7 +1128,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     term_resize(g_active_session->term, rows, cols);
                     if (g_active_session->channel)
                         ssh_pty_resize(g_active_session->channel, cols, rows);
-                    InvalidateRect(hwnd, NULL, FALSE);
+                    invalidate_terminal(hwnd);
                 }
             }
             update_scrollbar(hwnd);
@@ -1101,12 +1140,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             HDC hdc = BeginPaint(hwnd, &ps);
 
             if (g_active_session && g_active_session->term) {
-                renderer_draw(&g_renderer, hdc, g_active_session->term, 0, TAB_HEIGHT, &ps.rcPaint);
+                renderer_draw(&g_renderer, hdc, g_active_session->term, 0, TAB_HEIGHT, &ps.rcPaint, &g_selection);
 
-                /* Fill gutter areas not covered by complete character cells.
-                 * Integer division floors cols/rows, leaving a residual strip
-                 * at the right and bottom that must be explicitly cleared to
-                 * avoid stale pixels after a resize. */
+                /* Fill gutter areas not covered by complete character cells. */
                 RECT client;
                 GetClientRect(hwnd, &client);
                 HBRUSH bg = CreateSolidBrush(g_renderer.defaultBg);
@@ -1147,13 +1183,24 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     return 0;
                 }
                 if (g_active_session->channel) {
+                    /* Drain pending transport data so the write can
+                     * succeed in non-blocking mode.  Without this,
+                     * libssh2_channel_write returns EAGAIN when the
+                     * session has unread inbound data, and the retry
+                     * loop in ssh_channel_write blocks the UI thread
+                     * (preventing WM_TIMER / ssh_io_poll from running)
+                     * — a deadlock that silently drops keystrokes. */
+                    ssh_io_poll(g_active_session->channel,
+                                g_active_session->term,
+                                g_active_session->session_log);
                     ssh_channel_write(g_active_session->channel, &c, 1);
-                } else {
-                    /* Local echo if not connected (debug) */
-                    // term_process(g_active_session->term, &c, 1);
                 }
-                g_active_session->term->scrollback_offset = 0;
-                InvalidateRect(hwnd, NULL, FALSE);
+                /* Only invalidate if we were scrolled back */
+                if (g_active_session->term->scrollback_offset != 0) {
+                    g_active_session->term->scrollback_offset = 0;
+                    update_scrollbar(hwnd);
+                    invalidate_terminal(hwnd);
+                }
             }
             return 0;
         }
@@ -1202,25 +1249,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         if (g_active_session->term->scrollback_offset < g_active_session->term->max_scrollback) {
                             g_active_session->term->scrollback_offset++;
                             update_scrollbar(hwnd);
-                            InvalidateRect(hwnd, NULL, FALSE);
+                            invalidate_terminal(hwnd);
                         }
                         return 0;
                     case VK_NEXT:  /* Page Down */
                         if (g_active_session->term->scrollback_offset > 0) {
                             g_active_session->term->scrollback_offset--;
                             update_scrollbar(hwnd);
-                            InvalidateRect(hwnd, NULL, FALSE);
+                            invalidate_terminal(hwnd);
                         }
                         return 0;
                 }
                 if (seq) {
                     if (g_active_session->channel) {
+                        ssh_io_poll(g_active_session->channel,
+                                    g_active_session->term,
+                                    g_active_session->session_log);
                         ssh_channel_write(g_active_session->channel, seq, strlen(seq));
-                    } else {
-                        // term_process(g_active_session->term, seq, strlen(seq));
                     }
-                    g_active_session->term->scrollback_offset = 0;
-                    InvalidateRect(hwnd, NULL, FALSE);
+                    if (g_active_session->term->scrollback_offset != 0) {
+                        g_active_session->term->scrollback_offset = 0;
+                        update_scrollbar(hwnd);
+                        invalidate_terminal(hwnd);
+                    }
                     return 0;
                 }
             }
@@ -1234,20 +1285,91 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 apply_zoom(hwnd, delta > 0 ? 1 : -1);
                 return 0;
             }
-            /* Plain scroll: move scrollback */
-            if (g_active_session && g_active_session->term) {
-                int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-                if (delta > 0) {
-                    if (g_active_session->term->scrollback_offset <
-                            g_active_session->term->max_scrollback)
-                        g_active_session->term->scrollback_offset++;
-                } else {
-                    if (g_active_session->term->scrollback_offset > 0)
-                        g_active_session->term->scrollback_offset--;
-                }
-                update_scrollbar(hwnd);
-                InvalidateRect(hwnd, NULL, FALSE);
+            /* Plain scroll: no-op (use scrollbar or Page Up/Down) */
+            return 0;
+        }
+
+        case WM_RBUTTONDOWN: {
+            /* Right-click pastes the clipboard */
+            do_paste(hwnd);
+            return 0;
+        }
+
+        case WM_LBUTTONDOWN: {
+            if (!g_active_session || !g_active_session->term) break;
+            SetCapture(hwnd);
+            int mx = LOWORD(lParam), my = HIWORD(lParam);
+            selection_pixel_to_cell(mx, my,
+                g_renderer.charWidth, g_renderer.charHeight,
+                TAB_HEIGHT, g_active_session->term->rows,
+                g_active_session->term->cols,
+                &g_selection.start_row, &g_selection.start_col);
+            g_selection.end_row = g_selection.start_row;
+            g_selection.end_col = g_selection.start_col;
+            g_selection.active = true;
+            g_selection.valid = false;
+            invalidate_terminal(hwnd);
+            return 0;
+        }
+
+        case WM_MOUSEMOVE: {
+            if (!g_selection.active) break;
+            if (!(wParam & MK_LBUTTON)) {
+                g_selection.active = false;
+                break;
             }
+            if (!g_active_session || !g_active_session->term) break;
+            int mx = LOWORD(lParam), my = HIWORD(lParam);
+            selection_pixel_to_cell(mx, my,
+                g_renderer.charWidth, g_renderer.charHeight,
+                TAB_HEIGHT, g_active_session->term->rows,
+                g_active_session->term->cols,
+                &g_selection.end_row, &g_selection.end_col);
+            g_selection.valid = (g_selection.start_row != g_selection.end_row ||
+                                 g_selection.start_col != g_selection.end_col);
+            invalidate_terminal(hwnd);
+            return 0;
+        }
+
+        case WM_LBUTTONUP: {
+            if (!g_selection.active) break;
+            ReleaseCapture();
+            g_selection.active = false;
+            if (!g_active_session || !g_active_session->term) break;
+            /* Update end position from final mouse coordinates —
+             * WM_MOUSEMOVE may not fire at the exact release point. */
+            int mx = LOWORD(lParam), my = HIWORD(lParam);
+            selection_pixel_to_cell(mx, my,
+                g_renderer.charWidth, g_renderer.charHeight,
+                TAB_HEIGHT, g_active_session->term->rows,
+                g_active_session->term->cols,
+                &g_selection.end_row, &g_selection.end_col);
+            g_selection.valid = true;
+            /* Extract selected text and copy to clipboard */
+            char buf[8192];
+            size_t n = selection_extract_text(&g_selection,
+                g_active_session->term, buf, sizeof(buf));
+            if (n > 0 && OpenClipboard(hwnd)) {
+                EmptyClipboard();
+                HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, n + 1);
+                if (hg) {
+                    char *dst = (char *)GlobalLock(hg);
+                    memcpy(dst, buf, n + 1);
+                    GlobalUnlock(hg);
+                    SetClipboardData(CF_TEXT, hg);
+                }
+                CloseClipboard();
+            }
+            g_selection.valid = false;
+            /* Force full repaint so highlighted cells are redrawn without highlight.
+             * The dirty-row optimisation in the renderer would skip clean rows,
+             * leaving stale highlighted pixels on screen. */
+            for (int i = 0; i < g_active_session->term->lines_count; i++) {
+                int idx = (g_active_session->term->lines_start + i) % g_active_session->term->lines_capacity;
+                if (g_active_session->term->lines[idx])
+                    g_active_session->term->lines[idx]->dirty = true;
+            }
+            invalidate_terminal(hwnd);
             return 0;
         }
 
@@ -1283,7 +1405,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (off > max_off) off = max_off;
             t->scrollback_offset = off;
             update_scrollbar(hwnd);
-            InvalidateRect(hwnd, NULL, FALSE);
+            invalidate_terminal(hwnd);
             return 0;
         }
 

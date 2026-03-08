@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-#define TOK_VALUE_MAX 1024
+#define TOK_VALUE_MAX 8192
 
 typedef enum {
     TOK_EOF,

@@ -164,15 +164,15 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
             cw - MARGIN - BTN_W, btn_y, BTN_W, BTN_H,
             hwnd, (HMENU)IDCANCEL, NULL, NULL);
 
-        /* Create MS Shell Dlg 8pt for labels/buttons */
+        /* Create Cascadia Code 9pt for labels/buttons */
         {
             HDC hdc = GetDC(hwnd);
-            int h = -MulDiv(8, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+            int h = -MulDiv(9, GetDeviceCaps(hdc, LOGPIXELSY), 72);
             ReleaseDC(hwnd, hdc);
             nd->hDlgFont = CreateFont(
                 h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, "MS Shell Dlg");
+                CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, "Cascadia Code");
             if (nd->hDlgFont)
                 EnumChildWindows(hwnd, SetFontCb, (LPARAM)nd->hDlgFont);
         }

@@ -122,3 +122,31 @@ int tabmgr_get_logging(const TabManager *m, int index)
     if (index < 0 || index >= m->count) return 0;
     return m->tabs[index].logging;
 }
+
+/* ---- Button tooltip text (pure layout, no Win32 dependency) -------------- */
+#define BTN_SIZE_LAYOUT  24
+#define BTN_GAP_LAYOUT   2
+
+const char *tabs_btn_tooltip_at(int mx, int client_width)
+{
+    /* [+] button: x=[4, 4+BTN_SIZE] */
+    if (mx >= 4 && mx <= 4 + BTN_SIZE_LAYOUT)
+        return "Session Manager";
+
+    /* Right-side buttons */
+    int cogX   = client_width - BTN_SIZE_LAYOUT - 4;
+    int aiX    = cogX - BTN_SIZE_LAYOUT - BTN_GAP_LAYOUT;
+    int rightX = aiX - BTN_SIZE_LAYOUT - BTN_GAP_LAYOUT;
+    int leftX  = rightX - BTN_SIZE_LAYOUT - BTN_GAP_LAYOUT;
+
+    if (mx >= cogX && mx <= cogX + BTN_SIZE_LAYOUT)
+        return "Settings";
+    if (mx >= aiX && mx <= aiX + BTN_SIZE_LAYOUT)
+        return "AI Chat";
+    if (mx >= leftX && mx <= leftX + BTN_SIZE_LAYOUT)
+        return "Previous tab";
+    if (mx >= rightX && mx <= rightX + BTN_SIZE_LAYOUT)
+        return "Next tab";
+
+    return NULL;
+}

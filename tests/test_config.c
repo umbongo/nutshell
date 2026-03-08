@@ -15,13 +15,14 @@ int test_config_default_settings(void)
     TEST_BEGIN();
     Settings s;
     config_default_settings(&s);
-    ASSERT_STR_EQ(s.font, "Consolas");
+    ASSERT_STR_EQ(s.font, "Cascadia Code");
     ASSERT_EQ(s.font_size, 10);
     ASSERT_EQ(s.scrollback_lines, 10000);
     ASSERT_EQ(s.paste_delay_ms, 350);
     ASSERT_EQ(s.logging_enabled, 0);
-    ASSERT_STR_EQ(s.foreground_colour, "#000000");
-    ASSERT_STR_EQ(s.background_colour, "#FFFFFF");
+    ASSERT_STR_EQ(s.foreground_colour, "#E0E0E0");
+    ASSERT_STR_EQ(s.background_colour, "#121212");
+    ASSERT_STR_EQ(s.colour_scheme, "Onyx Synapse");
     ASSERT_STR_EQ(s.host_key_verification, "tofu");
     TEST_END();
 }
@@ -52,7 +53,7 @@ int test_config_new_default_free(void)
     TEST_BEGIN();
     Config *cfg = config_new_default();
     ASSERT_NOT_NULL(cfg);
-    ASSERT_STR_EQ(cfg->settings.font, "Consolas");
+    ASSERT_STR_EQ(cfg->settings.font, "Cascadia Code");
     ASSERT_EQ((int)vec_size(&cfg->profiles), 0);
     config_free(cfg);
     config_free(NULL);  /* must not crash */
@@ -108,7 +109,7 @@ int test_config_load_empty_object(void)
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NOT_NULL(cfg);
     /* Defaults should be intact. */
-    ASSERT_STR_EQ(cfg->settings.font, "Consolas");
+    ASSERT_STR_EQ(cfg->settings.font, "Cascadia Code");
     ASSERT_EQ((int)vec_size(&cfg->profiles), 0);
     config_free(cfg);
     remove(TMP_CFG);
@@ -280,7 +281,7 @@ int test_config_ai_key_encrypted_on_disk(void)
                    sizeof(cfg->settings.ai_api_key), "%s", "secret-api-key");
     ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
 
-    /* Read raw file and check the key is not in plaintext */
+    /* Read raw file and check the key is NOT in plaintext */
     FILE *f = fopen(TMP_CFG, "r");
     ASSERT_NOT_NULL(f);
     char raw[4096];
@@ -288,8 +289,15 @@ int test_config_ai_key_encrypted_on_disk(void)
     raw[n] = '\0';
     fclose(f);
 
-    /* Temporarily storing key as plaintext for debugging */
-    ASSERT_TRUE(strstr(raw, "secret-api-key") != NULL);
+    ASSERT_TRUE(strstr(raw, "secret-api-key") == NULL);
+    /* Should contain the encryption prefix instead */
+    ASSERT_TRUE(strstr(raw, "$aes256gcm$v1$") != NULL);
+
+    /* Verify round-trip: load should decrypt back to original */
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_STR_EQ(loaded->settings.ai_api_key, "secret-api-key");
+    config_free(loaded);
 
     config_free(cfg);
     remove(TMP_CFG);
@@ -427,7 +435,7 @@ int test_config_validate_empty_font(void)
     config_default_settings(&s);
     s.font[0] = '\0';
     settings_validate(&s);
-    ASSERT_STR_EQ(s.font, "Consolas");
+    ASSERT_STR_EQ(s.font, "Cascadia Code");
     TEST_END();
 }
 
@@ -443,7 +451,7 @@ int test_config_load_realistic(void)
     fputs(
         "{\n"
         "  \"settings\": {\n"
-        "    \"font\": \"Consolas\",\n"
+        "    \"font\": \"Cascadia Code\",\n"
         "    \"font_size\": 10,\n"
         "    \"scrollback_lines\": 10000,\n"
         "    \"paste_delay_ms\": 350,\n"
@@ -465,7 +473,7 @@ int test_config_load_realistic(void)
 
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NOT_NULL(cfg);
-    ASSERT_STR_EQ(cfg->settings.font, "Consolas");
+    ASSERT_STR_EQ(cfg->settings.font, "Cascadia Code");
     ASSERT_EQ(cfg->settings.font_size, 10);
     ASSERT_EQ(cfg->settings.scrollback_lines, 10000);
     ASSERT_EQ(cfg->settings.paste_delay_ms, 350);
@@ -476,6 +484,8 @@ int test_config_load_realistic(void)
     ASSERT_STR_EQ(cfg->settings.ai_custom_url, "https://api.deepseek.com/v1");
     ASSERT_STR_EQ(cfg->settings.ai_custom_model, "deepseek-chat");
     ASSERT_STR_EQ(cfg->settings.ai_api_key, "sk-3b016e9b5afc4000b28120f57bd6c7d9");
+    /* Legacy config has no colour_scheme — migration fills in default */
+    ASSERT_STR_EQ(cfg->settings.colour_scheme, "Onyx Synapse");
     ASSERT_EQ((int)vec_size(&cfg->profiles), 0);
 
     config_free(cfg);
@@ -495,7 +505,7 @@ int test_config_load_missing_ai_fields(void)
     fputs(
         "{\n"
         "  \"settings\": {\n"
-        "    \"font\": \"Consolas\",\n"
+        "    \"font\": \"Cascadia Code\",\n"
         "    \"font_size\": 10\n"
         "  }\n"
         "}\n", f);
@@ -637,3 +647,32 @@ int test_config_save_null(void)
     config_free(cfg);
     TEST_END();
 }
+
+int test_config_default_colour_scheme(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_STR_EQ(s.colour_scheme, "Onyx Synapse");
+    TEST_END();
+}
+
+int test_config_roundtrip_colour_scheme(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    (void)snprintf(cfg->settings.colour_scheme,
+                   sizeof(cfg->settings.colour_scheme),
+                   "%s", "Moss & Mist");
+    int rc = config_save(cfg, TMP_CFG);
+    ASSERT_EQ(rc, 0);
+    config_free(cfg);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_STR_EQ(loaded->settings.colour_scheme, "Moss & Mist");
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+

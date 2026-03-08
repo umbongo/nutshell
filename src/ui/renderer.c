@@ -1,6 +1,9 @@
 #include "renderer.h"
+#include "display_buffer.h"
+#include "selection.h"
 #include "theme.h"
 #include <stdio.h>
+#include <string.h>
 
 #ifdef _WIN32
 #include <dwmapi.h>
@@ -30,6 +33,11 @@ void renderer_init(Renderer *r, const char *fontName, int fontSize) {
                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                           FIXED_PITCH | FF_MODERN, fontName);
 
+    r->hBoldFont = CreateFont(height, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                              FIXED_PITCH | FF_MODERN, fontName);
+
     /* Calculate char dimensions */
     hdc = GetDC(NULL);
     HFONT oldFont = SelectObject(hdc, r->hFont);
@@ -42,13 +50,16 @@ void renderer_init(Renderer *r, const char *fontName, int fontSize) {
 
     r->defaultFg = RGB(0,   0,   0);   /* #000000 — overridden by apply_config_colors() */
     r->defaultBg = RGB(255, 255, 255); /* #FFFFFF — overridden by apply_config_colors() */
+
+    /* Display buffer starts empty — allocated on first draw */
+    memset(&r->dispbuf, 0, sizeof(r->dispbuf));
 }
 
 void renderer_free(Renderer *r) {
-    if (r && r->hFont) {
-        DeleteObject(r->hFont);
-        r->hFont = NULL;
-    }
+    if (!r) return;
+    if (r->hFont)     { DeleteObject(r->hFont);     r->hFont = NULL; }
+    if (r->hBoldFont) { DeleteObject(r->hBoldFont); r->hBoldFont = NULL; }
+    dispbuf_free(&r->dispbuf);
 }
 
 /* Helper to find the TermRow for a given screen row index */
@@ -68,13 +79,53 @@ static TermRow *get_visible_row(Terminal *term, int screen_row) {
     return term->lines[physical_idx];
 }
 
-void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const RECT *paintRect) {
+/* Check if cell (row, col) falls within the selection range. */
+static bool cell_in_selection(const Selection *sel, int row, int col)
+{
+    if (!sel || !sel->valid) return false;
+    int r0, c0, r1, c1;
+    selection_normalise(sel, &r0, &c0, &r1, &c1);
+    if (row < r0 || row > r1) return false;
+    if (row == r0 && row == r1) return col >= c0 && col <= c1;
+    if (row == r0) return col >= c0;
+    if (row == r1) return col <= c1;
+    return true; /* middle row — fully selected */
+}
+
+/* Resolve a cell's fg, bg, and bold flag, accounting for reverse + selection. */
+static void resolve_cell(const Renderer *r, const TermCell *cell,
+                          const Terminal *term, int row_idx, int col_idx,
+                          const Selection *sel,
+                          COLORREF *out_fg, COLORREF *out_bg,
+                          bool *out_bold)
+{
+    COLORREF fg = (cell->attr.fg_mode == COLOR_DEFAULT) ? r->defaultFg : to_colorref(cell->attr.fg);
+    COLORREF bg = (cell->attr.bg_mode == COLOR_DEFAULT) ? r->defaultBg : to_colorref(cell->attr.bg);
+    bool reverse = (cell->attr.flags & TERM_ATTR_REVERSE) ||
+                   (term->cursor.visible && term->cursor.row == row_idx && term->cursor.col == col_idx);
+    if (reverse) { COLORREF tmp = fg; fg = bg; bg = tmp; }
+    if (cell_in_selection(sel, row_idx, col_idx)) {
+        COLORREF tmp = fg; fg = bg; bg = tmp;
+    }
+    *out_fg = fg;
+    *out_bg = bg;
+    *out_bold = (cell->attr.flags & TERM_ATTR_BOLD) != 0;
+}
+
+void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const RECT *paintRect, const Selection *sel) {
     if (!r || !term) return;
+
+    /* Ensure display buffer matches terminal dimensions */
+    if (r->dispbuf.rows != term->rows || r->dispbuf.cols != term->cols) {
+        dispbuf_resize(&r->dispbuf, term->rows, term->cols);
+    }
 
     HFONT oldFont = SelectObject(hdc, r->hFont);
     SetBkMode(hdc, OPAQUE);
+    bool cur_bold = false;  /* track which font is selected */
 
     int cursor_row = term->cursor.visible ? term->cursor.row : -1;
+    bool has_sel = sel && sel->valid;
 
     for (int row_idx = 0; row_idx < term->rows; row_idx++) {
         int py = y + row_idx * r->charHeight;
@@ -85,41 +136,78 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         TermRow *row = get_visible_row(term, row_idx);
         if (!row) continue;
 
-        /* Skip clean rows that don't contain the cursor */
-        if (!row->dirty && row_idx != cursor_row) continue;
+        /* Skip clean rows that don't contain the cursor and aren't selected.
+         * When scrolled back, visible rows differ from what was last painted,
+         * so we must repaint all of them regardless of dirty flags. */
+        if (term->scrollback_offset == 0 &&
+            !row->dirty && row_idx != cursor_row && !has_sel) continue;
 
-        for (int col_idx = 0; col_idx < term->cols; col_idx++) {
-            int px = x + col_idx * r->charWidth;
+        for (int col_idx = 0; col_idx < term->cols; ) {
+            int px_start = x + col_idx * r->charWidth;
 
-            /* Skip cols outside paint rect */
-            if (px + r->charWidth < paintRect->left || px > paintRect->right) continue;
+            /* Skip cols before paint rect */
+            if (px_start + r->charWidth < paintRect->left) { col_idx++; continue; }
+            /* Stop if we're past the paint rect */
+            if (px_start > paintRect->right) break;
 
+            /* Resolve first cell */
             TermCell *cell = &row->cells[col_idx];
+            COLORREF fg, bg;
+            bool bold;
+            resolve_cell(r, cell, term, row_idx, col_idx, sel, &fg, &bg, &bold);
             uint32_t cp = cell->codepoint;
-            WCHAR wch = (cp == 0) ? L' ' : (WCHAR)cp;
+            uint8_t aflags = cell->attr.flags;
 
-            /* Resolve colors: COLOR_DEFAULT means use the terminal's configured default. */
-            COLORREF fg = (cell->attr.fg_mode == COLOR_DEFAULT) ? r->defaultFg : to_colorref(cell->attr.fg);
-            COLORREF bg = (cell->attr.bg_mode == COLOR_DEFAULT) ? r->defaultBg : to_colorref(cell->attr.bg);
-
-            /* Handle reverse video and cursor */
-            bool reverse = (cell->attr.flags & TERM_ATTR_REVERSE) ||
-                           (term->cursor.visible && term->cursor.row == row_idx && term->cursor.col == col_idx);
-
-            if (reverse) {
-                COLORREF tmp = fg; fg = bg; bg = tmp;
+            /* Cell-level dirty check: skip if the display buffer already
+             * has this exact content painted. */
+            if (dispbuf_cell_clean(&r->dispbuf, row_idx, col_idx,
+                                   cp, (uint32_t)fg, (uint32_t)bg, aflags)) {
+                col_idx++;
+                continue;
             }
 
-            SetTextColor(hdc, fg);
-            SetBkColor(hdc, bg);
+            COLORREF run_fg = fg, run_bg = bg;
+            bool run_bold = bold;
+            WCHAR run_buf[512];
+            int run_start = col_idx;
+            int run_len = 0;
+            run_buf[run_len++] = (cp == 0) ? L' ' : (WCHAR)cp;
+            dispbuf_cell_update(&r->dispbuf, row_idx, col_idx,
+                                cp, (uint32_t)fg, (uint32_t)bg, aflags);
+            col_idx++;
 
-            RECT cellRect = {px, py, px + r->charWidth, py + r->charHeight};
-            ExtTextOutW(hdc, px, py, ETO_OPAQUE | ETO_CLIPPED, &cellRect, &wch, 1, NULL);
+            /* Accumulate consecutive cells with matching fg/bg/bold */
+            while (col_idx < term->cols && run_len < 512) {
+                cell = &row->cells[col_idx];
+                resolve_cell(r, cell, term, row_idx, col_idx, sel, &fg, &bg, &bold);
+                if (fg != run_fg || bg != run_bg || bold != run_bold) break;
+                cp = cell->codepoint;
+                aflags = cell->attr.flags;
+                run_buf[run_len++] = (cp == 0) ? L' ' : (WCHAR)cp;
+                dispbuf_cell_update(&r->dispbuf, row_idx, col_idx,
+                                    cp, (uint32_t)fg, (uint32_t)bg, aflags);
+                col_idx++;
+            }
+
+            /* Select bold/normal font for this run */
+            if (run_bold != cur_bold) {
+                SelectObject(hdc, run_bold ? r->hBoldFont : r->hFont);
+                cur_bold = run_bold;
+            }
+
+            /* Draw the entire run in one call */
+            SetTextColor(hdc, run_fg);
+            SetBkColor(hdc, run_bg);
+            int px = x + run_start * r->charWidth;
+            RECT runRect = {px, py, px + run_len * r->charWidth, py + r->charHeight};
+            ExtTextOutW(hdc, px, py, ETO_OPAQUE | ETO_CLIPPED, &runRect,
+                        run_buf, (UINT)run_len, NULL);
         }
 
         row->dirty = false;
     }
 
+    /* Restore normal font */
     SelectObject(hdc, oldFont);
 }
 

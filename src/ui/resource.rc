@@ -15,14 +15,13 @@ CAPTION "Session Manager"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     /* ---- Left column: saved sessions ---- */
-    GROUPBOX        "Sessions",         -1,             4,   4, 183, 177
+    LTEXT           "Sessions",         -1,            12,   6, 167,   8
     LISTBOX         IDC_LIST_SESSIONS,                 12,  18, 167, 143, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_TABSTOP
     PUSHBUTTON      "New",              IDC_BTN_NEW,   12, 163,  47,  14
     PUSHBUTTON      "Edit",             IDC_BTN_EDIT,  65, 163,  47,  14
     PUSHBUTTON      "Delete",           IDC_BTN_DELETE,128, 163,  55,  14
 
     /* ---- Right column: connection form ---- */
-    GROUPBOX        "Connection",       -1,           191,   4, 275, 177
 
     LTEXT           "Name:",            -1,           198,  18,  35,   8
     EDITTEXT        IDC_EDIT_NAME,                    237,  16, 221,  14, ES_AUTOHSCROLL
