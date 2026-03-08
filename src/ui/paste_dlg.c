@@ -28,6 +28,7 @@ typedef struct {
     HWND      hEdit;
     HWND      hBtnPaste;
     HWND      hBtnCancel;
+    int       dpi;
 } PasteDlgData;
 
 /* ---- Colour helper ------------------------------------------------------ */
@@ -69,41 +70,47 @@ static char *build_edit_text(char **lines, int count)
     return buf;
 }
 
-/* ---- Layout constants --------------------------------------------------- */
+/* ---- Layout constants (base values at 96 DPI) --------------------------- */
 
-#define MARGIN      10
-#define BTN_W       75
-#define BTN_H       23
-#define BTN_GAP     10
-#define SUMMARY_H   20
-#define FOOTER_H    (MARGIN + BTN_H + MARGIN)
+#define MARGIN_BASE      10
+#define BTN_W_BASE       75
+#define BTN_H_BASE       23
+#define BTN_GAP_BASE     10
+#define SUMMARY_H_BASE   20
 
 /* ---- Reposition controls on resize -------------------------------------- */
 
 static void layout_controls(PasteDlgData *d, int cw, int ch)
 {
     if (!d) return;
+    int dpi = d->dpi > 0 ? d->dpi : 96;
+    int margin = MulDiv(MARGIN_BASE, dpi, 96);
+    int btn_w = MulDiv(BTN_W_BASE, dpi, 96);
+    int btn_h = MulDiv(BTN_H_BASE, dpi, 96);
+    int btn_gap = MulDiv(BTN_GAP_BASE, dpi, 96);
+    int summ_h = MulDiv(SUMMARY_H_BASE, dpi, 96);
+    int footer_h = margin + btn_h + margin;
 
     /* Summary label: top */
     SetWindowPos(d->hSummary, NULL,
-        MARGIN, MARGIN, cw - 2 * MARGIN, SUMMARY_H,
+        margin, margin, cw - 2 * margin, summ_h,
         SWP_NOZORDER);
 
     /* Text area: fills middle */
-    int edit_top = MARGIN + SUMMARY_H + MARGIN;
-    int edit_h = ch - edit_top - FOOTER_H;
+    int edit_top = margin + summ_h + margin;
+    int edit_h = ch - edit_top - footer_h;
     if (edit_h < 20) edit_h = 20;
     SetWindowPos(d->hEdit, NULL,
-        MARGIN, edit_top, cw - 2 * MARGIN, edit_h,
+        margin, edit_top, cw - 2 * margin, edit_h,
         SWP_NOZORDER);
 
     /* Buttons: bottom-right */
-    int btn_y = ch - MARGIN - BTN_H;
+    int btn_y = ch - margin - btn_h;
     SetWindowPos(d->hBtnCancel, NULL,
-        cw - MARGIN - BTN_W, btn_y, BTN_W, BTN_H,
+        cw - margin - btn_w, btn_y, btn_w, btn_h,
         SWP_NOZORDER);
     SetWindowPos(d->hBtnPaste, NULL,
-        cw - MARGIN - BTN_W - BTN_GAP - BTN_W, btn_y, BTN_W, BTN_H,
+        cw - margin - btn_w - btn_gap - btn_w, btn_y, btn_w, btn_h,
         SWP_NOZORDER);
 }
 
@@ -129,6 +136,19 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
         PasteDlgData *nd = (PasteDlgData *)cs->lpCreateParams;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
 
+        /* Get per-monitor DPI for layout scaling */
+        {
+            HDC hdc_dpi = GetDC(hwnd);
+            nd->dpi = GetDeviceCaps(hdc_dpi, LOGPIXELSY);
+            ReleaseDC(hwnd, hdc_dpi);
+        }
+        int margin = MulDiv(MARGIN_BASE, nd->dpi, 96);
+        int btn_w = MulDiv(BTN_W_BASE, nd->dpi, 96);
+        int btn_h = MulDiv(BTN_H_BASE, nd->dpi, 96);
+        int btn_gap = MulDiv(BTN_GAP_BASE, nd->dpi, 96);
+        int summ_h = MulDiv(SUMMARY_H_BASE, nd->dpi, 96);
+        int footer_h = margin + btn_h + margin;
+
         RECT rc;
         GetClientRect(hwnd, &rc);
         int cw = rc.right;
@@ -137,31 +157,31 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
         /* Summary label */
         nd->hSummary = CreateWindow("STATIC", nd->summary,
             WS_VISIBLE | WS_CHILD | SS_LEFT,
-            MARGIN, MARGIN, cw - 2 * MARGIN, SUMMARY_H,
+            margin, margin, cw - 2 * margin, summ_h,
             hwnd, (HMENU)IDC_PASTE_SUMMARY, NULL, NULL);
 
         /* Multiline read-only edit for paste content */
-        int edit_top = MARGIN + SUMMARY_H + MARGIN;
-        int edit_h = ch - edit_top - FOOTER_H;
+        int edit_top = margin + summ_h + margin;
+        int edit_h = ch - edit_top - footer_h;
         if (edit_h < 20) edit_h = 20;
 
         nd->hEdit = CreateWindowEx(WS_EX_CLIENTEDGE, "EDIT", nd->edit_text,
             WS_VISIBLE | WS_CHILD | WS_BORDER |
             ES_MULTILINE | ES_READONLY | ES_AUTOHSCROLL |
             WS_VSCROLL | WS_HSCROLL,
-            MARGIN, edit_top, cw - 2 * MARGIN, edit_h,
+            margin, edit_top, cw - 2 * margin, edit_h,
             hwnd, (HMENU)IDC_PASTE_EDIT, NULL, NULL);
 
         /* Buttons */
-        int btn_y = ch - MARGIN - BTN_H;
+        int btn_y = ch - margin - btn_h;
         nd->hBtnPaste = CreateWindow("BUTTON", "Paste",
             WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-            cw - MARGIN - BTN_W - BTN_GAP - BTN_W, btn_y, BTN_W, BTN_H,
+            cw - margin - btn_w - btn_gap - btn_w, btn_y, btn_w, btn_h,
             hwnd, (HMENU)IDOK, NULL, NULL);
 
         nd->hBtnCancel = CreateWindow("BUTTON", "Cancel",
             WS_VISIBLE | WS_CHILD,
-            cw - MARGIN - BTN_W, btn_y, BTN_W, BTN_H,
+            cw - margin - btn_w, btn_y, btn_w, btn_h,
             hwnd, (HMENU)IDCANCEL, NULL, NULL);
 
         /* Create Cascadia Code 9pt for labels/buttons */
@@ -171,7 +191,7 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
             ReleaseDC(hwnd, hdc);
             nd->hDlgFont = CreateFont(
                 h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, "Cascadia Code");
             if (nd->hDlgFont)
                 EnumChildWindows(hwnd, SetFontCb, (LPARAM)nd->hDlgFont);
@@ -199,8 +219,9 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
 
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mmi = (MINMAXINFO *)lParam;
-        mmi->ptMinTrackSize.x = 400;
-        mmi->ptMinTrackSize.y = 250;
+        int ddpi = d ? d->dpi : 96;
+        mmi->ptMinTrackSize.x = MulDiv(400, ddpi, 96);
+        mmi->ptMinTrackSize.y = MulDiv(250, ddpi, 96);
         return 0;
     }
 
@@ -277,12 +298,12 @@ int paste_preview_show(HWND parent, const char *raw_text,
 
     /* Create terminal font for text area */
     {
-        HDC hdc = GetDC(NULL);
+        HDC hdc = GetDC(parent);
         int h = -MulDiv(font_size, GetDeviceCaps(hdc, LOGPIXELSY), 72);
-        ReleaseDC(NULL, hdc);
+        ReleaseDC(parent, hdc);
         d.hTermFont = CreateFont(
             h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
             font_name ? font_name : "Consolas");
     }
@@ -299,10 +320,19 @@ int paste_preview_show(HWND parent, const char *raw_text,
     wc.lpszClassName  = PASTE_CLASS;
     RegisterClassEx(&wc);
 
+    /* Scale window size for DPI */
+    int pdpi;
+    {
+        HDC hdc_p = GetDC(parent);
+        pdpi = GetDeviceCaps(hdc_p, LOGPIXELSY);
+        ReleaseDC(parent, hdc_p);
+    }
+
     HWND hwnd = CreateWindowEx(
         0, PASTE_CLASS, "Confirm Paste",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 520, 400,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        MulDiv(520, pdpi, 96), MulDiv(400, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), &d);
 
     if (hwnd) {

@@ -73,23 +73,26 @@ typedef struct {
     const ThemeColors *theme;
     HBRUSH   hBrBgPrimary;
     HBRUSH   hBrBgSecondary;
+    int      dpi;
 } SettingsDlgData;
 
 /* ---- Layout helpers ----------------------------------------------------- */
 
-static HWND make_label(HWND parent, const char *text, int x, int y, int w)
+static HWND make_label(HWND parent, const char *text, int x, int y, int w, int dpi)
 {
+    int lh = MulDiv(18, dpi, 96);
     return CreateWindow("STATIC", text,
         WS_VISIBLE | WS_CHILD | SS_RIGHT,
-        x, y + 3, w, 18, parent, NULL, NULL, NULL);
+        x, y + lh / 6, w, lh, parent, NULL, NULL, NULL);
 }
 
 static HWND make_edit(HWND parent, const char *text,
-                      int x, int y, int w, HMENU id)
+                      int x, int y, int w, HMENU id, int dpi)
 {
+    int eh = MulDiv(22, dpi, 96);
     HWND h = CreateWindow("EDIT", text,
         WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
-        x, y + 1, w, 22, parent, id, NULL, NULL);
+        x, y + 1, w, eh, parent, id, NULL, NULL);
     SendMessage(h, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                 MAKELPARAM(3, 3));
     return h;
@@ -210,24 +213,32 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         SettingsDlgData *nd = (SettingsDlgData *)cs->lpCreateParams;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
 
+        /* Get per-monitor DPI for layout scaling */
+        {
+            HDC hdc_dpi = GetDC(hwnd);
+            nd->dpi = GetDeviceCaps(hdc_dpi, LOGPIXELSY);
+            ReleaseDC(hwnd, hdc_dpi);
+        }
+        #define S(px) MulDiv((px), nd->dpi, 96)
+
         RECT rc;
         GetClientRect(hwnd, &rc);
         int cw = rc.right;
         int ch = rc.bottom;
 
-        /* Column geometry */
-        int lx = 10;   /* label x       */
-        int lw = 120;  /* label width    */
-        int ex = 135;  /* control x      */
-        int ew = 200;  /* default edit w */
+        /* Column geometry — DPI-scaled */
+        int lx = S(10);    /* label x       */
+        int lw = S(120);   /* label width    */
+        int ex = S(135);   /* control x      */
+        int ew = S(200);   /* default edit w */
 
-        int y = 10; /* current row y position */
-        int rh = 28; /* row height */
+        int y = S(10);  /* current row y position */
+        int rh = S(28); /* row height */
 
         /* Row 1: Font */
-        make_label(hwnd, "Font:", lx, y, lw);
+        make_label(hwnd, "Font:", lx, y, lw, nd->dpi);
         {
-            HWND hCombo = make_combo(hwnd, ex, y, ew, 200, (HMENU)IDC_FONT_COMBO);
+            HWND hCombo = make_combo(hwnd, ex, y, ew, S(200), (HMENU)IDC_FONT_COMBO);
             for (int i = 0; i < NUM_FONTS; i++)
                 SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)k_fonts[i]);
             int sel = 0;
@@ -242,9 +253,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         y += rh;
 
         /* Row 2: Font size */
-        make_label(hwnd, "Font Size:", lx, y, lw);
+        make_label(hwnd, "Font Size:", lx, y, lw, nd->dpi);
         {
-            HWND hSz = make_combo(hwnd, ex, y, 80, 180, (HMENU)IDC_FONTSIZE_COMBO);
+            HWND hSz = make_combo(hwnd, ex, y, S(80), S(180), (HMENU)IDC_FONTSIZE_COMBO);
             int sel = 0;
             for (int i = 0; i < NUM_FONT_SIZES; i++) {
                 char buf[8];
@@ -262,8 +273,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             char buf[16];
             (void)snprintf(buf, sizeof(buf), "%d",
                            nd->cfg->settings.scrollback_lines);
-            make_label(hwnd, "Scrollback Lines:", lx, y, lw);
-            make_edit(hwnd, buf, ex, y, 80, (HMENU)IDC_SCROLLBACK_EDIT);
+            make_label(hwnd, "Scrollback Lines:", lx, y, lw, nd->dpi);
+            make_edit(hwnd, buf, ex, y, S(80), (HMENU)IDC_SCROLLBACK_EDIT, nd->dpi);
         }
         y += rh;
 
@@ -272,15 +283,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             char buf[16];
             (void)snprintf(buf, sizeof(buf), "%d",
                            nd->cfg->settings.paste_delay_ms);
-            make_label(hwnd, "Paste Delay (ms):", lx, y, lw);
-            make_edit(hwnd, buf, ex, y, 80, (HMENU)IDC_PASTEDELAY_EDIT);
+            make_label(hwnd, "Paste Delay (ms):", lx, y, lw, nd->dpi);
+            make_edit(hwnd, buf, ex, y, S(80), (HMENU)IDC_PASTEDELAY_EDIT, nd->dpi);
         }
         y += rh;
 
         /* Row 5: Colour Scheme */
-        make_label(hwnd, "Colour Scheme:", lx, y, lw);
+        make_label(hwnd, "Colour Scheme:", lx, y, lw, nd->dpi);
         {
-            HWND hScheme = make_combo(hwnd, ex, y, ew, 150, (HMENU)IDC_SCHEME_COMBO);
+            HWND hScheme = make_combo(hwnd, ex, y, ew, S(150), (HMENU)IDC_SCHEME_COMBO);
             int sel = 0;
             for (int i = 0; i < NUM_UI_THEMES; i++) {
                 SendMessage(hScheme, CB_ADDSTRING, 0,
@@ -294,15 +305,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         y += rh;
 
         /* Row 6: Log directory */
-        make_label(hwnd, "Log Directory:", lx, y, lw);
+        make_label(hwnd, "Log Directory:", lx, y, lw, nd->dpi);
         make_edit(hwnd, nd->cfg->settings.log_dir,
-                  ex, y, ew, (HMENU)IDC_LOG_DIR_EDIT);
+                  ex, y, ew, (HMENU)IDC_LOG_DIR_EDIT, nd->dpi);
         y += rh;
 
         /* Row 6: Log name format */
-        make_label(hwnd, "Log Name Format:", lx, y, lw);
+        make_label(hwnd, "Log Name Format:", lx, y, lw, nd->dpi);
         make_edit(hwnd, nd->cfg->settings.log_format,
-                  ex, y, ew, (HMENU)IDC_LOG_FMT_EDIT);
+                  ex, y, ew, (HMENU)IDC_LOG_FMT_EDIT, nd->dpi);
 
         /* Tooltip on the log format edit: list strftime specifiers */
         nd->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
@@ -327,11 +338,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         }
 
         /* Row 7: AI Provider */
-        y += rh + 5; /* advance past Log Name Format row + small gap */
+        y += rh + S(5); /* advance past Log Name Format row + small gap */
         int is_custom = (_stricmp(nd->cfg->settings.ai_provider, "custom") == 0);
-        make_label(hwnd, "AI Provider:", lx, y, lw);
+        make_label(hwnd, "AI Provider:", lx, y, lw, nd->dpi);
         {
-            HWND hAi = make_combo(hwnd, ex, y, ew, 150, (HMENU)IDC_AI_PROVIDER_COMBO);
+            HWND hAi = make_combo(hwnd, ex, y, ew, S(150), (HMENU)IDC_AI_PROVIDER_COMBO);
             int sel = 0;
             for (int i = 0; i < NUM_AI_PROVIDERS; i++) {
                 SendMessage(hAi, CB_ADDSTRING, 0, (LPARAM)k_ai_providers[i]);
@@ -345,15 +356,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
 
         /* Row 8: AI Model (combo + refresh button) */
         {
-            int model_w = ew - 30; /* leave room for refresh button */
-            make_label(hwnd, "AI Model:", lx, y, lw);
+            int model_w = ew - S(30); /* leave room for refresh button */
+            make_label(hwnd, "AI Model:", lx, y, lw, nd->dpi);
             HWND hModel = CreateWindow("COMBOBOX", "",
                 WS_VISIBLE | WS_CHILD | CBS_DROPDOWN | CBS_HASSTRINGS | WS_VSCROLL,
-                ex, y, model_w, 180, hwnd, (HMENU)IDC_AI_CUSTOM_MODEL, NULL, NULL);
+                ex, y, model_w, S(180), hwnd, (HMENU)IDC_AI_CUSTOM_MODEL, NULL, NULL);
             /* Refresh button (Unicode ↻) — owner-drawn for theme */
             CreateWindowW(L"BUTTON", L"\x21BB",
                 WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                ex + model_w + 5, y, 25, 22, hwnd, (HMENU)IDC_AI_REFRESH, NULL, NULL);
+                ex + model_w + S(5), y, S(25), S(22), hwnd, (HMENU)IDC_AI_REFRESH, NULL, NULL);
             /* Show saved model as text but leave dropdown empty until refreshed */
             const char *cur_model = nd->cfg->settings.ai_custom_model;
             if (!cur_model[0]) {
@@ -366,12 +377,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         y += rh;
 
         /* Row 9: AI API Key (masked) */
-        make_label(hwnd, "AI API Key:", lx, y, lw);
+        make_label(hwnd, "AI API Key:", lx, y, lw, nd->dpi);
         {
             HWND hKey = CreateWindow("EDIT",
                 nd->cfg->settings.ai_api_key,
                 WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_PASSWORD,
-                ex, y + 1, ew, 22, hwnd, (HMENU)IDC_AI_KEY_EDIT, NULL, NULL);
+                ex, y + 1, ew, S(22), hwnd, (HMENU)IDC_AI_KEY_EDIT, NULL, NULL);
             SendMessage(hKey, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                         MAKELPARAM(3, 3));
         }
@@ -379,12 +390,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
 
         /* Row 10: AI Base URL (only for custom provider) */
         {
-            HWND hUrlLabel = make_label(hwnd, "AI Base URL:", lx, y, lw);
+            HWND hUrlLabel = make_label(hwnd, "AI Base URL:", lx, y, lw, nd->dpi);
             HWND hUrl = CreateWindow("EDIT",
                 nd->cfg->settings.ai_custom_url,
                 WS_CHILD | WS_BORDER | ES_AUTOHSCROLL |
                 (is_custom ? WS_VISIBLE : 0),
-                ex, y + 1, ew, 22, hwnd, (HMENU)IDC_AI_CUSTOM_URL, NULL, NULL);
+                ex, y + 1, ew, S(22), hwnd, (HMENU)IDC_AI_CUSTOM_URL, NULL, NULL);
             SendMessage(hUrl, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                         MAKELPARAM(3, 3));
             if (!is_custom) ShowWindow(hUrlLabel, SW_HIDE);
@@ -393,27 +404,27 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         /* Action buttons (owner-drawn for theme) */
         CreateWindow("BUTTON", "Save",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            cw / 2 - 80, ch - 65, 75, 25, hwnd, (HMENU)IDOK, NULL, NULL);
+            cw / 2 - S(80), ch - S(65), S(75), S(25), hwnd, (HMENU)IDOK, NULL, NULL);
         CreateWindow("BUTTON", "Cancel",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            cw / 2 + 5, ch - 65, 75, 25, hwnd, (HMENU)IDCANCEL, NULL, NULL);
+            cw / 2 + S(5), ch - S(65), S(75), S(25), hwnd, (HMENU)IDCANCEL, NULL, NULL);
 
         /* Version / copyright footer */
         CreateWindow("STATIC", "Nutshell v1.5",
             WS_VISIBLE | WS_CHILD | SS_CENTER,
-            0, ch - 35, cw, 16, hwnd, NULL, NULL, NULL);
+            0, ch - S(35), cw, S(16), hwnd, NULL, NULL, NULL);
         CreateWindow("STATIC", "Copyright (C) 2026 Thomas Sulkiewicz",
             WS_VISIBLE | WS_CHILD | SS_CENTER,
-            0, ch - 19, cw, 16, hwnd, NULL, NULL, NULL);
+            0, ch - S(19), cw, S(16), hwnd, NULL, NULL, NULL);
+
+        #undef S
 
         /* Apply configured font at UI size to all child controls */
         {
-            HDC hdc = GetDC(hwnd);
-            int h = -MulDiv(APP_FONT_UI_SIZE, GetDeviceCaps(hdc, LOGPIXELSY), 72);
-            ReleaseDC(hwnd, hdc);
+            int h = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
             nd->hDlgFont = CreateFont(
                 h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
                 nd->cfg->settings.font);
             if (nd->hDlgFont)
@@ -749,10 +760,19 @@ void settings_dlg_show(HWND parent, Config *cfg)
     wc.lpszClassName = SETTINGS_CLASS;
     RegisterClassEx(&wc);
 
+    /* Scale window size for DPI */
+    int pdpi;
+    {
+        HDC hdc = GetDC(parent);
+        pdpi = GetDeviceCaps(hdc, LOGPIXELSY);
+        ReleaseDC(parent, hdc);
+    }
+
     HWND hwnd = CreateWindowEx(
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 400, 490,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        MulDiv(400, pdpi, 96), MulDiv(490, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {

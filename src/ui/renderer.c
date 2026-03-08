@@ -19,27 +19,23 @@ static COLORREF to_colorref(uint32_t rgb) {
     return RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
 }
 
-void renderer_init(Renderer *r, const char *fontName, int fontSize) {
+void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi) {
     if (!r) return;
 
-    HDC hdc = GetDC(NULL);
-    int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(NULL, hdc);
-
-    int height = -MulDiv(fontSize, logPixelsY, 72);
+    int height = -MulDiv(fontSize, dpi, 72);
 
     r->hFont = CreateFont(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                          DEFAULT_CHARSET, OUT_TT_PRECIS,
                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                           FIXED_PITCH | FF_MODERN, fontName);
 
     r->hBoldFont = CreateFont(height, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                              DEFAULT_CHARSET, OUT_TT_PRECIS,
                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                               FIXED_PITCH | FF_MODERN, fontName);
 
     /* Calculate char dimensions */
-    hdc = GetDC(NULL);
+    HDC hdc = GetDC(NULL);
     HFONT oldFont = SelectObject(hdc, r->hFont);
     TEXTMETRIC tm;
     GetTextMetrics(hdc, &tm);

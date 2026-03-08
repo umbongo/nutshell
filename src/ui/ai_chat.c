@@ -84,6 +84,7 @@ typedef struct {
     char queued_cmds[16][1024];
     int queued_count;
     int queued_next;       /* index of next command to execute */
+    int dpi;
 } AiChatData;
 
 /* Append colored text to the RichEdit chat display.
@@ -353,6 +354,10 @@ static void execute_command(AiChatData *d, const char *cmd)
 {
     if (!d || !d->active_channel || !cmd || !cmd[0]) return;
 
+    /* Clear any existing text on the line before pasting:
+       Ctrl+E (end of line) + Ctrl+U (kill to start of line) */
+    ssh_channel_write(d->active_channel, "\x05\x15", 2);
+
     /* Send command + CR to SSH channel (CR = Enter key, same as WM_CHAR) */
     ssh_channel_write(d->active_channel, cmd, (size_t)strlen(cmd));
     ssh_channel_write(d->active_channel, "\r", 1);
@@ -440,9 +445,9 @@ static void add_tooltip(HWND hTooltip, HWND hCtrl, const char *text)
     SendMessage(hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
 }
 
-/* Match the tab strip layout constants for consistent appearance */
-#define AI_INDICATOR_W   12  /* same as INDICATOR_W in tabs.c */
-#define AI_INDICATOR_GAP  3  /* same as INDICATOR_GAP in tabs.c */
+/* Match the tab strip layout constants for consistent appearance (base values at 96 DPI) */
+#define AI_INDICATOR_W_BASE   12  /* same as INDICATOR_W in tabs.c */
+#define AI_INDICATOR_GAP_BASE  3  /* same as INDICATOR_GAP in tabs.c */
 
 /* Draw a tab-style button: same shape, border, font and indicator style
  * as the session tabs in the main window's tab strip. */
@@ -483,19 +488,21 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
     /* For Permit Write button: draw status indicator (matches tab indicator) */
     int text_left = rc.left;
     if ((int)dis->CtlID == IDC_CHAT_PERMIT && d) {
-        int indX = rc.left + AI_INDICATOR_GAP;
+        int indW = MulDiv(AI_INDICATOR_W_BASE, d->dpi, 96);
+        int indGap = MulDiv(AI_INDICATOR_GAP_BASE, d->dpi, 96);
+        int indX = rc.left + indGap;
         COLORREF dot_col = d->permit_write ? RGB(0, 160, 80) : RGB(200, 50, 50);
         HBRUSH hDot = CreateSolidBrush(dot_col);
         HPEN hDotPen = CreatePen(PS_SOLID, 1, dot_col);
         HGDIOBJ oBr = SelectObject(hdc, hDot);
         HGDIOBJ oPen = SelectObject(hdc, hDotPen);
         RoundRect(hdc, indX, indY,
-                  indX + AI_INDICATOR_W, indY + indicH, 3, 3);
+                  indX + indW, indY + indicH, 3, 3);
         SelectObject(hdc, oPen);
         SelectObject(hdc, oBr);
         DeleteObject(hDotPen);
         DeleteObject(hDot);
-        text_left = indX + AI_INDICATOR_W + AI_INDICATOR_GAP;
+        text_left = indX + indW + indGap;
     }
 
     /* Text — use the normal UI font (same as tab title text) */
@@ -510,7 +517,7 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
     GetWindowTextW(dis->hwndItem, text, (int)(sizeof(text)/sizeof(text[0])));
     RECT rcText = rc;
     rcText.left = text_left;
-    rcText.right -= AI_INDICATOR_GAP;
+    rcText.right -= MulDiv(AI_INDICATOR_GAP_BASE, d ? d->dpi : 96, 96);
     DrawTextW(hdc, text, -1, &rcText,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
@@ -529,32 +536,42 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
         nd->hwnd = hwnd;
 
+        /* Get per-monitor DPI for layout scaling */
+        {
+            HDC hdc_dpi = GetDC(hwnd);
+            nd->dpi = GetDeviceCaps(hdc_dpi, LOGPIXELSY);
+            ReleaseDC(hwnd, hdc_dpi);
+        }
+        #define S(px) MulDiv((px), nd->dpi, 96)
+
         RECT rc;
         GetClientRect(hwnd, &rc);
         int cw = rc.right;
         int ch = rc.bottom;
-        int btn_h = 24; /* compact — matches BTN_SIZE in tab strip */
-        int top_y = 4 + btn_h + 4; /* display starts below buttons */
+        int btn_h = S(24); /* compact — matches BTN_SIZE in tab strip */
+        int pad = S(4);
+        int top_y = pad + btn_h + pad; /* display starts below buttons */
 
         /* New Chat button (owner-drawn for theme) */
         nd->hNewChatBtn = CreateWindow("BUTTON", "New Chat",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            4, 4, 78, btn_h,
+            pad, pad, S(78), btn_h,
             hwnd, (HMENU)IDC_CHAT_NEWCHAT, NULL, NULL);
 
         /* Permit Write button */
         nd->permit_write = 0; /* default: read-only */
         nd->hPermitBtn = CreateWindow("BUTTON", "Permit Write",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            86, 4, 115, btn_h,
+            pad + S(78) + pad, pad, S(115), btn_h,
             hwnd, (HMENU)IDC_CHAT_PERMIT, NULL, NULL);
 
         /* Chat display: read-only RichEdit for colored text */
-        int input_h = 46; /* ~2 lines for multiline input */
+        int input_h = S(46); /* ~2 lines for multiline input */
+        int margin = S(5);
         nd->hDisplay = CreateWindowW(L"RichEdit20W", L"",
             WS_VISIBLE | WS_CHILD | WS_VSCROLL | WS_BORDER |
             ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-            5, top_y, cw - 10, ch - input_h - top_y - 10,
+            margin, top_y, cw - margin * 2, ch - input_h - top_y - margin * 2,
             hwnd, (HMENU)IDC_CHAT_DISPLAY, NULL, NULL);
 
         /* Set RichEdit background from theme */
@@ -563,32 +580,33 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                        : GetSysColor(COLOR_WINDOW)));
 
         /* Input field: multiline, Enter sends via subclass, Shift+Enter = newline */
+        int send_w = S(40);
         nd->hInput = CreateWindow("EDIT", "",
             WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL |
             ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
-            5, ch - input_h - 5, cw - 55, input_h,
+            margin, ch - input_h - margin, cw - send_w - margin * 3, input_h,
             hwnd, (HMENU)IDC_CHAT_INPUT, NULL, NULL);
         SetWindowSubclass(nd->hInput, InputSubclassProc, 0, 0);
 
         /* Send button (owner-drawn for theme) */
         nd->hSendBtn = CreateWindow("BUTTON", ">",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            cw - 45, ch - input_h - 5, 40, input_h,
+            cw - send_w - margin, ch - input_h - margin, send_w, input_h,
             hwnd, (HMENU)IDC_CHAT_SEND, NULL, NULL);
 
         /* Font — use configured font at UI size */
-        HDC hdc = GetDC(hwnd);
-        int h = -MulDiv(APP_FONT_UI_SIZE, GetDeviceCaps(hdc, LOGPIXELSY), 72);
-        ReleaseDC(hwnd, hdc);
+        int h = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
         nd->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                               DEFAULT_CHARSET, OUT_TT_PRECIS,
                                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                FIXED_PITCH | FF_MODERN, nd->font_name);
-        /* Small bold font — matches the tab strip indicator labels exactly */
-        nd->hSmallFont = CreateFont(-10, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+        /* Small bold font — DPI-scaled to match tab strip indicator labels */
+        int sh = -MulDiv(7, nd->dpi, 72);
+        nd->hSmallFont = CreateFont(sh, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                    DEFAULT_CHARSET, OUT_TT_PRECIS,
                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                     FIXED_PITCH | FF_MODERN, nd->font_name);
+        #undef S
         if (nd->hFont) {
             SendMessage(nd->hDisplay, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
             SendMessage(nd->hInput, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
@@ -630,16 +648,21 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
     case WM_SIZE: {
         if (!d) break;
+        #define S(px) MulDiv((px), d->dpi, 96)
         int cw = LOWORD(lParam);
         int ch = HIWORD(lParam);
-        int btn_h = 24;
-        int top_y = 4 + btn_h + 4;
-        int input_h = 46;
-        MoveWindow(d->hNewChatBtn, 4, 4, 78, btn_h, TRUE);
-        MoveWindow(d->hPermitBtn, 86, 4, 115, btn_h, TRUE);
-        MoveWindow(d->hDisplay, 5, top_y, cw - 10, ch - input_h - top_y - 10, TRUE);
-        MoveWindow(d->hInput, 5, ch - input_h - 5, cw - 55, input_h, TRUE);
-        MoveWindow(d->hSendBtn, cw - 45, ch - input_h - 5, 40, input_h, TRUE);
+        int btn_h = S(24);
+        int pad = S(4);
+        int top_y = pad + btn_h + pad;
+        int input_h = S(46);
+        int margin = S(5);
+        int send_w = S(40);
+        MoveWindow(d->hNewChatBtn, pad, pad, S(78), btn_h, TRUE);
+        MoveWindow(d->hPermitBtn, pad + S(78) + pad, pad, S(115), btn_h, TRUE);
+        MoveWindow(d->hDisplay, margin, top_y, cw - margin * 2, ch - input_h - top_y - margin * 2, TRUE);
+        MoveWindow(d->hInput, margin, ch - input_h - margin, cw - send_w - margin * 3, input_h, TRUE);
+        MoveWindow(d->hSendBtn, cw - send_w - margin, ch - input_h - margin, send_w, input_h, TRUE);
+        #undef S
         return 0;
     }
 
@@ -953,10 +976,19 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
                         ? custom_model : ai_provider_model(provider);
     ai_conv_init(&d->conv, model ? model : "deepseek-chat");
 
+    /* Scale window size for DPI */
+    int pdpi;
+    {
+        HDC hdc = GetDC(parent);
+        pdpi = GetDeviceCaps(hdc, LOGPIXELSY);
+        ReleaseDC(parent, hdc);
+    }
+
     HWND hwnd = CreateWindowEx(
         0, AI_CHAT_CLASS, "AI Assist",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 500, 600,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        MulDiv(500, pdpi, 96), MulDiv(600, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (!hwnd) {

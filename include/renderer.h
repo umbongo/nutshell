@@ -17,7 +17,7 @@ typedef struct Renderer {
     DisplayBuffer dispbuf;
 } Renderer;
 
-void renderer_init(Renderer *r, const char *fontName, int fontSize);
+void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi);
 void renderer_free(Renderer *r);
 void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const RECT *paintRect, const Selection *sel);
 void renderer_apply_theme(HWND hwnd, COLORREF bg_colorref);

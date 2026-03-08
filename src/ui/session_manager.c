@@ -129,7 +129,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             ReleaseDC(hwnd, hdc);
             st->hDlgFont = CreateFont(
                 h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
                 st->cfg->settings.font);
             if (st->hDlgFont) {

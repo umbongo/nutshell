@@ -124,28 +124,36 @@ int tabmgr_get_logging(const TabManager *m, int index)
 }
 
 /* ---- Button tooltip text (pure layout, no Win32 dependency) -------------- */
-#define BTN_SIZE_LAYOUT  24
-#define BTN_GAP_LAYOUT   2
+#define BTN_BASE  24
+#define GAP_BASE  2
+#define PAD_BASE  4
 
-const char *tabs_btn_tooltip_at(int mx, int client_width)
+/* Simple integer MulDiv for non-Win32 builds */
+static int tab_scale(int val, int dpi) { return val * dpi / 96; }
+
+const char *tabs_btn_tooltip_at(int mx, int client_width, int dpi)
 {
-    /* [+] button: x=[4, 4+BTN_SIZE] */
-    if (mx >= 4 && mx <= 4 + BTN_SIZE_LAYOUT)
+    int btn = tab_scale(BTN_BASE, dpi);
+    int gap = tab_scale(GAP_BASE, dpi);
+    int pad = tab_scale(PAD_BASE, dpi);
+
+    /* [+] button: x=[pad, pad+btn] */
+    if (mx >= pad && mx <= pad + btn)
         return "Session Manager";
 
     /* Right-side buttons */
-    int cogX   = client_width - BTN_SIZE_LAYOUT - 4;
-    int aiX    = cogX - BTN_SIZE_LAYOUT - BTN_GAP_LAYOUT;
-    int rightX = aiX - BTN_SIZE_LAYOUT - BTN_GAP_LAYOUT;
-    int leftX  = rightX - BTN_SIZE_LAYOUT - BTN_GAP_LAYOUT;
+    int cogX   = client_width - btn - pad;
+    int aiX    = cogX - btn - gap;
+    int rightX = aiX - btn - gap;
+    int leftX  = rightX - btn - gap;
 
-    if (mx >= cogX && mx <= cogX + BTN_SIZE_LAYOUT)
+    if (mx >= cogX && mx <= cogX + btn)
         return "Settings";
-    if (mx >= aiX && mx <= aiX + BTN_SIZE_LAYOUT)
+    if (mx >= aiX && mx <= aiX + btn)
         return "AI Assist\nOpen the AI assistant.\nAsk questions or let it run commands\non your terminal.";
-    if (mx >= leftX && mx <= leftX + BTN_SIZE_LAYOUT)
+    if (mx >= leftX && mx <= leftX + btn)
         return "Previous tab";
-    if (mx >= rightX && mx <= rightX + BTN_SIZE_LAYOUT)
+    if (mx >= rightX && mx <= rightX + btn)
         return "Next tab";
 
     return NULL;

@@ -57,7 +57,7 @@ void      tabmgr_set_logging   (TabManager *m, int index, int logging);
 int       tabmgr_get_logging   (const TabManager *m, int index);
 
 /* Return tooltip label for the tab-strip button at pixel position mx,
- * given total client width.  Returns NULL if mx is not over a button. */
-const char *tabs_btn_tooltip_at(int mx, int client_width);
+ * given total client width and DPI.  Returns NULL if mx is not over a button. */
+const char *tabs_btn_tooltip_at(int mx, int client_width, int dpi);
 
 #endif

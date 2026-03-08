@@ -29,7 +29,29 @@
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell";
 
-#define TAB_HEIGHT 32
+/* Per-monitor DPI helper.  Dynamically loads GetDpiForWindow (Win10 1607+)
+ * and falls back to the system-wide LOGPIXELSY value on older builds. */
+typedef UINT (WINAPI *GetDpiForWindow_fn)(HWND);
+static int get_window_dpi(HWND hwnd)
+{
+    static GetDpiForWindow_fn pfn = NULL;
+    static int resolved = 0;
+    if (!resolved) {
+        HMODULE h = GetModuleHandleA("user32.dll");
+        if (h) pfn = (GetDpiForWindow_fn)(void (*)(void))GetProcAddress(h, "GetDpiForWindow");
+        resolved = 1;
+    }
+    if (pfn && hwnd) return (int)pfn(hwnd);
+    HDC hdc = GetDC(NULL);
+    int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
+    ReleaseDC(NULL, hdc);
+    return dpi;
+}
+
+#define TAB_HEIGHT_BASE 32
+static int g_dpi = 96;
+static int g_tab_height = TAB_HEIGHT_BASE;
+
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
 #define WM_CONN_DONE            (WM_USER + 2)
 
@@ -87,7 +109,7 @@ static void invalidate_terminal(HWND hwnd)
 {
     RECT rc;
     GetClientRect(hwnd, &rc);
-    rc.top = TAB_HEIGHT;
+    rc.top = g_tab_height;
     InvalidateRect(hwnd, &rc, FALSE);
 }
 
@@ -518,7 +540,7 @@ static void on_session_connect(const Profile *info) {
     RECT rc;
     GetClientRect(GetParent(g_hwndTabs), &rc);
     int term_w = rc.right;
-    int term_h = rc.bottom - TAB_HEIGHT;
+    int term_h = rc.bottom - g_tab_height;
     if (term_h < 1) term_h = 1;
 
     int cols = 80;
@@ -615,7 +637,8 @@ static void on_settings_clicked(void) {
     /* Reinitialise renderer — font or size may have changed */
     renderer_free(&g_renderer);
     renderer_init(&g_renderer, g_config->settings.font,
-                  g_config->settings.font_size);
+                  g_config->settings.font_size,
+                  get_window_dpi(parent));
     apply_config_colors();
     renderer_apply_theme(parent, g_renderer.defaultBg);
 
@@ -898,7 +921,8 @@ static void apply_zoom(HWND hwnd, int delta)
 
     g_config->settings.font_size = new_size;
     renderer_free(&g_renderer);
-    renderer_init(&g_renderer, g_config->settings.font, new_size);
+    renderer_init(&g_renderer, g_config->settings.font, new_size,
+                  get_window_dpi(hwnd));
     apply_config_colors();
     renderer_apply_theme(hwnd, g_renderer.defaultBg);
 
@@ -949,18 +973,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_theme = ui_theme_get(idx);
             }
 
+            /* Compute DPI-scaled tab height */
+            g_dpi = get_window_dpi(hwnd);
+            g_tab_height = MulDiv(TAB_HEIGHT_BASE, g_dpi, 96);
+
             tabs_init(g_hInst);
             csb_register(g_hInst);
 
             RECT rc;
             GetClientRect(hwnd, &rc);
 
-            g_hwndTabs = tabs_create(hwnd, 0, 0, rc.right, TAB_HEIGHT);
+            g_hwndTabs = tabs_create(hwnd, 0, 0, rc.right, g_tab_height);
 
             /* Custom themed scrollbar on the right edge */
             g_hwndScrollbar = csb_create(hwnd,
-                rc.right - CSB_WIDTH, TAB_HEIGHT,
-                CSB_WIDTH, rc.bottom - TAB_HEIGHT,
+                rc.right - CSB_WIDTH, g_tab_height,
+                CSB_WIDTH, rc.bottom - g_tab_height,
                 g_theme, g_hInst);
             tabs_set_callbacks(g_hwndTabs, on_tab_select, on_tab_new, on_tab_close, on_settings_clicked, on_log_toggle);
             tabs_set_ai_callback(g_hwndTabs, on_ai_clicked);
@@ -973,7 +1001,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                           g_config->settings.font[0]
                               ? g_config->settings.font : "Cascadia Code",
                           g_config->settings.font_size > 0
-                              ? g_config->settings.font_size : 12);
+                              ? g_config->settings.font_size : 12,
+                          get_window_dpi(hwnd));
             apply_config_colors();
             renderer_apply_theme(hwnd, g_renderer.defaultBg);
 
@@ -1103,7 +1132,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int snapped_w, snapped_h;
             snap_calc(client_w, client_h,
                       g_renderer.charWidth, g_renderer.charHeight,
-                      nc_w, nc_h, TAB_HEIGHT,
+                      nc_w, nc_h, g_tab_height,
                       NULL, NULL, &snapped_w, &snapped_h);
 
             int l = (int)wr->left, t = (int)wr->top,
@@ -1118,19 +1147,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int height = HIWORD(lParam);
 
             if (g_hwndTabs) {
-                SetWindowPos(g_hwndTabs, NULL, 0, 0, width, TAB_HEIGHT, SWP_NOZORDER);
+                SetWindowPos(g_hwndTabs, NULL, 0, 0, width, g_tab_height, SWP_NOZORDER);
             }
 
             /* Reposition custom scrollbar */
             if (g_hwndScrollbar) {
                 SetWindowPos(g_hwndScrollbar, NULL,
-                    width - CSB_WIDTH, TAB_HEIGHT,
-                    CSB_WIDTH, height - TAB_HEIGHT,
+                    width - CSB_WIDTH, g_tab_height,
+                    CSB_WIDTH, height - g_tab_height,
                     SWP_NOZORDER);
             }
 
             if (g_active_session && g_active_session->term && g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
-                int term_h = height - TAB_HEIGHT;
+                int term_h = height - g_tab_height;
                 if (term_h < 1) term_h = 1;
 
                 int term_w = width - CSB_WIDTH;
@@ -1151,19 +1180,50 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        case WM_DPICHANGED: {
+            int newDpi = (int)HIWORD(wParam);
+            g_dpi = newDpi;
+            g_tab_height = MulDiv(TAB_HEIGHT_BASE, g_dpi, 96);
+
+            RECT *suggested = (RECT *)lParam;
+            SetWindowPos(hwnd, NULL,
+                suggested->left, suggested->top,
+                suggested->right - suggested->left,
+                suggested->bottom - suggested->top,
+                SWP_NOZORDER | SWP_NOACTIVATE);
+
+            /* Recreate renderer fonts at new DPI */
+            renderer_free(&g_renderer);
+            renderer_init(&g_renderer, g_config->settings.font,
+                          g_config->settings.font_size, newDpi);
+            apply_config_colors();
+            renderer_apply_theme(hwnd, g_renderer.defaultBg);
+
+            /* Recreate tab strip fonts */
+            tabs_set_font(g_hwndTabs, g_config->settings.font);
+
+            /* Recalculate terminal grid via WM_SIZE */
+            RECT dpi_rc;
+            GetClientRect(hwnd, &dpi_rc);
+            SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
+                        MAKELPARAM(dpi_rc.right, dpi_rc.bottom));
+            InvalidateRect(hwnd, NULL, TRUE);
+            return 0;
+        }
+
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
 
             if (g_active_session && g_active_session->term) {
-                renderer_draw(&g_renderer, hdc, g_active_session->term, 0, TAB_HEIGHT, &ps.rcPaint, &g_selection);
+                renderer_draw(&g_renderer, hdc, g_active_session->term, 0, g_tab_height, &ps.rcPaint, &g_selection);
 
                 /* Fill gutter areas not covered by complete character cells. */
                 RECT client;
                 GetClientRect(hwnd, &client);
                 HBRUSH bg = CreateSolidBrush(g_renderer.defaultBg);
 
-                int text_bottom = TAB_HEIGHT +
+                int text_bottom = g_tab_height +
                     g_active_session->term->rows * g_renderer.charHeight;
                 if (text_bottom < client.bottom) {
                     RECT r = { 0, text_bottom, client.right, client.bottom };
@@ -1172,7 +1232,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
                 int text_right = g_active_session->term->cols * g_renderer.charWidth;
                 if (text_right < client.right) {
-                    RECT r = { text_right, TAB_HEIGHT, client.right, text_bottom };
+                    RECT r = { text_right, g_tab_height, client.right, text_bottom };
                     FillRect(hdc, &r, bg);
                 }
 
@@ -1331,7 +1391,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int mx = LOWORD(lParam), my = HIWORD(lParam);
             selection_pixel_to_cell(mx, my,
                 g_renderer.charWidth, g_renderer.charHeight,
-                TAB_HEIGHT, g_active_session->term->rows,
+                g_tab_height, g_active_session->term->rows,
                 g_active_session->term->cols,
                 &g_selection.start_row, &g_selection.start_col);
             g_selection.end_row = g_selection.start_row;
@@ -1352,7 +1412,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int mx = LOWORD(lParam), my = HIWORD(lParam);
             selection_pixel_to_cell(mx, my,
                 g_renderer.charWidth, g_renderer.charHeight,
-                TAB_HEIGHT, g_active_session->term->rows,
+                g_tab_height, g_active_session->term->rows,
                 g_active_session->term->cols,
                 &g_selection.end_row, &g_selection.end_col);
             g_selection.valid = (g_selection.start_row != g_selection.end_row ||
@@ -1371,7 +1431,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int mx = LOWORD(lParam), my = HIWORD(lParam);
             selection_pixel_to_cell(mx, my,
                 g_renderer.charWidth, g_renderer.charHeight,
-                TAB_HEIGHT, g_active_session->term->rows,
+                g_tab_height, g_active_session->term->rows,
                 g_active_session->term->cols,
                 &g_selection.end_row, &g_selection.end_col);
             g_selection.valid = true;
@@ -1475,11 +1535,11 @@ void ui_init(HINSTANCE instance) {
         return;
     }
 
-    /* Initial size: 1024 x 680 px, centred on screen */
+    /* Initial size: 1400 x 900 px, centred on screen */
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
-    int winW = 1024;
-    int winH = 680;
+    int winW = 1400;
+    int winH = 900;
     int x = (screenW - winW) / 2;
     int y = (screenH - winH) / 2;
 

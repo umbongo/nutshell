@@ -25,7 +25,7 @@ typedef struct {
 } Renderer;
 
 #ifdef _WIN32
-void renderer_init(Renderer *r, const char *fontName, int fontSize);
+void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi);
 void renderer_free(Renderer *r);
 void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const RECT *paintRect, const Selection *sel);
 /* Apply dark/light title bar to hwnd based on the background COLORREF.

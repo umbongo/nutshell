@@ -2,6 +2,9 @@
 #include "tab_manager.h"
 #include <string.h>
 
+/* Convenience wrapper: call tabs_btn_tooltip_at with 96 DPI (no scaling) */
+#define tabs_btn_tooltip_at_96(mx, cw) tabs_btn_tooltip_at((mx), (cw), 96)
+
 /* ---- tabmgr_init --------------------------------------------------------- */
 
 int test_tabmgr_init(void)
@@ -338,11 +341,11 @@ int test_tabmgr_navigate_zero_delta(void)
 int test_tabs_btn_tooltip_add(void)
 {
     TEST_BEGIN();
-    const char *tip = tabs_btn_tooltip_at(10, 400);
+    const char *tip = tabs_btn_tooltip_at_96(10, 400);
     ASSERT_NOT_NULL(tip);
     ASSERT_STR_EQ(tip, "Session Manager");
     /* Left edge */
-    tip = tabs_btn_tooltip_at(4, 400);
+    tip = tabs_btn_tooltip_at_96(4, 400);
     ASSERT_NOT_NULL(tip);
     ASSERT_STR_EQ(tip, "Session Manager");
     TEST_END();
@@ -353,7 +356,7 @@ int test_tabs_btn_tooltip_add(void)
 int test_tabs_btn_tooltip_settings(void)
 {
     TEST_BEGIN();
-    const char *tip = tabs_btn_tooltip_at(380, 400);
+    const char *tip = tabs_btn_tooltip_at_96(380, 400);
     ASSERT_NOT_NULL(tip);
     ASSERT_STR_EQ(tip, "Settings");
     TEST_END();
@@ -362,7 +365,7 @@ int test_tabs_btn_tooltip_settings(void)
 int test_tabs_btn_tooltip_ai(void)
 {
     TEST_BEGIN();
-    const char *tip = tabs_btn_tooltip_at(350, 400);
+    const char *tip = tabs_btn_tooltip_at_96(350, 400);
     ASSERT_NOT_NULL(tip);
     /* Tooltip is now multiline; check it starts with "AI Assist" */
     ASSERT_EQ(strncmp(tip, "AI Assist", 9), 0);
@@ -372,7 +375,7 @@ int test_tabs_btn_tooltip_ai(void)
 int test_tabs_btn_tooltip_prev(void)
 {
     TEST_BEGIN();
-    const char *tip = tabs_btn_tooltip_at(300, 400);
+    const char *tip = tabs_btn_tooltip_at_96(300, 400);
     ASSERT_NOT_NULL(tip);
     ASSERT_STR_EQ(tip, "Previous tab");
     TEST_END();
@@ -381,7 +384,7 @@ int test_tabs_btn_tooltip_prev(void)
 int test_tabs_btn_tooltip_next(void)
 {
     TEST_BEGIN();
-    const char *tip = tabs_btn_tooltip_at(325, 400);
+    const char *tip = tabs_btn_tooltip_at_96(325, 400);
     ASSERT_NOT_NULL(tip);
     ASSERT_STR_EQ(tip, "Next tab");
     TEST_END();
@@ -392,7 +395,7 @@ int test_tabs_btn_tooltip_gap(void)
 {
     TEST_BEGIN();
     /* Between [+] and tabs area, but past [+] button */
-    const char *tip = tabs_btn_tooltip_at(200, 400);
+    const char *tip = tabs_btn_tooltip_at_96(200, 400);
     ASSERT_NULL(tip);
     TEST_END();
 }
@@ -402,7 +405,7 @@ int test_tabs_btn_tooltip_past_add(void)
 {
     TEST_BEGIN();
     /* BTN_SIZE=24, so [+] goes from 4 to 28. x=29 is past it. */
-    const char *tip = tabs_btn_tooltip_at(29, 400);
+    const char *tip = tabs_btn_tooltip_at_96(29, 400);
     ASSERT_NULL(tip);
     TEST_END();
 }
