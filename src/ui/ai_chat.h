@@ -6,10 +6,10 @@
 #include "term.h"
 #include "ssh_channel.h"
 
-/* Initialize the AI chat window class. Call once at startup. */
+/* Initialize the AI assist window class. Call once at startup. */
 void ai_chat_init(HINSTANCE hInstance);
 
-/* Show the AI chat window. If already open, brings to front.
+/* Show the AI assist window. If already open, brings to front.
  * api_key, provider, custom_url, custom_model, font_name, colour_scheme copied.
  * paste_delay_ms: inter-command delay when executing batched commands. */
 HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
@@ -24,7 +24,7 @@ void ai_chat_set_session(HWND hwnd, Terminal *term, SSHChannel *channel);
 void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
                         const char *custom_url, const char *custom_model);
 
-/* Close and destroy the AI chat window. */
+/* Close and destroy the AI assist window. */
 void ai_chat_close(HWND hwnd);
 
 #endif /* _WIN32 */

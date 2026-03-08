@@ -364,7 +364,8 @@ int test_tabs_btn_tooltip_ai(void)
     TEST_BEGIN();
     const char *tip = tabs_btn_tooltip_at(350, 400);
     ASSERT_NOT_NULL(tip);
-    ASSERT_STR_EQ(tip, "AI Chat");
+    /* Tooltip is now multiline; check it starts with "AI Assist" */
+    ASSERT_EQ(strncmp(tip, "AI Assist", 9), 0);
     TEST_END();
 }
 

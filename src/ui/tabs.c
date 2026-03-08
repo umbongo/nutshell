@@ -268,8 +268,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     DeleteObject(hAccent);
                 }
 
-                /* Indicator dimensions: full inner height minus 3 px top+bottom */
-                int indicH = tabH - 6;
+                /* Indicator dimensions: inner height with 5px top+bottom margin */
+                int indicH = tabH - 10;
                 if (indicH < 4) indicH = 4;
 
                 /* ---- Status indicator (INDICATOR_W × indicH rounded rect) ---- */

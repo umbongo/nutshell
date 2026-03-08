@@ -24,6 +24,7 @@
 #include "selection.h"
 #include "app_font.h"
 #include "ui_theme.h"
+#include "custom_scrollbar.h"
 
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell";
@@ -76,6 +77,7 @@ static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
 static HWND g_hwndAiChat = NULL;
+static HWND g_hwndScrollbar = NULL;
 static const ThemeColors *g_theme = NULL;
 static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
@@ -607,6 +609,7 @@ static void on_settings_clicked(void) {
         int idx = ui_theme_find(g_config->settings.colour_scheme);
         g_theme = ui_theme_get(idx);
         tabs_set_theme(g_hwndTabs, g_theme);
+        if (g_hwndScrollbar) csb_set_theme(g_hwndScrollbar, g_theme);
     }
 
     /* Reinitialise renderer — font or size may have changed */
@@ -845,14 +848,11 @@ static void do_paste(HWND hwnd)
  * arch.  nTrackPos is an *output* field — SetScrollInfo ignores it. */
 static void update_scrollbar(HWND hwnd)
 {
-    SCROLLINFO si;
-    si.cbSize = sizeof(SCROLLINFO);
-    si.fMask  = SIF_ALL;
+    if (!g_hwndScrollbar) return;
 
     if (!g_active_session || !g_active_session->term) {
-        si.nMin  = si.nMax = si.nPos = 0;
-        si.nPage = 1;
-        SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+        csb_set_range(g_hwndScrollbar, 0, 0, 1);
+        csb_set_pos(g_hwndScrollbar, 0);
         return;
     }
 
@@ -862,11 +862,10 @@ static void update_scrollbar(HWND hwnd)
     int nPos  = (total > rows) ? (total - rows - t->scrollback_offset) : 0;
     if (nPos < 0) nPos = 0;
 
-    si.nMin  = 0;
-    si.nMax  = (total > 1) ? (total - 1) : 0;
-    si.nPage = (UINT)rows;
-    si.nPos  = nPos;
-    SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+    int nMax = (total > 1) ? (total - 1) : 0;
+    csb_set_range(g_hwndScrollbar, 0, nMax, rows);
+    csb_set_pos(g_hwndScrollbar, nPos);
+    (void)hwnd;
 }
 
 /* ---- Cell-snapping helpers ----------------------------------------------- */
@@ -951,11 +950,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
 
             tabs_init(g_hInst);
+            csb_register(g_hInst);
 
             RECT rc;
             GetClientRect(hwnd, &rc);
 
             g_hwndTabs = tabs_create(hwnd, 0, 0, rc.right, TAB_HEIGHT);
+
+            /* Custom themed scrollbar on the right edge */
+            g_hwndScrollbar = csb_create(hwnd,
+                rc.right - CSB_WIDTH, TAB_HEIGHT,
+                CSB_WIDTH, rc.bottom - TAB_HEIGHT,
+                g_theme, g_hInst);
             tabs_set_callbacks(g_hwndTabs, on_tab_select, on_tab_new, on_tab_close, on_settings_clicked, on_log_toggle);
             tabs_set_ai_callback(g_hwndTabs, on_ai_clicked);
             tabs_set_ai_active(g_hwndTabs,
@@ -1088,8 +1094,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             RECT *wr = (RECT *)lParam;
             int nc_w, nc_h;
             get_nc_size(hwnd, &nc_w, &nc_h);
-            /* AdjustWindowRectEx does not account for WS_VSCROLL */
-            nc_w += GetSystemMetrics(SM_CXVSCROLL);
+            /* Account for the custom scrollbar width */
+            nc_w += CSB_WIDTH;
 
             int client_w = (wr->right  - wr->left) - nc_w;
             int client_h = (wr->bottom - wr->top)  - nc_h;
@@ -1115,11 +1121,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 SetWindowPos(g_hwndTabs, NULL, 0, 0, width, TAB_HEIGHT, SWP_NOZORDER);
             }
 
+            /* Reposition custom scrollbar */
+            if (g_hwndScrollbar) {
+                SetWindowPos(g_hwndScrollbar, NULL,
+                    width - CSB_WIDTH, TAB_HEIGHT,
+                    CSB_WIDTH, height - TAB_HEIGHT,
+                    SWP_NOZORDER);
+            }
+
             if (g_active_session && g_active_session->term && g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
                 int term_h = height - TAB_HEIGHT;
                 if (term_h < 1) term_h = 1;
 
-                int cols = width / g_renderer.charWidth;
+                int term_w = width - CSB_WIDTH;
+                if (term_w < 1) term_w = 1;
+                int cols = term_w / g_renderer.charWidth;
                 int rows = term_h / g_renderer.charHeight;
                 if (cols < 1) cols = 1;
                 if (rows < 1) rows = 1;
@@ -1285,7 +1301,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 apply_zoom(hwnd, delta > 0 ? 1 : -1);
                 return 0;
             }
-            /* Plain scroll: no-op (use scrollbar or Page Up/Down) */
+            /* Plain scroll: scroll 3 lines per notch */
+            if (g_active_session && g_active_session->term) {
+                Terminal *t = g_active_session->term;
+                int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                int lines = 3 * delta / WHEEL_DELTA;
+                int max_off = (t->lines_count > t->rows)
+                                  ? (t->lines_count - t->rows) : 0;
+                if (max_off > t->max_scrollback) max_off = t->max_scrollback;
+                int off = t->scrollback_offset + lines;
+                if (off < 0) off = 0;
+                if (off > max_off) off = max_off;
+                t->scrollback_offset = off;
+                update_scrollbar(hwnd);
+                invalidate_terminal(hwnd);
+            }
             return 0;
         }
 
@@ -1388,15 +1418,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             case SB_BOTTOM:       off = 0; break;
             case SB_THUMBTRACK:
             case SB_THUMBPOSITION: {
-                /* Win64: HIWORD(wParam) only gives 16-bit precision (0-65535).
-                 * GetScrollInfo(SIF_TRACKPOS) returns the full 32-bit nTrackPos,
-                 * which is correct for deep buffers where nPos can exceed 65535. */
-                SCROLLINFO si;
-                si.cbSize = sizeof(SCROLLINFO);
-                si.fMask  = SIF_TRACKPOS;
-                GetScrollInfo(hwnd, SB_VERT, &si);
+                /* Custom scrollbar stores the full 32-bit position internally,
+                 * so no HIWORD(wParam) truncation issue (unlike WS_VSCROLL). */
+                int trackpos = csb_get_trackpos(g_hwndScrollbar);
                 /* nPos = lines_count - rows - off  =>  off = lines_count - rows - nPos */
-                off = t->lines_count - t->rows - si.nTrackPos;
+                off = t->lines_count - t->rows - trackpos;
                 break;
             }
             default: return 0;
@@ -1461,7 +1487,7 @@ void ui_init(HINSTANCE instance) {
         0,
         CLASS_NAME,
         APP_TITLE,
-        WS_OVERLAPPEDWINDOW | WS_VSCROLL,
+        WS_OVERLAPPEDWINDOW,
         x, y, winW, winH,
         NULL, NULL, instance, NULL
     );

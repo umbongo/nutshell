@@ -48,8 +48,10 @@ typedef struct {
     HWND hSendBtn;
     HWND hNewChatBtn;
     HWND hPermitBtn;
+    HWND hTooltip;        /* Win32 tooltip control */
     int permit_write;     /* 0 = read-only (red), 1 = read/write (green) */
     HFONT hFont;
+    HFONT hSmallFont;     /* small bold font for indicator label */
     char font_name[64];
     const ThemeColors *theme;
     HBRUSH hBrBgPrimary;
@@ -424,6 +426,97 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
+/* Add a tooltip to a child control */
+static void add_tooltip(HWND hTooltip, HWND hCtrl, const char *text)
+{
+    if (!hTooltip || !hCtrl) return;
+    TOOLINFO ti;
+    memset(&ti, 0, sizeof(ti));
+    ti.cbSize   = sizeof(ti);
+    ti.uFlags   = TTF_SUBCLASS | TTF_IDISHWND;
+    ti.hwnd     = GetParent(hCtrl);
+    ti.uId      = (UINT_PTR)hCtrl;
+    ti.lpszText = (LPSTR)text;
+    SendMessage(hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+}
+
+/* Match the tab strip layout constants for consistent appearance */
+#define AI_INDICATOR_W   12  /* same as INDICATOR_W in tabs.c */
+#define AI_INDICATOR_GAP  3  /* same as INDICATOR_GAP in tabs.c */
+
+/* Draw a tab-style button: same shape, border, font and indicator style
+ * as the session tabs in the main window's tab strip. */
+static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
+                             AiChatData *d)
+{
+    if (!dis || !theme) return;
+    HDC hdc = dis->hDC;
+    RECT rc = dis->rcItem;
+    int btnH = rc.bottom - rc.top;
+    int pressed = (dis->itemState & ODS_SELECTED) != 0;
+
+    COLORREF bg = theme_cr(pressed ? theme->bg_primary : theme->bg_secondary);
+    COLORREF fg = theme_cr(theme->text_main);
+    COLORREF border_cr = theme_cr(theme->border);
+
+    /* Clear with parent bg so rounded corners are clean */
+    HBRUSH hParentBr = CreateSolidBrush(theme_cr(theme->bg_primary));
+    FillRect(hdc, &rc, hParentBr);
+    DeleteObject(hParentBr);
+
+    /* Rounded rect background + border — radius 6 matches tabs */
+    HBRUSH hBr = CreateSolidBrush(bg);
+    HPEN hPen = CreatePen(PS_SOLID, 1, border_cr);
+    HGDIOBJ oldBr = SelectObject(hdc, hBr);
+    HGDIOBJ oldPen = SelectObject(hdc, hPen);
+    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBr);
+    DeleteObject(hPen);
+    DeleteObject(hBr);
+
+    /* Indicator height: same formula as tabs — button height minus 10px */
+    int indicH = btnH - 10;
+    if (indicH < 4) indicH = 4;
+    int indY = rc.top + (btnH - indicH) / 2;
+
+    /* For Permit Write button: draw status indicator (matches tab indicator) */
+    int text_left = rc.left;
+    if ((int)dis->CtlID == IDC_CHAT_PERMIT && d) {
+        int indX = rc.left + AI_INDICATOR_GAP;
+        COLORREF dot_col = d->permit_write ? RGB(0, 160, 80) : RGB(200, 50, 50);
+        HBRUSH hDot = CreateSolidBrush(dot_col);
+        HPEN hDotPen = CreatePen(PS_SOLID, 1, dot_col);
+        HGDIOBJ oBr = SelectObject(hdc, hDot);
+        HGDIOBJ oPen = SelectObject(hdc, hDotPen);
+        RoundRect(hdc, indX, indY,
+                  indX + AI_INDICATOR_W, indY + indicH, 3, 3);
+        SelectObject(hdc, oPen);
+        SelectObject(hdc, oBr);
+        DeleteObject(hDotPen);
+        DeleteObject(hDot);
+        text_left = indX + AI_INDICATOR_W + AI_INDICATOR_GAP;
+    }
+
+    /* Text — use the normal UI font (same as tab title text) */
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, fg);
+
+    HFONT hOldFont = NULL;
+    if (d && d->hFont)
+        hOldFont = (HFONT)SelectObject(hdc, d->hFont);
+
+    wchar_t text[64];
+    GetWindowTextW(dis->hwndItem, text, (int)(sizeof(text)/sizeof(text[0])));
+    RECT rcText = rc;
+    rcText.left = text_left;
+    rcText.right -= AI_INDICATOR_GAP;
+    DrawTextW(hdc, text, -1, &rcText,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    if (hOldFont) SelectObject(hdc, hOldFont);
+}
+
 static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                        WPARAM wParam, LPARAM lParam)
 {
@@ -440,20 +533,20 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         GetClientRect(hwnd, &rc);
         int cw = rc.right;
         int ch = rc.bottom;
-        int btn_h = 28; /* New Chat button height */
-        int top_y = 5 + btn_h + 5; /* display starts below button */
+        int btn_h = 24; /* compact — matches BTN_SIZE in tab strip */
+        int top_y = 4 + btn_h + 4; /* display starts below buttons */
 
         /* New Chat button (owner-drawn for theme) */
         nd->hNewChatBtn = CreateWindow("BUTTON", "New Chat",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            5, 5, 90, btn_h,
+            4, 4, 78, btn_h,
             hwnd, (HMENU)IDC_CHAT_NEWCHAT, NULL, NULL);
 
         /* Permit Write button */
         nd->permit_write = 0; /* default: read-only */
         nd->hPermitBtn = CreateWindow("BUTTON", "Permit Write",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            100, 5, 130, btn_h,
+            86, 4, 115, btn_h,
             hwnd, (HMENU)IDC_CHAT_PERMIT, NULL, NULL);
 
         /* Chat display: read-only RichEdit for colored text */
@@ -491,12 +584,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                FIXED_PITCH | FF_MODERN, nd->font_name);
+        /* Small bold font — matches the tab strip indicator labels exactly */
+        nd->hSmallFont = CreateFont(-10, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                                    CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                    FIXED_PITCH | FF_MODERN, nd->font_name);
         if (nd->hFont) {
             SendMessage(nd->hDisplay, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
             SendMessage(nd->hInput, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
-            SendMessage(nd->hSendBtn, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
-            SendMessage(nd->hNewChatBtn, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
-            SendMessage(nd->hPermitBtn, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
         }
 
         /* Apply theme title bar + borders */
@@ -505,8 +600,27 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             themed_apply_borders(hwnd, nd->theme);
         }
 
+        /* Create tooltip control and add tips for all buttons */
+        nd->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
+            WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+            0, 0, 0, 0, hwnd, NULL, NULL, NULL);
+        if (nd->hTooltip) {
+            SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, 300);
+            add_tooltip(nd->hTooltip, nd->hNewChatBtn,
+                "New Chat\nClear the conversation and start fresh.");
+            add_tooltip(nd->hTooltip, nd->hPermitBtn,
+                "Permit Write\n"
+                "Toggle read/write mode for AI commands.\n"
+                "Green = AI can execute any command.\n"
+                "Red = AI can only run read-only commands\n"
+                "(ls, cat, pwd, etc).");
+            add_tooltip(nd->hTooltip, nd->hSendBtn,
+                "Send\nSend your message to the AI.\n"
+                "Shortcut: press Enter in the input box.");
+        }
+
         chat_append_ops(nd->hDisplay,
-            "AI Chat - Type a message and press Enter or click Send.\r\n"
+            "AI Assist - Type a message and press Enter or click Send.\r\n"
             "The AI can see your terminal and execute commands.\r\n"
             "---\r\n");
 
@@ -518,11 +632,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (!d) break;
         int cw = LOWORD(lParam);
         int ch = HIWORD(lParam);
-        int btn_h = 28;
-        int top_y = 5 + btn_h + 5;
+        int btn_h = 24;
+        int top_y = 4 + btn_h + 4;
         int input_h = 46;
-        MoveWindow(d->hNewChatBtn, 5, 5, 90, btn_h, TRUE);
-        MoveWindow(d->hPermitBtn, 100, 5, 130, btn_h, TRUE);
+        MoveWindow(d->hNewChatBtn, 4, 4, 78, btn_h, TRUE);
+        MoveWindow(d->hPermitBtn, 86, 4, 115, btn_h, TRUE);
         MoveWindow(d->hDisplay, 5, top_y, cw - 10, ch - input_h - top_y - 10, TRUE);
         MoveWindow(d->hInput, 5, ch - input_h - 5, cw - 55, input_h, TRUE);
         MoveWindow(d->hSendBtn, cw - 45, ch - input_h - 5, 40, input_h, TRUE);
@@ -547,7 +661,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 /* Clear display and show welcome message */
                 SetWindowTextW(d->hDisplay, L"");
                 chat_append_ops(d->hDisplay,
-                    "AI Chat - Type a message and press Enter or click Send.\r\n"
+                    "AI Assist - Type a message and press Enter or click Send.\r\n"
                     "The AI can see your terminal and execute commands.\r\n"
                     "---\r\n");
                 /* Clear input field */
@@ -731,8 +845,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_DRAWITEM:
         if (d && d->theme) {
             LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
-            int is_primary = ((int)dis->CtlID == IDC_CHAT_SEND);
-            draw_themed_button(dis, d->theme, is_primary);
+            if ((int)dis->CtlID == IDC_CHAT_SEND) {
+                /* Send button: primary accent style */
+                draw_themed_button(dis, d->theme, 1);
+            } else {
+                /* New Chat / Permit Write: tab-strip style */
+                draw_tab_button(dis, d->theme, d);
+            }
             return TRUE;
         }
         break;
@@ -757,6 +876,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (d) {
             DeleteCriticalSection(&d->cs);
             if (d->hFont) DeleteObject(d->hFont);
+            if (d->hSmallFont) DeleteObject(d->hSmallFont);
+            if (d->hTooltip) DestroyWindow(d->hTooltip);
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
             free(d);
@@ -833,7 +954,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     ai_conv_init(&d->conv, model ? model : "deepseek-chat");
 
     HWND hwnd = CreateWindowEx(
-        0, AI_CHAT_CLASS, "AI Chat",
+        0, AI_CHAT_CLASS, "AI Assist",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT, 500, 600,
         parent, NULL, GetModuleHandle(NULL), d);

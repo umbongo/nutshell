@@ -142,7 +142,7 @@ const char *tabs_btn_tooltip_at(int mx, int client_width)
     if (mx >= cogX && mx <= cogX + BTN_SIZE_LAYOUT)
         return "Settings";
     if (mx >= aiX && mx <= aiX + BTN_SIZE_LAYOUT)
-        return "AI Chat";
+        return "AI Assist\nOpen the AI assistant.\nAsk questions or let it run commands\non your terminal.";
     if (mx >= leftX && mx <= leftX + BTN_SIZE_LAYOUT)
         return "Previous tab";
     if (mx >= rightX && mx <= rightX + BTN_SIZE_LAYOUT)

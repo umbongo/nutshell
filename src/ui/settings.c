@@ -350,9 +350,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             HWND hModel = CreateWindow("COMBOBOX", "",
                 WS_VISIBLE | WS_CHILD | CBS_DROPDOWN | CBS_HASSTRINGS | WS_VSCROLL,
                 ex, y, model_w, 180, hwnd, (HMENU)IDC_AI_CUSTOM_MODEL, NULL, NULL);
-            /* Refresh button (Unicode ↻) */
+            /* Refresh button (Unicode ↻) — owner-drawn for theme */
             CreateWindowW(L"BUTTON", L"\x21BB",
-                WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+                WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
                 ex + model_w + 5, y, 25, 22, hwnd, (HMENU)IDC_AI_REFRESH, NULL, NULL);
             /* Show saved model as text but leave dropdown empty until refreshed */
             const char *cur_model = nd->cfg->settings.ai_custom_model;
