@@ -43,9 +43,29 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
 size_t ai_build_request_body(const AiConversation *conv,
                              char *buf, size_t buf_size);
 
+/* Build the JSON request body with explicit stream flag.
+ * stream=1 adds "stream":true for SSE streaming responses.
+ * Returns bytes written (excluding NUL), or 0 on error. */
+size_t ai_build_request_body_ex(const AiConversation *conv,
+                                char *buf, size_t buf_size, int stream);
+
 /* Parse a chat completion JSON response, extract assistant message content.
  * Returns 0 on success, -1 on error. */
 int ai_parse_response(const char *json, char *content_out, size_t content_size);
+
+/* Parse a single SSE streaming chunk (the JSON after "data: ").
+ * Extracts delta.content and delta.reasoning_content from the chunk.
+ * Either output may be NULL if not needed.
+ * Returns 0 on success, 1 if stream is done ([DONE]), -1 on error. */
+int ai_parse_stream_chunk(const char *json,
+                          char *content_out, size_t content_size,
+                          char *thinking_out, size_t thinking_size);
+
+/* Extended parse: also extract reasoning/thinking content (e.g. DeepSeek
+ * reasoner's "reasoning_content" field).  thinking_out may be NULL.
+ * Returns 0 on success, -1 on error. */
+int ai_parse_response_ex(const char *json, char *content_out, size_t content_size,
+                          char *thinking_out, size_t thinking_size);
 
 /* Extract a command from [EXEC]...[/EXEC] markers in AI response.
  * Returns 1 if found, 0 otherwise. */

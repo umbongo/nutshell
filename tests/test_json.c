@@ -419,3 +419,78 @@ int test_json_free_null(void)
     ASSERT_TRUE(1);
     TEST_END();
 }
+
+/* ============================================================
+ * Unicode escape tests
+ * ============================================================ */
+
+int test_tok_unicode_escape_ascii(void)
+{
+    TEST_BEGIN();
+    Tokenizer t;
+    /* \u003c = '<', \u003e = '>' */
+    tok_init(&t, "\"\\u003cpackage\\u003e\"");
+    Token tok = tok_next(&t);
+    ASSERT_EQ(tok.type, TOK_STRING);
+    ASSERT_STR_EQ(tok.value, "<package>");
+    TEST_END();
+}
+
+int test_tok_unicode_escape_apostrophe(void)
+{
+    TEST_BEGIN();
+    Tokenizer t;
+    tok_init(&t, "\"it\\u0027s\"");
+    Token tok = tok_next(&t);
+    ASSERT_EQ(tok.type, TOK_STRING);
+    ASSERT_STR_EQ(tok.value, "it's");
+    TEST_END();
+}
+
+int test_tok_unicode_escape_multibyte(void)
+{
+    TEST_BEGIN();
+    Tokenizer t;
+    /* \u00e9 = 'é' (UTF-8: 0xC3 0xA9) */
+    tok_init(&t, "\"caf\\u00e9\"");
+    Token tok = tok_next(&t);
+    ASSERT_EQ(tok.type, TOK_STRING);
+    ASSERT_STR_EQ(tok.value, "caf\xc3\xa9");
+    TEST_END();
+}
+
+int test_tok_unicode_escape_3byte(void)
+{
+    TEST_BEGIN();
+    Tokenizer t;
+    /* \u2603 = snowman (UTF-8: 0xE2 0x98 0x83) */
+    tok_init(&t, "\"\\u2603\"");
+    Token tok = tok_next(&t);
+    ASSERT_EQ(tok.type, TOK_STRING);
+    ASSERT_STR_EQ(tok.value, "\xe2\x98\x83");
+    TEST_END();
+}
+
+int test_tok_unicode_surrogate_pair(void)
+{
+    TEST_BEGIN();
+    Tokenizer t;
+    /* \uD83D\uDE00 = U+1F600 grinning face (UTF-8: 0xF0 0x9F 0x98 0x80) */
+    tok_init(&t, "\"\\uD83D\\uDE00\"");
+    Token tok = tok_next(&t);
+    ASSERT_EQ(tok.type, TOK_STRING);
+    ASSERT_STR_EQ(tok.value, "\xf0\x9f\x98\x80");
+    TEST_END();
+}
+
+int test_parse_string_with_unicode(void)
+{
+    TEST_BEGIN();
+    JsonNode *n = json_parse("{\"msg\": \"use \\u003ctag\\u003e here\"}");
+    ASSERT_NOT_NULL(n);
+    const char *s = json_obj_str(n, "msg");
+    ASSERT_NOT_NULL(s);
+    ASSERT_STR_EQ(s, "use <tag> here");
+    json_free(n);
+    TEST_END();
+}

@@ -705,6 +705,83 @@ static void on_ai_clicked(void) {
     }
 }
 
+static void on_status_click(int index, void *user_data, TabStatus status) {
+    Session *s = (Session *)user_data;
+    if (!s) return;
+    HWND hParent = GetParent(g_hwndTabs);
+
+    if (status == TAB_CONNECTED) {
+        /* Ask to disconnect */
+        int ans = MessageBoxA(hParent,
+                              "Disconnect this session?",
+                              "Disconnect",
+                              MB_YESNO | MB_ICONQUESTION);
+        if (ans == IDYES) {
+            if (g_paste.channel == s->channel)
+                paste_cancel();
+            term_process(s->term, "\r\n[Disconnected by user]\r\n", 25);
+            if (s->channel) { ssh_channel_free(s->channel); s->channel = NULL; }
+            if (s->ssh)     { ssh_session_free(s->ssh);     s->ssh = NULL; }
+            if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
+            int tidx = tabs_find(g_hwndTabs, s);
+            if (tidx >= 0) {
+                tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
+                tabs_set_logging(g_hwndTabs, tidx, 0);
+            }
+            invalidate_terminal(hParent);
+        }
+    } else if (status == TAB_DISCONNECTED) {
+        /* Attempt reconnect using stored profile */
+        if (s->conn_profile.host[0] == '\0') {
+            MessageBoxA(hParent,
+                        "No connection profile available for reconnection.",
+                        "Reconnect", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        /* Clean up any leftover SSH state */
+        if (s->channel) { ssh_channel_free(s->channel); s->channel = NULL; }
+        if (s->ssh)     { ssh_session_free(s->ssh);     s->ssh = NULL; }
+        if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
+
+        /* Re-populate password from config — it was zeroed after first auth */
+        for (size_t i = 0; i < vec_size(&g_config->profiles); i++) {
+            const Profile *pr = (const Profile *)vec_get(&g_config->profiles, i);
+            if (strcmp(pr->host, s->conn_profile.host) == 0 &&
+                strcmp(pr->username, s->conn_profile.username) == 0 &&
+                pr->port == s->conn_profile.port) {
+                memcpy(s->conn_profile.password, pr->password,
+                       sizeof(s->conn_profile.password));
+                break;
+            }
+        }
+
+        term_process(s->term, "\r\nReconnecting", 14);
+
+        int tidx = tabs_find(g_hwndTabs, s);
+        if (tidx >= 0)
+            tabs_set_status(g_hwndTabs, tidx, TAB_CONNECTING);
+
+        s->conn_state    = CONN_CONNECTING;
+        s->conn_cancelled = 0;
+        s->conn_result   = 0;
+        s->conn_error[0] = '\0';
+        s->conn_start_ms = GetTickCount64();
+        s->conn_dots     = 0;
+        s->conn_hwnd     = hParent;
+
+        s->conn_thread = CreateThread(NULL, 0, connection_thread, s, 0, NULL);
+        if (!s->conn_thread) {
+            term_process(s->term, "\r\nFailed to start connection thread.\r\n", 38);
+            if (tidx >= 0)
+                tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
+            s->conn_state = CONN_IDLE;
+        }
+        invalidate_terminal(hParent);
+    }
+    /* TAB_CONNECTING and TAB_IDLE: no action */
+    (void)index;
+}
+
 static void on_log_toggle(int index, void *user_data) {
     Session *s = (Session *)user_data;
     if (!s) return;
@@ -926,6 +1003,11 @@ static void apply_zoom(HWND hwnd, int delta)
     apply_config_colors();
     renderer_apply_theme(hwnd, g_renderer.defaultBg);
 
+    /* Mark all rows dirty so the renderer repaints with the new font */
+    if (g_active_session && g_active_session->term)
+        term_mark_all_dirty(g_active_session->term);
+    dispbuf_invalidate(&g_renderer.dispbuf);
+
     /* Send synthetic WM_SIZE so terminals resize to the new character grid. */
     RECT rc;
     GetClientRect(hwnd, &rc);
@@ -992,6 +1074,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_theme, g_hInst);
             tabs_set_callbacks(g_hwndTabs, on_tab_select, on_tab_new, on_tab_close, on_settings_clicked, on_log_toggle);
             tabs_set_ai_callback(g_hwndTabs, on_ai_clicked);
+            tabs_set_status_click_callback(g_hwndTabs, on_status_click);
             tabs_set_ai_active(g_hwndTabs,
                                g_config->settings.ai_api_key[0] != '\0');
             tabs_set_theme(g_hwndTabs, g_theme);
@@ -1171,11 +1254,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
                 if (cols != g_active_session->term->cols || rows != g_active_session->term->rows) {
                     term_resize(g_active_session->term, rows, cols);
+                    term_mark_all_dirty(g_active_session->term);
+                    dispbuf_invalidate(&g_renderer.dispbuf);
                     if (g_active_session->channel)
                         ssh_pty_resize(g_active_session->channel, cols, rows);
-                    invalidate_terminal(hwnd);
                 }
             }
+            /* Always repaint the full window on resize so gutter areas
+             * (below/right of the character grid) get filled with the
+             * background colour instead of showing GDI artifacts. */
+            InvalidateRect(hwnd, NULL, FALSE);
             update_scrollbar(hwnd);
             return 0;
         }

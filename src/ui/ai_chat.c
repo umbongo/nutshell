@@ -26,9 +26,11 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define IDC_CHAT_SEND     2003
 #define IDC_CHAT_NEWCHAT  2004
 #define IDC_CHAT_PERMIT   2005
+#define IDC_CHAT_THINKING 2006
 
 #define WM_AI_RESPONSE   (WM_USER + 100)
 #define WM_AI_CONTINUE   (WM_USER + 101)
+#define WM_AI_STREAM     (WM_USER + 102)  /* wParam: 0=thinking, 1=content; lParam: char* */
 
 #define TERM_CONTEXT_ROWS 50
 #define CONTINUE_DELAY_MS 2000  /* Wait for terminal output before continuing */
@@ -48,8 +50,10 @@ typedef struct {
     HWND hSendBtn;
     HWND hNewChatBtn;
     HWND hPermitBtn;
+    HWND hThinkingBtn;
     HWND hTooltip;        /* Win32 tooltip control */
     int permit_write;     /* 0 = read-only (red), 1 = read/write (green) */
+    int show_thinking;    /* 0 = hide reasoning, 1 = show reasoning */
     HFONT hFont;
     HFONT hSmallFont;     /* small bold font for indicator label */
     char font_name[64];
@@ -85,6 +89,7 @@ typedef struct {
     int queued_count;
     int queued_next;       /* index of next command to execute */
     int dpi;
+    int stream_phase;  /* 0=not started, 1=in thinking, 2=in content */
 } AiChatData;
 
 /* Append colored text to the RichEdit chat display.
@@ -202,7 +207,174 @@ static char *format_ai_text(const char *raw)
     return out;
 }
 
-/* Background thread: call AI API */
+/* Heap-allocated struct to pass both content and thinking from thread to UI */
+typedef struct {
+    char *content;
+    char *thinking;
+} AiResponseMsg;
+
+/* Context for SSE streaming callback */
+typedef struct {
+    AiChatData *d;
+    char line_buf[8192];     /* SSE line accumulation buffer */
+    size_t line_len;
+    char full_content[AI_MSG_MAX];   /* accumulated full content */
+    size_t content_len;
+    char full_thinking[AI_MSG_MAX];  /* accumulated full thinking */
+    size_t thinking_len;
+    int in_thinking;         /* 1 while receiving thinking chunks */
+    int header_sent;         /* bitmask: 1=thinking header, 2=content header */
+} StreamContext;
+
+/* Process a single SSE line from the stream */
+static void stream_process_line(StreamContext *ctx, const char *line, size_t len)
+{
+    /* Skip empty lines */
+    if (len == 0) return;
+
+    /* SSE lines start with "data: " */
+    if (len < 6 || strncmp(line, "data: ", 6) != 0) return;
+
+    const char *json = line + 6;
+    char content_delta[1024] = "";
+    char thinking_delta[1024] = "";
+
+    int rc = ai_parse_stream_chunk(json, content_delta, sizeof(content_delta),
+                                   thinking_delta, sizeof(thinking_delta));
+
+    if (rc == 1) {
+        /* [DONE] — stream finished */
+        return;
+    }
+    if (rc < 0) return;
+
+    /* Post thinking delta to UI */
+    if (thinking_delta[0]) {
+        /* Accumulate */
+        size_t dlen = strlen(thinking_delta);
+        if (ctx->thinking_len + dlen < AI_MSG_MAX - 1) {
+            memcpy(ctx->full_thinking + ctx->thinking_len, thinking_delta, dlen);
+            ctx->thinking_len += dlen;
+            ctx->full_thinking[ctx->thinking_len] = '\0';
+        }
+        /* Post to UI for realtime display */
+        PostMessage(ctx->d->hwnd, WM_AI_STREAM, 0, (LPARAM)_strdup(thinking_delta));
+    }
+
+    /* Post content delta to UI */
+    if (content_delta[0]) {
+        /* Accumulate */
+        size_t dlen = strlen(content_delta);
+        if (ctx->content_len + dlen < AI_MSG_MAX - 1) {
+            memcpy(ctx->full_content + ctx->content_len, content_delta, dlen);
+            ctx->content_len += dlen;
+            ctx->full_content[ctx->content_len] = '\0';
+        }
+        /* Post to UI for realtime display */
+        PostMessage(ctx->d->hwnd, WM_AI_STREAM, 1, (LPARAM)_strdup(content_delta));
+    }
+}
+
+/* SSE stream callback — accumulates lines and processes them */
+static int stream_callback(const char *data, size_t len, void *userdata)
+{
+    StreamContext *ctx = (StreamContext *)userdata;
+
+    for (size_t i = 0; i < len; i++) {
+        char c = data[i];
+        if (c == '\n') {
+            /* Strip trailing \r */
+            if (ctx->line_len > 0 && ctx->line_buf[ctx->line_len - 1] == '\r')
+                ctx->line_len--;
+            ctx->line_buf[ctx->line_len] = '\0';
+            stream_process_line(ctx, ctx->line_buf, ctx->line_len);
+            ctx->line_len = 0;
+        } else {
+            if (ctx->line_len < sizeof(ctx->line_buf) - 1)
+                ctx->line_buf[ctx->line_len++] = c;
+        }
+    }
+    return 0;
+}
+
+/* Background thread: streaming AI API call */
+static unsigned __stdcall ai_stream_thread_proc(void *arg)
+{
+    AiChatData *d = (AiChatData *)arg;
+
+    EnterCriticalSection(&d->cs);
+
+    char body[AI_BODY_MAX];
+    size_t body_len = ai_build_request_body_ex(&d->conv, body, sizeof(body), 1);
+
+    char api_key_copy[256];
+    char provider_copy[64];
+    char custom_url_copy[256];
+    strncpy(api_key_copy, d->api_key, sizeof(api_key_copy) - 1);
+    api_key_copy[sizeof(api_key_copy) - 1] = '\0';
+    strncpy(provider_copy, d->provider, sizeof(provider_copy) - 1);
+    provider_copy[sizeof(provider_copy) - 1] = '\0';
+    strncpy(custom_url_copy, d->custom_url, sizeof(custom_url_copy) - 1);
+    custom_url_copy[sizeof(custom_url_copy) - 1] = '\0';
+
+    LeaveCriticalSection(&d->cs);
+
+    if (body_len == 0) {
+        PostMessage(d->hwnd, WM_AI_RESPONSE, 0, (LPARAM)_strdup("Error: failed to build request"));
+        d->busy = 0;
+        return 0;
+    }
+
+    const char *url = ai_provider_url(provider_copy);
+    if (!url && strcmp(provider_copy, "custom") == 0 && custom_url_copy[0])
+        url = custom_url_copy;
+    if (!url) {
+        PostMessage(d->hwnd, WM_AI_RESPONSE, 0, (LPARAM)_strdup("Error: unknown AI provider"));
+        d->busy = 0;
+        return 0;
+    }
+
+    char auth[300];
+    (void)snprintf(auth, sizeof(auth), "Bearer %s", api_key_copy);
+
+    StreamContext ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.d = d;
+
+    int status = 0;
+    char errbuf[256] = "";
+    int rc = ai_http_post_stream(url, auth, body, body_len,
+                                 stream_callback, &ctx,
+                                 &status, errbuf, sizeof(errbuf));
+
+    if (rc != 0 || status < 200 || status >= 300) {
+        char msg[1024];
+        if (rc != 0 && errbuf[0])
+            snprintf(msg, sizeof(msg), "HTTP error: %s", errbuf);
+        else
+            snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
+        PostMessage(d->hwnd, WM_AI_RESPONSE, 0, (LPARAM)_strdup(msg));
+        d->busy = 0;
+        return 0;
+    }
+
+    /* Add assistant message to conversation */
+    EnterCriticalSection(&d->cs);
+    ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, ctx.full_content);
+    LeaveCriticalSection(&d->cs);
+
+    /* Signal stream done — wParam=2 means "streaming complete, do command extraction" */
+    AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(AiResponseMsg));
+    if (rmsg) {
+        rmsg->content = _strdup(ctx.full_content);
+        rmsg->thinking = (ctx.full_thinking[0] != '\0') ? _strdup(ctx.full_thinking) : NULL;
+    }
+    PostMessage(d->hwnd, WM_AI_RESPONSE, 2, (LPARAM)rmsg);
+    d->busy = 0;
+    return 0;
+}
+
+/* Background thread: non-streaming AI API call */
 static unsigned __stdcall ai_thread_proc(void *arg)
 {
     AiChatData *d = (AiChatData *)arg;
@@ -268,9 +440,11 @@ static unsigned __stdcall ai_thread_proc(void *arg)
         return 0;
     }
 
-    /* Parse response */
+    /* Parse response — extract both content and reasoning */
     char content[AI_MSG_MAX];
-    if (ai_parse_response(resp.body, content, sizeof(content)) != 0) {
+    char thinking[AI_MSG_MAX];
+    if (ai_parse_response_ex(resp.body, content, sizeof(content),
+                              thinking, sizeof(thinking)) != 0) {
         char errbuf[1024];
         snprintf(errbuf, sizeof(errbuf),
                  "Error: failed to parse AI response:\n%.900s",
@@ -288,7 +462,12 @@ static unsigned __stdcall ai_thread_proc(void *arg)
     ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, content);
     LeaveCriticalSection(&d->cs);
 
-    PostMessage(d->hwnd, WM_AI_RESPONSE, 1, (LPARAM)_strdup(content));
+    AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(AiResponseMsg));
+    if (rmsg) {
+        rmsg->content  = _strdup(content);
+        rmsg->thinking = (thinking[0] != '\0') ? _strdup(thinking) : NULL;
+    }
+    PostMessage(d->hwnd, WM_AI_RESPONSE, 1, (LPARAM)rmsg);
     d->busy = 0;
     return 0;
 }
@@ -345,9 +524,13 @@ static void send_user_message(AiChatData *d)
     d->indicator_pos = cr_ind.cpMax;
     chat_append_ops(d->hDisplay, "\r\n(thinking...)");
 
-    /* Spawn background thread */
+    /* Spawn background thread — use streaming when thinking is enabled */
     d->busy = 1;
-    _beginthreadex(NULL, 0, ai_thread_proc, d, 0, NULL);
+    d->stream_phase = 0;
+    if (d->show_thinking)
+        _beginthreadex(NULL, 0, ai_stream_thread_proc, d, 0, NULL);
+    else
+        _beginthreadex(NULL, 0, ai_thread_proc, d, 0, NULL);
 }
 
 static void execute_command(AiChatData *d, const char *cmd)
@@ -403,7 +586,10 @@ static void send_continue_message(AiChatData *d)
     chat_append_ops(d->hDisplay, "\r\n(continuing...)");
 
     d->busy = 1;
-    _beginthreadex(NULL, 0, ai_thread_proc, d, 0, NULL);
+    if (d->show_thinking)
+        _beginthreadex(NULL, 0, ai_stream_thread_proc, d, 0, NULL);
+    else
+        _beginthreadex(NULL, 0, ai_thread_proc, d, 0, NULL);
 }
 
 /* Subclass proc for the multiline input: Enter sends, Shift+Enter inserts newline */
@@ -485,13 +671,16 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
     if (indicH < 4) indicH = 4;
     int indY = rc.top + (btnH - indicH) / 2;
 
-    /* For Permit Write button: draw status indicator (matches tab indicator) */
+    /* For Permit Write / Thinking buttons: draw status indicator */
     int text_left = rc.left;
-    if ((int)dis->CtlID == IDC_CHAT_PERMIT && d) {
+    if (((int)dis->CtlID == IDC_CHAT_PERMIT ||
+         (int)dis->CtlID == IDC_CHAT_THINKING) && d) {
+        int is_active = ((int)dis->CtlID == IDC_CHAT_PERMIT)
+                      ? d->permit_write : d->show_thinking;
         int indW = MulDiv(AI_INDICATOR_W_BASE, d->dpi, 96);
         int indGap = MulDiv(AI_INDICATOR_GAP_BASE, d->dpi, 96);
         int indX = rc.left + indGap;
-        COLORREF dot_col = d->permit_write ? RGB(0, 160, 80) : RGB(200, 50, 50);
+        COLORREF dot_col = is_active ? RGB(0, 160, 80) : RGB(200, 50, 50);
         HBRUSH hDot = CreateSolidBrush(dot_col);
         HPEN hDotPen = CreatePen(PS_SOLID, 1, dot_col);
         HGDIOBJ oBr = SelectObject(hdc, hDot);
@@ -565,6 +754,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             pad + S(78) + pad, pad, S(115), btn_h,
             hwnd, (HMENU)IDC_CHAT_PERMIT, NULL, NULL);
 
+        /* Show Thinking button */
+        nd->show_thinking = 0; /* default: off */
+        nd->hThinkingBtn = CreateWindow("BUTTON", "Thinking",
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+            pad + S(78) + pad + S(115) + pad, pad, S(100), btn_h,
+            hwnd, (HMENU)IDC_CHAT_THINKING, NULL, NULL);
+
         /* Chat display: read-only RichEdit for colored text */
         int input_h = S(46); /* ~2 lines for multiline input */
         int margin = S(5);
@@ -632,6 +828,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 "Green = AI can execute any command.\n"
                 "Red = AI can only run read-only commands\n"
                 "(ls, cat, pwd, etc).");
+            add_tooltip(nd->hTooltip, nd->hThinkingBtn,
+                "Show Thinking\n"
+                "Toggle display of AI reasoning/thinking.\n"
+                "Green = show reasoning content.\n"
+                "Red = hide reasoning content.\n"
+                "Works with models that provide reasoning\n"
+                "(e.g. DeepSeek Reasoner).");
             add_tooltip(nd->hTooltip, nd->hSendBtn,
                 "Send\nSend your message to the AI.\n"
                 "Shortcut: press Enter in the input box.");
@@ -659,6 +862,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         int send_w = S(40);
         MoveWindow(d->hNewChatBtn, pad, pad, S(78), btn_h, TRUE);
         MoveWindow(d->hPermitBtn, pad + S(78) + pad, pad, S(115), btn_h, TRUE);
+        MoveWindow(d->hThinkingBtn, pad + S(78) + pad + S(115) + pad, pad, S(100), btn_h, TRUE);
         MoveWindow(d->hDisplay, margin, top_y, cw - margin * 2, ch - input_h - top_y - margin * 2, TRUE);
         MoveWindow(d->hInput, margin, ch - input_h - margin, cw - send_w - margin * 3, input_h, TRUE);
         MoveWindow(d->hSendBtn, cw - send_w - margin, ch - input_h - margin, send_w, input_h, TRUE);
@@ -698,6 +902,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 InvalidateRect(d->hPermitBtn, NULL, TRUE);
             }
             return 0;
+        case IDC_CHAT_THINKING:
+            if (d) {
+                d->show_thinking = !d->show_thinking;
+                InvalidateRect(d->hThinkingBtn, NULL, TRUE);
+            }
+            return 0;
         case IDC_CHAT_INPUT:
             /* Handle Enter key in input (via EN_CHANGE notification is wrong;
              * we handle it via WM_KEYDOWN subclass or default button) */
@@ -705,10 +915,49 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
         break;
 
+    case WM_AI_STREAM: {
+        /* Realtime streaming chunk: wParam 0=thinking, 1=content */
+        if (!d) break;
+        char *delta = (char *)lParam;
+        if (!delta) break;
+
+        /* Remove the (thinking...) indicator on first chunk */
+        if (d->indicator_pos >= 0) {
+            int end_pos = GetWindowTextLength(d->hDisplay);
+            SendMessage(d->hDisplay, EM_SETSEL,
+                        (WPARAM)d->indicator_pos, (LPARAM)end_pos);
+            SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
+            d->indicator_pos = -1;
+        }
+
+        if (wParam == 0) {
+            /* Thinking chunk */
+            if (d->stream_phase != 1) {
+                chat_append_ops(d->hDisplay, "\r\n--- Thinking ---\r\n");
+                d->stream_phase = 1;
+            }
+            COLORREF col_dim = d->theme ? theme_cr(d->theme->text_dim)
+                                        : RGB(140, 140, 140);
+            chat_append_styled(d->hDisplay, delta, col_dim, 1);
+        } else {
+            /* Content chunk */
+            if (d->stream_phase != 2) {
+                if (d->stream_phase == 1)
+                    chat_append_ops(d->hDisplay, "\r\n");
+                chat_append_ops(d->hDisplay, "\r\n--- AI ---\r\n");
+                d->stream_phase = 2;
+            }
+            COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main)
+                                       : GetSysColor(COLOR_WINDOWTEXT);
+            chat_append_color(d->hDisplay, delta, col_ai);
+        }
+
+        free(delta);
+        return 0;
+    }
+
     case WM_AI_RESPONSE: {
         if (!d) break;
-        char *text = (char *)lParam;
-        if (!text) break;
 
         /* Remove thinking/continuing indicator using saved position */
         if (d->indicator_pos >= 0) {
@@ -720,21 +969,41 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
 
         if (wParam == 1) {
+            /* Non-streaming success — lParam is AiResponseMsg* */
+            AiResponseMsg *rmsg = (AiResponseMsg *)lParam;
+            if (!rmsg) break;
+            char *text = rmsg->content;
+            char *thinking = rmsg->thinking;
+
             COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT);
+
+            /* Show thinking/reasoning if toggle is on and content exists */
+            if (d->show_thinking && thinking && thinking[0]) {
+                chat_append_ops(d->hDisplay, "\r\n--- Thinking ---\r\n");
+                COLORREF col_dim = d->theme ? theme_cr(d->theme->text_dim) : RGB(140, 140, 140);
+                char *fmt_think = format_ai_text(thinking);
+                if (fmt_think) {
+                    chat_append_styled(d->hDisplay, fmt_think, col_dim, 1);
+                    free(fmt_think);
+                } else {
+                    chat_append_styled(d->hDisplay, thinking, col_dim, 1);
+                }
+                chat_append_styled(d->hDisplay, "\r\n", col_dim, 1);
+            }
 
             chat_append_ops(d->hDisplay, "\r\n--- AI ---\r\n");
             char *formatted = format_ai_text(text);
             if (formatted) {
                 chat_append_color(d->hDisplay, formatted, col_ai);
                 free(formatted);
-            } else {
+            } else if (text) {
                 chat_append_color(d->hDisplay, text, col_ai);
             }
             chat_append_color(d->hDisplay, "\r\n", col_ai);
 
-            /* Check for executable commands (supports multiple) */
+            /* Extract commands and handle them */
             char cmds[16][1024];
-            int ncmds = ai_extract_commands(text, cmds, 16);
+            int ncmds = text ? ai_extract_commands(text, cmds, 16) : 0;
 
             /* Filter out write commands when permit_write is off */
             if (ncmds > 0 && !d->permit_write) {
@@ -747,16 +1016,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                sizeof(filtered[0]));
                         nfiltered++;
                     } else {
-                        chat_append_ops(d->hDisplay,
-                            "  [blocked: ");
-                        chat_append_ops(d->hDisplay,
-                            cmds[ci]);
-                        chat_append_ops(d->hDisplay,
-                            "]\r\n");
+                        chat_append_ops(d->hDisplay, "  [blocked: ");
+                        chat_append_ops(d->hDisplay, cmds[ci]);
+                        chat_append_ops(d->hDisplay, "]\r\n");
                     }
                 }
-                /* Inform the AI about blocked commands so it doesn't
-                 * falsely claim they were executed */
                 if (nfiltered < ncmds_before) {
                     char bmsg[2048];
                     int bp = snprintf(bmsg, sizeof(bmsg),
@@ -783,7 +1047,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
 
             if (ncmds > 0) {
-                /* Build a single confirmation dialog listing all commands */
                 char confirm[4096];
                 size_t clen = ai_build_confirm_text(cmds, ncmds,
                                                      confirm, sizeof(confirm));
@@ -795,19 +1058,16 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (result == IDYES) {
                     chat_append_ops(d->hDisplay,
                                     "\r\n--- Commands ---\r\n");
-                    /* Queue commands for delayed execution */
                     memcpy(d->queued_cmds, cmds,
                            (size_t)ncmds * sizeof(cmds[0]));
                     d->queued_count = ncmds;
                     d->queued_next = 0;
-                    /* Execute first command immediately */
                     execute_command(d, d->queued_cmds[0]);
                     d->queued_next = 1;
                     if (ncmds > 1 && d->paste_delay_ms > 0) {
                         SetTimer(hwnd, TIMER_CMD_QUEUE,
                                  (UINT)d->paste_delay_ms, NULL);
                     } else {
-                        /* No delay: execute remaining immediately */
                         for (int ci = 1; ci < ncmds; ci++)
                             execute_command(d, d->queued_cmds[ci]);
                         d->queued_next = ncmds;
@@ -820,15 +1080,116 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                     "\r\n  [all commands cancelled]\r\n");
                 }
             }
+
+            free(text);
+            free(thinking);
+            free(rmsg);
+        } else if (wParam == 2) {
+            /* Streaming complete — text already displayed, do command extraction */
+            AiResponseMsg *rmsg = (AiResponseMsg *)lParam;
+            if (!rmsg) break;
+            char *text = rmsg->content;
+
+            /* End the streaming section */
+            chat_append_color(d->hDisplay, "\r\n",
+                d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT));
+            d->stream_phase = 0;
+
+            /* Extract commands from the full accumulated content */
+            char cmds[16][1024];
+            int ncmds = text ? ai_extract_commands(text, cmds, 16) : 0;
+
+            /* Filter out write commands when permit_write is off */
+            if (ncmds > 0 && !d->permit_write) {
+                int ncmds_before = ncmds;
+                char filtered[16][1024];
+                int nfiltered = 0;
+                for (int ci = 0; ci < ncmds; ci++) {
+                    if (ai_command_is_readonly(cmds[ci])) {
+                        memcpy(filtered[nfiltered], cmds[ci],
+                               sizeof(filtered[0]));
+                        nfiltered++;
+                    } else {
+                        chat_append_ops(d->hDisplay, "  [blocked: ");
+                        chat_append_ops(d->hDisplay, cmds[ci]);
+                        chat_append_ops(d->hDisplay, "]\r\n");
+                    }
+                }
+                if (nfiltered < ncmds_before) {
+                    char bmsg[2048];
+                    int bp = snprintf(bmsg, sizeof(bmsg),
+                        "NOTE: The following commands were BLOCKED by "
+                        "the user's read-only security policy and were "
+                        "NOT executed:\n");
+                    for (int ci = 0; ci < ncmds; ci++) {
+                        if (!ai_command_is_readonly(cmds[ci]))
+                            bp += snprintf(bmsg + bp,
+                                sizeof(bmsg) - (size_t)bp,
+                                "  - %s\n", cmds[ci]);
+                    }
+                    snprintf(bmsg + bp, sizeof(bmsg) - (size_t)bp,
+                        "Do NOT claim these commands were executed. "
+                        "If the user needs these actions, tell them "
+                        "to enable 'Permit Write' and try again.");
+                    EnterCriticalSection(&d->cs);
+                    ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
+                    LeaveCriticalSection(&d->cs);
+                }
+                memcpy(cmds, filtered,
+                       (size_t)nfiltered * sizeof(cmds[0]));
+                ncmds = nfiltered;
+            }
+
+            if (ncmds > 0) {
+                char confirm[4096];
+                size_t clen = ai_build_confirm_text(cmds, ncmds,
+                                                     confirm, sizeof(confirm));
+                if (clen == 0)
+                    snprintf(confirm, sizeof(confirm), "Execute %d command(s)?", ncmds);
+
+                int result = MessageBox(hwnd, confirm, "Execute Commands",
+                                       MB_YESNO | MB_ICONQUESTION);
+                if (result == IDYES) {
+                    chat_append_ops(d->hDisplay,
+                                    "\r\n--- Commands ---\r\n");
+                    memcpy(d->queued_cmds, cmds,
+                           (size_t)ncmds * sizeof(cmds[0]));
+                    d->queued_count = ncmds;
+                    d->queued_next = 0;
+                    execute_command(d, d->queued_cmds[0]);
+                    d->queued_next = 1;
+                    if (ncmds > 1 && d->paste_delay_ms > 0) {
+                        SetTimer(hwnd, TIMER_CMD_QUEUE,
+                                 (UINT)d->paste_delay_ms, NULL);
+                    } else {
+                        for (int ci = 1; ci < ncmds; ci++)
+                            execute_command(d, d->queued_cmds[ci]);
+                        d->queued_next = ncmds;
+                        d->commands_executed = ncmds;
+                        SetTimer(hwnd, TIMER_CONTINUE,
+                                 CONTINUE_DELAY_MS, NULL);
+                    }
+                } else {
+                    chat_append_ops(d->hDisplay,
+                                    "\r\n  [all commands cancelled]\r\n");
+                }
+            }
+
+            free(text);
+            free(rmsg->thinking);
+            free(rmsg);
         } else {
-            /* Error */
+            /* Error — lParam is plain char* */
+            char *text = (char *)lParam;
+            if (!text) break;
+            d->stream_phase = 0;
             chat_append_ops(d->hDisplay,
                             "\r\n--- Error ---\r\n");
             chat_append_ops(d->hDisplay, text);
             chat_append_ops(d->hDisplay, "\r\n");
+            free(text);
         }
 
-        free(text);
         return 0;
     }
 

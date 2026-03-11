@@ -60,19 +60,32 @@ void renderer_free(Renderer *r) {
     dispbuf_free(&r->dispbuf);
 }
 
-/* Helper to find the TermRow for a given screen row index */
+/* Helper to find the TermRow for a given screen row index.
+ * Must match parser.c get_screen_row() logic so the renderer sees the
+ * same rows the parser writes to.  After resize with sparse content
+ * lines_count can be < rows; the rows beyond lines_count are still
+ * pre-allocated and the parser writes to them, so we must access them. */
 static TermRow *get_visible_row(Terminal *term, int screen_row) {
-    int total = term->lines_count;
-    int view_height = term->rows;
+    if (screen_row < 0 || screen_row >= term->rows) return NULL;
+
     int offset = term->scrollback_offset;
-    
-    /* Calculate the logical index of the top visible line */
-    int effective_top = total - view_height - offset;
-    if (effective_top < 0) effective_top = 0;
-    
-    int logical_idx = effective_top + screen_row;
-    if (logical_idx >= total) return NULL;
-    
+    int top_logical;
+    if (offset == 0) {
+        /* Normal view — same as parser's get_screen_row */
+        top_logical = (term->lines_count >= term->rows)
+                    ? (term->lines_count - term->rows) : 0;
+    } else {
+        /* Scrolled back — shift view up */
+        top_logical = (term->lines_count >= term->rows)
+                    ? (term->lines_count - term->rows - offset) : -offset;
+        if (top_logical < 0) top_logical = 0;
+    }
+
+    int logical_idx = top_logical + screen_row;
+    /* When lines_count < rows the logical index can exceed lines_count.
+     * The row is still allocated (pre-allocated by init/resize) so return it. */
+    if (logical_idx >= term->lines_capacity) return NULL;
+
     int physical_idx = (term->lines_start + logical_idx) % term->lines_capacity;
     return term->lines[physical_idx];
 }
@@ -147,12 +160,28 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         if (py + r->charHeight < paintRect->top || py > paintRect->bottom) continue;
 
         TermRow *row = get_visible_row(term, row_idx);
-        if (!row) continue;
+        if (!row) {
+            /* No terminal content for this row (lines_count < rows after resize).
+             * Paint background if the display buffer says these cells are dirty. */
+            if (!dispbuf_cell_clean(&r->dispbuf, row_idx, 0,
+                                     0, (uint32_t)r->defaultBg, (uint32_t)r->defaultBg, 0)) {
+                RECT emptyRect = {x, py, x + term->cols * r->charWidth, py + r->charHeight};
+                SetBkColor(hdc, r->defaultBg);
+                ExtTextOutW(hdc, x, py, ETO_OPAQUE, &emptyRect, L"", 0, NULL);
+                /* Mark all cells in this row as painted with background */
+                for (int c = 0; c < term->cols; c++) {
+                    dispbuf_cell_update(&r->dispbuf, row_idx, c,
+                                        0, (uint32_t)r->defaultBg, (uint32_t)r->defaultBg, 0);
+                }
+            }
+            continue;
+        }
 
         /* Skip clean rows that don't contain the cursor and aren't selected.
          * When scrolled back, visible rows differ from what was last painted,
          * so we must repaint all of them regardless of dirty flags.
-         * Also repaint the previous cursor row to erase the ghost cursor. */
+         * Also repaint the previous cursor row to erase the ghost cursor.
+         * After a full invalidation (font/zoom/resize) repaint everything. */
         if (term->scrollback_offset == 0 &&
             !row->dirty && row_idx != cursor_row && row_idx != prev_row &&
             !has_sel) continue;

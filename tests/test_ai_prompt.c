@@ -877,3 +877,185 @@ int test_ai_confirm_text_numbering(void) {
     ASSERT_TRUE(strstr(buf, "5 commands") != NULL);
     TEST_END();
 }
+
+/* --- ai_parse_response_ex tests (thinking/reasoning content) --- */
+
+int test_ai_parse_response_ex_no_thinking(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"choices\":[{\"message\":{\"content\":\"Hello from AI\"}}]}";
+    char content[256], thinking[256];
+    ASSERT_EQ(ai_parse_response_ex(json, content, sizeof(content),
+                                    thinking, sizeof(thinking)), 0);
+    ASSERT_STR_EQ(content, "Hello from AI");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+int test_ai_parse_response_ex_with_reasoning(void) {
+    TEST_BEGIN();
+    /* DeepSeek reasoner format: reasoning_content alongside content */
+    const char *json =
+        "{\"choices\":[{\"message\":{"
+        "\"reasoning_content\":\"Let me think about this...\","
+        "\"content\":\"The answer is 42.\"}}]}";
+    char content[256], thinking[256];
+    ASSERT_EQ(ai_parse_response_ex(json, content, sizeof(content),
+                                    thinking, sizeof(thinking)), 0);
+    ASSERT_STR_EQ(content, "The answer is 42.");
+    ASSERT_STR_EQ(thinking, "Let me think about this...");
+    TEST_END();
+}
+
+int test_ai_parse_response_ex_null_thinking_buf(void) {
+    TEST_BEGIN();
+    /* If thinking_out is NULL, should still work (just ignore thinking) */
+    const char *json =
+        "{\"choices\":[{\"message\":{"
+        "\"reasoning_content\":\"thinking...\","
+        "\"content\":\"answer\"}}]}";
+    char content[256];
+    ASSERT_EQ(ai_parse_response_ex(json, content, sizeof(content),
+                                    NULL, 0), 0);
+    ASSERT_STR_EQ(content, "answer");
+    TEST_END();
+}
+
+/* --- ai_build_request_body_ex stream tests --- */
+
+int test_ai_build_body_stream_true(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test-model");
+    ai_conv_add(&conv, AI_ROLE_USER, "hello");
+    char buf[4096];
+    size_t n = ai_build_request_body_ex(&conv, buf, sizeof(buf), 1);
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "\"stream\":true") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"stream\":false") == NULL);
+    TEST_END();
+}
+
+int test_ai_build_body_stream_false(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test-model");
+    ai_conv_add(&conv, AI_ROLE_USER, "hello");
+    char buf[4096];
+    size_t n = ai_build_request_body_ex(&conv, buf, sizeof(buf), 0);
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "\"stream\":false") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"stream\":true") == NULL);
+    TEST_END();
+}
+
+int test_ai_build_body_ex_matches_original(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "gpt-4o");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "You are helpful.");
+    ai_conv_add(&conv, AI_ROLE_USER, "Hello");
+    char buf1[4096], buf2[4096];
+    size_t n1 = ai_build_request_body(&conv, buf1, sizeof(buf1));
+    size_t n2 = ai_build_request_body_ex(&conv, buf2, sizeof(buf2), 0);
+    ASSERT_EQ((int)n1, (int)n2);
+    ASSERT_STR_EQ(buf1, buf2);
+    TEST_END();
+}
+
+/* --- ai_parse_stream_chunk tests --- */
+
+int test_ai_parse_stream_chunk_content(void) {
+    TEST_BEGIN();
+    const char *json = "{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}";
+    char content[256], thinking[256];
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "Hello");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_thinking(void) {
+    TEST_BEGIN();
+    const char *json = "{\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me think...\"}}]}";
+    char content[256], thinking[256];
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "");
+    ASSERT_STR_EQ(thinking, "Let me think...");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_both(void) {
+    TEST_BEGIN();
+    const char *json = "{\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm\",\"content\":\"ok\"}}]}";
+    char content[256], thinking[256];
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "ok");
+    ASSERT_STR_EQ(thinking, "hmm");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_done(void) {
+    TEST_BEGIN();
+    int rc = ai_parse_stream_chunk("[DONE]", NULL, 0, NULL, 0);
+    ASSERT_EQ(rc, 1);
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_role_only(void) {
+    TEST_BEGIN();
+    /* First chunk often has just the role, no content */
+    const char *json = "{\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}";
+    char content[256], thinking[256];
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_empty_delta(void) {
+    TEST_BEGIN();
+    const char *json = "{\"choices\":[{\"delta\":{}}]}";
+    char content[256], thinking[256];
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_null(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_parse_stream_chunk(NULL, NULL, 0, NULL, 0), -1);
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_malformed(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_parse_stream_chunk("not json", NULL, 0, NULL, 0), -1);
+    ASSERT_EQ(ai_parse_stream_chunk("{}", NULL, 0, NULL, 0), -1);
+    TEST_END();
+}
+
+int test_ai_parse_response_ex_empty_reasoning(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"choices\":[{\"message\":{"
+        "\"reasoning_content\":\"\","
+        "\"content\":\"direct answer\"}}]}";
+    char content[256], thinking[256];
+    ASSERT_EQ(ai_parse_response_ex(json, content, sizeof(content),
+                                    thinking, sizeof(thinking)), 0);
+    ASSERT_STR_EQ(content, "direct answer");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}

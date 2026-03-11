@@ -202,6 +202,136 @@ int ai_http_post(const char *url, const char *auth_header,
     return 0;
 }
 
+int ai_http_post_stream(const char *url, const char *auth_header,
+                        const char *body, size_t body_len,
+                        AiStreamCallback cb, void *userdata,
+                        int *status_out, char *error, size_t error_size)
+{
+    if (status_out) *status_out = 0;
+    if (error && error_size > 0) error[0] = '\0';
+
+    if (!url || !body || !cb) {
+        if (error) snprintf(error, error_size, "NULL url, body, or callback");
+        return -1;
+    }
+
+    wchar_t host[256], path[1024];
+    int port, use_ssl;
+    if (parse_url(url, host, 256, path, 1024, &port, &use_ssl) != 0) {
+        if (error) snprintf(error, error_size, "Invalid URL");
+        return -1;
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"Nutshell/1.0",
+                                     WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                     WINHTTP_NO_PROXY_NAME,
+                                     WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        if (error) snprintf(error, error_size, "WinHttpOpen failed: %lu",
+                            GetLastError());
+        return -1;
+    }
+
+    if (use_ssl) {
+        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
+                        | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+        WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS,
+                         &protocols, sizeof(protocols));
+    }
+
+    /* Streaming can take a long time — 5 min receive timeout */
+    WinHttpSetTimeouts(hSession, 0, 60000, 30000, 300000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host, (INTERNET_PORT)port, 0);
+    if (!hConnect) {
+        if (error) snprintf(error, error_size, "WinHttpConnect failed: %lu",
+                            GetLastError());
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
+    DWORD flags = use_ssl ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", path,
+                                            NULL, WINHTTP_NO_REFERER,
+                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                            flags);
+    if (!hRequest) {
+        if (error) snprintf(error, error_size, "WinHttpOpenRequest failed: %lu",
+                            GetLastError());
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
+    WinHttpAddRequestHeaders(hRequest,
+        L"Content-Type: application/json\r\n",
+        (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+
+    if (auth_header && auth_header[0]) {
+        wchar_t auth_w[512];
+        int len = MultiByteToWideChar(CP_UTF8, 0, auth_header, -1, auth_w, 512);
+        if (len > 0) {
+            wchar_t hdr[600];
+            swprintf(hdr, 600, L"Authorization: %ls\r\n", auth_w);
+            WinHttpAddRequestHeaders(hRequest, hdr, (DWORD)-1,
+                                     WINHTTP_ADDREQ_FLAG_ADD);
+        }
+    }
+
+    BOOL sent = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                   (LPVOID)body, (DWORD)body_len,
+                                   (DWORD)body_len, 0);
+    if (!sent) {
+        if (error) snprintf(error, error_size, "WinHttpSendRequest failed: %lu",
+                            GetLastError());
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
+    if (!WinHttpReceiveResponse(hRequest, NULL)) {
+        if (error) snprintf(error, error_size,
+                            "WinHttpReceiveResponse failed: %lu", GetLastError());
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
+    DWORD http_status = 0, ssz = sizeof(http_status);
+    WinHttpQueryHeaders(hRequest,
+        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX, &http_status, &ssz, WINHTTP_NO_HEADER_INDEX);
+    if (status_out) *status_out = (int)http_status;
+
+    /* Read chunks and pass to callback */
+    int ret = 0;
+    char chunk_buf[4096];
+    DWORD bytes_read;
+    for (;;) {
+        DWORD avail = 0;
+        if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
+        if (avail == 0) break;
+
+        DWORD to_read = avail < sizeof(chunk_buf) - 1
+                       ? avail : (DWORD)(sizeof(chunk_buf) - 1);
+        if (!WinHttpReadData(hRequest, chunk_buf, to_read, &bytes_read)) break;
+        if (bytes_read == 0) break;
+
+        chunk_buf[bytes_read] = '\0';
+        if (cb(chunk_buf, (size_t)bytes_read, userdata) != 0) {
+            ret = 0; /* caller aborted — not an error */
+            break;
+        }
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return ret;
+}
+
 int ai_http_get(const char *url, const char * const *headers,
                 AiHttpResponse *resp)
 {
@@ -367,6 +497,18 @@ int ai_http_get(const char *url, const char * const *headers,
     if (!resp) return -1;
     memset(resp, 0, sizeof(*resp));
     snprintf(resp->error, sizeof(resp->error), "HTTP not available on this platform");
+    return -1;
+}
+
+int ai_http_post_stream(const char *url, const char *auth_header,
+                        const char *body, size_t body_len,
+                        AiStreamCallback cb, void *userdata,
+                        int *status_out, char *error, size_t error_size)
+{
+    (void)url; (void)auth_header; (void)body; (void)body_len;
+    (void)cb; (void)userdata; (void)status_out;
+    if (error && error_size > 0)
+        snprintf(error, error_size, "HTTP not available on this platform");
     return -1;
 }
 

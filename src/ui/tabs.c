@@ -51,6 +51,7 @@ typedef struct TabControlData {
     TabSettingsCallback  on_settings;
     TabLogToggleCallback on_log_toggle;
     TabAiCallback        on_ai;
+    TabStatusClickCallback on_status_click;
 
     HFONT hFont;
     HFONT hSmallFont;  /* cached small font for indicator labels */
@@ -492,6 +493,18 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                             data->on_close(i, data->m.tabs[i].user_data);
                         return 0;
                     }
+                    /* Check status indicator dot */
+                    int indX_h = x + indGap_h;
+                    int indH_h = tabH - S(10);
+                    if (indH_h < S(4)) indH_h = S(4);
+                    int indY_h = tabY + (tabH - indH_h) / 2;
+                    if (mx >= indX_h && mx <= indX_h + indW_h &&
+                        my >= indY_h && my <= indY_h + indH_h) {
+                        if (data->on_status_click)
+                            data->on_status_click(i, data->m.tabs[i].user_data,
+                                                  data->m.tabs[i].status);
+                        return 0;
+                    }
                     /* Check log button */
                     int logBtnX = x + indGap_h + indW_h + indGap_h;
                     int logBtnH = tabH - S(6);
@@ -694,6 +707,13 @@ void tabs_set_theme(HWND hwnd, const ThemeColors *theme)
     if (!data) return;
     data->theme = theme;
     InvalidateRect(hwnd, NULL, FALSE);
+}
+
+void tabs_set_status_click_callback(HWND hwnd, TabStatusClickCallback on_status_click)
+{
+    TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!data) return;
+    data->on_status_click = on_status_click;
 }
 
 #endif

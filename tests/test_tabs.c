@@ -409,3 +409,78 @@ int test_tabs_btn_tooltip_past_add(void)
     ASSERT_NULL(tip);
     TEST_END();
 }
+
+/* =========================================================================
+ * Status dot click — action depends on tab status
+ * ========================================================================= */
+
+/* Connected tab: status click should report TAB_CONNECTED */
+int test_tabmgr_status_click_connected(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "Server", (void *)1);
+    tabmgr_set_status(&m, 0, TAB_CONNECTED);
+    /* Simulate what the click handler does: read status to decide action */
+    TabStatus s = tabmgr_get_status(&m, 0);
+    ASSERT_EQ(s, TAB_CONNECTED);
+    TEST_END();
+}
+
+/* Disconnected tab: status click should report TAB_DISCONNECTED */
+int test_tabmgr_status_click_disconnected(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "Server", (void *)1);
+    tabmgr_set_status(&m, 0, TAB_DISCONNECTED);
+    TabStatus s = tabmgr_get_status(&m, 0);
+    ASSERT_EQ(s, TAB_DISCONNECTED);
+    TEST_END();
+}
+
+/* Connecting tab: status click should report TAB_CONNECTING (no action) */
+int test_tabmgr_status_click_connecting(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "Server", (void *)1);
+    tabmgr_set_status(&m, 0, TAB_CONNECTING);
+    TabStatus s = tabmgr_get_status(&m, 0);
+    ASSERT_EQ(s, TAB_CONNECTING);
+    TEST_END();
+}
+
+/* Idle tab: status click should report TAB_IDLE (no action) */
+int test_tabmgr_status_click_idle(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "Server", (void *)1);
+    TabStatus s = tabmgr_get_status(&m, 0);
+    ASSERT_EQ(s, TAB_IDLE);
+    TEST_END();
+}
+
+/* Status click on correct tab among multiple */
+int test_tabmgr_status_click_correct_tab(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    tabmgr_add(&m, "A", (void *)1);
+    tabmgr_add(&m, "B", (void *)2);
+    tabmgr_add(&m, "C", (void *)3);
+    tabmgr_set_status(&m, 0, TAB_CONNECTED);
+    tabmgr_set_status(&m, 1, TAB_DISCONNECTED);
+    tabmgr_set_status(&m, 2, TAB_CONNECTING);
+    /* Each tab has independent status */
+    ASSERT_EQ(tabmgr_get_status(&m, 0), TAB_CONNECTED);
+    ASSERT_EQ(tabmgr_get_status(&m, 1), TAB_DISCONNECTED);
+    ASSERT_EQ(tabmgr_get_status(&m, 2), TAB_CONNECTING);
+    TEST_END();
+}

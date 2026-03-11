@@ -11,12 +11,9 @@ int test_dispbuf_init_zeroed(void) {
     ASSERT_EQ(db.rows, 4);
     ASSERT_EQ(db.cols, 10);
     ASSERT_NOT_NULL(db.cells);
-    /* All cells should be zero (codepoint=0, fg=0, bg=0, flags=0) */
+    /* All cells should have sentinel codepoint (dirty) after init */
     for (int i = 0; i < 4 * 10; i++) {
-        ASSERT_EQ(db.cells[i].codepoint, 0u);
-        ASSERT_EQ(db.cells[i].fg, 0u);
-        ASSERT_EQ(db.cells[i].bg, 0u);
-        ASSERT_EQ(db.cells[i].flags, 0u);
+        ASSERT_EQ(db.cells[i].codepoint, 0xFFFFFFFFu);
     }
     dispbuf_free(&db);
     TEST_END();
@@ -32,7 +29,7 @@ int test_dispbuf_resize_clears(void) {
     dispbuf_resize(&db, 3, 8);
     ASSERT_EQ(db.rows, 3);
     ASSERT_EQ(db.cols, 8);
-    ASSERT_EQ(db.cells[0].codepoint, 0u);
+    ASSERT_EQ(db.cells[0].codepoint, 0xFFFFFFFFu);
     dispbuf_free(&db);
     TEST_END();
 }
@@ -102,5 +99,34 @@ int test_dispbuf_free_null(void) {
     memset(&db, 0, sizeof(db));
     dispbuf_free(&db);  /* should not crash */
     ASSERT_NULL(db.cells);
+    TEST_END();
+}
+
+/* After init, zero-codepoint cells must still be dirty (not match empty cells)
+ * so the renderer paints the background colour on every cell at least once. */
+int test_dispbuf_init_all_dirty(void) {
+    TEST_BEGIN();
+    DisplayBuffer db;
+    dispbuf_init(&db, 2, 3);
+    /* An empty terminal cell has codepoint=0, fg=0, bg=0, flags=0.
+     * This must NOT match the initial display buffer state. */
+    for (int r = 0; r < 2; r++)
+        for (int c = 0; c < 3; c++)
+            ASSERT_FALSE(dispbuf_cell_clean(&db, r, c, 0, 0, 0, 0));
+    dispbuf_free(&db);
+    TEST_END();
+}
+
+/* After resize, all cells must be dirty (same rationale as init). */
+int test_dispbuf_resize_all_dirty(void) {
+    TEST_BEGIN();
+    DisplayBuffer db;
+    dispbuf_init(&db, 2, 3);
+    dispbuf_cell_update(&db, 0, 0, 'A', 0xFF, 0x00, 1);
+    dispbuf_resize(&db, 4, 5);
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 5; c++)
+            ASSERT_FALSE(dispbuf_cell_clean(&db, r, c, 0, 0, 0, 0));
+    dispbuf_free(&db);
     TEST_END();
 }

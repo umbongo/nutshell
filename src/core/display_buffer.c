@@ -9,6 +9,8 @@ void dispbuf_init(DisplayBuffer *db, int rows, int cols)
     db->cells = (DisplayCell *)calloc(n, sizeof(DisplayCell));
     db->rows = rows;
     db->cols = cols;
+    /* Mark all cells dirty so the first paint covers every pixel */
+    dispbuf_invalidate(db);
 }
 
 void dispbuf_free(DisplayBuffer *db)
@@ -28,6 +30,8 @@ void dispbuf_resize(DisplayBuffer *db, int rows, int cols)
     db->cells = (DisplayCell *)calloc(n, sizeof(DisplayCell));
     db->rows = rows;
     db->cols = cols;
+    /* Mark all cells dirty so every pixel is repainted after resize */
+    dispbuf_invalidate(db);
 }
 
 void dispbuf_invalidate(DisplayBuffer *db)

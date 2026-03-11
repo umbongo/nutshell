@@ -116,8 +116,8 @@ static const char *role_str(AiRole role)
     return "user";
 }
 
-size_t ai_build_request_body(const AiConversation *conv,
-                             char *buf, size_t buf_size)
+size_t ai_build_request_body_ex(const AiConversation *conv,
+                                char *buf, size_t buf_size, int stream)
 {
     if (!conv || !buf || buf_size == 0 || conv->msg_count == 0) return 0;
 
@@ -131,7 +131,8 @@ size_t ai_build_request_body(const AiConversation *conv,
     pos = json_escape_str(conv->model, buf, buf_size, pos);
     if (pos == 0) return 0;
 
-    const char *mid = ",\"stream\":false,\"messages\":[";
+    const char *mid = stream ? ",\"stream\":true,\"messages\":["
+                             : ",\"stream\":false,\"messages\":[";
     size_t mid_len = strlen(mid);
     if (pos + mid_len >= buf_size) return 0;
     memcpy(buf + pos, mid, mid_len);
@@ -164,11 +165,20 @@ size_t ai_build_request_body(const AiConversation *conv,
     return pos;
 }
 
-int ai_parse_response(const char *json, char *content_out, size_t content_size)
+size_t ai_build_request_body(const AiConversation *conv,
+                             char *buf, size_t buf_size)
+{
+    return ai_build_request_body_ex(conv, buf, buf_size, 0);
+}
+
+int ai_parse_response_ex(const char *json, char *content_out, size_t content_size,
+                          char *thinking_out, size_t thinking_size)
 {
     if (!json || !content_out || content_size == 0) return -1;
 
     content_out[0] = '\0';
+    if (thinking_out && thinking_size > 0)
+        thinking_out[0] = '\0';
 
     JsonNode *root = json_parse(json);
     if (!root) return -1;
@@ -199,6 +209,65 @@ int ai_parse_response(const char *json, char *content_out, size_t content_size)
     }
 
     snprintf(content_out, content_size, "%s", content);
+
+    /* Extract reasoning/thinking content if present (DeepSeek reasoner format) */
+    if (thinking_out && thinking_size > 0) {
+        const char *reasoning = json_obj_str(message, "reasoning_content");
+        if (reasoning)
+            snprintf(thinking_out, thinking_size, "%s", reasoning);
+    }
+
+    json_free(root);
+    return 0;
+}
+
+int ai_parse_response(const char *json, char *content_out, size_t content_size)
+{
+    return ai_parse_response_ex(json, content_out, content_size, NULL, 0);
+}
+
+int ai_parse_stream_chunk(const char *json,
+                          char *content_out, size_t content_size,
+                          char *thinking_out, size_t thinking_size)
+{
+    if (!json) return -1;
+    if (content_out && content_size > 0) content_out[0] = '\0';
+    if (thinking_out && thinking_size > 0) thinking_out[0] = '\0';
+
+    /* Check for stream termination */
+    if (strcmp(json, "[DONE]") == 0) return 1;
+
+    JsonNode *root = json_parse(json);
+    if (!root) return -1;
+
+    /* Navigate: root.choices[0].delta */
+    JsonNode *choices = json_obj_get(root, "choices");
+    if (!choices || choices->type != JSON_ARRAY || vec_size(&choices->as.arr) == 0) {
+        json_free(root);
+        return -1;
+    }
+
+    JsonNode *first = (JsonNode *)vec_get(&choices->as.arr, 0);
+    if (!first || first->type != JSON_OBJECT) {
+        json_free(root);
+        return -1;
+    }
+
+    JsonNode *delta = json_obj_get(first, "delta");
+    if (!delta || delta->type != JSON_OBJECT) {
+        /* Some chunks may have empty delta (e.g. role-only) — not an error */
+        json_free(root);
+        return 0;
+    }
+
+    const char *content = json_obj_str(delta, "content");
+    if (content && content_out && content_size > 0)
+        snprintf(content_out, content_size, "%s", content);
+
+    const char *reasoning = json_obj_str(delta, "reasoning_content");
+    if (reasoning && thinking_out && thinking_size > 0)
+        snprintf(thinking_out, thinking_size, "%s", reasoning);
+
     json_free(root);
     return 0;
 }

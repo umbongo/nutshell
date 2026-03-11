@@ -13,6 +13,7 @@ typedef void (*TabCloseCallback)(int index, void *user_data);
 typedef void (*TabSettingsCallback)(void);
 typedef void (*TabLogToggleCallback)(int index, void *user_data);
 typedef void (*TabAiCallback)(void);
+typedef void (*TabStatusClickCallback)(int index, void *user_data, TabStatus status);
 
 void      tabs_init       (HINSTANCE hInstance);
 HWND      tabs_create     (HWND parent, int x, int y, int width, int height);
@@ -39,6 +40,7 @@ void      tabs_set_connect_info(HWND hwnd, int index,
 void      tabs_set_logging(HWND hwnd, int index, int logging);
 int       tabs_get_logging(HWND hwnd, int index);
 void      tabs_set_ai_callback(HWND hwnd, TabAiCallback on_ai);
+void      tabs_set_status_click_callback(HWND hwnd, TabStatusClickCallback on_status_click);
 void      tabs_set_ai_active(HWND hwnd, int active);
 /* Update tab strip font to match the given family (at UI_SIZE). */
 void      tabs_set_font(HWND hwnd, const char *font_name);

@@ -126,4 +126,8 @@ void term_clear_dirty(Terminal *term);
 /* Return true if any visible row has its dirty flag set. */
 bool term_has_dirty_rows(Terminal *term);
 
+/* Mark every row dirty so the renderer repaints everything.
+ * Call after font/zoom/resize changes that affect pixel layout. */
+void term_mark_all_dirty(Terminal *term);
+
 #endif

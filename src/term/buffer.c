@@ -347,6 +347,16 @@ bool term_has_dirty_rows(Terminal *term)
     return false;
 }
 
+void term_mark_all_dirty(Terminal *term)
+{
+    if (!term) return;
+    for (int i = 0; i < term->lines_count; i++) {
+        int idx = (term->lines_start + i) % term->lines_capacity;
+        if (term->lines[idx])
+            term->lines[idx]->dirty = true;
+    }
+}
+
 void term_alt_screen_enter(Terminal *term)
 {
     if (!term || term->alt_screen_active) return;

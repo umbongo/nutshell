@@ -91,6 +91,12 @@ int test_parse_obj_get_missing_key(void);
 int test_parse_obj_str_type_mismatch(void);
 int test_parse_obj_num_fallback(void);
 int test_json_free_null(void);
+int test_tok_unicode_escape_ascii(void);
+int test_tok_unicode_escape_apostrophe(void);
+int test_tok_unicode_escape_multibyte(void);
+int test_tok_unicode_escape_3byte(void);
+int test_tok_unicode_surrogate_pair(void);
+int test_parse_string_with_unicode(void);
 
 /* test_config.c */
 int test_config_default_settings(void);
@@ -154,6 +160,11 @@ int test_tabs_btn_tooltip_prev(void);
 int test_tabs_btn_tooltip_next(void);
 int test_tabs_btn_tooltip_gap(void);
 int test_tabs_btn_tooltip_past_add(void);
+int test_tabmgr_status_click_connected(void);
+int test_tabmgr_status_click_disconnected(void);
+int test_tabmgr_status_click_connecting(void);
+int test_tabmgr_status_click_idle(void);
+int test_tabmgr_status_click_correct_tab(void);
 
 /* test_tooltip.c */
 int test_tooltip_format_3661(void);
@@ -393,6 +404,12 @@ int test_dirty_null_safety(void);
 int test_dirty_multi_write_clear(void);
 int test_dirty_scroll_all_visible(void);
 int test_dirty_alt_screen(void);
+int test_mark_all_dirty_basic(void);
+int test_mark_all_dirty_null(void);
+int test_mark_all_dirty_after_clear(void);
+int test_resize_sparse_rows_accessible(void);
+int test_resize_type_beyond_old_content(void);
+int test_dispbuf_empty_rows_dirty_after_invalidate(void);
 
 /* test_color_consistency.c */
 int test_cc_default_is_pure_light(void);
@@ -470,6 +487,21 @@ int test_ai_confirm_text_multiple(void);
 int test_ai_confirm_text_null(void);
 int test_ai_confirm_text_overflow(void);
 int test_ai_confirm_text_numbering(void);
+int test_ai_build_body_stream_true(void);
+int test_ai_build_body_stream_false(void);
+int test_ai_build_body_ex_matches_original(void);
+int test_ai_parse_stream_chunk_content(void);
+int test_ai_parse_stream_chunk_thinking(void);
+int test_ai_parse_stream_chunk_both(void);
+int test_ai_parse_stream_chunk_done(void);
+int test_ai_parse_stream_chunk_role_only(void);
+int test_ai_parse_stream_chunk_empty_delta(void);
+int test_ai_parse_stream_chunk_null(void);
+int test_ai_parse_stream_chunk_malformed(void);
+int test_ai_parse_response_ex_no_thinking(void);
+int test_ai_parse_response_ex_with_reasoning(void);
+int test_ai_parse_response_ex_null_thinking_buf(void);
+int test_ai_parse_response_ex_empty_reasoning(void);
 int test_ai_conv_reset_clears_messages(void);
 int test_ai_conv_reset_preserves_model(void);
 int test_ai_conv_reset_allows_reuse(void);
@@ -650,6 +682,8 @@ int test_dispbuf_cell_fg_diff(void);
 int test_dispbuf_cell_bg_diff(void);
 int test_dispbuf_invalidate_all(void);
 int test_dispbuf_free_null(void);
+int test_dispbuf_init_all_dirty(void);
+int test_dispbuf_resize_all_dirty(void);
 
 /* test_color.c */
 int test_color256_palette_ansi(void);
@@ -759,6 +793,12 @@ int main(void) {
     failed += test_parse_obj_str_type_mismatch();
     failed += test_parse_obj_num_fallback();
     failed += test_json_free_null();
+    failed += test_tok_unicode_escape_ascii();
+    failed += test_tok_unicode_escape_apostrophe();
+    failed += test_tok_unicode_escape_multibyte();
+    failed += test_tok_unicode_escape_3byte();
+    failed += test_tok_unicode_surrogate_pair();
+    failed += test_parse_string_with_unicode();
 
     /* Config */
     failed += test_config_default_settings();
@@ -825,6 +865,13 @@ int main(void) {
     failed += test_tabs_btn_tooltip_next();
     failed += test_tabs_btn_tooltip_gap();
     failed += test_tabs_btn_tooltip_past_add();
+
+    printf("\n--- Status Dot Click ---\n");
+    failed += test_tabmgr_status_click_connected();
+    failed += test_tabmgr_status_click_disconnected();
+    failed += test_tabmgr_status_click_connecting();
+    failed += test_tabmgr_status_click_idle();
+    failed += test_tabmgr_status_click_correct_tab();
 
     /* Tooltip */
     failed += test_tooltip_format_3661();
@@ -1035,6 +1082,12 @@ int main(void) {
     failed += test_dirty_multi_write_clear();
     failed += test_dirty_scroll_all_visible();
     failed += test_dirty_alt_screen();
+    failed += test_mark_all_dirty_basic();
+    failed += test_mark_all_dirty_null();
+    failed += test_mark_all_dirty_after_clear();
+    failed += test_resize_sparse_rows_accessible();
+    failed += test_resize_type_beyond_old_content();
+    failed += test_dispbuf_empty_rows_dirty_after_invalidate();
 
     printf("\n--- AI HTTP ---\n");
     failed += test_ai_http_response_free_null();
@@ -1097,6 +1150,21 @@ int main(void) {
     failed += test_ai_confirm_text_null();
     failed += test_ai_confirm_text_overflow();
     failed += test_ai_confirm_text_numbering();
+    failed += test_ai_build_body_stream_true();
+    failed += test_ai_build_body_stream_false();
+    failed += test_ai_build_body_ex_matches_original();
+    failed += test_ai_parse_stream_chunk_content();
+    failed += test_ai_parse_stream_chunk_thinking();
+    failed += test_ai_parse_stream_chunk_both();
+    failed += test_ai_parse_stream_chunk_done();
+    failed += test_ai_parse_stream_chunk_role_only();
+    failed += test_ai_parse_stream_chunk_empty_delta();
+    failed += test_ai_parse_stream_chunk_null();
+    failed += test_ai_parse_stream_chunk_malformed();
+    failed += test_ai_parse_response_ex_no_thinking();
+    failed += test_ai_parse_response_ex_with_reasoning();
+    failed += test_ai_parse_response_ex_null_thinking_buf();
+    failed += test_ai_parse_response_ex_empty_reasoning();
     failed += test_ai_conv_reset_clears_messages();
     failed += test_ai_conv_reset_preserves_model();
     failed += test_ai_conv_reset_allows_reuse();
@@ -1208,6 +1276,8 @@ int main(void) {
     failed += test_dispbuf_cell_bg_diff();
     failed += test_dispbuf_invalidate_all();
     failed += test_dispbuf_free_null();
+    failed += test_dispbuf_init_all_dirty();
+    failed += test_dispbuf_resize_all_dirty();
 
     printf("\n--- Color ---\n");
     failed += test_color256_palette_ansi();
