@@ -16,7 +16,8 @@ typedef enum {
     TERM_STATE_NORMAL,
     TERM_STATE_ESC,
     TERM_STATE_CSI,
-    TERM_STATE_OSC
+    TERM_STATE_OSC,
+    TERM_STATE_SCS     /* consuming one byte after ESC ( ) * + # */
 } TermState;
 
 /* How a cell's fg/bg colour was specified. */
@@ -89,6 +90,10 @@ typedef struct {
     bool app_cursor_keys; /* ?1h/l  — application cursor key sequences */
     bool insert_mode;     /* 4h/l   — insert vs. replace mode           */
 
+    /* Scroll region (0-based, inclusive).  Default: 0 .. rows-1. */
+    int scroll_top;
+    int scroll_bot;
+
     /* Alternate screen buffer (?1049h/l) */
     bool alt_screen_active;
     TermRow  **primary_lines;
@@ -103,6 +108,8 @@ void term_free(Terminal *term);
 void term_resize(Terminal *term, int rows, int cols);
 void term_process(Terminal *term, const char *data, size_t len);
 void term_scroll(Terminal *term);
+void term_scroll_up(Terminal *term, int top, int bot, int n);
+void term_scroll_down(Terminal *term, int top, int bot, int n);
 void term_alt_screen_enter(Terminal *term);
 void term_alt_screen_exit(Terminal *term);
 

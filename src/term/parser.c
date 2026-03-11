@@ -315,26 +315,67 @@ static void handle_csi(Terminal *term, char final) {
             term->cursor.col = m - 1;
             clamp_cursor(term);
             break;
-        case 'J': // ED - Erase in Display
+        case 'J': /* ED — Erase in Display */
             n = get_param(term, 0, 0);
-            if (n == 2) {
-                // Clear entire screen
-                for (int r = 0; r < term->rows; r++) {
-                    TermRow *row = get_screen_row(term, r);
-                    if (row) {
+            if (n == 0) {
+                /* Clear from cursor to end of screen */
+                TermRow *cr0 = get_screen_row(term, term->cursor.row);
+                if (cr0) {
+                    for (int c = term->cursor.col; c < term->cols; c++) {
+                        cr0->cells[c].codepoint = 0;
+                        cr0->cells[c].attr = term->current_attr;
+                    }
+                    cr0->dirty = true;
+                }
+                for (int r = term->cursor.row + 1; r < term->rows; r++) {
+                    TermRow *rr = get_screen_row(term, r);
+                    if (rr) {
                         for (int c = 0; c < term->cols; c++) {
-                            row->cells[c].codepoint = 0;
-                            row->cells[c].attr = term->current_attr;
+                            rr->cells[c].codepoint = 0;
+                            rr->cells[c].attr = term->current_attr;
                         }
-                        row->len = 0;
-                        row->dirty = true;
-                        row->wrapped = false;
+                        rr->len = 0;
+                        rr->dirty = true;
+                    }
+                }
+            } else if (n == 1) {
+                /* Clear from start of screen to cursor */
+                for (int r = 0; r < term->cursor.row; r++) {
+                    TermRow *rr = get_screen_row(term, r);
+                    if (rr) {
+                        for (int c = 0; c < term->cols; c++) {
+                            rr->cells[c].codepoint = 0;
+                            rr->cells[c].attr = term->current_attr;
+                        }
+                        rr->len = 0;
+                        rr->dirty = true;
+                    }
+                }
+                TermRow *cr1 = get_screen_row(term, term->cursor.row);
+                if (cr1) {
+                    for (int c = 0; c <= term->cursor.col; c++) {
+                        cr1->cells[c].codepoint = 0;
+                        cr1->cells[c].attr = term->current_attr;
+                    }
+                    cr1->dirty = true;
+                }
+            } else if (n == 2) {
+                /* Clear entire screen */
+                for (int r = 0; r < term->rows; r++) {
+                    TermRow *rr = get_screen_row(term, r);
+                    if (rr) {
+                        for (int c = 0; c < term->cols; c++) {
+                            rr->cells[c].codepoint = 0;
+                            rr->cells[c].attr = term->current_attr;
+                        }
+                        rr->len = 0;
+                        rr->dirty = true;
+                        rr->wrapped = false;
                     }
                 }
                 term->cursor.row = 0;
                 term->cursor.col = 0;
             }
-            // TODO: Implement 0 (cursor to end) and 1 (start to cursor)
             break;
         case 'K': // EL - Erase in Line
             n = get_param(term, 0, 0);
@@ -397,6 +438,94 @@ static void handle_csi(Terminal *term, char final) {
             else if (n == 4) term->cursor.col = term->cols - 1; /* End */
             /* 2=Ins, 3=Del, 5=PgUp, 6=PgDn - ignored for now */
             break;
+        case 'r': { /* DECSTBM — Set Scrolling Region */
+            int sr_top = get_param(term, 0, 1) - 1;
+            int sr_bot = get_param(term, 1, term->rows) - 1;
+            if (sr_top < 0) sr_top = 0;
+            if (sr_bot >= term->rows) sr_bot = term->rows - 1;
+            if (sr_top < sr_bot) {
+                term->scroll_top = sr_top;
+                term->scroll_bot = sr_bot;
+            } else {
+                term->scroll_top = 0;
+                term->scroll_bot = term->rows - 1;
+            }
+            term->cursor.row = 0;
+            term->cursor.col = 0;
+            break;
+        }
+        case 'L': { /* IL — Insert Lines */
+            int il_n = get_param(term, 0, 1);
+            if (term->cursor.row >= term->scroll_top &&
+                term->cursor.row <= term->scroll_bot) {
+                term_scroll_down(term, term->cursor.row,
+                                 term->scroll_bot, il_n);
+            }
+            break;
+        }
+        case 'M': { /* DL — Delete Lines */
+            int dl_n = get_param(term, 0, 1);
+            if (term->cursor.row >= term->scroll_top &&
+                term->cursor.row <= term->scroll_bot) {
+                term_scroll_up(term, term->cursor.row,
+                               term->scroll_bot, dl_n);
+            }
+            break;
+        }
+        case 'S': { /* SU — Scroll Up */
+            int su_n = get_param(term, 0, 1);
+            term_scroll_up(term, term->scroll_top, term->scroll_bot, su_n);
+            break;
+        }
+        case 'T': { /* SD — Scroll Down */
+            int sd_n = get_param(term, 0, 1);
+            term_scroll_down(term, term->scroll_top, term->scroll_bot, sd_n);
+            break;
+        }
+        case '@': { /* ICH — Insert Characters */
+            int ich_n = get_param(term, 0, 1);
+            TermRow *ich_row = get_screen_row(term, term->cursor.row);
+            if (ich_row) {
+                for (int ic = term->cols - 1; ic >= term->cursor.col + ich_n; ic--)
+                    ich_row->cells[ic] = ich_row->cells[ic - ich_n];
+                for (int ic = term->cursor.col;
+                     ic < term->cursor.col + ich_n && ic < term->cols; ic++) {
+                    ich_row->cells[ic].codepoint = 0;
+                    ich_row->cells[ic].attr = term->current_attr;
+                }
+                ich_row->dirty = true;
+            }
+            break;
+        }
+        case 'P': { /* DCH — Delete Characters */
+            int dch_n = get_param(term, 0, 1);
+            TermRow *dch_row = get_screen_row(term, term->cursor.row);
+            if (dch_row) {
+                int dch_end = term->cols - dch_n;
+                if (dch_end < term->cursor.col) dch_end = term->cursor.col;
+                for (int dc = term->cursor.col; dc < dch_end; dc++)
+                    dch_row->cells[dc] = dch_row->cells[dc + dch_n];
+                for (int dc = dch_end; dc < term->cols; dc++) {
+                    dch_row->cells[dc].codepoint = 0;
+                    dch_row->cells[dc].attr = term->current_attr;
+                }
+                dch_row->dirty = true;
+            }
+            break;
+        }
+        case 'X': { /* ECH — Erase Characters (cursor stays) */
+            int ech_n = get_param(term, 0, 1);
+            TermRow *ech_row = get_screen_row(term, term->cursor.row);
+            if (ech_row) {
+                for (int ec = term->cursor.col;
+                     ec < term->cursor.col + ech_n && ec < term->cols; ec++) {
+                    ech_row->cells[ec].codepoint = 0;
+                    ech_row->cells[ec].attr = term->current_attr;
+                }
+                ech_row->dirty = true;
+            }
+            break;
+        }
     }
 }
 
@@ -417,10 +546,11 @@ void term_process(Terminal *term, const char *data, size_t len) {
                 } else if (c == '\r') {
                     term->cursor.col = 0;
                 } else if (c == '\n') {
-                    term->cursor.row++;
-                    if (term->cursor.row >= term->rows) {
-                        term_scroll(term);
-                        term->cursor.row = term->rows - 1;
+                    if (term->cursor.row == term->scroll_bot) {
+                        term_scroll_up(term, term->scroll_top,
+                                       term->scroll_bot, 1);
+                    } else if (term->cursor.row < term->rows - 1) {
+                        term->cursor.row++;
                     }
                 } else if (c == '\b') {
                     if (term->cursor.col > 0) term->cursor.col--;
@@ -443,9 +573,61 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     term->state = TERM_STATE_OSC;
                     term->osc_len = 0;
                     term->osc_buffer[0] = '\0';
+                } else if (c == 'M') {
+                    /* RI — Reverse Index */
+                    if (term->cursor.row == term->scroll_top) {
+                        term_scroll_down(term, term->scroll_top,
+                                         term->scroll_bot, 1);
+                    } else if (term->cursor.row > 0) {
+                        term->cursor.row--;
+                    }
+                    term->state = TERM_STATE_NORMAL;
+                } else if (c == 'D') {
+                    /* IND — Index (same as LF within scroll region) */
+                    if (term->cursor.row == term->scroll_bot) {
+                        term_scroll_up(term, term->scroll_top,
+                                       term->scroll_bot, 1);
+                    } else if (term->cursor.row < term->rows - 1) {
+                        term->cursor.row++;
+                    }
+                    term->state = TERM_STATE_NORMAL;
+                } else if (c == '7') {
+                    /* DECSC — Save Cursor */
+                    term->saved_cursor = term->cursor;
+                    term->state = TERM_STATE_NORMAL;
+                } else if (c == '8') {
+                    /* DECRC — Restore Cursor */
+                    term->cursor = term->saved_cursor;
+                    if (term->cursor.row < 0) term->cursor.row = 0;
+                    if (term->cursor.col < 0) term->cursor.col = 0;
+                    if (term->cursor.row >= term->rows)
+                        term->cursor.row = term->rows - 1;
+                    if (term->cursor.col >= term->cols)
+                        term->cursor.col = term->cols - 1;
+                    term->state = TERM_STATE_NORMAL;
+                } else if (c == 'E') {
+                    /* NEL — Next Line (CR + LF) */
+                    term->cursor.col = 0;
+                    if (term->cursor.row == term->scroll_bot) {
+                        term_scroll_up(term, term->scroll_top,
+                                       term->scroll_bot, 1);
+                    } else if (term->cursor.row < term->rows - 1) {
+                        term->cursor.row++;
+                    }
+                    term->state = TERM_STATE_NORMAL;
+                } else if (c == '(' || c == ')' || c == '*' ||
+                           c == '+' || c == '#') {
+                    /* SCS / DECDHL / DECALN — consume the next byte */
+                    term->state = TERM_STATE_SCS;
                 } else {
                     term->state = TERM_STATE_NORMAL;
                 }
+                break;
+
+            case TERM_STATE_SCS:
+                /* Consume charset designator or line-attribute byte.
+                 * We don't implement alternate charsets — just eat it. */
+                term->state = TERM_STATE_NORMAL;
                 break;
 
             case TERM_STATE_CSI:

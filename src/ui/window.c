@@ -1034,7 +1034,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             if (tidx >= 0)
                                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
                         }
-                        if (term_has_dirty_rows(s->term)) {
+                        if (poll_rc > 0 || term_has_dirty_rows(s->term)) {
                             DWORD now = GetTickCount();
                             if (now - g_last_paint_tick >= PAINT_COOLDOWN_MS) {
                                 invalidate_terminal(hwnd);

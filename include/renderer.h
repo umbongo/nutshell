@@ -15,6 +15,8 @@ typedef struct Renderer {
     COLORREF defaultFg;
     COLORREF defaultBg;
     DisplayBuffer dispbuf;
+    int prev_cursor_row;
+    int prev_cursor_col;
 } Renderer;
 
 void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi);

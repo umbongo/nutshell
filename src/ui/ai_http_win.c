@@ -79,13 +79,26 @@ int ai_http_post(const char *url, const char *auth_header,
                                      WINHTTP_NO_PROXY_NAME,
                                      WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed");
+        snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed: %lu",
+                 GetLastError());
         return -1;
     }
 
+    /* Require TLS 1.2+ for modern AI APIs */
+    if (use_ssl) {
+        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
+                        | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+        WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS,
+                         &protocols, sizeof(protocols));
+    }
+
+    /* AI responses can take 60+ seconds; raise receive timeout to 120s */
+    WinHttpSetTimeouts(hSession, 0, 60000, 30000, 120000);
+
     HINTERNET hConnect = WinHttpConnect(hSession, host, (INTERNET_PORT)port, 0);
     if (!hConnect) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpConnect failed");
+        snprintf(resp->error, sizeof(resp->error), "WinHttpConnect failed: %lu",
+                 GetLastError());
         WinHttpCloseHandle(hSession);
         return -1;
     }
@@ -96,7 +109,8 @@ int ai_http_post(const char *url, const char *auth_header,
                                             WINHTTP_DEFAULT_ACCEPT_TYPES,
                                             flags);
     if (!hRequest) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpOpenRequest failed");
+        snprintf(resp->error, sizeof(resp->error), "WinHttpOpenRequest failed: %lu",
+                 GetLastError());
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -132,7 +146,8 @@ int ai_http_post(const char *url, const char *auth_header,
     }
 
     if (!WinHttpReceiveResponse(hRequest, NULL)) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpReceiveResponse failed");
+        snprintf(resp->error, sizeof(resp->error),
+                 "WinHttpReceiveResponse failed: %lu", GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
@@ -210,13 +225,26 @@ int ai_http_get(const char *url, const char * const *headers,
                                      WINHTTP_NO_PROXY_NAME,
                                      WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed");
+        snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed: %lu",
+                 GetLastError());
         return -1;
     }
 
+    /* Require TLS 1.2+ for modern AI APIs */
+    if (use_ssl) {
+        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
+                        | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+        WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS,
+                         &protocols, sizeof(protocols));
+    }
+
+    /* AI responses can take 60+ seconds; raise receive timeout to 120s */
+    WinHttpSetTimeouts(hSession, 0, 60000, 30000, 120000);
+
     HINTERNET hConnect = WinHttpConnect(hSession, host, (INTERNET_PORT)port, 0);
     if (!hConnect) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpConnect failed");
+        snprintf(resp->error, sizeof(resp->error), "WinHttpConnect failed: %lu",
+                 GetLastError());
         WinHttpCloseHandle(hSession);
         return -1;
     }
@@ -227,7 +255,8 @@ int ai_http_get(const char *url, const char * const *headers,
                                             WINHTTP_DEFAULT_ACCEPT_TYPES,
                                             flags);
     if (!hRequest) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpOpenRequest failed");
+        snprintf(resp->error, sizeof(resp->error), "WinHttpOpenRequest failed: %lu",
+                 GetLastError());
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
         return -1;
@@ -264,7 +293,8 @@ int ai_http_get(const char *url, const char * const *headers,
     }
 
     if (!WinHttpReceiveResponse(hRequest, NULL)) {
-        snprintf(resp->error, sizeof(resp->error), "WinHttpReceiveResponse failed");
+        snprintf(resp->error, sizeof(resp->error),
+                 "WinHttpReceiveResponse failed: %lu", GetLastError());
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);

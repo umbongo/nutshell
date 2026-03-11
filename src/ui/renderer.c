@@ -49,6 +49,8 @@ void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi) {
 
     /* Display buffer starts empty — allocated on first draw */
     memset(&r->dispbuf, 0, sizeof(r->dispbuf));
+    r->prev_cursor_row = -1;
+    r->prev_cursor_col = -1;
 }
 
 void renderer_free(Renderer *r) {
@@ -121,7 +123,22 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
     bool cur_bold = false;  /* track which font is selected */
 
     int cursor_row = term->cursor.visible ? term->cursor.row : -1;
+    int cursor_col = term->cursor.visible ? term->cursor.col : -1;
     bool has_sel = sel && sel->valid;
+
+    /* If cursor moved, invalidate the old cursor cell in the display buffer
+     * so the ghost cursor gets erased on repaint. */
+    int prev_row = r->prev_cursor_row;
+    int prev_col = r->prev_cursor_col;
+    if (prev_row != cursor_row || prev_col != cursor_col) {
+        if (prev_row >= 0 && prev_row < r->dispbuf.rows &&
+            prev_col >= 0 && prev_col < r->dispbuf.cols) {
+            dispbuf_cell_update(&r->dispbuf, prev_row, prev_col,
+                                0xFFFFFFFF, 0, 0, 0xFF);  /* force mismatch */
+        }
+        r->prev_cursor_row = cursor_row;
+        r->prev_cursor_col = cursor_col;
+    }
 
     for (int row_idx = 0; row_idx < term->rows; row_idx++) {
         int py = y + row_idx * r->charHeight;
@@ -134,9 +151,11 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
 
         /* Skip clean rows that don't contain the cursor and aren't selected.
          * When scrolled back, visible rows differ from what was last painted,
-         * so we must repaint all of them regardless of dirty flags. */
+         * so we must repaint all of them regardless of dirty flags.
+         * Also repaint the previous cursor row to erase the ghost cursor. */
         if (term->scrollback_offset == 0 &&
-            !row->dirty && row_idx != cursor_row && !has_sel) continue;
+            !row->dirty && row_idx != cursor_row && row_idx != prev_row &&
+            !has_sel) continue;
 
         for (int col_idx = 0; col_idx < term->cols; ) {
             int px_start = x + col_idx * r->charWidth;

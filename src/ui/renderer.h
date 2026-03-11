@@ -19,6 +19,8 @@ typedef struct {
     COLORREF defaultFg;
     COLORREF defaultBg;
     DisplayBuffer dispbuf;
+    int prev_cursor_row;
+    int prev_cursor_col;
 #endif
     int charWidth;
     int charHeight;

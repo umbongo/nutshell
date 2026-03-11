@@ -62,6 +62,8 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->title[0]         = '\0';
     term->app_cursor_keys  = false;
     term->insert_mode      = false;
+    term->scroll_top       = 0;
+    term->scroll_bot       = rows - 1;
     term->alt_screen_active = false;
     term->primary_lines    = NULL;
 
@@ -218,6 +220,10 @@ void term_resize(Terminal *term, int rows, int cols) {
     if (term->cursor.row >= term->rows) term->cursor.row = term->rows - 1;
     if (term->cursor.col < 0) term->cursor.col = 0;
     if (term->cursor.col >= term->cols) term->cursor.col = term->cols - 1;
+
+    /* Reset scroll region to full screen on resize */
+    term->scroll_top = 0;
+    term->scroll_bot = rows - 1;
 }
 
 void term_scroll(Terminal *term) {
@@ -241,6 +247,82 @@ void term_scroll(Terminal *term) {
         int idx = (term->lines_start + i) % term->lines_capacity;
         term->lines[idx]->dirty = true;
     }
+}
+
+/* Helper: convert screen row (0-based) to physical ring-buffer index */
+static int screen_to_phys(Terminal *term, int screen_row) {
+    int top = (term->lines_count >= term->rows)
+            ? (term->lines_count - term->rows) : 0;
+    return (term->lines_start + top + screen_row) % term->lines_capacity;
+}
+
+void term_scroll_up(Terminal *term, int top, int bot, int n) {
+    if (!term || top < 0 || bot >= term->rows || top >= bot || n <= 0)
+        return;
+    if (n > bot - top + 1) n = bot - top + 1;
+
+    /* Full-screen scroll on primary buffer: delegate to term_scroll()
+     * which handles scrollback ring-buffer extension. */
+    if (top == 0 && bot == term->rows - 1 && !term->alt_screen_active) {
+        for (int i = 0; i < n; i++)
+            term_scroll(term);
+        return;
+    }
+
+    /* Region scroll (or alt screen): pointer-swap within screen rows. */
+    /* Save the n row pointers that will be recycled */
+    TermRow *saved[64];
+    if (n > 64) n = 64;
+    for (int i = 0; i < n; i++)
+        saved[i] = term->lines[screen_to_phys(term, top + i)];
+
+    /* Shift rows [top+n .. bot] up to [top .. bot-n] */
+    for (int i = top; i <= bot - n; i++) {
+        int dst = screen_to_phys(term, i);
+        int src = screen_to_phys(term, i + n);
+        term->lines[dst] = term->lines[src];
+    }
+
+    /* Place recycled (cleared) rows at [bot-n+1 .. bot] */
+    for (int i = 0; i < n; i++) {
+        int idx = screen_to_phys(term, bot - n + 1 + i);
+        term->lines[idx] = saved[i];
+        term_row_fill(saved[i], term->cols, term->current_attr);
+    }
+
+    /* Mark all rows in the region dirty */
+    for (int i = top; i <= bot; i++)
+        term->lines[screen_to_phys(term, i)]->dirty = true;
+}
+
+void term_scroll_down(Terminal *term, int top, int bot, int n) {
+    if (!term || top < 0 || bot >= term->rows || top >= bot || n <= 0)
+        return;
+    if (n > bot - top + 1) n = bot - top + 1;
+
+    /* Save the n row pointers that will be recycled (bottom of region) */
+    TermRow *saved[64];
+    if (n > 64) n = 64;
+    for (int i = 0; i < n; i++)
+        saved[i] = term->lines[screen_to_phys(term, bot - n + 1 + i)];
+
+    /* Shift rows [top .. bot-n] down to [top+n .. bot] */
+    for (int i = bot - n; i >= top; i--) {
+        int dst = screen_to_phys(term, i + n);
+        int src = screen_to_phys(term, i);
+        term->lines[dst] = term->lines[src];
+    }
+
+    /* Place recycled (cleared) rows at [top .. top+n-1] */
+    for (int i = 0; i < n; i++) {
+        int idx = screen_to_phys(term, top + i);
+        term->lines[idx] = saved[i];
+        term_row_fill(saved[i], term->cols, term->current_attr);
+    }
+
+    /* Mark all rows in the region dirty */
+    for (int i = top; i <= bot; i++)
+        term->lines[screen_to_phys(term, i)]->dirty = true;
 }
 
 void term_clear_dirty(Terminal *term)
@@ -288,6 +370,8 @@ void term_alt_screen_enter(Terminal *term)
     term->lines_start     = 0;
     term->cursor.row      = 0;
     term->cursor.col      = 0;
+    term->scroll_top      = 0;
+    term->scroll_bot      = term->rows - 1;
     term->alt_screen_active = true;
 }
 
@@ -308,6 +392,8 @@ void term_alt_screen_exit(Terminal *term)
     term->cursor          = term->primary_cursor;
     term->primary_lines   = NULL;
     term->alt_screen_active = false;
+    term->scroll_top = 0;
+    term->scroll_bot = term->rows - 1;
 
     /* Reset SGR attributes so text after alt screen exit uses defaults,
      * not whatever colors the alt-screen application (e.g. man/less) set. */
