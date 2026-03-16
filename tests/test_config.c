@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define TMP_CFG "/tmp/nutshell_test_config.json"
+#define TMP_CFG "/tmp/nutshell_test.config"
 
 /* ============================================================
  * Settings defaults

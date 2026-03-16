@@ -9,7 +9,7 @@ All planned phases are **complete**. 391 tests pass, build clean, lint clean.
 | Phase | Summary |
 |-------|---------|
 | 1. Foundation | Makefile (cross-compile + test + lint + debug), test framework, xmalloc, vector, string_utils, logger |
-| 2. Config | JSON tokenizer, JSON parser (recursive descent), config loader/saver, `config.json` profiles + settings |
+| 2. Config | JSON tokenizer, JSON parser (recursive descent), config loader/saver, `nutshell.config` profiles + settings |
 | 3. Terminal | VT100/ANSI parser, screen buffer with scrollback ring, cursor movement, SGR attributes |
 | 4. SSH | libssh2 + OpenSSL linkage, session/channel/PTY, non-blocking I/O loop |
 | 5. UI (Win32) | Main window, GDI renderer, keyboard input, resize handling, owner-drawn tab strip |

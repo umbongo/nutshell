@@ -3,6 +3,9 @@
 
 #include <stddef.h>
 
+/* Config filename — single source of truth. */
+#define CONFIG_FILENAME "nutshell.config"
+
 #define CFG_STR_MAX ((size_t)256)
 #ifndef AI_NOTES_MAX
 #define AI_NOTES_MAX ((size_t)2560)

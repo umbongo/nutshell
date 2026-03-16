@@ -4,11 +4,11 @@
 /*
  * Application configuration — Settings and SSH Profiles.
  *
- * Config is persisted as JSON (config.json).  All string fields use
+ * Config is persisted as JSON (nutshell.config).  All string fields use
  * fixed-size arrays so no extra heap allocation is needed per field.
  *
  * Usage:
- *   Config *cfg = config_load("config.json");  // NULL if file absent/bad
+ *   Config *cfg = config_load(CONFIG_FILENAME);  // NULL if file absent/bad
  *   if (!cfg) cfg = config_new_default();
  *   // ... use cfg ...
  *   config_free(cfg);
@@ -16,6 +16,9 @@
 
 #include "vector.h"
 #include <stddef.h>
+
+/* Config filename — single source of truth. */
+#define CONFIG_FILENAME "nutshell.config"
 
 /* Maximum length for string fields (including null terminator). */
 #define CFG_STR_MAX ((size_t)256)
@@ -74,7 +77,7 @@ typedef struct {
 /* Fill *s with compiled-in defaults.  Does not allocate. */
 void config_default_settings(Settings *s);
 
-/* Load config.json from path.  Returns NULL if the file cannot be opened
+/* Load config from path.  Returns NULL if the file cannot be opened
  * or parsed.  Caller must call config_free() on the returned pointer. */
 Config *config_load(const char *path);
 

@@ -1040,7 +1040,7 @@ static void apply_zoom(HWND hwnd, int delta)
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
-            /* M-8: resolve config.json to an absolute path at startup so
+            /* M-8: resolve config file to an absolute path at startup so
              * GetOpenFileNameA (file browse dialogs) cannot change CWD and
              * cause saves to go to the wrong directory. */
             {
@@ -1048,15 +1048,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 get_exe_dir(exe_dir, sizeof(exe_dir));
                 if (exe_dir[0] != '\0')
                     (void)snprintf(g_config_path, sizeof(g_config_path),
-                                   "%s\\config.json", exe_dir);
+                                   "%s\\" CONFIG_FILENAME, exe_dir);
                 else
                     (void)snprintf(g_config_path, sizeof(g_config_path),
-                                   "config.json");
+                                   CONFIG_FILENAME);
 
                 g_config = config_load(g_config_path);
                 if (!g_config) {
                     MessageBoxA(hwnd,
-                        "Could not load config.json.\n\nStarting with default settings.",
+                        "Could not load " CONFIG_FILENAME ".\n\nStarting with default settings.",
                         "Configuration Warning", MB_OK | MB_ICONWARNING);
                     g_config = config_new_default();
                 }

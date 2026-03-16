@@ -24,7 +24,7 @@ Nutshell is a lightweight native C SSH client for Windows. The goal is to produc
 -   **Zoom**: Ctrl+=/-, Ctrl+Scroll. Font clamped 6–72 pt. Gutter-free fit with fallback. Persisted to settings.
 -   **Paste Confirmation**: Dialog for pastes >64 bytes or containing newlines. Truncated preview, line count. Inter-line delay from settings.
 -   **Session File Logging**: ANSI-stripped output to timestamped files. Configurable directory (default: exe directory) and strftime name format.
--   **Configuration**: JSON profiles and settings via `config.json` in the executable's directory.
+-   **Configuration**: JSON profiles and settings via `nutshell.config` in the executable's directory.
 
 ### 2.4. Visual Specification (match Go/Fyne version)
 

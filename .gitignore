@@ -6,7 +6,7 @@
 build/
 
 # Runtime configuration (may contain encrypted credentials)
-config.json
+nutshell.config
 settings.ini
 
 # Session log files

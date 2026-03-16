@@ -812,7 +812,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
 
             /* Clamp out-of-range values before persisting */
             settings_validate(s);
-            config_save(d->cfg, "config.json");
+            config_save(d->cfg, CONFIG_FILENAME);
             DestroyWindow(hwnd);
             break;
         }

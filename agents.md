@@ -72,4 +72,4 @@ The AI feature is split into testable core and Win32-only UI:
 ## Secrets
 
 - `config_profile_free()` zeroes passwords with `memset` before `free`. Follow the same pattern for API keys and any credential fields.
-- API keys are stored encrypted in `config.json` using `crypto_encrypt()`/`crypto_decrypt()`, same as profile passwords.
+- API keys are stored encrypted in `nutshell.config` using `crypto_encrypt()`/`crypto_decrypt()`, same as profile passwords.
