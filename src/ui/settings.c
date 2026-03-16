@@ -1,4 +1,5 @@
 #include "settings_dlg.h"
+#include "resource.h"
 #include "app_font.h"
 #include "ui_theme.h"
 #include "themed_button.h"
@@ -446,7 +447,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             cw / 2 + S(5), ch - S(65), S(75), S(25), hwnd, (HMENU)IDCANCEL, NULL, NULL);
 
         /* Version / copyright footer */
-        CreateWindow("STATIC", "Nutshell v1.5",
+        CreateWindow("STATIC", "Nutshell v" APP_VERSION,
             WS_VISIBLE | WS_CHILD | SS_CENTER,
             0, ch - S(35), cw, S(16), hwnd, NULL, NULL, NULL);
         CreateWindow("STATIC", "Copyright (C) 2026 Thomas Sulkiewicz",

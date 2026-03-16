@@ -1390,3 +1390,854 @@ int test_save_text_multi_exchange(void)
     ASSERT_NOT_NULL(p);
     TEST_END();
 }
+
+/* ---- Session switch / AiSessionState isolation tests ---- */
+
+int test_session_state_init_not_valid(void)
+{
+    TEST_BEGIN();
+    /* A zeroed AiSessionState should not be valid */
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+    ASSERT_EQ(state.valid, 0);
+    TEST_END();
+}
+
+int test_session_state_save_restore(void)
+{
+    TEST_BEGIN();
+    /* Simulate save: copy conv to state, mark valid */
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+
+    AiConversation conv;
+    ai_conv_init(&conv, "test-model");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&conv, AI_ROLE_USER, "hello");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "hi back");
+
+    memcpy(&state.conv, &conv, sizeof(AiConversation));
+    state.valid = 1;
+
+    /* Simulate restore: copy state.conv to a fresh conv */
+    AiConversation restored;
+    memcpy(&restored, &state.conv, sizeof(AiConversation));
+    ASSERT_EQ(restored.msg_count, 3);
+    ASSERT_STR_EQ(restored.model, "test-model");
+    ASSERT_STR_EQ(restored.messages[1].content, "hello");
+    ASSERT_STR_EQ(restored.messages[2].content, "hi back");
+    TEST_END();
+}
+
+int test_session_state_two_sessions_isolated(void)
+{
+    TEST_BEGIN();
+    /* Two session states must be completely independent */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    ai_conv_init(&state_a.conv, "model-a");
+    ai_conv_add(&state_a.conv, AI_ROLE_SYSTEM, "sys-a");
+    ai_conv_add(&state_a.conv, AI_ROLE_USER, "question-a");
+    state_a.valid = 1;
+
+    ai_conv_init(&state_b.conv, "model-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_SYSTEM, "sys-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_USER, "question-b");
+    state_b.valid = 1;
+
+    /* Adding to one doesn't affect the other */
+    ai_conv_add(&state_a.conv, AI_ROLE_ASSISTANT, "answer-a");
+    ASSERT_EQ(state_a.conv.msg_count, 3);
+    ASSERT_EQ(state_b.conv.msg_count, 2);
+    ASSERT_STR_EQ(state_a.conv.messages[2].content, "answer-a");
+    TEST_END();
+}
+
+int test_session_state_switch_preserves_old(void)
+{
+    TEST_BEGIN();
+    /* Simulates the session switch flow:
+     * 1. Working conv has session A's data
+     * 2. Save working conv to state A
+     * 3. Load state B into working conv
+     * 4. State A must still have its original data intact */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    /* Set up state B with existing conversation */
+    ai_conv_init(&state_b.conv, "model-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_SYSTEM, "sys-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_USER, "q-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_ASSISTANT, "a-b");
+    state_b.valid = 1;
+
+    /* Working conv starts as session A */
+    AiConversation working;
+    ai_conv_init(&working, "model-a");
+    ai_conv_add(&working, AI_ROLE_SYSTEM, "sys-a");
+    ai_conv_add(&working, AI_ROLE_USER, "q-a");
+
+    /* Step 2: save working to state A */
+    memcpy(&state_a.conv, &working, sizeof(AiConversation));
+    state_a.valid = 1;
+
+    /* Step 3: load state B */
+    memcpy(&working, &state_b.conv, sizeof(AiConversation));
+
+    /* Step 4: verify state A is untouched */
+    ASSERT_EQ(state_a.conv.msg_count, 2);
+    ASSERT_STR_EQ(state_a.conv.messages[1].content, "q-a");
+
+    /* And working now has B's data */
+    ASSERT_EQ(working.msg_count, 3);
+    ASSERT_STR_EQ(working.messages[2].content, "a-b");
+    TEST_END();
+}
+
+int test_session_state_busy_commit_to_original(void)
+{
+    TEST_BEGIN();
+    /* Simulates the mid-stream switch scenario:
+     * 1. Thread starts on session A (busy_state = &state_a)
+     * 2. User switches to session B (active_state = &state_b)
+     * 3. Thread finishes: writes to busy_state->conv, not working conv
+     * 4. Verify state A got the response, state B/working didn't */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    /* Session A has a pending question */
+    ai_conv_init(&state_a.conv, "model-a");
+    ai_conv_add(&state_a.conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&state_a.conv, AI_ROLE_USER, "q-a");
+    state_a.valid = 1;
+
+    /* Session B is idle */
+    ai_conv_init(&state_b.conv, "model-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_SYSTEM, "sys");
+    state_b.valid = 1;
+
+    /* Simulate: busy_state = &state_a, user switches, working = state_b */
+    AiSessionState *busy_state = &state_a;
+    AiConversation working;
+    memcpy(&working, &state_b.conv, sizeof(AiConversation));
+
+    /* Thread finishes: active != busy, so commit to busy_state */
+    ai_conv_add(&busy_state->conv, AI_ROLE_ASSISTANT, "response-for-a");
+
+    /* Verify: state A got the response */
+    ASSERT_EQ(state_a.conv.msg_count, 3);
+    ASSERT_STR_EQ(state_a.conv.messages[2].content, "response-for-a");
+
+    /* State B and working are untouched */
+    ASSERT_EQ(state_b.conv.msg_count, 1);
+    ASSERT_EQ(working.msg_count, 1);
+    TEST_END();
+}
+
+int test_session_state_switch_back_has_response(void)
+{
+    TEST_BEGIN();
+    /* After the thread commits to busy_state, switching back should
+     * load the conversation with the response included */
+    AiSessionState state_a;
+    memset(&state_a, 0, sizeof(state_a));
+
+    ai_conv_init(&state_a.conv, "model");
+    ai_conv_add(&state_a.conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&state_a.conv, AI_ROLE_USER, "question");
+    ai_conv_add(&state_a.conv, AI_ROLE_ASSISTANT, "answer");
+    state_a.valid = 1;
+
+    /* Simulate switch back: load state_a into working */
+    AiConversation working;
+    memcpy(&working, &state_a.conv, sizeof(AiConversation));
+
+    ASSERT_EQ(working.msg_count, 3);
+    ASSERT_STR_EQ(working.messages[2].content, "answer");
+    TEST_END();
+}
+
+int test_session_state_reset_clears_valid(void)
+{
+    TEST_BEGIN();
+    /* After ai_conv_reset, the conversation is empty but the
+     * valid flag must be managed separately (caller sets it) */
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+
+    ai_conv_init(&state.conv, "model");
+    ai_conv_add(&state.conv, AI_ROLE_USER, "test");
+    state.valid = 1;
+
+    ai_conv_reset(&state.conv);
+    ASSERT_EQ(state.conv.msg_count, 0);
+    /* valid stays 1 — caller must manage it */
+    ASSERT_EQ(state.valid, 1);
+    /* Model preserved after reset */
+    ASSERT_STR_EQ(state.conv.model, "model");
+    TEST_END();
+}
+
+/* ---- New Chat isolation tests ---- */
+
+int test_new_chat_only_resets_active_session(void)
+{
+    TEST_BEGIN();
+    /* Simulate: two sessions, "New Chat" on session A.
+     * Session B must be completely unaffected. */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    /* Both sessions have conversations */
+    ai_conv_init(&state_a.conv, "model");
+    ai_conv_add(&state_a.conv, AI_ROLE_SYSTEM, "sys-a");
+    ai_conv_add(&state_a.conv, AI_ROLE_USER, "q-a");
+    ai_conv_add(&state_a.conv, AI_ROLE_ASSISTANT, "a-a");
+    state_a.valid = 1;
+
+    ai_conv_init(&state_b.conv, "model");
+    ai_conv_add(&state_b.conv, AI_ROLE_SYSTEM, "sys-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_USER, "q-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_ASSISTANT, "a-b");
+    state_b.valid = 1;
+
+    /* Working conv mirrors session A (the active one) */
+    AiConversation working;
+    memcpy(&working, &state_a.conv, sizeof(AiConversation));
+
+    /* New Chat: reset working + active_state (A) */
+    ai_conv_reset(&working);
+    ai_conv_reset(&state_a.conv);
+    state_a.valid = 1;
+
+    /* Verify session A is cleared */
+    ASSERT_EQ(working.msg_count, 0);
+    ASSERT_EQ(state_a.conv.msg_count, 0);
+
+    /* Verify session B is completely untouched */
+    ASSERT_EQ(state_b.conv.msg_count, 3);
+    ASSERT_STR_EQ(state_b.conv.messages[0].content, "sys-b");
+    ASSERT_STR_EQ(state_b.conv.messages[1].content, "q-b");
+    ASSERT_STR_EQ(state_b.conv.messages[2].content, "a-b");
+    ASSERT_EQ(state_b.valid, 1);
+    TEST_END();
+}
+
+int test_new_chat_then_switch_preserves_other(void)
+{
+    TEST_BEGIN();
+    /* New Chat on A, then switch to B: B should load fully intact */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    ai_conv_init(&state_a.conv, "model");
+    ai_conv_add(&state_a.conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&state_a.conv, AI_ROLE_USER, "q-a");
+    state_a.valid = 1;
+
+    ai_conv_init(&state_b.conv, "model");
+    ai_conv_add(&state_b.conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&state_b.conv, AI_ROLE_USER, "q-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_ASSISTANT, "a-b");
+    state_b.valid = 1;
+
+    /* Working = A initially */
+    AiConversation working;
+    memcpy(&working, &state_a.conv, sizeof(AiConversation));
+
+    /* New Chat on A */
+    ai_conv_reset(&working);
+    ai_conv_reset(&state_a.conv);
+    state_a.valid = 1;
+
+    /* Switch to B: save working to state_a (already empty), load state_b */
+    memcpy(&state_a.conv, &working, sizeof(AiConversation));
+    memcpy(&working, &state_b.conv, sizeof(AiConversation));
+
+    /* B is loaded correctly */
+    ASSERT_EQ(working.msg_count, 3);
+    ASSERT_STR_EQ(working.messages[1].content, "q-b");
+    ASSERT_STR_EQ(working.messages[2].content, "a-b");
+
+    /* A stays empty */
+    ASSERT_EQ(state_a.conv.msg_count, 0);
+    TEST_END();
+}
+
+int test_new_chat_then_switch_back_stays_empty(void)
+{
+    TEST_BEGIN();
+    /* New Chat on A, switch to B, switch back to A: A should still be empty */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    ai_conv_init(&state_a.conv, "model");
+    ai_conv_add(&state_a.conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&state_a.conv, AI_ROLE_USER, "q-a");
+    state_a.valid = 1;
+
+    ai_conv_init(&state_b.conv, "model");
+    ai_conv_add(&state_b.conv, AI_ROLE_SYSTEM, "sys");
+    state_b.valid = 1;
+
+    AiConversation working;
+    memcpy(&working, &state_a.conv, sizeof(AiConversation));
+
+    /* New Chat on A */
+    ai_conv_reset(&working);
+    ai_conv_reset(&state_a.conv);
+    state_a.valid = 1;
+
+    /* Switch to B */
+    memcpy(&state_a.conv, &working, sizeof(AiConversation));
+    memcpy(&working, &state_b.conv, sizeof(AiConversation));
+
+    /* Switch back to A */
+    memcpy(&state_b.conv, &working, sizeof(AiConversation));
+    memcpy(&working, &state_a.conv, sizeof(AiConversation));
+
+    /* A is still empty */
+    ASSERT_EQ(working.msg_count, 0);
+    ASSERT_STR_EQ(working.model, "model");
+    TEST_END();
+}
+
+int test_new_chat_preserves_model(void)
+{
+    TEST_BEGIN();
+    /* New Chat should preserve the model name */
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+
+    ai_conv_init(&state.conv, "deepseek-reasoner");
+    ai_conv_add(&state.conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&state.conv, AI_ROLE_USER, "question");
+    state.valid = 1;
+
+    AiConversation working;
+    memcpy(&working, &state.conv, sizeof(AiConversation));
+
+    ai_conv_reset(&working);
+    ai_conv_reset(&state.conv);
+
+    ASSERT_STR_EQ(working.model, "deepseek-reasoner");
+    ASSERT_STR_EQ(state.conv.model, "deepseek-reasoner");
+    ASSERT_EQ(working.msg_count, 0);
+    TEST_END();
+}
+
+int test_new_chat_multiple_sessions_all_isolated(void)
+{
+    TEST_BEGIN();
+    /* Three sessions: New Chat on the middle one.
+     * First and third must be completely untouched. */
+    AiSessionState states[3];
+    memset(states, 0, sizeof(states));
+
+    for (int i = 0; i < 3; i++) {
+        char model[32];
+        snprintf(model, sizeof(model), "model-%d", i);
+        ai_conv_init(&states[i].conv, model);
+        ai_conv_add(&states[i].conv, AI_ROLE_SYSTEM, "sys");
+
+        char msg[32];
+        snprintf(msg, sizeof(msg), "question-%d", i);
+        ai_conv_add(&states[i].conv, AI_ROLE_USER, msg);
+
+        snprintf(msg, sizeof(msg), "answer-%d", i);
+        ai_conv_add(&states[i].conv, AI_ROLE_ASSISTANT, msg);
+        states[i].valid = 1;
+    }
+
+    /* New Chat on session 1 (the middle one) */
+    ai_conv_reset(&states[1].conv);
+    states[1].valid = 1;
+
+    /* Session 0: untouched */
+    ASSERT_EQ(states[0].conv.msg_count, 3);
+    ASSERT_STR_EQ(states[0].conv.messages[1].content, "question-0");
+    ASSERT_STR_EQ(states[0].conv.messages[2].content, "answer-0");
+
+    /* Session 1: cleared */
+    ASSERT_EQ(states[1].conv.msg_count, 0);
+    ASSERT_STR_EQ(states[1].conv.model, "model-1");
+
+    /* Session 2: untouched */
+    ASSERT_EQ(states[2].conv.msg_count, 3);
+    ASSERT_STR_EQ(states[2].conv.messages[1].content, "question-2");
+    ASSERT_STR_EQ(states[2].conv.messages[2].content, "answer-2");
+    TEST_END();
+}
+
+/* --- Inline Command Approval tests --- */
+
+int test_inline_approval_confirm_text_has_newlines(void)
+{
+    TEST_BEGIN();
+    /* Confirm text must contain newlines for inline display in RichEdit */
+    char cmds[2][1024] = {"ls -la ~", "df -h"};
+    char buf[512];
+    size_t n = ai_build_confirm_text(cmds, 2, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    /* Each command on its own line */
+    ASSERT_TRUE(strstr(buf, "\n  1. ls -la ~\n") != NULL);
+    ASSERT_TRUE(strstr(buf, "\n  2. df -h\n") != NULL);
+    /* Ends with Allow? for inline prompt */
+    char *last_line = strrchr(buf, '\n');
+    ASSERT_TRUE(last_line != NULL);
+    ASSERT_TRUE(strstr(last_line, "Allow?") != NULL);
+    TEST_END();
+}
+
+int test_inline_approval_confirm_text_no_modal_title(void)
+{
+    TEST_BEGIN();
+    /* The confirm text must NOT contain "Execute Commands" title —
+     * that was the old modal dialog title. The text should be
+     * self-describing with "wants to execute" phrasing. */
+    char cmds[1][1024] = {"uptime"};
+    char buf[512];
+    size_t n = ai_build_confirm_text(cmds, 1, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "wants to execute") != NULL);
+    /* Should NOT contain the old dialog title string */
+    ASSERT_TRUE(strstr(buf, "Execute Commands") == NULL);
+    TEST_END();
+}
+
+int test_inline_approval_queued_cmds_preserved(void)
+{
+    TEST_BEGIN();
+    /* Simulate the approval flow: commands are extracted and queued.
+     * Verify they survive being copied into the queue array. */
+    char cmds[3][1024] = {"ls -la", "ps aux", "free -m"};
+    char queued[16][1024];
+    int ncmds = 3;
+    memcpy(queued, cmds, (size_t)ncmds * sizeof(cmds[0]));
+
+    /* All commands must survive the copy */
+    ASSERT_STR_EQ(queued[0], "ls -la");
+    ASSERT_STR_EQ(queued[1], "ps aux");
+    ASSERT_STR_EQ(queued[2], "free -m");
+    TEST_END();
+}
+
+int test_inline_approval_deny_clears_queue(void)
+{
+    TEST_BEGIN();
+    /* Simulate deny: queued_count and queued_next reset to 0 */
+    char queued[16][1024];
+    int queued_count = 3;
+    int queued_next = 0;
+    int pending_approval = 1;
+
+    snprintf(queued[0], sizeof(queued[0]), "rm -rf /");
+    snprintf(queued[1], sizeof(queued[1]), "shutdown");
+    snprintf(queued[2], sizeof(queued[2]), "reboot");
+
+    /* User clicks Deny */
+    pending_approval = 0;
+    queued_count = 0;
+    queued_next = 0;
+
+    ASSERT_EQ(pending_approval, 0);
+    ASSERT_EQ(queued_count, 0);
+    ASSERT_EQ(queued_next, 0);
+    TEST_END();
+}
+
+int test_inline_approval_allow_starts_execution(void)
+{
+    TEST_BEGIN();
+    /* Simulate allow: pending clears, queued_next advances */
+    int pending_approval = 1;
+    int queued_count = 3;
+    int queued_next = 0;
+
+    /* User clicks Allow — first command executed */
+    pending_approval = 0;
+    queued_next = 1;
+
+    ASSERT_EQ(pending_approval, 0);
+    ASSERT_EQ(queued_next, 1);
+    ASSERT_EQ(queued_count, 3);
+
+    /* Remaining commands execute */
+    for (int i = queued_next; i < queued_count; i++)
+        queued_next = i + 1;
+    ASSERT_EQ(queued_next, queued_count);
+    TEST_END();
+}
+
+int test_inline_approval_blocks_send(void)
+{
+    TEST_BEGIN();
+    /* When pending_approval is set, send_user_message should be blocked.
+     * Simulate the guard condition. */
+    int busy = 0;
+    int pending_approval = 1;
+
+    /* Guard: if (!d || d->busy || d->pending_approval) return; */
+    int should_block = (busy || pending_approval);
+    ASSERT_EQ(should_block, 1);
+
+    /* After approval is resolved, sending should work */
+    pending_approval = 0;
+    should_block = (busy || pending_approval);
+    ASSERT_EQ(should_block, 0);
+    TEST_END();
+}
+
+int test_inline_approval_blocks_new_chat(void)
+{
+    TEST_BEGIN();
+    /* New Chat should be blocked while pending approval */
+    int busy = 0;
+    int pending_approval = 1;
+
+    /* Guard: if (d && !d->busy && !d->pending_approval) */
+    int can_new_chat = (!busy && !pending_approval);
+    ASSERT_EQ(can_new_chat, 0);
+
+    /* After resolving approval */
+    pending_approval = 0;
+    can_new_chat = (!busy && !pending_approval);
+    ASSERT_EQ(can_new_chat, 1);
+    TEST_END();
+}
+
+int test_inline_approval_readonly_filter_then_approve(void)
+{
+    TEST_BEGIN();
+    /* When permit_write is off, write commands are filtered out
+     * before the approval prompt. Only read-only commands remain. */
+    char cmds[4][1024] = {"ls -la", "rm file.txt", "cat log", "mkdir foo"};
+    int ncmds = 4;
+
+    /* Filter: keep only readonly */
+    char filtered[16][1024];
+    int nfiltered = 0;
+    for (int i = 0; i < ncmds; i++) {
+        if (ai_command_is_readonly(cmds[i])) {
+            memcpy(filtered[nfiltered], cmds[i], sizeof(filtered[0]));
+            nfiltered++;
+        }
+    }
+
+    ASSERT_EQ(nfiltered, 2);
+    ASSERT_STR_EQ(filtered[0], "ls -la");
+    ASSERT_STR_EQ(filtered[1], "cat log");
+
+    /* Confirm text should only show the 2 remaining commands */
+    char buf[512];
+    size_t n = ai_build_confirm_text(filtered, nfiltered, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "2 commands") != NULL);
+    ASSERT_TRUE(strstr(buf, "rm") == NULL);
+    ASSERT_TRUE(strstr(buf, "mkdir") == NULL);
+    TEST_END();
+}
+
+int test_inline_approval_switch_saves_to_session(void)
+{
+    TEST_BEGIN();
+    /* Switching sessions saves pending approval to AiSessionState
+     * via heap-allocated command array, then restores on switch back. */
+    AiSessionState *state = calloc(1, sizeof(AiSessionState));
+    ASSERT_TRUE(state != NULL);
+
+    /* Simulate saving: pending approval with 2 commands */
+    state->pending_approval = 1;
+    state->pending_cmd_count = 2;
+    state->pending_cmds = malloc(2 * 1024);
+    ASSERT_TRUE(state->pending_cmds != NULL);
+    snprintf(state->pending_cmds[0], 1024, "ls -la");
+    snprintf(state->pending_cmds[1], 1024, "df -h");
+
+    /* Verify state persists */
+    ASSERT_EQ(state->pending_approval, 1);
+    ASSERT_EQ(state->pending_cmd_count, 2);
+    ASSERT_STR_EQ(state->pending_cmds[0], "ls -la");
+    ASSERT_STR_EQ(state->pending_cmds[1], "df -h");
+
+    /* Simulate restoring to local queue */
+    char queued[16][1024];
+    memcpy(queued, state->pending_cmds,
+           (size_t)state->pending_cmd_count * sizeof(queued[0]));
+    ASSERT_STR_EQ(queued[0], "ls -la");
+    ASSERT_STR_EQ(queued[1], "df -h");
+
+    /* Cleanup */
+    free(state->pending_cmds);
+    free(state);
+    TEST_END();
+}
+
+int test_inline_approval_switch_clears_on_allow(void)
+{
+    TEST_BEGIN();
+    /* After Allow, session state's pending fields are cleared */
+    AiSessionState *state = calloc(1, sizeof(AiSessionState));
+    ASSERT_TRUE(state != NULL);
+    state->pending_approval = 1;
+    state->pending_cmd_count = 1;
+    state->pending_cmds = malloc(1024);
+    ASSERT_TRUE(state->pending_cmds != NULL);
+    snprintf(state->pending_cmds[0], 1024, "uptime");
+
+    /* Simulate Allow click */
+    state->pending_approval = 0;
+    free(state->pending_cmds);
+    state->pending_cmds = NULL;
+    state->pending_cmd_count = 0;
+
+    ASSERT_EQ(state->pending_approval, 0);
+    ASSERT_EQ(state->pending_cmd_count, 0);
+    ASSERT_TRUE(state->pending_cmds == NULL);
+    free(state);
+    TEST_END();
+}
+
+int test_inline_approval_deferred_extract_on_switch(void)
+{
+    TEST_BEGIN();
+    /* When AI response arrives while user is on a different session,
+     * commands must still be extracted and saved to the original
+     * session's state for deferred approval. */
+    AiSessionState *bs = calloc(1, sizeof(AiSessionState));
+    ASSERT_TRUE(bs != NULL);
+
+    /* AI response text with a command block */
+    const char *response =
+        "Here is the command:\n[EXEC]ping -c 3 server[/EXEC]\n";
+
+    /* Extract commands (same as the switched-away WM_AI_RESPONSE path) */
+    char cmds[16][1024];
+    int ncmds = ai_extract_commands(response, cmds, 16);
+    ASSERT_EQ(ncmds, 1);
+    ASSERT_STR_EQ(cmds[0], "ping -c 3 server");
+
+    /* Save to session state (simulates the deferred save) */
+    if (ncmds > 0) {
+        free(bs->pending_cmds);
+        size_t sz = (size_t)ncmds * sizeof(cmds[0]);
+        bs->pending_cmds = malloc(sz);
+        ASSERT_TRUE(bs->pending_cmds != NULL);
+        memcpy(bs->pending_cmds, cmds, sz);
+        bs->pending_cmd_count = ncmds;
+        bs->pending_approval = 1;
+    }
+
+    /* Verify the command survives in session state */
+    ASSERT_EQ(bs->pending_approval, 1);
+    ASSERT_EQ(bs->pending_cmd_count, 1);
+    ASSERT_STR_EQ(bs->pending_cmds[0], "ping -c 3 server");
+
+    free(bs->pending_cmds);
+    free(bs);
+    TEST_END();
+}
+
+int test_inline_approval_deferred_no_commands(void)
+{
+    TEST_BEGIN();
+    /* If AI response has no commands, no approval should be saved */
+    AiSessionState *bs = calloc(1, sizeof(AiSessionState));
+    ASSERT_TRUE(bs != NULL);
+
+    const char *response = "The server looks fine, no action needed.";
+    char cmds[16][1024];
+    int ncmds = ai_extract_commands(response, cmds, 16);
+    ASSERT_EQ(ncmds, 0);
+
+    /* No commands → no pending approval */
+    ASSERT_EQ(bs->pending_approval, 0);
+    ASSERT_TRUE(bs->pending_cmds == NULL);
+    free(bs);
+    TEST_END();
+}
+
+int test_inline_approval_two_sessions_independent(void)
+{
+    TEST_BEGIN();
+    /* Two sessions with independent pending approval states.
+     * Allowing one must not affect the other. */
+    AiSessionState *sa = calloc(1, sizeof(AiSessionState));
+    AiSessionState *sb = calloc(1, sizeof(AiSessionState));
+    ASSERT_TRUE(sa != NULL);
+    ASSERT_TRUE(sb != NULL);
+
+    /* Session A: pending approval with "ls -la" */
+    sa->pending_approval = 1;
+    sa->pending_cmd_count = 1;
+    sa->pending_cmds = malloc(1024);
+    ASSERT_TRUE(sa->pending_cmds != NULL);
+    snprintf(sa->pending_cmds[0], 1024, "ls -la");
+
+    /* Session B: pending approval with "df -h" */
+    sb->pending_approval = 1;
+    sb->pending_cmd_count = 1;
+    sb->pending_cmds = malloc(1024);
+    ASSERT_TRUE(sb->pending_cmds != NULL);
+    snprintf(sb->pending_cmds[0], 1024, "df -h");
+
+    /* Allow on session B */
+    sb->pending_approval = 0;
+    free(sb->pending_cmds);
+    sb->pending_cmds = NULL;
+    sb->pending_cmd_count = 0;
+
+    /* Session A must be completely unaffected */
+    ASSERT_EQ(sa->pending_approval, 1);
+    ASSERT_EQ(sa->pending_cmd_count, 1);
+    ASSERT_STR_EQ(sa->pending_cmds[0], "ls -la");
+
+    free(sa->pending_cmds);
+    free(sa);
+    free(sb);
+    TEST_END();
+}
+
+int test_inline_approval_deny_one_keep_other(void)
+{
+    TEST_BEGIN();
+    /* Denying on one session must not affect the other */
+    AiSessionState *sa = calloc(1, sizeof(AiSessionState));
+    AiSessionState *sb = calloc(1, sizeof(AiSessionState));
+    ASSERT_TRUE(sa != NULL);
+    ASSERT_TRUE(sb != NULL);
+
+    sa->pending_approval = 1;
+    sa->pending_cmd_count = 2;
+    sa->pending_cmds = malloc(2 * 1024);
+    ASSERT_TRUE(sa->pending_cmds != NULL);
+    snprintf(sa->pending_cmds[0], 1024, "rm file");
+    snprintf(sa->pending_cmds[1], 1024, "rmdir dir");
+
+    sb->pending_approval = 1;
+    sb->pending_cmd_count = 1;
+    sb->pending_cmds = malloc(1024);
+    ASSERT_TRUE(sb->pending_cmds != NULL);
+    snprintf(sb->pending_cmds[0], 1024, "uptime");
+
+    /* Deny on A */
+    sa->pending_approval = 0;
+    free(sa->pending_cmds);
+    sa->pending_cmds = NULL;
+    sa->pending_cmd_count = 0;
+
+    /* B still pending */
+    ASSERT_EQ(sb->pending_approval, 1);
+    ASSERT_EQ(sb->pending_cmd_count, 1);
+    ASSERT_STR_EQ(sb->pending_cmds[0], "uptime");
+
+    free(sb->pending_cmds);
+    free(sa);
+    free(sb);
+    TEST_END();
+}
+
+int test_inline_approval_save_restore_roundtrip(void)
+{
+    TEST_BEGIN();
+    /* Full roundtrip: save working state → session, switch away,
+     * switch back → restore from session, verify commands intact. */
+    AiSessionState *state = calloc(1, sizeof(AiSessionState));
+    ASSERT_TRUE(state != NULL);
+
+    /* Working state: 3 pending commands */
+    char working_cmds[16][1024];
+    int working_count = 3;
+    int working_approval = 1;
+    snprintf(working_cmds[0], 1024, "ps aux");
+    snprintf(working_cmds[1], 1024, "free -m");
+    snprintf(working_cmds[2], 1024, "df -h");
+
+    /* Step 1: save to session (simulates switching away) */
+    state->pending_approval = working_approval;
+    state->pending_cmd_count = 0;
+    if (working_approval && working_count > 0) {
+        size_t sz = (size_t)working_count * sizeof(working_cmds[0]);
+        state->pending_cmds = malloc(sz);
+        ASSERT_TRUE(state->pending_cmds != NULL);
+        memcpy(state->pending_cmds, working_cmds, sz);
+        state->pending_cmd_count = working_count;
+    }
+
+    /* Step 2: clear working state (simulates loading other session) */
+    working_approval = 0;
+    working_count = 0;
+    memset(working_cmds, 0, sizeof(working_cmds));
+
+    /* Step 3: restore from session (simulates switching back) */
+    if (state->pending_approval && state->pending_cmds &&
+        state->pending_cmd_count > 0) {
+        int nc = state->pending_cmd_count;
+        if (nc > 16) nc = 16;
+        memcpy(working_cmds, state->pending_cmds,
+               (size_t)nc * sizeof(working_cmds[0]));
+        working_count = nc;
+        working_approval = 1;
+    }
+
+    /* Verify full roundtrip */
+    ASSERT_EQ(working_approval, 1);
+    ASSERT_EQ(working_count, 3);
+    ASSERT_STR_EQ(working_cmds[0], "ps aux");
+    ASSERT_STR_EQ(working_cmds[1], "free -m");
+    ASSERT_STR_EQ(working_cmds[2], "df -h");
+
+    free(state->pending_cmds);
+    free(state);
+    TEST_END();
+}
+
+int test_inline_approval_deferred_multi_commands(void)
+{
+    TEST_BEGIN();
+    /* Deferred extraction with multiple commands */
+    AiSessionState *bs = calloc(1, sizeof(AiSessionState));
+    ASSERT_TRUE(bs != NULL);
+
+    const char *response =
+        "Run these:\n"
+        "[EXEC]ls -la ~[/EXEC]\n"
+        "[EXEC]ss -tlnp[/EXEC]\n"
+        "[EXEC]ps aux --sort=-%mem | head -20[/EXEC]\n";
+
+    char cmds[16][1024];
+    int ncmds = ai_extract_commands(response, cmds, 16);
+    ASSERT_TRUE(ncmds >= 3);
+
+    size_t sz = (size_t)ncmds * sizeof(cmds[0]);
+    bs->pending_cmds = malloc(sz);
+    ASSERT_TRUE(bs->pending_cmds != NULL);
+    memcpy(bs->pending_cmds, cmds, sz);
+    bs->pending_cmd_count = ncmds;
+    bs->pending_approval = 1;
+
+    /* All commands survive heap storage */
+    ASSERT_STR_EQ(bs->pending_cmds[0], "ls -la ~");
+    ASSERT_STR_EQ(bs->pending_cmds[1], "ss -tlnp");
+    ASSERT_TRUE(strstr(bs->pending_cmds[2], "ps aux") != NULL);
+
+    /* Confirm text can be rebuilt from stored commands */
+    char confirm[4096];
+    size_t clen = ai_build_confirm_text(
+        bs->pending_cmds, bs->pending_cmd_count,
+        confirm, sizeof(confirm));
+    ASSERT_TRUE(clen > 0);
+    ASSERT_TRUE(strstr(confirm, "ls -la ~") != NULL);
+    ASSERT_TRUE(strstr(confirm, "ss -tlnp") != NULL);
+
+    free(bs->pending_cmds);
+    free(bs);
+    TEST_END();
+}

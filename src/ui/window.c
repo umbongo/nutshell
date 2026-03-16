@@ -164,6 +164,7 @@ static void free_session(Session *s) {
         if (s->channel) ssh_channel_free(s->channel);
         if (s->ssh) ssh_session_free(s->ssh);
         if (s->session_log) fclose(s->session_log);
+        free(s->ai_state.pending_cmds);
         term_free(s->term);
         free(s);
     }

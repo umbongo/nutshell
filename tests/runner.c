@@ -602,6 +602,34 @@ int test_save_text_thinking_hidden(void);
 int test_save_text_skips_system(void);
 int test_save_text_null_safety(void);
 int test_save_text_multi_exchange(void);
+int test_session_state_init_not_valid(void);
+int test_session_state_save_restore(void);
+int test_session_state_two_sessions_isolated(void);
+int test_session_state_switch_preserves_old(void);
+int test_session_state_busy_commit_to_original(void);
+int test_session_state_switch_back_has_response(void);
+int test_session_state_reset_clears_valid(void);
+int test_new_chat_only_resets_active_session(void);
+int test_new_chat_then_switch_preserves_other(void);
+int test_new_chat_then_switch_back_stays_empty(void);
+int test_new_chat_preserves_model(void);
+int test_new_chat_multiple_sessions_all_isolated(void);
+int test_inline_approval_confirm_text_has_newlines(void);
+int test_inline_approval_confirm_text_no_modal_title(void);
+int test_inline_approval_queued_cmds_preserved(void);
+int test_inline_approval_deny_clears_queue(void);
+int test_inline_approval_allow_starts_execution(void);
+int test_inline_approval_blocks_send(void);
+int test_inline_approval_blocks_new_chat(void);
+int test_inline_approval_readonly_filter_then_approve(void);
+int test_inline_approval_switch_saves_to_session(void);
+int test_inline_approval_switch_clears_on_allow(void);
+int test_inline_approval_deferred_extract_on_switch(void);
+int test_inline_approval_deferred_no_commands(void);
+int test_inline_approval_two_sessions_independent(void);
+int test_inline_approval_deny_one_keep_other(void);
+int test_inline_approval_save_restore_roundtrip(void);
+int test_inline_approval_deferred_multi_commands(void);
 
 /* test_edit_scroll.c */
 int test_edit_scroll_visible_basic(void);
@@ -1355,6 +1383,40 @@ int main(void) {
     failed += test_save_text_skips_system();
     failed += test_save_text_null_safety();
     failed += test_save_text_multi_exchange();
+
+    printf("\n--- Session Switch ---\n");
+    failed += test_session_state_init_not_valid();
+    failed += test_session_state_save_restore();
+    failed += test_session_state_two_sessions_isolated();
+    failed += test_session_state_switch_preserves_old();
+    failed += test_session_state_busy_commit_to_original();
+    failed += test_session_state_switch_back_has_response();
+    failed += test_session_state_reset_clears_valid();
+
+    printf("\n--- New Chat Isolation ---\n");
+    failed += test_new_chat_only_resets_active_session();
+    failed += test_new_chat_then_switch_preserves_other();
+    failed += test_new_chat_then_switch_back_stays_empty();
+    failed += test_new_chat_preserves_model();
+    failed += test_new_chat_multiple_sessions_all_isolated();
+
+    printf("\n--- Inline Command Approval ---\n");
+    failed += test_inline_approval_confirm_text_has_newlines();
+    failed += test_inline_approval_confirm_text_no_modal_title();
+    failed += test_inline_approval_queued_cmds_preserved();
+    failed += test_inline_approval_deny_clears_queue();
+    failed += test_inline_approval_allow_starts_execution();
+    failed += test_inline_approval_blocks_send();
+    failed += test_inline_approval_blocks_new_chat();
+    failed += test_inline_approval_readonly_filter_then_approve();
+    failed += test_inline_approval_switch_saves_to_session();
+    failed += test_inline_approval_switch_clears_on_allow();
+    failed += test_inline_approval_deferred_extract_on_switch();
+    failed += test_inline_approval_deferred_no_commands();
+    failed += test_inline_approval_two_sessions_independent();
+    failed += test_inline_approval_deny_one_keep_other();
+    failed += test_inline_approval_save_restore_roundtrip();
+    failed += test_inline_approval_deferred_multi_commands();
 
     printf("\n--- Edit Scroll ---\n");
     failed += test_edit_scroll_visible_basic();

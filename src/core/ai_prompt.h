@@ -159,6 +159,10 @@ AiInputAction ai_input_key_action(int is_enter, int shift_held);
 typedef struct {
     AiConversation conv;
     int valid;  /* 0 = never used, 1 = has saved conversation */
+    /* Pending command approval (heap-allocated to keep struct small) */
+    int pending_approval;
+    int pending_cmd_count;
+    char (*pending_cmds)[1024];  /* heap array, NULL when not pending */
 } AiSessionState;
 
 #endif /* NUTSHELL_AI_PROMPT_H */
