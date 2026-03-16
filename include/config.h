@@ -19,6 +19,9 @@
 
 /* Maximum length for string fields (including null terminator). */
 #define CFG_STR_MAX ((size_t)256)
+#ifndef AI_NOTES_MAX
+#define AI_NOTES_MAX ((size_t)2560)
+#endif
 
 /* ---- Authentication type -------------------------------------------------- */
 
@@ -45,6 +48,7 @@ typedef struct {
     char   ai_api_key[CFG_STR_MAX];
     char   ai_custom_url[CFG_STR_MAX];
     char   ai_custom_model[CFG_STR_MAX];
+    char   ai_system_notes[AI_NOTES_MAX];
 } Settings;
 
 /* ---- Profile -------------------------------------------------------------- */
@@ -57,6 +61,7 @@ typedef struct {
     AuthType auth_type;
     char     password[CFG_STR_MAX];
     char     key_path[CFG_STR_MAX];
+    char     ai_notes[AI_NOTES_MAX];
 } Profile;
 
 /* ---- Config --------------------------------------------------------------- */

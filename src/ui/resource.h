@@ -1,6 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
+#define APP_VERSION "0.9.0"
+
 #define IDD_SESSION_MANAGER 101
 
 /* Session list panel */
@@ -20,5 +22,6 @@
 #define IDC_EDIT_KEYPATH    1017
 #define IDC_BTN_SAVE        1018
 #define IDC_BTN_BROWSE_KEY  1019
+#define IDC_EDIT_AI_NOTES   1020
 
 #endif

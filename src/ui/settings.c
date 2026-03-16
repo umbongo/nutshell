@@ -2,6 +2,8 @@
 #include "app_font.h"
 #include "ui_theme.h"
 #include "themed_button.h"
+#include "custom_scrollbar.h"
+#include "edit_scroll.h"
 #include "ai_prompt.h"
 #include "ai_http.h"
 #include "json_parser.h"
@@ -26,7 +28,9 @@
 #define IDC_AI_CUSTOM_MODEL 1017
 #define IDC_AI_REFRESH      1019
 #define IDC_SCHEME_COMBO    1020
+#define IDC_AI_SYSTEM_NOTES 1021
 #define WM_AI_MODELS_DONE   (WM_USER + 200)
+#define IDT_SYSNOTES_SCROLL 51  /* timer for AI instructions scroll sync */
 
 static const char *SETTINGS_CLASS = "Nutshell_Settings";
 
@@ -74,6 +78,8 @@ typedef struct {
     HBRUSH   hBrBgPrimary;
     HBRUSH   hBrBgSecondary;
     int      dpi;
+    HWND     hSysNotesScroll; /* custom scrollbar for AI instructions */
+    int      sys_notes_line_h; /* cached line height in px */
 } SettingsDlgData;
 
 /* ---- Layout helpers ----------------------------------------------------- */
@@ -197,6 +203,13 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
     ctx->result = buf;
     PostMessage(ctx->hwnd, WM_AI_MODELS_DONE, 0, (LPARAM)ctx);
     return 0;
+}
+
+/* Sync AI instructions edit scroll state to custom scrollbar. */
+static void sys_notes_sync_scroll(HWND hwnd, SettingsDlgData *d)
+{
+    HWND hEdit = GetDlgItem(hwnd, IDC_AI_SYSTEM_NOTES);
+    csb_sync_edit(hEdit, d->hSysNotesScroll, d->sys_notes_line_h);
 }
 
 /* ---- Window procedure --------------------------------------------------- */
@@ -337,8 +350,20 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)300);
         }
 
-        /* Row 7: AI Provider */
-        y += rh + S(5); /* advance past Log Name Format row + small gap */
+        /* Row 7: AI API Key (masked) — between log format and AI provider */
+        y += rh;
+        make_label(hwnd, "AI API Key:", lx, y, lw, nd->dpi);
+        {
+            HWND hKey = CreateWindow("EDIT",
+                nd->cfg->settings.ai_api_key,
+                WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_PASSWORD,
+                ex, y + 1, ew, S(22), hwnd, (HMENU)IDC_AI_KEY_EDIT, NULL, NULL);
+            SendMessage(hKey, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                        MAKELPARAM(3, 3));
+        }
+
+        /* Row 8: AI Provider */
+        y += rh + S(5); /* small gap before AI section */
         int is_custom = (_stricmp(nd->cfg->settings.ai_provider, "custom") == 0);
         make_label(hwnd, "AI Provider:", lx, y, lw, nd->dpi);
         {
@@ -354,7 +379,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         }
         y += rh;
 
-        /* Row 8: AI Model (combo + refresh button) */
+        /* Row 9: AI Model (combo + refresh button) */
         {
             int model_w = ew - S(30); /* leave room for refresh button */
             make_label(hwnd, "AI Model:", lx, y, lw, nd->dpi);
@@ -376,18 +401,6 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         }
         y += rh;
 
-        /* Row 9: AI API Key (masked) */
-        make_label(hwnd, "AI API Key:", lx, y, lw, nd->dpi);
-        {
-            HWND hKey = CreateWindow("EDIT",
-                nd->cfg->settings.ai_api_key,
-                WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_PASSWORD,
-                ex, y + 1, ew, S(22), hwnd, (HMENU)IDC_AI_KEY_EDIT, NULL, NULL);
-            SendMessage(hKey, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
-                        MAKELPARAM(3, 3));
-        }
-        y += rh;
-
         /* Row 10: AI Base URL (only for custom provider) */
         {
             HWND hUrlLabel = make_label(hwnd, "AI Base URL:", lx, y, lw, nd->dpi);
@@ -399,6 +412,29 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             SendMessage(hUrl, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                         MAKELPARAM(3, 3));
             if (!is_custom) ShowWindow(hUrlLabel, SW_HIDE);
+        }
+        y += rh;
+
+        /* Row 11: AI System Instructions (multiline, two-line label) */
+        {
+            int lbl_h = MulDiv(30, nd->dpi, 96); /* two lines */
+            CreateWindow("STATIC", "System Wide\r\nAI Instructions:",
+                WS_VISIBLE | WS_CHILD | SS_RIGHT,
+                S(2), y, ex - S(6), lbl_h, hwnd, NULL, NULL, NULL);
+        }
+        {
+            int edit_w = ew - CSB_WIDTH;
+            int edit_h = S(132);
+            HWND hSysNotes = CreateWindow("EDIT",
+                nd->cfg->settings.ai_system_notes,
+                WS_VISIBLE | WS_CHILD | WS_BORDER |
+                ES_MULTILINE | ES_AUTOVSCROLL,
+                ex, y + 1, edit_w, edit_h, hwnd, (HMENU)IDC_AI_SYSTEM_NOTES, NULL, NULL);
+            SendMessage(hSysNotes, EM_SETLIMITTEXT, (WPARAM)2559, 0);
+            SendMessage(hSysNotes, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                        MAKELPARAM(3, 3));
+            SendMessageW(hSysNotes, EM_SETCUEBANNER, 0,
+                         (LPARAM)L"System-wide AI instructions (max 400 words)");
         }
 
         /* Action buttons (owner-drawn for theme) */
@@ -439,6 +475,35 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             nd->hBrBgSecondary = CreateSolidBrush(theme_cr(nd->theme->bg_secondary));
             themed_apply_title_bar(hwnd, nd->theme);
             themed_apply_borders(hwnd, nd->theme);
+        }
+
+        /* Custom scrollbar for AI instructions multiline edit */
+        {
+            HWND hEdit = GetDlgItem(hwnd, IDC_AI_SYSTEM_NOTES);
+            if (hEdit) {
+                /* Measure line height from applied font */
+                HDC hdc = GetDC(hEdit);
+                HGDIOBJ old = SelectObject(hdc, (HGDIOBJ)nd->hDlgFont);
+                TEXTMETRIC tm;
+                GetTextMetrics(hdc, &tm);
+                nd->sys_notes_line_h = tm.tmHeight + tm.tmExternalLeading;
+                if (nd->sys_notes_line_h < 1) nd->sys_notes_line_h = 16;
+                SelectObject(hdc, old);
+                ReleaseDC(hEdit, hdc);
+
+                /* Position scrollbar on right edge of edit */
+                RECT erc;
+                GetWindowRect(hEdit, &erc);
+                POINT pt = { erc.right, erc.top };
+                ScreenToClient(hwnd, &pt);
+                int eh = erc.bottom - erc.top;
+
+                csb_register(GetModuleHandle(NULL));
+                nd->hSysNotesScroll = csb_create(hwnd, pt.x, pt.y,
+                                                 CSB_WIDTH, eh, nd->theme,
+                                                 GetModuleHandle(NULL));
+                SetTimer(hwnd, IDT_SYSNOTES_SCROLL, 50, NULL);
+            }
         }
 
         return 0;
@@ -488,6 +553,40 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         free(ctx);
         return 0;
     }
+
+    case WM_VSCROLL:
+        /* Custom scrollbar for AI instructions */
+        if (d && d->hSysNotesScroll && (HWND)lParam == d->hSysNotesScroll) {
+            WORD code = LOWORD(wParam);
+            HWND hEdit = GetDlgItem(hwnd, IDC_AI_SYSTEM_NOTES);
+            int first = (int)SendMessage(hEdit, EM_GETFIRSTVISIBLELINE, 0, 0);
+            int delta = 0;
+            switch (code) {
+            case SB_LINEUP:    delta = -1; break;
+            case SB_LINEDOWN:  delta =  1; break;
+            case SB_PAGEUP:    delta = -3; break;
+            case SB_PAGEDOWN:  delta =  3; break;
+            case SB_THUMBTRACK:
+            case SB_THUMBPOSITION:
+                delta = edit_scroll_line_delta(
+                    csb_get_trackpos(d->hSysNotesScroll), first);
+                break;
+            case SB_TOP:       delta = -first; break;
+            case SB_BOTTOM:    delta = 99999;  break;
+            }
+            if (delta != 0)
+                SendMessage(hEdit, EM_LINESCROLL, 0, (LPARAM)delta);
+            sys_notes_sync_scroll(hwnd, d);
+            return 0;
+        }
+        break;
+
+    case WM_TIMER:
+        if (wParam == IDT_SYSNOTES_SCROLL && d) {
+            sys_notes_sync_scroll(hwnd, d);
+            return 0;
+        }
+        break;
 
     case WM_ERASEBKGND:
         if (d && d->theme) {
@@ -706,6 +805,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                 }
             }
 
+            /* AI system-wide instructions */
+            GetDlgItemText(hwnd, IDC_AI_SYSTEM_NOTES,
+                           s->ai_system_notes, (int)sizeof(s->ai_system_notes));
+
             /* Clamp out-of-range values before persisting */
             settings_validate(s);
             config_save(d->cfg, "config.json");
@@ -721,6 +824,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
 
     case WM_DESTROY:
         if (d) {
+            KillTimer(hwnd, IDT_SYSNOTES_SCROLL);
             if (d->hTooltip) DestroyWindow(d->hTooltip);
             if (d->hDlgFont) DeleteObject(d->hDlgFont);
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
@@ -772,7 +876,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(400, pdpi, 96), MulDiv(490, pdpi, 96),
+        MulDiv(400, pdpi, 96), MulDiv(686, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {

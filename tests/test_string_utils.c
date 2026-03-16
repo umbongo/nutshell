@@ -249,3 +249,95 @@ int test_ansi_strip_null_dst(void)
     ASSERT_EQ((int)n, 0);
     TEST_END();
 }
+
+/* ---- utf8_encode -------------------------------------------------------- */
+
+int test_utf8_encode_ascii(void)
+{
+    TEST_BEGIN();
+    char buf[4];
+    ASSERT_EQ(utf8_encode(0x41, buf), 1);        /* 'A' */
+    ASSERT_EQ(buf[0], 'A');
+    ASSERT_EQ(utf8_encode(0x00, buf), 1);         /* NUL */
+    ASSERT_EQ(buf[0], '\0');
+    ASSERT_EQ(utf8_encode(0x7F, buf), 1);         /* DEL — last 1-byte */
+    ASSERT_EQ((unsigned char)buf[0], 0x7F);
+    TEST_END();
+}
+
+int test_utf8_encode_2byte(void)
+{
+    TEST_BEGIN();
+    char buf[4];
+    /* U+00A9 = copyright sign: C2 A9 */
+    ASSERT_EQ(utf8_encode(0xA9, buf), 2);
+    ASSERT_EQ((unsigned char)buf[0], 0xC2);
+    ASSERT_EQ((unsigned char)buf[1], 0xA9);
+    /* U+07FF — last 2-byte codepoint */
+    ASSERT_EQ(utf8_encode(0x7FF, buf), 2);
+    ASSERT_EQ((unsigned char)buf[0], 0xDF);
+    ASSERT_EQ((unsigned char)buf[1], 0xBF);
+    /* U+0080 — first 2-byte codepoint */
+    ASSERT_EQ(utf8_encode(0x80, buf), 2);
+    ASSERT_EQ((unsigned char)buf[0], 0xC2);
+    ASSERT_EQ((unsigned char)buf[1], 0x80);
+    TEST_END();
+}
+
+int test_utf8_encode_3byte(void)
+{
+    TEST_BEGIN();
+    char buf[4];
+    /* U+4E16 = 世 : E4 B8 96 */
+    ASSERT_EQ(utf8_encode(0x4E16, buf), 3);
+    ASSERT_EQ((unsigned char)buf[0], 0xE4);
+    ASSERT_EQ((unsigned char)buf[1], 0xB8);
+    ASSERT_EQ((unsigned char)buf[2], 0x96);
+    /* U+0800 — first 3-byte codepoint */
+    ASSERT_EQ(utf8_encode(0x800, buf), 3);
+    ASSERT_EQ((unsigned char)buf[0], 0xE0);
+    ASSERT_EQ((unsigned char)buf[1], 0xA0);
+    ASSERT_EQ((unsigned char)buf[2], 0x80);
+    /* U+FFFF — last 3-byte codepoint */
+    ASSERT_EQ(utf8_encode(0xFFFF, buf), 3);
+    ASSERT_EQ((unsigned char)buf[0], 0xEF);
+    ASSERT_EQ((unsigned char)buf[1], 0xBF);
+    ASSERT_EQ((unsigned char)buf[2], 0xBF);
+    TEST_END();
+}
+
+int test_utf8_encode_4byte(void)
+{
+    TEST_BEGIN();
+    char buf[4];
+    /* U+1F600 = 😀 : F0 9F 98 80 */
+    ASSERT_EQ(utf8_encode(0x1F600, buf), 4);
+    ASSERT_EQ((unsigned char)buf[0], 0xF0);
+    ASSERT_EQ((unsigned char)buf[1], 0x9F);
+    ASSERT_EQ((unsigned char)buf[2], 0x98);
+    ASSERT_EQ((unsigned char)buf[3], 0x80);
+    /* U+10000 — first 4-byte codepoint */
+    ASSERT_EQ(utf8_encode(0x10000, buf), 4);
+    ASSERT_EQ((unsigned char)buf[0], 0xF0);
+    ASSERT_EQ((unsigned char)buf[1], 0x90);
+    ASSERT_EQ((unsigned char)buf[2], 0x80);
+    ASSERT_EQ((unsigned char)buf[3], 0x80);
+    /* U+10FFFF — last valid codepoint */
+    ASSERT_EQ(utf8_encode(0x10FFFF, buf), 4);
+    ASSERT_EQ((unsigned char)buf[0], 0xF4);
+    ASSERT_EQ((unsigned char)buf[1], 0x8F);
+    ASSERT_EQ((unsigned char)buf[2], 0xBF);
+    ASSERT_EQ((unsigned char)buf[3], 0xBF);
+    TEST_END();
+}
+
+int test_utf8_encode_out_of_range(void)
+{
+    TEST_BEGIN();
+    char buf[4];
+    /* U+110000 — first invalid codepoint */
+    ASSERT_EQ(utf8_encode(0x110000, buf), 0);
+    /* Large value */
+    ASSERT_EQ(utf8_encode(0xFFFFFFFF, buf), 0);
+    TEST_END();
+}

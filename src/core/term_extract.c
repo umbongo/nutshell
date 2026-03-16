@@ -1,31 +1,6 @@
 #include "term_extract.h"
+#include "string_utils.h"
 #include <string.h>
-
-/* Encode a Unicode codepoint as UTF-8 into buf (must have room for 4 bytes).
- * Returns the number of bytes written. */
-static int encode_utf8(uint32_t cp, char *buf)
-{
-    if (cp < 0x80) {
-        buf[0] = (char)cp;
-        return 1;
-    } else if (cp < 0x800) {
-        buf[0] = (char)(0xC0 | (cp >> 6));
-        buf[1] = (char)(0x80 | (cp & 0x3F));
-        return 2;
-    } else if (cp < 0x10000) {
-        buf[0] = (char)(0xE0 | (cp >> 12));
-        buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[2] = (char)(0x80 | (cp & 0x3F));
-        return 3;
-    } else if (cp < 0x110000) {
-        buf[0] = (char)(0xF0 | (cp >> 18));
-        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[3] = (char)(0x80 | (cp & 0x3F));
-        return 4;
-    }
-    return 0;
-}
 
 /* Extract rows from logical index range [start_logical, start_logical+count)
  * into buf. Returns bytes written (excluding NUL). */
@@ -73,7 +48,7 @@ static size_t extract_rows(const Terminal *term, int start_logical, int count,
             if (cp == 0) cp = ' '; /* empty cell → space */
 
             char u8[4];
-            int n = encode_utf8(cp, u8);
+            int n = utf8_encode(cp, u8);
             if (pos + (size_t)n >= buf_size) goto done; /* leave room for NUL */
             memcpy(buf + pos, u8, (size_t)n);
             pos += (size_t)n;

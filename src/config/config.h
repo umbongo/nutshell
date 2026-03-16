@@ -4,6 +4,9 @@
 #include <stddef.h>
 
 #define CFG_STR_MAX ((size_t)256)
+#ifndef AI_NOTES_MAX
+#define AI_NOTES_MAX ((size_t)2560)
+#endif
 
 #include "profile.h"
 #include "../core/vector.h"
@@ -24,6 +27,7 @@ typedef struct {
     char ai_api_key[CFG_STR_MAX];
     char ai_custom_url[CFG_STR_MAX];
     char ai_custom_model[CFG_STR_MAX];
+    char ai_system_notes[AI_NOTES_MAX];
 } Settings;
 
 typedef struct {

@@ -23,6 +23,10 @@ typedef struct {
     AuthType auth_type;
     char password[256]; // Or passphrase for key
     char key_path[MAX_PATH];
+#ifndef AI_NOTES_MAX
+#define AI_NOTES_MAX 2560
+#endif
+    char ai_notes[AI_NOTES_MAX]; // Per-session notes for AI context
 } Profile;
 
 #endif

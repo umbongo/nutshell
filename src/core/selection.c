@@ -1,4 +1,5 @@
 #include "selection.h"
+#include "string_utils.h"
 #include <string.h>
 
 void selection_pixel_to_cell(int px, int py, int char_w, int char_h,
@@ -32,31 +33,6 @@ void selection_normalise(const Selection *sel, int *r0, int *c0, int *r1, int *c
         *r0 = sr; *c0 = sc;
         *r1 = er; *c1 = ec;
     }
-}
-
-/* Encode a Unicode codepoint as UTF-8. Returns bytes written. */
-static int sel_encode_utf8(uint32_t cp, char *buf)
-{
-    if (cp < 0x80) {
-        buf[0] = (char)cp;
-        return 1;
-    } else if (cp < 0x800) {
-        buf[0] = (char)(0xC0 | (cp >> 6));
-        buf[1] = (char)(0x80 | (cp & 0x3F));
-        return 2;
-    } else if (cp < 0x10000) {
-        buf[0] = (char)(0xE0 | (cp >> 12));
-        buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[2] = (char)(0x80 | (cp & 0x3F));
-        return 3;
-    } else if (cp < 0x110000) {
-        buf[0] = (char)(0xF0 | (cp >> 18));
-        buf[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-        buf[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-        buf[3] = (char)(0x80 | (cp & 0x3F));
-        return 4;
-    }
-    return 0;
 }
 
 size_t selection_extract_text(const Selection *sel, const Terminal *term,
@@ -100,7 +76,7 @@ size_t selection_extract_text(const Selection *sel, const Terminal *term,
             uint32_t cp = trow->cells[c].codepoint;
             if (cp == 0) cp = ' ';
             char u8[4];
-            int n = sel_encode_utf8(cp, u8);
+            int n = utf8_encode(cp, u8);
             if (pos + (size_t)n >= buf_size) goto done;
             memcpy(buf + pos, u8, (size_t)n);
             pos += (size_t)n;

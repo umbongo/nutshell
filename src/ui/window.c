@@ -27,7 +27,7 @@
 #include "custom_scrollbar.h"
 
 static const char *CLASS_NAME = "Nutshell_Window";
-static const char *APP_TITLE = "Nutshell";
+static const char *APP_TITLE = "Nutshell v" APP_VERSION;
 
 /* Per-monitor DPI helper.  Dynamically loads GetDpiForWindow (Win10 1607+)
  * and falls back to the system-wide LOGPIXELSY value on older builds. */
@@ -73,6 +73,7 @@ typedef struct Session {
     ULONGLONG       conn_start_ms;
     int             conn_dots;     /* dots appended so far */
     CRITICAL_SECTION conn_cs;      /* H-1: guards conn_result/conn_error/ssh/channel */
+    AiSessionState ai_state;       /* per-session AI conversation */
     struct Session *next;
 } Session;
 
@@ -146,6 +147,7 @@ static Session *create_session(int rows, int cols) {
     s->conn_start_ms = 0;
     s->conn_dots = 0;
     InitializeCriticalSection(&s->conn_cs);  /* H-1 */
+    memset(&s->ai_state, 0, sizeof(s->ai_state));
     s->next = g_session_list;
     g_session_list = s;
     return s;
@@ -175,11 +177,15 @@ static void on_tab_select(int index, void *user_data) {
     invalidate_terminal(hParent);
     SetFocus(hParent);
 
-    /* Update AI chat with the new active session */
+    /* Switch AI chat to the new session's conversation */
     if (g_hwndAiChat && IsWindow(g_hwndAiChat) && g_active_session) {
-        ai_chat_set_session(g_hwndAiChat,
-                           g_active_session->term,
-                           g_active_session->channel);
+        ai_chat_switch_session(g_hwndAiChat,
+                               &g_active_session->ai_state,
+                               g_active_session->term,
+                               g_active_session->channel,
+                               g_active_session->conn_profile.ai_notes,
+                               g_config->settings.ai_system_notes,
+                               g_active_session->conn_profile.name);
     }
 }
 
@@ -209,6 +215,10 @@ static void on_tab_close(int index, void *user_data) {
     if (g_active_session == s) {
         g_active_session = NULL;
     }
+
+    /* Notify AI chat before freeing so it can clear dangling pointers */
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat))
+        ai_chat_notify_session_closed(g_hwndAiChat, &s->ai_state);
 
     free_session(s);
     tabs_remove(g_hwndTabs, index);
@@ -552,6 +562,7 @@ static void on_session_connect(const Profile *info) {
 
     /* Open the tab immediately so the user sees activity at once */
     Session *s = create_session(rows, cols);
+    s->conn_profile  = *info; /* copy profile early — tab callbacks read it */
     term_process(s->term, "Connecting", 10); /* dots appended by 500ms timer */
 
     char title[32];
@@ -574,7 +585,6 @@ static void on_session_connect(const Profile *info) {
 
     /* Store state for the worker thread */
     s->conn_state    = CONN_CONNECTING;
-    s->conn_profile  = *info;
     s->conn_result   = 0;
     s->conn_error[0] = '\0';
     s->conn_start_ms = GetTickCount64();
@@ -649,13 +659,18 @@ static void on_settings_clicked(void) {
     tabs_set_ai_active(g_hwndTabs,
                        g_config->settings.ai_api_key[0] != '\0');
 
-    /* Update AI chat window with new key/provider if open */
+    /* Update AI chat window with new key/provider/theme if open */
     if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
         ai_chat_update_key(g_hwndAiChat,
                            g_config->settings.ai_api_key,
                            g_config->settings.ai_provider,
                            g_config->settings.ai_custom_url,
                            g_config->settings.ai_custom_model);
+        ai_chat_update_notes(g_hwndAiChat,
+                            g_active_session ? g_active_session->conn_profile.ai_notes : NULL,
+                            g_config->settings.ai_system_notes);
+        ai_chat_set_theme(g_hwndAiChat,
+                          g_config->settings.colour_scheme);
     }
 
     /* Resize all terminals to the new character grid */
@@ -695,7 +710,11 @@ static void on_ai_clicked(void) {
                                 g_config->settings.ai_custom_model,
                                 g_config->settings.paste_delay_ms,
                                 g_config->settings.font,
-                                g_config->settings.colour_scheme);
+                                g_config->settings.colour_scheme,
+                                g_active_session ? g_active_session->conn_profile.ai_notes : NULL,
+                                g_config->settings.ai_system_notes,
+                                g_active_session ? &g_active_session->ai_state : NULL,
+                                g_active_session ? g_active_session->conn_profile.name : NULL);
 
     /* Set the active session if one exists */
     if (g_hwndAiChat && g_active_session) {
@@ -893,7 +912,8 @@ static void do_paste(HWND hwnd)
         g_config->settings.foreground_colour,
         g_config->settings.background_colour,
         g_config->settings.font,
-        g_config->settings.font_size);
+        g_config->settings.font_size,
+        g_config->settings.colour_scheme);
 
     if (confirmed) {
         int delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
@@ -1623,11 +1643,15 @@ void ui_init(HINSTANCE instance) {
         return;
     }
 
-    /* Initial size: 1400 x 900 px, centred on screen */
+    /* Initial size: slightly larger than the Session Manager dialog
+     * (530×317 DLU ≈ 795×513 px at 96 DPI).  Add ~10% margin. */
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
-    int winW = 1400;
-    int winH = 900;
+    int dpi = get_window_dpi(NULL);
+    int winW = MulDiv(880, dpi, 96);
+    int winH = MulDiv(570, dpi, 96);
+    if (winW > screenW) winW = screenW;
+    if (winH > screenH) winH = screenH;
     int x = (screenW - winW) / 2;
     int y = (screenH - winH) / 2;
 

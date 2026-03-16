@@ -177,6 +177,87 @@ int test_ui_theme_find_roundtrip(void) {
     TEST_END();
 }
 
+/* ---- Theme switch tests (pure logic behind ai_chat_set_theme) ---- */
+
+int test_ui_theme_switch_changes_pointer(void) {
+    TEST_BEGIN();
+    /* Switching from one scheme to another yields a different theme pointer */
+    const ThemeColors *a = ui_theme_get(ui_theme_find("Onyx Synapse"));
+    const ThemeColors *b = ui_theme_get(ui_theme_find("Onyx Light"));
+    ASSERT_TRUE(a != b);
+    ASSERT_TRUE(a->bg_primary != b->bg_primary);
+    TEST_END();
+}
+
+int test_ui_theme_switch_all_pairs_differ(void) {
+    TEST_BEGIN();
+    /* Every pair of themes must produce distinct bg_primary colors */
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        for (int j = i + 1; j < NUM_UI_THEMES; j++) {
+            const ThemeColors *a = ui_theme_get(i);
+            const ThemeColors *b = ui_theme_get(j);
+            ASSERT_TRUE(a->bg_primary != b->bg_primary);
+        }
+    }
+    TEST_END();
+}
+
+int test_ui_theme_switch_roundtrip(void) {
+    TEST_BEGIN();
+    /* Switch away and back: same pointer returned */
+    const ThemeColors *orig = ui_theme_get(ui_theme_find("Sage & Sand"));
+    const ThemeColors *other = ui_theme_get(ui_theme_find("Moss & Mist"));
+    ASSERT_TRUE(orig != other);
+    const ThemeColors *back = ui_theme_get(ui_theme_find("Sage & Sand"));
+    ASSERT_TRUE(orig == back);
+    TEST_END();
+}
+
+int test_ui_theme_switch_unknown_falls_back(void) {
+    TEST_BEGIN();
+    /* Switching to unknown scheme falls back to theme 0 */
+    const ThemeColors *def = ui_theme_get(0);
+    const ThemeColors *unk = ui_theme_get(ui_theme_find("NonExistent"));
+    ASSERT_TRUE(def == unk);
+    TEST_END();
+}
+
+int test_ui_theme_switch_null_falls_back(void) {
+    TEST_BEGIN();
+    /* Switching with NULL falls back to theme 0 */
+    const ThemeColors *def = ui_theme_get(0);
+    const ThemeColors *nul = ui_theme_get(ui_theme_find(NULL));
+    ASSERT_TRUE(def == nul);
+    TEST_END();
+}
+
+int test_ui_theme_switch_colors_consistent(void) {
+    TEST_BEGIN();
+    /* After switching, all fields of the returned theme are self-consistent:
+     * bg_secondary differs from bg_primary, text contrasts bg */
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const char *name = ui_theme_name(i);
+        int idx = ui_theme_find(name);
+        const ThemeColors *t = ui_theme_get(idx);
+        ASSERT_TRUE(t->bg_primary != t->bg_secondary);
+        ASSERT_TRUE(t->text_main != t->bg_primary);
+        ASSERT_TRUE(t->terminal_fg != t->terminal_bg);
+    }
+    TEST_END();
+}
+
+int test_ui_theme_switch_preserves_name(void) {
+    TEST_BEGIN();
+    /* The name field of the resolved theme matches what we looked up */
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const char *name = ui_theme_name(i);
+        int idx = ui_theme_find(name);
+        const ThemeColors *t = ui_theme_get(idx);
+        ASSERT_STR_EQ(t->name, name);
+    }
+    TEST_END();
+}
+
 int test_ui_theme_dark_themes_have_light_text(void) {
     TEST_BEGIN();
     for (int i = 0; i < NUM_UI_THEMES; i++) {

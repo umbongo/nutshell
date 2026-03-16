@@ -5,11 +5,16 @@
 #include "session_manager.h"
 #include "../core/app_font.h"
 #include "../core/ui_theme.h"
+#include "../core/edit_scroll.h"
 #include "themed_button.h"
+#include "custom_scrollbar.h"
 #include "../config/profile.h"
 #include "../config/config.h"
 #include "../core/vector.h"
 #include "resource.h"
+
+#define IDT_AINOTES_SCROLL 50  /* timer ID for AI notes scroll sync */
+#define IDT_LIST_SCROLL    51  /* timer ID for session list scroll sync */
 
 /* ---- Internal state passed through GWLP_USERDATA ---- */
 
@@ -22,6 +27,9 @@ typedef struct {
     const ThemeColors *theme;
     HBRUSH      hBrBgPrimary;
     HBRUSH      hBrBgSecondary;
+    HWND        hAiScrollbar; /* custom scrollbar for AI notes edit */
+    int         ai_line_h;    /* cached line height in px for AI notes */
+    HWND        hListScrollbar; /* custom scrollbar for session listbox */
 } SessMgrState;
 
 /* ---- Helpers ---- */
@@ -47,6 +55,7 @@ static void form_clear(HWND hwnd)
     SetDlgItemTextA(hwnd, IDC_EDIT_USER,    "");
     SetDlgItemTextA(hwnd, IDC_EDIT_PASS,    "");
     SetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, "");
+    SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, "");
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL, 0, 0);
 }
 
@@ -59,6 +68,7 @@ static void form_load(HWND hwnd, const Profile *pr)
     SetDlgItemTextA(hwnd, IDC_EDIT_USER,    pr->username);
     SetDlgItemTextA(hwnd, IDC_EDIT_PASS,    pr->password);
     SetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, pr->key_path);
+    SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, pr->ai_notes);
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL,
                 pr->auth_type == AUTH_KEY ? 1 : 0, 0);
 }
@@ -78,6 +88,36 @@ static void toggle_auth_fields(HWND hwnd)
                                 : L"Password"));
 }
 
+/* Sync the AI notes edit control's scroll state to the custom scrollbar. */
+static void ai_notes_sync_scroll(HWND hwnd, SessMgrState *st)
+{
+    HWND hEdit = GetDlgItem(hwnd, IDC_EDIT_AI_NOTES);
+    csb_sync_edit(hEdit, st->hAiScrollbar, st->ai_line_h);
+}
+
+/* Sync the session listbox scroll state to its custom scrollbar. */
+static void list_sync_scroll(HWND hwnd, SessMgrState *st)
+{
+    if (!st->hListScrollbar) return;
+    HWND hList = GetDlgItem(hwnd, IDC_LIST_SESSIONS);
+    if (!hList) return;
+
+    int total = (int)SendMessage(hList, LB_GETCOUNT, 0, 0);
+    int top   = (int)SendMessage(hList, LB_GETTOPINDEX, 0, 0);
+    RECT rc;
+    GetClientRect(hList, &rc);
+    int item_h  = (int)SendMessage(hList, LB_GETITEMHEIGHT, 0, 0);
+    int visible = (item_h > 0) ? ((rc.bottom - rc.top) / item_h) : total;
+
+    if (total <= visible) {
+        csb_set_range(st->hListScrollbar, 0, 0, 1);
+        csb_set_pos(st->hListScrollbar, 0);
+    } else {
+        csb_set_range(st->hListScrollbar, 0, total - 1, visible);
+        csb_set_pos(st->hListScrollbar, top);
+    }
+}
+
 /*
  * Read form fields into *pr.
  * Returns 1 on success, 0 if host is empty (caller shows error).
@@ -92,6 +132,7 @@ static int form_read(HWND hwnd, Profile *pr)
     GetDlgItemTextA(hwnd, IDC_EDIT_USER,    pr->username, sizeof(pr->username));
     GetDlgItemTextA(hwnd, IDC_EDIT_PASS,    pr->password, sizeof(pr->password));
     GetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, pr->key_path, sizeof(pr->key_path));
+    GetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, pr->ai_notes, sizeof(pr->ai_notes));
 
     int auth_idx  = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH),
                                      CB_GETCURSEL, 0, 0);
@@ -121,6 +162,11 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         SendMessageA(hCombo, CB_ADDSTRING, 0, (LPARAM)"Password");
         SendMessageA(hCombo, CB_ADDSTRING, 0, (LPARAM)"SSH Key");
         SendMessage (hCombo, CB_SETCURSEL, 0, 0);
+
+        /* Limit AI Notes to ~400 words (2559 chars) */
+        SendDlgItemMessage(hwnd, IDC_EDIT_AI_NOTES, EM_SETLIMITTEXT, 2559, 0);
+        SendMessage(GetDlgItem(hwnd, IDC_EDIT_AI_NOTES), EM_SETCUEBANNER, 0,
+                    (LPARAM)L"Notes for AI about this server (max 400 words)");
 
         /* Apply configured font at UI size to all child controls */
         {
@@ -161,6 +207,55 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                     SetWindowLong(hBtn, GWL_STYLE, style);
                     InvalidateRect(hBtn, NULL, TRUE);
                 }
+            }
+        }
+
+        /* Custom scrollbar for AI notes multiline edit */
+        {
+            HWND hEdit = GetDlgItem(hwnd, IDC_EDIT_AI_NOTES);
+            if (hEdit) {
+                /* Measure line height from the configured font */
+                HDC hdc = GetDC(hEdit);
+                HGDIOBJ old = SelectObject(hdc, (HGDIOBJ)st->hDlgFont);
+                TEXTMETRIC tm;
+                GetTextMetrics(hdc, &tm);
+                st->ai_line_h = tm.tmHeight + tm.tmExternalLeading;
+                if (st->ai_line_h < 1) st->ai_line_h = 16;
+                SelectObject(hdc, old);
+                ReleaseDC(hEdit, hdc);
+
+                /* Position the scrollbar on the right edge of the edit */
+                RECT erc;
+                GetWindowRect(hEdit, &erc);
+                POINT pt = { erc.right, erc.top };
+                ScreenToClient(hwnd, &pt);
+                int eh = erc.bottom - erc.top;
+
+                csb_register(GetModuleHandle(NULL));
+                st->hAiScrollbar = csb_create(hwnd, pt.x, pt.y,
+                                              CSB_WIDTH, eh, st->theme,
+                                              GetModuleHandle(NULL));
+
+                /* Start a timer to sync scroll state (50ms) */
+                SetTimer(hwnd, IDT_AINOTES_SCROLL, 50, NULL);
+            }
+        }
+
+        /* Custom scrollbar for session listbox */
+        {
+            HWND hList = GetDlgItem(hwnd, IDC_LIST_SESSIONS);
+            if (hList) {
+                RECT lrc;
+                GetWindowRect(hList, &lrc);
+                POINT pt = { lrc.right, lrc.top };
+                ScreenToClient(hwnd, &pt);
+                int lh = lrc.bottom - lrc.top;
+
+                csb_register(GetModuleHandle(NULL));
+                st->hListScrollbar = csb_create(hwnd, pt.x, pt.y,
+                                                CSB_WIDTH, lh, st->theme,
+                                                GetModuleHandle(NULL));
+                SetTimer(hwnd, IDT_LIST_SCROLL, 50, NULL);
             }
         }
 
@@ -336,6 +431,73 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         break;
     }
 
+    case WM_VSCROLL:
+        /* Custom scrollbar for session listbox */
+        if (st && st->hListScrollbar && (HWND)lParam == st->hListScrollbar) {
+            WORD code = LOWORD(wParam);
+            HWND hList = GetDlgItem(hwnd, IDC_LIST_SESSIONS);
+            int top   = (int)SendMessage(hList, LB_GETTOPINDEX, 0, 0);
+            int total = (int)SendMessage(hList, LB_GETCOUNT, 0, 0);
+            RECT rc;
+            GetClientRect(hList, &rc);
+            int item_h  = (int)SendMessage(hList, LB_GETITEMHEIGHT, 0, 0);
+            int visible = (item_h > 0) ? ((rc.bottom - rc.top) / item_h) : total;
+            int new_top = top;
+            switch (code) {
+            case SB_LINEUP:    new_top = top - 1; break;
+            case SB_LINEDOWN:  new_top = top + 1; break;
+            case SB_PAGEUP:    new_top = top - visible; break;
+            case SB_PAGEDOWN:  new_top = top + visible; break;
+            case SB_THUMBTRACK:
+            case SB_THUMBPOSITION:
+                new_top = csb_get_trackpos(st->hListScrollbar);
+                break;
+            case SB_TOP:       new_top = 0; break;
+            case SB_BOTTOM:    new_top = total - visible; break;
+            }
+            if (new_top < 0) new_top = 0;
+            if (new_top > total - visible) new_top = total - visible;
+            SendMessage(hList, LB_SETTOPINDEX, (WPARAM)new_top, 0);
+            list_sync_scroll(hwnd, st);
+            return TRUE;
+        }
+        /* Custom scrollbar for AI notes */
+        if (st && st->hAiScrollbar && (HWND)lParam == st->hAiScrollbar) {
+            WORD code = LOWORD(wParam);
+            HWND hEdit = GetDlgItem(hwnd, IDC_EDIT_AI_NOTES);
+            int first = (int)SendMessage(hEdit, EM_GETFIRSTVISIBLELINE, 0, 0);
+            int delta = 0;
+            switch (code) {
+            case SB_LINEUP:    delta = -1; break;
+            case SB_LINEDOWN:  delta =  1; break;
+            case SB_PAGEUP:    delta = -edit_scroll_visible_lines(1, 1) * 3; break;
+            case SB_PAGEDOWN:  delta =  edit_scroll_visible_lines(1, 1) * 3; break;
+            case SB_THUMBTRACK:
+            case SB_THUMBPOSITION:
+                delta = edit_scroll_line_delta(
+                    csb_get_trackpos(st->hAiScrollbar), first);
+                break;
+            case SB_TOP:       delta = -first; break;
+            case SB_BOTTOM:    delta = 99999;  break;
+            }
+            if (delta != 0)
+                SendMessage(hEdit, EM_LINESCROLL, 0, (LPARAM)delta);
+            ai_notes_sync_scroll(hwnd, st);
+            return TRUE;
+        }
+        break;
+
+    case WM_TIMER:
+        if (wParam == IDT_AINOTES_SCROLL && st) {
+            ai_notes_sync_scroll(hwnd, st);
+            return TRUE;
+        }
+        if (wParam == IDT_LIST_SCROLL && st) {
+            list_sync_scroll(hwnd, st);
+            return TRUE;
+        }
+        break;
+
     case WM_DRAWITEM:
         if (st && st->theme) {
             LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
@@ -375,7 +537,9 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
 
     case WM_DESTROY:
         if (st) {
-            if (st->hDlgFont)      DeleteObject(st->hDlgFont);
+            KillTimer(hwnd, IDT_AINOTES_SCROLL);
+            KillTimer(hwnd, IDT_LIST_SCROLL);
+            if (st->hDlgFont)       DeleteObject(st->hDlgFont);
             if (st->hBrBgPrimary)   DeleteObject(st->hBrBgPrimary);
             if (st->hBrBgSecondary) DeleteObject(st->hBrBgSecondary);
         }

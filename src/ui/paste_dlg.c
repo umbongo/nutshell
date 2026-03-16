@@ -6,10 +6,15 @@
 
 #ifdef _WIN32
 
+#include "ui_theme.h"
+#include "custom_scrollbar.h"
+#include "edit_scroll.h"
+
 /* ---- Control IDs -------------------------------------------------------- */
 
 #define IDC_PASTE_SUMMARY  2001
 #define IDC_PASTE_EDIT     2002
+#define TIMER_PASTE_SCROLL 1     /* Sync custom scrollbar with EDIT */
 
 static const char *PASTE_CLASS = "Nutshell_PastePreview";
 
@@ -23,12 +28,15 @@ typedef struct {
     COLORREF  bg;
     HBRUSH    hBgBrush;
     HFONT     hTermFont;    /* terminal font for text area */
-    HFONT     hDlgFont;     /* MS Shell Dlg 8pt for labels/buttons */
+    HFONT     hDlgFont;     /* Cascadia Code 9pt for labels/buttons */
     HWND      hSummary;
     HWND      hEdit;
     HWND      hBtnPaste;
     HWND      hBtnCancel;
+    HWND      hScrollbar;   /* custom themed scrollbar */
+    int       line_h;       /* cached line height for scroll math */
     int       dpi;
+    const ThemeColors *theme;
 } PasteDlgData;
 
 /* ---- Colour helper ------------------------------------------------------ */
@@ -78,6 +86,15 @@ static char *build_edit_text(char **lines, int count)
 #define BTN_GAP_BASE     10
 #define SUMMARY_H_BASE   20
 
+/* ---- Sync custom scrollbar with edit control ---- */
+
+static void paste_sync_scroll(PasteDlgData *d)
+{
+    if (!d || !d->hEdit || !d->hScrollbar) return;
+    int lh = d->line_h > 0 ? d->line_h : 1;
+    csb_sync_edit(d->hEdit, d->hScrollbar, lh);
+}
+
 /* ---- Reposition controls on resize -------------------------------------- */
 
 static void layout_controls(PasteDlgData *d, int cw, int ch)
@@ -90,19 +107,27 @@ static void layout_controls(PasteDlgData *d, int cw, int ch)
     int btn_gap = MulDiv(BTN_GAP_BASE, dpi, 96);
     int summ_h = MulDiv(SUMMARY_H_BASE, dpi, 96);
     int footer_h = margin + btn_h + margin;
+    int sb_w = MulDiv(CSB_WIDTH, dpi, 96);
 
     /* Summary label: top */
     SetWindowPos(d->hSummary, NULL,
         margin, margin, cw - 2 * margin, summ_h,
         SWP_NOZORDER);
 
-    /* Text area: fills middle */
+    /* Text area: fills middle, narrowed for scrollbar */
     int edit_top = margin + summ_h + margin;
     int edit_h = ch - edit_top - footer_h;
     if (edit_h < 20) edit_h = 20;
+    int edit_w = cw - 2 * margin - sb_w;
+    if (edit_w < 20) edit_w = 20;
     SetWindowPos(d->hEdit, NULL,
-        margin, edit_top, cw - 2 * margin, edit_h,
+        margin, edit_top, edit_w, edit_h,
         SWP_NOZORDER);
+
+    /* Custom scrollbar: right of edit */
+    if (d->hScrollbar)
+        MoveWindow(d->hScrollbar,
+            margin + edit_w, edit_top, sb_w, edit_h, TRUE);
 
     /* Buttons: bottom-right */
     int btn_y = ch - margin - btn_h;
@@ -112,6 +137,8 @@ static void layout_controls(PasteDlgData *d, int cw, int ch)
     SetWindowPos(d->hBtnPaste, NULL,
         cw - margin - btn_w - btn_gap - btn_w, btn_y, btn_w, btn_h,
         SWP_NOZORDER);
+
+    paste_sync_scroll(d);
 }
 
 /* ---- EnumChildWindows callback: apply font ------------------------------ */
@@ -148,6 +175,7 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
         int btn_gap = MulDiv(BTN_GAP_BASE, nd->dpi, 96);
         int summ_h = MulDiv(SUMMARY_H_BASE, nd->dpi, 96);
         int footer_h = margin + btn_h + margin;
+        int sb_w = MulDiv(CSB_WIDTH, nd->dpi, 96);
 
         RECT rc;
         GetClientRect(hwnd, &rc);
@@ -160,17 +188,26 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
             margin, margin, cw - 2 * margin, summ_h,
             hwnd, (HMENU)IDC_PASTE_SUMMARY, NULL, NULL);
 
-        /* Multiline read-only edit for paste content */
+        /* Multiline read-only edit — no WS_VSCROLL, custom scrollbar instead */
         int edit_top = margin + summ_h + margin;
         int edit_h = ch - edit_top - footer_h;
         if (edit_h < 20) edit_h = 20;
+        int edit_w = cw - 2 * margin - sb_w;
+        if (edit_w < 20) edit_w = 20;
 
         nd->hEdit = CreateWindowEx(WS_EX_CLIENTEDGE, "EDIT", nd->edit_text,
             WS_VISIBLE | WS_CHILD | WS_BORDER |
             ES_MULTILINE | ES_READONLY | ES_AUTOHSCROLL |
-            WS_VSCROLL | WS_HSCROLL,
-            margin, edit_top, cw - 2 * margin, edit_h,
+            WS_HSCROLL,
+            margin, edit_top, edit_w, edit_h,
             hwnd, (HMENU)IDC_PASTE_EDIT, NULL, NULL);
+
+        /* Custom scrollbar right of the edit control */
+        if (nd->theme) {
+            nd->hScrollbar = csb_create(hwnd,
+                margin + edit_w, edit_top, sb_w, edit_h,
+                nd->theme, GetModuleHandle(NULL));
+        }
 
         /* Buttons */
         int btn_y = ch - margin - btn_h;
@@ -197,13 +234,23 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
                 EnumChildWindows(hwnd, SetFontCb, (LPARAM)nd->hDlgFont);
         }
 
-        /* Apply terminal font to the text area */
+        /* Apply terminal font to the text area and cache line height */
         if (nd->hTermFont)
             SendMessage(nd->hEdit, WM_SETFONT,
                         (WPARAM)nd->hTermFont, (LPARAM)TRUE);
+        {
+            HDC hdc_lh = GetDC(nd->hEdit);
+            TEXTMETRIC tm_lh;
+            GetTextMetrics(hdc_lh, &tm_lh);
+            nd->line_h = tm_lh.tmHeight + tm_lh.tmExternalLeading;
+            ReleaseDC(nd->hEdit, hdc_lh);
+        }
 
         /* Brush for text area background */
         nd->hBgBrush = CreateSolidBrush(nd->bg);
+
+        /* Start scroll sync timer */
+        SetTimer(hwnd, TIMER_PASTE_SCROLL, 50, NULL);
 
         return 0;
     }
@@ -238,6 +285,55 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
         break;
     }
 
+    case WM_TIMER:
+        if (wParam == TIMER_PASTE_SCROLL && d)
+            paste_sync_scroll(d);
+        return 0;
+
+    case WM_VSCROLL:
+        /* Handle custom scrollbar messages */
+        if (d && d->hScrollbar &&
+            (HWND)lParam == d->hScrollbar) {
+            WORD code = LOWORD(wParam);
+            int first = (int)SendMessage(d->hEdit,
+                            EM_GETFIRSTVISIBLELINE, 0, 0);
+            int delta = 0;
+            RECT erc_v;
+            GetClientRect(d->hEdit, &erc_v);
+            int lh = d->line_h > 0 ? d->line_h : 1;
+            int vis = edit_scroll_visible_lines(
+                          erc_v.bottom - erc_v.top, lh);
+            switch (code) {
+            case SB_LINEUP:    delta = -1;   break;
+            case SB_LINEDOWN:  delta =  1;   break;
+            case SB_PAGEUP:    delta = -vis; break;
+            case SB_PAGEDOWN:  delta =  vis; break;
+            case SB_THUMBTRACK:
+            case SB_THUMBPOSITION:
+                delta = edit_scroll_line_delta(
+                    csb_get_trackpos(d->hScrollbar), first);
+                break;
+            case SB_TOP:    delta = -first;  break;
+            case SB_BOTTOM: delta =  99999;  break;
+            }
+            if (delta != 0)
+                SendMessage(d->hEdit, EM_LINESCROLL, 0, (LPARAM)delta);
+            paste_sync_scroll(d);
+            return 0;
+        }
+        break;
+
+    case WM_MOUSEWHEEL:
+        /* Forward mouse wheel to scroll the edit control */
+        if (d && d->hEdit) {
+            int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
+            int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
+            SendMessage(d->hEdit, EM_LINESCROLL, 0, (LPARAM)scroll);
+            paste_sync_scroll(d);
+            return 0;
+        }
+        break;
+
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDOK:
@@ -253,6 +349,7 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
 
     case WM_DESTROY:
         if (d) {
+            KillTimer(hwnd, TIMER_PASTE_SCROLL);
             if (d->hBgBrush) DeleteObject(d->hBgBrush);
             if (d->hDlgFont) DeleteObject(d->hDlgFont);
             if (d->hTermFont) DeleteObject(d->hTermFont);
@@ -272,7 +369,8 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
 
 int paste_preview_show(HWND parent, const char *raw_text,
                        const char *fg_hex, const char *bg_hex,
-                       const char *font_name, int font_size)
+                       const char *font_name, int font_size,
+                       const char *colour_scheme)
 {
     if (!raw_text) return 0;
 
@@ -287,6 +385,12 @@ int paste_preview_show(HWND parent, const char *raw_text,
     d.result = 0;
     d.fg = hex_to_cr(fg_hex);
     d.bg = hex_to_cr(bg_hex);
+
+    /* Resolve theme for custom scrollbar */
+    {
+        int idx = colour_scheme ? ui_theme_find(colour_scheme) : 0;
+        d.theme = ui_theme_get(idx);
+    }
 
     paste_build_summary(line_count, strlen(raw_text),
                         d.summary, sizeof(d.summary));
@@ -320,7 +424,7 @@ int paste_preview_show(HWND parent, const char *raw_text,
     wc.lpszClassName  = PASTE_CLASS;
     RegisterClassEx(&wc);
 
-    /* Scale window size for DPI */
+    /* Scale window size for DPI and clamp to screen */
     int pdpi;
     {
         HDC hdc_p = GetDC(parent);
@@ -328,11 +432,24 @@ int paste_preview_show(HWND parent, const char *raw_text,
         ReleaseDC(parent, hdc_p);
     }
 
+    int desired_w = MulDiv(520, pdpi, 96);
+    int desired_h = MulDiv(400, pdpi, 96);
+
+    /* Get usable screen area (excludes taskbar) */
+    RECT work;
+    SystemParametersInfo(SPI_GETWORKAREA, 0, &work, 0);
+    int screen_w = work.right - work.left;
+    int screen_h = work.bottom - work.top;
+
+    int win_w, win_h;
+    paste_clamp_size(desired_w, desired_h, screen_w, screen_h,
+                     &win_w, &win_h);
+
     HWND hwnd = CreateWindowEx(
         0, PASTE_CLASS, "Confirm Paste",
         WS_OVERLAPPEDWINDOW | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(520, pdpi, 96), MulDiv(400, pdpi, 96),
+        win_w, win_h,
         parent, NULL, GetModuleHandle(NULL), &d);
 
     if (hwnd) {

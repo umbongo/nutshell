@@ -4,6 +4,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include "ui_theme.h"
+#include "edit_scroll.h"
 
 /*
  * Custom themed scrollbar control — replaces WS_VSCROLL with an owner-drawn
@@ -166,10 +167,10 @@ static inline LRESULT CALLBACK csb_wndproc(HWND hwnd, UINT msg,
 
         if (my < d->thumb_y) {
             /* Click above thumb — page up */
-            SendMessage(hParent, WM_VSCROLL, SB_PAGEUP, 0);
+            SendMessage(hParent, WM_VSCROLL, SB_PAGEUP, (LPARAM)hwnd);
         } else if (my >= d->thumb_y + d->thumb_h) {
             /* Click below thumb — page down */
-            SendMessage(hParent, WM_VSCROLL, SB_PAGEDOWN, 0);
+            SendMessage(hParent, WM_VSCROLL, SB_PAGEDOWN, (LPARAM)hwnd);
         } else {
             /* On thumb — start drag */
             d->dragging = 1;
@@ -209,7 +210,7 @@ static inline LRESULT CALLBACK csb_wndproc(HWND hwnd, UINT msg,
             /* Send SB_THUMBTRACK to parent */
             HWND hParent = GetParent(hwnd);
             SendMessage(hParent, WM_VSCROLL,
-                        MAKEWPARAM(SB_THUMBTRACK, 0), 0);
+                        MAKEWPARAM(SB_THUMBTRACK, 0), (LPARAM)hwnd);
         } else {
             /* Check hover state */
             int was_hovering = d->hovering;
@@ -237,7 +238,7 @@ static inline LRESULT CALLBACK csb_wndproc(HWND hwnd, UINT msg,
             /* Send SB_THUMBPOSITION (final) to parent */
             HWND hParent = GetParent(hwnd);
             SendMessage(hParent, WM_VSCROLL,
-                        MAKEWPARAM(SB_THUMBPOSITION, 0), 0);
+                        MAKEWPARAM(SB_THUMBPOSITION, 0), (LPARAM)hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
         } else {
             ReleaseCapture();
@@ -325,6 +326,24 @@ static inline void csb_set_theme(HWND hwnd, const ThemeColors *theme)
     if (!d) return;
     d->theme = theme;
     InvalidateRect(hwnd, NULL, FALSE);
+}
+
+/* Sync a custom scrollbar with a multiline EDIT/RichEdit control.
+ * Reads the edit's line count and first visible line, then updates
+ * the scrollbar range and position. */
+static inline void csb_sync_edit(HWND hEdit, HWND hScrollbar, int line_h)
+{
+    if (!hEdit || !hScrollbar) return;
+    int total = (int)SendMessage(hEdit, EM_GETLINECOUNT, 0, 0);
+    int first = (int)SendMessage(hEdit, EM_GETFIRSTVISIBLELINE, 0, 0);
+    RECT erc;
+    GetClientRect(hEdit, &erc);
+    int eh = erc.bottom - erc.top;
+    int nMin, nMax, nPage, nPos;
+    edit_scroll_params(total, first, eh, line_h,
+                       &nMin, &nMax, &nPage, &nPos);
+    csb_set_range(hScrollbar, nMin, nMax, nPage);
+    csb_set_pos(hScrollbar, nPos);
 }
 
 #endif /* _WIN32 */

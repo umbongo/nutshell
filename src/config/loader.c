@@ -238,6 +238,9 @@ Config *config_load(const char *path)
                 field_copy(s->ai_api_key, sizeof(s->ai_api_key), sv);
             }
         }
+        if ((sv = json_obj_str(jset, "ai_system_notes"))) {
+            field_copy(s->ai_system_notes, sizeof(s->ai_system_notes), sv);
+        }
         settings_validate(s);
     }
 
@@ -283,6 +286,9 @@ Config *config_load(const char *path)
             }
             if ((sv = json_obj_str(jp, "key_path"))) {
                 field_copy(pr->key_path, sizeof(pr->key_path), sv);
+            }
+            if ((sv = json_obj_str(jp, "ai_notes"))) {
+                field_copy(pr->ai_notes, sizeof(pr->ai_notes), sv);
             }
             vec_push(&cfg->profiles, pr);
         }
@@ -360,6 +366,9 @@ int config_save(const Config *cfg, const char *path)
     } else {
         fprint_json_str(f, "");
     }
+    fputs(",\n", f);
+    fputs("    \"ai_system_notes\": ", f);
+    fprint_json_str(f, s->ai_system_notes);
     fputs("\n  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);
@@ -392,6 +401,9 @@ int config_save(const Config *cfg, const char *path)
         fputs(",\n", f);
         fputs("      \"key_path\": ", f);
         fprint_json_str(f, pr->key_path);
+        fputs(",\n", f);
+        fputs("      \"ai_notes\": ", f);
+        fprint_json_str(f, pr->ai_notes);
         fputs("\n    }", f);
         if (i + 1u < n) {
             fputc(',', f);

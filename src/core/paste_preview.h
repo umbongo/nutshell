@@ -16,4 +16,10 @@ void paste_line_free(char **lines, int count);
 void paste_build_summary(int line_count, size_t char_count,
                          char *buf, size_t buf_sz);
 
+/* Clamp a desired window size so it fits within 90% of the given
+ * screen dimensions.  Pure arithmetic — no Win32 dependency. */
+void paste_clamp_size(int desired_w, int desired_h,
+                      int screen_w, int screen_h,
+                      int *out_w, int *out_h);
+
 #endif

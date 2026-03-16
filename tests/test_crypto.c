@@ -199,3 +199,25 @@ int test_crypto_decrypt_not_encrypted(void)
     ASSERT_TRUE(rc != CRYPTO_OK);
     TEST_END();
 }
+
+int test_crypto_decrypt_empty_payload(void)
+{
+    TEST_BEGIN();
+    char dec[256];
+    /* Prefix with empty or minimal base64 — too short for nonce+tag */
+    int rc = crypto_decrypt_with_key(TEST_KEY, CRYPTO_ENC_PREFIX, dec, sizeof(dec));
+    ASSERT_TRUE(rc != CRYPTO_OK);
+    rc = crypto_decrypt_with_key(TEST_KEY, CRYPTO_ENC_PREFIX "AA==", dec, sizeof(dec));
+    ASSERT_TRUE(rc != CRYPTO_OK);
+    TEST_END();
+}
+
+int test_crypto_decrypt_invalid_base64(void)
+{
+    TEST_BEGIN();
+    char dec[256];
+    /* Prefix with invalid base64 characters */
+    int rc = crypto_decrypt_with_key(TEST_KEY, CRYPTO_ENC_PREFIX "!!!not-base64!!!", dec, sizeof(dec));
+    ASSERT_TRUE(rc != CRYPTO_OK);
+    TEST_END();
+}

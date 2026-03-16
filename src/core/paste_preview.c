@@ -73,3 +73,16 @@ void paste_build_summary(int line_count, size_t char_count,
                    line_count, line_count == 1 ? "line" : "lines",
                    char_count);
 }
+
+void paste_clamp_size(int desired_w, int desired_h,
+                      int screen_w, int screen_h,
+                      int *out_w, int *out_h)
+{
+    /* Clamp to 90% of screen to keep buttons visible and
+     * leave room for taskbar / window chrome */
+    int max_w = (screen_w * 9) / 10;
+    int max_h = (screen_h * 9) / 10;
+
+    *out_w = desired_w > max_w ? max_w : desired_w;
+    *out_h = desired_h > max_h ? max_h : desired_h;
+}

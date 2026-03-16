@@ -167,3 +167,79 @@ int test_paste_build_summary_small_buf(void)
     ASSERT_TRUE(strlen(buf) < 10);
     TEST_END();
 }
+
+/* ---- paste_clamp_size --------------------------------------------------- */
+
+int test_paste_clamp_fits(void)
+{
+    TEST_BEGIN();
+    int w, h;
+    paste_clamp_size(500, 400, 1920, 1080, &w, &h);
+    ASSERT_EQ(w, 500);
+    ASSERT_EQ(h, 400);
+    TEST_END();
+}
+
+int test_paste_clamp_too_tall(void)
+{
+    TEST_BEGIN();
+    int w, h;
+    paste_clamp_size(500, 2000, 1920, 1080, &w, &h);
+    ASSERT_EQ(w, 500);
+    /* Should be clamped to 90% of screen height */
+    ASSERT_EQ(h, 972);  /* (int)(1080 * 0.9) */
+    TEST_END();
+}
+
+int test_paste_clamp_too_wide(void)
+{
+    TEST_BEGIN();
+    int w, h;
+    paste_clamp_size(2500, 400, 1920, 1080, &w, &h);
+    /* Should be clamped to 90% of screen width */
+    ASSERT_EQ(w, 1728);  /* (int)(1920 * 0.9) */
+    ASSERT_EQ(h, 400);
+    TEST_END();
+}
+
+int test_paste_clamp_both(void)
+{
+    TEST_BEGIN();
+    int w, h;
+    paste_clamp_size(3000, 2000, 1920, 1080, &w, &h);
+    ASSERT_EQ(w, 1728);
+    ASSERT_EQ(h, 972);
+    TEST_END();
+}
+
+int test_paste_clamp_exact_boundary(void)
+{
+    TEST_BEGIN();
+    int w, h;
+    /* Exactly at 90% — should not be reduced */
+    paste_clamp_size(1728, 972, 1920, 1080, &w, &h);
+    ASSERT_EQ(w, 1728);
+    ASSERT_EQ(h, 972);
+    TEST_END();
+}
+
+int test_paste_clamp_small_screen(void)
+{
+    TEST_BEGIN();
+    int w, h;
+    paste_clamp_size(500, 400, 640, 480, &w, &h);
+    /* 90% of 640 = 576, 90% of 480 = 432 — both fit */
+    ASSERT_EQ(w, 500);
+    ASSERT_EQ(h, 400);
+    TEST_END();
+}
+
+int test_paste_clamp_small_screen_overflow(void)
+{
+    TEST_BEGIN();
+    int w, h;
+    paste_clamp_size(800, 600, 640, 480, &w, &h);
+    ASSERT_EQ(w, 576);   /* (int)(640 * 0.9) */
+    ASSERT_EQ(h, 432);   /* (int)(480 * 0.9) */
+    TEST_END();
+}

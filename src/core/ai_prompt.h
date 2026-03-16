@@ -34,9 +34,11 @@ void ai_conv_reset(AiConversation *conv);
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
 
 /* Build the system prompt with terminal context embedded.
- * terminal_text may be NULL. */
+ * terminal_text, session_notes, system_notes may be NULL. */
 void ai_build_system_prompt(char *buf, size_t buf_size,
-                            const char *terminal_text);
+                            const char *terminal_text,
+                            const char *session_notes,
+                            const char *system_notes);
 
 /* Build the JSON request body from the conversation.
  * Returns bytes written (excluding NUL), or 0 on error. */
@@ -103,6 +105,42 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
  * Returns 1 if read-only, 0 if the command may write/modify. */
 int ai_command_is_readonly(const char *cmd);
 
+/* Count words in text (whitespace-delimited). Returns 0 for NULL/empty. */
+int ai_word_count(const char *text);
+
+/* Get the context window token limit for a model name.
+ * Returns 0 for unknown models. */
+int ai_model_context_limit(const char *model);
+
+/* Estimate total tokens in a conversation (chars/4 heuristic). */
+int ai_context_estimate_tokens(const AiConversation *conv);
+
+/* Compact a conversation: keep system prompt (msg[0]) and last
+ * keep_recent*2 messages (user+assistant pairs). Removes older messages.
+ * Returns number of messages removed, or 0 if nothing to compact. */
+int ai_conv_compact(AiConversation *conv, int keep_recent);
+
+/* Format a command execution progress string.
+ * current: 1-based index of current command.
+ * total: total number of commands.
+ * buf/buf_size: output buffer.
+ * Returns bytes written (excluding NUL). */
+int ai_cmd_progress_text(int current, int total, char *buf, size_t buf_size);
+
+/* Format a "waiting for output" status string.
+ * buf/buf_size: output buffer.
+ * Returns bytes written (excluding NUL). */
+int ai_cmd_waiting_text(char *buf, size_t buf_size);
+
+/* Build a plain-text save of a conversation for "Save As".
+ * Skips the system prompt (msg[0]).  If show_thinking is non-zero and
+ * thinking[i] is non-NULL for an assistant message at index i, a
+ * "--- Thinking ---" block is included before the AI response.
+ * Returns bytes written (excluding NUL), or 0 on error. */
+size_t ai_build_save_text(const AiConversation *conv,
+                           char *const *thinking, int show_thinking,
+                           char *buf, size_t buf_size);
+
 /* Key action for AI chat input field. */
 typedef enum {
     AI_INPUT_SEND,       /* Enter without Shift: send message */
@@ -114,5 +152,13 @@ typedef enum {
  * is_enter: 1 if VK_RETURN/Enter, 0 otherwise.
  * shift_held: 1 if Shift is down, 0 otherwise. */
 AiInputAction ai_input_key_action(int is_enter, int shift_held);
+
+/* Per-session AI state: wraps a conversation with a validity flag.
+ * Sessions embed this so the AI chat window can save/restore conversations
+ * when the user switches tabs. */
+typedef struct {
+    AiConversation conv;
+    int valid;  /* 0 = never used, 1 = has saved conversation */
+} AiSessionState;
 
 #endif /* NUTSHELL_AI_PROMPT_H */

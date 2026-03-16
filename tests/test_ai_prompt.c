@@ -249,10 +249,37 @@ int test_ai_provider_models_unknown(void) {
     TEST_END();
 }
 
+int test_ai_provider_models_url_known(void) {
+    TEST_BEGIN();
+    const char *url;
+    url = ai_provider_models_url("deepseek");
+    ASSERT_NOT_NULL(url);
+    ASSERT_TRUE(strstr(url, "deepseek.com") != NULL);
+    ASSERT_TRUE(strstr(url, "models") != NULL);
+    url = ai_provider_models_url("openai");
+    ASSERT_NOT_NULL(url);
+    ASSERT_TRUE(strstr(url, "openai.com") != NULL);
+    url = ai_provider_models_url("anthropic");
+    ASSERT_NOT_NULL(url);
+    ASSERT_TRUE(strstr(url, "anthropic.com") != NULL);
+    url = ai_provider_models_url("moonshot");
+    ASSERT_NOT_NULL(url);
+    ASSERT_TRUE(strstr(url, "moonshot.ai") != NULL);
+    TEST_END();
+}
+
+int test_ai_provider_models_url_unknown(void) {
+    TEST_BEGIN();
+    ASSERT_NULL(ai_provider_models_url("unknown"));
+    ASSERT_NULL(ai_provider_models_url("custom"));
+    ASSERT_NULL(ai_provider_models_url(NULL));
+    TEST_END();
+}
+
 int test_ai_system_prompt_with_terminal(void) {
     TEST_BEGIN();
     char buf[2048];
-    ai_build_system_prompt(buf, sizeof(buf), "user@host:~$ ls\nfile.txt");
+    ai_build_system_prompt(buf, sizeof(buf), "user@host:~$ ls\nfile.txt", NULL, NULL);
     ASSERT_TRUE(strstr(buf, "SSH terminal") != NULL);
     ASSERT_TRUE(strstr(buf, "[EXEC]") != NULL);
     ASSERT_TRUE(strstr(buf, "user@host") != NULL);
@@ -363,7 +390,7 @@ int test_ai_extract_commands_null(void) {
 int test_ai_system_prompt_multi_command(void) {
     TEST_BEGIN();
     char buf[4096];
-    ai_build_system_prompt(buf, sizeof(buf), NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL);
     /* System prompt should mention multiple commands */
     ASSERT_TRUE(strstr(buf, "multiple commands") != NULL);
     TEST_END();
@@ -464,7 +491,7 @@ int test_ai_extract_commands_newlines_in_command(void) {
 int test_ai_system_prompt_all_commands_instruction(void) {
     TEST_BEGIN();
     char buf[4096];
-    ai_build_system_prompt(buf, sizeof(buf), NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL);
     /* Must instruct to include ALL commands */
     ASSERT_TRUE(strstr(buf, "ALL commands") != NULL);
     /* Must discourage splitting across responses */
@@ -479,7 +506,7 @@ int test_ai_system_prompt_all_commands_instruction(void) {
 int test_ai_system_prompt_no_partial_plan(void) {
     TEST_BEGIN();
     char buf[4096];
-    ai_build_system_prompt(buf, sizeof(buf), NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL);
     /* Must discourage "let's start with" partial plans */
     ASSERT_TRUE(strstr(buf, "Never say") != NULL);
     ASSERT_TRUE(strstr(buf, "first step") != NULL);
@@ -489,7 +516,7 @@ int test_ai_system_prompt_no_partial_plan(void) {
 int test_ai_system_prompt_no_terminal(void) {
     TEST_BEGIN();
     char buf[2048];
-    ai_build_system_prompt(buf, sizeof(buf), NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL);
     ASSERT_TRUE(strstr(buf, "SSH terminal") != NULL);
     /* Without terminal text, the "Current terminal output:" section is absent */
     ASSERT_TRUE(strstr(buf, "Current terminal output") == NULL);
@@ -1057,5 +1084,309 @@ int test_ai_parse_response_ex_empty_reasoning(void) {
                                     thinking, sizeof(thinking)), 0);
     ASSERT_STR_EQ(content, "direct answer");
     ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+/* --- AiSessionState tests --- */
+
+int test_session_state_init(void) {
+    TEST_BEGIN();
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+    ASSERT_EQ(state.valid, 0);
+    ASSERT_EQ(state.conv.msg_count, 0);
+    TEST_END();
+}
+
+int test_session_save_restore(void) {
+    TEST_BEGIN();
+    /* Create a conversation with messages */
+    AiConversation conv;
+    ai_conv_init(&conv, "test-model");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "system prompt");
+    ai_conv_add(&conv, AI_ROLE_USER, "hello");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "hi there");
+
+    /* Save to session state */
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+    memcpy(&state.conv, &conv, sizeof(AiConversation));
+    state.valid = 1;
+
+    /* Start a fresh working conv */
+    AiConversation work;
+    ai_conv_init(&work, "test-model");
+    ASSERT_EQ(work.msg_count, 0);
+
+    /* Restore from session state */
+    memcpy(&work, &state.conv, sizeof(AiConversation));
+    ASSERT_EQ(work.msg_count, 3);
+    ASSERT_STR_EQ(work.messages[1].content, "hello");
+    ASSERT_STR_EQ(work.messages[2].content, "hi there");
+    ASSERT_STR_EQ(work.model, "test-model");
+    TEST_END();
+}
+
+int test_session_conv_independence(void) {
+    TEST_BEGIN();
+    /* Two separate session states */
+    AiSessionState s1, s2;
+    memset(&s1, 0, sizeof(s1));
+    memset(&s2, 0, sizeof(s2));
+
+    /* Populate state 1 */
+    ai_conv_init(&s1.conv, "model-a");
+    ai_conv_add(&s1.conv, AI_ROLE_USER, "msg for server A");
+    s1.valid = 1;
+
+    /* Populate state 2 */
+    ai_conv_init(&s2.conv, "model-b");
+    ai_conv_add(&s2.conv, AI_ROLE_USER, "msg for server B");
+    ai_conv_add(&s2.conv, AI_ROLE_ASSISTANT, "reply from B");
+    s2.valid = 1;
+
+    /* Simulate: load s1 into working conv */
+    AiConversation work;
+    memcpy(&work, &s1.conv, sizeof(AiConversation));
+    ASSERT_EQ(work.msg_count, 1);
+    ASSERT_STR_EQ(work.messages[0].content, "msg for server A");
+
+    /* Save back to s1, load s2 */
+    memcpy(&s1.conv, &work, sizeof(AiConversation));
+    memcpy(&work, &s2.conv, sizeof(AiConversation));
+    ASSERT_EQ(work.msg_count, 2);
+    ASSERT_STR_EQ(work.messages[0].content, "msg for server B");
+
+    /* Verify s1 wasn't corrupted */
+    ASSERT_EQ(s1.conv.msg_count, 1);
+    ASSERT_STR_EQ(s1.conv.messages[0].content, "msg for server A");
+    TEST_END();
+}
+
+int test_session_new_chat_reset(void) {
+    TEST_BEGIN();
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+    ai_conv_init(&state.conv, "test");
+    ai_conv_add(&state.conv, AI_ROLE_USER, "old message");
+    state.valid = 1;
+
+    /* Simulate New Chat: reset both working conv and state */
+    AiConversation work;
+    memcpy(&work, &state.conv, sizeof(AiConversation));
+    ASSERT_EQ(work.msg_count, 1);
+
+    ai_conv_reset(&work);
+    ai_conv_reset(&state.conv);
+    state.valid = 1;  /* Keep valid so switching back shows empty, not stale */
+
+    ASSERT_EQ(work.msg_count, 0);
+    ASSERT_EQ(state.conv.msg_count, 0);
+    ASSERT_EQ(state.valid, 1);
+    /* Model preserved after reset */
+    ASSERT_STR_EQ(work.model, "test");
+    TEST_END();
+}
+
+/* ---- ai_cmd_progress_text / ai_cmd_waiting_text tests ---- */
+
+int test_cmd_progress_single(void)
+{
+    TEST_BEGIN();
+    char buf[64];
+    int n = ai_cmd_progress_text(1, 1, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_STR_EQ(buf, "(executing 1/1.)");
+    TEST_END();
+}
+
+int test_cmd_progress_multi(void)
+{
+    TEST_BEGIN();
+    char buf[64];
+    ai_cmd_progress_text(2, 4, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "(executing 2/4.)");
+    TEST_END();
+}
+
+int test_cmd_progress_last(void)
+{
+    TEST_BEGIN();
+    char buf[64];
+    ai_cmd_progress_text(4, 4, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "(executing 4/4.)");
+    TEST_END();
+}
+
+int test_cmd_progress_null_buf(void)
+{
+    TEST_BEGIN();
+    int n = ai_cmd_progress_text(1, 1, NULL, 0);
+    ASSERT_EQ(n, 0);
+    TEST_END();
+}
+
+int test_cmd_progress_small_buf(void)
+{
+    TEST_BEGIN();
+    char buf[8];
+    int n = ai_cmd_progress_text(1, 1, buf, sizeof(buf));
+    /* Should be truncated but not overflow */
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strlen(buf) < 8);
+    TEST_END();
+}
+
+int test_cmd_waiting_text(void)
+{
+    TEST_BEGIN();
+    char buf[64];
+    int n = ai_cmd_waiting_text(buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_STR_EQ(buf, "(waiting for output.)");
+    TEST_END();
+}
+
+int test_cmd_waiting_null_buf(void)
+{
+    TEST_BEGIN();
+    int n = ai_cmd_waiting_text(NULL, 0);
+    ASSERT_EQ(n, 0);
+    TEST_END();
+}
+
+/* ---- ai_build_save_text tests ---- */
+
+int test_save_text_empty_conv(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    char buf[4096];
+    size_t n = ai_build_save_text(&conv, NULL, 0, buf, sizeof(buf));
+    /* Empty conversation still produces header */
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "AI Assist") != NULL);
+    TEST_END();
+}
+
+int test_save_text_user_message(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "system prompt");
+    ai_conv_add(&conv, AI_ROLE_USER, "hello world");
+    char buf[4096];
+    size_t n = ai_build_save_text(&conv, NULL, 0, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "--- You ---") != NULL);
+    ASSERT_TRUE(strstr(buf, "hello world") != NULL);
+    TEST_END();
+}
+
+int test_save_text_assistant_message(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "system prompt");
+    ai_conv_add(&conv, AI_ROLE_USER, "hi");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "hello back");
+    char buf[4096];
+    size_t n = ai_build_save_text(&conv, NULL, 0, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "--- AI ---") != NULL);
+    ASSERT_TRUE(strstr(buf, "hello back") != NULL);
+    TEST_END();
+}
+
+int test_save_text_with_thinking(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&conv, AI_ROLE_USER, "q");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "answer");
+    /* thinking_history[2] corresponds to msg index 2 (the assistant msg) */
+    char *thinking[AI_MAX_MESSAGES] = {0};
+    thinking[2] = "let me reason about this";
+    char buf[4096];
+    size_t n = ai_build_save_text(&conv, thinking, 1, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "--- Thinking ---") != NULL);
+    ASSERT_TRUE(strstr(buf, "let me reason about this") != NULL);
+    TEST_END();
+}
+
+int test_save_text_thinking_hidden(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&conv, AI_ROLE_USER, "q");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "answer");
+    char *thinking[AI_MAX_MESSAGES] = {0};
+    thinking[2] = "secret reasoning";
+    char buf[4096];
+    /* show_thinking=0 — thinking should NOT appear */
+    size_t n = ai_build_save_text(&conv, thinking, 0, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "--- Thinking ---") == NULL);
+    ASSERT_TRUE(strstr(buf, "secret reasoning") == NULL);
+    ASSERT_TRUE(strstr(buf, "answer") != NULL);
+    TEST_END();
+}
+
+int test_save_text_skips_system(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "SECRET_SYSTEM_PROMPT");
+    ai_conv_add(&conv, AI_ROLE_USER, "visible");
+    char buf[4096];
+    size_t n = ai_build_save_text(&conv, NULL, 0, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    /* System prompt should not appear in save output */
+    ASSERT_TRUE(strstr(buf, "SECRET_SYSTEM_PROMPT") == NULL);
+    ASSERT_TRUE(strstr(buf, "visible") != NULL);
+    TEST_END();
+}
+
+int test_save_text_null_safety(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ai_build_save_text(NULL, NULL, 0, NULL, 0), 0);
+    char buf[64];
+    ASSERT_EQ(ai_build_save_text(NULL, NULL, 0, buf, sizeof(buf)), 0);
+    TEST_END();
+}
+
+int test_save_text_multi_exchange(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+    ai_conv_add(&conv, AI_ROLE_USER, "first question");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "first answer");
+    ai_conv_add(&conv, AI_ROLE_USER, "second question");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "second answer");
+    char buf[4096];
+    size_t n = ai_build_save_text(&conv, NULL, 0, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    /* Both exchanges present */
+    ASSERT_TRUE(strstr(buf, "first question") != NULL);
+    ASSERT_TRUE(strstr(buf, "first answer") != NULL);
+    ASSERT_TRUE(strstr(buf, "second question") != NULL);
+    ASSERT_TRUE(strstr(buf, "second answer") != NULL);
+    /* "You" appears twice, "AI" appears twice */
+    char *p = strstr(buf, "--- You ---");
+    ASSERT_NOT_NULL(p);
+    p = strstr(p + 1, "--- You ---");
+    ASSERT_NOT_NULL(p);
     TEST_END();
 }

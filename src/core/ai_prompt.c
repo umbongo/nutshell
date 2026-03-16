@@ -33,7 +33,9 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
 }
 
 void ai_build_system_prompt(char *buf, size_t buf_size,
-                            const char *terminal_text)
+                            const char *terminal_text,
+                            const char *session_notes,
+                            const char *system_notes)
 {
     if (!buf || buf_size == 0) return;
 
@@ -54,13 +56,96 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
         "Never say 'let's start with' or do only the first step. "
         "Include every command the user needs in one response.";
 
-    if (terminal_text && terminal_text[0]) {
-        snprintf(buf, buf_size,
-                 "%s\n\nCurrent terminal output:\n```\n%s\n```",
-                 base, terminal_text);
-    } else {
-        snprintf(buf, buf_size, "%s", base);
+    size_t pos = 0;
+    int n = snprintf(buf, buf_size, "%s", base);
+    if (n < 0) return;
+    pos = (size_t)n;
+
+    if (system_notes && system_notes[0] && pos < buf_size) {
+        n = snprintf(buf + pos, buf_size - pos,
+                     "\n\nUser's system-wide instructions:\n%s", system_notes);
+        if (n > 0) pos += (size_t)n;
     }
+    if (session_notes && session_notes[0] && pos < buf_size) {
+        n = snprintf(buf + pos, buf_size - pos,
+                     "\n\nAbout this server:\n%s", session_notes);
+        if (n > 0) pos += (size_t)n;
+    }
+    if (terminal_text && terminal_text[0] && pos < buf_size) {
+        snprintf(buf + pos, buf_size - pos,
+                 "\n\nCurrent terminal output:\n```\n%s\n```", terminal_text);
+    }
+}
+
+int ai_word_count(const char *text)
+{
+    if (!text) return 0;
+    int count = 0;
+    int in_word = 0;
+    for (const char *p = text; *p; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+            in_word = 0;
+        } else if (!in_word) {
+            in_word = 1;
+            count++;
+        }
+    }
+    return count;
+}
+
+int ai_model_context_limit(const char *model)
+{
+    if (!model) return 0;
+    static const struct { const char *name; int tokens; } limits[] = {
+        {"deepseek-chat",              64000},
+        {"deepseek-coder",            128000},
+        {"deepseek-reasoner",          64000},
+        {"gpt-4o",                    128000},
+        {"gpt-4o-mini",               128000},
+        {"gpt-4-turbo",               128000},
+        {"o3-mini",                   200000},
+        {"gpt-3.5-turbo",             16000},
+        {"claude-sonnet-4-6",         200000},
+        {"claude-haiku-4-5-20251001", 200000},
+        {"claude-opus-4-6",           200000},
+        {"kimi-k2",                   128000},
+        {"moonshot-v1-8k",              8000},
+        {"moonshot-v1-32k",            32000},
+        {"moonshot-v1-128k",          128000},
+        {NULL, 0}
+    };
+    for (int i = 0; limits[i].name; i++) {
+        if (strcmp(model, limits[i].name) == 0)
+            return limits[i].tokens;
+    }
+    return 0;
+}
+
+int ai_context_estimate_tokens(const AiConversation *conv)
+{
+    if (!conv) return 0;
+    int total_chars = 0;
+    for (int i = 0; i < conv->msg_count; i++)
+        total_chars += (int)strlen(conv->messages[i].content);
+    return total_chars / 4;
+}
+
+int ai_conv_compact(AiConversation *conv, int keep_recent)
+{
+    if (!conv || keep_recent <= 0) return 0;
+    int keep_msgs = keep_recent * 2;
+    if (conv->msg_count <= 1 + keep_msgs) return 0;
+
+    int remove_start = 1;
+    int remove_end = conv->msg_count - keep_msgs;
+    int remove_count = remove_end - remove_start;
+    if (remove_count <= 0) return 0;
+
+    memmove(&conv->messages[remove_start],
+            &conv->messages[remove_end],
+            (size_t)(conv->msg_count - remove_end) * sizeof(AiMessage));
+    conv->msg_count -= remove_count;
+    return remove_count;
 }
 
 /* Write a JSON-escaped string (with quotes) into buf at position pos.
@@ -539,4 +624,56 @@ AiInputAction ai_input_key_action(int is_enter, int shift_held)
 {
     if (!is_enter) return AI_INPUT_PASSTHROUGH;
     return shift_held ? AI_INPUT_NEWLINE : AI_INPUT_SEND;
+}
+
+int ai_cmd_progress_text(int current, int total, char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+    return snprintf(buf, buf_size, "(executing %d/%d.)", current, total);
+}
+
+int ai_cmd_waiting_text(char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+    return snprintf(buf, buf_size, "(waiting for output.)");
+}
+
+size_t ai_build_save_text(const AiConversation *conv,
+                           char *const *thinking, int show_thinking,
+                           char *buf, size_t buf_size)
+{
+    if (!conv || !buf || buf_size == 0) return 0;
+
+    size_t pos = 0;
+    int n;
+
+    n = snprintf(buf + pos, buf_size - pos, "AI Assist Conversation\n"
+                 "Model: %s\n"
+                 "========================================\n\n",
+                 conv->model);
+    if (n > 0) pos += (size_t)n;
+
+    for (int i = 1; i < conv->msg_count && pos < buf_size; i++) {
+        const AiMessage *msg = &conv->messages[i];
+
+        if (msg->role == AI_ROLE_USER) {
+            n = snprintf(buf + pos, buf_size - pos,
+                         "--- You ---\n%s\n\n", msg->content);
+            if (n > 0) pos += (size_t)n;
+        } else if (msg->role == AI_ROLE_ASSISTANT) {
+            if (show_thinking && thinking && thinking[i] &&
+                thinking[i][0]) {
+                n = snprintf(buf + pos, buf_size - pos,
+                             "--- Thinking ---\n%s\n\n", thinking[i]);
+                if (n > 0) pos += (size_t)n;
+            }
+            n = snprintf(buf + pos, buf_size - pos,
+                         "--- AI ---\n%s\n\n", msg->content);
+            if (n > 0) pos += (size_t)n;
+        }
+    }
+
+    if (pos >= buf_size) pos = buf_size - 1;
+    buf[pos] = '\0';
+    return pos;
 }
