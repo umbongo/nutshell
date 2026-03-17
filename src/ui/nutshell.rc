@@ -1,8 +1,8 @@
 #include <windows.h>
 #include "resource.h"
 
-// Uncomment the following line when you have a valid nutshell.ico file in src/ui/
-// IDI_APPICON ICON "nutshell.ico"
+IDI_APPICON  ICON "nutshell.ico"
+IDI_AI_BRAIN ICON "ai_icon.ico"
 
 // DPI awareness manifest — prevents bitmap scaling on high-DPI displays
 1 24 "nutshell.manifest"

@@ -1,10 +1,12 @@
 #include "tabs.h"
 #include "app_font.h"
 #include "ui_theme.h"
+#include "resource.h"
 #include "xmalloc.h"
 #include "logger.h"
 #include "tooltip.h"
 #include <stdio.h>
+#include <math.h>
 #include <commctrl.h>
 
 #ifdef _WIN32
@@ -56,6 +58,7 @@ typedef struct TabControlData {
     HFONT hFont;
     HFONT hSmallFont;  /* cached small font for indicator labels */
     HWND  hTooltip;    /* Win32 tooltip control */
+    HICON hAiIcon;     /* AI brain icon loaded from resources */
     int   ai_active;   /* 1 = API key configured -> green, 0 = grey */
     int   dpi;         /* per-window DPI for layout scaling */
     char  font_name[64];
@@ -104,6 +107,57 @@ static void tabs_create_fonts(TabControlData *data, HWND hwnd)
                                    FIXED_PITCH | FF_MODERN, data->font_name);
 }
 
+/* Draw an icon in a single colour using its mask.
+   Extracts the AND-mask via GetIconInfo, then uses raster ops:
+     1) AND destination with mask  → clears icon-shaped area to black
+     2) OR  coloured mask onto dest → fills icon area with tint colour */
+static void draw_icon_tinted(HDC hdc, HICON hIcon, int dx, int dy,
+                             int sz, COLORREF tint)
+{
+    ICONINFO ii;
+    if (!GetIconInfo(hIcon, &ii)) return;
+
+    HDC maskDC  = CreateCompatibleDC(hdc);
+    HDC colorDC = CreateCompatibleDC(hdc);
+
+    /* Stretch the mask to the desired size */
+    HBITMAP scaledMask = CreateBitmap(sz, sz, 1, 1, NULL);
+    HBITMAP oldMask    = (HBITMAP)SelectObject(maskDC, scaledMask);
+
+    HDC srcDC = CreateCompatibleDC(hdc);
+    HBITMAP oldSrc = (HBITMAP)SelectObject(srcDC, ii.hbmMask);
+    BITMAP bm;
+    GetObject(ii.hbmMask, sizeof(bm), &bm);
+    StretchBlt(maskDC, 0, 0, sz, sz, srcDC, 0, 0, bm.bmWidth, bm.bmHeight, SRCCOPY);
+    SelectObject(srcDC, oldSrc);
+    DeleteDC(srcDC);
+
+    /* Create a coloured bitmap: tint colour everywhere, then mask it */
+    HBITMAP colorBmp = CreateCompatibleBitmap(hdc, sz, sz);
+    HBITMAP oldColor = (HBITMAP)SelectObject(colorDC, colorBmp);
+    RECT fr = {0, 0, sz, sz};
+    HBRUSH tintBr = CreateSolidBrush(tint);
+    FillRect(colorDC, &fr, tintBr);
+    DeleteObject(tintBr);
+    /* AND with inverted mask: keep tint only where icon is opaque */
+    BitBlt(colorDC, 0, 0, sz, sz, maskDC, 0, 0, (DWORD)0x220326); /* DSna */
+
+    /* Apply to destination */
+    BitBlt(hdc, dx, dy, sz, sz, maskDC,  0, 0, SRCAND);   /* clear icon area */
+    BitBlt(hdc, dx, dy, sz, sz, colorDC, 0, 0, SRCPAINT); /* paint tint */
+
+    SelectObject(maskDC, oldMask);
+    SelectObject(colorDC, oldColor);
+    DeleteObject(scaledMask);
+    DeleteObject(colorBmp);
+    DeleteDC(maskDC);
+    DeleteDC(colorDC);
+
+    /* Clean up GetIconInfo bitmaps */
+    DeleteObject(ii.hbmMask);
+    if (ii.hbmColor) DeleteObject(ii.hbmColor);
+}
+
 static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -117,6 +171,12 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             (void)snprintf(data->font_name, sizeof(data->font_name),
                            "%s", APP_FONT_DEFAULT);
             tabs_create_fonts(data, hwnd);
+
+            /* Load AI brain icon from resources */
+            data->hAiIcon = (HICON)LoadImage(GetModuleHandle(NULL),
+                                             MAKEINTRESOURCE(IDI_AI_BRAIN),
+                                             IMAGE_ICON, 0, 0,
+                                             LR_DEFAULTCOLOR | LR_SHARED);
 
             /* Create tooltip control — one tool covers the entire tab strip */
             data->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
@@ -142,6 +202,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (data) {
                 if (data->hFont)      DeleteObject(data->hFont);
                 if (data->hSmallFont) DeleteObject(data->hSmallFont);
+                if (data->hAiIcon)    DestroyIcon(data->hAiIcon);
                 if (data->hTooltip)   DestroyWindow(data->hTooltip);
                 free(data);
             }
@@ -385,24 +446,72 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     DrawTextW(hdc, L"\x25B6", -1, &rcRight,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 }
-                /* AI button */
+                /* AI button — brain icon from resource, tinted */
                 if (aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + btnSz, btnY + btnSz};
                     RoundRect(hdc, rcAi.left, rcAi.top, rcAi.right, rcAi.bottom, rr, rr);
                     COLORREF aiCol = data->ai_active ? RGB(0, 180, 0) : cDim;
-                    SetTextColor(hdc, aiCol);
-                    HFONT hPrevAi = (HFONT)SelectObject(hdc, data->hSmallFont);
-                    DrawText(hdc, "AI", 2, &rcAi,
-                             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hdc, hPrevAi);
+                    int iconPad = btnSz / 6;
+                    int iconSz  = btnSz - iconPad * 2;
+                    if (data->hAiIcon && iconSz > 0) {
+                        draw_icon_tinted(hdc, data->hAiIcon,
+                                         aiX + iconPad, btnY + iconPad,
+                                         iconSz, aiCol);
+                    } else {
+                        /* Fallback: text label */
+                        SetTextColor(hdc, aiCol);
+                        HFONT hPrevAi = (HFONT)SelectObject(hdc, data->hSmallFont);
+                        DrawText(hdc, "AI", 2, &rcAi,
+                                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                        SelectObject(hdc, hPrevAi);
+                    }
                 }
-                /* ⚙ Cog (settings) */
+                /* ⚙ Cog (settings) — custom-drawn gear */
                 if (cogX > x) {
                     RECT rcCog = {cogX, btnY, cogX + btnSz, btnY + btnSz};
                     RoundRect(hdc, rcCog.left, rcCog.top, rcCog.right, rcCog.bottom, rr, rr);
-                    SetTextColor(hdc, cDim);
-                    DrawTextW(hdc, L"\x2699", -1, &rcCog,
-                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+                    int cx = cogX + btnSz / 2;
+                    int cy = btnY + btnSz / 2;
+                    int rOuter = btnSz * 38 / 100;  /* outer tooth tip   */
+                    int rInner = btnSz * 27 / 100;  /* inner tooth root  */
+                    int rHole  = btnSz * 11 / 100;  /* center hole       */
+                    int teeth  = 8;
+                    int nPts   = teeth * 4;          /* 4 vertices/tooth  */
+                    POINT gear[32];     /* 8 teeth × 4 = 32 points */
+                    double step = 2.0 * 3.14159265 / (double)nPts;
+
+                    for (int ti = 0; ti < teeth; ti++) {
+                        double a0 = (double)(ti * 4)     * step;
+                        double a1 = (double)(ti * 4 + 1) * step;
+                        double a2 = (double)(ti * 4 + 2) * step;
+                        double a3 = (double)(ti * 4 + 3) * step;
+                        gear[ti * 4    ].x = cx + (int)(rInner * cos(a0));
+                        gear[ti * 4    ].y = cy + (int)(rInner * sin(a0));
+                        gear[ti * 4 + 1].x = cx + (int)(rOuter * cos(a1));
+                        gear[ti * 4 + 1].y = cy + (int)(rOuter * sin(a1));
+                        gear[ti * 4 + 2].x = cx + (int)(rOuter * cos(a2));
+                        gear[ti * 4 + 2].y = cy + (int)(rOuter * sin(a2));
+                        gear[ti * 4 + 3].x = cx + (int)(rInner * cos(a3));
+                        gear[ti * 4 + 3].y = cy + (int)(rInner * sin(a3));
+                    }
+                    HBRUSH gearBr = CreateSolidBrush(cDim);
+                    HPEN gearPen  = CreatePen(PS_SOLID, 1, cDim);
+                    HBRUSH hOldGBr = (HBRUSH)SelectObject(hdc, gearBr);
+                    HPEN hOldGPn   = (HPEN)SelectObject(hdc, gearPen);
+                    Polygon(hdc, gear, nPts);
+                    /* Center hole */
+                    HBRUSH holeBr = CreateSolidBrush(cBtn);
+                    HPEN holePen  = CreatePen(PS_SOLID, 1, cBtn);
+                    SelectObject(hdc, holeBr);
+                    SelectObject(hdc, holePen);
+                    Ellipse(hdc, cx - rHole, cy - rHole, cx + rHole, cy + rHole);
+                    SelectObject(hdc, hOldGBr);
+                    SelectObject(hdc, hOldGPn);
+                    DeleteObject(holeBr);
+                    DeleteObject(holePen);
+                    DeleteObject(gearBr);
+                    DeleteObject(gearPen);
                 }
 
                 SelectObject(hdc, hOldBtnBr);

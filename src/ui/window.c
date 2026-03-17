@@ -1634,7 +1634,9 @@ void ui_init(HINSTANCE instance) {
     wc.lpfnWndProc = WndProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hIcon = LoadIcon(NULL, IDI_APPLICATION); /* Use system default icon */
+    wc.hIcon = LoadIcon(instance, MAKEINTRESOURCE(IDI_APPICON));
+    wc.hIconSm = (HICON)LoadImage(instance, MAKEINTRESOURCE(IDI_APPICON),
+                                   IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); /* Will be overwritten by WM_PAINT */
     wc.lpszClassName = CLASS_NAME;
 

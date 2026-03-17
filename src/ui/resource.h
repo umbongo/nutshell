@@ -3,7 +3,9 @@
 
 #define APP_VERSION "0.9.1"
 
+#define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
+#define IDI_AI_BRAIN        102
 
 /* Session list panel */
 #define IDC_LIST_SESSIONS   1000
