@@ -176,3 +176,96 @@ int test_wheel_scroll_partial_notch(void) {
     ASSERT_EQ(edit_scroll_wheel_delta(-60, 120, 3), 0);
     TEST_END();
 }
+
+/* --- edit_scroll_wheel_accum tests ---
+ *
+ * High-precision mice and trackpads send sub-notch wheel deltas (e.g. 30, 40)
+ * which the old function silently drops via integer division truncation.
+ * The accumulator version collects partial deltas across events and scrolls
+ * once a full notch threshold is crossed. */
+
+int test_wheel_accum_full_notch(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    /* Full notch in one event -> scrolls immediately, accumulator resets */
+    ASSERT_EQ(edit_scroll_wheel_accum(120, 120, 3, &accum), -3);
+    ASSERT_EQ(accum, 0);
+    /* Full notch down */
+    ASSERT_EQ(edit_scroll_wheel_accum(-120, 120, 3, &accum), 3);
+    ASSERT_EQ(accum, 0);
+    TEST_END();
+}
+
+int test_wheel_accum_partial_events(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    /* Four partial events of +30 each = 120 total = one notch up */
+    ASSERT_EQ(edit_scroll_wheel_accum(30, 120, 3, &accum), 0);
+    ASSERT_EQ(accum, 30);
+    ASSERT_EQ(edit_scroll_wheel_accum(30, 120, 3, &accum), 0);
+    ASSERT_EQ(accum, 60);
+    ASSERT_EQ(edit_scroll_wheel_accum(30, 120, 3, &accum), 0);
+    ASSERT_EQ(accum, 90);
+    /* Fourth event crosses threshold */
+    ASSERT_EQ(edit_scroll_wheel_accum(30, 120, 3, &accum), -3);
+    ASSERT_EQ(accum, 0);
+    TEST_END();
+}
+
+int test_wheel_accum_partial_down(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    /* Two partial events of -60 each = -120 total = one notch down */
+    ASSERT_EQ(edit_scroll_wheel_accum(-60, 120, 3, &accum), 0);
+    ASSERT_EQ(accum, -60);
+    ASSERT_EQ(edit_scroll_wheel_accum(-60, 120, 3, &accum), 3);
+    ASSERT_EQ(accum, 0);
+    TEST_END();
+}
+
+int test_wheel_accum_overflow_carries(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    /* 150 = one full notch (120) + 30 remainder */
+    ASSERT_EQ(edit_scroll_wheel_accum(150, 120, 3, &accum), -3);
+    ASSERT_EQ(accum, 30);
+    /* Next 90 + carry 30 = 120 -> another notch */
+    ASSERT_EQ(edit_scroll_wheel_accum(90, 120, 3, &accum), -3);
+    ASSERT_EQ(accum, 0);
+    TEST_END();
+}
+
+int test_wheel_accum_direction_change_resets(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    /* Accumulate up, then change direction */
+    ASSERT_EQ(edit_scroll_wheel_accum(60, 120, 3, &accum), 0);
+    ASSERT_EQ(accum, 60);
+    /* Direction reversal: reset accumulator, start fresh */
+    ASSERT_EQ(edit_scroll_wheel_accum(-30, 120, 3, &accum), 0);
+    ASSERT_EQ(accum, -30);
+    TEST_END();
+}
+
+int test_wheel_accum_two_notches(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    /* 240 = two notches up -> -6 lines */
+    ASSERT_EQ(edit_scroll_wheel_accum(240, 120, 3, &accum), -6);
+    ASSERT_EQ(accum, 0);
+    TEST_END();
+}
+
+int test_wheel_accum_zero_notch_size(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    ASSERT_EQ(edit_scroll_wheel_accum(120, 0, 3, &accum), 0);
+    TEST_END();
+}
+
+int test_wheel_accum_null_accumulator(void) {
+    TEST_BEGIN();
+    /* Should not crash with NULL accumulator */
+    ASSERT_EQ(edit_scroll_wheel_accum(120, 120, 3, NULL), 0);
+    TEST_END();
+}

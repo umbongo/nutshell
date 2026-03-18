@@ -44,6 +44,7 @@ static const char * const k_fonts[] = {
     "Consolas",
     "Cascadia Mono",
     "Courier New",
+    "Inter",
     "Lucida Console",
     "Lucida Sans Typewriter",
     "Fira Code",
@@ -456,14 +457,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
 
         #undef S
 
-        /* Apply configured font at UI size to all child controls */
+        /* Apply Inter UI font to all child controls */
         {
             int h = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
             nd->hDlgFont = CreateFont(
                 h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
-                nd->cfg->settings.font);
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                APP_FONT_UI_FACE);
             if (nd->hDlgFont)
                 EnumChildWindows(hwnd, SetFontProc, (LPARAM)nd->hDlgFont);
         }

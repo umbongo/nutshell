@@ -165,6 +165,19 @@ typedef struct {
     /* Live stream content accumulation (for rebuild mid-stream) */
     char stream_content[AI_MSG_MAX];
     size_t stream_content_len;
+
+    /* RichEdit char position where AI response text began (for markdown re-render) */
+    int stream_display_start;
+
+    /* Wheel delta accumulator for high-precision scroll devices */
+    int wheel_accum;
+
+    /* Current UI font size (points) for zoom — starts at APP_FONT_UI_SIZE */
+    int ui_font_size;
+
+    /* Custom scrollbar for input text box */
+    HWND hInputScrollbar;
+    int  input_line_h;     /* cached line height in px for input */
 } AiChatData;
 
 /* Forward declarations */
@@ -199,13 +212,12 @@ static void chat_append_styled(HWND hDisplay, const char *text,
     int vis_lns = (font_h > 0) ? ((rc_disp.bottom - rc_disp.top) / font_h) : 1;
     int was_at_bottom = (first_vis + vis_lns >= total_lns) || (total_lns <= vis_lns);
 
-    int len = GetWindowTextLength(hDisplay);
-    SendMessage(hDisplay, EM_SETSEL, (WPARAM)len, (LPARAM)len);
+    SendMessage(hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
 
     CHARFORMAT2 cf;
     memset(&cf, 0, sizeof(cf));
     cf.cbSize = sizeof(cf);
-    cf.dwMask = CFM_COLOR | CFM_ITALIC;
+    cf.dwMask = CFM_COLOR | CFM_ITALIC | CFM_BOLD | CFM_STRIKEOUT;
     cf.crTextColor = color;
     cf.dwEffects = italic ? CFE_ITALIC : 0;
     SendMessage(hDisplay, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
@@ -237,6 +249,263 @@ static void chat_append_color(HWND hDisplay, const char *text, COLORREF color)
 static void chat_append_ops(HWND hDisplay, const char *text)
 {
     chat_append_styled(hDisplay, text, RGB(140, 140, 140), 1);
+}
+
+/* Extended styled append: supports bold, font face, font size, background color.
+ * effects: 0 or combination of CFE_BOLD | CFE_ITALIC | CFE_STRIKEOUT
+ * font: NULL to keep current; fontSize: twips, 0 to keep current.
+ * bgColor: CLR_DEFAULT to skip background coloring. */
+static void chat_append_styled_ex(HWND hDisplay, const char *text,
+                                   COLORREF color, COLORREF bgColor,
+                                   DWORD effects, const char *font,
+                                   int fontSize)
+{
+    /* Auto-scroll detection (same as chat_append_styled) */
+    int total_lns = (int)SendMessage(hDisplay, EM_GETLINECOUNT, 0, 0);
+    int first_vis = (int)SendMessage(hDisplay, EM_GETFIRSTVISIBLELINE, 0, 0);
+    RECT rc_disp;
+    GetClientRect(hDisplay, &rc_disp);
+    int font_h = 1;
+    {
+        HDC hdc_a = GetDC(hDisplay);
+        TEXTMETRIC tm_a;
+        GetTextMetrics(hdc_a, &tm_a);
+        font_h = tm_a.tmHeight + tm_a.tmExternalLeading;
+        ReleaseDC(hDisplay, hdc_a);
+    }
+    int vis_lns = (font_h > 0) ? ((rc_disp.bottom - rc_disp.top) / font_h) : 1;
+    int was_at_bottom = (first_vis + vis_lns >= total_lns) || (total_lns <= vis_lns);
+
+    SendMessage(hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+
+    CHARFORMAT2 cf;
+    memset(&cf, 0, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    cf.dwMask = CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_STRIKEOUT;
+    cf.crTextColor = color;
+    cf.dwEffects = effects;
+
+    if (bgColor != CLR_DEFAULT) {
+        cf.dwMask |= CFM_BACKCOLOR;
+        cf.crBackColor = bgColor;
+    }
+    if (font) {
+        cf.dwMask |= CFM_FACE;
+        strncpy(cf.szFaceName, font, LF_FACESIZE - 1);
+        cf.szFaceName[LF_FACESIZE - 1] = '\0';
+    }
+    if (fontSize > 0) {
+        cf.dwMask |= CFM_SIZE;
+        cf.yHeight = fontSize;
+    }
+    SendMessage(hDisplay, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, text, -1, NULL, 0);
+    if (wlen > 0) {
+        wchar_t *wtext = (wchar_t *)malloc((size_t)wlen * sizeof(wchar_t));
+        if (wtext) {
+            MultiByteToWideChar(CP_UTF8, 0, text, -1, wtext, wlen);
+            SendMessageW(hDisplay, EM_REPLACESEL, FALSE, (LPARAM)wtext);
+            free(wtext);
+        }
+    }
+
+    if (was_at_bottom)
+        SendMessage(hDisplay, WM_VSCROLL, SB_BOTTOM, 0);
+}
+
+#include "markdown.h"
+
+/* Render a markdown-formatted AI response into the RichEdit display.
+ * Handles block-level elements (headings, code blocks, lists, tables,
+ * horizontal rules, blockquotes) and inline formatting (bold, italic,
+ * code, strikethrough). */
+static void chat_append_markdown(HWND hDisplay, const char *raw,
+                                  COLORREF baseColor,
+                                  const ThemeColors *theme)
+{
+    if (!raw || !raw[0]) return;
+
+    COLORREF col_dim = theme ? theme_cr(theme->text_dim) : RGB(140, 140, 140);
+    const char *code_font = "Cascadia Mono";
+
+    /* Split into lines (work on a copy since we modify in-place) */
+    size_t raw_len = strlen(raw);
+    char *buf = (char *)malloc(raw_len + 2);
+    if (!buf) return;
+    memcpy(buf, raw, raw_len + 1);
+
+    int in_code_block = 0;
+    char *p = buf;
+
+    while (*p) {
+        /* Extract one line */
+        char *eol = strchr(p, '\n');
+        if (eol) *eol = '\0';
+
+        /* Strip trailing \r */
+        size_t llen = strlen(p);
+        if (llen > 0 && p[llen - 1] == '\r') p[--llen] = '\0';
+
+        MdLineInfo info = md_classify_line(p, in_code_block);
+
+        switch (info.type) {
+        case MD_LINE_EMPTY:
+            chat_append_styled_ex(hDisplay, "\r\n", baseColor, CLR_DEFAULT,
+                                  0, NULL, 0);
+            break;
+
+        case MD_LINE_CODE_FENCE:
+            in_code_block = !in_code_block;
+            /* Don't render the fence line itself */
+            break;
+
+        case MD_LINE_CODE:
+            chat_append_styled_ex(hDisplay, p, baseColor, CLR_DEFAULT,
+                                  0, code_font, 0);
+            chat_append_styled_ex(hDisplay, "\r\n", baseColor, CLR_DEFAULT,
+                                  0, NULL, 0);
+            break;
+
+        case MD_LINE_HEADING: {
+            int twips = 0;
+            switch (info.heading_level) {
+            case 1: twips = 280; break;
+            case 2: twips = 240; break;
+            case 3: twips = 210; break;
+            default: twips = 200; break;
+            }
+            /* Parse inline spans to strip markers like ** from heading text */
+            const char *h_text = p + info.content_offset;
+            MdSpan h_spans[MD_MAX_SPANS];
+            int nh = md_parse_inline(h_text, (int)strlen(h_text), h_spans);
+            for (int s = 0; s < nh; s++) {
+                char tmp[2048];
+                int slen = h_spans[s].end - h_spans[s].start;
+                if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
+                memcpy(tmp, h_text + h_spans[s].start, (size_t)slen);
+                tmp[slen] = '\0';
+                DWORD eff = CFE_BOLD; /* headings are always bold */
+                const char *sfont = NULL;
+                if (h_spans[s].type == MD_SPAN_CODE)
+                    sfont = code_font;
+                else if (h_spans[s].type == MD_SPAN_ITALIC ||
+                         h_spans[s].type == MD_SPAN_BOLD_ITALIC)
+                    eff |= CFE_ITALIC;
+                chat_append_styled_ex(hDisplay, tmp, baseColor, CLR_DEFAULT,
+                                      eff, sfont, twips);
+            }
+            chat_append_styled_ex(hDisplay, "\r\n", baseColor, CLR_DEFAULT,
+                                  0, NULL, 0);
+            break;
+        }
+
+        case MD_LINE_HRULE:
+            chat_append_styled_ex(hDisplay,
+                "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+                "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+                "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+                "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+                "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+                "\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80"
+                "\r\n",
+                col_dim, CLR_DEFAULT, 0, NULL, 0);
+            break;
+
+        case MD_LINE_ULIST:
+            chat_append_styled_ex(hDisplay, "  \xe2\x80\xa2  ", baseColor,
+                                  CLR_DEFAULT, 0, NULL, 0);
+            /* fall through to render inline content */
+            info.content_offset = info.content_offset; /* use content_offset */
+            goto render_inline;
+
+        case MD_LINE_OLIST: {
+            /* Render "  N.  " prefix */
+            char prefix[16];
+            int nlen = info.content_offset - 2; /* digits + dot */
+            snprintf(prefix, sizeof(prefix), "  %.*s  ", nlen, p);
+            chat_append_styled_ex(hDisplay, prefix, baseColor,
+                                  CLR_DEFAULT, 0, NULL, 0);
+            goto render_inline;
+        }
+
+        case MD_LINE_TABLE:
+            /* Render tables in monospace so columns align */
+            chat_append_styled_ex(hDisplay, p, baseColor, CLR_DEFAULT,
+                                  0, code_font, 0);
+            chat_append_styled_ex(hDisplay, "\r\n", baseColor, CLR_DEFAULT,
+                                  0, NULL, 0);
+            break;
+
+        case MD_LINE_BLOCKQUOTE: {
+            const char *bq_text = p + info.content_offset;
+            chat_append_styled_ex(hDisplay,
+                "\xe2\x94\x82 ", col_dim, CLR_DEFAULT, CFE_ITALIC, NULL, 0);
+            /* Render inline formatting within blockquote */
+            MdSpan bq_spans[MD_MAX_SPANS];
+            int nbq = md_parse_inline(bq_text, (int)strlen(bq_text), bq_spans);
+            for (int s = 0; s < nbq; s++) {
+                char tmp[2048];
+                int slen = bq_spans[s].end - bq_spans[s].start;
+                if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
+                memcpy(tmp, bq_text + bq_spans[s].start, (size_t)slen);
+                tmp[slen] = '\0';
+                DWORD eff = CFE_ITALIC; /* blockquote base is italic */
+                const char *sfont = NULL;
+                switch (bq_spans[s].type) {
+                case MD_SPAN_BOLD:        eff |= CFE_BOLD; break;
+                case MD_SPAN_BOLD_ITALIC: eff |= CFE_BOLD; break;
+                case MD_SPAN_CODE:        sfont = code_font; break;
+                case MD_SPAN_STRIKETHROUGH: eff |= CFE_STRIKEOUT; break;
+                default: break;
+                }
+                chat_append_styled_ex(hDisplay, tmp, col_dim, CLR_DEFAULT,
+                                      eff, sfont, 0);
+            }
+            chat_append_styled_ex(hDisplay, "\r\n", baseColor, CLR_DEFAULT,
+                                  0, NULL, 0);
+            break;
+        }
+
+        case MD_LINE_PARAGRAPH:
+        default:
+        render_inline: {
+            /* Parse and render inline spans */
+            const char *il_text = p + info.content_offset;
+            MdSpan spans[MD_MAX_SPANS];
+            int nspans = md_parse_inline(il_text, (int)strlen(il_text), spans);
+            for (int s = 0; s < nspans; s++) {
+                char tmp[2048];
+                int slen = spans[s].end - spans[s].start;
+                if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
+                memcpy(tmp, il_text + spans[s].start, (size_t)slen);
+                tmp[slen] = '\0';
+                DWORD eff = 0;
+                const char *sfont = NULL;
+                switch (spans[s].type) {
+                case MD_SPAN_BOLD:        eff = CFE_BOLD; break;
+                case MD_SPAN_ITALIC:      eff = CFE_ITALIC; break;
+                case MD_SPAN_BOLD_ITALIC: eff = CFE_BOLD | CFE_ITALIC; break;
+                case MD_SPAN_CODE:        sfont = code_font; break;
+                case MD_SPAN_STRIKETHROUGH: eff = CFE_STRIKEOUT; break;
+                default: break;
+                }
+                chat_append_styled_ex(hDisplay, tmp, baseColor,
+                                      CLR_DEFAULT, eff, sfont, 0);
+            }
+            chat_append_styled_ex(hDisplay, "\r\n", baseColor,
+                                  CLR_DEFAULT, 0, NULL, 0);
+            break;
+        }
+        } /* switch */
+
+        if (eol)
+            p = eol + 1;
+        else
+            break;
+    }
+
+    free(buf);
 }
 
 /* Format AI response for display:
@@ -583,14 +852,8 @@ static void chat_rebuild_display(AiChatData *d)
                 chat_append_styled(d->hDisplay, "\r\n", col_dim, 1);
             }
             chat_append_ops(d->hDisplay, "\r\n--- AI ---\r\n");
-            char *formatted = format_ai_text(msg->content);
-            if (formatted) {
-                chat_append_color(d->hDisplay, formatted, col_ai);
-                free(formatted);
-            } else {
-                chat_append_color(d->hDisplay, msg->content, col_ai);
-            }
-            chat_append_color(d->hDisplay, "\r\n", col_ai);
+            chat_append_markdown(d->hDisplay, msg->content, col_ai,
+                                 d->theme);
         }
         /* Skip system messages injected mid-conversation */
     }
@@ -650,6 +913,7 @@ static void send_user_message(AiChatData *d)
     d->stream_thinking_len = 0;
     d->stream_content[0] = '\0';
     d->stream_content_len = 0;
+    d->stream_display_start = -1;
     start_indicator(d, "thinking");
 
     /* Always use streaming thread — gives realtime auto-scroll for content
@@ -906,10 +1170,17 @@ static void relayout(AiChatData *d)
             ShowWindow(d->hDenyBtn, SW_HIDE);
         }
     }
-    if (d->hInput)
-        MoveWindow(d->hInput, margin, ch - input_h - margin, cw - send_w - margin * 3, input_h, TRUE);
-    if (d->hSendBtn)
-        MoveWindow(d->hSendBtn, cw - send_w - margin, ch - input_h - margin, send_w, input_h, TRUE);
+    {
+        int input_y = ch - input_h - margin;
+        int input_w = cw - send_w - margin * 3 - CSB_WIDTH;
+        if (d->hInput)
+            MoveWindow(d->hInput, margin, input_y, input_w, input_h, TRUE);
+        if (d->hInputScrollbar)
+            MoveWindow(d->hInputScrollbar, margin + input_w, input_y,
+                       CSB_WIDTH, input_h, TRUE);
+        if (d->hSendBtn)
+            MoveWindow(d->hSendBtn, cw - send_w - margin, input_y, send_w, input_h, TRUE);
+    }
     #undef S
 }
 
@@ -919,6 +1190,52 @@ static void display_sync_scroll(AiChatData *d)
     if (!d) return;
     int lh = d->display_line_h > 0 ? d->display_line_h : 1;
     csb_sync_edit(d->hDisplay, d->hDisplayScrollbar, lh);
+}
+
+/* Sync the input scrollbar with the EDIT control's scroll state */
+static void input_sync_scroll(AiChatData *d)
+{
+    if (!d || !d->hInputScrollbar) return;
+    int lh = d->input_line_h > 0 ? d->input_line_h : 1;
+    csb_sync_edit(d->hInput, d->hInputScrollbar, lh);
+}
+
+/* Zoom the AI chat font: recreate hFont at the new size, apply to controls,
+ * and re-measure line height for scroll sync. */
+static void chat_apply_zoom(AiChatData *d, int delta)
+{
+    if (!d) return;
+    int new_size = app_font_zoom(d->ui_font_size, delta);
+    if (new_size == d->ui_font_size)
+        return;
+    d->ui_font_size = new_size;
+
+    /* Recreate main font at new size */
+    if (d->hFont) DeleteObject(d->hFont);
+    int h = -MulDiv(new_size, d->dpi, 72);
+    d->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                          DEFAULT_CHARSET, OUT_TT_PRECIS,
+                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                          DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+    if (d->hFont) {
+        SendMessage(d->hDisplay, WM_SETFONT, (WPARAM)d->hFont, TRUE);
+        SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hFont, TRUE);
+        /* Re-measure line height */
+        HDC hdc = GetDC(d->hDisplay);
+        HGDIOBJ old = SelectObject(hdc, (HGDIOBJ)d->hFont);
+        TEXTMETRIC tm;
+        GetTextMetrics(hdc, &tm);
+        d->display_line_h = tm.tmHeight + tm.tmExternalLeading;
+        d->input_line_h = d->display_line_h;
+        SelectObject(hdc, old);
+        ReleaseDC(d->hDisplay, hdc);
+    }
+    /* Rebuild the display so all text is re-rendered with proper colors
+     * and markdown formatting.  WM_SETFONT alone strips per-character
+     * formatting (colors, bold, etc.) from the RichEdit control. */
+    chat_rebuild_display(d);
+    display_sync_scroll(d);
+    input_sync_scroll(d);
 }
 
 static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
@@ -1043,31 +1360,39 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Input field: multiline, Enter sends via subclass, Shift+Enter = newline */
         int send_w = S(40);
+        int input_y = ch - input_h - margin;
+        int input_w = cw - send_w - margin * 3 - CSB_WIDTH;
         nd->hInput = CreateWindow("EDIT", "",
             WS_VISIBLE | WS_CHILD | WS_BORDER |
             ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
-            margin, ch - input_h - margin, cw - send_w - margin * 3, input_h,
+            margin, input_y, input_w, input_h,
             hwnd, (HMENU)IDC_CHAT_INPUT, NULL, NULL);
         SetWindowSubclass(nd->hInput, InputSubclassProc, 0, 0);
+
+        /* Custom themed scrollbar for input */
+        nd->hInputScrollbar = csb_create(hwnd,
+            margin + input_w, input_y, CSB_WIDTH, input_h,
+            nd->theme, GetModuleHandle(NULL));
 
         /* Send button (owner-drawn for theme) */
         nd->hSendBtn = CreateWindow("BUTTON", ">",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            cw - send_w - margin, ch - input_h - margin, send_w, input_h,
+            cw - send_w - margin, input_y, send_w, input_h,
             hwnd, (HMENU)IDC_CHAT_SEND, NULL, NULL);
 
-        /* Font — use configured font at UI size */
+        /* Font — use Inter UI font */
+        nd->ui_font_size = APP_FONT_UI_SIZE;
         int h = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
         nd->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                                DEFAULT_CHARSET, OUT_TT_PRECIS,
                                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                               FIXED_PITCH | FF_MODERN, nd->font_name);
+                               DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
         /* Small bold font — DPI-scaled to match tab strip indicator labels */
         int sh = -MulDiv(7, nd->dpi, 72);
         nd->hSmallFont = CreateFont(sh, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                                     DEFAULT_CHARSET, OUT_TT_PRECIS,
                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                    FIXED_PITCH | FF_MODERN, nd->font_name);
+                                    DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
         #undef S
         if (nd->hFont) {
             SendMessage(nd->hDisplay, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
@@ -1078,6 +1403,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             TEXTMETRIC tm_m;
             GetTextMetrics(hdc_m, &tm_m);
             nd->display_line_h = tm_m.tmHeight + tm_m.tmExternalLeading;
+            nd->input_line_h = nd->display_line_h;
             SelectObject(hdc_m, old_m);
             ReleaseDC(nd->hDisplay, hdc_m);
         }
@@ -1425,6 +1751,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     chat_append_ops(d->hDisplay, "\r\n");
                 chat_append_ops(d->hDisplay, "\r\n--- AI ---\r\n");
                 d->stream_phase = 2;
+                /* Record where the AI content starts for markdown re-render */
+                CHARRANGE cr_start;
+                SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+                SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_start);
+                d->stream_display_start = cr_start.cpMin;
             }
             COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main)
                                        : GetSysColor(COLOR_WINDOWTEXT);
@@ -1509,9 +1840,28 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             d->stream_thinking[0] = '\0';
             d->stream_thinking_len = 0;
 
-            /* End the streaming section */
-            chat_append_color(d->hDisplay, "\r\n",
-                d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT));
+            /* Replace the plain-text stream with markdown-rendered version */
+            if (d->stream_display_start >= 0 && d->stream_content_len > 0) {
+                /* Select from stream start to end and delete */
+                SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+                CHARRANGE cr_end;
+                SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_end);
+                CHARRANGE cr_repl = { d->stream_display_start, cr_end.cpMax };
+                SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_repl);
+                SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
+
+                /* Re-render with markdown formatting */
+                COLORREF col_ai = d->theme
+                    ? theme_cr(d->theme->text_main)
+                    : GetSysColor(COLOR_WINDOWTEXT);
+                chat_append_markdown(d->hDisplay, d->stream_content,
+                                     col_ai, d->theme);
+            } else {
+                chat_append_color(d->hDisplay, "\r\n",
+                    d->theme ? theme_cr(d->theme->text_main)
+                             : GetSysColor(COLOR_WINDOWTEXT));
+            }
+            d->stream_display_start = -1;
             d->stream_phase = 0;
 
             /* Extract commands from the full accumulated content */
@@ -1658,6 +2008,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
         } else if (wParam == TIMER_SCROLL_SYNC) {
             display_sync_scroll(d);
+            input_sync_scroll(d);
         }
         return 0;
 
@@ -1690,13 +2041,61 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             display_sync_scroll(d);
             return 0;
         }
+        if (d && d->hInputScrollbar &&
+            (HWND)lParam == d->hInputScrollbar) {
+            WORD code = LOWORD(wParam);
+            int first = (int)SendMessage(d->hInput,
+                            EM_GETFIRSTVISIBLELINE, 0, 0);
+            int delta = 0;
+            RECT erc_i;
+            GetClientRect(d->hInput, &erc_i);
+            int vis = edit_scroll_visible_lines(erc_i.bottom - erc_i.top,
+                          d->input_line_h > 0 ? d->input_line_h : 1);
+            switch (code) {
+            case SB_LINEUP:    delta = -1;   break;
+            case SB_LINEDOWN:  delta =  1;   break;
+            case SB_PAGEUP:    delta = -vis; break;
+            case SB_PAGEDOWN:  delta =  vis; break;
+            case SB_THUMBTRACK:
+            case SB_THUMBPOSITION:
+                delta = edit_scroll_line_delta(
+                    csb_get_trackpos(d->hInputScrollbar), first);
+                break;
+            case SB_TOP:    delta = -first;  break;
+            case SB_BOTTOM: delta =  99999;  break;
+            }
+            if (delta != 0)
+                SendMessage(d->hInput, EM_LINESCROLL, 0, (LPARAM)delta);
+            input_sync_scroll(d);
+            return 0;
+        }
+        break;
+
+    case WM_KEYDOWN:
+        if (d && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            if (wParam == VK_OEM_PLUS || wParam == (WPARAM)'=') {
+                chat_apply_zoom(d, 1);
+                return 0;
+            }
+            if (wParam == VK_OEM_MINUS || wParam == (WPARAM)'-') {
+                chat_apply_zoom(d, -1);
+                return 0;
+            }
+        }
         break;
 
     case WM_MOUSEWHEEL:
         if (d && d->hDisplay) {
             int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
-            int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
-            SendMessage(d->hDisplay, EM_LINESCROLL, 0, (LPARAM)scroll);
+            /* Ctrl+Scroll zooms the font */
+            if (GetKeyState(VK_CONTROL) & 0x8000) {
+                chat_apply_zoom(d, zdelta > 0 ? 1 : -1);
+                return 0;
+            }
+            int scroll = edit_scroll_wheel_accum(zdelta, WHEEL_DELTA, 3,
+                                                 &d->wheel_accum);
+            if (scroll != 0)
+                SendMessage(d->hDisplay, EM_LINESCROLL, 0, (LPARAM)scroll);
             display_sync_scroll(d);
             return 0;
         }
@@ -1957,6 +2356,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
 
     InitializeCriticalSection(&d->cs);
     d->indicator_pos = -1;
+    d->stream_display_start = -1;
     d->paste_delay_ms = paste_delay_ms;
     if (font_name && font_name[0])
         strncpy(d->font_name, font_name, sizeof(d->font_name) - 1);
@@ -2089,9 +2489,11 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme)
     SendMessage(d->hDisplay, EM_SETBKGNDCOLOR, 0,
                 (LPARAM)theme_cr(d->theme->bg_secondary));
 
-    /* Update custom scrollbar theme */
+    /* Update custom scrollbar themes */
     if (d->hDisplayScrollbar)
         csb_set_theme(d->hDisplayScrollbar, d->theme);
+    if (d->hInputScrollbar)
+        csb_set_theme(d->hInputScrollbar, d->theme);
 
     /* Update title bar and borders */
     themed_apply_title_bar(hwnd, d->theme);

@@ -33,4 +33,12 @@ int edit_scroll_line_delta(int target_pos, int current_first_visible);
 int edit_scroll_wheel_delta(int wheel_delta, int notch_size,
                             int lines_per_notch);
 
+/* Accumulator-based wheel delta for high-precision mice/trackpads.
+ * Collects sub-notch deltas across events and only returns a scroll
+ * value once a full notch threshold is crossed.  Remainder is kept
+ * in *accumulator for the next call.
+ * Returns 0 when accumulated delta has not yet reached a full notch. */
+int edit_scroll_wheel_accum(int wheel_delta, int notch_size,
+                            int lines_per_notch, int *accumulator);
+
 #endif /* NUTSHELL_EDIT_SCROLL_H */

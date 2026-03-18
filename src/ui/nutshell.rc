@@ -2,7 +2,9 @@
 #include "resource.h"
 
 IDI_APPICON  ICON "nutshell.ico"
-IDI_AI_BRAIN ICON "ai_icon.ico"
+
+IDR_FONT_INTER      RCDATA "fonts/Inter-Regular.ttf"
+IDR_FONT_INTER_BOLD RCDATA "fonts/Inter-Bold.ttf"
 
 // DPI awareness manifest — prevents bitmap scaling on high-DPI displays
 1 24 "nutshell.manifest"

@@ -21,10 +21,13 @@
 #include "log_format.h"
 #include "paste_dlg.h"
 #include "ai_chat.h"
+#include "ai_chat_testable.h"
 #include "selection.h"
 #include "app_font.h"
 #include "ui_theme.h"
 #include "custom_scrollbar.h"
+#include "menubar_line.h"
+#include <dwmapi.h>
 
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell v" APP_VERSION;
@@ -49,8 +52,10 @@ static int get_window_dpi(HWND hwnd)
 }
 
 #define TAB_HEIGHT_BASE 32
+#define TERM_LEFT_MARGIN 6
 static int g_dpi = 96;
 static int g_tab_height = TAB_HEIGHT_BASE;
+static int g_left_margin = TERM_LEFT_MARGIN;
 
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
 #define WM_CONN_DONE            (WM_USER + 2)
@@ -100,10 +105,12 @@ static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
 static HWND g_hwndAiChat = NULL;
+static HFONT g_hMenuFont = NULL;
 static HWND g_hwndScrollbar = NULL;
 static const ThemeColors *g_theme = NULL;
 static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
+static HMENU create_app_menu(void);      /* forward declaration */
 
 /* Invalidate only the terminal area (below the tab strip), not the tabs. */
 static void invalidate_terminal(HWND hwnd)
@@ -550,7 +557,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
 static void on_session_connect(const Profile *info) {
     RECT rc;
     GetClientRect(GetParent(g_hwndTabs), &rc);
-    int term_w = rc.right;
+    int term_w = rc.right - g_left_margin;
     int term_h = rc.bottom - g_tab_height;
     if (term_h < 1) term_h = 1;
 
@@ -643,6 +650,11 @@ static void on_settings_clicked(void) {
         g_theme = ui_theme_get(idx);
         tabs_set_theme(g_hwndTabs, g_theme);
         if (g_hwndScrollbar) csb_set_theme(g_hwndScrollbar, g_theme);
+        /* Rebuild menu bar with new theme colours */
+        HMENU oldMenu = GetMenu(parent);
+        SetMenu(parent, create_app_menu());
+        if (oldMenu) DestroyMenu(oldMenu);
+        DrawMenuBar(parent);
     }
 
     /* Reinitialise renderer — font or size may have changed */
@@ -1037,6 +1049,157 @@ static void apply_zoom(HWND hwnd, int delta)
     invalidate_terminal(hwnd);
 }
 
+/* ---- Owner-draw menu for colour-scheme integration ---- */
+
+/* Per-item data attached via MF_OWNERDRAW */
+typedef struct {
+    UINT   id;           /* command ID (or 0 for popup) */
+    HMENU  hSub;         /* submenu handle, or NULL */
+    char   text[64];     /* display text */
+    char   accel[32];    /* accelerator text (after \t), or "" */
+    int    is_separator; /* 1 = separator line */
+} MenuItemData;
+
+/* Small pool of MenuItemData — never freed (lives for app lifetime) */
+#define MAX_MENU_ITEMS 32
+static MenuItemData g_menu_items[MAX_MENU_ITEMS];
+static int g_menu_item_count;
+
+static MenuItemData *alloc_menu_item(void)
+{
+    if (g_menu_item_count >= MAX_MENU_ITEMS) return &g_menu_items[0];
+    return &g_menu_items[g_menu_item_count++];
+}
+
+/* Helper: add an owner-draw item to a menu */
+static void menu_add_item(HMENU menu, UINT id, const char *label)
+{
+    MenuItemData *mi = alloc_menu_item();
+    mi->id   = id;
+    mi->hSub = NULL;
+    mi->is_separator = 0;
+    /* Split "Text\tAccel" */
+    const char *tab = strchr(label, '\t');
+    if (tab) {
+        size_t n = (size_t)(tab - label);
+        if (n >= sizeof(mi->text)) n = sizeof(mi->text) - 1;
+        memcpy(mi->text, label, n);
+        mi->text[n] = '\0';
+        (void)snprintf(mi->accel, sizeof(mi->accel), "%s", tab + 1);
+    } else {
+        (void)snprintf(mi->text, sizeof(mi->text), "%s", label);
+        mi->accel[0] = '\0';
+    }
+    AppendMenu(menu, MF_OWNERDRAW, id, (LPCSTR)mi);
+}
+
+static void menu_add_separator(HMENU menu)
+{
+    MenuItemData *mi = alloc_menu_item();
+    mi->id = 0;
+    mi->hSub = NULL;
+    mi->is_separator = 1;
+    mi->text[0] = '\0';
+    mi->accel[0] = '\0';
+    AppendMenu(menu, MF_OWNERDRAW | MF_SEPARATOR, 0, (LPCSTR)mi);
+}
+
+static void menu_add_popup(HMENU bar, HMENU sub, const char *label)
+{
+    MenuItemData *mi = alloc_menu_item();
+    mi->id   = 0;
+    mi->hSub = sub;
+    mi->is_separator = 0;
+    mi->accel[0] = '\0';
+    (void)snprintf(mi->text, sizeof(mi->text), "%s", label);
+    AppendMenu(bar, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)sub, (LPCSTR)mi);
+}
+
+/* Apply theme background to a menu handle */
+static void menu_set_bg(HMENU menu, COLORREF bg)
+{
+    MENUINFO mi;
+    memset(&mi, 0, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    mi.fMask  = MIM_BACKGROUND;
+    mi.hbrBack = CreateSolidBrush(bg);
+    SetMenuInfo(menu, &mi);
+}
+
+/* Convert 0xRRGGBB to COLORREF */
+static COLORREF menu_tc(unsigned int rgb)
+{
+    return RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+}
+
+/* Build the application menu bar */
+static HMENU create_app_menu(void)
+{
+    g_menu_item_count = 0;
+
+    HMENU hMenu = CreateMenu();
+    HMENU hFile = CreatePopupMenu();
+    menu_add_item(hFile, IDM_FILE_NEW_SESSION, "New Session\tCtrl+T");
+    menu_add_separator(hFile);
+    menu_add_item(hFile, IDM_FILE_CONNECT, "Session Manager...");
+    menu_add_item(hFile, IDM_FILE_DISCONNECT, "Disconnect");
+    menu_add_separator(hFile);
+    menu_add_item(hFile, IDM_FILE_LOG_START, "Start Logging");
+    menu_add_item(hFile, IDM_FILE_LOG_STOP, "Stop Logging");
+    menu_add_separator(hFile);
+    menu_add_item(hFile, IDM_FILE_EXIT, "Exit");
+    menu_add_popup(hMenu, hFile, "File");
+
+    HMENU hEdit = CreatePopupMenu();
+    menu_add_item(hEdit, IDM_EDIT_COPY, "Copy\tCtrl+C");
+    menu_add_item(hEdit, IDM_EDIT_PASTE, "Paste\tCtrl+V");
+    menu_add_item(hEdit, IDM_EDIT_SELECT_ALL, "Select All\tCtrl+A");
+    menu_add_separator(hEdit);
+    menu_add_item(hEdit, IDM_EDIT_SETTINGS, "Settings...");
+    menu_add_popup(hMenu, hEdit, "Edit");
+
+    HMENU hView = CreatePopupMenu();
+    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist");
+    menu_add_item(hView, IDM_VIEW_FULLSCREEN, "Fullscreen\tF11");
+    menu_add_popup(hMenu, hView, "View");
+
+    HMENU hHelp = CreatePopupMenu();
+    menu_add_item(hHelp, IDM_ABOUT, "About");
+    menu_add_popup(hMenu, hHelp, "Help");
+
+    /* Apply theme background to all menus */
+    if (g_theme) {
+        COLORREF bg = menu_tc(g_theme->bg_secondary);
+        menu_set_bg(hMenu, bg);
+        menu_set_bg(hFile, bg);
+        menu_set_bg(hEdit, bg);
+        menu_set_bg(hView, bg);
+    }
+
+    return hMenu;
+}
+
+/* Copy current selection to clipboard */
+static void do_copy(HWND hwnd)
+{
+    if (!g_active_session || !g_active_session->term) return;
+    if (!g_selection.valid) return;
+    char buf[8192];
+    size_t n = selection_extract_text(&g_selection,
+        g_active_session->term, buf, sizeof(buf));
+    if (n > 0 && OpenClipboard(hwnd)) {
+        EmptyClipboard();
+        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, n + 1);
+        if (hg) {
+            char *dst = (char *)GlobalLock(hg);
+            memcpy(dst, buf, n + 1);
+            GlobalUnlock(hg);
+            SetClipboardData(CF_TEXT, hg);
+        }
+        CloseClipboard();
+    }
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
@@ -1076,9 +1239,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_theme = ui_theme_get(idx);
             }
 
-            /* Compute DPI-scaled tab height */
+            /* Compute DPI-scaled tab height and terminal left margin */
             g_dpi = get_window_dpi(hwnd);
             g_tab_height = MulDiv(TAB_HEIGHT_BASE, g_dpi, 96);
+            g_left_margin = MulDiv(TERM_LEFT_MARGIN, g_dpi, 96);
+
+            app_font_load_ui();
+
+            /* Create UI font for owner-drawn menus */
+            {
+                int mh = -MulDiv(APP_FONT_UI_SIZE, g_dpi, 72);
+                g_hMenuFont = CreateFont(mh, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+            }
 
             tabs_init(g_hInst);
             csb_register(g_hInst);
@@ -1114,8 +1288,198 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             SetTimer(hwnd, 1, 10,  NULL);
             SetTimer(hwnd, 2, 500, NULL);
             
+            /* Attach menu bar */
+            SetMenu(hwnd, create_app_menu());
+
             PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
             return 0;
+
+        case WM_COMMAND:
+            switch (LOWORD(wParam)) {
+                case IDM_FILE_NEW_SESSION:
+                    on_tab_new();
+                    return 0;
+                case IDM_FILE_CONNECT:
+                    PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
+                    return 0;
+                case IDM_FILE_DISCONNECT:
+                    if (g_active_session) {
+                        int tidx = tabs_find(g_hwndTabs, g_active_session);
+                        if (tidx >= 0)
+                            on_status_click(tidx, g_active_session,
+                                            tabs_get_status(g_hwndTabs, tidx));
+                    }
+                    return 0;
+                case IDM_FILE_LOG_START:
+                    if (g_active_session) {
+                        int tidx = tabs_find(g_hwndTabs, g_active_session);
+                        if (tidx >= 0 && !tabs_get_logging(g_hwndTabs, tidx))
+                            on_log_toggle(tidx, g_active_session);
+                    }
+                    return 0;
+                case IDM_FILE_LOG_STOP:
+                    if (g_active_session) {
+                        int tidx = tabs_find(g_hwndTabs, g_active_session);
+                        if (tidx >= 0 && tabs_get_logging(g_hwndTabs, tidx))
+                            on_log_toggle(tidx, g_active_session);
+                    }
+                    return 0;
+                case IDM_FILE_EXIT:
+                    PostMessage(hwnd, WM_CLOSE, 0, 0);
+                    return 0;
+                case IDM_EDIT_COPY:
+                    do_copy(hwnd);
+                    return 0;
+                case IDM_EDIT_PASTE:
+                    do_paste(hwnd);
+                    return 0;
+                case IDM_EDIT_SELECT_ALL:
+                    if (g_active_session && g_active_session->term) {
+                        g_selection.start_row = 0;
+                        g_selection.start_col = 0;
+                        g_selection.end_row = g_active_session->term->rows - 1;
+                        g_selection.end_col = g_active_session->term->cols - 1;
+                        g_selection.valid = true;
+                        invalidate_terminal(hwnd);
+                    }
+                    return 0;
+                case IDM_EDIT_SETTINGS:
+                    on_settings_clicked();
+                    return 0;
+                case IDM_VIEW_AI_CHAT:
+                    on_ai_clicked();
+                    return 0;
+                case IDM_VIEW_FULLSCREEN: {
+                    static WINDOWPLACEMENT wp_prev;
+                    static int wp_init = 0;
+                    if (!wp_init) { memset(&wp_prev, 0, sizeof(wp_prev)); wp_prev.length = sizeof(wp_prev); wp_init = 1; }
+                    LONG style = GetWindowLong(hwnd, GWL_STYLE);
+                    if (style & WS_OVERLAPPEDWINDOW) {
+                        MONITORINFO mi;
+                        mi.cbSize = sizeof(mi);
+                        if (GetWindowPlacement(hwnd, &wp_prev) &&
+                            GetMonitorInfo(MonitorFromWindow(hwnd,
+                                           MONITOR_DEFAULTTOPRIMARY), &mi)) {
+                            SetWindowLong(hwnd, GWL_STYLE,
+                                          (LONG)((DWORD)style & ~(DWORD)WS_OVERLAPPEDWINDOW));
+                            SetWindowPos(hwnd, HWND_TOP,
+                                (int)mi.rcMonitor.left, (int)mi.rcMonitor.top,
+                                (int)(mi.rcMonitor.right - mi.rcMonitor.left),
+                                (int)(mi.rcMonitor.bottom - mi.rcMonitor.top),
+                                SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+                        }
+                    } else {
+                        SetWindowLong(hwnd, GWL_STYLE,
+                                      (LONG)((DWORD)style | (DWORD)WS_OVERLAPPEDWINDOW));
+                        SetWindowPlacement(hwnd, &wp_prev);
+                        SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                            SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+                    }
+                    return 0;
+                }
+                case IDM_ABOUT:
+                    MessageBoxA(hwnd,
+                        "Nutshell SSH Client v" APP_VERSION
+                        "\n\nA lightweight SSH terminal emulator."
+                        "\n\nCopyright \xA9 2026 Thomas Sulkiewicz",
+                        "About Nutshell", MB_OK | MB_ICONINFORMATION);
+                    return 0;
+            }
+            break;
+
+        case WM_MEASUREITEM: {
+            MEASUREITEMSTRUCT *mis = (MEASUREITEMSTRUCT *)lParam;
+            if (mis->CtlType == ODT_MENU) {
+                MenuItemData *mi = (MenuItemData *)(ULONG_PTR)mis->itemData;
+                if (mi && mi->is_separator) {
+                    mis->itemHeight = (UINT)MulDiv(6, g_dpi, 96);
+                    mis->itemWidth  = 0;
+                    return TRUE;
+                }
+                if (mi) {
+                    HDC hdc = GetDC(hwnd);
+                    HFONT oldFont = g_hMenuFont ? (HFONT)SelectObject(hdc, g_hMenuFont) : NULL;
+                    SIZE sz = {0, 0};
+                    GetTextExtentPoint32A(hdc, mi->text, (int)strlen(mi->text), &sz);
+                    /* Top-level menu bar items: tighter padding */
+                    int hpad = mi->hSub ? MulDiv(10, g_dpi, 96)
+                                        : MulDiv(24, g_dpi, 96);
+                    mis->itemWidth = (UINT)sz.cx + (UINT)hpad;
+                    if (mi->accel[0]) {
+                        SIZE az;
+                        GetTextExtentPoint32A(hdc, mi->accel, (int)strlen(mi->accel), &az);
+                        mis->itemWidth += (UINT)az.cx + (UINT)MulDiv(12, g_dpi, 96);
+                    }
+                    mis->itemHeight = (UINT)sz.cy + (UINT)MulDiv(4, g_dpi, 96);
+                    if (oldFont) SelectObject(hdc, oldFont);
+                    ReleaseDC(hwnd, hdc);
+                    return TRUE;
+                }
+            }
+            break;
+        }
+
+        case WM_DRAWITEM: {
+            DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lParam;
+            if (dis->CtlType == ODT_MENU) {
+                MenuItemData *mid = (MenuItemData *)(ULONG_PTR)dis->itemData;
+                if (!mid) break;
+                HDC hdc = dis->hDC;
+                HFONT oldFont = g_hMenuFont ? (HFONT)SelectObject(hdc, g_hMenuFont) : NULL;
+                RECT rcItem = dis->rcItem;
+                int selected = (dis->itemState & ODS_SELECTED) != 0;
+
+                /* Theme colours */
+                COLORREF cBg   = g_theme ? menu_tc(g_theme->bg_secondary) : GetSysColor(COLOR_MENU);
+                COLORREF cFg   = g_theme ? menu_tc(g_theme->text_main)    : GetSysColor(COLOR_MENUTEXT);
+                COLORREF cSel  = g_theme ? menu_tc(g_theme->accent)       : GetSysColor(COLOR_HIGHLIGHT);
+                COLORREF cDim  = g_theme ? menu_tc(g_theme->text_dim)     : GetSysColor(COLOR_GRAYTEXT);
+                COLORREF cBord = g_theme ? menu_tc(g_theme->border)       : GetSysColor(COLOR_MENUHILIGHT);
+
+                if (mid->is_separator) {
+                    HBRUSH bgBr = CreateSolidBrush(cBg);
+                    FillRect(hdc, &rcItem, bgBr);
+                    DeleteObject(bgBr);
+                    int my = (rcItem.top + rcItem.bottom) / 2;
+                    HPEN sepPen = CreatePen(PS_SOLID, 1, cBord);
+                    HPEN oldPen = (HPEN)SelectObject(hdc, sepPen);
+                    MoveToEx(hdc, rcItem.left + MulDiv(4, g_dpi, 96), my, NULL);
+                    LineTo(hdc, rcItem.right - MulDiv(4, g_dpi, 96), my);
+                    SelectObject(hdc, oldPen);
+                    DeleteObject(sepPen);
+                    if (oldFont) SelectObject(hdc, oldFont);
+                    return TRUE;
+                }
+
+                /* Background */
+                HBRUSH itemBr = CreateSolidBrush(selected ? cSel : cBg);
+                FillRect(hdc, &rcItem, itemBr);
+                DeleteObject(itemBr);
+
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, selected ? RGB(255, 255, 255) : cFg);
+
+                /* Text — left aligned with padding */
+                int xPad = MulDiv(8, g_dpi, 96);
+                RECT rcText = rcItem;
+                rcText.left += xPad;
+                DrawTextA(hdc, mid->text, -1, &rcText,
+                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+                /* Accelerator — right aligned */
+                if (mid->accel[0]) {
+                    SetTextColor(hdc, selected ? RGB(220, 220, 220) : cDim);
+                    RECT rcAccel = rcItem;
+                    rcAccel.right -= xPad;
+                    DrawTextA(hdc, mid->accel, -1, &rcAccel,
+                              DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+                }
+                if (oldFont) SelectObject(hdc, oldFont);
+                return TRUE;
+            }
+            break;
+        }
 
         case WM_TIMER:
             if (wParam == 1) {
@@ -1213,6 +1577,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     tabs_set_logging(g_hwndTabs, tidx,
                                      s->session_log ? 1 : 0);
                 }
+
+                /* Update AI chat channel — fixes commands failing when
+                 * the AI window was opened before the session connected. */
+                if (ai_chat_should_update_channel(
+                        g_hwndAiChat != NULL,
+                        NULL,  /* don't care about current chat channel */
+                        s->channel,
+                        s == g_active_session)) {
+                    ai_chat_set_session(g_hwndAiChat, s->term, s->channel);
+                }
             }
             update_scrollbar(hwnd);
             invalidate_terminal(hwnd);
@@ -1227,8 +1601,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             RECT *wr = (RECT *)lParam;
             int nc_w, nc_h;
             get_nc_size(hwnd, &nc_w, &nc_h);
-            /* Account for the custom scrollbar width */
-            nc_w += CSB_WIDTH;
+            /* Account for the custom scrollbar width and left margin */
+            nc_w += CSB_WIDTH + g_left_margin;
 
             int client_w = (wr->right  - wr->left) - nc_w;
             int client_h = (wr->bottom - wr->top)  - nc_h;
@@ -1266,7 +1640,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 int term_h = height - g_tab_height;
                 if (term_h < 1) term_h = 1;
 
-                int term_w = width - CSB_WIDTH;
+                int term_w = width - CSB_WIDTH - g_left_margin;
                 if (term_w < 1) term_w = 1;
                 int cols = term_w / g_renderer.charWidth;
                 int rows = term_h / g_renderer.charHeight;
@@ -1293,6 +1667,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int newDpi = (int)HIWORD(wParam);
             g_dpi = newDpi;
             g_tab_height = MulDiv(TAB_HEIGHT_BASE, g_dpi, 96);
+            g_left_margin = MulDiv(TERM_LEFT_MARGIN, g_dpi, 96);
 
             RECT *suggested = (RECT *)lParam;
             SetWindowPos(hwnd, NULL,
@@ -1307,6 +1682,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                           g_config->settings.font_size, newDpi);
             apply_config_colors();
             renderer_apply_theme(hwnd, g_renderer.defaultBg);
+
+            /* Recreate menu font at new DPI */
+            if (g_hMenuFont) DeleteObject(g_hMenuFont);
+            {
+                int mh = -MulDiv(APP_FONT_UI_SIZE, g_dpi, 72);
+                g_hMenuFont = CreateFont(mh, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+            }
 
             /* Recreate tab strip fonts */
             tabs_set_font(g_hwndTabs, g_config->settings.font);
@@ -1325,7 +1709,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             HDC hdc = BeginPaint(hwnd, &ps);
 
             if (g_active_session && g_active_session->term) {
-                renderer_draw(&g_renderer, hdc, g_active_session->term, 0, g_tab_height, &ps.rcPaint, &g_selection);
+                renderer_draw(&g_renderer, hdc, g_active_session->term, g_left_margin, g_tab_height, &ps.rcPaint, &g_selection);
 
                 /* Fill gutter areas not covered by complete character cells. */
                 RECT client;
@@ -1339,9 +1723,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     FillRect(hdc, &r, bg);
                 }
 
-                int text_right = g_active_session->term->cols * g_renderer.charWidth;
+                int text_right = g_left_margin +
+                    g_active_session->term->cols * g_renderer.charWidth;
                 if (text_right < client.right) {
                     RECT r = { text_right, g_tab_height, client.right, text_bottom };
+                    FillRect(hdc, &r, bg);
+                }
+
+                /* Left margin gutter */
+                if (g_left_margin > 0) {
+                    RECT r = { 0, g_tab_height, g_left_margin, text_bottom };
                     FillRect(hdc, &r, bg);
                 }
 
@@ -1354,6 +1745,49 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
             EndPaint(hwnd, &ps);
             return 0;
+        }
+
+        case WM_NCPAINT: {
+            /* Let Windows paint the non-client area first */
+            DefWindowProc(hwnd, msg, wParam, lParam);
+
+            /* Paint over the bright 1px line at the bottom of the menu bar.
+             * Windows draws this line in the system highlight color, which
+             * is jarring on dark themes. */
+            unsigned int line_rgb = menubar_line_color(g_theme, 0xF0F0F0);
+            COLORREF line_cr = RGB((line_rgb >> 16) & 0xFF,
+                                   (line_rgb >>  8) & 0xFF,
+                                    line_rgb        & 0xFF);
+
+            /* Get the 1px rect just above the client area */
+            RECT wrc;
+            GetWindowRect(hwnd, &wrc);
+            POINT client_org = {0, 0};
+            ClientToScreen(hwnd, &client_org);
+
+            int lx, ly, lw, lh;
+            menubar_line_rect(wrc.left, wrc.top, client_org.y,
+                              wrc.right - wrc.left, &lx, &ly, &lw, &lh);
+
+            /* Paint in screen coordinates using the window DC */
+            HDC hdc = GetWindowDC(hwnd);
+            if (hdc) {
+                RECT lr = { lx - wrc.left, ly - wrc.top,
+                            lx - wrc.left + lw, ly - wrc.top + lh };
+                HBRUSH br = CreateSolidBrush(line_cr);
+                FillRect(hdc, &lr, br);
+                DeleteObject(br);
+                ReleaseDC(hwnd, hdc);
+            }
+            return 0;
+        }
+
+        case WM_NCACTIVATE: {
+            /* Repaint non-client area on activation change to keep the
+             * menu bar line covered after Windows redraws it. */
+            LRESULT res = DefWindowProc(hwnd, msg, wParam, lParam);
+            SendMessage(hwnd, WM_NCPAINT, 0, 0);
+            return res;
         }
 
         case WM_CHAR: {
@@ -1391,6 +1825,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_KEYDOWN: {
+            /* F11 — toggle fullscreen */
+            if (wParam == VK_F11) {
+                SendMessage(hwnd, WM_COMMAND, IDM_VIEW_FULLSCREEN, 0);
+                return 0;
+            }
             /* Ctrl+T — new tab */
             if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == (WPARAM)'T') {
                 on_tab_new();
@@ -1497,7 +1936,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_LBUTTONDOWN: {
             if (!g_active_session || !g_active_session->term) break;
             SetCapture(hwnd);
-            int mx = LOWORD(lParam), my = HIWORD(lParam);
+            int mx = LOWORD(lParam) - g_left_margin, my = HIWORD(lParam);
             selection_pixel_to_cell(mx, my,
                 g_renderer.charWidth, g_renderer.charHeight,
                 g_tab_height, g_active_session->term->rows,
@@ -1518,7 +1957,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 break;
             }
             if (!g_active_session || !g_active_session->term) break;
-            int mx = LOWORD(lParam), my = HIWORD(lParam);
+            int mx = LOWORD(lParam) - g_left_margin, my = HIWORD(lParam);
             selection_pixel_to_cell(mx, my,
                 g_renderer.charWidth, g_renderer.charHeight,
                 g_tab_height, g_active_session->term->rows,
@@ -1537,7 +1976,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!g_active_session || !g_active_session->term) break;
             /* Update end position from final mouse coordinates —
              * WM_MOUSEMOVE may not fire at the exact release point. */
-            int mx = LOWORD(lParam), my = HIWORD(lParam);
+            int mx = LOWORD(lParam) - g_left_margin, my = HIWORD(lParam);
             selection_pixel_to_cell(mx, my,
                 g_renderer.charWidth, g_renderer.charHeight,
                 g_tab_height, g_active_session->term->rows,
@@ -1621,6 +2060,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             g_hwndAiChat = NULL;
             if (g_config) config_free(g_config);
             renderer_free(&g_renderer);
+            if (g_hMenuFont) { DeleteObject(g_hMenuFont); g_hMenuFont = NULL; }
+            app_font_free_ui();
             PostQuitMessage(0);
             return 0;
     }

@@ -5,7 +5,23 @@
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
-#define IDI_AI_BRAIN        102
+#define IDR_FONT_INTER      200
+#define IDR_FONT_INTER_BOLD 201
+
+/* Menu bar command IDs */
+#define IDM_FILE_NEW_SESSION  2001
+#define IDM_FILE_CONNECT      2002
+#define IDM_FILE_DISCONNECT   2003
+#define IDM_FILE_LOG_START    2004
+#define IDM_FILE_LOG_STOP     2005
+#define IDM_FILE_EXIT         2006
+#define IDM_EDIT_COPY         2010
+#define IDM_EDIT_PASTE        2011
+#define IDM_EDIT_SELECT_ALL   2012
+#define IDM_EDIT_SETTINGS     2013
+#define IDM_VIEW_AI_CHAT      2020
+#define IDM_VIEW_FULLSCREEN   2021
+#define IDM_ABOUT             2030
 
 /* Session list panel */
 #define IDC_LIST_SESSIONS   1000

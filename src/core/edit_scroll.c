@@ -31,3 +31,24 @@ int edit_scroll_wheel_delta(int wheel_delta, int notch_size,
      * Wheel down (negative delta) should scroll content down (positive). */
     return -(wheel_delta / notch_size * lines_per_notch);
 }
+
+int edit_scroll_wheel_accum(int wheel_delta, int notch_size,
+                            int lines_per_notch, int *accumulator)
+{
+    if (notch_size == 0 || !accumulator) return 0;
+
+    /* If direction changed, reset the accumulator */
+    if ((*accumulator > 0 && wheel_delta < 0) ||
+        (*accumulator < 0 && wheel_delta > 0)) {
+        *accumulator = 0;
+    }
+
+    *accumulator += wheel_delta;
+
+    /* Consume full notches from the accumulator */
+    int notches = *accumulator / notch_size;
+    if (notches == 0) return 0;
+
+    *accumulator -= notches * notch_size;
+    return -(notches * lines_per_notch);
+}

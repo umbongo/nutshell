@@ -142,13 +142,10 @@ const char *tabs_btn_tooltip_at(int mx, int client_width, int dpi)
         return "Session Manager";
 
     /* Right-side buttons */
-    int cogX   = client_width - btn - pad;
-    int aiX    = cogX - btn - gap;
+    int aiX    = client_width - btn - pad;
     int rightX = aiX - btn - gap;
     int leftX  = rightX - btn - gap;
 
-    if (mx >= cogX && mx <= cogX + btn)
-        return "Settings";
     if (mx >= aiX && mx <= aiX + btn)
         return "AI Assist\nOpen the AI assistant.\nAsk questions or let it run commands\non your terminal.";
     if (mx >= leftX && mx <= leftX + btn)

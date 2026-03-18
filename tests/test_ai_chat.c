@@ -1,4 +1,6 @@
 #include "test_framework.h"
+#include "ai_chat_testable.h"
+#include "markdown.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -379,5 +381,388 @@ int test_utf8_exec_block_preserves_multibyte(void) {
     ASSERT_STR_EQ(out, cmd_with_utf8); /* no \n, so identical */
     ASSERT_NOT_NULL(strstr(out, "\xc3\xa9"));  /* é */
     ASSERT_NOT_NULL(strstr(out, "\xc3\xa8"));  /* è */
+    TEST_END();
+}
+
+/*
+ * Connection lifecycle tests.
+ *
+ * Bug: if the AI Assist window is opened before an SSH session connects,
+ * active_channel stays NULL because WM_CONN_DONE never calls
+ * ai_chat_set_session().  Commands then fail with "no active SSH channel".
+ *
+ * These tests validate the pure-logic helper ai_chat_should_update_channel()
+ * that determines whether the AI chat's channel needs refreshing after a
+ * connection completes.
+ */
+
+/* AI chat open, channel is NULL, session just connected → must update */
+int test_ai_chat_update_channel_after_connect(void)
+{
+    TEST_BEGIN();
+    int dummy_channel = 42;  /* non-NULL sentinel */
+    int result = ai_chat_should_update_channel(
+        1,              /* chat_open */
+        NULL,           /* chat's current channel (NULL — opened before connect) */
+        &dummy_channel, /* session's new channel */
+        1);             /* session is the active tab */
+    ASSERT_TRUE(result);
+    TEST_END();
+}
+
+/* AI chat not open → no update needed */
+int test_ai_chat_no_update_when_closed(void)
+{
+    TEST_BEGIN();
+    int dummy_channel = 42;
+    int result = ai_chat_should_update_channel(
+        0, NULL, &dummy_channel, 1);
+    ASSERT_FALSE(result);
+    TEST_END();
+}
+
+/* AI chat open but session is not the active tab → no update */
+int test_ai_chat_no_update_inactive_session(void)
+{
+    TEST_BEGIN();
+    int dummy_channel = 42;
+    int result = ai_chat_should_update_channel(
+        1, NULL, &dummy_channel, 0);
+    ASSERT_FALSE(result);
+    TEST_END();
+}
+
+/* AI chat open, channel already set (reconnect case) → still update */
+int test_ai_chat_update_on_reconnect(void)
+{
+    TEST_BEGIN();
+    int old_channel = 1;
+    int new_channel = 2;
+    int result = ai_chat_should_update_channel(
+        1, &old_channel, &new_channel, 1);
+    ASSERT_TRUE(result);
+    TEST_END();
+}
+
+/* Connection failed (NULL channel) → no update */
+int test_ai_chat_no_update_null_new_channel(void)
+{
+    TEST_BEGIN();
+    int result = ai_chat_should_update_channel(
+        1, NULL, NULL, 1);
+    ASSERT_FALSE(result);
+    TEST_END();
+}
+
+/* ---- Markdown parser tests ---- */
+
+/* Block-level classification */
+
+int test_md_heading_h1(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("# Hello", 0);
+    ASSERT_EQ(info.type, MD_LINE_HEADING);
+    ASSERT_EQ(info.heading_level, 1);
+    ASSERT_EQ(info.content_offset, 2);
+    TEST_END();
+}
+
+int test_md_heading_h2(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("## Sub", 0);
+    ASSERT_EQ(info.type, MD_LINE_HEADING);
+    ASSERT_EQ(info.heading_level, 2);
+    ASSERT_EQ(info.content_offset, 3);
+    TEST_END();
+}
+
+int test_md_heading_h3(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("### Third", 0);
+    ASSERT_EQ(info.type, MD_LINE_HEADING);
+    ASSERT_EQ(info.heading_level, 3);
+    ASSERT_EQ(info.content_offset, 4);
+    TEST_END();
+}
+
+int test_md_heading_inline_bold_stripped(void) {
+    TEST_BEGIN();
+    /* Heading with bold markers: "## **Overview**" — the inline parser
+     * should produce a single BOLD span with content "Overview" (no **). */
+    MdLineInfo info = md_classify_line("## **Overview**", 0);
+    ASSERT_EQ(info.type, MD_LINE_HEADING);
+    ASSERT_EQ(info.heading_level, 2);
+    const char *h_text = "## **Overview**" + info.content_offset;
+    MdSpan spans[MD_MAX_SPANS];
+    int n = md_parse_inline(h_text, (int)strlen(h_text), spans);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(spans[0].type, MD_SPAN_BOLD);
+    int slen = spans[0].end - spans[0].start;
+    ASSERT_EQ(slen, 8); /* "Overview" */
+    ASSERT_TRUE(memcmp(h_text + spans[0].start, "Overview", 8) == 0);
+    TEST_END();
+}
+
+int test_md_code_fence(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("```python", 0);
+    ASSERT_EQ(info.type, MD_LINE_CODE_FENCE);
+    /* Inside code block, lines are CODE */
+    info = md_classify_line("x = 1", 1);
+    ASSERT_EQ(info.type, MD_LINE_CODE);
+    /* Closing fence */
+    info = md_classify_line("```", 1);
+    ASSERT_EQ(info.type, MD_LINE_CODE_FENCE);
+    TEST_END();
+}
+
+int test_md_hrule(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("---", 0);
+    ASSERT_EQ(info.type, MD_LINE_HRULE);
+    info = md_classify_line("***", 0);
+    ASSERT_EQ(info.type, MD_LINE_HRULE);
+    info = md_classify_line("___", 0);
+    ASSERT_EQ(info.type, MD_LINE_HRULE);
+    info = md_classify_line("-----", 0);
+    ASSERT_EQ(info.type, MD_LINE_HRULE);
+    TEST_END();
+}
+
+int test_md_ulist(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("- item one", 0);
+    ASSERT_EQ(info.type, MD_LINE_ULIST);
+    ASSERT_EQ(info.content_offset, 2);
+    info = md_classify_line("* item two", 0);
+    ASSERT_EQ(info.type, MD_LINE_ULIST);
+    info = md_classify_line("+ item three", 0);
+    ASSERT_EQ(info.type, MD_LINE_ULIST);
+    TEST_END();
+}
+
+int test_md_olist(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("1. first", 0);
+    ASSERT_EQ(info.type, MD_LINE_OLIST);
+    ASSERT_EQ(info.content_offset, 3);
+    info = md_classify_line("12. twelfth", 0);
+    ASSERT_EQ(info.type, MD_LINE_OLIST);
+    ASSERT_EQ(info.content_offset, 4);
+    TEST_END();
+}
+
+int test_md_table(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("| col1 | col2 |", 0);
+    ASSERT_EQ(info.type, MD_LINE_TABLE);
+    TEST_END();
+}
+
+int test_md_table_separator(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(md_is_table_separator("|---|---|"));
+    ASSERT_TRUE(md_is_table_separator("| --- | --- |"));
+    ASSERT_TRUE(md_is_table_separator("|:---:|:---:|"));
+    ASSERT_FALSE(md_is_table_separator("| text | data |"));
+    ASSERT_FALSE(md_is_table_separator("not a table"));
+    TEST_END();
+}
+
+int test_md_blockquote(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("> quoted text", 0);
+    ASSERT_EQ(info.type, MD_LINE_BLOCKQUOTE);
+    ASSERT_EQ(info.content_offset, 2);
+    TEST_END();
+}
+
+int test_md_empty_line(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("", 0);
+    ASSERT_EQ(info.type, MD_LINE_EMPTY);
+    info = md_classify_line(NULL, 0);
+    ASSERT_EQ(info.type, MD_LINE_EMPTY);
+    TEST_END();
+}
+
+int test_md_paragraph(void) {
+    TEST_BEGIN();
+    MdLineInfo info = md_classify_line("Just some text", 0);
+    ASSERT_EQ(info.type, MD_LINE_PARAGRAPH);
+    TEST_END();
+}
+
+/* Inline span parsing */
+
+int test_md_inline_bold(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    const char *line = "hello **bold** world";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    ASSERT_TRUE(n >= 3);
+    /* Find the bold span */
+    int found_bold = 0;
+    for (int i = 0; i < n; i++) {
+        if (spans[i].type == MD_SPAN_BOLD) {
+            found_bold = 1;
+            /* Content should be "bold" */
+            ASSERT_EQ(spans[i].end - spans[i].start, 4);
+            ASSERT_TRUE(memcmp(line + spans[i].start, "bold", 4) == 0);
+        }
+    }
+    ASSERT_TRUE(found_bold);
+    TEST_END();
+}
+
+int test_md_inline_bold_whole_line(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    /* Entire line wrapped in ** — common in AI output */
+    const char *line = "**Server Purpose Summary: \"automaton\"**";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    /* Should be exactly 1 bold span, no stray text with ** */
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(spans[0].type, MD_SPAN_BOLD);
+    /* Content should NOT include the ** markers */
+    int slen = spans[0].end - spans[0].start;
+    ASSERT_TRUE(memcmp(line + spans[0].start,
+        "Server Purpose Summary: \"automaton\"", (size_t)slen) == 0);
+    ASSERT_TRUE(slen == 35);
+    TEST_END();
+}
+
+int test_md_inline_bold_with_inner_stars(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    /* Bold text followed by non-bold — e.g. "**1. Heading**" */
+    const char *line = "**1. Music Automation (MusicBot)**";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(spans[0].type, MD_SPAN_BOLD);
+    int slen = spans[0].end - spans[0].start;
+    ASSERT_TRUE(memcmp(line + spans[0].start,
+        "1. Music Automation (MusicBot)", (size_t)slen) == 0);
+    TEST_END();
+}
+
+int test_md_inline_italic(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    const char *line = "hello *italic* world";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        if (spans[i].type == MD_SPAN_ITALIC) {
+            found = 1;
+            ASSERT_EQ(spans[i].end - spans[i].start, 6);
+            ASSERT_TRUE(memcmp(line + spans[i].start, "italic", 6) == 0);
+        }
+    }
+    ASSERT_TRUE(found);
+    TEST_END();
+}
+
+int test_md_inline_code(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    const char *line = "use `printf()` here";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        if (spans[i].type == MD_SPAN_CODE) {
+            found = 1;
+            ASSERT_EQ(spans[i].end - spans[i].start, 8);
+            ASSERT_TRUE(memcmp(line + spans[i].start, "printf()", 8) == 0);
+        }
+    }
+    ASSERT_TRUE(found);
+    TEST_END();
+}
+
+int test_md_inline_strikethrough(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    const char *line = "this is ~~deleted~~ text";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        if (spans[i].type == MD_SPAN_STRIKETHROUGH) {
+            found = 1;
+            ASSERT_EQ(spans[i].end - spans[i].start, 7);
+            ASSERT_TRUE(memcmp(line + spans[i].start, "deleted", 7) == 0);
+        }
+    }
+    ASSERT_TRUE(found);
+    TEST_END();
+}
+
+int test_md_inline_bold_italic(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    const char *line = "***important***";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    ASSERT_TRUE(n >= 1);
+    int found = 0;
+    for (int i = 0; i < n; i++) {
+        if (spans[i].type == MD_SPAN_BOLD_ITALIC) {
+            found = 1;
+            ASSERT_TRUE(memcmp(line + spans[i].start, "important", 9) == 0);
+        }
+    }
+    ASSERT_TRUE(found);
+    TEST_END();
+}
+
+int test_md_inline_plain_text(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    const char *line = "just plain text";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(spans[0].type, MD_SPAN_TEXT);
+    ASSERT_EQ(spans[0].start, 0);
+    ASSERT_EQ(spans[0].end, (int)strlen(line));
+    TEST_END();
+}
+
+int test_md_inline_mixed(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    const char *line = "say **hello** and `code`";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    int bold_count = 0, code_count = 0, text_count = 0;
+    for (int i = 0; i < n; i++) {
+        if (spans[i].type == MD_SPAN_BOLD) bold_count++;
+        else if (spans[i].type == MD_SPAN_CODE) code_count++;
+        else if (spans[i].type == MD_SPAN_TEXT) text_count++;
+    }
+    ASSERT_EQ(bold_count, 1);
+    ASSERT_EQ(code_count, 1);
+    ASSERT_TRUE(text_count >= 2); /* "say ", " and " */
+    TEST_END();
+}
+
+int test_md_inline_unclosed(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    /* Unclosed markers should be treated as plain text */
+    const char *line = "hello **unclosed";
+    int n = md_parse_inline(line, (int)strlen(line), spans);
+    ASSERT_TRUE(n >= 1);
+    /* No bold span should exist */
+    for (int i = 0; i < n; i++) {
+        ASSERT_TRUE(spans[i].type != MD_SPAN_BOLD);
+    }
+    TEST_END();
+}
+
+int test_md_inline_empty(void) {
+    TEST_BEGIN();
+    MdSpan spans[MD_MAX_SPANS];
+    int n = md_parse_inline("", 0, spans);
+    ASSERT_EQ(n, 0);
+    n = md_parse_inline(NULL, 0, spans);
+    ASSERT_EQ(n, 0);
     TEST_END();
 }

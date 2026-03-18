@@ -159,7 +159,6 @@ int test_tabmgr_navigate_single_tab(void);
 int test_tabmgr_navigate_no_tabs(void);
 int test_tabmgr_navigate_zero_delta(void);
 int test_tabs_btn_tooltip_add(void);
-int test_tabs_btn_tooltip_settings(void);
 int test_tabs_btn_tooltip_ai(void);
 int test_tabs_btn_tooltip_prev(void);
 int test_tabs_btn_tooltip_next(void);
@@ -652,6 +651,14 @@ int test_wheel_scroll_custom_speed(void);
 int test_wheel_scroll_zero_delta(void);
 int test_wheel_scroll_zero_notch_size(void);
 int test_wheel_scroll_partial_notch(void);
+int test_wheel_accum_full_notch(void);
+int test_wheel_accum_partial_events(void);
+int test_wheel_accum_partial_down(void);
+int test_wheel_accum_overflow_carries(void);
+int test_wheel_accum_direction_change_resets(void);
+int test_wheel_accum_two_notches(void);
+int test_wheel_accum_zero_notch_size(void);
+int test_wheel_accum_null_accumulator(void);
 
 /* test_term_extract.c */
 int test_extract_empty_term(void);
@@ -714,6 +721,36 @@ int test_indicator_offset_grows_with_newlines(void);
 int test_continuing_indicator_removal(void);
 int test_indicator_no_newlines_no_discrepancy(void);
 int test_indicator_after_single_newline(void);
+int test_ai_chat_update_channel_after_connect(void);
+int test_ai_chat_no_update_when_closed(void);
+int test_ai_chat_no_update_inactive_session(void);
+int test_ai_chat_update_on_reconnect(void);
+int test_ai_chat_no_update_null_new_channel(void);
+/* test_ai_chat.c — markdown parser */
+int test_md_heading_h1(void);
+int test_md_heading_h2(void);
+int test_md_heading_h3(void);
+int test_md_heading_inline_bold_stripped(void);
+int test_md_code_fence(void);
+int test_md_hrule(void);
+int test_md_ulist(void);
+int test_md_olist(void);
+int test_md_table(void);
+int test_md_table_separator(void);
+int test_md_blockquote(void);
+int test_md_empty_line(void);
+int test_md_paragraph(void);
+int test_md_inline_bold(void);
+int test_md_inline_bold_whole_line(void);
+int test_md_inline_bold_with_inner_stars(void);
+int test_md_inline_italic(void);
+int test_md_inline_code(void);
+int test_md_inline_strikethrough(void);
+int test_md_inline_bold_italic(void);
+int test_md_inline_plain_text(void);
+int test_md_inline_mixed(void);
+int test_md_inline_unclosed(void);
+int test_md_inline_empty(void);
 int test_utf8_emoji_survives_format(void);
 int test_utf8_multibyte_not_split(void);
 int test_utf8_ansi_misinterpretation_pattern(void);
@@ -731,6 +768,14 @@ int test_channel_write_nonblocking_fails_after_output(void);
 int test_channel_write_blocking_succeeds_after_output(void);
 int test_channel_write_blocking_multiple_keystrokes(void);
 
+/* test_menubar_line.c */
+int test_menubar_line_matches_border(void);
+int test_menubar_line_null_theme_uses_fallback(void);
+int test_menubar_line_dark_theme_is_dark(void);
+int test_menubar_line_light_theme_is_light(void);
+int test_menubar_line_rect_position(void);
+int test_menubar_line_rect_null_safe(void);
+
 /* test_app_font.c */
 int test_app_font_sizes_count(void);
 int test_app_font_sizes_ascending(void);
@@ -741,6 +786,11 @@ int test_app_font_zoom_up(void);
 int test_app_font_zoom_down(void);
 int test_app_font_zoom_at_min(void);
 int test_app_font_zoom_at_max(void);
+int test_app_font_zoom_from_ui_size_up(void);
+int test_app_font_zoom_from_ui_size_down(void);
+int test_app_font_zoom_ui_full_range_up(void);
+int test_app_font_zoom_preserves_size_after_roundtrip(void);
+int test_app_font_zoom_ui_full_range_down(void);
 
 /* test_selection.c */
 int test_sel_pixel_to_cell_basic(void);
@@ -977,7 +1027,6 @@ int main(void) {
 
     printf("\n--- Tab Button Tooltips ---\n");
     failed += test_tabs_btn_tooltip_add();
-    failed += test_tabs_btn_tooltip_settings();
     failed += test_tabs_btn_tooltip_ai();
     failed += test_tabs_btn_tooltip_prev();
     failed += test_tabs_btn_tooltip_next();
@@ -1440,6 +1489,16 @@ int main(void) {
     failed += test_wheel_scroll_zero_notch_size();
     failed += test_wheel_scroll_partial_notch();
 
+    printf("\n--- Wheel Accumulator ---\n");
+    failed += test_wheel_accum_full_notch();
+    failed += test_wheel_accum_partial_events();
+    failed += test_wheel_accum_partial_down();
+    failed += test_wheel_accum_overflow_carries();
+    failed += test_wheel_accum_direction_change_resets();
+    failed += test_wheel_accum_two_notches();
+    failed += test_wheel_accum_zero_notch_size();
+    failed += test_wheel_accum_null_accumulator();
+
     printf("\n--- Term Extract ---\n");
     failed += test_extract_empty_term();
     failed += test_extract_single_line();
@@ -1459,6 +1518,41 @@ int main(void) {
     failed += test_continuing_indicator_removal();
     failed += test_indicator_no_newlines_no_discrepancy();
     failed += test_indicator_after_single_newline();
+
+    printf("\n--- AI Chat Channel Update ---\n");
+    failed += test_ai_chat_update_channel_after_connect();
+    failed += test_ai_chat_no_update_when_closed();
+    failed += test_ai_chat_no_update_inactive_session();
+    failed += test_ai_chat_update_on_reconnect();
+    failed += test_ai_chat_no_update_null_new_channel();
+
+    printf("\n--- Markdown Block Classification ---\n");
+    failed += test_md_heading_h1();
+    failed += test_md_heading_h2();
+    failed += test_md_heading_h3();
+    failed += test_md_heading_inline_bold_stripped();
+    failed += test_md_code_fence();
+    failed += test_md_hrule();
+    failed += test_md_ulist();
+    failed += test_md_olist();
+    failed += test_md_table();
+    failed += test_md_table_separator();
+    failed += test_md_blockquote();
+    failed += test_md_empty_line();
+    failed += test_md_paragraph();
+
+    printf("\n--- Markdown Inline Parsing ---\n");
+    failed += test_md_inline_bold();
+    failed += test_md_inline_bold_whole_line();
+    failed += test_md_inline_bold_with_inner_stars();
+    failed += test_md_inline_italic();
+    failed += test_md_inline_code();
+    failed += test_md_inline_strikethrough();
+    failed += test_md_inline_bold_italic();
+    failed += test_md_inline_plain_text();
+    failed += test_md_inline_mixed();
+    failed += test_md_inline_unclosed();
+    failed += test_md_inline_empty();
 
     printf("\n--- AI Chat UTF-8 ---\n");
     failed += test_utf8_emoji_survives_format();
@@ -1622,6 +1716,14 @@ int main(void) {
     failed += test_logfmt_zero_bufsize();
     failed += test_logfmt_special_chars();
 
+    printf("\n--- Menu Bar Line ---\n");
+    failed += test_menubar_line_matches_border();
+    failed += test_menubar_line_null_theme_uses_fallback();
+    failed += test_menubar_line_dark_theme_is_dark();
+    failed += test_menubar_line_light_theme_is_light();
+    failed += test_menubar_line_rect_position();
+    failed += test_menubar_line_rect_null_safe();
+
     printf("\n--- App Font ---\n");
     failed += test_app_font_sizes_count();
     failed += test_app_font_sizes_ascending();
@@ -1632,6 +1734,11 @@ int main(void) {
     failed += test_app_font_zoom_down();
     failed += test_app_font_zoom_at_min();
     failed += test_app_font_zoom_at_max();
+    failed += test_app_font_zoom_from_ui_size_up();
+    failed += test_app_font_zoom_from_ui_size_down();
+    failed += test_app_font_zoom_ui_full_range_up();
+    failed += test_app_font_zoom_preserves_size_after_roundtrip();
+    failed += test_app_font_zoom_ui_full_range_down();
 
     printf("\n--- Selection ---\n");
     failed += test_sel_pixel_to_cell_basic();

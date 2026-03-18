@@ -30,7 +30,7 @@ TARGET = $(BUILD_DIR)/nutshell.exe
 # Test configuration (Native Linux)
 TEST_CC = gcc
 TEST_CFLAGS = -std=c11 -Wall -Wextra -g \
-              -Isrc -Isrc/core -Isrc/config -Isrc/crypto -Isrc/term -Isrc/ssh \
+              -Isrc -Isrc/core -Isrc/config -Isrc/crypto -Isrc/term -Isrc/ssh -Isrc/ui \
               -D_TEST -Wno-unused-function
 
 # Auto-detect libssh2 availability for test linking
