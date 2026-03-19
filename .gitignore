@@ -1,9 +1,10 @@
 # Build artefacts
 *.o
 *.a
-*.exe
+# *.exe
 *.obj
-build/
+#build/
+test_runner
 
 # Runtime configuration (may contain encrypted credentials)
 nutshell.config

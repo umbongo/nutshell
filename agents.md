@@ -37,13 +37,16 @@ The AI feature is split into testable core and Win32-only UI:
 | HTTP response cleanup | `src/core/ai_http.{c,h}` | Yes |
 | WinHTTP client | `src/ui/ai_http_win.c` | No (Win32) |
 | Chat window UI | `src/ui/ai_chat.{c,h}` | No (Win32) |
+| AI dock panel | `src/ui/ai_dock.h` | No (Win32) |
+| Help guide | `src/ui/help_guide.{c,h}` | No (Win32) |
+| Markdown rendering | `src/ui/markdown.h` | No (Win32) |
 | Settings UI fields | `src/ui/settings.c` | No (Win32) |
 | Tab bar AI button | `src/ui/tabs.{c,h}` | No (Win32) |
 
 - The AI uses OpenAI-compatible chat completion API. DeepSeek is the default provider.
 - Conversations are managed via `AiConversation` struct (fixed-size message array).
 - Terminal context (last 50 rows) is injected into the system prompt on each user message.
-- Commands are marked with `[EXEC]cmd[/EXEC]` in AI responses and require user confirmation via MessageBox before execution.
+- Commands are marked with `[EXEC]cmd[/EXEC]` in AI responses and require user confirmation via inline Allow/Deny buttons in the chat window before execution.
 - API keys are encrypted at rest using the same AES-256-GCM scheme as SSH passwords.
 
 ## UI Theming (Onyx Synapse)

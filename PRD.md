@@ -21,7 +21,7 @@ Nutshell is a lightweight native C SSH client for Windows. The goal is to produc
 ### 2.3. User Interface
 -   **Native Windows UI**: Win32 API directly (user32, gdi32, kernel32, comctl32). No GTK/Qt/Fyne.
 -   **Tabbed Interface**: Owner-drawn tab strip with multi-session support, status indicators, close buttons, Ctrl+T/Ctrl+W.
--   **Zoom**: Ctrl+=/-, Ctrl+Scroll. Font clamped 6–72 pt. Gutter-free fit with fallback. Persisted to settings.
+-   **Zoom**: Ctrl+=/-, Ctrl+Scroll. Font snapped to discrete sizes (6–20 pt). Gutter-free fit with fallback. Persisted to settings.
 -   **Paste Confirmation**: Dialog for pastes >64 bytes or containing newlines. Truncated preview, line count. Inter-line delay from settings.
 -   **Session File Logging**: ANSI-stripped output to timestamped files. Configurable directory (default: exe directory) and strftime name format.
 -   **Configuration**: JSON profiles and settings via `nutshell.config` in the executable's directory.
@@ -39,7 +39,7 @@ Nutshell is a lightweight native C SSH client for Windows. The goal is to produc
 -   **Palette** (user-selectable): Light Gray, Black, Dark Green, Bright Green, Dark Blue, Cyan Blue, Dark Red, Dark Yellow, Dark Magenta, Medium Gray, White, Bright Yellow, Bright Cyan, Bright Red.
 
 #### Fonts
--   **Default**: Consolas 12 pt. **Range**: 6–72 pt.
+-   **Default**: Consolas 10 pt. **Range**: 6–20 pt (discrete sizes: 6, 8, 10, 12, 14, 16, 18, 20).
 -   **Options**: Consolas, Courier New, Lucida Console, Cascadia Code, Cascadia Mono.
 -   **Zoom**: Ctrl+=/-, Ctrl+ScrollUp/Down adjusts font size ±1 pt, persisted to settings. Gutter-free fit with fallback across full 6–72 range.
 
@@ -64,7 +64,7 @@ Nutshell is a lightweight native C SSH client for Windows. The goal is to produc
 #### Settings Dialog
 -   **Size**: 480 × 530 px, fixed.
 -   **Fields**: Font, Font size, Foreground colour (swatch + ChooseColor), Background colour (swatch + ChooseColor), Paste delay (350 ms), Session logging toggle, Log directory, Log name format (with strftime tooltip on hover listing specifiers), Scrollback lines (10,000).
--   **Validation**: `settings_validate()` clamps font_size [6–72], scrollback [100–50,000], paste_delay [0–5,000].
+-   **Validation**: `settings_validate()` snaps font_size to nearest allowed discrete size (6–20), clamps scrollback [100–50,000], paste_delay [0–5,000].
 -   **Buttons**: [Save] (primary), [Cancel]. Footer: copyright.
 
 #### Error State
@@ -151,15 +151,14 @@ Decisions locked in during implementation. Do not revisit without a clear reason
 5.  **Integration**: Wiring the terminal output to the UI.
 
 ## 7. Testing Strategy
--   **Unit Tests**: Custom test harness (258 tests) for logic (parsing, config, data structures, tooltips, themes, paste, zoom, ANSI strip, settings validation).
+-   **Unit Tests**: Custom test harness (865 tests) for logic (parsing, config, data structures, tooltips, themes, paste, zoom, ANSI strip, settings validation, AI prompt, display buffer, edit scroll, tabs, fonts, and more).
 -   **Integration Tests**: Mock SSH server for connection testing.
 -   **Reference**: Use `../golang/` tests as logic references.
 -   **Server Compatibility Matrix**: OpenSSH 8.x (Ubuntu 22.04), OpenSSH 9.x (Debian 12), Dropbear, Windows OpenSSH Server — both password auth and Ed25519/RSA-4096 key auth.
--   **Security**: See `vulnerabilities.md` for known issues and recommended mitigations.
+-   **Security**: Passwords and API keys encrypted at rest with AES-256-GCM. TOFU host key verification.
 
 ## 8. Future Scope
--   Address items in `vulnerabilities.md` (especially DPAPI for password encryption, thread safety).
--   Dirty-rect rendering optimisation.
+-   DPAPI for password encryption, thread safety improvements.
 -   Dr. Memory audit on Windows release build.
 -   Port to Linux (X11/Wayland) using platform-specific UI layers.
 -   SFTP support.

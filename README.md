@@ -1,6 +1,6 @@
-# Nutshell v0.9.1
+# Nutshell v0.9.4
 
-A lightweight native C SSH client for Windows, focusing on performance, minimal dependencies, and native OS integration. Built entirely with the Win32 API — no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~1.5 MB (UPX compressed).
+A lightweight native C SSH client for Windows, focusing on performance, minimal dependencies, and native OS integration. Built entirely with the Win32 API — no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~2.0 MB (UPX compressed).
 
 ## Features
 
@@ -15,7 +15,7 @@ A lightweight native C SSH client for Windows, focusing on performance, minimal 
 - Onyx Synapse UI — 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - AI chat assistant — reads terminal context, executes commands, supports streaming and reasoning display
 - DPI-aware layout across all windows and dialogs
-- 567 unit tests, zero lint warnings
+- 865 unit tests, zero lint warnings
 
 ---
 
@@ -106,7 +106,7 @@ Zoom changes trigger an automatic PTY resize so the remote shell adapts to the n
 Open from the menu or via the settings button. Changes take effect immediately — no restart needed.
 
 #### Display
-- **Font family** — curated list of monospace fonts: Cascadia Code (default), Consolas, Cascadia Mono, Courier New, Lucida Console, Lucida Sans Typewriter, Fira Code, JetBrains Mono, Source Code Pro, Hack
+- **Font family** — curated list of monospace fonts: Consolas (default), Cascadia Code, Cascadia Mono, Courier New, Inter, Lucida Console, Lucida Sans Typewriter, Fira Code, JetBrains Mono, Source Code Pro, Hack
 - **Font size** — discrete sizes from 6 to 20 pt
 - **Colour scheme** — choose from 4 built-in themes:
   - **Onyx Synapse** (dark, default) — dark background with green accents
@@ -154,9 +154,9 @@ The AI assistant can see the last 50 lines of your terminal output and execute c
 
 #### Command Execution
 
-When the AI suggests commands, they appear in a **batch approval dialog** listing all proposed commands. You can:
+When the AI suggests commands, they appear **inline in the chat window** with Allow/Deny buttons. You can:
 
-- **Allow** — execute all commands in sequence, with the configured paste delay between them
+- **Allow** — execute all queued commands in sequence
 - **Deny** — reject the commands
 
 After commands execute, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed.
@@ -210,13 +210,13 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │   ├── crypto/     # AES-256-GCM password encryption (OpenSSL)
 │   ├── term/       # Terminal emulator (buffer, parser) + SSH (session, channel, PTY, knownhosts)
 │   ├── ui/         # Win32 UI — renderer, tabs, window, session manager, settings dialog,
-│   │               #   ai_chat, ai_http_win, paste_dlg, themed_button, custom_scrollbar
+│   │               #   ai_chat, ai_dock, ai_http_win, help_guide, paste_dlg, markdown,
+│   │               #   menubar_line, themed_button, custom_scrollbar
 │   └── main.c
 ├── tests/          # Unit tests (TDD — tests written before implementation)
 ├── build/          # Build artefacts (gitignored)
 ├── PRD.md              # Product Requirements
-├── TODO.md             # Phase completion log and outstanding items
-├── vulnerabilities.md  # Security audit findings and recommended fixes
+├── agents.md           # Lessons learned and tips for contributors
 └── Makefile
 ```
 
@@ -230,7 +230,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 -   vcpkg with the custom `x64-mingw-gcc-static` triplet for MinGW-targeted OpenSSL and libssh2 (see `~/vcpkg/custom-triplets/`)
 
 ### Building
-Always use `make release` for the distributable build — it compiles with size optimisations and compresses with UPX (~1.5 MB):
+Always use `make release` for the distributable build — it compiles with size optimisations and compresses with UPX (~2.0 MB):
 
 ```bash
 make release
@@ -240,8 +240,8 @@ Requires `upx` (`sudo apt install upx`). Use plain `make` only if you need an un
 
 | Command | Purpose |
 |---------|---------|
-| `make release` | **Recommended** — optimised + UPX compressed (~1.5 MB) |
-| `make` | Uncompressed build (~5.4 MB), useful for debugging |
+| `make release` | **Recommended** — optimised + UPX compressed (~2.0 MB) |
+| `make` | Uncompressed build (~6.7 MB), useful for debugging |
 | `make test` | Run unit tests (native Linux) |
 | `make lint` | Static analysis with cppcheck |
 | `make debug` | Build with AddressSanitizer + UndefinedBehaviorSanitizer |
@@ -286,11 +286,10 @@ If you are an AI assistant helping with this codebase, please observe the follow
 11. **Module layout**: SSH code lives in `src/term/` (ssh_session.c, ssh_channel.c, ssh_pty.c, knownhosts.c), not a separate `src/ssh/` directory. Crypto is in `src/crypto/`. Tab management logic is in `src/core/tab_manager.c`; the owner-drawn tab strip UI is in `src/ui/tabs.c`.
 12. **libssh2 macros**: `libssh2_channel_open_session`, `libssh2_session_init`, and `libssh2_channel_write` are **macros** in the real libssh2 header. `src/term/libssh2.h` is a stub used only for test builds — the real header comes from vcpkg at `~/vcpkg/installed/x64-mingw-gcc-static/`.
 13. **Resize reflow**: `TermRow.len` tracks actual written content width. When reflowing on resize, always loop to `row->len`, not `term->cols`, to avoid copying trailing empty cells that cause spurious wraps.
-14. **Discrete font sizes**: Allowed sizes are `{6, 8, 10, 12, 14, 16, 18, 20}` — defined in three places that must stay in sync: `k_allowed_sizes[]` in `window.c`, `k_font_sizes[]` in `settings.c`, and `k_allowed_sizes[]` in `loader.c`. `settings_validate()` snaps any out-of-set value to the nearest allowed size (not a range clamp).
+14. **Discrete font sizes**: Allowed sizes are `{6, 8, 10, 12, 14, 16, 18, 20}` — centralised in `src/core/app_font.h` (`APP_FONT_SIZES` array, `APP_FONT_NUM_SIZES`). Use `app_font_snap_size()` to snap any out-of-set value to the nearest allowed size. Default is 10 pt.
 15. **Colour defaults**: Default terminal colours are `fg=#E0E0E0, bg=#121212` matching the "Onyx Synapse" colour scheme. `COLOR_DEFAULT` fg/bg mode means the renderer substitutes the configured scheme colours; hardcoded colour values in `buffer.c`/`parser.c` are only set for `COLOR_ANSI16`/`COLOR_256`/`COLOR_RGB` cells.
 16. **UI theming**: All UI chrome (tabs, settings, session manager, AI chat) is themed via `ThemeColors` from `src/core/ui_theme.{c,h}`. Use `WM_CTLCOLORDLG`, `WM_CTLCOLORSTATIC`, `WM_CTLCOLOREDIT`, `WM_CTLCOLORLISTBOX` to paint dialog backgrounds and control colours. Buttons use `BS_OWNERDRAW` with `draw_themed_button()` from `themed_button.h`. The theme is looked up by name from config (`colour_scheme` field) via `ui_theme_find()` + `ui_theme_get()`.
 17. **Scrollbar**: `update_scrollbar()` in `window.c` syncs a Win32 vertical scrollbar to the active terminal. Use `GetScrollInfo(SIF_TRACKPOS)` for `WM_VSCROLL` — never `HIWORD(wParam)`, which silently truncates to 16 bits and breaks scrollback > 65535 lines.
 18. **AI integration architecture**: AI code is split into portable core (`src/core/ai_prompt.c`, `src/core/ai_http.c`, `src/core/term_extract.c`) and Win32 UI (`src/ui/ai_chat.c`, `src/ui/ai_http_win.c`). Core files are testable on Linux; UI files are excluded from test builds via the `NON_TEST_SRCS` pattern in the Makefile. The AI uses an OpenAI-compatible chat completion API (DeepSeek default). Conversations use `AiConversation` struct with role-tagged messages. Commands are extracted via `[EXEC]cmd[/EXEC]` markers. The HTTP client uses WinHTTP on Windows.
 19. **Two config.h files**: `include/config.h` is used by the Windows cross-compile; `src/config/config.h` is used by native test builds. Both must be kept in sync when modifying the `Settings` struct.
-20. **Config path caveat**: `nutshell.config` is loaded relative to CWD, which can change after `GetOpenFileNameA` file dialogs. See `vulnerabilities.md` M-8 for details. The long-term fix is to resolve to an absolute path at startup using `get_exe_dir()`.
-21. **Security**: See `vulnerabilities.md` for known security issues ranked by severity. The most critical are password encryption key derivation (C-1/C-2) and TOFU broken for non-RSA keys (H-4).
+20. **Config path caveat**: `nutshell.config` is loaded relative to CWD, which can change after `GetOpenFileNameA` file dialogs. The long-term fix is to resolve to an absolute path at startup using `get_exe_dir()`.
