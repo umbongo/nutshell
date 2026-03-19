@@ -1,6 +1,6 @@
 # Nutshell v0.9.4
 
-A lightweight native C SSH client for Windows, focusing on performance, minimal dependencies, and native OS integration. Built entirely with the Win32 API — no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~2.0 MB (UPX compressed).
+A lightweight, AI enabled, native C SSH client for Windows, focusing on performance, minimal dependencies, and native OS integration. Built entirely with the Win32 API — no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~2.0 MB (UPX compressed).
 
 ## Features
 
