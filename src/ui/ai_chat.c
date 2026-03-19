@@ -15,6 +15,9 @@
 #include "edit_scroll.h"
 #include "term_extract.h"
 #include "ssh_channel.h"
+#include "resource.h"
+#include "ai_dock.h"
+#include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <stdio.h>
 #include <string.h>
 #include <process.h>
@@ -36,6 +39,7 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define IDC_CHAT_SAVE     2010
 #define IDC_CHAT_ALLOW    2011
 #define IDC_CHAT_DENY     2012
+#define IDC_CHAT_UNDOCK   2013
 
 #define WM_AI_RESPONSE   (WM_USER + 100)
 #define WM_AI_CONTINUE   (WM_USER + 101)
@@ -82,6 +86,7 @@ typedef struct {
     HWND hPermitBtn;
     HWND hThinkingBtn;
     HWND hSaveBtn;
+    HWND hUndockBtn;
     HWND hAllowBtn;
     HWND hDenyBtn;
     HWND hTooltip;        /* Win32 tooltip control */
@@ -90,6 +95,7 @@ typedef struct {
     HFONT hFont;
     HFONT hSmallFont;     /* small bold font for indicator label */
     char font_name[64];
+    char ai_font_name[64];   /* font for AI markdown code blocks */
     const ThemeColors *theme;
     HBRUSH hBrBgPrimary;
     HBRUSH hBrBgSecondary;
@@ -106,7 +112,6 @@ typedef struct {
     SSHChannel *active_channel;
 
     /* Background thread */
-    volatile int busy;
     CRITICAL_SECTION cs;
 
     /* Auto-continue: when AI only gives partial commands, re-prompt */
@@ -133,12 +138,6 @@ typedef struct {
 
     /* Per-session conversation tracking */
     AiSessionState *active_state;     /* points to current session's ai_state */
-
-    /* Background thread target: the session the thread is working for.
-     * When the user switches tabs mid-stream, active_state changes but
-     * busy_state stays pointing to the original session so the thread's
-     * results go to the right conversation. */
-    AiSessionState *busy_state;
 
     /* Session name label */
     HWND hSessionLabel;
@@ -178,7 +177,16 @@ typedef struct {
     /* Custom scrollbar for input text box */
     HWND hInputScrollbar;
     int  input_line_h;     /* cached line height in px for input */
+
+    /* Docked mode: 1 = child window in main frame, 0 = floating */
+    int docked;
+
+    /* Compact button mode: 1 = icon-only buttons when frame is narrow */
+    int compact_buttons;
 } AiChatData;
+
+/* Helper: check if the currently active session has a busy AI stream */
+#define ACTIVE_BUSY(d) ((d)->active_state && (d)->active_state->busy)
 
 /* Forward declarations */
 static void do_session_switch(AiChatData *d,
@@ -322,12 +330,13 @@ static void chat_append_styled_ex(HWND hDisplay, const char *text,
  * code, strikethrough). */
 static void chat_append_markdown(HWND hDisplay, const char *raw,
                                   COLORREF baseColor,
-                                  const ThemeColors *theme)
+                                  const ThemeColors *theme,
+                                  const char *code_font)
 {
     if (!raw || !raw[0]) return;
 
     COLORREF col_dim = theme ? theme_cr(theme->text_dim) : RGB(140, 140, 140);
-    const char *code_font = "Cascadia Mono";
+    if (!code_font || !code_font[0]) code_font = "Consolas";
 
     /* Split into lines (work on a copy since we modify in-place) */
     size_t raw_len = strlen(raw);
@@ -569,15 +578,39 @@ static char *format_ai_text(const char *raw)
     return out;
 }
 
-/* Heap-allocated struct to pass both content and thinking from thread to UI */
+/* Heap-allocated struct to pass both content and thinking from thread to UI.
+ * Also carries the target session so the UI thread can route the response
+ * to the correct session when multiple streams run concurrently. */
 typedef struct {
+    AiSessionState *session;   /* which session this response is for */
     char *content;
     char *thinking;
 } AiResponseMsg;
 
+/* Heap-allocated chunk posted via WM_AI_STREAM.  Replaces the old plain
+ * char* lParam so the UI thread can tell which session the chunk belongs to. */
+typedef struct {
+    AiSessionState *session;
+    char *delta;
+} AiStreamChunk;
+
+/* Thread argument: everything the background thread needs, decoupled from
+ * AiChatData so multiple threads can run for different sessions. */
+typedef struct {
+    HWND hwnd;                      /* target window for PostMessage */
+    AiSessionState *target;         /* session this request is for */
+    CRITICAL_SECTION *cs;           /* shared CS for conv writes */
+    char api_key[256];
+    char provider[64];
+    char custom_url[256];
+    char body[AI_BODY_MAX];         /* pre-built JSON request body */
+    size_t body_len;
+} AiStreamThreadArg;
+
 /* Context for SSE streaming callback */
 typedef struct {
-    AiChatData *d;
+    HWND hwnd;                   /* target window for PostMessage */
+    AiSessionState *target;      /* session this stream belongs to */
     char line_buf[8192];     /* SSE line accumulation buffer */
     size_t line_len;
     char full_content[AI_MSG_MAX];   /* accumulated full content */
@@ -620,7 +653,12 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
             ctx->full_thinking[ctx->thinking_len] = '\0';
         }
         /* Post to UI for realtime display */
-        PostMessage(ctx->d->hwnd, WM_AI_STREAM, 0, (LPARAM)_strdup(thinking_delta));
+        AiStreamChunk *chunk = calloc(1, sizeof(*chunk));
+        if (chunk) {
+            chunk->session = ctx->target;
+            chunk->delta = _strdup(thinking_delta);
+            PostMessage(ctx->hwnd, WM_AI_STREAM, 0, (LPARAM)chunk);
+        }
     }
 
     /* Post content delta to UI */
@@ -633,7 +671,12 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
             ctx->full_content[ctx->content_len] = '\0';
         }
         /* Post to UI for realtime display */
-        PostMessage(ctx->d->hwnd, WM_AI_STREAM, 1, (LPARAM)_strdup(content_delta));
+        AiStreamChunk *chunk = calloc(1, sizeof(*chunk));
+        if (chunk) {
+            chunk->session = ctx->target;
+            chunk->delta = _strdup(content_delta);
+            PostMessage(ctx->hwnd, WM_AI_STREAM, 1, (LPARAM)chunk);
+        }
     }
 }
 
@@ -659,53 +702,53 @@ static int stream_callback(const char *data, size_t len, void *userdata)
     return 0;
 }
 
-/* Background thread: streaming AI API call */
-static unsigned __stdcall ai_stream_thread_proc(void *arg)
+/* Helper: post an error AiResponseMsg tagged with the target session.
+ * The WM_AI_RESPONSE handler is responsible for setting busy = 0. */
+static void post_error_response(HWND hwnd, AiSessionState *target, const char *msg)
 {
-    AiChatData *d = (AiChatData *)arg;
+    AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(*rmsg));
+    if (rmsg) {
+        rmsg->session = target;
+        rmsg->content = _strdup(msg);
+        PostMessage(hwnd, WM_AI_RESPONSE, 0, (LPARAM)rmsg);
+    } else {
+        /* Fallback: can't allocate — clear busy here since handler won't run */
+        target->busy = 0;
+    }
+}
 
-    EnterCriticalSection(&d->cs);
+/* Background thread: streaming AI API call.
+ * Receives a heap-allocated AiStreamThreadArg and frees it before returning. */
+static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
+{
+    AiStreamThreadArg *arg = (AiStreamThreadArg *)raw_arg;
 
-    char body[AI_BODY_MAX];
-    size_t body_len = ai_build_request_body_ex(&d->conv, body, sizeof(body), 1);
-
-    char api_key_copy[256];
-    char provider_copy[64];
-    char custom_url_copy[256];
-    strncpy(api_key_copy, d->api_key, sizeof(api_key_copy) - 1);
-    api_key_copy[sizeof(api_key_copy) - 1] = '\0';
-    strncpy(provider_copy, d->provider, sizeof(provider_copy) - 1);
-    provider_copy[sizeof(provider_copy) - 1] = '\0';
-    strncpy(custom_url_copy, d->custom_url, sizeof(custom_url_copy) - 1);
-    custom_url_copy[sizeof(custom_url_copy) - 1] = '\0';
-
-    LeaveCriticalSection(&d->cs);
-
-    if (body_len == 0) {
-        PostMessage(d->hwnd, WM_AI_RESPONSE, 0, (LPARAM)_strdup("Error: failed to build request"));
-        d->busy = 0;
+    if (arg->body_len == 0) {
+        post_error_response(arg->hwnd, arg->target, "Error: failed to build request");
+        free(arg);
         return 0;
     }
 
-    const char *url = ai_provider_url(provider_copy);
-    if (!url && strcmp(provider_copy, "custom") == 0 && custom_url_copy[0])
-        url = custom_url_copy;
+    const char *url = ai_provider_url(arg->provider);
+    if (!url && strcmp(arg->provider, "custom") == 0 && arg->custom_url[0])
+        url = arg->custom_url;
     if (!url) {
-        PostMessage(d->hwnd, WM_AI_RESPONSE, 0, (LPARAM)_strdup("Error: unknown AI provider"));
-        d->busy = 0;
+        post_error_response(arg->hwnd, arg->target, "Error: unknown AI provider");
+        free(arg);
         return 0;
     }
 
     char auth[300];
-    (void)snprintf(auth, sizeof(auth), "Bearer %s", api_key_copy);
+    (void)snprintf(auth, sizeof(auth), "Bearer %s", arg->api_key);
 
     StreamContext ctx;
     memset(&ctx, 0, sizeof(ctx));
-    ctx.d = d;
+    ctx.hwnd = arg->hwnd;
+    ctx.target = arg->target;
 
     int status = 0;
     char errbuf[256] = "";
-    int rc = ai_http_post_stream(url, auth, body, body_len,
+    int rc = ai_http_post_stream(url, auth, arg->body, arg->body_len,
                                  stream_callback, &ctx,
                                  &status, errbuf, sizeof(errbuf));
 
@@ -715,32 +758,31 @@ static unsigned __stdcall ai_stream_thread_proc(void *arg)
             snprintf(msg, sizeof(msg), "HTTP error: %s", errbuf);
         else
             snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
-        PostMessage(d->hwnd, WM_AI_RESPONSE, 0, (LPARAM)_strdup(msg));
-        d->busy = 0;
+        post_error_response(arg->hwnd, arg->target, msg);
+        free(arg);
         return 0;
     }
 
-    /* Add assistant message to the conversation that originated the request.
-     * Use busy_state->conv if the user switched tabs mid-stream, otherwise
-     * d->conv (which may be the same thing). */
-    EnterCriticalSection(&d->cs);
-    if (d->busy_state && d->active_state != d->busy_state) {
-        /* User switched away — commit to the original session's stored conv */
-        ai_conv_add(&d->busy_state->conv, AI_ROLE_ASSISTANT, ctx.full_content);
-        d->busy_state->valid = 1;
-    } else {
-        ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, ctx.full_content);
-    }
-    LeaveCriticalSection(&d->cs);
+    /* Add assistant message to the target session's conversation. */
+    EnterCriticalSection(arg->cs);
+    ai_conv_add(&arg->target->conv, AI_ROLE_ASSISTANT, ctx.full_content);
+    arg->target->valid = 1;
+    LeaveCriticalSection(arg->cs);
 
-    /* Signal stream done — wParam=2 means "streaming complete, do command extraction" */
-    AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(AiResponseMsg));
+    /* Signal stream done — wParam=2 means "streaming complete, do command extraction".
+     * busy is cleared by the WM_AI_RESPONSE handler on the UI thread to prevent
+     * a race where the user sends a new message before cleanup completes. */
+    AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(*rmsg));
     if (rmsg) {
+        rmsg->session = arg->target;
         rmsg->content = _strdup(ctx.full_content);
         rmsg->thinking = (ctx.full_thinking[0] != '\0') ? _strdup(ctx.full_thinking) : NULL;
+        PostMessage(arg->hwnd, WM_AI_RESPONSE, 2, (LPARAM)rmsg);
+    } else {
+        /* Fallback: can't allocate — clear busy here */
+        arg->target->busy = 0;
     }
-    PostMessage(d->hwnd, WM_AI_RESPONSE, 2, (LPARAM)rmsg);
-    d->busy = 0;
+    free(arg);
     return 0;
 }
 
@@ -853,7 +895,7 @@ static void chat_rebuild_display(AiChatData *d)
             }
             chat_append_ops(d->hDisplay, "\r\n--- AI ---\r\n");
             chat_append_markdown(d->hDisplay, msg->content, col_ai,
-                                 d->theme);
+                                 d->theme, d->ai_font_name);
         }
         /* Skip system messages injected mid-conversation */
     }
@@ -863,9 +905,50 @@ static void chat_rebuild_display(AiChatData *d)
     update_context_bar(d);
 }
 
+/* Build an AiStreamThreadArg from current AiChatData state under the CS,
+ * and launch the background thread.  Sets active_state->busy = 1. */
+static void launch_stream_thread(AiChatData *d)
+{
+    AiStreamThreadArg *arg = (AiStreamThreadArg *)calloc(1, sizeof(*arg));
+    if (!arg) return;
+
+    arg->hwnd = d->hwnd;
+    arg->target = d->active_state;
+    arg->cs = &d->cs;
+
+    EnterCriticalSection(&d->cs);
+    strncpy(arg->api_key, d->api_key, sizeof(arg->api_key) - 1);
+    strncpy(arg->provider, d->provider, sizeof(arg->provider) - 1);
+    strncpy(arg->custom_url, d->custom_url, sizeof(arg->custom_url) - 1);
+    arg->body_len = ai_build_request_body_ex(&d->conv, arg->body,
+                                              sizeof(arg->body), 1);
+    LeaveCriticalSection(&d->cs);
+
+    /* Allocate per-session stream accumulators */
+    free(d->active_state->stream_content);
+    d->active_state->stream_content = (char *)calloc(1, AI_MSG_MAX);
+    d->active_state->stream_content_len = 0;
+    free(d->active_state->stream_thinking);
+    d->active_state->stream_thinking = (char *)calloc(1, AI_MSG_MAX);
+    d->active_state->stream_thinking_len = 0;
+    d->active_state->stream_phase = 0;
+
+    d->active_state->busy = 1;
+
+    /* Reset display-side stream buffers */
+    d->stream_thinking[0] = '\0';
+    d->stream_thinking_len = 0;
+    d->stream_content[0] = '\0';
+    d->stream_content_len = 0;
+    d->stream_phase = 0;
+
+    _beginthreadex(NULL, 0, ai_stream_thread_proc, arg, 0, NULL);
+}
+
 static void send_user_message(AiChatData *d)
 {
-    if (!d || d->busy || d->pending_approval) return;
+    if (!d || !d->active_state || d->active_state->busy || d->pending_approval)
+        return;
 
     char input[2048];
     GetWindowText(d->hInput, input, (int)sizeof(input));
@@ -909,20 +992,10 @@ static void send_user_message(AiChatData *d)
 
     update_context_bar(d);
 
-    d->stream_thinking[0] = '\0';
-    d->stream_thinking_len = 0;
-    d->stream_content[0] = '\0';
-    d->stream_content_len = 0;
     d->stream_display_start = -1;
     start_indicator(d, "thinking");
 
-    /* Always use streaming thread — gives realtime auto-scroll for content
-     * regardless of show_thinking toggle.  Thinking chunks are filtered
-     * in the WM_AI_STREAM handler when show_thinking is off. */
-    d->busy = 1;
-    d->busy_state = d->active_state;
-    d->stream_phase = 0;
-    _beginthreadex(NULL, 0, ai_stream_thread_proc, d, 0, NULL);
+    launch_stream_thread(d);
 }
 
 static void execute_command(AiChatData *d, const char *cmd)
@@ -949,7 +1022,7 @@ static void execute_command(AiChatData *d, const char *cmd)
 
 static void send_continue_message(AiChatData *d)
 {
-    if (!d || d->busy) return;
+    if (!d || !d->active_state || d->active_state->busy) return;
 
     /* Extract fresh terminal context after command execution */
     char term_text[8192] = "";
@@ -977,15 +1050,12 @@ static void send_continue_message(AiChatData *d)
 
     LeaveCriticalSection(&d->cs);
 
-    d->stream_content[0] = '\0';
-    d->stream_content_len = 0;
     start_indicator(d, "continuing");
 
-    d->busy = 1;
-    d->busy_state = d->active_state;
-    d->stream_phase = 0;
-    _beginthreadex(NULL, 0, ai_stream_thread_proc, d, 0, NULL);
+    launch_stream_thread(d);
 }
+
+static void input_sync_scroll(AiChatData *d);
 
 /* Subclass proc for the multiline input: Enter sends, Shift+Enter inserts newline */
 static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
@@ -1004,6 +1074,19 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
             return 0; /* eat the Enter key */
         }
         /* AI_INPUT_NEWLINE: fall through to default (inserts newline) */
+    }
+    if (msg == WM_MOUSEWHEEL) {
+        int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
+        int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
+        SendMessage(hwnd, EM_LINESCROLL, 0, (LPARAM)scroll);
+        /* Sync input scrollbar */
+        HWND parent = GetParent(hwnd);
+        if (parent) {
+            AiChatData *d = (AiChatData *)GetWindowLongPtr(parent,
+                                                           GWLP_USERDATA);
+            if (d) input_sync_scroll(d);
+        }
+        return 0;
     }
     if (msg == WM_NCDESTROY) {
         RemoveWindowSubclass(hwnd, InputSubclassProc, uIdSubclass);
@@ -1086,26 +1169,67 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
         SelectObject(hdc, oBr);
         DeleteObject(hDotPen);
         DeleteObject(hDot);
+
+        /* Draw letter on indicator: W for write, T for thinking */
+        {
+            const char *letter = ((int)dis->CtlID == IDC_CHAT_PERMIT)
+                                  ? "W" : "T";
+            HFONT hSmall = CreateFont(
+                -MulDiv(7, d->dpi, 72), 0, 0, 0, FW_BOLD,
+                FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                APP_FONT_UI_FACE);
+            HFONT hOldF = (HFONT)SelectObject(hdc, hSmall);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(255, 255, 255));
+            RECT indRect = { indX, indY, indX + indW, indY + indicH };
+            DrawText(hdc, letter, 1, &indRect,
+                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, hOldF);
+            DeleteObject(hSmall);
+        }
+
         text_left = indX + indW + indGap;
     }
 
-    /* Text — use the normal UI font (same as tab title text) */
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, fg);
+    /* Text — skip for indicator buttons when in compact mode (icon-only) */
+    int is_indicator_btn = ((int)dis->CtlID == IDC_CHAT_PERMIT ||
+                            (int)dis->CtlID == IDC_CHAT_THINKING ||
+                            (int)dis->CtlID == IDC_CHAT_NEWCHAT);
+    if (!d || !d->compact_buttons || !is_indicator_btn) {
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, fg);
 
-    HFONT hOldFont = NULL;
-    if (d && d->hFont)
-        hOldFont = (HFONT)SelectObject(hdc, d->hFont);
+        HFONT hOldFont = NULL;
+        if (d && d->hFont)
+            hOldFont = (HFONT)SelectObject(hdc, d->hFont);
 
-    wchar_t text[64];
-    GetWindowTextW(dis->hwndItem, text, (int)(sizeof(text)/sizeof(text[0])));
-    RECT rcText = rc;
-    rcText.left = text_left;
-    rcText.right -= MulDiv(AI_INDICATOR_GAP_BASE, d ? d->dpi : 96, 96);
-    DrawTextW(hdc, text, -1, &rcText,
-              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        wchar_t text[64];
+        GetWindowTextW(dis->hwndItem, text, (int)(sizeof(text)/sizeof(text[0])));
+        RECT rcText = rc;
+        rcText.left = text_left;
+        rcText.right -= MulDiv(AI_INDICATOR_GAP_BASE, d ? d->dpi : 96, 96);
+        DrawTextW(hdc, text, -1, &rcText,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-    if (hOldFont) SelectObject(hdc, hOldFont);
+        if (hOldFont) SelectObject(hdc, hOldFont);
+    } else if (d && d->compact_buttons &&
+               (int)dis->CtlID == IDC_CHAT_NEWCHAT) {
+        /* Compact mode: draw a "+" icon for New Chat */
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, fg);
+        HFONT hBold = CreateFont(
+            -MulDiv(10, d->dpi, 72), 0, 0, 0, FW_BOLD,
+            FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+            APP_FONT_UI_FACE);
+        HFONT hOldF = (HFONT)SelectObject(hdc, hBold);
+        DrawText(hdc, "+", 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, hOldF);
+        DeleteObject(hBold);
+    }
 }
 
 /* Reposition all child controls.  Called from WM_SIZE and when
@@ -1127,14 +1251,30 @@ static void relayout(AiChatData *d)
     int send_w = S(40);
     int approve_h = d->pending_approval ? (btn_h + pad) : 0;
 
-    if (d->hNewChatBtn)
-        MoveWindow(d->hNewChatBtn, pad, pad, S(78), btn_h, TRUE);
-    if (d->hPermitBtn)
-        MoveWindow(d->hPermitBtn, pad + S(78) + pad, pad, S(115), btn_h, TRUE);
-    if (d->hThinkingBtn)
-        MoveWindow(d->hThinkingBtn, pad + S(78) + pad + S(115) + pad, pad, S(115), btn_h, TRUE);
+    /* Right-side icon buttons (always shown) */
+    int right_w = pad + btn_h + pad + btn_h + pad;
     if (d->hSaveBtn)
         MoveWindow(d->hSaveBtn, cw - pad - btn_h, pad, btn_h, btn_h, TRUE);
+    if (d->hUndockBtn)
+        MoveWindow(d->hUndockBtn, cw - pad - btn_h - pad - btn_h, pad,
+                   btn_h, btn_h, TRUE);
+
+    /* Decide if left-side buttons fit with full text or need compact mode.
+     * Full: New Chat (78) + Permit Write (115) + Show Thinking (115)
+     * Compact: New Chat (78) + indicator-only (btn_h) + indicator-only (btn_h) */
+    int full_w = pad + S(78) + pad + S(115) + pad + S(115);
+    int avail = cw - right_w;
+    d->compact_buttons = (full_w > avail);
+    int pw = d->compact_buttons ? btn_h : S(115);
+    int tw = d->compact_buttons ? btn_h : S(115);
+    int nw = d->compact_buttons ? btn_h : S(78);
+
+    if (d->hNewChatBtn)
+        MoveWindow(d->hNewChatBtn, pad, pad, nw, btn_h, TRUE);
+    if (d->hPermitBtn)
+        MoveWindow(d->hPermitBtn, pad + nw + pad, pad, pw, btn_h, TRUE);
+    if (d->hThinkingBtn)
+        MoveWindow(d->hThinkingBtn, pad + nw + pad + pw + pad, pad, tw, btn_h, TRUE);
     {
         int bar_h = S(16);
         int ctx_w = S(120);
@@ -1148,8 +1288,9 @@ static void relayout(AiChatData *d)
         top_y += bar_h + pad;
     }
     {
-        int disp_w = cw - margin * 2 - CSB_WIDTH;
-        int disp_h = ch - input_h - approve_h - top_y - margin * 2;
+        int disp_w, disp_h;
+        ai_dock_chat_layout(cw, ch, top_y, input_h, approve_h, margin,
+                            CSB_WIDTH, &disp_w, &disp_h);
         if (d->hDisplay)
             MoveWindow(d->hDisplay, margin, top_y, disp_w, disp_h, TRUE);
         if (d->hDisplayScrollbar)
@@ -1172,7 +1313,9 @@ static void relayout(AiChatData *d)
     }
     {
         int input_y = ch - input_h - margin;
+        if (input_y < top_y) input_y = top_y;
         int input_w = cw - send_w - margin * 3 - CSB_WIDTH;
+        if (input_w < 1) input_w = 1;
         if (d->hInput)
             MoveWindow(d->hInput, margin, input_y, input_w, input_h, TRUE);
         if (d->hInputScrollbar)
@@ -1292,6 +1435,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             cw - pad - btn_h, pad, btn_h, btn_h,
             hwnd, (HMENU)IDC_CHAT_SAVE, NULL, NULL);
 
+        /* Undock/Dock button — square, left of save button */
+        nd->hUndockBtn = CreateWindow("BUTTON", "",
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+            cw - pad - btn_h - pad - btn_h, pad, btn_h, btn_h,
+            hwnd, (HMENU)IDC_CHAT_UNDOCK, NULL, NULL);
+
         /* Allow/Deny buttons — hidden until command approval needed.
          * Initial position is off-screen; relayout() places them. */
         nd->hAllowBtn = CreateWindow("BUTTON", "Allow",
@@ -1334,17 +1483,22 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             top_y += bar_h + pad;
         }
 
-        /* Chat display: read-only RichEdit for colored text */
+        /* Chat display: read-only RichEdit for colored text.
+         * In docked mode the initial window may be 1x1, so clamp
+         * all dimensions to >=1 — relayout() fixes them on first WM_SIZE. */
         int input_h = S(46); /* ~2 lines for multiline input */
         int margin = S(5);
         int disp_w = cw - margin * 2 - CSB_WIDTH;
+        if (disp_w < 1) disp_w = 1;
         int disp_h = ch - input_h - top_y - margin * 2;
+        if (disp_h < 1) disp_h = 1;
         nd->hDisplay = CreateWindowW(L"RichEdit20W", L"",
             WS_VISIBLE | WS_CHILD | WS_BORDER |
             ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
             margin, top_y, disp_w, disp_h,
             hwnd, (HMENU)IDC_CHAT_DISPLAY, NULL, NULL);
-        SetWindowSubclass(nd->hDisplay, DisplaySubclassProc, 1, 0);
+        if (nd->hDisplay)
+            SetWindowSubclass(nd->hDisplay, DisplaySubclassProc, 1, 0);
 
         /* Custom themed scrollbar for chat display */
         csb_register(GetModuleHandle(NULL));
@@ -1354,20 +1508,24 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         SetTimer(hwnd, TIMER_SCROLL_SYNC, 50, NULL);
 
         /* Set RichEdit background from theme */
-        SendMessage(nd->hDisplay, EM_SETBKGNDCOLOR, 0,
-                    (LPARAM)(nd->theme ? theme_cr(nd->theme->bg_secondary)
-                                       : GetSysColor(COLOR_WINDOW)));
+        if (nd->hDisplay)
+            SendMessage(nd->hDisplay, EM_SETBKGNDCOLOR, 0,
+                        (LPARAM)(nd->theme ? theme_cr(nd->theme->bg_secondary)
+                                           : GetSysColor(COLOR_WINDOW)));
 
         /* Input field: multiline, Enter sends via subclass, Shift+Enter = newline */
         int send_w = S(40);
         int input_y = ch - input_h - margin;
+        if (input_y < 0) input_y = 0;
         int input_w = cw - send_w - margin * 3 - CSB_WIDTH;
+        if (input_w < 1) input_w = 1;
         nd->hInput = CreateWindow("EDIT", "",
             WS_VISIBLE | WS_CHILD | WS_BORDER |
             ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
             margin, input_y, input_w, input_h,
             hwnd, (HMENU)IDC_CHAT_INPUT, NULL, NULL);
-        SetWindowSubclass(nd->hInput, InputSubclassProc, 0, 0);
+        if (nd->hInput)
+            SetWindowSubclass(nd->hInput, InputSubclassProc, 0, 0);
 
         /* Custom themed scrollbar for input */
         nd->hInputScrollbar = csb_create(hwnd,
@@ -1441,6 +1599,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 "(e.g. DeepSeek Reasoner).");
             add_tooltip(nd->hTooltip, nd->hSaveBtn,
                 "Save\nSave the conversation as a text file.");
+            if (nd->hUndockBtn)
+                add_tooltip(nd->hTooltip, nd->hUndockBtn,
+                    nd->docked ? "Undock\nOpen AI Assist in a separate window."
+                               : "Dock\nDock AI Assist inside the main window.");
             add_tooltip(nd->hTooltip, nd->hSendBtn,
                 "Send\nSend your message to the AI.\n"
                 "Shortcut: press Enter in the input box.");
@@ -1463,7 +1625,23 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_SIZE: {
         if (!d) break;
         relayout(d);
+        /* Force repaint of all owner-drawn buttons after layout change.
+         * Erase background (TRUE) so newly exposed areas during the
+         * slide-out animation get filled with the theme colour. */
+        InvalidateRect(hwnd, NULL, TRUE);
         return 0;
+    }
+
+    case WM_NCHITTEST: {
+        /* When docked, make the left edge transparent to mouse clicks
+         * so the parent window can handle splitter dragging. */
+        if (d && d->docked) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ScreenToClient(hwnd, &pt);
+            if (pt.x < AI_DOCK_SPLITTER_HIT / 2)
+                return HTTRANSPARENT;
+        }
+        break;
     }
 
     case WM_COMMAND:
@@ -1473,7 +1651,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             SetFocus(d->hInput);
             return 0;
         case IDC_CHAT_NEWCHAT:
-            if (d && !d->busy && !d->pending_approval) {
+            if (d && !ACTIVE_BUSY(d) && !d->pending_approval) {
                 /* Reset only the ACTIVE session's conversation.
                  * Other sessions' AiSessionState objects are untouched. */
                 ai_conv_reset(&d->conv);
@@ -1541,6 +1719,17 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 }
             }
             return 0;
+        case IDC_CHAT_UNDOCK:
+            if (d) {
+                /* Post (not Send) so the AI window finishes its message
+                 * loop before the main window destroys and recreates it. */
+                HWND owner = GetParent(hwnd);
+                if (!owner) owner = GetWindow(hwnd, GW_OWNER);
+                if (owner)
+                    PostMessage(owner, WM_COMMAND,
+                                MAKEWPARAM(IDM_VIEW_AI_UNDOCK, 0), 0);
+            }
+            return 0;
         case IDC_CHAT_PERMIT:
             if (d) {
                 d->permit_write = !d->permit_write;
@@ -1552,7 +1741,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->show_thinking = !d->show_thinking;
                 InvalidateRect(d->hThinkingBtn, NULL, TRUE);
 
-                if (!d->busy) {
+                if (!ACTIVE_BUSY(d)) {
                     /* Not streaming — rebuild display to show/hide
                      * thinking history for all past messages. */
                     chat_rebuild_display(d);
@@ -1568,7 +1757,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         : RGB(140, 140, 140);
                     chat_append_styled(d->hDisplay,
                         d->stream_thinking, col_dim, 1);
-                } else if (!d->show_thinking && d->busy) {
+                } else if (!d->show_thinking && ACTIVE_BUSY(d)) {
                     /* Toggled OFF mid-stream — rebuild to remove
                      * thinking text, then re-append any content. */
                     int saved_phase = d->stream_phase;
@@ -1643,7 +1832,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         "Context usage tracking is not available\n"
                         "for this model (unknown context limit).",
                         "Compact Context", MB_OK | MB_ICONINFORMATION);
-                } else if (d->busy) {
+                } else if (ACTIVE_BUSY(d)) {
                     MessageBox(hwnd,
                         "Cannot compact while AI is processing.",
                         "Compact Context", MB_OK | MB_ICONINFORMATION);
@@ -1681,34 +1870,65 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_AI_STREAM: {
         /* Realtime streaming chunk: wParam 0=thinking, 1=content */
         if (!d) break;
-        char *delta = (char *)lParam;
-        if (!delta) break;
+        AiStreamChunk *chunk = (AiStreamChunk *)lParam;
+        if (!chunk) break;
+        char *delta = chunk->delta;
+        AiSessionState *src = chunk->session;
+        free(chunk);  /* free wrapper; delta freed below */
+        if (!delta) return 0;
 
-        /* Always accumulate stream data regardless of which session is displayed */
-        if (wParam == 0) {
+        /* Always accumulate to the source session's stream buffers */
+        if (src) {
             size_t dlen = strlen(delta);
-            if (d->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
-                memcpy(d->stream_thinking + d->stream_thinking_len,
-                       delta, dlen);
-                d->stream_thinking_len += dlen;
-                d->stream_thinking[d->stream_thinking_len] = '\0';
-            }
-            if (d->stream_phase == 0)
-                d->stream_phase = 1;
-        } else {
-            size_t dlen = strlen(delta);
-            if (d->stream_content_len + dlen < AI_MSG_MAX - 1) {
-                memcpy(d->stream_content + d->stream_content_len,
-                       delta, dlen);
-                d->stream_content_len += dlen;
-                d->stream_content[d->stream_content_len] = '\0';
+            if (wParam == 0) {
+                if (src->stream_thinking &&
+                    src->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
+                    memcpy(src->stream_thinking + src->stream_thinking_len,
+                           delta, dlen);
+                    src->stream_thinking_len += dlen;
+                    src->stream_thinking[src->stream_thinking_len] = '\0';
+                }
+                if (src->stream_phase == 0)
+                    src->stream_phase = 1;
+            } else {
+                if (src->stream_content &&
+                    src->stream_content_len + dlen < AI_MSG_MAX - 1) {
+                    memcpy(src->stream_content + src->stream_content_len,
+                           delta, dlen);
+                    src->stream_content_len += dlen;
+                    src->stream_content[src->stream_content_len] = '\0';
+                }
+                if (src->stream_phase < 2)
+                    src->stream_phase = 2;
             }
         }
 
-        /* If the user switched to a different session, don't touch the display */
-        if (d->busy_state && d->active_state != d->busy_state) {
+        /* If this chunk is for a different session, don't touch the display */
+        if (src != d->active_state) {
             free(delta);
             return 0;
+        }
+
+        /* Also accumulate to display-side buffers */
+        {
+            size_t dlen = strlen(delta);
+            if (wParam == 0) {
+                if (d->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
+                    memcpy(d->stream_thinking + d->stream_thinking_len,
+                           delta, dlen);
+                    d->stream_thinking_len += dlen;
+                    d->stream_thinking[d->stream_thinking_len] = '\0';
+                }
+                if (d->stream_phase == 0)
+                    d->stream_phase = 1;
+            } else {
+                if (d->stream_content_len + dlen < AI_MSG_MAX - 1) {
+                    memcpy(d->stream_content + d->stream_content_len,
+                           delta, dlen);
+                    d->stream_content_len += dlen;
+                    d->stream_content[d->stream_content_len] = '\0';
+                }
+            }
         }
 
         /* Remove the animated indicator only when we'll show something.
@@ -1768,44 +1988,43 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
     case WM_AI_RESPONSE: {
         if (!d) break;
+        AiResponseMsg *rmsg = (AiResponseMsg *)lParam;
+        if (!rmsg) break;
+        AiSessionState *src = rmsg->session;
 
-        /* If the user switched to a different session while AI was streaming,
-         * the thread already committed its result to busy_state->conv.
+        /* Free per-session stream accumulators */
+        if (src) {
+            free(src->stream_content);
+            src->stream_content = NULL;
+            src->stream_content_len = 0;
+            free(src->stream_thinking);
+            src->stream_thinking = NULL;
+            src->stream_thinking_len = 0;
+            src->stream_phase = 0;
+        }
+
+        /* If this response is for a different session than the one displayed,
+         * the thread already committed its result to src->conv.
          * Extract commands for deferred approval, then clean up. */
-        if (d->busy_state && d->active_state != d->busy_state) {
-            d->stream_thinking[0] = '\0';
-            d->stream_thinking_len = 0;
-            d->stream_content[0] = '\0';
-            d->stream_content_len = 0;
-            d->stream_phase = 0;
-            if (wParam == 2) {
-                AiResponseMsg *rmsg = (AiResponseMsg *)lParam;
-                if (rmsg && rmsg->content) {
-                    /* Extract commands and save to the original session
-                     * so approval prompt appears when user switches back */
-                    char cmds[16][1024];
-                    int ncmds = ai_extract_commands(rmsg->content,
-                                                     cmds, 16);
-                    if (ncmds > 0) {
-                        free(d->busy_state->pending_cmds);
-                        size_t sz = (size_t)ncmds
-                                    * sizeof(cmds[0]);
-                        d->busy_state->pending_cmds = malloc(sz);
-                        if (d->busy_state->pending_cmds) {
-                            memcpy(d->busy_state->pending_cmds,
-                                   cmds, sz);
-                            d->busy_state->pending_cmd_count = ncmds;
-                            d->busy_state->pending_approval = 1;
-                        }
+        if (src != d->active_state) {
+            if (wParam == 2 && src && rmsg->content) {
+                char cmds[16][1024];
+                int ncmds = ai_extract_commands(rmsg->content, cmds, 16);
+                if (ncmds > 0) {
+                    free(src->pending_cmds);
+                    size_t sz = (size_t)ncmds * sizeof(cmds[0]);
+                    src->pending_cmds = malloc(sz);
+                    if (src->pending_cmds) {
+                        memcpy(src->pending_cmds, cmds, sz);
+                        src->pending_cmd_count = ncmds;
+                        src->pending_approval = 1;
                     }
-                    free(rmsg->content);
-                    free(rmsg->thinking);
                 }
-                free(rmsg);
-            } else {
-                free((char *)lParam);
             }
-            d->busy_state = NULL;
+            if (src) src->busy = 0;
+            free(rmsg->content);
+            free(rmsg->thinking);
+            free(rmsg);
             return 0;
         }
 
@@ -1823,13 +2042,19 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         if (wParam == 2) {
             /* Streaming complete — text already displayed, do command extraction */
-            AiResponseMsg *rmsg = (AiResponseMsg *)lParam;
-            if (!rmsg) break;
             char *text = rmsg->content;
 
+            /* The thread committed the assistant message to src->conv.
+             * Sync d->conv (the working copy) so it includes the response. */
+            if (text) {
+                EnterCriticalSection(&d->cs);
+                ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, text);
+                LeaveCriticalSection(&d->cs);
+            }
+
             /* Save thinking for this assistant message in history.
-             * The assistant message was just added to conv by the stream
-             * thread, so it's at msg_count-1. */
+             * The assistant message was just added to conv above,
+             * so it's at msg_count-1. */
             if (d->stream_thinking_len > 0 &&
                 d->conv.msg_count > 0) {
                 int idx = d->conv.msg_count - 1;
@@ -1855,7 +2080,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     ? theme_cr(d->theme->text_main)
                     : GetSysColor(COLOR_WINDOWTEXT);
                 chat_append_markdown(d->hDisplay, d->stream_content,
-                                     col_ai, d->theme);
+                                     col_ai, d->theme, d->ai_font_name);
             } else {
                 chat_append_color(d->hDisplay, "\r\n",
                     d->theme ? theme_cr(d->theme->text_main)
@@ -1940,18 +2165,21 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             free(rmsg);
             update_context_bar(d);
         } else {
-            /* Error — lParam is plain char* */
-            char *text = (char *)lParam;
-            if (!text) break;
+            /* Error */
+            char *text = rmsg->content;
             d->stream_phase = 0;
-            chat_append_ops(d->hDisplay,
-                            "\r\n--- Error ---\r\n");
-            chat_append_ops(d->hDisplay, text);
-            chat_append_ops(d->hDisplay, "\r\n");
-            free(text);
+            if (text) {
+                chat_append_ops(d->hDisplay,
+                                "\r\n--- Error ---\r\n");
+                chat_append_ops(d->hDisplay, text);
+                chat_append_ops(d->hDisplay, "\r\n");
+                free(text);
+            }
+            free(rmsg->thinking);
+            free(rmsg);
         }
 
-        d->busy_state = NULL;
+        if (src) src->busy = 0;
         return 0;
     }
 
@@ -1978,7 +2206,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
         } else if (wParam == TIMER_CONTINUE) {
             KillTimer(hwnd, TIMER_CONTINUE);
-            if (d->commands_executed > 0 && !d->busy) {
+            if (d->commands_executed > 0 && !ACTIVE_BUSY(d)) {
                 d->commands_executed = 0;
                 send_continue_message(d);
             }
@@ -2140,7 +2368,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 DeleteObject(hPen);
                 DeleteObject(hBr);
 
-                /* Draw floppy disk icon — scaled to button size */
+                /* Draw 3D floppy disk icon — scaled to button size.
+                 * Two-colour scheme: steel blue body, bright silver
+                 * detail areas, with beveled edges for depth. */
                 int w = rc.right - rc.left;
                 int h = rc.bottom - rc.top;
                 int m = w / 5;  /* margin around icon */
@@ -2149,76 +2379,274 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 int iw = w - m * 2;
                 int ih = h - m * 2;
 
-                HPEN hIconPen = CreatePen(PS_SOLID, 1, fg);
-                SelectObject(hdc, hIconPen);
+                /* Derive two icon colours from fg:
+                 *   col1 — steel-blue tinted body (mid-tone)
+                 *   col2 — bright silver for metal/label (light) */
+                BYTE fR = GetRValue(fg), fG = GetGValue(fg),
+                     fB = GetBValue(fg);
+                /* Tint toward steel-blue: dampen R, keep G, boost B */
+                COLORREF col1 = RGB(fR * 2 / 5,
+                                    fG * 3 / 5,
+                                    fB / 2 + 128 > 255 ? 255
+                                                        : fB / 2 + 128);
+                /* Bright silver — close to white, slight warmth */
+                COLORREF col2 = RGB(fR + (255 - fR) * 4 / 5,
+                                    fG + (255 - fG) * 4 / 5,
+                                    fB + (255 - fB) * 3 / 5);
+                /* Highlight and shadow derived from body colour */
+                BYTE c1R = GetRValue(col1), c1G = GetGValue(col1),
+                     c1B = GetBValue(col1);
+                COLORREF hi1 = RGB(c1R + (255 - c1R) / 2,
+                                   c1G + (255 - c1G) / 2,
+                                   c1B + (255 - c1B) / 2);
+                COLORREF lo1 = RGB(c1R * 2 / 5, c1G * 2 / 5, c1B * 2 / 5);
+                /* Shadow/highlight for silver detail areas */
+                BYTE c2R = GetRValue(col2), c2G = GetGValue(col2),
+                     c2B = GetBValue(col2);
+                COLORREF lo2 = RGB(c2R * 3 / 5, c2G * 3 / 5, c2B * 3 / 5);
 
-                /* Disk body — filled rounded rect with chamfered
-                 * top-right corner (classic floppy shape) */
+                int chamfer = iw / 4;
+                int bev = iw >= 14 ? 2 : 1; /* bevel thickness */
+
+                /* --- Drop shadow behind disk (offset 1px) --- */
                 {
-                    POINT body[6];
-                    int chamfer = iw / 4;
-                    body[0] = (POINT){ ix,              iy };
-                    body[1] = (POINT){ ix + iw - chamfer, iy };
-                    body[2] = (POINT){ ix + iw,         iy + chamfer };
-                    body[3] = (POINT){ ix + iw,         iy + ih };
-                    body[4] = (POINT){ ix,              iy + ih };
-                    body[5] = body[0];
-                    HBRUSH hBodyBr = CreateSolidBrush(fg);
+                    POINT sh[5] = {
+                        { ix + 1,                  iy + 1 },
+                        { ix + iw - chamfer + 1,   iy + 1 },
+                        { ix + iw + 1,             iy + chamfer + 1 },
+                        { ix + iw + 1,             iy + ih + 1 },
+                        { ix + 1,                  iy + ih + 1 }
+                    };
+                    HBRUSH hShBr = CreateSolidBrush(lo1);
+                    HPEN hShPen = CreatePen(PS_SOLID, 1, lo1);
+                    SelectObject(hdc, hShBr);
+                    SelectObject(hdc, hShPen);
+                    Polygon(hdc, sh, 5);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hShBr);
+                    DeleteObject(hShPen);
+                }
+
+                /* --- Disk body (col1 fill) --- */
+                {
+                    POINT body[5] = {
+                        { ix,                  iy },
+                        { ix + iw - chamfer,   iy },
+                        { ix + iw,             iy + chamfer },
+                        { ix + iw,             iy + ih },
+                        { ix,                  iy + ih }
+                    };
+                    HBRUSH hBodyBr = CreateSolidBrush(col1);
+                    HPEN hBodyPen = CreatePen(PS_SOLID, 1, col1);
                     SelectObject(hdc, hBodyBr);
+                    SelectObject(hdc, hBodyPen);
                     Polygon(hdc, body, 5);
                     SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
                     DeleteObject(hBodyBr);
+                    DeleteObject(hBodyPen);
+
+                    /* Beveled highlight — top & left edges */
+                    HPEN hHi = CreatePen(PS_SOLID, 1, hi1);
+                    SelectObject(hdc, hHi);
+                    int b;
+                    for (b = 0; b < bev; b++) {
+                        MoveToEx(hdc, ix + b, iy + ih - 1 - b, NULL);
+                        LineTo(hdc, ix + b, iy + b);
+                        LineTo(hdc, ix + iw - chamfer - b, iy + b);
+                    }
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hHi);
+
+                    /* Beveled shadow — bottom & right edges */
+                    HPEN hLo = CreatePen(PS_SOLID, 1, lo1);
+                    SelectObject(hdc, hLo);
+                    for (b = 0; b < bev; b++) {
+                        MoveToEx(hdc, ix + 1 + b, iy + ih - b, NULL);
+                        LineTo(hdc, ix + iw - b, iy + ih - b);
+                        LineTo(hdc, ix + iw - b, iy + chamfer + b);
+                    }
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hLo);
+
+                    /* Chamfer fold line — diagonal accent */
+                    HPEN hCh = CreatePen(PS_SOLID, 1, lo1);
+                    SelectObject(hdc, hCh);
+                    MoveToEx(hdc, ix + iw - chamfer, iy, NULL);
+                    LineTo(hdc, ix + iw, iy + chamfer);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hCh);
                 }
 
-                /* Metal slider area — lighter rect at top center */
+                /* --- Metal slider area (col2, top centre) --- */
                 {
                     int sw = iw * 5 / 9;
-                    int sh = ih * 3 / 8;
+                    int sh = ih * 2 / 5;
                     int sx = ix + (iw - sw) / 2;
-                    int sy = iy;
-                    HBRUSH hSliderBr = CreateSolidBrush(bg);
-                    RECT sliderRc = { sx, sy, sx + sw, sy + sh };
-                    FillRect(hdc, &sliderRc, hSliderBr);
-                    DeleteObject(hSliderBr);
+                    int sy = iy + 1;
+
+                    /* Silver fill */
+                    HBRUSH hSlBr = CreateSolidBrush(col2);
+                    RECT slRc = { sx, sy, sx + sw, sy + sh };
+                    FillRect(hdc, &slRc, hSlBr);
+                    DeleteObject(hSlBr);
+
+                    /* Beveled inset border on slider */
+                    HPEN hSlLo = CreatePen(PS_SOLID, 1, lo2);
+                    SelectObject(hdc, hSlLo);
+                    MoveToEx(hdc, sx, sy + sh - 1, NULL);
+                    LineTo(hdc, sx + sw - 1, sy + sh - 1);
+                    LineTo(hdc, sx + sw - 1, sy - 1);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hSlLo);
 
                     /* Shutter opening — dark notch in right half */
                     int ow = sw / 3;
                     int ox = sx + sw - ow - 1;
-                    HBRUSH hOpenBr = CreateSolidBrush(fg);
-                    RECT openRc = { ox, sy, ox + ow, sy + sh };
+                    HBRUSH hOpenBr = CreateSolidBrush(lo1);
+                    RECT openRc = { ox, sy + 1, ox + ow, sy + sh - 1 };
                     FillRect(hdc, &openRc, hOpenBr);
                     DeleteObject(hOpenBr);
                 }
 
-                /* Label area — lighter rect at bottom */
+                /* --- Label area (col2, bottom centre) --- */
                 {
                     int lw = iw * 3 / 4;
                     int lh = ih * 2 / 5;
                     int lx = ix + (iw - lw) / 2;
-                    int ly = iy + ih - lh;
-                    HBRUSH hLabBr = CreateSolidBrush(bg);
+                    int ly = iy + ih - lh - 1;
+
+                    /* Silver fill */
+                    HBRUSH hLabBr = CreateSolidBrush(col2);
                     RECT labRc = { lx, ly, lx + lw, ly + lh };
                     FillRect(hdc, &labRc, hLabBr);
                     DeleteObject(hLabBr);
 
-                    /* Two small horizontal lines on the label */
-                    HPEN hLinePen = CreatePen(PS_SOLID, 1,
-                        theme_cr(d->theme->text_dim));
+                    /* Inset shadow — top and left of label */
+                    HPEN hLabLo = CreatePen(PS_SOLID, 1, lo2);
+                    SelectObject(hdc, hLabLo);
+                    MoveToEx(hdc, lx, ly + lh - 1, NULL);
+                    LineTo(hdc, lx, ly);
+                    LineTo(hdc, lx + lw, ly);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hLabLo);
+
+                    /* Ruled lines on the label */
+                    HPEN hLinePen = CreatePen(PS_SOLID, 1, lo2);
                     SelectObject(hdc, hLinePen);
-                    int lineX1 = lx + 2;
-                    int lineX2 = lx + lw - 2;
-                    int lineY1 = ly + lh / 3;
-                    int lineY2 = ly + lh * 2 / 3;
-                    MoveToEx(hdc, lineX1, lineY1, NULL);
-                    LineTo(hdc, lineX2, lineY1);
-                    MoveToEx(hdc, lineX1, lineY2, NULL);
-                    LineTo(hdc, lineX2, lineY2);
-                    SelectObject(hdc, hIconPen);
+                    int lx1 = lx + 2, lx2 = lx + lw - 2;
+                    int ly1 = ly + lh / 4;
+                    int ly2 = ly + lh / 2;
+                    int ly3 = ly + lh * 3 / 4;
+                    MoveToEx(hdc, lx1, ly1, NULL);
+                    LineTo(hdc, lx2, ly1);
+                    MoveToEx(hdc, lx1, ly2, NULL);
+                    LineTo(hdc, lx2, ly2);
+                    MoveToEx(hdc, lx1, ly3, NULL);
+                    LineTo(hdc, lx2, ly3);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
                     DeleteObject(hLinePen);
                 }
+            } else if ((int)dis->CtlID == IDC_CHAT_UNDOCK) {
+                /* Square undock button with 3D pop-out/dock-in icon */
+                HDC hdc = dis->hDC;
+                RECT brc = dis->rcItem;
+                int pressed = (dis->itemState & ODS_SELECTED) != 0;
+                COLORREF bg = theme_cr(pressed ? d->theme->bg_primary
+                                               : d->theme->bg_secondary);
+                COLORREF fg = theme_cr(d->theme->text_main);
+                COLORREF bdr = theme_cr(d->theme->border);
 
-                SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                DeleteObject(hIconPen);
+                HBRUSH hBgBr = CreateSolidBrush(theme_cr(d->theme->bg_primary));
+                FillRect(hdc, &brc, hBgBr);
+                DeleteObject(hBgBr);
+
+                HBRUSH hBr = CreateSolidBrush(bg);
+                HPEN hPen = CreatePen(PS_SOLID, 1, bdr);
+                HGDIOBJ oBr = SelectObject(hdc, hBr);
+                HGDIOBJ oPen = SelectObject(hdc, hPen);
+                RoundRect(hdc, brc.left, brc.top, brc.right, brc.bottom, 6, 6);
+                SelectObject(hdc, oPen);
+                SelectObject(hdc, oBr);
+                DeleteObject(hPen);
+                DeleteObject(hBr);
+
+                /* Draw pop-out or dock-in icon — outline style with
+                 * 3D highlight/shadow on edges for depth. */
+                int bw = brc.right - brc.left;
+                int bh = brc.bottom - brc.top;
+                int um = bw / 4;
+                int uix = brc.left + um;
+                int uiy = brc.top + um;
+                int uiw = bw - um * 2;
+                int uih = bh - um * 2;
+
+                /* Two colours from fg for 3D line treatment */
+                BYTE uR = GetRValue(fg), uG = GetGValue(fg),
+                     uB = GetBValue(fg);
+                COLORREF uHi = RGB(uR + (255 - uR) / 2,
+                                   uG + (255 - uG) / 2,
+                                   uB + (255 - uB) / 2);
+                COLORREF uLo = RGB(uR * 2 / 5, uG * 2 / 5, uB * 2 / 5);
+
+                /* Same-size square for both states */
+                int rsz = uiw * 3 / 5;
+
+                if (d->docked) {
+                    /* Pop-out: square at bottom-left + arrow to top-right */
+                    int rx = uix, ry = uiy + uih - rsz;
+
+                    /* Shadow offset behind rectangle */
+                    HPEN hSh = CreatePen(PS_SOLID, 1, uLo);
+                    SelectObject(hdc, hSh);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
+                    Rectangle(hdc, rx + 1, ry + 1, rx + rsz + 1, ry + rsz + 1);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hSh);
+
+                    /* Highlight rectangle outline */
+                    HPEN hFg = CreatePen(PS_SOLID, 1, uHi);
+                    SelectObject(hdc, hFg);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
+                    Rectangle(hdc, rx, ry, rx + rsz, ry + rsz);
+
+                    /* Arrow shaft + head pointing to top-right */
+                    int ax = uix + uiw, ay = uiy;
+                    MoveToEx(hdc, uix + uiw / 3, uiy + uih * 2 / 3, NULL);
+                    LineTo(hdc, ax, ay);
+                    MoveToEx(hdc, ax - uiw / 3, ay, NULL);
+                    LineTo(hdc, ax, ay);
+                    LineTo(hdc, ax, ay + uih / 3);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hFg);
+                } else {
+                    /* Dock-in: square at top-right + arrow to bottom-left */
+                    int rx = uix + uiw - rsz, ry = uiy;
+
+                    /* Shadow offset behind rectangle */
+                    HPEN hSh = CreatePen(PS_SOLID, 1, uLo);
+                    SelectObject(hdc, hSh);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
+                    Rectangle(hdc, rx + 1, ry + 1, rx + rsz + 1, ry + rsz + 1);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hSh);
+
+                    /* Highlight rectangle outline */
+                    HPEN hFg = CreatePen(PS_SOLID, 1, uHi);
+                    SelectObject(hdc, hFg);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
+                    Rectangle(hdc, rx, ry, rx + rsz, ry + rsz);
+
+                    /* Arrow shaft + head pointing to bottom-left */
+                    int ax = uix, ay = uiy + uih;
+                    MoveToEx(hdc, uix + uiw * 2 / 3, uiy + uih / 3, NULL);
+                    LineTo(hdc, ax, ay);
+                    MoveToEx(hdc, ax + uiw / 3, ay, NULL);
+                    LineTo(hdc, ax, ay);
+                    LineTo(hdc, ax, ay - uih / 3);
+                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
+                    DeleteObject(hFg);
+                }
             } else if ((int)dis->CtlID == IDC_CHAT_ALLOW) {
                 /* Green Allow button */
                 HDC hdc = dis->hDC;
@@ -2315,6 +2743,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         return 0;
 
     case WM_CLOSE:
+        if (d && d->docked) {
+            /* Docked: ask parent to close the panel (preserves state) */
+            SendMessage(GetParent(hwnd), WM_COMMAND,
+                        MAKEWPARAM(IDM_VIEW_AI_CHAT, 0), 0);
+            return 0;
+        }
         DestroyWindow(hwnd);
         return 0;
     }
@@ -2346,10 +2780,12 @@ void ai_chat_init(HINSTANCE hInstance)
 HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
                   const char *custom_url, const char *custom_model,
                   int paste_delay_ms, const char *font_name,
+                  const char *ai_font,
                   const char *colour_scheme,
                   const char *session_notes, const char *system_notes,
                   AiSessionState *initial_state,
-                  const char *session_name)
+                  const char *session_name,
+                  int docked)
 {
     AiChatData *d = (AiChatData *)calloc(1, sizeof(AiChatData));
     if (!d) return NULL;
@@ -2362,6 +2798,10 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
         strncpy(d->font_name, font_name, sizeof(d->font_name) - 1);
     else
         strncpy(d->font_name, APP_FONT_DEFAULT, sizeof(d->font_name) - 1);
+    if (ai_font && ai_font[0])
+        strncpy(d->ai_font_name, ai_font, sizeof(d->ai_font_name) - 1);
+    else
+        strncpy(d->ai_font_name, APP_FONT_AI_DEFAULT, sizeof(d->ai_font_name) - 1);
 
     /* Theme lookup */
     {
@@ -2400,6 +2840,8 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     if (session_name)
         strncpy(d->session_name, session_name, sizeof(d->session_name) - 1);
 
+    d->docked = docked;
+
     /* Scale window size for DPI */
     int pdpi;
     {
@@ -2408,11 +2850,17 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
         ReleaseDC(parent, hdc);
     }
 
+    DWORD style = docked
+        ? (WS_CHILD | WS_CLIPCHILDREN)       /* hidden until first resize */
+        : (WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+
     HWND hwnd = CreateWindowEx(
         0, AI_CHAT_CLASS, "AI Assist",
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(500, pdpi, 96), MulDiv(600, pdpi, 96),
+        style,
+        docked ? 0 : CW_USEDEFAULT,
+        docked ? 0 : CW_USEDEFAULT,
+        docked ? 1 : MulDiv(500, pdpi, 96),
+        docked ? 1 : MulDiv(600, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (!hwnd) {
@@ -2504,7 +2952,7 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme)
 }
 
 /* Internal helper: perform the actual session switch (save/load/rebuild).
- * Safe to call even while busy — the background thread targets busy_state. */
+ * Safe to call even while busy — each thread targets its own session. */
 static void do_session_switch(AiChatData *d,
                               AiSessionState *new_state,
                               Terminal *term, SSHChannel *channel,
@@ -2512,10 +2960,10 @@ static void do_session_switch(AiChatData *d,
                               const char *system_notes,
                               const char *session_name)
 {
-    /* Save current conversation to old session state (unless the thread
-     * already saved it via busy_state during a mid-stream switch). */
+    /* Save current conversation to old session state.
+     * Skip if the session is busy — the thread will commit to its own conv. */
     if (d->active_state && d->active_state != new_state &&
-        d->active_state != d->busy_state) {
+        !d->active_state->busy) {
         memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
         d->active_state->valid = 1;
     }
@@ -2621,9 +3069,31 @@ static void do_session_switch(AiChatData *d,
         chat_append_ops(d->hDisplay, "\r\n");
     }
 
-    /* If switching back to the session that's still streaming,
-     * re-append any accumulated content so the user sees progress. */
-    if (d->busy && d->busy_state == new_state) {
+    /* If switching to a session that's still streaming,
+     * re-append any accumulated content so the user sees progress.
+     * Use the per-session stream buffers (populated by WM_AI_STREAM). */
+    if (new_state && new_state->busy) {
+        /* Copy session stream buffers into display-side buffers */
+        d->stream_thinking[0] = '\0';
+        d->stream_thinking_len = 0;
+        d->stream_content[0] = '\0';
+        d->stream_content_len = 0;
+        if (new_state->stream_thinking && new_state->stream_thinking_len > 0) {
+            size_t tlen = new_state->stream_thinking_len;
+            if (tlen >= AI_MSG_MAX) tlen = AI_MSG_MAX - 1;
+            memcpy(d->stream_thinking, new_state->stream_thinking, tlen);
+            d->stream_thinking_len = tlen;
+            d->stream_thinking[tlen] = '\0';
+        }
+        if (new_state->stream_content && new_state->stream_content_len > 0) {
+            size_t clen = new_state->stream_content_len;
+            if (clen >= AI_MSG_MAX) clen = AI_MSG_MAX - 1;
+            memcpy(d->stream_content, new_state->stream_content, clen);
+            d->stream_content_len = clen;
+            d->stream_content[clen] = '\0';
+        }
+        d->stream_phase = new_state->stream_phase;
+
         if (d->show_thinking && d->stream_thinking_len > 0) {
             COLORREF col_dim = d->theme
                 ? theme_cr(d->theme->text_dim) : RGB(140, 140, 140);
@@ -2657,13 +3127,11 @@ void ai_chat_switch_session(HWND hwnd,
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
 
-    /* If busy, save the current conversation to the busy session's state
-     * before switching away.  The background thread will commit its result
-     * directly to busy_state->conv when it finishes, so we must save now
-     * while d->conv still reflects the pre-response state. */
-    if (d->busy && d->busy_state && d->active_state == d->busy_state) {
-        memcpy(&d->busy_state->conv, &d->conv, sizeof(AiConversation));
-        d->busy_state->valid = 1;
+    /* If the active session is busy, save the current conversation so the
+     * thread can commit its result on top of this snapshot. */
+    if (d->active_state && d->active_state->busy) {
+        memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
+        d->active_state->valid = 1;
     }
 
     /* Kill any indicator timer — it belongs to the old session's display */
@@ -2672,8 +3140,8 @@ void ai_chat_switch_session(HWND hwnd,
         d->indicator_pos = -1;
     }
 
-    /* Switch immediately — the thread continues in the background and
-     * its results will go to busy_state, not the newly displayed session. */
+    /* Switch immediately — any running thread continues in the background
+     * targeting its own session directly. */
     do_session_switch(d, new_state, term, channel,
                       session_notes, system_notes, session_name);
 }
@@ -2688,16 +3156,30 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
     free(state->pending_cmds);
     state->pending_cmds = NULL;
 
+    /* Free per-session stream buffers */
+    free(state->stream_content);
+    state->stream_content = NULL;
+    free(state->stream_thinking);
+    state->stream_thinking = NULL;
+    state->busy = 0;
+
     if (d->active_state == state)
         d->active_state = NULL;
-    if (d->busy_state == state)
-        d->busy_state = NULL;
 }
 
 void ai_chat_close(HWND hwnd)
 {
     if (hwnd && IsWindow(hwnd))
         DestroyWindow(hwnd);
+}
+
+int ai_chat_has_content(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd)) return 0;
+    AiChatData *d = (AiChatData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return 0;
+    /* At least one user or assistant message beyond the system prompt */
+    return d->conv.msg_count > 1;
 }
 
 #endif /* _WIN32 */

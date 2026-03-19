@@ -112,9 +112,13 @@ static void list_sync_scroll(HWND hwnd, SessMgrState *st)
     if (total <= visible) {
         csb_set_range(st->hListScrollbar, 0, 0, 1);
         csb_set_pos(st->hListScrollbar, 0);
+        if (IsWindowVisible(st->hListScrollbar))
+            ShowWindow(st->hListScrollbar, SW_HIDE);
     } else {
         csb_set_range(st->hListScrollbar, 0, total - 1, visible);
         csb_set_pos(st->hListScrollbar, top);
+        if (!IsWindowVisible(st->hListScrollbar))
+            ShowWindow(st->hListScrollbar, SW_SHOWNOACTIVATE);
     }
 }
 
@@ -168,24 +172,9 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         SendMessage(GetDlgItem(hwnd, IDC_EDIT_AI_NOTES), EM_SETCUEBANNER, 0,
                     (LPARAM)L"Notes for AI about this server (max 400 words)");
 
-        /* Apply configured font at UI size to all child controls */
-        {
-            HDC hdc = GetDC(hwnd);
-            int h = -MulDiv(APP_FONT_UI_SIZE, GetDeviceCaps(hdc, LOGPIXELSY), 72);
-            ReleaseDC(hwnd, hdc);
-            st->hDlgFont = CreateFont(
-                h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
-                st->cfg->settings.font);
-            if (st->hDlgFont) {
-                HWND hChild = NULL;
-                while ((hChild = FindWindowEx(hwnd, hChild, NULL, NULL)) != NULL)
-                    SendMessage(hChild, WM_SETFONT, (WPARAM)st->hDlgFont, TRUE);
-            }
-        }
-
-        /* Theme: look up from config, create brushes, apply title bar + borders */
+        /* Theme: look up from config, create brushes, apply title bar + borders.
+         * Must happen BEFORE font application, because WM_SETFONT with
+         * fRedraw=TRUE triggers WM_CTLCOLOR* messages that need st->theme. */
         {
             int idx = ui_theme_find(st->cfg->settings.colour_scheme);
             st->theme = ui_theme_get(idx);
@@ -207,6 +196,24 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                     SetWindowLong(hBtn, GWL_STYLE, style);
                     InvalidateRect(hBtn, NULL, TRUE);
                 }
+            }
+        }
+
+        /* Apply configured font at UI size to all child controls.
+         * Done after theme setup so WM_CTLCOLOR* repaints use correct colors. */
+        {
+            HDC hdc = GetDC(hwnd);
+            int h = -MulDiv(APP_FONT_UI_SIZE, GetDeviceCaps(hdc, LOGPIXELSY), 72);
+            ReleaseDC(hwnd, hdc);
+            st->hDlgFont = CreateFont(
+                h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                APP_FONT_UI_FACE);
+            if (st->hDlgFont) {
+                HWND hChild = NULL;
+                while ((hChild = FindWindowEx(hwnd, hChild, NULL, NULL)) != NULL)
+                    SendMessage(hChild, WM_SETFONT, (WPARAM)st->hDlgFont, TRUE);
             }
         }
 
@@ -487,6 +494,20 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         }
         break;
 
+    case WM_MOUSEWHEEL:
+        if (st) {
+            /* Forward wheel to AI notes edit */
+            HWND hEdit = GetDlgItem(hwnd, IDC_EDIT_AI_NOTES);
+            if (hEdit) {
+                int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
+                int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
+                SendMessage(hEdit, EM_LINESCROLL, 0, (LPARAM)scroll);
+                ai_notes_sync_scroll(hwnd, st);
+            }
+            return TRUE;
+        }
+        break;
+
     case WM_TIMER:
         if (wParam == IDT_AINOTES_SCROLL && st) {
             ai_notes_sync_scroll(hwnd, st);
@@ -555,6 +576,7 @@ int SessionManager_Show(HINSTANCE hInstance, HWND parent,
                         Profile *out_profile)
 {
     SessMgrState st;
+    memset(&st, 0, sizeof(st));
     st.cfg         = cfg;
     st.config_path = config_path;
     st.out_profile = out_profile;

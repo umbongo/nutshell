@@ -133,6 +133,9 @@ int test_config_load_missing_ai_fields(void);
 int test_config_load_unknown_fields(void);
 int test_config_load_out_of_range(void);
 int test_config_roundtrip_all_fields(void);
+int test_config_default_ai_font(void);
+int test_config_roundtrip_ai_font(void);
+int test_config_validate_empty_ai_font(void);
 /* test_session_manager.c */
 int test_profile_struct(void);
 
@@ -565,6 +568,18 @@ int test_ai_cmd_readonly_du_devnull(void);
 int test_ai_cmd_write_redirect_to_file(void);
 int test_ai_cmd_write_append_to_file(void);
 int test_ai_cmd_write_stderr_to_file(void);
+int test_ai_cmd_write_configure_terminal(void);
+int test_ai_cmd_write_conf_t(void);
+int test_ai_cmd_write_configure_paloalto(void);
+int test_ai_cmd_write_write_memory(void);
+int test_ai_cmd_write_commit(void);
+int test_ai_cmd_write_reload(void);
+int test_ai_cmd_write_rollback(void);
+int test_ai_cmd_write_erase(void);
+int test_ai_cmd_write_execute(void);
+int test_ai_cmd_readonly_show_running(void);
+int test_ai_cmd_readonly_show_interfaces(void);
+int test_ai_cmd_readonly_display_version(void);
 
 /* test_ai_context.c */
 int test_ai_word_count_basic(void);
@@ -629,6 +644,16 @@ int test_inline_approval_two_sessions_independent(void);
 int test_inline_approval_deny_one_keep_other(void);
 int test_inline_approval_save_restore_roundtrip(void);
 int test_inline_approval_deferred_multi_commands(void);
+/* test_ai_prompt.c — concurrent session busy/stream state */
+int test_session_state_busy_init_zero(void);
+int test_session_state_busy_independent(void);
+int test_session_state_concurrent_busy(void);
+int test_session_state_stream_buffer_alloc_free(void);
+int test_session_state_stream_thinking_accumulation(void);
+int test_session_state_cleanup_on_close(void);
+int test_session_state_switch_while_both_busy(void);
+int test_session_state_switch_back_restores_stream(void);
+int test_session_state_pending_cmds_per_session(void);
 
 /* test_edit_scroll.c */
 int test_edit_scroll_visible_basic(void);
@@ -659,6 +684,15 @@ int test_wheel_accum_direction_change_resets(void);
 int test_wheel_accum_two_notches(void);
 int test_wheel_accum_zero_notch_size(void);
 int test_wheel_accum_null_accumulator(void);
+int test_scroll_needed_overflow(void);
+int test_scroll_needed_exact_fit(void);
+int test_scroll_needed_fewer_lines(void);
+int test_scroll_needed_one_over(void);
+int test_scroll_needed_single_line(void);
+int test_scroll_needed_zero_lines(void);
+int test_scroll_needed_zero_height(void);
+int test_scroll_needed_zero_line_height(void);
+int test_scroll_needed_empty_zero_height(void);
 
 /* test_term_extract.c */
 int test_extract_empty_term(void);
@@ -776,6 +810,45 @@ int test_menubar_line_light_theme_is_light(void);
 int test_menubar_line_rect_position(void);
 int test_menubar_line_rect_null_safe(void);
 
+/* test_ai_dock.c */
+int test_dock_can_open_no_session(void);
+int test_dock_can_open_no_channel(void);
+int test_dock_can_open_connected(void);
+int test_dock_pct_to_px_default(void);
+int test_dock_pct_to_px_clamp_min(void);
+int test_dock_pct_to_px_clamp_max(void);
+int test_dock_pct_to_px_zero_client(void);
+int test_dock_clamp_width_within_range(void);
+int test_dock_clamp_width_too_small(void);
+int test_dock_clamp_width_too_large(void);
+int test_dock_terminal_width_no_panel(void);
+int test_dock_terminal_width_with_panel(void);
+int test_dock_terminal_width_minimum(void);
+int test_dock_ease_in_zero(void);
+int test_dock_ease_in_one(void);
+int test_dock_ease_in_half(void);
+int test_dock_ease_in_clamp(void);
+int test_dock_anim_width_start(void);
+int test_dock_anim_width_end(void);
+int test_dock_anim_width_mid(void);
+int test_dock_lerp_open_start(void);
+int test_dock_lerp_open_end(void);
+int test_dock_lerp_open_mid(void);
+int test_dock_lerp_close_start(void);
+int test_dock_lerp_close_end(void);
+int test_dock_lerp_close_mid(void);
+int test_dock_lerp_close_quarter(void);
+int test_dock_lerp_resize(void);
+int test_dock_splitter_hit_inside(void);
+int test_dock_splitter_hit_outside(void);
+int test_dock_splitter_hit_above_tabs(void);
+int test_dock_chat_layout_normal(void);
+int test_dock_chat_layout_tiny_window(void);
+int test_dock_chat_layout_with_approval(void);
+int test_dock_initial_cols_no_panel(void);
+int test_dock_initial_cols_with_panel(void);
+int test_dock_initial_cols_zero_char_width(void);
+
 /* test_app_font.c */
 int test_app_font_sizes_count(void);
 int test_app_font_sizes_ascending(void);
@@ -866,6 +939,20 @@ int test_color_rgb_black(void);
 int test_color_rgb_white(void);
 int test_color_sgr_default_fg(void);
 int test_color_sgr_default_bg(void);
+
+/* test_cursor_scroll.c */
+int test_cursor_visible_at_bottom(void);
+int test_cursor_hidden_when_scrolled(void);
+int test_cursor_hidden_when_scrolled_far(void);
+int test_cursor_hidden_when_invisible(void);
+int test_cursor_hidden_invisible_and_scrolled(void);
+int test_cell_is_cursor_at_position(void);
+int test_cell_not_cursor_wrong_row(void);
+int test_cell_not_cursor_wrong_col(void);
+int test_cell_not_cursor_when_scrolled(void);
+int test_cell_not_cursor_when_invisible(void);
+int test_cell_not_cursor_scrolled_and_invisible(void);
+int test_cursor_row_zero(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -998,6 +1085,9 @@ int main(void) {
     failed += test_config_load_unknown_fields();
     failed += test_config_load_out_of_range();
     failed += test_config_roundtrip_all_fields();
+    failed += test_config_default_ai_font();
+    failed += test_config_roundtrip_ai_font();
+    failed += test_config_validate_empty_ai_font();
 
     /* Session Manager */
     failed += test_profile_struct();
@@ -1395,6 +1485,20 @@ int main(void) {
     failed += test_ai_cmd_write_append_to_file();
     failed += test_ai_cmd_write_stderr_to_file();
 
+    printf("\n--- Network device commands ---\n");
+    failed += test_ai_cmd_write_configure_terminal();
+    failed += test_ai_cmd_write_conf_t();
+    failed += test_ai_cmd_write_configure_paloalto();
+    failed += test_ai_cmd_write_write_memory();
+    failed += test_ai_cmd_write_commit();
+    failed += test_ai_cmd_write_reload();
+    failed += test_ai_cmd_write_rollback();
+    failed += test_ai_cmd_write_erase();
+    failed += test_ai_cmd_write_execute();
+    failed += test_ai_cmd_readonly_show_running();
+    failed += test_ai_cmd_readonly_show_interfaces();
+    failed += test_ai_cmd_readonly_display_version();
+
     printf("\n--- AI Context ---\n");
     failed += test_ai_word_count_basic();
     failed += test_ai_word_count_multispace();
@@ -1467,6 +1571,17 @@ int main(void) {
     failed += test_inline_approval_save_restore_roundtrip();
     failed += test_inline_approval_deferred_multi_commands();
 
+    printf("\n--- Concurrent AI Sessions ---\n");
+    failed += test_session_state_busy_init_zero();
+    failed += test_session_state_busy_independent();
+    failed += test_session_state_concurrent_busy();
+    failed += test_session_state_stream_buffer_alloc_free();
+    failed += test_session_state_stream_thinking_accumulation();
+    failed += test_session_state_cleanup_on_close();
+    failed += test_session_state_switch_while_both_busy();
+    failed += test_session_state_switch_back_restores_stream();
+    failed += test_session_state_pending_cmds_per_session();
+
     printf("\n--- Edit Scroll ---\n");
     failed += test_edit_scroll_visible_basic();
     failed += test_edit_scroll_visible_rounding();
@@ -1498,6 +1613,17 @@ int main(void) {
     failed += test_wheel_accum_two_notches();
     failed += test_wheel_accum_zero_notch_size();
     failed += test_wheel_accum_null_accumulator();
+
+    printf("\n--- Scroll Needed ---\n");
+    failed += test_scroll_needed_overflow();
+    failed += test_scroll_needed_exact_fit();
+    failed += test_scroll_needed_fewer_lines();
+    failed += test_scroll_needed_one_over();
+    failed += test_scroll_needed_single_line();
+    failed += test_scroll_needed_zero_lines();
+    failed += test_scroll_needed_zero_height();
+    failed += test_scroll_needed_zero_line_height();
+    failed += test_scroll_needed_empty_zero_height();
 
     printf("\n--- Term Extract ---\n");
     failed += test_extract_empty_term();
@@ -1724,6 +1850,45 @@ int main(void) {
     failed += test_menubar_line_rect_position();
     failed += test_menubar_line_rect_null_safe();
 
+    printf("\n--- AI Dock ---\n");
+    failed += test_dock_can_open_no_session();
+    failed += test_dock_can_open_no_channel();
+    failed += test_dock_can_open_connected();
+    failed += test_dock_pct_to_px_default();
+    failed += test_dock_pct_to_px_clamp_min();
+    failed += test_dock_pct_to_px_clamp_max();
+    failed += test_dock_pct_to_px_zero_client();
+    failed += test_dock_clamp_width_within_range();
+    failed += test_dock_clamp_width_too_small();
+    failed += test_dock_clamp_width_too_large();
+    failed += test_dock_terminal_width_no_panel();
+    failed += test_dock_terminal_width_with_panel();
+    failed += test_dock_terminal_width_minimum();
+    failed += test_dock_ease_in_zero();
+    failed += test_dock_ease_in_one();
+    failed += test_dock_ease_in_half();
+    failed += test_dock_ease_in_clamp();
+    failed += test_dock_anim_width_start();
+    failed += test_dock_anim_width_end();
+    failed += test_dock_anim_width_mid();
+    failed += test_dock_lerp_open_start();
+    failed += test_dock_lerp_open_end();
+    failed += test_dock_lerp_open_mid();
+    failed += test_dock_lerp_close_start();
+    failed += test_dock_lerp_close_end();
+    failed += test_dock_lerp_close_mid();
+    failed += test_dock_lerp_close_quarter();
+    failed += test_dock_lerp_resize();
+    failed += test_dock_splitter_hit_inside();
+    failed += test_dock_splitter_hit_outside();
+    failed += test_dock_splitter_hit_above_tabs();
+    failed += test_dock_chat_layout_normal();
+    failed += test_dock_chat_layout_tiny_window();
+    failed += test_dock_chat_layout_with_approval();
+    failed += test_dock_initial_cols_no_panel();
+    failed += test_dock_initial_cols_with_panel();
+    failed += test_dock_initial_cols_zero_char_width();
+
     printf("\n--- App Font ---\n");
     failed += test_app_font_sizes_count();
     failed += test_app_font_sizes_ascending();
@@ -1757,6 +1922,20 @@ int main(void) {
     failed += test_sel_extract_backward_selection();
     failed += test_sel_extract_single_char();
     failed += test_sel_extract_includes_last_char();
+
+    /* test_cursor_scroll.c */
+    failed += test_cursor_visible_at_bottom();
+    failed += test_cursor_hidden_when_scrolled();
+    failed += test_cursor_hidden_when_scrolled_far();
+    failed += test_cursor_hidden_when_invisible();
+    failed += test_cursor_hidden_invisible_and_scrolled();
+    failed += test_cell_is_cursor_at_position();
+    failed += test_cell_not_cursor_wrong_row();
+    failed += test_cell_not_cursor_wrong_col();
+    failed += test_cell_not_cursor_when_scrolled();
+    failed += test_cell_not_cursor_when_invisible();
+    failed += test_cell_not_cursor_scrolled_and_invisible();
+    failed += test_cursor_row_zero();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

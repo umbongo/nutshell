@@ -9,6 +9,7 @@
 #include "ui_theme.h"
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
+#include "../core/app_font.h"
 
 /* ---- Control IDs -------------------------------------------------------- */
 
@@ -28,7 +29,7 @@ typedef struct {
     COLORREF  bg;
     HBRUSH    hBgBrush;
     HFONT     hTermFont;    /* terminal font for text area */
-    HFONT     hDlgFont;     /* Cascadia Code 9pt for labels/buttons */
+    HFONT     hDlgFont;     /* Inter 9pt for labels/buttons */
     HWND      hSummary;
     HWND      hEdit;
     HWND      hBtnPaste;
@@ -229,7 +230,7 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
             nd->hDlgFont = CreateFont(
                 h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, "Cascadia Code");
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
             if (nd->hDlgFont)
                 EnumChildWindows(hwnd, SetFontCb, (LPARAM)nd->hDlgFont);
         }

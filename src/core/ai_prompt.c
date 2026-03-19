@@ -440,6 +440,11 @@ static int is_write_command(const char *word, size_t len)
         "tar", "zip", "unzip", "gzip", "gunzip", "bzip2",
         "make", "cmake", "gcc", "g++", "cc",
         "docker", "podman", "kubectl",
+        /* Network device config commands (Cisco, Aruba, Palo Alto, Juniper, Fortinet) */
+        "configure", "conf",
+        "write", "commit", "rollback",
+        "reload", "erase",
+        "execute",
         NULL
     };
 
@@ -530,6 +535,8 @@ const char *ai_provider_url(const char *provider)
         return "https://api.anthropic.com/v1/messages";
     if (strcmp(provider, "moonshot") == 0)
         return "https://api.moonshot.ai/v1/chat/completions";
+    if (strcmp(provider, "gemini") == 0)
+        return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
     return NULL;
 }
@@ -542,6 +549,7 @@ const char *ai_provider_model(const char *provider)
     if (strcmp(provider, "openai") == 0)   return "gpt-4o";
     if (strcmp(provider, "anthropic") == 0) return "claude-sonnet-4-6";
     if (strcmp(provider, "moonshot") == 0)  return "kimi-k2";
+    if (strcmp(provider, "gemini") == 0)   return "gemini-2.5-flash";
 
     return NULL;
 }
@@ -563,11 +571,15 @@ const char * const *ai_provider_models(const char *provider)
     static const char * const moonshot_models[] = {
         "kimi-k2", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", NULL
     };
+    static const char * const gemini_models[] = {
+        "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", NULL
+    };
 
     if (strcmp(provider, "deepseek") == 0)   return deepseek_models;
     if (strcmp(provider, "openai") == 0)     return openai_models;
     if (strcmp(provider, "anthropic") == 0)  return anthropic_models;
     if (strcmp(provider, "moonshot") == 0)   return moonshot_models;
+    if (strcmp(provider, "gemini") == 0)     return gemini_models;
 
     return NULL;
 }
@@ -584,6 +596,8 @@ const char *ai_provider_models_url(const char *provider)
         return "https://api.anthropic.com/v1/models";
     if (strcmp(provider, "moonshot") == 0)
         return "https://api.moonshot.ai/v1/models";
+    if (strcmp(provider, "gemini") == 0)
+        return "https://generativelanguage.googleapis.com/v1beta/openai/models";
 
     return NULL;
 }

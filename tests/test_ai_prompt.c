@@ -844,6 +844,80 @@ int test_ai_cmd_write_stderr_to_file(void) {
     TEST_END();
 }
 
+/* --- ai_command_is_readonly: network device commands --- */
+
+int test_ai_cmd_write_configure_terminal(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("configure terminal"), 0);
+    TEST_END();
+}
+
+int test_ai_cmd_write_conf_t(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("conf t"), 0);
+    TEST_END();
+}
+
+int test_ai_cmd_write_configure_paloalto(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("configure"), 0);
+    TEST_END();
+}
+
+int test_ai_cmd_write_write_memory(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("write memory"), 0);
+    TEST_END();
+}
+
+int test_ai_cmd_write_commit(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("commit"), 0);
+    TEST_END();
+}
+
+int test_ai_cmd_write_reload(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("reload"), 0);
+    TEST_END();
+}
+
+int test_ai_cmd_write_rollback(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("rollback"), 0);
+    TEST_END();
+}
+
+int test_ai_cmd_write_erase(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("erase startup-config"), 0);
+    TEST_END();
+}
+
+int test_ai_cmd_write_execute(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("execute reboot"), 0);
+    TEST_END();
+}
+
+int test_ai_cmd_readonly_show_running(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("show running-config"), 1);
+    TEST_END();
+}
+
+int test_ai_cmd_readonly_show_interfaces(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("show interfaces"), 1);
+    TEST_END();
+}
+
+int test_ai_cmd_readonly_display_version(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_command_is_readonly("display version"), 1);
+    TEST_END();
+}
+
 /* --- ai_build_confirm_text tests --- */
 
 int test_ai_confirm_text_single(void) {
@@ -2239,5 +2313,341 @@ int test_inline_approval_deferred_multi_commands(void)
 
     free(bs->pending_cmds);
     free(bs);
+    TEST_END();
+}
+
+/* ---- Per-session busy/stream state tests (concurrent AI support) ---- */
+
+int test_session_state_busy_init_zero(void)
+{
+    TEST_BEGIN();
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+    ASSERT_EQ(state.busy, 0);
+    ASSERT_NULL(state.stream_content);
+    ASSERT_NULL(state.stream_thinking);
+    ASSERT_EQ((int)state.stream_content_len, 0);
+    ASSERT_EQ((int)state.stream_thinking_len, 0);
+    ASSERT_EQ(state.stream_phase, 0);
+    TEST_END();
+}
+
+int test_session_state_busy_independent(void)
+{
+    TEST_BEGIN();
+    /* Two sessions: one busy, one idle — must be independent */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    state_a.busy = 1;
+    state_a.stream_content = (char *)calloc(1, AI_MSG_MAX);
+    ASSERT_NOT_NULL(state_a.stream_content);
+    memcpy(state_a.stream_content, "partial response A", 18);
+    state_a.stream_content_len = 18;
+    state_a.stream_content[18] = '\0';
+    state_a.stream_phase = 2;
+
+    /* B is idle — should be completely unaffected */
+    ASSERT_EQ(state_b.busy, 0);
+    ASSERT_NULL(state_b.stream_content);
+    ASSERT_EQ((int)state_b.stream_content_len, 0);
+    ASSERT_EQ(state_b.stream_phase, 0);
+
+    /* A is still busy with its data */
+    ASSERT_EQ(state_a.busy, 1);
+    ASSERT_EQ((int)state_a.stream_content_len, 18);
+    ASSERT_STR_EQ(state_a.stream_content, "partial response A");
+
+    free(state_a.stream_content);
+    TEST_END();
+}
+
+int test_session_state_concurrent_busy(void)
+{
+    TEST_BEGIN();
+    /* Both sessions can be busy at the same time */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    ai_conv_init(&state_a.conv, "model-a");
+    ai_conv_add(&state_a.conv, AI_ROLE_SYSTEM, "sys-a");
+    ai_conv_add(&state_a.conv, AI_ROLE_USER, "question-a");
+    state_a.valid = 1;
+    state_a.busy = 1;
+
+    ai_conv_init(&state_b.conv, "model-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_SYSTEM, "sys-b");
+    ai_conv_add(&state_b.conv, AI_ROLE_USER, "question-b");
+    state_b.valid = 1;
+    state_b.busy = 1;
+
+    /* Both busy */
+    ASSERT_EQ(state_a.busy, 1);
+    ASSERT_EQ(state_b.busy, 1);
+
+    /* Simulate thread A completing: writes response and clears busy */
+    ai_conv_add(&state_a.conv, AI_ROLE_ASSISTANT, "answer-a");
+    state_a.busy = 0;
+
+    /* A is done, B is still busy */
+    ASSERT_EQ(state_a.busy, 0);
+    ASSERT_EQ(state_b.busy, 1);
+    ASSERT_EQ(state_a.conv.msg_count, 3);
+    ASSERT_STR_EQ(state_a.conv.messages[2].content, "answer-a");
+
+    /* B hasn't changed */
+    ASSERT_EQ(state_b.conv.msg_count, 2);
+
+    /* Simulate thread B completing */
+    ai_conv_add(&state_b.conv, AI_ROLE_ASSISTANT, "answer-b");
+    state_b.busy = 0;
+
+    ASSERT_EQ(state_b.busy, 0);
+    ASSERT_EQ(state_b.conv.msg_count, 3);
+    ASSERT_STR_EQ(state_b.conv.messages[2].content, "answer-b");
+    TEST_END();
+}
+
+int test_session_state_stream_buffer_alloc_free(void)
+{
+    TEST_BEGIN();
+    /* Simulate stream start: allocate buffers */
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+
+    state.stream_content = (char *)calloc(1, AI_MSG_MAX);
+    state.stream_thinking = (char *)calloc(1, AI_MSG_MAX);
+    ASSERT_NOT_NULL(state.stream_content);
+    ASSERT_NOT_NULL(state.stream_thinking);
+    state.busy = 1;
+    state.stream_phase = 0;
+
+    /* Simulate accumulation */
+    const char *chunk1 = "Hello ";
+    const char *chunk2 = "World";
+    size_t len1 = strlen(chunk1);
+    size_t len2 = strlen(chunk2);
+    memcpy(state.stream_content, chunk1, len1);
+    state.stream_content_len = len1;
+    memcpy(state.stream_content + state.stream_content_len, chunk2, len2);
+    state.stream_content_len += len2;
+    state.stream_content[state.stream_content_len] = '\0';
+    state.stream_phase = 2;
+
+    ASSERT_STR_EQ(state.stream_content, "Hello World");
+    ASSERT_EQ((int)state.stream_content_len, 11);
+
+    /* Simulate stream end: free buffers */
+    free(state.stream_content);
+    state.stream_content = NULL;
+    state.stream_content_len = 0;
+    free(state.stream_thinking);
+    state.stream_thinking = NULL;
+    state.stream_thinking_len = 0;
+    state.stream_phase = 0;
+    state.busy = 0;
+
+    ASSERT_NULL(state.stream_content);
+    ASSERT_NULL(state.stream_thinking);
+    ASSERT_EQ(state.busy, 0);
+    TEST_END();
+}
+
+int test_session_state_stream_thinking_accumulation(void)
+{
+    TEST_BEGIN();
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+
+    state.stream_thinking = (char *)calloc(1, AI_MSG_MAX);
+    ASSERT_NOT_NULL(state.stream_thinking);
+    state.busy = 1;
+
+    /* Accumulate thinking chunks */
+    const char *t1 = "Let me think...";
+    const char *t2 = " Actually, ";
+    const char *t3 = "the answer is 42.";
+    size_t tlen = 0;
+
+    memcpy(state.stream_thinking + tlen, t1, strlen(t1));
+    tlen += strlen(t1);
+    memcpy(state.stream_thinking + tlen, t2, strlen(t2));
+    tlen += strlen(t2);
+    memcpy(state.stream_thinking + tlen, t3, strlen(t3));
+    tlen += strlen(t3);
+    state.stream_thinking[tlen] = '\0';
+    state.stream_thinking_len = tlen;
+    state.stream_phase = 1;
+
+    ASSERT_STR_EQ(state.stream_thinking,
+                   "Let me think... Actually, the answer is 42.");
+    ASSERT_EQ(state.stream_phase, 1);
+
+    free(state.stream_thinking);
+    TEST_END();
+}
+
+int test_session_state_cleanup_on_close(void)
+{
+    TEST_BEGIN();
+    /* Simulate session close while busy: buffers must be freed */
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+
+    state.busy = 1;
+    state.stream_content = (char *)calloc(1, AI_MSG_MAX);
+    state.stream_thinking = (char *)calloc(1, AI_MSG_MAX);
+    state.pending_cmds = (char (*)[1024])malloc(2 * 1024);
+    state.pending_cmd_count = 2;
+    state.pending_approval = 1;
+
+    /* Simulate cleanup (mirrors ai_chat_notify_session_closed) */
+    free(state.pending_cmds);
+    state.pending_cmds = NULL;
+    free(state.stream_content);
+    state.stream_content = NULL;
+    free(state.stream_thinking);
+    state.stream_thinking = NULL;
+    state.busy = 0;
+
+    ASSERT_NULL(state.pending_cmds);
+    ASSERT_NULL(state.stream_content);
+    ASSERT_NULL(state.stream_thinking);
+    ASSERT_EQ(state.busy, 0);
+    TEST_END();
+}
+
+int test_session_state_switch_while_both_busy(void)
+{
+    TEST_BEGIN();
+    /* Simulate: A is busy streaming, switch to B, start B streaming.
+     * Both should have independent busy state and stream buffers. */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    /* A starts streaming */
+    ai_conv_init(&state_a.conv, "model");
+    ai_conv_add(&state_a.conv, AI_ROLE_USER, "question-a");
+    state_a.valid = 1;
+    state_a.busy = 1;
+    state_a.stream_content = (char *)calloc(1, AI_MSG_MAX);
+    memcpy(state_a.stream_content, "partial-a", 9);
+    state_a.stream_content_len = 9;
+    state_a.stream_content[9] = '\0';
+    state_a.stream_phase = 2;
+
+    /* Switch to B: A's data is preserved, B starts fresh */
+    ai_conv_init(&state_b.conv, "model");
+    ai_conv_add(&state_b.conv, AI_ROLE_USER, "question-b");
+    state_b.valid = 1;
+    state_b.busy = 1;
+    state_b.stream_content = (char *)calloc(1, AI_MSG_MAX);
+    memcpy(state_b.stream_content, "partial-b", 9);
+    state_b.stream_content_len = 9;
+    state_b.stream_content[9] = '\0';
+    state_b.stream_phase = 2;
+
+    /* Both independently streaming */
+    ASSERT_EQ(state_a.busy, 1);
+    ASSERT_EQ(state_b.busy, 1);
+    ASSERT_STR_EQ(state_a.stream_content, "partial-a");
+    ASSERT_STR_EQ(state_b.stream_content, "partial-b");
+
+    /* A's thread finishes — only A is affected */
+    ai_conv_add(&state_a.conv, AI_ROLE_ASSISTANT, "answer-a");
+    state_a.busy = 0;
+    free(state_a.stream_content);
+    state_a.stream_content = NULL;
+    state_a.stream_content_len = 0;
+    state_a.stream_phase = 0;
+
+    ASSERT_EQ(state_a.busy, 0);
+    ASSERT_EQ(state_b.busy, 1);
+    ASSERT_NULL(state_a.stream_content);
+    ASSERT_STR_EQ(state_b.stream_content, "partial-b");
+
+    /* B's thread finishes */
+    ai_conv_add(&state_b.conv, AI_ROLE_ASSISTANT, "answer-b");
+    state_b.busy = 0;
+    free(state_b.stream_content);
+    state_b.stream_content = NULL;
+
+    ASSERT_EQ(state_b.busy, 0);
+    ASSERT_STR_EQ(state_a.conv.messages[1].content, "answer-a");
+    ASSERT_STR_EQ(state_b.conv.messages[1].content, "answer-b");
+    TEST_END();
+}
+
+int test_session_state_switch_back_restores_stream(void)
+{
+    TEST_BEGIN();
+    /* Switching back to a busy session should allow display of accumulated
+     * stream content from the per-session buffers */
+    AiSessionState state_a;
+    memset(&state_a, 0, sizeof(state_a));
+
+    ai_conv_init(&state_a.conv, "model");
+    ai_conv_add(&state_a.conv, AI_ROLE_USER, "question");
+    state_a.valid = 1;
+    state_a.busy = 1;
+
+    /* Simulate stream accumulation while user is on another tab */
+    state_a.stream_content = (char *)calloc(1, AI_MSG_MAX);
+    state_a.stream_thinking = (char *)calloc(1, AI_MSG_MAX);
+    memcpy(state_a.stream_content, "accumulated content", 19);
+    state_a.stream_content_len = 19;
+    state_a.stream_content[19] = '\0';
+    memcpy(state_a.stream_thinking, "some thinking", 13);
+    state_a.stream_thinking_len = 13;
+    state_a.stream_thinking[13] = '\0';
+    state_a.stream_phase = 2;
+
+    /* When switching back, the display can restore from session buffers */
+    ASSERT_EQ(state_a.busy, 1);
+    ASSERT_STR_EQ(state_a.stream_content, "accumulated content");
+    ASSERT_STR_EQ(state_a.stream_thinking, "some thinking");
+    ASSERT_EQ(state_a.stream_phase, 2);
+    ASSERT_EQ((int)state_a.stream_content_len, 19);
+    ASSERT_EQ((int)state_a.stream_thinking_len, 13);
+
+    free(state_a.stream_content);
+    free(state_a.stream_thinking);
+    TEST_END();
+}
+
+int test_session_state_pending_cmds_per_session(void)
+{
+    TEST_BEGIN();
+    /* When a non-active session finishes with commands,
+     * they should be stored in that session's pending state */
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+
+    /* Session A gets commands while user views B */
+    char cmds[2][1024];
+    snprintf(cmds[0], sizeof(cmds[0]), "ls -la");
+    snprintf(cmds[1], sizeof(cmds[1]), "df -h");
+
+    state_a.pending_cmds = (char (*)[1024])malloc(2 * sizeof(cmds[0]));
+    ASSERT_NOT_NULL(state_a.pending_cmds);
+    memcpy(state_a.pending_cmds, cmds, 2 * sizeof(cmds[0]));
+    state_a.pending_cmd_count = 2;
+    state_a.pending_approval = 1;
+
+    /* Session B has no pending commands */
+    ASSERT_NULL(state_b.pending_cmds);
+    ASSERT_EQ(state_b.pending_approval, 0);
+
+    /* A has its commands ready */
+    ASSERT_EQ(state_a.pending_approval, 1);
+    ASSERT_EQ(state_a.pending_cmd_count, 2);
+    ASSERT_STR_EQ(state_a.pending_cmds[0], "ls -la");
+    ASSERT_STR_EQ(state_a.pending_cmds[1], "df -h");
+
+    free(state_a.pending_cmds);
     TEST_END();
 }

@@ -269,3 +269,68 @@ int test_wheel_accum_null_accumulator(void) {
     ASSERT_EQ(edit_scroll_wheel_accum(120, 120, 3, NULL), 0);
     TEST_END();
 }
+
+/* --- edit_scroll_needed tests --- */
+
+int test_scroll_needed_overflow(void) {
+    TEST_BEGIN();
+    /* 50 lines, 200px edit, 16px line = 12 visible -> scrollbar needed */
+    ASSERT_EQ(edit_scroll_needed(50, 200, 16), 1);
+    TEST_END();
+}
+
+int test_scroll_needed_exact_fit(void) {
+    TEST_BEGIN();
+    /* 10 lines, 160px edit, 16px line = exactly 10 visible -> not needed */
+    ASSERT_EQ(edit_scroll_needed(10, 160, 16), 0);
+    TEST_END();
+}
+
+int test_scroll_needed_fewer_lines(void) {
+    TEST_BEGIN();
+    /* 5 lines, 200px edit, 16px line = 12 visible -> not needed */
+    ASSERT_EQ(edit_scroll_needed(5, 200, 16), 0);
+    TEST_END();
+}
+
+int test_scroll_needed_one_over(void) {
+    TEST_BEGIN();
+    /* 11 lines, 160px edit, 16px line = 10 visible -> needed */
+    ASSERT_EQ(edit_scroll_needed(11, 160, 16), 1);
+    TEST_END();
+}
+
+int test_scroll_needed_single_line(void) {
+    TEST_BEGIN();
+    /* 1 line, 200px edit -> not needed */
+    ASSERT_EQ(edit_scroll_needed(1, 200, 16), 0);
+    TEST_END();
+}
+
+int test_scroll_needed_zero_lines(void) {
+    TEST_BEGIN();
+    /* 0 lines -> not needed */
+    ASSERT_EQ(edit_scroll_needed(0, 200, 16), 0);
+    TEST_END();
+}
+
+int test_scroll_needed_zero_height(void) {
+    TEST_BEGIN();
+    /* Zero edit height: degenerate -> needed (can't show anything) */
+    ASSERT_EQ(edit_scroll_needed(5, 0, 16), 1);
+    TEST_END();
+}
+
+int test_scroll_needed_zero_line_height(void) {
+    TEST_BEGIN();
+    /* Zero line height: degenerate -> needed (can't compute visible) */
+    ASSERT_EQ(edit_scroll_needed(5, 200, 0), 1);
+    TEST_END();
+}
+
+int test_scroll_needed_empty_zero_height(void) {
+    TEST_BEGIN();
+    /* Zero lines and zero height -> not needed */
+    ASSERT_EQ(edit_scroll_needed(0, 0, 16), 0);
+    TEST_END();
+}

@@ -33,6 +33,10 @@ int edit_scroll_line_delta(int target_pos, int current_first_visible);
 int edit_scroll_wheel_delta(int wheel_delta, int notch_size,
                             int lines_per_notch);
 
+/* Returns 1 if a scrollbar is needed (total_lines > visible lines), 0 otherwise.
+ * Degenerate cases (zero height/line_height with content) return 1. */
+int edit_scroll_needed(int total_lines, int edit_height, int line_height);
+
 /* Accumulator-based wheel delta for high-precision mice/trackpads.
  * Collects sub-notch deltas across events and only returns a scroll
  * value once a full notch threshold is crossed.  Remainder is kept

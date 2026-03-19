@@ -1,7 +1,7 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION "0.9.1"
+#define APP_VERSION "0.9.4"
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -14,6 +14,7 @@
 #define IDM_FILE_DISCONNECT   2003
 #define IDM_FILE_LOG_START    2004
 #define IDM_FILE_LOG_STOP     2005
+#define IDM_FILE_SAVE_AI      2007
 #define IDM_FILE_EXIT         2006
 #define IDM_EDIT_COPY         2010
 #define IDM_EDIT_PASTE        2011
@@ -21,6 +22,8 @@
 #define IDM_EDIT_SETTINGS     2013
 #define IDM_VIEW_AI_CHAT      2020
 #define IDM_VIEW_FULLSCREEN   2021
+#define IDM_VIEW_AI_UNDOCK    2022
+#define IDM_HELP_GUIDE        2029
 #define IDM_ABOUT             2030
 
 /* Session list panel */

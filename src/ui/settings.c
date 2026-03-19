@@ -30,6 +30,7 @@
 #define IDC_AI_REFRESH      1019
 #define IDC_SCHEME_COMBO    1020
 #define IDC_AI_SYSTEM_NOTES 1021
+#define IDC_AI_FONT_COMBO   1022
 #define WM_AI_MODELS_DONE   (WM_USER + 200)
 #define IDT_SYSNOTES_SCROLL 51  /* timer for AI instructions scroll sync */
 
@@ -62,13 +63,40 @@ static const char * const k_fonts[] = {
 /* ---- AI provider list --------------------------------------------------- */
 
 static const char * const k_ai_providers[] = {
-    "deepseek",
-    "openai",
     "anthropic",
+    "openai",
+    "gemini",
     "moonshot",
+    "deepseek",
     "custom",
 };
 #define NUM_AI_PROVIDERS ((int)(sizeof(k_ai_providers) / sizeof(k_ai_providers[0])))
+
+/* ---- Font availability check -------------------------------------------- */
+
+/* EnumFontFamiliesExA callback: sets *(int*)lParam = 1 if the font exists. */
+static int CALLBACK font_exists_cb(const LOGFONTA *lf, const TEXTMETRICA *tm,
+                                    DWORD type, LPARAM lParam)
+{
+    (void)lf; (void)tm; (void)type;
+    *(int *)lParam = 1;
+    return 0; /* stop enumeration after first match */
+}
+
+/* Return non-zero if a font family is installed on this system. */
+static int font_is_installed(const char *face_name)
+{
+    int found = 0;
+    HDC hdc = GetDC(NULL);
+    LOGFONTA lf;
+    memset(&lf, 0, sizeof(lf));
+    strncpy(lf.lfFaceName, face_name, LF_FACESIZE - 1);
+    lf.lfCharSet = DEFAULT_CHARSET;
+    EnumFontFamiliesExA(hdc, &lf, (FONTENUMPROCA)font_exists_cb,
+                        (LPARAM)&found, 0);
+    ReleaseDC(NULL, hdc);
+    return found;
+}
 
 /* ---- Dialog state ------------------------------------------------------- */
 
@@ -250,24 +278,39 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         int y = S(10);  /* current row y position */
         int rh = S(28); /* row height */
 
-        /* Row 1: Font */
-        make_label(hwnd, "Font:", lx, y, lw, nd->dpi);
+        /* Row 1: Terminal Font */
+        make_label(hwnd, "Terminal Font:", lx, y, lw, nd->dpi);
         {
             HWND hCombo = make_combo(hwnd, ex, y, ew, S(200), (HMENU)IDC_FONT_COMBO);
-            for (int i = 0; i < NUM_FONTS; i++)
-                SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)k_fonts[i]);
-            int sel = 0;
+            int sel = 0, idx = 0;
             for (int i = 0; i < NUM_FONTS; i++) {
-                if (_stricmp(nd->cfg->settings.font, k_fonts[i]) == 0) {
-                    sel = i;
-                    break;
-                }
+                if (!font_is_installed(k_fonts[i])) continue;
+                SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)k_fonts[i]);
+                if (_stricmp(nd->cfg->settings.font, k_fonts[i]) == 0)
+                    sel = idx;
+                idx++;
             }
             SendMessage(hCombo, CB_SETCURSEL, (WPARAM)sel, 0);
         }
         y += rh;
 
-        /* Row 2: Font size */
+        /* Row 2: AI Assist Font */
+        make_label(hwnd, "AI Assist Font:", lx, y, lw, nd->dpi);
+        {
+            HWND hCombo = make_combo(hwnd, ex, y, ew, S(200), (HMENU)IDC_AI_FONT_COMBO);
+            int sel = 0, idx = 0;
+            for (int i = 0; i < NUM_FONTS; i++) {
+                if (!font_is_installed(k_fonts[i])) continue;
+                SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)k_fonts[i]);
+                if (_stricmp(nd->cfg->settings.ai_font, k_fonts[i]) == 0)
+                    sel = idx;
+                idx++;
+            }
+            SendMessage(hCombo, CB_SETCURSEL, (WPARAM)sel, 0);
+        }
+        y += rh;
+
+        /* Row 3: Font size */
         make_label(hwnd, "Font Size:", lx, y, lw, nd->dpi);
         {
             HWND hSz = make_combo(hwnd, ex, y, S(80), S(180), (HMENU)IDC_FONTSIZE_COMBO);
@@ -392,12 +435,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             CreateWindowW(L"BUTTON", L"\x21BB",
                 WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
                 ex + model_w + S(5), y, S(25), S(22), hwnd, (HMENU)IDC_AI_REFRESH, NULL, NULL);
-            /* Show saved model as text but leave dropdown empty until refreshed */
+            /* Show saved model if one was previously chosen; otherwise leave
+             * empty until the user presses refresh */
             const char *cur_model = nd->cfg->settings.ai_custom_model;
-            if (!cur_model[0]) {
-                const char *def = ai_provider_model(nd->cfg->settings.ai_provider);
-                if (def) cur_model = def;
-            }
             if (cur_model && cur_model[0])
                 SetWindowText(hModel, cur_model);
         }
@@ -583,6 +623,19 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         }
         break;
 
+    case WM_MOUSEWHEEL:
+        if (d) {
+            HWND hEdit = GetDlgItem(hwnd, IDC_AI_SYSTEM_NOTES);
+            if (hEdit) {
+                int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
+                int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
+                SendMessage(hEdit, EM_LINESCROLL, 0, (LPARAM)scroll);
+                sys_notes_sync_scroll(hwnd, d);
+            }
+            return 0;
+        }
+        break;
+
     case WM_TIMER:
         if (wParam == IDT_SYSNOTES_SCROLL && d) {
             sys_notes_sync_scroll(hwnd, d);
@@ -647,11 +700,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                     ShowWindow(GetDlgItem(hwnd, IDC_AI_CUSTOM_URL), sw);
                     HWND hUrlLbl = FindWindowEx(hwnd, NULL, "STATIC", "AI Base URL:");
                     if (hUrlLbl) ShowWindow(hUrlLbl, sw);
-                    /* Set default model text; leave dropdown empty until refreshed */
+                    /* Clear model — user must press refresh to populate */
                     HWND hMdl = GetDlgItem(hwnd, IDC_AI_CUSTOM_MODEL);
                     SendMessage(hMdl, CB_RESETCONTENT, 0, 0);
-                    const char *def = ai_provider_model(k_ai_providers[sel]);
-                    SetWindowText(hMdl, def ? def : "");
+                    SetWindowText(hMdl, "");
                 }
             }
             break;
@@ -739,14 +791,20 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             if (!d) { DestroyWindow(hwnd); break; }
             Settings *s = &d->cfg->settings;
 
-            /* Font from combo */
+            /* Terminal font from combo */
             {
-                int sel = (int)SendDlgItemMessage(hwnd, IDC_FONT_COMBO,
-                                                  CB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel < NUM_FONTS) {
-                    strncpy(s->font, k_fonts[sel], sizeof(s->font) - 1);
-                    s->font[sizeof(s->font) - 1] = '\0';
-                }
+                char buf[CFG_STR_MAX];
+                GetDlgItemText(hwnd, IDC_FONT_COMBO, buf, (int)sizeof(buf));
+                if (buf[0])
+                    snprintf(s->font, sizeof(s->font), "%s", buf);
+            }
+
+            /* AI Assist font from combo */
+            {
+                char buf[CFG_STR_MAX];
+                GetDlgItemText(hwnd, IDC_AI_FONT_COMBO, buf, (int)sizeof(buf));
+                if (buf[0])
+                    snprintf(s->ai_font, sizeof(s->ai_font), "%s", buf);
             }
 
             /* Font size from discrete combo */
@@ -878,7 +936,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(400, pdpi, 96), MulDiv(686, pdpi, 96),
+        MulDiv(400, pdpi, 96), MulDiv(714, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {

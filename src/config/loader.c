@@ -1,4 +1,5 @@
 #include "config.h"
+#include "ai_prompt.h"
 #include "app_font.h"
 #include "ui_theme.h"
 #include "json_parser.h"
@@ -92,6 +93,9 @@ void settings_validate(Settings *s)
     if (s->font[0] == '\0') {
         (void)snprintf(s->font, sizeof(s->font), "%s", APP_FONT_DEFAULT);
     }
+    if (s->ai_font[0] == '\0') {
+        (void)snprintf(s->ai_font, sizeof(s->ai_font), "%s", APP_FONT_AI_DEFAULT);
+    }
     s->font_size = app_font_snap_size(s->font_size);
     if (s->scrollback_lines < 100)    s->scrollback_lines = 100;
     if (s->scrollback_lines > 50000)  s->scrollback_lines = 50000;
@@ -103,6 +107,7 @@ void config_default_settings(Settings *s)
 {
     memset(s, 0, sizeof(*s));
     field_copy(s->font,                 sizeof(s->font),                 APP_FONT_DEFAULT);
+    field_copy(s->ai_font,              sizeof(s->ai_font),              APP_FONT_AI_DEFAULT);
     s->font_size        = APP_FONT_DEFAULT_SIZE;
     s->scrollback_lines = 10000;
     s->paste_delay_ms   = 350;
@@ -112,7 +117,7 @@ void config_default_settings(Settings *s)
     field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#E0E0E0");
     field_copy(s->background_colour,    sizeof(s->background_colour),    "#121212");
     field_copy(s->colour_scheme,        sizeof(s->colour_scheme),        "Onyx Synapse");
-    field_copy(s->ai_provider,          sizeof(s->ai_provider),          "deepseek");
+    field_copy(s->ai_provider,          sizeof(s->ai_provider),          AI_DEFAULT_PROVIDER);
     /* ai_api_key defaults to empty (already zeroed by memset) */
 }
 
@@ -184,6 +189,9 @@ Config *config_load(const char *path)
 
         if ((sv = json_obj_str(jset, "font"))) {
             field_copy(s->font, sizeof(s->font), sv);
+        }
+        if ((sv = json_obj_str(jset, "ai_font"))) {
+            field_copy(s->ai_font, sizeof(s->ai_font), sv);
         }
         s->font_size = (int)json_obj_num(jset, "font_size",
                                          (double)s->font_size);
@@ -322,6 +330,9 @@ int config_save(const Config *cfg, const char *path)
     fputs("{\n  \"settings\": {\n", f);
     fputs("    \"font\": ", f);
     fprint_json_str(f, s->font);
+    fputs(",\n", f);
+    fputs("    \"ai_font\": ", f);
+    fprint_json_str(f, s->ai_font);
     fputs(",\n", f);
     fprintf(f, "    \"font_size\": %d,\n", s->font_size);
     fprintf(f, "    \"scrollback_lines\": %d,\n", s->scrollback_lines);

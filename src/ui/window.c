@@ -14,6 +14,7 @@
 #include "resource.h"
 #include "session_manager.h"
 #include "settings_dlg.h"
+#include "help_guide.h"
 #include "ssh_session.h"
 #include "ssh_pty.h"
 #include "ssh_io.h"
@@ -27,7 +28,10 @@
 #include "ui_theme.h"
 #include "custom_scrollbar.h"
 #include "menubar_line.h"
+#include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <dwmapi.h>
+
+static void hide_ai_panel(HWND parent);
 
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell v" APP_VERSION;
@@ -112,6 +116,19 @@ static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
 static HMENU create_app_menu(void);      /* forward declaration */
 
+/* ---- Docked AI panel state ---- */
+#include "ai_dock.h"
+static int g_ai_docked = 1;           /* 1=docked (default), 0=floating */
+static int g_ai_panel_width = 0;      /* current docked panel width in px, 0=closed */
+static int g_ai_target_width = 0;     /* animation target width */
+static int g_ai_last_width = 0;       /* remembered width for re-open (resets on app start) */
+static int g_ai_anim_from = 0;        /* animation start width (for close: current, open: 0) */
+static int g_ai_splitter_dragging = 0;
+static ULONGLONG g_ai_anim_start = 0;
+static int g_ai_reopen_after_connect = 0; /* reopen AI panel after first session connects */
+#define AI_ANIM_TIMER_ID  4
+#define AI_ANIM_INTERVAL  16           /* ~60fps */
+
 /* Invalidate only the terminal area (below the tab strip), not the tabs. */
 static void invalidate_terminal(HWND hwnd)
 {
@@ -172,6 +189,8 @@ static void free_session(Session *s) {
         if (s->ssh) ssh_session_free(s->ssh);
         if (s->session_log) fclose(s->session_log);
         free(s->ai_state.pending_cmds);
+        free(s->ai_state.stream_content);
+        free(s->ai_state.stream_thinking);
         term_free(s->term);
         free(s);
     }
@@ -230,7 +249,11 @@ static void on_tab_close(int index, void *user_data) {
 
     free_session(s);
     tabs_remove(g_hwndTabs, index);
-    
+
+    /* Auto-hide AI panel when no active session remains */
+    if (!g_active_session)
+        hide_ai_panel(GetParent(g_hwndTabs));
+
     /* Force repaint of terminal area after tab close */
     invalidate_terminal(GetParent(g_hwndTabs));
 }
@@ -557,7 +580,10 @@ static DWORD WINAPI connection_thread(LPVOID param)
 static void on_session_connect(const Profile *info) {
     RECT rc;
     GetClientRect(GetParent(g_hwndTabs), &rc);
-    int term_w = rc.right - g_left_margin;
+    int ai_w = 0;
+    if (g_ai_docked && g_hwndAiChat && IsWindowVisible(g_hwndAiChat))
+        ai_w = g_ai_panel_width;
+    int term_w = ai_dock_terminal_width(rc.right, ai_w, CSB_WIDTH, g_left_margin);
     int term_h = rc.bottom - g_tab_height;
     if (term_h < 1) term_h = 1;
 
@@ -566,6 +592,13 @@ static void on_session_connect(const Profile *info) {
     if (g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
         cols = term_w / g_renderer.charWidth;
         rows = term_h / g_renderer.charHeight;
+    }
+
+    /* First session: close AI panel during connection, reopen after */
+    if (g_session_list == NULL && g_hwndAiChat && IsWindow(g_hwndAiChat)
+        && IsWindowVisible(g_hwndAiChat)) {
+        hide_ai_panel(GetParent(g_hwndTabs));
+        g_ai_reopen_after_connect = 1;
     }
 
     /* Open the tab immediately so the user sees activity at once */
@@ -696,38 +729,106 @@ static void on_settings_clicked(void) {
     InvalidateRect(g_hwndTabs, NULL, TRUE);
 }
 
+/* Start the slide animation for the docked AI panel.
+ * Animates from the current panel width to target_w. */
+static void start_ai_panel_anim(HWND hwnd, int target_w)
+{
+    g_ai_anim_from = g_ai_panel_width;
+    g_ai_target_width = target_w;
+    g_ai_anim_start = GetTickCount64();
+    SetTimer(hwnd, AI_ANIM_TIMER_ID, AI_ANIM_INTERVAL, NULL);
+}
+
+/* Helper: trigger relayout */
+static void relayout_main(HWND hwnd)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    SendMessage(hwnd, WM_SIZE, SIZE_RESTORED,
+                MAKELPARAM(rc.right, rc.bottom));
+}
+
+static HWND create_ai_chat(HWND parent)
+{
+    return ai_chat_show(parent,
+                        g_config->settings.ai_api_key,
+                        g_config->settings.ai_provider,
+                        g_config->settings.ai_custom_url,
+                        g_config->settings.ai_custom_model,
+                        g_config->settings.paste_delay_ms,
+                        g_config->settings.font,
+                        g_config->settings.ai_font,
+                        g_config->settings.colour_scheme,
+                        g_active_session ? g_active_session->conn_profile.ai_notes : NULL,
+                        g_config->settings.ai_system_notes,
+                        g_active_session ? &g_active_session->ai_state : NULL,
+                        g_active_session ? g_active_session->conn_profile.name : NULL,
+                        g_ai_docked);
+}
+
+static void hide_ai_panel(HWND parent) {
+    if (!g_hwndAiChat || !IsWindow(g_hwndAiChat)) return;
+    if (g_ai_docked) {
+        g_ai_last_width = g_ai_panel_width;
+        /* Animate closed — ShowWindow(SW_HIDE) happens when anim finishes */
+        start_ai_panel_anim(parent, 0);
+    } else {
+        ShowWindow(g_hwndAiChat, SW_HIDE);
+    }
+}
+
 static void on_ai_clicked(void) {
-    if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
-        /* Already open — toggle: hide if visible, show if hidden */
-        if (IsWindowVisible(g_hwndAiChat)) {
-            ShowWindow(g_hwndAiChat, SW_HIDE);
+    HWND parent = GetParent(g_hwndTabs);
+    int has_session = g_active_session && g_active_session->channel;
+
+    /* No connected session — block open, allow hide */
+    if (!has_session) {
+        if (g_hwndAiChat && IsWindow(g_hwndAiChat)
+            && IsWindowVisible(g_hwndAiChat)) {
+            hide_ai_panel(parent);
         } else {
-            ShowWindow(g_hwndAiChat, SW_SHOW);
-            SetForegroundWindow(g_hwndAiChat);
+            MessageBoxA(parent,
+                "No active SSH session.\nPlease connect to a session first.",
+                "AI Assist", MB_OK | MB_ICONINFORMATION);
+        }
+        return;
+    }
+
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
+        if (g_ai_docked) {
+            /* Docked toggle: hide and reclaim terminal space */
+            if (IsWindowVisible(g_hwndAiChat)) {
+                hide_ai_panel(parent);
+            } else {
+                ShowWindow(g_hwndAiChat, SW_SHOW);
+                RECT rc;
+                GetClientRect(parent, &rc);
+                int target = g_ai_last_width > 0
+                    ? g_ai_last_width
+                    : ai_dock_pct_to_px(rc.right, AI_DOCK_DEFAULT_PCT,
+                                        AI_DOCK_MIN_PCT, AI_DOCK_MAX_PCT);
+                start_ai_panel_anim(parent, target);
+            }
+        } else {
+            /* Floating toggle */
+            if (IsWindowVisible(g_hwndAiChat))
+                ShowWindow(g_hwndAiChat, SW_HIDE);
+            else {
+                ShowWindow(g_hwndAiChat, SW_SHOW);
+                SetForegroundWindow(g_hwndAiChat);
+            }
         }
         return;
     }
 
     if (!g_config || g_config->settings.ai_api_key[0] == '\0') {
-        MessageBoxA(GetParent(g_hwndTabs),
+        MessageBoxA(parent,
             "No AI API key configured.\nPlease set one in Settings.",
             "AI Chat", MB_OK | MB_ICONINFORMATION);
         return;
     }
 
-    HWND parent = GetParent(g_hwndTabs);
-    g_hwndAiChat = ai_chat_show(parent,
-                                g_config->settings.ai_api_key,
-                                g_config->settings.ai_provider,
-                                g_config->settings.ai_custom_url,
-                                g_config->settings.ai_custom_model,
-                                g_config->settings.paste_delay_ms,
-                                g_config->settings.font,
-                                g_config->settings.colour_scheme,
-                                g_active_session ? g_active_session->conn_profile.ai_notes : NULL,
-                                g_config->settings.ai_system_notes,
-                                g_active_session ? &g_active_session->ai_state : NULL,
-                                g_active_session ? g_active_session->conn_profile.name : NULL);
+    g_hwndAiChat = create_ai_chat(parent);
 
     /* Set the active session if one exists */
     if (g_hwndAiChat && g_active_session) {
@@ -735,6 +836,40 @@ static void on_ai_clicked(void) {
                            g_active_session->term,
                            g_active_session->channel);
     }
+
+    if (g_ai_docked && g_hwndAiChat) {
+        RECT rc;
+        GetClientRect(parent, &rc);
+        int target = g_ai_last_width > 0
+            ? g_ai_last_width
+            : ai_dock_pct_to_px(rc.right, AI_DOCK_DEFAULT_PCT,
+                                AI_DOCK_MIN_PCT, AI_DOCK_MAX_PCT);
+        /* Give the window a proper initial size before showing it,
+         * so child controls are created/laid out at a valid size. */
+        int splitter = AI_DOCK_SPLITTER_W;
+        SetWindowPos(g_hwndAiChat, NULL,
+            rc.right - target + splitter, g_tab_height,
+            target - splitter, rc.bottom - g_tab_height,
+            SWP_NOZORDER);
+        ShowWindow(g_hwndAiChat, SW_SHOW);
+        start_ai_panel_anim(parent, target);
+    }
+}
+
+/* Toggle between docked and floating mode */
+static void on_ai_dock_toggle(HWND hwnd) {
+    g_ai_docked = !g_ai_docked;
+
+    /* Close current AI window (saves state via WM_DESTROY) */
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
+        ai_chat_close(g_hwndAiChat);
+        g_hwndAiChat = NULL;
+    }
+    g_ai_panel_width = 0;
+    relayout_main(hwnd);
+
+    /* Reopen in new mode */
+    on_ai_clicked();
 }
 
 static void on_status_click(int index, void *user_data, TabStatus status) {
@@ -986,6 +1121,8 @@ static void update_scrollbar(HWND hwnd)
     if (!g_active_session || !g_active_session->term) {
         csb_set_range(g_hwndScrollbar, 0, 0, 1);
         csb_set_pos(g_hwndScrollbar, 0);
+        if (IsWindowVisible(g_hwndScrollbar))
+            ShowWindow(g_hwndScrollbar, SW_HIDE);
         return;
     }
 
@@ -998,6 +1135,15 @@ static void update_scrollbar(HWND hwnd)
     int nMax = (total > 1) ? (total - 1) : 0;
     csb_set_range(g_hwndScrollbar, 0, nMax, rows);
     csb_set_pos(g_hwndScrollbar, nPos);
+
+    /* Auto show/hide: only display when content overflows */
+    if (total > rows) {
+        if (!IsWindowVisible(g_hwndScrollbar))
+            ShowWindow(g_hwndScrollbar, SW_SHOWNOACTIVATE);
+    } else {
+        if (IsWindowVisible(g_hwndScrollbar))
+            ShowWindow(g_hwndScrollbar, SW_HIDE);
+    }
     (void)hwnd;
 }
 
@@ -1147,6 +1293,8 @@ static HMENU create_app_menu(void)
     menu_add_item(hFile, IDM_FILE_LOG_START, "Start Logging");
     menu_add_item(hFile, IDM_FILE_LOG_STOP, "Stop Logging");
     menu_add_separator(hFile);
+    menu_add_item(hFile, IDM_FILE_SAVE_AI, "Save AI Chat...");
+    menu_add_separator(hFile);
     menu_add_item(hFile, IDM_FILE_EXIT, "Exit");
     menu_add_popup(hMenu, hFile, "File");
 
@@ -1159,11 +1307,14 @@ static HMENU create_app_menu(void)
     menu_add_popup(hMenu, hEdit, "Edit");
 
     HMENU hView = CreatePopupMenu();
-    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist");
+    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist\tCtrl+Space");
+    menu_add_item(hView, IDM_VIEW_AI_UNDOCK, "Undock AI Assist");
     menu_add_item(hView, IDM_VIEW_FULLSCREEN, "Fullscreen\tF11");
     menu_add_popup(hMenu, hView, "View");
 
     HMENU hHelp = CreatePopupMenu();
+    menu_add_item(hHelp, IDM_HELP_GUIDE, "User Guide");
+    menu_add_separator(hHelp);
     menu_add_item(hHelp, IDM_ABOUT, "About");
     menu_add_popup(hMenu, hHelp, "Help");
 
@@ -1174,6 +1325,7 @@ static HMENU create_app_menu(void)
         menu_set_bg(hFile, bg);
         menu_set_bg(hEdit, bg);
         menu_set_bg(hView, bg);
+        menu_set_bg(hHelp, bg);
     }
 
     return hMenu;
@@ -1277,7 +1429,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
             renderer_init(&g_renderer,
                           g_config->settings.font[0]
-                              ? g_config->settings.font : "Cascadia Code",
+                              ? g_config->settings.font : APP_FONT_DEFAULT,
                           g_config->settings.font_size > 0
                               ? g_config->settings.font_size : 12,
                           get_window_dpi(hwnd));
@@ -1293,6 +1445,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
             PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
             return 0;
+
+        case WM_INITMENUPOPUP: {
+            /* Grey out "Save AI Chat..." when no content or panel hidden */
+            HMENU hBar = GetMenu(hwnd);
+            if (hBar) {
+                int has = g_hwndAiChat && IsWindow(g_hwndAiChat)
+                          && ai_chat_has_content(g_hwndAiChat);
+                EnableMenuItem(hBar, IDM_FILE_SAVE_AI,
+                               (UINT)(MF_BYCOMMAND
+                                      | (has ? MF_ENABLED : MF_GRAYED)));
+            }
+            break;
+        }
 
         case WM_COMMAND:
             switch (LOWORD(wParam)) {
@@ -1346,8 +1511,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 case IDM_EDIT_SETTINGS:
                     on_settings_clicked();
                     return 0;
+                case IDM_FILE_SAVE_AI:
+                    /* Forward to the AI chat's save button (IDC_CHAT_SAVE) */
+                    if (g_hwndAiChat && IsWindow(g_hwndAiChat))
+                        SendMessage(g_hwndAiChat, WM_COMMAND,
+                                    MAKEWPARAM(2010 /*IDC_CHAT_SAVE*/,
+                                               BN_CLICKED), 0);
+                    return 0;
                 case IDM_VIEW_AI_CHAT:
                     on_ai_clicked();
+                    return 0;
+                case IDM_VIEW_AI_UNDOCK:
+                    on_ai_dock_toggle(hwnd);
                     return 0;
                 case IDM_VIEW_FULLSCREEN: {
                     static WINDOWPLACEMENT wp_prev;
@@ -1378,6 +1553,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                     return 0;
                 }
+                case IDM_HELP_GUIDE:
+                    help_guide_show(hwnd, g_config->settings.colour_scheme);
+                    return 0;
                 case IDM_ABOUT:
                     MessageBoxA(hwnd,
                         "Nutshell SSH Client v" APP_VERSION
@@ -1501,6 +1679,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             int tidx = tabs_find(g_hwndTabs, s);
                             if (tidx >= 0)
                                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
+                            /* Auto-hide AI panel when the active session disconnects */
+                            if (s == g_active_session)
+                                hide_ai_panel(hwnd);
                         }
                         if (poll_rc > 0 || term_has_dirty_rows(s->term)) {
                             DWORD now = GetTickCount();
@@ -1535,6 +1716,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (needs_repaint) invalidate_terminal(hwnd);
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();
+            } else if (wParam == AI_ANIM_TIMER_ID) {
+                ULONGLONG now = GetTickCount64();
+                double t = (double)(now - g_ai_anim_start)
+                           / (double)AI_DOCK_ANIM_MS;
+                if (t >= 1.0) t = 1.0;
+                g_ai_panel_width = ai_dock_anim_lerp(
+                    g_ai_anim_from, g_ai_target_width, t);
+                if (t >= 1.0) {
+                    g_ai_panel_width = g_ai_target_width;
+                    KillTimer(hwnd, AI_ANIM_TIMER_ID);
+                    /* Hide the window after close animation finishes */
+                    if (g_ai_target_width == 0
+                        && g_hwndAiChat && IsWindow(g_hwndAiChat))
+                        ShowWindow(g_hwndAiChat, SW_HIDE);
+                }
+                relayout_main(hwnd);
             }
             return 0;
 
@@ -1587,6 +1784,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         s == g_active_session)) {
                     ai_chat_set_session(g_hwndAiChat, s->term, s->channel);
                 }
+
+                /* Reopen AI panel that was closed before first session */
+                if (g_ai_reopen_after_connect && s == g_active_session) {
+                    g_ai_reopen_after_connect = 0;
+                    on_ai_clicked();
+                }
             }
             update_scrollbar(hwnd);
             invalidate_terminal(hwnd);
@@ -1624,14 +1827,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int width = LOWORD(lParam);
             int height = HIWORD(lParam);
 
+            /* Docked AI panel — leave a splitter gap between terminal and panel */
+            int ai_w = 0;
+            if (g_ai_docked && g_hwndAiChat && IsWindowVisible(g_hwndAiChat)) {
+                ai_w = g_ai_panel_width;
+                /* Clamp to max if window was resized smaller */
+                if (ai_w > width * AI_DOCK_MAX_PCT / 100)
+                    ai_w = width * AI_DOCK_MAX_PCT / 100;
+                int splitter = AI_DOCK_SPLITTER_W;
+                SetWindowPos(g_hwndAiChat, NULL,
+                    width - ai_w + splitter, g_tab_height,
+                    ai_w - splitter, height - g_tab_height,
+                    SWP_NOZORDER | SWP_NOCOPYBITS);
+            }
+
             if (g_hwndTabs) {
                 SetWindowPos(g_hwndTabs, NULL, 0, 0, width, g_tab_height, SWP_NOZORDER);
             }
 
-            /* Reposition custom scrollbar */
+            /* Reposition custom scrollbar (left of AI panel if docked) */
             if (g_hwndScrollbar) {
                 SetWindowPos(g_hwndScrollbar, NULL,
-                    width - CSB_WIDTH, g_tab_height,
+                    width - ai_w - CSB_WIDTH, g_tab_height,
                     CSB_WIDTH, height - g_tab_height,
                     SWP_NOZORDER);
             }
@@ -1640,8 +1857,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 int term_h = height - g_tab_height;
                 if (term_h < 1) term_h = 1;
 
-                int term_w = width - CSB_WIDTH - g_left_margin;
-                if (term_w < 1) term_w = 1;
+                int term_w = ai_dock_terminal_width(width, ai_w, CSB_WIDTH, g_left_margin);
                 int cols = term_w / g_renderer.charWidth;
                 int rows = term_h / g_renderer.charHeight;
                 if (cols < 1) cols = 1;
@@ -1664,10 +1880,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_DPICHANGED: {
+            int oldDpi = g_dpi;
             int newDpi = (int)HIWORD(wParam);
             g_dpi = newDpi;
             g_tab_height = MulDiv(TAB_HEIGHT_BASE, g_dpi, 96);
             g_left_margin = MulDiv(TERM_LEFT_MARGIN, g_dpi, 96);
+
+            /* Rescale docked AI panel width proportionally */
+            if (g_ai_panel_width > 0)
+                g_ai_panel_width = MulDiv(g_ai_panel_width, newDpi, oldDpi);
+            if (g_ai_last_width > 0)
+                g_ai_last_width = MulDiv(g_ai_last_width, newDpi, oldDpi);
 
             RECT *suggested = (RECT *)lParam;
             SetWindowPos(hwnd, NULL,
@@ -1708,25 +1931,31 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
 
+            /* Determine terminal area right edge (excludes docked AI panel) */
+            int ai_w = 0;
+            if (g_ai_docked && g_hwndAiChat && IsWindowVisible(g_hwndAiChat))
+                ai_w = g_ai_panel_width;
+            RECT client;
+            GetClientRect(hwnd, &client);
+            int term_right_edge = client.right - ai_w;
+
             if (g_active_session && g_active_session->term) {
                 renderer_draw(&g_renderer, hdc, g_active_session->term, g_left_margin, g_tab_height, &ps.rcPaint, &g_selection);
 
                 /* Fill gutter areas not covered by complete character cells. */
-                RECT client;
-                GetClientRect(hwnd, &client);
                 HBRUSH bg = CreateSolidBrush(g_renderer.defaultBg);
 
                 int text_bottom = g_tab_height +
                     g_active_session->term->rows * g_renderer.charHeight;
                 if (text_bottom < client.bottom) {
-                    RECT r = { 0, text_bottom, client.right, client.bottom };
+                    RECT r = { 0, text_bottom, term_right_edge, client.bottom };
                     FillRect(hdc, &r, bg);
                 }
 
                 int text_right = g_left_margin +
                     g_active_session->term->cols * g_renderer.charWidth;
-                if (text_right < client.right) {
-                    RECT r = { text_right, g_tab_height, client.right, text_bottom };
+                if (text_right < term_right_edge) {
+                    RECT r = { text_right, g_tab_height, term_right_edge, text_bottom };
                     FillRect(hdc, &r, bg);
                 }
 
@@ -1739,8 +1968,35 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 DeleteObject(bg);
             } else {
                 HBRUSH brush = CreateSolidBrush(g_renderer.defaultBg);
-                FillRect(hdc, &ps.rcPaint, brush);
+                RECT fill = { ps.rcPaint.left, ps.rcPaint.top,
+                              term_right_edge < ps.rcPaint.right ? term_right_edge : ps.rcPaint.right,
+                              ps.rcPaint.bottom };
+                FillRect(hdc, &fill, brush);
                 DeleteObject(brush);
+            }
+
+            /* Fill the splitter gap between terminal and docked AI panel */
+            if (ai_w > 0 && g_theme) {
+                int splitter = AI_DOCK_SPLITTER_W;
+                /* Fill entire gap with bg_primary so no white shows through */
+                unsigned int bg_rgb = g_theme->bg_primary;
+                HBRUSH gapBr = CreateSolidBrush(RGB((bg_rgb >> 16) & 0xFF,
+                                                     (bg_rgb >>  8) & 0xFF,
+                                                      bg_rgb        & 0xFF));
+                RECT gr = { term_right_edge, g_tab_height,
+                            term_right_edge + splitter, client.bottom };
+                FillRect(hdc, &gr, gapBr);
+                DeleteObject(gapBr);
+
+                /* Draw 1px splitter line at the left edge of the gap */
+                unsigned int sc = g_theme->border;
+                HBRUSH sbr = CreateSolidBrush(RGB((sc >> 16) & 0xFF,
+                                                   (sc >>  8) & 0xFF,
+                                                    sc        & 0xFF));
+                RECT sr = { term_right_edge, g_tab_height,
+                            term_right_edge + 1, client.bottom };
+                FillRect(hdc, &sr, sbr);
+                DeleteObject(sbr);
             }
 
             EndPaint(hwnd, &ps);
@@ -1833,6 +2089,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Ctrl+T — new tab */
             if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == (WPARAM)'T') {
                 on_tab_new();
+                return 0;
+            }
+            /* Ctrl+Space — toggle AI Assist panel */
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == VK_SPACE) {
+                on_ai_clicked();
                 return 0;
             }
             /* Ctrl+V — paste with confirmation */
@@ -1933,8 +2194,42 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        case WM_SETCURSOR: {
+            if (g_ai_docked && g_ai_panel_width > 0 && g_hwndAiChat) {
+                POINT pt;
+                GetCursorPos(&pt);
+                ScreenToClient(hwnd, &pt);
+                RECT crc;
+                GetClientRect(hwnd, &crc);
+                int splitter_x = crc.right - g_ai_panel_width;
+                if (ai_dock_splitter_hit(pt.x, splitter_x,
+                                          AI_DOCK_SPLITTER_HIT, pt.y,
+                                          g_tab_height)) {
+                    SetCursor(LoadCursor(NULL, IDC_SIZEWE));
+                    return TRUE;
+                }
+            }
+            break;
+        }
+
         case WM_LBUTTONDOWN: {
+            /* Check splitter drag first */
+            if (g_ai_docked && g_ai_panel_width > 0 && g_hwndAiChat) {
+                int mx = GET_X_LPARAM(lParam);
+                int my = GET_Y_LPARAM(lParam);
+                RECT crc;
+                GetClientRect(hwnd, &crc);
+                int splitter_x = crc.right - g_ai_panel_width;
+                if (ai_dock_splitter_hit(mx, splitter_x,
+                                          AI_DOCK_SPLITTER_HIT, my,
+                                          g_tab_height)) {
+                    g_ai_splitter_dragging = 1;
+                    SetCapture(hwnd);
+                    return 0;
+                }
+            }
             if (!g_active_session || !g_active_session->term) break;
+            SetFocus(hwnd);  /* reclaim keyboard focus from AI panel */
             SetCapture(hwnd);
             int mx = LOWORD(lParam) - g_left_margin, my = HIWORD(lParam);
             selection_pixel_to_cell(mx, my,
@@ -1951,6 +2246,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_MOUSEMOVE: {
+            if (g_ai_splitter_dragging) {
+                RECT crc;
+                GetClientRect(hwnd, &crc);
+                int mx = GET_X_LPARAM(lParam);
+                int new_w = crc.right - mx;
+                new_w = ai_dock_clamp_width(new_w, crc.right,
+                                             AI_DOCK_MIN_PCT, AI_DOCK_MAX_PCT);
+                g_ai_panel_width = new_w;
+                g_ai_last_width = new_w;
+                relayout_main(hwnd);
+                /* Force synchronous repaint so no ghosting between frames */
+                RedrawWindow(hwnd, NULL, NULL,
+                             RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+                return 0;
+            }
             if (!g_selection.active) break;
             if (!(wParam & MK_LBUTTON)) {
                 g_selection.active = false;
@@ -1970,6 +2280,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_LBUTTONUP: {
+            if (g_ai_splitter_dragging) {
+                g_ai_splitter_dragging = 0;
+                ReleaseCapture();
+                return 0;
+            }
             if (!g_selection.active) break;
             ReleaseCapture();
             g_selection.active = false;
@@ -2103,7 +2418,7 @@ void ui_init(HINSTANCE instance) {
         0,
         CLASS_NAME,
         APP_TITLE,
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         x, y, winW, winH,
         NULL, NULL, instance, NULL
     );

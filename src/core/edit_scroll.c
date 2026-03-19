@@ -18,6 +18,14 @@ void edit_scroll_params(int total_lines, int first_visible,
     *nPos  = first_visible;
 }
 
+int edit_scroll_needed(int total_lines, int edit_height, int line_height)
+{
+    if (total_lines <= 0) return 0;
+    int vis = edit_scroll_visible_lines(edit_height, line_height);
+    if (vis <= 0) return 1;  /* can't show anything -> scrollbar needed */
+    return total_lines > vis ? 1 : 0;
+}
+
 int edit_scroll_line_delta(int target_pos, int current_first_visible)
 {
     return target_pos - current_first_visible;

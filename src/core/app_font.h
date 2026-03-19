@@ -10,10 +10,11 @@
 extern const int k_app_font_sizes[APP_FONT_NUM_SIZES];
 
 /* Default font family and sizes. */
-#define APP_FONT_DEFAULT      "Cascadia Code"
+#define APP_FONT_DEFAULT      "Consolas"
 #define APP_FONT_DEFAULT_SIZE 10
 #define APP_FONT_UI_SIZE       9
 #define APP_FONT_UI_FACE      "Inter"
+#define APP_FONT_AI_DEFAULT   "Consolas"
 
 /* Load/free the bundled Inter UI font from exe resources.
  * Call app_font_load_ui() once at startup before creating UI.

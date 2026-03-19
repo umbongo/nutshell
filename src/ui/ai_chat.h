@@ -11,17 +11,19 @@
 void ai_chat_init(HINSTANCE hInstance);
 
 /* Show the AI assist window. If already open, brings to front.
- * api_key, provider, custom_url, custom_model, font_name, colour_scheme copied.
+ * api_key, provider, custom_url, custom_model, font_name, ai_font, colour_scheme copied.
  * paste_delay_ms: inter-command delay when executing batched commands.
  * session_notes, system_notes: optional AI context notes (may be NULL).
  * initial_state: per-session AI state (may be NULL for fresh conversation). */
 HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
                   const char *custom_url, const char *custom_model,
                   int paste_delay_ms, const char *font_name,
+                  const char *ai_font,
                   const char *colour_scheme,
                   const char *session_notes, const char *system_notes,
                   AiSessionState *initial_state,
-                  const char *session_name);
+                  const char *session_name,
+                  int docked);
 
 /* Switch the AI chat to a different session's conversation.
  * Saves the current conversation, loads the new one, rebuilds the display.
@@ -55,6 +57,9 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme);
 
 /* Close and destroy the AI assist window. */
 void ai_chat_close(HWND hwnd);
+
+/* Returns non-zero if the AI chat has saveable conversation content. */
+int ai_chat_has_content(HWND hwnd);
 
 #endif /* _WIN32 */
 #endif /* NUTSHELL_AI_CHAT_H */

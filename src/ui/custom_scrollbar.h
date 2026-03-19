@@ -330,7 +330,8 @@ static inline void csb_set_theme(HWND hwnd, const ThemeColors *theme)
 
 /* Sync a custom scrollbar with a multiline EDIT/RichEdit control.
  * Reads the edit's line count and first visible line, then updates
- * the scrollbar range and position. */
+ * the scrollbar range and position.  Automatically shows/hides the
+ * scrollbar when content does or does not exceed the visible area. */
 static inline void csb_sync_edit(HWND hEdit, HWND hScrollbar, int line_h)
 {
     if (!hEdit || !hScrollbar) return;
@@ -344,6 +345,14 @@ static inline void csb_sync_edit(HWND hEdit, HWND hScrollbar, int line_h)
                        &nMin, &nMax, &nPage, &nPos);
     csb_set_range(hScrollbar, nMin, nMax, nPage);
     csb_set_pos(hScrollbar, nPos);
+
+    /* Auto show/hide: only display scrollbar when content overflows */
+    int needed = edit_scroll_needed(total, eh, line_h);
+    int visible = IsWindowVisible(hScrollbar);
+    if (needed && !visible)
+        ShowWindow(hScrollbar, SW_SHOWNOACTIVATE);
+    else if (!needed && visible)
+        ShowWindow(hScrollbar, SW_HIDE);
 }
 
 #endif /* _WIN32 */

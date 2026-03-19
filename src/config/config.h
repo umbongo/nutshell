@@ -16,6 +16,7 @@
 
 typedef struct {
     char font[CFG_STR_MAX];
+    char ai_font[CFG_STR_MAX];
     int font_size;
     int scrollback_lines;
     int paste_delay_ms;

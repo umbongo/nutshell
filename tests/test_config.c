@@ -1,4 +1,5 @@
 #include "test_framework.h"
+#include "ai_prompt.h"
 #include "config.h"
 #include <string.h>
 #include <stdio.h>
@@ -15,7 +16,7 @@ int test_config_default_settings(void)
     TEST_BEGIN();
     Settings s;
     config_default_settings(&s);
-    ASSERT_STR_EQ(s.font, "Cascadia Code");
+    ASSERT_STR_EQ(s.font, "Consolas");
     ASSERT_EQ(s.font_size, 10);
     ASSERT_EQ(s.scrollback_lines, 10000);
     ASSERT_EQ(s.paste_delay_ms, 350);
@@ -53,7 +54,7 @@ int test_config_new_default_free(void)
     TEST_BEGIN();
     Config *cfg = config_new_default();
     ASSERT_NOT_NULL(cfg);
-    ASSERT_STR_EQ(cfg->settings.font, "Cascadia Code");
+    ASSERT_STR_EQ(cfg->settings.font, "Consolas");
     ASSERT_EQ((int)vec_size(&cfg->profiles), 0);
     config_free(cfg);
     config_free(NULL);  /* must not crash */
@@ -109,7 +110,7 @@ int test_config_load_empty_object(void)
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NOT_NULL(cfg);
     /* Defaults should be intact. */
-    ASSERT_STR_EQ(cfg->settings.font, "Cascadia Code");
+    ASSERT_STR_EQ(cfg->settings.font, "Consolas");
     ASSERT_EQ((int)vec_size(&cfg->profiles), 0);
     config_free(cfg);
     remove(TMP_CFG);
@@ -128,7 +129,7 @@ int test_config_roundtrip_settings(void)
 
     /* Modify a few settings. */
     (void)snprintf(orig->settings.font, sizeof(orig->settings.font),
-                   "%s", "Cascadia Code");
+                   "%s", "Consolas");
     orig->settings.font_size        = 16;
     orig->settings.scrollback_lines = 5000;
     orig->settings.logging_enabled  = 1;
@@ -141,7 +142,7 @@ int test_config_roundtrip_settings(void)
     Config *loaded = config_load(TMP_CFG);
     ASSERT_NOT_NULL(loaded);
 
-    ASSERT_STR_EQ(loaded->settings.font, "Cascadia Code");
+    ASSERT_STR_EQ(loaded->settings.font, "Consolas");
     ASSERT_EQ(loaded->settings.font_size, 16);
     ASSERT_EQ(loaded->settings.scrollback_lines, 5000);
     ASSERT_EQ(loaded->settings.logging_enabled, 1);
@@ -238,7 +239,7 @@ int test_config_default_ai_provider(void)
     TEST_BEGIN();
     Settings s;
     config_default_settings(&s);
-    ASSERT_STR_EQ(s.ai_provider, "deepseek");
+    ASSERT_STR_EQ(s.ai_provider, AI_DEFAULT_PROVIDER);
     TEST_END();
 }
 
@@ -435,7 +436,7 @@ int test_config_validate_empty_font(void)
     config_default_settings(&s);
     s.font[0] = '\0';
     settings_validate(&s);
-    ASSERT_STR_EQ(s.font, "Cascadia Code");
+    ASSERT_STR_EQ(s.font, "Consolas");
     TEST_END();
 }
 
@@ -451,7 +452,7 @@ int test_config_load_realistic(void)
     fputs(
         "{\n"
         "  \"settings\": {\n"
-        "    \"font\": \"Cascadia Code\",\n"
+        "    \"font\": \"Consolas\",\n"
         "    \"font_size\": 10,\n"
         "    \"scrollback_lines\": 10000,\n"
         "    \"paste_delay_ms\": 350,\n"
@@ -473,7 +474,7 @@ int test_config_load_realistic(void)
 
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NOT_NULL(cfg);
-    ASSERT_STR_EQ(cfg->settings.font, "Cascadia Code");
+    ASSERT_STR_EQ(cfg->settings.font, "Consolas");
     ASSERT_EQ(cfg->settings.font_size, 10);
     ASSERT_EQ(cfg->settings.scrollback_lines, 10000);
     ASSERT_EQ(cfg->settings.paste_delay_ms, 350);
@@ -505,7 +506,7 @@ int test_config_load_missing_ai_fields(void)
     fputs(
         "{\n"
         "  \"settings\": {\n"
-        "    \"font\": \"Cascadia Code\",\n"
+        "    \"font\": \"Consolas\",\n"
         "    \"font_size\": 10\n"
         "  }\n"
         "}\n", f);
@@ -514,7 +515,7 @@ int test_config_load_missing_ai_fields(void)
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NOT_NULL(cfg);
     /* AI fields should be defaults */
-    ASSERT_STR_EQ(cfg->settings.ai_provider, "deepseek");
+    ASSERT_STR_EQ(cfg->settings.ai_provider, AI_DEFAULT_PROVIDER);
     ASSERT_STR_EQ(cfg->settings.ai_api_key, "");
     ASSERT_STR_EQ(cfg->settings.ai_custom_url, "");
     ASSERT_STR_EQ(cfg->settings.ai_custom_model, "");
@@ -673,6 +674,48 @@ int test_config_roundtrip_colour_scheme(void)
     ASSERT_STR_EQ(loaded->settings.colour_scheme, "Moss & Mist");
     config_free(loaded);
     remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * AI Assist font settings
+ * ============================================================ */
+
+int test_config_default_ai_font(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_STR_EQ(s.ai_font, "Consolas");
+    TEST_END();
+}
+
+int test_config_roundtrip_ai_font(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    (void)snprintf(cfg->settings.ai_font,
+                   sizeof(cfg->settings.ai_font),
+                   "%s", "Inter");
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_STR_EQ(loaded->settings.ai_font, "Inter");
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_validate_empty_ai_font(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.ai_font[0] = '\0';
+    settings_validate(&s);
+    ASSERT_STR_EQ(s.ai_font, "Consolas");
     TEST_END();
 }
 

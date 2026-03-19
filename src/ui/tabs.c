@@ -104,43 +104,141 @@ static void tabs_create_fonts(TabControlData *data, HWND hwnd)
                                    DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
 }
 
-/* Draw a chip/CPU icon using GDI primitives.
-   Rounded square body with a circle in the center and pins on all four sides.
+/* Draw a 3D chip/CPU icon using GDI primitives.
+   Grey-scale body with beveled edges for depth, silver centre die,
+   and a small green indicator light in the centre.
    Scales cleanly at any DPI. */
-static void draw_chip_icon(HDC hdc, int bx, int by, int sz, COLORREF color)
+static void draw_chip_icon(HDC hdc, int bx, int by, int sz,
+                           COLORREF color, int active)
 {
     int pw = sz >= 20 ? 2 : 1;
-    HPEN pen = CreatePen(PS_SOLID, pw, color);
-    HPEN oldPen = (HPEN)SelectObject(hdc, pen);
-    HBRUSH oldBr = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    (void)color; /* icon uses fixed grey palette */
 
-    /* Body: centered square with margin for pins */
-    int margin = sz * 2 / 10;   /* space for pins on each side */
+    /* Grey palette for the chip */
+    COLORREF col1 = RGB(100, 100, 100); /* body — medium grey */
+    COLORREF col2 = RGB(190, 190, 190); /* die  — light silver */
+    COLORREF hi1  = RGB(150, 150, 150); /* body highlight */
+    COLORREF lo1  = RGB(50,  50,  50);  /* body shadow */
+    COLORREF lo2  = RGB(120, 120, 120); /* die shadow */
+
+    /* Body: centred square with margin for pins */
+    int margin = sz * 2 / 10;
     int bL = bx + margin;
     int bT = by + margin;
     int bR = bx + sz - margin;
     int bB = by + sz - margin;
-    int rr = (bR - bL) / 6;     /* corner radius */
+    int rr = (bR - bL) / 6;
+    int bodyW = bR - bL;
+    int bev = bodyW >= 14 ? 2 : 1;
 
+    /* Drop shadow behind body */
+    {
+        HBRUSH hShBr = CreateSolidBrush(lo1);
+        HPEN hShPen = CreatePen(PS_SOLID, 1, lo1);
+        HPEN oldPen = (HPEN)SelectObject(hdc, hShPen);
+        HBRUSH oldBr = (HBRUSH)SelectObject(hdc, hShBr);
+        RoundRect(hdc, bL + 1, bT + 1, bR + 1, bB + 1, rr, rr);
+        SelectObject(hdc, oldBr);
+        SelectObject(hdc, oldPen);
+        DeleteObject(hShBr);
+        DeleteObject(hShPen);
+    }
+
+    /* Filled body (col1) */
+    HBRUSH hBodyBr = CreateSolidBrush(col1);
+    HPEN hBodyPen = CreatePen(PS_SOLID, 1, col1);
+    HPEN oldPen = (HPEN)SelectObject(hdc, hBodyPen);
+    HBRUSH oldBr = (HBRUSH)SelectObject(hdc, hBodyBr);
     RoundRect(hdc, bL, bT, bR, bB, rr, rr);
+    SelectObject(hdc, oldBr);
+    DeleteObject(hBodyBr);
+    DeleteObject(hBodyPen);
 
-    /* Center circle */
-    int cx = bx + sz / 2;
-    int cy = by + sz / 2;
-    int cr = (bR - bL) / 5;     /* circle radius */
-    Ellipse(hdc, cx - cr, cy - cr, cx + cr, cy + cr);
+    /* Beveled highlight — top & left edges */
+    HPEN hHi = CreatePen(PS_SOLID, 1, hi1);
+    SelectObject(hdc, hHi);
+    int b;
+    for (b = 0; b < bev; b++) {
+        MoveToEx(hdc, bL + rr, bT + b, NULL);
+        LineTo(hdc, bR - rr, bT + b);
+        MoveToEx(hdc, bL + b, bT + rr, NULL);
+        LineTo(hdc, bL + b, bB - rr);
+    }
+    SelectObject(hdc, oldPen);
+    DeleteObject(hHi);
+
+    /* Beveled shadow — bottom & right edges */
+    HPEN hLo = CreatePen(PS_SOLID, 1, lo1);
+    SelectObject(hdc, hLo);
+    for (b = 0; b < bev; b++) {
+        MoveToEx(hdc, bL + rr, bB - b, NULL);
+        LineTo(hdc, bR - rr, bB - b);
+        MoveToEx(hdc, bR - b, bT + rr, NULL);
+        LineTo(hdc, bR - b, bB - rr);
+    }
+    SelectObject(hdc, oldPen);
+    DeleteObject(hLo);
+
+    /* Centre die — silver raised square with beveled border */
+    {
+        int cx = bx + sz / 2;
+        int cy = by + sz / 2;
+        int cr = bodyW / 3;
+        HBRUSH hDieBr = CreateSolidBrush(col2);
+        HPEN hDiePen = CreatePen(PS_SOLID, 1, lo2);
+        SelectObject(hdc, hDieBr);
+        SelectObject(hdc, hDiePen);
+        Rectangle(hdc, cx - cr, cy - cr, cx + cr, cy + cr);
+        /* Highlight top-left of die */
+        HPEN hDieHi = CreatePen(PS_SOLID, 1, col2);
+        SelectObject(hdc, hDieHi);
+        MoveToEx(hdc, cx - cr, cy + cr - 1, NULL);
+        LineTo(hdc, cx - cr, cy - cr);
+        LineTo(hdc, cx + cr, cy - cr);
+        /* Shadow bottom-right of die */
+        HPEN hDieLo = CreatePen(PS_SOLID, 1, lo2);
+        SelectObject(hdc, hDieLo);
+        MoveToEx(hdc, cx - cr + 1, cy + cr, NULL);
+        LineTo(hdc, cx + cr, cy + cr);
+        LineTo(hdc, cx + cr, cy - cr);
+        SelectObject(hdc, oldBr);
+        SelectObject(hdc, oldPen);
+        DeleteObject(hDieBr);
+        DeleteObject(hDiePen);
+        DeleteObject(hDieHi);
+        DeleteObject(hDieLo);
+
+        /* Green indicator light in the centre of the die —
+         * sized to fill most of the die so it's visible at small sizes.
+         * Bright green when active, dark green (off) otherwise. */
+        {
+            int dr = cr - 1 > 1 ? cr - 1 : 1;
+            COLORREF dotFill = active ? RGB(0, 200, 0) : RGB(40, 70, 40);
+            COLORREF dotEdge = active ? RGB(0, 120, 0) : RGB(30, 50, 30);
+            HBRUSH hDotBr = CreateSolidBrush(dotFill);
+            HPEN hDotPen = CreatePen(PS_SOLID, 1, dotEdge);
+            SelectObject(hdc, hDotBr);
+            SelectObject(hdc, hDotPen);
+            Ellipse(hdc, cx - dr, cy - dr, cx + dr, cy + dr);
+            SelectObject(hdc, oldBr);
+            SelectObject(hdc, oldPen);
+            DeleteObject(hDotBr);
+            DeleteObject(hDotPen);
+        }
+    }
 
     /* Pins — 3 per side, evenly spaced */
-    int bodyW = bR - bL;
     int pinLen = margin / 2;
+    HPEN hPinPen = CreatePen(PS_SOLID, pw, col1);
+    SelectObject(hdc, hPinPen);
+    SelectObject(hdc, GetStockObject(NULL_BRUSH));
     int i;
     for (i = 0; i < 3; i++) {
-        int off = bodyW * (i + 1) / 4;  /* 1/4, 2/4, 3/4 across body */
+        int off = bodyW * (i + 1) / 4;
 
         /* Top pins */
         MoveToEx(hdc, bL + off, bT, NULL);
         LineTo(hdc, bL + off, bT - pinLen);
-        /* small circle at pin end */
         Ellipse(hdc, bL + off - pw, bT - pinLen - pw * 2,
                      bL + off + pw + 1, bT - pinLen + 1);
 
@@ -165,7 +263,7 @@ static void draw_chip_icon(HDC hdc, int bx, int by, int sz, COLORREF color)
 
     SelectObject(hdc, oldBr);
     SelectObject(hdc, oldPen);
-    DeleteObject(pen);
+    DeleteObject(hPinPen);
 }
 
 static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -452,12 +550,11 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 if (aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + btnSz, btnY + btnSz};
                     RoundRect(hdc, rcAi.left, rcAi.top, rcAi.right, rcAi.bottom, rr, rr);
-                    COLORREF aiCol = data->ai_active ? RGB(0, 180, 0) : cDim;
                     int iconPad = btnSz / 5;
                     int iconSz  = btnSz - iconPad * 2;
                     if (iconSz > 0)
                         draw_chip_icon(hdc, aiX + iconPad, btnY + iconPad,
-                                       iconSz, aiCol);
+                                       iconSz, cDim, data->ai_active);
                 }
 
                 SelectObject(hdc, hOldBtnBr);

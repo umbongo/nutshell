@@ -3,6 +3,10 @@
 
 #include <stddef.h>
 
+/* Default AI provider — must match the first entry in the provider list
+ * shown in the Settings dialog (settings.c k_ai_providers[]). */
+#define AI_DEFAULT_PROVIDER "anthropic"
+
 #define AI_MSG_MAX     8192
 #define AI_BODY_MAX    65536
 #define AI_MAX_MESSAGES 64
@@ -163,6 +167,13 @@ typedef struct {
     int pending_approval;
     int pending_cmd_count;
     char (*pending_cmds)[1024];  /* heap array, NULL when not pending */
+    /* Per-session streaming state (supports concurrent AI requests) */
+    volatile int busy;           /* 1 while a stream thread is running */
+    char *stream_content;        /* heap-allocated accumulator, NULL when idle */
+    size_t stream_content_len;
+    char *stream_thinking;       /* heap-allocated accumulator, NULL when idle */
+    size_t stream_thinking_len;
+    int stream_phase;            /* 0=not started, 1=thinking, 2=content */
 } AiSessionState;
 
 #endif /* NUTSHELL_AI_PROMPT_H */

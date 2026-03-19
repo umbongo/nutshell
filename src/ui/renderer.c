@@ -34,8 +34,21 @@ void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi) {
                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                               FIXED_PITCH | FF_MODERN, fontName);
 
+    if (!r->hFont || !r->hBoldFont) {
+        if (r->hFont)     { DeleteObject(r->hFont);     r->hFont = NULL; }
+        if (r->hBoldFont) { DeleteObject(r->hBoldFont); r->hBoldFont = NULL; }
+        r->charWidth = 8;
+        r->charHeight = 16;
+        return;
+    }
+
     /* Calculate char dimensions */
     HDC hdc = GetDC(NULL);
+    if (!hdc) {
+        r->charWidth = 8;
+        r->charHeight = 16;
+        return;
+    }
     HFONT oldFont = SelectObject(hdc, r->hFont);
     TEXTMETRIC tm;
     GetTextMetrics(hdc, &tm);
@@ -113,7 +126,8 @@ static void resolve_cell(const Renderer *r, const TermCell *cell,
     COLORREF fg = (cell->attr.fg_mode == COLOR_DEFAULT) ? r->defaultFg : to_colorref(cell->attr.fg);
     COLORREF bg = (cell->attr.bg_mode == COLOR_DEFAULT) ? r->defaultBg : to_colorref(cell->attr.bg);
     bool reverse = (cell->attr.flags & TERM_ATTR_REVERSE) ||
-                   (term->cursor.visible && term->cursor.row == row_idx && term->cursor.col == col_idx);
+                   (term->cursor.visible && term->scrollback_offset == 0 &&
+                    term->cursor.row == row_idx && term->cursor.col == col_idx);
     if (reverse) { COLORREF tmp = fg; fg = bg; bg = tmp; }
     if (cell_in_selection(sel, row_idx, col_idx)) {
         COLORREF tmp = fg; fg = bg; bg = tmp;
@@ -129,14 +143,18 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
     /* Ensure display buffer matches terminal dimensions */
     if (r->dispbuf.rows != term->rows || r->dispbuf.cols != term->cols) {
         dispbuf_resize(&r->dispbuf, term->rows, term->cols);
+        if (!r->dispbuf.cells) return;
     }
 
     HFONT oldFont = SelectObject(hdc, r->hFont);
     SetBkMode(hdc, OPAQUE);
     bool cur_bold = false;  /* track which font is selected */
 
-    int cursor_row = term->cursor.visible ? term->cursor.row : -1;
-    int cursor_col = term->cursor.visible ? term->cursor.col : -1;
+    /* Hide cursor when scrolled back — it's below the visible area */
+    int cursor_row = (term->cursor.visible && term->scrollback_offset == 0)
+                     ? term->cursor.row : -1;
+    int cursor_col = (term->cursor.visible && term->scrollback_offset == 0)
+                     ? term->cursor.col : -1;
     bool has_sel = sel && sel->valid;
 
     /* If cursor moved, invalidate the old cursor cell in the display buffer
@@ -154,7 +172,7 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
     }
 
     for (int row_idx = 0; row_idx < term->rows; row_idx++) {
-        int py = y + row_idx * r->charHeight;
+        LONG py = (LONG)y + (LONG)row_idx * r->charHeight;
 
         /* Skip rows outside paint rect */
         if (py + r->charHeight < paintRect->top || py > paintRect->bottom) continue;
@@ -165,9 +183,9 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
              * Paint background if the display buffer says these cells are dirty. */
             if (!dispbuf_cell_clean(&r->dispbuf, row_idx, 0,
                                      0, (uint32_t)r->defaultBg, (uint32_t)r->defaultBg, 0)) {
-                RECT emptyRect = {x, py, x + term->cols * r->charWidth, py + r->charHeight};
+                RECT emptyRect = {x, py, (LONG)x + (LONG)term->cols * r->charWidth, py + r->charHeight};
                 SetBkColor(hdc, r->defaultBg);
-                ExtTextOutW(hdc, x, py, ETO_OPAQUE, &emptyRect, L"", 0, NULL);
+                ExtTextOutW(hdc, x, (int)py, ETO_OPAQUE, &emptyRect, L"", 0, NULL);
                 /* Mark all cells in this row as painted with background */
                 for (int c = 0; c < term->cols; c++) {
                     dispbuf_cell_update(&r->dispbuf, row_idx, c,
@@ -187,7 +205,7 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             !has_sel) continue;
 
         for (int col_idx = 0; col_idx < term->cols; ) {
-            int px_start = x + col_idx * r->charWidth;
+            LONG px_start = (LONG)x + (LONG)col_idx * r->charWidth;
 
             /* Skip cols before paint rect */
             if (px_start + r->charWidth < paintRect->left) { col_idx++; continue; }
@@ -212,22 +230,36 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
 
             COLORREF run_fg = fg, run_bg = bg;
             bool run_bold = bold;
-            WCHAR run_buf[512];
+            WCHAR run_buf[1024]; /* extra room for surrogate pairs */
             int run_start = col_idx;
             int run_len = 0;
-            run_buf[run_len++] = (cp == 0) ? L' ' : (WCHAR)cp;
+            if (cp == 0) {
+                run_buf[run_len++] = L' ';
+            } else if (cp > 0xFFFF) {
+                run_buf[run_len++] = (WCHAR)(0xD800 + ((cp - 0x10000) >> 10));
+                run_buf[run_len++] = (WCHAR)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+            } else {
+                run_buf[run_len++] = (WCHAR)cp;
+            }
             dispbuf_cell_update(&r->dispbuf, row_idx, col_idx,
                                 cp, (uint32_t)fg, (uint32_t)bg, aflags);
             col_idx++;
 
             /* Accumulate consecutive cells with matching fg/bg/bold */
-            while (col_idx < term->cols && run_len < 512) {
+            while (col_idx < term->cols && run_len < 1020) {
                 cell = &row->cells[col_idx];
                 resolve_cell(r, cell, term, row_idx, col_idx, sel, &fg, &bg, &bold);
                 if (fg != run_fg || bg != run_bg || bold != run_bold) break;
                 cp = cell->codepoint;
                 aflags = cell->attr.flags;
-                run_buf[run_len++] = (cp == 0) ? L' ' : (WCHAR)cp;
+                if (cp == 0) {
+                    run_buf[run_len++] = L' ';
+                } else if (cp > 0xFFFF) {
+                    run_buf[run_len++] = (WCHAR)(0xD800 + ((cp - 0x10000) >> 10));
+                    run_buf[run_len++] = (WCHAR)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+                } else {
+                    run_buf[run_len++] = (WCHAR)cp;
+                }
                 dispbuf_cell_update(&r->dispbuf, row_idx, col_idx,
                                     cp, (uint32_t)fg, (uint32_t)bg, aflags);
                 col_idx++;
@@ -242,9 +274,9 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             /* Draw the entire run in one call */
             SetTextColor(hdc, run_fg);
             SetBkColor(hdc, run_bg);
-            int px = x + run_start * r->charWidth;
-            RECT runRect = {px, py, px + run_len * r->charWidth, py + r->charHeight};
-            ExtTextOutW(hdc, px, py, ETO_OPAQUE | ETO_CLIPPED, &runRect,
+            LONG px = (LONG)x + (LONG)run_start * r->charWidth;
+            RECT runRect = {px, py, px + (LONG)run_len * r->charWidth, py + r->charHeight};
+            ExtTextOutW(hdc, (int)px, (int)py, ETO_OPAQUE | ETO_CLIPPED, &runRect,
                         run_buf, (UINT)run_len, NULL);
         }
 
