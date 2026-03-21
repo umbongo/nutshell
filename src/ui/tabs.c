@@ -12,17 +12,17 @@
 static const char *TABS_CLASS_NAME = "Nutshell_Tabs";
 
 /* ---- Layout constants (base values at 96 DPI) ---------------------------- */
-#define TAB_H_PAD_BASE    4
+#define TAB_H_PAD_BASE    12
 #define BTN_SIZE_BASE     24
-#define TAB_GAP_BASE      4
+#define TAB_GAP_BASE      8
 #define BTN_GAP_BASE      2
 #define INDICATOR_W_BASE  12
-#define INDICATOR_GAP_BASE 3
+#define INDICATOR_GAP_BASE 4
 #define CLOSE_SIZE_BASE   12
-#define TAB_MIN_W_BASE    80
+#define TAB_MIN_W_BASE    100
 #define ACCENT_BAR_H_BASE 3
-#define PAD_BASE          4   /* left margin before [+] button */
-#define TAB_START_GAP_BASE 8  /* gap between [+] and first tab */
+#define PAD_BASE          8   /* left margin before [+] button */
+#define TAB_START_GAP_BASE 12  /* gap between [+] and first tab */
 
 /* DPI-scaled layout helper — use S(base) inside functions that have `data` */
 #define S(px) MulDiv((px), data->dpi, 96)
@@ -55,6 +55,7 @@ typedef struct TabControlData {
 
     HFONT hFont;
     HFONT hSmallFont;  /* cached small font for indicator labels */
+    HFONT hIconFont;   /* Windows Fluent Icons */
     HWND  hTooltip;    /* Win32 tooltip control */
     int   ai_active;   /* 1 = API key configured -> green, 0 = grey */
     int   dpi;         /* per-window DPI for layout scaling */
@@ -80,11 +81,12 @@ static COLORREF status_color(TabStatus s)
     }
 }
 
-/* (Re-)create hFont and hSmallFont from font_name.  Deletes any previous. */
+/* (Re-)create hFont, hSmallFont, and hIconFont from font_name.  Deletes any previous. */
 static void tabs_create_fonts(TabControlData *data, HWND hwnd)
 {
     if (data->hFont)      { DeleteObject(data->hFont);      data->hFont = NULL; }
     if (data->hSmallFont) { DeleteObject(data->hSmallFont); data->hSmallFont = NULL; }
+    if (data->hIconFont)  { DeleteObject(data->hIconFont);  data->hIconFont = NULL; }
 
     HDC hdc = GetDC(hwnd);
     int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
@@ -102,169 +104,22 @@ static void tabs_create_fonts(TabControlData *data, HWND hwnd)
                                    DEFAULT_CHARSET, OUT_TT_PRECIS,
                                    CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                    DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+    
+    /* Icon font for Close, Arrows, AI Chip */
+    int ih = -MulDiv(APP_FONT_UI_SIZE, logPixelsY, 72);
+    data->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                 DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                 DEFAULT_PITCH | FF_DONTCARE, "Segoe Fluent Icons");
+    if (!data->hIconFont) {
+        data->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                     DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                     DEFAULT_PITCH | FF_DONTCARE, "Segoe MDL2 Assets");
+    }
 }
 
-/* Draw a 3D chip/CPU icon using GDI primitives.
-   Grey-scale body with beveled edges for depth, silver centre die,
-   and a small green indicator light in the centre.
-   Scales cleanly at any DPI. */
-static void draw_chip_icon(HDC hdc, int bx, int by, int sz,
-                           COLORREF color, int active)
-{
-    int pw = sz >= 20 ? 2 : 1;
-    (void)color; /* icon uses fixed grey palette */
-
-    /* Grey palette for the chip */
-    COLORREF col1 = RGB(100, 100, 100); /* body — medium grey */
-    COLORREF col2 = RGB(190, 190, 190); /* die  — light silver */
-    COLORREF hi1  = RGB(150, 150, 150); /* body highlight */
-    COLORREF lo1  = RGB(50,  50,  50);  /* body shadow */
-    COLORREF lo2  = RGB(120, 120, 120); /* die shadow */
-
-    /* Body: centred square with margin for pins */
-    int margin = sz * 2 / 10;
-    int bL = bx + margin;
-    int bT = by + margin;
-    int bR = bx + sz - margin;
-    int bB = by + sz - margin;
-    int rr = (bR - bL) / 6;
-    int bodyW = bR - bL;
-    int bev = bodyW >= 14 ? 2 : 1;
-
-    /* Drop shadow behind body */
-    {
-        HBRUSH hShBr = CreateSolidBrush(lo1);
-        HPEN hShPen = CreatePen(PS_SOLID, 1, lo1);
-        HPEN oldPen = (HPEN)SelectObject(hdc, hShPen);
-        HBRUSH oldBr = (HBRUSH)SelectObject(hdc, hShBr);
-        RoundRect(hdc, bL + 1, bT + 1, bR + 1, bB + 1, rr, rr);
-        SelectObject(hdc, oldBr);
-        SelectObject(hdc, oldPen);
-        DeleteObject(hShBr);
-        DeleteObject(hShPen);
-    }
-
-    /* Filled body (col1) */
-    HBRUSH hBodyBr = CreateSolidBrush(col1);
-    HPEN hBodyPen = CreatePen(PS_SOLID, 1, col1);
-    HPEN oldPen = (HPEN)SelectObject(hdc, hBodyPen);
-    HBRUSH oldBr = (HBRUSH)SelectObject(hdc, hBodyBr);
-    RoundRect(hdc, bL, bT, bR, bB, rr, rr);
-    SelectObject(hdc, oldBr);
-    DeleteObject(hBodyBr);
-    DeleteObject(hBodyPen);
-
-    /* Beveled highlight — top & left edges */
-    HPEN hHi = CreatePen(PS_SOLID, 1, hi1);
-    SelectObject(hdc, hHi);
-    int b;
-    for (b = 0; b < bev; b++) {
-        MoveToEx(hdc, bL + rr, bT + b, NULL);
-        LineTo(hdc, bR - rr, bT + b);
-        MoveToEx(hdc, bL + b, bT + rr, NULL);
-        LineTo(hdc, bL + b, bB - rr);
-    }
-    SelectObject(hdc, oldPen);
-    DeleteObject(hHi);
-
-    /* Beveled shadow — bottom & right edges */
-    HPEN hLo = CreatePen(PS_SOLID, 1, lo1);
-    SelectObject(hdc, hLo);
-    for (b = 0; b < bev; b++) {
-        MoveToEx(hdc, bL + rr, bB - b, NULL);
-        LineTo(hdc, bR - rr, bB - b);
-        MoveToEx(hdc, bR - b, bT + rr, NULL);
-        LineTo(hdc, bR - b, bB - rr);
-    }
-    SelectObject(hdc, oldPen);
-    DeleteObject(hLo);
-
-    /* Centre die — silver raised square with beveled border */
-    {
-        int cx = bx + sz / 2;
-        int cy = by + sz / 2;
-        int cr = bodyW / 3;
-        HBRUSH hDieBr = CreateSolidBrush(col2);
-        HPEN hDiePen = CreatePen(PS_SOLID, 1, lo2);
-        SelectObject(hdc, hDieBr);
-        SelectObject(hdc, hDiePen);
-        Rectangle(hdc, cx - cr, cy - cr, cx + cr, cy + cr);
-        /* Highlight top-left of die */
-        HPEN hDieHi = CreatePen(PS_SOLID, 1, col2);
-        SelectObject(hdc, hDieHi);
-        MoveToEx(hdc, cx - cr, cy + cr - 1, NULL);
-        LineTo(hdc, cx - cr, cy - cr);
-        LineTo(hdc, cx + cr, cy - cr);
-        /* Shadow bottom-right of die */
-        HPEN hDieLo = CreatePen(PS_SOLID, 1, lo2);
-        SelectObject(hdc, hDieLo);
-        MoveToEx(hdc, cx - cr + 1, cy + cr, NULL);
-        LineTo(hdc, cx + cr, cy + cr);
-        LineTo(hdc, cx + cr, cy - cr);
-        SelectObject(hdc, oldBr);
-        SelectObject(hdc, oldPen);
-        DeleteObject(hDieBr);
-        DeleteObject(hDiePen);
-        DeleteObject(hDieHi);
-        DeleteObject(hDieLo);
-
-        /* Green indicator light in the centre of the die —
-         * sized to fill most of the die so it's visible at small sizes.
-         * Bright green when active, dark green (off) otherwise. */
-        {
-            int dr = cr - 1 > 1 ? cr - 1 : 1;
-            COLORREF dotFill = active ? RGB(0, 200, 0) : RGB(40, 70, 40);
-            COLORREF dotEdge = active ? RGB(0, 120, 0) : RGB(30, 50, 30);
-            HBRUSH hDotBr = CreateSolidBrush(dotFill);
-            HPEN hDotPen = CreatePen(PS_SOLID, 1, dotEdge);
-            SelectObject(hdc, hDotBr);
-            SelectObject(hdc, hDotPen);
-            Ellipse(hdc, cx - dr, cy - dr, cx + dr, cy + dr);
-            SelectObject(hdc, oldBr);
-            SelectObject(hdc, oldPen);
-            DeleteObject(hDotBr);
-            DeleteObject(hDotPen);
-        }
-    }
-
-    /* Pins — 3 per side, evenly spaced */
-    int pinLen = margin / 2;
-    HPEN hPinPen = CreatePen(PS_SOLID, pw, col1);
-    SelectObject(hdc, hPinPen);
-    SelectObject(hdc, GetStockObject(NULL_BRUSH));
-    int i;
-    for (i = 0; i < 3; i++) {
-        int off = bodyW * (i + 1) / 4;
-
-        /* Top pins */
-        MoveToEx(hdc, bL + off, bT, NULL);
-        LineTo(hdc, bL + off, bT - pinLen);
-        Ellipse(hdc, bL + off - pw, bT - pinLen - pw * 2,
-                     bL + off + pw + 1, bT - pinLen + 1);
-
-        /* Bottom pins */
-        MoveToEx(hdc, bL + off, bB, NULL);
-        LineTo(hdc, bL + off, bB + pinLen);
-        Ellipse(hdc, bL + off - pw, bB + pinLen - 1,
-                     bL + off + pw + 1, bB + pinLen + pw * 2);
-
-        /* Left pins */
-        MoveToEx(hdc, bL, bT + off, NULL);
-        LineTo(hdc, bL - pinLen, bT + off);
-        Ellipse(hdc, bL - pinLen - pw * 2, bT + off - pw,
-                     bL - pinLen + 1, bT + off + pw + 1);
-
-        /* Right pins */
-        MoveToEx(hdc, bR, bT + off, NULL);
-        LineTo(hdc, bR + pinLen, bT + off);
-        Ellipse(hdc, bR + pinLen - 1, bT + off - pw,
-                     bR + pinLen + pw * 2, bT + off + pw + 1);
-    }
-
-    SelectObject(hdc, oldBr);
-    SelectObject(hdc, oldPen);
-    DeleteObject(hPinPen);
-}
+/* Removed manual draw_chip_icon logic in favour of Fluent icons */
 
 static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -304,6 +159,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             if (data) {
                 if (data->hFont)      DeleteObject(data->hFont);
                 if (data->hSmallFont) DeleteObject(data->hSmallFont);
+                if (data->hIconFont)  DeleteObject(data->hIconFont);
                 if (data->hTooltip)   DestroyWindow(data->hTooltip);
                 free(data);
             }
@@ -513,8 +369,10 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 int closeY = tabY + (tabH - closeSz) / 2;
                 RECT rcClose = {closeX, closeY, closeX + closeSz, closeY + closeSz};
                 SetTextColor(hdc, cDim);
-                DrawTextW(hdc, L"\x00D7", -1, &rcClose,
+                HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont ? data->hIconFont : data->hFont);
+                DrawTextW(hdc, L"\xEA39", -1, &rcClose,
                           DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(hdc, prevF);
 
                 x += tw + tabGap;
             }
@@ -535,26 +393,30 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     RECT rcLeft = {leftX, btnY, leftX + btnSz, btnY + btnSz};
                     RoundRect(hdc, rcLeft.left, rcLeft.top, rcLeft.right, rcLeft.bottom, rr, rr);
                     SetTextColor(hdc, cDim);
-                    DrawTextW(hdc, L"\x25C0", -1, &rcLeft,
+                    HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont ? data->hIconFont : data->hFont);
+                    DrawTextW(hdc, L"\xE76B", -1, &rcLeft,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, prevF);
                 }
                 /* ▶ Right arrow */
                 if (rightX > x) {
                     RECT rcRight = {rightX, btnY, rightX + btnSz, btnY + btnSz};
                     RoundRect(hdc, rcRight.left, rcRight.top, rcRight.right, rcRight.bottom, rr, rr);
                     SetTextColor(hdc, cDim);
-                    DrawTextW(hdc, L"\x25B6", -1, &rcRight,
+                    HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont ? data->hIconFont : data->hFont);
+                    DrawTextW(hdc, L"\xE76C", -1, &rcRight,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, prevF);
                 }
-                /* AI button — GDI-drawn chip icon */
+                /* AI button — Fluent icon */
                 if (aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + btnSz, btnY + btnSz};
                     RoundRect(hdc, rcAi.left, rcAi.top, rcAi.right, rcAi.bottom, rr, rr);
-                    int iconPad = btnSz / 5;
-                    int iconSz  = btnSz - iconPad * 2;
-                    if (iconSz > 0)
-                        draw_chip_icon(hdc, aiX + iconPad, btnY + iconPad,
-                                       iconSz, cDim, data->ai_active);
+                    SetTextColor(hdc, data->ai_active ? RGB(0, 180, 0) : cDim);
+                    HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont ? data->hIconFont : data->hFont);
+                    DrawTextW(hdc, L"\xE950", -1, &rcAi,
+                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, prevF);
                 }
 
                 SelectObject(hdc, hOldBtnBr);

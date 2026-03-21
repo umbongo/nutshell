@@ -84,11 +84,11 @@ typedef struct {
     HWND hSendBtn;
     HWND hNewChatBtn;
     HWND hPermitBtn;
-    HWND hThinkingBtn;
     HWND hSaveBtn;
     HWND hUndockBtn;
     HWND hAllowBtn;
     HWND hDenyBtn;
+    HWND hThinkingBtn;
     HWND hTooltip;        /* Win32 tooltip control */
     int permit_write;     /* 0 = read-only (red), 1 = read/write (green) */
     int show_thinking;    /* 0 = hide reasoning, 1 = show reasoning */
@@ -183,6 +183,9 @@ typedef struct {
 
     /* Compact button mode: 1 = icon-only buttons when frame is narrow */
     int compact_buttons;
+
+    /* Fluent UI Icon Font */
+    HFONT hIconFont;
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -289,7 +292,7 @@ static void chat_append_styled_ex(HWND hDisplay, const char *text,
     CHARFORMAT2 cf;
     memset(&cf, 0, sizeof(cf));
     cf.cbSize = sizeof(cf);
-    cf.dwMask = CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_STRIKEOUT;
+    cf.dwMask = CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_STRIKEOUT | CFM_LINK;
     cf.crTextColor = color;
     cf.dwEffects = effects;
 
@@ -448,8 +451,10 @@ static void chat_append_markdown(HWND hDisplay, const char *raw,
 
         case MD_LINE_BLOCKQUOTE: {
             const char *bq_text = p + info.content_offset;
+            COLORREF col_exec = RGB(255, 140, 0); /* orange */
+            /* Exec/Quotes */
             chat_append_styled_ex(hDisplay,
-                "\xe2\x94\x82 ", col_dim, CLR_DEFAULT, CFE_ITALIC, NULL, 0);
+                "\xe2\x96\xb6 ", col_exec, CLR_DEFAULT, CFE_BOLD, code_font, 180);
             /* Render inline formatting within blockquote */
             MdSpan bq_spans[MD_MAX_SPANS];
             int nbq = md_parse_inline(bq_text, (int)strlen(bq_text), bq_spans);
@@ -459,16 +464,15 @@ static void chat_append_markdown(HWND hDisplay, const char *raw,
                 if (slen >= (int)sizeof(tmp)) slen = (int)sizeof(tmp) - 1;
                 memcpy(tmp, bq_text + bq_spans[s].start, (size_t)slen);
                 tmp[slen] = '\0';
-                DWORD eff = CFE_ITALIC; /* blockquote base is italic */
-                const char *sfont = NULL;
+                DWORD eff = 0; /* blockquotes non-italic so executed commands are visible */
+                const char *sfont = code_font;
                 switch (bq_spans[s].type) {
                 case MD_SPAN_BOLD:        eff |= CFE_BOLD; break;
                 case MD_SPAN_BOLD_ITALIC: eff |= CFE_BOLD; break;
-                case MD_SPAN_CODE:        sfont = code_font; break;
                 case MD_SPAN_STRIKETHROUGH: eff |= CFE_STRIKEOUT; break;
                 default: break;
                 }
-                chat_append_styled_ex(hDisplay, tmp, col_dim, CLR_DEFAULT,
+                chat_append_styled_ex(hDisplay, tmp, col_exec, CLR_DEFAULT,
                                       eff, sfont, 0);
             }
             chat_append_styled_ex(hDisplay, "\r\n", baseColor, CLR_DEFAULT,
@@ -790,6 +794,13 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 static void update_context_bar(AiChatData *d)
 {
     if (!d || !d->hContextBar) return;
+    
+    LONG style = GetWindowLong(d->hContextBar, GWL_STYLE);
+    if (style & PBS_MARQUEE) {
+        SendMessage(d->hContextBar, PBM_SETMARQUEE, 0, 0);
+        SetWindowLong(d->hContextBar, GWL_STYLE, style & ~PBS_MARQUEE);
+    }
+
     if (d->context_limit <= 0) {
         SendMessage(d->hContextBar, PBM_SETPOS, 0, 0);
         SetWindowText(d->hContextLabel, "Context: N/A");
@@ -810,33 +821,26 @@ static void update_context_bar(AiChatData *d)
 }
 
 /* Start (or replace) the animated indicator with the given base text.
- * E.g. base="thinking" shows "(thinking.)" cycling dots. */
+ * Replaces the usual Context progress bar with a Marquee while busy. */
 static void start_indicator(AiChatData *d, const char *base)
 {
-    /* Remove any existing indicator */
-    if (d->indicator_pos >= 0) {
-        KillTimer(d->hwnd, TIMER_THINKING);
-        SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-        CHARRANGE cr_rm;
-        SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm);
-        CHARRANGE cr_sel = { d->indicator_pos, cr_rm.cpMax };
-        SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
-        SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
+    if (d->hContextBar) {
+        LONG style = GetWindowLong(d->hContextBar, GWL_STYLE);
+        SetWindowLong(d->hContextBar, GWL_STYLE, style | PBS_MARQUEE);
+        SendMessage(d->hContextBar, PBM_SETMARQUEE, 1, 50);
+        /* Red/Orange color for Marquee */
+        SendMessage(d->hContextBar, PBM_SETBARCOLOR, 0, (LPARAM)RGB(220, 100, 50));
+        EnableWindow(d->hContextBar, TRUE);
     }
-
-    /* Record new indicator position */
-    SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-    CHARRANGE cr_new;
-    SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_new);
-    d->indicator_pos = cr_new.cpMax;
-    d->thinking_tick = 0;
-    snprintf(d->indicator_base, sizeof(d->indicator_base), "%s", base);
-
-    /* Show initial frame: "(base.)" */
-    char initial[80];
-    snprintf(initial, sizeof(initial), "\r\n(%s.)", base);
-    chat_append_ops(d->hDisplay, initial);
-    SetTimer(d->hwnd, TIMER_THINKING, THINKING_ANIM_MS, NULL);
+    if (d->hContextLabel) {
+        char label[128];
+        snprintf(label, sizeof(label), "%c%s",
+            base[0] >= 'a' && base[0] <= 'z' ? (char)(base[0]-32) : base[0], base+1);
+        if (strcmp(base, "thinking") == 0) {
+            snprintf(label, sizeof(label), "Thinking... (Click to toggle)");
+        }
+        SetWindowText(d->hContextLabel, label);
+    }
 }
 
 /* Free all thinking history entries. */
@@ -873,27 +877,28 @@ static void chat_rebuild_display(AiChatData *d)
         const AiMessage *msg = &d->conv.messages[i];
 
         if (msg->role == AI_ROLE_USER) {
-            chat_append_ops(d->hDisplay, "\r\n--- You ---\r\n");
+            chat_append_styled(d->hDisplay, "\r\n\r\n", col_user, 0);
+            chat_append_styled_ex(d->hDisplay, "You\r\n", col_user, CLR_DEFAULT, CFE_BOLD, NULL, 220);
             chat_append_color(d->hDisplay, msg->content, col_user);
             chat_append_color(d->hDisplay, "\r\n", col_user);
         } else if (msg->role == AI_ROLE_ASSISTANT) {
+            chat_append_styled(d->hDisplay, "\r\n\r\n", col_ai, 0);
+            chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
             /* Show thinking block if toggle is on and thinking exists */
             if (d->show_thinking && d->thinking_history[i] &&
                 d->thinking_history[i][0]) {
-                COLORREF col_dim = d->theme
-                    ? theme_cr(d->theme->text_dim) : RGB(140, 140, 140);
-                chat_append_ops(d->hDisplay, "\r\n--- Thinking ---\r\n");
+                COLORREF col_purple = RGB(150, 100, 200);
+                chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
                 char *fmt_think = format_ai_text(d->thinking_history[i]);
                 if (fmt_think) {
-                    chat_append_styled(d->hDisplay, fmt_think, col_dim, 1);
+                    chat_append_styled(d->hDisplay, fmt_think, col_purple, 1);
                     free(fmt_think);
                 } else {
                     chat_append_styled(d->hDisplay,
-                        d->thinking_history[i], col_dim, 1);
+                        d->thinking_history[i], col_purple, 1);
                 }
-                chat_append_styled(d->hDisplay, "\r\n", col_dim, 1);
+                chat_append_styled(d->hDisplay, "\r\n", col_purple, 1);
             }
-            chat_append_ops(d->hDisplay, "\r\n--- AI ---\r\n");
             chat_append_markdown(d->hDisplay, msg->content, col_ai,
                                  d->theme, d->ai_font_name);
         }
@@ -958,7 +963,8 @@ static void send_user_message(AiChatData *d)
 
     /* Display user message */
     COLORREF col_user = d->theme ? theme_cr(d->theme->accent) : RGB(0, 120, 215);
-    chat_append_ops(d->hDisplay, "\r\n--- You ---\r\n");
+    chat_append_styled(d->hDisplay, "\r\n\r\n", col_user, 0);
+    chat_append_styled_ex(d->hDisplay, "You\r\n", col_user, CLR_DEFAULT, CFE_BOLD, NULL, 220);
     chat_append_color(d->hDisplay, input, col_user);
     chat_append_color(d->hDisplay, "\r\n", col_user);
 
@@ -1149,12 +1155,10 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
     if (indicH < 4) indicH = 4;
     int indY = rc.top + (btnH - indicH) / 2;
 
-    /* For Permit Write / Thinking buttons: draw status indicator */
+    /* For Permit Write indicator: draw status indicator */
     int text_left = rc.left;
-    if (((int)dis->CtlID == IDC_CHAT_PERMIT ||
-         (int)dis->CtlID == IDC_CHAT_THINKING) && d) {
-        int is_active = ((int)dis->CtlID == IDC_CHAT_PERMIT)
-                      ? d->permit_write : d->show_thinking;
+    if (((int)dis->CtlID == IDC_CHAT_PERMIT) && d) {
+        int is_active = d->permit_write;
         int indW = MulDiv(AI_INDICATOR_W_BASE, d->dpi, 96);
         int indGap = MulDiv(AI_INDICATOR_GAP_BASE, d->dpi, 96);
         int indX = rc.left + indGap;
@@ -1170,10 +1174,9 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
         DeleteObject(hDotPen);
         DeleteObject(hDot);
 
-        /* Draw letter on indicator: W for write, T for thinking */
+        /* Draw letter on indicator: W for write */
         {
-            const char *letter = ((int)dis->CtlID == IDC_CHAT_PERMIT)
-                                  ? "W" : "T";
+            const char *letter = "W";
             HFONT hSmall = CreateFont(
                 -MulDiv(7, d->dpi, 72), 0, 0, 0, FW_BOLD,
                 FALSE, FALSE, FALSE, DEFAULT_CHARSET,
@@ -1195,7 +1198,6 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
 
     /* Text — skip for indicator buttons when in compact mode (icon-only) */
     int is_indicator_btn = ((int)dis->CtlID == IDC_CHAT_PERMIT ||
-                            (int)dis->CtlID == IDC_CHAT_THINKING ||
                             (int)dis->CtlID == IDC_CHAT_NEWCHAT);
     if (!d || !d->compact_buttons || !is_indicator_btn) {
         SetBkMode(hdc, TRANSPARENT);
@@ -1260,14 +1262,14 @@ static void relayout(AiChatData *d)
                    btn_h, btn_h, TRUE);
 
     /* Decide if left-side buttons fit with full text or need compact mode.
-     * Full: New Chat (78) + Permit Write (115) + Show Thinking (115)
-     * Compact: New Chat (78) + indicator-only (btn_h) + indicator-only (btn_h) */
+     * Full: New Chat (78) + Permit Write (115)
+     * Compact: New Chat (78) + indicator-only (btn_h) */
     int full_w = pad + S(78) + pad + S(115) + pad + S(115);
     int avail = cw - right_w;
     d->compact_buttons = (full_w > avail);
     int pw = d->compact_buttons ? btn_h : S(115);
-    int tw = d->compact_buttons ? btn_h : S(115);
     int nw = d->compact_buttons ? btn_h : S(78);
+    int tw = d->compact_buttons ? btn_h : S(115);
 
     if (d->hNewChatBtn)
         MoveWindow(d->hNewChatBtn, pad, pad, nw, btn_h, TRUE);
@@ -1355,11 +1357,25 @@ static void chat_apply_zoom(AiChatData *d, int delta)
 
     /* Recreate main font at new size */
     if (d->hFont) DeleteObject(d->hFont);
+    if (d->hIconFont) DeleteObject(d->hIconFont);
     int h = -MulDiv(new_size, d->dpi, 72);
     d->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                           DEFAULT_CHARSET, OUT_TT_PRECIS,
                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                           DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+                          
+    int ih = -MulDiv(new_size, d->dpi, 72);
+    d->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                               DEFAULT_CHARSET, OUT_TT_PRECIS,
+                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                               DEFAULT_PITCH | FF_DONTCARE, "Segoe Fluent Icons");
+    if (!d->hIconFont) {
+        d->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                   DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                   DEFAULT_PITCH | FF_DONTCARE, "Segoe MDL2 Assets");
+    }
+
     if (d->hFont) {
         SendMessage(d->hDisplay, WM_SETFONT, (WPARAM)d->hFont, TRUE);
         SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hFont, TRUE);
@@ -1422,9 +1438,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             pad + S(78) + pad, pad, S(115), btn_h,
             hwnd, (HMENU)IDC_CHAT_PERMIT, NULL, NULL);
 
-        /* Show Thinking button */
         nd->show_thinking = 0; /* default: off */
-        nd->hThinkingBtn = CreateWindow("BUTTON", "Show Thinking",
+        nd->hThinkingBtn = CreateWindow("BUTTON", "Thinking: OFF",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             pad + S(78) + pad + S(115) + pad, pad, S(115), btn_h,
             hwnd, (HMENU)IDC_CHAT_THINKING, NULL, NULL);
@@ -1497,8 +1512,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
             margin, top_y, disp_w, disp_h,
             hwnd, (HMENU)IDC_CHAT_DISPLAY, NULL, NULL);
-        if (nd->hDisplay)
+        if (nd->hDisplay) {
             SetWindowSubclass(nd->hDisplay, DisplaySubclassProc, 1, 0);
+            DWORD em = (DWORD)SendMessage(nd->hDisplay, EM_GETEVENTMASK, 0, 0);
+            SendMessage(nd->hDisplay, EM_SETEVENTMASK, 0, em | ENM_LINK);
+        }
 
         /* Custom themed scrollbar for chat display */
         csb_register(GetModuleHandle(NULL));
@@ -1551,6 +1569,19 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                     DEFAULT_CHARSET, OUT_TT_PRECIS,
                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                     DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+
+        /* Icon Font for Fluent UI */
+        int ih = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
+        nd->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                   DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                   DEFAULT_PITCH | FF_DONTCARE, "Segoe Fluent Icons");
+        if (!nd->hIconFont) {
+            nd->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                       DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                       CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                       DEFAULT_PITCH | FF_DONTCARE, "Segoe MDL2 Assets");
+        }
         #undef S
         if (nd->hFont) {
             SendMessage(nd->hDisplay, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
@@ -1591,12 +1622,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 "Red = AI can only run read-only commands\n"
                 "(ls, cat, pwd, etc).");
             add_tooltip(nd->hTooltip, nd->hThinkingBtn,
-                "Show Thinking\n"
-                "Toggle display of AI reasoning/thinking.\n"
-                "Green = show reasoning content.\n"
-                "Red = hide reasoning content.\n"
-                "Works with models that provide reasoning\n"
-                "(e.g. DeepSeek Reasoner).");
+                "Toggle Thinking\n"
+                "Show or hide the AI's internal reasoning process.");
             add_tooltip(nd->hTooltip, nd->hSaveBtn,
                 "Save\nSave the conversation as a text file.");
             if (nd->hUndockBtn)
@@ -1640,6 +1667,19 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             ScreenToClient(hwnd, &pt);
             if (pt.x < AI_DOCK_SPLITTER_HIT / 2)
                 return HTTRANSPARENT;
+        }
+        break;
+    }
+
+    case WM_NOTIFY: {
+        NMHDR *nmh = (NMHDR *)lParam;
+        if (d && nmh->hwndFrom == d->hDisplay && nmh->code == EN_LINK) {
+            ENLINK *enm = (ENLINK *)lParam;
+            if (enm->msg == WM_LBUTTONUP) {
+                if (!d->show_thinking) {
+                    PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CHAT_THINKING, BN_CLICKED), 0);
+                }
+            }
         }
         break;
     }
@@ -1736,45 +1776,33 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 InvalidateRect(d->hPermitBtn, NULL, TRUE);
             }
             return 0;
+
         case IDC_CHAT_THINKING:
             if (d) {
                 d->show_thinking = !d->show_thinking;
+                SetWindowText(d->hThinkingBtn, d->show_thinking ? "Thinking: ON" : "Thinking: OFF");
                 InvalidateRect(d->hThinkingBtn, NULL, TRUE);
 
-                if (!ACTIVE_BUSY(d)) {
-                    /* Not streaming — rebuild display to show/hide
-                     * thinking history for all past messages. */
-                    chat_rebuild_display(d);
-                } else if (d->show_thinking &&
-                           d->stream_thinking_len > 0 &&
-                           d->stream_phase == 1) {
-                    /* Toggled ON mid-stream while thinking is active:
-                     * insert all accumulated thinking retroactively. */
-                    chat_append_ops(d->hDisplay,
-                                    "\r\n--- Thinking ---\r\n");
-                    COLORREF col_dim = d->theme
-                        ? theme_cr(d->theme->text_dim)
-                        : RGB(140, 140, 140);
-                    chat_append_styled(d->hDisplay,
-                        d->stream_thinking, col_dim, 1);
-                } else if (!d->show_thinking && ACTIVE_BUSY(d)) {
-                    /* Toggled OFF mid-stream — rebuild to remove
-                     * thinking text, then re-append any content. */
-                    int saved_phase = d->stream_phase;
-                    chat_rebuild_display(d);
-                    d->stream_phase = saved_phase;
-                    if (saved_phase == 2 && d->stream_content_len > 0) {
-                        chat_append_ops(d->hDisplay,
-                                        "\r\n--- AI ---\r\n");
-                        COLORREF col_ai = d->theme
-                            ? theme_cr(d->theme->text_main)
-                            : GetSysColor(COLOR_WINDOWTEXT);
-                        chat_append_color(d->hDisplay,
-                            d->stream_content, col_ai);
+                if (ACTIVE_BUSY(d)) {
+                    if (d->show_thinking && d->stream_thinking_len > 0 && d->stream_phase == 1) {
+                        COLORREF col_purple = RGB(150, 100, 200);
+                        chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
+                        chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
+                    } else if (!d->show_thinking) {
+                        int saved_phase = d->stream_phase;
+                        chat_rebuild_display(d);
+                        d->stream_phase = saved_phase;
+                        if (saved_phase == 2 && d->stream_content_len > 0) {
+                            COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT);
+                            chat_append_color(d->hDisplay, d->stream_content, col_ai);
+                        }
                     }
+                } else {
+                    chat_rebuild_display(d);
                 }
             }
             return 0;
+
         case IDC_CHAT_ALLOW:
             if (d && d->pending_approval) {
                 d->pending_approval = 0;
@@ -1827,14 +1855,33 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             return 0;
         case IDC_CONTEXT_LABEL:
             if (d && HIWORD(wParam) == STN_CLICKED) {
-                if (d->context_limit <= 0) {
+                if (ACTIVE_BUSY(d)) {
+                    /* Toggle show thinking while busy */
+                    d->show_thinking = !d->show_thinking;
+                    if (d->hThinkingBtn) {
+                        SetWindowText(d->hThinkingBtn, d->show_thinking ? "Thinking: ON" : "Thinking: OFF");
+                        InvalidateRect(d->hThinkingBtn, NULL, TRUE);
+                    }
+                    if (d->show_thinking && d->stream_thinking_len > 0 && d->stream_phase == 1) {
+                        /* Toggled ON mid-stream while thinking is active:
+                         * insert all accumulated thinking retroactively. */
+                        COLORREF col_purple = RGB(150, 100, 200);
+                        chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
+                        chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
+                    } else if (!d->show_thinking) {
+                        /* Toggled OFF mid-stream — rebuild to remove thinking text */
+                        int saved_phase = d->stream_phase;
+                        chat_rebuild_display(d);
+                        d->stream_phase = saved_phase;
+                        if (saved_phase == 2 && d->stream_content_len > 0) {
+                            COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT);
+                            chat_append_color(d->hDisplay, d->stream_content, col_ai);
+                        }
+                    }
+                } else if (d->context_limit <= 0) {
                     MessageBox(hwnd,
                         "Context usage tracking is not available\n"
                         "for this model (unknown context limit).",
-                        "Compact Context", MB_OK | MB_ICONINFORMATION);
-                } else if (ACTIVE_BUSY(d)) {
-                    MessageBox(hwnd,
-                        "Cannot compact while AI is processing.",
                         "Compact Context", MB_OK | MB_ICONINFORMATION);
                 } else {
                     int r = MessageBox(hwnd,
@@ -1942,7 +1989,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 should_remove = 1;  /* thinking chunk, visible */
 
             if (should_remove && d->indicator_pos >= 0) {
-                KillTimer(hwnd, TIMER_THINKING);
+                KillTimer(d->hwnd, TIMER_THINKING);
                 SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
                 CHARRANGE cr_rm;
                 SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm);
@@ -1955,30 +2002,52 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Display the chunk */
         if (wParam == 0) {
-            /* Only display if show_thinking is on */
-            if (d->show_thinking) {
-                if (d->stream_phase != 1) {
-                    chat_append_ops(d->hDisplay, "\r\n--- Thinking ---\r\n");
-                    d->stream_phase = 1;
+            /* Thinking delta */
+            if (d->stream_phase < 1) {
+                d->stream_phase = 1;
+
+                COLORREF col_purple = RGB(150, 100, 200);
+                if (d->show_thinking) {
+                    chat_append_styled(d->hDisplay, "\r\n\r\n", col_purple, 0);
+                    chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
+                    GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
+                    d->stream_display_start =
+                        (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX,
+                                         (WPARAM)&gtx, 0);
+                } else {
+                    chat_append_styled(d->hDisplay, "\r\n\r\n", col_purple, 0);
+                    GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
+                    d->indicator_pos = (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX, (WPARAM)&gtx, 0);
+                    chat_append_styled_ex(d->hDisplay, "Thinking... (Click to view)\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
                 }
-                COLORREF col_dim = d->theme ? theme_cr(d->theme->text_dim)
-                                            : RGB(140, 140, 140);
-                chat_append_styled(d->hDisplay, delta, col_dim, 1);
+            }
+
+            if (d->show_thinking && delta && delta[0]) {
+                COLORREF col_purple = RGB(150, 100, 200);
+                char *fmt = format_ai_text(delta);
+                if (fmt) {
+                    chat_append_styled(d->hDisplay, fmt, col_purple, 1);
+                    free(fmt);
+                } else {
+                    chat_append_styled(d->hDisplay, delta, col_purple, 1);
+                }
             }
         } else {
-            if (d->stream_phase != 2) {
-                if (d->stream_phase == 1)
-                    chat_append_ops(d->hDisplay, "\r\n");
-                chat_append_ops(d->hDisplay, "\r\n--- AI ---\r\n");
-                d->stream_phase = 2;
-                /* Record where the AI content starts for markdown re-render */
-                CHARRANGE cr_start;
-                SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-                SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_start);
-                d->stream_display_start = cr_start.cpMin;
-            }
+            /* Content delta */
             COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main)
                                        : GetSysColor(COLOR_WINDOWTEXT);
+            if (d->stream_phase < 2) {
+                if (d->stream_phase == 1)
+                    chat_append_ops(d->hDisplay, "\r\n");
+                chat_append_styled(d->hDisplay, "\r\n\r\n", col_ai, 0);
+                chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
+                d->stream_phase = 2;
+                /* Record where the AI content starts for markdown re-render */
+                GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
+                d->stream_display_start =
+                    (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX,
+                                     (WPARAM)&gtx, 0);
+            }
             chat_append_color(d->hDisplay, delta, col_ai);
         }
 
@@ -2210,30 +2279,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->commands_executed = 0;
                 send_continue_message(d);
             }
-        } else if (wParam == TIMER_THINKING) {
-            /* Animate thinking/continuing indicator: cycle dots.
-             * Use EM_EXGETSEL for end position — RichEdit counts
-             * \r\n as 1 char internally, so GetWindowTextLength
-             * would give a wrong offset vs indicator_pos. */
-            if (d->indicator_pos >= 0) {
-                d->thinking_tick = (d->thinking_tick + 1) % 3;
-                static const char *dots[] = { ".", "..", "..." };
-                char frame[96];
-                snprintf(frame, sizeof(frame), "\r\n(%s%s)",
-                         d->indicator_base, dots[d->thinking_tick]);
-
-                /* Select from indicator to end using RichEdit offsets */
-                SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-                CHARRANGE cr_end;
-                SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_end);
-                CHARRANGE cr_sel = { d->indicator_pos, cr_end.cpMax };
-                SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
-                SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
-
-                /* Re-apply ops styling and insert new frame */
-                SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-                chat_append_ops(d->hDisplay, frame);
-            }
         } else if (wParam == TIMER_SCROLL_SYNC) {
             display_sync_scroll(d);
             input_sync_scroll(d);
@@ -2368,185 +2413,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 DeleteObject(hPen);
                 DeleteObject(hBr);
 
-                /* Draw 3D floppy disk icon — scaled to button size.
-                 * Two-colour scheme: steel blue body, bright silver
-                 * detail areas, with beveled edges for depth. */
-                int w = rc.right - rc.left;
-                int h = rc.bottom - rc.top;
-                int m = w / 5;  /* margin around icon */
-                int ix = rc.left + m;
-                int iy = rc.top + m;
-                int iw = w - m * 2;
-                int ih = h - m * 2;
-
-                /* Derive two icon colours from fg:
-                 *   col1 — steel-blue tinted body (mid-tone)
-                 *   col2 — bright silver for metal/label (light) */
-                BYTE fR = GetRValue(fg), fG = GetGValue(fg),
-                     fB = GetBValue(fg);
-                /* Tint toward steel-blue: dampen R, keep G, boost B */
-                COLORREF col1 = RGB(fR * 2 / 5,
-                                    fG * 3 / 5,
-                                    fB / 2 + 128 > 255 ? 255
-                                                        : fB / 2 + 128);
-                /* Bright silver — close to white, slight warmth */
-                COLORREF col2 = RGB(fR + (255 - fR) * 4 / 5,
-                                    fG + (255 - fG) * 4 / 5,
-                                    fB + (255 - fB) * 3 / 5);
-                /* Highlight and shadow derived from body colour */
-                BYTE c1R = GetRValue(col1), c1G = GetGValue(col1),
-                     c1B = GetBValue(col1);
-                COLORREF hi1 = RGB(c1R + (255 - c1R) / 2,
-                                   c1G + (255 - c1G) / 2,
-                                   c1B + (255 - c1B) / 2);
-                COLORREF lo1 = RGB(c1R * 2 / 5, c1G * 2 / 5, c1B * 2 / 5);
-                /* Shadow/highlight for silver detail areas */
-                BYTE c2R = GetRValue(col2), c2G = GetGValue(col2),
-                     c2B = GetBValue(col2);
-                COLORREF lo2 = RGB(c2R * 3 / 5, c2G * 3 / 5, c2B * 3 / 5);
-
-                int chamfer = iw / 4;
-                int bev = iw >= 14 ? 2 : 1; /* bevel thickness */
-
-                /* --- Drop shadow behind disk (offset 1px) --- */
-                {
-                    POINT sh[5] = {
-                        { ix + 1,                  iy + 1 },
-                        { ix + iw - chamfer + 1,   iy + 1 },
-                        { ix + iw + 1,             iy + chamfer + 1 },
-                        { ix + iw + 1,             iy + ih + 1 },
-                        { ix + 1,                  iy + ih + 1 }
-                    };
-                    HBRUSH hShBr = CreateSolidBrush(lo1);
-                    HPEN hShPen = CreatePen(PS_SOLID, 1, lo1);
-                    SelectObject(hdc, hShBr);
-                    SelectObject(hdc, hShPen);
-                    Polygon(hdc, sh, 5);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hShBr);
-                    DeleteObject(hShPen);
-                }
-
-                /* --- Disk body (col1 fill) --- */
-                {
-                    POINT body[5] = {
-                        { ix,                  iy },
-                        { ix + iw - chamfer,   iy },
-                        { ix + iw,             iy + chamfer },
-                        { ix + iw,             iy + ih },
-                        { ix,                  iy + ih }
-                    };
-                    HBRUSH hBodyBr = CreateSolidBrush(col1);
-                    HPEN hBodyPen = CreatePen(PS_SOLID, 1, col1);
-                    SelectObject(hdc, hBodyBr);
-                    SelectObject(hdc, hBodyPen);
-                    Polygon(hdc, body, 5);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
-                    DeleteObject(hBodyBr);
-                    DeleteObject(hBodyPen);
-
-                    /* Beveled highlight — top & left edges */
-                    HPEN hHi = CreatePen(PS_SOLID, 1, hi1);
-                    SelectObject(hdc, hHi);
-                    int b;
-                    for (b = 0; b < bev; b++) {
-                        MoveToEx(hdc, ix + b, iy + ih - 1 - b, NULL);
-                        LineTo(hdc, ix + b, iy + b);
-                        LineTo(hdc, ix + iw - chamfer - b, iy + b);
-                    }
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hHi);
-
-                    /* Beveled shadow — bottom & right edges */
-                    HPEN hLo = CreatePen(PS_SOLID, 1, lo1);
-                    SelectObject(hdc, hLo);
-                    for (b = 0; b < bev; b++) {
-                        MoveToEx(hdc, ix + 1 + b, iy + ih - b, NULL);
-                        LineTo(hdc, ix + iw - b, iy + ih - b);
-                        LineTo(hdc, ix + iw - b, iy + chamfer + b);
-                    }
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hLo);
-
-                    /* Chamfer fold line — diagonal accent */
-                    HPEN hCh = CreatePen(PS_SOLID, 1, lo1);
-                    SelectObject(hdc, hCh);
-                    MoveToEx(hdc, ix + iw - chamfer, iy, NULL);
-                    LineTo(hdc, ix + iw, iy + chamfer);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hCh);
-                }
-
-                /* --- Metal slider area (col2, top centre) --- */
-                {
-                    int sw = iw * 5 / 9;
-                    int sh = ih * 2 / 5;
-                    int sx = ix + (iw - sw) / 2;
-                    int sy = iy + 1;
-
-                    /* Silver fill */
-                    HBRUSH hSlBr = CreateSolidBrush(col2);
-                    RECT slRc = { sx, sy, sx + sw, sy + sh };
-                    FillRect(hdc, &slRc, hSlBr);
-                    DeleteObject(hSlBr);
-
-                    /* Beveled inset border on slider */
-                    HPEN hSlLo = CreatePen(PS_SOLID, 1, lo2);
-                    SelectObject(hdc, hSlLo);
-                    MoveToEx(hdc, sx, sy + sh - 1, NULL);
-                    LineTo(hdc, sx + sw - 1, sy + sh - 1);
-                    LineTo(hdc, sx + sw - 1, sy - 1);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hSlLo);
-
-                    /* Shutter opening — dark notch in right half */
-                    int ow = sw / 3;
-                    int ox = sx + sw - ow - 1;
-                    HBRUSH hOpenBr = CreateSolidBrush(lo1);
-                    RECT openRc = { ox, sy + 1, ox + ow, sy + sh - 1 };
-                    FillRect(hdc, &openRc, hOpenBr);
-                    DeleteObject(hOpenBr);
-                }
-
-                /* --- Label area (col2, bottom centre) --- */
-                {
-                    int lw = iw * 3 / 4;
-                    int lh = ih * 2 / 5;
-                    int lx = ix + (iw - lw) / 2;
-                    int ly = iy + ih - lh - 1;
-
-                    /* Silver fill */
-                    HBRUSH hLabBr = CreateSolidBrush(col2);
-                    RECT labRc = { lx, ly, lx + lw, ly + lh };
-                    FillRect(hdc, &labRc, hLabBr);
-                    DeleteObject(hLabBr);
-
-                    /* Inset shadow — top and left of label */
-                    HPEN hLabLo = CreatePen(PS_SOLID, 1, lo2);
-                    SelectObject(hdc, hLabLo);
-                    MoveToEx(hdc, lx, ly + lh - 1, NULL);
-                    LineTo(hdc, lx, ly);
-                    LineTo(hdc, lx + lw, ly);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hLabLo);
-
-                    /* Ruled lines on the label */
-                    HPEN hLinePen = CreatePen(PS_SOLID, 1, lo2);
-                    SelectObject(hdc, hLinePen);
-                    int lx1 = lx + 2, lx2 = lx + lw - 2;
-                    int ly1 = ly + lh / 4;
-                    int ly2 = ly + lh / 2;
-                    int ly3 = ly + lh * 3 / 4;
-                    MoveToEx(hdc, lx1, ly1, NULL);
-                    LineTo(hdc, lx2, ly1);
-                    MoveToEx(hdc, lx1, ly2, NULL);
-                    LineTo(hdc, lx2, ly2);
-                    MoveToEx(hdc, lx1, ly3, NULL);
-                    LineTo(hdc, lx2, ly3);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hLinePen);
-                }
+                /* Draw Fluent UI floppy disk icon (\xE74E Save) */
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, fg);
+                HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont ? d->hIconFont : d->hFont);
+                RECT txtRc = rc;
+                DrawTextW(hdc, L"\xE74E", -1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(hdc, prevF);
             } else if ((int)dis->CtlID == IDC_CHAT_UNDOCK) {
                 /* Square undock button with 3D pop-out/dock-in icon */
                 HDC hdc = dis->hDC;
@@ -2571,82 +2444,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 DeleteObject(hPen);
                 DeleteObject(hBr);
 
-                /* Draw pop-out or dock-in icon — outline style with
-                 * 3D highlight/shadow on edges for depth. */
-                int bw = brc.right - brc.left;
-                int bh = brc.bottom - brc.top;
-                int um = bw / 4;
-                int uix = brc.left + um;
-                int uiy = brc.top + um;
-                int uiw = bw - um * 2;
-                int uih = bh - um * 2;
-
-                /* Two colours from fg for 3D line treatment */
-                BYTE uR = GetRValue(fg), uG = GetGValue(fg),
-                     uB = GetBValue(fg);
-                COLORREF uHi = RGB(uR + (255 - uR) / 2,
-                                   uG + (255 - uG) / 2,
-                                   uB + (255 - uB) / 2);
-                COLORREF uLo = RGB(uR * 2 / 5, uG * 2 / 5, uB * 2 / 5);
-
-                /* Same-size square for both states */
-                int rsz = uiw * 3 / 5;
-
-                if (d->docked) {
-                    /* Pop-out: square at bottom-left + arrow to top-right */
-                    int rx = uix, ry = uiy + uih - rsz;
-
-                    /* Shadow offset behind rectangle */
-                    HPEN hSh = CreatePen(PS_SOLID, 1, uLo);
-                    SelectObject(hdc, hSh);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
-                    Rectangle(hdc, rx + 1, ry + 1, rx + rsz + 1, ry + rsz + 1);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hSh);
-
-                    /* Highlight rectangle outline */
-                    HPEN hFg = CreatePen(PS_SOLID, 1, uHi);
-                    SelectObject(hdc, hFg);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
-                    Rectangle(hdc, rx, ry, rx + rsz, ry + rsz);
-
-                    /* Arrow shaft + head pointing to top-right */
-                    int ax = uix + uiw, ay = uiy;
-                    MoveToEx(hdc, uix + uiw / 3, uiy + uih * 2 / 3, NULL);
-                    LineTo(hdc, ax, ay);
-                    MoveToEx(hdc, ax - uiw / 3, ay, NULL);
-                    LineTo(hdc, ax, ay);
-                    LineTo(hdc, ax, ay + uih / 3);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hFg);
-                } else {
-                    /* Dock-in: square at top-right + arrow to bottom-left */
-                    int rx = uix + uiw - rsz, ry = uiy;
-
-                    /* Shadow offset behind rectangle */
-                    HPEN hSh = CreatePen(PS_SOLID, 1, uLo);
-                    SelectObject(hdc, hSh);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
-                    Rectangle(hdc, rx + 1, ry + 1, rx + rsz + 1, ry + rsz + 1);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hSh);
-
-                    /* Highlight rectangle outline */
-                    HPEN hFg = CreatePen(PS_SOLID, 1, uHi);
-                    SelectObject(hdc, hFg);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_BRUSH));
-                    Rectangle(hdc, rx, ry, rx + rsz, ry + rsz);
-
-                    /* Arrow shaft + head pointing to bottom-left */
-                    int ax = uix, ay = uiy + uih;
-                    MoveToEx(hdc, uix + uiw * 2 / 3, uiy + uih / 3, NULL);
-                    LineTo(hdc, ax, ay);
-                    MoveToEx(hdc, ax + uiw / 3, ay, NULL);
-                    LineTo(hdc, ax, ay);
-                    LineTo(hdc, ax, ay - uih / 3);
-                    SelectObject(hdc, (HGDIOBJ)GetStockObject(NULL_PEN));
-                    DeleteObject(hFg);
-                }
+                /* Draw Fluent UI Pop-out/Dock icon */
+                SetBkMode(hdc, TRANSPARENT);
+                SetTextColor(hdc, fg);
+                HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont ? d->hIconFont : d->hFont);
+                /* \xE8A7 = FullScreen (outer arrows), \xE923 = BackToWindow */
+                DrawTextW(hdc, d->docked ? L"\xE8A7" : L"\xE923", -1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                SelectObject(hdc, prevF);
             } else if ((int)dis->CtlID == IDC_CHAT_ALLOW) {
                 /* Green Allow button */
                 HDC hdc = dis->hDC;
@@ -2734,6 +2538,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             DeleteCriticalSection(&d->cs);
             if (d->hFont) DeleteObject(d->hFont);
             if (d->hSmallFont) DeleteObject(d->hSmallFont);
+            if (d->hIconFont) DeleteObject(d->hIconFont);
             if (d->hTooltip) DestroyWindow(d->hTooltip);
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
@@ -3095,18 +2900,19 @@ static void do_session_switch(AiChatData *d,
         d->stream_phase = new_state->stream_phase;
 
         if (d->show_thinking && d->stream_thinking_len > 0) {
-            COLORREF col_dim = d->theme
-                ? theme_cr(d->theme->text_dim) : RGB(140, 140, 140);
-            chat_append_ops(d->hDisplay, "\r\n--- Thinking ---\r\n");
-            chat_append_styled(d->hDisplay, d->stream_thinking, col_dim, 1);
+            COLORREF col_purple = RGB(150, 100, 200);
+            chat_append_styled(d->hDisplay, "\r\n\r\n", col_purple, 0);
+            chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
+            chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
             d->stream_phase = 1;
         }
         if (d->stream_content_len > 0) {
             if (d->stream_phase == 1)
                 chat_append_ops(d->hDisplay, "\r\n");
-            chat_append_ops(d->hDisplay, "\r\n--- AI ---\r\n");
             COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main)
                                        : GetSysColor(COLOR_WINDOWTEXT);
+            chat_append_styled(d->hDisplay, "\r\n\r\n", col_ai, 0);
+            chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
             chat_append_color(d->hDisplay, d->stream_content, col_ai);
             d->stream_phase = 2;
         } else if (d->stream_phase <= 1) {

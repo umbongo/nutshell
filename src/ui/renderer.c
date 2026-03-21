@@ -231,15 +231,24 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             COLORREF run_fg = fg, run_bg = bg;
             bool run_bold = bold;
             WCHAR run_buf[1024]; /* extra room for surrogate pairs */
+            INT run_dx[1024];    /* explicit spacing per WCHAR */
             int run_start = col_idx;
             int run_len = 0;
             if (cp == 0) {
-                run_buf[run_len++] = L' ';
+                run_buf[run_len] = L' ';
+                run_dx[run_len] = r->charWidth;
+                run_len++;
             } else if (cp > 0xFFFF) {
-                run_buf[run_len++] = (WCHAR)(0xD800 + ((cp - 0x10000) >> 10));
-                run_buf[run_len++] = (WCHAR)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+                run_buf[run_len] = (WCHAR)(0xD800 + ((cp - 0x10000) >> 10));
+                run_dx[run_len] = r->charWidth;
+                run_len++;
+                run_buf[run_len] = (WCHAR)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+                run_dx[run_len] = 0; /* second surrogate half takes 0 cells */
+                run_len++;
             } else {
-                run_buf[run_len++] = (WCHAR)cp;
+                run_buf[run_len] = (WCHAR)cp;
+                run_dx[run_len] = r->charWidth;
+                run_len++;
             }
             dispbuf_cell_update(&r->dispbuf, row_idx, col_idx,
                                 cp, (uint32_t)fg, (uint32_t)bg, aflags);
@@ -253,12 +262,20 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
                 cp = cell->codepoint;
                 aflags = cell->attr.flags;
                 if (cp == 0) {
-                    run_buf[run_len++] = L' ';
+                    run_buf[run_len] = L' ';
+                    run_dx[run_len] = r->charWidth;
+                    run_len++;
                 } else if (cp > 0xFFFF) {
-                    run_buf[run_len++] = (WCHAR)(0xD800 + ((cp - 0x10000) >> 10));
-                    run_buf[run_len++] = (WCHAR)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+                    run_buf[run_len] = (WCHAR)(0xD800 + ((cp - 0x10000) >> 10));
+                    run_dx[run_len] = r->charWidth;
+                    run_len++;
+                    run_buf[run_len] = (WCHAR)(0xDC00 + ((cp - 0x10000) & 0x3FF));
+                    run_dx[run_len] = 0;
+                    run_len++;
                 } else {
-                    run_buf[run_len++] = (WCHAR)cp;
+                    run_buf[run_len] = (WCHAR)cp;
+                    run_dx[run_len] = r->charWidth;
+                    run_len++;
                 }
                 dispbuf_cell_update(&r->dispbuf, row_idx, col_idx,
                                     cp, (uint32_t)fg, (uint32_t)bg, aflags);
@@ -275,9 +292,10 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             SetTextColor(hdc, run_fg);
             SetBkColor(hdc, run_bg);
             LONG px = (LONG)x + (LONG)run_start * r->charWidth;
-            RECT runRect = {px, py, px + (LONG)run_len * r->charWidth, py + r->charHeight};
+            int run_cols = col_idx - run_start;
+            RECT runRect = {px, py, px + (LONG)run_cols * r->charWidth, py + r->charHeight};
             ExtTextOutW(hdc, (int)px, (int)py, ETO_OPAQUE | ETO_CLIPPED, &runRect,
-                        run_buf, (UINT)run_len, NULL);
+                        run_buf, (UINT)run_len, run_dx);
         }
 
         row->dirty = false;
