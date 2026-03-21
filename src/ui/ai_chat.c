@@ -221,7 +221,7 @@ static void chat_append_styled(HWND hDisplay, const char *text,
         ReleaseDC(hDisplay, hdc_a);
     }
     int vis_lns = (font_h > 0) ? ((rc_disp.bottom - rc_disp.top) / font_h) : 1;
-    int was_at_bottom = (first_vis + vis_lns >= total_lns) || (total_lns <= vis_lns);
+    int was_at_bottom = (first_vis + vis_lns + 2 >= total_lns) || (total_lns <= vis_lns);
 
     SendMessage(hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
 
@@ -246,7 +246,8 @@ static void chat_append_styled(HWND hDisplay, const char *text,
     }
 
     if (was_at_bottom) {
-        SendMessage(hDisplay, WM_VSCROLL, SB_BOTTOM, 0);
+        SendMessage(hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+        SendMessage(hDisplay, EM_SCROLLCARET, 0, 0);
     }
 }
 
@@ -285,7 +286,7 @@ static void chat_append_styled_ex(HWND hDisplay, const char *text,
         ReleaseDC(hDisplay, hdc_a);
     }
     int vis_lns = (font_h > 0) ? ((rc_disp.bottom - rc_disp.top) / font_h) : 1;
-    int was_at_bottom = (first_vis + vis_lns >= total_lns) || (total_lns <= vis_lns);
+    int was_at_bottom = (first_vis + vis_lns + 2 >= total_lns) || (total_lns <= vis_lns);
 
     SendMessage(hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
 
@@ -321,8 +322,10 @@ static void chat_append_styled_ex(HWND hDisplay, const char *text,
         }
     }
 
-    if (was_at_bottom)
-        SendMessage(hDisplay, WM_VSCROLL, SB_BOTTOM, 0);
+    if (was_at_bottom) {
+        SendMessage(hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+        SendMessage(hDisplay, EM_SCROLLCARET, 0, 0);
+    }
 }
 
 #include "markdown.h"
@@ -906,7 +909,8 @@ static void chat_rebuild_display(AiChatData *d)
     }
 
     /* Scroll to bottom */
-    SendMessage(d->hDisplay, WM_VSCROLL, SB_BOTTOM, 0);
+    SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+    SendMessage(d->hDisplay, EM_SCROLLCARET, 0, 0);
     update_context_bar(d);
 }
 
