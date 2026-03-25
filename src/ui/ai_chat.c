@@ -293,9 +293,9 @@ static void chat_append_styled_ex(HWND hDisplay, const char *text,
     CHARFORMAT2 cf;
     memset(&cf, 0, sizeof(cf));
     cf.cbSize = sizeof(cf);
-    cf.dwMask = CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_STRIKEOUT | CFM_LINK;
+    cf.dwMask = CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_STRIKEOUT | CFM_LINK | CFM_UNDERLINE;
     cf.crTextColor = color;
-    cf.dwEffects = effects;
+    cf.dwEffects = effects & ~((DWORD)CFE_UNDERLINE);  /* Remove underline even if CFE_LINK is set */
 
     if (bgColor != CLR_DEFAULT) {
         cf.dwMask |= CFM_BACKCOLOR;
@@ -2102,15 +2102,23 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             return 0;
         }
 
-        /* Remove thinking/continuing indicator using saved position */
+        /* Remove temporary processing indicator, but keep collapsed thinking indicator */
         KillTimer(hwnd, TIMER_THINKING);
         if (d->indicator_pos >= 0) {
-            SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-            CHARRANGE cr_rm2;
-            SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm2);
-            CHARRANGE cr_sel2 = { d->indicator_pos, cr_rm2.cpMax };
-            SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel2);
-            SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
+            /* Only remove if it's the temporary "> processing..." indicator (phase 0)
+             * or if we're showing expanded thinking (phase 1 with show_thinking=true).
+             * Keep the collapsed "> Thinking..." indicator (phase 1 with show_thinking=false)
+             * so user can click to expand after streaming completes. */
+            int should_remove_indicator = (d->stream_phase == 0) ||
+                                         (d->stream_phase == 1 && d->show_thinking);
+            if (should_remove_indicator) {
+                SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+                CHARRANGE cr_rm2;
+                SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm2);
+                CHARRANGE cr_sel2 = { d->indicator_pos, cr_rm2.cpMax };
+                SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel2);
+                SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
+            }
             d->indicator_pos = -1;
         }
 
