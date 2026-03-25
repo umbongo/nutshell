@@ -378,6 +378,7 @@ void term_alt_screen_enter(Terminal *term)
     term->lines_capacity  = cap;
     term->lines_count     = cap;
     term->lines_start     = 0;
+    term->scrollback_offset = 0;
     term->cursor.row      = 0;
     term->cursor.col      = 0;
     term->scroll_top      = 0;
@@ -402,6 +403,7 @@ void term_alt_screen_exit(Terminal *term)
     term->cursor          = term->primary_cursor;
     term->primary_lines   = NULL;
     term->alt_screen_active = false;
+    term->scrollback_offset = 0;
     term->scroll_top = 0;
     term->scroll_bot = term->rows - 1;
 

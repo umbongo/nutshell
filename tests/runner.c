@@ -319,6 +319,8 @@ int test_vt_unknown_private_mode(void);
 int test_vt_osc_special_chars(void);
 int test_vt_alt_screen_isolation(void);
 int test_vt_alt_screen_resets_attr(void);
+int test_vt_alt_screen_resets_scrollback_enter(void);
+int test_vt_alt_screen_resets_scrollback_exit(void);
 
 /* test_connect_anim.c */
 int test_anim_dots_zero_elapsed(void);
@@ -1267,6 +1269,8 @@ int main(void) {
     failed += test_vt_osc_special_chars();
     failed += test_vt_alt_screen_isolation();
     failed += test_vt_alt_screen_resets_attr();
+    failed += test_vt_alt_screen_resets_scrollback_enter();
+    failed += test_vt_alt_screen_resets_scrollback_exit();
 
     printf("\n--- Theme ---\n");
     failed += test_theme_dark_background();

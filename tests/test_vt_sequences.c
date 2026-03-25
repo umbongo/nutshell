@@ -242,3 +242,42 @@ int test_vt_alt_screen_resets_attr(void)
     term_free(t);
     TEST_END();
 }
+
+/* Regression: scrollback_offset must be reset to 0 on alt screen enter,
+ * otherwise the renderer shows stale scroll position from the primary buffer
+ * (full-screen apps like nano appear broken until the user scrolls down). */
+int test_vt_alt_screen_resets_scrollback_enter(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 100);
+    /* Fill enough lines to create scrollback */
+    for (int i = 0; i < 20; i++)
+        term_process(t, "Line\r\n", 6);
+    /* Simulate user scrolling back */
+    t->scrollback_offset = 5;
+    ASSERT_EQ(t->scrollback_offset, 5);
+    /* Enter alt screen — offset must be reset */
+    term_process(t, "\033[?1049h", 8);
+    ASSERT_EQ(t->scrollback_offset, 0);
+    term_free(t);
+    TEST_END();
+}
+
+/* Regression: scrollback_offset must be reset to 0 on alt screen exit,
+ * so the primary buffer view snaps to the live bottom. */
+int test_vt_alt_screen_resets_scrollback_exit(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 100);
+    /* Enter alt screen */
+    term_process(t, "\033[?1049h", 8);
+    /* Simulate user scrolling back while in alt screen */
+    t->scrollback_offset = 3;
+    ASSERT_EQ(t->scrollback_offset, 3);
+    /* Exit alt screen — offset must be reset */
+    term_process(t, "\033[?1049l", 8);
+    ASSERT_EQ(t->scrollback_offset, 0);
+    term_free(t);
+    TEST_END();
+}
+
