@@ -39,6 +39,7 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define IDC_SESSION_LABEL 2009
 #define IDC_CHAT_SAVE     2010
 #define IDC_CHAT_ALLOW    2011
+#define IDC_THINKING_BOX  2014
 #define IDC_CHAT_DENY     2012
 #define IDC_CHAT_UNDOCK   2013
 
@@ -81,6 +82,7 @@ static LRESULT CALLBACK DisplaySubclassProc(HWND hwnd, UINT msg,
 typedef struct {
     HWND hwnd;
     HWND hDisplay;
+    HWND hThinkingBox;  /* Embedded textbox for thinking/processing content */
     HWND hInput;
     HWND hSendBtn;
     HWND hNewChatBtn;
@@ -533,7 +535,7 @@ static void chat_append_markdown(HWND hDisplay, const char *raw,
  *   - Convert \n to \r\n for Win32 EDIT control
  *   - Replace [EXEC]cmd[/EXEC] with "  > cmd" blocks
  *   - Result must be freed by caller */
-static char *format_ai_text(const char *raw)
+__attribute__((unused)) static char *format_ai_text(const char *raw)
 {
     if (!raw) return NULL;
 
@@ -892,30 +894,10 @@ static void chat_rebuild_display(AiChatData *d)
         } else if (msg->role == AI_ROLE_ASSISTANT) {
             chat_append_styled(d->hDisplay, "\r\n\r\n", col_ai, 0);
             chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
-            /* Show thinking block if it exists */
+            /* Show thinking indicator if it exists - thinking content shown in embedded textbox when clicked */
             if (d->thinking_history[i] && d->thinking_history[i][0]) {
                 COLORREF col_purple = RGB(150, 100, 200);
                 chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
-                if (d->show_thinking) {
-                    /* Format thinking text and show with indentation and left border */
-                    char *fmt_think = format_ai_text(d->thinking_history[i]);
-                    const char *think_text = fmt_think ? fmt_think : d->thinking_history[i];
-
-                    /* Add indented thinking with left border line */
-                    char *thinking_copy = str_dup(think_text);
-                    if (thinking_copy) {
-                        char *line = strtok(thinking_copy, "\n");
-                        while (line) {
-                            chat_append_styled_ex(d->hDisplay, "  │ ", col_purple, CLR_DEFAULT, 0, NULL, 0);
-                            chat_append_styled(d->hDisplay, line, col_purple, 0);
-                            chat_append_styled(d->hDisplay, "\r\n", col_purple, 0);
-                            line = strtok(NULL, "\n");
-                        }
-                        free(thinking_copy);
-                    }
-
-                    if (fmt_think) free(fmt_think);
-                }
             }
             chat_append_markdown(d->hDisplay, msg->content, col_ai,
                                  d->theme, d->ai_font_name);
@@ -1318,11 +1300,24 @@ static void relayout(AiChatData *d)
         int disp_w, disp_h;
         ai_dock_chat_layout(cw, ch, top_y, input_h, approve_h, margin,
                             CSB_WIDTH, &disp_w, &disp_h);
+
+        /* If thinking box is visible, split the display area */
+        int think_h = S(100);  /* Height of thinking box */
+        int actual_disp_h = disp_h;
+        if (d->hThinkingBox && IsWindowVisible(d->hThinkingBox)) {
+            actual_disp_h = disp_h - think_h - pad;
+            if (actual_disp_h < S(50)) actual_disp_h = S(50);  /* Minimum display height */
+
+            /* Position thinking box below display */
+            MoveWindow(d->hThinkingBox, margin, top_y + actual_disp_h + pad,
+                      disp_w, think_h, TRUE);
+        }
+
         if (d->hDisplay)
-            MoveWindow(d->hDisplay, margin, top_y, disp_w, disp_h, TRUE);
+            MoveWindow(d->hDisplay, margin, top_y, disp_w, actual_disp_h, TRUE);
         if (d->hDisplayScrollbar)
             MoveWindow(d->hDisplayScrollbar, margin + disp_w, top_y,
-                       CSB_WIDTH, disp_h, TRUE);
+                       CSB_WIDTH, actual_disp_h, TRUE);
     }
     /* Approval buttons — between display and input */
     if (d->hAllowBtn && d->hDenyBtn) {
@@ -1553,6 +1548,18 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         (LPARAM)(nd->theme ? theme_cr(nd->theme->bg_secondary)
                                            : GetSysColor(COLOR_WINDOW)));
 
+        /* Thinking box: initially hidden, appears when indicator is clicked */
+        nd->hThinkingBox = CreateWindowW(L"EDIT", L"",
+            WS_CHILD | WS_BORDER | WS_VSCROLL |
+            ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
+            margin, top_y + disp_h - S(100), disp_w, S(100),
+            hwnd, (HMENU)IDC_THINKING_BOX, NULL, NULL);
+        if (nd->hThinkingBox) {
+            COLORREF bg = nd->theme ? theme_cr(nd->theme->bg_primary) : RGB(40, 40, 40);
+            SendMessage(nd->hThinkingBox, EM_SETBKGNDCOLOR, 0, (LPARAM)bg);
+            ShowWindow(nd->hThinkingBox, SW_HIDE);  /* Hidden by default */
+        }
+
         /* Input field: multiline, Enter sends via subclass, Shift+Enter = newline */
         int send_w = S(40);
         int input_y = ch - input_h - margin;
@@ -1696,42 +1703,43 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (d && nmh->hwndFrom == d->hDisplay && nmh->code == EN_LINK) {
             ENLINK *enm = (ENLINK *)lParam;
             if (enm->msg == WM_LBUTTONUP) {
-                /* Always allow clicking indicators - toggle thinking/processing display */
+                /* Toggle thinking textbox visibility */
                 d->show_thinking = !d->show_thinking;
 
-                if (ACTIVE_BUSY(d)) {
-                    /* During streaming - rebuild and restore current phase */
-                    int saved_phase = d->stream_phase;
-                    chat_rebuild_display(d);
-                    d->stream_phase = saved_phase;
+                if (d->hThinkingBox) {
+                    if (d->show_thinking) {
+                        /* Show thinking box and populate it */
+                        ShowWindow(d->hThinkingBox, SW_SHOW);
 
-                    /* Re-add any streamed content based on phase */
-                    COLORREF col_purple = RGB(150, 100, 200);
-                    if (saved_phase >= 1 && d->stream_thinking_len > 0 && d->show_thinking) {
-                        /* Show thinking content indented with left border */
-                        chat_append_styled_ex(d->hDisplay, "\r\n  ", col_purple, CLR_DEFAULT, 0, NULL, 0);
-                        chat_append_styled_ex(d->hDisplay, "│ ", col_purple, CLR_DEFAULT, 0, NULL, 0);
-                        char *thinking_copy = str_dup(d->stream_thinking);
-                        if (thinking_copy) {
-                            /* Add indentation to each line of thinking */
-                            char *line = strtok(thinking_copy, "\n");
-                            while (line) {
-                                chat_append_styled_ex(d->hDisplay, "  │ ", col_purple, CLR_DEFAULT, 0, NULL, 0);
-                                chat_append_styled(d->hDisplay, line, col_purple, 0);
-                                chat_append_styled(d->hDisplay, "\r\n", col_purple, 0);
-                                line = strtok(NULL, "\n");
+                        /* Clear and populate with current thinking content */
+                        SetWindowTextA(d->hThinkingBox, "");
+                        if (ACTIVE_BUSY(d) && d->stream_thinking_len > 0) {
+                            /* Streaming - show current thinking buffer */
+                            SetWindowTextA(d->hThinkingBox, d->stream_thinking);
+                        } else {
+                            /* Find thinking from history for last AI message */
+                            for (int i = d->conv.msg_count - 1; i >= 0; i--) {
+                                if (d->conv.messages[i].role == AI_ROLE_ASSISTANT &&
+                                    d->thinking_history[i] && d->thinking_history[i][0]) {
+                                    SetWindowTextA(d->hThinkingBox, d->thinking_history[i]);
+                                    break;
+                                }
                             }
-                            free(thinking_copy);
                         }
-                    }
 
-                    if (saved_phase == 2 && d->stream_content_len > 0) {
-                        COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT);
-                        chat_append_color(d->hDisplay, d->stream_content, col_ai);
+                        /* Trigger layout to adjust display/thinking box sizes */
+                        RECT rc;
+                        GetClientRect(d->hwnd, &rc);
+                        SendMessage(d->hwnd, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
+                    } else {
+                        /* Hide thinking box */
+                        ShowWindow(d->hThinkingBox, SW_HIDE);
+
+                        /* Trigger layout to restore display size */
+                        RECT rc;
+                        GetClientRect(d->hwnd, &rc);
+                        SendMessage(d->hwnd, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
                     }
-                } else {
-                    /* Not streaming - rebuild entire display from history */
-                    chat_rebuild_display(d);
                 }
             }
         }
@@ -2040,25 +2048,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 }
             }
 
-            if (d->show_thinking && delta && delta[0]) {
-                COLORREF col_purple = RGB(150, 100, 200);
-                char *fmt = format_ai_text(delta);
-                const char *text_to_show = fmt ? fmt : delta;
-
-                /* Add indentation with left border to thinking content */
-                char *thinking_copy = str_dup(text_to_show);
-                if (thinking_copy) {
-                    char *line = strtok(thinking_copy, "\n");
-                    while (line) {
-                        chat_append_styled_ex(d->hDisplay, "  │ ", col_purple, CLR_DEFAULT, 0, NULL, 0);
-                        chat_append_styled(d->hDisplay, line, col_purple, 0);
-                        chat_append_styled(d->hDisplay, "\r\n", col_purple, 0);
-                        line = strtok(NULL, "\n");
-                    }
-                    free(thinking_copy);
-                }
-
-                if (fmt) free(fmt);
+            /* Update thinking box if visible */
+            if (d->show_thinking && d->hThinkingBox && delta && delta[0]) {
+                SetWindowTextA(d->hThinkingBox, d->stream_thinking);
             }
         } else {
             /* Content delta (no thinking - simple response) */
