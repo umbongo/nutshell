@@ -1681,6 +1681,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (d && nmh->hwndFrom == d->hDisplay && nmh->code == EN_LINK) {
             ENLINK *enm = (ENLINK *)lParam;
             if (enm->msg == WM_LBUTTONUP) {
+                /* Only toggle thinking if we have thinking content (phase >= 1 and thinking_len > 0) */
+                /* Clicking "> processing..." (phase 0) should do nothing */
+                if (ACTIVE_BUSY(d) && d->stream_phase == 0) {
+                    /* Still in processing phase - ignore click */
+                    break;
+                }
+
                 /* Toggle thinking display when clicking '>' indicator */
                 d->show_thinking = !d->show_thinking;
                 if (ACTIVE_BUSY(d)) {
