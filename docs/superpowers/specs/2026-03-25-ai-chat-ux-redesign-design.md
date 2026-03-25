@@ -28,8 +28,7 @@ Replace the single RichEdit control with a structured message list. Each convers
 ```c
 typedef enum {
     CHAT_ITEM_USER,      /* User prompt */
-    CHAT_ITEM_AI_TEXT,   /* AI response with markdown */
-    CHAT_ITEM_THINKING,  /* Collapsible thinking region (child of AI item) */
+    CHAT_ITEM_AI_TEXT,   /* AI response with markdown + embedded thinking */
     CHAT_ITEM_COMMAND,   /* Command block with approve/deny */
     CHAT_ITEM_STATUS     /* System messages, errors, denied notices */
 } ChatItemType;
@@ -51,9 +50,8 @@ typedef struct ChatMsgItem {
             int thinking_complete;   /* 1 = streaming finished */
         } ai;
         struct {
-            char command[1024];
-            int safety_tier;         /* 1=critical, 2=high, 3=moderate, 4=low */
-            int requires_permit;     /* 1 = needs permit_write */
+            char *command;           /* Heap-allocated command string (UTF-8) */
+            CmdSafetyLevel safety;   /* CMD_SAFE, CMD_WRITE, or CMD_CRITICAL */
             int approved;            /* -1=pending, 0=denied, 1=approved */
             int blocked;             /* 1 = blocked by permit_write=off */
         } cmd;
@@ -102,6 +100,34 @@ User action / AI stream chunk
 ```
 
 **Virtual scrolling**: Only items intersecting the visible viewport are painted. A running `y_offset` accumulator determines which items are visible given the current scroll position. This keeps performance O(visible items) regardless of conversation length.
+
+**Theme change handling**: When the theme changes, all `measured_height` caches are invalidated (all items marked dirty) and a full relayout is triggered. This is cheaper than the old RichEdit approach since no stored formatted text needs to be re-styled — items are simply repainted with new colors/metrics.
+
+### 2.4 Concurrency Model
+
+The `ChatMsgItem` linked list is **owned exclusively by the UI thread**. No other thread may read or write it.
+
+**Stream delivery**: The existing `WM_AI_STREAM` posted-message pattern is preserved. The background HTTP thread accumulates chunks and posts `WM_AI_STREAM` to the UI thread's message queue with a heap-allocated copy of the chunk. The UI thread's message handler:
+
+1. Acquires the `CRITICAL_SECTION cs` (protects shared fields: `stream_thinking`, `stream_content`, `stream_phase`)
+2. Appends the chunk to the appropriate accumulator
+3. Updates the relevant `ChatMsgItem` (marks dirty, updates text/thinking_text)
+4. Releases the critical section
+5. Triggers remeasure + repaint
+
+**Ownership rules:**
+- `ChatMsgItem` list: UI thread only (create, modify, destroy)
+- `stream_thinking[]`, `stream_content[]`, `stream_phase`: shared, protected by `CRITICAL_SECTION cs`
+- `AiConversation` / `AiSessionState`: UI thread only (modified on `WM_AI_RESPONSE` after stream completes)
+- Heap-allocated chunk strings in `WM_AI_STREAM` lParam: allocated by stream thread, freed by UI thread after processing
+
+### 2.5 Memory Model
+
+`ChatMsgItem.text` is an **independent heap copy** of the conversation message content from `AiMessage.content`. The item list is rebuilt from the `AiConversation` array when needed (session switch, conversation compaction via `ai_conv_compact`, theme change). This doubles memory for message text but decouples the display model from the conversation storage model, allowing each to evolve independently.
+
+Similarly, `ChatMsgItem.u.cmd.command` is heap-allocated. Command strings are validated and truncated at allocation time: if a command exceeds 1023 bytes, it is **rejected** (not silently truncated) and replaced with an error status item: `[command too long — truncated for safety]`. This prevents silent truncation from altering command semantics (e.g., `rm -rf /tmp/important_backup` truncated to `rm -rf /tmp/important`).
+
+All heap fields (`text`, `thinking_text`, `command`) are **zeroed before free** since they may contain sensitive content (API reasoning, passwords in command arguments).
 
 ---
 
@@ -161,6 +187,35 @@ COLORREF chat_indicator_yellow; /* Slow activity dot */
 COLORREF chat_indicator_red;    /* Stalled activity dot */
 ```
 
+These 12 fields are grouped as a `ThemeChatColors` sub-struct within `ThemeColors` for clarity. All 4 theme definitions in `src/core/ui_theme.c` (Onyx Synapse dark/light, Sage & Sand, Moss & Mist) must be updated with appropriate values for these fields.
+
+### 3.4 Markdown Rendering Scope
+
+The markdown-to-GDI renderer supports the following features in the initial implementation:
+
+**Included:**
+- Headings (H1-H3) — bold, increased font size
+- Bold (`**text**`) and italic (`*text*`)
+- Inline code (`` `code` ``) — monospace font, subtle background
+- Fenced code blocks (``` ``` ```) — monospace font, dark background, 6px padding
+- Unordered lists (`- item`) — bullet prefix with indent
+- Ordered lists (`1. item`) — numbered prefix with indent
+- Horizontal rules (`---`) — thin line separator
+- Line breaks and paragraphs
+
+**Deferred to future phase:**
+- Tables — complex GDI layout, low priority for chat context
+- Links — no clickable URLs in owner-drawn (display as underlined text only)
+- Images — not applicable for terminal AI chat
+- Blockquotes — deferred unless needed
+- Strikethrough — deferred
+
+This scopes the initial implementation and prevents feature creep.
+
+### 3.5 Accessibility (Deferred)
+
+The current RichEdit control provides screen reader support via the built-in `IAccessible` interface. Moving to an owner-drawn control loses this. Full `IAccessible` / UI Automation provider implementation is **deferred to a future phase** after the core UX redesign is stable. This is a known regression that will be addressed.
+
 ---
 
 ## 4. Collapsible Thinking
@@ -184,6 +239,7 @@ COLORREF chat_indicator_red;    /* Stalled activity dot */
 5. **Elapsed time** — tracked from first thinking token to last. Updated every 100ms during streaming via timer.
 6. **Max height**: 300px (DPI-scaled). Internal vertical scroll if content exceeds this.
 7. **Min height**: 30px (DPI-scaled) when expanded with minimal content.
+8. **Nested scroll**: When the mouse cursor is over an expanded thinking region with overflowed content, mouse wheel scrolls the thinking region. When the thinking region's scroll reaches top or bottom, the event bubbles to the parent message list. This matches standard nested-scroll behavior.
 
 ### 4.3 Rendering
 
@@ -223,14 +279,14 @@ When `permit_write = 0` and a command is classified as write/critical:
 ```
 ┌─ Command ──────────────── [blocked] ─┐
 │                                       │
-│  🔒 rm -rf /tmp/build/               │  <- greyed out text
+│  [lock icon] rm -rf /tmp/build/      │  <- greyed out text
 │                                       │
 │  Enable "Permit Write" to approve     │  <- help text
 └───────────────────────────────────────┘
 ```
 
 - No Allow/Deny buttons shown
-- Command text greyed out with lock icon
+- Command text greyed out with lock icon (rendered via the existing `hIconFont` Fluent UI Icon Font, not emoji — GDI emoji rendering is unreliable)
 - Help text explains what to do
 - The AI receives a system message explaining the block (existing behavior, preserved)
 
@@ -264,7 +320,7 @@ When an AI response contains multiple commands:
 
 1. User clicks `Allow all commands this session` text link
 2. First click: text changes to `Are you sure? Click again to confirm`
-3. Second click within 3 seconds: auto-approve activated
+3. Second click within 3 seconds: auto-approve activated. If 3 seconds elapse without a second click, the text reverts to `Allow all commands this session` and the flow resets.
 4. Banner appears at top of chat panel: `⚠ Auto-approve active [revoke]`
 5. All subsequent commands auto-execute without approval prompts
 6. Clicking `[revoke]` disables auto-approve and removes the banner
@@ -329,7 +385,7 @@ A heartbeat timer fires every 1 second and checks `time_since_last_token`:
 | 30s+ | Red (static) | `● Stalled — no response for Xs` + `[Retry]` link |
 | Connection lost | Red (static) | `● Connection lost` + `[Retry]` |
 
-**Pulsing animation**: Opacity cycles 1.0 -> 0.3 -> 1.0 over 1.5 seconds via Win32 timer. Implemented as alpha-blended circle draw (or alternating between two pre-rendered bitmaps for performance).
+**Pulsing animation**: Two pre-rendered bitmaps per color (full-opacity and half-opacity circle), toggled by a Win32 timer every 750ms. This avoids the complexity of GDI alpha blending on drawn shapes while providing a clear "alive" visual signal.
 
 ### 6.4 Retry Behavior
 
@@ -410,7 +466,7 @@ CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
 
 **Special patterns requiring deeper scan:**
 - Shell redirects: `>`, `>>`, `&>` (except `>/dev/null`, `2>/dev/null`, `2>&1`)
-- Pipe to destructive: `| xargs rm`, `| sh`, `| bash`
+- Pipe to destructive: `| xargs rm`, `| sh`, `| bash`, `| sudo tee /etc/config`
 - `sudo`/`su` prefix: escalates any command
 - `sed -i`, `perl -pi -e`: in-place file editing
 - `curl -o`/`wget -O`: downloading to file
@@ -610,7 +666,7 @@ Test-driven development: tests written before implementation for each module. Al
 - Commands with leading/trailing whitespace
 - Commands with path prefixes (`/usr/bin/rm` -> `rm`)
 - Commands with sudo/su prefix escalation
-- Pipe chains: safest classification of most dangerous segment
+- Pipe chains: classify each pipeline segment independently; return the most dangerous (highest risk) classification
 - Shell redirects: `echo foo > /tmp/bar` classified as write
 - Redirect exceptions: `2>/dev/null`, `>/dev/null` do not trigger write
 - Quoted strings containing redirect characters (not actual redirects)
@@ -620,6 +676,7 @@ Test-driven development: tests written before implementation for each module. Al
 - Flag sensitivity: `sed` (safe) vs `sed -i` (write), `curl` (safe) vs `curl -o` (write)
 - Commands with semicolons: `ls; rm -rf /` — most dangerous wins
 - Commands with `&&`/`||`: compound classification
+- Pipe to sudo tee: `cat file | sudo tee /etc/config` should be CMD_CRITICAL (sudo + tee writing to /etc)
 - Very long commands (buffer boundary testing)
 - Commands with unicode/non-ASCII characters
 - Network device config mode commands: `set`, `no`, `delete` in isolation
@@ -779,6 +836,7 @@ The rewrite is contained within the display/rendering layer. The external API (`
 | `src/ui/ui_theme.h` | Add chat-specific color fields to ThemeColors |
 | `src/core/ai_prompt.c` | Refactor `ai_command_is_readonly()` to use new `cmd_classify()` |
 | `src/core/ai_prompt.h` | Add `CmdPlatform` to session state |
+| `src/core/ui_theme.c` | Add `ThemeChatColors` values for all 4 themes |
 
 ### 10.4 New Files
 
@@ -801,7 +859,7 @@ The rewrite is contained within the display/rendering layer. The external API (`
 
 ## 11. Open Questions
 
-1. **Platform auto-detection**: Should the classifier attempt to detect the connected device's platform from login banners/prompts, or require manual configuration in session settings?
+1. **Platform auto-detection**: Default is `CMD_PLATFORM_LINUX`. A "Device Type" dropdown will be added to session settings for manual override. Auto-detection from login banners/prompts is a follow-up enhancement.
 2. **Keyboard navigation**: Should command blocks be focusable via Tab, with Enter to approve and Escape to deny?
 3. **Text selection**: The owner-drawn list needs a text selection model for copy/paste. Implement full selection (click-drag across messages) or per-message selection (click to select, Ctrl+C to copy)?
 4. **Search**: Should the message list support Ctrl+F to search conversation history?
