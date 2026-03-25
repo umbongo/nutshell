@@ -922,6 +922,8 @@ int test_dispbuf_invalidate_all(void);
 int test_dispbuf_free_null(void);
 int test_dispbuf_init_all_dirty(void);
 int test_dispbuf_resize_all_dirty(void);
+int test_dispbuf_resize_dimensions_sync(void);
+int test_dispbuf_resize_shrink_dimensions(void);
 
 /* test_color.c */
 int test_color256_palette_ansi(void);
@@ -1739,6 +1741,8 @@ int main(void) {
     failed += test_dispbuf_free_null();
     failed += test_dispbuf_init_all_dirty();
     failed += test_dispbuf_resize_all_dirty();
+    failed += test_dispbuf_resize_dimensions_sync();
+    failed += test_dispbuf_resize_shrink_dimensions();
 
     printf("\n--- Color ---\n");
     failed += test_color256_palette_ansi();

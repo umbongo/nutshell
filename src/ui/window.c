@@ -1868,7 +1868,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (cols != g_active_session->term->cols || rows != g_active_session->term->rows) {
                     term_resize(g_active_session->term, rows, cols);
                     term_mark_all_dirty(g_active_session->term);
-                    dispbuf_invalidate(&g_renderer.dispbuf);
+                    dispbuf_resize(&g_renderer.dispbuf, rows, cols);
                     if (g_active_session->channel)
                         ssh_pty_resize(g_active_session->channel, cols, rows);
                 }
