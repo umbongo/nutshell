@@ -887,20 +887,20 @@ static void chat_rebuild_display(AiChatData *d)
         } else if (msg->role == AI_ROLE_ASSISTANT) {
             chat_append_styled(d->hDisplay, "\r\n\r\n", col_ai, 0);
             chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
-            /* Show thinking block if toggle is on and thinking exists */
-            if (d->show_thinking && d->thinking_history[i] &&
-                d->thinking_history[i][0]) {
+            /* Show thinking block if it exists */
+            if (d->thinking_history[i] && d->thinking_history[i][0]) {
                 COLORREF col_purple = RGB(150, 100, 200);
-                chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
-                char *fmt_think = format_ai_text(d->thinking_history[i]);
-                if (fmt_think) {
-                    chat_append_styled(d->hDisplay, fmt_think, col_purple, 1);
-                    free(fmt_think);
-                } else {
-                    chat_append_styled(d->hDisplay,
-                        d->thinking_history[i], col_purple, 1);
+                chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
+                if (d->show_thinking) {
+                    char *fmt_think = format_ai_text(d->thinking_history[i]);
+                    if (fmt_think) {
+                        chat_append_styled(d->hDisplay, fmt_think, col_purple, 1);
+                        free(fmt_think);
+                    } else {
+                        chat_append_styled(d->hDisplay,
+                            d->thinking_history[i], col_purple, 1);
+                    }
                 }
-                chat_append_styled(d->hDisplay, "\r\n", col_purple, 1);
             }
             chat_append_markdown(d->hDisplay, msg->content, col_ai,
                                  d->theme, d->ai_font_name);
@@ -950,6 +950,13 @@ static void launch_stream_thread(AiChatData *d)
     d->stream_content[0] = '\0';
     d->stream_content_len = 0;
     d->stream_phase = 0;
+
+    /* Show initial processing indicator immediately so user sees activity */
+    COLORREF col_purple = RGB(150, 100, 200);
+    chat_append_styled(d->hDisplay, "\r\n\r\n", col_purple, 0);
+    GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
+    d->indicator_pos = (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX, (WPARAM)&gtx, 0);
+    chat_append_styled_ex(d->hDisplay, "> processing...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
 
     _beginthreadex(NULL, 0, ai_stream_thread_proc, arg, 0, NULL);
 }
@@ -1273,14 +1280,13 @@ static void relayout(AiChatData *d)
     d->compact_buttons = (full_w > avail);
     int pw = d->compact_buttons ? btn_h : S(115);
     int nw = d->compact_buttons ? btn_h : S(78);
-    int tw = d->compact_buttons ? btn_h : S(115);
+    /* tw removed - thinking button no longer exists */
 
     if (d->hNewChatBtn)
         MoveWindow(d->hNewChatBtn, pad, pad, nw, btn_h, TRUE);
     if (d->hPermitBtn)
         MoveWindow(d->hPermitBtn, pad + nw + pad, pad, pw, btn_h, TRUE);
-    if (d->hThinkingBtn)
-        MoveWindow(d->hThinkingBtn, pad + nw + pad + pw + pad, pad, tw, btn_h, TRUE);
+    /* Thinking button removed - thinking is now inline in chat display */
     {
         int bar_h = S(16);
         int ctx_w = S(120);
@@ -1442,11 +1448,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             pad + S(78) + pad, pad, S(115), btn_h,
             hwnd, (HMENU)IDC_CHAT_PERMIT, NULL, NULL);
 
-        nd->show_thinking = 0; /* default: off */
-        nd->hThinkingBtn = CreateWindow("BUTTON", "Thinking: OFF",
-            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            pad + S(78) + pad + S(115) + pad, pad, S(115), btn_h,
-            hwnd, (HMENU)IDC_CHAT_THINKING, NULL, NULL);
+        nd->show_thinking = 0; /* default: collapsed (user must click '>' to expand) */
+        nd->hThinkingBtn = NULL; /* Thinking button removed - now inline in chat */
 
         /* Save button — square, right-aligned in button row */
         nd->hSaveBtn = CreateWindow("BUTTON", "",
@@ -1625,9 +1628,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 "Green = AI can execute any command.\n"
                 "Red = AI can only run read-only commands\n"
                 "(ls, cat, pwd, etc).");
-            add_tooltip(nd->hTooltip, nd->hThinkingBtn,
-                "Toggle Thinking\n"
-                "Show or hide the AI's internal reasoning process.");
+            /* Thinking tooltip removed - click '>' in chat to expand/collapse */
             add_tooltip(nd->hTooltip, nd->hSaveBtn,
                 "Save\nSave the conversation as a text file.");
             if (nd->hUndockBtn)
@@ -1680,8 +1681,26 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (d && nmh->hwndFrom == d->hDisplay && nmh->code == EN_LINK) {
             ENLINK *enm = (ENLINK *)lParam;
             if (enm->msg == WM_LBUTTONUP) {
-                if (!d->show_thinking) {
-                    PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CHAT_THINKING, BN_CLICKED), 0);
+                /* Toggle thinking display when clicking '>' indicator */
+                d->show_thinking = !d->show_thinking;
+                if (ACTIVE_BUSY(d)) {
+                    /* During streaming, rebuild to show/hide thinking in real-time */
+                    if (d->show_thinking && d->stream_thinking_len > 0 && d->stream_phase == 1) {
+                        COLORREF col_purple = RGB(150, 100, 200);
+                        chat_append_styled_ex(d->hDisplay, "\r\n> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
+                        chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
+                    } else if (!d->show_thinking) {
+                        int saved_phase = d->stream_phase;
+                        chat_rebuild_display(d);
+                        d->stream_phase = saved_phase;
+                        if (saved_phase == 2 && d->stream_content_len > 0) {
+                            COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT);
+                            chat_append_color(d->hDisplay, d->stream_content, col_ai);
+                        }
+                    }
+                } else {
+                    /* Not streaming - rebuild entire display */
+                    chat_rebuild_display(d);
                 }
             }
         }
@@ -1781,31 +1800,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
             return 0;
 
-        case IDC_CHAT_THINKING:
-            if (d) {
-                d->show_thinking = !d->show_thinking;
-                SetWindowText(d->hThinkingBtn, d->show_thinking ? "Thinking: ON" : "Thinking: OFF");
-                InvalidateRect(d->hThinkingBtn, NULL, TRUE);
-
-                if (ACTIVE_BUSY(d)) {
-                    if (d->show_thinking && d->stream_thinking_len > 0 && d->stream_phase == 1) {
-                        COLORREF col_purple = RGB(150, 100, 200);
-                        chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
-                        chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
-                    } else if (!d->show_thinking) {
-                        int saved_phase = d->stream_phase;
-                        chat_rebuild_display(d);
-                        d->stream_phase = saved_phase;
-                        if (saved_phase == 2 && d->stream_content_len > 0) {
-                            COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT);
-                            chat_append_color(d->hDisplay, d->stream_content, col_ai);
-                        }
-                    }
-                } else {
-                    chat_rebuild_display(d);
-                }
-            }
-            return 0;
+        /* IDC_CHAT_THINKING removed - thinking toggle now inline in chat */
 
         case IDC_CHAT_ALLOW:
             if (d && d->pending_approval) {
@@ -1859,30 +1854,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             return 0;
         case IDC_CONTEXT_LABEL:
             if (d && HIWORD(wParam) == STN_CLICKED) {
-                if (ACTIVE_BUSY(d)) {
-                    /* Toggle show thinking while busy */
-                    d->show_thinking = !d->show_thinking;
-                    if (d->hThinkingBtn) {
-                        SetWindowText(d->hThinkingBtn, d->show_thinking ? "Thinking: ON" : "Thinking: OFF");
-                        InvalidateRect(d->hThinkingBtn, NULL, TRUE);
-                    }
-                    if (d->show_thinking && d->stream_thinking_len > 0 && d->stream_phase == 1) {
-                        /* Toggled ON mid-stream while thinking is active:
-                         * insert all accumulated thinking retroactively. */
-                        COLORREF col_purple = RGB(150, 100, 200);
-                        chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
-                        chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
-                    } else if (!d->show_thinking) {
-                        /* Toggled OFF mid-stream — rebuild to remove thinking text */
-                        int saved_phase = d->stream_phase;
-                        chat_rebuild_display(d);
-                        d->stream_phase = saved_phase;
-                        if (saved_phase == 2 && d->stream_content_len > 0) {
-                            COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT);
-                            chat_append_color(d->hDisplay, d->stream_content, col_ai);
-                        }
-                    }
-                } else if (d->context_limit <= 0) {
+                /* Context label click - removed thinking toggle (now inline in chat) */
+                if (d->context_limit <= 0) {
                     MessageBox(hwnd,
                         "Context usage tracking is not available\n"
                         "for this model (unknown context limit).",
@@ -2010,19 +1983,29 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d->stream_phase < 1) {
                 d->stream_phase = 1;
 
+                /* Replace "> processing..." with "> Thinking..." */
                 COLORREF col_purple = RGB(150, 100, 200);
+                if (d->indicator_pos >= 0) {
+                    /* Remove the processing indicator */
+                    SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+                    CHARRANGE cr_rm;
+                    SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm);
+                    CHARRANGE cr_sel = { d->indicator_pos, cr_rm.cpMax };
+                    SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
+                    SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
+                    d->indicator_pos = -1;
+                }
+
                 if (d->show_thinking) {
-                    chat_append_styled(d->hDisplay, "\r\n\r\n", col_purple, 0);
-                    chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
+                    chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
                     GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
                     d->stream_display_start =
                         (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX,
                                          (WPARAM)&gtx, 0);
                 } else {
-                    chat_append_styled(d->hDisplay, "\r\n\r\n", col_purple, 0);
                     GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
                     d->indicator_pos = (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX, (WPARAM)&gtx, 0);
-                    chat_append_styled_ex(d->hDisplay, "Thinking... (Click to view)\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
+                    chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
                 }
             }
 
@@ -2037,13 +2020,24 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 }
             }
         } else {
-            /* Content delta */
+            /* Content delta (no thinking - simple response) */
             COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main)
                                        : GetSysColor(COLOR_WINDOWTEXT);
             if (d->stream_phase < 2) {
+                /* Replace "> processing..." with "AI" header */
+                if (d->indicator_pos >= 0) {
+                    /* Remove the processing indicator */
+                    SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
+                    CHARRANGE cr_rm;
+                    SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm);
+                    CHARRANGE cr_sel = { d->indicator_pos, cr_rm.cpMax };
+                    SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
+                    SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
+                    d->indicator_pos = -1;
+                }
+
                 if (d->stream_phase == 1)
                     chat_append_ops(d->hDisplay, "\r\n");
-                chat_append_styled(d->hDisplay, "\r\n\r\n", col_ai, 0);
                 chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
                 d->stream_phase = 2;
                 /* Record where the AI content starts for markdown re-render */
@@ -2903,11 +2897,13 @@ static void do_session_switch(AiChatData *d,
         }
         d->stream_phase = new_state->stream_phase;
 
-        if (d->show_thinking && d->stream_thinking_len > 0) {
+        if (d->stream_thinking_len > 0) {
             COLORREF col_purple = RGB(150, 100, 200);
             chat_append_styled(d->hDisplay, "\r\n\r\n", col_purple, 0);
-            chat_append_styled_ex(d->hDisplay, "Thinking Process\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_ITALIC, NULL, 180);
-            chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
+            chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
+            if (d->show_thinking) {
+                chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
+            }
             d->stream_phase = 1;
         }
         if (d->stream_content_len > 0) {
