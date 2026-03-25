@@ -1555,8 +1555,15 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             margin, top_y + disp_h - S(100), disp_w, S(100),
             hwnd, (HMENU)IDC_THINKING_BOX, NULL, NULL);
         if (nd->hThinkingBox) {
-            COLORREF bg = nd->theme ? theme_cr(nd->theme->bg_primary) : RGB(40, 40, 40);
+            /* Apply theme colors - use same as display for consistency */
+            COLORREF bg = nd->theme ? theme_cr(nd->theme->bg_secondary) : GetSysColor(COLOR_WINDOW);
             SendMessage(nd->hThinkingBox, EM_SETBKGNDCOLOR, 0, (LPARAM)bg);
+
+            /* Apply font to match main display */
+            if (nd->hFont) {
+                SendMessage(nd->hThinkingBox, WM_SETFONT, (WPARAM)nd->hFont, FALSE);
+            }
+
             ShowWindow(nd->hThinkingBox, SW_HIDE);  /* Hidden by default */
         }
 
@@ -2022,29 +2029,24 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d->stream_phase < 1) {
                 d->stream_phase = 1;
 
-                /* Replace "> processing..." with "> Thinking..." */
+                /* Update "> processing..." to "> Thinking..." in place */
                 COLORREF col_purple = RGB(150, 100, 200);
                 if (d->indicator_pos >= 0) {
-                    /* Remove the processing indicator */
-                    SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-                    CHARRANGE cr_rm;
-                    SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm);
-                    CHARRANGE cr_sel = { d->indicator_pos, cr_rm.cpMax };
+                    /* Replace the text but keep it visible */
+                    CHARRANGE cr_sel = { d->indicator_pos, d->indicator_pos + 16 };  /* Length of "> processing..." */
                     SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
-                    SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
-                    d->indicator_pos = -1;
-                }
 
-                if (d->show_thinking) {
-                    chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
-                    GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
-                    d->stream_display_start =
-                        (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX,
-                                         (WPARAM)&gtx, 0);
-                } else {
-                    GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
-                    d->indicator_pos = (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX, (WPARAM)&gtx, 0);
-                    chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
+                    /* Set format for replacement text */
+                    CHARFORMAT2 cf;
+                    memset(&cf, 0, sizeof(cf));
+                    cf.cbSize = sizeof(cf);
+                    cf.dwMask = CFM_COLOR | CFM_BOLD | CFM_LINK;
+                    cf.crTextColor = col_purple;
+                    cf.dwEffects = CFE_BOLD | CFE_LINK;
+                    SendMessage(d->hDisplay, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+
+                    /* Replace text */
+                    SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"> Thinking...\r\n");
                 }
             }
 
@@ -2057,20 +2059,18 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main)
                                        : GetSysColor(COLOR_WINDOWTEXT);
             if (d->stream_phase < 2) {
-                /* Replace "> processing..." with "AI" header */
-                if (d->indicator_pos >= 0) {
-                    /* Remove the processing indicator */
-                    SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-                    CHARRANGE cr_rm;
-                    SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm);
-                    CHARRANGE cr_sel = { d->indicator_pos, cr_rm.cpMax };
-                    SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
-                    SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
-                    d->indicator_pos = -1;
-                }
-
+                /* Simple response - just keep "> processing..." or add AI header after it */
                 if (d->stream_phase == 1)
                     chat_append_ops(d->hDisplay, "\r\n");
+                else {
+                    /* Phase 0 - remove "> processing..." and add "AI" header */
+                    if (d->indicator_pos >= 0) {
+                        CHARRANGE cr_sel = { d->indicator_pos, d->indicator_pos + 16 };
+                        SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
+                        SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
+                        d->indicator_pos = -1;
+                    }
+                }
                 chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
                 d->stream_phase = 2;
                 /* Record where the AI content starts for markdown re-render */
@@ -2128,25 +2128,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             return 0;
         }
 
-        /* Remove temporary processing indicator, but keep collapsed thinking indicator */
+        /* Don't remove indicators - they stay visible with embedded textbox approach */
         KillTimer(hwnd, TIMER_THINKING);
-        if (d->indicator_pos >= 0) {
-            /* Only remove if it's the temporary "> processing..." indicator (phase 0)
-             * or if we're showing expanded thinking (phase 1 with show_thinking=true).
-             * Keep the collapsed "> Thinking..." indicator (phase 1 with show_thinking=false)
-             * so user can click to expand after streaming completes. */
-            int should_remove_indicator = (d->stream_phase == 0) ||
-                                         (d->stream_phase == 1 && d->show_thinking);
-            if (should_remove_indicator) {
-                SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-                CHARRANGE cr_rm2;
-                SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm2);
-                CHARRANGE cr_sel2 = { d->indicator_pos, cr_rm2.cpMax };
-                SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel2);
-                SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
-            }
-            d->indicator_pos = -1;
-        }
+        d->indicator_pos = -1;
 
         if (wParam == 2) {
             /* Streaming complete — text already displayed, do command extraction */
