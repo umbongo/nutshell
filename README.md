@@ -2,7 +2,7 @@
 
 
 
-**Version**: v0.9.10 \
+**Version**: v0.9.11 \
 **Build Date**: 2026-03-25 \
 **Author**: Thomas Sulkiewicz 
 

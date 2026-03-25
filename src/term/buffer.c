@@ -204,12 +204,20 @@ void term_resize(Terminal *term, int rows, int cols) {
     term->lines_capacity = new_capacity;
     term->lines_start = 0; // We rebuilt it linearly starting at 0
     term->lines_count = (new_count > new_capacity) ? new_capacity : new_count;
-    
+
     term->rows = rows;
     term->cols = cols;
-    
+
+    /* If resizing to a larger terminal with sparse content AND the cursor was
+     * near the bottom (likely at a prompt), ensure the buffer has enough lines
+     * to fill the screen. This keeps the cursor at the visual bottom and prevents
+     * gaps when commands output.  Only apply if we had significant prior content. */
+    if (term->lines_count < rows && new_cursor_row > 0 && term->lines_count > 0) {
+        term->lines_count = rows;
+    }
+
     /* 4. Update cursor */
-    /* The new cursor row is relative to the start of the buffer. 
+    /* The new cursor row is relative to the start of the buffer.
        We need to convert it to screen coordinates (relative to top of visible screen). */
     int new_screen_top = (term->lines_count >= term->rows) ? (term->lines_count - term->rows) : 0;
     term->cursor.row = new_cursor_row - new_screen_top;
