@@ -857,7 +857,58 @@ The rewrite is contained within the display/rendering layer. The external API (`
 
 ---
 
-## 11. Open Questions
+## 11. Per-Session Context Isolation
+
+When multiple SSH sessions are open, each has its own independent AI conversation. Switching tabs switches the AI chat panel context.
+
+### 11.1 Session State Ownership
+
+Each SSH session owns an `AiSessionState` containing:
+- Conversation history (`AiConversation` with message array)
+- Pending command approval state (queued commands, approval status)
+- Thinking history (per-message thinking text)
+- Auto-approve session flag
+- Permit write toggle state
+- Stream accumulators (thinking/content in progress)
+- Activity monitor state (phase, heartbeat timer)
+- Platform type (`CmdPlatform`) for command classification
+
+### 11.2 Session Switch Behavior
+
+When the user selects a different SSH tab:
+
+1. **Save current state**: The active `ChatMsgItem` list is serialized back to the current session's `AiSessionState`. Stream accumulators, scroll position, thinking toggle states, and pending approvals are preserved.
+2. **Rebuild display**: The `ChatMsgItem` list is rebuilt from the new session's `AiSessionState`. All items are marked dirty for fresh measurement.
+3. **Restore UI state**: Scroll position restored, pending approval buttons shown/hidden, permit write indicator updated, activity indicator reflects the new session's state.
+4. **Terminal context updated**: `active_term` and `active_channel` pointers switch to the new session's terminal.
+
+### 11.3 Concurrent Streaming
+
+If the AI is actively streaming a response in session A and the user switches to session B:
+- Session A's stream continues in the background. Chunks are accumulated in A's `AiSessionState` but not rendered.
+- Session B's display is shown. If B also has an active stream, it renders live.
+- When the user switches back to A, the display rebuilds with all accumulated content.
+
+### 11.4 Isolation Guarantees
+
+- **No cross-session data leakage**: Conversation history, commands, thinking content, and approval state are strictly per-session.
+- **No shared mutable state**: Each session's `AiSessionState` is independent. The only shared resource is the AI chat window itself (single panel, displays one session at a time).
+- **Session notes**: Per-session `session_notes` provide terminal-specific context to the AI (e.g., device type, hostname). System-wide `system_notes` are shared across all sessions.
+- **Session close cleanup**: When an SSH session closes, `ai_chat_notify_session_closed()` clears internal pointers. Thinking history and stream accumulators for that session are freed.
+
+### 11.5 Tests (added to `test_chat_msg.c`)
+
+- Switch session: verify display rebuilds from new session's conversation
+- Switch during pending approval: verify approval state preserved and restored
+- Switch during active stream: verify chunks accumulate in background, display correct on return
+- Switch with different permit_write states: verify indicator updates
+- Switch with different platform types: verify classifier uses correct platform
+- Close session while it has pending approvals: verify clean teardown, no dangling pointers
+- Rapid tab switching: verify no memory leaks or display corruption
+
+---
+
+## 12. Open Questions
 
 1. **Platform auto-detection**: Default is `CMD_PLATFORM_LINUX`. A "Device Type" dropdown will be added to session settings for manual override. Auto-detection from login banners/prompts is a follow-up enhancement.
 2. **Keyboard navigation**: Should command blocks be focusable via Tab, with Enter to approve and Escape to deny?
