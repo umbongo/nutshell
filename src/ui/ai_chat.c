@@ -293,9 +293,13 @@ static void chat_append_styled_ex(HWND hDisplay, const char *text,
     CHARFORMAT2 cf;
     memset(&cf, 0, sizeof(cf));
     cf.cbSize = sizeof(cf);
+    /* Include underline in mask so we can explicitly control it */
     cf.dwMask = CFM_COLOR | CFM_BOLD | CFM_ITALIC | CFM_STRIKEOUT | CFM_LINK | CFM_UNDERLINE;
     cf.crTextColor = color;
-    cf.dwEffects = effects & ~((DWORD)CFE_UNDERLINE);  /* Remove underline even if CFE_LINK is set */
+    /* Copy effects but force underline OFF - Windows tends to add underline to links automatically */
+    cf.dwEffects = effects;
+    /* Explicitly clear underline bit */
+    cf.dwEffects &= ~((DWORD)CFE_UNDERLINE);
 
     if (bgColor != CLR_DEFAULT) {
         cf.dwMask |= CFM_BACKCOLOR;
@@ -1681,10 +1685,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (d && nmh->hwndFrom == d->hDisplay && nmh->code == EN_LINK) {
             ENLINK *enm = (ENLINK *)lParam;
             if (enm->msg == WM_LBUTTONUP) {
-                /* Only toggle thinking if we have thinking content (phase >= 1 and thinking_len > 0) */
-                /* Clicking "> processing..." (phase 0) should do nothing */
-                if (ACTIVE_BUSY(d) && d->stream_phase == 0) {
-                    /* Still in processing phase - ignore click */
+                /* Only toggle thinking if we're in phase 1 (thinking) */
+                /* Ignore clicks during phase 0 (processing) and phase 2 (content) */
+                if (ACTIVE_BUSY(d) && (d->stream_phase == 0 || d->stream_phase == 2)) {
+                    /* Processing or content phase - no clickable thinking indicator - ignore click */
                     break;
                 }
 
