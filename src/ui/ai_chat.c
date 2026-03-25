@@ -17,6 +17,7 @@
 #include "ssh_channel.h"
 #include "resource.h"
 #include "ai_dock.h"
+#include "string_utils.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <stdio.h>
 #include <string.h>
@@ -896,14 +897,24 @@ static void chat_rebuild_display(AiChatData *d)
                 COLORREF col_purple = RGB(150, 100, 200);
                 chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
                 if (d->show_thinking) {
+                    /* Format thinking text and show with indentation and left border */
                     char *fmt_think = format_ai_text(d->thinking_history[i]);
-                    if (fmt_think) {
-                        chat_append_styled(d->hDisplay, fmt_think, col_purple, 1);
-                        free(fmt_think);
-                    } else {
-                        chat_append_styled(d->hDisplay,
-                            d->thinking_history[i], col_purple, 1);
+                    const char *think_text = fmt_think ? fmt_think : d->thinking_history[i];
+
+                    /* Add indented thinking with left border line */
+                    char *thinking_copy = str_dup(think_text);
+                    if (thinking_copy) {
+                        char *line = strtok(thinking_copy, "\n");
+                        while (line) {
+                            chat_append_styled_ex(d->hDisplay, "  │ ", col_purple, CLR_DEFAULT, 0, NULL, 0);
+                            chat_append_styled(d->hDisplay, line, col_purple, 0);
+                            chat_append_styled(d->hDisplay, "\r\n", col_purple, 0);
+                            line = strtok(NULL, "\n");
+                        }
+                        free(thinking_copy);
                     }
+
+                    if (fmt_think) free(fmt_think);
                 }
             }
             chat_append_markdown(d->hDisplay, msg->content, col_ai,
@@ -1685,32 +1696,41 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (d && nmh->hwndFrom == d->hDisplay && nmh->code == EN_LINK) {
             ENLINK *enm = (ENLINK *)lParam;
             if (enm->msg == WM_LBUTTONUP) {
-                /* Only toggle thinking if we're in phase 1 (thinking) */
-                /* Ignore clicks during phase 0 (processing) and phase 2 (content) */
-                if (ACTIVE_BUSY(d) && (d->stream_phase == 0 || d->stream_phase == 2)) {
-                    /* Processing or content phase - no clickable thinking indicator - ignore click */
-                    break;
-                }
-
-                /* Toggle thinking display when clicking '>' indicator */
+                /* Always allow clicking indicators - toggle thinking/processing display */
                 d->show_thinking = !d->show_thinking;
+
                 if (ACTIVE_BUSY(d)) {
-                    /* During streaming, rebuild to show/hide thinking in real-time */
-                    if (d->show_thinking && d->stream_thinking_len > 0 && d->stream_phase == 1) {
-                        COLORREF col_purple = RGB(150, 100, 200);
-                        chat_append_styled_ex(d->hDisplay, "\r\n> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
-                        chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
-                    } else if (!d->show_thinking) {
-                        int saved_phase = d->stream_phase;
-                        chat_rebuild_display(d);
-                        d->stream_phase = saved_phase;
-                        if (saved_phase == 2 && d->stream_content_len > 0) {
-                            COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT);
-                            chat_append_color(d->hDisplay, d->stream_content, col_ai);
+                    /* During streaming - rebuild and restore current phase */
+                    int saved_phase = d->stream_phase;
+                    chat_rebuild_display(d);
+                    d->stream_phase = saved_phase;
+
+                    /* Re-add any streamed content based on phase */
+                    COLORREF col_purple = RGB(150, 100, 200);
+                    if (saved_phase >= 1 && d->stream_thinking_len > 0 && d->show_thinking) {
+                        /* Show thinking content indented with left border */
+                        chat_append_styled_ex(d->hDisplay, "\r\n  ", col_purple, CLR_DEFAULT, 0, NULL, 0);
+                        chat_append_styled_ex(d->hDisplay, "│ ", col_purple, CLR_DEFAULT, 0, NULL, 0);
+                        char *thinking_copy = str_dup(d->stream_thinking);
+                        if (thinking_copy) {
+                            /* Add indentation to each line of thinking */
+                            char *line = strtok(thinking_copy, "\n");
+                            while (line) {
+                                chat_append_styled_ex(d->hDisplay, "  │ ", col_purple, CLR_DEFAULT, 0, NULL, 0);
+                                chat_append_styled(d->hDisplay, line, col_purple, 0);
+                                chat_append_styled(d->hDisplay, "\r\n", col_purple, 0);
+                                line = strtok(NULL, "\n");
+                            }
+                            free(thinking_copy);
                         }
                     }
+
+                    if (saved_phase == 2 && d->stream_content_len > 0) {
+                        COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main) : GetSysColor(COLOR_WINDOWTEXT);
+                        chat_append_color(d->hDisplay, d->stream_content, col_ai);
+                    }
                 } else {
-                    /* Not streaming - rebuild entire display */
+                    /* Not streaming - rebuild entire display from history */
                     chat_rebuild_display(d);
                 }
             }
@@ -2023,12 +2043,22 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d->show_thinking && delta && delta[0]) {
                 COLORREF col_purple = RGB(150, 100, 200);
                 char *fmt = format_ai_text(delta);
-                if (fmt) {
-                    chat_append_styled(d->hDisplay, fmt, col_purple, 1);
-                    free(fmt);
-                } else {
-                    chat_append_styled(d->hDisplay, delta, col_purple, 1);
+                const char *text_to_show = fmt ? fmt : delta;
+
+                /* Add indentation with left border to thinking content */
+                char *thinking_copy = str_dup(text_to_show);
+                if (thinking_copy) {
+                    char *line = strtok(thinking_copy, "\n");
+                    while (line) {
+                        chat_append_styled_ex(d->hDisplay, "  │ ", col_purple, CLR_DEFAULT, 0, NULL, 0);
+                        chat_append_styled(d->hDisplay, line, col_purple, 0);
+                        chat_append_styled(d->hDisplay, "\r\n", col_purple, 0);
+                        line = strtok(NULL, "\n");
+                    }
+                    free(thinking_copy);
                 }
+
+                if (fmt) free(fmt);
             }
         } else {
             /* Content delta (no thinking - simple response) */
