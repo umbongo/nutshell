@@ -106,6 +106,9 @@ void term_resize(Terminal *term, int rows, int cols) {
     if (!term || rows <= 0 || cols <= 0) return;
     if (term->rows == rows && term->cols == cols) return;
 
+    int old_rows = term->rows;
+    int old_lines_count = term->lines_count;
+
     /* 1. Create a new line buffer */
     int new_capacity = rows + term->max_scrollback;
     TermRow **new_lines = xcalloc((size_t)new_capacity, sizeof(TermRow *));
@@ -217,18 +220,33 @@ void term_resize(Terminal *term, int rows, int cols) {
     term->rows = rows;
     term->cols = cols;
 
-    /* Note: we do NOT inflate lines_count to fill the screen here.
-     * Inflating creates blank rows in the visible area between old content
-     * and the cursor, causing a "masked" gap.  Instead, term_scroll()
-     * properly marks all visible rows dirty even when lines_count < rows. */
+    /* 4. Push content to bottom when resizing to a larger screen.
+     * When the old screen was full (content reached the bottom), the cursor
+     * should stay near the bottom of the new screen, not float in the middle
+     * with a gap below.  Prepend empty rows to shift content down. */
+    if (rows > old_rows && old_lines_count >= old_rows &&
+        term->lines_count < term->rows) {
+        int pad = term->rows - term->lines_count;
+        /* Shift lines_start backward to prepend empty rows from the
+         * pre-allocated tail of the buffer. */
+        term->lines_start = (term->lines_start - pad + term->lines_capacity)
+                            % term->lines_capacity;
+        /* Ensure prepended rows are clean */
+        for (int i = 0; i < pad; i++) {
+            int idx = (term->lines_start + i) % term->lines_capacity;
+            term_row_fill(term->lines[idx], cols, term->current_attr);
+        }
+        new_cursor_row += pad;
+        term->lines_count = term->rows;
+    }
 
-    /* 4. Update cursor */
+    /* 5. Update cursor */
     /* The new cursor row is relative to the start of the buffer.
        We need to convert it to screen coordinates (relative to top of visible screen). */
     int new_screen_top = (term->lines_count >= term->rows) ? (term->lines_count - term->rows) : 0;
     term->cursor.row = new_cursor_row - new_screen_top;
     term->cursor.col = new_cursor_col;
-    
+
     /* Clamp cursor to be safe */
     if (term->cursor.row < 0) term->cursor.row = 0;
     if (term->cursor.row >= term->rows) term->cursor.row = term->rows - 1;

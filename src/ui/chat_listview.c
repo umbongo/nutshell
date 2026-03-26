@@ -406,7 +406,8 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     RECT rc;
     HGDIOBJ old_font;
 
-    if (!item->text || item->text_len == 0)
+    if ((!item->text || item->text_len == 0) &&
+        !(item->type == CHAT_ITEM_COMMAND && item->u.cmd.command))
         return lv->msg_gap;
 
     switch (item->type) {
