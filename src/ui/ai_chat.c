@@ -18,6 +18,11 @@
 #include "resource.h"
 #include "ai_dock.h"
 #include "string_utils.h"
+#include "chat_msg.h"
+#include "chat_thinking.h"
+#include "chat_activity.h"
+#include "chat_approval.h"
+#include "chat_listview.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <stdio.h>
 #include <string.h>
@@ -61,7 +66,9 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
                                            UINT_PTR uIdSubclass,
                                            DWORD_PTR dwRefData);
 
-/* Subclass for the RichEdit display: forward mouse wheel to parent */
+/* Subclass for the RichEdit display: forward mouse wheel to parent.
+ * DEPRECATED: ChatListView has its own WndProc. */
+__attribute__((unused))
 static LRESULT CALLBACK DisplaySubclassProc(HWND hwnd, UINT msg,
                                              WPARAM wParam, LPARAM lParam,
                                              UINT_PTR uIdSubclass,
@@ -123,8 +130,11 @@ typedef struct {
 
     /* Position of the animated indicator so we can remove/update it */
     int indicator_pos;  /* char offset where indicator starts, or -1 */
+    int indicator_line_y; /* Y pixel position of indicator line for thinking box placement */
     int thinking_tick;  /* animation frame counter 0-2 for dot cycling */
     char indicator_base[64]; /* base text without dots, e.g. "thinking" */
+    int thinking_box_height; /* Current height of thinking box for auto-resize */
+    int last_phase; /* Track phase transitions (0=processing, 1=thinking) */
 
     /* Batch command execution with paste delay */
     int paste_delay_ms;
@@ -189,6 +199,11 @@ typedef struct {
 
     /* Fluent UI Icon Font */
     HFONT hIconFont;
+
+    /* New chat list view fields */
+    ChatMsgList msg_list;           /* Message item linked list */
+    HWND hChatList;                 /* Owner-drawn chat list view */
+    ChatMsgItem *stream_ai_item;    /* Current AI item being streamed into */
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -204,7 +219,9 @@ static void do_session_switch(AiChatData *d,
 
 /* Append colored text to the RichEdit chat display.
  * Auto-scrolls to the bottom only if the user was already at the bottom.
- * If italic != 0, the text is rendered in italic. */
+ * If italic != 0, the text is rendered in italic.
+ * DEPRECATED: kept for reference; ChatListView replaces RichEdit display. */
+__attribute__((unused))
 static void chat_append_styled(HWND hDisplay, const char *text,
                                 COLORREF color, int italic)
 {
@@ -254,13 +271,17 @@ static void chat_append_styled(HWND hDisplay, const char *text,
     }
 }
 
-/* Convenience: non-italic colored text */
+/* Convenience: non-italic colored text.
+ * DEPRECATED: kept for reference; ChatListView replaces RichEdit display. */
+__attribute__((unused))
 static void chat_append_color(HWND hDisplay, const char *text, COLORREF color)
 {
     chat_append_styled(hDisplay, text, color, 0);
 }
 
-/* Append ops/status text: italic + dim gray for clear contrast */
+/* Append ops/status text: italic + dim gray for clear contrast.
+ * DEPRECATED: kept for reference; ChatListView replaces RichEdit display. */
+__attribute__((unused))
 static void chat_append_ops(HWND hDisplay, const char *text)
 {
     chat_append_styled(hDisplay, text, RGB(140, 140, 140), 1);
@@ -269,7 +290,9 @@ static void chat_append_ops(HWND hDisplay, const char *text)
 /* Extended styled append: supports bold, font face, font size, background color.
  * effects: 0 or combination of CFE_BOLD | CFE_ITALIC | CFE_STRIKEOUT
  * font: NULL to keep current; fontSize: twips, 0 to keep current.
- * bgColor: CLR_DEFAULT to skip background coloring. */
+ * bgColor: CLR_DEFAULT to skip background coloring.
+ * DEPRECATED: kept for reference; ChatListView replaces RichEdit display. */
+__attribute__((unused))
 static void chat_append_styled_ex(HWND hDisplay, const char *text,
                                    COLORREF color, COLORREF bgColor,
                                    DWORD effects, const char *font,
@@ -340,7 +363,9 @@ static void chat_append_styled_ex(HWND hDisplay, const char *text,
 /* Render a markdown-formatted AI response into the RichEdit display.
  * Handles block-level elements (headings, code blocks, lists, tables,
  * horizontal rules, blockquotes) and inline formatting (bold, italic,
- * code, strikethrough). */
+ * code, strikethrough).
+ * DEPRECATED: kept for reference; ChatListView uses md_render instead. */
+__attribute__((unused))
 static void chat_append_markdown(HWND hDisplay, const char *raw,
                                   COLORREF baseColor,
                                   const ThemeColors *theme,
@@ -864,50 +889,84 @@ static void thinking_history_clear(AiChatData *d)
     d->stream_thinking_len = 0;
 }
 
+/* Position and resize the thinking box inline after the indicator.
+ * DEPRECATED: thinking is now inline in ChatListView items. */
+__attribute__((unused))
+static void position_thinking_box(AiChatData *d)
+{
+    if (!d || !d->hThinkingBox || !d->hDisplay || d->indicator_pos < 0)
+        return;
+
+    /* Get pixel position of the character right after the indicator line */
+    POINTL pt;
+    SendMessage(d->hDisplay, EM_POSFROMCHAR, (WPARAM)&pt, (LPARAM)(d->indicator_pos + 16)); /* +16 for "> processing...\r\n" length */
+
+    /* Get display width for thinking box width - use full width with margins */
+    RECT rc_display;
+    GetClientRect(d->hDisplay, &rc_display);
+    int margin = 10; /* Left and right margins */
+    int box_width = rc_display.right - (margin * 2);
+    if (box_width < 100) box_width = 100; /* Minimum width */
+
+    /* Calculate height based on content */
+    int line_count = (int)SendMessage(d->hThinkingBox, EM_GETLINECOUNT, 0, 0);
+    HDC hdc = GetDC(d->hThinkingBox);
+    HGDIOBJ old_font = SelectObject(hdc, (HGDIOBJ)d->hFont);
+    TEXTMETRIC tm;
+    GetTextMetrics(hdc, &tm);
+    int line_height = tm.tmHeight + tm.tmExternalLeading;
+    SelectObject(hdc, old_font);
+    ReleaseDC(d->hThinkingBox, hdc);
+
+    int box_height = (line_count + 1) * line_height + 10; /* +10 for padding */
+    if (box_height < 30) box_height = 30;
+    if (box_height > 300) box_height = 300; /* Max height to prevent huge boxes */
+
+    d->thinking_box_height = box_height;
+    d->indicator_line_y = (int)pt.y;
+
+    /* Position the box - use margin for X position, pt.y + line_height for Y */
+    MoveWindow(d->hThinkingBox, margin, (int)pt.y + line_height + 2,
+              box_width, box_height, TRUE);
+}
+
 /* Rebuild the chat display from the conversation history.
- * Used when switching sessions to replay the loaded conversation. */
+ * Used when switching sessions to replay the loaded conversation.
+ * Populates the ChatMsgList and invalidates the ChatListView. */
 static void chat_rebuild_display(AiChatData *d)
 {
-    if (!d || !d->hDisplay) return;
+    if (!d) return;
 
-    SetWindowTextW(d->hDisplay, L"");
+    chat_msg_list_clear(&d->msg_list);
+    d->stream_ai_item = NULL;
 
-    /* Welcome header — same as WM_CREATE / IDC_CHAT_NEWCHAT */
-    chat_append_ops(d->hDisplay,
-        "AI Assist - Type a message and press Enter or click Send.\r\n"
-        "The AI can see your terminal and execute commands.\r\n"
-        "---\r\n");
-
-    COLORREF col_user = d->theme ? theme_cr(d->theme->accent) : RGB(0, 120, 215);
-    COLORREF col_ai   = d->theme ? theme_cr(d->theme->text_main)
-                                 : GetSysColor(COLOR_WINDOWTEXT);
+    /* Add welcome status message */
+    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+        "AI Assist - Type a message and press Enter or click Send.\n"
+        "The AI can see your terminal and execute commands.");
 
     /* Replay messages, skipping the system prompt at index 0 */
     for (int i = 1; i < d->conv.msg_count; i++) {
         const AiMessage *msg = &d->conv.messages[i];
 
         if (msg->role == AI_ROLE_USER) {
-            chat_append_styled(d->hDisplay, "\r\n\r\n", col_user, 0);
-            chat_append_styled_ex(d->hDisplay, "You\r\n", col_user, CLR_DEFAULT, CFE_BOLD, NULL, 220);
-            chat_append_color(d->hDisplay, msg->content, col_user);
-            chat_append_color(d->hDisplay, "\r\n", col_user);
+            chat_msg_append(&d->msg_list, CHAT_ITEM_USER, msg->content);
         } else if (msg->role == AI_ROLE_ASSISTANT) {
-            chat_append_styled(d->hDisplay, "\r\n\r\n", col_ai, 0);
-            chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
-            /* Show thinking indicator if it exists - thinking content shown in embedded textbox when clicked */
-            if (d->thinking_history[i] && d->thinking_history[i][0]) {
-                COLORREF col_purple = RGB(150, 100, 200);
-                chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
+            ChatMsgItem *item = chat_msg_append(&d->msg_list,
+                                                 CHAT_ITEM_AI_TEXT,
+                                                 msg->content);
+            if (item && d->thinking_history[i] &&
+                d->thinking_history[i][0]) {
+                chat_msg_set_thinking(item, d->thinking_history[i]);
             }
-            chat_append_markdown(d->hDisplay, msg->content, col_ai,
-                                 d->theme, d->ai_font_name);
         }
         /* Skip system messages injected mid-conversation */
     }
 
-    /* Scroll to bottom */
-    SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-    SendMessage(d->hDisplay, EM_SCROLLCARET, 0, 0);
+    if (d->hChatList) {
+        chat_listview_invalidate(d->hChatList);
+        chat_listview_scroll_to_bottom(d->hChatList);
+    }
     update_context_bar(d);
 }
 
@@ -947,13 +1006,15 @@ static void launch_stream_thread(AiChatData *d)
     d->stream_content[0] = '\0';
     d->stream_content_len = 0;
     d->stream_phase = 0;
+    d->last_phase = 0;
 
-    /* Show initial processing indicator immediately so user sees activity */
-    COLORREF col_purple = RGB(150, 100, 200);
-    chat_append_styled(d->hDisplay, "\r\n\r\n", col_purple, 0);
-    GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
-    d->indicator_pos = (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX, (WPARAM)&gtx, 0);
-    chat_append_styled_ex(d->hDisplay, "> processing...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
+    /* Create a placeholder AI item in the ChatMsgList for streaming */
+    d->stream_ai_item = chat_msg_append(&d->msg_list, CHAT_ITEM_AI_TEXT,
+                                         "");
+    if (d->hChatList) {
+        chat_listview_invalidate(d->hChatList);
+        chat_listview_scroll_to_bottom(d->hChatList);
+    }
 
     _beginthreadex(NULL, 0, ai_stream_thread_proc, arg, 0, NULL);
 }
@@ -969,12 +1030,12 @@ static void send_user_message(AiChatData *d)
 
     SetWindowText(d->hInput, "");
 
-    /* Display user message */
-    COLORREF col_user = d->theme ? theme_cr(d->theme->accent) : RGB(0, 120, 215);
-    chat_append_styled(d->hDisplay, "\r\n\r\n", col_user, 0);
-    chat_append_styled_ex(d->hDisplay, "You\r\n", col_user, CLR_DEFAULT, CFE_BOLD, NULL, 220);
-    chat_append_color(d->hDisplay, input, col_user);
-    chat_append_color(d->hDisplay, "\r\n", col_user);
+    /* Display user message in ChatListView */
+    chat_msg_append(&d->msg_list, CHAT_ITEM_USER, input);
+    if (d->hChatList) {
+        chat_listview_invalidate(d->hChatList);
+        chat_listview_scroll_to_bottom(d->hChatList);
+    }
 
     /* Extract terminal context */
     char term_text[8192] = "";
@@ -1016,8 +1077,9 @@ static void execute_command(AiChatData *d, const char *cmd)
 {
     if (!d || !cmd || !cmd[0]) return;
     if (!d->active_channel) {
-        chat_append_ops(d->hDisplay,
-                        "  [error: no active SSH channel]\r\n");
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                        "[error: no active SSH channel]");
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
         return;
     }
 
@@ -1029,9 +1091,11 @@ static void execute_command(AiChatData *d, const char *cmd)
     ssh_channel_write(d->active_channel, cmd, (size_t)strlen(cmd));
     ssh_channel_write(d->active_channel, "\r", 1);
 
-    chat_append_ops(d->hDisplay, "  $ ");
-    chat_append_ops(d->hDisplay, cmd);
-    chat_append_ops(d->hDisplay, "\r\n");
+    /* Show executed command as status item */
+    char status_buf[1100];
+    snprintf(status_buf, sizeof(status_buf), "$ %s", cmd);
+    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, status_buf);
+    if (d->hChatList) chat_listview_invalidate(d->hChatList);
 }
 
 static void send_continue_message(AiChatData *d)
@@ -1301,23 +1365,16 @@ static void relayout(AiChatData *d)
         ai_dock_chat_layout(cw, ch, top_y, input_h, approve_h, margin,
                             CSB_WIDTH, &disp_w, &disp_h);
 
-        /* If thinking box is visible, split the display area */
-        int think_h = S(100);  /* Height of thinking box */
-        int actual_disp_h = disp_h;
-        if (d->hThinkingBox && IsWindowVisible(d->hThinkingBox)) {
-            actual_disp_h = disp_h - think_h - pad;
-            if (actual_disp_h < S(50)) actual_disp_h = S(50);  /* Minimum display height */
-
-            /* Position thinking box below display */
-            MoveWindow(d->hThinkingBox, margin, top_y + actual_disp_h + pad,
-                      disp_w, think_h, TRUE);
-        }
-
+        /* Display takes full calculated height */
         if (d->hDisplay)
-            MoveWindow(d->hDisplay, margin, top_y, disp_w, actual_disp_h, TRUE);
+            MoveWindow(d->hDisplay, margin, top_y, disp_w, disp_h, TRUE);
         if (d->hDisplayScrollbar)
             MoveWindow(d->hDisplayScrollbar, margin + disp_w, top_y,
-                       CSB_WIDTH, actual_disp_h, TRUE);
+                       CSB_WIDTH, disp_h, TRUE);
+
+        /* Notify ChatListView of size change */
+        if (d->hChatList)
+            chat_listview_relayout(d->hChatList);
     }
     /* Approval buttons — between display and input */
     if (d->hAllowBtn && d->hDenyBtn) {
@@ -1349,7 +1406,9 @@ static void relayout(AiChatData *d)
     #undef S
 }
 
-/* Sync the custom scrollbar with the RichEdit display's scroll state */
+/* Sync the custom scrollbar with the RichEdit display's scroll state.
+ * DEPRECATED: ChatListView handles its own scrolling. */
+__attribute__((unused))
 static void display_sync_scroll(AiChatData *d)
 {
     if (!d) return;
@@ -1397,23 +1456,34 @@ static void chat_apply_zoom(AiChatData *d, int delta)
     }
 
     if (d->hFont) {
-        SendMessage(d->hDisplay, WM_SETFONT, (WPARAM)d->hFont, TRUE);
         SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hFont, TRUE);
+        /* Update ChatListView fonts */
+        if (d->hChatList) {
+            HFONT hBold = CreateFont(h, 0, 0, 0, FW_BOLD,
+                FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                APP_FONT_UI_FACE);
+            HFONT hMono = CreateFont(h, 0, 0, 0, FW_NORMAL,
+                FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
+                d->ai_font_name[0] ? d->ai_font_name : "Consolas");
+            chat_listview_set_fonts(d->hChatList, d->hFont,
+                                    hMono, hBold, d->hSmallFont,
+                                    d->hIconFont);
+            chat_listview_relayout(d->hChatList);
+        }
         /* Re-measure line height */
-        HDC hdc = GetDC(d->hDisplay);
+        HDC hdc = GetDC(d->hInput);
         HGDIOBJ old = SelectObject(hdc, (HGDIOBJ)d->hFont);
         TEXTMETRIC tm;
         GetTextMetrics(hdc, &tm);
         d->display_line_h = tm.tmHeight + tm.tmExternalLeading;
         d->input_line_h = d->display_line_h;
         SelectObject(hdc, old);
-        ReleaseDC(d->hDisplay, hdc);
+        ReleaseDC(d->hInput, hdc);
     }
-    /* Rebuild the display so all text is re-rendered with proper colors
-     * and markdown formatting.  WM_SETFONT alone strips per-character
-     * formatting (colors, bold, etc.) from the RichEdit control. */
-    chat_rebuild_display(d);
-    display_sync_scroll(d);
     input_sync_scroll(d);
 }
 
@@ -1515,7 +1585,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             top_y += bar_h + pad;
         }
 
-        /* Chat display: read-only RichEdit for colored text.
+        /* Chat display: owner-drawn ChatListView replaces RichEdit.
          * In docked mode the initial window may be 1x1, so clamp
          * all dimensions to >=1 — relayout() fixes them on first WM_SIZE. */
         int input_h = S(46); /* ~2 lines for multiline input */
@@ -1524,48 +1594,28 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (disp_w < 1) disp_w = 1;
         int disp_h = ch - input_h - top_y - margin * 2;
         if (disp_h < 1) disp_h = 1;
-        nd->hDisplay = CreateWindowW(L"RichEdit20W", L"",
-            WS_VISIBLE | WS_CHILD | WS_BORDER |
-            ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-            margin, top_y, disp_w, disp_h,
-            hwnd, (HMENU)IDC_CHAT_DISPLAY, NULL, NULL);
-        if (nd->hDisplay) {
-            SetWindowSubclass(nd->hDisplay, DisplaySubclassProc, 1, 0);
-            DWORD em = (DWORD)SendMessage(nd->hDisplay, EM_GETEVENTMASK, 0, 0);
-            SendMessage(nd->hDisplay, EM_SETEVENTMASK, 0, em | ENM_LINK);
-        }
 
-        /* Custom themed scrollbar for chat display */
+        /* Initialize the message list */
+        chat_msg_list_init(&nd->msg_list);
+
+        /* Create ChatListView — hDisplay points to same HWND for layout compat */
+        chat_listview_register(GetModuleHandle(NULL));
+        nd->hChatList = chat_listview_create(hwnd, margin, top_y,
+                                              disp_w, disp_h,
+                                              &nd->msg_list, nd->theme);
+        nd->hDisplay = nd->hChatList;  /* layout code uses hDisplay */
+
+        /* Custom themed scrollbar for chat display (kept for visual consistency) */
         csb_register(GetModuleHandle(NULL));
         nd->hDisplayScrollbar = csb_create(hwnd,
             margin + disp_w, top_y, CSB_WIDTH, disp_h,
             nd->theme, GetModuleHandle(NULL));
-        SetTimer(hwnd, TIMER_SCROLL_SYNC, 50, NULL);
 
-        /* Set RichEdit background from theme */
-        if (nd->hDisplay)
-            SendMessage(nd->hDisplay, EM_SETBKGNDCOLOR, 0,
-                        (LPARAM)(nd->theme ? theme_cr(nd->theme->bg_secondary)
-                                           : GetSysColor(COLOR_WINDOW)));
-
-        /* Thinking box: initially hidden, appears when indicator is clicked */
-        nd->hThinkingBox = CreateWindowW(L"EDIT", L"",
-            WS_CHILD | WS_BORDER | WS_VSCROLL |
-            ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-            margin, top_y + disp_h - S(100), disp_w, S(100),
-            hwnd, (HMENU)IDC_THINKING_BOX, NULL, NULL);
-        if (nd->hThinkingBox) {
-            /* Apply theme colors - use same as display for consistency */
-            COLORREF bg = nd->theme ? theme_cr(nd->theme->bg_secondary) : GetSysColor(COLOR_WINDOW);
-            SendMessage(nd->hThinkingBox, EM_SETBKGNDCOLOR, 0, (LPARAM)bg);
-
-            /* Apply font to match main display */
-            if (nd->hFont) {
-                SendMessage(nd->hThinkingBox, WM_SETFONT, (WPARAM)nd->hFont, FALSE);
-            }
-
-            ShowWindow(nd->hThinkingBox, SW_HIDE);  /* Hidden by default */
-        }
+        /* ThinkingBox no longer needed — thinking is inline in ChatListView */
+        nd->hThinkingBox = NULL;
+        nd->thinking_box_height = 0;
+        nd->indicator_line_y = -1;
+        nd->last_phase = -1;
 
         /* Input field: multiline, Enter sends via subclass, Shift+Enter = newline */
         int send_w = S(40);
@@ -1620,17 +1670,35 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
         #undef S
         if (nd->hFont) {
-            SendMessage(nd->hDisplay, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
             SendMessage(nd->hInput, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
+            /* Set fonts on the ChatListView */
+            if (nd->hChatList) {
+                /* Create a bold variant for headings */
+                HFONT hBold = CreateFont(h, 0, 0, 0, FW_BOLD,
+                    FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                    OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                    APP_FONT_UI_FACE);
+                /* Create a monospace font for code blocks */
+                HFONT hMono = CreateFont(h, 0, 0, 0, FW_NORMAL,
+                    FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                    OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
+                    nd->ai_font_name[0] ? nd->ai_font_name
+                                        : "Consolas");
+                chat_listview_set_fonts(nd->hChatList, nd->hFont,
+                                        hMono, hBold, nd->hSmallFont,
+                                        nd->hIconFont);
+            }
             /* Measure line height for scrollbar sync */
-            HDC hdc_m = GetDC(nd->hDisplay);
+            HDC hdc_m = GetDC(nd->hInput);
             HGDIOBJ old_m = SelectObject(hdc_m, (HGDIOBJ)nd->hFont);
             TEXTMETRIC tm_m;
             GetTextMetrics(hdc_m, &tm_m);
             nd->display_line_h = tm_m.tmHeight + tm_m.tmExternalLeading;
             nd->input_line_h = nd->display_line_h;
             SelectObject(hdc_m, old_m);
-            ReleaseDC(nd->hDisplay, hdc_m);
+            ReleaseDC(nd->hInput, hdc_m);
         }
         if (nd->hSmallFont) {
             SendMessage(nd->hSessionLabel, WM_SETFONT, (WPARAM)nd->hSmallFont, TRUE);
@@ -1673,10 +1741,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (nd->conv.msg_count > 0) {
             chat_rebuild_display(nd);
         } else {
-            chat_append_ops(nd->hDisplay,
-                "AI Assist - Type a message and press Enter or click Send.\r\n"
-                "The AI can see your terminal and execute commands.\r\n"
-                "---\r\n");
+            chat_msg_append(&nd->msg_list, CHAT_ITEM_STATUS,
+                "AI Assist - Type a message and press Enter or click Send.\n"
+                "The AI can see your terminal and execute commands.");
+            if (nd->hChatList)
+                chat_listview_invalidate(nd->hChatList);
         }
 
         SetFocus(nd->hInput);
@@ -1706,50 +1775,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     }
 
     case WM_NOTIFY: {
-        NMHDR *nmh = (NMHDR *)lParam;
-        if (d && nmh->hwndFrom == d->hDisplay && nmh->code == EN_LINK) {
-            ENLINK *enm = (ENLINK *)lParam;
-            if (enm->msg == WM_LBUTTONUP) {
-                /* Toggle thinking textbox visibility */
-                d->show_thinking = !d->show_thinking;
-
-                if (d->hThinkingBox) {
-                    if (d->show_thinking) {
-                        /* Show thinking box and populate it */
-                        ShowWindow(d->hThinkingBox, SW_SHOW);
-
-                        /* Clear and populate with current thinking content */
-                        SetWindowTextA(d->hThinkingBox, "");
-                        if (ACTIVE_BUSY(d) && d->stream_thinking_len > 0) {
-                            /* Streaming - show current thinking buffer */
-                            SetWindowTextA(d->hThinkingBox, d->stream_thinking);
-                        } else {
-                            /* Find thinking from history for last AI message */
-                            for (int i = d->conv.msg_count - 1; i >= 0; i--) {
-                                if (d->conv.messages[i].role == AI_ROLE_ASSISTANT &&
-                                    d->thinking_history[i] && d->thinking_history[i][0]) {
-                                    SetWindowTextA(d->hThinkingBox, d->thinking_history[i]);
-                                    break;
-                                }
-                            }
-                        }
-
-                        /* Trigger layout to adjust display/thinking box sizes */
-                        RECT rc;
-                        GetClientRect(d->hwnd, &rc);
-                        SendMessage(d->hwnd, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
-                    } else {
-                        /* Hide thinking box */
-                        ShowWindow(d->hThinkingBox, SW_HIDE);
-
-                        /* Trigger layout to restore display size */
-                        RECT rc;
-                        GetClientRect(d->hwnd, &rc);
-                        SendMessage(d->hwnd, WM_SIZE, 0, MAKELPARAM(rc.right, rc.bottom));
-                    }
-                }
-            }
-        }
+        /* EN_LINK handling removed — ChatListView handles thinking toggle
+         * inline via its own click handling in the list view WndProc. */
+        (void)lParam;
         break;
     }
 
@@ -1780,11 +1808,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->stream_phase = 0;
                 thinking_history_clear(d);
                 /* Clear display and show welcome message */
-                SetWindowTextW(d->hDisplay, L"");
-                chat_append_ops(d->hDisplay,
-                    "AI Assist - Type a message and press Enter or click Send.\r\n"
-                    "The AI can see your terminal and execute commands.\r\n"
-                    "---\r\n");
+                chat_msg_list_clear(&d->msg_list);
+                d->stream_ai_item = NULL;
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                    "AI Assist - Type a message and press Enter or click Send.\n"
+                    "The AI can see your terminal and execute commands.");
+                if (d->hChatList)
+                    chat_listview_invalidate(d->hChatList);
                 /* Clear input field */
                 SetWindowText(d->hInput, "");
                 SetFocus(d->hInput);
@@ -1858,8 +1888,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     d->active_state->pending_cmd_count = 0;
                 }
                 relayout(d);
-                chat_append_ops(d->hDisplay,
-                                "\r\n--- Commands ---\r\n");
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                "--- Commands ---");
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
                 execute_command(d, d->queued_cmds[0]);
                 d->queued_next = 1;
                 if (d->queued_count > 1 && d->paste_delay_ms > 0) {
@@ -1893,8 +1924,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     d->active_state->pending_cmd_count = 0;
                 }
                 relayout(d);
-                chat_append_ops(d->hDisplay,
-                                "\r\n  [commands denied]\r\n");
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                "[commands denied]");
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
                 SetFocus(d->hInput);
             }
             return 0;
@@ -1918,13 +1950,18 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         if (removed > 0) {
                             char cbuf[128];
                             snprintf(cbuf, sizeof(cbuf),
-                                     "\r\n[compacted: removed %d older messages]\r\n",
+                                     "[compacted: removed %d older messages]",
                                      removed);
-                            chat_append_ops(d->hDisplay, cbuf);
+                            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                            cbuf);
+                            if (d->hChatList)
+                                chat_listview_invalidate(d->hChatList);
                             update_context_bar(d);
                         } else {
-                            chat_append_ops(d->hDisplay,
-                                "\r\n[nothing to compact]\r\n");
+                            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                            "[nothing to compact]");
+                            if (d->hChatList)
+                                chat_listview_invalidate(d->hChatList);
                         }
                     }
                 }
@@ -2001,85 +2038,25 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
         }
 
-        /* Remove the animated indicator only when we'll show something.
-         * Hidden thinking chunks (wParam==0, show_thinking off) must NOT
-         * remove it — otherwise the user sees nothing until content arrives. */
-        {
-            int should_remove = 0;
-            if (wParam == 1)
-                should_remove = 1;  /* content chunk — always visible */
-            else if (d->show_thinking)
-                should_remove = 1;  /* thinking chunk, visible */
-
-            if (should_remove && d->indicator_pos >= 0) {
-                KillTimer(d->hwnd, TIMER_THINKING);
-                SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-                CHARRANGE cr_rm;
-                SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_rm);
-                CHARRANGE cr_sel = { d->indicator_pos, cr_rm.cpMax };
-                SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
-                SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
-                d->indicator_pos = -1;
+        /* Update the streaming AI item in the ChatMsgList */
+        if (d->stream_ai_item) {
+            if (wParam == 0) {
+                /* Thinking delta — update thinking text on AI item */
+                if (d->stream_phase < 1)
+                    d->stream_phase = 1;
+                chat_msg_set_thinking(d->stream_ai_item,
+                                      d->stream_thinking);
+            } else {
+                /* Content delta — update AI item text */
+                if (d->stream_phase < 2)
+                    d->stream_phase = 2;
+                chat_msg_set_text(d->stream_ai_item,
+                                  d->stream_content);
             }
-        }
-
-        /* Display the chunk */
-        if (wParam == 0) {
-            /* Thinking delta */
-            if (d->stream_phase < 1) {
-                d->stream_phase = 1;
-
-                /* Update "> processing..." to "> Thinking..." in place */
-                COLORREF col_purple = RGB(150, 100, 200);
-                if (d->indicator_pos >= 0) {
-                    /* Replace the text but keep it visible */
-                    CHARRANGE cr_sel = { d->indicator_pos, d->indicator_pos + 16 };  /* Length of "> processing..." */
-                    SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
-
-                    /* Set format for replacement text */
-                    CHARFORMAT2 cf;
-                    memset(&cf, 0, sizeof(cf));
-                    cf.cbSize = sizeof(cf);
-                    cf.dwMask = CFM_COLOR | CFM_BOLD | CFM_LINK;
-                    cf.crTextColor = col_purple;
-                    cf.dwEffects = CFE_BOLD | CFE_LINK;
-                    SendMessage(d->hDisplay, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-
-                    /* Replace text */
-                    SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"> Thinking...\r\n");
-                }
+            if (d->hChatList) {
+                chat_listview_invalidate(d->hChatList);
+                chat_listview_scroll_to_bottom(d->hChatList);
             }
-
-            /* Update thinking box if visible */
-            if (d->show_thinking && d->hThinkingBox && delta && delta[0]) {
-                SetWindowTextA(d->hThinkingBox, d->stream_thinking);
-            }
-        } else {
-            /* Content delta (no thinking - simple response) */
-            COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main)
-                                       : GetSysColor(COLOR_WINDOWTEXT);
-            if (d->stream_phase < 2) {
-                /* Simple response - just keep "> processing..." or add AI header after it */
-                if (d->stream_phase == 1)
-                    chat_append_ops(d->hDisplay, "\r\n");
-                else {
-                    /* Phase 0 - remove "> processing..." and add "AI" header */
-                    if (d->indicator_pos >= 0) {
-                        CHARRANGE cr_sel = { d->indicator_pos, d->indicator_pos + 16 };
-                        SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_sel);
-                        SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
-                        d->indicator_pos = -1;
-                    }
-                }
-                chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
-                d->stream_phase = 2;
-                /* Record where the AI content starts for markdown re-render */
-                GETTEXTLENGTHEX gtx = { .flags = GTL_NUMCHARS, .codepage = 1200 };
-                d->stream_display_start =
-                    (int)SendMessage(d->hDisplay, EM_GETTEXTLENGTHEX,
-                                     (WPARAM)&gtx, 0);
-            }
-            chat_append_color(d->hDisplay, delta, col_ai);
         }
 
         free(delta);
@@ -2128,12 +2105,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             return 0;
         }
 
-        /* Don't remove indicators - they stay visible with embedded textbox approach */
         KillTimer(hwnd, TIMER_THINKING);
         d->indicator_pos = -1;
 
         if (wParam == 2) {
-            /* Streaming complete — text already displayed, do command extraction */
+            /* Streaming complete — finalize AI item and extract commands */
             char *text = rmsg->content;
 
             /* The thread committed the assistant message to src->conv.
@@ -2144,9 +2120,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 LeaveCriticalSection(&d->cs);
             }
 
-            /* Save thinking for this assistant message in history.
-             * The assistant message was just added to conv above,
-             * so it's at msg_count-1. */
+            /* Save thinking for this assistant message in history. */
             if (d->stream_thinking_len > 0 &&
                 d->conv.msg_count > 0) {
                 int idx = d->conv.msg_count - 1;
@@ -2157,27 +2131,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             d->stream_thinking[0] = '\0';
             d->stream_thinking_len = 0;
 
-            /* Replace the plain-text stream with markdown-rendered version */
-            if (d->stream_display_start >= 0 && d->stream_content_len > 0) {
-                /* Select from stream start to end and delete */
-                SendMessage(d->hDisplay, EM_SETSEL, (WPARAM)-1, (LPARAM)-1);
-                CHARRANGE cr_end;
-                SendMessage(d->hDisplay, EM_EXGETSEL, 0, (LPARAM)&cr_end);
-                CHARRANGE cr_repl = { d->stream_display_start, cr_end.cpMax };
-                SendMessage(d->hDisplay, EM_EXSETSEL, 0, (LPARAM)&cr_repl);
-                SendMessageW(d->hDisplay, EM_REPLACESEL, FALSE, (LPARAM)L"");
-
-                /* Re-render with markdown formatting */
-                COLORREF col_ai = d->theme
-                    ? theme_cr(d->theme->text_main)
-                    : GetSysColor(COLOR_WINDOWTEXT);
-                chat_append_markdown(d->hDisplay, d->stream_content,
-                                     col_ai, d->theme, d->ai_font_name);
-            } else {
-                chat_append_color(d->hDisplay, "\r\n",
-                    d->theme ? theme_cr(d->theme->text_main)
-                             : GetSysColor(COLOR_WINDOWTEXT));
+            /* Finalize the AI item with the full content (for markdown re-render) */
+            if (d->stream_ai_item && text) {
+                chat_msg_set_text(d->stream_ai_item, text);
+                if (d->thinking_history[d->conv.msg_count - 1])
+                    chat_msg_set_thinking(d->stream_ai_item,
+                        d->thinking_history[d->conv.msg_count - 1]);
             }
+            d->stream_ai_item = NULL;
             d->stream_display_start = -1;
             d->stream_phase = 0;
 
@@ -2196,9 +2157,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                sizeof(filtered[0]));
                         nfiltered++;
                     } else {
-                        chat_append_ops(d->hDisplay, "  [blocked: ");
-                        chat_append_ops(d->hDisplay, cmds[ci]);
-                        chat_append_ops(d->hDisplay, "]\r\n");
+                        /* Show blocked command as CHAT_ITEM_COMMAND */
+                        ChatMsgItem *blk = chat_msg_append(
+                            &d->msg_list, CHAT_ITEM_COMMAND, "");
+                        if (blk)
+                            chat_msg_set_command(blk, cmds[ci],
+                                CMD_WRITE, 1);
                     }
                 }
                 if (nfiltered < ncmds_before) {
@@ -2227,20 +2191,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
 
             if (ncmds > 0) {
-                /* Show commands inline in chat and present
-                 * Allow / Deny buttons instead of a modal dialog */
-                char confirm[4096];
-                size_t clen = ai_build_confirm_text(cmds, ncmds,
-                                                     confirm, sizeof(confirm));
-                if (clen == 0)
-                    snprintf(confirm, sizeof(confirm),
-                             "Execute %d command(s)?", ncmds);
-                chat_append_ops(d->hDisplay, "\r\n");
-                COLORREF dim = d->theme
-                    ? theme_cr(d->theme->text_dim)
-                    : GetSysColor(COLOR_GRAYTEXT);
-                chat_append_color(d->hDisplay, confirm, dim);
-                chat_append_ops(d->hDisplay, "\r\n");
+                /* Create CHAT_ITEM_COMMAND items for each command */
+                for (int ci = 0; ci < ncmds; ci++) {
+                    ChatMsgItem *cmd_item = chat_msg_append(
+                        &d->msg_list, CHAT_ITEM_COMMAND, "");
+                    if (cmd_item)
+                        chat_msg_set_command(cmd_item, cmds[ci],
+                            CMD_SAFE, 0);
+                }
 
                 /* Stash commands and show approval buttons */
                 memcpy(d->queued_cmds, cmds,
@@ -2252,6 +2210,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 SetFocus(d->hAllowBtn);
             }
 
+            if (d->hChatList) {
+                chat_listview_invalidate(d->hChatList);
+                chat_listview_scroll_to_bottom(d->hChatList);
+            }
+
             free(text);
             free(rmsg->thinking);
             free(rmsg);
@@ -2260,11 +2223,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* Error */
             char *text = rmsg->content;
             d->stream_phase = 0;
+            d->stream_ai_item = NULL;
             if (text) {
-                chat_append_ops(d->hDisplay,
-                                "\r\n--- Error ---\r\n");
-                chat_append_ops(d->hDisplay, text);
-                chat_append_ops(d->hDisplay, "\r\n");
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                text);
+                if (d->hChatList)
+                    chat_listview_invalidate(d->hChatList);
                 free(text);
             }
             free(rmsg->thinking);
@@ -2303,7 +2267,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 send_continue_message(d);
             }
         } else if (wParam == TIMER_SCROLL_SYNC) {
-            display_sync_scroll(d);
+            /* ChatListView handles its own scroll; only sync input */
             input_sync_scroll(d);
         }
         return 0;
@@ -2311,30 +2275,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_VSCROLL:
         if (d && d->hDisplayScrollbar &&
             (HWND)lParam == d->hDisplayScrollbar) {
-            WORD code = LOWORD(wParam);
-            int first = (int)SendMessage(d->hDisplay,
-                            EM_GETFIRSTVISIBLELINE, 0, 0);
-            int delta = 0;
-            RECT erc_v;
-            GetClientRect(d->hDisplay, &erc_v);
-            int vis = edit_scroll_visible_lines(erc_v.bottom - erc_v.top,
-                          d->display_line_h > 0 ? d->display_line_h : 1);
-            switch (code) {
-            case SB_LINEUP:    delta = -1;   break;
-            case SB_LINEDOWN:  delta =  1;   break;
-            case SB_PAGEUP:    delta = -vis; break;
-            case SB_PAGEDOWN:  delta =  vis; break;
-            case SB_THUMBTRACK:
-            case SB_THUMBPOSITION:
-                delta = edit_scroll_line_delta(
-                    csb_get_trackpos(d->hDisplayScrollbar), first);
-                break;
-            case SB_TOP:    delta = -first;  break;
-            case SB_BOTTOM: delta =  99999;  break;
-            }
-            if (delta != 0)
-                SendMessage(d->hDisplay, EM_LINESCROLL, 0, (LPARAM)delta);
-            display_sync_scroll(d);
+            /* ChatListView handles its own scroll; forward WM_VSCROLL */
+            if (d->hChatList)
+                SendMessage(d->hChatList, WM_VSCROLL, wParam, 0);
             return 0;
         }
         if (d && d->hInputScrollbar &&
@@ -2381,19 +2324,17 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         break;
 
     case WM_MOUSEWHEEL:
-        if (d && d->hDisplay) {
+        if (d) {
             int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
             /* Ctrl+Scroll zooms the font */
             if (GetKeyState(VK_CONTROL) & 0x8000) {
                 chat_apply_zoom(d, zdelta > 0 ? 1 : -1);
                 return 0;
             }
-            int scroll = edit_scroll_wheel_accum(zdelta, WHEEL_DELTA, 3,
-                                                 &d->wheel_accum);
-            if (scroll != 0)
-                SendMessage(d->hDisplay, EM_LINESCROLL, 0, (LPARAM)scroll);
-            display_sync_scroll(d);
-            return 0;
+            /* Forward wheel to ChatListView if it exists */
+            if (d->hChatList)
+                return SendMessage(d->hChatList, WM_MOUSEWHEEL,
+                                   wParam, lParam);
         }
         break;
 
@@ -2558,6 +2499,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->active_state->valid = 1;
             }
             thinking_history_clear(d);
+            chat_msg_list_clear(&d->msg_list);
+            d->stream_ai_item = NULL;
             DeleteCriticalSection(&d->cs);
             if (d->hFont) DeleteObject(d->hFont);
             if (d->hSmallFont) DeleteObject(d->hSmallFont);
@@ -2586,12 +2529,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
 void ai_chat_init(HINSTANCE hInstance)
 {
-    /* Load RichEdit control library.
-     * Riched20.dll registers "RichEdit20A"; Msftedit.dll registers
-     * "RICHEDIT50W" and may also register 20A on some systems.
-     * Load both to ensure RichEdit20A is always available. */
+    /* Load RichEdit control library (still needed for input field) */
     LoadLibrary("Riched20.dll");
     LoadLibrary("Msftedit.dll");
+
+    /* Register the ChatListView window class */
+    chat_listview_register(hInstance);
 
     WNDCLASSEX wc;
     memset(&wc, 0, sizeof(wc));
@@ -2761,9 +2704,9 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme)
     d->hBrBgPrimary   = CreateSolidBrush(theme_cr(d->theme->bg_primary));
     d->hBrBgSecondary = CreateSolidBrush(theme_cr(d->theme->bg_secondary));
 
-    /* Update RichEdit background */
-    SendMessage(d->hDisplay, EM_SETBKGNDCOLOR, 0,
-                (LPARAM)theme_cr(d->theme->bg_secondary));
+    /* Update ChatListView theme */
+    if (d->hChatList)
+        chat_listview_set_theme(d->hChatList, d->theme);
 
     /* Update custom scrollbar themes */
     if (d->hDisplayScrollbar)
@@ -2889,12 +2832,7 @@ static void do_session_switch(AiChatData *d,
         if (clen == 0)
             snprintf(confirm, sizeof(confirm),
                      "Execute %d command(s)?", d->queued_count);
-        chat_append_ops(d->hDisplay, "\r\n");
-        COLORREF dim = d->theme
-            ? theme_cr(d->theme->text_dim)
-            : GetSysColor(COLOR_GRAYTEXT);
-        chat_append_color(d->hDisplay, confirm, dim);
-        chat_append_ops(d->hDisplay, "\r\n");
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, confirm);
     }
 
     /* If switching to a session that's still streaming,
@@ -2922,28 +2860,18 @@ static void do_session_switch(AiChatData *d,
         }
         d->stream_phase = new_state->stream_phase;
 
-        if (d->stream_thinking_len > 0) {
-            COLORREF col_purple = RGB(150, 100, 200);
-            chat_append_styled(d->hDisplay, "\r\n\r\n", col_purple, 0);
-            chat_append_styled_ex(d->hDisplay, "> Thinking...\r\n", col_purple, CLR_DEFAULT, CFE_BOLD | CFE_LINK, NULL, 180);
-            if (d->show_thinking) {
-                chat_append_styled(d->hDisplay, d->stream_thinking, col_purple, 1);
-            }
-            d->stream_phase = 1;
-        }
-        if (d->stream_content_len > 0) {
-            if (d->stream_phase == 1)
-                chat_append_ops(d->hDisplay, "\r\n");
-            COLORREF col_ai = d->theme ? theme_cr(d->theme->text_main)
-                                       : GetSysColor(COLOR_WINDOWTEXT);
-            chat_append_styled(d->hDisplay, "\r\n\r\n", col_ai, 0);
-            chat_append_styled_ex(d->hDisplay, "AI\r\n", RGB(0, 150, 200), CLR_DEFAULT, CFE_BOLD, NULL, 220);
-            chat_append_color(d->hDisplay, d->stream_content, col_ai);
-            d->stream_phase = 2;
-        } else if (d->stream_phase <= 1) {
-            /* Still in thinking phase or no content yet — show indicator */
-            start_indicator(d, "thinking");
-        }
+        /* Create an AI item in the msg_list for the in-progress stream */
+        d->stream_ai_item = chat_msg_append(&d->msg_list,
+                                             CHAT_ITEM_AI_TEXT,
+                                             d->stream_content);
+        if (d->stream_ai_item && d->stream_thinking_len > 0)
+            chat_msg_set_thinking(d->stream_ai_item,
+                                  d->stream_thinking);
+    }
+
+    if (d->hChatList) {
+        chat_listview_invalidate(d->hChatList);
+        chat_listview_scroll_to_bottom(d->hChatList);
     }
 }
 
