@@ -813,11 +813,11 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
         {
             const char *letter = "W";
             HFONT hSmall = CreateFont(
-                -MulDiv(7, d->dpi, 72), 0, 0, 0, FW_BOLD,
+                -MulDiv(8, d->dpi, 72), 0, 0, 0, FW_BOLD,
                 FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                 OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                APP_FONT_UI_FACE);
+                "Segoe UI");
             HFONT hOldF = (HFONT)SelectObject(hdc, hSmall);
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, RGB(255, 255, 255));
@@ -1187,12 +1187,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                DEFAULT_CHARSET, OUT_TT_PRECIS,
                                CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
-        /* Small bold font — DPI-scaled to match tab strip indicator labels */
-        int sh = -MulDiv(7, nd->dpi, 72);
+        /* Small bold font — Segoe UI renders reliably at small sizes on all
+         * Windows versions (hand-tuned hinting), unlike bundled Inter. */
+        int sh = -MulDiv(8, nd->dpi, 72);
         nd->hSmallFont = CreateFont(sh, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                                     DEFAULT_CHARSET, OUT_TT_PRECIS,
                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                    DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+                                    DEFAULT_PITCH | FF_SWISS, "Segoe UI");
 
         /* Icon Font for Fluent UI */
         int ih = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);

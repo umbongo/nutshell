@@ -133,7 +133,7 @@ int test_activity_format_processing(void) {
     chat_activity_init(&s);
     chat_activity_set_phase(&s, ACTIVITY_PROCESSING, 0.0f);
     char buf[128];
-    int n = chat_activity_format(&s, buf, sizeof(buf));
+    int n = chat_activity_format(&s, 1.0f, buf, sizeof(buf));
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "Processing") != NULL);
     TEST_END();
@@ -146,7 +146,7 @@ int test_activity_format_executing(void) {
     chat_activity_set_phase(&s, ACTIVITY_EXECUTING, 0.0f);
     chat_activity_set_exec(&s, 2, 5);
     char buf[128];
-    chat_activity_format(&s, buf, sizeof(buf));
+    chat_activity_format(&s, 1.0f, buf, sizeof(buf));
     ASSERT_TRUE(strstr(buf, "2") != NULL);
     ASSERT_TRUE(strstr(buf, "5") != NULL);
     TEST_END();
@@ -160,7 +160,7 @@ int test_activity_format_stalled(void) {
     chat_activity_token(&s, 0.0f);
     chat_activity_tick(&s, 45.0f);
     char buf[128];
-    chat_activity_format(&s, buf, sizeof(buf));
+    chat_activity_format(&s, 1.0f, buf, sizeof(buf));
     ASSERT_TRUE(strstr(buf, "Stalled") != NULL || strstr(buf, "stalled") != NULL);
     TEST_END();
 }

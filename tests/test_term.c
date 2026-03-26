@@ -377,7 +377,7 @@ int test_term_sgr_reverse_off_man_scenario(void) {
     Terminal *t = term_init(24, 80, 100);
 
     /* Simulate less: reverse on, write text, reverse off, write text */
-    term_process(t, "\x1B[7m" "standout" "\x1B[27m" "normal", 25);
+    term_process(t, "\x1B[7m" "standout" "\x1B[27m" "normal", 23);
 
     /* 's' at col 0 should have reverse set */
     TermCell s_cell = get_cell(t, 0, 0);

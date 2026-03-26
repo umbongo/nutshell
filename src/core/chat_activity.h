@@ -51,7 +51,9 @@ void chat_activity_connection_lost(ActivityState *state);
 /* Reset to idle. */
 void chat_activity_reset(ActivityState *state);
 
-/* Format inline status text into buf. Returns bytes written. */
-int chat_activity_format(const ActivityState *state, char *buf, size_t buf_size);
+/* Format inline status text into buf. current_time is monotonic seconds
+ * (used to compute elapsed time for thinking phase). Returns bytes written. */
+int chat_activity_format(const ActivityState *state, float current_time,
+                         char *buf, size_t buf_size);
 
 #endif /* NUTSHELL_CHAT_ACTIVITY_H */

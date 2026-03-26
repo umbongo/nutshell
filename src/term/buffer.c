@@ -192,7 +192,16 @@ void term_resize(Terminal *term, int rows, int cols) {
         }
     }
     new_count = current_new_row_idx + 1;
-    if (current_new_col_idx == 0 && new_count > 0) new_count--; // Trailing empty row
+    if (new_count > new_capacity) new_count = new_capacity;
+    /* Strip ALL trailing empty rows so that resizing to a larger terminal
+     * doesn't leave phantom blank rows between old content and the cursor.
+     * Keep at least up to (and including) the cursor row. */
+    {
+        int min_count = new_cursor_row + 1;
+        if (min_count < 1) min_count = 1;
+        while (new_count > min_count && new_lines[new_count - 1]->len == 0)
+            new_count--;
+    }
 
     /* 3. Swap buffers */
     for (int i = 0; i < term->lines_capacity; i++) {
@@ -208,13 +217,10 @@ void term_resize(Terminal *term, int rows, int cols) {
     term->rows = rows;
     term->cols = cols;
 
-    /* If resizing to a larger terminal with sparse content AND the cursor was
-     * near the bottom (likely at a prompt), ensure the buffer has enough lines
-     * to fill the screen. This keeps the cursor at the visual bottom and prevents
-     * gaps when commands output.  Only apply if we had significant prior content. */
-    if (term->lines_count < rows && new_cursor_row > 0 && term->lines_count > 0) {
-        term->lines_count = rows;
-    }
+    /* Note: we do NOT inflate lines_count to fill the screen here.
+     * Inflating creates blank rows in the visible area between old content
+     * and the cursor, causing a "masked" gap.  Instead, term_scroll()
+     * properly marks all visible rows dirty even when lines_count < rows. */
 
     /* 4. Update cursor */
     /* The new cursor row is relative to the start of the buffer.
@@ -248,10 +254,15 @@ void term_scroll(Terminal *term) {
     }
 
     /* Mark all visible rows dirty: each screen position now maps to a
-     * different logical row, so the renderer must repaint every row. */
+     * different logical row, so the renderer must repaint every row.
+     * When lines_count < rows (sparse content after resize), we must
+     * also mark the pre-allocated rows beyond lines_count that are
+     * still visible on screen; otherwise they never get repainted. */
     int vis_start = term->lines_count - term->rows;
     if (vis_start < 0) vis_start = 0;
-    for (int i = vis_start; i < term->lines_count; i++) {
+    int vis_end = vis_start + term->rows;
+    if (vis_end > term->lines_capacity) vis_end = term->lines_capacity;
+    for (int i = vis_start; i < vis_end; i++) {
         int idx = (term->lines_start + i) % term->lines_capacity;
         term->lines[idx]->dirty = true;
     }

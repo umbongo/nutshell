@@ -46,8 +46,8 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 
 /* ── Command button layout constants (96 DPI) ───────────────────────── */
 
-#define BASE_BTN_W        70   /* Allow/Deny button width */
-#define BASE_BTN_H        24   /* Allow/Deny button height */
+#define BASE_BTN_W        76   /* Allow/Deny button width */
+#define BASE_BTN_H        28   /* Allow/Deny button height */
 #define BASE_BTN_GAP       8   /* Gap between buttons */
 #define BASE_TAG_PAD_H     6   /* Safety tag horizontal padding */
 #define BASE_TAG_PAD_V     2   /* Safety tag vertical padding */
@@ -380,6 +380,10 @@ static void recalc_layout(ChatListView *lv)
 
     ReleaseDC(lv->hwnd, hdc);
 
+    /* Reserve space for the activity indicator when active */
+    if (lv->activity && lv->activity->phase != ACTIVITY_IDLE)
+        y += CLV_SCALE(lv, BASE_ACTIVITY_H) + lv->msg_gap;
+
     lv->total_height = y;
     lv->viewport_height = rc.bottom - rc.top;
 
@@ -422,8 +426,10 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     }
 
     case CHAT_ITEM_AI_TEXT: {
-        /* AI text: left-indented, full width minus indent */
-        text_w = width - lv->ai_indent - side_pad;
+        /* AI text: left-indented.  on_paint applies side_pad to item_rc,
+         * and paint_ai_item subtracts another side_pad on the right, so
+         * the effective text width is width - 2*side_pad - indent - side_pad. */
+        text_w = width - lv->ai_indent - 3 * side_pad;
         if (text_w < 40) text_w = 40;
 
         old_font = SelectObject(hdc, lv->hFont ? lv->hFont
@@ -435,39 +441,22 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
         int h = rc.bottom - rc.top;
 
-        /* Thinking region: always show header line if thinking text exists */
-        if (item->u.ai.thinking_text) {
-            int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
-            h += hdr_h + CLV_SCALE(lv, 4);  /* header + gap */
+        /* Thinking region removed from inline display — the activity
+         * indicator (green dot + timer) now handles thinking status.
+         * Thinking text is still stored for future log/export use. */
 
-            if (!item->u.ai.thinking_collapsed) {
-                /* Expanded: measure content, cap at max height */
-                int think_w = text_w - CLV_SCALE(lv, BASE_BORDER_W) -
-                              CLV_SCALE(lv, 8);
-                if (think_w < 20) think_w = 20;
-                old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                            : GetStockObject(DEFAULT_GUI_FONT));
-                SetRect(&rc, 0, 0, think_w, 0);
-                draw_text_utf8(hdc, item->u.ai.thinking_text, &rc,
-                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-                SelectObject(hdc, old_font);
-                int think_content_h = rc.bottom - rc.top;
-                int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
-                int min_h = CLV_SCALE(lv, BASE_THINK_MIN_H);
-                if (think_content_h < min_h) think_content_h = min_h;
-                if (think_content_h > max_h) think_content_h = max_h;
-                h += think_content_h + CLV_SCALE(lv, 8);
-            }
-        }
-
-        return h + CLV_SCALE(lv, BASE_ICON_SIZE);  /* Icon row above text */
+        /* Icon row + gap before content (must match paint_ai_item layout) */
+        return h + CLV_SCALE(lv, BASE_ICON_SIZE) + CLV_SCALE(lv, 4);
     }
 
     case CHAT_ITEM_COMMAND: {
-        /* Command block: monospace, padded, with safety tag + buttons */
+        /* Command block: monospace, padded, with safety tag + buttons.
+         * on_paint applies side_pad to item_rc, paint_command_item adds
+         * another side_pad for the block, so effective text area is
+         * width - 4*side_pad - 2*code_pad. */
         const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
                                                    : item->text;
-        text_w = width - 2 * side_pad - 2 * lv->code_pad;
+        text_w = width - 4 * side_pad - 2 * lv->code_pad;
         if (text_w < 40) text_w = 40;
 
         old_font = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
@@ -482,12 +471,15 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         /* Safety tag row at top */
         h += CLV_SCALE(lv, BASE_TAG_H) + CLV_SCALE(lv, 4);
 
-        /* Button/status row at bottom */
-        h += CLV_SCALE(lv, BASE_BTN_H) + CLV_SCALE(lv, 4);
+        /* Gap between command text and button row */
+        h += CLV_SCALE(lv, 4);
+
+        /* Button/status row at bottom + bottom padding */
+        h += CLV_SCALE(lv, BASE_BTN_H) + CLV_SCALE(lv, 6);
 
         /* If blocked, add help text row */
         if (item->u.cmd.blocked)
-            h += CLV_SCALE(lv, 16);
+            h += CLV_SCALE(lv, 20);
 
         /* "Allow All" ghost button above first command when multiple exist */
         int total_cmds, pending_cmds;
@@ -504,7 +496,10 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     }
 
     case CHAT_ITEM_STATUS: {
-        text_w = width - 2 * side_pad;
+        /* on_paint applies side_pad to item_rc, paint_status_item adds
+         * another side_pad on each side, so effective width is
+         * width - 4*side_pad. */
+        text_w = width - 4 * side_pad;
         if (text_w < 40) text_w = 40;
 
         old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
@@ -630,116 +625,9 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     DrawTextA(hdc, "AI", 2, &label_rc,
               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 
-    /* Thinking region: collapsible header + optional content */
+    /* Thinking status is now shown by the activity indicator (green dot +
+     * timer) below the message list — no inline thinking region needed. */
     int content_top = rc->top + icon_sz + CLV_SCALE(lv, 4);
-
-    if (item->u.ai.thinking_text) {
-        int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
-        int think_left = rc->left + lv->ai_indent;
-
-        /* Draw toggle header line: "> Thinking (2.1s)" or "v Thinking (2.1s)" */
-        {
-            HGDIOBJ old_hdr_font = SelectObject(hdc, lv->hSmallFont
-                                   ? lv->hSmallFont
-                                   : GetStockObject(DEFAULT_GUI_FONT));
-            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
-            SetBkMode(hdc, TRANSPARENT);
-
-            char hdr_text[128];
-            const char *arrow = item->u.ai.thinking_collapsed ? ">" : "v";
-            if (item->u.ai.thinking_elapsed > 0.0f) {
-                snprintf(hdr_text, sizeof(hdr_text), "%s Thinking (%.1fs)",
-                         arrow, (double)item->u.ai.thinking_elapsed);
-            } else {
-                snprintf(hdr_text, sizeof(hdr_text), "%s Thinking", arrow);
-            }
-
-            RECT hdr_rc;
-            hdr_rc.left   = think_left;
-            hdr_rc.top    = content_top;
-            hdr_rc.right  = rc->right - side_pad;
-            hdr_rc.bottom = content_top + hdr_h;
-            DrawTextA(hdc, hdr_text, -1, &hdr_rc,
-                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-            SelectObject(hdc, old_hdr_font);
-        }
-
-        content_top += hdr_h + CLV_SCALE(lv, 4);
-
-        /* Expanded: draw thinking content with left border, clipped to max height */
-        if (!item->u.ai.thinking_collapsed) {
-            int border_w = CLV_SCALE(lv, BASE_BORDER_W);
-            int text_w = rc->right - think_left - side_pad;
-            if (text_w < 20) text_w = 20;
-
-            /* Measure full content height */
-            HGDIOBJ old_think_font = SelectObject(hdc, lv->hSmallFont
-                                     ? lv->hSmallFont
-                                     : GetStockObject(DEFAULT_GUI_FONT));
-            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
-
-            int think_text_w = text_w - border_w - CLV_SCALE(lv, 8);
-            if (think_text_w < 20) think_text_w = 20;
-
-            RECT meas_rc;
-            SetRect(&meas_rc, 0, 0, think_text_w, 0);
-            draw_text_utf8(hdc, item->u.ai.thinking_text, &meas_rc,
-                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-            int full_content_h = meas_rc.bottom - meas_rc.top;
-
-            int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
-            int min_h = CLV_SCALE(lv, BASE_THINK_MIN_H);
-            int visible_h = full_content_h;
-            if (visible_h < min_h) visible_h = min_h;
-            if (visible_h > max_h) visible_h = max_h;
-
-            /* Clamp scroll offset */
-            int max_scroll = full_content_h - visible_h;
-            if (max_scroll < 0) max_scroll = 0;
-            if (item->u.ai.thinking_scroll_y > max_scroll)
-                item->u.ai.thinking_scroll_y = max_scroll;
-            if (item->u.ai.thinking_scroll_y < 0)
-                item->u.ai.thinking_scroll_y = 0;
-
-            /* Left border bar */
-            RECT bar_rc;
-            bar_rc.left   = think_left;
-            bar_rc.top    = content_top;
-            bar_rc.right  = think_left + border_w;
-            bar_rc.bottom = content_top + visible_h;
-
-            HBRUSH bar_br = CreateSolidBrush(RGB_FROM_THEME(tc->thinking_border));
-            FillRect(hdc, &bar_rc, bar_br);
-            DeleteObject(bar_br);
-
-            /* Set up clip region for thinking content */
-            RECT clip_rc;
-            clip_rc.left   = think_left + border_w + CLV_SCALE(lv, 4);
-            clip_rc.top    = content_top;
-            clip_rc.right  = clip_rc.left + think_text_w;
-            clip_rc.bottom = content_top + visible_h;
-
-            HRGN clip_rgn = CreateRectRgnIndirect(&clip_rc);
-            int saved_dc = SaveDC(hdc);
-            SelectClipRgn(hdc, clip_rgn);
-
-            /* Draw text offset by scroll */
-            RECT think_rc;
-            think_rc.left   = clip_rc.left;
-            think_rc.top    = content_top - item->u.ai.thinking_scroll_y;
-            think_rc.right  = clip_rc.right;
-            think_rc.bottom = think_rc.top + full_content_h + visible_h;
-
-            draw_text_utf8(hdc, item->u.ai.thinking_text, &think_rc,
-                           DT_WORDBREAK | DT_NOPREFIX);
-
-            RestoreDC(hdc, saved_dc);
-            DeleteObject(clip_rgn);
-            SelectObject(hdc, old_think_font);
-
-            content_top += visible_h + CLV_SCALE(lv, 8);
-        }
-    }
 
     /* Main AI text content */
     SetTextColor(hdc, RGB_FROM_THEME(lv->theme->text_main));
@@ -866,9 +754,9 @@ static void paint_command_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     text_rc.top    = content_top;
     text_rc.right  = block.right - lv->code_pad;
     text_rc.bottom = block.bottom - CLV_SCALE(lv, BASE_BTN_H) -
-                     CLV_SCALE(lv, 8);
+                     CLV_SCALE(lv, 10);
     if (item->u.cmd.blocked)
-        text_rc.bottom -= CLV_SCALE(lv, 16);
+        text_rc.bottom -= CLV_SCALE(lv, 20);
     draw_text_utf8(hdc, cmd_text, &text_rc,
                    DT_WORDBREAK | DT_NOPREFIX);
 
@@ -1046,10 +934,16 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
 
     /* Draw status text */
     char status_buf[128];
-    chat_activity_format(lv->activity, status_buf, sizeof(status_buf));
+    float now = (float)GetTickCount() / 1000.0f;
+    chat_activity_format(lv->activity, now, status_buf, sizeof(status_buf));
 
+    /* Use a muted version of the dot colour for text readability */
+    COLORREF text_clr = RGB(
+        (GetRValue(dot_clr) * 3 + GetRValue(bg_clr)) / 4,
+        (GetGValue(dot_clr) * 3 + GetGValue(bg_clr)) / 4,
+        (GetBValue(dot_clr) * 3 + GetBValue(bg_clr)) / 4);
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, dot_clr);
+    SetTextColor(hdc, text_clr);
     HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont
                                          ? lv->hSmallFont
                                          : GetStockObject(DEFAULT_GUI_FONT));

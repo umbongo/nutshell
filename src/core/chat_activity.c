@@ -58,7 +58,8 @@ void chat_activity_reset(ActivityState *state)
     chat_activity_init(state);
 }
 
-int chat_activity_format(const ActivityState *state, char *buf, size_t buf_size)
+int chat_activity_format(const ActivityState *state, float current_time,
+                         char *buf, size_t buf_size)
 {
     if (!buf || buf_size == 0) return 0;
 
@@ -66,12 +67,12 @@ int chat_activity_format(const ActivityState *state, char *buf, size_t buf_size)
         return (int)snprintf(buf, buf_size, "Connection lost");
 
     if (state->health == HEALTH_RED && state->phase != ACTIVITY_IDLE) {
-        float elapsed = 0;
-        (void)elapsed;
         return (int)snprintf(buf, buf_size, "Stalled - no response");
     }
 
     const char *slow = (state->health == HEALTH_YELLOW) ? " (slow)" : "";
+
+    float phase_elapsed = current_time - state->phase_start_time;
 
     switch (state->phase) {
     case ACTIVITY_IDLE:
@@ -79,6 +80,9 @@ int chat_activity_format(const ActivityState *state, char *buf, size_t buf_size)
     case ACTIVITY_PROCESSING:
         return (int)snprintf(buf, buf_size, "Processing...%s", slow);
     case ACTIVITY_THINKING:
+        if (phase_elapsed >= 1.0f)
+            return (int)snprintf(buf, buf_size, "Thinking (%.1fs)%s",
+                                 (double)phase_elapsed, slow);
         return (int)snprintf(buf, buf_size, "Thinking...%s", slow);
     case ACTIVITY_RESPONDING:
         return (int)snprintf(buf, buf_size, "Responding...%s", slow);
