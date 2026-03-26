@@ -348,7 +348,8 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
                 lf.lfHeight = (LONG)(lf.lfHeight * 150 / 100);
             else if (info.heading_level == 2)
                 lf.lfHeight = (LONG)(lf.lfHeight * 125 / 100);
-            /* h3 keeps base size */
+            else
+                lf.lfHeight = (LONG)(lf.lfHeight * 110 / 100);
 
             HFONT heading_font = CreateFontIndirect(&lf);
             HFONT use_font = heading_font ? heading_font : hBoldFont;
@@ -541,9 +542,11 @@ int md_render_text(HDC hdc, const char *text, int x, int y, int max_width,
         return 0;
 
     int old_bk = SetBkMode(hdc, TRANSPARENT);
+    COLORREF old_color = GetTextColor(hdc);
     int result = md_render_core(hdc, text, x, y, max_width,
                                 hFont, hMonoFont, hBoldFont,
                                 theme, 1);
+    SetTextColor(hdc, old_color);
     SetBkMode(hdc, old_bk);
     return result;
 }
