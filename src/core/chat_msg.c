@@ -37,6 +37,7 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
         item->u.ai.thinking_collapsed = 1;
         item->u.ai.thinking_elapsed = 0.0f;
         item->u.ai.thinking_complete = 0;
+        item->u.ai.thinking_scroll_y = 0;
     } else if (type == CHAT_ITEM_COMMAND) {
         item->u.cmd.command = NULL;
         item->u.cmd.safety = CMD_SAFE;

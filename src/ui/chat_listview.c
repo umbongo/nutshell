@@ -37,6 +37,9 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define BASE_AI_INDENT    30
 #define BASE_CODE_PAD      6
 #define BASE_BORDER_W      3   /* Left-border width for thinking blocks */
+#define BASE_THINK_MAX_H 300   /* Max height of expanded thinking region */
+#define BASE_THINK_MIN_H  30   /* Min height of expanded thinking region */
+#define BASE_THINK_HDR_H  20   /* Height of thinking toggle header line */
 #define BASE_ICON_SIZE    20   /* AI avatar circle diameter */
 #define BASE_CORNER_R      6   /* User bubble corner radius */
 #define BASE_SIDE_PAD      8   /* Left/right margin for the whole panel */
@@ -431,18 +434,29 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
         int h = rc.bottom - rc.top;
 
-        /* If there's visible thinking text, add space for it */
-        if (item->u.ai.thinking_text && !item->u.ai.thinking_collapsed) {
-            int think_w = text_w - CLV_SCALE(lv, BASE_BORDER_W) -
-                          CLV_SCALE(lv, 4);
-            if (think_w < 20) think_w = 20;
-            old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                        : GetStockObject(DEFAULT_GUI_FONT));
-            SetRect(&rc, 0, 0, think_w, 0);
-            draw_text_utf8(hdc, item->u.ai.thinking_text, &rc,
-                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-            SelectObject(hdc, old_font);
-            h += (rc.bottom - rc.top) + CLV_SCALE(lv, 8);
+        /* Thinking region: always show header line if thinking text exists */
+        if (item->u.ai.thinking_text) {
+            int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
+            h += hdr_h + CLV_SCALE(lv, 4);  /* header + gap */
+
+            if (!item->u.ai.thinking_collapsed) {
+                /* Expanded: measure content, cap at max height */
+                int think_w = text_w - CLV_SCALE(lv, BASE_BORDER_W) -
+                              CLV_SCALE(lv, 8);
+                if (think_w < 20) think_w = 20;
+                old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                            : GetStockObject(DEFAULT_GUI_FONT));
+                SetRect(&rc, 0, 0, think_w, 0);
+                draw_text_utf8(hdc, item->u.ai.thinking_text, &rc,
+                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+                SelectObject(hdc, old_font);
+                int think_content_h = rc.bottom - rc.top;
+                int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
+                int min_h = CLV_SCALE(lv, BASE_THINK_MIN_H);
+                if (think_content_h < min_h) think_content_h = min_h;
+                if (think_content_h > max_h) think_content_h = max_h;
+                h += think_content_h + CLV_SCALE(lv, 8);
+            }
         }
 
         return h + CLV_SCALE(lv, BASE_ICON_SIZE);  /* Icon row above text */
@@ -604,51 +618,115 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     DrawTextA(hdc, "AI", 2, &label_rc,
               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 
-    /* Thinking region (if visible) */
+    /* Thinking region: collapsible header + optional content */
     int content_top = rc->top + icon_sz + CLV_SCALE(lv, 4);
 
-    if (item->u.ai.thinking_text && !item->u.ai.thinking_collapsed) {
-        int border_w = CLV_SCALE(lv, BASE_BORDER_W);
+    if (item->u.ai.thinking_text) {
+        int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
         int think_left = rc->left + lv->ai_indent;
-        int text_w = rc->right - think_left - side_pad;
-        if (text_w < 20) text_w = 20;
 
-        /* Left border bar */
-        RECT bar_rc;
-        bar_rc.left   = think_left;
-        bar_rc.top    = content_top;
-        bar_rc.right  = think_left + border_w;
-        bar_rc.bottom = content_top + CLV_SCALE(lv, 40);  /* approximate */
+        /* Draw toggle header line: "> Thinking (2.1s)" or "v Thinking (2.1s)" */
+        {
+            HGDIOBJ old_hdr_font = SelectObject(hdc, lv->hSmallFont
+                                   ? lv->hSmallFont
+                                   : GetStockObject(DEFAULT_GUI_FONT));
+            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
+            SetBkMode(hdc, TRANSPARENT);
 
-        HBRUSH bar_br = CreateSolidBrush(RGB_FROM_THEME(tc->thinking_border));
+            char hdr_text[128];
+            const char *arrow = item->u.ai.thinking_collapsed ? ">" : "v";
+            if (item->u.ai.thinking_elapsed > 0.0f) {
+                snprintf(hdr_text, sizeof(hdr_text), "%s Thinking (%.1fs)",
+                         arrow, (double)item->u.ai.thinking_elapsed);
+            } else {
+                snprintf(hdr_text, sizeof(hdr_text), "%s Thinking", arrow);
+            }
 
-        /* Measure thinking text height to set bar bottom */
-        HGDIOBJ old_think_font = SelectObject(hdc, lv->hSmallFont
-                                 ? lv->hSmallFont
-                                 : GetStockObject(DEFAULT_GUI_FONT));
-        SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
-        RECT think_rc;
-        think_rc.left = think_left + border_w + CLV_SCALE(lv, 4);
-        think_rc.top  = content_top;
-        think_rc.right = think_rc.left + text_w - border_w - CLV_SCALE(lv, 4);
-        think_rc.bottom = rc->bottom;
+            RECT hdr_rc;
+            hdr_rc.left   = think_left;
+            hdr_rc.top    = content_top;
+            hdr_rc.right  = rc->right - side_pad;
+            hdr_rc.bottom = content_top + hdr_h;
+            DrawTextA(hdc, hdr_text, -1, &hdr_rc,
+                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            SelectObject(hdc, old_hdr_font);
+        }
 
-        /* Measure first, then draw */
-        RECT meas_rc = think_rc;
-        draw_text_utf8(hdc, item->u.ai.thinking_text, &meas_rc,
-                       DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-        int think_h = meas_rc.bottom - meas_rc.top;
+        content_top += hdr_h + CLV_SCALE(lv, 4);
 
-        bar_rc.bottom = content_top + think_h;
-        FillRect(hdc, &bar_rc, bar_br);
-        DeleteObject(bar_br);
+        /* Expanded: draw thinking content with left border, clipped to max height */
+        if (!item->u.ai.thinking_collapsed) {
+            int border_w = CLV_SCALE(lv, BASE_BORDER_W);
+            int text_w = rc->right - think_left - side_pad;
+            if (text_w < 20) text_w = 20;
 
-        /* Draw thinking text */
-        draw_text_utf8(hdc, item->u.ai.thinking_text, &think_rc,
-                       DT_WORDBREAK | DT_NOPREFIX);
-        SelectObject(hdc, old_think_font);
+            /* Measure full content height */
+            HGDIOBJ old_think_font = SelectObject(hdc, lv->hSmallFont
+                                     ? lv->hSmallFont
+                                     : GetStockObject(DEFAULT_GUI_FONT));
+            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
 
-        content_top += think_h + CLV_SCALE(lv, 8);
+            int think_text_w = text_w - border_w - CLV_SCALE(lv, 8);
+            if (think_text_w < 20) think_text_w = 20;
+
+            RECT meas_rc;
+            SetRect(&meas_rc, 0, 0, think_text_w, 0);
+            draw_text_utf8(hdc, item->u.ai.thinking_text, &meas_rc,
+                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+            int full_content_h = meas_rc.bottom - meas_rc.top;
+
+            int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
+            int min_h = CLV_SCALE(lv, BASE_THINK_MIN_H);
+            int visible_h = full_content_h;
+            if (visible_h < min_h) visible_h = min_h;
+            if (visible_h > max_h) visible_h = max_h;
+
+            /* Clamp scroll offset */
+            int max_scroll = full_content_h - visible_h;
+            if (max_scroll < 0) max_scroll = 0;
+            if (item->u.ai.thinking_scroll_y > max_scroll)
+                item->u.ai.thinking_scroll_y = max_scroll;
+            if (item->u.ai.thinking_scroll_y < 0)
+                item->u.ai.thinking_scroll_y = 0;
+
+            /* Left border bar */
+            RECT bar_rc;
+            bar_rc.left   = think_left;
+            bar_rc.top    = content_top;
+            bar_rc.right  = think_left + border_w;
+            bar_rc.bottom = content_top + visible_h;
+
+            HBRUSH bar_br = CreateSolidBrush(RGB_FROM_THEME(tc->thinking_border));
+            FillRect(hdc, &bar_rc, bar_br);
+            DeleteObject(bar_br);
+
+            /* Set up clip region for thinking content */
+            RECT clip_rc;
+            clip_rc.left   = think_left + border_w + CLV_SCALE(lv, 4);
+            clip_rc.top    = content_top;
+            clip_rc.right  = clip_rc.left + think_text_w;
+            clip_rc.bottom = content_top + visible_h;
+
+            HRGN clip_rgn = CreateRectRgnIndirect(&clip_rc);
+            int saved_dc = SaveDC(hdc);
+            SelectClipRgn(hdc, clip_rgn);
+
+            /* Draw text offset by scroll */
+            RECT think_rc;
+            think_rc.left   = clip_rc.left;
+            think_rc.top    = content_top - item->u.ai.thinking_scroll_y;
+            think_rc.right  = clip_rc.right;
+            think_rc.bottom = think_rc.top + full_content_h + visible_h;
+
+            draw_text_utf8(hdc, item->u.ai.thinking_text, &think_rc,
+                           DT_WORDBREAK | DT_NOPREFIX);
+
+            RestoreDC(hdc, saved_dc);
+            DeleteObject(clip_rgn);
+            SelectObject(hdc, old_think_font);
+
+            content_top += visible_h + CLV_SCALE(lv, 8);
+        }
     }
 
     /* Main AI text content */
@@ -1105,6 +1183,27 @@ static void on_lbuttondown(ChatListView *lv, int mx, int my)
     while (item) {
         int h = item->measured_height;
 
+        /* Check click on thinking toggle header for AI items */
+        if (item->type == CHAT_ITEM_AI_TEXT && my >= y && my < y + h
+            && item->u.ai.thinking_text) {
+            int icon_sz = CLV_SCALE(lv, BASE_ICON_SIZE);
+            int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
+            int hdr_top = y + icon_sz + CLV_SCALE(lv, 4);
+            int think_left = side_pad + lv->ai_indent;
+
+            if (my >= hdr_top && my < hdr_top + hdr_h &&
+                mx >= think_left) {
+                item->u.ai.thinking_collapsed =
+                    !item->u.ai.thinking_collapsed;
+                if (item->u.ai.thinking_collapsed)
+                    item->u.ai.thinking_scroll_y = 0;
+                item->dirty = 1;
+                recalc_layout(lv);
+                InvalidateRect(lv->hwnd, NULL, FALSE);
+                return;
+            }
+        }
+
         if (item->type == CHAT_ITEM_COMMAND && my >= y && my < y + h) {
             int cur_top = y;
             int first_cmd = is_first_command(lv->msg_list, item);
@@ -1305,8 +1404,81 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     case WM_MOUSEWHEEL: {
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
         int scroll_amount = CLV_SCALE(lv, 40);  /* ~3 lines per notch */
-        int old_pos = lv->scroll_y;
 
+        /* Check if cursor is over an expanded thinking region */
+        {
+            POINT pt;
+            pt.x = GET_X_LPARAM(lParam);
+            pt.y = GET_Y_LPARAM(lParam);
+            ScreenToClient(hwnd, &pt);
+
+            int wy = lv->msg_gap - lv->scroll_y;
+            ChatMsgItem *wi = lv->msg_list ? lv->msg_list->head : NULL;
+            while (wi) {
+                int wh = wi->measured_height;
+                if (wi->type == CHAT_ITEM_AI_TEXT && wi->u.ai.thinking_text
+                    && !wi->u.ai.thinking_collapsed
+                    && pt.y >= wy && pt.y < wy + wh) {
+                    /* Compute thinking content region bounds */
+                    int icon_sz = CLV_SCALE(lv, BASE_ICON_SIZE);
+                    int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
+                    int think_top = wy + icon_sz + CLV_SCALE(lv, 4)
+                                    + hdr_h + CLV_SCALE(lv, 4);
+                    int side_pad2 = CLV_SCALE(lv, BASE_SIDE_PAD);
+                    int think_left = side_pad2 + lv->ai_indent;
+
+                    /* Measure full content to check overflow */
+                    HDC tdc = GetDC(hwnd);
+                    HGDIOBJ tf = SelectObject(tdc, lv->hSmallFont
+                                 ? lv->hSmallFont
+                                 : GetStockObject(DEFAULT_GUI_FONT));
+                    int border_w = CLV_SCALE(lv, BASE_BORDER_W);
+                    RECT crc;
+                    GetClientRect(hwnd, &crc);
+                    int tw = crc.right - think_left - side_pad2
+                             - border_w - CLV_SCALE(lv, 8);
+                    if (tw < 20) tw = 20;
+                    RECT mr;
+                    SetRect(&mr, 0, 0, tw, 0);
+                    draw_text_utf8(tdc, wi->u.ai.thinking_text, &mr,
+                                   DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+                    int full_h = mr.bottom - mr.top;
+                    SelectObject(tdc, tf);
+                    ReleaseDC(hwnd, tdc);
+
+                    int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
+                    int min_h = CLV_SCALE(lv, BASE_THINK_MIN_H);
+                    int vis_h = full_h;
+                    if (vis_h < min_h) vis_h = min_h;
+                    if (vis_h > max_h) vis_h = max_h;
+
+                    /* Is cursor in the thinking content area and is there overflow? */
+                    if (full_h > vis_h && pt.x >= think_left
+                        && pt.y >= think_top
+                        && pt.y < think_top + vis_h) {
+                        int max_scroll = full_h - vis_h;
+                        int old_sy = wi->u.ai.thinking_scroll_y;
+                        wi->u.ai.thinking_scroll_y +=
+                            (-delta * scroll_amount) / WHEEL_DELTA;
+                        if (wi->u.ai.thinking_scroll_y < 0)
+                            wi->u.ai.thinking_scroll_y = 0;
+                        if (wi->u.ai.thinking_scroll_y > max_scroll)
+                            wi->u.ai.thinking_scroll_y = max_scroll;
+                        if (wi->u.ai.thinking_scroll_y != old_sy) {
+                            InvalidateRect(hwnd, NULL, FALSE);
+                            return 0;  /* consumed by thinking scroll */
+                        }
+                        /* At boundary — bubble to parent list scroll */
+                        break;
+                    }
+                    break;
+                }
+                wy += wh + lv->msg_gap;
+                wi = wi->next;
+            }
+        }
+
+        int old_pos = lv->scroll_y;
         lv->scroll_y -= (delta * scroll_amount) / WHEEL_DELTA;
         clamp_scroll(lv);
 

@@ -2417,6 +2417,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             float now = (float)GetTickCount() / 1000.0f;
             chat_activity_tick(&d->activity, now);
             d->pulse_toggle = !d->pulse_toggle;
+
+            /* Tick thinking elapsed time on the streaming AI item */
+            if (d->stream_ai_item && d->stream_phase == 1
+                && d->stream_ai_item->u.ai.thinking_text) {
+                d->stream_ai_item->u.ai.thinking_elapsed += 1.0f;
+                d->stream_ai_item->dirty = 1;
+            }
+
             if (d->hChatList) {
                 chat_listview_set_pulse(d->hChatList, d->pulse_toggle);
                 InvalidateRect(d->hChatList, NULL, FALSE);
