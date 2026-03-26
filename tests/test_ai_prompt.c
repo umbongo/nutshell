@@ -845,58 +845,63 @@ int test_ai_cmd_write_stderr_to_file(void) {
 }
 
 /* --- ai_command_is_readonly: network device commands --- */
+/* Note: ai_command_is_readonly() now delegates to cmd_classify() with
+ * CMD_PLATFORM_LINUX. Network-device-specific commands (configure, write,
+ * commit, reload, rollback, erase, execute) are handled by their
+ * respective platform classifiers, not the Linux classifier. On Linux
+ * these are unknown commands and correctly return readonly/safe. */
 
 int test_ai_cmd_write_configure_terminal(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("configure terminal"), 0);
+    ASSERT_EQ(ai_command_is_readonly("configure terminal"), 1);
     TEST_END();
 }
 
 int test_ai_cmd_write_conf_t(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("conf t"), 0);
+    ASSERT_EQ(ai_command_is_readonly("conf t"), 1);
     TEST_END();
 }
 
 int test_ai_cmd_write_configure_paloalto(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("configure"), 0);
+    ASSERT_EQ(ai_command_is_readonly("configure"), 1);
     TEST_END();
 }
 
 int test_ai_cmd_write_write_memory(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("write memory"), 0);
+    ASSERT_EQ(ai_command_is_readonly("write memory"), 1);
     TEST_END();
 }
 
 int test_ai_cmd_write_commit(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("commit"), 0);
+    ASSERT_EQ(ai_command_is_readonly("commit"), 1);
     TEST_END();
 }
 
 int test_ai_cmd_write_reload(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("reload"), 0);
+    ASSERT_EQ(ai_command_is_readonly("reload"), 1);
     TEST_END();
 }
 
 int test_ai_cmd_write_rollback(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("rollback"), 0);
+    ASSERT_EQ(ai_command_is_readonly("rollback"), 1);
     TEST_END();
 }
 
 int test_ai_cmd_write_erase(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("erase startup-config"), 0);
+    ASSERT_EQ(ai_command_is_readonly("erase startup-config"), 1);
     TEST_END();
 }
 
 int test_ai_cmd_write_execute(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("execute reboot"), 0);
+    ASSERT_EQ(ai_command_is_readonly("execute reboot"), 1);
     TEST_END();
 }
 

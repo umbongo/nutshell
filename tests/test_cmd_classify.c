@@ -603,3 +603,32 @@ int test_cmd_classify_panos_clear_session_all_critical(void) {
     ASSERT_EQ((int)cmd_classify("clear session all", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
     TEST_END();
 }
+
+/* --- Cross-platform heuristics (spec section 7.10) --- */
+int test_cmd_classify_heuristic_show_always_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("show version", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show version", CMD_PLATFORM_ARUBA_CX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show version", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_heuristic_negation_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("no logging host 10.0.0.1", CMD_PLATFORM_CISCO_IOS) >= CMD_WRITE, 1);
+    TEST_END();
+}
+
+int test_cmd_classify_heuristic_reload_always_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("reload", CMD_PLATFORM_CISCO_IOS), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("reload", CMD_PLATFORM_ARUBA_CX), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("reload", CMD_PLATFORM_ARUBA_OS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_heuristic_clear_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("clear counters", CMD_PLATFORM_CISCO_IOS) >= CMD_WRITE, 1);
+    TEST_END();
+}

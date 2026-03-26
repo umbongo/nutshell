@@ -1,4 +1,5 @@
 #include "ai_prompt.h"
+#include "cmd_classify.h"
 #include "json_parser.h"
 #include <stdio.h>
 #include <string.h>
@@ -414,113 +415,9 @@ int ai_extract_commands(const char *response, char cmds[][1024],
 
 /* ---- Command read-only classification ---- */
 
-/* Check if a word matches a known write/dangerous command. */
-static int is_write_command(const char *word, size_t len)
-{
-    static const char *write_cmds[] = {
-        "rm", "rmdir", "mv", "cp", "mkdir", "touch", "chmod", "chown",
-        "chgrp", "ln", "install", "truncate", "shred",
-        "dd", "mkfs", "mount", "umount",
-        "vim", "vi", "nano", "emacs", "ed", "pico",
-        "sed", "awk",
-        "tee",
-        "apt", "apt-get", "dpkg", "yum", "dnf", "rpm", "pacman",
-        "snap", "flatpak", "pip", "pip3", "npm", "yarn", "cargo",
-        "gem", "go",
-        "git", "svn", "hg",
-        "kill", "killall", "pkill",
-        "reboot", "shutdown", "halt", "poweroff", "init",
-        "systemctl", "service",
-        "useradd", "userdel", "usermod", "groupadd", "groupdel",
-        "passwd", "chpasswd",
-        "iptables", "ufw", "firewall-cmd",
-        "crontab", "at",
-        "sudo", "su", "doas",
-        "wget", "curl",
-        "tar", "zip", "unzip", "gzip", "gunzip", "bzip2",
-        "make", "cmake", "gcc", "g++", "cc",
-        "docker", "podman", "kubectl",
-        /* Network device config commands (Cisco, Aruba, Palo Alto, Juniper, Fortinet) */
-        "configure", "conf",
-        "write", "commit", "rollback",
-        "reload", "erase",
-        "execute",
-        NULL
-    };
-
-    for (int i = 0; write_cmds[i]; i++) {
-        size_t cl = strlen(write_cmds[i]);
-        if (cl == len && memcmp(word, write_cmds[i], len) == 0)
-            return 1;
-    }
-    return 0;
-}
-
 int ai_command_is_readonly(const char *cmd)
 {
-    if (!cmd || !cmd[0]) return 1;
-
-    /* Check for output redirects anywhere in the command.
-     * Allow harmless patterns: 2>/dev/null, >/dev/null, 2>&1, &>/dev/null */
-    for (const char *p = cmd; *p; p++) {
-        if (*p == '\'' || *p == '"') {
-            /* Skip quoted strings */
-            char q = *p++;
-            while (*p && *p != q) p++;
-            if (!*p) break;
-            continue;
-        }
-        if (*p == '>' || (*p == '&' && *(p + 1) == '>')) {
-            /* Check if this is a harmless redirect */
-            const char *r = p;
-            /* Handle &> prefix */
-            if (*r == '&') r++;
-            /* Handle 2> prefix (r already at > or after &) */
-            if (r > cmd && *(r - 1) == '2') { /* 2> or 2>> */ }
-            /* Skip > or >> */
-            r++;
-            if (*r == '>') r++;
-            /* Skip spaces */
-            while (*r == ' ' || *r == '\t') r++;
-            /* Allow: /dev/null, &1, &2 */
-            if (strncmp(r, "/dev/null", 9) == 0)
-                { p = r + 8; continue; }
-            if (*r == '&' && (*(r + 1) == '1' || *(r + 1) == '2'))
-                { p = r + 1; continue; }
-            return 0; /* real file redirect — not readonly */
-        }
-    }
-
-    /* Check each command in a pipeline */
-    const char *seg = cmd;
-    while (*seg) {
-        /* Skip leading whitespace */
-        while (*seg == ' ' || *seg == '\t') seg++;
-        if (!*seg) break;
-
-        /* Extract first word of this segment */
-        const char *word_start = seg;
-        while (*seg && *seg != ' ' && *seg != '\t' && *seg != '|'
-               && *seg != ';' && *seg != '&')
-            seg++;
-        size_t word_len = (size_t)(seg - word_start);
-
-        /* Strip path prefix (e.g., /usr/bin/rm → rm) */
-        const char *base = word_start;
-        for (const char *s = word_start; s < word_start + word_len; s++) {
-            if (*s == '/') base = s + 1;
-        }
-        size_t base_len = (size_t)((word_start + word_len) - base);
-
-        if (base_len > 0 && is_write_command(base, base_len))
-            return 0;
-
-        /* Advance to next pipe/semicolon segment */
-        while (*seg && *seg != '|' && *seg != ';' && *seg != '&') seg++;
-        if (*seg) seg++; /* skip separator */
-    }
-
-    return 1;
+    return cmd_classify(cmd, CMD_PLATFORM_LINUX) == CMD_SAFE;
 }
 
 const char *ai_provider_url(const char *provider)

@@ -1061,6 +1061,11 @@ int test_cmd_classify_panos_request_license_info_safe(void);
 int test_cmd_classify_panos_request_license_deactivate_critical(void);
 int test_cmd_classify_panos_pipe_modifier(void);
 int test_cmd_classify_panos_clear_session_all_critical(void);
+/* test_cmd_classify.c - Cross-platform heuristics */
+int test_cmd_classify_heuristic_show_always_safe(void);
+int test_cmd_classify_heuristic_negation_write(void);
+int test_cmd_classify_heuristic_reload_always_critical(void);
+int test_cmd_classify_heuristic_clear_write(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -2152,6 +2157,11 @@ int main(void) {
     failed += test_cmd_classify_panos_request_license_deactivate_critical();
     failed += test_cmd_classify_panos_pipe_modifier();
     failed += test_cmd_classify_panos_clear_session_all_critical();
+    /* Cross-platform heuristics */
+    failed += test_cmd_classify_heuristic_show_always_safe();
+    failed += test_cmd_classify_heuristic_negation_write();
+    failed += test_cmd_classify_heuristic_reload_always_critical();
+    failed += test_cmd_classify_heuristic_clear_write();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

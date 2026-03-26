@@ -30,6 +30,9 @@ static const char *linux_write_cmds[] = {
     "tar", "zip", "unzip", "gzip",
     "wget",
     "firewall-cmd",
+    "tee",
+    "vim", "vi", "nano", "emacs", "ed", "pico",
+    "awk",
     NULL
 };
 
