@@ -958,6 +958,33 @@ int test_cell_not_cursor_when_invisible(void);
 int test_cell_not_cursor_scrolled_and_invisible(void);
 int test_cursor_row_zero(void);
 
+/* test_cmd_classify.c */
+int test_cmd_classify_null(void);
+int test_cmd_classify_empty(void);
+int test_cmd_classify_linux_ls(void);
+int test_cmd_classify_linux_cat(void);
+int test_cmd_classify_linux_grep(void);
+int test_cmd_classify_linux_ping(void);
+int test_cmd_classify_linux_mv(void);
+int test_cmd_classify_linux_cp(void);
+int test_cmd_classify_linux_mkdir(void);
+int test_cmd_classify_linux_chmod(void);
+int test_cmd_classify_linux_apt_install(void);
+int test_cmd_classify_linux_git_push(void);
+int test_cmd_classify_linux_systemctl_start(void);
+int test_cmd_classify_linux_docker_run(void);
+int test_cmd_classify_linux_rm(void);
+int test_cmd_classify_linux_reboot(void);
+int test_cmd_classify_linux_shutdown(void);
+int test_cmd_classify_linux_kill9(void);
+int test_cmd_classify_linux_killall(void);
+int test_cmd_classify_linux_dd(void);
+int test_cmd_classify_linux_mkfs(void);
+int test_cmd_classify_linux_iptables_flush(void);
+int test_cmd_classify_linux_systemctl_stop(void);
+int test_cmd_classify_linux_docker_rm_f(void);
+int test_cmd_classify_linux_kubectl_delete(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -1944,6 +1971,33 @@ int main(void) {
     failed += test_cell_not_cursor_when_invisible();
     failed += test_cell_not_cursor_scrolled_and_invisible();
     failed += test_cursor_row_zero();
+
+    printf("\n--- Command Classifier ---\n");
+    failed += test_cmd_classify_null();
+    failed += test_cmd_classify_empty();
+    failed += test_cmd_classify_linux_ls();
+    failed += test_cmd_classify_linux_cat();
+    failed += test_cmd_classify_linux_grep();
+    failed += test_cmd_classify_linux_ping();
+    failed += test_cmd_classify_linux_mv();
+    failed += test_cmd_classify_linux_cp();
+    failed += test_cmd_classify_linux_mkdir();
+    failed += test_cmd_classify_linux_chmod();
+    failed += test_cmd_classify_linux_apt_install();
+    failed += test_cmd_classify_linux_git_push();
+    failed += test_cmd_classify_linux_systemctl_start();
+    failed += test_cmd_classify_linux_docker_run();
+    failed += test_cmd_classify_linux_rm();
+    failed += test_cmd_classify_linux_reboot();
+    failed += test_cmd_classify_linux_shutdown();
+    failed += test_cmd_classify_linux_kill9();
+    failed += test_cmd_classify_linux_killall();
+    failed += test_cmd_classify_linux_dd();
+    failed += test_cmd_classify_linux_mkfs();
+    failed += test_cmd_classify_linux_iptables_flush();
+    failed += test_cmd_classify_linux_systemctl_stop();
+    failed += test_cmd_classify_linux_docker_rm_f();
+    failed += test_cmd_classify_linux_kubectl_delete();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
