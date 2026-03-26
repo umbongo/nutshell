@@ -1084,6 +1084,17 @@ int test_chat_msg_unique_ids(void);
 int test_chat_msg_command_too_long(void);
 int test_chat_msg_list_clear(void);
 
+/* test_chat_thinking.c */
+int test_thinking_init(void);
+int test_thinking_first_token(void);
+int test_thinking_elapsed_updates(void);
+int test_thinking_complete(void);
+int test_thinking_toggle(void);
+int test_thinking_toggle_during_streaming(void);
+int test_thinking_tick_idle_noop(void);
+int test_thinking_tick_complete_noop(void);
+int test_thinking_reset(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -2196,6 +2207,17 @@ int main(void) {
     failed += test_chat_msg_unique_ids();
     failed += test_chat_msg_command_too_long();
     failed += test_chat_msg_list_clear();
+
+    printf("\n--- Thinking Controller ---\n");
+    failed += test_thinking_init();
+    failed += test_thinking_first_token();
+    failed += test_thinking_elapsed_updates();
+    failed += test_thinking_complete();
+    failed += test_thinking_toggle();
+    failed += test_thinking_toggle_during_streaming();
+    failed += test_thinking_tick_idle_noop();
+    failed += test_thinking_tick_complete_noop();
+    failed += test_thinking_reset();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
