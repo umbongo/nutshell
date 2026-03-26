@@ -1,0 +1,95 @@
+<h2>Message Layout — Visual Direction</h2>
+<p class="subtitle">How should user vs AI messages be visually distinguished?</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#1e1e2e; padding:16px; border-radius:6px; font-family:monospace; font-size:13px; line-height:1.6;">
+        <!-- User message -->
+        <div style="margin-bottom:16px;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+            <div style="width:22px;height:22px;border-radius:50%;background:#4a9eff;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:bold;">Y</div>
+            <span style="color:#4a9eff;font-weight:bold;font-size:12px;">You</span>
+          </div>
+          <div style="color:#cdd6f4; padding-left:30px;">List the files in /etc/nginx/</div>
+        </div>
+        <!-- AI message -->
+        <div style="margin-bottom:16px;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+            <div style="width:22px;height:22px;border-radius:50%;background:#a855f7;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:bold;">N</div>
+            <span style="color:#a855f7;font-weight:bold;font-size:12px;">Nutshell</span>
+          </div>
+          <div style="padding-left:30px;">
+            <!-- Thinking toggle -->
+            <div style="color:#888;font-size:11px;cursor:pointer;margin-bottom:8px;">
+              <span style="color:#a855f7;">▶</span> <span style="text-decoration:underline;">Thinking (2.1s)</span>
+            </div>
+            <div style="color:#cdd6f4;">I'll list the nginx configuration directory for you.</div>
+            <!-- Command block -->
+            <div style="background:#11111b;border:1px solid #45475a;border-radius:6px;margin-top:10px;overflow:hidden;">
+              <div style="padding:6px 10px;border-bottom:1px solid #45475a;display:flex;justify-content:space-between;align-items:center;">
+                <span style="color:#94e2d5;font-size:11px;font-family:monospace;">Command</span>
+                <span style="color:#585b70;font-size:10px;">read-only</span>
+              </div>
+              <div style="padding:8px 10px;font-family:monospace;color:#a6e3a1;font-size:12px;">ls -la /etc/nginx/</div>
+              <div style="padding:6px 10px;border-top:1px solid #45475a;display:flex;gap:8px;">
+                <div style="padding:3px 16px;border-radius:4px;background:#166534;color:#4ade80;font-size:11px;cursor:pointer;">Allow</div>
+                <div style="padding:3px 16px;border-radius:4px;background:#7f1d1d;color:#f87171;font-size:11px;cursor:pointer;">Deny</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A: Left-aligned with Avatars</h3>
+      <p>ChatGPT/Copilot style. All messages left-aligned, distinguished by avatar + name color. Clean, scannable. Command blocks and thinking inline under the AI message.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#1e1e2e; padding:16px; border-radius:6px; font-family:monospace; font-size:13px; line-height:1.6;">
+        <!-- User message - right aligned bubble -->
+        <div style="margin-bottom:16px; display:flex; justify-content:flex-end;">
+          <div style="background:#2a4a7f; padding:8px 14px; border-radius:12px 12px 2px 12px; color:#cdd6f4; max-width:80%;">
+            List the files in /etc/nginx/
+          </div>
+        </div>
+        <!-- AI message - left aligned -->
+        <div style="margin-bottom:16px;">
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+            <div style="width:22px;height:22px;border-radius:50%;background:#a855f7;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;font-weight:bold;">N</div>
+            <span style="color:#a855f7;font-weight:bold;font-size:12px;">Nutshell</span>
+          </div>
+          <div style="padding-left:30px;">
+            <div style="color:#888;font-size:11px;cursor:pointer;margin-bottom:8px;">
+              <span style="color:#a855f7;">▶</span> <span style="text-decoration:underline;">Thinking (2.1s)</span>
+            </div>
+            <div style="color:#cdd6f4;">I'll list the nginx configuration directory for you.</div>
+            <div style="background:#11111b;border:1px solid #45475a;border-radius:6px;margin-top:10px;overflow:hidden;">
+              <div style="padding:6px 10px;border-bottom:1px solid #45475a;display:flex;justify-content:space-between;align-items:center;">
+                <span style="color:#94e2d5;font-size:11px;font-family:monospace;">Command</span>
+                <span style="color:#585b70;font-size:10px;">read-only</span>
+              </div>
+              <div style="padding:8px 10px;font-family:monospace;color:#a6e3a1;font-size:12px;">ls -la /etc/nginx/</div>
+              <div style="padding:6px 10px;border-top:1px solid #45475a;display:flex;gap:8px;">
+                <div style="padding:3px 16px;border-radius:4px;background:#166534;color:#4ade80;font-size:11px;cursor:pointer;">Allow</div>
+                <div style="padding:3px 16px;border-radius:4px;background:#7f1d1d;color:#f87171;font-size:11px;cursor:pointer;">Deny</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B: Bubble + Left-aligned Hybrid</h3>
+      <p>User messages in right-aligned bubbles, AI messages left-aligned with avatar. Stronger visual separation but takes more horizontal space for user prompts.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 2rem; padding: 1rem; border-left: 3px solid #6c8; background: rgba(102,204,136,0.08); border-radius: 4px;">
+  <h3 style="margin-top:0;">💡 Recommendation: A</h3>
+  <p>In a side panel (which is typically narrow), right-aligned bubbles waste horizontal space. Left-aligned with avatars gives you the ChatGPT feel and keeps the full width available for command blocks and thinking content. The avatar + name color distinction is enough at a glance.</p>
+</div>

@@ -1,0 +1,69 @@
+<h2>AI Chat Panel UX — Three Approaches</h2>
+<p class="subtitle">Each approach addresses the same 5 requirements with different trade-offs</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Incremental Refinement</h3>
+      <p>Keep the current RichEdit-based architecture. Improve visual styling, add inline command blocks, and refine the thinking toggle. Lowest risk, fastest to ship.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Minimal structural changes to ai_chat.c</li>
+          <li>Reuses all existing RichEdit rendering</li>
+          <li>Can ship incrementally per-feature</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>RichEdit limits visual polish (no true message bubbles)</li>
+          <li>Thinking box remains a separate child window overlaid on display</li>
+          <li>Command blocks are text-only — buttons must still float outside</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Hybrid: RichEdit + Inline Controls</h3>
+      <p>Keep RichEdit for message text but embed lightweight child windows (buttons, command boxes) at calculated positions within the conversation flow. Thinking becomes a collapsible inline region.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Command approve/deny buttons appear right below their command block</li>
+          <li>Thinking box is inline and collapsible in real-time</li>
+          <li>Keeps proven markdown rendering in RichEdit</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Positioning child windows inside RichEdit is fragile (scroll sync)</li>
+          <li>More complex layout logic in relayout()</li>
+          <li>Medium effort — more than A, less than C</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Custom Owner-Draw Message List</h3>
+      <p>Replace RichEdit with a custom-drawn scrollable message list. Each message is a discrete item with its own layout: bubbles, embedded thinking regions, command blocks with buttons. Full visual control.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Full control over every pixel — true ChatGPT-like feel</li>
+          <li>Each message is a self-contained unit with embedded controls</li>
+          <li>Clean architecture: message items instead of character offsets</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Major rewrite — replaces the entire display system</li>
+          <li>Must reimplement text selection, scrolling, markdown rendering</li>
+          <li>High risk, longest timeline</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 2rem; padding: 1.2rem; border-left: 3px solid #6c8; background: rgba(102,204,136,0.08); border-radius: 4px;">
+  <h3 style="margin-top:0;">💡 Recommendation: Approach B (Hybrid)</h3>
+  <p>It gives you the inline command approval and real-time thinking toggle you need, without throwing away the proven RichEdit markdown rendering. The positioning complexity is manageable — you're already doing it with the thinking box. This approach extends that pattern to command blocks and approve/deny buttons.</p>
+</div>
