@@ -1035,6 +1035,32 @@ int test_cmd_classify_asa_show_safe(void);
 int test_cmd_classify_asa_nat_write(void);
 int test_cmd_classify_asa_no_failover_critical(void);
 int test_cmd_classify_asa_clear_configure_all_critical(void);
+/* test_cmd_classify.c - Aruba OS-CX */
+int test_cmd_classify_aruba_cx_show_safe(void);
+int test_cmd_classify_aruba_cx_conf_write(void);
+int test_cmd_classify_aruba_cx_erase_startup_critical(void);
+int test_cmd_classify_aruba_cx_no_vsx_critical(void);
+/* test_cmd_classify.c - ArubaOS (wireless) */
+int test_cmd_classify_aruba_os_show_safe(void);
+int test_cmd_classify_aruba_os_wlan_write(void);
+int test_cmd_classify_aruba_os_factory_reset_critical(void);
+int test_cmd_classify_aruba_os_ap_wipe_critical(void);
+/* test_cmd_classify.c - PAN-OS */
+int test_cmd_classify_panos_show_safe(void);
+int test_cmd_classify_panos_ping_safe(void);
+int test_cmd_classify_panos_commit_validate_safe(void);
+int test_cmd_classify_panos_test_safe(void);
+int test_cmd_classify_panos_configure_write(void);
+int test_cmd_classify_panos_set_write(void);
+int test_cmd_classify_panos_commit_critical(void);
+int test_cmd_classify_panos_commit_force_critical(void);
+int test_cmd_classify_panos_commit_all_critical(void);
+int test_cmd_classify_panos_delete_critical(void);
+int test_cmd_classify_panos_request_restart_critical(void);
+int test_cmd_classify_panos_request_license_info_safe(void);
+int test_cmd_classify_panos_request_license_deactivate_critical(void);
+int test_cmd_classify_panos_pipe_modifier(void);
+int test_cmd_classify_panos_clear_session_all_critical(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -2100,6 +2126,32 @@ int main(void) {
     failed += test_cmd_classify_asa_nat_write();
     failed += test_cmd_classify_asa_no_failover_critical();
     failed += test_cmd_classify_asa_clear_configure_all_critical();
+    /* Aruba OS-CX */
+    failed += test_cmd_classify_aruba_cx_show_safe();
+    failed += test_cmd_classify_aruba_cx_conf_write();
+    failed += test_cmd_classify_aruba_cx_erase_startup_critical();
+    failed += test_cmd_classify_aruba_cx_no_vsx_critical();
+    /* ArubaOS (wireless) */
+    failed += test_cmd_classify_aruba_os_show_safe();
+    failed += test_cmd_classify_aruba_os_wlan_write();
+    failed += test_cmd_classify_aruba_os_factory_reset_critical();
+    failed += test_cmd_classify_aruba_os_ap_wipe_critical();
+    /* PAN-OS */
+    failed += test_cmd_classify_panos_show_safe();
+    failed += test_cmd_classify_panos_ping_safe();
+    failed += test_cmd_classify_panos_commit_validate_safe();
+    failed += test_cmd_classify_panos_test_safe();
+    failed += test_cmd_classify_panos_configure_write();
+    failed += test_cmd_classify_panos_set_write();
+    failed += test_cmd_classify_panos_commit_critical();
+    failed += test_cmd_classify_panos_commit_force_critical();
+    failed += test_cmd_classify_panos_commit_all_critical();
+    failed += test_cmd_classify_panos_delete_critical();
+    failed += test_cmd_classify_panos_request_restart_critical();
+    failed += test_cmd_classify_panos_request_license_info_safe();
+    failed += test_cmd_classify_panos_request_license_deactivate_critical();
+    failed += test_cmd_classify_panos_pipe_modifier();
+    failed += test_cmd_classify_panos_clear_session_all_critical();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

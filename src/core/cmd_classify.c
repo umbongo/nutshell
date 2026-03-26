@@ -945,6 +945,576 @@ static CmdSafetyLevel classify_cisco_asa_segment(const char *seg, size_t seg_len
     return classify_cisco_ios_segment(seg, seg_len, reason_buf, reason_buf_size);
 }
 
+/* ----- Per-segment Aruba OS-CX classification ----- */
+
+static CmdSafetyLevel classify_aruba_cx_segment(const char *seg, size_t seg_len,
+                                                  char *reason_buf, size_t reason_buf_size)
+{
+    const char *p = seg;
+    const char *tok1_start, *tok2_start, *tok3_start;
+    size_t tok1_len, tok2_len, tok3_len;
+
+    (void)seg_len;
+
+    if (!next_token(&p, &tok1_start, &tok1_len))
+        return CMD_SAFE;
+
+    /* --- Safe commands --- */
+    if (tok_prefix_ci(tok1_start, tok1_len, "show"))
+        return CMD_SAFE;
+    if (tok_eq_ci(tok1_start, tok1_len, "ping") ||
+        tok_eq_ci(tok1_start, tok1_len, "traceroute") ||
+        tok_eq_ci(tok1_start, tok1_len, "enable") ||
+        tok_eq_ci(tok1_start, tok1_len, "disable") ||
+        tok_eq_ci(tok1_start, tok1_len, "exit") ||
+        tok_eq_ci(tok1_start, tok1_len, "end") ||
+        tok_eq_ci(tok1_start, tok1_len, "dir"))
+        return CMD_SAFE;
+
+    /* --- Critical: standalone --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "reload")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "reload: device reboot");
+        return CMD_CRITICAL;
+    }
+
+    /* --- Two-token critical --- */
+    {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            /* erase startup-config */
+            if (tok_eq_ci(tok1_start, tok1_len, "erase") &&
+                tok_prefix_ci(tok2_start, tok2_len, "startup")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "erase startup-config");
+                return CMD_CRITICAL;
+            }
+            /* erase all zeroize */
+            if (tok_eq_ci(tok1_start, tok1_len, "erase") &&
+                tok_eq_ci(tok2_start, tok2_len, "all")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "erase all");
+                return CMD_CRITICAL;
+            }
+            /* checkpoint rollback */
+            if (tok_eq_ci(tok1_start, tok1_len, "checkpoint") &&
+                tok_eq_ci(tok2_start, tok2_len, "rollback")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "checkpoint rollback");
+                return CMD_CRITICAL;
+            }
+            /* boot set-default */
+            if (tok_eq_ci(tok1_start, tok1_len, "boot") &&
+                tok_prefix_ci(tok2_start, tok2_len, "set-default")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "boot set-default");
+                return CMD_CRITICAL;
+            }
+            /* delete flash */
+            if (tok_eq_ci(tok1_start, tok1_len, "delete") &&
+                tok_prefix_ci(tok2_start, tok2_len, "flash")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "delete flash");
+                return CMD_CRITICAL;
+            }
+            /* redundancy switchover */
+            if (tok_eq_ci(tok1_start, tok1_len, "redundancy") &&
+                tok_eq_ci(tok2_start, tok2_len, "switchover")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "redundancy switchover");
+                return CMD_CRITICAL;
+            }
+        }
+    }
+
+    /* --- "no" prefix critical --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "no")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            if (tok_eq_ci(tok2_start, tok2_len, "vsx") ||
+                tok_eq_ci(tok2_start, tok2_len, "stacking") ||
+                tok_eq_ci(tok2_start, tok2_len, "spanning-tree")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "no %.*s: critical config removal",
+                             (int)tok2_len, tok2_start);
+                return CMD_CRITICAL;
+            }
+        }
+        /* other "no" -> write */
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "no (negation): modifies config");
+        return CMD_WRITE;
+    }
+
+    /* --- Write commands --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "configure") ||
+        tok_eq_ci(tok1_start, tok1_len, "write") ||
+        tok_eq_ci(tok1_start, tok1_len, "interface") ||
+        tok_eq_ci(tok1_start, tok1_len, "vlan") ||
+        tok_eq_ci(tok1_start, tok1_len, "router") ||
+        tok_eq_ci(tok1_start, tok1_len, "ip") ||
+        tok_eq_ci(tok1_start, tok1_len, "user") ||
+        tok_eq_ci(tok1_start, tok1_len, "radius-server") ||
+        tok_eq_ci(tok1_start, tok1_len, "aaa") ||
+        tok_eq_ci(tok1_start, tok1_len, "hostname") ||
+        tok_eq_ci(tok1_start, tok1_len, "ntp") ||
+        tok_eq_ci(tok1_start, tok1_len, "mirror")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "config command: %.*s",
+                     (int)tok1_len, tok1_start);
+        return CMD_WRITE;
+    }
+
+    /* Default for network devices: conservative -> CMD_WRITE */
+    return CMD_WRITE;
+}
+
+/* ----- Per-segment ArubaOS (wireless) classification ----- */
+
+static CmdSafetyLevel classify_aruba_os_segment(const char *seg, size_t seg_len,
+                                                  char *reason_buf, size_t reason_buf_size)
+{
+    const char *p = seg;
+    const char *tok1_start, *tok2_start, *tok3_start;
+    size_t tok1_len, tok2_len, tok3_len;
+
+    (void)seg_len;
+    (void)tok3_start;
+    (void)tok3_len;
+
+    if (!next_token(&p, &tok1_start, &tok1_len))
+        return CMD_SAFE;
+
+    /* --- Safe commands --- */
+    if (tok_prefix_ci(tok1_start, tok1_len, "show"))
+        return CMD_SAFE;
+    if (tok_eq_ci(tok1_start, tok1_len, "ping") ||
+        tok_eq_ci(tok1_start, tok1_len, "traceroute") ||
+        tok_eq_ci(tok1_start, tok1_len, "enable") ||
+        tok_eq_ci(tok1_start, tok1_len, "disable") ||
+        tok_eq_ci(tok1_start, tok1_len, "exit") ||
+        tok_eq_ci(tok1_start, tok1_len, "end"))
+        return CMD_SAFE;
+
+    /* --- Critical: standalone --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "reload")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "reload: device reboot");
+        return CMD_CRITICAL;
+    }
+    if (tok_eq_ci(tok1_start, tok1_len, "factory-reset")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "factory-reset: wipes device");
+        return CMD_CRITICAL;
+    }
+
+    /* --- Two-token critical --- */
+    {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            /* write erase */
+            if (tok_eq_ci(tok1_start, tok1_len, "write") &&
+                tok_eq_ci(tok2_start, tok2_len, "erase")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "write erase: clears config");
+                return CMD_CRITICAL;
+            }
+            /* cluster reset */
+            if (tok_eq_ci(tok1_start, tok1_len, "cluster") &&
+                tok_eq_ci(tok2_start, tok2_len, "reset")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "cluster reset");
+                return CMD_CRITICAL;
+            }
+            /* clear ap */
+            if (tok_eq_ci(tok1_start, tok1_len, "clear") &&
+                tok_eq_ci(tok2_start, tok2_len, "ap")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "clear ap");
+                return CMD_CRITICAL;
+            }
+            /* delete flash: */
+            if (tok_eq_ci(tok1_start, tok1_len, "delete") &&
+                tok_prefix_ci(tok2_start, tok2_len, "flash")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "delete flash");
+                return CMD_CRITICAL;
+            }
+            /* whitelist-db del */
+            if (tok_eq_ci(tok1_start, tok1_len, "whitelist-db") &&
+                tok_eq_ci(tok2_start, tok2_len, "del")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "whitelist-db del");
+                return CMD_CRITICAL;
+            }
+        }
+    }
+
+    /* ap wipe out */
+    if (tok_eq_ci(tok1_start, tok1_len, "ap")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_eq_ci(tok2_start, tok2_len, "wipe")) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "ap wipe: wipes access points");
+            return CMD_CRITICAL;
+        }
+    }
+
+    /* apboot */
+    if (tok_eq_ci(tok1_start, tok1_len, "apboot")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "apboot: reboots access points");
+        return CMD_CRITICAL;
+    }
+
+    /* no vrrp */
+    if (tok_eq_ci(tok1_start, tok1_len, "no")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            if (tok_eq_ci(tok2_start, tok2_len, "vrrp")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "no vrrp: removes HA");
+                return CMD_CRITICAL;
+            }
+        }
+        /* other "no" -> write */
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "no (negation): modifies config");
+        return CMD_WRITE;
+    }
+
+    /* --- Write commands --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "configure") ||
+        tok_eq_ci(tok1_start, tok1_len, "write") ||
+        tok_eq_ci(tok1_start, tok1_len, "ap-group") ||
+        tok_eq_ci(tok1_start, tok1_len, "wlan") ||
+        tok_eq_ci(tok1_start, tok1_len, "virtual-ap") ||
+        tok_eq_ci(tok1_start, tok1_len, "ap") ||
+        tok_eq_ci(tok1_start, tok1_len, "interface") ||
+        tok_eq_ci(tok1_start, tok1_len, "ip") ||
+        tok_eq_ci(tok1_start, tok1_len, "vlan") ||
+        tok_eq_ci(tok1_start, tok1_len, "aaa") ||
+        tok_eq_ci(tok1_start, tok1_len, "user-role") ||
+        tok_eq_ci(tok1_start, tok1_len, "hostname") ||
+        tok_eq_ci(tok1_start, tok1_len, "ntp") ||
+        tok_eq_ci(tok1_start, tok1_len, "snmp-server") ||
+        tok_eq_ci(tok1_start, tok1_len, "backup") ||
+        tok_eq_ci(tok1_start, tok1_len, "restore")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "config command: %.*s",
+                     (int)tok1_len, tok1_start);
+        return CMD_WRITE;
+    }
+
+    /* Default for network devices: conservative -> CMD_WRITE */
+    return CMD_WRITE;
+}
+
+/* ----- Per-segment PAN-OS classification ----- */
+
+static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
+                                               char *reason_buf, size_t reason_buf_size)
+{
+    const char *p = seg;
+    const char *tok1_start, *tok2_start, *tok3_start;
+    size_t tok1_len, tok2_len, tok3_len;
+
+    (void)seg_len;
+
+    if (!next_token(&p, &tok1_start, &tok1_len))
+        return CMD_SAFE;
+
+    /* --- Safe commands --- */
+    if (tok_prefix_ci(tok1_start, tok1_len, "show") ||
+        tok_eq_ci(tok1_start, tok1_len, "less") ||
+        tok_eq_ci(tok1_start, tok1_len, "diff") ||
+        tok_eq_ci(tok1_start, tok1_len, "find") ||
+        tok_eq_ci(tok1_start, tok1_len, "ping") ||
+        tok_eq_ci(tok1_start, tok1_len, "traceroute") ||
+        tok_eq_ci(tok1_start, tok1_len, "nslookup") ||
+        tok_eq_ci(tok1_start, tok1_len, "test") ||
+        tok_eq_ci(tok1_start, tok1_len, "exit") ||
+        tok_eq_ci(tok1_start, tok1_len, "quit") ||
+        tok_eq_ci(tok1_start, tok1_len, "top") ||
+        tok_eq_ci(tok1_start, tok1_len, "up"))
+        return CMD_SAFE;
+
+    /* tail follow -> safe */
+    if (tok_eq_ci(tok1_start, tok1_len, "tail")) {
+        return CMD_SAFE;
+    }
+
+    /* scp export -> safe, scp import -> write */
+    if (tok_eq_ci(tok1_start, tok1_len, "scp")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            if (tok_eq_ci(tok2_start, tok2_len, "export"))
+                return CMD_SAFE;
+            if (tok_eq_ci(tok2_start, tok2_len, "import")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "scp import");
+                return CMD_WRITE;
+            }
+        }
+        return CMD_WRITE;
+    }
+
+    /* --- commit handling (most nuanced) --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "commit")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            /* commit validate -> safe */
+            if (tok_eq_ci(tok2_start, tok2_len, "validate"))
+                return CMD_SAFE;
+            /* commit force / commit partial -> critical */
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "commit: applies config changes");
+            return CMD_CRITICAL;
+        }
+        /* bare "commit" -> critical */
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "commit: applies config changes");
+        return CMD_CRITICAL;
+    }
+    /* commit-all -> critical */
+    if (tok_prefix_ci(tok1_start, tok1_len, "commit-")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "commit-all: pushes config to devices");
+        return CMD_CRITICAL;
+    }
+
+    /* --- Critical standalone --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "delete")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "delete: removes config objects");
+        return CMD_CRITICAL;
+    }
+    if (tok_eq_ci(tok1_start, tok1_len, "rollback")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "rollback: reverts config");
+        return CMD_CRITICAL;
+    }
+
+    /* load config -> critical */
+    if (tok_eq_ci(tok1_start, tok1_len, "load")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_eq_ci(tok2_start, tok2_len, "config")) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "load config: replaces running config");
+            return CMD_CRITICAL;
+        }
+    }
+
+    /* --- request subcommands --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "request")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            /* request restart / request shutdown -> critical */
+            if (tok_eq_ci(tok2_start, tok2_len, "restart") ||
+                tok_eq_ci(tok2_start, tok2_len, "shutdown")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "request %.*s: system action",
+                             (int)tok2_len, tok2_start);
+                return CMD_CRITICAL;
+            }
+            /* request system -> check subcommand */
+            if (tok_eq_ci(tok2_start, tok2_len, "system")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len)) {
+                    if (tok_prefix_ci(tok3_start, tok3_len, "private-data-reset")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "request system private-data-reset");
+                        return CMD_CRITICAL;
+                    }
+                    if (tok_eq_ci(tok3_start, tok3_len, "software")) {
+                        /* request system software install -> critical, download -> write */
+                        const char *p4 = p3;
+                        const char *tok4_start;
+                        size_t tok4_len;
+                        if (next_token(&p4, &tok4_start, &tok4_len)) {
+                            if (tok_eq_ci(tok4_start, tok4_len, "install")) {
+                                if (reason_buf && reason_buf_size > 0)
+                                    snprintf(reason_buf, reason_buf_size, "request system software install");
+                                return CMD_CRITICAL;
+                            }
+                            if (tok_eq_ci(tok4_start, tok4_len, "download")) {
+                                if (reason_buf && reason_buf_size > 0)
+                                    snprintf(reason_buf, reason_buf_size, "request system software download");
+                                return CMD_WRITE;
+                            }
+                        }
+                    }
+                }
+            }
+            /* request certificate delete -> critical, generate/import -> write */
+            if (tok_eq_ci(tok2_start, tok2_len, "certificate")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len)) {
+                    if (tok_eq_ci(tok3_start, tok3_len, "delete")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "request certificate delete");
+                        return CMD_CRITICAL;
+                    }
+                    if (tok_eq_ci(tok3_start, tok3_len, "generate") ||
+                        tok_eq_ci(tok3_start, tok3_len, "import")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "request certificate %.*s",
+                                     (int)tok3_len, tok3_start);
+                        return CMD_WRITE;
+                    }
+                }
+            }
+            /* request license deactivate -> critical, info -> safe, activate/fetch -> write */
+            if (tok_eq_ci(tok2_start, tok2_len, "license")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len)) {
+                    if (tok_eq_ci(tok3_start, tok3_len, "deactivate")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "request license deactivate");
+                        return CMD_CRITICAL;
+                    }
+                    if (tok_eq_ci(tok3_start, tok3_len, "info"))
+                        return CMD_SAFE;
+                    if (tok_eq_ci(tok3_start, tok3_len, "activate") ||
+                        tok_eq_ci(tok3_start, tok3_len, "fetch")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "request license %.*s",
+                                     (int)tok3_len, tok3_start);
+                        return CMD_WRITE;
+                    }
+                }
+            }
+            /* request content/anti-virus/wildfire upgrade install -> critical */
+            if (tok_eq_ci(tok2_start, tok2_len, "content") ||
+                tok_eq_ci(tok2_start, tok2_len, "anti-virus") ||
+                tok_eq_ci(tok2_start, tok2_len, "wildfire")) {
+                /* Check for "upgrade install" in remaining tokens */
+                const char *scan = p2;
+                const char *ts;
+                size_t tl;
+                while (next_token(&scan, &ts, &tl)) {
+                    if (tok_eq_ci(ts, tl, "install")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "request %.*s upgrade install",
+                                     (int)tok2_len, tok2_start);
+                        return CMD_CRITICAL;
+                    }
+                }
+            }
+            /* request high-availability */
+            if (tok_prefix_ci(tok2_start, tok2_len, "high-availability")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len)) {
+                    if (tok_eq_ci(tok3_start, tok3_len, "state") ||
+                        tok_prefix_ci(tok3_start, tok3_len, "sync-to-remote")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "request high-availability action");
+                        return CMD_CRITICAL;
+                    }
+                }
+            }
+        }
+        /* Default request -> write */
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "request command");
+        return CMD_WRITE;
+    }
+
+    /* --- clear subcommands --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "clear")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            /* clear session all -> critical, clear session id/filter -> write */
+            if (tok_eq_ci(tok2_start, tok2_len, "session")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len)) {
+                    if (tok_eq_ci(tok3_start, tok3_len, "all")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "clear session all: drops all sessions");
+                        return CMD_CRITICAL;
+                    }
+                }
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "clear session");
+                return CMD_WRITE;
+            }
+            /* clear log -> critical */
+            if (tok_eq_ci(tok2_start, tok2_len, "log")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "clear log: deletes logs");
+                return CMD_CRITICAL;
+            }
+            /* clear counter / clear arp / clear mac / clear ndp -> write */
+            if (tok_eq_ci(tok2_start, tok2_len, "counter") ||
+                tok_eq_ci(tok2_start, tok2_len, "arp") ||
+                tok_eq_ci(tok2_start, tok2_len, "mac") ||
+                tok_eq_ci(tok2_start, tok2_len, "ndp")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "clear %.*s",
+                             (int)tok2_len, tok2_start);
+                return CMD_WRITE;
+            }
+        }
+        /* Default clear -> write */
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "clear command");
+        return CMD_WRITE;
+    }
+
+    /* --- debug critical --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "debug")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            if (tok_eq_ci(tok2_start, tok2_len, "software")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len) &&
+                    tok_eq_ci(tok3_start, tok3_len, "restart")) {
+                    if (reason_buf && reason_buf_size > 0)
+                        snprintf(reason_buf, reason_buf_size, "debug software restart");
+                    return CMD_CRITICAL;
+                }
+            }
+            if (tok_eq_ci(tok2_start, tok2_len, "dataplane")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len) &&
+                    tok_eq_ci(tok3_start, tok3_len, "reset")) {
+                    if (reason_buf && reason_buf_size > 0)
+                        snprintf(reason_buf, reason_buf_size, "debug dataplane reset");
+                    return CMD_CRITICAL;
+                }
+            }
+        }
+    }
+
+    /* --- Write commands --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "configure") ||
+        tok_eq_ci(tok1_start, tok1_len, "set") ||
+        tok_eq_ci(tok1_start, tok1_len, "edit") ||
+        tok_eq_ci(tok1_start, tok1_len, "rename") ||
+        tok_eq_ci(tok1_start, tok1_len, "copy") ||
+        tok_eq_ci(tok1_start, tok1_len, "move") ||
+        tok_eq_ci(tok1_start, tok1_len, "override") ||
+        tok_eq_ci(tok1_start, tok1_len, "revert") ||
+        tok_eq_ci(tok1_start, tok1_len, "import")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "config command: %.*s",
+                     (int)tok1_len, tok1_start);
+        return CMD_WRITE;
+    }
+
+    /* save config -> write */
+    if (tok_eq_ci(tok1_start, tok1_len, "save")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "save config");
+        return CMD_WRITE;
+    }
+
+    /* Default for PAN-OS: conservative -> CMD_WRITE */
+    return CMD_WRITE;
+}
+
 /* ----- Top-level command classification ----- */
 
 CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
@@ -970,7 +1540,9 @@ CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
             if (*p == '\'' && !in_dq) in_sq = !in_sq;
             else if (*p == '"' && !in_sq) in_dq = !in_dq;
             else if (!in_sq && !in_dq) {
-                if (*p == '|' || *p == ';') break;
+                /* PAN-OS: | is a display filter, not a shell pipe */
+                if (*p == '|' && platform != CMD_PLATFORM_PANOS) break;
+                if (*p == ';') break;
                 if (*p == '&' && *(p+1) == '&') break;
             }
             p++;
@@ -992,6 +1564,21 @@ CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
             break;
         case CMD_PLATFORM_CISCO_ASA:
             seg_level = classify_cisco_asa_segment(seg_start, seg_len,
+                            worst == CMD_SAFE ? reason_buf : NULL,
+                            worst == CMD_SAFE ? reason_buf_size : 0);
+            break;
+        case CMD_PLATFORM_ARUBA_CX:
+            seg_level = classify_aruba_cx_segment(seg_start, seg_len,
+                            worst == CMD_SAFE ? reason_buf : NULL,
+                            worst == CMD_SAFE ? reason_buf_size : 0);
+            break;
+        case CMD_PLATFORM_ARUBA_OS:
+            seg_level = classify_aruba_os_segment(seg_start, seg_len,
+                            worst == CMD_SAFE ? reason_buf : NULL,
+                            worst == CMD_SAFE ? reason_buf_size : 0);
+            break;
+        case CMD_PLATFORM_PANOS:
+            seg_level = classify_panos_segment(seg_start, seg_len,
                             worst == CMD_SAFE ? reason_buf : NULL,
                             worst == CMD_SAFE ? reason_buf_size : 0);
             break;

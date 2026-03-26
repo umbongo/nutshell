@@ -461,3 +461,145 @@ int test_cmd_classify_asa_clear_configure_all_critical(void) {
     ASSERT_EQ((int)cmd_classify("clear configure all", CMD_PLATFORM_CISCO_ASA), (int)CMD_CRITICAL);
     TEST_END();
 }
+
+/* --- Aruba OS-CX --- */
+int test_cmd_classify_aruba_cx_show_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("show running-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_aruba_cx_conf_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("configure terminal", CMD_PLATFORM_ARUBA_CX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_aruba_cx_erase_startup_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("erase startup-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_aruba_cx_no_vsx_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("no vsx", CMD_PLATFORM_ARUBA_CX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* --- ArubaOS (wireless) --- */
+int test_cmd_classify_aruba_os_show_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("show ap database", CMD_PLATFORM_ARUBA_OS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_aruba_os_wlan_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("wlan ssid-profile corp", CMD_PLATFORM_ARUBA_OS), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_aruba_os_factory_reset_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("factory-reset", CMD_PLATFORM_ARUBA_OS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_aruba_os_ap_wipe_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ap wipe out all", CMD_PLATFORM_ARUBA_OS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* --- PAN-OS --- */
+int test_cmd_classify_panos_show_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("show system info", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_ping_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ping host 10.0.0.1", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_commit_validate_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("commit validate", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_test_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("test security-policy-match", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_configure_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("configure", CMD_PLATFORM_PANOS), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_set_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("set network interface ethernet1/1 ip 10.0.0.1/24", CMD_PLATFORM_PANOS), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_commit_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("commit", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_commit_force_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("commit force", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_commit_all_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("commit-all", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_delete_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("delete network interface ethernet1/1", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_request_restart_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("request restart system", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_request_license_info_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("request license info", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_request_license_deactivate_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("request license deactivate", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_pipe_modifier(void) {
+    TEST_BEGIN();
+    /* Pipe modifiers (| match, | except) should not change safety level */
+    ASSERT_EQ((int)cmd_classify("show running-config | match ssl", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_panos_clear_session_all_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("clear session all", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
