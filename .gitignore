@@ -15,6 +15,7 @@ settings.ini
 
 # Claude Code project data
 .claude/
+.superpowers/
 
 # Editor files
 *.swp
