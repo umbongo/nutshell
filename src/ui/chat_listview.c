@@ -8,6 +8,7 @@
 #ifdef _WIN32
 
 #include "chat_listview.h"
+#include "chat_activity.h"
 #include "resource.h"
 #include <windowsx.h>
 #include <commctrl.h>
@@ -67,6 +68,11 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define CLR_GHOST_TEXT    RGB(100, 160, 120)
 #define CLR_LINK_TEXT     RGB(100, 140, 180)   /* auto-approve link */
 #define CLR_BLOCKED_TEXT  RGB(128, 128, 128)   /* greyed-out command text */
+#define CLR_RETRY_TEXT    RGB(100, 140, 180)   /* [Retry] link colour */
+
+/* Height of the inline activity indicator line (96 DPI base) */
+#define BASE_ACTIVITY_H   28
+#define BASE_DOT_SIZE       8
 
 /* ── Forward declarations ───────────────────────────────────────────── */
 
@@ -295,6 +301,20 @@ void chat_listview_set_theme(HWND hwnd, const ThemeColors *theme)
     if (!lv) return;
     lv->theme = theme;
     InvalidateRect(hwnd, NULL, TRUE);
+}
+
+void chat_listview_set_activity(HWND hwnd, ActivityState *activity)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    lv->activity = activity;
+}
+
+void chat_listview_set_pulse(HWND hwnd, int toggle)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    lv->pulse_toggle = toggle;
 }
 
 void chat_listview_invalidate(HWND hwnd)
@@ -882,6 +902,94 @@ static void paint_status_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     SelectObject(hdc, old_font);
 }
 
+/* ── Activity indicator colour from health status ───────────────────── */
+
+static COLORREF activity_health_color(const ChatListView *lv, HealthStatus h)
+{
+    const ThemeChatColors *tc = &lv->theme->chat;
+    switch (h) {
+    case HEALTH_YELLOW: return RGB_FROM_THEME(tc->indicator_yellow);
+    case HEALTH_RED:    return RGB_FROM_THEME(tc->indicator_red);
+    default:            return RGB_FROM_THEME(tc->indicator_green);
+    }
+}
+
+/* Blend colour towards background for half-pulse effect */
+static COLORREF blend_with_bg(COLORREF fg, COLORREF bg_clr)
+{
+    int r = (GetRValue(fg) + GetRValue(bg_clr)) / 2;
+    int g = (GetGValue(fg) + GetGValue(bg_clr)) / 2;
+    int b = (GetBValue(fg) + GetBValue(bg_clr)) / 2;
+    return RGB(r, g, b);
+}
+
+/* Paint the inline activity indicator below the last message.
+ * Returns the height consumed (0 if idle). */
+static int paint_activity_indicator(ChatListView *lv, HDC hdc,
+                                     int y, int cw)
+{
+    if (!lv->activity || lv->activity->phase == ACTIVITY_IDLE)
+        return 0;
+
+    int act_h  = CLV_SCALE(lv, BASE_ACTIVITY_H);
+    int dot_sz = CLV_SCALE(lv, BASE_DOT_SIZE);
+    int pad    = CLV_SCALE(lv, BASE_SIDE_PAD);
+    int indent = CLV_SCALE(lv, BASE_AI_INDENT);
+
+    COLORREF bg_clr = RGB_FROM_THEME(lv->theme->bg_primary);
+    COLORREF dot_clr = activity_health_color(lv, lv->activity->health);
+    if (lv->pulse_toggle)
+        dot_clr = blend_with_bg(dot_clr, bg_clr);
+
+    /* Draw pulsing dot */
+    int dot_x = pad + indent;
+    int dot_y = y + (act_h - dot_sz) / 2;
+    HBRUSH dot_br = CreateSolidBrush(dot_clr);
+    HPEN   dot_pen = CreatePen(PS_SOLID, 1, dot_clr);
+    HGDIOBJ old_br  = SelectObject(hdc, dot_br);
+    HGDIOBJ old_pen = SelectObject(hdc, dot_pen);
+    Ellipse(hdc, dot_x, dot_y, dot_x + dot_sz, dot_y + dot_sz);
+    SelectObject(hdc, old_pen);
+    SelectObject(hdc, old_br);
+    DeleteObject(dot_pen);
+    DeleteObject(dot_br);
+
+    /* Draw status text */
+    char status_buf[128];
+    chat_activity_format(lv->activity, status_buf, sizeof(status_buf));
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, dot_clr);
+    HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont
+                                         ? lv->hSmallFont
+                                         : GetStockObject(DEFAULT_GUI_FONT));
+    RECT text_rc;
+    text_rc.left   = dot_x + dot_sz + CLV_SCALE(lv, 6);
+    text_rc.top    = y;
+    text_rc.right  = cw - pad;
+    text_rc.bottom = y + act_h;
+    DrawTextA(hdc, status_buf, -1, &text_rc,
+              DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+    /* Draw [Retry] link when stalled */
+    if (lv->activity->health == HEALTH_RED) {
+        SIZE sz;
+        GetTextExtentPoint32A(hdc, status_buf, (int)strlen(status_buf), &sz);
+        int retry_x = text_rc.left + sz.cx + CLV_SCALE(lv, 10);
+        SetTextColor(hdc, CLR_RETRY_TEXT);
+        RECT retry_rc;
+        retry_rc.left   = retry_x;
+        retry_rc.top    = y;
+        retry_rc.right  = cw - pad;
+        retry_rc.bottom = y + act_h;
+        DrawTextA(hdc, "[Retry]", -1, &retry_rc,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    }
+
+    SelectObject(hdc, old_font);
+    return act_h;
+}
+
 /* ══════════════════════════════════════════════════════════════════════
  *  WM_PAINT: double-buffered, virtual-scroll painting
  * ══════════════════════════════════════════════════════════════════════ */
@@ -958,6 +1066,10 @@ static void on_paint(ChatListView *lv)
         y += h + lv->msg_gap;
         item = item->next;
     }
+
+    /* Paint inline activity indicator below the last message */
+    if (y <= ch)
+        paint_activity_indicator(lv, mem_dc, y, cw);
 
     /* Blit to screen */
     BitBlt(hdc, 0, 0, cw, ch, mem_dc, 0, 0, SRCCOPY);
@@ -1091,6 +1203,19 @@ static void on_lbuttondown(ChatListView *lv, int mx, int my)
 
         y += h + lv->msg_gap;
         item = item->next;
+    }
+
+    /* Check click on [Retry] link in the activity indicator */
+    if (lv->activity && lv->activity->phase != ACTIVITY_IDLE &&
+        lv->activity->health == HEALTH_RED) {
+        int act_h = CLV_SCALE(lv, BASE_ACTIVITY_H);
+        if (my >= y && my < y + act_h) {
+            /* Somewhere in the activity indicator line — check [Retry] zone */
+            HWND par = GetParent(lv->hwnd);
+            if (par)
+                PostMessage(par, WM_COMMAND,
+                            MAKEWPARAM(IDC_ACTIVITY_RETRY, 0), 0);
+        }
     }
 }
 

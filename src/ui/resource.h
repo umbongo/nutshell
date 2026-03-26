@@ -50,5 +50,6 @@
 #define IDC_CMD_DENY_BASE    3020  /* 3020..3035 for up to 16 commands */
 #define IDC_CMD_APPROVE_ALL  3040
 #define IDC_AUTO_APPROVE     3041
+#define IDC_ACTIVITY_RETRY   3042  /* Retry link in activity indicator */
 
 #endif

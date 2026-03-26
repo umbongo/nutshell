@@ -4,6 +4,7 @@
 
 #include <windows.h>
 #include "chat_msg.h"
+#include "chat_activity.h"
 #include "ui_theme.h"
 
 typedef struct {
@@ -22,6 +23,10 @@ typedef struct {
     HFONT hBoldFont;
     HFONT hSmallFont;
     HFONT hIconFont;
+
+    /* Activity indicator (not owned, set by parent) */
+    ActivityState *activity;
+    int pulse_toggle;           /* Animation toggle for pulsing dot */
 
     /* DPI scaling factor (1.0 = 96 DPI) */
     float dpi_scale;
@@ -57,5 +62,11 @@ void chat_listview_scroll_to_bottom(HWND hwnd);
 
 /* Recalculate layout after resize. */
 void chat_listview_relayout(HWND hwnd);
+
+/* Set activity state pointer (not owned). */
+void chat_listview_set_activity(HWND hwnd, ActivityState *activity);
+
+/* Set pulse toggle (called by parent on heartbeat timer). */
+void chat_listview_set_pulse(HWND hwnd, int toggle);
 
 #endif /* NUTSHELL_CHAT_LISTVIEW_H */

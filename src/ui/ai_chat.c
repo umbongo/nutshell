@@ -58,7 +58,9 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define TIMER_CMD_QUEUE   2     /* Delayed command execution (paste delay) */
 #define TIMER_SCROLL_SYNC 4     /* Sync custom scrollbar with RichEdit */
 #define TIMER_THINKING    5     /* Animated thinking indicator */
+#define TIMER_HEARTBEAT   6     /* Activity monitor heartbeat (1s) */
 #define THINKING_ANIM_MS  400   /* Dot animation interval */
+#define HEARTBEAT_MS      1000  /* Heartbeat interval */
 
 /* Forward declaration for input subclass */
 static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
@@ -208,6 +210,10 @@ typedef struct {
     /* Owned fonts for ChatListView (caller manages lifetime) */
     HFONT hBoldFont;
     HFONT hMonoFont;
+
+    /* Activity monitor state */
+    ActivityState activity;
+    int pulse_toggle;          /* 0/1 for pulsing dot animation */
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -1004,6 +1010,18 @@ static void launch_stream_thread(AiChatData *d)
 
     d->active_state->busy = 1;
 
+    /* Start activity monitor */
+    {
+        float now = (float)GetTickCount() / 1000.0f;
+        chat_activity_set_phase(&d->activity, ACTIVITY_PROCESSING, now);
+        d->pulse_toggle = 0;
+        SetTimer(d->hwnd, TIMER_HEARTBEAT, HEARTBEAT_MS, NULL);
+        if (d->hChatList) {
+            chat_listview_set_activity(d->hChatList, &d->activity);
+            chat_listview_set_pulse(d->hChatList, 0);
+        }
+    }
+
     /* Reset display-side stream buffers */
     d->stream_thinking[0] = '\0';
     d->stream_thinking_len = 0;
@@ -1540,6 +1558,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
          * handled inline via chat_listview command block buttons.
          * Initialize the approval queue. */
         chat_approval_init(&nd->approval_q);
+        chat_activity_init(&nd->activity);
 
         /* Session name (left) + context bar (right) row */
         {
@@ -1590,6 +1609,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                               disp_w, disp_h,
                                               &nd->msg_list, nd->theme);
         nd->hDisplay = nd->hChatList;  /* layout code uses hDisplay */
+        if (nd->hChatList)
+            chat_listview_set_activity(nd->hChatList, &nd->activity);
 
         /* Custom themed scrollbar for chat display (kept for visual consistency) */
         csb_register(GetModuleHandle(NULL));
@@ -1790,6 +1811,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->stream_content[0] = '\0';
                 d->stream_content_len = 0;
                 d->stream_phase = 0;
+                KillTimer(hwnd, TIMER_HEARTBEAT);
+                chat_activity_reset(&d->activity);
                 thinking_history_clear(d);
                 /* Clear display and show welcome message */
                 chat_msg_list_clear(&d->msg_list);
@@ -1886,14 +1909,22 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
                 /* Execute approved command */
-                if (idx < d->queued_count)
+                if (idx < d->queued_count) {
                     execute_command(d, d->queued_cmds[idx]);
+                    float now_a = (float)GetTickCount() / 1000.0f;
+                    chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now_a);
+                    chat_activity_set_exec(&d->activity, idx + 1, d->queued_count);
+                }
 
                 /* Check if all decided — if so, wrap up */
                 if (chat_approval_all_decided(&d->approval_q)) {
                     d->pending_approval = 0;
                     d->commands_executed = d->queued_count;
                     start_indicator(d, "waiting for output");
+                    {
+                        float now_w = (float)GetTickCount() / 1000.0f;
+                        chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now_w);
+                    }
                     SetTimer(hwnd, TIMER_CONTINUE,
                              CONTINUE_DELAY_MS, NULL);
                 }
@@ -1949,14 +1980,59 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
                 /* Execute all approved commands */
-                for (int ci = 0; ci < d->queued_count; ci++)
+                {
+                    float now_e = (float)GetTickCount() / 1000.0f;
+                    chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now_e);
+                }
+                for (int ci = 0; ci < d->queued_count; ci++) {
                     execute_command(d, d->queued_cmds[ci]);
+                    chat_activity_set_exec(&d->activity, ci + 1, d->queued_count);
+                }
                 d->queued_next = d->queued_count;
                 d->commands_executed = d->queued_count;
                 start_indicator(d, "waiting for output");
+                {
+                    float now_w2 = (float)GetTickCount() / 1000.0f;
+                    chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now_w2);
+                }
                 SetTimer(hwnd, TIMER_CONTINUE,
                          CONTINUE_DELAY_MS, NULL);
                 SetFocus(d->hInput);
+                return 0;
+            }
+
+            /* IDC_ACTIVITY_RETRY → cancel current request and resend */
+            if (d && ctl_id == IDC_ACTIVITY_RETRY) {
+                /* Cancel current stream if possible, reset activity */
+                if (d->active_state) d->active_state->busy = 0;
+                KillTimer(hwnd, TIMER_HEARTBEAT);
+                chat_activity_reset(&d->activity);
+                if (d->hChatList) {
+                    chat_listview_set_pulse(d->hChatList, 0);
+                    chat_listview_invalidate(d->hChatList);
+                }
+
+                /* Remove the streaming AI item (incomplete response) */
+                if (d->stream_ai_item) {
+                    chat_msg_remove(&d->msg_list, d->stream_ai_item);
+                    d->stream_ai_item = NULL;
+                }
+                d->stream_phase = 0;
+                d->stream_content[0] = '\0';
+                d->stream_content_len = 0;
+                d->stream_thinking[0] = '\0';
+                d->stream_thinking_len = 0;
+
+                /* Remove the last assistant message from conv if added */
+                EnterCriticalSection(&d->cs);
+                if (d->conv.msg_count > 0 &&
+                    d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
+                    d->conv.msg_count--;
+                LeaveCriticalSection(&d->cs);
+
+                /* Re-launch stream */
+                start_indicator(d, "retrying");
+                launch_stream_thread(d);
                 return 0;
             }
 
@@ -2077,6 +2153,20 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
         }
 
+        /* Update activity state on stream chunks */
+        {
+            float now = (float)GetTickCount() / 1000.0f;
+            if (wParam == 0) {
+                if (d->activity.phase != ACTIVITY_THINKING)
+                    chat_activity_set_phase(&d->activity, ACTIVITY_THINKING, now);
+                chat_activity_token(&d->activity, now);
+            } else {
+                if (d->activity.phase != ACTIVITY_RESPONDING)
+                    chat_activity_set_phase(&d->activity, ACTIVITY_RESPONDING, now);
+                chat_activity_token(&d->activity, now);
+            }
+        }
+
         /* Update the streaming AI item in the ChatMsgList */
         if (d->stream_ai_item) {
             if (wParam == 0) {
@@ -2145,6 +2235,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
 
         KillTimer(hwnd, TIMER_THINKING);
+        KillTimer(hwnd, TIMER_HEARTBEAT);
+        chat_activity_reset(&d->activity);
+        if (d->hChatList) {
+            chat_listview_set_pulse(d->hChatList, 0);
+            chat_listview_invalidate(d->hChatList);
+        }
         d->indicator_pos = -1;
 
         if (wParam == 2) {
@@ -2285,12 +2381,23 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d->queued_next < d->queued_count) {
                 execute_command(d, d->queued_cmds[d->queued_next]);
                 d->queued_next++;
+                /* Update activity: executing N/M */
+                {
+                    float now = (float)GetTickCount() / 1000.0f;
+                    if (d->activity.phase != ACTIVITY_EXECUTING)
+                        chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now);
+                    chat_activity_set_exec(&d->activity, d->queued_next, d->queued_count);
+                }
             }
             if (d->queued_next >= d->queued_count) {
                 /* All commands executed — stop timer, show waiting */
                 KillTimer(hwnd, TIMER_CMD_QUEUE);
                 d->commands_executed = d->queued_count;
                 start_indicator(d, "waiting for output");
+                {
+                    float now = (float)GetTickCount() / 1000.0f;
+                    chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now);
+                }
                 SetTimer(hwnd, TIMER_CONTINUE, CONTINUE_DELAY_MS, NULL);
             } else {
                 /* More commands pending — show progress after cmd text */
@@ -2304,6 +2411,24 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d->commands_executed > 0 && !ACTIVE_BUSY(d)) {
                 d->commands_executed = 0;
                 send_continue_message(d);
+            }
+        } else if (wParam == TIMER_HEARTBEAT) {
+            /* Activity monitor heartbeat: tick health + toggle pulse */
+            float now = (float)GetTickCount() / 1000.0f;
+            chat_activity_tick(&d->activity, now);
+            d->pulse_toggle = !d->pulse_toggle;
+            if (d->hChatList) {
+                chat_listview_set_pulse(d->hChatList, d->pulse_toggle);
+                InvalidateRect(d->hChatList, NULL, FALSE);
+            }
+            /* Also repaint header area for the header bar indicator */
+            {
+                RECT hdr_rc;
+                GetClientRect(hwnd, &hdr_rc);
+                #define HS(px) MulDiv((px), d->dpi, 96)
+                hdr_rc.bottom = HS(4) + HS(24) + HS(4) + HS(16) + HS(4);
+                #undef HS
+                InvalidateRect(hwnd, &hdr_rc, FALSE);
             }
         } else if (wParam == TIMER_SCROLL_SYNC) {
             /* ChatListView handles its own scroll; only sync input */
@@ -2376,6 +2501,115 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                    wParam, lParam);
         }
         break;
+
+    case WM_PAINT:
+        if (d && d->theme && d->activity.phase != ACTIVITY_IDLE) {
+            /* Paint a small activity dot + one-word status in the header bar,
+             * next to the session label.  We paint only in the header strip
+             * so child controls are not affected. */
+            PAINTSTRUCT ps_hdr;
+            HDC hdc_hdr = BeginPaint(hwnd, &ps_hdr);
+            #define HP(px) MulDiv((px), d->dpi, 96)
+            {
+                int pad_h   = HP(4);
+                int btn_h_h = HP(24);
+                int bar_h_h = HP(16);
+                int top_y_h = pad_h + btn_h_h + pad_h; /* session label row y */
+
+                /* Dot position: right end of session label area */
+                RECT rc_lbl;
+                if (d->hSessionLabel) {
+                    GetWindowRect(d->hSessionLabel, &rc_lbl);
+                    MapWindowPoints(NULL, hwnd, (POINT *)&rc_lbl, 2);
+                } else {
+                    SetRect(&rc_lbl, pad_h, top_y_h, HP(200), top_y_h + bar_h_h);
+                }
+
+                /* Get session label text width */
+                SIZE sz_lbl;
+                HGDIOBJ old_f = SelectObject(hdc_hdr,
+                    d->hSmallFont ? d->hSmallFont
+                                  : GetStockObject(DEFAULT_GUI_FONT));
+                char lbl_text[256];
+                GetWindowTextA(d->hSessionLabel, lbl_text, (int)sizeof(lbl_text));
+                GetTextExtentPoint32A(hdc_hdr, lbl_text, (int)strlen(lbl_text), &sz_lbl);
+
+                int dot_sz  = HP(6);
+                int dot_x   = rc_lbl.left + sz_lbl.cx + HP(6);
+                int dot_y   = top_y_h + (bar_h_h - dot_sz) / 2;
+
+                /* Choose colour from health */
+                COLORREF dot_clr;
+                switch (d->activity.health) {
+                case HEALTH_YELLOW:
+                    dot_clr = RGB(((d->theme->chat.indicator_yellow)>>16)&0xFF,
+                                  ((d->theme->chat.indicator_yellow)>>8)&0xFF,
+                                  (d->theme->chat.indicator_yellow)&0xFF);
+                    break;
+                case HEALTH_RED:
+                    dot_clr = RGB(((d->theme->chat.indicator_red)>>16)&0xFF,
+                                  ((d->theme->chat.indicator_red)>>8)&0xFF,
+                                  (d->theme->chat.indicator_red)&0xFF);
+                    break;
+                default:
+                    dot_clr = RGB(((d->theme->chat.indicator_green)>>16)&0xFF,
+                                  ((d->theme->chat.indicator_green)>>8)&0xFF,
+                                  (d->theme->chat.indicator_green)&0xFF);
+                    break;
+                }
+
+                /* Apply pulse: blend with bg on toggle */
+                if (d->pulse_toggle) {
+                    COLORREF bg_c = RGB(((d->theme->bg_primary)>>16)&0xFF,
+                                        ((d->theme->bg_primary)>>8)&0xFF,
+                                        (d->theme->bg_primary)&0xFF);
+                    dot_clr = RGB(
+                        (GetRValue(dot_clr) + GetRValue(bg_c)) / 2,
+                        (GetGValue(dot_clr) + GetGValue(bg_c)) / 2,
+                        (GetBValue(dot_clr) + GetBValue(bg_c)) / 2);
+                }
+
+                /* Draw dot */
+                HBRUSH hDotBr = CreateSolidBrush(dot_clr);
+                HPEN   hDotPn = CreatePen(PS_SOLID, 1, dot_clr);
+                HGDIOBJ ob = SelectObject(hdc_hdr, hDotBr);
+                HGDIOBJ op = SelectObject(hdc_hdr, hDotPn);
+                Ellipse(hdc_hdr, dot_x, dot_y,
+                        dot_x + dot_sz, dot_y + dot_sz);
+                SelectObject(hdc_hdr, op);
+                SelectObject(hdc_hdr, ob);
+                DeleteObject(hDotPn);
+                DeleteObject(hDotBr);
+
+                /* Draw one-word status */
+                const char *word;
+                switch (d->activity.phase) {
+                case ACTIVITY_PROCESSING: word = "Processing"; break;
+                case ACTIVITY_THINKING:   word = "Thinking";   break;
+                case ACTIVITY_RESPONDING:  word = "Responding"; break;
+                case ACTIVITY_EXECUTING:   word = "Executing";  break;
+                case ACTIVITY_WAITING:     word = "Waiting";    break;
+                default:                   word = "";           break;
+                }
+                if (word[0]) {
+                    SetBkMode(hdc_hdr, TRANSPARENT);
+                    SetTextColor(hdc_hdr, dot_clr);
+                    RECT wrc;
+                    wrc.left   = dot_x + dot_sz + HP(4);
+                    wrc.top    = top_y_h;
+                    wrc.right  = rc_lbl.right;
+                    wrc.bottom = top_y_h + bar_h_h;
+                    DrawTextA(hdc_hdr, word, -1, &wrc,
+                              DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+                }
+
+                SelectObject(hdc_hdr, old_f);
+            }
+            #undef HP
+            EndPaint(hwnd, &ps_hdr);
+            return 0;
+        }
+        break;  /* Let DefWindowProc handle WM_PAINT when idle */
 
     case WM_ERASEBKGND:
         if (d && d->theme) {
@@ -2482,6 +2716,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_DESTROY:
         if (d) {
             KillTimer(hwnd, TIMER_SCROLL_SYNC);
+            KillTimer(hwnd, TIMER_HEARTBEAT);
             /* Save conversation back to session before cleanup */
             if (d->active_state) {
                 memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
