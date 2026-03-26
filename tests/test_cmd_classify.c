@@ -338,3 +338,126 @@ int test_cmd_classify_ex_null_reason(void) {
     ASSERT_EQ((int)level, (int)CMD_CRITICAL);
     TEST_END();
 }
+
+/* --- Cisco IOS --- */
+int test_cmd_classify_ios_show_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("show ip route", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_ping_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_enable_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("enable", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_conf_t_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("configure terminal", CMD_PLATFORM_CISCO_IOS), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_write_mem_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("write memory", CMD_PLATFORM_CISCO_IOS), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_ip_address_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ip address 10.0.0.1 255.255.255.0", CMD_PLATFORM_CISCO_IOS), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_reload_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("reload", CMD_PLATFORM_CISCO_IOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_write_erase_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("write erase", CMD_PLATFORM_CISCO_IOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_no_router_bgp_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("no router bgp 65000", CMD_PLATFORM_CISCO_IOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_clear_bgp_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("clear ip bgp *", CMD_PLATFORM_CISCO_IOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_shutdown_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("shutdown", CMD_PLATFORM_CISCO_IOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_ios_case_insensitive(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("SHOW ip route", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* --- Cisco NX-OS (IOS rules plus NX-OS extras) --- */
+int test_cmd_classify_nxos_show_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("show vlan", CMD_PLATFORM_CISCO_NXOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_nxos_feature_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("feature nv overlay", CMD_PLATFORM_CISCO_NXOS), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_nxos_no_vpc_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("no vpc domain 100", CMD_PLATFORM_CISCO_NXOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_nxos_reload_module_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("reload module 1", CMD_PLATFORM_CISCO_NXOS), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* --- Cisco ASA --- */
+int test_cmd_classify_asa_show_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("show running-config", CMD_PLATFORM_CISCO_ASA), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_asa_nat_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("nat (inside,outside) dynamic interface", CMD_PLATFORM_CISCO_ASA), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_asa_no_failover_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("no failover", CMD_PLATFORM_CISCO_ASA), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_asa_clear_configure_all_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("clear configure all", CMD_PLATFORM_CISCO_ASA), (int)CMD_CRITICAL);
+    TEST_END();
+}

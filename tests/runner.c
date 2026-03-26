@@ -1012,6 +1012,29 @@ int test_cmd_classify_ip_route_del_critical(void);
 int test_cmd_classify_ip_addr_add_write(void);
 int test_cmd_classify_ex_reason(void);
 int test_cmd_classify_ex_null_reason(void);
+/* test_cmd_classify.c - Cisco IOS */
+int test_cmd_classify_ios_show_safe(void);
+int test_cmd_classify_ios_ping_safe(void);
+int test_cmd_classify_ios_enable_safe(void);
+int test_cmd_classify_ios_conf_t_write(void);
+int test_cmd_classify_ios_write_mem_write(void);
+int test_cmd_classify_ios_ip_address_write(void);
+int test_cmd_classify_ios_reload_critical(void);
+int test_cmd_classify_ios_write_erase_critical(void);
+int test_cmd_classify_ios_no_router_bgp_critical(void);
+int test_cmd_classify_ios_clear_bgp_critical(void);
+int test_cmd_classify_ios_shutdown_critical(void);
+int test_cmd_classify_ios_case_insensitive(void);
+/* test_cmd_classify.c - Cisco NX-OS */
+int test_cmd_classify_nxos_show_safe(void);
+int test_cmd_classify_nxos_feature_write(void);
+int test_cmd_classify_nxos_no_vpc_critical(void);
+int test_cmd_classify_nxos_reload_module_critical(void);
+/* test_cmd_classify.c - Cisco ASA */
+int test_cmd_classify_asa_show_safe(void);
+int test_cmd_classify_asa_nat_write(void);
+int test_cmd_classify_asa_no_failover_critical(void);
+int test_cmd_classify_asa_clear_configure_all_critical(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -2054,6 +2077,29 @@ int main(void) {
     failed += test_cmd_classify_ip_addr_add_write();
     failed += test_cmd_classify_ex_reason();
     failed += test_cmd_classify_ex_null_reason();
+    /* Cisco IOS */
+    failed += test_cmd_classify_ios_show_safe();
+    failed += test_cmd_classify_ios_ping_safe();
+    failed += test_cmd_classify_ios_enable_safe();
+    failed += test_cmd_classify_ios_conf_t_write();
+    failed += test_cmd_classify_ios_write_mem_write();
+    failed += test_cmd_classify_ios_ip_address_write();
+    failed += test_cmd_classify_ios_reload_critical();
+    failed += test_cmd_classify_ios_write_erase_critical();
+    failed += test_cmd_classify_ios_no_router_bgp_critical();
+    failed += test_cmd_classify_ios_clear_bgp_critical();
+    failed += test_cmd_classify_ios_shutdown_critical();
+    failed += test_cmd_classify_ios_case_insensitive();
+    /* Cisco NX-OS */
+    failed += test_cmd_classify_nxos_show_safe();
+    failed += test_cmd_classify_nxos_feature_write();
+    failed += test_cmd_classify_nxos_no_vpc_critical();
+    failed += test_cmd_classify_nxos_reload_module_critical();
+    /* Cisco ASA */
+    failed += test_cmd_classify_asa_show_safe();
+    failed += test_cmd_classify_asa_nat_write();
+    failed += test_cmd_classify_asa_no_failover_critical();
+    failed += test_cmd_classify_asa_clear_configure_all_critical();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

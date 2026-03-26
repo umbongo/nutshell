@@ -175,6 +175,20 @@ static int tok_prefix(const char *tok, size_t tlen, const char *prefix)
     return memcmp(tok, prefix, plen) == 0;
 }
 
+static int tok_eq_ci(const char *tok, size_t tlen, const char *lit)
+{
+    size_t llen = strlen(lit);
+    if (tlen != llen) return 0;
+    return ci_memcmp(tok, lit, tlen) == 0;
+}
+
+static int tok_prefix_ci(const char *tok, size_t tlen, const char *prefix)
+{
+    size_t plen = strlen(prefix);
+    if (tlen < plen) return 0;
+    return ci_memcmp(tok, prefix, plen) == 0;
+}
+
 static int tok_in_list(const char *tok, size_t tlen, const char **list)
 {
     for (int i = 0; list[i]; i++) {
@@ -528,6 +542,409 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
     return redir;
 }
 
+/* ----- Per-segment Cisco IOS classification ----- */
+
+static CmdSafetyLevel classify_cisco_ios_segment(const char *seg, size_t seg_len,
+                                                   char *reason_buf, size_t reason_buf_size)
+{
+    const char *p = seg;
+    const char *tok1_start, *tok2_start, *tok3_start;
+    size_t tok1_len, tok2_len, tok3_len;
+
+    (void)seg_len;
+
+    if (!next_token(&p, &tok1_start, &tok1_len))
+        return CMD_SAFE;
+
+    /* --- Safe commands --- */
+    if (tok_prefix_ci(tok1_start, tok1_len, "show"))
+        return CMD_SAFE;
+    if (tok_eq_ci(tok1_start, tok1_len, "ping") ||
+        tok_eq_ci(tok1_start, tok1_len, "traceroute") ||
+        tok_eq_ci(tok1_start, tok1_len, "terminal") ||
+        tok_eq_ci(tok1_start, tok1_len, "enable") ||
+        tok_eq_ci(tok1_start, tok1_len, "disable") ||
+        tok_eq_ci(tok1_start, tok1_len, "exit") ||
+        tok_eq_ci(tok1_start, tok1_len, "end") ||
+        tok_eq_ci(tok1_start, tok1_len, "dir") ||
+        tok_eq_ci(tok1_start, tok1_len, "verify"))
+        return CMD_SAFE;
+
+    /* --- Critical: standalone commands --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "reload")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "reload: device reboot");
+        return CMD_CRITICAL;
+    }
+    if (tok_eq_ci(tok1_start, tok1_len, "shutdown")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "shutdown: disables interface");
+        return CMD_CRITICAL;
+    }
+    if (tok_eq_ci(tok1_start, tok1_len, "redundancy")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_eq_ci(tok2_start, tok2_len, "force-switchover")) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "redundancy force-switchover");
+            return CMD_CRITICAL;
+        }
+    }
+
+    /* --- Two-token critical checks --- */
+    {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            /* write erase */
+            if (tok_eq_ci(tok1_start, tok1_len, "write") &&
+                tok_eq_ci(tok2_start, tok2_len, "erase")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "write erase: clears startup config");
+                return CMD_CRITICAL;
+            }
+            /* erase startup-config / erase nvram: */
+            if (tok_eq_ci(tok1_start, tok1_len, "erase") &&
+                (tok_prefix_ci(tok2_start, tok2_len, "startup") ||
+                 tok_prefix_ci(tok2_start, tok2_len, "nvram"))) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "erase config");
+                return CMD_CRITICAL;
+            }
+            /* delete flash: */
+            if (tok_eq_ci(tok1_start, tok1_len, "delete") &&
+                tok_prefix_ci(tok2_start, tok2_len, "flash")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "delete flash");
+                return CMD_CRITICAL;
+            }
+            /* format flash: */
+            if (tok_eq_ci(tok1_start, tok1_len, "format") &&
+                tok_prefix_ci(tok2_start, tok2_len, "flash")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "format flash");
+                return CMD_CRITICAL;
+            }
+            /* config replace */
+            if (tok_eq_ci(tok1_start, tok1_len, "config") &&
+                tok_eq_ci(tok2_start, tok2_len, "replace")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "config replace");
+                return CMD_CRITICAL;
+            }
+        }
+    }
+
+    /* --- "clear" critical patterns --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "clear")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            /* clear crypto sa / clear crypto isakmp */
+            if (tok_eq_ci(tok2_start, tok2_len, "crypto")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "clear crypto: drops VPN sessions");
+                return CMD_CRITICAL;
+            }
+            /* clear ip bgp / clear ip ospf */
+            if (tok_eq_ci(tok2_start, tok2_len, "ip")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len)) {
+                    if (tok_prefix_ci(tok3_start, tok3_len, "bgp") ||
+                        tok_prefix_ci(tok3_start, tok3_len, "ospf")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "clear ip routing: resets adjacencies");
+                        return CMD_CRITICAL;
+                    }
+                }
+            }
+        }
+        /* Other clear commands default to write */
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "clear command");
+        return CMD_WRITE;
+    }
+
+    /* --- "no" prefix --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "no")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            /* no router ospf/eigrp/bgp -> critical */
+            if (tok_eq_ci(tok2_start, tok2_len, "router")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len)) {
+                    if (tok_eq_ci(tok3_start, tok3_len, "ospf") ||
+                        tok_eq_ci(tok3_start, tok3_len, "eigrp") ||
+                        tok_eq_ci(tok3_start, tok3_len, "bgp")) {
+                        if (reason_buf && reason_buf_size > 0)
+                            snprintf(reason_buf, reason_buf_size, "no router: removes routing process");
+                        return CMD_CRITICAL;
+                    }
+                }
+            }
+            /* no spanning-tree vlan */
+            if (tok_eq_ci(tok2_start, tok2_len, "spanning-tree")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len) &&
+                    tok_eq_ci(tok3_start, tok3_len, "vlan")) {
+                    if (reason_buf && reason_buf_size > 0)
+                        snprintf(reason_buf, reason_buf_size, "no spanning-tree vlan");
+                    return CMD_CRITICAL;
+                }
+            }
+            /* no vlan */
+            if (tok_eq_ci(tok2_start, tok2_len, "vlan")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "no vlan: removes VLAN");
+                return CMD_CRITICAL;
+            }
+        }
+        /* no <anything else> -> write */
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "no (negation): modifies config");
+        return CMD_WRITE;
+    }
+
+    /* --- Write commands --- */
+    if (tok_eq_ci(tok1_start, tok1_len, "configure") ||
+        tok_eq_ci(tok1_start, tok1_len, "ip") ||
+        tok_eq_ci(tok1_start, tok1_len, "switchport") ||
+        tok_eq_ci(tok1_start, tok1_len, "channel-group") ||
+        tok_eq_ci(tok1_start, tok1_len, "router") ||
+        tok_eq_ci(tok1_start, tok1_len, "network") ||
+        tok_eq_ci(tok1_start, tok1_len, "route-map") ||
+        tok_eq_ci(tok1_start, tok1_len, "prefix-list") ||
+        tok_eq_ci(tok1_start, tok1_len, "access-list") ||
+        tok_eq_ci(tok1_start, tok1_len, "username") ||
+        tok_eq_ci(tok1_start, tok1_len, "hostname") ||
+        tok_eq_ci(tok1_start, tok1_len, "banner") ||
+        tok_eq_ci(tok1_start, tok1_len, "logging") ||
+        tok_eq_ci(tok1_start, tok1_len, "copy") ||
+        tok_eq_ci(tok1_start, tok1_len, "boot")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "config command: %.*s",
+                     (int)tok1_len, tok1_start);
+        return CMD_WRITE;
+    }
+    /* write memory / write (without erase, already handled) */
+    if (tok_eq_ci(tok1_start, tok1_len, "write")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "write memory: saves config");
+        return CMD_WRITE;
+    }
+    /* enable secret / enable password */
+    if (tok_eq_ci(tok1_start, tok1_len, "enable")) {
+        /* Already returned SAFE for bare "enable" above; if we get here
+         * it means there's a subcommand like "enable secret" */
+        return CMD_SAFE;  /* bare enable already handled */
+    }
+    if (tok_eq_ci(tok1_start, tok1_len, "ntp") ||
+        tok_eq_ci(tok1_start, tok1_len, "interface") ||
+        tok_eq_ci(tok1_start, tok1_len, "vlan") ||
+        tok_eq_ci(tok1_start, tok1_len, "spanning-tree") ||
+        tok_eq_ci(tok1_start, tok1_len, "snmp-server") ||
+        tok_eq_ci(tok1_start, tok1_len, "line") ||
+        tok_eq_ci(tok1_start, tok1_len, "service")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "config command: %.*s",
+                     (int)tok1_len, tok1_start);
+        return CMD_WRITE;
+    }
+
+    /* Default for network devices: conservative -> CMD_WRITE */
+    return CMD_WRITE;
+}
+
+/* ----- Per-segment Cisco NX-OS classification (inherits IOS + extras) ----- */
+
+static CmdSafetyLevel classify_cisco_nxos_segment(const char *seg, size_t seg_len,
+                                                    char *reason_buf, size_t reason_buf_size)
+{
+    const char *p = seg;
+    const char *tok1_start, *tok2_start, *tok3_start;
+    size_t tok1_len, tok2_len, tok3_len;
+
+    (void)seg_len;
+
+    if (!next_token(&p, &tok1_start, &tok1_len))
+        return CMD_SAFE;
+
+    /* NX-OS specific critical: reload module */
+    if (tok_eq_ci(tok1_start, tok1_len, "reload")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "reload: device/module reboot");
+        return CMD_CRITICAL;
+    }
+
+    /* install all */
+    if (tok_eq_ci(tok1_start, tok1_len, "install")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_eq_ci(tok2_start, tok2_len, "all")) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "install all: system upgrade");
+            return CMD_CRITICAL;
+        }
+    }
+
+    /* no vpc / no vpc domain / no feature nv overlay / vpc role preempt */
+    if (tok_eq_ci(tok1_start, tok1_len, "no")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            if (tok_eq_ci(tok2_start, tok2_len, "vpc")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "no vpc: removes vPC config");
+                return CMD_CRITICAL;
+            }
+            if (tok_eq_ci(tok2_start, tok2_len, "feature")) {
+                const char *p3 = p2;
+                if (next_token(&p3, &tok3_start, &tok3_len) &&
+                    tok_prefix_ci(tok3_start, tok3_len, "nv")) {
+                    if (reason_buf && reason_buf_size > 0)
+                        snprintf(reason_buf, reason_buf_size, "no feature nv overlay: disables VXLAN");
+                    return CMD_CRITICAL;
+                }
+            }
+        }
+        /* Fall through to IOS handler for other "no" commands */
+    }
+
+    if (tok_eq_ci(tok1_start, tok1_len, "vpc")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_eq_ci(tok2_start, tok2_len, "role")) {
+            const char *p3 = p2;
+            if (next_token(&p3, &tok3_start, &tok3_len) &&
+                tok_eq_ci(tok3_start, tok3_len, "preempt")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "vpc role preempt");
+                return CMD_CRITICAL;
+            }
+        }
+    }
+
+    /* NX-OS specific write: feature, checkpoint, rollback */
+    if (tok_eq_ci(tok1_start, tok1_len, "feature") ||
+        tok_eq_ci(tok1_start, tok1_len, "checkpoint") ||
+        tok_eq_ci(tok1_start, tok1_len, "rollback")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "NX-OS config: %.*s",
+                     (int)tok1_len, tok1_start);
+        return CMD_WRITE;
+    }
+
+    /* Delegate to IOS classifier for everything else */
+    return classify_cisco_ios_segment(seg, seg_len, reason_buf, reason_buf_size);
+}
+
+/* ----- Per-segment Cisco ASA classification ----- */
+
+static CmdSafetyLevel classify_cisco_asa_segment(const char *seg, size_t seg_len,
+                                                   char *reason_buf, size_t reason_buf_size)
+{
+    const char *p = seg;
+    const char *tok1_start, *tok2_start, *tok3_start;
+    size_t tok1_len, tok2_len, tok3_len;
+
+    (void)seg_len;
+
+    if (!next_token(&p, &tok1_start, &tok1_len))
+        return CMD_SAFE;
+
+    /* ASA specific critical: no failover, failover active/reload-standby */
+    if (tok_eq_ci(tok1_start, tok1_len, "no")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            if (tok_eq_ci(tok2_start, tok2_len, "failover")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "no failover: disables HA");
+                return CMD_CRITICAL;
+            }
+            if (tok_eq_ci(tok2_start, tok2_len, "nameif")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "no nameif: removes interface name");
+                return CMD_CRITICAL;
+            }
+            if (tok_eq_ci(tok2_start, tok2_len, "context")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "no context: removes security context");
+                return CMD_CRITICAL;
+            }
+        }
+        /* Fall through to IOS for other "no" commands */
+    }
+
+    if (tok_eq_ci(tok1_start, tok1_len, "failover")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len)) {
+            if (tok_eq_ci(tok2_start, tok2_len, "active") ||
+                tok_eq_ci(tok2_start, tok2_len, "reload-standby")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "failover action");
+                return CMD_CRITICAL;
+            }
+        }
+    }
+
+    /* clear configure all */
+    if (tok_eq_ci(tok1_start, tok1_len, "clear")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_eq_ci(tok2_start, tok2_len, "configure")) {
+            const char *p3 = p2;
+            if (next_token(&p3, &tok3_start, &tok3_len) &&
+                tok_eq_ci(tok3_start, tok3_len, "all")) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "clear configure all: wipes config");
+                return CMD_CRITICAL;
+            }
+        }
+        /* Delegate other clear to IOS */
+    }
+
+    /* configure factory-default */
+    if (tok_eq_ci(tok1_start, tok1_len, "configure")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_prefix_ci(tok2_start, tok2_len, "factory")) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "configure factory-default");
+            return CMD_CRITICAL;
+        }
+    }
+
+    /* vpn-sessiondb logoff */
+    if (tok_eq_ci(tok1_start, tok1_len, "vpn-sessiondb")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_eq_ci(tok2_start, tok2_len, "logoff")) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "vpn-sessiondb logoff: disconnects VPN users");
+            return CMD_CRITICAL;
+        }
+    }
+
+    /* ASA specific write commands */
+    if (tok_eq_ci(tok1_start, tok1_len, "nat") ||
+        tok_eq_ci(tok1_start, tok1_len, "access-group") ||
+        tok_eq_ci(tok1_start, tok1_len, "object-group") ||
+        tok_eq_ci(tok1_start, tok1_len, "route") ||
+        tok_eq_ci(tok1_start, tok1_len, "tunnel-group") ||
+        tok_eq_ci(tok1_start, tok1_len, "group-policy") ||
+        tok_eq_ci(tok1_start, tok1_len, "crypto") ||
+        tok_eq_ci(tok1_start, tok1_len, "aaa") ||
+        tok_eq_ci(tok1_start, tok1_len, "policy-map") ||
+        tok_eq_ci(tok1_start, tok1_len, "service-policy") ||
+        tok_eq_ci(tok1_start, tok1_len, "security-level") ||
+        tok_eq_ci(tok1_start, tok1_len, "nameif")) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "ASA config: %.*s",
+                     (int)tok1_len, tok1_start);
+        return CMD_WRITE;
+    }
+
+    /* Delegate to IOS classifier for shared commands */
+    return classify_cisco_ios_segment(seg, seg_len, reason_buf, reason_buf_size);
+}
+
 /* ----- Top-level command classification ----- */
 
 CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
@@ -563,13 +980,27 @@ CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
         CmdSafetyLevel seg_level;
 
         switch (platform) {
+        case CMD_PLATFORM_CISCO_IOS:
+            seg_level = classify_cisco_ios_segment(seg_start, seg_len,
+                            worst == CMD_SAFE ? reason_buf : NULL,
+                            worst == CMD_SAFE ? reason_buf_size : 0);
+            break;
+        case CMD_PLATFORM_CISCO_NXOS:
+            seg_level = classify_cisco_nxos_segment(seg_start, seg_len,
+                            worst == CMD_SAFE ? reason_buf : NULL,
+                            worst == CMD_SAFE ? reason_buf_size : 0);
+            break;
+        case CMD_PLATFORM_CISCO_ASA:
+            seg_level = classify_cisco_asa_segment(seg_start, seg_len,
+                            worst == CMD_SAFE ? reason_buf : NULL,
+                            worst == CMD_SAFE ? reason_buf_size : 0);
+            break;
         case CMD_PLATFORM_LINUX:
         default:
             seg_level = classify_linux_segment(seg_start, seg_len,
                             worst == CMD_SAFE ? reason_buf : NULL,
                             worst == CMD_SAFE ? reason_buf_size : 0);
             break;
-        /* Network platform classification added in later tasks */
         }
 
         if (is_pipe_target) {
