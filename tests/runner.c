@@ -1095,6 +1095,23 @@ int test_thinking_tick_idle_noop(void);
 int test_thinking_tick_complete_noop(void);
 int test_thinking_reset(void);
 
+/* test_chat_activity.c */
+int test_activity_init(void);
+int test_activity_phase_transition(void);
+int test_activity_skip_thinking(void);
+int test_activity_health_green(void);
+int test_activity_health_yellow(void);
+int test_activity_health_red(void);
+int test_activity_health_boundary_10s(void);
+int test_activity_health_boundary_30s(void);
+int test_activity_token_resets_health(void);
+int test_activity_connection_lost(void);
+int test_activity_exec_progress(void);
+int test_activity_format_processing(void);
+int test_activity_format_executing(void);
+int test_activity_format_stalled(void);
+int test_activity_reset(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -2218,6 +2235,23 @@ int main(void) {
     failed += test_thinking_tick_idle_noop();
     failed += test_thinking_tick_complete_noop();
     failed += test_thinking_reset();
+
+    printf("\n--- Activity Monitor ---\n");
+    failed += test_activity_init();
+    failed += test_activity_phase_transition();
+    failed += test_activity_skip_thinking();
+    failed += test_activity_health_green();
+    failed += test_activity_health_yellow();
+    failed += test_activity_health_red();
+    failed += test_activity_health_boundary_10s();
+    failed += test_activity_health_boundary_30s();
+    failed += test_activity_token_resets_health();
+    failed += test_activity_connection_lost();
+    failed += test_activity_exec_progress();
+    failed += test_activity_format_processing();
+    failed += test_activity_format_executing();
+    failed += test_activity_format_stalled();
+    failed += test_activity_reset();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
