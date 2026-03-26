@@ -81,6 +81,7 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 
 static LRESULT CALLBACK ChatListWndProc(HWND, UINT, WPARAM, LPARAM);
 static void     recalc_layout(ChatListView *lv);
+static void     recalc_dpi_constants(ChatListView *lv);
 static void     update_scrollbar(ChatListView *lv);
 static int      measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                              int width);
@@ -543,6 +544,17 @@ static void clamp_scroll(ChatListView *lv)
     if (max_scroll < 0) max_scroll = 0;
     if (lv->scroll_y > max_scroll) lv->scroll_y = max_scroll;
     if (lv->scroll_y < 0) lv->scroll_y = 0;
+}
+
+/* ── Recalculate scaled layout constants from current dpi_scale ─────── */
+
+static void recalc_dpi_constants(ChatListView *lv)
+{
+    lv->msg_gap    = CLV_SCALE(lv, BASE_MSG_GAP);
+    lv->user_pad_h = CLV_SCALE(lv, BASE_USER_PAD_H);
+    lv->user_pad_v = CLV_SCALE(lv, BASE_USER_PAD_V);
+    lv->ai_indent  = CLV_SCALE(lv, BASE_AI_INDENT);
+    lv->code_pad   = CLV_SCALE(lv, BASE_CODE_PAD);
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -1165,6 +1177,7 @@ static void on_paint(ChatListView *lv)
 
 static void on_lbuttondown(ChatListView *lv, int mx, int my)
 {
+    SetFocus(lv->hwnd);   /* Acquire keyboard focus so WM_KEYDOWN fires */
     int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
     int btn_w    = CLV_SCALE(lv, BASE_BTN_W);
     int btn_h    = CLV_SCALE(lv, BASE_BTN_H);
@@ -1333,6 +1346,32 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         lv->hwnd = hwnd;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)lv);
 
+        /* Detect DPI: try GetDpiForWindow (Win10 1607+) via runtime lookup,
+         * fall back to GetDeviceCaps on older systems.
+         * Use a union to avoid ISO C pedantic pointer-cast warnings. */
+        {
+            typedef UINT (WINAPI *GetDpiForWindow_t)(HWND);
+            union { FARPROC proc; GetDpiForWindow_t fn; } u;
+            HMODULE hUser32 = GetModuleHandleA("user32.dll");
+            u.fn = NULL;
+            if (hUser32) {
+                u.proc = GetProcAddress(hUser32, "GetDpiForWindow");
+            }
+            UINT dpi = 96;
+            if (u.fn) {
+                dpi = u.fn(hwnd);
+            } else {
+                HDC hdc_screen = GetDC(NULL);
+                if (hdc_screen) {
+                    dpi = (UINT)GetDeviceCaps(hdc_screen, LOGPIXELSX);
+                    ReleaseDC(NULL, hdc_screen);
+                }
+            }
+            lv->dpi_scale = (float)dpi / 96.0f;
+        }
+
+        recalc_dpi_constants(lv);
+
         RECT rc;
         GetClientRect(hwnd, &rc);
         lv->viewport_height = rc.bottom - rc.top;
@@ -1482,6 +1521,59 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         lv->scroll_y -= (delta * scroll_amount) / WHEEL_DELTA;
         clamp_scroll(lv);
 
+        if (lv->scroll_y != old_pos) {
+            update_scrollbar(lv);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+    }
+
+    case WM_DPICHANGED: {
+        UINT new_dpi = HIWORD(wParam);   /* new DPI value */
+        lv->dpi_scale = (float)new_dpi / 96.0f;
+        recalc_dpi_constants(lv);
+        /* Use the suggested window rect provided by the system */
+        RECT *suggested = (RECT *)lParam;
+        SetWindowPos(hwnd, NULL,
+                     suggested->left, suggested->top,
+                     suggested->right  - suggested->left,
+                     suggested->bottom - suggested->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        recalc_layout(lv);
+        InvalidateRect(hwnd, NULL, TRUE);
+        return 0;
+    }
+
+    case WM_KEYDOWN: {
+        int old_pos = lv->scroll_y;
+        int line_h  = lv->msg_gap > 0 ? lv->msg_gap * 3 : 36;
+
+        switch (wParam) {
+        case VK_PRIOR:   /* Page Up */
+            lv->scroll_y -= lv->viewport_height;
+            break;
+        case VK_NEXT:    /* Page Down */
+            lv->scroll_y += lv->viewport_height;
+            break;
+        case VK_HOME:
+            lv->scroll_y = 0;
+            break;
+        case VK_END: {
+            int max_s = lv->total_height - lv->viewport_height;
+            lv->scroll_y = max_s > 0 ? max_s : 0;
+            break;
+        }
+        case VK_UP:
+            lv->scroll_y -= line_h;
+            break;
+        case VK_DOWN:
+            lv->scroll_y += line_h;
+            break;
+        default:
+            break;
+        }
+
+        clamp_scroll(lv);
         if (lv->scroll_y != old_pos) {
             update_scrollbar(lv);
             InvalidateRect(hwnd, NULL, FALSE);
