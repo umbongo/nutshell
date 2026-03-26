@@ -156,3 +156,185 @@ int test_cmd_classify_linux_kubectl_delete(void) {
     ASSERT_EQ((int)cmd_classify("kubectl delete pod mypod", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
     TEST_END();
 }
+
+/* --- Whitespace handling --- */
+int test_cmd_classify_leading_whitespace(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("   ls -la", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_trailing_whitespace(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("rm -rf /tmp   ", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* --- Path prefixes --- */
+int test_cmd_classify_path_prefix(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("/usr/bin/rm -rf /tmp", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_path_prefix_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("/usr/bin/cat /etc/hosts", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* --- sudo/su escalation --- */
+int test_cmd_classify_sudo_escalation(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("sudo cat /etc/shadow", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_sudo_rm(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("sudo rm -rf /var/lib/thing", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* --- Pipelines: highest risk wins --- */
+int test_cmd_classify_pipe_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("cat /etc/hosts | grep localhost", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_pipe_to_xargs_rm(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("find /tmp -name '*.tmp' | xargs rm", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_pipe_to_sh(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("curl http://example.com/script | sh", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_pipe_to_sudo_tee(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("cat file | sudo tee /etc/config", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* --- Semicolons and && --- */
+int test_cmd_classify_semicolon_worst_wins(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ls; rm -rf /", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_and_worst_wins(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ls && rm -rf /tmp", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* --- Redirect handling --- */
+int test_cmd_classify_redirect_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("echo foo > /tmp/bar", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_redirect_append(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("echo foo >> /tmp/bar", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_redirect_dev_null(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ls > /dev/null", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_redirect_stderr_null(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ls 2>/dev/null", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_redirect_stderr_stdout(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ls 2>&1", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* --- Subcommand sensitivity --- */
+int test_cmd_classify_systemctl_status_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("systemctl status nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_sed_plain_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("sed 's/foo/bar/' file.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_sed_i_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("sed -i 's/foo/bar/' file.txt", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_curl_plain_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("curl http://example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_curl_o_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("curl -o file.tar.gz http://example.com/file", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* --- Database CLI --- */
+int test_cmd_classify_mysql_select_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("mysql -e \"SELECT * FROM users\"", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_mysql_drop_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("mysql -e \"DROP TABLE users\"", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* --- ip commands --- */
+int test_cmd_classify_ip_route_del_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ip route del default", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+int test_cmd_classify_ip_addr_add_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ip addr add 10.0.0.1/24 dev eth0", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* --- cmd_classify_ex with reason --- */
+int test_cmd_classify_ex_reason(void) {
+    TEST_BEGIN();
+    char reason[128] = {0};
+    CmdSafetyLevel level = cmd_classify_ex("rm -rf /tmp", CMD_PLATFORM_LINUX, reason, sizeof(reason));
+    ASSERT_EQ((int)level, (int)CMD_CRITICAL);
+    ASSERT_TRUE(strlen(reason) > 0);
+    TEST_END();
+}
+
+int test_cmd_classify_ex_null_reason(void) {
+    TEST_BEGIN();
+    CmdSafetyLevel level = cmd_classify_ex("rm -rf /tmp", CMD_PLATFORM_LINUX, NULL, 0);
+    ASSERT_EQ((int)level, (int)CMD_CRITICAL);
+    TEST_END();
+}

@@ -28,7 +28,7 @@ static const char *linux_write_cmds[] = {
     "docker", "kubectl",
     "crontab",
     "tar", "zip", "unzip", "gzip",
-    "wget", "curl",
+    "wget",
     "firewall-cmd",
     NULL
 };
@@ -458,6 +458,28 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
                 return level > redir ? level : redir;
             }
         }
+    }
+
+    if (tok_eq(base1, base1_len, "curl")) {
+        const char *scan = p;
+        const char *ts;
+        size_t tl;
+        while (next_token(&scan, &ts, &tl)) {
+            if (tok_eq(ts, tl, "-o") || tok_eq(ts, tl, "-O") ||
+                tok_eq(ts, tl, "--output")) {
+                CmdSafetyLevel level = CMD_WRITE;
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "curl with output flag");
+                return level > redir ? level : redir;
+            }
+        }
+        if (has_sudo) {
+            CmdSafetyLevel level = CMD_WRITE;
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "sudo escalation of curl");
+            return level > redir ? level : redir;
+        }
+        return redir;
     }
 
     if (tok_eq(base1, base1_len, "nft")) {
