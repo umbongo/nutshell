@@ -10,6 +10,21 @@
 #define NUM_UI_THEMES 4
 
 typedef struct {
+    unsigned int user_bubble;        /* User bubble background */
+    unsigned int user_text;          /* User bubble text */
+    unsigned int ai_accent;          /* AI avatar and name color */
+    unsigned int cmd_bg;             /* Command block background */
+    unsigned int cmd_border;         /* Command block border */
+    unsigned int cmd_text;           /* Command text (monospace) */
+    unsigned int thinking_border;    /* Thinking region left border */
+    unsigned int thinking_text;      /* Thinking content text */
+    unsigned int status_text;        /* Status message text */
+    unsigned int indicator_green;    /* Healthy activity dot */
+    unsigned int indicator_yellow;   /* Slow activity dot */
+    unsigned int indicator_red;      /* Stalled activity dot */
+} ThemeChatColors;
+
+typedef struct {
     const char  *name;          /* "Onyx Synapse", "Onyx Light", etc. */
     unsigned int bg_primary;    /* Main window / dialog background */
     unsigned int bg_secondary;  /* Panels, inactive tabs, input fields */
@@ -19,6 +34,7 @@ typedef struct {
     unsigned int border;        /* Subtle borders and separators */
     unsigned int terminal_fg;   /* Terminal default foreground */
     unsigned int terminal_bg;   /* Terminal default background */
+    ThemeChatColors chat;       /* Chat panel colors */
 } ThemeColors;
 
 /* Get the built-in theme by index (0..NUM_UI_THEMES-1).

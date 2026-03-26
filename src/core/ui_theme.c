@@ -12,6 +12,20 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         0x2A2A2A, /* border       */
         0xE0E0E0, /* terminal_fg  */
         0x121212, /* terminal_bg  */
+        .chat = {
+            0x007AFF, /* user_bubble — accent blue */
+            0xFFFFFF, /* user_text — white on blue */
+            0x007AFF, /* ai_accent — blue */
+            0x1A1A2E, /* cmd_bg — darker than bg */
+            0x2A2A3E, /* cmd_border */
+            0xC0C0C0, /* cmd_text — monospace light */
+            0x007AFF, /* thinking_border — accent */
+            0x888888, /* thinking_text — dim */
+            0x666666, /* status_text — dimmer */
+            0x34C759, /* indicator_green */
+            0xFFCC00, /* indicator_yellow */
+            0xFF3B30, /* indicator_red */
+        },
     },
     {
         "Onyx Light",
@@ -23,6 +37,12 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         0xDCDCE0, /* border       */
         0x1D1D1F, /* terminal_fg  */
         0xF5F5F7, /* terminal_bg  */
+        .chat = {
+            0x007AFF, 0xFFFFFF, 0x007AFF,
+            0xEEEEF2, 0xDCDCE0, 0x333333,
+            0x007AFF, 0x86868B, 0xAAAAAA,
+            0x34C759, 0xFFCC00, 0xFF3B30,
+        },
     },
     {
         "Sage & Sand",
@@ -34,6 +54,12 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         0x3F4138, /* border       */
         0xEAE7DC, /* terminal_fg  */
         0x2B2D24, /* terminal_bg  */
+        .chat = {
+            0xA3B18A, 0x1A1A14, 0xA3B18A,
+            0x232520, 0x3F4138, 0xD4D1C4,
+            0xA3B18A, 0xA09E93, 0x7A7868,
+            0x8FBC6A, 0xD4AA4A, 0xC75A3A,
+        },
     },
     {
         "Moss & Mist",
@@ -45,6 +71,12 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         0xD5D8D3, /* border       */
         0x354F52, /* terminal_fg  */
         0xF1F3F0, /* terminal_bg  */
+        .chat = {
+            0x84A98C, 0xFFFFFF, 0x84A98C,
+            0xE8EBE6, 0xD5D8D3, 0x354F52,
+            0x84A98C, 0x6B8A8D, 0x9AAFB1,
+            0x52B788, 0xE9C46A, 0xE76F51,
+        },
     },
 };
 
