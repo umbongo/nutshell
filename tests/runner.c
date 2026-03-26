@@ -1067,6 +1067,23 @@ int test_cmd_classify_heuristic_negation_write(void);
 int test_cmd_classify_heuristic_reload_always_critical(void);
 int test_cmd_classify_heuristic_clear_write(void);
 
+/* test_chat_msg.c */
+int test_chat_msg_list_init(void);
+int test_chat_msg_append_user(void);
+int test_chat_msg_append_order(void);
+int test_chat_msg_remove_middle(void);
+int test_chat_msg_remove_head(void);
+int test_chat_msg_remove_tail(void);
+int test_chat_msg_remove_only(void);
+int test_chat_msg_set_text(void);
+int test_chat_msg_set_command(void);
+int test_chat_msg_set_thinking(void);
+int test_chat_msg_empty_text(void);
+int test_chat_msg_null_text(void);
+int test_chat_msg_unique_ids(void);
+int test_chat_msg_command_too_long(void);
+int test_chat_msg_list_clear(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -2162,6 +2179,23 @@ int main(void) {
     failed += test_cmd_classify_heuristic_negation_write();
     failed += test_cmd_classify_heuristic_reload_always_critical();
     failed += test_cmd_classify_heuristic_clear_write();
+
+    printf("\n--- Chat Message List ---\n");
+    failed += test_chat_msg_list_init();
+    failed += test_chat_msg_append_user();
+    failed += test_chat_msg_append_order();
+    failed += test_chat_msg_remove_middle();
+    failed += test_chat_msg_remove_head();
+    failed += test_chat_msg_remove_tail();
+    failed += test_chat_msg_remove_only();
+    failed += test_chat_msg_set_text();
+    failed += test_chat_msg_set_command();
+    failed += test_chat_msg_set_thinking();
+    failed += test_chat_msg_empty_text();
+    failed += test_chat_msg_null_text();
+    failed += test_chat_msg_unique_ids();
+    failed += test_chat_msg_command_too_long();
+    failed += test_chat_msg_list_clear();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
