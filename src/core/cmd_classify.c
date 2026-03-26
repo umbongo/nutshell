@@ -954,8 +954,8 @@ static CmdSafetyLevel classify_aruba_cx_segment(const char *seg, size_t seg_len,
                                                   char *reason_buf, size_t reason_buf_size)
 {
     const char *p = seg;
-    const char *tok1_start, *tok2_start, *tok3_start;
-    size_t tok1_len, tok2_len, tok3_len;
+    const char *tok1_start, *tok2_start;
+    size_t tok1_len, tok2_len;
 
     (void)seg_len;
 

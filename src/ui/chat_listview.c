@@ -470,7 +470,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         HBRUSH bar_br = CreateSolidBrush(RGB_FROM_THEME(tc->thinking_border));
 
         /* Measure thinking text height to set bar bottom */
-        HGDIOBJ think_font = SelectObject(hdc, lv->hSmallFont
+        HGDIOBJ old_think_font = SelectObject(hdc, lv->hSmallFont
                                  ? lv->hSmallFont
                                  : GetStockObject(DEFAULT_GUI_FONT));
         SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
@@ -493,7 +493,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         /* Draw thinking text */
         draw_text_utf8(hdc, item->u.ai.thinking_text, &think_rc,
                        DT_WORDBREAK | DT_NOPREFIX);
-        SelectObject(hdc, think_font);
+        SelectObject(hdc, old_think_font);
 
         content_top += think_h + CLV_SCALE(lv, 8);
     }
