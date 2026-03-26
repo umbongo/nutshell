@@ -103,15 +103,32 @@ static int render_span(HDC hdc, const char *line, const MdSpan *span,
 
     /* Select font based on span type */
     HFONT sel_font = hFont;
+    HFONT created_font = NULL;  /* Track dynamically created fonts */
     switch (span->type) {
     case MD_SPAN_BOLD:
-    case MD_SPAN_BOLD_ITALIC:
         sel_font = hBoldFont;
         break;
+    case MD_SPAN_BOLD_ITALIC: {
+        /* Create bold+italic from bold font */
+        LOGFONT lf;
+        GetObject(hBoldFont, sizeof(lf), &lf);
+        lf.lfItalic = TRUE;
+        created_font = CreateFontIndirect(&lf);
+        sel_font = created_font ? created_font : hBoldFont;
+        break;
+    }
+    case MD_SPAN_ITALIC: {
+        /* Create italic from regular font */
+        LOGFONT lf;
+        GetObject(hFont, sizeof(lf), &lf);
+        lf.lfItalic = TRUE;
+        created_font = CreateFontIndirect(&lf);
+        sel_font = created_font ? created_font : hFont;
+        break;
+    }
     case MD_SPAN_CODE:
         sel_font = hMonoFont;
         break;
-    case MD_SPAN_ITALIC:
     case MD_SPAN_STRIKETHROUGH:
     case MD_SPAN_TEXT:
         sel_font = hFont;
@@ -176,6 +193,7 @@ static int render_span(HDC hdc, const char *line, const MdSpan *span,
     }
 
     SelectObject(hdc, old_font);
+    if (created_font) DeleteObject(created_font);
     mdbuf_free(&wb);
 
     *out_height = h;
@@ -243,8 +261,14 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
         int line_len = (int)(eol - p);
 
         /* Make a NUL-terminated copy for md_classify_line */
-        char *line_buf = (char *)malloc((size_t)line_len + 1);
-        if (!line_buf) break;
+        char stack_buf[512];
+        char *line_buf;
+        if (line_len < (int)sizeof(stack_buf)) {
+            line_buf = stack_buf;
+        } else {
+            line_buf = (char *)malloc((size_t)line_len + 1);
+            if (!line_buf) break;
+        }
         memcpy(line_buf, p, (size_t)line_len);
         line_buf[line_len] = '\0';
 
@@ -316,18 +340,27 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
             const char *content = line_buf + info.content_offset;
             int content_len = line_len - info.content_offset;
 
-            /* Use bold font for headings */
-            HFONT old_font = (HFONT)SelectObject(hdc, hBoldFont);
+            /* Create a scaled bold font for headings:
+             * h1 = 150%, h2 = 125%, h3 = 110% of base */
+            LOGFONT lf;
+            GetObject(hBoldFont, sizeof(lf), &lf);
+            if (info.heading_level == 1)
+                lf.lfHeight = (LONG)(lf.lfHeight * 150 / 100);
+            else if (info.heading_level == 2)
+                lf.lfHeight = (LONG)(lf.lfHeight * 125 / 100);
+            /* h3 keeps base size */
 
-            /* For h1/h2, scale up by adjusting the font temporarily —
-             * but since we only have the fonts passed in, we render
-             * headings with the bold font and add extra spacing. */
+            HFONT heading_font = CreateFontIndirect(&lf);
+            HFONT use_font = heading_font ? heading_font : hBoldFont;
+
+            HFONT old_font = (HFONT)SelectObject(hdc, use_font);
             int h = render_inline_spans(hdc, content, content_len,
                                         x, cur_y, max_width,
-                                        hBoldFont, hMonoFont, hBoldFont,
+                                        use_font, hMonoFont, use_font,
                                         theme, paint);
             cur_y += h + MD_HEADING_EXTRA_V;
             SelectObject(hdc, old_font);
+            if (heading_font) DeleteObject(heading_font);
             break;
         }
 
@@ -486,7 +519,7 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
         }
         }
 
-        free(line_buf);
+        if (line_buf != stack_buf) free(line_buf);
 
         /* Advance past the newline */
         if (*eol == '\n')
