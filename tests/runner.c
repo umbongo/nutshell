@@ -1112,6 +1112,26 @@ int test_activity_format_executing(void);
 int test_activity_format_stalled(void);
 int test_activity_reset(void);
 
+/* test_chat_approval.c */
+int test_approval_init(void);
+int test_approval_add_safe(void);
+int test_approval_add_blocked(void);
+int test_approval_add_write_permitted(void);
+int test_approval_approve(void);
+int test_approval_deny(void);
+int test_approval_approve_all(void);
+int test_approval_auto_approve_flow(void);
+int test_approval_auto_approve_timeout(void);
+int test_approval_auto_approve_revoke(void);
+int test_approval_auto_approve_adds(void);
+int test_approval_all_decided(void);
+int test_approval_next_approved(void);
+int test_approval_execute_complete(void);
+int test_approval_empty_command(void);
+int test_approval_whitespace_command(void);
+int test_approval_queue_full(void);
+int test_approval_reset(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -2252,6 +2272,26 @@ int main(void) {
     failed += test_activity_format_executing();
     failed += test_activity_format_stalled();
     failed += test_activity_reset();
+
+    printf("\n--- Command Approval ---\n");
+    failed += test_approval_init();
+    failed += test_approval_add_safe();
+    failed += test_approval_add_blocked();
+    failed += test_approval_add_write_permitted();
+    failed += test_approval_approve();
+    failed += test_approval_deny();
+    failed += test_approval_approve_all();
+    failed += test_approval_auto_approve_flow();
+    failed += test_approval_auto_approve_timeout();
+    failed += test_approval_auto_approve_revoke();
+    failed += test_approval_auto_approve_adds();
+    failed += test_approval_all_decided();
+    failed += test_approval_next_approved();
+    failed += test_approval_execute_complete();
+    failed += test_approval_empty_command();
+    failed += test_approval_whitespace_command();
+    failed += test_approval_queue_full();
+    failed += test_approval_reset();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
