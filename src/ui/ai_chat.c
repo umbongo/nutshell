@@ -96,8 +96,8 @@ typedef struct {
     HWND hPermitBtn;
     HWND hSaveBtn;
     HWND hUndockBtn;
-    HWND hAllowBtn;
-    HWND hDenyBtn;
+    /* Old floating Allow/Deny buttons removed — now inline in chat_listview */
+    ApprovalQueue approval_q;
     HWND hThinkingBtn;
     HWND hTooltip;        /* Win32 tooltip control */
     int permit_write;     /* 0 = read-only (red), 1 = read/write (green) */
@@ -1380,20 +1380,7 @@ static void relayout(AiChatData *d)
         if (d->hChatList)
             chat_listview_relayout(d->hChatList);
     }
-    /* Approval buttons — between display and input */
-    if (d->hAllowBtn && d->hDenyBtn) {
-        if (d->pending_approval) {
-            int approve_y = ch - input_h - approve_h - margin;
-            int abw = S(80);
-            MoveWindow(d->hAllowBtn, margin, approve_y, abw, btn_h, TRUE);
-            MoveWindow(d->hDenyBtn, margin + abw + pad, approve_y, abw, btn_h, TRUE);
-            ShowWindow(d->hAllowBtn, SW_SHOW);
-            ShowWindow(d->hDenyBtn, SW_SHOW);
-        } else {
-            ShowWindow(d->hAllowBtn, SW_HIDE);
-            ShowWindow(d->hDenyBtn, SW_HIDE);
-        }
-    }
+    /* Old floating approval buttons removed — now inline in chat_listview */
     {
         int input_y = ch - input_h - margin;
         if (input_y < top_y) input_y = top_y;
@@ -1549,16 +1536,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             cw - pad - btn_h - pad - btn_h, pad, btn_h, btn_h,
             hwnd, (HMENU)IDC_CHAT_UNDOCK, NULL, NULL);
 
-        /* Allow/Deny buttons — hidden until command approval needed.
-         * Initial position is off-screen; relayout() places them. */
-        nd->hAllowBtn = CreateWindow("BUTTON", "Allow",
-            WS_CHILD | BS_OWNERDRAW,
-            S(5), 0, S(80), btn_h,
-            hwnd, (HMENU)IDC_CHAT_ALLOW, NULL, NULL);
-        nd->hDenyBtn = CreateWindow("BUTTON", "Deny",
-            WS_CHILD | BS_OWNERDRAW,
-            S(5) + S(80) + pad, 0, S(80), btn_h,
-            hwnd, (HMENU)IDC_CHAT_DENY, NULL, NULL);
+        /* Old floating Allow/Deny buttons removed — approval is now
+         * handled inline via chat_listview command block buttons.
+         * Initialize the approval queue. */
+        chat_approval_init(&nd->approval_q);
 
         /* Session name (left) + context bar (right) row */
         {
@@ -1881,58 +1862,113 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* IDC_CHAT_THINKING removed - thinking toggle now inline in chat */
 
-        case IDC_CHAT_ALLOW:
-            if (d && d->pending_approval) {
-                d->pending_approval = 0;
-                if (d->active_state) {
-                    d->active_state->pending_approval = 0;
-                    free(d->active_state->pending_cmds);
-                    d->active_state->pending_cmds = NULL;
-                    d->active_state->pending_cmd_count = 0;
+        /* ── Inline command approval from chat_listview ───────────── */
+        default: {
+            int ctl_id = LOWORD(wParam);
+
+            /* IDC_CMD_APPROVE_BASE + index → approve single command */
+            if (d && ctl_id >= IDC_CMD_APPROVE_BASE &&
+                ctl_id < IDC_CMD_APPROVE_BASE + APPROVAL_MAX_CMDS) {
+                int idx = ctl_id - IDC_CMD_APPROVE_BASE;
+                chat_approval_approve(&d->approval_q, idx);
+
+                /* Sync approval state back to ChatMsgItem list */
+                int ci = 0;
+                ChatMsgItem *it = d->msg_list.head;
+                while (it) {
+                    if (it->type == CHAT_ITEM_COMMAND) {
+                        if (ci == idx) { it->u.cmd.approved = 1; break; }
+                        ci++;
+                    }
+                    it = it->next;
                 }
-                relayout(d);
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                                "--- Commands ---");
+
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
-                execute_command(d, d->queued_cmds[0]);
-                d->queued_next = 1;
-                if (d->queued_count > 1 && d->paste_delay_ms > 0) {
-                    char prog[80];
-                    snprintf(prog, sizeof(prog),
-                             "executing %d/%d", 1, d->queued_count);
-                    start_indicator(d, prog);
-                    SetTimer(hwnd, TIMER_CMD_QUEUE,
-                             (UINT)d->paste_delay_ms, NULL);
-                } else {
-                    for (int ci = 1; ci < d->queued_count; ci++)
-                        execute_command(d, d->queued_cmds[ci]);
-                    d->queued_next = d->queued_count;
+
+                /* Execute approved command */
+                if (idx < d->queued_count)
+                    execute_command(d, d->queued_cmds[idx]);
+
+                /* Check if all decided — if so, wrap up */
+                if (chat_approval_all_decided(&d->approval_q)) {
+                    d->pending_approval = 0;
                     d->commands_executed = d->queued_count;
                     start_indicator(d, "waiting for output");
                     SetTimer(hwnd, TIMER_CONTINUE,
                              CONTINUE_DELAY_MS, NULL);
                 }
                 SetFocus(d->hInput);
+                return 0;
             }
-            return 0;
-        case IDC_CHAT_DENY:
-            if (d && d->pending_approval) {
-                d->pending_approval = 0;
-                d->queued_count = 0;
-                d->queued_next = 0;
-                if (d->active_state) {
-                    d->active_state->pending_approval = 0;
-                    free(d->active_state->pending_cmds);
-                    d->active_state->pending_cmds = NULL;
-                    d->active_state->pending_cmd_count = 0;
+
+            /* IDC_CMD_DENY_BASE + index → deny single command */
+            if (d && ctl_id >= IDC_CMD_DENY_BASE &&
+                ctl_id < IDC_CMD_DENY_BASE + APPROVAL_MAX_CMDS) {
+                int idx = ctl_id - IDC_CMD_DENY_BASE;
+                chat_approval_deny(&d->approval_q, idx);
+
+                /* Sync denial state back to ChatMsgItem list */
+                int ci = 0;
+                ChatMsgItem *it = d->msg_list.head;
+                while (it) {
+                    if (it->type == CHAT_ITEM_COMMAND) {
+                        if (ci == idx) { it->u.cmd.approved = 0; break; }
+                        ci++;
+                    }
+                    it = it->next;
                 }
-                relayout(d);
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                                "[commands denied]");
+
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
+
+                /* Check if all decided */
+                if (chat_approval_all_decided(&d->approval_q)) {
+                    d->pending_approval = 0;
+                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                    "[some commands denied]");
+                    if (d->hChatList)
+                        chat_listview_invalidate(d->hChatList);
+                }
                 SetFocus(d->hInput);
+                return 0;
             }
-            return 0;
+
+            /* IDC_CMD_APPROVE_ALL → approve all pending commands */
+            if (d && ctl_id == IDC_CMD_APPROVE_ALL) {
+                chat_approval_approve_all(&d->approval_q);
+
+                /* Sync all to approved in ChatMsgItem list */
+                ChatMsgItem *it = d->msg_list.head;
+                while (it) {
+                    if (it->type == CHAT_ITEM_COMMAND &&
+                        it->u.cmd.approved == -1 && !it->u.cmd.blocked)
+                        it->u.cmd.approved = 1;
+                    it = it->next;
+                }
+
+                d->pending_approval = 0;
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+
+                /* Execute all approved commands */
+                for (int ci = 0; ci < d->queued_count; ci++)
+                    execute_command(d, d->queued_cmds[ci]);
+                d->queued_next = d->queued_count;
+                d->commands_executed = d->queued_count;
+                start_indicator(d, "waiting for output");
+                SetTimer(hwnd, TIMER_CONTINUE,
+                         CONTINUE_DELAY_MS, NULL);
+                SetFocus(d->hInput);
+                return 0;
+            }
+
+            /* IDC_AUTO_APPROVE → toggle session auto-approve */
+            if (d && ctl_id == IDC_AUTO_APPROVE) {
+                float now = (float)GetTickCount() / 1000.0f;
+                chat_approval_auto_approve_click(&d->approval_q, now, 3.0f);
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                return 0;
+            }
+            break;
+        }
         case IDC_CONTEXT_LABEL:
             if (d && HIWORD(wParam) == STN_CLICKED) {
                 /* Context label click - removed thinking toggle (now inline in chat) */
@@ -2210,7 +2246,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->queued_next = 0;
                 d->pending_approval = 1;
                 relayout(d);
-                SetFocus(d->hAllowBtn);
+                SetFocus(d->hInput);
             }
 
             if (d->hChatList) {
@@ -2418,58 +2454,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 /* \xE8A7 = FullScreen (outer arrows), \xE923 = BackToWindow */
                 DrawTextW(hdc, d->docked ? L"\xE8A7" : L"\xE923", -1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 SelectObject(hdc, prevF);
-            } else if ((int)dis->CtlID == IDC_CHAT_ALLOW) {
-                /* Green Allow button */
-                HDC hdc = dis->hDC;
-                RECT rc = dis->rcItem;
-                int pressed = (dis->itemState & ODS_SELECTED) != 0;
-                COLORREF greenBg = pressed ? RGB(0, 120, 60) : RGB(0, 160, 80);
-                COLORREF fg = RGB(255, 255, 255);
-                HBRUSH hParBr = CreateSolidBrush(theme_cr(d->theme->bg_primary));
-                FillRect(hdc, &rc, hParBr);
-                DeleteObject(hParBr);
-                HBRUSH hBr = CreateSolidBrush(greenBg);
-                HPEN hPen = CreatePen(PS_SOLID, 1, greenBg);
-                SelectObject(hdc, hBr);
-                SelectObject(hdc, hPen);
-                RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
-                SelectObject(hdc, GetStockObject(NULL_BRUSH));
-                SelectObject(hdc, GetStockObject(NULL_PEN));
-                DeleteObject(hPen);
-                DeleteObject(hBr);
-                SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, fg);
-                HFONT hOld = d->hFont
-                    ? (HFONT)SelectObject(hdc, d->hFont) : NULL;
-                DrawText(hdc, "Allow", -1, &rc,
-                         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                if (hOld) SelectObject(hdc, hOld);
-            } else if ((int)dis->CtlID == IDC_CHAT_DENY) {
-                /* Red Deny button */
-                HDC hdc = dis->hDC;
-                RECT rc = dis->rcItem;
-                int pressed = (dis->itemState & ODS_SELECTED) != 0;
-                COLORREF redBg = pressed ? RGB(160, 30, 30) : RGB(200, 50, 50);
-                COLORREF fg = RGB(255, 255, 255);
-                HBRUSH hParBr = CreateSolidBrush(theme_cr(d->theme->bg_primary));
-                FillRect(hdc, &rc, hParBr);
-                DeleteObject(hParBr);
-                HBRUSH hBr = CreateSolidBrush(redBg);
-                HPEN hPen = CreatePen(PS_SOLID, 1, redBg);
-                SelectObject(hdc, hBr);
-                SelectObject(hdc, hPen);
-                RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
-                SelectObject(hdc, GetStockObject(NULL_BRUSH));
-                SelectObject(hdc, GetStockObject(NULL_PEN));
-                DeleteObject(hPen);
-                DeleteObject(hBr);
-                SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, fg);
-                HFONT hOld = d->hFont
-                    ? (HFONT)SelectObject(hdc, d->hFont) : NULL;
-                DrawText(hdc, "Deny", -1, &rc,
-                         DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                if (hOld) SelectObject(hdc, hOld);
+            /* Old IDC_CHAT_ALLOW / IDC_CHAT_DENY draw code removed —
+             * approval buttons are now inline in chat_listview */
             } else {
                 draw_tab_button(dis, d->theme, d);
             }

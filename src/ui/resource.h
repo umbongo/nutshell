@@ -1,7 +1,7 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION "0.9.19"
+#define APP_VERSION "0.9.22"
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -44,5 +44,11 @@
 #define IDC_BTN_SAVE        1018
 #define IDC_BTN_BROWSE_KEY  1019
 #define IDC_EDIT_AI_NOTES   1020
+
+/* Inline command approval buttons (in chat_listview → WM_COMMAND to chat panel) */
+#define IDC_CMD_APPROVE_BASE 3000  /* 3000..3015 for up to 16 commands */
+#define IDC_CMD_DENY_BASE    3020  /* 3020..3035 for up to 16 commands */
+#define IDC_CMD_APPROVE_ALL  3040
+#define IDC_AUTO_APPROVE     3041
 
 #endif

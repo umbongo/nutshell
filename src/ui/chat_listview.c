@@ -8,6 +8,7 @@
 #ifdef _WIN32
 
 #include "chat_listview.h"
+#include "resource.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -39,6 +40,34 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define BASE_CORNER_R      6   /* User bubble corner radius */
 #define BASE_SIDE_PAD      8   /* Left/right margin for the whole panel */
 
+/* ── Command button layout constants (96 DPI) ───────────────────────── */
+
+#define BASE_BTN_W        70   /* Allow/Deny button width */
+#define BASE_BTN_H        24   /* Allow/Deny button height */
+#define BASE_BTN_GAP       8   /* Gap between buttons */
+#define BASE_TAG_PAD_H     6   /* Safety tag horizontal padding */
+#define BASE_TAG_PAD_V     2   /* Safety tag vertical padding */
+#define BASE_TAG_H        18   /* Safety tag height */
+#define BASE_ALLOW_ALL_H  28   /* "Allow All" ghost button height */
+
+/* ── Safety tag colours (hardcoded — not theme-dependent) ───────────── */
+
+#define CLR_TAG_SAFE     RGB(140, 140, 140)  /* grey */
+#define CLR_TAG_WRITE    RGB(220, 140, 30)   /* orange */
+#define CLR_TAG_CRITICAL RGB(210, 50, 50)    /* red */
+
+/* ── Button colours ─────────────────────────────────────────────────── */
+
+#define CLR_BTN_ALLOW     RGB(0, 160, 80)
+#define CLR_BTN_ALLOW_P   RGB(0, 120, 60)     /* pressed */
+#define CLR_BTN_DENY      RGB(200, 50, 50)
+#define CLR_BTN_DENY_P    RGB(160, 30, 30)     /* pressed */
+#define CLR_BTN_TEXT      RGB(255, 255, 255)
+#define CLR_GHOST_BORDER  RGB(100, 160, 120)   /* Allow All outline */
+#define CLR_GHOST_TEXT    RGB(100, 160, 120)
+#define CLR_LINK_TEXT     RGB(100, 140, 180)   /* auto-approve link */
+#define CLR_BLOCKED_TEXT  RGB(128, 128, 128)   /* greyed-out command text */
+
 /* ── Forward declarations ───────────────────────────────────────────── */
 
 static LRESULT CALLBACK ChatListWndProc(HWND, UINT, WPARAM, LPARAM);
@@ -51,9 +80,44 @@ static void     paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 static void     paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                RECT *rc);
 static void     paint_command_item(ChatListView *lv, HDC hdc,
-                                   ChatMsgItem *item, RECT *rc);
+                                   ChatMsgItem *item, RECT *rc,
+                                   int cmd_index, int is_first_cmd,
+                                   int total_cmds);
 static void     paint_status_item(ChatListView *lv, HDC hdc,
                                   ChatMsgItem *item, RECT *rc);
+
+/* ── Helpers: count pending commands, compute command index ──────────── */
+
+static void count_commands(const ChatMsgList *list, int *total, int *pending)
+{
+    *total = 0;
+    *pending = 0;
+    if (!list) return;
+    ChatMsgItem *item = list->head;
+    while (item) {
+        if (item->type == CHAT_ITEM_COMMAND) {
+            (*total)++;
+            if (item->u.cmd.approved == -1 && !item->u.cmd.blocked)
+                (*pending)++;
+        }
+        item = item->next;
+    }
+}
+
+/* command_index_of: reserved for future use (e.g., tooltip lookup) */
+
+/* ── Is this the first command item in the list? ────────────────────── */
+
+static int is_first_command(const ChatMsgList *list, const ChatMsgItem *target)
+{
+    ChatMsgItem *item = list->head;
+    while (item) {
+        if (item->type == CHAT_ITEM_COMMAND)
+            return (item == target) ? 1 : 0;
+        item = item->next;
+    }
+    return 0;
+}
 
 /* ── UTF-8 → UTF-16 helper (caller must free returned buffer) ───── */
 
@@ -104,6 +168,40 @@ static void fill_rounded_rect(HDC hdc, const RECT *rc, int radius,
     SelectObject(hdc, old_br);
     DeleteObject(pen);
     DeleteObject(br);
+}
+
+/* ── Draw outlined (ghost) rounded rect ─────────────────────────────── */
+
+static void draw_ghost_rect(HDC hdc, const RECT *rc, int radius,
+                             COLORREF border_clr)
+{
+    HPEN pen = CreatePen(PS_SOLID, 1, border_clr);
+    HGDIOBJ old_pen = SelectObject(hdc, pen);
+    HGDIOBJ old_br  = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+    RoundRect(hdc, rc->left, rc->top, rc->right, rc->bottom, radius, radius);
+    SelectObject(hdc, old_br);
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen);
+}
+
+/* ── Safety tag colour ──────────────────────────────────────────────── */
+
+static COLORREF safety_tag_color(CmdSafetyLevel level)
+{
+    switch (level) {
+    case CMD_WRITE:    return CLR_TAG_WRITE;
+    case CMD_CRITICAL: return CLR_TAG_CRITICAL;
+    default:           return CLR_TAG_SAFE;
+    }
+}
+
+static const char *safety_tag_text(CmdSafetyLevel level)
+{
+    switch (level) {
+    case CMD_WRITE:    return "WRITE";
+    case CMD_CRITICAL: return "CRITICAL";
+    default:           return "SAFE";
+    }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -319,7 +417,7 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     }
 
     case CHAT_ITEM_COMMAND: {
-        /* Command block: monospace, padded */
+        /* Command block: monospace, padded, with safety tag + buttons */
         const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
                                                    : item->text;
         text_w = width - 2 * side_pad - 2 * lv->code_pad;
@@ -331,8 +429,26 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         draw_text_utf8(hdc, cmd_text, &rc,
                        DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
         SelectObject(hdc, old_font);
-        return (rc.bottom - rc.top) + 2 * lv->code_pad +
-               CLV_SCALE(lv, 24);  /* Extra for status row (approve/deny) */
+
+        int h = (rc.bottom - rc.top) + 2 * lv->code_pad;
+
+        /* Safety tag row at top */
+        h += CLV_SCALE(lv, BASE_TAG_H) + CLV_SCALE(lv, 4);
+
+        /* Button/status row at bottom */
+        h += CLV_SCALE(lv, BASE_BTN_H) + CLV_SCALE(lv, 4);
+
+        /* If blocked, add help text row */
+        if (item->u.cmd.blocked)
+            h += CLV_SCALE(lv, 16);
+
+        /* "Allow All" ghost button above first command when multiple exist */
+        int total_cmds, pending_cmds;
+        count_commands(lv->msg_list, &total_cmds, &pending_cmds);
+        if (total_cmds > 1 && is_first_command(lv->msg_list, item))
+            h += CLV_SCALE(lv, BASE_ALLOW_ALL_H) + CLV_SCALE(lv, 4);
+
+        return h;
     }
 
     case CHAT_ITEM_STATUS: {
@@ -512,17 +628,59 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     SelectObject(hdc, old_font);
 }
 
+/* ── Paint command item with safety tag, buttons, blocked state ────── */
+
 static void paint_command_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                               RECT *rc)
+                               RECT *rc, int cmd_index, int is_first_cmd,
+                               int total_cmds)
 {
+    (void)cmd_index;  /* index used only for hit testing, not painting */
+
     const ThemeChatColors *tc = &lv->theme->chat;
     int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
     int border_w = CLV_SCALE(lv, 1);
+    int corner   = CLV_SCALE(lv, BASE_CORNER_R);
+    int btn_w    = CLV_SCALE(lv, BASE_BTN_W);
+    int btn_h    = CLV_SCALE(lv, BASE_BTN_H);
+    int btn_gap  = CLV_SCALE(lv, BASE_BTN_GAP);
+    int tag_h    = CLV_SCALE(lv, BASE_TAG_H);
+    int tag_pad  = CLV_SCALE(lv, BASE_TAG_PAD_H);
 
-    /* Command block background with border */
-    RECT block = *rc;
-    block.left  += side_pad;
-    block.right -= side_pad;
+    int cur_top = rc->top;
+
+    /* ── "Allow All (N commands)" ghost button above first command ─── */
+    if (is_first_cmd && total_cmds > 1) {
+        int aa_h = CLV_SCALE(lv, BASE_ALLOW_ALL_H);
+        int aa_w = CLV_SCALE(lv, 180);
+        RECT aa_rc;
+        aa_rc.left   = rc->left + side_pad;
+        aa_rc.top    = cur_top;
+        aa_rc.right  = aa_rc.left + aa_w;
+        aa_rc.bottom = cur_top + aa_h;
+
+        draw_ghost_rect(hdc, &aa_rc, corner, CLR_GHOST_BORDER);
+
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, CLR_GHOST_TEXT);
+        HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont
+                                        ? lv->hSmallFont
+                                        : GetStockObject(DEFAULT_GUI_FONT));
+        char aa_text[64];
+        snprintf(aa_text, sizeof(aa_text), "Allow All (%d commands)",
+                 total_cmds);
+        DrawTextA(hdc, aa_text, -1, &aa_rc,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(hdc, old_font);
+
+        cur_top += aa_h + CLV_SCALE(lv, 4);
+    }
+
+    /* ── Command block background with border ─────────────────────── */
+    RECT block;
+    block.left   = rc->left + side_pad;
+    block.top    = cur_top;
+    block.right  = rc->right - side_pad;
+    block.bottom = rc->bottom;
 
     HBRUSH bg_br = CreateSolidBrush(RGB_FROM_THEME(tc->cmd_bg));
     FillRect(hdc, &block, bg_br);
@@ -538,49 +696,140 @@ static void paint_command_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     SelectObject(hdc, old_pen);
     DeleteObject(border_pen);
 
-    /* Command text (monospace) */
+    /* ── Safety tag (top-right corner) ────────────────────────────── */
+    COLORREF tag_clr = safety_tag_color(item->u.cmd.safety);
+    const char *tag_text = safety_tag_text(item->u.cmd.safety);
+
+    SetBkMode(hdc, TRANSPARENT);
+    HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                        : GetStockObject(DEFAULT_GUI_FONT));
+
+    /* Measure tag text width */
+    SIZE tag_sz;
+    GetTextExtentPoint32A(hdc, tag_text, (int)strlen(tag_text), &tag_sz);
+    int tag_w = tag_sz.cx + 2 * tag_pad;
+
+    RECT tag_rc;
+    tag_rc.right  = block.right - lv->code_pad;
+    tag_rc.left   = tag_rc.right - tag_w;
+    tag_rc.top    = block.top + CLV_SCALE(lv, 3);
+    tag_rc.bottom = tag_rc.top + tag_h;
+
+    fill_rounded_rect(hdc, &tag_rc, CLV_SCALE(lv, 3), tag_clr);
+    SetTextColor(hdc, CLR_BTN_TEXT);
+    DrawTextA(hdc, tag_text, -1, &tag_rc,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    int content_top = tag_rc.bottom + CLV_SCALE(lv, 4);
+
+    /* ── Command text (monospace) ─────────────────────────────────── */
     const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
                                                : item->text;
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB_FROM_THEME(tc->cmd_text));
-    HGDIOBJ old_font = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
-                                        : GetStockObject(ANSI_FIXED_FONT));
+
+    if (item->u.cmd.blocked) {
+        SetTextColor(hdc, CLR_BLOCKED_TEXT);
+    } else {
+        SetTextColor(hdc, RGB_FROM_THEME(tc->cmd_text));
+    }
+    HGDIOBJ mono_font = lv->hMonoFont ? lv->hMonoFont
+                                       : GetStockObject(ANSI_FIXED_FONT);
+    SelectObject(hdc, mono_font);
     RECT text_rc;
     text_rc.left   = block.left + lv->code_pad;
-    text_rc.top    = block.top + lv->code_pad;
+    text_rc.top    = content_top;
     text_rc.right  = block.right - lv->code_pad;
-    text_rc.bottom = block.bottom - CLV_SCALE(lv, 24);
+    text_rc.bottom = block.bottom - CLV_SCALE(lv, BASE_BTN_H) -
+                     CLV_SCALE(lv, 8);
+    if (item->u.cmd.blocked)
+        text_rc.bottom -= CLV_SCALE(lv, 16);
     draw_text_utf8(hdc, cmd_text, &text_rc,
                    DT_WORDBREAK | DT_NOPREFIX);
 
-    /* Status row: approval state */
-    RECT status_rc;
-    status_rc.left   = block.left + lv->code_pad;
-    status_rc.top    = text_rc.bottom + CLV_SCALE(lv, 2);
-    status_rc.right  = block.right - lv->code_pad;
-    status_rc.bottom = block.bottom - CLV_SCALE(lv, 2);
+    int status_top = text_rc.bottom + CLV_SCALE(lv, 4);
 
-    const char *status;
-    COLORREF status_color;
+    /* ── Blocked state: lock icon + help text ─────────────────────── */
     if (item->u.cmd.blocked) {
-        status = "BLOCKED";
-        status_color = RGB_FROM_THEME(tc->indicator_red);
-    } else if (item->u.cmd.approved == 1) {
-        status = "APPROVED";
-        status_color = RGB_FROM_THEME(tc->indicator_green);
-    } else if (item->u.cmd.approved == 0) {
-        status = "DENIED";
-        status_color = RGB_FROM_THEME(tc->indicator_red);
-    } else {
-        status = "PENDING";
-        status_color = RGB_FROM_THEME(tc->indicator_yellow);
+        /* Lock icon via Fluent UI icon font (U+E72E = Lock) */
+        if (lv->hIconFont) {
+            SelectObject(hdc, lv->hIconFont);
+            SetTextColor(hdc, CLR_BLOCKED_TEXT);
+            RECT lock_rc;
+            lock_rc.left   = block.left + lv->code_pad;
+            lock_rc.top    = status_top;
+            lock_rc.right  = lock_rc.left + CLV_SCALE(lv, 20);
+            lock_rc.bottom = status_top + CLV_SCALE(lv, 16);
+            DrawTextW(hdc, L"\xE72E", 1, &lock_rc,
+                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        }
+
+        SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                         : GetStockObject(DEFAULT_GUI_FONT));
+        SetTextColor(hdc, CLR_BLOCKED_TEXT);
+        RECT help_rc;
+        help_rc.left   = block.left + lv->code_pad + CLV_SCALE(lv, 22);
+        help_rc.top    = status_top;
+        help_rc.right  = block.right - lv->code_pad;
+        help_rc.bottom = status_top + CLV_SCALE(lv, 16);
+        DrawTextA(hdc, "Enable \"Permit Write\" to approve", -1, &help_rc,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        status_top += CLV_SCALE(lv, 16);
     }
 
-    SetTextColor(hdc, status_color);
-    SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                     : GetStockObject(DEFAULT_GUI_FONT));
-    DrawTextA(hdc, status, -1, &status_rc,
-              DT_SINGLELINE | DT_RIGHT | DT_VCENTER | DT_NOPREFIX);
+    /* ── Button row / Status text ─────────────────────────────────── */
+    if (!item->u.cmd.blocked && item->u.cmd.approved == -1) {
+        /* PENDING: Draw Allow + Deny buttons */
+        RECT allow_rc;
+        allow_rc.left   = block.left + lv->code_pad;
+        allow_rc.top    = status_top;
+        allow_rc.right  = allow_rc.left + btn_w;
+        allow_rc.bottom = allow_rc.top + btn_h;
+        fill_rounded_rect(hdc, &allow_rc, corner, CLR_BTN_ALLOW);
+        SetTextColor(hdc, CLR_BTN_TEXT);
+        SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                         : GetStockObject(DEFAULT_GUI_FONT));
+        DrawTextA(hdc, "Allow", -1, &allow_rc,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+        RECT deny_rc;
+        deny_rc.left   = allow_rc.right + btn_gap;
+        deny_rc.top    = status_top;
+        deny_rc.right  = deny_rc.left + btn_w;
+        deny_rc.bottom = deny_rc.top + btn_h;
+        fill_rounded_rect(hdc, &deny_rc, corner, CLR_BTN_DENY);
+        SetTextColor(hdc, CLR_BTN_TEXT);
+        DrawTextA(hdc, "Deny", -1, &deny_rc,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    } else {
+        /* Show status text */
+        const char *status;
+        COLORREF status_color;
+        if (item->u.cmd.blocked) {
+            status = "Blocked";
+            status_color = RGB_FROM_THEME(tc->indicator_red);
+        } else if (item->u.cmd.approved == 1) {
+            status = "Approved";
+            status_color = RGB_FROM_THEME(tc->indicator_green);
+        } else if (item->u.cmd.approved == 0) {
+            status = "Denied";
+            status_color = RGB_FROM_THEME(tc->indicator_red);
+        } else {
+            status = "Pending";
+            status_color = RGB_FROM_THEME(tc->indicator_yellow);
+        }
+
+        RECT sts_rc;
+        sts_rc.left   = block.left + lv->code_pad;
+        sts_rc.top    = status_top;
+        sts_rc.right  = block.right - lv->code_pad;
+        sts_rc.bottom = status_top + btn_h;
+
+        SetTextColor(hdc, status_color);
+        SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                         : GetStockObject(DEFAULT_GUI_FONT));
+        DrawTextA(hdc, status, -1, &sts_rc,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    }
+
     SelectObject(hdc, old_font);
 }
 
@@ -626,10 +875,15 @@ static void on_paint(ChatListView *lv)
     FillRect(mem_dc, &client, bg_br);
     DeleteObject(bg_br);
 
+    /* Pre-count commands for "Allow All" rendering */
+    int total_cmds, pending_cmds;
+    count_commands(lv->msg_list, &total_cmds, &pending_cmds);
+
     /* Walk items, skip those above viewport, stop after those below */
     int y = lv->msg_gap - lv->scroll_y;
     int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
+    int cmd_idx = 0;
 
     while (item) {
         int h = item->measured_height;
@@ -650,13 +904,20 @@ static void on_paint(ChatListView *lv)
                 paint_ai_item(lv, mem_dc, item, &item_rc);
                 break;
             case CHAT_ITEM_COMMAND:
-                paint_command_item(lv, mem_dc, item, &item_rc);
+                paint_command_item(lv, mem_dc, item, &item_rc,
+                                   cmd_idx,
+                                   is_first_command(lv->msg_list, item),
+                                   total_cmds);
+                cmd_idx++;
                 break;
             case CHAT_ITEM_STATUS:
                 paint_status_item(lv, mem_dc, item, &item_rc);
                 break;
             }
         }
+
+        if (item->type == CHAT_ITEM_COMMAND && !(y + h > 0 && y < ch))
+            cmd_idx++;
 
         /* Stop if we've gone past the viewport */
         if (y > ch) break;
@@ -673,6 +934,115 @@ static void on_paint(ChatListView *lv)
     DeleteDC(mem_dc);
 
     EndPaint(lv->hwnd, &ps);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  Hit testing: convert mouse click to button action
+ * ══════════════════════════════════════════════════════════════════════ */
+
+static void on_lbuttondown(ChatListView *lv, int mx, int my)
+{
+    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
+    int btn_w    = CLV_SCALE(lv, BASE_BTN_W);
+    int btn_h    = CLV_SCALE(lv, BASE_BTN_H);
+    int btn_gap  = CLV_SCALE(lv, BASE_BTN_GAP);
+    int code_pad = lv->code_pad;
+
+    int total_cmds, pending_cmds;
+    count_commands(lv->msg_list, &total_cmds, &pending_cmds);
+
+    /* Walk items to find which one was clicked */
+    int y = lv->msg_gap - lv->scroll_y;
+    ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
+    int cmd_idx = 0;
+    HWND parent = GetParent(lv->hwnd);
+
+    while (item) {
+        int h = item->measured_height;
+
+        if (item->type == CHAT_ITEM_COMMAND && my >= y && my < y + h) {
+            int cur_top = y;
+            int first_cmd = is_first_command(lv->msg_list, item);
+
+            /* Check "Allow All" ghost button above first command */
+            if (first_cmd && total_cmds > 1) {
+                int aa_h = CLV_SCALE(lv, BASE_ALLOW_ALL_H);
+                int aa_w = CLV_SCALE(lv, 180);
+                RECT aa_rc;
+                aa_rc.left   = side_pad + side_pad;
+                aa_rc.top    = cur_top;
+                aa_rc.right  = aa_rc.left + aa_w;
+                aa_rc.bottom = cur_top + aa_h;
+
+                if (mx >= aa_rc.left && mx < aa_rc.right &&
+                    my >= aa_rc.top && my < aa_rc.bottom) {
+                    if (parent)
+                        PostMessage(parent, WM_COMMAND,
+                                    MAKEWPARAM(IDC_CMD_APPROVE_ALL, 0), 0);
+                    return;
+                }
+                cur_top += aa_h + CLV_SCALE(lv, 4);
+            }
+
+            /* Block area: left + side_pad to right - side_pad */
+            int block_left  = side_pad + side_pad;
+
+            /* Skip over command text area to find button row */
+            /* We need to estimate where the button row starts.
+             * Use the measured_height minus the trailing content. */
+            int status_top;
+            if (item->u.cmd.blocked) {
+                /* blocked: no buttons, but has help text */
+                status_top = y + h - btn_h - CLV_SCALE(lv, 4) -
+                             CLV_SCALE(lv, 16);
+            } else {
+                status_top = y + h - btn_h - CLV_SCALE(lv, 4);
+            }
+
+            /* Only test Allow/Deny if pending and not blocked */
+            if (!item->u.cmd.blocked && item->u.cmd.approved == -1) {
+                /* Allow button */
+                RECT allow_rc;
+                allow_rc.left   = block_left + code_pad;
+                allow_rc.top    = status_top;
+                allow_rc.right  = allow_rc.left + btn_w;
+                allow_rc.bottom = allow_rc.top + btn_h;
+
+                if (mx >= allow_rc.left && mx < allow_rc.right &&
+                    my >= allow_rc.top && my < allow_rc.bottom) {
+                    if (parent)
+                        PostMessage(parent, WM_COMMAND,
+                                    MAKEWPARAM(IDC_CMD_APPROVE_BASE + cmd_idx,
+                                               0), 0);
+                    return;
+                }
+
+                /* Deny button */
+                RECT deny_rc;
+                deny_rc.left   = allow_rc.right + btn_gap;
+                deny_rc.top    = status_top;
+                deny_rc.right  = deny_rc.left + btn_w;
+                deny_rc.bottom = deny_rc.top + btn_h;
+
+                if (mx >= deny_rc.left && mx < deny_rc.right &&
+                    my >= deny_rc.top && my < deny_rc.bottom) {
+                    if (parent)
+                        PostMessage(parent, WM_COMMAND,
+                                    MAKEWPARAM(IDC_CMD_DENY_BASE + cmd_idx,
+                                               0), 0);
+                    return;
+                }
+            }
+
+            return;  /* Click was in command block but not on a button */
+        }
+
+        if (item->type == CHAT_ITEM_COMMAND)
+            cmd_idx++;
+
+        y += h + lv->msg_gap;
+        item = item->next;
+    }
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -713,6 +1083,13 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         GetClientRect(hwnd, &rc);
         lv->viewport_height = rc.bottom - rc.top;
         recalc_layout(lv);
+        return 0;
+    }
+
+    case WM_LBUTTONDOWN: {
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        on_lbuttondown(lv, mx, my);
         return 0;
     }
 
