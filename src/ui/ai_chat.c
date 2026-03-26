@@ -204,6 +204,10 @@ typedef struct {
     ChatMsgList msg_list;           /* Message item linked list */
     HWND hChatList;                 /* Owner-drawn chat list view */
     ChatMsgItem *stream_ai_item;    /* Current AI item being streamed into */
+
+    /* Owned fonts for ChatListView (caller manages lifetime) */
+    HFONT hBoldFont;
+    HFONT hMonoFont;
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -1457,21 +1461,23 @@ static void chat_apply_zoom(AiChatData *d, int delta)
 
     if (d->hFont) {
         SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hFont, TRUE);
-        /* Update ChatListView fonts */
+        /* Update ChatListView fonts (free old first to prevent leaks) */
         if (d->hChatList) {
-            HFONT hBold = CreateFont(h, 0, 0, 0, FW_BOLD,
+            if (d->hBoldFont) DeleteObject(d->hBoldFont);
+            if (d->hMonoFont) DeleteObject(d->hMonoFont);
+            d->hBoldFont = CreateFont(h, 0, 0, 0, FW_BOLD,
                 FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                 OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
                 APP_FONT_UI_FACE);
-            HFONT hMono = CreateFont(h, 0, 0, 0, FW_NORMAL,
+            d->hMonoFont = CreateFont(h, 0, 0, 0, FW_NORMAL,
                 FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                 OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
                 d->ai_font_name[0] ? d->ai_font_name : "Consolas");
             chat_listview_set_fonts(d->hChatList, d->hFont,
-                                    hMono, hBold, d->hSmallFont,
-                                    d->hIconFont);
+                                    d->hMonoFont, d->hBoldFont,
+                                    d->hSmallFont, d->hIconFont);
             chat_listview_relayout(d->hChatList);
         }
         /* Re-measure line height */
@@ -1599,7 +1605,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         chat_msg_list_init(&nd->msg_list);
 
         /* Create ChatListView — hDisplay points to same HWND for layout compat */
-        chat_listview_register(GetModuleHandle(NULL));
         nd->hChatList = chat_listview_create(hwnd, margin, top_y,
                                               disp_w, disp_h,
                                               &nd->msg_list, nd->theme);
@@ -1673,22 +1678,20 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             SendMessage(nd->hInput, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
             /* Set fonts on the ChatListView */
             if (nd->hChatList) {
-                /* Create a bold variant for headings */
-                HFONT hBold = CreateFont(h, 0, 0, 0, FW_BOLD,
+                nd->hBoldFont = CreateFont(h, 0, 0, 0, FW_BOLD,
                     FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                     OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                     CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
                     APP_FONT_UI_FACE);
-                /* Create a monospace font for code blocks */
-                HFONT hMono = CreateFont(h, 0, 0, 0, FW_NORMAL,
+                nd->hMonoFont = CreateFont(h, 0, 0, 0, FW_NORMAL,
                     FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                     OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                     CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
                     nd->ai_font_name[0] ? nd->ai_font_name
                                         : "Consolas");
                 chat_listview_set_fonts(nd->hChatList, nd->hFont,
-                                        hMono, hBold, nd->hSmallFont,
-                                        nd->hIconFont);
+                                        nd->hMonoFont, nd->hBoldFont,
+                                        nd->hSmallFont, nd->hIconFont);
             }
             /* Measure line height for scrollbar sync */
             HDC hdc_m = GetDC(nd->hInput);
@@ -2505,6 +2508,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d->hFont) DeleteObject(d->hFont);
             if (d->hSmallFont) DeleteObject(d->hSmallFont);
             if (d->hIconFont) DeleteObject(d->hIconFont);
+            if (d->hBoldFont) DeleteObject(d->hBoldFont);
+            if (d->hMonoFont) DeleteObject(d->hMonoFont);
             if (d->hTooltip) DestroyWindow(d->hTooltip);
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
