@@ -82,7 +82,7 @@ static void     paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 static void     paint_command_item(ChatListView *lv, HDC hdc,
                                    ChatMsgItem *item, RECT *rc,
                                    int cmd_index, int is_first_cmd,
-                                   int total_cmds);
+                                   int is_last_cmd, int total_cmds);
 static void     paint_status_item(ChatListView *lv, HDC hdc,
                                   ChatMsgItem *item, RECT *rc);
 
@@ -117,6 +117,18 @@ static int is_first_command(const ChatMsgList *list, const ChatMsgItem *target)
         item = item->next;
     }
     return 0;
+}
+
+static int is_last_command(const ChatMsgList *list, const ChatMsgItem *target)
+{
+    (void)list;
+    /* Walk from target forward: if no more COMMAND items, it's the last */
+    const ChatMsgItem *item = target->next;
+    while (item) {
+        if (item->type == CHAT_ITEM_COMMAND) return 0;
+        item = item->next;
+    }
+    return (target->type == CHAT_ITEM_COMMAND) ? 1 : 0;
 }
 
 /* ── UTF-8 → UTF-16 helper (caller must free returned buffer) ───── */
@@ -448,6 +460,11 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         if (total_cmds > 1 && is_first_command(lv->msg_list, item))
             h += CLV_SCALE(lv, BASE_ALLOW_ALL_H) + CLV_SCALE(lv, 4);
 
+        /* "Allow all commands this session" link below last command */
+        if (total_cmds > 1 && is_last_command(lv->msg_list, item)
+            && item->u.cmd.approved == -1)
+            h += CLV_SCALE(lv, 18);
+
         return h;
     }
 
@@ -632,7 +649,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
 static void paint_command_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                RECT *rc, int cmd_index, int is_first_cmd,
-                               int total_cmds)
+                               int is_last_cmd, int total_cmds)
 {
     (void)cmd_index;  /* index used only for hit testing, not painting */
 
@@ -830,6 +847,21 @@ static void paint_command_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                   DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     }
 
+    /* "Allow all commands this session" link after last command */
+    if (is_last_cmd && total_cmds > 1 && item->u.cmd.approved == -1) {
+        int link_y = rc->bottom - CLV_SCALE(lv, 16);
+        RECT link_rc;
+        link_rc.left   = rc->left + side_pad;
+        link_rc.top    = link_y;
+        link_rc.right  = rc->right - side_pad;
+        link_rc.bottom = link_y + CLV_SCALE(lv, 14);
+        SetTextColor(hdc, RGB_FROM_THEME(lv->theme->accent));
+        SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                         : GetStockObject(DEFAULT_GUI_FONT));
+        DrawTextA(hdc, "Allow all commands this session", -1, &link_rc,
+                  DT_SINGLELINE | DT_CENTER | DT_NOPREFIX);
+    }
+
     SelectObject(hdc, old_font);
 }
 
@@ -907,6 +939,7 @@ static void on_paint(ChatListView *lv)
                 paint_command_item(lv, mem_dc, item, &item_rc,
                                    cmd_idx,
                                    is_first_command(lv->msg_list, item),
+                                   is_last_command(lv->msg_list, item),
                                    total_cmds);
                 cmd_idx++;
                 break;
@@ -1031,6 +1064,22 @@ static void on_lbuttondown(ChatListView *lv, int mx, int my)
                                     MAKEWPARAM(IDC_CMD_DENY_BASE + cmd_idx,
                                                0), 0);
                     return;
+                }
+            }
+
+            /* Check "Allow all commands this session" link */
+            {
+                int total_cmds2, pending_cmds2;
+                count_commands(lv->msg_list, &total_cmds2, &pending_cmds2);
+                if (total_cmds2 > 1 && is_last_command(lv->msg_list, item)
+                    && item->u.cmd.approved == -1) {
+                    int link_y = y + h - CLV_SCALE(lv, 16);
+                    if (my >= link_y && my < y + h) {
+                        if (parent)
+                            PostMessage(parent, WM_COMMAND,
+                                        MAKEWPARAM(IDC_AUTO_APPROVE, 0), 0);
+                        return;
+                    }
                 }
             }
 
