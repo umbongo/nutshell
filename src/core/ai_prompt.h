@@ -174,6 +174,9 @@ typedef struct {
     char *stream_thinking;       /* heap-allocated accumulator, NULL when idle */
     size_t stream_thinking_len;
     int stream_phase;            /* 0=not started, 1=thinking, 2=content */
+    int platform;                /* CmdPlatform for this session */
+    int auto_approve;            /* Session-level auto-approve flag */
+    int activity_phase;          /* ActivityPhase saved on session switch */
 } AiSessionState;
 
 #endif /* NUTSHELL_AI_PROMPT_H */

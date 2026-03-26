@@ -2993,6 +2993,9 @@ static void do_session_switch(AiChatData *d,
                 d->active_state->pending_cmd_count = d->queued_count;
             }
         }
+        /* Save auto-approve and activity phase to old session */
+        d->active_state->auto_approve = d->approval_q.auto_approve;
+        d->active_state->activity_phase = (int)d->activity.phase;
     }
 
     /* Clear thinking history — it belongs to the old session */
@@ -3053,6 +3056,17 @@ static void do_session_switch(AiChatData *d,
         d->queued_count = 0;
         d->queued_next = 0;
     }
+
+    /* Restore auto-approve and activity phase from new session */
+    if (new_state) {
+        d->approval_q.auto_approve = new_state->auto_approve;
+        chat_activity_set_phase(&d->activity,
+                                (ActivityPhase)new_state->activity_phase, 0.0f);
+    } else {
+        d->approval_q.auto_approve = 0;
+        chat_activity_reset(&d->activity);
+    }
+
     relayout(d);
 
     chat_rebuild_display(d);
