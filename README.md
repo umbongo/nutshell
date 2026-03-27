@@ -2,8 +2,8 @@
 
 
 
-**Version**: v0.9.27 \
-**Build Date**: 2026-03-26 \
+**Version**: v0.9.28 \
+**Build Date**: 2026-03-27 \
 **Author**: Thomas Sulkiewicz 
 
 ## Overview
