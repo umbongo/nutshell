@@ -698,6 +698,11 @@ static void paint_command_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     block.right  = rc->right - side_pad;
     block.bottom = rc->bottom;
 
+    /* Exclude the "Allow all commands this session" link area from the block
+     * so buttons don't overlap with it */
+    if (is_last_cmd && total_cmds > 1 && item->u.cmd.approved == -1)
+        block.bottom -= CLV_SCALE(lv, 18);
+
     HBRUSH bg_br = CreateSolidBrush(RGB_FROM_THEME(tc->cmd_bg));
     FillRect(hdc, &block, bg_br);
     DeleteObject(bg_br);
@@ -846,9 +851,9 @@ static void paint_command_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                   DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     }
 
-    /* "Allow all commands this session" link after last command */
+    /* "Allow all commands this session" link below the command block */
     if (is_last_cmd && total_cmds > 1 && item->u.cmd.approved == -1) {
-        int link_y = rc->bottom - CLV_SCALE(lv, 16);
+        int link_y = block.bottom + CLV_SCALE(lv, 2);
         RECT link_rc;
         link_rc.left   = rc->left + side_pad;
         link_rc.top    = link_y;
@@ -1139,16 +1144,23 @@ static void on_lbuttondown(ChatListView *lv, int mx, int my)
             /* Block area: left + side_pad to right - side_pad */
             int block_left  = side_pad + side_pad;
 
-            /* Skip over command text area to find button row */
-            /* We need to estimate where the button row starts.
-             * Use the measured_height minus the trailing content. */
+            /* Skip over command text area to find button row.
+             * Must match paint_command_item's layout exactly:
+             *   status_top = block.bottom - btn_h - 6  (from text_rc calc)
+             * where block.bottom excludes the link area for last commands. */
+            int effective_h = h;
+            /* Subtract the "Allow all commands this session" link area */
+            if (is_last_command(lv->msg_list, item) && total_cmds > 1
+                && item->u.cmd.approved == -1)
+                effective_h -= CLV_SCALE(lv, 18);
+
             int status_top;
             if (item->u.cmd.blocked) {
                 /* blocked: no buttons, but has help text */
-                status_top = y + h - btn_h - CLV_SCALE(lv, 4) -
-                             CLV_SCALE(lv, 16);
+                status_top = y + effective_h - btn_h - CLV_SCALE(lv, 6) -
+                             CLV_SCALE(lv, 20);
             } else {
-                status_top = y + h - btn_h - CLV_SCALE(lv, 4);
+                status_top = y + effective_h - btn_h - CLV_SCALE(lv, 6);
             }
 
             /* Only test Allow/Deny if pending and not blocked */
@@ -1186,14 +1198,15 @@ static void on_lbuttondown(ChatListView *lv, int mx, int my)
                 }
             }
 
-            /* Check "Allow all commands this session" link */
+            /* Check "Allow all commands this session" link (below the block) */
             {
                 int total_cmds2, pending_cmds2;
                 count_commands(lv->msg_list, &total_cmds2, &pending_cmds2);
                 if (total_cmds2 > 1 && is_last_command(lv->msg_list, item)
                     && item->u.cmd.approved == -1) {
-                    int link_y = y + h - CLV_SCALE(lv, 16);
-                    if (my >= link_y && my < y + h) {
+                    int link_top = y + effective_h + CLV_SCALE(lv, 2);
+                    int link_bot = link_top + CLV_SCALE(lv, 14);
+                    if (my >= link_top && my < link_bot) {
                         if (parent)
                             PostMessage(parent, WM_COMMAND,
                                         MAKEWPARAM(IDC_AUTO_APPROVE, 0), 0);

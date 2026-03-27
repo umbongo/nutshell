@@ -1858,13 +1858,18 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
 
             if (ncmds > 0) {
-                /* Create CHAT_ITEM_COMMAND items for each command */
+                /* Reset approval queue for this batch */
+                chat_approval_reset(&d->approval_q);
+
+                /* Create CHAT_ITEM_COMMAND items and populate approval queue */
                 for (int ci = 0; ci < ncmds; ci++) {
                     ChatMsgItem *cmd_item = chat_msg_append(
                         &d->msg_list, CHAT_ITEM_COMMAND, "");
                     if (cmd_item)
                         chat_msg_set_command(cmd_item, cmds[ci],
                             CMD_SAFE, 0);
+                    chat_approval_add(&d->approval_q, cmds[ci],
+                                      CMD_PLATFORM_LINUX, d->permit_write);
                 }
 
                 /* Stash commands and show approval buttons */
