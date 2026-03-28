@@ -596,6 +596,49 @@ static void recalc_layout(ChatListView *lv)
     update_scrollbar(lv);
 }
 
+/* Build a measurement-ready copy of AI text: strip [EXEC]/[/EXEC] tags
+ * and trailing newlines before [EXEC] markers.  Caller must free(). */
+static char *ai_text_for_measure(const char *text)
+{
+    size_t len = strlen(text);
+    char *out = malloc(len + 1);
+    if (!out) return NULL;
+    char *dst = out;
+    const char *pos = text;
+
+    while (*pos) {
+        const char *exec = strstr(pos, "[EXEC]");
+        if (!exec) {
+            size_t remain = strlen(pos);
+            memcpy(dst, pos, remain);
+            dst += remain;
+            break;
+        }
+        /* Copy text before [EXEC], stripping trailing newlines */
+        size_t seg_len = (size_t)(exec - pos);
+        memcpy(dst, pos, seg_len);
+        dst += seg_len;
+        while (dst > out && (dst[-1] == '\n' || dst[-1] == '\r'))
+            dst--;
+
+        /* Find [/EXEC] and copy command content (without tags) */
+        const char *cmd_start = exec + 6;
+        const char *exec_end = strstr(cmd_start, "[/EXEC]");
+        if (!exec_end) {
+            size_t remain = strlen(cmd_start);
+            memcpy(dst, cmd_start, remain);
+            dst += remain;
+            break;
+        }
+        size_t cmd_len = (size_t)(exec_end - cmd_start);
+        memcpy(dst, cmd_start, cmd_len);
+        dst += cmd_len;
+        pos = exec_end + 7;
+    }
+    *dst = '\0';
+    return out;
+}
+
 /* ── Measure a single item ──────────────────────────────────────────── */
 
 static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
@@ -636,15 +679,20 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         old_font = SelectObject(hdc, lv->hFont ? lv->hFont
                                                 : GetStockObject(DEFAULT_GUI_FONT));
         SetRect(&rc, 0, 0, text_w, 0);
-        draw_text_utf8(hdc, item->text, &rc,
+
+        const char *measure_text = item->text;
+        char *stripped = NULL;
+        if (strstr(item->text, "[EXEC]")) {
+            stripped = ai_text_for_measure(item->text);
+            if (stripped) measure_text = stripped;
+        }
+        draw_text_utf8(hdc, measure_text, &rc,
                        DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        free(stripped);
+
         SelectObject(hdc, old_font);
 
         int h = rc.bottom - rc.top;
-
-        /* Thinking region removed from inline display — the activity
-         * indicator (green dot + timer) now handles thinking status.
-         * Thinking text is still stored for future log/export use. */
 
         /* Icon row + gap before content (must match paint_ai_item layout) */
         return h + CLV_SCALE(lv, BASE_ICON_SIZE) + CLV_SCALE(lv, 4);
@@ -820,12 +868,19 @@ static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
             if (seg) {
                 memcpy(seg, pos, seg_len);
                 seg[seg_len] = '\0';
-                RECT seg_rc = { rc->left, y, rc->right, rc->bottom };
-                SetTextColor(hdc, normal_clr);
-                SelectObject(hdc, text_font);
-                int h = draw_text_utf8(hdc, seg, &seg_rc,
-                                       DT_WORDBREAK | DT_NOPREFIX);
-                y += h;
+                /* Strip trailing newlines to remove blank line before [EXEC] */
+                size_t trim = seg_len;
+                while (trim > 0 && (seg[trim - 1] == '\n' || seg[trim - 1] == '\r'))
+                    trim--;
+                seg[trim] = '\0';
+                if (trim > 0) {
+                    RECT seg_rc = { rc->left, y, rc->right, rc->bottom };
+                    SetTextColor(hdc, normal_clr);
+                    SelectObject(hdc, text_font);
+                    int h = draw_text_utf8(hdc, seg, &seg_rc,
+                                           DT_WORDBREAK | DT_NOPREFIX);
+                    y += h;
+                }
                 free(seg);
             }
         }
