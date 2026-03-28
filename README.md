@@ -1,3 +1,5 @@
+<img src="images/nutshell_acorn_transparent.png" alt="Nutshell" width="80">
+
 # Nutshell SSH
 
 **Version**: v1.0.09 \
