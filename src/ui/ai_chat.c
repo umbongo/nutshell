@@ -1479,10 +1479,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d) {
                 d->permit_write = !d->permit_write;
                 InvalidateRect(d->hPermitBtn, NULL, TRUE);
-                /* When enabling permit_write, unblock all blocked commands */
                 if (d->permit_write) {
+                    /* Enabling: unblock all blocked commands */
                     chat_approval_unblock_all(&d->approval_q);
-                    /* Sync blocked→pending in ChatMsgItem list */
                     ChatMsgItem *it = d->msg_list.head;
                     while (it) {
                         if (it->type == CHAT_ITEM_COMMAND &&
@@ -1492,9 +1491,22 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         }
                         it = it->next;
                     }
-                    if (d->hChatList)
-                        chat_listview_invalidate(d->hChatList);
+                } else {
+                    /* Disabling: re-block pending write/critical commands */
+                    chat_approval_block_pending_writes(&d->approval_q);
+                    ChatMsgItem *it = d->msg_list.head;
+                    while (it) {
+                        if (it->type == CHAT_ITEM_COMMAND &&
+                            !it->u.cmd.settled &&
+                            it->u.cmd.approved == -1 &&
+                            it->u.cmd.safety > CMD_SAFE) {
+                            it->u.cmd.blocked = 1;
+                        }
+                        it = it->next;
+                    }
                 }
+                if (d->hChatList)
+                    chat_listview_invalidate(d->hChatList);
             }
             return 0;
         case IDC_CHAT_AUTOAPPROVE:
