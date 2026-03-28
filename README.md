@@ -6,7 +6,20 @@
 
 ## Overview
 
-Nutshell is a lightweight, AI-enabled, native C SSH client for Windows, focusing on performance, minimal dependencies, and native OS integration. Built entirely with the Win32 API — no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~2.1 MB (UPX compressed).
+Nutshell is a lightweight, AI-enabled, native C SSH client for Windows. It pairs a full-featured terminal with a built-in AI assistant that can read your terminal output, suggest commands, and execute them over SSH — with your approval at every step.
+
+Built entirely with the Win32 API, no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~2.1 MB (UPX compressed).
+
+## AI Chat Assistant
+
+The standout feature: an integrated AI panel that sits alongside your terminal session. It sees what you see — the last 50 lines of terminal output — and can act on it.
+
+- **Context-aware** — the AI reads your live terminal output and tailors responses to what's happening on screen
+- **Command execution** — suggests commands that appear inline with Allow/Deny buttons; nothing runs without your approval
+- **Streaming responses** — real-time token streaming with chain-of-thought / reasoning display
+- **Multi-provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or any OpenAI-compatible endpoint
+- **Per-session context** — attach notes to each server profile (e.g. "production database — read-only") that guide the AI's behaviour
+- **Safety controls** — Permit Write toggle restricts the AI to read-only commands; Auto Approve for trusted workflows
 
 ## Pre-built Binary
 
@@ -14,6 +27,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 
 ## Features
 
+- AI chat assistant with terminal context, command execution, streaming, and reasoning display
 - Multi-tab SSH sessions with owner-drawn tab strip (status dots, log indicator, close button)
 - VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
 - Password and SSH key authentication with passphrase prompt and retry
@@ -23,7 +37,6 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Paste confirmation dialog with configurable inter-line delay
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
-- AI chat assistant — reads terminal context, executes commands, supports streaming and reasoning display
 - DPI-aware layout across all windows and dialogs
 - 1,062 unit tests, zero lint warnings
 
