@@ -38,7 +38,7 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define BASE_AI_INDENT    30
 #define BASE_CODE_PAD      6
 #define BASE_BORDER_W      3   /* Left-border width for thinking blocks */
-#define BASE_THINK_MAX_H 300   /* Max height of expanded thinking region */
+#define BASE_THINK_MAX_H 400   /* Max height of expanded thinking region */
 #define BASE_THINK_MIN_H  30   /* Min height of expanded thinking region */
 #define BASE_THINK_HDR_H  20   /* Height of thinking toggle header line */
 #define BASE_ICON_SIZE    20   /* AI avatar circle diameter */
