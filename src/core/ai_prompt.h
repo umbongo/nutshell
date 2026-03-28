@@ -121,6 +121,13 @@ int ai_response_split(const char *response,
 /* Count words in text (whitespace-delimited). Returns 0 for NULL/empty. */
 int ai_word_count(const char *text);
 
+/* Format a context bar label string.
+ * tokens: current estimated token count.
+ * limit: model context window size (0 = unknown → "Context: N/A").
+ * buf/buf_size: output buffer.
+ * Returns bytes written (excluding NUL). */
+int ai_format_context_label(int tokens, int limit, char *buf, size_t buf_size);
+
 /* Get the context window token limit for a model name.
  * Returns 0 for unknown models. */
 int ai_model_context_limit(const char *model);

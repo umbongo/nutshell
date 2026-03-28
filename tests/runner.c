@@ -1173,6 +1173,23 @@ int test_split_pre_truncated(void);
 int test_split_post_truncated(void);
 int test_split_unclosed_exec(void);
 
+/* test_context_bar.c */
+int test_context_tokens_empty_conv(void);
+int test_context_tokens_null(void);
+int test_context_tokens_single_message(void);
+int test_context_tokens_multiple_messages(void);
+int test_context_tokens_rounding_down(void);
+int test_context_label_zero_tokens(void);
+int test_context_label_small_tokens(void);
+int test_context_label_kilo_tokens(void);
+int test_context_label_large_limit(void);
+int test_context_label_full(void);
+int test_context_label_over_limit(void);
+int test_context_label_small_limit(void);
+int test_context_label_exact_1k(void);
+int test_context_label_na(void);
+int test_context_label_small_buf(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -2374,6 +2391,23 @@ int main(void) {
     failed += test_split_pre_truncated();
     failed += test_split_post_truncated();
     failed += test_split_unclosed_exec();
+
+    printf("\n--- Context Bar ---\n");
+    failed += test_context_tokens_empty_conv();
+    failed += test_context_tokens_null();
+    failed += test_context_tokens_single_message();
+    failed += test_context_tokens_multiple_messages();
+    failed += test_context_tokens_rounding_down();
+    failed += test_context_label_zero_tokens();
+    failed += test_context_label_small_tokens();
+    failed += test_context_label_kilo_tokens();
+    failed += test_context_label_large_limit();
+    failed += test_context_label_full();
+    failed += test_context_label_over_limit();
+    failed += test_context_label_small_limit();
+    failed += test_context_label_exact_1k();
+    failed += test_context_label_na();
+    failed += test_context_label_small_buf();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

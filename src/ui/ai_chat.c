@@ -146,8 +146,9 @@ typedef struct {
 
     /* Context window usage bar */
     HWND hContextBar;
-    HWND hContextLabel;
-    int  context_limit;  /* token limit for model, 0=unknown */
+    HWND hContextLabel;       /* kept for cleanup but hidden — text drawn by subclass */
+    int  context_limit;       /* token limit for model, 0=unknown */
+    char context_label[64];   /* text drawn on progress bar by subclass */
 
     /* Thinking history: per-assistant-message thinking text.
      * Indexed by conv.messages[] index (only meaningful for ASSISTANT roles).
@@ -196,6 +197,9 @@ typedef struct {
     /* Activity monitor state */
     ActivityState activity;
     int pulse_toggle;          /* 0/1 for pulsing dot animation */
+
+    /* Stream abort: UI thread sets to 1, stream callback checks it */
+    volatile int abort_stream;
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -233,6 +237,7 @@ typedef struct {
     HWND hwnd;                      /* target window for PostMessage */
     AiSessionState *target;         /* session this request is for */
     CRITICAL_SECTION *cs;           /* shared CS for conv writes */
+    volatile int *abort_flag;       /* set to 1 by UI thread to cancel stream */
     char api_key[256];
     char provider[64];
     char custom_url[256];
@@ -244,6 +249,7 @@ typedef struct {
 typedef struct {
     HWND hwnd;                   /* target window for PostMessage */
     AiSessionState *target;      /* session this stream belongs to */
+    volatile int *abort_flag;    /* checked each chunk — non-zero aborts */
     char line_buf[8192];     /* SSE line accumulation buffer */
     size_t line_len;
     char full_content[AI_MSG_MAX];   /* accumulated full content */
@@ -318,6 +324,10 @@ static int stream_callback(const char *data, size_t len, void *userdata)
 {
     StreamContext *ctx = (StreamContext *)userdata;
 
+    /* Check abort flag (set by UI thread on Cancel / New Chat / window close) */
+    if (ctx->abort_flag && *ctx->abort_flag)
+        return 1; /* abort stream */
+
     for (size_t i = 0; i < len; i++) {
         char c = data[i];
         if (c == '\n') {
@@ -378,12 +388,19 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
     memset(&ctx, 0, sizeof(ctx));
     ctx.hwnd = arg->hwnd;
     ctx.target = arg->target;
+    ctx.abort_flag = arg->abort_flag;
 
     int status = 0;
     char errbuf[256] = "";
     int rc = ai_http_post_stream(url, auth, arg->body, arg->body_len,
                                  stream_callback, &ctx,
                                  &status, errbuf, sizeof(errbuf));
+
+    /* If stream was aborted (user cancelled), discard partial results */
+    if (arg->abort_flag && *arg->abort_flag) {
+        free(arg);
+        return 0;
+    }
 
     if (rc != 0 || status < 200 || status >= 300) {
         char msg[1024];
@@ -420,6 +437,35 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 }
 
 
+/* Subclass proc for the context progress bar — draws label text on top of
+ * the bar after the default paint.  Avoids the fragile transparent-STATIC
+ * overlay that loses its text on parent/sibling repaints. */
+#define CONTEXT_BAR_SUBCLASS_ID 99
+static LRESULT CALLBACK ContextBarSubclass(HWND hwnd, UINT msg,
+    WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    if (msg == WM_PAINT) {
+        LRESULT r = DefSubclassProc(hwnd, msg, wParam, lParam);
+        AiChatData *d = (AiChatData *)dwRefData;
+        if (d && d->context_label[0] && d->theme) {
+            HDC hdc = GetDC(hwnd);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, theme_cr(d->theme->text_main));
+            HFONT oldFont = (HFONT)SelectObject(hdc, d->hFont);
+            DrawTextA(hdc, d->context_label, -1, &rc,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, oldFont);
+            ReleaseDC(hwnd, hdc);
+        }
+        return r;
+    }
+    if (msg == WM_NCDESTROY)
+        RemoveWindowSubclass(hwnd, ContextBarSubclass, uIdSubclass);
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
 static void update_context_bar(AiChatData *d)
 {
     if (!d || !d->hContextBar) return;
@@ -432,7 +478,9 @@ static void update_context_bar(AiChatData *d)
 
     if (d->context_limit <= 0) {
         SendMessage(d->hContextBar, PBM_SETPOS, 0, 0);
-        SetWindowText(d->hContextLabel, "Context: N/A");
+        ai_format_context_label(0, 0, d->context_label,
+                                sizeof(d->context_label));
+        InvalidateRect(d->hContextBar, NULL, TRUE);
         EnableWindow(d->hContextBar, FALSE);
         return;
     }
@@ -443,9 +491,9 @@ static void update_context_bar(AiChatData *d)
     SendMessage(d->hContextBar, PBM_SETBARCOLOR, 0,
                 (LPARAM)(pct > 80 ? RGB(220, 50, 50) :
                          pct > 50 ? RGB(220, 180, 50) : RGB(50, 180, 50)));
-    char label[64];
-    snprintf(label, sizeof(label), "Context: %d%%", pct);
-    SetWindowText(d->hContextLabel, label);
+    ai_format_context_label(tokens, d->context_limit,
+                            d->context_label, sizeof(d->context_label));
+    InvalidateRect(d->hContextBar, NULL, TRUE);
     EnableWindow(d->hContextBar, TRUE);
 }
 
@@ -461,15 +509,14 @@ static void start_indicator(AiChatData *d, const char *base)
         SendMessage(d->hContextBar, PBM_SETBARCOLOR, 0, (LPARAM)RGB(220, 100, 50));
         EnableWindow(d->hContextBar, TRUE);
     }
-    if (d->hContextLabel) {
-        char label[128];
-        snprintf(label, sizeof(label), "%c%s",
-            base[0] >= 'a' && base[0] <= 'z' ? (char)(base[0]-32) : base[0], base+1);
-        if (strcmp(base, "thinking") == 0) {
-            snprintf(label, sizeof(label), "Thinking... (Click to toggle)");
-        }
-        SetWindowText(d->hContextLabel, label);
-    }
+    if (strcmp(base, "thinking") == 0)
+        snprintf(d->context_label, sizeof(d->context_label),
+                 "Thinking...");
+    else
+        snprintf(d->context_label, sizeof(d->context_label), "%c%s",
+            base[0] >= 'a' && base[0] <= 'z' ? (char)(base[0]-32) : base[0],
+            base + 1);
+    InvalidateRect(d->hContextBar, NULL, TRUE);
 }
 
 /* Free all thinking history entries. */
@@ -534,6 +581,8 @@ static void launch_stream_thread(AiChatData *d)
     arg->hwnd = d->hwnd;
     arg->target = d->active_state;
     arg->cs = &d->cs;
+    d->abort_stream = 0;  /* reset before launching */
+    arg->abort_flag = &d->abort_stream;
 
     EnterCriticalSection(&d->cs);
     strncpy(arg->api_key, d->api_key, sizeof(arg->api_key) - 1);
@@ -582,7 +631,14 @@ static void launch_stream_thread(AiChatData *d)
         chat_listview_scroll_to_bottom(d->hChatList);
     }
 
-    _beginthreadex(NULL, 0, ai_stream_thread_proc, arg, 0, NULL);
+    HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, ai_stream_thread_proc, arg, 0, NULL);
+    if (hThread) CloseHandle(hThread);
+
+    /* Switch Send button to Stop while streaming */
+    if (d->hSendBtn) {
+        SetWindowTextW(d->hSendBtn, L"\x25A0"); /* ■ solid square = stop */
+        InvalidateRect(d->hSendBtn, NULL, TRUE);
+    }
 }
 
 /* Mark all current command items as settled so they render inline
@@ -596,6 +652,75 @@ static void settle_all_commands(ChatMsgList *list)
             it->dirty = 1;
         }
         it = it->next;
+    }
+}
+
+/* Cancel the active AI stream: signal abort, clear busy, reset UI state.
+ * Safe to call even when no stream is active. */
+static void cancel_active_stream(AiChatData *d)
+{
+    if (!d) return;
+
+    /* Signal the background thread to abort */
+    d->abort_stream = 1;
+
+    /* Force-clear busy so we can proceed */
+    if (d->active_state) d->active_state->busy = 0;
+
+    /* Kill timers */
+    KillTimer(d->hwnd, TIMER_HEARTBEAT);
+    KillTimer(d->hwnd, TIMER_CONTINUE);
+    KillTimer(d->hwnd, TIMER_CMD_QUEUE);
+    chat_activity_reset(&d->activity);
+    if (d->hChatList) {
+        chat_listview_set_pulse(d->hChatList, 0);
+        chat_listview_invalidate(d->hChatList);
+    }
+
+    /* Remove the incomplete streaming AI item */
+    if (d->stream_ai_item) {
+        chat_msg_remove(&d->msg_list, d->stream_ai_item);
+        d->stream_ai_item = NULL;
+    }
+
+    /* Reset streaming state */
+    d->stream_phase = 0;
+    d->stream_content[0] = '\0';
+    d->stream_content_len = 0;
+    d->stream_thinking[0] = '\0';
+    d->stream_thinking_len = 0;
+    d->commands_executed = 0;
+    d->pending_approval = 0;
+    d->queued_count = 0;
+    d->queued_next = 0;
+
+    /* Remove the last assistant message from conv if partially added */
+    EnterCriticalSection(&d->cs);
+    if (d->conv.msg_count > 0 &&
+        d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
+        d->conv.msg_count--;
+    LeaveCriticalSection(&d->cs);
+
+    /* Update UI */
+    update_context_bar(d);
+    if (d->hChatList) chat_listview_invalidate(d->hChatList);
+
+    /* Free per-session stream accumulators (normally freed in WM_AI_RESPONSE,
+     * but stale response may not arrive after cancel) */
+    if (d->active_state) {
+        free(d->active_state->stream_content);
+        d->active_state->stream_content = NULL;
+        d->active_state->stream_content_len = 0;
+        free(d->active_state->stream_thinking);
+        d->active_state->stream_thinking = NULL;
+        d->active_state->stream_thinking_len = 0;
+        d->active_state->stream_phase = 0;
+    }
+
+    /* Restore Send button from Stop */
+    if (d->hSendBtn) {
+        SetWindowText(d->hSendBtn, ">");
+        InvalidateRect(d->hSendBtn, NULL, TRUE);
     }
 }
 
@@ -965,14 +1090,12 @@ static void relayout(AiChatData *d)
         MoveWindow(d->hAllowAllBtn, pad + nw + pad + pw + pad, pad, aw, btn_h, TRUE);
     {
         int bar_h = S(16);
-        int ctx_w = S(120);
+        int ctx_w = S(180);
         int label_w = cw - ctx_w - pad * 3;
         if (d->hSessionLabel)
             MoveWindow(d->hSessionLabel, pad, top_y, label_w, bar_h, TRUE);
         if (d->hContextBar)
             MoveWindow(d->hContextBar, cw - ctx_w - pad, top_y, ctx_w, bar_h, TRUE);
-        if (d->hContextLabel)
-            MoveWindow(d->hContextLabel, cw - ctx_w - pad, top_y, ctx_w, bar_h, TRUE);
         top_y += bar_h + pad;
     }
     {
@@ -1152,7 +1275,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         /* Session name (left) + context bar (right) row */
         {
             int bar_h = S(16);
-            int ctx_w = S(120);  /* fixed width for context bar */
+            int ctx_w = S(180);  /* fixed width for context bar */
             int label_w = cw - ctx_w - pad * 3;
 
             /* Session name label on the left */
@@ -1170,14 +1293,18 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             SendMessage(nd->hContextBar, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
             SendMessage(nd->hContextBar, PBM_SETPOS, 0, 0);
             SendMessage(nd->hContextBar, PBM_SETBKCOLOR, 0,
-                        (LPARAM)theme_cr(nd->theme->bg_primary));
+                        (LPARAM)theme_cr(nd->theme->bg_secondary));
 
-            /* Clickable label overlay (SS_NOTIFY enables STN_CLICKED) */
-            nd->hContextLabel = CreateWindow("STATIC",
-                nd->context_limit > 0 ? "Context: 0%" : "Context: N/A",
-                WS_VISIBLE | WS_CHILD | SS_CENTER | SS_NOTIFY,
-                cw - ctx_w - pad, top_y, ctx_w, bar_h,
+            /* Label overlay hidden — text is now drawn by the progress
+             * bar subclass (ContextBarSubclass) for reliable rendering. */
+            nd->hContextLabel = CreateWindow("STATIC", "",
+                WS_CHILD, /* NOT visible */
+                0, 0, 0, 0,
                 hwnd, (HMENU)IDC_CONTEXT_LABEL, NULL, NULL);
+
+            /* Subclass the progress bar to draw label text on itself */
+            SetWindowSubclass(nd->hContextBar, ContextBarSubclass,
+                              CONTEXT_BAR_SUBCLASS_ID, (DWORD_PTR)nd);
 
             top_y += bar_h + pad;
         }
@@ -1353,6 +1480,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 chat_listview_invalidate(nd->hChatList);
         }
 
+        update_context_bar(nd);
         SetFocus(nd->hInput);
         return 0;
     }
@@ -1389,11 +1517,26 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDC_CHAT_SEND:
-            send_user_message(d);
+            if (d && ACTIVE_BUSY(d)) {
+                /* While streaming, Send button acts as Stop */
+                cancel_active_stream(d);
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                    "[cancelled]");
+                if (d->hChatList) {
+                    chat_listview_invalidate(d->hChatList);
+                    chat_listview_scroll_to_bottom(d->hChatList);
+                }
+            } else {
+                send_user_message(d);
+            }
             SetFocus(d->hInput);
             return 0;
         case IDC_CHAT_NEWCHAT:
-            if (d && !ACTIVE_BUSY(d) && !d->pending_approval) {
+            if (d) {
+                /* Cancel any active stream first */
+                if (ACTIVE_BUSY(d))
+                    cancel_active_stream(d);
+
                 /* Reset only the ACTIVE session's conversation.
                  * Other sessions' AiSessionState objects are untouched. */
                 ai_conv_reset(&d->conv);
@@ -1403,6 +1546,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 }
                 d->indicator_pos = -1;
                 d->commands_executed = 0;
+                d->pending_approval = 0;
                 d->pending_request[0] = '\0';
                 d->queued_count = 0;
                 d->queued_next = 0;
@@ -1853,6 +1997,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         free(chunk);  /* free wrapper; delta freed below */
         if (!delta) return 0;
 
+        /* Discard stale chunks that arrive after cancel */
+        if (d->abort_stream) {
+            free(delta);
+            return 0;
+        }
+
         /* Always accumulate to the source session's stream buffers */
         if (src) {
             size_t dlen = strlen(delta);
@@ -2195,6 +2345,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
 
         if (src) src->busy = 0;
+        /* Restore Send button from Stop */
+        if (d->hSendBtn) {
+            SetWindowText(d->hSendBtn, ">");
+            InvalidateRect(d->hSendBtn, NULL, TRUE);
+        }
         return 0;
     }
 
@@ -2547,6 +2702,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
     case WM_DESTROY:
         if (d) {
+            /* Signal any running stream thread to abort before cleanup */
+            d->abort_stream = 1;
+            if (d->active_state) d->active_state->busy = 0;
+
             KillTimer(hwnd, TIMER_SCROLL_SYNC);
             KillTimer(hwnd, TIMER_HEARTBEAT);
             /* Save conversation back to session before cleanup */

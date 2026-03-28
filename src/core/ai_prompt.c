@@ -131,6 +131,29 @@ int ai_context_estimate_tokens(const AiConversation *conv)
     return total_chars / 4;
 }
 
+int ai_format_context_label(int tokens, int limit, char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+    if (limit <= 0)
+        return snprintf(buf, buf_size, "Context: N/A");
+
+    int pct = (tokens * 100) / limit;
+    if (pct > 100) pct = 100;
+
+    char tok_str[16], lim_str[16];
+    if (tokens >= 1000)
+        snprintf(tok_str, sizeof(tok_str), "%.1fk", tokens / 1000.0);
+    else
+        snprintf(tok_str, sizeof(tok_str), "%d", tokens);
+    if (limit >= 1000)
+        snprintf(lim_str, sizeof(lim_str), "%dk", limit / 1000);
+    else
+        snprintf(lim_str, sizeof(lim_str), "%d", limit);
+
+    return snprintf(buf, buf_size, "Context: %s / %s (%d%%)",
+                    tok_str, lim_str, pct);
+}
+
 int ai_conv_compact(AiConversation *conv, int keep_recent)
 {
     if (!conv || keep_recent <= 0) return 0;
