@@ -2375,9 +2375,15 @@ void ui_init(HINSTANCE instance) {
     wc.lpfnWndProc = WndProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hIcon = LoadIcon(instance, MAKEINTRESOURCE(IDI_APPICON));
+    wc.hIcon = (HICON)LoadImage(instance, MAKEINTRESOURCE(IDI_APPICON),
+                                IMAGE_ICON,
+                                GetSystemMetrics(SM_CXICON),
+                                GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
     wc.hIconSm = (HICON)LoadImage(instance, MAKEINTRESOURCE(IDI_APPICON),
-                                   IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
+                                   IMAGE_ICON,
+                                   GetSystemMetrics(SM_CXSMICON),
+                                   GetSystemMetrics(SM_CYSMICON),
+                                   LR_DEFAULTCOLOR);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1); /* Will be overwritten by WM_PAINT */
     wc.lpszClassName = CLASS_NAME;
 
