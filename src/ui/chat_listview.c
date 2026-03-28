@@ -1668,8 +1668,11 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
                 mx >= think_left) {
                 item->u.ai.thinking_collapsed =
                     !item->u.ai.thinking_collapsed;
-                if (item->u.ai.thinking_collapsed)
+                if (item->u.ai.thinking_collapsed) {
                     item->u.ai.thinking_scroll_y = 0;
+                } else {
+                    item->u.ai.thinking_autoscroll = 1;
+                }
                 item->dirty = 1;
                 recalc_layout(lv);
                 InvalidateRect(lv->hwnd, NULL, FALSE);
@@ -2041,6 +2044,12 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                             wi->u.ai.thinking_scroll_y = 0;
                         if (wi->u.ai.thinking_scroll_y > max_scroll)
                             wi->u.ai.thinking_scroll_y = max_scroll;
+                        /* Auto-scroll: disengage on scroll-up,
+                         * re-engage when user reaches bottom */
+                        if (wi->u.ai.thinking_scroll_y >= max_scroll)
+                            wi->u.ai.thinking_autoscroll = 1;
+                        else
+                            wi->u.ai.thinking_autoscroll = 0;
                         if (wi->u.ai.thinking_scroll_y != old_sy) {
                             InvalidateRect(hwnd, NULL, FALSE);
                             return 0;  /* consumed by thinking scroll */

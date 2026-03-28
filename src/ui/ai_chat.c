@@ -1929,6 +1929,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     d->stream_phase = 1;
                 chat_msg_set_thinking(d->stream_ai_item,
                                       d->stream_thinking);
+                /* Auto-scroll expanded thinking to bottom */
+                if (!d->stream_ai_item->u.ai.thinking_collapsed
+                    && d->stream_ai_item->u.ai.thinking_autoscroll) {
+                    d->stream_ai_item->u.ai.thinking_scroll_y = 999999;
+                    /* Will be clamped to max_scroll by paint/mousewheel */
+                }
             } else {
                 /* Content delta — update AI item text */
                 if (d->stream_phase < 2)
