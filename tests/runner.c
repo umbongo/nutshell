@@ -1153,6 +1153,8 @@ int test_approval_queue_full(void);
 int test_approval_auto_approve_direct_toggle(void);
 int test_approval_auto_approve_direct_toggle_with_write(void);
 int test_approval_reset(void);
+int test_approval_block_pending_writes(void);
+int test_approval_block_pending_writes_skips_decided(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -2316,6 +2318,8 @@ int main(void) {
     failed += test_approval_auto_approve_direct_toggle();
     failed += test_approval_auto_approve_direct_toggle_with_write();
     failed += test_approval_reset();
+    failed += test_approval_block_pending_writes();
+    failed += test_approval_block_pending_writes_skips_decided();
 
     printf("\n--- Command Collapse ---\n");
     failed += test_cmd_index_single();

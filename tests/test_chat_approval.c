@@ -240,3 +240,42 @@ int test_approval_reset(void) {
     ASSERT_EQ(q.count, 0);
     TEST_END();
 }
+
+int test_approval_block_pending_writes(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    /* Safe command stays pending */
+    chat_approval_add(&q, "ls -la", CMD_PLATFORM_LINUX, 1);
+    /* Write command stays pending (permit_write=1) */
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
+    /* Critical command stays pending (permit_write=1) */
+    chat_approval_add(&q, "rm -rf /tmp", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ(q.count, 3);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_PENDING);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_PENDING);
+    ASSERT_EQ((int)q.entries[2].status, (int)APPROVE_PENDING);
+
+    int n = chat_approval_block_pending_writes(&q);
+    /* Only write+critical get blocked, safe stays pending */
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_PENDING);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_BLOCKED);
+    ASSERT_EQ((int)q.entries[2].status, (int)APPROVE_BLOCKED);
+    TEST_END();
+}
+
+int test_approval_block_pending_writes_skips_decided(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
+    chat_approval_add(&q, "cp x y", CMD_PLATFORM_LINUX, 1);
+    /* Approve first command — should not be re-blocked */
+    chat_approval_approve(&q, 0);
+    int n = chat_approval_block_pending_writes(&q);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_BLOCKED);
+    TEST_END();
+}

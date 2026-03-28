@@ -75,6 +75,11 @@ void chat_approval_set_completed(ApprovalQueue *q, int index);
  * Changes BLOCKED → PENDING. Returns number unblocked. */
 int chat_approval_unblock_all(ApprovalQueue *q);
 
+/* Block all pending write/critical commands (permit_write was disabled).
+ * Changes PENDING → BLOCKED for entries with safety > CMD_SAFE.
+ * Returns number blocked. */
+int chat_approval_block_pending_writes(ApprovalQueue *q);
+
 /* Reset the queue (e.g., for new AI response). */
 void chat_approval_reset(ApprovalQueue *q);
 
