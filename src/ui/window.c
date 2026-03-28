@@ -35,7 +35,7 @@
 static void hide_ai_panel(HWND parent);
 
 static const char *CLASS_NAME = "Nutshell_Window";
-static const char *APP_TITLE = "Nutshell v" APP_VERSION;
+static const char *APP_TITLE = "Nutshell";
 
 
 #define TAB_HEIGHT_BASE 32
@@ -1335,6 +1335,159 @@ static void do_copy(HWND hwnd)
     }
 }
 
+/* ---- Custom About dialog with acorn icon ---- */
+
+#define ABOUT_ICON_SIZE  78
+#define ABOUT_DLG_W     320
+#define ABOUT_DLG_H     290
+#define ABOUT_CLASS     "Nutshell_About"
+
+static LRESULT CALLBACK AboutDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_CREATE: {
+            /* Place OK button using actual client area */
+            RECT cr;
+            GetClientRect(hwnd, &cr);
+            int dpi = get_window_dpi(hwnd);
+            int btnW = MulDiv(80, dpi, 96);
+            int btnH = MulDiv(28, dpi, 96);
+            int btnX = (cr.right - btnW) / 2;
+            int btnY = cr.bottom - btnH - MulDiv(16, dpi, 96);
+            CreateWindowA("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                          btnX, btnY, btnW, btnH, hwnd, (HMENU)IDOK, g_hInst, NULL);
+            return 0;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            int dpi = get_window_dpi(hwnd);
+
+            /* Background */
+            HBRUSH bgBrush = CreateSolidBrush(
+                g_theme ? RGB((g_theme->bg_primary >> 16) & 0xFF,
+                              (g_theme->bg_primary >> 8) & 0xFF,
+                              g_theme->bg_primary & 0xFF)
+                        : GetSysColor(COLOR_3DFACE));
+            FillRect(hdc, &rc, bgBrush);
+            DeleteObject(bgBrush);
+
+            /* Draw acorn icon centered at top */
+            int iconSz = MulDiv(ABOUT_ICON_SIZE, dpi, 96);
+            int iconX = (rc.right - iconSz) / 2;
+            int iconY = MulDiv(20, dpi, 96);
+            HICON hIcon = (HICON)LoadImage(g_hInst, MAKEINTRESOURCE(IDI_APPICON),
+                                           IMAGE_ICON, iconSz, iconSz, LR_DEFAULTCOLOR);
+            if (hIcon) {
+                DrawIconEx(hdc, iconX, iconY, hIcon, iconSz, iconSz,
+                           0, NULL, DI_NORMAL);
+                DestroyIcon(hIcon);
+            }
+
+            /* Text below icon */
+            SetBkMode(hdc, TRANSPARENT);
+            COLORREF textClr = g_theme
+                ? RGB((g_theme->text_main >> 16) & 0xFF,
+                      (g_theme->text_main >> 8) & 0xFF,
+                      g_theme->text_main & 0xFF)
+                : GetSysColor(COLOR_WINDOWTEXT);
+            SetTextColor(hdc, textClr);
+
+            int titlePt = MulDiv(ABOUT_ICON_SIZE, 18, 100);
+            if (titlePt < 14) titlePt = 14;
+            int bodyPt = MulDiv(ABOUT_ICON_SIZE, 14, 100);
+            if (bodyPt < 11) bodyPt = 11;
+
+            HFONT hBold = CreateFontA(
+                -MulDiv(titlePt, dpi, 96), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Inter");
+            HFONT hNormal = CreateFontA(
+                -MulDiv(bodyPt, dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Inter");
+
+            int textY = iconY + iconSz + MulDiv(16, dpi, 96);
+            int lineH = MulDiv(titlePt + 10, dpi, 96);
+            RECT textRc = { 0, textY, rc.right, textY + lineH };
+            HFONT oldFont = SelectObject(hdc, hBold);
+            DrawTextA(hdc, "Nutshell v" APP_VERSION, -1, &textRc,
+                      DT_CENTER | DT_SINGLELINE);
+
+            textY += lineH + MulDiv(4, dpi, 96);
+            lineH = MulDiv(bodyPt + 8, dpi, 96);
+            textRc.top = textY;
+            textRc.bottom = textY + lineH;
+            SelectObject(hdc, hNormal);
+            DrawTextA(hdc, "A lightweight SSH terminal emulator.", -1, &textRc,
+                      DT_CENTER | DT_SINGLELINE);
+
+            textY += lineH + MulDiv(2, dpi, 96);
+            textRc.top = textY;
+            textRc.bottom = textY + lineH;
+            DrawTextA(hdc, "Copyright \xA9 2026 Thomas Sulkiewicz", -1, &textRc,
+                      DT_CENTER | DT_SINGLELINE);
+
+            SelectObject(hdc, oldFont);
+            DeleteObject(hBold);
+            DeleteObject(hNormal);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_COMMAND:
+            if (LOWORD(wParam) == IDOK)
+                DestroyWindow(hwnd);
+            return 0;
+        case WM_KEYDOWN:
+            if (wParam == VK_ESCAPE || wParam == VK_RETURN)
+                DestroyWindow(hwnd);
+            return 0;
+        case WM_DESTROY:
+            EnableWindow(GetParent(hwnd), TRUE);
+            SetForegroundWindow(GetParent(hwnd));
+            return 0;
+        default:
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
+    return 0;
+}
+
+static void show_about_dialog(HWND parent) {
+    static int registered = 0;
+    if (!registered) {
+        WNDCLASSEXA wc = {0};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = AboutDlgProc;
+        wc.hInstance = g_hInst;
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.lpszClassName = ABOUT_CLASS;
+        RegisterClassExA(&wc);
+        registered = 1;
+    }
+
+    int dlgW = MulDiv(ABOUT_DLG_W, g_dpi, 96);
+    int dlgH = MulDiv(ABOUT_DLG_H, g_dpi, 96);
+    RECT parentRc;
+    GetWindowRect(parent, &parentRc);
+    int x = parentRc.left + (parentRc.right - parentRc.left - dlgW) / 2;
+    int y = parentRc.top + (parentRc.bottom - parentRc.top - dlgH) / 2;
+
+    HWND dlg = CreateWindowExA(
+        WS_EX_DLGMODALFRAME, ABOUT_CLASS, "About Nutshell",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        x, y, dlgW, dlgH,
+        parent, NULL, g_hInst, NULL);
+
+    EnableWindow(parent, FALSE);
+
+    MSG m;
+    while (IsWindow(dlg) && GetMessage(&m, NULL, 0, 0) > 0) {
+        if (!IsDialogMessage(dlg, &m)) {
+            TranslateMessage(&m);
+            DispatchMessage(&m);
+        }
+    }
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
@@ -1540,11 +1693,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     help_guide_show(hwnd, g_config->settings.colour_scheme);
                     return 0;
                 case IDM_ABOUT:
-                    MessageBoxA(hwnd,
-                        "Nutshell SSH Client v" APP_VERSION
-                        "\n\nA lightweight SSH terminal emulator."
-                        "\n\nCopyright \xA9 2026 Thomas Sulkiewicz",
-                        "About Nutshell", MB_OK | MB_ICONINFORMATION);
+                    show_about_dialog(hwnd);
                     return 0;
             }
             break;
