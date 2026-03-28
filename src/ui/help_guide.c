@@ -1,5 +1,6 @@
 #include "help_guide.h"
 #include "resource.h"
+#include "dpi_util.h"
 #include "app_font.h"
 #include "ui_theme.h"
 #include "themed_button.h"
@@ -298,9 +299,7 @@ static LRESULT CALLBACK HelpGuideWndProc(HWND hwnd, UINT msg,
         int cw = rc.right;
         int ch = rc.bottom;
 
-        HDC hdc = GetDC(hwnd);
-        int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        ReleaseDC(hwnd, hdc);
+        int dpi = get_window_dpi(hwnd);
 
         #define S(x) MulDiv((x), dpi, 96)
 
@@ -505,12 +504,7 @@ void help_guide_show(HWND parent, const char *colour_scheme)
     wc.lpszClassName = GUIDE_CLASS;
     RegisterClassEx(&wc);
 
-    int pdpi;
-    {
-        HDC hdc = GetDC(parent);
-        pdpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        ReleaseDC(parent, hdc);
-    }
+    int pdpi = get_window_dpi(parent);
 
     HWND hwnd = CreateWindowEx(
         0, GUIDE_CLASS, "Nutshell User Guide",

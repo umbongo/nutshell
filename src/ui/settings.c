@@ -1,5 +1,6 @@
 #include "settings_dlg.h"
 #include "resource.h"
+#include "dpi_util.h"
 #include "app_font.h"
 #include "ui_theme.h"
 #include "themed_button.h"
@@ -257,11 +258,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
 
         /* Get per-monitor DPI for layout scaling */
-        {
-            HDC hdc_dpi = GetDC(hwnd);
-            nd->dpi = GetDeviceCaps(hdc_dpi, LOGPIXELSY);
-            ReleaseDC(hwnd, hdc_dpi);
-        }
+        nd->dpi = get_window_dpi(hwnd);
         #define S(px) MulDiv((px), nd->dpi, 96)
 
         RECT rc;
@@ -925,12 +922,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
     RegisterClassEx(&wc);
 
     /* Scale window size for DPI */
-    int pdpi;
-    {
-        HDC hdc = GetDC(parent);
-        pdpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        ReleaseDC(parent, hdc);
-    }
+    int pdpi = get_window_dpi(parent);
 
     HWND hwnd = CreateWindowEx(
         0, SETTINGS_CLASS, "Settings",

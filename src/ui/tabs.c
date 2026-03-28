@@ -6,6 +6,7 @@
 #include "tooltip.h"
 #include <stdio.h>
 #include <commctrl.h>
+#include "dpi_util.h"
 
 #ifdef _WIN32
 
@@ -82,16 +83,14 @@ static COLORREF status_color(TabStatus s)
 }
 
 /* (Re-)create hFont, hSmallFont, and hIconFont from font_name.  Deletes any previous. */
-static void tabs_create_fonts(TabControlData *data, HWND hwnd)
+static void tabs_create_fonts(TabControlData *data, int dpi)
 {
     if (data->hFont)      { DeleteObject(data->hFont);      data->hFont = NULL; }
     if (data->hSmallFont) { DeleteObject(data->hSmallFont); data->hSmallFont = NULL; }
     if (data->hIconFont)  { DeleteObject(data->hIconFont);  data->hIconFont = NULL; }
 
-    HDC hdc = GetDC(hwnd);
-    int logPixelsY = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(hwnd, hdc);
-    data->dpi = logPixelsY;
+    data->dpi = dpi;
+    int logPixelsY = dpi;
 
     int h = -MulDiv(APP_FONT_UI_SIZE, logPixelsY, 72);
     data->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -133,7 +132,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
             (void)snprintf(data->font_name, sizeof(data->font_name),
                            "%s", APP_FONT_DEFAULT);
-            tabs_create_fonts(data, hwnd);
+            tabs_create_fonts(data, get_window_dpi(hwnd));
 
             /* Create tooltip control — one tool covers the entire tab strip */
             data->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
@@ -701,12 +700,13 @@ void tabs_set_ai_active(HWND hwnd, int active)
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
-void tabs_set_font(HWND hwnd, const char *font_name)
+void tabs_set_font(HWND hwnd, const char *font_name, int dpi)
 {
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!data || !font_name) return;
     (void)snprintf(data->font_name, sizeof(data->font_name), "%s", font_name);
-    tabs_create_fonts(data, hwnd);
+    if (dpi <= 0) dpi = get_window_dpi(hwnd);
+    tabs_create_fonts(data, dpi);
     InvalidateRect(hwnd, NULL, FALSE);
 }
 

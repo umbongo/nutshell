@@ -50,6 +50,10 @@ int test_utf8_encode_2byte(void);
 int test_utf8_encode_3byte(void);
 int test_utf8_encode_4byte(void);
 int test_utf8_encode_out_of_range(void);
+int test_model_label_middle_dot_utf8(void);
+int test_model_label_middle_dot_not_split(void);
+int test_model_label_utf8_encode_middle_dot(void);
+int test_model_label_truncation(void);
 
 /* test_logger.c */
 int test_logger_init_stderr_only(void);
@@ -1237,6 +1241,10 @@ int main(void) {
     failed += test_utf8_encode_3byte();
     failed += test_utf8_encode_4byte();
     failed += test_utf8_encode_out_of_range();
+    failed += test_model_label_middle_dot_utf8();
+    failed += test_model_label_middle_dot_not_split();
+    failed += test_model_label_utf8_encode_middle_dot();
+    failed += test_model_label_truncation();
     failed += test_logger_init_stderr_only();
     failed += test_logger_creates_file();
     failed += test_logger_file_contains_message();

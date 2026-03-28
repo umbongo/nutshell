@@ -11,6 +11,7 @@
 #include "chat_activity.h"
 #include "resource.h"
 #include "custom_scrollbar.h"
+#include "dpi_util.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -457,6 +458,17 @@ void chat_listview_set_scrollbar(HWND hwnd, HWND scrollbar)
     ChatListView *lv = lv_from_hwnd(hwnd);
     if (!lv) return;
     lv->ext_scrollbar = scrollbar;
+}
+
+void chat_listview_set_model(HWND hwnd, const char *model)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    if (model)
+        snprintf(lv->model_name, sizeof(lv->model_name), "%s", model);
+    else
+        lv->model_name[0] = '\0';
+    InvalidateRect(hwnd, NULL, FALSE);
 }
 
 void chat_listview_invalidate(HWND hwnd)
@@ -985,6 +997,23 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     DrawTextA(hdc, "AI", 2, &label_rc,
               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 
+    /* Model name after "AI" label in smaller font */
+    if (lv->model_name[0]) {
+        SIZE ai_sz;
+        GetTextExtentPoint32A(hdc, "AI", 2, &ai_sz);
+        SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                         : GetStockObject(DEFAULT_GUI_FONT));
+        char model_label[80];
+        snprintf(model_label, sizeof(model_label), " \xC2\xB7 %s", lv->model_name);
+        RECT model_rc = label_rc;
+        model_rc.left += ai_sz.cx;
+        draw_text_utf8(hdc, model_label, &model_rc,
+                       DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+        /* Restore font for content rendering below */
+        SelectObject(hdc, lv->hFont ? lv->hFont
+                          : GetStockObject(DEFAULT_GUI_FONT));
+    }
+
     int content_top = rc->top + icon_sz + CLV_SCALE(lv, 4);
 
     /* ── Thinking block (contained box) ──────────────────────────── */
@@ -1031,7 +1060,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             SetRect(&hdr_rc, box_rc.left + pad, box_rc.top + pad,
                     box_rc.right - pad, box_rc.bottom - pad);
             draw_text_utf8(hdc, hdr_buf, &hdr_rc,
-                           DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+                           DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
 
             content_top = box_rc.bottom + gap;
         } else {
@@ -1087,7 +1116,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             SetRect(&hdr_rc, box_rc.left + pad, box_rc.top + pad,
                     box_rc.right - pad, box_rc.top + pad + hdr_h);
             draw_text_utf8(hdc, hdr_buf, &hdr_rc,
-                           DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+                           DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
 
             /* Separator line */
             int sep_y = box_rc.top + pad + hdr_h;
@@ -1827,27 +1856,9 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         lv->hwnd = hwnd;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)lv);
 
-        /* Detect DPI: try GetDpiForWindow (Win10 1607+) via runtime lookup,
-         * fall back to GetDeviceCaps on older systems.
-         * Use a union to avoid ISO C pedantic pointer-cast warnings. */
+        /* Detect DPI using shared helper (tries GetDpiForWindow, falls back to GetDeviceCaps) */
         {
-            typedef UINT (WINAPI *GetDpiForWindow_t)(HWND);
-            union { FARPROC proc; GetDpiForWindow_t fn; } u;
-            HMODULE hUser32 = GetModuleHandleA("user32.dll");
-            u.fn = NULL;
-            if (hUser32) {
-                u.proc = GetProcAddress(hUser32, "GetDpiForWindow");
-            }
-            UINT dpi = 96;
-            if (u.fn) {
-                dpi = u.fn(hwnd);
-            } else {
-                HDC hdc_screen = GetDC(NULL);
-                if (hdc_screen) {
-                    dpi = (UINT)GetDeviceCaps(hdc_screen, LOGPIXELSX);
-                    ReleaseDC(NULL, hdc_screen);
-                }
-            }
+            UINT dpi = (UINT)get_window_dpi(hwnd);
             lv->dpi_scale = (float)dpi / 96.0f;
         }
 

@@ -54,6 +54,9 @@ typedef struct {
     int ai_indent;          /* AI content left indent (30px) */
     int code_pad;           /* Code block padding (6px) */
 
+    /* Model name for AI label display */
+    char model_name[64];
+
     /* External custom scrollbar (not owned) */
     HWND ext_scrollbar;
 
@@ -96,5 +99,8 @@ void chat_listview_reset_cmd_expand(HWND hwnd);
 
 /* Set external custom scrollbar to sync with. */
 void chat_listview_set_scrollbar(HWND hwnd, HWND scrollbar);
+
+/* Set the AI model name displayed next to "AI" label. */
+void chat_listview_set_model(HWND hwnd, const char *model);
 
 #endif /* NUTSHELL_CHAT_LISTVIEW_H */

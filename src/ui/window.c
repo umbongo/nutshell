@@ -28,6 +28,7 @@
 #include "ui_theme.h"
 #include "custom_scrollbar.h"
 #include "menubar_line.h"
+#include "dpi_util.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <dwmapi.h>
 
@@ -36,24 +37,6 @@ static void hide_ai_panel(HWND parent);
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell v" APP_VERSION;
 
-/* Per-monitor DPI helper.  Dynamically loads GetDpiForWindow (Win10 1607+)
- * and falls back to the system-wide LOGPIXELSY value on older builds. */
-typedef UINT (WINAPI *GetDpiForWindow_fn)(HWND);
-static int get_window_dpi(HWND hwnd)
-{
-    static GetDpiForWindow_fn pfn = NULL;
-    static int resolved = 0;
-    if (!resolved) {
-        HMODULE h = GetModuleHandleA("user32.dll");
-        if (h) pfn = (GetDpiForWindow_fn)(void (*)(void))GetProcAddress(h, "GetDpiForWindow");
-        resolved = 1;
-    }
-    if (pfn && hwnd) return (int)pfn(hwnd);
-    HDC hdc = GetDC(NULL);
-    int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-    ReleaseDC(NULL, hdc);
-    return dpi;
-}
 
 #define TAB_HEIGHT_BASE 32
 #define TERM_LEFT_MARGIN 6
@@ -699,7 +682,7 @@ static void on_settings_clicked(void) {
     renderer_apply_theme(parent, g_renderer.defaultBg);
 
     /* Update tab strip font (may have changed) */
-    tabs_set_font(g_hwndTabs, g_config->settings.font);
+    tabs_set_font(g_hwndTabs, g_config->settings.font, 0);
 
     /* Update AI button state (green/grey based on API key) */
     tabs_set_ai_active(g_hwndTabs,
@@ -1918,7 +1901,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
 
             /* Recreate tab strip fonts */
-            tabs_set_font(g_hwndTabs, g_config->settings.font);
+            tabs_set_font(g_hwndTabs, g_config->settings.font, newDpi);
 
             /* Recalculate terminal grid via WM_SIZE */
             RECT dpi_rc;

@@ -23,6 +23,7 @@
 #include "chat_activity.h"
 #include "chat_approval.h"
 #include "chat_listview.h"
+#include "dpi_util.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <stdio.h>
 #include <string.h>
@@ -510,8 +511,7 @@ static void start_indicator(AiChatData *d, const char *base)
         EnableWindow(d->hContextBar, TRUE);
     }
     if (strcmp(base, "thinking") == 0)
-        snprintf(d->context_label, sizeof(d->context_label),
-                 "Thinking...");
+        d->context_label[0] = '\0';   /* inline indicator shows timing */
     else
         snprintf(d->context_label, sizeof(d->context_label), "%c%s",
             base[0] >= 'a' && base[0] <= 'z' ? (char)(base[0]-32) : base[0],
@@ -1217,11 +1217,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         nd->hwnd = hwnd;
 
         /* Get per-monitor DPI for layout scaling */
-        {
-            HDC hdc_dpi = GetDC(hwnd);
-            nd->dpi = GetDeviceCaps(hdc_dpi, LOGPIXELSY);
-            ReleaseDC(hwnd, hdc_dpi);
-        }
+        nd->dpi = get_window_dpi(hwnd);
         #define S(px) MulDiv((px), nd->dpi, 96)
 
         RECT rc;
@@ -1417,6 +1413,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 chat_listview_set_fonts(nd->hChatList, nd->hFont,
                                         nd->hMonoFont, nd->hBoldFont,
                                         nd->hSmallFont, nd->hIconFont);
+                chat_listview_set_model(nd->hChatList, nd->conv.model);
             }
             /* Measure line height for scrollbar sync */
             HDC hdc_m = GetDC(nd->hInput);
@@ -2906,12 +2903,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     d->docked = docked;
 
     /* Scale window size for DPI */
-    int pdpi;
-    {
-        HDC hdc = GetDC(parent);
-        pdpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        ReleaseDC(parent, hdc);
-    }
+    int pdpi = get_window_dpi(parent);
 
     DWORD style = docked
         ? (WS_CHILD | WS_CLIPCHILDREN)       /* hidden until first resize */
@@ -2965,6 +2957,10 @@ void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
             snprintf(d->conv.model, sizeof(d->conv.model), "%s", model);
     }
     LeaveCriticalSection(&d->cs);
+
+    /* Update model name on chat listview */
+    if (d->hChatList)
+        chat_listview_set_model(d->hChatList, d->conv.model);
 }
 
 void ai_chat_update_notes(HWND hwnd, const char *session_notes,
