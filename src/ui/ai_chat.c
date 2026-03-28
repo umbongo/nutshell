@@ -2630,6 +2630,20 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         r = r * 4 / 5; g = g * 4 / 5; b = b * 4 / 5;
                         bg_rgb = (r << 16) | (g << 8) | b;
                     }
+                    /* 3D depth colors */
+                    unsigned int hi_r = ((bg_rgb >> 16) & 0xFF);
+                    unsigned int hi_g = ((bg_rgb >> 8)  & 0xFF);
+                    unsigned int hi_b = ( bg_rgb        & 0xFF);
+                    hi_r = hi_r + (255 - hi_r) * 2 / 5;
+                    hi_g = hi_g + (255 - hi_g) * 2 / 5;
+                    hi_b = hi_b + (255 - hi_b) * 2 / 5;
+                    unsigned int hi_rgb = (hi_r << 16) | (hi_g << 8) | hi_b;
+                    unsigned int sh_r = ((bg_rgb >> 16) & 0xFF) * 3 / 5;
+                    unsigned int sh_g = ((bg_rgb >> 8)  & 0xFF) * 3 / 5;
+                    unsigned int sh_b = ( bg_rgb        & 0xFF) * 3 / 5;
+                    unsigned int sh_rgb = (sh_r << 16) | (sh_g << 8) | sh_b;
+
+                    /* Clear corners, draw round-rect body */
                     HBRUSH hBgBr = CreateSolidBrush(theme_cr(d->theme->bg_primary));
                     FillRect(hdc, &rc, hBgBr);
                     DeleteObject(hBgBr);
@@ -2637,30 +2651,42 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     HPEN hPen = CreatePen(PS_SOLID, 1, theme_cr(d->theme->border));
                     HGDIOBJ oBr = SelectObject(hdc, hBr);
                     HGDIOBJ oPen = SelectObject(hdc, hPen);
-                    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 4, 4);
+                    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
                     SelectObject(hdc, oPen);
                     SelectObject(hdc, oBr);
                     DeleteObject(hPen);
                     DeleteObject(hBr);
-                    /* Larger icon text */
-                    int ih = -MulDiv(14, d->dpi, 72);
-                    HFONT hBig = CreateFont(ih, 0, 0, 0, FW_BOLD,
-                        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                        APP_FONT_UI_FACE);
-                    HFONT prev = (HFONT)SelectObject(hdc, hBig ? hBig : d->hFont);
+
+                    /* Top highlight line (inset 1px) */
+                    HPEN hHiPen = CreatePen(PS_SOLID, 1, theme_cr(hi_rgb));
+                    HGDIOBJ oP = SelectObject(hdc, hHiPen);
+                    MoveToEx(hdc, rc.left + 3, rc.top + 1, NULL);
+                    LineTo(hdc, rc.right - 3, rc.top + 1);
+                    /* Left highlight line */
+                    MoveToEx(hdc, rc.left + 1, rc.top + 3, NULL);
+                    LineTo(hdc, rc.left + 1, rc.bottom - 3);
+                    SelectObject(hdc, oP);
+                    DeleteObject(hHiPen);
+
+                    /* Bottom shadow line (inset 1px) */
+                    HPEN hShPen = CreatePen(PS_SOLID, 1, theme_cr(sh_rgb));
+                    oP = SelectObject(hdc, hShPen);
+                    MoveToEx(hdc, rc.left + 3, rc.bottom - 2, NULL);
+                    LineTo(hdc, rc.right - 3, rc.bottom - 2);
+                    /* Right shadow line */
+                    MoveToEx(hdc, rc.right - 2, rc.top + 3, NULL);
+                    LineTo(hdc, rc.right - 2, rc.bottom - 3);
+                    SelectObject(hdc, oP);
+                    DeleteObject(hShPen);
+
+                    /* Icon — same font as other panel icons */
+                    HFONT prev = (HFONT)SelectObject(hdc,
+                        d->hIconFont ? d->hIconFont : d->hFont);
                     SetBkMode(hdc, TRANSPARENT);
                     SetTextColor(hdc, theme_cr(0xFFFFFF));
                     DrawTextW(hdc, btn_text, -1, &rc,
                               DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                     SelectObject(hdc, prev);
-                    if (hBig) DeleteObject(hBig);
-                    if (dis->itemState & ODS_FOCUS) {
-                        RECT fr = rc;
-                        InflateRect(&fr, -3, -3);
-                        DrawFocusRect(hdc, &fr);
-                    }
                 }
             } else if ((int)dis->CtlID == IDC_CHAT_SAVE) {
                 /* Square save button with floppy disk icon */
