@@ -1153,8 +1153,25 @@ int test_approval_queue_full(void);
 int test_approval_auto_approve_direct_toggle(void);
 int test_approval_auto_approve_direct_toggle_with_write(void);
 int test_approval_reset(void);
+int test_approval_auto_approve_persists_across_reset(void);
+int test_approval_auto_approve_blocked_not_all_decided(void);
 int test_approval_block_pending_writes(void);
 int test_approval_block_pending_writes_skips_decided(void);
+
+/* test_response_split.c */
+int test_split_no_commands(void);
+int test_split_single_command_with_summary(void);
+int test_split_multiple_commands_with_summary(void);
+int test_split_commands_only(void);
+int test_split_no_post_text(void);
+int test_split_null_response(void);
+int test_split_null_outputs(void);
+int test_split_empty_response(void);
+int test_split_inter_command_text_excluded(void);
+int test_split_whitespace_post(void);
+int test_split_pre_truncated(void);
+int test_split_post_truncated(void);
+int test_split_unclosed_exec(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -2318,6 +2335,8 @@ int main(void) {
     failed += test_approval_auto_approve_direct_toggle();
     failed += test_approval_auto_approve_direct_toggle_with_write();
     failed += test_approval_reset();
+    failed += test_approval_auto_approve_persists_across_reset();
+    failed += test_approval_auto_approve_blocked_not_all_decided();
     failed += test_approval_block_pending_writes();
     failed += test_approval_block_pending_writes_skips_decided();
 
@@ -2340,6 +2359,21 @@ int main(void) {
     failed += test_cmd_selected_toggle();
     failed += test_cmd_selected_blocked_not_counted();
     failed += test_cmd_selected_approved_not_counted();
+
+    printf("\n--- Response Split ---\n");
+    failed += test_split_no_commands();
+    failed += test_split_single_command_with_summary();
+    failed += test_split_multiple_commands_with_summary();
+    failed += test_split_commands_only();
+    failed += test_split_no_post_text();
+    failed += test_split_null_response();
+    failed += test_split_null_outputs();
+    failed += test_split_empty_response();
+    failed += test_split_inter_command_text_excluded();
+    failed += test_split_whitespace_post();
+    failed += test_split_pre_truncated();
+    failed += test_split_post_truncated();
+    failed += test_split_unclosed_exec();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

@@ -413,6 +413,62 @@ int ai_extract_commands(const char *response, char cmds[][1024],
     return count;
 }
 
+/* ---- Response splitting ---- */
+
+int ai_response_split(const char *response,
+                      char *pre_cmd, size_t pre_size,
+                      char *post_cmd, size_t post_size)
+{
+    if (pre_cmd && pre_size > 0) pre_cmd[0] = '\0';
+    if (post_cmd && post_size > 0) post_cmd[0] = '\0';
+    if (!response || !*response) return 0;
+
+    /* Find first [EXEC] and count command pairs */
+    const char *first_exec = NULL;
+    const char *last_end = NULL;
+    int count = 0;
+    const char *pos = response;
+
+    while ((pos = strstr(pos, "[EXEC]")) != NULL) {
+        if (!first_exec) first_exec = pos;
+        pos += 6;
+        const char *end = strstr(pos, "[/EXEC]");
+        if (!end) break; /* unclosed — don't count */
+        count++;
+        last_end = end + 7; /* past "[/EXEC]" */
+        pos = last_end;
+    }
+
+    if (count == 0) {
+        /* No valid command pairs — full text goes to pre_cmd */
+        if (pre_cmd && pre_size > 0) {
+            size_t len = strlen(response);
+            if (len >= pre_size) len = pre_size - 1;
+            memcpy(pre_cmd, response, len);
+            pre_cmd[len] = '\0';
+        }
+        return 0;
+    }
+
+    /* Pre-command: text before first [EXEC] */
+    if (pre_cmd && pre_size > 0) {
+        size_t len = (size_t)(first_exec - response);
+        if (len >= pre_size) len = pre_size - 1;
+        memcpy(pre_cmd, response, len);
+        pre_cmd[len] = '\0';
+    }
+
+    /* Post-command: text after last [/EXEC] */
+    if (post_cmd && post_size > 0 && last_end) {
+        size_t len = strlen(last_end);
+        if (len >= post_size) len = post_size - 1;
+        memcpy(post_cmd, last_end, len);
+        post_cmd[len] = '\0';
+    }
+
+    return count;
+}
+
 /* ---- Command read-only classification ---- */
 
 int ai_command_is_readonly(const char *cmd)
