@@ -381,7 +381,7 @@ HWND chat_listview_create(HWND parent, int x, int y, int w, int h,
 
     HWND hwnd = CreateWindowExA(
         0, CHATLIST_CLASS, NULL,
-        WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_CLIPCHILDREN,
+        WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
         x, y, w, h,
         parent, NULL, GetModuleHandle(NULL), lv);
 
@@ -457,8 +457,6 @@ void chat_listview_set_scrollbar(HWND hwnd, HWND scrollbar)
     ChatListView *lv = lv_from_hwnd(hwnd);
     if (!lv) return;
     lv->ext_scrollbar = scrollbar;
-    /* Hide the built-in Windows scrollbar */
-    ShowScrollBar(hwnd, SB_VERT, FALSE);
 }
 
 void chat_listview_invalidate(HWND hwnd)
@@ -708,20 +706,10 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
 static void update_scrollbar(ChatListView *lv)
 {
-    SCROLLINFO si;
-    memset(&si, 0, sizeof(si));
-    si.cbSize = sizeof(si);
-    si.fMask  = SIF_RANGE | SIF_PAGE | SIF_POS;
-    si.nMin   = 0;
-    si.nMax   = lv->total_height > 0 ? lv->total_height - 1 : 0;
-    si.nPage  = (UINT)lv->viewport_height;
-    si.nPos   = lv->scroll_y;
-    SetScrollInfo(lv->hwnd, SB_VERT, &si, TRUE);
-
-    /* Sync external custom scrollbar if set */
     if (lv->ext_scrollbar) {
-        csb_set_range(lv->ext_scrollbar, si.nMin, si.nMax, (int)si.nPage);
-        csb_set_pos(lv->ext_scrollbar, si.nPos);
+        int max_val = lv->total_height > 0 ? lv->total_height - 1 : 0;
+        csb_set_range(lv->ext_scrollbar, 0, max_val, lv->viewport_height);
+        csb_set_pos(lv->ext_scrollbar, lv->scroll_y);
     }
 }
 
