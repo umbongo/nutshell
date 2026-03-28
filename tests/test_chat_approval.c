@@ -196,6 +196,40 @@ int test_approval_queue_full(void) {
     TEST_END();
 }
 
+int test_approval_auto_approve_direct_toggle(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_EQ(q.auto_approve, 0);
+    /* Simulate the Auto Approve button: direct toggle on */
+    q.auto_approve = 1;
+    ASSERT_EQ(q.auto_approve, 1);
+    /* Commands added while active should auto-approve */
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
+    /* Toggle off */
+    q.auto_approve = 0;
+    ASSERT_EQ(q.auto_approve, 0);
+    /* Commands added after toggle off should be pending */
+    chat_approval_add(&q, "cat /etc/hosts", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_PENDING);
+    TEST_END();
+}
+
+int test_approval_auto_approve_direct_toggle_with_write(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.auto_approve = 1;
+    /* Write commands with permit_write=0 should still be blocked */
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_BLOCKED);
+    /* Write commands with permit_write=1 should auto-approve */
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_APPROVED);
+    TEST_END();
+}
+
 int test_approval_reset(void) {
     TEST_BEGIN();
     ApprovalQueue q;

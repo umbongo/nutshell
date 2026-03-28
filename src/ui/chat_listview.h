@@ -28,6 +28,22 @@ typedef struct {
     ActivityState *activity;
     int pulse_toggle;           /* Animation toggle for pulsing dot */
 
+    /* Text selection (content-space Y coordinates) */
+    int sel_start_y;            /* Content Y where mouse-drag started */
+    int sel_end_y;              /* Content Y where mouse-drag currently is */
+    int sel_active;             /* 1 = mouse is held down, dragging */
+    int sel_valid;              /* 1 = a selection exists to highlight/copy */
+
+    /* Command list collapse state (0 = collapsed, 1 = expanded) */
+    int cmd_list_expanded;
+
+    /* Command container scroll state */
+    int cmd_scroll_y;           /* Scroll offset within command container */
+    int cmd_total_h;            /* Total height of all command cards */
+    int cmd_visible_h;          /* Visible content height (capped) */
+    int cmd_count;              /* Number of command items */
+    int cmd_heights[16];        /* Individual card heights (pre-container) */
+
     /* DPI scaling factor (1.0 = 96 DPI) */
     float dpi_scale;
 
@@ -37,6 +53,9 @@ typedef struct {
     int user_pad_v;         /* User bubble vertical padding (8px) */
     int ai_indent;          /* AI content left indent (30px) */
     int code_pad;           /* Code block padding (6px) */
+
+    /* External custom scrollbar (not owned) */
+    HWND ext_scrollbar;
 
 } ChatListView;
 
@@ -68,5 +87,14 @@ void chat_listview_set_activity(HWND hwnd, ActivityState *activity);
 
 /* Set pulse toggle (called by parent on heartbeat timer). */
 void chat_listview_set_pulse(HWND hwnd, int toggle);
+
+/* Toggle command list expand/collapse state. */
+void chat_listview_toggle_cmd_expand(HWND hwnd);
+
+/* Reset command list expand state (e.g., on new AI response). */
+void chat_listview_reset_cmd_expand(HWND hwnd);
+
+/* Set external custom scrollbar to sync with. */
+void chat_listview_set_scrollbar(HWND hwnd, HWND scrollbar);
 
 #endif /* NUTSHELL_CHAT_LISTVIEW_H */

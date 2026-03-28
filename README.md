@@ -2,8 +2,8 @@
 
 
 
-**Version**: v0.9.28 \
-**Build Date**: 2026-03-27 \
+**Version**: v0.9.35 \
+**Build Date**: 2026-03-28 \
 **Author**: Thomas Sulkiewicz 
 
 ## Overview
@@ -28,7 +28,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Onyx Synapse UI — 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - AI chat assistant — reads terminal context, executes commands, supports streaming and reasoning display
 - DPI-aware layout across all windows and dialogs
-- 865 unit tests, zero lint warnings
+- 1,026 unit tests, zero lint warnings
 
 ---
 
@@ -218,16 +218,20 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │   ├── core/       # Portable logic — xmalloc, vector, string_utils, logger, tab_manager,
 │   │               #   theme, ui_theme, tooltip, snap, zoom, connect_anim, log_format,
 │   │               #   ai_prompt, ai_http, term_extract, display_buffer, app_font,
-│   │               #   selection, paste_preview, edit_scroll
-│   ├── config/     # JSON tokenizer, JSON parser, config loader, ssh_io
+│   │               #   selection, paste_preview, edit_scroll, chat_msg, chat_activity,
+│   │               #   chat_approval, chat_thinking, cmd_classify
+│   ├── config/     # JSON tokenizer, JSON parser, config loader, profile, ssh_io
 │   ├── crypto/     # AES-256-GCM password encryption (OpenSSL)
 │   ├── term/       # Terminal emulator (buffer, parser) + SSH (session, channel, PTY, knownhosts)
-│   ├── ui/         # Win32 UI — renderer, tabs, window, session manager, settings dialog,
-│   │               #   ai_chat, ai_dock, ai_http_win, help_guide, paste_dlg, markdown,
-│   │               #   menubar_line, themed_button, custom_scrollbar
+│   ├── ui/         # Win32 UI — renderer, tabs, window, session_manager, settings,
+│   │               #   ai_chat, ai_dock, ai_http_win, chat_listview, help_guide,
+│   │               #   paste_dlg, markdown, md_render, menubar_line, themed_button,
+│   │               #   custom_scrollbar
 │   └── main.c
 ├── tests/          # Unit tests (TDD — tests written before implementation)
 ├── build/          # Build artefacts (gitignored)
+├── images/         # Application icon and assets
+├── LICENSE
 ├── PRD.md              # Product Requirements
 ├── agents.md           # Lessons learned and tips for contributors
 └── Makefile
@@ -291,7 +295,7 @@ If you are an AI assistant helping with this codebase, please observe the follow
 3.  **Win32 API Verbosity**: The Win32 API is verbose. When writing UI code, prefer creating helper functions for repetitive tasks like `CreateWindowEx` or `SendMessage`.
 4.  **Test Harness**: We use a custom minimal test runner. It relies on macros like `ASSERT_EQ` and `ASSERT_TRUE`. Do not import `CUnit` or `GoogleTest`; use the provided `tests/test_framework.h`. Each test function uses `TEST_BEGIN()` / `TEST_END()` — failures are reported but do not abort the function, so all assertions in a test always run.
 5.  **String Handling**: Do not use `strcat` or `strcpy`. Use `snprintf(dst, sizeof(dst), "%s", src)` for field copies, or the helpers in `src/core/string_utils.h` (`str_dup`, `str_cat`, `str_trim`).
-6.  **Cross-Reference**: If you are unsure about logic, check `../golang/` for the reference Go implementation, but translate the *intent*, not the syntax. Go channels usually map to Windows Events or callback queues in C.
+6.  **Cross-Reference**: The original Go reference implementation is no longer available. Rely on the C source and tests as the authoritative reference for intended behaviour.
 7.  **Struct Packing**: Be mindful of struct padding and alignment when dealing with network protocols (SSH packets). Use `#pragma pack` if necessary.
 8.  **JSON / Config API**: Use `json_parse()` -> `json_obj_get()` / `json_obj_str()` / `json_obj_num()` / `json_obj_bool()` to extract values. Always call `json_free()` on the root when done. Config fields are fixed-size `char[256]` arrays — no heap allocation per field. Load with `config_load()`, save with `config_save()`, and always call `config_free()` on the returned pointer.
 9.  **Const correctness**: cppcheck enforces `constVariablePointer`. Declare local pointers as `const T *` if the pointee is not mutated. `json_obj_get()`, `json_obj_str()`, `json_obj_num()`, and `json_obj_bool()` all accept `const JsonNode *`, so callers can pass const pointers directly.
@@ -303,6 +307,6 @@ If you are an AI assistant helping with this codebase, please observe the follow
 15. **Colour defaults**: Default terminal colours are `fg=#E0E0E0, bg=#121212` matching the "Onyx Synapse" colour scheme. `COLOR_DEFAULT` fg/bg mode means the renderer substitutes the configured scheme colours; hardcoded colour values in `buffer.c`/`parser.c` are only set for `COLOR_ANSI16`/`COLOR_256`/`COLOR_RGB` cells.
 16. **UI theming**: All UI chrome (tabs, settings, session manager, AI chat) is themed via `ThemeColors` from `src/core/ui_theme.{c,h}`. Use `WM_CTLCOLORDLG`, `WM_CTLCOLORSTATIC`, `WM_CTLCOLOREDIT`, `WM_CTLCOLORLISTBOX` to paint dialog backgrounds and control colours. Buttons use `BS_OWNERDRAW` with `draw_themed_button()` from `themed_button.h`. The theme is looked up by name from config (`colour_scheme` field) via `ui_theme_find()` + `ui_theme_get()`.
 17. **Scrollbar**: `update_scrollbar()` in `window.c` syncs a Win32 vertical scrollbar to the active terminal. Use `GetScrollInfo(SIF_TRACKPOS)` for `WM_VSCROLL` — never `HIWORD(wParam)`, which silently truncates to 16 bits and breaks scrollback > 65535 lines.
-18. **AI integration architecture**: AI code is split into portable core (`src/core/ai_prompt.c`, `src/core/ai_http.c`, `src/core/term_extract.c`) and Win32 UI (`src/ui/ai_chat.c`, `src/ui/ai_http_win.c`). Core files are testable on Linux; UI files are excluded from test builds via the `NON_TEST_SRCS` pattern in the Makefile. The AI uses an OpenAI-compatible chat completion API (Anthropic default). Conversations use `AiConversation` struct with role-tagged messages. Commands are extracted via `[EXEC]cmd[/EXEC]` markers. The HTTP client uses WinHTTP on Windows.
-19. **Two config.h files**: `include/config.h` is used by the Windows cross-compile; `src/config/config.h` is used by native test builds. Both must be kept in sync when modifying the `Settings` struct.
+18. **AI integration architecture**: AI code is split into portable core (`src/core/ai_prompt.c`, `src/core/ai_http.c`, `src/core/term_extract.c`, `src/core/chat_msg.c`, `src/core/chat_activity.c`, `src/core/chat_approval.c`, `src/core/chat_thinking.c`, `src/core/cmd_classify.c`) and Win32 UI (`src/ui/ai_chat.c`, `src/ui/ai_http_win.c`, `src/ui/chat_listview.c`, `src/ui/md_render.c`). Core files are testable on Linux; UI files are excluded from test builds via the `NON_TEST_SRCS` pattern in the Makefile. The AI uses an OpenAI-compatible chat completion API (Anthropic default). Conversations use `AiConversation` struct with role-tagged messages. Commands are extracted via `[EXEC]cmd[/EXEC]` markers. The chat listview (`chat_listview.c`) provides owner-drawn virtual-scroll rendering of chat messages with DPI-aware layout and text selection support. The HTTP client uses WinHTTP on Windows.
+19. **Config header**: `src/config/config.h` is the single config header used by both Windows cross-compile and native test builds.
 20. **Config path caveat**: `nutshell.config` is loaded relative to CWD, which can change after `GetOpenFileNameA` file dialogs. The long-term fix is to resolve to an absolute path at startup using `get_exe_dir()`.

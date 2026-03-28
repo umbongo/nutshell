@@ -33,6 +33,8 @@ typedef struct ChatMsgItem {
             CmdSafetyLevel safety;
             int approved;       /* -1=pending, 0=denied, 1=approved */
             int blocked;
+            int selected;       /* 1=tickbox checked for batch approve */
+            int settled;        /* 1=finalized, rendered inline, not in active container */
         } cmd;
     } u;
 

@@ -1515,7 +1515,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     /* Forward to the AI chat's save button (IDC_CHAT_SAVE) */
                     if (g_hwndAiChat && IsWindow(g_hwndAiChat))
                         SendMessage(g_hwndAiChat, WM_COMMAND,
-                                    MAKEWPARAM(2010 /*IDC_CHAT_SAVE*/,
+                                    MAKEWPARAM(4010 /*IDC_CHAT_SAVE*/,
                                                BN_CLICKED), 0);
                     return 0;
                 case IDM_VIEW_AI_CHAT:

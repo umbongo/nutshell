@@ -20,3 +20,6 @@ settings.ini
 # Editor files
 *.swp
 *~
+
+# Backups
+backups/

@@ -71,6 +71,10 @@ void chat_approval_set_executing(ApprovalQueue *q, int index);
 /* Mark a command as completed. */
 void chat_approval_set_completed(ApprovalQueue *q, int index);
 
+/* Unblock all blocked commands (permit_write was enabled).
+ * Changes BLOCKED → PENDING. Returns number unblocked. */
+int chat_approval_unblock_all(ApprovalQueue *q);
+
 /* Reset the queue (e.g., for new AI response). */
 void chat_approval_reset(ApprovalQueue *q);
 

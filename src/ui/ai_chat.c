@@ -33,20 +33,21 @@
 
 static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 
-#define IDC_CHAT_DISPLAY  2001
-#define IDC_CHAT_INPUT    2002
-#define IDC_CHAT_SEND     2003
-#define IDC_CHAT_NEWCHAT  2004
-#define IDC_CHAT_PERMIT   2005
-#define IDC_CHAT_THINKING 2006
-#define IDC_CONTEXT_BAR   2007
-#define IDC_CONTEXT_LABEL 2008
-#define IDC_SESSION_LABEL 2009
-#define IDC_CHAT_SAVE     2010
-#define IDC_CHAT_ALLOW    2011
-#define IDC_THINKING_BOX  2014
-#define IDC_CHAT_DENY     2012
-#define IDC_CHAT_UNDOCK   2013
+#define IDC_CHAT_DISPLAY  4001
+#define IDC_CHAT_INPUT    4002
+#define IDC_CHAT_SEND     4003
+#define IDC_CHAT_NEWCHAT  4004
+#define IDC_CHAT_PERMIT   4005
+#define IDC_CHAT_THINKING 4006
+#define IDC_CONTEXT_BAR   4007
+#define IDC_CONTEXT_LABEL 4008
+#define IDC_SESSION_LABEL 4009
+#define IDC_CHAT_SAVE     4010
+#define IDC_CHAT_ALLOW    4011
+#define IDC_THINKING_BOX  4014
+#define IDC_CHAT_DENY     4012
+#define IDC_CHAT_UNDOCK   4013
+#define IDC_CHAT_AUTOAPPROVE 4015
 
 #define WM_AI_RESPONSE   (WM_USER + 100)
 #define WM_AI_CONTINUE   (WM_USER + 101)
@@ -76,6 +77,7 @@ typedef struct {
     HWND hSendBtn;
     HWND hNewChatBtn;
     HWND hPermitBtn;
+    HWND hAllowAllBtn;
     HWND hSaveBtn;
     HWND hUndockBtn;
     /* Old floating Allow/Deny buttons removed — now inline in chat_listview */
@@ -582,6 +584,20 @@ static void launch_stream_thread(AiChatData *d)
     _beginthreadex(NULL, 0, ai_stream_thread_proc, arg, 0, NULL);
 }
 
+/* Mark all current command items as settled so they render inline
+ * and are excluded from the active command container. */
+static void settle_all_commands(ChatMsgList *list)
+{
+    ChatMsgItem *it = list->head;
+    while (it) {
+        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
+            it->u.cmd.settled = 1;
+            it->dirty = 1;
+        }
+        it = it->next;
+    }
+}
+
 static void send_user_message(AiChatData *d)
 {
     if (!d || !d->active_state || d->active_state->busy || d->pending_approval)
@@ -790,14 +806,52 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
     if (indicH < 4) indicH = 4;
     int indY = rc.top + (btnH - indicH) / 2;
 
-    /* For Permit Write indicator: draw status indicator */
+    /* For Permit Write / Allow All indicator: draw status indicator */
     int text_left = rc.left;
+    if (((int)dis->CtlID == IDC_CHAT_AUTOAPPROVE) && d) {
+        int is_active = d->approval_q.auto_approve;
+        int indW = MulDiv(AI_INDICATOR_W_BASE, d->dpi, 96);
+        int indGap = MulDiv(AI_INDICATOR_GAP_BASE, d->dpi, 96);
+        int indX = rc.left + indGap;
+        COLORREF dot_col = is_active ? RGB(0, 160, 80) : RGB(128, 128, 128);
+        HBRUSH hDot = CreateSolidBrush(dot_col);
+        HPEN hDotPen = CreatePen(PS_SOLID, 1, dot_col);
+        HGDIOBJ oBr = SelectObject(hdc, hDot);
+        HGDIOBJ oPen = SelectObject(hdc, hDotPen);
+        RoundRect(hdc, indX, indY,
+                  indX + indW, indY + indicH, 3, 3);
+        SelectObject(hdc, oPen);
+        SelectObject(hdc, oBr);
+        DeleteObject(hDotPen);
+        DeleteObject(hDot);
+
+        /* Draw letter on indicator: A for Allow All */
+        {
+            const char *letter = "A";
+            HFONT hSmall = CreateFont(
+                -MulDiv(8, d->dpi, 72), 0, 0, 0, FW_BOLD,
+                FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                "Segoe UI");
+            HFONT hOldF = (HFONT)SelectObject(hdc, hSmall);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(255, 255, 255));
+            RECT indRect = { indX, indY, indX + indW, indY + indicH };
+            DrawText(hdc, letter, 1, &indRect,
+                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, hOldF);
+            DeleteObject(hSmall);
+        }
+
+        text_left = indX + indW + indGap;
+    }
     if (((int)dis->CtlID == IDC_CHAT_PERMIT) && d) {
         int is_active = d->permit_write;
         int indW = MulDiv(AI_INDICATOR_W_BASE, d->dpi, 96);
         int indGap = MulDiv(AI_INDICATOR_GAP_BASE, d->dpi, 96);
         int indX = rc.left + indGap;
-        COLORREF dot_col = is_active ? RGB(0, 160, 80) : RGB(200, 50, 50);
+        COLORREF dot_col = is_active ? RGB(0, 160, 80) : RGB(128, 128, 128);
         HBRUSH hDot = CreateSolidBrush(dot_col);
         HPEN hDotPen = CreatePen(PS_SOLID, 1, dot_col);
         HGDIOBJ oBr = SelectObject(hdc, hDot);
@@ -833,6 +887,7 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
 
     /* Text — skip for indicator buttons when in compact mode (icon-only) */
     int is_indicator_btn = ((int)dis->CtlID == IDC_CHAT_PERMIT ||
+                            (int)dis->CtlID == IDC_CHAT_AUTOAPPROVE ||
                             (int)dis->CtlID == IDC_CHAT_NEWCHAT);
     if (!d || !d->compact_buttons || !is_indicator_btn) {
         SetBkMode(hdc, TRANSPARENT);
@@ -897,20 +952,21 @@ static void relayout(AiChatData *d)
                    btn_h, btn_h, TRUE);
 
     /* Decide if left-side buttons fit with full text or need compact mode.
-     * Full: New Chat (78) + Permit Write (115)
-     * Compact: New Chat (78) + indicator-only (btn_h) */
+     * Full: New Chat (78) + Permit Write (115) + Auto Approve (115)
+     * Compact: New Chat (78) + indicator-only (btn_h) + indicator-only (btn_h) */
     int full_w = pad + S(78) + pad + S(115) + pad + S(115);
     int avail = cw - right_w;
     d->compact_buttons = (full_w > avail);
     int pw = d->compact_buttons ? btn_h : S(115);
     int nw = d->compact_buttons ? btn_h : S(78);
-    /* tw removed - thinking button no longer exists */
+    int aw = d->compact_buttons ? btn_h : S(115);
 
     if (d->hNewChatBtn)
         MoveWindow(d->hNewChatBtn, pad, pad, nw, btn_h, TRUE);
     if (d->hPermitBtn)
         MoveWindow(d->hPermitBtn, pad + nw + pad, pad, pw, btn_h, TRUE);
-    /* Thinking button removed - thinking is now inline in chat display */
+    if (d->hAllowAllBtn)
+        MoveWindow(d->hAllowAllBtn, pad + nw + pad + pw + pad, pad, aw, btn_h, TRUE);
     {
         int bar_h = S(16);
         int ctx_w = S(120);
@@ -1070,6 +1126,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             pad + S(78) + pad, pad, S(115), btn_h,
             hwnd, (HMENU)IDC_CHAT_PERMIT, NULL, NULL);
 
+        /* Auto Approve button */
+        nd->hAllowAllBtn = CreateWindow("BUTTON", "Auto Approve",
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+            pad + S(78) + pad + S(115) + pad, pad, S(115), btn_h,
+            hwnd, (HMENU)IDC_CHAT_AUTOAPPROVE, NULL, NULL);
+
         nd->show_thinking = 0; /* default: collapsed (user must click '>' to expand) */
         nd->hThinkingBtn = NULL; /* Thinking button removed - now inline in chat */
 
@@ -1111,6 +1173,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 hwnd, (HMENU)IDC_CONTEXT_BAR, NULL, NULL);
             SendMessage(nd->hContextBar, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
             SendMessage(nd->hContextBar, PBM_SETPOS, 0, 0);
+            SendMessage(nd->hContextBar, PBM_SETBKCOLOR, 0,
+                        (LPARAM)theme_cr(nd->theme->bg_primary));
 
             /* Clickable label overlay (SS_NOTIFY enables STN_CLICKED) */
             nd->hContextLabel = CreateWindow("STATIC",
@@ -1148,6 +1212,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         nd->hDisplayScrollbar = csb_create(hwnd,
             margin + disp_w, top_y, CSB_WIDTH, disp_h,
             nd->theme, GetModuleHandle(NULL));
+
+        /* Connect custom scrollbar to ChatListView */
+        if (nd->hChatList && nd->hDisplayScrollbar)
+            chat_listview_set_scrollbar(nd->hChatList, nd->hDisplayScrollbar);
 
         /* ThinkingBox no longer needed — thinking is inline in ChatListView */
         nd->hThinkingBox = NULL;
@@ -1260,8 +1328,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 "Permit Write\n"
                 "Toggle read/write mode for AI commands.\n"
                 "Green = AI can execute any command.\n"
-                "Red = AI can only run read-only commands\n"
+                "Grey = AI can only run read-only commands\n"
                 "(ls, cat, pwd, etc).");
+            add_tooltip(nd->hTooltip, nd->hAllowAllBtn,
+                "Allow all commands this session\n"
+                "When active, AI commands are executed\n"
+                "without individual approval prompts.");
             /* Thinking tooltip removed - click '>' in chat to expand/collapse */
             add_tooltip(nd->hTooltip, nd->hSaveBtn,
                 "Save\nSave the conversation as a text file.");
@@ -1412,6 +1484,29 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d) {
                 d->permit_write = !d->permit_write;
                 InvalidateRect(d->hPermitBtn, NULL, TRUE);
+                /* When enabling permit_write, unblock all blocked commands */
+                if (d->permit_write) {
+                    chat_approval_unblock_all(&d->approval_q);
+                    /* Sync blocked→pending in ChatMsgItem list */
+                    ChatMsgItem *it = d->msg_list.head;
+                    while (it) {
+                        if (it->type == CHAT_ITEM_COMMAND &&
+                            it->u.cmd.blocked) {
+                            it->u.cmd.blocked = 0;
+                            it->u.cmd.approved = -1;
+                        }
+                        it = it->next;
+                    }
+                    if (d->hChatList)
+                        chat_listview_invalidate(d->hChatList);
+                }
+            }
+            return 0;
+        case IDC_CHAT_AUTOAPPROVE:
+            if (d) {
+                d->approval_q.auto_approve = !d->approval_q.auto_approve;
+                InvalidateRect(d->hAllowAllBtn, NULL, TRUE);
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
             }
             return 0;
 
@@ -1431,7 +1526,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 int ci = 0;
                 ChatMsgItem *it = d->msg_list.head;
                 while (it) {
-                    if (it->type == CHAT_ITEM_COMMAND) {
+                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
                         if (ci == idx) { it->u.cmd.approved = 1; break; }
                         ci++;
                     }
@@ -1451,6 +1546,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 /* Check if all decided — if so, wrap up */
                 if (chat_approval_all_decided(&d->approval_q)) {
                     d->pending_approval = 0;
+                    settle_all_commands(&d->msg_list);
                     d->commands_executed = d->queued_count;
                     start_indicator(d, "waiting for output");
                     {
@@ -1474,7 +1570,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 int ci = 0;
                 ChatMsgItem *it = d->msg_list.head;
                 while (it) {
-                    if (it->type == CHAT_ITEM_COMMAND) {
+                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
                         if (ci == idx) { it->u.cmd.approved = 0; break; }
                         ci++;
                     }
@@ -1486,6 +1582,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 /* Check if all decided */
                 if (chat_approval_all_decided(&d->approval_q)) {
                     d->pending_approval = 0;
+                    settle_all_commands(&d->msg_list);
                     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                     "[some commands denied]");
                     if (d->hChatList)
@@ -1502,13 +1599,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 /* Sync all to approved in ChatMsgItem list */
                 ChatMsgItem *it = d->msg_list.head;
                 while (it) {
-                    if (it->type == CHAT_ITEM_COMMAND &&
+                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
                         it->u.cmd.approved == -1 && !it->u.cmd.blocked)
                         it->u.cmd.approved = 1;
                     it = it->next;
                 }
 
                 d->pending_approval = 0;
+                settle_all_commands(&d->msg_list);
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
                 /* Execute all approved commands */
@@ -1529,6 +1627,97 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 }
                 SetTimer(hwnd, TIMER_CONTINUE,
                          CONTINUE_DELAY_MS, NULL);
+                SetFocus(d->hInput);
+                return 0;
+            }
+
+            /* IDC_CMD_APPROVE_SEL → approve only selected (ticked) commands */
+            if (d && ctl_id == IDC_CMD_APPROVE_SEL) {
+                int ci = 0;
+                int any_approved = 0;
+                ChatMsgItem *it = d->msg_list.head;
+                while (it) {
+                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
+                        if (it->u.cmd.selected && it->u.cmd.approved == -1
+                            && !it->u.cmd.blocked) {
+                            it->u.cmd.approved = 1;
+                            chat_approval_approve(&d->approval_q, ci);
+                            any_approved = 1;
+                        }
+                        ci++;
+                    }
+                    it = it->next;
+                }
+
+                /* Deny unselected pending commands */
+                ci = 0;
+                it = d->msg_list.head;
+                while (it) {
+                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
+                        if (it->u.cmd.approved == -1 && !it->u.cmd.blocked) {
+                            it->u.cmd.approved = 0;
+                            chat_approval_deny(&d->approval_q, ci);
+                        }
+                        ci++;
+                    }
+                    it = it->next;
+                }
+
+                d->pending_approval = 0;
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+
+                if (any_approved) {
+                    float now_e = (float)GetTickCount() / 1000.0f;
+                    chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now_e);
+                    ci = 0;
+                    it = d->msg_list.head;
+                    while (it) {
+                        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
+                            it->u.cmd.approved == 1 && ci < d->queued_count) {
+                            execute_command(d, d->queued_cmds[ci]);
+                            chat_activity_set_exec(&d->activity, ci + 1,
+                                                   d->queued_count);
+                        }
+                        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) ci++;
+                        it = it->next;
+                    }
+                    d->commands_executed = d->queued_count;
+                    start_indicator(d, "waiting for output");
+                    float now_w = (float)GetTickCount() / 1000.0f;
+                    chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now_w);
+                    SetTimer(hwnd, TIMER_CONTINUE,
+                             CONTINUE_DELAY_MS, NULL);
+                } else {
+                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                    "[no commands selected]");
+                    if (d->hChatList)
+                        chat_listview_invalidate(d->hChatList);
+                }
+                settle_all_commands(&d->msg_list);
+                SetFocus(d->hInput);
+                return 0;
+            }
+
+            /* IDC_CMD_CANCEL_ALL → deny all pending commands */
+            if (d && ctl_id == IDC_CMD_CANCEL_ALL) {
+                int ci = 0;
+                ChatMsgItem *it = d->msg_list.head;
+                while (it) {
+                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
+                        it->u.cmd.approved == -1 && !it->u.cmd.blocked) {
+                        it->u.cmd.approved = 0;
+                        chat_approval_deny(&d->approval_q, ci);
+                    }
+                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) ci++;
+                    it = it->next;
+                }
+                d->pending_approval = 0;
+                settle_all_commands(&d->msg_list);
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                "[all commands cancelled]");
+                if (d->hChatList)
+                    chat_listview_invalidate(d->hChatList);
                 SetFocus(d->hInput);
                 return 0;
             }
@@ -1573,6 +1762,31 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 float now = (float)GetTickCount() / 1000.0f;
                 chat_approval_auto_approve_click(&d->approval_q, now, 3.0f);
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                return 0;
+            }
+
+            /* IDC_CMD_EXPAND_ALL → toggle command list expand/collapse */
+            if (d && ctl_id == IDC_CMD_EXPAND_ALL) {
+                if (d->hChatList) chat_listview_toggle_cmd_expand(d->hChatList);
+                return 0;
+            }
+
+            /* IDC_CHATLIST_PASTE → right-click paste from chat listview */
+            if (d && ctl_id == IDC_CHATLIST_PASTE) {
+                if (d->hInput && IsClipboardFormatAvailable(CF_TEXT) &&
+                    OpenClipboard(hwnd)) {
+                    HGLOBAL hg = GetClipboardData(CF_TEXT);
+                    if (hg) {
+                        const char *txt = (const char *)GlobalLock(hg);
+                        if (txt) {
+                            SendMessageA(d->hInput, EM_REPLACESEL,
+                                         TRUE, (LPARAM)txt);
+                            GlobalUnlock(hg);
+                            SetFocus(d->hInput);
+                        }
+                    }
+                    CloseClipboard();
+                }
                 return 0;
             }
             break;
@@ -1813,6 +2027,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             char cmds[16][1024];
             int ncmds = text ? ai_extract_commands(text, cmds, 16) : 0;
 
+            /* Settle old command items so they render inline */
+            settle_all_commands(&d->msg_list);
+
             /* Filter out write commands when permit_write is off */
             if (ncmds > 0 && !d->permit_write) {
                 int ncmds_before = ncmds;
@@ -1878,6 +2095,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->queued_count = ncmds;
                 d->queued_next = 0;
                 d->pending_approval = 1;
+                if (d->hChatList)
+                    chat_listview_reset_cmd_expand(d->hChatList);
                 relayout(d);
                 SetFocus(d->hInput);
             }
@@ -2474,6 +2693,11 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme)
     if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
     d->hBrBgPrimary   = CreateSolidBrush(theme_cr(d->theme->bg_primary));
     d->hBrBgSecondary = CreateSolidBrush(theme_cr(d->theme->bg_secondary));
+
+    /* Update context bar background to match theme */
+    if (d->hContextBar)
+        SendMessage(d->hContextBar, PBM_SETBKCOLOR, 0,
+                    (LPARAM)theme_cr(d->theme->bg_primary));
 
     /* Update ChatListView theme */
     if (d->hChatList)

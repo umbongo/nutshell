@@ -1,5 +1,6 @@
 #include "term.h"
 #include "xmalloc.h"
+#include <assert.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -309,7 +310,8 @@ void term_scroll_up(Terminal *term, int top, int bot, int n) {
     /* Region scroll (or alt screen): pointer-swap within screen rows. */
     /* Save the n row pointers that will be recycled */
     TermRow *saved[64];
-    if (n > 64) n = 64;
+    assert(n <= 64 && "scroll_up: n exceeds saved[] capacity");
+    if (n > 64) n = 64;  /* safety clamp */
     for (int i = 0; i < n; i++)
         saved[i] = term->lines[screen_to_phys(term, top + i)];
 
@@ -339,7 +341,8 @@ void term_scroll_down(Terminal *term, int top, int bot, int n) {
 
     /* Save the n row pointers that will be recycled (bottom of region) */
     TermRow *saved[64];
-    if (n > 64) n = 64;
+    assert(n <= 64 && "scroll_down: n exceeds saved[] capacity");
+    if (n > 64) n = 64;  /* safety clamp */
     for (int i = 0; i < n; i++)
         saved[i] = term->lines[screen_to_phys(term, bot - n + 1 + i)];
 

@@ -1112,6 +1112,26 @@ int test_activity_format_executing(void);
 int test_activity_format_stalled(void);
 int test_activity_reset(void);
 
+/* test_cmd_collapse.c */
+int test_cmd_index_single(void);
+int test_cmd_index_with_mixed_items(void);
+int test_cmd_index_not_found(void);
+int test_cmd_first_last_single(void);
+int test_cmd_first_last_multiple(void);
+int test_collapse_few_commands_all_visible(void);
+int test_collapse_exact_threshold_all_visible(void);
+int test_collapse_hides_beyond_threshold(void);
+int test_expand_shows_all(void);
+int test_collapse_max_commands(void);
+int test_count_commands_with_pending(void);
+int test_allow_all_button_visibility(void);
+int test_expand_button_visibility(void);
+int test_single_command_no_allow_all(void);
+int test_cmd_selected_default_zero(void);
+int test_cmd_selected_toggle(void);
+int test_cmd_selected_blocked_not_counted(void);
+int test_cmd_selected_approved_not_counted(void);
+
 /* test_chat_approval.c */
 int test_approval_init(void);
 int test_approval_add_safe(void);
@@ -1130,6 +1150,8 @@ int test_approval_execute_complete(void);
 int test_approval_empty_command(void);
 int test_approval_whitespace_command(void);
 int test_approval_queue_full(void);
+int test_approval_auto_approve_direct_toggle(void);
+int test_approval_auto_approve_direct_toggle_with_write(void);
 int test_approval_reset(void);
 
 /* ---- Main ---------------------------------------------------------------- */
@@ -2291,7 +2313,29 @@ int main(void) {
     failed += test_approval_empty_command();
     failed += test_approval_whitespace_command();
     failed += test_approval_queue_full();
+    failed += test_approval_auto_approve_direct_toggle();
+    failed += test_approval_auto_approve_direct_toggle_with_write();
     failed += test_approval_reset();
+
+    printf("\n--- Command Collapse ---\n");
+    failed += test_cmd_index_single();
+    failed += test_cmd_index_with_mixed_items();
+    failed += test_cmd_index_not_found();
+    failed += test_cmd_first_last_single();
+    failed += test_cmd_first_last_multiple();
+    failed += test_collapse_few_commands_all_visible();
+    failed += test_collapse_exact_threshold_all_visible();
+    failed += test_collapse_hides_beyond_threshold();
+    failed += test_expand_shows_all();
+    failed += test_collapse_max_commands();
+    failed += test_count_commands_with_pending();
+    failed += test_allow_all_button_visibility();
+    failed += test_expand_button_visibility();
+    failed += test_single_command_no_allow_all();
+    failed += test_cmd_selected_default_zero();
+    failed += test_cmd_selected_toggle();
+    failed += test_cmd_selected_blocked_not_counted();
+    failed += test_cmd_selected_approved_not_counted();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

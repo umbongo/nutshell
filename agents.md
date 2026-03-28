@@ -4,6 +4,14 @@ This file captures hard-won lessons from developing this codebase. If you are an
 
 ## Build System
 
+- **MANDATORY — Always bump the version before building.** Before running any `make` target that produces a binary, increment the patch version in **all three files**:
+  1. `src/ui/resource.h` — the `APP_VERSION` string (e.g., `"0.9.31"` → `"0.9.32"`)
+  2. `README.md` — the `**Version**:` line
+  3. `src/ui/nutshell.rc` — `FILEVERSION`, `PRODUCTVERSION`, and both `FileVersion`/`ProductVersion` string values
+
+  No exceptions. Every build gets a unique version number. This directive is also in `CLAUDE.md` for automatic loading.
+- **Always use `make clean && make release`** for builds. Never use `make release` alone — always clean first to ensure a full rebuild.
+- **Always use test driven development.** write tests before writing the code, include corner cases, positive and negative tests. 
 - **Two compilers**: `x86_64-w64-mingw32-gcc` for the Windows cross-compile (`make`), native `gcc` for tests (`make test`). Code must compile clean under both with `-Werror`.
 - **vcpkg include order matters**: `VCPKG_INC` must come before `-Isrc/term` so the real `libssh2.h` (with macros) overrides the local test stub.
 - **Linker order matters**: vcpkg libs (`-lssh2 -lssl -lcrypto -lzlib`) must come before Windows system libs (`-lws2_32 -lgdi32 ...`).
@@ -26,39 +34,6 @@ There are two copies of `config.h`: `include/config.h` (used by Windows cross-co
 - `TermRow.len` tracks actual written content width. `TermRow.width` is the allocated capacity but is **not initialized** when rows are allocated with `xmalloc`. Always use `row->len` for content boundaries.
 - When extracting terminal text, skip trailing empty rows to avoid spurious blank lines. Use a two-pass approach: first find last non-empty row, then extract.
 
-## AI Integration Architecture
-
-The AI feature is split into testable core and Win32-only UI:
-
-| Layer | Files | Testable on Linux? |
-|-------|-------|--------------------|
-| Terminal text extraction | `src/core/term_extract.{c,h}` | Yes |
-| Prompt building / JSON | `src/core/ai_prompt.{c,h}` | Yes |
-| HTTP response cleanup | `src/core/ai_http.{c,h}` | Yes |
-| WinHTTP client | `src/ui/ai_http_win.c` | No (Win32) |
-| Chat window UI | `src/ui/ai_chat.{c,h}` | No (Win32) |
-| AI dock panel | `src/ui/ai_dock.h` | No (Win32) |
-| Help guide | `src/ui/help_guide.{c,h}` | No (Win32) |
-| Markdown rendering | `src/ui/markdown.h` | No (Win32) |
-| Settings UI fields | `src/ui/settings.c` | No (Win32) |
-| Tab bar AI button | `src/ui/tabs.{c,h}` | No (Win32) |
-
-- The AI uses OpenAI-compatible chat completion API. DeepSeek is the default provider.
-- Conversations are managed via `AiConversation` struct (fixed-size message array).
-- Terminal context (last 50 rows) is injected into the system prompt on each user message.
-- Commands are marked with `[EXEC]cmd[/EXEC]` in AI responses and require user confirmation via inline Allow/Deny buttons in the chat window before execution.
-- API keys are encrypted at rest using the same AES-256-GCM scheme as SSH passwords.
-
-## UI Theming (Onyx Synapse)
-
-- All UI chrome is themed via `ThemeColors` from `src/core/ui_theme.{c,h}`. 4 themes: Onyx Synapse (dark), Onyx Light, Sage & Sand (dark), Moss & Mist (light).
-- Theme is selected by name in config (`colour_scheme` field), looked up via `ui_theme_find()` + `ui_theme_get()`.
-- Use `WM_CTLCOLORDLG`, `WM_CTLCOLORSTATIC`, `WM_CTLCOLOREDIT`, `WM_CTLCOLORLISTBOX` to paint dialog/control backgrounds and text. Each dialog stores its own `HBRUSH` handles, freed in `WM_DESTROY`.
-- Buttons use `BS_OWNERDRAW` + `WM_DRAWITEM` with shared `draw_themed_button()` from `src/ui/themed_button.h`. Primary buttons (Save, Connect, Send) get accent colour; secondary buttons get bg_secondary.
-- For resource-based dialogs (session manager), set `BS_OWNERDRAW` at runtime in `WM_INITDIALOG` by modifying the button's `GWL_STYLE`.
-- Tab strip theming: `tabs_set_theme()` stores a `ThemeColors*` and uses it in WM_PAINT. Active tab gets a 3px accent bar at the bottom.
-- Dialog background brush: set `wc.hbrBackground = NULL` in WNDCLASS for custom-painted windows; resource dialogs use `WM_CTLCOLORDLG` to return a custom brush.
-
 ## Testing Conventions
 
 - TDD: write tests first, then implement.
@@ -74,5 +49,5 @@ The AI feature is split into testable core and Win32-only UI:
 
 ## Secrets
 
-- `config_profile_free()` zeroes passwords with `memset` before `free`. Follow the same pattern for API keys and any credential fields.
+- Use `secure_zero()` (from `src/core/secure_zero.h`) to wipe passwords and keys — never plain `memset`, which the compiler can optimize away. Follow this pattern for API keys and any credential fields.
 - API keys are stored encrypted in `nutshell.config` using `crypto_encrypt()`/`crypto_decrypt()`, same as profile passwords.

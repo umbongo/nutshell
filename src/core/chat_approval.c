@@ -128,6 +128,18 @@ void chat_approval_set_completed(ApprovalQueue *q, int index)
         q->entries[index].status = APPROVE_COMPLETED;
 }
 
+int chat_approval_unblock_all(ApprovalQueue *q)
+{
+    int n = 0;
+    for (int i = 0; i < q->count; i++) {
+        if (q->entries[i].status == APPROVE_BLOCKED) {
+            q->entries[i].status = APPROVE_PENDING;
+            n++;
+        }
+    }
+    return n;
+}
+
 void chat_approval_reset(ApprovalQueue *q)
 {
     int saved_auto = q->auto_approve;
