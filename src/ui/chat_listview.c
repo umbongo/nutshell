@@ -695,7 +695,39 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         int h = rc.bottom - rc.top;
 
         /* Icon row + gap before content (must match paint_ai_item layout) */
-        return h + CLV_SCALE(lv, BASE_ICON_SIZE) + CLV_SCALE(lv, 4);
+        int total = h + CLV_SCALE(lv, BASE_ICON_SIZE) + CLV_SCALE(lv, 4);
+
+        /* Thinking block height (if thinking text exists) */
+        if (item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
+            int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
+            int pad = lv->code_pad;
+            int gap = CLV_SCALE(lv, 6);
+
+            if (item->u.ai.thinking_collapsed) {
+                /* Collapsed: header + border + gap */
+                total += hdr_h + 2 * pad + gap;
+            } else {
+                /* Expanded: measure thinking text height */
+                int think_w = text_w - 2 * pad;
+                if (think_w < 20) think_w = 20;
+                HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
+                                          : GetStockObject(DEFAULT_GUI_FONT));
+                RECT trc;
+                SetRect(&trc, 0, 0, think_w, 0);
+                draw_text_utf8(hdc, item->u.ai.thinking_text, &trc,
+                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+                int think_h = trc.bottom - trc.top;
+                SelectObject(hdc, tf);
+
+                int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
+                if (think_h > max_h) think_h = max_h;
+
+                /* header + separator + body + border + gap */
+                total += hdr_h + think_h + 3 * pad + gap;
+            }
+        }
+
+        return total;
     }
 
     case CHAT_ITEM_COMMAND: {
