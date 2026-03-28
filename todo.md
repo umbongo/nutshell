@@ -51,6 +51,10 @@
 - **Description:** The AI Assist panel shows two scrollbars: the custom themed scrollbar (csb) and what appears to be a standard Windows scrollbar or a second scrollbar from the command card container. The one that doesn't match the visual design should be removed, keeping only the themed scrollbar.
 - **Fix:** Removed `WS_VSCROLL` from ChatListView window creation, removed `SetScrollInfo`/`ShowScrollBar` calls. Only the custom themed scrollbar (csb) remains.
 
+### 12. Auto Approve not persisting across command batches
+- **Status:** Pending
+- **Description:** When Auto Approve is toggled on and a batch of command cards is approved/executed, the next batch of commands from the AI's follow-up response still requires manual approval despite Auto Approve being visibly active (indicator lit). Auto Approve should carry forward so that subsequent command batches from the same conversation are automatically approved without user intervention.
+
 ### 6. [REMINDER] Check fonts when moving between resolutions
 - **Status:** Pending — needs clarification from user before work begins
 - **Description:** Investigate font rendering/scaling issues when switching between display resolutions. AI needs to ask user for specifics before addressing.
