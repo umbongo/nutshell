@@ -27,6 +27,7 @@ typedef struct ChatMsgItem {
             float thinking_elapsed;
             int thinking_complete;
             int thinking_scroll_y;   /* internal scroll offset for expanded thinking */
+            int thinking_autoscroll; /* 1 = auto-scroll to bottom during streaming */
         } ai;
         struct {
             char *command;
