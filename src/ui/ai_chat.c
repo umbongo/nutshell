@@ -670,11 +670,6 @@ static void execute_command(AiChatData *d, const char *cmd)
     ssh_channel_write(d->active_channel, cmd, (size_t)strlen(cmd));
     ssh_channel_write(d->active_channel, "\r", 1);
 
-    /* Show executed command as status item */
-    char status_buf[1100];
-    snprintf(status_buf, sizeof(status_buf), "$ %s", cmd);
-    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, status_buf);
-    if (d->hChatList) chat_listview_invalidate(d->hChatList);
 }
 
 static void send_continue_message(AiChatData *d)
