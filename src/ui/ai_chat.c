@@ -511,6 +511,7 @@ static void chat_rebuild_display(AiChatData *d)
             if (item && d->thinking_history[i] &&
                 d->thinking_history[i][0]) {
                 chat_msg_set_thinking(item, d->thinking_history[i]);
+                item->u.ai.thinking_complete = 1;
             }
         }
         /* Skip system messages injected mid-conversation */
@@ -2025,6 +2026,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (d->thinking_history[d->conv.msg_count - 1])
                     chat_msg_set_thinking(d->stream_ai_item,
                         d->thinking_history[d->conv.msg_count - 1]);
+                d->stream_ai_item->u.ai.thinking_complete = 1;
             }
             d->stream_ai_item = NULL;
             d->stream_display_start = -1;
@@ -2096,14 +2098,57 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                       CMD_PLATFORM_LINUX, d->permit_write);
                 }
 
-                /* Stash commands and show approval buttons */
+                /* Stash commands */
                 memcpy(d->queued_cmds, cmds,
                        (size_t)ncmds * sizeof(cmds[0]));
                 d->queued_count = ncmds;
                 d->queued_next = 0;
-                d->pending_approval = 1;
-                if (d->hChatList)
-                    chat_listview_reset_cmd_expand(d->hChatList);
+
+                if (chat_approval_all_decided(&d->approval_q)) {
+                    /* Auto-approve already decided all commands —
+                     * skip approval UI and execute immediately */
+                    d->pending_approval = 0;
+                    /* Sync approved state to ChatMsgItems */
+                    {
+                        int ci2 = 0;
+                        ChatMsgItem *it = d->msg_list.head;
+                        while (it) {
+                            if (it->type == CHAT_ITEM_COMMAND &&
+                                !it->u.cmd.settled && ci2 < d->approval_q.count) {
+                                if (d->approval_q.entries[ci2].status == APPROVE_APPROVED)
+                                    it->u.cmd.approved = 1;
+                                ci2++;
+                            }
+                            it = it->next;
+                        }
+                    }
+                    settle_all_commands(&d->msg_list);
+                    {
+                        float now_e = (float)GetTickCount() / 1000.0f;
+                        chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now_e);
+                    }
+                    for (int ci2 = 0; ci2 < d->queued_count; ci2++) {
+                        if (d->approval_q.entries[ci2].status == APPROVE_APPROVED) {
+                            execute_command(d, d->queued_cmds[ci2]);
+                            chat_activity_set_exec(&d->activity, ci2 + 1,
+                                                   d->queued_count);
+                        }
+                    }
+                    d->queued_next = d->queued_count;
+                    d->commands_executed = d->queued_count;
+                    start_indicator(d, "waiting for output");
+                    {
+                        float now_w = (float)GetTickCount() / 1000.0f;
+                        chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now_w);
+                    }
+                    SetTimer(hwnd, TIMER_CONTINUE,
+                             CONTINUE_DELAY_MS, NULL);
+                } else {
+                    /* Show approval buttons and wait for user */
+                    d->pending_approval = 1;
+                    if (d->hChatList)
+                        chat_listview_reset_cmd_expand(d->hChatList);
+                }
                 relayout(d);
                 SetFocus(d->hInput);
             }
