@@ -22,6 +22,8 @@ typedef struct {
     unsigned int indicator_green;    /* Healthy activity dot */
     unsigned int indicator_yellow;   /* Slow activity dot */
     unsigned int indicator_red;      /* Stalled activity dot */
+    unsigned int send_btn;           /* Send button background (pastel blue) */
+    unsigned int stop_btn;           /* Stop button background (pastel red) */
 } ThemeChatColors;
 
 typedef struct {

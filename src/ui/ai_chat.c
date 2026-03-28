@@ -2612,7 +2612,56 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (d && d->theme) {
             LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
             if ((int)dis->CtlID == IDC_CHAT_SEND) {
-                draw_themed_button(dis, d->theme, 1);
+                /* Custom send button: pastel blue bg + larger icon */
+                {
+                    HDC hdc = dis->hDC;
+                    RECT rc = dis->rcItem;
+                    int pressed = (dis->itemState & ODS_SELECTED) != 0;
+                    wchar_t btn_text[64];
+                    GetWindowTextW(dis->hwndItem, btn_text, 64);
+                    int is_stop = (btn_text[0] == 0x25A0); /* ■ */
+                    unsigned int bg_rgb = is_stop
+                        ? d->theme->chat.stop_btn
+                        : d->theme->chat.send_btn;
+                    if (pressed) {
+                        unsigned int r = (bg_rgb >> 16) & 0xFF;
+                        unsigned int g = (bg_rgb >> 8)  & 0xFF;
+                        unsigned int b =  bg_rgb        & 0xFF;
+                        r = r * 4 / 5; g = g * 4 / 5; b = b * 4 / 5;
+                        bg_rgb = (r << 16) | (g << 8) | b;
+                    }
+                    HBRUSH hBgBr = CreateSolidBrush(theme_cr(d->theme->bg_primary));
+                    FillRect(hdc, &rc, hBgBr);
+                    DeleteObject(hBgBr);
+                    HBRUSH hBr = CreateSolidBrush(theme_cr(bg_rgb));
+                    HPEN hPen = CreatePen(PS_SOLID, 1, theme_cr(d->theme->border));
+                    HGDIOBJ oBr = SelectObject(hdc, hBr);
+                    HGDIOBJ oPen = SelectObject(hdc, hPen);
+                    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 4, 4);
+                    SelectObject(hdc, oPen);
+                    SelectObject(hdc, oBr);
+                    DeleteObject(hPen);
+                    DeleteObject(hBr);
+                    /* Larger icon text */
+                    int ih = -MulDiv(14, d->dpi, 72);
+                    HFONT hBig = CreateFont(ih, 0, 0, 0, FW_BOLD,
+                        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                        APP_FONT_UI_FACE);
+                    HFONT prev = (HFONT)SelectObject(hdc, hBig ? hBig : d->hFont);
+                    SetBkMode(hdc, TRANSPARENT);
+                    SetTextColor(hdc, theme_cr(0xFFFFFF));
+                    DrawTextW(hdc, btn_text, -1, &rc,
+                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, prev);
+                    if (hBig) DeleteObject(hBig);
+                    if (dis->itemState & ODS_FOCUS) {
+                        RECT fr = rc;
+                        InflateRect(&fr, -3, -3);
+                        DrawFocusRect(hdc, &fr);
+                    }
+                }
             } else if ((int)dis->CtlID == IDC_CHAT_SAVE) {
                 /* Square save button with floppy disk icon */
                 HDC hdc = dis->hDC;
