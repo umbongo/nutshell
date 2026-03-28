@@ -42,12 +42,14 @@
 - **Fix:** Added `chat_approval_block_pending_writes()` function that transitions PENDING → BLOCKED for write/critical entries. Added else branch to IDC_CHAT_PERMIT handler to call it and sync ChatMsgItem blocked state.
 
 ### 10. Remove extra spacing between commentary and [EXEC] commands
-- **Status:** Pending
+- **Status:** Done (v0.9.37)
 - **Description:** In the AI chat panel, when the AI response contains commentary text followed by a purple [EXEC] command, there is an unwanted blank line between the commentary and the command. The space should be removed so the command sits directly beneath its preceding commentary. Keep the space between a command and the next commentary block (i.e., space *after* commands, not *before*).
+- **Fix:** In `draw_ai_text_with_exec()`, strip trailing `\n`/`\r` from pre-EXEC text segments before rendering. Added `ai_text_for_measure()` helper to keep height measurement in sync with rendering.
 
 ### 11. Duplicate scrollbar in AI Assist panel — remove the misaligned one
-- **Status:** Pending
+- **Status:** Done (v0.9.37)
 - **Description:** The AI Assist panel shows two scrollbars: the custom themed scrollbar (csb) and what appears to be a standard Windows scrollbar or a second scrollbar from the command card container. The one that doesn't match the visual design should be removed, keeping only the themed scrollbar.
+- **Fix:** Removed `WS_VSCROLL` from ChatListView window creation, removed `SetScrollInfo`/`ShowScrollBar` calls. Only the custom themed scrollbar (csb) remains.
 
 ### 6. [REMINDER] Check fonts when moving between resolutions
 - **Status:** Pending — needs clarification from user before work begins
@@ -60,3 +62,4 @@
 - **v0.9.34** — Fixed AI Assist panel lock-up after first command approval (settled flag)
 - **v0.9.35** — Scrollbar theming, removed duplicate commands, EXEC purple styling, crontab -l safe, permit write grey indicator
 - **v0.9.36** — Removed grey command echo after execution, permit write re-blocks commands when disabled
+- **v0.9.37** — Removed blank line before [EXEC] commands, removed duplicate native scrollbar
