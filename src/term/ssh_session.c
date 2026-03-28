@@ -1,5 +1,6 @@
 #include "ssh_session.h"
 #include "../core/xmalloc.h"
+#include "../core/secure_zero.h"
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -19,13 +20,6 @@ typedef int SOCKET;
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* Portable secret-zeroing: volatile prevents the compiler from eliding it. */
-static void secure_zero(void *p, size_t n)
-{
-    volatile unsigned char *vp = (volatile unsigned char *)p;
-    while (n--) *vp++ = 0;
-}
 
 SshSession *ssh_session_new(void) {
     SshSession *s = xcalloc(1, sizeof(SshSession));

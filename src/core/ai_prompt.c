@@ -131,6 +131,29 @@ int ai_context_estimate_tokens(const AiConversation *conv)
     return total_chars / 4;
 }
 
+int ai_format_context_label(int tokens, int limit, char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+    if (limit <= 0)
+        return snprintf(buf, buf_size, "Context: N/A");
+
+    int pct = (tokens * 100) / limit;
+    if (pct > 100) pct = 100;
+
+    char tok_str[16], lim_str[16];
+    if (tokens >= 1000)
+        snprintf(tok_str, sizeof(tok_str), "%.1fk", tokens / 1000.0);
+    else
+        snprintf(tok_str, sizeof(tok_str), "%d", tokens);
+    if (limit >= 1000)
+        snprintf(lim_str, sizeof(lim_str), "%dk", limit / 1000);
+    else
+        snprintf(lim_str, sizeof(lim_str), "%d", limit);
+
+    return snprintf(buf, buf_size, "Context: %s / %s (%d%%)",
+                    tok_str, lim_str, pct);
+}
+
 int ai_conv_compact(AiConversation *conv, int keep_recent)
 {
     if (!conv || keep_recent <= 0) return 0;
@@ -408,6 +431,62 @@ int ai_extract_commands(const char *response, char cmds[][1024],
         count++;
 
         pos = end + 7; /* skip "[/EXEC]" */
+    }
+
+    return count;
+}
+
+/* ---- Response splitting ---- */
+
+int ai_response_split(const char *response,
+                      char *pre_cmd, size_t pre_size,
+                      char *post_cmd, size_t post_size)
+{
+    if (pre_cmd && pre_size > 0) pre_cmd[0] = '\0';
+    if (post_cmd && post_size > 0) post_cmd[0] = '\0';
+    if (!response || !*response) return 0;
+
+    /* Find first [EXEC] and count command pairs */
+    const char *first_exec = NULL;
+    const char *last_end = NULL;
+    int count = 0;
+    const char *pos = response;
+
+    while ((pos = strstr(pos, "[EXEC]")) != NULL) {
+        if (!first_exec) first_exec = pos;
+        pos += 6;
+        const char *end = strstr(pos, "[/EXEC]");
+        if (!end) break; /* unclosed — don't count */
+        count++;
+        last_end = end + 7; /* past "[/EXEC]" */
+        pos = last_end;
+    }
+
+    if (count == 0) {
+        /* No valid command pairs — full text goes to pre_cmd */
+        if (pre_cmd && pre_size > 0) {
+            size_t len = strlen(response);
+            if (len >= pre_size) len = pre_size - 1;
+            memcpy(pre_cmd, response, len);
+            pre_cmd[len] = '\0';
+        }
+        return 0;
+    }
+
+    /* Pre-command: text before first [EXEC] */
+    if (pre_cmd && pre_size > 0) {
+        size_t len = (size_t)(first_exec - response);
+        if (len >= pre_size) len = pre_size - 1;
+        memcpy(pre_cmd, response, len);
+        pre_cmd[len] = '\0';
+    }
+
+    /* Post-command: text after last [/EXEC] */
+    if (post_cmd && post_size > 0 && last_end) {
+        size_t len = strlen(last_end);
+        if (len >= post_size) len = post_size - 1;
+        memcpy(post_cmd, last_end, len);
+        post_cmd[len] = '\0';
     }
 
     return count;

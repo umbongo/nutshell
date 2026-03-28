@@ -341,3 +341,64 @@ int test_utf8_encode_out_of_range(void)
     ASSERT_EQ(utf8_encode(0xFFFFFFFF, buf), 0);
     TEST_END();
 }
+
+/* ── UTF-8 model label formatting tests ──────────────────────────── */
+
+int test_model_label_middle_dot_utf8(void)
+{
+    TEST_BEGIN();
+    /* The model label uses "\xC2\xB7" which is U+00B7 MIDDLE DOT in UTF-8.
+     * Verify the snprintf format produces correct UTF-8 bytes. */
+    char label[80];
+    snprintf(label, sizeof(label), " \xC2\xB7 %s", "deepseek-chat");
+    /* Byte 1 (space), Byte 2-3 (middle dot), Byte 4 (space) */
+    ASSERT_EQ((unsigned char)label[0], ' ');
+    ASSERT_EQ((unsigned char)label[1], 0xC2);
+    ASSERT_EQ((unsigned char)label[2], 0xB7);
+    ASSERT_EQ((unsigned char)label[3], ' ');
+    /* Model name follows */
+    ASSERT_STR_EQ(label + 4, "deepseek-chat");
+    TEST_END();
+}
+
+int test_model_label_middle_dot_not_split(void)
+{
+    TEST_BEGIN();
+    /* Ensure the middle dot is exactly 2 bytes (not 1 byte 0xB7 which would
+     * indicate Latin-1 encoding, nor the "Â·" artifact from double-encoding). */
+    char label[80];
+    snprintf(label, sizeof(label), " \xC2\xB7 %s", "gpt-4");
+    /* Count bytes between the spaces: must be exactly 2 (0xC2, 0xB7) */
+    ASSERT_EQ((unsigned char)label[1], 0xC2);
+    ASSERT_EQ((unsigned char)label[2], 0xB7);
+    /* Next byte must be space, not another high byte */
+    ASSERT_EQ((unsigned char)label[3], ' ');
+    TEST_END();
+}
+
+int test_model_label_utf8_encode_middle_dot(void)
+{
+    TEST_BEGIN();
+    /* Verify utf8_encode produces the same bytes as the literal */
+    char buf[4];
+    int len = utf8_encode(0xB7, buf);  /* U+00B7 MIDDLE DOT */
+    ASSERT_EQ(len, 2);
+    ASSERT_EQ((unsigned char)buf[0], 0xC2);
+    ASSERT_EQ((unsigned char)buf[1], 0xB7);
+    TEST_END();
+}
+
+int test_model_label_truncation(void)
+{
+    TEST_BEGIN();
+    /* A very long model name should be truncated but still have valid UTF-8 prefix */
+    char label[20];  /* small buffer */
+    snprintf(label, sizeof(label), " \xC2\xB7 %s",
+             "very-long-model-name-that-exceeds-buffer");
+    /* Middle dot must still be intact */
+    ASSERT_EQ((unsigned char)label[1], 0xC2);
+    ASSERT_EQ((unsigned char)label[2], 0xB7);
+    /* Must be null-terminated */
+    ASSERT_EQ(label[19], '\0');
+    TEST_END();
+}

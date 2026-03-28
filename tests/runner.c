@@ -50,6 +50,10 @@ int test_utf8_encode_2byte(void);
 int test_utf8_encode_3byte(void);
 int test_utf8_encode_4byte(void);
 int test_utf8_encode_out_of_range(void);
+int test_model_label_middle_dot_utf8(void);
+int test_model_label_middle_dot_not_split(void);
+int test_model_label_utf8_encode_middle_dot(void);
+int test_model_label_truncation(void);
 
 /* test_logger.c */
 int test_logger_init_stderr_only(void);
@@ -1112,6 +1116,26 @@ int test_activity_format_executing(void);
 int test_activity_format_stalled(void);
 int test_activity_reset(void);
 
+/* test_cmd_collapse.c */
+int test_cmd_index_single(void);
+int test_cmd_index_with_mixed_items(void);
+int test_cmd_index_not_found(void);
+int test_cmd_first_last_single(void);
+int test_cmd_first_last_multiple(void);
+int test_collapse_few_commands_all_visible(void);
+int test_collapse_exact_threshold_all_visible(void);
+int test_collapse_hides_beyond_threshold(void);
+int test_expand_shows_all(void);
+int test_collapse_max_commands(void);
+int test_count_commands_with_pending(void);
+int test_allow_all_button_visibility(void);
+int test_expand_button_visibility(void);
+int test_single_command_no_allow_all(void);
+int test_cmd_selected_default_zero(void);
+int test_cmd_selected_toggle(void);
+int test_cmd_selected_blocked_not_counted(void);
+int test_cmd_selected_approved_not_counted(void);
+
 /* test_chat_approval.c */
 int test_approval_init(void);
 int test_approval_add_safe(void);
@@ -1130,7 +1154,45 @@ int test_approval_execute_complete(void);
 int test_approval_empty_command(void);
 int test_approval_whitespace_command(void);
 int test_approval_queue_full(void);
+int test_approval_auto_approve_direct_toggle(void);
+int test_approval_auto_approve_direct_toggle_with_write(void);
 int test_approval_reset(void);
+int test_approval_auto_approve_persists_across_reset(void);
+int test_approval_auto_approve_blocked_not_all_decided(void);
+int test_approval_block_pending_writes(void);
+int test_approval_block_pending_writes_skips_decided(void);
+
+/* test_response_split.c */
+int test_split_no_commands(void);
+int test_split_single_command_with_summary(void);
+int test_split_multiple_commands_with_summary(void);
+int test_split_commands_only(void);
+int test_split_no_post_text(void);
+int test_split_null_response(void);
+int test_split_null_outputs(void);
+int test_split_empty_response(void);
+int test_split_inter_command_text_excluded(void);
+int test_split_whitespace_post(void);
+int test_split_pre_truncated(void);
+int test_split_post_truncated(void);
+int test_split_unclosed_exec(void);
+
+/* test_context_bar.c */
+int test_context_tokens_empty_conv(void);
+int test_context_tokens_null(void);
+int test_context_tokens_single_message(void);
+int test_context_tokens_multiple_messages(void);
+int test_context_tokens_rounding_down(void);
+int test_context_label_zero_tokens(void);
+int test_context_label_small_tokens(void);
+int test_context_label_kilo_tokens(void);
+int test_context_label_large_limit(void);
+int test_context_label_full(void);
+int test_context_label_over_limit(void);
+int test_context_label_small_limit(void);
+int test_context_label_exact_1k(void);
+int test_context_label_na(void);
+int test_context_label_small_buf(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -1179,6 +1241,10 @@ int main(void) {
     failed += test_utf8_encode_3byte();
     failed += test_utf8_encode_4byte();
     failed += test_utf8_encode_out_of_range();
+    failed += test_model_label_middle_dot_utf8();
+    failed += test_model_label_middle_dot_not_split();
+    failed += test_model_label_utf8_encode_middle_dot();
+    failed += test_model_label_truncation();
     failed += test_logger_init_stderr_only();
     failed += test_logger_creates_file();
     failed += test_logger_file_contains_message();
@@ -2291,7 +2357,65 @@ int main(void) {
     failed += test_approval_empty_command();
     failed += test_approval_whitespace_command();
     failed += test_approval_queue_full();
+    failed += test_approval_auto_approve_direct_toggle();
+    failed += test_approval_auto_approve_direct_toggle_with_write();
     failed += test_approval_reset();
+    failed += test_approval_auto_approve_persists_across_reset();
+    failed += test_approval_auto_approve_blocked_not_all_decided();
+    failed += test_approval_block_pending_writes();
+    failed += test_approval_block_pending_writes_skips_decided();
+
+    printf("\n--- Command Collapse ---\n");
+    failed += test_cmd_index_single();
+    failed += test_cmd_index_with_mixed_items();
+    failed += test_cmd_index_not_found();
+    failed += test_cmd_first_last_single();
+    failed += test_cmd_first_last_multiple();
+    failed += test_collapse_few_commands_all_visible();
+    failed += test_collapse_exact_threshold_all_visible();
+    failed += test_collapse_hides_beyond_threshold();
+    failed += test_expand_shows_all();
+    failed += test_collapse_max_commands();
+    failed += test_count_commands_with_pending();
+    failed += test_allow_all_button_visibility();
+    failed += test_expand_button_visibility();
+    failed += test_single_command_no_allow_all();
+    failed += test_cmd_selected_default_zero();
+    failed += test_cmd_selected_toggle();
+    failed += test_cmd_selected_blocked_not_counted();
+    failed += test_cmd_selected_approved_not_counted();
+
+    printf("\n--- Response Split ---\n");
+    failed += test_split_no_commands();
+    failed += test_split_single_command_with_summary();
+    failed += test_split_multiple_commands_with_summary();
+    failed += test_split_commands_only();
+    failed += test_split_no_post_text();
+    failed += test_split_null_response();
+    failed += test_split_null_outputs();
+    failed += test_split_empty_response();
+    failed += test_split_inter_command_text_excluded();
+    failed += test_split_whitespace_post();
+    failed += test_split_pre_truncated();
+    failed += test_split_post_truncated();
+    failed += test_split_unclosed_exec();
+
+    printf("\n--- Context Bar ---\n");
+    failed += test_context_tokens_empty_conv();
+    failed += test_context_tokens_null();
+    failed += test_context_tokens_single_message();
+    failed += test_context_tokens_multiple_messages();
+    failed += test_context_tokens_rounding_down();
+    failed += test_context_label_zero_tokens();
+    failed += test_context_label_small_tokens();
+    failed += test_context_label_kilo_tokens();
+    failed += test_context_label_large_limit();
+    failed += test_context_label_full();
+    failed += test_context_label_over_limit();
+    failed += test_context_label_small_limit();
+    failed += test_context_label_exact_1k();
+    failed += test_context_label_na();
+    failed += test_context_label_small_buf();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

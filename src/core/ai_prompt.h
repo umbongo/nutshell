@@ -109,8 +109,24 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
  * Returns 1 if read-only, 0 if the command may write/modify. */
 int ai_command_is_readonly(const char *cmd);
 
+/* Split an AI response into pre-command and post-command text.
+ * pre_cmd receives text before the first [EXEC] marker.
+ * post_cmd receives text after the last [/EXEC] marker.
+ * Either output buffer may be NULL (with size 0) to skip.
+ * Returns the number of [EXEC]...[/EXEC] command pairs found. */
+int ai_response_split(const char *response,
+                      char *pre_cmd, size_t pre_size,
+                      char *post_cmd, size_t post_size);
+
 /* Count words in text (whitespace-delimited). Returns 0 for NULL/empty. */
 int ai_word_count(const char *text);
+
+/* Format a context bar label string.
+ * tokens: current estimated token count.
+ * limit: model context window size (0 = unknown → "Context: N/A").
+ * buf/buf_size: output buffer.
+ * Returns bytes written (excluding NUL). */
+int ai_format_context_label(int tokens, int limit, char *buf, size_t buf_size);
 
 /* Get the context window token limit for a model name.
  * Returns 0 for unknown models. */

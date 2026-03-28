@@ -1,7 +1,7 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION "0.9.28"
+#define APP_VERSION "1.0.01"
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -51,5 +51,10 @@
 #define IDC_CMD_APPROVE_ALL  3040
 #define IDC_AUTO_APPROVE     3041
 #define IDC_ACTIVITY_RETRY   3042  /* Retry link in activity indicator */
+#define IDC_CHATLIST_PASTE   3043  /* Right-click paste from chat listview */
+#define IDC_CMD_EXPAND_ALL   3044  /* Expand collapsed command list */
+#define IDC_CMD_APPROVE_SEL  3045  /* Approve selected (ticked) commands */
+#define IDC_CMD_CANCEL_ALL   3046  /* Cancel (deny) all pending commands */
+#define IDC_CMD_TOGGLE_BASE  3050  /* 3050..3065 for up to 16 command tickboxes */
 
 #endif

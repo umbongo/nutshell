@@ -1,5 +1,6 @@
 #include "paste_dlg.h"
 #include "paste_preview.h"
+#include "dpi_util.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -165,11 +166,7 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
 
         /* Get per-monitor DPI for layout scaling */
-        {
-            HDC hdc_dpi = GetDC(hwnd);
-            nd->dpi = GetDeviceCaps(hdc_dpi, LOGPIXELSY);
-            ReleaseDC(hwnd, hdc_dpi);
-        }
+        nd->dpi = get_window_dpi(hwnd);
         int margin = MulDiv(MARGIN_BASE, nd->dpi, 96);
         int btn_w = MulDiv(BTN_W_BASE, nd->dpi, 96);
         int btn_h = MulDiv(BTN_H_BASE, nd->dpi, 96);
@@ -224,9 +221,7 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
 
         /* Create Cascadia Code 9pt for labels/buttons */
         {
-            HDC hdc = GetDC(hwnd);
-            int h = -MulDiv(9, GetDeviceCaps(hdc, LOGPIXELSY), 72);
-            ReleaseDC(hwnd, hdc);
+            int h = -MulDiv(9, get_window_dpi(hwnd), 72);
             nd->hDlgFont = CreateFont(
                 h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -403,9 +398,7 @@ int paste_preview_show(HWND parent, const char *raw_text,
 
     /* Create terminal font for text area */
     {
-        HDC hdc = GetDC(parent);
-        int h = -MulDiv(font_size, GetDeviceCaps(hdc, LOGPIXELSY), 72);
-        ReleaseDC(parent, hdc);
+        int h = -MulDiv(font_size, get_window_dpi(parent), 72);
         d.hTermFont = CreateFont(
             h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -426,12 +419,7 @@ int paste_preview_show(HWND parent, const char *raw_text,
     RegisterClassEx(&wc);
 
     /* Scale window size for DPI and clamp to screen */
-    int pdpi;
-    {
-        HDC hdc_p = GetDC(parent);
-        pdpi = GetDeviceCaps(hdc_p, LOGPIXELSY);
-        ReleaseDC(parent, hdc_p);
-    }
+    int pdpi = get_window_dpi(parent);
 
     int desired_w = MulDiv(520, pdpi, 96);
     int desired_h = MulDiv(400, pdpi, 96);

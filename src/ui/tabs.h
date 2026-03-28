@@ -43,7 +43,7 @@ void      tabs_set_ai_callback(HWND hwnd, TabAiCallback on_ai);
 void      tabs_set_status_click_callback(HWND hwnd, TabStatusClickCallback on_status_click);
 void      tabs_set_ai_active(HWND hwnd, int active);
 /* Update tab strip font to match the given family (at UI_SIZE). */
-void      tabs_set_font(HWND hwnd, const char *font_name);
+void      tabs_set_font(HWND hwnd, const char *font_name, int dpi);
 /* Set the colour theme for the tab strip. */
 void      tabs_set_theme(HWND hwnd, const ThemeColors *theme);
 

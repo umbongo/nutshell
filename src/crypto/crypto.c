@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200112L
 #endif
 #include "crypto.h"
+#include "secure_zero.h"
 #include <string.h>
 #include <stdlib.h>
 #include <openssl/evp.h>
@@ -24,15 +25,6 @@
 /* PBKDF2 parameters */
 static const char PBKDF2_SALT[] = "CongaSSH-v1";  /* used by crypto_derive_key only */
 #define PBKDF2_ITER 100000
-
-/* ---- Portable secret-zeroing --------------------------------------------- */
-
-/* L-1: volatile prevents the compiler from eliding the zero wipe. */
-static void secure_zero(void *p, size_t n)
-{
-    volatile unsigned char *vp = (volatile unsigned char *)p;
-    while (n--) *vp++ = 0;
-}
 
 /* ---- Base64 helpers ------------------------------------------------------- */
 

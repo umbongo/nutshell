@@ -27,12 +27,15 @@ typedef struct ChatMsgItem {
             float thinking_elapsed;
             int thinking_complete;
             int thinking_scroll_y;   /* internal scroll offset for expanded thinking */
+            int thinking_autoscroll; /* 1 = auto-scroll to bottom during streaming */
         } ai;
         struct {
             char *command;
             CmdSafetyLevel safety;
             int approved;       /* -1=pending, 0=denied, 1=approved */
             int blocked;
+            int selected;       /* 1=tickbox checked for batch approve */
+            int settled;        /* 1=finalized, rendered inline, not in active container */
         } cmd;
     } u;
 

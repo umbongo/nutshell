@@ -98,6 +98,9 @@ static const SubcmdRule linux_subcmd_rules[] = {
     { "git", "diff",   CMD_SAFE },
     { "git", "show",   CMD_SAFE },
     { "git", "branch", CMD_SAFE },
+    /* crontab */
+    { "crontab", "-l", CMD_SAFE },
+    { "crontab", "--list", CMD_SAFE },
     /* sed */
     { "sed", "-i", CMD_WRITE },
     /* curl/wget with output */

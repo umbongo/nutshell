@@ -12,6 +12,7 @@
 #include "../config/config.h"
 #include "../core/vector.h"
 #include "resource.h"
+#include "dpi_util.h"
 
 #define IDT_AINOTES_SCROLL 50  /* timer ID for AI notes scroll sync */
 #define IDT_LIST_SCROLL    51  /* timer ID for session list scroll sync */
@@ -202,9 +203,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         /* Apply configured font at UI size to all child controls.
          * Done after theme setup so WM_CTLCOLOR* repaints use correct colors. */
         {
-            HDC hdc = GetDC(hwnd);
-            int h = -MulDiv(APP_FONT_UI_SIZE, GetDeviceCaps(hdc, LOGPIXELSY), 72);
-            ReleaseDC(hwnd, hdc);
+            int h = -MulDiv(APP_FONT_UI_SIZE, get_window_dpi(hwnd), 72);
             st->hDlgFont = CreateFont(
                 h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,

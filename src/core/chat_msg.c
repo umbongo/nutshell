@@ -1,5 +1,6 @@
 /* src/core/chat_msg.c */
 #include "chat_msg.h"
+#include "secure_zero.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -38,11 +39,13 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
         item->u.ai.thinking_elapsed = 0.0f;
         item->u.ai.thinking_complete = 0;
         item->u.ai.thinking_scroll_y = 0;
+        item->u.ai.thinking_autoscroll = 1;
     } else if (type == CHAT_ITEM_COMMAND) {
         item->u.cmd.command = NULL;
         item->u.cmd.safety = CMD_SAFE;
         item->u.cmd.approved = -1;
         item->u.cmd.blocked = 0;
+        item->u.cmd.settled = 0;
     }
 
     /* Link into list */
@@ -56,14 +59,6 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
     list->count++;
 
     return item;
-}
-
-/* Secure zero: use volatile pointer to prevent compiler from optimizing out
- * the memset. On Windows production builds, use SecureZeroMemory instead. */
-static void secure_zero(void *ptr, size_t len)
-{
-    volatile unsigned char *p = (volatile unsigned char *)ptr;
-    while (len--) *p++ = 0;
 }
 
 static void free_item(ChatMsgItem *item)

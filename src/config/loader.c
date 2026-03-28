@@ -4,6 +4,7 @@
 #include "ui_theme.h"
 #include "json_parser.h"
 #include "xmalloc.h"
+#include "secure_zero.h"
 #include "crypto.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -285,7 +286,7 @@ Config *config_load(const char *path)
                     char plaintext[256];
                     if (crypto_decrypt(sv, plaintext, sizeof(plaintext)) == CRYPTO_OK) {
                         field_copy(pr->password, sizeof(pr->password), plaintext);
-                        memset(plaintext, 0, sizeof(plaintext));
+                        secure_zero(plaintext, sizeof(plaintext));
                     }
                     /* On decrypt failure, leave password empty */
                 } else {
