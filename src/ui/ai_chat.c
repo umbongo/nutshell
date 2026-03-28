@@ -54,7 +54,7 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define WM_AI_CONTINUE   (WM_USER + 101)
 #define WM_AI_STREAM     (WM_USER + 102)  /* wParam: 0=thinking, 1=content; lParam: char* */
 
-#define TERM_CONTEXT_ROWS 50
+#define TERM_CONTEXT_ROWS 150
 #define CONTINUE_DELAY_MS 2000  /* Wait for terminal output before continuing */
 #define TIMER_CONTINUE    1
 #define TIMER_CMD_QUEUE   2     /* Delayed command execution (paste delay) */
@@ -743,7 +743,7 @@ static void send_user_message(AiChatData *d)
     }
 
     /* Extract terminal context */
-    char term_text[8192] = "";
+    char term_text[14336] = "";
     if (d->active_term) {
         term_extract_last_n(d->active_term, TERM_CONTEXT_ROWS,
                            term_text, sizeof(term_text));
@@ -803,7 +803,7 @@ static void send_continue_message(AiChatData *d)
     if (!d || !d->active_state || d->active_state->busy) return;
 
     /* Extract fresh terminal context after command execution */
-    char term_text[8192] = "";
+    char term_text[14336] = "";
     if (d->active_term) {
         term_extract_last_n(d->active_term, TERM_CONTEXT_ROWS,
                            term_text, sizeof(term_text));

@@ -1,6 +1,6 @@
 # Nutshell
 
-**Version**: v1.0.02 \
+**Version**: v1.0.03 \
 **Build Date**: 2026-03-28 \
 **Author**: Thomas Sulkiewicz
 
@@ -14,7 +14,7 @@ Built entirely with the Win32 API, no external UI frameworks. Cross-compiled fro
 
 The standout feature: an integrated AI panel that sits alongside your terminal session. It sees what you see — the last 50 lines of terminal output — and can act on it.
 
-- **Context-aware** — the AI reads your live terminal output and tailors responses to what's happening on screen
+- **Context-aware** — the AI reads the last 150 lines of your live terminal output and tailors responses to what's happening on screen
 - **Command execution** — suggests commands that appear inline with Allow/Deny buttons; nothing runs without your approval
 - **Streaming responses** — real-time token streaming with chain-of-thought / reasoning display
 - **Multi-provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or any OpenAI-compatible endpoint
@@ -156,7 +156,7 @@ Open from the menu or via the settings button. Changes take effect immediately �
 
 Click the **AI** button in the tab strip to open the chat panel. The button is green when an API key is configured, grey otherwise.
 
-The AI assistant can see the last 50 lines of your terminal output and execute commands over SSH. Each tab maintains its own independent conversation history.
+The AI assistant can see the last 150 lines of your terminal output and execute commands over SSH. Each tab maintains its own independent conversation history.
 
 #### Chat Window Controls
 

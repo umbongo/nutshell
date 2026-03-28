@@ -10,8 +10,8 @@ IDR_FONT_INTER_BOLD RCDATA "fonts/Inter-Bold.ttf"
 1 24 "nutshell.manifest"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION     1,0,2,0
-PRODUCTVERSION  1,0,2,0
+FILEVERSION     1,0,3,0
+PRODUCTVERSION  1,0,3,0
 FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
 FILEFLAGS       0
 FILEOS          VOS_NT_WINDOWS32
@@ -24,12 +24,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName",      "Thomas Sulkiewicz"
             VALUE "FileDescription",  "Nutshell SSH Client"
-            VALUE "FileVersion",      "1.0.02.0"
+            VALUE "FileVersion",      "1.0.03.0"
             VALUE "InternalName",     "nutshell"
             VALUE "LegalCopyright",   "Copyright (C) 2026"
             VALUE "OriginalFilename", "nutshell.exe"
             VALUE "ProductName",      "Nutshell"
-            VALUE "ProductVersion",   "1.0.02"
+            VALUE "ProductVersion",   "1.0.03"
         END
     END
     BLOCK "VarFileInfo"

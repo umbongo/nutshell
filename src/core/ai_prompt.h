@@ -7,7 +7,7 @@
  * shown in the Settings dialog (settings.c k_ai_providers[]). */
 #define AI_DEFAULT_PROVIDER "anthropic"
 
-#define AI_MSG_MAX     8192
+#define AI_MSG_MAX     16384
 #define AI_BODY_MAX    65536
 #define AI_MAX_MESSAGES 64
 
