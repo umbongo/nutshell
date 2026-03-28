@@ -33,8 +33,9 @@
 - **Fix:** Removed the `CHAT_ITEM_STATUS` creation (status_buf/snprintf/chat_msg_append) from `execute_command()` in ai_chat.c. Commands are already visible as purple [EXEC] blocks.
 
 ### 8. [RESEARCH] Best practice for show/hide thinking
-- **Status:** Pending — research only, no code changes
-- **Description:** Research best practices for showing and hiding AI "thinking" / chain-of-thought in chat UIs. Then review the existing thinking implementation in the codebase (thinking_text, thinking_collapsed, thinking_elapsed in ChatMsgItem, activity indicator, etc.) to determine what changes are needed to reach best-practice state. Present findings for review before any implementation.
+- **Status:** Done (v0.9.40)
+- **Description:** Research best practices for showing and hiding AI "thinking" / chain-of-thought in chat UIs. Then review the existing thinking implementation in the codebase to determine what changes are needed to reach best-practice state.
+- **Fix:** Restored inline thinking block as a contained box (border, rounded corners, header/body). Collapsed by default with "Thought for X.Xs" header; click to expand. Auto-scrolls during streaming; disengages on user scroll-up, re-engages at bottom. Max height 400px with internal scrolling. Theme-aware colors across all 4 schemes.
 
 ### 9. Permit Write toggle should re-block commands when disabled
 - **Status:** Done (v0.9.36)
@@ -52,8 +53,9 @@
 - **Fix:** Removed `WS_VSCROLL` from ChatListView window creation, removed `SetScrollInfo`/`ShowScrollBar` calls. Only the custom themed scrollbar (csb) remains.
 
 ### 12. Auto Approve not persisting across command batches
-- **Status:** Pending
+- **Status:** Done (v0.9.38)
 - **Description:** When Auto Approve is toggled on and a batch of command cards is approved/executed, the next batch of commands from the AI's follow-up response still requires manual approval despite Auto Approve being visibly active (indicator lit). Auto Approve should carry forward so that subsequent command batches from the same conversation are automatically approved without user intervention.
+- **Fix:** When new commands arrive from AI, after adding them to the approval queue, check `chat_approval_all_decided()`. If all commands are already decided (auto-approved or blocked), bypass the approval UI (`pending_approval = 0`), sync ChatMsgItem states, settle commands, and execute immediately — mirroring the Allow All flow.
 
 ### 6. [REMINDER] Check fonts when moving between resolutions
 - **Status:** Pending — needs clarification from user before work begins
@@ -67,3 +69,5 @@
 - **v0.9.35** — Scrollbar theming, removed duplicate commands, EXEC purple styling, crontab -l safe, permit write grey indicator
 - **v0.9.36** — Removed grey command echo after execution, permit write re-blocks commands when disabled
 - **v0.9.37** — Removed blank line before [EXEC] commands, removed duplicate native scrollbar
+- **v0.9.38** — Auto Approve now persists across command batches
+- **v0.9.40** — Restored inline thinking block with contained box design, auto-scroll
