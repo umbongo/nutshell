@@ -985,9 +985,146 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     DrawTextA(hdc, "AI", 2, &label_rc,
               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 
-    /* Thinking status is now shown by the activity indicator (green dot +
-     * timer) below the message list — no inline thinking region needed. */
     int content_top = rc->top + icon_sz + CLV_SCALE(lv, 4);
+
+    /* ── Thinking block (contained box) ──────────────────────────── */
+    if (item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
+        int hdr_h   = CLV_SCALE(lv, BASE_THINK_HDR_H);
+        int pad     = lv->code_pad;
+        int corner  = CLV_SCALE(lv, 6);
+        int gap     = CLV_SCALE(lv, 6);
+        int box_left  = rc->left + lv->ai_indent;
+        int box_right = rc->right - side_pad;
+
+        if (item->u.ai.thinking_collapsed) {
+            /* ── Collapsed: single header row ─────────────────── */
+            RECT box_rc;
+            SetRect(&box_rc, box_left, content_top,
+                    box_right, content_top + hdr_h + 2 * pad);
+            fill_rounded_rect(hdc, &box_rc, corner,
+                              RGB_FROM_THEME(tc->cmd_bg));
+            /* Border */
+            HPEN border_pen = CreatePen(PS_SOLID, 1,
+                                        RGB_FROM_THEME(tc->cmd_border));
+            HGDIOBJ old_pen2 = SelectObject(hdc, border_pen);
+            HGDIOBJ old_br2 = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            RoundRect(hdc, box_rc.left, box_rc.top,
+                      box_rc.right, box_rc.bottom, corner, corner);
+            SelectObject(hdc, old_pen2);
+            SelectObject(hdc, old_br2);
+            DeleteObject(border_pen);
+
+            /* Header text: chevron + "Thought for X.Xs" */
+            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
+            SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont
+                              : GetStockObject(DEFAULT_GUI_FONT));
+            char hdr_buf[64];
+            if (item->u.ai.thinking_complete)
+                snprintf(hdr_buf, sizeof(hdr_buf),
+                         "\xe2\x96\xb6  Thought for %.1fs",
+                         (double)item->u.ai.thinking_elapsed);
+            else
+                snprintf(hdr_buf, sizeof(hdr_buf),
+                         "\xe2\x96\xb6  Thinking... (%.1fs)",
+                         (double)item->u.ai.thinking_elapsed);
+            RECT hdr_rc;
+            SetRect(&hdr_rc, box_rc.left + pad, box_rc.top + pad,
+                    box_rc.right - pad, box_rc.bottom - pad);
+            draw_text_utf8(hdc, hdr_buf, &hdr_rc,
+                           DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+            content_top = box_rc.bottom + gap;
+        } else {
+            /* ── Expanded: header + separator + scrollable body ── */
+
+            /* Measure full thinking text height */
+            int think_w = box_right - box_left - 2 * pad;
+            if (think_w < 20) think_w = 20;
+            HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
+                                      : GetStockObject(DEFAULT_GUI_FONT));
+            RECT mr;
+            SetRect(&mr, 0, 0, think_w, 0);
+            draw_text_utf8(hdc, item->u.ai.thinking_text, &mr,
+                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+            int full_h = mr.bottom - mr.top;
+            int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
+            int vis_h = full_h;
+            if (vis_h > max_h) vis_h = max_h;
+            if (vis_h < CLV_SCALE(lv, BASE_THINK_MIN_H))
+                vis_h = CLV_SCALE(lv, BASE_THINK_MIN_H);
+
+            int box_h = hdr_h + pad + vis_h + 2 * pad;
+            RECT box_rc;
+            SetRect(&box_rc, box_left, content_top,
+                    box_right, content_top + box_h);
+            fill_rounded_rect(hdc, &box_rc, corner,
+                              RGB_FROM_THEME(tc->cmd_bg));
+            /* Border */
+            HPEN border_pen = CreatePen(PS_SOLID, 1,
+                                        RGB_FROM_THEME(tc->cmd_border));
+            HGDIOBJ old_pen2 = SelectObject(hdc, border_pen);
+            HGDIOBJ old_br2 = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            RoundRect(hdc, box_rc.left, box_rc.top,
+                      box_rc.right, box_rc.bottom, corner, corner);
+            SelectObject(hdc, old_pen2);
+            SelectObject(hdc, old_br2);
+            DeleteObject(border_pen);
+
+            /* Header row */
+            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
+            SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont
+                              : GetStockObject(DEFAULT_GUI_FONT));
+            char hdr_buf[64];
+            if (item->u.ai.thinking_complete)
+                snprintf(hdr_buf, sizeof(hdr_buf),
+                         "\xe2\x96\xbc  Thought for %.1fs",
+                         (double)item->u.ai.thinking_elapsed);
+            else
+                snprintf(hdr_buf, sizeof(hdr_buf),
+                         "\xe2\x96\xbc  Thinking... (%.1fs)",
+                         (double)item->u.ai.thinking_elapsed);
+            RECT hdr_rc;
+            SetRect(&hdr_rc, box_rc.left + pad, box_rc.top + pad,
+                    box_rc.right - pad, box_rc.top + pad + hdr_h);
+            draw_text_utf8(hdc, hdr_buf, &hdr_rc,
+                           DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+            /* Separator line */
+            int sep_y = box_rc.top + pad + hdr_h;
+            HPEN sep_pen = CreatePen(PS_SOLID, 1,
+                                     RGB_FROM_THEME(tc->cmd_border));
+            HGDIOBJ old_sep = SelectObject(hdc, sep_pen);
+            MoveToEx(hdc, box_rc.left + pad, sep_y, NULL);
+            LineTo(hdc, box_rc.right - pad, sep_y);
+            SelectObject(hdc, old_sep);
+            DeleteObject(sep_pen);
+
+            /* Body: thinking text with clip region and scroll offset */
+            int body_top = sep_y + pad;
+            RECT clip_rc;
+            SetRect(&clip_rc, box_rc.left + pad, body_top,
+                    box_rc.right - pad, body_top + vis_h);
+            HRGN clip_rgn = CreateRectRgnIndirect(&clip_rc);
+            SelectClipRgn(hdc, clip_rgn);
+
+            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
+            SelectObject(hdc, lv->hFont ? lv->hFont
+                              : GetStockObject(DEFAULT_GUI_FONT));
+            RECT body_rc;
+            SetRect(&body_rc, clip_rc.left,
+                    body_top - item->u.ai.thinking_scroll_y,
+                    clip_rc.right,
+                    body_top - item->u.ai.thinking_scroll_y + full_h);
+            draw_text_utf8(hdc, item->u.ai.thinking_text, &body_rc,
+                           DT_WORDBREAK | DT_NOPREFIX);
+
+            SelectClipRgn(hdc, NULL);
+            DeleteObject(clip_rgn);
+            SelectObject(hdc, tf);
+
+            content_top = box_rc.bottom + gap;
+        }
+    }
 
     /* Main AI text content */
     SetTextColor(hdc, RGB_FROM_THEME(lv->theme->text_main));
