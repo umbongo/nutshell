@@ -273,6 +273,12 @@ To run Dr. Memory on the Windows release build:
 
 ---
 
+## License
+
+This project is licensed under the [Creative Commons Attribution-NonCommercial 4.0 International License (CC BY-NC 4.0)](LICENSE). Free for non-commercial use and educational institutions. See the [LICENSE](LICENSE) file for details.
+
+---
+
 ## Tips and Tricks for Bots
 
 If you are an AI assistant helping with this codebase, please observe the following:
