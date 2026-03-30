@@ -1,12 +1,14 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION "1.0.11"
+#define APP_VERSION        "1.0.20"
+#define APP_VERSION_BINARY  1,0,20,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
 #define IDR_FONT_INTER      200
 #define IDR_FONT_INTER_BOLD 201
+#define IDR_ACORN_PNG       202
 
 /* Menu bar command IDs */
 #define IDM_FILE_NEW_SESSION  2001

@@ -207,3 +207,81 @@ int test_chat_msg_list_clear(void) {
     ASSERT_NULL(list.tail);
     TEST_END();
 }
+
+/* ── Error-status-after-AI scenarios ────────────────────────────────
+ * When an HTTP error occurs during streaming, a STATUS item is appended
+ * after the AI item.  The status item must be the tail and marked dirty
+ * so the UI layer knows to scroll it into view. */
+
+int test_chat_msg_error_status_after_ai_is_tail(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_msg_append(&list, CHAT_ITEM_USER, "hello");
+    chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "");
+    ChatMsgItem *status = chat_msg_append(&list, CHAT_ITEM_STATUS,
+                                          "HTTP 429: streaming request failed");
+    ASSERT_NOT_NULL(status);
+    ASSERT_TRUE(list.tail == status);
+    ASSERT_EQ((int)status->type, (int)CHAT_ITEM_STATUS);
+    ASSERT_STR_EQ(status->text, "HTTP 429: streaming request failed");
+    ASSERT_EQ(status->dirty, 1);
+    ASSERT_EQ(list.count, 3);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_error_status_dirty_flag(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_msg_append(&list, CHAT_ITEM_USER, "test");
+    ChatMsgItem *ai = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "partial");
+    /* Simulate the AI item having been measured (dirty cleared) */
+    ai->dirty = 0;
+    ChatMsgItem *err = chat_msg_append(&list, CHAT_ITEM_STATUS,
+                                       "HTTP 500: streaming request failed");
+    /* The new status item must be dirty regardless of prior items */
+    ASSERT_EQ(err->dirty, 1);
+    /* The AI item before it should be untouched */
+    ASSERT_EQ(ai->dirty, 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_multiple_error_statuses(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_msg_append(&list, CHAT_ITEM_USER, "try again");
+    chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "");
+    chat_msg_append(&list, CHAT_ITEM_STATUS,
+                    "HTTP 429: streaming request failed");
+    /* User retries, another error */
+    chat_msg_append(&list, CHAT_ITEM_USER, "try again");
+    chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "");
+    ChatMsgItem *err2 = chat_msg_append(&list, CHAT_ITEM_STATUS,
+                                         "HTTP 429: streaming request failed");
+    ASSERT_TRUE(list.tail == err2);
+    ASSERT_EQ(err2->dirty, 1);
+    ASSERT_EQ(list.count, 6);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_status_after_empty_ai(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_msg_append(&list, CHAT_ITEM_USER, "hello");
+    /* AI item with no content yet (stream never started) */
+    ChatMsgItem *ai = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "");
+    ASSERT_STR_EQ(ai->text, "");
+    ChatMsgItem *status = chat_msg_append(&list, CHAT_ITEM_STATUS,
+                                          "Error: connection timeout");
+    ASSERT_TRUE(list.tail == status);
+    ASSERT_EQ(status->dirty, 1);
+    ASSERT_EQ(list.count, 3);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}

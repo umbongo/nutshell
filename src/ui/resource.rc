@@ -51,3 +51,5 @@ BEGIN
     DEFPUSHBUTTON   "Connect",          IDOK,         412, 262,  55,  14
     PUSHBUTTON      "Cancel",           IDCANCEL,     471, 262,  55,  14
 END
+
+IDR_ACORN_PNG  RCDATA  "../../images/nutshell_acorn_transparent.png"

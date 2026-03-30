@@ -490,6 +490,16 @@ void chat_listview_scroll_to_bottom(HWND hwnd)
     InvalidateRect(hwnd, NULL, TRUE);
 }
 
+int chat_listview_is_near_bottom(HWND hwnd)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return 1;
+    int max_scroll = lv->total_height - lv->viewport_height;
+    if (max_scroll <= 0) return 1;
+    /* "Near bottom" = within one screenful of the bottom */
+    return lv->scroll_y >= max_scroll - lv->viewport_height;
+}
+
 void chat_listview_relayout(HWND hwnd)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
@@ -709,7 +719,7 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         /* Icon row + gap before content (must match paint_ai_item layout) */
         int total = h + CLV_SCALE(lv, BASE_ICON_SIZE) + CLV_SCALE(lv, 4);
 
-        /* Thinking block height (if thinking text exists) */
+        /* Thinking block height — shown during streaming and after completion */
         if (item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
             int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
             int pad = lv->code_pad;
@@ -753,6 +763,20 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
                                                    : item->text;
         text_w = width - 4 * side_pad - 2 * lv->code_pad;
+
+        /* Subtract inline safety tag width so measurement matches the
+         * narrower text area that paint_cmd_card actually uses. */
+        {
+            const char *tag = safety_tag_text(item->u.cmd.safety);
+            HGDIOBJ tf = SelectObject(hdc, lv->hSmallFont
+                             ? lv->hSmallFont
+                             : GetStockObject(DEFAULT_GUI_FONT));
+            SIZE tsz;
+            GetTextExtentPoint32A(hdc, tag, (int)strlen(tag), &tsz);
+            SelectObject(hdc, tf);
+            int tag_w = tsz.cx + 2 * CLV_SCALE(lv, BASE_TAG_PAD_H);
+            text_w -= tag_w + CLV_SCALE(lv, 4);
+        }
         if (text_w < 40) text_w = 40;
 
         old_font = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
@@ -1016,7 +1040,9 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
     int content_top = rc->top + icon_sz + CLV_SCALE(lv, 4);
 
-    /* ── Thinking block (contained box) ──────────────────────────── */
+    /* ── Thinking block (contained box) — shown during streaming and
+     * after completion.  During streaming the header shows a pulsing
+     * green dot; after completion it shows "Thought for X.Xs". ───── */
     if (item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
         int hdr_h   = CLV_SCALE(lv, BASE_THINK_HDR_H);
         int pad     = lv->code_pad;
@@ -1043,24 +1069,74 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             SelectObject(hdc, old_br2);
             DeleteObject(border_pen);
 
-            /* Header text: chevron + "Thought for X.Xs" */
+            /* Header text: chevron + optional pulsing dot + label */
             SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
             SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont
                               : GetStockObject(DEFAULT_GUI_FONT));
-            char hdr_buf[64];
-            if (item->u.ai.thinking_complete)
-                snprintf(hdr_buf, sizeof(hdr_buf),
-                         "\xe2\x96\xb6  Thought for %.1fs",
-                         (double)item->u.ai.thinking_elapsed);
-            else
-                snprintf(hdr_buf, sizeof(hdr_buf),
-                         "\xe2\x96\xb6  Thinking... (%.1fs)",
-                         (double)item->u.ai.thinking_elapsed);
             RECT hdr_rc;
             SetRect(&hdr_rc, box_rc.left + pad, box_rc.top + pad,
                     box_rc.right - pad, box_rc.bottom - pad);
-            draw_text_utf8(hdc, hdr_buf, &hdr_rc,
-                           DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+
+            if (item->u.ai.thinking_complete) {
+                char hdr_buf[64];
+                snprintf(hdr_buf, sizeof(hdr_buf),
+                         "\xe2\x96\xb6  Thought for %.1fs",
+                         (double)item->u.ai.thinking_elapsed);
+                draw_text_utf8(hdc, hdr_buf, &hdr_rc,
+                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
+                               | DT_END_ELLIPSIS);
+            } else {
+                /* Draw chevron */
+                draw_text_utf8(hdc, "\xe2\x96\xb6", &hdr_rc,
+                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+                /* Measure chevron width to position dot after it */
+                RECT chev_rc;
+                SetRect(&chev_rc, 0, 0, 0, 0);
+                draw_text_utf8(hdc, "\xe2\x96\xb6", &chev_rc,
+                               DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+                int dot_x = hdr_rc.left + (chev_rc.right - chev_rc.left)
+                            + CLV_SCALE(lv, 6);
+                int dot_sz = CLV_SCALE(lv, BASE_DOT_SIZE);
+                int dot_y = hdr_rc.top
+                            + (hdr_rc.bottom - hdr_rc.top - dot_sz) / 2;
+                /* Pulsing dot — blend with bg on alternate ticks */
+                COLORREF dot_clr = RGB_FROM_THEME(tc->thinking_text);
+                if (lv->pulse_toggle) {
+                    COLORREF bg = RGB_FROM_THEME(tc->cmd_bg);
+                    dot_clr = RGB(
+                        (GetRValue(dot_clr) + GetRValue(bg)) / 2,
+                        (GetGValue(dot_clr) + GetGValue(bg)) / 2,
+                        (GetBValue(dot_clr) + GetBValue(bg)) / 2);
+                }
+                HBRUSH dbr = CreateSolidBrush(dot_clr);
+                HPEN   dpen = CreatePen(PS_SOLID, 1, dot_clr);
+                HGDIOBJ obr = SelectObject(hdc, dbr);
+                HGDIOBJ old_dpen = SelectObject(hdc, dpen);
+                Ellipse(hdc, dot_x, dot_y,
+                        dot_x + dot_sz, dot_y + dot_sz);
+                SelectObject(hdc, old_dpen);
+                SelectObject(hdc, obr);
+                DeleteObject(dpen);
+                DeleteObject(dbr);
+
+                /* "Thinking..." label after the dot */
+                RECT lbl_rc;
+                SetRect(&lbl_rc, dot_x + dot_sz + CLV_SCALE(lv, 4),
+                        hdr_rc.top, hdr_rc.right, hdr_rc.bottom);
+                draw_text_utf8(hdc, "Thinking...", &lbl_rc,
+                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+                /* Right-aligned elapsed timer */
+                char time_buf[16];
+                snprintf(time_buf, sizeof(time_buf), "%.1fs",
+                         (double)item->u.ai.thinking_elapsed);
+                RECT time_rc;
+                SetRect(&time_rc, hdr_rc.left, hdr_rc.top,
+                        hdr_rc.right, hdr_rc.bottom);
+                draw_text_utf8(hdc, time_buf, &time_rc,
+                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
+                               | DT_RIGHT);
+            }
 
             content_top = box_rc.bottom + gap;
         } else {
@@ -1103,20 +1179,69 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
             SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont
                               : GetStockObject(DEFAULT_GUI_FONT));
-            char hdr_buf[64];
-            if (item->u.ai.thinking_complete)
-                snprintf(hdr_buf, sizeof(hdr_buf),
-                         "\xe2\x96\xbc  Thought for %.1fs",
-                         (double)item->u.ai.thinking_elapsed);
-            else
-                snprintf(hdr_buf, sizeof(hdr_buf),
-                         "\xe2\x96\xbc  Thinking... (%.1fs)",
-                         (double)item->u.ai.thinking_elapsed);
             RECT hdr_rc;
             SetRect(&hdr_rc, box_rc.left + pad, box_rc.top + pad,
                     box_rc.right - pad, box_rc.top + pad + hdr_h);
-            draw_text_utf8(hdc, hdr_buf, &hdr_rc,
-                           DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+
+            if (item->u.ai.thinking_complete) {
+                char hdr_buf[64];
+                snprintf(hdr_buf, sizeof(hdr_buf),
+                         "\xe2\x96\xbc  Thought for %.1fs",
+                         (double)item->u.ai.thinking_elapsed);
+                draw_text_utf8(hdc, hdr_buf, &hdr_rc,
+                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
+                               | DT_END_ELLIPSIS);
+            } else {
+                /* Draw chevron */
+                draw_text_utf8(hdc, "\xe2\x96\xbc", &hdr_rc,
+                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+                /* Pulsing dot after chevron */
+                RECT chev_rc;
+                SetRect(&chev_rc, 0, 0, 0, 0);
+                draw_text_utf8(hdc, "\xe2\x96\xbc", &chev_rc,
+                               DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+                int dot_x = hdr_rc.left + (chev_rc.right - chev_rc.left)
+                            + CLV_SCALE(lv, 6);
+                int dot_sz = CLV_SCALE(lv, BASE_DOT_SIZE);
+                int dot_y = hdr_rc.top
+                            + (hdr_rc.bottom - hdr_rc.top - dot_sz) / 2;
+                COLORREF dot_clr = RGB_FROM_THEME(tc->thinking_text);
+                if (lv->pulse_toggle) {
+                    COLORREF bg = RGB_FROM_THEME(tc->cmd_bg);
+                    dot_clr = RGB(
+                        (GetRValue(dot_clr) + GetRValue(bg)) / 2,
+                        (GetGValue(dot_clr) + GetGValue(bg)) / 2,
+                        (GetBValue(dot_clr) + GetBValue(bg)) / 2);
+                }
+                HBRUSH dbr = CreateSolidBrush(dot_clr);
+                HPEN   dpen = CreatePen(PS_SOLID, 1, dot_clr);
+                HGDIOBJ obr = SelectObject(hdc, dbr);
+                HGDIOBJ old_dpen = SelectObject(hdc, dpen);
+                Ellipse(hdc, dot_x, dot_y,
+                        dot_x + dot_sz, dot_y + dot_sz);
+                SelectObject(hdc, old_dpen);
+                SelectObject(hdc, obr);
+                DeleteObject(dpen);
+                DeleteObject(dbr);
+
+                /* "Thinking..." label */
+                RECT lbl_rc;
+                SetRect(&lbl_rc, dot_x + dot_sz + CLV_SCALE(lv, 4),
+                        hdr_rc.top, hdr_rc.right, hdr_rc.bottom);
+                draw_text_utf8(hdc, "Thinking...", &lbl_rc,
+                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+                /* Right-aligned elapsed timer */
+                char time_buf[16];
+                snprintf(time_buf, sizeof(time_buf), "%.1fs",
+                         (double)item->u.ai.thinking_elapsed);
+                RECT time_rc;
+                SetRect(&time_rc, hdr_rc.left, hdr_rc.top,
+                        hdr_rc.right, hdr_rc.bottom);
+                draw_text_utf8(hdc, time_buf, &time_rc,
+                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
+                               | DT_RIGHT);
+            }
 
             /* Separator line */
             int sep_y = box_rc.top + pad + hdr_h;
@@ -1130,9 +1255,10 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
             /* Body: thinking text with clip region and scroll offset */
             int body_top = sep_y + pad;
+            int sb_w = (full_h > vis_h) ? CLV_SCALE(lv, 6) : 0;
             RECT clip_rc;
             SetRect(&clip_rc, box_rc.left + pad, body_top,
-                    box_rc.right - pad, body_top + vis_h);
+                    box_rc.right - pad - sb_w, body_top + vis_h);
             HRGN clip_rgn = CreateRectRgnIndirect(&clip_rc);
             SelectClipRgn(hdc, clip_rgn);
 
@@ -1149,6 +1275,35 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
             SelectClipRgn(hdc, NULL);
             DeleteObject(clip_rgn);
+
+            /* Scrollbar thumb when content overflows */
+            if (full_h > vis_h) {
+                int sb_x = box_rc.right - pad - sb_w;
+                int sb_inset = CLV_SCALE(lv, 1);
+                int track_h = vis_h;
+                int thumb_h = (vis_h * vis_h) / full_h;
+                int min_thumb = CLV_SCALE(lv, 20);
+                if (thumb_h < min_thumb) thumb_h = min_thumb;
+                int max_scroll = full_h - vis_h;
+                int thumb_y = body_top;
+                if (max_scroll > 0)
+                    thumb_y += (item->u.ai.thinking_scroll_y
+                                * (track_h - thumb_h)) / max_scroll;
+
+                /* Draw rounded thumb in thinking_text color */
+                COLORREF thumb_clr = RGB_FROM_THEME(tc->thinking_text);
+                HBRUSH tb = CreateSolidBrush(thumb_clr);
+                HPEN np = CreatePen(PS_NULL, 0, 0);
+                HGDIOBJ ob = SelectObject(hdc, tb);
+                HGDIOBJ op = SelectObject(hdc, np);
+                RoundRect(hdc, sb_x + sb_inset, thumb_y,
+                          sb_x + sb_w - sb_inset, thumb_y + thumb_h,
+                          sb_w, sb_w);
+                SelectObject(hdc, op);
+                SelectObject(hdc, ob);
+                DeleteObject(np);
+                DeleteObject(tb);
+            }
             SelectObject(hdc, tf);
 
             content_top = box_rc.bottom + gap;
@@ -1487,7 +1642,8 @@ static COLORREF blend_with_bg(COLORREF fg, COLORREF bg_clr)
 static int paint_activity_indicator(ChatListView *lv, HDC hdc,
                                      int y, int cw)
 {
-    if (!lv->activity || lv->activity->phase == ACTIVITY_IDLE)
+    if (!lv->activity || lv->activity->phase == ACTIVITY_IDLE
+        || lv->activity->phase == ACTIVITY_THINKING)
         return 0;
 
     int act_h  = CLV_SCALE(lv, BASE_ACTIVITY_H);
@@ -1690,10 +1846,11 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
             && item->u.ai.thinking_text) {
             int icon_sz = CLV_SCALE(lv, BASE_ICON_SIZE);
             int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
+            int click_h = hdr_h + 2 * lv->code_pad;
             int hdr_top = y + icon_sz + CLV_SCALE(lv, 4);
             int think_left = side_pad + lv->ai_indent;
 
-            if (my >= hdr_top && my < hdr_top + hdr_h &&
+            if (my >= hdr_top && my < hdr_top + click_h &&
                 mx >= think_left) {
                 item->u.ai.thinking_collapsed =
                     !item->u.ai.thinking_collapsed;

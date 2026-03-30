@@ -31,6 +31,7 @@
 #include "dpi_util.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <dwmapi.h>
+#include <gdiplus.h>       /* GDI+ flat API (includes gdiplusflat.h) */
 
 static void hide_ai_panel(HWND parent);
 
@@ -109,6 +110,10 @@ static int g_ai_anim_from = 0;        /* animation start width (for close: curre
 static int g_ai_splitter_dragging = 0;
 static ULONGLONG g_ai_anim_start = 0;
 static int g_ai_reopen_after_connect = 0; /* reopen AI panel after first session connects */
+
+/* ---- Acorn watermark state ---- */
+static ULONG_PTR g_gdip_token = 0;
+static GpImage  *g_acorn_image = NULL;
 #define AI_ANIM_TIMER_ID  4
 #define AI_ANIM_INTERVAL  16           /* ~60fps */
 
@@ -1579,7 +1584,41 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Attach menu bar */
             SetMenu(hwnd, create_app_menu());
 
-            PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
+            /* Initialize GDI+ for acorn watermark rendering */
+            {
+                GdiplusStartupInput gdip_input;
+                gdip_input.GdiplusVersion = 1;
+                gdip_input.DebugEventCallback = NULL;
+                gdip_input.SuppressBackgroundThread = FALSE;
+                gdip_input.SuppressExternalCodecs = FALSE;
+                if (GdiplusStartup(&g_gdip_token, &gdip_input, NULL) == 0) {
+                    /* Load acorn PNG from embedded RCDATA resource */
+                    HRSRC hRes = FindResource(g_hInst,
+                                              MAKEINTRESOURCE(IDR_ACORN_PNG),
+                                              RT_RCDATA);
+                    if (hRes) {
+                        DWORD sz = SizeofResource(g_hInst, hRes);
+                        HGLOBAL hMem = LoadResource(g_hInst, hRes);
+                        if (hMem && sz > 0) {
+                            const void *data = LockResource(hMem);
+                            HGLOBAL hBuf = GlobalAlloc(GMEM_MOVEABLE, sz);
+                            if (hBuf) {
+                                void *buf = GlobalLock(hBuf);
+                                memcpy(buf, data, sz);
+                                GlobalUnlock(hBuf);
+                                IStream *stream = NULL;
+                                if (CreateStreamOnHGlobal(hBuf, TRUE,
+                                                         &stream) == S_OK) {
+                                    GdipCreateBitmapFromStream(stream,
+                                        (GpBitmap **)&g_acorn_image);
+                                    stream->lpVtbl->Release(stream);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             return 0;
 
         case WM_INITMENUPOPUP: {
@@ -2107,6 +2146,83 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                               ps.rcPaint.bottom };
                 FillRect(hdc, &fill, brush);
                 DeleteObject(brush);
+
+                /* Draw ghosted acorn watermark centered with 15% margins */
+                if (g_acorn_image) {
+                    int area_w = term_right_edge;
+                    int area_h = client.bottom - g_tab_height;
+                    /* 15% inset on each side => 70% usable */
+                    int box_w = area_w * 70 / 100;
+                    int box_h = area_h * 70 / 100;
+                    /* Fit square (locked aspect ratio) to shorter dimension */
+                    int img_sz = box_w < box_h ? box_w : box_h;
+                    if (img_sz > 0) {
+                        int cx = (area_w - img_sz) / 2;
+                        int cy = g_tab_height + (area_h - img_sz) / 2;
+
+                        GpGraphics *gfx = NULL;
+                        GdipCreateFromHDC(hdc, &gfx);
+                        if (gfx) {
+                            GdipSetInterpolationMode(gfx, 7); /* HighQualityBicubic */
+
+                            /* Color matrix: grayscale (luminance weights)
+                             * with alpha = 0.06 for a subtle watermark. */
+                            ColorMatrix cm = {{
+                                {0.299f, 0.299f, 0.299f, 0,      0},
+                                {0.587f, 0.587f, 0.587f, 0,      0},
+                                {0.114f, 0.114f, 0.114f, 0,      0},
+                                {0,      0,      0,      0.06f,  0},
+                                {0,      0,      0,      0,      0}
+                            }};
+                            GpImageAttributes *attr = NULL;
+                            GdipCreateImageAttributes(&attr);
+                            if (attr) {
+                                GdipSetImageAttributesColorMatrix(attr,
+                                    0, TRUE, &cm, NULL, 0);
+
+                                UINT src_w = 0, src_h = 0;
+                                GdipGetImageWidth(g_acorn_image, &src_w);
+                                GdipGetImageHeight(g_acorn_image, &src_h);
+
+                                GdipDrawImageRectRectI(gfx, g_acorn_image,
+                                    cx, cy, img_sz, img_sz,
+                                    0, 0, (INT)src_w, (INT)src_h,
+                                    2, /* UnitPixel */
+                                    attr, NULL, NULL);
+                                GdipDisposeImageAttributes(attr);
+                            }
+                            GdipDeleteGraphics(gfx);
+                        }
+                    }
+                }
+
+                /* Version label at bottom-right, same opacity as logo */
+                {
+                    int vpad = MulDiv(10, g_dpi, 96);
+                    int font_h = -MulDiv(9, g_dpi, 72);
+                    HFONT vfont = CreateFont(font_h, 0, 0, 0, FW_NORMAL,
+                        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                        APP_FONT_UI_FACE);
+                    HGDIOBJ old_vf = SelectObject(hdc, vfont);
+                    SetBkMode(hdc, TRANSPARENT);
+                    /* Blend text color at 6% against background */
+                    COLORREF bg_cr = g_renderer.defaultBg;
+                    int vr = GetRValue(bg_cr) + (int)((255 - GetRValue(bg_cr)) * 0.10);
+                    int vg = GetGValue(bg_cr) + (int)((255 - GetGValue(bg_cr)) * 0.10);
+                    int vb = GetBValue(bg_cr) + (int)((255 - GetBValue(bg_cr)) * 0.10);
+                    SetTextColor(hdc, RGB(vr, vg, vb));
+                    RECT vrc;
+                    vrc.left   = 0;
+                    vrc.top    = 0;
+                    vrc.right  = term_right_edge - vpad;
+                    vrc.bottom = client.bottom - vpad;
+                    DrawTextA(hdc, "v" APP_VERSION, -1, &vrc,
+                              DT_SINGLELINE | DT_RIGHT | DT_BOTTOM | DT_NOPREFIX);
+                    SelectObject(hdc, old_vf);
+                    DeleteObject(vfont);
+                }
             }
 
             /* Fill the splitter gap between terminal and docked AI panel */
@@ -2511,6 +2627,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             renderer_free(&g_renderer);
             if (g_hMenuFont) { DeleteObject(g_hMenuFont); g_hMenuFont = NULL; }
             app_font_free_ui();
+            if (g_acorn_image) {
+                GdipDisposeImage(g_acorn_image);
+                g_acorn_image = NULL;
+            }
+            if (g_gdip_token) {
+                GdiplusShutdown(g_gdip_token);
+                g_gdip_token = 0;
+            }
             PostQuitMessage(0);
             return 0;
     }

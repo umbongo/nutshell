@@ -2090,8 +2090,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                   d->stream_content);
             }
             if (d->hChatList) {
+                int was_near_bottom =
+                    chat_listview_is_near_bottom(d->hChatList);
                 chat_listview_invalidate(d->hChatList);
-                chat_listview_scroll_to_bottom(d->hChatList);
+                if (was_near_bottom)
+                    chat_listview_scroll_to_bottom(d->hChatList);
             }
         }
 
@@ -2333,8 +2336,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (text) {
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                 text);
-                if (d->hChatList)
+                if (d->hChatList) {
                     chat_listview_invalidate(d->hChatList);
+                    chat_listview_scroll_to_bottom(d->hChatList);
+                }
                 free(text);
             }
             free(rmsg->thinking);

@@ -1087,6 +1087,10 @@ int test_chat_msg_null_text(void);
 int test_chat_msg_unique_ids(void);
 int test_chat_msg_command_too_long(void);
 int test_chat_msg_list_clear(void);
+int test_chat_msg_error_status_after_ai_is_tail(void);
+int test_chat_msg_error_status_dirty_flag(void);
+int test_chat_msg_multiple_error_statuses(void);
+int test_chat_msg_status_after_empty_ai(void);
 
 /* test_chat_thinking.c */
 int test_thinking_init(void);
@@ -2310,6 +2314,10 @@ int main(void) {
     failed += test_chat_msg_unique_ids();
     failed += test_chat_msg_command_too_long();
     failed += test_chat_msg_list_clear();
+    failed += test_chat_msg_error_status_after_ai_is_tail();
+    failed += test_chat_msg_error_status_dirty_flag();
+    failed += test_chat_msg_multiple_error_statuses();
+    failed += test_chat_msg_status_after_empty_ai();
 
     printf("\n--- Thinking Controller ---\n");
     failed += test_thinking_init();
