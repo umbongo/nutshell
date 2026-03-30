@@ -537,10 +537,14 @@ static void recalc_layout(ChatListView *lv)
     HDC hdc = GetDC(lv->hwnd);
     if (!hdc) return;
 
-    /* Pass 1: measure items (only dirty items need remeasuring) */
+    /* Pass 1: measure items (only dirty items need remeasuring).
+     * Exception: unsettled command items are always remeasured because
+     * Pass 2 overwrites their measured_height with the container height,
+     * and we need the original card height for cmd_heights[]. */
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
-        if (item->dirty || item->measured_height == 0)
+        int force = (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled);
+        if (item->dirty || item->measured_height == 0 || force)
             item->measured_height = measure_item(lv, hdc, item, width);
         item->dirty = 0;
         item = item->next;
