@@ -445,8 +445,8 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 
     if (rc != 0 || status < 200 || status >= 300) {
         char msg[1024];
-        if (rc != 0 && errbuf[0])
-            snprintf(msg, sizeof(msg), "HTTP error: %s", errbuf);
+        if (errbuf[0])
+            snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
         else
             snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
         post_error_response(arg->hwnd, arg->target, msg);
