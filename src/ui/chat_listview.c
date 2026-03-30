@@ -500,8 +500,11 @@ int chat_listview_is_near_bottom(HWND hwnd)
     if (!lv) return 1;
     int max_scroll = lv->total_height - lv->viewport_height;
     if (max_scroll <= 0) return 1;
-    /* "Near bottom" = within one screenful of the bottom */
-    return lv->scroll_y >= max_scroll - lv->viewport_height;
+    /* "Near bottom" = within a small margin of the bottom.
+     * Tight threshold so expanding the thinking box (which increases
+     * total_height) doesn't keep triggering scroll_to_bottom. */
+    int margin = CLV_SCALE(lv, 60);
+    return lv->scroll_y >= max_scroll - margin;
 }
 
 void chat_listview_relayout(HWND hwnd)

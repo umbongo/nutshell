@@ -2304,14 +2304,17 @@ next_coalesce:;
             chat_activity_token(&d->activity, now);
 
             if (d->stream_ai_item) {
-                if (d->stream_phase == 1) {
+                /* Always update thinking text if we have any */
+                if (d->stream_thinking_len > 0) {
                     chat_msg_set_thinking(d->stream_ai_item,
                                           d->stream_thinking);
                     if (!d->stream_ai_item->u.ai.thinking_collapsed
                         && d->stream_ai_item->u.ai.thinking_autoscroll) {
                         d->stream_ai_item->u.ai.thinking_scroll_y = 999999;
                     }
-                } else {
+                }
+                /* Always update content text if we have any */
+                if (d->stream_content_len > 0) {
                     chat_msg_set_text(d->stream_ai_item,
                                       d->stream_content);
                 }
