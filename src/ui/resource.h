@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.0.25"
-#define APP_VERSION_BINARY  1,0,25,0
+#define APP_VERSION        "1.0.26"
+#define APP_VERSION_BINARY  1,0,26,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -58,6 +58,5 @@
 #define IDC_CMD_APPROVE_SEL  3045  /* Approve selected (ticked) commands */
 #define IDC_CMD_CANCEL_ALL   3046  /* Cancel (deny) all pending commands */
 #define IDC_CMD_TOGGLE_BASE  3050  /* 3050..3065 for up to 16 command tickboxes */
-#define IDC_QUEUE_CANCEL     3066  /* Cancel link on queued user message bubble */
 
 #endif

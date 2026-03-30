@@ -17,7 +17,6 @@ typedef struct ChatMsgItem {
     int id;
     int measured_height;
     int dirty;
-    int queued;          /* 1 = pending in queue, shown with [Cancel] label */
     char *text;
     size_t text_len;
 

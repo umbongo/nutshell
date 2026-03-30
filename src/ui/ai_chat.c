@@ -241,14 +241,6 @@ typedef struct {
 
     /* Pending image attachment for the next send */
     AiAttachment *pending_attachment;
-
-    /* Message queue (single slot — used when AI is busy) */
-    struct {
-        char text[2048];
-        AiAttachment *attachment;
-        ChatMsgItem *chat_item;
-        int active;
-    } queued_msg;
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -1689,58 +1681,17 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         switch (LOWORD(wParam)) {
         case IDC_CHAT_SEND:
             if (d && ACTIVE_BUSY(d)) {
-                /* Queue message instead of cancelling */
-                char qbuf[2048];
-                GetWindowText(d->hInput, qbuf, (int)sizeof(qbuf));
-                if (qbuf[0] != '\0') {
-                    /* Remove old queued message if any */
-                    if (d->queued_msg.active && d->queued_msg.chat_item) {
-                        chat_msg_remove(&d->msg_list,
-                                        d->queued_msg.chat_item);
-                        d->queued_msg.chat_item = NULL;
-                    }
-                    ai_attachment_free(&d->queued_msg.attachment);
-
-                    /* Store new queued message */
-                    snprintf(d->queued_msg.text,
-                             sizeof(d->queued_msg.text), "%s", qbuf);
-                    d->queued_msg.attachment = d->pending_attachment;
-                    d->pending_attachment = NULL;
-                    d->queued_msg.active = 1;
-
-                    /* Show in chat as queued bubble */
-                    ChatMsgItem *qi = chat_msg_append(&d->msg_list,
-                                                      CHAT_ITEM_USER,
-                                                      qbuf);
-                    if (qi) qi->queued = 1;
-                    d->queued_msg.chat_item = qi;
-
-                    SetWindowText(d->hInput, "");
-                    if (d->hChatList) {
-                        chat_listview_invalidate(d->hChatList);
-                        chat_listview_scroll_to_bottom(d->hChatList);
-                    }
+                cancel_active_stream(d);
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                    "[cancelled]");
+                if (d->hChatList) {
+                    chat_listview_invalidate(d->hChatList);
+                    chat_listview_scroll_to_bottom(d->hChatList);
                 }
             } else {
                 send_user_message(d);
             }
             SetFocus(d->hInput);
-            return 0;
-        case IDC_QUEUE_CANCEL:
-            if (d && d->queued_msg.active) {
-                SetWindowText(d->hInput, d->queued_msg.text);
-                if (d->queued_msg.chat_item) {
-                    chat_msg_remove(&d->msg_list,
-                                    d->queued_msg.chat_item);
-                    d->queued_msg.chat_item = NULL;
-                }
-                ai_attachment_free(&d->queued_msg.attachment);
-                d->queued_msg.active = 0;
-                d->queued_msg.text[0] = '\0';
-                if (d->hChatList)
-                    chat_listview_invalidate(d->hChatList);
-                SetFocus(d->hInput);
-            }
             return 0;
         case IDC_CHAT_NEWCHAT:
             if (d) {
@@ -2555,27 +2506,6 @@ next_coalesce:;
             free(rmsg->thinking);
             free(rmsg);
             update_context_bar(d);
-
-            /* Auto-send queued message if any */
-            if (d->queued_msg.active && !d->pending_approval) {
-                /* Remove the queued preview bubble */
-                if (d->queued_msg.chat_item) {
-                    chat_msg_remove(&d->msg_list,
-                                    d->queued_msg.chat_item);
-                    d->queued_msg.chat_item = NULL;
-                }
-                /* Set up for send */
-                SetWindowText(d->hInput, d->queued_msg.text);
-                d->pending_attachment = d->queued_msg.attachment;
-                d->queued_msg.attachment = NULL;
-                d->queued_msg.active = 0;
-                d->queued_msg.text[0] = '\0';
-                if (d->hChatList)
-                    chat_listview_invalidate(d->hChatList);
-                /* Deferred send */
-                PostMessage(hwnd, WM_COMMAND,
-                            MAKEWPARAM(IDC_CHAT_SEND, BN_CLICKED), 0);
-            }
         } else {
             /* Error */
             char *text = rmsg->content;
@@ -3040,7 +2970,6 @@ next_coalesce:;
             }
             thinking_history_clear(d);
             ai_attachment_free(&d->pending_attachment);
-            ai_attachment_free(&d->queued_msg.attachment);
             chat_msg_list_clear(&d->msg_list);
             d->stream_ai_item = NULL;
             DeleteCriticalSection(&d->cs);
