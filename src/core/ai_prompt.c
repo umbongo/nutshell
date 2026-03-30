@@ -2,7 +2,32 @@
 #include "cmd_classify.h"
 #include "json_parser.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+void ai_attachment_free(AiAttachment **att)
+{
+    if (!att || !*att) return;
+    free((*att)->base64_url);
+    free(*att);
+    *att = NULL;
+}
+
+AiAttachment *ai_attachment_dup(const AiAttachment *att)
+{
+    if (!att) return NULL;
+    AiAttachment *dup = calloc(1, sizeof(*dup));
+    if (!dup) return NULL;
+    if (att->base64_url) {
+        size_t len = strlen(att->base64_url);
+        dup->base64_url = malloc(len + 1);
+        if (!dup->base64_url) { free(dup); return NULL; }
+        memcpy(dup->base64_url, att->base64_url, len + 1);
+    }
+    dup->width = att->width;
+    dup->height = att->height;
+    return dup;
+}
 
 void ai_conv_init(AiConversation *conv, const char *model)
 {
@@ -15,6 +40,8 @@ void ai_conv_init(AiConversation *conv, const char *model)
 void ai_conv_reset(AiConversation *conv)
 {
     if (!conv) return;
+    for (int i = 0; i < conv->msg_count; i++)
+        ai_attachment_free(&conv->messages[i].attachment);
     char model[64];
     memcpy(model, conv->model, sizeof(model));
     memset(conv, 0, sizeof(*conv));
@@ -29,6 +56,7 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     AiMessage *m = &conv->messages[conv->msg_count];
     m->role = role;
     snprintf(m->content, sizeof(m->content), "%s", content);
+    m->attachment = NULL;
     conv->msg_count++;
     return 0;
 }
@@ -226,6 +254,7 @@ static const char *role_str(AiRole role)
 }
 
 size_t ai_build_request_body_ex(const AiConversation *conv,
+                                const AiAttachment *last_user_attachment,
                                 char *buf, size_t buf_size, int stream)
 {
     if (!conv || !buf || buf_size == 0 || conv->msg_count == 0) return 0;
@@ -254,15 +283,50 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
         }
 
         const char *role = role_str(conv->messages[i].role);
-        int rn = snprintf(buf + pos, buf_size - pos, "{\"role\":\"%s\",\"content\":", role);
-        if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
-        pos += (size_t)rn;
 
-        pos = json_escape_str(conv->messages[i].content, buf, buf_size, pos);
-        if (pos == 0) return 0;
+        /* Check if this is the last user message with a multimodal attachment */
+        int is_multimodal = (conv->messages[i].role == AI_ROLE_USER
+                             && i == conv->msg_count - 1
+                             && last_user_attachment
+                             && last_user_attachment->base64_url);
 
-        if (pos + 1 >= buf_size) return 0;
-        buf[pos++] = '}';
+        if (is_multimodal) {
+            /* Emit content as array: [{"type":"text","text":"..."},{"type":"image_url","image_url":{"url":"..."}}] */
+            int rn = snprintf(buf + pos, buf_size - pos,
+                              "{\"role\":\"%s\",\"content\":[{\"type\":\"text\",\"text\":", role);
+            if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
+            pos += (size_t)rn;
+
+            pos = json_escape_str(conv->messages[i].content, buf, buf_size, pos);
+            if (pos == 0) return 0;
+
+            /* image_url part — base64_url is already a complete data URI, write it as a JSON string */
+            const char *img_mid = "},{\"type\":\"image_url\",\"image_url\":{\"url\":";
+            size_t img_mid_len = strlen(img_mid);
+            if (pos + img_mid_len >= buf_size) return 0;
+            memcpy(buf + pos, img_mid, img_mid_len);
+            pos += img_mid_len;
+
+            pos = json_escape_str(last_user_attachment->base64_url, buf, buf_size, pos);
+            if (pos == 0) return 0;
+
+            /* Close: }}]} */
+            const char *img_close = "}}]}";
+            size_t img_close_len = strlen(img_close);
+            if (pos + img_close_len >= buf_size) return 0;
+            memcpy(buf + pos, img_close, img_close_len);
+            pos += img_close_len;
+        } else {
+            int rn = snprintf(buf + pos, buf_size - pos, "{\"role\":\"%s\",\"content\":", role);
+            if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
+            pos += (size_t)rn;
+
+            pos = json_escape_str(conv->messages[i].content, buf, buf_size, pos);
+            if (pos == 0) return 0;
+
+            if (pos + 1 >= buf_size) return 0;
+            buf[pos++] = '}';
+        }
     }
 
     /* Close: ]} */
@@ -277,7 +341,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
 size_t ai_build_request_body(const AiConversation *conv,
                              char *buf, size_t buf_size)
 {
-    return ai_build_request_body_ex(conv, buf, buf_size, 0);
+    return ai_build_request_body_ex(conv, NULL, buf, buf_size, 0);
 }
 
 int ai_parse_response_ex(const char *json, char *content_out, size_t content_size,

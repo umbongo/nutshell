@@ -22,6 +22,7 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
     item->type = type;
     item->id = list->next_id++;
     item->dirty = 1;
+    item->queued = 0;
     item->measured_height = 0;
 
     /* Copy text (treat NULL as empty) */

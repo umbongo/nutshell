@@ -31,6 +31,40 @@
 #include <richedit.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <shlwapi.h>
+#include "base64.h"
+
+/* GDI+ flat API declarations (C-compatible -- no C++ headers) */
+typedef int GpStatus;
+typedef void GpBitmap;
+typedef void GpImage;
+typedef struct { UINT32 Data1; UINT16 Data2; UINT16 Data3; BYTE Data4[8]; } GPCLSID;
+typedef struct { UINT32 Num; UINT32 Size; } EncoderParameters;
+
+extern GpStatus __stdcall GdiplusStartup(ULONG_PTR *token, const void *input,
+                                          void *output);
+extern void     __stdcall GdiplusShutdown(ULONG_PTR token);
+extern GpStatus __stdcall GdipCreateBitmapFromHBITMAP(HBITMAP hbm, HPALETTE hpal,
+                                                       GpBitmap **bitmap);
+extern GpStatus __stdcall GdipSaveImageToStream(GpImage *image, IStream *stream,
+                                                 const GPCLSID *clsid,
+                                                 const EncoderParameters *params);
+extern GpStatus __stdcall GdipDisposeImage(GpImage *image);
+extern GpStatus __stdcall GdipGetImageWidth(GpImage *image, UINT *width);
+extern GpStatus __stdcall GdipGetImageHeight(GpImage *image, UINT *height);
+
+typedef struct {
+    UINT32 GdiplusVersion;
+    void *DebugEventCallback;
+    BOOL SuppressBackgroundThread;
+    BOOL SuppressExternalCodecs;
+} GdiplusStartupInput;
+
+/* PNG encoder CLSID: {557CF406-1A04-11D3-9A73-0000F81EF32E} */
+static const GPCLSID CLSID_PNG = {
+    0x557CF406, 0x1A04, 0x11D3,
+    {0x9A, 0x73, 0x00, 0x00, 0xF8, 0x1E, 0xF3, 0x2E}
+};
 
 static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 
@@ -201,6 +235,20 @@ typedef struct {
 
     /* Stream abort: UI thread sets to 1, stream callback checks it */
     volatile int abort_stream;
+
+    /* GDI+ token for image conversion */
+    ULONG_PTR gdip_token;
+
+    /* Pending image attachment for the next send */
+    AiAttachment *pending_attachment;
+
+    /* Message queue (single slot — used when AI is busy) */
+    struct {
+        char text[2048];
+        AiAttachment *attachment;
+        ChatMsgItem *chat_item;
+        int active;
+    } queued_msg;
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -588,8 +636,13 @@ static void launch_stream_thread(AiChatData *d)
     strncpy(arg->api_key, d->api_key, sizeof(arg->api_key) - 1);
     strncpy(arg->provider, d->provider, sizeof(arg->provider) - 1);
     strncpy(arg->custom_url, d->custom_url, sizeof(arg->custom_url) - 1);
-    arg->body_len = ai_build_request_body_ex(&d->conv, arg->body,
-                                              sizeof(arg->body), 1);
+    {
+        int last_msg = d->conv.msg_count - 1;
+        const AiAttachment *att = (last_msg >= 0)
+            ? d->conv.messages[last_msg].attachment : NULL;
+        arg->body_len = ai_build_request_body_ex(&d->conv, att, arg->body,
+                                                  sizeof(arg->body), 1);
+    }
     LeaveCriticalSection(&d->cs);
 
     /* Allocate per-session stream accumulators */
@@ -731,6 +784,18 @@ static void send_user_message(AiChatData *d)
 
     char input[2048];
     GetWindowText(d->hInput, input, (int)sizeof(input));
+
+    /* Strip any "[Image attached] " prefixes inserted by clipboard paste */
+    {
+        const char *img_prefix = "[Image attached] ";
+        size_t pfx_len = strlen(img_prefix);
+        char *text_start = input;
+        while (strstr(text_start, img_prefix) == text_start)
+            text_start += pfx_len;
+        if (text_start != input)
+            memmove(input, text_start, strlen(text_start) + 1);
+    }
+
     if (input[0] == '\0') return;
 
     SetWindowText(d->hInput, "");
@@ -768,6 +833,16 @@ static void send_user_message(AiChatData *d)
     }
 
     ai_conv_add(&d->conv, AI_ROLE_USER, input);
+
+    /* Attach pending image to the user message just added */
+    if (d->pending_attachment) {
+        int last = d->conv.msg_count - 1;
+        if (last >= 0 && d->conv.messages[last].role == AI_ROLE_USER) {
+            d->conv.messages[last].attachment =
+                ai_attachment_dup(d->pending_attachment);
+        }
+    }
+
     LeaveCriticalSection(&d->cs);
 
     update_context_bar(d);
@@ -776,6 +851,9 @@ static void send_user_message(AiChatData *d)
     start_indicator(d, "thinking");
 
     launch_stream_thread(d);
+
+    /* Clear pending attachment after thread is launched */
+    ai_attachment_free(&d->pending_attachment);
 }
 
 static void execute_command(AiChatData *d, const char *cmd)
@@ -833,6 +911,80 @@ static void send_continue_message(AiChatData *d)
     launch_stream_thread(d);
 }
 
+/* Convert a clipboard bitmap to a base64-encoded PNG AiAttachment.
+ * Returns NULL if the clipboard does not contain a bitmap or on error. */
+static AiAttachment *clipboard_to_png_attachment(HWND owner)
+{
+    if (!IsClipboardFormatAvailable(CF_BITMAP))
+        return NULL;
+    if (!OpenClipboard(owner))
+        return NULL;
+
+    HBITMAP hbm = (HBITMAP)GetClipboardData(CF_BITMAP);
+    if (!hbm) { CloseClipboard(); return NULL; }
+
+    BITMAP bm_info;
+    GetObject(hbm, sizeof(bm_info), &bm_info);
+
+    GpBitmap *gpbmp = NULL;
+    if (GdipCreateBitmapFromHBITMAP(hbm, NULL, &gpbmp) != 0 || !gpbmp) {
+        CloseClipboard();
+        return NULL;
+    }
+    CloseClipboard();
+
+    IStream *stm = SHCreateMemStream(NULL, 0);
+    if (!stm) {
+        GdipDisposeImage((GpImage *)gpbmp);
+        return NULL;
+    }
+
+    if (GdipSaveImageToStream((GpImage *)gpbmp, stm, &CLSID_PNG, NULL) != 0) {
+        stm->lpVtbl->Release(stm);
+        GdipDisposeImage((GpImage *)gpbmp);
+        return NULL;
+    }
+    GdipDisposeImage((GpImage *)gpbmp);
+
+    STATSTG stat;
+    stm->lpVtbl->Stat(stm, &stat, STATFLAG_NONAME);
+    size_t png_len = (size_t)stat.cbSize.QuadPart;
+
+    unsigned char *png_buf = (unsigned char *)malloc(png_len);
+    if (!png_buf) { stm->lpVtbl->Release(stm); return NULL; }
+
+    LARGE_INTEGER zero_pos = {{0}};
+    stm->lpVtbl->Seek(stm, zero_pos, STREAM_SEEK_SET, NULL);
+    ULONG bytes_read = 0;
+    stm->lpVtbl->Read(stm, png_buf, (ULONG)png_len, &bytes_read);
+    stm->lpVtbl->Release(stm);
+
+    if (bytes_read != (ULONG)png_len) { free(png_buf); return NULL; }
+
+    size_t b64_size = ((png_len + 2) / 3) * 4 + 1;
+    char *b64 = (char *)malloc(b64_size);
+    if (!b64) { free(png_buf); return NULL; }
+
+    size_t b64_len = base64_encode(png_buf, png_len, b64, b64_size);
+    free(png_buf);
+    if (b64_len == 0) { free(b64); return NULL; }
+
+    const char *prefix = "data:image/png;base64,";
+    size_t prefix_len = strlen(prefix);
+    char *url = (char *)malloc(prefix_len + b64_len + 1);
+    if (!url) { free(b64); return NULL; }
+    memcpy(url, prefix, prefix_len);
+    memcpy(url + prefix_len, b64, b64_len + 1);
+    free(b64);
+
+    AiAttachment *att = (AiAttachment *)calloc(1, sizeof(*att));
+    if (!att) { free(url); return NULL; }
+    att->base64_url = url;
+    att->width = bm_info.bmWidth;
+    att->height = bm_info.bmHeight;
+    return att;
+}
+
 static void input_sync_scroll(AiChatData *d);
 
 /* Subclass proc for the multiline input: Enter sends, Shift+Enter inserts newline */
@@ -841,6 +993,22 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
                                            UINT_PTR uIdSubclass,
                                            DWORD_PTR dwRefData)
 {
+    if (msg == WM_PASTE) {
+        HWND parent = GetParent(hwnd);
+        AiChatData *pd = parent
+            ? (AiChatData *)GetWindowLongPtr(parent, GWLP_USERDATA) : NULL;
+        if (pd && IsClipboardFormatAvailable(CF_BITMAP)) {
+            AiAttachment *att = clipboard_to_png_attachment(parent);
+            if (att) {
+                ai_attachment_free(&pd->pending_attachment);
+                pd->pending_attachment = att;
+                SendMessageA(hwnd, EM_REPLACESEL, TRUE,
+                             (LPARAM)"[Image attached] ");
+                return 0;
+            }
+        }
+        /* Fall through to default text paste */
+    }
     if (msg == WM_KEYDOWN && wParam == VK_RETURN) {
         int shift = GetKeyState(VK_SHIFT) & 0x8000;
         AiInputAction action = ai_input_key_action(1, shift ? 1 : 0);
@@ -1216,6 +1384,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
         nd->hwnd = hwnd;
 
+        /* Start GDI+ for clipboard image conversion */
+        {
+            GdiplusStartupInput gdip_in = {1, NULL, FALSE, FALSE};
+            GdiplusStartup(&nd->gdip_token, &gdip_in, NULL);
+        }
+
         /* Get per-monitor DPI for layout scaling */
         nd->dpi = get_window_dpi(hwnd);
         #define S(px) MulDiv((px), nd->dpi, 96)
@@ -1515,18 +1689,58 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         switch (LOWORD(wParam)) {
         case IDC_CHAT_SEND:
             if (d && ACTIVE_BUSY(d)) {
-                /* While streaming, Send button acts as Stop */
-                cancel_active_stream(d);
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                    "[cancelled]");
-                if (d->hChatList) {
-                    chat_listview_invalidate(d->hChatList);
-                    chat_listview_scroll_to_bottom(d->hChatList);
+                /* Queue message instead of cancelling */
+                char qbuf[2048];
+                GetWindowText(d->hInput, qbuf, (int)sizeof(qbuf));
+                if (qbuf[0] != '\0') {
+                    /* Remove old queued message if any */
+                    if (d->queued_msg.active && d->queued_msg.chat_item) {
+                        chat_msg_remove(&d->msg_list,
+                                        d->queued_msg.chat_item);
+                        d->queued_msg.chat_item = NULL;
+                    }
+                    ai_attachment_free(&d->queued_msg.attachment);
+
+                    /* Store new queued message */
+                    snprintf(d->queued_msg.text,
+                             sizeof(d->queued_msg.text), "%s", qbuf);
+                    d->queued_msg.attachment = d->pending_attachment;
+                    d->pending_attachment = NULL;
+                    d->queued_msg.active = 1;
+
+                    /* Show in chat as queued bubble */
+                    ChatMsgItem *qi = chat_msg_append(&d->msg_list,
+                                                      CHAT_ITEM_USER,
+                                                      qbuf);
+                    if (qi) qi->queued = 1;
+                    d->queued_msg.chat_item = qi;
+
+                    SetWindowText(d->hInput, "");
+                    if (d->hChatList) {
+                        chat_listview_invalidate(d->hChatList);
+                        chat_listview_scroll_to_bottom(d->hChatList);
+                    }
                 }
             } else {
                 send_user_message(d);
             }
             SetFocus(d->hInput);
+            return 0;
+        case IDC_QUEUE_CANCEL:
+            if (d && d->queued_msg.active) {
+                SetWindowText(d->hInput, d->queued_msg.text);
+                if (d->queued_msg.chat_item) {
+                    chat_msg_remove(&d->msg_list,
+                                    d->queued_msg.chat_item);
+                    d->queued_msg.chat_item = NULL;
+                }
+                ai_attachment_free(&d->queued_msg.attachment);
+                d->queued_msg.active = 0;
+                d->queued_msg.text[0] = '\0';
+                if (d->hChatList)
+                    chat_listview_invalidate(d->hChatList);
+                SetFocus(d->hInput);
+            }
             return 0;
         case IDC_CHAT_NEWCHAT:
             if (d) {
@@ -2338,6 +2552,27 @@ next_coalesce:;
             free(rmsg->thinking);
             free(rmsg);
             update_context_bar(d);
+
+            /* Auto-send queued message if any */
+            if (d->queued_msg.active && !d->pending_approval) {
+                /* Remove the queued preview bubble */
+                if (d->queued_msg.chat_item) {
+                    chat_msg_remove(&d->msg_list,
+                                    d->queued_msg.chat_item);
+                    d->queued_msg.chat_item = NULL;
+                }
+                /* Set up for send */
+                SetWindowText(d->hInput, d->queued_msg.text);
+                d->pending_attachment = d->queued_msg.attachment;
+                d->queued_msg.attachment = NULL;
+                d->queued_msg.active = 0;
+                d->queued_msg.text[0] = '\0';
+                if (d->hChatList)
+                    chat_listview_invalidate(d->hChatList);
+                /* Deferred send */
+                PostMessage(hwnd, WM_COMMAND,
+                            MAKEWPARAM(IDC_CHAT_SEND, BN_CLICKED), 0);
+            }
         } else {
             /* Error */
             char *text = rmsg->content;
@@ -2801,6 +3036,8 @@ next_coalesce:;
                 d->active_state->valid = 1;
             }
             thinking_history_clear(d);
+            ai_attachment_free(&d->pending_attachment);
+            ai_attachment_free(&d->queued_msg.attachment);
             chat_msg_list_clear(&d->msg_list);
             d->stream_ai_item = NULL;
             DeleteCriticalSection(&d->cs);
@@ -2812,6 +3049,7 @@ next_coalesce:;
             if (d->hTooltip) DestroyWindow(d->hTooltip);
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
+            GdiplusShutdown(d->gdip_token);
             free(d);
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)NULL);
         }

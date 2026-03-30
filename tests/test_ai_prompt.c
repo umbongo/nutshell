@@ -1035,7 +1035,7 @@ int test_ai_build_body_stream_true(void) {
     ai_conv_init(&conv, "test-model");
     ai_conv_add(&conv, AI_ROLE_USER, "hello");
     char buf[4096];
-    size_t n = ai_build_request_body_ex(&conv, buf, sizeof(buf), 1);
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1);
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "\"stream\":true") != NULL);
     ASSERT_TRUE(strstr(buf, "\"stream\":false") == NULL);
@@ -1048,7 +1048,7 @@ int test_ai_build_body_stream_false(void) {
     ai_conv_init(&conv, "test-model");
     ai_conv_add(&conv, AI_ROLE_USER, "hello");
     char buf[4096];
-    size_t n = ai_build_request_body_ex(&conv, buf, sizeof(buf), 0);
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0);
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "\"stream\":false") != NULL);
     ASSERT_TRUE(strstr(buf, "\"stream\":true") == NULL);
@@ -1063,7 +1063,7 @@ int test_ai_build_body_ex_matches_original(void) {
     ai_conv_add(&conv, AI_ROLE_USER, "Hello");
     char buf1[4096], buf2[4096];
     size_t n1 = ai_build_request_body(&conv, buf1, sizeof(buf1));
-    size_t n2 = ai_build_request_body_ex(&conv, buf2, sizeof(buf2), 0);
+    size_t n2 = ai_build_request_body_ex(&conv, NULL, buf2, sizeof(buf2), 0);
     ASSERT_EQ((int)n1, (int)n2);
     ASSERT_STR_EQ(buf1, buf2);
     TEST_END();

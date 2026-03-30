@@ -696,7 +696,12 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         draw_text_utf8(hdc, item->text, &rc,
                        DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
         SelectObject(hdc, old_font);
-        return (rc.bottom - rc.top) + 2 * lv->user_pad_v;
+        {
+            int total = (rc.bottom - rc.top) + 2 * lv->user_pad_v;
+            if (item->queued)
+                total += CLV_SCALE(lv, 16);
+            return total;
+        }
     }
 
     case CHAT_ITEM_AI_TEXT: {
@@ -895,6 +900,29 @@ static void paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     draw_text_utf8(hdc, item->text, &text_rc,
                    DT_WORDBREAK | DT_NOPREFIX);
     SelectObject(hdc, old_font);
+
+    if (item->queued) {
+        int label_h = CLV_SCALE(lv, 14);
+        RECT label_rc;
+        label_rc.left   = text_rc.left;
+        label_rc.top    = text_rc.bottom + CLV_SCALE(lv, 2);
+        label_rc.right  = text_rc.right;
+        label_rc.bottom = label_rc.top + label_h;
+
+        HGDIOBJ qf = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                       : GetStockObject(DEFAULT_GUI_FONT));
+        SetTextColor(hdc, RGB(160, 160, 160));
+        DrawTextA(hdc, "Queued \xe2\x80\x94 ", -1, &label_rc,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        SIZE qs;
+        GetTextExtentPoint32A(hdc, "Queued -- ", 10, &qs);
+        RECT cancel_rc = label_rc;
+        cancel_rc.left += qs.cx;
+        SetTextColor(hdc, CLR_RETRY_TEXT);
+        DrawTextA(hdc, "Cancel", -1, &cancel_rc,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        SelectObject(hdc, qf);
+    }
 }
 
 /* Draw AI text with [EXEC]...[/EXEC] segments highlighted in purple.
@@ -1847,6 +1875,17 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
         if (h == 0) {
             item = item->next;
             continue;
+        }
+
+        /* Check click on [Cancel] for queued user messages */
+        if (item->type == CHAT_ITEM_USER && item->queued
+            && my >= y && my < y + h) {
+            int label_top = y + h - CLV_SCALE(lv, 16);
+            if (my >= label_top) {
+                PostMessage(parent, WM_COMMAND,
+                            MAKEWPARAM(IDC_QUEUE_CANCEL, 0), 0);
+                return 1;
+            }
         }
 
         /* Check click on thinking toggle header for AI items */

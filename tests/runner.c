@@ -1198,6 +1198,15 @@ int test_context_label_exact_1k(void);
 int test_context_label_na(void);
 int test_context_label_small_buf(void);
 
+/* test_base64.c */
+int test_base64_empty(void);
+int test_base64_hello(void);
+int test_base64_padding_1byte(void);
+int test_base64_padding_2bytes(void);
+int test_base64_padding_3bytes(void);
+int test_base64_small_buffer(void);
+int test_base64_binary(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -1255,6 +1264,15 @@ int main(void) {
     failed += test_logger_min_level_filters();
     failed += test_logger_all_levels_no_crash();
     failed += test_logger_close_without_file();
+
+    printf("\n--- Base64 ---\n");
+    failed += test_base64_empty();
+    failed += test_base64_hello();
+    failed += test_base64_padding_1byte();
+    failed += test_base64_padding_2bytes();
+    failed += test_base64_padding_3bytes();
+    failed += test_base64_small_buffer();
+    failed += test_base64_binary();
 
     printf("\n--- Config & UI ---\n");
     /* JSON Tokenizer */
