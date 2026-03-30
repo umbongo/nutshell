@@ -2271,7 +2271,10 @@ next_coalesce:;
                 }
                 if (d->hChatList) {
                     chat_listview_invalidate(d->hChatList);
-                    if (was_near_bottom)
+                    /* Only auto-scroll during content phase — during thinking
+                     * the box is already visible and scroll_to_bottom would
+                     * shift coordinates, breaking click-to-expand. */
+                    if (was_near_bottom && d->stream_phase >= 2)
                         chat_listview_scroll_to_bottom(d->hChatList);
                 }
             }

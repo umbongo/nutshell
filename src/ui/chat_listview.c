@@ -1758,6 +1758,12 @@ static void on_paint(ChatListView *lv)
     /* Walk items, skip those above viewport, stop after those below */
     int y = lv->msg_gap - lv->scroll_y;
     int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
+
+    /* Track last user message for sticky pinning */
+    ChatMsgItem *last_user = NULL;
+    int last_user_y = 0;
+    int last_user_h = 0;
+
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
         int h = item->measured_height;
@@ -1766,6 +1772,13 @@ static void on_paint(ChatListView *lv)
         if (h == 0) {
             item = item->next;
             continue;
+        }
+
+        /* Track the most recent user message position */
+        if (item->type == CHAT_ITEM_USER) {
+            last_user = item;
+            last_user_y = y;
+            last_user_h = h;
         }
 
         /* Skip items entirely above viewport */
@@ -1817,6 +1830,35 @@ static void on_paint(ChatListView *lv)
 
         y += h + lv->msg_gap;
         item = item->next;
+    }
+
+    /* Sticky user message: if the last user message has scrolled above
+     * the viewport, re-paint it pinned to the top so the user always
+     * sees the question the AI is addressing. */
+    if (last_user && last_user_y + last_user_h <= 0) {
+        /* Clear the sticky area with background */
+        RECT sticky_bg;
+        SetRect(&sticky_bg, 0, 0, cw, last_user_h + CLV_SCALE(lv, 2));
+        HBRUSH sbr = CreateSolidBrush(bg);
+        FillRect(mem_dc, &sticky_bg, sbr);
+        DeleteObject(sbr);
+
+        /* Paint the user bubble at y=0 */
+        RECT sticky_rc;
+        sticky_rc.left   = side_pad;
+        sticky_rc.top    = 0;
+        sticky_rc.right  = cw - side_pad;
+        sticky_rc.bottom = last_user_h;
+        paint_user_item(lv, mem_dc, last_user, &sticky_rc);
+
+        /* Subtle bottom shadow line to separate from scrolling content */
+        HPEN shadow_pen = CreatePen(PS_SOLID, 1,
+                                     RGB_FROM_THEME(lv->theme->chat.cmd_border));
+        HGDIOBJ old_sp = SelectObject(mem_dc, shadow_pen);
+        MoveToEx(mem_dc, 0, last_user_h + 1, NULL);
+        LineTo(mem_dc, cw, last_user_h + 1);
+        SelectObject(mem_dc, old_sp);
+        DeleteObject(shadow_pen);
     }
 
     /* Paint inline activity indicator below the last message */
