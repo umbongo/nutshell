@@ -1985,120 +1985,130 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         break;
 
     case WM_AI_STREAM: {
-        /* Realtime streaming chunk: wParam 0=thinking, 1=content */
+        /* Realtime streaming chunk: wParam 0=thinking, 1=content.
+         *
+         * Coalesce: drain ALL pending WM_AI_STREAM messages from the
+         * queue and accumulate them before doing the expensive UI
+         * update (remeasure + repaint) once.  This prevents the UI
+         * thread from being starved when tokens arrive faster than
+         * we can repaint. */
         if (!d) break;
-        AiStreamChunk *chunk = (AiStreamChunk *)lParam;
-        if (!chunk) break;
-        char *delta = chunk->delta;
-        AiSessionState *src = chunk->session;
-        free(chunk);  /* free wrapper; delta freed below */
-        if (!delta) return 0;
 
-        /* Discard stale chunks that arrive after cancel */
-        if (d->abort_stream) {
+        /* Check scroll position BEFORE any layout changes */
+        int was_near_bottom = d->hChatList
+            ? chat_listview_is_near_bottom(d->hChatList) : 1;
+        int display_dirty = 0;
+
+        /* Process this chunk and all queued WM_AI_STREAM messages */
+        WPARAM cur_wp = wParam;
+        LPARAM cur_lp = lParam;
+        for (;;) {
+            AiStreamChunk *chunk = (AiStreamChunk *)cur_lp;
+            if (!chunk) goto next_coalesce;
+            char *delta = chunk->delta;
+            AiSessionState *src = chunk->session;
+            free(chunk);
+            if (!delta) goto next_coalesce;
+
+            if (d->abort_stream) { free(delta); goto next_coalesce; }
+
+            /* Accumulate to source session buffers */
+            if (src) {
+                size_t dlen = strlen(delta);
+                if (cur_wp == 0) {
+                    if (src->stream_thinking &&
+                        src->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
+                        memcpy(src->stream_thinking + src->stream_thinking_len,
+                               delta, dlen);
+                        src->stream_thinking_len += dlen;
+                        src->stream_thinking[src->stream_thinking_len] = '\0';
+                    }
+                    if (src->stream_phase == 0)
+                        src->stream_phase = 1;
+                } else {
+                    if (src->stream_content &&
+                        src->stream_content_len + dlen < AI_MSG_MAX - 1) {
+                        memcpy(src->stream_content + src->stream_content_len,
+                               delta, dlen);
+                        src->stream_content_len += dlen;
+                        src->stream_content[src->stream_content_len] = '\0';
+                    }
+                    if (src->stream_phase < 2)
+                        src->stream_phase = 2;
+                }
+            }
+
+            /* Accumulate to display buffers if active session */
+            if (src == d->active_state) {
+                size_t dlen = strlen(delta);
+                if (cur_wp == 0) {
+                    if (d->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
+                        memcpy(d->stream_thinking + d->stream_thinking_len,
+                               delta, dlen);
+                        d->stream_thinking_len += dlen;
+                        d->stream_thinking[d->stream_thinking_len] = '\0';
+                    }
+                    if (d->stream_phase == 0)
+                        d->stream_phase = 1;
+                } else {
+                    if (d->stream_content_len + dlen < AI_MSG_MAX - 1) {
+                        memcpy(d->stream_content + d->stream_content_len,
+                               delta, dlen);
+                        d->stream_content_len += dlen;
+                        d->stream_content[d->stream_content_len] = '\0';
+                    }
+                }
+                display_dirty = 1;
+            }
+
             free(delta);
-            return 0;
-        }
 
-        /* Always accumulate to the source session's stream buffers */
-        if (src) {
-            size_t dlen = strlen(delta);
-            if (wParam == 0) {
-                if (src->stream_thinking &&
-                    src->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
-                    memcpy(src->stream_thinking + src->stream_thinking_len,
-                           delta, dlen);
-                    src->stream_thinking_len += dlen;
-                    src->stream_thinking[src->stream_thinking_len] = '\0';
-                }
-                if (src->stream_phase == 0)
-                    src->stream_phase = 1;
+next_coalesce:;
+            /* Peek for more WM_AI_STREAM messages */
+            MSG peeked;
+            if (PeekMessage(&peeked, hwnd, WM_AI_STREAM, WM_AI_STREAM,
+                            PM_REMOVE)) {
+                cur_wp = peeked.wParam;
+                cur_lp = peeked.lParam;
             } else {
-                if (src->stream_content &&
-                    src->stream_content_len + dlen < AI_MSG_MAX - 1) {
-                    memcpy(src->stream_content + src->stream_content_len,
-                           delta, dlen);
-                    src->stream_content_len += dlen;
-                    src->stream_content[src->stream_content_len] = '\0';
-                }
-                if (src->stream_phase < 2)
-                    src->stream_phase = 2;
+                break;  /* No more queued — proceed to UI update */
             }
         }
 
-        /* If this chunk is for a different session, don't touch the display */
-        if (src != d->active_state) {
-            free(delta);
-            return 0;
-        }
-
-        /* Also accumulate to display-side buffers */
-        {
-            size_t dlen = strlen(delta);
-            if (wParam == 0) {
-                if (d->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
-                    memcpy(d->stream_thinking + d->stream_thinking_len,
-                           delta, dlen);
-                    d->stream_thinking_len += dlen;
-                    d->stream_thinking[d->stream_thinking_len] = '\0';
-                }
-                if (d->stream_phase == 0)
-                    d->stream_phase = 1;
-            } else {
-                if (d->stream_content_len + dlen < AI_MSG_MAX - 1) {
-                    memcpy(d->stream_content + d->stream_content_len,
-                           delta, dlen);
-                    d->stream_content_len += dlen;
-                    d->stream_content[d->stream_content_len] = '\0';
-                }
-            }
-        }
-
-        /* Update activity state on stream chunks */
-        {
+        /* Single UI update for all coalesced chunks */
+        if (display_dirty) {
             float now = (float)GetTickCount() / 1000.0f;
-            if (wParam == 0) {
+            if (d->stream_phase == 1) {
                 if (d->activity.phase != ACTIVITY_THINKING)
-                    chat_activity_set_phase(&d->activity, ACTIVITY_THINKING, now);
-                chat_activity_token(&d->activity, now);
-            } else {
+                    chat_activity_set_phase(&d->activity,
+                                            ACTIVITY_THINKING, now);
+            } else if (d->stream_phase >= 2) {
                 if (d->activity.phase != ACTIVITY_RESPONDING)
-                    chat_activity_set_phase(&d->activity, ACTIVITY_RESPONDING, now);
-                chat_activity_token(&d->activity, now);
+                    chat_activity_set_phase(&d->activity,
+                                            ACTIVITY_RESPONDING, now);
             }
-        }
+            chat_activity_token(&d->activity, now);
 
-        /* Update the streaming AI item in the ChatMsgList */
-        if (d->stream_ai_item) {
-            if (wParam == 0) {
-                /* Thinking delta — update thinking text on AI item */
-                if (d->stream_phase < 1)
-                    d->stream_phase = 1;
-                chat_msg_set_thinking(d->stream_ai_item,
-                                      d->stream_thinking);
-                /* Auto-scroll expanded thinking to bottom */
-                if (!d->stream_ai_item->u.ai.thinking_collapsed
-                    && d->stream_ai_item->u.ai.thinking_autoscroll) {
-                    d->stream_ai_item->u.ai.thinking_scroll_y = 999999;
-                    /* Will be clamped to max_scroll by paint/mousewheel */
+            if (d->stream_ai_item) {
+                if (d->stream_phase == 1) {
+                    chat_msg_set_thinking(d->stream_ai_item,
+                                          d->stream_thinking);
+                    if (!d->stream_ai_item->u.ai.thinking_collapsed
+                        && d->stream_ai_item->u.ai.thinking_autoscroll) {
+                        d->stream_ai_item->u.ai.thinking_scroll_y = 999999;
+                    }
+                } else {
+                    chat_msg_set_text(d->stream_ai_item,
+                                      d->stream_content);
                 }
-            } else {
-                /* Content delta — update AI item text */
-                if (d->stream_phase < 2)
-                    d->stream_phase = 2;
-                chat_msg_set_text(d->stream_ai_item,
-                                  d->stream_content);
-            }
-            if (d->hChatList) {
-                int was_near_bottom =
-                    chat_listview_is_near_bottom(d->hChatList);
-                chat_listview_invalidate(d->hChatList);
-                if (was_near_bottom)
-                    chat_listview_scroll_to_bottom(d->hChatList);
+                if (d->hChatList) {
+                    chat_listview_invalidate(d->hChatList);
+                    if (was_near_bottom)
+                        chat_listview_scroll_to_bottom(d->hChatList);
+                }
             }
         }
 
-        free(delta);
         return 0;
     }
 

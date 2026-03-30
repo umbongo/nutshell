@@ -409,7 +409,11 @@ void chat_listview_set_fonts(HWND hwnd, HFONT font, HFONT mono,
     lv->hBoldFont = bold;
     lv->hSmallFont = small_font;
     lv->hIconFont = icon;
-    /* Fonts changed — need full remeasure */
+    /* Fonts changed — mark all dirty for full remeasure */
+    {
+        ChatMsgItem *fi = lv->msg_list ? lv->msg_list->head : NULL;
+        while (fi) { fi->dirty = 1; fi = fi->next; }
+    }
     recalc_layout(lv);
     InvalidateRect(hwnd, NULL, TRUE);
 }
@@ -507,6 +511,9 @@ void chat_listview_relayout(HWND hwnd)
     RECT rc;
     GetClientRect(hwnd, &rc);
     lv->viewport_height = rc.bottom - rc.top;
+    /* Mark all items dirty — width changed, heights need recalculating */
+    ChatMsgItem *ri = lv->msg_list ? lv->msg_list->head : NULL;
+    while (ri) { ri->dirty = 1; ri = ri->next; }
     recalc_layout(lv);
     InvalidateRect(hwnd, NULL, TRUE);
 }
@@ -527,10 +534,11 @@ static void recalc_layout(ChatListView *lv)
     HDC hdc = GetDC(lv->hwnd);
     if (!hdc) return;
 
-    /* Pass 1: measure all items individually */
+    /* Pass 1: measure items (only dirty items need remeasuring) */
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
-        item->measured_height = measure_item(lv, hdc, item, width);
+        if (item->dirty || item->measured_height == 0)
+            item->measured_height = measure_item(lv, hdc, item, width);
         item->dirty = 0;
         item = item->next;
     }
