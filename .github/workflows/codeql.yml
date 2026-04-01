@@ -26,8 +26,8 @@ jobs:
 
       - name: Build (cross-compile for Windows)
         run: |
-          x86_64-w64-mingw32-gcc -o nutshell.exe src/*.c \
-            -lws2_32 -lshlwapi   # adjust flags/libs as needed
+          x86_64-w64-mingw32-gcc -o nutshell.exe src/*.c ui/*.c \
+          -lws2_32 -lshlwapi -Iui
 
       - name: Analyze
         uses: github/codeql-action/analyze@v3
