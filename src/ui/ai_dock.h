@@ -6,7 +6,7 @@
  * No Win32 dependency — fully testable on Linux.
  */
 
-#define AI_DOCK_DEFAULT_PCT   30   /* Default panel width as % of main window */
+#define AI_DOCK_DEFAULT_PCT   50   /* Default panel width as % of main window */
 #define AI_DOCK_MIN_PCT       10   /* Minimum panel width % */
 #define AI_DOCK_MAX_PCT       75   /* Maximum panel width % */
 #define AI_DOCK_SPLITTER_W     6   /* Visual splitter gap width in px */
