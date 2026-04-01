@@ -2,13 +2,12 @@
 
 ## MANDATORY: Version Bump Before Every Build
 
-**Before running `make` (any target that produces a binary), increment the patch version in ALL THREE files:**
+**Before running `make` (any target that produces a binary), increment the patch version in BOTH files:**
 
-1. `src/ui/resource.h` — update `APP_VERSION` string (e.g., `"1.0.02"` -> `"1.0.03"`)
+1. `src/ui/resource.h` — update `APP_VERSION` string and `APP_VERSION_BINARY` macro (e.g., `"1.0.30"` -> `"1.0.31"` and `1,0,30,0` -> `1,0,31,0`)
 2. `README.md` — update the `**Version**:` line
-3. `src/ui/nutshell.rc` — update `FILEVERSION`, `PRODUCTVERSION`, and both `FileVersion`/`ProductVersion` string values
 
-No exceptions. Every build gets a unique version number.
+`nutshell.rc` reads `APP_VERSION` and `APP_VERSION_BINARY` from `resource.h` via `#include`, so it updates automatically. No exceptions. Every build gets a unique version number.
 
 ## Build Commands
 
@@ -31,9 +30,9 @@ Write tests before implementation code. Include corner cases, positive and negat
 
 When planning and debugging, use the latest version of Opus. When implementing the changes, use the latest version of Sonnet. Once implemented ensure that Opus checks Sonnet's work.
 
-## Two config.h Files
+## Config Header
 
-There are two copies of `config.h`: `include/config.h` (used by Windows cross-compile) and `src/config/config.h` (used by native test builds). When modifying the `Settings` struct, **both must be updated in sync** or one build will fail with missing-member errors.
+There is a single `config.h` at `src/config/config.h`, used by both the Windows cross-compile and native test builds. When modifying the `Settings` struct or `Profile` struct, this is the only file that needs updating.
 
 ## Cross-Compile Pitfalls
 
@@ -45,7 +44,7 @@ There are two copies of `config.h`: `include/config.h` (used by Windows cross-co
 
 ## Terminal Buffer
 
-- `TermRow.len` tracks actual written content width. `TermRow.width` is the allocated capacity but is **not initialized** when rows are allocated with `xmalloc`. Always use `row->len` for content boundaries.
+- `TermRow.len` tracks actual written content width. Always use `row->len` for content boundaries, not `term->cols`.
 - When extracting terminal text, skip trailing empty rows to avoid spurious blank lines. Use a two-pass approach: first find last non-empty row, then extract.
 
 ## JSON Handling

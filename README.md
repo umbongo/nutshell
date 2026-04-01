@@ -10,7 +10,7 @@
 
 Nutshell is a lightweight, AI-enabled, native C SSH client for Windows. It pairs a full-featured terminal with a built-in AI assistant that can read your terminal output, suggest commands, and execute them over SSH — with your approval at every step.
 
-Built entirely with the Win32 API, no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~2.1 MB (UPX compressed).
+Built entirely with the Win32 API, no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~5.1 MB (UPX compressed).
 
 ## AI Chat Assistant
 
@@ -40,7 +40,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 1,062 unit tests, zero lint warnings
+- 1,167 unit tests, zero lint warnings
 
 ---
 
@@ -176,6 +176,7 @@ The AI assistant can see the last 150 lines of your terminal output and execute 
 - Type in the input box at the bottom
 - **Enter** sends the message
 - **Shift+Enter** inserts a newline (for multi-line messages)
+- **Ctrl+V** with an image on the clipboard attaches a screenshot (sent as base64 PNG to multimodal-capable providers)
 - Click **Send** (or press Enter) to submit
 
 #### Command Execution
@@ -263,8 +264,8 @@ Requires `upx` (`sudo apt install upx`). Use plain `make` only if you need an un
 
 | Command | Purpose |
 |---------|---------|
-| `make clean && make release` | **Recommended** — optimised + UPX compressed (~2.1 MB) |
-| `make` | Uncompressed build (~6.7 MB), useful for debugging |
+| `make clean && make release` | **Recommended** — optimised + UPX compressed (~5.1 MB) |
+| `make` | Uncompressed build (~9.7 MB), useful for debugging |
 | `make test` | Run unit tests (native Linux) |
 | `make lint` | Static analysis with cppcheck |
 | `make debug` | Build with AddressSanitizer + UndefinedBehaviorSanitizer |
