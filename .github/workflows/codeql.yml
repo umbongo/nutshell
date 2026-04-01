@@ -1,0 +1,42 @@
+name: CodeQL C/C++ Analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: c-cpp
+          queries: security-extended
+
+      - name: Build (native test target)
+        run: make test
+        env:
+          # CodeQL traces the compiler invocations from make test,
+          # which compiles all core/config/crypto/term source files
+          # plus the test runner. UI files (Win32-only) are excluded
+          # from the test build by design.
+          CI: true
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:c-cpp"
