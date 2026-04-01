@@ -105,6 +105,21 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
                                            UINT_PTR uIdSubclass,
                                            DWORD_PTR dwRefData);
 
+/* Subclass for owner-drawn buttons: suppress WM_ERASEBKGND to prevent
+ * white flicker during parent resize.  WM_DRAWITEM already fills the
+ * entire button rect, so erasing is redundant. */
+#define BTN_NOERASE_SUBCLASS_ID 43
+static LRESULT CALLBACK btn_noerase_subclass(
+    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    (void)dwRefData;
+    if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_NCDESTROY)
+        RemoveWindowSubclass(hwnd, btn_noerase_subclass, uIdSubclass);
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
 typedef struct {
     HWND hwnd;
     HWND hDisplay;
@@ -1420,6 +1435,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             cw - pad - btn_h - pad - btn_h, pad, btn_h, btn_h,
             hwnd, (HMENU)IDC_CHAT_UNDOCK, NULL, NULL);
 
+        /* Suppress WM_ERASEBKGND on owner-drawn buttons to prevent
+         * white flicker during splitter drag / parent resize. */
+        SetWindowSubclass(nd->hNewChatBtn,  btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hPermitBtn,   btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hAllowAllBtn, btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hSaveBtn,     btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hUndockBtn,   btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+
         /* Old floating Allow/Deny buttons removed — approval is now
          * handled inline via chat_listview command block buttons.
          * Initialize the approval queue. */
@@ -1524,6 +1547,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             cw - send_w - margin, input_y, send_w, input_h,
             hwnd, (HMENU)IDC_CHAT_SEND, NULL, NULL);
+        SetWindowSubclass(nd->hSendBtn, btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
         /* Font — use Inter UI font */
         nd->ui_font_size = APP_FONT_UI_SIZE;
