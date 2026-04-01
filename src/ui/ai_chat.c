@@ -23,6 +23,7 @@
 #include "chat_activity.h"
 #include "chat_approval.h"
 #include "chat_listview.h"
+#include "icon_font.h"
 #include "dpi_util.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <stdio.h>
@@ -1319,16 +1320,7 @@ static void chat_apply_zoom(AiChatData *d, int delta)
                           DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
                           
     int ih = -MulDiv(new_size, d->dpi, 72);
-    d->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                               DEFAULT_CHARSET, OUT_TT_PRECIS,
-                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                               DEFAULT_PITCH | FF_DONTCARE, "Segoe Fluent Icons");
-    if (!d->hIconFont) {
-        d->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                   DEFAULT_PITCH | FF_DONTCARE, "Segoe MDL2 Assets");
-    }
+    d->hIconFont = create_icon_font(ih);
 
     if (d->hFont) {
         SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hFont, TRUE);
@@ -1548,18 +1540,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                     DEFAULT_PITCH | FF_SWISS, "Segoe UI");
 
-        /* Icon Font for Fluent UI */
+        /* Icon Font — validated, NULL if no Fluent/MDL2 font available */
         int ih = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
-        nd->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                   DEFAULT_PITCH | FF_DONTCARE, "Segoe Fluent Icons");
-        if (!nd->hIconFont) {
-            nd->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                       DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                       CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                       DEFAULT_PITCH | FF_DONTCARE, "Segoe MDL2 Assets");
-        }
+        nd->hIconFont = create_icon_font(ih);
         #undef S
         if (nd->hFont) {
             SendMessage(nd->hInput, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
@@ -2862,7 +2845,8 @@ next_coalesce:;
                     SelectObject(hdc, oP);
                     DeleteObject(hShPen);
 
-                    /* Icon — same font as other panel icons */
+                    /* Icon — use icon font if available, else regular font.
+                     * btn_text is ">" or "■" which exist in any font. */
                     HFONT prev = (HFONT)SelectObject(hdc,
                         d->hIconFont ? d->hIconFont : d->hFont);
                     SetBkMode(hdc, TRANSPARENT);
@@ -2895,13 +2879,17 @@ next_coalesce:;
                 DeleteObject(hPen);
                 DeleteObject(hBr);
 
-                /* Draw Fluent UI floppy disk icon (\xE74E Save) */
+                /* Draw save icon */
                 SetBkMode(hdc, TRANSPARENT);
                 SetTextColor(hdc, fg);
-                HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont ? d->hIconFont : d->hFont);
                 RECT txtRc = rc;
-                DrawTextW(hdc, L"\xE74E", -1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(hdc, prevF);
+                if (d->hIconFont) {
+                    HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont);
+                    DrawTextW(hdc, L"\xE74E", -1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, prevF);
+                } else {
+                    DrawText(hdc, "S", 1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
             } else if ((int)dis->CtlID == IDC_CHAT_UNDOCK) {
                 /* Square undock button with 3D pop-out/dock-in icon */
                 HDC hdc = dis->hDC;
@@ -2926,13 +2914,16 @@ next_coalesce:;
                 DeleteObject(hPen);
                 DeleteObject(hBr);
 
-                /* Draw Fluent UI Pop-out/Dock icon */
+                /* Draw Pop-out/Dock icon */
                 SetBkMode(hdc, TRANSPARENT);
                 SetTextColor(hdc, fg);
-                HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont ? d->hIconFont : d->hFont);
-                /* \xE8A7 = FullScreen (outer arrows), \xE923 = BackToWindow */
-                DrawTextW(hdc, d->docked ? L"\xE8A7" : L"\xE923", -1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(hdc, prevF);
+                if (d->hIconFont) {
+                    HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont);
+                    DrawTextW(hdc, d->docked ? L"\xE8A7" : L"\xE923", -1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, prevF);
+                } else {
+                    DrawText(hdc, d->docked ? "^" : "v", 1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
             /* Old IDC_CHAT_ALLOW / IDC_CHAT_DENY draw code removed —
              * approval buttons are now inline in chat_listview */
             } else {
