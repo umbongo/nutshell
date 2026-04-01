@@ -67,6 +67,15 @@ static const GPCLSID CLSID_PNG = {
     {0x9A, 0x73, 0x00, 0x00, 0xF8, 0x1E, 0xF3, 0x2E}
 };
 
+/* Move an AiConversation from src to dst.  Attachment ownership transfers
+ * to dst; src attachment pointers are NULLed to prevent double-free. */
+static void ai_conv_move(AiConversation *dst, AiConversation *src)
+{
+    memcpy(dst, src, sizeof(AiConversation));
+    for (int i = 0; i < src->msg_count; i++)
+        src->messages[i].attachment = NULL;
+}
+
 static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 
 #define IDC_CHAT_DISPLAY  4001
@@ -2983,7 +2992,7 @@ next_coalesce:;
             KillTimer(hwnd, TIMER_HEARTBEAT);
             /* Save conversation back to session before cleanup */
             if (d->active_state) {
-                memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
+                ai_conv_move(&d->active_state->conv, &d->conv);
                 d->active_state->valid = 1;
             }
             thinking_history_clear(d);
@@ -3093,7 +3102,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     /* Load existing conversation from session state if available */
     d->active_state = initial_state;
     if (initial_state && initial_state->valid) {
-        memcpy(&d->conv, &initial_state->conv, sizeof(AiConversation));
+        ai_conv_move(&d->conv, &initial_state->conv);
     }
 
     if (session_notes)
@@ -3231,7 +3240,7 @@ static void do_session_switch(AiChatData *d,
      * Skip if the session is busy — the thread will commit to its own conv. */
     if (d->active_state && d->active_state != new_state &&
         !d->active_state->busy) {
-        memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
+        ai_conv_move(&d->active_state->conv, &d->conv);
         d->active_state->valid = 1;
     }
 
@@ -3266,7 +3275,7 @@ static void do_session_switch(AiChatData *d,
     /* Load new session's conversation */
     if (new_state && new_state != d->active_state) {
         if (new_state->valid) {
-            memcpy(&d->conv, &new_state->conv, sizeof(AiConversation));
+            ai_conv_move(&d->conv, &new_state->conv);
         } else {
             char model[64];
             strncpy(model, d->conv.model, sizeof(model) - 1);
@@ -3399,7 +3408,7 @@ void ai_chat_switch_session(HWND hwnd,
     /* If the active session is busy, save the current conversation so the
      * thread can commit its result on top of this snapshot. */
     if (d->active_state && d->active_state->busy) {
-        memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
+        ai_conv_move(&d->active_state->conv, &d->conv);
         d->active_state->valid = 1;
     }
 
