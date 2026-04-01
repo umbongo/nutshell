@@ -1841,7 +1841,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         if (poll_rc > 0)
                             update_scrollbar(hwnd);
                         if (poll_rc == -2) {
-                            /* EOF */
+                            /* EOF — the final data chunk (e.g. alt-screen-exit
+                             * sequence) was already fed to term_process by
+                             * ssh_io_poll, so force a full display-buffer
+                             * invalidation before handling the disconnect. */
+                            dispbuf_invalidate(&g_renderer.dispbuf);
                             if (g_paste.channel == s->channel)
                                 paste_cancel();
                             term_process(s->term, "\r\n[Connection Closed]\r\n", 23);
