@@ -69,11 +69,15 @@ int test_term_parser(void) {
     ASSERT_EQ(term->cursor.col, 9); // 0-based
     
     // 6. Erase Display (Clear Screen)
+    // VT100/xterm: ESC[2J clears screen but does NOT move cursor.
+    // Cursor stays at row=4,col=9 (from step 5's ESC[5;10H).
     term_process(term, "\x1B[2J", 4);
     ASSERT_EQ(get_cell(term, 0, 0).codepoint, 0); // Cleared
-    ASSERT_EQ(term->cursor.row, 0); // Reset to top-left
-    
-    // 7. Split Escape Sequence
+    ASSERT_EQ(term->cursor.row, 4); // Cursor unchanged (was at row 4 from step 5)
+    ASSERT_EQ(term->cursor.col, 9); // Cursor unchanged (was at col 9 from step 5)
+
+    // 7. Split Escape Sequence — move cursor home first so the 'G' lands at (0,0)
+    term_process(term, "\x1B[H", 3); // ESC[H = cursor home
     term_process(term, "\x1B[3", 3);
     term_process(term, "2mGreen", 7);
     TermCell c2 = get_cell(term, 0, 0); // 'G'
@@ -404,6 +408,44 @@ int test_term_sgr_reset_after_turnoff(void) {
     /* Full reset on already-cleared flags is a no-op */
     term_process(t, "\x1B[0m", 4);
     ASSERT_EQ(t->current_attr.flags, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_bracketed_paste_enable(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    ASSERT_EQ(t->bracketed_paste_mode, false);
+    term_process(t, "\x1B[?2004h", 8);
+    ASSERT_EQ(t->bracketed_paste_mode, true);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_bracketed_paste_disable(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\x1B[?2004h", 8);
+    ASSERT_EQ(t->bracketed_paste_mode, true);
+    term_process(t, "\x1B[?2004l", 8);
+    ASSERT_EQ(t->bracketed_paste_mode, false);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_bracketed_paste_persists_after_reset(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    /* Enable bracketed paste, then send SGR reset — mode should survive */
+    term_process(t, "\x1B[?2004h", 8);
+    term_process(t, "\x1B[0m", 4);
+    ASSERT_EQ(t->bracketed_paste_mode, true);
 
     term_free(t);
     TEST_END();

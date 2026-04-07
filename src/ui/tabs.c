@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <commctrl.h>
 #include "dpi_util.h"
+#include "icon_font.h"
 
 #ifdef _WIN32
 
@@ -104,18 +105,9 @@ static void tabs_create_fonts(TabControlData *data, int dpi)
                                    CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                    DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
     
-    /* Icon font for Close, Arrows, AI Chip */
+    /* Icon font — validated, NULL if no Fluent/MDL2 font available */
     int ih = -MulDiv(APP_FONT_UI_SIZE, logPixelsY, 72);
-    data->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                 CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                 DEFAULT_PITCH | FF_DONTCARE, "Segoe Fluent Icons");
-    if (!data->hIconFont) {
-        data->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                     DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                     DEFAULT_PITCH | FF_DONTCARE, "Segoe MDL2 Assets");
-    }
+    data->hIconFont = create_icon_font(ih);
 }
 
 /* Removed manual draw_chip_icon logic in favour of Fluent icons */
@@ -221,12 +213,21 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             break;
         }
 
+        case WM_ERASEBKGND:
+            return 1;   /* suppress erase — we fill in WM_PAINT */
+
         case WM_PAINT: {
             PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hwnd, &ps);
+            HDC hdcReal = BeginPaint(hwnd, &ps);
 
             RECT rcClient;
             GetClientRect(hwnd, &rcClient);
+
+            /* Double-buffer: paint to off-screen bitmap, then blit once */
+            HDC hdc = CreateCompatibleDC(hdcReal);
+            HBITMAP hBmp = CreateCompatibleBitmap(hdcReal,
+                                rcClient.right, rcClient.bottom);
+            HGDIOBJ hOldBmp = SelectObject(hdc, hBmp);
 
             /* Theme colours (fallback to light neutral if no theme set) */
             const ThemeColors *t = data->theme;
@@ -368,10 +369,15 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 int closeY = tabY + (tabH - closeSz) / 2;
                 RECT rcClose = {closeX, closeY, closeX + closeSz, closeY + closeSz};
                 SetTextColor(hdc, cDim);
-                HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont ? data->hIconFont : data->hFont);
-                DrawTextW(hdc, L"\xEA39", -1, &rcClose,
-                          DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(hdc, prevF);
+                if (data->hIconFont) {
+                    HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont);
+                    DrawTextW(hdc, L"\xEA39", -1, &rcClose,
+                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, prevF);
+                } else {
+                    DrawText(hdc, "x", 1, &rcClose,
+                             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
 
                 x += tw + tabGap;
             }
@@ -392,30 +398,45 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     RECT rcLeft = {leftX, btnY, leftX + btnSz, btnY + btnSz};
                     RoundRect(hdc, rcLeft.left, rcLeft.top, rcLeft.right, rcLeft.bottom, rr, rr);
                     SetTextColor(hdc, cDim);
-                    HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont ? data->hIconFont : data->hFont);
-                    DrawTextW(hdc, L"\xE76B", -1, &rcLeft,
-                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hdc, prevF);
+                    if (data->hIconFont) {
+                        HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont);
+                        DrawTextW(hdc, L"\xE76B", -1, &rcLeft,
+                                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                        SelectObject(hdc, prevF);
+                    } else {
+                        DrawText(hdc, "<", 1, &rcLeft,
+                                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    }
                 }
                 /* ▶ Right arrow */
                 if (rightX > x) {
                     RECT rcRight = {rightX, btnY, rightX + btnSz, btnY + btnSz};
                     RoundRect(hdc, rcRight.left, rcRight.top, rcRight.right, rcRight.bottom, rr, rr);
                     SetTextColor(hdc, cDim);
-                    HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont ? data->hIconFont : data->hFont);
-                    DrawTextW(hdc, L"\xE76C", -1, &rcRight,
-                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hdc, prevF);
+                    if (data->hIconFont) {
+                        HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont);
+                        DrawTextW(hdc, L"\xE76C", -1, &rcRight,
+                                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                        SelectObject(hdc, prevF);
+                    } else {
+                        DrawText(hdc, ">", 1, &rcRight,
+                                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    }
                 }
                 /* AI button — Fluent icon */
                 if (aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + btnSz, btnY + btnSz};
                     RoundRect(hdc, rcAi.left, rcAi.top, rcAi.right, rcAi.bottom, rr, rr);
                     SetTextColor(hdc, data->ai_active ? RGB(0, 180, 0) : cDim);
-                    HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont ? data->hIconFont : data->hFont);
-                    DrawTextW(hdc, L"\xE950", -1, &rcAi,
-                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hdc, prevF);
+                    if (data->hIconFont) {
+                        HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont);
+                        DrawTextW(hdc, L"\xE950", -1, &rcAi,
+                                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                        SelectObject(hdc, prevF);
+                    } else {
+                        DrawText(hdc, "AI", 2, &rcAi,
+                                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    }
                 }
 
                 SelectObject(hdc, hOldBtnBr);
@@ -425,6 +446,14 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
 
             SelectObject(hdc, hOldFont);
+
+            /* Blit double-buffer to screen */
+            BitBlt(hdcReal, 0, 0, rcClient.right, rcClient.bottom,
+                   hdc, 0, 0, SRCCOPY);
+            SelectObject(hdc, hOldBmp);
+            DeleteObject(hBmp);
+            DeleteDC(hdc);
+
             EndPaint(hwnd, &ps);
             return 0;
         }

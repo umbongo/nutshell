@@ -21,7 +21,32 @@ static void log_chunk(FILE *f, const char *data, size_t len)
     fflush(f);
 }
 
-int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file) {
+/* Write raw bytes to the debug log in a readable format.
+ * ESC (0x1B) → "ESC", printable ASCII → as-is, others → \xHH */
+static void debug_log_chunk(FILE *f, const char *data, size_t len)
+{
+    if (!f || len == 0u) return;
+    for (size_t i = 0u; i < len; i++) {
+        unsigned char ch = (unsigned char)data[i];
+        if (ch == 0x1Bu) {
+            fputs("ESC", f);
+        } else if (ch >= 0x20u && ch < 0x7Fu) {
+            fputc((int)ch, f);
+        } else if (ch == '\r') {
+            fputs("\\r", f);
+        } else if (ch == '\n') {
+            fputs("\\n\n", f);
+        } else if (ch == '\t') {
+            fputs("\\t", f);
+        } else {
+            fprintf(f, "\\x%02X", (unsigned int)ch);
+        }
+    }
+    fflush(f);
+}
+
+int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file,
+                FILE *debug_log) {
     if (!channel || !term) return -1;
 
     char buf[4096];
@@ -37,6 +62,7 @@ int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file) {
         if (rc > 0) {
             term_process(term, buf, (size_t)rc);
             log_chunk(log_file, buf, (size_t)rc);
+            debug_log_chunk(debug_log, buf, (size_t)rc);
             total_read += (size_t)rc;
             work_done = 1;
         } else if (rc == LIBSSH2_ERROR_EAGAIN || rc == 0) {
@@ -50,6 +76,7 @@ int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file) {
         if (rc > 0) {
             term_process(term, buf, (size_t)rc);
             log_chunk(log_file, buf, (size_t)rc);
+            debug_log_chunk(debug_log, buf, (size_t)rc);
             total_read += (size_t)rc;
             work_done = 1;
         }

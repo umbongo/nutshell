@@ -101,6 +101,12 @@ typedef struct {
     int        primary_lines_count;
     int        primary_lines_start;
     TermCursor primary_cursor;
+    /* Set when the buffer swaps (e.g. alt-screen exit) so the renderer knows
+     * the display buffer shadow is stale and must be fully invalidated. */
+    bool full_redraw_needed;
+
+    /* Bracketed paste mode (?2004h/l): when true, wrap paste with \033[200~/201~ */
+    bool bracketed_paste_mode;
 } Terminal;
 
 Terminal *term_init(int rows, int cols, int max_scrollback);

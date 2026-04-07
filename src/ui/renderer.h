@@ -16,6 +16,8 @@ typedef struct {
 #ifdef _WIN32
     HFONT hFont;
     HFONT hBoldFont;
+    HFONT hFallbackFont;      /* unicode fallback for glyphs missing from primary font */
+    HFONT hBoldFallbackFont;
     COLORREF defaultFg;
     COLORREF defaultBg;
     DisplayBuffer dispbuf;

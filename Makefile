@@ -9,7 +9,7 @@ CFLAGS = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow -Wformat=2 -Wconvers
          -Isrc -Isrc/core -Isrc/config -Isrc/crypto -I$(VCPKG_INC) -Isrc/term -Isrc/ssh -Isrc/ui
 LDFLAGS = -mwindows -Os -flto -Wl,--gc-sections -s \
           -L$(VCPKG_LIB) -lssh2 -lssl -lcrypto -lzlib -lcrypt32 -lbcrypt \
-          -lws2_32 -lgdi32 -luser32 -lcomctl32 -ldwmapi -lwinhttp -lm
+          -lgdiplus -lole32 -lshlwapi -lws2_32 -lgdi32 -luser32 -lcomctl32 -ldwmapi -lwinhttp -lm
 
 # Source directories
 SRC_DIRS = src src/core src/config src/crypto src/term src/ssh src/ui
@@ -70,12 +70,17 @@ TEST_SRCS = $(APP_SRCS) $(TEST_IMPL_SRCS)
 TEST_TARGET = build/test_runner
 
 
-.PHONY: all clean test lint debug release
+.PHONY: all clean test lint debug release redraw-debug
 
 all: $(TARGET)
 
 release: $(TARGET)
 	upx --best --lzma $(TARGET)
+
+# Build with redraw diagnostic logging enabled (writes to OutputDebugString).
+# Use DebugView or a debugger to capture output.
+redraw-debug:
+	$(MAKE) CFLAGS="$(CFLAGS) -DREDRAW_DEBUG"
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)

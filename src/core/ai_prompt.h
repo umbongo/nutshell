@@ -8,7 +8,7 @@
 #define AI_DEFAULT_PROVIDER "anthropic"
 
 #define AI_MSG_MAX     16384
-#define AI_BODY_MAX    65536
+#define AI_BODY_MAX    524288   /* 512KB — accommodates base64 images */
 #define AI_MAX_MESSAGES 64
 
 typedef enum {
@@ -18,8 +18,14 @@ typedef enum {
 } AiRole;
 
 typedef struct {
+    char *base64_url;    /* "data:image/png;base64,..." (heap) */
+    int width, height;   /* original pixel dimensions */
+} AiAttachment;
+
+typedef struct {
     AiRole role;
     char content[AI_MSG_MAX];
+    AiAttachment *attachment;  /* NULL for text-only messages */
 } AiMessage;
 
 typedef struct {
@@ -49,10 +55,19 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
 size_t ai_build_request_body(const AiConversation *conv,
                              char *buf, size_t buf_size);
 
+/* Free an attachment and NULL the pointer. */
+void ai_attachment_free(AiAttachment **att);
+
+/* Deep-copy an attachment. Returns NULL on failure or if att is NULL. */
+AiAttachment *ai_attachment_dup(const AiAttachment *att);
+
 /* Build the JSON request body with explicit stream flag.
  * stream=1 adds "stream":true for SSE streaming responses.
+ * last_user_attachment: if non-NULL, emits multimodal content array for the
+ * last user message.
  * Returns bytes written (excluding NUL), or 0 on error. */
 size_t ai_build_request_body_ex(const AiConversation *conv,
+                                const AiAttachment *last_user_attachment,
                                 char *buf, size_t buf_size, int stream);
 
 /* Parse a chat completion JSON response, extract assistant message content.

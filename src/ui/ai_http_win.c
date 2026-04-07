@@ -305,6 +305,33 @@ int ai_http_post_stream(const char *url, const char *auth_header,
         WINHTTP_HEADER_NAME_BY_INDEX, &http_status, &ssz, WINHTTP_NO_HEADER_INDEX);
     if (status_out) *status_out = (int)http_status;
 
+    /* On HTTP error, read body into the error buffer instead of streaming */
+    if (http_status >= 300) {
+        size_t err_pos = 0;
+        char chunk_buf[4096];
+        DWORD bytes_read;
+        for (;;) {
+            DWORD avail = 0;
+            if (!WinHttpQueryDataAvailable(hRequest, &avail)) break;
+            if (avail == 0) break;
+            DWORD to_read = avail < sizeof(chunk_buf) - 1
+                           ? avail : (DWORD)(sizeof(chunk_buf) - 1);
+            if (!WinHttpReadData(hRequest, chunk_buf, to_read, &bytes_read))
+                break;
+            if (bytes_read == 0) break;
+            /* Append to error buffer */
+            if (error && err_pos + (size_t)bytes_read < error_size - 1) {
+                memcpy(error + err_pos, chunk_buf, (size_t)bytes_read);
+                err_pos += (size_t)bytes_read;
+                error[err_pos] = '\0';
+            }
+        }
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return -1;
+    }
+
     /* Read chunks and pass to callback */
     int ret = 0;
     char chunk_buf[4096];

@@ -142,6 +142,109 @@ int test_config_roundtrip_ai_font(void);
 int test_config_validate_empty_ai_font(void);
 /* test_session_manager.c */
 int test_profile_struct(void);
+int test_profile_default_values(void);
+int test_profile_free_null(void);
+int test_profile_field_truncation(void);
+int test_profile_auth_types(void);
+int test_profile_ai_notes(void);
+int test_sessmgr_new_default(void);
+int test_sessmgr_add_profiles(void);
+int test_sessmgr_free_null(void);
+int test_sessmgr_load_null_path(void);
+int test_sessmgr_load_nonexistent(void);
+int test_sessmgr_save_null(void);
+int test_sessmgr_save_load_roundtrip(void);
+int test_sessmgr_settings_validate(void);
+int test_sessmgr_multiple_profiles_roundtrip(void);
+
+/* test_xmalloc.c */
+int test_xmalloc_basic(void);
+int test_xmalloc_zero_size(void);
+int test_xmalloc_one_byte(void);
+int test_xmalloc_large(void);
+int test_xcalloc_basic(void);
+int test_xcalloc_zero_nmemb(void);
+int test_xcalloc_zero_size(void);
+int test_xrealloc_grow(void);
+int test_xrealloc_shrink(void);
+int test_xrealloc_null_ptr(void);
+int test_xstrdup_basic(void);
+int test_xstrdup_empty(void);
+int test_xstrdup_null(void);
+int test_xstrdup_long(void);
+
+/* test_json_fuzz.c */
+int test_json_fuzz_lone_lbrace(void);
+int test_json_fuzz_lone_lbracket(void);
+int test_json_fuzz_trailing_comma_object(void);
+int test_json_fuzz_trailing_comma_array(void);
+int test_json_fuzz_double_colon(void);
+int test_json_fuzz_empty_string_input(void);
+int test_json_fuzz_whitespace_only(void);
+int test_json_fuzz_just_comma(void);
+int test_json_fuzz_just_colon(void);
+int test_json_fuzz_nested_empty_objects(void);
+int test_json_fuzz_nested_empty_arrays(void);
+int test_json_fuzz_deep_nesting_arrays(void);
+int test_json_fuzz_deep_nesting_objects(void);
+int test_json_fuzz_unterminated_string(void);
+int test_json_fuzz_string_with_newline(void);
+int test_json_fuzz_string_lone_backslash(void);
+int test_json_fuzz_string_bad_unicode_escape(void);
+int test_json_fuzz_string_truncated_unicode(void);
+int test_json_fuzz_string_lone_high_surrogate(void);
+int test_json_fuzz_string_bad_low_surrogate(void);
+int test_json_fuzz_number_double_minus(void);
+int test_json_fuzz_number_trailing_dot(void);
+int test_json_fuzz_number_leading_plus(void);
+int test_json_fuzz_number_nan(void);
+int test_json_fuzz_number_infinity(void);
+int test_json_fuzz_tok_long_string(void);
+int test_json_fuzz_tok_overlong_string(void);
+int test_json_fuzz_tok_long_number(void);
+int test_json_fuzz_object_int_key(void);
+int test_json_fuzz_duplicate_keys(void);
+int test_json_fuzz_array_of_mixed_types(void);
+int test_json_fuzz_garbage_after_value(void);
+int test_json_fuzz_null_bytes_in_input(void);
+int test_json_fuzz_obj_get_on_array(void);
+int test_json_fuzz_obj_str_on_null_node(void);
+int test_json_fuzz_obj_num_on_null_node(void);
+int test_json_fuzz_obj_bool_on_null_node(void);
+
+/* test_term_fuzz.c */
+int test_term_fuzz_incomplete_esc(void);
+int test_term_fuzz_incomplete_csi(void);
+int test_term_fuzz_csi_no_params(void);
+int test_term_fuzz_csi_many_params(void);
+int test_term_fuzz_csi_huge_param_value(void);
+int test_term_fuzz_csi_zero_param(void);
+int test_term_fuzz_osc_unterminated(void);
+int test_term_fuzz_osc_very_long_title(void);
+int test_term_fuzz_osc_empty_title(void);
+int test_term_fuzz_utf8_overlong(void);
+int test_term_fuzz_utf8_truncated(void);
+int test_term_fuzz_utf8_4byte(void);
+int test_term_fuzz_utf8_invalid_continuation(void);
+int test_term_fuzz_rapid_alt_screen(void);
+int test_term_fuzz_double_alt_screen_enter(void);
+int test_term_fuzz_scroll_region_inverted(void);
+int test_term_fuzz_scroll_region_zero(void);
+int test_term_fuzz_scroll_region_single_row(void);
+int test_term_fuzz_erase_at_origin(void);
+int test_term_fuzz_erase_display_modes(void);
+int test_term_fuzz_all_control_chars(void);
+int test_term_fuzz_binary_garbage(void);
+int test_term_fuzz_resize_during_alt_screen(void);
+int test_term_resize_alt_cursor_valid(void);
+int test_term_resize_alt_primary_dimensions(void);
+int test_term_resize_alt_shrink(void);
+int test_term_fuzz_resize_tiny(void);
+int test_term_fuzz_resize_same_size(void);
+int test_term_fuzz_write_at_last_column(void);
+int test_term_fuzz_cr_at_last_column(void);
+int test_term_fuzz_split_csi_across_calls(void);
+int test_term_fuzz_split_osc_across_calls(void);
 
 /* test_tabs.c */
 int test_tabmgr_init(void);
@@ -295,6 +398,9 @@ int test_term_sgr_reverse_off(void);
 int test_term_sgr_selective_off(void);
 int test_term_sgr_reverse_off_man_scenario(void);
 int test_term_sgr_reset_after_turnoff(void);
+int test_term_bracketed_paste_enable(void);
+int test_term_bracketed_paste_disable(void);
+int test_term_bracketed_paste_persists_after_reset(void);
 
 /* test_theme.c */
 int test_theme_dark_background(void);
@@ -1087,6 +1193,10 @@ int test_chat_msg_null_text(void);
 int test_chat_msg_unique_ids(void);
 int test_chat_msg_command_too_long(void);
 int test_chat_msg_list_clear(void);
+int test_chat_msg_error_status_after_ai_is_tail(void);
+int test_chat_msg_error_status_dirty_flag(void);
+int test_chat_msg_multiple_error_statuses(void);
+int test_chat_msg_status_after_empty_ai(void);
 
 /* test_chat_thinking.c */
 int test_thinking_init(void);
@@ -1194,6 +1304,15 @@ int test_context_label_exact_1k(void);
 int test_context_label_na(void);
 int test_context_label_small_buf(void);
 
+/* test_base64.c */
+int test_base64_empty(void);
+int test_base64_hello(void);
+int test_base64_padding_1byte(void);
+int test_base64_padding_2bytes(void);
+int test_base64_padding_3bytes(void);
+int test_base64_small_buffer(void);
+int test_base64_binary(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -1251,6 +1370,15 @@ int main(void) {
     failed += test_logger_min_level_filters();
     failed += test_logger_all_levels_no_crash();
     failed += test_logger_close_without_file();
+
+    printf("\n--- Base64 ---\n");
+    failed += test_base64_empty();
+    failed += test_base64_hello();
+    failed += test_base64_padding_1byte();
+    failed += test_base64_padding_2bytes();
+    failed += test_base64_padding_3bytes();
+    failed += test_base64_small_buffer();
+    failed += test_base64_binary();
 
     printf("\n--- Config & UI ---\n");
     /* JSON Tokenizer */
@@ -1333,8 +1461,22 @@ int main(void) {
     failed += test_config_roundtrip_ai_font();
     failed += test_config_validate_empty_ai_font();
 
-    /* Session Manager */
+    /* Session Manager / Profile / Config */
     failed += test_profile_struct();
+    failed += test_profile_default_values();
+    failed += test_profile_free_null();
+    failed += test_profile_field_truncation();
+    failed += test_profile_auth_types();
+    failed += test_profile_ai_notes();
+    failed += test_sessmgr_new_default();
+    failed += test_sessmgr_add_profiles();
+    failed += test_sessmgr_free_null();
+    failed += test_sessmgr_load_null_path();
+    failed += test_sessmgr_load_nonexistent();
+    failed += test_sessmgr_save_null();
+    failed += test_sessmgr_save_load_roundtrip();
+    failed += test_sessmgr_settings_validate();
+    failed += test_sessmgr_multiple_profiles_roundtrip();
 
     /* Tab Manager */
     failed += test_tabmgr_init();
@@ -1493,6 +1635,9 @@ int main(void) {
     failed += test_term_sgr_selective_off();
     failed += test_term_sgr_reverse_off_man_scenario();
     failed += test_term_sgr_reset_after_turnoff();
+    failed += test_term_bracketed_paste_enable();
+    failed += test_term_bracketed_paste_disable();
+    failed += test_term_bracketed_paste_persists_after_reset();
 
     printf("\n--- VT Sequences ---\n");
     failed += test_vt_osc_title_0();
@@ -2310,6 +2455,10 @@ int main(void) {
     failed += test_chat_msg_unique_ids();
     failed += test_chat_msg_command_too_long();
     failed += test_chat_msg_list_clear();
+    failed += test_chat_msg_error_status_after_ai_is_tail();
+    failed += test_chat_msg_error_status_dirty_flag();
+    failed += test_chat_msg_multiple_error_statuses();
+    failed += test_chat_msg_status_after_empty_ai();
 
     printf("\n--- Thinking Controller ---\n");
     failed += test_thinking_init();
@@ -2416,6 +2565,95 @@ int main(void) {
     failed += test_context_label_exact_1k();
     failed += test_context_label_na();
     failed += test_context_label_small_buf();
+
+    printf("\n--- xmalloc ---\n");
+    failed += test_xmalloc_basic();
+    failed += test_xmalloc_zero_size();
+    failed += test_xmalloc_one_byte();
+    failed += test_xmalloc_large();
+    failed += test_xcalloc_basic();
+    failed += test_xcalloc_zero_nmemb();
+    failed += test_xcalloc_zero_size();
+    failed += test_xrealloc_grow();
+    failed += test_xrealloc_shrink();
+    failed += test_xrealloc_null_ptr();
+    failed += test_xstrdup_basic();
+    failed += test_xstrdup_empty();
+    failed += test_xstrdup_null();
+    failed += test_xstrdup_long();
+
+    printf("\n--- JSON Fuzz ---\n");
+    failed += test_json_fuzz_lone_lbrace();
+    failed += test_json_fuzz_lone_lbracket();
+    failed += test_json_fuzz_trailing_comma_object();
+    failed += test_json_fuzz_trailing_comma_array();
+    failed += test_json_fuzz_double_colon();
+    failed += test_json_fuzz_empty_string_input();
+    failed += test_json_fuzz_whitespace_only();
+    failed += test_json_fuzz_just_comma();
+    failed += test_json_fuzz_just_colon();
+    failed += test_json_fuzz_nested_empty_objects();
+    failed += test_json_fuzz_nested_empty_arrays();
+    failed += test_json_fuzz_deep_nesting_arrays();
+    failed += test_json_fuzz_deep_nesting_objects();
+    failed += test_json_fuzz_unterminated_string();
+    failed += test_json_fuzz_string_with_newline();
+    failed += test_json_fuzz_string_lone_backslash();
+    failed += test_json_fuzz_string_bad_unicode_escape();
+    failed += test_json_fuzz_string_truncated_unicode();
+    failed += test_json_fuzz_string_lone_high_surrogate();
+    failed += test_json_fuzz_string_bad_low_surrogate();
+    failed += test_json_fuzz_number_double_minus();
+    failed += test_json_fuzz_number_trailing_dot();
+    failed += test_json_fuzz_number_leading_plus();
+    failed += test_json_fuzz_number_nan();
+    failed += test_json_fuzz_number_infinity();
+    failed += test_json_fuzz_tok_long_string();
+    failed += test_json_fuzz_tok_overlong_string();
+    failed += test_json_fuzz_tok_long_number();
+    failed += test_json_fuzz_object_int_key();
+    failed += test_json_fuzz_duplicate_keys();
+    failed += test_json_fuzz_array_of_mixed_types();
+    failed += test_json_fuzz_garbage_after_value();
+    failed += test_json_fuzz_null_bytes_in_input();
+    failed += test_json_fuzz_obj_get_on_array();
+    failed += test_json_fuzz_obj_str_on_null_node();
+    failed += test_json_fuzz_obj_num_on_null_node();
+    failed += test_json_fuzz_obj_bool_on_null_node();
+
+    printf("\n--- Terminal Fuzz ---\n");
+    failed += test_term_fuzz_incomplete_esc();
+    failed += test_term_fuzz_incomplete_csi();
+    failed += test_term_fuzz_csi_no_params();
+    failed += test_term_fuzz_csi_many_params();
+    failed += test_term_fuzz_csi_huge_param_value();
+    failed += test_term_fuzz_csi_zero_param();
+    failed += test_term_fuzz_osc_unterminated();
+    failed += test_term_fuzz_osc_very_long_title();
+    failed += test_term_fuzz_osc_empty_title();
+    failed += test_term_fuzz_utf8_overlong();
+    failed += test_term_fuzz_utf8_truncated();
+    failed += test_term_fuzz_utf8_4byte();
+    failed += test_term_fuzz_utf8_invalid_continuation();
+    failed += test_term_fuzz_rapid_alt_screen();
+    failed += test_term_fuzz_double_alt_screen_enter();
+    failed += test_term_fuzz_scroll_region_inverted();
+    failed += test_term_fuzz_scroll_region_zero();
+    failed += test_term_fuzz_scroll_region_single_row();
+    failed += test_term_fuzz_erase_at_origin();
+    failed += test_term_fuzz_erase_display_modes();
+    failed += test_term_fuzz_all_control_chars();
+    failed += test_term_fuzz_binary_garbage();
+    failed += test_term_fuzz_resize_during_alt_screen();
+    failed += test_term_resize_alt_cursor_valid();
+    failed += test_term_resize_alt_primary_dimensions();
+    failed += test_term_resize_alt_shrink();
+    failed += test_term_fuzz_resize_tiny();
+    failed += test_term_fuzz_resize_same_size();
+    failed += test_term_fuzz_write_at_last_column();
+    failed += test_term_fuzz_cr_at_last_column();
+    failed += test_term_fuzz_split_csi_across_calls();
+    failed += test_term_fuzz_split_osc_across_calls();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

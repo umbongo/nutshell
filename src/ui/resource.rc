@@ -45,9 +45,11 @@ BEGIN
     PUSHBUTTON      "...", IDC_BTN_BROWSE_KEY,        498, 110,  20,  14
 
     RTEXT           "AI Notes:",        -1,           191, 133,  42,   8
-    EDITTEXT        IDC_EDIT_AI_NOTES,                237, 130, 267, 117, ES_MULTILINE | ES_AUTOVSCROLL
+    EDITTEXT        IDC_EDIT_AI_NOTES,                237, 130, 267, 117, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN
 
     PUSHBUTTON      "Save",             IDC_BTN_SAVE, 198, 262,  50,  14
     DEFPUSHBUTTON   "Connect",          IDOK,         412, 262,  55,  14
     PUSHBUTTON      "Cancel",           IDCANCEL,     471, 262,  55,  14
 END
+
+IDR_ACORN_PNG  RCDATA  "../../images/nutshell_acorn_transparent.png"

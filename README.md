@@ -2,15 +2,15 @@
 
 # Nutshell SSH
 
-**Version**: v1.0.11 \
-**Build Date**: 2026-03-28 \
+**Version**: v1.0.36 \
+**Build Date**: 2026-04-07 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
 
 Nutshell is a lightweight, AI-enabled, native C SSH client for Windows. It pairs a full-featured terminal with a built-in AI assistant that can read your terminal output, suggest commands, and execute them over SSH — with your approval at every step.
 
-Built entirely with the Win32 API, no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~2.1 MB (UPX compressed).
+Built entirely with the Win32 API, no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~5.1 MB (UPX compressed).
 
 ## AI Chat Assistant
 
@@ -40,7 +40,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 1,062 unit tests, zero lint warnings
+- 1,167 unit tests, zero lint warnings
 
 ---
 
@@ -176,6 +176,7 @@ The AI assistant can see the last 150 lines of your terminal output and execute 
 - Type in the input box at the bottom
 - **Enter** sends the message
 - **Shift+Enter** inserts a newline (for multi-line messages)
+- **Ctrl+V** with an image on the clipboard attaches a screenshot (sent as base64 PNG to multimodal-capable providers)
 - Click **Send** (or press Enter) to submit
 
 #### Command Execution
@@ -228,18 +229,78 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 ```
 .
 ├── src/
-│   ├── core/       # Portable logic (testable on Linux)
-│   ├── config/     # JSON tokenizer, parser, config loader
-│   ├── crypto/     # AES-256-GCM encryption (OpenSSL)
-│   ├── term/       # Terminal emulator + SSH (libssh2)
-│   ├── ui/         # Win32 UI (excluded from test builds)
-│   └── main.c
-├── tests/          # Unit tests (TDD)
-├── build/          # Build artefacts
-├── images/         # Application icon and assets
+│   ├── main.c                          # Entry point
+│   ├── config/                         # Configuration & JSON
+│   │   ├── config.h, profile.h         #   Settings and profile structs
+│   │   ├── json_parser.c/.h            #   Recursive-descent JSON parser
+│   │   ├── json_tokenizer.c/.h         #   JSON lexer with Unicode escapes
+│   │   ├── loader.c                    #   Config file read/write (atomic save)
+│   │   └── ssh_io.c/.h                 #   SSH I/O helpers
+│   ├── core/                           # Portable logic (testable on Linux)
+│   │   ├── ai_http.c/.h               #   AI HTTP interface
+│   │   ├── ai_prompt.c/.h             #   Conversations, request building, response parsing
+│   │   ├── app_font.c/.h              #   Font management and size snapping
+│   │   ├── base64.c/.h                #   Base64 encoding (OpenSSL)
+│   │   ├── chat_activity.c/.h         #   Activity indicator state machine
+│   │   ├── chat_approval.c/.h         #   Command approval queue
+│   │   ├── chat_msg.c/.h              #   Chat message list with secure wipe
+│   │   ├── chat_thinking.c/.h         #   Thinking/reasoning display state
+│   │   ├── cmd_classify.c/.h          #   Command safety classification (Linux, Cisco, Aruba, PAN-OS)
+│   │   ├── connect_anim.c/.h          #   Connection animation dots
+│   │   ├── display_buffer.c/.h        #   Display invalidation tracking
+│   │   ├── edit_scroll.c/.h           #   Scroll math for text editors
+│   │   ├── log_format.c/.h            #   Log filename formatting (strftime)
+│   │   ├── logger.c/.h                #   File and stderr logging
+│   │   ├── paste_preview.c/.h         #   Paste preview with size constraints
+│   │   ├── secure_zero.h              #   Volatile memset for secrets
+│   │   ├── selection.c/.h             #   Text selection (pixel-to-cell)
+│   │   ├── snap.c/.h                  #   Window grid snapping
+│   │   ├── string_utils.c/.h          #   String helpers, ANSI stripping, UTF-8
+│   │   ├── tab_manager.c/.h           #   Tab data model
+│   │   ├── term_extract.c/.h          #   Terminal text extraction
+│   │   ├── theme.c/.h                 #   Color calculations (luminance, bg detection)
+│   │   ├── tooltip.c/.h               #   Connection tooltip formatting
+│   │   ├── ui_theme.c/.h              #   Theme system (4 schemes)
+│   │   ├── vector.c/.h                #   Dynamic array
+│   │   ├── xmalloc.c/.h              #   Aborting allocator wrappers
+│   │   └── zoom.c/.h                  #   Zoom level calculations
+│   ├── crypto/                         # Cryptography
+│   │   └── crypto.c/.h                #   AES-256-GCM encrypt/decrypt (OpenSSL, PBKDF2)
+│   ├── term/                           # Terminal emulator & SSH
+│   │   ├── buffer.c                   #   Ring buffer management (scrollback, resize, reflow)
+│   │   ├── parser.c                   #   VT100/ANSI escape sequence parser
+│   │   ├── term.c/.h                  #   Terminal structs, init, dirty tracking
+│   │   ├── ssh_session.c/.h           #   SSH session lifecycle (connect, auth, disconnect)
+│   │   ├── ssh_channel.c/.h           #   SSH channel I/O with timeout
+│   │   ├── ssh_pty.c/.h              #   PTY allocation and resize
+│   │   ├── knownhosts.c/.h           #   TOFU host key verification
+│   │   └── libssh2.h                 #   Test stub header
+│   └── ui/                             # Win32 UI (excluded from test builds)
+│       ├── window.c                   #   Main window, menu, layout (108 KB)
+│       ├── ai_chat.c/.h              #   AI chat panel, streaming, image paste (140 KB)
+│       ├── ai_http_win.c             #   WinHTTP streaming implementation
+│       ├── chat_listview.c/.h        #   Chat message rendering, sticky scroll
+│       ├── md_render.c/.h, markdown.h #   Markdown rendering for AI responses
+│       ├── session_manager.c/.h       #   Session manager dialog
+│       ├── settings.c, settings_dlg.h #   Settings dialog
+│       ├── tabs.c/.h                  #   Double-buffered tab strip widget
+│       ├── renderer.c/.h             #   Terminal cell renderer
+│       ├── help_guide.c/.h           #   Help guide dialog
+│       ├── paste_dlg.c/.h            #   Paste confirmation dialog
+│       ├── icon_font.h               #   Icon font detection with ASCII fallbacks
+│       ├── resource.h                 #   Version macros and resource IDs
+│       ├── themed_button.h           #   Themed button widget
+│       ├── custom_scrollbar.h        #   Custom scrollbar widget
+│       ├── dpi_util.h                #   DPI-aware layout helpers
+│       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
+│       ├── nutshell.rc, resource.rc   #   Windows resource scripts
+│       └── fonts/                     #   Embedded Inter Regular + Bold TTF
+├── tests/                              # 1,167 unit tests across 52 test files
+├── build/win/                          # Build output (nutshell.exe)
+├── images/                             # Application icon and assets
+├── CLAUDE.md                           # AI assistant project conventions
 ├── LICENSE
-├── CLAUDE.md       # AI assistant instructions and project conventions
-└── Makefile
+└── Makefile                            # Cross-compile (MinGW) + native test builds
 ```
 
 ## Build Instructions
@@ -263,8 +324,8 @@ Requires `upx` (`sudo apt install upx`). Use plain `make` only if you need an un
 
 | Command | Purpose |
 |---------|---------|
-| `make clean && make release` | **Recommended** — optimised + UPX compressed (~2.1 MB) |
-| `make` | Uncompressed build (~6.7 MB), useful for debugging |
+| `make clean && make release` | **Recommended** — optimised + UPX compressed (~5.1 MB) |
+| `make` | Uncompressed build (~9.7 MB), useful for debugging |
 | `make test` | Run unit tests (native Linux) |
 | `make lint` | Static analysis with cppcheck |
 | `make debug` | Build with AddressSanitizer + UndefinedBehaviorSanitizer |

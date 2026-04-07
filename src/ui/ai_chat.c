@@ -23,6 +23,7 @@
 #include "chat_activity.h"
 #include "chat_approval.h"
 #include "chat_listview.h"
+#include "icon_font.h"
 #include "dpi_util.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <stdio.h>
@@ -31,6 +32,49 @@
 #include <richedit.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <shlwapi.h>
+#include "base64.h"
+
+/* GDI+ flat API declarations (C-compatible -- no C++ headers) */
+typedef int GpStatus;
+typedef void GpBitmap;
+typedef void GpImage;
+typedef struct { UINT32 Data1; UINT16 Data2; UINT16 Data3; BYTE Data4[8]; } GPCLSID;
+typedef struct { UINT32 Num; UINT32 Size; } EncoderParameters;
+
+extern GpStatus __stdcall GdiplusStartup(ULONG_PTR *token, const void *input,
+                                          void *output);
+extern void     __stdcall GdiplusShutdown(ULONG_PTR token);
+extern GpStatus __stdcall GdipCreateBitmapFromHBITMAP(HBITMAP hbm, HPALETTE hpal,
+                                                       GpBitmap **bitmap);
+extern GpStatus __stdcall GdipSaveImageToStream(GpImage *image, IStream *stream,
+                                                 const GPCLSID *clsid,
+                                                 const EncoderParameters *params);
+extern GpStatus __stdcall GdipDisposeImage(GpImage *image);
+extern GpStatus __stdcall GdipGetImageWidth(GpImage *image, UINT *width);
+extern GpStatus __stdcall GdipGetImageHeight(GpImage *image, UINT *height);
+
+typedef struct {
+    UINT32 GdiplusVersion;
+    void *DebugEventCallback;
+    BOOL SuppressBackgroundThread;
+    BOOL SuppressExternalCodecs;
+} GdiplusStartupInput;
+
+/* PNG encoder CLSID: {557CF406-1A04-11D3-9A73-0000F81EF32E} */
+static const GPCLSID CLSID_PNG = {
+    0x557CF406, 0x1A04, 0x11D3,
+    {0x9A, 0x73, 0x00, 0x00, 0xF8, 0x1E, 0xF3, 0x2E}
+};
+
+/* Move an AiConversation from src to dst.  Attachment ownership transfers
+ * to dst; src attachment pointers are NULLed to prevent double-free. */
+static void ai_conv_move(AiConversation *dst, AiConversation *src)
+{
+    memcpy(dst, src, sizeof(AiConversation));
+    for (int i = 0; i < src->msg_count; i++)
+        src->messages[i].attachment = NULL;
+}
 
 static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 
@@ -69,6 +113,21 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
                                            WPARAM wParam, LPARAM lParam,
                                            UINT_PTR uIdSubclass,
                                            DWORD_PTR dwRefData);
+
+/* Subclass for owner-drawn buttons: suppress WM_ERASEBKGND to prevent
+ * white flicker during parent resize.  WM_DRAWITEM already fills the
+ * entire button rect, so erasing is redundant. */
+#define BTN_NOERASE_SUBCLASS_ID 43
+static LRESULT CALLBACK btn_noerase_subclass(
+    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    (void)dwRefData;
+    if (msg == WM_ERASEBKGND) return 1;
+    if (msg == WM_NCDESTROY)
+        RemoveWindowSubclass(hwnd, btn_noerase_subclass, uIdSubclass);
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
 
 typedef struct {
     HWND hwnd;
@@ -201,6 +260,12 @@ typedef struct {
 
     /* Stream abort: UI thread sets to 1, stream callback checks it */
     volatile int abort_stream;
+
+    /* GDI+ token for image conversion */
+    ULONG_PTR gdip_token;
+
+    /* Pending image attachment for the next send */
+    AiAttachment *pending_attachment;
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -405,8 +470,8 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 
     if (rc != 0 || status < 200 || status >= 300) {
         char msg[1024];
-        if (rc != 0 && errbuf[0])
-            snprintf(msg, sizeof(msg), "HTTP error: %s", errbuf);
+        if (errbuf[0])
+            snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
         else
             snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
         post_error_response(arg->hwnd, arg->target, msg);
@@ -588,8 +653,13 @@ static void launch_stream_thread(AiChatData *d)
     strncpy(arg->api_key, d->api_key, sizeof(arg->api_key) - 1);
     strncpy(arg->provider, d->provider, sizeof(arg->provider) - 1);
     strncpy(arg->custom_url, d->custom_url, sizeof(arg->custom_url) - 1);
-    arg->body_len = ai_build_request_body_ex(&d->conv, arg->body,
-                                              sizeof(arg->body), 1);
+    {
+        int last_msg = d->conv.msg_count - 1;
+        const AiAttachment *att = (last_msg >= 0)
+            ? d->conv.messages[last_msg].attachment : NULL;
+        arg->body_len = ai_build_request_body_ex(&d->conv, att, arg->body,
+                                                  sizeof(arg->body), 1);
+    }
     LeaveCriticalSection(&d->cs);
 
     /* Allocate per-session stream accumulators */
@@ -731,6 +801,18 @@ static void send_user_message(AiChatData *d)
 
     char input[2048];
     GetWindowText(d->hInput, input, (int)sizeof(input));
+
+    /* Strip any "[Image attached] " prefixes inserted by clipboard paste */
+    {
+        const char *img_prefix = "[Image attached] ";
+        size_t pfx_len = strlen(img_prefix);
+        char *text_start = input;
+        while (strstr(text_start, img_prefix) == text_start)
+            text_start += pfx_len;
+        if (text_start != input)
+            memmove(input, text_start, strlen(text_start) + 1);
+    }
+
     if (input[0] == '\0') return;
 
     SetWindowText(d->hInput, "");
@@ -768,6 +850,16 @@ static void send_user_message(AiChatData *d)
     }
 
     ai_conv_add(&d->conv, AI_ROLE_USER, input);
+
+    /* Attach pending image to the user message just added */
+    if (d->pending_attachment) {
+        int last = d->conv.msg_count - 1;
+        if (last >= 0 && d->conv.messages[last].role == AI_ROLE_USER) {
+            d->conv.messages[last].attachment =
+                ai_attachment_dup(d->pending_attachment);
+        }
+    }
+
     LeaveCriticalSection(&d->cs);
 
     update_context_bar(d);
@@ -776,6 +868,9 @@ static void send_user_message(AiChatData *d)
     start_indicator(d, "thinking");
 
     launch_stream_thread(d);
+
+    /* Clear pending attachment after thread is launched */
+    ai_attachment_free(&d->pending_attachment);
 }
 
 static void execute_command(AiChatData *d, const char *cmd)
@@ -833,6 +928,80 @@ static void send_continue_message(AiChatData *d)
     launch_stream_thread(d);
 }
 
+/* Convert a clipboard bitmap to a base64-encoded PNG AiAttachment.
+ * Returns NULL if the clipboard does not contain a bitmap or on error. */
+static AiAttachment *clipboard_to_png_attachment(HWND owner)
+{
+    if (!IsClipboardFormatAvailable(CF_BITMAP))
+        return NULL;
+    if (!OpenClipboard(owner))
+        return NULL;
+
+    HBITMAP hbm = (HBITMAP)GetClipboardData(CF_BITMAP);
+    if (!hbm) { CloseClipboard(); return NULL; }
+
+    BITMAP bm_info;
+    GetObject(hbm, sizeof(bm_info), &bm_info);
+
+    GpBitmap *gpbmp = NULL;
+    if (GdipCreateBitmapFromHBITMAP(hbm, NULL, &gpbmp) != 0 || !gpbmp) {
+        CloseClipboard();
+        return NULL;
+    }
+    CloseClipboard();
+
+    IStream *stm = SHCreateMemStream(NULL, 0);
+    if (!stm) {
+        GdipDisposeImage((GpImage *)gpbmp);
+        return NULL;
+    }
+
+    if (GdipSaveImageToStream((GpImage *)gpbmp, stm, &CLSID_PNG, NULL) != 0) {
+        stm->lpVtbl->Release(stm);
+        GdipDisposeImage((GpImage *)gpbmp);
+        return NULL;
+    }
+    GdipDisposeImage((GpImage *)gpbmp);
+
+    STATSTG stat;
+    stm->lpVtbl->Stat(stm, &stat, STATFLAG_NONAME);
+    size_t png_len = (size_t)stat.cbSize.QuadPart;
+
+    unsigned char *png_buf = (unsigned char *)malloc(png_len);
+    if (!png_buf) { stm->lpVtbl->Release(stm); return NULL; }
+
+    LARGE_INTEGER zero_pos = {{0}};
+    stm->lpVtbl->Seek(stm, zero_pos, STREAM_SEEK_SET, NULL);
+    ULONG bytes_read = 0;
+    stm->lpVtbl->Read(stm, png_buf, (ULONG)png_len, &bytes_read);
+    stm->lpVtbl->Release(stm);
+
+    if (bytes_read != (ULONG)png_len) { free(png_buf); return NULL; }
+
+    size_t b64_size = ((png_len + 2) / 3) * 4 + 1;
+    char *b64 = (char *)malloc(b64_size);
+    if (!b64) { free(png_buf); return NULL; }
+
+    size_t b64_len = base64_encode(png_buf, png_len, b64, b64_size);
+    free(png_buf);
+    if (b64_len == 0) { free(b64); return NULL; }
+
+    const char *prefix = "data:image/png;base64,";
+    size_t prefix_len = strlen(prefix);
+    char *url = (char *)malloc(prefix_len + b64_len + 1);
+    if (!url) { free(b64); return NULL; }
+    memcpy(url, prefix, prefix_len);
+    memcpy(url + prefix_len, b64, b64_len + 1);
+    free(b64);
+
+    AiAttachment *att = (AiAttachment *)calloc(1, sizeof(*att));
+    if (!att) { free(url); return NULL; }
+    att->base64_url = url;
+    att->width = bm_info.bmWidth;
+    att->height = bm_info.bmHeight;
+    return att;
+}
+
 static void input_sync_scroll(AiChatData *d);
 
 /* Subclass proc for the multiline input: Enter sends, Shift+Enter inserts newline */
@@ -841,6 +1010,22 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
                                            UINT_PTR uIdSubclass,
                                            DWORD_PTR dwRefData)
 {
+    if (msg == WM_PASTE) {
+        HWND parent = GetParent(hwnd);
+        AiChatData *pd = parent
+            ? (AiChatData *)GetWindowLongPtr(parent, GWLP_USERDATA) : NULL;
+        if (pd && IsClipboardFormatAvailable(CF_BITMAP)) {
+            AiAttachment *att = clipboard_to_png_attachment(parent);
+            if (att) {
+                ai_attachment_free(&pd->pending_attachment);
+                pd->pending_attachment = att;
+                SendMessageA(hwnd, EM_REPLACESEL, TRUE,
+                             (LPARAM)"[Image attached] ");
+                return 0;
+            }
+        }
+        /* Fall through to default text paste */
+    }
     if (msg == WM_KEYDOWN && wParam == VK_RETURN) {
         int shift = GetKeyState(VK_SHIFT) & 0x8000;
         AiInputAction action = ai_input_key_action(1, shift ? 1 : 0);
@@ -1159,16 +1344,7 @@ static void chat_apply_zoom(AiChatData *d, int delta)
                           DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
                           
     int ih = -MulDiv(new_size, d->dpi, 72);
-    d->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                               DEFAULT_CHARSET, OUT_TT_PRECIS,
-                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                               DEFAULT_PITCH | FF_DONTCARE, "Segoe Fluent Icons");
-    if (!d->hIconFont) {
-        d->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                   DEFAULT_PITCH | FF_DONTCARE, "Segoe MDL2 Assets");
-    }
+    d->hIconFont = create_icon_font(ih);
 
     if (d->hFont) {
         SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hFont, TRUE);
@@ -1216,6 +1392,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
         nd->hwnd = hwnd;
 
+        /* Start GDI+ for clipboard image conversion */
+        {
+            GdiplusStartupInput gdip_in = {1, NULL, FALSE, FALSE};
+            GdiplusStartup(&nd->gdip_token, &gdip_in, NULL);
+        }
+
         /* Get per-monitor DPI for layout scaling */
         nd->dpi = get_window_dpi(hwnd);
         #define S(px) MulDiv((px), nd->dpi, 96)
@@ -1261,6 +1443,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             cw - pad - btn_h - pad - btn_h, pad, btn_h, btn_h,
             hwnd, (HMENU)IDC_CHAT_UNDOCK, NULL, NULL);
+
+        /* Suppress WM_ERASEBKGND on owner-drawn buttons to prevent
+         * white flicker during splitter drag / parent resize. */
+        SetWindowSubclass(nd->hNewChatBtn,  btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hPermitBtn,   btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hAllowAllBtn, btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hSaveBtn,     btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hUndockBtn,   btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
         /* Old floating Allow/Deny buttons removed — approval is now
          * handled inline via chat_listview command block buttons.
@@ -1366,6 +1556,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             cw - send_w - margin, input_y, send_w, input_h,
             hwnd, (HMENU)IDC_CHAT_SEND, NULL, NULL);
+        SetWindowSubclass(nd->hSendBtn, btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
         /* Font — use Inter UI font */
         nd->ui_font_size = APP_FONT_UI_SIZE;
@@ -1382,18 +1573,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                     DEFAULT_PITCH | FF_SWISS, "Segoe UI");
 
-        /* Icon Font for Fluent UI */
+        /* Icon Font — validated, NULL if no Fluent/MDL2 font available */
         int ih = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
-        nd->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                   DEFAULT_PITCH | FF_DONTCARE, "Segoe Fluent Icons");
-        if (!nd->hIconFont) {
-            nd->hIconFont = CreateFont(ih, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                                       DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                       CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                       DEFAULT_PITCH | FF_DONTCARE, "Segoe MDL2 Assets");
-        }
+        nd->hIconFont = create_icon_font(ih);
         #undef S
         if (nd->hFont) {
             SendMessage(nd->hInput, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
@@ -1515,7 +1697,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         switch (LOWORD(wParam)) {
         case IDC_CHAT_SEND:
             if (d && ACTIVE_BUSY(d)) {
-                /* While streaming, Send button acts as Stop */
                 cancel_active_stream(d);
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                     "[cancelled]");
@@ -1985,117 +2166,136 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         break;
 
     case WM_AI_STREAM: {
-        /* Realtime streaming chunk: wParam 0=thinking, 1=content */
+        /* Realtime streaming chunk: wParam 0=thinking, 1=content.
+         *
+         * Coalesce: drain ALL pending WM_AI_STREAM messages from the
+         * queue and accumulate them before doing the expensive UI
+         * update (remeasure + repaint) once.  This prevents the UI
+         * thread from being starved when tokens arrive faster than
+         * we can repaint. */
         if (!d) break;
-        AiStreamChunk *chunk = (AiStreamChunk *)lParam;
-        if (!chunk) break;
-        char *delta = chunk->delta;
-        AiSessionState *src = chunk->session;
-        free(chunk);  /* free wrapper; delta freed below */
-        if (!delta) return 0;
 
-        /* Discard stale chunks that arrive after cancel */
-        if (d->abort_stream) {
+        /* Check scroll position BEFORE any layout changes */
+        int was_near_bottom = d->hChatList
+            ? chat_listview_is_near_bottom(d->hChatList) : 1;
+        int display_dirty = 0;
+
+        /* Process this chunk and all queued WM_AI_STREAM messages */
+        WPARAM cur_wp = wParam;
+        LPARAM cur_lp = lParam;
+        for (;;) {
+            AiStreamChunk *chunk = (AiStreamChunk *)cur_lp;
+            if (!chunk) goto next_coalesce;
+            char *delta = chunk->delta;
+            AiSessionState *src = chunk->session;
+            free(chunk);
+            if (!delta) goto next_coalesce;
+
+            if (d->abort_stream) { free(delta); goto next_coalesce; }
+
+            /* Accumulate to source session buffers */
+            if (src) {
+                size_t dlen = strlen(delta);
+                if (cur_wp == 0) {
+                    if (src->stream_thinking &&
+                        src->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
+                        memcpy(src->stream_thinking + src->stream_thinking_len,
+                               delta, dlen);
+                        src->stream_thinking_len += dlen;
+                        src->stream_thinking[src->stream_thinking_len] = '\0';
+                    }
+                    if (src->stream_phase == 0)
+                        src->stream_phase = 1;
+                } else {
+                    if (src->stream_content &&
+                        src->stream_content_len + dlen < AI_MSG_MAX - 1) {
+                        memcpy(src->stream_content + src->stream_content_len,
+                               delta, dlen);
+                        src->stream_content_len += dlen;
+                        src->stream_content[src->stream_content_len] = '\0';
+                    }
+                    if (src->stream_phase < 2)
+                        src->stream_phase = 2;
+                }
+            }
+
+            /* Accumulate to display buffers if active session */
+            if (src == d->active_state) {
+                size_t dlen = strlen(delta);
+                if (cur_wp == 0) {
+                    if (d->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
+                        memcpy(d->stream_thinking + d->stream_thinking_len,
+                               delta, dlen);
+                        d->stream_thinking_len += dlen;
+                        d->stream_thinking[d->stream_thinking_len] = '\0';
+                    }
+                    if (d->stream_phase == 0)
+                        d->stream_phase = 1;
+                } else {
+                    if (d->stream_content_len + dlen < AI_MSG_MAX - 1) {
+                        memcpy(d->stream_content + d->stream_content_len,
+                               delta, dlen);
+                        d->stream_content_len += dlen;
+                        d->stream_content[d->stream_content_len] = '\0';
+                    }
+                }
+                display_dirty = 1;
+            }
+
             free(delta);
-            return 0;
-        }
 
-        /* Always accumulate to the source session's stream buffers */
-        if (src) {
-            size_t dlen = strlen(delta);
-            if (wParam == 0) {
-                if (src->stream_thinking &&
-                    src->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
-                    memcpy(src->stream_thinking + src->stream_thinking_len,
-                           delta, dlen);
-                    src->stream_thinking_len += dlen;
-                    src->stream_thinking[src->stream_thinking_len] = '\0';
-                }
-                if (src->stream_phase == 0)
-                    src->stream_phase = 1;
+next_coalesce:;
+            /* Peek for more WM_AI_STREAM messages */
+            MSG peeked;
+            if (PeekMessage(&peeked, hwnd, WM_AI_STREAM, WM_AI_STREAM,
+                            PM_REMOVE)) {
+                cur_wp = peeked.wParam;
+                cur_lp = peeked.lParam;
             } else {
-                if (src->stream_content &&
-                    src->stream_content_len + dlen < AI_MSG_MAX - 1) {
-                    memcpy(src->stream_content + src->stream_content_len,
-                           delta, dlen);
-                    src->stream_content_len += dlen;
-                    src->stream_content[src->stream_content_len] = '\0';
-                }
-                if (src->stream_phase < 2)
-                    src->stream_phase = 2;
+                break;  /* No more queued — proceed to UI update */
             }
         }
 
-        /* If this chunk is for a different session, don't touch the display */
-        if (src != d->active_state) {
-            free(delta);
-            return 0;
-        }
-
-        /* Also accumulate to display-side buffers */
-        {
-            size_t dlen = strlen(delta);
-            if (wParam == 0) {
-                if (d->stream_thinking_len + dlen < AI_MSG_MAX - 1) {
-                    memcpy(d->stream_thinking + d->stream_thinking_len,
-                           delta, dlen);
-                    d->stream_thinking_len += dlen;
-                    d->stream_thinking[d->stream_thinking_len] = '\0';
-                }
-                if (d->stream_phase == 0)
-                    d->stream_phase = 1;
-            } else {
-                if (d->stream_content_len + dlen < AI_MSG_MAX - 1) {
-                    memcpy(d->stream_content + d->stream_content_len,
-                           delta, dlen);
-                    d->stream_content_len += dlen;
-                    d->stream_content[d->stream_content_len] = '\0';
-                }
-            }
-        }
-
-        /* Update activity state on stream chunks */
-        {
+        /* Single UI update for all coalesced chunks */
+        if (display_dirty) {
             float now = (float)GetTickCount() / 1000.0f;
-            if (wParam == 0) {
+            if (d->stream_phase == 1) {
                 if (d->activity.phase != ACTIVITY_THINKING)
-                    chat_activity_set_phase(&d->activity, ACTIVITY_THINKING, now);
-                chat_activity_token(&d->activity, now);
-            } else {
+                    chat_activity_set_phase(&d->activity,
+                                            ACTIVITY_THINKING, now);
+            } else if (d->stream_phase >= 2) {
                 if (d->activity.phase != ACTIVITY_RESPONDING)
-                    chat_activity_set_phase(&d->activity, ACTIVITY_RESPONDING, now);
-                chat_activity_token(&d->activity, now);
+                    chat_activity_set_phase(&d->activity,
+                                            ACTIVITY_RESPONDING, now);
             }
-        }
+            chat_activity_token(&d->activity, now);
 
-        /* Update the streaming AI item in the ChatMsgList */
-        if (d->stream_ai_item) {
-            if (wParam == 0) {
-                /* Thinking delta — update thinking text on AI item */
-                if (d->stream_phase < 1)
-                    d->stream_phase = 1;
-                chat_msg_set_thinking(d->stream_ai_item,
-                                      d->stream_thinking);
-                /* Auto-scroll expanded thinking to bottom */
-                if (!d->stream_ai_item->u.ai.thinking_collapsed
-                    && d->stream_ai_item->u.ai.thinking_autoscroll) {
-                    d->stream_ai_item->u.ai.thinking_scroll_y = 999999;
-                    /* Will be clamped to max_scroll by paint/mousewheel */
+            if (d->stream_ai_item) {
+                /* Always update thinking text if we have any */
+                if (d->stream_thinking_len > 0) {
+                    chat_msg_set_thinking(d->stream_ai_item,
+                                          d->stream_thinking);
+                    if (!d->stream_ai_item->u.ai.thinking_collapsed
+                        && d->stream_ai_item->u.ai.thinking_autoscroll) {
+                        d->stream_ai_item->u.ai.thinking_scroll_y = 999999;
+                    }
                 }
-            } else {
-                /* Content delta — update AI item text */
-                if (d->stream_phase < 2)
-                    d->stream_phase = 2;
-                chat_msg_set_text(d->stream_ai_item,
-                                  d->stream_content);
-            }
-            if (d->hChatList) {
-                chat_listview_invalidate(d->hChatList);
-                chat_listview_scroll_to_bottom(d->hChatList);
+                /* Always update content text if we have any */
+                if (d->stream_content_len > 0) {
+                    chat_msg_set_text(d->stream_ai_item,
+                                      d->stream_content);
+                }
+                if (d->hChatList) {
+                    chat_listview_invalidate(d->hChatList);
+                    /* Only auto-scroll during content phase — during thinking
+                     * the box is already visible and scroll_to_bottom would
+                     * shift coordinates, breaking click-to-expand. */
+                    if (was_near_bottom && d->stream_phase >= 2)
+                        chat_listview_scroll_to_bottom(d->hChatList);
+                }
             }
         }
 
-        free(delta);
         return 0;
     }
 
@@ -2333,8 +2533,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (text) {
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                 text);
-                if (d->hChatList)
+                if (d->hChatList) {
                     chat_listview_invalidate(d->hChatList);
+                    chat_listview_scroll_to_bottom(d->hChatList);
+                }
                 free(text);
             }
             free(rmsg->thinking);
@@ -2676,7 +2878,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     SelectObject(hdc, oP);
                     DeleteObject(hShPen);
 
-                    /* Icon — same font as other panel icons */
+                    /* Icon — use icon font if available, else regular font.
+                     * btn_text is ">" or "■" which exist in any font. */
                     HFONT prev = (HFONT)SelectObject(hdc,
                         d->hIconFont ? d->hIconFont : d->hFont);
                     SetBkMode(hdc, TRANSPARENT);
@@ -2709,13 +2912,17 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 DeleteObject(hPen);
                 DeleteObject(hBr);
 
-                /* Draw Fluent UI floppy disk icon (\xE74E Save) */
+                /* Draw save icon */
                 SetBkMode(hdc, TRANSPARENT);
                 SetTextColor(hdc, fg);
-                HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont ? d->hIconFont : d->hFont);
                 RECT txtRc = rc;
-                DrawTextW(hdc, L"\xE74E", -1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(hdc, prevF);
+                if (d->hIconFont) {
+                    HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont);
+                    DrawTextW(hdc, L"\xE74E", -1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, prevF);
+                } else {
+                    DrawText(hdc, "S", 1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
             } else if ((int)dis->CtlID == IDC_CHAT_UNDOCK) {
                 /* Square undock button with 3D pop-out/dock-in icon */
                 HDC hdc = dis->hDC;
@@ -2740,13 +2947,16 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 DeleteObject(hPen);
                 DeleteObject(hBr);
 
-                /* Draw Fluent UI Pop-out/Dock icon */
+                /* Draw Pop-out/Dock icon */
                 SetBkMode(hdc, TRANSPARENT);
                 SetTextColor(hdc, fg);
-                HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont ? d->hIconFont : d->hFont);
-                /* \xE8A7 = FullScreen (outer arrows), \xE923 = BackToWindow */
-                DrawTextW(hdc, d->docked ? L"\xE8A7" : L"\xE923", -1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                SelectObject(hdc, prevF);
+                if (d->hIconFont) {
+                    HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont);
+                    DrawTextW(hdc, d->docked ? L"\xE8A7" : L"\xE923", -1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    SelectObject(hdc, prevF);
+                } else {
+                    DrawText(hdc, d->docked ? "^" : "v", 1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
             /* Old IDC_CHAT_ALLOW / IDC_CHAT_DENY draw code removed —
              * approval buttons are now inline in chat_listview */
             } else {
@@ -2782,10 +2992,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             KillTimer(hwnd, TIMER_HEARTBEAT);
             /* Save conversation back to session before cleanup */
             if (d->active_state) {
-                memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
+                ai_conv_move(&d->active_state->conv, &d->conv);
                 d->active_state->valid = 1;
             }
             thinking_history_clear(d);
+            ai_attachment_free(&d->pending_attachment);
             chat_msg_list_clear(&d->msg_list);
             d->stream_ai_item = NULL;
             DeleteCriticalSection(&d->cs);
@@ -2797,6 +3008,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d->hTooltip) DestroyWindow(d->hTooltip);
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
+            GdiplusShutdown(d->gdip_token);
             free(d);
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)NULL);
         }
@@ -2890,7 +3102,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     /* Load existing conversation from session state if available */
     d->active_state = initial_state;
     if (initial_state && initial_state->valid) {
-        memcpy(&d->conv, &initial_state->conv, sizeof(AiConversation));
+        ai_conv_move(&d->conv, &initial_state->conv);
     }
 
     if (session_notes)
@@ -3028,7 +3240,7 @@ static void do_session_switch(AiChatData *d,
      * Skip if the session is busy — the thread will commit to its own conv. */
     if (d->active_state && d->active_state != new_state &&
         !d->active_state->busy) {
-        memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
+        ai_conv_move(&d->active_state->conv, &d->conv);
         d->active_state->valid = 1;
     }
 
@@ -3063,7 +3275,7 @@ static void do_session_switch(AiChatData *d,
     /* Load new session's conversation */
     if (new_state && new_state != d->active_state) {
         if (new_state->valid) {
-            memcpy(&d->conv, &new_state->conv, sizeof(AiConversation));
+            ai_conv_move(&d->conv, &new_state->conv);
         } else {
             char model[64];
             strncpy(model, d->conv.model, sizeof(model) - 1);
@@ -3196,7 +3408,7 @@ void ai_chat_switch_session(HWND hwnd,
     /* If the active session is busy, save the current conversation so the
      * thread can commit its result on top of this snapshot. */
     if (d->active_state && d->active_state->busy) {
-        memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
+        ai_conv_move(&d->active_state->conv, &d->conv);
         d->active_state->valid = 1;
     }
 

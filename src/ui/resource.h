@@ -1,12 +1,14 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION "1.0.11"
+#define APP_VERSION        "1.0.36"
+#define APP_VERSION_BINARY  1,0,36,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
 #define IDR_FONT_INTER      200
 #define IDR_FONT_INTER_BOLD 201
+#define IDR_ACORN_PNG       202
 
 /* Menu bar command IDs */
 #define IDM_FILE_NEW_SESSION  2001
@@ -56,5 +58,6 @@
 #define IDC_CMD_APPROVE_SEL  3045  /* Approve selected (ticked) commands */
 #define IDC_CMD_CANCEL_ALL   3046  /* Cancel (deny) all pending commands */
 #define IDC_CMD_TOGGLE_BASE  3050  /* 3050..3065 for up to 16 command tickboxes */
+#define IDC_DEBUG_TERMINAL   3060  /* Settings: raw debug log toggle */
 
 #endif

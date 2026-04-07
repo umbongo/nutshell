@@ -113,6 +113,7 @@ void config_default_settings(Settings *s)
     s->scrollback_lines = 10000;
     s->paste_delay_ms   = 350;
     s->logging_enabled  = 0;
+    s->debug_terminal   = 0;
     field_copy(s->log_format,           sizeof(s->log_format),           "%Y-%m-%d_%H-%M-%S");
     field_copy(s->host_key_verification,sizeof(s->host_key_verification),"tofu");
     field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#E0E0E0");
@@ -202,6 +203,8 @@ Config *config_load(const char *path)
                                               (double)s->paste_delay_ms);
         s->logging_enabled = json_obj_bool(jset, "logging_enabled",
                                            s->logging_enabled);
+        s->debug_terminal  = json_obj_bool(jset, "debug_terminal",
+                                           s->debug_terminal);
         if ((sv = json_obj_str(jset, "log_format"))) {
             field_copy(s->log_format, sizeof(s->log_format), sv);
         }
@@ -340,6 +343,8 @@ int config_save(const Config *cfg, const char *path)
     fprintf(f, "    \"paste_delay_ms\": %d,\n", s->paste_delay_ms);
     fprintf(f, "    \"logging_enabled\": %s,\n",
             s->logging_enabled ? "true" : "false");
+    fprintf(f, "    \"debug_terminal\": %s,\n",
+            s->debug_terminal ? "true" : "false");
     fputs("    \"log_format\": ", f);
     fprint_json_str(f, s->log_format);
     fputs(",\n", f);
