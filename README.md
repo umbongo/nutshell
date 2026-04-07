@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.0.36 \
+**Version**: v1.0.37 \
 **Build Date**: 2026-04-07 \
 **Author**: Thomas Sulkiewicz
 
