@@ -236,6 +236,9 @@ int test_term_fuzz_erase_display_modes(void);
 int test_term_fuzz_all_control_chars(void);
 int test_term_fuzz_binary_garbage(void);
 int test_term_fuzz_resize_during_alt_screen(void);
+int test_term_resize_alt_cursor_valid(void);
+int test_term_resize_alt_primary_dimensions(void);
+int test_term_resize_alt_shrink(void);
 int test_term_fuzz_resize_tiny(void);
 int test_term_fuzz_resize_same_size(void);
 int test_term_fuzz_write_at_last_column(void);
@@ -395,6 +398,9 @@ int test_term_sgr_reverse_off(void);
 int test_term_sgr_selective_off(void);
 int test_term_sgr_reverse_off_man_scenario(void);
 int test_term_sgr_reset_after_turnoff(void);
+int test_term_bracketed_paste_enable(void);
+int test_term_bracketed_paste_disable(void);
+int test_term_bracketed_paste_persists_after_reset(void);
 
 /* test_theme.c */
 int test_theme_dark_background(void);
@@ -1629,6 +1635,9 @@ int main(void) {
     failed += test_term_sgr_selective_off();
     failed += test_term_sgr_reverse_off_man_scenario();
     failed += test_term_sgr_reset_after_turnoff();
+    failed += test_term_bracketed_paste_enable();
+    failed += test_term_bracketed_paste_disable();
+    failed += test_term_bracketed_paste_persists_after_reset();
 
     printf("\n--- VT Sequences ---\n");
     failed += test_vt_osc_title_0();
@@ -2636,6 +2645,9 @@ int main(void) {
     failed += test_term_fuzz_all_control_chars();
     failed += test_term_fuzz_binary_garbage();
     failed += test_term_fuzz_resize_during_alt_screen();
+    failed += test_term_resize_alt_cursor_valid();
+    failed += test_term_resize_alt_primary_dimensions();
+    failed += test_term_resize_alt_shrink();
     failed += test_term_fuzz_resize_tiny();
     failed += test_term_fuzz_resize_same_size();
     failed += test_term_fuzz_write_at_last_column();

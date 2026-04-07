@@ -282,6 +282,7 @@ static void handle_private_mode(Terminal *term, bool set)
         case 1049: if (set) term_alt_screen_enter(term);
                    else     term_alt_screen_exit(term);
                    break;
+        case 2004: term->bracketed_paste_mode = set; break;
         default:   break; /* ignore unknown private modes */
     }
 }
@@ -360,7 +361,7 @@ static void handle_csi(Terminal *term, char final) {
                     cr1->dirty = true;
                 }
             } else if (n == 2) {
-                /* Clear entire screen */
+                /* Clear entire screen — VT100: does NOT move cursor (xterm compat) */
                 for (int r = 0; r < term->rows; r++) {
                     TermRow *rr = get_screen_row(term, r);
                     if (rr) {
@@ -373,8 +374,9 @@ static void handle_csi(Terminal *term, char final) {
                         rr->wrapped = false;
                     }
                 }
-                term->cursor.row = 0;
-                term->cursor.col = 0;
+                /* Cursor position unchanged — applications that want cursor home
+                 * send ESC[H separately.  Moving here was non-standard and caused
+                 * the bash prompt to appear at the top after TUI apps exited. */
             }
             break;
         case 'K': // EL - Erase in Line

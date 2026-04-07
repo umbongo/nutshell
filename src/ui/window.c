@@ -29,6 +29,7 @@
 #include "custom_scrollbar.h"
 #include "menubar_line.h"
 #include "dpi_util.h"
+#include "redraw_log.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <dwmapi.h>
 #include <gdiplus.h>       /* GDI+ flat API (includes gdiplusflat.h) */
@@ -55,6 +56,7 @@ typedef struct Session {
     SshSession *ssh;
     SSHChannel *channel;
     FILE       *session_log;   /* NULL when logging disabled */
+    FILE       *debug_log;    /* NULL when debug_terminal disabled */
     /* Connection thread state */
     ConnState       conn_state;
     volatile int    conn_cancelled;
@@ -123,6 +125,8 @@ static void invalidate_terminal(HWND hwnd)
     RECT rc;
     GetClientRect(hwnd, &rc);
     rc.top = g_tab_height;
+    REDRAW_LOG("[REDRAW] invalidate_terminal: rect=(%ld,%ld,%ld,%ld)\n",
+               rc.left, rc.top, rc.right, rc.bottom);
     InvalidateRect(hwnd, &rc, FALSE);
 }
 
@@ -139,6 +143,7 @@ typedef struct {
     HWND        hwnd;      /* window to repaint */
     int         delay_ms;  /* inter-line delay */
     SSHChannel *channel;   /* target channel (paste continues across tab switches) */
+    bool        bracketed; /* send \033[201~ when paste completes */
 } PasteState;
 
 static PasteState g_paste = {0};
@@ -150,6 +155,7 @@ static Session *create_session(int rows, int cols) {
     s->ssh = NULL;
     s->channel = NULL;
     s->session_log = NULL;
+    s->debug_log = NULL;
     s->conn_state = CONN_IDLE;
     s->conn_cancelled = 0;
     s->conn_thread = NULL;
@@ -176,6 +182,7 @@ static void free_session(Session *s) {
         if (s->channel) ssh_channel_free(s->channel);
         if (s->ssh) ssh_session_free(s->ssh);
         if (s->session_log) fclose(s->session_log);
+        if (s->debug_log)   fclose(s->debug_log);
         free(s->ai_state.pending_cmds);
         free(s->ai_state.stream_content);
         free(s->ai_state.stream_thinking);
@@ -429,6 +436,43 @@ static FILE *open_session_log(const char *hostname)
                    log_dir, ts, safe_host);
 
     return fopen(path, "ab");
+}
+
+/* Open a raw debug log file for escape-sequence diagnostics.
+ * Filename: <session_name>-debug-<YYYY-MM-DD_HH-MM-SS>.log in the exe dir.
+ * Returns NULL if debug_terminal is false or on error. */
+static FILE *open_debug_log(const char *session_name)
+{
+    if (!g_config || !g_config->settings.debug_terminal) return NULL;
+
+    char dir[MAX_PATH];
+    get_exe_dir(dir, sizeof(dir));
+    if (dir[0] == '\0') (void)snprintf(dir, sizeof(dir), ".");
+
+    /* Sanitise session name for use as a filename component */
+    char safe_name[64];
+    size_t ni = 0u;
+    for (const char *p = session_name; *p && ni < sizeof(safe_name) - 1u; p++) {
+        char c = *p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '-' || c == '_') {
+            safe_name[ni++] = c;
+        } else {
+            safe_name[ni++] = '_';
+        }
+    }
+    if (ni == 0u) { safe_name[0] = 's'; ni = 1u; }
+    safe_name[ni] = '\0';
+
+    time_t now = time(NULL);
+    const struct tm *t = localtime(&now);
+    char ts[32];
+    if (t) strftime(ts, sizeof(ts), "%Y-%m-%d_%H-%M-%S", t);
+    else   (void)snprintf(ts, sizeof(ts), "unknown");
+
+    char path[MAX_PATH];
+    (void)snprintf(path, sizeof(path), "%s\\%s-debug-%s.log", dir, safe_name, ts);
+    return fopen(path, "wb");
 }
 
 /* ---- Background connection thread --------------------------------------- */
@@ -878,6 +922,7 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
             if (s->channel) { ssh_channel_free(s->channel); s->channel = NULL; }
             if (s->ssh)     { ssh_session_free(s->ssh);     s->ssh = NULL; }
             if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
+            if (s->debug_log)   { fclose(s->debug_log);   s->debug_log   = NULL; }
             int tidx = tabs_find(g_hwndTabs, s);
             if (tidx >= 0) {
                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
@@ -897,6 +942,7 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
         if (s->channel) { ssh_channel_free(s->channel); s->channel = NULL; }
         if (s->ssh)     { ssh_session_free(s->ssh);     s->ssh = NULL; }
         if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
+        if (s->debug_log)   { fclose(s->debug_log);   s->debug_log   = NULL; }
 
         /* Re-populate password from config — it was zeroed after first auth */
         for (size_t i = 0; i < vec_size(&g_config->profiles); i++) {
@@ -996,16 +1042,26 @@ static bool paste_send_next_line(void)
     return *g_paste.pos != '\0';
 }
 
-/* Cancel any in-progress paste and free state */
+/* Cancel any in-progress paste and free state (no bracket-close sent) */
 static void paste_cancel(void)
 {
     if (g_paste.buf) {
         KillTimer(g_paste.hwnd, PASTE_TIMER_ID);
         free(g_paste.buf);
-        g_paste.buf = NULL;
-        g_paste.pos = NULL;
-        g_paste.channel = NULL;
+        g_paste.buf      = NULL;
+        g_paste.pos      = NULL;
+        g_paste.channel  = NULL;
+        g_paste.bracketed = false;
     }
+}
+
+/* Called when paste completes naturally — sends bracket-close if needed, then cleans up */
+static void paste_finish(void)
+{
+    static const char BRACKET_CLOSE[] = "\033[201~";
+    if (g_paste.bracketed && g_paste.channel)
+        ssh_channel_write(g_paste.channel, BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
+    paste_cancel();
 }
 
 /* Called by WM_TIMER when wParam == PASTE_TIMER_ID */
@@ -1016,7 +1072,7 @@ static void paste_timer_tick(void)
         g_active_session->term->scrollback_offset = 0;
         invalidate_terminal(g_paste.hwnd);
     }
-    if (!more) paste_cancel();
+    if (!more) paste_finish();
 }
 
 static void do_paste(HWND hwnd)
@@ -1035,63 +1091,88 @@ static void do_paste(HWND hwnd)
     const char *raw = (const char *)GlobalLock(hClip);
     if (!raw) { CloseClipboard(); return; }
 
-    size_t raw_len = strlen(raw);
+    /* Copy to a local buffer so the clipboard is free before the dialog blocks.
+     * The user must be able to copy new text while the preview is open. */
+    char *local = _strdup(raw);
+    GlobalUnlock(hClip);
+    CloseClipboard();
+
+    if (!local) return;
 
     /* Count newlines */
     int line_count = 0;
-    for (size_t i = 0; i < raw_len; i++) {
-        if (raw[i] == '\n') line_count++;
+    for (size_t i = 0; local[i]; i++) {
+        if (local[i] == '\n') line_count++;
     }
 
     /* Always ask for confirmation before pasting */
-    int confirmed = paste_preview_show(hwnd, raw,
+    int confirmed = paste_preview_show(hwnd, local,
         g_config->settings.foreground_colour,
         g_config->settings.background_colour,
         g_config->settings.font,
         g_config->settings.font_size,
         g_config->settings.colour_scheme);
 
-    if (confirmed) {
-        int delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
-
-        /* Single line or no delay: send everything immediately */
-        if (line_count == 0 || delay_ms <= 0) {
-            const char *p = raw;
-            while (*p) {
-                const char *nl = strchr(p, '\n');
-                size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
-                for (size_t i = 0; i < chunk; i++) {
-                    if (p[i] != '\r')
-                        ssh_channel_write(g_active_session->channel, &p[i], 1);
-                }
-                p += chunk;
-            }
-            g_active_session->term->scrollback_offset = 0;
-            invalidate_terminal(hwnd);
-        } else {
-            /* Multi-line with delay: use timer-driven paste */
-            g_paste.buf = _strdup(raw);
-            g_paste.pos = g_paste.buf;
-            g_paste.hwnd = hwnd;
-            g_paste.delay_ms = delay_ms;
-            g_paste.channel = g_active_session->channel;
-
-            /* Send the first line immediately */
-            paste_send_next_line();
-            g_active_session->term->scrollback_offset = 0;
-            invalidate_terminal(hwnd);
-
-            /* Start timer for remaining lines */
-            if (g_paste.pos && *g_paste.pos) {
-                SetTimer(hwnd, PASTE_TIMER_ID, (UINT)delay_ms, NULL);
-            } else {
-                paste_cancel();
-            }
-        }
+    if (!confirmed) {
+        free(local);
+        return;
     }
 
-    GlobalUnlock(hClip);
-    CloseClipboard();
+    bool bpm = g_active_session->term &&
+               g_active_session->term->bracketed_paste_mode;
+    int  delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
+
+    static const char BRACKET_OPEN[]  = "\033[200~";
+    static const char BRACKET_CLOSE[] = "\033[201~";
+
+    /* Bracketed paste mode: send the whole block at once — the remote app
+     * receives it as a unit and handles newlines itself, so inter-line delay
+     * would only add pointless latency. */
+    if (line_count == 0 || delay_ms <= 0 || bpm) {
+        if (bpm)
+            ssh_channel_write(g_active_session->channel,
+                              BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
+        const char *p = local;
+        while (*p) {
+            const char *nl = strchr(p, '\n');
+            size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
+            for (size_t i = 0; i < chunk; i++) {
+                if (p[i] != '\r')
+                    ssh_channel_write(g_active_session->channel, &p[i], 1);
+            }
+            p += chunk;
+        }
+        if (bpm)
+            ssh_channel_write(g_active_session->channel,
+                              BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
+        g_active_session->term->scrollback_offset = 0;
+        invalidate_terminal(hwnd);
+        free(local);
+    } else {
+        /* Multi-line with delay: use timer-driven paste (takes ownership of local) */
+        g_paste.buf       = local;
+        g_paste.pos       = g_paste.buf;
+        g_paste.hwnd      = hwnd;
+        g_paste.delay_ms  = delay_ms;
+        g_paste.channel   = g_active_session->channel;
+        g_paste.bracketed = bpm;
+
+        if (bpm)
+            ssh_channel_write(g_active_session->channel,
+                              BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
+
+        /* Send the first line immediately */
+        paste_send_next_line();
+        g_active_session->term->scrollback_offset = 0;
+        invalidate_terminal(hwnd);
+
+        /* Start timer for remaining lines, or finish if buffer exhausted */
+        if (g_paste.pos && *g_paste.pos) {
+            SetTimer(hwnd, PASTE_TIMER_ID, (UINT)delay_ms, NULL);
+        } else {
+            paste_finish();
+        }
+    }
 }
 
 /* ---- Scrollbar helper ---------------------------------------------------- */
@@ -1837,7 +1918,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 while (s) {
                     if (s->channel && s->conn_state == CONN_IDLE) {
                         int poll_rc = ssh_io_poll(s->channel, s->term,
-                                                      s->session_log);
+                                                      s->session_log,
+                                                      s->debug_log);
                         if (poll_rc > 0)
                             update_scrollbar(hwnd);
                         if (poll_rc == -2) {
@@ -1941,6 +2023,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             } else {
                 term_process(s->term, "\r\nConnected.\r\n", 14);
                 s->session_log = open_session_log(s->conn_profile.host);
+                s->debug_log   = open_debug_log(s->conn_profile.name);
                 if (tidx >= 0) {
                     tabs_set_connect_info(g_hwndTabs, tidx,
                                          s->conn_profile.username,
@@ -2117,6 +2200,23 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int term_right_edge = client.right - ai_w;
 
             if (g_active_session && g_active_session->term) {
+#ifdef REDRAW_DEBUG
+                {
+                    Terminal *_t = g_active_session->term;
+                    int _dirty = 0;
+                    for (int _ri = 0; _ri < _t->rows; _ri++) {
+                        int _li = ((_t->lines_count >= _t->rows)
+                                   ? (_t->lines_count - _t->rows) : 0) + _ri;
+                        int _pi = (_t->lines_start + _li) % _t->lines_capacity;
+                        if (_t->lines[_pi] && _t->lines[_pi]->dirty) _dirty++;
+                    }
+                    REDRAW_LOG("[REDRAW] WM_PAINT: paintRect=(%ld,%ld,%ld,%ld) "
+                               "dirty_rows=%d full_redraw=%d\n",
+                               ps.rcPaint.left, ps.rcPaint.top,
+                               ps.rcPaint.right, ps.rcPaint.bottom,
+                               _dirty, _t->full_redraw_needed);
+                }
+#endif
                 renderer_draw(&g_renderer, hdc, g_active_session->term, g_left_margin, g_tab_height, &ps.rcPaint, &g_selection);
 
                 /* Fill gutter areas not covered by complete character cells. */
@@ -2321,7 +2421,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                      * — a deadlock that silently drops keystrokes. */
                     ssh_io_poll(g_active_session->channel,
                                 g_active_session->term,
-                                g_active_session->session_log);
+                                g_active_session->session_log,
+                                g_active_session->debug_log);
                     ssh_channel_write(g_active_session->channel, &c, 1);
                 }
                 /* Only invalidate if we were scrolled back */
@@ -2403,7 +2504,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     if (g_active_session->channel) {
                         ssh_io_poll(g_active_session->channel,
                                     g_active_session->term,
-                                    g_active_session->session_log);
+                                    g_active_session->session_log,
+                                    g_active_session->debug_log);
                         ssh_channel_write(g_active_session->channel, seq, strlen(seq));
                     }
                     if (g_active_session->term->scrollback_offset != 0) {

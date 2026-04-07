@@ -70,12 +70,17 @@ TEST_SRCS = $(APP_SRCS) $(TEST_IMPL_SRCS)
 TEST_TARGET = build/test_runner
 
 
-.PHONY: all clean test lint debug release
+.PHONY: all clean test lint debug release redraw-debug
 
 all: $(TARGET)
 
 release: $(TARGET)
 	upx --best --lzma $(TARGET)
+
+# Build with redraw diagnostic logging enabled (writes to OutputDebugString).
+# Use DebugView or a debugger to capture output.
+redraw-debug:
+	$(MAKE) CFLAGS="$(CFLAGS) -DREDRAW_DEBUG"
 
 $(TARGET): $(OBJS)
 	@mkdir -p $(dir $@)

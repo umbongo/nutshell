@@ -2,6 +2,7 @@
 #include "display_buffer.h"
 #include "selection.h"
 #include "theme.h"
+#include "redraw_log.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -33,6 +34,19 @@ void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi) {
                               DEFAULT_CHARSET, OUT_TT_PRECIS,
                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                               FIXED_PITCH | FF_MODERN, fontName);
+
+    /* Fallback font for characters missing from the primary font (emoji, rare
+     * Unicode symbols, etc.).  "Segoe UI Symbol" is present on all Windows 10+
+     * systems and covers a broad range of Unicode including box-drawing, arrows,
+     * mathematical operators, and many symbol blocks. */
+    r->hFallbackFont = CreateFont(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                                  DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                  CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                  DEFAULT_PITCH | FF_DONTCARE, "Segoe UI Symbol");
+    r->hBoldFallbackFont = CreateFont(height, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                                      DEFAULT_CHARSET, OUT_TT_PRECIS,
+                                      CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                      DEFAULT_PITCH | FF_DONTCARE, "Segoe UI Symbol");
 
     if (!r->hFont || !r->hBoldFont) {
         if (r->hFont)     { DeleteObject(r->hFont);     r->hFont = NULL; }
@@ -68,8 +82,10 @@ void renderer_init(Renderer *r, const char *fontName, int fontSize, int dpi) {
 
 void renderer_free(Renderer *r) {
     if (!r) return;
-    if (r->hFont)     { DeleteObject(r->hFont);     r->hFont = NULL; }
-    if (r->hBoldFont) { DeleteObject(r->hBoldFont); r->hBoldFont = NULL; }
+    if (r->hFont)             { DeleteObject(r->hFont);             r->hFont = NULL; }
+    if (r->hBoldFont)         { DeleteObject(r->hBoldFont);         r->hBoldFont = NULL; }
+    if (r->hFallbackFont)     { DeleteObject(r->hFallbackFont);     r->hFallbackFont = NULL; }
+    if (r->hBoldFallbackFont) { DeleteObject(r->hBoldFallbackFont); r->hBoldFallbackFont = NULL; }
     dispbuf_free(&r->dispbuf);
 }
 
@@ -146,6 +162,24 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         if (!r->dispbuf.cells) return;
     }
 
+#ifdef REDRAW_DEBUG
+    {
+        /* Count rows that fall within paintRect */
+        int _in_rect = 0;
+        for (int _ri = 0; _ri < term->rows; _ri++) {
+            LONG _py = (LONG)y + (LONG)_ri * r->charHeight;
+            if (!(_py + r->charHeight < paintRect->top || _py > paintRect->bottom))
+                _in_rect++;
+        }
+        REDRAW_LOG("[REDRAW] renderer_draw: rows=%d in_paintrect=%d "
+                   "paintRect=(%ld,%ld,%ld,%ld) charH=%d\n",
+                   term->rows, _in_rect,
+                   paintRect->left, paintRect->top,
+                   paintRect->right, paintRect->bottom,
+                   r->charHeight);
+    }
+#endif
+
     HFONT oldFont = SelectObject(hdc, r->hFont);
     SetBkMode(hdc, OPAQUE);
     bool cur_bold = false;  /* track which font is selected */
@@ -169,6 +203,13 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         }
         r->prev_cursor_row = cursor_row;
         r->prev_cursor_col = cursor_col;
+    }
+
+    /* If the terminal buffer was swapped (e.g. alt-screen exit), the display
+     * buffer shadow is stale — invalidate it to force a full repaint. */
+    if (term->full_redraw_needed) {
+        dispbuf_invalidate(&r->dispbuf);
+        term->full_redraw_needed = false;
     }
 
     for (int row_idx = 0; row_idx < term->rows; row_idx++) {
@@ -288,14 +329,60 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
                 cur_bold = run_bold;
             }
 
-            /* Draw the entire run in one call */
             SetTextColor(hdc, run_fg);
             SetBkColor(hdc, run_bg);
             LONG px = (LONG)x + (LONG)run_start * r->charWidth;
             int run_cols = col_idx - run_start;
             RECT runRect = {px, py, px + (LONG)run_cols * r->charWidth, py + r->charHeight};
+
+            /* Check for missing glyphs in non-ASCII runs.  Skip the API call for
+             * pure ASCII (common case) to avoid unnecessary Win32 overhead.
+             * Surrogate pairs (SMP characters like emoji) always return 0xFFFF from
+             * GetGlyphIndicesW since it is a BMP-only API — they automatically fall
+             * through to the fallback path where Uniscribe handles them correctly. */
+            bool need_fallback_check = false;
+            for (int gi = 0; gi < run_len && !need_fallback_check; gi++) {
+                if (run_buf[gi] > 0x7Fu) need_fallback_check = true;
+            }
+            WORD glyph_indices[1024];
+            bool has_missing = false;
+            if (need_fallback_check) {
+                GetGlyphIndicesW(hdc, run_buf, run_len, glyph_indices,
+                                 GGI_MARK_NONEXISTING_GLYPHS);
+                for (int gi = 0; gi < run_len && !has_missing; gi++) {
+                    if (run_dx[gi] > 0 && glyph_indices[gi] == 0xFFFF) has_missing = true;
+                }
+            }
+
+            /* Draw the entire run with the primary font */
             ExtTextOutW(hdc, (int)px, (int)py, ETO_OPAQUE | ETO_CLIPPED, &runRect,
                         run_buf, (UINT)run_len, run_dx);
+
+            /* Overdraw missing-glyph cells using the Unicode fallback font.
+             * Each missing character is redrawn individually, clipped to its cell,
+             * so the proportional fallback font stays within the terminal grid. */
+            if (has_missing) {
+                HFONT fb = run_bold ? r->hBoldFallbackFont : r->hFallbackFont;
+                if (fb) {
+                    SelectObject(hdc, fb);
+                    int cwrun = 0; /* column index within this run */
+                    for (int wi = 0; wi < run_len; wi++) {
+                        if (run_dx[wi] > 0) {
+                            if (glyph_indices[wi] == 0xFFFF) {
+                                LONG px_c = (LONG)x + (LONG)(run_start + cwrun) * r->charWidth;
+                                UINT nw = (wi + 1 < run_len && run_dx[wi + 1] == 0) ? 2u : 1u;
+                                RECT cellRect = {px_c, py, px_c + r->charWidth, py + r->charHeight};
+                                INT cell_dx[2] = {r->charWidth, 0};
+                                ExtTextOutW(hdc, (int)px_c, (int)py, ETO_OPAQUE | ETO_CLIPPED,
+                                            &cellRect, run_buf + wi, nw, cell_dx);
+                            }
+                            cwrun++;
+                        }
+                    }
+                    /* Restore primary font — cur_bold remains valid */
+                    SelectObject(hdc, run_bold ? r->hBoldFont : r->hFont);
+                }
+            }
         }
 
         row->dirty = false;

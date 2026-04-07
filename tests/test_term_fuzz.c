@@ -355,6 +355,85 @@ int test_term_fuzz_resize_during_alt_screen(void)
     TEST_END();
 }
 
+/* After resize-during-alt-screen + exit, cursor must be within the new bounds. */
+int test_term_resize_alt_cursor_valid(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    /* Write content to primary screen so cursor is somewhere real */
+    term_process(t, "Hello world\r\nSecond line\r\n", 26);
+    term_process(t, "\x1B[?1049h", 8);   /* enter alt screen (man/less) */
+    term_resize(t, 50, 160);             /* maximise window */
+    term_process(t, "\x1B[?1049l", 8);   /* exit alt screen */
+
+    ASSERT_EQ(t->rows, 50);
+    ASSERT_EQ(t->cols, 160);
+    ASSERT_TRUE(t->cursor.row >= 0);
+    ASSERT_TRUE(t->cursor.row < t->rows);
+    ASSERT_TRUE(t->cursor.col >= 0);
+    ASSERT_TRUE(t->cursor.col < t->cols);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* After resize-during-alt-screen + exit, primary buffer dimensions must be
+ * consistent with the new terminal size. Writes a full line at the new width
+ * to exercise cells 0..new_cols-1 — catches out-of-bounds with ASAN. */
+int test_term_resize_alt_primary_dimensions(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "Primary content\r\n", 17);
+    term_process(t, "\x1B[?1049h", 8);
+    term_resize(t, 50, 160);
+    term_process(t, "\x1B[?1049l", 8);
+
+    ASSERT_EQ(t->rows, 50);
+    ASSERT_EQ(t->cols, 160);
+    ASSERT_TRUE(t->lines_count >= 1);
+    ASSERT_TRUE(t->lines_count <= t->lines_capacity);
+
+    /* Write 160 chars — exercises cells at cols 80-159 which were only valid
+     * at the new width. Without the fix this overruns old 80-cell rows. */
+    for (int i = 0; i < 160; i++)
+        term_process(t, "X", 1);
+
+    /* After exactly cols chars the cursor is in "pending wrap" state at col==cols.
+     * The wrap fires on the *next* put_char, so col==cols is valid here. */
+    ASSERT_TRUE(t->cursor.col >= 0 && t->cursor.col <= t->cols);
+    ASSERT_TRUE(t->cursor.row >= 0 && t->cursor.row < t->rows);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* Shrinking the terminal while on alt screen must also keep primary valid. */
+int test_term_resize_alt_shrink(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(50, 160, 100);
+
+    term_process(t, "Wide primary content here\r\n", 27);
+    term_process(t, "\x1B[?1049h", 8);
+    term_resize(t, 24, 80);             /* restore to smaller window */
+    term_process(t, "\x1B[?1049l", 8);
+
+    ASSERT_EQ(t->rows, 24);
+    ASSERT_EQ(t->cols, 80);
+    ASSERT_TRUE(t->cursor.row >= 0);
+    ASSERT_TRUE(t->cursor.row < t->rows);
+    ASSERT_TRUE(t->cursor.col >= 0);
+    ASSERT_TRUE(t->cursor.col < t->cols);
+    ASSERT_TRUE(t->lines_count >= 1);
+    ASSERT_TRUE(t->lines_count <= t->lines_capacity);
+
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_fuzz_resize_tiny(void)
 {
     TEST_BEGIN();

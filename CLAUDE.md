@@ -28,7 +28,10 @@ Write tests before implementation code. Include corner cases, positive and negat
 
 ## Software Development Rules for Claude
 
-When planning and debugging, use the latest version of Opus. When implementing the changes, use the latest version of Sonnet. Once implemented ensure that Opus checks Sonnet's work.
+- **Planning, architecture, and troubleshooting**: use Opus.
+- **Implementation**: use Sonnet sub-agents.
+- **Context discipline**: only preserve sub-agent results and key learnings in the Opus context — discard intermediate details. The goal is to keep the Opus context small and efficient.
+- Once implementation is complete, have Opus review Sonnet's work.
 
 ## Config Header
 

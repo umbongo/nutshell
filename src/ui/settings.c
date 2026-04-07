@@ -392,8 +392,21 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)300);
         }
 
-        /* Row 7: AI API Key (masked) — between log format and AI provider */
+        /* Row 7: Debug terminal log checkbox */
         y += rh;
+        {
+            int dbg_h = MulDiv(20, nd->dpi, 96);
+            HWND hDbg = CreateWindow("BUTTON", "Debug Terminal Log",
+                WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+                ex, y, ew, dbg_h, hwnd, (HMENU)IDC_DEBUG_TERMINAL, NULL, NULL);
+            SendMessage(hDbg, BM_SETCHECK,
+                        nd->cfg->settings.debug_terminal ? BST_CHECKED : BST_UNCHECKED, 0);
+            /* Apply theme colours to the checkbox text */
+            (void)hDbg;
+        }
+        y += rh;
+
+        /* Row 8: AI API Key (masked) — between log format and AI provider */
         make_label(hwnd, "AI API Key:", lx, y, lw, nd->dpi);
         {
             HWND hKey = CreateWindow("EDIT",
@@ -827,6 +840,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                            s->log_dir, (int)sizeof(s->log_dir));
             GetDlgItemText(hwnd, IDC_LOG_FMT_EDIT,
                            s->log_format, (int)sizeof(s->log_format));
+
+            /* Debug terminal log checkbox */
+            s->debug_terminal = (IsDlgButtonChecked(hwnd, IDC_DEBUG_TERMINAL)
+                                  == BST_CHECKED) ? 1 : 0;
 
             /* AI provider from combo */
             {

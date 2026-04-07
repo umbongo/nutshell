@@ -65,8 +65,10 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->insert_mode      = false;
     term->scroll_top       = 0;
     term->scroll_bot       = rows - 1;
-    term->alt_screen_active = false;
-    term->primary_lines    = NULL;
+    term->alt_screen_active   = false;
+    term->primary_lines       = NULL;
+    term->full_redraw_needed  = false;
+    term->bracketed_paste_mode = false;
 
     term->lines = xcalloc((size_t)term->lines_capacity, sizeof(TermRow *));
     
@@ -96,110 +98,74 @@ void term_free(Terminal *term) {
     free(term);
 }
 
-/* Helper to get a pointer to a specific logical line index (0 = oldest) */
-static TermRow *get_logical_row(Terminal *term, int logical_idx) {
-    if (logical_idx < 0 || logical_idx >= term->lines_count) return NULL;
-    int physical_idx = (term->lines_start + logical_idx) % term->lines_capacity;
-    return term->lines[physical_idx];
-}
-
-void term_resize(Terminal *term, int rows, int cols) {
-    if (!term || rows <= 0 || cols <= 0) return;
-    if (term->rows == rows && term->cols == cols) return;
-
-    int old_rows = term->rows;
-    int old_lines_count = term->lines_count;
-
-    /* 1. Create a new line buffer */
-    int new_capacity = rows + term->max_scrollback;
+/* Reflow old_lines (circular buffer, old_cols wide) into a newly-allocated
+ * linear buffer at new_rows × new_cols.  Frees old_lines.
+ * Cursor position is passed as screen-relative (row from top of visible area)
+ * and returned as screen-relative in the new geometry. */
+static void term_reflow_buffer(
+    TermRow **old_lines, int old_capacity, int old_start, int old_count,
+    int old_cols, int old_rows,
+    int cur_row, int cur_col,        /* screen-relative cursor in */
+    int new_rows, int new_cols, int max_scrollback,
+    TermAttr fill_attr,
+    TermRow ***out_lines, int *out_capacity, int *out_count, int *out_start,
+    int *out_cursor_row, int *out_cursor_col)
+{
+    int new_capacity = new_rows + max_scrollback;
     TermRow **new_lines = xcalloc((size_t)new_capacity, sizeof(TermRow *));
-    
-    /* Pre-allocate rows in the new buffer */
     for (int i = 0; i < new_capacity; i++) {
-        new_lines[i] = term_row_alloc(cols);
-        term_row_fill(new_lines[i], cols, term->current_attr);
+        new_lines[i] = term_row_alloc(new_cols);
+        term_row_fill(new_lines[i], new_cols, fill_attr);
     }
 
-    /* 2. Reflow content from old buffer to new buffer */
-    int new_count = 0;
-    int current_new_row_idx = 0;
-    int current_new_col_idx = 0;
-
-    /* We need to track the cursor's new position */
-    int old_cursor_row = term->cursor.row;
-    int old_cursor_col = term->cursor.col;
-    /* Calculate logical index of the cursor row in the old buffer */
-    /* The screen is at the end of the buffer. 
-       Top of screen = lines_count - term->rows (if full) or 0. */
-    int old_screen_top = (term->lines_count >= term->rows) ? (term->lines_count - term->rows) : 0;
-    int cursor_logical_idx = old_screen_top + old_cursor_row;
-    
+    int cur_new_row = 0;
+    int cur_new_col = 0;
     int new_cursor_row = 0;
     int new_cursor_col = 0;
 
-    for (int i = 0; i < term->lines_count; i++) {
-        TermRow *old_row = get_logical_row(term, i);
+    /* Convert screen-relative cursor to buffer-absolute logical index */
+    int old_screen_top = (old_count >= old_rows) ? (old_count - old_rows) : 0;
+    int cursor_logical = old_screen_top + cur_row;
+
+    for (int i = 0; i < old_count; i++) {
+        int pi = (old_start + i) % old_capacity;
+        TermRow *old_row = old_lines[pi];
         if (!old_row) continue;
 
-        /* If this old row was NOT wrapped, it starts a new line in the new buffer.
-           Otherwise, we continue appending to the current new line. */
         if (!old_row->wrapped && i > 0) {
-            current_new_row_idx++;
-            current_new_col_idx = 0;
+            cur_new_row++;
+            cur_new_col = 0;
         }
+        if (cur_new_row >= new_capacity) break;
 
-        /* Ensure we don't overflow the new buffer capacity (drop oldest lines if needed) */
-        if (current_new_row_idx >= new_capacity) {
-            /* Shift everything up? Or just circular buffer logic? 
-               Since we are rebuilding linearly, let's just clamp. 
-               In a real reflow, we might drop history. */
-             // For simplicity in this pass, we won't implement complex history dropping during resize
-             // beyond capacity. We'll just stop filling if full, or wrap around if we implemented ring logic here.
-             // But since we are allocating a fresh linear buffer, let's just stop.
-             break; 
-        }
+        /* Only reflow up to the written content width */
+        int cell_limit = old_row->len < old_cols ? old_row->len : old_cols;
 
-        /* Only copy actual content cells — trailing empty cells (codepoint==0 beyond
-         * the row's written length) must not be reflowed, as they would create
-         * spurious wraps and incorrect row counts when resizing. */
-        int cell_limit = old_row->len < term->cols ? old_row->len : term->cols;
-
-        /* Copy cells */
         for (int c = 0; c < cell_limit; c++) {
-            /* Check if we hit the cursor position */
-            if (i == cursor_logical_idx && c == old_cursor_col) {
-                new_cursor_row = current_new_row_idx;
-                new_cursor_col = current_new_col_idx;
+            if (i == cursor_logical && c == cur_col) {
+                new_cursor_row = cur_new_row;
+                new_cursor_col = cur_new_col;
             }
-
-            const TermCell *cell = &old_row->cells[c];
-
-            /* Append to new buffer */
-            new_lines[current_new_row_idx]->cells[current_new_col_idx] = *cell;
-            new_lines[current_new_row_idx]->len = current_new_col_idx + 1;
-
-            current_new_col_idx++;
-
-            /* Wrap if we hit new width */
-            if (current_new_col_idx >= cols) {
-                current_new_row_idx++;
-                current_new_col_idx = 0;
-                if (current_new_row_idx >= new_capacity) break;
-                new_lines[current_new_row_idx]->wrapped = true; // Continuation line
+            new_lines[cur_new_row]->cells[cur_new_col] = old_row->cells[c];
+            new_lines[cur_new_row]->len = cur_new_col + 1;
+            cur_new_col++;
+            if (cur_new_col >= new_cols) {
+                cur_new_row++;
+                cur_new_col = 0;
+                if (cur_new_row >= new_capacity) break;
+                new_lines[cur_new_row]->wrapped = true;
             }
         }
-
-        /* Check if cursor was at/past the content end (not caught in loop) */
-        if (i == cursor_logical_idx && old_cursor_col >= cell_limit) {
-            new_cursor_row = current_new_row_idx;
-            new_cursor_col = current_new_col_idx;
+        if (i == cursor_logical && cur_col >= cell_limit) {
+            new_cursor_row = cur_new_row;
+            new_cursor_col = cur_new_col;
         }
     }
-    new_count = current_new_row_idx + 1;
+
+    int new_count = cur_new_row + 1;
     if (new_count > new_capacity) new_count = new_capacity;
-    /* Strip ALL trailing empty rows so that resizing to a larger terminal
-     * doesn't leave phantom blank rows between old content and the cursor.
-     * Keep at least up to (and including) the cursor row. */
+
+    /* Strip trailing empty rows, keeping at least the cursor row */
     {
         int min_count = new_cursor_row + 1;
         if (min_count < 1) min_count = 1;
@@ -207,54 +173,77 @@ void term_resize(Terminal *term, int rows, int cols) {
             new_count--;
     }
 
-    /* 3. Swap buffers */
-    for (int i = 0; i < term->lines_capacity; i++) {
-        term_row_free(term->lines[i]);
-    }
-    free(term->lines);
+    /* Free old buffer */
+    for (int i = 0; i < old_capacity; i++)
+        term_row_free(old_lines[i]);
+    free(old_lines);
 
-    term->lines = new_lines;
-    term->lines_capacity = new_capacity;
-    term->lines_start = 0; // We rebuilt it linearly starting at 0
-    term->lines_count = (new_count > new_capacity) ? new_capacity : new_count;
+    /* Push content to bottom on expansion: prepend empty rows so the cursor
+     * stays near the bottom rather than floating mid-screen. */
+    int new_start = 0;
+    if (new_rows > old_rows && old_count >= old_rows && new_count < new_rows) {
+        int pad = new_rows - new_count;
+        new_start = (new_capacity - pad) % new_capacity;
+        for (int i = 0; i < pad; i++) {
+            int idx = (new_start + i) % new_capacity;
+            term_row_fill(new_lines[idx], new_cols, fill_attr);
+        }
+        new_cursor_row += pad;
+        new_count = new_rows;
+    }
+
+    /* Convert cursor back to screen-relative */
+    int screen_top = (new_count >= new_rows) ? (new_count - new_rows) : 0;
+    new_cursor_row -= screen_top;
+    if (new_cursor_row < 0)        new_cursor_row = 0;
+    if (new_cursor_row >= new_rows) new_cursor_row = new_rows - 1;
+    if (new_cursor_col < 0)        new_cursor_col = 0;
+    if (new_cursor_col >= new_cols) new_cursor_col = new_cols - 1;
+
+    *out_lines      = new_lines;
+    *out_capacity   = new_capacity;
+    *out_count      = new_count;
+    *out_start      = new_start;
+    *out_cursor_row = new_cursor_row;
+    *out_cursor_col = new_cursor_col;
+}
+
+void term_resize(Terminal *term, int rows, int cols) {
+    if (!term || rows <= 0 || cols <= 0) return;
+    if (term->rows == rows && term->cols == cols) return;
+
+    int old_rows = term->rows;
+    int old_cols = term->cols;
+
+    /* Reflow the active buffer (alt-screen or primary).
+     * Alt-screen has no scrollback — allocate rows only. */
+    term_reflow_buffer(
+        term->lines, term->lines_capacity, term->lines_start, term->lines_count,
+        old_cols, old_rows,
+        term->cursor.row, term->cursor.col,
+        rows, cols,
+        term->alt_screen_active ? 0 : term->max_scrollback,
+        term->current_attr,
+        &term->lines, &term->lines_capacity, &term->lines_count, &term->lines_start,
+        &term->cursor.row, &term->cursor.col);
+
+    /* When on the alt screen, also reflow the saved primary buffer so that
+     * term_alt_screen_exit() restores it at the correct dimensions. */
+    if (term->alt_screen_active) {
+        term_reflow_buffer(
+            term->primary_lines, term->primary_lines_capacity,
+            term->primary_lines_start, term->primary_lines_count,
+            old_cols, old_rows,
+            term->primary_cursor.row, term->primary_cursor.col,
+            rows, cols, term->max_scrollback,
+            term->current_attr,
+            &term->primary_lines, &term->primary_lines_capacity,
+            &term->primary_lines_count, &term->primary_lines_start,
+            &term->primary_cursor.row, &term->primary_cursor.col);
+    }
 
     term->rows = rows;
     term->cols = cols;
-
-    /* 4. Push content to bottom when resizing to a larger screen.
-     * When the old screen was full (content reached the bottom), the cursor
-     * should stay near the bottom of the new screen, not float in the middle
-     * with a gap below.  Prepend empty rows to shift content down. */
-    if (rows > old_rows && old_lines_count >= old_rows &&
-        term->lines_count < term->rows) {
-        int pad = term->rows - term->lines_count;
-        /* Shift lines_start backward to prepend empty rows from the
-         * pre-allocated tail of the buffer. */
-        term->lines_start = (term->lines_start - pad + term->lines_capacity)
-                            % term->lines_capacity;
-        /* Ensure prepended rows are clean */
-        for (int i = 0; i < pad; i++) {
-            int idx = (term->lines_start + i) % term->lines_capacity;
-            term_row_fill(term->lines[idx], cols, term->current_attr);
-        }
-        new_cursor_row += pad;
-        term->lines_count = term->rows;
-    }
-
-    /* 5. Update cursor */
-    /* The new cursor row is relative to the start of the buffer.
-       We need to convert it to screen coordinates (relative to top of visible screen). */
-    int new_screen_top = (term->lines_count >= term->rows) ? (term->lines_count - term->rows) : 0;
-    term->cursor.row = new_cursor_row - new_screen_top;
-    term->cursor.col = new_cursor_col;
-
-    /* Clamp cursor to be safe */
-    if (term->cursor.row < 0) term->cursor.row = 0;
-    if (term->cursor.row >= term->rows) term->cursor.row = term->rows - 1;
-    if (term->cursor.col < 0) term->cursor.col = 0;
-    if (term->cursor.col >= term->cols) term->cursor.col = term->cols - 1;
-
-    /* Reset scroll region to full screen on resize */
     term->scroll_top = 0;
     term->scroll_bot = rows - 1;
 }
@@ -457,4 +446,9 @@ void term_alt_screen_exit(Terminal *term)
         if (term->lines[idx])
             term->lines[idx]->dirty = true;
     }
+
+    /* Signal the renderer to invalidate its display buffer shadow.
+     * The shadow still holds the alt-screen content; cell-level dirty checks
+     * would skip cells that happen to match, leaving stale pixels on screen. */
+    term->full_redraw_needed = true;
 }
