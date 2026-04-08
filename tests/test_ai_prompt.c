@@ -1035,7 +1035,7 @@ int test_ai_build_body_stream_true(void) {
     ai_conv_init(&conv, "test-model");
     ai_conv_add(&conv, AI_ROLE_USER, "hello");
     char buf[4096];
-    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1);
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1, NULL);
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "\"stream\":true") != NULL);
     ASSERT_TRUE(strstr(buf, "\"stream\":false") == NULL);
@@ -1048,7 +1048,7 @@ int test_ai_build_body_stream_false(void) {
     ai_conv_init(&conv, "test-model");
     ai_conv_add(&conv, AI_ROLE_USER, "hello");
     char buf[4096];
-    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0);
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, NULL);
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "\"stream\":false") != NULL);
     ASSERT_TRUE(strstr(buf, "\"stream\":true") == NULL);
@@ -1063,9 +1063,42 @@ int test_ai_build_body_ex_matches_original(void) {
     ai_conv_add(&conv, AI_ROLE_USER, "Hello");
     char buf1[4096], buf2[4096];
     size_t n1 = ai_build_request_body(&conv, buf1, sizeof(buf1));
-    size_t n2 = ai_build_request_body_ex(&conv, NULL, buf2, sizeof(buf2), 0);
+    size_t n2 = ai_build_request_body_ex(&conv, NULL, buf2, sizeof(buf2), 0, NULL);
     ASSERT_EQ((int)n1, (int)n2);
     ASSERT_STR_EQ(buf1, buf2);
+    TEST_END();
+}
+
+int test_ai_build_body_anthropic_system(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "You are helpful.");
+    ai_conv_add(&conv, AI_ROLE_USER, "Hello");
+    char buf[4096];
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1, "anthropic");
+    ASSERT_TRUE(n > 0);
+    /* System must be top-level, not in messages array */
+    ASSERT_TRUE(strstr(buf, "\"system\":\"You are helpful.\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"role\":\"system\"") == NULL);
+    /* User message still present */
+    ASSERT_TRUE(strstr(buf, "\"role\":\"user\"") != NULL);
+    /* max_tokens required by Anthropic */
+    ASSERT_TRUE(strstr(buf, "\"max_tokens\"") != NULL);
+    TEST_END();
+}
+
+int test_ai_build_body_anthropic_no_system(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+    ai_conv_add(&conv, AI_ROLE_USER, "Hello");
+    char buf[4096];
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, "anthropic");
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "\"role\":\"user\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"max_tokens\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"role\":\"system\"") == NULL);
     TEST_END();
 }
 
@@ -2654,5 +2687,52 @@ int test_session_state_pending_cmds_per_session(void)
     ASSERT_STR_EQ(state_a.pending_cmds[1], "df -h");
 
     free(state_a.pending_cmds);
+    TEST_END();
+}
+
+int test_ai_build_auth_headers_anthropic(void) {
+    TEST_BEGIN();
+    char hdr0[300], hdr1[64];
+    const char *hdrs[3];
+    ai_build_auth_headers("anthropic", "sk-ant-test-key",
+                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1), hdrs);
+    ASSERT_STR_EQ(hdrs[0], "x-api-key: sk-ant-test-key");
+    ASSERT_STR_EQ(hdrs[1], "anthropic-version: 2023-06-01");
+    ASSERT_NULL(hdrs[2]);
+    /* Must NOT send Authorization: Bearer for Anthropic */
+    ASSERT_TRUE(strstr(hdrs[0], "Bearer") == NULL);
+    TEST_END();
+}
+
+int test_ai_build_auth_headers_openai(void) {
+    TEST_BEGIN();
+    char hdr0[300], hdr1[64];
+    const char *hdrs[3];
+    ai_build_auth_headers("openai", "sk-openai-key",
+                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1), hdrs);
+    ASSERT_STR_EQ(hdrs[0], "Authorization: Bearer sk-openai-key");
+    ASSERT_NULL(hdrs[1]);
+    TEST_END();
+}
+
+int test_ai_build_auth_headers_deepseek(void) {
+    TEST_BEGIN();
+    char hdr0[300], hdr1[64];
+    const char *hdrs[3];
+    ai_build_auth_headers("deepseek", "ds-key-123",
+                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1), hdrs);
+    ASSERT_STR_EQ(hdrs[0], "Authorization: Bearer ds-key-123");
+    ASSERT_NULL(hdrs[1]);
+    TEST_END();
+}
+
+int test_ai_build_auth_headers_custom(void) {
+    TEST_BEGIN();
+    char hdr0[300], hdr1[64];
+    const char *hdrs[3];
+    ai_build_auth_headers("custom", "my-custom-key",
+                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1), hdrs);
+    ASSERT_STR_EQ(hdrs[0], "Authorization: Bearer my-custom-key");
+    ASSERT_NULL(hdrs[1]);
     TEST_END();
 }

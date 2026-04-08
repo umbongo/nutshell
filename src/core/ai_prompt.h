@@ -65,10 +65,14 @@ AiAttachment *ai_attachment_dup(const AiAttachment *att);
  * stream=1 adds "stream":true for SSE streaming responses.
  * last_user_attachment: if non-NULL, emits multimodal content array for the
  * last user message.
+ * provider: e.g. "anthropic", "openai", NULL for generic OpenAI-compat format.
+ *   For "anthropic": emits system message as top-level "system" key (required
+ *   by Anthropic Messages API) and adds required "max_tokens":8096.
  * Returns bytes written (excluding NUL), or 0 on error. */
 size_t ai_build_request_body_ex(const AiConversation *conv,
                                 const AiAttachment *last_user_attachment,
-                                char *buf, size_t buf_size, int stream);
+                                char *buf, size_t buf_size, int stream,
+                                const char *provider);
 
 /* Parse a chat completion JSON response, extract assistant message content.
  * Returns 0 on success, -1 on error. */
@@ -113,6 +117,20 @@ const char * const *ai_provider_models(const char *provider);
 /* Get the models list API endpoint URL for a provider.
  * Returns NULL for unknown/custom providers. */
 const char *ai_provider_models_url(const char *provider);
+
+/* Build a NULL-terminated array of auth headers for a provider's chat API.
+ * provider:  e.g. "anthropic", "openai", "deepseek"
+ * api_key:   the raw API key string
+ * hdr0/hdr1: caller-supplied buffers (each at least 300 bytes)
+ * out:        filled with up to 2 header pointers + NULL terminator
+ *
+ * Anthropic → {"x-api-key: <key>", "anthropic-version: 2023-06-01", NULL}
+ * All others → {"Authorization: Bearer <key>", NULL}
+ */
+void ai_build_auth_headers(const char *provider, const char *api_key,
+                            char *hdr0, size_t hdr0_size,
+                            char *hdr1, size_t hdr1_size,
+                            const char *out[3]);
 
 /* Build a confirmation dialog string listing all commands for batch approval.
  * cmds: array of command strings, ncmds: count.
