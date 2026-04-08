@@ -2736,3 +2736,100 @@ int test_ai_build_auth_headers_custom(void) {
     ASSERT_NULL(hdrs[1]);
     TEST_END();
 }
+
+/* --- Anthropic-format streaming chunk tests --- */
+
+int test_ai_parse_stream_chunk_anthropic_text_delta(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}";
+    char content[256], thinking[256];
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "Hello");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_anthropic_thinking_delta(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Let me reason...\"}}";
+    char content[256], thinking[256];
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "");
+    ASSERT_STR_EQ(thinking, "Let me reason...");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_anthropic_message_stop(void) {
+    TEST_BEGIN();
+    const char *json = "{\"type\":\"message_stop\"}";
+    int rc = ai_parse_stream_chunk(json, NULL, 0, NULL, 0);
+    ASSERT_EQ(rc, 1);
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_anthropic_ping(void) {
+    TEST_BEGIN();
+    /* Anthropic sends ping events during streaming — should be ignored */
+    const char *json = "{\"type\":\"ping\"}";
+    char content[256], thinking[256];
+    content[0] = '\0'; thinking[0] = '\0';
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_anthropic_message_start(void) {
+    TEST_BEGIN();
+    /* message_start carries usage info but no content */
+    const char *json =
+        "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_abc\","
+        "\"role\":\"assistant\",\"content\":[]}}";
+    char content[256], thinking[256];
+    content[0] = '\0'; thinking[0] = '\0';
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+/* --- Anthropic-format non-streaming response tests --- */
+
+int test_ai_parse_response_anthropic_basic(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"type\":\"message\",\"role\":\"assistant\","
+        "\"content\":[{\"type\":\"text\",\"text\":\"Hello from Claude\"}]}";
+    char content[256];
+    ASSERT_EQ(ai_parse_response(json, content, sizeof(content)), 0);
+    ASSERT_STR_EQ(content, "Hello from Claude");
+    TEST_END();
+}
+
+int test_ai_parse_response_ex_anthropic_with_thinking(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"type\":\"message\",\"role\":\"assistant\","
+        "\"content\":["
+        "{\"type\":\"thinking\",\"thinking\":\"I should say hello.\"},"
+        "{\"type\":\"text\",\"text\":\"Hello!\"}"
+        "]}";
+    char content[256], thinking[256];
+    ASSERT_EQ(ai_parse_response_ex(json, content, sizeof(content),
+                                    thinking, sizeof(thinking)), 0);
+    ASSERT_STR_EQ(content, "Hello!");
+    ASSERT_STR_EQ(thinking, "I should say hello.");
+    TEST_END();
+}
