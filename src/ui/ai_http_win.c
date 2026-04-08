@@ -55,7 +55,7 @@ static int parse_url(const char *url, wchar_t *host, size_t host_sz,
     return 0;
 }
 
-int ai_http_post(const char *url, const char *auth_header,
+int ai_http_post(const char *url, const char * const *headers,
                  const char *body, size_t body_len,
                  AiHttpResponse *resp)
 {
@@ -121,14 +121,20 @@ int ai_http_post(const char *url, const char *auth_header,
         L"Content-Type: application/json\r\n",
         (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
 
-    if (auth_header && auth_header[0]) {
-        wchar_t auth_w[512];
-        int len = MultiByteToWideChar(CP_UTF8, 0, auth_header, -1, auth_w, 512);
-        if (len > 0) {
-            wchar_t hdr[600];
-            swprintf(hdr, 600, L"Authorization: %ls\r\n", auth_w);
-            WinHttpAddRequestHeaders(hRequest, hdr, (DWORD)-1,
-                                     WINHTTP_ADDREQ_FLAG_ADD);
+    if (headers) {
+        for (int i = 0; headers[i]; i++) {
+            wchar_t hdr_w[600];
+            int len = MultiByteToWideChar(CP_UTF8, 0, headers[i], -1, hdr_w, 590);
+            if (len > 0) {
+                size_t wlen = (size_t)(len - 1);
+                if (wlen + 2 < 600) {
+                    hdr_w[wlen]     = L'\r';
+                    hdr_w[wlen + 1] = L'\n';
+                    hdr_w[wlen + 2] = L'\0';
+                }
+                WinHttpAddRequestHeaders(hRequest, hdr_w, (DWORD)-1,
+                                         WINHTTP_ADDREQ_FLAG_ADD);
+            }
         }
     }
 
@@ -202,7 +208,7 @@ int ai_http_post(const char *url, const char *auth_header,
     return 0;
 }
 
-int ai_http_post_stream(const char *url, const char *auth_header,
+int ai_http_post_stream(const char *url, const char * const *headers,
                         const char *body, size_t body_len,
                         AiStreamCallback cb, void *userdata,
                         int *status_out, char *error, size_t error_size)
@@ -267,14 +273,20 @@ int ai_http_post_stream(const char *url, const char *auth_header,
         L"Content-Type: application/json\r\n",
         (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
 
-    if (auth_header && auth_header[0]) {
-        wchar_t auth_w[512];
-        int len = MultiByteToWideChar(CP_UTF8, 0, auth_header, -1, auth_w, 512);
-        if (len > 0) {
-            wchar_t hdr[600];
-            swprintf(hdr, 600, L"Authorization: %ls\r\n", auth_w);
-            WinHttpAddRequestHeaders(hRequest, hdr, (DWORD)-1,
-                                     WINHTTP_ADDREQ_FLAG_ADD);
+    if (headers) {
+        for (int i = 0; headers[i]; i++) {
+            wchar_t hdr_w[600];
+            int len = MultiByteToWideChar(CP_UTF8, 0, headers[i], -1, hdr_w, 590);
+            if (len > 0) {
+                size_t wlen = (size_t)(len - 1);
+                if (wlen + 2 < 600) {
+                    hdr_w[wlen]     = L'\r';
+                    hdr_w[wlen + 1] = L'\n';
+                    hdr_w[wlen + 2] = L'\0';
+                }
+                WinHttpAddRequestHeaders(hRequest, hdr_w, (DWORD)-1,
+                                         WINHTTP_ADDREQ_FLAG_ADD);
+            }
         }
     }
 
@@ -506,11 +518,11 @@ int ai_http_get(const char *url, const char * const *headers,
 
 #else /* !_WIN32 — stub for non-Windows builds */
 
-int ai_http_post(const char *url, const char *auth_header,
+int ai_http_post(const char *url, const char * const *headers,
                  const char *body, size_t body_len,
                  AiHttpResponse *resp)
 {
-    (void)url; (void)auth_header; (void)body; (void)body_len;
+    (void)url; (void)headers; (void)body; (void)body_len;
     if (!resp) return -1;
     memset(resp, 0, sizeof(*resp));
     snprintf(resp->error, sizeof(resp->error), "HTTP not available on this platform");
@@ -527,12 +539,12 @@ int ai_http_get(const char *url, const char * const *headers,
     return -1;
 }
 
-int ai_http_post_stream(const char *url, const char *auth_header,
+int ai_http_post_stream(const char *url, const char * const *headers,
                         const char *body, size_t body_len,
                         AiStreamCallback cb, void *userdata,
                         int *status_out, char *error, size_t error_size)
 {
-    (void)url; (void)auth_header; (void)body; (void)body_len;
+    (void)url; (void)headers; (void)body; (void)body_len;
     (void)cb; (void)userdata; (void)status_out;
     if (error && error_size > 0)
         snprintf(error, error_size, "HTTP not available on this platform");

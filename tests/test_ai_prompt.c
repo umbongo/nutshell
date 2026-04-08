@@ -1035,7 +1035,7 @@ int test_ai_build_body_stream_true(void) {
     ai_conv_init(&conv, "test-model");
     ai_conv_add(&conv, AI_ROLE_USER, "hello");
     char buf[4096];
-    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1);
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1, NULL);
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "\"stream\":true") != NULL);
     ASSERT_TRUE(strstr(buf, "\"stream\":false") == NULL);
@@ -1048,7 +1048,7 @@ int test_ai_build_body_stream_false(void) {
     ai_conv_init(&conv, "test-model");
     ai_conv_add(&conv, AI_ROLE_USER, "hello");
     char buf[4096];
-    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0);
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, NULL);
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "\"stream\":false") != NULL);
     ASSERT_TRUE(strstr(buf, "\"stream\":true") == NULL);
@@ -1063,9 +1063,42 @@ int test_ai_build_body_ex_matches_original(void) {
     ai_conv_add(&conv, AI_ROLE_USER, "Hello");
     char buf1[4096], buf2[4096];
     size_t n1 = ai_build_request_body(&conv, buf1, sizeof(buf1));
-    size_t n2 = ai_build_request_body_ex(&conv, NULL, buf2, sizeof(buf2), 0);
+    size_t n2 = ai_build_request_body_ex(&conv, NULL, buf2, sizeof(buf2), 0, NULL);
     ASSERT_EQ((int)n1, (int)n2);
     ASSERT_STR_EQ(buf1, buf2);
+    TEST_END();
+}
+
+int test_ai_build_body_anthropic_system(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "You are helpful.");
+    ai_conv_add(&conv, AI_ROLE_USER, "Hello");
+    char buf[4096];
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1, "anthropic");
+    ASSERT_TRUE(n > 0);
+    /* System must be top-level, not in messages array */
+    ASSERT_TRUE(strstr(buf, "\"system\":\"You are helpful.\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"role\":\"system\"") == NULL);
+    /* User message still present */
+    ASSERT_TRUE(strstr(buf, "\"role\":\"user\"") != NULL);
+    /* max_tokens required by Anthropic */
+    ASSERT_TRUE(strstr(buf, "\"max_tokens\"") != NULL);
+    TEST_END();
+}
+
+int test_ai_build_body_anthropic_no_system(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+    ai_conv_add(&conv, AI_ROLE_USER, "Hello");
+    char buf[4096];
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, "anthropic");
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "\"role\":\"user\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"max_tokens\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"role\":\"system\"") == NULL);
     TEST_END();
 }
 
@@ -2654,5 +2687,149 @@ int test_session_state_pending_cmds_per_session(void)
     ASSERT_STR_EQ(state_a.pending_cmds[1], "df -h");
 
     free(state_a.pending_cmds);
+    TEST_END();
+}
+
+int test_ai_build_auth_headers_anthropic(void) {
+    TEST_BEGIN();
+    char hdr0[300], hdr1[64];
+    const char *hdrs[3];
+    ai_build_auth_headers("anthropic", "sk-ant-test-key",
+                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1), hdrs);
+    ASSERT_STR_EQ(hdrs[0], "x-api-key: sk-ant-test-key");
+    ASSERT_STR_EQ(hdrs[1], "anthropic-version: 2023-06-01");
+    ASSERT_NULL(hdrs[2]);
+    /* Must NOT send Authorization: Bearer for Anthropic */
+    ASSERT_TRUE(strstr(hdrs[0], "Bearer") == NULL);
+    TEST_END();
+}
+
+int test_ai_build_auth_headers_openai(void) {
+    TEST_BEGIN();
+    char hdr0[300], hdr1[64];
+    const char *hdrs[3];
+    ai_build_auth_headers("openai", "sk-openai-key",
+                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1), hdrs);
+    ASSERT_STR_EQ(hdrs[0], "Authorization: Bearer sk-openai-key");
+    ASSERT_NULL(hdrs[1]);
+    TEST_END();
+}
+
+int test_ai_build_auth_headers_deepseek(void) {
+    TEST_BEGIN();
+    char hdr0[300], hdr1[64];
+    const char *hdrs[3];
+    ai_build_auth_headers("deepseek", "ds-key-123",
+                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1), hdrs);
+    ASSERT_STR_EQ(hdrs[0], "Authorization: Bearer ds-key-123");
+    ASSERT_NULL(hdrs[1]);
+    TEST_END();
+}
+
+int test_ai_build_auth_headers_custom(void) {
+    TEST_BEGIN();
+    char hdr0[300], hdr1[64];
+    const char *hdrs[3];
+    ai_build_auth_headers("custom", "my-custom-key",
+                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1), hdrs);
+    ASSERT_STR_EQ(hdrs[0], "Authorization: Bearer my-custom-key");
+    ASSERT_NULL(hdrs[1]);
+    TEST_END();
+}
+
+/* --- Anthropic-format streaming chunk tests --- */
+
+int test_ai_parse_stream_chunk_anthropic_text_delta(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}";
+    char content[256], thinking[256];
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "Hello");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_anthropic_thinking_delta(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"type\":\"content_block_delta\",\"index\":0,"
+        "\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Let me reason...\"}}";
+    char content[256], thinking[256];
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "");
+    ASSERT_STR_EQ(thinking, "Let me reason...");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_anthropic_message_stop(void) {
+    TEST_BEGIN();
+    const char *json = "{\"type\":\"message_stop\"}";
+    int rc = ai_parse_stream_chunk(json, NULL, 0, NULL, 0);
+    ASSERT_EQ(rc, 1);
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_anthropic_ping(void) {
+    TEST_BEGIN();
+    /* Anthropic sends ping events during streaming — should be ignored */
+    const char *json = "{\"type\":\"ping\"}";
+    char content[256], thinking[256];
+    content[0] = '\0'; thinking[0] = '\0';
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+int test_ai_parse_stream_chunk_anthropic_message_start(void) {
+    TEST_BEGIN();
+    /* message_start carries usage info but no content */
+    const char *json =
+        "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_abc\","
+        "\"role\":\"assistant\",\"content\":[]}}";
+    char content[256], thinking[256];
+    content[0] = '\0'; thinking[0] = '\0';
+    int rc = ai_parse_stream_chunk(json, content, sizeof(content),
+                                   thinking, sizeof(thinking));
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(content, "");
+    ASSERT_STR_EQ(thinking, "");
+    TEST_END();
+}
+
+/* --- Anthropic-format non-streaming response tests --- */
+
+int test_ai_parse_response_anthropic_basic(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"type\":\"message\",\"role\":\"assistant\","
+        "\"content\":[{\"type\":\"text\",\"text\":\"Hello from Claude\"}]}";
+    char content[256];
+    ASSERT_EQ(ai_parse_response(json, content, sizeof(content)), 0);
+    ASSERT_STR_EQ(content, "Hello from Claude");
+    TEST_END();
+}
+
+int test_ai_parse_response_ex_anthropic_with_thinking(void) {
+    TEST_BEGIN();
+    const char *json =
+        "{\"type\":\"message\",\"role\":\"assistant\","
+        "\"content\":["
+        "{\"type\":\"thinking\",\"thinking\":\"I should say hello.\"},"
+        "{\"type\":\"text\",\"text\":\"Hello!\"}"
+        "]}";
+    char content[256], thinking[256];
+    ASSERT_EQ(ai_parse_response_ex(json, content, sizeof(content),
+                                    thinking, sizeof(thinking)), 0);
+    ASSERT_STR_EQ(content, "Hello!");
+    ASSERT_STR_EQ(thinking, "I should say hello.");
     TEST_END();
 }

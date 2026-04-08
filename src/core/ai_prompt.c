@@ -255,29 +255,60 @@ static const char *role_str(AiRole role)
 
 size_t ai_build_request_body_ex(const AiConversation *conv,
                                 const AiAttachment *last_user_attachment,
-                                char *buf, size_t buf_size, int stream)
+                                char *buf, size_t buf_size, int stream,
+                                const char *provider)
 {
     if (!conv || !buf || buf_size == 0 || conv->msg_count == 0) return 0;
 
+    int is_anthropic = provider && strcmp(provider, "anthropic") == 0;
     size_t pos = 0;
+    int n;
 
-    /* Opening: {"model":"...","messages":[ */
-    int n = snprintf(buf, buf_size, "{\"model\":");
+    /* {"model":"..." */
+    n = snprintf(buf, buf_size, "{\"model\":");
     if (n < 0) return 0;
     pos = (size_t)n;
 
     pos = json_escape_str(conv->model, buf, buf_size, pos);
     if (pos == 0) return 0;
 
-    const char *mid = stream ? ",\"stream\":true,\"messages\":["
-                             : ",\"stream\":false,\"messages\":[";
-    size_t mid_len = strlen(mid);
-    if (pos + mid_len >= buf_size) return 0;
-    memcpy(buf + pos, mid, mid_len);
-    pos += mid_len;
+    /* Anthropic requires max_tokens */
+    if (is_anthropic) {
+        n = snprintf(buf + pos, buf_size - pos, ",\"max_tokens\":8096");
+        if (n < 0 || pos + (size_t)n >= buf_size) return 0;
+        pos += (size_t)n;
+    }
 
-    for (int i = 0; i < conv->msg_count; i++) {
-        if (i > 0) {
+    /* stream flag */
+    const char *stream_str = stream ? ",\"stream\":true" : ",\"stream\":false";
+    size_t stream_len = strlen(stream_str);
+    if (pos + stream_len >= buf_size) return 0;
+    memcpy(buf + pos, stream_str, stream_len);
+    pos += stream_len;
+
+    /* Anthropic: system message as top-level "system" key */
+    int msg_start = 0;
+    if (is_anthropic && conv->msg_count > 0
+            && conv->messages[0].role == AI_ROLE_SYSTEM) {
+        const char *sys_key = ",\"system\":";
+        size_t sys_key_len = strlen(sys_key);
+        if (pos + sys_key_len >= buf_size) return 0;
+        memcpy(buf + pos, sys_key, sys_key_len);
+        pos += sys_key_len;
+        pos = json_escape_str(conv->messages[0].content, buf, buf_size, pos);
+        if (pos == 0) return 0;
+        msg_start = 1;
+    }
+
+    /* Open messages array */
+    const char *msgs_open = ",\"messages\":[";
+    size_t msgs_open_len = strlen(msgs_open);
+    if (pos + msgs_open_len >= buf_size) return 0;
+    memcpy(buf + pos, msgs_open, msgs_open_len);
+    pos += msgs_open_len;
+
+    for (int i = msg_start; i < conv->msg_count; i++) {
+        if (i > msg_start) {
             if (pos + 1 >= buf_size) return 0;
             buf[pos++] = ',';
         }
@@ -300,7 +331,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
             pos = json_escape_str(conv->messages[i].content, buf, buf_size, pos);
             if (pos == 0) return 0;
 
-            /* image_url part — base64_url is already a complete data URI, write it as a JSON string */
+            /* image_url part — base64_url is already a complete data URI */
             const char *img_mid = "},{\"type\":\"image_url\",\"image_url\":{\"url\":";
             size_t img_mid_len = strlen(img_mid);
             if (pos + img_mid_len >= buf_size) return 0;
@@ -310,7 +341,6 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
             pos = json_escape_str(last_user_attachment->base64_url, buf, buf_size, pos);
             if (pos == 0) return 0;
 
-            /* Close: }}]} */
             const char *img_close = "}}]}";
             size_t img_close_len = strlen(img_close);
             if (pos + img_close_len >= buf_size) return 0;
@@ -341,7 +371,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
 size_t ai_build_request_body(const AiConversation *conv,
                              char *buf, size_t buf_size)
 {
-    return ai_build_request_body_ex(conv, NULL, buf, buf_size, 0);
+    return ai_build_request_body_ex(conv, NULL, buf, buf_size, 0, NULL);
 }
 
 int ai_parse_response_ex(const char *json, char *content_out, size_t content_size,
@@ -356,7 +386,28 @@ int ai_parse_response_ex(const char *json, char *content_out, size_t content_siz
     JsonNode *root = json_parse(json);
     if (!root) return -1;
 
-    /* Navigate: root.choices[0].message.content */
+    /* Anthropic Messages API: top-level "content" is an array of blocks */
+    JsonNode *content_arr = json_obj_get(root, "content");
+    if (content_arr && content_arr->type == JSON_ARRAY) {
+        for (size_t i = 0; i < vec_size(&content_arr->as.arr); i++) {
+            JsonNode *block = (JsonNode *)vec_get(&content_arr->as.arr, i);
+            if (!block || block->type != JSON_OBJECT) continue;
+            const char *block_type = json_obj_str(block, "type");
+            if (!block_type) continue;
+            if (strcmp(block_type, "text") == 0) {
+                const char *text = json_obj_str(block, "text");
+                if (text) snprintf(content_out, content_size, "%s", text);
+            } else if (strcmp(block_type, "thinking") == 0) {
+                const char *thinking = json_obj_str(block, "thinking");
+                if (thinking && thinking_out && thinking_size > 0)
+                    snprintf(thinking_out, thinking_size, "%s", thinking);
+            }
+        }
+        json_free(root);
+        return content_out[0] ? 0 : -1;
+    }
+
+    /* OpenAI / OpenAI-compatible format: choices[0].message.content */
     JsonNode *choices = json_obj_get(root, "choices");
     if (!choices || choices->type != JSON_ARRAY || vec_size(&choices->as.arr) == 0) {
         json_free(root);
@@ -407,13 +458,42 @@ int ai_parse_stream_chunk(const char *json,
     if (content_out && content_size > 0) content_out[0] = '\0';
     if (thinking_out && thinking_size > 0) thinking_out[0] = '\0';
 
-    /* Check for stream termination */
+    /* Check for stream termination (OpenAI format) */
     if (strcmp(json, "[DONE]") == 0) return 1;
 
     JsonNode *root = json_parse(json);
     if (!root) return -1;
 
-    /* Navigate: root.choices[0].delta */
+    /* Detect format by top-level "type" key (Anthropic) vs "choices" (OpenAI) */
+    const char *type = json_obj_str(root, "type");
+    if (type) {
+        /* Anthropic Messages API SSE format */
+        if (strcmp(type, "message_stop") == 0) {
+            json_free(root);
+            return 1; /* stream done */
+        }
+        if (strcmp(type, "content_block_delta") == 0) {
+            JsonNode *delta = json_obj_get(root, "delta");
+            if (delta && delta->type == JSON_OBJECT) {
+                const char *delta_type = json_obj_str(delta, "type");
+                if (delta_type && strcmp(delta_type, "text_delta") == 0) {
+                    const char *text = json_obj_str(delta, "text");
+                    if (text && content_out && content_size > 0)
+                        snprintf(content_out, content_size, "%s", text);
+                } else if (delta_type && strcmp(delta_type, "thinking_delta") == 0) {
+                    const char *thinking = json_obj_str(delta, "thinking");
+                    if (thinking && thinking_out && thinking_size > 0)
+                        snprintf(thinking_out, thinking_size, "%s", thinking);
+                }
+            }
+        }
+        /* Other Anthropic events (ping, message_start, content_block_start,
+         * content_block_stop, message_delta) — not an error, just no content */
+        json_free(root);
+        return 0;
+    }
+
+    /* OpenAI / OpenAI-compatible format: choices[0].delta */
     JsonNode *choices = json_obj_get(root, "choices");
     if (!choices || choices->type != JSON_ARRAY || vec_size(&choices->as.arr) == 0) {
         json_free(root);
@@ -730,4 +810,25 @@ size_t ai_build_save_text(const AiConversation *conv,
     if (pos >= buf_size) pos = buf_size - 1;
     buf[pos] = '\0';
     return pos;
+}
+
+void ai_build_auth_headers(const char *provider, const char *api_key,
+                            char *hdr0, size_t hdr0_size,
+                            char *hdr1, size_t hdr1_size,
+                            const char *out[3])
+{
+    if (!provider || !api_key || !hdr0 || !hdr1 || !out) return;
+
+    if (strcmp(provider, "anthropic") == 0) {
+        snprintf(hdr0, hdr0_size, "x-api-key: %s", api_key);
+        snprintf(hdr1, hdr1_size, "anthropic-version: 2023-06-01");
+        out[0] = hdr0;
+        out[1] = hdr1;
+        out[2] = NULL;
+    } else {
+        snprintf(hdr0, hdr0_size, "Authorization: Bearer %s", api_key);
+        out[0] = hdr0;
+        out[1] = NULL;
+        out[2] = NULL;
+    }
 }

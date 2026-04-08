@@ -447,8 +447,11 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
         return 0;
     }
 
-    char auth[300];
-    (void)snprintf(auth, sizeof(auth), "Bearer %s", arg->api_key);
+    char hdr0[300], hdr1[64];
+    const char *req_headers[3];
+    ai_build_auth_headers(arg->provider, arg->api_key,
+                          hdr0, sizeof(hdr0), hdr1, sizeof(hdr1),
+                          req_headers);
 
     StreamContext ctx;
     memset(&ctx, 0, sizeof(ctx));
@@ -458,7 +461,7 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 
     int status = 0;
     char errbuf[256] = "";
-    int rc = ai_http_post_stream(url, auth, arg->body, arg->body_len,
+    int rc = ai_http_post_stream(url, req_headers, arg->body, arg->body_len,
                                  stream_callback, &ctx,
                                  &status, errbuf, sizeof(errbuf));
 
@@ -658,7 +661,8 @@ static void launch_stream_thread(AiChatData *d)
         const AiAttachment *att = (last_msg >= 0)
             ? d->conv.messages[last_msg].attachment : NULL;
         arg->body_len = ai_build_request_body_ex(&d->conv, att, arg->body,
-                                                  sizeof(arg->body), 1);
+                                                  sizeof(arg->body), 1,
+                                                  arg->provider);
     }
     LeaveCriticalSection(&d->cs);
 

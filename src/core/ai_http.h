@@ -12,15 +12,17 @@ typedef struct {
 
 /*
  * Synchronous HTTP POST — designed to be called from a background thread.
- * url:         full endpoint URL
- * auth_header: "Bearer sk-xxx..." (Authorization header value)
- * body:        JSON request body
- * body_len:    length of body
- * resp:        output response struct
+ * url:     full endpoint URL
+ * headers: NULL-terminated array of raw header strings
+ *          (e.g. {"x-api-key: sk-xxx", "anthropic-version: 2023-06-01", NULL})
+ *          May be NULL for no extra headers.
+ * body:    JSON request body
+ * body_len: length of body
+ * resp:    output response struct
  *
  * Returns 0 on success (check resp->status_code), -1 on transport error.
  */
-int ai_http_post(const char *url, const char *auth_header,
+int ai_http_post(const char *url, const char * const *headers,
                  const char *body, size_t body_len,
                  AiHttpResponse *resp);
 
@@ -43,19 +45,19 @@ typedef int (*AiStreamCallback)(const char *data, size_t len, void *userdata);
 
 /*
  * Streaming HTTP POST — calls cb for each network chunk as it arrives.
- * url:         full endpoint URL
- * auth_header: "Bearer sk-xxx..." (Authorization header value)
- * body:        JSON request body
- * body_len:    length of body
- * cb:          callback invoked for each chunk
- * userdata:    passed to callback
- * status_out:  receives HTTP status code (may be NULL)
- * error:       error message buffer (may be NULL)
- * error_size:  size of error buffer
+ * url:        full endpoint URL
+ * headers:    NULL-terminated array of raw header strings, may be NULL
+ * body:       JSON request body
+ * body_len:   length of body
+ * cb:         callback invoked for each chunk
+ * userdata:   passed to callback
+ * status_out: receives HTTP status code (may be NULL)
+ * error:      error message buffer (may be NULL)
+ * error_size: size of error buffer
  *
  * Returns 0 on success, -1 on transport error.
  */
-int ai_http_post_stream(const char *url, const char *auth_header,
+int ai_http_post_stream(const char *url, const char * const *headers,
                         const char *body, size_t body_len,
                         AiStreamCallback cb, void *userdata,
                         int *status_out, char *error, size_t error_size);

@@ -2051,6 +2051,33 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     on_ai_clicked();
                 }
             }
+            /* Sync PTY size to actual window dimensions — the window may have
+             * been resized while the connection thread was running (auth can
+             * take several seconds), and WM_SIZE skips ssh_pty_resize when
+             * channel is NULL. Without this, TUI apps like nano start with
+             * the pre-connection window size and appear blank until the user
+             * manually resizes. */
+            if (conn_result == 0 && s->channel && s->term
+                    && g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
+                RECT rc2;
+                GetClientRect(hwnd, &rc2);
+                int ai_w2 = 0;
+                if (g_ai_docked && g_hwndAiChat && IsWindowVisible(g_hwndAiChat))
+                    ai_w2 = g_ai_panel_width;
+                int th2 = rc2.bottom - g_tab_height;
+                if (th2 < 1) th2 = 1;
+                int tw2 = ai_dock_terminal_width(rc2.right, ai_w2, CSB_WIDTH, g_left_margin);
+                int cols2 = tw2 / g_renderer.charWidth;
+                int rows2 = th2 / g_renderer.charHeight;
+                if (cols2 < 1) cols2 = 1;
+                if (rows2 < 1) rows2 = 1;
+                if (cols2 != s->term->cols || rows2 != s->term->rows) {
+                    term_resize(s->term, rows2, cols2);
+                    term_mark_all_dirty(s->term);
+                    dispbuf_resize(&g_renderer.dispbuf, rows2, cols2);
+                    ssh_pty_resize(s->channel, cols2, rows2);
+                }
+            }
             update_scrollbar(hwnd);
             invalidate_terminal(hwnd);
             return 0;
