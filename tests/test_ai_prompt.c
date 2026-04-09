@@ -2833,3 +2833,353 @@ int test_ai_parse_response_ex_anthropic_with_thinking(void) {
     ASSERT_STR_EQ(thinking, "I should say hello.");
     TEST_END();
 }
+
+/* ---- Phase 1C: AiMessage overflow + tool serialization tests ---- */
+
+int test_ai_msg_content_inline(void) {
+    TEST_BEGIN();
+    AiMessage msg;
+    memset(&msg, 0, sizeof(msg));
+    const char *text = "Hello, world!";
+    size_t len = strlen(text);
+    ASSERT_EQ(ai_msg_set_content(&msg, text, len), 0);
+    ASSERT_NULL(msg.content_overflow);
+    ASSERT_STR_EQ(ai_msg_content(&msg), "Hello, world!");
+    ASSERT_EQ((int)msg.content_len, (int)len);
+    TEST_END();
+}
+
+int test_ai_msg_content_overflow(void) {
+    TEST_BEGIN();
+    AiMessage msg;
+    memset(&msg, 0, sizeof(msg));
+    /* Allocate a string larger than AI_MSG_MAX */
+    size_t big_len = AI_MSG_MAX + 100;
+    char *big = malloc(big_len + 1);
+    ASSERT_NOT_NULL(big);
+    memset(big, 'x', big_len);
+    big[big_len] = '\0';
+
+    ASSERT_EQ(ai_msg_set_content(&msg, big, big_len), 0);
+    ASSERT_NOT_NULL(msg.content_overflow);
+    ASSERT_EQ((int)msg.content_len, (int)big_len);
+    /* Verify content matches */
+    ASSERT_EQ(strlen(ai_msg_content(&msg)), big_len);
+    ASSERT_EQ(ai_msg_content(&msg)[0], 'x');
+    ASSERT_EQ(ai_msg_content(&msg)[big_len - 1], 'x');
+    /* Inline buffer should be cleared */
+    ASSERT_EQ(msg.content[0], '\0');
+
+    ai_msg_free(&msg);
+    free(big);
+    TEST_END();
+}
+
+int test_ai_msg_free_cleanup(void) {
+    TEST_BEGIN();
+    AiMessage msg;
+    memset(&msg, 0, sizeof(msg));
+
+    /* Set overflow content */
+    size_t big_len = AI_MSG_MAX + 50;
+    char *big = malloc(big_len + 1);
+    ASSERT_NOT_NULL(big);
+    memset(big, 'a', big_len);
+    big[big_len] = '\0';
+    ASSERT_EQ(ai_msg_set_content(&msg, big, big_len), 0);
+    free(big);
+    ASSERT_NOT_NULL(msg.content_overflow);
+
+    /* Allocate tool_calls */
+    msg.tool_calls = malloc(sizeof(AiToolCall));
+    ASSERT_NOT_NULL(msg.tool_calls);
+    msg.n_tool_calls = 1;
+
+    /* Free should clean everything */
+    ai_msg_free(&msg);
+    ASSERT_NULL(msg.content_overflow);
+    ASSERT_NULL(msg.tool_calls);
+    ASSERT_EQ(msg.n_tool_calls, 0);
+    TEST_END();
+}
+
+int test_ai_msg_set_content_twice(void) {
+    TEST_BEGIN();
+    AiMessage msg;
+    memset(&msg, 0, sizeof(msg));
+
+    /* First set — overflow */
+    size_t big_len = AI_MSG_MAX + 10;
+    char *big1 = malloc(big_len + 1);
+    ASSERT_NOT_NULL(big1);
+    memset(big1, 'A', big_len);
+    big1[big_len] = '\0';
+    ASSERT_EQ(ai_msg_set_content(&msg, big1, big_len), 0);
+    free(big1);
+    ASSERT_NOT_NULL(msg.content_overflow);
+
+    /* Second set — also overflow, first should be freed without leak */
+    char *big2 = malloc(big_len + 1);
+    ASSERT_NOT_NULL(big2);
+    memset(big2, 'B', big_len);
+    big2[big_len] = '\0';
+    ASSERT_EQ(ai_msg_set_content(&msg, big2, big_len), 0);
+    free(big2);
+    ASSERT_NOT_NULL(msg.content_overflow);
+    /* New content is all 'B' */
+    ASSERT_EQ(msg.content_overflow[0], 'B');
+
+    ai_msg_free(&msg);
+    TEST_END();
+}
+
+/* ---- Tool result serialization: Anthropic format ---- */
+
+int test_ai_build_body_tool_result_anthropic(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+
+    /* system */
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "You are a helpful assistant.");
+    /* user */
+    ai_conv_add(&conv, AI_ROLE_USER, "What files are here?");
+    /* assistant with tool_use */
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "Let me check.");
+    {
+        AiMessage *asst = &conv.messages[conv.msg_count - 1];
+        asst->tool_calls = malloc(sizeof(AiToolCall));
+        ASSERT_NOT_NULL(asst->tool_calls);
+        snprintf(asst->tool_calls[0].id,   sizeof(asst->tool_calls[0].id),   "call_abc123");
+        snprintf(asst->tool_calls[0].name, sizeof(asst->tool_calls[0].name), "run_command");
+        snprintf(asst->tool_calls[0].input_json, sizeof(asst->tool_calls[0].input_json),
+                 "{\"command\":\"ls\"}");
+        asst->n_tool_calls = 1;
+    }
+    /* tool result */
+    ai_conv_add(&conv, AI_ROLE_TOOL, "file1.txt\nfile2.txt");
+    {
+        AiMessage *tr = &conv.messages[conv.msg_count - 1];
+        snprintf(tr->tool_call_id, sizeof(tr->tool_call_id), "call_abc123");
+        snprintf(tr->tool_name,   sizeof(tr->tool_name),    "run_command");
+        tr->is_tool_error = 0;
+    }
+
+    char buf[8192];
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, "anthropic");
+    ASSERT_TRUE(n > 0);
+
+    /* Tool result must appear as a user message with tool_result block */
+    ASSERT_TRUE(strstr(buf, "\"type\":\"tool_result\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"tool_use_id\":\"call_abc123\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "file1.txt") != NULL);
+    /* The wrapping role must be "user" (not "tool") */
+    ASSERT_TRUE(strstr(buf, "\"role\":\"tool\"") == NULL);
+
+    /* Cleanup */
+    free(conv.messages[2].tool_calls);
+    TEST_END();
+}
+
+int test_ai_build_body_assistant_tool_use_anthropic(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+    ai_conv_add(&conv, AI_ROLE_USER, "Run ls please.");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "Sure, running it.");
+    {
+        AiMessage *asst = &conv.messages[conv.msg_count - 1];
+        asst->tool_calls = malloc(sizeof(AiToolCall));
+        ASSERT_NOT_NULL(asst->tool_calls);
+        snprintf(asst->tool_calls[0].id,   sizeof(asst->tool_calls[0].id),   "toolu_01");
+        snprintf(asst->tool_calls[0].name, sizeof(asst->tool_calls[0].name), "run_command");
+        snprintf(asst->tool_calls[0].input_json, sizeof(asst->tool_calls[0].input_json),
+                 "{\"command\":\"ls\"}");
+        asst->n_tool_calls = 1;
+    }
+
+    char buf[4096];
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, "anthropic");
+    ASSERT_TRUE(n > 0);
+
+    /* Assistant content array must have text block and tool_use block */
+    ASSERT_TRUE(strstr(buf, "\"type\":\"text\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"type\":\"tool_use\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"id\":\"toolu_01\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"name\":\"run_command\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"input\":{\"command\":\"ls\"}") != NULL);
+    /* Should NOT have OpenAI tool_calls array */
+    ASSERT_TRUE(strstr(buf, "\"tool_calls\"") == NULL);
+
+    free(conv.messages[1].tool_calls);
+    TEST_END();
+}
+
+/* ---- Tool result serialization: OpenAI format ---- */
+
+int test_ai_build_body_tool_result_openai(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "gpt-4o");
+    ai_conv_add(&conv, AI_ROLE_USER, "What files are here?");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "Let me check.");
+    {
+        AiMessage *asst = &conv.messages[conv.msg_count - 1];
+        asst->tool_calls = malloc(sizeof(AiToolCall));
+        ASSERT_NOT_NULL(asst->tool_calls);
+        snprintf(asst->tool_calls[0].id,   sizeof(asst->tool_calls[0].id),   "call_xyz");
+        snprintf(asst->tool_calls[0].name, sizeof(asst->tool_calls[0].name), "run_command");
+        snprintf(asst->tool_calls[0].input_json, sizeof(asst->tool_calls[0].input_json),
+                 "{\"command\":\"ls\"}");
+        asst->n_tool_calls = 1;
+    }
+    ai_conv_add(&conv, AI_ROLE_TOOL, "file_a.txt");
+    {
+        AiMessage *tr = &conv.messages[conv.msg_count - 1];
+        snprintf(tr->tool_call_id, sizeof(tr->tool_call_id), "call_xyz");
+        snprintf(tr->tool_name,   sizeof(tr->tool_name),    "run_command");
+    }
+
+    char buf[4096];
+    /* OpenAI format: provider=NULL */
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, NULL);
+    ASSERT_TRUE(n > 0);
+
+    /* Tool result must appear as role:"tool" with tool_call_id */
+    ASSERT_TRUE(strstr(buf, "\"role\":\"tool\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"tool_call_id\":\"call_xyz\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "file_a.txt") != NULL);
+    /* Must NOT use Anthropic tool_result format */
+    ASSERT_TRUE(strstr(buf, "\"type\":\"tool_result\"") == NULL);
+
+    free(conv.messages[1].tool_calls);
+    TEST_END();
+}
+
+int test_ai_build_body_assistant_tool_use_openai(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "gpt-4o");
+    ai_conv_add(&conv, AI_ROLE_USER, "Run ls.");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "");
+    {
+        AiMessage *asst = &conv.messages[conv.msg_count - 1];
+        asst->tool_calls = malloc(sizeof(AiToolCall));
+        ASSERT_NOT_NULL(asst->tool_calls);
+        snprintf(asst->tool_calls[0].id,   sizeof(asst->tool_calls[0].id),   "call_001");
+        snprintf(asst->tool_calls[0].name, sizeof(asst->tool_calls[0].name), "run_command");
+        snprintf(asst->tool_calls[0].input_json, sizeof(asst->tool_calls[0].input_json),
+                 "{\"command\":\"ls\"}");
+        asst->n_tool_calls = 1;
+    }
+
+    char buf[4096];
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, NULL);
+    ASSERT_TRUE(n > 0);
+
+    /* Must have tool_calls array with id, type:function, function:{name,arguments} */
+    ASSERT_TRUE(strstr(buf, "\"tool_calls\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"id\":\"call_001\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"type\":\"function\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"name\":\"run_command\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"arguments\"") != NULL);
+    /* Must NOT use Anthropic tool_use format */
+    ASSERT_TRUE(strstr(buf, "\"type\":\"tool_use\"") == NULL);
+
+    free(conv.messages[1].tool_calls);
+    TEST_END();
+}
+
+/* ---- Tool result grouping: Anthropic ---- */
+
+int test_ai_build_body_tool_result_grouping_anthropic(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+    ai_conv_add(&conv, AI_ROLE_USER, "Run two tools.");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "OK.");
+    {
+        AiMessage *asst = &conv.messages[conv.msg_count - 1];
+        asst->tool_calls = malloc(2 * sizeof(AiToolCall));
+        ASSERT_NOT_NULL(asst->tool_calls);
+        snprintf(asst->tool_calls[0].id,   sizeof(asst->tool_calls[0].id),   "call_1");
+        snprintf(asst->tool_calls[0].name, sizeof(asst->tool_calls[0].name), "tool_a");
+        snprintf(asst->tool_calls[0].input_json, sizeof(asst->tool_calls[0].input_json), "{}");
+        snprintf(asst->tool_calls[1].id,   sizeof(asst->tool_calls[1].id),   "call_2");
+        snprintf(asst->tool_calls[1].name, sizeof(asst->tool_calls[1].name), "tool_b");
+        snprintf(asst->tool_calls[1].input_json, sizeof(asst->tool_calls[1].input_json), "{}");
+        asst->n_tool_calls = 2;
+    }
+    /* Two consecutive tool result messages */
+    ai_conv_add(&conv, AI_ROLE_TOOL, "result from tool_a");
+    {
+        AiMessage *tr = &conv.messages[conv.msg_count - 1];
+        snprintf(tr->tool_call_id, sizeof(tr->tool_call_id), "call_1");
+    }
+    ai_conv_add(&conv, AI_ROLE_TOOL, "result from tool_b");
+    {
+        AiMessage *tr = &conv.messages[conv.msg_count - 1];
+        snprintf(tr->tool_call_id, sizeof(tr->tool_call_id), "call_2");
+    }
+
+    char buf[8192];
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 0, "anthropic");
+    ASSERT_TRUE(n > 0);
+
+    /* Both tool results must be inside ONE user message — verify only one
+     * "role":"user" appears after the first (which is the original user msg) */
+    const char *p = buf;
+    int user_role_count = 0;
+    while ((p = strstr(p, "\"role\":\"user\"")) != NULL) {
+        user_role_count++;
+        p++;
+    }
+    /* One for the original user message, one for the grouped tool_result wrapper */
+    ASSERT_EQ(user_role_count, 2);
+
+    /* Both tool_result blocks present in buffer */
+    ASSERT_TRUE(strstr(buf, "\"tool_use_id\":\"call_1\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"tool_use_id\":\"call_2\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "result from tool_a") != NULL);
+    ASSERT_TRUE(strstr(buf, "result from tool_b") != NULL);
+
+    free(conv.messages[1].tool_calls);
+    TEST_END();
+}
+
+/* ---- ai_build_request_body_tools tests ---- */
+
+int test_ai_build_body_tools_null_tools_json(void) {
+    TEST_BEGIN();
+    /* NULL tools_json → identical to ai_build_request_body_ex */
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+    ai_conv_add(&conv, AI_ROLE_USER, "hello");
+
+    char buf1[4096], buf2[4096];
+    size_t n1 = ai_build_request_body_ex(&conv, NULL, buf1, sizeof(buf1), 0, "anthropic");
+    size_t n2 = ai_build_request_body_tools(&conv, NULL, NULL,
+                                            buf2, sizeof(buf2), 0, "anthropic");
+    ASSERT_EQ((int)n1, (int)n2);
+    ASSERT_STR_EQ(buf1, buf2);
+    TEST_END();
+}
+
+int test_ai_build_body_tools_with_tools_json(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+    ai_conv_add(&conv, AI_ROLE_USER, "hello");
+
+    const char *tools = "[{\"name\":\"my_tool\",\"description\":\"does stuff\","
+                        "\"input_schema\":{\"type\":\"object\",\"properties\":{}}}]";
+    char buf[8192];
+    size_t n = ai_build_request_body_tools(&conv, NULL, tools,
+                                           buf, sizeof(buf), 0, "anthropic");
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "\"tools\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "my_tool") != NULL);
+    /* Top-level object still closes properly */
+    ASSERT_EQ(buf[n - 1], '}');
+    TEST_END();
+}

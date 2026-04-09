@@ -47,6 +47,18 @@ void ai_chat_set_session(HWND hwnd, Terminal *term, SSHChannel *channel);
 void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
                         const char *custom_url, const char *custom_model);
 
+/* Update tool configuration (search provider, fetch enabled, etc.).
+ * Call after settings change and on initial window creation.
+ * search_provider: "none", "duckduckgo-api", "duckduckgo-html", or "custom".
+ * search_url: custom endpoint URL (only used when search_provider="custom").
+ * max_search_results: 1-20, 0 uses default (7).
+ * web_fetch_enabled: 1 to enable, 0 to disable. */
+void ai_chat_update_tools(HWND hwnd,
+                          const char *search_provider,
+                          const char *search_url,
+                          int max_search_results,
+                          int web_fetch_enabled);
+
 /* Update session-specific and system-wide AI notes.
  * Either may be NULL to leave unchanged. */
 void ai_chat_update_notes(HWND hwnd, const char *session_notes,

@@ -73,6 +73,22 @@ static const char * const k_ai_providers[] = {
 };
 #define NUM_AI_PROVIDERS ((int)(sizeof(k_ai_providers) / sizeof(k_ai_providers[0])))
 
+/* ---- AI search provider list -------------------------------------------- */
+
+typedef struct {
+    const char *label;
+    const char *value;
+} SearchProviderEntry;
+
+static const SearchProviderEntry k_search_providers[] = {
+    { "None",                 "none"           },
+    { "DuckDuckGo (API)",     "duckduckgo-api" },
+    { "DuckDuckGo (HTML)",    "duckduckgo-html"},
+    { "Custom",               "custom"         },
+};
+#define NUM_SEARCH_PROVIDERS \
+    ((int)(sizeof(k_search_providers) / sizeof(k_search_providers[0])))
+
 /* ---- Font availability check -------------------------------------------- */
 
 /* EnumFontFamiliesExA callback: sets *(int*)lParam = 1 if the font exists. */
@@ -489,6 +505,70 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                          (LPARAM)L"System-wide AI instructions (max 400 words)");
         }
 
+        y += S(132) + S(4); /* advance past the multiline edit */
+
+        /* Row 12: Search Engine */
+        {
+            int is_custom_search = (_stricmp(nd->cfg->settings.ai_search_provider,
+                                              "custom") == 0);
+            make_label(hwnd, "Search Engine:", lx, y, lw, nd->dpi);
+            HWND hSearch = make_combo(hwnd, ex, y, ew, S(120),
+                                      (HMENU)IDC_AI_SEARCH_COMBO);
+            int sel = 0;
+            for (int i = 0; i < NUM_SEARCH_PROVIDERS; i++) {
+                SendMessage(hSearch, CB_ADDSTRING, 0,
+                            (LPARAM)k_search_providers[i].label);
+                if (_stricmp(nd->cfg->settings.ai_search_provider,
+                             k_search_providers[i].value) == 0)
+                    sel = i;
+            }
+            SendMessage(hSearch, CB_SETCURSEL, (WPARAM)sel, 0);
+
+            /* Custom search URL (only shown when Custom selected) */
+            y += rh;
+            HWND hUrlLbl = make_label(hwnd, "Search URL:", lx, y, lw, nd->dpi);
+            HWND hUrl = CreateWindow("EDIT",
+                nd->cfg->settings.ai_search_url,
+                WS_CHILD | WS_BORDER | ES_AUTOHSCROLL |
+                (is_custom_search ? WS_VISIBLE : 0),
+                ex, y + 1, ew, S(22), hwnd, (HMENU)IDC_AI_SEARCH_URL, NULL, NULL);
+            SendMessage(hUrl, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                        MAKELPARAM(3, 3));
+            if (!is_custom_search) {
+                ShowWindow(hUrlLbl, SW_HIDE);
+                ShowWindow(hUrl, SW_HIDE);
+            }
+        }
+        y += rh;
+
+        /* Row 13: Max Search Results */
+        {
+            char buf[8];
+            int max_r = nd->cfg->settings.ai_max_search_results;
+            if (max_r <= 0) max_r = 7;
+            (void)snprintf(buf, sizeof(buf), "%d", max_r);
+            make_label(hwnd, "Max Results:", lx, y, lw, nd->dpi);
+            HWND hMax = CreateWindow("EDIT", buf,
+                WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER,
+                ex, y + 1, S(50), S(22), hwnd, (HMENU)IDC_AI_MAX_RESULTS, NULL, NULL);
+            SendMessage(hMax, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                        MAKELPARAM(3, 3));
+        }
+        y += rh;
+
+        /* Row 14: Permit Web Fetch */
+        {
+            int fetch_h = MulDiv(20, nd->dpi, 96);
+            HWND hFetch = CreateWindow("BUTTON", "Permit Web Fetch",
+                WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+                ex, y, ew, fetch_h, hwnd, (HMENU)IDC_AI_WEB_FETCH, NULL, NULL);
+            SendMessage(hFetch, BM_SETCHECK,
+                        nd->cfg->settings.ai_web_fetch_enabled
+                            ? BST_CHECKED : BST_UNCHECKED, 0);
+            (void)hFetch;
+        }
+        y += rh;
+
         /* Action buttons (owner-drawn for theme) */
         CreateWindow("BUTTON", "Save",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
@@ -699,6 +779,22 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
 
+        case IDC_AI_SEARCH_COMBO:
+            /* Show/hide custom search URL field */
+            if (HIWORD(wParam) == CBN_SELCHANGE && d) {
+                int sel = (int)SendDlgItemMessage(hwnd, IDC_AI_SEARCH_COMBO,
+                                                  CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < NUM_SEARCH_PROVIDERS) {
+                    int cust = (_stricmp(k_search_providers[sel].value,
+                                        "custom") == 0);
+                    int sw = cust ? SW_SHOW : SW_HIDE;
+                    ShowWindow(GetDlgItem(hwnd, IDC_AI_SEARCH_URL), sw);
+                    HWND hLbl = FindWindowEx(hwnd, NULL, "STATIC", "Search URL:");
+                    if (hLbl) ShowWindow(hLbl, sw);
+                }
+            }
+            break;
+
         case IDC_AI_PROVIDER_COMBO:
             /* Show/hide custom URL field; repopulate model combo */
             if (HIWORD(wParam) == CBN_SELCHANGE && d) {
@@ -883,6 +979,31 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             GetDlgItemText(hwnd, IDC_AI_SYSTEM_NOTES,
                            s->ai_system_notes, (int)sizeof(s->ai_system_notes));
 
+            /* AI search provider from combo */
+            {
+                int sel = (int)SendDlgItemMessage(hwnd, IDC_AI_SEARCH_COMBO,
+                                                  CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < NUM_SEARCH_PROVIDERS) {
+                    strncpy(s->ai_search_provider,
+                            k_search_providers[sel].value,
+                            sizeof(s->ai_search_provider) - 1);
+                    s->ai_search_provider[sizeof(s->ai_search_provider) - 1] = '\0';
+                }
+            }
+
+            /* Custom search URL */
+            GetDlgItemText(hwnd, IDC_AI_SEARCH_URL,
+                           s->ai_search_url, (int)sizeof(s->ai_search_url));
+
+            /* Max search results */
+            v = GetDlgItemInt(hwnd, IDC_AI_MAX_RESULTS, &ok, FALSE);
+            if (ok && v >= 1 && v <= 20)
+                s->ai_max_search_results = (int)v;
+
+            /* Permit web fetch */
+            s->ai_web_fetch_enabled = (IsDlgButtonChecked(hwnd, IDC_AI_WEB_FETCH)
+                                        == BST_CHECKED) ? 1 : 0;
+
             /* Clamp out-of-range values before persisting */
             settings_validate(s);
             config_save(d->cfg, CONFIG_FILENAME);
@@ -945,7 +1066,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(400, pdpi, 96), MulDiv(714, pdpi, 96),
+        MulDiv(400, pdpi, 96), MulDiv(826, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {

@@ -749,6 +749,11 @@ static void on_settings_clicked(void) {
                             g_config->settings.ai_system_notes);
         ai_chat_set_theme(g_hwndAiChat,
                           g_config->settings.colour_scheme);
+        ai_chat_update_tools(g_hwndAiChat,
+                             g_config->settings.ai_search_provider,
+                             g_config->settings.ai_search_url,
+                             g_config->settings.ai_max_search_results,
+                             g_config->settings.ai_web_fetch_enabled);
     }
 
     /* Resize all terminals to the new character grid */
@@ -782,7 +787,7 @@ static void relayout_main(HWND hwnd)
 
 static HWND create_ai_chat(HWND parent)
 {
-    return ai_chat_show(parent,
+    HWND hwnd = ai_chat_show(parent,
                         g_config->settings.ai_api_key,
                         g_config->settings.ai_provider,
                         g_config->settings.ai_custom_url,
@@ -796,6 +801,14 @@ static HWND create_ai_chat(HWND parent)
                         g_active_session ? &g_active_session->ai_state : NULL,
                         g_active_session ? g_active_session->conn_profile.name : NULL,
                         g_ai_docked);
+    if (hwnd) {
+        ai_chat_update_tools(hwnd,
+                             g_config->settings.ai_search_provider,
+                             g_config->settings.ai_search_url,
+                             g_config->settings.ai_max_search_results,
+                             g_config->settings.ai_web_fetch_enabled);
+    }
+    return hwnd;
 }
 
 static void hide_ai_panel(HWND parent) {

@@ -1,4 +1,5 @@
 #include "ai_prompt.h"
+#include "ai_tools.h"
 #include "cmd_classify.h"
 #include "json_parser.h"
 #include <stdio.h>
@@ -29,6 +30,53 @@ AiAttachment *ai_attachment_dup(const AiAttachment *att)
     return dup;
 }
 
+const char *ai_msg_content(const AiMessage *msg)
+{
+    if (!msg) return "";
+    if (msg->content_overflow) return msg->content_overflow;
+    return msg->content;
+}
+
+int ai_msg_set_content(AiMessage *msg, const char *data, size_t len)
+{
+    if (!msg) return -1;
+    /* Free any prior overflow */
+    if (msg->content_overflow) {
+        free(msg->content_overflow);
+        msg->content_overflow = NULL;
+    }
+    if (len < AI_MSG_MAX) {
+        memcpy(msg->content, data, len);
+        msg->content[len] = '\0';
+        msg->content_len = len;
+    } else {
+        msg->content_overflow = malloc(len + 1);
+        if (!msg->content_overflow) return -1;
+        memcpy(msg->content_overflow, data, len);
+        msg->content_overflow[len] = '\0';
+        msg->content_len = len;
+        msg->content[0] = '\0';  /* clear inline buffer */
+    }
+    return 0;
+}
+
+void ai_msg_free(AiMessage *msg)
+{
+    if (!msg) return;
+    if (msg->content_overflow) {
+        free(msg->content_overflow);
+        msg->content_overflow = NULL;
+    }
+    if (msg->tool_calls) {
+        free(msg->tool_calls);
+        msg->tool_calls = NULL;
+    }
+    msg->n_tool_calls = 0;
+    if (msg->attachment) {
+        ai_attachment_free(&msg->attachment);
+    }
+}
+
 void ai_conv_init(AiConversation *conv, const char *model)
 {
     if (!conv) return;
@@ -41,7 +89,7 @@ void ai_conv_reset(AiConversation *conv)
 {
     if (!conv) return;
     for (int i = 0; i < conv->msg_count; i++)
-        ai_attachment_free(&conv->messages[i].attachment);
+        ai_msg_free(&conv->messages[i]);
     char model[64];
     memcpy(model, conv->model, sizeof(model));
     memset(conv, 0, sizeof(*conv));
@@ -56,7 +104,14 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     AiMessage *m = &conv->messages[conv->msg_count];
     m->role = role;
     snprintf(m->content, sizeof(m->content), "%s", content);
+    m->content_overflow = NULL;
+    m->content_len = strlen(m->content);
     m->attachment = NULL;
+    m->tool_call_id[0] = '\0';
+    m->tool_name[0] = '\0';
+    m->is_tool_error = 0;
+    m->tool_calls = NULL;
+    m->n_tool_calls = 0;
     conv->msg_count++;
     return 0;
 }
@@ -155,7 +210,7 @@ int ai_context_estimate_tokens(const AiConversation *conv)
     if (!conv) return 0;
     int total_chars = 0;
     for (int i = 0; i < conv->msg_count; i++)
-        total_chars += (int)strlen(conv->messages[i].content);
+        total_chars += (int)strlen(ai_msg_content(&conv->messages[i]));
     return total_chars / 4;
 }
 
@@ -249,6 +304,7 @@ static const char *role_str(AiRole role)
         case AI_ROLE_SYSTEM:    return "system";
         case AI_ROLE_USER:      return "user";
         case AI_ROLE_ASSISTANT: return "assistant";
+        case AI_ROLE_TOOL:      return "tool";
     }
     return "user";
 }
@@ -295,7 +351,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
         if (pos + sys_key_len >= buf_size) return 0;
         memcpy(buf + pos, sys_key, sys_key_len);
         pos += sys_key_len;
-        pos = json_escape_str(conv->messages[0].content, buf, buf_size, pos);
+        pos = json_escape_str(ai_msg_content(&conv->messages[0]), buf, buf_size, pos);
         if (pos == 0) return 0;
         msg_start = 1;
     }
@@ -307,16 +363,270 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
     memcpy(buf + pos, msgs_open, msgs_open_len);
     pos += msgs_open_len;
 
+    /* Track whether we emitted at least one message (for comma placement) */
+    int emitted = 0;
+
     for (int i = msg_start; i < conv->msg_count; i++) {
-        if (i > msg_start) {
+        const AiMessage *msg = &conv->messages[i];
+
+        /* ---- Anthropic: coalesce consecutive AI_ROLE_TOOL messages ---- */
+        if (is_anthropic && msg->role == AI_ROLE_TOOL) {
+            /* Find the end of this run of tool-result messages */
+            int run_end = i;
+            while (run_end + 1 < conv->msg_count &&
+                   conv->messages[run_end + 1].role == AI_ROLE_TOOL)
+                run_end++;
+
+            /* Emit opening comma + user wrapper */
+            if (emitted) {
+                if (pos + 1 >= buf_size) return 0;
+                buf[pos++] = ',';
+            }
+            emitted = 1;
+
+            const char *tool_user_open = "{\"role\":\"user\",\"content\":[";
+            size_t tuo_len = strlen(tool_user_open);
+            if (pos + tuo_len >= buf_size) return 0;
+            memcpy(buf + pos, tool_user_open, tuo_len);
+            pos += tuo_len;
+
+            for (int j = i; j <= run_end; j++) {
+                const AiMessage *tm = &conv->messages[j];
+                if (j > i) {
+                    if (pos + 1 >= buf_size) return 0;
+                    buf[pos++] = ',';
+                }
+                /* {"type":"tool_result","tool_use_id":"...","content":"..."} */
+                int rn = snprintf(buf + pos, buf_size - pos,
+                                  "{\"type\":\"tool_result\",\"tool_use_id\":");
+                if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
+                pos += (size_t)rn;
+
+                pos = json_escape_str(tm->tool_call_id, buf, buf_size, pos);
+                if (pos == 0) return 0;
+
+                const char *content_key = ",\"content\":";
+                size_t ck_len = strlen(content_key);
+                if (pos + ck_len >= buf_size) return 0;
+                memcpy(buf + pos, content_key, ck_len);
+                pos += ck_len;
+
+                pos = json_escape_str(ai_msg_content(tm), buf, buf_size, pos);
+                if (pos == 0) return 0;
+
+                if (tm->is_tool_error) {
+                    const char *err_flag = ",\"is_error\":true";
+                    size_t ef_len = strlen(err_flag);
+                    if (pos + ef_len >= buf_size) return 0;
+                    memcpy(buf + pos, err_flag, ef_len);
+                    pos += ef_len;
+                }
+
+                if (pos + 1 >= buf_size) return 0;
+                buf[pos++] = '}';
+            }
+
+            /* Close content array and user wrapper */
+            const char *tool_user_close = "]}";
+            size_t tuc_len = strlen(tool_user_close);
+            if (pos + tuc_len >= buf_size) return 0;
+            memcpy(buf + pos, tool_user_close, tuc_len);
+            pos += tuc_len;
+
+            /* Skip the whole run */
+            i = run_end;
+            continue;
+        }
+
+        /* ---- OpenAI: tool result message ---- */
+        if (!is_anthropic && msg->role == AI_ROLE_TOOL) {
+            if (emitted) {
+                if (pos + 1 >= buf_size) return 0;
+                buf[pos++] = ',';
+            }
+            emitted = 1;
+
+            int rn = snprintf(buf + pos, buf_size - pos,
+                              "{\"role\":\"tool\",\"tool_call_id\":");
+            if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
+            pos += (size_t)rn;
+
+            pos = json_escape_str(msg->tool_call_id, buf, buf_size, pos);
+            if (pos == 0) return 0;
+
+            const char *tc_content = ",\"content\":";
+            size_t tcc_len = strlen(tc_content);
+            if (pos + tcc_len >= buf_size) return 0;
+            memcpy(buf + pos, tc_content, tcc_len);
+            pos += tcc_len;
+
+            pos = json_escape_str(ai_msg_content(msg), buf, buf_size, pos);
+            if (pos == 0) return 0;
+
+            if (pos + 1 >= buf_size) return 0;
+            buf[pos++] = '}';
+            continue;
+        }
+
+        /* ---- Assistant message with tool_use blocks (Anthropic) ---- */
+        if (is_anthropic && msg->role == AI_ROLE_ASSISTANT && msg->n_tool_calls > 0) {
+            if (emitted) {
+                if (pos + 1 >= buf_size) return 0;
+                buf[pos++] = ',';
+            }
+            emitted = 1;
+
+            const char *asst_open = "{\"role\":\"assistant\",\"content\":[";
+            size_t ao_len = strlen(asst_open);
+            if (pos + ao_len >= buf_size) return 0;
+            memcpy(buf + pos, asst_open, ao_len);
+            pos += ao_len;
+
+            /* Text block (may be empty but include it) */
+            const char *text_open = "{\"type\":\"text\",\"text\":";
+            size_t to_len = strlen(text_open);
+            if (pos + to_len >= buf_size) return 0;
+            memcpy(buf + pos, text_open, to_len);
+            pos += to_len;
+
+            pos = json_escape_str(ai_msg_content(msg), buf, buf_size, pos);
+            if (pos == 0) return 0;
+
+            if (pos + 1 >= buf_size) return 0;
+            buf[pos++] = '}';
+
+            /* Tool use blocks */
+            for (int t = 0; t < msg->n_tool_calls; t++) {
+                const AiToolCall *tc = &msg->tool_calls[t];
+                if (pos + 1 >= buf_size) return 0;
+                buf[pos++] = ',';
+
+                int rn = snprintf(buf + pos, buf_size - pos,
+                                  "{\"type\":\"tool_use\",\"id\":");
+                if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
+                pos += (size_t)rn;
+
+                pos = json_escape_str(tc->id, buf, buf_size, pos);
+                if (pos == 0) return 0;
+
+                const char *name_key = ",\"name\":";
+                size_t nk_len = strlen(name_key);
+                if (pos + nk_len >= buf_size) return 0;
+                memcpy(buf + pos, name_key, nk_len);
+                pos += nk_len;
+
+                pos = json_escape_str(tc->name, buf, buf_size, pos);
+                if (pos == 0) return 0;
+
+                /* input: raw JSON object from input_json */
+                const char *input_key = ",\"input\":";
+                size_t ik_len = strlen(input_key);
+                if (pos + ik_len >= buf_size) return 0;
+                memcpy(buf + pos, input_key, ik_len);
+                pos += ik_len;
+
+                size_t ij_len = strlen(tc->input_json);
+                if (pos + ij_len + 1 >= buf_size) return 0;
+                memcpy(buf + pos, tc->input_json, ij_len);
+                pos += ij_len;
+
+                if (pos + 1 >= buf_size) return 0;
+                buf[pos++] = '}';
+            }
+
+            /* Close content array and assistant object */
+            const char *asst_close = "]}";
+            size_t ac_len = strlen(asst_close);
+            if (pos + ac_len >= buf_size) return 0;
+            memcpy(buf + pos, asst_close, ac_len);
+            pos += ac_len;
+            continue;
+        }
+
+        /* ---- Assistant message with tool_calls (OpenAI) ---- */
+        if (!is_anthropic && msg->role == AI_ROLE_ASSISTANT && msg->n_tool_calls > 0) {
+            if (emitted) {
+                if (pos + 1 >= buf_size) return 0;
+                buf[pos++] = ',';
+            }
+            emitted = 1;
+
+            int rn = snprintf(buf + pos, buf_size - pos,
+                              "{\"role\":\"assistant\",\"content\":");
+            if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
+            pos += (size_t)rn;
+
+            pos = json_escape_str(ai_msg_content(msg), buf, buf_size, pos);
+            if (pos == 0) return 0;
+
+            const char *tc_open = ",\"tool_calls\":[";
+            size_t tco_len = strlen(tc_open);
+            if (pos + tco_len >= buf_size) return 0;
+            memcpy(buf + pos, tc_open, tco_len);
+            pos += tco_len;
+
+            for (int t = 0; t < msg->n_tool_calls; t++) {
+                const AiToolCall *tc = &msg->tool_calls[t];
+                if (t > 0) {
+                    if (pos + 1 >= buf_size) return 0;
+                    buf[pos++] = ',';
+                }
+
+                int trn = snprintf(buf + pos, buf_size - pos,
+                                   "{\"id\":");
+                if (trn < 0 || pos + (size_t)trn >= buf_size) return 0;
+                pos += (size_t)trn;
+
+                pos = json_escape_str(tc->id, buf, buf_size, pos);
+                if (pos == 0) return 0;
+
+                const char *fn_open = ",\"type\":\"function\",\"function\":{\"name\":";
+                size_t fno_len = strlen(fn_open);
+                if (pos + fno_len >= buf_size) return 0;
+                memcpy(buf + pos, fn_open, fno_len);
+                pos += fno_len;
+
+                pos = json_escape_str(tc->name, buf, buf_size, pos);
+                if (pos == 0) return 0;
+
+                const char *args_key = ",\"arguments\":";
+                size_t ak_len = strlen(args_key);
+                if (pos + ak_len >= buf_size) return 0;
+                memcpy(buf + pos, args_key, ak_len);
+                pos += ak_len;
+
+                /* arguments is a JSON string in OpenAI format */
+                pos = json_escape_str(tc->input_json, buf, buf_size, pos);
+                if (pos == 0) return 0;
+
+                /* Close function object and tool_call object */
+                const char *tc_close = "}}";
+                size_t tcc2_len = strlen(tc_close);
+                if (pos + tcc2_len >= buf_size) return 0;
+                memcpy(buf + pos, tc_close, tcc2_len);
+                pos += tcc2_len;
+            }
+
+            /* Close tool_calls array and assistant object */
+            const char *tca_close = "]}";
+            size_t tcac_len = strlen(tca_close);
+            if (pos + tcac_len >= buf_size) return 0;
+            memcpy(buf + pos, tca_close, tcac_len);
+            pos += tcac_len;
+            continue;
+        }
+
+        /* ---- Normal message (system/user/assistant without tool_calls) ---- */
+        if (emitted) {
             if (pos + 1 >= buf_size) return 0;
             buf[pos++] = ',';
         }
+        emitted = 1;
 
-        const char *role = role_str(conv->messages[i].role);
+        const char *role = role_str(msg->role);
 
         /* Check if this is the last user message with a multimodal attachment */
-        int is_multimodal = (conv->messages[i].role == AI_ROLE_USER
+        int is_multimodal = (msg->role == AI_ROLE_USER
                              && i == conv->msg_count - 1
                              && last_user_attachment
                              && last_user_attachment->base64_url);
@@ -328,7 +638,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
             if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
             pos += (size_t)rn;
 
-            pos = json_escape_str(conv->messages[i].content, buf, buf_size, pos);
+            pos = json_escape_str(ai_msg_content(msg), buf, buf_size, pos);
             if (pos == 0) return 0;
 
             /* image_url part — base64_url is already a complete data URI */
@@ -351,7 +661,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
             if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
             pos += (size_t)rn;
 
-            pos = json_escape_str(conv->messages[i].content, buf, buf_size, pos);
+            pos = json_escape_str(ai_msg_content(msg), buf, buf_size, pos);
             if (pos == 0) return 0;
 
             if (pos + 1 >= buf_size) return 0;
@@ -372,6 +682,47 @@ size_t ai_build_request_body(const AiConversation *conv,
                              char *buf, size_t buf_size)
 {
     return ai_build_request_body_ex(conv, NULL, buf, buf_size, 0, NULL);
+}
+
+size_t ai_build_request_body_tools(const AiConversation *conv,
+                                    const AiAttachment *last_user_attachment,
+                                    const char *tools_json,
+                                    char *buf, size_t buf_size,
+                                    int stream, const char *provider)
+{
+    if (!tools_json || tools_json[0] == '\0')
+        return ai_build_request_body_ex(conv, last_user_attachment,
+                                        buf, buf_size, stream, provider);
+
+    /* Build without tools first to get the base body, then inject tools
+     * before the closing '}' of the top-level object. */
+    if (!conv || !buf || buf_size == 0) return 0;
+
+    size_t base = ai_build_request_body_ex(conv, last_user_attachment,
+                                           buf, buf_size, stream, provider);
+    if (base == 0) return 0;
+
+    /* base points past the final '}' — remove it and append tools */
+    /* buf[base-1] == '}', buf[base-2] == ']' from the messages close */
+    if (base < 2 || buf[base - 1] != '}') return 0;
+
+    /* We need to insert: ,"tools":[...]} */
+    size_t tj_len = strlen(tools_json);
+    const char *tools_prefix = ",\"tools\":";
+    size_t tp_len = strlen(tools_prefix);
+
+    /* Check space: we're replacing the last '}' with ,"tools":<json>} */
+    if (base - 1 + tp_len + tj_len + 1 + 1 >= buf_size) return 0;
+
+    size_t pos = base - 1; /* overwrite the closing '}' */
+    memcpy(buf + pos, tools_prefix, tp_len);
+    pos += tp_len;
+    memcpy(buf + pos, tools_json, tj_len);
+    pos += tj_len;
+    buf[pos++] = '}';
+    buf[pos] = '\0';
+
+    return pos;
 }
 
 int ai_parse_response_ex(const char *json, char *content_out, size_t content_size,
@@ -523,6 +874,44 @@ int ai_parse_stream_chunk(const char *json,
 
     json_free(root);
     return 0;
+}
+
+int ai_provider_supports_tools(const char *provider)
+{
+    if (!provider) return 0;
+    if (strcmp(provider, "anthropic") == 0) return 1;
+    if (strcmp(provider, "openai") == 0) return 1;
+    if (strcmp(provider, "deepseek") == 0) return 1;
+    return 0;  /* unknown providers: safe default */
+}
+
+int ai_parse_stream_chunk_ex(const char *json,
+                             char *content_out, size_t content_size,
+                             char *thinking_out, size_t thinking_size,
+                             AiToolStreamState *tool_stream,
+                             const char *provider)
+{
+    if (!tool_stream)
+        return ai_parse_stream_chunk(json, content_out, content_size,
+                                     thinking_out, thinking_size);
+
+    if (provider && strcmp(provider, "anthropic") == 0) {
+        int trc = ai_parse_tool_stream_anthropic(json, tool_stream);
+        if (trc == 1) return 2;   /* tool_use stop */
+        if (trc == 2) return 1;   /* end_turn / message_stop */
+        if (trc == -1) return -1; /* error */
+        /* trc == 0: normal chunk — also extract any text/thinking deltas */
+        return ai_parse_stream_chunk(json, content_out, content_size,
+                                     thinking_out, thinking_size);
+    } else {
+        /* OpenAI-compatible */
+        int trc = ai_parse_tool_stream_openai(json, tool_stream);
+        if (trc == 1) return 2;   /* tool_use stop */
+        if (trc == 2) return 1;   /* done */
+        if (trc == -1) return -1; /* error */
+        return ai_parse_stream_chunk(json, content_out, content_size,
+                                     thinking_out, thinking_size);
+    }
 }
 
 int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size)
@@ -792,7 +1181,7 @@ size_t ai_build_save_text(const AiConversation *conv,
 
         if (msg->role == AI_ROLE_USER) {
             n = snprintf(buf + pos, buf_size - pos,
-                         "--- You ---\n%s\n\n", msg->content);
+                         "--- You ---\n%s\n\n", ai_msg_content(msg));
             if (n > 0) pos += (size_t)n;
         } else if (msg->role == AI_ROLE_ASSISTANT) {
             if (show_thinking && thinking && thinking[i] &&
@@ -802,7 +1191,7 @@ size_t ai_build_save_text(const AiConversation *conv,
                 if (n > 0) pos += (size_t)n;
             }
             n = snprintf(buf + pos, buf_size - pos,
-                         "--- AI ---\n%s\n\n", msg->content);
+                         "--- AI ---\n%s\n\n", ai_msg_content(msg));
             if (n > 0) pos += (size_t)n;
         }
     }

@@ -9,7 +9,9 @@ typedef enum {
     CHAT_ITEM_USER,
     CHAT_ITEM_AI_TEXT,
     CHAT_ITEM_COMMAND,
-    CHAT_ITEM_STATUS
+    CHAT_ITEM_STATUS,
+    CHAT_ITEM_TOOL_CALL,    /* "using tool: <name>" status-style row */
+    CHAT_ITEM_TOOL_RESULT   /* tool result (brief, collapsible) */
 } ChatItemType;
 
 typedef struct ChatMsgItem {

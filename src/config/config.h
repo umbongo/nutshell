@@ -33,6 +33,10 @@ typedef struct {
     char ai_custom_url[CFG_STR_MAX];
     char ai_custom_model[CFG_STR_MAX];
     char ai_system_notes[AI_NOTES_MAX];
+    char ai_search_provider[64];     /* "none", "duckduckgo-api", "duckduckgo-html", "custom" */
+    char ai_search_url[256];         /* for custom search endpoint only */
+    int  ai_max_search_results;      /* 1-20, default 7 */
+    int  ai_web_fetch_enabled;       /* 0 = disabled (default), 1 = enabled */
 } Settings;
 
 typedef struct {

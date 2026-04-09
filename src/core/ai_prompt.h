@@ -2,6 +2,7 @@
 #define NUTSHELL_AI_PROMPT_H
 
 #include <stddef.h>
+#include "ai_tools.h"
 
 /* Default AI provider — must match the first entry in the provider list
  * shown in the Settings dialog (settings.c k_ai_providers[]). */
@@ -14,7 +15,8 @@
 typedef enum {
     AI_ROLE_SYSTEM,
     AI_ROLE_USER,
-    AI_ROLE_ASSISTANT
+    AI_ROLE_ASSISTANT,
+    AI_ROLE_TOOL          /* tool result message */
 } AiRole;
 
 typedef struct {
@@ -24,8 +26,19 @@ typedef struct {
 
 typedef struct {
     AiRole role;
-    char content[AI_MSG_MAX];
-    AiAttachment *attachment;  /* NULL for text-only messages */
+    char content[AI_MSG_MAX];       /* inline buffer — fits most messages */
+    char *content_overflow;         /* heap-allocated when content > AI_MSG_MAX, else NULL */
+    size_t content_len;             /* actual content length (regardless of which buffer) */
+    AiAttachment *attachment;       /* NULL for text-only messages */
+
+    /* Tool fields — zero/empty when unused */
+    char tool_call_id[64];    /* set on ROLE_TOOL: the id this result is for */
+    char tool_name[64];       /* set on ROLE_TOOL: tool name (for display) */
+    int  is_tool_error;       /* set on ROLE_TOOL: 1 if this is an error result */
+
+    /* For ROLE_ASSISTANT messages that contain tool_use blocks */
+    AiToolCall *tool_calls;   /* heap-allocated array, NULL when unused */
+    int n_tool_calls;         /* 0 means normal text message */
 } AiMessage;
 
 typedef struct {
@@ -85,6 +98,24 @@ int ai_parse_response(const char *json, char *content_out, size_t content_size);
 int ai_parse_stream_chunk(const char *json,
                           char *content_out, size_t content_size,
                           char *thinking_out, size_t thinking_size);
+
+/* Extended stream chunk parser that also detects tool_use blocks.
+ * content_out/thinking_out: same as ai_parse_stream_chunk.
+ * tool_stream: if non-NULL, tool_use blocks are accumulated into this state.
+ * provider: e.g. "anthropic", "openai" — determines SSE format.
+ * Returns:
+ *   0  — normal chunk processed (text delta, thinking delta, etc.)
+ *   1  — stream done (end_turn/stop)
+ *   2  — tool_use stop_reason detected (time to execute tools)
+ *  -1  — error */
+int ai_parse_stream_chunk_ex(const char *json,
+                             char *content_out, size_t content_size,
+                             char *thinking_out, size_t thinking_size,
+                             AiToolStreamState *tool_stream,
+                             const char *provider);
+
+/* Returns 1 if the provider supports native tool use, 0 otherwise. */
+int ai_provider_supports_tools(const char *provider);
 
 /* Extended parse: also extract reasoning/thinking content (e.g. DeepSeek
  * reasoner's "reasoning_content" field).  thinking_out may be NULL.
@@ -150,6 +181,26 @@ int ai_command_is_readonly(const char *cmd);
 int ai_response_split(const char *response,
                       char *pre_cmd, size_t pre_size,
                       char *post_cmd, size_t post_size);
+
+/* Returns pointer to message content (inline or overflow buffer) */
+const char *ai_msg_content(const AiMessage *msg);
+
+/* Sets message content. Handles inline vs overflow allocation.
+ * Returns 0 on success, -1 on allocation failure. */
+int ai_msg_set_content(AiMessage *msg, const char *data, size_t len);
+
+/* Frees dynamic resources (content_overflow + tool_calls). */
+void ai_msg_free(AiMessage *msg);
+
+/* Build the JSON request body with tool definitions.
+ * tools_json: serialized tool definitions array (e.g. from ai_tools_serialize_*), or NULL.
+ * If tools_json is NULL, behaves identically to ai_build_request_body_ex.
+ * Returns bytes written (excluding NUL), or 0 on error. */
+size_t ai_build_request_body_tools(const AiConversation *conv,
+                                    const AiAttachment *last_user_attachment,
+                                    const char *tools_json,
+                                    char *buf, size_t buf_size,
+                                    int stream, const char *provider);
 
 /* Count words in text (whitespace-delimited). Returns 0 for NULL/empty. */
 int ai_word_count(const char *text);
