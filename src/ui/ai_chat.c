@@ -38,6 +38,7 @@
 #include <commdlg.h>
 #include <shlwapi.h>
 #include "base64.h"
+#include "json_validate.h"
 
 /* GDI+ flat API declarations (C-compatible -- no C++ headers) */
 typedef int GpStatus;
@@ -214,6 +215,8 @@ typedef struct {
     HWND hContextLabel;       /* kept for cleanup but hidden — text drawn by subclass */
     int  context_limit;       /* token limit for model, 0=unknown */
     char context_label[64];   /* text drawn on progress bar by subclass */
+    int  actual_input_tokens;  /* last known input tokens from API (0 if unavailable) */
+    int  actual_output_tokens; /* last known output tokens from API (0 if unavailable) */
 
     /* Thinking history: per-assistant-message thinking text.
      * Indexed by conv.messages[] index (only meaningful for ASSISTANT roles).
@@ -299,6 +302,8 @@ typedef struct {
     AiSessionState *session;   /* which session this response is for */
     char *content;
     char *thinking;
+    int input_tokens;          /* actual input token count from API (0 if unavailable) */
+    int output_tokens;         /* actual output token count from API (0 if unavailable) */
 } AiResponseMsg;
 
 /* Heap-allocated chunk posted via WM_AI_STREAM.  Replaces the old plain
@@ -342,6 +347,8 @@ typedef struct {
     AiToolStreamState *tool_stream;
     char provider[64];
     int tool_stop;          /* set to 1 when tool_use stop detected */
+    int input_tokens;        /* actual input token count from API (0 until received) */
+    int output_tokens;       /* actual output token count from API (0 until received) */
 } StreamContext;
 
 /* Process a single SSE line from the stream */
@@ -356,6 +363,7 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     const char *json = line + 6;
     char content_delta[1024] = "";
     char thinking_delta[1024] = "";
+    int chunk_input_tokens = 0, chunk_output_tokens = 0;
 
     int rc;
     if (ctx->tool_stream) {
@@ -370,8 +378,15 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
         }
     } else {
         rc = ai_parse_stream_chunk(json, content_delta, sizeof(content_delta),
-                                   thinking_delta, sizeof(thinking_delta));
+                                   thinking_delta, sizeof(thinking_delta),
+                                   &chunk_input_tokens, &chunk_output_tokens);
     }
+
+    /* Accumulate actual token counts when provided by the API */
+    if (chunk_input_tokens > 0)
+        ctx->input_tokens += chunk_input_tokens;
+    if (chunk_output_tokens > 0)
+        ctx->output_tokens += chunk_output_tokens;
 
     if (rc == 1) {
         /* [DONE] — stream finished */
@@ -510,6 +525,7 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
     /* Agentic loop — runs once for non-tool responses, multiple times with tools */
     char final_content[AI_MSG_MAX] = "";
     char final_thinking[AI_MSG_MAX] = "";
+    int total_input_tokens = 0, total_output_tokens = 0;
     int loop_done = 0;
 
     while (!loop_done) {
@@ -567,6 +583,12 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
             final_thinking[copy_n] = '\0';
         }
 
+        /* Accumulate token counts (last non-zero value wins) */
+        if (ctx.input_tokens > 0)
+            total_input_tokens = ctx.input_tokens;
+        if (ctx.output_tokens > 0)
+            total_output_tokens = ctx.output_tokens;
+
         /* ---- Tool-use branch ---- */
         if (ctx.tool_stop && tool_stream_ptr &&
             tool_stream_ptr->pending_tool_count > 0) {
@@ -610,10 +632,25 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     continue;
                 }
 
-                /* Notify UI of tool call */
+                /* Notify UI of tool call (include provider for web_search) */
                 char tool_call_text[256];
-                snprintf(tool_call_text, sizeof(tool_call_text),
-                         "using tool: %s", call->name);
+                const AiToolDef *tdef = ai_tools_find(arg->tool_registry,
+                                                      call->name);
+                const char *provider_suffix = NULL;
+                if (tdef && tdef->tool_data &&
+                    strcmp(call->name, "web_search") == 0) {
+                    const WebSearchContext *wsc =
+                        (const WebSearchContext *)tdef->tool_data;
+                    if (wsc->search_provider[0])
+                        provider_suffix = wsc->search_provider;
+                }
+                if (provider_suffix)
+                    snprintf(tool_call_text, sizeof(tool_call_text),
+                             "using tool: %s - %s", call->name,
+                             provider_suffix);
+                else
+                    snprintf(tool_call_text, sizeof(tool_call_text),
+                             "using tool: %s", call->name);
                 post_tool_msg(arg->hwnd, CHAT_ITEM_TOOL_CALL, tool_call_text);
 
                 /* Execute */
@@ -628,8 +665,9 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     post_tool_msg(arg->hwnd, CHAT_ITEM_STATUS, warn);
                 }
 
-                /* Show brief result in UI */
-                if (results[ti].content && results[ti].content_len > 0) {
+                /* Show brief result in UI (skip error results) */
+                if (results[ti].content && results[ti].content_len > 0
+                    && !results[ti].is_error) {
                     char preview[256];
                     size_t plen = results[ti].content_len < 200
                                 ? results[ti].content_len : 200;
@@ -672,6 +710,15 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     arg->body, sizeof(arg->body),
                     1, arg->provider);
                 LeaveCriticalSection(arg->cs);
+                {
+                    char json_err[256];
+                    if (arg->body_len == 0 ||
+                        !json_validate(arg->body, arg->body_len, json_err, sizeof(json_err))) {
+                        post_tool_msg(arg->hwnd, CHAT_ITEM_STATUS,
+                            json_err[0] ? json_err : "JSON rebuild failed in tool loop");
+                        loop_done = 1;
+                    }
+                }
                 /* loop continues */
             }
         } else {
@@ -694,6 +741,8 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
         rmsg->session = arg->target;
         rmsg->content = _strdup(final_content);
         rmsg->thinking = (final_thinking[0] != '\0') ? _strdup(final_thinking) : NULL;
+        rmsg->input_tokens = total_input_tokens;
+        rmsg->output_tokens = total_output_tokens;
         PostMessage(arg->hwnd, WM_AI_RESPONSE, 2, (LPARAM)rmsg);
     } else {
         /* Fallback: can't allocate — clear busy here */
@@ -751,7 +800,8 @@ static void update_context_bar(AiChatData *d)
         EnableWindow(d->hContextBar, FALSE);
         return;
     }
-    int tokens = ai_context_estimate_tokens(&d->conv);
+    int actual = d->actual_input_tokens + d->actual_output_tokens;
+    int tokens = (actual > 0) ? actual : ai_context_estimate_tokens(&d->conv);
     int pct = (tokens * 100) / d->context_limit;
     if (pct > 100) pct = 100;
     SendMessage(d->hContextBar, PBM_SETPOS, (WPARAM)pct, 0);
@@ -981,6 +1031,18 @@ static void launch_stream_thread(AiChatData *d)
     }
 
     LeaveCriticalSection(&d->cs);
+
+    {
+        char json_err[256];
+        if (arg->body_len == 0 ||
+            !json_validate(arg->body, arg->body_len, json_err, sizeof(json_err))) {
+            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                json_err[0] ? json_err : "JSON build failed");
+            if (d->hChatList) chat_listview_invalidate(d->hChatList);
+            free(arg);
+            return;
+        }
+    }
 
     /* One-time notification when tools are configured but provider doesn't support them */
     if (d->tool_registry.count > 0 && !ai_provider_supports_tools(d->provider)
@@ -2098,6 +2160,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->stream_content[0] = '\0';
                 d->stream_content_len = 0;
                 d->stream_phase = 0;
+                d->actual_input_tokens = 0;
+                d->actual_output_tokens = 0;
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
                 thinking_history_clear(d);
@@ -2178,6 +2242,19 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                             it->u.cmd.approved = -1;
                         }
                         it = it->next;
+                    }
+                    /* Inject a corrective note so the AI knows that any
+                     * previously-blocked commands are now allowed.  Without
+                     * this, the AI sees the stale "blocked by read-only
+                     * policy" message in its history and keeps telling the
+                     * user to enable Permit Write even though they just did. */
+                    if (d->conv.msg_count > 0) {
+                        EnterCriticalSection(&d->cs);
+                        ai_conv_add(&d->conv, AI_ROLE_USER,
+                            "NOTE: The user has enabled 'Permit Write'. "
+                            "Write commands are now allowed and will no longer be blocked. "
+                            "Do not reference any previous security policy blocks.");
+                        LeaveCriticalSection(&d->cs);
                     }
                 } else {
                     /* Disabling: re-block pending write/critical commands */
@@ -2734,6 +2811,12 @@ next_coalesce:;
         if (wParam == 2) {
             /* Streaming complete — finalize AI item and extract commands */
             char *text = rmsg->content;
+
+            /* Store actual token counts when the API provided them */
+            if (rmsg->input_tokens > 0)
+                d->actual_input_tokens = rmsg->input_tokens;
+            if (rmsg->output_tokens > 0)
+                d->actual_output_tokens = rmsg->output_tokens;
 
             /* The thread committed the assistant message to src->conv.
              * Sync d->conv (the working copy) so it includes the response. */
