@@ -1488,6 +1488,24 @@ int test_escape_empty_string(void);
 int test_escape_forward_slash(void);
 int test_escape_backspace_as_unicode(void);
 int test_escape_formfeed_as_unicode(void);
+int test_validate_simple_object(void);
+int test_validate_nested_object(void);
+int test_validate_string_escapes(void);
+int test_validate_unicode_escape(void);
+int test_validate_all_value_types(void);
+int test_validate_raw_newline_in_string(void);
+int test_validate_raw_tab_in_string(void);
+int test_validate_bad_escape_sequence(void);
+int test_validate_truncated_unicode(void);
+int test_validate_unmatched_brace(void);
+int test_validate_unmatched_bracket(void);
+int test_validate_trailing_comma_object(void);
+int test_validate_trailing_comma_array(void);
+int test_validate_empty_input(void);
+int test_validate_null_input(void);
+int test_validate_mismatched_brackets(void);
+int test_validate_negative_number(void);
+int test_validate_array_of_objects(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -3009,6 +3027,26 @@ int main(void) {
     failed += test_escape_forward_slash();
     failed += test_escape_backspace_as_unicode();
     failed += test_escape_formfeed_as_unicode();
+
+    printf("\n--- JSON Validator ---\n");
+    failed += test_validate_simple_object();
+    failed += test_validate_nested_object();
+    failed += test_validate_string_escapes();
+    failed += test_validate_unicode_escape();
+    failed += test_validate_all_value_types();
+    failed += test_validate_raw_newline_in_string();
+    failed += test_validate_raw_tab_in_string();
+    failed += test_validate_bad_escape_sequence();
+    failed += test_validate_truncated_unicode();
+    failed += test_validate_unmatched_brace();
+    failed += test_validate_unmatched_bracket();
+    failed += test_validate_trailing_comma_object();
+    failed += test_validate_trailing_comma_array();
+    failed += test_validate_empty_input();
+    failed += test_validate_null_input();
+    failed += test_validate_mismatched_brackets();
+    failed += test_validate_negative_number();
+    failed += test_validate_array_of_objects();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

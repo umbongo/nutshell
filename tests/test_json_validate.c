@@ -110,3 +110,153 @@ int test_escape_formfeed_as_unicode(void) {
     ASSERT_STR_EQ(buf, "\"\\u000c\"");
     TEST_END();
 }
+
+/* ---- json_validate tests ---- */
+
+int test_validate_simple_object(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"key\":\"value\"}";
+    ASSERT_TRUE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_nested_object(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"a\":{\"b\":[1,2,3]},\"c\":true}";
+    ASSERT_TRUE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_string_escapes(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"msg\":\"hello\\nworld\\t\\\"quoted\\\"\"}";
+    ASSERT_TRUE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_unicode_escape(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"c\":\"\\u0041\"}";
+    ASSERT_TRUE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_all_value_types(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"s\":\"str\",\"n\":42,\"f\":3.14,\"t\":true,\"fa\":false,\"nu\":null}";
+    ASSERT_TRUE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_raw_newline_in_string(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    /* Raw newline inside a JSON string — invalid */
+    const char json[] = "{\"msg\":\"hello\nworld\"}";
+    ASSERT_FALSE(json_validate(json, sizeof(json) - 1, err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "control character") != NULL);
+    TEST_END();
+}
+
+int test_validate_raw_tab_in_string(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    /* Raw tab inside a JSON string — invalid */
+    const char json[] = "{\"msg\":\"hello\tworld\"}";
+    ASSERT_FALSE(json_validate(json, sizeof(json) - 1, err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "control character") != NULL);
+    TEST_END();
+}
+
+int test_validate_bad_escape_sequence(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"msg\":\"hello\\xworld\"}";
+    ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "escape") != NULL);
+    TEST_END();
+}
+
+int test_validate_truncated_unicode(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    /* \u00 — only 2 hex digits instead of 4 */
+    const char *json = "{\"c\":\"\\u00\"}";
+    ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_unmatched_brace(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"key\":\"value\"";
+    ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_unmatched_bracket(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "[1,2,3";
+    ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_trailing_comma_object(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"a\":1,}";
+    ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_trailing_comma_array(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "[1,2,]";
+    ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_empty_input(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    ASSERT_FALSE(json_validate("", 0, err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_null_input(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    ASSERT_FALSE(json_validate(NULL, 0, err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_mismatched_brackets(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"a\":[}";
+    ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_negative_number(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "{\"n\":-42}";
+    ASSERT_TRUE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
+
+int test_validate_array_of_objects(void) {
+    TEST_BEGIN();
+    char err[256] = "";
+    const char *json = "[{\"a\":1},{\"b\":2}]";
+    ASSERT_TRUE(json_validate(json, strlen(json), err, sizeof(err)));
+    TEST_END();
+}
