@@ -188,6 +188,7 @@ int test_validate_truncated_unicode(void) {
     /* \u00 — only 2 hex digits instead of 4 */
     const char *json = "{\"c\":\"\\u00\"}";
     ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "unicode") != NULL);
     TEST_END();
 }
 
@@ -196,6 +197,7 @@ int test_validate_unmatched_brace(void) {
     char err[256] = "";
     const char *json = "{\"key\":\"value\"";
     ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "nclosed") != NULL);
     TEST_END();
 }
 
@@ -204,6 +206,7 @@ int test_validate_unmatched_bracket(void) {
     char err[256] = "";
     const char *json = "[1,2,3";
     ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "nclosed") != NULL);
     TEST_END();
 }
 
@@ -212,6 +215,7 @@ int test_validate_trailing_comma_object(void) {
     char err[256] = "";
     const char *json = "{\"a\":1,}";
     ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "comma") != NULL);
     TEST_END();
 }
 
@@ -220,6 +224,7 @@ int test_validate_trailing_comma_array(void) {
     char err[256] = "";
     const char *json = "[1,2,]";
     ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "comma") != NULL);
     TEST_END();
 }
 
@@ -242,6 +247,7 @@ int test_validate_mismatched_brackets(void) {
     char err[256] = "";
     const char *json = "{\"a\":[}";
     ASSERT_FALSE(json_validate(json, strlen(json), err, sizeof(err)));
+    ASSERT_TRUE(strstr(err, "Unexpected") != NULL);
     TEST_END();
 }
 
