@@ -1434,6 +1434,59 @@ int test_agentic_conversation_full(void);
 int test_agentic_cancel_before_tool(void);
 int test_agentic_truncation_warning(void);
 
+/* test_token_usage.c */
+int test_token_anthropic_message_start_input_tokens(void);
+int test_token_anthropic_message_delta_output_tokens(void);
+int test_token_openai_usage_field(void);
+int test_token_non_usage_event_returns_zero(void);
+int test_token_openai_no_usage_returns_zero(void);
+int test_token_null_output_pointers_safe(void);
+int test_token_null_json_returns_error(void);
+int test_token_message_start_no_usage_field(void);
+
+/* test_chat_approval.c — permit-write toggle */
+int test_permit_toggle_corrective_msg_appended(void);
+int test_permit_toggle_no_inject_when_conv_empty(void);
+int test_permit_toggle_corrective_msg_is_last(void);
+
+/* test_markdown_render.c — parser edge cases */
+int test_md_classify_hash_only(void);
+int test_md_classify_h4_is_paragraph(void);
+int test_md_classify_inside_code_block(void);
+int test_md_classify_closing_fence(void);
+int test_md_classify_dash_disambiguation(void);
+int test_md_classify_star_disambiguation(void);
+int test_md_classify_olist_multidigit(void);
+int test_md_classify_blockquote_no_space(void);
+int test_md_classify_table_line(void);
+int test_md_classify_empty_string(void);
+int test_md_classify_null_line(void);
+int test_md_classify_plain_text(void);
+int test_md_classify_table_in_code_block(void);
+int test_md_inline_null_inputs(void);
+int test_md_inline_unclosed_backtick(void);
+int test_md_inline_unclosed_strikethrough(void);
+int test_md_inline_no_markers(void);
+int test_md_inline_code_offsets(void);
+int test_md_inline_bold_italic_span(void);
+int test_md_inline_strikethrough_offsets(void);
+int test_md_inline_text_bold_text(void);
+int test_md_inline_italic_offsets(void);
+int test_md_table_sep_minimal(void);
+int test_md_table_sep_colons(void);
+int test_md_table_sep_not_separator(void);
+int test_md_table_sep_null(void);
+
+/* test_json_validate.c */
+int test_escape_simple_string(void);
+int test_escape_special_chars(void);
+int test_escape_control_chars(void);
+int test_escape_no_quotes(void);
+int test_escape_with_offset(void);
+int test_escape_overflow(void);
+int test_escape_empty_string(void);
+int test_escape_forward_slash(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -2899,6 +2952,59 @@ int main(void) {
     failed += test_agentic_conversation_full();
     failed += test_agentic_cancel_before_tool();
     failed += test_agentic_truncation_warning();
+
+    printf("\n--- Token Usage ---\n");
+    failed += test_token_anthropic_message_start_input_tokens();
+    failed += test_token_anthropic_message_delta_output_tokens();
+    failed += test_token_openai_usage_field();
+    failed += test_token_non_usage_event_returns_zero();
+    failed += test_token_openai_no_usage_returns_zero();
+    failed += test_token_null_output_pointers_safe();
+    failed += test_token_null_json_returns_error();
+    failed += test_token_message_start_no_usage_field();
+
+    printf("\n--- Permit-Write Toggle ---\n");
+    failed += test_permit_toggle_corrective_msg_appended();
+    failed += test_permit_toggle_no_inject_when_conv_empty();
+    failed += test_permit_toggle_corrective_msg_is_last();
+
+    printf("\n--- Markdown Parser Edge Cases ---\n");
+    failed += test_md_classify_hash_only();
+    failed += test_md_classify_h4_is_paragraph();
+    failed += test_md_classify_inside_code_block();
+    failed += test_md_classify_closing_fence();
+    failed += test_md_classify_dash_disambiguation();
+    failed += test_md_classify_star_disambiguation();
+    failed += test_md_classify_olist_multidigit();
+    failed += test_md_classify_blockquote_no_space();
+    failed += test_md_classify_table_line();
+    failed += test_md_classify_empty_string();
+    failed += test_md_classify_null_line();
+    failed += test_md_classify_plain_text();
+    failed += test_md_classify_table_in_code_block();
+    failed += test_md_inline_null_inputs();
+    failed += test_md_inline_unclosed_backtick();
+    failed += test_md_inline_unclosed_strikethrough();
+    failed += test_md_inline_no_markers();
+    failed += test_md_inline_code_offsets();
+    failed += test_md_inline_bold_italic_span();
+    failed += test_md_inline_strikethrough_offsets();
+    failed += test_md_inline_text_bold_text();
+    failed += test_md_inline_italic_offsets();
+    failed += test_md_table_sep_minimal();
+    failed += test_md_table_sep_colons();
+    failed += test_md_table_sep_not_separator();
+    failed += test_md_table_sep_null();
+
+    printf("\n--- JSON Escape ---\n");
+    failed += test_escape_simple_string();
+    failed += test_escape_special_chars();
+    failed += test_escape_control_chars();
+    failed += test_escape_no_quotes();
+    failed += test_escape_with_offset();
+    failed += test_escape_overflow();
+    failed += test_escape_empty_string();
+    failed += test_escape_forward_slash();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
