@@ -77,7 +77,8 @@ int json_validate(const char *buf, size_t len, char *error, size_t error_size)
 
     /* Context tracking for trailing-comma detection */
     /* after_comma[d] = 1 if the last significant token at depth d was a comma */
-    char after_comma[VALIDATE_MAX_DEPTH];
+    /* +1 so after_comma[VALIDATE_MAX_DEPTH] is reachable when depth reaches max */
+    char after_comma[VALIDATE_MAX_DEPTH + 1];
     memset(after_comma, 0, sizeof(after_comma));
 
     for (size_t i = 0; i < len; i++) {

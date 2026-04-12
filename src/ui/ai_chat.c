@@ -711,7 +711,7 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     1, arg->provider);
                 LeaveCriticalSection(arg->cs);
                 {
-                    char json_err[256];
+                    char json_err[256] = "";
                     if (arg->body_len == 0 ||
                         !json_validate(arg->body, arg->body_len, json_err, sizeof(json_err))) {
                         post_tool_msg(arg->hwnd, CHAT_ITEM_STATUS,
@@ -1033,7 +1033,7 @@ static void launch_stream_thread(AiChatData *d)
     LeaveCriticalSection(&d->cs);
 
     {
-        char json_err[256];
+        char json_err[256] = "";
         if (arg->body_len == 0 ||
             !json_validate(arg->body, arg->body_len, json_err, sizeof(json_err))) {
             chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
