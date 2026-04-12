@@ -206,10 +206,14 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
     }
 
     /* If the terminal buffer was swapped (e.g. alt-screen exit), the display
-     * buffer shadow is stale — invalidate it to force a full repaint. */
+     * buffer shadow is stale — invalidate it to force a full repaint.
+     * Also bypass the row-level dirty skip so every row reaches the
+     * cell-level shadow check (defense-in-depth). */
+    bool force_all_rows = false;
     if (term->full_redraw_needed) {
         dispbuf_invalidate(&r->dispbuf);
         term->full_redraw_needed = false;
+        force_all_rows = true;
     }
 
     for (int row_idx = 0; row_idx < term->rows; row_idx++) {
@@ -241,7 +245,8 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
          * so we must repaint all of them regardless of dirty flags.
          * Also repaint the previous cursor row to erase the ghost cursor.
          * After a full invalidation (font/zoom/resize) repaint everything. */
-        if (term->scrollback_offset == 0 &&
+        if (!force_all_rows &&
+            term->scrollback_offset == 0 &&
             !row->dirty && row_idx != cursor_row && row_idx != prev_row &&
             !has_sel) continue;
 
