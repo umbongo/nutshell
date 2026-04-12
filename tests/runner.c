@@ -557,6 +557,9 @@ int test_mark_all_dirty_after_clear(void);
 int test_resize_sparse_rows_accessible(void);
 int test_resize_type_beyond_old_content(void);
 int test_dispbuf_empty_rows_dirty_after_invalidate(void);
+int test_dirty_alt_screen_sparse(void);
+int test_mark_all_dirty_sparse(void);
+int test_has_dirty_rows_sparse(void);
 
 /* test_color_consistency.c */
 int test_cc_default_is_pure_light(void);
@@ -1991,6 +1994,9 @@ int main(void) {
     failed += test_resize_sparse_rows_accessible();
     failed += test_resize_type_beyond_old_content();
     failed += test_dispbuf_empty_rows_dirty_after_invalidate();
+    failed += test_dirty_alt_screen_sparse();
+    failed += test_mark_all_dirty_sparse();
+    failed += test_has_dirty_rows_sparse();
 
     printf("\n--- AI HTTP ---\n");
     failed += test_ai_http_response_free_null();

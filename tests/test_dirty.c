@@ -247,6 +247,79 @@ int test_resize_sparse_rows_accessible(void) {
     TEST_END();
 }
 
+/* Alt-screen exit must mark ALL visible screen rows dirty,
+ * even when lines_count < rows (sparse buffer after init). */
+int test_dirty_alt_screen_sparse(void)
+{
+    TEST_BEGIN();
+    /* Create terminal with 10 rows but only write to 2 lines.
+     * lines_count will be ~2, much less than rows=10. */
+    Terminal *t = term_init(10, 40, 0);
+    feed(t, "line1\nline2");
+    int saved_count = t->lines_count;
+    ASSERT_TRUE(saved_count < t->rows);  /* precondition: sparse */
+
+    /* Enter alt-screen, draw something, then exit */
+    term_alt_screen_enter(t);
+    feed(t, "ALT CONTENT FILLS SCREEN");
+    term_clear_dirty(t);
+    term_alt_screen_exit(t);
+
+    /* Every visible screen row must be dirty after exit */
+    int dirty = 0;
+    for (int i = 0; i < t->rows; i++) {
+        int top = (t->lines_count >= t->rows)
+                ? (t->lines_count - t->rows) : 0;
+        int phys = (t->lines_start + top + i) % t->lines_capacity;
+        if (t->lines[phys] && t->lines[phys]->dirty) dirty++;
+    }
+    ASSERT_EQ(dirty, t->rows);
+    term_free(t);
+    TEST_END();
+}
+
+/* term_mark_all_dirty must cover rows beyond lines_count when sparse. */
+int test_mark_all_dirty_sparse(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 0);
+    feed(t, "hi");
+    ASSERT_TRUE(t->lines_count < t->rows);  /* precondition */
+    term_clear_dirty(t);
+    term_mark_all_dirty(t);
+
+    /* All screen rows must be dirty, not just 0..lines_count-1 */
+    int dirty = 0;
+    for (int i = 0; i < t->rows; i++) {
+        int top = (t->lines_count >= t->rows)
+                ? (t->lines_count - t->rows) : 0;
+        int phys = (t->lines_start + top + i) % t->lines_capacity;
+        if (t->lines[phys] && t->lines[phys]->dirty) dirty++;
+    }
+    ASSERT_EQ(dirty, t->rows);
+    term_free(t);
+    TEST_END();
+}
+
+/* term_has_dirty_rows must detect dirty rows beyond lines_count. */
+int test_has_dirty_rows_sparse(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 40, 0);
+    feed(t, "hi");
+    ASSERT_TRUE(t->lines_count < t->rows);
+    term_clear_dirty(t);
+
+    /* Manually dirty a row beyond lines_count */
+    int beyond = t->lines_count;  /* first row past lines_count */
+    int phys = (t->lines_start + beyond) % t->lines_capacity;
+    if (t->lines[phys]) t->lines[phys]->dirty = true;
+
+    ASSERT_TRUE(term_has_dirty_rows(t));
+    term_free(t);
+    TEST_END();
+}
+
 /* After resize to larger size, typing on a row beyond the old content
  * area must produce visible output (the row must exist in the buffer). */
 int test_resize_type_beyond_old_content(void) {
