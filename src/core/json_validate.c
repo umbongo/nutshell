@@ -26,6 +26,9 @@ size_t json_escape_string(const char *s, size_t s_len, char *buf,
             case '\r': esc = "\\r";  break;
             case '\t': esc = "\\t";  break;
             default:
+                /* \b (0x08) and \f (0x0C) are intentionally not given named
+                 * escapes — they serialise as \u0008 / \u000c, which is
+                 * semantically equivalent per RFC 8259. */
                 if (c < 0x20) {
                     snprintf(u_esc, sizeof(u_esc), "\\u%04x", (unsigned)c);
                     esc = u_esc;
