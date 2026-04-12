@@ -1,52 +1,9 @@
 #include "ai_tools.h"
 #include "json_parser.h"
+#include "json_validate.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-
-/* ---- JSON escape helper -------------------------------------------------- */
-
-/* Write src as a JSON-escaped string into buf (WITHOUT surrounding quotes).
- * Returns bytes written, or 0 on overflow. */
-static size_t json_escape_str(const char *src, size_t src_len,
-                               char *buf, size_t max)
-{
-    size_t pos = 0;
-
-    for (size_t i = 0; i < src_len; i++) {
-        unsigned char c = (unsigned char)src[i];
-        const char *esc = NULL;
-        char u_esc[7];
-
-        switch (c) {
-            case '"':  esc = "\\\""; break;
-            case '\\': esc = "\\\\"; break;
-            case '\n': esc = "\\n";  break;
-            case '\r': esc = "\\r";  break;
-            case '\t': esc = "\\t";  break;
-            default:
-                if (c < 0x20) {
-                    snprintf(u_esc, sizeof(u_esc), "\\u%04x", (unsigned)c);
-                    esc = u_esc;
-                }
-                break;
-        }
-
-        if (esc) {
-            size_t len = strlen(esc);
-            if (pos + len >= max) return 0;
-            memcpy(buf + pos, esc, len);
-            pos += len;
-        } else {
-            if (pos + 1 >= max) return 0;
-            buf[pos++] = (char)c;
-        }
-    }
-
-    if (pos >= max) return 0;
-    buf[pos] = '\0';
-    return pos;
-}
 
 /* ---- JSON node to string helper ------------------------------------------ */
 
@@ -75,9 +32,9 @@ static size_t json_object_to_string(const JsonNode *node, char *buf, size_t max)
         if (pos + 1 >= max) return 0;
         buf[pos++] = '"';
         size_t key_len = strlen(key);
-        size_t escaped = json_escape_str(key, key_len, buf + pos, max - pos);
-        if (escaped == 0 && key_len > 0) return 0;
-        pos += escaped;
+        size_t new_pos = json_escape_string(key, key_len, buf, max, pos, 0);
+        if (new_pos == 0 && key_len > 0) return 0;
+        pos = new_pos;
         if (pos + 1 >= max) return 0;
         buf[pos++] = '"';
 
@@ -165,10 +122,10 @@ static size_t json_node_to_string(const JsonNode *node, char *buf, size_t max)
             if (pos + 1 >= max) return 0;
             buf[pos++] = '"';
             size_t slen = strlen(node->as.str_val);
-            size_t escaped = json_escape_str(node->as.str_val, slen,
-                                             buf + pos, max - pos);
-            if (escaped == 0 && slen > 0) return 0;
-            pos += escaped;
+            size_t new_pos = json_escape_string(node->as.str_val, slen,
+                                                buf, max, pos, 0);
+            if (new_pos == 0 && slen > 0) return 0;
+            pos = new_pos;
             if (pos + 1 >= max) return 0;
             buf[pos++] = '"';
             buf[pos] = '\0';
@@ -246,17 +203,17 @@ int ai_tools_serialize_anthropic(const AiToolRegistry *reg, char *buf, size_t ma
         if (buf_append(buf, max, &pos, "{\"name\":\"") < 0) return -1;
 
         /* name is already safe (no special chars expected), but escape it */
-        size_t name_escaped = json_escape_str(t->name, strlen(t->name),
-                                              buf + pos, max - pos);
-        if (name_escaped == 0 && t->name[0] != '\0') return -1;
-        pos += name_escaped;
+        size_t new_pos = json_escape_string(t->name, strlen(t->name),
+                                            buf, max, pos, 0);
+        if (new_pos == 0 && t->name[0] != '\0') return -1;
+        pos = new_pos;
 
         if (buf_append(buf, max, &pos, "\",\"description\":\"") < 0) return -1;
 
-        size_t desc_escaped = json_escape_str(t->description, strlen(t->description),
-                                              buf + pos, max - pos);
-        if (desc_escaped == 0 && t->description[0] != '\0') return -1;
-        pos += desc_escaped;
+        new_pos = json_escape_string(t->description, strlen(t->description),
+                                     buf, max, pos, 0);
+        if (new_pos == 0 && t->description[0] != '\0') return -1;
+        pos = new_pos;
 
         if (buf_append(buf, max, &pos, "\",\"input_schema\":") < 0) return -1;
 
@@ -278,6 +235,7 @@ int ai_tools_serialize_openai(const AiToolRegistry *reg, char *buf, size_t max)
     if (!reg || !buf || max == 0) return -1;
 
     size_t pos = 0;
+    size_t new_pos;
     if (buf_append(buf, max, &pos, "[") < 0) return -1;
 
     for (int i = 0; i < reg->count; i++) {
@@ -289,17 +247,17 @@ int ai_tools_serialize_openai(const AiToolRegistry *reg, char *buf, size_t max)
 
         if (buf_append(buf, max, &pos, "{\"type\":\"function\",\"function\":{\"name\":\"") < 0) return -1;
 
-        size_t name_escaped = json_escape_str(t->name, strlen(t->name),
-                                              buf + pos, max - pos);
-        if (name_escaped == 0 && t->name[0] != '\0') return -1;
-        pos += name_escaped;
+        new_pos = json_escape_string(t->name, strlen(t->name),
+                                     buf, max, pos, 0);
+        if (new_pos == 0 && t->name[0] != '\0') return -1;
+        pos = new_pos;
 
         if (buf_append(buf, max, &pos, "\",\"description\":\"") < 0) return -1;
 
-        size_t desc_escaped = json_escape_str(t->description, strlen(t->description),
-                                              buf + pos, max - pos);
-        if (desc_escaped == 0 && t->description[0] != '\0') return -1;
-        pos += desc_escaped;
+        new_pos = json_escape_string(t->description, strlen(t->description),
+                                     buf, max, pos, 0);
+        if (new_pos == 0 && t->description[0] != '\0') return -1;
+        pos = new_pos;
 
         if (buf_append(buf, max, &pos, "\",\"parameters\":") < 0) return -1;
 
@@ -485,20 +443,20 @@ int ai_tool_result_anthropic(const AiToolResult *result, char *buf, size_t max)
     if (buf_append(buf, max, &pos,
                    "{\"type\":\"tool_result\",\"tool_use_id\":\"") < 0) return -1;
 
-    size_t id_escaped = json_escape_str(result->tool_use_id,
+    size_t new_pos = json_escape_string(result->tool_use_id,
                                         strlen(result->tool_use_id),
-                                        buf + pos, max - pos);
-    if (id_escaped == 0 && result->tool_use_id[0] != '\0') return -1;
-    pos += id_escaped;
+                                        buf, max, pos, 0);
+    if (new_pos == 0 && result->tool_use_id[0] != '\0') return -1;
+    pos = new_pos;
 
     if (buf_append(buf, max, &pos, "\",\"content\":\"") < 0) return -1;
 
     if (result->content && result->content_len > 0) {
-        size_t content_escaped = json_escape_str(result->content,
-                                                  result->content_len,
-                                                  buf + pos, max - pos);
-        if (content_escaped == 0 && result->content_len > 0) return -1;
-        pos += content_escaped;
+        new_pos = json_escape_string(result->content,
+                                     result->content_len,
+                                     buf, max, pos, 0);
+        if (new_pos == 0 && result->content_len > 0) return -1;
+        pos = new_pos;
     }
 
     if (buf_append(buf, max, &pos, "\"") < 0) return -1;
@@ -521,20 +479,20 @@ int ai_tool_result_openai(const AiToolResult *result, char *buf, size_t max)
     if (buf_append(buf, max, &pos,
                    "{\"role\":\"tool\",\"tool_call_id\":\"") < 0) return -1;
 
-    size_t id_escaped = json_escape_str(result->tool_use_id,
+    size_t new_pos = json_escape_string(result->tool_use_id,
                                         strlen(result->tool_use_id),
-                                        buf + pos, max - pos);
-    if (id_escaped == 0 && result->tool_use_id[0] != '\0') return -1;
-    pos += id_escaped;
+                                        buf, max, pos, 0);
+    if (new_pos == 0 && result->tool_use_id[0] != '\0') return -1;
+    pos = new_pos;
 
     if (buf_append(buf, max, &pos, "\",\"content\":\"") < 0) return -1;
 
     if (result->content && result->content_len > 0) {
-        size_t content_escaped = json_escape_str(result->content,
-                                                  result->content_len,
-                                                  buf + pos, max - pos);
-        if (content_escaped == 0 && result->content_len > 0) return -1;
-        pos += content_escaped;
+        new_pos = json_escape_string(result->content,
+                                     result->content_len,
+                                     buf, max, pos, 0);
+        if (new_pos == 0 && result->content_len > 0) return -1;
+        pos = new_pos;
     }
 
     if (buf_append(buf, max, &pos, "\"}") < 0) return -1;
