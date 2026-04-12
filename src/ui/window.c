@@ -2054,8 +2054,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         }
                         if (poll_rc > 0 || term_has_dirty_rows(s->term)) {
                             DWORD now = GetTickCount();
-                            if (now - g_last_paint_tick >= PAINT_COOLDOWN_MS) {
-                                if (poll_rc > 0)
+                            bool critical = (s == g_active_session &&
+                                             s->term->full_redraw_needed);
+                            if (critical || now - g_last_paint_tick >= PAINT_COOLDOWN_MS) {
+                                if (poll_rc > 0 || critical)
                                     dispbuf_invalidate(&g_renderer.dispbuf);
                                 invalidate_terminal(hwnd);
                                 g_last_paint_tick = now;
