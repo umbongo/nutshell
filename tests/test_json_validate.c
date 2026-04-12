@@ -1,3 +1,4 @@
+/* tests/test_json_validate.c — Tests for json_escape_string and json_validate (json_validate.h) */
 #include "test_framework.h"
 #include "json_validate.h"
 #include <string.h>
@@ -83,5 +84,29 @@ int test_escape_forward_slash(void) {
     ASSERT_TRUE(pos > 0);
     buf[pos] = '\0';
     ASSERT_STR_EQ(buf, "\"a/b\"");
+    TEST_END();
+}
+
+int test_escape_backspace_as_unicode(void) {
+    TEST_BEGIN();
+    char buf[256];
+    /* \b (0x08) is not given a named escape — falls through to \u0008 */
+    const char input[] = "\x08";
+    size_t pos = json_escape_string(input, 1, buf, sizeof(buf), 0, 1);
+    ASSERT_TRUE(pos > 0);
+    buf[pos] = '\0';
+    ASSERT_STR_EQ(buf, "\"\\u0008\"");
+    TEST_END();
+}
+
+int test_escape_formfeed_as_unicode(void) {
+    TEST_BEGIN();
+    char buf[256];
+    /* \f (0x0C) is not given a named escape — falls through to \u000c */
+    const char input[] = "\x0c";
+    size_t pos = json_escape_string(input, 1, buf, sizeof(buf), 0, 1);
+    ASSERT_TRUE(pos > 0);
+    buf[pos] = '\0';
+    ASSERT_STR_EQ(buf, "\"\\u000c\"");
     TEST_END();
 }

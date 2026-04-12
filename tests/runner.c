@@ -1486,6 +1486,8 @@ int test_escape_with_offset(void);
 int test_escape_overflow(void);
 int test_escape_empty_string(void);
 int test_escape_forward_slash(void);
+int test_escape_backspace_as_unicode(void);
+int test_escape_formfeed_as_unicode(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -3005,6 +3007,8 @@ int main(void) {
     failed += test_escape_overflow();
     failed += test_escape_empty_string();
     failed += test_escape_forward_slash();
+    failed += test_escape_backspace_as_unicode();
+    failed += test_escape_formfeed_as_unicode();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
