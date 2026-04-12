@@ -357,9 +357,9 @@ void term_scroll_down(Terminal *term, int top, int bot, int n) {
 void term_clear_dirty(Terminal *term)
 {
     if (!term) return;
-    for (int i = 0; i < term->lines_count; i++) {
-        int idx = (term->lines_start + i) % term->lines_capacity;
-        if (term->lines[idx])
+    for (int i = 0; i < term->rows; i++) {
+        int idx = screen_to_phys(term, i);
+        if (idx >= 0 && idx < term->lines_capacity && term->lines[idx])
             term->lines[idx]->dirty = false;
     }
 }
@@ -367,10 +367,10 @@ void term_clear_dirty(Terminal *term)
 bool term_has_dirty_rows(Terminal *term)
 {
     if (!term) return false;
-    /* Check all rows in the buffer (visible + scrollback) */
-    for (int i = 0; i < term->lines_count; i++) {
-        int idx = (term->lines_start + i) % term->lines_capacity;
-        if (term->lines[idx] && term->lines[idx]->dirty)
+    for (int i = 0; i < term->rows; i++) {
+        int idx = screen_to_phys(term, i);
+        if (idx >= 0 && idx < term->lines_capacity &&
+            term->lines[idx] && term->lines[idx]->dirty)
             return true;
     }
     return false;
@@ -379,9 +379,9 @@ bool term_has_dirty_rows(Terminal *term)
 void term_mark_all_dirty(Terminal *term)
 {
     if (!term) return;
-    for (int i = 0; i < term->lines_count; i++) {
-        int idx = (term->lines_start + i) % term->lines_capacity;
-        if (term->lines[idx])
+    for (int i = 0; i < term->rows; i++) {
+        int idx = screen_to_phys(term, i);
+        if (idx >= 0 && idx < term->lines_capacity && term->lines[idx])
             term->lines[idx]->dirty = true;
     }
 }
@@ -440,10 +440,12 @@ void term_alt_screen_exit(Terminal *term)
      * not whatever colors the alt-screen application (e.g. man/less) set. */
     memset(&term->current_attr, 0, sizeof(term->current_attr));
 
-    /* Mark all restored rows dirty — screen content changed completely. */
-    for (int i = 0; i < term->lines_count; i++) {
-        int idx = (term->lines_start + i) % term->lines_capacity;
-        if (term->lines[idx])
+    /* Mark all visible screen rows dirty — not just 0..lines_count-1.
+     * When lines_count < rows (sparse buffer), rows beyond lines_count
+     * are still visible on screen and must be repainted. */
+    for (int i = 0; i < term->rows; i++) {
+        int idx = screen_to_phys(term, i);
+        if (idx >= 0 && idx < term->lines_capacity && term->lines[idx])
             term->lines[idx]->dirty = true;
     }
 

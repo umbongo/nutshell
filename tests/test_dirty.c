@@ -248,16 +248,15 @@ int test_resize_sparse_rows_accessible(void) {
 }
 
 /* Alt-screen exit must mark ALL visible screen rows dirty,
- * even when lines_count < rows (sparse buffer after init). */
+ * even when lines_count < rows (sparse buffer). */
 int test_dirty_alt_screen_sparse(void)
 {
     TEST_BEGIN();
-    /* Create terminal with 10 rows but only write to 2 lines.
-     * lines_count will be ~2, much less than rows=10. */
+    /* Use a 10-row terminal; reduce lines_count to 3 to simulate a
+     * sparse buffer (fresh session with very few lines typed). */
     Terminal *t = term_init(10, 40, 0);
-    feed(t, "line1\nline2");
-    int saved_count = t->lines_count;
-    ASSERT_TRUE(saved_count < t->rows);  /* precondition: sparse */
+    t->lines_count = 3;  /* simulate sparse: fewer lines than rows */
+    ASSERT_TRUE(t->lines_count < t->rows);  /* precondition: sparse */
 
     /* Enter alt-screen, draw something, then exit */
     term_alt_screen_enter(t);
@@ -282,8 +281,10 @@ int test_dirty_alt_screen_sparse(void)
 int test_mark_all_dirty_sparse(void)
 {
     TEST_BEGIN();
+    /* Use a 10-row terminal; reduce lines_count to 3 to simulate a
+     * sparse buffer (fewer lines than screen rows). */
     Terminal *t = term_init(10, 40, 0);
-    feed(t, "hi");
+    t->lines_count = 3;
     ASSERT_TRUE(t->lines_count < t->rows);  /* precondition */
     term_clear_dirty(t);
     term_mark_all_dirty(t);
@@ -305,14 +306,18 @@ int test_mark_all_dirty_sparse(void)
 int test_has_dirty_rows_sparse(void)
 {
     TEST_BEGIN();
+    /* Use a 10-row terminal; reduce lines_count to 3 to simulate a
+     * sparse buffer (fewer lines than screen rows). */
     Terminal *t = term_init(10, 40, 0);
-    feed(t, "hi");
+    t->lines_count = 3;
     ASSERT_TRUE(t->lines_count < t->rows);
     term_clear_dirty(t);
 
     /* Manually dirty a row beyond lines_count */
     int beyond = t->lines_count;  /* first row past lines_count */
-    int phys = (t->lines_start + beyond) % t->lines_capacity;
+    int top = (t->lines_count >= t->rows)
+            ? (t->lines_count - t->rows) : 0;
+    int phys = (t->lines_start + top + beyond) % t->lines_capacity;
     if (t->lines[phys]) t->lines[phys]->dirty = true;
 
     ASSERT_TRUE(term_has_dirty_rows(t));
