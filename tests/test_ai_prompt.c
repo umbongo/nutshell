@@ -1109,7 +1109,8 @@ int test_ai_parse_stream_chunk_content(void) {
     const char *json = "{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}";
     char content[256], thinking[256];
     int rc = ai_parse_stream_chunk(json, content, sizeof(content),
-                                   thinking, sizeof(thinking));
+                                   thinking, sizeof(thinking),
+                                   NULL, NULL);
     ASSERT_EQ(rc, 0);
     ASSERT_STR_EQ(content, "Hello");
     ASSERT_STR_EQ(thinking, "");
@@ -1121,7 +1122,8 @@ int test_ai_parse_stream_chunk_thinking(void) {
     const char *json = "{\"choices\":[{\"delta\":{\"reasoning_content\":\"Let me think...\"}}]}";
     char content[256], thinking[256];
     int rc = ai_parse_stream_chunk(json, content, sizeof(content),
-                                   thinking, sizeof(thinking));
+                                   thinking, sizeof(thinking),
+                                   NULL, NULL);
     ASSERT_EQ(rc, 0);
     ASSERT_STR_EQ(content, "");
     ASSERT_STR_EQ(thinking, "Let me think...");
@@ -1133,7 +1135,8 @@ int test_ai_parse_stream_chunk_both(void) {
     const char *json = "{\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm\",\"content\":\"ok\"}}]}";
     char content[256], thinking[256];
     int rc = ai_parse_stream_chunk(json, content, sizeof(content),
-                                   thinking, sizeof(thinking));
+                                   thinking, sizeof(thinking),
+                                   NULL, NULL);
     ASSERT_EQ(rc, 0);
     ASSERT_STR_EQ(content, "ok");
     ASSERT_STR_EQ(thinking, "hmm");
@@ -1142,7 +1145,7 @@ int test_ai_parse_stream_chunk_both(void) {
 
 int test_ai_parse_stream_chunk_done(void) {
     TEST_BEGIN();
-    int rc = ai_parse_stream_chunk("[DONE]", NULL, 0, NULL, 0);
+    int rc = ai_parse_stream_chunk("[DONE]", NULL, 0, NULL, 0, NULL, NULL);
     ASSERT_EQ(rc, 1);
     TEST_END();
 }
@@ -1153,7 +1156,8 @@ int test_ai_parse_stream_chunk_role_only(void) {
     const char *json = "{\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}";
     char content[256], thinking[256];
     int rc = ai_parse_stream_chunk(json, content, sizeof(content),
-                                   thinking, sizeof(thinking));
+                                   thinking, sizeof(thinking),
+                                   NULL, NULL);
     ASSERT_EQ(rc, 0);
     ASSERT_STR_EQ(content, "");
     ASSERT_STR_EQ(thinking, "");
@@ -1165,7 +1169,8 @@ int test_ai_parse_stream_chunk_empty_delta(void) {
     const char *json = "{\"choices\":[{\"delta\":{}}]}";
     char content[256], thinking[256];
     int rc = ai_parse_stream_chunk(json, content, sizeof(content),
-                                   thinking, sizeof(thinking));
+                                   thinking, sizeof(thinking),
+                                   NULL, NULL);
     ASSERT_EQ(rc, 0);
     ASSERT_STR_EQ(content, "");
     ASSERT_STR_EQ(thinking, "");
@@ -1174,14 +1179,14 @@ int test_ai_parse_stream_chunk_empty_delta(void) {
 
 int test_ai_parse_stream_chunk_null(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_parse_stream_chunk(NULL, NULL, 0, NULL, 0), -1);
+    ASSERT_EQ(ai_parse_stream_chunk(NULL, NULL, 0, NULL, 0, NULL, NULL), -1);
     TEST_END();
 }
 
 int test_ai_parse_stream_chunk_malformed(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_parse_stream_chunk("not json", NULL, 0, NULL, 0), -1);
-    ASSERT_EQ(ai_parse_stream_chunk("{}", NULL, 0, NULL, 0), -1);
+    ASSERT_EQ(ai_parse_stream_chunk("not json", NULL, 0, NULL, 0, NULL, NULL), -1);
+    ASSERT_EQ(ai_parse_stream_chunk("{}", NULL, 0, NULL, 0, NULL, NULL), -1);
     TEST_END();
 }
 
@@ -2746,7 +2751,8 @@ int test_ai_parse_stream_chunk_anthropic_text_delta(void) {
         "\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}";
     char content[256], thinking[256];
     int rc = ai_parse_stream_chunk(json, content, sizeof(content),
-                                   thinking, sizeof(thinking));
+                                   thinking, sizeof(thinking),
+                                   NULL, NULL);
     ASSERT_EQ(rc, 0);
     ASSERT_STR_EQ(content, "Hello");
     ASSERT_STR_EQ(thinking, "");
@@ -2760,7 +2766,8 @@ int test_ai_parse_stream_chunk_anthropic_thinking_delta(void) {
         "\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Let me reason...\"}}";
     char content[256], thinking[256];
     int rc = ai_parse_stream_chunk(json, content, sizeof(content),
-                                   thinking, sizeof(thinking));
+                                   thinking, sizeof(thinking),
+                                   NULL, NULL);
     ASSERT_EQ(rc, 0);
     ASSERT_STR_EQ(content, "");
     ASSERT_STR_EQ(thinking, "Let me reason...");
@@ -2770,7 +2777,7 @@ int test_ai_parse_stream_chunk_anthropic_thinking_delta(void) {
 int test_ai_parse_stream_chunk_anthropic_message_stop(void) {
     TEST_BEGIN();
     const char *json = "{\"type\":\"message_stop\"}";
-    int rc = ai_parse_stream_chunk(json, NULL, 0, NULL, 0);
+    int rc = ai_parse_stream_chunk(json, NULL, 0, NULL, 0, NULL, NULL);
     ASSERT_EQ(rc, 1);
     TEST_END();
 }
@@ -2782,7 +2789,8 @@ int test_ai_parse_stream_chunk_anthropic_ping(void) {
     char content[256], thinking[256];
     content[0] = '\0'; thinking[0] = '\0';
     int rc = ai_parse_stream_chunk(json, content, sizeof(content),
-                                   thinking, sizeof(thinking));
+                                   thinking, sizeof(thinking),
+                                   NULL, NULL);
     ASSERT_EQ(rc, 0);
     ASSERT_STR_EQ(content, "");
     ASSERT_STR_EQ(thinking, "");
@@ -2798,7 +2806,8 @@ int test_ai_parse_stream_chunk_anthropic_message_start(void) {
     char content[256], thinking[256];
     content[0] = '\0'; thinking[0] = '\0';
     int rc = ai_parse_stream_chunk(json, content, sizeof(content),
-                                   thinking, sizeof(thinking));
+                                   thinking, sizeof(thinking),
+                                   NULL, NULL);
     ASSERT_EQ(rc, 0);
     ASSERT_STR_EQ(content, "");
     ASSERT_STR_EQ(thinking, "");

@@ -93,11 +93,17 @@ int ai_parse_response(const char *json, char *content_out, size_t content_size);
 
 /* Parse a single SSE streaming chunk (the JSON after "data: ").
  * Extracts delta.content and delta.reasoning_content from the chunk.
- * Either output may be NULL if not needed.
+ * Also extracts actual token counts when present:
+ *   - Anthropic message_start: input_tokens_out set from message.usage.input_tokens
+ *   - Anthropic message_delta: output_tokens_out set from usage.output_tokens
+ *   - OpenAI with top-level usage: prompt_tokens -> input_tokens_out,
+ *                                  completion_tokens -> output_tokens_out
+ * Any output pointer may be NULL if not needed.
  * Returns 0 on success, 1 if stream is done ([DONE]), -1 on error. */
 int ai_parse_stream_chunk(const char *json,
                           char *content_out, size_t content_size,
-                          char *thinking_out, size_t thinking_size);
+                          char *thinking_out, size_t thinking_size,
+                          int *input_tokens_out, int *output_tokens_out);
 
 /* Extended stream chunk parser that also detects tool_use blocks.
  * content_out/thinking_out: same as ai_parse_stream_chunk.

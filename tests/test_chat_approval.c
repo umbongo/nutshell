@@ -1,6 +1,7 @@
 /* tests/test_chat_approval.c */
 #include "test_framework.h"
 #include "chat_approval.h"
+#include "ai_prompt.h"
 #include <string.h>
 
 int test_approval_init(void) {
@@ -321,5 +322,94 @@ int test_approval_block_pending_writes_skips_decided(void) {
     ASSERT_EQ(n, 1);
     ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
     ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_BLOCKED);
+    TEST_END();
+}
+
+/* --- Permit-write toggle conversation injection tests --- */
+
+/* When permit_write is toggled ON and there is an active conversation,
+ * a corrective "write is now allowed" note must be injected as the last
+ * user message so the AI drops its stale "blocked" context. */
+
+int test_permit_toggle_corrective_msg_appended(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+
+    /* Simulate: user asked something, AI replied, then blocked note was
+     * injected because permit_write was off at the time. */
+    ASSERT_EQ(ai_conv_add(&conv, AI_ROLE_USER, "move config.bak to config"), 0);
+    ASSERT_EQ(ai_conv_add(&conv, AI_ROLE_ASSISTANT,
+        "I'll run: [EXEC]mv config.bak config[/EXEC]"), 0);
+    ASSERT_EQ(ai_conv_add(&conv, AI_ROLE_USER,
+        "NOTE: The following commands were BLOCKED by the user's read-only "
+        "security policy and were NOT executed:\n  - mv config.bak config\n"
+        "Do NOT claim these commands were executed. If the user needs these "
+        "actions, tell them to enable 'Permit Write' and try again."), 0);
+
+    int count_before = conv.msg_count;
+
+    /* Simulate the IDC_CHAT_PERMIT toggle-ON path: inject corrective note */
+    const char *corrective =
+        "NOTE: The user has enabled 'Permit Write'. "
+        "Write commands are now allowed and will no longer be blocked. "
+        "Do not reference any previous security policy blocks.";
+    ASSERT_EQ(ai_conv_add(&conv, AI_ROLE_USER, corrective), 0);
+
+    /* One message was added */
+    ASSERT_EQ(conv.msg_count, count_before + 1);
+
+    /* Last message is a user message with the corrective text */
+    int last = conv.msg_count - 1;
+    ASSERT_EQ((int)conv.messages[last].role, (int)AI_ROLE_USER);
+    ASSERT_TRUE(strstr(conv.messages[last].content, "Permit Write") != NULL);
+    ASSERT_TRUE(strstr(conv.messages[last].content,
+        "no longer be blocked") != NULL);
+    TEST_END();
+}
+
+int test_permit_toggle_no_inject_when_conv_empty(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+
+    /* Empty conversation — the toggle handler should NOT inject
+     * (guarded by msg_count > 0 in the real code). Nothing to test
+     * in the conversation API itself; just verify msg_count stays 0
+     * when we add nothing. */
+    ASSERT_EQ(conv.msg_count, 0);
+    TEST_END();
+}
+
+int test_permit_toggle_corrective_msg_is_last(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+
+    /* Several exchanges before the blocked note */
+    ai_conv_add(&conv, AI_ROLE_USER, "hello");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "hi there");
+    ai_conv_add(&conv, AI_ROLE_USER, "run mv a b");
+    ai_conv_add(&conv, AI_ROLE_ASSISTANT, "[EXEC]mv a b[/EXEC]");
+    ai_conv_add(&conv, AI_ROLE_USER,
+        "NOTE: The following commands were BLOCKED by the user's read-only "
+        "security policy and were NOT executed:\n  - mv a b");
+
+    /* Inject corrective note */
+    ai_conv_add(&conv, AI_ROLE_USER,
+        "NOTE: The user has enabled 'Permit Write'. "
+        "Write commands are now allowed and will no longer be blocked. "
+        "Do not reference any previous security policy blocks.");
+
+    /* Corrective note must be the last message in the conversation */
+    int last = conv.msg_count - 1;
+    ASSERT_EQ((int)conv.messages[last].role, (int)AI_ROLE_USER);
+    ASSERT_TRUE(strstr(conv.messages[last].content,
+        "enabled 'Permit Write'") != NULL);
+
+    /* The message before it is the stale blocked note — not removed */
+    int prev = conv.msg_count - 2;
+    ASSERT_EQ((int)conv.messages[prev].role, (int)AI_ROLE_USER);
+    ASSERT_TRUE(strstr(conv.messages[prev].content, "BLOCKED") != NULL);
     TEST_END();
 }

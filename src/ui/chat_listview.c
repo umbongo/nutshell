@@ -12,6 +12,7 @@
 #include "resource.h"
 #include "custom_scrollbar.h"
 #include "dpi_util.h"
+#include "md_render.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -718,23 +719,16 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         text_w = width - lv->ai_indent - 3 * side_pad;
         if (text_w < 40) text_w = 40;
 
-        old_font = SelectObject(hdc, lv->hFont ? lv->hFont
-                                                : GetStockObject(DEFAULT_GUI_FONT));
-        SetRect(&rc, 0, 0, text_w, 0);
-
         const char *measure_text = item->text;
         char *stripped = NULL;
         if (strstr(item->text, "[EXEC]")) {
             stripped = ai_text_for_measure(item->text);
             if (stripped) measure_text = stripped;
         }
-        draw_text_utf8(hdc, measure_text, &rc,
-                       DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        int h = md_measure_text(hdc, measure_text, text_w,
+                                lv->hFont, lv->hMonoFont, lv->hBoldFont,
+                                lv->theme);
         free(stripped);
-
-        SelectObject(hdc, old_font);
-
-        int h = rc.bottom - rc.top;
 
         /* Icon row + gap before content (must match paint_ai_item layout) */
         int total = h + CLV_SCALE(lv, BASE_ICON_SIZE) + CLV_SCALE(lv, 4);
@@ -828,7 +822,7 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                                     : GetStockObject(DEFAULT_GUI_FONT));
         SetRect(&rc, 0, 0, text_w, 0);
         draw_text_utf8(hdc, item->text, &rc,
-                       DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_CENTER);
+                       DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_LEFT);
         SelectObject(hdc, old_font);
         return (rc.bottom - rc.top) + CLV_SCALE(lv, 8);
     }
@@ -917,17 +911,14 @@ static void paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
                                     const char *text, RECT *rc)
 {
-    COLORREF normal_clr = RGB_FROM_THEME(lv->theme->text_main);
     COLORREF exec_clr = CLR_EXEC_TAG;
     HFONT mono_font = lv->hMonoFont ? lv->hMonoFont
                                      : (HFONT)GetStockObject(ANSI_FIXED_FONT);
-    HFONT text_font = lv->hFont ? lv->hFont
-                                 : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 
     /* If no [EXEC] markers, fast path */
     if (!strstr(text, "[EXEC]")) {
-        SetTextColor(hdc, normal_clr);
-        draw_text_utf8(hdc, text, rc, DT_WORDBREAK | DT_NOPREFIX);
+        md_render_text(hdc, text, rc->left, rc->top, rc->right - rc->left,
+                       lv->hFont, lv->hMonoFont, lv->hBoldFont, lv->theme);
         return;
     }
 
@@ -941,11 +932,9 @@ static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
         if (!exec_start) {
             /* Remaining text is normal */
             if (*pos) {
-                RECT seg_rc = { rc->left, y, rc->right, rc->bottom };
-                SetTextColor(hdc, normal_clr);
-                SelectObject(hdc, text_font);
-                int h = draw_text_utf8(hdc, pos, &seg_rc,
-                                       DT_WORDBREAK | DT_NOPREFIX);
+                int h = md_render_text(hdc, pos, rc->left, y, rc->right - rc->left,
+                                       lv->hFont, lv->hMonoFont, lv->hBoldFont,
+                                       lv->theme);
                 y += h;
             }
             break;
@@ -965,11 +954,10 @@ static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
                     trim--;
                 seg[trim] = '\0';
                 if (trim > 0) {
-                    RECT seg_rc = { rc->left, y, rc->right, rc->bottom };
-                    SetTextColor(hdc, normal_clr);
-                    SelectObject(hdc, text_font);
-                    int h = draw_text_utf8(hdc, seg, &seg_rc,
-                                           DT_WORDBREAK | DT_NOPREFIX);
+                    int h = md_render_text(hdc, seg, rc->left, y,
+                                           rc->right - rc->left,
+                                           lv->hFont, lv->hMonoFont,
+                                           lv->hBoldFont, lv->theme);
                     y += h;
                 }
                 free(seg);
@@ -1635,7 +1623,7 @@ static void paint_status_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     text_rc.left  += CLV_SCALE(lv, BASE_SIDE_PAD);
     text_rc.right -= CLV_SCALE(lv, BASE_SIDE_PAD);
     draw_text_utf8(hdc, item->text, &text_rc,
-                   DT_WORDBREAK | DT_NOPREFIX | DT_CENTER);
+                   DT_WORDBREAK | DT_NOPREFIX | DT_LEFT);
     SelectObject(hdc, old_font);
 }
 
