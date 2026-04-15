@@ -102,6 +102,8 @@ void settings_validate(Settings *s)
     if (s->scrollback_lines > 50000)  s->scrollback_lines = 50000;
     if (s->paste_delay_ms < 0)    s->paste_delay_ms = 0;
     if (s->paste_delay_ms > 5000) s->paste_delay_ms = 5000;
+    if (s->ai_max_search_results < 1)  s->ai_max_search_results = 1;
+    if (s->ai_max_search_results > 20) s->ai_max_search_results = 20;
 }
 
 void config_default_settings(Settings *s)
@@ -121,6 +123,10 @@ void config_default_settings(Settings *s)
     field_copy(s->colour_scheme,        sizeof(s->colour_scheme),        "Onyx Synapse");
     field_copy(s->ai_provider,          sizeof(s->ai_provider),          AI_DEFAULT_PROVIDER);
     /* ai_api_key defaults to empty (already zeroed by memset) */
+    field_copy(s->ai_search_provider, sizeof(s->ai_search_provider), "duckduckgo-api");
+    /* ai_search_url defaults to empty (already zeroed by memset) */
+    s->ai_max_search_results = 7;
+    s->ai_web_fetch_enabled = 0;
 }
 
 Profile *config_profile_new(void)
@@ -253,6 +259,16 @@ Config *config_load(const char *path)
         if ((sv = json_obj_str(jset, "ai_system_notes"))) {
             field_copy(s->ai_system_notes, sizeof(s->ai_system_notes), sv);
         }
+        if ((sv = json_obj_str(jset, "ai_search_provider"))) {
+            field_copy(s->ai_search_provider, sizeof(s->ai_search_provider), sv);
+        }
+        if ((sv = json_obj_str(jset, "ai_search_url"))) {
+            field_copy(s->ai_search_url, sizeof(s->ai_search_url), sv);
+        }
+        s->ai_max_search_results = (int)json_obj_num(jset, "ai_max_search_results",
+                                                     (double)s->ai_max_search_results);
+        s->ai_web_fetch_enabled = json_obj_bool(jset, "ai_web_fetch_enabled",
+                                                s->ai_web_fetch_enabled);
         settings_validate(s);
     }
 
@@ -386,7 +402,17 @@ int config_save(const Config *cfg, const char *path)
     fputs(",\n", f);
     fputs("    \"ai_system_notes\": ", f);
     fprint_json_str(f, s->ai_system_notes);
-    fputs("\n  },\n  \"profiles\": [\n", f);
+    fputs(",\n", f);
+    fputs("    \"ai_search_provider\": ", f);
+    fprint_json_str(f, s->ai_search_provider);
+    fputs(",\n", f);
+    fputs("    \"ai_search_url\": ", f);
+    fprint_json_str(f, s->ai_search_url);
+    fputs(",\n", f);
+    fprintf(f, "    \"ai_max_search_results\": %d,\n", s->ai_max_search_results);
+    fprintf(f, "    \"ai_web_fetch_enabled\": %s\n",
+            s->ai_web_fetch_enabled ? "true" : "false");
+    fputs("  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);
     for (size_t i = 0u; i < n; i++) {

@@ -1326,6 +1326,114 @@ int test_base64_padding_3bytes(void);
 int test_base64_small_buffer(void);
 int test_base64_binary(void);
 
+/* test_ai_tools.c — registry, serialization, parsing, execution */
+int test_ai_tools_init(void);
+int test_ai_tools_register(void);
+int test_ai_tools_register_max(void);
+int test_ai_tools_find_not_found(void);
+int test_ai_tools_find_by_name(void);
+int test_ai_tools_serialize_anthropic_empty(void);
+int test_ai_tools_serialize_anthropic_one(void);
+int test_ai_tools_serialize_anthropic_overflow(void);
+int test_ai_tools_serialize_openai_empty(void);
+int test_ai_tools_serialize_openai_one(void);
+int test_ai_tools_serialize_openai_overflow(void);
+int test_ai_parse_tool_calls_anthropic_basic(void);
+int test_ai_parse_tool_calls_anthropic_multiple(void);
+int test_ai_parse_tool_calls_anthropic_no_tools(void);
+int test_ai_parse_tool_calls_anthropic_invalid(void);
+int test_ai_parse_tool_calls_openai_basic(void);
+int test_ai_parse_tool_calls_openai_multiple(void);
+int test_ai_parse_tool_calls_openai_no_tools(void);
+int test_ai_parse_tool_calls_openai_invalid(void);
+int test_ai_tool_execute_basic(void);
+int test_ai_tool_execute_not_found(void);
+int test_ai_tool_execute_tool_data(void);
+int test_ai_tool_execute_truncated(void);
+int test_ai_tool_result_anthropic_basic(void);
+int test_ai_tool_result_anthropic_error(void);
+int test_ai_tool_result_openai_basic(void);
+int test_ai_tool_result_openai_error(void);
+int test_ai_tools_validate_schemas_valid(void);
+int test_ai_tools_validate_schemas_invalid(void);
+int test_ai_tool_input_max_boundary(void);
+/* test_ai_tools.c — streaming */
+int test_ai_stream_anthropic_tool_use_block(void);
+int test_ai_stream_anthropic_text_block(void);
+int test_ai_stream_anthropic_mixed_blocks(void);
+int test_ai_stream_openai_tool_call(void);
+int test_ai_stream_openai_no_tools(void);
+int test_ai_stream_error_reset(void);
+int test_ai_stream_anthropic_invalid_json(void);
+
+/* test_ai_prompt.c — message helpers & tool body building */
+int test_ai_msg_content_inline(void);
+int test_ai_msg_content_overflow(void);
+int test_ai_msg_free_cleanup(void);
+int test_ai_msg_set_content_twice(void);
+int test_ai_build_body_tool_result_anthropic(void);
+int test_ai_build_body_assistant_tool_use_anthropic(void);
+int test_ai_build_body_tool_result_openai(void);
+int test_ai_build_body_assistant_tool_use_openai(void);
+int test_ai_build_body_tool_result_grouping_anthropic(void);
+int test_ai_build_body_tools_null_tools_json(void);
+int test_ai_build_body_tools_with_tools_json(void);
+
+/* test_html_util.c */
+int test_html_strip_tags_basic(void);
+int test_html_strip_tags_script(void);
+int test_html_strip_tags_style(void);
+int test_html_strip_tags_nested(void);
+int test_html_strip_tags_self_closing(void);
+int test_html_strip_tags_empty(void);
+int test_html_strip_tags_unclosed(void);
+int test_html_decode_entities_named(void);
+int test_html_decode_entities_numeric(void);
+int test_html_decode_entities_apos(void);
+int test_html_decode_entities_malformed(void);
+int test_html_decode_entities_consecutive(void);
+int test_html_url_decode_basic(void);
+int test_html_url_decode_plus(void);
+int test_html_url_decode_double_encoded(void);
+int test_html_url_decode_passthrough(void);
+int test_html_strip_tag_by_name_bold(void);
+int test_html_find_by_class_basic(void);
+int test_html_find_by_class_not_found(void);
+int test_html_find_by_class_multi_class(void);
+
+/* test_tool_web_search.c */
+int test_ddg_api_article(void);
+int test_ddg_api_disambiguation(void);
+int test_ddg_api_empty(void);
+int test_ddg_api_invalid(void);
+int test_ddg_html_organic(void);
+int test_ddg_html_ad_filtered(void);
+int test_ddg_html_captcha(void);
+int test_ddg_html_no_results(void);
+
+/* test_tool_web_fetch.c */
+int test_web_fetch_html_to_text_basic(void);
+int test_web_fetch_html_to_text_script_removed(void);
+int test_web_fetch_html_to_text_entities(void);
+int test_web_fetch_html_to_text_whitespace(void);
+int test_web_fetch_html_to_text_truncation(void);
+int test_web_fetch_html_to_text_empty(void);
+int test_web_fetch_url_validation(void);
+
+/* test_agentic_loop.c */
+int test_agentic_can_continue_initial(void);
+int test_agentic_max_iterations(void);
+int test_agentic_mid_iteration(void);
+int test_agentic_search_rate_limit(void);
+int test_agentic_search_under_limit(void);
+int test_agentic_non_search_no_limit(void);
+int test_agentic_state_reset_clears(void);
+int test_agentic_add_assistant_tool_msg(void);
+int test_agentic_add_tool_results(void);
+int test_agentic_conversation_full(void);
+int test_agentic_cancel_before_tool(void);
+int test_agentic_truncation_warning(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -2680,6 +2788,117 @@ int main(void) {
     failed += test_term_fuzz_cr_at_last_column();
     failed += test_term_fuzz_split_csi_across_calls();
     failed += test_term_fuzz_split_osc_across_calls();
+
+    printf("\n--- AI Tools ---\n");
+    failed += test_ai_tools_init();
+    failed += test_ai_tools_register();
+    failed += test_ai_tools_register_max();
+    failed += test_ai_tools_find_not_found();
+    failed += test_ai_tools_find_by_name();
+    failed += test_ai_tools_serialize_anthropic_empty();
+    failed += test_ai_tools_serialize_anthropic_one();
+    failed += test_ai_tools_serialize_anthropic_overflow();
+    failed += test_ai_tools_serialize_openai_empty();
+    failed += test_ai_tools_serialize_openai_one();
+    failed += test_ai_tools_serialize_openai_overflow();
+    failed += test_ai_parse_tool_calls_anthropic_basic();
+    failed += test_ai_parse_tool_calls_anthropic_multiple();
+    failed += test_ai_parse_tool_calls_anthropic_no_tools();
+    failed += test_ai_parse_tool_calls_anthropic_invalid();
+    failed += test_ai_parse_tool_calls_openai_basic();
+    failed += test_ai_parse_tool_calls_openai_multiple();
+    failed += test_ai_parse_tool_calls_openai_no_tools();
+    failed += test_ai_parse_tool_calls_openai_invalid();
+    failed += test_ai_tool_execute_basic();
+    failed += test_ai_tool_execute_not_found();
+    failed += test_ai_tool_execute_tool_data();
+    failed += test_ai_tool_execute_truncated();
+    failed += test_ai_tool_result_anthropic_basic();
+    failed += test_ai_tool_result_anthropic_error();
+    failed += test_ai_tool_result_openai_basic();
+    failed += test_ai_tool_result_openai_error();
+    failed += test_ai_tools_validate_schemas_valid();
+    failed += test_ai_tools_validate_schemas_invalid();
+    failed += test_ai_tool_input_max_boundary();
+
+    printf("\n--- AI Tool Streaming ---\n");
+    failed += test_ai_stream_anthropic_tool_use_block();
+    failed += test_ai_stream_anthropic_text_block();
+    failed += test_ai_stream_anthropic_mixed_blocks();
+    failed += test_ai_stream_openai_tool_call();
+    failed += test_ai_stream_openai_no_tools();
+    failed += test_ai_stream_error_reset();
+    failed += test_ai_stream_anthropic_invalid_json();
+
+    printf("\n--- AI Message Helpers ---\n");
+    failed += test_ai_msg_content_inline();
+    failed += test_ai_msg_content_overflow();
+    failed += test_ai_msg_free_cleanup();
+    failed += test_ai_msg_set_content_twice();
+
+    printf("\n--- AI Tool Body Building ---\n");
+    failed += test_ai_build_body_tool_result_anthropic();
+    failed += test_ai_build_body_assistant_tool_use_anthropic();
+    failed += test_ai_build_body_tool_result_openai();
+    failed += test_ai_build_body_assistant_tool_use_openai();
+    failed += test_ai_build_body_tool_result_grouping_anthropic();
+    failed += test_ai_build_body_tools_null_tools_json();
+    failed += test_ai_build_body_tools_with_tools_json();
+
+    printf("\n--- HTML Utilities ---\n");
+    failed += test_html_strip_tags_basic();
+    failed += test_html_strip_tags_script();
+    failed += test_html_strip_tags_style();
+    failed += test_html_strip_tags_nested();
+    failed += test_html_strip_tags_self_closing();
+    failed += test_html_strip_tags_empty();
+    failed += test_html_strip_tags_unclosed();
+    failed += test_html_decode_entities_named();
+    failed += test_html_decode_entities_numeric();
+    failed += test_html_decode_entities_apos();
+    failed += test_html_decode_entities_malformed();
+    failed += test_html_decode_entities_consecutive();
+    failed += test_html_url_decode_basic();
+    failed += test_html_url_decode_plus();
+    failed += test_html_url_decode_double_encoded();
+    failed += test_html_url_decode_passthrough();
+    failed += test_html_strip_tag_by_name_bold();
+    failed += test_html_find_by_class_basic();
+    failed += test_html_find_by_class_not_found();
+    failed += test_html_find_by_class_multi_class();
+
+    printf("\n--- Web Search Parsing ---\n");
+    failed += test_ddg_api_article();
+    failed += test_ddg_api_disambiguation();
+    failed += test_ddg_api_empty();
+    failed += test_ddg_api_invalid();
+    failed += test_ddg_html_organic();
+    failed += test_ddg_html_ad_filtered();
+    failed += test_ddg_html_captcha();
+    failed += test_ddg_html_no_results();
+
+    printf("\n--- Web Fetch ---\n");
+    failed += test_web_fetch_html_to_text_basic();
+    failed += test_web_fetch_html_to_text_script_removed();
+    failed += test_web_fetch_html_to_text_entities();
+    failed += test_web_fetch_html_to_text_whitespace();
+    failed += test_web_fetch_html_to_text_truncation();
+    failed += test_web_fetch_html_to_text_empty();
+    failed += test_web_fetch_url_validation();
+
+    printf("\n--- Agentic Loop ---\n");
+    failed += test_agentic_can_continue_initial();
+    failed += test_agentic_max_iterations();
+    failed += test_agentic_mid_iteration();
+    failed += test_agentic_search_rate_limit();
+    failed += test_agentic_search_under_limit();
+    failed += test_agentic_non_search_no_limit();
+    failed += test_agentic_state_reset_clears();
+    failed += test_agentic_add_assistant_tool_msg();
+    failed += test_agentic_add_tool_results();
+    failed += test_agentic_conversation_full();
+    failed += test_agentic_cancel_before_tool();
+    failed += test_agentic_truncation_warning();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

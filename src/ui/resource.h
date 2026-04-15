@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.0.40"
-#define APP_VERSION_BINARY  1,0,40,0
+#define APP_VERSION        "1.0.42"
+#define APP_VERSION_BINARY  1,0,42,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -59,5 +59,9 @@
 #define IDC_CMD_CANCEL_ALL   3046  /* Cancel (deny) all pending commands */
 #define IDC_CMD_TOGGLE_BASE  3050  /* 3050..3065 for up to 16 command tickboxes */
 #define IDC_DEBUG_TERMINAL   3060  /* Settings: raw debug log toggle */
+#define IDC_AI_SEARCH_COMBO  3061  /* Settings: search engine dropdown */
+#define IDC_AI_SEARCH_URL    3062  /* Settings: custom search URL edit */
+#define IDC_AI_MAX_RESULTS   3063  /* Settings: max search results */
+#define IDC_AI_WEB_FETCH     3064  /* Settings: permit web fetch checkbox */
 
 #endif

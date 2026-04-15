@@ -277,6 +277,8 @@ static size_t sel_extract_text(const ChatListView *lv, char *buf, size_t buf_sz)
             case CHAT_ITEM_USER:
             case CHAT_ITEM_AI_TEXT:
             case CHAT_ITEM_STATUS:
+            case CHAT_ITEM_TOOL_CALL:
+            case CHAT_ITEM_TOOL_RESULT:
                 txt = item->text;
                 break;
             case CHAT_ITEM_COMMAND:
@@ -813,6 +815,8 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         return h;
     }
 
+    case CHAT_ITEM_TOOL_CALL:
+    case CHAT_ITEM_TOOL_RESULT:
     case CHAT_ITEM_STATUS: {
         /* on_paint applies side_pad to item_rc, paint_status_item adds
          * another side_pad on each side, so effective width is
@@ -1802,6 +1806,8 @@ static void on_paint(ChatListView *lv)
                 else
                     paint_cmd_container(lv, mem_dc, &item_rc);
                 break;
+            case CHAT_ITEM_TOOL_CALL:
+            case CHAT_ITEM_TOOL_RESULT:
             case CHAT_ITEM_STATUS:
                 paint_status_item(lv, mem_dc, item, &item_rc);
                 break;

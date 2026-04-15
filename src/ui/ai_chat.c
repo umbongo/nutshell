@@ -7,6 +7,10 @@
 #ifdef _WIN32
 
 #include "ai_prompt.h"
+#include "ai_tools.h"
+#include "ai_tool_web_search.h"
+#include "ai_tool_web_fetch.h"
+#include "ai_agentic.h"
 #include "ai_http.h"
 #include "app_font.h"
 #include "ui_theme.h"
@@ -97,6 +101,7 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define WM_AI_RESPONSE   (WM_USER + 100)
 #define WM_AI_CONTINUE   (WM_USER + 101)
 #define WM_AI_STREAM     (WM_USER + 102)  /* wParam: 0=thinking, 1=content; lParam: char* */
+#define WM_AI_TOOL_MSG   (WM_USER + 103)  /* wParam: ChatItemType; lParam: heap char* text */
 
 #define TERM_CONTEXT_ROWS 150
 #define CONTINUE_DELAY_MS 2000  /* Wait for terminal output before continuing */
@@ -266,6 +271,12 @@ typedef struct {
 
     /* Pending image attachment for the next send */
     AiAttachment *pending_attachment;
+
+    /* Tool use */
+    AiToolRegistry tool_registry;
+    WebSearchContext search_ctx;
+    WebFetchContext  fetch_ctx;
+    int tool_support_notified;  /* 1 after showing "tools unavailable" message */
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -309,6 +320,9 @@ typedef struct {
     char custom_url[256];
     char body[AI_BODY_MAX];         /* pre-built JSON request body */
     size_t body_len;
+    /* Tool use — non-NULL when tools are registered */
+    AiToolRegistry *tool_registry;  /* pointer into AiChatData (valid while window alive) */
+    char tools_json[AI_TOOL_SCHEMA_MAX * AI_TOOL_MAX]; /* serialized tool defs */
 } AiStreamThreadArg;
 
 /* Context for SSE streaming callback */
@@ -324,6 +338,10 @@ typedef struct {
     size_t thinking_len;
     int in_thinking;         /* 1 while receiving thinking chunks */
     int header_sent;         /* bitmask: 1=thinking header, 2=content header */
+    /* Tool streaming state (NULL when no tools registered) */
+    AiToolStreamState *tool_stream;
+    char provider[64];
+    int tool_stop;          /* set to 1 when tool_use stop detected */
 } StreamContext;
 
 /* Process a single SSE line from the stream */
@@ -339,8 +357,21 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     char content_delta[1024] = "";
     char thinking_delta[1024] = "";
 
-    int rc = ai_parse_stream_chunk(json, content_delta, sizeof(content_delta),
+    int rc;
+    if (ctx->tool_stream) {
+        rc = ai_parse_stream_chunk_ex(json,
+                                     content_delta, sizeof(content_delta),
+                                     thinking_delta, sizeof(thinking_delta),
+                                     ctx->tool_stream, ctx->provider);
+        if (rc == 2) {
+            /* Tool-use stop: signal to outer loop */
+            ctx->tool_stop = 1;
+            return;
+        }
+    } else {
+        rc = ai_parse_stream_chunk(json, content_delta, sizeof(content_delta),
                                    thinking_delta, sizeof(thinking_delta));
+    }
 
     if (rc == 1) {
         /* [DONE] — stream finished */
@@ -426,8 +457,19 @@ static void post_error_response(HWND hwnd, AiSessionState *target, const char *m
     }
 }
 
+/* Post a tool-related status message to the UI thread.
+ * type is CHAT_ITEM_TOOL_CALL or CHAT_ITEM_TOOL_RESULT.
+ * Heap-allocates the text; the WM_AI_TOOL_MSG handler frees it. */
+static void post_tool_msg(HWND hwnd, ChatItemType type, const char *text)
+{
+    char *dup = _strdup(text ? text : "");
+    if (dup)
+        PostMessage(hwnd, WM_AI_TOOL_MSG, (WPARAM)type, (LPARAM)dup);
+}
+
 /* Background thread: streaming AI API call.
- * Receives a heap-allocated AiStreamThreadArg and frees it before returning. */
+ * Receives a heap-allocated AiStreamThreadArg and frees it before returning.
+ * When arg->tool_registry is non-NULL, runs the agentic tool-use loop. */
 static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 {
     AiStreamThreadArg *arg = (AiStreamThreadArg *)raw_arg;
@@ -453,40 +495,196 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                           hdr0, sizeof(hdr0), hdr1, sizeof(hdr1),
                           req_headers);
 
-    StreamContext ctx;
-    memset(&ctx, 0, sizeof(ctx));
-    ctx.hwnd = arg->hwnd;
-    ctx.target = arg->target;
-    ctx.abort_flag = arg->abort_flag;
+    /* Agentic state (only used when tools are enabled) */
+    AgenticState agentic;
+    agentic_state_reset(&agentic);
 
-    int status = 0;
-    char errbuf[256] = "";
-    int rc = ai_http_post_stream(url, req_headers, arg->body, arg->body_len,
-                                 stream_callback, &ctx,
-                                 &status, errbuf, sizeof(errbuf));
-
-    /* If stream was aborted (user cancelled), discard partial results */
-    if (arg->abort_flag && *arg->abort_flag) {
-        free(arg);
-        return 0;
+    /* Tool streaming state (heap-allocated so we can reset between loops) */
+    AiToolStreamState tool_stream_state;
+    AiToolStreamState *tool_stream_ptr = NULL;
+    if (arg->tool_registry) {
+        ai_tools_stream_init(&tool_stream_state);
+        tool_stream_ptr = &tool_stream_state;
     }
 
-    if (rc != 0 || status < 200 || status >= 300) {
-        char msg[1024];
-        if (errbuf[0])
-            snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
-        else
-            snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
-        post_error_response(arg->hwnd, arg->target, msg);
-        free(arg);
-        return 0;
-    }
+    /* Agentic loop — runs once for non-tool responses, multiple times with tools */
+    char final_content[AI_MSG_MAX] = "";
+    char final_thinking[AI_MSG_MAX] = "";
+    int loop_done = 0;
 
-    /* Add assistant message to the target session's conversation. */
-    EnterCriticalSection(arg->cs);
-    ai_conv_add(&arg->target->conv, AI_ROLE_ASSISTANT, ctx.full_content);
-    arg->target->valid = 1;
-    LeaveCriticalSection(arg->cs);
+    while (!loop_done) {
+        StreamContext ctx;
+        memset(&ctx, 0, sizeof(ctx));
+        ctx.hwnd = arg->hwnd;
+        ctx.target = arg->target;
+        ctx.abort_flag = arg->abort_flag;
+        ctx.tool_stream = tool_stream_ptr;
+        if (tool_stream_ptr)
+            strncpy(ctx.provider, arg->provider, sizeof(ctx.provider) - 1);
+
+        /* Reset tool stream state for this loop iteration */
+        if (tool_stream_ptr)
+            ai_tools_stream_reset(tool_stream_ptr);
+
+        int status = 0;
+        char errbuf[256] = "";
+        int rc = ai_http_post_stream(url, req_headers, arg->body, arg->body_len,
+                                     stream_callback, &ctx,
+                                     &status, errbuf, sizeof(errbuf));
+
+        /* If stream was aborted (user cancelled), discard partial results */
+        if (arg->abort_flag && *arg->abort_flag) {
+            if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
+            free(arg);
+            return 0;
+        }
+
+        if (rc != 0 || status < 200 || status >= 300) {
+            char msg[1024];
+            if (errbuf[0])
+                snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
+            else
+                snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
+            if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
+            post_error_response(arg->hwnd, arg->target, msg);
+            free(arg);
+            return 0;
+        }
+
+        /* Accumulate final content/thinking across all iterations */
+        if (ctx.content_len > 0) {
+            size_t existing = strlen(final_content);
+            size_t space = sizeof(final_content) - existing - 1;
+            size_t copy_n = ctx.content_len < space ? ctx.content_len : space;
+            memcpy(final_content + existing, ctx.full_content, copy_n);
+            final_content[existing + copy_n] = '\0';
+        }
+        if (ctx.thinking_len > 0 && final_thinking[0] == '\0') {
+            /* Only capture first thinking block */
+            size_t copy_n = ctx.thinking_len < sizeof(final_thinking) - 1
+                          ? ctx.thinking_len : sizeof(final_thinking) - 1;
+            memcpy(final_thinking, ctx.full_thinking, copy_n);
+            final_thinking[copy_n] = '\0';
+        }
+
+        /* ---- Tool-use branch ---- */
+        if (ctx.tool_stop && tool_stream_ptr &&
+            tool_stream_ptr->pending_tool_count > 0) {
+
+            /* Add assistant message with tool_use blocks */
+            EnterCriticalSection(arg->cs);
+            agentic_add_assistant_tool_msg(&arg->target->conv,
+                                          ctx.full_content,
+                                          tool_stream_ptr->pending_tool_calls,
+                                          tool_stream_ptr->pending_tool_count);
+            arg->target->valid = 1;
+            LeaveCriticalSection(arg->cs);
+
+            /* Execute each tool call */
+            AiToolResult *results = (AiToolResult *)calloc(
+                (size_t)tool_stream_ptr->pending_tool_count, sizeof(AiToolResult));
+            if (!results) {
+                ai_tools_stream_reset(tool_stream_ptr);
+                post_error_response(arg->hwnd, arg->target,
+                                    "Error: out of memory for tool results");
+                free(arg);
+                return 0;
+            }
+
+            for (int ti = 0; ti < tool_stream_ptr->pending_tool_count; ti++) {
+                AiToolCall *call = &tool_stream_ptr->pending_tool_calls[ti];
+
+                /* Rate limit check */
+                char rate_err[256] = "";
+                if (!agentic_check_rate_limit(&agentic, call->name,
+                                              rate_err, sizeof(rate_err))) {
+                    results[ti].tool_use_id[0] = '\0';
+                    strncpy(results[ti].tool_use_id, call->id,
+                            sizeof(results[ti].tool_use_id) - 1);
+                    results[ti].content = _strdup(rate_err);
+                    results[ti].content_len = results[ti].content
+                                           ? strlen(results[ti].content) : 0;
+                    results[ti].is_error = 1;
+                    post_tool_msg(arg->hwnd, CHAT_ITEM_TOOL_CALL,
+                                  "[tool rate-limited]");
+                    continue;
+                }
+
+                /* Notify UI of tool call */
+                char tool_call_text[256];
+                snprintf(tool_call_text, sizeof(tool_call_text),
+                         "using tool: %s", call->name);
+                post_tool_msg(arg->hwnd, CHAT_ITEM_TOOL_CALL, tool_call_text);
+
+                /* Execute */
+                ai_tool_execute(arg->tool_registry, call, arg->abort_flag,
+                                &results[ti]);
+                agentic_record_tool_call(&agentic, call->name);
+
+                /* Truncation warning */
+                if (results[ti].was_truncated) {
+                    char warn[256];
+                    agentic_truncation_warning(call->name, warn, sizeof(warn));
+                    post_tool_msg(arg->hwnd, CHAT_ITEM_STATUS, warn);
+                }
+
+                /* Show brief result in UI */
+                if (results[ti].content && results[ti].content_len > 0) {
+                    char preview[256];
+                    size_t plen = results[ti].content_len < 200
+                                ? results[ti].content_len : 200;
+                    memcpy(preview, results[ti].content, plen);
+                    preview[plen] = '\0';
+                    post_tool_msg(arg->hwnd, CHAT_ITEM_TOOL_RESULT, preview);
+                }
+            }
+
+            /* Add tool results to conversation */
+            EnterCriticalSection(arg->cs);
+            agentic_add_tool_results(&arg->target->conv,
+                                     tool_stream_ptr->pending_tool_calls,
+                                     results,
+                                     tool_stream_ptr->pending_tool_count);
+            LeaveCriticalSection(arg->cs);
+
+            /* Free tool results */
+            for (int ti = 0; ti < tool_stream_ptr->pending_tool_count; ti++)
+                free(results[ti].content);
+            free(results);
+
+            ai_tools_stream_reset(tool_stream_ptr);
+            agentic.loop_iter++;
+
+            /* Check if we can continue */
+            if (!agentic_can_continue(&agentic)) {
+                post_tool_msg(arg->hwnd, CHAT_ITEM_STATUS,
+                    "[tool loop limit reached — stopping]");
+                loop_done = 1;
+            } else {
+                /* Rebuild request body with updated conversation (including tool results) */
+                EnterCriticalSection(arg->cs);
+                int last_msg = arg->target->conv.msg_count - 1;
+                const AiAttachment *att2 = (last_msg >= 0)
+                    ? arg->target->conv.messages[last_msg].attachment : NULL;
+                arg->body_len = ai_build_request_body_tools(
+                    &arg->target->conv, att2,
+                    arg->tools_json[0] ? arg->tools_json : NULL,
+                    arg->body, sizeof(arg->body),
+                    1, arg->provider);
+                LeaveCriticalSection(arg->cs);
+                /* loop continues */
+            }
+        } else {
+            /* Normal end (no tool-use stop) — add assistant message and exit loop */
+            loop_done = 1;
+            EnterCriticalSection(arg->cs);
+            ai_conv_add(&arg->target->conv, AI_ROLE_ASSISTANT, ctx.full_content);
+            arg->target->valid = 1;
+            LeaveCriticalSection(arg->cs);
+        }
+    } /* end agentic loop */
+
+    if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
 
     /* Signal stream done — wParam=2 means "streaming complete, do command extraction".
      * busy is cleared by the WM_AI_RESPONSE handler on the UI thread to prevent
@@ -494,8 +692,8 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
     AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(*rmsg));
     if (rmsg) {
         rmsg->session = arg->target;
-        rmsg->content = _strdup(ctx.full_content);
-        rmsg->thinking = (ctx.full_thinking[0] != '\0') ? _strdup(ctx.full_thinking) : NULL;
+        rmsg->content = _strdup(final_content);
+        rmsg->thinking = (final_thinking[0] != '\0') ? _strdup(final_thinking) : NULL;
         PostMessage(arg->hwnd, WM_AI_RESPONSE, 2, (LPARAM)rmsg);
     } else {
         /* Fallback: can't allocate — clear busy here */
@@ -639,6 +837,69 @@ static void chat_rebuild_display(AiChatData *d)
     update_context_bar(d);
 }
 
+/* Initialise the tool registry from the configured search/fetch settings. */
+static void chat_register_tools(AiChatData *d,
+                                const char *search_provider,
+                                const char *search_url,
+                                int max_search_results,
+                                int web_fetch_enabled)
+{
+    ai_tools_init(&d->tool_registry);
+
+    if (search_provider && strcmp(search_provider, "none") != 0) {
+        snprintf(d->search_ctx.search_provider,
+                 sizeof(d->search_ctx.search_provider),
+                 "%s", search_provider);
+        snprintf(d->search_ctx.search_url,
+                 sizeof(d->search_ctx.search_url),
+                 "%s", search_url ? search_url : "");
+        d->search_ctx.max_search_results =
+            max_search_results > 0 ? max_search_results : 7;
+
+        AiToolDef search_tool;
+        memset(&search_tool, 0, sizeof(search_tool));
+        snprintf(search_tool.name, sizeof(search_tool.name), "web_search");
+        snprintf(search_tool.description, sizeof(search_tool.description),
+                 "Search the web for current information. Use this when the user "
+                 "asks about recent events, current data, or anything that requires "
+                 "up-to-date information beyond your training data.");
+        snprintf(search_tool.input_schema_json,
+                 sizeof(search_tool.input_schema_json),
+                 "{\"type\":\"object\","
+                 "\"properties\":{\"query\":{\"type\":\"string\","
+                 "\"description\":\"The search query\"}},"
+                 "\"required\":[\"query\"]}");
+        search_tool.safety = TOOL_SAFE;
+        search_tool.execute = tool_web_search_execute;
+        search_tool.tool_data = &d->search_ctx;
+        ai_tools_register(&d->tool_registry, &search_tool);
+    }
+
+    if (web_fetch_enabled) {
+        d->fetch_ctx.timeout_ms = 10000;
+
+        AiToolDef fetch_tool;
+        memset(&fetch_tool, 0, sizeof(fetch_tool));
+        snprintf(fetch_tool.name, sizeof(fetch_tool.name), "web_fetch");
+        snprintf(fetch_tool.description, sizeof(fetch_tool.description),
+                 "Fetch the contents of a specific web page URL. Use this to retrieve "
+                 "detailed information from a URL found via web search or provided by the user.");
+        snprintf(fetch_tool.input_schema_json,
+                 sizeof(fetch_tool.input_schema_json),
+                 "{\"type\":\"object\","
+                 "\"properties\":{\"url\":{\"type\":\"string\","
+                 "\"description\":\"The URL to fetch\"}},"
+                 "\"required\":[\"url\"]}");
+        fetch_tool.safety = TOOL_SAFE;
+        fetch_tool.execute = tool_web_fetch_execute;
+        fetch_tool.tool_data = &d->fetch_ctx;
+        ai_tools_register(&d->tool_registry, &fetch_tool);
+    }
+
+    /* Reset notification flag whenever tools are reconfigured */
+    d->tool_support_notified = 0;
+}
+
 /* Build an AiStreamThreadArg from current AiChatData state under the CS,
  * and launch the background thread.  Sets active_state->busy = 1. */
 static void launch_stream_thread(AiChatData *d)
@@ -660,11 +921,75 @@ static void launch_stream_thread(AiChatData *d)
         int last_msg = d->conv.msg_count - 1;
         const AiAttachment *att = (last_msg >= 0)
             ? d->conv.messages[last_msg].attachment : NULL;
-        arg->body_len = ai_build_request_body_ex(&d->conv, att, arg->body,
-                                                  sizeof(arg->body), 1,
-                                                  arg->provider);
+
+        /* Use tool-aware request builder when tools are registered and provider supports them */
+        int has_tools = (d->tool_registry.count > 0);
+        int provider_supports = ai_provider_supports_tools(d->provider);
+
+        if (has_tools && provider_supports) {
+            /* Serialize tool definitions for this provider */
+            arg->tools_json[0] = '\0';
+            if (strcmp(d->provider, "anthropic") == 0)
+                ai_tools_serialize_anthropic(&d->tool_registry, arg->tools_json,
+                                             sizeof(arg->tools_json));
+            else
+                ai_tools_serialize_openai(&d->tool_registry, arg->tools_json,
+                                          sizeof(arg->tools_json));
+
+            arg->tool_registry = &d->tool_registry;
+            arg->body_len = ai_build_request_body_tools(&d->conv, att,
+                                                         arg->tools_json[0] ? arg->tools_json : NULL,
+                                                         arg->body, sizeof(arg->body),
+                                                         1, arg->provider);
+        } else {
+            arg->tool_registry = NULL;
+            arg->body_len = ai_build_request_body_ex(&d->conv, att, arg->body,
+                                                      sizeof(arg->body), 1,
+                                                      arg->provider);
+        }
     }
+
+    /* Sync conversation to session state so the agentic loop can rebuild
+     * follow-up requests from target->conv (which needs model, system
+     * prompt, and user messages — not just the tool messages added later). */
+    {
+        /* Free any existing messages in the session conv */
+        for (int ci = 0; ci < d->active_state->conv.msg_count; ci++)
+            ai_msg_free(&d->active_state->conv.messages[ci]);
+
+        /* Copy struct (model, msg_count, fixed-size content arrays) */
+        memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
+
+        /* Duplicate heap resources so both convs can be freed independently */
+        for (int ci = 0; ci < d->active_state->conv.msg_count; ci++) {
+            AiMessage *m = &d->active_state->conv.messages[ci];
+            if (m->content_overflow) {
+                char *dup = (char *)malloc(m->content_len + 1);
+                if (dup) memcpy(dup, m->content_overflow, m->content_len + 1);
+                m->content_overflow = dup;
+            }
+            m->attachment = m->attachment
+                ? ai_attachment_dup(d->conv.messages[ci].attachment) : NULL;
+            if (m->tool_calls && m->n_tool_calls > 0) {
+                size_t tc_sz = (size_t)m->n_tool_calls * sizeof(AiToolCall);
+                AiToolCall *tc = (AiToolCall *)malloc(tc_sz);
+                if (tc) memcpy(tc, d->conv.messages[ci].tool_calls, tc_sz);
+                m->tool_calls = tc;
+            }
+        }
+        d->active_state->valid = 1;
+    }
+
     LeaveCriticalSection(&d->cs);
+
+    /* One-time notification when tools are configured but provider doesn't support them */
+    if (d->tool_registry.count > 0 && !ai_provider_supports_tools(d->provider)
+        && !d->tool_support_notified) {
+        d->tool_support_notified = 1;
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+            "[Note: web search/fetch tools require Anthropic, OpenAI, or DeepSeek provider]");
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    }
 
     /* Allocate per-session stream accumulators */
     free(d->active_state->stream_content);
@@ -842,12 +1167,48 @@ static void send_user_message(AiChatData *d)
         char sys_prompt[AI_MSG_MAX];
         ai_build_system_prompt(sys_prompt, sizeof(sys_prompt), term_text,
                                d->session_notes, d->system_notes);
+        /* Append tool descriptions if tools are registered and provider supports them */
+        if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
+            size_t len = strlen(sys_prompt);
+            len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+                "\n\nYou have access to the following tools that will be called "
+                "automatically via the API tool-use mechanism:\n\n");
+            for (int ti = 0; ti < d->tool_registry.count; ti++) {
+                len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+                    "- %s: %s\n",
+                    d->tool_registry.tools[ti].name,
+                    d->tool_registry.tools[ti].description);
+            }
+            len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+                "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
+                "request them via the tool-use API and the results will be provided.\n\n"
+                "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
+            (void)len;
+        }
         ai_conv_add(&d->conv, AI_ROLE_SYSTEM, sys_prompt);
     } else if (d->active_term) {
         /* Update system prompt with fresh terminal context */
         char sys_prompt[AI_MSG_MAX];
         ai_build_system_prompt(sys_prompt, sizeof(sys_prompt), term_text,
                                d->session_notes, d->system_notes);
+        /* Append tool descriptions */
+        if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
+            size_t len = strlen(sys_prompt);
+            len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+                "\n\nYou have access to the following tools that will be called "
+                "automatically via the API tool-use mechanism:\n\n");
+            for (int ti = 0; ti < d->tool_registry.count; ti++) {
+                len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+                    "- %s: %s\n",
+                    d->tool_registry.tools[ti].name,
+                    d->tool_registry.tools[ti].description);
+            }
+            len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+                "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
+                "request them via the tool-use API and the results will be provided.\n\n"
+                "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
+            (void)len;
+        }
         /* Replace the first (system) message */
         snprintf(d->conv.messages[0].content,
                  sizeof(d->conv.messages[0].content), "%s", sys_prompt);
@@ -2169,6 +2530,22 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
         break;
 
+    case WM_AI_TOOL_MSG: {
+        /* Tool call/result notification from background thread.
+         * wParam: ChatItemType (CHAT_ITEM_TOOL_CALL or CHAT_ITEM_TOOL_RESULT or CHAT_ITEM_STATUS)
+         * lParam: heap-allocated char* text (we must free) */
+        if (!d) { free((void *)lParam); break; }
+        char *tool_text = (char *)lParam;
+        ChatItemType tool_type = (ChatItemType)(WPARAM)wParam;
+        chat_msg_append(&d->msg_list, tool_type, tool_text);
+        free(tool_text);
+        if (d->hChatList) {
+            chat_listview_invalidate(d->hChatList);
+            chat_listview_scroll_to_bottom(d->hChatList);
+        }
+        return 0;
+    }
+
     case WM_AI_STREAM: {
         /* Realtime streaming chunk: wParam 0=thinking, 1=content.
          *
@@ -3177,6 +3554,22 @@ void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
     /* Update model name on chat listview */
     if (d->hChatList)
         chat_listview_set_model(d->hChatList, d->conv.model);
+}
+
+void ai_chat_update_tools(HWND hwnd,
+                          const char *search_provider,
+                          const char *search_url,
+                          int max_search_results,
+                          int web_fetch_enabled)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    chat_register_tools(d,
+                        search_provider ? search_provider : "none",
+                        search_url,
+                        max_search_results,
+                        web_fetch_enabled);
 }
 
 void ai_chat_update_notes(HWND hwnd, const char *session_notes,
