@@ -1439,6 +1439,9 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
                                            UINT_PTR uIdSubclass,
                                            DWORD_PTR dwRefData)
 {
+    if (msg == WM_KEYDOWN || msg == WM_CHAR) {
+        session_mark_user_active();
+    }
     if (msg == WM_PASTE) {
         HWND parent = GetParent(hwnd);
         AiChatData *pd = parent

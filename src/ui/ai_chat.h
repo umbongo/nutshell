@@ -73,5 +73,9 @@ void ai_chat_close(HWND hwnd);
 /* Returns non-zero if the AI chat has saveable conversation content. */
 int ai_chat_has_content(HWND hwnd);
 
+/* Bump the active session's user-idle tick.  Called from any UI
+ * surface (chat input, etc.) that should count as user activity. */
+void session_mark_user_active(void);
+
 #endif /* _WIN32 */
 #endif /* NUTSHELL_AI_CHAT_H */
