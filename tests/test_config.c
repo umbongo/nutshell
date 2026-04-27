@@ -753,6 +753,10 @@ int test_config_validate_ssh_user_idle_clamp(void)
     s.ssh_user_idle_timeout_mins = 0;
     settings_validate(&s);
     ASSERT_EQ(s.ssh_user_idle_timeout_mins, 0);
+
+    s.ssh_user_idle_timeout_mins = 10080;
+    settings_validate(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, 10080);
     TEST_END();
 }
 
