@@ -218,6 +218,11 @@ typedef struct {
     int  actual_input_tokens;  /* last known input tokens from API (0 if unavailable) */
     int  actual_output_tokens; /* last known output tokens from API (0 if unavailable) */
 
+    /* Buffer for the context-bar hover tooltip text. Populated on
+     * each TTN_GETDISPINFO callback so the tip always reflects the
+     * latest token state. */
+    char tooltip_buf[512];
+
     /* Thinking history: per-assistant-message thinking text.
      * Indexed by conv.messages[] index (only meaningful for ASSISTANT roles).
      * Heap-allocated strings; NULL if no thinking for that message. */
