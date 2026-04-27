@@ -27,7 +27,7 @@
 #include "chat_activity.h"
 #include "chat_approval.h"
 #include "chat_listview.h"
-#include "icon_font.h"
+#include "icons.h"
 #include "dpi_util.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <stdio.h>
@@ -246,9 +246,6 @@ typedef struct {
 
     /* Compact button mode: 1 = icon-only buttons when frame is narrow */
     int compact_buttons;
-
-    /* Fluent UI Icon Font */
-    HFONT hIconFont;
 
     /* New chat list view fields */
     ChatMsgList msg_list;           /* Message item linked list */
@@ -1403,8 +1400,22 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
         }
         /* AI_INPUT_NEWLINE: fall through to default (inserts newline) */
     }
+    if (msg == WM_KEYDOWN && (GetKeyState(VK_CONTROL) & 0x8000)) {
+        if (wParam == VK_OEM_PLUS  || wParam == (WPARAM)'='
+         || wParam == VK_OEM_MINUS || wParam == (WPARAM)'-') {
+            HWND parent = GetParent(hwnd);
+            if (parent) SendMessage(parent, msg, wParam, lParam);
+            return 0;
+        }
+    }
     if (msg == WM_MOUSEWHEEL) {
         int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
+        /* Ctrl+Wheel: forward to parent so chat_apply_zoom runs */
+        if (GetKeyState(VK_CONTROL) & 0x8000) {
+            HWND parent = GetParent(hwnd);
+            if (parent) SendMessage(parent, msg, wParam, lParam);
+            return 0;
+        }
         int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
         SendMessage(hwnd, EM_LINESCROLL, 0, (LPARAM)scroll);
         /* Sync input scrollbar */
@@ -1579,19 +1590,8 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
         if (hOldFont) SelectObject(hdc, hOldFont);
     } else if (d && d->compact_buttons &&
                (int)dis->CtlID == IDC_CHAT_NEWCHAT) {
-        /* Compact mode: draw a "+" icon for New Chat */
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, fg);
-        HFONT hBold = CreateFont(
-            -MulDiv(10, d->dpi, 72), 0, 0, 0, FW_BOLD,
-            FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-            OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-            APP_FONT_UI_FACE);
-        HFONT hOldF = (HFONT)SelectObject(hdc, hBold);
-        DrawText(hdc, "+", 1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        SelectObject(hdc, hOldF);
-        DeleteObject(hBold);
+        /* Compact mode: built-in vector icon for New Chat */
+        ns_icon_draw(hdc, NS_ICON_NEW_CHAT, &rc, fg, (UINT)d->dpi);
     }
 }
 
@@ -1701,15 +1701,11 @@ static void chat_apply_zoom(AiChatData *d, int delta)
 
     /* Recreate main font at new size */
     if (d->hFont) DeleteObject(d->hFont);
-    if (d->hIconFont) DeleteObject(d->hIconFont);
     int h = -MulDiv(new_size, d->dpi, 72);
     d->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                           DEFAULT_CHARSET, OUT_TT_PRECIS,
                           CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                           DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
-                          
-    int ih = -MulDiv(new_size, d->dpi, 72);
-    d->hIconFont = create_icon_font(ih);
 
     if (d->hFont) {
         SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hFont, TRUE);
@@ -1729,7 +1725,7 @@ static void chat_apply_zoom(AiChatData *d, int delta)
                 d->ai_font_name[0] ? d->ai_font_name : "Consolas");
             chat_listview_set_fonts(d->hChatList, d->hFont,
                                     d->hMonoFont, d->hBoldFont,
-                                    d->hSmallFont, d->hIconFont);
+                                    d->hSmallFont);
             chat_listview_relayout(d->hChatList);
         }
         /* Re-measure line height */
@@ -1938,9 +1934,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                     DEFAULT_PITCH | FF_SWISS, "Segoe UI");
 
-        /* Icon Font — validated, NULL if no Fluent/MDL2 font available */
-        int ih = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
-        nd->hIconFont = create_icon_font(ih);
         #undef S
         if (nd->hFont) {
             SendMessage(nd->hInput, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
@@ -1959,7 +1952,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                         : "Consolas");
                 chat_listview_set_fonts(nd->hChatList, nd->hFont,
                                         nd->hMonoFont, nd->hBoldFont,
-                                        nd->hSmallFont, nd->hIconFont);
+                                        nd->hSmallFont);
                 chat_listview_set_model(nd->hChatList, nd->conv.model);
             }
             /* Measure line height for scrollbar sync */
@@ -2041,11 +2034,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
     case WM_NCHITTEST: {
         /* When docked, make the left edge transparent to mouse clicks
-         * so the parent window can handle splitter dragging. */
+         * so the parent window can handle splitter dragging. The transparent
+         * band must match the parent's right-side splitter pad so every
+         * pixel that falls through actually lands inside the parent's
+         * hit zone. */
         if (d && d->docked) {
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hwnd, &pt);
-            if (pt.x < AI_DOCK_SPLITTER_HIT / 2)
+            if (pt.x < AI_DOCK_SPLITTER_PAD)
                 return HTTRANSPARENT;
         }
         break;
@@ -3259,15 +3255,13 @@ next_coalesce:;
                     SelectObject(hdc, oP);
                     DeleteObject(hShPen);
 
-                    /* Icon — use icon font if available, else regular font.
-                     * btn_text is ">" or "■" which exist in any font. */
-                    HFONT prev = (HFONT)SelectObject(hdc,
-                        d->hIconFont ? d->hIconFont : d->hFont);
-                    SetBkMode(hdc, TRANSPARENT);
-                    SetTextColor(hdc, theme_cr(0xFFFFFF));
-                    DrawTextW(hdc, btn_text, -1, &rc,
-                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hdc, prev);
+                    /* Draw send (paper plane) or stop (square) icon
+                     * from the built-in vector set. Choose by BUSY state
+                     * so the icon stays in sync with the button label
+                     * even if the caller forgets to refresh text. */
+                    int busy = ACTIVE_BUSY(d) || is_stop;
+                    ns_icon_draw(hdc, busy ? NS_ICON_STOP : NS_ICON_SEND,
+                                 &rc, theme_cr(0xFFFFFF), (UINT)d->dpi);
                 }
             } else if ((int)dis->CtlID == IDC_CHAT_SAVE) {
                 /* Square save button with floppy disk icon */
@@ -3294,16 +3288,7 @@ next_coalesce:;
                 DeleteObject(hBr);
 
                 /* Draw save icon */
-                SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, fg);
-                RECT txtRc = rc;
-                if (d->hIconFont) {
-                    HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont);
-                    DrawTextW(hdc, L"\xE74E", -1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hdc, prevF);
-                } else {
-                    DrawText(hdc, "S", 1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                }
+                ns_icon_draw(hdc, NS_ICON_SAVE, &rc, fg, (UINT)d->dpi);
             } else if ((int)dis->CtlID == IDC_CHAT_UNDOCK) {
                 /* Square undock button with 3D pop-out/dock-in icon */
                 HDC hdc = dis->hDC;
@@ -3329,15 +3314,8 @@ next_coalesce:;
                 DeleteObject(hBr);
 
                 /* Draw Pop-out/Dock icon */
-                SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, fg);
-                if (d->hIconFont) {
-                    HFONT prevF = (HFONT)SelectObject(hdc, d->hIconFont);
-                    DrawTextW(hdc, d->docked ? L"\xE8A7" : L"\xE923", -1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hdc, prevF);
-                } else {
-                    DrawText(hdc, d->docked ? "^" : "v", 1, &brc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                }
+                ns_icon_draw(hdc, d->docked ? NS_ICON_UNDOCK : NS_ICON_DOCK,
+                             &brc, fg, (UINT)d->dpi);
             /* Old IDC_CHAT_ALLOW / IDC_CHAT_DENY draw code removed —
              * approval buttons are now inline in chat_listview */
             } else {
@@ -3383,7 +3361,6 @@ next_coalesce:;
             DeleteCriticalSection(&d->cs);
             if (d->hFont) DeleteObject(d->hFont);
             if (d->hSmallFont) DeleteObject(d->hSmallFont);
-            if (d->hIconFont) DeleteObject(d->hIconFont);
             if (d->hBoldFont) DeleteObject(d->hBoldFont);
             if (d->hMonoFont) DeleteObject(d->hMonoFont);
             if (d->hTooltip) DestroyWindow(d->hTooltip);

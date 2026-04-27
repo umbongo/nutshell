@@ -9,5 +9,5 @@
 
 ## Design / UI polish
 
-- [ ] Redesign the icons used in the app. The current set lives in [src/ui/icons.h](src/ui/icons.h) / [src/ui/icons.c](src/ui/icons.c) as a custom vector op-stream on a 16-unit grid. Pay particular attention to the **ai-assist icon** (`NS_ICON_AI`, currently an "acorn silhouette") — it should read clearly at small sizes and feel cohesive with the rest of the icon set.
-- [ ] Review the spacing, look, and feel of the tabs in both the terminal area and the AI panel ([src/ui/tabs.c](src/ui/tabs.c), [src/ui/tabs.h](src/ui/tabs.h)). Goals: equal spacing between tabs, polished appearance (padding, separators, active/hover states), and reliable hit-testing / rendering across DPI scales.
+- [x] Redesign the icons used in the app. The current set lives in [src/ui/icons.h](src/ui/icons.h) / [src/ui/icons.c](src/ui/icons.c) as a custom vector op-stream on a 16-unit grid. Pay particular attention to the **ai-assist icon** (`NS_ICON_AI`, currently an "acorn silhouette") — it should read clearly at small sizes and feel cohesive with the rest of the icon set.
+- [x] Review the spacing, look, and feel of the tabs in both the terminal area and the AI panel ([src/ui/tabs.c](src/ui/tabs.c), [src/ui/tabs.h](src/ui/tabs.h)). Goals: equal spacing between tabs, polished appearance (padding, separators, active/hover states), and reliable hit-testing / rendering across DPI scales.

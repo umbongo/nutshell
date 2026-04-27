@@ -130,6 +130,18 @@ static void invalidate_terminal(HWND hwnd)
     InvalidateRect(hwnd, &rc, FALSE);
 }
 
+/* Force a full repaint: marks every terminal row dirty AND invalidates the
+ * display-buffer shadow, so the next WM_PAINT redraws every cell. Use for
+ * state transitions outside WM_SIZE — tab switch, disconnect, reconnect —
+ * because InvalidateRect alone is not enough: the renderer's cell-level
+ * dirty check would still skip cells that match the stale shadow. */
+static void force_full_terminal_repaint(HWND hwnd, Terminal *term)
+{
+    if (term) term_mark_all_dirty(term);
+    dispbuf_invalidate(&g_renderer.dispbuf);
+    invalidate_terminal(hwnd);
+}
+
 /* Paint cooldown: cap repaints at ~60fps to prevent thrashing on heavy output */
 #define PAINT_COOLDOWN_MS 16
 static DWORD g_last_paint_tick;
@@ -196,7 +208,8 @@ static void on_tab_select(int index, void *user_data) {
     g_active_session = (Session *)user_data;
     HWND hParent = GetParent(g_hwndTabs);
     update_scrollbar(hParent);
-    invalidate_terminal(hParent);
+    force_full_terminal_repaint(hParent,
+        g_active_session ? g_active_session->term : NULL);
     SetFocus(hParent);
 
     /* Switch AI chat to the new session's conversation */
@@ -250,7 +263,8 @@ static void on_tab_close(int index, void *user_data) {
         hide_ai_panel(GetParent(g_hwndTabs));
 
     /* Force repaint of terminal area after tab close */
-    invalidate_terminal(GetParent(g_hwndTabs));
+    force_full_terminal_repaint(GetParent(g_hwndTabs),
+        g_active_session ? g_active_session->term : NULL);
 }
 
 /* ---- Passphrase prompt --------------------------------------------------- */
@@ -941,7 +955,7 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
                 tabs_set_logging(g_hwndTabs, tidx, 0);
             }
-            invalidate_terminal(hParent);
+            force_full_terminal_repaint(hParent, s->term);
         }
     } else if (status == TAB_DISCONNECTED) {
         /* Attempt reconnect using stored profile */
@@ -990,7 +1004,7 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
             s->conn_state = CONN_IDLE;
         }
-        invalidate_terminal(hParent);
+        force_full_terminal_repaint(hParent, s->term);
     }
     /* TAB_CONNECTING and TAB_IDLE: no action */
     (void)index;
@@ -2092,7 +2106,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
             update_scrollbar(hwnd);
-            invalidate_terminal(hwnd);
+            force_full_terminal_repaint(hwnd, s ? s->term : NULL);
             return 0;
         }
 
@@ -2145,12 +2159,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 SetWindowPos(g_hwndTabs, NULL, 0, 0, width, g_tab_height, SWP_NOZORDER);
             }
 
-            /* Reposition custom scrollbar (left of AI panel if docked) */
+            /* Reposition custom scrollbar (left of AI panel if docked).
+             * When docked, make the rightmost SPLITTER_PAD pixels of the
+             * scrollbar fall through to the parent so the splitter is
+             * grabbable from the scrollbar side. */
             if (g_hwndScrollbar) {
                 SetWindowPos(g_hwndScrollbar, NULL,
                     width - ai_w - CSB_WIDTH, g_tab_height,
                     CSB_WIDTH, height - g_tab_height,
                     SWP_NOZORDER);
+                csb_set_right_pad(g_hwndScrollbar,
+                    g_ai_docked ? AI_DOCK_SPLITTER_PAD : 0);
             }
 
             if (g_active_session && g_active_session->term && g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
@@ -2599,8 +2618,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 GetClientRect(hwnd, &crc);
                 int splitter_x = crc.right - g_ai_panel_width;
                 if (ai_dock_splitter_hit(pt.x, splitter_x,
-                                          AI_DOCK_SPLITTER_HIT, pt.y,
-                                          g_tab_height)) {
+                                          AI_DOCK_SPLITTER_W,
+                                          AI_DOCK_SPLITTER_PAD,
+                                          pt.y, g_tab_height)) {
                     SetCursor(LoadCursor(NULL, IDC_SIZEWE));
                     return TRUE;
                 }
@@ -2617,8 +2637,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 GetClientRect(hwnd, &crc);
                 int splitter_x = crc.right - g_ai_panel_width;
                 if (ai_dock_splitter_hit(mx, splitter_x,
-                                          AI_DOCK_SPLITTER_HIT, my,
-                                          g_tab_height)) {
+                                          AI_DOCK_SPLITTER_W,
+                                          AI_DOCK_SPLITTER_PAD,
+                                          my, g_tab_height)) {
                     g_ai_splitter_dragging = 1;
                     SetCapture(hwnd);
                     return 0;

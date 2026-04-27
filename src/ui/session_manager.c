@@ -8,6 +8,7 @@
 #include "../core/edit_scroll.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
+#include "icons.h"
 #include "../config/profile.h"
 #include "../config/config.h"
 #include "../core/vector.h"
@@ -34,6 +35,58 @@ typedef struct {
 } SessMgrState;
 
 /* ---- Helpers ---- */
+
+/* Paint a single owner-drawn session row: theme bg, server icon, name. */
+static void paint_session_row(LPDRAWITEMSTRUCT dis, const ThemeColors *theme)
+{
+    HDC hdc = dis->hDC;
+    RECT rc = dis->rcItem;
+    int selected = (dis->itemState & ODS_SELECTED) != 0;
+    int focus    = (dis->itemState & ODS_FOCUS) != 0;
+
+    COLORREF bg = selected ? theme_cr(theme->accent)
+                           : theme_cr(theme->bg_secondary);
+    COLORREF fg = selected ? theme_cr(theme->bg_primary)
+                           : theme_cr(theme->text_main);
+
+    HBRUSH br = CreateSolidBrush(bg);
+    FillRect(hdc, &rc, br);
+    DeleteObject(br);
+
+    int row_h = rc.bottom - rc.top;
+    int pad   = 4;
+    int icon_sz = row_h - pad * 2;
+    if (icon_sz < 12) icon_sz = 12;
+
+    RECT icon_rc = {
+        rc.left + pad,
+        rc.top + (row_h - icon_sz) / 2,
+        rc.left + pad + icon_sz,
+        rc.top + (row_h - icon_sz) / 2 + icon_sz
+    };
+    UINT dpi = (UINT)get_window_dpi(GetParent(dis->hwndItem));
+    if (dpi == 0) dpi = 96;
+    ns_icon_draw(hdc, NS_ICON_SERVER, &icon_rc, fg, dpi);
+
+    if ((INT)dis->itemID >= 0) {
+        char text[256];
+        text[0] = '\0';
+        SendMessageA(dis->hwndItem, LB_GETTEXT, dis->itemID, (LPARAM)text);
+
+        RECT text_rc = {
+            icon_rc.right + pad,
+            rc.top,
+            rc.right - pad,
+            rc.bottom
+        };
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, fg);
+        DrawTextA(hdc, text, -1, &text_rc,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+    }
+
+    if (focus) DrawFocusRect(hdc, &rc);
+}
 
 /* Rebuild the listbox from cfg->profiles.  Falls back to host if name is empty. */
 static void list_rebuild(HWND hList, const Config *cfg)
@@ -521,8 +574,22 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
     case WM_DRAWITEM:
         if (st && st->theme) {
             LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
+            if ((int)dis->CtlID == IDC_LIST_SESSIONS) {
+                paint_session_row(dis, st->theme);
+                return TRUE;
+            }
             int is_primary = ((int)dis->CtlID == IDOK);
             draw_themed_button(dis, st->theme, is_primary);
+            return TRUE;
+        }
+        break;
+
+    case WM_MEASUREITEM:
+        if ((int)wParam == IDC_LIST_SESSIONS) {
+            LPMEASUREITEMSTRUCT mis = (LPMEASUREITEMSTRUCT)lParam;
+            int dpi = get_window_dpi(hwnd);
+            if (dpi <= 0) dpi = 96;
+            mis->itemHeight = (UINT)MulDiv(22, dpi, 96);
             return TRUE;
         }
         break;
