@@ -7,6 +7,7 @@
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>  /* TCP_KEEPIDLE, TCP_KEEPINTVL */
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -41,6 +42,42 @@ static ssize_t nutshell_recv_cb(libssh2_socket_t sock, void *buffer,
         s->bytes_read_total += (uint64_t)n;
     }
     return (ssize_t)n;
+}
+
+#ifdef _WIN32
+#include <mstcpip.h>  /* tcp_keepalive struct, SIO_KEEPALIVE_VALS */
+#endif
+
+/* Enable OS-level TCP keepalive on the socket as a backstop for the
+ * libssh2-recv liveness check.  Idle 30s, interval 10s.  Quiet on
+ * failure — the libssh2-layer detector compensates. */
+static void set_tcp_keepalive(SOCKET sock)
+{
+#ifdef _WIN32
+    BOOL enable = TRUE;
+    setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE,
+               (const char *)&enable, (int)sizeof(enable));
+
+    struct tcp_keepalive ka;
+    ka.onoff             = 1;
+    ka.keepalivetime     = 30000u;  /* idle before first probe (ms) */
+    ka.keepaliveinterval = 10000u;  /* interval between probes (ms) */
+    DWORD bytes_returned = 0;
+    WSAIoctl(sock, SIO_KEEPALIVE_VALS, &ka, (DWORD)sizeof(ka),
+             NULL, 0, &bytes_returned, NULL, NULL);
+#else
+    int enable = 1;
+    setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &enable, (socklen_t)sizeof(enable));
+    /* Linux tunables for parity (the user's runtime target is Windows). */
+#ifdef TCP_KEEPIDLE
+    int idle = 30;
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &idle, (socklen_t)sizeof(idle));
+#endif
+#ifdef TCP_KEEPINTVL
+    int intvl = 10;
+    setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &intvl, (socklen_t)sizeof(intvl));
+#endif
+#endif
 }
 
 SshSession *ssh_session_new(void) {
@@ -163,6 +200,7 @@ int ssh_connect(SshSession *s, const char *host, int port) {
     }
 
     s->socket = sock;
+    set_tcp_keepalive(sock);
 
     /* Install our recv hook so we can track socket-level liveness.
      * Must run before handshake so KEX bytes are counted. */
