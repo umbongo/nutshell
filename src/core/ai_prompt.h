@@ -218,6 +218,29 @@ int ai_word_count(const char *text);
  * Returns bytes written (excluding NUL). */
 int ai_format_context_label(int tokens, int limit, char *buf, size_t buf_size);
 
+/* Build a multi-line tooltip string describing context window usage.
+ *
+ * Behaviour:
+ *  - If actual_in + actual_out > 0: shows separate "Input tokens" and
+ *    "Output tokens" lines plus a "Total" line.
+ *  - Otherwise: shows a single "Total (estimated)" line using
+ *    estimated_total, prefixed with '~'.
+ *  - If context_limit <= 0: omits the "/ <limit> (<pct>%)" tail and
+ *    appends a "Limit: unknown" line.
+ *  - If model_name is NULL or empty: the "Model:" line is omitted.
+ *
+ * Numbers >= 1000 are formatted with thousands separators (commas).
+ *
+ * Returns the number of bytes written (excluding NUL), or 0 if buf is
+ * NULL or buf_size == 0. Output is always NUL-terminated when buf_size
+ * >= 1.
+ */
+int ai_format_context_tooltip(int actual_in, int actual_out,
+                              int estimated_total,
+                              int context_limit,
+                              const char *model_name,
+                              char *buf, size_t buf_size);
+
 /* Get the context window token limit for a model name.
  * Returns 0 for unknown models. */
 int ai_model_context_limit(const char *model);

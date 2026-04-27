@@ -1317,6 +1317,9 @@ int test_context_label_exact_1k(void);
 int test_context_label_na(void);
 int test_context_label_small_buf(void);
 
+/* test_context_tooltip.c */
+int test_context_tooltip_actual_basic(void);
+
 /* test_base64.c */
 int test_base64_empty(void);
 int test_base64_hello(void);
@@ -2772,6 +2775,7 @@ int main(void) {
     failed += test_context_label_exact_1k();
     failed += test_context_label_na();
     failed += test_context_label_small_buf();
+    failed += test_context_tooltip_actual_basic();
 
     printf("\n--- xmalloc ---\n");
     failed += test_xmalloc_basic();

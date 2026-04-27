@@ -238,6 +238,77 @@ int ai_format_context_label(int tokens, int limit, char *buf, size_t buf_size)
                     tok_str, lim_str, pct);
 }
 
+/* Internal helper: format a non-negative int with thousands separators
+ * (e.g. 18432 -> "18,432"). Writes into buf of size buf_size and
+ * NUL-terminates. Returns bytes written (excluding NUL). */
+static int format_int_with_commas(int value, char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+    if (value < 0) value = 0;
+
+    char tmp[16];
+    int tmp_len = snprintf(tmp, sizeof(tmp), "%d", value);
+    if (tmp_len < 0) tmp_len = 0;
+
+    /* Walk digits from the right, inserting commas every 3. */
+    int out_len = 0;
+    int digits_since_comma = 0;
+    char rev[24];
+    for (int i = tmp_len - 1; i >= 0; i--) {
+        if (digits_since_comma == 3) {
+            rev[out_len++] = ',';
+            digits_since_comma = 0;
+        }
+        rev[out_len++] = tmp[i];
+        digits_since_comma++;
+    }
+
+    /* Reverse into buf. */
+    int written = 0;
+    for (int i = out_len - 1; i >= 0 && (size_t)written < buf_size - 1; i--)
+        buf[written++] = rev[i];
+    buf[written] = '\0';
+    return written;
+}
+
+int ai_format_context_tooltip(int actual_in, int actual_out,
+                              int estimated_total,
+                              int context_limit,
+                              const char *model_name,
+                              char *buf, size_t buf_size)
+{
+    (void)estimated_total; /* used in Task 2 */
+    if (!buf || buf_size == 0) return 0;
+    buf[0] = '\0';
+
+    int actual_total = actual_in + actual_out;
+    int has_actual = (actual_total > 0);
+
+    /* This task only handles the actual-data path with a known limit
+     * and a non-NULL model. Other paths are added in Task 2. */
+    if (!has_actual || context_limit <= 0 || !model_name || !model_name[0])
+        return 0;
+
+    char in_str[24], out_str[24], tot_str[24], lim_str[24];
+    format_int_with_commas(actual_in,     in_str,  sizeof(in_str));
+    format_int_with_commas(actual_out,    out_str, sizeof(out_str));
+    format_int_with_commas(actual_total,  tot_str, sizeof(tot_str));
+    format_int_with_commas(context_limit, lim_str, sizeof(lim_str));
+
+    int pct = (actual_total * 100) / context_limit;
+    if (pct > 100) pct = 100;
+
+    return snprintf(buf, buf_size,
+        "Context usage\r\n"
+        "\r\n"
+        "Input tokens:   %s\r\n"
+        "Output tokens:  %s\r\n"
+        "Total:          %s / %s (%d%%)\r\n"
+        "\r\n"
+        "Model:          %s",
+        in_str, out_str, tot_str, lim_str, pct, model_name);
+}
+
 int ai_conv_compact(AiConversation *conv, int keep_recent)
 {
     if (!conv || keep_recent <= 0) return 0;
