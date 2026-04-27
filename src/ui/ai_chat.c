@@ -2048,7 +2048,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
             0, 0, 0, 0, hwnd, NULL, NULL, NULL);
         if (nd->hTooltip) {
-            SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, 300);
+            SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, 400);
             add_tooltip(nd->hTooltip, nd->hNewChatBtn,
                 "New Chat\nClear the conversation and start fresh.");
             add_tooltip(nd->hTooltip, nd->hPermitBtn,
@@ -2071,6 +2071,20 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             add_tooltip(nd->hTooltip, nd->hSendBtn,
                 "Send\nSend your message to the AI.\n"
                 "Shortcut: press Enter in the input box.");
+            /* Register the context bar as a callback-text tool. The
+             * actual text is built on demand in the WM_NOTIFY handler
+             * for TTN_GETDISPINFOA, so it always reflects current
+             * token state without us having to push updates. */
+            if (nd->hContextBar) {
+                TOOLINFO ti;
+                memset(&ti, 0, sizeof(ti));
+                ti.cbSize   = sizeof(ti);
+                ti.uFlags   = TTF_SUBCLASS | TTF_IDISHWND;
+                ti.hwnd     = hwnd;
+                ti.uId      = (UINT_PTR)nd->hContextBar;
+                ti.lpszText = LPSTR_TEXTCALLBACK;
+                SendMessage(nd->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+            }
         }
 
         /* Show loaded conversation or fresh welcome message */
