@@ -277,36 +277,85 @@ int ai_format_context_tooltip(int actual_in, int actual_out,
                               const char *model_name,
                               char *buf, size_t buf_size)
 {
-    (void)estimated_total; /* used in Task 2 */
     if (!buf || buf_size == 0) return 0;
     buf[0] = '\0';
 
     int actual_total = actual_in + actual_out;
-    int has_actual = (actual_total > 0);
+    int has_actual   = (actual_total > 0);
+    int has_limit    = (context_limit > 0);
+    int has_model    = (model_name && model_name[0]);
 
-    /* This task only handles the actual-data path with a known limit
-     * and a non-NULL model. Other paths are added in Task 2. */
-    if (!has_actual || context_limit <= 0 || !model_name || !model_name[0])
-        return 0;
+    char tot_str[24], lim_str[24];
+    int  display_total = has_actual ? actual_total : estimated_total;
+    if (display_total < 0) display_total = 0;
+    format_int_with_commas(display_total, tot_str, sizeof(tot_str));
+    if (has_limit)
+        format_int_with_commas(context_limit, lim_str, sizeof(lim_str));
 
-    char in_str[24], out_str[24], tot_str[24], lim_str[24];
-    format_int_with_commas(actual_in,     in_str,  sizeof(in_str));
-    format_int_with_commas(actual_out,    out_str, sizeof(out_str));
-    format_int_with_commas(actual_total,  tot_str, sizeof(tot_str));
-    format_int_with_commas(context_limit, lim_str, sizeof(lim_str));
+    int pct = 0;
+    if (has_limit) {
+        pct = (display_total * 100) / context_limit;
+        if (pct > 100) pct = 100;
+    }
 
-    int pct = (actual_total * 100) / context_limit;
-    if (pct > 100) pct = 100;
+    /* Build into a working buffer to keep the snprintf calls simple. */
+    char tmp[512];
+    int  off = 0;
+    int  rem = (int)sizeof(tmp);
 
-    return snprintf(buf, buf_size,
-        "Context usage\r\n"
-        "\r\n"
-        "Input tokens:   %s\r\n"
-        "Output tokens:  %s\r\n"
-        "Total:          %s / %s (%d%%)\r\n"
-        "\r\n"
-        "Model:          %s",
-        in_str, out_str, tot_str, lim_str, pct, model_name);
+    int w = snprintf(tmp + off, (size_t)rem, "Context usage\r\n\r\n");
+    if (w < 0) w = 0;
+    off += w; rem -= w; if (rem < 0) rem = 0;
+
+    if (has_actual) {
+        char in_str[24], out_str[24];
+        format_int_with_commas(actual_in,  in_str,  sizeof(in_str));
+        format_int_with_commas(actual_out, out_str, sizeof(out_str));
+        w = snprintf(tmp + off, (size_t)rem,
+            "Input tokens:   %s\r\n"
+            "Output tokens:  %s\r\n",
+            in_str, out_str);
+        if (w < 0) w = 0;
+        off += w; rem -= w; if (rem < 0) rem = 0;
+
+        if (has_limit) {
+            w = snprintf(tmp + off, (size_t)rem,
+                "Total:          %s / %s (%d%%)\r\n",
+                tot_str, lim_str, pct);
+        } else {
+            w = snprintf(tmp + off, (size_t)rem,
+                "Total:          %s\r\n"
+                "Limit: unknown\r\n",
+                tot_str);
+        }
+    } else {
+        if (has_limit) {
+            w = snprintf(tmp + off, (size_t)rem,
+                "Total (estimated):  ~%s / %s (%d%%)\r\n",
+                tot_str, lim_str, pct);
+        } else {
+            w = snprintf(tmp + off, (size_t)rem,
+                "Total (estimated):  ~%s\r\n"
+                "Limit: unknown\r\n",
+                tot_str);
+        }
+    }
+    if (w < 0) w = 0;
+    off += w; rem -= w; if (rem < 0) rem = 0;
+
+    if (has_model) {
+        w = snprintf(tmp + off, (size_t)rem,
+            "\r\nModel:          %s", model_name);
+        if (w < 0) w = 0;
+        off += w; rem -= w; if (rem < 0) rem = 0;
+    }
+
+    /* Copy into the caller's buffer with truncation. */
+    size_t copy_len = (size_t)off;
+    if (copy_len > buf_size - 1) copy_len = buf_size - 1;
+    memcpy(buf, tmp, copy_len);
+    buf[copy_len] = '\0';
+    return (int)copy_len;
 }
 
 int ai_conv_compact(AiConversation *conv, int keep_recent)

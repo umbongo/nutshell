@@ -1319,6 +1319,16 @@ int test_context_label_small_buf(void);
 
 /* test_context_tooltip.c */
 int test_context_tooltip_actual_basic(void);
+int test_context_tooltip_estimate_marks_estimated(void);
+int test_context_tooltip_unknown_limit_actual(void);
+int test_context_tooltip_unknown_limit_estimate(void);
+int test_context_tooltip_null_model_omits_line(void);
+int test_context_tooltip_empty_model_omits_line(void);
+int test_context_tooltip_zero_actuals_zero_estimate(void);
+int test_context_tooltip_large_numbers(void);
+int test_context_tooltip_small_buf_safe(void);
+int test_context_tooltip_null_buf_returns_zero(void);
+int test_context_tooltip_zero_size_returns_zero(void);
 
 /* test_base64.c */
 int test_base64_empty(void);
@@ -2776,6 +2786,16 @@ int main(void) {
     failed += test_context_label_na();
     failed += test_context_label_small_buf();
     failed += test_context_tooltip_actual_basic();
+    failed += test_context_tooltip_estimate_marks_estimated();
+    failed += test_context_tooltip_unknown_limit_actual();
+    failed += test_context_tooltip_unknown_limit_estimate();
+    failed += test_context_tooltip_null_model_omits_line();
+    failed += test_context_tooltip_empty_model_omits_line();
+    failed += test_context_tooltip_zero_actuals_zero_estimate();
+    failed += test_context_tooltip_large_numbers();
+    failed += test_context_tooltip_small_buf_safe();
+    failed += test_context_tooltip_null_buf_returns_zero();
+    failed += test_context_tooltip_zero_size_returns_zero();
 
     printf("\n--- xmalloc ---\n");
     failed += test_xmalloc_basic();
