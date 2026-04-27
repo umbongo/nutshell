@@ -325,6 +325,8 @@ static const TooltipEntry k_tooltips[] = {
       "Disconnect SSH sessions after this many minutes of no user "
       "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
       "scrolling, tab switches, and AI chat input all count as activity." },
+    { IDC_AI_REFRESH,
+      "Fetch the model list from the selected AI provider." },
 };
 #define NUM_TOOLTIPS ((int)(sizeof(k_tooltips) / sizeof(k_tooltips[0])))
 
@@ -483,12 +485,24 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         }
         y += rh;
 
-        /* SSH section heading */
+        /* SSH section heading: etched line, then the word "SSH" on the next row. */
+        {
+            int sep_y = y + MulDiv(8, nd->dpi, 96);
+            int sep_h = MulDiv(2, nd->dpi, 96);
+            /* Span the full content width: from lx through end of edit area. */
+            HWND hSep = CreateWindow("STATIC", "",
+                WS_VISIBLE | WS_CHILD | SS_ETCHEDHORZ,
+                lx, sep_y, (ex + ew) - lx, sep_h,
+                hwnd, NULL, NULL, NULL);
+            (void)hSep;
+        }
+        y += rh;
+
         {
             int ssh_h = MulDiv(20, nd->dpi, 96);
             HWND hSshLabel = CreateWindow("STATIC", "SSH",
                 WS_VISIBLE | WS_CHILD | SS_LEFT,
-                lx, y + ssh_h / 6, lw, ssh_h, hwnd, NULL, NULL, NULL);
+                lx, y, lw, ssh_h, hwnd, NULL, NULL, NULL);
             (void)hSshLabel;
         }
         y += rh;
@@ -1098,7 +1112,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
 
             /* SSH user idle timeout */
             v = GetDlgItemInt(hwnd, IDC_SSH_IDLE_EDIT, &ok, FALSE);
-            if (ok && (int)v >= 0 && (int)v <= 10080)
+            if (ok && v <= 10080u)
                 s->ssh_user_idle_timeout_mins = (int)v;
             /* on parse failure or out-of-range: retain previous value */
 
@@ -1164,7 +1178,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(400, pdpi, 96), MulDiv(880, pdpi, 96),
+        MulDiv(400, pdpi, 96), MulDiv(910, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {
