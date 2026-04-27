@@ -221,24 +221,27 @@ int test_dock_lerp_resize(void) {
 
 int test_dock_splitter_hit_inside(void) {
     TEST_BEGIN();
-    /* Splitter at x=900, width=4, half=2, mouse at 899 */
-    ASSERT_TRUE(ai_dock_splitter_hit(899, 900, 4, 50, 32));
-    ASSERT_TRUE(ai_dock_splitter_hit(900, 900, 4, 50, 32));
-    ASSERT_TRUE(ai_dock_splitter_hit(901, 900, 4, 50, 32));
+    /* splitter_x=900, gap=6, pad=8 -> hit zone [892, 914] */
+    ASSERT_TRUE(ai_dock_splitter_hit(892, 900, 6, 8, 50, 32));
+    ASSERT_TRUE(ai_dock_splitter_hit(900, 900, 6, 8, 50, 32));   /* visual line */
+    ASSERT_TRUE(ai_dock_splitter_hit(903, 900, 6, 8, 50, 32));   /* mid-gap */
+    ASSERT_TRUE(ai_dock_splitter_hit(906, 900, 6, 8, 50, 32));   /* right edge of gap */
+    ASSERT_TRUE(ai_dock_splitter_hit(914, 900, 6, 8, 50, 32));   /* into AI panel transparent zone */
     TEST_END();
 }
 
 int test_dock_splitter_hit_outside(void) {
     TEST_BEGIN();
-    ASSERT_TRUE(!ai_dock_splitter_hit(895, 900, 4, 50, 32));
-    ASSERT_TRUE(!ai_dock_splitter_hit(905, 900, 4, 50, 32));
+    /* splitter_x=900, gap=6, pad=8 -> hit zone [892, 914] */
+    ASSERT_TRUE(!ai_dock_splitter_hit(891, 900, 6, 8, 50, 32));
+    ASSERT_TRUE(!ai_dock_splitter_hit(915, 900, 6, 8, 50, 32));
     TEST_END();
 }
 
 int test_dock_splitter_hit_above_tabs(void) {
     TEST_BEGIN();
     /* Mouse in tab bar area (y < top_y) should not hit */
-    ASSERT_TRUE(!ai_dock_splitter_hit(900, 900, 4, 10, 32));
+    ASSERT_TRUE(!ai_dock_splitter_hit(900, 900, 6, 8, 10, 32));
     TEST_END();
 }
 

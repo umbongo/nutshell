@@ -3,6 +3,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <windowsx.h>
 #include "ui_theme.h"
 #include "edit_scroll.h"
 
@@ -42,6 +43,7 @@ typedef struct {
     int drag_offset;   /* mouse Y offset from thumb top when drag started */
     int hovering;      /* 1 if mouse is over the thumb */
     int tracking;      /* 1 if TrackMouseEvent is active */
+    int right_pad;     /* px on right edge that fall through to parent (for splitter drag) */
     const ThemeColors *theme;
 } CsbData;
 
@@ -158,6 +160,21 @@ static inline LRESULT CALLBACK csb_wndproc(HWND hwnd, UINT msg,
 
     case WM_ERASEBKGND:
         return 1;  /* we fill the whole area in WM_PAINT */
+
+    case WM_NCHITTEST: {
+        /* Fall through to parent on the right edge so the parent can
+         * handle the AI dock splitter drag without the scrollbar
+         * stealing the click. */
+        if (d && d->right_pad > 0) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            ScreenToClient(hwnd, &pt);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            if (pt.x >= rc.right - d->right_pad)
+                return HTTRANSPARENT;
+        }
+        break;
+    }
 
     case WM_LBUTTONDOWN: {
         if (!d) break;
@@ -326,6 +343,16 @@ static inline void csb_set_theme(HWND hwnd, const ThemeColors *theme)
     if (!d) return;
     d->theme = theme;
     InvalidateRect(hwnd, NULL, FALSE);
+}
+
+/* Make the rightmost `pad` pixels fall through to the parent window
+ * (HTTRANSPARENT). Used so the AI dock splitter is draggable from the
+ * scrollbar side. Pass 0 to disable. */
+static inline void csb_set_right_pad(HWND hwnd, int pad)
+{
+    CsbData *d = (CsbData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    d->right_pad = pad < 0 ? 0 : pad;
 }
 
 /* Sync a custom scrollbar with a multiline EDIT/RichEdit control.

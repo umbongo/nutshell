@@ -16,7 +16,7 @@ FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     /* ---- Left column: saved sessions ---- */
     LTEXT           "Sessions",         -1,            12,   6, 158,   8
-    LISTBOX         IDC_LIST_SESSIONS,                 12,  18, 158, 272, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_TABSTOP
+    LISTBOX         IDC_LIST_SESSIONS,                 12,  18, 158, 272, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_TABSTOP
     PUSHBUTTON      "New",              IDC_BTN_NEW,   12, 295,  47,  14
     PUSHBUTTON      "Edit",             IDC_BTN_EDIT,  65, 295,  47,  14
     PUSHBUTTON      "Delete",           IDC_BTN_DELETE,128, 295,  55,  14

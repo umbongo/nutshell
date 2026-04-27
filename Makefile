@@ -70,7 +70,19 @@ TEST_SRCS = $(APP_SRCS) $(TEST_IMPL_SRCS)
 TEST_TARGET = build/test_runner
 
 
-.PHONY: all clean test lint debug release redraw-debug
+.PHONY: all clean test lint debug release redraw-debug wintest
+
+# ── Win32-only test harness (icon renderer). Links GDI+ via MinGW,
+# runs the resulting .exe under Wine if available; otherwise prints
+# a skip notice.  Kept separate from `test` which is native Linux.
+WIN_TEST_CC      = x86_64-w64-mingw32-gcc
+WIN_TEST_TARGET  = build/win/test_runner.exe
+WIN_TEST_SRCS    = src/ui/icons.c tests/test_icons.c tests/win_runner.c
+WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
+                   -Wformat=2 -Wconversion \
+                   -Isrc -Isrc/core -Isrc/config -Isrc/crypto \
+                   -I$(VCPKG_INC) -Isrc/term -Isrc/ssh -Isrc/ui -Itests
+WIN_TEST_LDFLAGS = -lgdiplus -lgdi32 -luser32
 
 all: $(TARGET)
 
@@ -96,6 +108,15 @@ test:
 	@mkdir -p build
 	$(TEST_CC) $(TEST_CFLAGS) $(TEST_SRCS) -o $(TEST_TARGET) $(TEST_LDFLAGS)
 	./$(TEST_TARGET)
+
+wintest:
+	@mkdir -p $(BUILD_DIR)
+	$(WIN_TEST_CC) $(WIN_TEST_CFLAGS) $(WIN_TEST_SRCS) -o $(WIN_TEST_TARGET) $(WIN_TEST_LDFLAGS)
+	@if command -v wine >/dev/null 2>&1; then \
+		wine $(WIN_TEST_TARGET); \
+	else \
+		echo "[skip] wine not installed — built $(WIN_TEST_TARGET) but cannot run"; \
+	fi
 
 clean:
 	rm -f $(OBJS) $(TARGET) $(TEST_TARGET) *.o tests/*.o

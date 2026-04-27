@@ -22,7 +22,6 @@ typedef struct {
     HFONT hMonoFont;
     HFONT hBoldFont;
     HFONT hSmallFont;
-    HFONT hIconFont;
 
     /* Activity indicator (not owned, set by parent) */
     ActivityState *activity;
@@ -71,7 +70,7 @@ HWND chat_listview_create(HWND parent, int x, int y, int w, int h,
 
 /* Set fonts (called after creation or font change). */
 void chat_listview_set_fonts(HWND hwnd, HFONT font, HFONT mono,
-                             HFONT bold, HFONT small_font, HFONT icon);
+                             HFONT bold, HFONT small_font);
 
 /* Set theme (triggers full repaint). */
 void chat_listview_set_theme(HWND hwnd, const ThemeColors *theme);

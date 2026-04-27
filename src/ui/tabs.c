@@ -7,14 +7,15 @@
 #include <stdio.h>
 #include <commctrl.h>
 #include "dpi_util.h"
-#include "icon_font.h"
+#include "icons.h"
+#include "ui_draw.h"
 
 #ifdef _WIN32
 
 static const char *TABS_CLASS_NAME = "Nutshell_Tabs";
 
 /* ---- Layout constants (base values at 96 DPI) ---------------------------- */
-#define TAB_H_PAD_BASE    12
+#define TAB_V_PAD_BASE    12   /* vertical inset above/below tab strip */
 #define BTN_SIZE_BASE     24
 #define TAB_GAP_BASE      8
 #define BTN_GAP_BASE      2
@@ -57,13 +58,28 @@ typedef struct TabControlData {
 
     HFONT hFont;
     HFONT hSmallFont;  /* cached small font for indicator labels */
-    HFONT hIconFont;   /* Windows Fluent Icons */
     HWND  hTooltip;    /* Win32 tooltip control */
     int   ai_active;   /* 1 = API key configured -> green, 0 = grey */
     int   dpi;         /* per-window DPI for layout scaling */
     char  font_name[64];
     const ThemeColors *theme;
+    float pulse_phase; /* 0..2*PI — advanced by WM_TIMER for connecting tabs */
+    int   hover_tab;   /* index of tab under cursor, or -1 */
+    int   hover_btn;   /* HOVER_BTN_* (see enum below) or -1 */
+    BOOL  tracking_mouse; /* TRUE while TrackMouseEvent is armed */
 } TabControlData;
+
+/* Right-side and add buttons that participate in hover highlighting. */
+enum {
+    HOVER_BTN_NONE = -1,
+    HOVER_BTN_ADD = 0,
+    HOVER_BTN_LEFT,
+    HOVER_BTN_RIGHT,
+    HOVER_BTN_AI
+};
+
+#define TABS_TIMER_PULSE  0x7501
+#define TABS_PULSE_MS     50
 
 /* Convert 0xRRGGBB to COLORREF (0x00BBGGRR) */
 static COLORREF tc(unsigned int rgb)
@@ -83,12 +99,11 @@ static COLORREF status_color(TabStatus s)
     }
 }
 
-/* (Re-)create hFont, hSmallFont, and hIconFont from font_name.  Deletes any previous. */
+/* (Re-)create hFont and hSmallFont from font_name. Deletes any previous. */
 static void tabs_create_fonts(TabControlData *data, int dpi)
 {
     if (data->hFont)      { DeleteObject(data->hFont);      data->hFont = NULL; }
     if (data->hSmallFont) { DeleteObject(data->hSmallFont); data->hSmallFont = NULL; }
-    if (data->hIconFont)  { DeleteObject(data->hIconFont);  data->hIconFont = NULL; }
 
     data->dpi = dpi;
     int logPixelsY = dpi;
@@ -104,13 +119,60 @@ static void tabs_create_fonts(TabControlData *data, int dpi)
                                    DEFAULT_CHARSET, OUT_TT_PRECIS,
                                    CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                    DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
-    
-    /* Icon font — validated, NULL if no Fluent/MDL2 font available */
-    int ih = -MulDiv(APP_FONT_UI_SIZE, logPixelsY, 72);
-    data->hIconFont = create_icon_font(ih);
 }
 
 /* Removed manual draw_chip_icon logic in favour of Fluent icons */
+
+/* Hover hit-test: figure out which tab and/or right-side button is under
+ * (mx, my).  Returns indices via out params; -1 / HOVER_BTN_NONE when
+ * nothing is hovered.  Mirrors the geometry of the paint and click paths
+ * — keep in sync if those change. */
+static void tabs_hover_hit(HWND hwnd, TabControlData *data, int mx, int my,
+                           int *out_tab, int *out_btn)
+{
+    *out_tab = -1;
+    *out_btn = HOVER_BTN_NONE;
+    if (!data) return;
+
+    RECT rcClient;
+    GetClientRect(hwnd, &rcClient);
+
+    int btnSz_h  = S(BTN_SIZE_BASE);
+    int pad_h    = S(PAD_BASE);
+    int btnGap_h = S(BTN_GAP_BASE);
+    int btnY_h   = (rcClient.bottom - btnSz_h) / 2;
+
+    /* [+] add */
+    if (mx >= pad_h && mx <= pad_h + btnSz_h &&
+        my >= btnY_h && my <= btnY_h + btnSz_h) {
+        *out_btn = HOVER_BTN_ADD;
+        return;
+    }
+
+    /* Right-side cluster */
+    int aiX_h    = rcClient.right - btnSz_h - pad_h;
+    int rightX_h = aiX_h - btnSz_h - btnGap_h;
+    int leftX_h  = rightX_h - btnSz_h - btnGap_h;
+    if (my >= btnY_h && my <= btnY_h + btnSz_h) {
+        if (mx >= aiX_h    && mx <= aiX_h    + btnSz_h) { *out_btn = HOVER_BTN_AI;    return; }
+        if (mx >= rightX_h && mx <= rightX_h + btnSz_h) { *out_btn = HOVER_BTN_RIGHT; return; }
+        if (mx >= leftX_h  && mx <= leftX_h  + btnSz_h) { *out_btn = HOVER_BTN_LEFT;  return; }
+    }
+
+    /* Tabs */
+    int overhead_h = TAB_OVERHEAD_S;
+    int minW_h     = S(TAB_MIN_W_BASE);
+    int x = TAB_START_X_S;
+    HDC hdc_h = GetDC(hwnd);
+    HFONT hOld = (HFONT)SelectObject(hdc_h, data->hFont);
+    for (int i = 0; i < data->m.count; i++) {
+        int tw = tab_w_s(hdc_h, data->m.tabs[i].title, overhead_h, minW_h);
+        if (mx >= x && mx <= x + tw) { *out_tab = i; break; }
+        x += tw + S(TAB_GAP_BASE);
+    }
+    SelectObject(hdc_h, hOld);
+    ReleaseDC(hwnd, hdc_h);
+}
 
 static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -120,6 +182,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case WM_CREATE: {
             data = xcalloc(1, sizeof(TabControlData));
             tabmgr_init(&data->m);
+            data->hover_tab = -1;
+            data->hover_btn = HOVER_BTN_NONE;
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
 
             (void)snprintf(data->font_name, sizeof(data->font_name),
@@ -143,24 +207,75 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 /* Enable multiline tooltips (needed for \n to render) */
                 SendMessage(data->hTooltip, TTM_SETMAXTIPWIDTH, 0, 500);
             }
+            SetTimer(hwnd, TABS_TIMER_PULSE, TABS_PULSE_MS, NULL);
             return 0;
         }
 
+        case WM_TIMER:
+            if (data && wParam == TABS_TIMER_PULSE) {
+                /* Advance phase; only invalidate if any tab is CONNECTING */
+                int any_connecting = 0;
+                for (int i = 0; i < data->m.count; i++) {
+                    if (data->m.tabs[i].status == TAB_CONNECTING) { any_connecting = 1; break; }
+                }
+                if (any_connecting) {
+                    data->pulse_phase += 0.18f;
+                    if (data->pulse_phase > 6.2831853f) data->pulse_phase -= 6.2831853f;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+            }
+            return 0;
+
         case WM_DESTROY:
+            KillTimer(hwnd, TABS_TIMER_PULSE);
             if (data) {
                 if (data->hFont)      DeleteObject(data->hFont);
                 if (data->hSmallFont) DeleteObject(data->hSmallFont);
-                if (data->hIconFont)  DeleteObject(data->hIconFont);
                 if (data->hTooltip)   DestroyWindow(data->hTooltip);
                 free(data);
             }
             return 0;
 
-        case WM_MOUSEMOVE:
+        case WM_MOUSEMOVE: {
+            if (!data) return 0;
+
+            /* Update hover indices; only invalidate when they change so we
+             * don't trigger a 60Hz repaint while the cursor moves. */
+            int mx = (int)(short)LOWORD(lParam);
+            int my = (int)(short)HIWORD(lParam);
+            int new_tab = -1, new_btn = HOVER_BTN_NONE;
+            tabs_hover_hit(hwnd, data, mx, my, &new_tab, &new_btn);
+            if (new_tab != data->hover_tab || new_btn != data->hover_btn) {
+                data->hover_tab = new_tab;
+                data->hover_btn = new_btn;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+
+            /* Arm WM_MOUSELEAVE delivery once per enter. */
+            if (!data->tracking_mouse) {
+                TRACKMOUSEEVENT tme = {0};
+                tme.cbSize    = sizeof(tme);
+                tme.dwFlags   = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                if (TrackMouseEvent(&tme)) data->tracking_mouse = TRUE;
+            }
+
             /* Relay mouse moves to the tooltip control so it can trigger */
-            if (data && data->hTooltip) {
+            if (data->hTooltip) {
                 MSG msg2 = {hwnd, WM_MOUSEMOVE, wParam, lParam, 0, {0, 0}};
                 SendMessage(data->hTooltip, TTM_RELAYEVENT, 0, (LPARAM)&msg2);
+            }
+            return 0;
+        }
+
+        case WM_MOUSELEAVE:
+            if (data) {
+                data->tracking_mouse = FALSE;
+                if (data->hover_tab != -1 || data->hover_btn != HOVER_BTN_NONE) {
+                    data->hover_tab = -1;
+                    data->hover_btn = HOVER_BTN_NONE;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
             }
             return 0;
 
@@ -256,7 +371,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int indW     = S(INDICATOR_W_BASE);
             int indGap   = S(INDICATOR_GAP_BASE);
             int closeSz  = S(CLOSE_SIZE_BASE);
-            int tabHPad  = S(TAB_H_PAD_BASE);
+            int tabVPad  = S(TAB_V_PAD_BASE);
             int accentH  = S(ACCENT_BAR_H_BASE);
             int overhead = TAB_OVERHEAD_S;
             int minW     = S(TAB_MIN_W_BASE);
@@ -267,9 +382,11 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int btnY = (rcClient.bottom - btnSz) / 2;
             RECT rcAdd = {pad, btnY, pad + btnSz, btnY + btnSz};
             {
+                COLORREF addFill = (data->hover_btn == HOVER_BTN_ADD)
+                                 ? rgb_alpha(cBtn, cTabAct, 0.6f) : cBtn;
                 HPEN hPen = CreatePen(PS_SOLID, 1, cBorder);
                 HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
-                HBRUSH hBr = CreateSolidBrush(cBtn);
+                HBRUSH hBr = CreateSolidBrush(addFill);
                 HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hBr);
                 RoundRect(hdc, rcAdd.left, rcAdd.top, rcAdd.right, rcAdd.bottom, rr, rr);
                 SelectObject(hdc, hOldBr);
@@ -277,12 +394,11 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 DeleteObject(hBr);
                 DeleteObject(hPen);
             }
-            SetTextColor(hdc, cText);
-            DrawText(hdc, "+", -1, &rcAdd, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            ns_icon_draw(hdc, NS_ICON_PLUS, &rcAdd, cText, (UINT)data->dpi);
 
             /* ---- Tabs ---- */
-            int tabH = rcClient.bottom - tabHPad;
-            int tabY = tabHPad / 2;
+            int tabH = rcClient.bottom - tabVPad;
+            int tabY = tabVPad / 2;
             int x    = tabStartX;
 
             for (int i = 0; i < data->m.count; i++) {
@@ -291,9 +407,13 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
                 /* Background & border */
                 int is_active = (i == data->m.active_index);
+                int is_hover  = (!is_active && i == data->hover_tab);
+                COLORREF tabFill = is_active ? cTabAct
+                                 : (is_hover ? rgb_alpha(cTabInact, cTabAct, 0.5f)
+                                             : cTabInact);
                 HPEN hPen = CreatePen(PS_SOLID, 1, cBorder);
                 HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
-                HBRUSH hTabBrush = CreateSolidBrush(is_active ? cTabAct : cTabInact);
+                HBRUSH hTabBrush = CreateSolidBrush(tabFill);
                 HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hTabBrush);
 
                 RoundRect(hdc, rcTab.left, rcTab.top, rcTab.right, rcTab.bottom, S(6), S(6));
@@ -320,8 +440,9 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 int indX = x + indGap;
                 int indY = tabY + (tabH - indicH) / 2;
                 {
-                    HBRUSH sBrush = CreateSolidBrush(status_color(data->m.tabs[i].status));
-                    HPEN sPen     = CreatePen(PS_SOLID, 1, status_color(data->m.tabs[i].status));
+                    COLORREF sCol = status_color(data->m.tabs[i].status);
+                    HBRUSH sBrush = CreateSolidBrush(sCol);
+                    HPEN sPen     = CreatePen(PS_SOLID, 1, sCol);
                     HPEN hOldSPen  = (HPEN)SelectObject(hdc, sPen);
                     HBRUSH hOldSBr = (HBRUSH)SelectObject(hdc, sBrush);
                     RoundRect(hdc, indX, indY, indX + indW, indY + indicH, rr, rr);
@@ -329,6 +450,11 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     SelectObject(hdc, hOldSPen);
                     DeleteObject(sBrush);
                     DeleteObject(sPen);
+
+                    if (data->m.tabs[i].status == TAB_CONNECTING) {
+                        RECT dot_rc = { indX, indY, indX + indW, indY + indicH };
+                        draw_status_pulse(hdc, &dot_rc, sCol, data->pulse_phase);
+                    }
                 }
 
                 /* ---- Log button ---- */
@@ -368,16 +494,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 int closeX = x + tw - closeSz - pad;
                 int closeY = tabY + (tabH - closeSz) / 2;
                 RECT rcClose = {closeX, closeY, closeX + closeSz, closeY + closeSz};
-                SetTextColor(hdc, cDim);
-                if (data->hIconFont) {
-                    HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont);
-                    DrawTextW(hdc, L"\xEA39", -1, &rcClose,
-                              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    SelectObject(hdc, prevF);
-                } else {
-                    DrawText(hdc, "x", 1, &rcClose,
-                             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                }
+                ns_icon_draw(hdc, NS_ICON_CLOSE, &rcClose, cDim, (UINT)data->dpi);
 
                 x += tw + tabGap;
             }
@@ -388,60 +505,44 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 int rightX = aiX - btnSz - btnGap;
                 int leftX  = rightX - btnSz - btnGap;
 
-                HBRUSH rBtnBrush = CreateSolidBrush(cBtn);
+                COLORREF hoverFill = rgb_alpha(cBtn, cTabAct, 0.6f);
                 HPEN rBtnPen = CreatePen(PS_SOLID, 1, cBorder);
                 HPEN hOldBtnPen = (HPEN)SelectObject(hdc, rBtnPen);
-                HBRUSH hOldBtnBr = (HBRUSH)SelectObject(hdc, rBtnBrush);
+
+                /* Helper macro: paint one square button's bg, picking the
+                 * hover-tinted fill if this button is currently hovered. */
+                #define DRAW_BTN_BG(rcptr, hover_id) do { \
+                    COLORREF _f = (data->hover_btn == (hover_id)) ? hoverFill : cBtn; \
+                    HBRUSH _b = CreateSolidBrush(_f); \
+                    HBRUSH _ob = (HBRUSH)SelectObject(hdc, _b); \
+                    RoundRect(hdc, (rcptr)->left, (rcptr)->top, \
+                              (rcptr)->right, (rcptr)->bottom, rr, rr); \
+                    SelectObject(hdc, _ob); \
+                    DeleteObject(_b); \
+                } while (0)
 
                 /* ◀ Left arrow */
                 if (leftX > x) {
                     RECT rcLeft = {leftX, btnY, leftX + btnSz, btnY + btnSz};
-                    RoundRect(hdc, rcLeft.left, rcLeft.top, rcLeft.right, rcLeft.bottom, rr, rr);
-                    SetTextColor(hdc, cDim);
-                    if (data->hIconFont) {
-                        HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont);
-                        DrawTextW(hdc, L"\xE76B", -1, &rcLeft,
-                                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                        SelectObject(hdc, prevF);
-                    } else {
-                        DrawText(hdc, "<", 1, &rcLeft,
-                                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    }
+                    DRAW_BTN_BG(&rcLeft, HOVER_BTN_LEFT);
+                    ns_icon_draw(hdc, NS_ICON_CHEV_LEFT, &rcLeft, cDim, (UINT)data->dpi);
                 }
                 /* ▶ Right arrow */
                 if (rightX > x) {
                     RECT rcRight = {rightX, btnY, rightX + btnSz, btnY + btnSz};
-                    RoundRect(hdc, rcRight.left, rcRight.top, rcRight.right, rcRight.bottom, rr, rr);
-                    SetTextColor(hdc, cDim);
-                    if (data->hIconFont) {
-                        HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont);
-                        DrawTextW(hdc, L"\xE76C", -1, &rcRight,
-                                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                        SelectObject(hdc, prevF);
-                    } else {
-                        DrawText(hdc, ">", 1, &rcRight,
-                                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    }
+                    DRAW_BTN_BG(&rcRight, HOVER_BTN_RIGHT);
+                    ns_icon_draw(hdc, NS_ICON_CHEV_RIGHT, &rcRight, cDim, (UINT)data->dpi);
                 }
-                /* AI button — Fluent icon */
+                /* AI button — vector chat-bubble glyph */
                 if (aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + btnSz, btnY + btnSz};
-                    RoundRect(hdc, rcAi.left, rcAi.top, rcAi.right, rcAi.bottom, rr, rr);
-                    SetTextColor(hdc, data->ai_active ? RGB(0, 180, 0) : cDim);
-                    if (data->hIconFont) {
-                        HFONT prevF = (HFONT)SelectObject(hdc, data->hIconFont);
-                        DrawTextW(hdc, L"\xE950", -1, &rcAi,
-                                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                        SelectObject(hdc, prevF);
-                    } else {
-                        DrawText(hdc, "AI", 2, &rcAi,
-                                 DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-                    }
+                    DRAW_BTN_BG(&rcAi, HOVER_BTN_AI);
+                    COLORREF aiCol = data->ai_active ? RGB(0, 180, 0) : cDim;
+                    ns_icon_draw(hdc, NS_ICON_AI, &rcAi, aiCol, (UINT)data->dpi);
                 }
 
-                SelectObject(hdc, hOldBtnBr);
+                #undef DRAW_BTN_BG
                 SelectObject(hdc, hOldBtnPen);
-                DeleteObject(rBtnBrush);
                 DeleteObject(rBtnPen);
             }
 
@@ -468,7 +569,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int indW_h   = S(INDICATOR_W_BASE);
             int indGap_h = S(INDICATOR_GAP_BASE);
             int closeSz_h = S(CLOSE_SIZE_BASE);
-            int tabHPad_h = S(TAB_H_PAD_BASE);
+            int tabVPad_h = S(TAB_V_PAD_BASE);
             int overhead_h = TAB_OVERHEAD_S;
             int minW_h    = S(TAB_MIN_W_BASE);
 
@@ -509,8 +610,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             }
 
             /* Hit test tabs */
-            int tabH = rcClient.bottom - tabHPad_h;
-            int tabY = tabHPad_h / 2;
+            int tabH = rcClient.bottom - tabVPad_h;
+            int tabY = tabVPad_h / 2;
             int x = TAB_START_X_S;
 
             HDC hdc_ht = GetDC(hwnd);
@@ -542,13 +643,13 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                                                   data->m.tabs[i].status);
                         return 0;
                     }
-                    /* Check log button */
+                    /* Check log button — geometry MUST mirror the paint
+                     * path (see status indicator above) so hit zones don't
+                     * drift off the visible rect at high DPI. */
                     int logBtnX = x + indGap_h + indW_h + indGap_h;
-                    int logBtnH = tabH - S(6);
-                    if (logBtnH < S(4)) logBtnH = S(4);
-                    int logBtnY = tabY + (tabH - logBtnH) / 2;
+                    int logBtnY = indY_h;
                     if (mx >= logBtnX && mx <= logBtnX + indW_h &&
-                        my >= logBtnY && my <= logBtnY + logBtnH) {
+                        my >= logBtnY && my <= logBtnY + indH_h) {
                         if (data->on_log_toggle)
                             data->on_log_toggle(i, data->m.tabs[i].user_data);
                         InvalidateRect(hwnd, NULL, FALSE);

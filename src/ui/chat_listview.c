@@ -13,6 +13,7 @@
 #include "custom_scrollbar.h"
 #include "dpi_util.h"
 #include "md_render.h"
+#include "icons.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -226,12 +227,15 @@ static void draw_ghost_rect(HDC hdc, const RECT *rc, int radius,
 
 /* ── Safety tag colour ──────────────────────────────────────────────── */
 
-static COLORREF safety_tag_color(CmdSafetyLevel level)
+/* Theme-driven severity chip colour.  Maps SAFE/WRITE/CRITICAL to
+ * the theme's indicator_green/yellow/red respectively. */
+static COLORREF safety_chip_color(const ChatListView *lv, CmdSafetyLevel level)
 {
+    const ThemeChatColors *tc = &lv->theme->chat;
     switch (level) {
-    case CMD_WRITE:    return CLR_TAG_WRITE;
-    case CMD_CRITICAL: return CLR_TAG_CRITICAL;
-    default:           return CLR_TAG_SAFE;
+    case CMD_WRITE:    return RGB_FROM_THEME(tc->indicator_yellow);
+    case CMD_CRITICAL: return RGB_FROM_THEME(tc->indicator_red);
+    default:           return RGB_FROM_THEME(tc->indicator_green);
     }
 }
 
@@ -403,7 +407,7 @@ static ChatListView *lv_from_hwnd(HWND hwnd)
 }
 
 void chat_listview_set_fonts(HWND hwnd, HFONT font, HFONT mono,
-                             HFONT bold, HFONT small_font, HFONT icon)
+                             HFONT bold, HFONT small_font)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
     if (!lv) return;
@@ -411,7 +415,6 @@ void chat_listview_set_fonts(HWND hwnd, HFONT font, HFONT mono,
     lv->hMonoFont = mono;
     lv->hBoldFont = bold;
     lv->hSmallFont = small_font;
-    lv->hIconFont = icon;
     /* Fonts changed — mark all dirty for full remeasure */
     {
         ChatMsgItem *fi = lv->msg_list ? lv->msg_list->head : NULL;
@@ -1019,6 +1022,17 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     DeleteObject(null_pen);
     DeleteObject(avatar_br);
 
+    /* Sparkle glyph inset into the avatar circle */
+    {
+        int pad = CLV_SCALE(lv, 4);
+        RECT spark_rc = { rc->left + pad, rc->top + pad,
+                          rc->left + icon_sz - pad,
+                          rc->top + icon_sz - pad };
+        ns_icon_draw(hdc, NS_ICON_SPARKLE, &spark_rc,
+                     RGB(255, 255, 255),
+                     (UINT)(96.0f * lv->dpi_scale));
+    }
+
     /* "AI" label next to avatar */
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, RGB_FROM_THEME(tc->ai_accent));
@@ -1348,7 +1362,7 @@ static void paint_cmd_card(ChatListView *lv, HDC hdc,
     SetBkMode(hdc, TRANSPARENT);
 
     /* ── Safety tag (top-right, inline with command text) ──────────── */
-    COLORREF tag_clr = safety_tag_color(item->u.cmd.safety);
+    COLORREF tag_clr = safety_chip_color(lv, item->u.cmd.safety);
     const char *tag_text = safety_tag_text(item->u.cmd.safety);
 
     HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
@@ -1394,15 +1408,11 @@ static void paint_cmd_card(ChatListView *lv, HDC hdc,
 
     if (item->u.cmd.blocked) {
         /* Lock icon + "Blocked" */
-        if (lv->hIconFont) {
-            SelectObject(hdc, lv->hIconFont);
-            SetTextColor(hdc, CLR_BLOCKED_TEXT);
-            RECT lock_rc = { rc->left + code_pad, status_top,
-                             rc->left + code_pad + CLV_SCALE(lv, 18),
-                             status_top + status_h };
-            DrawTextW(hdc, L"\xE72E", 1, &lock_rc,
-                      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-        }
+        RECT lock_rc = { rc->left + code_pad, status_top,
+                         rc->left + code_pad + CLV_SCALE(lv, 18),
+                         status_top + status_h };
+        ns_icon_draw(hdc, NS_ICON_LOCK, &lock_rc,
+                     CLR_BLOCKED_TEXT, (UINT)(96.0f * lv->dpi_scale));
         SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
                                          : GetStockObject(DEFAULT_GUI_FONT));
         SetTextColor(hdc, RGB_FROM_THEME(tc->indicator_red));
@@ -2205,6 +2215,12 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     }
 
     case WM_MOUSEWHEEL: {
+        /* Ctrl+Wheel: forward to AI chat parent for zoom. */
+        if (GetKeyState(VK_CONTROL) & 0x8000) {
+            HWND parent = GetParent(hwnd);
+            if (parent) SendMessage(parent, msg, wParam, lParam);
+            return 0;
+        }
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
         int scroll_amount = CLV_SCALE(lv, 40);  /* ~3 lines per notch */
 
@@ -2346,6 +2362,14 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     }
 
     case WM_KEYDOWN: {
+        /* Ctrl+= / Ctrl+- : forward to AI chat parent for zoom */
+        if ((GetKeyState(VK_CONTROL) & 0x8000) &&
+            (wParam == VK_OEM_PLUS  || wParam == (WPARAM)'='
+          || wParam == VK_OEM_MINUS || wParam == (WPARAM)'-')) {
+            HWND parent = GetParent(hwnd);
+            if (parent) SendMessage(parent, msg, wParam, lParam);
+            return 0;
+        }
         /* Ctrl+C: copy selection to clipboard */
         if (wParam == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
             if (lv->sel_valid)

@@ -10,7 +10,7 @@
 #define AI_DOCK_MIN_PCT       10   /* Minimum panel width % */
 #define AI_DOCK_MAX_PCT       75   /* Maximum panel width % */
 #define AI_DOCK_SPLITTER_W     6   /* Visual splitter gap width in px */
-#define AI_DOCK_SPLITTER_HIT  10  /* Hit zone width for drag detection */
+#define AI_DOCK_SPLITTER_PAD   8   /* Extra clickable px on each side of the gap */
 #define AI_DOCK_ANIM_MS      200   /* Slide animation duration in ms */
 
 /* Check if AI Assist can be opened: requires an active SSH session.
@@ -82,14 +82,17 @@ static inline int ai_dock_anim_lerp(int from_w, int to_w, double t)
 }
 
 /* Test if mouse x-coordinate hits the splitter zone.
- * splitter_x is the left edge of the docked panel. */
+ * splitter_x is the left edge of the visible gap (left edge of docked panel area).
+ * gap_w is the visible gap width (AI_DOCK_SPLITTER_W).
+ * pad is the extra clickable padding on each side beyond the visible gap.
+ * Hit zone: [splitter_x - pad, splitter_x + gap_w + pad]. */
 static inline int ai_dock_splitter_hit(int mouse_x, int splitter_x,
-                                        int splitter_w, int mouse_y,
-                                        int top_y)
+                                        int gap_w, int pad,
+                                        int mouse_y, int top_y)
 {
     if (mouse_y < top_y) return 0;
-    int half = splitter_w / 2;
-    return (mouse_x >= splitter_x - half && mouse_x <= splitter_x + half);
+    return (mouse_x >= splitter_x - pad &&
+            mouse_x <= splitter_x + gap_w + pad);
 }
 
 /* Compute display area dimensions for the AI chat panel layout.
