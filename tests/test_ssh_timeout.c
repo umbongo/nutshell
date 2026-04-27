@@ -98,3 +98,34 @@ int test_ssh_idle_one_minute_over(void)
     ASSERT_TRUE(ssh_idle_should_timeout(70000u, 0u, 1));
     TEST_END();
 }
+
+int test_ssh_network_at_threshold_exact(void)
+{
+    TEST_BEGIN();
+    /* Exactly 90s elapsed, 90s threshold — strict > means false */
+    ASSERT_FALSE(ssh_network_should_timeout(90000u, 0u, 90000u));
+    TEST_END();
+}
+
+int test_ssh_idle_wraparound_over(void)
+{
+    TEST_BEGIN();
+    /* last well before rollover, now well after → ~262 s elapsed,
+     * threshold 1 minute → fires across the wrap. */
+    uint32_t last = 0xFFFE0000u;
+    uint32_t now  = 0x00020000u;
+    ASSERT_TRUE(ssh_idle_should_timeout(now, last, 1));
+    TEST_END();
+}
+
+int test_ssh_idle_huge_timeout_clamps(void)
+{
+    TEST_BEGIN();
+    /* 100 000 minutes * 60 000 = 6e9 > 2^32 → clamped to 0xFFFFFFFF.
+     * With now < clamped threshold, comparison is false. */
+    ASSERT_FALSE(ssh_idle_should_timeout(0x80000000u, 0u, 100000));
+    /* And for completeness: a delta that does exceed the clamp value
+     * is impossible in 32-bit space — so the clamp behaves as
+     * "effectively never times out within one tick window". */
+    TEST_END();
+}

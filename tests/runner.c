@@ -119,6 +119,9 @@ int test_ssh_idle_under_threshold(void);
 int test_ssh_idle_over_threshold(void);
 int test_ssh_idle_one_minute_under(void);
 int test_ssh_idle_one_minute_over(void);
+int test_ssh_network_at_threshold_exact(void);
+int test_ssh_idle_wraparound_over(void);
+int test_ssh_idle_huge_timeout_clamps(void);
 
 /* test_config.c */
 int test_config_default_settings(void);
@@ -1660,6 +1663,9 @@ int main(void) {
     failed += test_ssh_idle_over_threshold();
     failed += test_ssh_idle_one_minute_under();
     failed += test_ssh_idle_one_minute_over();
+    failed += test_ssh_network_at_threshold_exact();
+    failed += test_ssh_idle_wraparound_over();
+    failed += test_ssh_idle_huge_timeout_clamps();
 
     /* Config */
     failed += test_config_default_settings();
