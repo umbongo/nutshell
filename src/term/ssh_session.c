@@ -21,6 +21,28 @@ typedef int SOCKET;
 #include <stdlib.h>
 #include <string.h>
 
+/* libssh2 RECV callback signature:
+ *   ssize_t recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
+ *                   int flags, void **abstract);
+ *
+ * `*abstract` is the per-session opaque pointer set via
+ * libssh2_session_abstract().  We store the SshSession* there so we can
+ * bump bytes_read_total without a global. */
+static ssize_t nutshell_recv_cb(libssh2_socket_t sock, void *buffer,
+                                size_t length, int flags, void **abstract)
+{
+#ifdef _WIN32
+    int n = recv(sock, (char *)buffer, (int)length, flags);
+#else
+    ssize_t n = recv(sock, buffer, length, flags);
+#endif
+    if (n > 0 && abstract && *abstract) {
+        SshSession *s = (SshSession *)*abstract;
+        s->bytes_read_total += (uint64_t)n;
+    }
+    return (ssize_t)n;
+}
+
 SshSession *ssh_session_new(void) {
     SshSession *s = xcalloc(1, sizeof(SshSession));
     s->socket = INVALID_SOCKET;
@@ -141,6 +163,14 @@ int ssh_connect(SshSession *s, const char *host, int port) {
     }
 
     s->socket = sock;
+
+    /* Install our recv hook so we can track socket-level liveness.
+     * Must run before handshake so KEX bytes are counted. */
+    void **abstract = libssh2_session_abstract(s->session);
+    if (abstract) *abstract = s;
+    libssh2_session_callback_set(s->session,
+                                 LIBSSH2_CALLBACK_RECV,
+                                 (void *)nutshell_recv_cb);
 
     if (libssh2_session_handshake(s->session, (libssh2_socket_t)s->socket)) {
         snprintf(s->last_error, sizeof(s->last_error), "SSH handshake failed");

@@ -2,6 +2,7 @@
 #define NUTSHELL_SSH_SESSION_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -19,6 +20,7 @@ typedef struct {
     bool connected;
     char last_error[256];
     char cached_passphrase[256]; /* zeroed on free; never written to disk */
+    uint64_t bytes_read_total;   /* incremented by libssh2 RECV callback */
 } SshSession;
 
 SshSession *ssh_session_new(void);

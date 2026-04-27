@@ -6,14 +6,19 @@
 
 #define LIBSSH2_ERROR_EAGAIN -37
 
+#define LIBSSH2_CALLBACK_RECV 1
+
+typedef int libssh2_socket_t;
 typedef struct _LIBSSH2_SESSION LIBSSH2_SESSION;
 typedef struct _LIBSSH2_CHANNEL LIBSSH2_CHANNEL;
 
 LIBSSH2_SESSION *libssh2_session_init(void);
 int libssh2_session_free(LIBSSH2_SESSION *session);
 int libssh2_session_disconnect(LIBSSH2_SESSION *session, const char *description);
-int libssh2_session_handshake(LIBSSH2_SESSION *session, int socket);
+int libssh2_session_handshake(LIBSSH2_SESSION *session, libssh2_socket_t socket);
 void libssh2_session_set_blocking(LIBSSH2_SESSION *session, int blocking);
+void **libssh2_session_abstract(LIBSSH2_SESSION *session);
+void *libssh2_session_callback_set(LIBSSH2_SESSION *session, int cbtype, void *callback);
 
 int libssh2_userauth_password(LIBSSH2_SESSION *session, const char *username, const char *password);
 int libssh2_userauth_publickey_fromfile(LIBSSH2_SESSION *session, const char *username, const char *publickey, const char *privatekey, const char *passphrase);
