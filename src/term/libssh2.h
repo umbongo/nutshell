@@ -23,6 +23,8 @@ libssh2_cb_generic *libssh2_session_callback_set2(LIBSSH2_SESSION *session,
                                                   int cbtype,
                                                   libssh2_cb_generic *callback);
 
+void libssh2_keepalive_config(LIBSSH2_SESSION *session, int want_reply, unsigned int interval);
+
 int libssh2_userauth_password(LIBSSH2_SESSION *session, const char *username, const char *password);
 int libssh2_userauth_publickey_fromfile(LIBSSH2_SESSION *session, const char *username, const char *publickey, const char *privatekey, const char *passphrase);
 

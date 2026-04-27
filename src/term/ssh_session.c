@@ -217,6 +217,13 @@ int ssh_connect(SshSession *s, const char *host, int port) {
         return -1;
     }
 
+    /* Configure SSH-level keepalive: 30s interval, want_reply=1 so the
+     * server must respond.  The reply travels through our RECV callback
+     * and bumps bytes_read_total, which keeps the network-failure rail
+     * happy on idle but healthy connections.  libssh2_keepalive_send is
+     * driven once per second by the WM_TIMER poll loop. */
+    libssh2_keepalive_config(s->session, 1, 30);
+
     s->connected = true;
     return 0;
 }
