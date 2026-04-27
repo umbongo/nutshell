@@ -168,9 +168,9 @@ int ssh_connect(SshSession *s, const char *host, int port) {
      * Must run before handshake so KEX bytes are counted. */
     void **abstract = libssh2_session_abstract(s->session);
     if (abstract) *abstract = s;
-    libssh2_session_callback_set(s->session,
-                                 LIBSSH2_CALLBACK_RECV,
-                                 (void *)nutshell_recv_cb);
+    libssh2_session_callback_set2(s->session,
+                                  LIBSSH2_CALLBACK_RECV,
+                                  (libssh2_cb_generic *)nutshell_recv_cb);
 
     if (libssh2_session_handshake(s->session, (libssh2_socket_t)s->socket)) {
         snprintf(s->last_error, sizeof(s->last_error), "SSH handshake failed");

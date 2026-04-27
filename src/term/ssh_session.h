@@ -20,7 +20,9 @@ typedef struct {
     bool connected;
     char last_error[256];
     char cached_passphrase[256]; /* zeroed on free; never written to disk */
-    uint64_t bytes_read_total;   /* incremented by libssh2 RECV callback */
+    uint64_t bytes_read_total;   /* incremented by libssh2 RECV callback;
+                                   accessed only after WM_CONN_DONE on the
+                                   UI thread, so no atomicity needed */
 } SshSession;
 
 SshSession *ssh_session_new(void);
