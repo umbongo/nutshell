@@ -107,6 +107,19 @@ int test_tok_unicode_escape_3byte(void);
 int test_tok_unicode_surrogate_pair(void);
 int test_parse_string_with_unicode(void);
 
+/* test_ssh_timeout.c */
+int test_ssh_network_just_connected(void);
+int test_ssh_network_under_threshold(void);
+int test_ssh_network_over_threshold(void);
+int test_ssh_network_wraparound_under(void);
+int test_ssh_network_wraparound_over(void);
+int test_ssh_idle_disabled_zero(void);
+int test_ssh_idle_disabled_negative(void);
+int test_ssh_idle_under_threshold(void);
+int test_ssh_idle_over_threshold(void);
+int test_ssh_idle_one_minute_under(void);
+int test_ssh_idle_one_minute_over(void);
+
 /* test_config.c */
 int test_config_default_settings(void);
 int test_config_profile_new_free(void);
@@ -1634,6 +1647,19 @@ int main(void) {
     failed += test_tok_unicode_escape_3byte();
     failed += test_tok_unicode_surrogate_pair();
     failed += test_parse_string_with_unicode();
+
+    /* SSH timeout helpers */
+    failed += test_ssh_network_just_connected();
+    failed += test_ssh_network_under_threshold();
+    failed += test_ssh_network_over_threshold();
+    failed += test_ssh_network_wraparound_under();
+    failed += test_ssh_network_wraparound_over();
+    failed += test_ssh_idle_disabled_zero();
+    failed += test_ssh_idle_disabled_negative();
+    failed += test_ssh_idle_under_threshold();
+    failed += test_ssh_idle_over_threshold();
+    failed += test_ssh_idle_one_minute_under();
+    failed += test_ssh_idle_one_minute_over();
 
     /* Config */
     failed += test_config_default_settings();
