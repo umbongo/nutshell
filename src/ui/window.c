@@ -11,6 +11,8 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <stdint.h>
+#include "ssh_timeout.h"
 #include "resource.h"
 #include "session_manager.h"
 #include "settings_dlg.h"
@@ -69,6 +71,10 @@ typedef struct Session {
     int             conn_dots;     /* dots appended so far */
     CRITICAL_SECTION conn_cs;      /* H-1: guards conn_result/conn_error/ssh/channel */
     AiSessionState ai_state;       /* per-session AI conversation */
+    DWORD     last_socket_data_tick;  /* GetTickCount() of last libssh2 recv() */
+    DWORD     last_keepalive_tick;    /* GetTickCount() of last keepalive_send() */
+    DWORD     last_user_input_tick;   /* GetTickCount() of last user activity */
+    uint64_t  prev_bytes_read;        /* SshSession.bytes_read_total snapshot */
     struct Session *next;
 } Session;
 
@@ -1949,6 +1955,75 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                                       s->debug_log);
                         if (poll_rc > 0)
                             update_scrollbar(hwnd);
+
+                        DWORD now_tick = GetTickCount();
+
+                        /* Track socket-level liveness via the libssh2 RECV
+                         * callback's byte counter.  Any change since last
+                         * tick — including silently-consumed keepalive
+                         * replies — proves the link is alive. */
+                        if (s->ssh) {
+                            uint64_t curr = s->ssh->bytes_read_total;
+                            if (curr != s->prev_bytes_read) {
+                                s->last_socket_data_tick = now_tick;
+                                s->prev_bytes_read = curr;
+                            }
+                        }
+
+                        /* Drive libssh2 keepalive ~once per second.  The
+                         * library handles the 30s send cadence internally;
+                         * we just need to give it CPU time. */
+                        if (now_tick - s->last_keepalive_tick >= 1000u) {
+                            int next_secs = 0;
+                            if (s->ssh && s->ssh->session)
+                                libssh2_keepalive_send(s->ssh->session,
+                                                       &next_secs);
+                            s->last_keepalive_tick = now_tick;
+                        }
+
+                        /* Network-failure rail: no socket bytes at all
+                         * (not even keepalive replies) for the threshold. */
+                        if (poll_rc != -2 && s->channel &&
+                            ssh_network_should_timeout(now_tick,
+                                                       s->last_socket_data_tick,
+                                                       NETWORK_FAILURE_TIMEOUT_MS)) {
+                            dispbuf_invalidate(&g_renderer.dispbuf);
+                            if (g_paste.channel == s->channel)
+                                paste_cancel();
+                            term_process(s->term,
+                                         "\r\n[Connection timed out]\r\n", 26);
+                            ssh_channel_free(s->channel);
+                            s->channel = NULL;
+                            int tidx_net = tabs_find(g_hwndTabs, s);
+                            if (tidx_net >= 0)
+                                tabs_set_status(g_hwndTabs, tidx_net, TAB_DISCONNECTED);
+                            if (s == g_active_session) hide_ai_panel(hwnd);
+                        }
+
+                        /* User-idle rail: configurable, 0 = disabled. */
+                        if (poll_rc != -2 && s->channel &&
+                            ssh_idle_should_timeout(
+                                now_tick,
+                                s->last_user_input_tick,
+                                g_config->settings.ssh_user_idle_timeout_mins)) {
+                            char banner[64];
+                            int n = snprintf(banner, sizeof(banner),
+                                             "\r\n[Disconnected after %d min idle]\r\n",
+                                             g_config->settings.ssh_user_idle_timeout_mins);
+                            if (n < 0) n = 0;
+                            if (n > (int)sizeof(banner)) n = (int)sizeof(banner) - 1;
+                            dispbuf_invalidate(&g_renderer.dispbuf);
+                            if (g_paste.channel == s->channel)
+                                paste_cancel();
+                            term_process(s->term, banner, (size_t)n);
+                            ssh_channel_free(s->channel);
+                            s->channel = NULL;
+                            int tidx_idle = tabs_find(g_hwndTabs, s);
+                            if (tidx_idle >= 0)
+                                tabs_set_status(g_hwndTabs, tidx_idle, TAB_DISCONNECTED);
+                            if (s == g_active_session) hide_ai_panel(hwnd);
+                        }
+
                         if (poll_rc == -2) {
                             /* EOF — the final data chunk (e.g. alt-screen-exit
                              * sequence) was already fed to term_process by
@@ -2028,6 +2103,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_CONN_DONE: {
             Session *s = (Session *)lParam;
             s->conn_state = CONN_IDLE;
+            DWORD tick_now = GetTickCount();
+            s->last_socket_data_tick = tick_now;
+            s->last_keepalive_tick   = tick_now;
+            s->last_user_input_tick  = tick_now;
+            s->prev_bytes_read       = (s->ssh ? s->ssh->bytes_read_total : 0);
             CloseHandle(s->conn_thread);
             s->conn_thread = NULL;
 
