@@ -32,6 +32,7 @@
 #define IDC_SCHEME_COMBO    1020
 #define IDC_AI_SYSTEM_NOTES 1021
 #define IDC_AI_FONT_COMBO   1022
+#define IDC_SSH_IDLE_EDIT   1030
 #define WM_AI_MODELS_DONE   (WM_USER + 200)
 #define IDT_SYSNOTES_SCROLL 51  /* timer for AI instructions scroll sync */
 
@@ -252,6 +253,81 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
     return 0;
 }
 
+/* ---- Tooltip helpers ---------------------------------------------------- */
+
+/* Add a tooltip to a single child control inside the dialog.
+ * Reuses one shared tooltip window per dialog (TTM_ADDTOOL). */
+static void add_tooltip(HWND tooltip_host, HWND tool, const char *text)
+{
+    if (!tooltip_host || !tool || !text) return;
+    TOOLINFO ti;
+    memset(&ti, 0, sizeof(ti));
+    ti.cbSize   = sizeof(TOOLINFO);
+    ti.uFlags   = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd     = GetParent(tool);
+    ti.uId      = (UINT_PTR)tool;
+    ti.lpszText = (LPSTR)text;
+    SendMessage(tooltip_host, TTM_ADDTOOL, 0, (LPARAM)&ti);
+}
+
+typedef struct { int id; const char *text; } TooltipEntry;
+
+static const TooltipEntry k_tooltips[] = {
+    { IDC_FONT_COMBO,
+      "Monospaced font used by the terminal display." },
+    { IDC_AI_FONT_COMBO,
+      "Font used by the AI chat panel (does not affect the terminal)." },
+    { IDC_FONTSIZE_COMBO,
+      "Terminal font size in points." },
+    { IDC_SCROLLBACK_EDIT,
+      "Number of lines kept in the scrollback buffer (100 - 50 000)." },
+    { IDC_PASTEDELAY_EDIT,
+      "Pause in ms between characters when pasting into the terminal "
+      "(0 - 5 000). Higher values help slow remote shells keep up." },
+    { IDC_SCHEME_COMBO,
+      "Predefined colour scheme for the terminal. Foreground and "
+      "background overrides apply on top of the scheme." },
+    { IDC_LOG_DIR_EDIT,
+      "Directory where session logs are written when logging is enabled." },
+    { IDC_LOG_FMT_EDIT,
+      "%Y  4-digit year (e.g. 2026)\r\n"
+      "%m  month (01-12)\r\n"
+      "%d  day   (01-31)\r\n"
+      "%H  hour  (00-23)\r\n"
+      "%M  minute (00-59)\r\n"
+      "%S  second (00-59)\r\n"
+      "Example: session-%Y%m%d_%H%M%S" },
+    { IDC_DEBUG_TERMINAL,
+      "Write raw terminal byte stream to a debug log "
+      "(useful for debugging escape-sequence handling)." },
+    { IDC_AI_KEY_EDIT,
+      "API key for the chosen AI provider. Stored encrypted in "
+      "nutshell.config." },
+    { IDC_AI_PROVIDER_COMBO,
+      "AI provider used by the chat panel." },
+    { IDC_AI_CUSTOM_URL,
+      "Custom AI API endpoint URL. Only used when provider is 'custom'." },
+    { IDC_AI_CUSTOM_MODEL,
+      "Custom model identifier. Only used when provider is 'custom'." },
+    { IDC_AI_SYSTEM_NOTES,
+      "Default system instructions for the AI. Profile-specific notes, "
+      "if set, take precedence." },
+    { IDC_AI_SEARCH_COMBO,
+      "Search backend used by AI tool calls. 'None' disables web search." },
+    { IDC_AI_SEARCH_URL,
+      "Custom search endpoint. Only used when search provider is 'custom'." },
+    { IDC_AI_MAX_RESULTS,
+      "Maximum number of search results returned to the AI per query "
+      "(1 - 20)." },
+    { IDC_AI_WEB_FETCH,
+      "Allow the AI to fetch arbitrary URLs as a tool call." },
+    { IDC_SSH_IDLE_EDIT,
+      "Disconnect SSH sessions after this many minutes of no user "
+      "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
+      "scrolling, tab switches, and AI chat input all count as activity." },
+};
+#define NUM_TOOLTIPS ((int)(sizeof(k_tooltips) / sizeof(k_tooltips[0])))
+
 /* Sync AI instructions edit scroll state to custom scrollbar. */
 static void sys_notes_sync_scroll(HWND hwnd, SettingsDlgData *d)
 {
@@ -386,27 +462,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         make_edit(hwnd, nd->cfg->settings.log_format,
                   ex, y, ew, (HMENU)IDC_LOG_FMT_EDIT, nd->dpi);
 
-        /* Tooltip on the log format edit: list strftime specifiers */
+        /* Shared tooltip window — tools registered via k_tooltips table below */
         nd->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
             WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP | TTS_BALLOON,
             0, 0, 0, 0, hwnd, NULL, NULL, NULL);
-        if (nd->hTooltip) {
-            TOOLINFO ti;
-            memset(&ti, 0, sizeof(ti));
-            ti.cbSize   = sizeof(TOOLINFO);
-            ti.uFlags   = TTF_IDISHWND | TTF_SUBCLASS;
-            ti.hwnd     = hwnd;
-            ti.uId      = (UINT_PTR)GetDlgItem(hwnd, IDC_LOG_FMT_EDIT);
-            ti.lpszText = "%Y  4-digit year (e.g. 2026)\r\n"
-                          "%m  month (01-12)\r\n"
-                          "%d  day   (01-31)\r\n"
-                          "%H  hour  (00-23)\r\n"
-                          "%M  minute (00-59)\r\n"
-                          "%S  second (00-59)\r\n"
-                          "Example: session-%Y%m%d_%H%M%S";
-            SendMessage(nd->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+        if (nd->hTooltip)
             SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)300);
-        }
 
         /* Row 7: Debug terminal log checkbox */
         y += rh;
@@ -421,6 +482,28 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             (void)hDbg;
         }
         y += rh;
+
+        /* SSH section heading */
+        {
+            int ssh_h = MulDiv(20, nd->dpi, 96);
+            HWND hSshLabel = CreateWindow("STATIC", "SSH",
+                WS_VISIBLE | WS_CHILD | SS_LEFT,
+                lx, y + ssh_h / 6, lw, ssh_h, hwnd, NULL, NULL, NULL);
+            (void)hSshLabel;
+        }
+        y += rh;
+
+        /* SSH: User Idle Timeout */
+        make_label(hwnd, "User Idle Timeout (mins, 0=never):",
+                   lx, y, lw, nd->dpi);
+        {
+            char buf[32];
+            (void)snprintf(buf, sizeof(buf), "%d",
+                           nd->cfg->settings.ssh_user_idle_timeout_mins);
+            make_edit(hwnd, buf, ex, y, S(80),
+                      (HMENU)IDC_SSH_IDLE_EDIT, nd->dpi);
+        }
+        y += rh + S(5);  /* extra gap before the AI section */
 
         /* Row 8: AI API Key (masked) — between log format and AI provider */
         make_label(hwnd, "AI API Key:", lx, y, lw, nd->dpi);
@@ -635,6 +718,15 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                                                  CSB_WIDTH, eh, nd->theme,
                                                  GetModuleHandle(NULL));
                 SetTimer(hwnd, IDT_SYSNOTES_SCROLL, 50, NULL);
+            }
+        }
+
+        /* Apply tooltips to every Settings control. */
+        if (nd->hTooltip) {
+            for (int i = 0; i < NUM_TOOLTIPS; i++) {
+                HWND tool = GetDlgItem(hwnd, k_tooltips[i].id);
+                if (tool)
+                    add_tooltip(nd->hTooltip, tool, k_tooltips[i].text);
             }
         }
 
@@ -1004,6 +1096,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             s->ai_web_fetch_enabled = (IsDlgButtonChecked(hwnd, IDC_AI_WEB_FETCH)
                                         == BST_CHECKED) ? 1 : 0;
 
+            /* SSH user idle timeout */
+            v = GetDlgItemInt(hwnd, IDC_SSH_IDLE_EDIT, &ok, FALSE);
+            if (ok && (int)v >= 0 && (int)v <= 10080)
+                s->ssh_user_idle_timeout_mins = (int)v;
+            /* on parse failure or out-of-range: retain previous value */
+
             /* Clamp out-of-range values before persisting */
             settings_validate(s);
             config_save(d->cfg, CONFIG_FILENAME);
@@ -1066,7 +1164,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(400, pdpi, 96), MulDiv(826, pdpi, 96),
+        MulDiv(400, pdpi, 96), MulDiv(880, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {
