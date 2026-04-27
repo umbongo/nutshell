@@ -104,6 +104,8 @@ void settings_validate(Settings *s)
     if (s->paste_delay_ms > 5000) s->paste_delay_ms = 5000;
     if (s->ai_max_search_results < 1)  s->ai_max_search_results = 1;
     if (s->ai_max_search_results > 20) s->ai_max_search_results = 20;
+    if (s->ssh_user_idle_timeout_mins < 0)     s->ssh_user_idle_timeout_mins = 0;
+    if (s->ssh_user_idle_timeout_mins > 10080) s->ssh_user_idle_timeout_mins = 10080;
 }
 
 void config_default_settings(Settings *s)
@@ -127,6 +129,7 @@ void config_default_settings(Settings *s)
     /* ai_search_url defaults to empty (already zeroed by memset) */
     s->ai_max_search_results = 7;
     s->ai_web_fetch_enabled = 0;
+    s->ssh_user_idle_timeout_mins = 0;
 }
 
 Profile *config_profile_new(void)
@@ -269,6 +272,9 @@ Config *config_load(const char *path)
                                                      (double)s->ai_max_search_results);
         s->ai_web_fetch_enabled = json_obj_bool(jset, "ai_web_fetch_enabled",
                                                 s->ai_web_fetch_enabled);
+        s->ssh_user_idle_timeout_mins =
+            (int)json_obj_num(jset, "ssh_user_idle_timeout_mins",
+                              (double)s->ssh_user_idle_timeout_mins);
         settings_validate(s);
     }
 
@@ -410,8 +416,10 @@ int config_save(const Config *cfg, const char *path)
     fprint_json_str(f, s->ai_search_url);
     fputs(",\n", f);
     fprintf(f, "    \"ai_max_search_results\": %d,\n", s->ai_max_search_results);
-    fprintf(f, "    \"ai_web_fetch_enabled\": %s\n",
+    fprintf(f, "    \"ai_web_fetch_enabled\": %s,\n",
             s->ai_web_fetch_enabled ? "true" : "false");
+    fprintf(f, "    \"ssh_user_idle_timeout_mins\": %d\n",
+            s->ssh_user_idle_timeout_mins);
     fputs("  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);

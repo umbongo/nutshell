@@ -37,6 +37,7 @@ typedef struct {
     char ai_search_url[256];         /* for custom search endpoint only */
     int  ai_max_search_results;      /* 1-20, default 7 */
     int  ai_web_fetch_enabled;       /* 0 = disabled (default), 1 = enabled */
+    int  ssh_user_idle_timeout_mins; /* 0 = never; default 0 */
 } Settings;
 
 typedef struct {
