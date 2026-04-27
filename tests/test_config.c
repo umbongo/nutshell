@@ -719,3 +719,60 @@ int test_config_validate_empty_ai_font(void)
     TEST_END();
 }
 
+/* ============================================================
+ * SSH user-idle timeout setting
+ * ============================================================ */
+
+int test_config_default_ssh_user_idle(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, 0);
+    TEST_END();
+}
+
+int test_config_validate_ssh_user_idle_clamp(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+
+    s.ssh_user_idle_timeout_mins = -5;
+    settings_validate(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, 0);
+
+    s.ssh_user_idle_timeout_mins = 99999;
+    settings_validate(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, 10080);
+
+    s.ssh_user_idle_timeout_mins = 180;
+    settings_validate(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, 180);
+
+    s.ssh_user_idle_timeout_mins = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.ssh_user_idle_timeout_mins, 0);
+    TEST_END();
+}
+
+int test_config_roundtrip_ssh_user_idle(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+    orig->settings.ssh_user_idle_timeout_mins = 240;
+
+    int rc = config_save(orig, TMP_CFG);
+    ASSERT_EQ(rc, 0);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_EQ(loaded->settings.ssh_user_idle_timeout_mins, 240);
+
+    config_free(orig);
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+

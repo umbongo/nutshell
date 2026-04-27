@@ -156,6 +156,9 @@ int test_config_roundtrip_all_fields(void);
 int test_config_default_ai_font(void);
 int test_config_roundtrip_ai_font(void);
 int test_config_validate_empty_ai_font(void);
+int test_config_default_ssh_user_idle(void);
+int test_config_validate_ssh_user_idle_clamp(void);
+int test_config_roundtrip_ssh_user_idle(void);
 /* test_session_manager.c */
 int test_profile_struct(void);
 int test_profile_default_values(void);
@@ -1700,6 +1703,9 @@ int main(void) {
     failed += test_config_default_ai_font();
     failed += test_config_roundtrip_ai_font();
     failed += test_config_validate_empty_ai_font();
+    failed += test_config_default_ssh_user_idle();
+    failed += test_config_validate_ssh_user_idle_clamp();
+    failed += test_config_roundtrip_ssh_user_idle();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();
