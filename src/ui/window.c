@@ -38,6 +38,12 @@
 
 static void hide_ai_panel(HWND parent);
 
+static void mark_active_user_active(void) {
+    if (g_active_session) {
+        g_active_session->last_user_input_tick = GetTickCount();
+    }
+}
+
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell";
 
@@ -212,6 +218,8 @@ static void free_session(Session *s) {
 static void on_tab_select(int index, void *user_data) {
     (void)index;
     g_active_session = (Session *)user_data;
+    if (g_active_session)
+        g_active_session->last_user_input_tick = GetTickCount();
     HWND hParent = GetParent(g_hwndTabs);
     update_scrollbar(hParent);
     force_full_terminal_repaint(hParent,
@@ -1100,6 +1108,7 @@ static void paste_finish(void)
 /* Called by WM_TIMER when wParam == PASTE_TIMER_ID */
 static void paste_timer_tick(void)
 {
+    mark_active_user_active();
     bool more = paste_send_next_line();
     if (g_active_session && g_active_session->term) {
         g_active_session->term->scrollback_offset = 0;
@@ -1111,6 +1120,7 @@ static void paste_timer_tick(void)
 static void do_paste(HWND hwnd)
 {
     if (!g_active_session || !g_active_session->channel) return;
+    mark_active_user_active();
 
     /* Cancel any in-progress paste */
     paste_cancel();
@@ -2540,6 +2550,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_CHAR: {
+            mark_active_user_active();
             if (g_active_session && g_active_session->term) {
                 char c = (char)wParam;
                 if (c == 0x17) { /* Ctrl+W */
@@ -2575,6 +2586,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_KEYDOWN: {
+            mark_active_user_active();
             /* F11 — toggle fullscreen */
             if (wParam == VK_F11) {
                 SendMessage(hwnd, WM_COMMAND, IDM_VIEW_FULLSCREEN, 0);
@@ -2667,6 +2679,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             /* Plain scroll: scroll 3 lines per notch */
             if (g_active_session && g_active_session->term) {
+                g_active_session->last_user_input_tick = GetTickCount();
                 Terminal *t = g_active_session->term;
                 int delta = GET_WHEEL_DELTA_WPARAM(wParam);
                 int lines = 3 * delta / WHEEL_DELTA;
