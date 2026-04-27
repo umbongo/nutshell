@@ -1329,6 +1329,7 @@ int test_context_tooltip_large_numbers(void);
 int test_context_tooltip_small_buf_safe(void);
 int test_context_tooltip_null_buf_returns_zero(void);
 int test_context_tooltip_zero_size_returns_zero(void);
+int test_context_tooltip_oversized_model_no_overflow(void);
 
 /* test_base64.c */
 int test_base64_empty(void);
@@ -2796,6 +2797,7 @@ int main(void) {
     failed += test_context_tooltip_small_buf_safe();
     failed += test_context_tooltip_null_buf_returns_zero();
     failed += test_context_tooltip_zero_size_returns_zero();
+    failed += test_context_tooltip_oversized_model_no_overflow();
 
     printf("\n--- xmalloc ---\n");
     failed += test_xmalloc_basic();

@@ -305,7 +305,8 @@ int ai_format_context_tooltip(int actual_in, int actual_out,
 
     int w = snprintf(tmp + off, (size_t)rem, "Context usage\r\n\r\n");
     if (w < 0) w = 0;
-    off += w; rem -= w; if (rem < 0) rem = 0;
+    if (w > rem) w = rem;
+    off += w; rem -= w;
 
     if (has_actual) {
         char in_str[24], out_str[24];
@@ -316,7 +317,8 @@ int ai_format_context_tooltip(int actual_in, int actual_out,
             "Output tokens:  %s\r\n",
             in_str, out_str);
         if (w < 0) w = 0;
-        off += w; rem -= w; if (rem < 0) rem = 0;
+        if (w > rem) w = rem;
+        off += w; rem -= w;
 
         if (has_limit) {
             w = snprintf(tmp + off, (size_t)rem,
@@ -341,13 +343,15 @@ int ai_format_context_tooltip(int actual_in, int actual_out,
         }
     }
     if (w < 0) w = 0;
-    off += w; rem -= w; if (rem < 0) rem = 0;
+    if (w > rem) w = rem;
+    off += w; rem -= w;
 
     if (has_model) {
         w = snprintf(tmp + off, (size_t)rem,
             "\r\nModel:          %s", model_name);
         if (w < 0) w = 0;
-        off += w; rem -= w; if (rem < 0) rem = 0;
+        if (w > rem) w = rem;
+        off += w; rem -= w;
     }
 
     /* Copy into the caller's buffer with truncation. */

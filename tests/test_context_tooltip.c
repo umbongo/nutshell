@@ -161,3 +161,30 @@ int test_context_tooltip_zero_size_returns_zero(void) {
     ASSERT_EQ(n, 0);
     TEST_END();
 }
+
+int test_context_tooltip_oversized_model_no_overflow(void) {
+    TEST_BEGIN();
+    char big_model[800];
+    memset(big_model, 'a', sizeof(big_model) - 1);
+    big_model[sizeof(big_model) - 1] = '\0';
+
+    char buf[1024];
+    memset(buf, 0xCC, sizeof(buf));   /* poison */
+    int n = ai_format_context_tooltip(
+        100, 50, 0, 64000, big_model,
+        buf, sizeof(buf));
+    ASSERT_TRUE(n >= 0);
+    ASSERT_TRUE(n < (int)sizeof(buf));
+    ASSERT_EQ(buf[n], '\0');
+    ASSERT_TRUE(strncmp(buf, "Context usage", 13) == 0);
+
+    /* Same oversized model, tiny caller buffer — must not crash, must NUL-terminate. */
+    char small[64];
+    memset(small, 0xCC, sizeof(small));
+    int n2 = ai_format_context_tooltip(
+        100, 50, 0, 64000, big_model,
+        small, sizeof(small));
+    ASSERT_TRUE(n2 >= 0);
+    ASSERT_EQ(small[sizeof(small) - 1], '\0');
+    TEST_END();
+}
