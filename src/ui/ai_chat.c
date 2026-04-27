@@ -2131,7 +2131,24 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_NOTIFY: {
         /* EN_LINK handling removed — ChatListView handles thinking toggle
          * inline via its own click handling in the list view WndProc. */
-        (void)lParam;
+        NMHDR *hdr = (NMHDR *)lParam;
+        if (d && hdr && hdr->code == TTN_GETDISPINFOA &&
+            d->hContextBar &&
+            hdr->idFrom == (UINT_PTR)d->hContextBar) {
+            NMTTDISPINFOA *nm = (NMTTDISPINFOA *)lParam;
+            int actual = d->actual_input_tokens + d->actual_output_tokens;
+            int est = (actual > 0) ? 0
+                                   : ai_context_estimate_tokens(&d->conv);
+            ai_format_context_tooltip(
+                d->actual_input_tokens,
+                d->actual_output_tokens,
+                est,
+                d->context_limit,
+                d->conv.model,
+                d->tooltip_buf, sizeof(d->tooltip_buf));
+            nm->lpszText = d->tooltip_buf;
+            return 0;
+        }
         break;
     }
 
