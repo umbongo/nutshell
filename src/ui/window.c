@@ -38,12 +38,6 @@
 
 static void hide_ai_panel(HWND parent);
 
-void session_mark_user_active(void) {
-    if (g_active_session) {
-        g_active_session->last_user_input_tick = GetTickCount();
-    }
-}
-
 static const char *CLASS_NAME = "Nutshell_Window";
 static const char *APP_TITLE = "Nutshell";
 
@@ -130,6 +124,12 @@ static ULONG_PTR g_gdip_token = 0;
 static GpImage  *g_acorn_image = NULL;
 #define AI_ANIM_TIMER_ID  4
 #define AI_ANIM_INTERVAL  16           /* ~60fps */
+
+void session_mark_user_active(void) {
+    if (g_active_session) {
+        g_active_session->last_user_input_tick = GetTickCount();
+    }
+}
 
 /* Invalidate only the terminal area (below the tab strip), not the tabs. */
 static void invalidate_terminal(HWND hwnd)
