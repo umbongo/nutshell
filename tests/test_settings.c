@@ -2,6 +2,7 @@
 #include "config.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #define TMP_VAL "/tmp/nutshell_test_validate.json"
 
@@ -183,5 +184,64 @@ int test_settings_validate_via_load(void)
 
     config_free(cfg);
     remove(TMP_VAL);
+    TEST_END();
+}
+
+/* ---- markdown_render_enabled default + JSON roundtrip ---- */
+
+int test_settings_markdown_render_default(void) {
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    /* Default: markdown rendering is ON. */
+    ASSERT_EQ(s.markdown_render_enabled, 1);
+    TEST_END();
+}
+
+int test_settings_markdown_render_roundtrip_off(void) {
+    TEST_BEGIN();
+    /* Write a config with the flag explicitly false; verify it loads as 0. */
+    const char *path = "/tmp/nutshell_test_md_off.config";
+    FILE *f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fputs("{ \"settings\": { \"markdown_render_enabled\": false } }", f);
+    fclose(f);
+    Config *cfg = config_load(path);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cfg->settings.markdown_render_enabled, 0);
+    config_free(cfg);
+    remove(path);
+    TEST_END();
+}
+
+int test_settings_markdown_render_roundtrip_on(void) {
+    TEST_BEGIN();
+    /* Explicitly true → loads as 1. */
+    const char *path = "/tmp/nutshell_test_md_on.config";
+    FILE *f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fputs("{ \"settings\": { \"markdown_render_enabled\": true } }", f);
+    fclose(f);
+    Config *cfg = config_load(path);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cfg->settings.markdown_render_enabled, 1);
+    config_free(cfg);
+    remove(path);
+    TEST_END();
+}
+
+int test_settings_markdown_render_missing_field(void) {
+    TEST_BEGIN();
+    /* Missing field → falls back to default (1). */
+    const char *path = "/tmp/nutshell_test_md_missing.config";
+    FILE *f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fputs("{ \"settings\": {} }", f);
+    fclose(f);
+    Config *cfg = config_load(path);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cfg->settings.markdown_render_enabled, 1);
+    config_free(cfg);
+    remove(path);
     TEST_END();
 }

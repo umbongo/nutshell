@@ -38,6 +38,7 @@ typedef struct {
     int  ai_max_search_results;      /* 1-20, default 7 */
     int  ai_web_fetch_enabled;       /* 0 = disabled (default), 1 = enabled */
     int  ssh_user_idle_timeout_mins; /* 0 = never; default 0 */
+    int  markdown_render_enabled;    /* render AI replies as markdown */
 } Settings;
 
 typedef struct {

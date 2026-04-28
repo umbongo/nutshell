@@ -130,6 +130,7 @@ void config_default_settings(Settings *s)
     s->ai_max_search_results = 7;
     s->ai_web_fetch_enabled = 0;
     s->ssh_user_idle_timeout_mins = 0;
+    s->markdown_render_enabled = 1;
 }
 
 Profile *config_profile_new(void)
@@ -275,6 +276,8 @@ Config *config_load(const char *path)
         s->ssh_user_idle_timeout_mins =
             (int)json_obj_num(jset, "ssh_user_idle_timeout_mins",
                               (double)s->ssh_user_idle_timeout_mins);
+        s->markdown_render_enabled = json_obj_bool(jset, "markdown_render_enabled",
+                                                   s->markdown_render_enabled);
         settings_validate(s);
     }
 
@@ -418,8 +421,10 @@ int config_save(const Config *cfg, const char *path)
     fprintf(f, "    \"ai_max_search_results\": %d,\n", s->ai_max_search_results);
     fprintf(f, "    \"ai_web_fetch_enabled\": %s,\n",
             s->ai_web_fetch_enabled ? "true" : "false");
-    fprintf(f, "    \"ssh_user_idle_timeout_mins\": %d\n",
+    fprintf(f, "    \"ssh_user_idle_timeout_mins\": %d,\n",
             s->ssh_user_idle_timeout_mins);
+    fprintf(f, "    \"markdown_render_enabled\": %s\n",
+            s->markdown_render_enabled ? "true" : "false");
     fputs("  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);

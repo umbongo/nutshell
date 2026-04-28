@@ -353,6 +353,10 @@ int test_settings_validate_paste_delay_high(void);
 int test_settings_validate_empty_font(void);
 int test_settings_validate_null(void);
 int test_settings_validate_via_load(void);
+int test_settings_markdown_render_default(void);
+int test_settings_markdown_render_roundtrip_off(void);
+int test_settings_markdown_render_roundtrip_on(void);
+int test_settings_markdown_render_missing_field(void);
 
 /* test_crypto.c */
 int test_crypto_roundtrip_basic(void);
@@ -1832,6 +1836,10 @@ int main(void) {
     failed += test_settings_validate_empty_font();
     failed += test_settings_validate_null();
     failed += test_settings_validate_via_load();
+    failed += test_settings_markdown_render_default();
+    failed += test_settings_markdown_render_roundtrip_off();
+    failed += test_settings_markdown_render_roundtrip_on();
+    failed += test_settings_markdown_render_missing_field();
 
     printf("\n--- Crypto ---\n");
     failed += test_crypto_roundtrip_basic();
