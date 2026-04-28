@@ -432,14 +432,35 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                 return TRUE;
             }
             HWND hList = GetDlgItem(hwnd, IDC_LIST_SESSIONS);
+            int do_append = 0;
             if (st->edit_idx >= 0 &&
                 (size_t)st->edit_idx < vec_size(&st->cfg->profiles)) {
-                /* Update existing profile in place */
-                Profile *pr = (Profile *)vec_get(&st->cfg->profiles,
-                                                 (size_t)st->edit_idx);
+                Profile *existing = (Profile *)vec_get(
+                    &st->cfg->profiles, (size_t)st->edit_idx);
+                if (strcmp(existing->name, tmp.name) != 0) {
+                    char prompt[768];
+                    snprintf(prompt, sizeof(prompt),
+                        "The name has changed from \"%s\" to \"%s\".\n\n"
+                        "Save as a new profile, or rename the existing one?\n\n"
+                        "Yes  = save as a new profile\n"
+                        "No   = rename the existing profile\n"
+                        "Cancel = don't save",
+                        existing->name[0] ? existing->name : "(unnamed)",
+                        tmp.name[0]      ? tmp.name      : "(unnamed)");
+                    int rc = MessageBoxA(hwnd, prompt, "Save Profile",
+                                         MB_YESNOCANCEL | MB_ICONQUESTION);
+                    if (rc == IDCANCEL) return TRUE;
+                    do_append = (rc == IDYES);
+                }
+            } else {
+                do_append = 1;
+            }
+
+            if (!do_append) {
+                Profile *pr = (Profile *)vec_get(
+                    &st->cfg->profiles, (size_t)st->edit_idx);
                 *pr = tmp;
             } else {
-                /* Add new profile */
                 Profile *pr = config_profile_new();
                 *pr = tmp;
                 vec_push(&st->cfg->profiles, pr);
