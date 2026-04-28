@@ -77,165 +77,219 @@ static void mdbuf_free(MdWBuf *b)
     b->ptr = NULL;
 }
 
-/* ── Internal: render or measure a single inline span ────────────────── */
+/* ── Internal: measure a single word in a span's font ────────────────── */
 
-/* Returns width consumed. Advances *px. Sets *line_h to max line height. */
-static int render_span(HDC hdc, const char *line, const MdSpan *span,
-                       int px, int py, int max_right,
-                       HFONT hFont, HFONT hMonoFont, HFONT hBoldFont,
-                       const ThemeColors *theme, int paint,
-                       int *out_height)
+/* Returns pixel width of [text+byte_off .. text+byte_off+byte_len) when
+ * rendered in the span's font. Also returns line height via *out_h. */
+static int measure_word(HDC hdc, const char *text, int byte_off, int byte_len,
+                        const MdSpan *span,
+                        HFONT hFont, HFONT hMonoFont, HFONT hBoldFont,
+                        int *out_h)
 {
-    const char *text = line + span->start;
-    int byte_len = span->end - span->start;
     if (byte_len <= 0) {
-        *out_height = 0;
+        *out_h = 0;
         return 0;
     }
 
-    MdWBuf wb;
-    mdbuf_init(&wb, text, byte_len);
-    if (wb.len <= 0) {
-        mdbuf_free(&wb);
-        *out_height = 0;
-        return 0;
-    }
-
-    /* Select font based on span type */
     HFONT sel_font = hFont;
-    HFONT created_font = NULL;  /* Track dynamically created fonts */
+    HFONT created = NULL;
     switch (span->type) {
-    case MD_SPAN_BOLD:
-        sel_font = hBoldFont;
-        break;
+    case MD_SPAN_BOLD:        sel_font = hBoldFont; break;
     case MD_SPAN_BOLD_ITALIC: {
-        /* Create bold+italic from bold font */
-        LOGFONT lf;
-        GetObject(hBoldFont, sizeof(lf), &lf);
+        LOGFONT lf; GetObject(hBoldFont, sizeof(lf), &lf);
         lf.lfItalic = TRUE;
-        created_font = CreateFontIndirect(&lf);
-        sel_font = created_font ? created_font : hBoldFont;
+        created = CreateFontIndirect(&lf);
+        sel_font = created ? created : hBoldFont;
         break;
     }
     case MD_SPAN_ITALIC: {
-        /* Create italic from regular font */
-        LOGFONT lf;
-        GetObject(hFont, sizeof(lf), &lf);
+        LOGFONT lf; GetObject(hFont, sizeof(lf), &lf);
         lf.lfItalic = TRUE;
-        created_font = CreateFontIndirect(&lf);
-        sel_font = created_font ? created_font : hFont;
+        created = CreateFontIndirect(&lf);
+        sel_font = created ? created : hFont;
         break;
     }
-    case MD_SPAN_CODE:
-        sel_font = hMonoFont;
-        break;
-    case MD_SPAN_STRIKETHROUGH:
-    case MD_SPAN_TEXT:
-        sel_font = hFont;
-        break;
+    case MD_SPAN_CODE:        sel_font = hMonoFont; break;
+    default:                  sel_font = hFont;     break;
     }
 
     HFONT old_font = (HFONT)SelectObject(hdc, sel_font);
 
-    /* Measure */
-    RECT rc_measure;
-    rc_measure.left = px;
-    rc_measure.top = py;
-    rc_measure.right = max_right;
-    rc_measure.bottom = py + 1000;
-    int h = DrawTextW(hdc, wb.ptr, wb.len, &rc_measure,
-                      DT_LEFT | DT_TOP | DT_WORDBREAK | DT_CALCRECT);
-    int w = rc_measure.right - rc_measure.left;
+    MdWBuf wb;
+    mdbuf_init(&wb, text + byte_off, byte_len);
 
-    if (paint) {
-        /* Inline code background */
-        if (span->type == MD_SPAN_CODE) {
-            RECT bg_rc;
-            bg_rc.left   = px - 1;
-            bg_rc.top    = py;
-            bg_rc.right  = px + w + 1;
-            bg_rc.bottom = py + h;
-            HBRUSH bg_br = CreateSolidBrush(
-                RGB_FROM_THEME(theme->chat.cmd_bg));
-            FillRect(hdc, &bg_rc, bg_br);
-            DeleteObject(bg_br);
-        }
+    SIZE sz = { 0, 0 };
+    GetTextExtentPoint32W(hdc, wb.ptr, wb.len, &sz);
 
-        /* Set text colour */
-        COLORREF text_color;
-        if (span->type == MD_SPAN_CODE) {
-            text_color = RGB_FROM_THEME(theme->chat.cmd_text);
-        } else {
-            text_color = RGB_FROM_THEME(theme->text_main);
-        }
-        SetTextColor(hdc, text_color);
+    TEXTMETRIC tm;
+    GetTextMetrics(hdc, &tm);
 
-        /* Draw text */
-        RECT rc_draw;
-        rc_draw.left   = px;
-        rc_draw.top    = py;
-        rc_draw.right  = max_right;
-        rc_draw.bottom = py + h;
-        DrawTextW(hdc, wb.ptr, wb.len, &rc_draw,
-                  DT_LEFT | DT_TOP | DT_WORDBREAK);
+    SelectObject(hdc, old_font);
+    if (created) DeleteObject(created);
+    mdbuf_free(&wb);
 
-        /* Strikethrough: draw a line through the middle */
-        if (span->type == MD_SPAN_STRIKETHROUGH) {
-            int mid_y = py + h / 2;
-            HPEN pen = CreatePen(PS_SOLID, 1,
-                                 RGB_FROM_THEME(theme->text_main));
-            HPEN old_pen = (HPEN)SelectObject(hdc, pen);
-            MoveToEx(hdc, px, mid_y, NULL);
-            LineTo(hdc, px + w, mid_y);
-            SelectObject(hdc, old_pen);
-            DeleteObject(pen);
-        }
+    *out_h = tm.tmHeight;
+    return sz.cx;
+}
+
+/* ── Internal: paint a single word at (px, py) in a span's font ──────── */
+
+static void paint_word(HDC hdc, const char *text, int byte_off, int byte_len,
+                       const MdSpan *span, int px, int py,
+                       HFONT hFont, HFONT hMonoFont, HFONT hBoldFont,
+                       const ThemeColors *theme)
+{
+    if (byte_len <= 0) return;
+
+    HFONT sel_font = hFont;
+    HFONT created = NULL;
+    switch (span->type) {
+    case MD_SPAN_BOLD:        sel_font = hBoldFont; break;
+    case MD_SPAN_BOLD_ITALIC: {
+        LOGFONT lf; GetObject(hBoldFont, sizeof(lf), &lf);
+        lf.lfItalic = TRUE;
+        created = CreateFontIndirect(&lf);
+        sel_font = created ? created : hBoldFont;
+        break;
+    }
+    case MD_SPAN_ITALIC: {
+        LOGFONT lf; GetObject(hFont, sizeof(lf), &lf);
+        lf.lfItalic = TRUE;
+        created = CreateFontIndirect(&lf);
+        sel_font = created ? created : hFont;
+        break;
+    }
+    case MD_SPAN_CODE:        sel_font = hMonoFont; break;
+    default:                  sel_font = hFont;     break;
+    }
+
+    HFONT old_font = (HFONT)SelectObject(hdc, sel_font);
+
+    MdWBuf wb;
+    mdbuf_init(&wb, text + byte_off, byte_len);
+
+    SIZE sz = { 0, 0 };
+    GetTextExtentPoint32W(hdc, wb.ptr, wb.len, &sz);
+
+    /* Code background */
+    if (span->type == MD_SPAN_CODE) {
+        RECT bg = { px - 1, py, px + sz.cx + 1, py + sz.cy };
+        HBRUSH br = CreateSolidBrush(RGB_FROM_THEME(theme->chat.cmd_bg));
+        FillRect(hdc, &bg, br);
+        DeleteObject(br);
+    }
+
+    COLORREF clr = (span->type == MD_SPAN_CODE)
+        ? RGB_FROM_THEME(theme->chat.cmd_text)
+        : RGB_FROM_THEME(theme->text_main);
+    SetTextColor(hdc, clr);
+
+    TextOutW(hdc, px, py, wb.ptr, wb.len);
+
+    if (span->type == MD_SPAN_STRIKETHROUGH) {
+        TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+        int mid_y = py + tm.tmHeight / 2;
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB_FROM_THEME(theme->text_main));
+        HPEN old_pen = (HPEN)SelectObject(hdc, pen);
+        MoveToEx(hdc, px, mid_y, NULL);
+        LineTo(hdc, px + sz.cx, mid_y);
+        SelectObject(hdc, old_pen);
+        DeleteObject(pen);
     }
 
     SelectObject(hdc, old_font);
-    if (created_font) DeleteObject(created_font);
+    if (created) DeleteObject(created);
     mdbuf_free(&wb);
-
-    *out_height = h;
-    return w;
 }
 
-/* ── Internal: render/measure inline spans for a single line ─────────── */
+/* ── Word-by-word inline layouter ────────────────────────────────────── */
 
-/* Returns height consumed. */
+/* Lays out parsed spans on one or more visual lines starting at (x, y),
+ * wrapping to column `x` when a token won't fit at `cur_x`. Returns the
+ * total height consumed (including the last line's height). */
 static int render_inline_spans(HDC hdc, const char *line, int line_len,
                                int x, int y, int max_width,
                                HFONT hFont, HFONT hMonoFont, HFONT hBoldFont,
                                const ThemeColors *theme, int paint)
 {
-    MdSpan spans[MD_MAX_SPANS];
-    int count = md_parse_inline(line, line_len, spans);
-
-    if (count == 0) {
-        /* Empty line — still occupies one line height */
-        TEXTMETRIC tm;
+    /* Default line height (used for empty lines and as min line height). */
+    int default_lh;
+    {
         HFONT old = (HFONT)SelectObject(hdc, hFont);
-        GetTextMetrics(hdc, &tm);
+        TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+        default_lh = tm.tmHeight;
         SelectObject(hdc, old);
-        return tm.tmHeight;
     }
 
-    int max_h = 0;
+    if (line_len <= 0) return default_lh;
+
+    MdSpan spans[MD_MAX_SPANS];
+    int span_count = md_parse_inline(line, line_len, spans);
+    if (span_count == 0) return default_lh;
+
+    int max_right = x + max_width;
     int cur_x = x;
     int cur_y = y;
-    int max_right = x + max_width;
+    int line_h = default_lh;
+    int at_line_start = 1;   /* true if cur_x == x (drop leading whitespace) */
 
-    for (int i = 0; i < count; i++) {
-        int span_h = 0;
-        int span_w = render_span(hdc, line, &spans[i],
-                                 cur_x, cur_y, max_right,
-                                 hFont, hMonoFont, hBoldFont,
-                                 theme, paint, &span_h);
-        cur_x += span_w;
-        if (span_h > max_h) max_h = span_h;
+    for (int s = 0; s < span_count; s++) {
+        const MdSpan *span = &spans[s];
+        int span_end = span->end;
+        int off = span->start;
+
+        while (off < span_end) {
+            int wstart = 0, wend = 0;
+            if (!md_next_word(line, span_end, off, &wstart, &wend)) break;
+            int w_byte_len = wend - wstart;
+            int is_ws = (line[wstart] == ' ' || line[wstart] == '\t');
+
+            int word_h = 0;
+            int word_w = measure_word(hdc, line, wstart, w_byte_len,
+                                      span, hFont, hMonoFont, hBoldFont,
+                                      &word_h);
+
+            /* Drop leading whitespace at the start of a wrapped line. */
+            if (is_ws && at_line_start) {
+                off = wend;
+                continue;
+            }
+
+            /* If this is whitespace that would push past max_right, just
+             * end the line here (don't emit trailing whitespace before wrap). */
+            if (is_ws && cur_x + word_w > max_right) {
+                cur_y += line_h;
+                cur_x = x;
+                line_h = default_lh;
+                at_line_start = 1;
+                off = wend;   /* consume the whitespace */
+                continue;
+            }
+
+            /* Word doesn't fit on current line and we're not at line start —
+             * wrap before placing it. */
+            if (!is_ws && cur_x + word_w > max_right && !at_line_start) {
+                cur_y += line_h;
+                cur_x = x;
+                line_h = default_lh;
+                at_line_start = 1;
+            }
+
+            /* Place the token. */
+            if (paint) {
+                paint_word(hdc, line, wstart, w_byte_len, span,
+                           cur_x, cur_y,
+                           hFont, hMonoFont, hBoldFont, theme);
+            }
+            cur_x += word_w;
+            if (word_h > line_h) line_h = word_h;
+            at_line_start = 0;
+            off = wend;
+        }
     }
 
-    return max_h > 0 ? max_h : MD_LINE_SPACING;
+    /* Account for the final line. */
+    return (cur_y - y) + line_h;
 }
 
 /* ── Core: shared render/measure logic ───────────────────────────────── */
