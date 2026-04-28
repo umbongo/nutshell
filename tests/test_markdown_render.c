@@ -399,3 +399,43 @@ int test_md_next_word_tab_is_whitespace(void) {
     ASSERT_EQ(end, 2);   /* "a\t" */
     TEST_END();
 }
+
+/* ---- table-line detection: leading whitespace ---- */
+
+int test_md_classify_table_with_leading_spaces(void) {
+    TEST_BEGIN();
+    /* Two leading spaces before | should still classify as TABLE. */
+    MdLineInfo info = md_classify_line("  | A | B |", 0);
+    ASSERT_EQ(info.type, MD_LINE_TABLE);
+    TEST_END();
+}
+
+int test_md_classify_table_with_leading_tab(void) {
+    TEST_BEGIN();
+    /* Tab before | should still classify as TABLE. */
+    MdLineInfo info = md_classify_line("\t| A | B |", 0);
+    ASSERT_EQ(info.type, MD_LINE_TABLE);
+    TEST_END();
+}
+
+int test_md_classify_table_indented_in_code_block(void) {
+    TEST_BEGIN();
+    /* Inside code block, even an indented |…| stays as CODE. */
+    MdLineInfo info = md_classify_line("  | col |", 1);
+    ASSERT_EQ(info.type, MD_LINE_CODE);
+    TEST_END();
+}
+
+int test_md_table_sep_with_leading_spaces(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(md_is_table_separator("  |---|"));
+    ASSERT_TRUE(md_is_table_separator("\t|:--:|"));
+    TEST_END();
+}
+
+int test_md_table_sep_leading_spaces_not_separator(void) {
+    TEST_BEGIN();
+    /* Leading spaces with text after | is still NOT a separator. */
+    ASSERT_FALSE(md_is_table_separator("  | text |"));
+    TEST_END();
+}

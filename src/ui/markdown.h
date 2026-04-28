@@ -115,10 +115,16 @@ static inline MdLineInfo md_classify_line(const char *line, int in_code_block)
         }
     }
 
-    /* Table: starts with | */
-    if (line[0] == '|') {
-        info.type = MD_LINE_TABLE;
-        return info;
+    /* Table: first non-whitespace character is |. Allow leading spaces or
+     * tabs so AI-emitted tables with light indentation still render as a
+     * table block instead of falling through to PARAGRAPH. */
+    {
+        int ti = 0;
+        while (line[ti] == ' ' || line[ti] == '\t') ti++;
+        if (line[ti] == '|') {
+            info.type = MD_LINE_TABLE;
+            return info;
+        }
     }
 
     return info;
@@ -295,8 +301,11 @@ static inline int md_parse_inline(const char *line, int len, MdSpan *out)
 /* Helper: check if a table separator line (|---|---|) */
 static inline int md_is_table_separator(const char *line)
 {
-    if (!line || line[0] != '|') return 0;
-    for (int i = 1; line[i]; i++) {
+    if (!line) return 0;
+    int i = 0;
+    while (line[i] == ' ' || line[i] == '\t') i++;
+    if (line[i] != '|') return 0;
+    for (i = i + 1; line[i]; i++) {
         if (line[i] != '-' && line[i] != '|' && line[i] != ' ' && line[i] != ':')
             return 0;
     }
