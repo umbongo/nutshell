@@ -533,12 +533,18 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     DRAW_BTN_BG(&rcRight, HOVER_BTN_RIGHT);
                     ns_icon_draw(hdc, NS_ICON_CHEV_RIGHT, &rcRight, cDim, (UINT)data->dpi);
                 }
-                /* AI button — vector chat-bubble glyph */
+                /* AI button — CPU chip glyph. Chip body and pins always
+                 * render in cDim; the inner sparkle uses the accent
+                 * color, which goes green only when an AI key is
+                 * configured. The accent region is small by design so
+                 * the green stays well under 35% of the icon. */
                 if (aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + btnSz, btnY + btnSz};
                     DRAW_BTN_BG(&rcAi, HOVER_BTN_AI);
-                    COLORREF aiCol = data->ai_active ? RGB(0, 180, 0) : cDim;
-                    ns_icon_draw(hdc, NS_ICON_AI, &rcAi, aiCol, (UINT)data->dpi);
+                    COLORREF aiAccent = data->ai_active ? RGB(0, 180, 0) : cDim;
+                    ns_icon_draw_accent(hdc, NS_ICON_AI, &rcAi,
+                                        cDim, aiAccent, 0, 255,
+                                        (UINT)data->dpi);
                 }
 
                 #undef DRAW_BTN_BG

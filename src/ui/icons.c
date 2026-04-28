@@ -17,13 +17,18 @@ enum {
     OP_CURVE,
     OP_CLOSE,
     OP_FILLSTROKE,
-    OP_STROKE
+    OP_STROKE,
+    /* Accent variants stroke/fill with a second color. When the caller
+     * does not supply an accent, it defaults to fg so these behave
+     * identically to OP_STROKE / OP_FILLSTROKE. */
+    OP_STROKE_ACCENT,
+    OP_FILLSTROKE_ACCENT
 };
 
 /* Coordinates: uint8_t on a 0..128 grid. 128 is the max coordinate
  * (right/bottom of the 16x16 cell at 1/8th subdivision) and must
  * fit in the storage type, which is why int8_t would be wrong. */
-static const uint8_t g_glyphs[NS_ICON_COUNT][96] = {
+static const uint8_t g_glyphs[NS_ICON_COUNT][192] = {
     /* NS_ICON_CLOSE */
     { OP_MOVE, 32, 32, OP_LINE, 96, 96, OP_STROKE,
       OP_MOVE, 96, 32, OP_LINE, 32, 96, OP_STROKE, OP_END },
@@ -34,24 +39,41 @@ static const uint8_t g_glyphs[NS_ICON_COUNT][96] = {
     /* NS_ICON_PLUS */
     { OP_MOVE, 64, 28, OP_LINE, 64, 100, OP_STROKE,
       OP_MOVE, 28, 64, OP_LINE, 100, 64, OP_STROKE, OP_END },
-    /* NS_ICON_AI — rounded chat bubble with a sparkle cut out of the
-     * upper-right.  The bubble and spark sit in the same path so the
-     * even-odd fill rule turns the spark into a hole that reveals the
-     * button background; the stroke outlines both. */
-    { OP_MOVE, 24, 24, OP_LINE, 92, 24,
-      OP_CURVE, 100, 24, 108, 32, 108, 40,
-      OP_LINE, 108, 76,
-      OP_CURVE, 108, 84, 100, 92, 92, 92,
-      OP_LINE, 56, 92, OP_LINE, 36, 108, OP_LINE, 44, 92,
-      OP_LINE, 24, 92,
-      OP_CURVE, 16, 92, 8, 84, 8, 76,
-      OP_LINE, 8, 40,
-      OP_CURVE, 8, 32, 16, 24, 24, 24,
-      OP_CLOSE,
-      OP_MOVE, 88, 20,
-      OP_LINE, 91, 29, OP_LINE, 100, 32, OP_LINE, 91, 35,
-      OP_LINE, 88, 44, OP_LINE, 85, 35, OP_LINE, 76, 32, OP_LINE, 85, 29,
-      OP_CLOSE, OP_FILLSTROKE, OP_END },
+    /* NS_ICON_AI — AI CPU. A square chip body with 16 pin stubs (4 per
+     * side) and an inner die, drawn in fg. A small 4-point sparkle in
+     * the center of the die is the AI marker and uses the accent color
+     * — green when an AI key is configured, fg otherwise. The accent
+     * region is intentionally kept small (well under 35% of the icon)
+     * so the configured-state cue reads as a highlight, not a tint. */
+    { /* Chip body */
+      OP_MOVE, 28, 28, OP_LINE, 100, 28, OP_LINE, 100, 100,
+      OP_LINE, 28, 100, OP_CLOSE,
+      /* Inner die */
+      OP_MOVE, 44, 44, OP_LINE, 84, 44, OP_LINE, 84, 84,
+      OP_LINE, 44, 84, OP_CLOSE,
+      /* 16 pins: top, bottom, left, right (4 each) */
+      OP_MOVE, 40, 28, OP_LINE, 40, 16,
+      OP_MOVE, 54, 28, OP_LINE, 54, 16,
+      OP_MOVE, 74, 28, OP_LINE, 74, 16,
+      OP_MOVE, 88, 28, OP_LINE, 88, 16,
+      OP_MOVE, 40, 100, OP_LINE, 40, 112,
+      OP_MOVE, 54, 100, OP_LINE, 54, 112,
+      OP_MOVE, 74, 100, OP_LINE, 74, 112,
+      OP_MOVE, 88, 100, OP_LINE, 88, 112,
+      OP_MOVE, 28, 40, OP_LINE, 16, 40,
+      OP_MOVE, 28, 54, OP_LINE, 16, 54,
+      OP_MOVE, 28, 74, OP_LINE, 16, 74,
+      OP_MOVE, 28, 88, OP_LINE, 16, 88,
+      OP_MOVE, 100, 40, OP_LINE, 112, 40,
+      OP_MOVE, 100, 54, OP_LINE, 112, 54,
+      OP_MOVE, 100, 74, OP_LINE, 112, 74,
+      OP_MOVE, 100, 88, OP_LINE, 112, 88,
+      OP_STROKE,
+      /* Center sparkle (4-point star) — accent-colored AI marker */
+      OP_MOVE, 64, 52,
+      OP_LINE, 67, 61, OP_LINE, 76, 64, OP_LINE, 67, 67,
+      OP_LINE, 64, 76, OP_LINE, 61, 67, OP_LINE, 52, 64, OP_LINE, 61, 61,
+      OP_CLOSE, OP_FILLSTROKE_ACCENT, OP_END },
     /* NS_ICON_DOCK — rect with right quarter filled */
     { OP_MOVE, 16, 24, OP_LINE, 112, 24, OP_LINE, 112, 104,
       OP_LINE, 16, 104, OP_CLOSE, OP_STROKE,
@@ -122,11 +144,14 @@ static const uint8_t g_glyphs[NS_ICON_COUNT][96] = {
     { OP_MOVE, 32, 64, OP_LINE, 32, 64, OP_CLOSE, OP_FILLSTROKE,
       OP_MOVE, 64, 64, OP_LINE, 64, 64, OP_CLOSE, OP_FILLSTROKE,
       OP_MOVE, 96, 64, OP_LINE, 96, 64, OP_CLOSE, OP_FILLSTROKE, OP_END },
-    /* NS_ICON_SERVER — stacked racks */
-    { OP_MOVE, 20, 24, OP_LINE, 108, 24, OP_LINE, 108, 58,
-      OP_LINE, 20, 58, OP_CLOSE, OP_STROKE,
-      OP_MOVE, 20, 70, OP_LINE, 108, 70, OP_LINE, 108, 104,
-      OP_LINE, 20, 104, OP_CLOSE, OP_STROKE, OP_END },
+    /* NS_ICON_SERVER — tower with vents and indicator LED */
+    { OP_MOVE, 40, 16, OP_LINE, 88, 16, OP_LINE, 88, 112,
+      OP_LINE, 40, 112, OP_CLOSE, OP_STROKE,
+      OP_MOVE, 50, 28, OP_LINE, 50, 28, OP_CLOSE, OP_FILLSTROKE,
+      OP_MOVE, 48, 44, OP_LINE, 80, 44, OP_STROKE,
+      OP_MOVE, 48, 56, OP_LINE, 80, 56, OP_STROKE,
+      OP_MOVE, 48, 68, OP_LINE, 80, 68, OP_STROKE,
+      OP_MOVE, 48, 92, OP_LINE, 80, 92, OP_STROKE, OP_END },
     /* NS_ICON_TRASH */
     { OP_MOVE, 24, 36, OP_LINE, 104, 36, OP_STROKE,
       OP_MOVE, 48, 36, OP_LINE, 48, 26, OP_LINE, 80, 26, OP_LINE, 80, 36, OP_STROKE,
@@ -210,8 +235,10 @@ static ARGB argb_of(COLORREF c, BYTE a)
          | ((ARGB)GetBValue(c));
 }
 
-void ns_icon_draw_ex(HDC hdc, NsIconId id, const RECT *rc,
-                     COLORREF fg, BYTE fill_alpha, UINT dpi)
+void ns_icon_draw_accent(HDC hdc, NsIconId id, const RECT *rc,
+                         COLORREF fg, COLORREF accent,
+                         BYTE fill_alpha, BYTE accent_fill_alpha,
+                         UINT dpi)
 {
     (void)dpi;
 
@@ -229,18 +256,27 @@ void ns_icon_draw_ex(HDC hdc, NsIconId id, const RECT *rc,
     float ox = (float)rc->left + ((float)w - 128.0f * scale) / 2.0f;
     float oy = (float)rc->top  + ((float)h - 128.0f * scale) / 2.0f;
 
-    GpPen *pen = NULL;
     /* Stroke ≈ side/24 px so a 24 px icon strokes at ~1 px and a 48 px
      * icon at ~2 px — keeps the look proportional without going chunky
      * at larger sizes. */
     float stroke_w = (float)side / 24.0f;
     if (stroke_w < 1.0f) stroke_w = 1.0f;
+
+    GpPen *pen = NULL;
     GdipCreatePen1(argb_of(fg, 255), stroke_w, UnitPixel, &pen);
     GdipSetPenLineCap197819(pen, LineCapRound, LineCapRound, DashCapFlat);
     GdipSetPenLineJoin(pen, LineJoinRound);
 
+    GpPen *pen_accent = NULL;
+    GdipCreatePen1(argb_of(accent, 255), stroke_w, UnitPixel, &pen_accent);
+    GdipSetPenLineCap197819(pen_accent, LineCapRound, LineCapRound, DashCapFlat);
+    GdipSetPenLineJoin(pen_accent, LineJoinRound);
+
     GpSolidFill *brush = NULL;
     GdipCreateSolidFill(argb_of(fg, fill_alpha), &brush);
+
+    GpSolidFill *brush_accent = NULL;
+    GdipCreateSolidFill(argb_of(accent, accent_fill_alpha), &brush_accent);
 
     GpPath *path = NULL;
     GdipCreatePath(FillModeAlternate, &path);
@@ -293,6 +329,18 @@ void ns_icon_draw_ex(HDC hdc, NsIconId id, const RECT *rc,
             GdipDeletePath(path);
             GdipCreatePath(FillModeAlternate, &path);
             break;
+        case OP_STROKE_ACCENT:
+            GdipDrawPath(g, pen_accent, path);
+            GdipDeletePath(path);
+            GdipCreatePath(FillModeAlternate, &path);
+            break;
+        case OP_FILLSTROKE_ACCENT:
+            if (accent_fill_alpha)
+                GdipFillPath(g, (GpBrush *)brush_accent, path);
+            GdipDrawPath(g, pen_accent, path);
+            GdipDeletePath(path);
+            GdipCreatePath(FillModeAlternate, &path);
+            break;
         default:
             /* Malformed glyph stream — stop to avoid runaway parse. */
             goto done;
@@ -303,9 +351,19 @@ void ns_icon_draw_ex(HDC hdc, NsIconId id, const RECT *rc,
 
 done:
     GdipDeletePath(path);
+    GdipDeleteBrush((GpBrush *)brush_accent);
     GdipDeleteBrush((GpBrush *)brush);
+    GdipDeletePen(pen_accent);
     GdipDeletePen(pen);
     GdipDeleteGraphics(g);
+}
+
+void ns_icon_draw_ex(HDC hdc, NsIconId id, const RECT *rc,
+                     COLORREF fg, BYTE fill_alpha, UINT dpi)
+{
+    /* No accent: route accent ops through the fg pen/brush by passing
+     * fg as the accent color. */
+    ns_icon_draw_accent(hdc, id, rc, fg, fg, fill_alpha, fill_alpha, dpi);
 }
 
 void ns_icon_draw(HDC hdc, NsIconId id, const RECT *rc,
@@ -314,7 +372,6 @@ void ns_icon_draw(HDC hdc, NsIconId id, const RECT *rc,
     /* Per-icon default interior fill alpha. Icons not listed here
      * default to stroke-only (alpha 0). */
     static const BYTE k_fill[NS_ICON_COUNT] = {
-        [NS_ICON_AI]       = 255,
         [NS_ICON_BOLT]     = 56,
         [NS_ICON_STOP]     = 255,
         [NS_ICON_SHIELD]   = 38,

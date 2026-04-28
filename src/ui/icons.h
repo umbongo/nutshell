@@ -56,5 +56,13 @@ void ns_icon_draw(HDC hdc, NsIconId id, const RECT *rc,
 void ns_icon_draw_ex(HDC hdc, NsIconId id, const RECT *rc,
                      COLORREF fg, BYTE fill_alpha, UINT dpi);
 
+/* Two-color variant. Accent ops in the glyph stream
+ * (OP_STROKE_ACCENT / OP_FILLSTROKE_ACCENT) use `accent` instead of
+ * `fg`. Glyphs with no accent ops render identically to ns_icon_draw_ex. */
+void ns_icon_draw_accent(HDC hdc, NsIconId id, const RECT *rc,
+                         COLORREF fg, COLORREF accent,
+                         BYTE fill_alpha, BYTE accent_fill_alpha,
+                         UINT dpi);
+
 #endif /* _WIN32 */
 #endif /* NUTSHELL_ICONS_H */
