@@ -1512,6 +1512,12 @@ int test_md_table_sep_minimal(void);
 int test_md_table_sep_colons(void);
 int test_md_table_sep_not_separator(void);
 int test_md_table_sep_null(void);
+int test_md_next_word_basic(void);
+int test_md_next_word_leading_space(void);
+int test_md_next_word_only_spaces(void);
+int test_md_next_word_empty(void);
+int test_md_next_word_long_run(void);
+int test_md_next_word_tab_is_whitespace(void);
 
 /* test_json_validate.c */
 int test_escape_simple_string(void);
@@ -3085,6 +3091,12 @@ int main(void) {
     failed += test_md_table_sep_colons();
     failed += test_md_table_sep_not_separator();
     failed += test_md_table_sep_null();
+    failed += test_md_next_word_basic();
+    failed += test_md_next_word_leading_space();
+    failed += test_md_next_word_only_spaces();
+    failed += test_md_next_word_empty();
+    failed += test_md_next_word_long_run();
+    failed += test_md_next_word_tab_is_whitespace();
 
     printf("\n--- JSON Escape ---\n");
     failed += test_escape_simple_string();

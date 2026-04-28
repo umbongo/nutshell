@@ -303,4 +303,36 @@ static inline int md_is_table_separator(const char *line)
     return 1;
 }
 
+/* Find the next "word" (run of non-whitespace, OR run of whitespace) starting
+ * at `offset` in `line[0..len)`. Whitespace and non-whitespace alternate, so
+ * the layouter can keep a word and its following space together as one piece
+ * but drop the space when wrapping.
+ *
+ * Returns 1 and writes [start, end) of the token; returns 0 if no more tokens.
+ * Whitespace = ' ' or '\t' (not newline — caller has already split on \n).
+ */
+static inline int md_next_word(const char *line, int len, int offset,
+                               int *out_start, int *out_end)
+{
+    if (!line || len <= 0 || offset < 0 || offset >= len) return 0;
+
+    int i = offset;
+
+    if (line[i] == ' ' || line[i] == '\t') {
+        /* Pure whitespace token: consume all consecutive whitespace. */
+        while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+    } else {
+        /* Non-whitespace token: consume non-whitespace then any trailing whitespace.
+         * This keeps a word and its following space(s) together as one piece so
+         * the layouter can drop the space at a line-wrap boundary without losing
+         * the next word's content. */
+        while (i < len && line[i] != ' ' && line[i] != '\t') i++;
+        while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+    }
+
+    if (out_start) *out_start = offset;
+    if (out_end)   *out_end   = i;
+    return 1;
+}
+
 #endif /* NUTSHELL_MARKDOWN_H */

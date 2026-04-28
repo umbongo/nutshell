@@ -304,3 +304,98 @@ int test_md_table_sep_null(void) {
     ASSERT_FALSE(md_is_table_separator(NULL));
     TEST_END();
 }
+
+/* ---- md_next_word: word-with-trailing-space tokenization ---- */
+
+int test_md_next_word_basic(void) {
+    TEST_BEGIN();
+    /* "hello world foo" → "hello ", "world ", "foo" */
+    const char *line = "hello world foo";
+    int len = (int)strlen(line);
+    int start = 0, end = 0;
+    int n;
+
+    n = md_next_word(line, len, 0, &start, &end);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(start, 0);
+    ASSERT_EQ(end, 6);   /* "hello " — includes trailing space */
+
+    n = md_next_word(line, len, 6, &start, &end);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(start, 6);
+    ASSERT_EQ(end, 12);  /* "world " */
+
+    n = md_next_word(line, len, 12, &start, &end);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(start, 12);
+    ASSERT_EQ(end, 15);  /* "foo" — no trailing space */
+
+    n = md_next_word(line, len, 15, &start, &end);
+    ASSERT_EQ(n, 0);     /* end of string */
+    TEST_END();
+}
+
+int test_md_next_word_leading_space(void) {
+    TEST_BEGIN();
+    /* Leading whitespace forms its own token so layout can decide
+     * whether to keep or drop it after a wrap. */
+    const char *line = "   abc";
+    int start = 0, end = 0;
+    int n = md_next_word(line, (int)strlen(line), 0, &start, &end);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(start, 0);
+    ASSERT_EQ(end, 3);   /* "   " — pure whitespace token */
+
+    n = md_next_word(line, (int)strlen(line), 3, &start, &end);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(start, 3);
+    ASSERT_EQ(end, 6);   /* "abc" */
+    TEST_END();
+}
+
+int test_md_next_word_only_spaces(void) {
+    TEST_BEGIN();
+    const char *line = "   ";
+    int start = 0, end = 0;
+    int n = md_next_word(line, (int)strlen(line), 0, &start, &end);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(start, 0);
+    ASSERT_EQ(end, 3);
+    n = md_next_word(line, (int)strlen(line), 3, &start, &end);
+    ASSERT_EQ(n, 0);
+    TEST_END();
+}
+
+int test_md_next_word_empty(void) {
+    TEST_BEGIN();
+    int start = 0, end = 0;
+    ASSERT_EQ(md_next_word("", 0, 0, &start, &end), 0);
+    ASSERT_EQ(md_next_word(NULL, 5, 0, &start, &end), 0);
+    ASSERT_EQ(md_next_word("abc", 3, 3, &start, &end), 0);  /* offset == len */
+    ASSERT_EQ(md_next_word("abc", 3, 99, &start, &end), 0); /* offset past end */
+    TEST_END();
+}
+
+int test_md_next_word_long_run(void) {
+    TEST_BEGIN();
+    /* Very long unbreakable word still returns one token */
+    const char *line = "/home/thomas/some/very/long/path";
+    int start = 0, end = 0;
+    int n = md_next_word(line, (int)strlen(line), 0, &start, &end);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(start, 0);
+    ASSERT_EQ(end, (int)strlen(line));
+    TEST_END();
+}
+
+int test_md_next_word_tab_is_whitespace(void) {
+    TEST_BEGIN();
+    /* Tabs are whitespace too */
+    const char *line = "a\tb";
+    int start = 0, end = 0;
+    int n = md_next_word(line, (int)strlen(line), 0, &start, &end);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(start, 0);
+    ASSERT_EQ(end, 2);   /* "a\t" */
+    TEST_END();
+}
