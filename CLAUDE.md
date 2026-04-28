@@ -60,3 +60,9 @@ There is a single `config.h` at `src/config/config.h`, used by both the Windows 
 
 - Use `secure_zero()` (from `src/core/secure_zero.h`) to wipe passwords and keys — never plain `memset`, which the compiler can optimize away.
 - API keys are stored encrypted in `nutshell.config` using `crypto_encrypt()`/`crypto_decrypt()`, same as profile passwords.
+
+## Git commits
+
+- Do not add "🤖 Generated with Claude Code" footer
+- Do not add "Co-Authored-By: Claude <noreply@anthropic.com>" trailer
+- Write commit messages as if I authored them
