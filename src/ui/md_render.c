@@ -93,6 +93,7 @@ static int measure_word(HDC hdc, const char *text, int byte_off, int byte_len,
 
     HFONT sel_font = hFont;
     HFONT created = NULL;
+    /* Font selection per span type. KEEP IN SYNC with paint_word. */
     switch (span->type) {
     case MD_SPAN_BOLD:        sel_font = hBoldFont; break;
     case MD_SPAN_BOLD_ITALIC: {
@@ -143,6 +144,7 @@ static void paint_word(HDC hdc, const char *text, int byte_off, int byte_len,
 
     HFONT sel_font = hFont;
     HFONT created = NULL;
+    /* Font selection per span type. KEEP IN SYNC with measure_word. */
     switch (span->type) {
     case MD_SPAN_BOLD:        sel_font = hBoldFont; break;
     case MD_SPAN_BOLD_ITALIC: {
