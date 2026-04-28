@@ -558,11 +558,17 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
             break;
         }
 
-        case MD_LINE_EMPTY:
+        case MD_LINE_EMPTY: {
             /* Reset ordered list counter on blank line */
             olist_num = 0;
-            cur_y += MD_PARA_SPACING;
+            /* Real paragraph break: full font line height plus MD_LINE_SPACING.
+             * MD_PARA_SPACING (6 px) made \n\n indistinguishable from \n. */
+            HFONT old = (HFONT)SelectObject(hdc, hFont);
+            TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
+            SelectObject(hdc, old);
+            cur_y += tm.tmHeight + MD_LINE_SPACING;
             break;
+        }
 
         case MD_LINE_PARAGRAPH: {
             /* Reset ordered list counter */
