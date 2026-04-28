@@ -12,11 +12,11 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>   /* fcntl, F_GETFL, F_SETFL, O_NONBLOCK */
-#include <errno.h>
 #define closesocket close
 typedef int SOCKET;
 #define INVALID_SOCKET (-1)
 #endif
+#include <errno.h>   /* EAGAIN/EINTR/EBADF/EIO for the libssh2 recv contract */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,14 +28,34 @@ typedef int SOCKET;
  *
  * `*abstract` is the per-session opaque pointer set via
  * libssh2_session_abstract().  We store the SshSession* there so we can
- * bump bytes_read_total without a global. */
+ * bump bytes_read_total without a global.
+ *
+ * Error contract: libssh2's transport layer compares the return value
+ * against -EAGAIN literally (see libssh2 transport.c) — anything else
+ * negative is treated as a fatal LIBSSH2_ERROR_SOCKET_RECV.  The default
+ * _libssh2_recv translates platform error codes to negative POSIX errno
+ * values; we must do the same or the handshake (and every non-blocking
+ * channel read after it) will fail. */
 static ssize_t nutshell_recv_cb(libssh2_socket_t sock, void *buffer,
                                 size_t length, int flags, void **abstract)
 {
 #ifdef _WIN32
     int n = recv(sock, (char *)buffer, (int)length, flags);
+    if (n < 0) {
+        switch (WSAGetLastError()) {
+        case WSAEWOULDBLOCK: return -EAGAIN;
+        case WSAEINTR:       return -EINTR;
+        case WSAENOTSOCK:    return -EBADF;
+        default:             return -EIO;
+        }
+    }
 #else
     ssize_t n = recv(sock, buffer, length, flags);
+    if (n < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+            return -EAGAIN;
+        return -errno;
+    }
 #endif
     if (n > 0 && abstract && *abstract) {
         SshSession *s = (SshSession *)*abstract;
@@ -202,8 +222,11 @@ int ssh_connect(SshSession *s, const char *host, int port) {
     s->socket = sock;
     set_tcp_keepalive(sock);
 
-    /* Install our recv hook so we can track socket-level liveness.
-     * Must run before handshake so KEX bytes are counted. */
+    /* Install our recv hook so libssh2 reads route through us; this lets
+     * us track post-handshake socket-level liveness via bytes_read_total.
+     * The counter's baseline is reset at WM_CONN_DONE, so KEX/auth bytes
+     * are never observed — but the hook must already honour libssh2's
+     * -EAGAIN/-errno contract because the handshake itself reads through it. */
     void **abstract = libssh2_session_abstract(s->session);
     if (abstract) *abstract = s;
     libssh2_session_callback_set2(s->session,
