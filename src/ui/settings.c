@@ -321,6 +321,8 @@ static const TooltipEntry k_tooltips[] = {
       "(1 - 20)." },
     { IDC_AI_WEB_FETCH,
       "Allow the AI to fetch arbitrary URLs as a tool call." },
+    { IDC_AI_MD_RENDER,
+      "Render AI replies as formatted markdown. Turn off to see raw text." },
     { IDC_SSH_IDLE_EDIT,
       "Disconnect SSH sessions after this many minutes of no user "
       "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
@@ -663,6 +665,19 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                         nd->cfg->settings.ai_web_fetch_enabled
                             ? BST_CHECKED : BST_UNCHECKED, 0);
             (void)hFetch;
+        }
+        y += rh;
+
+        /* Row 15: Render AI markdown */
+        {
+            int fetch_h = MulDiv(20, nd->dpi, 96);
+            HWND hMdRender = CreateWindow("BUTTON", "Render AI markdown",
+                WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+                ex, y, ew, fetch_h, hwnd, (HMENU)IDC_AI_MD_RENDER, NULL, NULL);
+            SendMessage(hMdRender, BM_SETCHECK,
+                        nd->cfg->settings.markdown_render_enabled
+                            ? BST_CHECKED : BST_UNCHECKED, 0);
+            (void)hMdRender;
         }
         y += rh;
 
@@ -1109,6 +1124,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             /* Permit web fetch */
             s->ai_web_fetch_enabled = (IsDlgButtonChecked(hwnd, IDC_AI_WEB_FETCH)
                                         == BST_CHECKED) ? 1 : 0;
+
+            /* Render AI markdown */
+            s->markdown_render_enabled = (IsDlgButtonChecked(hwnd, IDC_AI_MD_RENDER)
+                                           == BST_CHECKED) ? 1 : 0;
 
             /* SSH user idle timeout */
             v = GetDlgItemInt(hwnd, IDC_SSH_IDLE_EDIT, &ok, FALSE);

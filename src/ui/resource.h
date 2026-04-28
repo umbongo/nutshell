@@ -63,5 +63,6 @@
 #define IDC_AI_SEARCH_URL    3062  /* Settings: custom search URL edit */
 #define IDC_AI_MAX_RESULTS   3063  /* Settings: max search results */
 #define IDC_AI_WEB_FETCH     3064  /* Settings: permit web fetch checkbox */
+#define IDC_AI_MD_RENDER     3065  /* Settings: render AI markdown checkbox */
 
 #endif
