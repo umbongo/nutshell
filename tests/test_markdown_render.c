@@ -426,6 +426,15 @@ int test_md_classify_table_indented_in_code_block(void) {
     TEST_END();
 }
 
+int test_md_classify_indented_plain_text(void) {
+    TEST_BEGIN();
+    /* Leading whitespace without | → paragraph, not table.
+     * Guards against future regressors loosening the | check. */
+    MdLineInfo info = md_classify_line("  hello world", 0);
+    ASSERT_EQ(info.type, MD_LINE_PARAGRAPH);
+    TEST_END();
+}
+
 int test_md_table_sep_with_leading_spaces(void) {
     TEST_BEGIN();
     ASSERT_TRUE(md_is_table_separator("  |---|"));

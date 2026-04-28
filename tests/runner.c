@@ -1515,6 +1515,7 @@ int test_md_table_sep_null(void);
 int test_md_classify_table_with_leading_spaces(void);
 int test_md_classify_table_with_leading_tab(void);
 int test_md_classify_table_indented_in_code_block(void);
+int test_md_classify_indented_plain_text(void);
 int test_md_table_sep_with_leading_spaces(void);
 int test_md_table_sep_leading_spaces_not_separator(void);
 int test_md_next_word_basic(void);
@@ -3099,6 +3100,7 @@ int main(void) {
     failed += test_md_classify_table_with_leading_spaces();
     failed += test_md_classify_table_with_leading_tab();
     failed += test_md_classify_table_indented_in_code_block();
+    failed += test_md_classify_indented_plain_text();
     failed += test_md_table_sep_with_leading_spaces();
     failed += test_md_table_sep_leading_spaces_not_separator();
     failed += test_md_next_word_basic();
