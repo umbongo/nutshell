@@ -59,6 +59,8 @@ typedef struct {
     /* External custom scrollbar (not owned) */
     HWND ext_scrollbar;
 
+    int render_markdown;        /* 1 = markdown render on, 0 = plain text */
+
 } ChatListView;
 
 /* Register the window class. Call once at startup. */
@@ -104,5 +106,8 @@ void chat_listview_set_scrollbar(HWND hwnd, HWND scrollbar);
 
 /* Set the AI model name displayed next to "AI" label. */
 void chat_listview_set_model(HWND hwnd, const char *model);
+
+/* Toggle markdown rendering. Triggers a redraw. Default after create: 1. */
+void chat_listview_set_render_markdown(HWND hwnd, int enabled);
 
 #endif /* NUTSHELL_CHAT_LISTVIEW_H */

@@ -3723,6 +3723,15 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme)
     InvalidateRect(hwnd, NULL, TRUE);
 }
 
+void ai_chat_set_markdown(HWND hwnd, int enabled)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    if (d->hChatList)
+        chat_listview_set_render_markdown(d->hChatList, enabled);
+}
+
 /* Internal helper: perform the actual session switch (save/load/rebuild).
  * Safe to call even while busy — each thread targets its own session. */
 static void do_session_switch(AiChatData *d,

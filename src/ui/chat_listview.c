@@ -379,6 +379,7 @@ HWND chat_listview_create(HWND parent, int x, int y, int w, int h,
     lv->msg_list = msg_list;
     lv->theme    = theme;
     lv->dpi_scale = 1.0f;
+    lv->render_markdown = 1;
 
     /* Compute scaled layout constants */
     lv->msg_gap    = CLV_SCALE(lv, BASE_MSG_GAP);
@@ -479,6 +480,17 @@ void chat_listview_set_model(HWND hwnd, const char *model)
     else
         lv->model_name[0] = '\0';
     InvalidateRect(hwnd, NULL, FALSE);
+}
+
+void chat_listview_set_render_markdown(HWND hwnd, int enabled)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    int v = enabled ? 1 : 0;
+    if (lv->render_markdown == v) return;   /* no-op */
+    lv->render_markdown = v;
+    /* Layout heights change with the new mode — recalc and redraw. */
+    chat_listview_invalidate(hwnd);
 }
 
 void chat_listview_invalidate(HWND hwnd)
@@ -728,9 +740,21 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             stripped = ai_text_for_measure(item->text);
             if (stripped) measure_text = stripped;
         }
-        int h = md_measure_text(hdc, measure_text, text_w,
+        int h;
+        if (lv->render_markdown) {
+            h = md_measure_text(hdc, measure_text, text_w,
                                 lv->hFont, lv->hMonoFont, lv->hBoldFont,
                                 lv->theme);
+        } else {
+            HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
+                                       : GetStockObject(DEFAULT_GUI_FONT));
+            RECT mrc;
+            SetRect(&mrc, 0, 0, text_w, 0);
+            draw_text_utf8(hdc, measure_text, &mrc,
+                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+            h = mrc.bottom - mrc.top;
+            SelectObject(hdc, tf);
+        }
         free(stripped);
 
         /* Icon row + gap before content (must match paint_ai_item layout) */
@@ -909,6 +933,34 @@ static void paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
 }
 
+/* Render one AI text segment. Markdown when lv->render_markdown is on,
+ * plain word-wrapped UTF-8 in lv->hFont otherwise. The [EXEC] purple
+ * monospace path is handled by draw_ai_text_with_exec — segments passed
+ * here never contain [EXEC] markers. Returns height consumed in pixels. */
+static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
+                           int x, int y, int width)
+{
+    if (lv->render_markdown) {
+        return md_render_text(hdc, text, x, y, width,
+                              lv->hFont, lv->hMonoFont, lv->hBoldFont,
+                              lv->theme);
+    }
+    HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
+                              : GetStockObject(DEFAULT_GUI_FONT));
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB_FROM_THEME(lv->theme->text_main));
+    RECT mrc;
+    SetRect(&mrc, x, y, x + width, 0);
+    draw_text_utf8(hdc, text, &mrc,
+                   DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+    int seg_h = mrc.bottom - mrc.top;
+    SetRect(&mrc, x, y, x + width, y + seg_h);
+    draw_text_utf8(hdc, text, &mrc,
+                   DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+    SelectObject(hdc, tf);
+    return seg_h;
+}
+
 /* Draw AI text with [EXEC]...[/EXEC] segments highlighted in purple.
  * Uses the same rect and flags as draw_text_utf8 but splits at markers. */
 static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
@@ -920,8 +972,8 @@ static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
 
     /* If no [EXEC] markers, fast path */
     if (!strstr(text, "[EXEC]")) {
-        md_render_text(hdc, text, rc->left, rc->top, rc->right - rc->left,
-                       lv->hFont, lv->hMonoFont, lv->hBoldFont, lv->theme);
+        draw_ai_segment(lv, hdc, text, rc->left, rc->top,
+                        rc->right - rc->left);
         return;
     }
 
@@ -935,9 +987,8 @@ static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
         if (!exec_start) {
             /* Remaining text is normal */
             if (*pos) {
-                int h = md_render_text(hdc, pos, rc->left, y, rc->right - rc->left,
-                                       lv->hFont, lv->hMonoFont, lv->hBoldFont,
-                                       lv->theme);
+                int h = draw_ai_segment(lv, hdc, pos, rc->left, y,
+                                        rc->right - rc->left);
                 y += h;
             }
             break;
@@ -957,10 +1008,8 @@ static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
                     trim--;
                 seg[trim] = '\0';
                 if (trim > 0) {
-                    int h = md_render_text(hdc, seg, rc->left, y,
-                                           rc->right - rc->left,
-                                           lv->hFont, lv->hMonoFont,
-                                           lv->hBoldFont, lv->theme);
+                    int h = draw_ai_segment(lv, hdc, seg, rc->left, y,
+                                            rc->right - rc->left);
                     y += h;
                 }
                 free(seg);

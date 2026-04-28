@@ -775,6 +775,8 @@ static void on_settings_clicked(void) {
         ai_chat_update_notes(g_hwndAiChat,
                             g_active_session ? g_active_session->conn_profile.ai_notes : NULL,
                             g_config->settings.ai_system_notes);
+        ai_chat_set_markdown(g_hwndAiChat,
+                             g_config->settings.markdown_render_enabled);
         ai_chat_set_theme(g_hwndAiChat,
                           g_config->settings.colour_scheme);
         ai_chat_update_tools(g_hwndAiChat,
@@ -835,6 +837,7 @@ static HWND create_ai_chat(HWND parent)
                              g_config->settings.ai_search_url,
                              g_config->settings.ai_max_search_results,
                              g_config->settings.ai_web_fetch_enabled);
+        ai_chat_set_markdown(hwnd, g_config->settings.markdown_render_enabled);
     }
     return hwnd;
 }
