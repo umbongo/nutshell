@@ -260,7 +260,13 @@ typedef struct {
     HWND hChatList;                 /* Owner-drawn chat list view */
     ChatMsgItem *stream_ai_item;    /* Current AI item being streamed into */
 
-    /* Owned fonts for ChatListView (caller manages lifetime) */
+    /* Owned fonts for ChatListView (caller manages lifetime).
+     * hChatFont/hBoldFont/hMonoFont are zoomable and apply to chat
+     * content (user messages + AI responses) and the user input
+     * textbox. The UI font (d->hFont) and d->hSmallFont stay fixed so
+     * buttons, context bar, and indicator labels are not affected by
+     * Ctrl+/Ctrl- zoom. */
+    HFONT hChatFont;
     HFONT hBoldFont;
     HFONT hMonoFont;
 
@@ -1759,8 +1765,10 @@ static void input_sync_scroll(AiChatData *d)
     csb_sync_edit(d->hInput, d->hInputScrollbar, lh);
 }
 
-/* Zoom the AI chat font: recreate hFont at the new size, apply to controls,
- * and re-measure line height for scroll sync. */
+/* Zoom the AI chat content fonts. Resizes the chat ListView fonts
+ * (user messages + AI responses) and the user input textbox font.
+ * Buttons keep the UI font; context bar and session label keep the
+ * small font. */
 static void chat_apply_zoom(AiChatData *d, int delta)
 {
     if (!d) return;
@@ -1769,46 +1777,51 @@ static void chat_apply_zoom(AiChatData *d, int delta)
         return;
     d->ui_font_size = new_size;
 
-    /* Recreate main font at new size */
-    if (d->hFont) DeleteObject(d->hFont);
-    int h = -MulDiv(new_size, d->dpi, 72);
-    d->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                          DEFAULT_CHARSET, OUT_TT_PRECIS,
-                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                          DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+    if (!d->hChatList)
+        return;
 
-    if (d->hFont) {
-        SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hFont, TRUE);
-        /* Update ChatListView fonts (free old first to prevent leaks) */
-        if (d->hChatList) {
-            if (d->hBoldFont) DeleteObject(d->hBoldFont);
-            if (d->hMonoFont) DeleteObject(d->hMonoFont);
-            d->hBoldFont = CreateFont(h, 0, 0, 0, FW_BOLD,
-                FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                APP_FONT_UI_FACE);
-            d->hMonoFont = CreateFont(h, 0, 0, 0, FW_NORMAL,
-                FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
-                d->ai_font_name[0] ? d->ai_font_name : "Consolas");
-            chat_listview_set_fonts(d->hChatList, d->hFont,
-                                    d->hMonoFont, d->hBoldFont,
-                                    d->hSmallFont);
-            chat_listview_relayout(d->hChatList);
+    int h = -MulDiv(new_size, d->dpi, 72);
+
+    if (d->hChatFont) DeleteObject(d->hChatFont);
+    if (d->hBoldFont) DeleteObject(d->hBoldFont);
+    if (d->hMonoFont) DeleteObject(d->hMonoFont);
+
+    d->hChatFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_TT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                              DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+    d->hBoldFont = CreateFont(h, 0, 0, 0, FW_BOLD,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+        APP_FONT_UI_FACE);
+    d->hMonoFont = CreateFont(h, 0, 0, 0, FW_NORMAL,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
+        d->ai_font_name[0] ? d->ai_font_name : "Consolas");
+
+    chat_listview_set_fonts(d->hChatList, d->hChatFont,
+                            d->hMonoFont, d->hBoldFont,
+                            d->hSmallFont);
+    chat_listview_relayout(d->hChatList);
+
+    /* Apply the same zoomable font to the user input textbox so its text
+     * scales with the chat. Buttons, labels and the context bar continue
+     * to use the fixed UI font (d->hFont). */
+    if (d->hInput && d->hChatFont) {
+        SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hChatFont, TRUE);
+        HDC hdc_m = GetDC(d->hInput);
+        if (hdc_m) {
+            HGDIOBJ old_m = SelectObject(hdc_m, (HGDIOBJ)d->hChatFont);
+            TEXTMETRIC tm_m;
+            GetTextMetrics(hdc_m, &tm_m);
+            d->input_line_h = tm_m.tmHeight + tm_m.tmExternalLeading;
+            SelectObject(hdc_m, old_m);
+            ReleaseDC(d->hInput, hdc_m);
         }
-        /* Re-measure line height */
-        HDC hdc = GetDC(d->hInput);
-        HGDIOBJ old = SelectObject(hdc, (HGDIOBJ)d->hFont);
-        TEXTMETRIC tm;
-        GetTextMetrics(hdc, &tm);
-        d->display_line_h = tm.tmHeight + tm.tmExternalLeading;
-        d->input_line_h = d->display_line_h;
-        SelectObject(hdc, old);
-        ReleaseDC(d->hInput, hdc);
+        input_sync_scroll(d);
     }
-    input_sync_scroll(d);
 }
 
 static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
@@ -2006,9 +2019,15 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         #undef S
         if (nd->hFont) {
-            SendMessage(nd->hInput, WM_SETFONT, (WPARAM)nd->hFont, TRUE);
-            /* Set fonts on the ChatListView */
+            /* Chat content uses its own zoomable fonts (separate from
+             * the UI font used by buttons/labels). The input textbox
+             * shares the chat font so its text scales on Ctrl+/Ctrl-. */
             if (nd->hChatList) {
+                nd->hChatFont = CreateFont(h, 0, 0, 0, FW_NORMAL,
+                    FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                    OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                    APP_FONT_UI_FACE);
                 nd->hBoldFont = CreateFont(h, 0, 0, 0, FW_BOLD,
                     FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                     OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -2020,14 +2039,17 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
                     nd->ai_font_name[0] ? nd->ai_font_name
                                         : "Consolas");
-                chat_listview_set_fonts(nd->hChatList, nd->hFont,
+                chat_listview_set_fonts(nd->hChatList,
+                                        nd->hChatFont ? nd->hChatFont : nd->hFont,
                                         nd->hMonoFont, nd->hBoldFont,
                                         nd->hSmallFont);
                 chat_listview_set_model(nd->hChatList, nd->conv.model);
             }
+            HFONT hInputFont = nd->hChatFont ? nd->hChatFont : nd->hFont;
+            SendMessage(nd->hInput, WM_SETFONT, (WPARAM)hInputFont, TRUE);
             /* Measure line height for scrollbar sync */
             HDC hdc_m = GetDC(nd->hInput);
-            HGDIOBJ old_m = SelectObject(hdc_m, (HGDIOBJ)nd->hFont);
+            HGDIOBJ old_m = SelectObject(hdc_m, (HGDIOBJ)hInputFont);
             TEXTMETRIC tm_m;
             GetTextMetrics(hdc_m, &tm_m);
             nd->display_line_h = tm_m.tmHeight + tm_m.tmExternalLeading;
@@ -3483,6 +3505,7 @@ next_coalesce:;
             DeleteCriticalSection(&d->cs);
             if (d->hFont) DeleteObject(d->hFont);
             if (d->hSmallFont) DeleteObject(d->hSmallFont);
+            if (d->hChatFont) DeleteObject(d->hChatFont);
             if (d->hBoldFont) DeleteObject(d->hBoldFont);
             if (d->hMonoFont) DeleteObject(d->hMonoFont);
             if (d->hTooltip) DestroyWindow(d->hTooltip);
