@@ -14,7 +14,7 @@ Built entirely with the Win32 API, no external UI frameworks. Cross-compiled fro
 
 ## AI Chat Assistant
 
-The standout feature: an integrated AI panel that sits alongside your terminal session. It sees what you see — the last 50 lines of terminal output — and can act on it.
+The standout feature: an integrated AI panel that sits alongside your terminal session. It sees what you see — the last 150 lines of terminal output — and can act on it.
 
 - **Context-aware** — the AI reads the last 150 lines of your live terminal output and tailors responses to what's happening on screen
 - **Command execution** — suggests commands that appear inline with Allow/Deny buttons; nothing runs without your approval
