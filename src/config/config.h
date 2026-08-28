@@ -56,4 +56,9 @@ void settings_validate(Settings *s);
 Profile *config_profile_new(void);
 void config_profile_free(Profile *p);
 
+/* Case-insensitive exact lookup. Empty fields never match; first match
+ * wins on duplicates. Returns NULL when not found or on NULL/empty input. */
+Profile *config_find_profile_by_name(const Config *cfg, const char *name);
+Profile *config_find_profile_by_host(const Config *cfg, const char *host);
+
 #endif

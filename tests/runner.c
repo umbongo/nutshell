@@ -175,6 +175,16 @@ int test_cli_trailing_junk(void);
 int test_cli_value_resembling_flag(void);
 int test_cli_overlong_value(void);
 int test_cli_usage_text_mentions_all_flags(void);
+
+/* profile lookup (test_config.c) */
+int test_find_profile_by_name_exact(void);
+int test_find_profile_by_name_case_insensitive(void);
+int test_find_profile_by_name_absent(void);
+int test_find_profile_null_and_empty(void);
+int test_find_profile_empty_name_never_matches(void);
+int test_find_profile_by_host_case_insensitive(void);
+int test_find_profile_no_partial_match(void);
+
 /* test_session_manager.c */
 int test_profile_struct(void);
 int test_profile_default_values(void);
@@ -1758,6 +1768,15 @@ int main(void) {
     failed += test_cli_value_resembling_flag();
     failed += test_cli_overlong_value();
     failed += test_cli_usage_text_mentions_all_flags();
+
+    printf("\n--- Profile lookup ---\n");
+    failed += test_find_profile_by_name_exact();
+    failed += test_find_profile_by_name_case_insensitive();
+    failed += test_find_profile_by_name_absent();
+    failed += test_find_profile_null_and_empty();
+    failed += test_find_profile_empty_name_never_matches();
+    failed += test_find_profile_by_host_case_insensitive();
+    failed += test_find_profile_no_partial_match();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();

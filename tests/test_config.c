@@ -720,6 +720,105 @@ int test_config_validate_empty_ai_font(void)
 }
 
 /* ============================================================
+ * Profile lookup (config_find_profile_by_name / _by_host)
+ * ============================================================ */
+
+static Config *make_lookup_cfg(void)
+{
+    Config *cfg = config_new_default();
+    Profile *a = config_profile_new();
+    snprintf(a->name, sizeof(a->name), "Automaton");
+    snprintf(a->host, sizeof(a->host), "automaton.local");
+    vec_push(&cfg->profiles, a);
+    Profile *b = config_profile_new();
+    /* unnamed profile — host only */
+    snprintf(b->host, sizeof(b->host), "backup.example.com");
+    vec_push(&cfg->profiles, b);
+    Profile *c = config_profile_new();
+    snprintf(c->name, sizeof(c->name), "automaton");  /* duplicate name, different case */
+    snprintf(c->host, sizeof(c->host), "other.host");
+    vec_push(&cfg->profiles, c);
+    return cfg;
+}
+
+int test_find_profile_by_name_exact(void)
+{
+    TEST_BEGIN();
+    Config *cfg = make_lookup_cfg();
+    Profile *p = config_find_profile_by_name(cfg, "Automaton");
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->host, "automaton.local");
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_find_profile_by_name_case_insensitive(void)
+{
+    TEST_BEGIN();
+    Config *cfg = make_lookup_cfg();
+    Profile *p = config_find_profile_by_name(cfg, "AUTOMATON");
+    ASSERT_NOT_NULL(p);
+    /* first match wins: profile 'a', not the duplicate 'c' */
+    ASSERT_STR_EQ(p->host, "automaton.local");
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_find_profile_by_name_absent(void)
+{
+    TEST_BEGIN();
+    Config *cfg = make_lookup_cfg();
+    ASSERT_NULL(config_find_profile_by_name(cfg, "nosuch"));
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_find_profile_null_and_empty(void)
+{
+    TEST_BEGIN();
+    Config *cfg = make_lookup_cfg();
+    ASSERT_NULL(config_find_profile_by_name(NULL, "x"));
+    ASSERT_NULL(config_find_profile_by_name(cfg, NULL));
+    ASSERT_NULL(config_find_profile_by_name(cfg, ""));
+    ASSERT_NULL(config_find_profile_by_host(NULL, "x"));
+    ASSERT_NULL(config_find_profile_by_host(cfg, NULL));
+    ASSERT_NULL(config_find_profile_by_host(cfg, ""));
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_find_profile_empty_name_never_matches(void)
+{
+    TEST_BEGIN();
+    Config *cfg = make_lookup_cfg();
+    /* profile 'b' has empty name — empty query must not match it */
+    ASSERT_NULL(config_find_profile_by_name(cfg, ""));
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_find_profile_by_host_case_insensitive(void)
+{
+    TEST_BEGIN();
+    Config *cfg = make_lookup_cfg();
+    Profile *p = config_find_profile_by_host(cfg, "BACKUP.example.COM");
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->host, "backup.example.com");
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_find_profile_no_partial_match(void)
+{
+    TEST_BEGIN();
+    Config *cfg = make_lookup_cfg();
+    ASSERT_NULL(config_find_profile_by_name(cfg, "Auto"));       /* prefix */
+    ASSERT_NULL(config_find_profile_by_host(cfg, "backup"));     /* prefix */
+    config_free(cfg);
+    TEST_END();
+}
+
+/* ============================================================
  * SSH user-idle timeout setting
  * ============================================================ */
 

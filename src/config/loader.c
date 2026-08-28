@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -478,4 +479,49 @@ int config_save(const Config *cfg, const char *path)
 #endif
     free(tmp_path);
     return moved;
+}
+
+/* ---- Profile lookup ------------------------------------------------------- */
+
+/* ASCII case-insensitive equality (config matching is exact, not prefix). */
+static int str_ieq(const char *a, const char *b)
+{
+    while (*a != '\0' && *b != '\0') {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+Profile *config_find_profile_by_name(const Config *cfg, const char *name)
+{
+    if (!cfg || !name || name[0] == '\0') {
+        return NULL;
+    }
+    size_t n = vec_size(&cfg->profiles);
+    for (size_t i = 0u; i < n; i++) {
+        Profile *p = (Profile *)vec_get(&cfg->profiles, i);
+        if (p && p->name[0] != '\0' && str_ieq(p->name, name)) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
+Profile *config_find_profile_by_host(const Config *cfg, const char *host)
+{
+    if (!cfg || !host || host[0] == '\0') {
+        return NULL;
+    }
+    size_t n = vec_size(&cfg->profiles);
+    for (size_t i = 0u; i < n; i++) {
+        Profile *p = (Profile *)vec_get(&cfg->profiles, i);
+        if (p && p->host[0] != '\0' && str_ieq(p->host, host)) {
+            return p;
+        }
+    }
+    return NULL;
 }
