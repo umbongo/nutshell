@@ -159,6 +159,22 @@ int test_config_validate_empty_ai_font(void);
 int test_config_default_ssh_user_idle(void);
 int test_config_validate_ssh_user_idle_clamp(void);
 int test_config_roundtrip_ssh_user_idle(void);
+/* test_cli_args.c */
+int test_cli_no_args(void);
+int test_cli_session_name_short(void);
+int test_cli_session_name_long(void);
+int test_cli_host_short(void);
+int test_cli_host_long(void);
+int test_cli_no_connect(void);
+int test_cli_list_version_help(void);
+int test_cli_missing_value(void);
+int test_cli_unknown_flag(void);
+int test_cli_bare_argument(void);
+int test_cli_mutual_exclusion(void);
+int test_cli_trailing_junk(void);
+int test_cli_value_resembling_flag(void);
+int test_cli_overlong_value(void);
+int test_cli_usage_text_mentions_all_flags(void);
 /* test_session_manager.c */
 int test_profile_struct(void);
 int test_profile_default_values(void);
@@ -1725,6 +1741,23 @@ int main(void) {
     failed += test_config_default_ssh_user_idle();
     failed += test_config_validate_ssh_user_idle_clamp();
     failed += test_config_roundtrip_ssh_user_idle();
+
+    printf("\n--- CLI args ---\n");
+    failed += test_cli_no_args();
+    failed += test_cli_session_name_short();
+    failed += test_cli_session_name_long();
+    failed += test_cli_host_short();
+    failed += test_cli_host_long();
+    failed += test_cli_no_connect();
+    failed += test_cli_list_version_help();
+    failed += test_cli_missing_value();
+    failed += test_cli_unknown_flag();
+    failed += test_cli_bare_argument();
+    failed += test_cli_mutual_exclusion();
+    failed += test_cli_trailing_junk();
+    failed += test_cli_value_resembling_flag();
+    failed += test_cli_overlong_value();
+    failed += test_cli_usage_text_mentions_all_flags();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();
