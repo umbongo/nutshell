@@ -50,6 +50,7 @@ static int g_left_margin = TERM_LEFT_MARGIN;
 
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
 #define WM_CONN_DONE            (WM_USER + 2)
+#define WM_STARTUP_CONNECT      (WM_USER + 3)
 
 typedef enum { CONN_IDLE, CONN_CONNECTING } ConnState;
 
@@ -100,6 +101,8 @@ static HINSTANCE g_hInst = NULL;
 static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
+static CliAction g_startup_action = CLI_RUN;
+static char g_startup_arg[256];
 static HWND g_hwndAiChat = NULL;
 static HFONT g_hMenuFont = NULL;
 static HWND g_hwndScrollbar = NULL;
@@ -1746,6 +1749,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
 
+            PostMessage(hwnd, WM_STARTUP_CONNECT, 0, 0);
+
             return 0;
 
         case WM_INITMENUPOPUP: {
@@ -2114,6 +2119,39 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_SHOW_SESSION_MANAGER:
             on_tab_new();
             return 0;
+
+        case WM_STARTUP_CONNECT: {
+            const Profile *pr = NULL;
+            const char *wanted = NULL;
+            if (g_startup_action == CLI_CONNECT_NAME) {
+                wanted = g_startup_arg;
+                pr = config_find_profile_by_name(g_config, wanted);
+            } else if (g_startup_action == CLI_CONNECT_HOST) {
+                wanted = g_startup_arg;
+                pr = config_find_profile_by_host(g_config, wanted);
+            } else if (g_startup_action == CLI_RUN
+                       && g_config->settings.auto_connect
+                       && g_config->settings.auto_connect_session[0] != '\0') {
+                /* Settings dropdown shows host for unnamed sessions, so the
+                 * stored string may be either: name first, then host. */
+                wanted = g_config->settings.auto_connect_session;
+                pr = config_find_profile_by_name(g_config, wanted);
+                if (!pr) pr = config_find_profile_by_host(g_config, wanted);
+            } else {
+                return 0;  /* CLI_RUN_NO_CONNECT, or nothing to do */
+            }
+            if (pr) {
+                on_session_connect(pr);
+            } else {
+                char nf_text[512];
+                (void)snprintf(nf_text, sizeof(nf_text),
+                               "Session \"%s\" not found.", wanted);
+                MessageBoxA(hwnd, nf_text, "Session Not Found",
+                            MB_OK | MB_ICONWARNING);
+                PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
+            }
+            return 0;
+        }
 
         case WM_CONN_DONE: {
             Session *s = (Session *)lParam;
@@ -2904,6 +2942,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
+}
+
+void ui_set_startup_action(CliAction action, const char *arg)
+{
+    g_startup_action = action;
+    (void)snprintf(g_startup_arg, sizeof(g_startup_arg), "%s",
+                   arg ? arg : "");
 }
 
 void ui_init(HINSTANCE instance) {
