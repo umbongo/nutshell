@@ -879,3 +879,71 @@ int test_config_roundtrip_ssh_user_idle(void)
     TEST_END();
 }
 
+/* ============================================================
+ * Auto-connect settings
+ * ============================================================ */
+
+int test_config_default_auto_connect(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(s.auto_connect, 0);
+    ASSERT_STR_EQ(s.auto_connect_session, "");
+    TEST_END();
+}
+
+int test_config_validate_auto_connect_clamp(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.auto_connect = 7;
+    settings_validate(&s);
+    ASSERT_EQ(s.auto_connect, 1);
+    s.auto_connect = -3;
+    settings_validate(&s);
+    ASSERT_EQ(s.auto_connect, 1);
+    s.auto_connect = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.auto_connect, 0);
+    TEST_END();
+}
+
+int test_config_roundtrip_auto_connect(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    cfg->settings.auto_connect = 1;
+    snprintf(cfg->settings.auto_connect_session,
+             sizeof(cfg->settings.auto_connect_session), "automaton");
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    Config *re = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(re);
+    ASSERT_EQ(re->settings.auto_connect, 1);
+    ASSERT_STR_EQ(re->settings.auto_connect_session, "automaton");
+    config_free(re);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_legacy_no_auto_connect(void)
+{
+    TEST_BEGIN();
+    /* A config written before these fields existed must default them. */
+    FILE *f = fopen(TMP_CFG, "w");
+    ASSERT_NOT_NULL(f);
+    fputs("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cfg->settings.auto_connect, 0);
+    ASSERT_STR_EQ(cfg->settings.auto_connect_session, "");
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+

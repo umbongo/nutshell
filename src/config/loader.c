@@ -107,6 +107,7 @@ void settings_validate(Settings *s)
     if (s->ai_max_search_results > 20) s->ai_max_search_results = 20;
     if (s->ssh_user_idle_timeout_mins < 0)     s->ssh_user_idle_timeout_mins = 0;
     if (s->ssh_user_idle_timeout_mins > 10080) s->ssh_user_idle_timeout_mins = 10080;
+    if (s->auto_connect != 0) s->auto_connect = 1;
 }
 
 void config_default_settings(Settings *s)
@@ -132,6 +133,8 @@ void config_default_settings(Settings *s)
     s->ai_web_fetch_enabled = 0;
     s->ssh_user_idle_timeout_mins = 0;
     s->markdown_render_enabled = 1;
+    s->auto_connect = 0;
+    /* auto_connect_session defaults to empty (already zeroed by memset) */
 }
 
 Profile *config_profile_new(void)
@@ -279,6 +282,11 @@ Config *config_load(const char *path)
                               (double)s->ssh_user_idle_timeout_mins);
         s->markdown_render_enabled = json_obj_bool(jset, "markdown_render_enabled",
                                                    s->markdown_render_enabled);
+        s->auto_connect = json_obj_bool(jset, "auto_connect", s->auto_connect);
+        if ((sv = json_obj_str(jset, "auto_connect_session"))) {
+            field_copy(s->auto_connect_session,
+                       sizeof(s->auto_connect_session), sv);
+        }
         settings_validate(s);
     }
 
@@ -424,8 +432,13 @@ int config_save(const Config *cfg, const char *path)
             s->ai_web_fetch_enabled ? "true" : "false");
     fprintf(f, "    \"ssh_user_idle_timeout_mins\": %d,\n",
             s->ssh_user_idle_timeout_mins);
-    fprintf(f, "    \"markdown_render_enabled\": %s\n",
+    fprintf(f, "    \"markdown_render_enabled\": %s,\n",
             s->markdown_render_enabled ? "true" : "false");
+    fprintf(f, "    \"auto_connect\": %s,\n",
+            s->auto_connect ? "true" : "false");
+    fputs("    \"auto_connect_session\": ", f);
+    fprint_json_str(f, s->auto_connect_session);
+    fputc('\n', f);
     fputs("  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);

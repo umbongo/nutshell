@@ -185,6 +185,12 @@ int test_find_profile_empty_name_never_matches(void);
 int test_find_profile_by_host_case_insensitive(void);
 int test_find_profile_no_partial_match(void);
 
+/* auto-connect settings (test_config.c) */
+int test_config_default_auto_connect(void);
+int test_config_validate_auto_connect_clamp(void);
+int test_config_roundtrip_auto_connect(void);
+int test_config_load_legacy_no_auto_connect(void);
+
 /* test_session_manager.c */
 int test_profile_struct(void);
 int test_profile_default_values(void);
@@ -1777,6 +1783,12 @@ int main(void) {
     failed += test_find_profile_empty_name_never_matches();
     failed += test_find_profile_by_host_case_insensitive();
     failed += test_find_profile_no_partial_match();
+
+    printf("\n--- Auto-connect settings ---\n");
+    failed += test_config_default_auto_connect();
+    failed += test_config_validate_auto_connect_clamp();
+    failed += test_config_roundtrip_auto_connect();
+    failed += test_config_load_legacy_no_auto_connect();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();
