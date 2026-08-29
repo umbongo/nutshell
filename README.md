@@ -2,8 +2,8 @@
 
 # Nutshell SSH
 
-**Version**: v1.0.70 \
-**Build Date**: 2026-04-28 \
+**Version**: v1.0.73 \
+**Build Date**: 2026-08-29 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -40,7 +40,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 1,167 unit tests, zero lint warnings
+- 1,464 unit tests, zero lint warnings
 
 ---
 
@@ -128,31 +128,62 @@ Zoom changes trigger an automatic PTY resize so the remote shell adapts to the n
 
 ### Settings
 
-Open from the menu or via the settings button. Changes take effect immediately — no restart needed.
+Open from **Edit > Settings**. Changes take effect immediately — no restart needed.
 
-#### Display
-- **Font family** — curated list of monospace fonts: Consolas (default), Cascadia Code, Cascadia Mono, Courier New, Inter, Lucida Console, Lucida Sans Typewriter, Fira Code, JetBrains Mono, Source Code Pro, Hack
-- **Font size** — discrete sizes from 6 to 20 pt
+The window is laid out like PuTTY: pick a category on the left, and its
+settings fill the panel on the right. The window is resizable, and a page
+scrolls if you shrink it below the content.
+
+| Group | Pages |
+|-------|-------|
+| **General** | Appearance, Terminal, Logging |
+| **Connection** | SSH, Startup |
+| **AI Assistant** | Provider, Behaviour, Web Access |
+| | About |
+
+#### General > Appearance
 - **Colour scheme** — choose from 4 built-in themes:
   - **Onyx Synapse** (dark, default) — dark background with green accents
   - **Onyx Light** — light background variant
   - **Sage & Sand** — dark earthy tones
   - **Moss & Mist** — light pastel colours
+- **Terminal font** — curated list of monospace fonts: Consolas (default), Cascadia Code, Cascadia Mono, Courier New, Inter, Lucida Console, Lucida Sans Typewriter, Fira Code, JetBrains Mono, Source Code Pro, Hack. Only fonts actually installed are offered.
+- **Font size** — discrete sizes from 6 to 20 pt
+- **AI assist font** — font for the AI chat panel; does not affect the terminal
 
-#### Terminal
+#### General > Terminal
 - **Scrollback lines** — 100 to 50,000 (default: 10,000)
 - **Paste delay** — inter-line delay in milliseconds (0 to 5000)
 
-#### Logging
-- **Enable/disable** session file logging
+#### General > Logging
 - **Log directory** — where log files are saved (default: same directory as the executable)
-- **Log format** — strftime format string for log filenames (e.g. `%Y-%m-%d_%H-%M-%S`)
+- **Log name format** — strftime format string for log filenames (e.g. `%Y-%m-%d_%H-%M-%S`)
+- **Debug terminal log** — capture the raw terminal byte stream for escape-sequence debugging
 
-#### AI
+Logging itself is started and stopped from **File > Start/Stop Logging**, not here.
+
+#### Connection > SSH
+- **Idle timeout** — disconnect after this many minutes with no user activity; 0 never disconnects. Keystrokes, mouse-wheel scrolling, tab switches and AI chat input all count as activity.
+
+#### Connection > Startup
+- **Auto-connect at startup** — connect to a saved session as soon as Nutshell launches
+- **Session** — which saved session to open. Command-line options override this; start with `-nc` to skip auto-connect once.
+
+#### AI Assistant > Provider
 - **Provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or Custom
 - **API key** — encrypted at rest with AES-256-GCM (same encryption as saved passwords)
-- **Custom URL / Model** — for self-hosted or alternative API endpoints
-- **System notes** — global instructions included in every AI conversation
+- **Model** — type one, or press the refresh button to fetch the provider's model list
+- **Base URL** — shown only for the Custom provider, for self-hosted or alternative endpoints
+
+#### AI Assistant > Behaviour
+- **System instructions** — global instructions included in every AI conversation (per-session AI Notes take precedence)
+- **Render AI markdown** — format AI replies as markdown; turn off to see raw text
+
+#### AI Assistant > Web Access
+- **Search engine** — None, DuckDuckGo (API), DuckDuckGo (HTML), or Custom
+- **Search URL** — shown only for the Custom search engine
+- **Max results** — search results returned to the AI per query (1 to 20)
+- **Permit web fetch** — allow the AI to fetch arbitrary URLs as a tool call
 
 ### AI Chat Assistant
 
@@ -254,6 +285,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │   │   ├── paste_preview.c/.h         #   Paste preview with size constraints
 │   │   ├── secure_zero.h              #   Volatile memset for secrets
 │   │   ├── selection.c/.h             #   Text selection (pixel-to-cell)
+│   │   ├── settings_layout.c/.h    #   Settings window layout (pages, panes, rows)
 │   │   ├── snap.c/.h                  #   Window grid snapping
 │   │   ├── string_utils.c/.h          #   String helpers, ANSI stripping, UTF-8
 │   │   ├── tab_manager.c/.h           #   Tab data model
@@ -282,7 +314,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │       ├── chat_listview.c/.h        #   Chat message rendering, sticky scroll
 │       ├── md_render.c/.h, markdown.h #   Markdown rendering for AI responses
 │       ├── session_manager.c/.h       #   Session manager dialog
-│       ├── settings.c, settings_dlg.h #   Settings dialog
+│       ├── settings.c, settings_dlg.h #   Settings dialog (paged, resizable)
 │       ├── tabs.c/.h                  #   Double-buffered tab strip widget
 │       ├── renderer.c/.h             #   Terminal cell renderer
 │       ├── help_guide.c/.h           #   Help guide dialog

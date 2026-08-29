@@ -6,6 +6,7 @@
 #include "themed_button.h"
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
+#include "settings_layout.h"
 #include "ai_prompt.h"
 #include "ai_http.h"
 #include "json_parser.h"
@@ -37,6 +38,7 @@
 #define IDT_SYSNOTES_SCROLL 51  /* timer for AI instructions scroll sync */
 
 static const char *SETTINGS_CLASS = "Nutshell_Settings";
+static const char *PAGE_CLASS     = "Nutshell_SettingsPage";
 
 /* ---- Font list ---------------------------------------------------------- */
 
@@ -116,48 +118,135 @@ static int font_is_installed(const char *face_name)
     return found;
 }
 
+/* ---- Page control table --------------------------------------------------
+ * Every control on every page is created once as a child of the page host
+ * and positioned by relayout() (see below) from this table. See
+ * docs/superpowers/specs/2026-08-29-settings-window-redesign-design.md. */
+
+typedef struct {
+    HWND hLabel;    /* right-aligned label, or NULL (checkboxes / statics) */
+    HWND hCtrl;     /* the control itself */
+    HWND hExtra;    /* optional second control on the same row (refresh button), or NULL */
+    int  page;      /* SETTINGS_PAGE_* */
+    int  ctrl_w;    /* 96-dpi width hint; 0 = stretch to the content pane */
+    int  extra_w;   /* 96-dpi width reserved on the right (hExtra, or a
+                      * dedicated scrollbar with no companion control) */
+    int  rows;      /* minimum vertical row span (1 for a normal row) */
+    int  stretch_v; /* 1 = absorb leftover vertical space on this page */
+    int  visible;   /* conditional visibility (custom URL fields) */
+    int  full_w;    /* 1 = no label column; control spans the whole pane */
+} SettingsCtrl;
+
+/* Raise this when a page outgrows it; add_ctrl refuses to overflow. */
+#define MAX_SETTINGS_CTRLS 48
+
 /* ---- Dialog state ------------------------------------------------------- */
 
 typedef struct {
     Config  *cfg;
     HWND     hTooltip;
     HFONT    hDlgFont;   /* MS Shell Dlg 8pt — applied to all child controls */
+    HFONT    hBoldFont;  /* same face, bold — nav headers + breadcrumb title */
     const ThemeColors *theme;
     HBRUSH   hBrBgPrimary;
     HBRUSH   hBrBgSecondary;
     int      dpi;
     HWND     hSysNotesScroll; /* custom scrollbar for AI instructions */
     int      sys_notes_line_h; /* cached line height in px */
+
+    HWND     hNav;        /* category nav listbox (child of main window) */
+    HWND     hPage;       /* page host (child of main window) */
+    HWND     hBtnOK;
+    HWND     hBtnCancel;
+    HWND     hFooter;     /* "Nutshell vX.Y.Z" footer (child of main window) */
+    HWND     hPageTitle;  /* breadcrumb title (child of page host) */
+    HWND     hPageScroll; /* whole-page scrollbar (child of page host) */
+    HWND     hSshHint;    /* dim wrapped SSH idle-timeout hint */
+    HWND     hAboutBlurb; /* dim About tagline */
+
+    SettingsCtrl *ctrl_ai_base_url;   /* toggled by provider combo */
+    SettingsCtrl *ctrl_ai_search_url; /* toggled by search-provider combo */
+
+    int      cur_page; /* SETTINGS_PAGE_* currently shown */
+    int      scroll;   /* current page scroll offset, px */
+
+    SettingsCtrl ctrls[MAX_SETTINGS_CTRLS];
+    int          n_ctrls;
 } SettingsDlgData;
 
-/* ---- Layout helpers ----------------------------------------------------- */
+static void relayout(HWND hwnd, SettingsDlgData *d);
+static void sys_notes_sync_scroll(SettingsDlgData *d);
 
-static HWND make_label(HWND parent, const char *text, int x, int y, int w, int dpi)
+/* ---- Layout helpers ----------------------------------------------------- */
+/* Controls are created with placeholder geometry; relayout() positions them
+ * for real once every control on every page exists. */
+
+static HWND make_label2(HWND parent, const char *text)
 {
-    int lh = MulDiv(18, dpi, 96);
     return CreateWindow("STATIC", text,
-        WS_VISIBLE | WS_CHILD | SS_RIGHT,
-        x, y + lh / 6, w, lh, parent, NULL, NULL, NULL);
+        WS_CHILD | WS_VISIBLE | SS_RIGHT,
+        0, 0, 10, 10, parent, NULL, NULL, NULL);
 }
 
-static HWND make_edit(HWND parent, const char *text,
-                      int x, int y, int w, HMENU id, int dpi)
+static HWND make_static2(HWND parent, const char *text)
 {
-    int eh = MulDiv(22, dpi, 96);
+    return CreateWindow("STATIC", text,
+        WS_CHILD | WS_VISIBLE | SS_LEFT,
+        0, 0, 10, 10, parent, NULL, NULL, NULL);
+}
+
+static HWND make_edit2(HWND parent, const char *text, HMENU id, DWORD extra_style)
+{
     HWND h = CreateWindow("EDIT", text,
-        WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
-        x, y + 1, w, eh, parent, id, NULL, NULL);
+        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL | extra_style,
+        0, 0, 10, 10, parent, id, NULL, NULL);
     SendMessage(h, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                 MAKELPARAM(3, 3));
     return h;
 }
 
-/* Drop-down list combo.  drop_h = total window height including dropdown. */
-static HWND make_combo(HWND parent, int x, int y, int w, int drop_h, HMENU id)
+static HWND make_combo2(HWND parent, HMENU id, DWORD type_style)
 {
     return CreateWindow("COMBOBOX", "",
-        WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL,
-        x, y, w, drop_h, parent, id, NULL, NULL);
+        WS_CHILD | WS_VISIBLE | CBS_HASSTRINGS | WS_VSCROLL | type_style,
+        0, 0, 10, 200, parent, id, NULL, NULL);
+}
+
+static HWND make_check2(HWND parent, const char *text, HMENU id)
+{
+    return CreateWindow("BUTTON", text,
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        0, 0, 10, 10, parent, id, NULL, NULL);
+}
+
+static SettingsCtrl *add_ctrl(SettingsDlgData *d, HWND lbl, HWND ctrl, HWND extra,
+                               int page, int ctrl_w, int extra_w, int rows,
+                               int stretch_v, int visible, int full_w)
+{
+    if (d->n_ctrls >= MAX_SETTINGS_CTRLS) return NULL;
+    SettingsCtrl *c = &d->ctrls[d->n_ctrls++];
+    c->hLabel    = lbl;
+    c->hCtrl     = ctrl;
+    c->hExtra    = extra;
+    c->page      = page;
+    c->ctrl_w    = ctrl_w;
+    c->extra_w   = extra_w;
+    c->rows      = rows;
+    c->stretch_v = stretch_v;
+    c->visible   = visible;
+    c->full_w    = full_w;
+    return c;
+}
+
+/* Combo boxes must keep a tall window rect at all times — that rect also
+ * defines the drop-down list's extent, not just the closed box — so
+ * relayout() never shrinks one down to a single row's height. */
+static int is_combo_class(HWND h)
+{
+    char cls[32];
+    if (!h) return 0;
+    GetClassNameA(h, cls, (int)sizeof(cls));
+    return _stricmp(cls, "ComboBox") == 0;
 }
 
 /* EnumChildWindows callback: send WM_SETFONT to every child control. */
@@ -338,432 +427,722 @@ static const TooltipEntry k_tooltips[] = {
 };
 #define NUM_TOOLTIPS ((int)(sizeof(k_tooltips) / sizeof(k_tooltips[0])))
 
-/* Sync AI instructions edit scroll state to custom scrollbar. */
-static void sys_notes_sync_scroll(HWND hwnd, SettingsDlgData *d)
+/* Sync AI instructions edit scroll state to custom scrollbar.
+ * csb_sync_edit re-shows the scrollbar whenever the text overflows, so this
+ * must do nothing unless the notes edit is the page on screen — the 50 ms
+ * timer would otherwise float the notes scrollbar over an unrelated page. */
+static void sys_notes_sync_scroll(SettingsDlgData *d)
 {
-    HWND hEdit = GetDlgItem(hwnd, IDC_AI_SYSTEM_NOTES);
+    if (!d || !d->hSysNotesScroll) return;
+    if (d->cur_page != SETTINGS_PAGE_AI_BEHAVIOUR) {
+        ShowWindow(d->hSysNotesScroll, SW_HIDE);
+        return;
+    }
+    HWND hEdit = GetDlgItem(d->hPage, IDC_AI_SYSTEM_NOTES);
     csb_sync_edit(hEdit, d->hSysNotesScroll, d->sys_notes_line_h);
 }
 
-/* ---- Window procedure --------------------------------------------------- */
+/* ---- Nav owner-draw ------------------------------------------------------ */
 
-static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
+static void draw_nav_item(SettingsDlgData *d, LPDRAWITEMSTRUCT dis)
+{
+    HDC hdc = dis->hDC;
+    RECT rc = dis->rcItem;
+    const ThemeColors *th = d->theme;
+
+    HBRUSH hBg = CreateSolidBrush(theme_cr(th->bg_secondary));
+    FillRect(hdc, &rc, hBg);
+    DeleteObject(hBg);
+
+    if ((int)dis->itemID < 0) return;
+    const SettingsNavEntry *e = settings_nav_at((int)dis->itemID);
+    if (!e) return;
+
+    int selected = ((dis->itemState & ODS_SELECTED) != 0) && !e->is_header;
+    if (selected) {
+        HBRUSH hSel = CreateSolidBrush(theme_cr(th->accent));
+        FillRect(hdc, &rc, hSel);
+        DeleteObject(hSel);
+    }
+
+    SettingsMetrics m;
+    settings_metrics_init(&m, d->dpi);
+    int indent = (e->depth > 0) ? settings_scale(14, d->dpi) : 0;
+
+    SetBkMode(hdc, TRANSPARENT);
+    unsigned int fg = selected ? th->bg_primary
+                     : (e->is_header ? th->text_dim : th->text_main);
+    SetTextColor(hdc, theme_cr(fg));
+
+    HFONT useFont = e->is_header ? d->hBoldFont : d->hDlgFont;
+    HGDIOBJ old = useFont ? SelectObject(hdc, useFont) : NULL;
+
+    RECT trc = rc;
+    trc.left += m.pad + indent;
+    DrawTextA(hdc, e->label, -1, &trc,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    if (old) SelectObject(hdc, old);
+}
+
+/* Step past a header in the direction of travel; on a dead end at either
+ * edge of the list, fall back to searching the opposite direction so the
+ * selection always lands on a real page. */
+static int resolve_page_index(int start_idx, int dir)
+{
+    int n = settings_nav_count();
+    int idx = start_idx;
+    while (idx >= 0 && idx < n) {
+        const SettingsNavEntry *e = settings_nav_at(idx);
+        if (e && !e->is_header) return idx;
+        idx += dir;
+    }
+    idx = start_idx;
+    dir = -dir;
+    while (idx >= 0 && idx < n) {
+        const SettingsNavEntry *e = settings_nav_at(idx);
+        if (e && !e->is_header) return idx;
+        idx += dir;
+    }
+    int fp = settings_nav_first_page();
+    return (fp >= 0) ? fp : 0;
+}
+
+/* ---- Relayout ------------------------------------------------------------
+ * Single code path for resize, page switch, and scrolling. Positions every
+ * control on the current page inside the page host, then repositions the
+ * nav pane, page host, and button bar within the main window. */
+
+static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
+                          int content_w, int content_h)
+{
+    /* Pass 1: how many rows does the current page need, and which control
+     * (if any) absorbs leftover vertical space? */
+    int total_rows = 1; /* the breadcrumb title row */
+    SettingsCtrl *stretch = NULL;
+    for (int i = 0; i < d->n_ctrls; i++) {
+        SettingsCtrl *c = &d->ctrls[i];
+        if (c->page != d->cur_page || !c->visible) continue;
+        total_rows += c->rows;
+        if (c->stretch_v) stretch = c;
+    }
+
+    int avail_rows = (content_h - 2 * m->pad) / m->row_h;
+    int extra = avail_rows - total_rows;
+    int extra_rows = (extra > 0 && stretch) ? extra : 0;
+
+    int page_h = settings_page_height(total_rows + extra_rows, m);
+    int scroll_max = settings_scroll_max(content_h, page_h);
+    d->scroll = settings_scroll_clamp(d->scroll, scroll_max);
+
+    int show_scroll = scroll_max > 0;
+    int usable_w = content_w - (show_scroll ? CSB_WIDTH : 0);
+    if (usable_w < 0) usable_w = 0;
+
+    if (show_scroll) {
+        int sx = content_w - CSB_WIDTH;
+        SetWindowPos(d->hPageScroll, NULL, sx, 0, CSB_WIDTH, content_h,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(d->hPageScroll, SW_SHOWNOACTIVATE);
+        int pmax = page_h > 0 ? page_h - 1 : 0;
+        csb_set_range(d->hPageScroll, 0, pmax, content_h);
+        csb_set_pos(d->hPageScroll, d->scroll);
+    } else if (d->hPageScroll) {
+        ShowWindow(d->hPageScroll, SW_HIDE);
+    }
+
+    /* Breadcrumb title occupies row 0, spanning the full usable width. */
+    if (d->hPageTitle) {
+        SettingsRect lrc, crc;
+        settings_row_rects(0, usable_w, 0, d->scroll, m, &lrc, &crc);
+        int w = usable_w - 2 * m->pad;
+        if (w < 0) w = 0;
+        SetWindowPos(d->hPageTitle, NULL, m->pad, crc.y, w, crc.h,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    /* Pass 2: place every control on the current page. */
+    int row = 1;
+    for (int i = 0; i < d->n_ctrls; i++) {
+        SettingsCtrl *c = &d->ctrls[i];
+
+        if (c->page != d->cur_page || !c->visible) {
+            if (c->hLabel) ShowWindow(c->hLabel, SW_HIDE);
+            if (c->hCtrl)  ShowWindow(c->hCtrl, SW_HIDE);
+            if (c->hExtra) ShowWindow(c->hExtra, SW_HIDE);
+            continue;
+        }
+
+        int eff_rows = c->rows + ((c == stretch) ? extra_rows : 0);
+        int ctrl_w_scaled = (c->ctrl_w > 0) ? settings_scale(c->ctrl_w, m->dpi) : 0;
+
+        SettingsRect lrc, crc;
+        settings_row_rects(row, usable_w, ctrl_w_scaled, d->scroll, m, &lrc, &crc);
+
+        if (c->full_w) {
+            crc.x = m->pad;
+            crc.w = usable_w - 2 * m->pad;
+            if (crc.w < 0) crc.w = 0;
+        }
+
+        if (eff_rows > 1)
+            crc.h = eff_rows * m->row_h - (m->row_h - m->ctrl_h);
+
+        if (c->hExtra) {
+            int extra_w_scaled = settings_scale(c->extra_w, m->dpi);
+            int new_w = crc.w - extra_w_scaled - m->gap;
+            if (new_w < 0) new_w = 0;
+            SettingsRect erc = crc;
+            erc.x = crc.x + new_w + m->gap;
+            erc.w = extra_w_scaled;
+            crc.w = new_w;
+            SetWindowPos(c->hExtra, NULL, erc.x, erc.y, erc.w, erc.h,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            ShowWindow(c->hExtra, SW_SHOW);
+        } else if (c->extra_w > 0) {
+            /* Reserve space with no companion control (the AI notes csb,
+             * positioned separately below once the edit's real rect is
+             * known). */
+            crc.w -= c->extra_w;
+            if (crc.w < 0) crc.w = 0;
+        }
+
+        if (is_combo_class(c->hCtrl))
+            crc.h = m->ctrl_h + settings_scale(200, m->dpi);
+
+        if (c->hLabel) {
+            SetWindowPos(c->hLabel, NULL, lrc.x, lrc.y, lrc.w, lrc.h,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            ShowWindow(c->hLabel, SW_SHOW);
+        }
+        SetWindowPos(c->hCtrl, NULL, crc.x, crc.y, crc.w, crc.h,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        ShowWindow(c->hCtrl, SW_SHOW);
+
+        row += eff_rows;
+    }
+
+    /* Reposition the AI notes scrollbar flush against the notes edit. */
+    {
+        HWND hNotes = GetDlgItem(d->hPage, IDC_AI_SYSTEM_NOTES);
+        if (hNotes && d->hSysNotesScroll &&
+            d->cur_page == SETTINGS_PAGE_AI_BEHAVIOUR) {
+            RECT erc;
+            GetWindowRect(hNotes, &erc);
+            POINT pt = { erc.right, erc.top };
+            ScreenToClient(d->hPage, &pt);
+            int eh = erc.bottom - erc.top;
+            SetWindowPos(d->hSysNotesScroll, NULL, pt.x, pt.y, CSB_WIDTH, eh,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            sys_notes_sync_scroll(d);
+        } else if (d->hSysNotesScroll) {
+            ShowWindow(d->hSysNotesScroll, SW_HIDE);
+        }
+    }
+}
+
+static void relayout(HWND hwnd, SettingsDlgData *d)
+{
+    if (!d) return;
+
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+
+    SettingsMetrics m;
+    settings_metrics_init(&m, d->dpi);
+
+    SettingsRect nav, content, buttons;
+    settings_layout_regions(rc.right, rc.bottom, &m, &nav, &content, &buttons);
+
+    SetWindowPos(d->hNav, NULL, nav.x, nav.y, nav.w, nav.h,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    /* The layout module tiles the panes edge to edge, so inset the page host
+     * by one column to leave the divider between nav and content visible —
+     * the main window paints it in WM_ERASEBKGND. */
+    int page_w = content.w - 1;
+    if (page_w < 0) page_w = 0;
+    SetWindowPos(d->hPage, NULL, content.x + 1, content.y, page_w, content.h,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+
+    int by = buttons.y + (buttons.h - m.btn_h) / 2;
+    int cancel_x = buttons.x + buttons.w - m.pad - m.btn_w;
+    SetWindowPos(d->hBtnCancel, NULL, cancel_x, by, m.btn_w, m.btn_h,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    int ok_x = cancel_x - m.gap - m.btn_w;
+    SetWindowPos(d->hBtnOK, NULL, ok_x, by, m.btn_w, m.btn_h,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+
+    int fh = settings_scale(16, m.dpi);
+    int fy = buttons.y + (buttons.h - fh) / 2;
+    int fw = ok_x - m.gap - (buttons.x + m.pad);
+    if (fw < 0) fw = 0;
+    SetWindowPos(d->hFooter, NULL, buttons.x + m.pad, fy, fw, fh,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+
+    relayout_page(d, &m, page_w, content.h);
+}
+
+/* ---- Page host window procedure ------------------------------------------
+ * Every page control is a child of this window. It handles theme colours,
+ * owner-draw for the refresh button, forwards WM_COMMAND to the main
+ * window, and owns scrolling (both the AI notes edit and the whole page). */
+
+static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
+                                         WPARAM wParam, LPARAM lParam)
+{
+    SettingsDlgData *d = (SettingsDlgData *)(LONG_PTR)
+                         GetWindowLongPtr(hwnd, GWLP_USERDATA);
+
+    switch (umsg) {
+    case WM_CREATE: {
+        LPCREATESTRUCT cs = (LPCREATESTRUCT)lParam;
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+        return 0;
+    }
+
+    case WM_ERASEBKGND:
+        if (d && d->theme) {
+            HDC hdc = (HDC)wParam;
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            FillRect(hdc, &rc, d->hBrBgPrimary);
+            return 1;
+        }
+        break;
+
+    case WM_CTLCOLORSTATIC:
+        if (d && d->theme) {
+            HWND hCtl = (HWND)lParam;
+            int dim = (hCtl == d->hSshHint || hCtl == d->hAboutBlurb);
+            SetTextColor((HDC)wParam,
+                         theme_cr(dim ? d->theme->text_dim : d->theme->text_main));
+            SetBkColor((HDC)wParam, theme_cr(d->theme->bg_primary));
+            return (LRESULT)d->hBrBgPrimary;
+        }
+        break;
+
+    case WM_CTLCOLOREDIT:
+        if (d && d->theme) {
+            SetTextColor((HDC)wParam, theme_cr(d->theme->text_main));
+            SetBkColor((HDC)wParam, theme_cr(d->theme->bg_secondary));
+            return (LRESULT)d->hBrBgSecondary;
+        }
+        break;
+
+    case WM_CTLCOLORLISTBOX:
+        if (d && d->theme) {
+            SetTextColor((HDC)wParam, theme_cr(d->theme->text_main));
+            SetBkColor((HDC)wParam, theme_cr(d->theme->bg_secondary));
+            return (LRESULT)d->hBrBgSecondary;
+        }
+        break;
+
+    case WM_DRAWITEM:
+        if (d && d->theme) {
+            LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
+            if ((int)dis->CtlID == IDC_AI_REFRESH) {
+                draw_themed_button(dis, d->theme, 0);
+                return TRUE;
+            }
+        }
+        break;
+
+    case WM_COMMAND:
+        return SendMessage(GetParent(hwnd), WM_COMMAND, wParam, lParam);
+
+    case WM_VSCROLL:
+        if (d) {
+            HWND hSrc = (HWND)lParam;
+
+            if (hSrc == d->hSysNotesScroll) {
+                WORD code = LOWORD(wParam);
+                HWND hEdit = GetDlgItem(d->hPage, IDC_AI_SYSTEM_NOTES);
+                int first = (int)SendMessage(hEdit, EM_GETFIRSTVISIBLELINE, 0, 0);
+                int delta = 0;
+                switch (code) {
+                case SB_LINEUP:    delta = -1; break;
+                case SB_LINEDOWN:  delta =  1; break;
+                case SB_PAGEUP:    delta = -3; break;
+                case SB_PAGEDOWN:  delta =  3; break;
+                case SB_THUMBTRACK:
+                case SB_THUMBPOSITION:
+                    delta = edit_scroll_line_delta(
+                        csb_get_trackpos(d->hSysNotesScroll), first);
+                    break;
+                case SB_TOP:       delta = -first; break;
+                case SB_BOTTOM:    delta = 99999;  break;
+                }
+                if (delta != 0)
+                    SendMessage(hEdit, EM_LINESCROLL, 0, (LPARAM)delta);
+                sys_notes_sync_scroll(d);
+                return 0;
+            }
+
+            if (hSrc == d->hPageScroll) {
+                WORD code = LOWORD(wParam);
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                SettingsMetrics m;
+                settings_metrics_init(&m, d->dpi);
+                switch (code) {
+                case SB_LINEUP:      d->scroll -= m.row_h;   break;
+                case SB_LINEDOWN:    d->scroll += m.row_h;   break;
+                case SB_PAGEUP:      d->scroll -= rc.bottom; break;
+                case SB_PAGEDOWN:    d->scroll += rc.bottom; break;
+                case SB_THUMBTRACK:
+                case SB_THUMBPOSITION:
+                    d->scroll = csb_get_trackpos(d->hPageScroll);
+                    break;
+                case SB_TOP:         d->scroll = 0;          break;
+                case SB_BOTTOM:      d->scroll = 0x7FFFFFFF; break;
+                }
+                relayout(GetParent(hwnd), d);
+                return 0;
+            }
+        }
+        break;
+
+    case WM_MOUSEWHEEL:
+        if (d) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            HWND hHit = WindowFromPoint(pt);
+            HWND hNotes = GetDlgItem(d->hPage, IDC_AI_SYSTEM_NOTES);
+
+            if (hNotes && hHit == hNotes && IsWindowVisible(hNotes)) {
+                int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
+                int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
+                SendMessage(hNotes, EM_LINESCROLL, 0, (LPARAM)scroll);
+                sys_notes_sync_scroll(d);
+            } else {
+                SettingsMetrics m;
+                settings_metrics_init(&m, d->dpi);
+                int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
+                int notches = zdelta / WHEEL_DELTA;
+                d->scroll -= notches * 3 * m.row_h;
+                relayout(GetParent(hwnd), d);
+            }
+            return 0;
+        }
+        break;
+    }
+
+    return DefWindowProc(hwnd, umsg, wParam, lParam);
+}
+
+/* ---- Main window procedure ------------------------------------------------ */
+
+static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                                         WPARAM wParam, LPARAM lParam)
 {
     SettingsDlgData *d = (SettingsDlgData *)(LONG_PTR)
                          GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
-    switch (msg) {
+    switch (umsg) {
     case WM_CREATE: {
         LPCREATESTRUCT cs = (LPCREATESTRUCT)lParam;
         SettingsDlgData *nd = (SettingsDlgData *)cs->lpCreateParams;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)nd);
 
-        /* Get per-monitor DPI for layout scaling */
         nd->dpi = get_window_dpi(hwnd);
-        #define S(px) MulDiv((px), nd->dpi, 96)
+        SettingsMetrics m;
+        settings_metrics_init(&m, nd->dpi);
 
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        int cw = rc.right;
-        int ch = rc.bottom;
-
-        /* Column geometry — DPI-scaled */
-        int lx = S(10);    /* label x       */
-        int lw = S(120);   /* label width    */
-        int ex = S(135);   /* control x      */
-        int ew = S(200);   /* default edit w */
-
-        int y = S(10);  /* current row y position */
-        int rh = S(28); /* row height */
-
-        /* Row 1: Terminal Font */
-        make_label(hwnd, "Terminal Font:", lx, y, lw, nd->dpi);
+        /* ---- Nav listbox ---- */
+        nd->hNav = CreateWindow("LISTBOX", "",
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+            LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOTIFY,
+            0, 0, 10, 10, hwnd, (HMENU)IDC_SETTINGS_NAV, NULL, NULL);
         {
-            HWND hCombo = make_combo(hwnd, ex, y, ew, S(200), (HMENU)IDC_FONT_COMBO);
+            int n = settings_nav_count();
+            for (int i = 0; i < n; i++) {
+                const SettingsNavEntry *e = settings_nav_at(i);
+                SendMessage(nd->hNav, LB_ADDSTRING, 0, (LPARAM)e->label);
+            }
+            SendMessage(nd->hNav, LB_SETITEMHEIGHT, 0,
+                        (LPARAM)MAKELONG(m.nav_item_h, 0));
+        }
+
+        /* ---- Page host ---- */
+        nd->hPage = CreateWindowEx(0, PAGE_CLASS, "",
+            WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+            0, 0, 10, 10, hwnd, NULL, GetModuleHandle(NULL), nd);
+
+        nd->hPageTitle = make_static2(nd->hPage, "");
+
+        nd->n_ctrls = 0;
+
+        /* ==== APPEARANCE ==== */
+        {
+            HWND lbl = make_label2(nd->hPage, "Colour Scheme:");
+            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_SCHEME_COMBO, CBS_DROPDOWNLIST);
+            int sel = 0;
+            for (int i = 0; i < NUM_UI_THEMES; i++) {
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)ui_theme_name(i));
+                if (_stricmp(nd->cfg->settings.colour_scheme, ui_theme_name(i)) == 0)
+                    sel = i;
+            }
+            SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_APPEARANCE, 0, 0, 1, 0, 1, 0);
+        }
+        {
+            HWND lbl = make_label2(nd->hPage, "Terminal Font:");
+            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_FONT_COMBO, CBS_DROPDOWNLIST);
             int sel = 0, idx = 0;
             for (int i = 0; i < NUM_FONTS; i++) {
                 if (!font_is_installed(k_fonts[i])) continue;
-                SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)k_fonts[i]);
-                if (_stricmp(nd->cfg->settings.font, k_fonts[i]) == 0)
-                    sel = idx;
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_fonts[i]);
+                if (_stricmp(nd->cfg->settings.font, k_fonts[i]) == 0) sel = idx;
                 idx++;
             }
-            SendMessage(hCombo, CB_SETCURSEL, (WPARAM)sel, 0);
+            SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_APPEARANCE, 0, 0, 1, 0, 1, 0);
         }
-        y += rh;
-
-        /* Row 2: AI Assist Font */
-        make_label(hwnd, "AI Assist Font:", lx, y, lw, nd->dpi);
         {
-            HWND hCombo = make_combo(hwnd, ex, y, ew, S(200), (HMENU)IDC_AI_FONT_COMBO);
-            int sel = 0, idx = 0;
-            for (int i = 0; i < NUM_FONTS; i++) {
-                if (!font_is_installed(k_fonts[i])) continue;
-                SendMessage(hCombo, CB_ADDSTRING, 0, (LPARAM)k_fonts[i]);
-                if (_stricmp(nd->cfg->settings.ai_font, k_fonts[i]) == 0)
-                    sel = idx;
-                idx++;
-            }
-            SendMessage(hCombo, CB_SETCURSEL, (WPARAM)sel, 0);
-        }
-        y += rh;
-
-        /* Row 3: Font size */
-        make_label(hwnd, "Font Size:", lx, y, lw, nd->dpi);
-        {
-            HWND hSz = make_combo(hwnd, ex, y, S(80), S(180), (HMENU)IDC_FONTSIZE_COMBO);
+            HWND lbl = make_label2(nd->hPage, "Font Size:");
+            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_FONTSIZE_COMBO, CBS_DROPDOWNLIST);
             int sel = 0;
             for (int i = 0; i < NUM_FONT_SIZES; i++) {
                 char buf[8];
                 (void)snprintf(buf, sizeof(buf), "%d", k_app_font_sizes[i]);
-                SendMessage(hSz, CB_ADDSTRING, 0, (LPARAM)buf);
-                if (k_app_font_sizes[i] == nd->cfg->settings.font_size)
-                    sel = i;
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)buf);
+                if (k_app_font_sizes[i] == nd->cfg->settings.font_size) sel = i;
             }
-            SendMessage(hSz, CB_SETCURSEL, (WPARAM)sel, 0);
+            SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_APPEARANCE, 80, 0, 1, 0, 1, 0);
         }
-        y += rh;
+        {
+            HWND lbl = make_label2(nd->hPage, "AI Assist Font:");
+            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_FONT_COMBO, CBS_DROPDOWNLIST);
+            int sel = 0, idx = 0;
+            for (int i = 0; i < NUM_FONTS; i++) {
+                if (!font_is_installed(k_fonts[i])) continue;
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_fonts[i]);
+                if (_stricmp(nd->cfg->settings.ai_font, k_fonts[i]) == 0) sel = idx;
+                idx++;
+            }
+            SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_APPEARANCE, 0, 0, 1, 0, 1, 0);
+        }
 
-        /* Row 3: Scrollback lines */
+        /* ==== TERMINAL ==== */
         {
             char buf[16];
-            (void)snprintf(buf, sizeof(buf), "%d",
-                           nd->cfg->settings.scrollback_lines);
-            make_label(hwnd, "Scrollback Lines:", lx, y, lw, nd->dpi);
-            make_edit(hwnd, buf, ex, y, S(80), (HMENU)IDC_SCROLLBACK_EDIT, nd->dpi);
+            (void)snprintf(buf, sizeof(buf), "%d", nd->cfg->settings.scrollback_lines);
+            HWND lbl = make_label2(nd->hPage, "Scrollback Lines:");
+            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_SCROLLBACK_EDIT, 0);
+            add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_TERMINAL, 100, 0, 1, 0, 1, 0);
         }
-        y += rh;
-
-        /* Row 4: Paste delay */
         {
             char buf[16];
-            (void)snprintf(buf, sizeof(buf), "%d",
-                           nd->cfg->settings.paste_delay_ms);
-            make_label(hwnd, "Paste Delay (ms):", lx, y, lw, nd->dpi);
-            make_edit(hwnd, buf, ex, y, S(80), (HMENU)IDC_PASTEDELAY_EDIT, nd->dpi);
+            (void)snprintf(buf, sizeof(buf), "%d", nd->cfg->settings.paste_delay_ms);
+            HWND lbl = make_label2(nd->hPage, "Paste Delay (ms):");
+            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_PASTEDELAY_EDIT, 0);
+            add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_TERMINAL, 100, 0, 1, 0, 1, 0);
         }
-        y += rh;
 
-        /* Row 5: Colour Scheme */
-        make_label(hwnd, "Colour Scheme:", lx, y, lw, nd->dpi);
+        /* ==== LOGGING ==== */
         {
-            HWND hScheme = make_combo(hwnd, ex, y, ew, S(150), (HMENU)IDC_SCHEME_COMBO);
-            int sel = 0;
-            for (int i = 0; i < NUM_UI_THEMES; i++) {
-                SendMessage(hScheme, CB_ADDSTRING, 0,
-                            (LPARAM)ui_theme_name(i));
-                if (_stricmp(nd->cfg->settings.colour_scheme,
-                             ui_theme_name(i)) == 0)
-                    sel = i;
-            }
-            SendMessage(hScheme, CB_SETCURSEL, (WPARAM)sel, 0);
+            HWND lbl = make_label2(nd->hPage, "Log Directory:");
+            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.log_dir,
+                                 (HMENU)IDC_LOG_DIR_EDIT, 0);
+            add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_LOGGING, 0, 0, 1, 0, 1, 0);
         }
-        y += rh;
-
-        /* Row 6: Log directory */
-        make_label(hwnd, "Log Directory:", lx, y, lw, nd->dpi);
-        make_edit(hwnd, nd->cfg->settings.log_dir,
-                  ex, y, ew, (HMENU)IDC_LOG_DIR_EDIT, nd->dpi);
-        y += rh;
-
-        /* Row 6: Log name format */
-        make_label(hwnd, "Log Name Format:", lx, y, lw, nd->dpi);
-        make_edit(hwnd, nd->cfg->settings.log_format,
-                  ex, y, ew, (HMENU)IDC_LOG_FMT_EDIT, nd->dpi);
-
-        /* Shared tooltip window — tools registered via k_tooltips table below */
-        nd->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
-            WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP | TTS_BALLOON,
-            0, 0, 0, 0, hwnd, NULL, NULL, NULL);
-        if (nd->hTooltip)
-            SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)300);
-
-        /* Row 7: Debug terminal log checkbox */
-        y += rh;
         {
-            int dbg_h = MulDiv(20, nd->dpi, 96);
-            HWND hDbg = CreateWindow("BUTTON", "Debug Terminal Log",
-                WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
-                ex, y, ew, dbg_h, hwnd, (HMENU)IDC_DEBUG_TERMINAL, NULL, NULL);
-            SendMessage(hDbg, BM_SETCHECK,
+            HWND lbl = make_label2(nd->hPage, "Log Name Format:");
+            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.log_format,
+                                 (HMENU)IDC_LOG_FMT_EDIT, 0);
+            add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_LOGGING, 0, 0, 1, 0, 1, 0);
+        }
+        {
+            HWND chk = make_check2(nd->hPage, "Debug Terminal Log", (HMENU)IDC_DEBUG_TERMINAL);
+            SendMessage(chk, BM_SETCHECK,
                         nd->cfg->settings.debug_terminal ? BST_CHECKED : BST_UNCHECKED, 0);
-            /* Apply theme colours to the checkbox text */
-            (void)hDbg;
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_LOGGING, 0, 0, 1, 0, 1, 1);
         }
-        y += rh;
 
-        /* SSH section heading: etched line, then the word "SSH" on the next row. */
-        {
-            int sep_y = y + MulDiv(8, nd->dpi, 96);
-            int sep_h = MulDiv(2, nd->dpi, 96);
-            /* Span the full content width: from lx through end of edit area. */
-            HWND hSep = CreateWindow("STATIC", "",
-                WS_VISIBLE | WS_CHILD | SS_ETCHEDHORZ,
-                lx, sep_y, (ex + ew) - lx, sep_h,
-                hwnd, NULL, NULL, NULL);
-            (void)hSep;
-        }
-        y += rh;
-
-        {
-            int ssh_h = MulDiv(20, nd->dpi, 96);
-            HWND hSshLabel = CreateWindow("STATIC", "SSH",
-                WS_VISIBLE | WS_CHILD | SS_LEFT,
-                lx, y, lw, ssh_h, hwnd, NULL, NULL, NULL);
-            (void)hSshLabel;
-        }
-        y += rh;
-
-        /* SSH: User Idle Timeout */
-        make_label(hwnd, "User Idle Timeout (mins, 0=never):",
-                   lx, y, lw, nd->dpi);
+        /* ==== SSH ==== */
         {
             char buf[32];
             (void)snprintf(buf, sizeof(buf), "%d",
                            nd->cfg->settings.ssh_user_idle_timeout_mins);
-            make_edit(hwnd, buf, ex, y, S(80),
-                      (HMENU)IDC_SSH_IDLE_EDIT, nd->dpi);
+            HWND lbl = make_label2(nd->hPage, "Idle Timeout (mins):");
+            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_SSH_IDLE_EDIT, 0);
+            add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_SSH, 100, 0, 1, 0, 1, 0);
         }
-        y += rh;
-
-        /* Startup section heading: etched line, then "Startup". */
         {
-            int sep_y = y + MulDiv(8, nd->dpi, 96);
-            int sep_h = MulDiv(2, nd->dpi, 96);
-            HWND hSep2 = CreateWindow("STATIC", "",
-                WS_VISIBLE | WS_CHILD | SS_ETCHEDHORZ,
-                lx, sep_y, (ex + ew) - lx, sep_h,
-                hwnd, NULL, NULL, NULL);
-            (void)hSep2;
+            nd->hSshHint = make_static2(nd->hPage,
+                "0 disables the idle timeout. Keystrokes, scrolling, tab "
+                "switches and AI chat all count as activity.");
+            add_ctrl(nd, NULL, nd->hSshHint, NULL, SETTINGS_PAGE_SSH, 0, 0, 2, 0, 1, 1);
         }
-        y += rh;
 
+        /* ==== STARTUP ==== */
         {
-            int st_h = MulDiv(20, nd->dpi, 96);
-            HWND hStLabel = CreateWindow("STATIC", "Startup",
-                WS_VISIBLE | WS_CHILD | SS_LEFT,
-                lx, y, lw, st_h, hwnd, NULL, NULL, NULL);
-            (void)hStLabel;
-        }
-        y += rh;
-
-        /* Startup: auto-connect checkbox */
-        {
-            int ac_h = MulDiv(20, nd->dpi, 96);
-            HWND hAc = CreateWindow("BUTTON", "Auto-connect at startup",
-                WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
-                ex, y, ew, ac_h, hwnd, (HMENU)IDC_AUTOCONNECT_CHECK, NULL, NULL);
-            SendMessage(hAc, BM_SETCHECK,
+            HWND chk = make_check2(nd->hPage, "Auto-connect at startup",
+                                   (HMENU)IDC_AUTOCONNECT_CHECK);
+            SendMessage(chk, BM_SETCHECK,
                         nd->cfg->settings.auto_connect ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_STARTUP, 0, 0, 1, 0, 1, 1);
         }
-        y += rh;
-
-        /* Startup: session to auto-connect */
-        make_label(hwnd, "Session:", lx, y, lw, nd->dpi);
         {
-            HWND hAcCombo = make_combo(hwnd, ex, y, ew, S(150),
-                                       (HMENU)IDC_AUTOCONNECT_COMBO);
+            HWND lbl = make_label2(nd->hPage, "Session:");
+            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AUTOCONNECT_COMBO, CBS_DROPDOWNLIST);
             const char *cur = nd->cfg->settings.auto_connect_session;
             int sel = -1;
             size_t np = vec_size(&nd->cfg->profiles);
             for (size_t pi = 0; pi < np; pi++) {
                 const Profile *pr = (const Profile *)vec_get(&nd->cfg->profiles, pi);
                 const char *label = (pr->name[0] != '\0') ? pr->name : pr->host;
-                int idx = (int)SendMessageA(hAcCombo, CB_ADDSTRING, 0, (LPARAM)label);
+                int idx = (int)SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)label);
                 if (sel < 0 && cur[0] != '\0' && _stricmp(cur, label) == 0)
                     sel = idx;
             }
             /* Stored value no longer matches any session: keep it visible
              * (and selectable) so saving without touching it doesn't lose it. */
             if (sel < 0 && cur[0] != '\0')
-                sel = (int)SendMessageA(hAcCombo, CB_ADDSTRING, 0, (LPARAM)cur);
+                sel = (int)SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)cur);
             if (sel >= 0)
-                SendMessage(hAcCombo, CB_SETCURSEL, (WPARAM)sel, 0);
-            EnableWindow(hAcCombo,
-                         nd->cfg->settings.auto_connect ? TRUE : FALSE);
+                SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+            EnableWindow(cmb, nd->cfg->settings.auto_connect ? TRUE : FALSE);
+            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_STARTUP, 0, 0, 1, 0, 1, 0);
         }
-        y += rh + S(5);  /* gap before the AI section */
 
-        /* Row 8: AI API Key (masked) — between log format and AI provider */
-        make_label(hwnd, "AI API Key:", lx, y, lw, nd->dpi);
+        /* ==== AI_PROVIDER ==== */
         {
-            HWND hKey = CreateWindow("EDIT",
-                nd->cfg->settings.ai_api_key,
-                WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_PASSWORD,
-                ex, y + 1, ew, S(22), hwnd, (HMENU)IDC_AI_KEY_EDIT, NULL, NULL);
-            SendMessage(hKey, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
-                        MAKELPARAM(3, 3));
-        }
-
-        /* Row 8: AI Provider */
-        y += rh + S(5); /* small gap before AI section */
         int is_custom = (_stricmp(nd->cfg->settings.ai_provider, "custom") == 0);
-        make_label(hwnd, "AI Provider:", lx, y, lw, nd->dpi);
         {
-            HWND hAi = make_combo(hwnd, ex, y, ew, S(150), (HMENU)IDC_AI_PROVIDER_COMBO);
+            HWND lbl = make_label2(nd->hPage, "Provider:");
+            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_PROVIDER_COMBO, CBS_DROPDOWNLIST);
             int sel = 0;
             for (int i = 0; i < NUM_AI_PROVIDERS; i++) {
-                SendMessage(hAi, CB_ADDSTRING, 0, (LPARAM)k_ai_providers[i]);
-                if (_stricmp(nd->cfg->settings.ai_provider,
-                             k_ai_providers[i]) == 0)
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_ai_providers[i]);
+                if (_stricmp(nd->cfg->settings.ai_provider, k_ai_providers[i]) == 0)
                     sel = i;
             }
-            SendMessage(hAi, CB_SETCURSEL, (WPARAM)sel, 0);
+            SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 0);
         }
-        y += rh;
-
-        /* Row 9: AI Model (combo + refresh button) */
         {
-            int model_w = ew - S(30); /* leave room for refresh button */
-            make_label(hwnd, "AI Model:", lx, y, lw, nd->dpi);
-            HWND hModel = CreateWindow("COMBOBOX", "",
-                WS_VISIBLE | WS_CHILD | CBS_DROPDOWN | CBS_HASSTRINGS | WS_VSCROLL,
-                ex, y, model_w, S(180), hwnd, (HMENU)IDC_AI_CUSTOM_MODEL, NULL, NULL);
-            /* Refresh button (Unicode ↻) — owner-drawn for theme */
-            CreateWindowW(L"BUTTON", L"\x21BB",
-                WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-                ex + model_w + S(5), y, S(25), S(22), hwnd, (HMENU)IDC_AI_REFRESH, NULL, NULL);
-            /* Show saved model if one was previously chosen; otherwise leave
-             * empty until the user presses refresh */
+            HWND lbl = make_label2(nd->hPage, "API Key:");
+            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.ai_api_key,
+                                 (HMENU)IDC_AI_KEY_EDIT, ES_PASSWORD);
+            add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 0);
+        }
+        {
+            HWND lbl = make_label2(nd->hPage, "Model:");
+            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_CUSTOM_MODEL, CBS_DROPDOWN);
             const char *cur_model = nd->cfg->settings.ai_custom_model;
-            if (cur_model && cur_model[0])
-                SetWindowText(hModel, cur_model);
+            if (cur_model && cur_model[0]) SetWindowText(cmb, cur_model);
+            HWND refresh = CreateWindowW(L"BUTTON", L"\x21BB",
+                WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+                0, 0, 10, 10, nd->hPage, (HMENU)IDC_AI_REFRESH, NULL, NULL);
+            add_ctrl(nd, lbl, cmb, refresh, SETTINGS_PAGE_AI_PROVIDER, 0, 26, 1, 0, 1, 0);
         }
-        y += rh;
+        {
+            HWND lbl = make_label2(nd->hPage, "Base URL:");
+            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.ai_custom_url,
+                                 (HMENU)IDC_AI_CUSTOM_URL, 0);
+            nd->ctrl_ai_base_url = add_ctrl(nd, lbl, ed, NULL,
+                SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, is_custom, 0);
+        }
+        }
 
-        /* Row 10: AI Base URL (only for custom provider) */
+        /* ==== AI_BEHAVIOUR ==== */
         {
-            HWND hUrlLabel = make_label(hwnd, "AI Base URL:", lx, y, lw, nd->dpi);
-            HWND hUrl = CreateWindow("EDIT",
-                nd->cfg->settings.ai_custom_url,
-                WS_CHILD | WS_BORDER | ES_AUTOHSCROLL |
-                (is_custom ? WS_VISIBLE : 0),
-                ex, y + 1, ew, S(22), hwnd, (HMENU)IDC_AI_CUSTOM_URL, NULL, NULL);
-            SendMessage(hUrl, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+            HWND lbl = make_label2(nd->hPage, "System Instructions:");
+            HWND ed = CreateWindow("EDIT", nd->cfg->settings.ai_system_notes,
+                WS_CHILD | WS_VISIBLE | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL,
+                0, 0, 10, 10, nd->hPage, (HMENU)IDC_AI_SYSTEM_NOTES, NULL, NULL);
+            SendMessage(ed, EM_SETLIMITTEXT, (WPARAM)2559, 0);
+            SendMessage(ed, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                         MAKELPARAM(3, 3));
-            if (!is_custom) ShowWindow(hUrlLabel, SW_HIDE);
-        }
-        y += rh;
-
-        /* Row 11: AI System Instructions (multiline, two-line label) */
-        {
-            int lbl_h = MulDiv(30, nd->dpi, 96); /* two lines */
-            CreateWindow("STATIC", "System Wide\r\nAI Instructions:",
-                WS_VISIBLE | WS_CHILD | SS_RIGHT,
-                S(2), y, ex - S(6), lbl_h, hwnd, NULL, NULL, NULL);
-        }
-        {
-            int edit_w = ew - CSB_WIDTH;
-            int edit_h = S(132);
-            HWND hSysNotes = CreateWindow("EDIT",
-                nd->cfg->settings.ai_system_notes,
-                WS_VISIBLE | WS_CHILD | WS_BORDER |
-                ES_MULTILINE | ES_AUTOVSCROLL,
-                ex, y + 1, edit_w, edit_h, hwnd, (HMENU)IDC_AI_SYSTEM_NOTES, NULL, NULL);
-            SendMessage(hSysNotes, EM_SETLIMITTEXT, (WPARAM)2559, 0);
-            SendMessage(hSysNotes, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
-                        MAKELPARAM(3, 3));
-            SendMessageW(hSysNotes, EM_SETCUEBANNER, 0,
+            SendMessageW(ed, EM_SETCUEBANNER, 0,
                          (LPARAM)L"System-wide AI instructions (max 400 words)");
+            add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_BEHAVIOUR,
+                     0, CSB_WIDTH, 6, 1, 1, 0);
+        }
+        {
+            HWND chk = make_check2(nd->hPage, "Render AI markdown", (HMENU)IDC_AI_MD_RENDER);
+            SendMessage(chk, BM_SETCHECK,
+                        nd->cfg->settings.markdown_render_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
         }
 
-        y += S(132) + S(4); /* advance past the multiline edit */
-
-        /* Row 12: Search Engine */
+        /* ==== AI_WEB ==== */
         {
-            int is_custom_search = (_stricmp(nd->cfg->settings.ai_search_provider,
-                                              "custom") == 0);
-            make_label(hwnd, "Search Engine:", lx, y, lw, nd->dpi);
-            HWND hSearch = make_combo(hwnd, ex, y, ew, S(120),
-                                      (HMENU)IDC_AI_SEARCH_COMBO);
+        int is_custom_search =
+            (_stricmp(nd->cfg->settings.ai_search_provider, "custom") == 0);
+        {
+            HWND lbl = make_label2(nd->hPage, "Search Engine:");
+            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_SEARCH_COMBO, CBS_DROPDOWNLIST);
             int sel = 0;
             for (int i = 0; i < NUM_SEARCH_PROVIDERS; i++) {
-                SendMessage(hSearch, CB_ADDSTRING, 0,
-                            (LPARAM)k_search_providers[i].label);
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_search_providers[i].label);
                 if (_stricmp(nd->cfg->settings.ai_search_provider,
                              k_search_providers[i].value) == 0)
                     sel = i;
             }
-            SendMessage(hSearch, CB_SETCURSEL, (WPARAM)sel, 0);
-
-            /* Custom search URL (only shown when Custom selected) */
-            y += rh;
-            HWND hUrlLbl = make_label(hwnd, "Search URL:", lx, y, lw, nd->dpi);
-            HWND hUrl = CreateWindow("EDIT",
-                nd->cfg->settings.ai_search_url,
-                WS_CHILD | WS_BORDER | ES_AUTOHSCROLL |
-                (is_custom_search ? WS_VISIBLE : 0),
-                ex, y + 1, ew, S(22), hwnd, (HMENU)IDC_AI_SEARCH_URL, NULL, NULL);
-            SendMessage(hUrl, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
-                        MAKELPARAM(3, 3));
-            if (!is_custom_search) {
-                ShowWindow(hUrlLbl, SW_HIDE);
-                ShowWindow(hUrl, SW_HIDE);
-            }
+            SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, 1, 0);
         }
-        y += rh;
-
-        /* Row 13: Max Search Results */
+        {
+            HWND lbl = make_label2(nd->hPage, "Search URL:");
+            HWND ed = make_edit2(nd->hPage, nd->cfg->settings.ai_search_url,
+                                 (HMENU)IDC_AI_SEARCH_URL, 0);
+            nd->ctrl_ai_search_url = add_ctrl(nd, lbl, ed, NULL,
+                SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, is_custom_search, 0);
+        }
+        }
         {
             char buf[8];
             int max_r = nd->cfg->settings.ai_max_search_results;
             if (max_r <= 0) max_r = 7;
             (void)snprintf(buf, sizeof(buf), "%d", max_r);
-            make_label(hwnd, "Max Results:", lx, y, lw, nd->dpi);
-            HWND hMax = CreateWindow("EDIT", buf,
-                WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER,
-                ex, y + 1, S(50), S(22), hwnd, (HMENU)IDC_AI_MAX_RESULTS, NULL, NULL);
-            SendMessage(hMax, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
-                        MAKELPARAM(3, 3));
+            HWND lbl = make_label2(nd->hPage, "Max Results:");
+            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_MAX_RESULTS, ES_NUMBER);
+            add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_WEB, 70, 0, 1, 0, 1, 0);
         }
-        y += rh;
-
-        /* Row 14: Permit Web Fetch */
         {
-            int fetch_h = MulDiv(20, nd->dpi, 96);
-            HWND hFetch = CreateWindow("BUTTON", "Permit Web Fetch",
-                WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
-                ex, y, ew, fetch_h, hwnd, (HMENU)IDC_AI_WEB_FETCH, NULL, NULL);
-            SendMessage(hFetch, BM_SETCHECK,
-                        nd->cfg->settings.ai_web_fetch_enabled
-                            ? BST_CHECKED : BST_UNCHECKED, 0);
-            (void)hFetch;
+            HWND chk = make_check2(nd->hPage, "Permit Web Fetch", (HMENU)IDC_AI_WEB_FETCH);
+            SendMessage(chk, BM_SETCHECK,
+                        nd->cfg->settings.ai_web_fetch_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, 1, 1);
         }
-        y += rh;
 
-        /* Row 15: Render AI markdown */
+        /* ==== ABOUT ==== */
         {
-            int fetch_h = MulDiv(20, nd->dpi, 96);
-            HWND hMdRender = CreateWindow("BUTTON", "Render AI markdown",
-                WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
-                ex, y, ew, fetch_h, hwnd, (HMENU)IDC_AI_MD_RENDER, NULL, NULL);
-            SendMessage(hMdRender, BM_SETCHECK,
-                        nd->cfg->settings.markdown_render_enabled
-                            ? BST_CHECKED : BST_UNCHECKED, 0);
-            (void)hMdRender;
+            HWND s1 = make_static2(nd->hPage, "Nutshell v" APP_VERSION);
+            add_ctrl(nd, NULL, s1, NULL, SETTINGS_PAGE_ABOUT, 0, 0, 2, 0, 1, 1);
         }
-        y += rh;
+        {
+            HWND s2 = make_static2(nd->hPage, "Copyright (C) 2026 Thomas Sulkiewicz");
+            add_ctrl(nd, NULL, s2, NULL, SETTINGS_PAGE_ABOUT, 0, 0, 1, 0, 1, 1);
+        }
+        {
+            nd->hAboutBlurb = make_static2(nd->hPage,
+                "Windows SSH terminal with built-in AI assistance.");
+            add_ctrl(nd, NULL, nd->hAboutBlurb, NULL, SETTINGS_PAGE_ABOUT, 0, 0, 1, 0, 1, 1);
+        }
 
-        /* Action buttons (owner-drawn for theme) */
-        CreateWindow("BUTTON", "Save",
-            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            cw / 2 - S(80), ch - S(65), S(75), S(25), hwnd, (HMENU)IDOK, NULL, NULL);
-        CreateWindow("BUTTON", "Cancel",
-            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            cw / 2 + S(5), ch - S(65), S(75), S(25), hwnd, (HMENU)IDCANCEL, NULL, NULL);
+        /* ---- Buttons + footer (children of the main window) ---- */
+        nd->hBtnCancel = CreateWindow("BUTTON", "Cancel",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            0, 0, 10, 10, hwnd, (HMENU)IDCANCEL, NULL, NULL);
+        nd->hBtnOK = CreateWindow("BUTTON", "Save",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            0, 0, 10, 10, hwnd, (HMENU)IDOK, NULL, NULL);
+        nd->hFooter = CreateWindow("STATIC", "Nutshell v" APP_VERSION,
+            WS_CHILD | WS_VISIBLE | SS_LEFT,
+            0, 0, 10, 10, hwnd, NULL, NULL, NULL);
 
-        /* Version / copyright footer */
-        CreateWindow("STATIC", "Nutshell v" APP_VERSION,
-            WS_VISIBLE | WS_CHILD | SS_CENTER,
-            0, ch - S(35), cw, S(16), hwnd, NULL, NULL, NULL);
-        CreateWindow("STATIC", "Copyright (C) 2026 Thomas Sulkiewicz",
-            WS_VISIBLE | WS_CHILD | SS_CENTER,
-            0, ch - S(19), cw, S(16), hwnd, NULL, NULL, NULL);
+        /* ---- Tooltip window ---- */
+        nd->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
+            WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP | TTS_BALLOON,
+            0, 0, 0, 0, hwnd, NULL, NULL, NULL);
+        if (nd->hTooltip)
+            SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, (LPARAM)300);
 
-        #undef S
-
-        /* Apply Inter UI font to all child controls */
+        /* ---- Fonts ---- */
         {
             int h = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
             nd->hDlgFont = CreateFont(
@@ -771,11 +1150,18 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
                 APP_FONT_UI_FACE);
+            nd->hBoldFont = CreateFont(
+                h, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
+                APP_FONT_UI_FACE);
             if (nd->hDlgFont)
                 EnumChildWindows(hwnd, SetFontProc, (LPARAM)nd->hDlgFont);
+            if (nd->hBoldFont && nd->hPageTitle)
+                SendMessage(nd->hPageTitle, WM_SETFONT, (WPARAM)nd->hBoldFont, TRUE);
         }
 
-        /* Theme: look up from config, create brushes, apply title bar + borders */
+        /* ---- Theme: look up from config, create brushes, apply chrome ---- */
         {
             int idx = ui_theme_find(nd->cfg->settings.colour_scheme);
             nd->theme = ui_theme_get(idx);
@@ -785,11 +1171,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             themed_apply_borders(hwnd, nd->theme);
         }
 
-        /* Custom scrollbar for AI instructions multiline edit */
+        /* ---- Scrollbars: whole-page, and AI instructions ---- */
+        csb_register(GetModuleHandle(NULL));
+        nd->hPageScroll = csb_create(nd->hPage, 0, 0, CSB_WIDTH, 10,
+                                     nd->theme, GetModuleHandle(NULL));
         {
-            HWND hEdit = GetDlgItem(hwnd, IDC_AI_SYSTEM_NOTES);
+            HWND hEdit = GetDlgItem(nd->hPage, IDC_AI_SYSTEM_NOTES);
             if (hEdit) {
-                /* Measure line height from applied font */
                 HDC hdc = GetDC(hEdit);
                 HGDIOBJ old = SelectObject(hdc, (HGDIOBJ)nd->hDlgFont);
                 TEXTMETRIC tm;
@@ -799,45 +1187,72 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                 SelectObject(hdc, old);
                 ReleaseDC(hEdit, hdc);
 
-                /* Position scrollbar on right edge of edit */
-                RECT erc;
-                GetWindowRect(hEdit, &erc);
-                POINT pt = { erc.right, erc.top };
-                ScreenToClient(hwnd, &pt);
-                int eh = erc.bottom - erc.top;
-
-                csb_register(GetModuleHandle(NULL));
-                nd->hSysNotesScroll = csb_create(hwnd, pt.x, pt.y,
-                                                 CSB_WIDTH, eh, nd->theme,
-                                                 GetModuleHandle(NULL));
+                nd->hSysNotesScroll = csb_create(nd->hPage, 0, 0, CSB_WIDTH, 10,
+                                                 nd->theme, GetModuleHandle(NULL));
                 SetTimer(hwnd, IDT_SYSNOTES_SCROLL, 50, NULL);
             }
         }
 
-        /* Apply tooltips to every Settings control. */
+        /* ---- Tooltips ---- */
         if (nd->hTooltip) {
             for (int i = 0; i < NUM_TOOLTIPS; i++) {
-                HWND tool = GetDlgItem(hwnd, k_tooltips[i].id);
+                HWND tool = GetDlgItem(nd->hPage, k_tooltips[i].id);
                 if (tool)
                     add_tooltip(nd->hTooltip, tool, k_tooltips[i].text);
             }
         }
 
+        /* ---- Initial nav selection + first layout pass ---- */
+        {
+            int idx = settings_nav_first_page();
+            SendMessage(nd->hNav, LB_SETCURSEL, (WPARAM)idx, 0);
+            const SettingsNavEntry *e = settings_nav_at(idx);
+            nd->cur_page = e ? e->page_id : SETTINGS_PAGE_APPEARANCE;
+            SetWindowText(nd->hPageTitle, settings_page_title(nd->cur_page));
+        }
+        relayout(hwnd, nd);
+
+        return 0;
+    }
+
+    case WM_SIZE:
+        if (d && wParam != SIZE_MINIMIZED) {
+            relayout(hwnd, d);
+            InvalidateRect(hwnd, NULL, TRUE);
+        }
+        return 0;
+
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO *mmi = (MINMAXINFO *)lParam;
+        int ddpi = d ? d->dpi : 96;
+        SettingsMetrics m;
+        settings_metrics_init(&m, ddpi);
+        RECT wr = {0, 0, m.min_w, m.min_h};
+        AdjustWindowRect(&wr, (DWORD)GetWindowLong(hwnd, GWL_STYLE), FALSE);
+        mmi->ptMinTrackSize.x = wr.right - wr.left;
+        mmi->ptMinTrackSize.y = wr.bottom - wr.top;
         return 0;
     }
 
     case WM_AI_MODELS_DONE: {
         FetchModelsCtx *ctx = (FetchModelsCtx *)lParam;
         if (ctx && ctx->result) {
+            if (!d) {
+                /* Window is tearing down; nothing left to update. */
+                free(ctx->result);
+                free(ctx);
+                return 0;
+            }
+
             /* Re-enable the refresh button */
-            EnableWindow(GetDlgItem(hwnd, IDC_AI_REFRESH), TRUE);
+            EnableWindow(GetDlgItem(d->hPage, IDC_AI_REFRESH), TRUE);
 
             if (strncmp(ctx->result, "Error:", 6) == 0) {
                 MessageBox(hwnd, ctx->result, "Refresh Models",
                            MB_OK | MB_ICONWARNING);
             } else {
                 /* Parse newline-separated model IDs into the combo */
-                HWND hCombo = GetDlgItem(hwnd, IDC_AI_CUSTOM_MODEL);
+                HWND hCombo = GetDlgItem(d->hPage, IDC_AI_CUSTOM_MODEL);
                 /* Remember current text */
                 char cur[256] = {0};
                 GetWindowText(hCombo, cur, (int)sizeof(cur));
@@ -871,49 +1286,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         return 0;
     }
 
-    case WM_VSCROLL:
-        /* Custom scrollbar for AI instructions */
-        if (d && d->hSysNotesScroll && (HWND)lParam == d->hSysNotesScroll) {
-            WORD code = LOWORD(wParam);
-            HWND hEdit = GetDlgItem(hwnd, IDC_AI_SYSTEM_NOTES);
-            int first = (int)SendMessage(hEdit, EM_GETFIRSTVISIBLELINE, 0, 0);
-            int delta = 0;
-            switch (code) {
-            case SB_LINEUP:    delta = -1; break;
-            case SB_LINEDOWN:  delta =  1; break;
-            case SB_PAGEUP:    delta = -3; break;
-            case SB_PAGEDOWN:  delta =  3; break;
-            case SB_THUMBTRACK:
-            case SB_THUMBPOSITION:
-                delta = edit_scroll_line_delta(
-                    csb_get_trackpos(d->hSysNotesScroll), first);
-                break;
-            case SB_TOP:       delta = -first; break;
-            case SB_BOTTOM:    delta = 99999;  break;
-            }
-            if (delta != 0)
-                SendMessage(hEdit, EM_LINESCROLL, 0, (LPARAM)delta);
-            sys_notes_sync_scroll(hwnd, d);
-            return 0;
-        }
-        break;
-
-    case WM_MOUSEWHEEL:
-        if (d) {
-            HWND hEdit = GetDlgItem(hwnd, IDC_AI_SYSTEM_NOTES);
-            if (hEdit) {
-                int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
-                int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
-                SendMessage(hEdit, EM_LINESCROLL, 0, (LPARAM)scroll);
-                sys_notes_sync_scroll(hwnd, d);
-            }
-            return 0;
-        }
-        break;
-
     case WM_TIMER:
         if (wParam == IDT_SYSNOTES_SCROLL && d) {
-            sys_notes_sync_scroll(hwnd, d);
+            sys_notes_sync_scroll(d);
             return 0;
         }
         break;
@@ -924,23 +1299,29 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             RECT rc;
             GetClientRect(hwnd, &rc);
             FillRect(hdc, &rc, d->hBrBgPrimary);
+
+            SettingsMetrics m;
+            settings_metrics_init(&m, d->dpi);
+            SettingsRect nav, content, buttons;
+            settings_layout_regions(rc.right, rc.bottom, &m, &nav, &content, &buttons);
+
+            HPEN hPen = CreatePen(PS_SOLID, 1, theme_cr(d->theme->border));
+            HGDIOBJ old = SelectObject(hdc, hPen);
+            MoveToEx(hdc, nav.w, 0, NULL);
+            LineTo(hdc, nav.w, nav.h);
+            MoveToEx(hdc, 0, buttons.y, NULL);
+            LineTo(hdc, rc.right, buttons.y);
+            SelectObject(hdc, old);
+            DeleteObject(hPen);
             return 1;
         }
         break;
 
     case WM_CTLCOLORSTATIC:
         if (d && d->theme) {
-            SetTextColor((HDC)wParam, theme_cr(d->theme->text_main));
+            SetTextColor((HDC)wParam, theme_cr(d->theme->text_dim));
             SetBkColor((HDC)wParam, theme_cr(d->theme->bg_primary));
             return (LRESULT)d->hBrBgPrimary;
-        }
-        break;
-
-    case WM_CTLCOLOREDIT:
-        if (d && d->theme) {
-            SetTextColor((HDC)wParam, theme_cr(d->theme->text_main));
-            SetBkColor((HDC)wParam, theme_cr(d->theme->bg_secondary));
-            return (LRESULT)d->hBrBgSecondary;
         }
         break;
 
@@ -955,6 +1336,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
     case WM_DRAWITEM:
         if (d && d->theme) {
             LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
+            if ((int)dis->CtlID == IDC_SETTINGS_NAV) {
+                draw_nav_item(d, dis);
+                return TRUE;
+            }
             int is_primary = ((int)dis->CtlID == IDOK);
             draw_themed_button(dis, d->theme, is_primary);
             return TRUE;
@@ -964,18 +1349,34 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
 
+        case IDC_SETTINGS_NAV:
+            if (HIWORD(wParam) == LBN_SELCHANGE && d) {
+                int new_idx = (int)SendMessage(d->hNav, LB_GETCURSEL, 0, 0);
+                int old_idx = settings_nav_index_of_page(d->cur_page);
+                int dir = (new_idx >= old_idx) ? 1 : -1;
+                new_idx = resolve_page_index(new_idx, dir);
+                SendMessage(d->hNav, LB_SETCURSEL, (WPARAM)new_idx, 0);
+                const SettingsNavEntry *e = settings_nav_at(new_idx);
+                if (e) {
+                    d->cur_page = e->page_id;
+                    d->scroll = 0;
+                    SetWindowText(d->hPageTitle, settings_page_title(d->cur_page));
+                    relayout(hwnd, d);
+                    InvalidateRect(d->hPage, NULL, TRUE);
+                }
+            }
+            break;
+
         case IDC_AI_SEARCH_COMBO:
             /* Show/hide custom search URL field */
             if (HIWORD(wParam) == CBN_SELCHANGE && d) {
-                int sel = (int)SendDlgItemMessage(hwnd, IDC_AI_SEARCH_COMBO,
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_SEARCH_COMBO,
                                                   CB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel < NUM_SEARCH_PROVIDERS) {
-                    int cust = (_stricmp(k_search_providers[sel].value,
-                                        "custom") == 0);
-                    int sw = cust ? SW_SHOW : SW_HIDE;
-                    ShowWindow(GetDlgItem(hwnd, IDC_AI_SEARCH_URL), sw);
-                    HWND hLbl = FindWindowEx(hwnd, NULL, "STATIC", "Search URL:");
-                    if (hLbl) ShowWindow(hLbl, sw);
+                if (sel >= 0 && sel < NUM_SEARCH_PROVIDERS && d->ctrl_ai_search_url) {
+                    d->ctrl_ai_search_url->visible =
+                        (_stricmp(k_search_providers[sel].value, "custom") == 0);
+                    relayout(hwnd, d);
+                    InvalidateRect(d->hPage, NULL, TRUE);
                 }
             }
             break;
@@ -983,18 +1384,17 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         case IDC_AI_PROVIDER_COMBO:
             /* Show/hide custom URL field; repopulate model combo */
             if (HIWORD(wParam) == CBN_SELCHANGE && d) {
-                int sel = (int)SendDlgItemMessage(hwnd, IDC_AI_PROVIDER_COMBO,
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_PROVIDER_COMBO,
                                                   CB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel < NUM_AI_PROVIDERS) {
-                    int cust = (_stricmp(k_ai_providers[sel], "custom") == 0);
-                    int sw = cust ? SW_SHOW : SW_HIDE;
-                    ShowWindow(GetDlgItem(hwnd, IDC_AI_CUSTOM_URL), sw);
-                    HWND hUrlLbl = FindWindowEx(hwnd, NULL, "STATIC", "AI Base URL:");
-                    if (hUrlLbl) ShowWindow(hUrlLbl, sw);
+                if (sel >= 0 && sel < NUM_AI_PROVIDERS && d->ctrl_ai_base_url) {
+                    d->ctrl_ai_base_url->visible =
+                        (_stricmp(k_ai_providers[sel], "custom") == 0);
                     /* Clear model — user must press refresh to populate */
-                    HWND hMdl = GetDlgItem(hwnd, IDC_AI_CUSTOM_MODEL);
+                    HWND hMdl = GetDlgItem(d->hPage, IDC_AI_CUSTOM_MODEL);
                     SendMessage(hMdl, CB_RESETCONTENT, 0, 0);
                     SetWindowText(hMdl, "");
+                    relayout(hwnd, d);
+                    InvalidateRect(d->hPage, NULL, TRUE);
                 }
             }
             break;
@@ -1003,7 +1403,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             /* Fetch available models from the provider's API */
             if (d) {
                 /* Get current provider */
-                int psel = (int)SendDlgItemMessage(hwnd, IDC_AI_PROVIDER_COMBO,
+                int psel = (int)SendDlgItemMessage(d->hPage, IDC_AI_PROVIDER_COMBO,
                                                    CB_GETCURSEL, 0, 0);
                 const char *prov = (psel >= 0 && psel < NUM_AI_PROVIDERS)
                                    ? k_ai_providers[psel] : "";
@@ -1013,7 +1413,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                 char custom_models_url[512] = {0};
                 if (!models_url) {
                     char base[256];
-                    GetDlgItemText(hwnd, IDC_AI_CUSTOM_URL, base, (int)sizeof(base));
+                    GetDlgItemText(d->hPage, IDC_AI_CUSTOM_URL, base, (int)sizeof(base));
                     if (base[0]) {
                         /* Strip /chat/completions or similar, append /models */
                         char *slash = strrchr(base, '/');
@@ -1039,7 +1439,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
 
                 /* Get API key */
                 char api_key[256];
-                GetDlgItemText(hwnd, IDC_AI_KEY_EDIT, api_key, (int)sizeof(api_key));
+                GetDlgItemText(d->hPage, IDC_AI_KEY_EDIT, api_key, (int)sizeof(api_key));
                 if (!api_key[0]) {
                     MessageBox(hwnd, "Enter an API key first.",
                                "Refresh Models", MB_OK | MB_ICONWARNING);
@@ -1070,7 +1470,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                     if (ht) {
                         CloseHandle(ht);
                         /* Disable button while fetching */
-                        EnableWindow(GetDlgItem(hwnd, IDC_AI_REFRESH), FALSE);
+                        EnableWindow(GetDlgItem(d->hPage, IDC_AI_REFRESH), FALSE);
                     } else {
                         free(ctx);
                     }
@@ -1079,9 +1479,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             break;
 
         case IDC_AUTOCONNECT_CHECK:
-            EnableWindow(GetDlgItem(hwnd, IDC_AUTOCONNECT_COMBO),
-                         IsDlgButtonChecked(hwnd, IDC_AUTOCONNECT_CHECK)
-                             == BST_CHECKED ? TRUE : FALSE);
+            if (d)
+                EnableWindow(GetDlgItem(d->hPage, IDC_AUTOCONNECT_COMBO),
+                             IsDlgButtonChecked(d->hPage, IDC_AUTOCONNECT_CHECK)
+                                 == BST_CHECKED ? TRUE : FALSE);
             break;
 
         case IDOK: {
@@ -1091,7 +1492,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             /* Terminal font from combo */
             {
                 char buf[CFG_STR_MAX];
-                GetDlgItemText(hwnd, IDC_FONT_COMBO, buf, (int)sizeof(buf));
+                GetDlgItemText(d->hPage, IDC_FONT_COMBO, buf, (int)sizeof(buf));
                 if (buf[0])
                     snprintf(s->font, sizeof(s->font), "%s", buf);
             }
@@ -1099,14 +1500,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             /* AI Assist font from combo */
             {
                 char buf[CFG_STR_MAX];
-                GetDlgItemText(hwnd, IDC_AI_FONT_COMBO, buf, (int)sizeof(buf));
+                GetDlgItemText(d->hPage, IDC_AI_FONT_COMBO, buf, (int)sizeof(buf));
                 if (buf[0])
                     snprintf(s->ai_font, sizeof(s->ai_font), "%s", buf);
             }
 
             /* Font size from discrete combo */
             {
-                int sel = (int)SendDlgItemMessage(hwnd, IDC_FONTSIZE_COMBO,
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_FONTSIZE_COMBO,
                                                   CB_GETCURSEL, 0, 0);
                 if (sel >= 0 && sel < NUM_FONT_SIZES)
                     s->font_size = k_app_font_sizes[sel];
@@ -1116,25 +1517,25 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             BOOL ok;
             UINT v;
 
-            v = GetDlgItemInt(hwnd, IDC_SCROLLBACK_EDIT, &ok, FALSE);
+            v = GetDlgItemInt(d->hPage, IDC_SCROLLBACK_EDIT, &ok, FALSE);
             if (ok) s->scrollback_lines = (int)v;
 
-            v = GetDlgItemInt(hwnd, IDC_PASTEDELAY_EDIT, &ok, FALSE);
+            v = GetDlgItemInt(d->hPage, IDC_PASTEDELAY_EDIT, &ok, FALSE);
             if (ok) s->paste_delay_ms = (int)v;
 
             /* Log directory & format */
-            GetDlgItemText(hwnd, IDC_LOG_DIR_EDIT,
+            GetDlgItemText(d->hPage, IDC_LOG_DIR_EDIT,
                            s->log_dir, (int)sizeof(s->log_dir));
-            GetDlgItemText(hwnd, IDC_LOG_FMT_EDIT,
+            GetDlgItemText(d->hPage, IDC_LOG_FMT_EDIT,
                            s->log_format, (int)sizeof(s->log_format));
 
             /* Debug terminal log checkbox */
-            s->debug_terminal = (IsDlgButtonChecked(hwnd, IDC_DEBUG_TERMINAL)
+            s->debug_terminal = (IsDlgButtonChecked(d->hPage, IDC_DEBUG_TERMINAL)
                                   == BST_CHECKED) ? 1 : 0;
 
             /* AI provider from combo */
             {
-                int sel = (int)SendDlgItemMessage(hwnd, IDC_AI_PROVIDER_COMBO,
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_PROVIDER_COMBO,
                                                   CB_GETCURSEL, 0, 0);
                 if (sel >= 0 && sel < NUM_AI_PROVIDERS) {
                     strncpy(s->ai_provider, k_ai_providers[sel],
@@ -1144,20 +1545,20 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             }
 
             /* AI API key */
-            GetDlgItemText(hwnd, IDC_AI_KEY_EDIT,
+            GetDlgItemText(d->hPage, IDC_AI_KEY_EDIT,
                            s->ai_api_key, (int)sizeof(s->ai_api_key));
 
             /* AI custom URL */
-            GetDlgItemText(hwnd, IDC_AI_CUSTOM_URL,
+            GetDlgItemText(d->hPage, IDC_AI_CUSTOM_URL,
                            s->ai_custom_url, (int)sizeof(s->ai_custom_url));
 
             /* AI model — read combo text (works for both selection and free-text) */
-            GetDlgItemText(hwnd, IDC_AI_CUSTOM_MODEL,
+            GetDlgItemText(d->hPage, IDC_AI_CUSTOM_MODEL,
                            s->ai_custom_model, (int)sizeof(s->ai_custom_model));
 
             /* Colour scheme from combo */
             {
-                int sel = (int)SendDlgItemMessage(hwnd, IDC_SCHEME_COMBO,
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_SCHEME_COMBO,
                                                   CB_GETCURSEL, 0, 0);
                 if (sel >= 0 && sel < NUM_UI_THEMES) {
                     strncpy(s->colour_scheme, ui_theme_name(sel),
@@ -1167,12 +1568,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             }
 
             /* AI system-wide instructions */
-            GetDlgItemText(hwnd, IDC_AI_SYSTEM_NOTES,
+            GetDlgItemText(d->hPage, IDC_AI_SYSTEM_NOTES,
                            s->ai_system_notes, (int)sizeof(s->ai_system_notes));
 
             /* AI search provider from combo */
             {
-                int sel = (int)SendDlgItemMessage(hwnd, IDC_AI_SEARCH_COMBO,
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_SEARCH_COMBO,
                                                   CB_GETCURSEL, 0, 0);
                 if (sel >= 0 && sel < NUM_SEARCH_PROVIDERS) {
                     strncpy(s->ai_search_provider,
@@ -1183,32 +1584,32 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             }
 
             /* Custom search URL */
-            GetDlgItemText(hwnd, IDC_AI_SEARCH_URL,
+            GetDlgItemText(d->hPage, IDC_AI_SEARCH_URL,
                            s->ai_search_url, (int)sizeof(s->ai_search_url));
 
             /* Max search results */
-            v = GetDlgItemInt(hwnd, IDC_AI_MAX_RESULTS, &ok, FALSE);
+            v = GetDlgItemInt(d->hPage, IDC_AI_MAX_RESULTS, &ok, FALSE);
             if (ok && v >= 1 && v <= 20)
                 s->ai_max_search_results = (int)v;
 
             /* Permit web fetch */
-            s->ai_web_fetch_enabled = (IsDlgButtonChecked(hwnd, IDC_AI_WEB_FETCH)
+            s->ai_web_fetch_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_WEB_FETCH)
                                         == BST_CHECKED) ? 1 : 0;
 
             /* Render AI markdown */
-            s->markdown_render_enabled = (IsDlgButtonChecked(hwnd, IDC_AI_MD_RENDER)
+            s->markdown_render_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_MD_RENDER)
                                            == BST_CHECKED) ? 1 : 0;
 
             /* SSH user idle timeout */
-            v = GetDlgItemInt(hwnd, IDC_SSH_IDLE_EDIT, &ok, FALSE);
+            v = GetDlgItemInt(d->hPage, IDC_SSH_IDLE_EDIT, &ok, FALSE);
             if (ok && v <= 10080u)
                 s->ssh_user_idle_timeout_mins = (int)v;
             /* on parse failure or out-of-range: retain previous value */
 
             /* Auto-connect at startup */
-            s->auto_connect = (IsDlgButtonChecked(hwnd, IDC_AUTOCONNECT_CHECK)
+            s->auto_connect = (IsDlgButtonChecked(d->hPage, IDC_AUTOCONNECT_CHECK)
                                 == BST_CHECKED) ? 1 : 0;
-            GetDlgItemText(hwnd, IDC_AUTOCONNECT_COMBO,
+            GetDlgItemText(d->hPage, IDC_AUTOCONNECT_COMBO,
                            s->auto_connect_session,
                            (int)sizeof(s->auto_connect_session));
 
@@ -1229,7 +1630,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         if (d) {
             KillTimer(hwnd, IDT_SYSNOTES_SCROLL);
             if (d->hTooltip) DestroyWindow(d->hTooltip);
-            if (d->hDlgFont) DeleteObject(d->hDlgFont);
+            if (d->hDlgFont)  DeleteObject(d->hDlgFont);
+            if (d->hBoldFont) DeleteObject(d->hBoldFont);
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
             free(d);
@@ -1242,7 +1644,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
         return 0;
     }
 
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProc(hwnd, umsg, wParam, lParam);
 }
 
 /* ---- Public API --------------------------------------------------------- */
@@ -1267,14 +1669,32 @@ void settings_dlg_show(HWND parent, Config *cfg)
     wc.lpszClassName = SETTINGS_CLASS;
     RegisterClassEx(&wc);
 
-    /* Scale window size for DPI */
+    WNDCLASSEX wcPage;
+    memset(&wcPage, 0, sizeof(wcPage));
+    wcPage.cbSize        = sizeof(WNDCLASSEX);
+    wcPage.style         = CS_HREDRAW | CS_VREDRAW;
+    wcPage.lpfnWndProc   = SettingsPageProc;
+    wcPage.hInstance     = GetModuleHandle(NULL);
+    wcPage.hCursor       = LoadCursor(NULL, IDC_ARROW);
+    wcPage.hbrBackground = NULL;
+    wcPage.lpszClassName = PAGE_CLASS;
+    RegisterClassEx(&wcPage);
+
+    /* Default client size, DPI-scaled; AdjustWindowRect turns that into the
+     * window size the non-client area (title bar, borders) needs. */
     int pdpi = get_window_dpi(parent);
+    int client_w = settings_scale(760, pdpi);
+    int client_h = settings_scale(560, pdpi);
+    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME |
+                  WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_CLIPCHILDREN;
+    RECT wr = {0, 0, client_w, client_h};
+    AdjustWindowRect(&wr, style, FALSE);
 
     HWND hwnd = CreateWindowEx(
         0, SETTINGS_CLASS, "Settings",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        style | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(400, pdpi, 96), MulDiv(1022, pdpi, 96),
+        wr.right - wr.left, wr.bottom - wr.top,
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {
@@ -1292,3 +1712,4 @@ void settings_dlg_show(HWND parent, Config *cfg)
 }
 
 #endif
+
