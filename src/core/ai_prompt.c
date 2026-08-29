@@ -6,6 +6,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+
+int ai_context_clamp_lines(int lines)
+{
+    if (lines < 1) return 1;
+    if (lines > AI_CONTEXT_LINES_MAX) return AI_CONTEXT_LINES_MAX;
+    return lines;
+}
+
+size_t ai_context_buf_size(int lines, int cols)
+{
+    int clamped_lines = ai_context_clamp_lines(lines);
+    int use_cols = (cols < 1) ? 80 : cols;
+
+    size_t l = (size_t)clamped_lines;
+    size_t line_width = (size_t)use_cols + 1u; /* +1 for the newline */
+
+    /* Guard against overflow before multiplying: l * line_width + 1 */
+    if (l > (SIZE_MAX - 1u) / line_width) {
+        return AI_CONTEXT_BYTES_MAX;
+    }
+    size_t total = l * line_width + 1u;
+
+    if (total > AI_CONTEXT_BYTES_MAX) {
+        return AI_CONTEXT_BYTES_MAX;
+    }
+    return total;
+}
 
 void ai_attachment_free(AiAttachment **att)
 {

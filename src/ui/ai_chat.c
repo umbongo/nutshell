@@ -104,7 +104,6 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define WM_AI_STREAM     (WM_USER + 102)  /* wParam: 0=thinking, 1=content; lParam: char* */
 #define WM_AI_TOOL_MSG   (WM_USER + 103)  /* wParam: ChatItemType; lParam: heap char* text */
 
-#define TERM_CONTEXT_ROWS 150
 #define CONTINUE_DELAY_MS 2000  /* Wait for terminal output before continuing */
 #define TIMER_CONTINUE    1
 #define TIMER_CMD_QUEUE   2     /* Delayed command execution (paste delay) */
@@ -198,6 +197,19 @@ typedef struct {
     /* AI notes for system prompt context */
     char session_notes[2560];
     char system_notes[2560];
+
+    /* How many terminal lines are sent to the AI as context (1-50000).
+     * Always clamped via ai_context_clamp_lines(); never 0. */
+    int context_lines;
+
+    /* Scratch buffers for the terminal context and the system prompt built
+     * from it.  They live as long as the panel and grow with context_lines,
+     * so the send paths never allocate and cannot leak on an early return.
+     * Freed in WM_DESTROY. */
+    char  *ctx_term;
+    size_t ctx_term_cap;
+    char  *ctx_prompt;
+    size_t ctx_prompt_cap;
 
     /* Per-session conversation tracking */
     AiSessionState *active_state;     /* points to current session's ai_state */
@@ -1193,6 +1205,40 @@ static void cancel_active_stream(AiChatData *d)
     }
 }
 
+/* Grow the context scratch buffers to fit the configured line budget.
+ * Buffers only ever grow, so a shrinking setting keeps the larger block.
+ * On allocation failure the previous (smaller) buffer stays usable; only a
+ * first-call failure leaves a NULL, which callers must tolerate.
+ * Returns non-zero when both buffers are usable. */
+static int ctx_buffers_ensure(AiChatData *d)
+{
+    int cols = (d->active_term && d->active_term->cols > 0)
+               ? d->active_term->cols : 80;
+    size_t need_term   = ai_context_buf_size(d->context_lines, cols);
+    size_t need_prompt = need_term + AI_MSG_MAX;
+
+    if (d->ctx_term_cap < need_term) {
+        char *nb = (char *)realloc(d->ctx_term, need_term);
+        if (nb) { d->ctx_term = nb; d->ctx_term_cap = need_term; }
+    }
+    if (d->ctx_prompt_cap < need_prompt) {
+        char *nb = (char *)realloc(d->ctx_prompt, need_prompt);
+        if (nb) { d->ctx_prompt = nb; d->ctx_prompt_cap = need_prompt; }
+    }
+
+    /* Last resort on a failed first allocation: take whatever we can get. */
+    if (!d->ctx_term) {
+        d->ctx_term = (char *)malloc((size_t)AI_MSG_MAX);
+        if (d->ctx_term) d->ctx_term_cap = (size_t)AI_MSG_MAX;
+    }
+    if (!d->ctx_prompt) {
+        d->ctx_prompt = (char *)malloc((size_t)AI_MSG_MAX);
+        if (d->ctx_prompt) d->ctx_prompt_cap = (size_t)AI_MSG_MAX;
+    }
+
+    return (d->ctx_term && d->ctx_prompt) ? 1 : 0;
+}
+
 static void send_user_message(AiChatData *d)
 {
     if (!d || !d->active_state || d->active_state->busy || d->pending_approval)
@@ -1223,57 +1269,64 @@ static void send_user_message(AiChatData *d)
         chat_listview_scroll_to_bottom(d->hChatList);
     }
 
-    /* Extract terminal context */
-    char term_text[14336] = "";
-    if (d->active_term) {
-        term_extract_last_n(d->active_term, TERM_CONTEXT_ROWS,
-                           term_text, sizeof(term_text));
+    /* Extract terminal context into the panel's persistent scratch buffer */
+    const char *term_text = "";
+    int ctx_ok = ctx_buffers_ensure(d);
+    if (ctx_ok) {
+        d->ctx_term[0] = '\0';
+        if (d->active_term) {
+            term_extract_last_n(d->active_term, d->context_lines,
+                                d->ctx_term, d->ctx_term_cap);
+        }
+        term_text = d->ctx_term;
     }
 
     EnterCriticalSection(&d->cs);
 
     /* On first message, add system prompt */
-    if (d->conv.msg_count == 0) {
-        char sys_prompt[AI_MSG_MAX];
-        ai_build_system_prompt(sys_prompt, sizeof(sys_prompt), term_text,
+    if (ctx_ok && d->conv.msg_count == 0) {
+        char  *sys_prompt     = d->ctx_prompt;
+        size_t sys_prompt_cap = d->ctx_prompt_cap;
+        ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
                                d->session_notes, d->system_notes);
         /* Append tool descriptions if tools are registered and provider supports them */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
-            len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+            len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
                 "\n\nYou have access to the following tools that will be called "
                 "automatically via the API tool-use mechanism:\n\n");
             for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+                len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
                     "- %s: %s\n",
                     d->tool_registry.tools[ti].name,
                     d->tool_registry.tools[ti].description);
             }
-            len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+            len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
                 "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
                 "request them via the tool-use API and the results will be provided.\n\n"
                 "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
             (void)len;
         }
         ai_conv_add(&d->conv, AI_ROLE_SYSTEM, sys_prompt);
-    } else if (d->active_term) {
+    } else if (ctx_ok && d->active_term) {
         /* Update system prompt with fresh terminal context */
-        char sys_prompt[AI_MSG_MAX];
-        ai_build_system_prompt(sys_prompt, sizeof(sys_prompt), term_text,
+        char  *sys_prompt     = d->ctx_prompt;
+        size_t sys_prompt_cap = d->ctx_prompt_cap;
+        ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
                                d->session_notes, d->system_notes);
         /* Append tool descriptions */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
-            len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+            len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
                 "\n\nYou have access to the following tools that will be called "
                 "automatically via the API tool-use mechanism:\n\n");
             for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+                len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
                     "- %s: %s\n",
                     d->tool_registry.tools[ti].name,
                     d->tool_registry.tools[ti].description);
             }
-            len += (size_t)snprintf(sys_prompt + len, sizeof(sys_prompt) - len,
+            len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
                 "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
                 "request them via the tool-use API and the results will be provided.\n\n"
                 "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
@@ -1333,18 +1386,24 @@ static void send_continue_message(AiChatData *d)
     if (!d || !d->active_state || d->active_state->busy) return;
 
     /* Extract fresh terminal context after command execution */
-    char term_text[14336] = "";
-    if (d->active_term) {
-        term_extract_last_n(d->active_term, TERM_CONTEXT_ROWS,
-                           term_text, sizeof(term_text));
+    const char *term_text = "";
+    int ctx_ok = ctx_buffers_ensure(d);
+    if (ctx_ok) {
+        d->ctx_term[0] = '\0';
+        if (d->active_term) {
+            term_extract_last_n(d->active_term, d->context_lines,
+                                d->ctx_term, d->ctx_term_cap);
+        }
+        term_text = d->ctx_term;
     }
 
     EnterCriticalSection(&d->cs);
 
     /* Update system prompt with fresh terminal context */
-    if (d->conv.msg_count > 0 && d->active_term) {
-        char sys_prompt[AI_MSG_MAX];
-        ai_build_system_prompt(sys_prompt, sizeof(sys_prompt), term_text,
+    if (ctx_ok && d->conv.msg_count > 0 && d->active_term) {
+        char  *sys_prompt     = d->ctx_prompt;
+        size_t sys_prompt_cap = d->ctx_prompt_cap;
+        ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
                                d->session_notes, d->system_notes);
         snprintf(d->conv.messages[0].content,
                  sizeof(d->conv.messages[0].content), "%s", sys_prompt);
@@ -3512,6 +3571,8 @@ next_coalesce:;
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
             GdiplusShutdown(d->gdip_token);
+            free(d->ctx_term);
+            free(d->ctx_prompt);
             free(d);
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)NULL);
         }
@@ -3569,6 +3630,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     d->indicator_pos = -1;
     d->stream_display_start = -1;
     d->paste_delay_ms = paste_delay_ms;
+    d->context_lines = AI_CONTEXT_LINES_DEFAULT;
     if (font_name && font_name[0])
         strncpy(d->font_name, font_name, sizeof(d->font_name) - 1);
     else
@@ -3753,6 +3815,14 @@ void ai_chat_set_markdown(HWND hwnd, int enabled)
     if (!d) return;
     if (d->hChatList)
         chat_listview_set_render_markdown(d->hChatList, enabled);
+}
+
+void ai_chat_set_context_lines(HWND hwnd, int lines)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    d->context_lines = ai_context_clamp_lines(lines);
 }
 
 /* Internal helper: perform the actual session switch (save/load/rebuild).

@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.0.73 \
+**Version**: v1.0.74 \
 **Build Date**: 2026-08-29 \
 **Author**: Thomas Sulkiewicz
 
@@ -14,9 +14,9 @@ Built entirely with the Win32 API, no external UI frameworks. Cross-compiled fro
 
 ## AI Chat Assistant
 
-The standout feature: an integrated AI panel that sits alongside your terminal session. It sees what you see — the last 150 lines of terminal output — and can act on it.
+The standout feature: an integrated AI panel that sits alongside your terminal session. It sees what you see — a configurable window of recent terminal output — and can act on it.
 
-- **Context-aware** — the AI reads the last 150 lines of your live terminal output and tailors responses to what's happening on screen
+- **Context-aware** — the AI reads a configurable window of your live terminal output (1,000 lines by default, up to 50,000) and tailors responses to what's happening on screen
 - **Command execution** — suggests commands that appear inline with Allow/Deny buttons; nothing runs without your approval
 - **Streaming responses** — real-time token streaming with chain-of-thought / reasoning display
 - **Multi-provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or any OpenAI-compatible endpoint
@@ -176,6 +176,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 - **Base URL** — shown only for the Custom provider, for self-hosted or alternative endpoints
 
 #### AI Assistant > Behaviour
+- **Max terminal lines** — how much of the terminal the assistant reads as context, from 1 to 50,000 lines (default: 1,000). Each line becomes part of the context sent with every message: a larger window gives the assistant more of your session to reason about, at a proportionate cost in tokens.
 - **System instructions** — global instructions included in every AI conversation (per-session AI Notes take precedence)
 - **Render AI markdown** — format AI replies as markdown; turn off to see raw text
 
@@ -189,7 +190,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 
 Click the **AI** button in the tab strip to open the chat panel. The button is green when an API key is configured, grey otherwise.
 
-The AI assistant can see the last 150 lines of your terminal output and execute commands over SSH. Each tab maintains its own independent conversation history.
+The AI assistant can see the recent history of your terminal output (1,000 lines by default, configurable up to 50,000) and execute commands over SSH. Each tab maintains its own independent conversation history.
 
 #### Chat Window Controls
 
