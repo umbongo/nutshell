@@ -329,6 +329,12 @@ static const TooltipEntry k_tooltips[] = {
       "scrolling, tab switches, and AI chat input all count as activity." },
     { IDC_AI_REFRESH,
       "Fetch the model list from the selected AI provider." },
+    { IDC_AUTOCONNECT_CHECK,
+      "Automatically connect to the selected session when Nutshell "
+      "starts. Command-line options override this; start with -nc to "
+      "skip auto-connect once." },
+    { IDC_AUTOCONNECT_COMBO,
+      "The saved session to auto-connect to at startup." },
 };
 #define NUM_TOOLTIPS ((int)(sizeof(k_tooltips) / sizeof(k_tooltips[0])))
 
@@ -519,7 +525,65 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             make_edit(hwnd, buf, ex, y, S(80),
                       (HMENU)IDC_SSH_IDLE_EDIT, nd->dpi);
         }
-        y += rh + S(5);  /* extra gap before the AI section */
+        y += rh;
+
+        /* Startup section heading: etched line, then "Startup". */
+        {
+            int sep_y = y + MulDiv(8, nd->dpi, 96);
+            int sep_h = MulDiv(2, nd->dpi, 96);
+            HWND hSep2 = CreateWindow("STATIC", "",
+                WS_VISIBLE | WS_CHILD | SS_ETCHEDHORZ,
+                lx, sep_y, (ex + ew) - lx, sep_h,
+                hwnd, NULL, NULL, NULL);
+            (void)hSep2;
+        }
+        y += rh;
+
+        {
+            int st_h = MulDiv(20, nd->dpi, 96);
+            HWND hStLabel = CreateWindow("STATIC", "Startup",
+                WS_VISIBLE | WS_CHILD | SS_LEFT,
+                lx, y, lw, st_h, hwnd, NULL, NULL, NULL);
+            (void)hStLabel;
+        }
+        y += rh;
+
+        /* Startup: auto-connect checkbox */
+        {
+            int ac_h = MulDiv(20, nd->dpi, 96);
+            HWND hAc = CreateWindow("BUTTON", "Auto-connect at startup",
+                WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+                ex, y, ew, ac_h, hwnd, (HMENU)IDC_AUTOCONNECT_CHECK, NULL, NULL);
+            SendMessage(hAc, BM_SETCHECK,
+                        nd->cfg->settings.auto_connect ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+        y += rh;
+
+        /* Startup: session to auto-connect */
+        make_label(hwnd, "Session:", lx, y, lw, nd->dpi);
+        {
+            HWND hAcCombo = make_combo(hwnd, ex, y, ew, S(150),
+                                       (HMENU)IDC_AUTOCONNECT_COMBO);
+            const char *cur = nd->cfg->settings.auto_connect_session;
+            int sel = -1;
+            size_t np = vec_size(&nd->cfg->profiles);
+            for (size_t pi = 0; pi < np; pi++) {
+                const Profile *pr = (const Profile *)vec_get(&nd->cfg->profiles, pi);
+                const char *label = (pr->name[0] != '\0') ? pr->name : pr->host;
+                int idx = (int)SendMessageA(hAcCombo, CB_ADDSTRING, 0, (LPARAM)label);
+                if (sel < 0 && cur[0] != '\0' && _stricmp(cur, label) == 0)
+                    sel = idx;
+            }
+            /* Stored value no longer matches any session: keep it visible
+             * (and selectable) so saving without touching it doesn't lose it. */
+            if (sel < 0 && cur[0] != '\0')
+                sel = (int)SendMessageA(hAcCombo, CB_ADDSTRING, 0, (LPARAM)cur);
+            if (sel >= 0)
+                SendMessage(hAcCombo, CB_SETCURSEL, (WPARAM)sel, 0);
+            EnableWindow(hAcCombo,
+                         nd->cfg->settings.auto_connect ? TRUE : FALSE);
+        }
+        y += rh + S(5);  /* gap before the AI section */
 
         /* Row 8: AI API Key (masked) — between log format and AI provider */
         make_label(hwnd, "AI API Key:", lx, y, lw, nd->dpi);
@@ -1014,6 +1078,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
             }
             break;
 
+        case IDC_AUTOCONNECT_CHECK:
+            EnableWindow(GetDlgItem(hwnd, IDC_AUTOCONNECT_COMBO),
+                         IsDlgButtonChecked(hwnd, IDC_AUTOCONNECT_CHECK)
+                             == BST_CHECKED ? TRUE : FALSE);
+            break;
+
         case IDOK: {
             if (!d) { DestroyWindow(hwnd); break; }
             Settings *s = &d->cfg->settings;
@@ -1135,6 +1205,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT msg,
                 s->ssh_user_idle_timeout_mins = (int)v;
             /* on parse failure or out-of-range: retain previous value */
 
+            /* Auto-connect at startup */
+            s->auto_connect = (IsDlgButtonChecked(hwnd, IDC_AUTOCONNECT_CHECK)
+                                == BST_CHECKED) ? 1 : 0;
+            GetDlgItemText(hwnd, IDC_AUTOCONNECT_COMBO,
+                           s->auto_connect_session,
+                           (int)sizeof(s->auto_connect_session));
+
             /* Clamp out-of-range values before persisting */
             settings_validate(s);
             config_save(d->cfg, CONFIG_FILENAME);
@@ -1197,7 +1274,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
         0, SETTINGS_CLASS, "Settings",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(400, pdpi, 96), MulDiv(910, pdpi, 96),
+        MulDiv(400, pdpi, 96), MulDiv(1022, pdpi, 96),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {

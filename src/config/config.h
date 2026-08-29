@@ -39,6 +39,8 @@ typedef struct {
     int  ai_web_fetch_enabled;       /* 0 = disabled (default), 1 = enabled */
     int  ssh_user_idle_timeout_mins; /* 0 = never; default 0 */
     int  markdown_render_enabled;    /* render AI replies as markdown */
+    int  auto_connect;                       /* connect at startup: 0 = off (default) */
+    char auto_connect_session[CFG_STR_MAX];  /* session name (or host) to auto-connect */
 } Settings;
 
 typedef struct {
@@ -55,5 +57,10 @@ void config_default_settings(Settings *s);
 void settings_validate(Settings *s);
 Profile *config_profile_new(void);
 void config_profile_free(Profile *p);
+
+/* Case-insensitive exact lookup. Empty fields never match; first match
+ * wins on duplicates. Returns NULL when not found or on NULL/empty input. */
+Profile *config_find_profile_by_name(const Config *cfg, const char *name);
+Profile *config_find_profile_by_host(const Config *cfg, const char *host);
 
 #endif

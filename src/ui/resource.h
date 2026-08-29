@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.0.67"
-#define APP_VERSION_BINARY  1,0,67,0
+#define APP_VERSION        "1.0.70"
+#define APP_VERSION_BINARY  1,0,70,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -64,5 +64,7 @@
 #define IDC_AI_MAX_RESULTS   3063  /* Settings: max search results */
 #define IDC_AI_WEB_FETCH     3064  /* Settings: permit web fetch checkbox */
 #define IDC_AI_MD_RENDER     3066  /* Settings: render AI markdown checkbox */
+#define IDC_AUTOCONNECT_CHECK 3067 /* Settings: auto-connect at startup checkbox */
+#define IDC_AUTOCONNECT_COMBO 3068 /* Settings: auto-connect session dropdown */
 
 #endif
