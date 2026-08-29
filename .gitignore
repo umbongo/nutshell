@@ -5,6 +5,7 @@
 *.obj
 #build/
 test_runner
+build/win/test_runner.exe
 
 # Runtime configuration (may contain encrypted credentials)
 nutshell.config

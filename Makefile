@@ -119,7 +119,7 @@ wintest:
 	fi
 
 clean:
-	rm -f $(OBJS) $(TARGET) $(TEST_TARGET) *.o tests/*.o
+	rm -f $(OBJS) $(TARGET) $(TEST_TARGET) $(WIN_TEST_TARGET) *.o tests/*.o
 
 lint:
 	cppcheck --enable=warning,style,performance,portability --std=c11 src/
