@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.0.70"
-#define APP_VERSION_BINARY  1,0,70,0
+#define APP_VERSION        "1.0.72"
+#define APP_VERSION_BINARY  1,0,72,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -66,5 +66,6 @@
 #define IDC_AI_MD_RENDER     3066  /* Settings: render AI markdown checkbox */
 #define IDC_AUTOCONNECT_CHECK 3067 /* Settings: auto-connect at startup checkbox */
 #define IDC_AUTOCONNECT_COMBO 3068 /* Settings: auto-connect session dropdown */
+#define IDC_SETTINGS_NAV       3069 /* Settings: category nav listbox */
 
 #endif
