@@ -70,6 +70,9 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme);
 /* Enable or disable markdown rendering in the AI chat list view. */
 void ai_chat_set_markdown(HWND hwnd, int enabled);
 
+/* Set how many terminal lines are sent to the AI as context (1-50000). */
+void ai_chat_set_context_lines(HWND hwnd, int lines);
+
 /* Close and destroy the AI assist window. */
 void ai_chat_close(HWND hwnd);
 

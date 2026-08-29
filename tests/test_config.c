@@ -25,6 +25,7 @@ int test_config_default_settings(void)
     ASSERT_STR_EQ(s.background_colour, "#121212");
     ASSERT_STR_EQ(s.colour_scheme, "Onyx Synapse");
     ASSERT_STR_EQ(s.host_key_verification, "tofu");
+    ASSERT_EQ(s.ai_max_context_lines, 1000);
     TEST_END();
 }
 
@@ -135,6 +136,7 @@ int test_config_roundtrip_settings(void)
     orig->settings.logging_enabled  = 1;
     (void)snprintf(orig->settings.foreground_colour,
                    sizeof(orig->settings.foreground_colour), "%s", "#FFFFFF");
+    orig->settings.ai_max_context_lines = 2500;
 
     int rc = config_save(orig, TMP_CFG);
     ASSERT_EQ(rc, 0);
@@ -147,6 +149,7 @@ int test_config_roundtrip_settings(void)
     ASSERT_EQ(loaded->settings.scrollback_lines, 5000);
     ASSERT_EQ(loaded->settings.logging_enabled, 1);
     ASSERT_STR_EQ(loaded->settings.foreground_colour, "#FFFFFF");
+    ASSERT_EQ(loaded->settings.ai_max_context_lines, 2500);
 
     config_free(orig);
     config_free(loaded);

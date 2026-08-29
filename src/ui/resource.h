@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.0.73"
-#define APP_VERSION_BINARY  1,0,73,0
+#define APP_VERSION        "1.0.74"
+#define APP_VERSION_BINARY  1,0,74,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -67,5 +67,6 @@
 #define IDC_AUTOCONNECT_CHECK 3067 /* Settings: auto-connect at startup checkbox */
 #define IDC_AUTOCONNECT_COMBO 3068 /* Settings: auto-connect session dropdown */
 #define IDC_SETTINGS_NAV       3069 /* Settings: category nav listbox */
+#define IDC_AI_CONTEXT_LINES   3070 /* Settings: max terminal lines sent to AI */
 
 #endif

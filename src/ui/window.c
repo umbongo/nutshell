@@ -787,6 +787,8 @@ static void on_settings_clicked(void) {
                              g_config->settings.ai_search_url,
                              g_config->settings.ai_max_search_results,
                              g_config->settings.ai_web_fetch_enabled);
+        ai_chat_set_context_lines(g_hwndAiChat,
+                                  g_config->settings.ai_max_context_lines);
     }
 
     /* Resize all terminals to the new character grid */
@@ -841,6 +843,7 @@ static HWND create_ai_chat(HWND parent)
                              g_config->settings.ai_max_search_results,
                              g_config->settings.ai_web_fetch_enabled);
         ai_chat_set_markdown(hwnd, g_config->settings.markdown_render_enabled);
+        ai_chat_set_context_lines(hwnd, g_config->settings.ai_max_context_lines);
     }
     return hwnd;
 }

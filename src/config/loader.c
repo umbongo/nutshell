@@ -105,6 +105,8 @@ void settings_validate(Settings *s)
     if (s->paste_delay_ms > 5000) s->paste_delay_ms = 5000;
     if (s->ai_max_search_results < 1)  s->ai_max_search_results = 1;
     if (s->ai_max_search_results > 20) s->ai_max_search_results = 20;
+    if (s->ai_max_context_lines < 1)     s->ai_max_context_lines = 1;
+    if (s->ai_max_context_lines > 50000) s->ai_max_context_lines = 50000;
     if (s->ssh_user_idle_timeout_mins < 0)     s->ssh_user_idle_timeout_mins = 0;
     if (s->ssh_user_idle_timeout_mins > 10080) s->ssh_user_idle_timeout_mins = 10080;
     if (s->auto_connect != 0) s->auto_connect = 1;
@@ -133,6 +135,7 @@ void config_default_settings(Settings *s)
     s->ai_web_fetch_enabled = 0;
     s->ssh_user_idle_timeout_mins = 0;
     s->markdown_render_enabled = 1;
+    s->ai_max_context_lines = 1000;
     s->auto_connect = 0;
     /* auto_connect_session defaults to empty (already zeroed by memset) */
 }
@@ -282,6 +285,8 @@ Config *config_load(const char *path)
                               (double)s->ssh_user_idle_timeout_mins);
         s->markdown_render_enabled = json_obj_bool(jset, "markdown_render_enabled",
                                                    s->markdown_render_enabled);
+        s->ai_max_context_lines = (int)json_obj_num(jset, "ai_max_context_lines",
+                                                     (double)s->ai_max_context_lines);
         s->auto_connect = json_obj_bool(jset, "auto_connect", s->auto_connect);
         if ((sv = json_obj_str(jset, "auto_connect_session"))) {
             field_copy(s->auto_connect_session,
@@ -434,6 +439,7 @@ int config_save(const Config *cfg, const char *path)
             s->ssh_user_idle_timeout_mins);
     fprintf(f, "    \"markdown_render_enabled\": %s,\n",
             s->markdown_render_enabled ? "true" : "false");
+    fprintf(f, "    \"ai_max_context_lines\": %d,\n", s->ai_max_context_lines);
     fprintf(f, "    \"auto_connect\": %s,\n",
             s->auto_connect ? "true" : "false");
     fputs("    \"auto_connect_session\": ", f);

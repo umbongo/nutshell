@@ -12,6 +12,17 @@
 #define AI_BODY_MAX    524288   /* 512KB — accommodates base64 images */
 #define AI_MAX_MESSAGES 64
 
+#define AI_CONTEXT_LINES_DEFAULT 1000
+#define AI_CONTEXT_LINES_MAX     50000
+#define AI_CONTEXT_BYTES_MAX     ((size_t)8 * 1024 * 1024)  /* allocation ceiling */
+
+/* Clamp a configured line count into [1, AI_CONTEXT_LINES_MAX]. */
+int ai_context_clamp_lines(int lines);
+
+/* Bytes to allocate to hold `lines` rows of `cols` columns (plus newlines and
+ * a NUL terminator), clamped to AI_CONTEXT_BYTES_MAX. Never returns 0. */
+size_t ai_context_buf_size(int lines, int cols);
+
 typedef enum {
     AI_ROLE_SYSTEM,
     AI_ROLE_USER,

@@ -115,6 +115,34 @@ int test_settings_validate_scrollback_high(void)
     TEST_END();
 }
 
+/* ---- ai_max_context_lines clamping --------------------------------------- */
+
+int test_settings_validate_ai_max_context_lines_low(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.ai_max_context_lines = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_max_context_lines, 1);
+
+    s.ai_max_context_lines = -500;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_max_context_lines, 1);
+    TEST_END();
+}
+
+int test_settings_validate_ai_max_context_lines_high(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.ai_max_context_lines = 999999;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_max_context_lines, 50000);
+    TEST_END();
+}
+
 /* ---- paste_delay_ms clamping -------------------------------------------- */
 
 int test_settings_validate_paste_delay_neg(void)

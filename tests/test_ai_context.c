@@ -2,6 +2,7 @@
 #include "ai_prompt.h"
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 
 /* --- ai_word_count tests --- */
 
@@ -255,5 +256,107 @@ int test_ai_system_prompt_notes_null(void) {
     ai_build_system_prompt(buf, sizeof(buf), NULL, "", "");
     ASSERT_TRUE(strstr(buf, "AI assistant") != NULL);
     ASSERT_TRUE(strstr(buf, "system-wide") == NULL);
+    TEST_END();
+}
+
+/* --- ai_context_clamp_lines tests --- */
+
+int test_ai_context_clamp_lines_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_context_clamp_lines(-1), 1);
+    ASSERT_EQ(ai_context_clamp_lines(-1000), 1);
+    TEST_END();
+}
+
+int test_ai_context_clamp_lines_zero(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_context_clamp_lines(0), 1);
+    TEST_END();
+}
+
+int test_ai_context_clamp_lines_one(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_context_clamp_lines(1), 1);
+    TEST_END();
+}
+
+int test_ai_context_clamp_lines_in_range(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_context_clamp_lines(999), 999);
+    ASSERT_EQ(ai_context_clamp_lines(1000), 1000);
+    ASSERT_EQ(ai_context_clamp_lines(49999), 49999);
+    TEST_END();
+}
+
+int test_ai_context_clamp_lines_max_boundary(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_context_clamp_lines(50000), 50000);
+    TEST_END();
+}
+
+int test_ai_context_clamp_lines_above_max(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_context_clamp_lines(50001), 50000);
+    ASSERT_EQ(ai_context_clamp_lines(INT_MAX), 50000);
+    TEST_END();
+}
+
+/* --- ai_context_buf_size tests --- */
+
+int test_ai_context_buf_size_typical(void) {
+    TEST_BEGIN();
+    /* 1000 lines * (80 + 1) + 1 = 81001 */
+    ASSERT_EQ(ai_context_buf_size(1000, 80), (size_t)81001);
+    TEST_END();
+}
+
+int test_ai_context_buf_size_cols_floor(void) {
+    TEST_BEGIN();
+    /* cols <= 0 should use the 80-column floor */
+    ASSERT_EQ(ai_context_buf_size(1000, 0), (size_t)81001);
+    ASSERT_EQ(ai_context_buf_size(1000, -1), (size_t)81001);
+    ASSERT_EQ(ai_context_buf_size(1000, -500), (size_t)81001);
+    TEST_END();
+}
+
+int test_ai_context_buf_size_monotonic(void) {
+    TEST_BEGIN();
+    size_t prev = ai_context_buf_size(1, 80);
+    int counts[] = {1, 10, 100, 1000, 5000, 10000, 50000};
+    for (size_t i = 1; i < sizeof(counts) / sizeof(counts[0]); i++) {
+        size_t cur = ai_context_buf_size(counts[i], 80);
+        ASSERT_TRUE(cur >= prev);
+        prev = cur;
+    }
+    TEST_END();
+}
+
+int test_ai_context_buf_size_ceiling(void) {
+    TEST_BEGIN();
+    /* 50000 * 501 + 1 = 25,050,001 bytes, far above the 8MB ceiling */
+    size_t sz = ai_context_buf_size(50000, 500);
+    ASSERT_EQ(sz, AI_CONTEXT_BYTES_MAX);
+    TEST_END();
+}
+
+int test_ai_context_buf_size_never_zero(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(ai_context_buf_size(-1, -1) != 0);
+    ASSERT_TRUE(ai_context_buf_size(0, 0) != 0);
+    ASSERT_TRUE(ai_context_buf_size(1, 1) != 0);
+    ASSERT_TRUE(ai_context_buf_size(INT_MAX, INT_MAX) != 0);
+    ASSERT_TRUE(ai_context_buf_size(INT_MAX, 80) != 0);
+    ASSERT_TRUE(ai_context_buf_size(1, INT_MAX) != 0);
+    ASSERT_TRUE(ai_context_buf_size(INT_MIN, INT_MIN) != 0);
+    TEST_END();
+}
+
+int test_ai_context_buf_size_no_overflow(void) {
+    TEST_BEGIN();
+    /* Large-but-in-range inputs must not wrap around to a tiny value;
+     * the result must always be clamped sanely within the ceiling. */
+    size_t sz = ai_context_buf_size(INT_MAX, INT_MAX);
+    ASSERT_TRUE(sz <= AI_CONTEXT_BYTES_MAX);
+    ASSERT_TRUE(sz > 0);
     TEST_END();
 }

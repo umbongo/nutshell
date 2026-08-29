@@ -163,6 +163,7 @@ typedef struct {
     HWND     hPageScroll; /* whole-page scrollbar (child of page host) */
     HWND     hSshHint;    /* dim wrapped SSH idle-timeout hint */
     HWND     hAboutBlurb; /* dim About tagline */
+    HWND     hCtxHint;    /* dim wrapped AI max-context-lines hint */
 
     SettingsCtrl *ctrl_ai_base_url;   /* toggled by provider combo */
     SettingsCtrl *ctrl_ai_search_url; /* toggled by search-provider combo */
@@ -401,6 +402,10 @@ static const TooltipEntry k_tooltips[] = {
     { IDC_AI_SYSTEM_NOTES,
       "Default system instructions for the AI. Profile-specific notes, "
       "if set, take precedence." },
+    { IDC_AI_CONTEXT_LINES,
+      "How many lines of terminal output are sent to the AI as context "
+      "(1 - 50 000). Larger values give better context but cost more "
+      "tokens per message." },
     { IDC_AI_SEARCH_COMBO,
       "Search backend used by AI tool calls. 'None' disables web search." },
     { IDC_AI_SEARCH_URL,
@@ -713,7 +718,8 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
     case WM_CTLCOLORSTATIC:
         if (d && d->theme) {
             HWND hCtl = (HWND)lParam;
-            int dim = (hCtl == d->hSshHint || hCtl == d->hAboutBlurb);
+            int dim = (hCtl == d->hSshHint || hCtl == d->hAboutBlurb ||
+                       hCtl == d->hCtxHint);
             SetTextColor((HDC)wParam,
                          theme_cr(dim ? d->theme->text_dim : d->theme->text_main));
             SetBkColor((HDC)wParam, theme_cr(d->theme->bg_primary));
@@ -1048,6 +1054,24 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         }
 
         /* ==== AI_BEHAVIOUR ==== */
+        {
+            char buf[16];
+            int lines = nd->cfg->settings.ai_max_context_lines;
+            if (lines < 1) lines = AI_CONTEXT_LINES_DEFAULT;
+            (void)snprintf(buf, sizeof(buf), "%d", lines);
+            HWND lbl = make_label2(nd->hPage, "Max Terminal Lines:");
+            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_CONTEXT_LINES, ES_NUMBER);
+            add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 100, 0, 1, 0, 1, 0);
+        }
+        {
+            nd->hCtxHint = make_static2(nd->hPage,
+                "Each line becomes part of the context sent with every "
+                "message. A larger window gives the assistant more of your "
+                "session to reason about, at a proportionate cost in tokens. "
+                "The maximum is 50,000 lines.");
+            add_ctrl(nd, NULL, nd->hCtxHint, NULL, SETTINGS_PAGE_AI_BEHAVIOUR,
+                     0, 0, 4, 0, 1, 1);
+        }
         {
             HWND lbl = make_label2(nd->hPage, "System Instructions:");
             HWND ed = CreateWindow("EDIT", nd->cfg->settings.ai_system_notes,
@@ -1570,6 +1594,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             /* AI system-wide instructions */
             GetDlgItemText(d->hPage, IDC_AI_SYSTEM_NOTES,
                            s->ai_system_notes, (int)sizeof(s->ai_system_notes));
+
+            /* AI max context lines */
+            v = GetDlgItemInt(d->hPage, IDC_AI_CONTEXT_LINES, &ok, FALSE);
+            if (ok) s->ai_max_context_lines = ai_context_clamp_lines((int)v);
+            /* on parse failure: retain previous value */
 
             /* AI search provider from combo */
             {
