@@ -20,7 +20,9 @@
 int ai_context_clamp_lines(int lines);
 
 /* Bytes to allocate to hold `lines` rows of `cols` columns (plus newlines and
- * a NUL terminator), clamped to AI_CONTEXT_BYTES_MAX. Never returns 0. */
+ * a NUL terminator), clamped to AI_CONTEXT_BYTES_MAX. Never returns 0.
+ * Sizes at 4 bytes/cell (worst-case UTF-8 encoding of a single codepoint)
+ * so box-drawing/accented terminal output isn't truncated. */
 size_t ai_context_buf_size(int lines, int cols);
 
 typedef enum {
@@ -66,6 +68,13 @@ void ai_conv_reset(AiConversation *conv);
 
 /* Add a message. Returns 0 on success, -1 if full. */
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
+
+/* Replace the content of the system message (messages[0]) in place, without
+ * truncating to AI_MSG_MAX — used to refresh the system prompt with fresh
+ * terminal context on every turn. Requires conv to be non-NULL, non-empty,
+ * and messages[0].role == AI_ROLE_SYSTEM; content must be non-NULL.
+ * Returns 0 on success, -1 on invalid arguments or allocation failure. */
+int ai_conv_set_system(AiConversation *conv, const char *content);
 
 /* Build the system prompt with terminal context embedded.
  * terminal_text, session_notes, system_notes may be NULL. */

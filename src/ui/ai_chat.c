@@ -1333,8 +1333,7 @@ static void send_user_message(AiChatData *d)
             (void)len;
         }
         /* Replace the first (system) message */
-        snprintf(d->conv.messages[0].content,
-                 sizeof(d->conv.messages[0].content), "%s", sys_prompt);
+        ai_conv_set_system(&d->conv, sys_prompt);
     }
 
     ai_conv_add(&d->conv, AI_ROLE_USER, input);
@@ -1405,8 +1404,7 @@ static void send_continue_message(AiChatData *d)
         size_t sys_prompt_cap = d->ctx_prompt_cap;
         ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
                                d->session_notes, d->system_notes);
-        snprintf(d->conv.messages[0].content,
-                 sizeof(d->conv.messages[0].content), "%s", sys_prompt);
+        ai_conv_set_system(&d->conv, sys_prompt);
     }
 
     ai_conv_add(&d->conv, AI_ROLE_USER,

@@ -784,6 +784,7 @@ int test_ai_conv_compact_null(void);
 int test_ai_conv_compact_preserves_system(void);
 int test_ai_conv_compact_boundary(void);
 int test_ai_conv_compact_system_only(void);
+int test_ai_conv_compact_frees_removed(void);
 int test_ai_system_prompt_with_notes(void);
 int test_ai_system_prompt_notes_null(void);
 int test_ai_context_clamp_lines_negative(void);
@@ -798,6 +799,12 @@ int test_ai_context_buf_size_monotonic(void);
 int test_ai_context_buf_size_ceiling(void);
 int test_ai_context_buf_size_never_zero(void);
 int test_ai_context_buf_size_no_overflow(void);
+int test_ai_context_buf_size_utf8_worst_case(void);
+int test_ai_conv_add_preserves_large_content(void);
+int test_ai_conv_set_system_preserves_tail(void);
+int test_ai_conv_set_system_shrink_clears_overflow(void);
+int test_ai_conv_set_system_rejects_invalid(void);
+int test_ai_build_body_large_system_prompt(void);
 int test_cmd_progress_single(void);
 int test_cmd_progress_multi(void);
 int test_cmd_progress_last(void);
@@ -903,6 +910,10 @@ int test_extract_last_n_basic(void);
 int test_extract_last_n_with_scrollback(void);
 int test_extract_last_n_exceeds_total(void);
 int test_extract_last_n_zero(void);
+int test_extract_last_n_ignores_trailing_blank_rows(void);
+int test_extract_last_n_all_blank(void);
+int test_extract_last_n_utf8_fits_context_buffer(void);
+int test_extract_buf_too_small_keeps_newest(void);
 
 /* test_scroll_region.c */
 int test_sr_init_defaults(void);
@@ -2319,6 +2330,7 @@ int main(void) {
     failed += test_ai_conv_compact_preserves_system();
     failed += test_ai_conv_compact_boundary();
     failed += test_ai_conv_compact_system_only();
+    failed += test_ai_conv_compact_frees_removed();
     failed += test_ai_system_prompt_with_notes();
     failed += test_ai_system_prompt_notes_null();
     failed += test_ai_context_clamp_lines_negative();
@@ -2333,6 +2345,12 @@ int main(void) {
     failed += test_ai_context_buf_size_ceiling();
     failed += test_ai_context_buf_size_never_zero();
     failed += test_ai_context_buf_size_no_overflow();
+    failed += test_ai_context_buf_size_utf8_worst_case();
+    failed += test_ai_conv_add_preserves_large_content();
+    failed += test_ai_conv_set_system_preserves_tail();
+    failed += test_ai_conv_set_system_shrink_clears_overflow();
+    failed += test_ai_conv_set_system_rejects_invalid();
+    failed += test_ai_build_body_large_system_prompt();
     failed += test_cmd_progress_single();
     failed += test_cmd_progress_multi();
     failed += test_cmd_progress_last();
@@ -2451,6 +2469,10 @@ int main(void) {
     failed += test_extract_last_n_with_scrollback();
     failed += test_extract_last_n_exceeds_total();
     failed += test_extract_last_n_zero();
+    failed += test_extract_last_n_ignores_trailing_blank_rows();
+    failed += test_extract_last_n_all_blank();
+    failed += test_extract_last_n_utf8_fits_context_buffer();
+    failed += test_extract_buf_too_small_keeps_newest();
 
     printf("\n--- AI Chat Indicator ---\n");
     failed += test_indicator_removal_with_newlines();

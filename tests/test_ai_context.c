@@ -220,6 +220,59 @@ int test_ai_conv_compact_system_only(void) {
     TEST_END();
 }
 
+int test_ai_conv_compact_frees_removed(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+
+    /* USER messages are large enough to force content_overflow. */
+    size_t ulen = 2 * AI_MSG_MAX;
+    char *big = (char *)malloc(ulen + 1);
+    ASSERT_NOT_NULL(big);
+
+    for (int i = 0; i < 10; i++) {
+        memset(big, 'u', ulen);
+        big[ulen] = '\0';
+        char marker[32];
+        snprintf(marker, sizeof(marker), "USER-TAIL-%d", i);
+        memcpy(big + ulen - strlen(marker), marker, strlen(marker));
+        ai_conv_add(&conv, AI_ROLE_USER, big);
+
+        char abuf[16];
+        snprintf(abuf, sizeof(abuf), "asst_%d", i);
+        ai_conv_add(&conv, AI_ROLE_ASSISTANT, abuf);
+    }
+    free(big);
+    ASSERT_EQ(conv.msg_count, 21); /* 1 system + 10 pairs */
+
+    int old_msg_count = conv.msg_count;
+    int removed = ai_conv_compact(&conv, 3);
+    ASSERT_EQ(removed, 14);
+    ASSERT_EQ(conv.msg_count, 7);
+
+    /* System message untouched */
+    ASSERT_EQ((int)conv.messages[0].role, (int)AI_ROLE_SYSTEM);
+    ASSERT_STR_EQ(ai_msg_content(&conv.messages[0]), "sys");
+
+    /* Remaining messages are the last 3 pairs: user7,asst7,...,user9,asst9 */
+    ASSERT_TRUE(strstr(ai_msg_content(&conv.messages[1]), "USER-TAIL-7") != NULL);
+    ASSERT_STR_EQ(ai_msg_content(&conv.messages[2]), "asst_7");
+    ASSERT_TRUE(strstr(ai_msg_content(&conv.messages[3]), "USER-TAIL-8") != NULL);
+    ASSERT_STR_EQ(ai_msg_content(&conv.messages[4]), "asst_8");
+    ASSERT_TRUE(strstr(ai_msg_content(&conv.messages[5]), "USER-TAIL-9") != NULL);
+    ASSERT_EQ((int)strlen(ai_msg_content(&conv.messages[5])), (int)ulen);
+    ASSERT_STR_EQ(ai_msg_content(&conv.messages[6]), "asst_9");
+
+    /* Slots vacated by compaction must not hold stale/dangling pointers */
+    for (int i = conv.msg_count; i < old_msg_count; i++) {
+        ASSERT_NULL(conv.messages[i].content_overflow);
+    }
+
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
 /* --- ai_build_system_prompt with notes tests --- */
 
 int test_ai_system_prompt_with_notes(void) {
@@ -305,17 +358,17 @@ int test_ai_context_clamp_lines_above_max(void) {
 
 int test_ai_context_buf_size_typical(void) {
     TEST_BEGIN();
-    /* 1000 lines * (80 + 1) + 1 = 81001 */
-    ASSERT_EQ(ai_context_buf_size(1000, 80), (size_t)81001);
+    /* 1000 lines * (80*4 + 1) + 1 = 321001 — 4 bytes/cell worst-case UTF-8 */
+    ASSERT_EQ(ai_context_buf_size(1000, 80), (size_t)321001);
     TEST_END();
 }
 
 int test_ai_context_buf_size_cols_floor(void) {
     TEST_BEGIN();
     /* cols <= 0 should use the 80-column floor */
-    ASSERT_EQ(ai_context_buf_size(1000, 0), (size_t)81001);
-    ASSERT_EQ(ai_context_buf_size(1000, -1), (size_t)81001);
-    ASSERT_EQ(ai_context_buf_size(1000, -500), (size_t)81001);
+    ASSERT_EQ(ai_context_buf_size(1000, 0), (size_t)321001);
+    ASSERT_EQ(ai_context_buf_size(1000, -1), (size_t)321001);
+    ASSERT_EQ(ai_context_buf_size(1000, -500), (size_t)321001);
     TEST_END();
 }
 
@@ -358,5 +411,146 @@ int test_ai_context_buf_size_no_overflow(void) {
     size_t sz = ai_context_buf_size(INT_MAX, INT_MAX);
     ASSERT_TRUE(sz <= AI_CONTEXT_BYTES_MAX);
     ASSERT_TRUE(sz > 0);
+    TEST_END();
+}
+
+int test_ai_context_buf_size_utf8_worst_case(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(ai_context_buf_size(10, 80) >= (size_t)10 * (80u * 4u + 1u) + 1u);
+    ASSERT_TRUE(ai_context_buf_size(1, 1) >= (size_t)6);
+    ASSERT_EQ(ai_context_buf_size(AI_CONTEXT_LINES_MAX, 1000), AI_CONTEXT_BYTES_MAX);
+    TEST_END();
+}
+
+/* --- ai_conv_add / ai_msg_set_content overflow preservation --- */
+
+int test_ai_conv_add_preserves_large_content(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test-model");
+
+    size_t len = 3 * AI_MSG_MAX;
+    char *s = (char *)malloc(len + 1);
+    ASSERT_NOT_NULL(s);
+    memset(s, 'x', len);
+    s[len] = '\0';
+    const char *marker = "TAIL-MARKER-7";
+    size_t mlen = strlen(marker);
+    memcpy(s + len - mlen, marker, mlen);
+
+    int rc = ai_conv_add(&conv, AI_ROLE_SYSTEM, s);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ((int)strlen(ai_msg_content(&conv.messages[0])), (int)len);
+    ASSERT_TRUE(strstr(ai_msg_content(&conv.messages[0]), marker) != NULL);
+    ASSERT_EQ((int)conv.messages[0].content_len, (int)len);
+
+    free(s);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* --- ai_conv_set_system --- */
+
+int test_ai_conv_set_system_preserves_tail(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test-model");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "old");
+    ai_conv_add(&conv, AI_ROLE_USER, "hi");
+
+    size_t len = 3 * AI_MSG_MAX;
+    char *s = (char *)malloc(len + 1);
+    ASSERT_NOT_NULL(s);
+    memset(s, 'y', len);
+    s[len] = '\0';
+    const char *marker = "TAIL-MARKER-8";
+    size_t mlen = strlen(marker);
+    memcpy(s + len - mlen, marker, mlen);
+
+    int rc = ai_conv_set_system(&conv, s);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(conv.msg_count, 2);
+    ASSERT_EQ((int)conv.messages[0].role, (int)AI_ROLE_SYSTEM);
+    ASSERT_TRUE(strstr(ai_msg_content(&conv.messages[0]), marker) != NULL);
+    ASSERT_EQ((int)strlen(ai_msg_content(&conv.messages[0])), (int)len);
+    ASSERT_STR_EQ(ai_msg_content(&conv.messages[1]), "hi");
+
+    free(s);
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_conv_set_system_shrink_clears_overflow(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test-model");
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "old");
+
+    size_t len = 3 * AI_MSG_MAX;
+    char *s = (char *)malloc(len + 1);
+    ASSERT_NOT_NULL(s);
+    memset(s, 'z', len);
+    s[len] = '\0';
+    ai_conv_set_system(&conv, s);
+    free(s);
+
+    int rc = ai_conv_set_system(&conv, "small");
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(ai_msg_content(&conv.messages[0]), "small");
+    ASSERT_NULL(conv.messages[0].content_overflow);
+    ASSERT_EQ((int)conv.messages[0].content_len, 5);
+
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+int test_ai_conv_set_system_rejects_invalid(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_conv_set_system(NULL, "x"), -1);
+
+    AiConversation conv;
+    ai_conv_init(&conv, "test-model");
+    ASSERT_EQ(ai_conv_set_system(&conv, "x"), -1); /* empty conversation */
+
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, "sys");
+    ASSERT_EQ(ai_conv_set_system(&conv, NULL), -1);
+
+    ai_conv_reset(&conv);
+    ai_conv_add(&conv, AI_ROLE_USER, "not-system");
+    ASSERT_EQ(ai_conv_set_system(&conv, "x"), -1);
+    ASSERT_STR_EQ(ai_msg_content(&conv.messages[0]), "not-system");
+
+    ai_conv_reset(&conv);
+    TEST_END();
+}
+
+/* --- ai_build_request_body_ex with large system prompt --- */
+
+int test_ai_build_body_large_system_prompt(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "claude-sonnet-4-6");
+
+    size_t len = 3 * AI_MSG_MAX;
+    char *s = (char *)malloc(len + 1);
+    ASSERT_NOT_NULL(s);
+    memset(s, 'w', len);
+    s[len] = '\0';
+    const char *marker = "TAIL-MARKER-9";
+    size_t mlen = strlen(marker);
+    memcpy(s + len - mlen, marker, mlen);
+
+    ai_conv_add(&conv, AI_ROLE_SYSTEM, s);
+    ai_conv_add(&conv, AI_ROLE_USER, "hello");
+    free(s);
+
+    char *buf = (char *)malloc(AI_BODY_MAX);
+    ASSERT_NOT_NULL(buf);
+    size_t n = ai_build_request_body_ex(&conv, NULL, buf, AI_BODY_MAX, 1, "anthropic");
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "TAIL-MARKER-9") != NULL);
+
+    free(buf);
+    ai_conv_reset(&conv);
     TEST_END();
 }

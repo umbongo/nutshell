@@ -21,7 +21,8 @@ size_t ai_context_buf_size(int lines, int cols)
     int use_cols = (cols < 1) ? 80 : cols;
 
     size_t l = (size_t)clamped_lines;
-    size_t line_width = (size_t)use_cols + 1u; /* +1 for the newline */
+    /* 4 bytes/cell worst-case UTF-8 encoding, +1 for the newline */
+    size_t line_width = (size_t)use_cols * 4u + 1u;
 
     /* Guard against overflow before multiplying: l * line_width + 1 */
     if (l > (SIZE_MAX - 1u) / line_width) {
@@ -132,9 +133,8 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
 
     AiMessage *m = &conv->messages[conv->msg_count];
     m->role = role;
-    snprintf(m->content, sizeof(m->content), "%s", content);
     m->content_overflow = NULL;
-    m->content_len = strlen(m->content);
+    if (ai_msg_set_content(m, content, strlen(content)) != 0) return -1;
     m->attachment = NULL;
     m->tool_call_id[0] = '\0';
     m->tool_name[0] = '\0';
@@ -143,6 +143,13 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->n_tool_calls = 0;
     conv->msg_count++;
     return 0;
+}
+
+int ai_conv_set_system(AiConversation *conv, const char *content)
+{
+    if (!conv || conv->msg_count <= 0 || !content) return -1;
+    if (conv->messages[0].role != AI_ROLE_SYSTEM) return -1;
+    return ai_msg_set_content(&conv->messages[0], content, strlen(content));
 }
 
 void ai_build_system_prompt(char *buf, size_t buf_size,
@@ -401,10 +408,24 @@ int ai_conv_compact(AiConversation *conv, int keep_recent)
     int remove_count = remove_end - remove_start;
     if (remove_count <= 0) return 0;
 
+    int old_msg_count = conv->msg_count;
+
+    /* Free heap resources (content_overflow, attachment, tool_calls) owned
+     * by the messages being dropped, before their slots are overwritten. */
+    for (int i = remove_start; i < remove_end; i++)
+        ai_msg_free(&conv->messages[i]);
+
     memmove(&conv->messages[remove_start],
             &conv->messages[remove_end],
             (size_t)(conv->msg_count - remove_end) * sizeof(AiMessage));
     conv->msg_count -= remove_count;
+
+    /* The tail slots now hold stale duplicates of pointers that were just
+     * relocated (or already-freed pointers from the loop above) — clear
+     * them so nothing dangling is left behind. */
+    memset(&conv->messages[conv->msg_count], 0,
+           (size_t)(old_msg_count - conv->msg_count) * sizeof(AiMessage));
+
     return remove_count;
 }
 

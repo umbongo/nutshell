@@ -15,6 +15,11 @@ size_t term_extract_visible(const Terminal *term, char *buf, size_t buf_size);
 /*
  * Extract the last N rows (including scrollback) as a UTF-8 string.
  * Useful for providing AI with recent terminal context.
+ * N counts back from the last row that has content; blank rows below the
+ * cursor (e.g. after a `clear`) are ignored rather than counted toward N.
+ * If buf_size is too small to hold every requested row, the OLDEST rows
+ * are dropped first so the most recent terminal output is preserved
+ * (only when even the single newest row doesn't fit is it truncated).
  * Returns the number of bytes written (excluding NUL terminator).
  */
 size_t term_extract_last_n(const Terminal *term, int n, char *buf, size_t buf_size);
