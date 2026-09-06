@@ -241,6 +241,77 @@ Invoke-AiCase "ai_write_command_blocked_without_permit_write" {
     "write command held back; $file not created"
 }
 
+# ---- UI gallery ----------------------------------------------------------------
+# Contact sheet of every --ui-demo state x theme (Design-System Foundation,
+# spec section 5). Needs no SSH host or key -- --ui-demo never connects -- so
+# this runs as its own block, gated on $Only the same way Invoke-Case is,
+# rather than through it: it must not call Wait-NutshellShell or
+# Start-NutshellLogging, both of which assume a live shell prompt.
+
+function Test-NutshellCaptureNonBlank {
+    <# A handful of sampled pixels must not all be identical -- proof the
+       window actually painted, not just that PrintWindow returned bits. #>
+    param([Parameter(Mandatory)] [string] $Path)
+    $bmp = New-Object System.Drawing.Bitmap $Path
+    try {
+        $w = $bmp.Width; $h = $bmp.Height
+        if ($w -le 0 -or $h -le 0) { return $false }
+        $xs = @(2, [int]($w / 4), [int]($w / 2), [int](3 * $w / 4), ($w - 3)) |
+            Where-Object { $_ -ge 0 -and $_ -lt $w } | Select-Object -Unique
+        $ys = @(2, [int]($h / 4), [int]($h / 2), [int](3 * $h / 4), ($h - 3)) |
+            Where-Object { $_ -ge 0 -and $_ -lt $h } | Select-Object -Unique
+        $colors = New-Object System.Collections.Generic.HashSet[int]
+        foreach ($x in $xs) { foreach ($y in $ys) { [void]$colors.Add($bmp.GetPixel($x, $y).ToArgb()) } }
+        return $colors.Count -gt 1
+    } finally {
+        $bmp.Dispose()
+    }
+}
+
+function ConvertTo-NutshellFileToken {
+    <# Sanitise a display name for use in a filename: spaces -> '-', '&' -> 'and'. #>
+    param([Parameter(Mandatory)] [string] $Text)
+    return ($Text -replace '\s+', '-') -replace '&', 'and'
+}
+
+if ($Only.Count -eq 0 -or $Only -contains "ui_gallery") {
+    Write-Host ("[RUN ] ui_gallery")
+    $galleryDir = Join-Path $Artifacts "gallery"
+    New-Item -ItemType Directory -Force $galleryDir | Out-Null
+    $galleryStates = @("chat", "approval", "executing", "tool", "error", "empty", "all")
+    $galleryThemes = @("Onyx Synapse", "Onyx Light", "Sage & Sand", "Moss & Mist")
+    $galleryOk = $true
+    $galleryDetail = New-Object System.Collections.ArrayList
+    foreach ($theme in $galleryThemes) {
+        foreach ($state in $galleryStates) {
+            $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+            $session = $null
+            try {
+                $session = Start-Nutshell -Env $testEnv -ExtraArgs @("--ui-demo=$state", "--theme", $theme)
+                Set-NutshellWindowSize -Session $session -Width 1400 -Height 900
+                $fileName = "{0}-{1}.png" -f (ConvertTo-NutshellFileToken $theme), $state
+                $path = Join-Path $galleryDir $fileName
+                Save-NutshellScreenshot -Session $session -Path $path | Out-Null
+                if (-not (Test-NutshellCaptureNonBlank -Path $path)) {
+                    throw "capture looks blank: $fileName"
+                }
+            } catch {
+                $galleryOk = $false
+                [void]$galleryDetail.Add("$theme/${state}: " + $_.Exception.Message)
+            } finally {
+                if ($session) { Stop-Nutshell -Session $session }
+                for ($try = 0; $try -lt 5 -and (Test-Path $testEnv.Root); $try++) {
+                    Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+                    if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
+                }
+            }
+        }
+    }
+    $galleryReport = $galleryDetail -join "; "
+    if ($galleryOk) { Write-Host "[PASS] ui_gallery" } else { Write-Host ("[FAIL] ui_gallery -- " + $galleryReport) }
+    [void]$results.Add([pscustomobject]@{ Name = "ui_gallery"; Passed = $galleryOk; Detail = $galleryReport })
+}
+
 # ---- Summary ------------------------------------------------------------------
 
 $passed = @($results | Where-Object { $_.Passed }).Count

@@ -6,6 +6,7 @@
 #include "term.h"
 #include "ssh_channel.h"
 #include "ai_prompt.h"
+#include "chat_approval.h"
 
 /* Initialize the AI assist window class. Call once at startup. */
 void ai_chat_init(HINSTANCE hInstance);
@@ -84,6 +85,21 @@ void ai_chat_set_auto_approve_all(HWND hwnd, int enabled);
 
 /* Set how many terminal lines are sent to the AI as context (1-50000). */
 void ai_chat_set_context_lines(HWND hwnd, int lines);
+
+/* --ui-demo only: layer the canned approval queue and small activity
+ * flourishes onto a conversation already loaded via ai_chat_show()'s
+ * initial_state or ai_chat_switch_session() (see ui_demo_build() in
+ * src/core/ui_demo.h, which builds the conversation/approval queue this
+ * expects).
+ * state: the requested demo state name ("chat", "approval", "executing",
+ *   "tool", "error", "empty", "all") -- drives the two flourishes plain
+ *   AiConversation/ApprovalQueue data can't express on their own: the
+ *   executing command's activity dot, and the HTTP-error [Retry] link.
+ * approval: entries to render as command cards (copied); NULL/empty is
+ *   fine for states with no commands.
+ * No-op if hwnd isn't a live, open AI chat window. */
+void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
+                               const ApprovalQueue *approval);
 
 /* Close and destroy the AI assist window. */
 void ai_chat_close(HWND hwnd);

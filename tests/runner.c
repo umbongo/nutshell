@@ -175,6 +175,15 @@ int test_cli_trailing_junk(void);
 int test_cli_value_resembling_flag(void);
 int test_cli_overlong_value(void);
 int test_cli_usage_text_mentions_all_flags(void);
+int test_cli_ui_demo_bare_defaults_to_all(void);
+int test_cli_ui_demo_with_state(void);
+int test_cli_ui_demo_unknown_state_is_error(void);
+int test_cli_theme_with_ui_demo(void);
+int test_cli_theme_before_ui_demo_still_applies(void);
+int test_cli_theme_alone_is_error(void);
+int test_cli_theme_with_other_action_is_error(void);
+int test_cli_theme_missing_value_is_error(void);
+int test_cli_usage_text_omits_hidden_flags(void);
 
 /* profile lookup (test_config.c) */
 int test_find_profile_by_name_exact(void);
@@ -1808,6 +1817,22 @@ int test_ns_anim_list_step_removes_finished_keeps_active(void);
 int test_ns_anim_list_step_reduced_motion_finishes_immediately(void);
 int test_ns_anim_progress_tick_wraparound_near_ulong_max(void);
 
+/* test_ui_demo.c */
+int test_ui_demo_states_lists_seven_ending_in_all(void);
+int test_ui_demo_state_valid_accepts_every_listed_state(void);
+int test_ui_demo_state_valid_rejects_unknown_and_null(void);
+int test_ui_demo_build_unknown_state_returns_error(void);
+int test_ui_demo_build_null_outputs_safe(void);
+int test_ui_demo_build_chat_counts(void);
+int test_ui_demo_build_approval_counts_and_statuses(void);
+int test_ui_demo_build_executing_counts_and_statuses(void);
+int test_ui_demo_build_tool_counts(void);
+int test_ui_demo_build_error_counts(void);
+int test_ui_demo_build_empty_counts(void);
+int test_ui_demo_build_all_is_union(void);
+int test_ui_demo_term_text_ends_with_prompt(void);
+int test_ui_demo_thinking_text_non_empty(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -1992,6 +2017,15 @@ int main(void) {
     failed += test_cli_value_resembling_flag();
     failed += test_cli_overlong_value();
     failed += test_cli_usage_text_mentions_all_flags();
+    failed += test_cli_ui_demo_bare_defaults_to_all();
+    failed += test_cli_ui_demo_with_state();
+    failed += test_cli_ui_demo_unknown_state_is_error();
+    failed += test_cli_theme_with_ui_demo();
+    failed += test_cli_theme_before_ui_demo_still_applies();
+    failed += test_cli_theme_alone_is_error();
+    failed += test_cli_theme_with_other_action_is_error();
+    failed += test_cli_theme_missing_value_is_error();
+    failed += test_cli_usage_text_omits_hidden_flags();
 
     printf("\n--- Profile lookup ---\n");
     failed += test_find_profile_by_name_exact();
@@ -3647,6 +3681,22 @@ int main(void) {
     failed += test_ns_anim_list_step_removes_finished_keeps_active();
     failed += test_ns_anim_list_step_reduced_motion_finishes_immediately();
     failed += test_ns_anim_progress_tick_wraparound_near_ulong_max();
+
+    printf("\n--- Design System: demo ---\n");
+    failed += test_ui_demo_states_lists_seven_ending_in_all();
+    failed += test_ui_demo_state_valid_accepts_every_listed_state();
+    failed += test_ui_demo_state_valid_rejects_unknown_and_null();
+    failed += test_ui_demo_build_unknown_state_returns_error();
+    failed += test_ui_demo_build_null_outputs_safe();
+    failed += test_ui_demo_build_chat_counts();
+    failed += test_ui_demo_build_approval_counts_and_statuses();
+    failed += test_ui_demo_build_executing_counts_and_statuses();
+    failed += test_ui_demo_build_tool_counts();
+    failed += test_ui_demo_build_error_counts();
+    failed += test_ui_demo_build_empty_counts();
+    failed += test_ui_demo_build_all_is_union();
+    failed += test_ui_demo_term_text_ends_with_prompt();
+    failed += test_ui_demo_thinking_text_non_empty();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

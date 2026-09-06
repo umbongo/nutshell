@@ -32,6 +32,7 @@
 #include "chat_activity.h"
 #include "chat_approval.h"
 #include "chat_listview.h"
+#include "ui_demo.h"
 #include "icons.h"
 #include "dpi_util.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
@@ -893,13 +894,40 @@ static void chat_rebuild_display(AiChatData *d)
         if (msg->role == AI_ROLE_USER) {
             chat_msg_append(&d->msg_list, CHAT_ITEM_USER, msg->content);
         } else if (msg->role == AI_ROLE_ASSISTANT) {
-            ChatMsgItem *item = chat_msg_append(&d->msg_list,
-                                                 CHAT_ITEM_AI_TEXT,
-                                                 msg->content);
-            if (item && d->thinking_history[i] &&
-                d->thinking_history[i][0]) {
-                chat_msg_set_thinking(item, d->thinking_history[i]);
-                item->u.ai.thinking_complete = 1;
+            /* Tool-use blocks first, matching the live "using tool: <name>"
+             * status row posted while the call is in flight. */
+            if (msg->n_tool_calls > 0 && msg->tool_calls) {
+                for (int ti = 0; ti < msg->n_tool_calls; ti++) {
+                    char tool_call_text[128];
+                    snprintf(tool_call_text, sizeof(tool_call_text),
+                             "using tool: %s", msg->tool_calls[ti].name);
+                    chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_CALL,
+                                    tool_call_text);
+                }
+            }
+            const char *content = ai_msg_content(msg);
+            if (content && content[0] != '\0') {
+                ChatMsgItem *item = chat_msg_append(&d->msg_list,
+                                                     CHAT_ITEM_AI_TEXT,
+                                                     content);
+                if (item && d->thinking_history[i] &&
+                    d->thinking_history[i][0]) {
+                    chat_msg_set_thinking(item, d->thinking_history[i]);
+                    item->u.ai.thinking_complete = 1;
+                }
+            }
+        } else if (msg->role == AI_ROLE_TOOL) {
+            const char *content = ai_msg_content(msg);
+            size_t clen = content ? strlen(content) : 0;
+            char preview[256];
+            size_t plen = clen < 200 ? clen : 200;
+            memcpy(preview, content ? content : "", plen);
+            preview[plen] = '\0';
+            chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_RESULT, preview);
+            if (clen > 200) {
+                char warn[256];
+                agentic_truncation_warning(msg->tool_name, warn, sizeof(warn));
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, warn);
             }
         }
         /* Skip system messages injected mid-conversation */
@@ -4046,6 +4074,95 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
 
     if (d->active_state == state)
         d->active_state = NULL;
+}
+
+void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
+                               const ApprovalQueue *approval)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+
+    /* Attach the canned "thinking" block to the "chat" state's reply
+     * (index 2: system, user, assistant; "all" builds chat's turns first,
+     * so the index lines up there too) -- thinking text lives outside
+     * AiConversation, so ui_demo_build() can't set it and a plain rebuild
+     * from d->conv alone would leave it off. Every other state also has an
+     * assistant message at index 2, but with unrelated content, so this
+     * must not fire for those or the thinking block would show up on the
+     * wrong reply. */
+    if (state && (strcmp(state, "chat") == 0 || strcmp(state, "all") == 0) &&
+        d->conv.msg_count > 2 &&
+        d->conv.messages[2].role == AI_ROLE_ASSISTANT) {
+        free(d->thinking_history[2]);
+        d->thinking_history[2] = _strdup(ui_demo_thinking_text());
+    }
+
+    if (approval)
+        d->approval_q = *approval;
+    else
+        chat_approval_init(&d->approval_q);
+
+    /* Rebuilds msg_list from d->conv (now including the thinking block
+     * just attached, plus any tool_call/tool_result items). Deliberately
+     * does NOT touch approval_q -- a live session switch must never
+     * resurrect a stale batch from a different session, so that replay is
+     * done here instead, demo-only. */
+    chat_rebuild_display(d);
+
+    int any_active = 0;
+    int any_executing = 0;
+    for (int i = 0; i < d->approval_q.count; i++) {
+        const ApprovalEntry *e = &d->approval_q.entries[i];
+        ChatMsgItem *item = chat_msg_append(&d->msg_list, CHAT_ITEM_COMMAND, "");
+        if (!item) continue;
+        chat_msg_set_command(item, e->command, e->safety,
+                             e->status == APPROVE_BLOCKED);
+        switch (e->status) {
+        case APPROVE_APPROVED:
+        case APPROVE_EXECUTING:
+        case APPROVE_COMPLETED:
+            item->u.cmd.approved = 1;
+            item->u.cmd.settled = 1;
+            if (e->status == APPROVE_EXECUTING) any_executing = 1;
+            break;
+        case APPROVE_DENIED:
+            item->u.cmd.approved = 0;
+            item->u.cmd.settled = 1;
+            break;
+        case APPROVE_PENDING:
+        case APPROVE_BLOCKED:
+        default:
+            any_active = 1; /* stays unsettled -- part of the active card */
+            break;
+        }
+    }
+    d->pending_approval = any_active;
+
+    float now = (float)GetTickCount() / 1000.0f;
+    if (any_executing) {
+        chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now);
+        chat_activity_set_exec(&d->activity, 1, 1);
+    }
+
+    /* "error"/"all": a plain AiConversation can show the two user turns
+     * that led nowhere, but not *why* -- the HTTP-error [Retry] link and
+     * "cancelled" note come from ActivityState, so add them here. */
+    if (state && (strcmp(state, "error") == 0 || strcmp(state, "all") == 0)) {
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+            "Error: HTTP 503 Service Unavailable -- the AI provider could "
+            "not complete the request.");
+        chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now);
+        chat_activity_connection_lost(&d->activity);
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                        "Stream cancelled by user.");
+    }
+
+    relayout(d);
+    if (d->hChatList) {
+        chat_listview_invalidate(d->hChatList);
+        chat_listview_scroll_to_bottom(d->hChatList);
+    }
 }
 
 void ai_chat_close(HWND hwnd)

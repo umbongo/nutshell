@@ -174,7 +174,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             break;  /* CLI_RUN / CLI_RUN_NO_CONNECT / connect actions */
     }
 
-    ui_set_startup_action(opts.action, opts.arg);
+    ui_set_startup_action(opts.action, opts.arg, opts.demo_state, opts.theme);
 
     /* I-2: initialise WSA once for the process lifetime */
     WSADATA wsadata;

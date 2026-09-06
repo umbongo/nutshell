@@ -185,6 +185,105 @@ int test_cli_overlong_value(void)
     TEST_END();
 }
 
+/* ---- --ui-demo / --theme (hidden screenshot harness) ---- */
+
+int test_cli_ui_demo_bare_defaults_to_all(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--ui-demo" };
+    CliOptions o;
+    cli_parse(2, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_UI_DEMO);
+    ASSERT_STR_EQ(o.demo_state, "all");
+    TEST_END();
+}
+
+int test_cli_ui_demo_with_state(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--ui-demo=approval" };
+    CliOptions o;
+    cli_parse(2, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_UI_DEMO);
+    ASSERT_STR_EQ(o.demo_state, "approval");
+    TEST_END();
+}
+
+int test_cli_ui_demo_unknown_state_is_error(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--ui-demo=bogus" };
+    CliOptions o;
+    cli_parse(2, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    ASSERT_NOT_NULL(strstr(o.error, "bogus"));
+    TEST_END();
+}
+
+int test_cli_theme_with_ui_demo(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--ui-demo", "--theme", "Onyx Light" };
+    CliOptions o;
+    cli_parse(4, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_UI_DEMO);
+    ASSERT_STR_EQ(o.demo_state, "all");
+    ASSERT_STR_EQ(o.theme, "Onyx Light");
+    TEST_END();
+}
+
+int test_cli_theme_before_ui_demo_still_applies(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--theme", "Onyx Light", "--ui-demo=chat" };
+    CliOptions o;
+    cli_parse(4, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_UI_DEMO);
+    ASSERT_STR_EQ(o.demo_state, "chat");
+    ASSERT_STR_EQ(o.theme, "Onyx Light");
+    TEST_END();
+}
+
+int test_cli_theme_alone_is_error(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--theme", "Onyx Light" };
+    CliOptions o;
+    cli_parse(3, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_theme_with_other_action_is_error(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "-v", "--theme", "Onyx Light" };
+    CliOptions o;
+    cli_parse(4, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_theme_missing_value_is_error(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--ui-demo", "--theme" };
+    CliOptions o;
+    cli_parse(3, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    ASSERT_NOT_NULL(strstr(o.error, "--theme"));
+    TEST_END();
+}
+
+int test_cli_usage_text_omits_hidden_flags(void)
+{
+    TEST_BEGIN();
+    const char *u = cli_usage_text();
+    ASSERT_NULL(strstr(u, "--ui-demo"));
+    ASSERT_NULL(strstr(u, "--theme"));
+    TEST_END();
+}
+
 /* ---- usage text ---- */
 
 int test_cli_usage_text_mentions_all_flags(void)

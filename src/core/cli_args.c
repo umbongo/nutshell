@@ -1,4 +1,5 @@
 #include "cli_args.h"
+#include "ui_demo.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -29,6 +30,17 @@ static void set_error(CliOptions *out, const char *prefix, const char *what)
     (void)snprintf(out->error, sizeof(out->error), "%s%s", prefix, what);
 }
 
+/* Matches "--name" (bare) or "--name=<value>". Returns 1 on match and sets
+ * *has_inline_out to whether '=' was present (value starts right after). */
+static int long_flag_match(const char *arg, const char *name, size_t name_len,
+                           int *has_inline_out)
+{
+    if (strncmp(arg, name, name_len) != 0) return 0;
+    if (arg[name_len] == '\0') { *has_inline_out = 0; return 1; }
+    if (arg[name_len] == '=')  { *has_inline_out = 1; return 1; }
+    return 0;
+}
+
 void cli_parse(int argc, char **argv, CliOptions *out)
 {
     memset(out, 0, sizeof(*out));
@@ -39,12 +51,36 @@ void cli_parse(int argc, char **argv, CliOptions *out)
     }
 
     int seen = 0;
+    int theme_seen = 0;
+
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         CliAction act;
         int takes_value = 0;
+        int is_ui_demo = 0;
+        int has_inline = 0;
+        const char *inline_value = NULL;
 
-        if (flag_eq(a, "-sn", "--session-name")) {
+        if (long_flag_match(a, "--ui-demo", 9, &has_inline)) {
+            act = CLI_UI_DEMO;
+            is_ui_demo = 1;
+            if (has_inline) inline_value = a + 10; /* past "--ui-demo=" */
+        } else if (long_flag_match(a, "--theme", 7, &has_inline)) {
+            const char *value;
+            if (has_inline) {
+                value = a + 8; /* past "--theme=" */
+            } else {
+                if (i + 1 >= argc) {
+                    set_error(out, "Missing value for ", a);
+                    return;
+                }
+                i++;
+                value = argv[i];
+            }
+            (void)snprintf(out->theme, sizeof(out->theme), "%s", value);
+            theme_seen = 1;
+            continue; /* --theme is a modifier, not a mutually-exclusive action */
+        } else if (flag_eq(a, "-sn", "--session-name")) {
             act = CLI_CONNECT_NAME;
             takes_value = 1;
         } else if (flag_eq(a, "-h", "--host")) {
@@ -69,7 +105,14 @@ void cli_parse(int argc, char **argv, CliOptions *out)
         }
         seen = 1;
 
-        if (takes_value) {
+        if (is_ui_demo) {
+            const char *state = inline_value ? inline_value : "all";
+            if (!ui_demo_state_valid(state)) {
+                set_error(out, "Unknown demo state: ", state);
+                return;
+            }
+            (void)snprintf(out->demo_state, sizeof(out->demo_state), "%s", state);
+        } else if (takes_value) {
             if (i + 1 >= argc) {
                 set_error(out, "Missing value for ", a);
                 return;
@@ -78,5 +121,10 @@ void cli_parse(int argc, char **argv, CliOptions *out)
             (void)snprintf(out->arg, sizeof(out->arg), "%s", argv[i]);
         }
         out->action = act;
+    }
+
+    if (theme_seen && out->action != CLI_UI_DEMO) {
+        set_error(out, "--theme requires ", "--ui-demo");
+        return;
     }
 }

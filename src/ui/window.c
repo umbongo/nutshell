@@ -26,6 +26,7 @@
 #include "paste_dlg.h"
 #include "ai_chat.h"
 #include "ai_chat_testable.h"
+#include "ui_demo.h"
 #include "selection.h"
 #include "app_font.h"
 #include "ns_font.h"
@@ -108,6 +109,8 @@ static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
 static CliAction g_startup_action = CLI_RUN;
 static char g_startup_arg[256];
+static char g_startup_demo_state[CLI_DEMO_STATE_MAX];
+static char g_startup_theme[CLI_THEME_MAX];
 static HWND g_hwndAiChat = NULL;
 static HFONT g_hMenuFont = NULL;
 static HWND g_hwndScrollbar = NULL;
@@ -897,6 +900,112 @@ static HWND create_ai_chat(HWND parent)
         ai_chat_set_auto_approve_all(hwnd, g_config->settings.ai_auto_approve_all);
     }
     return hwnd;
+}
+
+/* --ui-demo: build a fake "demo" tab with canned terminal output and an AI
+ * panel populated from a fixed script -- no SSH, no network, no API key.
+ * (Design-System Foundation, spec section 5 / plan task 9.) */
+static void create_demo_session(HWND hwnd)
+{
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    int term_w = rc.right - g_left_margin - CSB_WIDTH;
+    int term_h = rc.bottom - g_tab_height;
+    if (term_h < 1) term_h = 1;
+    int cols = 80, rows = 24;
+    if (g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
+        cols = term_w / g_renderer.charWidth;
+        rows = term_h / g_renderer.charHeight;
+    }
+
+    Session *s = create_session(rows, cols);
+    memset(&s->conn_profile, 0, sizeof(s->conn_profile));
+    snprintf(s->conn_profile.name, sizeof(s->conn_profile.name), "demo");
+    /* s->channel / s->ssh are already NULL from create_session -- no
+     * connection exists or ever will for this tab. */
+
+    const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
+    char term_buf[8192];
+    ApprovalQueue demo_approval;
+    if (ui_demo_build(state, &s->ai_state.conv, &demo_approval,
+                      term_buf, sizeof(term_buf)) != 0) {
+        /* Unreachable in practice -- cli_parse already validated the
+         * state -- but never launch with a half-built demo. */
+        state = "all";
+        ui_demo_build(state, &s->ai_state.conv, &demo_approval,
+                      term_buf, sizeof(term_buf));
+    }
+    s->ai_state.valid = 1;
+    term_process(s->term, term_buf, strlen(term_buf));
+
+    int idx = tabs_add(g_hwndTabs, "demo", s);
+    if (idx < 0) {
+        if (g_session_list == s) g_session_list = s->next;
+        free_session(s);
+        return;
+    }
+    tabs_set_active(g_hwndTabs, idx);        /* -> on_tab_select: g_active_session = s */
+    tabs_set_status(g_hwndTabs, idx, TAB_IDLE); /* neutral -- never connects */
+    invalidate_terminal(hwnd);
+
+    /* --theme <name>: apply only if it names a real theme; an unknown
+     * name silently keeps whatever the config already selected. */
+    if (g_startup_theme[0]) {
+        for (int i = 0; i < NUM_UI_THEMES; i++) {
+            if (strcmp(ui_theme_name(i), g_startup_theme) == 0) {
+                g_theme = ui_theme_get(i);
+                ui_theme_resolve(g_theme, &g_tokens);
+                /* create_ai_chat() looks the theme up again from the config
+                 * string (colour_scheme), not from g_theme -- update it too
+                 * so the AI panel matches the terminal instead of staying
+                 * on whatever the config file had. */
+                snprintf(g_config->settings.colour_scheme,
+                        sizeof(g_config->settings.colour_scheme),
+                        "%s", ui_theme_name(i));
+                tabs_set_theme(g_hwndTabs, g_theme);
+                if (g_hwndScrollbar) csb_set_theme(g_hwndScrollbar, g_theme);
+                apply_config_colors();
+                renderer_apply_theme(hwnd, g_renderer.defaultBg);
+                HMENU oldMenu = GetMenu(hwnd);
+                SetMenu(hwnd, create_app_menu());
+                if (oldMenu) DestroyMenu(oldMenu);
+                DrawMenuBar(hwnd);
+                break;
+            }
+        }
+    }
+
+    /* Open the AI panel docked -- bypassing on_ai_clicked()'s "no active
+     * SSH session" and "no AI API key" gates entirely, since demo mode has
+     * neither and needs neither. */
+    if (!g_hwndAiChat) {
+        g_hwndAiChat = create_ai_chat(hwnd);
+    } else {
+        ai_chat_switch_session(g_hwndAiChat, &s->ai_state, s->term, NULL,
+                               NULL, NULL, "demo");
+    }
+    if (g_hwndAiChat) {
+        ai_chat_apply_demo_extras(g_hwndAiChat, state, &demo_approval);
+
+        if (g_ai_docked) {
+            RECT rc2;
+            GetClientRect(hwnd, &rc2);
+            int target = ai_dock_pct_to_px(rc2.right, AI_DOCK_DEFAULT_PCT,
+                                           AI_DOCK_MIN_PCT, AI_DOCK_MAX_PCT);
+            int splitter = AI_DOCK_SPLITTER_W;
+            SetWindowPos(g_hwndAiChat, NULL,
+                rc2.right - target + splitter, g_tab_height,
+                target - splitter, rc2.bottom - g_tab_height, SWP_NOZORDER);
+            g_ai_panel_width = target;
+            g_ai_target_width = target;
+            ShowWindow(g_hwndAiChat, SW_SHOW);
+        } else {
+            ShowWindow(g_hwndAiChat, SW_SHOW);
+        }
+    }
+
+    relayout_main(hwnd);
+    force_full_terminal_repaint(hwnd, s->term);
 }
 
 static void hide_ai_panel(HWND parent) {
@@ -2211,6 +2320,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
 
         case WM_STARTUP_CONNECT: {
+            if (g_startup_action == CLI_UI_DEMO) {
+                create_demo_session(hwnd);
+                return 0;
+            }
             const Profile *pr = NULL;
             const char *wanted = NULL;
             if (g_startup_action == CLI_CONNECT_NAME) {
@@ -3042,11 +3155,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-void ui_set_startup_action(CliAction action, const char *arg)
+void ui_set_startup_action(CliAction action, const char *arg,
+                           const char *demo_state, const char *theme)
 {
     g_startup_action = action;
     (void)snprintf(g_startup_arg, sizeof(g_startup_arg), "%s",
                    arg ? arg : "");
+    (void)snprintf(g_startup_demo_state, sizeof(g_startup_demo_state), "%s",
+                   demo_state ? demo_state : "");
+    (void)snprintf(g_startup_theme, sizeof(g_startup_theme), "%s",
+                   theme ? theme : "");
 }
 
 void ui_init(HINSTANCE instance) {

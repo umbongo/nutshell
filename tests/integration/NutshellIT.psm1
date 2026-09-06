@@ -131,9 +131,21 @@ function New-NutshellTestEnv {
 }
 
 function Start-Nutshell {
-    <# Launch the app connected to the env's profile; returns a session object. #>
-    param([Parameter(Mandatory)] $Env, [int] $TimeoutSec = 15)
-    $p = Start-Process -FilePath $Env.Exe -WorkingDirectory $Env.Root -ArgumentList @("-sn", $Env.ProfileName) -PassThru
+    <#
+    .SYNOPSIS
+        Launch the app; returns a session object once the main window appears.
+    .PARAMETER ExtraArgs
+        When given, launched with these args verbatim instead of
+        "-sn <profile>" -- e.g. @("--ui-demo=chat", "--theme", "Onyx Light")
+        for the ui_gallery case, which needs no SSH profile at all.
+    #>
+    param([Parameter(Mandatory)] $Env, [int] $TimeoutSec = 15, [string[]] $ExtraArgs = @())
+    $rawArgs = if ($ExtraArgs.Count -gt 0) { $ExtraArgs } else { @("-sn", $Env.ProfileName) }
+    # Start-Process's -ArgumentList does not auto-quote array elements containing
+    # spaces (Windows PowerShell 5.1), so an unquoted "Onyx Light" would arrive
+    # as two argv entries and fail CLI parsing. Quote any element that needs it.
+    $argList = $rawArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
+    $p = Start-Process -FilePath $Env.Exe -WorkingDirectory $Env.Root -ArgumentList $argList -PassThru
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $main = [IntPtr]::Zero
     while ((Get-Date) -lt $deadline) {
