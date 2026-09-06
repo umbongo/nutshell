@@ -191,3 +191,39 @@ password / thinking / server glyphs use it. Icon draw calls take token colours.
 - Native: hover transitions — enter, move within (no change), move between
   (both ids reported), leave.
 - `make wintest` green (all 32 glyphs render non-empty at 16/32/48 px).
+
+## 4. Motion tokens — APPROVED 2026-09-07
+
+### Tokens — `src/core/ns_motion.{c,h}`
+
+| Token | ms | Use |
+|---|---|---|
+| `MOTION_FAST` | 120 | hover / pressed colour transitions |
+| `MOTION_BASE` | 200 | panel slides (AI dock), layout shifts, tab status pulse |
+| `MOTION_SLOW` | 320 | long travel (toasts, future) |
+
+One easing, ease-out cubic: `ns_ease(t) = 1 - (1 - t)^3`.
+
+`NsAnim { start_tick; duration; }` with
+`ns_anim_progress(&a, now_tick, reduced_motion) → { double t_eased; int done; }`:
+clamps past the end, reports `done` exactly once, and returns `t = 1` on the
+first tick when `reduced_motion` is set.
+
+### One animation timer per window
+
+Each window that animates keeps a small list of `NsAnim` and one 16 ms
+`WM_TIMER`; it steps every active animation, invalidates what changed, and kills
+the timer when the list is empty. The AI dock slide (currently linear on its own
+timer), the tab status pulse and the chat activity dot move onto it. Paste delay,
+heartbeat and keep-alive timers are not animations and stay separate.
+
+### Reduced motion
+
+`SystemParametersInfo(SPI_GETCLIENTAREAANIMATION)` is read at startup and on
+`WM_SETTINGCHANGE`; when off, every animation snaps to its end state.
+
+### Tests (native)
+
+- `ns_ease`: monotonic on [0,1], exactly 0 at 0 and 1 at 1.
+- `ns_anim_progress`: t increases with time, clamps at 1, `done` fires once, and
+  with `reduced_motion` the first call returns t = 1 and done.
