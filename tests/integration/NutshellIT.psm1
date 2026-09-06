@@ -92,7 +92,9 @@ function New-NutshellTestEnv {
         [string] $ProfileName = "it",
         [hashtable] $Settings = @{}
     )
-    $root = Join-Path $env:TEMP ("nutshell-it-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
+    # Scratch lives under the git-ignored artifacts folder, not %TEMP%, so a run
+    # whose cleanup was interrupted leaves something visible next to its logs.
+    $root = Join-Path $PSScriptRoot ("artifacts\scratch\" + [guid]::NewGuid().ToString("N").Substring(0, 8))
     $logs = Join-Path $root "logs"
     New-Item -ItemType Directory -Force $root | Out-Null
     New-Item -ItemType Directory -Force $logs | Out-Null
@@ -148,6 +150,8 @@ function Stop-Nutshell {
     param([Parameter(Mandatory)] $Session)
     if ($Session.Process -and -not $Session.Process.HasExited) {
         Stop-Process -Id $Session.Process.Id -Force -ErrorAction SilentlyContinue
+        # Wait for the handle on the session log to go away so the scratch dir can be removed.
+        try { $Session.Process.WaitForExit(5000) | Out-Null } catch { }
     }
 }
 

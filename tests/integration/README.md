@@ -29,7 +29,10 @@ OCR and no screen scraping: the log is the oracle. Screenshots are still saved t
 
 Run a subset with `-Only connect_shows_prompt,pty_resizes_with_window`. Exit code is
 non-zero when any case fails. Per-case logs and screenshots are written to
-`tests\integration\artifacts\` (git-ignored).
+`tests\integration\artifacts\` (git-ignored); each case's scratch copy of the exe
+and config lives under `artifacts\scratch\` for the duration of the case and is
+deleted afterwards, so anything left there is from an interrupted run and can be
+removed.
 
 ## Cases
 

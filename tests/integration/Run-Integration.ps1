@@ -46,7 +46,10 @@ function Invoke-Case {
         if ($session -and $session.Log -and (Test-Path $session.Log)) {
             Copy-Item $session.Log (Join-Path $Artifacts "$Name.log") -Force
         }
-        Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+        for ($try = 0; $try -lt 5 -and (Test-Path $testEnv.Root); $try++) {
+            Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+            if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
+        }
     }
     if ($ok) { Write-Host ("[PASS] " + $Name) } else { Write-Host ("[FAIL] " + $Name + " -- " + $detail) }
     [void]$results.Add([pscustomobject]@{ Name = $Name; Passed = $ok; Detail = $detail })
