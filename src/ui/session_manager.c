@@ -4,6 +4,7 @@
 #include <string.h>
 #include "session_manager.h"
 #include "../core/app_font.h"
+#include "ns_font.h"
 #include "../core/ui_theme.h"
 #include "../core/edit_scroll.h"
 #include "themed_button.h"
@@ -256,12 +257,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         /* Apply configured font at UI size to all child controls.
          * Done after theme setup so WM_CTLCOLOR* repaints use correct colors. */
         {
-            int h = -MulDiv(APP_FONT_UI_SIZE, get_window_dpi(hwnd), 72);
-            st->hDlgFont = CreateFont(
-                h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                APP_FONT_UI_FACE);
+            st->hDlgFont = ns_font(FONT_BODY, get_window_dpi(hwnd));
             if (st->hDlgFont) {
                 HWND hChild = NULL;
                 while ((hChild = FindWindowEx(hwnd, hChild, NULL, NULL)) != NULL)
@@ -647,7 +643,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         if (st) {
             KillTimer(hwnd, IDT_AINOTES_SCROLL);
             KillTimer(hwnd, IDT_LIST_SCROLL);
-            if (st->hDlgFont)       DeleteObject(st->hDlgFont);
+            /* st->hDlgFont comes from the ns_font cache — owned there. */
             if (st->hBrBgPrimary)   DeleteObject(st->hBrBgPrimary);
             if (st->hBrBgSecondary) DeleteObject(st->hBrBgSecondary);
         }

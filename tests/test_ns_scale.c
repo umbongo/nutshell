@@ -193,6 +193,23 @@ int test_ns_type_font_slot_nearest_dpi_mapping(void) {
     TEST_END();
 }
 
+/* ---- ns_type: font face id ---- */
+
+int test_ns_type_font_face_id_proportional_is_zero(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ns_type_font_face_id(FONT_CAPTION), 0);
+    ASSERT_EQ(ns_type_font_face_id(FONT_BODY), 0);
+    ASSERT_EQ(ns_type_font_face_id(FONT_TITLE), 0);
+    ASSERT_EQ(ns_type_font_face_id(FONT_HEADING), 0);
+    TEST_END();
+}
+
+int test_ns_type_font_face_id_mono_is_two(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ns_type_font_face_id(FONT_MONO), 2);
+    TEST_END();
+}
+
 /* ---- ns_type: pill ---- */
 
 int test_ns_type_pill(void) {

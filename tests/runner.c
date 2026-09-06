@@ -1116,11 +1116,12 @@ int test_app_font_zoom_up(void);
 int test_app_font_zoom_down(void);
 int test_app_font_zoom_at_min(void);
 int test_app_font_zoom_at_max(void);
-int test_app_font_zoom_from_ui_size_up(void);
-int test_app_font_zoom_from_ui_size_down(void);
-int test_app_font_zoom_ui_full_range_up(void);
+int test_app_font_zoom_from_off_table_size_up(void);
+int test_app_font_zoom_from_off_table_size_down(void);
+int test_app_font_zoom_ui_size_is_in_table(void);
+int test_app_font_zoom_full_range_up(void);
 int test_app_font_zoom_preserves_size_after_roundtrip(void);
-int test_app_font_zoom_ui_full_range_down(void);
+int test_app_font_zoom_full_range_down(void);
 
 /* test_selection.c */
 int test_sel_pixel_to_cell_basic(void);
@@ -1732,6 +1733,8 @@ int test_ns_type_font_role_oob_returns_body(void);
 int test_ns_type_font_slot_unique_and_bounded(void);
 int test_ns_type_font_slot_stable_across_calls(void);
 int test_ns_type_font_slot_nearest_dpi_mapping(void);
+int test_ns_type_font_face_id_proportional_is_zero(void);
+int test_ns_type_font_face_id_mono_is_two(void);
 int test_ns_type_pill(void);
 
 /* test_ui_tokens.c */
@@ -2877,11 +2880,12 @@ int main(void) {
     failed += test_app_font_zoom_down();
     failed += test_app_font_zoom_at_min();
     failed += test_app_font_zoom_at_max();
-    failed += test_app_font_zoom_from_ui_size_up();
-    failed += test_app_font_zoom_from_ui_size_down();
-    failed += test_app_font_zoom_ui_full_range_up();
+    failed += test_app_font_zoom_from_off_table_size_up();
+    failed += test_app_font_zoom_from_off_table_size_down();
+    failed += test_app_font_zoom_ui_size_is_in_table();
+    failed += test_app_font_zoom_full_range_up();
     failed += test_app_font_zoom_preserves_size_after_roundtrip();
-    failed += test_app_font_zoom_ui_full_range_down();
+    failed += test_app_font_zoom_full_range_down();
 
     printf("\n--- Selection ---\n");
     failed += test_sel_pixel_to_cell_basic();
@@ -3517,6 +3521,8 @@ int main(void) {
     failed += test_ns_type_font_slot_unique_and_bounded();
     failed += test_ns_type_font_slot_stable_across_calls();
     failed += test_ns_type_font_slot_nearest_dpi_mapping();
+    failed += test_ns_type_font_face_id_proportional_is_zero();
+    failed += test_ns_type_font_face_id_mono_is_two();
     failed += test_ns_type_pill();
 
     printf("\n--- Design System: tokens ---\n");

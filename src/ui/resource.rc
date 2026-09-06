@@ -37,7 +37,7 @@ BEGIN
     LTEXT           "Auth:",            -1,           198,  72,  35,   8
     COMBOBOX        IDC_COMBO_AUTH,                   237,  70, 281,  40, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
-    LTEXT           "Password:",        -1,           191,  92,  42,   8
+    RTEXT           "Password:",        -1,           181,  92,  52,   8
     EDITTEXT        IDC_EDIT_PASS,                    237,  90, 281,  14, ES_PASSWORD | ES_AUTOHSCROLL
 
     LTEXT           "Key:",             IDC_STATIC_KEY,198, 112,  35,   8

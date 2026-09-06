@@ -90,6 +90,11 @@ enum { NS_DPI_TABLE_COUNT = 8, NS_FACE_COUNT = 4 };
 
 int ns_type_font_slot(NsFontRole role, int dpi, int face_id);
 
+/* The face_id src/ui/ns_font.c uses for a role: 2 (the configured mono face)
+ * for FONT_MONO, 0 (the proportional face) for every other role. Pure
+ * mapping so it is native-testable; ns_font.c is the only caller. */
+int ns_type_font_face_id(NsFontRole role);
+
 /* Pill radius for an element of the given (already-scaled) height. */
 int ns_type_pill(int height);
 

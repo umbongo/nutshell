@@ -13,6 +13,7 @@
 #include "ai_agentic.h"
 #include "ai_http.h"
 #include "app_font.h"
+#include "ns_font.h"
 #include "ui_theme.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
@@ -2059,13 +2060,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             hwnd, (HMENU)IDC_CHAT_SEND, NULL, NULL);
         SetWindowSubclass(nd->hSendBtn, btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
-        /* Font — use Inter UI font */
-        nd->ui_font_size = APP_FONT_UI_SIZE;
-        int h = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
-        nd->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                               DEFAULT_CHARSET, OUT_TT_PRECIS,
-                               CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                               DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+        /* Font — buttons/labels use the cached FONT_BODY role (Inter UI
+         * font); the chat content font below is independently zoomable
+         * (Ctrl+/Ctrl-), so it keeps its own CreateFont calls. */
+        nd->ui_font_size = ns_type_font(FONT_BODY)->size_pt;
+        int h = -MulDiv(nd->ui_font_size, nd->dpi, 72);
+        nd->hFont = ns_font(FONT_BODY, nd->dpi);
         /* Small bold font — Segoe UI renders reliably at small sizes on all
          * Windows versions (hand-tuned hinting), unlike bundled Inter. */
         int sh = -MulDiv(8, nd->dpi, 72);
@@ -3560,7 +3560,7 @@ next_coalesce:;
             chat_msg_list_clear(&d->msg_list);
             d->stream_ai_item = NULL;
             DeleteCriticalSection(&d->cs);
-            if (d->hFont) DeleteObject(d->hFont);
+            /* d->hFont comes from the ns_font cache — owned there, not here. */
             if (d->hSmallFont) DeleteObject(d->hSmallFont);
             if (d->hChatFont) DeleteObject(d->hChatFont);
             if (d->hBoldFont) DeleteObject(d->hBoldFont);
@@ -3766,6 +3766,16 @@ void ai_chat_update_notes(HWND hwnd, const char *session_notes,
     if (system_notes)
         strncpy(d->system_notes, system_notes, sizeof(d->system_notes) - 1);
     LeaveCriticalSection(&d->cs);
+}
+
+void ai_chat_refresh_fonts(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+
+    d->hFont = ns_font(FONT_BODY, d->dpi);
+    InvalidateRect(hwnd, NULL, TRUE);
 }
 
 void ai_chat_set_theme(HWND hwnd, const char *colour_scheme)

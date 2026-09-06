@@ -2,6 +2,7 @@
 #include "resource.h"
 #include "dpi_util.h"
 #include "app_font.h"
+#include "ns_font.h"
 #include "ui_theme.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
@@ -364,12 +365,7 @@ static LRESULT CALLBACK HelpGuideWndProc(HWND hwnd, UINT msg,
 
         /* Apply Inter UI font */
         {
-            int h = -MulDiv(APP_FONT_UI_SIZE, dpi, 72);
-            d->hDlgFont = CreateFont(
-                h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                APP_FONT_UI_FACE);
+            d->hDlgFont = ns_font(FONT_BODY, dpi);
             if (d->hDlgFont) {
                 HWND hChild = NULL;
                 while ((hChild = FindWindowEx(hwnd, hChild, NULL, NULL)) != NULL)
@@ -508,7 +504,7 @@ static LRESULT CALLBACK HelpGuideWndProc(HWND hwnd, UINT msg,
     case WM_DESTROY:
         KillTimer(hwnd, IDT_GUIDE_SCROLL);
         if (d) {
-            if (d->hDlgFont)       DeleteObject(d->hDlgFont);
+            /* d->hDlgFont comes from the ns_font cache — owned there. */
             if (d->hTitleFont)     DeleteObject(d->hTitleFont);
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);

@@ -11,6 +11,7 @@
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
 #include "../core/app_font.h"
+#include "ns_font.h"
 
 /* ---- Control IDs -------------------------------------------------------- */
 
@@ -219,13 +220,9 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
             cw - margin - btn_w, btn_y, btn_w, btn_h,
             hwnd, (HMENU)IDCANCEL, NULL, NULL);
 
-        /* Create Cascadia Code 9pt for labels/buttons */
+        /* Labels/buttons use the cached FONT_BODY role (Inter UI font) */
         {
-            int h = -MulDiv(9, get_window_dpi(hwnd), 72);
-            nd->hDlgFont = CreateFont(
-                h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+            nd->hDlgFont = ns_font(FONT_BODY, get_window_dpi(hwnd));
             if (nd->hDlgFont)
                 EnumChildWindows(hwnd, SetFontCb, (LPARAM)nd->hDlgFont);
         }
@@ -347,8 +344,7 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
         if (d) {
             KillTimer(hwnd, TIMER_PASTE_SCROLL);
             if (d->hBgBrush) DeleteObject(d->hBgBrush);
-            if (d->hDlgFont) DeleteObject(d->hDlgFont);
-            if (d->hTermFont) DeleteObject(d->hTermFont);
+            /* d->hDlgFont / d->hTermFont come from the ns_font cache. */
         }
         return 0;
 
@@ -396,15 +392,12 @@ int paste_preview_show(HWND parent, const char *raw_text,
 
     if (!d.edit_text) return 0;
 
-    /* Create terminal font for text area */
-    {
-        int h = -MulDiv(font_size, get_window_dpi(parent), 72);
-        d.hTermFont = CreateFont(
-            h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
-            font_name ? font_name : "Consolas");
-    }
+    /* Terminal font for text area — the cached FONT_MONO role, which
+     * tracks the same settings.font/font_size ns_font_set_faces() was
+     * last configured with. */
+    (void)font_name;
+    (void)font_size;
+    d.hTermFont = ns_font(FONT_MONO, get_window_dpi(parent));
 
     /* Register window class */
     WNDCLASSEX wc;

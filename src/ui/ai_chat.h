@@ -67,6 +67,13 @@ void ai_chat_update_notes(HWND hwnd, const char *session_notes,
 /* Update the colour scheme / theme of an open AI chat window. */
 void ai_chat_set_theme(HWND hwnd, const char *colour_scheme);
 
+/* Re-fetch the chrome fonts this window keeps cached across paints
+ * (currently just hFont, the FONT_BODY role for buttons/labels) from
+ * ns_font(). Call after ns_font_flush() runs elsewhere (a font-setting
+ * change or WM_DPICHANGED) so this window never draws with a stale,
+ * already-deleted handle. A no-op if the window is not open. */
+void ai_chat_refresh_fonts(HWND hwnd);
+
 /* Enable or disable markdown rendering in the AI chat list view. */
 void ai_chat_set_markdown(HWND hwnd, int enabled);
 

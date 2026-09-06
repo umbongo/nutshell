@@ -76,30 +76,44 @@ int test_app_font_zoom_at_max(void) {
     TEST_END();
 }
 
-/* ---- UI font zoom tests (AI chat starts at 9pt, not in the table) -------- */
+/* ---- UI font zoom tests -----------------------------------------------
+ * APP_FONT_UI_SIZE is 10 as of the design-system foundation work (body text
+ * moved from 9pt to 10pt), which now sits exactly on a table entry. These
+ * tests exercise app_font_zoom()'s off-table snapping directly with a
+ * literal 9 (the size AI chat used to start at) so the coverage for
+ * "starting size not in the table" survives that change. */
 
-int test_app_font_zoom_from_ui_size_up(void) {
+int test_app_font_zoom_from_off_table_size_up(void) {
     TEST_BEGIN();
-    /* APP_FONT_UI_SIZE is 9, which sits between 8 and 10.
-     * Zooming up from 9 should go to 10 (next size above). */
-    int result = app_font_zoom(APP_FONT_UI_SIZE, 1);
+    /* 9 sits between 8 and 10. Zooming up from 9 should go to 10 (next
+     * size above). */
+    int result = app_font_zoom(9, 1);
     ASSERT_EQ(result, 10);
     TEST_END();
 }
 
-int test_app_font_zoom_from_ui_size_down(void) {
+int test_app_font_zoom_from_off_table_size_down(void) {
     TEST_BEGIN();
     /* Zooming down from 9 should snap to 8 (the floor value, which is
      * already smaller than 9). */
-    int result = app_font_zoom(APP_FONT_UI_SIZE, -1);
+    int result = app_font_zoom(9, -1);
     ASSERT_EQ(result, 8);
     TEST_END();
 }
 
-int test_app_font_zoom_ui_full_range_up(void) {
+int test_app_font_zoom_ui_size_is_in_table(void) {
     TEST_BEGIN();
-    /* Starting from UI size (9), zoom up repeatedly to max */
-    int sz = APP_FONT_UI_SIZE;
+    /* APP_FONT_UI_SIZE (10) lands exactly on a table entry, so zooming
+     * from it behaves like any other in-table size. */
+    ASSERT_EQ(app_font_zoom(APP_FONT_UI_SIZE, 1), 12);
+    ASSERT_EQ(app_font_zoom(APP_FONT_UI_SIZE, -1), 8);
+    TEST_END();
+}
+
+int test_app_font_zoom_full_range_up(void) {
+    TEST_BEGIN();
+    /* Starting from an off-table size (9), zoom up repeatedly to max */
+    int sz = 9;
     sz = app_font_zoom(sz, 1);   ASSERT_EQ(sz, 10);
     sz = app_font_zoom(sz, 1);   ASSERT_EQ(sz, 12);
     sz = app_font_zoom(sz, 1);   ASSERT_EQ(sz, 14);
@@ -115,7 +129,7 @@ int test_app_font_zoom_preserves_size_after_roundtrip(void) {
     /* Zoom up then back down should return to a table value, not lose state.
      * This simulates the AI chat zoom: the size must always land on a valid
      * table entry so that rebuild_display can use it as a base. */
-    int sz = APP_FONT_UI_SIZE;  /* 9, not in table */
+    int sz = 9;  /* not in table */
     sz = app_font_zoom(sz, 1);  ASSERT_EQ(sz, 10); /* now in table */
     sz = app_font_zoom(sz, -1); ASSERT_EQ(sz, 8);  /* still in table */
     sz = app_font_zoom(sz, 1);  ASSERT_EQ(sz, 10); /* back to 10 */
@@ -124,10 +138,10 @@ int test_app_font_zoom_preserves_size_after_roundtrip(void) {
     TEST_END();
 }
 
-int test_app_font_zoom_ui_full_range_down(void) {
+int test_app_font_zoom_full_range_down(void) {
     TEST_BEGIN();
-    /* Starting from UI size (9), zoom down repeatedly to min */
-    int sz = APP_FONT_UI_SIZE;
+    /* Starting from an off-table size (9), zoom down repeatedly to min */
+    int sz = 9;
     sz = app_font_zoom(sz, -1);  ASSERT_EQ(sz, 8);
     sz = app_font_zoom(sz, -1);  ASSERT_EQ(sz, 6);
     sz = app_font_zoom(sz, -1);  ASSERT_EQ(sz, 6); /* clamped */

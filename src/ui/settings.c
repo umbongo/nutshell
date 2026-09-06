@@ -2,6 +2,7 @@
 #include "resource.h"
 #include "dpi_util.h"
 #include "app_font.h"
+#include "ns_font.h"
 #include "ui_theme.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
@@ -1200,17 +1201,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         /* ---- Fonts ---- */
         {
-            int h = -MulDiv(APP_FONT_UI_SIZE, nd->dpi, 72);
-            nd->hDlgFont = CreateFont(
-                h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                APP_FONT_UI_FACE);
-            nd->hBoldFont = CreateFont(
-                h, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                APP_FONT_UI_FACE);
+            nd->hDlgFont = ns_font(FONT_BODY, nd->dpi);
+            /* Page title is a heading, not just bold body text. */
+            nd->hBoldFont = ns_font(FONT_TITLE, nd->dpi);
             if (nd->hDlgFont)
                 EnumChildWindows(hwnd, SetFontProc, (LPARAM)nd->hDlgFont);
             if (nd->hBoldFont && nd->hPageTitle)
@@ -1704,8 +1697,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         if (d) {
             KillTimer(hwnd, IDT_SYSNOTES_SCROLL);
             if (d->hTooltip) DestroyWindow(d->hTooltip);
-            if (d->hDlgFont)  DeleteObject(d->hDlgFont);
-            if (d->hBoldFont) DeleteObject(d->hBoldFont);
+            /* d->hDlgFont / d->hBoldFont come from the ns_font cache. */
             if (d->hBrBgPrimary)   DeleteObject(d->hBrBgPrimary);
             if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
             free(d);

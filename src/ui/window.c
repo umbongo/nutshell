@@ -28,6 +28,7 @@
 #include "ai_chat_testable.h"
 #include "selection.h"
 #include "app_font.h"
+#include "ns_font.h"
 #include "ui_theme.h"
 #include "ns_tokens.h"
 #include "custom_scrollbar.h"
@@ -772,6 +773,15 @@ static void on_settings_clicked(void) {
                   get_window_dpi(parent));
     apply_config_colors();
     renderer_apply_theme(parent, g_renderer.defaultBg);
+
+    /* The terminal font/size feeds ns_font's FONT_MONO face too. This only
+     * flushes the cache if something actually changed; either way, refetch
+     * everything that keeps a font handle cached across paints below. */
+    ns_font_set_faces(APP_FONT_UI_FACE, g_config->settings.font,
+                      g_config->settings.font_size);
+    g_hMenuFont = ns_font(FONT_BODY, g_dpi);
+    if (g_hwndAiChat && IsWindow(g_hwndAiChat))
+        ai_chat_refresh_fonts(g_hwndAiChat);
 
     /* Update tab strip font (may have changed) */
     tabs_set_font(g_hwndTabs, g_config->settings.font, 0);
@@ -1709,13 +1719,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
             app_font_load_ui();
 
-            /* Create UI font for owner-drawn menus */
-            {
-                int mh = -MulDiv(APP_FONT_UI_SIZE, g_dpi, 72);
-                g_hMenuFont = CreateFont(mh, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
-            }
+            /* Configure the ns_font cache's faces before anything asks it
+             * for a font: proportional Inter for chrome, the configured
+             * terminal font/size for FONT_MONO. */
+            ns_font_set_faces(APP_FONT_UI_FACE,
+                              g_config->settings.font[0]
+                                  ? g_config->settings.font : APP_FONT_DEFAULT,
+                              g_config->settings.font_size > 0
+                                  ? g_config->settings.font_size : 12);
+
+            /* UI font for owner-drawn menus */
+            g_hMenuFont = ns_font(FONT_BODY, g_dpi);
 
             tabs_init(g_hInst);
             csb_register(g_hInst);
@@ -2391,17 +2405,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             apply_config_colors();
             renderer_apply_theme(hwnd, g_renderer.defaultBg);
 
-            /* Recreate menu font at new DPI */
-            if (g_hMenuFont) DeleteObject(g_hMenuFont);
-            {
-                int mh = -MulDiv(APP_FONT_UI_SIZE, g_dpi, 72);
-                g_hMenuFont = CreateFont(mh, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                    DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
-            }
-
-            /* Recreate tab strip fonts */
+            /* DPI changed: every cached role/dpi/face slot is now stale for
+             * this window, so flush the whole cache once and let each
+             * consumer re-fetch at the new DPI. */
+            ns_font_flush();
+            g_hMenuFont = ns_font(FONT_BODY, g_dpi);
             tabs_set_font(g_hwndTabs, g_config->settings.font, newDpi);
+            if (g_hwndAiChat && IsWindow(g_hwndAiChat))
+                ai_chat_refresh_fonts(g_hwndAiChat);
 
             /* Recalculate terminal grid via WM_SIZE */
             RECT dpi_rc;
@@ -2528,12 +2539,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 /* Version label at bottom-right, same opacity as logo */
                 {
                     int vpad = MulDiv(10, g_dpi, 96);
-                    int font_h = -MulDiv(9, g_dpi, 72);
-                    HFONT vfont = CreateFont(font_h, 0, 0, 0, FW_NORMAL,
-                        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                        APP_FONT_UI_FACE);
+                    HFONT vfont = ns_font(FONT_CAPTION, g_dpi);
                     HGDIOBJ old_vf = SelectObject(hdc, vfont);
                     SetBkMode(hdc, TRANSPARENT);
                     /* Blend text color at 6% against background */
@@ -2550,7 +2556,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     DrawTextA(hdc, "v" APP_VERSION, -1, &vrc,
                               DT_SINGLELINE | DT_RIGHT | DT_BOTTOM | DT_NOPREFIX);
                     SelectObject(hdc, old_vf);
-                    DeleteObject(vfont);
+                    /* vfont comes from the ns_font cache — no delete. */
                 }
             }
 
@@ -2979,7 +2985,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             g_hwndAiChat = NULL;
             if (g_config) config_free(g_config);
             renderer_free(&g_renderer);
-            if (g_hMenuFont) { DeleteObject(g_hMenuFont); g_hMenuFont = NULL; }
+            g_hMenuFont = NULL;
+            ns_font_flush();
             app_font_free_ui();
             if (g_acorn_image) {
                 GdipDisposeImage(g_acorn_image);

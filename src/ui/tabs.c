@@ -1,5 +1,6 @@
 #include "tabs.h"
 #include "app_font.h"
+#include "ns_font.h"
 #include "ui_theme.h"
 #include "xmalloc.h"
 #include "logger.h"
@@ -99,26 +100,14 @@ static COLORREF status_color(TabStatus s)
     }
 }
 
-/* (Re-)create hFont and hSmallFont from font_name. Deletes any previous. */
+/* (Re-)fetch hFont and hSmallFont from the ns_font cache for font_name/dpi.
+ * The cache owns both handles — nothing here to delete. */
 static void tabs_create_fonts(TabControlData *data, int dpi)
 {
-    if (data->hFont)      { DeleteObject(data->hFont);      data->hFont = NULL; }
-    if (data->hSmallFont) { DeleteObject(data->hSmallFont); data->hSmallFont = NULL; }
-
     data->dpi = dpi;
-    int logPixelsY = dpi;
-
-    int h = -MulDiv(APP_FONT_UI_SIZE, logPixelsY, 72);
-    data->hFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_TT_PRECIS,
-                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                              DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
-    /* Small bold font for indicator labels ("L", "AI") — DPI-scaled */
-    int sh = -MulDiv(7, logPixelsY, 72);
-    data->hSmallFont = CreateFont(sh, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                                   DEFAULT_CHARSET, OUT_TT_PRECIS,
-                                   CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                   DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
+    data->hFont      = ns_font(FONT_BODY, dpi);
+    /* Small caption font for indicator labels ("L", "AI") on the tab strip. */
+    data->hSmallFont = ns_font(FONT_CAPTION, dpi);
 }
 
 /* Removed manual draw_chip_icon logic in favour of Fluent icons */
@@ -229,8 +218,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case WM_DESTROY:
             KillTimer(hwnd, TABS_TIMER_PULSE);
             if (data) {
-                if (data->hFont)      DeleteObject(data->hFont);
-                if (data->hSmallFont) DeleteObject(data->hSmallFont);
+                /* data->hFont / data->hSmallFont come from the ns_font cache. */
                 if (data->hTooltip)   DestroyWindow(data->hTooltip);
                 free(data);
             }

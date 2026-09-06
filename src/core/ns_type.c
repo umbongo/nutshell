@@ -66,6 +66,11 @@ int ns_type_font_slot(NsFontRole role, int dpi, int face_id)
     return role_index * (NS_DPI_TABLE_COUNT * NS_FACE_COUNT) + dpi_index * NS_FACE_COUNT + face_id;
 }
 
+int ns_type_font_face_id(NsFontRole role)
+{
+    return (role == FONT_MONO) ? 2 : 0;
+}
+
 /* ---- Pill radius ------------------------------------------------------------ */
 
 int ns_type_pill(int height)
