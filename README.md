@@ -2,15 +2,15 @@
 
 # Nutshell SSH
 
-**Version**: v1.0.77 \
-**Build Date**: 2026-08-29 \
+**Version**: v1.0.78 \
+**Build Date**: 2026-09-07 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
 
 Nutshell is a lightweight, AI-enabled, native C SSH client for Windows. It pairs a full-featured terminal with a built-in AI assistant that can read your terminal output, suggest commands, and execute them over SSH — with your approval at every step.
 
-Built entirely with the Win32 API, no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~5.1 MB (UPX compressed).
+Built entirely with the Win32 API, no external UI frameworks. Cross-compiled from Linux with MinGW-w64, the release binary is ~5.3 MB (UPX compressed).
 
 ## AI Chat Assistant
 
@@ -40,7 +40,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 1,509 unit tests, zero lint warnings
+- 1,539 unit tests, zero lint warnings
 
 ---
 
@@ -49,7 +49,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 ### Getting Started
 
 1. Place `nutshell.exe` anywhere on your Windows machine. Configuration is stored in `nutshell.config` in the same directory.
-2. Launch the application. The session manager opens automatically.
+2. Launch the application. The session manager opens on demand via **Ctrl+T** or the **+** area in the tab strip. To have it open automatically at launch, enable **Open Session Manager at startup** in Settings (Connection > Startup) — off by default.
 3. Create a session profile by entering a hostname, port, username, and authentication credentials, then click **Connect**.
 
 ### Connecting to a Server
@@ -105,14 +105,15 @@ The terminal emulates a VT100/ANSI-compatible display. It supports:
 #### Scrolling
 
 - **Mouse wheel** scrolls through scrollback history
-- **Page Up / Page Down** scroll one page at a time
+- **Page Up / Page Down** scroll a full page (screen height minus one line) at a time
 - **Vertical scrollbar** on the right tracks the scrollback position (drag to seek)
 
 #### Text Selection and Clipboard
 
 - **Click and drag** on the terminal to select text
-- **Ctrl+V** or **Shift+Insert** pastes from the clipboard
-- Pasting more than 64 characters triggers a **confirmation dialog** showing a preview. This prevents accidental large pastes.
+- **Ctrl+C** copies the current selection to the clipboard and clears it; with no selection, Ctrl+C sends SIGINT to the remote shell as usual. **Ctrl+Shift+C** always copies (never sent to the shell)
+- **Ctrl+V** or **Shift+Insert** pastes from the clipboard; **Ctrl+Shift+V** always pastes
+- **Confirm before pasting** (Settings > Terminal, on by default) shows a preview dialog before every paste, so you can review what's about to be sent
 - **Paste delay**: an optional inter-line delay (0 to 5000 ms) can be set in Settings for servers that need time between lines
 
 ### Zoom
@@ -154,6 +155,7 @@ scrolls if you shrink it below the content.
 #### General > Terminal
 - **Scrollback lines** — 100 to 50,000 (default: 10,000)
 - **Paste delay** — inter-line delay in milliseconds (0 to 5000)
+- **Confirm before pasting** — show a preview dialog before every paste (default: on)
 
 #### General > Logging
 - **Log directory** — where log files are saved (default: same directory as the executable)
@@ -166,6 +168,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 - **Idle timeout** — disconnect after this many minutes with no user activity; 0 never disconnects. Keystrokes, mouse-wheel scrolling, tab switches and AI chat input all count as activity.
 
 #### Connection > Startup
+- **Open Session Manager at startup** — show the Session Manager as soon as Nutshell launches (default: off). Ignored when auto-connect fires, and suppressed by `-nc`.
 - **Auto-connect at startup** — connect to a saved session as soon as Nutshell launches
 - **Session** — which saved session to open. Command-line options override this; start with `-nc` to skip auto-connect once.
 
@@ -179,6 +182,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 - **Max terminal lines** — how much of the terminal the assistant reads as context, from 1 to 50,000 lines (default: 1,000). Each line becomes part of the context sent with every message: a larger window gives the assistant more of your session to reason about, at a proportionate cost in tokens.
 - **System instructions** — global instructions included in every AI conversation (per-session AI Notes take precedence)
 - **Render AI markdown** — format AI replies as markdown; turn off to see raw text
+- **Auto Approve also covers write/critical commands** — when on, session Auto Approve approves every command Permit Write allows, not just safe read-only ones (default: off)
 
 #### AI Assistant > Web Access
 - **Search engine** — None, DuckDuckGo (API), DuckDuckGo (HTML), or Custom
@@ -198,7 +202,7 @@ The AI assistant can see the recent history of your terminal output (1,000 lines
 |---------|----------|
 | **New Chat** | Clear the conversation and start fresh |
 | **Permit Write** | Toggle read/write mode. **Green** = AI can execute any command. **Grey** = AI restricted to read-only commands (ls, cat, pwd, etc.) |
-| **Auto Approve** | When enabled, automatically approves safe commands without prompting |
+| **Auto Approve** | Click twice within 3 seconds to confirm activation. Once on, automatically approves safe (read-only) commands without prompting — write/critical commands still require a manual Allow, unless **Auto Approve also covers write/critical commands** is enabled in Settings (AI Assistant > Behaviour) |
 | **Show Thinking** | Toggle display of AI reasoning/chain-of-thought |
 | **Save** (disk icon) | Save the conversation as a plain text file |
 | **Context bar** | Shows approximate token usage as a percentage of the model's context window |
@@ -230,7 +234,7 @@ Global **System Notes** in Settings are included in every conversation across al
 
 When enabled in Settings, each connected session writes a log file with ANSI escape codes stripped (plain text only).
 
-- Log files are named using the configured strftime format (default: `%Y-%m-%d_%H-%M-%S_hostname.log`)
+- Log files are named `<Log Name Format>_<name>.log` under the configured Log Directory — `<name>` is the session's profile name, falling back to its host. Log Name Format is a strftime format string (default: `%Y-%m-%d_%H-%M-%S`, e.g. `2026-09-07_14-30-00_myserver.log`). An empty or invalid format falls back to the default.
 - The **[L]** badge on a tab indicates active logging
 - Logging status is also shown in tab tooltips
 
@@ -246,13 +250,16 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 |----------|--------|
 | **Ctrl+T** | New session (open session manager) |
 | **Ctrl+W** | Close active tab |
+| **Ctrl+C** | Copy selection to clipboard and clear it; sends SIGINT if there is no selection |
+| **Ctrl+Shift+C** | Copy selection to clipboard (no-op if none); never sent to the shell |
 | **Ctrl+V** | Paste from clipboard |
+| **Ctrl+Shift+V** | Paste from clipboard (always, same as Ctrl+V) |
 | **Shift+Insert** | Paste from clipboard (alternative) |
 | **Ctrl+=** | Zoom in |
 | **Ctrl+-** | Zoom out |
 | **Ctrl+Scroll** | Zoom in/out with mouse wheel |
-| **Page Up** | Scroll up through scrollback |
-| **Page Down** | Scroll down through scrollback |
+| **Page Up** | Scroll up a full page through scrollback |
+| **Page Down** | Scroll down a full page through scrollback |
 
 ---
 

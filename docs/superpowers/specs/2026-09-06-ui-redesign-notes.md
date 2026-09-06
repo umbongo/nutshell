@@ -98,6 +98,10 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
 ## Todo
 
 - [x] Native Windows build + test environment (committed 58fc45e, v1.0.77).
+- [x] App + docs review (`2026-09-07-app-and-docs-review.md`) and the six behaviour
+      fixes Thomas approved from it (`2026-09-07-review-fixes-design.md`, v1.0.78).
+      Still open from that review: the AI-stream thread lifetime bugs, the relative
+      config-save path, and the Session Manager phantom row — fold into the roadmap.
 - [ ] Start the design-system foundation: present the six foundation sections above for
       approval, one at a time, beginning with semantic tokens.
 - [ ] Write `docs/superpowers/specs/2026-09-06-design-system-foundation-design.md`,

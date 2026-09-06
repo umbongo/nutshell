@@ -191,6 +191,13 @@ int test_config_validate_auto_connect_clamp(void);
 int test_config_roundtrip_auto_connect(void);
 int test_config_load_legacy_no_auto_connect(void);
 
+/* review-fixes settings: paste_confirm, open_session_manager_at_start,
+ * ai_auto_approve_all (test_config.c) */
+int test_config_default_review_fix_settings(void);
+int test_config_validate_review_fix_settings_clamp(void);
+int test_config_roundtrip_review_fix_settings(void);
+int test_config_load_legacy_no_review_fix_settings(void);
+
 /* test_session_manager.c */
 int test_profile_struct(void);
 int test_profile_default_values(void);
@@ -568,13 +575,26 @@ int test_logfmt_basic_name(void);
 int test_logfmt_spaces_to_underscores(void);
 int test_logfmt_empty_dir(void);
 int test_logfmt_null_dir(void);
-int test_logfmt_timestamp_format(void);
+int test_logfmt_custom_format(void);
 int test_logfmt_long_name(void);
 int test_logfmt_null_name(void);
 int test_logfmt_empty_name(void);
 int test_logfmt_null_buf(void);
 int test_logfmt_zero_bufsize(void);
 int test_logfmt_special_chars(void);
+int test_logfmt_null_fmt_uses_default(void);
+int test_logfmt_empty_fmt_uses_default(void);
+int test_logfmt_invalid_fmt_uses_default(void);
+int test_logfmt_trailing_percent_fmt_uses_default(void);
+int test_logfmt_null_t(void);
+int test_logfmt_validate_default_valid(void);
+int test_logfmt_validate_null_invalid(void);
+int test_logfmt_validate_empty_invalid(void);
+int test_logfmt_validate_percent_f_rejected(void);
+int test_logfmt_validate_trailing_percent_rejected(void);
+int test_logfmt_validate_escaped_percent_ok(void);
+int test_logfmt_validate_plain_text_ok(void);
+int test_logfmt_validate_all_allowed_specs_ok(void);
 
 /* test_dirty.c */
 int test_dirty_init_all_dirty(void);
@@ -897,6 +917,17 @@ int test_scroll_needed_zero_lines(void);
 int test_scroll_needed_zero_height(void);
 int test_scroll_needed_zero_line_height(void);
 int test_scroll_needed_empty_zero_height(void);
+
+/* scroll_page_up / scroll_page_down (test_edit_scroll.c) */
+int test_scroll_page_up_from_zero(void);
+int test_scroll_page_up_clamps_to_max(void);
+int test_scroll_page_down_from_middle(void);
+int test_scroll_page_down_clamps_to_zero(void);
+int test_scroll_page_up_rows_1_moves_by_1(void);
+int test_scroll_page_down_rows_1_moves_by_1(void);
+int test_scroll_page_up_rows_0_treated_as_1(void);
+int test_scroll_page_down_rows_0_treated_as_1(void);
+int test_scroll_page_up_negative_max_treated_as_zero(void);
 
 /* test_term_extract.c */
 int test_extract_empty_term(void);
@@ -1367,6 +1398,10 @@ int test_approval_auto_approve_persists_across_reset(void);
 int test_approval_auto_approve_blocked_not_all_decided(void);
 int test_approval_block_pending_writes(void);
 int test_approval_block_pending_writes_skips_decided(void);
+int test_approval_auto_approve_all_off_write_pending(void);
+int test_approval_auto_approve_all_on_write_approved(void);
+int test_approval_auto_approve_safe_always_approved(void);
+int test_approval_auto_approve_all_permit_write_off_still_blocked(void);
 
 /* test_response_split.c */
 int test_split_no_commands(void);
@@ -1861,6 +1896,12 @@ int main(void) {
     failed += test_config_validate_auto_connect_clamp();
     failed += test_config_roundtrip_auto_connect();
     failed += test_config_load_legacy_no_auto_connect();
+
+    printf("\n--- Review-fixes settings ---\n");
+    failed += test_config_default_review_fix_settings();
+    failed += test_config_validate_review_fix_settings_clamp();
+    failed += test_config_roundtrip_review_fix_settings();
+    failed += test_config_load_legacy_no_review_fix_settings();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();
@@ -2458,6 +2499,17 @@ int main(void) {
     failed += test_scroll_needed_zero_line_height();
     failed += test_scroll_needed_empty_zero_height();
 
+    printf("\n--- Page Up / Page Down scroll ---\n");
+    failed += test_scroll_page_up_from_zero();
+    failed += test_scroll_page_up_clamps_to_max();
+    failed += test_scroll_page_down_from_middle();
+    failed += test_scroll_page_down_clamps_to_zero();
+    failed += test_scroll_page_up_rows_1_moves_by_1();
+    failed += test_scroll_page_down_rows_1_moves_by_1();
+    failed += test_scroll_page_up_rows_0_treated_as_1();
+    failed += test_scroll_page_down_rows_0_treated_as_1();
+    failed += test_scroll_page_up_negative_max_treated_as_zero();
+
     printf("\n--- Term Extract ---\n");
     failed += test_extract_empty_term();
     failed += test_extract_single_line();
@@ -2673,13 +2725,26 @@ int main(void) {
     failed += test_logfmt_spaces_to_underscores();
     failed += test_logfmt_empty_dir();
     failed += test_logfmt_null_dir();
-    failed += test_logfmt_timestamp_format();
+    failed += test_logfmt_custom_format();
     failed += test_logfmt_long_name();
     failed += test_logfmt_null_name();
     failed += test_logfmt_empty_name();
     failed += test_logfmt_null_buf();
     failed += test_logfmt_zero_bufsize();
     failed += test_logfmt_special_chars();
+    failed += test_logfmt_null_fmt_uses_default();
+    failed += test_logfmt_empty_fmt_uses_default();
+    failed += test_logfmt_invalid_fmt_uses_default();
+    failed += test_logfmt_trailing_percent_fmt_uses_default();
+    failed += test_logfmt_null_t();
+    failed += test_logfmt_validate_default_valid();
+    failed += test_logfmt_validate_null_invalid();
+    failed += test_logfmt_validate_empty_invalid();
+    failed += test_logfmt_validate_percent_f_rejected();
+    failed += test_logfmt_validate_trailing_percent_rejected();
+    failed += test_logfmt_validate_escaped_percent_ok();
+    failed += test_logfmt_validate_plain_text_ok();
+    failed += test_logfmt_validate_all_allowed_specs_ok();
 
     printf("\n--- Menu Bar Line ---\n");
     failed += test_menubar_line_matches_border();
@@ -2959,6 +3024,10 @@ int main(void) {
     failed += test_approval_auto_approve_blocked_not_all_decided();
     failed += test_approval_block_pending_writes();
     failed += test_approval_block_pending_writes_skips_decided();
+    failed += test_approval_auto_approve_all_off_write_pending();
+    failed += test_approval_auto_approve_all_on_write_approved();
+    failed += test_approval_auto_approve_safe_always_approved();
+    failed += test_approval_auto_approve_all_permit_write_off_still_blocked();
 
     printf("\n--- Command Collapse ---\n");
     failed += test_cmd_index_single();

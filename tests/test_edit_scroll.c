@@ -334,3 +334,67 @@ int test_scroll_needed_empty_zero_height(void) {
     ASSERT_EQ(edit_scroll_needed(0, 0, 16), 0);
     TEST_END();
 }
+
+/* --- scroll_page_up / scroll_page_down (Page Up / Page Down) --- */
+
+int test_scroll_page_up_from_zero(void) {
+    TEST_BEGIN();
+    /* 30 rows -> step of 29, from offset 0 */
+    ASSERT_EQ(scroll_page_up(0, 30, 1000), 29);
+    TEST_END();
+}
+
+int test_scroll_page_up_clamps_to_max(void) {
+    TEST_BEGIN();
+    /* Near the top: 990 + 29 = 1019, clamped to max_scrollback (1000) */
+    ASSERT_EQ(scroll_page_up(990, 30, 1000), 1000);
+    /* Already at the max: stays at the max */
+    ASSERT_EQ(scroll_page_up(1000, 30, 1000), 1000);
+    TEST_END();
+}
+
+int test_scroll_page_down_from_middle(void) {
+    TEST_BEGIN();
+    /* 30 rows -> step of 29 */
+    ASSERT_EQ(scroll_page_down(100, 30), 71);
+    TEST_END();
+}
+
+int test_scroll_page_down_clamps_to_zero(void) {
+    TEST_BEGIN();
+    /* Near the bottom: 10 - 29 = -19, clamped to 0 */
+    ASSERT_EQ(scroll_page_down(10, 30), 0);
+    /* Already at zero: stays at zero */
+    ASSERT_EQ(scroll_page_down(0, 30), 0);
+    TEST_END();
+}
+
+int test_scroll_page_up_rows_1_moves_by_1(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(scroll_page_up(5, 1, 1000), 6);
+    TEST_END();
+}
+
+int test_scroll_page_down_rows_1_moves_by_1(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(scroll_page_down(5, 1), 4);
+    TEST_END();
+}
+
+int test_scroll_page_up_rows_0_treated_as_1(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(scroll_page_up(5, 0, 1000), 6);
+    TEST_END();
+}
+
+int test_scroll_page_down_rows_0_treated_as_1(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(scroll_page_down(5, 0), 4);
+    TEST_END();
+}
+
+int test_scroll_page_up_negative_max_treated_as_zero(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(scroll_page_up(0, 30, -5), 0);
+    TEST_END();
+}

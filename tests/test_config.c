@@ -950,3 +950,86 @@ int test_config_load_legacy_no_auto_connect(void)
     TEST_END();
 }
 
+/* ============================================================
+ * Review-fixes settings: paste_confirm, open_session_manager_at_start,
+ * ai_auto_approve_all
+ * ============================================================ */
+
+int test_config_default_review_fix_settings(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    ASSERT_EQ(s.paste_confirm, 1);
+    ASSERT_EQ(s.open_session_manager_at_start, 0);
+    ASSERT_EQ(s.ai_auto_approve_all, 0);
+    TEST_END();
+}
+
+int test_config_validate_review_fix_settings_clamp(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+
+    s.paste_confirm = 7;
+    s.open_session_manager_at_start = -3;
+    s.ai_auto_approve_all = 42;
+    settings_validate(&s);
+    ASSERT_EQ(s.paste_confirm, 1);
+    ASSERT_EQ(s.open_session_manager_at_start, 1);
+    ASSERT_EQ(s.ai_auto_approve_all, 1);
+
+    s.paste_confirm = 0;
+    s.open_session_manager_at_start = 0;
+    s.ai_auto_approve_all = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.paste_confirm, 0);
+    ASSERT_EQ(s.open_session_manager_at_start, 0);
+    ASSERT_EQ(s.ai_auto_approve_all, 0);
+    TEST_END();
+}
+
+int test_config_roundtrip_review_fix_settings(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+    orig->settings.paste_confirm = 0;
+    orig->settings.open_session_manager_at_start = 1;
+    orig->settings.ai_auto_approve_all = 1;
+
+    int rc = config_save(orig, TMP_CFG);
+    ASSERT_EQ(rc, 0);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_EQ(loaded->settings.paste_confirm, 0);
+    ASSERT_EQ(loaded->settings.open_session_manager_at_start, 1);
+    ASSERT_EQ(loaded->settings.ai_auto_approve_all, 1);
+
+    config_free(orig);
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_legacy_no_review_fix_settings(void)
+{
+    TEST_BEGIN();
+    /* A config written before these fields existed must default them. */
+    FILE *f = fopen(TMP_CFG, "w");
+    ASSERT_NOT_NULL(f);
+    fputs("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cfg->settings.paste_confirm, 1);
+    ASSERT_EQ(cfg->settings.open_session_manager_at_start, 0);
+    ASSERT_EQ(cfg->settings.ai_auto_approve_all, 0);
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+

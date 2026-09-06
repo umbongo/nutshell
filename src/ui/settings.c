@@ -374,6 +374,9 @@ static const TooltipEntry k_tooltips[] = {
     { IDC_PASTEDELAY_EDIT,
       "Pause in ms between characters when pasting into the terminal "
       "(0 - 5 000). Higher values help slow remote shells keep up." },
+    { IDC_PASTE_CONFIRM,
+      "Show a preview and require confirmation before pasting into the "
+      "terminal." },
     { IDC_SCHEME_COMBO,
       "Predefined colour scheme for the terminal. Foreground and "
       "background overrides apply on top of the scheme." },
@@ -417,12 +420,18 @@ static const TooltipEntry k_tooltips[] = {
       "Allow the AI to fetch arbitrary URLs as a tool call." },
     { IDC_AI_MD_RENDER,
       "Render AI replies as formatted markdown. Turn off to see raw text." },
+    { IDC_AI_AUTO_APPROVE_ALL,
+      "When Auto Approve is on, also approve write and critical commands "
+      "without a prompt. Off by default for safety." },
     { IDC_SSH_IDLE_EDIT,
       "Disconnect SSH sessions after this many minutes of no user "
       "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
       "scrolling, tab switches, and AI chat input all count as activity." },
     { IDC_AI_REFRESH,
       "Fetch the model list from the selected AI provider." },
+    { IDC_SESSION_MGR_STARTUP,
+      "Show the Session Manager when Nutshell starts, unless auto-connect "
+      "fires or -nc is used." },
     { IDC_AUTOCONNECT_CHECK,
       "Automatically connect to the selected session when Nutshell "
       "starts. Command-line options override this; start with -nc to "
@@ -945,6 +954,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_PASTEDELAY_EDIT, 0);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_TERMINAL, 100, 0, 1, 0, 1, 0);
         }
+        {
+            HWND chk = make_check2(nd->hPage, "Confirm before pasting",
+                                   (HMENU)IDC_PASTE_CONFIRM);
+            SendMessage(chk, BM_SETCHECK,
+                        nd->cfg->settings.paste_confirm ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_TERMINAL, 0, 0, 1, 0, 1, 1);
+        }
 
         /* ==== LOGGING ==== */
         {
@@ -983,6 +999,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         }
 
         /* ==== STARTUP ==== */
+        {
+            HWND chk = make_check2(nd->hPage, "Open Session Manager at startup",
+                                   (HMENU)IDC_SESSION_MGR_STARTUP);
+            SendMessage(chk, BM_SETCHECK,
+                        nd->cfg->settings.open_session_manager_at_start
+                            ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_STARTUP, 0, 0, 1, 0, 1, 1);
+        }
         {
             HWND chk = make_check2(nd->hPage, "Auto-connect at startup",
                                    (HMENU)IDC_AUTOCONNECT_CHECK);
@@ -1089,6 +1113,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             HWND chk = make_check2(nd->hPage, "Render AI markdown", (HMENU)IDC_AI_MD_RENDER);
             SendMessage(chk, BM_SETCHECK,
                         nd->cfg->settings.markdown_render_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
+            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
+        }
+        {
+            HWND chk = make_check2(nd->hPage,
+                                   "Auto Approve also covers write/critical commands",
+                                   (HMENU)IDC_AI_AUTO_APPROVE_ALL);
+            SendMessage(chk, BM_SETCHECK,
+                        nd->cfg->settings.ai_auto_approve_all ? BST_CHECKED : BST_UNCHECKED, 0);
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
         }
 
@@ -1547,6 +1579,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             v = GetDlgItemInt(d->hPage, IDC_PASTEDELAY_EDIT, &ok, FALSE);
             if (ok) s->paste_delay_ms = (int)v;
 
+            /* Confirm before pasting */
+            s->paste_confirm = (IsDlgButtonChecked(d->hPage, IDC_PASTE_CONFIRM)
+                                 == BST_CHECKED) ? 1 : 0;
+
             /* Log directory & format */
             GetDlgItemText(d->hPage, IDC_LOG_DIR_EDIT,
                            s->log_dir, (int)sizeof(s->log_dir));
@@ -1629,11 +1665,20 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             s->markdown_render_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_MD_RENDER)
                                            == BST_CHECKED) ? 1 : 0;
 
+            /* Auto Approve also covers write/critical commands */
+            s->ai_auto_approve_all = (IsDlgButtonChecked(d->hPage, IDC_AI_AUTO_APPROVE_ALL)
+                                       == BST_CHECKED) ? 1 : 0;
+
             /* SSH user idle timeout */
             v = GetDlgItemInt(d->hPage, IDC_SSH_IDLE_EDIT, &ok, FALSE);
             if (ok && v <= 10080u)
                 s->ssh_user_idle_timeout_mins = (int)v;
             /* on parse failure or out-of-range: retain previous value */
+
+            /* Open Session Manager at startup */
+            s->open_session_manager_at_start =
+                (IsDlgButtonChecked(d->hPage, IDC_SESSION_MGR_STARTUP)
+                     == BST_CHECKED) ? 1 : 0;
 
             /* Auto-connect at startup */
             s->auto_connect = (IsDlgButtonChecked(d->hPage, IDC_AUTOCONNECT_CHECK)

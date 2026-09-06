@@ -42,6 +42,9 @@ typedef struct {
     int  ai_max_context_lines;       /* terminal lines sent to the AI; 1-50000, default 1000 */
     int  auto_connect;                       /* connect at startup: 0 = off (default) */
     char auto_connect_session[CFG_STR_MAX];  /* session name (or host) to auto-connect */
+    int  paste_confirm;                  /* confirm before pasting: 1 = on (default) */
+    int  open_session_manager_at_start;  /* show Session Manager at startup: 0 = off (default) */
+    int  ai_auto_approve_all;            /* Auto Approve also covers write/critical: 0 = off (default) */
 } Settings;
 
 typedef struct {

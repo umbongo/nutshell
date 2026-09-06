@@ -45,4 +45,16 @@ int edit_scroll_needed(int total_lines, int edit_height, int line_height);
 int edit_scroll_wheel_accum(int wheel_delta, int notch_size,
                             int lines_per_notch, int *accumulator);
 
+/* ---- Terminal scrollback page-scroll helpers -------------------------------
+ * Pure arithmetic for Page Up / Page Down against the terminal scrollback
+ * buffer. Both move by max(rows - 1, 1) lines (rows <= 1 treated as 1). */
+
+/* Move the scrollback offset up (further into history) by a page.
+ * Result is clamped to [0, max_scrollback]. */
+int scroll_page_up(int offset, int rows, int max_scrollback);
+
+/* Move the scrollback offset down (toward the live view) by a page.
+ * Result is clamped to a minimum of 0. */
+int scroll_page_down(int offset, int rows);
+
 #endif /* NUTSHELL_EDIT_SCROLL_H */

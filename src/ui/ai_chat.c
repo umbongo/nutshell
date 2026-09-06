@@ -3815,6 +3815,14 @@ void ai_chat_set_markdown(HWND hwnd, int enabled)
         chat_listview_set_render_markdown(d->hChatList, enabled);
 }
 
+void ai_chat_set_auto_approve_all(HWND hwnd, int enabled)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    d->approval_q.auto_approve_all = enabled ? 1 : 0;
+}
+
 void ai_chat_set_context_lines(HWND hwnd, int lines)
 {
     if (!hwnd || !IsWindow(hwnd)) return;

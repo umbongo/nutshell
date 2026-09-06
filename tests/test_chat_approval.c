@@ -10,6 +10,7 @@ int test_approval_init(void) {
     chat_approval_init(&q);
     ASSERT_EQ(q.count, 0);
     ASSERT_EQ(q.auto_approve, 0);
+    ASSERT_EQ(q.auto_approve_all, 0);
     TEST_END();
 }
 
@@ -225,9 +226,15 @@ int test_approval_auto_approve_direct_toggle_with_write(void) {
     /* Write commands with permit_write=0 should still be blocked */
     chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 0);
     ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_BLOCKED);
-    /* Write commands with permit_write=1 should auto-approve */
+    /* Write commands with permit_write=1: with auto_approve_all off
+     * (the default), Auto Approve no longer covers write/critical
+     * commands — they stay PENDING for the user to decide. */
     chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
-    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_APPROVED);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_PENDING);
+    /* With auto_approve_all on, the old behaviour is restored. */
+    q.auto_approve_all = 1;
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[2].status, (int)APPROVE_APPROVED);
     TEST_END();
 }
 
@@ -322,6 +329,60 @@ int test_approval_block_pending_writes_skips_decided(void) {
     ASSERT_EQ(n, 1);
     ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
     ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_BLOCKED);
+    TEST_END();
+}
+
+/* --- Auto Approve "also covers write/critical commands" (auto_approve_all) --- */
+
+int test_approval_auto_approve_all_off_write_pending(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.auto_approve = 1;
+    q.auto_approve_all = 0;
+    /* Write command, permit_write on, but auto_approve_all off -> PENDING */
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_PENDING);
+    TEST_END();
+}
+
+int test_approval_auto_approve_all_on_write_approved(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.auto_approve = 1;
+    q.auto_approve_all = 1;
+    /* Write command, permit_write on, auto_approve_all on -> APPROVED */
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
+    TEST_END();
+}
+
+int test_approval_auto_approve_safe_always_approved(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.auto_approve = 1;
+    q.auto_approve_all = 0;
+    chat_approval_add(&q, "ls -la", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
+
+    chat_approval_reset(&q);
+    q.auto_approve_all = 1;
+    chat_approval_add(&q, "ls -la", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
+    TEST_END();
+}
+
+int test_approval_auto_approve_all_permit_write_off_still_blocked(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.auto_approve = 1;
+    q.auto_approve_all = 1;
+    /* permit_write off -> BLOCKED regardless of auto_approve_all */
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_BLOCKED);
     TEST_END();
 }
 

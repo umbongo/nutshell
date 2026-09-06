@@ -34,7 +34,7 @@ int chat_approval_add(ApprovalQueue *q, const char *command,
 
     if (e->safety > CMD_SAFE && !permit_write) {
         e->status = APPROVE_BLOCKED;
-    } else if (q->auto_approve) {
+    } else if (q->auto_approve && (e->safety == CMD_SAFE || q->auto_approve_all)) {
         e->status = APPROVE_APPROVED;
     } else {
         e->status = APPROVE_PENDING;

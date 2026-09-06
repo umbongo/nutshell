@@ -22,6 +22,7 @@
 #include "ssh_io.h"
 #include "knownhosts.h"
 #include "log_format.h"
+#include "edit_scroll.h"
 #include "paste_dlg.h"
 #include "ai_chat.h"
 #include "ai_chat_testable.h"
@@ -175,6 +176,12 @@ typedef struct {
 
 static PasteState g_paste = {0};
 static Selection g_selection = {0};
+
+/* Set in WM_KEYDOWN when Ctrl+C (or Ctrl+Shift+C) copies a selection, so the
+ * WM_CHAR that TranslateMessage still queues for 0x03 can be swallowed
+ * instead of being sent to the shell as SIGINT. Same pattern as Ctrl+V's
+ * 0x16, which WM_CHAR always swallows because WM_KEYDOWN always consumes it. */
+static bool g_ctrlc_swallow_char = false;
 
 static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
@@ -402,9 +409,10 @@ static void get_exe_dir(char *buf, size_t n)
 }
 
 /* Open a timestamped session log file under log_dir.
+ * name falls back to hostname (then "session") when empty.
  * Returns NULL if logging_enabled is false or on any error.
  * Caller is responsible for fclose(). */
-static FILE *open_session_log(const char *hostname)
+static FILE *open_session_log(const char *name, const char *hostname)
 {
     if (!g_config || !g_config->settings.logging_enabled) return NULL;
 
@@ -422,49 +430,11 @@ static FILE *open_session_log(const char *hostname)
     /* Create the directory (OK if already exists) */
     CreateDirectoryA(log_dir, NULL);
 
-    /* M-6: validate log_format against a whitelist of safe strftime specifiers
-     * before passing a user-controlled string to strftime. */
-    static const char ALLOWED_SPECS[] = "YymdHMSjAaBbpZz%";
-    const char *raw_fmt = g_config->settings.log_format[0]
-                            ? g_config->settings.log_format
-                            : "%Y-%m-%d_%H-%M-%S";
-    int fmt_ok = 1;
-    for (const char *q = raw_fmt; *q; q++) {
-        if (*q == '%') {
-            q++;
-            if (!*q || !strchr(ALLOWED_SPECS, *q)) { fmt_ok = 0; break; }
-        }
-    }
-    const char *fmt = fmt_ok ? raw_fmt : "%Y-%m-%d_%H-%M-%S";
+    const char *safe_name = (name && name[0]) ? name : hostname;
     time_t now = time(NULL);
-    const struct tm *t = localtime(&now);
-    char ts[64];
-    if (t) {
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-nonliteral"
-        strftime(ts, sizeof(ts), fmt, t);
-#pragma GCC diagnostic pop
-    } else {
-        (void)snprintf(ts, sizeof(ts), "unknown");
-    }
-
-    /* Sanitise hostname for use as a filename component */
-    char safe_host[64];
-    size_t hi = 0u;
-    for (const char *p = hostname; *p && hi < sizeof(safe_host) - 1u; p++) {
-        char c = *p;
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '-' || c == '.') {
-            safe_host[hi++] = c;
-        } else {
-            safe_host[hi++] = '_';
-        }
-    }
-    safe_host[hi] = '\0';
-
     char path[MAX_PATH];
-    (void)snprintf(path, sizeof(path), "%s\\%s_%s.log",
-                   log_dir, ts, safe_host);
+    log_format_filename(safe_name, log_dir, g_config->settings.log_format,
+                        localtime(&now), path, sizeof(path));
 
     return fopen(path, "ab");
 }
@@ -780,6 +750,8 @@ static void on_settings_clicked(void) {
                             g_config->settings.ai_system_notes);
         ai_chat_set_markdown(g_hwndAiChat,
                              g_config->settings.markdown_render_enabled);
+        ai_chat_set_auto_approve_all(g_hwndAiChat,
+                                     g_config->settings.ai_auto_approve_all);
         ai_chat_set_theme(g_hwndAiChat,
                           g_config->settings.colour_scheme);
         ai_chat_update_tools(g_hwndAiChat,
@@ -844,6 +816,7 @@ static HWND create_ai_chat(HWND parent)
                              g_config->settings.ai_web_fetch_enabled);
         ai_chat_set_markdown(hwnd, g_config->settings.markdown_render_enabled);
         ai_chat_set_context_lines(hwnd, g_config->settings.ai_max_context_lines);
+        ai_chat_set_auto_approve_all(hwnd, g_config->settings.ai_auto_approve_all);
     }
     return hwnd;
 }
@@ -1054,8 +1027,13 @@ static void on_log_toggle(int index, void *user_data) {
             get_exe_dir(dir_buf, sizeof(dir_buf));
             dir = dir_buf[0] ? dir_buf : ".";
         }
+        const char *name = s->conn_profile.name[0]
+                            ? s->conn_profile.name : s->conn_profile.host;
+        time_t now = time(NULL);
         char path[512];
-        log_format_filename(s->conn_profile.name, dir, path, sizeof(path));
+        log_format_filename(name, dir,
+                            g_config ? g_config->settings.log_format : NULL,
+                            localtime(&now), path, sizeof(path));
         s->session_log = fopen(path, "ab");
         if (s->session_log) {
             tabs_set_logging(g_hwndTabs, tidx, 1);
@@ -1066,11 +1044,10 @@ static void on_log_toggle(int index, void *user_data) {
 
 /* ---- Paste helper -------------------------------------------------------- */
 
-/* Send clipboard text to the active session, with multi-line confirmation
- * when content is longer than PASTE_CONFIRM_THRESHOLD bytes or contains a
- * newline.  Lines are separated by paste_delay_ms milliseconds via a
- * non-blocking WM_TIMER so the UI stays responsive. */
-#define PASTE_CONFIRM_THRESHOLD 64
+/* Send clipboard text to the active session. Shows a preview dialog first
+ * when settings.paste_confirm is on. Multi-line content is sent one line
+ * at a time, separated by paste_delay_ms milliseconds via a non-blocking
+ * WM_TIMER, so the UI stays responsive. */
 
 /* Send one line from g_paste.pos, advance pos past the '\n'.
  * Returns true if there is more data to send. */
@@ -1157,13 +1134,16 @@ static void do_paste(HWND hwnd)
         if (local[i] == '\n') line_count++;
     }
 
-    /* Always ask for confirmation before pasting */
-    int confirmed = paste_preview_show(hwnd, local,
-        g_config->settings.foreground_colour,
-        g_config->settings.background_colour,
-        g_config->settings.font,
-        g_config->settings.font_size,
-        g_config->settings.colour_scheme);
+    /* Ask for confirmation before pasting, unless disabled in settings */
+    int confirmed = 1;
+    if (g_config->settings.paste_confirm) {
+        confirmed = paste_preview_show(hwnd, local,
+            g_config->settings.foreground_colour,
+            g_config->settings.background_colour,
+            g_config->settings.font,
+            g_config->settings.font_size,
+            g_config->settings.colour_scheme);
+    }
 
     if (!confirmed) {
         free(local);
@@ -1422,7 +1402,7 @@ static HMENU create_app_menu(void)
     HMENU hEdit = CreatePopupMenu();
     menu_add_item(hEdit, IDM_EDIT_COPY, "Copy\tCtrl+C");
     menu_add_item(hEdit, IDM_EDIT_PASTE, "Paste\tCtrl+V");
-    menu_add_item(hEdit, IDM_EDIT_SELECT_ALL, "Select All\tCtrl+A");
+    menu_add_item(hEdit, IDM_EDIT_SELECT_ALL, "Select All");
     menu_add_separator(hEdit);
     menu_add_item(hEdit, IDM_EDIT_SETTINGS, "Settings...");
     menu_add_popup(hMenu, hEdit, "Edit");
@@ -1471,6 +1451,20 @@ static void do_copy(HWND hwnd)
         }
         CloseClipboard();
     }
+}
+
+/* Copy current selection to clipboard, then clear the highlight and force a
+ * repaint (Ctrl+C / Ctrl+Shift+C). No-op if there is no selection. */
+static void copy_selection_and_clear(HWND hwnd)
+{
+    if (!g_selection.valid) return;
+    do_copy(hwnd);
+    g_selection.valid = false;
+    /* Force a full repaint so the highlighted cells are redrawn without the
+     * highlight — the dirty-row optimisation would otherwise skip them. */
+    if (g_active_session && g_active_session->term)
+        term_mark_all_dirty(g_active_session->term);
+    invalidate_terminal(hwnd);
 }
 
 /* ---- Custom About dialog with acorn icon ---- */
@@ -2141,7 +2135,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 pr = config_find_profile_by_name(g_config, wanted);
                 if (!pr) pr = config_find_profile_by_host(g_config, wanted);
             } else {
-                return 0;  /* CLI_RUN_NO_CONNECT, or nothing to do */
+                /* Nothing to auto-connect. Open the Session Manager if the
+                 * user asked for that at startup — but not for -nc
+                 * (CLI_RUN_NO_CONNECT), which explicitly suppresses it. */
+                if (g_startup_action == CLI_RUN
+                    && g_config->settings.open_session_manager_at_start) {
+                    PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
+                }
+                return 0;
             }
             if (pr) {
                 on_session_connect(pr);
@@ -2185,7 +2186,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
             } else {
                 term_process(s->term, "\r\nConnected.\r\n", 14);
-                s->session_log = open_session_log(s->conn_profile.host);
+                s->session_log = open_session_log(s->conn_profile.name,
+                                                  s->conn_profile.host);
                 s->debug_log   = open_debug_log(s->conn_profile.name);
                 if (tidx >= 0) {
                     tabs_set_connect_info(g_hwndTabs, tidx,
@@ -2607,6 +2609,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (c == 0x16) { /* Ctrl+V — handled via do_paste in WM_KEYDOWN */
                     return 0;
                 }
+                if (c == 0x03 && g_ctrlc_swallow_char) {
+                    /* Ctrl+C copied a selection in WM_KEYDOWN — don't send SIGINT */
+                    g_ctrlc_swallow_char = false;
+                    return 0;
+                }
                 if (g_active_session->channel) {
                     /* Drain pending transport data so the write can
                      * succeed in non-blocking mode.  Without this,
@@ -2648,7 +2655,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 on_ai_clicked();
                 return 0;
             }
-            /* Ctrl+V — paste with confirmation */
+            /* Ctrl+C — copy selection if one exists, otherwise fall through
+             * so WM_CHAR sends 0x03 (SIGINT) as before. Ctrl+Shift+C always
+             * copies (no-op if nothing selected) and never reaches the shell. */
+            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == (WPARAM)'C') {
+                bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                if (shift || g_selection.valid) {
+                    copy_selection_and_clear(hwnd);
+                    g_ctrlc_swallow_char = true;
+                    return 0;
+                }
+                /* No selection, no shift: let 0x03 go to the shell. */
+            }
+            /* Ctrl+V / Ctrl+Shift+V — paste with confirmation */
             if ((GetKeyState(VK_CONTROL) & 0x8000) &&
                 (wParam == (WPARAM)'V' || wParam == (WPARAM)0x56)) {
                 do_paste(hwnd);
@@ -2683,18 +2702,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     case VK_DELETE: seq = "\x1B[3~"; break;
                     case VK_INSERT: seq = "\x1B[2~"; break;
                     case VK_PRIOR: /* Page Up */
-                        if (g_active_session->term->scrollback_offset < g_active_session->term->max_scrollback) {
-                            g_active_session->term->scrollback_offset++;
-                            update_scrollbar(hwnd);
-                            invalidate_terminal(hwnd);
-                        }
+                        g_active_session->term->scrollback_offset = scroll_page_up(
+                            g_active_session->term->scrollback_offset,
+                            g_active_session->term->rows,
+                            g_active_session->term->max_scrollback);
+                        update_scrollbar(hwnd);
+                        invalidate_terminal(hwnd);
                         return 0;
                     case VK_NEXT:  /* Page Down */
-                        if (g_active_session->term->scrollback_offset > 0) {
-                            g_active_session->term->scrollback_offset--;
-                            update_scrollbar(hwnd);
-                            invalidate_terminal(hwnd);
-                        }
+                        g_active_session->term->scrollback_offset = scroll_page_down(
+                            g_active_session->term->scrollback_offset,
+                            g_active_session->term->rows);
+                        update_scrollbar(hwnd);
+                        invalidate_terminal(hwnd);
                         return 0;
                 }
                 if (seq) {

@@ -76,20 +76,22 @@ static const char GUIDE_TEXT[] =
 "  - Bold, dim, underline, blink, and reverse text styles\r\n"
 "  - Alternate screen buffer (vim, nano, htop, etc.)\r\n"
 "  - Configurable scrollback (100 to 50,000 lines)\r\n"
-"  - Scroll with Page Up / Page Down or the scrollbar\r\n"
+"  - Scroll a full page with Page Up / Page Down, or use the scrollbar\r\n"
 "\r\n"
 "\r\n"
 "COPY & PASTE\r\n"
 "------------\r\n"
 "\r\n"
 "  - Select text: Click and drag in the terminal\r\n"
-"  - Copy:        Ctrl+C (when text is selected)\r\n"
-"  - Paste:       Ctrl+V or Shift+Insert\r\n"
-"  - Select All:  Ctrl+A\r\n"
+"  - Copy:        Ctrl+C copies the selection and clears it;\r\n"
+"                 with no selection, Ctrl+C sends SIGINT as usual\r\n"
+"  - Copy always: Ctrl+Shift+C (never sent to the shell)\r\n"
+"  - Paste:       Ctrl+V, Ctrl+Shift+V, or Shift+Insert\r\n"
+"  - Select All:  Edit menu (no shortcut; Ctrl+A goes to shell)\r\n"
 "\r\n"
-"When pasting more than 64 characters, a confirmation dialog\r\n"
-"appears showing a preview of the text. You can set an inter-line\r\n"
-"paste delay in Settings to avoid overwhelming slow devices.\r\n"
+"\"Confirm before pasting\" (Settings, on by default) shows a\r\n"
+"preview before every paste. An inter-line paste delay is also\r\n"
+"available, for servers that need time between lines.\r\n"
 "\r\n"
 "\r\n"
 "ZOOM\r\n"
@@ -119,6 +121,8 @@ static const char GUIDE_TEXT[] =
 "General > Terminal:\r\n"
 "  - Scrollback:   Number of lines kept in history\r\n"
 "  - Paste Delay:  Milliseconds between lines when pasting\r\n"
+"  - Confirm before pasting: preview dialog before pasting\r\n"
+"    (default: on)\r\n"
 "\r\n"
 "General > Logging:\r\n"
 "  - Log Directory, and Log Name Format using strftime\r\n"
@@ -129,6 +133,7 @@ static const char GUIDE_TEXT[] =
 "  - Idle Timeout: disconnect after N minutes (0 = never)\r\n"
 "\r\n"
 "Connection > Startup:\r\n"
+"  - Open Session Manager at startup (default: off)\r\n"
 "  - Auto-connect on launch, and the session to open\r\n"
 "\r\n"
 "AI Assistant > Provider, Behaviour, Web Access:\r\n"
@@ -143,9 +148,10 @@ static const char GUIDE_TEXT[] =
 "  2. All terminal output is saved as plain text (ANSI stripped)\r\n"
 "  3. File > Stop Logging to end recording\r\n"
 "\r\n"
-"Log files are saved to the directory configured in Settings.\r\n";
+"Files are named <Log Name Format>_<name>.log (name = profile\r\n"
+"name, falling back to host) in the configured Log Directory.\r\n";
 
-/* Second half — kept under 4095 chars for C99 compliance */
+/* Second part — kept under 4095 chars for C99 compliance */
 static const char GUIDE_TEXT_2[] =
 "\r\n"
 "AI ASSIST\r\n"
@@ -176,6 +182,11 @@ static const char GUIDE_TEXT_2[] =
 "  - Permit Write:   Toggle whether AI can execute commands\r\n"
 "      Green = AI can propose commands for you to approve\r\n"
 "      Red   = Read-only mode, no command execution\r\n"
+"  - Auto Approve:   Click twice within 3 seconds to confirm.\r\n"
+"      Once on, safe read-only commands run without prompting.\r\n"
+"      Write/critical commands still need a manual Allow, unless\r\n"
+"      Settings > AI Assistant > Behaviour > \"Auto Approve also\r\n"
+"      covers write/critical commands\" is enabled.\r\n"
 "  - Show Thinking:  Display the AI's reasoning process\r\n"
 "  - Save:           Export the conversation as a text file\r\n"
 "  - Context bar:    Shows approximate token usage\r\n"
@@ -220,6 +231,10 @@ static const char GUIDE_TEXT_2[] =
 "  1. Set Auth to \"SSH Key\" in the Session Manager\r\n"
 "  2. Browse to your private key file (.pem, .ppk, etc.)\r\n"
 "  3. If the key has a passphrase, enter it in the Password field\r\n"
+;
+
+/* Third part — kept under 4095 chars for C99 compliance */
+static const char GUIDE_TEXT_3[] =
 "\r\n"
 "\r\n"
 "SECURITY\r\n"
@@ -237,14 +252,16 @@ static const char GUIDE_TEXT_2[] =
 "\r\n"
 "  Ctrl+T           New session / Session Manager\r\n"
 "  Ctrl+W           Close active tab\r\n"
-"  Ctrl+C           Copy selected text\r\n"
+"  Ctrl+C           Copy selection (clears it); SIGINT if none\r\n"
+"  Ctrl+Shift+C     Copy selection (never sent to the shell)\r\n"
 "  Ctrl+V           Paste from clipboard\r\n"
+"  Ctrl+Shift+V     Paste from clipboard (always)\r\n"
 "  Shift+Insert     Paste from clipboard\r\n"
 "  Ctrl+=           Zoom in\r\n"
 "  Ctrl+-           Zoom out\r\n"
 "  Ctrl+Scroll      Zoom with mouse wheel\r\n"
-"  Page Up          Scroll up through history\r\n"
-"  Page Down        Scroll down through history\r\n"
+"  Page Up          Scroll up a full page through history\r\n"
+"  Page Down        Scroll down a full page through history\r\n"
 "  Ctrl+Space       Toggle AI Assist panel\r\n"
 "  F11              Toggle fullscreen\r\n"
 "  Enter            Send message (in AI chat)\r\n"
@@ -364,14 +381,16 @@ static LRESULT CALLBACK HelpGuideWndProc(HWND hwnd, UINT msg,
         themed_apply_title_bar(hwnd, d->theme);
         themed_apply_borders(hwnd, d->theme);
 
-        /* Set text after font is applied — two halves for C99 string limit */
+        /* Set text after font is applied — three parts for C99 string limit */
         {
             size_t len1 = strlen(GUIDE_TEXT);
             size_t len2 = strlen(GUIDE_TEXT_2);
-            char *full = (char *)malloc(len1 + len2 + 1);
+            size_t len3 = strlen(GUIDE_TEXT_3);
+            char *full = (char *)malloc(len1 + len2 + len3 + 1);
             if (full) {
                 memcpy(full, GUIDE_TEXT, len1);
-                memcpy(full + len1, GUIDE_TEXT_2, len2 + 1);
+                memcpy(full + len1, GUIDE_TEXT_2, len2);
+                memcpy(full + len1 + len2, GUIDE_TEXT_3, len3 + 1);
                 SetWindowTextA(hEdit, full);
                 free(full);
             }

@@ -27,6 +27,7 @@ typedef struct {
     int auto_approve;           /* 1 = session-level auto-approve active */
     int auto_approve_confirming; /* 1 = waiting for double-click confirm */
     float confirm_start_time;    /* when "are you sure?" was shown */
+    int auto_approve_all;       /* 1 = Auto Approve also covers write/critical commands */
 } ApprovalQueue;
 
 /* Initialize approval queue. */

@@ -70,6 +70,11 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme);
 /* Enable or disable markdown rendering in the AI chat list view. */
 void ai_chat_set_markdown(HWND hwnd, int enabled);
 
+/* Set whether session Auto Approve also covers write/critical commands
+ * (settings.ai_auto_approve_all). Survives chat_approval_reset(), so this
+ * only needs to be called when the setting itself changes. */
+void ai_chat_set_auto_approve_all(HWND hwnd, int enabled);
+
 /* Set how many terminal lines are sent to the AI as context (1-50000). */
 void ai_chat_set_context_lines(HWND hwnd, int lines);
 

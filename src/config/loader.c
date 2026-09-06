@@ -110,6 +110,9 @@ void settings_validate(Settings *s)
     if (s->ssh_user_idle_timeout_mins < 0)     s->ssh_user_idle_timeout_mins = 0;
     if (s->ssh_user_idle_timeout_mins > 10080) s->ssh_user_idle_timeout_mins = 10080;
     if (s->auto_connect != 0) s->auto_connect = 1;
+    if (s->paste_confirm != 0) s->paste_confirm = 1;
+    if (s->open_session_manager_at_start != 0) s->open_session_manager_at_start = 1;
+    if (s->ai_auto_approve_all != 0) s->ai_auto_approve_all = 1;
 }
 
 void config_default_settings(Settings *s)
@@ -138,6 +141,9 @@ void config_default_settings(Settings *s)
     s->ai_max_context_lines = 1000;
     s->auto_connect = 0;
     /* auto_connect_session defaults to empty (already zeroed by memset) */
+    s->paste_confirm = 1;
+    s->open_session_manager_at_start = 0;
+    s->ai_auto_approve_all = 0;
 }
 
 Profile *config_profile_new(void)
@@ -292,6 +298,12 @@ Config *config_load(const char *path)
             field_copy(s->auto_connect_session,
                        sizeof(s->auto_connect_session), sv);
         }
+        s->paste_confirm = json_obj_bool(jset, "paste_confirm", s->paste_confirm);
+        s->open_session_manager_at_start =
+            json_obj_bool(jset, "open_session_manager_at_start",
+                          s->open_session_manager_at_start);
+        s->ai_auto_approve_all = json_obj_bool(jset, "ai_auto_approve_all",
+                                               s->ai_auto_approve_all);
         settings_validate(s);
     }
 
@@ -444,7 +456,13 @@ int config_save(const Config *cfg, const char *path)
             s->auto_connect ? "true" : "false");
     fputs("    \"auto_connect_session\": ", f);
     fprint_json_str(f, s->auto_connect_session);
-    fputc('\n', f);
+    fputs(",\n", f);
+    fprintf(f, "    \"paste_confirm\": %s,\n",
+            s->paste_confirm ? "true" : "false");
+    fprintf(f, "    \"open_session_manager_at_start\": %s,\n",
+            s->open_session_manager_at_start ? "true" : "false");
+    fprintf(f, "    \"ai_auto_approve_all\": %s\n",
+            s->ai_auto_approve_all ? "true" : "false");
     fputs("  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);
