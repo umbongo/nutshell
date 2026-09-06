@@ -1,0 +1,81 @@
+# UI Redesign — Working Notes (checkpoint)
+
+**Status:** brainstorming in progress. Roadmap and rendering approach approved; the
+first sub-project (design-system foundation) has not yet been designed in detail.
+Resume from "Next steps" below.
+
+Branch: `ui-polish` (branched from `main` at v1.0.76).
+
+## Decisions so far
+
+| Decision | Choice |
+|---|---|
+| Scope | Full redesign, free rein on visual direction |
+| First surface | AI Assist panel |
+| Rendering | Stay on GDI/GDI+; build a proper design system on top (tokens, spacing scale, shared primitives, motion tokens). No Direct2D, no WebView2, no new runtime dependencies. |
+| Verification | Originally Wine + Xvfb on the Linux box; abandoned because Wine's first-run configuration dialog blocked headless launch. **Now: the session moves to Windows so builds can be run natively and inspected in the user's browser/desktop.** |
+| Roadmap (each gets its own spec + plan) | 1. Design-system foundation · 2. AI Assist panel · 3. Main window chrome (single toolbar replacing the menu bar, tab strip, status) · 4. Session Manager, first run, Settings · 5. Toasts + inline validation replacing MessageBox |
+
+## Review findings (from code survey + marketing screenshots)
+
+Strengths worth keeping: vector GDI+ icon set (`src/ui/icons.c`, 32 glyphs),
+bundled Inter font, per-monitor-v2 DPI, four themes with contrast tests
+(`src/core/ui_theme.*`), 200 ms dock slide, inline AI errors with Retry,
+`settings_layout` as the model for a testable layout module.
+
+Weaknesses, in impact order:
+
+1. **Approval card** (`src/ui/chat_listview.c` `paint_cmd_card` / `paint_cmd_container`):
+   "Blocked" repeats per row, long commands overlap the next row, WRITE/SAFE chips +
+   checkboxes + three loud buttons (green/red/orange) compete. Palette is hardcoded
+   (`chat_listview.c:66-87`), so it ignores the two light themes.
+2. **No hover state in the chat list** — Allow/Deny/Retry/auto-approve links give no
+   hover feedback and no hand cursor (`chat_listview.c` WM_MOUSEMOVE only drags selection).
+3. **Toggle state nearly invisible** — Permit Write / Auto Approve signal on/off only via
+   a small letter icon changing colour. Undock/Save icons have no labels or tooltips.
+4. **Modal dead ends** — 26 `MessageBox` sites, incl. field validation and the "no API key"
+   gate (`window.c:907`) which offers no way to open Settings. No toast mechanism exists.
+5. **No designed empty states / first run** — one grey line in the chat, empty LISTBOX in
+   Session Manager.
+6. **Plain chrome** — classic text menu bar above the tab strip; shortcuts (Ctrl+W,
+   Ctrl+=/-, PgUp/PgDn, Shift+Insert) never shown in the UI; no accelerator table.
+7. **Debt that fights a refresh:**
+   - Hardcoded colours outside the token system: `chat_listview.c` (27), `tabs.c` (16),
+     `ai_chat.c` (12), `window.c` (14).
+   - 5–6 copies of the RGB→COLORREF helper; two rounded-rect helpers; two DPI-scale macros
+     (`S`, `CLV_SCALE`) plus `settings_scale()`.
+   - Approval-card hit-testing (`on_lbuttondown`, ~180 lines) duplicates geometry from the
+     paint code instead of sharing it.
+   - AI panel `relayout()` uses inline magic numbers; button widths repeated in WM_CREATE.
+   - Token struct has only 8 base colours + 14 chat colours; no hover/pressed/disabled/
+     focus/elevation/success/warn/danger/link tokens.
+   - `src/ui/*.c` is excluded from the Linux test build; only header-only pure logic and
+     `src/core` modules are tested.
+
+## Design-system foundation — proposed shape (NOT yet approved)
+
+To be presented section by section:
+
+1. **Semantic tokens** — keep the 4 themes' 8 base colours; derive hover/pressed/disabled/
+   elevation/focus tints in `src/core` via luminance math (testable); add explicit
+   success/warning/danger/info/link per theme. Approval-card and tab colours move onto tokens.
+2. **Spacing + type scale** — 4 px base grid, named steps (xs 4, sm 8, md 12, lg 16, xl 24);
+   type ramp caption/body/title/mono; single DPI scale helper replacing `S`/`CLV_SCALE`.
+3. **Shared primitives** — one `ns_draw` module: rounded rect with alpha, card, chip/pill,
+   button (rest/hover/pressed/disabled/focus), icon+label; geometry structs in `src/core`
+   (like `settings_layout`) so paint and hit-test share one source of truth.
+4. **Motion tokens** — durations (fast 120 ms, base 200 ms) and one easing, shared by the
+   dock slide, tab pulse and chat activity dot.
+5. **Verification harness** — a hidden `--ui-demo` CLI flag that opens the AI panel with
+   canned messages (user, AI with thinking, approval card in all states, error with Retry)
+   so every screen state can be inspected without a live SSH session or API key.
+6. **Tests** — token-coverage test that fails on new `RGB(` in `src/ui` outside `ns_draw`;
+   derived-colour contrast tests; geometry tests for the shared primitives.
+
+## Next steps
+
+1. Present the six foundation sections above for approval, one at a time.
+2. Write `docs/superpowers/specs/2026-09-06-design-system-foundation-design.md`, self-review, commit.
+3. Invoke the writing-plans skill for the foundation plan.
+4. Then brainstorm sub-project 2 (AI Assist panel) — mockups of layout options are worth
+   showing visually before choosing.
