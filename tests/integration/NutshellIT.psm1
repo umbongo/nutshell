@@ -31,7 +31,20 @@ public class NutshellNative {
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint f);
+    [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
+    [DllImport("user32.dll", EntryPoint="SendMessageW")] public static extern IntPtr SendMsg(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+
+    /* Left-click at an offset from the window's top-left corner (physical px). */
+    public static void ClickAt(IntPtr h, int ox, int oy) {
+        RECT r; GetWindowRect(h, out r);
+        SetCursorPos(r.L + ox, r.T + oy); System.Threading.Thread.Sleep(100);
+        mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); System.Threading.Thread.Sleep(60);
+        mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
+    }
 
     public static List<string> ListWindows(uint pid) {
         var o = new List<string>();
@@ -198,6 +211,31 @@ function Wait-NutshellLog {
     return $false
 }
 
+function Open-NutshellSecondTab {
+    <# Open the Session Manager, pick the first saved profile and Connect, giving a second tab. #>
+    param([Parameter(Mandatory)] $Session, [int] $ConnectWaitSec = 8)
+    Send-NutshellCommand -Session $Session -Id $script:IDM_FILE_CONNECT -SettleMs 1200
+    $sm = (Get-NutshellWindows -Session $Session) | Where-Object { $_ -match "Session Manager" } | Select-Object -First 1
+    if (-not $sm) { throw "Session Manager did not open" }
+    $hsm = [IntPtr][long]($sm -split "`t")[0]
+    $list = [NutshellNative]::GetDlgItem($hsm, 1000)                                  # IDC_LIST_SESSIONS
+    [NutshellNative]::SendMsg($list, 0x0186, [IntPtr]0, [IntPtr]::Zero) | Out-Null     # LB_SETCURSEL 0
+    [NutshellNative]::PostMessage($hsm, $script:WM_COMMAND, [IntPtr]((1 -shl 16) -bor 1000), $list) | Out-Null  # LBN_SELCHANGE
+    Start-Sleep -Milliseconds 400
+    [NutshellNative]::PostMessage($hsm, $script:WM_COMMAND, [IntPtr]1, [IntPtr]::Zero) | Out-Null   # IDOK = Connect
+    Start-Sleep -Seconds $ConnectWaitSec
+}
+
+function Select-NutshellTab {
+    <# Click tab N (0-based) in the tab strip, then refocus the terminal. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int] $Index)
+    $scale = [NutshellNative]::GetDpiForWindow($Session.Main) / 96.0
+    $x = [int]((100 + 108 * $Index) * $scale)
+    $y = [int](64 * $scale)
+    [NutshellNative]::ClickAt($Session.Main, $x, $y)
+    Start-Sleep -Milliseconds 700
+}
+
 function Wait-NutshellShell {
     <# Press Enter until a shell prompt ($ or #) shows up in the log. Throws on timeout. #>
     param([Parameter(Mandatory)] $Session, [int] $TimeoutSec = 25)
@@ -238,4 +276,5 @@ function Save-NutshellScreenshot {
 
 Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell, Get-NutshellWindows, `
     Send-NutshellCommand, Start-NutshellLogging, Send-NutshellKeys, Send-NutshellLine, `
-    Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Save-NutshellScreenshot
+    Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Save-NutshellScreenshot, `
+    Open-NutshellSecondTab, Select-NutshellTab

@@ -141,6 +141,28 @@ Invoke-Case "page_up_scrolls_history" @{} {
     "screenshots saved (visual check)"
 }
 
+Invoke-Case "resize_applies_to_inactive_tab" @{} {
+    param($s)
+    # Regression for "lost lines after resize": WM_SIZE only resized the active
+    # tab, so a background tab kept its old grid and PTY size until the next
+    # resize. Resize on tab B, switch to tab A, and A must report the new size.
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    Set-NutshellWindowSize -Session $s -Width 1200 -Height 700
+    Send-NutshellLine -Session $s -Line 'echo TAB_A_READY'
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "TAB_A_READY" -TimeoutSec 5) "tab A not ready"
+    Open-NutshellSecondTab -Session $s
+    Assert-True (((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "Session Manager" }).Count -eq 0) "Session Manager still open; Connect failed"
+    Set-NutshellWindowSize -Session $s -Width 1600 -Height 1300
+    Select-NutshellTab -Session $s -Index 0
+    Send-NutshellLine -Session $s -Line 'echo A_LINES=$(tput lines)'
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "A_LINES=(\d+)" -TimeoutSec 5) "no size report from tab A"
+    $a = [int][regex]::Match((Get-NutshellLogText -Session $s), "A_LINES=(\d+)").Groups[1].Value
+    Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "inactive_tab_after_resize.png") | Out-Null
+    Assert-True ($a -ge 30) "tab A still has the pre-resize grid: tput lines = $a (expected >= 30 for a 1300px-tall window)"
+    "tab A reports $a lines after the resize happened on tab B"
+}
+
 # ---- Summary ------------------------------------------------------------------
 
 $passed = @($results | Where-Object { $_.Passed }).Count

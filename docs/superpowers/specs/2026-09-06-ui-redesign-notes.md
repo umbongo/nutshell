@@ -102,8 +102,11 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       fixes Thomas approved from it (`2026-09-07-review-fixes-design.md`, v1.0.78).
       Still open from that review: the AI-stream thread lifetime bugs, the relative
       config-save path, and the Session Manager phantom row — fold into the roadmap.
-- [ ] Investigate lost lines after app resize (reported by Thomas 2026-09-07; reproduce
-      on tompi with a full screen of output, resize, compare to `tput lines` / scrollback).
+- [x] Lost lines after app resize (v1.0.80). Root cause: `WM_SIZE` only resized the
+      active tab, so a tab in the background during the resize kept its old grid and
+      PTY size; its prompt then sat mid-window with the rest blank until enough Enters
+      scrolled it into place. `on_tab_select` now calls `sync_session_grid()`.
+      Regression case `resize_applies_to_inactive_tab` in the integration suite.
 - [ ] Start the design-system foundation: present the six foundation sections above for
       approval, one at a time, beginning with semantic tokens.
 - [ ] Write `docs/superpowers/specs/2026-09-06-design-system-foundation-design.md`,

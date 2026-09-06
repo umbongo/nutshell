@@ -158,6 +158,38 @@ static void force_full_terminal_repaint(HWND hwnd, Terminal *term)
     invalidate_terminal(hwnd);
 }
 
+/* Bring a session's terminal grid and remote PTY up to the current client
+ * area. WM_SIZE only touches the active session, so this is needed whenever a
+ * session becomes visible after the window may have changed size without it:
+ * on tab switch, and when a connection completes (auth can take seconds and
+ * WM_SIZE skips the PTY while channel is NULL). No-op when nothing changed. */
+static void sync_session_grid(HWND hwnd, Session *s)
+{
+    if (!s || !s->term || g_renderer.charWidth <= 0 || g_renderer.charHeight <= 0)
+        return;
+
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    int ai_w = 0;
+    if (g_ai_docked && g_hwndAiChat && IsWindowVisible(g_hwndAiChat))
+        ai_w = g_ai_panel_width;
+    int term_h = rc.bottom - g_tab_height;
+    if (term_h < 1) term_h = 1;
+    int term_w = ai_dock_terminal_width(rc.right, ai_w, CSB_WIDTH, g_left_margin);
+    int cols = term_w / g_renderer.charWidth;
+    int rows = term_h / g_renderer.charHeight;
+    if (cols < 1) cols = 1;
+    if (rows < 1) rows = 1;
+
+    if (cols != s->term->cols || rows != s->term->rows) {
+        term_resize(s->term, rows, cols);
+        term_mark_all_dirty(s->term);
+        dispbuf_resize(&g_renderer.dispbuf, rows, cols);
+        if (s->channel)
+            ssh_pty_resize(s->channel, cols, rows);
+    }
+}
+
 /* Paint cooldown: cap repaints at ~60fps to prevent thrashing on heavy output */
 #define PAINT_COOLDOWN_MS 16
 static DWORD g_last_paint_tick;
@@ -231,6 +263,10 @@ static void on_tab_select(int index, void *user_data) {
     if (g_active_session)
         g_active_session->last_user_input_tick = GetTickCount();
     HWND hParent = GetParent(g_hwndTabs);
+    /* WM_SIZE only resizes the active session, so a tab that sat in the
+     * background during a resize still has the old grid and PTY size.
+     * Bring it up to date before painting it. */
+    sync_session_grid(hParent, g_active_session);
     update_scrollbar(hParent);
     force_full_terminal_repaint(hParent,
         g_active_session ? g_active_session->term : NULL);
@@ -2226,27 +2262,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * channel is NULL. Without this, TUI apps like nano start with
              * the pre-connection window size and appear blank until the user
              * manually resizes. */
-            if (conn_result == 0 && s->channel && s->term
-                    && g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
-                RECT rc2;
-                GetClientRect(hwnd, &rc2);
-                int ai_w2 = 0;
-                if (g_ai_docked && g_hwndAiChat && IsWindowVisible(g_hwndAiChat))
-                    ai_w2 = g_ai_panel_width;
-                int th2 = rc2.bottom - g_tab_height;
-                if (th2 < 1) th2 = 1;
-                int tw2 = ai_dock_terminal_width(rc2.right, ai_w2, CSB_WIDTH, g_left_margin);
-                int cols2 = tw2 / g_renderer.charWidth;
-                int rows2 = th2 / g_renderer.charHeight;
-                if (cols2 < 1) cols2 = 1;
-                if (rows2 < 1) rows2 = 1;
-                if (cols2 != s->term->cols || rows2 != s->term->rows) {
-                    term_resize(s->term, rows2, cols2);
-                    term_mark_all_dirty(s->term);
-                    dispbuf_resize(&g_renderer.dispbuf, rows2, cols2);
-                    ssh_pty_resize(s->channel, cols2, rows2);
-                }
-            }
+            if (conn_result == 0)
+                sync_session_grid(hwnd, s);
             update_scrollbar(hwnd);
             force_full_terminal_repaint(hwnd, s ? s->term : NULL);
             return 0;
