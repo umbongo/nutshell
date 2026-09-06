@@ -12,17 +12,24 @@
 
 enum {
     OP_END = 0,
-    OP_MOVE,
-    OP_LINE,
-    OP_CURVE,
-    OP_CLOSE,
-    OP_FILLSTROKE,
-    OP_STROKE,
+    OP_MOVE,            /* x, y */
+    OP_LINE,            /* x, y */
+    OP_CURVE,           /* c1x, c1y, c2x, c2y, x, y */
+    OP_CLOSE,           /* (no operands) */
+    OP_FILLSTROKE,      /* (no operands) */
+    OP_STROKE,          /* (no operands) */
     /* Accent variants stroke/fill with a second color. When the caller
      * does not supply an accent, it defaults to fg so these behave
      * identically to OP_STROKE / OP_FILLSTROKE. */
-    OP_STROKE_ACCENT,
-    OP_FILLSTROKE_ACCENT
+    OP_STROKE_ACCENT,   /* (no operands) */
+    OP_FILLSTROKE_ACCENT, /* (no operands) */
+    /* A filled+stroked circle, independent of the running current
+     * point: cx, cy, r. Closes whatever figure precedes it and starts
+     * (and closes) its own, so it never joins the previous subpath —
+     * unlike a zero-length MOVE/LINE/CLOSE "dot", which GDI+ draws as
+     * nothing even with round caps. Fills and strokes immediately,
+     * like OP_FILLSTROKE. */
+    OP_DOT              /* cx, cy, r */
 };
 
 /* Coordinates: uint8_t on a 0..128 grid. 128 is the max coordinate
@@ -114,9 +121,9 @@ static const uint8_t g_glyphs[NS_ICON_COUNT][192] = {
       OP_CURVE, 12, 60, 20, 52, 28, 54, OP_CURVE, 32, 38, 64, 32, 72, 46,
       OP_CURVE, 96, 38, 116, 54, 112, 72, OP_CURVE, 116, 84, 104, 92, 92, 92,
       OP_CLOSE, OP_FILLSTROKE,
-      OP_MOVE, 48, 72, OP_LINE, 48, 72, OP_CLOSE, OP_FILLSTROKE,
-      OP_MOVE, 64, 72, OP_LINE, 64, 72, OP_CLOSE, OP_FILLSTROKE,
-      OP_MOVE, 80, 72, OP_LINE, 80, 72, OP_CLOSE, OP_FILLSTROKE, OP_END },
+      OP_DOT, 48, 72, 4,
+      OP_DOT, 64, 72, 4,
+      OP_DOT, 80, 72, 4, OP_END },
     /* NS_ICON_SEND — up arrow */
     { OP_MOVE, 64, 100, OP_LINE, 64, 36, OP_STROKE,
       OP_MOVE, 40, 60, OP_LINE, 64, 36, OP_LINE, 88, 60, OP_STROKE, OP_END },
@@ -141,13 +148,13 @@ static const uint8_t g_glyphs[NS_ICON_COUNT][192] = {
       OP_MOVE, 58, 76, OP_LINE, 108, 28, OP_STROKE,
       OP_MOVE, 88, 40, OP_LINE, 100, 52, OP_STROKE, OP_END },
     /* NS_ICON_PASSWORD — 3 dots */
-    { OP_MOVE, 32, 64, OP_LINE, 32, 64, OP_CLOSE, OP_FILLSTROKE,
-      OP_MOVE, 64, 64, OP_LINE, 64, 64, OP_CLOSE, OP_FILLSTROKE,
-      OP_MOVE, 96, 64, OP_LINE, 96, 64, OP_CLOSE, OP_FILLSTROKE, OP_END },
+    { OP_DOT, 32, 64, 8,
+      OP_DOT, 64, 64, 8,
+      OP_DOT, 96, 64, 8, OP_END },
     /* NS_ICON_SERVER — tower with vents and indicator LED */
     { OP_MOVE, 40, 16, OP_LINE, 88, 16, OP_LINE, 88, 112,
       OP_LINE, 40, 112, OP_CLOSE, OP_STROKE,
-      OP_MOVE, 50, 28, OP_LINE, 50, 28, OP_CLOSE, OP_FILLSTROKE,
+      OP_DOT, 50, 28, 4,
       OP_MOVE, 48, 44, OP_LINE, 80, 44, OP_STROKE,
       OP_MOVE, 48, 56, OP_LINE, 80, 56, OP_STROKE,
       OP_MOVE, 48, 68, OP_LINE, 80, 68, OP_STROKE,
@@ -341,6 +348,22 @@ void ns_icon_draw_accent(HDC hdc, NsIconId id, const RECT *rc,
             GdipDeletePath(path);
             GdipCreatePath(FillModeAlternate, &path);
             break;
+        case OP_DOT: {
+            float dcx = ox + (float)p[0] * scale;
+            float dcy = oy + (float)p[1] * scale;
+            float r   = (float)p[2] * scale;
+            p += 3;
+            /* Close whatever figure precedes this so the ellipse
+             * (which GDI+ always starts as its own new, closed
+             * figure) never reads as connected to it. */
+            GdipClosePathFigure(path);
+            GdipAddPathEllipse(path, dcx - r, dcy - r, r * 2.0f, r * 2.0f);
+            if (fill_alpha) GdipFillPath(g, (GpBrush *)brush, path);
+            GdipDrawPath(g, pen, path);
+            GdipDeletePath(path);
+            GdipCreatePath(FillModeAlternate, &path);
+            break;
+        }
         default:
             /* Malformed glyph stream — stop to avoid runaway parse. */
             goto done;
