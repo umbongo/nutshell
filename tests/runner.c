@@ -1756,6 +1756,29 @@ int test_ui_tokens_resolve_null_safe(void);
 int test_ui_tokens_colour_gate(void);
 int test_ui_tokens_scale_gate(void);
 
+/* test_ns_layout.c */
+int test_ns_button_layout_with_icon_no_overlap_96(void);
+int test_ns_button_layout_with_icon_no_overlap_192(void);
+int test_ns_button_layout_no_icon_zero_icon(void);
+int test_ns_card_layout_no_overlap_inside_parent_96(void);
+int test_ns_card_layout_no_overlap_inside_parent_192(void);
+int test_ns_card_layout_tiny_rect_no_crash(void);
+int test_approval_card_layout_zero_commands_hides_everything(void);
+int test_approval_card_layout_negative_commands_no_crash(void);
+int test_approval_card_layout_rows_no_overlap_inside_parent_96(void);
+int test_approval_card_layout_rows_no_overlap_inside_parent_192(void);
+int test_approval_card_layout_action_row_does_not_overlap_rows(void);
+int test_approval_card_layout_16_commands_scrollable(void);
+int test_approval_card_layout_exactly_visible_max_not_scrollable(void);
+int test_approval_card_layout_ellipsis_when_text_too_wide(void);
+int test_approval_card_layout_no_ellipsis_when_text_fits(void);
+int test_approval_card_layout_ellipsis_boundary_exact_fit(void);
+int test_approval_card_hit_round_trip_all_row_elements(void);
+int test_approval_card_hit_round_trip_actions(void);
+int test_approval_card_hit_miss_returns_none(void);
+int test_approval_card_hit_null_layout_safe(void);
+int test_approval_card_hit_scrolled_out_rows_not_hit(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -3543,6 +3566,29 @@ int main(void) {
     failed += test_ui_tokens_resolve_null_safe();
     failed += test_ui_tokens_colour_gate();
     failed += test_ui_tokens_scale_gate();
+
+    printf("\n--- Design System: layout ---\n");
+    failed += test_ns_button_layout_with_icon_no_overlap_96();
+    failed += test_ns_button_layout_with_icon_no_overlap_192();
+    failed += test_ns_button_layout_no_icon_zero_icon();
+    failed += test_ns_card_layout_no_overlap_inside_parent_96();
+    failed += test_ns_card_layout_no_overlap_inside_parent_192();
+    failed += test_ns_card_layout_tiny_rect_no_crash();
+    failed += test_approval_card_layout_zero_commands_hides_everything();
+    failed += test_approval_card_layout_negative_commands_no_crash();
+    failed += test_approval_card_layout_rows_no_overlap_inside_parent_96();
+    failed += test_approval_card_layout_rows_no_overlap_inside_parent_192();
+    failed += test_approval_card_layout_action_row_does_not_overlap_rows();
+    failed += test_approval_card_layout_16_commands_scrollable();
+    failed += test_approval_card_layout_exactly_visible_max_not_scrollable();
+    failed += test_approval_card_layout_ellipsis_when_text_too_wide();
+    failed += test_approval_card_layout_no_ellipsis_when_text_fits();
+    failed += test_approval_card_layout_ellipsis_boundary_exact_fit();
+    failed += test_approval_card_hit_round_trip_all_row_elements();
+    failed += test_approval_card_hit_round_trip_actions();
+    failed += test_approval_card_hit_miss_returns_none();
+    failed += test_approval_card_hit_null_layout_safe();
+    failed += test_approval_card_hit_scrolled_out_rows_not_hit();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

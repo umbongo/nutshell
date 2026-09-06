@@ -42,6 +42,7 @@ typedef struct {
     int cmd_visible_h;          /* Visible content height (capped) */
     int cmd_count;              /* Number of command items */
     int cmd_heights[16];        /* Individual card heights (pre-container) */
+    int cmd_text_w[16];         /* Full (unellipsised) command text width, px */
 
     /* DPI scaling factor (1.0 = 96 DPI) */
     float dpi_scale;

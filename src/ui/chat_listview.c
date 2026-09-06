@@ -17,6 +17,9 @@
 #include "ns_draw.h"
 #include "ns_scale.h"
 #include "ns_type.h"
+#include "ns_layout.h"
+#include "ns_tokens.h"
+#include "chat_approval.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -55,43 +58,16 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define BASE_CORNER_R      6   /* User bubble corner radius */
 #define BASE_SIDE_PAD      8   /* Left/right margin for the whole panel */
 
-/* ── Command button layout constants (96 DPI) ───────────────────────── */
+/* ── Command container chrome constants (96 DPI) ─────────────────────
+ * Row/tag/button/gap sizing for the approval card itself now comes from
+ * ns_layout's approval_card_layout(); only the outer container chrome
+ * (border box, scrollbar) is still local to this file. */
 
-#define BASE_BTN_W        76   /* Allow/Deny button width */
-#define BASE_BTN_H        28   /* Allow/Deny button height */
-#define BASE_BTN_GAP       8   /* Gap between buttons */
-#define BASE_TAG_PAD_H     6   /* Safety tag horizontal padding */
-#define BASE_TAG_PAD_V     2   /* Safety tag vertical padding */
-#define BASE_TAG_H        18   /* Safety tag height */
-#define BASE_ALLOW_ALL_H  28   /* "Allow All" button height */
-#define BASE_CMD_CONTAINER_MAX_H  260  /* Max command container height */
-#define BASE_CMD_CARD_GAP   1   /* Divider gap between cards in container */
 #define BASE_SCROLLBAR_W    6   /* Custom scrollbar width */
 
-/* ── Safety tag colours (hardcoded — not theme-dependent) ───────────── */
-
-#define CLR_TAG_SAFE     RGB(140, 140, 140)  /* grey */
-#define CLR_TAG_WRITE    RGB(220, 140, 30)   /* orange */
-#define CLR_TAG_CRITICAL RGB(210, 50, 50)    /* red */
-
-/* ── Button colours ─────────────────────────────────────────────────── */
-
-#define CLR_BTN_ALLOW     RGB(0, 160, 80)
-#define CLR_BTN_ALLOW_P   RGB(0, 120, 60)     /* pressed */
-#define CLR_BTN_DENY      RGB(200, 50, 50)
-#define CLR_BTN_DENY_P    RGB(160, 30, 30)     /* pressed */
-#define CLR_BTN_TEXT      RGB(255, 255, 255)
-#define CLR_GHOST_BORDER  RGB(100, 160, 120)   /* Allow All outline */
-#define CLR_GHOST_TEXT    RGB(100, 160, 120)
-#define CLR_BTN_ALLOW_SEL RGB(144, 213, 148)   /* pastel green — Allow Selected */
-#define CLR_BTN_ALLOW_ALL RGB(240, 180, 110)   /* pastel orange — Allow All */
-#define CLR_BTN_CANCEL    RGB(210, 60, 60)     /* red — Cancel */
-#define CLR_CHK_BORDER    RGB(160, 160, 160)   /* checkbox border */
-#define CLR_CHK_FILL      RGB(0, 160, 80)      /* checkbox checked fill */
-#define CLR_LINK_TEXT     RGB(100, 140, 180)   /* auto-approve link */
-#define CLR_BLOCKED_TEXT  RGB(128, 128, 128)   /* greyed-out command text */
-#define CLR_RETRY_TEXT    RGB(100, 140, 180)   /* [Retry] link colour */
-#define CLR_EXEC_TAG      RGB(180, 140, 220)   /* pastel purple for [EXEC] commands */
+/* Colours for the approval card and chat text now come from ns_tokens()
+ * (Design-System Foundation, task 5) — see paint_cmd_row/paint_cmd_container
+ * and draw_ai_text_with_exec/paint_activity_indicator below. */
 
 /* Height of the inline activity indicator line (96 DPI base) */
 #define BASE_ACTIVITY_H   28
@@ -112,42 +88,10 @@ static void     paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 static void     paint_cmd_card(ChatListView *lv, HDC hdc,
                                ChatMsgItem *item, RECT *rc);
 static void     paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc);
+static void     paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                              const ApprovalRowLayout *row);
 static void     paint_status_item(ChatListView *lv, HDC hdc,
                                   ChatMsgItem *item, RECT *rc);
-
-/* ── Helpers: count pending commands, compute command index ──────────── */
-
-static void count_commands(const ChatMsgList *list, int *total, int *pending)
-{
-    *total = 0;
-    *pending = 0;
-    if (!list) return;
-    ChatMsgItem *item = list->head;
-    while (item) {
-        if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled) {
-            (*total)++;
-            if (item->u.cmd.approved == -1 && !item->u.cmd.blocked)
-                (*pending)++;
-        }
-        item = item->next;
-    }
-}
-
-/* Count how many pending commands have their tickbox selected */
-static int count_selected(const ChatMsgList *list)
-{
-    int n = 0;
-    if (!list) return 0;
-    ChatMsgItem *item = list->head;
-    while (item) {
-        if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled &&
-            item->u.cmd.approved == -1 && !item->u.cmd.blocked &&
-            item->u.cmd.selected)
-            n++;
-        item = item->next;
-    }
-    return n;
-}
 
 /* command_index_of: reserved for future use (e.g., tooltip lookup) */
 
@@ -204,15 +148,24 @@ static int draw_text_utf8(HDC hdc, const char *text, RECT *rc, UINT flags)
 
 /* ── Safety tag colour ──────────────────────────────────────────────── */
 
-/* Theme-driven severity chip colour.  Maps SAFE/WRITE/CRITICAL to
- * the theme's indicator_green/yellow/red respectively. */
-static COLORREF safety_chip_color(const ChatListView *lv, CmdSafetyLevel level)
+/* Safety tag chip colours, from ns_tokens() per the design spec's table:
+ * SAFE -> text_dim, WRITE -> warning, CRITICAL -> danger. */
+static void safety_tag_colors(CmdSafetyLevel level, COLORREF *bg, COLORREF *fg)
 {
-    const ThemeChatColors *tc = &lv->theme->chat;
+    const ThemeTokens *tok = ns_tokens();
     switch (level) {
-    case CMD_WRITE:    return RGB_FROM_THEME(tc->indicator_yellow);
-    case CMD_CRITICAL: return RGB_FROM_THEME(tc->indicator_red);
-    default:           return RGB_FROM_THEME(tc->indicator_green);
+    case CMD_WRITE:
+        *bg = RGB_FROM_THEME(tok->warning.base);
+        *fg = RGB_FROM_THEME(tok->warning.label);
+        break;
+    case CMD_CRITICAL:
+        *bg = RGB_FROM_THEME(tok->danger.base);
+        *fg = RGB_FROM_THEME(tok->danger.label);
+        break;
+    default:
+        *bg = RGB_FROM_THEME(tok->text_dim);
+        *fg = RGB(255, 255, 255);
+        break;
     }
 }
 
@@ -547,42 +500,74 @@ static void recalc_layout(ChatListView *lv)
     ReleaseDC(lv->hwnd, hdc);
 
     /* Pass 2: compute command container — group all commands into a
-     * scrollable container drawn by the first command item. */
+     * scrollable container drawn by the first command item. Each row is a
+     * single fixed-height line (tag + ellipsised command text + checkbox +
+     * Allow/Deny), laid out by ns_layout's approval_card_layout(); see
+     * paint_cmd_container() and build_cmd_card_geometry() below. */
     {
         int n = 0;
         ChatMsgItem *first_cmd = NULL;
-        int sum_h = 0;
-        int card_gap = CLV_SCALE(lv, BASE_CMD_CARD_GAP);
+        int any_blocked = 0;
+
+        HDC hdc2 = GetDC(lv->hwnd);
+        int text_h = 0;
+        if (hdc2) {
+            HGDIOBJ old = SelectObject(hdc2, lv->hMonoFont ? lv->hMonoFont
+                                            : GetStockObject(ANSI_FIXED_FONT));
+            TEXTMETRICA tm;
+            GetTextMetricsA(hdc2, &tm);
+            text_h = tm.tmHeight;
+            SelectObject(hdc2, old);
+        }
 
         item = lv->msg_list ? lv->msg_list->head : NULL;
         while (item) {
             if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled) {
                 if (!first_cmd) first_cmd = item;
-                if (n < 16)
-                    lv->cmd_heights[n] = item->measured_height;
-                sum_h += item->measured_height;
-                if (n > 0) sum_h += card_gap;
+                if (item->u.cmd.blocked) any_blocked = 1;
+                if (n < APPROVAL_MAX_CMDS) {
+                    const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
+                                                               : item->text;
+                    SIZE sz = { 0, 0 };
+                    if (hdc2 && cmd_text && *cmd_text) {
+                        HGDIOBJ old = SelectObject(hdc2, lv->hMonoFont ? lv->hMonoFont
+                                                    : GetStockObject(ANSI_FIXED_FONT));
+                        GetTextExtentPoint32A(hdc2, cmd_text, (int)strlen(cmd_text), &sz);
+                        SelectObject(hdc2, old);
+                    }
+                    lv->cmd_text_w[n] = sz.cx;
+                }
                 n++;
             }
             item = item->next;
         }
+        if (hdc2) ReleaseDC(lv->hwnd, hdc2);
+
         lv->cmd_count = n;
-        lv->cmd_total_h = sum_h;
 
         if (n > 0 && first_cmd) {
-            int max_h = CLV_SCALE(lv, BASE_CMD_CONTAINER_MAX_H);
-            int visible_h = (sum_h > max_h) ? max_h : sum_h;
-            lv->cmd_visible_h = visible_h;
-            int pad = CLV_SCALE(lv, 6);  /* container top/bottom padding */
+            int row_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
+            int min_row_h = text_h + 2 * ns_scale(SP_XS, CLV_DPI(lv));
+            if (min_row_h > row_h) row_h = min_row_h;
 
-            /* Action buttons below the container */
-            int dummy_total, pending;
-            count_commands(lv->msg_list, &dummy_total, &pending);
-            int action_h = 0;
-            if (pending > 0)
-                action_h = CLV_SCALE(lv, 4) + CLV_SCALE(lv, BASE_ALLOW_ALL_H);
+            int visible_rows = (n < APPROVAL_VISIBLE_MAX) ? n : APPROVAL_VISIBLE_MAX;
+            lv->cmd_total_h   = n * row_h;
+            lv->cmd_visible_h = visible_rows * row_h;
 
-            int container_h = visible_h + 2 * pad + action_h;
+            int max_cmd_scroll = lv->cmd_total_h - lv->cmd_visible_h;
+            if (max_cmd_scroll < 0) max_cmd_scroll = 0;
+            if (lv->cmd_scroll_y > max_cmd_scroll) lv->cmd_scroll_y = max_cmd_scroll;
+            if (lv->cmd_scroll_y < 0) lv->cmd_scroll_y = 0;
+
+            int pad          = ns_scale(SP_MD, CLV_DPI(lv));
+            int gap_sm       = ns_scale(SP_SM, CLV_DPI(lv));
+            int action_ctrl_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
+            int interior_h   = 2 * pad + visible_rows * row_h + gap_sm + action_ctrl_h;
+
+            int header_h = any_blocked
+                ? (CLV_SCALE(lv, 20) + CLV_SCALE(lv, 4)) : 0;
+            int border_w = CLV_SCALE(lv, 1);
+            int container_h = 2 * border_w + header_h + interior_h;
 
             /* First command absorbs the full container height */
             first_cmd->measured_height = container_h;
@@ -593,13 +578,9 @@ static void recalc_layout(ChatListView *lv)
                     item->measured_height = 0;
                 item = item->next;
             }
-
-            /* Clamp cmd_scroll_y */
-            int max_cmd_scroll = sum_h - visible_h;
-            if (max_cmd_scroll < 0) max_cmd_scroll = 0;
-            if (lv->cmd_scroll_y > max_cmd_scroll)
-                lv->cmd_scroll_y = max_cmd_scroll;
-            if (lv->cmd_scroll_y < 0) lv->cmd_scroll_y = 0;
+        } else {
+            lv->cmd_total_h = 0;
+            lv->cmd_visible_h = 0;
         }
     }
 
@@ -775,42 +756,27 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
          * AI text as [EXEC] blocks rendered in purple. */
         if (item->u.cmd.settled)
             return 0;
-        /* Compact command card: safety tag inline with command text,
-         * plus a slim status row.  Container logic in recalc_layout
-         * handles grouping and scroll capping. */
-        const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
-                                                   : item->text;
-        text_w = width - 4 * side_pad - 2 * lv->code_pad;
-
-        /* Subtract inline safety tag width so measurement matches the
-         * narrower text area that paint_cmd_card actually uses. */
+        /* Unsettled commands are grouped by recalc_layout's Pass 2 into a
+         * single scrollable container (first item absorbs the container
+         * height, the rest go to 0), so the exact value returned here is
+         * always overwritten. One fixed-height row, matching
+         * approval_card_layout's row height, keeps Pass 1 from treating
+         * this item as needing another remeasure. */
         {
-            const char *tag = safety_tag_text(item->u.cmd.safety);
-            HGDIOBJ tf = SelectObject(hdc, lv->hSmallFont
-                             ? lv->hSmallFont
-                             : GetStockObject(DEFAULT_GUI_FONT));
-            SIZE tsz;
-            GetTextExtentPoint32A(hdc, tag, (int)strlen(tag), &tsz);
-            SelectObject(hdc, tf);
-            int tag_w = tsz.cx + 2 * CLV_SCALE(lv, BASE_TAG_PAD_H);
-            text_w -= tag_w + CLV_SCALE(lv, 4);
+            int row_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
+            int text_line_h;
+            old_font = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
+                                                        : GetStockObject(ANSI_FIXED_FONT));
+            {
+                TEXTMETRICA tm;
+                GetTextMetricsA(hdc, &tm);
+                text_line_h = tm.tmHeight;
+            }
+            SelectObject(hdc, old_font);
+            int min_row_h = text_line_h + 2 * ns_scale(SP_XS, CLV_DPI(lv));
+            if (min_row_h > row_h) row_h = min_row_h;
+            return row_h;
         }
-        if (text_w < 40) text_w = 40;
-
-        old_font = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
-                                                    : GetStockObject(ANSI_FIXED_FONT));
-        SetRect(&rc, 0, 0, text_w, 0);
-        draw_text_utf8(hdc, cmd_text, &rc,
-                       DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-        SelectObject(hdc, old_font);
-
-        int h = (rc.bottom - rc.top) + 2 * lv->code_pad;
-        /* Ensure minimum height for inline safety tag */
-        int min_h = CLV_SCALE(lv, BASE_TAG_H) + 2 * lv->code_pad;
-        if (h < min_h) h = min_h;
-        /* Compact status row + bottom padding */
-        h += CLV_SCALE(lv, 2) + CLV_SCALE(lv, 20) + CLV_SCALE(lv, 4);
-        return h;
     }
 
     case CHAT_ITEM_TOOL_CALL:
@@ -943,7 +909,7 @@ static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
 static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
                                     const char *text, RECT *rc)
 {
-    COLORREF exec_clr = CLR_EXEC_TAG;
+    COLORREF exec_clr = RGB_FROM_THEME(ns_tokens()->info.base);
     HFONT mono_font = lv->hMonoFont ? lv->hMonoFont
                                      : (HFONT)GetStockObject(ANSI_FIXED_FONT);
 
@@ -1374,149 +1340,226 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     SelectObject(hdc, old_font);
 }
 
-/* ── Paint a single compact command card (no outer border — container
- *    handles that).  Draws: command text + inline safety tag + status row. */
+/* ── Paint one approval-card row: tag, ellipsised command text, checkbox,
+ *    and either Allow/Deny buttons (pending) or a decided-status label.
+ *    Shared by paint_cmd_card() (a single settled row) and
+ *    paint_cmd_container() (many rows in the live queue). ────────────── */
+
+static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                          const ApprovalRowLayout *row)
+{
+    const ThemeChatColors *tc = &lv->theme->chat;
+    const ThemeTokens *tok = ns_tokens();
+    int dpi = CLV_DPI(lv);
+
+    /* Safety tag */
+    if (row->tag.w > 0 && row->tag.h > 0) {
+        RECT tag_rc = { row->tag.x, row->tag.y,
+                        row->tag.x + row->tag.w, row->tag.y + row->tag.h };
+        COLORREF tbg, tfg;
+        safety_tag_colors(item->u.cmd.safety, &tbg, &tfg);
+        ns_draw_chip(hdc, &tag_rc, tbg, tfg, lv->hSmallFont,
+                    safety_tag_text(item->u.cmd.safety));
+    }
+
+    /* Command text (single line, ellipsised when it doesn't fit) */
+    if (row->text.w > 0 && row->text.h > 0) {
+        RECT text_rc = { row->text.x, row->text.y,
+                         row->text.x + row->text.w, row->text.y + row->text.h };
+        const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
+                                                   : item->text;
+        SetTextColor(hdc, item->u.cmd.blocked ? RGB_FROM_THEME(tok->text_dim)
+                                               : RGB_FROM_THEME(tc->cmd_text));
+        HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
+                                          : GetStockObject(ANSI_FIXED_FONT));
+        UINT flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT;
+        if (row->ellipsis) flags |= DT_END_ELLIPSIS;
+        draw_text_utf8(hdc, cmd_text, &text_rc, flags);
+        SelectObject(hdc, old_f);
+    }
+
+    int pending = (!item->u.cmd.blocked && item->u.cmd.approved == -1);
+
+    /* Selection checkbox (pending rows only) */
+    if (pending && row->checkbox.w > 0 && row->checkbox.h > 0) {
+        RECT chk_rc = { row->checkbox.x, row->checkbox.y,
+                        row->checkbox.x + row->checkbox.w,
+                        row->checkbox.y + row->checkbox.h };
+        if (item->u.cmd.selected) {
+            ns_draw_round_fill(hdc, &chk_rc, ns_scale(R_CTRL, dpi),
+                               RGB_FROM_THEME(tok->success.base), 255);
+            SetTextColor(hdc, RGB_FROM_THEME(tok->success.label));
+            DrawTextW(hdc, L"\x2713", 1, &chk_rc,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        } else {
+            ns_draw_round_stroke(hdc, &chk_rc, ns_scale(R_CTRL, dpi),
+                                 RGB_FROM_THEME(tok->border), STROKE_HAIRLINE);
+        }
+    }
+
+    /* Allow / Deny buttons (pending), or a decided-status label */
+    if (pending && row->allow.w > 0 && row->deny.w > 0) {
+        RECT allow_rc = { row->allow.x, row->allow.y,
+                          row->allow.x + row->allow.w, row->allow.y + row->allow.h };
+        RECT deny_rc  = { row->deny.x, row->deny.y,
+                          row->deny.x + row->deny.w, row->deny.y + row->deny.h };
+        ns_draw_button(hdc, &allow_rc, &tok->success, NS_BTN_REST, 0,
+                       "Allow", lv->hSmallFont, dpi);
+        ns_draw_button(hdc, &deny_rc, &tok->danger, NS_BTN_REST, 0,
+                       "Deny", lv->hSmallFont, dpi);
+    } else if (!item->u.cmd.blocked && item->u.cmd.approved != -1
+               && row->allow.w > 0 && row->deny.w > 0) {
+        const char *status = (item->u.cmd.approved == 1) ? "Approved" : "Denied";
+        COLORREF sc = (item->u.cmd.approved == 1)
+            ? RGB_FROM_THEME(tok->success.base) : RGB_FROM_THEME(tok->danger.base);
+        RECT sts_rc = { row->allow.x, row->allow.y,
+                        row->deny.x + row->deny.w, row->deny.y + row->deny.h };
+        SetTextColor(hdc, sc);
+        HGDIOBJ old_f2 = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                          : GetStockObject(DEFAULT_GUI_FONT));
+        DrawTextA(hdc, status, -1, &sts_rc,
+                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(hdc, old_f2);
+    }
+}
+
+/* ── Paint a single, standalone (settled) command row — no container,
+ *    no header, no scrollbar, no card-wide actions. ─────────────────── */
 
 static void paint_cmd_card(ChatListView *lv, HDC hdc,
                            ChatMsgItem *item, RECT *rc)
 {
-    const ThemeChatColors *tc = &lv->theme->chat;
-    int code_pad = lv->code_pad;
-    int tag_h    = CLV_SCALE(lv, BASE_TAG_H);
-    int tag_pad  = CLV_SCALE(lv, BASE_TAG_PAD_H);
+    const char *cmd_text = item->u.cmd.command ? item->u.cmd.command : item->text;
+
+    HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
+                                      : GetStockObject(ANSI_FIXED_FONT));
+    TEXTMETRICA tm;
+    GetTextMetricsA(hdc, &tm);
+    SIZE sz = { 0, 0 };
+    if (cmd_text && *cmd_text)
+        GetTextExtentPoint32A(hdc, cmd_text, (int)strlen(cmd_text), &sz);
+    SelectObject(hdc, old_f);
+
+    NsRect r = { rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top };
+    int w = sz.cx;
+    ApprovalCardLayout layout;
+    approval_card_layout(r, 1, &w, tm.tmHeight, CLV_DPI(lv), &layout);
 
     SetBkMode(hdc, TRANSPARENT);
-
-    /* ── Safety tag (top-right, inline with command text) ──────────── */
-    COLORREF tag_clr = safety_chip_color(lv, item->u.cmd.safety);
-    const char *tag_text = safety_tag_text(item->u.cmd.safety);
-
-    HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                        : GetStockObject(DEFAULT_GUI_FONT));
-    SIZE tag_sz;
-    GetTextExtentPoint32A(hdc, tag_text, (int)strlen(tag_text), &tag_sz);
-    int tag_w = tag_sz.cx + 2 * tag_pad;
-
-    RECT tag_rc;
-    tag_rc.right  = rc->right - code_pad;
-    tag_rc.left   = tag_rc.right - tag_w;
-    tag_rc.top    = rc->top + code_pad;
-    tag_rc.bottom = tag_rc.top + tag_h;
-
-    ns_draw_round_fill(hdc, &tag_rc, ns_scale(R_CTRL, CLV_DPI(lv)), tag_clr, 255);
-    SetTextColor(hdc, CLR_BTN_TEXT);
-    DrawTextA(hdc, tag_text, -1, &tag_rc,
-              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
-    /* ── Command text (monospace, left of tag) ────────────────────── */
-    const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
-                                               : item->text;
-    if (item->u.cmd.blocked)
-        SetTextColor(hdc, CLR_BLOCKED_TEXT);
-    else
-        SetTextColor(hdc, RGB_FROM_THEME(tc->cmd_text));
-
-    SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
-                                     : GetStockObject(ANSI_FIXED_FONT));
-    RECT text_rc;
-    text_rc.left   = rc->left + code_pad;
-    text_rc.top    = rc->top + code_pad;
-    text_rc.right  = tag_rc.left - CLV_SCALE(lv, 4);
-    text_rc.bottom = rc->bottom - CLV_SCALE(lv, 22) - CLV_SCALE(lv, 2);
-    draw_text_utf8(hdc, cmd_text, &text_rc, DT_WORDBREAK | DT_NOPREFIX);
-
-    /* ── Status row ───────────────────────────────────────────────── */
-    int status_top = rc->bottom - CLV_SCALE(lv, 20) - CLV_SCALE(lv, 4);
-    int status_h   = CLV_SCALE(lv, 20);
-
-    SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                     : GetStockObject(DEFAULT_GUI_FONT));
-
-    if (item->u.cmd.blocked) {
-        /* Lock icon + "Blocked" */
-        RECT lock_rc = { rc->left + code_pad, status_top,
-                         rc->left + code_pad + CLV_SCALE(lv, 18),
-                         status_top + status_h };
-        ns_icon_draw(hdc, NS_ICON_LOCK, &lock_rc,
-                     CLR_BLOCKED_TEXT, (UINT)(96.0f * lv->dpi_scale));
-        SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                         : GetStockObject(DEFAULT_GUI_FONT));
-        SetTextColor(hdc, RGB_FROM_THEME(tc->indicator_red));
-        RECT blk_rc = { rc->left + code_pad + CLV_SCALE(lv, 20), status_top,
-                        rc->right - code_pad, status_top + status_h };
-        DrawTextA(hdc, "Blocked", -1, &blk_rc,
-                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-    } else if (item->u.cmd.approved == -1) {
-        /* Checkbox */
-        int chk_sz = CLV_SCALE(lv, 14);
-        int chk_x  = rc->left + code_pad;
-        int chk_y  = status_top + (status_h - chk_sz) / 2;
-        RECT chk_rc = { chk_x, chk_y, chk_x + chk_sz, chk_y + chk_sz };
-
-        if (item->u.cmd.selected) {
-            ns_draw_round_fill(hdc, &chk_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
-                               CLR_CHK_FILL, 255);
-            SetTextColor(hdc, CLR_BTN_TEXT);
-            DrawTextW(hdc, L"\x2713", 1, &chk_rc,
-                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        } else {
-            ns_draw_round_stroke(hdc, &chk_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
-                                 CLR_CHK_BORDER, STROKE_HAIRLINE);
-        }
-
-        SetTextColor(hdc, CLR_CHK_BORDER);
-        RECT lbl_rc = { chk_x + chk_sz + CLV_SCALE(lv, 4), status_top,
-                        rc->right - code_pad, status_top + status_h };
-        DrawTextA(hdc, item->u.cmd.selected ? "Selected" : "Select",
-                  -1, &lbl_rc,
-                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-    } else {
-        const char *status;
-        COLORREF status_color;
-        if (item->u.cmd.approved == 1) {
-            status = "Approved";
-            status_color = RGB_FROM_THEME(tc->indicator_green);
-        } else {
-            status = "Denied";
-            status_color = RGB_FROM_THEME(tc->indicator_red);
-        }
-        SetTextColor(hdc, status_color);
-        RECT sts_rc = { rc->left + code_pad, status_top,
-                        rc->right - code_pad, status_top + status_h };
-        DrawTextA(hdc, status, -1, &sts_rc,
-                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-    }
-
-    SelectObject(hdc, old_font);
+    if (layout.n_rows > 0)
+        paint_cmd_row(lv, hdc, item, &layout.rows[0]);
 }
 
-/* ── Paint the grouped command container: outer box, scrollable cards,
- *    themed scrollbar, and action buttons below. ──────────────────── */
+/* ── Shared geometry for the live command queue container, computed once
+ *    and used by both paint_cmd_container() and on_lbuttondown() so the
+ *    two can never drift apart. ───────────────────────────────────────── */
+
+typedef struct {
+    ApprovalCardLayout layout;
+    ChatMsgItem *cmd_items[APPROVAL_MAX_CMDS];
+    int n;
+    int first_row;
+    int box_left, box_top, box_right, box_bot;
+    int clip_left, clip_top, clip_right, clip_bot;
+    int card_right;
+    int needs_scroll;
+    int any_blocked;
+    int blocked_count;
+    int border_w;
+    int header_h;
+} CmdCardGeometry;
+
+static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
+                                    int y, int h, int cw, CmdCardGeometry *g)
+{
+    memset(g, 0, sizeof(*g));
+
+    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
+    int border_w = CLV_SCALE(lv, 1);
+    int gap_sm   = ns_scale(SP_SM, CLV_DPI(lv));
+    int action_ctrl_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
+    int sb_w     = CLV_SCALE(lv, BASE_SCROLLBAR_W);
+
+    g->border_w  = border_w;
+    g->box_left  = side_pad + side_pad;
+    g->box_right = cw - side_pad - side_pad;
+    g->box_top   = y;
+    g->box_bot   = y + h;
+
+    g->clip_left  = g->box_left + border_w;
+    g->clip_right = g->box_right - border_w;
+    g->clip_top   = g->box_top + border_w;
+    g->clip_bot   = g->box_bot - border_w;
+
+    int n = lv->cmd_count;
+    if (n > APPROVAL_MAX_CMDS) n = APPROVAL_MAX_CMDS;
+    int ci = 0;
+    ChatMsgItem *c = lv->msg_list ? lv->msg_list->head : NULL;
+    while (c && ci < APPROVAL_MAX_CMDS) {
+        if (c->type == CHAT_ITEM_COMMAND && !c->u.cmd.settled) {
+            g->cmd_items[ci] = c;
+            if (c->u.cmd.blocked) { g->any_blocked = 1; g->blocked_count++; }
+            ci++;
+        }
+        c = c->next;
+    }
+    g->n = n;
+
+    g->header_h = g->any_blocked
+        ? (CLV_SCALE(lv, 20) + CLV_SCALE(lv, 4)) : 0;
+    g->clip_top += g->header_h;
+
+    g->needs_scroll = (lv->cmd_total_h > lv->cmd_visible_h);
+    g->card_right = g->needs_scroll
+        ? (g->clip_right - sb_w - CLV_SCALE(lv, 3)) : g->clip_right;
+
+    int text_h = 0;
+    if (hdc_for_measure) {
+        HGDIOBJ old = SelectObject(hdc_for_measure, lv->hMonoFont ? lv->hMonoFont
+                                    : GetStockObject(ANSI_FIXED_FONT));
+        TEXTMETRICA tm;
+        GetTextMetricsA(hdc_for_measure, &tm);
+        text_h = tm.tmHeight;
+        SelectObject(hdc_for_measure, old);
+    }
+    int row_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
+    int min_row_h = text_h + 2 * ns_scale(SP_XS, CLV_DPI(lv));
+    if (min_row_h > row_h) row_h = min_row_h;
+
+    int first_row = (row_h > 0) ? (lv->cmd_scroll_y / row_h) : 0;
+    int max_first = n - APPROVAL_VISIBLE_MAX;
+    if (max_first < 0) max_first = 0;
+    if (first_row > max_first) first_row = max_first;
+    if (first_row < 0) first_row = 0;
+    g->first_row = first_row;
+
+    int rem_n = n - first_row;
+    NsRect body = { g->clip_left, g->clip_top,
+                   g->card_right - g->clip_left, g->clip_bot - g->clip_top };
+    approval_card_layout(body, rem_n, &lv->cmd_text_w[first_row], text_h,
+                        CLV_DPI(lv), &g->layout);
+    (void)gap_sm;
+    (void)action_ctrl_h;
+}
+
+/* ── Paint the grouped command container: outer box, one "Blocked" banner
+ *    (if any row is blocked), scrollable rows, themed scrollbar, and the
+ *    card-wide Allow All / Cancel actions. ──────────────────────────── */
 
 static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
-    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
-    int border_w = CLV_SCALE(lv, 1);
-    int corner   = CLV_SCALE(lv, BASE_CORNER_R);
-    int pad      = CLV_SCALE(lv, 6);
-    int card_gap = CLV_SCALE(lv, BASE_CMD_CARD_GAP);
-    int sb_w     = CLV_SCALE(lv, BASE_SCROLLBAR_W);
-    int code_pad = lv->code_pad;
+    const ThemeTokens *tok = ns_tokens();
+    int corner = CLV_SCALE(lv, BASE_CORNER_R);
 
-    int dummy_total, pending_cmds;
-    count_commands(lv->msg_list, &dummy_total, &pending_cmds);
-    int action_h = (pending_cmds > 0)
-                 ? CLV_SCALE(lv, 4) + CLV_SCALE(lv, BASE_ALLOW_ALL_H) : 0;
+    RECT client_rc;
+    GetClientRect(lv->hwnd, &client_rc);
+    int cw = client_rc.right - client_rc.left;
 
-    int needs_scroll = (lv->cmd_total_h > lv->cmd_visible_h);
+    CmdCardGeometry g;
+    build_cmd_card_geometry(lv, hdc, rc->top, rc->bottom - rc->top, cw, &g);
 
-    /* ── Container box (excludes action buttons) ──────────────────── */
-    RECT box;
-    box.left   = rc->left + side_pad;
-    box.top    = rc->top;
-    box.right  = rc->right - side_pad;
-    box.bottom = rc->bottom - action_h;
+    RECT box = { g.box_left, g.box_top, g.box_right, g.box_bot };
 
     /* Background */
     HBRUSH bg_br = CreateSolidBrush(RGB_FROM_THEME(tc->cmd_bg));
@@ -1524,7 +1567,7 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
     DeleteObject(bg_br);
 
     /* Border */
-    HPEN border_pen = CreatePen(PS_SOLID, border_w,
+    HPEN border_pen = CreatePen(PS_SOLID, g.border_w,
                                 RGB_FROM_THEME(tc->cmd_border));
     HGDIOBJ old_pen = SelectObject(hdc, border_pen);
     HGDIOBJ old_br  = SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -1533,121 +1576,79 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
     SelectObject(hdc, old_pen);
     DeleteObject(border_pen);
 
-    /* ── Clipped scroll region for cards ──────────────────────────── */
-    RECT clip;
-    clip.left   = box.left + border_w;
-    clip.top    = box.top + border_w;
-    clip.right  = box.right - border_w;
-    clip.bottom = box.bottom - border_w;
+    SetBkMode(hdc, TRANSPARENT);
 
+    /* ── "Blocked" banner, once per card ──────────────────────────── */
+    if (g.any_blocked) {
+        RECT hdr_rc = { g.clip_left, g.box_top + g.border_w,
+                        g.card_right, g.box_top + g.border_w + g.header_h };
+        int icon_w = CLV_SCALE(lv, 16);
+        RECT lock_rc = { hdr_rc.left, hdr_rc.top,
+                         hdr_rc.left + icon_w, hdr_rc.bottom };
+        ns_icon_draw(hdc, NS_ICON_LOCK, &lock_rc, RGB_FROM_THEME(tok->text_dim),
+                    (UINT)(96.0f * lv->dpi_scale));
+        RECT lbl_rc = { lock_rc.right + CLV_SCALE(lv, 4), hdr_rc.top,
+                        hdr_rc.right, hdr_rc.bottom };
+        SetTextColor(hdc, RGB_FROM_THEME(tok->text_dim));
+        HGDIOBJ hf = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                       : GetStockObject(DEFAULT_GUI_FONT));
+        char buf[48];
+        if (g.blocked_count == 1)
+            snprintf(buf, sizeof(buf), "Blocked");
+        else
+            snprintf(buf, sizeof(buf), "Blocked (%d)", g.blocked_count);
+        DrawTextA(hdc, buf, -1, &lbl_rc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        SelectObject(hdc, hf);
+    }
+
+    /* ── Clipped scroll region for rows ────────────────────────────── */
     int saved_dc = SaveDC(hdc);
-    IntersectClipRect(hdc, clip.left, clip.top, clip.right, clip.bottom);
+    IntersectClipRect(hdc, g.clip_left, g.clip_top, g.card_right, g.clip_bot);
 
-    /* Card content area (narrower if scrollbar shown) */
-    int card_right = needs_scroll ? (clip.right - sb_w - CLV_SCALE(lv, 3))
-                                  : clip.right;
-
-    /* Walk all command items and paint them within the clipped region */
-    int card_y = box.top + pad - lv->cmd_scroll_y;
-    int ci = 0;
-    ChatMsgItem *cmd = lv->msg_list ? lv->msg_list->head : NULL;
-    while (cmd) {
-        if (cmd->type == CHAT_ITEM_COMMAND && !cmd->u.cmd.settled && ci < lv->cmd_count) {
-            /* Divider line between cards */
-            if (ci > 0) {
-                RECT div_rc = { clip.left + code_pad, card_y - card_gap,
-                                card_right - code_pad, card_y };
-                HBRUSH div_br = CreateSolidBrush(RGB_FROM_THEME(tc->cmd_border));
-                FillRect(hdc, &div_rc, div_br);
-                DeleteObject(div_br);
-            }
-
-            int card_h = lv->cmd_heights[ci];
-            RECT card_rc = { clip.left, card_y, card_right, card_y + card_h };
-            paint_cmd_card(lv, hdc, cmd, &card_rc);
-
-            card_y += card_h + card_gap;
-            ci++;
-        }
-        cmd = cmd->next;
+    for (int i = 0; i < g.layout.n_rows; i++) {
+        const ApprovalRowLayout *rowl = &g.layout.rows[i];
+        if (rowl->tag.w <= 0 && rowl->text.w <= 0) continue;
+        ChatMsgItem *citem = g.cmd_items[g.first_row + i];
+        paint_cmd_row(lv, hdc, citem, rowl);
     }
 
     RestoreDC(hdc, saved_dc);
 
     /* ── Themed scrollbar (inside box, right edge) ────────────────── */
-    if (needs_scroll) {
-        int track_left  = box.right - border_w - sb_w - CLV_SCALE(lv, 2);
-        int track_top   = box.top + pad;
-        int track_bot   = box.bottom - pad;
+    if (g.needs_scroll) {
+        int sb_w = CLV_SCALE(lv, BASE_SCROLLBAR_W);
+        int track_left  = g.box_right - g.border_w - sb_w - CLV_SCALE(lv, 2);
+        int track_top   = g.clip_top;
+        int track_bot   = g.clip_bot;
         int track_h     = track_bot - track_top;
 
-        /* Track */
-        RECT track_rc = { track_left, track_top,
-                          track_left + sb_w, track_bot };
+        RECT track_rc = { track_left, track_top, track_left + sb_w, track_bot };
         ns_draw_round_fill(hdc, &track_rc, sb_w / 2,
                            RGB_FROM_THEME(tc->cmd_border), 255);
 
-        /* Thumb */
         int max_cmd_scroll = lv->cmd_total_h - lv->cmd_visible_h;
         if (max_cmd_scroll < 1) max_cmd_scroll = 1;
         int thumb_h = track_h * lv->cmd_visible_h / lv->cmd_total_h;
         if (thumb_h < CLV_SCALE(lv, 20)) thumb_h = CLV_SCALE(lv, 20);
         int thumb_y = track_top +
             (lv->cmd_scroll_y * (track_h - thumb_h)) / max_cmd_scroll;
-        RECT thumb_rc = { track_left, thumb_y,
-                          track_left + sb_w, thumb_y + thumb_h };
+        RECT thumb_rc = { track_left, thumb_y, track_left + sb_w, thumb_y + thumb_h };
         ns_draw_round_fill(hdc, &thumb_rc, sb_w / 2,
                            RGB_FROM_THEME(lv->theme->accent), 255);
     }
 
-    /* ── Action buttons: Allow Selected | Cancel | Allow All ──────── */
-    if (pending_cmds > 0) {
-        int ab_h   = CLV_SCALE(lv, BASE_ALLOW_ALL_H);
-        int ab_y   = box.bottom + CLV_SCALE(lv, 4);
-        int ab_w   = CLV_SCALE(lv, 120);
-        int ab_gap = CLV_SCALE(lv, 6);
-        int ab_x   = box.left;
-
-        SetBkMode(hdc, TRANSPARENT);
-        HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                            : GetStockObject(DEFAULT_GUI_FONT));
-
-        /* Allow Selected (pastel green) */
-        RECT sel_rc = { ab_x, ab_y, ab_x + ab_w, ab_y + ab_h };
-        ns_draw_round_fill(hdc, &sel_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
-                           CLR_BTN_ALLOW_SEL, 255);
-        SetTextColor(hdc, RGB(30, 30, 30));
-        {
-            int nsel = count_selected(lv->msg_list);
-            char sel_text[48];
-            if (nsel > 0)
-                snprintf(sel_text, sizeof(sel_text),
-                         "Allow Selected (%d)", nsel);
-            else
-                snprintf(sel_text, sizeof(sel_text), "Allow Selected");
-            DrawTextA(hdc, sel_text, -1, &sel_rc,
-                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        }
-
-        /* Cancel (red) */
-        int cx = ab_x + ab_w + ab_gap;
-        RECT can_rc = { cx, ab_y, cx + CLV_SCALE(lv, 80), ab_y + ab_h };
-        ns_draw_round_fill(hdc, &can_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
-                           CLR_BTN_CANCEL, 255);
-        SetTextColor(hdc, CLR_BTN_TEXT);
-        DrawTextA(hdc, "Cancel", -1, &can_rc,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
-        /* Allow All (pastel orange) */
-        int ax = can_rc.right + ab_gap;
-        RECT all_rc = { ax, ab_y, ax + CLV_SCALE(lv, 100), ab_y + ab_h };
-        ns_draw_round_fill(hdc, &all_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
-                           CLR_BTN_ALLOW_ALL, 255);
-        SetTextColor(hdc, RGB(30, 30, 30));
-        DrawTextA(hdc, "Allow All", -1, &all_rc,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
-        SelectObject(hdc, old_font);
+    /* ── Card-wide actions: Allow All | Cancel ────────────────────── */
+    {
+        RECT allow_all_rc = { g.layout.allow_all.x, g.layout.allow_all.y,
+                              g.layout.allow_all.x + g.layout.allow_all.w,
+                              g.layout.allow_all.y + g.layout.allow_all.h };
+        RECT cancel_rc = { g.layout.cancel.x, g.layout.cancel.y,
+                           g.layout.cancel.x + g.layout.cancel.w,
+                           g.layout.cancel.y + g.layout.cancel.h };
+        ns_draw_button(hdc, &allow_all_rc, &tok->warning, NS_BTN_REST, 0,
+                      "Allow All", lv->hSmallFont, CLV_DPI(lv));
+        ns_draw_button(hdc, &cancel_rc, &tok->danger, NS_BTN_REST, 0,
+                      "Cancel", lv->hSmallFont, CLV_DPI(lv));
     }
 }
 
@@ -1749,7 +1750,7 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
         SIZE sz;
         GetTextExtentPoint32A(hdc, status_buf, (int)strlen(status_buf), &sz);
         int retry_x = text_rc.left + sz.cx + CLV_SCALE(lv, 10);
-        SetTextColor(hdc, CLR_RETRY_TEXT);
+        SetTextColor(hdc, RGB_FROM_THEME(ns_tokens()->link.base));
         RECT retry_rc;
         retry_rc.left   = retry_x;
         retry_rc.top    = y;
@@ -1918,10 +1919,6 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
 {
     SetFocus(lv->hwnd);   /* Acquire keyboard focus so WM_KEYDOWN fires */
     int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
-    int code_pad = lv->code_pad;
-
-    int total_cmds, pending_cmds;
-    count_commands(lv->msg_list, &total_cmds, &pending_cmds);
 
     /* Walk items to find which one was clicked */
     int y = lv->msg_gap - lv->scroll_y;
@@ -1964,33 +1961,26 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
 
         /* ── Command container hit testing ─────────────────────────── */
         if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled && my >= y && my < y + h) {
-            int pad      = CLV_SCALE(lv, 6);
-            int card_gap = CLV_SCALE(lv, BASE_CMD_CARD_GAP);
-            int sb_w     = CLV_SCALE(lv, BASE_SCROLLBAR_W);
-            int action_h = (pending_cmds > 0)
-                         ? CLV_SCALE(lv, 4) + CLV_SCALE(lv, BASE_ALLOW_ALL_H)
-                         : 0;
-
             RECT client_rc;
             GetClientRect(lv->hwnd, &client_rc);
             int cw2 = client_rc.right - client_rc.left;
 
-            int box_left  = side_pad + side_pad;
-            int box_right = cw2 - side_pad - side_pad;
-            int box_top   = y;
-            int box_bot   = y + h - action_h;
+            HDC mdc = GetDC(lv->hwnd);
+            CmdCardGeometry g;
+            build_cmd_card_geometry(lv, mdc, y, h, cw2, &g);
+            if (mdc) ReleaseDC(lv->hwnd, mdc);
 
             /* ── Scrollbar click ──────────────────────────────────── */
-            int needs_scroll = (lv->cmd_total_h > lv->cmd_visible_h);
-            if (needs_scroll) {
-                int sb_right = box_right - CLV_SCALE(lv, 2);
+            if (g.needs_scroll) {
+                int sb_w = CLV_SCALE(lv, BASE_SCROLLBAR_W);
+                int sb_right = g.box_right - CLV_SCALE(lv, 2);
                 int sb_left  = sb_right - sb_w;
                 if (mx >= sb_left && mx <= sb_right &&
-                    my >= box_top + pad && my < box_bot - pad) {
+                    my >= g.clip_top && my < g.clip_bot) {
                     int track_h = lv->cmd_visible_h;
                     int max_cs = lv->cmd_total_h - lv->cmd_visible_h;
-                    int rel = my - box_top - pad;
-                    lv->cmd_scroll_y = (rel * max_cs) / track_h;
+                    int rel = my - g.clip_top;
+                    lv->cmd_scroll_y = (track_h > 0) ? (rel * max_cs) / track_h : 0;
                     if (lv->cmd_scroll_y < 0) lv->cmd_scroll_y = 0;
                     if (lv->cmd_scroll_y > max_cs) lv->cmd_scroll_y = max_cs;
                     InvalidateRect(lv->hwnd, NULL, FALSE);
@@ -1998,78 +1988,47 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
                 }
             }
 
-            /* ── Action buttons below container ───────────────────── */
-            if (pending_cmds > 0 && my >= box_bot) {
-                int ab_h   = CLV_SCALE(lv, BASE_ALLOW_ALL_H);
-                int ab_y2  = box_bot + CLV_SCALE(lv, 4);
-                int ab_w2  = CLV_SCALE(lv, 120);
-                int ab_gap = CLV_SCALE(lv, 6);
+            int row_out = -1;
+            int hit = approval_card_hit(&g.layout, mx, my, &row_out);
 
-                /* Allow Selected */
-                if (mx >= box_left && mx < box_left + ab_w2 &&
-                    my >= ab_y2 && my < ab_y2 + ab_h) {
-                    if (parent)
-                        PostMessage(parent, WM_COMMAND,
-                                    MAKEWPARAM(IDC_CMD_APPROVE_SEL, 0), 0);
-                    return 1;
-                }
-                /* Cancel */
-                int cx2 = box_left + ab_w2 + ab_gap;
-                int cw3 = CLV_SCALE(lv, 80);
-                if (mx >= cx2 && mx < cx2 + cw3 &&
-                    my >= ab_y2 && my < ab_y2 + ab_h) {
-                    if (parent)
-                        PostMessage(parent, WM_COMMAND,
-                                    MAKEWPARAM(IDC_CMD_CANCEL_ALL, 0), 0);
-                    return 1;
-                }
-                /* Allow All */
-                int ax2 = cx2 + cw3 + ab_gap;
-                int aw2 = CLV_SCALE(lv, 100);
-                if (mx >= ax2 && mx < ax2 + aw2 &&
-                    my >= ab_y2 && my < ab_y2 + ab_h) {
-                    if (parent)
-                        PostMessage(parent, WM_COMMAND,
-                                    MAKEWPARAM(IDC_CMD_APPROVE_ALL, 0), 0);
-                    return 1;
-                }
-                return 0;
+            if (hit == HIT_ALLOW_ALL) {
+                if (parent)
+                    PostMessage(parent, WM_COMMAND,
+                                MAKEWPARAM(IDC_CMD_APPROVE_ALL, 0), 0);
+                return 1;
             }
-
-            /* ── Card click (checkbox) — walk cards with scroll offset */
-            {
-                int card_y2 = box_top + pad - lv->cmd_scroll_y;
-                int ci = 0;
-                ChatMsgItem *cmd2 = lv->msg_list ? lv->msg_list->head : NULL;
-                while (cmd2) {
-                    if (cmd2->type == CHAT_ITEM_COMMAND && !cmd2->u.cmd.settled && ci < lv->cmd_count) {
-                        int card_h = lv->cmd_heights[ci];
-                        /* Only if click is within visible container area */
-                        if (my >= card_y2 && my < card_y2 + card_h &&
-                            my >= box_top + pad && my < box_bot - pad) {
-                            /* Check checkbox area */
-                            if (!cmd2->u.cmd.blocked &&
-                                cmd2->u.cmd.approved == -1) {
-                                int st = card_y2 + card_h -
-                                         CLV_SCALE(lv, 20) - CLV_SCALE(lv, 4);
-                                int chk_sz = CLV_SCALE(lv, 14);
-                                int chk_x = box_left + code_pad;
-                                if (mx >= chk_x &&
-                                    mx < chk_x + chk_sz + CLV_SCALE(lv, 60) &&
-                                    my >= st &&
-                                    my < st + CLV_SCALE(lv, 20)) {
-                                    cmd2->u.cmd.selected =
-                                        !cmd2->u.cmd.selected;
-                                    InvalidateRect(lv->hwnd, NULL, FALSE);
-                                    return 1;
-                                }
-                            }
-                            return 0;  /* Click in card but not interactive */
+            if (hit == HIT_CANCEL) {
+                if (parent)
+                    PostMessage(parent, WM_COMMAND,
+                                MAKEWPARAM(IDC_CMD_CANCEL_ALL, 0), 0);
+                return 1;
+            }
+            if (row_out >= 0) {
+                int real_idx = g.first_row + row_out;
+                if (real_idx >= 0 && real_idx < g.n) {
+                    ChatMsgItem *citem = g.cmd_items[real_idx];
+                    switch (hit) {
+                    case HIT_CHECKBOX:
+                        if (!citem->u.cmd.blocked && citem->u.cmd.approved == -1) {
+                            citem->u.cmd.selected = !citem->u.cmd.selected;
+                            InvalidateRect(lv->hwnd, NULL, FALSE);
                         }
-                        card_y2 += card_h + card_gap;
-                        ci++;
+                        return 1;
+                    case HIT_ALLOW:
+                        if (!citem->u.cmd.blocked && citem->u.cmd.approved == -1
+                            && parent)
+                            PostMessage(parent, WM_COMMAND,
+                                        MAKEWPARAM(IDC_CMD_APPROVE_BASE + real_idx, 0), 0);
+                        return 1;
+                    case HIT_DENY:
+                        if (!citem->u.cmd.blocked && citem->u.cmd.approved == -1
+                            && parent)
+                            PostMessage(parent, WM_COMMAND,
+                                        MAKEWPARAM(IDC_CMD_DENY_BASE + real_idx, 0), 0);
+                        return 1;
+                    default:
+                        break;
                     }
-                    cmd2 = cmd2->next;
                 }
             }
             return 0;

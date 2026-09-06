@@ -316,7 +316,7 @@ int test_ui_tokens_resolve_null_safe(void)
 
 /* ns_draw.c (renamed from ui_draw.c in Task 4) is the shared drawing
  * module and is excluded here: it is allowed to call RGB() directly. */
-#define COLOUR_GATE_BASELINE 79
+#define COLOUR_GATE_BASELINE 59
 #define SCALE_GATE_BASELINE  61
 
 static char *read_whole_file(const char *path)
