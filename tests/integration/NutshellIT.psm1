@@ -34,6 +34,8 @@ public class NutshellNative {
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
     [DllImport("user32.dll", EntryPoint="SendMessageW")] public static extern IntPtr SendMsg(IntPtr h, uint m, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+    [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendMsgStr(IntPtr h, uint m, IntPtr w, string l);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
@@ -236,6 +238,49 @@ function Select-NutshellTab {
     Start-Sleep -Milliseconds 700
 }
 
+function Get-NutshellAiKey {
+    <# API key for the AI cases: $env:NUTSHELL_IT_AI_KEY, else tests/integration/.ai_key (git-ignored). $null if neither. #>
+    if ($env:NUTSHELL_IT_AI_KEY) { return $env:NUTSHELL_IT_AI_KEY.Trim() }
+    $f = Join-Path $PSScriptRoot ".ai_key"
+    if (Test-Path $f) { $k = (Get-Content $f -Raw).Trim(); if ($k) { return $k } }
+    return $null
+}
+
+function Get-NutshellAiPanel {
+    <# HWND of the docked AI Assist panel (child of the main window), or Zero. #>
+    param([Parameter(Mandatory)] $Session)
+    return [NutshellNative]::FindWindowEx($Session.Main, [IntPtr]::Zero, "Nutshell_AIChat", $null)
+}
+
+function Open-NutshellAiPanel {
+    <# View > AI Assist, then return the docked panel HWND (throws if it did not appear). #>
+    param([Parameter(Mandatory)] $Session)
+    Send-NutshellCommand -Session $Session -Id 2020 -SettleMs 1500      # IDM_VIEW_AI_CHAT
+    $p = Get-NutshellAiPanel -Session $Session
+    if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel did not open (no API key, or no session?)" }
+    return $p
+}
+
+function Send-NutshellAiPrompt {
+    <# Put text in the AI input box and press Send. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Text)
+    $p = Get-NutshellAiPanel -Session $Session
+    if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel is not open" }
+    $input = [NutshellNative]::GetDlgItem($p, 4002)                                   # IDC_CHAT_INPUT
+    [NutshellNative]::SendMsgStr($input, 0x000C, [IntPtr]::Zero, $Text) | Out-Null   # WM_SETTEXT
+    [NutshellNative]::PostMessage($p, $script:WM_COMMAND, [IntPtr]4003, [IntPtr]::Zero) | Out-Null  # IDC_CHAT_SEND
+    Start-Sleep -Milliseconds 300
+}
+
+function Set-NutshellAiAutoApprove {
+    <# Toggle the session's Auto Approve button (IDC_CHAT_AUTOAPPROVE). #>
+    param([Parameter(Mandatory)] $Session)
+    $p = Get-NutshellAiPanel -Session $Session
+    if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel is not open" }
+    [NutshellNative]::PostMessage($p, $script:WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 300
+}
+
 function Wait-NutshellShell {
     <# Press Enter until a shell prompt ($ or #) shows up in the log. Throws on timeout. #>
     param([Parameter(Mandatory)] $Session, [int] $TimeoutSec = 25)
@@ -277,4 +322,5 @@ function Save-NutshellScreenshot {
 Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell, Get-NutshellWindows, `
     Send-NutshellCommand, Start-NutshellLogging, Send-NutshellKeys, Send-NutshellLine, `
     Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Save-NutshellScreenshot, `
-    Open-NutshellSecondTab, Select-NutshellTab
+    Open-NutshellSecondTab, Select-NutshellTab, `
+    Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiAutoApprove

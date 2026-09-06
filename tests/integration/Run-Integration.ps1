@@ -13,7 +13,10 @@ param(
     [string] $User = $env:USERNAME,
     [string] $KeyPath = (Join-Path $HOME ".ssh\thomas"),
     [string] $Exe = (Join-Path $PSScriptRoot "..\..\build\win\nutshell.exe"),
-    [string[]] $Only = @()
+    [string[]] $Only = @(),
+    # AI Assist cases: provider/model used with the key from NUTSHELL_IT_AI_KEY or tests\integration\.ai_key
+    [string] $AiProvider = "moonshot",
+    [string] $AiModel = "kimi-k3"
 )
 
 $ErrorActionPreference = "Stop"
@@ -161,6 +164,68 @@ Invoke-Case "resize_applies_to_inactive_tab" @{} {
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "inactive_tab_after_resize.png") | Out-Null
     Assert-True ($a -ge 30) "tab A still has the pre-resize grid: tput lines = $a (expected >= 30 for a 1300px-tall window)"
     "tab A reports $a lines after the resize happened on tab B"
+}
+
+# ---- AI Assist cases ----------------------------------------------------------
+# Skipped (not failed) when no key is available. Kept deliberately cheap: two
+# real requests, a 30-line terminal context, no web tools. Assertions read the
+# terminal log, so they prove the whole loop: prompt -> reply -> [EXEC] parse ->
+# approval -> execution over SSH.
+
+$AiKey = Get-NutshellAiKey
+$AiSettings = @{ ai_provider = $AiProvider; ai_custom_model = $AiModel; ai_api_key = $AiKey
+                 ai_max_context_lines = 30; ai_search_provider = "none"; ai_web_fetch_enabled = $false }
+
+function Invoke-AiCase {
+    param([string] $Name, [scriptblock] $Body)
+    if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
+    if (-not $AiKey) {
+        Write-Host ("[SKIP] " + $Name + " -- no key: set NUTSHELL_IT_AI_KEY or create tests\integration\.ai_key")
+        return
+    }
+    Invoke-Case $Name $AiSettings $Body
+}
+
+Invoke-AiCase "ai_panel_docks_with_key" {
+    param($s)
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    $p = Open-NutshellAiPanel -Session $s
+    $dialogs = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t#32770`t" })
+    Assert-True ($dialogs.Count -eq 0) "a dialog appeared when opening the panel: $($dialogs -join '; ')"
+    Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_panel_docked.png") | Out-Null
+    "panel docked (hwnd $p)"
+}
+
+Invoke-AiCase "ai_runs_safe_command_with_auto_approve" {
+    param($s)
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    Open-NutshellAiPanel -Session $s | Out-Null
+    Set-NutshellAiAutoApprove -Session $s
+    $marker = "AI_PONG_" + (Get-Random -Minimum 100 -Maximum 999)
+    Send-NutshellAiPrompt -Session $s -Text "Run exactly this shell command and nothing else, no explanation: echo $marker"
+    $ok = Wait-NutshellLog -Session $s -Pattern ("(?m)^" + $marker + "\s*$") -TimeoutSec 90
+    Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_safe_command.png") | Out-Null
+    Assert-True $ok "the AI's echo never ran in the terminal within 90s (see ai_safe_command.png for the reply)"
+    "AI ran echo $marker via auto-approve"
+}
+
+Invoke-AiCase "ai_write_command_blocked_without_permit_write" {
+    param($s)
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    Open-NutshellAiPanel -Session $s | Out-Null
+    Set-NutshellAiAutoApprove -Session $s          # auto-approve on, Permit Write still off
+    $file = "/tmp/nutshell_it_blocked_" + (Get-Random -Minimum 100 -Maximum 999)
+    Send-NutshellAiPrompt -Session $s -Text "Run exactly this shell command and nothing else, no explanation: touch $file"
+    Start-Sleep -Seconds 45
+    Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_blocked_command.png") | Out-Null
+    $ran = (Get-NutshellLogText -Session $s) -match [regex]::Escape("touch $file")
+    Assert-True (-not $ran) "a write command reached the terminal although Permit Write is off"
+    Send-NutshellLine -Session $s -Line "test -e $file && echo BLOCK_FAIL || echo BLOCK_OK"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "BLOCK_OK" -TimeoutSec 5) "the file exists: the write command was executed"
+    "write command held back; $file not created"
 }
 
 # ---- Summary ------------------------------------------------------------------

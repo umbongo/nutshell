@@ -31,3 +31,4 @@ build/.detect*
 
 # Integration test output
 tests/integration/artifacts/
+tests/integration/.ai_key
