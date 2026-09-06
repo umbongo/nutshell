@@ -48,6 +48,7 @@ typedef struct {
 typedef struct {
     ApprovalRowLayout rows[APPROVAL_MAX_CMDS];
     int n_rows, first_visible, scrollable;
+    int two_line;   /* 1 when rows wrap: tag + text on line 1, controls on line 2 */
     NsRect allow_all, cancel, viewport;
 } ApprovalCardLayout;
 
@@ -80,5 +81,12 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
  * (including HIT_NONE, HIT_ALLOW_ALL, HIT_CANCEL). Never crashes on a
  * NULL layout. */
 int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out);
+
+/* Height of one approval row for a card of width `card_w` (the same rect
+ * width passed to approval_card_layout), text height `text_h`, at `dpi`.
+ * Doubles when the card is narrow enough that rows go two-line. Callers that
+ * need the row height before they have a layout (scroll maths, container
+ * sizing) must use this so they agree with approval_card_layout. */
+int approval_row_height(int card_w, int text_h, int dpi);
 
 #endif /* NUTSHELL_NS_LAYOUT_H */

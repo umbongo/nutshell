@@ -402,3 +402,45 @@ int test_approval_card_hit_scrolled_out_rows_not_hit(void)
     }
     TEST_END();
 }
+
+/* ---- two-line rows in a narrow card ---------------------------------------- */
+
+int test_approval_card_layout_narrow_card_goes_two_line(void)
+{
+    TEST_BEGIN();
+    /* At 192 DPI a 560 px card cannot fit tag + text + checkbox + two buttons
+     * on one line; the row must wrap and the text must keep a real box. */
+    NsRect r = { 0, 0, 560, 800 };
+    int widths[3] = { 300, 300, 300 };
+    ApprovalCardLayout l;
+    approval_card_layout(r, 3, widths, 24, 192, &l);
+    ASSERT_EQ(l.two_line, 1);
+    for (int i = 0; i < 3; i++) {
+        ASSERT_TRUE(l.rows[i].text.w >= 160);              /* NS_MIN_TEXT_W at 96 → more at 192 */
+        ASSERT_TRUE(l.rows[i].text.y < l.rows[i].allow.y);  /* text line above controls */
+        ASSERT_TRUE(!rects_overlap(l.rows[i].text, l.rows[i].allow));
+        ASSERT_TRUE(!rects_overlap(l.rows[i].text, l.rows[i].checkbox));
+        if (i > 0) ASSERT_TRUE(!rects_overlap(l.rows[i - 1].allow, l.rows[i].tag));
+    }
+    /* A wide card stays single-line. */
+    NsRect wide = { 0, 0, 1600, 800 };
+    approval_card_layout(wide, 3, widths, 24, 192, &l);
+    ASSERT_EQ(l.two_line, 0);
+    ASSERT_EQ(l.rows[0].text.y, l.rows[0].allow.y + (l.rows[0].allow.h - l.rows[0].text.h) / 2);
+    TEST_END();
+}
+
+int test_approval_row_height_matches_layout(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 560, 800 };
+    int widths[2] = { 10, 10 };
+    ApprovalCardLayout l;
+    approval_card_layout(r, 2, widths, 24, 192, &l);
+    int row_h = l.rows[1].tag.y - l.rows[0].tag.y;
+    ASSERT_EQ(approval_row_height(r.w, 24, 192), row_h);
+    NsRect wide = { 0, 0, 1600, 800 };
+    approval_card_layout(wide, 2, widths, 24, 192, &l);
+    ASSERT_EQ(approval_row_height(wide.w, 24, 192), l.rows[1].tag.y - l.rows[0].tag.y);
+    TEST_END();
+}

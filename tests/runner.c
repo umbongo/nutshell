@@ -1787,6 +1787,8 @@ int test_approval_card_hit_round_trip_actions(void);
 int test_approval_card_hit_miss_returns_none(void);
 int test_approval_card_hit_null_layout_safe(void);
 int test_approval_card_hit_scrolled_out_rows_not_hit(void);
+int test_approval_card_layout_narrow_card_goes_two_line(void);
+int test_approval_row_height_matches_layout(void);
 
 /* test_ns_hover.c */
 int test_ns_hover_init_sets_both_ids_to_minus_one(void);
@@ -3652,6 +3654,8 @@ int main(void) {
     failed += test_approval_card_hit_miss_returns_none();
     failed += test_approval_card_hit_null_layout_safe();
     failed += test_approval_card_hit_scrolled_out_rows_not_hit();
+    failed += test_approval_card_layout_narrow_card_goes_two_line();
+    failed += test_approval_row_height_matches_layout();
 
     printf("\n--- Design System: hover ---\n");
     failed += test_ns_hover_init_sets_both_ids_to_minus_one();

@@ -8,6 +8,7 @@
  * named grid tokens (it isn't reused elsewhere), but kept a multiple of 4
  * to stay on the same grid. */
 #define NS_TAG_W 64
+#define NS_MIN_TEXT_W 160   /* below this, approval rows go two-line (96-DPI base) */
 
 static int point_in(NsRect r, int x, int y)
 {
@@ -92,9 +93,9 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
     int btn_w   = ns_scale(SZ_BTN_MIN_W, dpi);
     int chk_sz  = ns_scale(SZ_ICON, dpi);
 
-    int row_h = ctrl_h;
-    int min_row_h = text_h + 2 * ns_scale(SP_XS, dpi);
-    if (min_row_h > row_h) row_h = min_row_h;
+    int line_h = ctrl_h;
+    int min_line_h = text_h + 2 * ns_scale(SP_XS, dpi);
+    if (min_line_h > line_h) line_h = min_line_h;
 
     NsRect area;
     area.x = r.x + pad;
@@ -103,6 +104,17 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
     area.h = r.h - 2 * pad;
     if (area.w < 0) area.w = 0;
     if (area.h < 0) area.h = 0;
+
+    /* Single-line rows put tag, text, checkbox, Allow and Deny side by side.
+     * In a narrow panel (a docked AI panel at 200 % DPI, say) that leaves the
+     * command text no room at all, so when the text box would fall below
+     * NS_MIN_TEXT_W the row becomes two lines: tag + text on the first,
+     * the controls right-aligned on the second. */
+    int controls_w = chk_sz + gap_sm + btn_w + gap_sm + btn_w;
+    int text_w_single = area.w - tag_w - gap_sm - gap_sm - controls_w;
+    int two_line = (text_w_single < ns_scale(NS_MIN_TEXT_W, dpi)) ? 1 : 0;
+    int row_h = two_line ? 2 * line_h : line_h;
+    out->two_line = two_line;
 
     int visible_n = n;
     out->scrollable = (n > APPROVAL_VISIBLE_MAX) ? 1 : 0;
@@ -126,15 +138,18 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
         }
 
         int row_top = area.y + i * row_h;
+        /* Line the text sits on, and the line the controls sit on. */
+        int text_line_top = row_top;
+        int ctrl_line_top = two_line ? row_top + line_h : row_top;
 
         row->tag.x = area.x;
-        row->tag.y = row_top + (row_h - tag_h) / 2;
+        row->tag.y = text_line_top + (line_h - tag_h) / 2;
         row->tag.w = tag_w;
         row->tag.h = tag_h;
 
         row->deny.w = btn_w;
         row->deny.h = ctrl_h;
-        row->deny.y = row_top + (row_h - ctrl_h) / 2;
+        row->deny.y = ctrl_line_top + (line_h - ctrl_h) / 2;
         row->deny.x = area.x + area.w - btn_w;
 
         row->allow.w = btn_w;
@@ -144,13 +159,14 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
 
         row->checkbox.w = chk_sz;
         row->checkbox.h = chk_sz;
-        row->checkbox.y = row_top + (row_h - chk_sz) / 2;
+        row->checkbox.y = ctrl_line_top + (line_h - chk_sz) / 2;
         row->checkbox.x = row->allow.x - gap_sm - chk_sz;
 
         row->text.x = row->tag.x + tag_w + gap_sm;
-        row->text.y = row_top;
-        row->text.w = row->checkbox.x - gap_sm - row->text.x;
-        row->text.h = row_h;
+        row->text.y = text_line_top;
+        row->text.w = two_line ? (area.x + area.w - row->text.x)
+                               : (row->checkbox.x - gap_sm - row->text.x);
+        row->text.h = line_h;
         if (row->text.w < 0) row->text.w = 0;
 
         row->ellipsis = (cmd_text_w && cmd_text_w[i] > row->text.w) ? 1 : 0;
@@ -167,6 +183,27 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
     out->allow_all.h = ctrl_h;
     out->allow_all.y = actions_y;
     out->allow_all.x = out->cancel.x - gap_sm - btn_w;
+}
+
+int approval_row_height(int card_w, int text_h, int dpi)
+{
+    int pad     = ns_scale(SP_MD, dpi);
+    int gap_sm  = ns_scale(SP_SM, dpi);
+    int tag_w   = ns_scale(NS_TAG_W, dpi);
+    int ctrl_h  = ns_scale(SZ_CTRL_H, dpi);
+    int btn_w   = ns_scale(SZ_BTN_MIN_W, dpi);
+    int chk_sz  = ns_scale(SZ_ICON, dpi);
+
+    int line_h = ctrl_h;
+    int min_line_h = text_h + 2 * ns_scale(SP_XS, dpi);
+    if (min_line_h > line_h) line_h = min_line_h;
+
+    int area_w = card_w - 2 * pad;
+    if (area_w < 0) area_w = 0;
+    int controls_w = chk_sz + gap_sm + btn_w + gap_sm + btn_w;
+    int text_w_single = area_w - tag_w - gap_sm - gap_sm - controls_w;
+    int two_line = (text_w_single < ns_scale(NS_MIN_TEXT_W, dpi)) ? 1 : 0;
+    return two_line ? 2 * line_h : line_h;
 }
 
 int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out)

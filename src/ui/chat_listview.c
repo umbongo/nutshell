@@ -494,6 +494,18 @@ void chat_listview_relayout(HWND hwnd)
  *  Layout: measure all items, compute total_height
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* Approval-card row height at the current panel width. Must agree with the
+ * NsRect that build_cmd_card_geometry hands to approval_card_layout (the box
+ * inset by the side padding and border), otherwise scroll maths and container
+ * sizing drift from what is painted — especially once rows go two-line. */
+static int clv_cmd_row_h(ChatListView *lv, int width, int text_h)
+{
+    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
+    int border_w = CLV_SCALE(lv, 1);
+    int card_w = width - 4 * side_pad - 2 * border_w;
+    return approval_row_height(card_w, text_h, CLV_DPI(lv));
+}
+
 static void recalc_layout(ChatListView *lv)
 {
     if (!lv || !lv->hwnd) return;
@@ -567,9 +579,7 @@ static void recalc_layout(ChatListView *lv)
         lv->cmd_count = n;
 
         if (n > 0 && first_cmd) {
-            int row_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
-            int min_row_h = text_h + 2 * ns_scale(SP_XS, CLV_DPI(lv));
-            if (min_row_h > row_h) row_h = min_row_h;
+            int row_h = clv_cmd_row_h(lv, width, text_h);
 
             int visible_rows = (n < APPROVAL_VISIBLE_MAX) ? n : APPROVAL_VISIBLE_MAX;
             lv->cmd_total_h   = n * row_h;
@@ -784,7 +794,6 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
          * approval_card_layout's row height, keeps Pass 1 from treating
          * this item as needing another remeasure. */
         {
-            int row_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
             int text_line_h;
             old_font = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
                                                         : GetStockObject(ANSI_FIXED_FONT));
@@ -794,9 +803,7 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                 text_line_h = tm.tmHeight;
             }
             SelectObject(hdc, old_font);
-            int min_row_h = text_line_h + 2 * ns_scale(SP_XS, CLV_DPI(lv));
-            if (min_row_h > row_h) row_h = min_row_h;
-            return row_h;
+            return clv_cmd_row_h(lv, width, text_line_h);
         }
     }
 
@@ -1552,9 +1559,7 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
         text_h = tm.tmHeight;
         SelectObject(hdc_for_measure, old);
     }
-    int row_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
-    int min_row_h = text_h + 2 * ns_scale(SP_XS, CLV_DPI(lv));
-    if (min_row_h > row_h) row_h = min_row_h;
+    int row_h = clv_cmd_row_h(lv, cw, text_h);
 
     int first_row = (row_h > 0) ? (lv->cmd_scroll_y / row_h) : 0;
     int max_first = n - APPROVAL_VISIBLE_MAX;
