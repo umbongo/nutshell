@@ -475,6 +475,24 @@ int test_theme_luminance_green(void);
 int test_theme_luminance_blue(void);
 int test_theme_pure_black(void);
 int test_theme_pure_white(void);
+int test_theme_contrast_black_white(void);
+int test_theme_contrast_identical(void);
+int test_theme_contrast_symmetric(void);
+int test_theme_lstar_black_is_zero(void);
+int test_theme_lstar_white_is_100(void);
+int test_theme_lstar_mid_gray(void);
+int test_theme_lstar_monotonic(void);
+int test_theme_shift_lightness_up_increases(void);
+int test_theme_shift_lightness_down_decreases(void);
+int test_theme_shift_lightness_moves_by_requested_amount(void);
+int test_theme_shift_lightness_never_clips_black(void);
+int test_theme_shift_lightness_never_clips_white(void);
+int test_theme_shift_lightness_bounds(void);
+int test_theme_shift_lightness_zero_delta_noop(void);
+int test_theme_blend_t0_is_a(void);
+int test_theme_blend_t1_is_b(void);
+int test_theme_blend_midpoint(void);
+int test_theme_blend_clamps_t(void);
 
 /* test_vt_sequences.c */
 int test_vt_osc_title_0(void);
@@ -1716,6 +1734,25 @@ int test_ns_type_font_slot_stable_across_calls(void);
 int test_ns_type_font_slot_nearest_dpi_mapping(void);
 int test_ns_type_pill(void);
 
+/* test_ui_tokens.c */
+int test_ui_tokens_text_contrast_on_backgrounds(void);
+int test_ui_tokens_intent_label_contrast(void);
+int test_ui_tokens_label_is_one_of_the_three_candidates(void);
+int test_ui_tokens_onyx_light_accent_contrast(void);
+int test_ui_tokens_link_darker_than_accent_on_light_themes(void);
+int test_ui_tokens_derivation_all_surfaces(void);
+int test_ui_tokens_raised_derived_from_bg_secondary(void);
+int test_ui_tokens_focus_is_accent_by_default(void);
+int test_ui_tokens_text_disabled_blend(void);
+int test_ui_tokens_override_raised_honoured(void);
+int test_ui_tokens_override_focus_honoured(void);
+int test_ui_tokens_no_override_still_derives(void);
+int test_ui_tokens_chat_copied_unchanged(void);
+int test_ui_tokens_is_dark_matches_theme_is_dark(void);
+int test_ui_tokens_resolve_null_safe(void);
+int test_ui_tokens_colour_gate(void);
+int test_ui_tokens_scale_gate(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -2135,6 +2172,24 @@ int main(void) {
     failed += test_theme_luminance_blue();
     failed += test_theme_pure_black();
     failed += test_theme_pure_white();
+    failed += test_theme_contrast_black_white();
+    failed += test_theme_contrast_identical();
+    failed += test_theme_contrast_symmetric();
+    failed += test_theme_lstar_black_is_zero();
+    failed += test_theme_lstar_white_is_100();
+    failed += test_theme_lstar_mid_gray();
+    failed += test_theme_lstar_monotonic();
+    failed += test_theme_shift_lightness_up_increases();
+    failed += test_theme_shift_lightness_down_decreases();
+    failed += test_theme_shift_lightness_moves_by_requested_amount();
+    failed += test_theme_shift_lightness_never_clips_black();
+    failed += test_theme_shift_lightness_never_clips_white();
+    failed += test_theme_shift_lightness_bounds();
+    failed += test_theme_shift_lightness_zero_delta_noop();
+    failed += test_theme_blend_t0_is_a();
+    failed += test_theme_blend_t1_is_b();
+    failed += test_theme_blend_midpoint();
+    failed += test_theme_blend_clamps_t();
 
     printf("\n--- Scroll Region ---\n");
     failed += test_sr_init_defaults();
@@ -3463,6 +3518,25 @@ int main(void) {
     failed += test_ns_type_font_slot_stable_across_calls();
     failed += test_ns_type_font_slot_nearest_dpi_mapping();
     failed += test_ns_type_pill();
+
+    printf("\n--- Design System: tokens ---\n");
+    failed += test_ui_tokens_text_contrast_on_backgrounds();
+    failed += test_ui_tokens_intent_label_contrast();
+    failed += test_ui_tokens_label_is_one_of_the_three_candidates();
+    failed += test_ui_tokens_onyx_light_accent_contrast();
+    failed += test_ui_tokens_link_darker_than_accent_on_light_themes();
+    failed += test_ui_tokens_derivation_all_surfaces();
+    failed += test_ui_tokens_raised_derived_from_bg_secondary();
+    failed += test_ui_tokens_focus_is_accent_by_default();
+    failed += test_ui_tokens_text_disabled_blend();
+    failed += test_ui_tokens_override_raised_honoured();
+    failed += test_ui_tokens_override_focus_honoured();
+    failed += test_ui_tokens_no_override_still_derives();
+    failed += test_ui_tokens_chat_copied_unchanged();
+    failed += test_ui_tokens_is_dark_matches_theme_is_dark();
+    failed += test_ui_tokens_resolve_null_safe();
+    failed += test_ui_tokens_colour_gate();
+    failed += test_ui_tokens_scale_gate();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

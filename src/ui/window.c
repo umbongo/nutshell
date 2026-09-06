@@ -29,6 +29,7 @@
 #include "selection.h"
 #include "app_font.h"
 #include "ui_theme.h"
+#include "ns_tokens.h"
 #include "custom_scrollbar.h"
 #include "menubar_line.h"
 #include "dpi_util.h"
@@ -108,6 +109,10 @@ static HWND g_hwndAiChat = NULL;
 static HFONT g_hMenuFont = NULL;
 static HWND g_hwndScrollbar = NULL;
 static const ThemeColors *g_theme = NULL;
+static ThemeTokens g_tokens; /* resolved from g_theme wherever g_theme is (re)assigned */
+
+const ThemeTokens *ns_tokens(void) { return &g_tokens; }
+
 static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
 static HMENU create_app_menu(void);      /* forward declaration */
@@ -750,6 +755,7 @@ static void on_settings_clicked(void) {
     {
         int idx = ui_theme_find(g_config->settings.colour_scheme);
         g_theme = ui_theme_get(idx);
+        ui_theme_resolve(g_theme, &g_tokens);
         tabs_set_theme(g_hwndTabs, g_theme);
         if (g_hwndScrollbar) csb_set_theme(g_hwndScrollbar, g_theme);
         /* Rebuild menu bar with new theme colours */
@@ -1693,6 +1699,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             {
                 int idx = ui_theme_find(g_config->settings.colour_scheme);
                 g_theme = ui_theme_get(idx);
+                ui_theme_resolve(g_theme, &g_tokens);
             }
 
             /* Compute DPI-scaled tab height and terminal left margin */

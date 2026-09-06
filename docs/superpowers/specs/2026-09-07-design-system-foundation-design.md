@@ -54,16 +54,19 @@ colour) core derives:
 
 | State | Rule |
 |---|---|
-| `hover` | shift luminance one step toward the opposite of the theme's polarity: lighten on dark themes, darken on light ones |
+| `hover` | shift lightness one step toward the opposite of the theme's polarity: lighten on dark themes, darken on light ones |
 | `pressed` | two steps |
 | `disabled` | blend 50 % toward `bg_primary`; text tokens blend toward `text_dim` |
 | `focus` | the theme's `accent` at full strength, drawn as a 2 px ring |
 | `raised` | `bg_secondary` shifted one step (cards, popups) |
+| `label` | per surface: whichever of white, `bg_primary`, `text_main` has the highest contrast on it — the colour for text drawn on that surface |
 
-"One step" is a fixed relative luminance delta chosen so the change is visible on
-every theme (validated by test); starting value 0.06, tuned against the gallery.
-A theme may override any derived value by supplying it explicitly; unspecified
-values are derived.
+"One step" is **6 units of CIE L\*** (perceptual lightness), not relative
+luminance: a fixed luminance delta is a huge jump on a near-black surface and
+invisible on a light one, whereas 6 L\* reads as the same change on every theme
+(found during implementation, 2026-09-07). Tuned against the gallery. A theme may
+override any derived value by supplying it explicitly; unspecified values are
+derived.
 
 ### Resolve step
 
@@ -76,8 +79,8 @@ rewritten.
 ### Tests (native suite)
 
 - Contrast: every text-on-surface pairing the UI uses (`text_main`/`text_dim` on
-  `bg_primary`/`bg_secondary`/`raised`; button label on each intent colour and on
-  `accent`) is ≥ 4.5:1 in all four themes.
+  `bg_primary`/`bg_secondary`/`raised`; each surface's `label` on `accent` and on
+  every intent colour) is ≥ 4.5:1 in all four themes.
 - Derivation: each `hover`/`pressed` differs from its base by at least the minimum
   step; `disabled` is closer to `bg_primary` than its base; derived values never
   clip to pure black/white.

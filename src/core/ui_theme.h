@@ -26,6 +26,15 @@ typedef struct {
     unsigned int stop_btn;           /* Stop button background (pastel red) */
 } ThemeChatColors;
 
+/* Explicit per-theme overrides for a handful of derived tokens.  0 means
+ * "derive it" (see ui_theme_resolve()).  Kept deliberately small; more
+ * fields can be added here as later tasks need to override other derived
+ * values. */
+typedef struct {
+    unsigned int raised; /* override for bg_secondary shifted one step */
+    unsigned int focus;  /* override for accent-as-focus-ring colour */
+} ThemeOverrides;
+
 typedef struct {
     const char  *name;          /* "Onyx Synapse", "Onyx Light", etc. */
     unsigned int bg_primary;    /* Main window / dialog background */
@@ -36,6 +45,12 @@ typedef struct {
     unsigned int border;        /* Subtle borders and separators */
     unsigned int terminal_fg;   /* Terminal default foreground */
     unsigned int terminal_bg;   /* Terminal default background */
+    unsigned int success;       /* Intent: success / allow */
+    unsigned int warning;       /* Intent: warning / write commands */
+    unsigned int danger;        /* Intent: danger / deny / critical */
+    unsigned int info;          /* Intent: informational (was [EXEC] purple) */
+    unsigned int link;          /* Intent: hyperlink-style text */
+    ThemeOverrides overrides;   /* 0 fields = derive (see ui_theme_resolve) */
     ThemeChatColors chat;       /* Chat panel colors */
 } ThemeColors;
 
@@ -50,5 +65,37 @@ int ui_theme_find(const char *name);
 /* Get the display name for theme at index.
  * Out-of-range indices return theme 0's name. */
 const char *ui_theme_name(int index);
+
+/* ---- Resolved design tokens (Design-System Foundation, section 1) ------- */
+
+/* Perceptual-lightness (CIE L*) delta of "one step" used by every derived
+ * interaction state (hover, pressed, raised).  Pressed uses two steps.
+ * A fixed relative-luminance delta would be a huge jump on a near-black
+ * surface and invisible on a light one; 6 L* units read as the same change
+ * on every theme. */
+#define UI_THEME_STEP 6.0 /* L* units */
+
+/* A colour plus its computed interaction states.  `base` is always the
+ * source colour a ThemeSurface was derived from.  `label` is the text
+ * colour to draw on `base`: whichever of white, bg_primary or text_main
+ * has the highest contrast against it. */
+typedef struct {
+    unsigned int base, hover, pressed, disabled, label;
+} ThemeSurface;
+
+/* Fully resolved, ready-to-paint token set.  UI code should read only this
+ * struct and never compute a colour itself. */
+typedef struct {
+    ThemeSurface bg_primary, bg_secondary, raised, accent;
+    ThemeSurface success, warning, danger, info, link;
+    unsigned int text_main, text_dim, text_disabled, border, focus;
+    unsigned int terminal_fg, terminal_bg;
+    ThemeChatColors chat;   /* copied through unchanged for the migration window */
+    int is_dark;
+} ThemeTokens;
+
+/* Resolve `base` into a complete token set.  Call once, when the theme is
+ * chosen or changed; `out` may then be read from freely by UI code. */
+void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out);
 
 #endif /* NUTSHELL_UI_THEME_H */
