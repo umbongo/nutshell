@@ -2,8 +2,14 @@
 
 **Date**: 2026-09-07
 **Branch**: `ui-polish`
-**Status**: In progress — sections are appended as Thomas approves them
-(see `2026-09-06-ui-redesign-notes.md` for the roadmap this is step 1 of).
+**Status**: Approved 2026-09-07 — all six sections approved by Thomas one at a
+time, then self-reviewed for consistency (see `2026-09-06-ui-redesign-notes.md`
+for the roadmap this is step 1 of). Implementation plan:
+`../plans/2026-09-07-design-system-foundation.md`.
+
+New modules introduced here, for reference: core `ui_theme` (resolve),
+`ns_scale`, `ns_type`, `ns_layout`, `ns_hover`, `ns_motion`, `ui_demo`;
+Win32 `ns_draw` (grown from `ui_draw`), `ns_font`.
 
 Rendering stays GDI/GDI+. Everything below that can be reasoned about without a
 window handle lives in `src/core` and is covered by the native test suite.
@@ -55,8 +61,9 @@ colour) core derives:
 | `raised` | `bg_secondary` shifted one step (cards, popups) |
 
 "One step" is a fixed relative luminance delta chosen so the change is visible on
-every theme (validated by test). A theme may override any derived value by
-supplying it explicitly; unspecified values are derived.
+every theme (validated by test); starting value 0.06, tuned against the gallery.
+A theme may override any derived value by supplying it explicitly; unspecified
+values are derived.
 
 ### Resolve step
 
@@ -74,9 +81,9 @@ rewritten.
 - Derivation: each `hover`/`pressed` differs from its base by at least the minimum
   step; `disabled` is closer to `bg_primary` than its base; derived values never
   clip to pure black/white.
-- Coverage: a test scans `src/ui/*.c` and fails if a new `RGB(` literal appears
-  outside the shared drawing module (`ui_draw.c`, and a short allow-list for the
-  few that are genuinely non-thematic, e.g. the acorn watermark).
+- Coverage: the colour gate in section 6 — a test scans `src/ui/*.c` and fails if
+  a new `RGB(` literal appears outside the shared drawing module `ns_draw.c`
+  (section 3), with a short allow-list for the few genuinely non-thematic ones.
 
 ## 2. Spacing and type scale — APPROVED 2026-09-07
 
@@ -116,15 +123,18 @@ The 22 `BASE_*` constants in `chat_listview.c` collapse onto these.
 | `FONT_MONO` | terminal size | regular | 1.0 | terminal font |
 
 Sizes are points at 96 DPI and go through `ns_scale`. Body moves to 10 pt
-across the UI (menus, tabs, dialogs, chat prose).
+across the UI (menus, tabs, dialogs, chat prose). The ramp table (role → size,
+weight, line height, face) and the grid/stroke/radius constants live in
+`src/core/ns_type.{c,h}` next to `ns_scale`, so both are native-testable.
 
 ### Font cache
 
 `HFONT ns_font(NsFontRole role, int dpi)` in `src/ui/ns_font.{c,h}` returns a
 cached handle per (role, dpi, face) and owns its lifetime; `ns_font_flush()` is
 the whole of what `WM_DPICHANGED` and a font-setting change need to do. Replaces
-the 32 `CreateFont` call sites. The key/lookup logic is a pure table in
-`src/core` so it is unit-tested; only the `CreateFont` call is Win32.
+the 32 `CreateFont` call sites. The slot-key logic (`ns_type_font_slot(role, dpi,
+face_id)`) is a pure function in `ns_type.c` so it is unit-tested; only the
+`CreateFont` call is Win32.
 
 ### Tests (native suite)
 
@@ -233,9 +243,11 @@ heartbeat and keep-alive timers are not animations and stay separate.
 ### `--ui-demo[=<state>]` (hidden CLI flag)
 
 `cli_args.c` gains `CLI_UI_DEMO` with an optional state name and an optional
-`--theme <name>`. Neither appears in `-?` output or the user guide; the flag is
-compiled into the normal binary so screenshots always come from the shipped exe.
-No Help-menu entry.
+`--theme <name>`. `--theme` is the one exception to the parser's
+"all options are mutually exclusive" rule: it is accepted only alongside
+`--ui-demo` and is an error otherwise. Neither appears in `-?` output or the user
+guide; the flag is compiled into the normal binary so screenshots always come
+from the shipped exe. No Help-menu entry.
 
 In demo mode the app opens a fake session tab with canned terminal output (no
 SSH, no network, no key) and the AI panel docked, populated from a fixed script.
@@ -281,7 +293,7 @@ Six new test files, one per module, holding the tests listed in each section:
 | Module | Test file |
 |---|---|
 | `ui_theme` resolve + derivation | `tests/test_ui_tokens.c` |
-| `ns_scale`, grid, ramp, font-cache key | `tests/test_ns_scale.c` |
+| `ns_scale`; `ns_type` (grid, ramp, font-slot key) | `tests/test_ns_scale.c` |
 | `ns_layout` (button, card, approval card, hit-test) | `tests/test_ns_layout.c` |
 | `ns_hover` | `tests/test_ns_hover.c` |
 | `ns_motion` | `tests/test_ns_motion.c` |
@@ -314,5 +326,9 @@ Expected: 90–120 new tests on top of the current 1,539.
    (from 77).
 3. `make wintest` green.
 4. Integration suite green including `ui_gallery`.
-5. A before/after gallery diff reviewed by Thomas: existing screens unchanged
-   except body text at 10 pt and the light themes' new accent.
+5. A before/after review by Thomas: "before" is the set of screenshots the
+   current integration suite already captures (main window, Session Manager,
+   Settings pages, paste dialog, AI panel), taken at the last commit before the
+   foundation lands; "after" is the same set plus the `ui_gallery` contact
+   sheet. Expected differences only: body text at 10 pt, the light themes' new
+   accent, approval-card colours now theme-correct, icon dots present.

@@ -107,10 +107,13 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       PTY size; its prompt then sat mid-window with the rest blank until enough Enters
       scrolled it into place. `on_tab_select` now calls `sync_session_grid()`.
       Regression case `resize_applies_to_inactive_tab` in the integration suite.
-- [ ] Start the design-system foundation: present the six foundation sections above for
-      approval, one at a time, beginning with semantic tokens.
-- [ ] Write `docs/superpowers/specs/2026-09-06-design-system-foundation-design.md`,
-      self-review, commit.
+- [x] Design-system foundation: all six sections presented and approved one at a
+      time (2026-09-07). Decisions: derived interaction states with per-theme
+      override; each light theme gets its own accent; body text 10 pt; standalone
+      buttons stay child windows, in-card elements are painted; `--ui-demo` stays a
+      hidden flag, no menu entry.
+- [x] `docs/superpowers/specs/2026-09-07-design-system-foundation-design.md`
+      written, self-reviewed, committed.
 - [ ] Write the foundation implementation plan in `docs/superpowers/plans/`.
 - [ ] During foundation section 3 (shared primitives): add `OP_DOT` to `icons.c` so the
       password / thinking / server dots render; `make wintest` must go green.
