@@ -172,7 +172,14 @@ Invoke-Case "resize_applies_to_inactive_tab" @{} {
 # terminal log, so they prove the whole loop: prompt -> reply -> [EXEC] parse ->
 # approval -> execution over SSH.
 
-$AiKey = Get-NutshellAiKey
+$AiCfg = Get-NutshellAiConfig
+$AiKey = $null
+if ($AiCfg) {
+    $AiKey = $AiCfg.Key
+    # A saved .ai_config wins over the script defaults unless overridden on the command line.
+    if ($AiCfg.Provider -and -not $PSBoundParameters.ContainsKey("AiProvider")) { $AiProvider = $AiCfg.Provider }
+    if ($AiCfg.Model -and -not $PSBoundParameters.ContainsKey("AiModel")) { $AiModel = $AiCfg.Model }
+}
 $AiSettings = @{ ai_provider = $AiProvider; ai_custom_model = $AiModel; ai_api_key = $AiKey
                  ai_max_context_lines = 30; ai_search_provider = "none"; ai_web_fetch_enabled = $false }
 
@@ -223,8 +230,11 @@ Invoke-AiCase "ai_write_command_blocked_without_permit_write" {
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_blocked_command.png") | Out-Null
     $ran = (Get-NutshellLogText -Session $s) -match [regex]::Escape("touch $file")
     Assert-True (-not $ran) "a write command reached the terminal although Permit Write is off"
+    Set-NutshellTerminalFocus -Session $s   # the panel took keyboard focus; the check must go to the shell
     Send-NutshellLine -Session $s -Line "test -e $file && echo BLOCK_FAIL || echo BLOCK_OK"
-    Assert-True (Wait-NutshellLog -Session $s -Pattern "BLOCK_OK" -TimeoutSec 5) "the file exists: the write command was executed"
+    # Anchor to a line start: the echoed command line itself contains both words.
+    Assert-True (Wait-NutshellLog -Session $s -Pattern '(?m)^BLOCK_(OK|FAIL)\s*$' -TimeoutSec 8) "the existence check never reached the shell"
+    Assert-True ((Get-NutshellLogText -Session $s) -notmatch '(?m)^BLOCK_FAIL\s*$') "the file exists: the write command was executed"
     "write command held back; $file not created"
 }
 

@@ -34,7 +34,8 @@ public class NutshellNative {
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
     [DllImport("user32.dll", EntryPoint="SendMessageW")] public static extern IntPtr SendMsg(IntPtr h, uint m, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
-    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+    /* title is IntPtr so callers can pass Zero: PowerShell would turn a $null string into "" (match empty titles only). */
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, IntPtr title);
     [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendMsgStr(IntPtr h, uint m, IntPtr w, string l);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
@@ -238,18 +239,41 @@ function Select-NutshellTab {
     Start-Sleep -Milliseconds 700
 }
 
-function Get-NutshellAiKey {
-    <# API key for the AI cases: $env:NUTSHELL_IT_AI_KEY, else tests/integration/.ai_key (git-ignored). $null if neither. #>
-    if ($env:NUTSHELL_IT_AI_KEY) { return $env:NUTSHELL_IT_AI_KEY.Trim() }
+function Get-NutshellAiConfig {
+    <#
+    .SYNOPSIS
+        AI settings for the AI cases, or $null when no key is available.
+        Sources, in order: $env:NUTSHELL_IT_AI_KEY; tests/integration/.ai_key;
+        tests/integration/.ai_config/nutshell.config (saved from a Nutshell
+        instance run in that folder — the key stays encrypted with this
+        machine's key material and is passed through as-is, and the provider
+        and model saved there are used too). All three are git-ignored.
+    #>
+    if ($env:NUTSHELL_IT_AI_KEY) { return @{ Key = $env:NUTSHELL_IT_AI_KEY.Trim(); Provider = $null; Model = $null } }
     $f = Join-Path $PSScriptRoot ".ai_key"
-    if (Test-Path $f) { $k = (Get-Content $f -Raw).Trim(); if ($k) { return $k } }
+    if (Test-Path $f) { $k = (Get-Content $f -Raw).Trim(); if ($k) { return @{ Key = $k; Provider = $null; Model = $null } } }
+    $c = Join-Path $PSScriptRoot ".ai_config\nutshell.config"
+    if (Test-Path $c) {
+        try {
+            $j = Get-Content $c -Raw | ConvertFrom-Json
+            $k = [string]$j.settings.ai_api_key
+            if ($k) { return @{ Key = $k; Provider = [string]$j.settings.ai_provider; Model = [string]$j.settings.ai_custom_model } }
+        } catch { }
+    }
+    return $null
+}
+
+function Get-NutshellAiKey {
+    <# Just the key from Get-NutshellAiConfig, or $null. #>
+    $c = Get-NutshellAiConfig
+    if ($c) { return $c.Key }
     return $null
 }
 
 function Get-NutshellAiPanel {
     <# HWND of the docked AI Assist panel (child of the main window), or Zero. #>
     param([Parameter(Mandatory)] $Session)
-    return [NutshellNative]::FindWindowEx($Session.Main, [IntPtr]::Zero, "Nutshell_AIChat", $null)
+    return [NutshellNative]::FindWindowEx($Session.Main, [IntPtr]::Zero, "Nutshell_AIChat", [IntPtr]::Zero)
 }
 
 function Open-NutshellAiPanel {
@@ -269,6 +293,14 @@ function Send-NutshellAiPrompt {
     $input = [NutshellNative]::GetDlgItem($p, 4002)                                   # IDC_CHAT_INPUT
     [NutshellNative]::SendMsgStr($input, 0x000C, [IntPtr]::Zero, $Text) | Out-Null   # WM_SETTEXT
     [NutshellNative]::PostMessage($p, $script:WM_COMMAND, [IntPtr]4003, [IntPtr]::Zero) | Out-Null  # IDC_CHAT_SEND
+    Start-Sleep -Milliseconds 300
+}
+
+function Set-NutshellTerminalFocus {
+    <# Click inside the terminal area so keystrokes go to the shell, not the AI input box. #>
+    param([Parameter(Mandatory)] $Session)
+    $scale = [NutshellNative]::GetDpiForWindow($Session.Main) / 96.0
+    [NutshellNative]::ClickAt($Session.Main, [int](150 * $scale), [int](250 * $scale))
     Start-Sleep -Milliseconds 300
 }
 
@@ -323,4 +355,4 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Send-NutshellCommand, Start-NutshellLogging, Send-NutshellKeys, Send-NutshellLine, `
     Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Save-NutshellScreenshot, `
     Open-NutshellSecondTab, Select-NutshellTab, `
-    Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiAutoApprove
+    Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiAutoApprove, Set-NutshellTerminalFocus
