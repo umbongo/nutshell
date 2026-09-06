@@ -2186,8 +2186,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
             } else {
                 term_process(s->term, "\r\nConnected.\r\n", 14);
-                s->session_log = open_session_log(s->conn_profile.name,
-                                                  s->conn_profile.host);
+                /* Keep a log the user already started from the File menu
+                 * while the tab was still connecting; only auto-open one
+                 * (per the logging_enabled setting) if none is open. */
+                if (!s->session_log)
+                    s->session_log = open_session_log(s->conn_profile.name,
+                                                      s->conn_profile.host);
                 s->debug_log   = open_debug_log(s->conn_profile.name);
                 if (tidx >= 0) {
                     tabs_set_connect_info(g_hwndTabs, tidx,
