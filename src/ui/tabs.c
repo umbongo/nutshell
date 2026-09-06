@@ -9,7 +9,7 @@
 #include <commctrl.h>
 #include "dpi_util.h"
 #include "icons.h"
-#include "ui_draw.h"
+#include "ns_draw.h"
 
 #ifdef _WIN32
 
@@ -441,7 +441,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
                     if (data->m.tabs[i].status == TAB_CONNECTING) {
                         RECT dot_rc = { indX, indY, indX + indW, indY + indicH };
-                        draw_status_pulse(hdc, &dot_rc, sCol, data->pulse_phase);
+                        ns_draw_pulse(hdc, &dot_rc, sCol, data->pulse_phase);
                     }
                 }
 

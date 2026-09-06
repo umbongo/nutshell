@@ -14,6 +14,9 @@
 #include "ai_http.h"
 #include "app_font.h"
 #include "ns_font.h"
+#include "ns_draw.h"
+#include "ns_scale.h"
+#include "ns_type.h"
 #include "ui_theme.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
@@ -1606,16 +1609,12 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
     FillRect(hdc, &rc, hParentBr);
     DeleteObject(hParentBr);
 
-    /* Rounded rect background + border — radius 6 matches tabs */
-    HBRUSH hBr = CreateSolidBrush(bg);
-    HPEN hPen = CreatePen(PS_SOLID, 1, border_cr);
-    HGDIOBJ oldBr = SelectObject(hdc, hBr);
-    HGDIOBJ oldPen = SelectObject(hdc, hPen);
-    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
-    SelectObject(hdc, oldPen);
-    SelectObject(hdc, oldBr);
-    DeleteObject(hPen);
-    DeleteObject(hBr);
+    /* Rounded rect background + border — radius matches tabs */
+    {
+        int radius = ns_scale(R_CTRL, d->dpi);
+        ns_draw_round_fill(hdc, &rc, radius, bg, 255);
+        ns_draw_round_stroke(hdc, &rc, radius, border_cr, STROKE_HAIRLINE);
+    }
 
     /* Indicator height: same formula as tabs — button height minus 10px */
     int indicH = btnH - 10;
@@ -1630,16 +1629,8 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
         int indGap = MulDiv(AI_INDICATOR_GAP_BASE, d->dpi, 96);
         int indX = rc.left + indGap;
         COLORREF dot_col = is_active ? RGB(0, 160, 80) : RGB(128, 128, 128);
-        HBRUSH hDot = CreateSolidBrush(dot_col);
-        HPEN hDotPen = CreatePen(PS_SOLID, 1, dot_col);
-        HGDIOBJ oBr = SelectObject(hdc, hDot);
-        HGDIOBJ oPen = SelectObject(hdc, hDotPen);
-        RoundRect(hdc, indX, indY,
-                  indX + indW, indY + indicH, 3, 3);
-        SelectObject(hdc, oPen);
-        SelectObject(hdc, oBr);
-        DeleteObject(hDotPen);
-        DeleteObject(hDot);
+        RECT ind_rc = { indX, indY, indX + indW, indY + indicH };
+        ns_draw_round_fill(hdc, &ind_rc, ns_scale(R_CTRL, d->dpi), dot_col, 255);
 
         /* Draw letter on indicator: A for Allow All */
         {
@@ -1668,16 +1659,8 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
         int indGap = MulDiv(AI_INDICATOR_GAP_BASE, d->dpi, 96);
         int indX = rc.left + indGap;
         COLORREF dot_col = is_active ? RGB(0, 160, 80) : RGB(128, 128, 128);
-        HBRUSH hDot = CreateSolidBrush(dot_col);
-        HPEN hDotPen = CreatePen(PS_SOLID, 1, dot_col);
-        HGDIOBJ oBr = SelectObject(hdc, hDot);
-        HGDIOBJ oPen = SelectObject(hdc, hDotPen);
-        RoundRect(hdc, indX, indY,
-                  indX + indW, indY + indicH, 3, 3);
-        SelectObject(hdc, oPen);
-        SelectObject(hdc, oBr);
-        DeleteObject(hDotPen);
-        DeleteObject(hDot);
+        RECT ind_rc = { indX, indY, indX + indW, indY + indicH };
+        ns_draw_round_fill(hdc, &ind_rc, ns_scale(R_CTRL, d->dpi), dot_col, 255);
 
         /* Draw letter on indicator: W for write */
         {
@@ -3424,15 +3407,13 @@ next_coalesce:;
                     HBRUSH hBgBr = CreateSolidBrush(theme_cr(d->theme->bg_primary));
                     FillRect(hdc, &rc, hBgBr);
                     DeleteObject(hBgBr);
-                    HBRUSH hBr = CreateSolidBrush(theme_cr(bg_rgb));
-                    HPEN hPen = CreatePen(PS_SOLID, 1, theme_cr(d->theme->border));
-                    HGDIOBJ oBr = SelectObject(hdc, hBr);
-                    HGDIOBJ oPen = SelectObject(hdc, hPen);
-                    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
-                    SelectObject(hdc, oPen);
-                    SelectObject(hdc, oBr);
-                    DeleteObject(hPen);
-                    DeleteObject(hBr);
+                    {
+                        int radius = ns_scale(R_CTRL, d->dpi);
+                        ns_draw_round_fill(hdc, &rc, radius, theme_cr(bg_rgb), 255);
+                        ns_draw_round_stroke(hdc, &rc, radius,
+                                             theme_cr(d->theme->border),
+                                             STROKE_HAIRLINE);
+                    }
 
                     /* Top highlight line (inset 1px) */
                     HPEN hHiPen = CreatePen(PS_SOLID, 1, theme_cr(hi_rgb));
@@ -3478,15 +3459,11 @@ next_coalesce:;
                 FillRect(hdc, &rc, hBgBr);
                 DeleteObject(hBgBr);
 
-                HBRUSH hBr = CreateSolidBrush(bg);
-                HPEN hPen = CreatePen(PS_SOLID, 1, bdr);
-                HGDIOBJ oBr = SelectObject(hdc, hBr);
-                HGDIOBJ oPen = SelectObject(hdc, hPen);
-                RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 6, 6);
-                SelectObject(hdc, oPen);
-                SelectObject(hdc, oBr);
-                DeleteObject(hPen);
-                DeleteObject(hBr);
+                {
+                    int radius = ns_scale(R_CTRL, d->dpi);
+                    ns_draw_round_fill(hdc, &rc, radius, bg, 255);
+                    ns_draw_round_stroke(hdc, &rc, radius, bdr, STROKE_HAIRLINE);
+                }
 
                 /* Draw save icon */
                 ns_icon_draw(hdc, NS_ICON_SAVE, &rc, fg, (UINT)d->dpi);
@@ -3504,15 +3481,11 @@ next_coalesce:;
                 FillRect(hdc, &brc, hBgBr);
                 DeleteObject(hBgBr);
 
-                HBRUSH hBr = CreateSolidBrush(bg);
-                HPEN hPen = CreatePen(PS_SOLID, 1, bdr);
-                HGDIOBJ oBr = SelectObject(hdc, hBr);
-                HGDIOBJ oPen = SelectObject(hdc, hPen);
-                RoundRect(hdc, brc.left, brc.top, brc.right, brc.bottom, 6, 6);
-                SelectObject(hdc, oPen);
-                SelectObject(hdc, oBr);
-                DeleteObject(hPen);
-                DeleteObject(hBr);
+                {
+                    int radius = ns_scale(R_CTRL, d->dpi);
+                    ns_draw_round_fill(hdc, &brc, radius, bg, 255);
+                    ns_draw_round_stroke(hdc, &brc, radius, bdr, STROKE_HAIRLINE);
+                }
 
                 /* Draw Pop-out/Dock icon */
                 ns_icon_draw(hdc, d->docked ? NS_ICON_UNDOCK : NS_ICON_DOCK,

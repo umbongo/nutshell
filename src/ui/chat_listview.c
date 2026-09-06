@@ -14,6 +14,9 @@
 #include "dpi_util.h"
 #include "md_render.h"
 #include "icons.h"
+#include "ns_draw.h"
+#include "ns_scale.h"
+#include "ns_type.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -32,6 +35,10 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 /* ── DPI-aware pixel scaling ────────────────────────────────────────── */
 
 #define CLV_SCALE(lv, px) ((int)((float)(px) * (lv)->dpi_scale + 0.5f))
+
+/* Integer DPI for ns_scale()/ns_draw_*() calls; ChatListView only keeps a
+ * float dpi_scale (1.0 = 96 DPI) today. */
+#define CLV_DPI(lv) ((int)((lv)->dpi_scale * 96.0f + 0.5f))
 
 /* ── Base layout constants (96 DPI) ─────────────────────────────────── */
 
@@ -193,36 +200,6 @@ static int draw_text_utf8(HDC hdc, const char *text, RECT *rc, UINT flags)
     int h = DrawTextW(hdc, w, wlen, rc, flags);
     free(w);
     return h;
-}
-
-/* ── Rounded-rect helper ────────────────────────────────────────────── */
-
-static void fill_rounded_rect(HDC hdc, const RECT *rc, int radius,
-                               COLORREF fill)
-{
-    HBRUSH br = CreateSolidBrush(fill);
-    HPEN   pen = CreatePen(PS_SOLID, 1, fill);
-    HGDIOBJ old_br  = SelectObject(hdc, br);
-    HGDIOBJ old_pen = SelectObject(hdc, pen);
-    RoundRect(hdc, rc->left, rc->top, rc->right, rc->bottom, radius, radius);
-    SelectObject(hdc, old_pen);
-    SelectObject(hdc, old_br);
-    DeleteObject(pen);
-    DeleteObject(br);
-}
-
-/* ── Draw outlined (ghost) rounded rect ─────────────────────────────── */
-
-static void draw_ghost_rect(HDC hdc, const RECT *rc, int radius,
-                             COLORREF border_clr)
-{
-    HPEN pen = CreatePen(PS_SOLID, 1, border_clr);
-    HGDIOBJ old_pen = SelectObject(hdc, pen);
-    HGDIOBJ old_br  = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-    RoundRect(hdc, rc->left, rc->top, rc->right, rc->bottom, radius, radius);
-    SelectObject(hdc, old_br);
-    SelectObject(hdc, old_pen);
-    DeleteObject(pen);
 }
 
 /* ── Safety tag colour ──────────────────────────────────────────────── */
@@ -899,7 +876,6 @@ static void paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                             RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
-    int corner = CLV_SCALE(lv, BASE_CORNER_R);
 
     /* Right-align the bubble */
     int bubble_w = (rc->right - rc->left);
@@ -914,7 +890,8 @@ static void paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     bubble.bottom = rc->bottom;
 
     /* Draw bubble background */
-    fill_rounded_rect(hdc, &bubble, corner, RGB_FROM_THEME(tc->user_bubble));
+    ns_draw_round_fill(hdc, &bubble, ns_scale(R_CARD, CLV_DPI(lv)),
+                       RGB_FROM_THEME(tc->user_bubble), 255);
 
     /* Draw text */
     RECT text_rc = bubble;
@@ -1130,8 +1107,8 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             RECT box_rc;
             SetRect(&box_rc, box_left, content_top,
                     box_right, content_top + hdr_h + 2 * pad);
-            fill_rounded_rect(hdc, &box_rc, corner,
-                              RGB_FROM_THEME(tc->cmd_bg));
+            ns_draw_round_fill(hdc, &box_rc, ns_scale(R_CARD, CLV_DPI(lv)),
+                               RGB_FROM_THEME(tc->cmd_bg), 255);
             /* Border */
             HPEN border_pen = CreatePen(PS_SOLID, 1,
                                         RGB_FROM_THEME(tc->cmd_border));
@@ -1236,8 +1213,8 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             RECT box_rc;
             SetRect(&box_rc, box_left, content_top,
                     box_right, content_top + box_h);
-            fill_rounded_rect(hdc, &box_rc, corner,
-                              RGB_FROM_THEME(tc->cmd_bg));
+            ns_draw_round_fill(hdc, &box_rc, ns_scale(R_CARD, CLV_DPI(lv)),
+                               RGB_FROM_THEME(tc->cmd_bg), 255);
             /* Border */
             HPEN border_pen = CreatePen(PS_SOLID, 1,
                                         RGB_FROM_THEME(tc->cmd_border));
@@ -1426,7 +1403,7 @@ static void paint_cmd_card(ChatListView *lv, HDC hdc,
     tag_rc.top    = rc->top + code_pad;
     tag_rc.bottom = tag_rc.top + tag_h;
 
-    fill_rounded_rect(hdc, &tag_rc, CLV_SCALE(lv, 3), tag_clr);
+    ns_draw_round_fill(hdc, &tag_rc, ns_scale(R_CTRL, CLV_DPI(lv)), tag_clr, 255);
     SetTextColor(hdc, CLR_BTN_TEXT);
     DrawTextA(hdc, tag_text, -1, &tag_rc,
               DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -1477,12 +1454,14 @@ static void paint_cmd_card(ChatListView *lv, HDC hdc,
         RECT chk_rc = { chk_x, chk_y, chk_x + chk_sz, chk_y + chk_sz };
 
         if (item->u.cmd.selected) {
-            fill_rounded_rect(hdc, &chk_rc, CLV_SCALE(lv, 3), CLR_CHK_FILL);
+            ns_draw_round_fill(hdc, &chk_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
+                               CLR_CHK_FILL, 255);
             SetTextColor(hdc, CLR_BTN_TEXT);
             DrawTextW(hdc, L"\x2713", 1, &chk_rc,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         } else {
-            draw_ghost_rect(hdc, &chk_rc, CLV_SCALE(lv, 3), CLR_CHK_BORDER);
+            ns_draw_round_stroke(hdc, &chk_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
+                                 CLR_CHK_BORDER, STROKE_HAIRLINE);
         }
 
         SetTextColor(hdc, CLR_CHK_BORDER);
@@ -1605,8 +1584,8 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         /* Track */
         RECT track_rc = { track_left, track_top,
                           track_left + sb_w, track_bot };
-        fill_rounded_rect(hdc, &track_rc, sb_w / 2,
-                          RGB_FROM_THEME(tc->cmd_border));
+        ns_draw_round_fill(hdc, &track_rc, sb_w / 2,
+                           RGB_FROM_THEME(tc->cmd_border), 255);
 
         /* Thumb */
         int max_cmd_scroll = lv->cmd_total_h - lv->cmd_visible_h;
@@ -1617,8 +1596,8 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
             (lv->cmd_scroll_y * (track_h - thumb_h)) / max_cmd_scroll;
         RECT thumb_rc = { track_left, thumb_y,
                           track_left + sb_w, thumb_y + thumb_h };
-        fill_rounded_rect(hdc, &thumb_rc, sb_w / 2,
-                          RGB_FROM_THEME(lv->theme->accent));
+        ns_draw_round_fill(hdc, &thumb_rc, sb_w / 2,
+                           RGB_FROM_THEME(lv->theme->accent), 255);
     }
 
     /* ── Action buttons: Allow Selected | Cancel | Allow All ──────── */
@@ -1635,7 +1614,8 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
 
         /* Allow Selected (pastel green) */
         RECT sel_rc = { ab_x, ab_y, ab_x + ab_w, ab_y + ab_h };
-        fill_rounded_rect(hdc, &sel_rc, corner, CLR_BTN_ALLOW_SEL);
+        ns_draw_round_fill(hdc, &sel_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
+                           CLR_BTN_ALLOW_SEL, 255);
         SetTextColor(hdc, RGB(30, 30, 30));
         {
             int nsel = count_selected(lv->msg_list);
@@ -1652,7 +1632,8 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         /* Cancel (red) */
         int cx = ab_x + ab_w + ab_gap;
         RECT can_rc = { cx, ab_y, cx + CLV_SCALE(lv, 80), ab_y + ab_h };
-        fill_rounded_rect(hdc, &can_rc, corner, CLR_BTN_CANCEL);
+        ns_draw_round_fill(hdc, &can_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
+                           CLR_BTN_CANCEL, 255);
         SetTextColor(hdc, CLR_BTN_TEXT);
         DrawTextA(hdc, "Cancel", -1, &can_rc,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -1660,7 +1641,8 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         /* Allow All (pastel orange) */
         int ax = can_rc.right + ab_gap;
         RECT all_rc = { ax, ab_y, ax + CLV_SCALE(lv, 100), ab_y + ab_h };
-        fill_rounded_rect(hdc, &all_rc, corner, CLR_BTN_ALLOW_ALL);
+        ns_draw_round_fill(hdc, &all_rc, ns_scale(R_CTRL, CLV_DPI(lv)),
+                           CLR_BTN_ALLOW_ALL, 255);
         SetTextColor(hdc, RGB(30, 30, 30));
         DrawTextA(hdc, "Allow All", -1, &all_rc,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);

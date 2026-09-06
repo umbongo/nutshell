@@ -7,6 +7,9 @@
 #include <commctrl.h>
 #include "ui_theme.h"
 #include "theme.h"  /* theme_is_dark() */
+#include "ns_draw.h"
+#include "ns_tokens.h"
+#include "dpi_util.h"
 
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
@@ -31,9 +34,68 @@ static inline void themed_apply_title_bar(HWND hwnd, const ThemeColors *theme)
 }
 
 /*
- * Draw a themed owner-draw button.
+ * Hover tracking for owner-draw themed buttons. ns_draw_button() needs a
+ * hover state, and the plain BS_OWNERDRAW "Button" class does not expose
+ * one, so a tiny subclass tracks WM_MOUSEMOVE/WM_MOUSELEAVE per button and
+ * stamps a window property with the result. The core hover tracker
+ * (ns_hover) arrives in Task 6; this is deliberately minimal.
+ */
+
+#define THEMED_BUTTON_HOVER_SUBCLASS_ID 43
+#define THEMED_BUTTON_HOVER_PROP "NutshellThemedButtonHover"
+
+static inline LRESULT CALLBACK themed_button_hover_subclass(
+    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    (void)dwRefData;
+    switch (msg) {
+    case WM_MOUSEMOVE:
+        if (!GetPropA(hwnd, THEMED_BUTTON_HOVER_PROP)) {
+            SetPropA(hwnd, THEMED_BUTTON_HOVER_PROP, (HANDLE)1);
+            TRACKMOUSEEVENT tme;
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            tme.dwHoverTime = 0;
+            TrackMouseEvent(&tme);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        break;
+    case WM_MOUSELEAVE:
+        if (GetPropA(hwnd, THEMED_BUTTON_HOVER_PROP)) {
+            RemovePropA(hwnd, THEMED_BUTTON_HOVER_PROP);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        break;
+    case WM_NCDESTROY:
+        RemovePropA(hwnd, THEMED_BUTTON_HOVER_PROP);
+        RemoveWindowSubclass(hwnd, themed_button_hover_subclass, uIdSubclass);
+        break;
+    default:
+        break;
+    }
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
+
+/* Idempotent: SetWindowSubclass no-ops if this proc/id is already
+ * installed on hwnd, so callers may call it on every paint. */
+static inline void themed_button_track_hover(HWND hwnd)
+{
+    if (!hwnd) return;
+    SetWindowSubclass(hwnd, themed_button_hover_subclass,
+                      THEMED_BUTTON_HOVER_SUBCLASS_ID, 0);
+}
+
+static inline int themed_button_is_hot(HWND hwnd)
+{
+    return hwnd && GetPropA(hwnd, THEMED_BUTTON_HOVER_PROP) != NULL;
+}
+
+/*
+ * Draw a themed owner-draw button through ns_draw_button().
  *   dis       — DRAWITEMSTRUCT from WM_DRAWITEM
- *   theme     — active ThemeColors
+ *   theme     — active ThemeColors (only bg_primary, for corner clearing)
  *   is_primary — 1 for accent-coloured (Save, Connect, Send),
  *                0 for secondary (Cancel, New, Edit, Delete)
  */
@@ -45,55 +107,40 @@ static inline void draw_themed_button(LPDRAWITEMSTRUCT dis,
 
     HDC hdc = dis->hDC;
     RECT rc = dis->rcItem;
-    int pressed = (dis->itemState & ODS_SELECTED) != 0;
 
-    /* Colours */
-    unsigned int bg_rgb = is_primary ? theme->accent : theme->bg_secondary;
-    unsigned int fg_rgb = is_primary ? 0xFFFFFF : theme->text_main;
-    if (pressed) {
-        /* Darken by ~20% */
-        unsigned int r = (bg_rgb >> 16) & 0xFF;
-        unsigned int g = (bg_rgb >> 8)  & 0xFF;
-        unsigned int b =  bg_rgb        & 0xFF;
-        r = r * 4 / 5; g = g * 4 / 5; b = b * 4 / 5;
-        bg_rgb = (r << 16) | (g << 8) | b;
-    }
-
-    COLORREF bg_cr = theme_cr(bg_rgb);
-    COLORREF fg_cr = theme_cr(fg_rgb);
-    COLORREF border_cr = theme_cr(theme->border);
-
-    /* Clear corners with parent background so RoundRect corners are clean */
+    /* Clear corners with parent background so the rounded fill sits on a
+     * clean background. */
     HBRUSH hBgBr = CreateSolidBrush(theme_cr(theme->bg_primary));
     FillRect(hdc, &rc, hBgBr);
     DeleteObject(hBgBr);
 
-    /* Round-rect background with border */
-    HBRUSH hBr = CreateSolidBrush(bg_cr);
-    HPEN hPen = CreatePen(PS_SOLID, 1, border_cr);
-    HGDIOBJ oldBr = SelectObject(hdc, hBr);
-    HGDIOBJ oldPen = SelectObject(hdc, hPen);
-    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 4, 4);
-    SelectObject(hdc, oldPen);
-    SelectObject(hdc, oldBr);
-    DeleteObject(hPen);
-    DeleteObject(hBr);
+    themed_button_track_hover(dis->hwndItem);
 
-    /* Text */
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, fg_cr);
+    const ThemeSurface *surface = is_primary ? &ns_tokens()->accent
+                                              : &ns_tokens()->bg_secondary;
 
-    wchar_t text[64];
-    GetWindowTextW(dis->hwndItem, text, (int)(sizeof(text)/sizeof(text[0])));
-    DrawTextW(hdc, text, -1, &rc,
-              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    NsBtnState state;
+    if (dis->itemState & ODS_DISABLED)
+        state = NS_BTN_DISABLED;
+    else if (dis->itemState & ODS_SELECTED)
+        state = NS_BTN_PRESSED;
+    else if (themed_button_is_hot(dis->hwndItem))
+        state = NS_BTN_HOVER;
+    else
+        state = NS_BTN_REST;
 
-    /* Focus rect */
-    if (dis->itemState & ODS_FOCUS) {
-        RECT fr = rc;
-        InflateRect(&fr, -3, -3);
-        DrawFocusRect(hdc, &fr);
-    }
+    int focused = (dis->itemState & ODS_FOCUS) ? 1 : 0;
+
+    wchar_t wtext[64];
+    GetWindowTextW(dis->hwndItem, wtext, (int)(sizeof(wtext)/sizeof(wtext[0])));
+    char text[256];
+    WideCharToMultiByte(CP_UTF8, 0, wtext, -1, text, (int)sizeof(text),
+                        NULL, NULL);
+
+    HFONT font = (HFONT)SendMessage(dis->hwndItem, WM_GETFONT, 0, 0);
+    int dpi = get_window_dpi(dis->hwndItem);
+
+    ns_draw_button(hdc, &rc, surface, state, focused, text, font, dpi);
 }
 
 /*

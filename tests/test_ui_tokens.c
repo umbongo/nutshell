@@ -314,9 +314,8 @@ int test_ui_tokens_resolve_null_safe(void)
  * ===========================================================================
  */
 
-/* Once ns_draw.c exists (Task 4) it is excluded here too, same as
- * ui_draw.c is today: both are the shared drawing module allowed to call
- * RGB() directly. */
+/* ns_draw.c (renamed from ui_draw.c in Task 4) is the shared drawing
+ * module and is excluded here: it is allowed to call RGB() directly. */
 #define COLOUR_GATE_BASELINE 79
 #define SCALE_GATE_BASELINE  61
 
@@ -396,8 +395,7 @@ static int scan_ui_gates(int *out_colour, int *out_scale)
         char *content = read_whole_file(path);
         if (!content) continue;
 
-        int is_draw_module = (strcmp(name, "ns_draw.c") == 0) ||
-                              (strcmp(name, "ui_draw.c") == 0);
+        int is_draw_module = (strcmp(name, "ns_draw.c") == 0);
         if (!is_draw_module)
             colour += count_occurrences(content, "RGB(");
 
@@ -420,7 +418,7 @@ int test_ui_tokens_colour_gate(void)
         printf("  [colour gate] src/ui not found from cwd -- skipping\n");
         TEST_END();
     }
-    printf("  [colour gate] RGB( outside ns_draw.c/ui_draw.c in src/ui/*.c: %d (baseline %d)\n",
+    printf("  [colour gate] RGB( outside ns_draw.c in src/ui/*.c: %d (baseline %d)\n",
            colour, COLOUR_GATE_BASELINE);
     ASSERT_TRUE(colour <= COLOUR_GATE_BASELINE);
     TEST_END();
