@@ -28,3 +28,6 @@ backups/
 # Native-host test artefacts
 build/test_runner.exe
 build/.detect*
+
+# Integration test output
+tests/integration/artifacts/
