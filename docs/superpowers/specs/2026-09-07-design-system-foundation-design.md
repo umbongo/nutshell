@@ -267,3 +267,52 @@ painted" (a non-blank capture).
   Light"`, and rejects an unknown state with a CLI error.
 - `ui_demo_build(state, &conv, &approval)` produces the documented message and
   entry counts for every state, and `all` equals the union.
+
+## 6. Tests — APPROVED 2026-09-07
+
+Three layers. Sections 1–5 placed every computable piece in `src/core` so the
+first layer covers almost everything; the Win32 side only paints what core
+computed.
+
+### Native suite (`make test`)
+
+Six new test files, one per module, holding the tests listed in each section:
+
+| Module | Test file |
+|---|---|
+| `ui_theme` resolve + derivation | `tests/test_ui_tokens.c` |
+| `ns_scale`, grid, ramp, font-cache key | `tests/test_ns_scale.c` |
+| `ns_layout` (button, card, approval card, hit-test) | `tests/test_ns_layout.c` |
+| `ns_hover` | `tests/test_ns_hover.c` |
+| `ns_motion` | `tests/test_ns_motion.c` |
+| `ui_demo` + CLI flag | `tests/test_ui_demo.c` (+ cases in `test_cli_args.c`) |
+
+Expected: 90–120 new tests on top of the current 1,539.
+
+### Two gates (fail the native suite)
+
+- **Colour gate** — `test_ui_tokens.c` scans `src/ui/*.c` at test time and fails
+  on any `RGB(` outside `ns_draw.c`, except an explicit allow-list kept in the
+  test (acorn watermark colours, the four terminal ANSI fallbacks in
+  `renderer.c`). Growing the allow-list is a visible review decision.
+- **Scale gate** — the same scan fails on any new `#define S(` / `*_SCALE(`
+  macro or a bare `MulDiv(..., 96)` in `src/ui`, so no second rounding rule
+  reappears.
+
+### Windows layers
+
+- `make wintest` green: all 32 glyphs non-empty at 16/32/48 px (needs the
+  section-3 `OP_DOT`).
+- Integration suite (`tests/integration`): the existing 11 cases plus
+  `ui_gallery` from section 5. A full run leaves `artifacts\gallery\` as the
+  contact sheet.
+
+### Definition of done for the foundation
+
+1. All six modules landed with their tests; native suite green.
+2. Both gates passing; hardcoded colours in `src/ui` outside the allow-list: 0
+   (from 77).
+3. `make wintest` green.
+4. Integration suite green including `ui_gallery`.
+5. A before/after gallery diff reviewed by Thomas: existing screens unchanged
+   except body text at 10 pt and the light themes' new accent.
