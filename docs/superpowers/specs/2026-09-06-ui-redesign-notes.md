@@ -95,10 +95,15 @@ three dots on `NS_ICON_THINKING` and the LED on `NS_ICON_SERVER`, so those detai
 invisible too. Fix belongs in foundation section 3 (shared primitives): add an `OP_DOT`
 op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
 
-## Next steps
+## Todo
 
-1. Present the six foundation sections above for approval, one at a time.
-2. Write `docs/superpowers/specs/2026-09-06-design-system-foundation-design.md`, self-review, commit.
-3. Invoke the writing-plans skill for the foundation plan.
-4. Then brainstorm sub-project 2 (AI Assist panel) — mockups of layout options are worth
-   showing visually before choosing.
+- [x] Native Windows build + test environment (committed 58fc45e, v1.0.77).
+- [ ] Start the design-system foundation: present the six foundation sections above for
+      approval, one at a time, beginning with semantic tokens.
+- [ ] Write `docs/superpowers/specs/2026-09-06-design-system-foundation-design.md`,
+      self-review, commit.
+- [ ] Write the foundation implementation plan in `docs/superpowers/plans/`.
+- [ ] During foundation section 3 (shared primitives): add `OP_DOT` to `icons.c` so the
+      password / thinking / server dots render; `make wintest` must go green.
+- [ ] Then brainstorm sub-project 2 (AI Assist panel) — mockups of layout options are worth
+      showing visually before choosing.
