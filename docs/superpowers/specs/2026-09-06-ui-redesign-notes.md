@@ -114,7 +114,8 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       hidden flag, no menu entry.
 - [x] `docs/superpowers/specs/2026-09-07-design-system-foundation-design.md`
       written, self-reviewed, committed.
-- [ ] Write the foundation implementation plan in `docs/superpowers/plans/`.
+- [x] Foundation implementation plan: `docs/superpowers/plans/2026-09-07-design-system-foundation.md`
+      (10 tasks, TDD, gates as a ratchet). Next: implement task 1.
 - [ ] During foundation section 3 (shared primitives): add `OP_DOT` to `icons.c` so the
       password / thinking / server dots render; `make wintest` must go green.
 - [ ] Then brainstorm sub-project 2 (AI Assist panel) — mockups of layout options are worth
