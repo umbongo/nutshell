@@ -1697,6 +1697,25 @@ int test_sl_scroll_clamp_negative_pins_zero(void);
 int test_sl_scroll_clamp_over_max_pins_max(void);
 int test_sl_scroll_clamp_zero_max(void);
 
+/* test_ns_scale.c */
+int test_ns_scale_identity_at_96(void);
+int test_ns_scale_monotonic_across_dpis(void);
+int test_ns_scale_never_zero_for_positive_px(void);
+int test_ns_scale_matches_settings_scale(void);
+int test_ns_scale_dpi_le_zero_treated_as_96(void);
+int test_ns_type_sp_multiples_of_4(void);
+int test_ns_type_sz_multiples_of_4(void);
+int test_ns_type_radii_multiples_of_4(void);
+int test_ns_type_strokes_exact(void);
+int test_ns_type_ramp_strictly_increasing_px(void);
+int test_ns_type_font_px_mono_uses_mono_size(void);
+int test_ns_type_font_weights(void);
+int test_ns_type_font_role_oob_returns_body(void);
+int test_ns_type_font_slot_unique_and_bounded(void);
+int test_ns_type_font_slot_stable_across_calls(void);
+int test_ns_type_font_slot_nearest_dpi_mapping(void);
+int test_ns_type_pill(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -3425,6 +3444,25 @@ int main(void) {
     failed += test_sl_scroll_clamp_negative_pins_zero();
     failed += test_sl_scroll_clamp_over_max_pins_max();
     failed += test_sl_scroll_clamp_zero_max();
+
+    printf("\n--- Design System: scale & type ---\n");
+    failed += test_ns_scale_identity_at_96();
+    failed += test_ns_scale_monotonic_across_dpis();
+    failed += test_ns_scale_never_zero_for_positive_px();
+    failed += test_ns_scale_matches_settings_scale();
+    failed += test_ns_scale_dpi_le_zero_treated_as_96();
+    failed += test_ns_type_sp_multiples_of_4();
+    failed += test_ns_type_sz_multiples_of_4();
+    failed += test_ns_type_radii_multiples_of_4();
+    failed += test_ns_type_strokes_exact();
+    failed += test_ns_type_ramp_strictly_increasing_px();
+    failed += test_ns_type_font_px_mono_uses_mono_size();
+    failed += test_ns_type_font_weights();
+    failed += test_ns_type_font_role_oob_returns_body();
+    failed += test_ns_type_font_slot_unique_and_bounded();
+    failed += test_ns_type_font_slot_stable_across_calls();
+    failed += test_ns_type_font_slot_nearest_dpi_mapping();
+    failed += test_ns_type_pill();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

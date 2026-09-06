@@ -1,4 +1,5 @@
 #include "settings_layout.h"
+#include "ns_scale.h"
 #include <stddef.h>
 
 /* ---- Nav table -----------------------------------------------------------
@@ -25,19 +26,13 @@ static const SettingsNavEntry NAV_TABLE[] = {
 #define NAV_TABLE_COUNT ((int)(sizeof(NAV_TABLE) / sizeof(NAV_TABLE[0])))
 
 /* ---- Scaling --------------------------------------------------------------
- * MulDiv-equivalent: round(px * dpi / 96), without pulling in windows.h.
- * A 64-bit intermediate avoids overflow for any pixel/DPI value this module
- * is realistically called with. */
+ * Thin alias onto the shared ns_scale() helper (src/core/ns_scale.h), kept
+ * during the design-system migration so this module's callers don't all
+ * need to change at once. */
 
 int settings_scale(int px, int dpi)
 {
-    if (dpi <= 0) dpi = 96;
-
-    long long scaled = ((long long)px * dpi + 48) / 96; /* round to nearest */
-
-    if (px >= 1 && scaled < 1) scaled = 1;
-
-    return (int)scaled;
+    return ns_scale(px, dpi);
 }
 
 void settings_metrics_init(SettingsMetrics *m, int dpi)
