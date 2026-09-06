@@ -10,6 +10,8 @@
 #include "dpi_util.h"
 #include "icons.h"
 #include "ns_draw.h"
+#include "ns_tokens.h"
+#include "ns_hover.h"
 
 #ifdef _WIN32
 
@@ -65,19 +67,26 @@ typedef struct TabControlData {
     char  font_name[64];
     const ThemeColors *theme;
     float pulse_phase; /* 0..2*PI — advanced by WM_TIMER for connecting tabs */
-    int   hover_tab;   /* index of tab under cursor, or -1 */
-    int   hover_btn;   /* HOVER_BTN_* (see enum below) or -1 */
+    NsHover hover;     /* hot/pressed element id -- see TABS_HOVER_* below */
     BOOL  tracking_mouse; /* TRUE while TrackMouseEvent is armed */
 } TabControlData;
 
-/* Right-side and add buttons that participate in hover highlighting. */
+/* ns_hover element ids for the tab strip's painted controls (none of
+ * these are child windows, so they go through ns_hover like the
+ * approval card in chat_listview.c does -- see
+ * docs/superpowers/specs/2026-09-07-design-system-foundation-design.md
+ * section 3). The right-side/add buttons keep small fixed ids; each tab
+ * gets two ids (its background and its close glyph) so the two can hot
+ * independently. */
 enum {
-    HOVER_BTN_NONE = -1,
-    HOVER_BTN_ADD = 0,
-    HOVER_BTN_LEFT,
-    HOVER_BTN_RIGHT,
-    HOVER_BTN_AI
+    TABS_HOVER_ADD = 0,
+    TABS_HOVER_LEFT,
+    TABS_HOVER_RIGHT,
+    TABS_HOVER_AI
 };
+#define TABS_HOVER_TAB_BASE   10
+#define TABS_HOVER_TAB(i)     (TABS_HOVER_TAB_BASE + (i) * 2)
+#define TABS_HOVER_CLOSE(i)   (TABS_HOVER_TAB_BASE + (i) * 2 + 1)
 
 #define TABS_TIMER_PULSE  0x7501
 #define TABS_PULSE_MS     50
@@ -112,16 +121,96 @@ static void tabs_create_fonts(TabControlData *data, int dpi)
 
 /* Removed manual draw_chip_icon logic in favour of Fluent icons */
 
-/* Hover hit-test: figure out which tab and/or right-side button is under
- * (mx, my).  Returns indices via out params; -1 / HOVER_BTN_NONE when
- * nothing is hovered.  Mirrors the geometry of the paint and click paths
- * — keep in sync if those change. */
-static void tabs_hover_hit(HWND hwnd, TabControlData *data, int mx, int my,
-                           int *out_tab, int *out_btn)
+/* Rect of one of the small fixed right-side/add buttons (TABS_HOVER_ADD/
+ * LEFT/RIGHT/AI), matching the paint loop's geometry exactly. */
+static void tabs_rect_for_btn(HWND hwnd, TabControlData *data, int btn_id,
+                              RECT *out)
 {
-    *out_tab = -1;
-    *out_btn = HOVER_BTN_NONE;
-    if (!data) return;
+    RECT rcClient;
+    GetClientRect(hwnd, &rcClient);
+    int btnSz = S(BTN_SIZE_BASE);
+    int pad   = S(PAD_BASE);
+    int btnGap = S(BTN_GAP_BASE);
+    int btnY  = (rcClient.bottom - btnSz) / 2;
+    int aiX    = rcClient.right - btnSz - pad;
+    int rightX = aiX - btnSz - btnGap;
+    int leftX  = rightX - btnSz - btnGap;
+
+    switch (btn_id) {
+    case TABS_HOVER_ADD:   SetRect(out, pad, btnY, pad + btnSz, btnY + btnSz); break;
+    case TABS_HOVER_LEFT:  SetRect(out, leftX, btnY, leftX + btnSz, btnY + btnSz); break;
+    case TABS_HOVER_RIGHT: SetRect(out, rightX, btnY, rightX + btnSz, btnY + btnSz); break;
+    case TABS_HOVER_AI:    SetRect(out, aiX, btnY, aiX + btnSz, btnY + btnSz); break;
+    default:               SetRectEmpty(out); break;
+    }
+}
+
+/* Rect of tab `index`'s background (want_close = 0) or its close glyph
+ * (want_close = 1). Mirrors the paint loop's geometry exactly -- tab
+ * widths depend on each title, so this walks from the first tab like
+ * paint and the click hit-test do. Returns 0 (rect zeroed) if `index` is
+ * out of range, e.g. the tab was closed since the id was captured. */
+static int tabs_rect_for_tab(HWND hwnd, TabControlData *data, int index,
+                             int want_close, RECT *out)
+{
+    SetRectEmpty(out);
+    if (!data || index < 0 || index >= data->m.count) return 0;
+
+    RECT rcClient;
+    GetClientRect(hwnd, &rcClient);
+    int overhead = TAB_OVERHEAD_S;
+    int minW     = S(TAB_MIN_W_BASE);
+    int tabVPad  = S(TAB_V_PAD_BASE);
+    int tabH     = rcClient.bottom - tabVPad;
+    int tabY     = tabVPad / 2;
+    int closeSz  = S(CLOSE_SIZE_BASE);
+    int pad      = S(PAD_BASE);
+    int x        = TAB_START_X_S;
+
+    HDC hdc = GetDC(hwnd);
+    HFONT hOld = (HFONT)SelectObject(hdc, data->hFont);
+    int tw = 0;
+    for (int i = 0; i <= index; i++) {
+        tw = tab_w_s(hdc, data->m.tabs[i].title, overhead, minW);
+        if (i < index) x += tw + S(TAB_GAP_BASE);
+    }
+    SelectObject(hdc, hOld);
+    ReleaseDC(hwnd, hdc);
+
+    if (want_close) {
+        int closeX = x + tw - closeSz - pad;
+        int closeY = tabY + (tabH - closeSz) / 2;
+        SetRect(out, closeX, closeY, closeX + closeSz, closeY + closeSz);
+    } else {
+        SetRect(out, x, tabY, x + tw, tabY + tabH);
+    }
+    return 1;
+}
+
+/* Decode a TABS_HOVER_* id back into its rect. Used both for the
+ * currently-hot element and, on WM_MOUSEMOVE, for the previously-hot one
+ * (which chatlv-style keyed-by-position hit-testing can't report once
+ * the cursor has moved off it). */
+static int tabs_rect_for_id(HWND hwnd, TabControlData *data, int id, RECT *out)
+{
+    SetRectEmpty(out);
+    if (id < 0) return 0;
+    if (id < TABS_HOVER_TAB_BASE) {
+        tabs_rect_for_btn(hwnd, data, id, out);
+        return 1;
+    }
+    int offset = id - TABS_HOVER_TAB_BASE;
+    return tabs_rect_for_tab(hwnd, data, offset / 2, offset % 2, out);
+}
+
+/* Hover hit-test: figure out which painted element is under (mx, my).
+ * Returns a TABS_HOVER_* id, or -1 when nothing is hovered, plus its
+ * rect via out_rc (for targeted invalidation). Mirrors the geometry of
+ * the paint and click paths — keep in sync if those change. */
+static int tabs_hit_id(HWND hwnd, TabControlData *data, int mx, int my,
+                       RECT *out_rc)
+{
+    if (!data) return -1;
 
     RECT rcClient;
     GetClientRect(hwnd, &rcClient);
@@ -134,8 +223,8 @@ static void tabs_hover_hit(HWND hwnd, TabControlData *data, int mx, int my,
     /* [+] add */
     if (mx >= pad_h && mx <= pad_h + btnSz_h &&
         my >= btnY_h && my <= btnY_h + btnSz_h) {
-        *out_btn = HOVER_BTN_ADD;
-        return;
+        if (out_rc) tabs_rect_for_btn(hwnd, data, TABS_HOVER_ADD, out_rc);
+        return TABS_HOVER_ADD;
     }
 
     /* Right-side cluster */
@@ -143,24 +232,52 @@ static void tabs_hover_hit(HWND hwnd, TabControlData *data, int mx, int my,
     int rightX_h = aiX_h - btnSz_h - btnGap_h;
     int leftX_h  = rightX_h - btnSz_h - btnGap_h;
     if (my >= btnY_h && my <= btnY_h + btnSz_h) {
-        if (mx >= aiX_h    && mx <= aiX_h    + btnSz_h) { *out_btn = HOVER_BTN_AI;    return; }
-        if (mx >= rightX_h && mx <= rightX_h + btnSz_h) { *out_btn = HOVER_BTN_RIGHT; return; }
-        if (mx >= leftX_h  && mx <= leftX_h  + btnSz_h) { *out_btn = HOVER_BTN_LEFT;  return; }
+        if (mx >= aiX_h    && mx <= aiX_h    + btnSz_h) {
+            if (out_rc) tabs_rect_for_btn(hwnd, data, TABS_HOVER_AI, out_rc);
+            return TABS_HOVER_AI;
+        }
+        if (mx >= rightX_h && mx <= rightX_h + btnSz_h) {
+            if (out_rc) tabs_rect_for_btn(hwnd, data, TABS_HOVER_RIGHT, out_rc);
+            return TABS_HOVER_RIGHT;
+        }
+        if (mx >= leftX_h  && mx <= leftX_h  + btnSz_h) {
+            if (out_rc) tabs_rect_for_btn(hwnd, data, TABS_HOVER_LEFT, out_rc);
+            return TABS_HOVER_LEFT;
+        }
     }
 
-    /* Tabs */
+    /* Tabs (background, or close glyph within the hovered tab) */
     int overhead_h = TAB_OVERHEAD_S;
     int minW_h     = S(TAB_MIN_W_BASE);
+    int tabVPad_h  = S(TAB_V_PAD_BASE);
+    int tabH_h     = rcClient.bottom - tabVPad_h;
+    int tabY_h     = tabVPad_h / 2;
+    int closeSz_h  = S(CLOSE_SIZE_BASE);
     int x = TAB_START_X_S;
     HDC hdc_h = GetDC(hwnd);
     HFONT hOld = (HFONT)SelectObject(hdc_h, data->hFont);
     for (int i = 0; i < data->m.count; i++) {
         int tw = tab_w_s(hdc_h, data->m.tabs[i].title, overhead_h, minW_h);
-        if (mx >= x && mx <= x + tw) { *out_tab = i; break; }
+        if (mx >= x && mx <= x + tw) {
+            SelectObject(hdc_h, hOld);
+            ReleaseDC(hwnd, hdc_h);
+            int closeX = x + tw - closeSz_h - pad_h;
+            int closeY = tabY_h + (tabH_h - closeSz_h) / 2;
+            if (mx >= closeX && mx <= closeX + closeSz_h &&
+                my >= closeY && my <= closeY + closeSz_h) {
+                if (out_rc)
+                    SetRect(out_rc, closeX, closeY,
+                            closeX + closeSz_h, closeY + closeSz_h);
+                return TABS_HOVER_CLOSE(i);
+            }
+            if (out_rc) SetRect(out_rc, x, tabY_h, x + tw, tabY_h + tabH_h);
+            return TABS_HOVER_TAB(i);
+        }
         x += tw + S(TAB_GAP_BASE);
     }
     SelectObject(hdc_h, hOld);
     ReleaseDC(hwnd, hdc_h);
+    return -1;
 }
 
 static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -171,8 +288,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case WM_CREATE: {
             data = xcalloc(1, sizeof(TabControlData));
             tabmgr_init(&data->m);
-            data->hover_tab = -1;
-            data->hover_btn = HOVER_BTN_NONE;
+            ns_hover_init(&data->hover);
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
 
             (void)snprintf(data->font_name, sizeof(data->font_name),
@@ -227,16 +343,20 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case WM_MOUSEMOVE: {
             if (!data) return 0;
 
-            /* Update hover indices; only invalidate when they change so we
-             * don't trigger a 60Hz repaint while the cursor moves. */
+            /* Hit-test, feed ns_hover, and invalidate only the (up to)
+             * two rects that actually changed state -- never a full
+             * repaint just because the cursor moved. */
             int mx = (int)(short)LOWORD(lParam);
             int my = (int)(short)HIWORD(lParam);
-            int new_tab = -1, new_btn = HOVER_BTN_NONE;
-            tabs_hover_hit(hwnd, data, mx, my, &new_tab, &new_btn);
-            if (new_tab != data->hover_tab || new_btn != data->hover_btn) {
-                data->hover_tab = new_tab;
-                data->hover_btn = new_btn;
-                InvalidateRect(hwnd, NULL, FALSE);
+            RECT new_rc;
+            int hit_id = tabs_hit_id(hwnd, data, mx, my, &new_rc);
+            NsHoverChange ch = ns_hover_move(&data->hover, hit_id);
+            if (ch.changed) {
+                RECT old_rc;
+                if (tabs_rect_for_id(hwnd, data, ch.old_id, &old_rc))
+                    InvalidateRect(hwnd, &old_rc, FALSE);
+                if (ch.new_id >= 0)
+                    InvalidateRect(hwnd, &new_rc, FALSE);
             }
 
             /* Arm WM_MOUSELEAVE delivery once per enter. */
@@ -259,13 +379,25 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case WM_MOUSELEAVE:
             if (data) {
                 data->tracking_mouse = FALSE;
-                if (data->hover_tab != -1 || data->hover_btn != HOVER_BTN_NONE) {
-                    data->hover_tab = -1;
-                    data->hover_btn = HOVER_BTN_NONE;
-                    InvalidateRect(hwnd, NULL, FALSE);
+                NsHoverChange ch = ns_hover_leave(&data->hover);
+                if (ch.changed) {
+                    RECT old_rc;
+                    if (tabs_rect_for_id(hwnd, data, ch.old_id, &old_rc))
+                        InvalidateRect(hwnd, &old_rc, FALSE);
                 }
             }
             return 0;
+
+        case WM_SETCURSOR:
+            if (data && LOWORD(lParam) == HTCLIENT) {
+                POINT pt;
+                GetCursorPos(&pt);
+                ScreenToClient(hwnd, &pt);
+                int hit_id = tabs_hit_id(hwnd, data, pt.x, pt.y, NULL);
+                SetCursor(LoadCursor(NULL, hit_id >= 0 ? IDC_HAND : IDC_ARROW));
+                return TRUE;
+            }
+            break;
 
         case WM_NOTIFY: {
             const NMHDR *nmhdr = (const NMHDR *)lParam;
@@ -370,7 +502,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int btnY = (rcClient.bottom - btnSz) / 2;
             RECT rcAdd = {pad, btnY, pad + btnSz, btnY + btnSz};
             {
-                COLORREF addFill = (data->hover_btn == HOVER_BTN_ADD)
+                COLORREF addFill = ns_hover_state_for(&data->hover, TABS_HOVER_ADD)
                                  ? rgb_alpha(cBtn, cTabAct, 0.6f) : cBtn;
                 HPEN hPen = CreatePen(PS_SOLID, 1, cBorder);
                 HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
@@ -393,11 +525,14 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 int tw = tab_w_s(hdc, data->m.tabs[i].title, overhead, minW);
                 RECT rcTab = {x, tabY, x + tw, tabY + tabH};
 
-                /* Background & border */
+                /* Background & border. Hover fill comes straight from the
+                 * resolved tokens (Design-System Foundation task 6),
+                 * not a local rgb_alpha blend. */
                 int is_active = (i == data->m.active_index);
-                int is_hover  = (!is_active && i == data->hover_tab);
+                int is_hover  = (!is_active &&
+                                 ns_hover_state_for(&data->hover, TABS_HOVER_TAB(i)));
                 COLORREF tabFill = is_active ? cTabAct
-                                 : (is_hover ? rgb_alpha(cTabInact, cTabAct, 0.5f)
+                                 : (is_hover ? tc(ns_tokens()->bg_secondary.hover)
                                              : cTabInact);
                 HPEN hPen = CreatePen(PS_SOLID, 1, cBorder);
                 HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
@@ -478,11 +613,13 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 DrawText(hdc, data->m.tabs[i].title, -1, &rcText,
                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-                /* ---- ✕ close button ---- */
+                /* ---- ✕ close button -- brightens to text_main while hot */
                 int closeX = x + tw - closeSz - pad;
                 int closeY = tabY + (tabH - closeSz) / 2;
                 RECT rcClose = {closeX, closeY, closeX + closeSz, closeY + closeSz};
-                ns_icon_draw(hdc, NS_ICON_CLOSE, &rcClose, cDim, (UINT)data->dpi);
+                int close_hot = ns_hover_state_for(&data->hover, TABS_HOVER_CLOSE(i));
+                ns_icon_draw(hdc, NS_ICON_CLOSE, &rcClose,
+                            close_hot ? cText : cDim, (UINT)data->dpi);
 
                 x += tw + tabGap;
             }
@@ -500,7 +637,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 /* Helper macro: paint one square button's bg, picking the
                  * hover-tinted fill if this button is currently hovered. */
                 #define DRAW_BTN_BG(rcptr, hover_id) do { \
-                    COLORREF _f = (data->hover_btn == (hover_id)) ? hoverFill : cBtn; \
+                    COLORREF _f = ns_hover_state_for(&data->hover, (hover_id)) \
+                                  ? hoverFill : cBtn; \
                     HBRUSH _b = CreateSolidBrush(_f); \
                     HBRUSH _ob = (HBRUSH)SelectObject(hdc, _b); \
                     RoundRect(hdc, (rcptr)->left, (rcptr)->top, \
@@ -512,13 +650,13 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 /* ◀ Left arrow */
                 if (leftX > x) {
                     RECT rcLeft = {leftX, btnY, leftX + btnSz, btnY + btnSz};
-                    DRAW_BTN_BG(&rcLeft, HOVER_BTN_LEFT);
+                    DRAW_BTN_BG(&rcLeft, TABS_HOVER_LEFT);
                     ns_icon_draw(hdc, NS_ICON_CHEV_LEFT, &rcLeft, cDim, (UINT)data->dpi);
                 }
                 /* ▶ Right arrow */
                 if (rightX > x) {
                     RECT rcRight = {rightX, btnY, rightX + btnSz, btnY + btnSz};
-                    DRAW_BTN_BG(&rcRight, HOVER_BTN_RIGHT);
+                    DRAW_BTN_BG(&rcRight, TABS_HOVER_RIGHT);
                     ns_icon_draw(hdc, NS_ICON_CHEV_RIGHT, &rcRight, cDim, (UINT)data->dpi);
                 }
                 /* AI button — CPU chip glyph. Chip body and pins always
@@ -528,7 +666,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                  * the green stays well under 35% of the icon. */
                 if (aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + btnSz, btnY + btnSz};
-                    DRAW_BTN_BG(&rcAi, HOVER_BTN_AI);
+                    DRAW_BTN_BG(&rcAi, TABS_HOVER_AI);
                     COLORREF aiAccent = data->ai_active ? RGB(0, 180, 0) : cDim;
                     ns_icon_draw_accent(hdc, NS_ICON_AI, &rcAi,
                                         cDim, aiAccent, 0, 255,

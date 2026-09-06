@@ -6,6 +6,7 @@
 #include "chat_msg.h"
 #include "chat_activity.h"
 #include "ui_theme.h"
+#include "ns_hover.h"
 
 typedef struct {
     HWND hwnd;              /* The owner-drawn panel window */
@@ -61,6 +62,13 @@ typedef struct {
     HWND ext_scrollbar;
 
     int render_markdown;        /* 1 = markdown render on, 0 = plain text */
+
+    /* Hover tracking for painted elements (approval card rows/actions,
+     * the [Retry] link) -- see ns_hover.h and Design-System Foundation
+     * task 6. Element ids: CLV_ROW_HIT_ID/CLV_CARD_HIT_ID/CLV_HOVER_RETRY
+     * in chat_listview.c. */
+    NsHover hover;
+    int hover_tracking;         /* 1 while TrackMouseEvent(TME_LEAVE) is armed */
 
 } ChatListView;
 

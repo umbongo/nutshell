@@ -19,6 +19,7 @@
 #include "ns_type.h"
 #include "ns_layout.h"
 #include "ns_tokens.h"
+#include "ns_hover.h"
 #include "chat_approval.h"
 #include <windowsx.h>
 #include <commctrl.h>
@@ -73,6 +74,24 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define BASE_ACTIVITY_H   28
 #define BASE_DOT_SIZE       8
 
+/* ── ns_hover element ids ─────────────────────────────────────────────
+ * One NsHover per list view (lv->hover) tracks every painted, clickable
+ * element: approval-card rows, the card-wide Allow All / Cancel actions,
+ * and the [Retry] link in the activity indicator. Ids are shared between
+ * paint (which knows what it just drew) and the hover hit-test (which
+ * re-derives the same geometry via approval_card_layout/approval_card_hit
+ * -- see chatlv_hover_hit() / chatlv_hover_rect_for_id() below), so the
+ * two can never drift apart.
+ *
+ *   row element   -> row * 16 + HIT_* (HIT_TAG..HIT_DENY)
+ *   card action   -> APPROVAL_MAX_CMDS * 16 + HIT_* (HIT_ALLOW_ALL/HIT_CANCEL,
+ *                    which have no row -- approval_card_hit reports -1)
+ *   [Retry] link  -> CLV_HOVER_RETRY, clear of the row/card id range
+ */
+#define CLV_ROW_HIT_ID(row, hit)  ((row) * 16 + (hit))
+#define CLV_CARD_HIT_ID(hit)      (APPROVAL_MAX_CMDS * 16 + (hit))
+#define CLV_HOVER_RETRY           (APPROVAL_MAX_CMDS * 16 + 16)
+
 /* ── Forward declarations ───────────────────────────────────────────── */
 
 static LRESULT CALLBACK ChatListWndProc(HWND, UINT, WPARAM, LPARAM);
@@ -89,7 +108,7 @@ static void     paint_cmd_card(ChatListView *lv, HDC hdc,
                                ChatMsgItem *item, RECT *rc);
 static void     paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc);
 static void     paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                              const ApprovalRowLayout *row);
+                              const ApprovalRowLayout *row, int row_idx);
 static void     paint_status_item(ChatListView *lv, HDC hdc,
                                   ChatMsgItem *item, RECT *rc);
 
@@ -310,6 +329,7 @@ HWND chat_listview_create(HWND parent, int x, int y, int w, int h,
     lv->theme    = theme;
     lv->dpi_scale = 1.0f;
     lv->render_markdown = 1;
+    ns_hover_init(&lv->hover);
 
     /* Compute scaled layout constants */
     lv->msg_gap    = CLV_SCALE(lv, BASE_MSG_GAP);
@@ -1346,7 +1366,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
  *    paint_cmd_container() (many rows in the live queue). ────────────── */
 
 static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                          const ApprovalRowLayout *row)
+                          const ApprovalRowLayout *row, int row_idx)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
     const ThemeTokens *tok = ns_tokens();
@@ -1385,15 +1405,20 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         RECT chk_rc = { row->checkbox.x, row->checkbox.y,
                         row->checkbox.x + row->checkbox.w,
                         row->checkbox.y + row->checkbox.h };
+        int chk_hover = ns_hover_state_for(&lv->hover,
+                            CLV_ROW_HIT_ID(row_idx, HIT_CHECKBOX));
         if (item->u.cmd.selected) {
-            ns_draw_round_fill(hdc, &chk_rc, ns_scale(R_CTRL, dpi),
-                               RGB_FROM_THEME(tok->success.base), 255);
+            COLORREF fill = chk_hover ? RGB_FROM_THEME(tok->success.hover)
+                                      : RGB_FROM_THEME(tok->success.base);
+            ns_draw_round_fill(hdc, &chk_rc, ns_scale(R_CTRL, dpi), fill, 255);
             SetTextColor(hdc, RGB_FROM_THEME(tok->success.label));
             DrawTextW(hdc, L"\x2713", 1, &chk_rc,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         } else {
+            COLORREF stroke = chk_hover ? RGB_FROM_THEME(tok->accent.base)
+                                        : RGB_FROM_THEME(tok->border);
             ns_draw_round_stroke(hdc, &chk_rc, ns_scale(R_CTRL, dpi),
-                                 RGB_FROM_THEME(tok->border), STROKE_HAIRLINE);
+                                 stroke, STROKE_HAIRLINE);
         }
     }
 
@@ -1403,9 +1428,13 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                           row->allow.x + row->allow.w, row->allow.y + row->allow.h };
         RECT deny_rc  = { row->deny.x, row->deny.y,
                           row->deny.x + row->deny.w, row->deny.y + row->deny.h };
-        ns_draw_button(hdc, &allow_rc, &tok->success, NS_BTN_REST, 0,
+        NsBtnState allow_state = (NsBtnState)ns_hover_state_for(&lv->hover,
+                                      CLV_ROW_HIT_ID(row_idx, HIT_ALLOW));
+        NsBtnState deny_state  = (NsBtnState)ns_hover_state_for(&lv->hover,
+                                      CLV_ROW_HIT_ID(row_idx, HIT_DENY));
+        ns_draw_button(hdc, &allow_rc, &tok->success, allow_state, 0,
                        "Allow", lv->hSmallFont, dpi);
-        ns_draw_button(hdc, &deny_rc, &tok->danger, NS_BTN_REST, 0,
+        ns_draw_button(hdc, &deny_rc, &tok->danger, deny_state, 0,
                        "Deny", lv->hSmallFont, dpi);
     } else if (!item->u.cmd.blocked && item->u.cmd.approved != -1
                && row->allow.w > 0 && row->deny.w > 0) {
@@ -1447,7 +1476,7 @@ static void paint_cmd_card(ChatListView *lv, HDC hdc,
 
     SetBkMode(hdc, TRANSPARENT);
     if (layout.n_rows > 0)
-        paint_cmd_row(lv, hdc, item, &layout.rows[0]);
+        paint_cmd_row(lv, hdc, item, &layout.rows[0], 0);
 }
 
 /* ── Shared geometry for the live command queue container, computed once
@@ -1609,7 +1638,7 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         const ApprovalRowLayout *rowl = &g.layout.rows[i];
         if (rowl->tag.w <= 0 && rowl->text.w <= 0) continue;
         ChatMsgItem *citem = g.cmd_items[g.first_row + i];
-        paint_cmd_row(lv, hdc, citem, rowl);
+        paint_cmd_row(lv, hdc, citem, rowl, i);
     }
 
     RestoreDC(hdc, saved_dc);
@@ -1645,9 +1674,13 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         RECT cancel_rc = { g.layout.cancel.x, g.layout.cancel.y,
                            g.layout.cancel.x + g.layout.cancel.w,
                            g.layout.cancel.y + g.layout.cancel.h };
-        ns_draw_button(hdc, &allow_all_rc, &tok->warning, NS_BTN_REST, 0,
+        NsBtnState allow_all_state = (NsBtnState)ns_hover_state_for(&lv->hover,
+                                          CLV_CARD_HIT_ID(HIT_ALLOW_ALL));
+        NsBtnState cancel_state = (NsBtnState)ns_hover_state_for(&lv->hover,
+                                       CLV_CARD_HIT_ID(HIT_CANCEL));
+        ns_draw_button(hdc, &allow_all_rc, &tok->warning, allow_all_state, 0,
                       "Allow All", lv->hSmallFont, CLV_DPI(lv));
-        ns_draw_button(hdc, &cancel_rc, &tok->danger, NS_BTN_REST, 0,
+        ns_draw_button(hdc, &cancel_rc, &tok->danger, cancel_state, 0,
                       "Cancel", lv->hSmallFont, CLV_DPI(lv));
     }
 }
@@ -1745,8 +1778,9 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
     DrawTextA(hdc, status_buf, -1, &text_rc,
               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 
-    /* Draw [Retry] link when stalled */
+    /* Draw [Retry] link when stalled -- underlined while hot (ns_hover) */
     if (lv->activity->health == HEALTH_RED) {
+        static const char retry_text[] = "[Retry]";
         SIZE sz;
         GetTextExtentPoint32A(hdc, status_buf, (int)strlen(status_buf), &sz);
         int retry_x = text_rc.left + sz.cx + CLV_SCALE(lv, 10);
@@ -1756,8 +1790,21 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
         retry_rc.top    = y;
         retry_rc.right  = cw - pad;
         retry_rc.bottom = y + act_h;
-        DrawTextA(hdc, "[Retry]", -1, &retry_rc,
+        DrawTextA(hdc, retry_text, -1, &retry_rc,
                   DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+        if (ns_hover_state_for(&lv->hover, CLV_HOVER_RETRY) > 0) {
+            SIZE rsz;
+            GetTextExtentPoint32A(hdc, retry_text, (int)strlen(retry_text), &rsz);
+            int text_top = y + (act_h - rsz.cy) / 2;
+            int underline_y = text_top + rsz.cy - 1;
+            HPEN u_pen = CreatePen(PS_SOLID, 1, RGB_FROM_THEME(ns_tokens()->link.base));
+            HGDIOBJ old_u = SelectObject(hdc, u_pen);
+            MoveToEx(hdc, retry_x, underline_y, NULL);
+            LineTo(hdc, retry_x + rsz.cx, underline_y);
+            SelectObject(hdc, old_u);
+            DeleteObject(u_pen);
+        }
     }
 
     SelectObject(hdc, old_font);
@@ -1909,6 +1956,221 @@ static void on_paint(ChatListView *lv)
     DeleteDC(mem_dc);
 
     EndPaint(lv->hwnd, &ps);
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+ *  Hover hit-testing: same geometry as clicks, but never triggers an
+ *  action -- only identifies the painted element (if any) under the
+ *  cursor and its rect, for ns_hover_move() and targeted invalidation.
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/* Find the sole active (unsettled) command container item and the (y, h)
+ * it paints at. Only one item in the list ever carries the container's
+ * full measured_height at a time (the rest are absorbed with h = 0 --
+ * see build_cmd_card_geometry's caller in on_paint), so this mirrors the
+ * walk there and in on_lbuttondown. Returns NULL if no container is
+ * showing right now (e.g. everything has been decided). */
+static ChatMsgItem *find_active_cmd_container(ChatListView *lv,
+                                              int *out_y, int *out_h)
+{
+    int y = lv->msg_gap - lv->scroll_y;
+    ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
+    while (item) {
+        int h = item->measured_height;
+        if (h == 0) { item = item->next; continue; }
+        if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled) {
+            if (out_y) *out_y = y;
+            if (out_h) *out_h = h;
+            return item;
+        }
+        y += h + lv->msg_gap;
+        item = item->next;
+    }
+    return NULL;
+}
+
+/* The y coordinate just below the last visible item -- where the inline
+ * activity indicator (and its [Retry] link) paints. Mirrors the trailing
+ * walk in on_paint/on_lbuttondown. */
+static int chatlv_items_bottom_y(ChatListView *lv)
+{
+    int y = lv->msg_gap - lv->scroll_y;
+    ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
+    while (item) {
+        int h = item->measured_height;
+        if (h != 0) y += h + lv->msg_gap;
+        item = item->next;
+    }
+    return y;
+}
+
+/* Rect of the [Retry] link, matching paint_activity_indicator's layout.
+ * Returns 0 (leaving *out untouched) when there is no stalled activity
+ * to retry right now. The right edge deliberately matches the generous
+ * hit area on_lbuttondown already accepts for a click (the whole
+ * horizontal band to the right margin), so hover and click never
+ * disagree about whether the link is present. */
+static int activity_retry_rect(ChatListView *lv, HDC hdc, int y, int cw,
+                               RECT *out)
+{
+    if (!lv->activity || lv->activity->phase == ACTIVITY_IDLE ||
+        lv->activity->health != HEALTH_RED)
+        return 0;
+
+    int act_h  = CLV_SCALE(lv, BASE_ACTIVITY_H);
+    int dot_sz = CLV_SCALE(lv, BASE_DOT_SIZE);
+    int pad    = CLV_SCALE(lv, BASE_SIDE_PAD);
+    int indent = CLV_SCALE(lv, BASE_AI_INDENT);
+    int dot_x  = pad + indent;
+    int text_left = dot_x + dot_sz + CLV_SCALE(lv, 6);
+
+    char status_buf[128];
+    float now = (float)GetTickCount() / 1000.0f;
+    chat_activity_format(lv->activity, now, status_buf, sizeof(status_buf));
+
+    HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                         : GetStockObject(DEFAULT_GUI_FONT));
+    SIZE sz;
+    GetTextExtentPoint32A(hdc, status_buf, (int)strlen(status_buf), &sz);
+    SelectObject(hdc, old_font);
+
+    out->left   = text_left + sz.cx + CLV_SCALE(lv, 10);
+    out->top    = y;
+    out->right  = cw - pad;
+    out->bottom = y + act_h;
+    return 1;
+}
+
+/* Decode a row-element id back into the rect approval_card_layout gave
+ * it. Shared by chatlv_hover_hit() (current position) and
+ * chatlv_hover_rect_for_id() (the previously-hot element, which may no
+ * longer be under the cursor). */
+static int cmd_card_rect_for_hit(const ApprovalCardLayout *l, int hit,
+                                 int row, RECT *out)
+{
+    NsRect nr;
+    if (hit == HIT_ALLOW_ALL) {
+        nr = l->allow_all;
+    } else if (hit == HIT_CANCEL) {
+        nr = l->cancel;
+    } else if (row >= 0 && row < l->n_rows) {
+        const ApprovalRowLayout *rl = &l->rows[row];
+        switch (hit) {
+        case HIT_TAG:      nr = rl->tag;      break;
+        case HIT_TEXT:     nr = rl->text;     break;
+        case HIT_CHECKBOX: nr = rl->checkbox; break;
+        case HIT_ALLOW:    nr = rl->allow;    break;
+        case HIT_DENY:     nr = rl->deny;     break;
+        default: return 0;
+        }
+    } else {
+        return 0;
+    }
+    if (nr.w <= 0 || nr.h <= 0) return 0;
+    if (out) {
+        out->left = nr.x; out->top = nr.y;
+        out->right = nr.x + nr.w; out->bottom = nr.y + nr.h;
+    }
+    return 1;
+}
+
+/* Hit-test the whole list view for hover purposes only -- never posts a
+ * command, only reports which element (if any) is under (mx, my) via a
+ * CLV_ROW_HIT_ID/CLV_CARD_HIT_ID/CLV_HOVER_RETRY id, plus its rect for
+ * invalidation. Returns -1 when nothing hittable is under the cursor. */
+static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
+{
+    int cy, ch;
+    ChatMsgItem *citem = find_active_cmd_container(lv, &cy, &ch);
+    if (citem && my >= cy && my < cy + ch) {
+        RECT client_rc;
+        GetClientRect(lv->hwnd, &client_rc);
+        int cw = client_rc.right - client_rc.left;
+
+        HDC mdc = GetDC(lv->hwnd);
+        CmdCardGeometry g;
+        build_cmd_card_geometry(lv, mdc, cy, ch, cw, &g);
+        if (mdc) ReleaseDC(lv->hwnd, mdc);
+
+        int row_out = -1;
+        int hit = approval_card_hit(&g.layout, mx, my, &row_out);
+        if (hit != HIT_NONE &&
+            cmd_card_rect_for_hit(&g.layout, hit, row_out, out_rc)) {
+            return (row_out >= 0) ? CLV_ROW_HIT_ID(row_out, hit)
+                                  : CLV_CARD_HIT_ID(hit);
+        }
+    }
+
+    /* [Retry] link, below all items */
+    RECT client_rc;
+    GetClientRect(lv->hwnd, &client_rc);
+    int cw = client_rc.right - client_rc.left;
+    int y = chatlv_items_bottom_y(lv);
+    HDC hdc = GetDC(lv->hwnd);
+    RECT retry_rc;
+    int has_retry = activity_retry_rect(lv, hdc, y, cw, &retry_rc);
+    if (hdc) ReleaseDC(lv->hwnd, hdc);
+    if (has_retry && mx >= retry_rc.left && mx < retry_rc.right &&
+        my >= retry_rc.top && my < retry_rc.bottom) {
+        if (out_rc) *out_rc = retry_rc;
+        return CLV_HOVER_RETRY;
+    }
+
+    return -1;
+}
+
+/* Recompute the rect for a previously-reported hover id -- used to
+ * invalidate the element the cursor just left, which chatlv_hover_hit()
+ * (keyed by the *new* position) cannot report any more. Returns 0 (rect
+ * left untouched) if the element no longer exists, e.g. its container
+ * was dismissed between hover events; the caller should fall back to a
+ * full invalidate in that rare case. */
+static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
+{
+    if (id < 0) return 0;
+
+    if (id == CLV_HOVER_RETRY) {
+        RECT client_rc;
+        GetClientRect(lv->hwnd, &client_rc);
+        int cw = client_rc.right - client_rc.left;
+        int y = chatlv_items_bottom_y(lv);
+        HDC hdc = GetDC(lv->hwnd);
+        int ok = activity_retry_rect(lv, hdc, y, cw, out);
+        if (hdc) ReleaseDC(lv->hwnd, hdc);
+        return ok;
+    }
+
+    int cy, ch;
+    ChatMsgItem *citem = find_active_cmd_container(lv, &cy, &ch);
+    if (!citem) return 0;
+
+    RECT client_rc;
+    GetClientRect(lv->hwnd, &client_rc);
+    int cw = client_rc.right - client_rc.left;
+    HDC mdc = GetDC(lv->hwnd);
+    CmdCardGeometry g;
+    build_cmd_card_geometry(lv, mdc, cy, ch, cw, &g);
+    if (mdc) ReleaseDC(lv->hwnd, mdc);
+
+    int hit, row;
+    if (id == CLV_CARD_HIT_ID(HIT_ALLOW_ALL)) { hit = HIT_ALLOW_ALL; row = -1; }
+    else if (id == CLV_CARD_HIT_ID(HIT_CANCEL)) { hit = HIT_CANCEL; row = -1; }
+    else { row = id / 16; hit = id % 16; }
+
+    return cmd_card_rect_for_hit(&g.layout, hit, row, out);
+}
+
+/* Is `id` a link/button the user can click -- i.e. should the cursor be
+ * IDC_HAND rather than IDC_ARROW? Tag/text are hit-testable (for id
+ * completeness) but not interactive. */
+static int chatlv_hit_is_actionable(int id)
+{
+    if (id < 0) return 0;
+    if (id == CLV_HOVER_RETRY) return 1;
+    if (id == CLV_CARD_HIT_ID(HIT_ALLOW_ALL) || id == CLV_CARD_HIT_ID(HIT_CANCEL))
+        return 1;
+    int hit = id % 16;
+    return hit == HIT_CHECKBOX || hit == HIT_ALLOW || hit == HIT_DENY;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -2119,6 +2381,30 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     }
 
     case WM_MOUSEMOVE: {
+        if (!lv->sel_active) {
+            int mx = GET_X_LPARAM(lParam);
+            int my_hov = GET_Y_LPARAM(lParam);
+            RECT new_rc = {0, 0, 0, 0};
+            int hit_id = chatlv_hover_hit(lv, mx, my_hov, &new_rc);
+            NsHoverChange ch = ns_hover_move(&lv->hover, hit_id);
+            if (ch.changed) {
+                RECT old_rc;
+                if (chatlv_hover_rect_for_id(lv, ch.old_id, &old_rc))
+                    InvalidateRect(hwnd, &old_rc, FALSE);
+                else if (ch.old_id >= 0)
+                    InvalidateRect(hwnd, NULL, FALSE); /* element vanished */
+                if (ch.new_id >= 0)
+                    InvalidateRect(hwnd, &new_rc, FALSE);
+            }
+            if (hit_id >= 0 && !lv->hover_tracking) {
+                TRACKMOUSEEVENT tme;
+                tme.cbSize    = sizeof(tme);
+                tme.dwFlags   = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                tme.dwHoverTime = 0;
+                if (TrackMouseEvent(&tme)) lv->hover_tracking = 1;
+            }
+        }
         if (!lv->sel_active) break;
         int my = GET_Y_LPARAM(lParam);
         lv->sel_end_y = my + lv->scroll_y;
@@ -2137,6 +2423,32 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         lv->sel_valid = (ey - sy > 4);  /* small threshold to avoid accidental select */
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
+    }
+
+    case WM_MOUSELEAVE: {
+        lv->hover_tracking = 0;
+        NsHoverChange ch = ns_hover_leave(&lv->hover);
+        if (ch.changed) {
+            RECT old_rc;
+            if (chatlv_hover_rect_for_id(lv, ch.old_id, &old_rc))
+                InvalidateRect(hwnd, &old_rc, FALSE);
+            else
+                InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+    }
+
+    case WM_SETCURSOR: {
+        if (LOWORD(lParam) == HTCLIENT) {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            int hit_id = chatlv_hover_hit(lv, pt.x, pt.y, NULL);
+            SetCursor(LoadCursor(NULL, chatlv_hit_is_actionable(hit_id)
+                                        ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+        break;
     }
 
     case WM_LBUTTONUP: {

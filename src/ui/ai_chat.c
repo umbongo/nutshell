@@ -1600,7 +1600,16 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
     int btnH = rc.bottom - rc.top;
     int pressed = (dis->itemState & ODS_SELECTED) != 0;
 
+    /* Hover state comes from the task-4 themed_button subclass (a plain
+     * per-HWND boolean via WM_MOUSEMOVE/WM_MOUSELEAVE) -- these are real
+     * child windows, not painted elements, so ns_hover's id-keyed tracker
+     * does not apply here; this is that same minimal mechanism, just
+     * actually driving the paint now. */
+    themed_button_track_hover(dis->hwndItem);
+    int hot = !pressed && themed_button_is_hot(dis->hwndItem);
+
     COLORREF bg = theme_cr(pressed ? theme->bg_primary : theme->bg_secondary);
+    if (hot) bg = theme_cr(ns_tokens()->bg_secondary.hover);
     COLORREF fg = theme_cr(theme->text_main);
     COLORREF border_cr = theme_cr(theme->border);
 
@@ -3450,8 +3459,11 @@ next_coalesce:;
                 HDC hdc = dis->hDC;
                 RECT rc = dis->rcItem;
                 int pressed = (dis->itemState & ODS_SELECTED) != 0;
+                themed_button_track_hover(dis->hwndItem);
+                int hot = !pressed && themed_button_is_hot(dis->hwndItem);
                 COLORREF bg = theme_cr(pressed ? d->theme->bg_primary
-                                               : d->theme->bg_secondary);
+                                       : hot ? ns_tokens()->bg_secondary.hover
+                                             : d->theme->bg_secondary);
                 COLORREF fg = theme_cr(d->theme->text_main);
                 COLORREF bdr = theme_cr(d->theme->border);
 
@@ -3472,8 +3484,11 @@ next_coalesce:;
                 HDC hdc = dis->hDC;
                 RECT brc = dis->rcItem;
                 int pressed = (dis->itemState & ODS_SELECTED) != 0;
+                themed_button_track_hover(dis->hwndItem);
+                int hot = !pressed && themed_button_is_hot(dis->hwndItem);
                 COLORREF bg = theme_cr(pressed ? d->theme->bg_primary
-                                               : d->theme->bg_secondary);
+                                       : hot ? ns_tokens()->bg_secondary.hover
+                                             : d->theme->bg_secondary);
                 COLORREF fg = theme_cr(d->theme->text_main);
                 COLORREF bdr = theme_cr(d->theme->border);
 

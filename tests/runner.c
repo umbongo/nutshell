@@ -1779,6 +1779,20 @@ int test_approval_card_hit_miss_returns_none(void);
 int test_approval_card_hit_null_layout_safe(void);
 int test_approval_card_hit_scrolled_out_rows_not_hit(void);
 
+/* test_ns_hover.c */
+int test_ns_hover_init_sets_both_ids_to_minus_one(void);
+int test_ns_hover_enter_reports_change_from_none(void);
+int test_ns_hover_move_within_same_element_unchanged(void);
+int test_ns_hover_move_between_elements_reports_both_ids(void);
+int test_ns_hover_leave_reports_change_to_none(void);
+int test_ns_hover_leave_when_already_idle_unchanged(void);
+int test_ns_hover_press_sets_pressed_id(void);
+int test_ns_hover_release_clears_pressed_id(void);
+int test_ns_hover_release_when_nothing_pressed_unchanged(void);
+int test_ns_hover_state_for_rest_hover_pressed(void);
+int test_ns_hover_state_for_negative_id_always_rest(void);
+int test_ns_hover_state_for_null_hover_is_rest(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -3589,6 +3603,20 @@ int main(void) {
     failed += test_approval_card_hit_miss_returns_none();
     failed += test_approval_card_hit_null_layout_safe();
     failed += test_approval_card_hit_scrolled_out_rows_not_hit();
+
+    printf("\n--- Design System: hover ---\n");
+    failed += test_ns_hover_init_sets_both_ids_to_minus_one();
+    failed += test_ns_hover_enter_reports_change_from_none();
+    failed += test_ns_hover_move_within_same_element_unchanged();
+    failed += test_ns_hover_move_between_elements_reports_both_ids();
+    failed += test_ns_hover_leave_reports_change_to_none();
+    failed += test_ns_hover_leave_when_already_idle_unchanged();
+    failed += test_ns_hover_press_sets_pressed_id();
+    failed += test_ns_hover_release_clears_pressed_id();
+    failed += test_ns_hover_release_when_nothing_pressed_unchanged();
+    failed += test_ns_hover_state_for_rest_hover_pressed();
+    failed += test_ns_hover_state_for_negative_id_always_rest();
+    failed += test_ns_hover_state_for_null_hover_is_rest();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
