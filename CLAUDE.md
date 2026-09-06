@@ -57,6 +57,54 @@ There is a single `config.h` at `src/config/config.h`, used by both the Windows 
 - **`-Wconversion` catches size_t/int mismatches**: When calling functions that take `size_t`, cast explicitly (e.g., `(size_t)strlen(cmd)` not `(int)strlen(cmd)`).
 - **Missing `#include <stdio.h>`**: If a `.c` file uses `snprintf` but only includes domain headers, MinGW will error on implicit declaration. Always include `<stdio.h>` explicitly.
 
+## Design system rules
+
+All of `src/ui`'s colours, sizes, fonts, animation and hover state come from
+the six Design-System Foundation modules (see
+`docs/superpowers/specs/2026-09-07-design-system-foundation-design.md`).
+Two native tests in `tests/test_ui_tokens.c` enforce this as an
+exact-allow-list gate, not a ratchet — any violation fails `make test`:
+
+- **Never `RGB(` in `src/ui`, outside `ns_draw.c`.** Pull the colour from
+  `ns_tokens()` (a `const ThemeTokens *`): a surface's `.base`/`.hover`/
+  `.pressed`/`.disabled`/`.label`, a scalar like `text_main`/`text_dim`/
+  `text_disabled`/`border`/`focus`, one of the five intents (`success`/
+  `warning`/`danger`/`info`/`link`), or the chat block. Need something in
+  between two tokens (a dimmed label, a tinted chip background)? Use
+  `rgb_alpha()` from `ns_draw.h` to blend them — never a new hardcoded
+  literal. The gate classifies each `RGB(` call by its arguments: literal
+  numbers (`RGB(255, 255, 255)`) count against the allow-list; an
+  expression unpacking an existing packed colour (`RGB((c) >> 16 & 0xFF,
+  ...)`) or blending two `COLORREF`s (`GetRValue`/`GetGValue`/`GetBValue`
+  arithmetic) does not.
+- **Never `MulDiv(x, dpi, 96)` or a local `#define S(px)`/`CLV_SCALE`-style
+  scale macro.** Use `ns_scale(px, dpi)` (`src/core/ns_scale.h`) — the one
+  DPI-scaling helper for the whole UI. (`MulDiv` for something that
+  genuinely isn't a 96-DPI scale — a point-size conversion at `/72`, or
+  rescaling between two live DPIs on a monitor move — is fine; it just
+  won't match the gate's `MulDiv(..., 96)` pattern.)
+- **Never `CreateFont` in `src/ui`.** Use `ns_font(role, dpi)`
+  (`src/ui/ns_font.h`), a cache keyed on `(role, dpi, face)`; call
+  `ns_font_flush()` after `WM_DPICHANGED` or a font-setting change, not a
+  fresh `CreateFont`.
+- **Sizes and type from `ns_type.h`**: the `SP_*`/`SZ_*` spacing-and-size
+  grid, `R_CTRL`/`R_CARD`/`ns_type_pill()` for radii, `STROKE_*` for line
+  widths, and the `NsFontRole` ramp (`FONT_CAPTION`/`FONT_BODY`/
+  `FONT_TITLE`/`FONT_HEADING`/`FONT_MONO`) for text size/weight/line-height
+  — never a bare pixel constant for something the grid already names.
+- **Animation via `ns_motion`** (`src/core/ns_motion.h`): one timer per
+  window drives an `NsAnimList`; easing and progress are pure, tested
+  functions. Don't add a second `WM_TIMER`-driven animation loop.
+- **Hover via `ns_hover`** (`src/core/ns_hover.h`): feed a hit-test id into
+  `ns_hover_move()`/`ns_hover_leave()` on `WM_MOUSEMOVE`/`TrackMouseEvent`
+  and invalidate only the two elements that changed state, rather than
+  tracking a hot-id by hand per widget.
+- **Visual sanity check**: `nutshell.exe --ui-demo=all` (or `--ui-demo=<state>`
+  with `--theme "<name>"`) opens a live window in every panel state without
+  needing an SSH session or an AI key — use it to eyeball a change before
+  running the integration suite's `ui_gallery` case, which screenshots the
+  same states across all four themes into `tests\integration\artifacts\gallery\`.
+
 ## Terminal Buffer
 
 - `TermRow.len` tracks actual written content width. Always use `row->len` for content boundaries, not `term->cols`.

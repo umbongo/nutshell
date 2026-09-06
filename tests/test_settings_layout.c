@@ -1,39 +1,43 @@
 #include "test_framework.h"
 #include "settings_layout.h"
+#include "ns_scale.h"
 #include <string.h>
 
-/* ---- settings_scale ---- */
+/* ---- ns_scale (settings_layout's own scale alias was removed in the
+ * Design-System Foundation's final migration task; these tests now cover
+ * ns_scale() directly, at the exact px/dpi pairs the Settings window uses,
+ * so a regression there still gets caught here) ---- */
 
 int test_sl_scale_identity_at_96(void) {
     TEST_BEGIN();
-    ASSERT_EQ(settings_scale(168, 96), 168);
-    ASSERT_EQ(settings_scale(1, 96), 1);
-    ASSERT_EQ(settings_scale(0, 96), 0);
+    ASSERT_EQ(ns_scale(168, 96), 168);
+    ASSERT_EQ(ns_scale(1, 96), 1);
+    ASSERT_EQ(ns_scale(0, 96), 0);
     TEST_END();
 }
 
 int test_sl_scale_144_is_one_and_half(void) {
     TEST_BEGIN();
-    ASSERT_EQ(settings_scale(96, 144), 144);
-    ASSERT_EQ(settings_scale(100, 144), 150);
+    ASSERT_EQ(ns_scale(96, 144), 144);
+    ASSERT_EQ(ns_scale(100, 144), 150);
     TEST_END();
 }
 
 int test_sl_scale_never_zero_for_positive_px(void) {
     TEST_BEGIN();
     /* Even a tiny px value at a tiny dpi must not round to zero. */
-    ASSERT_TRUE(settings_scale(1, 1) >= 1);
-    ASSERT_TRUE(settings_scale(1, 48) >= 1);
-    ASSERT_TRUE(settings_scale(1, 96) >= 1);
+    ASSERT_TRUE(ns_scale(1, 1) >= 1);
+    ASSERT_TRUE(ns_scale(1, 48) >= 1);
+    ASSERT_TRUE(ns_scale(1, 96) >= 1);
     TEST_END();
 }
 
 int test_sl_scale_monotonic_in_dpi(void) {
     TEST_BEGIN();
-    int prev = settings_scale(100, 48);
+    int prev = ns_scale(100, 48);
     int dpis[] = {72, 96, 120, 144, 168, 192, 240};
     for (size_t i = 0; i < sizeof(dpis) / sizeof(dpis[0]); i++) {
-        int cur = settings_scale(100, dpis[i]);
+        int cur = ns_scale(100, dpis[i]);
         ASSERT_TRUE(cur >= prev);
         prev = cur;
     }

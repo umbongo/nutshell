@@ -205,6 +205,7 @@ void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out)
     out->text_main = base->text_main;
     out->text_dim  = base->text_dim;
     out->text_disabled = theme_blend(base->text_main, base->text_dim, 0.5);
+    out->text_dim_label = resolve_label(base->text_dim, base->bg_primary, base->text_main);
     out->border = base->border;
     out->focus  = base->overrides.focus ? base->overrides.focus : base->accent;
 

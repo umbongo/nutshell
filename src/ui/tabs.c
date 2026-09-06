@@ -1,6 +1,7 @@
 #include "tabs.h"
 #include "app_font.h"
 #include "ns_font.h"
+#include "ns_scale.h"
 #include "ui_theme.h"
 #include "xmalloc.h"
 #include "logger.h"
@@ -31,13 +32,12 @@ static const char *TABS_CLASS_NAME = "Nutshell_Tabs";
 #define PAD_BASE          8   /* left margin before [+] button */
 #define TAB_START_GAP_BASE 12  /* gap between [+] and first tab */
 
-/* DPI-scaled layout helper — use S(base) inside functions that have `data` */
-#define S(px) MulDiv((px), data->dpi, 96)
-
-/* TAB_OVERHEAD and TAB_START_X as scaled expressions */
-#define TAB_OVERHEAD_S (S(INDICATOR_GAP_BASE) + S(INDICATOR_W_BASE) + S(INDICATOR_GAP_BASE) \
-                        + S(INDICATOR_W_BASE) + S(INDICATOR_GAP_BASE) + S(CLOSE_SIZE_BASE) + S(10))
-#define TAB_START_X_S  (S(PAD_BASE) + S(BTN_SIZE_BASE) + S(TAB_START_GAP_BASE))
+/* TAB_OVERHEAD and TAB_START_X as scaled expressions -- ns_scale(base, dpi)
+ * inside functions that have `data` in scope, per the Design-System
+ * Foundation's one DPI-scaling helper (task 10; replaces the old S() macro). */
+#define TAB_OVERHEAD_S (ns_scale(INDICATOR_GAP_BASE, data->dpi) + ns_scale(INDICATOR_W_BASE, data->dpi) + ns_scale(INDICATOR_GAP_BASE, data->dpi) \
+                        + ns_scale(INDICATOR_W_BASE, data->dpi) + ns_scale(INDICATOR_GAP_BASE, data->dpi) + ns_scale(CLOSE_SIZE_BASE, data->dpi) + ns_scale(10, data->dpi))
+#define TAB_START_X_S  (ns_scale(PAD_BASE, data->dpi) + ns_scale(BTN_SIZE_BASE, data->dpi) + ns_scale(TAB_START_GAP_BASE, data->dpi))
 
 /* Return the pixel width needed to show title in full. */
 static int tab_w_s(HDC hdc, const char *title, int overhead, int min_w)
@@ -98,15 +98,18 @@ static COLORREF tc(unsigned int rgb)
     return RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
 }
 
-/* Return the COLORREF for a connection-status dot */
+/* Return the COLORREF for a connection-status dot, from ns_tokens()'s
+ * intents (Design-System Foundation, task 10): connecting -> warning,
+ * connected -> success, disconnected -> danger, idle -> text_dim. */
 static COLORREF status_color(TabStatus s)
 {
+    const ThemeTokens *tok = ns_tokens();
     switch (s) {
-        case TAB_CONNECTING:    return RGB(220, 160,   0);
-        case TAB_CONNECTED:     return RGB(  0, 160,  80);
-        case TAB_DISCONNECTED:  return RGB(200,  50,  50);
+        case TAB_CONNECTING:    return tc(tok->warning.base);
+        case TAB_CONNECTED:     return tc(tok->success.base);
+        case TAB_DISCONNECTED:  return tc(tok->danger.base);
         case TAB_IDLE: /* fall-through */
-        default:                return RGB(160, 160, 160);
+        default:                return tc(tok->text_dim);
     }
 }
 
@@ -129,9 +132,9 @@ static void tabs_rect_for_btn(HWND hwnd, TabControlData *data, int btn_id,
 {
     RECT rcClient;
     GetClientRect(hwnd, &rcClient);
-    int btnSz = S(BTN_SIZE_BASE);
-    int pad   = S(PAD_BASE);
-    int btnGap = S(BTN_GAP_BASE);
+    int btnSz = ns_scale(BTN_SIZE_BASE, data->dpi);
+    int pad   = ns_scale(PAD_BASE, data->dpi);
+    int btnGap = ns_scale(BTN_GAP_BASE, data->dpi);
     int btnY  = (rcClient.bottom - btnSz) / 2;
     int aiX    = rcClient.right - btnSz - pad;
     int rightX = aiX - btnSz - btnGap;
@@ -160,12 +163,12 @@ static int tabs_rect_for_tab(HWND hwnd, TabControlData *data, int index,
     RECT rcClient;
     GetClientRect(hwnd, &rcClient);
     int overhead = TAB_OVERHEAD_S;
-    int minW     = S(TAB_MIN_W_BASE);
-    int tabVPad  = S(TAB_V_PAD_BASE);
+    int minW     = ns_scale(TAB_MIN_W_BASE, data->dpi);
+    int tabVPad  = ns_scale(TAB_V_PAD_BASE, data->dpi);
     int tabH     = rcClient.bottom - tabVPad;
     int tabY     = tabVPad / 2;
-    int closeSz  = S(CLOSE_SIZE_BASE);
-    int pad      = S(PAD_BASE);
+    int closeSz  = ns_scale(CLOSE_SIZE_BASE, data->dpi);
+    int pad      = ns_scale(PAD_BASE, data->dpi);
     int x        = TAB_START_X_S;
 
     HDC hdc = GetDC(hwnd);
@@ -173,7 +176,7 @@ static int tabs_rect_for_tab(HWND hwnd, TabControlData *data, int index,
     int tw = 0;
     for (int i = 0; i <= index; i++) {
         tw = tab_w_s(hdc, data->m.tabs[i].title, overhead, minW);
-        if (i < index) x += tw + S(TAB_GAP_BASE);
+        if (i < index) x += tw + ns_scale(TAB_GAP_BASE, data->dpi);
     }
     SelectObject(hdc, hOld);
     ReleaseDC(hwnd, hdc);
@@ -216,9 +219,9 @@ static int tabs_hit_id(HWND hwnd, TabControlData *data, int mx, int my,
     RECT rcClient;
     GetClientRect(hwnd, &rcClient);
 
-    int btnSz_h  = S(BTN_SIZE_BASE);
-    int pad_h    = S(PAD_BASE);
-    int btnGap_h = S(BTN_GAP_BASE);
+    int btnSz_h  = ns_scale(BTN_SIZE_BASE, data->dpi);
+    int pad_h    = ns_scale(PAD_BASE, data->dpi);
+    int btnGap_h = ns_scale(BTN_GAP_BASE, data->dpi);
     int btnY_h   = (rcClient.bottom - btnSz_h) / 2;
 
     /* [+] add */
@@ -249,11 +252,11 @@ static int tabs_hit_id(HWND hwnd, TabControlData *data, int mx, int my,
 
     /* Tabs (background, or close glyph within the hovered tab) */
     int overhead_h = TAB_OVERHEAD_S;
-    int minW_h     = S(TAB_MIN_W_BASE);
-    int tabVPad_h  = S(TAB_V_PAD_BASE);
+    int minW_h     = ns_scale(TAB_MIN_W_BASE, data->dpi);
+    int tabVPad_h  = ns_scale(TAB_V_PAD_BASE, data->dpi);
     int tabH_h     = rcClient.bottom - tabVPad_h;
     int tabY_h     = tabVPad_h / 2;
-    int closeSz_h  = S(CLOSE_SIZE_BASE);
+    int closeSz_h  = ns_scale(CLOSE_SIZE_BASE, data->dpi);
     int x = TAB_START_X_S;
     HDC hdc_h = GetDC(hwnd);
     HFONT hOld = (HFONT)SelectObject(hdc_h, data->hFont);
@@ -274,7 +277,7 @@ static int tabs_hit_id(HWND hwnd, TabControlData *data, int mx, int my,
             if (out_rc) SetRect(out_rc, x, tabY_h, x + tw, tabY_h + tabH_h);
             return TABS_HOVER_TAB(i);
         }
-        x += tw + S(TAB_GAP_BASE);
+        x += tw + ns_scale(TAB_GAP_BASE, data->dpi);
     }
     SelectObject(hdc_h, hOld);
     ReleaseDC(hwnd, hdc_h);
@@ -417,11 +420,11 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 int tx = TAB_START_X_S;
                 int tab_idx = -1;
                 int overhead_s = TAB_OVERHEAD_S;
-                int min_w_s = S(TAB_MIN_W_BASE);
+                int min_w_s = ns_scale(TAB_MIN_W_BASE, data->dpi);
                 for (int i = 0; i < data->m.count; i++) {
                     int tw = tab_w_s(hdc_m, data->m.tabs[i].title, overhead_s, min_w_s);
                     if (pt.x >= tx && pt.x <= tx + tw) { tab_idx = i; break; }
-                    tx += tw + S(TAB_GAP_BASE);
+                    tx += tw + ns_scale(TAB_GAP_BASE, data->dpi);
                 }
                 SelectObject(hdc_m, hOldF);
                 ReleaseDC(hwnd, hdc_m);
@@ -468,16 +471,19 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                                 rcClient.right, rcClient.bottom);
             HGDIOBJ hOldBmp = SelectObject(hdc, hBmp);
 
-            /* Theme colours (fallback to light neutral if no theme set) */
+            /* Theme colours. tabs_set_theme() runs right after tabs_create()
+             * in WM_CREATE, before this window is ever painted, so
+             * data->theme is always set here -- no neutral fallback needed
+             * (Design-System Foundation, task 10). */
             const ThemeColors *t = data->theme;
-            COLORREF cBg       = t ? tc(t->bg_secondary) : RGB(242, 242, 242);
-            COLORREF cTabAct   = t ? tc(t->bg_primary)   : RGB(255, 255, 255);
-            COLORREF cTabInact = t ? tc(t->bg_secondary)  : RGB(230, 230, 230);
-            COLORREF cBorder   = t ? tc(t->border)        : RGB(180, 180, 180);
-            COLORREF cText     = t ? tc(t->text_main)     : RGB(0, 0, 0);
-            COLORREF cDim      = t ? tc(t->text_dim)      : RGB(120, 120, 120);
-            COLORREF cAccent   = t ? tc(t->accent)        : RGB(0, 122, 255);
-            COLORREF cBtn      = t ? tc(t->bg_secondary)  : RGB(196, 196, 196);
+            COLORREF cBg       = tc(t->bg_secondary);
+            COLORREF cTabAct   = tc(t->bg_primary);
+            COLORREF cTabInact = tc(t->bg_secondary);
+            COLORREF cBorder   = tc(t->border);
+            COLORREF cText     = tc(t->text_main);
+            COLORREF cDim      = tc(t->text_dim);
+            COLORREF cAccent   = tc(t->accent);
+            COLORREF cBtn      = tc(t->bg_secondary);
 
             /* Background */
             HBRUSH bgBrush = CreateSolidBrush(cBg);
@@ -488,19 +494,19 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             SetBkMode(hdc, TRANSPARENT);
 
             /* Scaled layout values */
-            int btnSz   = S(BTN_SIZE_BASE);
-            int pad      = S(PAD_BASE);
-            int tabGap   = S(TAB_GAP_BASE);
-            int btnGap   = S(BTN_GAP_BASE);
-            int indW     = S(INDICATOR_W_BASE);
-            int indGap   = S(INDICATOR_GAP_BASE);
-            int closeSz  = S(CLOSE_SIZE_BASE);
-            int tabVPad  = S(TAB_V_PAD_BASE);
-            int accentH  = S(ACCENT_BAR_H_BASE);
+            int btnSz   = ns_scale(BTN_SIZE_BASE, data->dpi);
+            int pad      = ns_scale(PAD_BASE, data->dpi);
+            int tabGap   = ns_scale(TAB_GAP_BASE, data->dpi);
+            int btnGap   = ns_scale(BTN_GAP_BASE, data->dpi);
+            int indW     = ns_scale(INDICATOR_W_BASE, data->dpi);
+            int indGap   = ns_scale(INDICATOR_GAP_BASE, data->dpi);
+            int closeSz  = ns_scale(CLOSE_SIZE_BASE, data->dpi);
+            int tabVPad  = ns_scale(TAB_V_PAD_BASE, data->dpi);
+            int accentH  = ns_scale(ACCENT_BAR_H_BASE, data->dpi);
             int overhead = TAB_OVERHEAD_S;
-            int minW     = S(TAB_MIN_W_BASE);
+            int minW     = ns_scale(TAB_MIN_W_BASE, data->dpi);
             int tabStartX = TAB_START_X_S;
-            int rr       = S(3);  /* corner radius */
+            int rr       = ns_scale(3, data->dpi);  /* corner radius */
 
             /* ---- [+] Add button ---- */
             int btnY = (rcClient.bottom - btnSz) / 2;
@@ -543,7 +549,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 HBRUSH hTabBrush = CreateSolidBrush(tabFill);
                 HBRUSH hOldBrush = (HBRUSH)SelectObject(hdc, hTabBrush);
 
-                RoundRect(hdc, rcTab.left, rcTab.top, rcTab.right, rcTab.bottom, S(6), S(6));
+                RoundRect(hdc, rcTab.left, rcTab.top, rcTab.right, rcTab.bottom, ns_scale(6, data->dpi), ns_scale(6, data->dpi));
 
                 SelectObject(hdc, hOldBrush);
                 SelectObject(hdc, hOldPen);
@@ -560,8 +566,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 }
 
                 /* Indicator dimensions: inner height with scaled margin */
-                int indicH = tabH - S(10);
-                if (indicH < S(4)) indicH = S(4);
+                int indicH = tabH - ns_scale(10, data->dpi);
+                if (indicH < ns_scale(4, data->dpi)) indicH = ns_scale(4, data->dpi);
 
                 /* ---- Status indicator ---- */
                 int indX = x + indGap;
@@ -589,8 +595,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 {
                     int logY = indY;
                     COLORREF logCol = data->m.tabs[i].logging
-                                    ? RGB(0, 160, 80)    /* green when on */
-                                    : RGB(180, 180, 180); /* gray when off */
+                                    ? tc(ns_tokens()->success.base)
+                                    : tc(ns_tokens()->border);
                     HBRUSH lBrush = CreateSolidBrush(logCol);
                     HPEN lPen     = CreatePen(PS_SOLID, 1, logCol);
                     HPEN hOldLPen  = (HPEN)SelectObject(hdc, lPen);
@@ -613,7 +619,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 SetTextColor(hdc, cText);
                 RECT rcText = rcTab;
                 rcText.left  += indGap + indW + indGap + indW + indGap;
-                rcText.right -= closeSz + S(6);
+                rcText.right -= closeSz + ns_scale(6, data->dpi);
                 DrawText(hdc, data->m.tabs[i].title, -1, &rcText,
                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
@@ -671,7 +677,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                 if (aiX > x) {
                     RECT rcAi = {aiX, btnY, aiX + btnSz, btnY + btnSz};
                     DRAW_BTN_BG(&rcAi, TABS_HOVER_AI);
-                    COLORREF aiAccent = data->ai_active ? RGB(0, 180, 0) : cDim;
+                    COLORREF aiAccent = data->ai_active
+                                      ? tc(ns_tokens()->success.base) : cDim;
                     ns_icon_draw_accent(hdc, NS_ICON_AI, &rcAi,
                                         cDim, aiAccent, 0, 255,
                                         (UINT)data->dpi);
@@ -699,15 +706,15 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
             int mx = (int)(short)LOWORD(lParam);
             int my = (int)(short)HIWORD(lParam);
 
-            int btnSz_h  = S(BTN_SIZE_BASE);
-            int pad_h    = S(PAD_BASE);
-            int btnGap_h = S(BTN_GAP_BASE);
-            int indW_h   = S(INDICATOR_W_BASE);
-            int indGap_h = S(INDICATOR_GAP_BASE);
-            int closeSz_h = S(CLOSE_SIZE_BASE);
-            int tabVPad_h = S(TAB_V_PAD_BASE);
+            int btnSz_h  = ns_scale(BTN_SIZE_BASE, data->dpi);
+            int pad_h    = ns_scale(PAD_BASE, data->dpi);
+            int btnGap_h = ns_scale(BTN_GAP_BASE, data->dpi);
+            int indW_h   = ns_scale(INDICATOR_W_BASE, data->dpi);
+            int indGap_h = ns_scale(INDICATOR_GAP_BASE, data->dpi);
+            int closeSz_h = ns_scale(CLOSE_SIZE_BASE, data->dpi);
+            int tabVPad_h = ns_scale(TAB_V_PAD_BASE, data->dpi);
             int overhead_h = TAB_OVERHEAD_S;
-            int minW_h    = S(TAB_MIN_W_BASE);
+            int minW_h    = ns_scale(TAB_MIN_W_BASE, data->dpi);
 
             /* Hit test [+] button */
             if (mx >= pad_h && mx <= pad_h + btnSz_h) {
@@ -769,8 +776,8 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     }
                     /* Check status indicator dot */
                     int indX_h = x + indGap_h;
-                    int indH_h = tabH - S(10);
-                    if (indH_h < S(4)) indH_h = S(4);
+                    int indH_h = tabH - ns_scale(10, data->dpi);
+                    if (indH_h < ns_scale(4, data->dpi)) indH_h = ns_scale(4, data->dpi);
                     int indY_h = tabY + (tabH - indH_h) / 2;
                     if (mx >= indX_h && mx <= indX_h + indW_h &&
                         my >= indY_h && my <= indY_h + indH_h) {
@@ -800,7 +807,7 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     }
                     return 0;
                 }
-                x += tw + S(TAB_GAP_BASE);
+                x += tw + ns_scale(TAB_GAP_BASE, data->dpi);
             }
             SelectObject(hdc_ht, hOldHt);
             ReleaseDC(hwnd, hdc_ht);

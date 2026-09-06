@@ -25,39 +25,29 @@ static const SettingsNavEntry NAV_TABLE[] = {
 
 #define NAV_TABLE_COUNT ((int)(sizeof(NAV_TABLE) / sizeof(NAV_TABLE[0])))
 
-/* ---- Scaling --------------------------------------------------------------
- * Thin alias onto the shared ns_scale() helper (src/core/ns_scale.h), kept
- * during the design-system migration so this module's callers don't all
- * need to change at once. */
-
-int settings_scale(int px, int dpi)
-{
-    return ns_scale(px, dpi);
-}
-
 void settings_metrics_init(SettingsMetrics *m, int dpi)
 {
     if (!m) return;
     if (dpi <= 0) dpi = 96;
 
     m->dpi        = dpi;
-    m->nav_w      = settings_scale(168, dpi);
-    m->pad        = settings_scale(14, dpi);
-    m->label_w    = settings_scale(150, dpi);
-    m->gap        = settings_scale(10, dpi);
-    m->row_h      = settings_scale(30, dpi);
-    m->ctrl_h     = settings_scale(22, dpi);
-    m->nav_item_h = settings_scale(22, dpi);
-    m->btnbar_h   = settings_scale(56, dpi);
-    m->btn_w      = settings_scale(82, dpi);
-    m->btn_h      = settings_scale(26, dpi);
-    m->min_w      = settings_scale(620, dpi);
+    m->nav_w      = ns_scale(168, dpi);
+    m->pad        = ns_scale(14, dpi);
+    m->label_w    = ns_scale(150, dpi);
+    m->gap        = ns_scale(10, dpi);
+    m->row_h      = ns_scale(30, dpi);
+    m->ctrl_h     = ns_scale(22, dpi);
+    m->nav_item_h = ns_scale(22, dpi);
+    m->btnbar_h   = ns_scale(56, dpi);
+    m->btn_w      = ns_scale(82, dpi);
+    m->btn_h      = ns_scale(26, dpi);
+    m->min_w      = ns_scale(620, dpi);
 
     /* min_h must always be large enough to show the whole nav list (every
      * header and page, no scrolling) plus the button bar underneath it,
      * at whatever DPI we scaled to — derive the floor rather than trust a
      * fixed base value to stay ahead of the nav list as it grows. */
-    int suggested_min_h = settings_scale(420, dpi);
+    int suggested_min_h = ns_scale(420, dpi);
     int nav_list_h = m->pad * 2 + m->nav_item_h * settings_nav_count();
     int required_min_h = nav_list_h + m->btnbar_h;
     m->min_h = (suggested_min_h > required_min_h) ? suggested_min_h : required_min_h;

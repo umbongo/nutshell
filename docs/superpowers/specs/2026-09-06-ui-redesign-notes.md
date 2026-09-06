@@ -1,12 +1,13 @@
 # UI Redesign — Working Notes (checkpoint)
 
-**Status:** sub-project 1 (design-system foundation) is fully designed and approved:
+**Status:** sub-project 1 (design-system foundation) is **implemented and done**:
 spec `2026-09-07-design-system-foundation-design.md`, plan
-`../plans/2026-09-07-design-system-foundation.md` (10 tasks). Next action is
-**plan task 1** (`ns_scale` + `ns_type`). Native Windows build, unit suite (1,539)
-and the tompi integration suite (11 cases) are all green. Resume from "Todo" below.
+`../plans/2026-09-07-design-system-foundation.md` (10 of 10 tasks landed).
+Native Windows build, unit suite (1,665, up from 1,539 at plan time) and the
+tompi integration suite (12 cases including `ui_gallery`) are all green. Next
+action is sub-project 2 (AI Assist panel). Resume from "Todo" below.
 
-Branch: `ui-polish` (branched from `main` at v1.0.76; now at v1.0.80).
+Branch: `ui-polish` (branched from `main` at v1.0.76; now at v1.0.92).
 
 ## Decisions so far
 
@@ -118,7 +119,19 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       written, self-reviewed, committed.
 - [x] Foundation implementation plan: `docs/superpowers/plans/2026-09-07-design-system-foundation.md`
       (10 tasks, TDD, gates as a ratchet). Next: implement task 1.
-- [ ] During foundation section 3 (shared primitives): add `OP_DOT` to `icons.c` so the
+- [x] During foundation section 3 (shared primitives): add `OP_DOT` to `icons.c` so the
       password / thinking / server dots render; `make wintest` must go green.
+- [x] **Design-system foundation implementation complete (task 10 of 10, v1.0.92).**
+      All six modules landed with their tests; native suite green at **1,665 tests**
+      (up from 1,539 at plan time). Both gates are exact-allow-list assertions, not
+      ratchets: the colour gate allows exactly 2 literal `RGB(` calls in all of
+      `src/ui` (`renderer.c`'s terminal fg/bg fallback), 0 everywhere else including
+      `ns_draw.c`'s own callers; the scale gate allows 0 local scale macros /
+      `MulDiv(..., 96)` sites (`settings_scale` deleted, its callers moved to
+      `ns_scale`). `make wintest` 2/2. `make clean && make release` clean under
+      `-Werror -Wpedantic -Wshadow -Wconversion -Wformat=2`. Definition of done
+      (spec section 6) met: colours outside the allow-list are 0 (from 77 at plan
+      time), both gates passing, wintest green, integration suite green including
+      `ui_gallery`.
 - [ ] Then brainstorm sub-project 2 (AI Assist panel) — mockups of layout options are worth
       showing visually before choosing.

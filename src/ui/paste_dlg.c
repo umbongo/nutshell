@@ -8,6 +8,7 @@
 #ifdef _WIN32
 
 #include "ui_theme.h"
+#include "ns_scale.h"
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
 #include "../core/app_font.h"
@@ -44,12 +45,16 @@ typedef struct {
 
 /* ---- Colour helper ------------------------------------------------------ */
 
-static COLORREF hex_to_cr(const char *hex)
+/* Colour helper: theme stores 0x00RRGGBB, GDI wants 0x00BBGGRR. */
+#define RGB_FROM_THEME(c) \
+    RGB(((c) >> 16) & 0xFF, ((c) >> 8) & 0xFF, (c) & 0xFF)
+
+static COLORREF hex_to_cr(const char *hex, COLORREF fallback)
 {
-    if (!hex || hex[0] != '#' || strlen(hex) < 7) return RGB(0, 0, 0);
+    if (!hex || hex[0] != '#' || strlen(hex) < 7) return fallback;
     unsigned int r = 0, g = 0, b = 0;
     if (sscanf(hex + 1, "%02x%02x%02x", &r, &g, &b) != 3)
-        return RGB(0, 0, 0);
+        return fallback;
     return RGB((BYTE)r, (BYTE)g, (BYTE)b);
 }
 
@@ -104,13 +109,13 @@ static void layout_controls(PasteDlgData *d, int cw, int ch)
 {
     if (!d) return;
     int dpi = d->dpi > 0 ? d->dpi : 96;
-    int margin = MulDiv(MARGIN_BASE, dpi, 96);
-    int btn_w = MulDiv(BTN_W_BASE, dpi, 96);
-    int btn_h = MulDiv(BTN_H_BASE, dpi, 96);
-    int btn_gap = MulDiv(BTN_GAP_BASE, dpi, 96);
-    int summ_h = MulDiv(SUMMARY_H_BASE, dpi, 96);
+    int margin = ns_scale(MARGIN_BASE, dpi);
+    int btn_w = ns_scale(BTN_W_BASE, dpi);
+    int btn_h = ns_scale(BTN_H_BASE, dpi);
+    int btn_gap = ns_scale(BTN_GAP_BASE, dpi);
+    int summ_h = ns_scale(SUMMARY_H_BASE, dpi);
     int footer_h = margin + btn_h + margin;
-    int sb_w = MulDiv(CSB_WIDTH, dpi, 96);
+    int sb_w = ns_scale(CSB_WIDTH, dpi);
 
     /* Summary label: top */
     SetWindowPos(d->hSummary, NULL,
@@ -168,13 +173,13 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
 
         /* Get per-monitor DPI for layout scaling */
         nd->dpi = get_window_dpi(hwnd);
-        int margin = MulDiv(MARGIN_BASE, nd->dpi, 96);
-        int btn_w = MulDiv(BTN_W_BASE, nd->dpi, 96);
-        int btn_h = MulDiv(BTN_H_BASE, nd->dpi, 96);
-        int btn_gap = MulDiv(BTN_GAP_BASE, nd->dpi, 96);
-        int summ_h = MulDiv(SUMMARY_H_BASE, nd->dpi, 96);
+        int margin = ns_scale(MARGIN_BASE, nd->dpi);
+        int btn_w = ns_scale(BTN_W_BASE, nd->dpi);
+        int btn_h = ns_scale(BTN_H_BASE, nd->dpi);
+        int btn_gap = ns_scale(BTN_GAP_BASE, nd->dpi);
+        int summ_h = ns_scale(SUMMARY_H_BASE, nd->dpi);
         int footer_h = margin + btn_h + margin;
-        int sb_w = MulDiv(CSB_WIDTH, nd->dpi, 96);
+        int sb_w = ns_scale(CSB_WIDTH, nd->dpi);
 
         RECT rc;
         GetClientRect(hwnd, &rc);
@@ -260,8 +265,8 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mmi = (MINMAXINFO *)lParam;
         int ddpi = d ? d->dpi : 96;
-        mmi->ptMinTrackSize.x = MulDiv(400, ddpi, 96);
-        mmi->ptMinTrackSize.y = MulDiv(250, ddpi, 96);
+        mmi->ptMinTrackSize.x = ns_scale(400, ddpi);
+        mmi->ptMinTrackSize.y = ns_scale(250, ddpi);
         return 0;
     }
 
@@ -375,14 +380,17 @@ int paste_preview_show(HWND parent, const char *raw_text,
     PasteDlgData d;
     memset(&d, 0, sizeof(d));
     d.result = 0;
-    d.fg = hex_to_cr(fg_hex);
-    d.bg = hex_to_cr(bg_hex);
 
-    /* Resolve theme for custom scrollbar */
+    /* Resolve theme for custom scrollbar, and for the terminal-colour
+     * fallback below when fg_hex/bg_hex fail to parse (Design-System
+     * Foundation, task 10: same fallback renderer.c uses -- the theme's
+     * own terminal colours, not a hardcoded black/white). */
     {
         int idx = colour_scheme ? ui_theme_find(colour_scheme) : 0;
         d.theme = ui_theme_get(idx);
     }
+    d.fg = hex_to_cr(fg_hex, RGB_FROM_THEME(d.theme->terminal_fg));
+    d.bg = hex_to_cr(bg_hex, RGB_FROM_THEME(d.theme->terminal_bg));
 
     paste_build_summary(line_count, strlen(raw_text),
                         d.summary, sizeof(d.summary));
@@ -414,8 +422,8 @@ int paste_preview_show(HWND parent, const char *raw_text,
     /* Scale window size for DPI and clamp to screen */
     int pdpi = get_window_dpi(parent);
 
-    int desired_w = MulDiv(520, pdpi, 96);
-    int desired_h = MulDiv(400, pdpi, 96);
+    int desired_w = ns_scale(520, pdpi);
+    int desired_h = ns_scale(400, pdpi);
 
     /* Get usable screen area (excludes taskbar) */
     RECT work;

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <dirent.h>
+#include <ctype.h>
 
 /* ===========================================================================
  * ui_theme_resolve() / ThemeTokens tests (Design-System Foundation, task 2)
@@ -67,6 +68,25 @@ int test_ui_tokens_intent_label_contrast(void)
         ASSERT_TRUE(theme_contrast(tok.danger.label,  tok.danger.base)  >= MIN_CONTRAST);
         ASSERT_TRUE(theme_contrast(tok.info.label,    tok.info.base)    >= MIN_CONTRAST);
         ASSERT_TRUE(theme_contrast(tok.link.label,    tok.link.base)    >= MIN_CONTRAST);
+    }
+    TEST_END();
+}
+
+/* text_dim_label -- the label to draw when text_dim itself is used as a
+ * chip/badge background (e.g. the "SAFE" safety tag, task 10) -- must read
+ * at >= 4.5:1 against text_dim in every theme, and be one of the three
+ * documented candidates. */
+int test_ui_tokens_text_dim_label_contrast(void)
+{
+    TEST_BEGIN();
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const ThemeColors *base = ui_theme_get(i);
+        ThemeTokens tok;
+        ui_theme_resolve(base, &tok);
+        ASSERT_TRUE(theme_contrast(tok.text_dim_label, tok.text_dim) >= MIN_CONTRAST);
+        ASSERT_TRUE(tok.text_dim_label == 0xFFFFFFu
+                    || tok.text_dim_label == base->bg_primary
+                    || tok.text_dim_label == base->text_main);
     }
     TEST_END();
 }
@@ -307,17 +327,56 @@ int test_ui_tokens_resolve_null_safe(void)
 }
 
 /* ===========================================================================
- * Colour gate + scale gate (ratchets) -- see docs/superpowers/plans/
- * 2026-09-07-design-system-foundation.md, Task 2, and section 6 of the
+ * Colour gate + scale gate -- see docs/superpowers/plans/
+ * 2026-09-07-design-system-foundation.md, Task 10, and section 6 of the
  * design spec.  Both scan src/ui/*.c relative to the repo root, which is
  * where `make test` runs from.
+ *
+ * Both gates started as "ratchet" tests (task 2): a baseline count that
+ * each task lowered.  Task 10 (the last one) finished the migration and
+ * turned them into exact-allow-list assertions: from here on, a new
+ * literal colour or a new local DPI-scale macro anywhere in src/ui fails
+ * the build, full stop -- there is no longer a baseline to creep under.
  * ===========================================================================
  */
 
-/* ns_draw.c (renamed from ui_draw.c in Task 4) is the shared drawing
- * module and is excluded here: it is allowed to call RGB() directly. */
-#define COLOUR_GATE_BASELINE 59
-#define SCALE_GATE_BASELINE  61
+/* ---- Colour gate ----------------------------------------------------------
+ *
+ * ns_draw.c (renamed from ui_draw.c in Task 4) is the shared drawing module
+ * and is excluded entirely: it is allowed to call RGB() directly.
+ *
+ * Every other src/ui/*.c file is scanned for calls to "RGB(" and each call's
+ * three arguments are classified:
+ *
+ *   - LITERAL: every argument is (optionally cast, optionally negated) a
+ *     bare numeric constant, e.g. RGB(255, 255, 255) or RGB(0, 0x80, 0).
+ *     This is a hardcoded colour and is what the gate counts.
+ *
+ *   - EXPRESSION: at least one argument references a variable or struct
+ *     field (contains an identifier that isn't part of a numeric literal,
+ *     or an operator like >>/&/+ combining one in).  This is a *conversion*
+ *     -- unpacking an already-themed 0xRRGGBB value into a COLORREF, or
+ *     blending two existing COLORREFs (GetRValue/GetGValue/GetBValue
+ *     arithmetic) -- not a new hardcoded colour, so the gate does not count
+ *     it.  This is also what naturally excludes every RGB_FROM_THEME-style
+ *     macro *definition* (its body is RGB() applied to its own parameter,
+ *     which is an expression) without needing a separate line-pattern
+ *     exclusion for macro headers.
+ *
+ * The allow-list below is the only place LITERAL calls may remain: the
+ * terminal's default fg/bg fallback colours in renderer.c (used only before
+ * a theme or config colour is applied -- the same role a theme's own
+ * terminal_fg/terminal_bg play afterward). Any file not listed here must
+ * have zero literal RGB( calls; any count that doesn't match its listed
+ * total (extra *or* missing) fails, so the table always reflects reality. */
+
+typedef struct { const char *file; int count; } ColourAllowEntry;
+static const ColourAllowEntry COLOUR_ALLOWLIST[] = {
+    { "renderer.c", 2 },  /* defaultFg/defaultBg terminal fallback (0,0,0) / (255,255,255) */
+};
+#define COLOUR_ALLOWLIST_N (sizeof(COLOUR_ALLOWLIST) / sizeof(COLOUR_ALLOWLIST[0]))
+
+#define SCALE_GATE_BASELINE 0
 
 static char *read_whole_file(const char *path)
 {
@@ -343,6 +402,120 @@ static int count_occurrences(const char *hay, const char *needle)
     while ((p = strstr(p, needle)) != NULL) {
         count++;
         p += nlen;
+    }
+    return count;
+}
+
+/* True if `arg` (a single RGB() argument, whitespace allowed) is a bare
+ * numeric literal: optional parenthesised cast(s) like "(BYTE)", optional
+ * unary minus, then decimal digits or a 0x/0X hex constant -- nothing
+ * else.  Any identifier character outside a cast or a 0x/hex digit makes
+ * it an expression instead. */
+static int is_literal_arg(const char *arg, size_t len)
+{
+    size_t i = 0, j = len;
+    while (i < j && isspace((unsigned char)arg[i])) i++;
+    while (j > i && isspace((unsigned char)arg[j - 1])) j--;
+    if (i >= j) return 0;
+
+    /* Skip any number of "(Identifier)" casts, e.g. "(BYTE)r" -- but a
+     * cast wrapping a variable still leaves that variable's letters
+     * behind, so this only strips the parens/type-name, not identifiers. */
+    for (;;) {
+        if (arg[i] != '(') break;
+        size_t k = i + 1;
+        while (k < j && arg[k] != ')') k++;
+        if (k >= j) break; /* unbalanced -- bail, treat rest normally */
+        /* Only treat as a cast if the inside is a plain identifier
+         * (letters/digits/underscore), not a sub-expression. */
+        size_t inner_start = i + 1;
+        int looks_like_ident = (inner_start < k);
+        for (size_t m = inner_start; m < k; m++) {
+            if (!isalnum((unsigned char)arg[m]) && arg[m] != '_') {
+                looks_like_ident = 0;
+                break;
+            }
+        }
+        if (!looks_like_ident) break;
+        i = k + 1;
+        while (i < j && isspace((unsigned char)arg[i])) i++;
+    }
+    if (i >= j) return 0;
+
+    if (arg[i] == '-' || arg[i] == '+') i++;
+    if (i >= j || !isxdigit((unsigned char)arg[i])) return 0;
+
+    int is_hex = 0;
+    if (j - i >= 2 && arg[i] == '0' && (arg[i + 1] == 'x' || arg[i + 1] == 'X')) {
+        is_hex = 1;
+        i += 2;
+    }
+    if (i >= j) return 0;
+    for (; i < j; i++) {
+        char c = arg[i];
+        if (is_hex ? !isxdigit((unsigned char)c) : !isdigit((unsigned char)c))
+            return 0;
+    }
+    return 1;
+}
+
+/* Scans one already-loaded RGB( call's argument text (between the outer
+ * parens) and returns 1 if it is a LITERAL call (all 3 comma-separated
+ * top-level arguments are bare numeric literals per is_literal_arg), 0 if
+ * it is an EXPRESSION call or malformed (wrong arg count). */
+static int rgb_call_is_literal(const char *args, size_t len)
+{
+    size_t starts[3];
+    size_t ends[3];
+    int nargs = 0;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i <= len; i++) {
+        char c = (i < len) ? args[i] : ',';
+        if (c == '(') depth++;
+        else if (c == ')') depth--;
+        else if (c == ',' && depth == 0) {
+            if (nargs < 3) { starts[nargs] = start; ends[nargs] = i; }
+            nargs++;
+            start = i + 1;
+        }
+    }
+    if (nargs != 3) return 0;
+    for (int k = 0; k < 3; k++)
+        if (!is_literal_arg(args + starts[k], ends[k] - starts[k]))
+            return 0;
+    return 1;
+}
+
+/* Counts LITERAL RGB( calls anywhere in `content` (balanced-paren scan, so
+ * a call's arguments may themselves span multiple lines). */
+static int count_literal_rgb_calls(const char *content)
+{
+    int count = 0;
+    size_t len = strlen(content);
+    const char *needle = "RGB(";
+    size_t nlen = strlen(needle);
+    for (size_t i = 0; i + nlen <= len; i++) {
+        if (strncmp(content + i, needle, nlen) != 0) continue;
+        if (i > 0 && (isalnum((unsigned char)content[i - 1]) || content[i - 1] == '_'))
+            continue; /* part of a longer identifier, e.g. RGB_FROM_THEME( */
+
+        size_t paren_start = i + nlen - 1; /* index of the '(' */
+        int depth = 0;
+        size_t j = paren_start;
+        size_t args_start = paren_start + 1;
+        size_t args_end = args_start;
+        for (; j < len; j++) {
+            if (content[j] == '(') depth++;
+            else if (content[j] == ')') {
+                depth--;
+                if (depth == 0) { args_end = j; break; }
+            }
+        }
+        if (depth != 0) continue; /* unbalanced to EOF -- ignore */
+        if (rgb_call_is_literal(content + args_start, args_end - args_start))
+            count++;
+        i = args_end; /* resume scanning after this call */
     }
     return count;
 }
@@ -373,16 +546,25 @@ static int count_scale_lines(const char *content)
     return count;
 }
 
-/* Scans src/ui/*.c and reports both gate counts via out params.
+static int allowlisted_count_for(const char *filename)
+{
+    for (size_t i = 0; i < COLOUR_ALLOWLIST_N; i++)
+        if (strcmp(COLOUR_ALLOWLIST[i].file, filename) == 0)
+            return COLOUR_ALLOWLIST[i].count;
+    return 0;
+}
+
+/* Scans src/ui/*.c: per-file literal-RGB() counts (printed and checked
+ * against the allow-list table) and the total scale-macro line count.
  * Returns 0 on success (directory found and scanned), -1 if src/ui could
- * not be opened (e.g. wrong working directory) so callers can skip
- * rather than false-fail. */
-static int scan_ui_gates(int *out_colour, int *out_scale)
+ * not be opened (e.g. wrong working directory) so callers can skip rather
+ * than false-fail. */
+static int scan_ui_gates(int *out_colour_mismatches, int *out_scale)
 {
     DIR *d = opendir("src/ui");
     if (!d) return -1;
 
-    int colour = 0, scale = 0;
+    int mismatches = 0, scale = 0;
     struct dirent *ent;
     while ((ent = readdir(d)) != NULL) {
         const char *name = ent->d_name;
@@ -396,8 +578,13 @@ static int scan_ui_gates(int *out_colour, int *out_scale)
         if (!content) continue;
 
         int is_draw_module = (strcmp(name, "ns_draw.c") == 0);
-        if (!is_draw_module)
-            colour += count_occurrences(content, "RGB(");
+        if (!is_draw_module) {
+            int literal = count_literal_rgb_calls(content);
+            int allowed = allowlisted_count_for(name);
+            printf("  [colour gate] %-20s literal RGB(): %d (allowed %d)\n",
+                   name, literal, allowed);
+            if (literal != allowed) mismatches++;
+        }
 
         scale += count_scale_lines(content);
 
@@ -405,7 +592,7 @@ static int scan_ui_gates(int *out_colour, int *out_scale)
     }
     closedir(d);
 
-    *out_colour = colour;
+    *out_colour_mismatches = mismatches;
     *out_scale = scale;
     return 0;
 }
@@ -413,27 +600,25 @@ static int scan_ui_gates(int *out_colour, int *out_scale)
 int test_ui_tokens_colour_gate(void)
 {
     TEST_BEGIN();
-    int colour = 0, scale = 0;
-    if (scan_ui_gates(&colour, &scale) != 0) {
+    int mismatches = 0, scale = 0;
+    if (scan_ui_gates(&mismatches, &scale) != 0) {
         printf("  [colour gate] src/ui not found from cwd -- skipping\n");
         TEST_END();
     }
-    printf("  [colour gate] RGB( outside ns_draw.c in src/ui/*.c: %d (baseline %d)\n",
-           colour, COLOUR_GATE_BASELINE);
-    ASSERT_TRUE(colour <= COLOUR_GATE_BASELINE);
+    ASSERT_EQ(mismatches, 0);
     TEST_END();
 }
 
 int test_ui_tokens_scale_gate(void)
 {
     TEST_BEGIN();
-    int colour = 0, scale = 0;
-    if (scan_ui_gates(&colour, &scale) != 0) {
+    int mismatches = 0, scale = 0;
+    if (scan_ui_gates(&mismatches, &scale) != 0) {
         printf("  [scale gate] src/ui not found from cwd -- skipping\n");
         TEST_END();
     }
-    printf("  [scale gate] #define S(/#define CLV_SCALE/MulDiv(...96) lines in src/ui/*.c: %d (baseline %d)\n",
+    printf("  [scale gate] #define S(/#define CLV_SCALE/MulDiv(...96) lines in src/ui/*.c: %d (expected %d)\n",
            scale, SCALE_GATE_BASELINE);
-    ASSERT_TRUE(scale <= SCALE_GATE_BASELINE);
+    ASSERT_EQ(scale, SCALE_GATE_BASELINE);
     TEST_END();
 }

@@ -89,6 +89,11 @@ typedef struct {
     ThemeSurface bg_primary, bg_secondary, raised, accent;
     ThemeSurface success, warning, danger, info, link;
     unsigned int text_main, text_dim, text_disabled, border, focus;
+    /* Whichever of white/bg_primary/text_main reads best against text_dim
+     * -- the same rule ThemeSurface.label uses for its base, needed because
+     * text_dim itself is occasionally painted as a chip/badge background
+     * (e.g. the "SAFE" safety tag) rather than only used as text (Task 10). */
+    unsigned int text_dim_label;
     unsigned int terminal_fg, terminal_bg;
     ThemeChatColors chat;   /* copied through unchanged for the migration window */
     int is_dark;

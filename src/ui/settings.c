@@ -3,6 +3,7 @@
 #include "dpi_util.h"
 #include "app_font.h"
 #include "ns_font.h"
+#include "ns_scale.h"
 #include "ui_theme.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
@@ -482,7 +483,7 @@ static void draw_nav_item(SettingsDlgData *d, LPDRAWITEMSTRUCT dis)
 
     SettingsMetrics m;
     settings_metrics_init(&m, d->dpi);
-    int indent = (e->depth > 0) ? settings_scale(14, d->dpi) : 0;
+    int indent = (e->depth > 0) ? ns_scale(14, d->dpi) : 0;
 
     SetBkMode(hdc, TRANSPARENT);
     unsigned int fg = selected ? th->bg_primary
@@ -589,7 +590,7 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
         }
 
         int eff_rows = c->rows + ((c == stretch) ? extra_rows : 0);
-        int ctrl_w_scaled = (c->ctrl_w > 0) ? settings_scale(c->ctrl_w, m->dpi) : 0;
+        int ctrl_w_scaled = (c->ctrl_w > 0) ? ns_scale(c->ctrl_w, m->dpi) : 0;
 
         SettingsRect lrc, crc;
         settings_row_rects(row, usable_w, ctrl_w_scaled, d->scroll, m, &lrc, &crc);
@@ -604,7 +605,7 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
             crc.h = eff_rows * m->row_h - (m->row_h - m->ctrl_h);
 
         if (c->hExtra) {
-            int extra_w_scaled = settings_scale(c->extra_w, m->dpi);
+            int extra_w_scaled = ns_scale(c->extra_w, m->dpi);
             int new_w = crc.w - extra_w_scaled - m->gap;
             if (new_w < 0) new_w = 0;
             SettingsRect erc = crc;
@@ -623,7 +624,7 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
         }
 
         if (is_combo_class(c->hCtrl))
-            crc.h = m->ctrl_h + settings_scale(200, m->dpi);
+            crc.h = m->ctrl_h + ns_scale(200, m->dpi);
 
         if (c->hLabel) {
             SetWindowPos(c->hLabel, NULL, lrc.x, lrc.y, lrc.w, lrc.h,
@@ -687,7 +688,7 @@ static void relayout(HWND hwnd, SettingsDlgData *d)
     SetWindowPos(d->hBtnOK, NULL, ok_x, by, m.btn_w, m.btn_h,
                  SWP_NOZORDER | SWP_NOACTIVATE);
 
-    int fh = settings_scale(16, m.dpi);
+    int fh = ns_scale(16, m.dpi);
     int fy = buttons.y + (buttons.h - fh) / 2;
     int fw = ok_x - m.gap - (buttons.x + m.pad);
     if (fw < 0) fw = 0;
@@ -1749,8 +1750,8 @@ void settings_dlg_show(HWND parent, Config *cfg)
     /* Default client size, DPI-scaled; AdjustWindowRect turns that into the
      * window size the non-client area (title bar, borders) needs. */
     int pdpi = get_window_dpi(parent);
-    int client_w = settings_scale(760, pdpi);
-    int client_h = settings_scale(560, pdpi);
+    int client_w = ns_scale(760, pdpi);
+    int client_h = ns_scale(560, pdpi);
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME |
                   WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_CLIPCHILDREN;
     RECT wr = {0, 0, client_w, client_h};

@@ -58,9 +58,6 @@ typedef struct {
     int min_h;      /* minimum window client height */
 } SettingsMetrics;
 
-/* Scale a 96-DPI pixel value to the given dpi; result is always >= 1 for px >= 1. */
-int settings_scale(int px, int dpi);
-
 /* Fill m with DPI-scaled constants. dpi <= 0 is treated as 96. */
 void settings_metrics_init(SettingsMetrics *m, int dpi);
 

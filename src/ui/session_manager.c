@@ -5,6 +5,7 @@
 #include "session_manager.h"
 #include "../core/app_font.h"
 #include "ns_font.h"
+#include "../core/ns_scale.h"
 #include "../core/ui_theme.h"
 #include "../core/edit_scroll.h"
 #include "themed_button.h"
@@ -606,7 +607,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             LPMEASUREITEMSTRUCT mis = (LPMEASUREITEMSTRUCT)lParam;
             int dpi = get_window_dpi(hwnd);
             if (dpi <= 0) dpi = 96;
-            mis->itemHeight = (UINT)MulDiv(22, dpi, 96);
+            mis->itemHeight = (UINT)ns_scale(22, dpi);
             return TRUE;
         }
         break;

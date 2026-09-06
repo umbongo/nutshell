@@ -30,6 +30,8 @@
 #include "selection.h"
 #include "app_font.h"
 #include "ns_font.h"
+#include "ns_scale.h"
+#include "ns_draw.h"
 #include "ui_theme.h"
 #include "ns_tokens.h"
 #include "ns_motion.h"
@@ -752,28 +754,16 @@ static void on_tab_new(void) {
     }
 }
 
-static COLORREF parse_hex_color(const char *hex, COLORREF fallback)
-{
-    unsigned int r = 0, g = 0, b = 0;
-    if (!hex || hex[0] != '#' || strlen(hex) < 7) return fallback;
-    if (sscanf(hex + 1, "%02x%02x%02x", &r, &g, &b) != 3) return fallback;
-    return RGB((BYTE)r, (BYTE)g, (BYTE)b);
-}
-
 static void apply_config_colors(void)
 {
-    if (g_theme) {
-        /* Use theme terminal colours as the base, overridden by explicit config */
-        unsigned int tfg = g_theme->terminal_fg;
-        unsigned int tbg = g_theme->terminal_bg;
-        g_renderer.defaultFg = RGB((tfg >> 16) & 0xFF, (tfg >> 8) & 0xFF, tfg & 0xFF);
-        g_renderer.defaultBg = RGB((tbg >> 16) & 0xFF, (tbg >> 8) & 0xFF, tbg & 0xFF);
-    } else {
-        g_renderer.defaultFg = parse_hex_color(
-            g_config->settings.foreground_colour, RGB(0, 0, 0));
-        g_renderer.defaultBg = parse_hex_color(
-            g_config->settings.background_colour, RGB(255, 255, 255));
-    }
+    /* g_theme is resolved in WM_CREATE before this window is ever painted
+     * or apply_config_colors() is ever called (Design-System Foundation,
+     * task 10) -- always use the theme's terminal colours, no raw-hex
+     * config fallback needed. */
+    unsigned int tfg = g_theme->terminal_fg;
+    unsigned int tbg = g_theme->terminal_bg;
+    g_renderer.defaultFg = RGB((tfg >> 16) & 0xFF, (tfg >> 8) & 0xFF, tfg & 0xFF);
+    g_renderer.defaultBg = RGB((tbg >> 16) & 0xFF, (tbg >> 8) & 0xFF, tbg & 0xFF);
 }
 
 static void on_settings_clicked(void) {
@@ -1668,10 +1658,10 @@ static LRESULT CALLBACK AboutDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             RECT cr;
             GetClientRect(hwnd, &cr);
             int dpi = get_window_dpi(hwnd);
-            int btnW = MulDiv(80, dpi, 96);
-            int btnH = MulDiv(28, dpi, 96);
+            int btnW = ns_scale(80, dpi);
+            int btnH = ns_scale(28, dpi);
             int btnX = (cr.right - btnW) / 2;
-            int btnY = cr.bottom - btnH - MulDiv(16, dpi, 96);
+            int btnY = cr.bottom - btnH - ns_scale(16, dpi);
             CreateWindowA("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
                           btnX, btnY, btnW, btnH, hwnd, (HMENU)IDOK, g_hInst, NULL);
             return 0;
@@ -1693,9 +1683,9 @@ static LRESULT CALLBACK AboutDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             DeleteObject(bgBrush);
 
             /* Draw acorn icon centered at top */
-            int iconSz = MulDiv(ABOUT_ICON_SIZE, dpi, 96);
+            int iconSz = ns_scale(ABOUT_ICON_SIZE, dpi);
             int iconX = (rc.right - iconSz) / 2;
-            int iconY = MulDiv(20, dpi, 96);
+            int iconY = ns_scale(20, dpi);
             HICON hIcon = (HICON)LoadImage(g_hInst, MAKEINTRESOURCE(IDI_APPICON),
                                            IMAGE_ICON, iconSz, iconSz, LR_DEFAULTCOLOR);
             if (hIcon) {
@@ -1719,28 +1709,28 @@ static LRESULT CALLBACK AboutDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             if (bodyPt < 11) bodyPt = 11;
 
             HFONT hBold = CreateFontA(
-                -MulDiv(titlePt, dpi, 96), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                -ns_scale(titlePt, dpi), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Inter");
             HFONT hNormal = CreateFontA(
-                -MulDiv(bodyPt, dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                -ns_scale(bodyPt, dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Inter");
 
-            int textY = iconY + iconSz + MulDiv(16, dpi, 96);
-            int lineH = MulDiv(titlePt + 10, dpi, 96);
+            int textY = iconY + iconSz + ns_scale(16, dpi);
+            int lineH = ns_scale(titlePt + 10, dpi);
             RECT textRc = { 0, textY, rc.right, textY + lineH };
             HFONT oldFont = SelectObject(hdc, hBold);
             DrawTextA(hdc, "Nutshell v" APP_VERSION, -1, &textRc,
                       DT_CENTER | DT_SINGLELINE);
 
-            textY += lineH + MulDiv(4, dpi, 96);
-            lineH = MulDiv(bodyPt + 8, dpi, 96);
+            textY += lineH + ns_scale(4, dpi);
+            lineH = ns_scale(bodyPt + 8, dpi);
             textRc.top = textY;
             textRc.bottom = textY + lineH;
             SelectObject(hdc, hNormal);
             DrawTextA(hdc, "A lightweight SSH terminal emulator.", -1, &textRc,
                       DT_CENTER | DT_SINGLELINE);
 
-            textY += lineH + MulDiv(2, dpi, 96);
+            textY += lineH + ns_scale(2, dpi);
             textRc.top = textY;
             textRc.bottom = textY + lineH;
             DrawTextA(hdc, "Copyright \xA9 2026 Thomas Sulkiewicz", -1, &textRc,
@@ -1783,8 +1773,8 @@ static void show_about_dialog(HWND parent) {
         registered = 1;
     }
 
-    int dlgW = MulDiv(ABOUT_DLG_W, g_dpi, 96);
-    int dlgH = MulDiv(ABOUT_DLG_H, g_dpi, 96);
+    int dlgW = ns_scale(ABOUT_DLG_W, g_dpi);
+    int dlgH = ns_scale(ABOUT_DLG_H, g_dpi);
     RECT parentRc;
     GetWindowRect(parent, &parentRc);
     int x = parentRc.left + (parentRc.right - parentRc.left - dlgW) / 2;
@@ -1853,8 +1843,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
             /* Compute DPI-scaled tab height and terminal left margin */
             g_dpi = get_window_dpi(hwnd);
-            g_tab_height = MulDiv(TAB_HEIGHT_BASE, g_dpi, 96);
-            g_left_margin = MulDiv(TERM_LEFT_MARGIN, g_dpi, 96);
+            g_tab_height = ns_scale(TAB_HEIGHT_BASE, g_dpi);
+            g_left_margin = ns_scale(TERM_LEFT_MARGIN, g_dpi);
 
             app_font_load_ui();
 
@@ -2067,7 +2057,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (mis->CtlType == ODT_MENU) {
                 MenuItemData *mi = (MenuItemData *)(ULONG_PTR)mis->itemData;
                 if (mi && mi->is_separator) {
-                    mis->itemHeight = (UINT)MulDiv(6, g_dpi, 96);
+                    mis->itemHeight = (UINT)ns_scale(6, g_dpi);
                     mis->itemWidth  = 0;
                     return TRUE;
                 }
@@ -2077,15 +2067,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     SIZE sz = {0, 0};
                     GetTextExtentPoint32A(hdc, mi->text, (int)strlen(mi->text), &sz);
                     /* Top-level menu bar items: tighter padding */
-                    int hpad = mi->hSub ? MulDiv(10, g_dpi, 96)
-                                        : MulDiv(24, g_dpi, 96);
+                    int hpad = mi->hSub ? ns_scale(10, g_dpi)
+                                        : ns_scale(24, g_dpi);
                     mis->itemWidth = (UINT)sz.cx + (UINT)hpad;
                     if (mi->accel[0]) {
                         SIZE az;
                         GetTextExtentPoint32A(hdc, mi->accel, (int)strlen(mi->accel), &az);
-                        mis->itemWidth += (UINT)az.cx + (UINT)MulDiv(12, g_dpi, 96);
+                        mis->itemWidth += (UINT)az.cx + (UINT)ns_scale(12, g_dpi);
                     }
-                    mis->itemHeight = (UINT)sz.cy + (UINT)MulDiv(4, g_dpi, 96);
+                    mis->itemHeight = (UINT)sz.cy + (UINT)ns_scale(4, g_dpi);
                     if (oldFont) SelectObject(hdc, oldFont);
                     ReleaseDC(hwnd, hdc);
                     return TRUE;
@@ -2110,6 +2100,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 COLORREF cSel  = g_theme ? menu_tc(g_theme->accent)       : GetSysColor(COLOR_HIGHLIGHT);
                 COLORREF cDim  = g_theme ? menu_tc(g_theme->text_dim)     : GetSysColor(COLOR_GRAYTEXT);
                 COLORREF cBord = g_theme ? menu_tc(g_theme->border)       : GetSysColor(COLOR_MENUHILIGHT);
+                /* Text on the selected (accent-filled) row: the token
+                 * system's contrast-optimal label for accent, and a
+                 * slightly dimmed version of it for the accelerator
+                 * column (Design-System Foundation, task 10). */
+                COLORREF cSelFg    = g_theme ? menu_tc(ns_tokens()->accent.label)
+                                             : GetSysColor(COLOR_HIGHLIGHTTEXT);
+                COLORREF cSelFgDim = g_theme ? rgb_alpha(cSelFg, cSel, 0.75f)
+                                             : cSelFg;
 
                 if (mid->is_separator) {
                     HBRUSH bgBr = CreateSolidBrush(cBg);
@@ -2118,8 +2116,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     int my = (rcItem.top + rcItem.bottom) / 2;
                     HPEN sepPen = CreatePen(PS_SOLID, 1, cBord);
                     HPEN oldPen = (HPEN)SelectObject(hdc, sepPen);
-                    MoveToEx(hdc, rcItem.left + MulDiv(4, g_dpi, 96), my, NULL);
-                    LineTo(hdc, rcItem.right - MulDiv(4, g_dpi, 96), my);
+                    MoveToEx(hdc, rcItem.left + ns_scale(4, g_dpi), my, NULL);
+                    LineTo(hdc, rcItem.right - ns_scale(4, g_dpi), my);
                     SelectObject(hdc, oldPen);
                     DeleteObject(sepPen);
                     if (oldFont) SelectObject(hdc, oldFont);
@@ -2132,10 +2130,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 DeleteObject(itemBr);
 
                 SetBkMode(hdc, TRANSPARENT);
-                SetTextColor(hdc, selected ? RGB(255, 255, 255) : cFg);
+                SetTextColor(hdc, selected ? cSelFg : cFg);
 
                 /* Text — left aligned with padding */
-                int xPad = MulDiv(8, g_dpi, 96);
+                int xPad = ns_scale(8, g_dpi);
                 RECT rcText = rcItem;
                 rcText.left += xPad;
                 DrawTextA(hdc, mid->text, -1, &rcText,
@@ -2143,7 +2141,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
                 /* Accelerator — right aligned */
                 if (mid->accel[0]) {
-                    SetTextColor(hdc, selected ? RGB(220, 220, 220) : cDim);
+                    SetTextColor(hdc, selected ? cSelFgDim : cDim);
                     RECT rcAccel = rcItem;
                     rcAccel.right -= xPad;
                     DrawTextA(hdc, mid->accel, -1, &rcAccel,
@@ -2531,8 +2529,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int oldDpi = g_dpi;
             int newDpi = (int)HIWORD(wParam);
             g_dpi = newDpi;
-            g_tab_height = MulDiv(TAB_HEIGHT_BASE, g_dpi, 96);
-            g_left_margin = MulDiv(TERM_LEFT_MARGIN, g_dpi, 96);
+            g_tab_height = ns_scale(TAB_HEIGHT_BASE, g_dpi);
+            g_left_margin = ns_scale(TERM_LEFT_MARGIN, g_dpi);
 
             /* Rescale docked AI panel width proportionally */
             if (g_ai_panel_width > 0)
@@ -2691,7 +2689,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
                 /* Version label at bottom-right, same opacity as logo */
                 {
-                    int vpad = MulDiv(10, g_dpi, 96);
+                    int vpad = ns_scale(10, g_dpi);
                     HFONT vfont = ns_font(FONT_CAPTION, g_dpi);
                     HGDIOBJ old_vf = SelectObject(hdc, vfont);
                     SetBkMode(hdc, TRANSPARENT);
@@ -3197,8 +3195,8 @@ void ui_init(HINSTANCE instance) {
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
     int dpi = get_window_dpi(NULL);
-    int winW = MulDiv(880, dpi, 96);
-    int winH = MulDiv(570, dpi, 96);
+    int winW = ns_scale(880, dpi);
+    int winH = ns_scale(570, dpi);
     if (winW > screenW) winW = screenW;
     if (winH > screenH) winH = screenH;
     int x = (screenW - winW) / 2;

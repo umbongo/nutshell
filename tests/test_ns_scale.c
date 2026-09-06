@@ -1,7 +1,6 @@
 #include "test_framework.h"
 #include "ns_scale.h"
 #include "ns_type.h"
-#include "settings_layout.h"
 #include <stdlib.h>
 
 /* ---- ns_scale ---- */
@@ -33,17 +32,6 @@ int test_ns_scale_never_zero_for_positive_px(void) {
     int dpi_table[] = { 96, 120, 144, 168, 192, 216, 240, 288 };
     for (size_t i = 0; i < sizeof(dpi_table) / sizeof(dpi_table[0]); i++) {
         ASSERT_TRUE(ns_scale(1, dpi_table[i]) >= 1);
-    }
-    TEST_END();
-}
-
-int test_ns_scale_matches_settings_scale(void) {
-    TEST_BEGIN();
-    int dpis[] = { 96, 120, 144, 192 };
-    for (size_t i = 0; i < sizeof(dpis) / sizeof(dpis[0]); i++) {
-        for (int px = 1; px <= 64; px++) {
-            ASSERT_EQ(ns_scale(px, dpis[i]), settings_scale(px, dpis[i]));
-        }
     }
     TEST_END();
 }

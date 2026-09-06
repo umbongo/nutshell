@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.0.91 \
+**Version**: v1.0.92 \
 **Build Date**: 2026-09-07 \
 **Author**: Thomas Sulkiewicz
 
@@ -290,6 +290,11 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │   │   ├── edit_scroll.c/.h           #   Scroll math for text editors
 │   │   ├── log_format.c/.h            #   Log filename formatting (strftime)
 │   │   ├── logger.c/.h                #   File and stderr logging
+│   │   ├── ns_hover.c/.h              #   Hover/hot-state tracker for painted controls
+│   │   ├── ns_layout.c/.h             #   Pure layout geometry (buttons, cards, approval card + hit-test)
+│   │   ├── ns_motion.c/.h             #   Easing curves and animation progress (one timer, all panels)
+│   │   ├── ns_scale.c/.h              #   The one DPI-scaling helper (round-half-up, base 96)
+│   │   ├── ns_type.c/.h               #   Spacing grid, radii, strokes, type ramp, font-slot key
 │   │   ├── paste_preview.c/.h         #   Paste preview with size constraints
 │   │   ├── secure_zero.h              #   Volatile memset for secrets
 │   │   ├── selection.c/.h             #   Text selection (pixel-to-cell)
@@ -300,7 +305,8 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │   │   ├── term_extract.c/.h          #   Terminal text extraction
 │   │   ├── theme.c/.h                 #   Color calculations (luminance, bg detection)
 │   │   ├── tooltip.c/.h               #   Connection tooltip formatting
-│   │   ├── ui_theme.c/.h              #   Theme system (4 schemes)
+│   │   ├── ui_demo.c/.h               #   Deterministic demo-state builder for --ui-demo and the gallery
+│   │   ├── ui_theme.c/.h              #   Theme system (4 schemes) + resolved design tokens (ThemeTokens)
 │   │   ├── vector.c/.h                #   Dynamic array
 │   │   ├── xmalloc.c/.h              #   Aborting allocator wrappers
 │   │   └── zoom.c/.h                  #   Zoom level calculations
@@ -328,13 +334,17 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │       ├── paste_dlg.c/.h            #   Paste confirmation dialog
 │       ├── icon_font.h               #   Icon font detection with ASCII fallbacks
 │       ├── resource.h                 #   Version macros and resource IDs
-│       ├── themed_button.h           #   Themed button widget
+│       ├── themed_button.h           #   Themed button widget (paints via ns_draw_button)
 │       ├── custom_scrollbar.h        #   Custom scrollbar widget
 │       ├── dpi_util.h                #   DPI-aware layout helpers
+│       ├── ns_draw.c/.h              #   The one drawing module (grown from ui_draw): chips, cards, buttons, focus rings
+│       ├── ns_font.c/.h              #   Font cache keyed on (role, dpi, face); replaces per-call CreateFont
+│       ├── ns_tokens.h               #   Read-only accessor for window.c's resolved ThemeTokens
+│       ├── ns_reduced_motion.h       #   SPI_GETCLIENTAREAANIMATION reduced-motion flag
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 1,509 unit tests across 66 test files
+├── tests/                              # 1,665 unit tests across 71 test files
 │   └── stubs/libssh2.h                 #   libssh2 stub for test builds without the real library
 ├── build/win/                          # Build output (nutshell.exe)
 ├── images/                             # Application icon and assets
@@ -411,3 +421,18 @@ To run Dr. Memory on the Windows release build:
 5.  **No format-string vulnerabilities**: `log_write()` takes a pre-formatted `const char *`. Use `snprintf` at the call site.
 6.  **String copying**: Always use `snprintf(dst, sizeof(dst), "%s", src)`. Never use `strcpy` or `strncpy`.
 7.  **Secrets**: Use `secure_zero()` from `src/core/secure_zero.h` to wipe passwords and keys. Never use plain `memset` for sensitive data.
+
+### Design system
+
+Every colour, size, font, animation and hover state in `src/ui` comes from
+one tested source in `src/core`/`src/ui`: `ns_tokens()` (resolved `ThemeTokens`)
+for colour, `ns_scale`/`ns_type` for spacing and type, `ns_font` for fonts,
+`ns_motion` for animation, `ns_hover` for hover state, and `ns_draw` for the
+actual painting. Two native tests (`tests/test_ui_tokens.c`) gate this: a
+`RGB(` literal outside `ns_draw.c`, or a local DPI-scale macro anywhere in
+`src/ui`, fails `make test`. See
+`docs/superpowers/specs/2026-09-07-design-system-foundation-design.md` for
+the full design, and run `nutshell.exe --ui-demo=all` (or any of the seven
+individual states) to preview every themed panel without a live SSH session
+— the same states the integration suite's `ui_gallery` case screenshots
+across all four themes.

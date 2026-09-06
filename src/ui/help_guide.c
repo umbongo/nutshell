@@ -3,6 +3,7 @@
 #include "dpi_util.h"
 #include "app_font.h"
 #include "ns_font.h"
+#include "ns_scale.h"
 #include "ui_theme.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
@@ -339,11 +340,9 @@ static LRESULT CALLBACK HelpGuideWndProc(HWND hwnd, UINT msg,
 
         int dpi = get_window_dpi(hwnd);
 
-        #define S(x) MulDiv((x), dpi, 96)
-
-        int margin = S(12);
-        int btn_h  = S(25);
-        int btn_w  = S(75);
+        int margin = ns_scale(12, dpi);
+        int btn_h  = ns_scale(25, dpi);
+        int btn_w  = ns_scale(75, dpi);
         int edit_w = cw - 2 * margin - CSB_WIDTH;
         int edit_h = ch - 3 * margin - btn_h;
 
@@ -413,7 +412,6 @@ static LRESULT CALLBACK HelpGuideWndProc(HWND hwnd, UINT msg,
             SetTimer(hwnd, IDT_GUIDE_SCROLL, 60, NULL);
         }
 
-        #undef S
         return 0;
     }
 
@@ -545,7 +543,7 @@ void help_guide_show(HWND parent, const char *colour_scheme)
         0, GUIDE_CLASS, "Nutshell User Guide",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        MulDiv(520, pdpi, 96), MulDiv(600, pdpi, 96),
+        ns_scale(520, pdpi), ns_scale(600, pdpi),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (hwnd) {

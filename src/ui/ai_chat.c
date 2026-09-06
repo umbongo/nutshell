@@ -15,6 +15,7 @@
 #include "app_font.h"
 #include "ns_font.h"
 #include "ns_draw.h"
+#include "ns_tokens.h"
 #include "ns_scale.h"
 #include "ns_type.h"
 #include "ns_reduced_motion.h"
@@ -832,8 +833,9 @@ static void update_context_bar(AiChatData *d)
     if (pct > 100) pct = 100;
     SendMessage(d->hContextBar, PBM_SETPOS, (WPARAM)pct, 0);
     SendMessage(d->hContextBar, PBM_SETBARCOLOR, 0,
-                (LPARAM)(pct > 80 ? RGB(220, 50, 50) :
-                         pct > 50 ? RGB(220, 180, 50) : RGB(50, 180, 50)));
+                (LPARAM)(pct > 80 ? theme_cr(d->theme->danger) :
+                         pct > 50 ? theme_cr(d->theme->warning)
+                                  : theme_cr(d->theme->success)));
     ai_format_context_label(tokens, d->context_limit,
                             d->context_label, sizeof(d->context_label));
     InvalidateRect(d->hContextBar, NULL, TRUE);
@@ -848,8 +850,9 @@ static void start_indicator(AiChatData *d, const char *base)
         LONG style = GetWindowLong(d->hContextBar, GWL_STYLE);
         SetWindowLong(d->hContextBar, GWL_STYLE, style | PBS_MARQUEE);
         SendMessage(d->hContextBar, PBM_SETMARQUEE, 1, 50);
-        /* Red/Orange color for Marquee */
-        SendMessage(d->hContextBar, PBM_SETBARCOLOR, 0, (LPARAM)RGB(220, 100, 50));
+        /* Warning-intent color for the busy Marquee */
+        SendMessage(d->hContextBar, PBM_SETBARCOLOR, 0,
+                    (LPARAM)theme_cr(d->theme->warning));
         EnableWindow(d->hContextBar, TRUE);
     }
     if (strcmp(base, "thinking") == 0)
@@ -1663,10 +1666,12 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
     int text_left = rc.left;
     if (((int)dis->CtlID == IDC_CHAT_AUTOAPPROVE) && d) {
         int is_active = d->approval_q.auto_approve;
-        int indW = MulDiv(AI_INDICATOR_W_BASE, d->dpi, 96);
-        int indGap = MulDiv(AI_INDICATOR_GAP_BASE, d->dpi, 96);
+        int indW = ns_scale(AI_INDICATOR_W_BASE, d->dpi);
+        int indGap = ns_scale(AI_INDICATOR_GAP_BASE, d->dpi);
         int indX = rc.left + indGap;
-        COLORREF dot_col = is_active ? RGB(0, 160, 80) : RGB(128, 128, 128);
+        const ThemeTokens *tok = ns_tokens();
+        COLORREF dot_col = is_active ? theme_cr(tok->success.base) : theme_cr(tok->text_dim);
+        COLORREF letter_col = is_active ? theme_cr(tok->success.label) : theme_cr(tok->text_dim_label);
         RECT ind_rc = { indX, indY, indX + indW, indY + indicH };
         ns_draw_round_fill(hdc, &ind_rc, ns_scale(R_CTRL, d->dpi), dot_col, 255);
 
@@ -1681,7 +1686,7 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
                 "Segoe UI");
             HFONT hOldF = (HFONT)SelectObject(hdc, hSmall);
             SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, RGB(255, 255, 255));
+            SetTextColor(hdc, letter_col);
             RECT indRect = { indX, indY, indX + indW, indY + indicH };
             DrawText(hdc, letter, 1, &indRect,
                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1693,10 +1698,12 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
     }
     if (((int)dis->CtlID == IDC_CHAT_PERMIT) && d) {
         int is_active = d->permit_write;
-        int indW = MulDiv(AI_INDICATOR_W_BASE, d->dpi, 96);
-        int indGap = MulDiv(AI_INDICATOR_GAP_BASE, d->dpi, 96);
+        int indW = ns_scale(AI_INDICATOR_W_BASE, d->dpi);
+        int indGap = ns_scale(AI_INDICATOR_GAP_BASE, d->dpi);
         int indX = rc.left + indGap;
-        COLORREF dot_col = is_active ? RGB(0, 160, 80) : RGB(128, 128, 128);
+        const ThemeTokens *tok = ns_tokens();
+        COLORREF dot_col = is_active ? theme_cr(tok->success.base) : theme_cr(tok->text_dim);
+        COLORREF letter_col = is_active ? theme_cr(tok->success.label) : theme_cr(tok->text_dim_label);
         RECT ind_rc = { indX, indY, indX + indW, indY + indicH };
         ns_draw_round_fill(hdc, &ind_rc, ns_scale(R_CTRL, d->dpi), dot_col, 255);
 
@@ -1711,7 +1718,7 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
                 "Segoe UI");
             HFONT hOldF = (HFONT)SelectObject(hdc, hSmall);
             SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, RGB(255, 255, 255));
+            SetTextColor(hdc, letter_col);
             RECT indRect = { indX, indY, indX + indW, indY + indicH };
             DrawText(hdc, letter, 1, &indRect,
                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1738,7 +1745,7 @@ static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
         GetWindowTextW(dis->hwndItem, text, (int)(sizeof(text)/sizeof(text[0])));
         RECT rcText = rc;
         rcText.left = text_left;
-        rcText.right -= MulDiv(AI_INDICATOR_GAP_BASE, d ? d->dpi : 96, 96);
+        rcText.right -= ns_scale(AI_INDICATOR_GAP_BASE, d ? d->dpi : 96);
         DrawTextW(hdc, text, -1, &rcText,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
@@ -1760,13 +1767,12 @@ static void relayout(AiChatData *d)
     GetClientRect(d->hwnd, &rc);
     int cw = rc.right;
     int ch = rc.bottom;
-    #define S(px) MulDiv((px), d->dpi, 96)
-    int btn_h = S(24);
-    int pad = S(4);
+    int btn_h = ns_scale(24, d->dpi);
+    int pad = ns_scale(4, d->dpi);
     int top_y = pad + btn_h + pad;
-    int input_h = S(46);
-    int margin = S(5);
-    int send_w = S(40);
+    int input_h = ns_scale(46, d->dpi);
+    int margin = ns_scale(5, d->dpi);
+    int send_w = ns_scale(40, d->dpi);
     int approve_h = d->pending_approval ? (btn_h + pad) : 0;
 
     /* Right-side icon buttons (always shown) */
@@ -1780,12 +1786,12 @@ static void relayout(AiChatData *d)
     /* Decide if left-side buttons fit with full text or need compact mode.
      * Full: New Chat (78) + Permit Write (115) + Auto Approve (115)
      * Compact: New Chat (78) + indicator-only (btn_h) + indicator-only (btn_h) */
-    int full_w = pad + S(78) + pad + S(115) + pad + S(115);
+    int full_w = pad + ns_scale(78, d->dpi) + pad + ns_scale(115, d->dpi) + pad + ns_scale(115, d->dpi);
     int avail = cw - right_w;
     d->compact_buttons = (full_w > avail);
-    int pw = d->compact_buttons ? btn_h : S(115);
-    int nw = d->compact_buttons ? btn_h : S(78);
-    int aw = d->compact_buttons ? btn_h : S(115);
+    int pw = d->compact_buttons ? btn_h : ns_scale(115, d->dpi);
+    int nw = d->compact_buttons ? btn_h : ns_scale(78, d->dpi);
+    int aw = d->compact_buttons ? btn_h : ns_scale(115, d->dpi);
 
     if (d->hNewChatBtn)
         MoveWindow(d->hNewChatBtn, pad, pad, nw, btn_h, TRUE);
@@ -1794,8 +1800,8 @@ static void relayout(AiChatData *d)
     if (d->hAllowAllBtn)
         MoveWindow(d->hAllowAllBtn, pad + nw + pad + pw + pad, pad, aw, btn_h, TRUE);
     {
-        int bar_h = S(16);
-        int ctx_w = S(180);
+        int bar_h = ns_scale(16, d->dpi);
+        int ctx_w = ns_scale(180, d->dpi);
         int label_w = cw - ctx_w - pad * 3;
         if (d->hSessionLabel)
             MoveWindow(d->hSessionLabel, pad, top_y, label_w, bar_h, TRUE);
@@ -1833,7 +1839,6 @@ static void relayout(AiChatData *d)
         if (d->hSendBtn)
             MoveWindow(d->hSendBtn, cw - send_w - margin, input_y, send_w, input_h, TRUE);
     }
-    #undef S
 }
 
 /* Sync the input scrollbar with the EDIT control's scroll state */
@@ -1923,33 +1928,32 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Get per-monitor DPI for layout scaling */
         nd->dpi = get_window_dpi(hwnd);
-        #define S(px) MulDiv((px), nd->dpi, 96)
 
         RECT rc;
         GetClientRect(hwnd, &rc);
         int cw = rc.right;
         int ch = rc.bottom;
-        int btn_h = S(24); /* compact — matches BTN_SIZE in tab strip */
-        int pad = S(4);
+        int btn_h = ns_scale(24, nd->dpi); /* compact — matches BTN_SIZE in tab strip */
+        int pad = ns_scale(4, nd->dpi);
         int top_y = pad + btn_h + pad; /* display starts below buttons */
 
         /* New Chat button (owner-drawn for theme) */
         nd->hNewChatBtn = CreateWindow("BUTTON", "New Chat",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            pad, pad, S(78), btn_h,
+            pad, pad, ns_scale(78, nd->dpi), btn_h,
             hwnd, (HMENU)IDC_CHAT_NEWCHAT, NULL, NULL);
 
         /* Permit Write button */
         nd->permit_write = 0; /* default: read-only */
         nd->hPermitBtn = CreateWindow("BUTTON", "Permit Write",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            pad + S(78) + pad, pad, S(115), btn_h,
+            pad + ns_scale(78, nd->dpi) + pad, pad, ns_scale(115, nd->dpi), btn_h,
             hwnd, (HMENU)IDC_CHAT_PERMIT, NULL, NULL);
 
         /* Auto Approve button */
         nd->hAllowAllBtn = CreateWindow("BUTTON", "Auto Approve",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            pad + S(78) + pad + S(115) + pad, pad, S(115), btn_h,
+            pad + ns_scale(78, nd->dpi) + pad + ns_scale(115, nd->dpi) + pad, pad, ns_scale(115, nd->dpi), btn_h,
             hwnd, (HMENU)IDC_CHAT_AUTOAPPROVE, NULL, NULL);
 
         nd->show_thinking = 0; /* default: collapsed (user must click '>' to expand) */
@@ -1983,8 +1987,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Session name (left) + context bar (right) row */
         {
-            int bar_h = S(16);
-            int ctx_w = S(180);  /* fixed width for context bar */
+            int bar_h = ns_scale(16, nd->dpi);
+            int ctx_w = ns_scale(180, nd->dpi);  /* fixed width for context bar */
             int label_w = cw - ctx_w - pad * 3;
 
             /* Session name label on the left */
@@ -2021,8 +2025,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         /* Chat display: owner-drawn ChatListView replaces RichEdit.
          * In docked mode the initial window may be 1x1, so clamp
          * all dimensions to >=1 — relayout() fixes them on first WM_SIZE. */
-        int input_h = S(46); /* ~2 lines for multiline input */
-        int margin = S(5);
+        int input_h = ns_scale(46, nd->dpi); /* ~2 lines for multiline input */
+        int margin = ns_scale(5, nd->dpi);
         int disp_w = cw - margin * 2 - CSB_WIDTH;
         if (disp_w < 1) disp_w = 1;
         int disp_h = ch - input_h - top_y - margin * 2;
@@ -2056,7 +2060,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         nd->last_phase = -1;
 
         /* Input field: multiline, Enter sends via subclass, Shift+Enter = newline */
-        int send_w = S(40);
+        int send_w = ns_scale(40, nd->dpi);
         int input_y = ch - input_h - margin;
         if (input_y < 0) input_y = 0;
         int input_w = cw - send_w - margin * 3 - CSB_WIDTH;
@@ -2095,7 +2099,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                     CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                     DEFAULT_PITCH | FF_SWISS, "Segoe UI");
 
-        #undef S
         if (nd->hFont) {
             /* Chat content uses its own zoomable fonts (separate from
              * the UI font used by buttons/labels). The input textbox
@@ -3210,9 +3213,7 @@ next_coalesce:;
             {
                 RECT hdr_rc;
                 GetClientRect(hwnd, &hdr_rc);
-                #define HS(px) MulDiv((px), d->dpi, 96)
-                hdr_rc.bottom = HS(4) + HS(24) + HS(4) + HS(16) + HS(4);
-                #undef HS
+                hdr_rc.bottom = ns_scale(4, d->dpi) + ns_scale(24, d->dpi) + ns_scale(4, d->dpi) + ns_scale(16, d->dpi) + ns_scale(4, d->dpi);
                 InvalidateRect(hwnd, &hdr_rc, FALSE);
             }
         } else if (wParam == TIMER_SCROLL_SYNC) {
@@ -3294,11 +3295,10 @@ next_coalesce:;
              * so child controls are not affected. */
             PAINTSTRUCT ps_hdr;
             HDC hdc_hdr = BeginPaint(hwnd, &ps_hdr);
-            #define HP(px) MulDiv((px), d->dpi, 96)
             {
-                int pad_h   = HP(4);
-                int btn_h_h = HP(24);
-                int bar_h_h = HP(16);
+                int pad_h   = ns_scale(4, d->dpi);
+                int btn_h_h = ns_scale(24, d->dpi);
+                int bar_h_h = ns_scale(16, d->dpi);
                 int top_y_h = pad_h + btn_h_h + pad_h; /* session label row y */
 
                 /* Dot position: right end of session label area */
@@ -3307,7 +3307,7 @@ next_coalesce:;
                     GetWindowRect(d->hSessionLabel, &rc_lbl);
                     MapWindowPoints(NULL, hwnd, (POINT *)&rc_lbl, 2);
                 } else {
-                    SetRect(&rc_lbl, pad_h, top_y_h, HP(200), top_y_h + bar_h_h);
+                    SetRect(&rc_lbl, pad_h, top_y_h, ns_scale(200, d->dpi), top_y_h + bar_h_h);
                 }
 
                 /* Get session label text width */
@@ -3319,8 +3319,8 @@ next_coalesce:;
                 GetWindowTextA(d->hSessionLabel, lbl_text, (int)sizeof(lbl_text));
                 GetTextExtentPoint32A(hdc_hdr, lbl_text, (int)strlen(lbl_text), &sz_lbl);
 
-                int dot_sz  = HP(6);
-                int dot_x   = rc_lbl.left + sz_lbl.cx + HP(6);
+                int dot_sz  = ns_scale(6, d->dpi);
+                int dot_x   = rc_lbl.left + sz_lbl.cx + ns_scale(6, d->dpi);
                 int dot_y   = top_y_h + (bar_h_h - dot_sz) / 2;
 
                 /* Choose colour from health */
@@ -3380,7 +3380,7 @@ next_coalesce:;
                     SetBkMode(hdc_hdr, TRANSPARENT);
                     SetTextColor(hdc_hdr, dot_clr);
                     RECT wrc;
-                    wrc.left   = dot_x + dot_sz + HP(4);
+                    wrc.left   = dot_x + dot_sz + ns_scale(4, d->dpi);
                     wrc.top    = top_y_h;
                     wrc.right  = rc_lbl.right;
                     wrc.bottom = top_y_h + bar_h_h;
@@ -3390,7 +3390,6 @@ next_coalesce:;
 
                 SelectObject(hdc_hdr, old_f);
             }
-            #undef HP
             EndPaint(hwnd, &ps_hdr);
             return 0;
         }
@@ -3706,8 +3705,8 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
         style,
         docked ? 0 : CW_USEDEFAULT,
         docked ? 0 : CW_USEDEFAULT,
-        docked ? 1 : MulDiv(500, pdpi, 96),
-        docked ? 1 : MulDiv(600, pdpi, 96),
+        docked ? 1 : ns_scale(500, pdpi),
+        docked ? 1 : ns_scale(600, pdpi),
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (!hwnd) {

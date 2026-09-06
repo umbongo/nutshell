@@ -39,10 +39,10 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 
 /* ── DPI-aware pixel scaling ────────────────────────────────────────── */
 
-#define CLV_SCALE(lv, px) ((int)((float)(px) * (lv)->dpi_scale + 0.5f))
-
 /* Integer DPI for ns_scale()/ns_draw_*() calls; ChatListView only keeps a
- * float dpi_scale (1.0 = 96 DPI) today. */
+ * float dpi_scale (1.0 = 96 DPI) today. The old CLV_SCALE(lv, px) macro has
+ * been replaced throughout by ns_scale(px, CLV_DPI(lv)) -- the one
+ * DPI-scaling helper for the whole UI (Design-System Foundation, task 10). */
 #define CLV_DPI(lv) ((int)((lv)->dpi_scale * 96.0f + 0.5f))
 
 /* ── Base layout constants (96 DPI) ─────────────────────────────────── */
@@ -184,7 +184,7 @@ static void safety_tag_colors(CmdSafetyLevel level, COLORREF *bg, COLORREF *fg)
         break;
     default:
         *bg = RGB_FROM_THEME(tok->text_dim);
-        *fg = RGB(255, 255, 255);
+        *fg = RGB_FROM_THEME(tok->text_dim_label);
         break;
     }
 }
@@ -333,11 +333,11 @@ HWND chat_listview_create(HWND parent, int x, int y, int w, int h,
     ns_hover_init(&lv->hover);
 
     /* Compute scaled layout constants */
-    lv->msg_gap    = CLV_SCALE(lv, BASE_MSG_GAP);
-    lv->user_pad_h = CLV_SCALE(lv, BASE_USER_PAD_H);
-    lv->user_pad_v = CLV_SCALE(lv, BASE_USER_PAD_V);
-    lv->ai_indent  = CLV_SCALE(lv, BASE_AI_INDENT);
-    lv->code_pad   = CLV_SCALE(lv, BASE_CODE_PAD);
+    lv->msg_gap    = ns_scale(BASE_MSG_GAP, CLV_DPI(lv));
+    lv->user_pad_h = ns_scale(BASE_USER_PAD_H, CLV_DPI(lv));
+    lv->user_pad_v = ns_scale(BASE_USER_PAD_V, CLV_DPI(lv));
+    lv->ai_indent  = ns_scale(BASE_AI_INDENT, CLV_DPI(lv));
+    lv->code_pad   = ns_scale(BASE_CODE_PAD, CLV_DPI(lv));
 
     HWND hwnd = CreateWindowExA(
         0, CHATLIST_CLASS, NULL,
@@ -472,7 +472,7 @@ int chat_listview_is_near_bottom(HWND hwnd)
     /* "Near bottom" = within a small margin of the bottom.
      * Tight threshold so expanding the thinking box (which increases
      * total_height) doesn't keep triggering scroll_to_bottom. */
-    int margin = CLV_SCALE(lv, 60);
+    int margin = ns_scale(60, CLV_DPI(lv));
     return lv->scroll_y >= max_scroll - margin;
 }
 
@@ -500,8 +500,8 @@ void chat_listview_relayout(HWND hwnd)
  * sizing drift from what is painted — especially once rows go two-line. */
 static int clv_cmd_row_h(ChatListView *lv, int width, int text_h)
 {
-    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
-    int border_w = CLV_SCALE(lv, 1);
+    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    int border_w = ns_scale(1, CLV_DPI(lv));
     int card_w = width - 4 * side_pad - 2 * border_w;
     return approval_row_height(card_w, text_h, CLV_DPI(lv));
 }
@@ -596,8 +596,8 @@ static void recalc_layout(ChatListView *lv)
             int interior_h   = 2 * pad + visible_rows * row_h + gap_sm + action_ctrl_h;
 
             int header_h = any_blocked
-                ? (CLV_SCALE(lv, 20) + CLV_SCALE(lv, 4)) : 0;
-            int border_w = CLV_SCALE(lv, 1);
+                ? (ns_scale(20, CLV_DPI(lv)) + ns_scale(4, CLV_DPI(lv))) : 0;
+            int border_w = ns_scale(1, CLV_DPI(lv));
             int container_h = 2 * border_w + header_h + interior_h;
 
             /* First command absorbs the full container height */
@@ -626,7 +626,7 @@ static void recalc_layout(ChatListView *lv)
 
     /* Reserve space for the activity indicator when active */
     if (lv->activity && lv->activity->phase != ACTIVITY_IDLE)
-        y += CLV_SCALE(lv, BASE_ACTIVITY_H) + lv->msg_gap;
+        y += ns_scale(BASE_ACTIVITY_H, CLV_DPI(lv)) + lv->msg_gap;
 
     lv->total_height = y;
     lv->viewport_height = rc.bottom - rc.top;
@@ -688,7 +688,7 @@ static char *ai_text_for_measure(const char *text)
 static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                         int width)
 {
-    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
+    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
     int text_w;
     RECT rc;
     HGDIOBJ old_font;
@@ -747,13 +747,13 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         free(stripped);
 
         /* Icon row + gap before content (must match paint_ai_item layout) */
-        int total = h + CLV_SCALE(lv, BASE_ICON_SIZE) + CLV_SCALE(lv, 4);
+        int total = h + ns_scale(BASE_ICON_SIZE, CLV_DPI(lv)) + ns_scale(4, CLV_DPI(lv));
 
         /* Thinking block height — shown during streaming and after completion */
         if (item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
-            int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
+            int hdr_h = ns_scale(BASE_THINK_HDR_H, CLV_DPI(lv));
             int pad = lv->code_pad;
-            int gap = CLV_SCALE(lv, 6);
+            int gap = ns_scale(6, CLV_DPI(lv));
 
             if (item->u.ai.thinking_collapsed) {
                 /* Collapsed: header + border + gap */
@@ -771,7 +771,7 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                 int think_h = trc.bottom - trc.top;
                 SelectObject(hdc, tf);
 
-                int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
+                int max_h = ns_scale(BASE_THINK_MAX_H, CLV_DPI(lv));
                 if (think_h > max_h) think_h = max_h;
 
                 /* header + separator + body + border + gap */
@@ -822,7 +822,7 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         draw_text_utf8(hdc, item->text, &rc,
                        DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_LEFT);
         SelectObject(hdc, old_font);
-        return (rc.bottom - rc.top) + CLV_SCALE(lv, 8);
+        return (rc.bottom - rc.top) + ns_scale(8, CLV_DPI(lv));
     }
 
     default:
@@ -855,11 +855,11 @@ static void clamp_scroll(ChatListView *lv)
 
 static void recalc_dpi_constants(ChatListView *lv)
 {
-    lv->msg_gap    = CLV_SCALE(lv, BASE_MSG_GAP);
-    lv->user_pad_h = CLV_SCALE(lv, BASE_USER_PAD_H);
-    lv->user_pad_v = CLV_SCALE(lv, BASE_USER_PAD_V);
-    lv->ai_indent  = CLV_SCALE(lv, BASE_AI_INDENT);
-    lv->code_pad   = CLV_SCALE(lv, BASE_CODE_PAD);
+    lv->msg_gap    = ns_scale(BASE_MSG_GAP, CLV_DPI(lv));
+    lv->user_pad_h = ns_scale(BASE_USER_PAD_H, CLV_DPI(lv));
+    lv->user_pad_v = ns_scale(BASE_USER_PAD_V, CLV_DPI(lv));
+    lv->ai_indent  = ns_scale(BASE_AI_INDENT, CLV_DPI(lv));
+    lv->code_pad   = ns_scale(BASE_CODE_PAD, CLV_DPI(lv));
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -873,7 +873,7 @@ static void paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
     /* Right-align the bubble */
     int bubble_w = (rc->right - rc->left);
-    int max_w = ((rc->right - rc->left + 2 * CLV_SCALE(lv, BASE_SIDE_PAD))
+    int max_w = ((rc->right - rc->left + 2 * ns_scale(BASE_SIDE_PAD, CLV_DPI(lv)))
                  * 3) / 4;
     if (bubble_w > max_w) bubble_w = max_w;
 
@@ -1027,8 +1027,8 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                            RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
-    int icon_sz = CLV_SCALE(lv, BASE_ICON_SIZE);
-    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
+    int icon_sz = ns_scale(BASE_ICON_SIZE, CLV_DPI(lv));
+    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
 
     /* AI avatar circle */
     HBRUSH avatar_br = CreateSolidBrush(RGB_FROM_THEME(tc->ai_accent));
@@ -1044,12 +1044,12 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
     /* Sparkle glyph inset into the avatar circle */
     {
-        int pad = CLV_SCALE(lv, 4);
+        int pad = ns_scale(4, CLV_DPI(lv));
         RECT spark_rc = { rc->left + pad, rc->top + pad,
                           rc->left + icon_sz - pad,
                           rc->top + icon_sz - pad };
         ns_icon_draw(hdc, NS_ICON_SPARKLE, &spark_rc,
-                     RGB(255, 255, 255),
+                     RGB_FROM_THEME(ns_tokens()->accent.label),
                      (UINT)(96.0f * lv->dpi_scale));
     }
 
@@ -1059,7 +1059,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     HGDIOBJ old_font = SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont
                                         : GetStockObject(DEFAULT_GUI_FONT));
     RECT label_rc;
-    label_rc.left   = rc->left + icon_sz + CLV_SCALE(lv, 6);
+    label_rc.left   = rc->left + icon_sz + ns_scale(6, CLV_DPI(lv));
     label_rc.top    = rc->top;
     label_rc.right  = rc->right;
     label_rc.bottom = rc->top + icon_sz;
@@ -1083,16 +1083,16 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                           : GetStockObject(DEFAULT_GUI_FONT));
     }
 
-    int content_top = rc->top + icon_sz + CLV_SCALE(lv, 4);
+    int content_top = rc->top + icon_sz + ns_scale(4, CLV_DPI(lv));
 
     /* ── Thinking block (contained box) — shown during streaming and
      * after completion.  During streaming the header shows a pulsing
      * green dot; after completion it shows "Thought for X.Xs". ───── */
     if (item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
-        int hdr_h   = CLV_SCALE(lv, BASE_THINK_HDR_H);
+        int hdr_h   = ns_scale(BASE_THINK_HDR_H, CLV_DPI(lv));
         int pad     = lv->code_pad;
-        int corner  = CLV_SCALE(lv, 6);
-        int gap     = CLV_SCALE(lv, 6);
+        int corner  = ns_scale(6, CLV_DPI(lv));
+        int gap     = ns_scale(6, CLV_DPI(lv));
         int box_left  = rc->left + lv->ai_indent;
         int box_right = rc->right - side_pad;
 
@@ -1140,8 +1140,8 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                 draw_text_utf8(hdc, "\xe2\x96\xb6", &chev_rc,
                                DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
                 int dot_x = hdr_rc.left + (chev_rc.right - chev_rc.left)
-                            + CLV_SCALE(lv, 6);
-                int dot_sz = CLV_SCALE(lv, BASE_DOT_SIZE);
+                            + ns_scale(6, CLV_DPI(lv));
+                int dot_sz = ns_scale(BASE_DOT_SIZE, CLV_DPI(lv));
                 int dot_y = hdr_rc.top
                             + (hdr_rc.bottom - hdr_rc.top - dot_sz) / 2;
                 /* Pulsing dot — blend with bg on alternate ticks */
@@ -1166,7 +1166,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
                 /* "Thinking..." label after the dot */
                 RECT lbl_rc;
-                SetRect(&lbl_rc, dot_x + dot_sz + CLV_SCALE(lv, 4),
+                SetRect(&lbl_rc, dot_x + dot_sz + ns_scale(4, CLV_DPI(lv)),
                         hdr_rc.top, hdr_rc.right, hdr_rc.bottom);
                 draw_text_utf8(hdc, "Thinking...", &lbl_rc,
                                DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
@@ -1197,11 +1197,11 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             draw_text_utf8(hdc, item->u.ai.thinking_text, &mr,
                            DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
             int full_h = mr.bottom - mr.top;
-            int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
+            int max_h = ns_scale(BASE_THINK_MAX_H, CLV_DPI(lv));
             int vis_h = full_h;
             if (vis_h > max_h) vis_h = max_h;
-            if (vis_h < CLV_SCALE(lv, BASE_THINK_MIN_H))
-                vis_h = CLV_SCALE(lv, BASE_THINK_MIN_H);
+            if (vis_h < ns_scale(BASE_THINK_MIN_H, CLV_DPI(lv)))
+                vis_h = ns_scale(BASE_THINK_MIN_H, CLV_DPI(lv));
 
             int box_h = hdr_h + pad + vis_h + 2 * pad;
             RECT box_rc;
@@ -1246,8 +1246,8 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                 draw_text_utf8(hdc, "\xe2\x96\xbc", &chev_rc,
                                DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
                 int dot_x = hdr_rc.left + (chev_rc.right - chev_rc.left)
-                            + CLV_SCALE(lv, 6);
-                int dot_sz = CLV_SCALE(lv, BASE_DOT_SIZE);
+                            + ns_scale(6, CLV_DPI(lv));
+                int dot_sz = ns_scale(BASE_DOT_SIZE, CLV_DPI(lv));
                 int dot_y = hdr_rc.top
                             + (hdr_rc.bottom - hdr_rc.top - dot_sz) / 2;
                 COLORREF dot_clr = RGB_FROM_THEME(tc->thinking_text);
@@ -1271,7 +1271,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
                 /* "Thinking..." label */
                 RECT lbl_rc;
-                SetRect(&lbl_rc, dot_x + dot_sz + CLV_SCALE(lv, 4),
+                SetRect(&lbl_rc, dot_x + dot_sz + ns_scale(4, CLV_DPI(lv)),
                         hdr_rc.top, hdr_rc.right, hdr_rc.bottom);
                 draw_text_utf8(hdc, "Thinking...", &lbl_rc,
                                DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
@@ -1300,7 +1300,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
             /* Body: thinking text with clip region and scroll offset */
             int body_top = sep_y + pad;
-            int sb_w = (full_h > vis_h) ? CLV_SCALE(lv, 6) : 0;
+            int sb_w = (full_h > vis_h) ? ns_scale(6, CLV_DPI(lv)) : 0;
             RECT clip_rc;
             SetRect(&clip_rc, box_rc.left + pad, body_top,
                     box_rc.right - pad - sb_w, body_top + vis_h);
@@ -1324,10 +1324,10 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             /* Scrollbar thumb when content overflows */
             if (full_h > vis_h) {
                 int sb_x = box_rc.right - pad - sb_w;
-                int sb_inset = CLV_SCALE(lv, 1);
+                int sb_inset = ns_scale(1, CLV_DPI(lv));
                 int track_h = vis_h;
                 int thumb_h = (vis_h * vis_h) / full_h;
-                int min_thumb = CLV_SCALE(lv, 20);
+                int min_thumb = ns_scale(20, CLV_DPI(lv));
                 if (thumb_h < min_thumb) thumb_h = min_thumb;
                 int max_scroll = full_h - vis_h;
                 int thumb_y = body_top;
@@ -1511,11 +1511,11 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
 {
     memset(g, 0, sizeof(*g));
 
-    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
-    int border_w = CLV_SCALE(lv, 1);
+    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    int border_w = ns_scale(1, CLV_DPI(lv));
     int gap_sm   = ns_scale(SP_SM, CLV_DPI(lv));
     int action_ctrl_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
-    int sb_w     = CLV_SCALE(lv, BASE_SCROLLBAR_W);
+    int sb_w     = ns_scale(BASE_SCROLLBAR_W, CLV_DPI(lv));
 
     g->border_w  = border_w;
     g->box_left  = side_pad + side_pad;
@@ -1543,12 +1543,12 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
     g->n = n;
 
     g->header_h = g->any_blocked
-        ? (CLV_SCALE(lv, 20) + CLV_SCALE(lv, 4)) : 0;
+        ? (ns_scale(20, CLV_DPI(lv)) + ns_scale(4, CLV_DPI(lv))) : 0;
     g->clip_top += g->header_h;
 
     g->needs_scroll = (lv->cmd_total_h > lv->cmd_visible_h);
     g->card_right = g->needs_scroll
-        ? (g->clip_right - sb_w - CLV_SCALE(lv, 3)) : g->clip_right;
+        ? (g->clip_right - sb_w - ns_scale(3, CLV_DPI(lv))) : g->clip_right;
 
     int text_h = 0;
     if (hdc_for_measure) {
@@ -1585,7 +1585,7 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
     const ThemeTokens *tok = ns_tokens();
-    int corner = CLV_SCALE(lv, BASE_CORNER_R);
+    int corner = ns_scale(BASE_CORNER_R, CLV_DPI(lv));
 
     RECT client_rc;
     GetClientRect(lv->hwnd, &client_rc);
@@ -1617,12 +1617,12 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
     if (g.any_blocked) {
         RECT hdr_rc = { g.clip_left, g.box_top + g.border_w,
                         g.card_right, g.box_top + g.border_w + g.header_h };
-        int icon_w = CLV_SCALE(lv, 16);
+        int icon_w = ns_scale(16, CLV_DPI(lv));
         RECT lock_rc = { hdr_rc.left, hdr_rc.top,
                          hdr_rc.left + icon_w, hdr_rc.bottom };
         ns_icon_draw(hdc, NS_ICON_LOCK, &lock_rc, RGB_FROM_THEME(tok->text_dim),
                     (UINT)(96.0f * lv->dpi_scale));
-        RECT lbl_rc = { lock_rc.right + CLV_SCALE(lv, 4), hdr_rc.top,
+        RECT lbl_rc = { lock_rc.right + ns_scale(4, CLV_DPI(lv)), hdr_rc.top,
                         hdr_rc.right, hdr_rc.bottom };
         SetTextColor(hdc, RGB_FROM_THEME(tok->text_dim));
         HGDIOBJ hf = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
@@ -1651,8 +1651,8 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
 
     /* ── Themed scrollbar (inside box, right edge) ────────────────── */
     if (g.needs_scroll) {
-        int sb_w = CLV_SCALE(lv, BASE_SCROLLBAR_W);
-        int track_left  = g.box_right - g.border_w - sb_w - CLV_SCALE(lv, 2);
+        int sb_w = ns_scale(BASE_SCROLLBAR_W, CLV_DPI(lv));
+        int track_left  = g.box_right - g.border_w - sb_w - ns_scale(2, CLV_DPI(lv));
         int track_top   = g.clip_top;
         int track_bot   = g.clip_bot;
         int track_h     = track_bot - track_top;
@@ -1664,7 +1664,7 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         int max_cmd_scroll = lv->cmd_total_h - lv->cmd_visible_h;
         if (max_cmd_scroll < 1) max_cmd_scroll = 1;
         int thumb_h = track_h * lv->cmd_visible_h / lv->cmd_total_h;
-        if (thumb_h < CLV_SCALE(lv, 20)) thumb_h = CLV_SCALE(lv, 20);
+        if (thumb_h < ns_scale(20, CLV_DPI(lv))) thumb_h = ns_scale(20, CLV_DPI(lv));
         int thumb_y = track_top +
             (lv->cmd_scroll_y * (track_h - thumb_h)) / max_cmd_scroll;
         RECT thumb_rc = { track_left, thumb_y, track_left + sb_w, thumb_y + thumb_h };
@@ -1701,8 +1701,8 @@ static void paint_status_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
                                         : GetStockObject(DEFAULT_GUI_FONT));
     RECT text_rc = *rc;
-    text_rc.left  += CLV_SCALE(lv, BASE_SIDE_PAD);
-    text_rc.right -= CLV_SCALE(lv, BASE_SIDE_PAD);
+    text_rc.left  += ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    text_rc.right -= ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
     draw_text_utf8(hdc, item->text, &text_rc,
                    DT_WORDBREAK | DT_NOPREFIX | DT_LEFT);
     SelectObject(hdc, old_font);
@@ -1738,10 +1738,10 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
         || lv->activity->phase == ACTIVITY_THINKING)
         return 0;
 
-    int act_h  = CLV_SCALE(lv, BASE_ACTIVITY_H);
-    int dot_sz = CLV_SCALE(lv, BASE_DOT_SIZE);
-    int pad    = CLV_SCALE(lv, BASE_SIDE_PAD);
-    int indent = CLV_SCALE(lv, BASE_AI_INDENT);
+    int act_h  = ns_scale(BASE_ACTIVITY_H, CLV_DPI(lv));
+    int dot_sz = ns_scale(BASE_DOT_SIZE, CLV_DPI(lv));
+    int pad    = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    int indent = ns_scale(BASE_AI_INDENT, CLV_DPI(lv));
 
     COLORREF bg_clr = RGB_FROM_THEME(lv->theme->bg_primary);
     COLORREF dot_clr = activity_health_color(lv, lv->activity->health);
@@ -1777,7 +1777,7 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
                                          ? lv->hSmallFont
                                          : GetStockObject(DEFAULT_GUI_FONT));
     RECT text_rc;
-    text_rc.left   = dot_x + dot_sz + CLV_SCALE(lv, 6);
+    text_rc.left   = dot_x + dot_sz + ns_scale(6, CLV_DPI(lv));
     text_rc.top    = y;
     text_rc.right  = cw - pad;
     text_rc.bottom = y + act_h;
@@ -1789,7 +1789,7 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
         static const char retry_text[] = "[Retry]";
         SIZE sz;
         GetTextExtentPoint32A(hdc, status_buf, (int)strlen(status_buf), &sz);
-        int retry_x = text_rc.left + sz.cx + CLV_SCALE(lv, 10);
+        int retry_x = text_rc.left + sz.cx + ns_scale(10, CLV_DPI(lv));
         SetTextColor(hdc, RGB_FROM_THEME(ns_tokens()->link.base));
         RECT retry_rc;
         retry_rc.left   = retry_x;
@@ -1844,7 +1844,7 @@ static void on_paint(ChatListView *lv)
 
     /* Walk items, skip those above viewport, stop after those below */
     int y = lv->msg_gap - lv->scroll_y;
-    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
+    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
 
     /* Track last user message for sticky pinning */
     ChatMsgItem *last_user = NULL;
@@ -1927,7 +1927,7 @@ static void on_paint(ChatListView *lv)
     if (last_user && last_user_y + last_user_h <= 0) {
         /* Clear the sticky area with background */
         RECT sticky_bg;
-        SetRect(&sticky_bg, 0, 0, cw, last_user_h + CLV_SCALE(lv, 2));
+        SetRect(&sticky_bg, 0, 0, cw, last_user_h + ns_scale(2, CLV_DPI(lv)));
         HBRUSH sbr = CreateSolidBrush(bg);
         FillRect(mem_dc, &sticky_bg, sbr);
         DeleteObject(sbr);
@@ -2023,12 +2023,12 @@ static int activity_retry_rect(ChatListView *lv, HDC hdc, int y, int cw,
         lv->activity->health != HEALTH_RED)
         return 0;
 
-    int act_h  = CLV_SCALE(lv, BASE_ACTIVITY_H);
-    int dot_sz = CLV_SCALE(lv, BASE_DOT_SIZE);
-    int pad    = CLV_SCALE(lv, BASE_SIDE_PAD);
-    int indent = CLV_SCALE(lv, BASE_AI_INDENT);
+    int act_h  = ns_scale(BASE_ACTIVITY_H, CLV_DPI(lv));
+    int dot_sz = ns_scale(BASE_DOT_SIZE, CLV_DPI(lv));
+    int pad    = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    int indent = ns_scale(BASE_AI_INDENT, CLV_DPI(lv));
     int dot_x  = pad + indent;
-    int text_left = dot_x + dot_sz + CLV_SCALE(lv, 6);
+    int text_left = dot_x + dot_sz + ns_scale(6, CLV_DPI(lv));
 
     char status_buf[128];
     float now = (float)GetTickCount() / 1000.0f;
@@ -2040,7 +2040,7 @@ static int activity_retry_rect(ChatListView *lv, HDC hdc, int y, int cw,
     GetTextExtentPoint32A(hdc, status_buf, (int)strlen(status_buf), &sz);
     SelectObject(hdc, old_font);
 
-    out->left   = text_left + sz.cx + CLV_SCALE(lv, 10);
+    out->left   = text_left + sz.cx + ns_scale(10, CLV_DPI(lv));
     out->top    = y;
     out->right  = cw - pad;
     out->bottom = y + act_h;
@@ -2186,7 +2186,7 @@ static int chatlv_hit_is_actionable(int id)
 static int on_lbuttondown(ChatListView *lv, int mx, int my)
 {
     SetFocus(lv->hwnd);   /* Acquire keyboard focus so WM_KEYDOWN fires */
-    int side_pad = CLV_SCALE(lv, BASE_SIDE_PAD);
+    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
 
     /* Walk items to find which one was clicked */
     int y = lv->msg_gap - lv->scroll_y;
@@ -2205,10 +2205,10 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
         /* Check click on thinking toggle header for AI items */
         if (item->type == CHAT_ITEM_AI_TEXT && my >= y && my < y + h
             && item->u.ai.thinking_text) {
-            int icon_sz = CLV_SCALE(lv, BASE_ICON_SIZE);
-            int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
+            int icon_sz = ns_scale(BASE_ICON_SIZE, CLV_DPI(lv));
+            int hdr_h = ns_scale(BASE_THINK_HDR_H, CLV_DPI(lv));
             int click_h = hdr_h + 2 * lv->code_pad;
-            int hdr_top = y + icon_sz + CLV_SCALE(lv, 4);
+            int hdr_top = y + icon_sz + ns_scale(4, CLV_DPI(lv));
             int think_left = side_pad + lv->ai_indent;
 
             if (my >= hdr_top && my < hdr_top + click_h &&
@@ -2240,8 +2240,8 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
 
             /* ── Scrollbar click ──────────────────────────────────── */
             if (g.needs_scroll) {
-                int sb_w = CLV_SCALE(lv, BASE_SCROLLBAR_W);
-                int sb_right = g.box_right - CLV_SCALE(lv, 2);
+                int sb_w = ns_scale(BASE_SCROLLBAR_W, CLV_DPI(lv));
+                int sb_right = g.box_right - ns_scale(2, CLV_DPI(lv));
                 int sb_left  = sb_right - sb_w;
                 if (mx >= sb_left && mx <= sb_right &&
                     my >= g.clip_top && my < g.clip_bot) {
@@ -2309,7 +2309,7 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
     /* Check click on [Retry] link in the activity indicator */
     if (lv->activity && lv->activity->phase != ACTIVITY_IDLE &&
         lv->activity->health == HEALTH_RED) {
-        int act_h = CLV_SCALE(lv, BASE_ACTIVITY_H);
+        int act_h = ns_scale(BASE_ACTIVITY_H, CLV_DPI(lv));
         if (my >= y && my < y + act_h) {
             HWND par = GetParent(lv->hwnd);
             if (par)
@@ -2530,7 +2530,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             return 0;
         }
         int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-        int scroll_amount = CLV_SCALE(lv, 40);  /* ~3 lines per notch */
+        int scroll_amount = ns_scale(40, CLV_DPI(lv));  /* ~3 lines per notch */
 
         /* Check if cursor is over an expanded thinking region */
         {
@@ -2547,11 +2547,11 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                     && !wi->u.ai.thinking_collapsed
                     && pt.y >= wy && pt.y < wy + wh) {
                     /* Compute thinking content region bounds */
-                    int icon_sz = CLV_SCALE(lv, BASE_ICON_SIZE);
-                    int hdr_h = CLV_SCALE(lv, BASE_THINK_HDR_H);
-                    int think_top = wy + icon_sz + CLV_SCALE(lv, 4)
-                                    + hdr_h + CLV_SCALE(lv, 4);
-                    int side_pad2 = CLV_SCALE(lv, BASE_SIDE_PAD);
+                    int icon_sz = ns_scale(BASE_ICON_SIZE, CLV_DPI(lv));
+                    int hdr_h = ns_scale(BASE_THINK_HDR_H, CLV_DPI(lv));
+                    int think_top = wy + icon_sz + ns_scale(4, CLV_DPI(lv))
+                                    + hdr_h + ns_scale(4, CLV_DPI(lv));
+                    int side_pad2 = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
                     int think_left = side_pad2 + lv->ai_indent;
 
                     /* Measure full content to check overflow */
@@ -2559,11 +2559,11 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                     HGDIOBJ tf = SelectObject(tdc, lv->hSmallFont
                                  ? lv->hSmallFont
                                  : GetStockObject(DEFAULT_GUI_FONT));
-                    int border_w = CLV_SCALE(lv, BASE_BORDER_W);
+                    int border_w = ns_scale(BASE_BORDER_W, CLV_DPI(lv));
                     RECT crc;
                     GetClientRect(hwnd, &crc);
                     int tw = crc.right - think_left - side_pad2
-                             - border_w - CLV_SCALE(lv, 8);
+                             - border_w - ns_scale(8, CLV_DPI(lv));
                     if (tw < 20) tw = 20;
                     RECT mr;
                     SetRect(&mr, 0, 0, tw, 0);
@@ -2573,8 +2573,8 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                     SelectObject(tdc, tf);
                     ReleaseDC(hwnd, tdc);
 
-                    int max_h = CLV_SCALE(lv, BASE_THINK_MAX_H);
-                    int min_h = CLV_SCALE(lv, BASE_THINK_MIN_H);
+                    int max_h = ns_scale(BASE_THINK_MAX_H, CLV_DPI(lv));
+                    int min_h = ns_scale(BASE_THINK_MIN_H, CLV_DPI(lv));
                     int vis_h = full_h;
                     if (vis_h < min_h) vis_h = min_h;
                     if (vis_h > max_h) vis_h = max_h;
