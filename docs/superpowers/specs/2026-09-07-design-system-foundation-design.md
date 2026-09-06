@@ -227,3 +227,43 @@ heartbeat and keep-alive timers are not animations and stay separate.
 - `ns_ease`: monotonic on [0,1], exactly 0 at 0 and 1 at 1.
 - `ns_anim_progress`: t increases with time, clamps at 1, `done` fires once, and
   with `reduced_motion` the first call returns t = 1 and done.
+
+## 5. Verification harness — APPROVED 2026-09-07
+
+### `--ui-demo[=<state>]` (hidden CLI flag)
+
+`cli_args.c` gains `CLI_UI_DEMO` with an optional state name and an optional
+`--theme <name>`. Neither appears in `-?` output or the user guide; the flag is
+compiled into the normal binary so screenshots always come from the shipped exe.
+No Help-menu entry.
+
+In demo mode the app opens a fake session tab with canned terminal output (no
+SSH, no network, no key) and the AI panel docked, populated from a fixed script.
+
+### States (canned data in `src/core/ui_demo.{c,h}`, a table over the real
+message and approval structures so it cannot drift)
+
+| State | Contents |
+|---|---|
+| `chat` | user message; AI reply with thinking block, markdown (headings, list, table, code block); status line |
+| `approval` | one card with safe / write / critical commands in pending, approved, denied and blocked states; Allow All visible |
+| `executing` | a command in EXECUTING with the activity dot; a completed one above it |
+| `tool` | a `[Tool: web_search]` call and a truncated `[Result]` with the 1 MB warning |
+| `error` | an HTTP error with Retry; a cancelled stream |
+| `empty` | fresh panel, no messages (the empty state to be designed in sub-project 2) |
+| `all` | every state above stacked in one conversation |
+
+### Harness integration
+
+Integration case `ui_gallery` launches `nutshell.exe --ui-demo=<state> --theme
+<theme>` for every state × theme (7 × 4) and saves `artifacts\gallery\<theme>-
+<state>.png` — a contact sheet for reviewing the redesign without a live session
+or credits. Runs in well under a minute; no assertions beyond "window appeared and
+painted" (a non-blank capture).
+
+### Tests (native)
+
+- `cli_parse` recognises `--ui-demo`, `--ui-demo=approval`, `--theme "Onyx
+  Light"`, and rejects an unknown state with a CLI error.
+- `ui_demo_build(state, &conv, &approval)` produces the documented message and
+  entry counts for every state, and `all` equals the union.
