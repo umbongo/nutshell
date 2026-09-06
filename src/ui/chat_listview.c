@@ -20,6 +20,7 @@
 #include "ns_layout.h"
 #include "ns_tokens.h"
 #include "ns_hover.h"
+#include "ns_reduced_motion.h"
 #include "chat_approval.h"
 #include <windowsx.h>
 #include <commctrl.h>
@@ -1138,7 +1139,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                             + (hdr_rc.bottom - hdr_rc.top - dot_sz) / 2;
                 /* Pulsing dot — blend with bg on alternate ticks */
                 COLORREF dot_clr = RGB_FROM_THEME(tc->thinking_text);
-                if (lv->pulse_toggle) {
+                if (lv->pulse_toggle && !ns_reduced_motion()) {
                     COLORREF bg = RGB_FROM_THEME(tc->cmd_bg);
                     dot_clr = RGB(
                         (GetRValue(dot_clr) + GetRValue(bg)) / 2,
@@ -1243,7 +1244,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                 int dot_y = hdr_rc.top
                             + (hdr_rc.bottom - hdr_rc.top - dot_sz) / 2;
                 COLORREF dot_clr = RGB_FROM_THEME(tc->thinking_text);
-                if (lv->pulse_toggle) {
+                if (lv->pulse_toggle && !ns_reduced_motion()) {
                     COLORREF bg = RGB_FROM_THEME(tc->cmd_bg);
                     dot_clr = RGB(
                         (GetRValue(dot_clr) + GetRValue(bg)) / 2,
@@ -1739,7 +1740,7 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
 
     COLORREF bg_clr = RGB_FROM_THEME(lv->theme->bg_primary);
     COLORREF dot_clr = activity_health_color(lv, lv->activity->health);
-    if (lv->pulse_toggle)
+    if (lv->pulse_toggle && !ns_reduced_motion())
         dot_clr = blend_with_bg(dot_clr, bg_clr);
 
     /* Draw pulsing dot */

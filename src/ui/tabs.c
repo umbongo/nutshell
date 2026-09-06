@@ -12,6 +12,7 @@
 #include "ns_draw.h"
 #include "ns_tokens.h"
 #include "ns_hover.h"
+#include "ns_reduced_motion.h"
 
 #ifdef _WIN32
 
@@ -318,12 +319,15 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
         case WM_TIMER:
             if (data && wParam == TABS_TIMER_PULSE) {
-                /* Advance phase; only invalidate if any tab is CONNECTING */
+                /* Advance phase; only invalidate if any tab is CONNECTING.
+                 * Reduced motion: leave pulse_phase at rest (0) so
+                 * ns_draw_pulse always renders its smallest, static ring
+                 * instead of animating. */
                 int any_connecting = 0;
                 for (int i = 0; i < data->m.count; i++) {
                     if (data->m.tabs[i].status == TAB_CONNECTING) { any_connecting = 1; break; }
                 }
-                if (any_connecting) {
+                if (any_connecting && !ns_reduced_motion()) {
                     data->pulse_phase += 0.18f;
                     if (data->pulse_phase > 6.2831853f) data->pulse_phase -= 6.2831853f;
                     InvalidateRect(hwnd, NULL, FALSE);

@@ -1793,6 +1793,21 @@ int test_ns_hover_state_for_rest_hover_pressed(void);
 int test_ns_hover_state_for_negative_id_always_rest(void);
 int test_ns_hover_state_for_null_hover_is_rest(void);
 
+/* test_ns_motion.c */
+int test_ns_ease_endpoints(void);
+int test_ns_ease_monotonic_over_unit_interval(void);
+int test_ns_ease_clamps_outside_unit_interval(void);
+int test_ns_anim_progress_increases_with_time(void);
+int test_ns_anim_progress_clamps_at_one(void);
+int test_ns_anim_progress_done_fires_exactly_once(void);
+int test_ns_anim_progress_reduced_motion_snaps_on_first_call(void);
+int test_ns_anim_list_add_and_get(void);
+int test_ns_anim_list_add_replaces_existing_id(void);
+int test_ns_anim_list_add_full_returns_minus_one(void);
+int test_ns_anim_list_step_removes_finished_keeps_active(void);
+int test_ns_anim_list_step_reduced_motion_finishes_immediately(void);
+int test_ns_anim_progress_tick_wraparound_near_ulong_max(void);
+
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
@@ -3617,6 +3632,21 @@ int main(void) {
     failed += test_ns_hover_state_for_rest_hover_pressed();
     failed += test_ns_hover_state_for_negative_id_always_rest();
     failed += test_ns_hover_state_for_null_hover_is_rest();
+
+    printf("\n--- Design System: motion ---\n");
+    failed += test_ns_ease_endpoints();
+    failed += test_ns_ease_monotonic_over_unit_interval();
+    failed += test_ns_ease_clamps_outside_unit_interval();
+    failed += test_ns_anim_progress_increases_with_time();
+    failed += test_ns_anim_progress_clamps_at_one();
+    failed += test_ns_anim_progress_done_fires_exactly_once();
+    failed += test_ns_anim_progress_reduced_motion_snaps_on_first_call();
+    failed += test_ns_anim_list_add_and_get();
+    failed += test_ns_anim_list_add_replaces_existing_id();
+    failed += test_ns_anim_list_add_full_returns_minus_one();
+    failed += test_ns_anim_list_step_removes_finished_keeps_active();
+    failed += test_ns_anim_list_step_reduced_motion_finishes_immediately();
+    failed += test_ns_anim_progress_tick_wraparound_near_ulong_max();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

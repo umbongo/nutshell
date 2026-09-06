@@ -17,6 +17,7 @@
 #include "ns_draw.h"
 #include "ns_scale.h"
 #include "ns_type.h"
+#include "ns_reduced_motion.h"
 #include "ui_theme.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
@@ -3315,7 +3316,7 @@ next_coalesce:;
                 }
 
                 /* Apply pulse: blend with bg on toggle */
-                if (d->pulse_toggle) {
+                if (d->pulse_toggle && !ns_reduced_motion()) {
                     COLORREF bg_c = RGB(((d->theme->bg_primary)>>16)&0xFF,
                                         ((d->theme->bg_primary)>>8)&0xFF,
                                         (d->theme->bg_primary)&0xFF);

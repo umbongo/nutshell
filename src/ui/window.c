@@ -31,6 +31,8 @@
 #include "ns_font.h"
 #include "ui_theme.h"
 #include "ns_tokens.h"
+#include "ns_motion.h"
+#include "ns_reduced_motion.h"
 #include "custom_scrollbar.h"
 #include "menubar_line.h"
 #include "dpi_util.h"
@@ -126,14 +128,37 @@ static int g_ai_target_width = 0;     /* animation target width */
 static int g_ai_last_width = 0;       /* remembered width for re-open (resets on app start) */
 static int g_ai_anim_from = 0;        /* animation start width (for close: current, open: 0) */
 static int g_ai_splitter_dragging = 0;
-static ULONGLONG g_ai_anim_start = 0;
 static int g_ai_reopen_after_connect = 0; /* reopen AI panel after first session connects */
 
 /* ---- Acorn watermark state ---- */
 static ULONG_PTR g_gdip_token = 0;
 static GpImage  *g_acorn_image = NULL;
-#define AI_ANIM_TIMER_ID  4
-#define AI_ANIM_INTERVAL  16           /* ~60fps */
+
+/* ---- Animation timer (Design-System Foundation, task 8) ----
+ * One 16ms WM_TIMER for the whole main window, driving a small NsAnimList.
+ * Each animated element (currently just the AI dock slide) gets an id in
+ * ANIM_ID_AI_DOCK below; the timer steps every tracked animation, applies
+ * whatever changed, and kills itself once the list goes empty. */
+#define ANIM_TIMER_ID        4
+#define ANIM_TIMER_INTERVAL 16           /* ~60fps */
+enum { ANIM_ID_AI_DOCK = 0 };
+static NsAnimList g_anim_list = {0};
+
+/* Reduced-motion flag: read at startup and on WM_SETTINGCHANGE via
+ * SPI_GETCLIENTAREAANIMATION. Non-zero means animations should snap
+ * straight to their end state. */
+static int g_reduced_motion = 0;
+
+int ns_reduced_motion(void) { return g_reduced_motion; }
+
+/* Read the current system "client area animation" setting into
+ * g_reduced_motion. Called at WM_CREATE and on every WM_SETTINGCHANGE. */
+static void refresh_reduced_motion(void)
+{
+    BOOL anim_enabled = TRUE;
+    SystemParametersInfoA(SPI_GETCLIENTAREAANIMATION, 0, &anim_enabled, 0);
+    g_reduced_motion = anim_enabled ? 0 : 1;
+}
 
 void session_mark_user_active(void) {
     if (g_active_session) {
@@ -831,8 +856,9 @@ static void start_ai_panel_anim(HWND hwnd, int target_w)
 {
     g_ai_anim_from = g_ai_panel_width;
     g_ai_target_width = target_w;
-    g_ai_anim_start = GetTickCount64();
-    SetTimer(hwnd, AI_ANIM_TIMER_ID, AI_ANIM_INTERVAL, NULL);
+    ns_anim_list_add(&g_anim_list, ANIM_ID_AI_DOCK,
+                      (unsigned long)GetTickCount(), MOTION_BASE);
+    SetTimer(hwnd, ANIM_TIMER_ID, ANIM_TIMER_INTERVAL, NULL);
 }
 
 /* Helper: trigger relayout */
@@ -1705,6 +1731,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;
 
+            /* Read the system "reduced motion" preference once at
+             * startup; WM_SETTINGCHANGE keeps it current afterward. */
+            refresh_reduced_motion();
+
             /* Look up colour theme from config */
             {
                 int idx = ui_theme_find(g_config->settings.colour_scheme);
@@ -2151,21 +2181,27 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (needs_repaint) invalidate_terminal(hwnd);
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();
-            } else if (wParam == AI_ANIM_TIMER_ID) {
-                ULONGLONG now = GetTickCount64();
-                double t = (double)(now - g_ai_anim_start)
-                           / (double)AI_DOCK_ANIM_MS;
-                if (t >= 1.0) t = 1.0;
-                g_ai_panel_width = ai_dock_anim_lerp(
-                    g_ai_anim_from, g_ai_target_width, t);
-                if (t >= 1.0) {
+            } else if (wParam == ANIM_TIMER_ID) {
+                unsigned long now = (unsigned long)GetTickCount();
+                int active = ns_anim_list_step(&g_anim_list, now,
+                                                g_reduced_motion);
+
+                NsAnimStep step;
+                if (ns_anim_list_get(&g_anim_list, ANIM_ID_AI_DOCK, now,
+                                      g_reduced_motion, &step)) {
+                    g_ai_panel_width = g_ai_anim_from
+                        + (int)((g_ai_target_width - g_ai_anim_from) * step.t);
+                } else {
+                    /* No longer tracked: the slide just finished (or was
+                     * never running) -- snap to the exact target. */
                     g_ai_panel_width = g_ai_target_width;
-                    KillTimer(hwnd, AI_ANIM_TIMER_ID);
                     /* Hide the window after close animation finishes */
                     if (g_ai_target_width == 0
                         && g_hwndAiChat && IsWindow(g_hwndAiChat))
                         ShowWindow(g_hwndAiChat, SW_HIDE);
                 }
+                if (active == 0)
+                    KillTimer(hwnd, ANIM_TIMER_ID);
                 relayout_main(hwnd);
             }
             return 0;
@@ -2422,6 +2458,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         }
+
+        case WM_SETTINGCHANGE:
+            refresh_reduced_motion();
+            return 0;
 
         case WM_PAINT: {
             PAINTSTRUCT ps;

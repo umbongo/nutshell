@@ -11,7 +11,8 @@
 #define AI_DOCK_MAX_PCT       75   /* Maximum panel width % */
 #define AI_DOCK_SPLITTER_W     6   /* Visual splitter gap width in px */
 #define AI_DOCK_SPLITTER_PAD   8   /* Extra clickable px on each side of the gap */
-#define AI_DOCK_ANIM_MS      200   /* Slide animation duration in ms */
+/* Slide animation duration: MOTION_BASE (src/core/ns_motion.h), driven by
+ * window.c's NsAnimList -- see the Design-System Foundation motion spec. */
 
 /* Check if AI Assist can be opened: requires an active SSH session.
  * session_active: non-zero if a session exists.
