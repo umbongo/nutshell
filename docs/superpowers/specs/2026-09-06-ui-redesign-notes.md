@@ -1,11 +1,12 @@
 # UI Redesign — Working Notes (checkpoint)
 
-**Status:** brainstorming in progress. Roadmap and rendering approach approved; the
-first sub-project (design-system foundation) has not yet been designed in detail.
-Native Windows build + test environment is working (see below).
-Resume from "Next steps" below.
+**Status:** sub-project 1 (design-system foundation) is fully designed and approved:
+spec `2026-09-07-design-system-foundation-design.md`, plan
+`../plans/2026-09-07-design-system-foundation.md` (10 tasks). Next action is
+**plan task 1** (`ns_scale` + `ns_type`). Native Windows build, unit suite (1,539)
+and the tompi integration suite (11 cases) are all green. Resume from "Todo" below.
 
-Branch: `ui-polish` (branched from `main` at v1.0.76; now at v1.0.77).
+Branch: `ui-polish` (branched from `main` at v1.0.76; now at v1.0.80).
 
 ## Decisions so far
 
@@ -53,9 +54,10 @@ Weaknesses, in impact order:
    - `src/ui/*.c` is excluded from the Linux test build; only header-only pure logic and
      `src/core` modules are tested.
 
-## Design-system foundation — proposed shape (NOT yet approved)
+## Design-system foundation — original proposed shape (superseded 2026-09-07)
 
-To be presented section by section:
+Kept for history; the approved version with all decisions is the spec named above.
+As first proposed:
 
 1. **Semantic tokens** — keep the 4 themes' 8 base colours; derive hover/pressed/disabled/
    elevation/focus tints in `src/core` via luminance math (testable); add explicit
