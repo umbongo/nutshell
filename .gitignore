@@ -25,3 +25,6 @@ settings.ini
 
 # Backups
 backups/
+# Native-host test artefacts
+build/test_runner.exe
+build/.detect*

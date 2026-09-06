@@ -151,7 +151,7 @@ int test_sessmgr_load_null_path(void)
 int test_sessmgr_load_nonexistent(void)
 {
     TEST_BEGIN();
-    Config *cfg = config_load("/tmp/nutshell_nonexistent_config_test.json");
+    Config *cfg = config_load(TEST_TMP_DIR "/nutshell_nonexistent_config_test.json");
     ASSERT_NULL(cfg);
     TEST_END();
 }
@@ -169,7 +169,7 @@ int test_sessmgr_save_null(void)
 int test_sessmgr_save_load_roundtrip(void)
 {
     TEST_BEGIN();
-    const char *path = "/tmp/nutshell_test_roundtrip.config";
+    const char *path = TEST_TMP_DIR "/nutshell_test_roundtrip.config";
 
     Config *cfg = config_new_default();
     snprintf(cfg->settings.font, sizeof(cfg->settings.font), "Consolas");
@@ -231,7 +231,7 @@ int test_sessmgr_settings_validate(void)
 int test_sessmgr_multiple_profiles_roundtrip(void)
 {
     TEST_BEGIN();
-    const char *path = "/tmp/nutshell_test_multi_profile.config";
+    const char *path = TEST_TMP_DIR "/nutshell_test_multi_profile.config";
 
     Config *cfg = config_new_default();
     for (int i = 0; i < 10; i++) {

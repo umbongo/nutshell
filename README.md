@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.0.76 \
+**Version**: v1.0.77 \
 **Build Date**: 2026-08-29 \
 **Author**: Thomas Sulkiewicz
 
@@ -40,7 +40,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 1,464 unit tests, zero lint warnings
+- 1,509 unit tests, zero lint warnings
 
 ---
 
@@ -306,8 +306,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │   │   ├── ssh_session.c/.h           #   SSH session lifecycle (connect, auth, disconnect)
 │   │   ├── ssh_channel.c/.h           #   SSH channel I/O with timeout
 │   │   ├── ssh_pty.c/.h              #   PTY allocation and resize
-│   │   ├── knownhosts.c/.h           #   TOFU host key verification
-│   │   └── libssh2.h                 #   Test stub header
+│   │   └── knownhosts.c/.h           #   TOFU host key verification
 │   └── ui/                             # Win32 UI (excluded from test builds)
 │       ├── window.c                   #   Main window, menu, layout (108 KB)
 │       ├── ai_chat.c/.h              #   AI chat panel, streaming, image paste (140 KB)
@@ -328,7 +327,8 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 1,167 unit tests across 52 test files
+├── tests/                              # 1,509 unit tests across 66 test files
+│   └── stubs/libssh2.h                 #   libssh2 stub for test builds without the real library
 ├── build/win/                          # Build output (nutshell.exe)
 ├── images/                             # Application icon and assets
 ├── CLAUDE.md                           # AI assistant project conventions
@@ -338,31 +338,51 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 
 ## Build Instructions
 
-### Prerequisites
+The Makefile supports two build hosts and picks the right one automatically.
+
+### Windows host (MSYS2 MINGW64)
+
+Install the toolchain and libraries once:
+
+```bash
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-libssh2 \
+          mingw-w64-x86_64-openssl mingw-w64-x86_64-zlib mingw-w64-x86_64-upx
+```
+
+Then, from a MINGW64 shell (or any shell with `C:\msys64\mingw64\bin` on PATH):
+
+```bash
+mingw32-make clean && mingw32-make release
+```
+
+Use `mingw32-make`, not the MSYS `make` — the latter breaks gcc's temp-file handling. The build links libssh2, OpenSSL and zlib statically, so the exe has no MSYS2 DLL dependencies.
+
+### Linux host (cross-compile)
+
 -   GCC (MinGW-w64) — `x86_64-w64-mingw32-gcc` for Windows cross-compile, native `gcc` for tests
 -   `g++-mingw-w64-x86-64` — required by vcpkg even for C-only builds
--   Make
+-   Make, `upx` (`sudo apt install upx`)
 -   cppcheck (static analysis)
 -   vcpkg with the custom `x64-mingw-gcc-static` triplet for MinGW-targeted OpenSSL and libssh2 (see `~/vcpkg/custom-triplets/`)
-
-### Building
-
-Always clean before building to ensure a full rebuild:
 
 ```bash
 make clean && make release
 ```
 
-Requires `upx` (`sudo apt install upx`). Use plain `make` only if you need an uncompressed binary for debugging.
+### Targets
+
+Always clean before building to ensure a full rebuild. Use plain `make` only if you need an uncompressed binary for debugging.
 
 | Command | Purpose |
 |---------|---------|
-| `make clean && make release` | **Recommended** — optimised + UPX compressed (~5.1 MB) |
+| `make clean && make release` | **Recommended** — optimised + UPX compressed (~5.3 MB) |
 | `make` | Uncompressed build (~9.7 MB), useful for debugging |
-| `make test` | Run unit tests (native Linux) |
+| `make test` | Run unit tests natively on the build host |
+| `make wintest` | Win32 icon-renderer tests (runs directly on Windows, under Wine on Linux) |
 | `make lint` | Static analysis with cppcheck |
-| `make debug` | Build with AddressSanitizer + UndefinedBehaviorSanitizer |
 | `make clean` | Remove all build artefacts |
+
+(On Windows substitute `mingw32-make` for `make`.)
 
 ### Memory Audit (Windows)
 

@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define TMP_VAL "/tmp/nutshell_test_validate.json"
+#define TMP_VAL TEST_TMP_DIR "/nutshell_test_validate.json"
 
 /* ---- settings_validate: valid defaults pass through unchanged ------------ */
 
@@ -229,7 +229,7 @@ int test_settings_markdown_render_default(void) {
 int test_settings_markdown_render_roundtrip_off(void) {
     TEST_BEGIN();
     /* Write a config with the flag explicitly false; verify it loads as 0. */
-    const char *path = "/tmp/nutshell_test_md_off.config";
+    const char *path = TEST_TMP_DIR "/nutshell_test_md_off.config";
     FILE *f = fopen(path, "w");
     ASSERT_NOT_NULL(f);
     fputs("{ \"settings\": { \"markdown_render_enabled\": false } }", f);
@@ -245,7 +245,7 @@ int test_settings_markdown_render_roundtrip_off(void) {
 int test_settings_markdown_render_roundtrip_on(void) {
     TEST_BEGIN();
     /* Explicitly true → loads as 1. */
-    const char *path = "/tmp/nutshell_test_md_on.config";
+    const char *path = TEST_TMP_DIR "/nutshell_test_md_on.config";
     FILE *f = fopen(path, "w");
     ASSERT_NOT_NULL(f);
     fputs("{ \"settings\": { \"markdown_render_enabled\": true } }", f);
@@ -261,7 +261,7 @@ int test_settings_markdown_render_roundtrip_on(void) {
 int test_settings_markdown_render_missing_field(void) {
     TEST_BEGIN();
     /* Missing field → falls back to default (1). */
-    const char *path = "/tmp/nutshell_test_md_missing.config";
+    const char *path = TEST_TMP_DIR "/nutshell_test_md_missing.config";
     FILE *f = fopen(path, "w");
     ASSERT_NOT_NULL(f);
     fputs("{ \"settings\": {} }", f);

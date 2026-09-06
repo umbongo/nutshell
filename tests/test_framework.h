@@ -5,6 +5,15 @@
 #include <string.h>
 #include <stdint.h>
 
+/* Scratch directory for tests that write files.  Linux: /tmp.  Windows: the
+ * build/ directory (a MinGW binary has no /tmp), relative to the repo root
+ * where `make test` runs. */
+#ifdef _WIN32
+#define TEST_TMP_DIR "build"
+#else
+#define TEST_TMP_DIR "/tmp"
+#endif
+
 extern int _tf_failed;
 extern int _tf_run;
 

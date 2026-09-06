@@ -1665,6 +1665,7 @@ int test_sl_scroll_clamp_zero_max(void);
 /* ---- Main ---------------------------------------------------------------- */
 
 int main(void) {
+    setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered so a crash shows the last [RUN ] line */
     int failed = 0;
 
     printf("\n--- Core ---\n");

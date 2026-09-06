@@ -14,9 +14,19 @@
 - **Always `make clean && make release`** — never `make release` alone.
 - **Always run `make test` after changes** to verify nothing is broken.
 - **Two compilers**: `x86_64-w64-mingw32-gcc` for the Windows cross-compile (`make`), native `gcc` for tests (`make test`). Code must compile clean under both with `-Werror`.
-- **vcpkg include order matters**: `VCPKG_INC` must come before `-Isrc/term` so the real `libssh2.h` (with macros) overrides the local test stub.
-- **Linker order matters**: vcpkg libs (`-lssh2 -lssl -lcrypto -lzlib`) must come before Windows system libs (`-lws2_32 -lgdi32 ...`).
+- **Linker order matters**: dependency libs (`-lssh2 -lssl -lcrypto -lzlib`/`-lz`) must come before Windows system libs (`-lws2_32 -lgdi32 ...`).
 - **`NON_TEST_SRCS`**: Files in `src/ui/` are excluded from test builds. If you add portable logic that needs testing, put it in `src/core/`, not `src/ui/`.
+- **libssh2 test stub** lives in `tests/stubs/libssh2.h` and is only added to the include path (`-Itests/stubs`) when the test build finds no real libssh2. Never put a stub header in `src/` — it would shadow the real one in the Windows build.
+
+### Building on Windows (MSYS2 MINGW64) — the current dev host
+
+The Makefile detects a Windows host (`OS=Windows_NT`) and switches to the pacman-installed libs, `-lz`, static linking, and `windres`.
+
+- One-time setup: `pacman -S mingw-w64-x86_64-make mingw-w64-x86_64-libssh2 mingw-w64-x86_64-openssl mingw-w64-x86_64-zlib mingw-w64-x86_64-upx mingw-w64-x86_64-gdb`
+- PATH must have `C:\msys64\mingw64\bin` before `C:\msys64\usr\bin`.
+- **Use `mingw32-make`, never the MSYS `make`** — MSYS make rewrites the temp-dir env for child processes and gcc then fails with "Cannot create temporary file in C:\WINDOWS".
+- Commands: `mingw32-make clean && mingw32-make release`, `mingw32-make test`, `mingw32-make wintest` (the GDI+ icon harness, runs directly on Windows).
+- Debug a crashing test runner with `gdb -batch -ex run -ex bt ./build/test_runner.exe`.
 
 ## Test-Driven Development
 
@@ -24,7 +34,9 @@ Write tests before implementation code. Include corner cases, positive and negat
 
 - Test framework: custom `test_framework.h` with `TEST_BEGIN()`/`TEST_END()`, `ASSERT_EQ`, `ASSERT_STR_EQ`, `ASSERT_TRUE`, `ASSERT_NULL`, `ASSERT_NOT_NULL`.
 - All test functions are declared and called in `tests/runner.c`.
-- Tests run natively on Linux — Win32 API calls are stubbed or excluded.
+- Tests run natively on the build host (Linux or Windows) — Win32 UI code is excluded; Win32-only tests (`test_icons.c`, `win_runner.c`) belong to `make wintest`.
+- Tests that write files must build paths from `TEST_TMP_DIR` (in `test_framework.h`), never a literal `/tmp/` — that path does not exist for a MinGW binary.
+- Windows threads default to a 1 MB stack (Linux: 8 MB). The Makefile links the Windows test runner with 16 MB; keep very large structs off the stack in product code anyway.
 
 ## Software Development Rules for Claude
 

@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define TMP_CFG_CC "/tmp/nutshell_test_cc.json"
+#define TMP_CFG_CC TEST_TMP_DIR "/nutshell_test_cc.json"
 
 static void feed(Terminal *t, const char *s) {
     term_process(t, s, strlen(s));

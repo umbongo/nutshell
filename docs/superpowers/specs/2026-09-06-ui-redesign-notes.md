@@ -2,9 +2,10 @@
 
 **Status:** brainstorming in progress. Roadmap and rendering approach approved; the
 first sub-project (design-system foundation) has not yet been designed in detail.
+Native Windows build + test environment is working (see below).
 Resume from "Next steps" below.
 
-Branch: `ui-polish` (branched from `main` at v1.0.76).
+Branch: `ui-polish` (branched from `main` at v1.0.76; now at v1.0.77).
 
 ## Decisions so far
 
@@ -71,6 +72,28 @@ To be presented section by section:
    so every screen state can be inspected without a live SSH session or API key.
 6. **Tests** — token-coverage test that fails on new `RGB(` in `src/ui` outside `ns_draw`;
    derived-colour contrast tests; geometry tests for the shared primitives.
+
+## Windows build environment (done 2026-09-06, session now on Windows)
+
+The repo builds and tests natively on the Windows dev box (MSYS2 MINGW64 at
+`C:\msys64`, gcc 15.2). Changes made, all on `ui-polish`, version bumped to 1.0.77:
+
+- `Makefile` detects `OS=Windows_NT` and switches to pacman libs, `-lz`, `-static`,
+  `windres`, a 16 MB test-runner stack, and links WinHTTP/GDI for the `#ifdef _WIN32`
+  paths in `src/core`. Linux/vcpkg behaviour is unchanged.
+- `src/term/libssh2.h` (test stub) moved to `tests/stubs/`, added to the include path
+  only when no real libssh2 is found — removes the include-order pitfall.
+- `TEST_TMP_DIR` in `test_framework.h` replaces literal `/tmp/` in file-writing tests.
+- Three SSH/known-hosts tests that had rotted (never compiled on the Linux box, which
+  lacked libssh2) now compile and run: 1,509 tests, 0 failures (was 1,464).
+- Use `mingw32-make`; MSYS `make` breaks gcc's temp-file path. See CLAUDE.md.
+
+**Finding from `make wintest` (first time it has ever run):** `NS_ICON_PASSWORD`
+renders zero pixels. Its glyph is three zero-length `OP_MOVE/OP_LINE/OP_CLOSE/OP_FILLSTROKE`
+"dots", which GDI+ draws as nothing even with round caps. The same trick is used for the
+three dots on `NS_ICON_THINKING` and the LED on `NS_ICON_SERVER`, so those details are
+invisible too. Fix belongs in foundation section 3 (shared primitives): add an `OP_DOT`
+op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
 
 ## Next steps
 

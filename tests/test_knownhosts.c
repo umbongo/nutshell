@@ -81,7 +81,7 @@ static void tmp_path(char *buf, size_t n, const char *name)
     GetTempPathA((DWORD)n, tmp);
     snprintf(buf, n, "%s%s", tmp, name);
 #else
-    snprintf(buf, n, "/tmp/%s", name);
+    snprintf(buf, n, TEST_TMP_DIR "/%s", name);
 #endif
 }
 
@@ -123,7 +123,8 @@ int test_kh_add_then_check_ok(void)
     ASSERT_EQ(setup_kh(&kh, "nutshell_kh_test2.txt"), KNOWNHOSTS_OK);
 
     ASSERT_EQ(knownhosts_add(&kh, "myhost.example.com", 22,
-                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN),
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA),
               KNOWNHOSTS_OK);
     int rc = knownhosts_check(&kh, "myhost.example.com", 22,
                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
@@ -141,7 +142,8 @@ int test_kh_mismatch(void)
     ASSERT_EQ(setup_kh(&kh, "nutshell_kh_test3.txt"), KNOWNHOSTS_OK);
 
     ASSERT_EQ(knownhosts_add(&kh, "mismatch.example.com", 22,
-                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN),
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA),
               KNOWNHOSTS_OK);
     int rc = knownhosts_check(&kh, "mismatch.example.com", 22,
                                (const char *)TEST_KEY_B, TEST_KEY_B_LEN,
@@ -178,7 +180,8 @@ int test_kh_file_created_on_add(void)
     KnownHosts kh;
     ASSERT_EQ(knownhosts_init(&kh, g_sess->session, path), KNOWNHOSTS_OK);
     ASSERT_EQ(knownhosts_add(&kh, "filetest.example.com", 22,
-                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN),
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA),
               KNOWNHOSTS_OK);
 
     FILE *f = fopen(path, "r");
@@ -196,9 +199,11 @@ int test_kh_multiple_hosts(void)
     ASSERT_EQ(setup_kh(&kh, "nutshell_kh_test6.txt"), KNOWNHOSTS_OK);
 
     ASSERT_EQ(knownhosts_add(&kh, "host1.example.com", 22,
-                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN), KNOWNHOSTS_OK);
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
     ASSERT_EQ(knownhosts_add(&kh, "host2.example.com", 22,
-                              (const char *)TEST_KEY_B, TEST_KEY_B_LEN), KNOWNHOSTS_OK);
+                              (const char *)TEST_KEY_B, TEST_KEY_B_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
 
     ASSERT_EQ(knownhosts_check(&kh, "host1.example.com", 22,
                                 (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
@@ -232,7 +237,8 @@ int test_kh_null_inputs(void)
                                   (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
                                   NULL, 0) == KNOWNHOSTS_ERROR);
     ASSERT_TRUE(knownhosts_add(NULL, "h", 22,
-                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN)
+                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA)
                 == KNOWNHOSTS_ERROR);
 
     knownhosts_free(NULL); /* must not crash */
@@ -248,9 +254,11 @@ int test_kh_key_rotation(void)
 
     /* Add key A, then update to key B */
     ASSERT_EQ(knownhosts_add(&kh, "rotate.example.com", 22,
-                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN), KNOWNHOSTS_OK);
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
     ASSERT_EQ(knownhosts_add(&kh, "rotate.example.com", 22,
-                              (const char *)TEST_KEY_B, TEST_KEY_B_LEN), KNOWNHOSTS_OK);
+                              (const char *)TEST_KEY_B, TEST_KEY_B_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
 
     /* Only key B should now match */
     ASSERT_EQ(knownhosts_check(&kh, "rotate.example.com", 22,

@@ -38,7 +38,7 @@ int test_ssh_io_safety(void) {
     TEST_BEGIN();
 
     // Test NULL inputs for IO poll
-    ASSERT_EQ(ssh_io_poll(NULL, NULL, NULL), -1);
+    ASSERT_EQ(ssh_io_poll(NULL, NULL, NULL, NULL), -1);
 
     // Test blocking mode setter safety
     SshSession *s = ssh_session_new();
@@ -91,15 +91,15 @@ int test_pty_resize_initial_state(void) {
     TEST_BEGIN();
 
     /* A freshly zeroed channel has last_cols == 0, last_rows == 0.
-     * Resizing to (0, 0) should be a no-op (dedup fires), not a libssh2 call.
-     * Resizing to any real size with a NULL channel must return -1. */
+     * The NULL-channel guard runs before the dedup check, so any resize on a
+     * channel with no libssh2 handle returns -1 — even a same-size one. */
     SSHChannel ch;
     ch.channel   = NULL;
     ch.ssh       = NULL;
     ch.last_cols = 0;
     ch.last_rows = 0;
 
-    ASSERT_EQ(ssh_pty_resize(&ch, 0, 0), 0);   /* dedup – same as initial */
+    ASSERT_EQ(ssh_pty_resize(&ch, 0, 0), -1);  /* NULL channel wins over dedup */
     ASSERT_EQ(ssh_pty_resize(&ch, 80, 24), -1); /* NULL channel → -1 */
 
     TEST_END();
