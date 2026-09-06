@@ -3,7 +3,7 @@
 **Author:** Opus (spec/plan) + Sonnet (implementation)
 **Branch:** `ai_tooling`
 **Date:** 2026-04-09
-**Status:** Draft — Revised after review
+**Status:** Implemented (ai_tools.c, ai_agentic.c, web search + web fetch tools, 2026-04). The `[EXEC]` marker path still coexists with native tool use; retiring it is a separate piece of work. Historical spec — moved from the repo root 2026-09-07.
 
 ---
 
