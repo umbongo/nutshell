@@ -49,6 +49,22 @@ public class NutshellNative {
         mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
     }
 
+    [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+
+    /* Client size of a window (physical px). */
+    public static RECT ClientSize(IntPtr h) { RECT r; GetClientRect(h, out r); return r; }
+
+    /* Left-click at client coordinates — independent of title bar / menu bar
+     * height, which differ between DPIs and Windows versions. */
+    public static void ClickClient(IntPtr h, int cx, int cy) {
+        POINT p; p.X = cx; p.Y = cy; ClientToScreen(h, ref p);
+        SetCursorPos(p.X, p.Y); System.Threading.Thread.Sleep(100);
+        mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); System.Threading.Thread.Sleep(60);
+        mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
+    }
+
     public static List<string> ListWindows(uint pid) {
         var o = new List<string>();
         EnumWindows((h, l) => {
@@ -248,10 +264,13 @@ function Open-NutshellSecondTab {
 function Select-NutshellTab {
     <# Click tab N (0-based) in the tab strip, then refocus the terminal. #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int] $Index)
+    # The tab strip is the top SZ_TAB_H (32 px at 96 DPI) of the client area;
+    # tabs start after the "+" button. Client coordinates sidestep the title
+    # and menu bars, whose heights vary with DPI.
     $scale = [NutshellNative]::GetDpiForWindow($Session.Main) / 96.0
-    $x = [int]((100 + 108 * $Index) * $scale)
-    $y = [int](64 * $scale)
-    [NutshellNative]::ClickAt($Session.Main, $x, $y)
+    $x = [int]((100 + 160 * $Index) * $scale)
+    $y = [int](16 * $scale)
+    [NutshellNative]::ClickClient($Session.Main, $x, $y)
     Start-Sleep -Milliseconds 700
 }
 
@@ -315,8 +334,12 @@ function Send-NutshellAiPrompt {
 function Set-NutshellTerminalFocus {
     <# Click inside the terminal area so keystrokes go to the shell, not the AI input box. #>
     param([Parameter(Mandatory)] $Session)
+    # Click low in the terminal's client area (near the prompt, left of any
+    # docked AI panel), then bring the window forward so SendKeys targets it.
     $scale = [NutshellNative]::GetDpiForWindow($Session.Main) / 96.0
-    [NutshellNative]::ClickAt($Session.Main, [int](150 * $scale), [int](250 * $scale))
+    $c = [NutshellNative]::ClientSize($Session.Main)
+    [NutshellNative]::ClickClient($Session.Main, [int](100 * $scale), [int]($c.B - 60 * $scale))
+    [NutshellNative]::SetForegroundWindow($Session.Main) | Out-Null
     Start-Sleep -Milliseconds 300
 }
 
