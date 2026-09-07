@@ -14,7 +14,7 @@ case) are all green. Next action is sub-project 3 (main window chrome:
 single toolbar replacing the menu bar, tab strip, status). Resume from
 "Todo" below.
 
-Branch: `ui-polish` (branched from `main` at v1.0.76; now at v1.0.96).
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.0.96.
 
 ## Decisions so far
 
