@@ -21,6 +21,8 @@
 #include "ns_reduced_motion.h"
 #include "ns_hover.h"
 #include "ai_panel_layout.h"
+#include "ai_panel_states.h"
+#include "settings_layout.h"
 #include "ui_theme.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
@@ -107,6 +109,14 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define IDC_CHAT_DENY     4012
 #define IDC_CHAT_UNDOCK   4013
 #define IDC_CHAT_AUTOAPPROVE 4015
+/* Empty/no-key/no-session state (ai_panel_states.h), posted by
+ * chat_listview.c when the message list is empty -- see
+ * chatlv_empty_state_hit()/on_lbuttondown() there (AI Assist Panel
+ * task 4). IDC_CHAT_SUGGESTION_BASE + 0..2 are the three suggestion
+ * chips (AI_STATE_EMPTY); IDC_CHAT_STATE_ACTION is the single action
+ * button (AI_STATE_NO_KEY/AI_STATE_NO_SESSION). */
+#define IDC_CHAT_SUGGESTION_BASE 4020  /* 4020..4022 */
+#define IDC_CHAT_STATE_ACTION    4023
 
 #define WM_AI_RESPONSE   (WM_USER + 100)
 #define WM_AI_CONTINUE   (WM_USER + 101)
@@ -319,6 +329,15 @@ typedef struct {
     WebSearchContext search_ctx;
     WebFetchContext  fetch_ctx;
     int tool_support_notified;  /* 1 after showing "tools unavailable" message */
+
+    /* Empty/no-key/no-session state (ai_panel_states.h), pushed to
+     * hChatList whenever it might change -- see update_panel_state()
+     * below (AI Assist Panel task 4). -1 = no forced override: the state
+     * is decided from active_channel/api_key. --ui-demo's "empty" state
+     * forces AI_STATE_EMPTY via ai_chat_force_state() even though the
+     * demo session has no channel (it would otherwise read as
+     * AI_STATE_NO_SESSION). */
+    int forced_state;
 } AiChatData;
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -832,6 +851,30 @@ static void update_context_bar(AiChatData *d)
     invalidate_status_line(d);
 }
 
+/* Decide and push the empty/no-key/no-session state (ai_panel_states.h)
+ * to the chat list view. chat_listview only paints/hit-tests it while
+ * the message list actually has zero items, so it is harmless (and
+ * cheap) to call this any time the inputs to the decision might have
+ * changed: the panel is shown, the session changes, the API key changes,
+ * or the conversation is reset. See the spec's "Empty and blocked
+ * states (frame C)" section. */
+static void update_panel_state(AiChatData *d)
+{
+    if (!d || !d->hChatList) return;
+
+    int state;
+    if (d->forced_state >= 0)
+        state = d->forced_state;
+    else if (!d->active_channel)
+        state = AI_STATE_NO_SESSION;
+    else if (d->api_key[0] == '\0')
+        state = AI_STATE_NO_KEY;
+    else
+        state = AI_STATE_EMPTY;
+
+    chat_listview_set_state(d->hChatList, state, d->context_lines);
+}
+
 /* Start (or replace) the busy-indicator text shown in place of the status
  * line's context meter numbers while a command/response is in flight (the
  * per-message activity dot + word in the header covers most of the same
@@ -870,10 +913,9 @@ static void chat_rebuild_display(AiChatData *d)
     chat_msg_list_clear(&d->msg_list);
     d->stream_ai_item = NULL;
 
-    /* Add welcome status message */
-    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-        "AI Assist - Type a message and press Enter or click Send.\n"
-        "The AI can see your terminal and execute commands.");
+    /* No welcome placeholder any more -- an empty msg_list here (no real
+     * messages replayed below) is painted by chat_listview as the empty/
+     * no-key/no-session state instead (see update_panel_state()). */
 
     /* Replay messages, skipping the system prompt at index 0 */
     for (int i = 1; i < d->conv.msg_count; i++) {
@@ -2376,16 +2418,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             SendMessage(nd->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
         }
 
-        /* Show loaded conversation or fresh welcome message */
-        if (nd->conv.msg_count > 0) {
-            chat_rebuild_display(nd);
-        } else {
-            chat_msg_append(&nd->msg_list, CHAT_ITEM_STATUS,
-                "AI Assist - Type a message and press Enter or click Send.\n"
-                "The AI can see your terminal and execute commands.");
-            if (nd->hChatList)
-                chat_listview_invalidate(nd->hChatList);
-        }
+        /* Replays any loaded conversation, or leaves msg_list empty for
+         * chat_listview to paint the empty/no-key/no-session state
+         * (set just below -- active_channel isn't known yet at this
+         * point, ai_chat_set_session() corrects it right after). */
+        chat_rebuild_display(nd);
+        update_panel_state(nd);
 
         update_context_bar(nd);
         relayout(nd);
@@ -2559,6 +2597,43 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
             SetFocus(d->hInput);
             return 0;
+        case IDC_CHAT_SUGGESTION_BASE:
+        case IDC_CHAT_SUGGESTION_BASE + 1:
+        case IDC_CHAT_SUGGESTION_BASE + 2: {
+            /* Empty-state suggestion chip (chat_listview.c): drop its
+             * text into the input box and send it via the normal path. */
+            if (!d) return 0;
+            int i = (int)LOWORD(wParam) - IDC_CHAT_SUGGESTION_BASE;
+            int count = 0;
+            const char *const *sugg = ai_panel_suggestions(&count);
+            if (i >= 0 && i < count) {
+                SetWindowText(d->hInput, sugg[i]);
+                send_user_message(d);
+                SetFocus(d->hInput);
+            }
+            return 0;
+        }
+        case IDC_CHAT_STATE_ACTION: {
+            /* Empty-state action button (chat_listview.c): NO_KEY opens
+             * Settings on the Provider page, NO_SESSION opens the
+             * Session Manager -- both handled by the main window
+             * (window.c), so post there rather than act locally. */
+            if (!d) return 0;
+            HWND main_hwnd = GetParent(hwnd);
+            if (!main_hwnd) return 0;
+            /* Same precedence as update_panel_state(): no channel means
+             * NO_SESSION is showing (even if the key is also empty), so
+             * check active_channel first rather than api_key. */
+            if (!d->active_channel) {
+                PostMessage(main_hwnd, WM_COMMAND,
+                           MAKEWPARAM(IDM_FILE_CONNECT, 0), 0);
+            } else {
+                PostMessage(main_hwnd, WM_COMMAND,
+                           MAKEWPARAM(IDM_EDIT_SETTINGS, 0),
+                           (LPARAM)SETTINGS_PAGE_AI_PROVIDER);
+            }
+            return 0;
+        }
         case IDC_CHAT_NEWCHAT:
             if (d) {
                 /* Cancel any active stream first */
@@ -2590,14 +2665,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
                 thinking_history_clear(d);
-                /* Clear display and show welcome message */
+                /* Clear display -- an empty msg_list is painted as the
+                 * empty/no-key/no-session state (update_panel_state()). */
                 chat_msg_list_clear(&d->msg_list);
                 d->stream_ai_item = NULL;
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                    "AI Assist - Type a message and press Enter or click Send.\n"
-                    "The AI can see your terminal and execute commands.");
                 if (d->hChatList)
                     chat_listview_invalidate(d->hChatList);
+                update_panel_state(d);
                 /* Clear input field */
                 SetWindowText(d->hInput, "");
                 SetFocus(d->hInput);
@@ -3783,6 +3857,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     InitializeCriticalSection(&d->cs);
     d->indicator_pos = -1;
     d->stream_display_start = -1;
+    d->forced_state = -1;
     d->paste_delay_ms = paste_delay_ms;
     d->context_lines = AI_CONTEXT_LINES_DEFAULT;
     if (font_name && font_name[0])
@@ -3864,6 +3939,16 @@ void ai_chat_set_session(HWND hwnd, Terminal *term, SSHChannel *channel)
     if (!d) return;
     d->active_term = term;
     d->active_channel = channel;
+    update_panel_state(d);
+}
+
+void ai_chat_force_state(HWND hwnd, int state_id)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    d->forced_state = state_id;
+    update_panel_state(d);
 }
 
 void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
@@ -3892,6 +3977,8 @@ void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
     /* Update model name on chat listview */
     if (d->hChatList)
         chat_listview_set_model(d->hChatList, d->conv.model);
+
+    update_panel_state(d);
 }
 
 void ai_chat_update_tools(HWND hwnd,
@@ -4114,6 +4201,7 @@ static void do_session_switch(AiChatData *d,
     relayout(d);
 
     chat_rebuild_display(d);
+    update_panel_state(d);
 
     /* Re-show the command approval prompt if switching back to a
      * session with pending approval */
@@ -4251,6 +4339,17 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * resurrect a stale batch from a different session, so that replay is
      * done here instead, demo-only. */
     chat_rebuild_display(d);
+
+    /* The demo session has no channel (window.c's create_demo_session
+     * passes NULL), so update_panel_state() would otherwise read every
+     * demo state as AI_STATE_NO_SESSION. Only "empty" actually leaves
+     * msg_list empty (every other state's replayed turns make the state
+     * moot -- chat_listview only paints it when the list has zero items),
+     * so force AI_STATE_EMPTY there and leave every other state
+     * undecided-but-irrelevant. ui_demo gains dedicated "nokey"/
+     * "nosession" states in task 5. */
+    ai_chat_force_state(hwnd, (state && strcmp(state, "empty") == 0)
+                              ? AI_STATE_EMPTY : -1);
 
     /* Gallery: "chat" shows the Thinking disclosure collapsed (the normal
      * post-reply state); "all" shows it expanded so the review set covers

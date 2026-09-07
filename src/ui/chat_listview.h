@@ -70,6 +70,14 @@ typedef struct {
     NsHover hover;
     int hover_tracking;         /* 1 while TrackMouseEvent(TME_LEAVE) is armed */
 
+    /* "Nothing to show yet" state (ai_panel_states.h's AiPanelStateId, or
+     * -1 for none), painted by on_paint() only while the message list has
+     * zero items -- see chat_listview_set_state() and AI Assist Panel
+     * task 4's "Empty and blocked states" section. state_context_lines
+     * feeds AI_STATE_EMPTY's "last N lines" body. */
+    int state_id;
+    int state_context_lines;
+
 } ChatListView;
 
 /* Register the window class. Call once at startup. */
@@ -121,5 +129,12 @@ void chat_listview_set_model(HWND hwnd, const char *model);
 
 /* Toggle markdown rendering. Triggers a redraw. Default after create: 1. */
 void chat_listview_set_render_markdown(HWND hwnd, int enabled);
+
+/* Set (or clear, with state_id = -1) the "nothing to show yet" state to
+ * paint when the message list has no items -- an AiPanelStateId from
+ * ai_panel_states.h (AI_STATE_EMPTY/NO_KEY/NO_SESSION). context_lines is
+ * substituted into AI_STATE_EMPTY's body ("last N lines"); ignored by the
+ * other states. Triggers a repaint; a no-op HWND is ignored. */
+void chat_listview_set_state(HWND hwnd, int state_id, int context_lines);
 
 #endif /* NUTSHELL_CHAT_LISTVIEW_H */

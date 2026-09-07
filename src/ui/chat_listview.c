@@ -23,7 +23,9 @@
 #include "ns_reduced_motion.h"
 #include "chat_approval.h"
 #include "ai_panel_layout.h"
+#include "ai_panel_states.h"
 #include "ai_prompt.h"
+#include "ns_font.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -102,6 +104,30 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define CLV_THINK_HOVER_BASE      (CLV_HOVER_RETRY + 1)
 #define CLV_THINK_HOVER_ID(iid)   (CLV_THINK_HOVER_BASE + (iid))
 
+/* Empty/no-key/no-session state (ai_panel_states.h) -- three suggestion
+ * chips or a single action button, painted by paint_empty_state() only
+ * when the message list has zero items. No other painted element can
+ * exist while this one shows (the list is empty), so a dedicated range
+ * far above every id above never collides with it. */
+#define CLV_STATE_CHIP_BASE      0x10000
+#define CLV_STATE_CHIP_HIT(i)    (CLV_STATE_CHIP_BASE + (i))
+#define CLV_STATE_BUTTON_HIT     (CLV_STATE_CHIP_BASE + 100)
+
+/* Geometry for the empty/no-key/no-session state, shared by
+ * paint_empty_state() and chatlv_empty_state_hit()/
+ * chatlv_hover_rect_for_id() so painting and hit-testing never drift
+ * apart. Built fresh from ai_panel_state()/ai_panel_state_body() on every
+ * call -- cheap, and always correct after a resize or state change. */
+typedef struct {
+    RECT icon;
+    RECT title;
+    RECT body;
+    int  is_button;   /* 1 = single action button (NO_KEY/NO_SESSION) */
+    RECT button;
+    int  n_chips;     /* 0..3, only when !is_button (AI_STATE_EMPTY) */
+    RECT chip[3];
+} EmptyStateLayout;
+
 /* ── Forward declarations ───────────────────────────────────────────── */
 
 static LRESULT CALLBACK ChatListWndProc(HWND, UINT, WPARAM, LPARAM);
@@ -123,6 +149,14 @@ static void     paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                               const ApprovalRowLayout *row, int row_idx);
 static void     paint_status_item(ChatListView *lv, HDC hdc,
                                   ChatMsgItem *item, RECT *rc);
+static void     build_empty_state_layout(ChatListView *lv, HDC hdc,
+                                         const RECT *client_rc,
+                                         EmptyStateLayout *out);
+static void     paint_empty_state(ChatListView *lv, HDC hdc,
+                                  const RECT *client_rc);
+static int      chatlv_empty_state_hit(ChatListView *lv, int mx, int my,
+                                       RECT *out_rc);
+static int      chatlv_list_empty(const ChatListView *lv);
 
 /* command_index_of: reserved for future use (e.g., tooltip lookup) */
 
@@ -401,6 +435,7 @@ HWND chat_listview_create(HWND parent, int x, int y, int w, int h,
     lv->theme    = theme;
     lv->dpi_scale = 1.0f;
     lv->render_markdown = 1;
+    lv->state_id = -1;
     ns_hover_init(&lv->hover);
 
     /* Compute scaled layout constants */
@@ -513,6 +548,15 @@ void chat_listview_set_render_markdown(HWND hwnd, int enabled)
     lv->render_markdown = v;
     /* Layout heights change with the new mode — recalc and redraw. */
     chat_listview_invalidate(hwnd);
+}
+
+void chat_listview_set_state(HWND hwnd, int state_id, int context_lines)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    lv->state_id = state_id;
+    lv->state_context_lines = context_lines;
+    InvalidateRect(hwnd, NULL, FALSE);
 }
 
 void chat_listview_invalidate(HWND hwnd)
@@ -1589,6 +1633,309 @@ static void paint_status_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     SelectObject(hdc, old_font);
 }
 
+/* ── Empty/no-key/no-session state (ai_panel_states.h) ────────────────
+ * Painted by on_paint() in place of the normal item walk whenever the
+ * message list has zero items and a state has been set via
+ * chat_listview_set_state() -- see AI Assist Panel task 4's "Empty and
+ * blocked states" section. ─────────────────────────────────────────── */
+
+static int chatlv_list_empty(const ChatListView *lv)
+{
+    return !lv || !lv->msg_list || lv->msg_list->count == 0;
+}
+
+/* Lay out the glyph circle, title, body and the chip row / action button
+ * centred in `client_rc`. Cheap (no allocation, no caching) so painting
+ * and hit-testing can each call it fresh and never disagree. */
+static void build_empty_state_layout(ChatListView *lv, HDC hdc,
+                                     const RECT *client_rc,
+                                     EmptyStateLayout *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (!lv || lv->state_id < 0) return;
+
+    const AiPanelState *st = ai_panel_state(lv->state_id);
+    if (!st) return;
+
+    int dpi = CLV_DPI(lv);
+    int cw = client_rc->right - client_rc->left;
+    int ch = client_rc->bottom - client_rc->top;
+    int side_pad = ns_scale(BASE_SIDE_PAD, dpi);
+
+    char body_buf[256];
+    ai_panel_state_body(lv->state_id, lv->state_context_lines,
+                        body_buf, sizeof(body_buf));
+
+    /* Wrap width: ~28 characters of FONT_BODY, clamped to what actually
+     * fits so a narrow docked panel never clips instead of wrapping. */
+    int max_w = cw - 2 * side_pad;
+    if (max_w < ns_scale(40, dpi)) max_w = cw > 0 ? cw : ns_scale(200, dpi);
+    int wrap_w = max_w;
+    HFONT body_font = ns_font(FONT_BODY, dpi);
+    HFONT title_font = ns_font(FONT_TITLE, dpi);
+    {
+        HGDIOBJ old = SelectObject(hdc, body_font);
+        TEXTMETRICA tm;
+        GetTextMetricsA(hdc, &tm);
+        int chars_w = tm.tmAveCharWidth * 28;
+        if (chars_w > 0 && chars_w < wrap_w) wrap_w = chars_w;
+        SelectObject(hdc, old);
+    }
+
+    /* Measure title (single line) and body (wrapped) heights */
+    RECT title_calc = { 0, 0, wrap_w, 0 };
+    HGDIOBJ old_tf = SelectObject(hdc, title_font);
+    draw_text_utf8(hdc, st->title, &title_calc,
+                   DT_CENTER | DT_NOPREFIX | DT_WORDBREAK | DT_CALCRECT);
+    SelectObject(hdc, old_tf);
+
+    RECT body_calc = { 0, 0, wrap_w, 0 };
+    HGDIOBJ old_bf = SelectObject(hdc, body_font);
+    draw_text_utf8(hdc, body_buf, &body_calc,
+                   DT_CENTER | DT_NOPREFIX | DT_WORDBREAK | DT_CALCRECT);
+    SelectObject(hdc, old_bf);
+
+    int icon_d = ns_scale(SZ_ICON, dpi) * 2;
+    int gap_icon_title  = ns_scale(SP_MD, dpi);
+    int gap_title_body  = ns_scale(SP_XS, dpi);
+    int gap_body_action = ns_scale(SP_LG, dpi);
+
+    int title_w = title_calc.right - title_calc.left;
+    int title_h = title_calc.bottom - title_calc.top;
+    int body_w  = body_calc.right - body_calc.left;
+    int body_h  = body_calc.bottom - body_calc.top;
+
+    /* ── Action row: three chips (EMPTY) or one button (NO_KEY/NO_SESSION) */
+    int action_h;
+    int chip_w[3] = {0, 0, 0};
+    int n_chips = 0;
+    HFONT chip_font = ns_font(FONT_CAPTION, dpi);
+    int pad_chip = ns_scale(SP_MD, dpi);
+    int gap_chip = ns_scale(SP_SM, dpi);
+    int chip_h = ns_scale(SZ_CTRL_H, dpi);
+    int btn_w = 0, btn_h = 0;
+
+    out->is_button = !st->has_suggestions;
+
+    if (out->is_button) {
+        HFONT btn_font = ns_font(FONT_BODY, dpi);
+        SIZE sz = {0, 0};
+        if (st->action_label) {
+            HGDIOBJ old = SelectObject(hdc, btn_font);
+            GetTextExtentPoint32A(hdc, st->action_label,
+                                  (int)strlen(st->action_label), &sz);
+            SelectObject(hdc, old);
+        }
+        btn_h = ns_scale(SZ_CTRL_H, dpi);
+        btn_w = sz.cx + 2 * ns_scale(SP_LG, dpi);
+        int min_btn_w = ns_scale(SZ_BTN_MIN_W, dpi);
+        if (btn_w < min_btn_w) btn_w = min_btn_w;
+        action_h = btn_h;
+    } else {
+        int count;
+        const char *const *sugg = ai_panel_suggestions(&count);
+        n_chips = count < 3 ? count : 3;
+        HGDIOBJ old = SelectObject(hdc, chip_font);
+        for (int i = 0; i < n_chips; i++) {
+            SIZE sz = {0, 0};
+            GetTextExtentPoint32A(hdc, sugg[i], (int)strlen(sugg[i]), &sz);
+            chip_w[i] = sz.cx + 2 * pad_chip;
+        }
+        SelectObject(hdc, old);
+        action_h = chip_h;   /* one row unless it has to wrap (below) */
+    }
+
+    /* Chip rows: try to fit all n_chips on one row; fall back to
+     * one-per-row when the docked panel is too narrow. Only two shapes
+     * are possible for 3 chips, so a small cascade covers every case. */
+    int chip_rows[3][3];   /* chip_rows[row][slot] = chip index, -1 = end */
+    int n_rows = 0;
+    if (!out->is_button) {
+        int all_w = 0;
+        for (int i = 0; i < n_chips; i++) all_w += chip_w[i];
+        all_w += gap_chip * (n_chips > 0 ? n_chips - 1 : 0);
+
+        if (n_chips == 0) {
+            n_rows = 0;
+        } else if (all_w <= max_w) {
+            n_rows = 1;
+            for (int i = 0; i < n_chips; i++) chip_rows[0][i] = i;
+            for (int i = n_chips; i < 3; i++) chip_rows[0][i] = -1;
+        } else if (n_chips == 3 &&
+                  (chip_w[0] + gap_chip + chip_w[1]) <= max_w) {
+            n_rows = 2;
+            chip_rows[0][0] = 0; chip_rows[0][1] = 1; chip_rows[0][2] = -1;
+            chip_rows[1][0] = 2; chip_rows[1][1] = -1; chip_rows[1][2] = -1;
+        } else {
+            n_rows = n_chips;
+            for (int i = 0; i < n_chips; i++) {
+                chip_rows[i][0] = i;
+                chip_rows[i][1] = -1;
+                chip_rows[i][2] = -1;
+            }
+        }
+        action_h = n_rows > 0
+            ? n_rows * chip_h + (n_rows - 1) * gap_chip
+            : 0;
+    }
+
+    int total_h = icon_d + gap_icon_title + title_h + gap_title_body +
+                  body_h + gap_body_action + action_h;
+    int top = (ch - total_h) / 2;
+    if (top < side_pad) top = side_pad;
+
+    int cx = client_rc->left + cw / 2;
+
+    out->icon.left   = cx - icon_d / 2;
+    out->icon.top    = top;
+    out->icon.right  = out->icon.left + icon_d;
+    out->icon.bottom = out->icon.top + icon_d;
+
+    out->title.left   = cx - title_w / 2;
+    out->title.top    = out->icon.bottom + gap_icon_title;
+    out->title.right  = out->title.left + title_w;
+    out->title.bottom = out->title.top + title_h;
+
+    out->body.left   = cx - body_w / 2;
+    out->body.top    = out->title.bottom + gap_title_body;
+    out->body.right  = out->body.left + body_w;
+    out->body.bottom = out->body.top + body_h;
+
+    int action_top = out->body.bottom + gap_body_action;
+
+    if (out->is_button) {
+        out->button.left   = cx - btn_w / 2;
+        out->button.top    = action_top;
+        out->button.right  = out->button.left + btn_w;
+        out->button.bottom = out->button.top + btn_h;
+    } else {
+        out->n_chips = n_chips;
+        for (int r = 0; r < n_rows; r++) {
+            int row_w = 0, row_n = 0;
+            for (int s = 0; s < 3 && chip_rows[r][s] >= 0; s++) {
+                row_w += chip_w[chip_rows[r][s]];
+                row_n++;
+            }
+            row_w += gap_chip * (row_n > 0 ? row_n - 1 : 0);
+            int x = cx - row_w / 2;
+            int y = action_top + r * (chip_h + gap_chip);
+            for (int s = 0; s < row_n; s++) {
+                int idx = chip_rows[r][s];
+                out->chip[idx].left   = x;
+                out->chip[idx].top    = y;
+                out->chip[idx].right  = x + chip_w[idx];
+                out->chip[idx].bottom = y + chip_h;
+                x += chip_w[idx] + gap_chip;
+            }
+        }
+    }
+}
+
+static void paint_empty_state(ChatListView *lv, HDC hdc, const RECT *client_rc)
+{
+    const AiPanelState *st = ai_panel_state(lv->state_id);
+    if (!st) return;
+
+    const ThemeTokens *tok = ns_tokens();
+    int dpi = CLV_DPI(lv);
+
+    EmptyStateLayout el;
+    build_empty_state_layout(lv, hdc, client_rc, &el);
+
+    SetBkMode(hdc, TRANSPARENT);
+
+    /* Glyph in a border-stroked circle, accent foreground */
+    int icon_d = el.icon.right - el.icon.left;
+    ns_draw_round_stroke(hdc, &el.icon, icon_d / 2,
+                         RGB_FROM_THEME(tok->border), STROKE_HAIRLINE);
+    {
+        int inner_d = ns_scale(SZ_ICON, dpi);
+        RECT glyph_rc = {
+            el.icon.left + (icon_d - inner_d) / 2,
+            el.icon.top  + (icon_d - inner_d) / 2,
+            0, 0
+        };
+        glyph_rc.right  = glyph_rc.left + inner_d;
+        glyph_rc.bottom = glyph_rc.top + inner_d;
+        ns_icon_draw(hdc, NS_ICON_AI, &glyph_rc,
+                    RGB_FROM_THEME(tok->accent.base), (UINT)dpi);
+    }
+
+    /* Title (FONT_TITLE, text_main) */
+    SetTextColor(hdc, RGB_FROM_THEME(tok->text_main));
+    {
+        HGDIOBJ old = SelectObject(hdc, ns_font(FONT_TITLE, dpi));
+        RECT title_rc = el.title;
+        draw_text_utf8(hdc, st->title, &title_rc,
+                       DT_CENTER | DT_NOPREFIX | DT_WORDBREAK);
+        SelectObject(hdc, old);
+    }
+
+    /* Body (FONT_BODY, text_dim) */
+    {
+        char body_buf[256];
+        ai_panel_state_body(lv->state_id, lv->state_context_lines,
+                            body_buf, sizeof(body_buf));
+        SetTextColor(hdc, RGB_FROM_THEME(tok->text_dim));
+        HGDIOBJ old = SelectObject(hdc, ns_font(FONT_BODY, dpi));
+        RECT body_rc = el.body;
+        draw_text_utf8(hdc, body_buf, &body_rc,
+                       DT_CENTER | DT_NOPREFIX | DT_WORDBREAK);
+        SelectObject(hdc, old);
+    }
+
+    if (el.is_button) {
+        NsBtnState state = (NsBtnState)ns_hover_state_for(&lv->hover,
+                                                           CLV_STATE_BUTTON_HIT);
+        ns_draw_button(hdc, &el.button, &tok->accent, state, 0,
+                      st->action_label, ns_font(FONT_BODY, dpi), dpi);
+    } else {
+        int count;
+        const char *const *sugg = ai_panel_suggestions(&count);
+        HFONT chip_font = ns_font(FONT_CAPTION, dpi);
+        for (int i = 0; i < el.n_chips && i < count; i++) {
+            int hover = ns_hover_state_for(&lv->hover, CLV_STATE_CHIP_HIT(i));
+            COLORREF bg = hover ? RGB_FROM_THEME(tok->raised.hover)
+                                : RGB_FROM_THEME(tok->raised.base);
+            ns_draw_chip(hdc, &el.chip[i], bg, RGB_FROM_THEME(tok->text_main),
+                        chip_font, sugg[i]);
+        }
+    }
+}
+
+/* Hit-test the empty/no-key/no-session state for hover and click purposes.
+ * Returns CLV_STATE_CHIP_HIT(i) / CLV_STATE_BUTTON_HIT, or -1 when nothing
+ * hittable is under (mx, my). Only meaningful while chatlv_list_empty()
+ * and lv->state_id >= 0 -- callers are expected to check that first. */
+static int chatlv_empty_state_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
+{
+    RECT client_rc;
+    GetClientRect(lv->hwnd, &client_rc);
+
+    EmptyStateLayout el;
+    HDC hdc = GetDC(lv->hwnd);
+    build_empty_state_layout(lv, hdc, &client_rc, &el);
+    if (hdc) ReleaseDC(lv->hwnd, hdc);
+
+    if (el.is_button) {
+        if (mx >= el.button.left && mx < el.button.right &&
+            my >= el.button.top && my < el.button.bottom) {
+            if (out_rc) *out_rc = el.button;
+            return CLV_STATE_BUTTON_HIT;
+        }
+        return -1;
+    }
+
+    for (int i = 0; i < el.n_chips; i++) {
+        if (mx >= el.chip[i].left && mx < el.chip[i].right &&
+            my >= el.chip[i].top && my < el.chip[i].bottom) {
+            if (out_rc) *out_rc = el.chip[i];
+            return CLV_STATE_CHIP_HIT(i);
+        }
+    }
+    return -1;
+}
+
 /* ── Activity indicator colour from health status ───────────────────── */
 
 static COLORREF activity_health_color(const ChatListView *lv, HealthStatus h)
@@ -1722,6 +2069,20 @@ static void on_paint(ChatListView *lv)
     HBRUSH bg_br = CreateSolidBrush(bg);
     FillRect(mem_dc, &client, bg_br);
     DeleteObject(bg_br);
+
+    /* Empty/no-key/no-session state: replaces the normal item walk
+     * entirely while the list has zero items and a state is set (AI
+     * Assist Panel task 4). */
+    if (chatlv_list_empty(lv) && lv->state_id >= 0) {
+        paint_empty_state(lv, mem_dc, &client);
+
+        BitBlt(hdc, 0, 0, cw, ch, mem_dc, 0, 0, SRCCOPY);
+        SelectObject(mem_dc, old_bmp);
+        DeleteObject(bmp);
+        DeleteDC(mem_dc);
+        EndPaint(lv->hwnd, &ps);
+        return;
+    }
 
     /* Walk items, skip those above viewport, stop after those below */
     int y = lv->msg_gap - lv->scroll_y;
@@ -2013,6 +2374,9 @@ static int chatlv_thinking_row_hit(ChatListView *lv, int mx, int my,
  * under the cursor. */
 static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
 {
+    if (chatlv_list_empty(lv) && lv->state_id >= 0)
+        return chatlv_empty_state_hit(lv, mx, my, out_rc);
+
     int cy, ch;
     ChatMsgItem *citem = find_active_cmd_container(lv, &cy, &ch);
     if (citem && my >= cy && my < cy + ch) {
@@ -2068,6 +2432,26 @@ static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
 static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
 {
     if (id < 0) return 0;
+
+    if (id >= CLV_STATE_CHIP_BASE) {
+        if (!chatlv_list_empty(lv) || lv->state_id < 0) return 0;
+        RECT client_rc;
+        GetClientRect(lv->hwnd, &client_rc);
+        EmptyStateLayout el;
+        HDC hdc = GetDC(lv->hwnd);
+        build_empty_state_layout(lv, hdc, &client_rc, &el);
+        if (hdc) ReleaseDC(lv->hwnd, hdc);
+
+        if (id == CLV_STATE_BUTTON_HIT) {
+            if (!el.is_button) return 0;
+            *out = el.button;
+            return 1;
+        }
+        int i = id - CLV_STATE_CHIP_BASE;
+        if (el.is_button || i < 0 || i >= el.n_chips) return 0;
+        *out = el.chip[i];
+        return 1;
+    }
 
     if (id == CLV_HOVER_RETRY) {
         RECT client_rc;
@@ -2138,6 +2522,7 @@ static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
 static int chatlv_hit_is_actionable(int id)
 {
     if (id < 0) return 0;
+    if (id >= CLV_STATE_CHIP_BASE) return 1;   /* empty-state chip/button */
     if (id == CLV_HOVER_RETRY) return 1;
     if (id >= CLV_THINK_HOVER_BASE) return 1;
     if (id == CLV_CARD_HIT_ID(HIT_DENY_ALL) || id == CLV_CARD_HIT_ID(HIT_RUN_SELECTED))
@@ -2153,6 +2538,29 @@ static int chatlv_hit_is_actionable(int id)
 static int on_lbuttondown(ChatListView *lv, int mx, int my)
 {
     SetFocus(lv->hwnd);   /* Acquire keyboard focus so WM_KEYDOWN fires */
+
+    /* Empty/no-key/no-session state: a suggestion chip sends its text as
+     * a prompt (IDC_CHAT_SUGGESTION_BASE + i); the action button opens
+     * Settings on Provider or the Session Manager (IDC_CHAT_STATE_ACTION)
+     * -- both handled by ai_chat.c's WM_COMMAND (private 4xxx id block;
+     * AI Assist Panel task 4). */
+    if (chatlv_list_empty(lv) && lv->state_id >= 0) {
+        RECT hit_rc;
+        int hit = chatlv_empty_state_hit(lv, mx, my, &hit_rc);
+        if (hit < 0) return 0;
+        HWND state_parent = GetParent(lv->hwnd);
+        if (!state_parent) return 1;
+        if (hit == CLV_STATE_BUTTON_HIT) {
+            PostMessage(state_parent, WM_COMMAND,
+                       MAKEWPARAM(4023 /* IDC_CHAT_STATE_ACTION */, 0), 0);
+        } else {
+            int i = hit - CLV_STATE_CHIP_BASE;
+            PostMessage(state_parent, WM_COMMAND,
+                       MAKEWPARAM(4020 + i /* IDC_CHAT_SUGGESTION_BASE */, 0), 0);
+        }
+        return 1;
+    }
+
     int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
 
     /* Walk items to find which one was clicked */

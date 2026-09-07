@@ -44,6 +44,14 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state);
 /* Update the active session's terminal/channel pointers (without switching conversation). */
 void ai_chat_set_session(HWND hwnd, Terminal *term, SSHChannel *channel);
 
+/* Force the empty/no-key/no-session state (an AiPanelStateId from
+ * src/core/ai_panel_states.h), overriding the usual decision from
+ * active_channel/api_key. -1 clears the override and returns to the
+ * normal decision. --ui-demo only: the demo session has no channel, so
+ * without this every demo state would otherwise read as
+ * AI_STATE_NO_SESSION whenever its conversation happens to be empty. */
+void ai_chat_force_state(HWND hwnd, int state_id);
+
 /* Update the API key, provider, and custom URL/model (e.g. after settings change). */
 void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
                         const char *custom_url, const char *custom_model);

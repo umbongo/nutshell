@@ -172,6 +172,7 @@ typedef struct {
 
     int      cur_page; /* SETTINGS_PAGE_* currently shown */
     int      scroll;   /* current page scroll offset, px */
+    int      initial_page; /* SETTINGS_PAGE_* to open on, or -1 for default */
 
     SettingsCtrl ctrls[MAX_SETTINGS_CTRLS];
     int          n_ctrls;
@@ -1254,7 +1255,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         /* ---- Initial nav selection + first layout pass ---- */
         {
-            int idx = settings_nav_first_page();
+            int idx = -1;
+            if (nd->initial_page >= 0)
+                idx = settings_nav_index_of_page(nd->initial_page);
+            if (idx < 0)
+                idx = settings_nav_first_page();
             SendMessage(nd->hNav, LB_SETCURSEL, (WPARAM)idx, 0);
             const SettingsNavEntry *e = settings_nav_at(idx);
             nd->cur_page = e ? e->page_id : SETTINGS_PAGE_APPEARANCE;
@@ -1716,7 +1721,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
 /* ---- Public API --------------------------------------------------------- */
 
-void settings_dlg_show(HWND parent, Config *cfg)
+void settings_dlg_show(HWND parent, Config *cfg, int initial_page)
 {
     if (!cfg) return;
 
@@ -1724,6 +1729,7 @@ void settings_dlg_show(HWND parent, Config *cfg)
     SettingsDlgData *d = (SettingsDlgData *)calloc(1u, sizeof(SettingsDlgData));
     if (!d) return;
     d->cfg = cfg;
+    d->initial_page = initial_page;
 
     WNDCLASSEX wc;
     memset(&wc, 0, sizeof(wc));

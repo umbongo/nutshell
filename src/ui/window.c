@@ -766,9 +766,12 @@ static void apply_config_colors(void)
     g_renderer.defaultBg = RGB((tbg >> 16) & 0xFF, (tbg >> 8) & 0xFF, tbg & 0xFF);
 }
 
-static void on_settings_clicked(void) {
+/* initial_page: a SETTINGS_PAGE_* to open Settings on, or -1 for the
+ * default page (see settings_dlg_show()). Lets the AI Assist panel's
+ * no-key state's "Open Settings" button land on Provider. */
+static void on_settings_clicked_page(int initial_page) {
     HWND parent = GetParent(g_hwndTabs);
-    settings_dlg_show(parent, g_config);
+    settings_dlg_show(parent, g_config, initial_page);
 
     /* Reload theme from config (colour scheme may have changed) */
     {
@@ -841,6 +844,10 @@ static void on_settings_clicked(void) {
     InvalidateRect(parent, NULL, TRUE);
     /* Force tab strip to repaint with new theme */
     InvalidateRect(g_hwndTabs, NULL, TRUE);
+}
+
+static void on_settings_clicked(void) {
+    on_settings_clicked_page(-1);
 }
 
 /* Start the slide animation for the docked AI panel.
@@ -1011,21 +1018,11 @@ static void hide_ai_panel(HWND parent) {
 
 static void on_ai_clicked(void) {
     HWND parent = GetParent(g_hwndTabs);
-    int has_session = g_active_session && g_active_session->channel;
 
-    /* No connected session — block open, allow hide */
-    if (!has_session) {
-        if (g_hwndAiChat && IsWindow(g_hwndAiChat)
-            && IsWindowVisible(g_hwndAiChat)) {
-            hide_ai_panel(parent);
-        } else {
-            MessageBoxA(parent,
-                "No active SSH session.\nPlease connect to a session first.",
-                "AI Assist", MB_OK | MB_ICONINFORMATION);
-        }
-        return;
-    }
-
+    /* The panel always opens now, session or API key or neither -- it
+     * shows the empty/no-key/no-session state itself (ai_panel_states.h,
+     * decided in ai_chat.c's update_panel_state()). No MessageBox gate
+     * here any more (AI Assist Panel task 4). */
     if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
         if (g_ai_docked) {
             /* Docked toggle: hide and reclaim terminal space */
@@ -1050,13 +1047,6 @@ static void on_ai_clicked(void) {
                 SetForegroundWindow(g_hwndAiChat);
             }
         }
-        return;
-    }
-
-    if (!g_config || g_config->settings.ai_api_key[0] == '\0') {
-        MessageBoxA(parent,
-            "No AI API key configured.\nPlease set one in Settings.",
-            "AI Chat", MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -1999,7 +1989,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                     return 0;
                 case IDM_EDIT_SETTINGS:
-                    on_settings_clicked();
+                    /* lParam carries a SETTINGS_PAGE_* override when this
+                     * is posted synthetically (ai_chat.c's no-key state
+                     * wants Provider) rather than a real menu click,
+                     * which always has lParam 0 -- indistinguishable from
+                     * "no override" here since page 0 (Appearance) is
+                     * also the default settings_nav_first_page() opens
+                     * on. */
+                    on_settings_clicked_page(lParam ? (int)lParam : -1);
                     return 0;
                 case IDM_FILE_SAVE_AI:
                     /* Forward to the AI chat's save button (IDC_CHAT_SAVE) */
