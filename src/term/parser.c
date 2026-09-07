@@ -535,6 +535,7 @@ static void handle_csi(Terminal *term, char final) {
 
 void term_process(Terminal *term, const char *data, size_t len) {
     if (!term || !data) return;
+    if (len > 0) term->write_seq++;
 
     int prev_cursor_row = term->cursor.row;
 

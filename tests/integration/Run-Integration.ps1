@@ -272,6 +272,38 @@ Invoke-AiCase "ai_runs_safe_command_with_auto_approve" {
     "AI ran echo $marker via auto-approve"
 }
 
+Invoke-AiCase "ai_commands_run_one_at_a_time" {
+    param($s)
+    # Prompt-gated command dispatch (2026-09-07-command-dispatch-and-auto-approve-levels.md,
+    # section A): commands must be sent one at a time, each only once the
+    # terminal is back at a shell prompt. Without that gating the tty echoes
+    # the second command's typed text immediately -- while "sleep 6" is
+    # still running -- so its echo would land in the log before FIRST_DONE's
+    # output. sleep 6 gives that race a real window to lose in.
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    Open-NutshellAiPanel -Session $s | Out-Null
+    Set-NutshellAiAutoApprove -Session $s
+    Send-NutshellAiPrompt -Session $s -Text ("Run these two commands as two separate EXEC blocks, in this order, " +
+        "nothing else and no explanation: sleep 6 && echo FIRST_DONE ; then: echo SECOND_DONE")
+    $ok = Wait-NutshellLog -Session $s -Pattern '(?m)^SECOND_DONE\s*$' -TimeoutSec 90
+    Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_commands_sequential.png") | Out-Null
+    Assert-True $ok "SECOND_DONE never appeared in the terminal within 90s"
+
+    $log = Get-NutshellLogText -Session $s
+    Assert-True ($log -match '(?m)^FIRST_DONE\s*$') "the output line FIRST_DONE never appeared in the log"
+
+    # Anchor FIRST_DONE to its output line (not the earlier echoed command
+    # text "... && echo FIRST_DONE"), and compare against where the second
+    # command's echoed text shows up.
+    $mFirst = [regex]::Match($log, '(?m)^FIRST_DONE\s*$')
+    $idxEcho = $log.IndexOf("echo SECOND_DONE")
+    Assert-True ($idxEcho -ge 0) "the echoed text 'echo SECOND_DONE' never appeared in the log"
+    Assert-True ($idxEcho -gt $mFirst.Index) ("echo SECOND_DONE was typed into the terminal (index $idxEcho) before " +
+        "FIRST_DONE's output line (index $($mFirst.Index)) -- commands were not gated on the shell prompt")
+    "commands ran one at a time: FIRST_DONE (index $($mFirst.Index)) before echo SECOND_DONE was typed (index $idxEcho)"
+}
+
 Invoke-AiCase "ai_write_command_held_then_runs_after_permit" {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null

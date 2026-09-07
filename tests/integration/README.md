@@ -49,12 +49,13 @@ removed.
 | `resize_applies_to_inactive_tab` | a tab resized while in the background reports the new `tput lines` when activated |
 | `ai_panel_docks_with_key` | View › AI Assist docks the panel without a dialog |
 | `ai_runs_safe_command_with_auto_approve` | a prompted `echo` runs in the terminal via `[EXEC]` + Auto Approve |
+| `ai_commands_run_one_at_a_time` | two `[EXEC]` blocks (`sleep 6 && echo FIRST_DONE`, then `echo SECOND_DONE`) run in order: the second command's echoed text only reaches the log after `FIRST_DONE`'s output, proving commands are gated on the shell prompt rather than burst-sent |
 | `ai_write_command_held_then_runs_after_permit` | a prompted `touch` is held back while Permit Write is off, then runs via "Run N selected" once Permit Write is switched on |
 | `approval_card_run_selected_settles` | "Run N selected" on a live approval card (`--ui-demo=approval`) settles without crashing; no SSH host or AI key needed |
 
 ## AI Assist cases
 
-The three `ai_*` cases make real API calls and are **skipped** unless a key is
+The four `ai_*` cases make real API calls and are **skipped** unless a key is
 present in the environment variable `NUTSHELL_IT_AI_KEY` or in the git-ignored
 file `tests\integration\.ai_key` (create it yourself; never commit it). Provider
 and model default to Moonshot / `kimi-k3` and can be changed with `-AiProvider`

@@ -519,3 +519,89 @@ int test_term_scroll_region_does_not_move_anchor(void) {
     term_free(t);
     TEST_END();
 }
+
+/* ---- term_at_prompt() / write_seq (prompt-gated command dispatch) ------- */
+
+int test_term_at_prompt_simple_dollar(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "thomas@tompi:~$ ", 17);
+    ASSERT_EQ(term_at_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_prompt_after_command_output(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "Reading package lists...\r\n", 27);
+    ASSERT_EQ(term_at_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_prompt_password_prompt(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "[sudo] password for thomas: ", 29);
+    ASSERT_EQ(term_at_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_prompt_text_typed_after_prompt(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    /* Cursor lands right after "ls" -- the line ends in 's', not a
+     * prompt character, even though it started as "$ ". */
+    term_process(t, "$ ls", 4);
+    ASSERT_EQ(term_at_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_prompt_alt_screen_active(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "$ ", 2);
+    ASSERT_EQ(term_at_prompt(t), 1);
+    term_alt_screen_enter(t);
+    ASSERT_EQ(term_at_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_prompt_trailing_content_after_cursor(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "$ ls", 4);
+    /* Move the cursor back into the middle of the row -- "ls" is still
+     * sitting on screen after it, so this must not read as a prompt. */
+    t->cursor.col = 2;
+    ASSERT_EQ(term_at_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_write_seq_increments_on_data(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    ASSERT_EQ(t->write_seq, 0);
+    term_process(t, "a", 1);
+    ASSERT_EQ(t->write_seq, 1);
+    term_process(t, "bcd", 3);
+    ASSERT_EQ(t->write_seq, 2);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_write_seq_unchanged_on_zero_len(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "a", 1);
+    unsigned long before = t->write_seq;
+    term_process(t, "", 0);
+    ASSERT_EQ(t->write_seq, before);
+    term_free(t);
+    TEST_END();
+}

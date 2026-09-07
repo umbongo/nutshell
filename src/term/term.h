@@ -107,6 +107,12 @@ typedef struct {
 
     /* Bracketed paste mode (?2004h/l): when true, wrap paste with \033[200~/201~ */
     bool bracketed_paste_mode;
+
+    /* Incremented in term_process() whenever it is called with len > 0.
+     * Cheap "did anything arrive" signal for callers (e.g. the AI command
+     * dispatcher) that need to detect terminal quiescence without diffing
+     * screen content. */
+    unsigned long write_seq;
 } Terminal;
 
 Terminal *term_init(int rows, int cols, int max_scrollback);
@@ -135,5 +141,12 @@ bool term_has_dirty_rows(Terminal *term);
 /* Mark every row dirty so the renderer repaints everything.
  * Call after font/zoom/resize changes that affect pixel layout. */
 void term_mark_all_dirty(Terminal *term);
+
+/* Is the terminal sitting at a shell prompt, ready for a new command?
+ * True when: the primary screen is active (not the alt screen), the
+ * cursor is inside the screen, nothing follows the cursor on its row,
+ * and the row's text up to the cursor ends in a shell-prompt character
+ * (see shell_prompt_line() in src/core/shell_prompt.h). */
+int term_at_prompt(const Terminal *term);
 
 #endif

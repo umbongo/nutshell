@@ -457,6 +457,26 @@ int test_session_passphrase_initially_empty(void);
 int test_session_passphrase_write_and_free(void);
 #endif
 
+/* test_shell_prompt.c */
+int test_shell_prompt_dollar(void);
+int test_shell_prompt_hash(void);
+int test_shell_prompt_percent(void);
+int test_shell_prompt_windows_ps(void);
+int test_shell_prompt_bracketed_user_host(void);
+int test_shell_prompt_password_prompt_negative(void);
+int test_shell_prompt_yn_prompt_negative(void);
+int test_shell_prompt_reading_negative(void);
+int test_shell_prompt_bare_number_negative(void);
+int test_shell_prompt_bare_gt_negative(void);
+int test_shell_prompt_more_pager_negative(void);
+int test_shell_prompt_empty_string(void);
+int test_shell_prompt_null(void);
+int test_shell_prompt_trailing_spaces_trimmed(void);
+int test_shell_prompt_trailing_tabs_trimmed(void);
+int test_shell_prompt_bare_gt_with_trailing_space_negative(void);
+int test_shell_prompt_gt_with_content_positive(void);
+int test_shell_prompt_all_whitespace_negative(void);
+
 /* test_term.c */
 int test_term_buffer(void);
 int test_term_parser(void);
@@ -482,6 +502,14 @@ int test_term_scroll_anchors_when_scrolled_up(void);
 int test_term_scroll_anchor_clamps_to_history(void);
 int test_term_scroll_anchor_clamps_to_max_scrollback(void);
 int test_term_scroll_region_does_not_move_anchor(void);
+int test_term_at_prompt_simple_dollar(void);
+int test_term_at_prompt_after_command_output(void);
+int test_term_at_prompt_password_prompt(void);
+int test_term_at_prompt_text_typed_after_prompt(void);
+int test_term_at_prompt_alt_screen_active(void);
+int test_term_at_prompt_trailing_content_after_cursor(void);
+int test_term_write_seq_increments_on_data(void);
+int test_term_write_seq_unchanged_on_zero_len(void);
 
 /* test_theme.c */
 int test_theme_dark_background(void);
@@ -2288,6 +2316,26 @@ int main(void) {
     failed += test_session_passphrase_write_and_free();
 #endif
 
+    printf("\n--- Shell Prompt Detection ---\n");
+    failed += test_shell_prompt_dollar();
+    failed += test_shell_prompt_hash();
+    failed += test_shell_prompt_percent();
+    failed += test_shell_prompt_windows_ps();
+    failed += test_shell_prompt_bracketed_user_host();
+    failed += test_shell_prompt_password_prompt_negative();
+    failed += test_shell_prompt_yn_prompt_negative();
+    failed += test_shell_prompt_reading_negative();
+    failed += test_shell_prompt_bare_number_negative();
+    failed += test_shell_prompt_bare_gt_negative();
+    failed += test_shell_prompt_more_pager_negative();
+    failed += test_shell_prompt_empty_string();
+    failed += test_shell_prompt_null();
+    failed += test_shell_prompt_trailing_spaces_trimmed();
+    failed += test_shell_prompt_trailing_tabs_trimmed();
+    failed += test_shell_prompt_bare_gt_with_trailing_space_negative();
+    failed += test_shell_prompt_gt_with_content_positive();
+    failed += test_shell_prompt_all_whitespace_negative();
+
     printf("\n--- Term ---\n");
     failed += test_term_buffer();
     failed += test_term_parser();
@@ -2313,6 +2361,14 @@ int main(void) {
     failed += test_term_scroll_anchor_clamps_to_history();
     failed += test_term_scroll_anchor_clamps_to_max_scrollback();
     failed += test_term_scroll_region_does_not_move_anchor();
+    failed += test_term_at_prompt_simple_dollar();
+    failed += test_term_at_prompt_after_command_output();
+    failed += test_term_at_prompt_password_prompt();
+    failed += test_term_at_prompt_text_typed_after_prompt();
+    failed += test_term_at_prompt_alt_screen_active();
+    failed += test_term_at_prompt_trailing_content_after_cursor();
+    failed += test_term_write_seq_increments_on_data();
+    failed += test_term_write_seq_unchanged_on_zero_len();
 
     printf("\n--- VT Sequences ---\n");
     failed += test_vt_osc_title_0();

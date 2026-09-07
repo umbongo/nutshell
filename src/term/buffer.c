@@ -1,5 +1,6 @@
 #include "term.h"
 #include "xmalloc.h"
+#include "shell_prompt.h"
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
@@ -69,6 +70,7 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->primary_lines       = NULL;
     term->full_redraw_needed  = false;
     term->bracketed_paste_mode = false;
+    term->write_seq            = 0;
 
     term->lines = xcalloc((size_t)term->lines_capacity, sizeof(TermRow *));
     
@@ -466,4 +468,53 @@ void term_alt_screen_exit(Terminal *term)
      * The shadow still holds the alt-screen content; cell-level dirty checks
      * would skip cells that happen to match, leaving stale pixels on screen. */
     term->full_redraw_needed = true;
+}
+
+int term_at_prompt(const Terminal *term)
+{
+    if (!term) return 0;
+    if (term->alt_screen_active) return 0;
+    if (term->cursor.row < 0 || term->cursor.row >= term->rows) return 0;
+    if (term->cursor.col < 0) return 0;
+
+    /* Same screen-row -> physical-ring-index mapping as screen_to_phys(),
+     * kept const-correct here since term_at_prompt() takes a const Terminal*. */
+    int top = (term->lines_count >= term->rows)
+            ? (term->lines_count - term->rows) : 0;
+    int logical = top + term->cursor.row;
+    if (logical < 0 || logical >= term->lines_count) return 0;
+    int physical = (term->lines_start + logical) % term->lines_capacity;
+    if (physical < 0 || physical >= term->lines_capacity) return 0;
+    TermRow *row = term->lines[physical];
+    if (!row) return 0;
+
+    int col = term->cursor.col;
+    if (col > term->cols) col = term->cols;
+
+    /* Nothing may follow the cursor on this row -- a non-blank cell past
+     * the cursor means text was typed ahead of a prompt that hasn't
+     * caught up yet (or the prompt hasn't actually returned). */
+    for (int c = col; c < row->len && c < term->cols; c++) {
+        uint32_t cp = row->cells[c].codepoint;
+        if (cp != 0 && cp != ' ') return 0;
+    }
+
+    /* Build the row's text up to the cursor column (ASCII as-is, other
+     * codepoints as '?') and test it for a shell-prompt ending. A huge
+     * cursor column (implausible for a real terminal) is clamped to the
+     * buffer, keeping the tail -- which is all shell_prompt_line() looks
+     * at -- intact. */
+    char buf[1024];
+    int n = col;
+    if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;
+    int start = col - n;
+    for (int i = 0; i < n; i++) {
+        uint32_t cp = row->cells[start + i].codepoint;
+        if (cp == 0) buf[i] = ' ';
+        else if (cp < 0x80) buf[i] = (char)cp;
+        else buf[i] = '?';
+    }
+    buf[n] = '\0';
+
+    return shell_prompt_line(buf);
 }

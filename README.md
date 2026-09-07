@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.1.0 \
+**Version**: v1.1.1 \
 **Build Date**: 2026-09-07 \
 **Author**: Thomas Sulkiewicz
 
@@ -227,7 +227,7 @@ When the AI suggests commands, they land in one approval card in the chat thread
 - **Rows** — a checkbox, the command text, and a risk tag (**SAFE** / **WRITE** / **CRITICAL**). Held rows show a disabled checkbox and dimmed text. Pending safe commands start checked
 - **Actions** — **Deny all** rejects every row; **Run N selected** executes the checked rows (disabled when nothing is checked)
 
-With session Auto approve on, safe rows are approved and start running the moment they arrive, same as before — the card just shows them as executing instead of waiting for a click. After commands execute, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed.
+With session Auto approve on, safe rows are approved and start running the moment they arrive, same as before — the card just shows them as executing instead of waiting for a click. Approved commands are sent one at a time: each one waits for the terminal to return to a shell prompt before the next is typed, so a command that stops at a password or confirmation prompt simply holds the queue instead of racing ahead. Once the last command's prompt has returned, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed.
 
 #### Thought Process
 

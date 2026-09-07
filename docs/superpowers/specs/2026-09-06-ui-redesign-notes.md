@@ -269,6 +269,23 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       `terminal_holds_position_while_output_arrives` compares captures.
       Versioning: after 1.0.99 the number rolls to 1.1.0 (Thomas; rule in CLAUDE.md).
 
+- [x] Prompt-gated command dispatch (v1.1.1; feature A of
+      `2026-09-07-command-dispatch-and-auto-approve-levels.md`). Every
+      command-execution path in `ai_chat.c` (auto-approve, Run N selected,
+      approve one) used to burst all approved commands onto the SSH channel
+      at once, so the tty echoed the next command into whatever the
+      previous one left waiting (a package prompt, a pager, a password
+      prompt). Replaced with a single dispatcher (`dispatch_start()` /
+      `dispatch_tick()` on `TIMER_CMD_QUEUE`, 250ms) that sends approved
+      commands one at a time, only once `term_at_prompt()` says the active
+      terminal is back at a shell prompt and has been quiet for
+      `PROMPT_QUIET_MS` (400ms); the continue message to the AI now fires
+      right after the last command's prompt returns instead of a fixed 2s
+      delay. New `src/core/shell_prompt.{c,h}` (`shell_prompt_line()`) and
+      `Terminal.write_seq` / `term_at_prompt()` in `src/term`, both unit
+      tested. Integration case `ai_commands_run_one_at_a_time` (not run by
+      Claude — costs API credits; reviewer runs it once).
+
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.

@@ -123,14 +123,14 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define WM_AI_STREAM     (WM_USER + 102)  /* wParam: 0=thinking, 1=content; lParam: char* */
 #define WM_AI_TOOL_MSG   (WM_USER + 103)  /* wParam: ChatItemType; lParam: heap char* text */
 
-#define CONTINUE_DELAY_MS 2000  /* Wait for terminal output before continuing */
-#define TIMER_CONTINUE    1
-#define TIMER_CMD_QUEUE   2     /* Delayed command execution (paste delay) */
+#define TIMER_CMD_QUEUE   2     /* Command dispatcher poll (prompt-gated) */
 #define TIMER_SCROLL_SYNC 4     /* Sync custom scrollbar with RichEdit */
 #define TIMER_THINKING    5     /* Animated thinking indicator */
 #define TIMER_HEARTBEAT   6     /* Activity monitor heartbeat (1s) */
 #define THINKING_ANIM_MS  400   /* Dot animation interval */
 #define HEARTBEAT_MS      1000  /* Heartbeat interval */
+#define CMD_QUEUE_POLL_MS 250   /* Dispatcher tick interval */
+#define PROMPT_QUIET_MS   400   /* Terminal must be quiet this long at a prompt */
 
 /* Forward declaration for input subclass */
 static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
@@ -222,6 +222,16 @@ typedef struct {
     int queued_next;       /* index of next command to execute */
     int pending_approval;  /* 1 = waiting for user to Allow/Deny commands */
     int dpi;
+
+    /* Prompt-gated command dispatcher (TIMER_CMD_QUEUE): sends approved
+     * commands from approval_q one at a time, only once active_term is
+     * back at a shell prompt. See dispatch_start()/dispatch_tick(). */
+    int dispatch_active;             /* 1 while the dispatcher is running */
+    unsigned long dispatch_seq;      /* last-seen active_term->write_seq */
+    int dispatch_await_echo;         /* 1 until the terminal changes after a send */
+    DWORD dispatch_last_change_tick; /* GetTickCount() of the last write_seq change */
+    int dispatch_last_idx;           /* approval_q index last set EXECUTING, or -1 */
+    int dispatch_sent_count;         /* commands sent so far in this dispatch run */
     int stream_phase;  /* 0=not started, 1=in thinking, 2=in content */
 
     /* AI notes for system prompt context */
@@ -1219,8 +1229,8 @@ static void cancel_active_stream(AiChatData *d)
 
     /* Kill timers */
     KillTimer(d->hwnd, TIMER_HEARTBEAT);
-    KillTimer(d->hwnd, TIMER_CONTINUE);
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
+    d->dispatch_active = 0;
     chat_activity_reset(&d->activity);
     if (d->hChatList) {
         chat_listview_set_pulse(d->hChatList, 0);
@@ -1487,6 +1497,138 @@ static void send_continue_message(AiChatData *d)
     start_indicator(d, "continuing");
 
     launch_stream_thread(d);
+}
+
+/* Start (or continue) the command dispatcher: sends every command in
+ * approval_q with status APPROVE_APPROVED, in order, one at a time, only
+ * once active_term is sitting at a shell prompt (see term_at_prompt()).
+ * Does not send anything itself -- the TIMER_CMD_QUEUE tick (dispatch_tick(),
+ * driven from AiChatWndProc's WM_TIMER) does the actual sending. Safe to
+ * call repeatedly (e.g. once per single-command Approve click): a no-op
+ * while a dispatch is already running, since any newly-approved entries
+ * are picked up by the next tick regardless. */
+static void dispatch_start(AiChatData *d)
+{
+    if (!d || d->dispatch_active) return;
+
+    d->dispatch_active = 1;
+    d->dispatch_seq = d->active_term ? d->active_term->write_seq : 0;
+    d->dispatch_await_echo = 0;
+    d->dispatch_last_change_tick = GetTickCount();
+    d->dispatch_last_idx = -1;
+    d->dispatch_sent_count = 0;
+
+    SetTimer(d->hwnd, TIMER_CMD_QUEUE, CMD_QUEUE_POLL_MS, NULL);
+
+    /* Send button shows Stop while the dispatcher is running, same as
+     * while an AI stream is in flight. */
+    if (d->hSendBtn) {
+        SetWindowTextW(d->hSendBtn, L"\x25A0");
+        InvalidateRect(d->hSendBtn, NULL, TRUE);
+    }
+}
+
+/* Stop the dispatcher: kill the timer, deny any commands that were
+ * approved but not yet sent (so a later dispatch_start() can't resurrect
+ * them), settle the command cards, and restore the Send button. When
+ * status_msg is non-NULL it is appended as a status line (the Stop button
+ * path); a session switch or panel close cancels silently (NULL). A no-op
+ * when the dispatcher isn't running. */
+static void dispatch_cancel(AiChatData *d, const char *status_msg)
+{
+    if (!d || !d->dispatch_active) return;
+
+    KillTimer(d->hwnd, TIMER_CMD_QUEUE);
+    d->dispatch_active = 0;
+
+    for (int i = 0; i < d->approval_q.count; i++) {
+        if (d->approval_q.entries[i].status == APPROVE_APPROVED)
+            d->approval_q.entries[i].status = APPROVE_DENIED;
+    }
+    settle_all_commands(d);
+
+    if (status_msg) {
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, status_msg);
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    }
+
+    if (d->hSendBtn) {
+        SetWindowText(d->hSendBtn, ">");
+        InvalidateRect(d->hSendBtn, NULL, TRUE);
+    }
+}
+
+/* TIMER_CMD_QUEUE tick: advance the dispatcher by at most one command.
+ * Tracks "quiet" (no terminal writes) and "changed since the last send"
+ * (dispatch_await_echo) off active_term->write_seq so the prompt that was
+ * on screen before a command runs can never be mistaken for the next
+ * prompt. See docs/superpowers/specs/2026-09-07-command-dispatch-and-
+ * auto-approve-levels.md, section A. */
+static void dispatch_tick(AiChatData *d)
+{
+    if (!d || !d->dispatch_active) return;
+
+    if (!d->active_term || !d->active_channel) {
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                        "[error: no active SSH channel]");
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        dispatch_cancel(d, NULL);
+        return;
+    }
+
+    unsigned long seq = d->active_term->write_seq;
+    if (seq != d->dispatch_seq) {
+        d->dispatch_seq = seq;
+        d->dispatch_last_change_tick = GetTickCount();
+        d->dispatch_await_echo = 0;
+    }
+
+    int ready = !d->dispatch_await_echo &&
+                term_at_prompt(d->active_term) &&
+                (GetTickCount() - d->dispatch_last_change_tick) >= PROMPT_QUIET_MS;
+    if (!ready) return;
+
+    int idx = chat_approval_next_approved(&d->approval_q);
+    if (idx >= 0) {
+        if (d->dispatch_last_idx >= 0)
+            chat_approval_set_completed(&d->approval_q, d->dispatch_last_idx);
+
+        /* N = commands already sent plus everything still APPROVED right
+         * now (idx included) -- so the label tracks correctly even when
+         * more commands get approved after the dispatcher started. */
+        int approved_now = 0;
+        for (int i = 0; i < d->approval_q.count; i++)
+            if (d->approval_q.entries[i].status == APPROVE_APPROVED)
+                approved_now++;
+        int total = d->dispatch_sent_count + approved_now;
+
+        chat_approval_set_executing(&d->approval_q, idx);
+        execute_command(d, d->approval_q.entries[idx].command);
+        d->dispatch_last_idx = idx;
+        d->dispatch_sent_count++;
+        d->dispatch_await_echo = 1;
+
+        float now = (float)GetTickCount() / 1000.0f;
+        chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now);
+        chat_activity_set_exec(&d->activity, d->dispatch_sent_count, total);
+
+        char prog[80];
+        snprintf(prog, sizeof(prog), "running %d/%d \xC2\xB7 waiting for prompt",
+                 d->dispatch_sent_count, total);
+        start_indicator(d, prog);
+    } else {
+        /* Nothing left to send -- settle up and let the AI continue. */
+        if (d->dispatch_last_idx >= 0)
+            chat_approval_set_completed(&d->approval_q, d->dispatch_last_idx);
+        KillTimer(d->hwnd, TIMER_CMD_QUEUE);
+        d->dispatch_active = 0;
+        settle_all_commands(d);
+        if (d->hSendBtn) {
+            SetWindowText(d->hSendBtn, ">");
+            InvalidateRect(d->hSendBtn, NULL, TRUE);
+        }
+        send_continue_message(d);
+    }
 }
 
 /* Convert a clipboard bitmap to a base64-encoded PNG AiAttachment.
@@ -2590,7 +2732,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDC_CHAT_SEND:
-            if (d && ACTIVE_BUSY(d)) {
+            if (d && d->dispatch_active) {
+                dispatch_cancel(d, "[command queue stopped]");
+                if (d->hChatList)
+                    chat_listview_scroll_to_bottom(d->hChatList);
+            } else if (d && ACTIVE_BUSY(d)) {
                 cancel_active_stream(d);
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                     "[cancelled]");
@@ -2642,9 +2788,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
         case IDC_CHAT_NEWCHAT:
             if (d) {
-                /* Cancel any active stream first */
+                /* Cancel any active stream or command dispatch first */
                 if (ACTIVE_BUSY(d))
                     cancel_active_stream(d);
+                if (d->dispatch_active)
+                    dispatch_cancel(d, NULL);
 
                 /* Reset only the ACTIVE session's conversation.
                  * Other sessions' AiSessionState objects are untouched. */
@@ -2813,26 +2961,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
-                /* Execute approved command */
-                if (idx < d->queued_count) {
-                    execute_command(d, d->queued_cmds[idx]);
-                    float now_a = (float)GetTickCount() / 1000.0f;
-                    chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now_a);
-                    chat_activity_set_exec(&d->activity, idx + 1, d->queued_count);
-                }
+                /* Let the dispatcher pick this command up once the
+                 * terminal is at a prompt (no-op if already running). */
+                dispatch_start(d);
 
-                /* Check if all decided — if so, wrap up */
+                /* Check if all decided — if so, the card can settle now */
                 if (chat_approval_all_decided(&d->approval_q)) {
                     d->pending_approval = 0;
                     settle_all_commands(d);
-                    d->commands_executed = d->queued_count;
-                    start_indicator(d, "waiting for output");
-                    {
-                        float now_w = (float)GetTickCount() / 1000.0f;
-                        chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now_w);
-                    }
-                    SetTimer(hwnd, TIMER_CONTINUE,
-                             CONTINUE_DELAY_MS, NULL);
                 }
                 SetFocus(d->hInput);
                 return 0;
@@ -2887,24 +3023,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 settle_all_commands(d);
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
-                /* Execute all approved commands */
-                {
-                    float now_e = (float)GetTickCount() / 1000.0f;
-                    chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now_e);
-                }
-                for (int ci = 0; ci < d->queued_count; ci++) {
-                    execute_command(d, d->queued_cmds[ci]);
-                    chat_activity_set_exec(&d->activity, ci + 1, d->queued_count);
-                }
-                d->queued_next = d->queued_count;
-                d->commands_executed = d->queued_count;
-                start_indicator(d, "waiting for output");
-                {
-                    float now_w2 = (float)GetTickCount() / 1000.0f;
-                    chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now_w2);
-                }
-                SetTimer(hwnd, TIMER_CONTINUE,
-                         CONTINUE_DELAY_MS, NULL);
+                /* Let the dispatcher send the approved commands one at a
+                 * time, only once the terminal is at a prompt. */
+                dispatch_start(d);
                 SetFocus(d->hInput);
                 return 0;
             }
@@ -2945,26 +3066,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
                 if (any_approved) {
-                    float now_e = (float)GetTickCount() / 1000.0f;
-                    chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now_e);
-                    ci = 0;
-                    it = d->msg_list.head;
-                    while (it) {
-                        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
-                            it->u.cmd.approved == 1 && ci < d->queued_count) {
-                            execute_command(d, d->queued_cmds[ci]);
-                            chat_activity_set_exec(&d->activity, ci + 1,
-                                                   d->queued_count);
-                        }
-                        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) ci++;
-                        it = it->next;
-                    }
-                    d->commands_executed = d->queued_count;
-                    start_indicator(d, "waiting for output");
-                    float now_w = (float)GetTickCount() / 1000.0f;
-                    chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now_w);
-                    SetTimer(hwnd, TIMER_CONTINUE,
-                             CONTINUE_DELAY_MS, NULL);
+                    /* Let the dispatcher send the approved commands one at
+                     * a time, only once the terminal is at a prompt. */
+                    dispatch_start(d);
                 } else {
                     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                     "[no commands selected]");
@@ -3440,26 +3544,9 @@ next_coalesce:;
                         }
                     }
                     settle_all_commands(d);
-                    {
-                        float now_e = (float)GetTickCount() / 1000.0f;
-                        chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now_e);
-                    }
-                    for (int ci2 = 0; ci2 < d->queued_count; ci2++) {
-                        if (d->approval_q.entries[ci2].status == APPROVE_APPROVED) {
-                            execute_command(d, d->queued_cmds[ci2]);
-                            chat_activity_set_exec(&d->activity, ci2 + 1,
-                                                   d->queued_count);
-                        }
-                    }
-                    d->queued_next = d->queued_count;
-                    d->commands_executed = d->queued_count;
-                    start_indicator(d, "waiting for output");
-                    {
-                        float now_w = (float)GetTickCount() / 1000.0f;
-                        chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now_w);
-                    }
-                    SetTimer(hwnd, TIMER_CONTINUE,
-                             CONTINUE_DELAY_MS, NULL);
+                    /* Let the dispatcher send the approved commands one at
+                     * a time, only once the terminal is at a prompt. */
+                    dispatch_start(d);
                 } else {
                     /* Show approval buttons and wait for user */
                     d->pending_approval = 1;
@@ -3506,41 +3593,7 @@ next_coalesce:;
     case WM_TIMER:
         if (!d) return 0;
         if (wParam == TIMER_CMD_QUEUE) {
-            /* Execute next queued command with paste delay */
-            if (d->queued_next < d->queued_count) {
-                execute_command(d, d->queued_cmds[d->queued_next]);
-                d->queued_next++;
-                /* Update activity: executing N/M */
-                {
-                    float now = (float)GetTickCount() / 1000.0f;
-                    if (d->activity.phase != ACTIVITY_EXECUTING)
-                        chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now);
-                    chat_activity_set_exec(&d->activity, d->queued_next, d->queued_count);
-                }
-            }
-            if (d->queued_next >= d->queued_count) {
-                /* All commands executed — stop timer, show waiting */
-                KillTimer(hwnd, TIMER_CMD_QUEUE);
-                d->commands_executed = d->queued_count;
-                start_indicator(d, "waiting for output");
-                {
-                    float now = (float)GetTickCount() / 1000.0f;
-                    chat_activity_set_phase(&d->activity, ACTIVITY_WAITING, now);
-                }
-                SetTimer(hwnd, TIMER_CONTINUE, CONTINUE_DELAY_MS, NULL);
-            } else {
-                /* More commands pending — show progress after cmd text */
-                char prog[80];
-                snprintf(prog, sizeof(prog), "executing %d/%d",
-                         d->queued_next + 1, d->queued_count);
-                start_indicator(d, prog);
-            }
-        } else if (wParam == TIMER_CONTINUE) {
-            KillTimer(hwnd, TIMER_CONTINUE);
-            if (d->commands_executed > 0 && !ACTIVE_BUSY(d)) {
-                d->commands_executed = 0;
-                send_continue_message(d);
-            }
+            dispatch_tick(d);
         } else if (wParam == TIMER_HEARTBEAT) {
             /* Activity monitor heartbeat: tick health + toggle pulse */
             float now = (float)GetTickCount() / 1000.0f;
@@ -3781,6 +3834,8 @@ next_coalesce:;
 
             KillTimer(hwnd, TIMER_SCROLL_SYNC);
             KillTimer(hwnd, TIMER_HEARTBEAT);
+            KillTimer(hwnd, TIMER_CMD_QUEUE);
+            d->dispatch_active = 0;
             /* Save conversation back to session before cleanup */
             if (d->active_state) {
                 ai_conv_move(&d->active_state->conv, &d->conv);
@@ -4102,9 +4157,14 @@ static void do_session_switch(AiChatData *d,
         d->active_state->valid = 1;
     }
 
-    /* Kill command timers — they belong to the old session */
+    /* Kill command timers — they belong to the old session. The dispatcher
+     * itself is per-panel, not per-session, so switching away just stops
+     * it silently (no "[command queue stopped]" -- that's the Stop button's
+     * message); it also denies whatever was left APPROVED in approval_q
+     * (the old session's batch) so a later dispatch_start() can't
+     * resurrect it and restores the Send button. */
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-    KillTimer(d->hwnd, TIMER_CONTINUE);
+    dispatch_cancel(d, NULL);
 
     /* Save pending approval state to old session (heap-allocated) */
     if (d->active_state && d->active_state != new_state) {
