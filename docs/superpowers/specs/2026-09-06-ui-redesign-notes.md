@@ -119,6 +119,11 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       written, self-reviewed, committed.
 - [x] Foundation implementation plan: `docs/superpowers/plans/2026-09-07-design-system-foundation.md`
       (10 tasks, TDD, gates as a ratchet). Next: implement task 1.
+- [x] Sub-project 2 (AI Assist panel) designed: mockups artifact, Thomas chose frame B,
+      card 1, "safe only"/"all" wording, empty state with three suggestions, and asked
+      that the AI thought process stay viewable (thinking disclosure). Spec
+      `2026-09-07-ai-assist-panel-design.md`, plan `../plans/2026-09-07-ai-assist-panel.md`
+      (5 tasks). Next: implement task 1.
 - [x] During foundation section 3 (shared primitives): add `OP_DOT` to `icons.c` so the
       password / thinking / server dots render; `make wintest` must go green.
 - [x] **Design-system foundation implementation complete (task 10 of 10, v1.0.92).**
