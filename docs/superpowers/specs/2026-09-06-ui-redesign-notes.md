@@ -1,13 +1,20 @@
 # UI Redesign — Working Notes (checkpoint)
 
-**Status:** sub-project 1 (design-system foundation) is **implemented and done**:
-spec `2026-09-07-design-system-foundation-design.md`, plan
-`../plans/2026-09-07-design-system-foundation.md` (10 of 10 tasks landed).
-Native Windows build, unit suite (1,665, up from 1,539 at plan time) and the
-tompi integration suite (12 cases including `ui_gallery`) are all green. Next
-action is sub-project 2 (AI Assist panel). Resume from "Todo" below.
+**Status:** sub-project 1 (design-system foundation) **and** sub-project 2
+(AI Assist panel) are both **implemented and done**:
+- Sub-project 1: spec `2026-09-07-design-system-foundation-design.md`, plan
+  `../plans/2026-09-07-design-system-foundation.md` (10 of 10 tasks landed).
+- Sub-project 2: spec `2026-09-07-ai-assist-panel-design.md`, plan
+  `../plans/2026-09-07-ai-assist-panel.md` (5 of 5 tasks landed, v1.0.96).
 
-Branch: `ui-polish` (branched from `main` at v1.0.76; now at v1.0.92).
+Native Windows build, unit suite (1,699, up from 1,539 at sub-project 1's
+plan time) and the tompi integration suite (`ui_gallery` now 9 states x 4
+themes = 36 captures, plus the new keystroke-free `ai_panel_opens_without_key`
+case) are all green. Next action is sub-project 3 (main window chrome:
+single toolbar replacing the menu bar, tab strip, status). Resume from
+"Todo" below.
+
+Branch: `ui-polish` (branched from `main` at v1.0.76; now at v1.0.96).
 
 ## Decisions so far
 
@@ -138,5 +145,53 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       (spec section 6) met: colours outside the allow-list are 0 (from 77 at plan
       time), both gates passing, wintest green, integration suite green including
       `ui_gallery`.
-- [ ] Then brainstorm sub-project 2 (AI Assist panel) — mockups of layout options are worth
-      showing visually before choosing.
+- [x] **AI Assist panel implementation complete (task 5 of 5, v1.0.96).** All five
+      tasks landed: `ai_panel_layout`/`ai_status_layout`/`thinking_layout`/`ai_modes_label`
+      in `src/core/ai_panel_layout.*`, `ai_panel_states` table, `approval_card_layout` v2
+      in `ns_layout` (checkbox/text/tag rows, `Deny all`/`Run N selected`, no more two-line
+      rule); card 1 painted in `chat_listview.c` with the Thinking disclosure; the header
+      (session name, model chip, New chat/Save chat/Undock-Dock icon buttons with
+      tooltips) and status line (Read-only/Read + write segmented control, Auto approve
+      off/safe only/all, context meter) replacing the old owner-drawn tab buttons in
+      `ai_chat.c`; the three empty/no-key/no-session states with suggestion chips and
+      Open Settings/Open Session Manager buttons, both `MessageBox` dead ends in
+      `window.c on_ai_clicked()` gone; `ui_demo` gained `nokey`/`nosession` states
+      (`ai_chat_apply_demo_extras()` now forces `AI_STATE_EMPTY`/`AI_STATE_NO_KEY`/
+      `AI_STATE_NO_SESSION` for `empty`/`nokey`/`nosession` respectively). Native suite
+      green at **1,699 tests** (up from 1,694 at task 5's start). `ui_gallery` now
+      captures 9 states x 4 themes = 36 images; the new keystroke-free
+      `ai_panel_opens_without_key` case (empty `ai_api_key`, connects to tompi, opens
+      the panel via the View menu command, asserts no `#32770` dialog and a non-blank
+      capture) passes. `make clean && make release` clean under `-Werror`, `wintest` 2/2.
+      README ("AI Chat Assistant" summary + user-guide section, feature bullets, test
+      count) and `help_guide.c`'s in-app AI section rewritten for the new panel (each
+      `GUIDE_TEXT_*` string literal still under 4095 chars). Gallery reviewed for four
+      sample captures (`Onyx-Synapse-nokey`, `Onyx-Light-nosession`, `Sage-and-Sand-all`,
+      `Moss-and-Mist-approval`) — all render correctly (empty-state copy/buttons match
+      `ai_panel_states.c` verbatim, Thinking disclosure expands with the right word
+      count, approval card header/rows/actions match the design spec). One
+      non-blocking observation: the demo `approval` state's already-settled
+      (approved/denied) commands render as nothing, since `chat_listview.c` hides
+      settled command items on the assumption their outcome is narrated as an `[EXEC]`
+      block in the AI's own reply text -- the canned `APPROVAL_ASSISTANT_MSG` in
+      `ui_demo.c` doesn't include one, so the gallery's `approval` capture only ever
+      shows the two still-open (pending/blocked) rows. Cosmetic-only (doesn't affect a
+      live conversation, where the AI's real reply does narrate settled commands); left
+      as-is rather than reshaping the canned demo script outside task 5's scope.
+
+  **Still open:**
+  - The three review findings not yet folded into a task: the AI-stream thread
+    lifetime bugs, the relative config-save path, and the Session Manager phantom row
+    (all first noted under "Review findings" above, before the design-system work
+    started).
+  - The three keystroke-driven `ai_*` integration cases
+    (`ai_panel_docks_with_key`, `ai_runs_safe_command_with_auto_approve`,
+    `ai_write_command_blocked_without_permit_write`) still need a rerun against
+    Moonshot once the desktop is unlocked -- this session could only verify the
+    keystroke-free cases (`ui_gallery`, `ai_panel_opens_without_key`).
+  - Thomas to review the gallery (all 36 captures, not just the four sampled above)
+    before sub-project 3 starts.
+
+- [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
+      the menu bar, tab strip, status. Mockups of layout options are worth showing
+      visually before choosing, same as sub-project 2.

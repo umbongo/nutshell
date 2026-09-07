@@ -177,6 +177,9 @@ int test_cli_overlong_value(void);
 int test_cli_usage_text_mentions_all_flags(void);
 int test_cli_ui_demo_bare_defaults_to_all(void);
 int test_cli_ui_demo_with_state(void);
+int test_cli_ui_demo_nokey_state(void);
+int test_cli_ui_demo_nosession_state(void);
+int test_cli_ui_demo_all_still_accepted_with_new_states(void);
 int test_cli_ui_demo_unknown_state_is_error(void);
 int test_cli_theme_with_ui_demo(void);
 int test_cli_theme_before_ui_demo_still_applies(void);
@@ -1851,7 +1854,7 @@ int test_ns_anim_list_step_reduced_motion_finishes_immediately(void);
 int test_ns_anim_progress_tick_wraparound_near_ulong_max(void);
 
 /* test_ui_demo.c */
-int test_ui_demo_states_lists_seven_ending_in_all(void);
+int test_ui_demo_states_lists_nine_ending_in_all(void);
 int test_ui_demo_state_valid_accepts_every_listed_state(void);
 int test_ui_demo_state_valid_rejects_unknown_and_null(void);
 int test_ui_demo_build_unknown_state_returns_error(void);
@@ -1862,6 +1865,8 @@ int test_ui_demo_build_executing_counts_and_statuses(void);
 int test_ui_demo_build_tool_counts(void);
 int test_ui_demo_build_error_counts(void);
 int test_ui_demo_build_empty_counts(void);
+int test_ui_demo_build_nokey_counts(void);
+int test_ui_demo_build_nosession_counts(void);
 int test_ui_demo_build_all_is_union(void);
 int test_ui_demo_term_text_ends_with_prompt(void);
 int test_ui_demo_thinking_text_non_empty(void);
@@ -2052,6 +2057,9 @@ int main(void) {
     failed += test_cli_usage_text_mentions_all_flags();
     failed += test_cli_ui_demo_bare_defaults_to_all();
     failed += test_cli_ui_demo_with_state();
+    failed += test_cli_ui_demo_nokey_state();
+    failed += test_cli_ui_demo_nosession_state();
+    failed += test_cli_ui_demo_all_still_accepted_with_new_states();
     failed += test_cli_ui_demo_unknown_state_is_error();
     failed += test_cli_theme_with_ui_demo();
     failed += test_cli_theme_before_ui_demo_still_applies();
@@ -3749,7 +3757,7 @@ int main(void) {
     failed += test_ns_anim_progress_tick_wraparound_near_ulong_max();
 
     printf("\n--- Design System: demo ---\n");
-    failed += test_ui_demo_states_lists_seven_ending_in_all();
+    failed += test_ui_demo_states_lists_nine_ending_in_all();
     failed += test_ui_demo_state_valid_accepts_every_listed_state();
     failed += test_ui_demo_state_valid_rejects_unknown_and_null();
     failed += test_ui_demo_build_unknown_state_returns_error();
@@ -3760,6 +3768,8 @@ int main(void) {
     failed += test_ui_demo_build_tool_counts();
     failed += test_ui_demo_build_error_counts();
     failed += test_ui_demo_build_empty_counts();
+    failed += test_ui_demo_build_nokey_counts();
+    failed += test_ui_demo_build_nosession_counts();
     failed += test_ui_demo_build_all_is_union();
     failed += test_ui_demo_term_text_ends_with_prompt();
     failed += test_ui_demo_thinking_text_non_empty();

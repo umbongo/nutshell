@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.0.95 \
+**Version**: v1.0.96 \
 **Build Date**: 2026-09-07 \
 **Author**: Thomas Sulkiewicz
 
@@ -17,11 +17,12 @@ Built entirely with the Win32 API, no external UI frameworks. Cross-compiled fro
 The standout feature: an integrated AI panel that sits alongside your terminal session. It sees what you see — a configurable window of recent terminal output — and can act on it.
 
 - **Context-aware** — the AI reads a configurable window of your live terminal output (1,000 lines by default, up to 50,000) and tailors responses to what's happening on screen
-- **Command execution** — suggests commands that appear inline with Allow/Deny buttons; nothing runs without your approval
-- **Streaming responses** — real-time token streaming with chain-of-thought / reasoning display
+- **Command execution** — suggested commands land in a single approval card (checkboxes, a risk tag per command, `Deny all` / `Run N selected`); nothing runs without your approval
+- **Streaming responses** — real-time token streaming, with a collapsible "Thinking" disclosure for chain-of-thought / reasoning
 - **Multi-provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or any OpenAI-compatible endpoint
 - **Per-session context** — attach notes to each server profile (e.g. "production database — read-only") that guide the AI's behaviour
-- **Safety controls** — Permit Write toggle restricts the AI to read-only commands; Auto Approve for trusted workflows
+- **Safety controls** — a Read-only / Read + write mode switch and an Auto approve level (off / safe only / all) sit directly above the input, next to a context-usage meter
+- **Guided empty states** — the panel always opens: it shows starter suggestions with nothing to ask yet, a button straight to Settings when no API key is set, and a button to the Session Manager when no session is connected
 
 ## Pre-built Binary
 
@@ -29,7 +30,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 
 ## Features
 
-- AI chat assistant with terminal context, command execution, streaming, and reasoning display
+- AI chat assistant with terminal context, an approval card for command execution, streaming, and a Thinking disclosure for reasoning
 - Multi-tab SSH sessions with owner-drawn tab strip (status dots, log indicator, close button)
 - VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
 - Password and SSH key authentication with passphrase prompt and retry
@@ -40,7 +41,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 1,539 unit tests, zero lint warnings
+- 1,699 unit tests, zero lint warnings
 
 ---
 
@@ -192,20 +193,23 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 
 ### AI Chat Assistant
 
-Click the **AI** button in the tab strip to open the chat panel. The button is green when an API key is configured, grey otherwise.
+Click the **AI** button in the tab strip (or press **Ctrl+Space**, or use View > AI Assist) to open the panel. The button is green when an API key is configured, grey otherwise — either way the panel opens; it just shows one of the [empty states](#empty-no-key-and-no-session-states) below when there's nothing to display yet.
 
 The AI assistant can see the recent history of your terminal output (1,000 lines by default, configurable up to 50,000) and execute commands over SSH. Each tab maintains its own independent conversation history.
 
-#### Chat Window Controls
+#### Header
 
-| Control | Function |
-|---------|----------|
-| **New Chat** | Clear the conversation and start fresh |
-| **Permit Write** | Toggle read/write mode. **Green** = AI can execute any command. **Grey** = AI restricted to read-only commands (ls, cat, pwd, etc.) |
-| **Auto Approve** | Click twice within 3 seconds to confirm activation. Once on, automatically approves safe (read-only) commands without prompting — write/critical commands still require a manual Allow, unless **Auto Approve also covers write/critical commands** is enabled in Settings (AI Assistant > Behaviour) |
-| **Show Thinking** | Toggle display of AI reasoning/chain-of-thought |
-| **Save** (disk icon) | Save the conversation as a plain text file |
-| **Context bar** | Shows approximate token usage as a percentage of the model's context window |
+- The session name, in the title font
+- A **model chip** naming the active model
+- Three icon buttons, each with a tooltip: **New chat** (clear the conversation and start fresh), **Save chat** (export the conversation as a plain text file), and **Undock/Dock** (pop the panel into its own window, or dock it back into the main frame)
+
+#### Status Line
+
+A line above the input box, always visible once a session is connected:
+
+- **Mode switch** — a two-segment control, **Read-only** / **Read + write**. Read-only restricts the AI to safe, non-mutating commands (`ls`, `cat`, `pwd`, etc.); **Read + write** is tinted with a warning colour whenever it's selected, so a permissive session stays visible at a glance
+- **Auto approve** — click to cycle **off** → **safe only** → **all** (the "all" level, which also auto-runs write/critical commands, only appears when **Auto Approve also covers write/critical commands** is enabled in Settings under AI Assistant > Behaviour)
+- **Context meter** — a small bar plus `used / limit` numbers showing how much of the model's context window the conversation is using; hover it for the exact token counts
 
 #### Sending Messages
 
@@ -213,16 +217,31 @@ The AI assistant can see the recent history of your terminal output (1,000 lines
 - **Enter** sends the message
 - **Shift+Enter** inserts a newline (for multi-line messages)
 - **Ctrl+V** with an image on the clipboard attaches a screenshot (sent as base64 PNG to multimodal-capable providers)
-- Click **Send** (or press Enter) to submit
+- Click **Send** (or press Enter) to submit; while a reply is streaming the button becomes **Stop**
 
 #### Command Execution
 
-When the AI suggests commands, they appear **inline in the chat window** with Allow/Deny buttons. You can:
+When the AI suggests commands, they land in one approval card in the chat thread:
 
-- **Allow** — execute all queued commands in sequence
-- **Deny** — reject the commands
+- **Header** — "N commands · M held", plus the reason (e.g. "Permit write is off") when any are held back
+- **Rows** — a checkbox, the command text, and a risk tag (**SAFE** / **WRITE** / **CRITICAL**). Held rows show a disabled checkbox and dimmed text. Pending safe commands start checked
+- **Actions** — **Deny all** rejects every row; **Run N selected** executes the checked rows (disabled when nothing is checked)
 
-After commands execute, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed.
+With session Auto approve on, safe rows are approved and start running the moment they arrive, same as before — the card just shows them as executing instead of waiting for a click. After commands execute, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed.
+
+#### Thought Process
+
+When a reply carries reasoning, a **Thinking** disclosure appears above the reply text: a chevron, the word "Thinking", and a dimmed summary (`· 240 words` once finished, `· streaming…` while still arriving). Click anywhere on the row to expand or collapse it. It opens automatically while a reply is streaming so you can watch the reasoning live, then collapses back to the summary once the reply text starts — unless you've expanded it yourself, in which case it stays open for the rest of the session. Replies with no reasoning show no disclosure at all.
+
+#### Empty, No-Key, and No-Session States
+
+The panel always opens, even with nothing to show yet — there's no longer a dialog that blocks it:
+
+| State | When | What it offers |
+|-------|------|-----------------|
+| **Ask about this session** | A connected session with an empty conversation | Three suggestion chips ("What's using disk?", "Why did that fail?", "Summarise the log") — click one to send it as a prompt |
+| **Add an API key to use the assistant** | No AI API key configured | An **Open Settings** button that jumps straight to AI Assistant > Provider |
+| **Connect to a session first** | No connected SSH session | An **Open Session Manager** button |
 
 #### Per-Session Notes
 

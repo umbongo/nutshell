@@ -12,7 +12,9 @@
  * already renders, so the gallery cannot drift from production behaviour.
  *
  * Recognised states: "chat", "approval", "executing", "tool", "error",
- * "empty", "all" (the union of the other six). */
+ * "empty", "nokey", "nosession", "all" (the union of the other seven --
+ * "nokey" and "nosession" carry no conversation/approval content of their
+ * own, same as "empty", so "all" is unaffected by their addition). */
 
 /* Build the canned conversation, approval queue and terminal text for one
  * demo state.

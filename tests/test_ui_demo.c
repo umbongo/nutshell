@@ -17,13 +17,13 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
     return n;
 }
 
-int test_ui_demo_states_lists_seven_ending_in_all(void)
+int test_ui_demo_states_lists_nine_ending_in_all(void)
 {
     TEST_BEGIN();
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 7);
+    ASSERT_EQ(count, 9);
     ASSERT_STR_EQ(states[count - 1], "all");
     TEST_END();
 }
@@ -140,6 +140,28 @@ int test_ui_demo_build_empty_counts(void)
     AiConversation conv;
     ApprovalQueue approval;
     ASSERT_EQ(ui_demo_build("empty", &conv, &approval, NULL, 0), 0);
+    ASSERT_EQ(conv.msg_count, 1); /* system prompt only -- always skipped */
+    ASSERT_EQ(approval.count, 0);
+    TEST_END();
+}
+
+int test_ui_demo_build_nokey_counts(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval;
+    ASSERT_EQ(ui_demo_build("nokey", &conv, &approval, NULL, 0), 0);
+    ASSERT_EQ(conv.msg_count, 1); /* system prompt only -- always skipped */
+    ASSERT_EQ(approval.count, 0);
+    TEST_END();
+}
+
+int test_ui_demo_build_nosession_counts(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval;
+    ASSERT_EQ(ui_demo_build("nosession", &conv, &approval, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 1); /* system prompt only -- always skipped */
     ASSERT_EQ(approval.count, 0);
     TEST_END();

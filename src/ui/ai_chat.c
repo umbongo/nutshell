@@ -4342,14 +4342,19 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
 
     /* The demo session has no channel (window.c's create_demo_session
      * passes NULL), so update_panel_state() would otherwise read every
-     * demo state as AI_STATE_NO_SESSION. Only "empty" actually leaves
-     * msg_list empty (every other state's replayed turns make the state
-     * moot -- chat_listview only paints it when the list has zero items),
-     * so force AI_STATE_EMPTY there and leave every other state
-     * undecided-but-irrelevant. ui_demo gains dedicated "nokey"/
-     * "nosession" states in task 5. */
-    ai_chat_force_state(hwnd, (state && strcmp(state, "empty") == 0)
-                              ? AI_STATE_EMPTY : -1);
+     * demo state as AI_STATE_NO_SESSION. "empty", "nokey" and "nosession"
+     * are the only states that actually leave msg_list empty (every other
+     * state's replayed turns make the forced state moot -- chat_listview
+     * only paints it when the list has zero items), so force the matching
+     * AiPanelStateId for those three and leave every other state
+     * undecided-but-irrelevant. */
+    int forced = -1;
+    if (state) {
+        if (strcmp(state, "empty") == 0) forced = AI_STATE_EMPTY;
+        else if (strcmp(state, "nokey") == 0) forced = AI_STATE_NO_KEY;
+        else if (strcmp(state, "nosession") == 0) forced = AI_STATE_NO_SESSION;
+    }
+    ai_chat_force_state(hwnd, forced);
 
     /* Gallery: "chat" shows the Thinking disclosure collapsed (the normal
      * post-reply state); "all" shows it expanded so the review set covers

@@ -209,6 +209,42 @@ int test_cli_ui_demo_with_state(void)
     TEST_END();
 }
 
+int test_cli_ui_demo_nokey_state(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--ui-demo=nokey" };
+    CliOptions o;
+    cli_parse(2, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_UI_DEMO);
+    ASSERT_STR_EQ(o.demo_state, "nokey");
+    TEST_END();
+}
+
+int test_cli_ui_demo_nosession_state(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--ui-demo=nosession" };
+    CliOptions o;
+    cli_parse(2, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_UI_DEMO);
+    ASSERT_STR_EQ(o.demo_state, "nosession");
+    TEST_END();
+}
+
+int test_cli_ui_demo_all_still_accepted_with_new_states(void)
+{
+    /* "all" stays valid and distinct from the two new states -- adding
+     * nokey/nosession to ui_demo_states() must not change what "all"
+     * means to cli_parse (it's just one more valid --ui-demo value). */
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--ui-demo=all" };
+    CliOptions o;
+    cli_parse(2, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_UI_DEMO);
+    ASSERT_STR_EQ(o.demo_state, "all");
+    TEST_END();
+}
+
 int test_cli_ui_demo_unknown_state_is_error(void)
 {
     TEST_BEGIN();

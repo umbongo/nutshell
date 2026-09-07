@@ -10,7 +10,8 @@
  * always last and always means "union of the other six".
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
-    "chat", "approval", "executing", "tool", "error", "empty", "all"
+    "chat", "approval", "executing", "tool", "error", "empty",
+    "nokey", "nosession", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
 
@@ -300,7 +301,10 @@ int ui_demo_build(const char *state, AiConversation *conv,
         build_tool(conv);
     if (is_all || strcmp(state, "error") == 0)
         build_error(conv);
-    /* "empty" adds nothing beyond the system message. */
+    /* "empty", "nokey" and "nosession" add nothing beyond the system
+     * message -- their distinct look comes entirely from the forced
+     * AiPanelStateId the win32 side applies via ai_chat_force_state()
+     * (see ai_chat_apply_demo_extras() in ai_chat.c). */
 
     return 0;
 }

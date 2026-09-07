@@ -243,10 +243,20 @@ Invoke-AiCase "ai_write_command_blocked_without_permit_write" {
 
 # ---- UI gallery ----------------------------------------------------------------
 # Contact sheet of every --ui-demo state x theme (Design-System Foundation,
-# spec section 5). Needs no SSH host or key -- --ui-demo never connects -- so
-# this runs as its own block, gated on $Only the same way Invoke-Case is,
-# rather than through it: it must not call Wait-NutshellShell or
-# Start-NutshellLogging, both of which assume a live shell prompt.
+# spec section 5; AI Assist Panel plan task 5 added "nokey"/"nosession").
+# Needs no SSH host or key -- --ui-demo never connects -- so this runs as its
+# own block, gated on $Only the same way Invoke-Case is, rather than through
+# it: it must not call Wait-NutshellShell or Start-NutshellLogging, both of
+# which assume a live shell prompt.
+#
+# $galleryStates is a hand-kept copy of src/core/ui_demo.c's STATE_NAMES
+# (minus "all", which the loop below adds separately so state x theme stays
+# a clean rectangle) -- there is no cheap way for a PowerShell script to
+# query the C array at build time, and --ui-demo=<unknown>'s error text
+# ("Unknown demo state: <name>") does not enumerate the valid ones. Native
+# coverage that this list can't silently drift from ui_demo_states() lives
+# in tests/test_ui_demo.c (test_ui_demo_states_lists_nine_ending_in_all
+# et al.) -- keep both lists in sync by hand when a state is added/removed.
 
 function Test-NutshellCaptureNonBlank {
     <# A handful of sampled pixels must not all be identical -- proof the
@@ -278,7 +288,7 @@ if ($Only.Count -eq 0 -or $Only -contains "ui_gallery") {
     Write-Host ("[RUN ] ui_gallery")
     $galleryDir = Join-Path $Artifacts "gallery"
     New-Item -ItemType Directory -Force $galleryDir | Out-Null
-    $galleryStates = @("chat", "approval", "executing", "tool", "error", "empty", "all")
+    $galleryStates = @("chat", "approval", "executing", "tool", "error", "empty", "nokey", "nosession", "all")
     $galleryThemes = @("Onyx Synapse", "Onyx Light", "Sage & Sand", "Moss & Mist")
     $galleryOk = $true
     $galleryDetail = New-Object System.Collections.ArrayList
@@ -310,6 +320,26 @@ if ($Only.Count -eq 0 -or $Only -contains "ui_gallery") {
     $galleryReport = $galleryDetail -join "; "
     if ($galleryOk) { Write-Host "[PASS] ui_gallery" } else { Write-Host ("[FAIL] ui_gallery -- " + $galleryReport) }
     [void]$results.Add([pscustomobject]@{ Name = "ui_gallery"; Passed = $galleryOk; Detail = $galleryReport })
+}
+
+# ---- AI panel without a key -----------------------------------------------------
+# Keystroke-free: unlike Invoke-AiCase (which needs a real API key to send a
+# prompt), this only needs a connected session and an *empty* ai_api_key --
+# proof that the two MessageBox dead ends (AI Assist Panel design, "Empty and
+# blocked states") are gone and the panel opens straight into the no-key
+# state instead. Runs through Invoke-Case directly (not Invoke-AiCase) since
+# it must run even when no AI key is configured for the other ai_* cases.
+Invoke-Case "ai_panel_opens_without_key" @{ ai_api_key = "" } {
+    param($s)
+    Send-NutshellCommand -Session $s -Id 2020 -SettleMs 1500      # IDM_VIEW_AI_CHAT
+    $dialogs = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t#32770`t" })
+    Assert-True ($dialogs.Count -eq 0) "a dialog appeared opening the panel with no API key: $($dialogs -join '; ')"
+    $p = Get-NutshellAiPanel -Session $s
+    Assert-True ($p -ne [IntPtr]::Zero) "AI Assist panel did not open with no API key"
+    $path = Join-Path $Artifacts "ai_panel_no_key.png"
+    Save-NutshellScreenshot -Session $s -Path $path | Out-Null
+    Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: ai_panel_no_key.png"
+    "panel opened with no key (hwnd $p), no dialog"
 }
 
 # ---- Summary ------------------------------------------------------------------
