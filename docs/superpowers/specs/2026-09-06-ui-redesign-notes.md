@@ -184,11 +184,8 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
     lifetime bugs, the relative config-save path, and the Session Manager phantom row
     (all first noted under "Review findings" above, before the design-system work
     started).
-  - The three keystroke-driven `ai_*` integration cases
-    (`ai_panel_docks_with_key`, `ai_runs_safe_command_with_auto_approve`,
-    `ai_write_command_blocked_without_permit_write`) still need a rerun against
-    Moonshot once the desktop is unlocked -- this session could only verify the
-    keystroke-free cases (`ui_gallery`, `ai_panel_opens_without_key`).
+  - Done 2026-09-07: the full integration suite ran 13/13 green against tompi and
+    Moonshot on v1.0.96 with the desktop unlocked (definition-of-done item 4).
   - Thomas to review the gallery (all 36 captures, not just the four sampled above)
     before sub-project 3 starts.
 
