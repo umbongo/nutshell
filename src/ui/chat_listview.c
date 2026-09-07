@@ -22,6 +22,8 @@
 #include "ns_hover.h"
 #include "ns_reduced_motion.h"
 #include "chat_approval.h"
+#include "ai_panel_layout.h"
+#include "ai_prompt.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -52,13 +54,13 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define BASE_USER_PAD_V    8
 #define BASE_AI_INDENT    30
 #define BASE_CODE_PAD      6
-#define BASE_BORDER_W      3   /* Left-border width for thinking blocks */
-#define BASE_THINK_MAX_H 400   /* Max height of expanded thinking region */
-#define BASE_THINK_MIN_H  30   /* Min height of expanded thinking region */
-#define BASE_THINK_HDR_H  20   /* Height of thinking toggle header line */
 #define BASE_ICON_SIZE    20   /* AI avatar circle diameter */
 #define BASE_CORNER_R      6   /* User bubble corner radius */
 #define BASE_SIDE_PAD      8   /* Left/right margin for the whole panel */
+
+/* The Thinking disclosure's row/chevron/label/summary/body geometry comes
+ * from ai_panel_layout's thinking_layout() (Design-System Foundation +
+ * AI Assist Panel, task 1/2) — see build_thinking_layout() below. */
 
 /* ── Command container chrome constants (96 DPI) ─────────────────────
  * Row/tag/button/gap sizing for the approval card itself now comes from
@@ -77,21 +79,28 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 
 /* ── ns_hover element ids ─────────────────────────────────────────────
  * One NsHover per list view (lv->hover) tracks every painted, clickable
- * element: approval-card rows, the card-wide Allow All / Cancel actions,
- * and the [Retry] link in the activity indicator. Ids are shared between
- * paint (which knows what it just drew) and the hover hit-test (which
- * re-derives the same geometry via approval_card_layout/approval_card_hit
- * -- see chatlv_hover_hit() / chatlv_hover_rect_for_id() below), so the
- * two can never drift apart.
+ * element: approval-card rows, the card-wide Deny all / Run N selected
+ * actions, the [Retry] link in the activity indicator, and every AI
+ * item's Thinking disclosure row. Ids are shared between paint (which
+ * knows what it just drew) and the hover hit-test (which re-derives the
+ * same geometry via approval_card_layout/approval_card_hit or
+ * build_thinking_layout() -- see chatlv_hover_hit() / chatlv_hover_rect_for_id()
+ * below), so the two can never drift apart.
  *
- *   row element   -> row * 16 + HIT_* (HIT_TAG..HIT_DENY)
- *   card action   -> APPROVAL_MAX_CMDS * 16 + HIT_* (HIT_ALLOW_ALL/HIT_CANCEL,
- *                    which have no row -- approval_card_hit reports -1)
- *   [Retry] link  -> CLV_HOVER_RETRY, clear of the row/card id range
+ *   row element     -> row * 16 + HIT_* (HIT_TAG/HIT_TEXT/HIT_CHECKBOX)
+ *   card action     -> APPROVAL_MAX_CMDS * 16 + HIT_* (HIT_DENY_ALL/
+ *                      HIT_RUN_SELECTED, which have no row -- approval_card_hit
+ *                      reports -1)
+ *   [Retry] link    -> CLV_HOVER_RETRY, clear of the row/card id range
+ *   Thinking row    -> CLV_THINK_HOVER_ID(item->id), clear of every id above
+ *                      (ChatMsgItem ids are unique and only ever grow, so a
+ *                      fixed base above CLV_HOVER_RETRY never collides)
  */
 #define CLV_ROW_HIT_ID(row, hit)  ((row) * 16 + (hit))
 #define CLV_CARD_HIT_ID(hit)      (APPROVAL_MAX_CMDS * 16 + (hit))
 #define CLV_HOVER_RETRY           (APPROVAL_MAX_CMDS * 16 + 16)
+#define CLV_THINK_HOVER_BASE      (CLV_HOVER_RETRY + 1)
+#define CLV_THINK_HOVER_ID(iid)   (CLV_THINK_HOVER_BASE + (iid))
 
 /* ── Forward declarations ───────────────────────────────────────────── */
 
@@ -105,9 +114,11 @@ static void     paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                 RECT *rc);
 static void     paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                RECT *rc);
-static void     paint_cmd_card(ChatListView *lv, HDC hdc,
-                               ChatMsgItem *item, RECT *rc);
 static void     paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc);
+static void     build_thinking_layout(ChatListView *lv, HDC hdc,
+                              ChatMsgItem *item, int box_left, int box_right,
+                              int content_top, ThinkingLayout *out,
+                              int *out_full_body_h);
 static void     paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                               const ApprovalRowLayout *row, int row_idx);
 static void     paint_status_item(ChatListView *lv, HDC hdc,
@@ -196,6 +207,66 @@ static const char *safety_tag_text(CmdSafetyLevel level)
     case CMD_CRITICAL: return "CRITICAL";
     default:           return "SAFE";
     }
+}
+
+/* ── Thinking disclosure geometry ──────────────────────────────────────
+ * Wraps ai_panel_layout's thinking_layout() with the one thing it can't
+ * know on its own: the wrapped reasoning text's measured height at the
+ * body box's width. thinking_layout() needs that height as an input (to
+ * clamp it to max_body_h and compute total_h), but the body box's width
+ * is itself an output of thinking_layout() -- so this calls it twice when
+ * expanded: once to learn body.w (any body_text_h works for that, since
+ * row/chevron/label/summary/body.x/body.w never depend on it), then again
+ * with the real measured height. Shared by measure_item(), paint_ai_item(),
+ * the click/hover hit-tests and the wheel-scroll handler so they can never
+ * disagree about where the row and body actually are. */
+static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                                  int box_left, int box_right, int content_top,
+                                  ThinkingLayout *out, int *out_full_body_h)
+{
+    int dpi = CLV_DPI(lv);
+    NsRect avail = { box_left, content_top, box_right - box_left, 0 };
+    int expanded = !item->u.ai.thinking_collapsed;
+    int max_body_h = lv->viewport_height / 2;
+    if (max_body_h < 1) max_body_h = 1;
+
+    thinking_layout(avail, expanded, 0, max_body_h, dpi, out);
+
+    int full_h = 0;
+    if (expanded && hdc && out->body.w > 0) {
+        HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
+                                       : GetStockObject(DEFAULT_GUI_FONT));
+        RECT mr;
+        SetRect(&mr, 0, 0, out->body.w, 0);
+        draw_text_utf8(hdc, item->u.ai.thinking_text ? item->u.ai.thinking_text : "",
+                       &mr, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+        full_h = mr.bottom - mr.top;
+        SelectObject(hdc, tf);
+
+        thinking_layout(avail, expanded, full_h, max_body_h, dpi, out);
+    }
+    if (out_full_body_h) *out_full_body_h = full_h;
+}
+
+/* A small down-pointing "v" stroke -- the expanded state of the Thinking
+ * disclosure's chevron. NS_ICON_CHEV_RIGHT (collapsed) has no rotated/
+ * down-pointing counterpart in the icon set, so this draws one directly
+ * with two line segments per the design spec. */
+static void draw_chevron_down(HDC hdc, const RECT *rc, COLORREF colour)
+{
+    int cx = (rc->left + rc->right) / 2;
+    int top = rc->top + (rc->bottom - rc->top) / 3;
+    int bot = rc->bottom - (rc->bottom - rc->top) / 3;
+    int half_w = (rc->right - rc->left) / 3;
+    if (half_w < 2) half_w = 2;
+
+    HPEN pen = CreatePen(PS_SOLID, STROKE_RULE, colour);
+    HGDIOBJ old_pen = SelectObject(hdc, pen);
+    MoveToEx(hdc, cx - half_w, top, NULL);
+    LineTo(hdc, cx, bot);
+    LineTo(hdc, cx + half_w, top);
+    SelectObject(hdc, old_pen);
+    DeleteObject(pen);
 }
 
 /* ── Selection: check if an item overlaps the selection range ──────── */
@@ -463,6 +534,15 @@ void chat_listview_scroll_to_bottom(HWND hwnd)
     InvalidateRect(hwnd, NULL, TRUE);
 }
 
+void chat_listview_scroll_to_top(HWND hwnd)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    lv->scroll_y = 0;
+    update_scrollbar(lv);
+    InvalidateRect(hwnd, NULL, TRUE);
+}
+
 int chat_listview_is_near_bottom(HWND hwnd)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
@@ -494,16 +574,12 @@ void chat_listview_relayout(HWND hwnd)
  *  Layout: measure all items, compute total_height
  * ══════════════════════════════════════════════════════════════════════ */
 
-/* Approval-card row height at the current panel width. Must agree with the
- * NsRect that build_cmd_card_geometry hands to approval_card_layout (the box
- * inset by the side padding and border), otherwise scroll maths and container
- * sizing drift from what is painted — especially once rows go two-line. */
-static int clv_cmd_row_h(ChatListView *lv, int width, int text_h)
+/* Approval-card row height at the current DPI. v2 rows are always
+ * single-line regardless of card width (approval_row_height no longer
+ * takes one) -- see ns_layout.h. */
+static int clv_cmd_row_h(ChatListView *lv, int text_h)
 {
-    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
-    int border_w = ns_scale(1, CLV_DPI(lv));
-    int card_w = width - 4 * side_pad - 2 * border_w;
-    return approval_row_height(card_w, text_h, CLV_DPI(lv));
+    return approval_row_height(text_h, CLV_DPI(lv));
 }
 
 static void recalc_layout(ChatListView *lv)
@@ -534,13 +610,12 @@ static void recalc_layout(ChatListView *lv)
 
     /* Pass 2: compute command container — group all commands into a
      * scrollable container drawn by the first command item. Each row is a
-     * single fixed-height line (tag + ellipsised command text + checkbox +
-     * Allow/Deny), laid out by ns_layout's approval_card_layout(); see
+     * single fixed-height line (checkbox + ellipsised command text + risk
+     * tag), laid out by ns_layout's approval_card_layout(); see
      * paint_cmd_container() and build_cmd_card_geometry() below. */
     {
         int n = 0;
         ChatMsgItem *first_cmd = NULL;
-        int any_blocked = 0;
 
         HDC hdc2 = GetDC(lv->hwnd);
         int text_h = 0;
@@ -557,7 +632,6 @@ static void recalc_layout(ChatListView *lv)
         while (item) {
             if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled) {
                 if (!first_cmd) first_cmd = item;
-                if (item->u.cmd.blocked) any_blocked = 1;
                 if (n < APPROVAL_MAX_CMDS) {
                     const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
                                                                : item->text;
@@ -579,7 +653,7 @@ static void recalc_layout(ChatListView *lv)
         lv->cmd_count = n;
 
         if (n > 0 && first_cmd) {
-            int row_h = clv_cmd_row_h(lv, width, text_h);
+            int row_h = clv_cmd_row_h(lv, text_h);
 
             int visible_rows = (n < APPROVAL_VISIBLE_MAX) ? n : APPROVAL_VISIBLE_MAX;
             lv->cmd_total_h   = n * row_h;
@@ -590,15 +664,17 @@ static void recalc_layout(ChatListView *lv)
             if (lv->cmd_scroll_y > max_cmd_scroll) lv->cmd_scroll_y = max_cmd_scroll;
             if (lv->cmd_scroll_y < 0) lv->cmd_scroll_y = 0;
 
+            /* Interior = header row + gap + visible rows + gap + actions
+             * row, exactly matching approval_card_layout's own geometry
+             * (see build_cmd_card_geometry) so scroll maths never drifts
+             * from what is painted. */
             int pad          = ns_scale(SP_MD, CLV_DPI(lv));
             int gap_sm       = ns_scale(SP_SM, CLV_DPI(lv));
-            int action_ctrl_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
-            int interior_h   = 2 * pad + visible_rows * row_h + gap_sm + action_ctrl_h;
+            int ctrl_h       = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
+            int interior_h   = 2 * pad + 2 * ctrl_h + 2 * gap_sm + visible_rows * row_h;
 
-            int header_h = any_blocked
-                ? (ns_scale(20, CLV_DPI(lv)) + ns_scale(4, CLV_DPI(lv))) : 0;
             int border_w = ns_scale(1, CLV_DPI(lv));
-            int container_h = 2 * border_w + header_h + interior_h;
+            int container_h = 2 * border_w + interior_h;
 
             /* First command absorbs the full container height */
             first_cmd->measured_height = container_h;
@@ -749,34 +825,14 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         /* Icon row + gap before content (must match paint_ai_item layout) */
         int total = h + ns_scale(BASE_ICON_SIZE, CLV_DPI(lv)) + ns_scale(4, CLV_DPI(lv));
 
-        /* Thinking block height — shown during streaming and after completion */
+        /* Thinking disclosure height — a clickable row plus, when
+         * expanded, a body box capped at half the thread height. Box
+         * position doesn't matter for a height-only measurement, so
+         * box_left/content_top are just 0. */
         if (item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
-            int hdr_h = ns_scale(BASE_THINK_HDR_H, CLV_DPI(lv));
-            int pad = lv->code_pad;
-            int gap = ns_scale(6, CLV_DPI(lv));
-
-            if (item->u.ai.thinking_collapsed) {
-                /* Collapsed: header + border + gap */
-                total += hdr_h + 2 * pad + gap;
-            } else {
-                /* Expanded: measure thinking text height */
-                int think_w = text_w - 2 * pad;
-                if (think_w < 20) think_w = 20;
-                HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
-                                          : GetStockObject(DEFAULT_GUI_FONT));
-                RECT trc;
-                SetRect(&trc, 0, 0, think_w, 0);
-                draw_text_utf8(hdc, item->u.ai.thinking_text, &trc,
-                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-                int think_h = trc.bottom - trc.top;
-                SelectObject(hdc, tf);
-
-                int max_h = ns_scale(BASE_THINK_MAX_H, CLV_DPI(lv));
-                if (think_h > max_h) think_h = max_h;
-
-                /* header + separator + body + border + gap */
-                total += hdr_h + think_h + 3 * pad + gap;
-            }
+            ThinkingLayout tl;
+            build_thinking_layout(lv, hdc, item, 0, text_w, 0, &tl, NULL);
+            total += tl.total_h + ns_scale(SP_SM, CLV_DPI(lv));
         }
 
         return total;
@@ -803,7 +859,7 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                 text_line_h = tm.tmHeight;
             }
             SelectObject(hdc, old_font);
-            return clv_cmd_row_h(lv, width, text_line_h);
+            return clv_cmd_row_h(lv, text_line_h);
         }
     }
 
@@ -1027,6 +1083,7 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                            RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
+    const ThemeTokens *tok = ns_tokens();
     int icon_sz = ns_scale(BASE_ICON_SIZE, CLV_DPI(lv));
     int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
 
@@ -1085,274 +1142,123 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
     int content_top = rc->top + icon_sz + ns_scale(4, CLV_DPI(lv));
 
-    /* ── Thinking block (contained box) — shown during streaming and
-     * after completion.  During streaming the header shows a pulsing
-     * green dot; after completion it shows "Thought for X.Xs". ───── */
+    /* ── Thinking disclosure: chevron + "Thinking" + a dimmed summary, and
+     * (when expanded) the full reasoning on bg_secondary with an accent
+     * bar down the left, scrollable inside a box capped at half the
+     * thread height. Geometry from ai_panel_layout's thinking_layout() via
+     * build_thinking_layout() -- shared with measure_item() and the
+     * click/hover/wheel handlers so painting never drifts from hit-testing.
+     * See docs/superpowers/specs/2026-09-07-ai-assist-panel-design.md
+     * "Thought process". ─────────────────────────────────────────────── */
     if (item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
-        int hdr_h   = ns_scale(BASE_THINK_HDR_H, CLV_DPI(lv));
-        int pad     = lv->code_pad;
-        int corner  = ns_scale(6, CLV_DPI(lv));
-        int gap     = ns_scale(6, CLV_DPI(lv));
         int box_left  = rc->left + lv->ai_indent;
         int box_right = rc->right - side_pad;
+        int expanded  = !item->u.ai.thinking_collapsed;
 
-        if (item->u.ai.thinking_collapsed) {
-            /* ── Collapsed: single header row ─────────────────── */
-            RECT box_rc;
-            SetRect(&box_rc, box_left, content_top,
-                    box_right, content_top + hdr_h + 2 * pad);
-            ns_draw_round_fill(hdc, &box_rc, ns_scale(R_CARD, CLV_DPI(lv)),
-                               RGB_FROM_THEME(tc->cmd_bg), 255);
-            /* Border */
-            HPEN border_pen = CreatePen(PS_SOLID, 1,
-                                        RGB_FROM_THEME(tc->cmd_border));
-            HGDIOBJ old_pen2 = SelectObject(hdc, border_pen);
-            HGDIOBJ old_br2 = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            RoundRect(hdc, box_rc.left, box_rc.top,
-                      box_rc.right, box_rc.bottom, corner, corner);
-            SelectObject(hdc, old_pen2);
-            SelectObject(hdc, old_br2);
-            DeleteObject(border_pen);
+        ThinkingLayout tl;
+        int full_h = 0;
+        build_thinking_layout(lv, hdc, item, box_left, box_right,
+                              content_top, &tl, &full_h);
 
-            /* Header text: chevron + optional pulsing dot + label */
-            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
-            SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont
-                              : GetStockObject(DEFAULT_GUI_FONT));
-            RECT hdr_rc;
-            SetRect(&hdr_rc, box_rc.left + pad, box_rc.top + pad,
-                    box_rc.right - pad, box_rc.bottom - pad);
+        COLORREF dim_clr = RGB_FROM_THEME(tok->text_dim);
 
-            if (item->u.ai.thinking_complete) {
-                char hdr_buf[64];
-                snprintf(hdr_buf, sizeof(hdr_buf),
-                         "\xe2\x96\xb6  Thought for %.1fs",
-                         (double)item->u.ai.thinking_elapsed);
-                draw_text_utf8(hdc, hdr_buf, &hdr_rc,
-                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
-                               | DT_END_ELLIPSIS);
-            } else {
-                /* Draw chevron */
-                draw_text_utf8(hdc, "\xe2\x96\xb6", &hdr_rc,
-                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-                /* Measure chevron width to position dot after it */
-                RECT chev_rc;
-                SetRect(&chev_rc, 0, 0, 0, 0);
-                draw_text_utf8(hdc, "\xe2\x96\xb6", &chev_rc,
-                               DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
-                int dot_x = hdr_rc.left + (chev_rc.right - chev_rc.left)
-                            + ns_scale(6, CLV_DPI(lv));
-                int dot_sz = ns_scale(BASE_DOT_SIZE, CLV_DPI(lv));
-                int dot_y = hdr_rc.top
-                            + (hdr_rc.bottom - hdr_rc.top - dot_sz) / 2;
-                /* Pulsing dot — blend with bg on alternate ticks */
-                COLORREF dot_clr = RGB_FROM_THEME(tc->thinking_text);
-                if (lv->pulse_toggle && !ns_reduced_motion()) {
-                    COLORREF bg = RGB_FROM_THEME(tc->cmd_bg);
-                    dot_clr = RGB(
-                        (GetRValue(dot_clr) + GetRValue(bg)) / 2,
-                        (GetGValue(dot_clr) + GetGValue(bg)) / 2,
-                        (GetBValue(dot_clr) + GetBValue(bg)) / 2);
-                }
-                HBRUSH dbr = CreateSolidBrush(dot_clr);
-                HPEN   dpen = CreatePen(PS_SOLID, 1, dot_clr);
-                HGDIOBJ obr = SelectObject(hdc, dbr);
-                HGDIOBJ old_dpen = SelectObject(hdc, dpen);
-                Ellipse(hdc, dot_x, dot_y,
-                        dot_x + dot_sz, dot_y + dot_sz);
-                SelectObject(hdc, old_dpen);
-                SelectObject(hdc, obr);
-                DeleteObject(dpen);
-                DeleteObject(dbr);
+        /* Chevron: CHEV_RIGHT collapsed, a hand-drawn down "v" expanded --
+         * no down-pointing icon exists in the icon set. */
+        RECT chev_rc = { tl.chevron.x, tl.chevron.y,
+                         tl.chevron.x + tl.chevron.w,
+                         tl.chevron.y + tl.chevron.h };
+        if (expanded)
+            draw_chevron_down(hdc, &chev_rc, dim_clr);
+        else
+            ns_icon_draw(hdc, NS_ICON_CHEV_RIGHT, &chev_rc, dim_clr,
+                        (UINT)(96.0f * lv->dpi_scale));
 
-                /* "Thinking..." label after the dot */
-                RECT lbl_rc;
-                SetRect(&lbl_rc, dot_x + dot_sz + ns_scale(4, CLV_DPI(lv)),
-                        hdr_rc.top, hdr_rc.right, hdr_rc.bottom);
-                draw_text_utf8(hdc, "Thinking...", &lbl_rc,
-                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        /* "Thinking" label (FONT_BODY, text_main) */
+        RECT think_label_rc = { tl.label.x, tl.label.y,
+                                tl.label.x + tl.label.w, tl.label.y + tl.label.h };
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB_FROM_THEME(lv->theme->text_main));
+        SelectObject(hdc, lv->hFont ? lv->hFont : GetStockObject(DEFAULT_GUI_FONT));
+        DrawTextA(hdc, "Thinking", -1, &think_label_rc,
+                  DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
 
-                /* Right-aligned elapsed timer */
-                char time_buf[16];
-                snprintf(time_buf, sizeof(time_buf), "%.1fs",
-                         (double)item->u.ai.thinking_elapsed);
-                RECT time_rc;
-                SetRect(&time_rc, hdr_rc.left, hdr_rc.top,
-                        hdr_rc.right, hdr_rc.bottom);
-                draw_text_utf8(hdc, time_buf, &time_rc,
-                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
-                               | DT_RIGHT);
-            }
+        /* Summary: "\xC2\xB7 N words" or "\xC2\xB7 streaming\xE2\x80\xA6", text_dim */
+        {
+            char summary_buf[32];
+            ai_thinking_summary(ai_word_count(item->u.ai.thinking_text),
+                                !item->u.ai.thinking_complete,
+                                summary_buf, sizeof(summary_buf));
+            RECT summary_rc = { tl.summary.x, tl.summary.y,
+                                tl.summary.x + tl.summary.w,
+                                tl.summary.y + tl.summary.h };
+            SetTextColor(hdc, dim_clr);
+            draw_text_utf8(hdc, summary_buf, &summary_rc,
+                           DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX
+                           | DT_END_ELLIPSIS);
+        }
 
-            content_top = box_rc.bottom + gap;
-        } else {
-            /* ── Expanded: header + separator + scrollable body ── */
+        if (expanded && tl.body.h > 0) {
+            RECT body_rc = { tl.body.x, tl.body.y,
+                             tl.body.x + tl.body.w, tl.body.y + tl.body.h };
+            int pad_sm = ns_scale(SP_SM, CLV_DPI(lv));
 
-            /* Measure full thinking text height */
-            int think_w = box_right - box_left - 2 * pad;
-            if (think_w < 20) think_w = 20;
-            HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
-                                      : GetStockObject(DEFAULT_GUI_FONT));
-            RECT mr;
-            SetRect(&mr, 0, 0, think_w, 0);
-            draw_text_utf8(hdc, item->u.ai.thinking_text, &mr,
-                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-            int full_h = mr.bottom - mr.top;
-            int max_h = ns_scale(BASE_THINK_MAX_H, CLV_DPI(lv));
-            int vis_h = full_h;
-            if (vis_h > max_h) vis_h = max_h;
-            if (vis_h < ns_scale(BASE_THINK_MIN_H, CLV_DPI(lv)))
-                vis_h = ns_scale(BASE_THINK_MIN_H, CLV_DPI(lv));
+            /* Accent bar down the left, STROKE_BAR wide (fixed px, not
+             * DPI-scaled -- see ns_type.h). */
+            RECT bar_rc = { box_left + pad_sm, body_rc.top,
+                            box_left + pad_sm + STROKE_BAR, body_rc.bottom };
+            HBRUSH accent_br = CreateSolidBrush(RGB_FROM_THEME(tok->accent.base));
+            FillRect(hdc, &bar_rc, accent_br);
+            DeleteObject(accent_br);
 
-            int box_h = hdr_h + pad + vis_h + 2 * pad;
-            RECT box_rc;
-            SetRect(&box_rc, box_left, content_top,
-                    box_right, content_top + box_h);
-            ns_draw_round_fill(hdc, &box_rc, ns_scale(R_CARD, CLV_DPI(lv)),
-                               RGB_FROM_THEME(tc->cmd_bg), 255);
-            /* Border */
-            HPEN border_pen = CreatePen(PS_SOLID, 1,
-                                        RGB_FROM_THEME(tc->cmd_border));
-            HGDIOBJ old_pen2 = SelectObject(hdc, border_pen);
-            HGDIOBJ old_br2 = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            RoundRect(hdc, box_rc.left, box_rc.top,
-                      box_rc.right, box_rc.bottom, corner, corner);
-            SelectObject(hdc, old_pen2);
-            SelectObject(hdc, old_br2);
-            DeleteObject(border_pen);
+            /* Body background */
+            HBRUSH bg_br2 = CreateSolidBrush(RGB_FROM_THEME(tok->bg_secondary.base));
+            FillRect(hdc, &body_rc, bg_br2);
+            DeleteObject(bg_br2);
 
-            /* Header row */
-            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
-            SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont
-                              : GetStockObject(DEFAULT_GUI_FONT));
-            RECT hdr_rc;
-            SetRect(&hdr_rc, box_rc.left + pad, box_rc.top + pad,
-                    box_rc.right - pad, box_rc.top + pad + hdr_h);
-
-            if (item->u.ai.thinking_complete) {
-                char hdr_buf[64];
-                snprintf(hdr_buf, sizeof(hdr_buf),
-                         "\xe2\x96\xbc  Thought for %.1fs",
-                         (double)item->u.ai.thinking_elapsed);
-                draw_text_utf8(hdc, hdr_buf, &hdr_rc,
-                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
-                               | DT_END_ELLIPSIS);
-            } else {
-                /* Draw chevron */
-                draw_text_utf8(hdc, "\xe2\x96\xbc", &hdr_rc,
-                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-                /* Pulsing dot after chevron */
-                RECT chev_rc;
-                SetRect(&chev_rc, 0, 0, 0, 0);
-                draw_text_utf8(hdc, "\xe2\x96\xbc", &chev_rc,
-                               DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
-                int dot_x = hdr_rc.left + (chev_rc.right - chev_rc.left)
-                            + ns_scale(6, CLV_DPI(lv));
-                int dot_sz = ns_scale(BASE_DOT_SIZE, CLV_DPI(lv));
-                int dot_y = hdr_rc.top
-                            + (hdr_rc.bottom - hdr_rc.top - dot_sz) / 2;
-                COLORREF dot_clr = RGB_FROM_THEME(tc->thinking_text);
-                if (lv->pulse_toggle && !ns_reduced_motion()) {
-                    COLORREF bg = RGB_FROM_THEME(tc->cmd_bg);
-                    dot_clr = RGB(
-                        (GetRValue(dot_clr) + GetRValue(bg)) / 2,
-                        (GetGValue(dot_clr) + GetGValue(bg)) / 2,
-                        (GetBValue(dot_clr) + GetBValue(bg)) / 2);
-                }
-                HBRUSH dbr = CreateSolidBrush(dot_clr);
-                HPEN   dpen = CreatePen(PS_SOLID, 1, dot_clr);
-                HGDIOBJ obr = SelectObject(hdc, dbr);
-                HGDIOBJ old_dpen = SelectObject(hdc, dpen);
-                Ellipse(hdc, dot_x, dot_y,
-                        dot_x + dot_sz, dot_y + dot_sz);
-                SelectObject(hdc, old_dpen);
-                SelectObject(hdc, obr);
-                DeleteObject(dpen);
-                DeleteObject(dbr);
-
-                /* "Thinking..." label */
-                RECT lbl_rc;
-                SetRect(&lbl_rc, dot_x + dot_sz + ns_scale(4, CLV_DPI(lv)),
-                        hdr_rc.top, hdr_rc.right, hdr_rc.bottom);
-                draw_text_utf8(hdc, "Thinking...", &lbl_rc,
-                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-
-                /* Right-aligned elapsed timer */
-                char time_buf[16];
-                snprintf(time_buf, sizeof(time_buf), "%.1fs",
-                         (double)item->u.ai.thinking_elapsed);
-                RECT time_rc;
-                SetRect(&time_rc, hdr_rc.left, hdr_rc.top,
-                        hdr_rc.right, hdr_rc.bottom);
-                draw_text_utf8(hdc, time_buf, &time_rc,
-                               DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX
-                               | DT_RIGHT);
-            }
-
-            /* Separator line */
-            int sep_y = box_rc.top + pad + hdr_h;
-            HPEN sep_pen = CreatePen(PS_SOLID, 1,
-                                     RGB_FROM_THEME(tc->cmd_border));
-            HGDIOBJ old_sep = SelectObject(hdc, sep_pen);
-            MoveToEx(hdc, box_rc.left + pad, sep_y, NULL);
-            LineTo(hdc, box_rc.right - pad, sep_y);
-            SelectObject(hdc, old_sep);
-            DeleteObject(sep_pen);
-
-            /* Body: thinking text with clip region and scroll offset */
-            int body_top = sep_y + pad;
+            int vis_h = tl.body.h;
             int sb_w = (full_h > vis_h) ? ns_scale(6, CLV_DPI(lv)) : 0;
-            RECT clip_rc;
-            SetRect(&clip_rc, box_rc.left + pad, body_top,
-                    box_rc.right - pad - sb_w, body_top + vis_h);
+            RECT clip_rc = body_rc;
+            clip_rc.left += ns_scale(SP_XS, CLV_DPI(lv));
+            clip_rc.right -= sb_w;
+
+            int max_scroll = (full_h > vis_h) ? full_h - vis_h : 0;
+            int eff_scroll = item->u.ai.thinking_scroll_y;
+            if (eff_scroll > max_scroll) eff_scroll = max_scroll;
+            if (eff_scroll < 0) eff_scroll = 0;
+
             HRGN clip_rgn = CreateRectRgnIndirect(&clip_rc);
             SelectClipRgn(hdc, clip_rgn);
 
-            SetTextColor(hdc, RGB_FROM_THEME(tc->thinking_text));
-            SelectObject(hdc, lv->hFont ? lv->hFont
-                              : GetStockObject(DEFAULT_GUI_FONT));
-            RECT body_rc;
-            SetRect(&body_rc, clip_rc.left,
-                    body_top - item->u.ai.thinking_scroll_y,
-                    clip_rc.right,
-                    body_top - item->u.ai.thinking_scroll_y + full_h);
-            draw_text_utf8(hdc, item->u.ai.thinking_text, &body_rc,
+            SetTextColor(hdc, dim_clr);
+            HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
+                                      : GetStockObject(DEFAULT_GUI_FONT));
+            RECT text_body_rc = { clip_rc.left, clip_rc.top - eff_scroll,
+                                  clip_rc.right,
+                                  clip_rc.top - eff_scroll + full_h };
+            draw_text_utf8(hdc, item->u.ai.thinking_text, &text_body_rc,
                            DT_WORDBREAK | DT_NOPREFIX);
+            SelectObject(hdc, tf);
 
             SelectClipRgn(hdc, NULL);
             DeleteObject(clip_rgn);
 
             /* Scrollbar thumb when content overflows */
             if (full_h > vis_h) {
-                int sb_x = box_rc.right - pad - sb_w;
-                int sb_inset = ns_scale(1, CLV_DPI(lv));
+                int sb_x = body_rc.right - sb_w;
                 int track_h = vis_h;
                 int thumb_h = (vis_h * vis_h) / full_h;
                 int min_thumb = ns_scale(20, CLV_DPI(lv));
                 if (thumb_h < min_thumb) thumb_h = min_thumb;
-                int max_scroll = full_h - vis_h;
-                int thumb_y = body_top;
+                int thumb_y = body_rc.top;
                 if (max_scroll > 0)
-                    thumb_y += (item->u.ai.thinking_scroll_y
-                                * (track_h - thumb_h)) / max_scroll;
+                    thumb_y += (eff_scroll * (track_h - thumb_h)) / max_scroll;
 
-                /* Draw rounded thumb in thinking_text color */
-                COLORREF thumb_clr = RGB_FROM_THEME(tc->thinking_text);
-                HBRUSH tb = CreateSolidBrush(thumb_clr);
-                HPEN np = CreatePen(PS_NULL, 0, 0);
-                HGDIOBJ ob = SelectObject(hdc, tb);
-                HGDIOBJ op = SelectObject(hdc, np);
-                RoundRect(hdc, sb_x + sb_inset, thumb_y,
-                          sb_x + sb_w - sb_inset, thumb_y + thumb_h,
-                          sb_w, sb_w);
-                SelectObject(hdc, op);
-                SelectObject(hdc, ob);
-                DeleteObject(np);
-                DeleteObject(tb);
+                RECT thumb_rc = { sb_x, thumb_y, sb_x + sb_w, thumb_y + thumb_h };
+                ns_draw_round_fill(hdc, &thumb_rc, sb_w / 2, dim_clr, 255);
             }
-            SelectObject(hdc, tf);
-
-            content_top = box_rc.bottom + gap;
         }
+
+        content_top += tl.total_h + ns_scale(SP_SM, CLV_DPI(lv));
     }
 
     /* Main AI text content */
@@ -1368,10 +1274,10 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     SelectObject(hdc, old_font);
 }
 
-/* ── Paint one approval-card row: tag, ellipsised command text, checkbox,
- *    and either Allow/Deny buttons (pending) or a decided-status label.
- *    Shared by paint_cmd_card() (a single settled row) and
- *    paint_cmd_container() (many rows in the live queue). ────────────── */
+/* ── Paint one approval-card v2 row: checkbox, command text (FONT_MONO,
+ *    ellipsised per row->ellipsis), risk chip. No per-row Allow/Deny --
+ *    decisions are card-wide now (Deny all / Run N selected). A held
+ *    (blocked) row's checkbox paints disabled and its text dims. ────── */
 
 static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                           const ApprovalRowLayout *row, int row_idx)
@@ -1380,7 +1286,7 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     const ThemeTokens *tok = ns_tokens();
     int dpi = CLV_DPI(lv);
 
-    /* Safety tag */
+    /* Risk chip */
     if (row->tag.w > 0 && row->tag.h > 0) {
         RECT tag_rc = { row->tag.x, row->tag.y,
                         row->tag.x + row->tag.w, row->tag.y + row->tag.h };
@@ -1396,8 +1302,8 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                          row->text.x + row->text.w, row->text.y + row->text.h };
         const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
                                                    : item->text;
-        SetTextColor(hdc, item->u.cmd.blocked ? RGB_FROM_THEME(tok->text_dim)
-                                               : RGB_FROM_THEME(tc->cmd_text));
+        SetTextColor(hdc, row->held ? RGB_FROM_THEME(tok->text_dim)
+                                     : RGB_FROM_THEME(tc->cmd_text));
         HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
                                           : GetStockObject(ANSI_FIXED_FONT));
         UINT flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT;
@@ -1406,85 +1312,33 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         SelectObject(hdc, old_f);
     }
 
-    int pending = (!item->u.cmd.blocked && item->u.cmd.approved == -1);
-
-    /* Selection checkbox (pending rows only) */
-    if (pending && row->checkbox.w > 0 && row->checkbox.h > 0) {
+    /* Selection checkbox */
+    if (row->checkbox.w > 0 && row->checkbox.h > 0) {
         RECT chk_rc = { row->checkbox.x, row->checkbox.y,
                         row->checkbox.x + row->checkbox.w,
                         row->checkbox.y + row->checkbox.h };
-        int chk_hover = ns_hover_state_for(&lv->hover,
-                            CLV_ROW_HIT_ID(row_idx, HIT_CHECKBOX));
-        if (item->u.cmd.selected) {
-            COLORREF fill = chk_hover ? RGB_FROM_THEME(tok->success.hover)
-                                      : RGB_FROM_THEME(tok->success.base);
-            ns_draw_round_fill(hdc, &chk_rc, ns_scale(R_CTRL, dpi), fill, 255);
-            SetTextColor(hdc, RGB_FROM_THEME(tok->success.label));
-            DrawTextW(hdc, L"\x2713", 1, &chk_rc,
-                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        } else {
-            COLORREF stroke = chk_hover ? RGB_FROM_THEME(tok->accent.base)
-                                        : RGB_FROM_THEME(tok->border);
+        if (row->held) {
+            /* Disabled look -- held rows can't be checked. */
             ns_draw_round_stroke(hdc, &chk_rc, ns_scale(R_CTRL, dpi),
-                                 stroke, STROKE_HAIRLINE);
+                                 RGB_FROM_THEME(tok->text_dim), STROKE_HAIRLINE);
+        } else {
+            int chk_hover = ns_hover_state_for(&lv->hover,
+                                CLV_ROW_HIT_ID(row_idx, HIT_CHECKBOX));
+            if (item->u.cmd.selected) {
+                COLORREF fill = chk_hover ? RGB_FROM_THEME(tok->success.hover)
+                                          : RGB_FROM_THEME(tok->success.base);
+                ns_draw_round_fill(hdc, &chk_rc, ns_scale(R_CTRL, dpi), fill, 255);
+                SetTextColor(hdc, RGB_FROM_THEME(tok->success.label));
+                DrawTextW(hdc, L"\x2713", 1, &chk_rc,
+                          DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            } else {
+                COLORREF stroke = chk_hover ? RGB_FROM_THEME(tok->accent.base)
+                                            : RGB_FROM_THEME(tok->border);
+                ns_draw_round_stroke(hdc, &chk_rc, ns_scale(R_CTRL, dpi),
+                                     stroke, STROKE_HAIRLINE);
+            }
         }
     }
-
-    /* Allow / Deny buttons (pending), or a decided-status label */
-    if (pending && row->allow.w > 0 && row->deny.w > 0) {
-        RECT allow_rc = { row->allow.x, row->allow.y,
-                          row->allow.x + row->allow.w, row->allow.y + row->allow.h };
-        RECT deny_rc  = { row->deny.x, row->deny.y,
-                          row->deny.x + row->deny.w, row->deny.y + row->deny.h };
-        NsBtnState allow_state = (NsBtnState)ns_hover_state_for(&lv->hover,
-                                      CLV_ROW_HIT_ID(row_idx, HIT_ALLOW));
-        NsBtnState deny_state  = (NsBtnState)ns_hover_state_for(&lv->hover,
-                                      CLV_ROW_HIT_ID(row_idx, HIT_DENY));
-        ns_draw_button(hdc, &allow_rc, &tok->success, allow_state, 0,
-                       "Allow", lv->hSmallFont, dpi);
-        ns_draw_button(hdc, &deny_rc, &tok->danger, deny_state, 0,
-                       "Deny", lv->hSmallFont, dpi);
-    } else if (!item->u.cmd.blocked && item->u.cmd.approved != -1
-               && row->allow.w > 0 && row->deny.w > 0) {
-        const char *status = (item->u.cmd.approved == 1) ? "Approved" : "Denied";
-        COLORREF sc = (item->u.cmd.approved == 1)
-            ? RGB_FROM_THEME(tok->success.base) : RGB_FROM_THEME(tok->danger.base);
-        RECT sts_rc = { row->allow.x, row->allow.y,
-                        row->deny.x + row->deny.w, row->deny.y + row->deny.h };
-        SetTextColor(hdc, sc);
-        HGDIOBJ old_f2 = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                          : GetStockObject(DEFAULT_GUI_FONT));
-        DrawTextA(hdc, status, -1, &sts_rc,
-                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        SelectObject(hdc, old_f2);
-    }
-}
-
-/* ── Paint a single, standalone (settled) command row — no container,
- *    no header, no scrollbar, no card-wide actions. ─────────────────── */
-
-static void paint_cmd_card(ChatListView *lv, HDC hdc,
-                           ChatMsgItem *item, RECT *rc)
-{
-    const char *cmd_text = item->u.cmd.command ? item->u.cmd.command : item->text;
-
-    HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
-                                      : GetStockObject(ANSI_FIXED_FONT));
-    TEXTMETRICA tm;
-    GetTextMetricsA(hdc, &tm);
-    SIZE sz = { 0, 0 };
-    if (cmd_text && *cmd_text)
-        GetTextExtentPoint32A(hdc, cmd_text, (int)strlen(cmd_text), &sz);
-    SelectObject(hdc, old_f);
-
-    NsRect r = { rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top };
-    int w = sz.cx;
-    ApprovalCardLayout layout;
-    approval_card_layout(r, 1, &w, tm.tmHeight, CLV_DPI(lv), &layout);
-
-    SetBkMode(hdc, TRANSPARENT);
-    if (layout.n_rows > 0)
-        paint_cmd_row(lv, hdc, item, &layout.rows[0], 0);
 }
 
 /* ── Shared geometry for the live command queue container, computed once
@@ -1495,15 +1349,15 @@ typedef struct {
     ApprovalCardLayout layout;
     ChatMsgItem *cmd_items[APPROVAL_MAX_CMDS];
     int n;
+    int held_count;
+    int checked_count;   /* checked && !held, over ALL n commands */
+    int run_enabled;      /* checked_count > 0 */
     int first_row;
     int box_left, box_top, box_right, box_bot;
     int clip_left, clip_top, clip_right, clip_bot;
     int card_right;
     int needs_scroll;
-    int any_blocked;
-    int blocked_count;
     int border_w;
-    int header_h;
 } CmdCardGeometry;
 
 static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
@@ -1513,8 +1367,6 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
 
     int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
     int border_w = ns_scale(1, CLV_DPI(lv));
-    int gap_sm   = ns_scale(SP_SM, CLV_DPI(lv));
-    int action_ctrl_h = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
     int sb_w     = ns_scale(BASE_SCROLLBAR_W, CLV_DPI(lv));
 
     g->border_w  = border_w;
@@ -1530,21 +1382,22 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
 
     int n = lv->cmd_count;
     if (n > APPROVAL_MAX_CMDS) n = APPROVAL_MAX_CMDS;
+    int checked_arr[APPROVAL_MAX_CMDS], held_arr[APPROVAL_MAX_CMDS];
     int ci = 0;
     ChatMsgItem *c = lv->msg_list ? lv->msg_list->head : NULL;
     while (c && ci < APPROVAL_MAX_CMDS) {
         if (c->type == CHAT_ITEM_COMMAND && !c->u.cmd.settled) {
             g->cmd_items[ci] = c;
-            if (c->u.cmd.blocked) { g->any_blocked = 1; g->blocked_count++; }
+            checked_arr[ci] = c->u.cmd.selected ? 1 : 0;
+            held_arr[ci] = c->u.cmd.blocked ? 1 : 0;
+            if (held_arr[ci]) g->held_count++;
+            if (checked_arr[ci] && !held_arr[ci]) g->checked_count++;
             ci++;
         }
         c = c->next;
     }
     g->n = n;
-
-    g->header_h = g->any_blocked
-        ? (ns_scale(20, CLV_DPI(lv)) + ns_scale(4, CLV_DPI(lv))) : 0;
-    g->clip_top += g->header_h;
+    g->run_enabled = g->checked_count > 0;
 
     g->needs_scroll = (lv->cmd_total_h > lv->cmd_visible_h);
     g->card_right = g->needs_scroll
@@ -1559,7 +1412,7 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
         text_h = tm.tmHeight;
         SelectObject(hdc_for_measure, old);
     }
-    int row_h = clv_cmd_row_h(lv, cw, text_h);
+    int row_h = clv_cmd_row_h(lv, text_h);
 
     int first_row = (row_h > 0) ? (lv->cmd_scroll_y / row_h) : 0;
     int max_first = n - APPROVAL_VISIBLE_MAX;
@@ -1568,24 +1421,27 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
     if (first_row < 0) first_row = 0;
     g->first_row = first_row;
 
+    /* run_enabled/checked_count above are over ALL n commands (not just
+     * the visible slice below) -- see ns_layout.h's note on scrolled-out
+     * rows still being able to enable Run selected. */
     int rem_n = n - first_row;
     NsRect body = { g->clip_left, g->clip_top,
                    g->card_right - g->clip_left, g->clip_bot - g->clip_top };
-    approval_card_layout(body, rem_n, &lv->cmd_text_w[first_row], text_h,
-                        CLV_DPI(lv), &g->layout);
-    (void)gap_sm;
-    (void)action_ctrl_h;
+    approval_card_layout(body, rem_n, &lv->cmd_text_w[first_row],
+                        &checked_arr[first_row], &held_arr[first_row],
+                        text_h, CLV_DPI(lv), &g->layout);
 }
 
-/* ── Paint the grouped command container: outer box, one "Blocked" banner
- *    (if any row is blocked), scrollable rows, themed scrollbar, and the
- *    card-wide Allow All / Cancel actions. ──────────────────────────── */
+/* ── Paint the grouped command container: outer box, header ("N commands
+ *    · M held"), scrollable rows, themed scrollbar, and the card-wide
+ *    Deny all / Run N selected actions. ──────────────────────────────── */
 
 static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
     const ThemeTokens *tok = ns_tokens();
-    int corner = ns_scale(BASE_CORNER_R, CLV_DPI(lv));
+    int dpi = CLV_DPI(lv);
+    int corner = ns_scale(BASE_CORNER_R, dpi);
 
     RECT client_rc;
     GetClientRect(lv->hwnd, &client_rc);
@@ -1613,27 +1469,40 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
 
     SetBkMode(hdc, TRANSPARENT);
 
-    /* ── "Blocked" banner, once per card ──────────────────────────── */
-    if (g.any_blocked) {
-        RECT hdr_rc = { g.clip_left, g.box_top + g.border_w,
-                        g.card_right, g.box_top + g.border_w + g.header_h };
-        int icon_w = ns_scale(16, CLV_DPI(lv));
-        RECT lock_rc = { hdr_rc.left, hdr_rc.top,
-                         hdr_rc.left + icon_w, hdr_rc.bottom };
-        ns_icon_draw(hdc, NS_ICON_LOCK, &lock_rc, RGB_FROM_THEME(tok->text_dim),
-                    (UINT)(96.0f * lv->dpi_scale));
-        RECT lbl_rc = { lock_rc.right + ns_scale(4, CLV_DPI(lv)), hdr_rc.top,
-                        hdr_rc.right, hdr_rc.bottom };
-        SetTextColor(hdc, RGB_FROM_THEME(tok->text_dim));
-        HGDIOBJ hf = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                       : GetStockObject(DEFAULT_GUI_FONT));
-        char buf[48];
-        if (g.blocked_count == 1)
-            snprintf(buf, sizeof(buf), "Blocked");
+    /* ── Header: "N commands · M held" [— Permit write is off] ──────── */
+    {
+        RECT hdr_rc = { g.layout.header.x, g.layout.header.y,
+                        g.layout.header.x + g.layout.header.w,
+                        g.layout.header.y + g.layout.header.h };
+        char hdr_buf[48];
+        if (g.held_count > 0)
+            snprintf(hdr_buf, sizeof(hdr_buf), "%d command%s \xC2\xB7 %d held",
+                     g.n, g.n == 1 ? "" : "s", g.held_count);
         else
-            snprintf(buf, sizeof(buf), "Blocked (%d)", g.blocked_count);
-        DrawTextA(hdc, buf, -1, &lbl_rc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            snprintf(hdr_buf, sizeof(hdr_buf), "%d command%s",
+                     g.n, g.n == 1 ? "" : "s");
+
+        SetTextColor(hdc, RGB_FROM_THEME(tok->text_main));
+        HGDIOBJ hf = SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont
+                                       : GetStockObject(DEFAULT_GUI_FONT));
+        RECT calc_rc = hdr_rc;
+        draw_text_utf8(hdc, hdr_buf, &calc_rc,
+                       DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_CALCRECT);
+        draw_text_utf8(hdc, hdr_buf, &hdr_rc,
+                       DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT);
         SelectObject(hdc, hf);
+
+        if (g.held_count > 0) {
+            RECT reason_rc = hdr_rc;
+            reason_rc.left = calc_rc.right;
+            SetTextColor(hdc, RGB_FROM_THEME(tok->text_dim));
+            HGDIOBJ rf = SelectObject(hdc, lv->hFont ? lv->hFont
+                                           : GetStockObject(DEFAULT_GUI_FONT));
+            draw_text_utf8(hdc, " \xE2\x80\x94 Permit write is off", &reason_rc,
+                           DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT
+                           | DT_END_ELLIPSIS);
+            SelectObject(hdc, rf);
+        }
     }
 
     /* ── Clipped scroll region for rows ────────────────────────────── */
@@ -1651,8 +1520,8 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
 
     /* ── Themed scrollbar (inside box, right edge) ────────────────── */
     if (g.needs_scroll) {
-        int sb_w = ns_scale(BASE_SCROLLBAR_W, CLV_DPI(lv));
-        int track_left  = g.box_right - g.border_w - sb_w - ns_scale(2, CLV_DPI(lv));
+        int sb_w = ns_scale(BASE_SCROLLBAR_W, dpi);
+        int track_left  = g.box_right - g.border_w - sb_w - ns_scale(2, dpi);
         int track_top   = g.clip_top;
         int track_bot   = g.clip_bot;
         int track_h     = track_bot - track_top;
@@ -1664,7 +1533,7 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         int max_cmd_scroll = lv->cmd_total_h - lv->cmd_visible_h;
         if (max_cmd_scroll < 1) max_cmd_scroll = 1;
         int thumb_h = track_h * lv->cmd_visible_h / lv->cmd_total_h;
-        if (thumb_h < ns_scale(20, CLV_DPI(lv))) thumb_h = ns_scale(20, CLV_DPI(lv));
+        if (thumb_h < ns_scale(20, dpi)) thumb_h = ns_scale(20, dpi);
         int thumb_y = track_top +
             (lv->cmd_scroll_y * (track_h - thumb_h)) / max_cmd_scroll;
         RECT thumb_rc = { track_left, thumb_y, track_left + sb_w, thumb_y + thumb_h };
@@ -1672,22 +1541,34 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
                            RGB_FROM_THEME(lv->theme->accent), 255);
     }
 
-    /* ── Card-wide actions: Allow All | Cancel ────────────────────── */
+    /* ── Card-wide actions: Deny all (ghost) | Run N selected (primary) ── */
     {
-        RECT allow_all_rc = { g.layout.allow_all.x, g.layout.allow_all.y,
-                              g.layout.allow_all.x + g.layout.allow_all.w,
-                              g.layout.allow_all.y + g.layout.allow_all.h };
-        RECT cancel_rc = { g.layout.cancel.x, g.layout.cancel.y,
-                           g.layout.cancel.x + g.layout.cancel.w,
-                           g.layout.cancel.y + g.layout.cancel.h };
-        NsBtnState allow_all_state = (NsBtnState)ns_hover_state_for(&lv->hover,
-                                          CLV_CARD_HIT_ID(HIT_ALLOW_ALL));
-        NsBtnState cancel_state = (NsBtnState)ns_hover_state_for(&lv->hover,
-                                       CLV_CARD_HIT_ID(HIT_CANCEL));
-        ns_draw_button(hdc, &allow_all_rc, &tok->warning, allow_all_state, 0,
-                      "Allow All", lv->hSmallFont, CLV_DPI(lv));
-        ns_draw_button(hdc, &cancel_rc, &tok->danger, cancel_state, 0,
-                      "Cancel", lv->hSmallFont, CLV_DPI(lv));
+        RECT deny_rc = { g.layout.deny_all.x, g.layout.deny_all.y,
+                         g.layout.deny_all.x + g.layout.deny_all.w,
+                         g.layout.deny_all.y + g.layout.deny_all.h };
+        RECT run_rc  = { g.layout.run_selected.x, g.layout.run_selected.y,
+                         g.layout.run_selected.x + g.layout.run_selected.w,
+                         g.layout.run_selected.y + g.layout.run_selected.h };
+
+        int deny_hover = ns_hover_state_for(&lv->hover, CLV_CARD_HIT_ID(HIT_DENY_ALL));
+        COLORREF deny_border = deny_hover ? RGB_FROM_THEME(tok->accent.base)
+                                          : RGB_FROM_THEME(tok->border);
+        ns_draw_round_stroke(hdc, &deny_rc, ns_scale(R_CTRL, dpi),
+                             deny_border, STROKE_HAIRLINE);
+        SetTextColor(hdc, RGB_FROM_THEME(tok->text_main));
+        HGDIOBJ df = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                       : GetStockObject(DEFAULT_GUI_FONT));
+        DrawTextA(hdc, "Deny all", -1, &deny_rc,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(hdc, df);
+
+        char run_label[32];
+        snprintf(run_label, sizeof(run_label), "Run %d selected", g.checked_count);
+        NsBtnState run_state = g.run_enabled
+            ? (NsBtnState)ns_hover_state_for(&lv->hover, CLV_CARD_HIT_ID(HIT_RUN_SELECTED))
+            : NS_BTN_DISABLED;
+        ns_draw_button(hdc, &run_rc, &tok->success, run_state, 0,
+                      run_label, lv->hSmallFont, dpi);
     }
 }
 
@@ -1884,10 +1765,10 @@ static void on_paint(ChatListView *lv)
                 paint_ai_item(lv, mem_dc, item, &item_rc);
                 break;
             case CHAT_ITEM_COMMAND:
-                if (item->u.cmd.settled)
-                    paint_cmd_card(lv, mem_dc, item, &item_rc);
-                else
-                    paint_cmd_container(lv, mem_dc, &item_rc);
+                /* Settled commands measure to h=0 (see measure_item) and
+                 * are skipped by the h==0 check above, so this is always
+                 * an unsettled, live command-queue item. */
+                paint_cmd_container(lv, mem_dc, &item_rc);
                 break;
             case CHAT_ITEM_TOOL_CALL:
             case CHAT_ITEM_TOOL_RESULT:
@@ -2055,18 +1936,18 @@ static int cmd_card_rect_for_hit(const ApprovalCardLayout *l, int hit,
                                  int row, RECT *out)
 {
     NsRect nr;
-    if (hit == HIT_ALLOW_ALL) {
-        nr = l->allow_all;
-    } else if (hit == HIT_CANCEL) {
-        nr = l->cancel;
+    if (hit == HIT_DENY_ALL) {
+        nr = l->deny_all;
+    } else if (hit == HIT_RUN_SELECTED) {
+        nr = l->run_selected;
+    } else if (hit == HIT_HEADER) {
+        nr = l->header;
     } else if (row >= 0 && row < l->n_rows) {
         const ApprovalRowLayout *rl = &l->rows[row];
         switch (hit) {
         case HIT_TAG:      nr = rl->tag;      break;
         case HIT_TEXT:     nr = rl->text;     break;
         case HIT_CHECKBOX: nr = rl->checkbox; break;
-        case HIT_ALLOW:    nr = rl->allow;    break;
-        case HIT_DENY:     nr = rl->deny;     break;
         default: return 0;
         }
     } else {
@@ -2080,10 +1961,56 @@ static int cmd_card_rect_for_hit(const ApprovalCardLayout *l, int hit,
     return 1;
 }
 
+/* Find the Thinking disclosure row (if any) under (mx, my), across every
+ * AI item in the list -- not just the one the cursor's vertical span
+ * belongs to would suggest, since a collapsed row is short but its item
+ * may still be tall (reply text below it). Returns 0 when nothing
+ * hittable is under the cursor. */
+static int chatlv_thinking_row_hit(ChatListView *lv, int mx, int my,
+                                   RECT *out_rc, int *out_item_id)
+{
+    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    RECT client_rc;
+    GetClientRect(lv->hwnd, &client_rc);
+    int box_left  = side_pad + lv->ai_indent;
+    int box_right = (client_rc.right - client_rc.left) - side_pad;
+
+    int y = lv->msg_gap - lv->scroll_y;
+    ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
+    while (item) {
+        int h = item->measured_height;
+        if (h == 0) { item = item->next; continue; }
+        if (item->type == CHAT_ITEM_AI_TEXT && item->u.ai.thinking_text &&
+            item->u.ai.thinking_text[0] && my >= y && my < y + h) {
+            int content_top = y + ns_scale(BASE_ICON_SIZE, CLV_DPI(lv))
+                               + ns_scale(4, CLV_DPI(lv));
+            ThinkingLayout tl;
+            HDC hdc = GetDC(lv->hwnd);
+            build_thinking_layout(lv, hdc, item, box_left, box_right,
+                                  content_top, &tl, NULL);
+            if (hdc) ReleaseDC(lv->hwnd, hdc);
+
+            if (mx >= tl.row.x && mx < tl.row.x + tl.row.w &&
+                my >= tl.row.y && my < tl.row.y + tl.row.h) {
+                if (out_rc)
+                    SetRect(out_rc, tl.row.x, tl.row.y,
+                           tl.row.x + tl.row.w, tl.row.y + tl.row.h);
+                if (out_item_id) *out_item_id = item->id;
+                return 1;
+            }
+            return 0;
+        }
+        y += h + lv->msg_gap;
+        item = item->next;
+    }
+    return 0;
+}
+
 /* Hit-test the whole list view for hover purposes only -- never posts a
  * command, only reports which element (if any) is under (mx, my) via a
- * CLV_ROW_HIT_ID/CLV_CARD_HIT_ID/CLV_HOVER_RETRY id, plus its rect for
- * invalidation. Returns -1 when nothing hittable is under the cursor. */
+ * CLV_ROW_HIT_ID/CLV_CARD_HIT_ID/CLV_HOVER_RETRY/CLV_THINK_HOVER_ID id,
+ * plus its rect for invalidation. Returns -1 when nothing hittable is
+ * under the cursor. */
 static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
 {
     int cy, ch;
@@ -2105,6 +2032,13 @@ static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
             return (row_out >= 0) ? CLV_ROW_HIT_ID(row_out, hit)
                                   : CLV_CARD_HIT_ID(hit);
         }
+    }
+
+    RECT think_rc;
+    int think_item_id = -1;
+    if (chatlv_thinking_row_hit(lv, mx, my, &think_rc, &think_item_id)) {
+        if (out_rc) *out_rc = think_rc;
+        return CLV_THINK_HOVER_ID(think_item_id);
     }
 
     /* [Retry] link, below all items */
@@ -2146,6 +2080,38 @@ static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
         return ok;
     }
 
+    if (id >= CLV_THINK_HOVER_BASE) {
+        int item_id = id - CLV_THINK_HOVER_BASE;
+        int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+        RECT client_rc;
+        GetClientRect(lv->hwnd, &client_rc);
+        int box_left  = side_pad + lv->ai_indent;
+        int box_right = (client_rc.right - client_rc.left) - side_pad;
+
+        int y = lv->msg_gap - lv->scroll_y;
+        ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
+        while (item) {
+            int h = item->measured_height;
+            if (h == 0) { item = item->next; continue; }
+            if (item->id == item_id && item->type == CHAT_ITEM_AI_TEXT &&
+                item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
+                int content_top = y + ns_scale(BASE_ICON_SIZE, CLV_DPI(lv))
+                                   + ns_scale(4, CLV_DPI(lv));
+                ThinkingLayout tl;
+                HDC hdc = GetDC(lv->hwnd);
+                build_thinking_layout(lv, hdc, item, box_left, box_right,
+                                      content_top, &tl, NULL);
+                if (hdc) ReleaseDC(lv->hwnd, hdc);
+                SetRect(out, tl.row.x, tl.row.y,
+                       tl.row.x + tl.row.w, tl.row.y + tl.row.h);
+                return 1;
+            }
+            y += h + lv->msg_gap;
+            item = item->next;
+        }
+        return 0;
+    }
+
     int cy, ch;
     ChatMsgItem *citem = find_active_cmd_container(lv, &cy, &ch);
     if (!citem) return 0;
@@ -2159,8 +2125,8 @@ static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
     if (mdc) ReleaseDC(lv->hwnd, mdc);
 
     int hit, row;
-    if (id == CLV_CARD_HIT_ID(HIT_ALLOW_ALL)) { hit = HIT_ALLOW_ALL; row = -1; }
-    else if (id == CLV_CARD_HIT_ID(HIT_CANCEL)) { hit = HIT_CANCEL; row = -1; }
+    if (id == CLV_CARD_HIT_ID(HIT_DENY_ALL)) { hit = HIT_DENY_ALL; row = -1; }
+    else if (id == CLV_CARD_HIT_ID(HIT_RUN_SELECTED)) { hit = HIT_RUN_SELECTED; row = -1; }
     else { row = id / 16; hit = id % 16; }
 
     return cmd_card_rect_for_hit(&g.layout, hit, row, out);
@@ -2173,10 +2139,11 @@ static int chatlv_hit_is_actionable(int id)
 {
     if (id < 0) return 0;
     if (id == CLV_HOVER_RETRY) return 1;
-    if (id == CLV_CARD_HIT_ID(HIT_ALLOW_ALL) || id == CLV_CARD_HIT_ID(HIT_CANCEL))
+    if (id >= CLV_THINK_HOVER_BASE) return 1;
+    if (id == CLV_CARD_HIT_ID(HIT_DENY_ALL) || id == CLV_CARD_HIT_ID(HIT_RUN_SELECTED))
         return 1;
     int hit = id % 16;
-    return hit == HIT_CHECKBOX || hit == HIT_ALLOW || hit == HIT_DENY;
+    return hit == HIT_CHECKBOX;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -2202,23 +2169,36 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
             continue;
         }
 
-        /* Check click on thinking toggle header for AI items */
+        /* Check click on the Thinking disclosure row for AI items */
         if (item->type == CHAT_ITEM_AI_TEXT && my >= y && my < y + h
-            && item->u.ai.thinking_text) {
-            int icon_sz = ns_scale(BASE_ICON_SIZE, CLV_DPI(lv));
-            int hdr_h = ns_scale(BASE_THINK_HDR_H, CLV_DPI(lv));
-            int click_h = hdr_h + 2 * lv->code_pad;
-            int hdr_top = y + icon_sz + ns_scale(4, CLV_DPI(lv));
-            int think_left = side_pad + lv->ai_indent;
+            && item->u.ai.thinking_text && item->u.ai.thinking_text[0]) {
+            int box_left = side_pad + lv->ai_indent;
+            RECT client_rc2;
+            GetClientRect(lv->hwnd, &client_rc2);
+            int box_right = (client_rc2.right - client_rc2.left) - side_pad;
+            int content_top = y + ns_scale(BASE_ICON_SIZE, CLV_DPI(lv))
+                               + ns_scale(4, CLV_DPI(lv));
 
-            if (my >= hdr_top && my < hdr_top + click_h &&
-                mx >= think_left) {
+            ThinkingLayout tl;
+            HDC mdc0 = GetDC(lv->hwnd);
+            build_thinking_layout(lv, mdc0, item, box_left, box_right,
+                                  content_top, &tl, NULL);
+            if (mdc0) ReleaseDC(lv->hwnd, mdc0);
+
+            if (my >= tl.row.y && my < tl.row.y + tl.row.h &&
+                mx >= tl.row.x && mx < tl.row.x + tl.row.w) {
                 item->u.ai.thinking_collapsed =
                     !item->u.ai.thinking_collapsed;
                 if (item->u.ai.thinking_collapsed) {
                     item->u.ai.thinking_scroll_y = 0;
                 } else {
                     item->u.ai.thinking_autoscroll = 1;
+                    /* The user opened it themselves -- remember for this
+                     * session so a reply-start doesn't auto-collapse it
+                     * (see ai_chat.c's WM_AI_STREAM handler). */
+                    if (parent)
+                        PostMessage(parent, WM_COMMAND,
+                                    MAKEWPARAM(IDC_CHAT_THINKING_OPENED, 0), 0);
                 }
                 item->dirty = 1;
                 recalc_layout(lv);
@@ -2259,45 +2239,34 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
             int row_out = -1;
             int hit = approval_card_hit(&g.layout, mx, my, &row_out);
 
-            if (hit == HIT_ALLOW_ALL) {
-                if (parent)
-                    PostMessage(parent, WM_COMMAND,
-                                MAKEWPARAM(IDC_CMD_APPROVE_ALL, 0), 0);
-                return 1;
-            }
-            if (hit == HIT_CANCEL) {
+            if (hit == HIT_DENY_ALL) {
                 if (parent)
                     PostMessage(parent, WM_COMMAND,
                                 MAKEWPARAM(IDC_CMD_CANCEL_ALL, 0), 0);
                 return 1;
             }
-            if (row_out >= 0) {
+            if (hit == HIT_RUN_SELECTED) {
+                /* Approve every checked, non-held, pending entry through
+                 * the existing approve path (IDC_CMD_APPROVE_SEL also
+                 * denies unselected pending rows -- exactly what "the
+                 * rows you unchecked don't run" means) and start
+                 * execution, same as Allow All did in v1. Disabled
+                 * (nothing checked) still consumes the click, no-op. */
+                if (g.run_enabled && parent)
+                    PostMessage(parent, WM_COMMAND,
+                                MAKEWPARAM(IDC_CMD_APPROVE_SEL, 0), 0);
+                return 1;
+            }
+            if (row_out >= 0 && hit == HIT_CHECKBOX) {
                 int real_idx = g.first_row + row_out;
                 if (real_idx >= 0 && real_idx < g.n) {
                     ChatMsgItem *citem = g.cmd_items[real_idx];
-                    switch (hit) {
-                    case HIT_CHECKBOX:
-                        if (!citem->u.cmd.blocked && citem->u.cmd.approved == -1) {
-                            citem->u.cmd.selected = !citem->u.cmd.selected;
-                            InvalidateRect(lv->hwnd, NULL, FALSE);
-                        }
-                        return 1;
-                    case HIT_ALLOW:
-                        if (!citem->u.cmd.blocked && citem->u.cmd.approved == -1
-                            && parent)
-                            PostMessage(parent, WM_COMMAND,
-                                        MAKEWPARAM(IDC_CMD_APPROVE_BASE + real_idx, 0), 0);
-                        return 1;
-                    case HIT_DENY:
-                        if (!citem->u.cmd.blocked && citem->u.cmd.approved == -1
-                            && parent)
-                            PostMessage(parent, WM_COMMAND,
-                                        MAKEWPARAM(IDC_CMD_DENY_BASE + real_idx, 0), 0);
-                        return 1;
-                    default:
-                        break;
+                    if (!citem->u.cmd.blocked && citem->u.cmd.approved == -1) {
+                        citem->u.cmd.selected = !citem->u.cmd.selected;
+                        InvalidateRect(lv->hwnd, NULL, FALSE);
                     }
                 }
+                return 1;
             }
             return 0;
         }
@@ -2544,45 +2513,30 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             while (wi) {
                 int wh = wi->measured_height;
                 if (wi->type == CHAT_ITEM_AI_TEXT && wi->u.ai.thinking_text
+                    && wi->u.ai.thinking_text[0]
                     && !wi->u.ai.thinking_collapsed
                     && pt.y >= wy && pt.y < wy + wh) {
-                    /* Compute thinking content region bounds */
-                    int icon_sz = ns_scale(BASE_ICON_SIZE, CLV_DPI(lv));
-                    int hdr_h = ns_scale(BASE_THINK_HDR_H, CLV_DPI(lv));
-                    int think_top = wy + icon_sz + ns_scale(4, CLV_DPI(lv))
-                                    + hdr_h + ns_scale(4, CLV_DPI(lv));
                     int side_pad2 = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
-                    int think_left = side_pad2 + lv->ai_indent;
-
-                    /* Measure full content to check overflow */
-                    HDC tdc = GetDC(hwnd);
-                    HGDIOBJ tf = SelectObject(tdc, lv->hSmallFont
-                                 ? lv->hSmallFont
-                                 : GetStockObject(DEFAULT_GUI_FONT));
-                    int border_w = ns_scale(BASE_BORDER_W, CLV_DPI(lv));
+                    int box_left = side_pad2 + lv->ai_indent;
                     RECT crc;
                     GetClientRect(hwnd, &crc);
-                    int tw = crc.right - think_left - side_pad2
-                             - border_w - ns_scale(8, CLV_DPI(lv));
-                    if (tw < 20) tw = 20;
-                    RECT mr;
-                    SetRect(&mr, 0, 0, tw, 0);
-                    draw_text_utf8(tdc, wi->u.ai.thinking_text, &mr,
-                                   DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-                    int full_h = mr.bottom - mr.top;
-                    SelectObject(tdc, tf);
-                    ReleaseDC(hwnd, tdc);
+                    int box_right = (crc.right - crc.left) - side_pad2;
+                    int content_top = wy + ns_scale(BASE_ICON_SIZE, CLV_DPI(lv))
+                                       + ns_scale(4, CLV_DPI(lv));
 
-                    int max_h = ns_scale(BASE_THINK_MAX_H, CLV_DPI(lv));
-                    int min_h = ns_scale(BASE_THINK_MIN_H, CLV_DPI(lv));
-                    int vis_h = full_h;
-                    if (vis_h < min_h) vis_h = min_h;
-                    if (vis_h > max_h) vis_h = max_h;
+                    ThinkingLayout tl;
+                    int full_h = 0;
+                    HDC tdc = GetDC(hwnd);
+                    build_thinking_layout(lv, tdc, wi, box_left, box_right,
+                                          content_top, &tl, &full_h);
+                    if (tdc) ReleaseDC(hwnd, tdc);
 
-                    /* Is cursor in the thinking content area and is there overflow? */
-                    if (full_h > vis_h && pt.x >= think_left
-                        && pt.y >= think_top
-                        && pt.y < think_top + vis_h) {
+                    int vis_h = tl.body.h;
+
+                    /* Is cursor in the thinking body area and is there overflow? */
+                    if (full_h > vis_h && pt.x >= tl.body.x && pt.x < tl.body.x + tl.body.w
+                        && pt.y >= tl.body.y
+                        && pt.y < tl.body.y + vis_h) {
                         int max_scroll = full_h - vis_h;
                         int old_sy = wi->u.ai.thinking_scroll_y;
                         wi->u.ai.thinking_scroll_y +=

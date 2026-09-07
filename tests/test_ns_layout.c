@@ -3,9 +3,11 @@
 #include "chat_approval.h"
 
 /* ===========================================================================
- * ns_layout tests (Design-System Foundation, task 5) -- see
+ * ns_layout tests (Design-System Foundation, task 5; approval card v2 per
+ * the AI Assist Panel plan, task 1) -- see
  * docs/superpowers/specs/2026-09-07-design-system-foundation-design.md
- * section 3.
+ * section 3 and docs/superpowers/specs/2026-09-07-ai-assist-panel-design.md
+ * "Approval card (card 1)".
  * ===========================================================================
  */
 
@@ -117,12 +119,15 @@ int test_approval_card_layout_zero_commands_hides_everything(void)
     TEST_BEGIN();
     NsRect r = { 0, 0, 500, 300 };
     ApprovalCardLayout out;
-    approval_card_layout(r, 0, NULL, 16, 96, &out);
+    approval_card_layout(r, 0, NULL, NULL, NULL, 16, 96, &out);
     ASSERT_EQ(out.n_rows, 0);
-    ASSERT_EQ(out.allow_all.w, 0);
-    ASSERT_EQ(out.allow_all.h, 0);
-    ASSERT_EQ(out.cancel.w, 0);
-    ASSERT_EQ(out.cancel.h, 0);
+    ASSERT_EQ(out.header.w, 0);
+    ASSERT_EQ(out.header.h, 0);
+    ASSERT_EQ(out.deny_all.w, 0);
+    ASSERT_EQ(out.deny_all.h, 0);
+    ASSERT_EQ(out.run_selected.w, 0);
+    ASSERT_EQ(out.run_selected.h, 0);
+    ASSERT_EQ(out.run_enabled, 0);
     TEST_END();
 }
 
@@ -131,7 +136,7 @@ int test_approval_card_layout_negative_commands_no_crash(void)
     TEST_BEGIN();
     NsRect r = { 0, 0, 500, 300 };
     ApprovalCardLayout out;
-    approval_card_layout(r, -3, NULL, 16, 96, &out);
+    approval_card_layout(r, -3, NULL, NULL, NULL, 16, 96, &out);
     ASSERT_EQ(out.n_rows, 0);
     TEST_END();
 }
@@ -149,22 +154,23 @@ int test_approval_card_layout_rows_no_overlap_inside_parent_96(void)
     TEST_BEGIN();
     NsRect r = big_card_rect();
     int widths[3] = { 40, 300, 90 };
+    int checked[3] = { 1, 1, 1 };
     ApprovalCardLayout out;
-    approval_card_layout(r, 3, widths, 16, 96, &out);
+    approval_card_layout(r, 3, widths, checked, NULL, 16, 96, &out);
 
     ASSERT_EQ(out.n_rows, 3);
+    ASSERT_TRUE(rect_inside(out.header, r));
     for (int i = 0; i < 3; i++) {
         const ApprovalRowLayout *row = &out.rows[i];
-        ASSERT_TRUE(rect_inside(row->tag, r));
-        ASSERT_TRUE(rect_inside(row->text, r));
         ASSERT_TRUE(rect_inside(row->checkbox, r));
-        ASSERT_TRUE(rect_inside(row->allow, r));
-        ASSERT_TRUE(rect_inside(row->deny, r));
+        ASSERT_TRUE(rect_inside(row->text, r));
+        ASSERT_TRUE(rect_inside(row->tag, r));
 
-        ASSERT_TRUE(!rects_overlap(row->tag, row->text));
-        ASSERT_TRUE(!rects_overlap(row->text, row->checkbox));
-        ASSERT_TRUE(!rects_overlap(row->checkbox, row->allow));
-        ASSERT_TRUE(!rects_overlap(row->allow, row->deny));
+        ASSERT_TRUE(!rects_overlap(row->checkbox, row->text));
+        ASSERT_TRUE(!rects_overlap(row->text, row->tag));
+        ASSERT_TRUE(!rects_overlap(out.header, row->checkbox));
+        ASSERT_TRUE(!rects_overlap(out.header, row->text));
+        ASSERT_TRUE(!rects_overlap(out.header, row->tag));
 
         for (int j = 0; j < 3; j++) {
             if (j == i) continue;
@@ -172,9 +178,9 @@ int test_approval_card_layout_rows_no_overlap_inside_parent_96(void)
             ASSERT_TRUE(!rects_overlap(row->text, out.rows[j].text));
         }
     }
-    ASSERT_TRUE(rect_inside(out.allow_all, r));
-    ASSERT_TRUE(rect_inside(out.cancel, r));
-    ASSERT_TRUE(!rects_overlap(out.allow_all, out.cancel));
+    ASSERT_TRUE(rect_inside(out.deny_all, r));
+    ASSERT_TRUE(rect_inside(out.run_selected, r));
+    ASSERT_TRUE(!rects_overlap(out.deny_all, out.run_selected));
     TEST_END();
 }
 
@@ -184,19 +190,17 @@ int test_approval_card_layout_rows_no_overlap_inside_parent_192(void)
     NsRect r = { 0, 0, 1000, 900 };
     int widths[3] = { 40, 300, 90 };
     ApprovalCardLayout out;
-    approval_card_layout(r, 3, widths, 20, 192, &out);
+    approval_card_layout(r, 3, widths, NULL, NULL, 20, 192, &out);
 
     ASSERT_EQ(out.n_rows, 3);
     for (int i = 0; i < 3; i++) {
         const ApprovalRowLayout *row = &out.rows[i];
-        ASSERT_TRUE(rect_inside(row->tag, r));
-        ASSERT_TRUE(rect_inside(row->text, r));
         ASSERT_TRUE(rect_inside(row->checkbox, r));
-        ASSERT_TRUE(rect_inside(row->allow, r));
-        ASSERT_TRUE(rect_inside(row->deny, r));
+        ASSERT_TRUE(rect_inside(row->text, r));
+        ASSERT_TRUE(rect_inside(row->tag, r));
     }
-    ASSERT_TRUE(rect_inside(out.allow_all, r));
-    ASSERT_TRUE(rect_inside(out.cancel, r));
+    ASSERT_TRUE(rect_inside(out.deny_all, r));
+    ASSERT_TRUE(rect_inside(out.run_selected, r));
     TEST_END();
 }
 
@@ -206,11 +210,34 @@ int test_approval_card_layout_action_row_does_not_overlap_rows(void)
     NsRect r = big_card_rect();
     int widths[5] = { 40, 300, 90, 120, 60 };
     ApprovalCardLayout out;
-    approval_card_layout(r, 5, widths, 16, 96, &out);
+    approval_card_layout(r, 5, widths, NULL, NULL, 16, 96, &out);
     for (int i = 0; i < 5; i++) {
-        ASSERT_TRUE(!rects_overlap(out.rows[i].allow, out.allow_all));
-        ASSERT_TRUE(!rects_overlap(out.rows[i].deny, out.cancel));
+        ASSERT_TRUE(!rects_overlap(out.rows[i].checkbox, out.deny_all));
+        ASSERT_TRUE(!rects_overlap(out.rows[i].text, out.deny_all));
+        ASSERT_TRUE(!rects_overlap(out.rows[i].tag, out.deny_all));
+        ASSERT_TRUE(!rects_overlap(out.rows[i].checkbox, out.run_selected));
+        ASSERT_TRUE(!rects_overlap(out.rows[i].text, out.run_selected));
+        ASSERT_TRUE(!rects_overlap(out.rows[i].tag, out.run_selected));
     }
+    TEST_END();
+}
+
+/* ---- approval_card_layout: header above rows -------------------------------- */
+
+int test_approval_card_layout_header_above_rows(void)
+{
+    TEST_BEGIN();
+    NsRect r = big_card_rect();
+    int widths[2] = { 40, 300 };
+    ApprovalCardLayout out;
+    approval_card_layout(r, 2, widths, NULL, NULL, 16, 96, &out);
+
+    ASSERT_TRUE(out.header.h > 0);
+    ASSERT_TRUE(out.header.y < out.rows[0].checkbox.y);
+    ASSERT_TRUE(out.header.y + out.header.h <= out.rows[0].checkbox.y);
+    ASSERT_TRUE(!rects_overlap(out.header, out.rows[0].checkbox));
+    ASSERT_TRUE(!rects_overlap(out.header, out.rows[0].text));
+    ASSERT_TRUE(!rects_overlap(out.header, out.rows[0].tag));
     TEST_END();
 }
 
@@ -223,7 +250,7 @@ int test_approval_card_layout_16_commands_scrollable(void)
     int widths[16];
     for (int i = 0; i < 16; i++) widths[i] = 50 + i;
     ApprovalCardLayout out;
-    approval_card_layout(r, 16, widths, 16, 96, &out);
+    approval_card_layout(r, 16, widths, NULL, NULL, 16, 96, &out);
 
     ASSERT_EQ(out.n_rows, 16);
     ASSERT_TRUE(out.scrollable);
@@ -237,8 +264,6 @@ int test_approval_card_layout_16_commands_scrollable(void)
         ASSERT_EQ(out.rows[i].tag.w, 0);
         ASSERT_EQ(out.rows[i].text.w, 0);
         ASSERT_EQ(out.rows[i].checkbox.w, 0);
-        ASSERT_EQ(out.rows[i].allow.w, 0);
-        ASSERT_EQ(out.rows[i].deny.w, 0);
     }
     TEST_END();
 }
@@ -250,7 +275,7 @@ int test_approval_card_layout_exactly_visible_max_not_scrollable(void)
     int widths[APPROVAL_VISIBLE_MAX];
     for (int i = 0; i < APPROVAL_VISIBLE_MAX; i++) widths[i] = 40;
     ApprovalCardLayout out;
-    approval_card_layout(r, APPROVAL_VISIBLE_MAX, widths, 16, 96, &out);
+    approval_card_layout(r, APPROVAL_VISIBLE_MAX, widths, NULL, NULL, 16, 96, &out);
     ASSERT_FALSE(out.scrollable);
     for (int i = 0; i < APPROVAL_VISIBLE_MAX; i++)
         ASSERT_TRUE(out.rows[i].tag.w > 0);
@@ -265,7 +290,7 @@ int test_approval_card_layout_ellipsis_when_text_too_wide(void)
     NsRect r = { 0, 0, 400, 300 };
     int widths[1] = { 100000 };  /* far wider than any text box could be */
     ApprovalCardLayout out;
-    approval_card_layout(r, 1, widths, 16, 96, &out);
+    approval_card_layout(r, 1, widths, NULL, NULL, 16, 96, &out);
     ASSERT_TRUE(out.rows[0].text.w > 0);
     ASSERT_EQ(out.rows[0].ellipsis, 1);
     TEST_END();
@@ -277,7 +302,7 @@ int test_approval_card_layout_no_ellipsis_when_text_fits(void)
     NsRect r = { 0, 0, 400, 300 };
     int widths[1] = { 4 };  /* trivially narrow */
     ApprovalCardLayout out;
-    approval_card_layout(r, 1, widths, 16, 96, &out);
+    approval_card_layout(r, 1, widths, NULL, NULL, 16, 96, &out);
     ASSERT_EQ(out.rows[0].ellipsis, 0);
     TEST_END();
 }
@@ -287,16 +312,73 @@ int test_approval_card_layout_ellipsis_boundary_exact_fit(void)
     TEST_BEGIN();
     NsRect r = { 0, 0, 400, 300 };
     ApprovalCardLayout probe;
-    approval_card_layout(r, 1, NULL, 16, 96, &probe);
+    approval_card_layout(r, 1, NULL, NULL, NULL, 16, 96, &probe);
     int exact = probe.rows[0].text.w;
 
     int widths_fit[1]     = { exact };
     int widths_overflow[1] = { exact + 1 };
     ApprovalCardLayout a, b;
-    approval_card_layout(r, 1, widths_fit, 16, 96, &a);
-    approval_card_layout(r, 1, widths_overflow, 16, 96, &b);
+    approval_card_layout(r, 1, widths_fit, NULL, NULL, 16, 96, &a);
+    approval_card_layout(r, 1, widths_overflow, NULL, NULL, 16, 96, &b);
     ASSERT_EQ(a.rows[0].ellipsis, 0);
     ASSERT_EQ(b.rows[0].ellipsis, 1);
+    TEST_END();
+}
+
+/* ---- approval_card_layout: run_enabled truth table --------------------------- */
+
+int test_approval_card_layout_run_enabled_truth_table(void)
+{
+    TEST_BEGIN();
+    NsRect r = big_card_rect();
+    int widths[3] = { 40, 40, 40 };
+    ApprovalCardLayout out;
+
+    /* Nothing checked -> disabled. */
+    int none_checked[3] = { 0, 0, 0 };
+    approval_card_layout(r, 3, widths, none_checked, NULL, 16, 96, &out);
+    ASSERT_EQ(out.run_enabled, 0);
+
+    /* One checked, nothing held -> enabled. */
+    int one_checked[3] = { 0, 1, 0 };
+    approval_card_layout(r, 3, widths, one_checked, NULL, 16, 96, &out);
+    ASSERT_EQ(out.run_enabled, 1);
+
+    /* Checked but that same row is held -> disabled. */
+    int checked_and_held[3] = { 0, 1, 0 };
+    int held_same[3]        = { 0, 1, 0 };
+    approval_card_layout(r, 3, widths, checked_and_held, held_same, 16, 96, &out);
+    ASSERT_EQ(out.run_enabled, 0);
+
+    /* All held, all checked -> disabled. */
+    int all_checked[3] = { 1, 1, 1 };
+    int all_held[3]    = { 1, 1, 1 };
+    approval_card_layout(r, 3, widths, all_checked, all_held, 16, 96, &out);
+    ASSERT_EQ(out.run_enabled, 0);
+
+    /* One checked-and-not-held among held rows -> enabled. */
+    int mixed_checked[3] = { 1, 1, 1 };
+    int mixed_held[3]    = { 1, 0, 1 };
+    approval_card_layout(r, 3, widths, mixed_checked, mixed_held, 16, 96, &out);
+    ASSERT_EQ(out.run_enabled, 1);
+
+    /* NULL checked -> disabled regardless of held. */
+    approval_card_layout(r, 3, widths, NULL, all_held, 16, 96, &out);
+    ASSERT_EQ(out.run_enabled, 0);
+
+    TEST_END();
+}
+
+int test_approval_card_layout_held_row_flag(void)
+{
+    TEST_BEGIN();
+    NsRect r = big_card_rect();
+    int widths[2] = { 40, 40 };
+    int held[2] = { 0, 1 };
+    ApprovalCardLayout out;
+    approval_card_layout(r, 2, widths, NULL, held, 16, 96, &out);
+    ASSERT_EQ(out.rows[0].held, 0);
+    ASSERT_EQ(out.rows[1].held, 1);
     TEST_END();
 }
 
@@ -308,31 +390,23 @@ int test_approval_card_hit_round_trip_all_row_elements(void)
     NsRect r = big_card_rect();
     int widths[4] = { 40, 300, 90, 20 };
     ApprovalCardLayout out;
-    approval_card_layout(r, 4, widths, 16, 96, &out);
+    approval_card_layout(r, 4, widths, NULL, NULL, 16, 96, &out);
 
     for (int i = 0; i < 4; i++) {
         const ApprovalRowLayout *row = &out.rows[i];
         int row_out;
         NsRect c;
 
-        c = rect_center(row->tag);
-        ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_TAG);
+        c = rect_center(row->checkbox);
+        ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_CHECKBOX);
         ASSERT_EQ(row_out, i);
 
         c = rect_center(row->text);
         ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_TEXT);
         ASSERT_EQ(row_out, i);
 
-        c = rect_center(row->checkbox);
-        ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_CHECKBOX);
-        ASSERT_EQ(row_out, i);
-
-        c = rect_center(row->allow);
-        ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_ALLOW);
-        ASSERT_EQ(row_out, i);
-
-        c = rect_center(row->deny);
-        ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_DENY);
+        c = rect_center(row->tag);
+        ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_TAG);
         ASSERT_EQ(row_out, i);
     }
     TEST_END();
@@ -344,16 +418,21 @@ int test_approval_card_hit_round_trip_actions(void)
     NsRect r = big_card_rect();
     int widths[2] = { 40, 300 };
     ApprovalCardLayout out;
-    approval_card_layout(r, 2, widths, 16, 96, &out);
+    approval_card_layout(r, 2, widths, NULL, NULL, 16, 96, &out);
 
     int row_out = 123;
-    NsRect c = rect_center(out.allow_all);
-    ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_ALLOW_ALL);
+    NsRect c = rect_center(out.header);
+    ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_HEADER);
     ASSERT_EQ(row_out, -1);
 
     row_out = 123;
-    c = rect_center(out.cancel);
-    ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_CANCEL);
+    c = rect_center(out.deny_all);
+    ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_DENY_ALL);
+    ASSERT_EQ(row_out, -1);
+
+    row_out = 123;
+    c = rect_center(out.run_selected);
+    ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_RUN_SELECTED);
     ASSERT_EQ(row_out, -1);
     TEST_END();
 }
@@ -364,7 +443,7 @@ int test_approval_card_hit_miss_returns_none(void)
     NsRect r = big_card_rect();
     int widths[2] = { 40, 300 };
     ApprovalCardLayout out;
-    approval_card_layout(r, 2, widths, 16, 96, &out);
+    approval_card_layout(r, 2, widths, NULL, NULL, 16, 96, &out);
 
     int row_out = 42;
     ASSERT_EQ(approval_card_hit(&out, -1000, -1000, &row_out), HIT_NONE);
@@ -389,7 +468,7 @@ int test_approval_card_hit_scrolled_out_rows_not_hit(void)
     int widths[16];
     for (int i = 0; i < 16; i++) widths[i] = 50;
     ApprovalCardLayout out;
-    approval_card_layout(r, 16, widths, 16, 96, &out);
+    approval_card_layout(r, 16, widths, NULL, NULL, 16, 96, &out);
 
     /* Rows past the visible window are zero-size, so their "would be"
      * position (row 9's tag, had it been sized) never registers a hit;
@@ -403,30 +482,27 @@ int test_approval_card_hit_scrolled_out_rows_not_hit(void)
     TEST_END();
 }
 
-/* ---- two-line rows in a narrow card ---------------------------------------- */
+/* ---- v2: rows stay single-line and keep a real text box in a narrow card ---- */
 
-int test_approval_card_layout_narrow_card_goes_two_line(void)
+int test_approval_card_layout_narrow_card_keeps_text_width(void)
 {
     TEST_BEGIN();
-    /* At 192 DPI a 560 px card cannot fit tag + text + checkbox + two buttons
-     * on one line; the row must wrap and the text must keep a real box. */
+    /* At 192 DPI a 560 px card is narrow, but with per-row Allow/Deny gone
+     * the row never wraps: text keeps at least NS_TAG_W*2 (scaled) width. */
     NsRect r = { 0, 0, 560, 800 };
     int widths[3] = { 300, 300, 300 };
     ApprovalCardLayout l;
-    approval_card_layout(r, 3, widths, 24, 192, &l);
-    ASSERT_EQ(l.two_line, 1);
+    approval_card_layout(r, 3, widths, NULL, NULL, 24, 192, &l);
+
+    int tag_w = l.rows[0].tag.w;
+    ASSERT_TRUE(tag_w > 0);
     for (int i = 0; i < 3; i++) {
-        ASSERT_TRUE(l.rows[i].text.w >= 160);              /* NS_MIN_TEXT_W at 96 → more at 192 */
-        ASSERT_TRUE(l.rows[i].text.y < l.rows[i].allow.y);  /* text line above controls */
-        ASSERT_TRUE(!rects_overlap(l.rows[i].text, l.rows[i].allow));
-        ASSERT_TRUE(!rects_overlap(l.rows[i].text, l.rows[i].checkbox));
-        if (i > 0) ASSERT_TRUE(!rects_overlap(l.rows[i - 1].allow, l.rows[i].tag));
+        ASSERT_TRUE(l.rows[i].text.w >= tag_w * 2);
+        ASSERT_TRUE(!rects_overlap(l.rows[i].checkbox, l.rows[i].text));
+        ASSERT_TRUE(!rects_overlap(l.rows[i].text, l.rows[i].tag));
+        /* single-line: checkbox, text and tag all share one row height */
+        ASSERT_TRUE(l.rows[i].checkbox.y + l.rows[i].checkbox.h <= l.rows[i].text.y + l.rows[i].text.h);
     }
-    /* A wide card stays single-line. */
-    NsRect wide = { 0, 0, 1600, 800 };
-    approval_card_layout(wide, 3, widths, 24, 192, &l);
-    ASSERT_EQ(l.two_line, 0);
-    ASSERT_EQ(l.rows[0].text.y, l.rows[0].allow.y + (l.rows[0].allow.h - l.rows[0].text.h) / 2);
     TEST_END();
 }
 
@@ -436,11 +512,12 @@ int test_approval_row_height_matches_layout(void)
     NsRect r = { 0, 0, 560, 800 };
     int widths[2] = { 10, 10 };
     ApprovalCardLayout l;
-    approval_card_layout(r, 2, widths, 24, 192, &l);
-    int row_h = l.rows[1].tag.y - l.rows[0].tag.y;
-    ASSERT_EQ(approval_row_height(r.w, 24, 192), row_h);
+    approval_card_layout(r, 2, widths, NULL, NULL, 24, 192, &l);
+    int row_h = l.rows[1].checkbox.y - l.rows[0].checkbox.y;
+    ASSERT_EQ(approval_row_height(24, 192), row_h);
+
     NsRect wide = { 0, 0, 1600, 800 };
-    approval_card_layout(wide, 2, widths, 24, 192, &l);
-    ASSERT_EQ(approval_row_height(wide.w, 24, 192), l.rows[1].tag.y - l.rows[0].tag.y);
+    approval_card_layout(wide, 2, widths, NULL, NULL, 24, 192, &l);
+    ASSERT_EQ(approval_row_height(24, 192), l.rows[1].checkbox.y - l.rows[0].checkbox.y);
     TEST_END();
 }

@@ -157,7 +157,13 @@ typedef struct {
     HWND hThinkingBtn;
     HWND hTooltip;        /* Win32 tooltip control */
     int permit_write;     /* 0 = read-only (red), 1 = read/write (green) */
-    int show_thinking;    /* 0 = hide reasoning, 1 = show reasoning */
+    int show_thinking;    /* 1 = user has manually opened a Thinking
+                            * disclosure this session -- suppresses
+                            * auto-collapse at reply-start (chat_listview.c)
+                            * and is also passed to ai_build_save_text() so
+                            * a session where the user looked at reasoning
+                            * saves it too. Mirrors auto_approve: persisted
+                            * per-session in AiSessionState, reset on New Chat. */
     HFONT hFont;
     HFONT hSmallFont;     /* small bold font for indicator label */
     char font_name[64];
@@ -2300,6 +2306,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->stream_phase = 0;
                 d->actual_input_tokens = 0;
                 d->actual_output_tokens = 0;
+                d->show_thinking = 0;
+                if (d->active_state) d->active_state->show_thinking = 0;
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
                 thinking_history_clear(d);
@@ -2378,6 +2386,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                             it->u.cmd.blocked) {
                             it->u.cmd.blocked = 0;
                             it->u.cmd.approved = -1;
+                            it->u.cmd.selected = 1;  /* no longer held -- starts checked */
                         }
                         it = it->next;
                     }
@@ -2667,6 +2676,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 return 0;
             }
 
+            /* IDC_CHAT_THINKING_OPENED → user manually expanded a Thinking
+             * disclosure this session; remember it so a reply-start doesn't
+             * auto-collapse it (see the WM_AI_STREAM handler above). */
+            if (d && ctl_id == IDC_CHAT_THINKING_OPENED) {
+                d->show_thinking = 1;
+                return 0;
+            }
+
             /* IDC_AUTO_APPROVE → toggle session auto-approve */
             if (d && ctl_id == IDC_AUTO_APPROVE) {
                 float now = (float)GetTickCount() / 1000.0f;
@@ -2775,6 +2792,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         int was_near_bottom = d->hChatList
             ? chat_listview_is_near_bottom(d->hChatList) : 1;
         int display_dirty = 0;
+        int prev_phase = d->stream_phase;  /* before this batch's chunks */
 
         /* Process this chunk and all queued WM_AI_STREAM messages */
         WPARAM cur_wp = wParam;
@@ -2867,6 +2885,20 @@ next_coalesce:;
             chat_activity_token(&d->activity, now);
 
             if (d->stream_ai_item) {
+                /* Thinking disclosure: open while reasoning is still
+                 * streaming in; once the reply text starts, collapse back
+                 * to the summary unless the user opened it themselves this
+                 * session (show_thinking) -- see the design spec's "Thought
+                 * process" section. Only decide the collapse once, right
+                 * when this batch is the one that crosses into content
+                 * (prev_phase < 2), so a later manual expand isn't fought. */
+                if (d->stream_thinking_len > 0) {
+                    if (d->stream_phase < 2) {
+                        d->stream_ai_item->u.ai.thinking_collapsed = 0;
+                    } else if (prev_phase < 2 && !d->show_thinking) {
+                        d->stream_ai_item->u.ai.thinking_collapsed = 1;
+                    }
+                }
                 /* Always update thinking text if we have any */
                 if (d->stream_thinking_len > 0) {
                     chat_msg_set_thinking(d->stream_ai_item,
@@ -3894,8 +3926,9 @@ static void do_session_switch(AiChatData *d,
                 d->active_state->pending_cmd_count = d->queued_count;
             }
         }
-        /* Save auto-approve and activity phase to old session */
+        /* Save auto-approve, show-thinking and activity phase to old session */
         d->active_state->auto_approve = d->approval_q.auto_approve;
+        d->active_state->show_thinking = d->show_thinking;
         d->active_state->activity_phase = (int)d->activity.phase;
     }
 
@@ -3958,13 +3991,15 @@ static void do_session_switch(AiChatData *d,
         d->queued_next = 0;
     }
 
-    /* Restore auto-approve and activity phase from new session */
+    /* Restore auto-approve, show-thinking and activity phase from new session */
     if (new_state) {
         d->approval_q.auto_approve = new_state->auto_approve;
+        d->show_thinking = new_state->show_thinking;
         chat_activity_set_phase(&d->activity,
                                 (ActivityPhase)new_state->activity_phase, 0.0f);
     } else {
         d->approval_q.auto_approve = 0;
+        d->show_thinking = 0;
         chat_activity_reset(&d->activity);
     }
 
@@ -4109,6 +4144,23 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * done here instead, demo-only. */
     chat_rebuild_display(d);
 
+    /* Gallery: "chat" shows the Thinking disclosure collapsed (the normal
+     * post-reply state); "all" shows it expanded so the review set covers
+     * both forms per the design spec's "Thought process" section. Setting
+     * the item's own flag (rather than d->show_thinking) is the smallest
+     * change -- chat_rebuild_display() always creates it collapsed. */
+    if (state && strcmp(state, "all") == 0) {
+        ChatMsgItem *ti = d->msg_list.head;
+        while (ti) {
+            if (ti->type == CHAT_ITEM_AI_TEXT && ti->u.ai.thinking_text &&
+                ti->u.ai.thinking_text[0]) {
+                ti->u.ai.thinking_collapsed = 0;
+                break;
+            }
+            ti = ti->next;
+        }
+    }
+
     int any_active = 0;
     int any_executing = 0;
     for (int i = 0; i < d->approval_q.count; i++) {
@@ -4160,7 +4212,16 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     relayout(d);
     if (d->hChatList) {
         chat_listview_invalidate(d->hChatList);
-        chat_listview_scroll_to_bottom(d->hChatList);
+        /* "chat"/"all": the markdown reply is long enough to push the
+         * Thinking disclosure (right above it) off the top of the thread
+         * if scrolled to the bottom -- chat_rebuild_display() above always
+         * leaves it scrolled to the bottom, so pull it back to the top
+         * here for these two states so the gallery review set actually
+         * shows the disclosure (collapsed in "chat", expanded in "all").
+         * Every other state keeps the bottom scroll, to show its most
+         * recent activity. */
+        if (state && (strcmp(state, "chat") == 0 || strcmp(state, "all") == 0))
+            chat_listview_scroll_to_top(d->hChatList);
     }
 }
 

@@ -352,14 +352,30 @@ static int count_selected(const ChatMsgList *list)
     return n;
 }
 
-int test_cmd_selected_default_zero(void) {
+/* Approval card v2 (AI Assist Panel): pending, non-held rows start
+ * checked -- the user unchecks the ones they don't want before "Run N
+ * selected" -- see src/core/chat_msg.c's chat_msg_set_command(). */
+int test_cmd_selected_default_checked(void) {
     TEST_BEGIN();
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
     chat_msg_set_command(c0, "ls", CMD_SAFE, 0);
+    ASSERT_EQ(c0->u.cmd.selected, 1);
+    ASSERT_EQ(count_selected(&list), 1);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+/* A held (blocked) row starts unchecked -- its checkbox paints disabled
+ * regardless, but it must never count toward "Run N selected". */
+int test_cmd_selected_default_unchecked_when_held(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c0, "rm -rf /", CMD_CRITICAL, 1); /* blocked */
     ASSERT_EQ(c0->u.cmd.selected, 0);
-    ASSERT_EQ(count_selected(&list), 0);
     chat_msg_list_clear(&list);
     TEST_END();
 }
@@ -375,12 +391,12 @@ int test_cmd_selected_toggle(void) {
     ChatMsgItem *c2 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
     chat_msg_set_command(c2, "cat f", CMD_SAFE, 0);
 
-    /* Select first and third */
-    c0->u.cmd.selected = 1;
-    c2->u.cmd.selected = 1;
+    /* All three start checked by default -- deselect the middle one,
+     * leaving first and third checked. */
+    c1->u.cmd.selected = 0;
     ASSERT_EQ(count_selected(&list), 2);
 
-    /* Deselect first */
+    /* Deselect first too */
     c0->u.cmd.selected = 0;
     ASSERT_EQ(count_selected(&list), 1);
     chat_msg_list_clear(&list);

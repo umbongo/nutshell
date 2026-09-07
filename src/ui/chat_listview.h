@@ -92,6 +92,9 @@ void chat_listview_invalidate(HWND hwnd);
 /* Scroll to bottom (e.g., after new message). */
 void chat_listview_scroll_to_bottom(HWND hwnd);
 
+/* Scroll to top (e.g., to reveal a Thinking disclosure above a long reply). */
+void chat_listview_scroll_to_top(HWND hwnd);
+
 /* Returns 1 if the list is scrolled near the bottom. */
 int chat_listview_is_near_bottom(HWND hwnd);
 

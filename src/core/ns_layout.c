@@ -8,7 +8,6 @@
  * named grid tokens (it isn't reused elsewhere), but kept a multiple of 4
  * to stay on the same grid. */
 #define NS_TAG_W 64
-#define NS_MIN_TEXT_W 160   /* below this, approval rows go two-line (96-DPI base) */
 
 static int point_in(NsRect r, int x, int y)
 {
@@ -77,8 +76,9 @@ void ns_card_layout(NsRect r, int dpi, NsCardLayout *out)
     if (out->body.h < 0) out->body.h = 0;
 }
 
-void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
-                          int dpi, ApprovalCardLayout *out)
+void approval_card_layout(NsRect r, int n, const int *cmd_text_w,
+                          const int *checked, const int *held,
+                          int text_h, int dpi, ApprovalCardLayout *out)
 {
     if (!out) return;
     memset(out, 0, sizeof(*out));
@@ -90,12 +90,10 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
     int tag_h   = ns_scale(SZ_TAG_H, dpi);
     int tag_w   = ns_scale(NS_TAG_W, dpi);
     int ctrl_h  = ns_scale(SZ_CTRL_H, dpi);
-    int btn_w   = ns_scale(SZ_BTN_MIN_W, dpi);
     int chk_sz  = ns_scale(SZ_ICON, dpi);
+    int btn_w   = ns_scale(SZ_BTN_MIN_W, dpi);
 
-    int line_h = ctrl_h;
-    int min_line_h = text_h + 2 * ns_scale(SP_XS, dpi);
-    if (min_line_h > line_h) line_h = min_line_h;
+    int row_h = approval_row_height(text_h, dpi);
 
     NsRect area;
     area.x = r.x + pad;
@@ -105,16 +103,13 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
     if (area.w < 0) area.w = 0;
     if (area.h < 0) area.h = 0;
 
-    /* Single-line rows put tag, text, checkbox, Allow and Deny side by side.
-     * In a narrow panel (a docked AI panel at 200 % DPI, say) that leaves the
-     * command text no room at all, so when the text box would fall below
-     * NS_MIN_TEXT_W the row becomes two lines: tag + text on the first,
-     * the controls right-aligned on the second. */
-    int controls_w = chk_sz + gap_sm + btn_w + gap_sm + btn_w;
-    int text_w_single = area.w - tag_w - gap_sm - gap_sm - controls_w;
-    int two_line = (text_w_single < ns_scale(NS_MIN_TEXT_W, dpi)) ? 1 : 0;
-    int row_h = two_line ? 2 * line_h : line_h;
-    out->two_line = two_line;
+    /* Header row ("N commands · M held") above the rows. */
+    out->header.x = area.x;
+    out->header.y = area.y;
+    out->header.w = area.w;
+    out->header.h = ctrl_h;
+
+    int rows_top = area.y + ctrl_h + gap_sm;
 
     int visible_n = n;
     out->scrollable = (n > APPROVAL_VISIBLE_MAX) ? 1 : 0;
@@ -126,84 +121,67 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
     int viewport_h = visible_n * row_h;
 
     out->viewport.x = area.x;
-    out->viewport.y = area.y;
+    out->viewport.y = rows_top;
     out->viewport.w = area.w;
     out->viewport.h = viewport_h;
+
+    int run_enabled = 0;
 
     for (int i = 0; i < n; i++) {
         ApprovalRowLayout *row = &out->rows[i];
         if (i >= visible_n) {
             memset(row, 0, sizeof(*row));
-            continue;
+        } else {
+            int row_top = rows_top + i * row_h;
+
+            /* checkbox at left */
+            row->checkbox.w = chk_sz;
+            row->checkbox.h = chk_sz;
+            row->checkbox.x = area.x;
+            row->checkbox.y = row_top + (row_h - chk_sz) / 2;
+
+            /* risk tag right-aligned */
+            row->tag.w = tag_w;
+            row->tag.h = tag_h;
+            row->tag.x = area.x + area.w - tag_w;
+            row->tag.y = row_top + (row_h - tag_h) / 2;
+
+            /* text fills the space between */
+            row->text.x = row->checkbox.x + chk_sz + gap_sm;
+            row->text.y = row_top;
+            row->text.w = row->tag.x - gap_sm - row->text.x;
+            row->text.h = row_h;
+            if (row->text.w < 0) row->text.w = 0;
+
+            row->ellipsis = (cmd_text_w && cmd_text_w[i] > row->text.w) ? 1 : 0;
+            row->held = (held && held[i]) ? 1 : 0;
         }
 
-        int row_top = area.y + i * row_h;
-        /* Line the text sits on, and the line the controls sit on. */
-        int text_line_top = row_top;
-        int ctrl_line_top = two_line ? row_top + line_h : row_top;
-
-        row->tag.x = area.x;
-        row->tag.y = text_line_top + (line_h - tag_h) / 2;
-        row->tag.w = tag_w;
-        row->tag.h = tag_h;
-
-        row->deny.w = btn_w;
-        row->deny.h = ctrl_h;
-        row->deny.y = ctrl_line_top + (line_h - ctrl_h) / 2;
-        row->deny.x = area.x + area.w - btn_w;
-
-        row->allow.w = btn_w;
-        row->allow.h = ctrl_h;
-        row->allow.y = row->deny.y;
-        row->allow.x = row->deny.x - gap_sm - btn_w;
-
-        row->checkbox.w = chk_sz;
-        row->checkbox.h = chk_sz;
-        row->checkbox.y = ctrl_line_top + (line_h - chk_sz) / 2;
-        row->checkbox.x = row->allow.x - gap_sm - chk_sz;
-
-        row->text.x = row->tag.x + tag_w + gap_sm;
-        row->text.y = text_line_top;
-        row->text.w = two_line ? (area.x + area.w - row->text.x)
-                               : (row->checkbox.x - gap_sm - row->text.x);
-        row->text.h = line_h;
-        if (row->text.w < 0) row->text.w = 0;
-
-        row->ellipsis = (cmd_text_w && cmd_text_w[i] > row->text.w) ? 1 : 0;
+        int is_checked = checked && checked[i];
+        int is_held = held && held[i];
+        if (is_checked && !is_held) run_enabled = 1;
     }
+    out->run_enabled = run_enabled;
 
-    int actions_y = area.y + viewport_h + gap_sm;
+    int actions_y = rows_top + viewport_h + gap_sm;
 
-    out->cancel.w = btn_w;
-    out->cancel.h = ctrl_h;
-    out->cancel.y = actions_y;
-    out->cancel.x = area.x + area.w - btn_w;
+    /* Deny all (ghost) then Run N selected (primary), right-aligned. */
+    out->run_selected.w = btn_w;
+    out->run_selected.h = ctrl_h;
+    out->run_selected.y = actions_y;
+    out->run_selected.x = area.x + area.w - btn_w;
 
-    out->allow_all.w = btn_w;
-    out->allow_all.h = ctrl_h;
-    out->allow_all.y = actions_y;
-    out->allow_all.x = out->cancel.x - gap_sm - btn_w;
+    out->deny_all.w = btn_w;
+    out->deny_all.h = ctrl_h;
+    out->deny_all.y = actions_y;
+    out->deny_all.x = out->run_selected.x - gap_sm - btn_w;
 }
 
-int approval_row_height(int card_w, int text_h, int dpi)
+int approval_row_height(int text_h, int dpi)
 {
-    int pad     = ns_scale(SP_MD, dpi);
-    int gap_sm  = ns_scale(SP_SM, dpi);
-    int tag_w   = ns_scale(NS_TAG_W, dpi);
-    int ctrl_h  = ns_scale(SZ_CTRL_H, dpi);
-    int btn_w   = ns_scale(SZ_BTN_MIN_W, dpi);
-    int chk_sz  = ns_scale(SZ_ICON, dpi);
-
-    int line_h = ctrl_h;
-    int min_line_h = text_h + 2 * ns_scale(SP_XS, dpi);
-    if (min_line_h > line_h) line_h = min_line_h;
-
-    int area_w = card_w - 2 * pad;
-    if (area_w < 0) area_w = 0;
-    int controls_w = chk_sz + gap_sm + btn_w + gap_sm + btn_w;
-    int text_w_single = area_w - tag_w - gap_sm - gap_sm - controls_w;
-    int two_line = (text_w_single < ns_scale(NS_MIN_TEXT_W, dpi)) ? 1 : 0;
-    return two_line ? 2 * line_h : line_h;
+    int ctrl_h = ns_scale(SZ_CTRL_H, dpi);
+    int min_h = text_h + 2 * ns_scale(SP_XS, dpi);
+    return (min_h > ctrl_h) ? min_h : ctrl_h;
 }
 
 int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out)
@@ -211,16 +189,15 @@ int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out)
     if (row_out) *row_out = -1;
     if (!l) return HIT_NONE;
 
-    if (point_in(l->allow_all, x, y)) return HIT_ALLOW_ALL;
-    if (point_in(l->cancel, x, y)) return HIT_CANCEL;
+    if (point_in(l->header, x, y)) return HIT_HEADER;
+    if (point_in(l->deny_all, x, y)) return HIT_DENY_ALL;
+    if (point_in(l->run_selected, x, y)) return HIT_RUN_SELECTED;
 
     int n = l->n_rows;
     if (n > APPROVAL_MAX_CMDS) n = APPROVAL_MAX_CMDS;
 
     for (int i = 0; i < n; i++) {
         const ApprovalRowLayout *row = &l->rows[i];
-        if (point_in(row->allow, x, y)) { if (row_out) *row_out = i; return HIT_ALLOW; }
-        if (point_in(row->deny, x, y)) { if (row_out) *row_out = i; return HIT_DENY; }
         if (point_in(row->checkbox, x, y)) { if (row_out) *row_out = i; return HIT_CHECKBOX; }
         if (point_in(row->tag, x, y)) { if (row_out) *row_out = i; return HIT_TAG; }
         if (point_in(row->text, x, y)) { if (row_out) *row_out = i; return HIT_TEXT; }

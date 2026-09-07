@@ -31,62 +31,72 @@ typedef struct { NsRect inset, header, body; } NsCardLayout;
  * approval_card_layout). Matches the visible-row cap in the spec. */
 #define APPROVAL_VISIBLE_MAX 8
 
-/* One approval-card row, left to right: safety tag, command text
- * (single line, ellipsised when it doesn't fit), selection checkbox,
- * Allow button, Deny button. `ellipsis` is set when the caller-supplied
- * full-text pixel width exceeds `text.w`. */
+/* One approval-card row, left to right: selection checkbox, command text
+ * (single line, ellipsised when it doesn't fit), risk tag right-aligned.
+ * `ellipsis` is set when the caller-supplied full-text pixel width exceeds
+ * `text.w`. `held` mirrors the caller's held[] input for this row (a held
+ * row paints its checkbox disabled and its text dimmed; it never counts
+ * toward `run_enabled`). Rows are always single-line — v1's two-line
+ * wrapping (and the per-row Allow/Deny buttons that made it necessary) is
+ * gone now that the card has a single Run N selected action. */
 typedef struct {
-    NsRect tag, text, checkbox, allow, deny;
+    NsRect checkbox, text, tag;
     int ellipsis;
+    int held;
 } ApprovalRowLayout;
 
-/* The whole approval card: up to APPROVAL_MAX_CMDS rows (rows beyond
- * n_rows, or beyond the visible window, are zeroed), plus the two card-wide
- * actions (Allow All, Cancel) and the rows' viewport rect. `first_visible`
- * is always 0 for a single ns_layout call — the caller re-slices its own
- * command array (widths + n) to scroll further rows into view. */
+/* The whole approval card v2: a header row ("N commands · M held"), up to
+ * APPROVAL_MAX_CMDS rows (rows beyond n_rows, or beyond the visible
+ * window, are zeroed), and the two card-wide actions (Deny all, Run N
+ * selected) below them. `first_visible` is always 0 for a single
+ * ns_layout call — the caller re-slices its own command array (widths +
+ * n) to scroll further rows into view. `run_enabled` is
+ * any(checked[i] && !held[i]) over all n rows (not just the visible
+ * ones), so a row scrolled out of view can still enable Run selected. */
 typedef struct {
     ApprovalRowLayout rows[APPROVAL_MAX_CMDS];
-    int n_rows, first_visible, scrollable;
-    int two_line;   /* 1 when rows wrap: tag + text on line 1, controls on line 2 */
-    NsRect allow_all, cancel, viewport;
+    int n_rows, first_visible, scrollable, run_enabled;
+    NsRect header, deny_all, run_selected, viewport;
 } ApprovalCardLayout;
 
 enum {
     HIT_NONE,
-    HIT_TAG,
+    HIT_HEADER,
     HIT_TEXT,
     HIT_CHECKBOX,
-    HIT_ALLOW,
-    HIT_DENY,
-    HIT_ALLOW_ALL,
-    HIT_CANCEL
+    HIT_TAG,
+    HIT_DENY_ALL,
+    HIT_RUN_SELECTED
 };
 
 void ns_button_layout(NsRect r, int has_icon, int dpi, NsButtonLayout *out);
 void ns_card_layout(NsRect r, int dpi, NsCardLayout *out);
 
 /* Lay out `n` command rows (n clamped to APPROVAL_MAX_CMDS) inside `r`,
- * plus the allow_all/cancel actions below them. `cmd_text_w[i]` is the
- * full (unellipsised) pixel width of row i's command text, measured by the
- * caller in its own font; `text_h` is that font's line height, used to
- * grow the row height beyond SZ_CTRL_H if needed. n <= 0 zeroes `out`
- * (rows/allow_all/cancel all zero-size) and does not crash. */
-void approval_card_layout(NsRect r, int n, const int *cmd_text_w, int text_h,
-                          int dpi, ApprovalCardLayout *out);
+ * a header row above them, and the deny_all/run_selected actions below
+ * them. `cmd_text_w[i]` is the full (unellipsised) pixel width of row i's
+ * command text, measured by the caller in its own font; `checked[i]` and
+ * `held[i]` are the caller's per-row selection/held state (either may be
+ * NULL, treated as all-zero); `text_h` is the command font's line height,
+ * used to grow the row height beyond SZ_CTRL_H if needed. n <= 0 zeroes
+ * `out` (rows/header/deny_all/run_selected all zero-size) and does not
+ * crash. */
+void approval_card_layout(NsRect r, int n, const int *cmd_text_w,
+                          const int *checked, const int *held,
+                          int text_h, int dpi, ApprovalCardLayout *out);
 
 /* Hit-test a point against a laid-out approval card. Returns a HIT_*
  * constant; `*row_out` (when non-NULL) receives the row index for
- * HIT_TAG/HIT_TEXT/HIT_CHECKBOX/HIT_ALLOW/HIT_DENY, or -1 otherwise
- * (including HIT_NONE, HIT_ALLOW_ALL, HIT_CANCEL). Never crashes on a
- * NULL layout. */
+ * HIT_TEXT/HIT_CHECKBOX/HIT_TAG, or -1 otherwise (including HIT_NONE,
+ * HIT_HEADER, HIT_DENY_ALL, HIT_RUN_SELECTED). Never crashes on a NULL
+ * layout. */
 int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out);
 
-/* Height of one approval row for a card of width `card_w` (the same rect
- * width passed to approval_card_layout), text height `text_h`, at `dpi`.
- * Doubles when the card is narrow enough that rows go two-line. Callers that
+/* Height of one approval row with command-text line height `text_h` at
+ * `dpi`: max(SZ_CTRL_H, text_h + 2*SP_XS). No longer takes a card width —
+ * v2 rows are always single-line regardless of card width. Callers that
  * need the row height before they have a layout (scroll maths, container
  * sizing) must use this so they agree with approval_card_layout. */
-int approval_row_height(int card_w, int text_h, int dpi);
+int approval_row_height(int text_h, int dpi);
 
 #endif /* NUTSHELL_NS_LAYOUT_H */

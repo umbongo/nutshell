@@ -326,6 +326,9 @@ typedef struct {
     int platform;                /* CmdPlatform for this session */
     int auto_approve;            /* Session-level auto-approve flag */
     int activity_phase;          /* ActivityPhase saved on session switch */
+    int show_thinking;           /* 1 = user opened a Thinking disclosure this
+                                   * session -- suppresses auto-collapse when a
+                                   * reply's text starts (see chat_listview.c) */
 } AiSessionState;
 
 #endif /* NUTSHELL_AI_PROMPT_H */

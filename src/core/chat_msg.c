@@ -149,6 +149,11 @@ int chat_msg_set_command(ChatMsgItem *item, const char *command,
     item->u.cmd.safety = safety;
     item->u.cmd.approved = -1;
     item->u.cmd.blocked = blocked;
+    /* Approval card v2: pending, non-held rows start checked (the user
+     * unchecks the ones they don't want before "Run N selected"); a held
+     * (blocked) row's checkbox paints disabled regardless, so leave it
+     * unchecked. */
+    item->u.cmd.selected = blocked ? 0 : 1;
     item->dirty = 1;
     return 0;
 }
