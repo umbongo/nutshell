@@ -9,6 +9,8 @@
 
 `nutshell.rc` reads `APP_VERSION` and `APP_VERSION_BINARY` from `resource.h` via `#include`, so it updates automatically. No exceptions. Every build gets a unique version number.
 
+The patch number never goes past 99: after `1.0.99` comes `1.1.0` (`1,1,0,0`), not `1.0.100`.
+
 ## Build Commands
 
 - **Always `make clean && make release`** — never `make release` alone.

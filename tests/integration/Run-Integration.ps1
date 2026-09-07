@@ -152,6 +152,52 @@ Invoke-Case "page_up_scrolls_history" @{} {
     "screenshots saved (visual check)"
 }
 
+function Get-TerminalAreaHash {
+    <# MD5 of the terminal text area of a main-window capture: the left 60% of
+       the width (excludes the scrollbar) between 15% and 95% of the height
+       (excludes the title bar / tab strip). While scrolled back the cursor is
+       not drawn, so two captures of an unchanged view hash identically. #>
+    param([Parameter(Mandatory)] [string] $Path)
+    $bmp = New-Object System.Drawing.Bitmap $Path
+    try {
+        $rect = New-Object System.Drawing.Rectangle -ArgumentList @(0, [int]($bmp.Height * 0.15), [int]($bmp.Width * 0.6), [int]($bmp.Height * 0.8))
+        $crop = $bmp.Clone($rect, $bmp.PixelFormat)
+        try {
+            $ms = New-Object System.IO.MemoryStream
+            $crop.Save($ms, [System.Drawing.Imaging.ImageFormat]::Bmp)
+            $md5 = [System.Security.Cryptography.MD5]::Create()
+            return [BitConverter]::ToString($md5.ComputeHash($ms.ToArray()))
+        } finally { $crop.Dispose() }
+    } finally { $bmp.Dispose() }
+}
+
+Invoke-Case "terminal_holds_position_while_output_arrives" @{} {
+    param($s)
+    # Smart scrolling (v1.1.0): a view scrolled back into history must stay on
+    # the same lines while new output arrives, and a keypress returns to the
+    # live view. Before the fix the offset was measured from the bottom and
+    # never adjusted, so every new line dragged the view along.
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    Send-NutshellLine -Session $s -Line "seq 1 300"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^300\s*$" -TimeoutSec 5) "seq output incomplete"
+    # Output that arrives with no keypress: 101 lines after a 4 s delay.
+    Send-NutshellLine -Session $s -Line "(sleep 4; seq 1000 1100) &"
+    Send-NutshellKeys -Session $s -Keys "{PGUP}{PGUP}" -SettleMs 500
+    $before = Join-Path $Artifacts "smart_scroll_before.png"
+    $after  = Join-Path $Artifacts "smart_scroll_after.png"
+    $live   = Join-Path $Artifacts "smart_scroll_live.png"
+    Save-NutshellScreenshot -Session $s -Path $before | Out-Null
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^1100\s*$" -TimeoutSec 12) "the background output never arrived"
+    Start-Sleep -Milliseconds 600
+    Save-NutshellScreenshot -Session $s -Path $after | Out-Null
+    Assert-True ((Get-TerminalAreaHash $before) -eq (Get-TerminalAreaHash $after)) "the scrolled-back view moved when new output arrived (see smart_scroll_before/after.png)"
+    Send-NutshellKeys -Session $s -Keys "{ENTER}" -SettleMs 600
+    Save-NutshellScreenshot -Session $s -Path $live | Out-Null
+    Assert-True ((Get-TerminalAreaHash $after) -ne (Get-TerminalAreaHash $live)) "a keypress did not return to the live view"
+    "view held while 101 lines arrived; Enter returned to the live view"
+}
+
 Invoke-Case "resize_applies_to_inactive_tab" @{} {
     param($s)
     # Regression for "lost lines after resize": WM_SIZE only resized the active

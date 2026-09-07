@@ -261,6 +261,14 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       when stuck; the deliberate ones (sending a prompt, Retry, session
       switch, cancelling a stream) were kept.
 
+- [x] Smart scrolling for the terminal pane (v1.1.0). `term_scroll` now moves a
+      scrolled-back `scrollback_offset` up by one for every line scrolled in
+      (clamped to the history held), so the view stays anchored while output
+      arrives; at the bottom it follows, and a keypress already resets to the
+      live view. Tests in `tests/test_term.c`; integration case
+      `terminal_holds_position_while_output_arrives` compares captures.
+      Versioning: after 1.0.99 the number rolls to 1.1.0 (Thomas; rule in CLAUDE.md).
+
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.

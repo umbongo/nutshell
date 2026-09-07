@@ -450,3 +450,72 @@ int test_term_bracketed_paste_persists_after_reset(void) {
     term_free(t);
     TEST_END();
 }
+
+/* ---- Smart scrolling: term_scroll keeps a scrolled-up view anchored ---- */
+
+/* At the bottom (offset 0) new output must keep following. */
+int test_term_scroll_follows_when_at_bottom(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 100);
+    ASSERT_EQ(t->scrollback_offset, 0);
+    for (int i = 0; i < 20; i++) term_scroll(t);
+    ASSERT_EQ(t->scrollback_offset, 0);
+    term_free(t);
+    TEST_END();
+}
+
+/* Scrolled up: each new line pushed in moves the offset by one so the
+ * same history lines stay on screen. */
+int test_term_scroll_anchors_when_scrolled_up(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 100);
+    for (int i = 0; i < 20; i++) term_scroll(t);   /* 20 lines of history */
+    t->scrollback_offset = 7;
+    term_scroll(t);
+    ASSERT_EQ(t->scrollback_offset, 8);
+    for (int i = 0; i < 5; i++) term_scroll(t);
+    ASSERT_EQ(t->scrollback_offset, 13);
+    term_free(t);
+    TEST_END();
+}
+
+/* The anchor can never point past the oldest line the buffer still holds:
+ * clamp to lines_count - rows once history is exhausted. */
+int test_term_scroll_anchor_clamps_to_history(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 100);
+    for (int i = 0; i < 10; i++) term_scroll(t);   /* lines_count = 15 */
+    t->scrollback_offset = 10;                      /* at the very top */
+    term_scroll(t);                                 /* lines_count = 16 */
+    ASSERT_EQ(t->scrollback_offset, 11);            /* still the top */
+    term_free(t);
+    TEST_END();
+}
+
+/* With the ring buffer full the oldest line is evicted on every scroll,
+ * so an anchor at the top stays at max_scrollback rather than growing. */
+int test_term_scroll_anchor_clamps_to_max_scrollback(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 8);
+    for (int i = 0; i < 30; i++) term_scroll(t);   /* buffer long since full */
+    t->scrollback_offset = 8;
+    term_scroll(t);
+    ASSERT_EQ(t->scrollback_offset, 8);
+    term_scroll(t);
+    ASSERT_EQ(t->scrollback_offset, 8);
+    term_free(t);
+    TEST_END();
+}
+
+/* A region scroll (scroll region narrower than the screen) never touches
+ * scrollback and so must not move the anchor either. */
+int test_term_scroll_region_does_not_move_anchor(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 100);
+    for (int i = 0; i < 20; i++) term_scroll(t);
+    t->scrollback_offset = 4;
+    term_scroll_up(t, 1, 3, 1);
+    ASSERT_EQ(t->scrollback_offset, 4);
+    term_free(t);
+    TEST_END();
+}

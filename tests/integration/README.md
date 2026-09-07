@@ -45,6 +45,7 @@ removed.
 | `paste_with_confirmation_shows_dialog` | `paste_confirm=true` shows the preview window |
 | `pty_resizes_with_window` | shrinking the window shrinks `tput lines`/`tput cols` |
 | `page_up_scrolls_history` | evidence screenshots before/after Page Up |
+| `terminal_holds_position_while_output_arrives` | a view scrolled back with Page Up stays on the same lines while background output arrives; Enter returns to the live view (smart scrolling) |
 | `resize_applies_to_inactive_tab` | a tab resized while in the background reports the new `tput lines` when activated |
 | `ai_panel_docks_with_key` | View › AI Assist docks the panel without a dialog |
 | `ai_runs_safe_command_with_auto_approve` | a prompted `echo` runs in the terminal via `[EXEC]` + Auto Approve |

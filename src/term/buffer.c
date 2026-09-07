@@ -261,6 +261,19 @@ void term_scroll(Terminal *term) {
         term->lines_start = (term->lines_start + 1) % term->lines_capacity;
     }
 
+    /* Smart scrolling: a view that is scrolled back stays anchored on the
+     * same history lines while new output arrives -- the offset counts
+     * lines from the bottom, so every line scrolled in moves it up by one,
+     * clamped to the history the buffer still holds. A view at the bottom
+     * (offset 0) keeps following; a keypress resets the offset (window.c). */
+    if (term->scrollback_offset > 0) {
+        int max_off = term->lines_count - term->rows;
+        if (max_off > term->max_scrollback) max_off = term->max_scrollback;
+        if (max_off < 0) max_off = 0;
+        term->scrollback_offset++;
+        if (term->scrollback_offset > max_off) term->scrollback_offset = max_off;
+    }
+
     /* Mark all visible rows dirty: each screen position now maps to a
      * different logical row, so the renderer must repaint every row.
      * When lines_count < rows (sparse content after resize), we must

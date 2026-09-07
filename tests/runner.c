@@ -477,6 +477,11 @@ int test_term_sgr_reset_after_turnoff(void);
 int test_term_bracketed_paste_enable(void);
 int test_term_bracketed_paste_disable(void);
 int test_term_bracketed_paste_persists_after_reset(void);
+int test_term_scroll_follows_when_at_bottom(void);
+int test_term_scroll_anchors_when_scrolled_up(void);
+int test_term_scroll_anchor_clamps_to_history(void);
+int test_term_scroll_anchor_clamps_to_max_scrollback(void);
+int test_term_scroll_region_does_not_move_anchor(void);
 
 /* test_theme.c */
 int test_theme_dark_background(void);
@@ -2303,6 +2308,11 @@ int main(void) {
     failed += test_term_bracketed_paste_enable();
     failed += test_term_bracketed_paste_disable();
     failed += test_term_bracketed_paste_persists_after_reset();
+    failed += test_term_scroll_follows_when_at_bottom();
+    failed += test_term_scroll_anchors_when_scrolled_up();
+    failed += test_term_scroll_anchor_clamps_to_history();
+    failed += test_term_scroll_anchor_clamps_to_max_scrollback();
+    failed += test_term_scroll_region_does_not_move_anchor();
 
     printf("\n--- VT Sequences ---\n");
     failed += test_vt_osc_title_0();
