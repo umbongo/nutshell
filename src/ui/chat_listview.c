@@ -26,6 +26,7 @@
 #include "ai_panel_states.h"
 #include "ai_prompt.h"
 #include "ns_font.h"
+#include "stick_scroll.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -438,6 +439,7 @@ HWND chat_listview_create(HWND parent, int x, int y, int w, int h,
     lv->dpi_scale = 1.0f;
     lv->render_markdown = 1;
     lv->state_id = -1;
+    lv->stick_to_bottom = 1;
     ns_hover_init(&lv->hover);
 
     /* Compute scaled layout constants */
@@ -575,6 +577,9 @@ void chat_listview_scroll_to_bottom(HWND hwnd)
     if (!lv) return;
     int max_scroll = lv->total_height - lv->viewport_height;
     if (max_scroll < 0) max_scroll = 0;
+    /* A programmatic jump to bottom (sending a prompt, opening the panel,
+     * Retry) is a deliberate "go to bottom" action -- re-engage stick. */
+    lv->stick_to_bottom = 1;
     lv->scroll_y = max_scroll;
     update_scrollbar(lv);
     InvalidateRect(hwnd, NULL, TRUE);
@@ -584,6 +589,7 @@ void chat_listview_scroll_to_top(HWND hwnd)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
     if (!lv) return;
+    lv->stick_to_bottom = 0;
     lv->scroll_y = 0;
     update_scrollbar(lv);
     InvalidateRect(hwnd, NULL, TRUE);
@@ -593,13 +599,9 @@ int chat_listview_is_near_bottom(HWND hwnd)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
     if (!lv) return 1;
-    int max_scroll = lv->total_height - lv->viewport_height;
-    if (max_scroll <= 0) return 1;
-    /* "Near bottom" = within a small margin of the bottom.
-     * Tight threshold so expanding the thinking box (which increases
-     * total_height) doesn't keep triggering scroll_to_bottom. */
-    int margin = ns_scale(60, CLV_DPI(lv));
-    return lv->scroll_y >= max_scroll - margin;
+    /* Kept for API compatibility -- now just reports the stick-to-bottom
+     * bit (set by after_user_scroll() on every user-driven scroll). */
+    return lv->stick_to_bottom;
 }
 
 void chat_listview_relayout(HWND hwnd)
@@ -753,11 +755,11 @@ static void recalc_layout(ChatListView *lv)
     lv->total_height = y;
     lv->viewport_height = rc.bottom - rc.top;
 
-    /* Clamp scroll */
+    /* Content/viewport change: follow the bottom while stuck, otherwise
+     * keep the current position (re-clamped to the new valid range). */
     int max_scroll = lv->total_height - lv->viewport_height;
-    if (max_scroll < 0) max_scroll = 0;
-    if (lv->scroll_y > max_scroll) lv->scroll_y = max_scroll;
-    if (lv->scroll_y < 0) lv->scroll_y = 0;
+    lv->scroll_y = stick_scroll_on_layout(lv->stick_to_bottom, lv->scroll_y,
+                                           max_scroll);
 
     update_scrollbar(lv);
 }
@@ -964,6 +966,20 @@ static void clamp_scroll(ChatListView *lv)
     if (max_scroll < 0) max_scroll = 0;
     if (lv->scroll_y > max_scroll) lv->scroll_y = max_scroll;
     if (lv->scroll_y < 0) lv->scroll_y = 0;
+}
+
+/* Call after any user-driven scroll change (wheel, scrollbar, keyboard,
+ * selection-drag auto-scroll) once lv->scroll_y has been set/clamped to
+ * its final value for the event. Recomputes stick_to_bottom from the
+ * resulting position -- reaching the bottom re-engages stick, anything
+ * else releases it -- and refreshes the scrollbar + repaint. */
+static void after_user_scroll(ChatListView *lv)
+{
+    int max_scroll = lv->total_height - lv->viewport_height;
+    if (max_scroll < 0) max_scroll = 0;
+    lv->stick_to_bottom = stick_scroll_after_user(lv->scroll_y, max_scroll);
+    update_scrollbar(lv);
+    InvalidateRect(lv->hwnd, NULL, FALSE);
 }
 
 /* ── Recalculate scaled layout constants from current dpi_scale ─────── */
@@ -2931,11 +2947,11 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         if (my < 0) {
             lv->scroll_y += my;  /* my is negative, scrolls up */
             clamp_scroll(lv);
-            update_scrollbar(lv);
+            after_user_scroll(lv);
         } else if (my > lv->viewport_height) {
             lv->scroll_y += my - lv->viewport_height;
             clamp_scroll(lv);
-            update_scrollbar(lv);
+            after_user_scroll(lv);
         }
         int sy = lv->sel_start_y, ey = lv->sel_end_y;
         if (sy > ey) { int tmp = sy; sy = ey; ey = tmp; }
@@ -3029,8 +3045,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
 
         clamp_scroll(lv);
         if (lv->scroll_y != old_pos) {
-            update_scrollbar(lv);
-            InvalidateRect(hwnd, NULL, FALSE);
+            after_user_scroll(lv);
         }
         return 0;
     }
@@ -3145,8 +3160,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         clamp_scroll(lv);
 
         if (lv->scroll_y != old_pos) {
-            update_scrollbar(lv);
-            InvalidateRect(hwnd, NULL, FALSE);
+            after_user_scroll(lv);
         }
         return 0;
     }
@@ -3223,8 +3237,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
 
         clamp_scroll(lv);
         if (lv->scroll_y != old_pos) {
-            update_scrollbar(lv);
-            InvalidateRect(hwnd, NULL, FALSE);
+            after_user_scroll(lv);
         }
         return 0;
     }

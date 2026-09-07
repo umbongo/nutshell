@@ -17,6 +17,7 @@ typedef struct {
     int scroll_y;           /* Current scroll offset in pixels */
     int total_height;       /* Total content height in pixels */
     int viewport_height;    /* Visible area height */
+    int stick_to_bottom;    /* 1 = follow content growth (classic stick-to-bottom) */
 
     /* Fonts (not owned, set by parent) */
     HFONT hFont;

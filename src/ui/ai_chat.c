@@ -3093,10 +3093,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         ChatItemType tool_type = (ChatItemType)(WPARAM)wParam;
         chat_msg_append(&d->msg_list, tool_type, tool_text);
         free(tool_text);
-        if (d->hChatList) {
-            chat_listview_invalidate(d->hChatList);
-            chat_listview_scroll_to_bottom(d->hChatList);
-        }
+        /* Following the tool call/result into view (if the user hasn't
+         * scrolled away) is now automatic: chat_listview_invalidate()
+         * recalcs layout, which applies the list's stick-to-bottom state. */
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
         return 0;
     }
 
@@ -3110,9 +3110,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
          * we can repaint. */
         if (!d) break;
 
-        /* Check scroll position BEFORE any layout changes */
-        int was_near_bottom = d->hChatList
-            ? chat_listview_is_near_bottom(d->hChatList) : 1;
         int display_dirty = 0;
         int prev_phase = d->stream_phase;  /* before this batch's chunks */
 
@@ -3237,14 +3234,13 @@ next_coalesce:;
                     chat_msg_set_text(d->stream_ai_item,
                                       d->stream_content);
                 }
-                if (d->hChatList) {
-                    chat_listview_invalidate(d->hChatList);
-                    /* Only auto-scroll during content phase — during thinking
-                     * the box is already visible and scroll_to_bottom would
-                     * shift coordinates, breaking click-to-expand. */
-                    if (was_near_bottom && d->stream_phase >= 2)
-                        chat_listview_scroll_to_bottom(d->hChatList);
-                }
+                /* Following the growing reply into view (if the user
+                 * hasn't scrolled away) is now automatic: invalidate's
+                 * recalc_layout applies the list's stick-to-bottom state
+                 * after total_height has already grown, so there's no
+                 * stale-margin race the way a per-chunk scroll_to_bottom
+                 * had. */
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
             }
         }
 
@@ -3474,10 +3470,10 @@ next_coalesce:;
                 SetFocus(d->hInput);
             }
 
-            if (d->hChatList) {
-                chat_listview_invalidate(d->hChatList);
-                chat_listview_scroll_to_bottom(d->hChatList);
-            }
+            /* Following the finished reply/approval card into view (if the
+             * user hasn't scrolled away) is now automatic via stick-to-
+             * bottom in recalc_layout. */
+            if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
             free(text);
             free(rmsg->thinking);
@@ -3491,10 +3487,7 @@ next_coalesce:;
             if (text) {
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                 text);
-                if (d->hChatList) {
-                    chat_listview_invalidate(d->hChatList);
-                    chat_listview_scroll_to_bottom(d->hChatList);
-                }
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
                 free(text);
             }
             free(rmsg->thinking);

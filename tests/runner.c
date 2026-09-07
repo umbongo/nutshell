@@ -957,6 +957,19 @@ int test_scroll_page_up_rows_1_moves_by_1(void);
 int test_scroll_page_down_rows_1_moves_by_1(void);
 int test_scroll_page_up_rows_0_treated_as_1(void);
 int test_scroll_page_down_rows_0_treated_as_1(void);
+
+/* test_stick_scroll.c */
+int test_stick_scroll_after_user_scrolled_up(void);
+int test_stick_scroll_after_user_exactly_at_bottom(void);
+int test_stick_scroll_after_user_past_bottom(void);
+int test_stick_scroll_after_user_max_scroll_zero_or_negative(void);
+int test_stick_scroll_after_user_negative_scroll_y(void);
+int test_stick_scroll_on_layout_stuck_content_grows(void);
+int test_stick_scroll_on_layout_not_stuck_content_grows_unchanged(void);
+int test_stick_scroll_on_layout_not_stuck_content_shrinks_clamped(void);
+int test_stick_scroll_on_layout_negative_scroll_y_clamped(void);
+int test_stick_scroll_on_layout_max_scroll_zero_or_negative(void);
+int test_stick_scroll_on_layout_stuck_content_shrinks(void);
 int test_scroll_page_up_negative_max_treated_as_zero(void);
 
 /* test_term_extract.c */
@@ -2731,6 +2744,19 @@ int main(void) {
     failed += test_scroll_page_up_rows_0_treated_as_1();
     failed += test_scroll_page_down_rows_0_treated_as_1();
     failed += test_scroll_page_up_negative_max_treated_as_zero();
+
+    printf("\n--- Stick-to-bottom scroll ---\n");
+    failed += test_stick_scroll_after_user_scrolled_up();
+    failed += test_stick_scroll_after_user_exactly_at_bottom();
+    failed += test_stick_scroll_after_user_past_bottom();
+    failed += test_stick_scroll_after_user_max_scroll_zero_or_negative();
+    failed += test_stick_scroll_after_user_negative_scroll_y();
+    failed += test_stick_scroll_on_layout_stuck_content_grows();
+    failed += test_stick_scroll_on_layout_not_stuck_content_grows_unchanged();
+    failed += test_stick_scroll_on_layout_not_stuck_content_shrinks_clamped();
+    failed += test_stick_scroll_on_layout_negative_scroll_y_clamped();
+    failed += test_stick_scroll_on_layout_max_scroll_zero_or_negative();
+    failed += test_stick_scroll_on_layout_stuck_content_shrinks();
 
     printf("\n--- Term Extract ---\n");
     failed += test_extract_empty_term();

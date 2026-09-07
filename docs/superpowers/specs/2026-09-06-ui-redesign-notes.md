@@ -244,6 +244,22 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       row from it, so they can't drift apart. Hit-testing already excluded
       settled items from the live container (verified, unchanged). Native
       suite green at **1,715 tests** (up from 1,707).
+- [x] **AI Assist chat list now sticks to bottom properly (v1.0.99).**
+      Replaced the old per-event `chat_listview_is_near_bottom()` margin
+      check (raced against `recalc_layout()` growing `total_height` first,
+      so a big content jump — the Thinking block opening, an approval card
+      appearing — regularly left the list stranded above the new bottom)
+      with classic stick-to-bottom state: `ChatListView.stick_to_bottom`,
+      set to 1 only when a user-driven scroll (wheel/scrollbar/keyboard/
+      selection-drag) ends at or past max scroll, consulted (never changed)
+      by `recalc_layout`/`WM_SIZE` to decide whether to follow new content
+      or hold position. New pure core module `src/core/stick_scroll.{c,h}`
+      (TDD, `tests/test_stick_scroll.c`) holds the two decision functions.
+      `ai_chat.c`'s per-chunk/per-event `chat_listview_scroll_to_bottom()`
+      calls (WM_AI_STREAM, WM_AI_TOOL_MSG, WM_AI_RESPONSE) were removed —
+      following now happens automatically via `chat_listview_invalidate()`
+      when stuck; the deliberate ones (sending a prompt, Retry, session
+      switch, cancelling a stream) were kept.
 
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
