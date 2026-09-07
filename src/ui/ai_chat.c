@@ -167,6 +167,9 @@ typedef struct {
      * chat_listview and the two modes are shown/clicked in the status
      * line (painted, not child windows; see ai_chat_status_hit()). */
     ApprovalQueue approval_q;
+    int auto_approve_default;  /* settings.ai_auto_approve_default, 0..3: seeds
+                                 * a fresh session's auto_approve/level (see
+                                 * ai_chat_set_auto_approve_default()). */
     HWND hThinkingBtn;
     HWND hTooltip;        /* Win32 tooltip control */
     int permit_write;     /* 0 = read-only (red), 1 = read/write (green) */
@@ -2021,7 +2024,7 @@ static void ai_chat_get_status_paint(AiChatData *d, HDC hdc, AiStatusPaint *out)
     int seg1_w = sz.cx;
 
     snprintf(out->auto_text, sizeof(out->auto_text), "Auto approve: %s",
-            ai_modes_label(d->approval_q.auto_approve, d->approval_q.auto_approve_all));
+            ai_modes_label(d->approval_q.auto_approve, d->approval_q.auto_approve_level));
     GetTextExtentPoint32A(use_hdc, out->auto_text, (int)strlen(out->auto_text), &sz);
     int auto_w = sz.cx;
 
@@ -2929,8 +2932,17 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
             return 0;
         case IDC_CHAT_AUTOAPPROVE:
+            /* Cycle: off -> safe only -> safe + write -> all -> off. */
             if (d) {
-                d->approval_q.auto_approve = !d->approval_q.auto_approve;
+                if (!d->approval_q.auto_approve) {
+                    d->approval_q.auto_approve = 1;
+                    d->approval_q.auto_approve_level = AUTO_APPROVE_SAFE;
+                } else if (d->approval_q.auto_approve_level < AUTO_APPROVE_ALL) {
+                    d->approval_q.auto_approve_level++;
+                } else {
+                    d->approval_q.auto_approve = 0;
+                    d->approval_q.auto_approve_level = AUTO_APPROVE_SAFE;
+                }
                 invalidate_status_line(d);
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
             }
@@ -4124,12 +4136,36 @@ void ai_chat_set_markdown(HWND hwnd, int enabled)
         chat_listview_set_render_markdown(d->hChatList, enabled);
 }
 
-void ai_chat_set_auto_approve_all(HWND hwnd, int enabled)
+/* Seed state->auto_approve/auto_approve_level from d->auto_approve_default
+ * if (and only if) this session's approval state has never been set --
+ * a session the user has already toggled (or that was already seeded)
+ * keeps its own choice. level0to3: 0 = off, 1..3 = on with level 0..2. */
+static void ai_chat_seed_auto_approve(AiChatData *d, AiSessionState *state)
+{
+    if (!state || state->auto_approve_seeded) return;
+    int level0to3 = d->auto_approve_default;
+    state->auto_approve = level0to3 > 0 ? 1 : 0;
+    state->auto_approve_level = level0to3 > 0 ? (level0to3 - 1) : AUTO_APPROVE_SAFE;
+    state->auto_approve_seeded = 1;
+}
+
+void ai_chat_set_auto_approve_default(HWND hwnd, int level0to3)
 {
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
-    d->approval_q.auto_approve_all = enabled ? 1 : 0;
+    if (level0to3 < 0) level0to3 = 0;
+    if (level0to3 > 3) level0to3 = 3;
+    d->auto_approve_default = level0to3;
+    /* Apply immediately to the active session if it hasn't been seeded yet
+     * (e.g. the panel was just created and this is the first call). A
+     * session the user has already touched is left alone. */
+    if (d->active_state) {
+        ai_chat_seed_auto_approve(d, d->active_state);
+        d->approval_q.auto_approve = d->active_state->auto_approve;
+        d->approval_q.auto_approve_level = d->active_state->auto_approve_level;
+        invalidate_status_line(d);
+    }
 }
 
 void ai_chat_set_context_lines(HWND hwnd, int lines)
@@ -4184,6 +4220,8 @@ static void do_session_switch(AiChatData *d,
         }
         /* Save auto-approve, show-thinking and activity phase to old session */
         d->active_state->auto_approve = d->approval_q.auto_approve;
+        d->active_state->auto_approve_level = d->approval_q.auto_approve_level;
+        d->active_state->auto_approve_seeded = 1;
         d->active_state->show_thinking = d->show_thinking;
         d->active_state->activity_phase = (int)d->activity.phase;
     }
@@ -4247,14 +4285,19 @@ static void do_session_switch(AiChatData *d,
         d->queued_next = 0;
     }
 
-    /* Restore auto-approve, show-thinking and activity phase from new session */
+    /* Restore auto-approve, show-thinking and activity phase from new session.
+     * A session that has never had its approval state set (fresh tab) is
+     * seeded from the configured default first. */
     if (new_state) {
+        ai_chat_seed_auto_approve(d, new_state);
         d->approval_q.auto_approve = new_state->auto_approve;
+        d->approval_q.auto_approve_level = new_state->auto_approve_level;
         d->show_thinking = new_state->show_thinking;
         chat_activity_set_phase(&d->activity,
                                 (ActivityPhase)new_state->activity_phase, 0.0f);
     } else {
         d->approval_q.auto_approve = 0;
+        d->approval_q.auto_approve_level = AUTO_APPROVE_SAFE;
         d->show_thinking = 0;
         chat_activity_reset(&d->activity);
     }

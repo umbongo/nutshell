@@ -131,7 +131,7 @@ function New-NutshellTestEnv {
         markdown_render_enabled = $true; ai_max_context_lines = 1000
         auto_connect = $false; auto_connect_session = ""
         paste_confirm = $true; open_session_manager_at_start = $false
-        ai_auto_approve_all = $false
+        ai_auto_approve_default = 0
     }
     foreach ($k in $Settings.Keys) { $s[$k] = $Settings[$k] }
 

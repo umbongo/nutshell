@@ -286,6 +286,29 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       tested. Integration case `ai_commands_run_one_at_a_time` (not run by
       Claude — costs API credits; reviewer runs it once).
 
+- [x] Auto approve has four levels (v1.1.2; feature B of
+      `2026-09-07-command-dispatch-and-auto-approve-levels.md`).
+      `ApprovalQueue.auto_approve_all` replaced with `auto_approve_level`
+      (`AutoApproveLevel`: SAFE/WRITE/ALL) in `src/core/chat_approval.{c,h}`;
+      the status-line click on the AI panel now cycles **off → safe only →
+      safe + write → all → off**. `ai_modes_label()` grew a third label
+      ("safe + write"). Config key `ai_auto_approve_all` (bool) replaced
+      with `ai_auto_approve_default` (int 0-3) in `config.h`/`loader.c` —
+      the old key is dropped and ignored on read, no migration. Settings ›
+      AI behaviour's checkbox became a drop-down, labelled "Auto Approve:"
+      (kept short to fit the page's fixed 150px label column — the
+      tooltip spells out that it sets the starting level for new
+      sessions), with items Off/Safe only/Safe + write/All. Same control id
+      (`IDC_AI_AUTO_APPROVE_DEFAULT`, renamed from
+      `IDC_AI_AUTO_APPROVE_ALL`). `AiSessionState` carries `auto_approve`
+      and `auto_approve_level` plus a new `auto_approve_seeded` flag so a
+      fresh session is seeded from the configured default exactly once
+      (via `ai_chat_set_auto_approve_default()`, renamed from
+      `ai_chat_set_auto_approve_all()`) while a session the user has
+      already toggled keeps its own choice across `chat_approval_reset()`
+      and session switches. Native suite green at **1,764 tests** (up from
+      1,757).
+
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.

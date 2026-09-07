@@ -325,6 +325,11 @@ typedef struct {
     int stream_phase;            /* 0=not started, 1=thinking, 2=content */
     int platform;                /* CmdPlatform for this session */
     int auto_approve;            /* Session-level auto-approve flag */
+    int auto_approve_level;      /* AutoApproveLevel: how far auto_approve reaches */
+    int auto_approve_seeded;     /* 1 once auto_approve/level have been set for
+                                   * this session (from the configured default,
+                                   * or by the user) -- guards against re-seeding
+                                   * an explicit choice on a later session switch */
     int activity_phase;          /* ActivityPhase saved on session switch */
     int show_thinking;           /* 1 = user opened a Thinking disclosure this
                                    * session -- suppresses auto-collapse when a

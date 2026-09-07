@@ -423,9 +423,12 @@ static const TooltipEntry k_tooltips[] = {
       "Allow the AI to fetch arbitrary URLs as a tool call." },
     { IDC_AI_MD_RENDER,
       "Render AI replies as formatted markdown. Turn off to see raw text." },
-    { IDC_AI_AUTO_APPROVE_ALL,
-      "When Auto Approve is on, also approve write and critical commands "
-      "without a prompt. Off by default for safety." },
+    { IDC_AI_AUTO_APPROVE_DEFAULT,
+      "Starting Auto approve level for new sessions. Safe only runs "
+      "read-only commands without asking; Safe + write adds write "
+      "commands; All adds critical ones. The status line in the AI panel "
+      "changes it per session. Write and critical commands still need "
+      "Permit write." },
     { IDC_SSH_IDLE_EDIT,
       "Disconnect SSH sessions after this many minutes of no user "
       "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
@@ -1119,12 +1122,18 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
         }
         {
-            HWND chk = make_check2(nd->hPage,
-                                   "Auto Approve also covers write/critical commands",
-                                   (HMENU)IDC_AI_AUTO_APPROVE_ALL);
-            SendMessage(chk, BM_SETCHECK,
-                        nd->cfg->settings.ai_auto_approve_all ? BST_CHECKED : BST_UNCHECKED, 0);
-            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
+            static const char *k_auto_approve_default_items[] = {
+                "Off", "Safe only", "Safe + write", "All"
+            };
+            HWND lbl = make_label2(nd->hPage, "Auto Approve:");
+            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_AUTO_APPROVE_DEFAULT,
+                                   CBS_DROPDOWNLIST);
+            int sel = nd->cfg->settings.ai_auto_approve_default;
+            if (sel < 0 || sel > 3) sel = 0;
+            for (int i = 0; i < 4; i++)
+                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_auto_approve_default_items[i]);
+            SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
+            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
         }
 
         /* ==== AI_WEB ==== */
@@ -1664,9 +1673,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             s->markdown_render_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_MD_RENDER)
                                            == BST_CHECKED) ? 1 : 0;
 
-            /* Auto Approve also covers write/critical commands */
-            s->ai_auto_approve_all = (IsDlgButtonChecked(d->hPage, IDC_AI_AUTO_APPROVE_ALL)
-                                       == BST_CHECKED) ? 1 : 0;
+            /* Auto approve level for new sessions */
+            {
+                int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_AUTO_APPROVE_DEFAULT,
+                                                  CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel <= 3) s->ai_auto_approve_default = sel;
+            }
 
             /* SSH user idle timeout */
             v = GetDlgItemInt(d->hPage, IDC_SSH_IDLE_EDIT, &ok, FALSE);

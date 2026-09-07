@@ -21,13 +21,21 @@ typedef struct {
     ApprovalStatus status;
 } ApprovalEntry;
 
+/* How far session-level Auto Approve reaches. Values are ordered so a
+ * higher level is a strict superset of a lower one's safety coverage. */
+typedef enum {
+    AUTO_APPROVE_SAFE  = 0,  /* only CMD_SAFE commands auto-approve */
+    AUTO_APPROVE_WRITE = 1,  /* CMD_SAFE and CMD_WRITE auto-approve */
+    AUTO_APPROVE_ALL   = 2   /* CMD_SAFE, CMD_WRITE and CMD_CRITICAL auto-approve */
+} AutoApproveLevel;
+
 typedef struct {
     ApprovalEntry entries[APPROVAL_MAX_CMDS];
     int count;
     int auto_approve;           /* 1 = session-level auto-approve active */
     int auto_approve_confirming; /* 1 = waiting for double-click confirm */
     float confirm_start_time;    /* when "are you sure?" was shown */
-    int auto_approve_all;       /* 1 = Auto Approve also covers write/critical commands */
+    int auto_approve_level;     /* AutoApproveLevel: how far auto_approve reaches */
 } ApprovalQueue;
 
 /* Initialize approval queue. */
@@ -35,7 +43,9 @@ void chat_approval_init(ApprovalQueue *q);
 
 /* Add a command to the approval queue. Classifies it against the given platform.
  * If permit_write is 0 and the command is write/critical, it's auto-blocked.
- * If auto_approve is active, it's auto-approved.
+ * If auto_approve is active, it's auto-approved when the command's safety is
+ * within reach of auto_approve_level (SAFE always; WRITE needs level >=
+ * AUTO_APPROVE_WRITE; CRITICAL needs level == AUTO_APPROVE_ALL).
  * Returns the entry index, or -1 if queue is full. */
 int chat_approval_add(ApprovalQueue *q, const char *command,
                       CmdPlatform platform, int permit_write);
@@ -90,7 +100,8 @@ int chat_approval_unblock_all(ApprovalQueue *q);
  * Returns number blocked. */
 int chat_approval_block_pending_writes(ApprovalQueue *q);
 
-/* Reset the queue (e.g., for new AI response). */
+/* Reset the queue (e.g., for new AI response).
+ * Preserves auto_approve and auto_approve_level. */
 void chat_approval_reset(ApprovalQueue *q);
 
 #endif /* NUTSHELL_CHAT_APPROVAL_H */

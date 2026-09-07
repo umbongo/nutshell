@@ -193,8 +193,13 @@ int test_ai_modes_label_off_safe_and_all(void)
     TEST_BEGIN();
     ASSERT_STR_EQ(ai_modes_label(0, 0), "off");
     ASSERT_STR_EQ(ai_modes_label(0, 1), "off");
+    ASSERT_STR_EQ(ai_modes_label(0, 2), "off");
     ASSERT_STR_EQ(ai_modes_label(1, 0), "safe only");
-    ASSERT_STR_EQ(ai_modes_label(1, 1), "all");
+    ASSERT_STR_EQ(ai_modes_label(1, 1), "safe + write");
+    ASSERT_STR_EQ(ai_modes_label(1, 2), "all");
+    /* Out-of-range levels clamp rather than misbehave. */
+    ASSERT_STR_EQ(ai_modes_label(1, -1), "safe only");
+    ASSERT_STR_EQ(ai_modes_label(1, 3), "all");
     TEST_END();
 }
 

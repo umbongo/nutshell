@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.1.1 \
+**Version**: v1.1.2 \
 **Build Date**: 2026-09-07 \
 **Author**: Thomas Sulkiewicz
 
@@ -21,7 +21,7 @@ The standout feature: an integrated AI panel that sits alongside your terminal s
 - **Streaming responses** — real-time token streaming, with a collapsible "Thinking" disclosure for chain-of-thought / reasoning
 - **Multi-provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or any OpenAI-compatible endpoint
 - **Per-session context** — attach notes to each server profile (e.g. "production database — read-only") that guide the AI's behaviour
-- **Safety controls** — a Read-only / Read + write mode switch and an Auto approve level (off / safe only / all) sit directly above the input, next to a context-usage meter
+- **Safety controls** — a Read-only / Read + write mode switch and an Auto approve level (off / safe only / safe + write / all) sit directly above the input, next to a context-usage meter
 - **Guided empty states** — the panel always opens: it shows starter suggestions with nothing to ask yet, a button straight to Settings when no API key is set, and a button to the Session Manager when no session is connected
 
 ## Pre-built Binary
@@ -183,7 +183,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 - **Max terminal lines** — how much of the terminal the assistant reads as context, from 1 to 50,000 lines (default: 1,000). Each line becomes part of the context sent with every message: a larger window gives the assistant more of your session to reason about, at a proportionate cost in tokens.
 - **System instructions** — global instructions included in every AI conversation (per-session AI Notes take precedence)
 - **Render AI markdown** — format AI replies as markdown; turn off to see raw text
-- **Auto Approve also covers write/critical commands** — when on, session Auto Approve approves every command Permit Write allows, not just safe read-only ones (default: off)
+- **Auto approve for new sessions** — the starting Auto approve level for each new session: Off / Safe only / Safe + write / All (default: Off). Safe only runs read-only commands without asking; Safe + write adds write commands; All adds critical ones. Write and critical commands still need Permit write, and the status line in the AI panel can change the level per session from there.
 
 #### AI Assistant > Web Access
 - **Search engine** — None, DuckDuckGo (API), DuckDuckGo (HTML), or Custom
@@ -208,7 +208,7 @@ The AI assistant can see the recent history of your terminal output (1,000 lines
 A line above the input box, always visible once a session is connected:
 
 - **Mode switch** — a two-segment control, **Read-only** / **Read + write**. Read-only restricts the AI to safe, non-mutating commands (`ls`, `cat`, `pwd`, etc.); **Read + write** is tinted with a warning colour whenever it's selected, so a permissive session stays visible at a glance
-- **Auto approve** — click to cycle **off** → **safe only** → **all** (the "all" level, which also auto-runs write/critical commands, only appears when **Auto Approve also covers write/critical commands** is enabled in Settings under AI Assistant > Behaviour)
+- **Auto approve** — click to cycle **off** → **safe only** → **safe + write** → **all** → **off**. A new session starts from the **Auto approve for new sessions** level set in Settings under AI Assistant > Behaviour; clicking here only changes the current session
 - **Context meter** — a small bar plus `used / limit` numbers showing how much of the model's context window the conversation is using; hover it for the exact token counts
 
 #### Sending Messages

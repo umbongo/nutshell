@@ -98,10 +98,12 @@ void ai_status_layout(NsRect status, int dpi, int seg0_text_w, int seg1_text_w,
     }
 }
 
-const char *ai_modes_label(int auto_on, int all_setting)
+const char *ai_modes_label(int auto_on, int level)
 {
     if (!auto_on) return "off";
-    return all_setting ? "all" : "safe only";
+    if (level <= 0) return "safe only";
+    if (level == 1) return "safe + write";
+    return "all"; /* level >= 2, including out-of-range values */
 }
 
 const char *ai_permit_label(int on)

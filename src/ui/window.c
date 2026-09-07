@@ -823,8 +823,8 @@ static void on_settings_clicked_page(int initial_page) {
                             g_config->settings.ai_system_notes);
         ai_chat_set_markdown(g_hwndAiChat,
                              g_config->settings.markdown_render_enabled);
-        ai_chat_set_auto_approve_all(g_hwndAiChat,
-                                     g_config->settings.ai_auto_approve_all);
+        ai_chat_set_auto_approve_default(g_hwndAiChat,
+                                     g_config->settings.ai_auto_approve_default);
         ai_chat_set_theme(g_hwndAiChat,
                           g_config->settings.colour_scheme);
         ai_chat_update_tools(g_hwndAiChat,
@@ -894,7 +894,7 @@ static HWND create_ai_chat(HWND parent)
                              g_config->settings.ai_web_fetch_enabled);
         ai_chat_set_markdown(hwnd, g_config->settings.markdown_render_enabled);
         ai_chat_set_context_lines(hwnd, g_config->settings.ai_max_context_lines);
-        ai_chat_set_auto_approve_all(hwnd, g_config->settings.ai_auto_approve_all);
+        ai_chat_set_auto_approve_default(hwnd, g_config->settings.ai_auto_approve_default);
     }
     return hwnd;
 }

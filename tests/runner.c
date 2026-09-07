@@ -204,11 +204,12 @@ int test_config_roundtrip_auto_connect(void);
 int test_config_load_legacy_no_auto_connect(void);
 
 /* review-fixes settings: paste_confirm, open_session_manager_at_start,
- * ai_auto_approve_all (test_config.c) */
+ * ai_auto_approve_default (test_config.c) */
 int test_config_default_review_fix_settings(void);
 int test_config_validate_review_fix_settings_clamp(void);
 int test_config_roundtrip_review_fix_settings(void);
 int test_config_load_legacy_no_review_fix_settings(void);
+int test_config_load_ignores_old_auto_approve_all_key(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -1477,10 +1478,16 @@ int test_approval_auto_approve_persists_across_reset(void);
 int test_approval_auto_approve_blocked_not_all_decided(void);
 int test_approval_block_pending_writes(void);
 int test_approval_block_pending_writes_skips_decided(void);
-int test_approval_auto_approve_all_off_write_pending(void);
-int test_approval_auto_approve_all_on_write_approved(void);
-int test_approval_auto_approve_safe_always_approved(void);
-int test_approval_auto_approve_all_permit_write_off_still_blocked(void);
+int test_approval_level_safe_always_approves_safe(void);
+int test_approval_level_safe_write_pending(void);
+int test_approval_level_safe_write_permit_off_blocked(void);
+int test_approval_level_write_approves_write(void);
+int test_approval_level_write_permit_off_blocked(void);
+int test_approval_level_write_critical_pending(void);
+int test_approval_level_all_approves_write_and_critical(void);
+int test_approval_level_all_permit_write_off_still_blocked(void);
+int test_approval_level_auto_approve_off_all_pending(void);
+int test_approval_reset_preserves_level(void);
 
 /* test_response_split.c */
 int test_split_no_commands(void);
@@ -2152,6 +2159,7 @@ int main(void) {
     failed += test_config_validate_review_fix_settings_clamp();
     failed += test_config_roundtrip_review_fix_settings();
     failed += test_config_load_legacy_no_review_fix_settings();
+    failed += test_config_load_ignores_old_auto_approve_all_key();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();
@@ -3340,10 +3348,16 @@ int main(void) {
     failed += test_approval_auto_approve_blocked_not_all_decided();
     failed += test_approval_block_pending_writes();
     failed += test_approval_block_pending_writes_skips_decided();
-    failed += test_approval_auto_approve_all_off_write_pending();
-    failed += test_approval_auto_approve_all_on_write_approved();
-    failed += test_approval_auto_approve_safe_always_approved();
-    failed += test_approval_auto_approve_all_permit_write_off_still_blocked();
+    failed += test_approval_level_safe_always_approves_safe();
+    failed += test_approval_level_safe_write_pending();
+    failed += test_approval_level_safe_write_permit_off_blocked();
+    failed += test_approval_level_write_approves_write();
+    failed += test_approval_level_write_permit_off_blocked();
+    failed += test_approval_level_write_critical_pending();
+    failed += test_approval_level_all_approves_write_and_critical();
+    failed += test_approval_level_all_permit_write_off_still_blocked();
+    failed += test_approval_level_auto_approve_off_all_pending();
+    failed += test_approval_reset_preserves_level();
 
     printf("\n--- Command Collapse ---\n");
     failed += test_cmd_index_single();

@@ -952,7 +952,7 @@ int test_config_load_legacy_no_auto_connect(void)
 
 /* ============================================================
  * Review-fixes settings: paste_confirm, open_session_manager_at_start,
- * ai_auto_approve_all
+ * ai_auto_approve_default
  * ============================================================ */
 
 int test_config_default_review_fix_settings(void)
@@ -962,7 +962,7 @@ int test_config_default_review_fix_settings(void)
     config_default_settings(&s);
     ASSERT_EQ(s.paste_confirm, 1);
     ASSERT_EQ(s.open_session_manager_at_start, 0);
-    ASSERT_EQ(s.ai_auto_approve_all, 0);
+    ASSERT_EQ(s.ai_auto_approve_default, 0);
     TEST_END();
 }
 
@@ -974,19 +974,24 @@ int test_config_validate_review_fix_settings_clamp(void)
 
     s.paste_confirm = 7;
     s.open_session_manager_at_start = -3;
-    s.ai_auto_approve_all = 42;
+    s.ai_auto_approve_default = 42;
     settings_validate(&s);
     ASSERT_EQ(s.paste_confirm, 1);
     ASSERT_EQ(s.open_session_manager_at_start, 1);
-    ASSERT_EQ(s.ai_auto_approve_all, 1);
+    ASSERT_EQ(s.ai_auto_approve_default, 3);
 
     s.paste_confirm = 0;
     s.open_session_manager_at_start = 0;
-    s.ai_auto_approve_all = 0;
+    s.ai_auto_approve_default = -1;
     settings_validate(&s);
     ASSERT_EQ(s.paste_confirm, 0);
     ASSERT_EQ(s.open_session_manager_at_start, 0);
-    ASSERT_EQ(s.ai_auto_approve_all, 0);
+    ASSERT_EQ(s.ai_auto_approve_default, 0);
+
+    /* In-range values pass through untouched. */
+    s.ai_auto_approve_default = 2;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_auto_approve_default, 2);
     TEST_END();
 }
 
@@ -997,7 +1002,7 @@ int test_config_roundtrip_review_fix_settings(void)
     ASSERT_NOT_NULL(orig);
     orig->settings.paste_confirm = 0;
     orig->settings.open_session_manager_at_start = 1;
-    orig->settings.ai_auto_approve_all = 1;
+    orig->settings.ai_auto_approve_default = 3;
 
     int rc = config_save(orig, TMP_CFG);
     ASSERT_EQ(rc, 0);
@@ -1006,7 +1011,7 @@ int test_config_roundtrip_review_fix_settings(void)
     ASSERT_NOT_NULL(loaded);
     ASSERT_EQ(loaded->settings.paste_confirm, 0);
     ASSERT_EQ(loaded->settings.open_session_manager_at_start, 1);
-    ASSERT_EQ(loaded->settings.ai_auto_approve_all, 1);
+    ASSERT_EQ(loaded->settings.ai_auto_approve_default, 3);
 
     config_free(orig);
     config_free(loaded);
@@ -1027,7 +1032,27 @@ int test_config_load_legacy_no_review_fix_settings(void)
     ASSERT_NOT_NULL(cfg);
     ASSERT_EQ(cfg->settings.paste_confirm, 1);
     ASSERT_EQ(cfg->settings.open_session_manager_at_start, 0);
-    ASSERT_EQ(cfg->settings.ai_auto_approve_all, 0);
+    ASSERT_EQ(cfg->settings.ai_auto_approve_default, 0);
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_ignores_old_auto_approve_all_key(void)
+{
+    TEST_BEGIN();
+    /* The old boolean key is dropped with no migration: a config file that
+     * still has it must fall back to the ai_auto_approve_default default
+     * (0), not read/coerce the stale key. */
+    FILE *f = fopen(TMP_CFG, "w");
+    ASSERT_NOT_NULL(f);
+    fputs("{\"settings\": {\"font\": \"Consolas\", "
+          "\"ai_auto_approve_all\": true}, \"profiles\": []}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cfg->settings.ai_auto_approve_default, 0);
     config_free(cfg);
     remove(TMP_CFG);
     TEST_END();

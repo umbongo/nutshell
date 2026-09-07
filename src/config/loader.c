@@ -112,7 +112,8 @@ void settings_validate(Settings *s)
     if (s->auto_connect != 0) s->auto_connect = 1;
     if (s->paste_confirm != 0) s->paste_confirm = 1;
     if (s->open_session_manager_at_start != 0) s->open_session_manager_at_start = 1;
-    if (s->ai_auto_approve_all != 0) s->ai_auto_approve_all = 1;
+    if (s->ai_auto_approve_default < 0) s->ai_auto_approve_default = 0;
+    if (s->ai_auto_approve_default > 3) s->ai_auto_approve_default = 3;
 }
 
 void config_default_settings(Settings *s)
@@ -143,7 +144,7 @@ void config_default_settings(Settings *s)
     /* auto_connect_session defaults to empty (already zeroed by memset) */
     s->paste_confirm = 1;
     s->open_session_manager_at_start = 0;
-    s->ai_auto_approve_all = 0;
+    s->ai_auto_approve_default = 0;
 }
 
 Profile *config_profile_new(void)
@@ -302,8 +303,10 @@ Config *config_load(const char *path)
         s->open_session_manager_at_start =
             json_obj_bool(jset, "open_session_manager_at_start",
                           s->open_session_manager_at_start);
-        s->ai_auto_approve_all = json_obj_bool(jset, "ai_auto_approve_all",
-                                               s->ai_auto_approve_all);
+        /* The old "ai_auto_approve_all" boolean key is dropped and ignored
+         * on read -- no migration, callers get the 0 (off) default. */
+        s->ai_auto_approve_default = (int)json_obj_num(jset, "ai_auto_approve_default",
+                                                        (double)s->ai_auto_approve_default);
         settings_validate(s);
     }
 
@@ -461,8 +464,7 @@ int config_save(const Config *cfg, const char *path)
             s->paste_confirm ? "true" : "false");
     fprintf(f, "    \"open_session_manager_at_start\": %s,\n",
             s->open_session_manager_at_start ? "true" : "false");
-    fprintf(f, "    \"ai_auto_approve_all\": %s\n",
-            s->ai_auto_approve_all ? "true" : "false");
+    fprintf(f, "    \"ai_auto_approve_default\": %d\n", s->ai_auto_approve_default);
     fputs("  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);

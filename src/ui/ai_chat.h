@@ -86,10 +86,14 @@ void ai_chat_refresh_fonts(HWND hwnd);
 /* Enable or disable markdown rendering in the AI chat list view. */
 void ai_chat_set_markdown(HWND hwnd, int enabled);
 
-/* Set whether session Auto Approve also covers write/critical commands
- * (settings.ai_auto_approve_all). Survives chat_approval_reset(), so this
- * only needs to be called when the setting itself changes. */
-void ai_chat_set_auto_approve_all(HWND hwnd, int enabled);
+/* Set the configured Auto Approve default for new sessions
+ * (settings.ai_auto_approve_default, 0..3: off / safe only / safe + write /
+ * all). Only seeds a session that hasn't had its auto-approve state set yet
+ * (fresh AiSessionState, or the panel's initial session) -- a session the
+ * user has already toggled via the status line keeps its own choice across
+ * this call and across chat_approval_reset(). Call whenever the setting
+ * itself changes, and once right after the panel is created. */
+void ai_chat_set_auto_approve_default(HWND hwnd, int level0to3);
 
 /* Set how many terminal lines are sent to the AI as context (1-50000). */
 void ai_chat_set_context_lines(HWND hwnd, int lines);

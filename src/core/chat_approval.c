@@ -34,7 +34,10 @@ int chat_approval_add(ApprovalQueue *q, const char *command,
 
     if (e->safety > CMD_SAFE && !permit_write) {
         e->status = APPROVE_BLOCKED;
-    } else if (q->auto_approve && (e->safety == CMD_SAFE || q->auto_approve_all)) {
+    } else if (q->auto_approve &&
+               (e->safety == CMD_SAFE ||
+                (e->safety == CMD_WRITE && q->auto_approve_level >= AUTO_APPROVE_WRITE) ||
+                q->auto_approve_level == AUTO_APPROVE_ALL)) {
         e->status = APPROVE_APPROVED;
     } else {
         e->status = APPROVE_PENDING;
@@ -171,8 +174,10 @@ int chat_approval_block_pending_writes(ApprovalQueue *q)
 void chat_approval_reset(ApprovalQueue *q)
 {
     int saved_auto = q->auto_approve;
+    int saved_level = q->auto_approve_level;
     memset(q->entries, 0, sizeof(q->entries));
     q->count = 0;
     q->auto_approve = saved_auto;
+    q->auto_approve_level = saved_level;
     q->auto_approve_confirming = 0;
 }
