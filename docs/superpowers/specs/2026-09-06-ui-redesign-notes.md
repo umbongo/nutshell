@@ -211,14 +211,39 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       `ai_write_command_blocked_without_permit_write`) cover the regressions. Native
       suite green at 1,707 tests (up from 1,699).
 
-- [ ] Thinking disclosure: measured height disagrees with painted height. Two
-      v1.0.97 integration captures show the approval card, and separately the
-      "Waiting for output…" indicator, painted over an open Thinking block
-      (`tests/integration/artifacts/ai_blocked_command.png`). The AI item is
-      being measured as if the block were collapsed (or shorter) while
-      `paint_ai_item` draws it open — most likely the item isn't remeasured
-      after the reply finalises with thinking attached. Fix with the three
-      review bugs, before sub-project 3.
+- [x] **Thinking disclosure overlap fixed (v1.0.98).** Measured height disagreed
+      with painted height: `chat_msg_set_thinking()` already marked its item
+      dirty, but `ai_chat.c` flipped `thinking_collapsed` directly in two more
+      places (the streaming handler's open/collapse-on-reply logic, and
+      `ai_chat_apply_demo_extras()`'s gallery "all" state) without setting
+      `dirty`, so `recalc_layout()` — which only remeasures dirty items — kept
+      the item's shorter pre-expand height and later items (the approval card,
+      the "Waiting for output…" indicator) painted over the open block. Both
+      sites now set `item->dirty = 1` alongside the flag flip, matching
+      `chat_listview.c`'s own click-to-toggle handler. Confirmed
+      `measure_item`'s thinking width (`width - ai_indent - 3*side_pad`) and
+      `paint_ai_item`'s box width (`rc->right - side_pad` minus
+      `rc->left + ai_indent`, with `rc` already inset by `side_pad` in
+      `on_paint`) already reduce to the same value — no geometry change
+      needed there. TDD: `tests/test_chat_msg.c` gained
+      `test_chat_msg_set_thinking_marks_dirty`.
+- [x] **Settled commands now render as inline rows (v1.0.98).** A decided
+      command used to measure to height 0 and vanish from the transcript on
+      the (false, since v0.9.41) assumption that its outcome was still
+      narrated in the AI's finalised text as an `[EXEC]` block — closing the
+      non-blocking observation noted under task 5 above. Each settled command
+      now paints as one compact inline row (mono command text, ellipsised
+      when needed, no card/header/checkbox/buttons) with a right-aligned
+      outcome chip: **ran** (approved, success intent), **held** (still
+      blocked by policy, warning intent), **denied** (explicit denial, dimmed
+      chip), or **skipped** (superseded before a decision, same dimmed
+      styling). New core geometry `settled_row_layout()` in
+      `src/core/ns_layout.*` (TDD, `tests/test_ns_layout.c`) mirrors
+      `approval_card_layout`'s row shape without the checkbox; `measure_item`
+      and a new `paint_cmd_settled_row()` in `chat_listview.c` both size the
+      row from it, so they can't drift apart. Hit-testing already excluded
+      settled items from the live container (verified, unchanged). Native
+      suite green at **1,715 tests** (up from 1,707).
 
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing

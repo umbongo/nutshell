@@ -144,6 +144,25 @@ int test_chat_msg_set_thinking(void) {
     TEST_END();
 }
 
+/* Thinking disclosure overlap fix: recalc_layout() only remeasures items
+ * that are dirty (or unmeasured). If chat_msg_set_thinking() replaced the
+ * text without marking the item dirty, an item already measured at its
+ * pre-thinking (shorter) height would keep that stale height forever,
+ * and later items would paint over the newly-opened Thinking block. */
+int test_chat_msg_set_thinking_marks_dirty(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "response");
+    /* Simulate the item having already been measured once (dirty cleared,
+     * as recalc_layout does after Pass 1) before thinking text arrives. */
+    item->dirty = 0;
+    ASSERT_EQ(chat_msg_set_thinking(item, "I think..."), 0);
+    ASSERT_EQ(item->dirty, 1);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
 int test_chat_msg_empty_text(void) {
     TEST_BEGIN();
     ChatMsgList list;

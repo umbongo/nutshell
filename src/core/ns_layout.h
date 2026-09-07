@@ -99,4 +99,18 @@ int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out);
  * sizing) must use this so they agree with approval_card_layout. */
 int approval_row_height(int text_h, int dpi);
 
+/* Lay out one settled (already-decided) command as a single compact inline
+ * row: command text on the left starting at r.x, an outcome chip (ran/held/
+ * denied/skipped) right-aligned at width `chip_w`, height SZ_TAG_H scaled,
+ * both vertically centred in a row of height approval_row_height(text_h,
+ * dpi). No checkbox (settled rows aren't interactive) -- `out->checkbox` is
+ * zeroed and `out->held` is always 0 (unlike ApprovalRowLayout's live-card
+ * use, "held" isn't a settled-row concept; the outcome chip carries that
+ * meaning instead). `cmd_text_w` is the full (unellipsised) pixel width of
+ * the command text, measured by the caller in its own font; `out->ellipsis`
+ * is set when it exceeds the text rect's width. `chip_w` <= 0 gives the
+ * text the full row width (no chip drawn). Never crashes on NULL `out`. */
+void settled_row_layout(NsRect r, int cmd_text_w, int chip_w, int text_h,
+                        int dpi, ApprovalRowLayout *out);
+
 #endif /* NUTSHELL_NS_LAYOUT_H */

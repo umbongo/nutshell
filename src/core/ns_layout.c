@@ -184,6 +184,40 @@ int approval_row_height(int text_h, int dpi)
     return (min_h > ctrl_h) ? min_h : ctrl_h;
 }
 
+void settled_row_layout(NsRect r, int cmd_text_w, int chip_w, int text_h,
+                        int dpi, ApprovalRowLayout *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+
+    int row_h  = approval_row_height(text_h, dpi);
+    int gap_sm = ns_scale(SP_SM, dpi);
+    int tag_h  = ns_scale(SZ_TAG_H, dpi);
+
+    if (chip_w < 0) chip_w = 0;
+
+    if (chip_w > 0) {
+        out->tag.w = chip_w;
+        out->tag.h = tag_h;
+        out->tag.x = r.x + r.w - chip_w;
+        out->tag.y = r.y + (row_h - tag_h) / 2;
+
+        out->text.w = out->tag.x - gap_sm - r.x;
+    } else {
+        /* out->tag stays zeroed -- no chip drawn. */
+        out->text.w = r.w;
+    }
+    if (out->text.w < 0) out->text.w = 0;
+
+    out->text.x = r.x;
+    out->text.y = r.y;
+    out->text.h = row_h;
+
+    out->ellipsis = (cmd_text_w > out->text.w) ? 1 : 0;
+    out->held = 0;
+    /* out->checkbox stays zeroed -- settled rows aren't interactive. */
+}
+
 int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out)
 {
     if (row_out) *row_out = -1;

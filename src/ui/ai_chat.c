@@ -3217,8 +3217,10 @@ next_coalesce:;
                 if (d->stream_thinking_len > 0) {
                     if (d->stream_phase < 2) {
                         d->stream_ai_item->u.ai.thinking_collapsed = 0;
+                        d->stream_ai_item->dirty = 1;
                     } else if (prev_phase < 2 && !d->show_thinking) {
                         d->stream_ai_item->u.ai.thinking_collapsed = 1;
+                        d->stream_ai_item->dirty = 1;
                     }
                 }
                 /* Always update thinking text if we have any */
@@ -4373,6 +4375,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
             if (ti->type == CHAT_ITEM_AI_TEXT && ti->u.ai.thinking_text &&
                 ti->u.ai.thinking_text[0]) {
                 ti->u.ai.thinking_collapsed = 0;
+                ti->dirty = 1;
                 break;
             }
             ti = ti->next;

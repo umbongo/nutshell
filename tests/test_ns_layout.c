@@ -521,3 +521,88 @@ int test_approval_row_height_matches_layout(void)
     ASSERT_EQ(approval_row_height(24, 192), l.rows[1].checkbox.y - l.rows[0].checkbox.y);
     TEST_END();
 }
+
+/* ---- settled_row_layout: settled command inline rows ------------------- */
+
+int test_settled_row_layout_chip_right_aligned(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 10, 20, 400, 100 };
+    ApprovalRowLayout out;
+    settled_row_layout(r, 50, 40, 16, 96, &out);
+    ASSERT_EQ(out.tag.x + out.tag.w, r.x + r.w);
+    ASSERT_EQ(out.tag.w, 40);
+    TEST_END();
+}
+
+int test_settled_row_layout_text_never_overlaps_chip(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 400, 100 };
+    ApprovalRowLayout out;
+    settled_row_layout(r, 5000, 40, 16, 96, &out);
+    ASSERT_TRUE(out.text.x + out.text.w <= out.tag.x);
+    TEST_END();
+}
+
+int test_settled_row_layout_ellipsis_only_when_too_wide(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 400, 100 };
+    ApprovalRowLayout fits, overflow;
+    settled_row_layout(r, 4, 40, 16, 96, &fits);
+    ASSERT_EQ(fits.ellipsis, 0);
+    settled_row_layout(r, 100000, 40, 16, 96, &overflow);
+    ASSERT_EQ(overflow.ellipsis, 1);
+    TEST_END();
+}
+
+int test_settled_row_layout_zero_chip_w_gives_text_full_width(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 400, 100 };
+    ApprovalRowLayout out;
+    settled_row_layout(r, 50, 0, 16, 96, &out);
+    ASSERT_EQ(out.text.w, r.w);
+    ASSERT_EQ(out.tag.w, 0);
+    TEST_END();
+}
+
+int test_settled_row_layout_row_height_matches_approval_row_height(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 400, 100 };
+    ApprovalRowLayout out;
+    settled_row_layout(r, 50, 40, 16, 96, &out);
+    ASSERT_EQ(out.text.h, approval_row_height(16, 96));
+
+    NsRect r2 = { 0, 0, 400, 100 };
+    ApprovalRowLayout out2;
+    settled_row_layout(r2, 50, 40, 24, 192, &out2);
+    ASSERT_EQ(out2.text.h, approval_row_height(24, 192));
+    TEST_END();
+}
+
+int test_settled_row_layout_checkbox_and_held_zeroed(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 400, 100 };
+    ApprovalRowLayout out;
+    settled_row_layout(r, 50, 40, 16, 96, &out);
+    ASSERT_EQ(out.checkbox.x, 0);
+    ASSERT_EQ(out.checkbox.y, 0);
+    ASSERT_EQ(out.checkbox.w, 0);
+    ASSERT_EQ(out.checkbox.h, 0);
+    ASSERT_EQ(out.held, 0);
+    TEST_END();
+}
+
+int test_settled_row_layout_text_starts_at_rect_left(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 25, 30, 400, 100 };
+    ApprovalRowLayout out;
+    settled_row_layout(r, 50, 40, 16, 96, &out);
+    ASSERT_EQ(out.text.x, r.x);
+    TEST_END();
+}

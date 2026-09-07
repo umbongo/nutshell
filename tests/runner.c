@@ -1346,6 +1346,7 @@ int test_chat_msg_remove_only(void);
 int test_chat_msg_set_text(void);
 int test_chat_msg_set_command(void);
 int test_chat_msg_set_thinking(void);
+int test_chat_msg_set_thinking_marks_dirty(void);
 int test_chat_msg_empty_text(void);
 int test_chat_msg_null_text(void);
 int test_chat_msg_unique_ids(void);
@@ -1806,6 +1807,13 @@ int test_approval_card_hit_null_layout_safe(void);
 int test_approval_card_hit_scrolled_out_rows_not_hit(void);
 int test_approval_card_layout_narrow_card_keeps_text_width(void);
 int test_approval_row_height_matches_layout(void);
+int test_settled_row_layout_chip_right_aligned(void);
+int test_settled_row_layout_text_never_overlaps_chip(void);
+int test_settled_row_layout_ellipsis_only_when_too_wide(void);
+int test_settled_row_layout_zero_chip_w_gives_text_full_width(void);
+int test_settled_row_layout_row_height_matches_approval_row_height(void);
+int test_settled_row_layout_checkbox_and_held_zeroed(void);
+int test_settled_row_layout_text_starts_at_rect_left(void);
 
 /* test_ai_panel.c */
 int test_ai_panel_layout_tiles_exact_sum_96(void);
@@ -3176,6 +3184,7 @@ int main(void) {
     failed += test_chat_msg_set_text();
     failed += test_chat_msg_set_command();
     failed += test_chat_msg_set_thinking();
+    failed += test_chat_msg_set_thinking_marks_dirty();
     failed += test_chat_msg_empty_text();
     failed += test_chat_msg_null_text();
     failed += test_chat_msg_unique_ids();
@@ -3719,6 +3728,13 @@ int main(void) {
     failed += test_approval_card_hit_scrolled_out_rows_not_hit();
     failed += test_approval_card_layout_narrow_card_keeps_text_width();
     failed += test_approval_row_height_matches_layout();
+    failed += test_settled_row_layout_chip_right_aligned();
+    failed += test_settled_row_layout_text_never_overlaps_chip();
+    failed += test_settled_row_layout_ellipsis_only_when_too_wide();
+    failed += test_settled_row_layout_zero_chip_w_gives_text_full_width();
+    failed += test_settled_row_layout_row_height_matches_approval_row_height();
+    failed += test_settled_row_layout_checkbox_and_held_zeroed();
+    failed += test_settled_row_layout_text_starts_at_rect_left();
 
     printf("\n--- AI Assist panel ---\n");
     failed += test_ai_panel_layout_tiles_exact_sum_96();

@@ -147,6 +147,8 @@ static void     build_thinking_layout(ChatListView *lv, HDC hdc,
                               int *out_full_body_h);
 static void     paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                               const ApprovalRowLayout *row, int row_idx);
+static void     paint_cmd_settled_row(ChatListView *lv, HDC hdc,
+                              ChatMsgItem *item, RECT *rc);
 static void     paint_status_item(ChatListView *lv, HDC hdc,
                                   ChatMsgItem *item, RECT *rc);
 static void     build_empty_state_layout(ChatListView *lv, HDC hdc,
@@ -883,10 +885,23 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     }
 
     case CHAT_ITEM_COMMAND: {
-        /* Settled commands are hidden — their info is already in the
-         * AI text as [EXEC] blocks rendered in purple. */
-        if (item->u.cmd.settled)
-            return 0;
+        /* Settled commands paint as one compact inline row (command text +
+         * outcome chip, no card/checkbox) via paint_cmd_settled_row() --
+         * see build_cmd_card_geometry's caller in on_paint. Row height
+         * matches approval_row_height() exactly like an unsettled row so
+         * scroll maths and the container never need to special-case it. */
+        if (item->u.cmd.settled) {
+            int text_line_h;
+            old_font = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
+                                                        : GetStockObject(ANSI_FIXED_FONT));
+            {
+                TEXTMETRICA tm;
+                GetTextMetricsA(hdc, &tm);
+                text_line_h = tm.tmHeight;
+            }
+            SelectObject(hdc, old_font);
+            return clv_cmd_row_h(lv, text_line_h);
+        }
         /* Unsettled commands are grouped by recalc_layout's Pass 2 into a
          * single scrollable container (first item absorbs the container
          * height, the rest go to 0), so the exact value returned here is
@@ -1382,6 +1397,112 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                      stroke, STROKE_HAIRLINE);
             }
         }
+    }
+}
+
+/* ── Paint a settled command as one compact inline row: command text on
+ *    the left, an outcome chip ("ran"/"held"/"denied"/"skipped") right-
+ *    aligned. No card, no header, no checkbox, no buttons -- the command
+ *    has already been decided and (for approved ones) already ran; this
+ *    is just a record of what happened, matching the AI text's own
+ *    [EXEC]-derived history. Geometry from ns_layout's settled_row_layout()
+ *    so painting and measure_item() can never disagree about the row's
+ *    height. ───────────────────────────────────────────────────────────── */
+
+static void paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                                  RECT *rc)
+{
+    const ThemeTokens *tok = ns_tokens();
+    int dpi = CLV_DPI(lv);
+    int side_pad = ns_scale(BASE_SIDE_PAD, dpi);
+
+    /* Left/right edges match paint_ai_item's box -- rc is already inset by
+     * side_pad on both sides (on_paint), so only the AI indent and one more
+     * side_pad (matching paint_ai_item's box_right) are needed here. */
+    int box_left  = rc->left + lv->ai_indent;
+    int box_right = rc->right - side_pad;
+    if (box_right < box_left) box_right = box_left;
+
+    /* Outcome -> label + colours, per priority: an approved (ran) command
+     * always shows "ran" even if it was momentarily held before being
+     * unblocked; otherwise a still-blocked command shows "held"; then an
+     * explicit denial; anything else (approved == -1, not blocked) means
+     * the command was superseded before ever being decided -- "skipped". */
+    const char *label;
+    COLORREF chip_bg, chip_fg, text_clr;
+    COLORREF dim = RGB_FROM_THEME(tok->text_dim);
+    COLORREF panel_bg = RGB_FROM_THEME(tok->bg_primary.base);
+
+    if (item->u.cmd.approved == 1) {
+        label = "ran";
+        chip_bg = RGB_FROM_THEME(tok->success.base);
+        chip_fg = RGB_FROM_THEME(tok->success.label);
+        text_clr = RGB_FROM_THEME(tok->text_main);
+    } else if (item->u.cmd.blocked) {
+        label = "held";
+        chip_bg = RGB_FROM_THEME(tok->warning.base);
+        chip_fg = RGB_FROM_THEME(tok->warning.label);
+        text_clr = dim;
+    } else if (item->u.cmd.approved == 0) {
+        label = "denied";
+        chip_bg = rgb_alpha(dim, panel_bg, 0.18f);
+        chip_fg = dim;
+        text_clr = dim;
+    } else {
+        label = "skipped";
+        chip_bg = rgb_alpha(dim, panel_bg, 0.18f);
+        chip_fg = dim;
+        text_clr = dim;
+    }
+
+    /* Chip label width, measured with the small font: label width plus
+     * SP_SM padding on both sides. */
+    HGDIOBJ old_sf = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                       : GetStockObject(DEFAULT_GUI_FONT));
+    SIZE lsz = { 0, 0 };
+    GetTextExtentPoint32A(hdc, label, (int)strlen(label), &lsz);
+    SelectObject(hdc, old_sf);
+    int chip_w = lsz.cx + 2 * ns_scale(SP_SM, dpi);
+
+    /* Command text width and line height, measured with the mono font
+     * (same font used to paint it) -- matches build_cmd_card_geometry's
+     * own measurement so ellipsis/height agree with the live card's rows. */
+    const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
+                                               : item->text;
+    HGDIOBJ old_mf = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
+                                       : GetStockObject(ANSI_FIXED_FONT));
+    SIZE csz = { 0, 0 };
+    if (cmd_text && *cmd_text)
+        GetTextExtentPoint32A(hdc, cmd_text, (int)strlen(cmd_text), &csz);
+    TEXTMETRICA tm;
+    GetTextMetricsA(hdc, &tm);
+    SelectObject(hdc, old_mf);
+
+    NsRect row_r = { box_left, rc->top, box_right - box_left,
+                     approval_row_height(tm.tmHeight, dpi) };
+    ApprovalRowLayout layout;
+    settled_row_layout(row_r, csz.cx, chip_w, tm.tmHeight, dpi, &layout);
+
+    /* Command text (single line, ellipsised when it doesn't fit) */
+    if (layout.text.w > 0 && layout.text.h > 0) {
+        RECT text_rc = { layout.text.x, layout.text.y,
+                         layout.text.x + layout.text.w,
+                         layout.text.y + layout.text.h };
+        SetTextColor(hdc, text_clr);
+        HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
+                                          : GetStockObject(ANSI_FIXED_FONT));
+        UINT flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT;
+        if (layout.ellipsis) flags |= DT_END_ELLIPSIS;
+        draw_text_utf8(hdc, cmd_text, &text_rc, flags);
+        SelectObject(hdc, old_f);
+    }
+
+    /* Outcome chip */
+    if (layout.tag.w > 0 && layout.tag.h > 0) {
+        RECT tag_rc = { layout.tag.x, layout.tag.y,
+                        layout.tag.x + layout.tag.w,
+                        layout.tag.y + layout.tag.h };
+        ns_draw_chip(hdc, &tag_rc, chip_bg, chip_fg, lv->hSmallFont, label);
     }
 }
 
@@ -2132,15 +2253,18 @@ static void on_paint(ChatListView *lv)
                 paint_ai_item(lv, mem_dc, item, &item_rc);
                 break;
             case CHAT_ITEM_COMMAND:
-                /* Settled commands measure to h=0 (see measure_item) and
-                 * are normally skipped by the h==0 check above. But
-                 * WM_PAINT never calls recalc_layout, so an item that was
-                 * just settled (settle_all_commands) without a re-layout
-                 * can still carry a stale non-zero measured_height here.
-                 * Painting it would call into paint_cmd_container with a
-                 * container that now has zero live (unsettled) items --
-                 * skip it instead of crashing on the mismatch. */
-                if (!item->u.cmd.settled)
+                /* A settled command paints as its own compact inline row.
+                 * An unsettled one is part of the single live container
+                 * (painted by whichever item currently absorbs the full
+                 * container height -- see build_cmd_card_geometry). Both
+                 * settled_row_layout() and approval_card_layout() are
+                 * recomputed straight from recalc_layout()'s measured
+                 * heights on every settle (settle_all_commands calls
+                 * chat_listview_invalidate, which recalcs), so item_rc's
+                 * height here always matches what's about to be painted. */
+                if (item->u.cmd.settled)
+                    paint_cmd_settled_row(lv, mem_dc, item, &item_rc);
+                else
                     paint_cmd_container(lv, mem_dc, &item_rc);
                 break;
             case CHAT_ITEM_TOOL_CALL:
