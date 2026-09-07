@@ -19,6 +19,8 @@
 #include "ns_scale.h"
 #include "ns_type.h"
 #include "ns_reduced_motion.h"
+#include "ns_hover.h"
+#include "ai_panel_layout.h"
 #include "ui_theme.h"
 #include "themed_button.h"
 #include "custom_scrollbar.h"
@@ -96,8 +98,8 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define IDC_CHAT_NEWCHAT  4004
 #define IDC_CHAT_PERMIT   4005
 #define IDC_CHAT_THINKING 4006
-#define IDC_CONTEXT_BAR   4007
-#define IDC_CONTEXT_LABEL 4008
+/* 4007/4008 (IDC_CONTEXT_BAR/IDC_CONTEXT_LABEL) retired with the boxed
+ * context label -- the meter is painted in the status line now. */
 #define IDC_SESSION_LABEL 4009
 #define IDC_CHAT_SAVE     4010
 #define IDC_CHAT_ALLOW    4011
@@ -148,15 +150,20 @@ typedef struct {
     HWND hInput;
     HWND hSendBtn;
     HWND hNewChatBtn;
-    HWND hPermitBtn;
-    HWND hAllowAllBtn;
     HWND hSaveBtn;
     HWND hUndockBtn;
-    /* Old floating Allow/Deny buttons removed — now inline in chat_listview */
+    /* Old floating Allow/Deny buttons, and the owner-drawn Permit Write /
+     * Auto Approve tab buttons, are gone — approval is inline in
+     * chat_listview and the two modes are shown/clicked in the status
+     * line (painted, not child windows; see ai_chat_status_hit()). */
     ApprovalQueue approval_q;
     HWND hThinkingBtn;
     HWND hTooltip;        /* Win32 tooltip control */
     int permit_write;     /* 0 = read-only (red), 1 = read/write (green) */
+    /* Hover/press tracking for the painted status line (mode segments,
+     * auto-approve text) -- see ai_chat_status_hit()/ai_chat_status_rect(). */
+    NsHover status_hover;
+    int status_hover_tracking;  /* TrackMouseEvent armed for WM_MOUSELEAVE */
     int show_thinking;    /* 1 = user has manually opened a Thinking
                             * disclosure this session -- suppresses
                             * auto-collapse at reply-start (chat_listview.c)
@@ -235,15 +242,17 @@ typedef struct {
     HWND hDisplayScrollbar;
     int  display_line_h;   /* cached line height in px */
 
-    /* Context window usage bar */
-    HWND hContextBar;
-    HWND hContextLabel;       /* kept for cleanup but hidden — text drawn by subclass */
+    /* Context window usage meter, painted in the status line (no child
+     * window any more -- see ai_chat_get_status_paint()). */
     int  context_limit;       /* token limit for model, 0=unknown */
-    char context_label[64];   /* text drawn on progress bar by subclass */
+    /* Busy-indicator override text ("Waiting for output", "Continuing"...):
+     * when non-empty, painted in place of the meter's used/limit numbers.
+     * Set by start_indicator(), cleared by update_context_bar(). */
+    char context_label[64];
     int  actual_input_tokens;  /* last known input tokens from API (0 if unavailable) */
     int  actual_output_tokens; /* last known output tokens from API (0 if unavailable) */
 
-    /* Buffer for the context-bar hover tooltip text. Populated on
+    /* Buffer for the status-line meter's hover tooltip text. Populated on
      * each TTN_GETDISPINFO callback so the tip always reflects the
      * latest token state. */
     char tooltip_buf[512];
@@ -276,9 +285,6 @@ typedef struct {
 
     /* Docked mode: 1 = child window in main frame, 0 = floating */
     int docked;
-
-    /* Compact button mode: 1 = icon-only buttons when frame is narrow */
-    int compact_buttons;
 
     /* New chat list view fields */
     ChatMsgList msg_list;           /* Message item linked list */
@@ -786,88 +792,61 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 }
 
 
-/* Subclass proc for the context progress bar — draws label text on top of
- * the bar after the default paint.  Avoids the fragile transparent-STATIC
- * overlay that loses its text on parent/sibling repaints. */
-#define CONTEXT_BAR_SUBCLASS_ID 99
-static LRESULT CALLBACK ContextBarSubclass(HWND hwnd, UINT msg,
-    WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+/* Compute the panel's top-level tiling (header/thread/status/composer) for
+ * the current client size -- the one place composer_h is decided, shared by
+ * relayout(), WM_PAINT and every status-line hit-test helper below so they
+ * never disagree with each other. */
+static void ai_chat_compute_layout(AiChatData *d, AiPanelLayout *out)
 {
-    if (msg == WM_PAINT) {
-        LRESULT r = DefSubclassProc(hwnd, msg, wParam, lParam);
-        AiChatData *d = (AiChatData *)dwRefData;
-        if (d && d->context_label[0] && d->theme) {
-            HDC hdc = GetDC(hwnd);
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, theme_cr(d->theme->text_main));
-            HFONT oldFont = (HFONT)SelectObject(hdc, d->hFont);
-            DrawTextA(hdc, d->context_label, -1, &rc,
-                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(hdc, oldFont);
-            ReleaseDC(hwnd, hdc);
-        }
-        return r;
-    }
-    if (msg == WM_NCDESTROY)
-        RemoveWindowSubclass(hwnd, ContextBarSubclass, uIdSubclass);
-    return DefSubclassProc(hwnd, msg, wParam, lParam);
+    RECT rc = {0, 0, 1, 1};
+    if (d->hwnd) GetClientRect(d->hwnd, &rc);
+    NsRect panel = { 0, 0, rc.right, rc.bottom };
+
+    int margin = ns_scale(5, d->dpi);
+    int input_h = ns_scale(46, d->dpi);
+    int composer_h = input_h + margin;
+    ai_panel_layout(panel, d->dpi, composer_h, out);
 }
 
+/* Invalidate just the status line -- called whenever permit_write,
+ * auto-approve or the context numbers change. */
+static void invalidate_status_line(AiChatData *d)
+{
+    if (!d || !d->hwnd) return;
+    AiPanelLayout l;
+    ai_chat_compute_layout(d, &l);
+    RECT r = { l.status.x, l.status.y, l.status.x + l.status.w,
+               l.status.y + l.status.h };
+    InvalidateRect(d->hwnd, &r, FALSE);
+}
+
+/* Recompute the context meter/usage state and clear any busy-indicator
+ * override text (see start_indicator()) so the status line goes back to
+ * showing the normal used/limit numbers. The numbers themselves are
+ * measured fresh from d->context_limit/actual_*_tokens/d->conv at paint
+ * time (ai_chat_get_status_paint()) -- this just triggers that repaint. */
 static void update_context_bar(AiChatData *d)
 {
-    if (!d || !d->hContextBar) return;
-    
-    LONG style = GetWindowLong(d->hContextBar, GWL_STYLE);
-    if (style & PBS_MARQUEE) {
-        SendMessage(d->hContextBar, PBM_SETMARQUEE, 0, 0);
-        SetWindowLong(d->hContextBar, GWL_STYLE, style & ~PBS_MARQUEE);
-    }
-
-    if (d->context_limit <= 0) {
-        SendMessage(d->hContextBar, PBM_SETPOS, 0, 0);
-        ai_format_context_label(0, 0, d->context_label,
-                                sizeof(d->context_label));
-        InvalidateRect(d->hContextBar, NULL, TRUE);
-        EnableWindow(d->hContextBar, FALSE);
-        return;
-    }
-    int actual = d->actual_input_tokens + d->actual_output_tokens;
-    int tokens = (actual > 0) ? actual : ai_context_estimate_tokens(&d->conv);
-    int pct = (tokens * 100) / d->context_limit;
-    if (pct > 100) pct = 100;
-    SendMessage(d->hContextBar, PBM_SETPOS, (WPARAM)pct, 0);
-    SendMessage(d->hContextBar, PBM_SETBARCOLOR, 0,
-                (LPARAM)(pct > 80 ? theme_cr(d->theme->danger) :
-                         pct > 50 ? theme_cr(d->theme->warning)
-                                  : theme_cr(d->theme->success)));
-    ai_format_context_label(tokens, d->context_limit,
-                            d->context_label, sizeof(d->context_label));
-    InvalidateRect(d->hContextBar, NULL, TRUE);
-    EnableWindow(d->hContextBar, TRUE);
+    if (!d) return;
+    d->context_label[0] = '\0';
+    invalidate_status_line(d);
 }
 
-/* Start (or replace) the animated indicator with the given base text.
- * Replaces the usual Context progress bar with a Marquee while busy. */
+/* Start (or replace) the busy-indicator text shown in place of the status
+ * line's context meter numbers while a command/response is in flight (the
+ * per-message activity dot + word in the header covers most of the same
+ * ground, but callers here have more specific text, e.g. "waiting for
+ * output"). */
 static void start_indicator(AiChatData *d, const char *base)
 {
-    if (d->hContextBar) {
-        LONG style = GetWindowLong(d->hContextBar, GWL_STYLE);
-        SetWindowLong(d->hContextBar, GWL_STYLE, style | PBS_MARQUEE);
-        SendMessage(d->hContextBar, PBM_SETMARQUEE, 1, 50);
-        /* Warning-intent color for the busy Marquee */
-        SendMessage(d->hContextBar, PBM_SETBARCOLOR, 0,
-                    (LPARAM)theme_cr(d->theme->warning));
-        EnableWindow(d->hContextBar, TRUE);
-    }
+    if (!d) return;
     if (strcmp(base, "thinking") == 0)
         d->context_label[0] = '\0';   /* inline indicator shows timing */
     else
         snprintf(d->context_label, sizeof(d->context_label), "%c%s",
             base[0] >= 'a' && base[0] <= 'z' ? (char)(base[0]-32) : base[0],
             base + 1);
-    InvalidateRect(d->hContextBar, NULL, TRUE);
+    invalidate_status_line(d);
 }
 
 /* Free all thinking history entries. */
@@ -1623,228 +1602,488 @@ static void add_tooltip(HWND hTooltip, HWND hCtrl, const char *text)
     SendMessage(hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
 }
 
-/* Match the tab strip layout constants for consistent appearance (base values at 96 DPI) */
-#define AI_INDICATOR_W_BASE   12  /* same as INDICATOR_W in tabs.c */
-#define AI_INDICATOR_GAP_BASE  3  /* same as INDICATOR_GAP in tabs.c */
-
-/* Draw a tab-style button: same shape, border, font and indicator style
- * as the session tabs in the main window's tab strip. */
-static void draw_tab_button(LPDRAWITEMSTRUCT dis, const ThemeColors *theme,
-                             AiChatData *d)
+/* Draw one of the header's square icon buttons (New chat / Save / Undock
+ * or Dock): bg_secondary fill, border stroke, R_CTRL radius, a built-in
+ * vector icon centred -- no label, per the frame-B header design. These
+ * are real child windows, so hover comes from the themed_button subclass
+ * rather than ns_hover. */
+static void draw_header_icon_button(LPDRAWITEMSTRUCT dis,
+                                     const ThemeColors *theme, int dpi,
+                                     NsIconId icon)
 {
     if (!dis || !theme) return;
     HDC hdc = dis->hDC;
     RECT rc = dis->rcItem;
-    int btnH = rc.bottom - rc.top;
     int pressed = (dis->itemState & ODS_SELECTED) != 0;
-
-    /* Hover state comes from the task-4 themed_button subclass (a plain
-     * per-HWND boolean via WM_MOUSEMOVE/WM_MOUSELEAVE) -- these are real
-     * child windows, not painted elements, so ns_hover's id-keyed tracker
-     * does not apply here; this is that same minimal mechanism, just
-     * actually driving the paint now. */
     themed_button_track_hover(dis->hwndItem);
     int hot = !pressed && themed_button_is_hot(dis->hwndItem);
-
-    COLORREF bg = theme_cr(pressed ? theme->bg_primary : theme->bg_secondary);
-    if (hot) bg = theme_cr(ns_tokens()->bg_secondary.hover);
+    COLORREF bg = theme_cr(pressed ? theme->bg_primary
+                           : hot ? ns_tokens()->bg_secondary.hover
+                                 : theme->bg_secondary);
     COLORREF fg = theme_cr(theme->text_main);
-    COLORREF border_cr = theme_cr(theme->border);
+    COLORREF bdr = theme_cr(theme->border);
 
-    /* Clear with parent bg so rounded corners are clean */
-    HBRUSH hParentBr = CreateSolidBrush(theme_cr(theme->bg_primary));
-    FillRect(hdc, &rc, hParentBr);
-    DeleteObject(hParentBr);
+    HBRUSH hBgBr = CreateSolidBrush(theme_cr(theme->bg_primary));
+    FillRect(hdc, &rc, hBgBr);
+    DeleteObject(hBgBr);
 
-    /* Rounded rect background + border — radius matches tabs */
-    {
-        int radius = ns_scale(R_CTRL, d->dpi);
-        ns_draw_round_fill(hdc, &rc, radius, bg, 255);
-        ns_draw_round_stroke(hdc, &rc, radius, border_cr, STROKE_HAIRLINE);
+    int radius = ns_scale(R_CTRL, dpi);
+    ns_draw_round_fill(hdc, &rc, radius, bg, 255);
+    ns_draw_round_stroke(hdc, &rc, radius, bdr, STROKE_HAIRLINE);
+
+    ns_icon_draw(hdc, icon, &rc, fg, (UINT)dpi);
+}
+
+/* Model-chip geometry, shared by relayout() (to size the session label)
+ * and the header paint (to draw the chip itself): sized to the current
+ * model name's measured text width (FONT_CAPTION + 2*SP_SM padding) and
+ * placed directly left of the header's icon buttons; the session label
+ * takes the remaining space to its left. `hdc` may be NULL (a fixed
+ * fallback width is used); pass a real one for an accurate size. */
+static void ai_chat_header_chip(AiChatData *d, NsRect header, int buttons_left,
+                                 HDC hdc, NsRect *out_chip, RECT *out_label)
+{
+    int pad_sm = ns_scale(SP_SM, d->dpi);
+    int chip_h = ns_scale(SZ_TAG_H, d->dpi);
+    int chip_w = chip_h * 2;
+
+    if (hdc) {
+        HFONT font = ns_font(FONT_CAPTION, d->dpi);
+        HGDIOBJ old = font ? SelectObject(hdc, font) : NULL;
+        const char *model = d->conv.model;
+        int mlen = (int)strlen(model);
+        SIZE sz = {0, 0};
+        if (mlen > 0) GetTextExtentPoint32A(hdc, model, mlen, &sz);
+        if (old) SelectObject(hdc, old);
+        chip_w = sz.cx + 2 * pad_sm;
     }
 
-    /* Indicator height: same formula as tabs — button height minus 10px */
-    int indicH = btnH - 10;
-    if (indicH < 4) indicH = 4;
-    int indY = rc.top + (btnH - indicH) / 2;
-
-    /* For Permit Write / Allow All indicator: draw status indicator */
-    int text_left = rc.left;
-    if (((int)dis->CtlID == IDC_CHAT_AUTOAPPROVE) && d) {
-        int is_active = d->approval_q.auto_approve;
-        int indW = ns_scale(AI_INDICATOR_W_BASE, d->dpi);
-        int indGap = ns_scale(AI_INDICATOR_GAP_BASE, d->dpi);
-        int indX = rc.left + indGap;
-        const ThemeTokens *tok = ns_tokens();
-        COLORREF dot_col = is_active ? theme_cr(tok->success.base) : theme_cr(tok->text_dim);
-        COLORREF letter_col = is_active ? theme_cr(tok->success.label) : theme_cr(tok->text_dim_label);
-        RECT ind_rc = { indX, indY, indX + indW, indY + indicH };
-        ns_draw_round_fill(hdc, &ind_rc, ns_scale(R_CTRL, d->dpi), dot_col, 255);
-
-        /* Draw letter on indicator: A for Allow All */
-        {
-            const char *letter = "A";
-            HFONT hSmall = CreateFont(
-                -MulDiv(8, d->dpi, 72), 0, 0, 0, FW_BOLD,
-                FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                "Segoe UI");
-            HFONT hOldF = (HFONT)SelectObject(hdc, hSmall);
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, letter_col);
-            RECT indRect = { indX, indY, indX + indW, indY + indicH };
-            DrawText(hdc, letter, 1, &indRect,
-                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(hdc, hOldF);
-            DeleteObject(hSmall);
-        }
-
-        text_left = indX + indW + indGap;
+    int chip_x = buttons_left - chip_w;
+    int chip_y = header.y + (header.h - chip_h) / 2;
+    if (out_chip) {
+        out_chip->x = chip_x; out_chip->y = chip_y;
+        out_chip->w = chip_w; out_chip->h = chip_h;
     }
-    if (((int)dis->CtlID == IDC_CHAT_PERMIT) && d) {
-        int is_active = d->permit_write;
-        int indW = ns_scale(AI_INDICATOR_W_BASE, d->dpi);
-        int indGap = ns_scale(AI_INDICATOR_GAP_BASE, d->dpi);
-        int indX = rc.left + indGap;
-        const ThemeTokens *tok = ns_tokens();
-        COLORREF dot_col = is_active ? theme_cr(tok->success.base) : theme_cr(tok->text_dim);
-        COLORREF letter_col = is_active ? theme_cr(tok->success.label) : theme_cr(tok->text_dim_label);
-        RECT ind_rc = { indX, indY, indX + indW, indY + indicH };
-        ns_draw_round_fill(hdc, &ind_rc, ns_scale(R_CTRL, d->dpi), dot_col, 255);
-
-        /* Draw letter on indicator: W for write */
-        {
-            const char *letter = "W";
-            HFONT hSmall = CreateFont(
-                -MulDiv(8, d->dpi, 72), 0, 0, 0, FW_BOLD,
-                FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-                "Segoe UI");
-            HFONT hOldF = (HFONT)SelectObject(hdc, hSmall);
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, letter_col);
-            RECT indRect = { indX, indY, indX + indW, indY + indicH };
-            DrawText(hdc, letter, 1, &indRect,
-                     DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(hdc, hOldF);
-            DeleteObject(hSmall);
-        }
-
-        text_left = indX + indW + indGap;
-    }
-
-    /* Text — skip for indicator buttons when in compact mode (icon-only) */
-    int is_indicator_btn = ((int)dis->CtlID == IDC_CHAT_PERMIT ||
-                            (int)dis->CtlID == IDC_CHAT_AUTOAPPROVE ||
-                            (int)dis->CtlID == IDC_CHAT_NEWCHAT);
-    if (!d || !d->compact_buttons || !is_indicator_btn) {
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, fg);
-
-        HFONT hOldFont = NULL;
-        if (d && d->hFont)
-            hOldFont = (HFONT)SelectObject(hdc, d->hFont);
-
-        wchar_t text[64];
-        GetWindowTextW(dis->hwndItem, text, (int)(sizeof(text)/sizeof(text[0])));
-        RECT rcText = rc;
-        rcText.left = text_left;
-        rcText.right -= ns_scale(AI_INDICATOR_GAP_BASE, d ? d->dpi : 96);
-        DrawTextW(hdc, text, -1, &rcText,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-
-        if (hOldFont) SelectObject(hdc, hOldFont);
-    } else if (d && d->compact_buttons &&
-               (int)dis->CtlID == IDC_CHAT_NEWCHAT) {
-        /* Compact mode: built-in vector icon for New Chat */
-        ns_icon_draw(hdc, NS_ICON_NEW_CHAT, &rc, fg, (UINT)d->dpi);
+    if (out_label) {
+        int label_left = header.x + pad_sm;
+        int label_right = chip_x - pad_sm;
+        if (label_right < label_left) label_right = label_left;
+        SetRect(out_label, label_left, header.y, label_right,
+                header.y + header.h);
     }
 }
 
-/* Reposition all child controls.  Called from WM_SIZE and when
- * the approval bar is shown / hidden so the display shrinks to
- * make room for the Allow / Deny buttons. */
+/* Reposition all child controls from ai_panel_layout()'s header/thread/
+ * status/composer tiling (ai_chat_compute_layout()). Called once at the
+ * end of WM_CREATE and again on every WM_SIZE. */
 static void relayout(AiChatData *d)
 {
     if (!d || !d->hwnd) return;
-    RECT rc;
-    GetClientRect(d->hwnd, &rc);
-    int cw = rc.right;
-    int ch = rc.bottom;
-    int btn_h = ns_scale(24, d->dpi);
-    int pad = ns_scale(4, d->dpi);
-    int top_y = pad + btn_h + pad;
-    int input_h = ns_scale(46, d->dpi);
+
     int margin = ns_scale(5, d->dpi);
+    int input_h = ns_scale(46, d->dpi);
     int send_w = ns_scale(40, d->dpi);
-    int approve_h = d->pending_approval ? (btn_h + pad) : 0;
 
-    /* Right-side icon buttons (always shown) */
-    int right_w = pad + btn_h + pad + btn_h + pad;
-    if (d->hSaveBtn)
-        MoveWindow(d->hSaveBtn, cw - pad - btn_h, pad, btn_h, btn_h, TRUE);
+    AiPanelLayout l;
+    ai_chat_compute_layout(d, &l);
+
+    /* ---- Header: session name (left), model chip (painted -- see
+     * WM_PAINT), three icon buttons right-aligned. ---- */
+    int btn_h = ns_scale(SZ_CTRL_H, d->dpi);
+    int pad_sm = ns_scale(SP_SM, d->dpi);
+    int by = l.header.y + (l.header.h - btn_h) / 2;
+    int bx = l.header.x + l.header.w - pad_sm - btn_h;
     if (d->hUndockBtn)
-        MoveWindow(d->hUndockBtn, cw - pad - btn_h - pad - btn_h, pad,
-                   btn_h, btn_h, TRUE);
-
-    /* Decide if left-side buttons fit with full text or need compact mode.
-     * Full: New Chat (78) + Permit Write (115) + Auto Approve (115)
-     * Compact: New Chat (78) + indicator-only (btn_h) + indicator-only (btn_h) */
-    int full_w = pad + ns_scale(78, d->dpi) + pad + ns_scale(115, d->dpi) + pad + ns_scale(115, d->dpi);
-    int avail = cw - right_w;
-    d->compact_buttons = (full_w > avail);
-    int pw = d->compact_buttons ? btn_h : ns_scale(115, d->dpi);
-    int nw = d->compact_buttons ? btn_h : ns_scale(78, d->dpi);
-    int aw = d->compact_buttons ? btn_h : ns_scale(115, d->dpi);
-
+        MoveWindow(d->hUndockBtn, bx, by, btn_h, btn_h, TRUE);
+    bx -= pad_sm + btn_h;
+    if (d->hSaveBtn)
+        MoveWindow(d->hSaveBtn, bx, by, btn_h, btn_h, TRUE);
+    bx -= pad_sm + btn_h;
     if (d->hNewChatBtn)
-        MoveWindow(d->hNewChatBtn, pad, pad, nw, btn_h, TRUE);
-    if (d->hPermitBtn)
-        MoveWindow(d->hPermitBtn, pad + nw + pad, pad, pw, btn_h, TRUE);
-    if (d->hAllowAllBtn)
-        MoveWindow(d->hAllowAllBtn, pad + nw + pad + pw + pad, pad, aw, btn_h, TRUE);
+        MoveWindow(d->hNewChatBtn, bx, by, btn_h, btn_h, TRUE);
+    int buttons_left = bx - pad_sm;
+
     {
-        int bar_h = ns_scale(16, d->dpi);
-        int ctx_w = ns_scale(180, d->dpi);
-        int label_w = cw - ctx_w - pad * 3;
+        NsRect chip;
+        RECT label_rc;
+        HDC hdc = GetDC(d->hwnd);
+        ai_chat_header_chip(d, l.header, buttons_left, hdc, &chip, &label_rc);
+        if (hdc) ReleaseDC(d->hwnd, hdc);
         if (d->hSessionLabel)
-            MoveWindow(d->hSessionLabel, pad, top_y, label_w, bar_h, TRUE);
-        if (d->hContextBar)
-            MoveWindow(d->hContextBar, cw - ctx_w - pad, top_y, ctx_w, bar_h, TRUE);
-        top_y += bar_h + pad;
+            MoveWindow(d->hSessionLabel, label_rc.left, label_rc.top,
+                       label_rc.right - label_rc.left,
+                       label_rc.bottom - label_rc.top, TRUE);
     }
+
+    /* ---- Thread: the chat list fills l.thread. ---- */
     {
-        int disp_w, disp_h;
-        ai_dock_chat_layout(cw, ch, top_y, input_h, approve_h, margin,
-                            CSB_WIDTH, &disp_w, &disp_h);
-
-        /* Display takes full calculated height */
+        int disp_w = l.thread.w - CSB_WIDTH;
+        if (disp_w < 1) disp_w = 1;
+        int disp_h = l.thread.h < 1 ? 1 : l.thread.h;
         if (d->hDisplay)
-            MoveWindow(d->hDisplay, margin, top_y, disp_w, disp_h, TRUE);
+            MoveWindow(d->hDisplay, l.thread.x, l.thread.y, disp_w, disp_h, TRUE);
         if (d->hDisplayScrollbar)
-            MoveWindow(d->hDisplayScrollbar, margin + disp_w, top_y,
+            MoveWindow(d->hDisplayScrollbar, l.thread.x + disp_w, l.thread.y,
                        CSB_WIDTH, disp_h, TRUE);
-
-        /* Notify ChatListView of size change */
         if (d->hChatList)
             chat_listview_relayout(d->hChatList);
     }
-    /* Old floating approval buttons removed — now inline in chat_listview */
+
+    /* ---- Composer: unchanged position and behaviour; keeps its own
+     * height (composer_h in ai_chat_compute_layout() is exactly
+     * input_h + margin, so l.composer.y lands where input_y always did). */
     {
-        int input_y = ch - input_h - margin;
-        if (input_y < top_y) input_y = top_y;
-        int input_w = cw - send_w - margin * 3 - CSB_WIDTH;
+        int input_y = l.composer.y;
+        int input_w = l.composer.w - send_w - margin * 3 - CSB_WIDTH;
         if (input_w < 1) input_w = 1;
         if (d->hInput)
-            MoveWindow(d->hInput, margin, input_y, input_w, input_h, TRUE);
+            MoveWindow(d->hInput, l.composer.x + margin, input_y,
+                       input_w, input_h, TRUE);
         if (d->hInputScrollbar)
-            MoveWindow(d->hInputScrollbar, margin + input_w, input_y,
-                       CSB_WIDTH, input_h, TRUE);
+            MoveWindow(d->hInputScrollbar, l.composer.x + margin + input_w,
+                       input_y, CSB_WIDTH, input_h, TRUE);
         if (d->hSendBtn)
-            MoveWindow(d->hSendBtn, cw - send_w - margin, input_y, send_w, input_h, TRUE);
+            MoveWindow(d->hSendBtn, l.composer.x + l.composer.w - send_w - margin,
+                       input_y, send_w, input_h, TRUE);
     }
+}
+
+/* ── Status line: geometry, hit-test, tooltip, paint ──────────────────
+ * The mode segments (Read-only / Read + write) and the auto-approve text
+ * are painted directly on the panel's own client area (not child
+ * windows), so hover/click/tooltip all go through a hit-test against a
+ * freshly measured AiStatusLayout rather than window messages. See
+ * docs/superpowers/specs/2026-09-07-ai-assist-panel-design.md "Structure
+ * (frame B)".
+ */
+
+enum { STATUS_HIT_SEG0 = 0, STATUS_HIT_SEG1 = 1, STATUS_HIT_AUTO = 2 };
+
+typedef struct {
+    NsRect status;
+    AiStatusLayout sl;
+    char auto_text[64];
+    char meter_text[32];
+    int has_meter;   /* context_limit > 0 -- meter numbers are meaningful */
+} AiStatusPaint;
+
+/* Format "<used> / <limit>" the same way the old boxed label did (e.g.
+ * "1.2k / 200k"), just without the "Context: " prefix or "(N%)" suffix --
+ * the meter bar shows the fraction visually now. */
+static void ai_chat_format_meter_text(int tokens, int limit,
+                                       char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return;
+    char tok_str[16], lim_str[16];
+    if (tokens >= 1000)
+        snprintf(tok_str, sizeof(tok_str), "%.1fk", tokens / 1000.0);
+    else
+        snprintf(tok_str, sizeof(tok_str), "%d", tokens);
+    if (limit >= 1000)
+        snprintf(lim_str, sizeof(lim_str), "%dk", limit / 1000);
+    else
+        snprintf(lim_str, sizeof(lim_str), "%d", limit);
+    snprintf(buf, cap, "%s / %s", tok_str, lim_str);
+}
+
+static NsRect ai_chat_status_rect_for_id(const AiStatusLayout *sl, int id)
+{
+    switch (id) {
+    case STATUS_HIT_SEG0: return sl->seg[0];
+    case STATUS_HIT_SEG1: return sl->seg[1];
+    case STATUS_HIT_AUTO: return sl->auto_label;
+    default: { NsRect z = {0, 0, 0, 0}; return z; }
+    }
+}
+
+static int ai_chat_pt_in_rect(NsRect r, int x, int y)
+{
+    return r.w > 0 && r.h > 0 &&
+           x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
+/* Measure the status line's variable-width text (segment labels,
+ * auto-approve text, meter numbers) and lay it out via ai_status_layout().
+ * Self-contained: borrows its own HDC when the caller doesn't have one
+ * handy (hit-testing/tooltips), or reuses the caller's paint HDC. */
+static void ai_chat_get_status_paint(AiChatData *d, HDC hdc, AiStatusPaint *out)
+{
+    memset(out, 0, sizeof(*out));
+
+    AiPanelLayout l;
+    ai_chat_compute_layout(d, &l);
+    out->status.x = l.status.x; out->status.y = l.status.y;
+    out->status.w = l.status.w; out->status.h = l.status.h;
+
+    HDC own_hdc = hdc ? NULL : GetDC(d->hwnd);
+    HDC use_hdc = hdc ? hdc : own_hdc;
+    if (!use_hdc) return;
+
+    HFONT font = ns_font(FONT_CAPTION, d->dpi);
+    HGDIOBJ old = font ? SelectObject(use_hdc, font) : NULL;
+
+    SIZE sz;
+    static const char seg0_label[] = "Read-only";
+    static const char seg1_label[] = "Read + write";
+    GetTextExtentPoint32A(use_hdc, seg0_label, (int)strlen(seg0_label), &sz);
+    int seg0_w = sz.cx;
+    GetTextExtentPoint32A(use_hdc, seg1_label, (int)strlen(seg1_label), &sz);
+    int seg1_w = sz.cx;
+
+    snprintf(out->auto_text, sizeof(out->auto_text), "Auto approve: %s",
+            ai_modes_label(d->approval_q.auto_approve, d->approval_q.auto_approve_all));
+    GetTextExtentPoint32A(use_hdc, out->auto_text, (int)strlen(out->auto_text), &sz);
+    int auto_w = sz.cx;
+
+    int meter_w = 0;
+    out->has_meter = d->context_limit > 0;
+    if (out->has_meter) {
+        int actual = d->actual_input_tokens + d->actual_output_tokens;
+        int tokens = actual > 0 ? actual : ai_context_estimate_tokens(&d->conv);
+        ai_chat_format_meter_text(tokens, d->context_limit,
+                                  out->meter_text, sizeof(out->meter_text));
+        GetTextExtentPoint32A(use_hdc, out->meter_text,
+                              (int)strlen(out->meter_text), &sz);
+        meter_w = sz.cx;
+    }
+
+    if (old) SelectObject(use_hdc, old);
+    if (own_hdc) ReleaseDC(d->hwnd, own_hdc);
+
+    ai_status_layout(out->status, d->dpi, seg0_w, seg1_w, auto_w, meter_w,
+                     &out->sl);
+}
+
+/* Hit-test a client point against the status line's clickable elements.
+ * Returns STATUS_HIT_SEG0/SEG1/AUTO, or -1 for nothing hittable. */
+static int ai_chat_status_hit(AiChatData *d, int x, int y)
+{
+    AiStatusPaint sp;
+    ai_chat_get_status_paint(d, NULL, &sp);
+    static const int ids[3] = { STATUS_HIT_SEG0, STATUS_HIT_SEG1, STATUS_HIT_AUTO };
+    for (int i = 0; i < 3; i++) {
+        NsRect r = ai_chat_status_rect_for_id(&sp.sl, ids[i]);
+        if (ai_chat_pt_in_rect(r, x, y)) return ids[i];
+    }
+    return -1;
+}
+
+/* Client rect for a given status-line hit id (for targeted invalidation
+ * when hover moves off an element). Returns 0 if the id is out of range or
+ * the element is currently zero-size (squeezed out on a narrow panel). */
+static int ai_chat_status_rect(AiChatData *d, int id, RECT *out_rc)
+{
+    if (id < 0) return 0;
+    AiStatusPaint sp;
+    ai_chat_get_status_paint(d, NULL, &sp);
+    NsRect r = ai_chat_status_rect_for_id(&sp.sl, id);
+    if (r.w <= 0 || r.h <= 0) return 0;
+    SetRect(out_rc, r.x, r.y, r.x + r.w, r.y + r.h);
+    return 1;
+}
+
+static RECT ai_chat_to_RECT(NsRect r)
+{
+    RECT rc = { r.x, r.y, r.x + r.w, r.y + r.h };
+    return rc;
+}
+
+/* Paint the header's model chip and (while a session is active) the
+ * activity dot + one-word status, next to the session label. */
+static void paint_header(AiChatData *d, HDC hdc)
+{
+    const ThemeTokens *tok = ns_tokens();
+    AiPanelLayout l;
+    ai_chat_compute_layout(d, &l);
+
+    int btn_h = ns_scale(SZ_CTRL_H, d->dpi);
+    int pad_sm = ns_scale(SP_SM, d->dpi);
+    int buttons_left = l.header.x + l.header.w - pad_sm
+                      - 3 * btn_h - 2 * pad_sm - pad_sm;
+
+    NsRect chip;
+    ai_chat_header_chip(d, l.header, buttons_left, hdc, &chip, NULL);
+    if (chip.w > 0 && chip.h > 0) {
+        RECT chip_rc = ai_chat_to_RECT(chip);
+        HFONT font = ns_font(FONT_CAPTION, d->dpi);
+        ns_draw_chip(hdc, &chip_rc, theme_cr(tok->raised.base),
+                    theme_cr(tok->text_dim), font, d->conv.model);
+    }
+
+    if (d->activity.phase == ACTIVITY_IDLE) return;
+
+    RECT rc_lbl = {0, 0, 0, 0};
+    if (d->hSessionLabel) {
+        GetWindowRect(d->hSessionLabel, &rc_lbl);
+        MapWindowPoints(NULL, d->hwnd, (POINT *)&rc_lbl, 2);
+    }
+    SIZE sz_lbl = {0, 0};
+    /* Measure with the session label's own font (FONT_TITLE) so the dot
+     * lands right after its actually-rendered text, not an approximation. */
+    HGDIOBJ old_f = SelectObject(hdc, ns_font(FONT_TITLE, d->dpi));
+    char lbl_text[256] = "";
+    if (d->hSessionLabel)
+        GetWindowTextA(d->hSessionLabel, lbl_text, (int)sizeof(lbl_text));
+    GetTextExtentPoint32A(hdc, lbl_text, (int)strlen(lbl_text), &sz_lbl);
+    SelectObject(hdc, d->hSmallFont ? d->hSmallFont : GetStockObject(DEFAULT_GUI_FONT));
+
+    int dot_sz = ns_scale(6, d->dpi);
+    int dot_x = rc_lbl.left + sz_lbl.cx + ns_scale(6, d->dpi);
+    int dot_y = rc_lbl.top + ((rc_lbl.bottom - rc_lbl.top) - dot_sz) / 2;
+
+    COLORREF dot_clr;
+    switch (d->activity.health) {
+    case HEALTH_YELLOW:
+        dot_clr = RGB(((d->theme->chat.indicator_yellow) >> 16) & 0xFF,
+                      ((d->theme->chat.indicator_yellow) >> 8) & 0xFF,
+                      (d->theme->chat.indicator_yellow) & 0xFF);
+        break;
+    case HEALTH_RED:
+        dot_clr = RGB(((d->theme->chat.indicator_red) >> 16) & 0xFF,
+                      ((d->theme->chat.indicator_red) >> 8) & 0xFF,
+                      (d->theme->chat.indicator_red) & 0xFF);
+        break;
+    default:
+        dot_clr = RGB(((d->theme->chat.indicator_green) >> 16) & 0xFF,
+                      ((d->theme->chat.indicator_green) >> 8) & 0xFF,
+                      (d->theme->chat.indicator_green) & 0xFF);
+        break;
+    }
+
+    if (d->pulse_toggle && !ns_reduced_motion()) {
+        COLORREF bg_c = RGB(((d->theme->bg_primary) >> 16) & 0xFF,
+                            ((d->theme->bg_primary) >> 8) & 0xFF,
+                            (d->theme->bg_primary) & 0xFF);
+        dot_clr = RGB((GetRValue(dot_clr) + GetRValue(bg_c)) / 2,
+                      (GetGValue(dot_clr) + GetGValue(bg_c)) / 2,
+                      (GetBValue(dot_clr) + GetBValue(bg_c)) / 2);
+    }
+
+    HBRUSH hDotBr = CreateSolidBrush(dot_clr);
+    HPEN hDotPn = CreatePen(PS_SOLID, 1, dot_clr);
+    HGDIOBJ ob = SelectObject(hdc, hDotBr);
+    HGDIOBJ op = SelectObject(hdc, hDotPn);
+    Ellipse(hdc, dot_x, dot_y, dot_x + dot_sz, dot_y + dot_sz);
+    SelectObject(hdc, op);
+    SelectObject(hdc, ob);
+    DeleteObject(hDotPn);
+    DeleteObject(hDotBr);
+
+    const char *word;
+    switch (d->activity.phase) {
+    case ACTIVITY_PROCESSING: word = "Processing"; break;
+    case ACTIVITY_THINKING:   word = "Thinking";   break;
+    case ACTIVITY_RESPONDING: word = "Responding"; break;
+    case ACTIVITY_EXECUTING:  word = "Executing";  break;
+    case ACTIVITY_WAITING:    word = "Waiting";    break;
+    default:                  word = "";           break;
+    }
+    if (word[0]) {
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, dot_clr);
+        RECT wrc;
+        wrc.left   = dot_x + dot_sz + ns_scale(4, d->dpi);
+        wrc.top    = rc_lbl.top;
+        wrc.right  = l.header.x + l.header.w;
+        wrc.bottom = rc_lbl.bottom;
+        DrawTextA(hdc, word, -1, &wrc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    }
+    SelectObject(hdc, old_f);
+}
+
+/* Paint the status line: bg_secondary fill with a border rule on top, the
+ * mode segmented control, the auto-approve text (or, while a
+ * start_indicator() busy override is set, that text instead of the
+ * meter), and the context meter + used/limit numbers. */
+static void paint_status_line(AiChatData *d, HDC hdc)
+{
+    const ThemeTokens *tok = ns_tokens();
+    AiStatusPaint sp;
+    ai_chat_get_status_paint(d, hdc, &sp);
+    RECT status_rc = ai_chat_to_RECT(sp.status);
+
+    HBRUSH bg_br = CreateSolidBrush(theme_cr(tok->bg_secondary.base));
+    FillRect(hdc, &status_rc, bg_br);
+    DeleteObject(bg_br);
+    ns_draw_separator(hdc, status_rc.left, status_rc.right, status_rc.top,
+                      theme_cr(tok->border));
+
+    HFONT cap_font = ns_font(FONT_CAPTION, d->dpi);
+    HGDIOBJ old_font = cap_font ? SelectObject(hdc, cap_font) : NULL;
+    int old_bk = SetBkMode(hdc, TRANSPARENT);
+
+    /* Mode segmented control */
+    {
+        const char *labels[2] = { "Read-only", "Read + write" };
+        int hover_state[2] = {
+            ns_hover_state_for(&d->status_hover, STATUS_HIT_SEG0),
+            ns_hover_state_for(&d->status_hover, STATUS_HIT_SEG1)
+        };
+        NsRect seg[2] = { sp.sl.seg[0], sp.sl.seg[1] };
+        ns_draw_segmented(hdc, seg, labels, d->permit_write, d->permit_write,
+                          tok, hover_state, cap_font, d->dpi);
+    }
+
+    /* Auto-approve text: "Auto approve: " in text_dim, the state word in
+     * text_main when on / text_dim when off; underlined while hovered. */
+    if (sp.sl.auto_label.w > 0) {
+        RECT rc = ai_chat_to_RECT(sp.sl.auto_label);
+        const char *prefix = "Auto approve: ";
+        const char *state = sp.auto_text + strlen(prefix);
+        SIZE prefix_sz;
+        GetTextExtentPoint32A(hdc, prefix, (int)strlen(prefix), &prefix_sz);
+
+        SetTextColor(hdc, theme_cr(tok->text_dim));
+        DrawTextA(hdc, prefix, -1, &rc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+        RECT state_rc = rc;
+        state_rc.left += prefix_sz.cx;
+        SetTextColor(hdc, d->approval_q.auto_approve
+                          ? theme_cr(tok->text_main) : theme_cr(tok->text_dim));
+        DrawTextA(hdc, state, -1, &state_rc,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+        if (ns_hover_state_for(&d->status_hover, STATUS_HIT_AUTO) > 0) {
+            SIZE full_sz;
+            GetTextExtentPoint32A(hdc, sp.auto_text, (int)strlen(sp.auto_text), &full_sz);
+            int text_top = rc.top + ((rc.bottom - rc.top) - full_sz.cy) / 2;
+            int underline_y = text_top + full_sz.cy - 1;
+            HPEN pen = CreatePen(PS_SOLID, 1, theme_cr(tok->text_dim));
+            HGDIOBJ old_pen = SelectObject(hdc, pen);
+            MoveToEx(hdc, rc.left, underline_y, NULL);
+            LineTo(hdc, rc.left + full_sz.cx, underline_y);
+            SelectObject(hdc, old_pen);
+            DeleteObject(pen);
+        }
+    }
+
+    /* Busy override, or the context meter + used/limit numbers */
+    if (d->context_label[0]) {
+        RECT rc = ai_chat_to_RECT(sp.sl.meter_bar.w > 0 ? sp.sl.meter_bar
+                                                        : sp.sl.meter_text);
+        rc.right = status_rc.right - ns_scale(SP_SM, d->dpi);
+        SetTextColor(hdc, theme_cr(tok->text_main));
+        DrawTextA(hdc, d->context_label, -1, &rc,
+                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    } else if (sp.has_meter) {
+        if (sp.sl.meter_bar.w > 0) {
+            int actual = d->actual_input_tokens + d->actual_output_tokens;
+            int tokens = actual > 0 ? actual : ai_context_estimate_tokens(&d->conv);
+            double frac = d->context_limit > 0
+                        ? (double)tokens / (double)d->context_limit : 0.0;
+            ns_draw_meter(hdc, &sp.sl.meter_bar, frac, tok);
+        }
+        if (sp.sl.meter_text.w > 0) {
+            RECT rc = ai_chat_to_RECT(sp.sl.meter_text);
+            SetTextColor(hdc, theme_cr(tok->text_main));
+            DrawTextA(hdc, sp.meter_text, -1, &rc,
+                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+    }
+
+    SetBkMode(hdc, old_bk);
+    if (old_font) SelectObject(hdc, old_font);
 }
 
 /* Sync the input scrollbar with the EDIT control's scroll state */
@@ -1935,53 +2174,37 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         /* Get per-monitor DPI for layout scaling */
         nd->dpi = get_window_dpi(hwnd);
 
-        RECT rc;
-        GetClientRect(hwnd, &rc);
-        int cw = rc.right;
-        int ch = rc.bottom;
-        int btn_h = ns_scale(24, nd->dpi); /* compact — matches BTN_SIZE in tab strip */
-        int pad = ns_scale(4, nd->dpi);
-        int top_y = pad + btn_h + pad; /* display starts below buttons */
+        /* All child-control geometry is decided by relayout() (called once
+         * at the end of this handler, then again on every WM_SIZE) from
+         * ai_panel_layout()'s header/thread/status/composer tiling -- the
+         * positions/sizes given to CreateWindow here are placeholders. */
+        int btn_h = ns_scale(SZ_CTRL_H, nd->dpi);
 
-        /* New Chat button (owner-drawn for theme) */
-        nd->hNewChatBtn = CreateWindow("BUTTON", "New Chat",
+        /* New chat / Save / Undock: three square icon buttons in the
+         * header, owner-drawn via draw_header_icon_button(). */
+        nd->hNewChatBtn = CreateWindow("BUTTON", "",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            pad, pad, ns_scale(78, nd->dpi), btn_h,
+            0, 0, btn_h, btn_h,
             hwnd, (HMENU)IDC_CHAT_NEWCHAT, NULL, NULL);
 
-        /* Permit Write button */
-        nd->permit_write = 0; /* default: read-only */
-        nd->hPermitBtn = CreateWindow("BUTTON", "Permit Write",
-            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            pad + ns_scale(78, nd->dpi) + pad, pad, ns_scale(115, nd->dpi), btn_h,
-            hwnd, (HMENU)IDC_CHAT_PERMIT, NULL, NULL);
-
-        /* Auto Approve button */
-        nd->hAllowAllBtn = CreateWindow("BUTTON", "Auto Approve",
-            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            pad + ns_scale(78, nd->dpi) + pad + ns_scale(115, nd->dpi) + pad, pad, ns_scale(115, nd->dpi), btn_h,
-            hwnd, (HMENU)IDC_CHAT_AUTOAPPROVE, NULL, NULL);
+        nd->permit_write = 0; /* default: read-only; shown/toggled in the status line */
 
         nd->show_thinking = 0; /* default: collapsed (user must click '>' to expand) */
         nd->hThinkingBtn = NULL; /* Thinking button removed - now inline in chat */
 
-        /* Save button — square, right-aligned in button row */
         nd->hSaveBtn = CreateWindow("BUTTON", "",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            cw - pad - btn_h, pad, btn_h, btn_h,
+            0, 0, btn_h, btn_h,
             hwnd, (HMENU)IDC_CHAT_SAVE, NULL, NULL);
 
-        /* Undock/Dock button — square, left of save button */
         nd->hUndockBtn = CreateWindow("BUTTON", "",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            cw - pad - btn_h - pad - btn_h, pad, btn_h, btn_h,
+            0, 0, btn_h, btn_h,
             hwnd, (HMENU)IDC_CHAT_UNDOCK, NULL, NULL);
 
         /* Suppress WM_ERASEBKGND on owner-drawn buttons to prevent
          * white flicker during splitter drag / parent resize. */
         SetWindowSubclass(nd->hNewChatBtn,  btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
-        SetWindowSubclass(nd->hPermitBtn,   btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
-        SetWindowSubclass(nd->hAllowAllBtn, btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
         SetWindowSubclass(nd->hSaveBtn,     btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
         SetWindowSubclass(nd->hUndockBtn,   btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
@@ -1990,59 +2213,28 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
          * Initialize the approval queue. */
         chat_approval_init(&nd->approval_q);
         chat_activity_init(&nd->activity);
+        ns_hover_init(&nd->status_hover);
 
-        /* Session name (left) + context bar (right) row */
-        {
-            int bar_h = ns_scale(16, nd->dpi);
-            int ctx_w = ns_scale(180, nd->dpi);  /* fixed width for context bar */
-            int label_w = cw - ctx_w - pad * 3;
-
-            /* Session name label on the left */
-            nd->hSessionLabel = CreateWindow("STATIC",
-                nd->session_name[0] ? nd->session_name : "",
-                WS_VISIBLE | WS_CHILD | SS_LEFT | SS_ENDELLIPSIS,
-                pad, top_y, label_w, bar_h,
-                hwnd, (HMENU)IDC_SESSION_LABEL, NULL, NULL);
-
-            /* Context bar and label on the right */
-            nd->hContextBar = CreateWindow(PROGRESS_CLASS, "",
-                WS_VISIBLE | WS_CHILD,
-                cw - ctx_w - pad, top_y, ctx_w, bar_h,
-                hwnd, (HMENU)IDC_CONTEXT_BAR, NULL, NULL);
-            SendMessage(nd->hContextBar, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-            SendMessage(nd->hContextBar, PBM_SETPOS, 0, 0);
-            SendMessage(nd->hContextBar, PBM_SETBKCOLOR, 0,
-                        (LPARAM)theme_cr(nd->theme->bg_secondary));
-
-            /* Label overlay hidden — text is now drawn by the progress
-             * bar subclass (ContextBarSubclass) for reliable rendering. */
-            nd->hContextLabel = CreateWindow("STATIC", "",
-                WS_CHILD, /* NOT visible */
-                0, 0, 0, 0,
-                hwnd, (HMENU)IDC_CONTEXT_LABEL, NULL, NULL);
-
-            /* Subclass the progress bar to draw label text on itself */
-            SetWindowSubclass(nd->hContextBar, ContextBarSubclass,
-                              CONTEXT_BAR_SUBCLASS_ID, (DWORD_PTR)nd);
-
-            top_y += bar_h + pad;
-        }
+        /* Session name label (left of the header, FONT_TITLE) -- the model
+         * chip to its right is painted, not a child window. */
+        nd->hSessionLabel = CreateWindow("STATIC",
+            nd->session_name[0] ? nd->session_name : "",
+            WS_VISIBLE | WS_CHILD | SS_LEFT | SS_ENDELLIPSIS,
+            0, 0, 1, 1,
+            hwnd, (HMENU)IDC_SESSION_LABEL, NULL, NULL);
 
         /* Chat display: owner-drawn ChatListView replaces RichEdit.
          * In docked mode the initial window may be 1x1, so clamp
          * all dimensions to >=1 — relayout() fixes them on first WM_SIZE. */
         int input_h = ns_scale(46, nd->dpi); /* ~2 lines for multiline input */
         int margin = ns_scale(5, nd->dpi);
-        int disp_w = cw - margin * 2 - CSB_WIDTH;
-        if (disp_w < 1) disp_w = 1;
-        int disp_h = ch - input_h - top_y - margin * 2;
-        if (disp_h < 1) disp_h = 1;
+        int disp_w = 1, disp_h = 1;
 
         /* Initialize the message list */
         chat_msg_list_init(&nd->msg_list);
 
         /* Create ChatListView — hDisplay points to same HWND for layout compat */
-        nd->hChatList = chat_listview_create(hwnd, margin, top_y,
+        nd->hChatList = chat_listview_create(hwnd, 0, 0,
                                               disp_w, disp_h,
                                               &nd->msg_list, nd->theme);
         nd->hDisplay = nd->hChatList;  /* layout code uses hDisplay */
@@ -2052,7 +2244,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         /* Custom themed scrollbar for chat display (kept for visual consistency) */
         csb_register(GetModuleHandle(NULL));
         nd->hDisplayScrollbar = csb_create(hwnd,
-            margin + disp_w, top_y, CSB_WIDTH, disp_h,
+            0, 0, CSB_WIDTH, disp_h,
             nd->theme, GetModuleHandle(NULL));
 
         /* Connect custom scrollbar to ChatListView */
@@ -2067,27 +2259,23 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Input field: multiline, Enter sends via subclass, Shift+Enter = newline */
         int send_w = ns_scale(40, nd->dpi);
-        int input_y = ch - input_h - margin;
-        if (input_y < 0) input_y = 0;
-        int input_w = cw - send_w - margin * 3 - CSB_WIDTH;
-        if (input_w < 1) input_w = 1;
         nd->hInput = CreateWindow("EDIT", "",
             WS_VISIBLE | WS_CHILD | WS_BORDER |
             ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
-            margin, input_y, input_w, input_h,
+            margin, 0, 1, input_h,
             hwnd, (HMENU)IDC_CHAT_INPUT, NULL, NULL);
         if (nd->hInput)
             SetWindowSubclass(nd->hInput, InputSubclassProc, 0, 0);
 
         /* Custom themed scrollbar for input */
         nd->hInputScrollbar = csb_create(hwnd,
-            margin + input_w, input_y, CSB_WIDTH, input_h,
+            0, 0, CSB_WIDTH, input_h,
             nd->theme, GetModuleHandle(NULL));
 
         /* Send button (owner-drawn for theme) */
         nd->hSendBtn = CreateWindow("BUTTON", ">",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
-            cw - send_w - margin, input_y, send_w, input_h,
+            0, 0, send_w, input_h,
             hwnd, (HMENU)IDC_CHAT_SEND, NULL, NULL);
         SetWindowSubclass(nd->hSendBtn, btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
@@ -2144,10 +2332,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             SelectObject(hdc_m, old_m);
             ReleaseDC(nd->hInput, hdc_m);
         }
-        if (nd->hSmallFont) {
-            SendMessage(nd->hSessionLabel, WM_SETFONT, (WPARAM)nd->hSmallFont, TRUE);
-            SendMessage(nd->hContextLabel, WM_SETFONT, (WPARAM)nd->hSmallFont, TRUE);
-        }
+        /* Session name reads at FONT_TITLE per the header design. */
+        SendMessage(nd->hSessionLabel, WM_SETFONT,
+                    (WPARAM)ns_font(FONT_TITLE, nd->dpi), TRUE);
 
         /* Apply theme title bar + borders */
         if (nd->theme) {
@@ -2155,27 +2342,21 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             themed_apply_borders(hwnd, nd->theme);
         }
 
-        /* Create tooltip control and add tips for all buttons */
+        /* Create tooltip control and add tips for all buttons, plus one
+         * whole-window callback-text tool for the painted status line
+         * (mode segments / auto-approve / context meter) -- its text is
+         * built on demand in WM_NOTIFY by hit-testing the cursor position
+         * via ai_chat_status_hit(), so it always reflects current state
+         * without us pushing updates. */
         nd->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
             WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
             0, 0, 0, 0, hwnd, NULL, NULL, NULL);
         if (nd->hTooltip) {
             SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, 400);
             add_tooltip(nd->hTooltip, nd->hNewChatBtn,
-                "New Chat\nClear the conversation and start fresh.");
-            add_tooltip(nd->hTooltip, nd->hPermitBtn,
-                "Permit Write\n"
-                "Toggle read/write mode for AI commands.\n"
-                "Green = AI can execute any command.\n"
-                "Grey = AI can only run read-only commands\n"
-                "(ls, cat, pwd, etc).");
-            add_tooltip(nd->hTooltip, nd->hAllowAllBtn,
-                "Allow all commands this session\n"
-                "When active, AI commands are executed\n"
-                "without individual approval prompts.");
-            /* Thinking tooltip removed - click '>' in chat to expand/collapse */
+                "New chat\nClear the conversation and start fresh.");
             add_tooltip(nd->hTooltip, nd->hSaveBtn,
-                "Save\nSave the conversation as a text file.");
+                "Save chat\nSave the conversation as a text file.");
             if (nd->hUndockBtn)
                 add_tooltip(nd->hTooltip, nd->hUndockBtn,
                     nd->docked ? "Undock\nOpen AI Assist in a separate window."
@@ -2183,20 +2364,16 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             add_tooltip(nd->hTooltip, nd->hSendBtn,
                 "Send\nSend your message to the AI.\n"
                 "Shortcut: press Enter in the input box.");
-            /* Register the context bar as a callback-text tool. The
-             * actual text is built on demand in the WM_NOTIFY handler
-             * for TTN_GETDISPINFOA, so it always reflects current
-             * token state without us having to push updates. */
-            if (nd->hContextBar) {
-                TOOLINFO ti;
-                memset(&ti, 0, sizeof(ti));
-                ti.cbSize   = sizeof(ti);
-                ti.uFlags   = TTF_SUBCLASS | TTF_IDISHWND;
-                ti.hwnd     = hwnd;
-                ti.uId      = (UINT_PTR)nd->hContextBar;
-                ti.lpszText = LPSTR_TEXTCALLBACK;
-                SendMessage(nd->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
-            }
+
+            TOOLINFO ti;
+            memset(&ti, 0, sizeof(ti));
+            ti.cbSize   = sizeof(ti);
+            ti.uFlags   = TTF_SUBCLASS | TTF_IDISHWND;
+            ti.hwnd     = hwnd;
+            ti.uId      = (UINT_PTR)hwnd;
+            ti.lpszText = LPSTR_TEXTCALLBACK;
+            GetClientRect(hwnd, &ti.rect);
+            SendMessage(nd->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
         }
 
         /* Show loaded conversation or fresh welcome message */
@@ -2211,6 +2388,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
 
         update_context_bar(nd);
+        relayout(nd);
         SetFocus(nd->hInput);
         return 0;
     }
@@ -2244,25 +2422,126 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         /* EN_LINK handling removed — ChatListView handles thinking toggle
          * inline via its own click handling in the list view WndProc. */
         NMHDR *hdr = (NMHDR *)lParam;
-        if (d && hdr && hdr->code == TTN_GETDISPINFOA &&
-            d->hContextBar &&
-            hdr->idFrom == (UINT_PTR)d->hContextBar) {
+        if (d && hdr && hdr->hwndFrom == d->hTooltip &&
+            (hdr->code == TTN_GETDISPINFOA || hdr->code == TTN_NEEDTEXTA) &&
+            hdr->idFrom == (UINT_PTR)hwnd) {
+            /* The one whole-window callback tool covers the painted status
+             * line -- hit-test the cursor to pick the right tip. */
             NMTTDISPINFOA *nm = (NMTTDISPINFOA *)lParam;
-            int actual = d->actual_input_tokens + d->actual_output_tokens;
-            int est = (actual > 0) ? 0
-                                   : ai_context_estimate_tokens(&d->conv);
-            ai_format_context_tooltip(
-                d->actual_input_tokens,
-                d->actual_output_tokens,
-                est,
-                d->context_limit,
-                d->conv.model,
-                d->tooltip_buf, sizeof(d->tooltip_buf));
-            nm->lpszText = d->tooltip_buf;
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            int hit = ai_chat_status_hit(d, pt.x, pt.y);
+            if (hit == STATUS_HIT_SEG0) {
+                nm->lpszText = (LPSTR)"Commands can only read.";
+                return 0;
+            }
+            if (hit == STATUS_HIT_SEG1) {
+                nm->lpszText = (LPSTR)"Commands may change the system.";
+                return 0;
+            }
+            if (hit == STATUS_HIT_AUTO) {
+                nm->lpszText = (LPSTR)"Approve safe commands automatically.";
+                return 0;
+            }
+            /* Otherwise: is the cursor over the context meter? */
+            AiStatusPaint sp;
+            ai_chat_get_status_paint(d, NULL, &sp);
+            NsRect meter = sp.sl.meter_bar.w > 0 ? sp.sl.meter_bar : sp.sl.meter_text;
+            if (sp.has_meter && ai_chat_pt_in_rect(meter, pt.x, pt.y)) {
+                int actual = d->actual_input_tokens + d->actual_output_tokens;
+                int est = (actual > 0) ? 0
+                                       : ai_context_estimate_tokens(&d->conv);
+                ai_format_context_tooltip(
+                    d->actual_input_tokens,
+                    d->actual_output_tokens,
+                    est,
+                    d->context_limit,
+                    d->conv.model,
+                    d->tooltip_buf, sizeof(d->tooltip_buf));
+                nm->lpszText = d->tooltip_buf;
+                return 0;
+            }
+            nm->lpszText = (LPSTR)"";
             return 0;
         }
         break;
     }
+
+    case WM_MOUSEMOVE: {
+        if (d) {
+            int mx = GET_X_LPARAM(lParam);
+            int my = GET_Y_LPARAM(lParam);
+            int hit_id = ai_chat_status_hit(d, mx, my);
+            NsHoverChange ch = ns_hover_move(&d->status_hover, hit_id);
+            if (ch.changed) {
+                RECT old_rc;
+                if (ai_chat_status_rect(d, ch.old_id, &old_rc))
+                    InvalidateRect(hwnd, &old_rc, FALSE);
+                RECT new_rc;
+                if (ch.new_id >= 0 && ai_chat_status_rect(d, ch.new_id, &new_rc))
+                    InvalidateRect(hwnd, &new_rc, FALSE);
+            }
+            if (!d->status_hover_tracking) {
+                TRACKMOUSEEVENT tme;
+                tme.cbSize = sizeof(tme);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                tme.dwHoverTime = 0;
+                if (TrackMouseEvent(&tme)) d->status_hover_tracking = 1;
+            }
+            if (d->hTooltip) {
+                MSG relay = { hwnd, WM_MOUSEMOVE, wParam, lParam, 0, {0, 0} };
+                SendMessage(d->hTooltip, TTM_RELAYEVENT, 0, (LPARAM)&relay);
+            }
+        }
+        return 0;
+    }
+
+    case WM_MOUSELEAVE:
+        if (d) {
+            d->status_hover_tracking = 0;
+            NsHoverChange ch = ns_hover_leave(&d->status_hover);
+            if (ch.changed) {
+                RECT old_rc;
+                if (ai_chat_status_rect(d, ch.old_id, &old_rc))
+                    InvalidateRect(hwnd, &old_rc, FALSE);
+            }
+        }
+        return 0;
+
+    case WM_SETCURSOR:
+        if (d && LOWORD(lParam) == HTCLIENT) {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            int hit_id = ai_chat_status_hit(d, pt.x, pt.y);
+            SetCursor(LoadCursor(NULL, hit_id >= 0 ? IDC_HAND : IDC_ARROW));
+            return TRUE;
+        }
+        break;
+
+    case WM_LBUTTONDOWN:
+        if (d) {
+            int mx = GET_X_LPARAM(lParam);
+            int my = GET_Y_LPARAM(lParam);
+            int hit_id = ai_chat_status_hit(d, mx, my);
+            if (hit_id == STATUS_HIT_SEG0) {
+                if (d->permit_write != 0)
+                    PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CHAT_PERMIT, 0), 0);
+                return 0;
+            }
+            if (hit_id == STATUS_HIT_SEG1) {
+                if (d->permit_write != 1)
+                    PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CHAT_PERMIT, 0), 0);
+                return 0;
+            }
+            if (hit_id == STATUS_HIT_AUTO) {
+                PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CHAT_AUTOAPPROVE, 0), 0);
+                return 0;
+            }
+        }
+        break;
 
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
@@ -2376,7 +2655,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         case IDC_CHAT_PERMIT:
             if (d) {
                 d->permit_write = !d->permit_write;
-                InvalidateRect(d->hPermitBtn, NULL, TRUE);
+                invalidate_status_line(d);
                 if (d->permit_write) {
                     /* Enabling: unblock all blocked commands */
                     chat_approval_unblock_all(&d->approval_q);
@@ -2424,7 +2703,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         case IDC_CHAT_AUTOAPPROVE:
             if (d) {
                 d->approval_q.auto_approve = !d->approval_q.auto_approve;
-                InvalidateRect(d->hAllowAllBtn, NULL, TRUE);
+                invalidate_status_line(d);
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
             }
             return 0;
@@ -2718,43 +2997,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
             break;
         }
-        case IDC_CONTEXT_LABEL:
-            if (d && HIWORD(wParam) == STN_CLICKED) {
-                /* Context label click - removed thinking toggle (now inline in chat) */
-                if (d->context_limit <= 0) {
-                    MessageBox(hwnd,
-                        "Context usage tracking is not available\n"
-                        "for this model (unknown context limit).",
-                        "Compact Context", MB_OK | MB_ICONINFORMATION);
-                } else {
-                    int r = MessageBox(hwnd,
-                        "Trim older messages to free context space?\n"
-                        "The 3 most recent exchanges will be kept.",
-                        "Compact Context", MB_YESNO | MB_ICONQUESTION);
-                    if (r == IDYES) {
-                        EnterCriticalSection(&d->cs);
-                        int removed = ai_conv_compact(&d->conv, 3);
-                        LeaveCriticalSection(&d->cs);
-                        if (removed > 0) {
-                            char cbuf[128];
-                            snprintf(cbuf, sizeof(cbuf),
-                                     "[compacted: removed %d older messages]",
-                                     removed);
-                            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                                            cbuf);
-                            if (d->hChatList)
-                                chat_listview_invalidate(d->hChatList);
-                            update_context_bar(d);
-                        } else {
-                            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                                            "[nothing to compact]");
-                            if (d->hChatList)
-                                chat_listview_invalidate(d->hChatList);
-                        }
-                    }
-                }
-            }
-            return 0;
         case IDC_CHAT_INPUT:
             /* Handle Enter key in input (via EN_CHANGE notification is wrong;
              * we handle it via WM_KEYDOWN subclass or default button) */
@@ -3321,111 +3563,20 @@ next_coalesce:;
         break;
 
     case WM_PAINT:
-        if (d && d->theme && d->activity.phase != ACTIVITY_IDLE) {
-            /* Paint a small activity dot + one-word status in the header bar,
-             * next to the session label.  We paint only in the header strip
-             * so child controls are not affected. */
-            PAINTSTRUCT ps_hdr;
-            HDC hdc_hdr = BeginPaint(hwnd, &ps_hdr);
-            {
-                int pad_h   = ns_scale(4, d->dpi);
-                int btn_h_h = ns_scale(24, d->dpi);
-                int bar_h_h = ns_scale(16, d->dpi);
-                int top_y_h = pad_h + btn_h_h + pad_h; /* session label row y */
-
-                /* Dot position: right end of session label area */
-                RECT rc_lbl;
-                if (d->hSessionLabel) {
-                    GetWindowRect(d->hSessionLabel, &rc_lbl);
-                    MapWindowPoints(NULL, hwnd, (POINT *)&rc_lbl, 2);
-                } else {
-                    SetRect(&rc_lbl, pad_h, top_y_h, ns_scale(200, d->dpi), top_y_h + bar_h_h);
-                }
-
-                /* Get session label text width */
-                SIZE sz_lbl;
-                HGDIOBJ old_f = SelectObject(hdc_hdr,
-                    d->hSmallFont ? d->hSmallFont
-                                  : GetStockObject(DEFAULT_GUI_FONT));
-                char lbl_text[256];
-                GetWindowTextA(d->hSessionLabel, lbl_text, (int)sizeof(lbl_text));
-                GetTextExtentPoint32A(hdc_hdr, lbl_text, (int)strlen(lbl_text), &sz_lbl);
-
-                int dot_sz  = ns_scale(6, d->dpi);
-                int dot_x   = rc_lbl.left + sz_lbl.cx + ns_scale(6, d->dpi);
-                int dot_y   = top_y_h + (bar_h_h - dot_sz) / 2;
-
-                /* Choose colour from health */
-                COLORREF dot_clr;
-                switch (d->activity.health) {
-                case HEALTH_YELLOW:
-                    dot_clr = RGB(((d->theme->chat.indicator_yellow)>>16)&0xFF,
-                                  ((d->theme->chat.indicator_yellow)>>8)&0xFF,
-                                  (d->theme->chat.indicator_yellow)&0xFF);
-                    break;
-                case HEALTH_RED:
-                    dot_clr = RGB(((d->theme->chat.indicator_red)>>16)&0xFF,
-                                  ((d->theme->chat.indicator_red)>>8)&0xFF,
-                                  (d->theme->chat.indicator_red)&0xFF);
-                    break;
-                default:
-                    dot_clr = RGB(((d->theme->chat.indicator_green)>>16)&0xFF,
-                                  ((d->theme->chat.indicator_green)>>8)&0xFF,
-                                  (d->theme->chat.indicator_green)&0xFF);
-                    break;
-                }
-
-                /* Apply pulse: blend with bg on toggle */
-                if (d->pulse_toggle && !ns_reduced_motion()) {
-                    COLORREF bg_c = RGB(((d->theme->bg_primary)>>16)&0xFF,
-                                        ((d->theme->bg_primary)>>8)&0xFF,
-                                        (d->theme->bg_primary)&0xFF);
-                    dot_clr = RGB(
-                        (GetRValue(dot_clr) + GetRValue(bg_c)) / 2,
-                        (GetGValue(dot_clr) + GetGValue(bg_c)) / 2,
-                        (GetBValue(dot_clr) + GetBValue(bg_c)) / 2);
-                }
-
-                /* Draw dot */
-                HBRUSH hDotBr = CreateSolidBrush(dot_clr);
-                HPEN   hDotPn = CreatePen(PS_SOLID, 1, dot_clr);
-                HGDIOBJ ob = SelectObject(hdc_hdr, hDotBr);
-                HGDIOBJ op = SelectObject(hdc_hdr, hDotPn);
-                Ellipse(hdc_hdr, dot_x, dot_y,
-                        dot_x + dot_sz, dot_y + dot_sz);
-                SelectObject(hdc_hdr, op);
-                SelectObject(hdc_hdr, ob);
-                DeleteObject(hDotPn);
-                DeleteObject(hDotBr);
-
-                /* Draw one-word status */
-                const char *word;
-                switch (d->activity.phase) {
-                case ACTIVITY_PROCESSING: word = "Processing"; break;
-                case ACTIVITY_THINKING:   word = "Thinking";   break;
-                case ACTIVITY_RESPONDING:  word = "Responding"; break;
-                case ACTIVITY_EXECUTING:   word = "Executing";  break;
-                case ACTIVITY_WAITING:     word = "Waiting";    break;
-                default:                   word = "";           break;
-                }
-                if (word[0]) {
-                    SetBkMode(hdc_hdr, TRANSPARENT);
-                    SetTextColor(hdc_hdr, dot_clr);
-                    RECT wrc;
-                    wrc.left   = dot_x + dot_sz + ns_scale(4, d->dpi);
-                    wrc.top    = top_y_h;
-                    wrc.right  = rc_lbl.right;
-                    wrc.bottom = top_y_h + bar_h_h;
-                    DrawTextA(hdc_hdr, word, -1, &wrc,
-                              DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-                }
-
-                SelectObject(hdc_hdr, old_f);
-            }
-            EndPaint(hwnd, &ps_hdr);
+        if (d && d->theme) {
+            /* The header's model chip and the status line are painted
+             * elements (not child windows), so they need repainting on
+             * every WM_PAINT regardless of activity; the activity dot +
+             * one-word status inside paint_header() is the only piece
+             * that's conditional on d->activity.phase. */
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            paint_header(d, hdc);
+            paint_status_line(d, hdc);
+            EndPaint(hwnd, &ps);
             return 0;
         }
-        break;  /* Let DefWindowProc handle WM_PAINT when idle */
+        break;
 
     case WM_ERASEBKGND:
         if (d && d->theme) {
@@ -3515,61 +3666,18 @@ next_coalesce:;
                                  &rc, theme_cr(0xFFFFFF), (UINT)d->dpi);
                 }
             } else if ((int)dis->CtlID == IDC_CHAT_SAVE) {
-                /* Square save button with floppy disk icon */
-                HDC hdc = dis->hDC;
-                RECT rc = dis->rcItem;
-                int pressed = (dis->itemState & ODS_SELECTED) != 0;
-                themed_button_track_hover(dis->hwndItem);
-                int hot = !pressed && themed_button_is_hot(dis->hwndItem);
-                COLORREF bg = theme_cr(pressed ? d->theme->bg_primary
-                                       : hot ? ns_tokens()->bg_secondary.hover
-                                             : d->theme->bg_secondary);
-                COLORREF fg = theme_cr(d->theme->text_main);
-                COLORREF bdr = theme_cr(d->theme->border);
-
-                HBRUSH hBgBr = CreateSolidBrush(theme_cr(d->theme->bg_primary));
-                FillRect(hdc, &rc, hBgBr);
-                DeleteObject(hBgBr);
-
-                {
-                    int radius = ns_scale(R_CTRL, d->dpi);
-                    ns_draw_round_fill(hdc, &rc, radius, bg, 255);
-                    ns_draw_round_stroke(hdc, &rc, radius, bdr, STROKE_HAIRLINE);
-                }
-
-                /* Draw save icon */
-                ns_icon_draw(hdc, NS_ICON_SAVE, &rc, fg, (UINT)d->dpi);
+                draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_SAVE);
             } else if ((int)dis->CtlID == IDC_CHAT_UNDOCK) {
-                /* Square undock button with 3D pop-out/dock-in icon */
-                HDC hdc = dis->hDC;
-                RECT brc = dis->rcItem;
-                int pressed = (dis->itemState & ODS_SELECTED) != 0;
-                themed_button_track_hover(dis->hwndItem);
-                int hot = !pressed && themed_button_is_hot(dis->hwndItem);
-                COLORREF bg = theme_cr(pressed ? d->theme->bg_primary
-                                       : hot ? ns_tokens()->bg_secondary.hover
-                                             : d->theme->bg_secondary);
-                COLORREF fg = theme_cr(d->theme->text_main);
-                COLORREF bdr = theme_cr(d->theme->border);
-
-                HBRUSH hBgBr = CreateSolidBrush(theme_cr(d->theme->bg_primary));
-                FillRect(hdc, &brc, hBgBr);
-                DeleteObject(hBgBr);
-
-                {
-                    int radius = ns_scale(R_CTRL, d->dpi);
-                    ns_draw_round_fill(hdc, &brc, radius, bg, 255);
-                    ns_draw_round_stroke(hdc, &brc, radius, bdr, STROKE_HAIRLINE);
-                }
-
-                /* Draw Pop-out/Dock icon */
-                ns_icon_draw(hdc, d->docked ? NS_ICON_UNDOCK : NS_ICON_DOCK,
-                             &brc, fg, (UINT)d->dpi);
-            /* Old IDC_CHAT_ALLOW / IDC_CHAT_DENY draw code removed —
-             * approval buttons are now inline in chat_listview */
-            } else {
-                draw_tab_button(dis, d->theme, d);
+                draw_header_icon_button(dis, d->theme, d->dpi,
+                    d->docked ? NS_ICON_UNDOCK : NS_ICON_DOCK);
+            } else if ((int)dis->CtlID == IDC_CHAT_NEWCHAT) {
+                draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_NEW_CHAT);
             }
+            /* Old IDC_CHAT_ALLOW / IDC_CHAT_DENY draw code removed —
+             * approval buttons are now inline in chat_listview. The
+             * owner-drawn Permit Write / Auto Approve "tab" buttons are
+             * gone too -- both are shown/clicked in the status line
+             * instead (WM_PAINT / ai_chat_status_hit()). */
             return TRUE;
         }
         break;
@@ -3823,6 +3931,11 @@ void ai_chat_refresh_fonts(HWND hwnd)
     if (!d) return;
 
     d->hFont = ns_font(FONT_BODY, d->dpi);
+    /* The session label's font comes from the same cache (ns_font_flush()
+     * invalidates the handle it was last given), so re-fetch it here. */
+    if (d->hSessionLabel)
+        SendMessage(d->hSessionLabel, WM_SETFONT,
+                    (WPARAM)ns_font(FONT_TITLE, d->dpi), TRUE);
     InvalidateRect(hwnd, NULL, TRUE);
 }
 
@@ -3840,11 +3953,6 @@ void ai_chat_set_theme(HWND hwnd, const char *colour_scheme)
     if (d->hBrBgSecondary) DeleteObject(d->hBrBgSecondary);
     d->hBrBgPrimary   = CreateSolidBrush(theme_cr(d->theme->bg_primary));
     d->hBrBgSecondary = CreateSolidBrush(theme_cr(d->theme->bg_secondary));
-
-    /* Update context bar background to match theme */
-    if (d->hContextBar)
-        SendMessage(d->hContextBar, PBM_SETBKCOLOR, 0,
-                    (LPARAM)theme_cr(d->theme->bg_primary));
 
     /* Update ChatListView theme */
     if (d->hChatList)

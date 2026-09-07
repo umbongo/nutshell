@@ -79,6 +79,31 @@ void ns_draw_icon_label(HDC hdc, const RECT *rc, NsIconId icon,
 /* A STROKE_HAIRLINE horizontal rule from x1 to x2 at y. */
 void ns_draw_separator(HDC hdc, int x1, int x2, int y, COLORREF colour);
 
+/* NsRect is core geometry (src/core/ns_layout.h); forward-declared here via
+ * the header instead of re-typedef'd so callers that already include
+ * ns_layout.h (or ai_panel_layout.h, which pulls it in) don't collide. */
+#include "ns_layout.h"
+
+/* A two-segment "segmented control" that reads as one piece: an outer
+ * `border` stroke at R_CTRL radius around both segments together, the
+ * selected segment filled `raised.base` with `text_main` label text (or,
+ * when `selected_is_warning`, `warning.base` fill with `warning.label`
+ * text -- used for a permissive/dangerous selection the user should
+ * notice), the other segment unfilled with `text_dim` text. `hover_state`
+ * is an NsBtnState (NS_BTN_REST/HOVER/PRESSED) per segment; hovering the
+ * unselected segment lightens it via the surface's `.hover`. `seg`/`labels`
+ * are indexed 0/1 left-to-right; `font` draws both labels. */
+void ns_draw_segmented(HDC hdc, const NsRect seg[2],
+                       const char *const labels[2], int selected,
+                       int selected_is_warning, const ThemeTokens *tokens,
+                       const int hover_state[2], HFONT font, int dpi);
+
+/* A context-usage meter: a `raised.base` pill-shaped track filling `bar`
+ * and an `accent.base` pill-shaped fill over the left `fraction` of it
+ * (clamped to [0, 1]). Pill radius via ns_type_pill(bar->h). */
+void ns_draw_meter(HDC hdc, const NsRect *bar, double fraction,
+                   const ThemeTokens *tokens);
+
 /* A keyboard-focus ring: STROKE_RULE wide, radius ns_scale(R_CTRL, dpi),
  * inset 1 px inside `rc`. */
 void ns_draw_focus_ring(HDC hdc, const RECT *rc, COLORREF colour, int dpi);

@@ -271,6 +271,87 @@ void ns_draw_chip(HDC hdc, const RECT *rc, COLORREF bg, COLORREF fg,
     if (oldfont) SelectObject(hdc, oldfont);
 }
 
+/* ── Segmented control ─────────────────────────────────────────────── */
+
+void ns_draw_segmented(HDC hdc, const NsRect seg[2],
+                       const char *const labels[2], int selected,
+                       int selected_is_warning, const ThemeTokens *tokens,
+                       const int hover_state[2], HFONT font, int dpi)
+{
+    if (!hdc || !seg || !labels || !tokens) return;
+
+    RECT outer;
+    outer.left   = seg[0].x < seg[1].x ? seg[0].x : seg[1].x;
+    outer.top    = seg[0].y < seg[1].y ? seg[0].y : seg[1].y;
+    outer.right  = (seg[0].x + seg[0].w > seg[1].x + seg[1].w)
+                 ? seg[0].x + seg[0].w : seg[1].x + seg[1].w;
+    outer.bottom = (seg[0].y + seg[0].h > seg[1].y + seg[1].h)
+                 ? seg[0].y + seg[0].h : seg[1].y + seg[1].h;
+
+    int radius = ns_scale(R_CTRL, dpi);
+    ns_draw_round_stroke(hdc, &outer, radius, NS_CR(tokens->border),
+                         STROKE_HAIRLINE);
+
+    HFONT old_font = font ? (HFONT)SelectObject(hdc, font) : NULL;
+    int old_bk = SetBkMode(hdc, TRANSPARENT);
+
+    for (int i = 0; i < 2; i++) {
+        RECT rc = { seg[i].x, seg[i].y, seg[i].x + seg[i].w, seg[i].y + seg[i].h };
+        int is_selected = (i == selected);
+
+        COLORREF fill_cr;
+        COLORREF label_cr;
+        if (is_selected) {
+            fill_cr = selected_is_warning ? NS_CR(tokens->warning.base)
+                                          : NS_CR(tokens->raised.base);
+            label_cr = selected_is_warning ? NS_CR(tokens->warning.label)
+                                           : NS_CR(tokens->text_main);
+        } else {
+            fill_cr = (hover_state && hover_state[i] == NS_BTN_HOVER)
+                    ? NS_CR(tokens->bg_secondary.hover)
+                    : NS_CR(tokens->bg_secondary.base);
+            label_cr = NS_CR(tokens->text_dim);
+        }
+        ns_draw_round_fill(hdc, &rc, radius, fill_cr, 255);
+
+        COLORREF old_tc = SetTextColor(hdc, label_cr);
+        draw_utf8_text(hdc, &rc, labels[i],
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SetTextColor(hdc, old_tc);
+    }
+
+    SetBkMode(hdc, old_bk);
+    if (old_font) SelectObject(hdc, old_font);
+
+    /* Re-stroke the border on top so the segment fills never bleed over
+     * the outer edge (rounded corners of each segment can slightly
+     * overpaint it). */
+    ns_draw_round_stroke(hdc, &outer, radius, NS_CR(tokens->border),
+                         STROKE_HAIRLINE);
+}
+
+/* ── Context meter ──────────────────────────────────────────────────── */
+
+void ns_draw_meter(HDC hdc, const NsRect *bar, double fraction,
+                   const ThemeTokens *tokens)
+{
+    if (!hdc || !bar || !tokens) return;
+    if (bar->w <= 0 || bar->h <= 0) return;
+
+    if (fraction < 0.0) fraction = 0.0;
+    if (fraction > 1.0) fraction = 1.0;
+
+    RECT track = { bar->x, bar->y, bar->x + bar->w, bar->y + bar->h };
+    int radius = ns_type_pill(bar->h);
+    ns_draw_round_fill(hdc, &track, radius, NS_CR(tokens->raised.base), 255);
+
+    int fill_w = (int)((double)bar->w * fraction + 0.5);
+    if (fill_w > 0) {
+        RECT fill = { bar->x, bar->y, bar->x + fill_w, bar->y + bar->h };
+        ns_draw_round_fill(hdc, &fill, radius, NS_CR(tokens->accent.base), 255);
+    }
+}
+
 /* ── Status pulse ───────────────────────────────────────────────────── */
 
 void ns_draw_pulse(HDC hdc, const RECT *rc, COLORREF colour, float phase)
