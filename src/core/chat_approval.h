@@ -62,6 +62,15 @@ void chat_approval_revoke_auto(ApprovalQueue *q);
 /* Check if all commands have been decided (no PENDING). */
 int chat_approval_all_decided(const ApprovalQueue *q);
 
+/* Does the approval card need to stay up for the user to act on?
+ * Returns 1 when any entry is still PENDING, or when at least one entry
+ * is BLOCKED and nothing in the queue is APPROVED (so nothing would run
+ * -- the card must stay up so the user can switch to Read + write and
+ * run, or Deny all). Returns 0 for an empty queue, or once every entry
+ * is settled into APPROVED/DENIED (with at least one APPROVED alongside
+ * any BLOCKED entries -- the auto-approve case, where something runs). */
+int chat_approval_needs_user(const ApprovalQueue *q);
+
 /* Get next approved command that hasn't started executing.
  * Returns entry index, or -1 if none. */
 int chat_approval_next_approved(const ApprovalQueue *q);

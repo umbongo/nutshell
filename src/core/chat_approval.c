@@ -107,6 +107,21 @@ int chat_approval_all_decided(const ApprovalQueue *q)
     return 1;
 }
 
+int chat_approval_needs_user(const ApprovalQueue *q)
+{
+    int any_blocked = 0, any_approved = 0;
+    for (int i = 0; i < q->count; i++) {
+        if (q->entries[i].status == APPROVE_PENDING)
+            return 1;
+        if (q->entries[i].status == APPROVE_BLOCKED)
+            any_blocked = 1;
+        if (q->entries[i].status == APPROVE_APPROVED)
+            any_approved = 1;
+    }
+    if (any_blocked && !any_approved) return 1;
+    return 0;
+}
+
 int chat_approval_next_approved(const ApprovalQueue *q)
 {
     for (int i = 0; i < q->count; i++) {

@@ -27,6 +27,11 @@ $Exe = (Resolve-Path $Exe).Path
 
 $results = New-Object System.Collections.ArrayList
 
+# WM_COMMAND itself is a module-private constant ($script:WM_COMMAND inside
+# NutshellIT.psm1, not exported); cases in this script that need to post one
+# directly (rather than through a helper like Send-NutshellCommand) use this.
+$WM_COMMAND = 0x0111
+
 function Invoke-Case {
     param([string] $Name, [hashtable] $Settings, [scriptblock] $Body)
     if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
@@ -221,11 +226,11 @@ Invoke-AiCase "ai_runs_safe_command_with_auto_approve" {
     "AI ran echo $marker via auto-approve"
 }
 
-Invoke-AiCase "ai_write_command_blocked_without_permit_write" {
+Invoke-AiCase "ai_write_command_held_then_runs_after_permit" {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
-    Open-NutshellAiPanel -Session $s | Out-Null
+    $p = Open-NutshellAiPanel -Session $s
     Set-NutshellAiAutoApprove -Session $s          # auto-approve on, Permit Write still off
     $file = "/tmp/nutshell_it_blocked_" + (Get-Random -Minimum 100 -Maximum 999)
     Send-NutshellAiPrompt -Session $s -Text "Run exactly this shell command and nothing else, no explanation: touch $file"
@@ -238,7 +243,20 @@ Invoke-AiCase "ai_write_command_blocked_without_permit_write" {
     # Anchor to a line start: the echoed command line itself contains both words.
     Assert-True (Wait-NutshellLog -Session $s -Pattern '(?m)^BLOCK_(OK|FAIL)\s*$' -TimeoutSec 8) "the existence check never reached the shell"
     Assert-True ((Get-NutshellLogText -Session $s) -notmatch '(?m)^BLOCK_FAIL\s*$') "the file exists: the write command was executed"
-    "write command held back; $file not created"
+
+    # Bug 2 regression: switch to Read + write (IDC_CHAT_PERMIT) and run the
+    # held command via "Run N selected" (IDC_CMD_APPROVE_SEL) -- before the
+    # fix, the write-only batch was never queued (only safe commands were),
+    # so queued_count stayed 0 and nothing ran even after unblocking.
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4005, [IntPtr]::Zero) | Out-Null   # IDC_CHAT_PERMIT
+    Start-Sleep -Seconds 1
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]3045, [IntPtr]::Zero) | Out-Null   # IDC_CMD_APPROVE_SEL
+    Assert-True (Wait-NutshellLog -Session $s -Pattern ([regex]::Escape("touch $file")) -TimeoutSec 10) "the held command never reached the terminal after switching to Read + write and running it"
+
+    Send-NutshellLine -Session $s -Line "test -e $file && echo RAN_OK || echo RAN_FAIL"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern '(?m)^RAN_(OK|FAIL)\s*$' -TimeoutSec 8) "the post-run existence check never reached the shell"
+    Assert-True ((Get-NutshellLogText -Session $s) -match '(?m)^RAN_OK\s*$') "the file still does not exist: the held command was not actually run"
+    "write command held back, then ran after Permit Write + Run selected; $file created"
 }
 
 # ---- UI gallery ----------------------------------------------------------------
@@ -320,6 +338,61 @@ if ($Only.Count -eq 0 -or $Only -contains "ui_gallery") {
     $galleryReport = $galleryDetail -join "; "
     if ($galleryOk) { Write-Host "[PASS] ui_gallery" } else { Write-Host ("[FAIL] ui_gallery -- " + $galleryReport) }
     [void]$results.Add([pscustomobject]@{ Name = "ui_gallery"; Passed = $galleryOk; Detail = $galleryReport })
+}
+
+# ---- Approval card: Run N selected settles without crashing --------------------
+# Regression for the v1.0.97 crash fix: build_cmd_card_geometry derived its row
+# count from the stale lv->cmd_count left over from before the last settle
+# instead of the live walk, so WM_PAINT (which never recalc_layouts) could paint
+# a command row against a NULL cmd_items[] slot. --ui-demo=approval seeds a
+# live container with one PENDING and one BLOCKED command; IDC_CMD_APPROVE_SEL
+# ("Run N selected") drives the exact settle-then-repaint path that crashed.
+# Needs no SSH host or AI key -- --ui-demo never connects -- so this runs as
+# its own block like ui_gallery above, not through Invoke-Case/Invoke-AiCase
+# (both assume a live shell prompt).
+if ($Only.Count -eq 0 -or $Only -contains "approval_card_run_selected_settles") {
+    $name = "approval_card_run_selected_settles"
+    Write-Host ("[RUN ] " + $name)
+    $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+    $session = $null
+    $ok = $false; $detail = ""
+    try {
+        $session = Start-Nutshell -Env $testEnv -ExtraArgs @("--ui-demo=approval")
+        Start-Sleep -Seconds 2
+        $p = Get-NutshellAiPanel -Session $session
+        if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel did not open in --ui-demo=approval" }
+        [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]3045, [IntPtr]::Zero) | Out-Null  # IDC_CMD_APPROVE_SEL
+        # Poll rather than a single sleep-then-check: right after an access
+        # violation the process can sit in WER's crash-handling dialog for a
+        # moment with HasExited still False (window present but frozen), so
+        # a lone HasExited check after one sleep can read as "alive" even
+        # though the app already crashed -- Responding (a live SendMessage
+        # ping) flips False as soon as the UI thread stops pumping messages,
+        # well before the process actually terminates.
+        $crashed = $false
+        for ($i = 0; $i -lt 10; $i++) {
+            Start-Sleep -Milliseconds 500
+            $session.Process.Refresh()
+            if ($session.Process.HasExited -or -not $session.Process.Responding) { $crashed = $true; break }
+        }
+        Assert-True (-not $crashed) "nutshell.exe crashed (or stopped responding) after Run N selected on the approval card"
+        $path = Join-Path $Artifacts "$name.png"
+        Save-NutshellScreenshot -Session $session -Path $path | Out-Null
+        Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: $name.png"
+        $detail = "process survived Run N selected on the approval card; capture non-blank"
+        $ok = $true
+    } catch {
+        $detail = $_.Exception.Message
+        if ($session) { try { Save-NutshellScreenshot -Session $session -Path (Join-Path $Artifacts "$name-FAIL.png") | Out-Null } catch {} }
+    } finally {
+        if ($session) { Stop-Nutshell -Session $session }
+        for ($try = 0; $try -lt 5 -and (Test-Path $testEnv.Root); $try++) {
+            Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+            if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
+        }
+    }
+    if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
+    [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
 }
 
 # ---- AI panel without a key -----------------------------------------------------

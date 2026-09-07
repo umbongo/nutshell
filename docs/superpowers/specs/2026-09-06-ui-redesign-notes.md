@@ -189,6 +189,37 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
   - Thomas to review the gallery (all 36 captures, not just the four sampled above)
     before sub-project 3 starts.
 
+- [x] **Two approval-card bugs fixed (v1.0.97).** Crash: clicking "Run N selected"
+      settled the active commands but only invalidated `chat_listview` *before* the
+      settle, not after; `WM_PAINT` doesn't recalc_layout on its own, so it painted
+      the command container against a stale `cmd_count` with zero live items behind
+      it and dereferenced a NULL `cmd_items[]` slot. Fixed at every layer:
+      `build_cmd_card_geometry` now derives its row count from the live walk instead
+      of `lv->cmd_count`, the paint/hit-test loops guard a NULL slot regardless, a
+      settled item paints nothing even with a stale non-zero `measured_height`, and
+      `settle_all_commands` (now taking `AiChatData *`) always re-invalidates after
+      settling. Held commands: when Permit write was off, write commands were
+      dropped from `d->queued_cmds`/the approval queue entirely (only shown as
+      blocked chips), so switching to Read + write and hitting "Run N selected"
+      queued nothing — a write-only batch had no path to ever run. Every extracted
+      command is now always queued through `chat_approval_add` (blocked commands
+      included), keeping item/queue/`queued_cmds` order identical always; added
+      `chat_approval_needs_user()` (TDD, `tests/test_chat_approval.c`) to decide
+      whether the card must stay up. New integration case
+      `approval_card_run_selected_settles` (no SSH/key needed, `--ui-demo=approval`)
+      and `ai_write_command_held_then_runs_after_permit` (renamed/extended from
+      `ai_write_command_blocked_without_permit_write`) cover the regressions. Native
+      suite green at 1,707 tests (up from 1,699).
+
+- [ ] Thinking disclosure: measured height disagrees with painted height. Two
+      v1.0.97 integration captures show the approval card, and separately the
+      "Waiting for output…" indicator, painted over an open Thinking block
+      (`tests/integration/artifacts/ai_blocked_command.png`). The AI item is
+      being measured as if the block were collapsed (or shorter) while
+      `paint_ai_item` draws it open — most likely the item isn't remeasured
+      after the reply finalises with thinking attached. Fix with the three
+      review bugs, before sub-project 3.
+
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.

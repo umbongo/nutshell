@@ -1424,8 +1424,6 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
     g->clip_top   = g->box_top + border_w;
     g->clip_bot   = g->box_bot - border_w;
 
-    int n = lv->cmd_count;
-    if (n > APPROVAL_MAX_CMDS) n = APPROVAL_MAX_CMDS;
     int checked_arr[APPROVAL_MAX_CMDS], held_arr[APPROVAL_MAX_CMDS];
     int ci = 0;
     ChatMsgItem *c = lv->msg_list ? lv->msg_list->head : NULL;
@@ -1440,6 +1438,13 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
         }
         c = c->next;
     }
+    /* n comes from the walk above (ci), not lv->cmd_count: WM_PAINT does
+     * not recalc_layout, so cmd_count can be stale relative to what's
+     * actually unsettled right now (e.g. right after a settle with no
+     * re-layout). Deriving n from ci keeps it in sync with cmd_items[]
+     * so no slot below n is ever left NULL. Already clamped to
+     * APPROVAL_MAX_CMDS by the while loop condition above. */
+    int n = ci;
     g->n = n;
     g->run_enabled = g->checked_count > 0;
 
@@ -1557,6 +1562,7 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         const ApprovalRowLayout *rowl = &g.layout.rows[i];
         if (rowl->tag.w <= 0 && rowl->text.w <= 0) continue;
         ChatMsgItem *citem = g.cmd_items[g.first_row + i];
+        if (!citem) continue;
         paint_cmd_row(lv, hdc, citem, rowl, i);
     }
 
@@ -2127,9 +2133,15 @@ static void on_paint(ChatListView *lv)
                 break;
             case CHAT_ITEM_COMMAND:
                 /* Settled commands measure to h=0 (see measure_item) and
-                 * are skipped by the h==0 check above, so this is always
-                 * an unsettled, live command-queue item. */
-                paint_cmd_container(lv, mem_dc, &item_rc);
+                 * are normally skipped by the h==0 check above. But
+                 * WM_PAINT never calls recalc_layout, so an item that was
+                 * just settled (settle_all_commands) without a re-layout
+                 * can still carry a stale non-zero measured_height here.
+                 * Painting it would call into paint_cmd_container with a
+                 * container that now has zero live (unsettled) items --
+                 * skip it instead of crashing on the mismatch. */
+                if (!item->u.cmd.settled)
+                    paint_cmd_container(lv, mem_dc, &item_rc);
                 break;
             case CHAT_ITEM_TOOL_CALL:
             case CHAT_ITEM_TOOL_RESULT:
@@ -2669,7 +2681,7 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
                 int real_idx = g.first_row + row_out;
                 if (real_idx >= 0 && real_idx < g.n) {
                     ChatMsgItem *citem = g.cmd_items[real_idx];
-                    if (!citem->u.cmd.blocked && citem->u.cmd.approved == -1) {
+                    if (citem && !citem->u.cmd.blocked && citem->u.cmd.approved == -1) {
                         citem->u.cmd.selected = !citem->u.cmd.selected;
                         InvalidateRect(lv->hwnd, NULL, FALSE);
                     }

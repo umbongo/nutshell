@@ -386,6 +386,101 @@ int test_approval_auto_approve_all_permit_write_off_still_blocked(void) {
     TEST_END();
 }
 
+/* --- chat_approval_needs_user: does the approval card need to stay up? --- */
+
+int test_needs_user_empty_queue(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_EQ(chat_approval_needs_user(&q), 0);
+    TEST_END();
+}
+
+int test_needs_user_all_pending(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX, 1);
+    chat_approval_add(&q, "cat f", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ(chat_approval_needs_user(&q), 1);
+    TEST_END();
+}
+
+int test_needs_user_pending_and_blocked(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX, 1);       /* pending */
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 0);   /* blocked */
+    ASSERT_EQ(chat_approval_needs_user(&q), 1);
+    TEST_END();
+}
+
+int test_needs_user_blocked_only(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    /* Every command is a write and permit_write is off: nothing pending,
+     * nothing approved, but nothing will run either -- the card must
+     * stay up so the user can switch to Read + write and run, or deny. */
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 0);
+    chat_approval_add(&q, "rm f", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ(chat_approval_needs_user(&q), 1);
+    TEST_END();
+}
+
+int test_needs_user_blocked_and_approved_auto_approve(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.auto_approve = 1;
+    /* Safe command auto-approves; write command with permit_write=0
+     * is blocked. Since something WILL run, the card doesn't need to
+     * stay up for the blocked one -- it's just noise on the side. */
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX, 1);
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_BLOCKED);
+    ASSERT_EQ(chat_approval_needs_user(&q), 0);
+    TEST_END();
+}
+
+int test_needs_user_approved_only(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX, 1);
+    chat_approval_approve(&q, 0);
+    ASSERT_EQ(chat_approval_needs_user(&q), 0);
+    TEST_END();
+}
+
+int test_needs_user_denied_only(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX, 1);
+    chat_approval_deny(&q, 0);
+    ASSERT_EQ(chat_approval_needs_user(&q), 0);
+    TEST_END();
+}
+
+int test_needs_user_after_unblock_all(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    /* Blocked-only batch needs the user... */
+    chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ(chat_approval_needs_user(&q), 1);
+    /* ...and after Permit Write turns on and unblocks it, it's now
+     * PENDING, which still needs the user (to actually run it). */
+    int n = chat_approval_unblock_all(&q);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_PENDING);
+    ASSERT_EQ(chat_approval_needs_user(&q), 1);
+    TEST_END();
+}
+
 /* --- Permit-write toggle conversation injection tests --- */
 
 /* When permit_write is toggled ON and there is an active conversation,

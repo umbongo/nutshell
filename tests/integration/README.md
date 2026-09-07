@@ -48,7 +48,8 @@ removed.
 | `resize_applies_to_inactive_tab` | a tab resized while in the background reports the new `tput lines` when activated |
 | `ai_panel_docks_with_key` | View › AI Assist docks the panel without a dialog |
 | `ai_runs_safe_command_with_auto_approve` | a prompted `echo` runs in the terminal via `[EXEC]` + Auto Approve |
-| `ai_write_command_blocked_without_permit_write` | a prompted `touch` is held back while Permit Write is off |
+| `ai_write_command_held_then_runs_after_permit` | a prompted `touch` is held back while Permit Write is off, then runs via "Run N selected" once Permit Write is switched on |
+| `approval_card_run_selected_settles` | "Run N selected" on a live approval card (`--ui-demo=approval`) settles without crashing; no SSH host or AI key needed |
 
 ## AI Assist cases
 

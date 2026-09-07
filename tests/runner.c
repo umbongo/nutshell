@@ -1608,6 +1608,16 @@ int test_token_null_output_pointers_safe(void);
 int test_token_null_json_returns_error(void);
 int test_token_message_start_no_usage_field(void);
 
+/* test_chat_approval.c — chat_approval_needs_user */
+int test_needs_user_empty_queue(void);
+int test_needs_user_all_pending(void);
+int test_needs_user_pending_and_blocked(void);
+int test_needs_user_blocked_only(void);
+int test_needs_user_blocked_and_approved_auto_approve(void);
+int test_needs_user_approved_only(void);
+int test_needs_user_denied_only(void);
+int test_needs_user_after_unblock_all(void);
+
 /* test_chat_approval.c — permit-write toggle */
 int test_permit_toggle_corrective_msg_appended(void);
 int test_permit_toggle_no_inject_when_conv_empty(void);
@@ -3508,6 +3518,16 @@ int main(void) {
     failed += test_token_null_output_pointers_safe();
     failed += test_token_null_json_returns_error();
     failed += test_token_message_start_no_usage_field();
+
+    printf("\n--- Approval Queue: needs_user ---\n");
+    failed += test_needs_user_empty_queue();
+    failed += test_needs_user_all_pending();
+    failed += test_needs_user_pending_and_blocked();
+    failed += test_needs_user_blocked_only();
+    failed += test_needs_user_blocked_and_approved_auto_approve();
+    failed += test_needs_user_approved_only();
+    failed += test_needs_user_denied_only();
+    failed += test_needs_user_after_unblock_all();
 
     printf("\n--- Permit-Write Toggle ---\n");
     failed += test_permit_toggle_corrective_msg_appended();

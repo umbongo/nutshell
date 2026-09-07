@@ -1186,9 +1186,14 @@ static void launch_stream_thread(AiChatData *d)
 }
 
 /* Mark all current command items as settled so they render inline
- * and are excluded from the active command container. */
-static void settle_all_commands(ChatMsgList *list)
+ * and are excluded from the active command container. Always follows
+ * up with a re-layout (chat_listview_invalidate), since WM_PAINT does
+ * not recalc_layout on its own -- without this, a stale measured_height
+ * from before the settle can leave WM_PAINT painting a command
+ * container against zero live items. */
+static void settle_all_commands(AiChatData *d)
 {
+    ChatMsgList *list = &d->msg_list;
     ChatMsgItem *it = list->head;
     while (it) {
         if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
@@ -1197,6 +1202,7 @@ static void settle_all_commands(ChatMsgList *list)
         }
         it = it->next;
     }
+    if (d->hChatList) chat_listview_invalidate(d->hChatList);
 }
 
 /* Cancel the active AI stream: signal abort, clear busy, reset UI state.
@@ -2818,7 +2824,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 /* Check if all decided — if so, wrap up */
                 if (chat_approval_all_decided(&d->approval_q)) {
                     d->pending_approval = 0;
-                    settle_all_commands(&d->msg_list);
+                    settle_all_commands(d);
                     d->commands_executed = d->queued_count;
                     start_indicator(d, "waiting for output");
                     {
@@ -2854,7 +2860,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 /* Check if all decided */
                 if (chat_approval_all_decided(&d->approval_q)) {
                     d->pending_approval = 0;
-                    settle_all_commands(&d->msg_list);
+                    settle_all_commands(d);
                     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                     "[some commands denied]");
                     if (d->hChatList)
@@ -2878,7 +2884,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 }
 
                 d->pending_approval = 0;
-                settle_all_commands(&d->msg_list);
+                settle_all_commands(d);
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
                 /* Execute all approved commands */
@@ -2965,7 +2971,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     if (d->hChatList)
                         chat_listview_invalidate(d->hChatList);
                 }
-                settle_all_commands(&d->msg_list);
+                settle_all_commands(d);
                 SetFocus(d->hInput);
                 return 0;
             }
@@ -2984,7 +2990,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     it = it->next;
                 }
                 d->pending_approval = 0;
-                settle_all_commands(&d->msg_list);
+                settle_all_commands(d);
                 if (d->hChatList) chat_listview_invalidate(d->hChatList);
                 chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                                 "[all commands cancelled]");
@@ -3350,74 +3356,74 @@ next_coalesce:;
             d->stream_phase = 0;
 
             /* Settle old command items so they render inline */
-            settle_all_commands(&d->msg_list);
-
-            /* Filter out write commands when permit_write is off */
-            if (ncmds > 0 && !d->permit_write) {
-                int ncmds_before = ncmds;
-                char filtered[16][1024];
-                int nfiltered = 0;
-                for (int ci = 0; ci < ncmds; ci++) {
-                    if (ai_command_is_readonly(cmds[ci])) {
-                        memcpy(filtered[nfiltered], cmds[ci],
-                               sizeof(filtered[0]));
-                        nfiltered++;
-                    } else {
-                        /* Show blocked command as CHAT_ITEM_COMMAND */
-                        ChatMsgItem *blk = chat_msg_append(
-                            &d->msg_list, CHAT_ITEM_COMMAND, "");
-                        if (blk)
-                            chat_msg_set_command(blk, cmds[ci],
-                                CMD_WRITE, 1);
-                    }
-                }
-                if (nfiltered < ncmds_before) {
-                    char bmsg[2048];
-                    int bp = snprintf(bmsg, sizeof(bmsg),
-                        "NOTE: The following commands were BLOCKED by "
-                        "the user's read-only security policy and were "
-                        "NOT executed:\n");
-                    for (int ci = 0; ci < ncmds; ci++) {
-                        if (!ai_command_is_readonly(cmds[ci]))
-                            bp += snprintf(bmsg + bp,
-                                sizeof(bmsg) - (size_t)bp,
-                                "  - %s\n", cmds[ci]);
-                    }
-                    snprintf(bmsg + bp, sizeof(bmsg) - (size_t)bp,
-                        "Do NOT claim these commands were executed. "
-                        "If the user needs these actions, tell them "
-                        "to enable 'Permit Write' and try again.");
-                    EnterCriticalSection(&d->cs);
-                    ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
-                    LeaveCriticalSection(&d->cs);
-                }
-                memcpy(cmds, filtered,
-                       (size_t)nfiltered * sizeof(cmds[0]));
-                ncmds = nfiltered;
-            }
+            settle_all_commands(d);
 
             if (ncmds > 0) {
-                /* Reset approval queue for this batch */
+                /* Reset approval queue for this batch, then classify and
+                 * queue every extracted command in order -- including
+                 * write commands when permit_write is off, which
+                 * chat_approval_add marks APPROVE_BLOCKED rather than
+                 * silently dropping. This keeps item order == queue
+                 * order == queued_cmds order always, so index-based
+                 * execution (APPROVE_SEL etc.) can never run the wrong
+                 * command, and a write-only batch still shows up as a
+                 * held card the user can run after switching to
+                 * Read + write (see chat_approval_needs_user below). */
                 chat_approval_reset(&d->approval_q);
 
-                /* Create CHAT_ITEM_COMMAND items and populate approval queue */
+                int queued = 0;
                 for (int ci = 0; ci < ncmds; ci++) {
+                    int idx = chat_approval_add(&d->approval_q, cmds[ci],
+                                                CMD_PLATFORM_LINUX,
+                                                d->permit_write);
+                    if (idx < 0) continue;  /* queue full or blank -- drop it */
+
                     ChatMsgItem *cmd_item = chat_msg_append(
                         &d->msg_list, CHAT_ITEM_COMMAND, "");
                     if (cmd_item)
                         chat_msg_set_command(cmd_item, cmds[ci],
-                            CMD_SAFE, 0);
-                    chat_approval_add(&d->approval_q, cmds[ci],
-                                      CMD_PLATFORM_LINUX, d->permit_write);
-                }
+                            d->approval_q.entries[idx].safety,
+                            d->approval_q.entries[idx].status == APPROVE_BLOCKED);
 
-                /* Stash commands */
-                memcpy(d->queued_cmds, cmds,
-                       (size_t)ncmds * sizeof(cmds[0]));
-                d->queued_count = ncmds;
+                    memcpy(d->queued_cmds[queued], cmds[ci],
+                           sizeof(d->queued_cmds[0]));
+                    queued++;
+                }
+                d->queued_count = queued;
                 d->queued_next = 0;
 
-                if (chat_approval_all_decided(&d->approval_q)) {
+                /* Tell the AI which commands (if any) were blocked by the
+                 * read-only policy -- classified straight from the queue,
+                 * which is the single source of truth for write/critical
+                 * classification (cmd_classify, via chat_approval_add). */
+                {
+                    int nblocked = 0;
+                    for (int qi = 0; qi < d->approval_q.count; qi++)
+                        if (d->approval_q.entries[qi].status == APPROVE_BLOCKED)
+                            nblocked++;
+                    if (nblocked > 0) {
+                        char bmsg[2048];
+                        int bp = snprintf(bmsg, sizeof(bmsg),
+                            "NOTE: The following commands were BLOCKED by "
+                            "the user's read-only security policy and were "
+                            "NOT executed:\n");
+                        for (int qi = 0; qi < d->approval_q.count; qi++) {
+                            if (d->approval_q.entries[qi].status == APPROVE_BLOCKED)
+                                bp += snprintf(bmsg + bp,
+                                    sizeof(bmsg) - (size_t)bp,
+                                    "  - %s\n", d->approval_q.entries[qi].command);
+                        }
+                        snprintf(bmsg + bp, sizeof(bmsg) - (size_t)bp,
+                            "Do NOT claim these commands were executed. "
+                            "If the user needs these actions, tell them "
+                            "to enable 'Permit Write' and try again.");
+                        EnterCriticalSection(&d->cs);
+                        ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
+                        LeaveCriticalSection(&d->cs);
+                    }
+                }
+
+                if (!chat_approval_needs_user(&d->approval_q)) {
                     /* Auto-approve already decided all commands —
                      * skip approval UI and execute immediately */
                     d->pending_approval = 0;
@@ -3435,7 +3441,7 @@ next_coalesce:;
                             it = it->next;
                         }
                     }
-                    settle_all_commands(&d->msg_list);
+                    settle_all_commands(d);
                     {
                         float now_e = (float)GetTickCount() / 1000.0f;
                         chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now_e);
