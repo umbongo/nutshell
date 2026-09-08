@@ -1717,6 +1717,25 @@ int test_md_next_word_leading_space(void);
 int test_md_next_word_only_spaces(void);
 int test_md_next_word_empty(void);
 int test_md_next_word_long_run(void);
+
+/* test_md_table.c — src/core/md_table.c */
+int test_md_table_split_basic(void);
+int test_md_table_split_no_outer_pipes(void);
+int test_md_table_split_escaped_pipe(void);
+int test_md_table_split_empty_cells(void);
+int test_md_table_split_ragged_row(void);
+int test_md_table_split_max_cells_caps_output(void);
+int test_md_table_split_null_and_empty(void);
+int test_md_table_split_single_empty_cell(void);
+int test_md_table_alignments_mixed(void);
+int test_md_table_alignments_not_a_separator(void);
+int test_md_table_alignments_null_safe(void);
+int test_md_table_fit_columns_fits_unchanged(void);
+int test_md_table_fit_columns_one_wide_shrinks(void);
+int test_md_table_fit_columns_two_wide_shrink_equal(void);
+int test_md_table_fit_columns_minimums_respected(void);
+int test_md_table_fit_columns_overflow(void);
+int test_md_table_fit_columns_null_safe(void);
 int test_md_next_word_tab_is_whitespace(void);
 
 /* test_json_validate.c */
@@ -3692,6 +3711,25 @@ int main(void) {
     failed += test_md_next_word_empty();
     failed += test_md_next_word_long_run();
     failed += test_md_next_word_tab_is_whitespace();
+
+    printf("\n--- Markdown table layout (md_table.c) ---\n");
+    failed += test_md_table_split_basic();
+    failed += test_md_table_split_no_outer_pipes();
+    failed += test_md_table_split_escaped_pipe();
+    failed += test_md_table_split_empty_cells();
+    failed += test_md_table_split_ragged_row();
+    failed += test_md_table_split_max_cells_caps_output();
+    failed += test_md_table_split_null_and_empty();
+    failed += test_md_table_split_single_empty_cell();
+    failed += test_md_table_alignments_mixed();
+    failed += test_md_table_alignments_not_a_separator();
+    failed += test_md_table_alignments_null_safe();
+    failed += test_md_table_fit_columns_fits_unchanged();
+    failed += test_md_table_fit_columns_one_wide_shrinks();
+    failed += test_md_table_fit_columns_two_wide_shrink_equal();
+    failed += test_md_table_fit_columns_minimums_respected();
+    failed += test_md_table_fit_columns_overflow();
+    failed += test_md_table_fit_columns_null_safe();
 
     printf("\n--- JSON Escape ---\n");
     failed += test_escape_simple_string();

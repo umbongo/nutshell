@@ -355,6 +355,29 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       measure and paint. Native suite green at **1,766 tests** (up from
       1,764).
 
+- [x] Markdown tables now render as real tables instead of raw piped text
+      (v1.1.4). New pure/tested `src/core/md_table.{c,h}`:
+      `md_table_split_row()` (trims cells, handles missing outer pipes and
+      `\|` escapes), `md_table_alignments()` (per-column left/center/right
+      from the `|---|:--:|--:|` separator row), and
+      `md_table_fit_columns()` (natural widths when they fit; otherwise
+      shrinks the widest column(s) first, evenly among ties, floored at
+      each column's widest single word or 6 em). `src/ui/md_render.c`
+      gathers a run of consecutive `MD_LINE_TABLE` lines as one block
+      (`md_render_table_block()`, intercepted before the per-line switch
+      in `md_render_core()` so header/body cells share the file's existing
+      inline renderer — bold/italic/code spans, header cells forced bold)
+      instead of the old per-line monospace dump. Header row gets a
+      subtle `text_dim`-over-`bg_primary` fill via `rgb_alpha()` (same
+      technique as `chat_listview`'s dim chips); hairline row separators
+      and an outer border in the theme's `border` colour; no vertical
+      column lines. Like the rest of this file, table constants (cell
+      padding, hairline width) are raw 96-DPI pixels, not run through
+      `ns_scale()` — `md_render_text`/`md_measure_text` aren't passed a
+      dpi, so nothing else in the file is either. 17 new native tests in
+      `tests/test_md_table.c`. Native suite green at **1,783 tests** (up
+      from 1,766).
+
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.
