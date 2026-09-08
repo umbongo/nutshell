@@ -3164,6 +3164,15 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                 GetScrollInfo(hwnd, SB_VERT, &si);
                 lv->scroll_y = si.nTrackPos;
             }
+            /* A thumb dragged to the end of the track can land a few
+             * pixels short of the true maximum (the track is coarser than
+             * the content). Snap within a line so "drag it to the very
+             * bottom" re-engages stick-to-bottom. */
+            {
+                int max_s = lv->total_height - lv->viewport_height;
+                if (max_s > 0 && lv->scroll_y < max_s && max_s - lv->scroll_y < line_h)
+                    lv->scroll_y = max_s;
+            }
             break;
         }
         case SB_TOP:           lv->scroll_y = 0;                     break;
@@ -3223,8 +3232,18 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
 
                     int vis_h = tl.body.h;
 
+                    /* The inner box may take the wheel only while it is
+                     * fully inside the viewport. A box cut off at the
+                     * bottom (a streaming reply's Thinking block) used to
+                     * swallow every wheel-down, so the outer list could
+                     * never reach the bottom and re-engage stick-to-bottom;
+                     * a partly visible box scrolls the list instead. */
+                    int box_fully_visible = tl.body.y >= 0
+                        && tl.body.y + vis_h <= lv->viewport_height;
+
                     /* Is cursor in the thinking body area and is there overflow? */
-                    if (full_h > vis_h && pt.x >= tl.body.x && pt.x < tl.body.x + tl.body.w
+                    if (box_fully_visible && full_h > vis_h
+                        && pt.x >= tl.body.x && pt.x < tl.body.x + tl.body.w
                         && pt.y >= tl.body.y
                         && pt.y < tl.body.y + vis_h) {
                         int max_scroll = full_h - vis_h;
@@ -3269,7 +3288,10 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                 if (wh2 == 0) { wi2 = wi2->next; continue; }
                 if (wi2->type == CHAT_ITEM_COMMAND &&
                     is_first_command(lv->msg_list, wi2) &&
-                    cpt.y >= wy2 && cpt.y < wy2 + wh2) {
+                    cpt.y >= wy2 && cpt.y < wy2 + wh2 &&
+                    wy2 >= 0 && wy2 + wh2 <= lv->viewport_height) {
+                    /* Same rule as the Thinking box above: a card that is
+                     * partly off-screen lets the list scroll instead. */
                     int max_cs = lv->cmd_total_h - lv->cmd_visible_h;
                     int old_cs = lv->cmd_scroll_y;
                     lv->cmd_scroll_y -= (delta * scroll_amount) / WHEEL_DELTA;

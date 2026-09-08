@@ -378,6 +378,14 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       `tests/test_md_table.c`. Native suite green at **1,783 tests** (up
       from 1,766).
 
+- [x] Wheel trap fixed (v1.1.5). An open Thinking box (or approval card) that
+      was only partly visible swallowed every wheel-down, so the list could
+      never reach the bottom and re-engage stick-to-bottom while a reply
+      streamed — the box stayed cut off. Inner boxes now take the wheel only
+      when fully inside the viewport; a scrollbar thumb dragged to the end of
+      the track snaps to the true maximum. Open: `md_render.c` renders at raw
+      96-DPI pixels (its padding is not `ns_scale`d) — fold into sub-project 3.
+
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.
