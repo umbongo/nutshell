@@ -137,20 +137,20 @@ static void     recalc_dpi_constants(ChatListView *lv);
 static void     update_scrollbar(ChatListView *lv);
 static int      measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                              int width);
-static void     paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+static int      paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                 RECT *rc);
-static void     paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+static int      paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                RECT *rc);
-static void     paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc);
+static int      paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc);
 static void     build_thinking_layout(ChatListView *lv, HDC hdc,
                               ChatMsgItem *item, int box_left, int box_right,
                               int content_top, ThinkingLayout *out,
                               int *out_full_body_h);
 static void     paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                               const ApprovalRowLayout *row, int row_idx);
-static void     paint_cmd_settled_row(ChatListView *lv, HDC hdc,
+static int      paint_cmd_settled_row(ChatListView *lv, HDC hdc,
                               ChatMsgItem *item, RECT *rc);
-static void     paint_status_item(ChatListView *lv, HDC hdc,
+static int      paint_status_item(ChatListView *lv, HDC hdc,
                                   ChatMsgItem *item, RECT *rc);
 static void     build_empty_state_layout(ChatListView *lv, HDC hdc,
                                          const RECT *client_rc,
@@ -764,47 +764,113 @@ static void recalc_layout(ChatListView *lv)
     update_scrollbar(lv);
 }
 
-/* Build a measurement-ready copy of AI text: strip [EXEC]/[/EXEC] tags
- * and trailing newlines before [EXEC] markers.  Caller must free(). */
-static char *ai_text_for_measure(const char *text)
+/* Height-only twin of draw_ai_segment() (defined below, near paint_ai_item):
+ * same font selection and wrap flags, no painting. Kept as the single
+ * source of truth for a plain (non-[EXEC]) segment's height so
+ * measure_item() and paint_ai_item() can never drift apart -- draw_ai_segment
+ * calls this too for its own non-markdown height calc. */
+static int measure_ai_segment(ChatListView *lv, HDC hdc, const char *text,
+                              int width)
 {
-    size_t len = strlen(text);
-    char *out = malloc(len + 1);
-    if (!out) return NULL;
-    char *dst = out;
+    if (lv->render_markdown) {
+        return md_measure_text(hdc, text, width,
+                               lv->hFont, lv->hMonoFont, lv->hBoldFont,
+                               lv->theme);
+    }
+    HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
+                              : GetStockObject(DEFAULT_GUI_FONT));
+    RECT mrc;
+    SetRect(&mrc, 0, 0, width, 0);
+    draw_text_utf8(hdc, text, &mrc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+    int h = mrc.bottom - mrc.top;
+    SelectObject(hdc, tf);
+    return h;
+}
+
+/* Height-only twin of draw_ai_text_with_exec() (near paint_ai_item): walks
+ * the exact same [EXEC]/[/EXEC] segment split -- plain segments through
+ * measure_ai_segment() (markdown or plain, matching draw_ai_segment's own
+ * font choice), [EXEC] segments through the mono font with DT_CALCRECT
+ * (matching draw_ai_text_with_exec's purple mono-font paint) -- so the two
+ * can never disagree about an EXEC-bearing message's height. Previously
+ * measure_item() stripped the [EXEC] tags and measured the whole message
+ * as one markdown-rendered string (ai_text_for_measure()), which is a
+ * structurally different computation from what paint_ai_item() actually
+ * draws (per-segment, with the command text in the mono font, never
+ * markdown-parsed) -- a real mismatch for any message containing a
+ * command, which is exactly the paint that overlaps with the item below
+ * it (or the activity indicator) when the two diverge. */
+static int measure_ai_text_with_exec(ChatListView *lv, HDC hdc,
+                                     const char *text, int width)
+{
+    if (!strstr(text, "[EXEC]"))
+        return measure_ai_segment(lv, hdc, text, width);
+
+    HFONT mono_font = lv->hMonoFont ? lv->hMonoFont
+                                     : (HFONT)GetStockObject(ANSI_FIXED_FONT);
     const char *pos = text;
+    int total_h = 0;
 
     while (*pos) {
-        const char *exec = strstr(pos, "[EXEC]");
-        if (!exec) {
-            size_t remain = strlen(pos);
-            memcpy(dst, pos, remain);
-            dst += remain;
-            break;
-        }
-        /* Copy text before [EXEC], stripping trailing newlines */
-        size_t seg_len = (size_t)(exec - pos);
-        memcpy(dst, pos, seg_len);
-        dst += seg_len;
-        while (dst > out && (dst[-1] == '\n' || dst[-1] == '\r'))
-            dst--;
+        const char *exec_start = strstr(pos, "[EXEC]");
 
-        /* Find [/EXEC] and copy command content (without tags) */
-        const char *cmd_start = exec + 6;
-        const char *exec_end = strstr(cmd_start, "[/EXEC]");
-        if (!exec_end) {
-            size_t remain = strlen(cmd_start);
-            memcpy(dst, cmd_start, remain);
-            dst += remain;
+        if (!exec_start) {
+            if (*pos)
+                total_h += measure_ai_segment(lv, hdc, pos, width);
             break;
         }
-        size_t cmd_len = (size_t)(exec_end - cmd_start);
-        memcpy(dst, cmd_start, cmd_len);
-        dst += cmd_len;
+
+        /* Segment before [EXEC], trailing newlines stripped -- mirrors
+         * draw_ai_text_with_exec's own trim exactly. */
+        if (exec_start > pos) {
+            size_t seg_len = (size_t)(exec_start - pos);
+            char *seg = malloc(seg_len + 1);
+            if (seg) {
+                memcpy(seg, pos, seg_len);
+                seg[seg_len] = '\0';
+                size_t trim = seg_len;
+                while (trim > 0 && (seg[trim - 1] == '\n' || seg[trim - 1] == '\r'))
+                    trim--;
+                seg[trim] = '\0';
+                if (trim > 0)
+                    total_h += measure_ai_segment(lv, hdc, seg, width);
+                free(seg);
+            }
+        }
+
+        const char *cmd_start = exec_start + 6;
+        const char *exec_end = strstr(cmd_start, "[/EXEC]");
+
+        if (!exec_end) {
+            RECT rc; SetRect(&rc, 0, 0, width, 0);
+            HGDIOBJ old = SelectObject(hdc, mono_font);
+            draw_text_utf8(hdc, exec_start, &rc,
+                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+            SelectObject(hdc, old);
+            total_h += rc.bottom - rc.top;
+            break;
+        }
+
+        {
+            size_t cmd_len = (size_t)(exec_end - cmd_start);
+            char *cmd_text = malloc(cmd_len + 1);
+            if (cmd_text) {
+                memcpy(cmd_text, cmd_start, cmd_len);
+                cmd_text[cmd_len] = '\0';
+                RECT rc; SetRect(&rc, 0, 0, width, 0);
+                HGDIOBJ old = SelectObject(hdc, mono_font);
+                draw_text_utf8(hdc, cmd_text, &rc,
+                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+                SelectObject(hdc, old);
+                total_h += rc.bottom - rc.top;
+                free(cmd_text);
+            }
+        }
+
         pos = exec_end + 7;
     }
-    *dst = '\0';
-    return out;
+
+    return total_h;
 }
 
 /* ── Measure a single item ──────────────────────────────────────────── */
@@ -847,28 +913,11 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         text_w = width - lv->ai_indent - 3 * side_pad;
         if (text_w < 40) text_w = 40;
 
-        const char *measure_text = item->text;
-        char *stripped = NULL;
-        if (strstr(item->text, "[EXEC]")) {
-            stripped = ai_text_for_measure(item->text);
-            if (stripped) measure_text = stripped;
-        }
-        int h;
-        if (lv->render_markdown) {
-            h = md_measure_text(hdc, measure_text, text_w,
-                                lv->hFont, lv->hMonoFont, lv->hBoldFont,
-                                lv->theme);
-        } else {
-            HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
-                                       : GetStockObject(DEFAULT_GUI_FONT));
-            RECT mrc;
-            SetRect(&mrc, 0, 0, text_w, 0);
-            draw_text_utf8(hdc, measure_text, &mrc,
-                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-            h = mrc.bottom - mrc.top;
-            SelectObject(hdc, tf);
-        }
-        free(stripped);
+        /* Mirrors paint_ai_item's draw_ai_text_with_exec() segment-by-
+         * segment exactly (see measure_ai_text_with_exec()'s comment) so
+         * an [EXEC]-bearing message never measures a different height
+         * than it paints. */
+        int h = measure_ai_text_with_exec(lv, hdc, item->text, text_w);
 
         /* Icon row + gap before content (must match paint_ai_item layout) */
         int total = h + ns_scale(BASE_ICON_SIZE, CLV_DPI(lv)) + ns_scale(4, CLV_DPI(lv));
@@ -997,8 +1046,8 @@ static void recalc_dpi_constants(ChatListView *lv)
  *  Paint routines
  * ══════════════════════════════════════════════════════════════════════ */
 
-static void paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                            RECT *rc)
+static int paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                           RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
 
@@ -1033,6 +1082,7 @@ static void paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                    DT_WORDBREAK | DT_NOPREFIX);
     SelectObject(hdc, old_font);
 
+    return rc->bottom - rc->top;
 }
 
 /* Render one AI text segment. Markdown when lv->render_markdown is on,
@@ -1047,15 +1097,14 @@ static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
                               lv->hFont, lv->hMonoFont, lv->hBoldFont,
                               lv->theme);
     }
+    /* Same calc measure_ai_segment() uses for this branch -- computed
+     * once here so paint and its own height report can never drift. */
+    int seg_h = measure_ai_segment(lv, hdc, text, width);
     HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
                               : GetStockObject(DEFAULT_GUI_FONT));
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, RGB_FROM_THEME(lv->theme->text_main));
     RECT mrc;
-    SetRect(&mrc, x, y, x + width, 0);
-    draw_text_utf8(hdc, text, &mrc,
-                   DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-    int seg_h = mrc.bottom - mrc.top;
     SetRect(&mrc, x, y, x + width, y + seg_h);
     draw_text_utf8(hdc, text, &mrc,
                    DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
@@ -1064,9 +1113,13 @@ static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
 }
 
 /* Draw AI text with [EXEC]...[/EXEC] segments highlighted in purple.
- * Uses the same rect and flags as draw_text_utf8 but splits at markers. */
-static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
-                                    const char *text, RECT *rc)
+ * Uses the same rect and flags as draw_text_utf8 but splits at markers.
+ * Returns the total height painted (rc->bottom is only a starting bound
+ * for the last EXEC segment's DrawText call, not a hard cap -- see
+ * measure_ai_text_with_exec()'s comment), so callers can find out when
+ * this grew taller than measure_item() predicted. */
+static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
+                                   const char *text, RECT *rc)
 {
     COLORREF exec_clr = RGB_FROM_THEME(ns_tokens()->info.base);
     HFONT mono_font = lv->hMonoFont ? lv->hMonoFont
@@ -1074,9 +1127,8 @@ static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
 
     /* If no [EXEC] markers, fast path */
     if (!strstr(text, "[EXEC]")) {
-        draw_ai_segment(lv, hdc, text, rc->left, rc->top,
-                        rc->right - rc->left);
-        return;
+        return draw_ai_segment(lv, hdc, text, rc->left, rc->top,
+                               rc->right - rc->left);
     }
 
     /* Multi-segment rendering: split at [EXEC]/[/EXEC] boundaries */
@@ -1123,28 +1175,45 @@ static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
         const char *exec_end = strstr(cmd_start, "[/EXEC]");
 
         if (!exec_end) {
-            /* No closing tag — render rest as exec */
-            RECT seg_rc = { rc->left, y, rc->right, rc->bottom };
+            /* No closing tag — render rest as exec. Two-pass (calc then
+             * paint into an exact-fit rect), same as draw_ai_segment's own
+             * non-markdown path, instead of clipping to rc->bottom -- a
+             * stale item bottom must never truncate what's actually
+             * painted (see measure_ai_text_with_exec()'s comment). */
+            RECT seg_rc;
+            HGDIOBJ old_mf = SelectObject(hdc, mono_font);
+            SetRect(&seg_rc, rc->left, y, rc->right, 0);
+            draw_text_utf8(hdc, exec_start, &seg_rc,
+                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+            int h = seg_rc.bottom - seg_rc.top;
+            SetRect(&seg_rc, rc->left, y, rc->right, y + h);
             SetTextColor(hdc, exec_clr);
-            SelectObject(hdc, mono_font);
-            int h = draw_text_utf8(hdc, exec_start, &seg_rc,
-                                   DT_WORDBREAK | DT_NOPREFIX);
+            draw_text_utf8(hdc, exec_start, &seg_rc,
+                           DT_WORDBREAK | DT_NOPREFIX);
+            SelectObject(hdc, old_mf);
             y += h;
             break;
         }
 
-        /* Draw the command (between [EXEC] and [/EXEC]) in purple with mono font */
+        /* Draw the command (between [EXEC] and [/EXEC]) in purple with mono
+         * font -- same two-pass, unclipped approach as above. */
         {
             size_t cmd_len = (size_t)(exec_end - cmd_start);
             char *cmd_text = malloc(cmd_len + 1);
             if (cmd_text) {
                 memcpy(cmd_text, cmd_start, cmd_len);
                 cmd_text[cmd_len] = '\0';
-                RECT seg_rc = { rc->left, y, rc->right, rc->bottom };
+                RECT seg_rc;
+                HGDIOBJ old_mf = SelectObject(hdc, mono_font);
+                SetRect(&seg_rc, rc->left, y, rc->right, 0);
+                draw_text_utf8(hdc, cmd_text, &seg_rc,
+                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+                int h = seg_rc.bottom - seg_rc.top;
+                SetRect(&seg_rc, rc->left, y, rc->right, y + h);
                 SetTextColor(hdc, exec_clr);
-                SelectObject(hdc, mono_font);
-                int h = draw_text_utf8(hdc, cmd_text, &seg_rc,
-                                       DT_WORDBREAK | DT_NOPREFIX);
+                draw_text_utf8(hdc, cmd_text, &seg_rc,
+                               DT_WORDBREAK | DT_NOPREFIX);
+                SelectObject(hdc, old_mf);
                 y += h;
                 free(cmd_text);
             }
@@ -1152,10 +1221,12 @@ static void draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
 
         pos = exec_end + 7; /* skip [/EXEC] */
     }
+
+    return y - rc->top;
 }
 
-static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                           RECT *rc)
+static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                          RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
     const ThemeTokens *tok = ns_tokens();
@@ -1345,8 +1416,16 @@ static void paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     text_rc.top    = content_top;
     text_rc.right  = rc->right - side_pad;
     text_rc.bottom = rc->bottom;
-    draw_ai_text_with_exec(lv, hdc, item->text, &text_rc);
+    int text_h = draw_ai_text_with_exec(lv, hdc, item->text, &text_rc);
     SelectObject(hdc, old_font);
+
+    /* Actual painted extent, not just the measured one -- see the Activity
+     * indicator overlap fix's on_paint()/painted_bottom tracking. Normally
+     * equal to rc's own height, but a message can legitimately paint
+     * taller than measure_item() predicted for it (very rare after the
+     * measure_ai_text_with_exec() fix, but on_paint() must still cope). */
+    int painted_h = (content_top - rc->top) + text_h;
+    return painted_h > (rc->bottom - rc->top) ? painted_h : (rc->bottom - rc->top);
 }
 
 /* ── Paint one approval-card v2 row: checkbox, command text (FONT_MONO,
@@ -1425,8 +1504,8 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
  *    so painting and measure_item() can never disagree about the row's
  *    height. ───────────────────────────────────────────────────────────── */
 
-static void paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                                  RECT *rc)
+static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                                 RECT *rc)
 {
     const ThemeTokens *tok = ns_tokens();
     int dpi = CLV_DPI(lv);
@@ -1520,6 +1599,10 @@ static void paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                         layout.tag.y + layout.tag.h };
         ns_draw_chip(hdc, &tag_rc, chip_bg, chip_fg, lv->hSmallFont, label);
     }
+
+    /* Fixed single-line row height -- exactly what measure_item()
+     * returned via clv_cmd_row_h(), never wraps. */
+    return rc->bottom - rc->top;
 }
 
 /* ── Shared geometry for the live command queue container, computed once
@@ -1622,7 +1705,7 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
  *    · M held"), scrollable rows, themed scrollbar, and the card-wide
  *    Deny all / Run N selected actions. ──────────────────────────────── */
 
-static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
+static int paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
     const ThemeTokens *tok = ns_tokens();
@@ -1757,10 +1840,16 @@ static void paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         ns_draw_button(hdc, &run_rc, &tok->success, run_state, 0,
                       run_label, lv->hSmallFont, dpi);
     }
+
+    /* The container's own height is fully determined by recalc_layout()'s
+     * Pass 2 (first_cmd->measured_height) before this ever paints, and
+     * build_cmd_card_geometry() above derives every row from that same
+     * geometry -- so the box always exactly fills rc, never taller. */
+    return rc->bottom - rc->top;
 }
 
-static void paint_status_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                              RECT *rc)
+static int paint_status_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                             RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
 
@@ -1774,6 +1863,12 @@ static void paint_status_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     draw_text_utf8(hdc, item->text, &text_rc,
                    DT_WORDBREAK | DT_NOPREFIX | DT_LEFT);
     SelectObject(hdc, old_font);
+
+    /* measure_item()'s text_w (width - 4*side_pad) matches this text_rc's
+     * width exactly, and the item's box already carries an extra 8px of
+     * slack beyond the wrapped text height, so the text never needs more
+     * room than rc gives it. */
+    return rc->bottom - rc->top;
 }
 
 /* ── Empty/no-key/no-session state (ai_panel_states.h) ────────────────
@@ -2236,6 +2331,16 @@ static void on_paint(ChatListView *lv)
     int last_user_y = 0;
     int last_user_h = 0;
 
+    /* Actual painted bottom, tracked independently of the measured-height
+     * walk above -- a paint_*() call can legitimately paint taller than
+     * measure_item() predicted (see paint_ai_item()'s EXEC-path comment),
+     * and the activity indicator must never land on top of that overflow
+     * (Activity indicator overlap fix). Starts one msg_gap below the
+     * initial y so that, with zero items painted, max(y, painted_bottom +
+     * msg_gap) below reduces to plain y -- unchanged from before this
+     * tracking existed. */
+    int painted_bottom = y - lv->msg_gap;
+
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
         int h = item->measured_height;
@@ -2261,12 +2366,13 @@ static void on_paint(ChatListView *lv)
             item_rc.right  = cw - side_pad;
             item_rc.bottom = y + h;
 
+            int painted_h = h;
             switch (item->type) {
             case CHAT_ITEM_USER:
-                paint_user_item(lv, mem_dc, item, &item_rc);
+                painted_h = paint_user_item(lv, mem_dc, item, &item_rc);
                 break;
             case CHAT_ITEM_AI_TEXT:
-                paint_ai_item(lv, mem_dc, item, &item_rc);
+                painted_h = paint_ai_item(lv, mem_dc, item, &item_rc);
                 break;
             case CHAT_ITEM_COMMAND:
                 /* A settled command paints as its own compact inline row.
@@ -2279,16 +2385,19 @@ static void on_paint(ChatListView *lv)
                  * chat_listview_invalidate, which recalcs), so item_rc's
                  * height here always matches what's about to be painted. */
                 if (item->u.cmd.settled)
-                    paint_cmd_settled_row(lv, mem_dc, item, &item_rc);
+                    painted_h = paint_cmd_settled_row(lv, mem_dc, item, &item_rc);
                 else
-                    paint_cmd_container(lv, mem_dc, &item_rc);
+                    painted_h = paint_cmd_container(lv, mem_dc, &item_rc);
                 break;
             case CHAT_ITEM_TOOL_CALL:
             case CHAT_ITEM_TOOL_RESULT:
             case CHAT_ITEM_STATUS:
-                paint_status_item(lv, mem_dc, item, &item_rc);
+                painted_h = paint_status_item(lv, mem_dc, item, &item_rc);
                 break;
             }
+
+            int this_bottom = y + painted_h;
+            if (this_bottom > painted_bottom) painted_bottom = this_bottom;
 
             /* Selection highlight: invert colours for items in selection */
             if (lv->sel_valid) {
@@ -2344,9 +2453,22 @@ static void on_paint(ChatListView *lv)
         DeleteObject(shadow_pen);
     }
 
-    /* Paint inline activity indicator below the last message */
-    if (y <= ch)
-        paint_activity_indicator(lv, mem_dc, y, cw);
+    /* Paint inline activity indicator below the last message -- at
+     * max(layout y, painted_bottom + msg_gap) so it never lands on top of
+     * an item that painted taller than it measured (Activity indicator
+     * overlap fix). Cached in lv->indicator_y so hover/click hit-testing
+     * for the [Retry] link (chatlv_items_bottom_y()) can never disagree
+     * with where this actually drew it. recalc_layout() already reserves
+     * BASE_ACTIVITY_H + msg_gap in total_height whenever activity is
+     * active, so a list stuck to the bottom keeps this y within the
+     * viewport -- the same "if (y <= ch)" gate below still applies to the
+     * (rarer) painted_bottom-driven position too. */
+    int indicator_y = y;
+    if (painted_bottom + lv->msg_gap > indicator_y)
+        indicator_y = painted_bottom + lv->msg_gap;
+    lv->indicator_y = indicator_y;
+    if (indicator_y <= ch)
+        paint_activity_indicator(lv, mem_dc, indicator_y, cw);
 
     /* Blit to screen */
     BitBlt(hdc, 0, 0, cw, ch, mem_dc, 0, 0, SRCCOPY);
@@ -2390,18 +2512,15 @@ static ChatMsgItem *find_active_cmd_container(ChatListView *lv,
 }
 
 /* The y coordinate just below the last visible item -- where the inline
- * activity indicator (and its [Retry] link) paints. Mirrors the trailing
- * walk in on_paint/on_lbuttondown. */
+ * activity indicator (and its [Retry] link) paints. Returns on_paint()'s
+ * cached lv->indicator_y rather than re-deriving it from measured_height,
+ * so hover/click hit-testing can never disagree with what was actually
+ * painted (a message that painted taller than it measured pushes the
+ * indicator further down than a measured-height-only walk would predict
+ * -- see the Activity indicator overlap fix). */
 static int chatlv_items_bottom_y(ChatListView *lv)
 {
-    int y = lv->msg_gap - lv->scroll_y;
-    ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
-    while (item) {
-        int h = item->measured_height;
-        if (h != 0) y += h + lv->msg_gap;
-        item = item->next;
-    }
-    return y;
+    return lv->indicator_y;
 }
 
 /* Rect of the [Retry] link, matching paint_activity_indicator's layout.
@@ -2749,8 +2868,15 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
                 mx >= tl.row.x && mx < tl.row.x + tl.row.w) {
                 item->u.ai.thinking_collapsed =
                     !item->u.ai.thinking_collapsed;
+                /* A manual click always sticks for this item -- see the
+                 * WM_AI_STREAM handler in ai_chat.c, which must never
+                 * change thinking_collapsed again once this is set. */
+                item->u.ai.thinking_user_set = 1;
                 if (item->u.ai.thinking_collapsed) {
                     item->u.ai.thinking_scroll_y = 0;
+                    if (parent)
+                        PostMessage(parent, WM_COMMAND,
+                                    MAKEWPARAM(IDC_CHAT_THINKING_CLOSED, 0), 0);
                 } else {
                     item->u.ai.thinking_autoscroll = 1;
                     /* The user opened it themselves -- remember for this
@@ -2835,11 +2961,16 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
         item = item->next;
     }
 
-    /* Check click on [Retry] link in the activity indicator */
+    /* Check click on [Retry] link in the activity indicator. Uses the
+     * cached y from the last on_paint() (chatlv_items_bottom_y()), not
+     * this function's own measured-height walk above, so a click can
+     * never disagree with where the indicator was actually drawn (see
+     * the Activity indicator overlap fix). */
     if (lv->activity && lv->activity->phase != ACTIVITY_IDLE &&
         lv->activity->health == HEALTH_RED) {
         int act_h = ns_scale(BASE_ACTIVITY_H, CLV_DPI(lv));
-        if (my >= y && my < y + act_h) {
+        int retry_y = chatlv_items_bottom_y(lv);
+        if (my >= retry_y && my < retry_y + act_h) {
             HWND par = GetParent(lv->hwnd);
             if (par)
                 PostMessage(par, WM_COMMAND,

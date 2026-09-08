@@ -144,6 +144,35 @@ int test_chat_msg_set_thinking(void) {
     TEST_END();
 }
 
+/* Thinking disclosure: a user collapse must stick (see ai_chat.c's
+ * WM_AI_STREAM handler). thinking_user_set is the flag that records a
+ * manual open/close; a freshly created AI item must start with it unset,
+ * and chat_msg_set_thinking() -- called on every streamed thinking chunk
+ * -- must never touch it, or a mid-stream collapse would be silently
+ * undone by the very next chunk. */
+int test_chat_msg_new_ai_item_thinking_user_set_is_zero(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "response");
+    ASSERT_NOT_NULL(item);
+    ASSERT_EQ(item->u.ai.thinking_user_set, 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_set_thinking_leaves_user_set_alone(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "response");
+    item->u.ai.thinking_user_set = 1;
+    ASSERT_EQ(chat_msg_set_thinking(item, "more thinking..."), 0);
+    ASSERT_EQ(item->u.ai.thinking_user_set, 1);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
 /* Thinking disclosure overlap fix: recalc_layout() only remeasures items
  * that are dirty (or unmeasured). If chat_msg_set_thinking() replaced the
  * text without marking the item dirty, an item already measured at its

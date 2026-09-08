@@ -3159,6 +3159,19 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 return 0;
             }
 
+            /* IDC_CHAT_THINKING_CLOSED → user manually collapsed a Thinking
+             * disclosure this session. Clear show_thinking (mirrored into
+             * active_state the way IDC_CHAT_NEWCHAT does above) so a later
+             * reply's block still starts open while it streams -- but the
+             * item the user just closed is protected from re-opening by
+             * its own thinking_user_set flag, set at the click site in
+             * chat_listview.c. */
+            if (d && ctl_id == IDC_CHAT_THINKING_CLOSED) {
+                d->show_thinking = 0;
+                if (d->active_state) d->active_state->show_thinking = 0;
+                return 0;
+            }
+
             /* IDC_AUTO_APPROVE → toggle session auto-approve */
             if (d && ctl_id == IDC_AUTO_APPROVE) {
                 float now = (float)GetTickCount() / 1000.0f;
@@ -3326,8 +3339,13 @@ next_coalesce:;
                  * session (show_thinking) -- see the design spec's "Thought
                  * process" section. Only decide the collapse once, right
                  * when this batch is the one that crosses into content
-                 * (prev_phase < 2), so a later manual expand isn't fought. */
-                if (d->stream_thinking_len > 0) {
+                 * (prev_phase < 2), so a later manual expand isn't fought.
+                 * If the user has manually opened or closed *this item's*
+                 * disclosure (thinking_user_set), that choice sticks for
+                 * the rest of the stream -- neither the auto-open nor the
+                 * auto-collapse below may touch thinking_collapsed again. */
+                if (d->stream_thinking_len > 0 &&
+                    !d->stream_ai_item->u.ai.thinking_user_set) {
                     if (d->stream_phase < 2) {
                         d->stream_ai_item->u.ai.thinking_collapsed = 0;
                         d->stream_ai_item->dirty = 1;

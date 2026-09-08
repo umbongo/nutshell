@@ -309,6 +309,52 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       and session switches. Native suite green at **1,764 tests** (up from
       1,757).
 
+- [x] Thinking-disclosure collapse sticks, and the activity indicator never
+      overlaps text (v1.1.3). Two independent fixes:
+      (1) A user's manual open/close of a reply's Thinking block now sticks
+      for the rest of that stream. New `thinking_user_set` flag on
+      `ChatMsgItem.u.ai` (`src/core/chat_msg.h`), zeroed on create; the
+      listview's click toggle (`src/ui/chat_listview.c`) sets it on every
+      manual toggle and posts a new `IDC_CHAT_THINKING_CLOSED`
+      (`src/ui/resource.h`) on close, mirroring the existing
+      `IDC_CHAT_THINKING_OPENED` on open. `ai_chat.c`'s `WM_AI_STREAM`
+      handler now skips both the auto-open (while thinking streams) and
+      the auto-collapse (once content starts) for any item with the flag
+      set, and `IDC_CHAT_THINKING_CLOSED` clears `show_thinking` (mirrored
+      into `active_state`, same as `IDC_CHAT_NEWCHAT` already did) so a
+      later reply still starts open.
+      (2) The inline activity indicator ("Processing…"/"Responding…"/etc.,
+      `paint_activity_indicator()`) could land on top of the last
+      message's text whenever that message painted taller than
+      `measure_item()` predicted. `paint_ai_item`, `paint_user_item`,
+      `paint_status_item`, `paint_cmd_container` and
+      `paint_cmd_settled_row` now return the height they actually painted;
+      `on_paint()` tracks `painted_bottom` (max of item-top + painted
+      height over all painted items) and places the indicator at
+      `max(layout y, painted_bottom + msg_gap)`, caching the result in a
+      new `ChatListView.indicator_y` field so `chatlv_items_bottom_y()`
+      (used by both hover and the `[Retry]` link's click hit-test) can
+      never disagree with what was actually drawn. Audit of measure vs.
+      paint for the AI item found one real, structural mismatch: for a
+      message containing `[EXEC]...[/EXEC]`, `measure_item()` used to
+      strip the tags and measure the whole message as one markdown-
+      rendered string, while `paint_ai_item`'s `draw_ai_text_with_exec()`
+      actually paints it as separate segments (markdown-rendered prose
+      interleaved with mono-font purple command text) — a different
+      computation that can legitimately produce a different height. Fixed
+      by adding `measure_ai_text_with_exec()` (and its `measure_ai_segment()`
+      helper, now also used by `draw_ai_segment()` for its own non-markdown
+      height calc), a height-only twin that walks the identical segment
+      split as the paint path; `ai_text_for_measure()` is gone. Also
+      hardened the EXEC segments' own paint: they used to clip to the
+      item's original (possibly stale) `rc->bottom` — now two-pass
+      (calc then paint into an exact-fit rect), matching
+      `draw_ai_segment`'s existing non-markdown approach, so a late growth
+      spurt can never be silently truncated. The thinking block, markdown
+      path, and plain-text path were checked and already agreed between
+      measure and paint. Native suite green at **1,766 tests** (up from
+      1,764).
+
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.

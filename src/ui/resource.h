@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.1.2"
-#define APP_VERSION_BINARY  1,1,2,0
+#define APP_VERSION        "1.1.3"
+#define APP_VERSION_BINARY  1,1,3,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -72,5 +72,6 @@
 #define IDC_SESSION_MGR_STARTUP 3072 /* Settings: open Session Manager at startup checkbox */
 #define IDC_AI_AUTO_APPROVE_DEFAULT 3073 /* Settings: Auto approve level for new sessions */
 #define IDC_CHAT_THINKING_OPENED 3074 /* Thinking disclosure manually expanded (chat_listview -> chat panel) */
+#define IDC_CHAT_THINKING_CLOSED 3075 /* Thinking disclosure manually collapsed (chat_listview -> chat panel) */
 
 #endif

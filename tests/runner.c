@@ -1394,6 +1394,8 @@ int test_chat_msg_set_text(void);
 int test_chat_msg_set_command(void);
 int test_chat_msg_set_thinking(void);
 int test_chat_msg_set_thinking_marks_dirty(void);
+int test_chat_msg_new_ai_item_thinking_user_set_is_zero(void);
+int test_chat_msg_set_thinking_leaves_user_set_alone(void);
 int test_chat_msg_empty_text(void);
 int test_chat_msg_null_text(void);
 int test_chat_msg_unique_ids(void);
@@ -3285,6 +3287,8 @@ int main(void) {
     failed += test_chat_msg_set_command();
     failed += test_chat_msg_set_thinking();
     failed += test_chat_msg_set_thinking_marks_dirty();
+    failed += test_chat_msg_new_ai_item_thinking_user_set_is_zero();
+    failed += test_chat_msg_set_thinking_leaves_user_set_alone();
     failed += test_chat_msg_empty_text();
     failed += test_chat_msg_null_text();
     failed += test_chat_msg_unique_ids();

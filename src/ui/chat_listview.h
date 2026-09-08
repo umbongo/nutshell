@@ -79,6 +79,15 @@ typedef struct {
     int state_id;
     int state_context_lines;
 
+    /* y coordinate at which on_paint() last placed the inline activity
+     * indicator -- computed from the actually-painted bottom of the item
+     * list, not just the measured layout, so it never lands on top of an
+     * item that painted taller than it measured (Activity indicator
+     * overlap fix). chatlv_items_bottom_y() returns this cached value so
+     * hover/click hit-testing for the [Retry] link can never disagree
+     * with where on_paint() actually drew it. */
+    int indicator_y;
+
 } ChatListView;
 
 /* Register the window class. Call once at startup. */

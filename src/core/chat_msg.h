@@ -30,6 +30,10 @@ typedef struct ChatMsgItem {
             int thinking_complete;
             int thinking_scroll_y;   /* internal scroll offset for expanded thinking */
             int thinking_autoscroll; /* 1 = auto-scroll to bottom during streaming */
+            int thinking_user_set;   /* 1 = user has manually opened or closed this
+                                       * item's Thinking disclosure; once set, the
+                                       * WM_AI_STREAM handler in ai_chat.c must never
+                                       * change thinking_collapsed on this item again. */
         } ai;
         struct {
             char *command;
