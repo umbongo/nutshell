@@ -134,3 +134,24 @@ unsigned int theme_blend(unsigned int a, unsigned int b, double t)
     if (bl > 255) bl = 255;
     return ((unsigned int)r << 16) | ((unsigned int)g << 8) | (unsigned int)bl;
 }
+
+unsigned int theme_role_color(unsigned int role, unsigned int bg,
+                              unsigned int fallback)
+{
+    if (theme_contrast(role, bg) >= 4.5) return role;
+
+    /* Keep the theme's own hue: walk the role colour's lightness away from
+     * the background (lighter on a dark ground, darker on a light one) in
+     * small L* steps until it reads at AA. theme_shift_lightness scales
+     * the channels together, so the hue survives; only its lightness
+     * moves. The fallback is reached only if even the lightest/darkest
+     * reachable shade cannot clear 4.5:1 (never the case for a saturated
+     * hue against a mid-grey, but guaranteed legible regardless). */
+    double dir = (theme_lstar(bg) < 50.0) ? 2.0 : -2.0;
+    unsigned int c = role;
+    for (int i = 0; i < 50; i++) {
+        c = theme_shift_lightness(c, dir);
+        if (theme_contrast(c, bg) >= 4.5) return c;
+    }
+    return fallback;
+}

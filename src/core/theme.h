@@ -41,4 +41,13 @@ unsigned int theme_shift_lightness(unsigned int rgb, double dl);
  * t is clamped to [0.0, 1.0]. */
 unsigned int theme_blend(unsigned int a, unsigned int b, double t);
 
+/* Colour-by-role helper: returns `role` unchanged when it reads at
+ * WCAG AA (>= 4.5:1) against `bg`; otherwise returns the same hue moved
+ * in lightness (lighter on a dark ground, darker on a light one) just far
+ * enough to clear 4.5:1, so the painted colour stays within the selected
+ * theme. `fallback` is used only if no shade of the hue can reach AA.
+ * Used to paint an intent colour (a theme's link/info hue) as flat text. */
+unsigned int theme_role_color(unsigned int role, unsigned int bg,
+                              unsigned int fallback);
+
 #endif

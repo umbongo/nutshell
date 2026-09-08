@@ -137,6 +137,72 @@ int test_ui_tokens_link_darker_than_accent_on_light_themes(void)
     TEST_END();
 }
 
+/* ---- Colour-by-role render-time contrast (AI reply markdown colour) ------ */
+
+/* md_render.c paints two intent hues directly as flat text on bg_primary:
+ * base->link (the "structure" hue -- headings, list/blockquote markers,
+ * table header text) and base->info (the "code" hue -- inline code text,
+ * fenced-code left bar). That's flat text on bg_primary, not a derived
+ * ThemeSurface, so the bar is theme_contrast(link/info, bg_primary) >= 4.5,
+ * same as text_main/text_dim above -- not ThemeSurface.label, which only
+ * applies to a surface's own base fill.
+ *
+ * Two of today's four themes fall short of 4.5:1 on the raw token:
+ *   Onyx Synapse: link 4.158, info 4.148
+ *   Sage & Sand:  link 3.099, info 3.095
+ * (Onyx Light: link 7.833, info 5.527; Moss & Mist: link 5.132, info
+ * 4.928 -- both comfortably clear it.) Per the design-system rules this
+ * test does not retune those colours -- md_render.c instead resolves each
+ * role through theme_role_color(), which falls back to text_main when the
+ * hue itself would fail. This test holds that resolved, actually-painted
+ * colour to >= 4.5:1 in every theme, and pins down (via the exact expected
+ * colour) which themes currently show the hue vs. fall back, so a future
+ * palette change shows up here as a deliberate diff. */
+int test_ui_tokens_md_role_color_contrast(void)
+{
+    TEST_BEGIN();
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const ThemeColors *base = ui_theme_get(i);
+
+        double link_c = theme_contrast(base->link, base->bg_primary);
+        double info_c = theme_contrast(base->info, base->bg_primary);
+        printf("  [md role colour] %-14s link=%.3f info=%.3f\n",
+               base->name, link_c, info_c);
+
+        unsigned int resolved_link =
+            theme_role_color(base->link, base->bg_primary, base->text_main);
+        unsigned int resolved_info =
+            theme_role_color(base->info, base->bg_primary, base->text_main);
+
+        /* Whatever theme_role_color hands the renderer must always clear
+         * 4.5:1, and it must stay the theme's own hue: a legible shade of
+         * link/info, never the plain text colour ("keep to the selected
+         * theme"). A hue that already clears AA comes back untouched. */
+        ASSERT_TRUE(theme_contrast(resolved_link, base->bg_primary) >= MIN_CONTRAST);
+        ASSERT_TRUE(theme_contrast(resolved_info, base->bg_primary) >= MIN_CONTRAST);
+        ASSERT_TRUE(resolved_link != base->text_main);
+        ASSERT_TRUE(resolved_info != base->text_main);
+        if (link_c >= MIN_CONTRAST) ASSERT_EQ((int)resolved_link, (int)base->link);
+        if (info_c >= MIN_CONTRAST) ASSERT_EQ((int)resolved_info, (int)base->info);
+
+        /* Hue preserved: the dominant channel of the shade is the dominant
+         * channel of the original (a blue link stays blue, not grey). */
+        unsigned int orig[2] = { base->link, base->info };
+        unsigned int got[2]  = { resolved_link, resolved_info };
+        for (int k = 0; k < 2; k++) {
+            unsigned int oc[3] = { (orig[k] >> 16) & 0xFFu, (orig[k] >> 8) & 0xFFu, orig[k] & 0xFFu };
+            unsigned int gc[3] = { (got[k] >> 16) & 0xFFu,  (got[k] >> 8) & 0xFFu,  got[k] & 0xFFu };
+            int omax = 0, gmax = 0;
+            for (int ch = 1; ch < 3; ch++) {
+                if (oc[ch] > oc[omax]) omax = ch;
+                if (gc[ch] > gc[gmax]) gmax = ch;
+            }
+            ASSERT_EQ(gmax, omax);
+        }
+    }
+    TEST_END();
+}
+
 /* ---- Derivation ------------------------------------------------------------ */
 
 static int surface_derivation_ok(ThemeSurface s, unsigned int bg_primary, int step_dir)

@@ -11,6 +11,7 @@
 #include "md_table.h"
 #include "ns_type.h"
 #include "ns_draw.h"
+#include "theme.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,12 +21,27 @@
 #define RGB_FROM_THEME(c) \
     RGB(((c) >> 16) & 0xFF, ((c) >> 8) & 0xFF, (c) & 0xFF)
 
+/* Colour-by-role: resolve one of the two AI-reply intent hues (structure =
+ * theme->link for headings/list markers/blockquote bar/table header text;
+ * code = theme->info for inline code text/fenced-code left bar) against
+ * theme->bg_primary, falling back to theme->text_main when the hue itself
+ * would read below WCAG AA (4.5:1) on this theme rather than retuning the
+ * theme's own palette -- see tests/test_ui_tokens.c's
+ * test_ui_tokens_md_role_color_contrast for the per-theme numbers this is
+ * guarding against. theme_contrast() is cheap enough to call per paint. */
+static COLORREF md_role_clr(const ThemeColors *theme, unsigned int role)
+{
+    return RGB_FROM_THEME(
+        theme_role_color(role, theme->bg_primary, theme->text_main));
+}
+
 /* ── Layout constants ────────────────────────────────────────────────── */
 
 #define MD_LINE_SPACING     2   /* Extra pixels between lines */
 #define MD_PARA_SPACING     6   /* Extra pixels between paragraphs */
 #define MD_CODE_PAD_H       4   /* Horizontal padding inside code blocks */
 #define MD_CODE_PAD_V       2   /* Vertical padding inside code blocks */
+#define MD_CODE_BAR_WIDTH   2   /* Width of fenced code block's left bar */
 #define MD_LIST_INDENT     16   /* Indent for list items */
 #define MD_BLOCKQUOTE_IND  12   /* Indent for blockquotes */
 #define MD_BQ_BAR_WIDTH     3   /* Width of blockquote left bar */
@@ -153,7 +169,8 @@ static int measure_word(HDC hdc, const char *text, int byte_off, int byte_len,
 static void paint_word(HDC hdc, const char *text, int byte_off, int byte_len,
                        const MdSpan *span, int px, int py,
                        HFONT hFont, HFONT hMonoFont, HFONT hBoldFont,
-                       const ThemeColors *theme)
+                       const ThemeColors *theme,
+                       COLORREF default_clr, COLORREF code_clr)
 {
     if (byte_len <= 0) return;
 
@@ -196,9 +213,7 @@ static void paint_word(HDC hdc, const char *text, int byte_off, int byte_len,
         DeleteObject(br);
     }
 
-    COLORREF clr = (span->type == MD_SPAN_CODE)
-        ? RGB_FROM_THEME(theme->chat.cmd_text)
-        : RGB_FROM_THEME(theme->text_main);
+    COLORREF clr = (span->type == MD_SPAN_CODE) ? code_clr : default_clr;
     SetTextColor(hdc, clr);
 
     TextOutW(hdc, px, py, wb.ptr, wb.len);
@@ -206,7 +221,7 @@ static void paint_word(HDC hdc, const char *text, int byte_off, int byte_len,
     if (span->type == MD_SPAN_STRIKETHROUGH) {
         TEXTMETRIC tm; GetTextMetrics(hdc, &tm);
         int mid_y = py + tm.tmHeight / 2;
-        HPEN pen = CreatePen(PS_SOLID, 1, RGB_FROM_THEME(theme->text_main));
+        HPEN pen = CreatePen(PS_SOLID, 1, default_clr);
         HPEN old_pen = (HPEN)SelectObject(hdc, pen);
         MoveToEx(hdc, px, mid_y, NULL);
         LineTo(hdc, px + sz.cx, mid_y);
@@ -294,7 +309,8 @@ static int measure_cell_widest_word(HDC hdc, const char *text, int len,
 static int render_inline_spans(HDC hdc, const char *line, int line_len,
                                int x, int y, int max_width,
                                HFONT hFont, HFONT hMonoFont, HFONT hBoldFont,
-                               const ThemeColors *theme, int paint)
+                               const ThemeColors *theme, int paint,
+                               COLORREF default_clr, COLORREF code_clr)
 {
     /* Default line height (used for empty lines and as min line height). */
     int default_lh;
@@ -363,7 +379,8 @@ static int render_inline_spans(HDC hdc, const char *line, int line_len,
             if (paint) {
                 paint_word(hdc, line, wstart, w_byte_len, span,
                            cur_x, cur_y,
-                           hFont, hMonoFont, hBoldFont, theme);
+                           hFont, hMonoFont, hBoldFont, theme,
+                           default_clr, code_clr);
             }
             cur_x += word_w;
             if (word_h > line_h) line_h = word_h;
@@ -412,8 +429,10 @@ static int md_render_table_block(HDC hdc, const char *first_line,
                                  int x, int y, int max_width,
                                  HFONT hFont, HFONT hMonoFont,
                                  HFONT hBoldFont, const ThemeColors *theme,
-                                 int paint)
+                                 int paint,
+                                 COLORREF structure_clr, COLORREF code_clr)
 {
+    COLORREF body_clr = RGB_FROM_THEME(theme->text_main);
     MdTableRow rows[MD_TABLE_MAX_ROWS];
     int n_rows = 0;
 
@@ -549,7 +568,8 @@ static int md_render_table_block(HDC hdc, const char *first_line,
         if (content_w < 1) content_w = 1;
         int h = clen > 0
             ? render_inline_spans(hdc, ctext, clen, 0, 0, content_w,
-                                  hBoldFont, hMonoFont, hBoldFont, theme, 0)
+                                  hBoldFont, hMonoFont, hBoldFont, theme, 0,
+                                  structure_clr, code_clr)
             : default_line_h;
         if (h > header_h) header_h = h;
     }
@@ -567,7 +587,8 @@ static int md_render_table_block(HDC hdc, const char *first_line,
             if (content_w < 1) content_w = 1;
             int h = clen > 0
                 ? render_inline_spans(hdc, ctext, clen, 0, 0, content_w,
-                                      hFont, hMonoFont, hBoldFont, theme, 0)
+                                      hFont, hMonoFont, hBoldFont, theme, 0,
+                                      body_clr, code_clr)
                 : default_line_h;
             if (h > rh) rh = h;
         }
@@ -620,7 +641,7 @@ static int md_render_table_block(HDC hdc, const char *first_line,
                                     row_y + MD_TABLE_PAD_V,
                                     content_w - off,
                                     hBoldFont, hMonoFont, hBoldFont,
-                                    theme, 1);
+                                    theme, 1, structure_clr, code_clr);
             }
             col_x += col_w[j];
         }
@@ -657,7 +678,7 @@ static int md_render_table_block(HDC hdc, const char *first_line,
                                         row_y + MD_TABLE_PAD_V,
                                         content_w - off,
                                         hFont, hMonoFont, hBoldFont,
-                                        theme, 1);
+                                        theme, 1, body_clr, code_clr);
                 }
                 col_x += col_w[j];
             }
@@ -702,6 +723,15 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
     if (!text || !*text || max_width <= 0)
         return 0;
 
+    /* The two AI-reply intent hues (see md_role_clr): "structure" for
+     * headings/list markers/blockquote bar/table header text, "code" for
+     * inline code text/fenced-code left bar. Resolved once per render so
+     * every line reuses the same (contrast-guarded) colour. */
+    COLORREF structure_clr = md_role_clr(theme, theme->link);
+    COLORREF code_clr = md_role_clr(theme, theme->info);
+    COLORREF body_clr = RGB_FROM_THEME(theme->text_main);
+    COLORREF dim_text_clr = RGB_FROM_THEME(theme->text_dim);
+
     int cur_y = y;
     int in_code_block = 0;
     int olist_num = 0;   /* current ordered list number */
@@ -738,7 +768,8 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
             int h = md_render_table_block(hdc, line_buf, line_len, &next_p,
                                           x, cur_y, max_width,
                                           hFont, hMonoFont, hBoldFont,
-                                          theme, paint);
+                                          theme, paint,
+                                          structure_clr, code_clr);
             cur_y += h + MD_LINE_SPACING;
             if (line_buf != stack_buf) free(line_buf);
             p = next_p;
@@ -789,8 +820,16 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
                 FillRect(hdc, &bg_rc, bg_br);
                 DeleteObject(bg_br);
 
+                /* Code hue left bar (fenced code block only -- inline
+                 * code gets the hue on its text instead, see paint_word). */
+                RECT bar_rc = bg_rc;
+                bar_rc.right = bar_rc.left + MD_CODE_BAR_WIDTH;
+                HBRUSH bar_br = CreateSolidBrush(code_clr);
+                FillRect(hdc, &bar_rc, bar_br);
+                DeleteObject(bar_br);
+
                 /* Draw code text */
-                SetTextColor(hdc, RGB_FROM_THEME(theme->chat.cmd_text));
+                SetTextColor(hdc, body_clr);
                 RECT rc_d;
                 rc_d.left   = x;
                 rc_d.top    = cur_y;
@@ -829,7 +868,8 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
             int h = render_inline_spans(hdc, content, content_len,
                                         x, cur_y, max_width,
                                         use_font, hMonoFont, use_font,
-                                        theme, paint);
+                                        theme, paint,
+                                        structure_clr, code_clr);
             cur_y += h + MD_HEADING_EXTRA_V;
             SelectObject(hdc, old_font);
             if (heading_font) DeleteObject(heading_font);
@@ -845,7 +885,7 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
                 /* Bullet character */
                 static const wchar_t bullet[] = L"\x2022 ";
                 HFONT old_font = (HFONT)SelectObject(hdc, hFont);
-                SetTextColor(hdc, RGB_FROM_THEME(theme->text_main));
+                SetTextColor(hdc, structure_clr);
                 RECT brc;
                 brc.left   = x;
                 brc.top    = cur_y;
@@ -859,7 +899,7 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
                                         x + MD_LIST_INDENT, cur_y,
                                         max_width - MD_LIST_INDENT,
                                         hFont, hMonoFont, hBoldFont,
-                                        theme, paint);
+                                        theme, paint, body_clr, code_clr);
             cur_y += h + MD_LINE_SPACING;
             break;
         }
@@ -877,7 +917,7 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
                 MdWBuf nb;
                 mdbuf_init(&nb, num_str, num_len);
                 HFONT old_font = (HFONT)SelectObject(hdc, hFont);
-                SetTextColor(hdc, RGB_FROM_THEME(theme->text_main));
+                SetTextColor(hdc, structure_clr);
                 RECT nrc;
                 nrc.left   = x;
                 nrc.top    = cur_y;
@@ -892,7 +932,7 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
                                         x + MD_LIST_INDENT, cur_y,
                                         max_width - MD_LIST_INDENT,
                                         hFont, hMonoFont, hBoldFont,
-                                        theme, paint);
+                                        theme, paint, body_clr, code_clr);
             cur_y += h + MD_LINE_SPACING;
             break;
         }
@@ -912,16 +952,15 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
                                         x + MD_BLOCKQUOTE_IND, cur_y,
                                         max_width - MD_BLOCKQUOTE_IND,
                                         hFont, hMonoFont, hBoldFont,
-                                        theme, paint);
+                                        theme, paint, dim_text_clr, code_clr);
             if (paint) {
-                /* Draw left bar */
+                /* Draw left bar (structure hue) */
                 RECT bar_rc;
                 bar_rc.left   = x;
                 bar_rc.top    = cur_y;
                 bar_rc.right  = x + MD_BQ_BAR_WIDTH;
                 bar_rc.bottom = cur_y + h;
-                HBRUSH bar_br = CreateSolidBrush(
-                    RGB_FROM_THEME(theme->text_dim));
+                HBRUSH bar_br = CreateSolidBrush(structure_clr);
                 FillRect(hdc, &bar_rc, bar_br);
                 DeleteObject(bar_br);
             }
@@ -964,7 +1003,7 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
             int h = render_inline_spans(hdc, line_buf, line_len,
                                         x, cur_y, max_width,
                                         hFont, hMonoFont, hBoldFont,
-                                        theme, paint);
+                                        theme, paint, body_clr, code_clr);
             cur_y += h + MD_LINE_SPACING;
             break;
         }

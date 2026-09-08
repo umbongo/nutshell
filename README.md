@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.1.5 \
+**Version**: v1.1.6 \
 **Build Date**: 2026-09-09 \
 **Author**: Thomas Sulkiewicz
 
@@ -182,7 +182,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 #### AI Assistant > Behaviour
 - **Max terminal lines** — how much of the terminal the assistant reads as context, from 1 to 50,000 lines (default: 1,000). Each line becomes part of the context sent with every message: a larger window gives the assistant more of your session to reason about, at a proportionate cost in tokens.
 - **System instructions** — global instructions included in every AI conversation (per-session AI Notes take precedence)
-- **Render AI markdown** — format AI replies as markdown; turn off to see raw text
+- **Render AI markdown** — format AI replies as markdown; turn off to see raw text. Headings, list/blockquote markers, and table header text pick up the theme's link hue, and code (inline and fenced) picks up the theme's info hue, so the structure of a reply reads at a glance
 - **Auto approve for new sessions** — the starting Auto approve level for each new session: Off / Safe only / Safe + write / All (default: Off). Safe only runs read-only commands without asking; Safe + write adds write commands; All adds critical ones. Write and critical commands still need Permit write, and the status line in the AI panel can change the level per session from there.
 
 #### AI Assistant > Web Access

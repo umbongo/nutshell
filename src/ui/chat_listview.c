@@ -883,8 +883,18 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     RECT rc;
     HGDIOBJ old_font;
 
+    /* An item with no text measures as a bare gap -- except a command (its
+     * text lives in u.cmd.command) and an AI reply that already carries
+     * thinking text: while reasoning streams, the reply text is still empty
+     * but the Thinking header and box are painted, so it must measure as
+     * an AI item or the list under-counts it by the whole box and stops
+     * following the stream (v1.1.6 fix). */
+    int ai_with_thinking = (item->type == CHAT_ITEM_AI_TEXT &&
+                            item->u.ai.thinking_text &&
+                            item->u.ai.thinking_text[0]);
     if ((!item->text || item->text_len == 0) &&
-        !(item->type == CHAT_ITEM_COMMAND && item->u.cmd.command))
+        !(item->type == CHAT_ITEM_COMMAND && item->u.cmd.command) &&
+        !ai_with_thinking)
         return lv->msg_gap;
 
     switch (item->type) {

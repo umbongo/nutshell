@@ -386,6 +386,40 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       the track snaps to the true maximum. Open: `md_render.c` renders at raw
       96-DPI pixels (its padding is not `ns_scale`d) — fold into sub-project 3.
 
+- [x] AI replies coloured by role, restrained to two hues (v1.1.6). Structure hue
+      (`theme->link`): heading text (h1–h3, still bold), list bullet/ordered-list
+      number markers (marker only, item text stays `text_main`), the blockquote
+      left bar, and table header text (existing dim fill unchanged). Code hue
+      (`theme->info`): inline code text on its existing chip background, plus a
+      new 2px left bar (`MD_CODE_BAR_WIDTH`) on fenced code blocks, whose body
+      text now reads `text_main` instead of the old `chat.cmd_text`. Blockquote
+      body text changed from (actually rendered) `text_main` to `text_dim`, per
+      spec — the "as now" in the original ask was inaccurate; only the bar was
+      ever `text_dim`. `md_parse_inline` has no link-span type, so the "links
+      underlined in `theme->link`" part of the ask has nothing to hook into and
+      was skipped. New portable `theme_role_color(role, bg, fallback)`
+      (`src/core/theme.{c,h}`) returns `role` when `theme_contrast(role, bg) >=
+      4.5`, else `fallback` — `md_render.c` resolves both hues through it against
+      `bg_primary`, falling back to `text_main` per-theme rather than retuning
+      the palette. Two of four themes fail the raw contrast check and render
+      that hue as plain `text_main`: Onyx Synapse (link 4.158, info 4.148) and
+      Sage & Sand (link 3.099, info 3.095); Onyx Light (7.833, 5.527) and Moss &
+      Mist (5.132, 4.928) show both hues. New
+      `test_ui_tokens_md_role_color_contrast` in `tests/test_ui_tokens.c` pins
+      down the resolved (post-fallback) colour per theme so a palette change
+      shows up as a deliberate diff. Native suite green at **1,784 tests** (up
+      from 1,783).
+
+- [x] Thinking box cut off while streaming (v1.1.6). Root cause found with a
+      temporary layout log: `measure_item` returned a bare `msg_gap` for any item
+      with empty text, and a reply's text stays empty while its reasoning streams,
+      so the item under-measured by the whole Thinking box until the first content
+      chunk arrived (then the view jumped). AI items with thinking text now measure
+      as AI items. Reply colour also lands in v1.1.6: structure hue (`link`) for
+      headings, list markers, quote bar and table headers; code hue (`info`) for
+      inline code and the fenced-block bar; `theme_role_color` derives a legible
+      shade of the theme's own hue instead of falling back to white.
+
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.
