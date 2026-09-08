@@ -3,7 +3,9 @@
 #include <string.h>
 
 /* ===========================================================================
- * ui_demo tests (Design-System Foundation, task 9) -- see
+ * ui_demo tests (Design-System Foundation, task 9; extended for pending
+ * command batches, docs/superpowers/specs/
+ * 2026-09-09-pending-command-batches.md) -- see
  * docs/superpowers/specs/2026-09-07-design-system-foundation-design.md
  * section 5 ("Verification harness").
  * ===========================================================================
@@ -17,13 +19,13 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
     return n;
 }
 
-int test_ui_demo_states_lists_nine_ending_in_all(void)
+int test_ui_demo_states_lists_ten_ending_in_all(void)
 {
     TEST_BEGIN();
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 9);
+    ASSERT_EQ(count, 10);
     ASSERT_STR_EQ(states[count - 1], "all");
     TEST_END();
 }
@@ -51,16 +53,16 @@ int test_ui_demo_build_unknown_state_returns_error(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
+    ApprovalQueue approval, approval2;
     char term[64];
-    ASSERT_EQ(ui_demo_build("bogus", &conv, &approval, term, sizeof(term)), -1);
+    ASSERT_EQ(ui_demo_build("bogus", &conv, &approval, &approval2, term, sizeof(term)), -1);
     TEST_END();
 }
 
 int test_ui_demo_build_null_outputs_safe(void)
 {
     TEST_BEGIN();
-    ASSERT_EQ(ui_demo_build("chat", NULL, NULL, NULL, 0), 0);
+    ASSERT_EQ(ui_demo_build("chat", NULL, NULL, NULL, NULL, 0), 0);
     TEST_END();
 }
 
@@ -68,13 +70,14 @@ int test_ui_demo_build_chat_counts(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
-    ASSERT_EQ(ui_demo_build("chat", &conv, &approval, NULL, 0), 0);
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("chat", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 3); /* system, user, assistant */
     ASSERT_EQ((int)conv.messages[0].role, (int)AI_ROLE_SYSTEM);
     ASSERT_EQ((int)conv.messages[1].role, (int)AI_ROLE_USER);
     ASSERT_EQ((int)conv.messages[2].role, (int)AI_ROLE_ASSISTANT);
     ASSERT_EQ(approval.count, 0);
+    ASSERT_EQ(approval2.count, 0);
     TEST_END();
 }
 
@@ -82,14 +85,15 @@ int test_ui_demo_build_approval_counts_and_statuses(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
-    ASSERT_EQ(ui_demo_build("approval", &conv, &approval, NULL, 0), 0);
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("approval", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 3);
     ASSERT_EQ(approval.count, 4);
     ASSERT_EQ(count_status(&approval, APPROVE_PENDING), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_APPROVED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_DENIED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_BLOCKED), 1);
+    ASSERT_EQ(approval2.count, 0);
     TEST_END();
 }
 
@@ -97,12 +101,13 @@ int test_ui_demo_build_executing_counts_and_statuses(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
-    ASSERT_EQ(ui_demo_build("executing", &conv, &approval, NULL, 0), 0);
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("executing", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 3);
     ASSERT_EQ(approval.count, 2);
     ASSERT_EQ(count_status(&approval, APPROVE_COMPLETED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_EXECUTING), 1);
+    ASSERT_EQ(approval2.count, 0);
     TEST_END();
 }
 
@@ -110,8 +115,8 @@ int test_ui_demo_build_tool_counts(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
-    ASSERT_EQ(ui_demo_build("tool", &conv, &approval, NULL, 0), 0);
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("tool", &conv, &approval, &approval2, NULL, 0), 0);
     /* system, user, assistant(tool_use), tool result, assistant summary */
     ASSERT_EQ(conv.msg_count, 5);
     ASSERT_EQ(approval.count, 0);
@@ -127,8 +132,8 @@ int test_ui_demo_build_error_counts(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
-    ASSERT_EQ(ui_demo_build("error", &conv, &approval, NULL, 0), 0);
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("error", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 3); /* system, two user turns, no reply */
     ASSERT_EQ(approval.count, 0);
     TEST_END();
@@ -138,8 +143,8 @@ int test_ui_demo_build_empty_counts(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
-    ASSERT_EQ(ui_demo_build("empty", &conv, &approval, NULL, 0), 0);
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("empty", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 1); /* system prompt only -- always skipped */
     ASSERT_EQ(approval.count, 0);
     TEST_END();
@@ -149,8 +154,8 @@ int test_ui_demo_build_nokey_counts(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
-    ASSERT_EQ(ui_demo_build("nokey", &conv, &approval, NULL, 0), 0);
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("nokey", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 1); /* system prompt only -- always skipped */
     ASSERT_EQ(approval.count, 0);
     TEST_END();
@@ -160,10 +165,36 @@ int test_ui_demo_build_nosession_counts(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
-    ASSERT_EQ(ui_demo_build("nosession", &conv, &approval, NULL, 0), 0);
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("nosession", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 1); /* system prompt only -- always skipped */
     ASSERT_EQ(approval.count, 0);
+    TEST_END();
+}
+
+/* "batches": batch 1 (user, assistant, pending+blocked pair) then an
+ * interleaving user turn then batch 2 (assistant, pending+blocked pair) --
+ * see docs/superpowers/specs/2026-09-09-pending-command-batches.md. */
+int test_ui_demo_build_batches_counts_and_statuses(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("batches", &conv, &approval, &approval2, NULL, 0), 0);
+    /* system, user, assistant, user, assistant */
+    ASSERT_EQ(conv.msg_count, 5);
+    ASSERT_EQ((int)conv.messages[1].role, (int)AI_ROLE_USER);
+    ASSERT_EQ((int)conv.messages[2].role, (int)AI_ROLE_ASSISTANT);
+    ASSERT_EQ((int)conv.messages[3].role, (int)AI_ROLE_USER);
+    ASSERT_EQ((int)conv.messages[4].role, (int)AI_ROLE_ASSISTANT);
+
+    ASSERT_EQ(approval.count, 2);
+    ASSERT_EQ(count_status(&approval, APPROVE_PENDING), 1);
+    ASSERT_EQ(count_status(&approval, APPROVE_BLOCKED), 1);
+
+    ASSERT_EQ(approval2.count, 2);
+    ASSERT_EQ(count_status(&approval2, APPROVE_PENDING), 1);
+    ASSERT_EQ(count_status(&approval2, APPROVE_BLOCKED), 1);
     TEST_END();
 }
 
@@ -171,13 +202,15 @@ int test_ui_demo_build_all_is_union(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
-    ASSERT_EQ(ui_demo_build("all", &conv, &approval, NULL, 0), 0);
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("all", &conv, &approval, &approval2, NULL, 0), 0);
     /* 1 shared system + (chat 2) + (approval 2) + (executing 2) + (tool 4)
-     * + (error 2) = 13 conversation messages. */
-    ASSERT_EQ(conv.msg_count, 13);
-    /* approval(4) + executing(2) = 6 approval entries. */
-    ASSERT_EQ(approval.count, 6);
+     * + (error 2) + (batches 4) = 17 conversation messages. */
+    ASSERT_EQ(conv.msg_count, 17);
+    /* approval(4) + executing(2) + batches' first batch(2) = 8 entries. */
+    ASSERT_EQ(approval.count, 8);
+    /* batches' second batch. */
+    ASSERT_EQ(approval2.count, 2);
     TEST_END();
 }
 
@@ -185,9 +218,9 @@ int test_ui_demo_term_text_ends_with_prompt(void)
 {
     TEST_BEGIN();
     AiConversation conv;
-    ApprovalQueue approval;
+    ApprovalQueue approval, approval2;
     char term[4096];
-    ASSERT_EQ(ui_demo_build("chat", &conv, &approval, term, sizeof(term)), 0);
+    ASSERT_EQ(ui_demo_build("chat", &conv, &approval, &approval2, term, sizeof(term)), 0);
     size_t len = strlen(term);
     ASSERT_TRUE(len > 2);
     ASSERT_STR_EQ(term + len - 2, "$ ");

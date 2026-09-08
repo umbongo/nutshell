@@ -268,6 +268,7 @@ static Session *create_session(int rows, int cols) {
     s->conn_dots = 0;
     InitializeCriticalSection(&s->conn_cs);  /* H-1 */
     memset(&s->ai_state, 0, sizeof(s->ai_state));
+    cmd_batch_set_init(&s->ai_state.batches);
     s->next = g_session_list;
     g_session_list = s;
     return s;
@@ -285,7 +286,7 @@ static void free_session(Session *s) {
         if (s->ssh) ssh_session_free(s->ssh);
         if (s->session_log) fclose(s->session_log);
         if (s->debug_log)   fclose(s->debug_log);
-        free(s->ai_state.pending_cmds);
+        cmd_batch_set_free(&s->ai_state.batches);
         free(s->ai_state.stream_content);
         free(s->ai_state.stream_thinking);
         term_free(s->term);
@@ -923,13 +924,13 @@ static void create_demo_session(HWND hwnd)
 
     const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
     char term_buf[8192];
-    ApprovalQueue demo_approval;
-    if (ui_demo_build(state, &s->ai_state.conv, &demo_approval,
+    ApprovalQueue demo_approval, demo_approval2;
+    if (ui_demo_build(state, &s->ai_state.conv, &demo_approval, &demo_approval2,
                       term_buf, sizeof(term_buf)) != 0) {
         /* Unreachable in practice -- cli_parse already validated the
          * state -- but never launch with a half-built demo. */
         state = "all";
-        ui_demo_build(state, &s->ai_state.conv, &demo_approval,
+        ui_demo_build(state, &s->ai_state.conv, &demo_approval, &demo_approval2,
                       term_buf, sizeof(term_buf));
     }
     s->ai_state.valid = 1;
@@ -982,7 +983,7 @@ static void create_demo_session(HWND hwnd)
                                NULL, NULL, "demo");
     }
     if (g_hwndAiChat) {
-        ai_chat_apply_demo_extras(g_hwndAiChat, state, &demo_approval);
+        ai_chat_apply_demo_extras(g_hwndAiChat, state, &demo_approval, &demo_approval2);
 
         if (g_ai_docked) {
             RECT rc2;

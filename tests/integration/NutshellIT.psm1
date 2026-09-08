@@ -28,6 +28,7 @@ public class NutshellNative {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint f);
@@ -215,6 +216,17 @@ function Send-NutshellKeys {
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Keys, [int] $SettleMs = 300)
     [NutshellNative]::SetForegroundWindow($Session.Main) | Out-Null
     Start-Sleep -Milliseconds 150
+    # SendKeys types into whatever window is in front. Refuse unless that is
+    # a window of the Nutshell process under test: a locked desktop reports no
+    # foreground window at all, and a person using the machine can hold the
+    # foreground (Windows then ignores SetForegroundWindow from a background
+    # process). Typing blind would land keystrokes in someone else's window.
+    $fg = [NutshellNative]::GetForegroundWindow()
+    $fgPid = [uint32]0
+    if ($fg -ne [IntPtr]::Zero) { [NutshellNative]::GetWindowThreadProcessId($fg, [ref]$fgPid) | Out-Null }
+    if ($fg -eq [IntPtr]::Zero -or [int]$fgPid -ne $Session.Process.Id) {
+        throw "Nutshell is not the foreground window (desktop locked, or another app holds the foreground); refusing to send keys"
+    }
     $ws = New-Object -ComObject WScript.Shell
     $ws.SendKeys($Keys)
     Start-Sleep -Milliseconds $SettleMs
@@ -352,6 +364,27 @@ function Set-NutshellAiAutoApprove {
     Start-Sleep -Milliseconds 300
 }
 
+function Wait-NutshellAiSendIdle {
+    <# Poll the AI panel's Send button (IDC_CHAT_SEND, 4003) until its text
+       is back to ">" -- busy (streaming a reply) or dispatching (running
+       approved commands) both show the stop glyph instead. Used to know a
+       reply has actually finished before acting on it, per docs/superpowers/
+       specs/2026-09-09-pending-command-batches.md's integration case. #>
+    param([Parameter(Mandatory)] $Session, [int] $TimeoutSec = 90)
+    $p = Get-NutshellAiPanel -Session $Session
+    if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel is not open" }
+    $btn = [NutshellNative]::GetDlgItem($p, 4003)                                    # IDC_CHAT_SEND
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $sb = New-Object System.Text.StringBuilder 16
+    while ((Get-Date) -lt $deadline) {
+        [void]$sb.Clear()
+        [NutshellNative]::GetWindowText($btn, $sb, $sb.Capacity) | Out-Null
+        if ($sb.ToString() -eq ">") { return }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "Send button never returned to idle (`">`") within ${TimeoutSec}s"
+}
+
 function Wait-NutshellShell {
     <# Press Enter until a shell prompt ($ or #) shows up in the log. Throws on timeout. #>
     param([Parameter(Mandatory)] $Session, [int] $TimeoutSec = 25)
@@ -394,4 +427,5 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Send-NutshellCommand, Start-NutshellLogging, Send-NutshellKeys, Send-NutshellLine, `
     Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Save-NutshellScreenshot, `
     Open-NutshellSecondTab, Select-NutshellTab, `
-    Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiAutoApprove, Set-NutshellTerminalFocus
+    Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiAutoApprove, Set-NutshellTerminalFocus, `
+    Wait-NutshellAiSendIdle

@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include "ai_tools.h"
+#include "cmd_batch.h"
 
 /* Default AI provider — must match the first entry in the provider list
  * shown in the Settings dialog (settings.c k_ai_providers[]). */
@@ -325,10 +326,15 @@ AiInputAction ai_input_key_action(int is_enter, int shift_held);
 typedef struct {
     AiConversation conv;
     int valid;  /* 0 = never used, 1 = has saved conversation */
-    /* Pending command approval (heap-allocated to keep struct small) */
-    int pending_approval;
-    int pending_cmd_count;
-    char (*pending_cmds)[1024];  /* heap array, NULL when not pending */
+    /* Pending command approval batches (see src/core/cmd_batch.h and
+     * docs/superpowers/specs/2026-09-09-pending-command-batches.md): any
+     * number of cards may be pending at once, each with its own
+     * ApprovalQueue. Replaces the old single pending_approval/pending_cmds
+     * snapshot -- cards are rebuilt straight from this set on session
+     * switch instead. Initialized with cmd_batch_set_init() when the
+     * session is created, freed with cmd_batch_set_free() when it's
+     * destroyed. */
+    CmdBatchSet batches;
     /* Per-session streaming state (supports concurrent AI requests) */
     volatile int busy;           /* 1 while a stream thread is running */
     char *stream_content;        /* heap-allocated accumulator, NULL when idle */

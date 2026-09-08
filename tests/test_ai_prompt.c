@@ -2068,37 +2068,29 @@ int test_inline_approval_allow_starts_execution(void)
 int test_inline_approval_blocks_send(void)
 {
     TEST_BEGIN();
-    /* When pending_approval is set, send_user_message should be blocked.
-     * Simulate the guard condition. */
+    /* Pending command batches (docs/superpowers/specs/
+     * 2026-09-09-pending-command-batches.md, rule 1): a pending card never
+     * blocks the input any more -- only a streaming reply or an active
+     * command dispatcher does. Simulate send_user_message's guard:
+     * if (!d || d->active_state->busy || d->dispatch_active) return; */
     int busy = 0;
-    int pending_approval = 1;
+    int dispatch_active = 0;
+    int has_pending_card = 1;  /* a card is up, but that alone never blocks */
 
-    /* Guard: if (!d || d->busy || d->pending_approval) return; */
-    int should_block = (busy || pending_approval);
-    ASSERT_EQ(should_block, 1);
-
-    /* After approval is resolved, sending should work */
-    pending_approval = 0;
-    should_block = (busy || pending_approval);
+    int should_block = (busy || dispatch_active);
     ASSERT_EQ(should_block, 0);
-    TEST_END();
-}
+    (void)has_pending_card;
 
-int test_inline_approval_blocks_new_chat(void)
-{
-    TEST_BEGIN();
-    /* New Chat should be blocked while pending approval */
-    int busy = 0;
-    int pending_approval = 1;
+    /* Streaming blocks sending */
+    busy = 1;
+    should_block = (busy || dispatch_active);
+    ASSERT_EQ(should_block, 1);
+    busy = 0;
 
-    /* Guard: if (d && !d->busy && !d->pending_approval) */
-    int can_new_chat = (!busy && !pending_approval);
-    ASSERT_EQ(can_new_chat, 0);
-
-    /* After resolving approval */
-    pending_approval = 0;
-    can_new_chat = (!busy && !pending_approval);
-    ASSERT_EQ(can_new_chat, 1);
+    /* An active dispatcher blocks sending too */
+    dispatch_active = 1;
+    should_block = (busy || dispatch_active);
+    ASSERT_EQ(should_block, 1);
     TEST_END();
 }
 
@@ -2134,300 +2126,72 @@ int test_inline_approval_readonly_filter_then_approve(void)
     TEST_END();
 }
 
-int test_inline_approval_switch_saves_to_session(void)
+/* ---- Pending command batches live in AiSessionState.batches now (see
+ * src/core/cmd_batch.h and docs/superpowers/specs/
+ * 2026-09-09-pending-command-batches.md) -- these replace the old
+ * single pending_cmds/pending_cmd_count/pending_approval snapshot the
+ * tests above this comment used to exercise directly. cmd_batch.{c,h}'s
+ * own suite (tests/test_cmd_batch.c) covers the set mechanics in depth;
+ * these just confirm AiSessionState wires it in per-session. ---- */
+
+int test_session_state_batches_two_sessions_independent(void)
 {
     TEST_BEGIN();
-    /* Switching sessions saves pending approval to AiSessionState
-     * via heap-allocated command array, then restores on switch back. */
-    AiSessionState *state = calloc(1, sizeof(AiSessionState));
-    ASSERT_TRUE(state != NULL);
+    AiSessionState state_a, state_b;
+    memset(&state_a, 0, sizeof(state_a));
+    memset(&state_b, 0, sizeof(state_b));
+    cmd_batch_set_init(&state_a.batches);
+    cmd_batch_set_init(&state_b.batches);
 
-    /* Simulate saving: pending approval with 2 commands */
-    state->pending_approval = 1;
-    state->pending_cmd_count = 2;
-    state->pending_cmds = malloc(2 * 1024);
-    ASSERT_TRUE(state->pending_cmds != NULL);
-    snprintf(state->pending_cmds[0], 1024, "ls -la");
-    snprintf(state->pending_cmds[1], 1024, "df -h");
+    CmdBatch *ba = cmd_batch_add(&state_a.batches, NULL, NULL);
+    ASSERT_NOT_NULL(ba);
+    chat_approval_add(&ba->q, "ls -la", CMD_PLATFORM_LINUX, 1);
 
-    /* Verify state persists */
-    ASSERT_EQ(state->pending_approval, 1);
-    ASSERT_EQ(state->pending_cmd_count, 2);
-    ASSERT_STR_EQ(state->pending_cmds[0], "ls -la");
-    ASSERT_STR_EQ(state->pending_cmds[1], "df -h");
+    CmdBatch *bb = cmd_batch_add(&state_b.batches, NULL, NULL);
+    ASSERT_NOT_NULL(bb);
+    chat_approval_add(&bb->q, "df -h", CMD_PLATFORM_LINUX, 1);
 
-    /* Simulate restoring to local queue */
-    char queued[16][1024];
-    memcpy(queued, state->pending_cmds,
-           (size_t)state->pending_cmd_count * sizeof(queued[0]));
-    ASSERT_STR_EQ(queued[0], "ls -la");
-    ASSERT_STR_EQ(queued[1], "df -h");
+    /* Deny + remove on B must not affect A */
+    chat_approval_deny(&bb->q, 0);
+    cmd_batch_remove(&state_b.batches, bb->id);
 
-    /* Cleanup */
-    free(state->pending_cmds);
-    free(state);
+    ASSERT_EQ(state_b.batches.count, 0);
+    ASSERT_EQ(state_a.batches.count, 1);
+    ASSERT_STR_EQ(state_a.batches.b[0]->q.entries[0].command, "ls -la");
+
+    cmd_batch_set_free(&state_a.batches);
+    cmd_batch_set_free(&state_b.batches);
     TEST_END();
 }
 
-int test_inline_approval_switch_clears_on_allow(void)
+int test_session_state_batches_survive_switch_away(void)
 {
     TEST_BEGIN();
-    /* After Allow, session state's pending fields are cleared */
-    AiSessionState *state = calloc(1, sizeof(AiSessionState));
-    ASSERT_TRUE(state != NULL);
-    state->pending_approval = 1;
-    state->pending_cmd_count = 1;
-    state->pending_cmds = malloc(1024);
-    ASSERT_TRUE(state->pending_cmds != NULL);
-    snprintf(state->pending_cmds[0], 1024, "uptime");
+    /* A batch created while a session is active must still be there,
+     * unsettled, after simulating a switch away and back (nothing here
+     * touches state.batches in between -- that's the whole point). */
+    AiSessionState state;
+    memset(&state, 0, sizeof(state));
+    cmd_batch_set_init(&state.batches);
 
-    /* Simulate Allow click */
-    state->pending_approval = 0;
-    free(state->pending_cmds);
-    state->pending_cmds = NULL;
-    state->pending_cmd_count = 0;
+    CmdBatch *b1 = cmd_batch_add(&state.batches, NULL, NULL);
+    ASSERT_NOT_NULL(b1);
+    chat_approval_add(&b1->q, "uptime", CMD_PLATFORM_LINUX, 1);
 
-    ASSERT_EQ(state->pending_approval, 0);
-    ASSERT_EQ(state->pending_cmd_count, 0);
-    ASSERT_TRUE(state->pending_cmds == NULL);
-    free(state);
-    TEST_END();
-}
+    /* A second reply while still on this session adds its own batch --
+     * the first is untouched (rule 2: a new reply never settles earlier
+     * cards). */
+    CmdBatch *b2 = cmd_batch_add(&state.batches, NULL, NULL);
+    ASSERT_NOT_NULL(b2);
+    chat_approval_add(&b2->q, "free -m", CMD_PLATFORM_LINUX, 1);
 
-int test_inline_approval_deferred_extract_on_switch(void)
-{
-    TEST_BEGIN();
-    /* When AI response arrives while user is on a different session,
-     * commands must still be extracted and saved to the original
-     * session's state for deferred approval. */
-    AiSessionState *bs = calloc(1, sizeof(AiSessionState));
-    ASSERT_TRUE(bs != NULL);
+    ASSERT_EQ(state.batches.count, 2);
+    ASSERT_TRUE(cmd_batch_find(&state.batches, b1->id) == b1);
+    ASSERT_TRUE(cmd_batch_find(&state.batches, b2->id) == b2);
+    ASSERT_EQ(b1->q.entries[0].status, APPROVE_PENDING);
+    ASSERT_EQ(b2->q.entries[0].status, APPROVE_PENDING);
 
-    /* AI response text with a command block */
-    const char *response =
-        "Here is the command:\n[EXEC]ping -c 3 server[/EXEC]\n";
-
-    /* Extract commands (same as the switched-away WM_AI_RESPONSE path) */
-    char cmds[16][1024];
-    int ncmds = ai_extract_commands(response, cmds, 16);
-    ASSERT_EQ(ncmds, 1);
-    ASSERT_STR_EQ(cmds[0], "ping -c 3 server");
-
-    /* Save to session state (simulates the deferred save) */
-    if (ncmds > 0) {
-        free(bs->pending_cmds);
-        size_t sz = (size_t)ncmds * sizeof(cmds[0]);
-        bs->pending_cmds = malloc(sz);
-        ASSERT_TRUE(bs->pending_cmds != NULL);
-        memcpy(bs->pending_cmds, cmds, sz);
-        bs->pending_cmd_count = ncmds;
-        bs->pending_approval = 1;
-    }
-
-    /* Verify the command survives in session state */
-    ASSERT_EQ(bs->pending_approval, 1);
-    ASSERT_EQ(bs->pending_cmd_count, 1);
-    ASSERT_STR_EQ(bs->pending_cmds[0], "ping -c 3 server");
-
-    free(bs->pending_cmds);
-    free(bs);
-    TEST_END();
-}
-
-int test_inline_approval_deferred_no_commands(void)
-{
-    TEST_BEGIN();
-    /* If AI response has no commands, no approval should be saved */
-    AiSessionState *bs = calloc(1, sizeof(AiSessionState));
-    ASSERT_TRUE(bs != NULL);
-
-    const char *response = "The server looks fine, no action needed.";
-    char cmds[16][1024];
-    int ncmds = ai_extract_commands(response, cmds, 16);
-    ASSERT_EQ(ncmds, 0);
-
-    /* No commands → no pending approval */
-    ASSERT_EQ(bs->pending_approval, 0);
-    ASSERT_TRUE(bs->pending_cmds == NULL);
-    free(bs);
-    TEST_END();
-}
-
-int test_inline_approval_two_sessions_independent(void)
-{
-    TEST_BEGIN();
-    /* Two sessions with independent pending approval states.
-     * Allowing one must not affect the other. */
-    AiSessionState *sa = calloc(1, sizeof(AiSessionState));
-    AiSessionState *sb = calloc(1, sizeof(AiSessionState));
-    ASSERT_TRUE(sa != NULL);
-    ASSERT_TRUE(sb != NULL);
-
-    /* Session A: pending approval with "ls -la" */
-    sa->pending_approval = 1;
-    sa->pending_cmd_count = 1;
-    sa->pending_cmds = malloc(1024);
-    ASSERT_TRUE(sa->pending_cmds != NULL);
-    snprintf(sa->pending_cmds[0], 1024, "ls -la");
-
-    /* Session B: pending approval with "df -h" */
-    sb->pending_approval = 1;
-    sb->pending_cmd_count = 1;
-    sb->pending_cmds = malloc(1024);
-    ASSERT_TRUE(sb->pending_cmds != NULL);
-    snprintf(sb->pending_cmds[0], 1024, "df -h");
-
-    /* Allow on session B */
-    sb->pending_approval = 0;
-    free(sb->pending_cmds);
-    sb->pending_cmds = NULL;
-    sb->pending_cmd_count = 0;
-
-    /* Session A must be completely unaffected */
-    ASSERT_EQ(sa->pending_approval, 1);
-    ASSERT_EQ(sa->pending_cmd_count, 1);
-    ASSERT_STR_EQ(sa->pending_cmds[0], "ls -la");
-
-    free(sa->pending_cmds);
-    free(sa);
-    free(sb);
-    TEST_END();
-}
-
-int test_inline_approval_deny_one_keep_other(void)
-{
-    TEST_BEGIN();
-    /* Denying on one session must not affect the other */
-    AiSessionState *sa = calloc(1, sizeof(AiSessionState));
-    AiSessionState *sb = calloc(1, sizeof(AiSessionState));
-    ASSERT_TRUE(sa != NULL);
-    ASSERT_TRUE(sb != NULL);
-
-    sa->pending_approval = 1;
-    sa->pending_cmd_count = 2;
-    sa->pending_cmds = malloc(2 * 1024);
-    ASSERT_TRUE(sa->pending_cmds != NULL);
-    snprintf(sa->pending_cmds[0], 1024, "rm file");
-    snprintf(sa->pending_cmds[1], 1024, "rmdir dir");
-
-    sb->pending_approval = 1;
-    sb->pending_cmd_count = 1;
-    sb->pending_cmds = malloc(1024);
-    ASSERT_TRUE(sb->pending_cmds != NULL);
-    snprintf(sb->pending_cmds[0], 1024, "uptime");
-
-    /* Deny on A */
-    sa->pending_approval = 0;
-    free(sa->pending_cmds);
-    sa->pending_cmds = NULL;
-    sa->pending_cmd_count = 0;
-
-    /* B still pending */
-    ASSERT_EQ(sb->pending_approval, 1);
-    ASSERT_EQ(sb->pending_cmd_count, 1);
-    ASSERT_STR_EQ(sb->pending_cmds[0], "uptime");
-
-    free(sb->pending_cmds);
-    free(sa);
-    free(sb);
-    TEST_END();
-}
-
-int test_inline_approval_save_restore_roundtrip(void)
-{
-    TEST_BEGIN();
-    /* Full roundtrip: save working state → session, switch away,
-     * switch back → restore from session, verify commands intact. */
-    AiSessionState *state = calloc(1, sizeof(AiSessionState));
-    ASSERT_TRUE(state != NULL);
-
-    /* Working state: 3 pending commands */
-    char working_cmds[16][1024];
-    int working_count = 3;
-    int working_approval = 1;
-    snprintf(working_cmds[0], 1024, "ps aux");
-    snprintf(working_cmds[1], 1024, "free -m");
-    snprintf(working_cmds[2], 1024, "df -h");
-
-    /* Step 1: save to session (simulates switching away) */
-    state->pending_approval = working_approval;
-    state->pending_cmd_count = 0;
-    if (working_approval && working_count > 0) {
-        size_t sz = (size_t)working_count * sizeof(working_cmds[0]);
-        state->pending_cmds = malloc(sz);
-        ASSERT_TRUE(state->pending_cmds != NULL);
-        memcpy(state->pending_cmds, working_cmds, sz);
-        state->pending_cmd_count = working_count;
-    }
-
-    /* Step 2: clear working state (simulates loading other session) */
-    working_approval = 0;
-    working_count = 0;
-    memset(working_cmds, 0, sizeof(working_cmds));
-
-    /* Step 3: restore from session (simulates switching back) */
-    if (state->pending_approval && state->pending_cmds &&
-        state->pending_cmd_count > 0) {
-        int nc = state->pending_cmd_count;
-        if (nc > 16) nc = 16;
-        memcpy(working_cmds, state->pending_cmds,
-               (size_t)nc * sizeof(working_cmds[0]));
-        working_count = nc;
-        working_approval = 1;
-    }
-
-    /* Verify full roundtrip */
-    ASSERT_EQ(working_approval, 1);
-    ASSERT_EQ(working_count, 3);
-    ASSERT_STR_EQ(working_cmds[0], "ps aux");
-    ASSERT_STR_EQ(working_cmds[1], "free -m");
-    ASSERT_STR_EQ(working_cmds[2], "df -h");
-
-    free(state->pending_cmds);
-    free(state);
-    TEST_END();
-}
-
-int test_inline_approval_deferred_multi_commands(void)
-{
-    TEST_BEGIN();
-    /* Deferred extraction with multiple commands */
-    AiSessionState *bs = calloc(1, sizeof(AiSessionState));
-    ASSERT_TRUE(bs != NULL);
-
-    const char *response =
-        "Run these:\n"
-        "[EXEC]ls -la ~[/EXEC]\n"
-        "[EXEC]ss -tlnp[/EXEC]\n"
-        "[EXEC]ps aux --sort=-%mem | head -20[/EXEC]\n";
-
-    char cmds[16][1024];
-    int ncmds = ai_extract_commands(response, cmds, 16);
-    ASSERT_TRUE(ncmds >= 3);
-
-    size_t sz = (size_t)ncmds * sizeof(cmds[0]);
-    bs->pending_cmds = malloc(sz);
-    ASSERT_TRUE(bs->pending_cmds != NULL);
-    memcpy(bs->pending_cmds, cmds, sz);
-    bs->pending_cmd_count = ncmds;
-    bs->pending_approval = 1;
-
-    /* All commands survive heap storage */
-    ASSERT_STR_EQ(bs->pending_cmds[0], "ls -la ~");
-    ASSERT_STR_EQ(bs->pending_cmds[1], "ss -tlnp");
-    ASSERT_TRUE(strstr(bs->pending_cmds[2], "ps aux") != NULL);
-
-    /* Confirm text can be rebuilt from stored commands */
-    char confirm[4096];
-    size_t clen = ai_build_confirm_text(
-        bs->pending_cmds, bs->pending_cmd_count,
-        confirm, sizeof(confirm));
-    ASSERT_TRUE(clen > 0);
-    ASSERT_TRUE(strstr(confirm, "ls -la ~") != NULL);
-    ASSERT_TRUE(strstr(confirm, "ss -tlnp") != NULL);
-
-    free(bs->pending_cmds);
-    free(bs);
+    cmd_batch_set_free(&state.batches);
     TEST_END();
 }
 
@@ -2607,27 +2371,29 @@ int test_session_state_stream_thinking_accumulation(void)
 int test_session_state_cleanup_on_close(void)
 {
     TEST_BEGIN();
-    /* Simulate session close while busy: buffers must be freed */
+    /* Simulate session close while busy: buffers and every pending batch
+     * must be freed (mirrors ai_chat_notify_session_closed). */
     AiSessionState state;
     memset(&state, 0, sizeof(state));
+    cmd_batch_set_init(&state.batches);
 
     state.busy = 1;
     state.stream_content = (char *)calloc(1, AI_MSG_MAX);
     state.stream_thinking = (char *)calloc(1, AI_MSG_MAX);
-    state.pending_cmds = (char (*)[1024])malloc(2 * 1024);
-    state.pending_cmd_count = 2;
-    state.pending_approval = 1;
+    CmdBatch *b = cmd_batch_add(&state.batches, NULL, NULL);
+    ASSERT_NOT_NULL(b);
+    chat_approval_add(&b->q, "uptime", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ(state.batches.count, 1);
 
-    /* Simulate cleanup (mirrors ai_chat_notify_session_closed) */
-    free(state.pending_cmds);
-    state.pending_cmds = NULL;
+    /* Simulate cleanup */
+    cmd_batch_set_free(&state.batches);
     free(state.stream_content);
     state.stream_content = NULL;
     free(state.stream_thinking);
     state.stream_thinking = NULL;
     state.busy = 0;
 
-    ASSERT_NULL(state.pending_cmds);
+    ASSERT_EQ(state.batches.count, 0);
     ASSERT_NULL(state.stream_content);
     ASSERT_NULL(state.stream_thinking);
     ASSERT_EQ(state.busy, 0);
@@ -2730,40 +2496,6 @@ int test_session_state_switch_back_restores_stream(void)
 
     free(state_a.stream_content);
     free(state_a.stream_thinking);
-    TEST_END();
-}
-
-int test_session_state_pending_cmds_per_session(void)
-{
-    TEST_BEGIN();
-    /* When a non-active session finishes with commands,
-     * they should be stored in that session's pending state */
-    AiSessionState state_a, state_b;
-    memset(&state_a, 0, sizeof(state_a));
-    memset(&state_b, 0, sizeof(state_b));
-
-    /* Session A gets commands while user views B */
-    char cmds[2][1024];
-    snprintf(cmds[0], sizeof(cmds[0]), "ls -la");
-    snprintf(cmds[1], sizeof(cmds[1]), "df -h");
-
-    state_a.pending_cmds = (char (*)[1024])malloc(2 * sizeof(cmds[0]));
-    ASSERT_NOT_NULL(state_a.pending_cmds);
-    memcpy(state_a.pending_cmds, cmds, 2 * sizeof(cmds[0]));
-    state_a.pending_cmd_count = 2;
-    state_a.pending_approval = 1;
-
-    /* Session B has no pending commands */
-    ASSERT_NULL(state_b.pending_cmds);
-    ASSERT_EQ(state_b.pending_approval, 0);
-
-    /* A has its commands ready */
-    ASSERT_EQ(state_a.pending_approval, 1);
-    ASSERT_EQ(state_a.pending_cmd_count, 2);
-    ASSERT_STR_EQ(state_a.pending_cmds[0], "ls -la");
-    ASSERT_STR_EQ(state_a.pending_cmds[1], "df -h");
-
-    free(state_a.pending_cmds);
     TEST_END();
 }
 

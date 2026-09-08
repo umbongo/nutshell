@@ -202,6 +202,21 @@ int test_cmd_batch_next_runnable_oldest_with_approved(void) {
     TEST_END();
 }
 
+/* conv_mark defaults to 0 (from cmd_batch_add's calloc) and is a plain
+ * settable field the caller records the conversation length into. */
+int test_cmd_batch_conv_mark_defaults_zero_and_settable(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(a);
+    ASSERT_EQ(a->conv_mark, 0);
+    a->conv_mark = 5;
+    ASSERT_EQ(a->conv_mark, 5);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
 int test_cmd_batch_next_runnable_none(void) {
     TEST_BEGIN();
     CmdBatchSet set;

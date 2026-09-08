@@ -19,6 +19,13 @@
 typedef struct {
     int id;
     ApprovalQueue q;
+    int conv_mark;  /* AiConversation.msg_count right after this batch's
+                      * reply was added -- the caller (ai_chat.c) sets this
+                      * right after cmd_batch_add(); comparing it to the
+                      * live msg_count when the batch finishes running says
+                      * whether "newer exchanges" have happened since (see
+                      * ai_build_continue_text() in ai_prompt.h). Defaults
+                      * to 0 from cmd_batch_add()'s calloc. */
 } CmdBatch;
 
 typedef struct {

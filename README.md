@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.1.7 \
+**Version**: v1.1.8 \
 **Build Date**: 2026-09-09 \
 **Author**: Thomas Sulkiewicz
 
@@ -221,13 +221,15 @@ A line above the input box, always visible once a session is connected:
 
 #### Command Execution
 
-When the AI suggests commands, they land in one approval card in the chat thread:
+When the AI suggests commands, they land in an approval card in the chat thread:
 
 - **Header** — "N commands · M held", plus the reason (e.g. "Permit write is off") when any are held back
 - **Rows** — a checkbox, the command text, and a risk tag (**SAFE** / **WRITE** / **CRITICAL**). Held rows show a disabled checkbox and dimmed text. Pending safe commands start checked
 - **Actions** — **Deny all** rejects every row; **Run N selected** executes the checked rows (disabled when nothing is checked)
 
-With session Auto approve on, safe rows are approved and start running the moment they arrive, same as before — the card just shows them as executing instead of waiting for a click. Approved commands are sent one at a time: each one waits for the terminal to return to a shell prompt before the next is typed, so a command that stops at a password or confirmation prompt simply holds the queue instead of racing ahead. Once the last command's prompt has returned, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed.
+A card never blocks the input — keep chatting, ask something else, or just scroll past it, and it stays right there, pending, for as long as the session lasts. Every reply that suggests commands gets its own card, so more than one can be pending at once; acting on one (or letting its approved commands finish running) never touches any other. Sending is only held up while a reply is actually streaming in or the dispatcher is mid-run sending an already-approved batch.
+
+With session Auto approve on, safe rows are approved and start running the moment they arrive, same as before — the card just shows them as executing instead of waiting for a click. Approved commands are sent one at a time: each one waits for the terminal to return to a shell prompt before the next is typed, so a command that stops at a password or confirmation prompt simply holds the queue instead of racing ahead. Once the last command's prompt has returned, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed; if another card's commands are waiting to run, they start the moment that continuation finishes.
 
 #### Thought Process
 

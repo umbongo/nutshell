@@ -11,7 +11,7 @@
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
-    "nokey", "nosession", "all"
+    "nokey", "nosession", "batches", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
 
@@ -234,6 +234,52 @@ static void build_error(AiConversation *conv)
 }
 
 /* ---------------------------------------------------------------------
+ * "batches": two independent pending command cards from two separate
+ * assistant replies, with a user turn between them so the transcript
+ * shows the interleaving (docs/superpowers/specs/
+ * 2026-09-09-pending-command-batches.md). Batch 1 reuses "approval"'s
+ * pending/blocked pair (ls -la /var/log, rm -rf /var/log/old); batch 2 is
+ * a fresh pending/blocked pair from the second reply.
+ * --------------------------------------------------------------------- */
+static const char BATCH1_USER_MSG[] =
+    "Check the log directory and clear out anything stale.";
+
+static const char BATCH1_ASSISTANT_MSG[] =
+    "Here's what I'd like to run for that:";
+
+static const char BATCH_INTERLEAVE_USER_MSG[] =
+    "Also -- while that's pending, can you check nginx and update packages?";
+
+static const char BATCH2_ASSISTANT_MSG[] =
+    "Sure, here's a second batch for that:";
+
+static void build_batches(AiConversation *conv, ApprovalQueue *approval,
+                          ApprovalQueue *approval2)
+{
+    if (conv) {
+        ai_conv_add(conv, AI_ROLE_USER, BATCH1_USER_MSG);
+        ai_conv_add(conv, AI_ROLE_ASSISTANT, BATCH1_ASSISTANT_MSG);
+    }
+    if (approval) {
+        /* Pending (safe) */
+        chat_approval_add(approval, "ls -la /var/log", CMD_PLATFORM_LINUX, 1);
+        /* Blocked (critical, permit_write off) */
+        chat_approval_add(approval, "rm -rf /var/log/old", CMD_PLATFORM_LINUX, 0);
+    }
+
+    if (conv) {
+        ai_conv_add(conv, AI_ROLE_USER, BATCH_INTERLEAVE_USER_MSG);
+        ai_conv_add(conv, AI_ROLE_ASSISTANT, BATCH2_ASSISTANT_MSG);
+    }
+    if (approval2) {
+        /* Pending (safe) */
+        chat_approval_add(approval2, "systemctl status nginx", CMD_PLATFORM_LINUX, 1);
+        /* Blocked (write, permit_write off) */
+        chat_approval_add(approval2, "sudo apt update", CMD_PLATFORM_LINUX, 0);
+    }
+}
+
+/* ---------------------------------------------------------------------
  * Terminal transcript: ~30 lines of plausible shell output ending at a
  * bare prompt, fed through term_process() by the win32 side.
  * --------------------------------------------------------------------- */
@@ -274,7 +320,8 @@ static const char DEMO_TERM_TEXT[] =
  * Entry point
  * --------------------------------------------------------------------- */
 int ui_demo_build(const char *state, AiConversation *conv,
-                  ApprovalQueue *approval, char *term_text, size_t term_cap)
+                  ApprovalQueue *approval, ApprovalQueue *approval2,
+                  char *term_text, size_t term_cap)
 {
     if (!ui_demo_state_valid(state)) return -1;
 
@@ -284,6 +331,9 @@ int ui_demo_build(const char *state, AiConversation *conv,
     }
     if (approval) {
         chat_approval_init(approval);
+    }
+    if (approval2) {
+        chat_approval_init(approval2);
     }
     if (term_text && term_cap > 0) {
         (void)snprintf(term_text, term_cap, "%s", DEMO_TERM_TEXT);
@@ -301,6 +351,8 @@ int ui_demo_build(const char *state, AiConversation *conv,
         build_tool(conv);
     if (is_all || strcmp(state, "error") == 0)
         build_error(conv);
+    if (is_all || strcmp(state, "batches") == 0)
+        build_batches(conv, approval, approval2);
     /* "empty", "nokey" and "nosession" add nothing beyond the system
      * message -- their distinct look comes entirely from the forced
      * AiPanelStateId the win32 side applies via ai_chat_force_state()

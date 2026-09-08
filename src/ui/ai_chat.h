@@ -98,20 +98,25 @@ void ai_chat_set_auto_approve_default(HWND hwnd, int level0to3);
 /* Set how many terminal lines are sent to the AI as context (1-50000). */
 void ai_chat_set_context_lines(HWND hwnd, int lines);
 
-/* --ui-demo only: layer the canned approval queue and small activity
+/* --ui-demo only: layer the canned approval queue(s) and small activity
  * flourishes onto a conversation already loaded via ai_chat_show()'s
  * initial_state or ai_chat_switch_session() (see ui_demo_build() in
- * src/core/ui_demo.h, which builds the conversation/approval queue this
- * expects).
+ * src/core/ui_demo.h, which builds the conversation/approval queues this
+ * expects). Builds a real CmdBatch per non-empty queue in the demo
+ * session's own batch set (see src/core/cmd_batch.h) so the cards get
+ * real ids, exactly like a live reply's.
  * state: the requested demo state name ("chat", "approval", "executing",
- *   "tool", "error", "empty", "all") -- drives the two flourishes plain
- *   AiConversation/ApprovalQueue data can't express on their own: the
- *   executing command's activity dot, and the HTTP-error [Retry] link.
- * approval: entries to render as command cards (copied); NULL/empty is
+ *   "tool", "error", "empty", "batches", "all") -- drives the flourishes
+ *   plain AiConversation/ApprovalQueue data can't express on their own:
+ *   the executing command's activity dot, and the HTTP-error [Retry] link.
+ * approval: entries for the state's (first) batch card; NULL/empty is
  *   fine for states with no commands.
+ * approval2: entries for a second, independent batch card -- only
+ *   "batches" (and "all") populate this; NULL/empty elsewhere.
  * No-op if hwnd isn't a live, open AI chat window. */
 void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
-                               const ApprovalQueue *approval);
+                               const ApprovalQueue *approval,
+                               const ApprovalQueue *approval2);
 
 /* Close and destroy the AI assist window. */
 void ai_chat_close(HWND hwnd);

@@ -12,22 +12,33 @@
  * already renders, so the gallery cannot drift from production behaviour.
  *
  * Recognised states: "chat", "approval", "executing", "tool", "error",
- * "empty", "nokey", "nosession", "all" (the union of the other seven --
- * "nokey" and "nosession" carry no conversation/approval content of their
- * own, same as "empty", so "all" is unaffected by their addition). */
+ * "empty", "nokey", "nosession", "batches", "all" (the union of the other
+ * eight -- "nokey" and "nosession" carry no conversation/approval content
+ * of their own, same as "empty", so "all" is unaffected by their
+ * addition). See docs/superpowers/specs/
+ * 2026-09-09-pending-command-batches.md for "batches": two independent
+ * pending command cards from two separate assistant replies, with a user
+ * turn in between so the transcript shows the interleaving. */
 
-/* Build the canned conversation, approval queue and terminal text for one
- * demo state.
+/* Build the canned conversation, approval queue(s) and terminal text for
+ * one demo state.
  *
- * conv and approval are reset (re-initialised) before filling; either may
- * be NULL to skip it. term_text/term_cap may be NULL/0 to skip building the
- * terminal transcript. conv always gets exactly one AI_ROLE_SYSTEM message
- * at index 0 (mirroring a real conversation), even for "empty".
+ * conv, approval and approval2 are reset (re-initialised) before filling;
+ * any may be NULL to skip it. term_text/term_cap may be NULL/0 to skip
+ * building the terminal transcript. conv always gets exactly one
+ * AI_ROLE_SYSTEM message at index 0 (mirroring a real conversation), even
+ * for "empty".
+ *
+ * approval2 holds a second, independent batch's entries -- only
+ * "batches" and "all" populate it (the union states' pending-batches
+ * portion); every other state leaves it at count == 0, same as an empty
+ * `approval`.
  *
  * Returns 0 on success, -1 if `state` is not recognised (nothing is
  * written in that case). */
 int ui_demo_build(const char *state, AiConversation *conv,
-                  ApprovalQueue *approval, char *term_text, size_t term_cap);
+                  ApprovalQueue *approval, ApprovalQueue *approval2,
+                  char *term_text, size_t term_cap);
 
 /* 1 if `state` is a recognised demo state name, 0 otherwise (including
  * NULL). */

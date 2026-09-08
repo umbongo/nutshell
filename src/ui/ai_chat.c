@@ -36,6 +36,7 @@
 #include "chat_thinking.h"
 #include "chat_activity.h"
 #include "chat_approval.h"
+#include "cmd_batch.h"
 #include "chat_listview.h"
 #include "ui_demo.h"
 #include "icons.h"
@@ -166,6 +167,12 @@ typedef struct {
      * Auto Approve tab buttons, are gone — approval is inline in
      * chat_listview and the two modes are shown/clicked in the status
      * line (painted, not child windows; see ai_chat_status_hit()). */
+    /* Pending command batches: approval_q.entries/count are unused --
+     * decisions live per-batch in d->active_state->batches (CmdBatchSet).
+     * approval_q survives only as the panel-wide template of
+     * auto_approve/auto_approve_level (copied into every new batch by
+     * cmd_batch_add()) and as the auto_approve_confirming/confirm_start_time
+     * state for the status line's "click twice to confirm" flow. */
     ApprovalQueue approval_q;
     int auto_approve_default;  /* settings.ai_auto_approve_default, 0..3: seeds
                                  * a fresh session's auto_approve/level (see
@@ -207,7 +214,6 @@ typedef struct {
     CRITICAL_SECTION cs;
 
     /* Auto-continue: when AI only gives partial commands, re-prompt */
-    int commands_executed;   /* number of commands just executed */
     char pending_request[2048]; /* original user request for context */
 
     /* Position of the animated indicator so we can remove/update it */
@@ -220,20 +226,21 @@ typedef struct {
 
     /* Batch command execution with paste delay */
     int paste_delay_ms;
-    char queued_cmds[16][1024];
-    int queued_count;
-    int queued_next;       /* index of next command to execute */
-    int pending_approval;  /* 1 = waiting for user to Allow/Deny commands */
     int dpi;
 
     /* Prompt-gated command dispatcher (TIMER_CMD_QUEUE): sends approved
-     * commands from approval_q one at a time, only once active_term is
-     * back at a shell prompt. See dispatch_start()/dispatch_tick(). */
+     * commands from one batch's queue (d->active_state->batches) at a
+     * time, only once active_term is back at a shell prompt. Any number
+     * of batches may be pending at once (see src/core/cmd_batch.h and
+     * docs/superpowers/specs/2026-09-09-pending-command-batches.md); the
+     * dispatcher only ever runs one at a time -- dispatch_batch_id says
+     * which. See dispatch_start()/dispatch_tick(). */
     int dispatch_active;             /* 1 while the dispatcher is running */
+    int dispatch_batch_id;           /* CmdBatch id currently being dispatched, or 0 */
     unsigned long dispatch_seq;      /* last-seen active_term->write_seq */
     int dispatch_await_echo;         /* 1 until the terminal changes after a send */
     DWORD dispatch_last_change_tick; /* GetTickCount() of the last write_seq change */
-    int dispatch_last_idx;           /* approval_q index last set EXECUTING, or -1 */
+    int dispatch_last_idx;           /* batch queue index last set EXECUTING, or -1 */
     int dispatch_sent_count;         /* commands sent so far in this dispatch run */
     int stream_phase;  /* 0=not started, 1=in thinking, 2=in content */
 
@@ -916,6 +923,49 @@ static void thinking_history_clear(AiChatData *d)
     d->stream_thinking_len = 0;
 }
 
+/* Append one CHAT_ITEM_COMMAND per entry in a batch's queue, in order,
+ * tagged with the batch's id (chat_msg_set_batch) -- the inverse of what
+ * WM_AI_RESPONSE builds live, used to rebuild a pending card wherever the
+ * command items themselves aren't carried across a rebuild: a session
+ * switch (chat_rebuild_display, below) and --ui-demo's "batches"/etc.
+ * states (ai_chat_apply_demo_extras, which builds real CmdBatch entries
+ * from the canned ApprovalQueue and lets this same replay draw them).
+ * Status maps straight onto the fields the list view reads: PENDING/
+ * BLOCKED stay unsettled (part of the active card, approved=-1, which
+ * chat_msg_set_command already defaults to); DENIED/APPROVED/EXECUTING/
+ * COMPLETED all render inline (settled=1) -- APPROVED is included because
+ * a card settles the moment every entry is decided, well before the
+ * dispatcher actually gets around to sending it (see
+ * settle_batch_if_done()). */
+static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
+{
+    if (!list || !batch) return;
+    for (int i = 0; i < batch->q.count; i++) {
+        const ApprovalEntry *e = &batch->q.entries[i];
+        ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
+        if (!item) continue;
+        chat_msg_set_command(item, e->command, e->safety,
+                             e->status == APPROVE_BLOCKED);
+        chat_msg_set_batch(item, batch->id);
+        switch (e->status) {
+        case APPROVE_APPROVED:
+        case APPROVE_EXECUTING:
+        case APPROVE_COMPLETED:
+            item->u.cmd.approved = 1;
+            item->u.cmd.settled = 1;
+            break;
+        case APPROVE_DENIED:
+            item->u.cmd.approved = 0;
+            item->u.cmd.settled = 1;
+            break;
+        case APPROVE_PENDING:
+        case APPROVE_BLOCKED:
+        default:
+            break;  /* stays unsettled -- part of the active card */
+        }
+    }
+}
+
 /* Rebuild the chat display from the conversation history.
  * Used when switching sessions to replay the loaded conversation.
  * Populates the ChatMsgList and invalidates the ChatListView. */
@@ -974,6 +1024,17 @@ static void chat_rebuild_display(AiChatData *d)
             }
         }
         /* Skip system messages injected mid-conversation */
+    }
+
+    /* Pending command batches: rebuild one card per batch still in the
+     * active session's set, oldest first -- the interleaving with earlier
+     * conversation turns isn't reconstructed (every batch's cards land
+     * after the full replay above), only which cards exist and their
+     * state (see docs/superpowers/specs/
+     * 2026-09-09-pending-command-batches.md, "Session switch"). */
+    if (d->active_state) {
+        for (int bi = 0; bi < d->active_state->batches.count; bi++)
+            append_batch_command_items(&d->msg_list, d->active_state->batches.b[bi]);
     }
 
     if (d->hChatList) {
@@ -1198,23 +1259,41 @@ static void launch_stream_thread(AiChatData *d)
     }
 }
 
-/* Mark all current command items as settled so they render inline
- * and are excluded from the active command container. Always follows
- * up with a re-layout (chat_listview_invalidate), since WM_PAINT does
- * not recalc_layout on its own -- without this, a stale measured_height
- * from before the settle can leave WM_PAINT painting a command
- * container against zero live items. */
-static void settle_all_commands(AiChatData *d)
+/* Resolve which batch a card-action WM_COMMAND targets: lParam is the
+ * batch id the card posted (chat_listview.c tags every card action with
+ * item->u.cmd.batch), or 0 to mean "the oldest batch still needing the
+ * user" -- used by handlers that can't supply a specific id (the
+ * integration harness; see docs/superpowers/specs/
+ * 2026-09-09-pending-command-batches.md). NULL if there's no active
+ * session or no such batch. */
+static CmdBatch *resolve_batch(AiChatData *d, LPARAM lParam)
 {
-    ChatMsgList *list = &d->msg_list;
-    ChatMsgItem *it = list->head;
-    while (it) {
-        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
-            it->u.cmd.settled = 1;
-            it->dirty = 1;
-        }
-        it = it->next;
-    }
+    if (!d || !d->active_state) return NULL;
+    int id = (int)lParam;
+    return id ? cmd_batch_find(&d->active_state->batches, id)
+              : cmd_batch_first_pending(&d->active_state->batches);
+}
+
+/* Once every entry in a batch has been decided (chat_approval_all_decided
+ * -- PENDING is the only thing that blocks this; BLOCKED counts as
+ * decided), render its command items inline (chat_msg_batch_settle) and,
+ * if nothing in it is left to run, remove the batch itself. A batch with
+ * an approved-but-not-yet-sent entry stays in the set -- dispatch_tick()
+ * removes it once execution actually finishes, since its ApprovalQueue is
+ * still needed to drive that. Always follows up with a re-layout
+ * (chat_listview_invalidate), since WM_PAINT does not recalc_layout on
+ * its own. */
+static void settle_batch_if_done(AiChatData *d, CmdBatch *batch)
+{
+    if (!d || !batch) return;
+    if (!chat_approval_all_decided(&batch->q)) return;
+
+    int batch_id = batch->id;
+    int has_runnable = chat_approval_next_approved(&batch->q) >= 0;
+
+    chat_msg_batch_settle(&d->msg_list, batch_id);
+    if (!has_runnable && d->active_state)
+        cmd_batch_remove(&d->active_state->batches, batch_id);
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
 }
 
@@ -1252,10 +1331,6 @@ static void cancel_active_stream(AiChatData *d)
     d->stream_content_len = 0;
     d->stream_thinking[0] = '\0';
     d->stream_thinking_len = 0;
-    d->commands_executed = 0;
-    d->pending_approval = 0;
-    d->queued_count = 0;
-    d->queued_next = 0;
 
     /* Remove the last assistant message from conv if partially added */
     EnterCriticalSection(&d->cs);
@@ -1323,7 +1398,11 @@ static int ctx_buffers_ensure(AiChatData *d)
 
 static void send_user_message(AiChatData *d)
 {
-    if (!d || !d->active_state || d->active_state->busy || d->pending_approval)
+    /* Pending command batches: a card never blocks the input (rule 1) --
+     * only a streaming reply or an active dispatcher does, same as the
+     * IDC_CHAT_SEND handler's Send/Stop toggle already enforces for the
+     * primary UI path. */
+    if (!d || !d->active_state || d->active_state->busy || d->dispatch_active)
         return;
 
     char input[2048];
@@ -1462,9 +1541,13 @@ static void execute_command(AiChatData *d, const char *cmd)
 
 }
 
-static void send_continue_message(AiChatData *d)
+/* Send a follow-up user turn after a batch finishes running and launch a
+ * fresh stream for it. msg_text is the continue message body (built by
+ * the caller via ai_build_continue_text() -- rule 4). */
+static void send_continue_message(AiChatData *d, const char *msg_text)
 {
     if (!d || !d->active_state || d->active_state->busy) return;
+    if (!msg_text || !msg_text[0]) return;
 
     /* Extract fresh terminal context after command execution */
     const char *term_text = "";
@@ -1489,11 +1572,7 @@ static void send_continue_message(AiChatData *d)
         ai_conv_set_system(&d->conv, sys_prompt);
     }
 
-    ai_conv_add(&d->conv, AI_ROLE_USER,
-        "The commands above have been executed. Look at the updated terminal "
-        "output and continue with any remaining tasks from my original request. "
-        "If there are more commands to run, include ALL of them now. "
-        "If everything is done, just summarize what was accomplished.");
+    ai_conv_add(&d->conv, AI_ROLE_USER, msg_text);
 
     LeaveCriticalSection(&d->cs);
 
@@ -1502,19 +1581,27 @@ static void send_continue_message(AiChatData *d)
     launch_stream_thread(d);
 }
 
-/* Start (or continue) the command dispatcher: sends every command in
- * approval_q with status APPROVE_APPROVED, in order, one at a time, only
- * once active_term is sitting at a shell prompt (see term_at_prompt()).
- * Does not send anything itself -- the TIMER_CMD_QUEUE tick (dispatch_tick(),
- * driven from AiChatWndProc's WM_TIMER) does the actual sending. Safe to
- * call repeatedly (e.g. once per single-command Approve click): a no-op
- * while a dispatch is already running, since any newly-approved entries
- * are picked up by the next tick regardless. */
-static void dispatch_start(AiChatData *d)
+/* Start the command dispatcher on one specific batch: sends every command
+ * in its queue with status APPROVE_APPROVED, in order, one at a time,
+ * only once active_term is sitting at a shell prompt (see
+ * term_at_prompt()). Does not send anything itself -- the TIMER_CMD_QUEUE
+ * tick (dispatch_tick(), driven from AiChatWndProc's WM_TIMER) does the
+ * actual sending. Safe to call repeatedly (e.g. once per single-command
+ * Approve click, or from a different batch's Run while this one is
+ * already running): a no-op while any dispatch is active or the batch
+ * has nothing approved yet -- another card's Run while the dispatcher is
+ * busy just leaves its commands APPROVED, and cmd_batch_next_runnable()
+ * picks the batch up once the current one finishes (see
+ * maybe_start_next_batch()). */
+static void dispatch_start(AiChatData *d, int batch_id)
 {
-    if (!d || d->dispatch_active) return;
+    if (!d || !d->active_state || d->dispatch_active) return;
+
+    CmdBatch *batch = cmd_batch_find(&d->active_state->batches, batch_id);
+    if (!batch || chat_approval_next_approved(&batch->q) < 0) return;
 
     d->dispatch_active = 1;
+    d->dispatch_batch_id = batch->id;
     d->dispatch_seq = d->active_term ? d->active_term->write_seq : 0;
     d->dispatch_await_echo = 0;
     d->dispatch_last_change_tick = GetTickCount();
@@ -1531,12 +1618,27 @@ static void dispatch_start(AiChatData *d)
     }
 }
 
-/* Stop the dispatcher: kill the timer, deny any commands that were
- * approved but not yet sent (so a later dispatch_start() can't resurrect
- * them), settle the command cards, and restore the Send button. When
- * status_msg is non-NULL it is appended as a status line (the Stop button
- * path); a session switch or panel close cancels silently (NULL). A no-op
- * when the dispatcher isn't running. */
+/* If nothing is currently dispatching or streaming, start the oldest
+ * batch that has an approved-but-unsent command (rule 3: a batch whose
+ * Run was clicked while another was dispatching "is queued and runs
+ * next"). Called once a stream finishes (the reply itself, or a batch's
+ * continue message) so a queued batch picks up right away instead of
+ * waiting for another user action. */
+static void maybe_start_next_batch(AiChatData *d)
+{
+    if (!d || !d->active_state || d->dispatch_active || ACTIVE_BUSY(d)) return;
+    CmdBatch *nb = cmd_batch_next_runnable(&d->active_state->batches);
+    if (nb) dispatch_start(d, nb->id);
+}
+
+/* Stop the dispatcher: kill the timer, deny any commands in the running
+ * batch that were approved but not yet sent (so a later dispatch_start()
+ * can't resurrect them), settle and remove just that batch's card, and
+ * restore the Send button. Other pending batches are untouched -- "Stop
+ * cancels the running batch only" (rule 3). When status_msg is non-NULL
+ * it is appended as a status line (the Stop button path); a session
+ * switch or panel close cancels silently (NULL). A no-op when the
+ * dispatcher isn't running. */
 static void dispatch_cancel(AiChatData *d, const char *status_msg)
 {
     if (!d || !d->dispatch_active) return;
@@ -1544,11 +1646,19 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg)
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
     d->dispatch_active = 0;
 
-    for (int i = 0; i < d->approval_q.count; i++) {
-        if (d->approval_q.entries[i].status == APPROVE_APPROVED)
-            d->approval_q.entries[i].status = APPROVE_DENIED;
+    CmdBatch *batch = d->active_state
+        ? cmd_batch_find(&d->active_state->batches, d->dispatch_batch_id)
+        : NULL;
+    if (batch) {
+        for (int i = 0; i < batch->q.count; i++) {
+            if (batch->q.entries[i].status == APPROVE_APPROVED)
+                batch->q.entries[i].status = APPROVE_DENIED;
+        }
+        chat_msg_batch_settle(&d->msg_list, batch->id);
+        cmd_batch_remove(&d->active_state->batches, batch->id);
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
     }
-    settle_all_commands(d);
+    d->dispatch_batch_id = 0;
 
     if (status_msg) {
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, status_msg);
@@ -1561,11 +1671,12 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg)
     }
 }
 
-/* TIMER_CMD_QUEUE tick: advance the dispatcher by at most one command.
- * Tracks "quiet" (no terminal writes) and "changed since the last send"
- * (dispatch_await_echo) off active_term->write_seq so the prompt that was
- * on screen before a command runs can never be mistaken for the next
- * prompt. See docs/superpowers/specs/2026-09-07-command-dispatch-and-
+/* TIMER_CMD_QUEUE tick: advance the dispatcher (on d->dispatch_batch_id)
+ * by at most one command. Tracks "quiet" (no terminal writes) and
+ * "changed since the last send" (dispatch_await_echo) off
+ * active_term->write_seq so the prompt that was on screen before a
+ * command runs can never be mistaken for the next prompt. See
+ * docs/superpowers/specs/2026-09-07-command-dispatch-and-
  * auto-approve-levels.md, section A. */
 static void dispatch_tick(AiChatData *d)
 {
@@ -1576,6 +1687,23 @@ static void dispatch_tick(AiChatData *d)
                         "[error: no active SSH channel]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
         dispatch_cancel(d, NULL);
+        return;
+    }
+
+    CmdBatch *batch = d->active_state
+        ? cmd_batch_find(&d->active_state->batches, d->dispatch_batch_id)
+        : NULL;
+    if (!batch) {
+        /* The batch vanished from under the dispatcher (e.g. the session
+         * it belonged to was switched away from and its dispatch was
+         * cancelled, but this stale tick still fired) -- stop cleanly. */
+        KillTimer(d->hwnd, TIMER_CMD_QUEUE);
+        d->dispatch_active = 0;
+        d->dispatch_batch_id = 0;
+        if (d->hSendBtn) {
+            SetWindowText(d->hSendBtn, ">");
+            InvalidateRect(d->hSendBtn, NULL, TRUE);
+        }
         return;
     }
 
@@ -1591,22 +1719,22 @@ static void dispatch_tick(AiChatData *d)
                 (GetTickCount() - d->dispatch_last_change_tick) >= PROMPT_QUIET_MS;
     if (!ready) return;
 
-    int idx = chat_approval_next_approved(&d->approval_q);
+    int idx = chat_approval_next_approved(&batch->q);
     if (idx >= 0) {
         if (d->dispatch_last_idx >= 0)
-            chat_approval_set_completed(&d->approval_q, d->dispatch_last_idx);
+            chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
 
         /* N = commands already sent plus everything still APPROVED right
          * now (idx included) -- so the label tracks correctly even when
          * more commands get approved after the dispatcher started. */
         int approved_now = 0;
-        for (int i = 0; i < d->approval_q.count; i++)
-            if (d->approval_q.entries[i].status == APPROVE_APPROVED)
+        for (int i = 0; i < batch->q.count; i++)
+            if (batch->q.entries[i].status == APPROVE_APPROVED)
                 approved_now++;
         int total = d->dispatch_sent_count + approved_now;
 
-        chat_approval_set_executing(&d->approval_q, idx);
-        execute_command(d, d->approval_q.entries[idx].command);
+        chat_approval_set_executing(&batch->q, idx);
+        execute_command(d, batch->q.entries[idx].command);
         d->dispatch_last_idx = idx;
         d->dispatch_sent_count++;
         d->dispatch_await_echo = 1;
@@ -1620,17 +1748,36 @@ static void dispatch_tick(AiChatData *d)
                  d->dispatch_sent_count, total);
         start_indicator(d, prog);
     } else {
-        /* Nothing left to send -- settle up and let the AI continue. */
+        /* Nothing left to send in this batch -- settle it, remove it, and
+         * tell the AI which batch just ran (rule 4) before letting it
+         * continue. */
         if (d->dispatch_last_idx >= 0)
-            chat_approval_set_completed(&d->approval_q, d->dispatch_last_idx);
+            chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
+
+        int batch_id = batch->id;
+        int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;
+        char first_cmd[1024] = "";
+        if (batch->q.count > 0)
+            snprintf(first_cmd, sizeof(first_cmd), "%s",
+                     batch->q.entries[0].command);
+
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
         d->dispatch_active = 0;
-        settle_all_commands(d);
+        d->dispatch_batch_id = 0;
+
+        chat_msg_batch_settle(&d->msg_list, batch_id);
+        cmd_batch_remove(&d->active_state->batches, batch_id);
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+
         if (d->hSendBtn) {
             SetWindowText(d->hSendBtn, ">");
             InvalidateRect(d->hSendBtn, NULL, TRUE);
         }
-        send_continue_message(d);
+
+        char continue_text[1024];
+        ai_build_continue_text(newer_exchanges, first_cmd,
+                               continue_text, sizeof(continue_text));
+        send_continue_message(d, continue_text);
     }
 }
 
@@ -2803,13 +2950,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (d->active_state) {
                     ai_conv_reset(&d->active_state->conv);
                     d->active_state->valid = 1;
+                    /* Drop every pending batch -- New Chat starts clean,
+                     * same as it clears msg_list below. */
+                    cmd_batch_set_free(&d->active_state->batches);
+                    cmd_batch_set_init(&d->active_state->batches);
                 }
                 d->indicator_pos = -1;
-                d->commands_executed = 0;
-                d->pending_approval = 0;
                 d->pending_request[0] = '\0';
-                d->queued_count = 0;
-                d->queued_next = 0;
                 d->stream_thinking[0] = '\0';
                 d->stream_thinking_len = 0;
                 d->stream_content[0] = '\0';
@@ -2888,8 +3035,12 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->permit_write = !d->permit_write;
                 invalidate_status_line(d);
                 if (d->permit_write) {
-                    /* Enabling: unblock all blocked commands */
-                    chat_approval_unblock_all(&d->approval_q);
+                    /* Enabling: unblock all blocked commands, in every
+                     * pending batch (rule: this must cover every card, not
+                     * just the newest). */
+                    if (d->active_state)
+                        for (int bi = 0; bi < d->active_state->batches.count; bi++)
+                            chat_approval_unblock_all(&d->active_state->batches.b[bi]->q);
                     ChatMsgItem *it = d->msg_list.head;
                     while (it) {
                         if (it->type == CHAT_ITEM_COMMAND &&
@@ -2914,8 +3065,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                         LeaveCriticalSection(&d->cs);
                     }
                 } else {
-                    /* Disabling: re-block pending write/critical commands */
-                    chat_approval_block_pending_writes(&d->approval_q);
+                    /* Disabling: re-block pending write/critical commands,
+                     * in every pending batch. */
+                    if (d->active_state)
+                        for (int bi = 0; bi < d->active_state->batches.count; bi++)
+                            chat_approval_block_pending_writes(&d->active_state->batches.b[bi]->q);
                     ChatMsgItem *it = d->msg_list.head;
                     while (it) {
                         if (it->type == CHAT_ITEM_COMMAND &&
@@ -2954,33 +3108,33 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         default: {
             int ctl_id = LOWORD(wParam);
 
-            /* IDC_CMD_APPROVE_BASE + index → approve single command */
+            /* IDC_CMD_APPROVE_BASE + index → approve single command.
+             * lParam is the batch id (0 = oldest batch still needing the
+             * user); idx is the command's position within that batch. */
             if (d && ctl_id >= IDC_CMD_APPROVE_BASE &&
                 ctl_id < IDC_CMD_APPROVE_BASE + APPROVAL_MAX_CMDS) {
                 int idx = ctl_id - IDC_CMD_APPROVE_BASE;
-                chat_approval_approve(&d->approval_q, idx);
+                CmdBatch *batch = resolve_batch(d, lParam);
+                if (batch) {
+                    chat_approval_approve(&batch->q, idx);
 
-                /* Sync approval state back to ChatMsgItem list */
-                int ci = 0;
-                ChatMsgItem *it = d->msg_list.head;
-                while (it) {
-                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
+                    /* Sync approval state back to the matching ChatMsgItem */
+                    int ci = 0;
+                    for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+                        if (it->type != CHAT_ITEM_COMMAND || it->u.cmd.settled) continue;
+                        if (it->u.cmd.batch != batch->id) continue;
                         if (ci == idx) { it->u.cmd.approved = 1; break; }
                         ci++;
                     }
-                    it = it->next;
-                }
 
-                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                    if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
-                /* Let the dispatcher pick this command up once the
-                 * terminal is at a prompt (no-op if already running). */
-                dispatch_start(d);
+                    /* Let the dispatcher pick this command up once the
+                     * terminal is at a prompt (no-op if already running). */
+                    dispatch_start(d, batch->id);
 
-                /* Check if all decided — if so, the card can settle now */
-                if (chat_approval_all_decided(&d->approval_q)) {
-                    d->pending_approval = 0;
-                    settle_all_commands(d);
+                    /* Check if all decided — if so, the card can settle now */
+                    settle_batch_if_done(d, batch);
                 }
                 SetFocus(d->hInput);
                 return 0;
@@ -2990,128 +3144,129 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d && ctl_id >= IDC_CMD_DENY_BASE &&
                 ctl_id < IDC_CMD_DENY_BASE + APPROVAL_MAX_CMDS) {
                 int idx = ctl_id - IDC_CMD_DENY_BASE;
-                chat_approval_deny(&d->approval_q, idx);
+                CmdBatch *batch = resolve_batch(d, lParam);
+                if (batch) {
+                    chat_approval_deny(&batch->q, idx);
 
-                /* Sync denial state back to ChatMsgItem list */
-                int ci = 0;
-                ChatMsgItem *it = d->msg_list.head;
-                while (it) {
-                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
+                    /* Sync denial state back to the matching ChatMsgItem */
+                    int ci = 0;
+                    for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+                        if (it->type != CHAT_ITEM_COMMAND || it->u.cmd.settled) continue;
+                        if (it->u.cmd.batch != batch->id) continue;
                         if (ci == idx) { it->u.cmd.approved = 0; break; }
                         ci++;
                     }
-                    it = it->next;
-                }
 
-                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                    if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
-                /* Check if all decided */
-                if (chat_approval_all_decided(&d->approval_q)) {
-                    d->pending_approval = 0;
-                    settle_all_commands(d);
-                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                                    "[some commands denied]");
-                    if (d->hChatList)
-                        chat_listview_invalidate(d->hChatList);
+                    /* Check if all decided */
+                    if (chat_approval_all_decided(&batch->q)) {
+                        settle_batch_if_done(d, batch);
+                        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                        "[some commands denied]");
+                        if (d->hChatList)
+                            chat_listview_invalidate(d->hChatList);
+                    }
                 }
                 SetFocus(d->hInput);
                 return 0;
             }
 
-            /* IDC_CMD_APPROVE_ALL → approve all pending commands */
+            /* IDC_CMD_APPROVE_ALL → approve all pending commands in one batch */
             if (d && ctl_id == IDC_CMD_APPROVE_ALL) {
-                chat_approval_approve_all(&d->approval_q);
+                CmdBatch *batch = resolve_batch(d, lParam);
+                if (batch) {
+                    chat_approval_approve_all(&batch->q);
 
-                /* Sync all to approved in ChatMsgItem list */
-                ChatMsgItem *it = d->msg_list.head;
-                while (it) {
-                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
-                        it->u.cmd.approved == -1 && !it->u.cmd.blocked)
-                        it->u.cmd.approved = 1;
-                    it = it->next;
+                    /* Sync all to approved in the matching ChatMsgItems */
+                    for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+                        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
+                            it->u.cmd.batch == batch->id &&
+                            it->u.cmd.approved == -1 && !it->u.cmd.blocked)
+                            it->u.cmd.approved = 1;
+                    }
+
+                    settle_batch_if_done(d, batch);
+                    if (d->hChatList) chat_listview_invalidate(d->hChatList);
+
+                    /* Let the dispatcher send the approved commands one at a
+                     * time, only once the terminal is at a prompt. */
+                    dispatch_start(d, batch->id);
                 }
-
-                d->pending_approval = 0;
-                settle_all_commands(d);
-                if (d->hChatList) chat_listview_invalidate(d->hChatList);
-
-                /* Let the dispatcher send the approved commands one at a
-                 * time, only once the terminal is at a prompt. */
-                dispatch_start(d);
                 SetFocus(d->hInput);
                 return 0;
             }
 
-            /* IDC_CMD_APPROVE_SEL → approve only selected (ticked) commands */
+            /* IDC_CMD_APPROVE_SEL → approve only selected (ticked) commands
+             * in one batch */
             if (d && ctl_id == IDC_CMD_APPROVE_SEL) {
-                int ci = 0;
-                int any_approved = 0;
-                ChatMsgItem *it = d->msg_list.head;
-                while (it) {
-                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
+                CmdBatch *batch = resolve_batch(d, lParam);
+                if (batch) {
+                    int ci = 0;
+                    int any_approved = 0;
+                    for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+                        if (it->type != CHAT_ITEM_COMMAND || it->u.cmd.settled) continue;
+                        if (it->u.cmd.batch != batch->id) continue;
                         if (it->u.cmd.selected && it->u.cmd.approved == -1
                             && !it->u.cmd.blocked) {
                             it->u.cmd.approved = 1;
-                            chat_approval_approve(&d->approval_q, ci);
+                            chat_approval_approve(&batch->q, ci);
                             any_approved = 1;
                         }
                         ci++;
                     }
-                    it = it->next;
-                }
 
-                /* Deny unselected pending commands */
-                ci = 0;
-                it = d->msg_list.head;
-                while (it) {
-                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) {
+                    /* Deny unselected pending commands */
+                    ci = 0;
+                    for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+                        if (it->type != CHAT_ITEM_COMMAND || it->u.cmd.settled) continue;
+                        if (it->u.cmd.batch != batch->id) continue;
                         if (it->u.cmd.approved == -1 && !it->u.cmd.blocked) {
                             it->u.cmd.approved = 0;
-                            chat_approval_deny(&d->approval_q, ci);
+                            chat_approval_deny(&batch->q, ci);
                         }
                         ci++;
                     }
-                    it = it->next;
-                }
 
-                d->pending_approval = 0;
-                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                    if (d->hChatList) chat_listview_invalidate(d->hChatList);
 
-                if (any_approved) {
-                    /* Let the dispatcher send the approved commands one at
-                     * a time, only once the terminal is at a prompt. */
-                    dispatch_start(d);
-                } else {
-                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                                    "[no commands selected]");
-                    if (d->hChatList)
-                        chat_listview_invalidate(d->hChatList);
+                    if (any_approved) {
+                        /* Let the dispatcher send the approved commands one
+                         * at a time, only once the terminal is at a prompt. */
+                        dispatch_start(d, batch->id);
+                    } else {
+                        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                        "[no commands selected]");
+                        if (d->hChatList)
+                            chat_listview_invalidate(d->hChatList);
+                    }
+                    settle_batch_if_done(d, batch);
                 }
-                settle_all_commands(d);
                 SetFocus(d->hInput);
                 return 0;
             }
 
-            /* IDC_CMD_CANCEL_ALL → deny all pending commands */
+            /* IDC_CMD_CANCEL_ALL → deny all pending commands in one batch */
             if (d && ctl_id == IDC_CMD_CANCEL_ALL) {
-                int ci = 0;
-                ChatMsgItem *it = d->msg_list.head;
-                while (it) {
-                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
-                        it->u.cmd.approved == -1 && !it->u.cmd.blocked) {
-                        it->u.cmd.approved = 0;
-                        chat_approval_deny(&d->approval_q, ci);
+                CmdBatch *batch = resolve_batch(d, lParam);
+                if (batch) {
+                    int ci = 0;
+                    for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+                        if (it->type != CHAT_ITEM_COMMAND || it->u.cmd.settled) continue;
+                        if (it->u.cmd.batch != batch->id) continue;
+                        if (it->u.cmd.approved == -1 && !it->u.cmd.blocked) {
+                            it->u.cmd.approved = 0;
+                            chat_approval_deny(&batch->q, ci);
+                        }
+                        ci++;
                     }
-                    if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled) ci++;
-                    it = it->next;
+                    settle_batch_if_done(d, batch);
+                    if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                    "[all commands cancelled]");
+                    if (d->hChatList)
+                        chat_listview_invalidate(d->hChatList);
                 }
-                d->pending_approval = 0;
-                settle_all_commands(d);
-                if (d->hChatList) chat_listview_invalidate(d->hChatList);
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                                "[all commands cancelled]");
-                if (d->hChatList)
-                    chat_listview_invalidate(d->hChatList);
                 SetFocus(d->hInput);
                 return 0;
             }
@@ -3399,20 +3554,29 @@ next_coalesce:;
         }
 
         /* If this response is for a different session than the one displayed,
-         * the thread already committed its result to src->conv.
-         * Extract commands for deferred approval, then clean up. */
+         * the thread already committed its result to src->conv. Build a real
+         * batch in that (background) session's own set -- there's no live
+         * msg_list to post cards into while it isn't displayed, but
+         * chat_rebuild_display() replays every batch in the set the moment
+         * the user switches to it, same as an active-session reply. */
         if (src != d->active_state) {
             if (wParam == 2 && src && rmsg->content) {
                 char cmds[16][1024];
                 int ncmds = ai_extract_commands(rmsg->content, cmds, 16);
                 if (ncmds > 0) {
-                    free(src->pending_cmds);
-                    size_t sz = (size_t)ncmds * sizeof(cmds[0]);
-                    src->pending_cmds = malloc(sz);
-                    if (src->pending_cmds) {
-                        memcpy(src->pending_cmds, cmds, sz);
-                        src->pending_cmd_count = ncmds;
-                        src->pending_approval = 1;
+                    ApprovalQueue bg_defaults;
+                    chat_approval_init(&bg_defaults);
+                    bg_defaults.auto_approve = src->auto_approve;
+                    bg_defaults.auto_approve_level = src->auto_approve_level;
+
+                    CmdBatch *batch = cmd_batch_add(&src->batches,
+                                                    &bg_defaults, NULL);
+                    if (batch) {
+                        batch->conv_mark = src->conv.msg_count;
+                        for (int ci = 0; ci < ncmds; ci++)
+                            chat_approval_add(&batch->q, cmds[ci],
+                                              CMD_PLATFORM_LINUX,
+                                              d->permit_write);
                     }
                 }
             }
@@ -3487,111 +3651,118 @@ next_coalesce:;
             d->stream_display_start = -1;
             d->stream_phase = 0;
 
-            /* Settle old command items so they render inline */
-            settle_all_commands(d);
+            /* Pending command batches: earlier cards are never touched by
+             * a new reply -- each reply that yields commands gets its own
+             * batch and its own card (see docs/superpowers/specs/
+             * 2026-09-09-pending-command-batches.md). No settle-all here. */
 
-            if (ncmds > 0) {
-                /* Reset approval queue for this batch, then classify and
-                 * queue every extracted command in order -- including
-                 * write commands when permit_write is off, which
-                 * chat_approval_add marks APPROVE_BLOCKED rather than
-                 * silently dropping. This keeps item order == queue
-                 * order == queued_cmds order always, so index-based
-                 * execution (APPROVE_SEL etc.) can never run the wrong
-                 * command, and a write-only batch still shows up as a
-                 * held card the user can run after switching to
-                 * Read + write (see chat_approval_needs_user below). */
-                chat_approval_reset(&d->approval_q);
+            if (ncmds > 0 && d->active_state) {
+                /* New batch for this reply. approval_q's auto_approve/
+                 * auto_approve_level are the only fields cmd_batch_add()
+                 * reads from `defaults` -- they seed the new batch's queue. */
+                int evicted_id = 0;
+                CmdBatch *batch = cmd_batch_add(&d->active_state->batches,
+                                                &d->approval_q, &evicted_id);
 
-                int queued = 0;
-                for (int ci = 0; ci < ncmds; ci++) {
-                    int idx = chat_approval_add(&d->approval_q, cmds[ci],
-                                                CMD_PLATFORM_LINUX,
-                                                d->permit_write);
-                    if (idx < 0) continue;  /* queue full or blank -- drop it */
+                if (batch) {
+                    /* Record how many conversation messages exist right
+                     * after this reply -- compared against the live count
+                     * when the batch finishes running to decide whether
+                     * the continue message needs to name it explicitly
+                     * (ai_build_continue_text's newer_exchanges). */
+                    batch->conv_mark = d->conv.msg_count;
 
-                    ChatMsgItem *cmd_item = chat_msg_append(
-                        &d->msg_list, CHAT_ITEM_COMMAND, "");
-                    if (cmd_item) {
-                        chat_msg_set_command(cmd_item, cmds[ci],
-                            d->approval_q.entries[idx].safety,
-                            d->approval_q.entries[idx].status == APPROVE_BLOCKED);
-                        /* Pending command batches: this pass still runs a
-                         * single "current batch" of id 1 (full per-reply
-                         * batching is pass 2's list-view wiring); tagging
-                         * it lets chat_listview.c's container grouping
-                         * (see cmd_container_measure) work unchanged. */
-                        chat_msg_set_batch(cmd_item, 1);
+                    if (evicted_id > 0) {
+                        chat_msg_batch_settle(&d->msg_list, evicted_id);
+                        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                            "[earlier command batch skipped]");
                     }
 
-                    memcpy(d->queued_cmds[queued], cmds[ci],
-                           sizeof(d->queued_cmds[0]));
-                    queued++;
-                }
-                d->queued_count = queued;
-                d->queued_next = 0;
+                    /* Classify and queue every extracted command in order
+                     * -- including write commands when permit_write is
+                     * off, which chat_approval_add marks APPROVE_BLOCKED
+                     * rather than silently dropping. This keeps item order
+                     * == queue order always, so index-based execution
+                     * (APPROVE_SEL etc.) can never run the wrong command,
+                     * and a write-only batch still shows up as a held card
+                     * the user can run after switching to Read + write
+                     * (see chat_approval_needs_user below). */
+                    for (int ci = 0; ci < ncmds; ci++) {
+                        int idx = chat_approval_add(&batch->q, cmds[ci],
+                                                    CMD_PLATFORM_LINUX,
+                                                    d->permit_write);
+                        if (idx < 0) continue;  /* queue full or blank -- drop it */
 
-                /* Tell the AI which commands (if any) were blocked by the
-                 * read-only policy -- classified straight from the queue,
-                 * which is the single source of truth for write/critical
-                 * classification (cmd_classify, via chat_approval_add). */
-                {
-                    int nblocked = 0;
-                    for (int qi = 0; qi < d->approval_q.count; qi++)
-                        if (d->approval_q.entries[qi].status == APPROVE_BLOCKED)
-                            nblocked++;
-                    if (nblocked > 0) {
-                        char bmsg[2048];
-                        int bp = snprintf(bmsg, sizeof(bmsg),
-                            "NOTE: The following commands were BLOCKED by "
-                            "the user's read-only security policy and were "
-                            "NOT executed:\n");
-                        for (int qi = 0; qi < d->approval_q.count; qi++) {
-                            if (d->approval_q.entries[qi].status == APPROVE_BLOCKED)
-                                bp += snprintf(bmsg + bp,
-                                    sizeof(bmsg) - (size_t)bp,
-                                    "  - %s\n", d->approval_q.entries[qi].command);
+                        ChatMsgItem *cmd_item = chat_msg_append(
+                            &d->msg_list, CHAT_ITEM_COMMAND, "");
+                        if (cmd_item) {
+                            chat_msg_set_command(cmd_item, cmds[ci],
+                                batch->q.entries[idx].safety,
+                                batch->q.entries[idx].status == APPROVE_BLOCKED);
+                            chat_msg_set_batch(cmd_item, batch->id);
                         }
-                        snprintf(bmsg + bp, sizeof(bmsg) - (size_t)bp,
-                            "Do NOT claim these commands were executed. "
-                            "If the user needs these actions, tell them "
-                            "to enable 'Permit Write' and try again.");
-                        EnterCriticalSection(&d->cs);
-                        ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
-                        LeaveCriticalSection(&d->cs);
                     }
-                }
 
-                if (!chat_approval_needs_user(&d->approval_q)) {
-                    /* Auto-approve already decided all commands —
-                     * skip approval UI and execute immediately */
-                    d->pending_approval = 0;
-                    /* Sync approved state to ChatMsgItems */
+                    /* Tell the AI which commands (if any) were blocked by
+                     * the read-only policy -- classified straight from the
+                     * queue, which is the single source of truth for
+                     * write/critical classification (cmd_classify, via
+                     * chat_approval_add). */
                     {
+                        int nblocked = 0;
+                        for (int qi = 0; qi < batch->q.count; qi++)
+                            if (batch->q.entries[qi].status == APPROVE_BLOCKED)
+                                nblocked++;
+                        if (nblocked > 0) {
+                            char bmsg[2048];
+                            int bp = snprintf(bmsg, sizeof(bmsg),
+                                "NOTE: The following commands were BLOCKED by "
+                                "the user's read-only security policy and were "
+                                "NOT executed:\n");
+                            for (int qi = 0; qi < batch->q.count; qi++) {
+                                if (batch->q.entries[qi].status == APPROVE_BLOCKED)
+                                    bp += snprintf(bmsg + bp,
+                                        sizeof(bmsg) - (size_t)bp,
+                                        "  - %s\n", batch->q.entries[qi].command);
+                            }
+                            snprintf(bmsg + bp, sizeof(bmsg) - (size_t)bp,
+                                "Do NOT claim these commands were executed. "
+                                "If the user needs these actions, tell them "
+                                "to enable 'Permit Write' and try again.");
+                            EnterCriticalSection(&d->cs);
+                            ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
+                            LeaveCriticalSection(&d->cs);
+                        }
+                    }
+
+                    if (!chat_approval_needs_user(&batch->q)) {
+                        /* Auto-approve already decided all commands —
+                         * skip approval UI and execute immediately */
                         int ci2 = 0;
                         ChatMsgItem *it = d->msg_list.head;
                         while (it) {
                             if (it->type == CHAT_ITEM_COMMAND &&
-                                !it->u.cmd.settled && ci2 < d->approval_q.count) {
-                                if (d->approval_q.entries[ci2].status == APPROVE_APPROVED)
+                                !it->u.cmd.settled &&
+                                it->u.cmd.batch == batch->id) {
+                                if (batch->q.entries[ci2].status == APPROVE_APPROVED)
                                     it->u.cmd.approved = 1;
                                 ci2++;
                             }
                             it = it->next;
                         }
+                        /* Let the dispatcher send the approved commands one
+                         * at a time, only once the terminal is at a prompt. */
+                        dispatch_start(d, batch->id);
+                    } else {
+                        /* Leave the card pending and reset its container's
+                         * scroll -- it stays interactive for the life of
+                         * the session (rule 5). */
+                        if (d->hChatList)
+                            chat_listview_reset_cmd_expand(d->hChatList);
                     }
-                    settle_all_commands(d);
-                    /* Let the dispatcher send the approved commands one at
-                     * a time, only once the terminal is at a prompt. */
-                    dispatch_start(d);
-                } else {
-                    /* Show approval buttons and wait for user */
-                    d->pending_approval = 1;
-                    if (d->hChatList)
-                        chat_listview_reset_cmd_expand(d->hChatList);
+                    relayout(d);
+                    SetFocus(d->hInput);
                 }
-                relayout(d);
-                SetFocus(d->hInput);
             }
 
             /* Following the finished reply/approval card into view (if the
@@ -3624,6 +3795,13 @@ next_coalesce:;
             SetWindowText(d->hSendBtn, ">");
             InvalidateRect(d->hSendBtn, NULL, TRUE);
         }
+        /* This reply is done (whether it was the original request or a
+         * batch's continue message) -- if another batch has approved
+         * commands still waiting to run, start it now (rule 3's "queued,
+         * runs next"). No-op if the dispatcher is already busy or another
+         * stream is in flight. */
+        if (src == d->active_state)
+            maybe_start_next_batch(d);
         return 0;
     }
 
@@ -4221,29 +4399,17 @@ static void do_session_switch(AiChatData *d,
     /* Kill command timers — they belong to the old session. The dispatcher
      * itself is per-panel, not per-session, so switching away just stops
      * it silently (no "[command queue stopped]" -- that's the Stop button's
-     * message); it also denies whatever was left APPROVED in approval_q
-     * (the old session's batch) so a later dispatch_start() can't
-     * resurrect it and restores the Send button. */
+     * message); dispatch_cancel() denies whatever was left APPROVED in the
+     * old session's running batch (so a later dispatch_start() can't
+     * resurrect it), settles and removes just that one batch, and restores
+     * the Send button. Every other pending batch in the old session stays
+     * in its CmdBatchSet untouched -- chat_rebuild_display() re-creates
+     * their cards when the user switches back (rule 6). */
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
     dispatch_cancel(d, NULL);
 
-    /* Save pending approval state to old session (heap-allocated) */
+    /* Save auto-approve, show-thinking and activity phase to old session */
     if (d->active_state && d->active_state != new_state) {
-        /* Free any previous pending commands */
-        free(d->active_state->pending_cmds);
-        d->active_state->pending_cmds = NULL;
-        d->active_state->pending_approval = d->pending_approval;
-        d->active_state->pending_cmd_count = 0;
-        if (d->pending_approval && d->queued_count > 0) {
-            size_t sz = (size_t)d->queued_count * sizeof(d->queued_cmds[0]);
-            d->active_state->pending_cmds = malloc(sz);
-            if (d->active_state->pending_cmds) {
-                memcpy(d->active_state->pending_cmds,
-                       d->queued_cmds, sz);
-                d->active_state->pending_cmd_count = d->queued_count;
-            }
-        }
-        /* Save auto-approve, show-thinking and activity phase to old session */
         d->active_state->auto_approve = d->approval_q.auto_approve;
         d->active_state->auto_approve_level = d->approval_q.auto_approve_level;
         d->active_state->auto_approve_seeded = 1;
@@ -4290,25 +4456,8 @@ static void do_session_switch(AiChatData *d,
 
     /* Reset transient UI state */
     d->indicator_pos = -1;
-    d->commands_executed = 0;
     d->pending_request[0] = '\0';
     d->stream_phase = 0;
-
-    /* Restore pending approval state from new session */
-    if (new_state && new_state->pending_approval &&
-        new_state->pending_cmds && new_state->pending_cmd_count > 0) {
-        int nc = new_state->pending_cmd_count;
-        if (nc > 16) nc = 16;
-        memcpy(d->queued_cmds, new_state->pending_cmds,
-               (size_t)nc * sizeof(d->queued_cmds[0]));
-        d->queued_count = nc;
-        d->queued_next = 0;
-        d->pending_approval = 1;
-    } else {
-        d->pending_approval = 0;
-        d->queued_count = 0;
-        d->queued_next = 0;
-    }
 
     /* Restore auto-approve, show-thinking and activity phase from new session.
      * A session that has never had its approval state set (fresh tab) is
@@ -4329,20 +4478,12 @@ static void do_session_switch(AiChatData *d,
 
     relayout(d);
 
+    /* chat_rebuild_display() replays the conversation and re-creates a
+     * card for every batch still in new_state->batches (rule 6) --
+     * ai_build_confirm_text()'s old single-snapshot summary line is gone
+     * along with it. */
     chat_rebuild_display(d);
     update_panel_state(d);
-
-    /* Re-show the command approval prompt if switching back to a
-     * session with pending approval */
-    if (d->pending_approval && d->queued_count > 0) {
-        char confirm[4096];
-        size_t clen = ai_build_confirm_text(d->queued_cmds,
-                         d->queued_count, confirm, sizeof(confirm));
-        if (clen == 0)
-            snprintf(confirm, sizeof(confirm),
-                     "Execute %d command(s)?", d->queued_count);
-        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, confirm);
-    }
 
     /* If switching to a session that's still streaming,
      * re-append any accumulated content so the user sees progress.
@@ -4420,9 +4561,19 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
 
-    /* Free heap-allocated pending commands */
-    free(state->pending_cmds);
-    state->pending_cmds = NULL;
+    /* If the dispatcher is running a batch that belongs to this session
+     * (it's the one currently displayed), stop it before the session's
+     * batch set is freed out from under it -- otherwise the next
+     * TIMER_CMD_QUEUE tick would dereference a batch that's about to be
+     * freed below. */
+    if (d->active_state == state) {
+        KillTimer(d->hwnd, TIMER_CMD_QUEUE);
+        dispatch_cancel(d, NULL);
+    }
+
+    /* Free every pending batch (the caller frees the AiSessionState itself
+     * right after this call returns). */
+    cmd_batch_set_free(&state->batches);
 
     /* Free per-session stream buffers */
     free(state->stream_content);
@@ -4436,7 +4587,8 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
 }
 
 void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
-                               const ApprovalQueue *approval)
+                               const ApprovalQueue *approval,
+                               const ApprovalQueue *approval2)
 {
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -4457,16 +4609,34 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         d->thinking_history[2] = _strdup(ui_demo_thinking_text());
     }
 
-    if (approval)
-        d->approval_q = *approval;
-    else
-        chat_approval_init(&d->approval_q);
+    /* Pending command batches: build real CmdBatch entries (real, unique
+     * ids) in the demo session's own batch set from the canned queues --
+     * approval for the state's own batch, approval2 for "batches"'s
+     * second one -- instead of touching d->approval_q. chat_rebuild_display()
+     * below replays every batch still in the set exactly the way a live
+     * session switch does (append_batch_command_items()), so this reuses
+     * the same code path a real reply's cards come from. */
+    int any_executing = 0;
+    if (d->active_state) {
+        cmd_batch_set_free(&d->active_state->batches);
+        cmd_batch_set_init(&d->active_state->batches);
+
+        const ApprovalQueue *queues[2] = { approval, approval2 };
+        for (int qi = 0; qi < 2; qi++) {
+            const ApprovalQueue *src = queues[qi];
+            if (!src || src->count == 0) continue;
+            CmdBatch *batch = cmd_batch_add(&d->active_state->batches, NULL, NULL);
+            if (!batch) continue;
+            batch->q = *src;  /* only overwrites q -- batch->id stays */
+            for (int i = 0; i < batch->q.count; i++)
+                if (batch->q.entries[i].status == APPROVE_EXECUTING)
+                    any_executing = 1;
+        }
+    }
 
     /* Rebuilds msg_list from d->conv (now including the thinking block
-     * just attached, plus any tool_call/tool_result items). Deliberately
-     * does NOT touch approval_q -- a live session switch must never
-     * resurrect a stale batch from a different session, so that replay is
-     * done here instead, demo-only. */
+     * just attached, plus any tool_call/tool_result items) and appends a
+     * card for every batch just built above. */
     chat_rebuild_display(d);
 
     /* The demo session has no channel (window.c's create_demo_session
@@ -4502,36 +4672,6 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
             ti = ti->next;
         }
     }
-
-    int any_active = 0;
-    int any_executing = 0;
-    for (int i = 0; i < d->approval_q.count; i++) {
-        const ApprovalEntry *e = &d->approval_q.entries[i];
-        ChatMsgItem *item = chat_msg_append(&d->msg_list, CHAT_ITEM_COMMAND, "");
-        if (!item) continue;
-        chat_msg_set_command(item, e->command, e->safety,
-                             e->status == APPROVE_BLOCKED);
-        chat_msg_set_batch(item, 1);   /* see the pending-batches note above */
-        switch (e->status) {
-        case APPROVE_APPROVED:
-        case APPROVE_EXECUTING:
-        case APPROVE_COMPLETED:
-            item->u.cmd.approved = 1;
-            item->u.cmd.settled = 1;
-            if (e->status == APPROVE_EXECUTING) any_executing = 1;
-            break;
-        case APPROVE_DENIED:
-            item->u.cmd.approved = 0;
-            item->u.cmd.settled = 1;
-            break;
-        case APPROVE_PENDING:
-        case APPROVE_BLOCKED:
-        default:
-            any_active = 1; /* stays unsettled -- part of the active card */
-            break;
-        }
-    }
-    d->pending_approval = any_active;
 
     float now = (float)GetTickCount() / 1000.0f;
     if (any_executing) {

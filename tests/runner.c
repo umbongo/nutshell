@@ -929,16 +929,12 @@ int test_inline_approval_queued_cmds_preserved(void);
 int test_inline_approval_deny_clears_queue(void);
 int test_inline_approval_allow_starts_execution(void);
 int test_inline_approval_blocks_send(void);
-int test_inline_approval_blocks_new_chat(void);
 int test_inline_approval_readonly_filter_then_approve(void);
-int test_inline_approval_switch_saves_to_session(void);
-int test_inline_approval_switch_clears_on_allow(void);
-int test_inline_approval_deferred_extract_on_switch(void);
-int test_inline_approval_deferred_no_commands(void);
-int test_inline_approval_two_sessions_independent(void);
-int test_inline_approval_deny_one_keep_other(void);
-int test_inline_approval_save_restore_roundtrip(void);
-int test_inline_approval_deferred_multi_commands(void);
+/* test_ai_prompt.c — AiSessionState.batches (pending command batches;
+ * see src/core/cmd_batch.h and docs/superpowers/specs/
+ * 2026-09-09-pending-command-batches.md) */
+int test_session_state_batches_two_sessions_independent(void);
+int test_session_state_batches_survive_switch_away(void);
 /* test_ai_prompt.c — concurrent session busy/stream state */
 int test_session_state_busy_init_zero(void);
 int test_session_state_busy_independent(void);
@@ -948,7 +944,6 @@ int test_session_state_stream_thinking_accumulation(void);
 int test_session_state_cleanup_on_close(void);
 int test_session_state_switch_while_both_busy(void);
 int test_session_state_switch_back_restores_stream(void);
-int test_session_state_pending_cmds_per_session(void);
 
 /* test_edit_scroll.c */
 int test_edit_scroll_visible_basic(void);
@@ -1432,6 +1427,7 @@ int test_cmd_batch_add_no_eviction_reports_zero(void);
 int test_cmd_batch_first_pending_oldest_needing_user(void);
 int test_cmd_batch_first_pending_none(void);
 int test_cmd_batch_next_runnable_oldest_with_approved(void);
+int test_cmd_batch_conv_mark_defaults_zero_and_settable(void);
 int test_cmd_batch_next_runnable_none(void);
 
 /* test_chat_thinking.c */
@@ -1975,7 +1971,7 @@ int test_ns_anim_list_step_reduced_motion_finishes_immediately(void);
 int test_ns_anim_progress_tick_wraparound_near_ulong_max(void);
 
 /* test_ui_demo.c */
-int test_ui_demo_states_lists_nine_ending_in_all(void);
+int test_ui_demo_states_lists_ten_ending_in_all(void);
 int test_ui_demo_state_valid_accepts_every_listed_state(void);
 int test_ui_demo_state_valid_rejects_unknown_and_null(void);
 int test_ui_demo_build_unknown_state_returns_error(void);
@@ -1988,6 +1984,7 @@ int test_ui_demo_build_error_counts(void);
 int test_ui_demo_build_empty_counts(void);
 int test_ui_demo_build_nokey_counts(void);
 int test_ui_demo_build_nosession_counts(void);
+int test_ui_demo_build_batches_counts_and_statuses(void);
 int test_ui_demo_build_all_is_union(void);
 int test_ui_demo_term_text_ends_with_prompt(void);
 int test_ui_demo_thinking_text_non_empty(void);
@@ -2800,16 +2797,9 @@ int main(void) {
     failed += test_inline_approval_deny_clears_queue();
     failed += test_inline_approval_allow_starts_execution();
     failed += test_inline_approval_blocks_send();
-    failed += test_inline_approval_blocks_new_chat();
     failed += test_inline_approval_readonly_filter_then_approve();
-    failed += test_inline_approval_switch_saves_to_session();
-    failed += test_inline_approval_switch_clears_on_allow();
-    failed += test_inline_approval_deferred_extract_on_switch();
-    failed += test_inline_approval_deferred_no_commands();
-    failed += test_inline_approval_two_sessions_independent();
-    failed += test_inline_approval_deny_one_keep_other();
-    failed += test_inline_approval_save_restore_roundtrip();
-    failed += test_inline_approval_deferred_multi_commands();
+    failed += test_session_state_batches_two_sessions_independent();
+    failed += test_session_state_batches_survive_switch_away();
 
     printf("\n--- Concurrent AI Sessions ---\n");
     failed += test_session_state_busy_init_zero();
@@ -2820,7 +2810,6 @@ int main(void) {
     failed += test_session_state_cleanup_on_close();
     failed += test_session_state_switch_while_both_busy();
     failed += test_session_state_switch_back_restores_stream();
-    failed += test_session_state_pending_cmds_per_session();
 
     printf("\n--- Edit Scroll ---\n");
     failed += test_edit_scroll_visible_basic();
@@ -3373,6 +3362,7 @@ int main(void) {
     failed += test_cmd_batch_first_pending_oldest_needing_user();
     failed += test_cmd_batch_first_pending_none();
     failed += test_cmd_batch_next_runnable_oldest_with_approved();
+    failed += test_cmd_batch_conv_mark_defaults_zero_and_settable();
     failed += test_cmd_batch_next_runnable_none();
 
     printf("\n--- Thinking Controller ---\n");
@@ -3999,7 +3989,7 @@ int main(void) {
     failed += test_ns_anim_progress_tick_wraparound_near_ulong_max();
 
     printf("\n--- Design System: demo ---\n");
-    failed += test_ui_demo_states_lists_nine_ending_in_all();
+    failed += test_ui_demo_states_lists_ten_ending_in_all();
     failed += test_ui_demo_state_valid_accepts_every_listed_state();
     failed += test_ui_demo_state_valid_rejects_unknown_and_null();
     failed += test_ui_demo_build_unknown_state_returns_error();
@@ -4012,6 +4002,7 @@ int main(void) {
     failed += test_ui_demo_build_empty_counts();
     failed += test_ui_demo_build_nokey_counts();
     failed += test_ui_demo_build_nosession_counts();
+    failed += test_ui_demo_build_batches_counts_and_statuses();
     failed += test_ui_demo_build_all_is_union();
     failed += test_ui_demo_term_text_ends_with_prompt();
     failed += test_ui_demo_thinking_text_non_empty();

@@ -420,6 +420,26 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
       inline code and the fenced-block bar; `theme_role_color` derives a legible
       shade of the theme's own hue instead of falling back to white.
 
+- [x] Pending command batches (v1.1.7 model + list containers, v1.1.8 panel
+      wiring/demo/integration; docs/superpowers/specs/
+      2026-09-09-pending-command-batches.md). A card no longer blocks the
+      input: each AI reply that yields commands gets its own batch (a
+      per-session `CmdBatchSet`, up to `CMD_BATCH_MAX` = 8, oldest evicted)
+      and its own card, so any number can be pending, interactive, at once
+      -- scrolling with the transcript, settled only when the user acts on
+      that specific card or its dispatcher run finishes. The dispatcher
+      still runs one batch at a time; a card's Run while another is
+      dispatching just queues, and picks up the moment the active one
+      finishes and any reply in flight completes. `--ui-demo=batches` (now
+      ten states) shows two pending cards from two replies with a user
+      turn interleaved.
+
+- [ ] Rerun `ai_write_command_held_then_runs_after_permit` (and any other
+      keystroke-driven case) on v1.1.8 when the desktop is unlocked: the
+      2026-09-09 03:40 run failed only because the desktop had locked
+      (`GetForegroundWindow()` was 0, so SendKeys reached nothing). The harness
+      now throws "Nutshell is not the foreground window" instead of typing blind.
+
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.
