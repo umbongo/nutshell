@@ -984,6 +984,78 @@ int test_ai_confirm_text_numbering(void) {
     TEST_END();
 }
 
+/* --- ai_build_continue_text tests --- */
+
+int test_ai_continue_text_no_newer_exchanges_is_default(void) {
+    TEST_BEGIN();
+    char buf[512];
+    size_t n = ai_build_continue_text(0, NULL, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "The commands above have been executed") != NULL);
+    ASSERT_TRUE(strstr(buf, "earlier request") == NULL);
+    TEST_END();
+}
+
+int test_ai_continue_text_no_newer_exchanges_ignores_first_cmd(void) {
+    TEST_BEGIN();
+    char buf[512];
+    /* Even if first_cmd is supplied, newer_exchanges == 0 means unchanged
+     * default text -- only newer_exchanges decides which message is used. */
+    size_t n = ai_build_continue_text(0, "ls -la", buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "The commands above have been executed") != NULL);
+    TEST_END();
+}
+
+int test_ai_continue_text_newer_exchanges_names_batch(void) {
+    TEST_BEGIN();
+    char buf[512];
+    size_t n = ai_build_continue_text(1, "df -h", buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "earlier request") != NULL);
+    ASSERT_TRUE(strstr(buf, "df -h") != NULL);
+    ASSERT_TRUE(strstr(buf, "continue with that request") != NULL);
+    TEST_END();
+}
+
+int test_ai_continue_text_newer_exchanges_multiple(void) {
+    TEST_BEGIN();
+    char buf[512];
+    size_t n = ai_build_continue_text(3, "echo hi", buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "echo hi") != NULL);
+    TEST_END();
+}
+
+int test_ai_continue_text_newer_exchanges_null_first_cmd_falls_back(void) {
+    TEST_BEGIN();
+    char buf[512];
+    /* newer_exchanges > 0 but no first_cmd -- fall back to the default
+     * text rather than emitting a broken "()" reference. */
+    size_t n = ai_build_continue_text(2, NULL, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "The commands above have been executed") != NULL);
+    TEST_END();
+}
+
+int test_ai_continue_text_null_buf(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)ai_build_continue_text(0, NULL, NULL, 512), 0);
+    char buf[512];
+    ASSERT_EQ((int)ai_build_continue_text(0, NULL, buf, 0), 0);
+    TEST_END();
+}
+
+int test_ai_continue_text_overflow_returns_zero(void) {
+    TEST_BEGIN();
+    char buf[8]; /* too small for either message */
+    size_t n = ai_build_continue_text(0, NULL, buf, sizeof(buf));
+    ASSERT_EQ((int)n, 0);
+    size_t n2 = ai_build_continue_text(1, "ls -la", buf, sizeof(buf));
+    ASSERT_EQ((int)n2, 0);
+    TEST_END();
+}
+
 /* --- ai_parse_response_ex tests (thinking/reasoning content) --- */
 
 int test_ai_parse_response_ex_no_thinking(void) {

@@ -1321,6 +1321,29 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
     return (size_t)pos;
 }
 
+size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
+                              char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+
+    int n;
+    if (newer_exchanges > 0 && first_cmd && first_cmd[0]) {
+        n = snprintf(buf, buf_size,
+            "The commands from my earlier request (`%s` \xE2\x80\xA6) have "
+            "now been executed. Look at the updated terminal output and "
+            "continue with that request.", first_cmd);
+    } else {
+        n = snprintf(buf, buf_size,
+            "The commands above have been executed. Look at the updated "
+            "terminal output and continue with any remaining tasks from my "
+            "original request. If there are more commands to run, include "
+            "ALL of them now. If everything is done, just summarize what "
+            "was accomplished.");
+    }
+    if (n < 0 || (size_t)n >= buf_size) return 0;
+    return (size_t)n;
+}
+
 AiInputAction ai_input_key_action(int is_enter, int shift_held)
 {
     if (!is_enter) return AI_INPUT_PASSTHROUGH;

@@ -195,6 +195,19 @@ void ai_build_auth_headers(const char *provider, const char *api_key,
 size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
                               char *buf, size_t buf_size);
 
+/* Build the "continue" message sent to the AI after a pending command
+ * batch finishes running (see docs/superpowers/specs/
+ * 2026-09-09-pending-command-batches.md, rule 4). When newer_exchanges is
+ * 0 (no other exchange has happened since this batch's card appeared),
+ * the message is the plain "the commands above" text unchanged from
+ * before batching existed. When newer_exchanges > 0, the message names
+ * which batch just ran via its first command, since "above" would
+ * otherwise be ambiguous once newer exchanges are in between.
+ * first_cmd may be NULL/empty only when newer_exchanges == 0.
+ * Returns bytes written (excluding NUL), or 0 on error. */
+size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
+                              char *buf, size_t buf_size);
+
 /* Check if a shell command is read-only (does not modify files or system state).
  * Returns 1 if read-only, 0 if the command may write/modify. */
 int ai_command_is_readonly(const char *cmd);

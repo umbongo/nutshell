@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.1.6"
-#define APP_VERSION_BINARY  1,1,6,0
+#define APP_VERSION        "1.1.7"
+#define APP_VERSION_BINARY  1,1,7,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101

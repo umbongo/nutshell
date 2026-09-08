@@ -46,6 +46,8 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
         item->u.cmd.approved = -1;
         item->u.cmd.blocked = 0;
         item->u.cmd.settled = 0;
+        item->u.cmd.batch = 0;
+        item->u.cmd.container_scroll = 0;
     }
 
     /* Link into list */
@@ -158,6 +160,12 @@ int chat_msg_set_command(ChatMsgItem *item, const char *command,
     return 0;
 }
 
+void chat_msg_set_batch(ChatMsgItem *item, int batch)
+{
+    if (!item || item->type != CHAT_ITEM_COMMAND) return;
+    item->u.cmd.batch = batch;
+}
+
 int chat_msg_set_thinking(ChatMsgItem *item, const char *thinking_text)
 {
     if (!item || item->type != CHAT_ITEM_AI_TEXT) return -1;
@@ -180,4 +188,45 @@ int chat_msg_set_thinking(ChatMsgItem *item, const char *thinking_text)
 int chat_msg_count(const ChatMsgList *list)
 {
     return list ? list->count : 0;
+}
+
+int chat_msg_batch_index(const ChatMsgList *list, const ChatMsgItem *item)
+{
+    if (!list || !item) return -1;
+    if (item->type != CHAT_ITEM_COMMAND || item->u.cmd.settled) return -1;
+
+    int idx = 0;
+    for (ChatMsgItem *it = list->head; it; it = it->next) {
+        if (it->type != CHAT_ITEM_COMMAND || it->u.cmd.settled) continue;
+        if (it->u.cmd.batch != item->u.cmd.batch) continue;
+        if (it == item) return idx;
+        idx++;
+    }
+    return -1;
+}
+
+ChatMsgItem *chat_msg_batch_first(const ChatMsgList *list, int batch)
+{
+    if (!list) return NULL;
+    for (ChatMsgItem *it = list->head; it; it = it->next) {
+        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
+            it->u.cmd.batch == batch)
+            return it;
+    }
+    return NULL;
+}
+
+int chat_msg_batch_settle(ChatMsgList *list, int batch)
+{
+    if (!list) return 0;
+    int n = 0;
+    for (ChatMsgItem *it = list->head; it; it = it->next) {
+        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
+            it->u.cmd.batch == batch) {
+            it->u.cmd.settled = 1;
+            it->dirty = 1;
+            n++;
+        }
+    }
+    return n;
 }

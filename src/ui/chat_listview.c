@@ -90,18 +90,44 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
  * build_thinking_layout() -- see chatlv_hover_hit() / chatlv_hover_rect_for_id()
  * below), so the two can never drift apart.
  *
- *   row element     -> row * 16 + HIT_* (HIT_TAG/HIT_TEXT/HIT_CHECKBOX)
- *   card action     -> APPROVAL_MAX_CMDS * 16 + HIT_* (HIT_DENY_ALL/
- *                      HIT_RUN_SELECTED, which have no row -- approval_card_hit
+ * Pending command batches: any number of command containers can be
+ * showing at once (one per run of consecutive unsettled command items
+ * sharing a batch id -- see cmd_container_measure()), so a row/card-action
+ * id must also say *which* container it belongs to. That's `ci`, a 0-based
+ * "container index" counting containers in list order (oldest first) --
+ * NOT the batch id, which is unbounded over a session's lifetime; ci is
+ * bounded by how many containers can ever be showing simultaneously
+ * (CmdBatchSet caps live batches at CMD_BATCH_MAX = 8), well under
+ * CLV_CMD_MAX_CONTAINERS below. cmd_container_at_y() assigns ci while
+ * walking containers for a hit-test; cmd_container_by_index() looks one
+ * back up from ci alone (chatlv_hover_rect_for_id(), recomputing the rect
+ * of a container that may no longer be under the cursor).
+ *
+ *   row element     -> CLV_CMD_ROW_HIT_ID(ci, row, hit), hit is HIT_TAG/
+ *                      HIT_TEXT/HIT_CHECKBOX
+ *   card action     -> CLV_CMD_CARD_HIT_ID(ci, hit), hit is HIT_DENY_ALL/
+ *                      HIT_RUN_SELECTED (no row -- approval_card_hit
  *                      reports -1)
- *   [Retry] link    -> CLV_HOVER_RETRY, clear of the row/card id range
+ *   [Retry] link    -> CLV_HOVER_RETRY, clear of every CLV_CMD_* id
+ *                      (ci < CLV_CMD_MAX_CONTAINERS bounds that range)
  *   Thinking row    -> CLV_THINK_HOVER_ID(item->id), clear of every id above
  *                      (ChatMsgItem ids are unique and only ever grow, so a
  *                      fixed base above CLV_HOVER_RETRY never collides)
- */
-#define CLV_ROW_HIT_ID(row, hit)  ((row) * 16 + (hit))
-#define CLV_CARD_HIT_ID(hit)      (APPROVAL_MAX_CMDS * 16 + (hit))
-#define CLV_HOVER_RETRY           (APPROVAL_MAX_CMDS * 16 + 16)
+ *
+ * Within a container's CLV_CMD_CONTAINER_STRIDE-wide slot, the low 4 bits
+ * are always the HIT_* type (row and card-action hits never overlap
+ * numerically, same as the single-container v1 scheme this replaces), so
+ * `id % CLV_CMD_ROW_SLOTS` still reads off the hit type regardless of
+ * which container or row produced it -- see chatlv_hit_is_actionable(). */
+#define CLV_CMD_ROW_SLOTS         16   /* room for HIT_* (0..6) */
+#define CLV_CMD_CONTAINER_STRIDE  ((APPROVAL_MAX_CMDS + 1) * CLV_CMD_ROW_SLOTS)
+#define CLV_CMD_MAX_CONTAINERS    16   /* generous cap; CMD_BATCH_MAX (8) bounds reality */
+#define CLV_CMD_ROW_HIT_ID(ci, row, hit) \
+    ((ci) * CLV_CMD_CONTAINER_STRIDE + (row) * CLV_CMD_ROW_SLOTS + (hit))
+#define CLV_CMD_CARD_HIT_ID(ci, hit) \
+    ((ci) * CLV_CMD_CONTAINER_STRIDE + APPROVAL_MAX_CMDS * CLV_CMD_ROW_SLOTS + (hit))
+#define CLV_CMD_ID_CEILING        (CLV_CMD_MAX_CONTAINERS * CLV_CMD_CONTAINER_STRIDE)
+#define CLV_HOVER_RETRY           CLV_CMD_ID_CEILING
 #define CLV_THINK_HOVER_BASE      (CLV_HOVER_RETRY + 1)
 #define CLV_THINK_HOVER_ID(iid)   (CLV_THINK_HOVER_BASE + (iid))
 
@@ -141,13 +167,16 @@ static int      paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                 RECT *rc);
 static int      paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                RECT *rc);
-static int      paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc);
+static int      paint_cmd_container(ChatListView *lv, HDC hdc,
+                                    ChatMsgItem *first, int container_idx,
+                                    RECT *rc);
 static void     build_thinking_layout(ChatListView *lv, HDC hdc,
                               ChatMsgItem *item, int box_left, int box_right,
                               int content_top, ThinkingLayout *out,
                               int *out_full_body_h);
 static void     paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                              const ApprovalRowLayout *row, int row_idx);
+                              const ApprovalRowLayout *row, int container_idx,
+                              int row_idx);
 static int      paint_cmd_settled_row(ChatListView *lv, HDC hdc,
                               ChatMsgItem *item, RECT *rc);
 static int      paint_status_item(ChatListView *lv, HDC hdc,
@@ -161,23 +190,13 @@ static int      chatlv_empty_state_hit(ChatListView *lv, int mx, int my,
                                        RECT *out_rc);
 static int      chatlv_list_empty(const ChatListView *lv);
 
-/* command_index_of: reserved for future use (e.g., tooltip lookup) */
-
-/* ── Is this the first command item in the list? ────────────────────── */
-
-static int is_first_command(const ChatMsgList *list, const ChatMsgItem *target)
-{
-    ChatMsgItem *item = list->head;
-    while (item) {
-        if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled)
-            return (item == target) ? 1 : 0;
-        item = item->next;
-    }
-    return 0;
-}
-
 /* command_index_of and is_last_command removed — no longer needed
- * with the container-based command rendering approach. */
+ * with the container-based command rendering approach. is_first_command()
+ * (v1's single-container "is this the container" check) is gone too: with
+ * multiple containers, any unsettled command item that survived the h==0
+ * skip already *is* its container's first item by construction (see
+ * recalc_layout's Pass 2 and cmd_container_measure() below) -- no extra
+ * list walk needed to confirm it. */
 
 /* ── UTF-8 → UTF-16 helper (caller must free returned buffer) ───── */
 
@@ -512,8 +531,14 @@ void chat_listview_toggle_cmd_expand(HWND hwnd)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
     if (!lv) return;
-    /* No longer collapse/expand — reset container scroll instead */
-    lv->cmd_scroll_y = 0;
+    /* No longer collapse/expand — reset every pending container's scroll
+     * instead (v1 had exactly one container; now there can be several). */
+    ChatMsgItem *it = lv->msg_list ? lv->msg_list->head : NULL;
+    while (it) {
+        if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled)
+            it->u.cmd.container_scroll = 0;
+        it = it->next;
+    }
     recalc_layout(lv);
     InvalidateRect(hwnd, NULL, TRUE);
 }
@@ -522,7 +547,22 @@ void chat_listview_reset_cmd_expand(HWND hwnd)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
     if (!lv) return;
-    lv->cmd_scroll_y = 0;
+    if (!lv->msg_list) return;
+
+    /* Newest container = the run of unsettled command items ending at the
+     * last such item in the list; find that item from the tail, then walk
+     * back to the start of its run (its batch's first item). */
+    ChatMsgItem *it = lv->msg_list->tail;
+    while (it && !(it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled))
+        it = it->prev;
+    if (!it) return;
+
+    int batch = it->u.cmd.batch;
+    while (it->prev && it->prev->type == CHAT_ITEM_COMMAND &&
+           !it->prev->u.cmd.settled && it->prev->u.cmd.batch == batch)
+        it = it->prev;
+
+    it->u.cmd.container_scroll = 0;
 }
 
 void chat_listview_set_scrollbar(HWND hwnd, HWND scrollbar)
@@ -630,6 +670,82 @@ static int clv_cmd_row_h(ChatListView *lv, int text_h)
     return approval_row_height(text_h, CLV_DPI(lv));
 }
 
+/* ── Per-container geometry, computed on demand ───────────────────────
+ * Pending command batches: a "container" is a run of consecutive
+ * unsettled CHAT_ITEM_COMMAND items sharing a batch id, drawn as one
+ * scrollable card by its first item (which alone carries the container's
+ * measured_height and container_scroll -- see chat_msg.h). This struct is
+ * the container's geometry (row count, per-row measured text width, row/
+ * total/visible heights), always derived fresh from `first` rather than
+ * cached on ChatListView, so recalc_layout's Pass 2 (heights),
+ * build_cmd_card_geometry (row layout) and the wheel handler (scroll
+ * clamping) can never drift apart -- same principle clv_cmd_row_h() itself
+ * already followed for the single-container v1 design. */
+typedef struct {
+    ChatMsgItem *first;                    /* container's first item */
+    int batch;
+    int n;                                 /* item/row count, <= APPROVAL_MAX_CMDS */
+    ChatMsgItem *items[APPROVAL_MAX_CMDS];
+    int text_w[APPROVAL_MAX_CMDS];         /* full unellipsised command text width, px */
+    int text_h;                            /* command font line height, px */
+    int row_h;
+    int total_h;                           /* n * row_h */
+    int visible_h;                         /* min(n, APPROVAL_VISIBLE_MAX) * row_h */
+} CmdContainerInfo;
+
+static void cmd_container_measure(ChatListView *lv, HDC hdc_for_measure,
+                                  ChatMsgItem *first, CmdContainerInfo *out)
+{
+    memset(out, 0, sizeof(*out));
+    if (!first || first->type != CHAT_ITEM_COMMAND || first->u.cmd.settled)
+        return;
+
+    out->first = first;
+    out->batch = first->u.cmd.batch;
+
+    HGDIOBJ old_font = NULL;
+    if (hdc_for_measure) {
+        old_font = SelectObject(hdc_for_measure, lv->hMonoFont ? lv->hMonoFont
+                                     : GetStockObject(ANSI_FIXED_FONT));
+        TEXTMETRICA tm;
+        GetTextMetricsA(hdc_for_measure, &tm);
+        out->text_h = tm.tmHeight;
+    }
+
+    int n = 0;
+    ChatMsgItem *it = first;
+    while (it && n < APPROVAL_MAX_CMDS &&
+           it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
+           it->u.cmd.batch == out->batch) {
+        out->items[n] = it;
+        if (hdc_for_measure) {
+            const char *cmd_text = it->u.cmd.command ? it->u.cmd.command : it->text;
+            SIZE sz = { 0, 0 };
+            if (cmd_text && *cmd_text)
+                GetTextExtentPoint32A(hdc_for_measure, cmd_text, (int)strlen(cmd_text), &sz);
+            out->text_w[n] = sz.cx;
+        }
+        n++;
+        it = it->next;
+    }
+    if (hdc_for_measure && old_font) SelectObject(hdc_for_measure, old_font);
+
+    out->n = n;
+    out->row_h = clv_cmd_row_h(lv, out->text_h);
+    int visible_rows = (n < APPROVAL_VISIBLE_MAX) ? n : APPROVAL_VISIBLE_MAX;
+    out->total_h = n * out->row_h;
+    out->visible_h = visible_rows * out->row_h;
+
+    /* Clamp the container's persisted scroll offset into range, same as
+     * v1's lv->cmd_scroll_y clamp in recalc_layout used to. */
+    int max_scroll = out->total_h - out->visible_h;
+    if (max_scroll < 0) max_scroll = 0;
+    if (first->u.cmd.container_scroll > max_scroll)
+        first->u.cmd.container_scroll = max_scroll;
+    if (first->u.cmd.container_scroll < 0)
+        first->u.cmd.container_scroll = 0;
+}
+
 static void recalc_layout(ChatListView *lv)
 {
     if (!lv || !lv->hwnd) return;
@@ -656,87 +772,48 @@ static void recalc_layout(ChatListView *lv)
     }
     ReleaseDC(lv->hwnd, hdc);
 
-    /* Pass 2: compute command container — group all commands into a
-     * scrollable container drawn by the first command item. Each row is a
-     * single fixed-height line (checkbox + ellipsised command text + risk
-     * tag), laid out by ns_layout's approval_card_layout(); see
-     * paint_cmd_container() and build_cmd_card_geometry() below. */
+    /* Pass 2: compute one scrollable container per run of consecutive
+     * unsettled command items sharing a batch id (see cmd_container_measure()
+     * above -- pending command batches). Each row is a single fixed-height
+     * line (checkbox + ellipsised command text + risk tag), laid out by
+     * ns_layout's approval_card_layout(); see paint_cmd_container() and
+     * build_cmd_card_geometry() below. */
     {
-        int n = 0;
-        ChatMsgItem *first_cmd = NULL;
-
         HDC hdc2 = GetDC(lv->hwnd);
-        int text_h = 0;
-        if (hdc2) {
-            HGDIOBJ old = SelectObject(hdc2, lv->hMonoFont ? lv->hMonoFont
-                                            : GetStockObject(ANSI_FIXED_FONT));
-            TEXTMETRICA tm;
-            GetTextMetricsA(hdc2, &tm);
-            text_h = tm.tmHeight;
-            SelectObject(hdc2, old);
-        }
 
         item = lv->msg_list ? lv->msg_list->head : NULL;
         while (item) {
             if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled) {
-                if (!first_cmd) first_cmd = item;
-                if (n < APPROVAL_MAX_CMDS) {
-                    const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
-                                                               : item->text;
-                    SIZE sz = { 0, 0 };
-                    if (hdc2 && cmd_text && *cmd_text) {
-                        HGDIOBJ old = SelectObject(hdc2, lv->hMonoFont ? lv->hMonoFont
-                                                    : GetStockObject(ANSI_FIXED_FONT));
-                        GetTextExtentPoint32A(hdc2, cmd_text, (int)strlen(cmd_text), &sz);
-                        SelectObject(hdc2, old);
-                    }
-                    lv->cmd_text_w[n] = sz.cx;
-                }
-                n++;
+                CmdContainerInfo ci;
+                cmd_container_measure(lv, hdc2, item, &ci);
+
+                /* Interior = header row + gap + visible rows + gap + actions
+                 * row, exactly matching approval_card_layout's own geometry
+                 * (see build_cmd_card_geometry) so scroll maths never drifts
+                 * from what is painted. */
+                int pad        = ns_scale(SP_MD, CLV_DPI(lv));
+                int gap_sm     = ns_scale(SP_SM, CLV_DPI(lv));
+                int ctrl_h     = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
+                int border_w   = ns_scale(1, CLV_DPI(lv));
+                int visible_rows = (ci.n < APPROVAL_VISIBLE_MAX) ? ci.n : APPROVAL_VISIBLE_MAX;
+                int interior_h = 2 * pad + 2 * ctrl_h + 2 * gap_sm + visible_rows * ci.row_h;
+                int container_h = 2 * border_w + interior_h;
+
+                /* First command absorbs the full container height; the
+                 * rest of this container's items (already known from the
+                 * measurement above) are hidden -- painted by the
+                 * container instead. */
+                item->measured_height = container_h;
+                for (int k = 1; k < ci.n; k++)
+                    ci.items[k]->measured_height = 0;
+
+                item = (ci.n > 0) ? ci.items[ci.n - 1]->next : item->next;
+                continue;
             }
             item = item->next;
         }
+
         if (hdc2) ReleaseDC(lv->hwnd, hdc2);
-
-        lv->cmd_count = n;
-
-        if (n > 0 && first_cmd) {
-            int row_h = clv_cmd_row_h(lv, text_h);
-
-            int visible_rows = (n < APPROVAL_VISIBLE_MAX) ? n : APPROVAL_VISIBLE_MAX;
-            lv->cmd_total_h   = n * row_h;
-            lv->cmd_visible_h = visible_rows * row_h;
-
-            int max_cmd_scroll = lv->cmd_total_h - lv->cmd_visible_h;
-            if (max_cmd_scroll < 0) max_cmd_scroll = 0;
-            if (lv->cmd_scroll_y > max_cmd_scroll) lv->cmd_scroll_y = max_cmd_scroll;
-            if (lv->cmd_scroll_y < 0) lv->cmd_scroll_y = 0;
-
-            /* Interior = header row + gap + visible rows + gap + actions
-             * row, exactly matching approval_card_layout's own geometry
-             * (see build_cmd_card_geometry) so scroll maths never drifts
-             * from what is painted. */
-            int pad          = ns_scale(SP_MD, CLV_DPI(lv));
-            int gap_sm       = ns_scale(SP_SM, CLV_DPI(lv));
-            int ctrl_h       = ns_scale(SZ_CTRL_H, CLV_DPI(lv));
-            int interior_h   = 2 * pad + 2 * ctrl_h + 2 * gap_sm + visible_rows * row_h;
-
-            int border_w = ns_scale(1, CLV_DPI(lv));
-            int container_h = 2 * border_w + interior_h;
-
-            /* First command absorbs the full container height */
-            first_cmd->measured_height = container_h;
-            /* Hide all subsequent commands (painted by container) */
-            item = first_cmd->next;
-            while (item) {
-                if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled)
-                    item->measured_height = 0;
-                item = item->next;
-            }
-        } else {
-            lv->cmd_total_h = 0;
-            lv->cmd_visible_h = 0;
-        }
     }
 
     /* Pass 3: compute total height (skip h=0 items) */
@@ -1444,7 +1521,8 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
  *    (blocked) row's checkbox paints disabled and its text dims. ────── */
 
 static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                          const ApprovalRowLayout *row, int row_idx)
+                          const ApprovalRowLayout *row, int container_idx,
+                          int row_idx)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
     const ThemeTokens *tok = ns_tokens();
@@ -1487,7 +1565,7 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                  RGB_FROM_THEME(tok->text_dim), STROKE_HAIRLINE);
         } else {
             int chk_hover = ns_hover_state_for(&lv->hover,
-                                CLV_ROW_HIT_ID(row_idx, HIT_CHECKBOX));
+                                CLV_CMD_ROW_HIT_ID(container_idx, row_idx, HIT_CHECKBOX));
             if (item->u.cmd.selected) {
                 COLORREF fill = chk_hover ? RGB_FROM_THEME(tok->success.hover)
                                           : RGB_FROM_THEME(tok->success.base);
@@ -1622,6 +1700,7 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 typedef struct {
     ApprovalCardLayout layout;
     ChatMsgItem *cmd_items[APPROVAL_MAX_CMDS];
+    ChatMsgItem *first;    /* this container's first item (owns container_scroll) */
     int n;
     int held_count;
     int checked_count;   /* checked && !held, over ALL n commands */
@@ -1632,12 +1711,21 @@ typedef struct {
     int card_right;
     int needs_scroll;
     int border_w;
+    int total_h, visible_h, row_h;   /* container geometry, for scrollbar/wheel maths */
 } CmdCardGeometry;
 
+/* `first` must be a container's first item (see cmd_container_measure()).
+ * `y`/`h` are its current paint position/height (from measure_item's
+ * container-absorbed height); `cw` is the client width. */
 static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
-                                    int y, int h, int cw, CmdCardGeometry *g)
+                                    ChatMsgItem *first, int y, int h, int cw,
+                                    CmdCardGeometry *g)
 {
     memset(g, 0, sizeof(*g));
+    g->first = first;
+
+    CmdContainerInfo cinfo;
+    cmd_container_measure(lv, hdc_for_measure, first, &cinfo);
 
     int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
     int border_w = ns_scale(1, CLV_DPI(lv));
@@ -1655,45 +1743,26 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
     g->clip_bot   = g->box_bot - border_w;
 
     int checked_arr[APPROVAL_MAX_CMDS], held_arr[APPROVAL_MAX_CMDS];
-    int ci = 0;
-    ChatMsgItem *c = lv->msg_list ? lv->msg_list->head : NULL;
-    while (c && ci < APPROVAL_MAX_CMDS) {
-        if (c->type == CHAT_ITEM_COMMAND && !c->u.cmd.settled) {
-            g->cmd_items[ci] = c;
-            checked_arr[ci] = c->u.cmd.selected ? 1 : 0;
-            held_arr[ci] = c->u.cmd.blocked ? 1 : 0;
-            if (held_arr[ci]) g->held_count++;
-            if (checked_arr[ci] && !held_arr[ci]) g->checked_count++;
-            ci++;
-        }
-        c = c->next;
+    int n = cinfo.n;
+    for (int i = 0; i < n; i++) {
+        g->cmd_items[i] = cinfo.items[i];
+        checked_arr[i] = cinfo.items[i]->u.cmd.selected ? 1 : 0;
+        held_arr[i] = cinfo.items[i]->u.cmd.blocked ? 1 : 0;
+        if (held_arr[i]) g->held_count++;
+        if (checked_arr[i] && !held_arr[i]) g->checked_count++;
     }
-    /* n comes from the walk above (ci), not lv->cmd_count: WM_PAINT does
-     * not recalc_layout, so cmd_count can be stale relative to what's
-     * actually unsettled right now (e.g. right after a settle with no
-     * re-layout). Deriving n from ci keeps it in sync with cmd_items[]
-     * so no slot below n is ever left NULL. Already clamped to
-     * APPROVAL_MAX_CMDS by the while loop condition above. */
-    int n = ci;
     g->n = n;
     g->run_enabled = g->checked_count > 0;
+    g->total_h = cinfo.total_h;
+    g->visible_h = cinfo.visible_h;
+    g->row_h = cinfo.row_h;
 
-    g->needs_scroll = (lv->cmd_total_h > lv->cmd_visible_h);
+    g->needs_scroll = (cinfo.total_h > cinfo.visible_h);
     g->card_right = g->needs_scroll
         ? (g->clip_right - sb_w - ns_scale(3, CLV_DPI(lv))) : g->clip_right;
 
-    int text_h = 0;
-    if (hdc_for_measure) {
-        HGDIOBJ old = SelectObject(hdc_for_measure, lv->hMonoFont ? lv->hMonoFont
-                                    : GetStockObject(ANSI_FIXED_FONT));
-        TEXTMETRICA tm;
-        GetTextMetricsA(hdc_for_measure, &tm);
-        text_h = tm.tmHeight;
-        SelectObject(hdc_for_measure, old);
-    }
-    int row_h = clv_cmd_row_h(lv, text_h);
-
-    int first_row = (row_h > 0) ? (lv->cmd_scroll_y / row_h) : 0;
+    int scroll = first ? first->u.cmd.container_scroll : 0;
+    int first_row = (cinfo.row_h > 0) ? (scroll / cinfo.row_h) : 0;
     int max_first = n - APPROVAL_VISIBLE_MAX;
     if (max_first < 0) max_first = 0;
     if (first_row > max_first) first_row = max_first;
@@ -1706,16 +1775,20 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
     int rem_n = n - first_row;
     NsRect body = { g->clip_left, g->clip_top,
                    g->card_right - g->clip_left, g->clip_bot - g->clip_top };
-    approval_card_layout(body, rem_n, &lv->cmd_text_w[first_row],
+    approval_card_layout(body, rem_n, &cinfo.text_w[first_row],
                         &checked_arr[first_row], &held_arr[first_row],
-                        text_h, CLV_DPI(lv), &g->layout);
+                        cinfo.text_h, CLV_DPI(lv), &g->layout);
 }
 
 /* ── Paint the grouped command container: outer box, header ("N commands
  *    · M held"), scrollable rows, themed scrollbar, and the card-wide
- *    Deny all / Run N selected actions. ──────────────────────────────── */
+ *    Deny all / Run N selected actions. `container_idx` is this
+ *    container's 0-based position among containers currently in the list
+ *    (see the CLV_CMD_* id-scheme comment near the top of the file) --
+ *    the caller (on_paint) tracks it while walking. ────────────────────── */
 
-static int paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
+static int paint_cmd_container(ChatListView *lv, HDC hdc, ChatMsgItem *first,
+                               int container_idx, RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
     const ThemeTokens *tok = ns_tokens();
@@ -1727,7 +1800,7 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
     int cw = client_rc.right - client_rc.left;
 
     CmdCardGeometry g;
-    build_cmd_card_geometry(lv, hdc, rc->top, rc->bottom - rc->top, cw, &g);
+    build_cmd_card_geometry(lv, hdc, first, rc->top, rc->bottom - rc->top, cw, &g);
 
     RECT box = { g.box_left, g.box_top, g.box_right, g.box_bot };
 
@@ -1793,7 +1866,7 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         if (rowl->tag.w <= 0 && rowl->text.w <= 0) continue;
         ChatMsgItem *citem = g.cmd_items[g.first_row + i];
         if (!citem) continue;
-        paint_cmd_row(lv, hdc, citem, rowl, i);
+        paint_cmd_row(lv, hdc, citem, rowl, container_idx, i);
     }
 
     RestoreDC(hdc, saved_dc);
@@ -1810,12 +1883,13 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         ns_draw_round_fill(hdc, &track_rc, sb_w / 2,
                            RGB_FROM_THEME(tc->cmd_border), 255);
 
-        int max_cmd_scroll = lv->cmd_total_h - lv->cmd_visible_h;
+        int max_cmd_scroll = g.total_h - g.visible_h;
         if (max_cmd_scroll < 1) max_cmd_scroll = 1;
-        int thumb_h = track_h * lv->cmd_visible_h / lv->cmd_total_h;
+        int thumb_h = track_h * g.visible_h / g.total_h;
         if (thumb_h < ns_scale(20, dpi)) thumb_h = ns_scale(20, dpi);
+        int scroll = first ? first->u.cmd.container_scroll : 0;
         int thumb_y = track_top +
-            (lv->cmd_scroll_y * (track_h - thumb_h)) / max_cmd_scroll;
+            (scroll * (track_h - thumb_h)) / max_cmd_scroll;
         RECT thumb_rc = { track_left, thumb_y, track_left + sb_w, thumb_y + thumb_h };
         ns_draw_round_fill(hdc, &thumb_rc, sb_w / 2,
                            RGB_FROM_THEME(lv->theme->accent), 255);
@@ -1830,7 +1904,8 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
                          g.layout.run_selected.x + g.layout.run_selected.w,
                          g.layout.run_selected.y + g.layout.run_selected.h };
 
-        int deny_hover = ns_hover_state_for(&lv->hover, CLV_CARD_HIT_ID(HIT_DENY_ALL));
+        int deny_hover = ns_hover_state_for(&lv->hover,
+                            CLV_CMD_CARD_HIT_ID(container_idx, HIT_DENY_ALL));
         COLORREF deny_border = deny_hover ? RGB_FROM_THEME(tok->accent.base)
                                           : RGB_FROM_THEME(tok->border);
         ns_draw_round_stroke(hdc, &deny_rc, ns_scale(R_CTRL, dpi),
@@ -1845,7 +1920,8 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, RECT *rc)
         char run_label[32];
         snprintf(run_label, sizeof(run_label), "Run %d selected", g.checked_count);
         NsBtnState run_state = g.run_enabled
-            ? (NsBtnState)ns_hover_state_for(&lv->hover, CLV_CARD_HIT_ID(HIT_RUN_SELECTED))
+            ? (NsBtnState)ns_hover_state_for(&lv->hover,
+                            CLV_CMD_CARD_HIT_ID(container_idx, HIT_RUN_SELECTED))
             : NS_BTN_DISABLED;
         ns_draw_button(hdc, &run_rc, &tok->success, run_state, 0,
                       run_label, lv->hSmallFont, dpi);
@@ -2351,6 +2427,11 @@ static void on_paint(ChatListView *lv)
      * tracking existed. */
     int painted_bottom = y - lv->msg_gap;
 
+    /* 0-based position among command containers painted so far, in list
+     * order -- feeds the hover-id scheme (see CLV_CMD_* near the top of
+     * the file). */
+    int cmd_container_idx = 0;
+
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
         int h = item->measured_height;
@@ -2386,18 +2467,22 @@ static void on_paint(ChatListView *lv)
                 break;
             case CHAT_ITEM_COMMAND:
                 /* A settled command paints as its own compact inline row.
-                 * An unsettled one is part of the single live container
-                 * (painted by whichever item currently absorbs the full
-                 * container height -- see build_cmd_card_geometry). Both
-                 * settled_row_layout() and approval_card_layout() are
-                 * recomputed straight from recalc_layout()'s measured
-                 * heights on every settle (settle_all_commands calls
-                 * chat_listview_invalidate, which recalcs), so item_rc's
-                 * height here always matches what's about to be painted. */
+                 * An unsettled one is a container's first item (painted as
+                 * the whole container -- see build_cmd_card_geometry); any
+                 * number of containers can be pending at once now (pending
+                 * command batches), each numbered by cmd_container_idx in
+                 * list order for the hover-id scheme (see CLV_CMD_* near
+                 * the top of the file). Both settled_row_layout() and
+                 * approval_card_layout() are recomputed straight from
+                 * recalc_layout()'s measured heights on every settle
+                 * (settle_all_commands calls chat_listview_invalidate,
+                 * which recalcs), so item_rc's height here always matches
+                 * what's about to be painted. */
                 if (item->u.cmd.settled)
                     painted_h = paint_cmd_settled_row(lv, mem_dc, item, &item_rc);
                 else
-                    painted_h = paint_cmd_container(lv, mem_dc, &item_rc);
+                    painted_h = paint_cmd_container(lv, mem_dc, item,
+                                                    cmd_container_idx++, &item_rc);
                 break;
             case CHAT_ITEM_TOOL_CALL:
             case CHAT_ITEM_TOOL_RESULT:
@@ -2496,24 +2581,63 @@ static void on_paint(ChatListView *lv)
  *  cursor and its rect, for ns_hover_move() and targeted invalidation.
  * ══════════════════════════════════════════════════════════════════════ */
 
-/* Find the sole active (unsettled) command container item and the (y, h)
- * it paints at. Only one item in the list ever carries the container's
- * full measured_height at a time (the rest are absorbed with h = 0 --
- * see build_cmd_card_geometry's caller in on_paint), so this mirrors the
- * walk there and in on_lbuttondown. Returns NULL if no container is
- * showing right now (e.g. everything has been decided). */
-static ChatMsgItem *find_active_cmd_container(ChatListView *lv,
-                                              int *out_y, int *out_h)
+/* Find the command container whose current [y, y+h) span (viewport
+ * coordinates) contains `my`, walking every container in the list (not
+ * just the first -- any number can be pending at once, see pending
+ * command batches). Only a container's first item ever carries its full
+ * measured_height (the rest are absorbed with h = 0 -- see
+ * build_cmd_card_geometry's caller in on_paint), so this mirrors the walk
+ * there. *out_index receives the container's 0-based position in list
+ * order (the same numbering on_paint assigns via cmd_container_idx),
+ * capped below CLV_CMD_MAX_CONTAINERS -- see the CLV_CMD_* id-scheme
+ * comment near the top of the file. Returns NULL if no container's span
+ * contains `my` right now. */
+static ChatMsgItem *cmd_container_at_y(ChatListView *lv, int my,
+                                       int *out_y, int *out_h, int *out_index)
 {
     int y = lv->msg_gap - lv->scroll_y;
+    int idx = 0;
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
         int h = item->measured_height;
         if (h == 0) { item = item->next; continue; }
         if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled) {
-            if (out_y) *out_y = y;
-            if (out_h) *out_h = h;
-            return item;
+            if (my >= y && my < y + h) {
+                if (out_y) *out_y = y;
+                if (out_h) *out_h = h;
+                if (out_index) *out_index = (idx < CLV_CMD_MAX_CONTAINERS) ? idx : -1;
+                return item;
+            }
+            idx++;
+        }
+        y += h + lv->msg_gap;
+        item = item->next;
+    }
+    return NULL;
+}
+
+/* Find the container at 0-based position `index` among containers
+ * currently in the list (same order cmd_container_at_y() counts in).
+ * Used to recompute a stale hover id's rect after the cursor has moved
+ * off it -- see chatlv_hover_rect_for_id(). Returns NULL if that many
+ * containers don't exist right now. */
+static ChatMsgItem *cmd_container_by_index(ChatListView *lv, int index,
+                                           int *out_y, int *out_h)
+{
+    if (index < 0) return NULL;
+    int y = lv->msg_gap - lv->scroll_y;
+    int idx = 0;
+    ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
+    while (item) {
+        int h = item->measured_height;
+        if (h == 0) { item = item->next; continue; }
+        if (item->type == CHAT_ITEM_COMMAND && !item->u.cmd.settled) {
+            if (idx == index) {
+                if (out_y) *out_y = y;
+                if (out_h) *out_h = h;
+                return item;
+            }
+            idx++;
         }
         y += h + lv->msg_gap;
         item = item->next;
@@ -2650,7 +2774,7 @@ static int chatlv_thinking_row_hit(ChatListView *lv, int mx, int my,
 
 /* Hit-test the whole list view for hover purposes only -- never posts a
  * command, only reports which element (if any) is under (mx, my) via a
- * CLV_ROW_HIT_ID/CLV_CARD_HIT_ID/CLV_HOVER_RETRY/CLV_THINK_HOVER_ID id,
+ * CLV_CMD_ROW_HIT_ID/CLV_CMD_CARD_HIT_ID/CLV_HOVER_RETRY/CLV_THINK_HOVER_ID id,
  * plus its rect for invalidation. Returns -1 when nothing hittable is
  * under the cursor. */
 static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
@@ -2658,24 +2782,24 @@ static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
     if (chatlv_list_empty(lv) && lv->state_id >= 0)
         return chatlv_empty_state_hit(lv, mx, my, out_rc);
 
-    int cy, ch;
-    ChatMsgItem *citem = find_active_cmd_container(lv, &cy, &ch);
-    if (citem && my >= cy && my < cy + ch) {
+    int cy, ch, cidx = -1;
+    ChatMsgItem *citem = cmd_container_at_y(lv, my, &cy, &ch, &cidx);
+    if (citem && cidx >= 0) {
         RECT client_rc;
         GetClientRect(lv->hwnd, &client_rc);
         int cw = client_rc.right - client_rc.left;
 
         HDC mdc = GetDC(lv->hwnd);
         CmdCardGeometry g;
-        build_cmd_card_geometry(lv, mdc, cy, ch, cw, &g);
+        build_cmd_card_geometry(lv, mdc, citem, cy, ch, cw, &g);
         if (mdc) ReleaseDC(lv->hwnd, mdc);
 
         int row_out = -1;
         int hit = approval_card_hit(&g.layout, mx, my, &row_out);
         if (hit != HIT_NONE &&
             cmd_card_rect_for_hit(&g.layout, hit, row_out, out_rc)) {
-            return (row_out >= 0) ? CLV_ROW_HIT_ID(row_out, hit)
-                                  : CLV_CARD_HIT_ID(hit);
+            return (row_out >= 0) ? CLV_CMD_ROW_HIT_ID(cidx, row_out, hit)
+                                  : CLV_CMD_CARD_HIT_ID(cidx, hit);
         }
     }
 
@@ -2777,8 +2901,17 @@ static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
         return 0;
     }
 
+    /* Whatever's left (id < CLV_CMD_ID_CEILING, i.e. below CLV_HOVER_RETRY)
+     * is a command-container id: decode its container index and local
+     * row/hit -- see the CLV_CMD_* comment near the top of the file. */
+    int cidx = id / CLV_CMD_CONTAINER_STRIDE;
+    int local = id % CLV_CMD_CONTAINER_STRIDE;
+    int row = local / CLV_CMD_ROW_SLOTS;
+    int hit = local % CLV_CMD_ROW_SLOTS;
+    if (row == APPROVAL_MAX_CMDS) row = -1;   /* card action, not a row */
+
     int cy, ch;
-    ChatMsgItem *citem = find_active_cmd_container(lv, &cy, &ch);
+    ChatMsgItem *citem = cmd_container_by_index(lv, cidx, &cy, &ch);
     if (!citem) return 0;
 
     RECT client_rc;
@@ -2786,13 +2919,8 @@ static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
     int cw = client_rc.right - client_rc.left;
     HDC mdc = GetDC(lv->hwnd);
     CmdCardGeometry g;
-    build_cmd_card_geometry(lv, mdc, cy, ch, cw, &g);
+    build_cmd_card_geometry(lv, mdc, citem, cy, ch, cw, &g);
     if (mdc) ReleaseDC(lv->hwnd, mdc);
-
-    int hit, row;
-    if (id == CLV_CARD_HIT_ID(HIT_DENY_ALL)) { hit = HIT_DENY_ALL; row = -1; }
-    else if (id == CLV_CARD_HIT_ID(HIT_RUN_SELECTED)) { hit = HIT_RUN_SELECTED; row = -1; }
-    else { row = id / 16; hit = id % 16; }
 
     return cmd_card_rect_for_hit(&g.layout, hit, row, out);
 }
@@ -2806,9 +2934,13 @@ static int chatlv_hit_is_actionable(int id)
     if (id >= CLV_STATE_CHIP_BASE) return 1;   /* empty-state chip/button */
     if (id == CLV_HOVER_RETRY) return 1;
     if (id >= CLV_THINK_HOVER_BASE) return 1;
-    if (id == CLV_CARD_HIT_ID(HIT_DENY_ALL) || id == CLV_CARD_HIT_ID(HIT_RUN_SELECTED))
-        return 1;
-    int hit = id % 16;
+    /* Command-container id: the low CLV_CMD_ROW_SLOTS bits are always the
+     * HIT_* type, regardless of which container/row produced it (row and
+     * card-action hit types never overlap numerically -- see the CLV_CMD_*
+     * comment near the top of the file), so no container/row decode is
+     * needed just to classify the hit type. */
+    int hit = id % CLV_CMD_ROW_SLOTS;
+    if (hit == HIT_DENY_ALL || hit == HIT_RUN_SELECTED) return 1;
     return hit == HIT_CHECKBOX;
 }
 
@@ -2911,7 +3043,7 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
 
             HDC mdc = GetDC(lv->hwnd);
             CmdCardGeometry g;
-            build_cmd_card_geometry(lv, mdc, y, h, cw2, &g);
+            build_cmd_card_geometry(lv, mdc, item, y, h, cw2, &g);
             if (mdc) ReleaseDC(lv->hwnd, mdc);
 
             /* ── Scrollbar click ──────────────────────────────────── */
@@ -2921,12 +3053,13 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
                 int sb_left  = sb_right - sb_w;
                 if (mx >= sb_left && mx <= sb_right &&
                     my >= g.clip_top && my < g.clip_bot) {
-                    int track_h = lv->cmd_visible_h;
-                    int max_cs = lv->cmd_total_h - lv->cmd_visible_h;
+                    int track_h = g.visible_h;
+                    int max_cs = g.total_h - g.visible_h;
                     int rel = my - g.clip_top;
-                    lv->cmd_scroll_y = (track_h > 0) ? (rel * max_cs) / track_h : 0;
-                    if (lv->cmd_scroll_y < 0) lv->cmd_scroll_y = 0;
-                    if (lv->cmd_scroll_y > max_cs) lv->cmd_scroll_y = max_cs;
+                    int cs = (track_h > 0) ? (rel * max_cs) / track_h : 0;
+                    if (cs < 0) cs = 0;
+                    if (cs > max_cs) cs = max_cs;
+                    item->u.cmd.container_scroll = cs;
                     InvalidateRect(lv->hwnd, NULL, FALSE);
                     return 1;
                 }
@@ -2938,7 +3071,8 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
             if (hit == HIT_DENY_ALL) {
                 if (parent)
                     PostMessage(parent, WM_COMMAND,
-                                MAKEWPARAM(IDC_CMD_CANCEL_ALL, 0), 0);
+                                MAKEWPARAM(IDC_CMD_CANCEL_ALL, 0),
+                                (LPARAM)item->u.cmd.batch);
                 return 1;
             }
             if (hit == HIT_RUN_SELECTED) {
@@ -2950,7 +3084,8 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
                  * (nothing checked) still consumes the click, no-op. */
                 if (g.run_enabled && parent)
                     PostMessage(parent, WM_COMMAND,
-                                MAKEWPARAM(IDC_CMD_APPROVE_SEL, 0), 0);
+                                MAKEWPARAM(IDC_CMD_APPROVE_SEL, 0),
+                                (LPARAM)item->u.cmd.batch);
                 return 1;
             }
             if (row_out >= 0 && hit == HIT_CHECKBOX) {
@@ -3284,8 +3419,11 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             }
         }
 
-        /* Check if cursor is over the command container */
-        if (lv->cmd_count > 0 && lv->cmd_total_h > lv->cmd_visible_h) {
+        /* Check if cursor is over a command container -- any unsettled
+         * command item that survived the wh2==0 skip below is a
+         * container's first item by construction (see recalc_layout's
+         * Pass 2), so no separate "is this the first" check is needed. */
+        {
             POINT cpt;
             cpt.x = GET_X_LPARAM(lParam);
             cpt.y = GET_Y_LPARAM(lParam);
@@ -3296,20 +3434,27 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             while (wi2) {
                 int wh2 = wi2->measured_height;
                 if (wh2 == 0) { wi2 = wi2->next; continue; }
-                if (wi2->type == CHAT_ITEM_COMMAND &&
-                    is_first_command(lv->msg_list, wi2) &&
+                if (wi2->type == CHAT_ITEM_COMMAND && !wi2->u.cmd.settled &&
                     cpt.y >= wy2 && cpt.y < wy2 + wh2 &&
                     wy2 >= 0 && wy2 + wh2 <= lv->viewport_height) {
                     /* Same rule as the Thinking box above: a card that is
                      * partly off-screen lets the list scroll instead. */
-                    int max_cs = lv->cmd_total_h - lv->cmd_visible_h;
-                    int old_cs = lv->cmd_scroll_y;
-                    lv->cmd_scroll_y -= (delta * scroll_amount) / WHEEL_DELTA;
-                    if (lv->cmd_scroll_y < 0) lv->cmd_scroll_y = 0;
-                    if (lv->cmd_scroll_y > max_cs) lv->cmd_scroll_y = max_cs;
-                    if (lv->cmd_scroll_y != old_cs) {
-                        InvalidateRect(hwnd, NULL, FALSE);
-                        return 0;
+                    HDC mdc = GetDC(hwnd);
+                    CmdContainerInfo cinfo;
+                    cmd_container_measure(lv, mdc, wi2, &cinfo);
+                    if (mdc) ReleaseDC(hwnd, mdc);
+
+                    if (cinfo.total_h > cinfo.visible_h) {
+                        int max_cs = cinfo.total_h - cinfo.visible_h;
+                        int old_cs = wi2->u.cmd.container_scroll;
+                        int new_cs = old_cs - (delta * scroll_amount) / WHEEL_DELTA;
+                        if (new_cs < 0) new_cs = 0;
+                        if (new_cs > max_cs) new_cs = max_cs;
+                        wi2->u.cmd.container_scroll = new_cs;
+                        if (new_cs != old_cs) {
+                            InvalidateRect(hwnd, NULL, FALSE);
+                            return 0;
+                        }
                     }
                     break;
                 }

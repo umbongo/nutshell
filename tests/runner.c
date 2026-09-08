@@ -765,6 +765,13 @@ int test_ai_confirm_text_multiple(void);
 int test_ai_confirm_text_null(void);
 int test_ai_confirm_text_overflow(void);
 int test_ai_confirm_text_numbering(void);
+int test_ai_continue_text_no_newer_exchanges_is_default(void);
+int test_ai_continue_text_no_newer_exchanges_ignores_first_cmd(void);
+int test_ai_continue_text_newer_exchanges_names_batch(void);
+int test_ai_continue_text_newer_exchanges_multiple(void);
+int test_ai_continue_text_newer_exchanges_null_first_cmd_falls_back(void);
+int test_ai_continue_text_null_buf(void);
+int test_ai_continue_text_overflow_returns_zero(void);
 int test_ai_build_body_stream_true(void);
 int test_ai_build_body_stream_false(void);
 int test_ai_build_body_ex_matches_original(void);
@@ -1405,6 +1412,27 @@ int test_chat_msg_error_status_after_ai_is_tail(void);
 int test_chat_msg_error_status_dirty_flag(void);
 int test_chat_msg_multiple_error_statuses(void);
 int test_chat_msg_status_after_empty_ai(void);
+int test_chat_msg_set_batch(void);
+int test_chat_msg_set_batch_noop_on_non_command(void);
+int test_chat_msg_set_command_does_not_touch_batch(void);
+int test_chat_msg_batch_index_first_settle_two_batches(void);
+int test_chat_msg_batch_index_non_command_is_negative_one(void);
+int test_chat_msg_batch_settle_unknown_batch_returns_zero(void);
+
+/* test_cmd_batch.c */
+int test_cmd_batch_set_init_empty(void);
+int test_cmd_batch_add_assigns_sequential_ids(void);
+int test_cmd_batch_add_inits_queue(void);
+int test_cmd_batch_add_copies_defaults(void);
+int test_cmd_batch_find_present_and_absent(void);
+int test_cmd_batch_remove_middle(void);
+int test_cmd_batch_remove_absent_is_noop(void);
+int test_cmd_batch_add_evicts_oldest_when_full(void);
+int test_cmd_batch_add_no_eviction_reports_zero(void);
+int test_cmd_batch_first_pending_oldest_needing_user(void);
+int test_cmd_batch_first_pending_none(void);
+int test_cmd_batch_next_runnable_oldest_with_approved(void);
+int test_cmd_batch_next_runnable_none(void);
 
 /* test_chat_thinking.c */
 int test_thinking_init(void);
@@ -2595,6 +2623,13 @@ int main(void) {
     failed += test_ai_confirm_text_null();
     failed += test_ai_confirm_text_overflow();
     failed += test_ai_confirm_text_numbering();
+    failed += test_ai_continue_text_no_newer_exchanges_is_default();
+    failed += test_ai_continue_text_no_newer_exchanges_ignores_first_cmd();
+    failed += test_ai_continue_text_newer_exchanges_names_batch();
+    failed += test_ai_continue_text_newer_exchanges_multiple();
+    failed += test_ai_continue_text_newer_exchanges_null_first_cmd_falls_back();
+    failed += test_ai_continue_text_null_buf();
+    failed += test_ai_continue_text_overflow_returns_zero();
     failed += test_ai_build_body_stream_true();
     failed += test_ai_build_body_stream_false();
     failed += test_ai_build_body_ex_matches_original();
@@ -3318,6 +3353,27 @@ int main(void) {
     failed += test_chat_msg_error_status_dirty_flag();
     failed += test_chat_msg_multiple_error_statuses();
     failed += test_chat_msg_status_after_empty_ai();
+    failed += test_chat_msg_set_batch();
+    failed += test_chat_msg_set_batch_noop_on_non_command();
+    failed += test_chat_msg_set_command_does_not_touch_batch();
+    failed += test_chat_msg_batch_index_first_settle_two_batches();
+    failed += test_chat_msg_batch_index_non_command_is_negative_one();
+    failed += test_chat_msg_batch_settle_unknown_batch_returns_zero();
+
+    printf("\n--- Pending command batches: cmd_batch ---\n");
+    failed += test_cmd_batch_set_init_empty();
+    failed += test_cmd_batch_add_assigns_sequential_ids();
+    failed += test_cmd_batch_add_inits_queue();
+    failed += test_cmd_batch_add_copies_defaults();
+    failed += test_cmd_batch_find_present_and_absent();
+    failed += test_cmd_batch_remove_middle();
+    failed += test_cmd_batch_remove_absent_is_noop();
+    failed += test_cmd_batch_add_evicts_oldest_when_full();
+    failed += test_cmd_batch_add_no_eviction_reports_zero();
+    failed += test_cmd_batch_first_pending_oldest_needing_user();
+    failed += test_cmd_batch_first_pending_none();
+    failed += test_cmd_batch_next_runnable_oldest_with_approved();
+    failed += test_cmd_batch_next_runnable_none();
 
     printf("\n--- Thinking Controller ---\n");
     failed += test_thinking_init();

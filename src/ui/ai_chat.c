@@ -3512,10 +3512,17 @@ next_coalesce:;
 
                     ChatMsgItem *cmd_item = chat_msg_append(
                         &d->msg_list, CHAT_ITEM_COMMAND, "");
-                    if (cmd_item)
+                    if (cmd_item) {
                         chat_msg_set_command(cmd_item, cmds[ci],
                             d->approval_q.entries[idx].safety,
                             d->approval_q.entries[idx].status == APPROVE_BLOCKED);
+                        /* Pending command batches: this pass still runs a
+                         * single "current batch" of id 1 (full per-reply
+                         * batching is pass 2's list-view wiring); tagging
+                         * it lets chat_listview.c's container grouping
+                         * (see cmd_container_measure) work unchanged. */
+                        chat_msg_set_batch(cmd_item, 1);
+                    }
 
                     memcpy(d->queued_cmds[queued], cmds[ci],
                            sizeof(d->queued_cmds[0]));
@@ -4504,6 +4511,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         if (!item) continue;
         chat_msg_set_command(item, e->command, e->safety,
                              e->status == APPROVE_BLOCKED);
+        chat_msg_set_batch(item, 1);   /* see the pending-batches note above */
         switch (e->status) {
         case APPROVE_APPROVED:
         case APPROVE_EXECUTING:

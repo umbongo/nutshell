@@ -38,13 +38,13 @@ typedef struct {
     /* Command list collapse state (0 = collapsed, 1 = expanded) */
     int cmd_list_expanded;
 
-    /* Command container scroll state */
-    int cmd_scroll_y;           /* Scroll offset within command container */
-    int cmd_total_h;            /* Total height of all command cards */
-    int cmd_visible_h;          /* Visible content height (capped) */
-    int cmd_count;              /* Number of command items */
+    /* Command container scroll/height state now lives per-container: see
+     * ChatMsgItem.u.cmd.container_scroll (chat_msg.h) and
+     * cmd_container_measure() in chat_listview.c, which computes a
+     * container's row count/heights/text widths on demand from its first
+     * item -- one container per run of consecutive unsettled command items
+     * sharing a batch id (pending command batches). */
     int cmd_heights[16];        /* Individual card heights (pre-container) */
-    int cmd_text_w[16];         /* Full (unellipsised) command text width, px */
 
     /* DPI scaling factor (1.0 = 96 DPI) */
     float dpi_scale;
@@ -66,8 +66,9 @@ typedef struct {
 
     /* Hover tracking for painted elements (approval card rows/actions,
      * the [Retry] link) -- see ns_hover.h and Design-System Foundation
-     * task 6. Element ids: CLV_ROW_HIT_ID/CLV_CARD_HIT_ID/CLV_HOVER_RETRY
-     * in chat_listview.c. */
+     * task 6. Element ids: CLV_CMD_ROW_HIT_ID/CLV_CMD_CARD_HIT_ID/
+     * CLV_HOVER_RETRY in chat_listview.c (see the id-scheme comment there
+     * for how a command-container id also encodes which container). */
     NsHover hover;
     int hover_tracking;         /* 1 while TrackMouseEvent(TME_LEAVE) is armed */
 
