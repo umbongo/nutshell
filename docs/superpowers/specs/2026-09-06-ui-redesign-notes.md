@@ -103,140 +103,40 @@ three dots on `NS_ICON_THINKING` and the LED on `NS_ICON_SERVER`, so those detai
 invisible too. Fix belongs in foundation section 3 (shared primitives): add an `OP_DOT`
 op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
 
-## Todo
+## Todo (compacted at the 2026-09-09 checkpoint)
 
-- [x] Native Windows build + test environment (committed 58fc45e, v1.0.77).
-- [x] App + docs review (`2026-09-07-app-and-docs-review.md`) and the six behaviour
-      fixes Thomas approved from it (`2026-09-07-review-fixes-design.md`, v1.0.78).
-      Still open from that review: the AI-stream thread lifetime bugs, the relative
-      config-save path, and the Session Manager phantom row — fold into the roadmap.
-- [x] Lost lines after app resize (v1.0.80). Root cause: `WM_SIZE` only resized the
-      active tab, so a tab in the background during the resize kept its old grid and
-      PTY size; its prompt then sat mid-window with the rest blank until enough Enters
-      scrolled it into place. `on_tab_select` now calls `sync_session_grid()`.
-      Regression case `resize_applies_to_inactive_tab` in the integration suite.
-- [x] Design-system foundation: all six sections presented and approved one at a
-      time (2026-09-07). Decisions: derived interaction states with per-theme
-      override; each light theme gets its own accent; body text 10 pt; standalone
-      buttons stay child windows, in-card elements are painted; `--ui-demo` stays a
-      hidden flag, no menu entry.
-- [x] `docs/superpowers/specs/2026-09-07-design-system-foundation-design.md`
-      written, self-reviewed, committed.
-- [x] Foundation implementation plan: `docs/superpowers/plans/2026-09-07-design-system-foundation.md`
-      (10 tasks, TDD, gates as a ratchet). Next: implement task 1.
-- [x] Sub-project 2 (AI Assist panel) designed: mockups artifact, Thomas chose frame B,
-      card 1, "safe only"/"all" wording, empty state with three suggestions, and asked
-      that the AI thought process stay viewable (thinking disclosure). Spec
-      `2026-09-07-ai-assist-panel-design.md`, plan `../plans/2026-09-07-ai-assist-panel.md`
-      (5 tasks). Next: implement task 1.
-- [x] During foundation section 3 (shared primitives): add `OP_DOT` to `icons.c` so the
-      password / thinking / server dots render; `make wintest` must go green.
-- [x] **Design-system foundation implementation complete (task 10 of 10, v1.0.92).**
-      All six modules landed with their tests; native suite green at **1,665 tests**
-      (up from 1,539 at plan time). Both gates are exact-allow-list assertions, not
-      ratchets: the colour gate allows exactly 2 literal `RGB(` calls in all of
-      `src/ui` (`renderer.c`'s terminal fg/bg fallback), 0 everywhere else including
-      `ns_draw.c`'s own callers; the scale gate allows 0 local scale macros /
-      `MulDiv(..., 96)` sites (`settings_scale` deleted, its callers moved to
-      `ns_scale`). `make wintest` 2/2. `make clean && make release` clean under
-      `-Werror -Wpedantic -Wshadow -Wconversion -Wformat=2`. Definition of done
-      (spec section 6) met: colours outside the allow-list are 0 (from 77 at plan
-      time), both gates passing, wintest green, integration suite green including
-      `ui_gallery`.
-- [x] **AI Assist panel implementation complete (task 5 of 5, v1.0.96).** All five
-      tasks landed: `ai_panel_layout`/`ai_status_layout`/`thinking_layout`/`ai_modes_label`
-      in `src/core/ai_panel_layout.*`, `ai_panel_states` table, `approval_card_layout` v2
-      in `ns_layout` (checkbox/text/tag rows, `Deny all`/`Run N selected`, no more two-line
-      rule); card 1 painted in `chat_listview.c` with the Thinking disclosure; the header
-      (session name, model chip, New chat/Save chat/Undock-Dock icon buttons with
-      tooltips) and status line (Read-only/Read + write segmented control, Auto approve
-      off/safe only/all, context meter) replacing the old owner-drawn tab buttons in
-      `ai_chat.c`; the three empty/no-key/no-session states with suggestion chips and
-      Open Settings/Open Session Manager buttons, both `MessageBox` dead ends in
-      `window.c on_ai_clicked()` gone; `ui_demo` gained `nokey`/`nosession` states
-      (`ai_chat_apply_demo_extras()` now forces `AI_STATE_EMPTY`/`AI_STATE_NO_KEY`/
-      `AI_STATE_NO_SESSION` for `empty`/`nokey`/`nosession` respectively). Native suite
-      green at **1,699 tests** (up from 1,694 at task 5's start). `ui_gallery` now
-      captures 9 states x 4 themes = 36 images; the new keystroke-free
-      `ai_panel_opens_without_key` case (empty `ai_api_key`, connects to tompi, opens
-      the panel via the View menu command, asserts no `#32770` dialog and a non-blank
-      capture) passes. `make clean && make release` clean under `-Werror`, `wintest` 2/2.
-      README ("AI Chat Assistant" summary + user-guide section, feature bullets, test
-      count) and `help_guide.c`'s in-app AI section rewritten for the new panel (each
-      `GUIDE_TEXT_*` string literal still under 4095 chars). Gallery reviewed for four
-      sample captures (`Onyx-Synapse-nokey`, `Onyx-Light-nosession`, `Sage-and-Sand-all`,
-      `Moss-and-Mist-approval`) — all render correctly (empty-state copy/buttons match
-      `ai_panel_states.c` verbatim, Thinking disclosure expands with the right word
-      count, approval card header/rows/actions match the design spec). One
-      non-blocking observation: the demo `approval` state's already-settled
-      (approved/denied) commands render as nothing, since `chat_listview.c` hides
-      settled command items on the assumption their outcome is narrated as an `[EXEC]`
-      block in the AI's own reply text -- the canned `APPROVAL_ASSISTANT_MSG` in
-      `ui_demo.c` doesn't include one, so the gallery's `approval` capture only ever
-      shows the two still-open (pending/blocked) rows. Cosmetic-only (doesn't affect a
-      live conversation, where the AI's real reply does narrate settled commands); left
-      as-is rather than reshaping the canned demo script outside task 5's scope.
+Done, in order (details in the commit messages and the specs named):
+- v1.0.77 native Windows build and test environment · v1.0.78 six review fixes
+  (`2026-09-07-review-fixes-design.md`) · v1.0.80 lost lines after resize.
+- v1.0.82–v1.0.92 design-system foundation, 10 of 10 tasks
+  (`2026-09-07-design-system-foundation-design.md`; gates are exact allow-lists).
+- v1.0.93–v1.0.96 AI Assist panel, 5 of 5 tasks (`2026-09-07-ai-assist-panel-design.md`).
+- v1.0.97 approval-card crash and held-command workflow · v1.0.98 settled rows,
+  Thinking remeasure · v1.0.99 chat list sticks to bottom · v1.1.0 terminal smart
+  scrolling · v1.1.1 prompt-gated one-at-a-time dispatch · v1.1.2 four auto-approve
+  levels (`2026-09-07-command-dispatch-and-auto-approve-levels.md`) · v1.1.3 collapsed
+  Thinking stays collapsed, indicator placement · v1.1.4 markdown tables · v1.1.5 wheel
+  trap · v1.1.6 colour by role, streaming Thinking measured · v1.1.7–v1.1.8 pending
+  command batches (`2026-09-09-pending-command-batches.md`) · v1.1.9 focus not stolen
+  from the terminal · v1.1.10 security fixes C1, C3/L3, C4/H9/H10/L4.
+- BVT programme stage 1 (PR #10): harness helpers (posted input, dialog driving, pixel
+  oracle, tiers), self-hosted runner `k2so-bvt`, `.github/workflows/bvt.yml`, ruleset
+  on `main` (PRs only, BVT required). Plan: `2026-09-09-bvt-coverage.md`.
 
-  **Still open:**
-  - The three review findings not yet folded into a task: the AI-stream thread
-    lifetime bugs, the relative config-save path, and the Session Manager phantom row
-    (all first noted under "Review findings" above, before the design-system work
-    started).
-  - Done 2026-09-07: the full integration suite ran 13/13 green against tompi and
-    Moonshot on v1.0.96 with the desktop unlocked (definition-of-done item 4).
-  - Thomas to review the gallery (all 36 captures, not just the four sampled above)
-    before sub-project 3 starts.
+Open, in priority order:
+- [ ] BVT batch A (18 cases, on branch `bvt-harness`, awaiting Opus review): commit as
+      a PR; fix the two product bugs it found — Ctrl+W leaves the surviving tab blank
+      and unresponsive; minimise/restore shifts a scrolled-back view by a page.
+- [ ] BVT batches B (sessions, auth, host key, connection), C (terminal, clipboard,
+      settings), D (AI extras) — 31 cases; `bvtuser` exists on tompi for auth cases.
+- [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local): C2
+      classifier allow-list + H2 platform; H3/H4 host-key fail-closed and default No;
+      H5/H6 config in %APPDATA% with DPAPI and absolute save path; H7/H8 window-message
+      hardening; then Medium and Low.
+- [ ] Older review findings: AI-stream thread lifetime bugs; Session Manager phantom row.
+- [ ] `md_render.c` renders at raw 96-DPI pixels — fold into sub-project 3.
+- [ ] Sub-project 3 (main window chrome): spec first, mockups before choosing, as with
+      sub-project 2.
 
-### Landed since v1.0.96
-
-- v1.0.97 — Two approval-card bugs fixed: the "Run N selected" crash (stale
-  `cmd_count` read by `WM_PAINT`), and held write commands that were never
-  queued and so could never run after Permit write was turned on.
-- v1.0.98 — Thinking-block measure/paint height mismatch fixed; settled
-  commands now render as inline rows with a ran/held/denied/skipped chip
-  instead of vanishing.
-- v1.0.99 — AI Assist chat list sticks to the bottom properly (new
-  `stick_to_bottom` state, replacing a racy near-bottom check).
-- v1.1.0 — Smart scrolling for the terminal pane: a scrolled-back view holds
-  its position while new output arrives.
-- v1.1.1 — Prompt-gated command dispatch: approved commands go to the
-  terminal one at a time, only once the shell is back at a prompt.
-- v1.1.2 — Auto approve grew from two levels to four: off / safe only /
-  safe + write / all.
-- v1.1.3 — Thinking-disclosure collapse now sticks to the user's choice; the
-  activity indicator never overlaps message text.
-- v1.1.4 — Markdown tables render as real tables instead of raw piped text.
-- v1.1.5 — Wheel trap fixed: a partly visible Thinking box or approval card
-  no longer swallows the wheel and blocks reaching the bottom.
-- v1.1.6 — AI replies coloured by role (structure/code hues via
-  `theme_role_color`); Thinking box no longer under-measured while streaming.
-- v1.1.7 / v1.1.8 — Pending command batches: a card never blocks the input;
-  up to `CMD_BATCH_MAX` = 8 batches pending per session, each with its own
-  card; `--ui-demo=batches` added (ten states total).
-- v1.1.9 — A finishing reply no longer steals keyboard focus from the
-  terminal; the integration harness takes the foreground with an Alt tap
-  before sending keystrokes, and refuses instead of typing blind if it can't.
-
-- [x] **Security audit fixes: C1, C3, L3, C4, H9, H10, L4 landed (v1.1.10).**
-      See `docs/superpowers/specs/2026-09-09-security-audit.md`'s "Fix
-      status" section for the per-finding writeup. Control characters
-      inside an `[EXEC]` block are now dropped and reported rather than
-      run verbatim (C1); the "blocked commands" and system-prompt tool
-      accumulations use a new `str_append_fmt()` helper instead of
-      unchecked `bp/len += snprintf` (C3/L3); `EL`/`ED` erase bounds and
-      the ICH/DCH/ECH/SU/SD/IL/DL counts are clamped in the VT parser and
-      CSI digits saturate at 65535 instead of overflowing (C4/H9/L4); the
-      scroll-region `assert(n <= 64)` in `term_scroll_up`/`_down` is gone,
-      replaced by a chunked loop (H10). 24 new regression tests, native
-      suite green at 1,828. C2, H1-H8, H11 and the Medium/other Low
-      findings are unchanged -- a separate discussion.
-
-- [ ] Three review findings still open (first noted under "Review findings"
-      above, before the design-system work started): the AI-stream thread
-      lifetime bugs, the relative config-save path, and the Session Manager
-      phantom row.
-- [ ] `md_render.c` renders at raw 96-DPI pixels (its padding is not
-      `ns_scale`d) — fold into sub-project 3.
-- [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
-      the menu bar, tab strip, status. Mockups of layout options are worth showing
-      visually before choosing, same as sub-project 2.
+Process (CLAUDE.md): Opus orchestrates each package and picks models; Fable reviews at
+PR level; nothing reaches `main` without a green BVT.

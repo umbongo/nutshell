@@ -4,14 +4,14 @@ End-to-end tests that drive the real `build\win\nutshell.exe` against a live SSH
 host. They complement the unit tests in `tests/*.c`, which never touch Win32 or a
 network. Everything here is Windows-only.
 
-Most of the suite needs no desktop session at all: typing and driving dialogs go
-through `PostMessage`/`SendMessage` straight to the app's own window queue, not
-simulated input, so it works with the desktop locked or another app in the
-foreground (a self-hosted CI runner's normal state). Only the handful of cases
-that exercise a true modifier chord the app reads via `GetKeyState` (Ctrl+C/V,
-Ctrl+Shift+C/V, Shift+Insert, Ctrl+= zoom) still need `SendKeys`, and therefore an
-unlocked, interactive desktop with keyboard focus free — see "Posted vs. real
-input" below for exactly which cases those are.
+No case needs a desktop session: typing and driving dialogs go through
+`PostMessage`/`SendMessage` straight to the app's own window queue, not simulated
+input, so the suite works with the desktop locked, the RDP session disconnected,
+or another app in the foreground (a self-hosted CI runner's normal state). Even
+the modifier chords the app reads via `GetKeyState` (Ctrl+C/V, Ctrl+Shift+C/V,
+Shift+Insert, Ctrl+= zoom) are posted — `Send-NutshellChord` borrows the app's own
+keyboard state with `AttachThreadInput` instead of synthesising real input. See
+"Posted input" below.
 
 ## How it works
 
@@ -22,34 +22,71 @@ asserts on the ANSI-stripped session log. No OCR and no screen scraping: the log
 the oracle. Screenshots are still saved to `artifacts\` as evidence for anything
 that is only visible on screen (scrolling, dialogs, theme colours).
 
-### Posted vs. real input
+### Layout
 
-- **Posted (no foreground/focus/unlocked desktop needed):** `Send-NutshellText`,
-  `Send-NutshellKey` (named keys: Enter, Tab, Escape, Backspace, PgUp, PgDn, Home,
-  End, Up, Down, Left, Right, Insert, F1–F12), `Send-NutshellLine`,
+`Run-Integration.ps1` is the driver only: params, `Invoke-Case`/`Invoke-AiCase`,
+`Assert-True`, `Invoke-KnownBugBlock`, the capture helpers more than one case
+file needs (`Test-NutshellCaptureNonBlank`, `ConvertTo-NutshellFileToken` — both
+defined in the driver), the results table and the exit code. A helper only one
+case file uses lives in that file (e.g. `Get-TerminalAreaHash` in
+`cases\10-terminal.ps1`). Case bodies live in `tests\integration\cases\*.ps1`, dot-sourced by the
+driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
+`$results`, etc. are all visible with nothing passed explicitly):
+
+| File | Cases |
+|---|---|
+| `cases\10-terminal.ps1` | connect, Ctrl+C, log filename, paste x2, PTY resize, Page Up, holds position, inactive-tab resize |
+| `cases\20-ai.ps1` | the five key-gated `ai_*` cases + `ai_panel_opens_without_key` |
+| `cases\30-ui-demo.ps1` | `ui_gallery`, `approval_card_run_selected_settles`, `helpers_theme_pixel_matches_token` |
+| `cases\40-helpers.ps1` | the other `helpers_*` cases |
+| `cases\50-window.ps1` | launch/window/shutdown/menu (`LAUNCH-*`, `RESIZE-1`, `WINDOW-*`, `CLOSE-1`, `MENU-1`) |
+| `cases\60-tabs-logging.ps1` | tabs (`TABS-*`) and logging (`LOG-*`) |
+| `cases\70-cli.ps1` | CLI flags (`CLI-1`'s several small cases) |
+
+Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
+`cases\*.ps1` is picked up automatically) rather than growing one giant script.
+
+### Posted input
+
+- **Plain keys and text:** `Send-NutshellText`, `Send-NutshellKey` (named keys:
+  Enter, Tab, Escape, Backspace, PgUp, PgDn, Home, End, Up, Down, Left, Right,
+  Insert, F1–F12, plus the letters the chords need), `Send-NutshellLine`,
   `Wait-NutshellShell`, `Send-NutshellCommand`, and every dialog helper below.
   These post `WM_CHAR`/`WM_KEYDOWN`+`WM_KEYUP`/`WM_COMMAND`/`BM_CLICK`/etc.
   straight to the target window's message queue, exactly mirroring what
   `src/ui/window.c`'s `WM_CHAR`/`WM_KEYDOWN` handlers (and each dialog's own
-  `WM_COMMAND` handler) already do for real input.
-- **Real (`SendKeys`, needs the foreground and an unlocked desktop):**
-  `Send-NutshellKeys` — kept only for the modifier chords `window.c` reads via
-  `GetKeyState` at the moment the message is processed (Ctrl+C/V, Ctrl+Shift+C/V,
-  Shift+Insert, Ctrl+=/Ctrl+- zoom), since a posted `WM_KEYDOWN` alone doesn't
-  change what `GetKeyState` reports. Cases still using it:
-  `ctrl_c_without_selection_interrupts`, `paste_without_confirmation`,
-  `paste_with_confirmation_shows_dialog` (all via their Ctrl+C/Ctrl+V step), plus
-  the AI cases' `Set-NutshellTerminalFocus`. These need keyboard focus free and
-  the desktop unlocked; everything else in the table below does not.
+  `WM_COMMAND` handler) already do for real input. `Send-NutshellKey -Hwnd`
+  aims the pair at another window of the app — used for the paste preview's
+  Escape, which `paste_dlg.c`'s own modal loop watches for.
+- **Modifier chords:** `Send-NutshellChord -Key <name> [-Ctrl] [-Shift]`.
+  `window.c` decides Ctrl+C/V, Ctrl+Shift+C/V, Shift+Insert and Ctrl+=/Ctrl+-
+  with `GetKeyState(VK_CONTROL/VK_SHIFT)` rather than from the message, so a
+  bare posted `WM_KEYDOWN` takes the wrong branch. `GetKeyState` reads the
+  keyboard-state table of the calling thread's input queue, and
+  `AttachThreadInput` makes two threads share one input queue — so the helper
+  attaches to Nutshell's UI thread, `SetKeyboardState`s the modifier down,
+  posts the key, waits for a `WM_NULL` round trip, then restores and detaches.
+  The app's message loop reads the same table in `TranslateMessage`, so Ctrl+C
+  with no selection — which `window.c` deliberately falls through on — still
+  produces the `WM_CHAR` `0x03` that reaches the shell as SIGINT. No real
+  input, no input desktop, nothing to lock.
+
+That is the whole of it: `Send-NutshellKeys` (real `SendKeys`, and the
+`SetForegroundWindow`/`keybd_event` dance it needed) is gone, and no case is
+foreground-dependent. It had to go rather than be tolerated — the dev box's
+logon session is normally RDP-disconnected, and on such a desktop
+`GetForegroundWindow()` returns 0 for *every* process, so no amount of retrying
+can make a window come forward. `Set-NutshellTerminalFocus` still calls
+`SetForegroundWindow` as a best effort after its click, but does not depend on
+it succeeding.
 
 ## Prerequisites
 
 - `build\win\nutshell.exe` built from the tree under test (`mingw32-make clean && mingw32-make release`).
 - A host reachable by SSH with a **passphrase-free** key authorised for the user.
   The dev box uses the Raspberry Pi `tompi` with `~/.ssh/thomas`.
-- For the cases listed under "Real" above only: keyboard focus free and the
-  desktop unlocked while the run is in progress. Every other case runs fine with
-  the desktop locked.
+- No desktop requirement: every case runs with the workstation locked, the RDP
+  session disconnected and other apps in the foreground.
 
 ## Running
 
@@ -82,8 +119,9 @@ avoided rather than merely guarded against.
 `-Tier bvt|ai|nightly|all` (default `all`, i.e. today's behaviour) filters which
 cases run:
 
-- **`bvt`** — every case that needs no AI key: all cases in the table below down
-  through `helpers_theme_pixel_matches_token`. About 3–4 minutes.
+- **`bvt`** — every case that needs no AI key: all cases in the table below except
+  the five key-gated `ai_*` ones. About 8–10 minutes with the section 1/4/5/8
+  additions below (was 3–4 minutes for the original set).
 - **`ai`** — the five key-gated `ai_*` cases (see "AI Assist cases" below).
 - **`nightly`** — reserved, currently empty; no case in this suite is slow/flaky
   enough yet to warrant it (idle-timeout and host-unreachable scenarios from
@@ -118,6 +156,24 @@ given, `-Only`'s list).
 | `helpers_session_manager_opens_and_lists_profile` | `Open-NutshellSessionManager` + `Wait-NutshellDialog` find the dialog, `Get-NutshellListItems` lists the generated profile, `Close-NutshellDialog -Button Cancel` closes it |
 | `helpers_settings_opens_every_page` | `Open-NutshellSettings`/`Select-NutshellSettingsPage` select and capture all nine Settings pages, `Close-NutshellDialog -Button Cancel` closes it |
 | `helpers_theme_pixel_matches_token` | `--ui-demo=chat --theme "Onyx Light"`; a sampled background pixel matches `Get-NutshellThemeColor`'s `bg_primary` within tolerance; no SSH host or AI key needed |
+| `launch_main_window_no_dialog` | (`LAUNCH-1`) `-nc` launch: `Nutshell_Window` appears, no dialog within 3s, `IDM_FILE_EXIT` → exit code 0 within 5s |
+| `launch_without_config_writes_defaults` | (`LAUNCH-2`) no `nutshell.config`: `config_load()` returns `NULL`, so a "Configuration Warning" MessageBox appears (not mentioned in the original plan — documented in the case); dismissed, no config is written until Settings › Save, then it exists with default keys |
+| `launch_with_corrupt_config_survives` | (`LAUNCH-3`) same Configuration Warning path for a truncated-JSON config; app keeps running with defaults, no crash |
+| `resize_range_paints_cleanly` | (`RESIZE-1`) 640×400 → 1024×768 → 1920×1080 → 1024×768 → 640×400: every capture non-blank, `tput cols` tracks the direction of each resize |
+| `minimise_restore_repaints` | (`WINDOW-1`) SW_MINIMIZE then SW_RESTORE: iconic/restored state asserted normally; the "repaints identically" comparison runs inside `Invoke-KnownBugBlock` — **known product bug**, `WM_SIZE` has no `SIZE_MINIMIZED` guard, so a scrolled-back view reproducibly jumps up one more page after restore (see the case comment) |
+| `fullscreen_toggle_changes_pty` | (`WINDOW-2`) `IDM_VIEW_FULLSCREEN` twice: `tput cols` grows then returns to its original value |
+| `close_with_live_session_exits_cleanly` | (`CLOSE-1`) `WM_CLOSE` with a connected tab: process exits within 5s, exit code 0, no dialog (none exists today) |
+| `menus_open_and_list_items` | (`MENU-1`) message-free: `GetMenu`/`GetSubMenu`/`GetMenuItemCount`/`GetMenuItemID` against the 4 top-level menus and every item's real `WM_COMMAND` id (0 = separator), hand-derived from `create_app_menu()` in `src/ui/window.c` — captions are **not** checked: the menu is entirely owner-drawn (`MF_OWNERDRAW`, no `MENU` resource in `resource.rc`) so `GetMenuString` returns empty for every item |
+| `tabs_open_switch_close` | (`TABS-1`) open a second tab (fully posted — no click needed), the tab strip capture changes, Ctrl+W closes the active one; the two post-close checks (strip hashes back to the one-tab strip, a marker still reaches the surviving tab's log) run inside `Invoke-KnownBugBlock` — **known product bug**, `on_tab_close` does not reattach the surviving tab, which is left visually connected but non-interactive (see the case comment) |
+| `tab_status_dot_colours` | (`TABS-2`) three phases (unroutable host / tompi / `kill -9 $$`), each at a fixed 1200×800 so the tab-strip scan band is meaningful: the status dot samples to the theme's `warning`/`success`/`danger` token colour respectively |
+| `logging_stop_then_restart_new_file` | (`LOG-1`) `IDM_FILE_LOG_STOP` then a marker is absent from the old file; `IDM_FILE_LOG_START` opens a new file and a second marker lands in it |
+| `debug_terminal_log_written` | (`LOG-2`) `debug_terminal=true`: a `<profile>-debug-<timestamp>.log` appears next to the exe (not in `log_dir` — see `open_debug_log()` in `window.c`) containing the sent sequence rendered as the literal text `ESC[1m` followed by `BOLD` |
+| `cli_version_prints` | (`CLI-1`) `nutshell.exe -v`: version string captured via the app's shared console (`AttachConsole`/`ReadConsoleTail`, output scoped to this run with a sentinel) on a host that has one, or read out of `cli_output()`'s MessageBox on a console-less host such as the BVT runner job — see `Test-NutshellHostConsole` |
+| `cli_list_profiles` | (`CLI-1`) `-l` lists the generated profile's name and host |
+| `cli_help` | (`CLI-1`) `-?` prints usage text |
+| `cli_unknown_flag_errors` | (`CLI-1`) an unrecognised flag: non-zero exit code, "Unknown option" text |
+| `cli_no_connect_opens_idle` | (`CLI-1`) `-nc`: main window, no dialog, and no repaint over 5s (nothing animates a connecting-state tab, since nothing tried to connect) |
+| `cli_host_flag_connects` | (`CLI-1`) `-h tompi` resolves the generated profile by host (`config_find_profile_by_host`) and connects, same as `-sn` |
 
 ## AI Assist cases
 
@@ -156,23 +212,58 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Get-NutshellWindowText -Hwnd` / `Get-NutshellChildWindows -Hwnd` | debugging: a window's text / every descendant as `hwnd`⇥`ctrlId`⇥`class`⇥`text` |
 | `Get-NutshellPixel -Path -X -Y` / `Test-NutshellPixelNear -Path -X -Y -Rgb -Tolerance` | read/compare a pixel in a saved capture |
 | `Get-NutshellThemeColor -Name -Token` | parses `src/core/ui_theme.c`'s per-theme initialisers for one of `bg_primary`, `bg_secondary`, `accent`, `text_main`, `text_dim`, `border`, `terminal_fg`, `terminal_bg`, `success`, `warning`, `danger`, `info`, `link` |
+| `Get-NutshellRegionHash -Path -Region` | MD5 of a proportional region `@{X;Y;W;H}` (each 0..1) of a saved capture — the general form of `cases-terminal.ps1`'s terminal-specific `Get-TerminalAreaHash`; used by `minimise_restore_repaints`, `tabs_open_switch_close` and `cli_no_connect_opens_idle` to compare a specific band (or the whole window) across two captures |
 
-Two things the harness cannot do, documented rather than faked:
+One thing the harness cannot do, documented rather than faked:
 
 - **`Get-NutshellTabCount`** throws — `tabs.c`'s tab strip is a single
   owner-drawn window with no per-tab child HWNDs, no exposed count message, and
   no UI Automation provider, so there's no way to ask it how many tabs exist
   without clicking around and diffing captures.
-- **Tab switching** (`Select-NutshellTab`, and therefore `Close-NutshellTab`,
-  which selects before posting Ctrl+W) still needs a real click
-  (`ClickClient`/`mouse_event`) since the tab strip only responds to
-  `WM_LBUTTONDOWN` hit-testing — no message-based way to activate a tab exists.
-  That means both need the foreground and an unlocked desktop, same as
-  `Send-NutshellKeys`.
+
+**Tab switching** (`Select-NutshellTab`, and `Close-NutshellTab`, which selects
+before posting Ctrl+W) *is* posted: `tabs.c`'s `WM_LBUTTONDOWN` handler
+hit-tests the message's own `lParam` and never reads the cursor, so the helper
+posts `WM_LBUTTONDOWN`+`WM_LBUTTONUP` to the `Nutshell_Tabs` child window at the
+tab's computed rect — no foreground, no mouse, works desktop-locked. (It used to
+click for real with `SetCursorPos`/`mouse_event`, which silently landed in
+whatever window was in front when Nutshell was not, and that is exactly how
+`resize_applies_to_inactive_tab` failed once.) The x it clicks assumes
+minimum-width tabs, which every harness tab is — the generated profile is named
+`it`; a long profile name would widen its tab and shift the ones after it.
 
 ## Adding a case
 
-Copy an `Invoke-Case` block in `Run-Integration.ps1`. The second argument is a
-hashtable of settings overrides for that case's generated config; the script block
-receives the session object and should throw (via `Assert-True`) on failure and
-return a short string on success.
+Copy an `Invoke-Case` block in the matching `cases\NN-*.ps1` file (see "Layout"
+above) — or start a new `cases\NN-name.ps1` file for a new batch, it's picked up
+automatically. The second argument is a hashtable of settings overrides for that
+case's generated config; the script block receives the session object and should
+throw (via `Assert-True`) on failure and return a short string on success.
+`Invoke-Case` also takes `-ExtraArgs` (launch with these args instead of
+`-sn <profile>`, e.g. `@("-h", "tompi")` or `@("-nc")`) and `-NoConfig` (skip
+writing `nutshell.config` — see `New-NutshellTestEnv`'s `-NoConfig` switch, used
+by the `LAUNCH-2`/`LAUNCH-3` first-run/corrupt-config cases). A case that needs to
+observe a dialog that blocks the main window from becoming visible in the first
+place (config-missing/corrupt — `WM_CREATE` shows a modal `MessageBoxA` before
+`CreateWindowEx` even returns) can't use `Invoke-Case`'s `Start-Nutshell` at all;
+see `Start-NutshellUntilDialogOrWindow` in `cases\50-window.ps1` for that pattern.
+
+### Known product bugs
+
+A check that fails because of a *product* bug already written down — not a
+harness bug, and not a regression — goes inside `Invoke-KnownBugBlock`:
+
+```powershell
+$known = Invoke-KnownBugBlock -Bug "what is broken, and where" {
+    Assert-True ($hb -eq $ha) "terminal content differs after minimise/restore"
+}
+"...the rest of the detail; $known"
+```
+
+The block still runs, and the outcome — `[XFAIL]` (still failing) or `[XPASS]`
+(unexpectedly passing: time to unwrap it) — lands in the case's detail column,
+but it does not fail the tier, so the `BVT` gate keeps saying "nothing
+regressed" rather than "the same known bugs are still open". Wrap only the
+checks the named bug actually breaks; everything else in the case stays a
+normal assertion. Two cases use this today: `minimise_restore_repaints` and
+`tabs_open_switch_close`.

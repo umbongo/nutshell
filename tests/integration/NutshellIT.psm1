@@ -10,9 +10,11 @@
 #   * Text and named keys (Send-NutshellText/-Key/-Line, Wait-NutshellShell) go
 #     through PostMessage(WM_CHAR / WM_KEYDOWN+WM_KEYUP) straight to the main
 #     window's queue — no foreground window, no focus, and no unlocked desktop
-#     required. Only true modifier chords the app reads via GetKeyState
-#     (Ctrl+C/V, Ctrl+Shift+C/V, Shift+Insert, Ctrl+= zoom) still need
-#     Send-NutshellKeys' real SendKeys input, which needs the foreground.
+#     required. The modifier chords the app reads via GetKeyState (Ctrl+C/V,
+#     Ctrl+Shift+C/V, Shift+Insert, Ctrl+= zoom) go through Send-NutshellChord,
+#     which attaches this thread's input state to the app's UI thread
+#     (AttachThreadInput) so a posted key sees the modifier down. Nothing in
+#     this module needs a foreground window or an unlocked desktop.
 #   * Dialogs (Session Manager, Settings, paste preview, passphrase prompt,
 #     host-key/error MessageBoxes, About) are driven the same posted way:
 #     GetDlgItem/EnumChildWindows to find a control by its resource id, then
@@ -68,12 +70,37 @@ public class NutshellNative {
     [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendMsgSb(IntPtr h, uint m, IntPtr w, StringBuilder sb);
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint uCode, uint uMapType);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+    /* Menu structure (WINDOW-1/MENU-1): the app menu is built entirely in
+     * code (src/ui/window.c's create_app_menu(), MF_OWNERDRAW throughout --
+     * there is no MENU resource in resource.rc) and every item's text is
+     * owner-drawn from the app's own MenuItemData struct, not an MF_STRING,
+     * so GetMenuString returns an empty string for every item (confirmed by
+     * probing the live app) -- only structure (item/submenu counts and each
+     * item's WM_COMMAND id, in order; a separator's id is 0) is recoverable
+     * without reading the target process's memory. */
+    [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetSubMenu(IntPtr hMenu, int nPos);
+    [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr hMenu);
+    [DllImport("user32.dll")] public static extern int GetMenuItemID(IntPtr hMenu, int nPos);
     /* title is IntPtr so callers can pass Zero: PowerShell would turn a $null string into "" (match empty titles only). */
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, IntPtr title);
     [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendMsgStr(IntPtr h, uint m, IntPtr w, string l);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
-    [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    /* Attached-input plumbing for Send-NutshellChord. Two threads whose input
+     * is attached share one input queue and, with it, one keyboard-state
+     * table: SetKeyboardState from this thread is then what the app's
+     * GetKeyState (and its message loop's TranslateMessage) reads. That is how
+     * a posted WM_KEYDOWN can carry a modifier without any real input, a
+     * foreground window or an unlocked desktop. */
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool GetKeyboardState(byte[] state);
+    [DllImport("user32.dll")] public static extern bool SetKeyboardState(byte[] state);
+    [DllImport("user32.dll", EntryPoint="SendMessageTimeoutW")]
+    public static extern IntPtr SendMessageTimeout(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr result);
     [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int nStdHandle);
     [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
     public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sec, uint creation, uint flags, IntPtr template);
@@ -88,6 +115,29 @@ public class NutshellNative {
     [DllImport("kernel32.dll")] public static extern bool GetConsoleScreenBufferInfo(IntPtr h, out CONSOLE_SCREEN_BUFFER_INFO info);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode)]
     public static extern bool ReadConsoleOutputCharacterW(IntPtr h, StringBuilder buf, uint n, COORD coord, out uint read);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode)]
+    public static extern bool WriteConsoleW(IntPtr h, string buf, uint n, out uint written, IntPtr reserved);
+
+    /* Write one line straight to the console's active screen buffer, on the
+     * same "CONOUT$" channel ReadConsoleTail reads and nutshell.exe's
+     * cli_output() writes. Write-Host is NOT equivalent: a PowerShell host
+     * whose output has been redirected to a pipe (this harness's usual
+     * situation, and a CI runner's) sends Write-Host down that pipe, so it
+     * never appears in the screen buffer at all. Used by cases\70-cli.ps1 to
+     * fence one case's console output off from the previous case's. Returns
+     * false when there is no console to write to. */
+    public static bool WriteConsoleLine(string text) {
+        IntPtr h = CreateFileW("CONOUT$", 0xC0000000 /* GENERIC_READ|WRITE */,
+            3 /* FILE_SHARE_READ|WRITE */, IntPtr.Zero, 3 /* OPEN_EXISTING */, 0, IntPtr.Zero);
+        if (h == IntPtr.Zero || h == new IntPtr(-1)) return false;
+        try {
+            string s = text + "\r\n";
+            uint written;
+            return WriteConsoleW(h, s, (uint)s.Length, out written, IntPtr.Zero);
+        } finally {
+            CloseHandle(h);
+        }
+    }
 
     /* Read the trailing N screen rows of the active console this process is
      * attached to. Used to recover the text nutshell.exe -v prints: it calls
@@ -204,9 +254,13 @@ $script:IDC_LIST_SESSIONS    = 1000
 # Posted-message constants (window.c's WM_CHAR/WM_KEYDOWN handlers; see
 # Send-NutshellText/-Key below for which VKs are handled directly vs. rely on
 # TranslateMessage to synthesize the WM_CHAR, mirroring what real typing does).
+$script:WM_NULL            = 0x0000
 $script:WM_CHAR            = 0x0102
 $script:WM_KEYDOWN         = 0x0100
 $script:WM_KEYUP           = 0x0101
+$script:WM_LBUTTONDOWN     = 0x0201
+$script:WM_LBUTTONUP       = 0x0202
+$script:MK_LBUTTON         = 0x0001
 $script:WM_SETTEXT         = 0x000C
 $script:WM_GETTEXTLENGTH   = 0x000E
 $script:BM_CLICK           = 0x00F5
@@ -234,12 +288,17 @@ $script:LBN_SELCHANGE      = 1
 # or IsDialogMessage filtering) to synthesize the matching WM_CHAR, exactly as
 # real typing does. PgUp/PgDn/Home/End/arrows/Insert/F-keys ARE handled
 # directly in that switch and never produce a WM_CHAR either way.
+#
+# Letter keys are here for Send-NutshellChord's sake: window.c's WM_KEYDOWN
+# switch compares wParam against the character literals 'C'/'V'/'T', which are
+# exactly the VK codes 0x43/0x56/0x54. Add more as chords need them.
 $script:VK_MAP = @{
     Enter = 0x0D; Tab = 0x09; Escape = 0x1B; Backspace = 0x08
     PgUp = 0x21; PgDn = 0x22; Home = 0x24; End = 0x23
     Up = 0x26; Down = 0x28; Left = 0x25; Right = 0x27; Insert = 0x2D
     F1 = 0x70; F2 = 0x71; F3 = 0x72; F4 = 0x73; F5 = 0x74; F6 = 0x75
     F7 = 0x76; F8 = 0x77; F9 = 0x78; F10 = 0x79; F11 = 0x7A; F12 = 0x7B
+    C = 0x43; T = 0x54; V = 0x56; Plus = 0xBB; Minus = 0xBD
 }
 $script:VK_EXTENDED = @(0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E)
 
@@ -259,6 +318,12 @@ function New-NutshellTestEnv {
     .PARAMETER KeyPath   Private key file (must be passphrase-free).
     .PARAMETER Settings  Hashtable of extra top-level settings to override, e.g.
                          @{ paste_confirm = $false; log_format = "%Y%m%d-%H%M" }.
+    .PARAMETER NoConfig  Skip writing nutshell.config entirely (LAUNCH-2/LAUNCH-3:
+                         first-run and corrupt-config scenarios) -- the scratch
+                         dir gets nutshell.exe and an empty logs\ folder only.
+                         Caller is responsible for writing its own config (or
+                         none at all) before launching. HostName/User/KeyPath
+                         are still required (unused) to keep one call shape.
     #>
     param(
         [Parameter(Mandatory)] [string] $Exe,
@@ -266,7 +331,8 @@ function New-NutshellTestEnv {
         [Parameter(Mandatory)] [string] $User,
         [Parameter(Mandatory)] [string] $KeyPath,
         [string] $ProfileName = "it",
-        [hashtable] $Settings = @{}
+        [hashtable] $Settings = @{},
+        [switch] $NoConfig
     )
     # Scratch lives under the git-ignored artifacts folder, not %TEMP%, so a run
     # whose cleanup was interrupted leaves something visible next to its logs.
@@ -295,13 +361,15 @@ function New-NutshellTestEnv {
     }
     foreach ($k in $Settings.Keys) { $s[$k] = $Settings[$k] }
 
-    $profile = [ordered]@{
-        name = $ProfileName; host = $HostName; port = 22; username = $User
-        auth_type = "key"; password = ""; key_path = $KeyPath; ai_notes = ""
+    if (-not $NoConfig) {
+        $profile = [ordered]@{
+            name = $ProfileName; host = $HostName; port = 22; username = $User
+            auth_type = "key"; password = ""; key_path = $KeyPath; ai_notes = ""
+        }
+        $cfg = [ordered]@{ settings = $s; profiles = @($profile) }
+        $json = $cfg | ConvertTo-Json -Depth 5
+        [IO.File]::WriteAllText((Join-Path $root "nutshell.config"), $json, (New-Object Text.UTF8Encoding $false))
     }
-    $cfg = [ordered]@{ settings = $s; profiles = @($profile) }
-    $json = $cfg | ConvertTo-Json -Depth 5
-    [IO.File]::WriteAllText((Join-Path $root "nutshell.config"), $json, (New-Object Text.UTF8Encoding $false))
 
     return [pscustomobject]@{ Root = $root; Logs = $logs; Exe = (Join-Path $root "nutshell.exe"); ProfileName = $ProfileName }
 }
@@ -322,6 +390,14 @@ function Start-Nutshell {
     # as two argv entries and fail CLI parsing. Quote any element that needs it.
     $argList = $rawArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
     $p = Start-Process -FilePath $Env.Exe -WorkingDirectory $Env.Root -ArgumentList $argList -PassThru
+    # Touch .Handle now, while the process is (almost certainly) still alive:
+    # .NET's Process.ExitCode reads back empty -- not $null, not an error,
+    # just "" -- if the underlying handle is first opened (lazily, by .NET)
+    # only after the process has already exited; observed directly in this
+    # harness (LAUNCH-1/CLOSE-1 read $session.Process.ExitCode after a fast
+    # exit). Forcing the handle open here while nutshell.exe is still running
+    # avoids that race for every later ExitCode read on this session.
+    $null = $p.Handle
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $main = [IntPtr]::Zero
     while ((Get-Date) -lt $deadline) {
@@ -411,63 +487,106 @@ function Send-NutshellKey {
        from the posted key pair (there's no accelerator table or
        IsDialogMessage filtering on the main loop, so this works exactly like
        a real keypress). PgUp/PgDn/Home/End/arrows/Insert/F-keys ARE handled
-       directly in that switch and act on WM_KEYDOWN alone. #>
-    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Key, [int] $SettleMs = 150)
+       directly in that switch and act on WM_KEYDOWN alone.
+
+       -Hwnd sends the pair to another window of the app instead of the main
+       one -- used for the paste preview's Escape, which its own modal loop
+       (paste_dlg.c's `GetMessage(&msg, NULL, ...)` with an explicit
+       `msg.wParam == VK_ESCAPE` check) picks up. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Key,
+          [IntPtr] $Hwnd = ([IntPtr]::Zero), [int] $SettleMs = 150)
     if (-not $script:VK_MAP.ContainsKey($Key)) {
         throw "Unknown key name '$Key' (known: $($script:VK_MAP.Keys -join ', '))"
     }
+    $target = if ($Hwnd -ne [IntPtr]::Zero) { $Hwnd } else { $Session.Main }
     $vk = [byte]$script:VK_MAP[$Key]
     $ext = $script:VK_EXTENDED -contains $vk
     $down = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $false
     $up   = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $true
-    [NutshellNative]::PostMessage($Session.Main, $script:WM_KEYDOWN, [IntPtr]$vk, $down) | Out-Null
-    [NutshellNative]::PostMessage($Session.Main, $script:WM_KEYUP,   [IntPtr]$vk, $up)   | Out-Null
+    [NutshellNative]::PostMessage($target, $script:WM_KEYDOWN, [IntPtr]$vk, $down) | Out-Null
+    [NutshellNative]::PostMessage($target, $script:WM_KEYUP,   [IntPtr]$vk, $up)   | Out-Null
     Start-Sleep -Milliseconds $SettleMs
 }
 
-function Send-NutshellKeys {
-    <# SendKeys syntax: ^c = Ctrl+C, ^+c = Ctrl+Shift+C, {PGUP}, {ENTER} ...
-       Real synthetic input (WScript.Shell.SendKeys), needed ONLY for the true
-       modifier chords window.c reads via GetKeyState at the moment the
-       message is processed rather than from the posted message itself --
-       Ctrl+C/V, Ctrl+Shift+C/V, Shift+Insert, Ctrl+=/- zoom. Those need the
-       Ctrl/Shift key to actually be down in the live keyboard state, which
-       only real input (or keybd_event) can produce; a posted WM_KEYDOWN alone
-       does not change GetKeyState's answer. That means this function -- and
-       every case that still calls it -- needs the foreground and therefore an
-       unlocked, interactive desktop; everything else in this module (typing,
-       Enter, Tab, Escape, Backspace, arrows, Home/End, PgUp/PgDn, Insert,
-       F-keys, and every dialog helper below) is posted and works desktop-locked. #>
-    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Keys, [int] $SettleMs = 300)
-    # SendKeys types into whatever window is in front, so Nutshell must own the
-    # foreground first. Windows only lets a process take the foreground when it
-    # recently received input, and this harness usually has not (it has been
-    # sleeping, waiting for a shell or an AI reply), so a bare
-    # SetForegroundWindow is silently ignored once someone else has the focus.
-    # The standard workaround: tap Alt (keybd_event, no window receives a
-    # character from it) so this process counts as the last input source, then
-    # ask again. Try a few times, then refuse rather than type blind -- a locked
-    # desktop reports no foreground window at all, and a person using the
-    # machine may legitimately hold the foreground; keystrokes must never land
-    # in someone else's window.
-    $ok = $false
-    for ($try = 0; $try -lt 4 -and -not $ok; $try++) {
-        if ($try -gt 0) {
-            [NutshellNative]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)        # Alt down
-            [NutshellNative]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)        # Alt up (KEYEVENTF_KEYUP)
+function Send-NutshellChord {
+    <# Post a modifier chord -- Ctrl+C, Ctrl+V, Ctrl+Shift+C, Shift+Insert,
+       Ctrl+= -- with no real input, no foreground window and no unlocked
+       desktop.
+
+       The problem: window.c's WM_KEYDOWN switch decides these with
+       GetKeyState(VK_CONTROL/VK_SHIFT) rather than from anything carried in
+       the message, so a bare posted WM_KEYDOWN arrives with the modifier
+       "up" and takes the wrong branch (Ctrl+V, for instance, becomes a plain
+       'v'). That is why this used to be real SendKeys, which needs the
+       foreground -- and a foreground is exactly what an RDP-disconnected or
+       locked session cannot give anyone: GetForegroundWindow() returns 0 for
+       every process on that desktop.
+
+       The fix: GetKeyState reads the keyboard-state table of the calling
+       thread's input queue, and AttachThreadInput makes two threads share one
+       input queue and therefore one such table. So attach this thread's input
+       to Nutshell's UI thread, SetKeyboardState with the modifier's high bit
+       set, post the key, and the app's GetKeyState answers "down". The same
+       table is what its message loop's TranslateMessage(&msg) consults, so
+       Ctrl+C without a selection -- which window.c deliberately falls through
+       on -- still turns into the WM_CHAR 0x03 that reaches the shell as
+       SIGINT, exactly as a real Ctrl+C does. Nothing here touches the input
+       desktop, so it behaves identically locked, unlocked or disconnected.
+
+       -Key is a $script:VK_MAP name (C, V, Insert, Plus, ...); -Ctrl/-Shift
+       pick the modifiers. Both the generic (VK_CONTROL/VK_SHIFT) and the
+       left-hand (VK_LCONTROL/VK_LSHIFT) entries are set, as a real key press
+       does -- GetKeyState(VK_CONTROL) reports the generic one, but leaving the
+       side-specific entry clear would be an inconsistent table.
+
+       The saved table is restored and the input detached in a finally block,
+       so an assertion failure mid-case cannot leave a phantom Ctrl down. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Key,
+          [switch] $Ctrl, [switch] $Shift, [int] $SettleMs = 500)
+    if (-not $script:VK_MAP.ContainsKey($Key)) {
+        throw "Unknown key name '$Key' (known: $($script:VK_MAP.Keys -join ', '))"
+    }
+    $vk  = [byte]$script:VK_MAP[$Key]
+    $ext = $script:VK_EXTENDED -contains $vk
+    $ownerPid = [uint32]0
+    $uiThread = [NutshellNative]::GetWindowThreadProcessId($Session.Main, [ref]$ownerPid)
+    if ($uiThread -eq 0) { throw "could not find the UI thread of window $($Session.Main)" }
+    $mine = [NutshellNative]::GetCurrentThreadId()
+    if (-not [NutshellNative]::AttachThreadInput($mine, $uiThread, $true)) {
+        throw "AttachThreadInput to Nutshell's UI thread ($uiThread) failed; cannot send a modifier chord"
+    }
+    try {
+        $saved = New-Object byte[] 256
+        [NutshellNative]::GetKeyboardState($saved) | Out-Null
+        $state = New-Object byte[] 256
+        [Array]::Copy($saved, $state, 256)
+        if ($Ctrl)  { $state[0x11] = 0x80; $state[0xA2] = 0x80 }   # VK_CONTROL, VK_LCONTROL
+        if ($Shift) { $state[0x10] = 0x80; $state[0xA0] = 0x80 }   # VK_SHIFT,   VK_LSHIFT
+        [NutshellNative]::SetKeyboardState($state) | Out-Null
+        try {
+            $down = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $false
+            $up   = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $true
+            [NutshellNative]::PostMessage($Session.Main, $script:WM_KEYDOWN, [IntPtr]$vk, $down) | Out-Null
+            # The modifier must still be down in the shared table when the app
+            # pulls that WM_KEYDOWN off its queue, so wait for the UI thread to
+            # come back to us before letting go: a WM_NULL round trip returns
+            # only once the thread is pumping messages again (it answers sent
+            # messages from inside GetMessage, so this works even while the
+            # paste preview's modal loop owns the thread). Sent messages jump
+            # the queue ahead of posted ones, so the short sleep after it is
+            # what actually covers the dispatch of the key itself; 120 ms is
+            # far more than a WndProc branch needs and costs nothing.
+            $res = [IntPtr]::Zero
+            [NutshellNative]::SendMessageTimeout($Session.Main, $script:WM_NULL,
+                [IntPtr]::Zero, [IntPtr]::Zero, 0, 2000, [ref]$res) | Out-Null
+            Start-Sleep -Milliseconds 120
+            [NutshellNative]::PostMessage($Session.Main, $script:WM_KEYUP, [IntPtr]$vk, $up) | Out-Null
+        } finally {
+            [NutshellNative]::SetKeyboardState($saved) | Out-Null
         }
-        [NutshellNative]::SetForegroundWindow($Session.Main) | Out-Null
-        Start-Sleep -Milliseconds 150
-        $fg = [NutshellNative]::GetForegroundWindow()
-        $fgPid = [uint32]0
-        if ($fg -ne [IntPtr]::Zero) { [NutshellNative]::GetWindowThreadProcessId($fg, [ref]$fgPid) | Out-Null }
-        $ok = ($fg -ne [IntPtr]::Zero -and [int]$fgPid -eq $Session.Process.Id)
+    } finally {
+        [NutshellNative]::AttachThreadInput($mine, $uiThread, $false) | Out-Null
     }
-    if (-not $ok) {
-        throw "Nutshell is not the foreground window (desktop locked, or another app holds the foreground); refusing to send keys"
-    }
-    $ws = New-Object -ComObject WScript.Shell
-    $ws.SendKeys($Keys)
     Start-Sleep -Milliseconds $SettleMs
 }
 
@@ -515,15 +634,42 @@ function Open-NutshellSecondTab {
 }
 
 function Select-NutshellTab {
-    <# Click tab N (0-based) in the tab strip, then refocus the terminal. #>
+    <# Activate tab N (0-based) by posting WM_LBUTTONDOWN+WM_LBUTTONUP straight
+       to the tab strip child window (class "Nutshell_Tabs", a direct child of
+       the main window -- window.c's tabs_create(hwnd, ...)). tabs.c's
+       WM_LBUTTONDOWN handler hit-tests the message's own lParam and never
+       calls GetCursorPos, so a posted click selects the tab with no
+       foreground window, no real mouse and no unlocked desktop -- unlike the
+       SetCursorPos/mouse_event click this used to do, which needed the
+       foreground and, when it did not have it, silently landed in whatever
+       window happened to be in front (that is how
+       resize_applies_to_inactive_tab failed: the switch back to tab A never
+       happened and the size command was typed into tab B).
+
+       Geometry mirrors tabs.c exactly: the first tab starts at
+       PAD_BASE + BTN_SIZE_BASE + TAB_START_GAP_BASE (8 + 24 + 12) and each tab
+       is TAB_MIN_W_BASE (100) wide plus a TAB_GAP_BASE (8) gap, every value
+       ns_scale'd to the window's DPI. That assumes minimum-width tabs, which
+       every harness tab is (the generated profile is named "it", far narrower
+       than the 100-px minimum); a long profile name would widen its tab and
+       shift the ones after it. The click lands mid-tab, clear of the status
+       dot, the L (log) toggle and the close glyph, each of which has its own
+       hit zone inside the tab rect. #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int] $Index)
-    # The tab strip is the top SZ_TAB_H (32 px at 96 DPI) of the client area;
-    # tabs start after the "+" button. Client coordinates sidestep the title
-    # and menu bars, whose heights vary with DPI.
-    $scale = [NutshellNative]::GetDpiForWindow($Session.Main) / 96.0
-    $x = [int]((100 + 160 * $Index) * $scale)
-    $y = [int](16 * $scale)
-    [NutshellNative]::ClickClient($Session.Main, $x, $y)
+    $tabs = [NutshellNative]::FindWindowEx($Session.Main, [IntPtr]::Zero, "Nutshell_Tabs", [IntPtr]::Zero)
+    if ($tabs -eq [IntPtr]::Zero) { throw "tab strip (class Nutshell_Tabs) not found under the main window" }
+    $dpi = [int][NutshellNative]::GetDpiForWindow($tabs)
+    if ($dpi -le 0) { $dpi = 96 }
+    $sx = { param($px) [int][math]::Round(($px * $dpi) / 96.0) }
+    $startX = (& $sx 8) + (& $sx 24) + (& $sx 12)     # PAD + [+] button + start gap
+    $tabW   = & $sx 100                                # TAB_MIN_W_BASE
+    $gap    = & $sx 8                                  # TAB_GAP_BASE
+    $x = $startX + $Index * ($tabW + $gap) + [int]($tabW / 2)
+    $rc = [NutshellNative]::ClientSize($tabs)
+    $y = [int]($rc.B / 2)
+    $lp = [IntPtr][int64]((($y -band 0xFFFF) -shl 16) -bor ($x -band 0xFFFF))
+    [NutshellNative]::PostMessage($tabs, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $lp) | Out-Null
+    [NutshellNative]::PostMessage($tabs, $script:WM_LBUTTONUP, [IntPtr]0, $lp) | Out-Null
     Start-Sleep -Milliseconds 700
 }
 
@@ -904,13 +1050,12 @@ function Get-NutshellTabCount {
 }
 
 function Close-NutshellTab {
-    <# Click tab -Index active (Select-NutshellTab -- the tab strip only
-       responds to real clicks, per tabs.c's WM_LBUTTONDOWN-only hit testing,
-       so this still needs the foreground/mouse and does not work
-       desktop-locked), then post Ctrl+W's WM_CHAR (0x17) to close the now-
+    <# Make tab -Index active (Select-NutshellTab, a posted WM_LBUTTONDOWN to
+       the tab strip), then post Ctrl+W's WM_CHAR (0x17) to close the now-
        active tab -- window.c's WM_CHAR handler special-cases 0x17
-       (on_tab_close on the active tab) independent of actual keyboard focus,
-       so that half of the operation IS posted. #>
+       (on_tab_close on the active tab) independent of actual keyboard focus.
+       Both halves are posted, so this needs no foreground and works
+       desktop-locked. #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int] $Index)
     Select-NutshellTab -Session $Session -Index $Index
     [NutshellNative]::PostMessage($Session.Main, $script:WM_CHAR, [IntPtr]0x17, [IntPtr]::Zero) | Out-Null
@@ -950,6 +1095,36 @@ function Test-NutshellPixelNear {
     $p = Get-NutshellPixel -Path $Path -X $X -Y $Y
     $dr = [Math]::Abs($p.R - $Rgb[0]); $dg = [Math]::Abs($p.G - $Rgb[1]); $db = [Math]::Abs($p.B - $Rgb[2])
     return ($dr -le $Tolerance -and $dg -le $Tolerance -and $db -le $Tolerance)
+}
+
+function Get-NutshellRegionHash {
+    <# MD5 of a proportional region of a saved capture -- the general form of
+       cases-terminal.ps1's Get-TerminalAreaHash (which stays there, being
+       terminal-specific and used by that file only).
+       -Region is @{ X = 0.0; Y = 0.15; W = 0.6; H = 0.8 } (each 0..1, fraction
+       of the bitmap's width/height) -- e.g. WINDOW-1 (minimise/restore) hashes
+       the same terminal-content band across two captures to prove the repaint
+       after restore reproduces the same pixels, and TABS-1 hashes just the
+       tab-strip band (top ~40px) to show the strip changed after a tab opened
+       or closed without needing Get-NutshellTabCount (not implementable --
+       see its doc comment). #>
+    param([Parameter(Mandatory)] [string] $Path, [Parameter(Mandatory)] [hashtable] $Region)
+    $bmp = New-Object System.Drawing.Bitmap $Path
+    try {
+        $x = [int]($bmp.Width * $Region.X); $y = [int]($bmp.Height * $Region.Y)
+        $w = [int]($bmp.Width * $Region.W); $h = [int]($bmp.Height * $Region.H)
+        if ($x -lt 0) { $x = 0 }; if ($y -lt 0) { $y = 0 }
+        if ($x + $w -gt $bmp.Width)  { $w = $bmp.Width  - $x }
+        if ($y + $h -gt $bmp.Height) { $h = $bmp.Height - $y }
+        $rect = New-Object System.Drawing.Rectangle -ArgumentList @($x, $y, $w, $h)
+        $crop = $bmp.Clone($rect, $bmp.PixelFormat)
+        try {
+            $ms = New-Object System.IO.MemoryStream
+            $crop.Save($ms, [System.Drawing.Imaging.ImageFormat]::Bmp)
+            $md5 = [System.Security.Cryptography.MD5]::Create()
+            return [BitConverter]::ToString($md5.ComputeHash($ms.ToArray()))
+        } finally { $crop.Dispose() }
+    } finally { $bmp.Dispose() }
 }
 
 # Flat 0xRRGGBB fields of ThemeTokens (src/core/ui_theme.h) that
@@ -1021,7 +1196,7 @@ function Get-NutshellExeVersion {
 }
 
 Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell, Get-NutshellWindows, `
-    Send-NutshellCommand, Start-NutshellLogging, Send-NutshellKeys, Send-NutshellText, Send-NutshellKey, Send-NutshellLine, `
+    Send-NutshellCommand, Start-NutshellLogging, Send-NutshellChord, Send-NutshellText, Send-NutshellKey, Send-NutshellLine, `
     Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Save-NutshellScreenshot, `
     Open-NutshellSecondTab, Select-NutshellTab, `
     Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiAutoApprove, Set-NutshellTerminalFocus, `
@@ -1031,4 +1206,5 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Select-NutshellListItem, Get-NutshellListItems, Close-NutshellDialog, `
     Open-NutshellSessionManager, Open-NutshellSettings, Select-NutshellSettingsPage, `
     Get-NutshellTabCount, Close-NutshellTab, Get-NutshellWindowText, Get-NutshellChildWindows, `
-    Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion
+    Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion, `
+    Get-NutshellRegionHash
