@@ -1,7 +1,6 @@
 #include "term.h"
 #include "xmalloc.h"
 #include "shell_prompt.h"
-#include <assert.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -311,26 +310,38 @@ void term_scroll_up(Terminal *term, int top, int bot, int n) {
         return;
     }
 
-    /* Region scroll (or alt screen): pointer-swap within screen rows. */
-    /* Save the n row pointers that will be recycled */
-    TermRow *saved[64];
-    assert(n <= 64 && "scroll_up: n exceeds saved[] capacity");
-    if (n > 64) n = 64;  /* safety clamp */
-    for (int i = 0; i < n; i++)
-        saved[i] = term->lines[screen_to_phys(term, top + i)];
+    /* Region scroll (or alt screen): pointer-swap within screen rows.
+     * H10: n can exceed 64 for a scroll region taller than 64 rows (the
+     * old code asserted n <= 64 against a fixed saved[64] and shipped
+     * with asserts live -- a remote host reaching this with n > 64 could
+     * abort() the process). Process the shift in chunks of at most 64 --
+     * scrolling up by n is equivalent to scrolling up by each chunk in
+     * turn, since every chunk is itself a complete, correctly-cleared
+     * scroll-up of the same region. */
+    int remaining = n;
+    while (remaining > 0) {
+        int chunk = (remaining > 64) ? 64 : remaining;
 
-    /* Shift rows [top+n .. bot] up to [top .. bot-n] */
-    for (int i = top; i <= bot - n; i++) {
-        int dst = screen_to_phys(term, i);
-        int src = screen_to_phys(term, i + n);
-        term->lines[dst] = term->lines[src];
-    }
+        /* Save the chunk row pointers that will be recycled */
+        TermRow *saved[64];
+        for (int i = 0; i < chunk; i++)
+            saved[i] = term->lines[screen_to_phys(term, top + i)];
 
-    /* Place recycled (cleared) rows at [bot-n+1 .. bot] */
-    for (int i = 0; i < n; i++) {
-        int idx = screen_to_phys(term, bot - n + 1 + i);
-        term->lines[idx] = saved[i];
-        term_row_fill(saved[i], term->cols, term->current_attr);
+        /* Shift rows [top+chunk .. bot] up to [top .. bot-chunk] */
+        for (int i = top; i <= bot - chunk; i++) {
+            int dst = screen_to_phys(term, i);
+            int src = screen_to_phys(term, i + chunk);
+            term->lines[dst] = term->lines[src];
+        }
+
+        /* Place recycled (cleared) rows at [bot-chunk+1 .. bot] */
+        for (int i = 0; i < chunk; i++) {
+            int idx = screen_to_phys(term, bot - chunk + 1 + i);
+            term->lines[idx] = saved[i];
+            term_row_fill(saved[i], term->cols, term->current_attr);
+        }
+
+        remaining -= chunk;
     }
 
     /* Mark all rows in the region dirty */
@@ -343,25 +354,33 @@ void term_scroll_down(Terminal *term, int top, int bot, int n) {
         return;
     if (n > bot - top + 1) n = bot - top + 1;
 
-    /* Save the n row pointers that will be recycled (bottom of region) */
-    TermRow *saved[64];
-    assert(n <= 64 && "scroll_down: n exceeds saved[] capacity");
-    if (n > 64) n = 64;  /* safety clamp */
-    for (int i = 0; i < n; i++)
-        saved[i] = term->lines[screen_to_phys(term, bot - n + 1 + i)];
+    /* H10: chunk in groups of at most 64 -- see the matching comment in
+     * term_scroll_up(). Scrolling down by n is equivalent to scrolling
+     * down by each chunk in turn. */
+    int remaining = n;
+    while (remaining > 0) {
+        int chunk = (remaining > 64) ? 64 : remaining;
 
-    /* Shift rows [top .. bot-n] down to [top+n .. bot] */
-    for (int i = bot - n; i >= top; i--) {
-        int dst = screen_to_phys(term, i + n);
-        int src = screen_to_phys(term, i);
-        term->lines[dst] = term->lines[src];
-    }
+        /* Save the chunk row pointers that will be recycled (bottom of region) */
+        TermRow *saved[64];
+        for (int i = 0; i < chunk; i++)
+            saved[i] = term->lines[screen_to_phys(term, bot - chunk + 1 + i)];
 
-    /* Place recycled (cleared) rows at [top .. top+n-1] */
-    for (int i = 0; i < n; i++) {
-        int idx = screen_to_phys(term, top + i);
-        term->lines[idx] = saved[i];
-        term_row_fill(saved[i], term->cols, term->current_attr);
+        /* Shift rows [top .. bot-chunk] down to [top+chunk .. bot] */
+        for (int i = bot - chunk; i >= top; i--) {
+            int dst = screen_to_phys(term, i + chunk);
+            int src = screen_to_phys(term, i);
+            term->lines[dst] = term->lines[src];
+        }
+
+        /* Place recycled (cleared) rows at [top .. top+chunk-1] */
+        for (int i = 0; i < chunk; i++) {
+            int idx = screen_to_phys(term, top + i);
+            term->lines[idx] = saved[i];
+            term_row_fill(saved[i], term->cols, term->current_attr);
+        }
+
+        remaining -= chunk;
     }
 
     /* Mark all rows in the region dirty */

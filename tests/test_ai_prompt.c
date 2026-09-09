@@ -479,12 +479,116 @@ int test_ai_extract_commands_single_matches_old(void) {
 
 int test_ai_extract_commands_newlines_in_command(void) {
     TEST_BEGIN();
-    /* A command that spans multiple lines (e.g., heredoc) */
+    /* C1 security fix: a command that spans multiple lines (e.g. a
+     * heredoc) is no longer extracted verbatim -- an embedded newline
+     * would let the block smuggle a second, unclassified command past
+     * cmd_classify/the approval card, so the whole block is dropped
+     * instead of being sanitised into something runnable. */
     const char *resp = "[EXEC]cat <<EOF\nhello\nworld\nEOF[/EXEC]";
     char cmds[16][1024];
     int n = ai_extract_commands(resp, cmds, 16);
+    ASSERT_EQ(n, 0);
+    TEST_END();
+}
+
+/* ---- C1: control characters inside [EXEC] blocks are dropped, not
+ * sanitised (see docs/superpowers/specs/2026-09-09-security-audit.md) ---- */
+
+int test_ai_extract_commands_ex_embedded_newline_rejected(void) {
+    TEST_BEGIN();
+    const char *resp = "[EXEC]echo ok\nrm -rf ~[/EXEC]";
+    char cmds[16][1024];
+    int rejected = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(rejected, 1);
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_embedded_tab_rejected(void) {
+    TEST_BEGIN();
+    const char *resp = "[EXEC]echo ok\trm -rf ~[/EXEC]";
+    char cmds[16][1024];
+    int rejected = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(rejected, 1);
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_embedded_esc_rejected(void) {
+    TEST_BEGIN();
+    const char *resp = "[EXEC]echo ok\x1brm -rf ~[/EXEC]";
+    char cmds[16][1024];
+    int rejected = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(rejected, 1);
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_embedded_del_rejected(void) {
+    TEST_BEGIN();
+    const char *resp = "[EXEC]echo ok\x7frm -rf ~[/EXEC]";
+    char cmds[16][1024];
+    int rejected = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(rejected, 1);
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_clean_block_still_extracts(void) {
+    TEST_BEGIN();
+    const char *resp = "[EXEC]ls -la[/EXEC]";
+    char cmds[16][1024];
+    int rejected = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
     ASSERT_EQ(n, 1);
-    ASSERT_STR_EQ(cmds[0], "cat <<EOF\nhello\nworld\nEOF");
+    ASSERT_EQ(rejected, 0);
+    ASSERT_STR_EQ(cmds[0], "ls -la");
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_only_second_bad(void) {
+    TEST_BEGIN();
+    /* Two blocks: the first is clean, the second contains an embedded
+     * newline. Only the first is extracted; the second is counted as
+     * rejected -- an attacker can't hide a bad block among good ones. */
+    const char *resp = "[EXEC]df -h[/EXEC][EXEC]echo ok\nrm -rf ~[/EXEC]";
+    char cmds[16][1024];
+    int rejected = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(rejected, 1);
+    ASSERT_STR_EQ(cmds[0], "df -h");
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_surrounding_newline_trimmed(void) {
+    TEST_BEGIN();
+    /* A leading/trailing newline directly inside the markers (common
+     * model formatting) is trimmed before the control-character check,
+     * so it still yields a clean single-line command. */
+    const char *resp = "[EXEC]\nls\n[/EXEC]";
+    char cmds[16][1024];
+    int rejected = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(rejected, 0);
+    ASSERT_STR_EQ(cmds[0], "ls");
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_null_rejected_ok(void) {
+    TEST_BEGIN();
+    /* rejected may be NULL -- old-style callers (or ai_extract_commands()
+     * itself) must not crash. */
+    const char *resp = "[EXEC]echo ok\nrm -rf ~[/EXEC][EXEC]ls[/EXEC]";
+    char cmds[16][1024];
+    int n = ai_extract_commands_ex(resp, cmds, 16, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(cmds[0], "ls");
     TEST_END();
 }
 

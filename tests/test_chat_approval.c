@@ -188,6 +188,19 @@ int test_approval_whitespace_command(void) {
     TEST_END();
 }
 
+/* C1 defense in depth: chat_approval_add() refuses a command containing
+ * a raw control byte even if some other caller bypasses
+ * ai_extract_commands()'s own filtering. */
+int test_approval_add_embedded_newline_rejected(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    int idx = chat_approval_add(&q, "echo ok\nrm -rf ~", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ(idx, -1);
+    ASSERT_EQ(q.count, 0);
+    TEST_END();
+}
+
 int test_approval_queue_full(void) {
     TEST_BEGIN();
     ApprovalQueue q;

@@ -281,3 +281,158 @@ int test_vt_alt_screen_resets_scrollback_exit(void)
     TEST_END();
 }
 
+/* ---- Security audit regressions (2026-09-09) ----------------------------- */
+
+/* Screen-row helper matching the pattern used throughout this file --
+ * row 0 is the top of the visible screen. */
+static TermRow *vt_screen_row(Terminal *t, int n)
+{
+    int top = (t->lines_count >= t->rows) ? (t->lines_count - t->rows) : 0;
+    return t->lines[(t->lines_start + top + n) % t->lines_capacity];
+}
+
+/* C4: cursor.col can legitimately equal term->cols between characters
+ * (deferred auto-wrap -- term_put_char only wraps on the *next* printable
+ * byte). EL(1) must clamp the erase bound to cols-1, not walk one TermCell
+ * past the row allocation. */
+int test_vt_el1_at_deferred_wrap_no_oob(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "\033[80G", 5);  /* CHA: cursor to column 80 (1-based) => index 79 */
+    term_process(t, "X", 1);        /* prints at col 79; cursor.col becomes 80 (deferred wrap) */
+    ASSERT_EQ(t->cursor.col, 80);
+    term_process(t, "\033[1K", 4);  /* EL n=1: erase start..cursor inclusive */
+    /* No crash/corruption reaching here is the main assertion; also check
+     * the last real column was actually erased (bound used cursor.col, not
+     * cols-1, would erase the same range here -- OOB write was the bug,
+     * not a wrong in-bounds result, so this just confirms behavior held). */
+    TermRow *row = vt_screen_row(t, 0);
+    ASSERT_TRUE(row->cells[79].codepoint == 0);
+    /* Deferred wrap must be preserved -- only the erase bound is clamped,
+     * never the cursor itself. */
+    ASSERT_EQ(t->cursor.col, 80);
+    term_free(t);
+    TEST_END();
+}
+
+/* Same bug, ED(1) (n==1 branch of 'J'). */
+int test_vt_ed1_at_deferred_wrap_no_oob(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "\033[80G", 5);
+    term_process(t, "X", 1);
+    ASSERT_EQ(t->cursor.col, 80);
+    term_process(t, "\033[1J", 4);
+    TermRow *row = vt_screen_row(t, 0);
+    ASSERT_TRUE(row->cells[79].codepoint == 0);
+    ASSERT_EQ(t->cursor.col, 80);
+    term_free(t);
+    TEST_END();
+}
+
+/* H9/L4: CSI digit accumulation saturates at 65535 instead of overflowing
+ * signed int -- ESC[2147483647@ must not turn into a huge negative ICH
+ * count and walk far below row index 0. */
+int test_vt_csi_digit_saturates_at_65535(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "\033[70000@", 8);
+    ASSERT_EQ(t->csi_params[0], 65535);
+    term_free(t);
+    TEST_END();
+}
+
+int test_vt_ich_int_max_param_no_crash(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "\033[1;6H", 6);       /* cursor at row 0, col 5 */
+    term_process(t, "\033[2147483647@", 13);
+    /* Row length must stay within bounds -- proves no OOB write/read
+     * corrupted it. */
+    TermRow *row = vt_screen_row(t, 0);
+    ASSERT_TRUE(row->len <= t->cols);
+    term_free(t);
+    TEST_END();
+}
+
+int test_vt_il_11_digit_param_no_crash(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "\033[99999999999L", 14);
+    ASSERT_EQ(t->csi_params[0], 65535);
+    TermRow *row = vt_screen_row(t, 0);
+    ASSERT_TRUE(row->len <= t->cols);
+    term_free(t);
+    TEST_END();
+}
+
+/* H10: term_scroll_up/term_scroll_down must handle a scroll region taller
+ * than 64 rows scrolled by more than 64 rows -- the old code asserted
+ * n <= 64 against a fixed saved[64] and shipped with asserts live
+ * (Makefile defines no -DNDEBUG), so a host sending a >64-row scroll could
+ * abort() the process. Chunking must reach the same final state as an
+ * unchunked scroll would. A 120-row terminal with a 100-row scroll region
+ * (rows 0..99) scrolled by 70 exercises two chunks (64 + 6). */
+
+int test_vt_scroll_up_region_beyond_64_moves_marker(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(120, 80, 100);
+    term_process(t, "\033[1;100r", 8);  /* DECSTBM: region rows 0..99 */
+    term_process(t, "\033[71;1H", 7);   /* cursor to row 70 (0-based), col 0 */
+    term_process(t, "M", 1);
+    term_process(t, "\033[70S", 5);     /* SU: scroll region up by 70 */
+    /* Row 70 shifts up to row 0. */
+    ASSERT_TRUE(vt_screen_row(t, 0)->cells[0].codepoint == (uint32_t)'M');
+    term_free(t);
+    TEST_END();
+}
+
+int test_vt_scroll_down_region_beyond_64_moves_marker(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(120, 80, 100);
+    term_process(t, "\033[1;100r", 8);  /* region rows 0..99 */
+    term_process(t, "\033[21;1H", 7);   /* cursor to row 20, col 0 */
+    term_process(t, "M", 1);
+    term_process(t, "\033[70T", 5);     /* SD: scroll region down by 70 */
+    /* Row 20 shifts down to row 90. */
+    ASSERT_TRUE(vt_screen_row(t, 90)->cells[0].codepoint == (uint32_t)'M');
+    term_free(t);
+    TEST_END();
+}
+
+int test_vt_il_beyond_64_moves_marker(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(120, 80, 100);
+    term_process(t, "\033[1;100r", 8);  /* region rows 0..99, cursor -> (0,0) */
+    term_process(t, "M", 1);            /* marker at row 0 */
+    term_process(t, "\033[70L", 5);     /* IL: insert 70 blank lines at cursor */
+    /* Existing content at row 0 is pushed down by 70. */
+    ASSERT_TRUE(vt_screen_row(t, 70)->cells[0].codepoint == (uint32_t)'M');
+    term_free(t);
+    TEST_END();
+}
+
+int test_vt_dl_beyond_64_moves_marker(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(120, 80, 100);
+    term_process(t, "\033[1;100r", 8);  /* region rows 0..99, cursor -> (0,0) */
+    term_process(t, "\033[71;1H", 7);   /* cursor to row 70, col 0 */
+    term_process(t, "M", 1);
+    term_process(t, "\033[1;1H", 6);    /* cursor back to row 0 (top of region) */
+    term_process(t, "\033[70M", 5);     /* DL: delete 70 lines at cursor */
+    /* Row 70 shifts up to row 0 (same shape as SU with cursor at the
+     * region top). */
+    ASSERT_TRUE(vt_screen_row(t, 0)->cells[0].codepoint == (uint32_t)'M');
+    term_free(t);
+    TEST_END();
+}
+

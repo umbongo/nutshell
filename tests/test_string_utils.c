@@ -402,3 +402,96 @@ int test_model_label_truncation(void)
     ASSERT_EQ(label[19], '\0');
     TEST_END();
 }
+
+/* ---- str_append_fmt (C3/L3: safe bp/len += snprintf accumulation) ------- */
+
+int test_str_append_fmt_fits(void)
+{
+    TEST_BEGIN();
+    char buf[32];
+    size_t len = 0;
+    buf[0] = '\0';
+    int ok = str_append_fmt(buf, sizeof(buf), &len, "hello %s", "world");
+    ASSERT_EQ(ok, 1);
+    ASSERT_EQ((int)len, 11);
+    ASSERT_STR_EQ(buf, "hello world");
+    TEST_END();
+}
+
+int test_str_append_fmt_exactly_fits(void)
+{
+    TEST_BEGIN();
+    /* cap=10 leaves room for exactly 9 chars + NUL */
+    char buf[10];
+    size_t len = 0;
+    buf[0] = '\0';
+    int ok = str_append_fmt(buf, sizeof(buf), &len, "%s", "abcdefghi");
+    ASSERT_EQ(ok, 1);
+    ASSERT_EQ((int)len, 9);
+    ASSERT_STR_EQ(buf, "abcdefghi");
+    TEST_END();
+}
+
+int test_str_append_fmt_does_not_fit_leaves_buf_intact(void)
+{
+    TEST_BEGIN();
+    char buf[10];
+    size_t len = 0;
+    strcpy(buf, "abcdefghi");  /* fills the 10-byte buffer + NUL exactly */
+    len = strlen(buf);
+    /* One more byte does not fit (would need 11 bytes total) */
+    int ok = str_append_fmt(buf, sizeof(buf), &len, "X");
+    ASSERT_EQ(ok, 0);
+    ASSERT_EQ((int)len, 9);
+    ASSERT_STR_EQ(buf, "abcdefghi");
+    TEST_END();
+}
+
+int test_str_append_fmt_does_not_fit_partial_overflow(void)
+{
+    TEST_BEGIN();
+    /* A format that would overflow mid-way -- len and buf must be exactly
+     * as they were before the call, not partially written. */
+    char buf[16] = "12345";
+    size_t len = 5;
+    int ok = str_append_fmt(buf, sizeof(buf), &len,
+                            "%s", "this string is far too long to fit");
+    ASSERT_EQ(ok, 0);
+    ASSERT_EQ((int)len, 5);
+    ASSERT_STR_EQ(buf, "12345");
+    TEST_END();
+}
+
+int test_str_append_fmt_repeated_stops_cleanly_at_capacity(void)
+{
+    TEST_BEGIN();
+    char buf[16];
+    size_t len = 0;
+    buf[0] = '\0';
+    int calls = 0, failures = 0;
+    for (int i = 0; i < 20; i++) {
+        calls++;
+        if (!str_append_fmt(buf, sizeof(buf), &len, "ab")) {
+            failures++;
+        }
+    }
+    /* Never wrote past capacity, always NUL-terminated, stopped appending
+     * once full instead of corrupting anything. */
+    ASSERT_TRUE(len < sizeof(buf));
+    ASSERT_TRUE(strlen(buf) == len);
+    ASSERT_TRUE(failures > 0);
+    ASSERT_TRUE(calls == 20);
+    TEST_END();
+}
+
+int test_str_append_fmt_null_args_safe(void)
+{
+    TEST_BEGIN();
+    char buf[8];
+    size_t len = 0;
+    buf[0] = '\0';
+    ASSERT_EQ(str_append_fmt(NULL, sizeof(buf), &len, "x"), 0);
+    ASSERT_EQ(str_append_fmt(buf, 0, &len, "x"), 0);
+    ASSERT_EQ(str_append_fmt(buf, sizeof(buf), NULL, "x"), 0);
+    TEST_END();
+}

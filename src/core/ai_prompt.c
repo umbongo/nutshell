@@ -3,6 +3,7 @@
 #include "cmd_classify.h"
 #include "json_parser.h"
 #include "json_validate.h"
+#include "string_utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1114,9 +1115,24 @@ int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size)
     return 1;
 }
 
-int ai_extract_commands(const char *response, char cmds[][1024],
-                        int max_cmds)
+/* True if s (NUL-terminated) contains any byte that would let a single
+ * [EXEC] block masquerade as more than one command -- a raw control
+ * character (< 0x20) or DEL (0x7F). Newline/CR/tab are the ones that
+ * matter in practice (see C1 in the security audit), but any control
+ * byte is rejected on the same principle: an [EXEC] block must contain
+ * exactly one single-line shell command. */
+static int ai_command_has_control_char(const char *s)
 {
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p < 0x20 || *p == 0x7F) return 1;
+    }
+    return 0;
+}
+
+int ai_extract_commands_ex(const char *response, char cmds[][1024],
+                           int max_cmds, int *rejected)
+{
+    if (rejected) *rejected = 0;
     if (!response || !cmds || max_cmds <= 0) return 0;
 
     int count = 0;
@@ -1137,14 +1153,45 @@ int ai_extract_commands(const char *response, char cmds[][1024],
         }
         if (len >= 1024) len = 1023;
 
-        memcpy(cmds[count], start, len);
-        cmds[count][len] = '\0';
+        char tmp[1024];
+        memcpy(tmp, start, len);
+        tmp[len] = '\0';
+
+        /* Trim whitespace (including any CR/LF the marker parsing leaves
+         * around the model's formatting, e.g. "[EXEC]\nls\n[/EXEC]") before
+         * judging the payload -- a command must be a single line once
+         * trimmed, not merely at its edges. */
+        str_trim(tmp);
+
+        if (tmp[0] == '\0') {
+            /* Whitespace-only block -- treat the same as an empty one. */
+            pos = end + 7;
+            continue;
+        }
+
+        if (ai_command_has_control_char(tmp)) {
+            /* A control character survived trimming -- the block contains
+             * more than one line (or another embedded control byte). Do
+             * not sanitise it into something runnable: drop it and let
+             * the caller tell the model. */
+            if (rejected) (*rejected)++;
+            pos = end + 7;
+            continue;
+        }
+
+        memcpy(cmds[count], tmp, strlen(tmp) + 1);
         count++;
 
         pos = end + 7; /* skip "[/EXEC]" */
     }
 
     return count;
+}
+
+int ai_extract_commands(const char *response, char cmds[][1024],
+                        int max_cmds)
+{
+    return ai_extract_commands_ex(response, cmds, max_cmds, NULL);
 }
 
 /* ---- Response splitting ---- */

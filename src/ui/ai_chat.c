@@ -1453,20 +1453,21 @@ static void send_user_message(AiChatData *d)
         /* Append tool descriptions if tools are registered and provider supports them */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
-            len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
+            if (str_append_fmt(sys_prompt, sys_prompt_cap, &len,
                 "\n\nYou have access to the following tools that will be called "
-                "automatically via the API tool-use mechanism:\n\n");
-            for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
-                    "- %s: %s\n",
-                    d->tool_registry.tools[ti].name,
-                    d->tool_registry.tools[ti].description);
+                "automatically via the API tool-use mechanism:\n\n")) {
+                for (int ti = 0; ti < d->tool_registry.count; ti++) {
+                    if (!str_append_fmt(sys_prompt, sys_prompt_cap, &len,
+                            "- %s: %s\n",
+                            d->tool_registry.tools[ti].name,
+                            d->tool_registry.tools[ti].description))
+                        break;
+                }
+                str_append_fmt(sys_prompt, sys_prompt_cap, &len,
+                    "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
+                    "request them via the tool-use API and the results will be provided.\n\n"
+                    "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
             }
-            len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
-                "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
-                "request them via the tool-use API and the results will be provided.\n\n"
-                "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
-            (void)len;
         }
         ai_conv_add(&d->conv, AI_ROLE_SYSTEM, sys_prompt);
     } else if (ctx_ok && d->active_term) {
@@ -1478,20 +1479,21 @@ static void send_user_message(AiChatData *d)
         /* Append tool descriptions */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
-            len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
+            if (str_append_fmt(sys_prompt, sys_prompt_cap, &len,
                 "\n\nYou have access to the following tools that will be called "
-                "automatically via the API tool-use mechanism:\n\n");
-            for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
-                    "- %s: %s\n",
-                    d->tool_registry.tools[ti].name,
-                    d->tool_registry.tools[ti].description);
+                "automatically via the API tool-use mechanism:\n\n")) {
+                for (int ti = 0; ti < d->tool_registry.count; ti++) {
+                    if (!str_append_fmt(sys_prompt, sys_prompt_cap, &len,
+                            "- %s: %s\n",
+                            d->tool_registry.tools[ti].name,
+                            d->tool_registry.tools[ti].description))
+                        break;
+                }
+                str_append_fmt(sys_prompt, sys_prompt_cap, &len,
+                    "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
+                    "request them via the tool-use API and the results will be provided.\n\n"
+                    "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
             }
-            len += (size_t)snprintf(sys_prompt + len, sys_prompt_cap - len,
-                "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
-                "request them via the tool-use API and the results will be provided.\n\n"
-                "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
-            (void)len;
         }
         /* Replace the first (system) message */
         ai_conv_set_system(&d->conv, sys_prompt);
@@ -1521,12 +1523,30 @@ static void send_user_message(AiChatData *d)
     ai_attachment_free(&d->pending_attachment);
 }
 
+/* Defense in depth against C1: even though ai_extract_commands() and
+ * chat_approval_add() already refuse a command containing a raw control
+ * byte, refuse to write one to the channel here too -- this is the last
+ * point before the bytes reach the remote shell. */
+static int command_has_control_char(const char *cmd)
+{
+    for (const unsigned char *p = (const unsigned char *)cmd; *p; p++) {
+        if (*p < 0x20 || *p == 0x7F) return 1;
+    }
+    return 0;
+}
+
 static void execute_command(AiChatData *d, const char *cmd)
 {
     if (!d || !cmd || !cmd[0]) return;
     if (!d->active_channel) {
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                         "[error: no active SSH channel]");
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        return;
+    }
+    if (command_has_control_char(cmd)) {
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+            "[command rejected: control characters inside an EXEC block]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
         return;
     }
@@ -3562,7 +3582,9 @@ next_coalesce:;
         if (src != d->active_state) {
             if (wParam == 2 && src && rmsg->content) {
                 char cmds[16][1024];
-                int ncmds = ai_extract_commands(rmsg->content, cmds, 16);
+                int rejected = 0;
+                int ncmds = ai_extract_commands_ex(rmsg->content, cmds, 16,
+                                                   &rejected);
                 if (ncmds > 0) {
                     ApprovalQueue bg_defaults;
                     chat_approval_init(&bg_defaults);
@@ -3578,6 +3600,17 @@ next_coalesce:;
                                               CMD_PLATFORM_LINUX,
                                               d->permit_write);
                     }
+                }
+                if (rejected > 0) {
+                    char note[256];
+                    snprintf(note, sizeof(note),
+                        "NOTE: %d EXEC block(s) were rejected because they "
+                        "contained control characters (newline, tab, "
+                        "escape). Put exactly one single-line command in "
+                        "each EXEC block.", rejected);
+                    EnterCriticalSection(&d->cs);
+                    ai_conv_add(&src->conv, AI_ROLE_USER, note);
+                    LeaveCriticalSection(&d->cs);
                 }
             }
             if (src) src->busy = 0;
@@ -3627,7 +3660,8 @@ next_coalesce:;
 
             /* Extract commands from the full accumulated content */
             char cmds[16][1024];
-            int ncmds = text ? ai_extract_commands(text, cmds, 16) : 0;
+            int rejected = 0;
+            int ncmds = text ? ai_extract_commands_ex(text, cmds, 16, &rejected) : 0;
 
             /* Finalize the AI item text.  When commands were found, show
              * only the pre-command portion — the summary/analysis after
@@ -3650,6 +3684,29 @@ next_coalesce:;
             d->stream_ai_item = NULL;
             d->stream_display_start = -1;
             d->stream_phase = 0;
+
+            /* C1: tell both the user and the model when one or more
+             * [EXEC] blocks were dropped for containing control
+             * characters (a newline is the classic way to smuggle a
+             * second, unclassified command past the approval card). */
+            if (rejected > 0) {
+                char status_text[80];
+                snprintf(status_text, sizeof(status_text),
+                    "[%d command(s) rejected: control characters inside "
+                    "an EXEC block]", rejected);
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, status_text);
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+
+                char rej_note[256];
+                snprintf(rej_note, sizeof(rej_note),
+                    "NOTE: %d EXEC block(s) were rejected because they "
+                    "contained control characters (newline, tab, escape). "
+                    "Put exactly one single-line command in each EXEC "
+                    "block.", rejected);
+                EnterCriticalSection(&d->cs);
+                ai_conv_add(&d->conv, AI_ROLE_USER, rej_note);
+                LeaveCriticalSection(&d->cs);
+            }
 
             /* Pending command batches: earlier cards are never touched by
              * a new reply -- each reply that yields commands gets its own
@@ -3715,20 +3772,24 @@ next_coalesce:;
                                 nblocked++;
                         if (nblocked > 0) {
                             char bmsg[2048];
-                            int bp = snprintf(bmsg, sizeof(bmsg),
-                                "NOTE: The following commands were BLOCKED by "
-                                "the user's read-only security policy and were "
-                                "NOT executed:\n");
-                            for (int qi = 0; qi < batch->q.count; qi++) {
-                                if (batch->q.entries[qi].status == APPROVE_BLOCKED)
-                                    bp += snprintf(bmsg + bp,
-                                        sizeof(bmsg) - (size_t)bp,
-                                        "  - %s\n", batch->q.entries[qi].command);
+                            size_t bp = 0;
+                            bmsg[0] = '\0';
+                            if (str_append_fmt(bmsg, sizeof(bmsg), &bp,
+                                    "NOTE: The following commands were BLOCKED by "
+                                    "the user's read-only security policy and were "
+                                    "NOT executed:\n")) {
+                                for (int qi = 0; qi < batch->q.count; qi++) {
+                                    if (batch->q.entries[qi].status == APPROVE_BLOCKED) {
+                                        if (!str_append_fmt(bmsg, sizeof(bmsg), &bp,
+                                                "  - %s\n", batch->q.entries[qi].command))
+                                            break;
+                                    }
+                                }
+                                str_append_fmt(bmsg, sizeof(bmsg), &bp,
+                                    "Do NOT claim these commands were executed. "
+                                    "If the user needs these actions, tell them "
+                                    "to enable 'Permit Write' and try again.");
                             }
-                            snprintf(bmsg + bp, sizeof(bmsg) - (size_t)bp,
-                                "Do NOT claim these commands were executed. "
-                                "If the user needs these actions, tell them "
-                                "to enable 'Permit Write' and try again.");
                             EnterCriticalSection(&d->cs);
                             ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
                             LeaveCriticalSection(&d->cs);

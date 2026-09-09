@@ -3,6 +3,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdarg.h>
 
 char *str_dup(const char *s)
 {
@@ -70,6 +72,32 @@ int str_ends_with(const char *s, const char *suffix)
         return 0;
     }
     return strcmp(s + (slen - suflen), suffix) == 0;
+}
+
+int str_append_fmt(char *buf, size_t cap, size_t *len, const char *fmt, ...)
+{
+    if (!buf || !len || !fmt || cap == 0u) {
+        return 0;
+    }
+    if (*len >= cap) {
+        return 0;  /* already full (or an invalid offset was passed in) */
+    }
+
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf + *len, cap - *len, fmt, ap);
+    va_end(ap);
+
+    if (n < 0 || (size_t)n >= cap - *len) {
+        /* Didn't fit (or an encoding error). vsnprintf may have written a
+         * truncated prefix into buf[*len..]; put back the terminator at
+         * the original length so buf reads exactly as it did before. */
+        buf[*len] = '\0';
+        return 0;
+    }
+
+    *len += (size_t)n;
+    return 1;
 }
 
 /* ---- UTF-8 encoder ---------------------------------------------------- */

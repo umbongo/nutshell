@@ -354,7 +354,14 @@ static void handle_csi(Terminal *term, char final) {
                 }
                 TermRow *cr1 = get_screen_row(term, term->cursor.row);
                 if (cr1) {
-                    for (int c = 0; c <= term->cursor.col; c++) {
+                    /* C4: cursor.col can legitimately equal term->cols
+                     * between characters (deferred auto-wrap, term_put_char
+                     * only wraps on the *next* printable byte) -- clamp the
+                     * erase bound, not the cursor itself, or this walks one
+                     * TermCell past the row allocation. */
+                    int cc = term->cursor.col;
+                    if (cc > term->cols - 1) cc = term->cols - 1;
+                    for (int c = 0; c <= cc; c++) {
                         cr1->cells[c].codepoint = 0;
                         cr1->cells[c].attr = term->current_attr;
                     }
@@ -383,11 +390,18 @@ static void handle_csi(Terminal *term, char final) {
             n = get_param(term, 0, 0);
             TermRow *row = get_screen_row(term, term->cursor.row);
             if (row) {
+                /* C4: clamp the erase bound to the last real column --
+                 * cursor.col can be term->cols between characters (deferred
+                 * auto-wrap). Do not clamp term->cursor itself, or the
+                 * pending wrap that must fire on the next printable char
+                 * would be lost. */
+                int cc = term->cursor.col;
+                if (cc > term->cols - 1) cc = term->cols - 1;
                 int start = 0, end = term->cols;
-                if (n == 0) start = term->cursor.col; // Cursor to end
-                else if (n == 1) end = term->cursor.col + 1; // Start to cursor
+                if (n == 0) start = cc; // Cursor to end
+                else if (n == 1) end = cc + 1; // Start to cursor
                 // n=2 is entire line (0 to cols)
-                
+
                 for (int c = start; c < end; c++) {
                     row->cells[c].codepoint = 0;
                     row->cells[c].attr = term->current_attr;
@@ -458,6 +472,7 @@ static void handle_csi(Terminal *term, char final) {
         }
         case 'L': { /* IL — Insert Lines */
             int il_n = get_param(term, 0, 1);
+            if (il_n > term->rows) il_n = term->rows;  /* H9/L4 */
             if (term->cursor.row >= term->scroll_top &&
                 term->cursor.row <= term->scroll_bot) {
                 term_scroll_down(term, term->cursor.row,
@@ -467,6 +482,7 @@ static void handle_csi(Terminal *term, char final) {
         }
         case 'M': { /* DL — Delete Lines */
             int dl_n = get_param(term, 0, 1);
+            if (dl_n > term->rows) dl_n = term->rows;  /* H9/L4 */
             if (term->cursor.row >= term->scroll_top &&
                 term->cursor.row <= term->scroll_bot) {
                 term_scroll_up(term, term->cursor.row,
@@ -476,16 +492,19 @@ static void handle_csi(Terminal *term, char final) {
         }
         case 'S': { /* SU — Scroll Up */
             int su_n = get_param(term, 0, 1);
+            if (su_n > term->rows) su_n = term->rows;  /* H9/L4 */
             term_scroll_up(term, term->scroll_top, term->scroll_bot, su_n);
             break;
         }
         case 'T': { /* SD — Scroll Down */
             int sd_n = get_param(term, 0, 1);
+            if (sd_n > term->rows) sd_n = term->rows;  /* H9/L4 */
             term_scroll_down(term, term->scroll_top, term->scroll_bot, sd_n);
             break;
         }
         case '@': { /* ICH — Insert Characters */
             int ich_n = get_param(term, 0, 1);
+            if (ich_n > term->cols) ich_n = term->cols;  /* H9/L4 */
             TermRow *ich_row = get_screen_row(term, term->cursor.row);
             if (ich_row) {
                 for (int ic = term->cols - 1; ic >= term->cursor.col + ich_n; ic--)
@@ -501,6 +520,7 @@ static void handle_csi(Terminal *term, char final) {
         }
         case 'P': { /* DCH — Delete Characters */
             int dch_n = get_param(term, 0, 1);
+            if (dch_n > term->cols) dch_n = term->cols;  /* H9/L4 */
             TermRow *dch_row = get_screen_row(term, term->cursor.row);
             if (dch_row) {
                 int dch_end = term->cols - dch_n;
@@ -517,6 +537,7 @@ static void handle_csi(Terminal *term, char final) {
         }
         case 'X': { /* ECH — Erase Characters (cursor stays) */
             int ech_n = get_param(term, 0, 1);
+            if (ech_n > term->cols) ech_n = term->cols;  /* H9/L4 */
             TermRow *ech_row = get_screen_row(term, term->cursor.row);
             if (ech_row) {
                 for (int ec = term->cursor.col;
@@ -642,7 +663,15 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     if (term->csi_param_count > 0 &&
                             term->csi_param_count <= TERM_MAX_CSI_PARAMS) {
                         int *p = &term->csi_params[term->csi_param_count - 1];
-                        *p = (*p * 10) + (c - '0');
+                        /* L4/H9: saturate at 65535 instead of overflowing --
+                         * computed in long so the intermediate can never
+                         * overflow int even starting from the saturated
+                         * value (65535*10+9 fits easily). An unbounded
+                         * digit accumulator here is what let ESC[2147483647@
+                         * turn into a huge negative count downstream. */
+                        long v = (long)(*p) * 10 + (c - '0');
+                        if (v > 65535L) v = 65535L;
+                        *p = (int)v;
                     }
                 } else if (c == ';') {
                     if (term->csi_param_count < TERM_MAX_CSI_PARAMS) {

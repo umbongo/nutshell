@@ -217,6 +217,20 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
   terminal; the integration harness takes the foreground with an Alt tap
   before sending keystrokes, and refuses instead of typing blind if it can't.
 
+- [x] **Security audit fixes: C1, C3, L3, C4, H9, H10, L4 landed (v1.1.10).**
+      See `docs/superpowers/specs/2026-09-09-security-audit.md`'s "Fix
+      status" section for the per-finding writeup. Control characters
+      inside an `[EXEC]` block are now dropped and reported rather than
+      run verbatim (C1); the "blocked commands" and system-prompt tool
+      accumulations use a new `str_append_fmt()` helper instead of
+      unchecked `bp/len += snprintf` (C3/L3); `EL`/`ED` erase bounds and
+      the ICH/DCH/ECH/SU/SD/IL/DL counts are clamped in the VT parser and
+      CSI digits saturate at 65535 instead of overflowing (C4/H9/L4); the
+      scroll-region `assert(n <= 64)` in `term_scroll_up`/`_down` is gone,
+      replaced by a chunked loop (H10). 24 new regression tests, native
+      suite green at 1,828. C2, H1-H8, H11 and the Medium/other Low
+      findings are unchanged -- a separate discussion.
+
 - [ ] Three review findings still open (first noted under "Review findings"
       above, before the design-system work started): the AI-stream thread
       lifetime bugs, the relative config-save path, and the Session Manager

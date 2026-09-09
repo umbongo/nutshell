@@ -156,9 +156,21 @@ int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size);
 
 /* Extract up to max_cmds commands from [EXEC]...[/EXEC] markers.
  * Each command is written into cmds[i] (each of cmd_size bytes).
- * Returns the number of commands found (0 if none). */
+ * Returns the number of commands found (0 if none).
+ *
+ * A block is trimmed of surrounding whitespace/CR/LF, then dropped (not
+ * returned, not sanitised) if what remains still contains a control
+ * character (< 0x20 or 0x7F) -- e.g. an embedded newline that would let
+ * one [EXEC] block smuggle a second, unclassified command. Use
+ * ai_extract_commands_ex() to find out how many blocks were dropped. */
 int ai_extract_commands(const char *response, char cmds[][1024],
                         int max_cmds);
+
+/* Same as ai_extract_commands(), but also reports how many [EXEC] blocks
+ * were dropped for containing a control character after trimming.
+ * *rejected is set to 0 up front (if non-NULL) and incremented per drop. */
+int ai_extract_commands_ex(const char *response, char cmds[][1024],
+                           int max_cmds, int *rejected);
 
 /* Get the API endpoint URL for a provider name.
  * Returns NULL for unknown providers. */
