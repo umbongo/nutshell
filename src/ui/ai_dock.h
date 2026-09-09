@@ -125,4 +125,33 @@ static inline int ai_dock_initial_term_cols(int client_w, int char_w,
     return cols > 0 ? cols : 1;
 }
 
+/* Fit the terminal character grid to a client area. Returns 1 and fills
+ * the rows and cols outputs (each at least 1) when the client area can hold a grid.
+ * Returns 0 and leaves the outputs untouched when it cannot: the window
+ * is iconic (WM_SIZE / GetClientRect report a 0x0 client while minimised)
+ * or the font metrics are not known yet. Callers must then leave the
+ * current grid and the remote PTY alone. Resizing through 1x1 while
+ * minimised is not harmless: the remote shell redraws its prompt one
+ * column wide, every wrapped character scrolls the buffer, and the
+ * smart-scroll anchor in term_scroll() pushes a scrolled-back view up a
+ * line per character -- the view lands a page higher after restore. */
+static inline int ai_dock_terminal_grid(int client_w, int client_h, int tab_h,
+                                        int panel_w, int scrollbar_w,
+                                        int left_margin,
+                                        int char_w, int char_h,
+                                        int *rows, int *cols)
+{
+    if (char_w <= 0 || char_h <= 0) return 0;
+    if (client_w <= 0 || client_h <= 0) return 0;
+    int term_h = client_h - tab_h;
+    if (term_h < 1) term_h = 1;
+    int term_w = ai_dock_terminal_width(client_w, panel_w, scrollbar_w,
+                                        left_margin);
+    int r = term_h / char_h;
+    int c = term_w / char_w;
+    *rows = r > 0 ? r : 1;
+    *cols = c > 0 ? c : 1;
+    return 1;
+}
+
 #endif /* NUTSHELL_AI_DOCK_H */
