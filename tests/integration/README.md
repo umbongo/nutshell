@@ -66,6 +66,16 @@ Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
   the AI cases' `Set-NutshellTerminalFocus`. These need keyboard focus free and
   the desktop unlocked; everything else in the table below does not.
 
+Those three, plus `resize_applies_to_inactive_tab` (whose posted tab click has
+been observed not to take effect with the workstation locked), are marked
+`-NeedsDesktop` on their `Invoke-Case` call. When
+`Test-NutshellDesktopAvailable` reports no usable desktop — `LogonUI.exe` owns
+the input desktop and `GetForegroundWindow()` returns 0 — those cases print
+`[SKIP]` and are left out of the results table, so a locked workstation gives
+an honestly incomplete run instead of four failures about the desktop rather
+than the code. Every other case runs locked, so a `bvt` run on a locked box is
+still a real gate; unlock it to get the full sweep.
+
 ## Prerequisites
 
 - `build\win\nutshell.exe` built from the tree under test (`mingw32-make clean && mingw32-make release`).
@@ -201,23 +211,23 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Get-NutshellThemeColor -Name -Token` | parses `src/core/ui_theme.c`'s per-theme initialisers for one of `bg_primary`, `bg_secondary`, `accent`, `text_main`, `text_dim`, `border`, `terminal_fg`, `terminal_bg`, `success`, `warning`, `danger`, `info`, `link` |
 | `Get-NutshellRegionHash -Path -Region` | MD5 of a proportional region `@{X;Y;W;H}` (each 0..1) of a saved capture — the general form of `cases-terminal.ps1`'s terminal-specific `Get-TerminalAreaHash`; used by `minimise_restore_repaints`, `tabs_open_switch_close` and `cli_no_connect_opens_idle` to compare a specific band (or the whole window) across two captures |
 
-Two things the harness cannot do, documented rather than faked:
+One thing the harness cannot do, documented rather than faked:
 
 - **`Get-NutshellTabCount`** throws — `tabs.c`'s tab strip is a single
   owner-drawn window with no per-tab child HWNDs, no exposed count message, and
   no UI Automation provider, so there's no way to ask it how many tabs exist
   without clicking around and diffing captures.
-- **Tab switching** (`Select-NutshellTab`, and therefore `Close-NutshellTab`,
-  which selects before posting Ctrl+W) still needs a real click
-  (`ClickClient`/`mouse_event`) since the tab strip only responds to
-  `WM_LBUTTONDOWN` hit-testing — no message-based way to activate a tab exists.
-  That means both need the foreground and an unlocked desktop, same as
-  `Send-NutshellKeys`. Closing the tab that's *already* active needs neither,
-  though: `Open-NutshellSecondTab` (Session Manager listbox selection + IDOK) is
-  fully posted and its new tab becomes active on its own, and Ctrl+W (`WM_CHAR`
-  `0x17`) always closes whichever tab is currently active — see
-  `tabs_open_switch_close` (`cases\60-tabs-logging.ps1`), which needs no
-  `Select-NutshellTab` at all.
+
+**Tab switching** (`Select-NutshellTab`, and `Close-NutshellTab`, which selects
+before posting Ctrl+W) *is* posted: `tabs.c`'s `WM_LBUTTONDOWN` handler
+hit-tests the message's own `lParam` and never reads the cursor, so the helper
+posts `WM_LBUTTONDOWN`+`WM_LBUTTONUP` to the `Nutshell_Tabs` child window at the
+tab's computed rect — no foreground, no mouse, works desktop-locked. (It used to
+click for real with `SetCursorPos`/`mouse_event`, which silently landed in
+whatever window was in front when Nutshell was not, and that is exactly how
+`resize_applies_to_inactive_tab` failed once.) The x it clicks assumes
+minimum-width tabs, which every harness tab is — the generated profile is named
+`it`; a long profile name would widen its tab and shift the ones after it.
 
 ## Adding a case
 

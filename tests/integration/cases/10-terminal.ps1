@@ -23,7 +23,7 @@ Invoke-Case "ctrl_c_without_selection_interrupts" @{} {
     Send-NutshellLine -Session $s -Line "echo AFTER_$((1+1))"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "AFTER_2" -TimeoutSec 5) "shell did not return within 5s: Ctrl+C was not delivered as SIGINT"
     "sleep 30 interrupted; prompt returned"
-}
+} -NeedsDesktop   # real Ctrl+C (GetKeyState)
 
 Invoke-Case "log_filename_follows_log_format" @{ log_format = "%Y%m%d-%H%M" } {
     param($s)
@@ -45,7 +45,7 @@ Invoke-Case "paste_without_confirmation" @{ paste_confirm = $false } {
     Send-NutshellKeys -Session $s -Keys "{ENTER}"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "PASTE_OK_42" -TimeoutSec 5) "pasted text never reached the shell"
     "pasted straight through"
-}
+} -NeedsDesktop   # real Ctrl+V (GetKeyState)
 
 Invoke-Case "paste_with_confirmation_shows_dialog" @{ paste_confirm = $true } {
     param($s)
@@ -58,7 +58,7 @@ Invoke-Case "paste_with_confirmation_shows_dialog" @{ paste_confirm = $true } {
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "paste_confirm_dialog.png") -Hwnd ([long]($dlg -split "`t")[0]) | Out-Null
     Send-NutshellKeys -Session $s -Keys "{ESC}" -SettleMs 400
     "dialog shown: " + ($dlg -split "`t")[2]
-}
+} -NeedsDesktop   # real Ctrl+V (GetKeyState)
 
 Invoke-Case "pty_resizes_with_window" @{} {
     param($s)
@@ -152,10 +152,16 @@ Invoke-Case "resize_applies_to_inactive_tab" @{} {
     Assert-True (((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "Session Manager" }).Count -eq 0) "Session Manager still open; Connect failed"
     Set-NutshellWindowSize -Session $s -Width 1600 -Height 1300
     Select-NutshellTab -Session $s -Index 0
+    # Sentinel first: only tab A's session log is being watched ($s.Log was
+    # captured before tab B existed), so if the switch back did not take
+    # effect this line goes to tab B and nothing arrives -- which is a
+    # different fault from "the resize never reached the inactive tab".
+    Send-NutshellLine -Session $s -Line 'echo BACK_ON_TAB_A'
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "BACK_ON_TAB_A" -TimeoutSec 5) "the switch back to tab A did not take effect: typing still reached the other tab"
     Send-NutshellLine -Session $s -Line 'echo A_LINES=$(tput lines)'
     Assert-True (Wait-NutshellLog -Session $s -Pattern "A_LINES=(\d+)" -TimeoutSec 5) "no size report from tab A"
     $a = [int][regex]::Match((Get-NutshellLogText -Session $s), "A_LINES=(\d+)").Groups[1].Value
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "inactive_tab_after_resize.png") | Out-Null
     Assert-True ($a -ge 30) "tab A still has the pre-resize grid: tput lines = $a (expected >= 30 for a 1300px-tall window)"
     "tab A reports $a lines after the resize happened on tab B"
-}
+} -NeedsDesktop   # the posted tab click does not take effect with the workstation locked (observed)

@@ -244,6 +244,9 @@ $script:IDC_LIST_SESSIONS    = 1000
 $script:WM_CHAR            = 0x0102
 $script:WM_KEYDOWN         = 0x0100
 $script:WM_KEYUP           = 0x0101
+$script:WM_LBUTTONDOWN     = 0x0201
+$script:WM_LBUTTONUP       = 0x0202
+$script:MK_LBUTTON         = 0x0001
 $script:WM_SETTEXT         = 0x000C
 $script:WM_GETTEXTLENGTH   = 0x000E
 $script:BM_CLICK           = 0x00F5
@@ -479,6 +482,21 @@ function Send-NutshellKey {
     Start-Sleep -Milliseconds $SettleMs
 }
 
+function Test-NutshellDesktopAvailable {
+    <# Can this desktop take real input at all? False when the workstation is
+       locked -- LogonUI.exe owns the input desktop then, and
+       GetForegroundWindow() reports no foreground window at all (0) from a
+       session desktop that cannot be brought forward.
+
+       Cases that need real input (Send-NutshellKeys' modifier chords) or that
+       have been observed only to work on an unlocked desktop use this through
+       Invoke-Case's -NeedsDesktop switch, which skips them rather than letting
+       them fail for a reason that has nothing to do with the code under test.
+       Everything else in this module is posted and works locked. #>
+    if (Get-Process LogonUI -ErrorAction SilentlyContinue) { return $false }
+    return ([NutshellNative]::GetForegroundWindow() -ne [IntPtr]::Zero)
+}
+
 function Send-NutshellKeys {
     <# SendKeys syntax: ^c = Ctrl+C, ^+c = Ctrl+Shift+C, {PGUP}, {ENTER} ...
        Real synthetic input (WScript.Shell.SendKeys), needed ONLY for the true
@@ -569,15 +587,42 @@ function Open-NutshellSecondTab {
 }
 
 function Select-NutshellTab {
-    <# Click tab N (0-based) in the tab strip, then refocus the terminal. #>
+    <# Activate tab N (0-based) by posting WM_LBUTTONDOWN+WM_LBUTTONUP straight
+       to the tab strip child window (class "Nutshell_Tabs", a direct child of
+       the main window -- window.c's tabs_create(hwnd, ...)). tabs.c's
+       WM_LBUTTONDOWN handler hit-tests the message's own lParam and never
+       calls GetCursorPos, so a posted click selects the tab with no
+       foreground window, no real mouse and no unlocked desktop -- unlike the
+       SetCursorPos/mouse_event click this used to do, which needed the
+       foreground and, when it did not have it, silently landed in whatever
+       window happened to be in front (that is how
+       resize_applies_to_inactive_tab failed: the switch back to tab A never
+       happened and the size command was typed into tab B).
+
+       Geometry mirrors tabs.c exactly: the first tab starts at
+       PAD_BASE + BTN_SIZE_BASE + TAB_START_GAP_BASE (8 + 24 + 12) and each tab
+       is TAB_MIN_W_BASE (100) wide plus a TAB_GAP_BASE (8) gap, every value
+       ns_scale'd to the window's DPI. That assumes minimum-width tabs, which
+       every harness tab is (the generated profile is named "it", far narrower
+       than the 100-px minimum); a long profile name would widen its tab and
+       shift the ones after it. The click lands mid-tab, clear of the status
+       dot, the L (log) toggle and the close glyph, each of which has its own
+       hit zone inside the tab rect. #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int] $Index)
-    # The tab strip is the top SZ_TAB_H (32 px at 96 DPI) of the client area;
-    # tabs start after the "+" button. Client coordinates sidestep the title
-    # and menu bars, whose heights vary with DPI.
-    $scale = [NutshellNative]::GetDpiForWindow($Session.Main) / 96.0
-    $x = [int]((100 + 160 * $Index) * $scale)
-    $y = [int](16 * $scale)
-    [NutshellNative]::ClickClient($Session.Main, $x, $y)
+    $tabs = [NutshellNative]::FindWindowEx($Session.Main, [IntPtr]::Zero, "Nutshell_Tabs", [IntPtr]::Zero)
+    if ($tabs -eq [IntPtr]::Zero) { throw "tab strip (class Nutshell_Tabs) not found under the main window" }
+    $dpi = [int][NutshellNative]::GetDpiForWindow($tabs)
+    if ($dpi -le 0) { $dpi = 96 }
+    $sx = { param($px) [int][math]::Round(($px * $dpi) / 96.0) }
+    $startX = (& $sx 8) + (& $sx 24) + (& $sx 12)     # PAD + [+] button + start gap
+    $tabW   = & $sx 100                                # TAB_MIN_W_BASE
+    $gap    = & $sx 8                                  # TAB_GAP_BASE
+    $x = $startX + $Index * ($tabW + $gap) + [int]($tabW / 2)
+    $rc = [NutshellNative]::ClientSize($tabs)
+    $y = [int]($rc.B / 2)
+    $lp = [IntPtr][int64]((($y -band 0xFFFF) -shl 16) -bor ($x -band 0xFFFF))
+    [NutshellNative]::PostMessage($tabs, $script:WM_LBUTTONDOWN, [IntPtr]$script:MK_LBUTTON, $lp) | Out-Null
+    [NutshellNative]::PostMessage($tabs, $script:WM_LBUTTONUP, [IntPtr]0, $lp) | Out-Null
     Start-Sleep -Milliseconds 700
 }
 
@@ -958,13 +1003,12 @@ function Get-NutshellTabCount {
 }
 
 function Close-NutshellTab {
-    <# Click tab -Index active (Select-NutshellTab -- the tab strip only
-       responds to real clicks, per tabs.c's WM_LBUTTONDOWN-only hit testing,
-       so this still needs the foreground/mouse and does not work
-       desktop-locked), then post Ctrl+W's WM_CHAR (0x17) to close the now-
+    <# Make tab -Index active (Select-NutshellTab, a posted WM_LBUTTONDOWN to
+       the tab strip), then post Ctrl+W's WM_CHAR (0x17) to close the now-
        active tab -- window.c's WM_CHAR handler special-cases 0x17
-       (on_tab_close on the active tab) independent of actual keyboard focus,
-       so that half of the operation IS posted. #>
+       (on_tab_close on the active tab) independent of actual keyboard focus.
+       Both halves are posted, so this needs no foreground and works
+       desktop-locked. #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int] $Index)
     Select-NutshellTab -Session $Session -Index $Index
     [NutshellNative]::PostMessage($Session.Main, $script:WM_CHAR, [IntPtr]0x17, [IntPtr]::Zero) | Out-Null
@@ -1116,4 +1160,4 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Open-NutshellSessionManager, Open-NutshellSettings, Select-NutshellSettingsPage, `
     Get-NutshellTabCount, Close-NutshellTab, Get-NutshellWindowText, Get-NutshellChildWindows, `
     Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion, `
-    Get-NutshellRegionHash
+    Get-NutshellRegionHash, Test-NutshellDesktopAvailable

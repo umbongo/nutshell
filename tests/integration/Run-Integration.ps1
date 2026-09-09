@@ -97,11 +97,23 @@ function Invoke-Case {
        since New-NutshellTestEnv must return before Start-Nutshell runs, a
        case needing a *pre-existing corrupt* file can't use Invoke-Case at all
        (see LAUNCH-3's standalone block in 50-window.ps1) and instead calls
-       New-NutshellTestEnv/Start-Nutshell itself. #>
+       New-NutshellTestEnv/Start-Nutshell itself.
+
+       -NeedsDesktop marks a case that only works on an unlocked, interactive
+       desktop -- the Send-NutshellKeys modifier chords, and the inactive-tab
+       resize case, whose posted tab click has been observed not to take effect
+       with the workstation locked. Those SKIP (nothing added to $results) when
+       Test-NutshellDesktopAvailable says the desktop cannot take real input,
+       rather than failing for a reason that has nothing to do with the code
+       under test. Everything without the switch runs desktop-locked. #>
     param([string] $Name, [hashtable] $Settings, [scriptblock] $Body, [string] $CaseTier = "bvt",
-          [string[]] $ExtraArgs = @(), [switch] $NoConfig)
+          [string[]] $ExtraArgs = @(), [switch] $NoConfig, [switch] $NeedsDesktop)
     if ($ActiveTiers -notcontains $CaseTier) { return }
     if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
+    if ($NeedsDesktop -and -not (Test-NutshellDesktopAvailable)) {
+        Write-Host ("[SKIP] " + $Name + " -- needs an unlocked, interactive desktop; this one is locked or has no foreground window")
+        return
+    }
     Write-Host ("[RUN ] " + $Name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath -Settings $Settings -NoConfig:$NoConfig
     $session = $null
