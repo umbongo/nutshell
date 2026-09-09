@@ -230,32 +230,44 @@ Invoke-Case "resize_range_paints_cleanly" @{} {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
+    # Small -> medium -> as large as this desktop allows -> medium -> small.
+    # The middle and top sizes are fractions of the work area rather than the
+    # old hardcoded 1024x768 / 1920x1080: Set-NutshellWindowSize clamps to the
+    # work area, so on a 1280x720 logon session "1920x1080" and "1024x768"
+    # would both arrive as the same window and the direction assertions would
+    # be comparing sizes the run never actually had. The comparisons below use
+    # the *achieved* client width for the same reason.
+    $wa = Get-NutshellWorkArea
+    $midW = [Math]::Max(640, [int]($wa.Width * 0.7)); $midH = [Math]::Max(400, [int]($wa.Height * 0.7))
     $sizes = @(
-        @{ W = 640;  H = 400  }, @{ W = 1024; H = 768  }, @{ W = 1920; H = 1080 },
-        @{ W = 1024; H = 768  }, @{ W = 640;  H = 400  }
+        @{ W = 640;   H = 400   }, @{ W = $midW;    H = $midH     }, @{ W = $wa.Width; H = $wa.Height },
+        @{ W = $midW; H = $midH }, @{ W = 640;      H = 400       }
     )
     $prevW = $null; $prevCols = $null
+    $steps = New-Object System.Collections.ArrayList
     $i = 0
     foreach ($sz in $sizes) {
         $i++
-        Set-NutshellWindowSize -Session $s -Width $sz.W -Height $sz.H
+        $r = Set-NutshellWindowSize -Session $s -Width $sz.W -Height $sz.H
+        $got = "$($r.ClientWidth)x$($r.ClientHeight)"
+        [void]$steps.Add($got)
         $path = Join-Path $Artifacts "resize_range_step$i.png"
         Save-NutshellScreenshot -Session $s -Path $path | Out-Null
-        Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank at $($sz.W)x$($sz.H) (step $i)"
+        Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank at client $got (step $i)"
         $marker = "RCOLS$i"
         Send-NutshellLine -Session $s -Line "echo ${marker}=`$(tput cols)"
-        Assert-True (Wait-NutshellLog -Session $s -Pattern "$marker=(\d+)" -TimeoutSec 5) "no size report at $($sz.W)x$($sz.H) (step $i)"
+        Assert-True (Wait-NutshellLog -Session $s -Pattern "$marker=(\d+)" -TimeoutSec 5) "no size report at client $got (step $i)"
         $cols = [int][regex]::Match((Get-NutshellLogText -Session $s), "$marker=(\d+)").Groups[1].Value
         if ($null -ne $prevW) {
-            if ($sz.W -gt $prevW) {
-                Assert-True ($cols -ge $prevCols) "window grew ($prevW -> $($sz.W)) but tput cols shrank ($prevCols -> $cols)"
-            } elseif ($sz.W -lt $prevW) {
-                Assert-True ($cols -le $prevCols) "window shrank ($prevW -> $($sz.W)) but tput cols grew ($prevCols -> $cols)"
+            if ($r.ClientWidth -gt $prevW) {
+                Assert-True ($cols -ge $prevCols) "client width grew ($prevW -> $($r.ClientWidth)) but tput cols shrank ($prevCols -> $cols)"
+            } elseif ($r.ClientWidth -lt $prevW) {
+                Assert-True ($cols -le $prevCols) "client width shrank ($prevW -> $($r.ClientWidth)) but tput cols grew ($prevCols -> $cols)"
             }
         }
-        $prevW = $sz.W; $prevCols = $cols
+        $prevW = $r.ClientWidth; $prevCols = $cols
     }
-    "640x400 -> 1024x768 -> 1920x1080 -> 1024x768 -> 640x400, all captures non-blank, cols tracked window width direction"
+    "client sizes " + ($steps -join " -> ") + ", all captures non-blank, cols tracked window width direction"
 }
 
 # ---- WINDOW-1: minimise and restore repaints -------------------------------------
@@ -277,7 +289,9 @@ Invoke-Case "minimise_restore_repaints" @{} {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
-    Set-NutshellWindowSize -Session $s -Width 1200 -Height 800
+    # A large window (clamped to the work area by the helper) -- nothing here
+    # depends on the exact size, only on the same size before and after.
+    Set-NutshellWindowSize -Session $s -Width 1200 -Height 800 | Out-Null
     # Fill the screen completely (well past one page) rather than leaving it
     # mostly blank after a bare `clear`: with only a couple of lines on an
     # otherwise-empty screen, "top of buffer" vs "bottom of buffer" anchoring
@@ -302,8 +316,13 @@ Invoke-Case "minimise_restore_repaints" @{} {
     $after = Join-Path $Artifacts "minimise_after.png"
     Save-NutshellScreenshot -Session $s -Path $after | Out-Null
     # Terminal band only (excludes the tab strip / any cursor-blink timing
-    # difference in the title area) -- same crop Get-TerminalAreaHash uses.
-    $region = @{ X = 0.0; Y = 0.15; W = 0.6; H = 0.8 }
+    # difference in the title area). Where the chrome ends is read off the real
+    # tab-strip window rather than assumed to be 15% down: that fraction is
+    # only right at one window size and one DPI, and the window size is now
+    # whatever the work area allowed.
+    $top = 0.15
+    try { $st = Get-NutshellTabStripRegion -Session $s; $top = [Math]::Min(0.5, $st.Y + $st.H + 0.01) } catch { }
+    $region = @{ X = 0.0; Y = $top; W = 0.6; H = (0.98 - $top) }
     $hb = Get-NutshellRegionHash -Path $before -Region $region
     $ha = Get-NutshellRegionHash -Path $after  -Region $region
     $known = Invoke-KnownBugBlock -Bug "WM_SIZE has no SIZE_MINIMIZED guard: minimise/restore scrolls a scrolled-back view up one page" {
@@ -317,7 +336,12 @@ Invoke-Case "fullscreen_toggle_changes_pty" @{} {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
-    Set-NutshellWindowSize -Session $s -Width 900 -Height 600
+    # Deliberately narrower than the screen, expressed as a fraction of the
+    # work area rather than a flat 900px: fullscreen goes to the whole monitor,
+    # so the baseline only has room to grow if it is smaller than the monitor,
+    # which "900" is not guaranteed to be on an arbitrary desktop.
+    $wa = Get-NutshellWorkArea
+    $base = Set-NutshellWindowSize -Session $s -Width ([int]($wa.Width * 0.7)) -Height ([int]($wa.Height * 0.7))
     Send-NutshellLine -Session $s -Line 'echo FS_COLS_0=$(tput cols)'
     Assert-True (Wait-NutshellLog -Session $s -Pattern "FS_COLS_0=(\d+)" -TimeoutSec 5) "no baseline size report"
     $cols0 = [int][regex]::Match((Get-NutshellLogText -Session $s), "FS_COLS_0=(\d+)").Groups[1].Value
@@ -328,7 +352,7 @@ Invoke-Case "fullscreen_toggle_changes_pty" @{} {
     Assert-True (Wait-NutshellLog -Session $s -Pattern "FS_COLS_1=(\d+)" -TimeoutSec 5) "no size report after entering fullscreen"
     $cols1 = [int][regex]::Match((Get-NutshellLogText -Session $s), "FS_COLS_1=(\d+)").Groups[1].Value
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "fullscreen_entered.png") | Out-Null
-    Assert-True ($cols1 -gt $cols0) "fullscreen did not grow tput cols: $cols0 -> $cols1 (from a 900px-wide window; expected the screen to be wider)"
+    Assert-True ($cols1 -gt $cols0) "fullscreen did not grow tput cols: $cols0 -> $cols1 (from a $($base.ClientWidth)px-wide client area on a $($wa.Width)px-wide work area; expected the screen to be wider)"
 
     [NutshellNative]::PostMessage($s.Main, $WM_COMMAND, [IntPtr]$IDM_VIEW_FULLSCREEN, [IntPtr]::Zero) | Out-Null
     Start-Sleep -Milliseconds 900
@@ -337,7 +361,7 @@ Invoke-Case "fullscreen_toggle_changes_pty" @{} {
     $cols2 = [int][regex]::Match((Get-NutshellLogText -Session $s), "FS_COLS_2=(\d+)").Groups[1].Value
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "fullscreen_exited.png") | Out-Null
     # Back to the *original* width, not merely smaller than fullscreen: the
-    # window returns to the same 900x600 it had before, so the PTY must report
+    # window returns to the same size it had before, so the PTY must report
     # the same column count it did then (README's "returns to its original
     # value").
     Assert-True ($cols2 -eq $cols0) "leaving fullscreen did not restore tput cols to its original value: $cols0 -> $cols1 (fullscreen) -> $cols2"

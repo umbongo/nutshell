@@ -62,6 +62,17 @@ public class NutshellNative {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll", EntryPoint="SystemParametersInfoW")] public static extern bool SystemParametersInfo(uint action, uint p, ref RECT r, uint w);
+
+    /* Primary monitor's work area (the screen minus the taskbar), physical px.
+     * SPI_GETWORKAREA = 0x0030. Set-NutshellWindowSize clamps to this so no
+     * case depends on how big the runner's logon session happens to be. */
+    public static RECT WorkArea() {
+        RECT r; r.L = 0; r.T = 0; r.R = 0; r.B = 0;
+        if (!SystemParametersInfo(0x0030, 0, ref r, 0)) { r.L = 0; r.T = 0; r.R = 1024; r.B = 768; }
+        return r;
+    }
+
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint f);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
     [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr h);
@@ -786,10 +797,96 @@ function Wait-NutshellShell {
     throw "no shell prompt within ${TimeoutSec}s (still connecting, or auth failed)"
 }
 
+function Get-NutshellWorkArea {
+    <# The primary monitor's work area (screen minus taskbar) in physical
+       pixels, as @{X;Y;Width;Height}. Cases that want "as big as this desktop
+       allows" or "clearly smaller than the screen" must derive the size from
+       this rather than hardcode one: the BVT runner's logon session is not a
+       fixed size (it has been seen at 1280x720 and larger), and a case that
+       assumes a desktop is exactly the kind of desktop dependency
+       CLAUDE.md forbids. #>
+    $r = [NutshellNative]::WorkArea()
+    return [pscustomobject]@{ X = $r.L; Y = $r.T; Width = ($r.R - $r.L); Height = ($r.B - $r.T) }
+}
+
 function Set-NutshellWindowSize {
+    <# Move and size the main window, clamped to the primary work area, and
+       return what was actually achieved.
+
+       -Width/-Height are a *request*. They are clamped to the work area
+       (Get-NutshellWorkArea) and the origin is pulled back so the whole window
+       stays on-screen, because a window bigger than the desktop is not a size
+       any case can reason about: Windows' default WM_GETMINMAXINFO max-track
+       size caps a user-visible resize at roughly the screen, the terminal grid
+       follows whatever the window ends up being, and PrintWindow happily
+       captures off-screen chrome, so an over-large request silently produces a
+       grid nobody asked for. The app's own minimum-size handling can also give
+       back *more* than was asked for.
+
+       Hence the return value, which cases must reason from rather than from
+       what they requested:
+
+         Requested{Width,Height}  what the caller asked for
+         Width/Height             the (clamped) outer size that was requested of Windows
+         X/Y                      the (adjusted) top-left it was moved to
+         Client{Width,Height}     GetClientRect after the move -- the real,
+                                  achieved client area the terminal grid is
+                                  computed from
+         Clamped                  $true if the request did not fit the work area
+
+       Assertions about rows/columns/pixel positions belong on Client* or on a
+       comparison between two achieved sizes, never on the requested numbers. #>
     param([Parameter(Mandatory)] $Session, [int] $X = 40, [int] $Y = 40, [Parameter(Mandatory)] [int] $Width, [Parameter(Mandatory)] [int] $Height)
-    [NutshellNative]::SetWindowPos($Session.Main, [IntPtr]::Zero, $X, $Y, $Width, $Height, 0x0004) | Out-Null
+    $wa = Get-NutshellWorkArea
+    $w = [Math]::Min($Width,  $wa.Width)
+    $h = [Math]::Min($Height, $wa.Height)
+    $x = $X; $y = $Y
+    if ($x -lt $wa.X) { $x = $wa.X }
+    if ($y -lt $wa.Y) { $y = $wa.Y }
+    if (($x + $w) -gt ($wa.X + $wa.Width))  { $x = $wa.X + $wa.Width  - $w }
+    if (($y + $h) -gt ($wa.Y + $wa.Height)) { $y = $wa.Y + $wa.Height - $h }
+    [NutshellNative]::SetWindowPos($Session.Main, [IntPtr]::Zero, $x, $y, $w, $h, 0x0004) | Out-Null
     Start-Sleep -Milliseconds 600
+    $c = [NutshellNative]::ClientSize($Session.Main)
+    return [pscustomobject]@{
+        RequestedWidth = $Width; RequestedHeight = $Height
+        Width = $w; Height = $h; X = $x; Y = $y
+        ClientWidth = ($c.R - $c.L); ClientHeight = ($c.B - $c.T)
+        Clamped = (($w -ne $Width) -or ($h -ne $Height))
+    }
+}
+
+function Get-NutshellTabStripRegion {
+    <# The tab strip's own rectangle, expressed as the proportional region
+       (@{X;Y;W;H}, each 0..1) it occupies inside a Save-NutshellScreenshot
+       capture of the main window -- ready to hand to Get-NutshellRegionHash or
+       Find-NutshellColorInRegion.
+
+       Derived from the real "Nutshell_Tabs" child window (window.c's
+       tabs_create()) via GetWindowRect, not from a guessed proportion of the
+       window: the strip sits below a title bar and menu bar whose heights
+       scale with the monitor's DPI, so a band like "10%-22% down" is only
+       right at one window size *and* one DPI. On this dev box at 288 DPI the
+       strip is nowhere near that band, which is why the hardcoded band stopped
+       finding the status dot.
+
+       -Pad grows the band by that fraction of the capture in every direction
+       (a couple of percent absorbs the drop shadow / rounded-corner blend at
+       the strip's edges). #>
+    param([Parameter(Mandatory)] $Session, [double] $Pad = 0.0)
+    $tabs = [NutshellNative]::FindWindowEx($Session.Main, [IntPtr]::Zero, "Nutshell_Tabs", [IntPtr]::Zero)
+    if ($tabs -eq [IntPtr]::Zero) { throw "tab strip (class Nutshell_Tabs) not found under the main window" }
+    $wr = New-Object NutshellNative+RECT
+    $tr = New-Object NutshellNative+RECT
+    [NutshellNative]::GetWindowRect($Session.Main, [ref]$wr) | Out-Null
+    [NutshellNative]::GetWindowRect($tabs, [ref]$tr) | Out-Null
+    $ww = $wr.R - $wr.L; $wh = $wr.B - $wr.T
+    if ($ww -le 0 -or $wh -le 0) { throw "main window has no size" }
+    $x = [Math]::Max(0.0, (($tr.L - $wr.L) / [double]$ww) - $Pad)
+    $y = [Math]::Max(0.0, (($tr.T - $wr.T) / [double]$wh) - $Pad)
+    $w = [Math]::Min(1.0 - $x, (($tr.R - $tr.L) / [double]$ww) + 2 * $Pad)
+    $h = [Math]::Min(1.0 - $y, (($tr.B - $tr.T) / [double]$wh) + 2 * $Pad)
+    return @{ X = $x; Y = $y; W = $w; H = $h }
 }
 
 function Save-NutshellScreenshot {
@@ -1197,7 +1294,8 @@ function Get-NutshellExeVersion {
 
 Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell, Get-NutshellWindows, `
     Send-NutshellCommand, Start-NutshellLogging, Send-NutshellChord, Send-NutshellText, Send-NutshellKey, Send-NutshellLine, `
-    Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Save-NutshellScreenshot, `
+    Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Get-NutshellWorkArea, `
+    Get-NutshellTabStripRegion, Save-NutshellScreenshot, `
     Open-NutshellSecondTab, Select-NutshellTab, `
     Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiAutoApprove, Set-NutshellTerminalFocus, `
     Wait-NutshellAiSendIdle, `

@@ -143,7 +143,7 @@ given, `-Only`'s list).
 | `pty_resizes_with_window` | shrinking the window shrinks `tput lines`/`tput cols` |
 | `page_up_scrolls_history` | evidence screenshots before/after Page Up |
 | `terminal_holds_position_while_output_arrives` | a view scrolled back with Page Up stays on the same lines while background output arrives; Enter returns to the live view (smart scrolling) |
-| `resize_applies_to_inactive_tab` | a tab resized while in the background reports the new `tput lines` when activated |
+| `resize_applies_to_inactive_tab` | a tab resized while in the background comes back with the same grid as the tab that was in front, and a bigger one than it had before the resize |
 | `ai_panel_docks_with_key` | View › AI Assist docks the panel without a dialog |
 | `ai_runs_safe_command_with_auto_approve` | a prompted `echo` runs in the terminal via `[EXEC]` + Auto Approve |
 | `ai_commands_run_one_at_a_time` | two `[EXEC]` blocks (`sleep 6 && echo FIRST_DONE`, then `echo SECOND_DONE`) run in order: the second command's echoed text only reaches the log after `FIRST_DONE`'s output, proving commands are gated on the shell prompt rather than burst-sent |
@@ -213,6 +213,21 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Get-NutshellPixel -Path -X -Y` / `Test-NutshellPixelNear -Path -X -Y -Rgb -Tolerance` | read/compare a pixel in a saved capture |
 | `Get-NutshellThemeColor -Name -Token` | parses `src/core/ui_theme.c`'s per-theme initialisers for one of `bg_primary`, `bg_secondary`, `accent`, `text_main`, `text_dim`, `border`, `terminal_fg`, `terminal_bg`, `success`, `warning`, `danger`, `info`, `link` |
 | `Get-NutshellRegionHash -Path -Region` | MD5 of a proportional region `@{X;Y;W;H}` (each 0..1) of a saved capture — the general form of `cases-terminal.ps1`'s terminal-specific `Get-TerminalAreaHash`; used by `minimise_restore_repaints`, `tabs_open_switch_close` and `cli_no_connect_opens_idle` to compare a specific band (or the whole window) across two captures |
+
+**Window geometry is never assumed.** `Set-NutshellWindowSize` treats its
+`-Width`/`-Height` as a *request*: it clamps them to the primary work area
+(`Get-NutshellWorkArea`), keeps the window on-screen, and returns what was
+actually achieved — `Width`/`Height`/`X`/`Y`, the real `ClientWidth`/
+`ClientHeight` from `GetClientRect`, and `Clamped`. Cases must reason from that
+return value (or from a relative comparison between two achieved sizes), never
+from the numbers they asked for: the runner's logon session is not a fixed
+size, and a window bigger than the desktop is not a size anything can reason
+about. The same goes for pixel bands — anything scanning or hashing the tab
+strip takes its rectangle from `Get-NutshellTabStripRegion`, which reads the
+real `Nutshell_Tabs` child window, because the chrome above the strip also
+scales with the monitor's DPI (this dev box's session runs at 288 DPI). A case
+that hardcodes a size, a row count or a proportional band is a desktop
+dependency in disguise and will fail the moment the runner's session changes.
 
 One thing the harness cannot do, documented rather than faked:
 
