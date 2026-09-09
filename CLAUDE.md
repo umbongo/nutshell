@@ -11,6 +11,8 @@
 
 The patch number never goes past 99: after `1.0.99` comes `1.1.0` (`1,1,0,0`), not `1.0.100`.
 
+CI enforces this: the `Version bump` check (`.github/scripts/check-version.sh`) fails any pull request that touches `src/`, the `Makefile` or `nutshell.rc` without raising `APP_VERSION`, or that leaves the three version strings disagreeing.
+
 ## Build Commands
 
 - **Always `make clean && make release`** — never `make release` alone.
@@ -152,9 +154,12 @@ the key-gated cases (they cost model credits), `-Tier nightly` the slow ones.
 status check (`.github/workflows/bvt.yml`, self-hosted runner labelled
 `nutshell-bvt` on the dev box) has passed. Work on a short-lived branch,
 push it, open the PR, wait for green, merge. Never push to `main` directly;
-never merge a red BVT. `tests/integration/Protect-Main.ps1` applies the rule
-and `tests/integration/Install-BvtRunner.ps1` registers the runner (both need
-`gh auth login` by a repository administrator).
+never merge a red BVT. The `Version bump` check
+(`.github/workflows/checks.yml`) is required too, and auto-merge is enabled,
+so `gh pr merge N --merge --auto` queues the merge for the moment both checks
+go green and deletes the branch afterwards. `tests/integration/Protect-Main.ps1`
+applies the rule and `tests/integration/Install-BvtRunner.ps1` registers the
+runner (both need `gh auth login` by a repository administrator).
 
 ## Terminal Buffer
 
