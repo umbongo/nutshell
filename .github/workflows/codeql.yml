@@ -19,6 +19,13 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # The hosted image bakes in third-party apt lists this build has no
+          # use for, and Google Chrome's intermittently serves a Packages.gz
+          # whose hash does not match its Release file. apt then exits 100 and
+          # the whole analysis fails on a repository we never read from. Drop
+          # those lists before updating rather than ignoring apt's exit code,
+          # which would also hide a real failure to fetch libssl-dev.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/microsoft-prod.list
           sudo apt-get update
           sudo apt-get install -y libssl-dev
 
