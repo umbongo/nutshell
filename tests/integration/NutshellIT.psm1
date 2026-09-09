@@ -40,6 +40,7 @@ public class NutshellNative {
     [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendMsgStr(IntPtr h, uint m, IntPtr w, string l);
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, int dx, int dy, uint d, IntPtr e);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
 
     /* Left-click at an offset from the window's top-left corner (physical px). */
@@ -214,17 +215,31 @@ function Start-NutshellLogging {
 function Send-NutshellKeys {
     <# SendKeys syntax: ^c = Ctrl+C, ^+c = Ctrl+Shift+C, {PGUP}, {ENTER} ... #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Keys, [int] $SettleMs = 300)
-    [NutshellNative]::SetForegroundWindow($Session.Main) | Out-Null
-    Start-Sleep -Milliseconds 150
-    # SendKeys types into whatever window is in front. Refuse unless that is
-    # a window of the Nutshell process under test: a locked desktop reports no
-    # foreground window at all, and a person using the machine can hold the
-    # foreground (Windows then ignores SetForegroundWindow from a background
-    # process). Typing blind would land keystrokes in someone else's window.
-    $fg = [NutshellNative]::GetForegroundWindow()
-    $fgPid = [uint32]0
-    if ($fg -ne [IntPtr]::Zero) { [NutshellNative]::GetWindowThreadProcessId($fg, [ref]$fgPid) | Out-Null }
-    if ($fg -eq [IntPtr]::Zero -or [int]$fgPid -ne $Session.Process.Id) {
+    # SendKeys types into whatever window is in front, so Nutshell must own the
+    # foreground first. Windows only lets a process take the foreground when it
+    # recently received input, and this harness usually has not (it has been
+    # sleeping, waiting for a shell or an AI reply), so a bare
+    # SetForegroundWindow is silently ignored once someone else has the focus.
+    # The standard workaround: tap Alt (keybd_event, no window receives a
+    # character from it) so this process counts as the last input source, then
+    # ask again. Try a few times, then refuse rather than type blind -- a locked
+    # desktop reports no foreground window at all, and a person using the
+    # machine may legitimately hold the foreground; keystrokes must never land
+    # in someone else's window.
+    $ok = $false
+    for ($try = 0; $try -lt 4 -and -not $ok; $try++) {
+        if ($try -gt 0) {
+            [NutshellNative]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)        # Alt down
+            [NutshellNative]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)        # Alt up (KEYEVENTF_KEYUP)
+        }
+        [NutshellNative]::SetForegroundWindow($Session.Main) | Out-Null
+        Start-Sleep -Milliseconds 150
+        $fg = [NutshellNative]::GetForegroundWindow()
+        $fgPid = [uint32]0
+        if ($fg -ne [IntPtr]::Zero) { [NutshellNative]::GetWindowThreadProcessId($fg, [ref]$fgPid) | Out-Null }
+        $ok = ($fg -ne [IntPtr]::Zero -and [int]$fgPid -eq $Session.Process.Id)
+    }
+    if (-not $ok) {
         throw "Nutshell is not the foreground window (desktop locked, or another app holds the foreground); refusing to send keys"
     }
     $ws = New-Object -ComObject WScript.Shell
