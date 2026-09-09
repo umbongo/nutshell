@@ -1,0 +1,71 @@
+name: Release
+
+# Cuts a GitHub release from a v* tag. Runs on the self-hosted Windows runner
+# because that is the only machine with the MSYS2 / mingw64 toolchain.
+#
+#   git tag v1.2.3 && git push origin v1.2.3
+#
+# The tag must match APP_VERSION in src/ui/resource.h, or the job fails before
+# publishing anything. workflow_dispatch builds the same way but only uploads
+# the exe as a workflow artifact -- it publishes no release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: [self-hosted, windows, nutshell-bvt]
+    timeout-minutes: 20
+    defaults:
+      run:
+        # Windows PowerShell 5.1 -- the runner has no pwsh. Same spelled-out
+        # invocation as bvt.yml (see the comment there): the runner process
+        # inherits a Restricted execution policy, and the built-in `powershell`
+        # shell cannot survive that.
+        shell: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; . '{0}'; if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Toolchain on PATH
+        run: |
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "C:\msys64\usr\bin"     | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Release build
+        run: |
+          mingw32-make clean
+          mingw32-make release
+
+      - name: Verify version matches the tag
+        if: github.event_name == 'push'
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $expected = $tag -replace '^v', ''
+          $line = Select-String -Path "src\ui\resource.h" -Pattern '#define\s+APP_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"' | Select-Object -First 1
+          if (-not $line) { throw "No APP_VERSION in src\ui\resource.h" }
+          $declared = $line.Matches[0].Groups[1].Value
+          $exe = (Get-Item "build\win\nutshell.exe").VersionInfo.ProductVersion
+          Write-Host "tag=$tag  resource.h=$declared  exe=$exe"
+          if ($declared -ne $expected) { throw "Tag $tag does not match APP_VERSION $declared in src\ui\resource.h" }
+          if ($exe -notlike "$expected*") { throw "Built exe reports version '$exe', expected $expected" }
+
+      - name: Publish release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" "build\win\nutshell.exe" --title "${{ github.ref_name }}" --generate-notes
+
+      - name: Upload exe (manual run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nutshell-exe
+          path: build/win/nutshell.exe
+          if-no-files-found: error
+          retention-days: 14

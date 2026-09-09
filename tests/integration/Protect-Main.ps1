@@ -3,9 +3,10 @@
 # use rulesets, which this one does).
 #
 # The ruleset makes main accept changes only through a pull request whose
-# "BVT" status check (the job in .github/workflows/bvt.yml) has succeeded on
-# the pull request's latest commit, with the branch up to date with main so
-# the check ran against what will actually land. Force pushes and deletion of
+# required status checks -- "BVT" (the job in .github/workflows/bvt.yml) and
+# "Version bump" (the job in .github/workflows/checks.yml) -- have succeeded
+# on the pull request's latest commit, with the branch up to date with main so
+# the checks ran against what will actually land. Force pushes and deletion of
 # main are blocked. No reviewer approval is required (a one-person project);
 # raise required_approving_review_count if that changes. No bypass actors are
 # configured, so the rule binds administrators too.
@@ -18,7 +19,7 @@
 param(
     [string] $Repo = "umbongo/nutshell",
     [string] $Branch = "main",
-    [string] $CheckName = "BVT",
+    [string[]] $CheckNames = @("BVT", "Version bump"),
     [string] $RulesetName = "main: pull requests with green BVT",
     [switch] $Show,
     [switch] $Remove
@@ -61,7 +62,7 @@ $body = @{
             required_review_thread_resolution = $false } },
         @{ type = "required_status_checks"; parameters = @{
             strict_required_status_checks_policy = $true
-            required_status_checks = @(@{ context = $CheckName }) } }
+            required_status_checks = @($CheckNames | ForEach-Object { @{ context = $_ } }) } }
     )
 } | ConvertTo-Json -Depth 8
 
@@ -79,4 +80,4 @@ try {
     }
 } finally { Remove-Item $tmp -ErrorAction SilentlyContinue }
 
-Write-Host "main: pull requests only, '$CheckName' must pass on the latest commit, branch up to date, no force pushes, no deletion."
+Write-Host "main: pull requests only, $(($CheckNames | ForEach-Object { "'$_'" }) -join ' and ') must pass on the latest commit, branch up to date, no force pushes, no deletion."
