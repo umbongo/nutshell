@@ -42,10 +42,21 @@ Write tests before implementation code. Include corner cases, positive and negat
 
 ## Software Development Rules for Claude
 
-- **Planning, architecture, and troubleshooting**: use Opus.
-- **Implementation**: use Sonnet sub-agents.
-- **Context discipline**: only preserve sub-agent results and key learnings in the Opus context — discard intermediate details. The goal is to keep the Opus context small and efficient.
-- Once implementation is complete, have Opus review Sonnet's work.
+- **Opus orchestrates each work package.** One Opus agent owns the package
+  end to end: it decides which model does each sub-task — Sonnet or Haiku
+  for mechanical implementation, Opus itself for review and the tricky
+  parts — spawns those agents with narrow briefs (the files and cases they
+  touch, not the whole tree; agent cost is driven by what they read and
+  re-run, not by the model), reviews their diffs, and opens the pull request.
+- **Escalation**: Opus hands a problem to Fable 5.1 (the main session) only
+  when it cannot work it out or wants a peer consult, and says so explicitly
+  in its report.
+- **Fable checks Opus's work**: the main session reviews the orchestrator's
+  deliverable at pull-request level before it merges. Fable is not spent on
+  mechanical implementation.
+- **Context discipline**: only preserve sub-agent results and key learnings in
+  the main context — discard intermediate details, and never poll a running
+  agent in a loop; its completion notification is the signal.
 
 ## Config Header
 
