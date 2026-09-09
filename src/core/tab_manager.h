@@ -36,7 +36,14 @@ typedef struct {
 void      tabmgr_init        (TabManager *m);
 /* Returns new tab index, or -1 if at capacity (TABS_MAX). */
 int       tabmgr_add         (TabManager *m, const char *title, void *user_data);
-void      tabmgr_remove      (TabManager *m, int index);
+/* Remove the tab at index.  active_index keeps pointing at the same tab when
+ * a different one is closed (it shifts down when a tab to its left goes).
+ * Returns 1 when the closed tab *was* the active one and another tab has
+ * taken its place — the caller must then treat that survivor as newly
+ * selected (the Win32 strip fires on_select so window.c reattaches its
+ * active session).  Returns 0 otherwise: a non-active tab was closed, no tab
+ * remains, or index was invalid. */
+int       tabmgr_remove      (TabManager *m, int index);
 void      tabmgr_set_active  (TabManager *m, int index);
 int       tabmgr_get_active  (const TabManager *m);
 void     *tabmgr_get_user_data(const TabManager *m, int index);

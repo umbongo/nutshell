@@ -55,20 +55,14 @@ function Find-NutshellColorInRegion {
 # hash changing when the second tab opens, and "the other tab is active" via
 # a marker landing in tab A's already-running log after the close.
 #
-# KNOWN PRODUCT BUG (2026-09-09 BVT sweep): the two post-close checks fail
-# reproducibly -- see the report. After Ctrl+W closes tab B, the content pane
-# shows the idle/no-session placeholder (the acorn watermark) instead of tab
-# A's terminal, the tab strip still shows tab A as connected (green dot), but
-# posted keystrokes/marker text no longer reach any shell at all (confirmed
-# directly: Send-NutshellLine after the close never shows up in the log, nor
-# does even a follow-up window resize bring tab A's content back -- ruling
-# out a stale-paint timing issue). That looks like on_tab_close (window.c)
-# not reattaching the surviving tab as the active session on this path. The
-# fix belongs in src/ and lands in its own change; until then those two checks
-# run inside Invoke-KnownBugBlock -- they still execute and are still
-# reported, they just do not fail the tier. Everything up to and including
-# the close (opening tab B, the strip changing, the capture being non-blank)
-# is asserted normally.
+# This case found a real product bug in the 2026-09-09 BVT sweep: after Ctrl+W
+# closed tab B, the content pane showed the idle/no-session placeholder (the
+# acorn watermark) instead of tab A's terminal, the tab strip still showed tab
+# A as connected (green dot), but posted keystrokes reached no shell at all --
+# not a stale-paint timing issue, since a follow-up resize did not bring tab
+# A's content back either. tabs_remove never told window.c that a survivor had
+# taken over the active slot, so on_tab_close left g_active_session NULL.
+# Fixed in v1.1.13; every assertion here now runs normally.
 Invoke-Case "tabs_open_switch_close" @{} {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null   # tab A's log -- stays $s.Log throughout
@@ -104,14 +98,19 @@ Invoke-Case "tabs_open_switch_close" @{} {
 
     # "Back to one tab" literally: the strip must hash the same as it did with
     # only tab A open, not merely be non-blank (which any strip at all passes).
-    $known = Invoke-KnownBugBlock -Bug "on_tab_close does not reattach the surviving tab: Ctrl+W leaves tab A blank and unresponsive" {
-        Assert-True ((Get-NutshellRegionHash -Path $afterClose -Region $stripRegion) -eq (Get-NutshellRegionHash -Path $before -Region $stripRegion)) `
-            "tab strip after closing tab B does not match the one-tab strip from before it was opened"
-        Send-NutshellLine -Session $s -Line "echo TAB_A_STILL_ACTIVE_AFTER_CLOSE"
-        Assert-True (Wait-NutshellLog -Session $s -Pattern "TAB_A_STILL_ACTIVE_AFTER_CLOSE" -TimeoutSec 10) `
-            "marker typed after closing tab B never reached tab A's log -- tab A is not the active tab"
-    }
-    "opened tab B (posted, no click), strip changed, Ctrl+W closed it, capture non-blank; $known"
+    Assert-True ((Get-NutshellRegionHash -Path $afterClose -Region $stripRegion) -eq (Get-NutshellRegionHash -Path $before -Region $stripRegion)) `
+        "tab strip after closing tab B does not match the one-tab strip from before it was opened"
+    # And tab A must be *live* again, not just drawn as active: the survivor
+    # has to receive keyboard input and its terminal must be the one shown.
+    # (Regression guard for the tab-close bug this case found: tabs_remove
+    # never fired on_select for the survivor, so g_active_session stayed NULL
+    # -- green dot in the strip, idle placeholder in the pane, keystrokes
+    # dropped. Fixed by tabmgr_remove reporting the reselect; see
+    # tests/test_tabs.c's tabmgr_remove_* cases.)
+    Send-NutshellLine -Session $s -Line "echo TAB_A_STILL_ACTIVE_AFTER_CLOSE"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "TAB_A_STILL_ACTIVE_AFTER_CLOSE" -TimeoutSec 10) `
+        "marker typed after closing tab B never reached tab A's log -- tab A is not the active tab"
+    "opened tab B (posted, no click), strip changed, Ctrl+W closed it, strip back to one tab, tab A still receives input"
 }
 
 # ---- TABS-2: status dot colours ---------------------------------------------------

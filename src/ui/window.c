@@ -361,6 +361,9 @@ static void on_tab_close(int index, void *user_data) {
         ai_chat_notify_session_closed(g_hwndAiChat, &s->ai_state);
 
     free_session(s);
+    /* If s was the active tab, tabs_remove fires on_tab_select for the
+     * neighbour that takes over, which re-points g_active_session at it and
+     * repaints its terminal.  Closing a non-active tab leaves it untouched. */
     tabs_remove(g_hwndTabs, index);
 
     /* Auto-hide AI panel when no active session remains */
@@ -2807,7 +2810,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (g_active_session && g_active_session->term) {
                 char c = (char)wParam;
                 if (c == 0x17) { /* Ctrl+W */
-                     int idx = tabs_get_active(g_hwndTabs);
+                     /* Close the tab that owns g_active_session — the same
+                      * pair the ✕ button hands on_tab_close — rather than
+                      * pairing the strip's active index with our session
+                      * pointer and trusting they still agree. */
+                     int idx = tabs_find(g_hwndTabs, g_active_session);
                      if (idx >= 0) on_tab_close(idx, g_active_session);
                      return 0;
                 }
