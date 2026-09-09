@@ -1,5 +1,12 @@
 # AI Chat Markdown — Table Detection + User Toggle (Design Spec)
 
+**Superseded** by the actual v1.1.4 table implementation (`src/core/md_table.c`,
+real bordered tables via `md_render_table_block()`, not the monospace-block
+approach proposed here) — see the "Landed since v1.0.96" list in
+`2026-09-06-ui-redesign-notes.md`. The render toggle (Settings > AI Assistant
+> Behaviour > "Render AI markdown") shipped earlier and independently of this
+spec. Kept for history below.
+
 **Status:** Draft, 2026-04-28
 
 ## Background

@@ -1,20 +1,18 @@
 # UI Redesign — Working Notes (checkpoint)
 
-**Status:** sub-project 1 (design-system foundation) **and** sub-project 2
-(AI Assist panel) are both **implemented and done**:
-- Sub-project 1: spec `2026-09-07-design-system-foundation-design.md`, plan
-  `../plans/2026-09-07-design-system-foundation.md` (10 of 10 tasks landed).
-- Sub-project 2: spec `2026-09-07-ai-assist-panel-design.md`, plan
-  `../plans/2026-09-07-ai-assist-panel.md` (5 of 5 tasks landed, v1.0.96).
+**Status:** sub-projects 1 (design-system foundation) and 2 (AI Assist panel)
+landed at v1.0.92/v1.0.96 (see "Landed since v1.0.96" below for what's
+shipped since — approval-card fixes, prompt-gated dispatch, four-level auto
+approve, markdown tables, role colour, smart scrolling, and pending command
+batches). Native suite: **1,804 tests**, 0 failures. Integration suite
+(`tests/integration/Run-Integration.ps1`): 17 cases (9 core + 5 AI +
+`ui_gallery` + `approval_card_run_selected_settles` +
+`ai_panel_opens_without_key`); `ui_gallery` now captures 10 `--ui-demo`
+states x 4 themes = 40 images. Next action is sub-project 3 (main window
+chrome: single toolbar replacing the menu bar, tab strip, status). Resume
+from "Todo" below.
 
-Native Windows build, unit suite (1,699, up from 1,539 at sub-project 1's
-plan time) and the tompi integration suite (`ui_gallery` now 9 states x 4
-themes = 36 captures, plus the new keystroke-free `ai_panel_opens_without_key`
-case) are all green. Next action is sub-project 3 (main window chrome:
-single toolbar replacing the menu bar, tab strip, status). Resume from
-"Todo" below.
-
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.0.96.
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.1.9.
 
 ## Decisions so far
 
@@ -189,257 +187,42 @@ op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
   - Thomas to review the gallery (all 36 captures, not just the four sampled above)
     before sub-project 3 starts.
 
-- [x] **Two approval-card bugs fixed (v1.0.97).** Crash: clicking "Run N selected"
-      settled the active commands but only invalidated `chat_listview` *before* the
-      settle, not after; `WM_PAINT` doesn't recalc_layout on its own, so it painted
-      the command container against a stale `cmd_count` with zero live items behind
-      it and dereferenced a NULL `cmd_items[]` slot. Fixed at every layer:
-      `build_cmd_card_geometry` now derives its row count from the live walk instead
-      of `lv->cmd_count`, the paint/hit-test loops guard a NULL slot regardless, a
-      settled item paints nothing even with a stale non-zero `measured_height`, and
-      `settle_all_commands` (now taking `AiChatData *`) always re-invalidates after
-      settling. Held commands: when Permit write was off, write commands were
-      dropped from `d->queued_cmds`/the approval queue entirely (only shown as
-      blocked chips), so switching to Read + write and hitting "Run N selected"
-      queued nothing — a write-only batch had no path to ever run. Every extracted
-      command is now always queued through `chat_approval_add` (blocked commands
-      included), keeping item/queue/`queued_cmds` order identical always; added
-      `chat_approval_needs_user()` (TDD, `tests/test_chat_approval.c`) to decide
-      whether the card must stay up. New integration case
-      `approval_card_run_selected_settles` (no SSH/key needed, `--ui-demo=approval`)
-      and `ai_write_command_held_then_runs_after_permit` (renamed/extended from
-      `ai_write_command_blocked_without_permit_write`) cover the regressions. Native
-      suite green at 1,707 tests (up from 1,699).
+### Landed since v1.0.96
 
-- [x] **Thinking disclosure overlap fixed (v1.0.98).** Measured height disagreed
-      with painted height: `chat_msg_set_thinking()` already marked its item
-      dirty, but `ai_chat.c` flipped `thinking_collapsed` directly in two more
-      places (the streaming handler's open/collapse-on-reply logic, and
-      `ai_chat_apply_demo_extras()`'s gallery "all" state) without setting
-      `dirty`, so `recalc_layout()` — which only remeasures dirty items — kept
-      the item's shorter pre-expand height and later items (the approval card,
-      the "Waiting for output…" indicator) painted over the open block. Both
-      sites now set `item->dirty = 1` alongside the flag flip, matching
-      `chat_listview.c`'s own click-to-toggle handler. Confirmed
-      `measure_item`'s thinking width (`width - ai_indent - 3*side_pad`) and
-      `paint_ai_item`'s box width (`rc->right - side_pad` minus
-      `rc->left + ai_indent`, with `rc` already inset by `side_pad` in
-      `on_paint`) already reduce to the same value — no geometry change
-      needed there. TDD: `tests/test_chat_msg.c` gained
-      `test_chat_msg_set_thinking_marks_dirty`.
-- [x] **Settled commands now render as inline rows (v1.0.98).** A decided
-      command used to measure to height 0 and vanish from the transcript on
-      the (false, since v0.9.41) assumption that its outcome was still
-      narrated in the AI's finalised text as an `[EXEC]` block — closing the
-      non-blocking observation noted under task 5 above. Each settled command
-      now paints as one compact inline row (mono command text, ellipsised
-      when needed, no card/header/checkbox/buttons) with a right-aligned
-      outcome chip: **ran** (approved, success intent), **held** (still
-      blocked by policy, warning intent), **denied** (explicit denial, dimmed
-      chip), or **skipped** (superseded before a decision, same dimmed
-      styling). New core geometry `settled_row_layout()` in
-      `src/core/ns_layout.*` (TDD, `tests/test_ns_layout.c`) mirrors
-      `approval_card_layout`'s row shape without the checkbox; `measure_item`
-      and a new `paint_cmd_settled_row()` in `chat_listview.c` both size the
-      row from it, so they can't drift apart. Hit-testing already excluded
-      settled items from the live container (verified, unchanged). Native
-      suite green at **1,715 tests** (up from 1,707).
-- [x] **AI Assist chat list now sticks to bottom properly (v1.0.99).**
-      Replaced the old per-event `chat_listview_is_near_bottom()` margin
-      check (raced against `recalc_layout()` growing `total_height` first,
-      so a big content jump — the Thinking block opening, an approval card
-      appearing — regularly left the list stranded above the new bottom)
-      with classic stick-to-bottom state: `ChatListView.stick_to_bottom`,
-      set to 1 only when a user-driven scroll (wheel/scrollbar/keyboard/
-      selection-drag) ends at or past max scroll, consulted (never changed)
-      by `recalc_layout`/`WM_SIZE` to decide whether to follow new content
-      or hold position. New pure core module `src/core/stick_scroll.{c,h}`
-      (TDD, `tests/test_stick_scroll.c`) holds the two decision functions.
-      `ai_chat.c`'s per-chunk/per-event `chat_listview_scroll_to_bottom()`
-      calls (WM_AI_STREAM, WM_AI_TOOL_MSG, WM_AI_RESPONSE) were removed —
-      following now happens automatically via `chat_listview_invalidate()`
-      when stuck; the deliberate ones (sending a prompt, Retry, session
-      switch, cancelling a stream) were kept.
+- v1.0.97 — Two approval-card bugs fixed: the "Run N selected" crash (stale
+  `cmd_count` read by `WM_PAINT`), and held write commands that were never
+  queued and so could never run after Permit write was turned on.
+- v1.0.98 — Thinking-block measure/paint height mismatch fixed; settled
+  commands now render as inline rows with a ran/held/denied/skipped chip
+  instead of vanishing.
+- v1.0.99 — AI Assist chat list sticks to the bottom properly (new
+  `stick_to_bottom` state, replacing a racy near-bottom check).
+- v1.1.0 — Smart scrolling for the terminal pane: a scrolled-back view holds
+  its position while new output arrives.
+- v1.1.1 — Prompt-gated command dispatch: approved commands go to the
+  terminal one at a time, only once the shell is back at a prompt.
+- v1.1.2 — Auto approve grew from two levels to four: off / safe only /
+  safe + write / all.
+- v1.1.3 — Thinking-disclosure collapse now sticks to the user's choice; the
+  activity indicator never overlaps message text.
+- v1.1.4 — Markdown tables render as real tables instead of raw piped text.
+- v1.1.5 — Wheel trap fixed: a partly visible Thinking box or approval card
+  no longer swallows the wheel and blocks reaching the bottom.
+- v1.1.6 — AI replies coloured by role (structure/code hues via
+  `theme_role_color`); Thinking box no longer under-measured while streaming.
+- v1.1.7 / v1.1.8 — Pending command batches: a card never blocks the input;
+  up to `CMD_BATCH_MAX` = 8 batches pending per session, each with its own
+  card; `--ui-demo=batches` added (ten states total).
+- v1.1.9 — A finishing reply no longer steals keyboard focus from the
+  terminal; the integration harness takes the foreground with an Alt tap
+  before sending keystrokes, and refuses instead of typing blind if it can't.
 
-- [x] Smart scrolling for the terminal pane (v1.1.0). `term_scroll` now moves a
-      scrolled-back `scrollback_offset` up by one for every line scrolled in
-      (clamped to the history held), so the view stays anchored while output
-      arrives; at the bottom it follows, and a keypress already resets to the
-      live view. Tests in `tests/test_term.c`; integration case
-      `terminal_holds_position_while_output_arrives` compares captures.
-      Versioning: after 1.0.99 the number rolls to 1.1.0 (Thomas; rule in CLAUDE.md).
-
-- [x] Prompt-gated command dispatch (v1.1.1; feature A of
-      `2026-09-07-command-dispatch-and-auto-approve-levels.md`). Every
-      command-execution path in `ai_chat.c` (auto-approve, Run N selected,
-      approve one) used to burst all approved commands onto the SSH channel
-      at once, so the tty echoed the next command into whatever the
-      previous one left waiting (a package prompt, a pager, a password
-      prompt). Replaced with a single dispatcher (`dispatch_start()` /
-      `dispatch_tick()` on `TIMER_CMD_QUEUE`, 250ms) that sends approved
-      commands one at a time, only once `term_at_prompt()` says the active
-      terminal is back at a shell prompt and has been quiet for
-      `PROMPT_QUIET_MS` (400ms); the continue message to the AI now fires
-      right after the last command's prompt returns instead of a fixed 2s
-      delay. New `src/core/shell_prompt.{c,h}` (`shell_prompt_line()`) and
-      `Terminal.write_seq` / `term_at_prompt()` in `src/term`, both unit
-      tested. Integration case `ai_commands_run_one_at_a_time` (not run by
-      Claude — costs API credits; reviewer runs it once).
-
-- [x] Auto approve has four levels (v1.1.2; feature B of
-      `2026-09-07-command-dispatch-and-auto-approve-levels.md`).
-      `ApprovalQueue.auto_approve_all` replaced with `auto_approve_level`
-      (`AutoApproveLevel`: SAFE/WRITE/ALL) in `src/core/chat_approval.{c,h}`;
-      the status-line click on the AI panel now cycles **off → safe only →
-      safe + write → all → off**. `ai_modes_label()` grew a third label
-      ("safe + write"). Config key `ai_auto_approve_all` (bool) replaced
-      with `ai_auto_approve_default` (int 0-3) in `config.h`/`loader.c` —
-      the old key is dropped and ignored on read, no migration. Settings ›
-      AI behaviour's checkbox became a drop-down, labelled "Auto Approve:"
-      (kept short to fit the page's fixed 150px label column — the
-      tooltip spells out that it sets the starting level for new
-      sessions), with items Off/Safe only/Safe + write/All. Same control id
-      (`IDC_AI_AUTO_APPROVE_DEFAULT`, renamed from
-      `IDC_AI_AUTO_APPROVE_ALL`). `AiSessionState` carries `auto_approve`
-      and `auto_approve_level` plus a new `auto_approve_seeded` flag so a
-      fresh session is seeded from the configured default exactly once
-      (via `ai_chat_set_auto_approve_default()`, renamed from
-      `ai_chat_set_auto_approve_all()`) while a session the user has
-      already toggled keeps its own choice across `chat_approval_reset()`
-      and session switches. Native suite green at **1,764 tests** (up from
-      1,757).
-
-- [x] Thinking-disclosure collapse sticks, and the activity indicator never
-      overlaps text (v1.1.3). Two independent fixes:
-      (1) A user's manual open/close of a reply's Thinking block now sticks
-      for the rest of that stream. New `thinking_user_set` flag on
-      `ChatMsgItem.u.ai` (`src/core/chat_msg.h`), zeroed on create; the
-      listview's click toggle (`src/ui/chat_listview.c`) sets it on every
-      manual toggle and posts a new `IDC_CHAT_THINKING_CLOSED`
-      (`src/ui/resource.h`) on close, mirroring the existing
-      `IDC_CHAT_THINKING_OPENED` on open. `ai_chat.c`'s `WM_AI_STREAM`
-      handler now skips both the auto-open (while thinking streams) and
-      the auto-collapse (once content starts) for any item with the flag
-      set, and `IDC_CHAT_THINKING_CLOSED` clears `show_thinking` (mirrored
-      into `active_state`, same as `IDC_CHAT_NEWCHAT` already did) so a
-      later reply still starts open.
-      (2) The inline activity indicator ("Processing…"/"Responding…"/etc.,
-      `paint_activity_indicator()`) could land on top of the last
-      message's text whenever that message painted taller than
-      `measure_item()` predicted. `paint_ai_item`, `paint_user_item`,
-      `paint_status_item`, `paint_cmd_container` and
-      `paint_cmd_settled_row` now return the height they actually painted;
-      `on_paint()` tracks `painted_bottom` (max of item-top + painted
-      height over all painted items) and places the indicator at
-      `max(layout y, painted_bottom + msg_gap)`, caching the result in a
-      new `ChatListView.indicator_y` field so `chatlv_items_bottom_y()`
-      (used by both hover and the `[Retry]` link's click hit-test) can
-      never disagree with what was actually drawn. Audit of measure vs.
-      paint for the AI item found one real, structural mismatch: for a
-      message containing `[EXEC]...[/EXEC]`, `measure_item()` used to
-      strip the tags and measure the whole message as one markdown-
-      rendered string, while `paint_ai_item`'s `draw_ai_text_with_exec()`
-      actually paints it as separate segments (markdown-rendered prose
-      interleaved with mono-font purple command text) — a different
-      computation that can legitimately produce a different height. Fixed
-      by adding `measure_ai_text_with_exec()` (and its `measure_ai_segment()`
-      helper, now also used by `draw_ai_segment()` for its own non-markdown
-      height calc), a height-only twin that walks the identical segment
-      split as the paint path; `ai_text_for_measure()` is gone. Also
-      hardened the EXEC segments' own paint: they used to clip to the
-      item's original (possibly stale) `rc->bottom` — now two-pass
-      (calc then paint into an exact-fit rect), matching
-      `draw_ai_segment`'s existing non-markdown approach, so a late growth
-      spurt can never be silently truncated. The thinking block, markdown
-      path, and plain-text path were checked and already agreed between
-      measure and paint. Native suite green at **1,766 tests** (up from
-      1,764).
-
-- [x] Markdown tables now render as real tables instead of raw piped text
-      (v1.1.4). New pure/tested `src/core/md_table.{c,h}`:
-      `md_table_split_row()` (trims cells, handles missing outer pipes and
-      `\|` escapes), `md_table_alignments()` (per-column left/center/right
-      from the `|---|:--:|--:|` separator row), and
-      `md_table_fit_columns()` (natural widths when they fit; otherwise
-      shrinks the widest column(s) first, evenly among ties, floored at
-      each column's widest single word or 6 em). `src/ui/md_render.c`
-      gathers a run of consecutive `MD_LINE_TABLE` lines as one block
-      (`md_render_table_block()`, intercepted before the per-line switch
-      in `md_render_core()` so header/body cells share the file's existing
-      inline renderer — bold/italic/code spans, header cells forced bold)
-      instead of the old per-line monospace dump. Header row gets a
-      subtle `text_dim`-over-`bg_primary` fill via `rgb_alpha()` (same
-      technique as `chat_listview`'s dim chips); hairline row separators
-      and an outer border in the theme's `border` colour; no vertical
-      column lines. Like the rest of this file, table constants (cell
-      padding, hairline width) are raw 96-DPI pixels, not run through
-      `ns_scale()` — `md_render_text`/`md_measure_text` aren't passed a
-      dpi, so nothing else in the file is either. 17 new native tests in
-      `tests/test_md_table.c`. Native suite green at **1,783 tests** (up
-      from 1,766).
-
-- [x] Wheel trap fixed (v1.1.5). An open Thinking box (or approval card) that
-      was only partly visible swallowed every wheel-down, so the list could
-      never reach the bottom and re-engage stick-to-bottom while a reply
-      streamed — the box stayed cut off. Inner boxes now take the wheel only
-      when fully inside the viewport; a scrollbar thumb dragged to the end of
-      the track snaps to the true maximum. Open: `md_render.c` renders at raw
-      96-DPI pixels (its padding is not `ns_scale`d) — fold into sub-project 3.
-
-- [x] AI replies coloured by role, restrained to two hues (v1.1.6). Structure hue
-      (`theme->link`): heading text (h1–h3, still bold), list bullet/ordered-list
-      number markers (marker only, item text stays `text_main`), the blockquote
-      left bar, and table header text (existing dim fill unchanged). Code hue
-      (`theme->info`): inline code text on its existing chip background, plus a
-      new 2px left bar (`MD_CODE_BAR_WIDTH`) on fenced code blocks, whose body
-      text now reads `text_main` instead of the old `chat.cmd_text`. Blockquote
-      body text changed from (actually rendered) `text_main` to `text_dim`, per
-      spec — the "as now" in the original ask was inaccurate; only the bar was
-      ever `text_dim`. `md_parse_inline` has no link-span type, so the "links
-      underlined in `theme->link`" part of the ask has nothing to hook into and
-      was skipped. New portable `theme_role_color(role, bg, fallback)`
-      (`src/core/theme.{c,h}`) returns `role` when `theme_contrast(role, bg) >=
-      4.5`, else `fallback` — `md_render.c` resolves both hues through it against
-      `bg_primary`, falling back to `text_main` per-theme rather than retuning
-      the palette. Two of four themes fail the raw contrast check and render
-      that hue as plain `text_main`: Onyx Synapse (link 4.158, info 4.148) and
-      Sage & Sand (link 3.099, info 3.095); Onyx Light (7.833, 5.527) and Moss &
-      Mist (5.132, 4.928) show both hues. New
-      `test_ui_tokens_md_role_color_contrast` in `tests/test_ui_tokens.c` pins
-      down the resolved (post-fallback) colour per theme so a palette change
-      shows up as a deliberate diff. Native suite green at **1,784 tests** (up
-      from 1,783).
-
-- [x] Thinking box cut off while streaming (v1.1.6). Root cause found with a
-      temporary layout log: `measure_item` returned a bare `msg_gap` for any item
-      with empty text, and a reply's text stays empty while its reasoning streams,
-      so the item under-measured by the whole Thinking box until the first content
-      chunk arrived (then the view jumped). AI items with thinking text now measure
-      as AI items. Reply colour also lands in v1.1.6: structure hue (`link`) for
-      headings, list markers, quote bar and table headers; code hue (`info`) for
-      inline code and the fenced-block bar; `theme_role_color` derives a legible
-      shade of the theme's own hue instead of falling back to white.
-
-- [x] Pending command batches (v1.1.7 model + list containers, v1.1.8 panel
-      wiring/demo/integration; docs/superpowers/specs/
-      2026-09-09-pending-command-batches.md). A card no longer blocks the
-      input: each AI reply that yields commands gets its own batch (a
-      per-session `CmdBatchSet`, up to `CMD_BATCH_MAX` = 8, oldest evicted)
-      and its own card, so any number can be pending, interactive, at once
-      -- scrolling with the transcript, settled only when the user acts on
-      that specific card or its dispatcher run finishes. The dispatcher
-      still runs one batch at a time; a card's Run while another is
-      dispatching just queues, and picks up the moment the active one
-      finishes and any reply in flight completes. `--ui-demo=batches` (now
-      ten states) shows two pending cards from two replies with a user
-      turn interleaved.
-
-- [ ] Rerun `ai_write_command_held_then_runs_after_permit` (and any other
-      keystroke-driven case) on v1.1.8 when the desktop is unlocked: the
-      2026-09-09 03:40 run failed only because the desktop had locked
-      (`GetForegroundWindow()` was 0, so SendKeys reached nothing). The harness
-      now throws "Nutshell is not the foreground window" instead of typing blind.
-
+- [ ] Three review findings still open (first noted under "Review findings"
+      above, before the design-system work started): the AI-stream thread
+      lifetime bugs, the relative config-save path, and the Session Manager
+      phantom row.
+- [ ] `md_render.c` renders at raw 96-DPI pixels (its padding is not
+      `ns_scale`d) — fold into sub-project 3.
 - [ ] Sub-project 3 (main window chrome) — brainstorm next: single toolbar replacing
       the menu bar, tab strip, status. Mockups of layout options are worth showing
       visually before choosing, same as sub-project 2.

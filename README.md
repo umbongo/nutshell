@@ -17,7 +17,7 @@ Built entirely with the Win32 API, no external UI frameworks. Cross-compiled fro
 The standout feature: an integrated AI panel that sits alongside your terminal session. It sees what you see — a configurable window of recent terminal output — and can act on it.
 
 - **Context-aware** — the AI reads a configurable window of your live terminal output (1,000 lines by default, up to 50,000) and tailors responses to what's happening on screen
-- **Command execution** — suggested commands land in a single approval card (checkboxes, a risk tag per command, `Deny all` / `Run N selected`); nothing runs without your approval
+- **Command execution** — suggested commands land in an approval card (checkboxes, a risk tag per command, `Deny all` / `Run N selected`) that never blocks the input; keep chatting and every reply that suggests commands gets its own pending card, up to eight per session
 - **Streaming responses** — real-time token streaming, with a collapsible "Thinking" disclosure for chain-of-thought / reasoning
 - **Multi-provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or any OpenAI-compatible endpoint
 - **Per-session context** — attach notes to each server profile (e.g. "production database — read-only") that guide the AI's behaviour
@@ -30,7 +30,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 
 ## Features
 
-- AI chat assistant with terminal context, an approval card for command execution, streaming, and a Thinking disclosure for reasoning
+- AI chat assistant with terminal context, pending approval cards for command execution (never block the input, up to eight per session), streaming, and a Thinking disclosure for reasoning
 - Multi-tab SSH sessions with owner-drawn tab strip (status dots, log indicator, close button)
 - VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
 - Password and SSH key authentication with passphrase prompt and retry
@@ -41,7 +41,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 1,699 unit tests, zero lint warnings
+- 1,804 unit tests, zero lint warnings
 
 ---
 
@@ -297,20 +297,31 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │   │   ├── loader.c                    #   Config file read/write (atomic save)
 │   │   └── ssh_io.c/.h                 #   SSH I/O helpers
 │   ├── core/                           # Portable logic (testable on Linux)
+│   │   ├── ai_agentic.c/.h            #   Agentic loop state (iteration count, rate limits per message)
 │   │   ├── ai_http.c/.h               #   AI HTTP interface
+│   │   ├── ai_panel_layout.c/.h       #   AI panel geometry (header/thread/status line/composer, Thinking disclosure)
+│   │   ├── ai_panel_states.c/.h       #   Copy for the panel's empty/no-key/no-session states
 │   │   ├── ai_prompt.c/.h             #   Conversations, request building, response parsing
+│   │   ├── ai_tool_web_fetch.c/.h     #   Web fetch tool (arbitrary URL fetch, as an AI tool call)
+│   │   ├── ai_tool_web_search.c/.h    #   Web search tool (DuckDuckGo API/HTML or custom)
+│   │   ├── ai_tools.c/.h              #   AI tool-call registry and dispatch
 │   │   ├── app_font.c/.h              #   Font management and size snapping
 │   │   ├── base64.c/.h                #   Base64 encoding (OpenSSL)
 │   │   ├── chat_activity.c/.h         #   Activity indicator state machine
-│   │   ├── chat_approval.c/.h         #   Command approval queue
+│   │   ├── chat_approval.c/.h         #   Per-batch command approval queue
 │   │   ├── chat_msg.c/.h              #   Chat message list with secure wipe
 │   │   ├── chat_thinking.c/.h         #   Thinking/reasoning display state
+│   │   ├── cli_args.c/.h              #   Command-line flag parsing (--ui-demo, --theme, -sn/-h/-nc/-l/-v/-?)
+│   │   ├── cmd_batch.c/.h             #   Set of pending command-approval batches per AI session (up to 8)
 │   │   ├── cmd_classify.c/.h          #   Command safety classification (Linux, Cisco, Aruba, PAN-OS)
 │   │   ├── connect_anim.c/.h          #   Connection animation dots
 │   │   ├── display_buffer.c/.h        #   Display invalidation tracking
 │   │   ├── edit_scroll.c/.h           #   Scroll math for text editors
+│   │   ├── html_util.c/.h             #   HTML tag stripping for web-fetch/search tool results
+│   │   ├── json_validate.c/.h         #   JSON string escaping for AI request bodies
 │   │   ├── log_format.c/.h            #   Log filename formatting (strftime)
 │   │   ├── logger.c/.h                #   File and stderr logging
+│   │   ├── md_table.c/.h              #   Markdown table parsing/column layout (pure; src/ui/md_render.c paints them)
 │   │   ├── ns_hover.c/.h              #   Hover/hot-state tracker for painted controls
 │   │   ├── ns_layout.c/.h             #   Pure layout geometry (buttons, cards, approval card + hit-test)
 │   │   ├── ns_motion.c/.h             #   Easing curves and animation progress (one timer, all panels)
@@ -320,11 +331,14 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │   │   ├── secure_zero.h              #   Volatile memset for secrets
 │   │   ├── selection.c/.h             #   Text selection (pixel-to-cell)
 │   │   ├── settings_layout.c/.h    #   Settings window layout (pages, panes, rows)
+│   │   ├── shell_prompt.c/.h          #   Detects a shell waiting at a prompt (gates one-at-a-time dispatch)
 │   │   ├── snap.c/.h                  #   Window grid snapping
+│   │   ├── ssh_timeout.c/.h           #   Network-failure rail (link declared dead after a socket-silence threshold)
+│   │   ├── stick_scroll.c/.h          #   Stick-to-bottom / smart-scroll decision logic for the chat list and terminal
 │   │   ├── string_utils.c/.h          #   String helpers, ANSI stripping, UTF-8
 │   │   ├── tab_manager.c/.h           #   Tab data model
 │   │   ├── term_extract.c/.h          #   Terminal text extraction
-│   │   ├── theme.c/.h                 #   Color calculations (luminance, bg detection)
+│   │   ├── theme.c/.h                 #   Color calculations (luminance, bg detection, per-role contrast)
 │   │   ├── tooltip.c/.h               #   Connection tooltip formatting
 │   │   ├── ui_demo.c/.h               #   Deterministic demo-state builder for --ui-demo and the gallery
 │   │   ├── ui_theme.c/.h              #   Theme system (4 schemes) + resolved design tokens (ThemeTokens)
@@ -353,7 +367,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │       ├── renderer.c/.h             #   Terminal cell renderer
 │       ├── help_guide.c/.h           #   Help guide dialog
 │       ├── paste_dlg.c/.h            #   Paste confirmation dialog
-│       ├── icon_font.h               #   Icon font detection with ASCII fallbacks
+│       ├── icons.c/.h                #   Built-in vector icon set (GDI+ paths; no icon-font dependency)
 │       ├── resource.h                 #   Version macros and resource IDs
 │       ├── themed_button.h           #   Themed button widget (paints via ns_draw_button)
 │       ├── custom_scrollbar.h        #   Custom scrollbar widget
@@ -362,10 +376,11 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │       ├── ns_font.c/.h              #   Font cache keyed on (role, dpi, face); replaces per-call CreateFont
 │       ├── ns_tokens.h               #   Read-only accessor for window.c's resolved ThemeTokens
 │       ├── ns_reduced_motion.h       #   SPI_GETCLIENTAREAANIMATION reduced-motion flag
+│       ├── redraw_log.h              #   Optional REDRAW_DEBUG file logging helper
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 1,665 unit tests across 71 test files
+├── tests/                              # 1,804 unit tests across 76 test files
 │   └── stubs/libssh2.h                 #   libssh2 stub for test builds without the real library
 ├── build/win/                          # Build output (nutshell.exe)
 ├── images/                             # Application icon and assets
@@ -453,7 +468,7 @@ actual painting. Two native tests (`tests/test_ui_tokens.c`) gate this: a
 `RGB(` literal outside `ns_draw.c`, or a local DPI-scale macro anywhere in
 `src/ui`, fails `make test`. See
 `docs/superpowers/specs/2026-09-07-design-system-foundation-design.md` for
-the full design, and run `nutshell.exe --ui-demo=all` (or any of the seven
+the full design, and run `nutshell.exe --ui-demo=all` (or any of the nine
 individual states) to preview every themed panel without a live SSH session
 — the same states the integration suite's `ui_gallery` case screenshots
 across all four themes.

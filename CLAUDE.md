@@ -67,7 +67,10 @@ the six Design-System Foundation modules (see
 Two native tests in `tests/test_ui_tokens.c` enforce this as an
 exact-allow-list gate, not a ratchet — any violation fails `make test`:
 
-- **Never `RGB(` in `src/ui`, outside `ns_draw.c`.** Pull the colour from
+- **Never `RGB(` in `src/ui`, outside `ns_draw.c`** (which is excluded
+  entirely) **or the 2 allowed literals in `renderer.c`** (the terminal's
+  default fg/bg fallback, used only before a theme is resolved). Pull the
+  colour from
   `ns_tokens()` (a `const ThemeTokens *`): a surface's `.base`/`.hover`/
   `.pressed`/`.disabled`/`.label`, a scalar like `text_main`/`text_dim`/
   `text_disabled`/`border`/`focus`, one of the five intents (`success`/
@@ -107,6 +110,21 @@ exact-allow-list gate, not a ratchet — any violation fails `make test`:
   running the integration suite's `ui_gallery` case, which screenshots the
   same states across all four themes into `tests\integration\artifacts\gallery\`.
 
+## Integration Harness
+
+`tests/integration/Run-Integration.ps1` drives the real `nutshell.exe` against
+a live SSH host with `SendKeys` — see `tests/integration/README.md` for the
+case list, prerequisites and how to run a subset. Two hard rules:
+
+- **Never stop a `nutshell` process you did not start.** Each case launches
+  its own scratch copy of the exe and tears it down itself; killing an
+  unrelated running instance (the user's own session, say) is never the fix
+  for a stuck or failing case.
+- **`SendKeys`-driven cases need an active, unlocked interactive session.**
+  Keystrokes go to whatever window currently holds the foreground; a locked
+  desktop or another app stealing focus makes the harness throw rather than
+  type blind, but the run still needs a real, unlocked desktop to pass.
+
 ## Terminal Buffer
 
 - `TermRow.len` tracks actual written content width. Always use `row->len` for content boundaries, not `term->cols`.
@@ -115,7 +133,7 @@ exact-allow-list gate, not a ratchet — any violation fails `make test`:
 ## JSON Handling
 
 - Use `json_parse()` + `json_obj_get()`/`json_obj_str()` for reading. Always `json_free()` the root.
-- For building JSON output (e.g., AI request bodies), use `snprintf` with manual escaping via a `json_escape_str()` helper. There is no JSON builder library.
+- For building JSON output (e.g., AI request bodies), use `snprintf` with manual escaping via `json_escape_string()` (`src/core/json_validate.h`). There is no JSON builder library.
 - Config fields are fixed-size `char[256]` arrays — no heap allocation per field.
 
 ## Secrets

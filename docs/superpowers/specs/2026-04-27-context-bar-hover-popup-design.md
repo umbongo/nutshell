@@ -1,5 +1,9 @@
 # Context Bar Hover Popup — Design
 
+**Superseded** by the context meter in `2026-09-07-ai-assist-panel-design.md`
+(the AI panel's status line), which folded this popup's exact-token-count
+hover into the shipped meter. Kept for history below.
+
 **Date:** 2026-04-27
 **Status:** Draft
 **Area:** AI chat panel UI
