@@ -49,8 +49,10 @@ if (-not (Test-Path (Join-Path $RunnerDir "config.cmd"))) {
 }
 
 if ($Uninstall) {
-    Write-Host "Removing scheduled task '$TaskName' (if present)..."
-    schtasks /Delete /TN $TaskName /F 2>$null | Out-Null
+    $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) ($TaskName + ".lnk")
+    Write-Host "Removing Startup shortcut '$lnk' (if present)..."
+    Remove-Item $lnk -ErrorAction SilentlyContinue
+    Write-Host "Stop the running runner window yourself (run.cmd) before or after this."
     Write-Host "Fetching a removal token and unregistering the runner..."
     $tok = (& $gh api -X POST "repos/$Repo/actions/runners/remove-token" --jq .token)
     Push-Location $RunnerDir
@@ -72,12 +74,23 @@ try {
 } finally { Pop-Location }
 
 # Start the runner at logon as an interactive process (a service would run in
-# session 0 without a desktop). It keeps running while the user is logged in;
-# a disconnected RDP session is fine, a logged-out one is not.
+# session 0 without a desktop). A shortcut in the user's Startup folder does
+# this without administrator rights (a logon scheduled task needs elevation).
+# It keeps running while the user is logged in; a disconnected RDP session is
+# fine, a logged-out one is not.
 $runCmd = Join-Path $RunnerDir "run.cmd"
-Write-Host "Creating scheduled task '$TaskName' (at logon, interactive)..."
-schtasks /Create /F /TN $TaskName /SC ONLOGON /RL LIMITED /TR "`"$runCmd`"" | Out-Null
-schtasks /Run /TN $TaskName | Out-Null
+$startup = [Environment]::GetFolderPath('Startup')
+$lnk = Join-Path $startup ($TaskName + ".lnk")
+Write-Host "Creating Startup shortcut '$lnk'..."
+$ws = New-Object -ComObject WScript.Shell
+$sc = $ws.CreateShortcut($lnk)
+$sc.TargetPath = $runCmd
+$sc.WorkingDirectory = $RunnerDir
+$sc.WindowStyle = 7   # minimised
+$sc.Description = "GitHub Actions self-hosted runner for the Nutshell BVT"
+$sc.Save()
+Write-Host "Starting the runner now..."
+Start-Process -FilePath $runCmd -WorkingDirectory $RunnerDir -WindowStyle Minimized | Out-Null
 
 Write-Host ""
 Write-Host "Runner registered. Check it under https://github.com/$Repo/settings/actions/runners"
