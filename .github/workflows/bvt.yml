@@ -1,0 +1,61 @@
+name: BVT
+
+# Build verification: native unit suite plus the end-to-end BVT tier of the
+# integration harness, run on the self-hosted Windows runner that has the
+# MSYS2 toolchain and can reach the test host (tompi). This is the required
+# status check for merging into main; see docs/superpowers/specs/
+# 2026-09-09-bvt-coverage.md and tests/integration/README.md.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # One BVT at a time: the harness drives a real desktop.
+  group: bvt-desktop
+  cancel-in-progress: false
+
+jobs:
+  bvt:
+    name: BVT
+    runs-on: [self-hosted, windows, nutshell-bvt]
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain on PATH
+        run: |
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "C:\msys64\usr\bin"     | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Unit tests
+        run: mingw32-make test
+
+      - name: Release build
+        run: |
+          mingw32-make clean
+          mingw32-make release
+
+      - name: BVT tier
+        env:
+          NUTSHELL_BVT_HOST: ${{ vars.NUTSHELL_BVT_HOST }}
+          NUTSHELL_BVT_USER: ${{ vars.NUTSHELL_BVT_USER }}
+          NUTSHELL_BVT_KEY:  ${{ vars.NUTSHELL_BVT_KEY }}
+        run: |
+          $hostName = if ($env:NUTSHELL_BVT_HOST) { $env:NUTSHELL_BVT_HOST } else { "tompi" }
+          $user     = if ($env:NUTSHELL_BVT_USER) { $env:NUTSHELL_BVT_USER } else { "thomas" }
+          $key      = if ($env:NUTSHELL_BVT_KEY)  { $env:NUTSHELL_BVT_KEY }  else { Join-Path $HOME ".ssh\thomas" }
+          .\tests\integration\Run-Integration.ps1 -HostName $hostName -User $user -KeyPath $key -Tier bvt
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bvt-artifacts
+          path: tests/integration/artifacts
+          if-no-files-found: ignore
+          retention-days: 14

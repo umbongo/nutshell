@@ -113,17 +113,34 @@ exact-allow-list gate, not a ratchet — any violation fails `make test`:
 ## Integration Harness
 
 `tests/integration/Run-Integration.ps1` drives the real `nutshell.exe` against
-a live SSH host with `SendKeys` — see `tests/integration/README.md` for the
-case list, prerequisites and how to run a subset. Two hard rules:
+a live SSH host — see `tests/integration/README.md` for the case list, the
+helpers, prerequisites and how to run a subset. Typing and dialog driving go
+through posted window messages (`Send-NutshellLine`, `Wait-NutshellDialog`,
+`Get-NutshellControl`, …), so most cases need no foreground window and run on
+the self-hosted runner or a locked desktop. Two hard rules:
 
 - **Never stop a `nutshell` process you did not start.** Each case launches
   its own scratch copy of the exe and tears it down itself; killing an
   unrelated running instance (the user's own session, say) is never the fix
   for a stuck or failing case.
-- **`SendKeys`-driven cases need an active, unlocked interactive session.**
-  Keystrokes go to whatever window currently holds the foreground; a locked
-  desktop or another app stealing focus makes the harness throw rather than
-  type blind, but the run still needs a real, unlocked desktop to pass.
+- **`Send-NutshellKeys` (real `SendKeys`) is only for modifier chords the app
+  reads with `GetKeyState`** (Ctrl+C/V, Ctrl+Shift+C/V, Shift+Insert, Ctrl+=
+  zoom). Those cases need an unlocked, interactive session; the helper throws
+  rather than typing into a stranger's window when Nutshell cannot be brought
+  to the foreground. Prefer the posted helpers for everything else.
+
+The tiers: `-Tier bvt` is the build verification sweep (no AI key), `-Tier ai`
+the key-gated cases (they cost model credits), `-Tier nightly` the slow ones.
+
+## Branches, pull requests and the BVT gate
+
+`main` is protected: changes land only through a pull request whose `BVT`
+status check (`.github/workflows/bvt.yml`, self-hosted runner labelled
+`nutshell-bvt` on the dev box) has passed. Work on a short-lived branch,
+push it, open the PR, wait for green, merge. Never push to `main` directly;
+never merge a red BVT. `tests/integration/Protect-Main.ps1` applies the rule
+and `tests/integration/Install-BvtRunner.ps1` registers the runner (both need
+`gh auth login` by a repository administrator).
 
 ## Terminal Buffer
 
