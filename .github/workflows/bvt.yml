@@ -33,8 +33,9 @@ jobs:
         # interactive shell). The built-in shell also prepends
         # $ErrorActionPreference = 'Stop' and propagates $LASTEXITCODE; a
         # custom shell gets neither, so spell those out too or a failing
-        # mingw32-make would leave the step green.
-        shell: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; . '{0}'; if ($LASTEXITCODE) { exit $LASTEXITCODE }"
+        # mingw32-make would leave the step green. The runner feeds the
+        # template through String.Format, so literal braces are doubled.
+        shell: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; . '{0}'; if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}"
     steps:
       - uses: actions/checkout@v4
 
