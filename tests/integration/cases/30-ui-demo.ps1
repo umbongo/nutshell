@@ -38,7 +38,10 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
             $session = $null
             try {
                 $session = Start-Nutshell -Env $testEnv -ExtraArgs @("--ui-demo=$state", "--theme", $theme)
-                Set-NutshellWindowSize -Session $session -Width 1400 -Height 900
+                # Clamped to the work area by the helper; the gallery only
+                # needs a large, consistent window, so the achieved size is
+                # irrelevant here and the return value is discarded.
+                Set-NutshellWindowSize -Session $session -Width 1400 -Height 900 | Out-Null
                 $fileName = "{0}-{1}.png" -f (ConvertTo-NutshellFileToken $theme), $state
                 $path = Join-Path $galleryDir $fileName
                 Save-NutshellScreenshot -Session $session -Path $path | Out-Null
@@ -129,20 +132,27 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
     try {
         $themeName = "Onyx Light"
         $session = Start-Nutshell -Env $testEnv -ExtraArgs @("--ui-demo=chat", "--theme", $themeName)
-        Set-NutshellWindowSize -Session $session -Width 1400 -Height 900
+        Set-NutshellWindowSize -Session $session -Width 1400 -Height 900 | Out-Null
         $path = Join-Path $Artifacts "$name.png"
         Save-NutshellScreenshot -Session $session -Path $path | Out-Null
         Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: $name.png"
 
-        # Sample proportionally (like Get-TerminalAreaHash in 10-terminal.ps1)
-        # rather than a
-        # fixed pixel, to land inside the terminal area regardless of DPI: 15%
-        # in from the left, 35% down -- left of the docked AI panel, below the
-        # menu bar. Onyx Light's terminal_bg equals its bg_primary (both
-        # 0xF5F5F7), chosen deliberately so this point validates bg_primary
-        # unambiguously regardless of which of the two panels it lands in.
+        # Sample proportionally rather than at a fixed pixel, and take the
+        # vertical offset from where the tab strip actually ends
+        # (Get-NutshellTabStripRegion, which reads the Nutshell_Tabs child
+        # window's real rect) plus a tenth of the window: a fixed "35% down"
+        # only clears the title bar, menu bar and tab strip at one window size
+        # and one DPI, and Set-NutshellWindowSize clamps the request to the
+        # work area, so neither is a constant. 15% in from the left keeps it
+        # left of the docked AI panel. Onyx Light's terminal_bg equals its
+        # bg_primary (both 0xF5F5F7), chosen deliberately so this point
+        # validates bg_primary unambiguously regardless of which of the two
+        # panels it lands in.
+        $strip = $null
+        try { $strip = Get-NutshellTabStripRegion -Session $session } catch { }
+        $below = if ($strip) { $strip.Y + $strip.H + 0.10 } else { 0.35 }
         $bmp = New-Object System.Drawing.Bitmap $path
-        $sx = [int]($bmp.Width * 0.15); $sy = [int]($bmp.Height * 0.35)
+        $sx = [int]($bmp.Width * 0.15); $sy = [int]($bmp.Height * [Math]::Min(0.9, $below))
         $bmp.Dispose()
 
         $bg = Get-NutshellThemeColor -Name $themeName -Token "bg_primary"
