@@ -14,12 +14,15 @@ function Find-NutshellColorInRegion {
        less fragile and still proves the dot is painted in that colour
        somewhere in the strip. Returns @{X;Y} or $null.
 
-       The default Y band is 0.10-0.22, the same one TABS-1 uses, and it is
-       only meaningful at a *known* window size: callers must
-       Set-NutshellWindowSize to 1200x800 first (at 800px tall the title bar
-       and menu bar together occupy roughly the top 10%, and the tab strip
-       sits just under them). A band starting at 0.0 would be mostly title bar
-       and would let a match anywhere in the chrome pass for a status dot. #>
+       Pass the Y band from Get-NutshellTabStripBand rather than relying on
+       the 0.10-0.22 default: that default only holds at 96 DPI, where the
+       title bar and menu bar of an 800px-tall window occupy about the top
+       10%. On a 200%-scaled desktop the same chrome is twice as tall, the
+       strip sits nearer 0.19-0.29, and the band silently searches the menu
+       bar instead -- the status dot is painted correctly and the case fails
+       anyway. The default is kept only for callers that have no session
+       handle. A band starting at 0.0 would be mostly title bar and would let
+       a match anywhere in the chrome pass for a status dot. #>
     param([Parameter(Mandatory)] [string] $Path, [int[]] $Rgb, [int] $Tolerance = 20,
           [double] $XMin = 0.0, [double] $XMax = 0.4, [double] $YMin = 0.10, [double] $YMax = 0.22, [int] $Step = 2)
     $bmp = New-Object System.Drawing.Bitmap $Path
@@ -38,6 +41,28 @@ function Find-NutshellColorInRegion {
         }
         return $null
     } finally { $bmp.Dispose() }
+}
+
+function Get-NutshellTabStripBand {
+    <# The tab strip's own position within a Save-NutshellScreenshot capture,
+       as @{YMin;YMax} fractions to hand to Find-NutshellColorInRegion or
+       Get-NutshellRegionHash. The strip is a real child window (class
+       "Nutshell_Tabs", created in tabs.c), so ask Windows where it is instead
+       of predicting it from the window height: its offset depends on the
+       title bar, the menu bar and tabs.c's own ns_scale'd TAB_HEIGHT_BASE,
+       all of which move with the desktop's DPI. The capture is a PrintWindow
+       of the whole window rect, so the fractions are relative to that rect. #>
+    param([Parameter(Mandatory)] $Session)
+    $wr = New-Object NutshellNative+RECT
+    [NutshellNative]::GetWindowRect($Session.Main, [ref]$wr) | Out-Null
+    $height = $wr.B - $wr.T
+    if ($height -le 0) { throw "main window has no height" }
+    $strip = [NutshellNative]::FindWindowEx($Session.Main, [IntPtr]::Zero, "Nutshell_Tabs", [IntPtr]::Zero)
+    if ($strip -eq [IntPtr]::Zero) { throw "tab strip window (class Nutshell_Tabs) not found" }
+    $sr = New-Object NutshellNative+RECT
+    [NutshellNative]::GetWindowRect($strip, [ref]$sr) | Out-Null
+    if (($sr.B - $sr.T) -le 0) { throw "tab strip has no height" }
+    return @{ YMin = ($sr.T - $wr.T) / $height; YMax = ($sr.B - $wr.T) / $height }
 }
 
 # ---- TABS-1: open, switch (implicitly), close, the other tab is active ----------
@@ -71,14 +96,16 @@ Invoke-Case "tabs_open_switch_close" @{} {
     Send-NutshellLine -Session $s -Line "echo TAB_A_ALPHA"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "TAB_A_ALPHA" -TimeoutSec 10) "tab A not ready"
 
-    # Fix the window size so the tab strip's proportional Y band is known: at
-    # the default (unset) launch size the strip sat outside a naively-picked
-    # "top 8%" band (title bar + menu bar alone were taller than that),
-    # comparing two identical blank margins and never seeing the tabs at all
-    # -- caught during development. 800px tall puts the strip (title + menu
-    # bar, then the strip itself, roughly 90-150px at 96 DPI) inside Y 0.10-0.22.
+    # Fix the window size for a reproducible capture, then ask Windows where
+    # the strip actually is: a naively-picked "top 8%" band sat above the
+    # strip entirely (title bar + menu bar alone were taller than that) and
+    # compared two identical blank margins, never seeing the tabs -- caught
+    # during development. A fixed 0.10-0.22 band fixed that at 96 DPI and then
+    # broke the same way on a 200%-scaled desktop, where the chrome is twice
+    # as tall. Get-NutshellTabStripBand is DPI-proof.
     Set-NutshellWindowSize -Session $s -Width 1200 -Height 800
-    $stripRegion = @{ X = 0.0; Y = 0.10; W = 1.0; H = 0.12 }
+    $band = Get-NutshellTabStripBand -Session $s
+    $stripRegion = @{ X = 0.0; Y = $band.YMin; W = 1.0; H = ($band.YMax - $band.YMin) }
     $before = Join-Path $Artifacts "tabs_strip_1open.png"
     Save-NutshellScreenshot -Session $s -Path $before | Out-Null
 
@@ -116,8 +143,9 @@ Invoke-Case "tabs_open_switch_close" @{} {
 # red/danger -- the shell dying is an error, so TAB_DISCONNECTED and nothing
 # else; accepting text_dim too would have made the phase pass on the idle
 # colour as well, which is not what TABS-2 is checking). Every phase fixes the
-# window at 1200x800 first so Find-NutshellColorInRegion's tab-strip Y band
-# means what it says. Colours come from tabs.c's status_color(): TAB_CONNECTING ->
+# window at 1200x800 for a reproducible capture and takes its search band from
+# Get-NutshellTabStripBand, which reads the strip's real position.
+# Colours come from tabs.c's status_color(): TAB_CONNECTING ->
 # tok->warning.base, TAB_CONNECTED -> tok->success.base, TAB_DISCONNECTED ->
 # tok->danger.base, TAB_IDLE -> tok->text_dim -- all of which equal the flat
 # ui_theme.c value Get-NutshellThemeColor reads (ThemeSurface.base is the
@@ -136,12 +164,13 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
         $s1 = $null
         try {
             $s1 = Start-Nutshell -Env $env1
-            Set-NutshellWindowSize -Session $s1 -Width 1200 -Height 800   # fixes the tab strip inside Find-NutshellColorInRegion's Y band
+            Set-NutshellWindowSize -Session $s1 -Width 1200 -Height 800   # reproducible capture geometry; the Y band comes from the strip itself
             Start-Sleep -Seconds 2
             $path1 = Join-Path $Artifacts "tabs_dot_connecting.png"
             Save-NutshellScreenshot -Session $s1 -Path $path1 | Out-Null
             $warn = Get-NutshellThemeColor -Name $theme -Token "warning"
-            $hit1 = Find-NutshellColorInRegion -Path $path1 -Rgb @($warn.R, $warn.G, $warn.B)
+            $band1 = Get-NutshellTabStripBand -Session $s1
+            $hit1 = Find-NutshellColorInRegion -Path $path1 -Rgb @($warn.R, $warn.G, $warn.B) -YMin $band1.YMin -YMax $band1.YMax
             Assert-True ($null -ne $hit1) "no pixel matching '$theme' warning rgb($($warn.R),$($warn.G),$($warn.B)) found in the tab strip while connecting"
             [void]$phaseDetail.Add("connecting: warning token rgb($($warn.R),$($warn.G),$($warn.B)) matched at ($($hit1.X),$($hit1.Y))")
         } finally {
@@ -163,7 +192,8 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
             $path2 = Join-Path $Artifacts "tabs_dot_connected.png"
             Save-NutshellScreenshot -Session $s2 -Path $path2 | Out-Null
             $succ = Get-NutshellThemeColor -Name $theme -Token "success"
-            $hit2 = Find-NutshellColorInRegion -Path $path2 -Rgb @($succ.R, $succ.G, $succ.B)
+            $band2 = Get-NutshellTabStripBand -Session $s2
+            $hit2 = Find-NutshellColorInRegion -Path $path2 -Rgb @($succ.R, $succ.G, $succ.B) -YMin $band2.YMin -YMax $band2.YMax
             Assert-True ($null -ne $hit2) "no pixel matching '$theme' success rgb($($succ.R),$($succ.G),$($succ.B)) found in the tab strip once connected"
             [void]$phaseDetail.Add("connected: success token rgb($($succ.R),$($succ.G),$($succ.B)) matched at ($($hit2.X),$($hit2.Y))")
 
@@ -174,7 +204,7 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
             $path3 = Join-Path $Artifacts "tabs_dot_disconnected.png"
             Save-NutshellScreenshot -Session $s2 -Path $path3 | Out-Null
             $danger = Get-NutshellThemeColor -Name $theme -Token "danger"
-            $hit3d  = Find-NutshellColorInRegion -Path $path3 -Rgb @($danger.R, $danger.G, $danger.B)
+            $hit3d  = Find-NutshellColorInRegion -Path $path3 -Rgb @($danger.R, $danger.G, $danger.B) -YMin $band2.YMin -YMax $band2.YMax
             Assert-True ($null -ne $hit3d) `
                 "no pixel matching '$theme' danger rgb($($danger.R),$($danger.G),$($danger.B)) found in the tab strip after kill -9 `$`$"
             [void]$phaseDetail.Add("disconnected: danger token rgb($($danger.R),$($danger.G),$($danger.B)) matched at ($($hit3d.X),$($hit3d.Y))")

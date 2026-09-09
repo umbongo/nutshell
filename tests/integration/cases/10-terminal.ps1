@@ -169,6 +169,16 @@ Invoke-Case "resize_applies_to_inactive_tab" @{} {
     Set-NutshellWindowSize -Session $s -Width 1200 -Height 700
     Send-NutshellLine -Session $s -Line 'echo TAB_A_READY'
     Assert-True (Wait-NutshellLog -Session $s -Pattern "TAB_A_READY" -TimeoutSec 5) "tab A not ready"
+    # Baseline tab A's own row count rather than predicting one from the pixel
+    # height below: rows are (client height - chrome) / charHeight, and both
+    # chrome and charHeight scale with the desktop's DPI, so any absolute
+    # expectation ("a 1300px window is >= 30 rows") only holds at the DPI it
+    # was written on. On a 200%-scaled runner the same window is 22 rows and
+    # a fixed threshold fails a working build.
+    Send-NutshellLine -Session $s -Line 'echo A_LINES_0=$(tput lines)'
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "A_LINES_0=(\d+)" -TimeoutSec 5) "no baseline size report from tab A"
+    $a0 = [int][regex]::Match((Get-NutshellLogText -Session $s), "A_LINES_0=(\d+)").Groups[1].Value
+    Assert-True ($a0 -gt 0) "tab A reported no rows before the resize"
     Open-NutshellSecondTab -Session $s
     Assert-True (((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "Session Manager" }).Count -eq 0) "Session Manager still open; Connect failed"
     Set-NutshellWindowSize -Session $s -Width 1600 -Height 1300
@@ -179,10 +189,10 @@ Invoke-Case "resize_applies_to_inactive_tab" @{} {
     # different fault from "the resize never reached the inactive tab".
     Send-NutshellLine -Session $s -Line 'echo BACK_ON_TAB_A'
     Assert-True (Wait-NutshellLog -Session $s -Pattern "BACK_ON_TAB_A" -TimeoutSec 5) "the switch back to tab A did not take effect: typing still reached the other tab"
-    Send-NutshellLine -Session $s -Line 'echo A_LINES=$(tput lines)'
-    Assert-True (Wait-NutshellLog -Session $s -Pattern "A_LINES=(\d+)" -TimeoutSec 5) "no size report from tab A"
-    $a = [int][regex]::Match((Get-NutshellLogText -Session $s), "A_LINES=(\d+)").Groups[1].Value
+    Send-NutshellLine -Session $s -Line 'echo A_LINES_1=$(tput lines)'
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "A_LINES_1=(\d+)" -TimeoutSec 5) "no size report from tab A"
+    $a = [int][regex]::Match((Get-NutshellLogText -Session $s), "A_LINES_1=(\d+)").Groups[1].Value
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "inactive_tab_after_resize.png") | Out-Null
-    Assert-True ($a -ge 30) "tab A still has the pre-resize grid: tput lines = $a (expected >= 30 for a 1300px-tall window)"
-    "tab A reports $a lines after the resize happened on tab B"
+    Assert-True ($a -gt $a0) "tab A still has the pre-resize grid: tput lines = $a, same or fewer than the $a0 it had before the window grew from 700px to 1300px tall"
+    "tab A reports $a lines after the resize happened on tab B (was $a0 before)"
 }
