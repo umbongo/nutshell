@@ -331,6 +331,9 @@ Invoke-AiCase "ai_write_command_held_then_runs_after_permit" {
     [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]3045, [IntPtr]::Zero) | Out-Null   # IDC_CMD_APPROVE_SEL
     Assert-True (Wait-NutshellLog -Session $s -Pattern ([regex]::Escape("touch $file")) -TimeoutSec 10) "the held command never reached the terminal after switching to Read + write and running it"
 
+    # Running the card moved the caret to the panel's input box; put the
+    # keyboard back in the terminal before typing the check.
+    Set-NutshellTerminalFocus -Session $s
     Send-NutshellLine -Session $s -Line "test -e $file && echo RAN_OK || echo RAN_FAIL"
     Assert-True (Wait-NutshellLog -Session $s -Pattern '(?m)^RAN_(OK|FAIL)\s*$' -TimeoutSec 8) "the post-run existence check never reached the shell"
     Assert-True ((Get-NutshellLogText -Session $s) -match '(?m)^RAN_OK\s*$') "the file still does not exist: the held command was not actually run"

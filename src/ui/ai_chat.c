@@ -3761,7 +3761,15 @@ next_coalesce:;
                             chat_listview_reset_cmd_expand(d->hChatList);
                     }
                     relayout(d);
-                    SetFocus(d->hInput);
+                    /* A reply finishing is not a user action: only move
+                     * the caret to the input if the focus is already
+                     * somewhere in this panel. Never take it from the
+                     * terminal while the user is typing there. */
+                    {
+                        HWND f = GetFocus();
+                        if (f && (f == hwnd || IsChild(hwnd, f)))
+                            SetFocus(d->hInput);
+                    }
                 }
             }
 
