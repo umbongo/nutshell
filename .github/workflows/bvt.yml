@@ -23,7 +23,18 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        shell: powershell   # Windows PowerShell 5.1 -- the harness targets it and the runner has no pwsh
+        # Windows PowerShell 5.1 -- the harness targets it and the runner has
+        # no pwsh. Spell the invocation out rather than the built-in
+        # `powershell` shell so it carries -ExecutionPolicy Bypass: the
+        # built-in one runs `powershell -command ". '{0}'"` and dies with
+        # "running scripts is disabled on this system" whenever the runner
+        # process inherits the machine's default Restricted policy (it did,
+        # once the runner came up from the Startup shortcut instead of an
+        # interactive shell). The built-in shell also prepends
+        # $ErrorActionPreference = 'Stop' and propagates $LASTEXITCODE; a
+        # custom shell gets neither, so spell those out too or a failing
+        # mingw32-make would leave the step green.
+        shell: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; . '{0}'; if ($LASTEXITCODE) { exit $LASTEXITCODE }"
     steps:
       - uses: actions/checkout@v4
 
