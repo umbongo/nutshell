@@ -19,11 +19,21 @@ Invoke-Case "ctrl_c_without_selection_interrupts" @{} {
     Wait-NutshellShell -Session $s
     Send-NutshellLine -Session $s -Line "sleep 30"
     Start-Sleep -Milliseconds 800
-    Send-NutshellKeys -Session $s -Keys "^c" -SettleMs 500
+    # Ctrl+C with nothing selected: window.c copies nothing and deliberately
+    # falls through, so the 0x03 that TranslateMessage derives from the key --
+    # from the same attached keyboard state Send-NutshellChord sets -- reaches
+    # the shell as SIGINT. Exactly one 0x03 is sent, so `sleep` is interrupted
+    # once and the next line runs at a live prompt rather than a second
+    # interrupt landing on it.
+    Send-NutshellChord -Session $s -Key C -Ctrl -SettleMs 500
     Send-NutshellLine -Session $s -Line "echo AFTER_$((1+1))"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "AFTER_2" -TimeoutSec 5) "shell did not return within 5s: Ctrl+C was not delivered as SIGINT"
+    # The prompt must be healthy afterwards: a chord delivered twice, or a
+    # stray 0x03 arriving late, would kill this second command instead.
+    Send-NutshellLine -Session $s -Line "echo STILL_ALIVE_3"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "STILL_ALIVE_3" -TimeoutSec 5) "the shell did not run a second command after the interrupt"
     "sleep 30 interrupted; prompt returned"
-} -NeedsDesktop   # real Ctrl+C (GetKeyState)
+}
 
 Invoke-Case "log_filename_follows_log_format" @{ log_format = "%Y%m%d-%H%M" } {
     param($s)
@@ -39,26 +49,37 @@ Invoke-Case "paste_without_confirmation" @{ paste_confirm = $false } {
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     Set-Clipboard -Value "echo PASTE_OK_42"
-    Send-NutshellKeys -Session $s -Keys "^v" -SettleMs 600
+    # Ctrl+V is decided entirely in WM_KEYDOWN (do_paste, then return 0), so no
+    # WM_CHAR is involved at all -- unlike Ctrl+C. If the chord's modifier did
+    # not take, the key would fall through as a plain 'v' and the text below
+    # would never appear.
+    Send-NutshellChord -Session $s -Key V -Ctrl -SettleMs 600
     $wins = Get-NutshellWindows -Session $s
     Assert-True (-not ($wins | Where-Object { $_ -match "Paste" })) "a paste confirmation window appeared although paste_confirm is off"
-    Send-NutshellKeys -Session $s -Keys "{ENTER}"
+    Send-NutshellKey -Session $s -Key Enter
     Assert-True (Wait-NutshellLog -Session $s -Pattern "PASTE_OK_42" -TimeoutSec 5) "pasted text never reached the shell"
     "pasted straight through"
-} -NeedsDesktop   # real Ctrl+V (GetKeyState)
+}
 
 Invoke-Case "paste_with_confirmation_shows_dialog" @{ paste_confirm = $true } {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     Set-Clipboard -Value "echo PASTE_CONFIRM_7"
-    Send-NutshellKeys -Session $s -Keys "^v" -SettleMs 800
+    Send-NutshellChord -Session $s -Key V -Ctrl -SettleMs 800
     $dlg = Get-NutshellWindows -Session $s | Where-Object { $_ -notmatch "Nutshell_Window" } | Select-Object -First 1
     Assert-True ($null -ne $dlg) "no confirmation window appeared with paste_confirm on"
+    $dlgHwnd = [IntPtr][long]($dlg -split "`t")[0]
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "paste_confirm_dialog.png") -Hwnd ([long]($dlg -split "`t")[0]) | Out-Null
-    Send-NutshellKeys -Session $s -Keys "{ESC}" -SettleMs 400
+    # Dismiss with a posted Escape aimed at the dialog itself: paste_dlg.c runs
+    # its own modal loop and cancels on a WM_KEYDOWN of VK_ESCAPE, so this needs
+    # no foreground either. (The app's UI thread is inside that loop, hence a
+    # posted key rather than a menu command.)
+    Send-NutshellKey -Session $s -Key Escape -Hwnd $dlgHwnd -SettleMs 600
+    Assert-True (-not (Get-NutshellWindows -Session $s | Where-Object { $_ -notmatch "Nutshell_Window" })) "the paste confirmation window is still open after Escape"
+    Assert-True ((Get-NutshellLogText -Session $s) -notmatch "PASTE_CONFIRM_7") "the cancelled paste reached the shell anyway"
     "dialog shown: " + ($dlg -split "`t")[2]
-} -NeedsDesktop   # real Ctrl+V (GetKeyState)
+}
 
 Invoke-Case "pty_resizes_with_window" @{} {
     param($s)
@@ -164,4 +185,4 @@ Invoke-Case "resize_applies_to_inactive_tab" @{} {
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "inactive_tab_after_resize.png") | Out-Null
     Assert-True ($a -ge 30) "tab A still has the pre-resize grid: tput lines = $a (expected >= 30 for a 1300px-tall window)"
     "tab A reports $a lines after the resize happened on tab B"
-} -NeedsDesktop   # the posted tab click does not take effect with the workstation locked (observed)
+}

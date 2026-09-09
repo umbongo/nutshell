@@ -4,14 +4,14 @@ End-to-end tests that drive the real `build\win\nutshell.exe` against a live SSH
 host. They complement the unit tests in `tests/*.c`, which never touch Win32 or a
 network. Everything here is Windows-only.
 
-Most of the suite needs no desktop session at all: typing and driving dialogs go
-through `PostMessage`/`SendMessage` straight to the app's own window queue, not
-simulated input, so it works with the desktop locked or another app in the
-foreground (a self-hosted CI runner's normal state). Only the handful of cases
-that exercise a true modifier chord the app reads via `GetKeyState` (Ctrl+C/V,
-Ctrl+Shift+C/V, Shift+Insert, Ctrl+= zoom) still need `SendKeys`, and therefore an
-unlocked, interactive desktop with keyboard focus free — see "Posted vs. real
-input" below for exactly which cases those are.
+No case needs a desktop session: typing and driving dialogs go through
+`PostMessage`/`SendMessage` straight to the app's own window queue, not simulated
+input, so the suite works with the desktop locked, the RDP session disconnected,
+or another app in the foreground (a self-hosted CI runner's normal state). Even
+the modifier chords the app reads via `GetKeyState` (Ctrl+C/V, Ctrl+Shift+C/V,
+Shift+Insert, Ctrl+= zoom) are posted — `Send-NutshellChord` borrows the app's own
+keyboard state with `AttachThreadInput` instead of synthesising real input. See
+"Posted input" below.
 
 ## How it works
 
@@ -46,44 +46,47 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
 `cases\*.ps1` is picked up automatically) rather than growing one giant script.
 
-### Posted vs. real input
+### Posted input
 
-- **Posted (no foreground/focus/unlocked desktop needed):** `Send-NutshellText`,
-  `Send-NutshellKey` (named keys: Enter, Tab, Escape, Backspace, PgUp, PgDn, Home,
-  End, Up, Down, Left, Right, Insert, F1–F12), `Send-NutshellLine`,
+- **Plain keys and text:** `Send-NutshellText`, `Send-NutshellKey` (named keys:
+  Enter, Tab, Escape, Backspace, PgUp, PgDn, Home, End, Up, Down, Left, Right,
+  Insert, F1–F12, plus the letters the chords need), `Send-NutshellLine`,
   `Wait-NutshellShell`, `Send-NutshellCommand`, and every dialog helper below.
   These post `WM_CHAR`/`WM_KEYDOWN`+`WM_KEYUP`/`WM_COMMAND`/`BM_CLICK`/etc.
   straight to the target window's message queue, exactly mirroring what
   `src/ui/window.c`'s `WM_CHAR`/`WM_KEYDOWN` handlers (and each dialog's own
-  `WM_COMMAND` handler) already do for real input.
-- **Real (`SendKeys`, needs the foreground and an unlocked desktop):**
-  `Send-NutshellKeys` — kept only for the modifier chords `window.c` reads via
-  `GetKeyState` at the moment the message is processed (Ctrl+C/V, Ctrl+Shift+C/V,
-  Shift+Insert, Ctrl+=/Ctrl+- zoom), since a posted `WM_KEYDOWN` alone doesn't
-  change what `GetKeyState` reports. Cases still using it:
-  `ctrl_c_without_selection_interrupts`, `paste_without_confirmation`,
-  `paste_with_confirmation_shows_dialog` (all via their Ctrl+C/Ctrl+V step), plus
-  the AI cases' `Set-NutshellTerminalFocus`. These need keyboard focus free and
-  the desktop unlocked; everything else in the table below does not.
+  `WM_COMMAND` handler) already do for real input. `Send-NutshellKey -Hwnd`
+  aims the pair at another window of the app — used for the paste preview's
+  Escape, which `paste_dlg.c`'s own modal loop watches for.
+- **Modifier chords:** `Send-NutshellChord -Key <name> [-Ctrl] [-Shift]`.
+  `window.c` decides Ctrl+C/V, Ctrl+Shift+C/V, Shift+Insert and Ctrl+=/Ctrl+-
+  with `GetKeyState(VK_CONTROL/VK_SHIFT)` rather than from the message, so a
+  bare posted `WM_KEYDOWN` takes the wrong branch. `GetKeyState` reads the
+  keyboard-state table of the calling thread's input queue, and
+  `AttachThreadInput` makes two threads share one input queue — so the helper
+  attaches to Nutshell's UI thread, `SetKeyboardState`s the modifier down,
+  posts the key, waits for a `WM_NULL` round trip, then restores and detaches.
+  The app's message loop reads the same table in `TranslateMessage`, so Ctrl+C
+  with no selection — which `window.c` deliberately falls through on — still
+  produces the `WM_CHAR` `0x03` that reaches the shell as SIGINT. No real
+  input, no input desktop, nothing to lock.
 
-Those three, plus `resize_applies_to_inactive_tab` (whose posted tab click has
-been observed not to take effect with the workstation locked), are marked
-`-NeedsDesktop` on their `Invoke-Case` call. When
-`Test-NutshellDesktopAvailable` reports no usable desktop — `LogonUI.exe` owns
-the input desktop and `GetForegroundWindow()` returns 0 — those cases print
-`[SKIP]` and are left out of the results table, so a locked workstation gives
-an honestly incomplete run instead of four failures about the desktop rather
-than the code. Every other case runs locked, so a `bvt` run on a locked box is
-still a real gate; unlock it to get the full sweep.
+That is the whole of it: `Send-NutshellKeys` (real `SendKeys`, and the
+`SetForegroundWindow`/`keybd_event` dance it needed) is gone, and no case is
+foreground-dependent. It had to go rather than be tolerated — the dev box's
+logon session is normally RDP-disconnected, and on such a desktop
+`GetForegroundWindow()` returns 0 for *every* process, so no amount of retrying
+can make a window come forward. `Set-NutshellTerminalFocus` still calls
+`SetForegroundWindow` as a best effort after its click, but does not depend on
+it succeeding.
 
 ## Prerequisites
 
 - `build\win\nutshell.exe` built from the tree under test (`mingw32-make clean && mingw32-make release`).
 - A host reachable by SSH with a **passphrase-free** key authorised for the user.
   The dev box uses the Raspberry Pi `tompi` with `~/.ssh/thomas`.
-- For the cases listed under "Real" above only: keyboard focus free and the
-  desktop unlocked while the run is in progress. Every other case runs fine with
-  the desktop locked.
+- No desktop requirement: every case runs with the workstation locked, the RDP
+  session disconnected and other apps in the foreground.
 
 ## Running
 

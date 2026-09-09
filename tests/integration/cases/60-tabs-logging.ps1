@@ -42,11 +42,10 @@ function Find-NutshellColorInRegion {
 
 # ---- TABS-1: open, switch (implicitly), close, the other tab is active ----------
 # Open-NutshellSecondTab is fully posted (Session Manager listbox selection +
-# IDOK, no real click) so the tab it opens becomes active with no foreground
-# needed. Closing it is then just Ctrl+W (WM_CHAR 0x17) on the *already*-
-# active tab -- window.c's WM_CHAR handler closes whichever tab is active, so
-# this whole case needs no Select-NutshellTab (real click) at all, unlike
-# what the case plan assumed. Get-NutshellTabCount is not implementable (see
+# IDOK) so the tab it opens becomes active on its own. Closing it is then just
+# Ctrl+W (WM_CHAR 0x17) on the *already*-active tab -- window.c's WM_CHAR
+# handler closes whichever tab is active, so this whole case needs no
+# Select-NutshellTab at all, unlike what the case plan assumed. Get-NutshellTabCount is not implementable (see
 # its doc comment), so "the count drops" is shown via a tab-strip capture
 # hash changing when the second tab opens, and "the other tab is active" via
 # a marker landing in tab A's already-running log after the close.

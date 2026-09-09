@@ -127,18 +127,21 @@ exact-allow-list gate, not a ratchet — any violation fails `make test`:
 a live SSH host — see `tests/integration/README.md` for the case list, the
 helpers, prerequisites and how to run a subset. Typing and dialog driving go
 through posted window messages (`Send-NutshellLine`, `Wait-NutshellDialog`,
-`Get-NutshellControl`, …), so most cases need no foreground window and run on
-the self-hosted runner or a locked desktop. Two hard rules:
+`Get-NutshellControl`, …), so **no** case needs a foreground window: the suite
+runs on the self-hosted runner, on a locked desktop and on an
+RDP-disconnected session alike. Two hard rules:
 
 - **Never stop a `nutshell` process you did not start.** Each case launches
   its own scratch copy of the exe and tears it down itself; killing an
   unrelated running instance (the user's own session, say) is never the fix
   for a stuck or failing case.
-- **`Send-NutshellKeys` (real `SendKeys`) is only for modifier chords the app
-  reads with `GetKeyState`** (Ctrl+C/V, Ctrl+Shift+C/V, Shift+Insert, Ctrl+=
-  zoom). Those cases need an unlocked, interactive session; the helper throws
-  rather than typing into a stranger's window when Nutshell cannot be brought
-  to the foreground. Prefer the posted helpers for everything else.
+- **Modifier chords go through `Send-NutshellChord`** (Ctrl+C/V,
+  Ctrl+Shift+C/V, Shift+Insert, Ctrl+= zoom — the ones the app reads with
+  `GetKeyState`). It attaches the harness thread's input to the app's UI
+  thread (`AttachThreadInput`) so a posted key sees the modifier down; there
+  is no real-`SendKeys` helper and nothing may be added that needs the
+  foreground. If a case seems to need one, the mechanism is wrong, not the
+  desktop.
 
 The tiers: `-Tier bvt` is the build verification sweep (no AI key), `-Tier ai`
 the key-gated cases (they cost model credits), `-Tier nightly` the slow ones.
@@ -171,6 +174,13 @@ and `tests/integration/Install-BvtRunner.ps1` registers the runner (both need
 
 ## Git commits
 
-- Do not add "🤖 Generated with Claude Code" footer
-- Do not add "Co-Authored-By: Claude <noreply@anthropic.com>" trailer
-- Write commit messages as if I authored them
+- Write the subject and body as if I authored them.
+- Keep the attribution: end every commit with the
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` trailer the tooling
+  adds, and every pull request body with its
+  `🤖 Generated with [Claude Code](https://claude.com/claude-code)` footer.
+- Name the models with their version, for quality control and performance
+  analysis: add a `Models:` line before the trailer listing the full model id
+  of every model that touched the change and what it did, e.g.
+  `Models: claude-opus-5 (orchestration, review); claude-sonnet-5 (cases 50-70);
+  claude-fable-5-1 (PR review)`. Pull request bodies carry the same line.

@@ -4,15 +4,14 @@
 #   .\tests\integration\Run-Integration.ps1 -HostName tompi -User thomas -KeyPath $HOME\.ssh\thomas
 #
 # Prerequisites: build\win\nutshell.exe built from the current tree; the key
-# authorised on the host. Typing and dialog-driving now go through
-# NutshellIT.psm1's posted-message helpers (Send-NutshellText/-Key/-Line,
-# Wait-NutshellDialog, Get/Set-NutshellControl*, ...) and do not need the
-# foreground or an unlocked desktop. A few cases still call the older
-# Send-NutshellKeys (real SendKeys) for modifier chords the app reads via
-# GetKeyState (Ctrl+C/V, Shift+Insert, Ctrl+= zoom) -- those still need
-# keyboard focus free and an unlocked, interactive desktop; see NutshellIT.psm1's
-# Send-NutshellKeys doc comment. Screenshots and logs land in
-# tests\integration\artifacts\.
+# authorised on the host. Typing and dialog-driving go through NutshellIT.psm1's
+# posted-message helpers (Send-NutshellText/-Key/-Line, Wait-NutshellDialog,
+# Get/Set-NutshellControl*, ...); the modifier chords the app reads via
+# GetKeyState (Ctrl+C/V, Shift+Insert, Ctrl+= zoom) go through
+# Send-NutshellChord, which borrows the app's own keyboard state with
+# AttachThreadInput. No case needs the foreground window, keyboard focus or an
+# unlocked desktop -- the whole suite runs on a locked or RDP-disconnected
+# session. Screenshots and logs land in tests\integration\artifacts\.
 #
 # Tiers (-Tier bvt|ai|nightly|all, default all): bvt is every non-AI case plus
 # ui_gallery/approval_card_run_selected_settles/ai_panel_opens_without_key (no
@@ -97,23 +96,11 @@ function Invoke-Case {
        since New-NutshellTestEnv must return before Start-Nutshell runs, a
        case needing a *pre-existing corrupt* file can't use Invoke-Case at all
        (see LAUNCH-3's standalone block in 50-window.ps1) and instead calls
-       New-NutshellTestEnv/Start-Nutshell itself.
-
-       -NeedsDesktop marks a case that only works on an unlocked, interactive
-       desktop -- the Send-NutshellKeys modifier chords, and the inactive-tab
-       resize case, whose posted tab click has been observed not to take effect
-       with the workstation locked. Those SKIP (nothing added to $results) when
-       Test-NutshellDesktopAvailable says the desktop cannot take real input,
-       rather than failing for a reason that has nothing to do with the code
-       under test. Everything without the switch runs desktop-locked. #>
+       New-NutshellTestEnv/Start-Nutshell itself. #>
     param([string] $Name, [hashtable] $Settings, [scriptblock] $Body, [string] $CaseTier = "bvt",
-          [string[]] $ExtraArgs = @(), [switch] $NoConfig, [switch] $NeedsDesktop)
+          [string[]] $ExtraArgs = @(), [switch] $NoConfig)
     if ($ActiveTiers -notcontains $CaseTier) { return }
     if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
-    if ($NeedsDesktop -and -not (Test-NutshellDesktopAvailable)) {
-        Write-Host ("[SKIP] " + $Name + " -- needs an unlocked, interactive desktop; this one is locked or has no foreground window")
-        return
-    }
     Write-Host ("[RUN ] " + $Name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath -Settings $Settings -NoConfig:$NoConfig
     $session = $null
