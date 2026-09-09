@@ -4,9 +4,22 @@
 #   .\tests\integration\Run-Integration.ps1 -HostName tompi -User thomas -KeyPath $HOME\.ssh\thomas
 #
 # Prerequisites: build\win\nutshell.exe built from the current tree; the key
-# authorised on the host; nothing else grabbing keyboard focus while it runs
-# (keystrokes are delivered to the foreground window). Screenshots and logs
-# land in tests\integration\artifacts\.
+# authorised on the host. Typing and dialog-driving now go through
+# NutshellIT.psm1's posted-message helpers (Send-NutshellText/-Key/-Line,
+# Wait-NutshellDialog, Get/Set-NutshellControl*, ...) and do not need the
+# foreground or an unlocked desktop. A few cases still call the older
+# Send-NutshellKeys (real SendKeys) for modifier chords the app reads via
+# GetKeyState (Ctrl+C/V, Shift+Insert, Ctrl+= zoom) -- those still need
+# keyboard focus free and an unlocked, interactive desktop; see NutshellIT.psm1's
+# Send-NutshellKeys doc comment. Screenshots and logs land in
+# tests\integration\artifacts\.
+#
+# Tiers (-Tier bvt|ai|nightly|all, default all): bvt is every non-AI case plus
+# ui_gallery/approval_card_run_selected_settles/ai_panel_opens_without_key (no
+# AI key needed despite the ai_ prefix); ai is the five key-gated ai_* cases;
+# nightly is currently empty (reserved for slow/flaky cases, e.g. idle-timeout
+# or host-unreachable scenarios, per docs/superpowers/specs/2026-09-09-bvt-coverage.md's
+# proposed tiers -- none of those cases exist yet, only the tier plumbing does).
 
 param(
     [string] $HostName = "tompi",
@@ -14,6 +27,8 @@ param(
     [string] $KeyPath = (Join-Path $HOME ".ssh\thomas"),
     [string] $Exe = (Join-Path $PSScriptRoot "..\..\build\win\nutshell.exe"),
     [string[]] $Only = @(),
+    [ValidateSet("bvt", "ai", "nightly", "all")]
+    [string] $Tier = "all",
     # AI Assist cases: provider/model used with the key from NUTSHELL_IT_AI_KEY or tests\integration\.ai_key
     [string] $AiProvider = "moonshot",
     [string] $AiModel = "kimi-k3"
@@ -25,6 +40,19 @@ $Artifacts = Join-Path $PSScriptRoot "artifacts"
 New-Item -ItemType Directory -Force $Artifacts | Out-Null
 $Exe = (Resolve-Path $Exe).Path
 
+$ActiveTiers = if ($Tier -eq "all") { @("bvt", "ai", "nightly") } else { @($Tier) }
+Write-Host ("Tier(s) requested: " + ($ActiveTiers -join ", "))
+
+# -Exe validation: confirm the binary under test actually runs and report its
+# version, so a stale build\win\nutshell.exe left over from an earlier
+# checkout doesn't silently run against the wrong code.
+$exeVersion = Get-NutshellExeVersion -Exe $Exe
+if ($exeVersion) {
+    Write-Host ("Exe: " + $Exe + " (version " + $exeVersion + ")")
+} else {
+    Write-Host ("Exe: " + $Exe + " (version could not be captured -- see Get-NutshellExeVersion's doc comment; not fatal)")
+}
+
 $results = New-Object System.Collections.ArrayList
 
 # WM_COMMAND itself is a module-private constant ($script:WM_COMMAND inside
@@ -33,7 +61,8 @@ $results = New-Object System.Collections.ArrayList
 $WM_COMMAND = 0x0111
 
 function Invoke-Case {
-    param([string] $Name, [hashtable] $Settings, [scriptblock] $Body)
+    param([string] $Name, [hashtable] $Settings, [scriptblock] $Body, [string] $CaseTier = "bvt")
+    if ($ActiveTiers -notcontains $CaseTier) { return }
     if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
     Write-Host ("[RUN ] " + $Name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath -Settings $Settings
@@ -147,7 +176,7 @@ Invoke-Case "page_up_scrolls_history" @{} {
     Send-NutshellLine -Session $s -Line "seq 1 300"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^300\s*$" -TimeoutSec 5) "seq output incomplete"
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "page_up_before.png") | Out-Null
-    Send-NutshellKeys -Session $s -Keys "{PGUP}" -SettleMs 400
+    Send-NutshellKey -Session $s -Key PgUp -SettleMs 400
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "page_up_after.png") | Out-Null
     "screenshots saved (visual check)"
 }
@@ -183,7 +212,8 @@ Invoke-Case "terminal_holds_position_while_output_arrives" @{} {
     Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^300\s*$" -TimeoutSec 5) "seq output incomplete"
     # Output that arrives with no keypress: 101 lines after a 4 s delay.
     Send-NutshellLine -Session $s -Line "(sleep 4; seq 1000 1100) &"
-    Send-NutshellKeys -Session $s -Keys "{PGUP}{PGUP}" -SettleMs 500
+    Send-NutshellKey -Session $s -Key PgUp -SettleMs 250
+    Send-NutshellKey -Session $s -Key PgUp -SettleMs 500
     $before = Join-Path $Artifacts "smart_scroll_before.png"
     $after  = Join-Path $Artifacts "smart_scroll_after.png"
     $live   = Join-Path $Artifacts "smart_scroll_live.png"
@@ -192,7 +222,7 @@ Invoke-Case "terminal_holds_position_while_output_arrives" @{} {
     Start-Sleep -Milliseconds 600
     Save-NutshellScreenshot -Session $s -Path $after | Out-Null
     Assert-True ((Get-TerminalAreaHash $before) -eq (Get-TerminalAreaHash $after)) "the scrolled-back view moved when new output arrived (see smart_scroll_before/after.png)"
-    Send-NutshellKeys -Session $s -Keys "{ENTER}" -SettleMs 600
+    Send-NutshellKey -Session $s -Key Enter -SettleMs 600
     Save-NutshellScreenshot -Session $s -Path $live | Out-Null
     Assert-True ((Get-TerminalAreaHash $after) -ne (Get-TerminalAreaHash $live)) "a keypress did not return to the live view"
     "view held while 101 lines arrived; Enter returned to the live view"
@@ -239,12 +269,13 @@ $AiSettings = @{ ai_provider = $AiProvider; ai_custom_model = $AiModel; ai_api_k
 
 function Invoke-AiCase {
     param([string] $Name, [scriptblock] $Body)
+    if ($ActiveTiers -notcontains "ai") { return }
     if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
     if (-not $AiKey) {
         Write-Host ("[SKIP] " + $Name + " -- no key: set NUTSHELL_IT_AI_KEY or create tests\integration\.ai_key")
         return
     }
-    Invoke-Case $Name $AiSettings $Body
+    Invoke-Case $Name $AiSettings $Body "ai"
 }
 
 Invoke-AiCase "ai_panel_docks_with_key" {
@@ -410,7 +441,7 @@ function ConvertTo-NutshellFileToken {
     return ($Text -replace '\s+', '-') -replace '&', 'and'
 }
 
-if ($Only.Count -eq 0 -or $Only -contains "ui_gallery") {
+if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "ui_gallery")) {
     Write-Host ("[RUN ] ui_gallery")
     $galleryDir = Join-Path $Artifacts "gallery"
     New-Item -ItemType Directory -Force $galleryDir | Out-Null
@@ -458,7 +489,7 @@ if ($Only.Count -eq 0 -or $Only -contains "ui_gallery") {
 # Needs no SSH host or AI key -- --ui-demo never connects -- so this runs as
 # its own block like ui_gallery above, not through Invoke-Case/Invoke-AiCase
 # (both assume a live shell prompt).
-if ($Only.Count -eq 0 -or $Only -contains "approval_card_run_selected_settles") {
+if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "approval_card_run_selected_settles")) {
     $name = "approval_card_run_selected_settles"
     Write-Host ("[RUN ] " + $name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
@@ -521,6 +552,107 @@ Invoke-Case "ai_panel_opens_without_key" @{ ai_api_key = "" } {
     Save-NutshellScreenshot -Session $s -Path $path | Out-Null
     Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: ai_panel_no_key.png"
     "panel opened with no key (hwnd $p), no dialog"
+}
+
+# ---- Harness self-tests: posted input and dialog helpers -----------------------
+# Prove the posted-message helpers added to NutshellIT.psm1 (no foreground, no
+# focus, no unlocked desktop needed) actually drive the real app end to end.
+
+Invoke-Case "helpers_posted_text_reaches_shell" @{} {
+    param($s)
+    # The point of this case: everything it does -- Start-NutshellLogging
+    # (PostMessage WM_COMMAND), Wait-NutshellShell (posted Enter),
+    # Send-NutshellLine (posted WM_CHAR per character + posted Enter) -- goes
+    # through PostMessage to the main window's queue, not SendKeys, so it must
+    # pass with the desktop locked or another app holding the foreground.
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    Send-NutshellLine -Session $s -Line "echo POSTED_OK"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "POSTED_OK" -TimeoutSec 10) "posted text never reached the shell"
+    "posted keystrokes reached the shell with no foreground/focus dependency"
+}
+
+Invoke-Case "helpers_session_manager_opens_and_lists_profile" @{} {
+    param($s)
+    $dlg = Open-NutshellSessionManager -Session $s
+    $list = Get-NutshellControl -Dialog $dlg -Id 1000   # IDC_LIST_SESSIONS
+    Assert-True ($list -ne [IntPtr]::Zero) "session list control (IDC_LIST_SESSIONS) not found"
+    $items = Get-NutshellListItems -Control $list
+    Assert-True (($items | Where-Object { $_ -match [regex]::Escape($s.Env.ProfileName) }).Count -gt 0) `
+        "generated profile '$($s.Env.ProfileName)' not in the list: $($items -join ', ')"
+    Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "helpers_session_manager.png") -Hwnd ([long]$dlg) | Out-Null
+    Close-NutshellDialog -Dialog $dlg -Button Cancel
+    $stillOpen = Wait-NutshellDialog -Session $s -Title "Session Manager" -TimeoutSec 2
+    Assert-True ($stillOpen -eq [IntPtr]::Zero) "Session Manager still open after Cancel"
+    "listed profile '$($s.Env.ProfileName)' among $($items.Count) item(s); Cancel closed the dialog"
+}
+
+Invoke-Case "helpers_settings_opens_every_page" @{} {
+    param($s)
+    # The nine selectable pages, per src/core/settings_layout.c's NAV_TABLE
+    # (the other three rows are non-selectable group headers).
+    $pages = @("Appearance", "Terminal", "Logging", "SSH", "Startup", "Provider", "Behaviour", "Web Access", "About")
+    $dlg = Open-NutshellSettings -Session $s -Page $pages[0]
+    foreach ($page in $pages) {
+        Select-NutshellSettingsPage -Dialog $dlg -Page $page
+        Start-Sleep -Milliseconds 300
+        $token = ($page -replace '\s+', '-')
+        $path = Join-Path $Artifacts "helpers_settings_page_$token.png"
+        Save-NutshellScreenshot -Session $s -Path $path -Hwnd ([long]$dlg) | Out-Null
+        Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: $path"
+    }
+    Close-NutshellDialog -Dialog $dlg -Button Cancel
+    $stillOpen = Wait-NutshellDialog -Session $s -Title "Settings" -TimeoutSec 2
+    Assert-True ($stillOpen -eq [IntPtr]::Zero) "Settings still open after Cancel"
+    "all $($pages.Count) pages selected and captured; Cancel closed the dialog"
+}
+
+# Keystroke-free like ui_gallery: --ui-demo never connects, so this needs no
+# SSH host or AI key and runs as its own block rather than through Invoke-Case
+# (which assumes a live shell prompt via Wait-NutshellShell/Start-NutshellLogging).
+if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "helpers_theme_pixel_matches_token")) {
+    $name = "helpers_theme_pixel_matches_token"
+    Write-Host ("[RUN ] " + $name)
+    $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+    $session = $null
+    $ok = $false; $detail = ""
+    try {
+        $themeName = "Onyx Light"
+        $session = Start-Nutshell -Env $testEnv -ExtraArgs @("--ui-demo=chat", "--theme", $themeName)
+        Set-NutshellWindowSize -Session $session -Width 1400 -Height 900
+        $path = Join-Path $Artifacts "$name.png"
+        Save-NutshellScreenshot -Session $session -Path $path | Out-Null
+        Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: $name.png"
+
+        # Sample proportionally (like Get-TerminalAreaHash above) rather than a
+        # fixed pixel, to land inside the terminal area regardless of DPI: 15%
+        # in from the left, 35% down -- left of the docked AI panel, below the
+        # menu bar. Onyx Light's terminal_bg equals its bg_primary (both
+        # 0xF5F5F7), chosen deliberately so this point validates bg_primary
+        # unambiguously regardless of which of the two panels it lands in.
+        $bmp = New-Object System.Drawing.Bitmap $path
+        $sx = [int]($bmp.Width * 0.15); $sy = [int]($bmp.Height * 0.35)
+        $bmp.Dispose()
+
+        $bg = Get-NutshellThemeColor -Name $themeName -Token "bg_primary"
+        $near = Test-NutshellPixelNear -Path $path -X $sx -Y $sy -Rgb @($bg.R, $bg.G, $bg.B) -Tolerance 12
+        $sampled = Get-NutshellPixel -Path $path -X $sx -Y $sy
+        Assert-True $near ("pixel ($sx,$sy) = rgb($($sampled.R),$($sampled.G),$($sampled.B)) does not match " +
+            "$themeName bg_primary rgb($($bg.R),$($bg.G),$($bg.B)) within tolerance")
+        $detail = "pixel ($sx,$sy) matched $themeName bg_primary rgb($($bg.R),$($bg.G),$($bg.B)) within tolerance"
+        $ok = $true
+    } catch {
+        $detail = $_.Exception.Message
+        if ($session) { try { Save-NutshellScreenshot -Session $session -Path (Join-Path $Artifacts "$name-FAIL.png") | Out-Null } catch {} }
+    } finally {
+        if ($session) { Stop-Nutshell -Session $session }
+        for ($try = 0; $try -lt 5 -and (Test-Path $testEnv.Root); $try++) {
+            Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+            if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
+        }
+    }
+    if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
+    [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
 }
 
 # ---- Summary ------------------------------------------------------------------
