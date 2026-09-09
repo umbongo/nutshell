@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        shell: pwsh
+        shell: powershell   # Windows PowerShell 5.1 -- the harness targets it and the runner has no pwsh
     steps:
       - uses: actions/checkout@v4
 
