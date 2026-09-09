@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "term.h"
 #include <stdlib.h>
+#include <stdio.h>
 
 // Helper to get a cell from the screen (0-based row/col)
 static TermCell get_cell(Terminal *term, int row, int col) {
@@ -602,6 +603,53 @@ int test_term_write_seq_unchanged_on_zero_len(void) {
     unsigned long before = t->write_seq;
     term_process(t, "", 0);
     ASSERT_EQ(t->write_seq, before);
+    term_free(t);
+    TEST_END();
+}
+
+/* Read the first visible screen row the renderer would draw, honouring
+ * scrollback_offset the same way renderer.c's get_visible_row() does. */
+static void get_top_visible_text(Terminal *t, char *out, int out_len) {
+    int top = (t->lines_count >= t->rows)
+            ? (t->lines_count - t->rows - t->scrollback_offset)
+            : -t->scrollback_offset;
+    if (top < 0) top = 0;
+    TermRow *row = t->lines[(t->lines_start + top) % t->lines_capacity];
+    int n = 0;
+    for (int c = 0; c < row->len && n < out_len - 1; c++)
+        out[n++] = (char)(row->cells[c].codepoint ? row->cells[c].codepoint : ' ');
+    out[n] = '\0';
+}
+
+/* Minimise/restore: WM_SIZE(SIZE_MINIMIZED) used to drive the grid to 1x1
+ * and back. Whatever the window layer does, the pure reflow round trip
+ * through a degenerate geometry must leave a scrolled-back view anchored on
+ * the same history line (the smart-scroll contract from term_scroll()). */
+int test_term_resize_degenerate_round_trip_keeps_scroll_anchor(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(15, 80, 3000);
+    char buf[32];
+    for (int i = 1; i <= 200; i++) {
+        int n = snprintf(buf, sizeof(buf), "%d\r\n", i);
+        term_process(t, buf, (size_t)n);
+    }
+    term_process(t, "thomas@tompi:~$ ", 16);
+
+    /* One PgUp: the same jump window.c's scroll_page_up() makes. */
+    t->scrollback_offset = 15;
+    char before[96], after[96];
+    get_top_visible_text(t, before, sizeof(before));
+    ASSERT_STR_EQ(before, "172");
+
+    term_resize(t, 1, 1);
+    term_resize(t, 15, 80);
+
+    ASSERT_EQ(t->rows, 15);
+    ASSERT_EQ(t->cols, 80);
+    ASSERT_EQ(t->scrollback_offset, 15);
+    get_top_visible_text(t, after, sizeof(after));
+    ASSERT_STR_EQ(after, before);
+
     term_free(t);
     TEST_END();
 }

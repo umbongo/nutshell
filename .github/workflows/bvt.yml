@@ -11,6 +11,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   # One BVT at a time: the harness drives a real desktop.
   group: bvt-desktop
@@ -23,9 +26,21 @@ jobs:
     timeout-minutes: 40
     defaults:
       run:
-        shell: powershell   # Windows PowerShell 5.1 -- the harness targets it and the runner has no pwsh
+        # Windows PowerShell 5.1 -- the harness targets it and the runner has
+        # no pwsh. Spell the invocation out rather than the built-in
+        # `powershell` shell so it carries -ExecutionPolicy Bypass: the
+        # built-in one runs `powershell -command ". '{0}'"` and dies with
+        # "running scripts is disabled on this system" whenever the runner
+        # process inherits the machine's default Restricted policy (it did,
+        # once the runner came up from the Startup shortcut instead of an
+        # interactive shell). The built-in shell also prepends
+        # $ErrorActionPreference = 'Stop' and propagates $LASTEXITCODE; a
+        # custom shell gets neither, so spell those out too or a failing
+        # mingw32-make would leave the step green. The runner feeds the
+        # template through String.Format, so literal braces are doubled.
+        shell: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; . '{0}'; if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Toolchain on PATH
         run: |
@@ -41,19 +56,12 @@ jobs:
           mingw32-make release
 
       - name: BVT tier
-        env:
-          NUTSHELL_BVT_HOST: ${{ vars.NUTSHELL_BVT_HOST }}
-          NUTSHELL_BVT_USER: ${{ vars.NUTSHELL_BVT_USER }}
-          NUTSHELL_BVT_KEY:  ${{ vars.NUTSHELL_BVT_KEY }}
-        run: |
-          $hostName = if ($env:NUTSHELL_BVT_HOST) { $env:NUTSHELL_BVT_HOST } else { "tompi" }
-          $user     = if ($env:NUTSHELL_BVT_USER) { $env:NUTSHELL_BVT_USER } else { "thomas" }
-          $key      = if ($env:NUTSHELL_BVT_KEY)  { $env:NUTSHELL_BVT_KEY }  else { Join-Path $HOME ".ssh\thomas" }
-          .\tests\integration\Run-Integration.ps1 -HostName $hostName -User $user -KeyPath $key -Tier bvt
+        # Test host, account and key live here -- change them on this line.
+        run: .\tests\integration\Run-Integration.ps1 -HostName tompi -User thomas -KeyPath (Join-Path $HOME ".ssh\thomas") -Tier bvt
 
       - name: Upload evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bvt-artifacts
           path: tests/integration/artifacts
