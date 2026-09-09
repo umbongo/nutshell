@@ -104,6 +104,64 @@ int test_dock_terminal_width_minimum(void) {
     TEST_END();
 }
 
+/* ---- Terminal grid fit (WM_SIZE / sync_session_grid) ---- */
+
+int test_dock_terminal_grid_normal(void) {
+    TEST_BEGIN();
+    int rows = -1, cols = -1;
+    /* 1200x800 client, 40px tab strip, no panel, 14px scrollbar, 6px
+     * margin, 9x18 cells: (800-40)/18 = 42 rows, (1200-14-6)/9 = 131 cols */
+    ASSERT_EQ(ai_dock_terminal_grid(1200, 800, 40, 0, 14, 6, 9, 18, &rows, &cols), 1);
+    ASSERT_EQ(rows, 42);
+    ASSERT_EQ(cols, 131);
+    TEST_END();
+}
+
+int test_dock_terminal_grid_with_panel(void) {
+    TEST_BEGIN();
+    int rows = -1, cols = -1;
+    /* Docked 300px panel: (1200-300-14-6)/9 = 97 cols */
+    ASSERT_EQ(ai_dock_terminal_grid(1200, 800, 40, 300, 14, 6, 9, 18, &rows, &cols), 1);
+    ASSERT_EQ(rows, 42);
+    ASSERT_EQ(cols, 97);
+    TEST_END();
+}
+
+int test_dock_terminal_grid_iconic_leaves_grid_alone(void) {
+    TEST_BEGIN();
+    int rows = 42, cols = 131;
+    /* SIZE_MINIMIZED reports a 0x0 client: no grid, outputs untouched */
+    ASSERT_EQ(ai_dock_terminal_grid(0, 0, 40, 0, 14, 6, 9, 18, &rows, &cols), 0);
+    ASSERT_EQ(rows, 42);
+    ASSERT_EQ(cols, 131);
+    /* A zero width alone is just as degenerate as a zero height */
+    ASSERT_EQ(ai_dock_terminal_grid(0, 800, 40, 0, 14, 6, 9, 18, &rows, &cols), 0);
+    ASSERT_EQ(ai_dock_terminal_grid(1200, 0, 40, 0, 14, 6, 9, 18, &rows, &cols), 0);
+    ASSERT_EQ(rows, 42);
+    ASSERT_EQ(cols, 131);
+    TEST_END();
+}
+
+int test_dock_terminal_grid_no_font_metrics(void) {
+    TEST_BEGIN();
+    int rows = 24, cols = 80;
+    ASSERT_EQ(ai_dock_terminal_grid(1200, 800, 40, 0, 14, 6, 0, 18, &rows, &cols), 0);
+    ASSERT_EQ(ai_dock_terminal_grid(1200, 800, 40, 0, 14, 6, 9, 0, &rows, &cols), 0);
+    ASSERT_EQ(rows, 24);
+    ASSERT_EQ(cols, 80);
+    TEST_END();
+}
+
+int test_dock_terminal_grid_tiny_visible_clamps_to_one(void) {
+    TEST_BEGIN();
+    int rows = -1, cols = -1;
+    /* Visible but smaller than the tab strip plus one cell: 1x1, never 0 */
+    ASSERT_EQ(ai_dock_terminal_grid(20, 30, 40, 0, 14, 6, 9, 18, &rows, &cols), 1);
+    ASSERT_EQ(rows, 1);
+    ASSERT_EQ(cols, 1);
+    TEST_END();
+}
+
 /* ---- Ease-in curve ---- */
 
 int test_dock_ease_in_zero(void) {

@@ -201,21 +201,23 @@ static void force_full_terminal_repaint(HWND hwnd, Terminal *term)
  * WM_SIZE skips the PTY while channel is NULL). No-op when nothing changed. */
 static void sync_session_grid(HWND hwnd, Session *s)
 {
-    if (!s || !s->term || g_renderer.charWidth <= 0 || g_renderer.charHeight <= 0)
+    if (!s || !s->term)
         return;
 
+    /* GetClientRect reports 0x0 while the window is iconic; the helper
+     * refuses to fit a grid to that and we keep the current one (see the
+     * SIZE_MINIMIZED note in WM_SIZE). */
     RECT rc;
     GetClientRect(hwnd, &rc);
     int ai_w = 0;
     if (g_ai_docked && g_hwndAiChat && IsWindowVisible(g_hwndAiChat))
         ai_w = g_ai_panel_width;
-    int term_h = rc.bottom - g_tab_height;
-    if (term_h < 1) term_h = 1;
-    int term_w = ai_dock_terminal_width(rc.right, ai_w, CSB_WIDTH, g_left_margin);
-    int cols = term_w / g_renderer.charWidth;
-    int rows = term_h / g_renderer.charHeight;
-    if (cols < 1) cols = 1;
-    if (rows < 1) rows = 1;
+    int rows, cols;
+    if (!ai_dock_terminal_grid(rc.right, rc.bottom, g_tab_height,
+                               ai_w, CSB_WIDTH, g_left_margin,
+                               g_renderer.charWidth, g_renderer.charHeight,
+                               &rows, &cols))
+        return;
 
     if (cols != s->term->cols || rows != s->term->rows) {
         term_resize(s->term, rows, cols);
@@ -229,6 +231,12 @@ static void sync_session_grid(HWND hwnd, Session *s)
 /* Paint cooldown: cap repaints at ~60fps to prevent thrashing on heavy output */
 #define PAINT_COOLDOWN_MS 16
 static DWORD g_last_paint_tick;
+
+/* Set by WM_SIZE(SIZE_MINIMIZED), cleared by the next WM_SIZE. The window
+ * surface does not survive the iconic state, but the renderer's
+ * display-buffer shadow does, so the restore repaint would skip every
+ * "unchanged" cell and leave the terminal band blank. */
+static bool g_iconic;
 
 /* ---- Paste state machine (timer-driven, non-blocking) ------------------- */
 #define PASTE_TIMER_ID 3
@@ -2463,6 +2471,24 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_SIZE: {
+            /* Minimise reports a 0x0 client. Fitting the grid to that
+             * (1x1) and pushing it to the remote PTY made the shell redraw
+             * its prompt one column wide while iconic; each wrapped
+             * character scrolled the buffer and, via term_scroll()'s
+             * smart-scroll anchor, moved a scrolled-back view up a line,
+             * so the view came back a page higher after restore. Nothing
+             * is visible while iconic, and SW_RESTORE delivers a proper
+             * WM_SIZE, so leave layout, grid and PTY exactly as they are. */
+            if (wParam == SIZE_MINIMIZED) {
+                g_iconic = true;
+                return 0;
+            }
+            if (g_iconic) {
+                g_iconic = false;
+                force_full_terminal_repaint(hwnd,
+                    g_active_session ? g_active_session->term : NULL);
+            }
+
             int width = LOWORD(lParam);
             int height = HIWORD(lParam);
 
@@ -2497,16 +2523,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     g_ai_docked ? AI_DOCK_SPLITTER_PAD : 0);
             }
 
-            if (g_active_session && g_active_session->term && g_renderer.charWidth > 0 && g_renderer.charHeight > 0) {
-                int term_h = height - g_tab_height;
-                if (term_h < 1) term_h = 1;
-
-                int term_w = ai_dock_terminal_width(width, ai_w, CSB_WIDTH, g_left_margin);
-                int cols = term_w / g_renderer.charWidth;
-                int rows = term_h / g_renderer.charHeight;
-                if (cols < 1) cols = 1;
-                if (rows < 1) rows = 1;
-
+            int rows, cols;
+            if (g_active_session && g_active_session->term &&
+                ai_dock_terminal_grid(width, height, g_tab_height,
+                                      ai_w, CSB_WIDTH, g_left_margin,
+                                      g_renderer.charWidth, g_renderer.charHeight,
+                                      &rows, &cols)) {
                 if (cols != g_active_session->term->cols || rows != g_active_session->term->rows) {
                     term_resize(g_active_session->term, rows, cols);
                     term_mark_all_dirty(g_active_session->term);
