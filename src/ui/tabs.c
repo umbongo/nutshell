@@ -859,8 +859,17 @@ void tabs_remove(HWND hwnd, int index)
 {
     TabControlData *data = (TabControlData *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!data) return;
-    tabmgr_remove(&data->m, index);
+    int reselect = tabmgr_remove(&data->m, index);
     InvalidateRect(hwnd, NULL, FALSE);
+    /* The closed tab was the active one and a neighbour took over.  Fire
+     * on_select for it exactly as a click on it would, so window.c re-points
+     * g_active_session (which on_tab_close nulled) at the survivor and its
+     * terminal is painted and receives input again.  Without this the strip
+     * highlights the survivor while the pane shows the idle placeholder. */
+    if (reselect && data->on_select) {
+        int a = data->m.active_index;
+        data->on_select(a, data->m.tabs[a].user_data);
+    }
 }
 
 void tabs_set_callbacks(HWND hwnd,

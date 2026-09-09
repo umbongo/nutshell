@@ -271,20 +271,15 @@ Invoke-Case "resize_range_paints_cleanly" @{} {
 }
 
 # ---- WINDOW-1: minimise and restore repaints -------------------------------------
-# KNOWN PRODUCT BUG (2026-09-09 BVT sweep): the final content comparison below
-# fails reproducibly, and not from a harness bug. Scrolled back with PgUp on a
-# full screen, minimising then restoring shifts the view up by exactly one more
-# page (e.g. top line 165 -> 150, a 15-row jump matching the visible row
-# count) every time, with generous settle time on both sides ruling out a
-# timing race: window.c's WM_SIZE has no SIZE_MINIMIZED guard, so the
-# resize-to-iconic re-runs the smart-scroll offset recompute (the same
-# mechanism `terminal_holds_position_while_output_arrives` in 10-terminal.ps1
-# tests for new output arriving) against a transient near-zero row count, and
-# never corrects it back on restore. The fix belongs in src/ and lands in its
-# own change; until then that one comparison runs inside
-# Invoke-KnownBugBlock -- it still executes and is still reported, it just
-# does not fail the tier. Everything else here (iconic/restore state changes,
-# the capture itself) is asserted normally.
+# This case found a real product bug in the 2026-09-09 BVT sweep: scrolled back
+# with PgUp on a full screen, minimising then restoring shifted the view up by
+# exactly one more page (e.g. top line 165 -> 150, a 15-row jump matching the
+# visible row count) every time. window.c's WM_SIZE had no SIZE_MINIMIZED
+# guard, so the resize-to-iconic re-ran the smart-scroll offset recompute (the
+# same mechanism `terminal_holds_position_while_output_arrives` in
+# 10-terminal.ps1 tests for new output arriving) against a transient near-zero
+# row count, and never corrected it back on restore. Fixed in v1.1.12 (PR #12);
+# every assertion here now runs normally.
 Invoke-Case "minimise_restore_repaints" @{} {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
@@ -325,10 +320,13 @@ Invoke-Case "minimise_restore_repaints" @{} {
     $region = @{ X = 0.0; Y = $top; W = 0.6; H = (0.98 - $top) }
     $hb = Get-NutshellRegionHash -Path $before -Region $region
     $ha = Get-NutshellRegionHash -Path $after  -Region $region
-    $known = Invoke-KnownBugBlock -Bug "WM_SIZE has no SIZE_MINIMIZED guard: minimise/restore scrolls a scrolled-back view up one page" {
-        Assert-True ($hb -eq $ha) "terminal content differs after minimise/restore (see minimise_before/after.png)"
-    }
-    "minimised (IsIconic true), restored (IsIconic false); $known"
+    # Regression guard for the bug this case found: WM_SIZE had no
+    # SIZE_MINIMIZED guard, so the resize-to-iconic re-ran the smart-scroll
+    # offset recompute against a transient near-zero row count and never
+    # corrected it on restore -- a scrolled-back view came back one page up.
+    # Fixed in v1.1.12 (PR #12); asserted normally from here on.
+    Assert-True ($hb -eq $ha) "terminal content differs after minimise/restore (see minimise_before/after.png)"
+    "minimised (IsIconic true), restored (IsIconic false), scrolled-back view unchanged"
 }
 
 # ---- WINDOW-2: fullscreen toggle changes the PTY size ----------------------------

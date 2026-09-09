@@ -22,9 +22,11 @@ int tabmgr_add(TabManager *m, const char *title, void *user_data)
     return idx;
 }
 
-void tabmgr_remove(TabManager *m, int index)
+int tabmgr_remove(TabManager *m, int index)
 {
-    if (index < 0 || index >= m->count) return;
+    if (index < 0 || index >= m->count) return 0;
+
+    int was_active = (m->active_index == index);
 
     for (int i = index; i < m->count - 1; i++) {
         m->tabs[i] = m->tabs[i + 1];
@@ -33,13 +35,21 @@ void tabmgr_remove(TabManager *m, int index)
 
     if (m->count == 0) {
         m->active_index = -1;
-    } else if (m->active_index >= m->count) {
-        m->active_index = m->count - 1;
-    } else if (m->active_index == index) {
-        /* Closed tab was active: prefer the previous one */
-        if (m->active_index > 0) m->active_index--;
-        /* else stay at 0 — the old tab[1] is now tab[0] */
+        return 0;                       /* no survivor to select */
     }
+    if (was_active) {
+        /* Closed tab was active: prefer the previous one; at 0 stay there —
+         * the old tab[1] is now tab[0].  Either way a *different* tab is
+         * now active and the caller must select it. */
+        if (m->active_index > 0) m->active_index--;
+        return 1;
+    }
+    if (m->active_index > index) {
+        /* A tab left of the active one went: the active tab slid down one
+         * slot but is still the same tab. */
+        m->active_index--;
+    }
+    return 0;
 }
 
 void tabmgr_set_active(TabManager *m, int index)

@@ -176,6 +176,105 @@ int test_tabmgr_close_active_tab(void)
     TEST_END();
 }
 
+/* ---- tabmgr_remove: closing the active tab reports that the survivor ----
+ * must be (re)selected.  This is the BVT tabs_open_switch_close scenario:
+ * tab A open, tab B opened and active, Ctrl+W closes B.  The tab strip's
+ * caller (tabs.c) must fire on_select for A, or window.c's g_active_session
+ * stays NULL and the user is stranded with a green dot and a blank pane. */
+
+int test_tabmgr_remove_active_reports_reselect(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    void *a = (void *)0xA, *b = (void *)0xB;
+    tabmgr_add(&m, "A", a);
+    tabmgr_add(&m, "B", b);
+    tabmgr_set_active(&m, 1);
+    ASSERT_EQ(tabmgr_remove(&m, 1), 1);
+    ASSERT_EQ(tabmgr_count(&m), 1);
+    ASSERT_EQ(tabmgr_get_active(&m), 0);
+    ASSERT_EQ(tabmgr_get_user_data(&m, tabmgr_get_active(&m)), a);
+    TEST_END();
+}
+
+/* ---- tabmgr_remove: closing the active *first* tab selects its successor - */
+
+int test_tabmgr_remove_active_first_selects_next(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    void *a = (void *)0xA, *b = (void *)0xB;
+    tabmgr_add(&m, "A", a);
+    tabmgr_add(&m, "B", b);
+    tabmgr_set_active(&m, 0);
+    ASSERT_EQ(tabmgr_remove(&m, 0), 1);
+    ASSERT_EQ(tabmgr_get_active(&m), 0);
+    ASSERT_EQ(tabmgr_get_user_data(&m, 0), b);
+    TEST_END();
+}
+
+/* ---- tabmgr_remove: closing a tab *left of* the active one must keep the
+ * same tab active (its index shifts down by one) and needs no reselect --- */
+
+int test_tabmgr_remove_before_active_keeps_same_tab(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    void *a = (void *)0xA, *b = (void *)0xB, *c = (void *)0xC;
+    tabmgr_add(&m, "A", a);
+    tabmgr_add(&m, "B", b);
+    tabmgr_add(&m, "C", c);
+    tabmgr_set_active(&m, 1);                 /* B active */
+    ASSERT_EQ(tabmgr_remove(&m, 0), 0);       /* close A */
+    ASSERT_EQ(tabmgr_count(&m), 2);
+    ASSERT_EQ(tabmgr_get_active(&m), 0);      /* B slid to index 0 */
+    ASSERT_EQ(tabmgr_get_user_data(&m, tabmgr_get_active(&m)), b);
+    TEST_END();
+}
+
+/* ---- tabmgr_remove: closing a tab *right of* the active one is a no-op for
+ * selection ------------------------------------------------------------- */
+
+int test_tabmgr_remove_after_active_no_reselect(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    void *a = (void *)0xA, *b = (void *)0xB, *c = (void *)0xC;
+    tabmgr_add(&m, "A", a);
+    tabmgr_add(&m, "B", b);
+    tabmgr_add(&m, "C", c);
+    tabmgr_set_active(&m, 0);
+    ASSERT_EQ(tabmgr_remove(&m, 2), 0);
+    ASSERT_EQ(tabmgr_get_active(&m), 0);
+    ASSERT_EQ(tabmgr_get_user_data(&m, 0), a);
+    ASSERT_EQ(tabmgr_remove(&m, 1), 0);
+    ASSERT_EQ(tabmgr_get_active(&m), 0);
+    ASSERT_EQ(tabmgr_get_user_data(&m, 0), a);
+    TEST_END();
+}
+
+/* ---- tabmgr_remove: nothing to reselect when the last tab or an invalid
+ * index goes ------------------------------------------------------------ */
+
+int test_tabmgr_remove_no_survivor_no_reselect(void)
+{
+    TEST_BEGIN();
+    TabManager m;
+    tabmgr_init(&m);
+    ASSERT_EQ(tabmgr_remove(&m, 0), 0);       /* empty manager */
+    tabmgr_add(&m, "A", (void *)1);
+    ASSERT_EQ(tabmgr_remove(&m, 5), 0);       /* invalid index */
+    ASSERT_EQ(tabmgr_get_active(&m), 0);
+    ASSERT_EQ(tabmgr_remove(&m, 0), 0);       /* only tab: no survivor */
+    ASSERT_EQ(tabmgr_count(&m), 0);
+    ASSERT_EQ(tabmgr_get_active(&m), -1);
+    TEST_END();
+}
+
 /* ---- New tab after close gets a fresh id (no collision) ----------------- */
 
 int test_tabmgr_reopen_no_id_collision(void)
