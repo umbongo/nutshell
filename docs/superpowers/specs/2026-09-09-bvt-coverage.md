@@ -18,10 +18,11 @@ are all below.
 The unit layer is strong on logic. The E2E layer proves the redesign work and
 the AI execution path well, and thinly or not at all everything else a user
 does in a day: managing profiles, authenticating with a password, host-key
-dialogs, tabs, settings, disconnecting, closing. Of 46 user journeys, 14 are
-covered end to end, 6 partially, 26 not at all. A comprehensive BVT sweep
-needs roughly 28 more cases; about half of them need one harness addition,
-driving dialogs through UI Automation instead of keystrokes.
+dialogs, tabs, settings, disconnecting, closing. Of the 60 user journeys
+below, 12 are covered end to end, 11 partially, 35 not at all, and 2 are out
+of reach for automation on one machine. A comprehensive BVT sweep needs 49
+more cases; about half of them need one harness addition, driving dialogs
+through UI Automation instead of keystrokes.
 
 Legend: **E2E** covered by an existing case · **Part** partially (a helper
 touches it but nothing asserts it) · **—** no end-to-end coverage. The unit
