@@ -103,7 +103,7 @@ three dots on `NS_ICON_THINKING` and the LED on `NS_ICON_SERVER`, so those detai
 invisible too. Fix belongs in foundation section 3 (shared primitives): add an `OP_DOT`
 op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
 
-## Todo (compacted at the 2026-09-09 checkpoint)
+## Todo (compacted at the 2026-09-10 checkpoint)
 
 Done, in order (details in the commit messages and the specs named):
 - v1.0.77 native Windows build and test environment · v1.0.78 six review fixes
@@ -111,22 +111,43 @@ Done, in order (details in the commit messages and the specs named):
 - v1.0.82–v1.0.92 design-system foundation, 10 of 10 tasks
   (`2026-09-07-design-system-foundation-design.md`; gates are exact allow-lists).
 - v1.0.93–v1.0.96 AI Assist panel, 5 of 5 tasks (`2026-09-07-ai-assist-panel-design.md`).
-- v1.0.97 approval-card crash and held-command workflow · v1.0.98 settled rows,
-  Thinking remeasure · v1.0.99 chat list sticks to bottom · v1.1.0 terminal smart
-  scrolling · v1.1.1 prompt-gated one-at-a-time dispatch · v1.1.2 four auto-approve
-  levels (`2026-09-07-command-dispatch-and-auto-approve-levels.md`) · v1.1.3 collapsed
-  Thinking stays collapsed, indicator placement · v1.1.4 markdown tables · v1.1.5 wheel
-  trap · v1.1.6 colour by role, streaming Thinking measured · v1.1.7–v1.1.8 pending
-  command batches (`2026-09-09-pending-command-batches.md`) · v1.1.9 focus not stolen
-  from the terminal · v1.1.10 security fixes C1, C3/L3, C4/H9/H10/L4.
-- BVT programme stage 1 (PR #10): harness helpers (posted input, dialog driving, pixel
-  oracle, tiers), self-hosted runner `k2so-bvt`, `.github/workflows/bvt.yml`, ruleset
-  on `main` (PRs only, BVT required). Plan: `2026-09-09-bvt-coverage.md`.
+- v1.0.97–v1.1.10 AI-panel polish, command dispatch and auto-approve levels
+  (`2026-09-07-command-dispatch-and-auto-approve-levels.md`,
+  `2026-09-09-pending-command-batches.md`), security fixes C1, C3/L3, C4/H9/H10/L4.
+- BVT programme (`2026-09-09-bvt-coverage.md`): stage 1 helpers, runner `k2so-bvt`,
+  `bvt.yml` and the ruleset (PR #10) · batch A, 34 bvt cases, all posted input — chords
+  via `Send-NutshellChord`, tab clicks posted to `Nutshell_Tabs` (PR #11, c2f55b0) ·
+  harness reasons from the achieved window size and the real tab-strip rect, never an
+  assumed desktop or DPI (PR #18, ffe9606).
+- v1.1.12 minimise/restore keeps the scrolled-back view (PR #12, 373e258); its
+  known-bug block in `minimise_restore_repaints` now reports XPASS.
+- CI (PR #13, 755f330): actions pinned to SHAs with Dependabot, explicit permissions,
+  `Version bump` required check (`.github/scripts/check-version.sh`), `release.yml` on
+  `v*` tags, auto-merge and branch auto-delete on, execution-policy-proof PowerShell
+  shell for the self-hosted runner (it starts from the Startup shortcut and inherits
+  Restricted).
 
 Open, in priority order:
-- [ ] BVT batch A (18 cases, on branch `bvt-harness`, awaiting Opus review): commit as
-      a PR; fix the two product bugs it found — Ctrl+W leaves the surviving tab blank
-      and unresponsive; minimise/restore shifts a scrolled-back view by a page.
+- [ ] Runner `k2so-bvt` offline since 2026-09-09 15:56Z — start `C:\actions-runner\run.cmd`.
+      PRs #12, #13 and #18 were merged by hand while it was down, so `main` is owed its
+      first green BVT. Dependabot PRs #14–#17 bump actions to new majors (Node 24
+      runner support needed): check before merging, or ignore semver-major updates in
+      `dependabot.yml`.
+- [ ] Ctrl+W bug — `window.c` on_tab_close leaves `g_active_session` NULL, tab A blank
+      and unresponsive. Fix in progress in a separate session as uncommitted edits in
+      the main checkout (tab_manager, tabs.c, window.c, tests, `60-tabs-logging.ps1`);
+      it must land on a branch rebased onto `main` (#12 and #18 touched the same files),
+      unwrapping both known-bug blocks (`tabs_open_switch_close`, `minimise_restore_repaints`).
+- [ ] CI review follow-ups (2026-09-10 review): fork-PR approval to all external
+      contributors plus a same-repo guard on the BVT job (public repo, self-hosted
+      runner on the dev box); CodeQL installs no libssh2, so the SSH/known-hosts files
+      and all of `src/ui` go unscanned — install `libssh2-1-dev`, fail if the Makefile
+      probe still says no, and consider a Windows CodeQL run for `src/ui`; BVT artifacts
+      are public and carry the LAN address, hostname, user and banners — upload on
+      failure only or scrub; a nightly scheduled BVT to catch environment drift;
+      untrack `build/win/nutshell.exe` (every product PR commits a 5 MB binary);
+      `.gitattributes` and renormalise (90 CRLF-indexed files) in a lone PR when nothing
+      else is in flight.
 - [ ] BVT batches B (sessions, auth, host key, connection), C (terminal, clipboard,
       settings), D (AI extras) — 31 cases; `bvtuser` exists on tompi for auth cases.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local): C2
@@ -138,5 +159,7 @@ Open, in priority order:
 - [ ] Sub-project 3 (main window chrome): spec first, mockups before choosing, as with
       sub-project 2.
 
-Process (CLAUDE.md): Opus orchestrates each package and picks models; Fable reviews at
-PR level; nothing reaches `main` without a green BVT.
+Process (CLAUDE.md): Opus orchestrates each package in its own worktree and picks
+models; Fable reviews at PR level; `gh pr merge N --merge --auto` queues the merge for
+a green `BVT` and `Version bump`. "Create a checkpoint" = compact this list, compact
+memory, delete temp files and worktrees, leave the tree ready for a new session.
