@@ -68,6 +68,20 @@ public class NutshellNative {
     [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendMsgSb(IntPtr h, uint m, IntPtr w, StringBuilder sb);
     [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint uCode, uint uMapType);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+    /* Menu structure (WINDOW-1/MENU-1): the app menu is built entirely in
+     * code (src/ui/window.c's create_app_menu(), MF_OWNERDRAW throughout --
+     * there is no MENU resource in resource.rc) and every item's text is
+     * owner-drawn from the app's own MenuItemData struct, not an MF_STRING,
+     * so GetMenuString returns an empty string for every item (confirmed by
+     * probing the live app) -- only structure (item/submenu counts and each
+     * item's WM_COMMAND id, in order; a separator's id is 0) is recoverable
+     * without reading the target process's memory. */
+    [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetSubMenu(IntPtr hMenu, int nPos);
+    [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr hMenu);
+    [DllImport("user32.dll")] public static extern int GetMenuItemID(IntPtr hMenu, int nPos);
     /* title is IntPtr so callers can pass Zero: PowerShell would turn a $null string into "" (match empty titles only). */
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, IntPtr title);
     [DllImport("user32.dll", EntryPoint="SendMessageW", CharSet=CharSet.Unicode)] public static extern IntPtr SendMsgStr(IntPtr h, uint m, IntPtr w, string l);
@@ -88,6 +102,29 @@ public class NutshellNative {
     [DllImport("kernel32.dll")] public static extern bool GetConsoleScreenBufferInfo(IntPtr h, out CONSOLE_SCREEN_BUFFER_INFO info);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode)]
     public static extern bool ReadConsoleOutputCharacterW(IntPtr h, StringBuilder buf, uint n, COORD coord, out uint read);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode)]
+    public static extern bool WriteConsoleW(IntPtr h, string buf, uint n, out uint written, IntPtr reserved);
+
+    /* Write one line straight to the console's active screen buffer, on the
+     * same "CONOUT$" channel ReadConsoleTail reads and nutshell.exe's
+     * cli_output() writes. Write-Host is NOT equivalent: a PowerShell host
+     * whose output has been redirected to a pipe (this harness's usual
+     * situation, and a CI runner's) sends Write-Host down that pipe, so it
+     * never appears in the screen buffer at all. Used by cases\70-cli.ps1 to
+     * fence one case's console output off from the previous case's. Returns
+     * false when there is no console to write to. */
+    public static bool WriteConsoleLine(string text) {
+        IntPtr h = CreateFileW("CONOUT$", 0xC0000000 /* GENERIC_READ|WRITE */,
+            3 /* FILE_SHARE_READ|WRITE */, IntPtr.Zero, 3 /* OPEN_EXISTING */, 0, IntPtr.Zero);
+        if (h == IntPtr.Zero || h == new IntPtr(-1)) return false;
+        try {
+            string s = text + "\r\n";
+            uint written;
+            return WriteConsoleW(h, s, (uint)s.Length, out written, IntPtr.Zero);
+        } finally {
+            CloseHandle(h);
+        }
+    }
 
     /* Read the trailing N screen rows of the active console this process is
      * attached to. Used to recover the text nutshell.exe -v prints: it calls
@@ -259,6 +296,12 @@ function New-NutshellTestEnv {
     .PARAMETER KeyPath   Private key file (must be passphrase-free).
     .PARAMETER Settings  Hashtable of extra top-level settings to override, e.g.
                          @{ paste_confirm = $false; log_format = "%Y%m%d-%H%M" }.
+    .PARAMETER NoConfig  Skip writing nutshell.config entirely (LAUNCH-2/LAUNCH-3:
+                         first-run and corrupt-config scenarios) -- the scratch
+                         dir gets nutshell.exe and an empty logs\ folder only.
+                         Caller is responsible for writing its own config (or
+                         none at all) before launching. HostName/User/KeyPath
+                         are still required (unused) to keep one call shape.
     #>
     param(
         [Parameter(Mandatory)] [string] $Exe,
@@ -266,7 +309,8 @@ function New-NutshellTestEnv {
         [Parameter(Mandatory)] [string] $User,
         [Parameter(Mandatory)] [string] $KeyPath,
         [string] $ProfileName = "it",
-        [hashtable] $Settings = @{}
+        [hashtable] $Settings = @{},
+        [switch] $NoConfig
     )
     # Scratch lives under the git-ignored artifacts folder, not %TEMP%, so a run
     # whose cleanup was interrupted leaves something visible next to its logs.
@@ -295,13 +339,15 @@ function New-NutshellTestEnv {
     }
     foreach ($k in $Settings.Keys) { $s[$k] = $Settings[$k] }
 
-    $profile = [ordered]@{
-        name = $ProfileName; host = $HostName; port = 22; username = $User
-        auth_type = "key"; password = ""; key_path = $KeyPath; ai_notes = ""
+    if (-not $NoConfig) {
+        $profile = [ordered]@{
+            name = $ProfileName; host = $HostName; port = 22; username = $User
+            auth_type = "key"; password = ""; key_path = $KeyPath; ai_notes = ""
+        }
+        $cfg = [ordered]@{ settings = $s; profiles = @($profile) }
+        $json = $cfg | ConvertTo-Json -Depth 5
+        [IO.File]::WriteAllText((Join-Path $root "nutshell.config"), $json, (New-Object Text.UTF8Encoding $false))
     }
-    $cfg = [ordered]@{ settings = $s; profiles = @($profile) }
-    $json = $cfg | ConvertTo-Json -Depth 5
-    [IO.File]::WriteAllText((Join-Path $root "nutshell.config"), $json, (New-Object Text.UTF8Encoding $false))
 
     return [pscustomobject]@{ Root = $root; Logs = $logs; Exe = (Join-Path $root "nutshell.exe"); ProfileName = $ProfileName }
 }
@@ -322,6 +368,14 @@ function Start-Nutshell {
     # as two argv entries and fail CLI parsing. Quote any element that needs it.
     $argList = $rawArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }
     $p = Start-Process -FilePath $Env.Exe -WorkingDirectory $Env.Root -ArgumentList $argList -PassThru
+    # Touch .Handle now, while the process is (almost certainly) still alive:
+    # .NET's Process.ExitCode reads back empty -- not $null, not an error,
+    # just "" -- if the underlying handle is first opened (lazily, by .NET)
+    # only after the process has already exited; observed directly in this
+    # harness (LAUNCH-1/CLOSE-1 read $session.Process.ExitCode after a fast
+    # exit). Forcing the handle open here while nutshell.exe is still running
+    # avoids that race for every later ExitCode read on this session.
+    $null = $p.Handle
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     $main = [IntPtr]::Zero
     while ((Get-Date) -lt $deadline) {
@@ -952,6 +1006,36 @@ function Test-NutshellPixelNear {
     return ($dr -le $Tolerance -and $dg -le $Tolerance -and $db -le $Tolerance)
 }
 
+function Get-NutshellRegionHash {
+    <# MD5 of a proportional region of a saved capture -- the general form of
+       cases-terminal.ps1's Get-TerminalAreaHash (which stays there, being
+       terminal-specific and used by that file only).
+       -Region is @{ X = 0.0; Y = 0.15; W = 0.6; H = 0.8 } (each 0..1, fraction
+       of the bitmap's width/height) -- e.g. WINDOW-1 (minimise/restore) hashes
+       the same terminal-content band across two captures to prove the repaint
+       after restore reproduces the same pixels, and TABS-1 hashes just the
+       tab-strip band (top ~40px) to show the strip changed after a tab opened
+       or closed without needing Get-NutshellTabCount (not implementable --
+       see its doc comment). #>
+    param([Parameter(Mandatory)] [string] $Path, [Parameter(Mandatory)] [hashtable] $Region)
+    $bmp = New-Object System.Drawing.Bitmap $Path
+    try {
+        $x = [int]($bmp.Width * $Region.X); $y = [int]($bmp.Height * $Region.Y)
+        $w = [int]($bmp.Width * $Region.W); $h = [int]($bmp.Height * $Region.H)
+        if ($x -lt 0) { $x = 0 }; if ($y -lt 0) { $y = 0 }
+        if ($x + $w -gt $bmp.Width)  { $w = $bmp.Width  - $x }
+        if ($y + $h -gt $bmp.Height) { $h = $bmp.Height - $y }
+        $rect = New-Object System.Drawing.Rectangle -ArgumentList @($x, $y, $w, $h)
+        $crop = $bmp.Clone($rect, $bmp.PixelFormat)
+        try {
+            $ms = New-Object System.IO.MemoryStream
+            $crop.Save($ms, [System.Drawing.Imaging.ImageFormat]::Bmp)
+            $md5 = [System.Security.Cryptography.MD5]::Create()
+            return [BitConverter]::ToString($md5.ComputeHash($ms.ToArray()))
+        } finally { $crop.Dispose() }
+    } finally { $bmp.Dispose() }
+}
+
 # Flat 0xRRGGBB fields of ThemeTokens (src/core/ui_theme.h) that
 # Get-NutshellThemeColor can read out of src/core/ui_theme.c's per-theme C
 # initialisers. The "chat block" array (user_bubble, cmd_bg, indicator_*, ...)
@@ -1031,4 +1115,5 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Select-NutshellListItem, Get-NutshellListItems, Close-NutshellDialog, `
     Open-NutshellSessionManager, Open-NutshellSettings, Select-NutshellSettingsPage, `
     Get-NutshellTabCount, Close-NutshellTab, Get-NutshellWindowText, Get-NutshellChildWindows, `
-    Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion
+    Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion, `
+    Get-NutshellRegionHash
