@@ -1417,6 +1417,109 @@ int test_cmd_classify_heuristic_show_always_safe(void);
 int test_cmd_classify_heuristic_negation_write(void);
 int test_cmd_classify_heuristic_reload_always_critical(void);
 int test_cmd_classify_heuristic_clear_write(void);
+/* test_cmd_classify.c - Linux additions: CRITICAL (spec 3.1) */
+int test_cmd_classify_linux_critical_filesystem_destruction(void);
+int test_cmd_classify_linux_critical_resource_removal(void);
+int test_cmd_classify_linux_critical_kernel_module(void);
+int test_cmd_classify_linux_critical_setenforce(void);
+int test_cmd_classify_linux_critical_firewall_wholesale(void);
+int test_cmd_classify_linux_critical_systemctl_subcommands(void);
+int test_cmd_classify_linux_critical_service_stop(void);
+int test_cmd_classify_linux_pkg_remove_critical(void);
+int test_cmd_classify_linux_pkg_remove_critical_extra(void);
+int test_cmd_classify_linux_pkg_query_safe(void);
+int test_cmd_classify_linux_critical_system_upgrade(void);
+int test_cmd_classify_linux_critical_account_removal(void);
+int test_cmd_classify_linux_critical_container(void);
+int test_cmd_classify_linux_critical_orchestration(void);
+int test_cmd_classify_linux_critical_terraform(void);
+int test_cmd_classify_linux_critical_network_iface(void);
+int test_cmd_classify_linux_critical_tc_netns(void);
+int test_cmd_classify_linux_critical_find_delete(void);
+int test_cmd_classify_linux_critical_zfs_btrfs(void);
+/* test_cmd_classify.c - Linux additions: WRITE (spec 3.2) */
+int test_cmd_classify_linux_write_files_and_archives(void);
+int test_cmd_classify_linux_write_boot_and_system(void);
+int test_cmd_classify_linux_write_pkg_install(void);
+int test_cmd_classify_linux_write_containers(void);
+int test_cmd_classify_linux_write_orchestration_iac(void);
+int test_cmd_classify_linux_write_scheduling_net(void);
+/* test_cmd_classify.c - Linux additions: SAFE (spec 3.3) */
+int test_cmd_classify_linux_safe_readonly_tools(void);
+int test_cmd_classify_linux_safe_network_tools(void);
+int test_cmd_classify_linux_safe_service_status(void);
+int test_cmd_classify_linux_safe_orchestration_status(void);
+/* test_cmd_classify.c - Linux corner case: ufw (spec 3.1 F8) */
+int test_cmd_classify_linux_ufw_status_vs_reset(void);
+/* test_cmd_classify.c - Cisco IOS additions (spec section 4) */
+int test_cmd_classify_ios_safe_additions(void);
+int test_cmd_classify_ios_configure_replace_critical(void);
+int test_cmd_classify_ios_device_fs_delete_critical(void);
+int test_cmd_classify_ios_copy_into_config_critical(void);
+int test_cmd_classify_ios_boot_system_critical(void);
+int test_cmd_classify_ios_default_interface_critical(void);
+int test_cmd_classify_ios_no_forms_critical(void);
+int test_cmd_classify_ios_clear_adjacency_critical(void);
+int test_cmd_classify_ios_hardware_reset_critical(void);
+int test_cmd_classify_ios_install_critical(void);
+int test_cmd_classify_ios_iosxr_critical(void);
+int test_cmd_classify_ios_crash_core_critical(void);
+int test_cmd_classify_ios_write_additions(void);
+/* test_cmd_classify.c - Cisco NX-OS additions (spec section 5) */
+int test_cmd_classify_nxos_critical_additions(void);
+int test_cmd_classify_nxos_write_additions(void);
+/* test_cmd_classify.c - Cisco ASA additions (spec section 6) */
+int test_cmd_classify_asa_critical_additions(void);
+int test_cmd_classify_asa_write_additions(void);
+/* test_cmd_classify.c - HP ProCurve / ProVision (spec section 7) */
+int test_cmd_classify_procurve_safe(void);
+int test_cmd_classify_procurve_write(void);
+int test_cmd_classify_procurve_critical_reboot_erase_copy(void);
+int test_cmd_classify_procurve_critical_negation_disable(void);
+/* test_cmd_classify.c - HPE Comware 5/7 (spec section 8) */
+int test_cmd_classify_comware_safe(void);
+int test_cmd_classify_comware_write(void);
+int test_cmd_classify_comware_critical_reset_reboot(void);
+int test_cmd_classify_comware_critical_undo(void);
+int test_cmd_classify_comware_critical_hidden_shell(void);
+int test_cmd_classify_comware_reboot_vs_linux_reboot(void);
+/* test_cmd_classify.c - Aruba OS-CX additions (spec section 9) */
+int test_cmd_classify_aruba_cx_critical_additions(void);
+int test_cmd_classify_aruba_cx_write_additions(void);
+int test_cmd_classify_aruba_cx_safe_additions(void);
+/* test_cmd_classify.c - ArubaOS additions (spec section 10) */
+int test_cmd_classify_aruba_os_critical_additions(void);
+int test_cmd_classify_aruba_os_write_additions(void);
+/* test_cmd_classify.c - PAN-OS additions (spec section 11) */
+int test_cmd_classify_panos_set_cli_safe(void);
+int test_cmd_classify_panos_safe_additions(void);
+int test_cmd_classify_panos_commit_check_safe(void);
+int test_cmd_classify_panos_critical_additions(void);
+int test_cmd_classify_panos_write_additions(void);
+/* test_cmd_classify.c - Juniper Junos (spec section 12) */
+int test_cmd_classify_junos_safe(void);
+int test_cmd_classify_junos_write(void);
+int test_cmd_classify_junos_critical(void);
+/* test_cmd_classify.c - Fortinet FortiOS (spec section 13) */
+int test_cmd_classify_fortios_safe(void);
+int test_cmd_classify_fortios_write(void);
+int test_cmd_classify_fortios_critical(void);
+/* test_cmd_classify.c - VyOS (spec section 14) */
+int test_cmd_classify_vyos_safe(void);
+int test_cmd_classify_vyos_write(void);
+int test_cmd_classify_vyos_critical(void);
+/* test_cmd_classify.c - MikroTik RouterOS (spec section 15) */
+int test_cmd_classify_mikrotik_safe(void);
+int test_cmd_classify_mikrotik_write(void);
+int test_cmd_classify_mikrotik_critical(void);
+int test_cmd_classify_mikrotik_critical_wins_over_find(void);
+int test_cmd_classify_mikrotik_print_vs_remove(void);
+/* test_cmd_classify.c - Section 17 cross-platform corner cases */
+int test_cmd_classify_display_filter_safe(void);
+int test_cmd_classify_comware_display_filter_safe(void);
+int test_cmd_classify_commit_check_validate_vs_bare_commit(void);
+int test_cmd_classify_new_platforms_empty_safe(void);
+int test_cmd_classify_new_platforms_lone_separator_safe(void);
 
 /* test_chat_msg.c */
 int test_chat_msg_list_init(void);
@@ -3387,6 +3490,109 @@ int main(void) {
     failed += test_cmd_classify_heuristic_negation_write();
     failed += test_cmd_classify_heuristic_reload_always_critical();
     failed += test_cmd_classify_heuristic_clear_write();
+    /* Linux additions: CRITICAL (spec 3.1) */
+    failed += test_cmd_classify_linux_critical_filesystem_destruction();
+    failed += test_cmd_classify_linux_critical_resource_removal();
+    failed += test_cmd_classify_linux_critical_kernel_module();
+    failed += test_cmd_classify_linux_critical_setenforce();
+    failed += test_cmd_classify_linux_critical_firewall_wholesale();
+    failed += test_cmd_classify_linux_critical_systemctl_subcommands();
+    failed += test_cmd_classify_linux_critical_service_stop();
+    failed += test_cmd_classify_linux_pkg_remove_critical();
+    failed += test_cmd_classify_linux_pkg_remove_critical_extra();
+    failed += test_cmd_classify_linux_pkg_query_safe();
+    failed += test_cmd_classify_linux_critical_system_upgrade();
+    failed += test_cmd_classify_linux_critical_account_removal();
+    failed += test_cmd_classify_linux_critical_container();
+    failed += test_cmd_classify_linux_critical_orchestration();
+    failed += test_cmd_classify_linux_critical_terraform();
+    failed += test_cmd_classify_linux_critical_network_iface();
+    failed += test_cmd_classify_linux_critical_tc_netns();
+    failed += test_cmd_classify_linux_critical_find_delete();
+    failed += test_cmd_classify_linux_critical_zfs_btrfs();
+    /* Linux additions: WRITE (spec 3.2) */
+    failed += test_cmd_classify_linux_write_files_and_archives();
+    failed += test_cmd_classify_linux_write_boot_and_system();
+    failed += test_cmd_classify_linux_write_pkg_install();
+    failed += test_cmd_classify_linux_write_containers();
+    failed += test_cmd_classify_linux_write_orchestration_iac();
+    failed += test_cmd_classify_linux_write_scheduling_net();
+    /* Linux additions: SAFE (spec 3.3) */
+    failed += test_cmd_classify_linux_safe_readonly_tools();
+    failed += test_cmd_classify_linux_safe_network_tools();
+    failed += test_cmd_classify_linux_safe_service_status();
+    failed += test_cmd_classify_linux_safe_orchestration_status();
+    /* Linux corner case: ufw (spec 3.1 F8) */
+    failed += test_cmd_classify_linux_ufw_status_vs_reset();
+    /* Cisco IOS additions (spec section 4) */
+    failed += test_cmd_classify_ios_safe_additions();
+    failed += test_cmd_classify_ios_configure_replace_critical();
+    failed += test_cmd_classify_ios_device_fs_delete_critical();
+    failed += test_cmd_classify_ios_copy_into_config_critical();
+    failed += test_cmd_classify_ios_boot_system_critical();
+    failed += test_cmd_classify_ios_default_interface_critical();
+    failed += test_cmd_classify_ios_no_forms_critical();
+    failed += test_cmd_classify_ios_clear_adjacency_critical();
+    failed += test_cmd_classify_ios_hardware_reset_critical();
+    failed += test_cmd_classify_ios_install_critical();
+    failed += test_cmd_classify_ios_iosxr_critical();
+    failed += test_cmd_classify_ios_crash_core_critical();
+    failed += test_cmd_classify_ios_write_additions();
+    /* Cisco NX-OS additions (spec section 5) */
+    failed += test_cmd_classify_nxos_critical_additions();
+    failed += test_cmd_classify_nxos_write_additions();
+    /* Cisco ASA additions (spec section 6) */
+    failed += test_cmd_classify_asa_critical_additions();
+    failed += test_cmd_classify_asa_write_additions();
+    /* HP ProCurve / ProVision (spec section 7) */
+    failed += test_cmd_classify_procurve_safe();
+    failed += test_cmd_classify_procurve_write();
+    failed += test_cmd_classify_procurve_critical_reboot_erase_copy();
+    failed += test_cmd_classify_procurve_critical_negation_disable();
+    /* HPE Comware 5/7 (spec section 8) */
+    failed += test_cmd_classify_comware_safe();
+    failed += test_cmd_classify_comware_write();
+    failed += test_cmd_classify_comware_critical_reset_reboot();
+    failed += test_cmd_classify_comware_critical_undo();
+    failed += test_cmd_classify_comware_critical_hidden_shell();
+    failed += test_cmd_classify_comware_reboot_vs_linux_reboot();
+    /* Aruba OS-CX additions (spec section 9) */
+    failed += test_cmd_classify_aruba_cx_critical_additions();
+    failed += test_cmd_classify_aruba_cx_write_additions();
+    failed += test_cmd_classify_aruba_cx_safe_additions();
+    /* ArubaOS additions (spec section 10) */
+    failed += test_cmd_classify_aruba_os_critical_additions();
+    failed += test_cmd_classify_aruba_os_write_additions();
+    /* PAN-OS additions (spec section 11) */
+    failed += test_cmd_classify_panos_set_cli_safe();
+    failed += test_cmd_classify_panos_safe_additions();
+    failed += test_cmd_classify_panos_commit_check_safe();
+    failed += test_cmd_classify_panos_critical_additions();
+    failed += test_cmd_classify_panos_write_additions();
+    /* Juniper Junos (spec section 12) */
+    failed += test_cmd_classify_junos_safe();
+    failed += test_cmd_classify_junos_write();
+    failed += test_cmd_classify_junos_critical();
+    /* Fortinet FortiOS (spec section 13) */
+    failed += test_cmd_classify_fortios_safe();
+    failed += test_cmd_classify_fortios_write();
+    failed += test_cmd_classify_fortios_critical();
+    /* VyOS (spec section 14) */
+    failed += test_cmd_classify_vyos_safe();
+    failed += test_cmd_classify_vyos_write();
+    failed += test_cmd_classify_vyos_critical();
+    /* MikroTik RouterOS (spec section 15) */
+    failed += test_cmd_classify_mikrotik_safe();
+    failed += test_cmd_classify_mikrotik_write();
+    failed += test_cmd_classify_mikrotik_critical();
+    failed += test_cmd_classify_mikrotik_critical_wins_over_find();
+    failed += test_cmd_classify_mikrotik_print_vs_remove();
+    /* Section 17 cross-platform corner cases */
+    failed += test_cmd_classify_display_filter_safe();
+    failed += test_cmd_classify_comware_display_filter_safe();
+    failed += test_cmd_classify_commit_check_validate_vs_bare_commit();
+    failed += test_cmd_classify_new_platforms_empty_safe();
+    failed += test_cmd_classify_new_platforms_lone_separator_safe();
 
     printf("\n--- Chat Message List ---\n");
     failed += test_chat_msg_list_init();

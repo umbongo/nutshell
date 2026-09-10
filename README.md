@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.1.13 \
+**Version**: v1.1.14 \
 **Build Date**: 2026-09-10 \
 **Author**: Thomas Sulkiewicz
 
@@ -313,7 +313,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │   │   ├── chat_thinking.c/.h         #   Thinking/reasoning display state
 │   │   ├── cli_args.c/.h              #   Command-line flag parsing (--ui-demo, --theme, -sn/-h/-nc/-l/-v/-?)
 │   │   ├── cmd_batch.c/.h             #   Set of pending command-approval batches per AI session (up to 8)
-│   │   ├── cmd_classify.c/.h          #   Command safety classification (Linux, Cisco, Aruba, PAN-OS)
+│   │   ├── cmd_classify.c/.h          #   Command safety classification (Linux, Cisco, HP, Aruba, PAN-OS, Junos, FortiOS, VyOS, RouterOS)
 │   │   ├── connect_anim.c/.h          #   Connection animation dots
 │   │   ├── display_buffer.c/.h        #   Display invalidation tracking
 │   │   ├── edit_scroll.c/.h           #   Scroll math for text editors

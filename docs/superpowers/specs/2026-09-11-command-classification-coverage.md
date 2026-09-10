@@ -101,8 +101,9 @@ session — is plain WRITE like any other `set`.
 
 **F16 — no HP support at all**, in either flavour: ProCurve/ProVision (`erase startup-config`,
 `boot system flash primary`) or Comware/H3C (`reboot`, `reset saved-configuration`, `undo` as
-the negation prefix, `display` as the show verb). Under the Linux ruleset a Comware `reboot`
-classifies SAFE.
+the negation prefix, `display` as the show verb). Under the Linux ruleset a Comware
+`reset saved-configuration` classifies SAFE — `reset` is in no Linux table — as does
+`undo interface GigabitEthernet1/0/1`.
 
 ---
 
@@ -210,6 +211,19 @@ scanner are unchanged.
 `describe` / `logs` / `top` / `explain` / `api-resources` / `version`, `helm list` / `status` /
 `get` / `history`, `terraform plan` / `show` / `output` / `validate`.
 
+**Implementation note.** The broad SAFE list above is documentation for that future
+allow-list: most of these commands already classify SAFE through the existing fallthrough, so
+they were not added as table rows. Only the entries that would otherwise **mis**classify were
+implemented — the package-manager query subcommands, `ufw status`, `firewall-cmd --list-all` /
+`--list-all-zones` / `--state`, and the read-only subcommands of `terraform` and `helm`, all of
+which sit under a base command that is flat WRITE for other reasons.
+
+**Package-manager dry runs.** Added while reconciling the tests: a dry-run flag anywhere in a
+package-manager invocation (`--simulate`, `--dry-run`, `--just-print`, `--no-act`, `--recon`,
+`--assume-no`, and `-s` for the apt family) makes the whole command SAFE, whatever the
+subcommand would otherwise be. `apt-get purge --dry-run nginx` reports what it would remove and
+removes nothing.
+
 > This list is written so that it can be lifted verbatim into the SAFE **allow-list** that
 > audit finding C2 calls for. Until that inversion lands, unknown Linux commands still fall
 > through to SAFE — these entries make the common read-only set explicit and give the
@@ -289,7 +303,7 @@ Inherits IOS. NX-OS-specific:
 | Form | Why |
 |---|---|
 | `reload`, `boot`, `boot system flash <primary\|secondary>` | reboot / next-boot image |
-| `erase startup-config`, `erase all zeroize`, `erase flash` | config or flash wipe |
+| `erase` — every form, bare verb included | config or flash wipe. ProCurve writes the flash target without a colon (`erase flash`), so the device-filesystem token test of M2 does not apply here |
 | `delete <file>` | file removal on flash |
 | `copy tftp startup-config`, `copy tftp flash`, `copy xmodem flash`, `copy usb flash` | config or image replacement |
 | `no vlan`, `no interface`, `no ip routing`, `no spanning-tree`, `no router`, `no password`, `no aaa`, `no snmp-server` | traffic drop / lock-out |
@@ -381,8 +395,10 @@ startup-config`, `banner`, `ssh`, `https-server`, `snmp-server`, `sflow`, `lag`,
 `request url-filtering update`, `request system external-list refresh`, `save
 named-configuration snapshot`, `revert config`.
 
-`commit check` / `commit validate` stays SAFE; bare `commit`, `commit force`, `commit partial`
-and `commit-all` stay CRITICAL.
+`commit validate` stays SAFE; bare `commit`, `commit force`, `commit partial` and
+`commit-all` stay CRITICAL. `commit check` is **Junos** syntax, not PAN-OS: an
+unrecognised `commit` subcommand fails closed as CRITICAL rather than being waved
+through as a validation.
 
 ---
 
@@ -499,9 +515,13 @@ gets at least one positive assertion, plus these corner cases:
 - `configure replace flash:x` → CRITICAL — F4;
 - one query form per package manager → SAFE, one removal form → CRITICAL — F5;
 - `ufw status` → SAFE, `ufw reset` → CRITICAL — F8;
-- Comware `reboot` → CRITICAL under `CMD_PLATFORM_HP_COMWARE` **and** SAFE under
-  `CMD_PLATFORM_LINUX`, asserted explicitly to document the F1 cross-platform hazard;
-- `commit check` (Junos) and `commit validate` (PAN-OS) → SAFE while bare `commit` → CRITICAL;
+- Comware `reset saved-configuration` → CRITICAL under `CMD_PLATFORM_HP_COMWARE` **and**
+  SAFE under `CMD_PLATFORM_LINUX`, asserted explicitly to document the F1 cross-platform
+  hazard. (Do not use `reboot` for this: it is already in `linux_critical_cmds`, so it is
+  CRITICAL on both platforms and demonstrates nothing.)
+- `commit check` (Junos) and `commit validate` (PAN-OS) → SAFE while bare `commit` →
+  CRITICAL; `commit check` on PAN-OS → CRITICAL, since that spelling is Junos syntax and
+  an unknown `commit` subcommand must fail closed;
 - `set cli config-output-format set` → SAFE on PAN-OS;
 - MikroTik verb-last: `/ip firewall filter print` → SAFE, `/ip firewall filter remove
   numbers=0` → CRITICAL;
