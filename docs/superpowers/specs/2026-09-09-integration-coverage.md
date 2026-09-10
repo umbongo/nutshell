@@ -53,7 +53,7 @@ column names the file when core logic behind the journey is unit-tested.
 | 14 | Connect from the list (double-click / Connect) | — | — | SM-5: select and connect, prompt reached |
 | 15 | Key auth, passphrase-free | key_auth, ssh | **E2E** `connect_shows_prompt` | — |
 | 16 | Key auth with passphrase: prompt, wrong passphrase retry, correct | key_auth | — | AUTH-1: needs a passphrased key on tompi; drive the prompt by UIA |
-| 17 | Password auth, saved password | crypto, config | — | AUTH-2: needs a password-auth user on tompi (create `pwuser`) |
+| 17 | Password auth, saved password | crypto, config | — | AUTH-2: needs a password-auth user on tompi (`bvtuser`, which exists: password locked, the harness sets it per run) |
 | 18 | Wrong password: error shown, retry offered, no crash | — | — | AUTH-3 |
 | 19 | Host unreachable / DNS failure: tab goes red, error text | ssh_timeout | — | CONN-1: connect to `10.255.255.1` or `nonexistent.invalid`, assert status dot and message within the timeout |
 | 20 | First connect host-key dialog (TOFU): Yes stores key, No aborts | knownhosts | — | HK-1: empty known_hosts, dialog appears, Yes then reconnect shows no dialog; No leaves no key |
