@@ -6,3 +6,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # One pull request for the whole weekly sweep, not one per action. Five
+    # separate bumps used to open five pull requests that each queued a full
+    # desktop integration run and cancelled each other out of the queue.
+    open-pull-requests-limit: 1
+    groups:
+      actions:
+        patterns: ["*"]

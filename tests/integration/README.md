@@ -116,20 +116,32 @@ avoided rather than merely guarded against.
 
 ### Tiers
 
-`-Tier bvt|ai|nightly|all` (default `all`, i.e. today's behaviour) filters which
+`-Tier gate|ai|nightly|all` (default `all`, i.e. today's behaviour) filters which
 cases run:
 
-- **`bvt`** — every case that needs no AI key: all cases in the table below except
-  the five key-gated `ai_*` ones. About 8–10 minutes with the section 1/4/5/8
-  additions below (was 3–4 minutes for the original set).
+- **`gate`** — the merge gate: every case that needs no AI key, i.e. all cases in
+  the table below except the five key-gated `ai_*` ones. About 8–10 minutes with
+  the section 1/4/5/8 additions below (was 3–4 minutes for the original set).
+  This is the tier `.github/workflows/integration.yml` runs.
 - **`ai`** — the five key-gated `ai_*` cases (see "AI Assist cases" below).
 - **`nightly`** — reserved, currently empty; no case in this suite is slow/flaky
   enough yet to warrant it (idle-timeout and host-unreachable scenarios from
-  `docs/superpowers/specs/2026-09-09-bvt-coverage.md`'s proposed tiers are not
+  `docs/superpowers/specs/2026-09-09-integration-coverage.md`'s proposed tiers are not
   implemented).
 
 `-Only` and `-Tier` combine (a case must be in both the requested tier(s) and, if
 given, `-Only`'s list).
+
+#### When CI runs the `gate` tier
+
+`.github/workflows/integration.yml` runs it **once per pull request, when the
+pull request is marked ready for review** — not on every push. It holds the one
+self-hosted machine that can drive a real desktop for 10–15 minutes, so the
+workflow triggers on `ready_for_review` only: work in a draft pull request and
+run `gh pr ready` when the change is done. A push afterwards leaves the
+`Integration tests` check missing on the new commit, which blocks the merge;
+re-run it with `gh workflow run integration.yml --ref <branch>`, which is also
+how to gate a pull request that was opened non-draft (Dependabot's).
 
 ## Cases
 
@@ -168,7 +180,7 @@ given, `-Only`'s list).
 | `tab_status_dot_colours` | (`TABS-2`) three phases (unroutable host / tompi / `kill -9 $$`), each at a fixed 1200×800 so the tab-strip scan band is meaningful: the status dot samples to the theme's `warning`/`success`/`danger` token colour respectively |
 | `logging_stop_then_restart_new_file` | (`LOG-1`) `IDM_FILE_LOG_STOP` then a marker is absent from the old file; `IDM_FILE_LOG_START` opens a new file and a second marker lands in it |
 | `debug_terminal_log_written` | (`LOG-2`) `debug_terminal=true`: a `<profile>-debug-<timestamp>.log` appears next to the exe (not in `log_dir` — see `open_debug_log()` in `window.c`) containing the sent sequence rendered as the literal text `ESC[1m` followed by `BOLD` |
-| `cli_version_prints` | (`CLI-1`) `nutshell.exe -v`: version string captured via the app's shared console (`AttachConsole`/`ReadConsoleTail`, output scoped to this run with a sentinel) on a host that has one, or read out of `cli_output()`'s MessageBox on a console-less host such as the BVT runner job — see `Test-NutshellHostConsole` |
+| `cli_version_prints` | (`CLI-1`) `nutshell.exe -v`: version string captured via the app's shared console (`AttachConsole`/`ReadConsoleTail`, output scoped to this run with a sentinel) on a host that has one, or read out of `cli_output()`'s MessageBox on a console-less host such as the runner job — see `Test-NutshellHostConsole` |
 | `cli_list_profiles` | (`CLI-1`) `-l` lists the generated profile's name and host |
 | `cli_help` | (`CLI-1`) `-?` prints usage text |
 | `cli_unknown_flag_errors` | (`CLI-1`) an unrecognised flag: non-zero exit code, "Unknown option" text |
@@ -277,7 +289,7 @@ $known = Invoke-KnownBugBlock -Bug "what is broken, and where" {
 
 The block still runs, and the outcome — `[XFAIL]` (still failing) or `[XPASS]`
 (unexpectedly passing: time to unwrap it) — lands in the case's detail column,
-but it does not fail the tier, so the `BVT` gate keeps saying "nothing
+but it does not fail the tier, so the `Integration tests` gate keeps saying "nothing
 regressed" rather than "the same known bugs are still open". Wrap only the
 checks the named bug actually breaks; everything else in the case stays a
 normal assertion. Two cases use this today: `minimise_restore_repaints` and

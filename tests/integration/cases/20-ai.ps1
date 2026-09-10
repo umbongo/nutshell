@@ -1,6 +1,6 @@
 # 20-ai.ps1 -- AI Assist cases. The five key-gated ai_* cases (tier "ai", real
 # API calls, skipped without a key -- see Invoke-AiCase in Run-Integration.ps1)
-# plus ai_panel_opens_without_key (tier "bvt", no key needed despite the name).
+# plus ai_panel_opens_without_key (tier "gate", no key needed despite the name).
 # Dot-sourced by Run-Integration.ps1; depends on its Invoke-Case/Invoke-AiCase/
 # Assert-True/$Artifacts/$WM_COMMAND.
 

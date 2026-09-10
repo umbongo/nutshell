@@ -10,6 +10,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  # Drop superseded runs: pushing again to a branch should not leave the
+  # previous hosted run burning to completion. Safe to cancel here -- unlike
+  # the desktop harness, these jobs hold no machine state.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   version-bump:
     name: Version bump

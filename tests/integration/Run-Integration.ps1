@@ -13,11 +13,13 @@
 # unlocked desktop -- the whole suite runs on a locked or RDP-disconnected
 # session. Screenshots and logs land in tests\integration\artifacts\.
 #
-# Tiers (-Tier bvt|ai|nightly|all, default all): bvt is every non-AI case plus
+# Tiers (-Tier gate|ai|nightly|all, default all): gate is the merge gate --
+# every non-AI case plus
 # ui_gallery/approval_card_run_selected_settles/ai_panel_opens_without_key (no
 # AI key needed despite the ai_ prefix); ai is the five key-gated ai_* cases;
 # nightly is currently empty (reserved for slow/flaky cases, e.g. idle-timeout
-# or host-unreachable scenarios, per docs/superpowers/specs/2026-09-09-bvt-coverage.md's
+# or host-unreachable scenarios, per
+# docs/superpowers/specs/2026-09-09-integration-coverage.md's
 # proposed tiers -- none of those cases exist yet, only the tier plumbing does).
 #
 # ---- Layout -----------------------------------------------------------------
@@ -51,7 +53,7 @@ param(
     [string] $KeyPath = (Join-Path $HOME ".ssh\thomas"),
     [string] $Exe = (Join-Path $PSScriptRoot "..\..\build\win\nutshell.exe"),
     [string[]] $Only = @(),
-    [ValidateSet("bvt", "ai", "nightly", "all")]
+    [ValidateSet("gate", "ai", "nightly", "all")]
     [string] $Tier = "all",
     # AI Assist cases: provider/model used with the key from NUTSHELL_IT_AI_KEY or tests\integration\.ai_key
     [string] $AiProvider = "moonshot",
@@ -64,7 +66,7 @@ $Artifacts = Join-Path $PSScriptRoot "artifacts"
 New-Item -ItemType Directory -Force $Artifacts | Out-Null
 $Exe = (Resolve-Path $Exe).Path
 
-$ActiveTiers = if ($Tier -eq "all") { @("bvt", "ai", "nightly") } else { @($Tier) }
+$ActiveTiers = if ($Tier -eq "all") { @("gate", "ai", "nightly") } else { @($Tier) }
 Write-Host ("Tier(s) requested: " + ($ActiveTiers -join ", "))
 
 # -Exe validation: confirm the binary under test actually runs and report its
@@ -97,7 +99,7 @@ function Invoke-Case {
        case needing a *pre-existing corrupt* file can't use Invoke-Case at all
        (see LAUNCH-3's standalone block in 50-window.ps1) and instead calls
        New-NutshellTestEnv/Start-Nutshell itself. #>
-    param([string] $Name, [hashtable] $Settings, [scriptblock] $Body, [string] $CaseTier = "bvt",
+    param([string] $Name, [hashtable] $Settings, [scriptblock] $Body, [string] $CaseTier = "gate",
           [string[]] $ExtraArgs = @(), [switch] $NoConfig)
     if ($ActiveTiers -notcontains $CaseTier) { return }
     if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
@@ -130,7 +132,7 @@ function Assert-True { param([bool] $Cond, [string] $Message) if (-not $Cond) { 
 
 function Invoke-KnownBugBlock {
     <# Run assertions that are known to fail today because of a named *product*
-       bug (not a harness bug), without failing the tier -- so the BVT gate
+       bug (not a harness bug), without failing the tier -- so the gate
        stays a signal about regressions rather than about a bug we have already
        written down and scheduled. The block runs for real; whichever way it
        goes is reported in the case's detail column, so a fix shows up as

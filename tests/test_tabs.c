@@ -177,10 +177,11 @@ int test_tabmgr_close_active_tab(void)
 }
 
 /* ---- tabmgr_remove: closing the active tab reports that the survivor ----
- * must be (re)selected.  This is the BVT tabs_open_switch_close scenario:
- * tab A open, tab B opened and active, Ctrl+W closes B.  The tab strip's
- * caller (tabs.c) must fire on_select for A, or window.c's g_active_session
- * stays NULL and the user is stranded with a green dot and a blank pane. */
+ * must be (re)selected.  This is the tabs_open_switch_close scenario in
+ * the integration suite: tab A open, tab B opened and active, Ctrl+W
+ * closes B.  The tab strip's caller (tabs.c) must fire on_select for A,
+ * or window.c's g_active_session stays NULL and the user is stranded
+ * with a green dot and a blank pane. */
 
 int test_tabmgr_remove_active_reports_reselect(void)
 {

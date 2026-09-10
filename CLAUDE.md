@@ -145,21 +145,45 @@ RDP-disconnected session alike. Two hard rules:
   foreground. If a case seems to need one, the mechanism is wrong, not the
   desktop.
 
-The tiers: `-Tier bvt` is the build verification sweep (no AI key), `-Tier ai`
-the key-gated cases (they cost model credits), `-Tier nightly` the slow ones.
+The tiers: `-Tier gate` is the merge gate — every case that needs no AI key —
+`-Tier ai` the key-gated cases (they cost model credits), `-Tier nightly` the
+slow ones.
 
-## Branches, pull requests and the BVT gate
+## Branches, pull requests and the integration-test gate
 
-`main` is protected: changes land only through a pull request whose `BVT`
-status check (`.github/workflows/bvt.yml`, self-hosted runner labelled
-`nutshell-bvt` on the dev box) has passed. Work on a short-lived branch,
-push it, open the PR, wait for green, merge. Never push to `main` directly;
-never merge a red BVT. The `Version bump` check
-(`.github/workflows/checks.yml`) is required too, and auto-merge is enabled,
-so `gh pr merge N --merge --auto` queues the merge for the moment both checks
-go green and deletes the branch afterwards. `tests/integration/Protect-Main.ps1`
-applies the rule and `tests/integration/Install-BvtRunner.ps1` registers the
-runner (both need `gh auth login` by a repository administrator).
+`main` is protected: changes land only through a pull request whose
+`Integration tests` status check (`.github/workflows/integration.yml`,
+self-hosted runner labelled `nutshell-desktop` on the dev box) has passed. The
+`Version bump` check (`.github/workflows/checks.yml`) is required too.
+
+**That check runs once per pull request, when the pull request is marked ready
+for review** — not on every push. It occupies the one machine that can drive a
+real desktop for 10–15 minutes, so work in a draft and open the gate when the
+change is actually done:
+
+```
+git switch -c my-change && git push -u origin my-change
+gh pr create --draft            # push as often as you like: no desktop runs
+gh pr ready N                   # fires the integration tests, once
+gh pr merge N --merge --auto    # auto-merge lands it when both checks go green
+```
+
+`gh pr ready` before `gh pr merge --auto`, in that order — auto-merge cannot be
+enabled while a pull request is still a draft.
+
+Never push to `main` directly; never merge a red gate. Two consequences of
+running the gate once, both deliberate:
+
+- **Push after it has gone green and the check goes missing on the new commit,
+  which blocks the merge** rather than passing it on a stale result. Re-run it
+  with `gh workflow run integration.yml --ref my-change`.
+- **A pull request opened non-draft never fires `ready_for_review`** (Dependabot's,
+  or one opened by mistake), so it has no gate result at all. Run
+  `gh workflow run integration.yml --ref <branch>` for those too.
+
+`tests/integration/Protect-Main.ps1` applies the ruleset and
+`tests/integration/Install-IntegrationRunner.ps1` registers the runner (both
+need `gh auth login` by a repository administrator).
 
 ## Terminal Buffer
 

@@ -1,0 +1,91 @@
+name: Integration tests
+
+# Build verification: native unit suite, a clean release build, then the
+# merge-gate tier of the integration harness, run on the self-hosted Windows
+# runner that has the MSYS2 toolchain and can reach the test host (tompi).
+# This is the required status check for merging into main; see
+# docs/superpowers/specs/2026-09-09-integration-coverage.md and
+# tests/integration/README.md.
+#
+# It runs once per pull request, when the pull request is marked ready for
+# review -- not on every push. The harness drives a real desktop for 10-15
+# minutes on the one machine that can host it, so work in a draft pull
+# request and open the gate with `gh pr ready` when the change is done.
+
+on:
+  pull_request:
+    branches: [main]
+    # `ready_for_review` only. Deliberately no `synchronize`: a push after the
+    # gate has run leaves this check missing on the new commit, which blocks
+    # the merge rather than passing it on a stale green -- re-run it with
+    # `gh workflow run integration.yml --ref <branch>`. Deliberately no
+    # `opened` either, since GitHub fires that for draft pull requests too.
+    # Note there is no way to filter this by label instead: a job skipped by
+    # an `if:` condition reports Success to a required status check, so a
+    # label gate would go green without the runner ever building.
+    types: [ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # The single `nutshell-desktop` runner already takes one job at a time, so a
+  # global group bought no exclusion -- all it did was invoke GitHub's "one
+  # pending run per group" rule, which cancelled a third branch's queued run
+  # outright and left its required check red. Key on the branch instead: a
+  # re-run supersedes only its own pull request, and other branches queue on
+  # the runner. cancel-in-progress stays false because cancelling mid-harness
+  # could orphan a scratch nutshell.exe on the dev box's live desktop, and
+  # nothing may kill a nutshell process the harness did not start.
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: Integration tests
+    runs-on: [self-hosted, windows, nutshell-desktop]
+    timeout-minutes: 40
+    defaults:
+      run:
+        # Windows PowerShell 5.1 -- the harness targets it and the runner has
+        # no pwsh. Spell the invocation out rather than the built-in
+        # `powershell` shell so it carries -ExecutionPolicy Bypass: the
+        # built-in one runs `powershell -command ". '{0}'"` and dies with
+        # "running scripts is disabled on this system" whenever the runner
+        # process inherits the machine's default Restricted policy (it did,
+        # once the runner came up from the Startup shortcut instead of an
+        # interactive shell). The built-in shell also prepends
+        # $ErrorActionPreference = 'Stop' and propagates $LASTEXITCODE; a
+        # custom shell gets neither, so spell those out too or a failing
+        # mingw32-make would leave the step green. The runner feeds the
+        # template through String.Format, so literal braces are doubled.
+        shell: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; . '{0}'; if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Toolchain on PATH
+        run: |
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "C:\msys64\usr\bin"     | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Unit tests
+        run: mingw32-make test
+
+      - name: Release build
+        run: |
+          mingw32-make clean
+          mingw32-make release
+
+      - name: Gate tier
+        # Test host, account and key live here -- change them on this line.
+        run: .\tests\integration\Run-Integration.ps1 -HostName tompi -User thomas -KeyPath (Join-Path $HOME ".ssh\thomas") -Tier gate
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: integration-artifacts
+          path: tests/integration/artifacts
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,4 +1,4 @@
-# 70-cli.ps1 -- CLI flags (bvt-coverage.md section 8, CLI-1 split into several
+# 70-cli.ps1 -- CLI flags (integration-coverage.md section 8, CLI-1 split into several
 # small cases: -v, -l, -?, an unknown flag, -nc, -h).
 # Dot-sourced by Run-Integration.ps1; depends on its Invoke-Case/Assert-True/
 # $Artifacts/$HostName/$User/$KeyPath/$Exe/$ActiveTiers/$Only/$results.
@@ -9,7 +9,7 @@ function Test-NutshellHostConsole {
        This is a pre-flight, not a nicety. Start-Process -NoNewWindow hangs
        indefinitely -- 10+ minutes, never returning even past a
        WaitForExit(5000) guard, so the guard cannot save the suite -- when it
-       is called from a console-less host, which is exactly what the BVT
+       is called from a console-less host, which is exactly what the
        GitHub Actions job is (the runner starts powershell.exe with its
        standard streams redirected and no console allocated) and what the
        nested automation shells this harness is often driven from are. See
@@ -38,7 +38,7 @@ function Invoke-NutshellCliCase {
          [NutshellNative]::ReadConsoleTail. Verified against this tree's
          actual behaviour, not assumed: AttachConsole succeeds and the text is
          readable in under a second.
-       - Without one (the BVT runner job, nested automation shells): -NoNewWindow
+       - Without one (the runner job, nested automation shells): -NoNewWindow
          is NOT used -- it would hang the whole suite, see
          Test-NutshellHostConsole -- so the exe is launched plainly, finds no
          parent console, and puts its output in a MessageBox, which this then
@@ -62,7 +62,7 @@ function Invoke-NutshellCliCase {
        string, same convention as Invoke-Case's -Body. #>
     param([Parameter(Mandatory)] [string] $Name, [Parameter(Mandatory)] [string[]] $CliArgs,
           [Parameter(Mandatory)] [scriptblock] $Assert, [int] $TimeoutSec = 8)
-    if ($ActiveTiers -notcontains "bvt") { return }
+    if ($ActiveTiers -notcontains "gate") { return }
     if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
     Write-Host ("[RUN ] " + $Name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
