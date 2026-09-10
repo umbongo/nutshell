@@ -140,8 +140,12 @@ self-hosted machine that can drive a real desktop for 10–15 minutes, so the
 workflow triggers on `ready_for_review` only: work in a draft pull request and
 run `gh pr ready` when the change is done. A push afterwards leaves the
 `Integration tests` check missing on the new commit, which blocks the merge;
-re-run it with `gh workflow run integration.yml --ref <branch>`, which is also
-how to gate a pull request that was opened non-draft (Dependabot's).
+re-gate with the draft round-trip `gh pr ready --undo N && gh pr ready N`, which
+is also how to gate a pull request opened non-draft (Dependabot's). Note that
+`gh workflow run integration.yml --ref <branch>` does **not** work for a PR: a
+`workflow_dispatch` run goes green but GitHub does not count it toward the PR's
+required check, so the PR stays blocked. Only a `pull_request`-triggered run
+(the draft round-trip, or a fresh push) satisfies the gate.
 
 ## Cases
 

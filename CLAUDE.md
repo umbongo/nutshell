@@ -175,11 +175,23 @@ Never push to `main` directly; never merge a red gate. Two consequences of
 running the gate once, both deliberate:
 
 - **Push after it has gone green and the check goes missing on the new commit,
-  which blocks the merge** rather than passing it on a stale result. Re-run it
-  with `gh workflow run integration.yml --ref my-change`.
-- **A pull request opened non-draft never fires `ready_for_review`** (Dependabot's,
-  or one opened by mistake), so it has no gate result at all. Run
-  `gh workflow run integration.yml --ref <branch>` for those too.
+  which blocks the merge** rather than passing it on a stale result.
+- **A pull request opened non-draft never fires `ready_for_review`**
+  (Dependabot's, or one opened by mistake), so it has no gate result at all.
+
+Re-gate in both cases with the draft round-trip:
+
+```
+gh pr ready --undo N && gh pr ready N    # fires a fresh gate run on the new head
+```
+
+Do **not** reach for `gh workflow run integration.yml --ref <branch>` here: a
+`workflow_dispatch` run goes green but GitHub does not count it toward a pull
+request's required check (it only counts runs it associates with the PR through
+a `pull_request` event), so the PR stays blocked on `Integration tests` with a
+green run sitting on its head commit. Only the draft round-trip (or a fresh
+push) fires a `pull_request`-associated run. `workflow_dispatch` remains useful
+for a branch with no PR.
 
 `tests/integration/Protect-Main.ps1` applies the ruleset and
 `tests/integration/Install-IntegrationRunner.ps1` registers the runner (both
