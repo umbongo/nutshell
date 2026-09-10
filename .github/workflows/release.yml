@@ -20,14 +20,14 @@ permissions:
 jobs:
   release:
     name: Release
-    runs-on: [self-hosted, windows, nutshell-bvt]
+    runs-on: [self-hosted, windows, nutshell-desktop]
     timeout-minutes: 20
     defaults:
       run:
         # Windows PowerShell 5.1 -- the runner has no pwsh. Same spelled-out
-        # invocation as bvt.yml (see the comment there): the runner process
-        # inherits a Restricted execution policy, and the built-in `powershell`
-        # shell cannot survive that.
+        # invocation as integration.yml (see the comment there): the runner
+        # process inherits a Restricted execution policy, and the built-in
+        # `powershell` shell cannot survive that.
         shell: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; . '{0}'; if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

@@ -1,4 +1,4 @@
-# 50-window.ps1 -- launch, window, shutdown, menu (bvt-coverage.md section 1):
+# 50-window.ps1 -- launch, window, shutdown, menu (integration-coverage.md section 1):
 # LAUNCH-1..3, RESIZE-1, WINDOW-1..2, CLOSE-1, MENU-1.
 # Dot-sourced by Run-Integration.ps1; depends on its Invoke-Case/Assert-True/
 # Test-NutshellCaptureNonBlank/$Artifacts/$HostName/$User/$KeyPath/$Exe/
@@ -68,7 +68,7 @@ function Wait-NutshellMainWindowOnly {
 # (exit code 0) rather than have Stop-Nutshell force-kill it, and -nc avoids
 # waiting on a live connection for something that's only testing launch/close
 # mechanics.
-if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "launch_main_window_no_dialog")) {
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "launch_main_window_no_dialog")) {
     $name = "launch_main_window_no_dialog"
     Write-Host ("[RUN ] " + $name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
@@ -123,7 +123,7 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
 # file now exists with recognisable default keys. open_session_manager_at_start
 # defaults to 0 (loader.c), so no Session Manager auto-opens; the plan's "handle
 # both" is therefore moot in the shipped default, noted here rather than guessed at.
-if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "launch_without_config_writes_defaults")) {
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "launch_without_config_writes_defaults")) {
     $name = "launch_without_config_writes_defaults"
     Write-Host ("[RUN ] " + $name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath -NoConfig
@@ -176,7 +176,7 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
 }
 
 # ---- LAUNCH-3: corrupt config survives -------------------------------------------
-if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "launch_with_corrupt_config_survives")) {
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "launch_with_corrupt_config_survives")) {
     $name = "launch_with_corrupt_config_survives"
     Write-Host ("[RUN ] " + $name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath -NoConfig
@@ -271,7 +271,7 @@ Invoke-Case "resize_range_paints_cleanly" @{} {
 }
 
 # ---- WINDOW-1: minimise and restore repaints -------------------------------------
-# This case found a real product bug in the 2026-09-09 BVT sweep: scrolled back
+# This case found a real product bug in the 2026-09-09 integration sweep: scrolled back
 # with PgUp on a full screen, minimising then restoring shifted the view up by
 # exactly one more page (e.g. top line 165 -> 150, a 15-row jump matching the
 # visible row count) every time. window.c's WM_SIZE had no SIZE_MINIMIZED
@@ -373,7 +373,7 @@ Invoke-Case "fullscreen_toggle_changes_pty" @{} {
 # WM_CLOSE straight through to DefWindowProc -> WM_DESTROY -> PostQuitMessage
 # with no confirmation prompt today, so the dialog-wait below is defensive
 # (kept in case that changes) rather than expected to fire.
-if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "close_with_live_session_exits_cleanly")) {
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "close_with_live_session_exits_cleanly")) {
     $name = "close_with_live_session_exits_cleanly"
     Write-Host ("[RUN ] " + $name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
@@ -431,14 +431,14 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
 # app (GetMenuStringW returned len=0/text='' for all 22 items across all 4
 # top-level menus). That's a product-observability gap for caption text
 # specifically: NOT implementable message-based without reading the target
-# process's memory for the MenuItemData.text field (out of scope for a BVT
+# process's memory for the MenuItemData.text field (out of scope for an integration
 # helper). What message APIs DO expose regardless of owner-draw -- and what
 # this case asserts -- is structure: top-level menu count, each submenu's
 # item count (separators included), and each item's real WM_COMMAND id in
 # order (GetMenuItemID returns 0 for a separator, the id itself otherwise),
 # hand-derived here from create_app_menu()'s call order and cross-checked
 # against src/ui/resource.h's IDM_* constants.
-if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "menus_open_and_list_items")) {
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "menus_open_and_list_items")) {
     $name = "menus_open_and_list_items"
     Write-Host ("[RUN ] " + $name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath

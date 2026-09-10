@@ -801,7 +801,7 @@ function Get-NutshellWorkArea {
     <# The primary monitor's work area (screen minus taskbar) in physical
        pixels, as @{X;Y;Width;Height}. Cases that want "as big as this desktop
        allows" or "clearly smaller than the screen" must derive the size from
-       this rather than hardcode one: the BVT runner's logon session is not a
+       this rather than hardcode one: the runner's logon session is not a
        fixed size (it has been seen at 1280x720 and larger), and a case that
        assumes a desktop is exactly the kind of desktop dependency
        CLAUDE.md forbids. #>

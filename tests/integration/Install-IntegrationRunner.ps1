@@ -1,7 +1,8 @@
-# Install-BvtRunner.ps1 — register this PC as the self-hosted GitHub Actions
-# runner that executes the BVT workflow (.github/workflows/bvt.yml).
+# Install-IntegrationRunner.ps1 — register this PC as the self-hosted GitHub
+# Actions runner that executes the "Integration tests" workflow
+# (.github/workflows/integration.yml).
 #
-# Why a self-hosted runner: the BVT drives the real nutshell.exe on a Windows
+# Why a self-hosted runner: the suite drives the real nutshell.exe on a Windows
 # desktop and connects to the test host (tompi) on the LAN. GitHub-hosted
 # runners have neither. The runner is started as an interactive process at
 # logon (a scheduled task), not as a Windows service, because a service runs
@@ -16,18 +17,25 @@
 #      the key in ~\.ssh\thomas (see tests/integration/README.md).
 #
 # Usage (Windows PowerShell 5.1 or pwsh, from any directory):
-#   .\tests\integration\Install-BvtRunner.ps1
-#   .\tests\integration\Install-BvtRunner.ps1 -Uninstall
+#   .\tests\integration\Install-IntegrationRunner.ps1
+#   .\tests\integration\Install-IntegrationRunner.ps1 -Uninstall
 #
 # The registration token is fetched with `gh api` and used once; nothing
 # secret is stored by this script.
+#
+# Re-labelling a runner that is already registered needs neither this script
+# nor the machine -- add the label through the API and it takes effect without
+# re-registering:
+#
+#   gh api -X POST repos/<owner>/<repo>/actions/runners/<id>/labels \
+#       -f "labels[]=nutshell-desktop"
 
 param(
     [string] $Repo = "umbongo/nutshell",
     [string] $RunnerDir = "C:\actions-runner",
-    [string] $RunnerName = $env:COMPUTERNAME.ToLower() + "-bvt",
-    [string] $Labels = "nutshell-bvt",
-    [string] $TaskName = "Nutshell BVT runner",
+    [string] $RunnerName = $env:COMPUTERNAME.ToLower() + "-nutshell",
+    [string] $Labels = "nutshell-desktop",
+    [string] $TaskName = "Nutshell integration runner",
     [switch] $Uninstall
 )
 
@@ -49,9 +57,16 @@ if (-not (Test-Path (Join-Path $RunnerDir "config.cmd"))) {
 }
 
 if ($Uninstall) {
-    $lnk = Join-Path ([Environment]::GetFolderPath('Startup')) ($TaskName + ".lnk")
-    Write-Host "Removing Startup shortcut '$lnk' (if present)..."
-    Remove-Item $lnk -ErrorAction SilentlyContinue
+    $startupDir = [Environment]::GetFolderPath('Startup')
+    # "Nutshell BVT runner" is the pre-rename name: clear it too, or an old
+    # shortcut keeps starting a second runner instance at every logon.
+    foreach ($name in @($TaskName, "Nutshell BVT runner")) {
+        $lnk = Join-Path $startupDir ($name + ".lnk")
+        if (Test-Path $lnk) {
+            Write-Host "Removing Startup shortcut '$lnk'..."
+            Remove-Item $lnk -ErrorAction SilentlyContinue
+        }
+    }
     Write-Host "Stop the running runner window yourself (run.cmd) before or after this."
     Write-Host "Fetching a removal token and unregistering the runner..."
     $tok = (& $gh api -X POST "repos/$Repo/actions/runners/remove-token" --jq .token)
@@ -87,11 +102,11 @@ $sc = $ws.CreateShortcut($lnk)
 $sc.TargetPath = $runCmd
 $sc.WorkingDirectory = $RunnerDir
 $sc.WindowStyle = 7   # minimised
-$sc.Description = "GitHub Actions self-hosted runner for the Nutshell BVT"
+$sc.Description = "GitHub Actions self-hosted runner for the Nutshell integration tests"
 $sc.Save()
 Write-Host "Starting the runner now..."
 Start-Process -FilePath $runCmd -WorkingDirectory $RunnerDir -WindowStyle Minimized | Out-Null
 
 Write-Host ""
 Write-Host "Runner registered. Check it under https://github.com/$Repo/settings/actions/runners"
-Write-Host "It must show as Idle (green) before the BVT workflow can run."
+Write-Host "It must show as Idle (green) before the integration tests can run."

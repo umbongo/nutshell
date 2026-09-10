@@ -1,15 +1,23 @@
-# Protect-Main.ps1 — make "BVT passed" the guardrail for main, as a repository
-# ruleset (the legacy branch-protection API is disabled on repositories that
-# use rulesets, which this one does).
+# Protect-Main.ps1 — make "the integration tests passed" the guardrail for
+# main, as a repository ruleset (the legacy branch-protection API is disabled
+# on repositories that use rulesets, which this one does).
 #
 # The ruleset makes main accept changes only through a pull request whose
-# required status checks -- "BVT" (the job in .github/workflows/bvt.yml) and
-# "Version bump" (the job in .github/workflows/checks.yml) -- have succeeded
-# on the pull request's latest commit, with the branch up to date with main so
-# the checks ran against what will actually land. Force pushes and deletion of
-# main are blocked. No reviewer approval is required (a one-person project);
-# raise required_approving_review_count if that changes. No bypass actors are
+# required status checks -- "Integration tests" (the job in
+# .github/workflows/integration.yml) and "Version bump" (the job in
+# .github/workflows/checks.yml) -- have succeeded on the pull request's latest
+# commit, with the branch up to date with main so the checks ran against what
+# will actually land. Force pushes and deletion of main are blocked. No
+# reviewer approval is required (a one-person project); raise
+# required_approving_review_count if that changes. No bypass actors are
 # configured, so the rule binds administrators too.
+#
+# The integration tests run once per pull request, when it is marked ready for
+# review -- so a draft pull request is expected to sit with that check absent,
+# and `gh pr ready` is what opens the gate. strict_required_status_checks_policy
+# stays on, which means a pull request that has already gone green has to run
+# again if main moves under it: that re-run is testing a genuinely different
+# tree, which is the point.
 #
 # Prerequisites: GitHub CLI logged in as a repository administrator.
 # Usage:  .\tests\integration\Protect-Main.ps1          (create or update)
@@ -19,8 +27,14 @@
 param(
     [string] $Repo = "umbongo/nutshell",
     [string] $Branch = "main",
-    [string[]] $CheckNames = @("BVT", "Version bump"),
-    [string] $RulesetName = "main: pull requests with green BVT",
+    [string[]] $CheckNames = @("Integration tests", "Version bump"),
+    [string] $RulesetName = "main: pull requests with green integration tests",
+    # Pre-rename ruleset name. Matched as a fallback so that re-running this
+    # updates the existing ruleset in place rather than creating a second one
+    # beside it -- two active rulesets both apply, and the stale one would go
+    # on requiring a "BVT" check that no workflow reports any more, blocking
+    # every merge into main.
+    [string] $LegacyRulesetName = "main: pull requests with green BVT",
     [switch] $Show,
     [switch] $Remove
 )
@@ -32,7 +46,12 @@ if (-not (Test-Path $gh)) { throw "GitHub CLI (gh) not found. Install it with: w
 & $gh auth status 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "gh is not logged in. Run: gh auth login" }
 
-$existing = (& $gh api "repos/$Repo/rulesets" | ConvertFrom-Json) | Where-Object { $_.name -eq $RulesetName }
+$all = (& $gh api "repos/$Repo/rulesets" | ConvertFrom-Json)
+$existing = $all | Where-Object { $_.name -eq $RulesetName }
+if (-not $existing) {
+    $existing = $all | Where-Object { $_.name -eq $LegacyRulesetName }
+    if ($existing) { Write-Host "Found the pre-rename ruleset '$LegacyRulesetName' (id $($existing.id)); updating it in place." }
+}
 
 if ($Show) {
     & $gh api "repos/$Repo/rulesets" --jq '.[] | [.id, .name, .enforcement] | @tsv'

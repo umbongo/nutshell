@@ -1,10 +1,22 @@
 name: CodeQL C/C++ Analysis
 
 on:
+  # Both triggers are deliberate: the pull_request run reports alerts on the
+  # diff, and the push run is what keeps the Security tab current and gives
+  # code scanning the default-branch baseline that tells a new alert from a
+  # pre-existing one. Both are hosted ubuntu runners -- free on a public repo,
+  # and neither touches the self-hosted desktop.
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+concurrency:
+  # Drop superseded runs: pushing again to a branch should not leave the
+  # previous hosted run burning to completion. Safe to cancel here -- unlike
+  # the desktop harness, these jobs hold no machine state.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analyze:

@@ -1,4 +1,4 @@
-# 60-tabs-logging.ps1 -- tabs (bvt-coverage.md section 4) and logging (section 5):
+# 60-tabs-logging.ps1 -- tabs (integration-coverage.md section 4) and logging (section 5):
 # TABS-1, TABS-2, LOG-1, LOG-2.
 # Dot-sourced by Run-Integration.ps1; depends on its Invoke-Case/Assert-True/
 # $Artifacts/$HostName/$User/$KeyPath/$Exe/$ActiveTiers/$Only/$results/
@@ -55,7 +55,7 @@ function Find-NutshellColorInRegion {
 # hash changing when the second tab opens, and "the other tab is active" via
 # a marker landing in tab A's already-running log after the close.
 #
-# This case found a real product bug in the 2026-09-09 BVT sweep: after Ctrl+W
+# This case found a real product bug in the 2026-09-09 integration sweep: after Ctrl+W
 # closed tab B, the content pane showed the idle/no-session placeholder (the
 # acorn watermark) instead of tab A's terminal, the tab strip still showed tab
 # A as connected (green dot), but posted keystrokes reached no shell at all --
@@ -138,7 +138,7 @@ Invoke-Case "tabs_open_switch_close" @{} {
 # phase's success dot sits at y=176-205 of an 800px capture (0.22-0.26), just
 # below the band, while the connecting phase only passed because the warning
 # colour also appears in the connecting animation's glow at y=170.
-if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "tab_status_dot_colours")) {
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "tab_status_dot_colours")) {
     $name = "tab_status_dot_colours"
     Write-Host ("[RUN ] " + $name)
     $theme = "Onyx Synapse"

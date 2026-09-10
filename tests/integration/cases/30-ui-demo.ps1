@@ -24,7 +24,7 @@
 # is the one state whose whole point is two independent pending cards at
 # once -- its capture is the visual proof that both render side by side.
 
-if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "ui_gallery")) {
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "ui_gallery")) {
     Write-Host ("[RUN ] ui_gallery")
     $galleryDir = Join-Path $Artifacts "gallery"
     New-Item -ItemType Directory -Force $galleryDir | Out-Null
@@ -75,7 +75,7 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
 # Needs no SSH host or AI key -- --ui-demo never connects -- so this runs as
 # its own block like ui_gallery above, not through Invoke-Case/Invoke-AiCase
 # (both assume a live shell prompt).
-if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "approval_card_run_selected_settles")) {
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "approval_card_run_selected_settles")) {
     $name = "approval_card_run_selected_settles"
     Write-Host ("[RUN ] " + $name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
@@ -123,7 +123,7 @@ if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "
 # Keystroke-free like ui_gallery: --ui-demo never connects, so this needs no
 # SSH host or AI key and runs as its own block rather than through Invoke-Case
 # (which assumes a live shell prompt via Wait-NutshellShell/Start-NutshellLogging).
-if (($ActiveTiers -contains "bvt") -and ($Only.Count -eq 0 -or $Only -contains "helpers_theme_pixel_matches_token")) {
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "helpers_theme_pixel_matches_token")) {
     $name = "helpers_theme_pixel_matches_token"
     Write-Host ("[RUN ] " + $name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
