@@ -1885,3 +1885,188 @@ int test_cmd_classify_new_platforms_lone_separator_safe(void) {
     ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
     TEST_END();
 }
+
+/* ===== CMD_PLATFORM_UNKNOWN overlay (platform-plumbing spec section 2) =====
+ * classify_unknown_segment() claims a short list of first-token network
+ * verbs as CRITICAL/WRITE and delegates everything else to
+ * classify_linux_segment() unchanged. */
+
+/* Unconditional first-token verbs -> CRITICAL */
+int test_cmd_classify_unknown_overlay_critical_verbs(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("reload", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("reboot", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("erase startup-config", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("factory-reset", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("restore", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("factory-default", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("commit", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("rollback", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("delete flash:old.bin", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("purge", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("undo", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("boot", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* "write erase" is claimed; a bare "write" (no "erase" second token) is not
+ * a network verb the overlay recognises and falls through to Linux, where
+ * "write" is unclassified -> SAFE. */
+int test_cmd_classify_unknown_overlay_write_erase(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("write erase", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("write memory", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* "request system/restart/shutdown" is claimed; other "request ..." forms
+ * fall through to Linux ("request" is not a Linux command -> SAFE). */
+int test_cmd_classify_unknown_overlay_request_verbs(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("request system reboot", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("request restart system", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("request shutdown system", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("request support info", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* "execute factoryreset/reboot/restore" is claimed; other "execute ..."
+ * forms fall through to Linux ("execute" is not a Linux command -> SAFE). */
+int test_cmd_classify_unknown_overlay_execute_verbs(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("execute factoryreset", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("execute reboot", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("execute restore config", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("execute ping 8.8.8.8", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* First-token verbs -> WRITE */
+int test_cmd_classify_unknown_overlay_write_verbs(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("no shutdown", CMD_PLATFORM_UNKNOWN), (int)CMD_WRITE);
+    /* The overlay may only raise, never lower: "shutdown" is a config verb
+     * on a network CLI but CRITICAL on a Linux host, and an unresolved
+     * session must not classify below what the Linux ruleset alone says. */
+    ASSERT_EQ((int)cmd_classify("shutdown", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("shutdown", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("configure terminal", CMD_PLATFORM_UNKNOWN), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("system-view", CMD_PLATFORM_UNKNOWN), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("set foo bar", CMD_PLATFORM_UNKNOWN), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("config t", CMD_PLATFORM_UNKNOWN), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* Everything the overlay doesn't claim delegates to classify_linux_segment()
+ * unchanged -- proving the Linux path is intact under CMD_PLATFORM_UNKNOWN. */
+int test_cmd_classify_unknown_linux_safe_commands_intact(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ls -la", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("cat /etc/hosts", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("grep -r x /var/log", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_unknown_linux_critical_command_intact(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("rm -rf /", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* ===== Platform name / label mapping (platform-plumbing spec section 4.1) ===== */
+
+int test_cmd_platform_from_name_round_trip(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_platform_from_name("linux"), (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)cmd_platform_from_name("cisco-ios"), (int)CMD_PLATFORM_CISCO_IOS);
+    ASSERT_EQ((int)cmd_platform_from_name("cisco-nxos"), (int)CMD_PLATFORM_CISCO_NXOS);
+    ASSERT_EQ((int)cmd_platform_from_name("cisco-asa"), (int)CMD_PLATFORM_CISCO_ASA);
+    ASSERT_EQ((int)cmd_platform_from_name("hp-procurve"), (int)CMD_PLATFORM_HP_PROCURVE);
+    ASSERT_EQ((int)cmd_platform_from_name("hp-comware"), (int)CMD_PLATFORM_HP_COMWARE);
+    ASSERT_EQ((int)cmd_platform_from_name("aruba-cx"), (int)CMD_PLATFORM_ARUBA_CX);
+    ASSERT_EQ((int)cmd_platform_from_name("aruba-os"), (int)CMD_PLATFORM_ARUBA_OS);
+    ASSERT_EQ((int)cmd_platform_from_name("panos"), (int)CMD_PLATFORM_PANOS);
+    ASSERT_EQ((int)cmd_platform_from_name("junos"), (int)CMD_PLATFORM_JUNOS);
+    ASSERT_EQ((int)cmd_platform_from_name("fortios"), (int)CMD_PLATFORM_FORTIOS);
+    ASSERT_EQ((int)cmd_platform_from_name("vyos"), (int)CMD_PLATFORM_VYOS);
+    ASSERT_EQ((int)cmd_platform_from_name("routeros"), (int)CMD_PLATFORM_MIKROTIK);
+    TEST_END();
+}
+
+int test_cmd_platform_name_round_trip(void) {
+    TEST_BEGIN();
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_LINUX), "linux");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_CISCO_IOS), "cisco-ios");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_CISCO_NXOS), "cisco-nxos");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_CISCO_ASA), "cisco-asa");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_HP_PROCURVE), "hp-procurve");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_HP_COMWARE), "hp-comware");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_ARUBA_CX), "aruba-cx");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_ARUBA_OS), "aruba-os");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_PANOS), "panos");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_JUNOS), "junos");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_FORTIOS), "fortios");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_VYOS), "vyos");
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_MIKROTIK), "routeros");
+    /* CMD_PLATFORM_UNKNOWN is the unresolved/awaiting-detection state, and
+     * "auto" -- not a device family -- is what it persists as. */
+    ASSERT_STR_EQ(cmd_platform_name(CMD_PLATFORM_UNKNOWN), "auto");
+    TEST_END();
+}
+
+int test_cmd_platform_from_name_unknown_token(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_platform_from_name("not-a-real-platform"), (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)cmd_platform_from_name("Cisco-IOS-XR"), (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)cmd_platform_from_name(""), (int)CMD_PLATFORM_UNKNOWN);
+    TEST_END();
+}
+
+int test_cmd_platform_from_name_null(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_platform_from_name(NULL), (int)CMD_PLATFORM_UNKNOWN);
+    TEST_END();
+}
+
+/* "auto" is not a device family -- it means "no override, detect it" -- and
+ * maps to CMD_PLATFORM_UNKNOWN, the correct starting state for a session
+ * awaiting detection. */
+int test_cmd_platform_from_name_auto(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_platform_from_name("auto"), (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)cmd_platform_from_name("AUTO"), (int)CMD_PLATFORM_UNKNOWN);
+    TEST_END();
+}
+
+int test_cmd_platform_label_unknown_is_auto_detect(void) {
+    TEST_BEGIN();
+    ASSERT_STR_EQ(cmd_platform_label(CMD_PLATFORM_UNKNOWN), "Auto-detect");
+    ASSERT_STR_EQ(cmd_platform_label(CMD_PLATFORM_CISCO_IOS), "Cisco IOS / IOS-XE");
+    ASSERT_STR_EQ(cmd_platform_label(CMD_PLATFORM_MIKROTIK), "MikroTik RouterOS");
+    TEST_END();
+}
+
+/* The overlay also has to cover the two shapes whose first token identifies
+   nothing: Comware's two-token "reset ..." (a bare "reset" is the harmless
+   Linux terminal reset) and RouterOS's verb-last "/path ... verb" form. */
+int test_cmd_classify_unknown_overlay_reset_forms(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("reset saved-configuration", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("reset bgp all", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("reset ospf process", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    /* bare "reset" is the terminfo terminal reset on a Linux host */
+    ASSERT_EQ((int)cmd_classify("reset", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_unknown_overlay_routeros_paths(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("/system reset-configuration", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("/ip firewall filter remove numbers=0", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("/interface disable ether1", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    /* a read-only RouterOS command, and a Linux absolute-path invocation,
+     * must both stay out of the way */
+    ASSERT_EQ((int)cmd_classify("/ip firewall filter print", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("/usr/bin/uptime", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    TEST_END();
+}

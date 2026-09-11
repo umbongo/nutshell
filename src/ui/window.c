@@ -40,6 +40,9 @@
 #include "menubar_line.h"
 #include "dpi_util.h"
 #include "redraw_log.h"
+#include "cmd_classify.h"
+#include "cmd_detect.h"
+#include "term_extract.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <dwmapi.h>
 #include <gdiplus.h>       /* GDI+ flat API (includes gdiplusflat.h) */
@@ -59,6 +62,14 @@ static int g_left_margin = TERM_LEFT_MARGIN;
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
 #define WM_CONN_DONE            (WM_USER + 2)
 #define WM_STARTUP_CONNECT      (WM_USER + 3)
+
+/* Bound on platform-detection attempts per session: counts poll ticks that
+ * delivered new bytes (ssh_io_poll(...) > 0), not raw timer ticks, so a
+ * quiet session doesn't burn through the budget while idle. A login banner
+ * that hasn't shown up within this many data-bearing reads isn't coming --
+ * give up and stay on CMD_PLATFORM_UNKNOWN (still safe: see cmd_classify's
+ * unknown-platform overlay) rather than scanning every poll forever. */
+#define PLATFORM_DETECT_MAX_TICKS 40
 
 typedef enum { CONN_IDLE, CONN_CONNECTING } ConnState;
 
@@ -80,6 +91,9 @@ typedef struct Session {
     int             conn_dots;     /* dots appended so far */
     CRITICAL_SECTION conn_cs;      /* H-1: guards conn_result/conn_error/ssh/channel */
     AiSessionState ai_state;       /* per-session AI conversation */
+    int       platform_locked;   /* profile named an explicit platform -- detection may not override it */
+    int       platform_scanned;  /* detection is done (resolved via banner, or gave up after the tick bound) */
+    int       platform_scan_ticks; /* data-bearing poll ticks spent scanning so far; bounds platform_scanned */
     DWORD     last_socket_data_tick;  /* GetTickCount() of last libssh2 recv() */
     DWORD     last_keepalive_tick;    /* GetTickCount() of last keepalive_send() */
     DWORD     last_user_input_tick;   /* GetTickCount() of last user activity */
@@ -277,6 +291,11 @@ static Session *create_session(int rows, int cols) {
     InitializeCriticalSection(&s->conn_cs);  /* H-1 */
     memset(&s->ai_state, 0, sizeof(s->ai_state));
     cmd_batch_set_init(&s->ai_state.batches);
+    /* Unconnected/pre-detect state must be the safe one, not Linux (value 0). */
+    s->ai_state.platform = (int)CMD_PLATFORM_UNKNOWN;
+    s->platform_locked = 0;
+    s->platform_scanned = 0;
+    s->platform_scan_ticks = 0;
     s->next = g_session_list;
     g_session_list = s;
     return s;
@@ -721,6 +740,16 @@ static void on_session_connect(const Profile *info) {
     /* Open the tab immediately so the user sees activity at once */
     Session *s = create_session(rows, cols);
     s->conn_profile  = *info; /* copy profile early — tab callbacks read it */
+
+    /* An explicit profile setting always wins: lock the platform so the
+     * poll-site detector (below) never overwrites what the operator chose.
+     * "auto" (and any unrecognised token) maps to CMD_PLATFORM_UNKNOWN,
+     * which leaves the session unlocked and awaiting detection. */
+    s->ai_state.platform = (int)cmd_platform_from_name(s->conn_profile.platform);
+    s->platform_locked   = (s->ai_state.platform != (int)CMD_PLATFORM_UNKNOWN);
+    s->platform_scanned  = 0;
+    s->platform_scan_ticks = 0;
+
     term_process(s->term, "Connecting", 10); /* dots appended by 500ms timer */
 
     char title[32];
@@ -2171,8 +2200,30 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         int poll_rc = ssh_io_poll(s->channel, s->term,
                                                       s->session_log,
                                                       s->debug_log);
-                        if (poll_rc > 0)
+                        if (poll_rc > 0) {
                             update_scrollbar(hwnd);
+
+                            /* Platform auto-detect: only while the profile
+                             * didn't pin an explicit platform and we haven't
+                             * already resolved (or given up). Re-scanning
+                             * every data-bearing tick is what lets a banner
+                             * split across multiple reads still be caught. */
+                            if (!s->platform_locked && !s->platform_scanned) {
+                                char detect_buf[4096];
+                                size_t detect_len = term_extract_last_n(
+                                    s->term, 40, detect_buf, sizeof detect_buf);
+                                CmdDetectConfidence detect_conf = CMD_DETECT_NONE;
+                                CmdPlatform detected = cmd_detect_platform(
+                                    detect_buf, detect_len, &detect_conf);
+                                if (detect_conf != CMD_DETECT_NONE)
+                                    s->ai_state.platform = (int)detected;
+
+                                s->platform_scan_ticks++;
+                                if (detect_conf == CMD_DETECT_BANNER ||
+                                    s->platform_scan_ticks >= PLATFORM_DETECT_MAX_TICKS)
+                                    s->platform_scanned = 1;
+                            }
+                        }
 
                         DWORD now_tick = GetTickCount();
 

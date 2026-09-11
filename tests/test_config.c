@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "ai_prompt.h"
 #include "config.h"
+#include "cmd_classify.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1054,6 +1055,92 @@ int test_config_load_ignores_old_auto_approve_all_key(void)
     ASSERT_NOT_NULL(cfg);
     ASSERT_EQ(cfg->settings.ai_auto_approve_default, 0);
     config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * Profile platform (device platform setting, audit H2)
+ * ============================================================ */
+
+int test_config_profile_platform_missing_defaults_to_auto(void)
+{
+    TEST_BEGIN();
+    /* A profile written before "platform" existed must default to "auto",
+     * same as config_profile_new() does for a brand-new profile. */
+    FILE *f = fopen(TMP_CFG, "w");
+    ASSERT_NOT_NULL(f);
+    fputs("{\"settings\": {}, \"profiles\": ["
+          "{\"name\": \"Old Box\", \"host\": \"old.example.com\"}"
+          "]}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ((int)vec_size(&cfg->profiles), 1);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0u);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->platform, "auto");
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_profile_platform_roundtrip(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+
+    Profile *p = config_profile_new();
+    (void)snprintf(p->host,     sizeof(p->host),     "%s", "switch.example.com");
+    (void)snprintf(p->platform, sizeof(p->platform), "%s", "cisco-nxos");
+    vec_push(&orig->profiles, p);
+
+    int rc = config_save(orig, TMP_CFG);
+    ASSERT_EQ(rc, 0);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_EQ((int)vec_size(&loaded->profiles), 1);
+
+    Profile *lp = (Profile *)vec_get(&loaded->profiles, 0u);
+    ASSERT_NOT_NULL(lp);
+    ASSERT_STR_EQ(lp->platform, "cisco-nxos");
+
+    config_free(orig);
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_profile_platform_garbage_maps_unknown(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+
+    Profile *p = config_profile_new();
+    (void)snprintf(p->host,     sizeof(p->host),     "%s", "mystery.example.com");
+    (void)snprintf(p->platform, sizeof(p->platform), "%s", "not-a-real-platform");
+    vec_push(&orig->profiles, p);
+
+    int rc = config_save(orig, TMP_CFG);
+    ASSERT_EQ(rc, 0);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    Profile *lp = (Profile *)vec_get(&loaded->profiles, 0u);
+    ASSERT_NOT_NULL(lp);
+    /* Config storage doesn't validate -- the garbage string round-trips
+     * as-is... */
+    ASSERT_STR_EQ(lp->platform, "not-a-real-platform");
+    /* ...but resolving it at connect time maps it safely to UNKNOWN rather
+     * than mis-detecting some real platform. */
+    ASSERT_EQ((int)cmd_platform_from_name(lp->platform), (int)CMD_PLATFORM_UNKNOWN);
+
+    config_free(orig);
+    config_free(loaded);
     remove(TMP_CFG);
     TEST_END();
 }

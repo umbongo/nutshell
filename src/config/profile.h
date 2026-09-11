@@ -23,6 +23,7 @@ typedef struct {
     AuthType auth_type;
     char password[256]; // Or passphrase for key
     char key_path[MAX_PATH];
+    char platform[32]; // Device platform token: "auto" (default), "linux", "cisco-ios", ...
 #ifndef AI_NOTES_MAX
 #define AI_NOTES_MAX 2560
 #endif

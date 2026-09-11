@@ -152,6 +152,7 @@ Profile *config_profile_new(void)
     Profile *p = xcalloc(1u, sizeof(Profile));
     p->port      = 22;
     p->auth_type = AUTH_PASSWORD;
+    field_copy(p->platform, sizeof(p->platform), "auto");
     return p;
 }
 
@@ -356,6 +357,11 @@ Config *config_load(const char *path)
             if ((sv = json_obj_str(jp, "ai_notes"))) {
                 field_copy(pr->ai_notes, sizeof(pr->ai_notes), sv);
             }
+            /* Missing key (older config) keeps the "auto" default that
+             * config_profile_new() already set. */
+            if ((sv = json_obj_str(jp, "platform"))) {
+                field_copy(pr->platform, sizeof(pr->platform), sv);
+            }
             vec_push(&cfg->profiles, pr);
         }
     }
@@ -500,6 +506,9 @@ int config_save(const Config *cfg, const char *path)
         fputs(",\n", f);
         fputs("      \"ai_notes\": ", f);
         fprint_json_str(f, pr->ai_notes);
+        fputs(",\n", f);
+        fputs("      \"platform\": ", f);
+        fprint_json_str(f, pr->platform);
         fputs("\n    }", f);
         if (i + 1u < n) {
             fputc(',', f);

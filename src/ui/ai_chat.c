@@ -3597,7 +3597,7 @@ next_coalesce:;
                         batch->conv_mark = src->conv.msg_count;
                         for (int ci = 0; ci < ncmds; ci++)
                             chat_approval_add(&batch->q, cmds[ci],
-                                              CMD_PLATFORM_LINUX,
+                                              (CmdPlatform)src->platform,
                                               d->permit_write);
                     }
                 }
@@ -3746,7 +3746,7 @@ next_coalesce:;
                      * (see chat_approval_needs_user below). */
                     for (int ci = 0; ci < ncmds; ci++) {
                         int idx = chat_approval_add(&batch->q, cmds[ci],
-                                                    CMD_PLATFORM_LINUX,
+                                                    (CmdPlatform)d->active_state->platform,
                                                     d->permit_write);
                         if (idx < 0) continue;  /* queue full or blank -- drop it */
 

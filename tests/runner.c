@@ -216,6 +216,53 @@ int test_config_validate_review_fix_settings_clamp(void);
 int test_config_roundtrip_review_fix_settings(void);
 int test_config_load_legacy_no_review_fix_settings(void);
 int test_config_load_ignores_old_auto_approve_all_key(void);
+/* Per-profile device platform (audit H2) */
+/* cmd_detect.c - banner/prompt platform detection */
+int test_cmd_detect_null_text(void);
+int test_cmd_detect_empty_text(void);
+int test_cmd_detect_null_confidence_out(void);
+int test_cmd_detect_banner_nxos(void);
+int test_cmd_detect_banner_asa(void);
+int test_cmd_detect_banner_ios(void);
+int test_cmd_detect_banner_aruba_cx(void);
+int test_cmd_detect_banner_aruba_os(void);
+int test_cmd_detect_banner_procurve(void);
+int test_cmd_detect_banner_comware(void);
+int test_cmd_detect_banner_panos(void);
+int test_cmd_detect_banner_junos(void);
+int test_cmd_detect_banner_fortios(void);
+int test_cmd_detect_banner_vyos(void);
+int test_cmd_detect_banner_routeros(void);
+int test_cmd_detect_banner_linux(void);
+int test_cmd_detect_banner_wins_over_ambiguous_prompt(void);
+int test_cmd_detect_prompt_comware(void);
+int test_cmd_detect_prompt_aruba_os(void);
+int test_cmd_detect_prompt_routeros(void);
+int test_cmd_detect_prompt_linux(void);
+int test_cmd_detect_ambiguous_user_at_host(void);
+int test_cmd_detect_ambiguous_hostname_hash_or_gt(void);
+int test_cmd_detect_no_prompt_at_all(void);
+int test_cmd_detect_trailing_blank_lines(void);
+int test_cmd_detect_banner_split_across_chunks(void);
+/* cmd_classify.c - unknown-platform overlay and name mapping */
+int test_cmd_classify_unknown_overlay_critical_verbs(void);
+int test_cmd_classify_unknown_overlay_write_erase(void);
+int test_cmd_classify_unknown_overlay_request_verbs(void);
+int test_cmd_classify_unknown_overlay_execute_verbs(void);
+int test_cmd_classify_unknown_overlay_write_verbs(void);
+int test_cmd_classify_unknown_overlay_reset_forms(void);
+int test_cmd_classify_unknown_overlay_routeros_paths(void);
+int test_cmd_classify_unknown_linux_safe_commands_intact(void);
+int test_cmd_classify_unknown_linux_critical_command_intact(void);
+int test_cmd_platform_from_name_round_trip(void);
+int test_cmd_platform_name_round_trip(void);
+int test_cmd_platform_from_name_unknown_token(void);
+int test_cmd_platform_from_name_null(void);
+int test_cmd_platform_from_name_auto(void);
+int test_cmd_platform_label_unknown_is_auto_detect(void);
+int test_config_profile_platform_missing_defaults_to_auto(void);
+int test_config_profile_platform_roundtrip(void);
+int test_config_profile_platform_garbage_maps_unknown(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -2351,6 +2398,53 @@ int main(void) {
     failed += test_config_roundtrip_review_fix_settings();
     failed += test_config_load_legacy_no_review_fix_settings();
     failed += test_config_load_ignores_old_auto_approve_all_key();
+    /* Per-profile device platform (audit H2) */
+    /* Platform detection */
+    failed += test_cmd_detect_null_text();
+    failed += test_cmd_detect_empty_text();
+    failed += test_cmd_detect_null_confidence_out();
+    failed += test_cmd_detect_banner_nxos();
+    failed += test_cmd_detect_banner_asa();
+    failed += test_cmd_detect_banner_ios();
+    failed += test_cmd_detect_banner_aruba_cx();
+    failed += test_cmd_detect_banner_aruba_os();
+    failed += test_cmd_detect_banner_procurve();
+    failed += test_cmd_detect_banner_comware();
+    failed += test_cmd_detect_banner_panos();
+    failed += test_cmd_detect_banner_junos();
+    failed += test_cmd_detect_banner_fortios();
+    failed += test_cmd_detect_banner_vyos();
+    failed += test_cmd_detect_banner_routeros();
+    failed += test_cmd_detect_banner_linux();
+    failed += test_cmd_detect_banner_wins_over_ambiguous_prompt();
+    failed += test_cmd_detect_prompt_comware();
+    failed += test_cmd_detect_prompt_aruba_os();
+    failed += test_cmd_detect_prompt_routeros();
+    failed += test_cmd_detect_prompt_linux();
+    failed += test_cmd_detect_ambiguous_user_at_host();
+    failed += test_cmd_detect_ambiguous_hostname_hash_or_gt();
+    failed += test_cmd_detect_no_prompt_at_all();
+    failed += test_cmd_detect_trailing_blank_lines();
+    failed += test_cmd_detect_banner_split_across_chunks();
+    /* Unknown-platform overlay and name mapping */
+    failed += test_cmd_classify_unknown_overlay_critical_verbs();
+    failed += test_cmd_classify_unknown_overlay_write_erase();
+    failed += test_cmd_classify_unknown_overlay_request_verbs();
+    failed += test_cmd_classify_unknown_overlay_execute_verbs();
+    failed += test_cmd_classify_unknown_overlay_write_verbs();
+    failed += test_cmd_classify_unknown_overlay_reset_forms();
+    failed += test_cmd_classify_unknown_overlay_routeros_paths();
+    failed += test_cmd_classify_unknown_linux_safe_commands_intact();
+    failed += test_cmd_classify_unknown_linux_critical_command_intact();
+    failed += test_cmd_platform_from_name_round_trip();
+    failed += test_cmd_platform_name_round_trip();
+    failed += test_cmd_platform_from_name_unknown_token();
+    failed += test_cmd_platform_from_name_null();
+    failed += test_cmd_platform_from_name_auto();
+    failed += test_cmd_platform_label_unknown_is_auto_detect();
+    failed += test_config_profile_platform_missing_defaults_to_auto();
+    failed += test_config_profile_platform_roundtrip();
+    failed += test_config_profile_platform_garbage_maps_unknown();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();

@@ -3730,6 +3730,248 @@ static CmdSafetyLevel classify_mikrotik_segment(const char *seg, size_t seg_len,
     return CMD_WRITE;
 }
 
+/* ----- Per-segment CMD_PLATFORM_UNKNOWN classification (spec section 2) -----
+ * A session whose platform has not been chosen and whose banner has not
+ * resolved it yet. The overlay below claims a short list of first-token
+ * verbs that are destructive on some network CLI and are not commands on
+ * any Linux system, so claiming them costs a Linux session nothing; a bare
+ * "commit" or "delete" typed at a Linux shell is a command-not-found. Three
+ * verbs need a second token to disambiguate ("write erase", "request
+ * system/restart/shutdown", "execute factoryreset/reboot/restore"); the
+ * rest are unconditional on the first token. Anything the overlay does not
+ * claim delegates to classify_linux_segment() unchanged, so Linux behaviour
+ * is preserved exactly for everything but this list. */
+
+static const char *unknown_critical_verbs[] = {
+    "reload", "reboot", "erase", "factory-reset", "restore",
+    "factory-default", "commit", "rollback", "delete", "purge", "undo",
+    "boot",
+    NULL
+};
+
+static const char *unknown_write_verbs[] = {
+    "no", "shutdown", "configure", "system-view", "set", "config",
+    NULL
+};
+
+static CmdSafetyLevel classify_unknown_segment(const char *seg, size_t seg_len,
+                                                char *reason_buf, size_t reason_buf_size)
+{
+    const char *p = seg;
+    const char *tok1_start, *tok2_start;
+    size_t tok1_len, tok2_len;
+
+    if (!next_token(&p, &tok1_start, &tok1_len))
+        return classify_linux_segment(seg, seg_len, reason_buf, reason_buf_size);
+
+    /* "write erase" (IOS, ArubaOS) -- only the two-word form is claimed; a
+     * bare "write" falls through to Linux. */
+    if (tok_eq_ci(tok1_start, tok1_len, "write")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_eq_ci(tok2_start, tok2_len, "erase")) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size,
+                         "write erase: destructive on IOS/ArubaOS");
+            return CMD_CRITICAL;
+        }
+        return classify_linux_segment(seg, seg_len, reason_buf, reason_buf_size);
+    }
+
+    /* "request system/restart/shutdown" (PAN-OS, Junos) */
+    if (tok_eq_ci(tok1_start, tok1_len, "request")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            (tok_eq_ci(tok2_start, tok2_len, "system") ||
+             tok_eq_ci(tok2_start, tok2_len, "restart") ||
+             tok_eq_ci(tok2_start, tok2_len, "shutdown"))) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size,
+                         "request %.*s: destructive on PAN-OS/Junos",
+                         (int)tok2_len, tok2_start);
+            return CMD_CRITICAL;
+        }
+        return classify_linux_segment(seg, seg_len, reason_buf, reason_buf_size);
+    }
+
+    /* "execute factoryreset/reboot/restore" (FortiOS) */
+    if (tok_eq_ci(tok1_start, tok1_len, "execute")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            (tok_eq_ci(tok2_start, tok2_len, "factoryreset") ||
+             tok_eq_ci(tok2_start, tok2_len, "reboot") ||
+             tok_eq_ci(tok2_start, tok2_len, "restore"))) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size,
+                         "execute %.*s: destructive on FortiOS",
+                         (int)tok2_len, tok2_start);
+            return CMD_CRITICAL;
+        }
+        return classify_linux_segment(seg, seg_len, reason_buf, reason_buf_size);
+    }
+
+    /* "reset saved-configuration" (Comware), "reset bgp|ospf|isis|session"
+     * (Comware adjacency resets). A bare "reset" on Linux is the harmless
+     * terminfo terminal reset, so only the two-token network forms are
+     * claimed here. */
+    if (tok_eq_ci(tok1_start, tok1_len, "reset")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            (tok_prefix_ci(tok2_start, tok2_len, "saved-config") ||
+             tok_eq_ci(tok2_start, tok2_len, "configuration") ||
+             tok_eq_ci(tok2_start, tok2_len, "bgp") ||
+             tok_eq_ci(tok2_start, tok2_len, "ospf") ||
+             tok_eq_ci(tok2_start, tok2_len, "isis") ||
+             tok_eq_ci(tok2_start, tok2_len, "session"))) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size,
+                         "reset %.*s: destructive on Comware",
+                         (int)tok2_len, tok2_start);
+            return CMD_CRITICAL;
+        }
+        return classify_linux_segment(seg, seg_len, reason_buf, reason_buf_size);
+    }
+
+    /* RouterOS puts its verb last behind a "/path" head ("/system
+     * reset-configuration", "/ip firewall filter remove numbers=0"), so the
+     * first token alone never identifies it. A Linux absolute-path
+     * invocation ("/etc/init.d/nginx stop") shares none of these verbs. */
+    if (tok1_len > 0 && tok1_start[0] == '/') {
+        static const char *ros_verbs[] = {
+            "reset-configuration", "remove", "reboot", "shutdown",
+            "format-drive", "downgrade", "disable", NULL
+        };
+        for (int i = 0; ros_verbs[i]; i++) {
+            if (seg_has_token_ci(seg, seg_len, ros_verbs[i])) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size,
+                             "%s: destructive RouterOS verb", ros_verbs[i]);
+                return CMD_CRITICAL;
+            }
+        }
+    }
+
+    for (int i = 0; unknown_critical_verbs[i]; i++) {
+        if (tok_eq_ci(tok1_start, tok1_len, unknown_critical_verbs[i])) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size,
+                         "%s: destructive on some network CLI",
+                         unknown_critical_verbs[i]);
+            return CMD_CRITICAL;
+        }
+    }
+
+    for (int i = 0; unknown_write_verbs[i]; i++) {
+        if (tok_eq_ci(tok1_start, tok1_len, unknown_write_verbs[i])) {
+            /* Never downgrade. Some of these verbs are worse than WRITE on a
+             * real Linux host -- "shutdown" is CRITICAL there -- and an
+             * unresolved session must never classify below what the Linux
+             * ruleset alone would have said. The overlay may only raise. */
+            char linux_reason[128];
+            CmdSafetyLevel linux_level;
+            linux_reason[0] = 0;
+            linux_level = classify_linux_segment(seg, seg_len, linux_reason,
+                                                 sizeof linux_reason);
+            if (linux_level > CMD_WRITE) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "%s", linux_reason);
+                return linux_level;
+            }
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size,
+                         "%s: config-changing verb on every network CLI",
+                         unknown_write_verbs[i]);
+            return CMD_WRITE;
+        }
+    }
+
+    return classify_linux_segment(seg, seg_len, reason_buf, reason_buf_size);
+}
+
+
+/* ----- Platform names, labels and the dropdown order ----- */
+
+/* "auto" is deliberately first: it is the default for a new profile and the
+ * value every profile in an older config inherits. It is not a device family,
+ * so it maps to CMD_PLATFORM_UNKNOWN -- a session that has not resolved what
+ * it is talking to. */
+typedef struct {
+    const char   *name;   /* stable config token */
+    const char   *label;  /* UI label */
+    CmdPlatform   platform;
+} PlatformChoice;
+
+static const PlatformChoice platform_choices[] = {
+    { "auto",        "Auto-detect",             CMD_PLATFORM_UNKNOWN },
+    { "linux",       "Linux / Unix",            CMD_PLATFORM_LINUX },
+    { "cisco-ios",   "Cisco IOS / IOS-XE",      CMD_PLATFORM_CISCO_IOS },
+    { "cisco-nxos",  "Cisco NX-OS",             CMD_PLATFORM_CISCO_NXOS },
+    { "cisco-asa",   "Cisco ASA",               CMD_PLATFORM_CISCO_ASA },
+    { "hp-procurve", "HP ProCurve / ProVision", CMD_PLATFORM_HP_PROCURVE },
+    { "hp-comware",  "HPE Comware / H3C",       CMD_PLATFORM_HP_COMWARE },
+    { "aruba-cx",    "Aruba OS-CX",             CMD_PLATFORM_ARUBA_CX },
+    { "aruba-os",    "ArubaOS (controller)",    CMD_PLATFORM_ARUBA_OS },
+    { "panos",       "Palo Alto PAN-OS",        CMD_PLATFORM_PANOS },
+    { "junos",       "Juniper Junos",           CMD_PLATFORM_JUNOS },
+    { "fortios",     "Fortinet FortiOS",        CMD_PLATFORM_FORTIOS },
+    { "vyos",        "VyOS",                    CMD_PLATFORM_VYOS },
+    { "routeros",    "MikroTik RouterOS",       CMD_PLATFORM_MIKROTIK }
+};
+
+static const int platform_choice_n =
+    (int)(sizeof(platform_choices) / sizeof(platform_choices[0]));
+
+CmdPlatform cmd_platform_from_name(const char *name)
+{
+    if (!name || !name[0]) return CMD_PLATFORM_UNKNOWN;
+    for (int i = 0; i < platform_choice_n; i++) {
+        const char *n = platform_choices[i].name;
+        size_t len = strlen(n);
+        if (strlen(name) == len && ci_memcmp(name, n, len) == 0)
+            return platform_choices[i].platform;
+    }
+    return CMD_PLATFORM_UNKNOWN;
+}
+
+const char *cmd_platform_name(CmdPlatform platform)
+{
+    /* Skip row 0 ("auto"): it shares CMD_PLATFORM_UNKNOWN with the unresolved
+     * state, and "auto" is what an unresolved session should persist as. */
+    if (platform == CMD_PLATFORM_UNKNOWN) return "auto";
+    for (int i = 1; i < platform_choice_n; i++) {
+        if (platform_choices[i].platform == platform)
+            return platform_choices[i].name;
+    }
+    return "auto";
+}
+
+const char *cmd_platform_label(CmdPlatform platform)
+{
+    if (platform == CMD_PLATFORM_UNKNOWN) return "Auto-detect";
+    for (int i = 1; i < platform_choice_n; i++) {
+        if (platform_choices[i].platform == platform)
+            return platform_choices[i].label;
+    }
+    return "Auto-detect";
+}
+
+int cmd_platform_choice_count(void)
+{
+    return platform_choice_n;
+}
+
+const char *cmd_platform_choice_name(int index)
+{
+    if (index < 0 || index >= platform_choice_n) return NULL;
+    return platform_choices[index].name;
+}
+
+const char *cmd_platform_choice_label(int index)
+{
+    if (index < 0 || index >= platform_choice_n) return NULL;
+    return platform_choices[index].label;
+}
+
 /* ----- Top-level command classification ----- */
 
 CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
@@ -3825,6 +4067,11 @@ CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
             break;
         case CMD_PLATFORM_MIKROTIK:
             seg_level = classify_mikrotik_segment(seg_start, seg_len,
+                            worst == CMD_SAFE ? reason_buf : NULL,
+                            worst == CMD_SAFE ? reason_buf_size : 0);
+            break;
+        case CMD_PLATFORM_UNKNOWN:
+            seg_level = classify_unknown_segment(seg_start, seg_len,
                             worst == CMD_SAFE ? reason_buf : NULL,
                             worst == CMD_SAFE ? reason_buf_size : 0);
             break;
