@@ -221,6 +221,20 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
 size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
                               char *buf, size_t buf_size);
 
+/* The corrective note injected into the conversation when the user raises
+ * the policy ceiling to `allowed_stop` (a CmdSafetyLevel). Without it the
+ * AI still has the earlier "these were BLOCKED" message in its history and
+ * keeps telling the user to change a setting they have just changed.
+ * Lives here, rather than at the one call site in src/ui/ai_chat.c, so the
+ * wording the model actually receives is natively testable.
+ * Returns bytes written (excluding NUL), or 0 on error. */
+size_t ai_build_policy_raised_note(int allowed_stop, char *buf, size_t buf_size);
+
+/* The note listing commands that were NOT run because they sat above the
+ * policy ceiling. `list` is the already-formatted "  - <command>\n" block.
+ * Returns bytes written (excluding NUL), or 0 on error. */
+size_t ai_build_policy_blocked_note(const char *list, char *buf, size_t buf_size);
+
 /* Check if a shell command is read-only (does not modify files or system state).
  * Returns 1 if read-only, 0 if the command may write/modify. */
 int ai_command_is_readonly(const char *cmd);
@@ -355,12 +369,13 @@ typedef struct {
     size_t stream_thinking_len;
     int stream_phase;            /* 0=not started, 1=thinking, 2=content */
     int platform;                /* CmdPlatform for this session */
-    int auto_approve;            /* Session-level auto-approve flag */
-    int auto_approve_level;      /* AutoApproveLevel: how far auto_approve reaches */
-    int auto_approve_seeded;     /* 1 once auto_approve/level have been set for
-                                   * this session (from the configured default,
-                                   * or by the user) -- guards against re-seeding
-                                   * an explicit choice on a later session switch */
+    CmdPolicy policy;            /* This session's command policy: the `allowed`
+                                   * ceiling and the `unattended` marker
+                                   * (src/core/cmd_policy.h) */
+    int policy_seeded;           /* 1 once `policy` has been set for this session
+                                   * (from the configured default, or by the
+                                   * user) -- guards against re-seeding an
+                                   * explicit choice on a later session switch */
     int activity_phase;          /* ActivityPhase saved on session switch */
     int show_thinking;           /* 1 = user opened a Thinking disclosure this
                                    * session -- suppresses auto-collapse when a

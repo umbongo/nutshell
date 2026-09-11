@@ -263,22 +263,19 @@ int test_cmd_platform_label_unknown_is_auto_detect(void);
 int test_config_profile_platform_missing_defaults_to_auto(void);
 int test_config_profile_platform_roundtrip(void);
 int test_config_profile_platform_garbage_maps_unknown(void);
-/* UNKNOWN safety category and the five auto-approve modes */
-int test_approval_mask_five_modes_by_four_categories(void);
-int test_approval_mixed_pipeline_unknown_and_write_not_approved_under_safe_write(void);
-int test_approval_unknown_blocked_when_permit_write_off(void);
-int test_approval_unknown_unblock_and_reblock(void);
-int test_auto_approve_mask_per_level(void);
-int test_auto_approve_mode_name_round_trip(void);
-int test_auto_approve_mode_label_per_mode(void);
-int test_auto_approve_mode_from_name_garbage_is_off(void);
-int test_auto_approve_mode_name_and_label_clamp_out_of_range(void);
-int test_config_auto_approve_mode_token_round_trip(void);
-int test_config_save_writes_new_token_not_old_numeric_key(void);
-int test_config_load_migrates_legacy_numeric_auto_approve(void);
-int test_config_load_new_token_wins_over_legacy_numeric(void);
-int test_config_load_garbage_auto_approve_mode_token_is_off(void);
-/* SAFE allow-list, UNKNOWN fallthroughs and the classification mask */
+/* UNKNOWN safety category, the policy gate and the one policy setting */
+int test_approval_decision_matrix_every_policy_by_category(void);
+int test_approval_mixed_pipeline_needs_every_segment_unattended(void);
+int test_approval_unknown_blocked_at_a_read_ceiling(void);
+int test_approval_unknown_unblocks_and_reblocks_with_the_ceiling(void);
+int test_config_policy_token_round_trips_every_pair(void);
+int test_config_save_writes_policy_key_and_neither_old_key(void);
+int test_config_load_migrates_v1_1_16_auto_approve_mode(void);
+int test_config_load_migrates_pre_v1_1_16_numeric_auto_approve(void);
+int test_config_load_policy_key_wins_over_both_old_keys(void);
+int test_config_load_garbage_policy_token_is_the_default(void);
+int test_config_load_inverted_policy_token_clamps_down(void);
+/* READ allow-list, UNKNOWN fallthroughs and the classification mask */
 int test_cmd_classify_linux_unrecognised_is_unknown(void);
 int test_cmd_classify_linux_unrecognised_with_redirect_is_write(void);
 int test_cmd_classify_linux_allow_list_vs_redirect(void);
@@ -1696,18 +1693,32 @@ int test_cmd_selected_toggle(void);
 int test_cmd_selected_blocked_not_counted(void);
 int test_cmd_selected_approved_not_counted(void);
 
+/* test_cmd_policy.c */
+int test_policy_default_is_read_only_nothing_unattended(void);
+int test_policy_clamp_normalises_garbage(void);
+int test_policy_set_allowed_clamps_and_drags_unattended_down(void);
+int test_policy_set_unattended_never_raises_the_ceiling(void);
+int test_policy_invariant_holds_after_any_sequence(void);
+int test_policy_cycles_wrap_through_every_stop(void);
+int test_policy_blocks_above_the_ceiling(void);
+int test_policy_unattended_mask_is_always_a_prefix_set(void);
+int test_policy_mask_gate_equals_worst_segment_gate(void);
+int test_policy_empty_mask_never_runs_unattended(void);
+int test_policy_cannot_express_read_plus_write_unattended(void);
+int test_policy_stop_names_and_labels(void);
+int test_policy_token_round_trips_every_legal_pair(void);
+int test_policy_token_rejects_and_clamps_bad_input(void);
+int test_policy_caption_reads_as_a_sentence(void);
+int test_policy_tip_covers_raise_lower_toggle_and_refusal(void);
+
 /* test_chat_approval.c */
 int test_approval_init(void);
-int test_approval_add_safe(void);
+int test_approval_add_read(void);
 int test_approval_add_blocked(void);
 int test_approval_add_write_permitted(void);
 int test_approval_approve(void);
 int test_approval_deny(void);
 int test_approval_approve_all(void);
-int test_approval_auto_approve_flow(void);
-int test_approval_auto_approve_timeout(void);
-int test_approval_auto_approve_revoke(void);
-int test_approval_auto_approve_adds(void);
 int test_approval_all_decided(void);
 int test_approval_next_approved(void);
 int test_approval_execute_complete(void);
@@ -1715,23 +1726,10 @@ int test_approval_empty_command(void);
 int test_approval_whitespace_command(void);
 int test_approval_add_embedded_newline_rejected(void);
 int test_approval_queue_full(void);
-int test_approval_auto_approve_direct_toggle(void);
-int test_approval_auto_approve_direct_toggle_with_write(void);
 int test_approval_reset(void);
-int test_approval_auto_approve_persists_across_reset(void);
-int test_approval_auto_approve_blocked_not_all_decided(void);
-int test_approval_block_pending_writes(void);
-int test_approval_block_pending_writes_skips_decided(void);
-int test_approval_level_safe_always_approves_safe(void);
-int test_approval_level_safe_write_pending(void);
-int test_approval_level_safe_write_permit_off_blocked(void);
-int test_approval_level_write_approves_write(void);
-int test_approval_level_write_permit_off_blocked(void);
-int test_approval_level_write_critical_pending(void);
-int test_approval_level_all_approves_write_and_critical(void);
-int test_approval_level_all_permit_write_off_still_blocked(void);
-int test_approval_level_auto_approve_off_all_pending(void);
-int test_approval_reset_preserves_level(void);
+int test_approval_unattended_marker_governs_new_adds(void);
+int test_approval_reset_preserves_policy(void);
+int test_approval_ceiling_raise_unblocks_and_lower_reblocks(void);
 
 /* test_response_split.c */
 int test_split_no_commands(void);
@@ -1917,9 +1915,9 @@ int test_needs_user_denied_only(void);
 int test_needs_user_after_unblock_all(void);
 
 /* test_chat_approval.c — permit-write toggle */
-int test_permit_toggle_corrective_msg_appended(void);
-int test_permit_toggle_no_inject_when_conv_empty(void);
-int test_permit_toggle_corrective_msg_is_last(void);
+int test_policy_blocked_note_names_the_commands_and_the_ceiling(void);
+int test_policy_raised_note_names_the_new_ceiling(void);
+int test_policy_raised_note_lands_last_in_the_conversation(void);
 
 /* test_markdown_render.c — parser edge cases */
 int test_md_classify_hash_only(void);
@@ -2131,6 +2129,26 @@ int test_settled_row_layout_zero_chip_w_gives_text_full_width(void);
 int test_settled_row_layout_row_height_matches_approval_row_height(void);
 int test_settled_row_layout_checkbox_and_held_zeroed(void);
 int test_settled_row_layout_text_starts_at_rect_left(void);
+int test_ns_policy_layout_cells_touch_and_sum_to_total_w_96(void);
+int test_ns_policy_layout_cells_touch_and_sum_to_total_w_192(void);
+int test_ns_policy_layout_bands_tile_cell_96(void);
+int test_ns_policy_layout_bands_tile_cell_192(void);
+int test_ns_policy_layout_hit_bands_tile_taller_box_96(void);
+int test_ns_policy_layout_hit_bands_tile_taller_box_192(void);
+int test_ns_policy_hit_all_eight_zones(void);
+int test_ns_policy_hit_outside_returns_none(void);
+int test_ns_policy_layout_rail_fill_zero_at_none_and_out_of_range(void);
+int test_ns_policy_layout_rail_fill_reaches_cell0_at_unattended_0(void);
+int test_ns_policy_layout_rail_fill_reaches_full_width_at_unattended_3(void);
+int test_ns_policy_layout_null_out_is_noop(void);
+int test_ns_policy_width_null_stop_text_w_safe(void);
+int test_ns_policy_layout_null_stop_text_w_no_negative_widths(void);
+int test_ns_policy_layout_zero_height_rect_safe(void);
+int test_ns_policy_layout_negative_stop_text_w_no_negative_widths(void);
+int test_ns_policy_hit_null_layout_safe(void);
+int test_ns_policy_hit_null_stop_out_safe(void);
+int test_ns_policy_layout_hit_h_smaller_than_r_h_96(void);
+int test_ns_policy_layout_hit_h_smaller_than_r_h_192(void);
 
 /* test_ai_panel.c */
 int test_ai_panel_layout_tiles_exact_sum_96(void);
@@ -2138,12 +2156,11 @@ int test_ai_panel_layout_tiles_exact_sum_192(void);
 int test_ai_panel_layout_thread_nonnegative_when_panel_tiny(void);
 int test_ai_status_layout_no_overlap_inside_line_96(void);
 int test_ai_status_layout_no_overlap_inside_line_192(void);
-int test_ai_status_layout_segments_touch(void);
+int test_ai_status_layout_policy_is_left_aligned_and_full_width(void);
 int test_ai_status_layout_wide_line_shows_full_meter(void);
 int test_ai_status_layout_meter_bar_dropped_when_narrow(void);
 int test_ai_status_layout_meter_text_dropped_when_very_narrow(void);
-int test_ai_modes_label_off_safe_and_all(void);
-int test_ai_permit_label_off_and_on(void);
+int test_ai_status_layout_negative_widths_are_clamped(void);
 int test_thinking_layout_collapsed_body_zero(void);
 int test_thinking_layout_expanded_body_uses_text_h_under_cap(void);
 int test_thinking_layout_expanded_body_capped(void);
@@ -2478,22 +2495,19 @@ int main(void) {
     failed += test_config_profile_platform_missing_defaults_to_auto();
     failed += test_config_profile_platform_roundtrip();
     failed += test_config_profile_platform_garbage_maps_unknown();
-    /* UNKNOWN safety category and the five auto-approve modes */
-    failed += test_approval_mask_five_modes_by_four_categories();
-    failed += test_approval_mixed_pipeline_unknown_and_write_not_approved_under_safe_write();
-    failed += test_approval_unknown_blocked_when_permit_write_off();
-    failed += test_approval_unknown_unblock_and_reblock();
-    failed += test_auto_approve_mask_per_level();
-    failed += test_auto_approve_mode_name_round_trip();
-    failed += test_auto_approve_mode_label_per_mode();
-    failed += test_auto_approve_mode_from_name_garbage_is_off();
-    failed += test_auto_approve_mode_name_and_label_clamp_out_of_range();
-    failed += test_config_auto_approve_mode_token_round_trip();
-    failed += test_config_save_writes_new_token_not_old_numeric_key();
-    failed += test_config_load_migrates_legacy_numeric_auto_approve();
-    failed += test_config_load_new_token_wins_over_legacy_numeric();
-    failed += test_config_load_garbage_auto_approve_mode_token_is_off();
-    /* SAFE allow-list, UNKNOWN fallthroughs and the classification mask */
+    /* UNKNOWN safety category, the policy gate and the one policy setting */
+    failed += test_approval_decision_matrix_every_policy_by_category();
+    failed += test_approval_mixed_pipeline_needs_every_segment_unattended();
+    failed += test_approval_unknown_blocked_at_a_read_ceiling();
+    failed += test_approval_unknown_unblocks_and_reblocks_with_the_ceiling();
+    failed += test_config_policy_token_round_trips_every_pair();
+    failed += test_config_save_writes_policy_key_and_neither_old_key();
+    failed += test_config_load_migrates_v1_1_16_auto_approve_mode();
+    failed += test_config_load_migrates_pre_v1_1_16_numeric_auto_approve();
+    failed += test_config_load_policy_key_wins_over_both_old_keys();
+    failed += test_config_load_garbage_policy_token_is_the_default();
+    failed += test_config_load_inverted_policy_token_clamps_down();
+    /* READ allow-list, UNKNOWN fallthroughs and the classification mask */
     failed += test_cmd_classify_linux_unrecognised_is_unknown();
     failed += test_cmd_classify_linux_unrecognised_with_redirect_is_write();
     failed += test_cmd_classify_linux_allow_list_vs_redirect();
@@ -3828,18 +3842,32 @@ int main(void) {
     failed += test_activity_format_stalled();
     failed += test_activity_reset();
 
+    printf("\n--- Command Policy ---\n");
+    failed += test_policy_default_is_read_only_nothing_unattended();
+    failed += test_policy_clamp_normalises_garbage();
+    failed += test_policy_set_allowed_clamps_and_drags_unattended_down();
+    failed += test_policy_set_unattended_never_raises_the_ceiling();
+    failed += test_policy_invariant_holds_after_any_sequence();
+    failed += test_policy_cycles_wrap_through_every_stop();
+    failed += test_policy_blocks_above_the_ceiling();
+    failed += test_policy_unattended_mask_is_always_a_prefix_set();
+    failed += test_policy_mask_gate_equals_worst_segment_gate();
+    failed += test_policy_empty_mask_never_runs_unattended();
+    failed += test_policy_cannot_express_read_plus_write_unattended();
+    failed += test_policy_stop_names_and_labels();
+    failed += test_policy_token_round_trips_every_legal_pair();
+    failed += test_policy_token_rejects_and_clamps_bad_input();
+    failed += test_policy_caption_reads_as_a_sentence();
+    failed += test_policy_tip_covers_raise_lower_toggle_and_refusal();
+
     printf("\n--- Command Approval ---\n");
     failed += test_approval_init();
-    failed += test_approval_add_safe();
+    failed += test_approval_add_read();
     failed += test_approval_add_blocked();
     failed += test_approval_add_write_permitted();
     failed += test_approval_approve();
     failed += test_approval_deny();
     failed += test_approval_approve_all();
-    failed += test_approval_auto_approve_flow();
-    failed += test_approval_auto_approve_timeout();
-    failed += test_approval_auto_approve_revoke();
-    failed += test_approval_auto_approve_adds();
     failed += test_approval_all_decided();
     failed += test_approval_next_approved();
     failed += test_approval_execute_complete();
@@ -3847,23 +3875,10 @@ int main(void) {
     failed += test_approval_whitespace_command();
     failed += test_approval_add_embedded_newline_rejected();
     failed += test_approval_queue_full();
-    failed += test_approval_auto_approve_direct_toggle();
-    failed += test_approval_auto_approve_direct_toggle_with_write();
     failed += test_approval_reset();
-    failed += test_approval_auto_approve_persists_across_reset();
-    failed += test_approval_auto_approve_blocked_not_all_decided();
-    failed += test_approval_block_pending_writes();
-    failed += test_approval_block_pending_writes_skips_decided();
-    failed += test_approval_level_safe_always_approves_safe();
-    failed += test_approval_level_safe_write_pending();
-    failed += test_approval_level_safe_write_permit_off_blocked();
-    failed += test_approval_level_write_approves_write();
-    failed += test_approval_level_write_permit_off_blocked();
-    failed += test_approval_level_write_critical_pending();
-    failed += test_approval_level_all_approves_write_and_critical();
-    failed += test_approval_level_all_permit_write_off_still_blocked();
-    failed += test_approval_level_auto_approve_off_all_pending();
-    failed += test_approval_reset_preserves_level();
+    failed += test_approval_unattended_marker_governs_new_adds();
+    failed += test_approval_reset_preserves_policy();
+    failed += test_approval_ceiling_raise_unblocks_and_lower_reblocks();
 
     printf("\n--- Command Collapse ---\n");
     failed += test_cmd_index_single();
@@ -4151,9 +4166,9 @@ int main(void) {
     failed += test_needs_user_after_unblock_all();
 
     printf("\n--- Permit-Write Toggle ---\n");
-    failed += test_permit_toggle_corrective_msg_appended();
-    failed += test_permit_toggle_no_inject_when_conv_empty();
-    failed += test_permit_toggle_corrective_msg_is_last();
+    failed += test_policy_blocked_note_names_the_commands_and_the_ceiling();
+    failed += test_policy_raised_note_names_the_new_ceiling();
+    failed += test_policy_raised_note_lands_last_in_the_conversation();
 
     printf("\n--- Markdown Parser Edge Cases ---\n");
     failed += test_md_classify_hash_only();
@@ -4367,6 +4382,26 @@ int main(void) {
     failed += test_settled_row_layout_row_height_matches_approval_row_height();
     failed += test_settled_row_layout_checkbox_and_held_zeroed();
     failed += test_settled_row_layout_text_starts_at_rect_left();
+    failed += test_ns_policy_layout_cells_touch_and_sum_to_total_w_96();
+    failed += test_ns_policy_layout_cells_touch_and_sum_to_total_w_192();
+    failed += test_ns_policy_layout_bands_tile_cell_96();
+    failed += test_ns_policy_layout_bands_tile_cell_192();
+    failed += test_ns_policy_layout_hit_bands_tile_taller_box_96();
+    failed += test_ns_policy_layout_hit_bands_tile_taller_box_192();
+    failed += test_ns_policy_hit_all_eight_zones();
+    failed += test_ns_policy_hit_outside_returns_none();
+    failed += test_ns_policy_layout_rail_fill_zero_at_none_and_out_of_range();
+    failed += test_ns_policy_layout_rail_fill_reaches_cell0_at_unattended_0();
+    failed += test_ns_policy_layout_rail_fill_reaches_full_width_at_unattended_3();
+    failed += test_ns_policy_layout_null_out_is_noop();
+    failed += test_ns_policy_width_null_stop_text_w_safe();
+    failed += test_ns_policy_layout_null_stop_text_w_no_negative_widths();
+    failed += test_ns_policy_layout_zero_height_rect_safe();
+    failed += test_ns_policy_layout_negative_stop_text_w_no_negative_widths();
+    failed += test_ns_policy_hit_null_layout_safe();
+    failed += test_ns_policy_hit_null_stop_out_safe();
+    failed += test_ns_policy_layout_hit_h_smaller_than_r_h_96();
+    failed += test_ns_policy_layout_hit_h_smaller_than_r_h_192();
 
     printf("\n--- AI Assist panel ---\n");
     failed += test_ai_panel_layout_tiles_exact_sum_96();
@@ -4374,12 +4409,11 @@ int main(void) {
     failed += test_ai_panel_layout_thread_nonnegative_when_panel_tiny();
     failed += test_ai_status_layout_no_overlap_inside_line_96();
     failed += test_ai_status_layout_no_overlap_inside_line_192();
-    failed += test_ai_status_layout_segments_touch();
+    failed += test_ai_status_layout_policy_is_left_aligned_and_full_width();
     failed += test_ai_status_layout_wide_line_shows_full_meter();
     failed += test_ai_status_layout_meter_bar_dropped_when_narrow();
     failed += test_ai_status_layout_meter_text_dropped_when_very_narrow();
-    failed += test_ai_modes_label_off_safe_and_all();
-    failed += test_ai_permit_label_off_and_on();
+    failed += test_ai_status_layout_negative_widths_are_clamped();
     failed += test_thinking_layout_collapsed_body_zero();
     failed += test_thinking_layout_expanded_body_uses_text_h_under_cap();
     failed += test_thinking_layout_expanded_body_capped();

@@ -330,6 +330,110 @@ void ns_draw_segmented(HDC hdc, const NsRect seg[2],
                          STROKE_HAIRLINE);
 }
 
+
+/* ── Command policy control ─────────────────────────────────────────── */
+
+/* The intent surface for a ceiling position: the higher the ceiling, the
+ * louder the whole control reads. */
+static const ThemeSurface *policy_intent(const ThemeTokens *tokens, int allowed)
+{
+    switch (allowed) {
+    case CMD_UNKNOWN:  return &tokens->info;
+    case CMD_WRITE:    return &tokens->warning;
+    case CMD_CRITICAL: return &tokens->danger;
+    default:           return &tokens->success;
+    }
+}
+
+void ns_draw_policy(HDC hdc, const NsPolicyLayout *l, CmdPolicy policy,
+                    int hover_band, int hover_stop, const ThemeTokens *tokens,
+                    HFONT font, int dpi)
+{
+    if (!hdc || !l || !tokens) return;
+    cmd_policy_clamp(&policy);
+
+    const ThemeSurface *intent = policy_intent(tokens, policy.allowed);
+    COLORREF surface = NS_CR(tokens->bg_secondary.base);
+    int radius = ns_scale(R_CTRL, dpi);
+
+    RECT outer = { l->cell[0].x, l->cell[0].y,
+                   l->cell[0].x + l->total_w,
+                   l->cell[0].y + l->cell[0].h };
+    ns_draw_round_stroke(hdc, &outer, radius, NS_CR(tokens->border),
+                         STROKE_HAIRLINE);
+
+    HFONT old_font = font ? (HFONT)SelectObject(hdc, font) : NULL;
+    int old_bk = SetBkMode(hdc, TRANSPARENT);
+
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        if (l->cell[k].w <= 0 || l->cell[k].h <= 0) continue;
+
+        int hot_label = (hover_band == POLICY_BAND_ALLOWED && hover_stop == k);
+        int hot_rail  = (hover_band == POLICY_BAND_UNATTENDED && hover_stop == k);
+
+        COLORREF fill_cr, label_cr;
+        if (k <= policy.unattended) {
+            fill_cr  = hot_label ? NS_CR(intent->hover) : NS_CR(intent->base);
+            label_cr = NS_CR(intent->label);
+        } else if (k <= policy.allowed) {
+            fill_cr  = rgb_alpha(NS_CR(intent->base), surface,
+                                 hot_label ? 0.30f : 0.18f);
+            label_cr = NS_CR(tokens->text_main);
+        } else {
+            fill_cr  = hot_label ? NS_CR(tokens->bg_secondary.hover) : surface;
+            label_cr = NS_CR(tokens->text_disabled);
+        }
+
+        RECT rc = { l->cell[k].x, l->cell[k].y,
+                    l->cell[k].x + l->cell[k].w,
+                    l->cell[k].y + l->cell[k].h };
+        ns_draw_round_fill(hdc, &rc, radius, fill_cr, 255);
+
+        RECT lrc = { l->label[k].x, l->label[k].y,
+                     l->label[k].x + l->label[k].w,
+                     l->label[k].y + l->label[k].h };
+        COLORREF old_tc = SetTextColor(hdc, label_cr);
+        draw_utf8_text(hdc, &lrc, cmd_policy_stop_label(k),
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SetTextColor(hdc, old_tc);
+
+        /* The unfilled remainder of the rail, cell by cell, so a hovered
+         * rail band is visible even where the marker does not reach. */
+        if (k > policy.unattended && l->rail[k].w > 0 && l->rail[k].h > 0) {
+            RECT rr = { l->rail[k].x, l->rail[k].y + (l->rail[k].h - STROKE_BAR) / 2,
+                        l->rail[k].x + l->rail[k].w, 0 };
+            rr.bottom = rr.top + STROKE_BAR;
+            COLORREF rail_cr = hot_rail ? NS_CR(tokens->text_dim)
+                                        : NS_CR(tokens->border);
+            HBRUSH br = CreateSolidBrush(rail_cr);
+            FillRect(hdc, &rr, br);
+            DeleteObject(br);
+        }
+    }
+
+    /* The filled rail: its length is the unattended marker. */
+    if (l->rail_fill.w > 0 && l->rail_fill.h > 0) {
+        RECT rr = { l->rail_fill.x,
+                    l->rail_fill.y + (l->rail_fill.h - STROKE_BAR) / 2,
+                    l->rail_fill.x + l->rail_fill.w, 0 };
+        rr.bottom = rr.top + STROKE_BAR;
+        int hot = (hover_band == POLICY_BAND_UNATTENDED &&
+                   hover_stop >= 0 && hover_stop <= policy.unattended);
+        HBRUSH br = CreateSolidBrush(hot ? NS_CR(intent->hover)
+                                         : NS_CR(intent->label));
+        FillRect(hdc, &rr, br);
+        DeleteObject(br);
+    }
+
+    SetBkMode(hdc, old_bk);
+    if (old_font) SelectObject(hdc, old_font);
+
+    /* Re-stroke on top: the per-cell rounded fills slightly overpaint the
+     * outer edge, same as ns_draw_segmented(). */
+    ns_draw_round_stroke(hdc, &outer, radius, NS_CR(tokens->border),
+                         STROKE_HAIRLINE);
+}
+
 /* ── Context meter ──────────────────────────────────────────────────── */
 
 void ns_draw_meter(HDC hdc, const NsRect *bar, double fraction,

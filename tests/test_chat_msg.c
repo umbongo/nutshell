@@ -123,9 +123,9 @@ int test_chat_msg_set_command(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    ASSERT_EQ(chat_msg_set_command(item, "ls -la", CMD_SAFE, 0), 0);
+    ASSERT_EQ(chat_msg_set_command(item, "ls -la", CMD_READ, 0), 0);
     ASSERT_STR_EQ(item->u.cmd.command, "ls -la");
-    ASSERT_EQ((int)item->u.cmd.safety, (int)CMD_SAFE);
+    ASSERT_EQ((int)item->u.cmd.safety, (int)CMD_READ);
     ASSERT_EQ(item->u.cmd.approved, -1); /* pending */
     ASSERT_EQ(item->u.cmd.blocked, 0);
     chat_msg_list_clear(&list);
@@ -237,7 +237,7 @@ int test_chat_msg_command_too_long(void) {
     memset(long_cmd, 'x', sizeof(long_cmd) - 1);
     long_cmd[sizeof(long_cmd) - 1] = '\0';
     /* Should reject (return non-zero) */
-    ASSERT_TRUE(chat_msg_set_command(item, long_cmd, CMD_SAFE, 0) != 0);
+    ASSERT_TRUE(chat_msg_set_command(item, long_cmd, CMD_READ, 0) != 0);
     chat_msg_list_clear(&list);
     TEST_END();
 }
@@ -324,7 +324,7 @@ int test_chat_msg_set_batch(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(item, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(item, "ls", CMD_READ, 0);
     ASSERT_EQ(item->u.cmd.batch, 0);
     chat_msg_set_batch(item, 7);
     ASSERT_EQ(item->u.cmd.batch, 7);
@@ -348,7 +348,7 @@ int test_chat_msg_set_command_does_not_touch_batch(void) {
     chat_msg_list_init(&list);
     ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
     chat_msg_set_batch(item, 3);
-    chat_msg_set_command(item, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(item, "ls", CMD_READ, 0);
     ASSERT_EQ(item->u.cmd.batch, 3);
     chat_msg_list_clear(&list);
     TEST_END();
@@ -362,22 +362,22 @@ int test_chat_msg_batch_index_first_settle_two_batches(void) {
     chat_msg_list_init(&list);
 
     ChatMsgItem *a1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(a1, "echo a1", CMD_SAFE, 0);
+    chat_msg_set_command(a1, "echo a1", CMD_READ, 0);
     chat_msg_set_batch(a1, 1);
     ChatMsgItem *a2 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(a2, "echo a2", CMD_SAFE, 0);
+    chat_msg_set_command(a2, "echo a2", CMD_READ, 0);
     chat_msg_set_batch(a2, 1);
 
     chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "in between");
 
     ChatMsgItem *b1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(b1, "echo b1", CMD_SAFE, 0);
+    chat_msg_set_command(b1, "echo b1", CMD_READ, 0);
     chat_msg_set_batch(b1, 2);
     ChatMsgItem *b2 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(b2, "echo b2", CMD_SAFE, 0);
+    chat_msg_set_command(b2, "echo b2", CMD_READ, 0);
     chat_msg_set_batch(b2, 2);
     ChatMsgItem *b3 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(b3, "echo b3", CMD_SAFE, 0);
+    chat_msg_set_command(b3, "echo b3", CMD_READ, 0);
     chat_msg_set_batch(b3, 2);
 
     /* batch_index: position within its own batch, ignoring the other */
@@ -436,7 +436,7 @@ int test_chat_msg_batch_settle_unknown_batch_returns_zero(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *a1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(a1, "echo a1", CMD_SAFE, 0);
+    chat_msg_set_command(a1, "echo a1", CMD_READ, 0);
     chat_msg_set_batch(a1, 1);
     ASSERT_EQ(chat_msg_batch_settle(&list, 99), 0);
     ASSERT_EQ(a1->u.cmd.settled, 0);

@@ -1254,7 +1254,7 @@ int ai_response_split(const char *response,
 
 int ai_command_is_readonly(const char *cmd)
 {
-    return cmd_classify(cmd, CMD_PLATFORM_LINUX) == CMD_SAFE;
+    return cmd_classify(cmd, CMD_PLATFORM_LINUX) == CMD_READ;
 }
 
 const char *ai_provider_url(const char *provider)
@@ -1387,6 +1387,31 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
             "ALL of them now. If everything is done, just summarize what "
             "was accomplished.");
     }
+    if (n < 0 || (size_t)n >= buf_size) return 0;
+    return (size_t)n;
+}
+
+size_t ai_build_policy_raised_note(int allowed_stop, char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+    int n = snprintf(buf, buf_size,
+        "NOTE: The user has raised the command policy to allow %s commands. "
+        "Commands at or below that are no longer blocked. Do not reference "
+        "any previous security policy blocks.",
+        cmd_policy_stop_label(allowed_stop));
+    if (n < 0 || (size_t)n >= buf_size) return 0;
+    return (size_t)n;
+}
+
+size_t ai_build_policy_blocked_note(const char *list, char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+    int n = snprintf(buf, buf_size,
+        "NOTE: The following commands were NOT executed because they sit "
+        "above the session's command policy ceiling:\n%s"
+        "Do NOT claim these commands were executed. If the user needs these "
+        "actions, tell them to raise the command policy far enough to allow "
+        "them, and try again.", list ? list : "");
     if (n < 0 || (size_t)n >= buf_size) return 0;
     return (size_t)n;
 }

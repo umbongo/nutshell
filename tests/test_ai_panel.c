@@ -91,22 +91,24 @@ int test_ai_panel_layout_thread_nonnegative_when_panel_tiny(void)
 
 /* ---- ai_status_layout -------------------------------------------------------- */
 
-static void collect_status_rects(const AiStatusLayout *l, NsRect out[5])
+/* A policy control of the width the four real stop labels come to at 96 DPI
+ * in the caption font, near enough: four cells of label + 2*SP_SM. */
+#define TEST_POLICY_W 220
+
+static void collect_status_rects(const AiStatusLayout *l, NsRect out[3])
 {
-    out[0] = l->seg[0];
-    out[1] = l->seg[1];
-    out[2] = l->auto_label;
-    out[3] = l->meter_bar;
-    out[4] = l->meter_text;
+    out[0] = l->policy;
+    out[1] = l->meter_bar;
+    out[2] = l->meter_text;
 }
 
 static int status_no_overlap_and_inside(const AiStatusLayout *l, NsRect line)
 {
-    NsRect r[5];
+    NsRect r[3];
     collect_status_rects(l, r);
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 3; i++) {
         if (!rect_inside(r[i], line)) return 0;
-        for (int j = i + 1; j < 5; j++)
+        for (int j = i + 1; j < 3; j++)
             if (rects_overlap(r[i], r[j])) return 0;
     }
     return 1;
@@ -117,7 +119,7 @@ int test_ai_status_layout_no_overlap_inside_line_96(void)
     TEST_BEGIN();
     NsRect status = { 0, 0, 600, 28 };
     AiStatusLayout out;
-    ai_status_layout(status, 96, 50, 70, 90, 60, &out);
+    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
     ASSERT_TRUE(status_no_overlap_and_inside(&out, status));
     TEST_END();
 }
@@ -127,20 +129,28 @@ int test_ai_status_layout_no_overlap_inside_line_192(void)
     TEST_BEGIN();
     NsRect status = { 0, 0, 1200, 56 };
     AiStatusLayout out;
-    ai_status_layout(status, 192, 50, 70, 90, 60, &out);
+    ai_status_layout(status, 192, 2 * TEST_POLICY_W, 60, &out);
     ASSERT_TRUE(status_no_overlap_and_inside(&out, status));
     TEST_END();
 }
 
-int test_ai_status_layout_segments_touch(void)
+/* The policy control is flush with the left edge of the line and vertically
+ * centred in it, at the full width the caller measured -- it is never
+ * squeezed, however narrow the line gets (the meter goes first). */
+int test_ai_status_layout_policy_is_left_aligned_and_full_width(void)
 {
     TEST_BEGIN();
-    NsRect status = { 0, 0, 600, 28 };
+    NsRect status = { 7, 11, 600, 28 };
     AiStatusLayout out;
-    ai_status_layout(status, 96, 50, 70, 90, 60, &out);
-    ASSERT_EQ(out.seg[1].x, out.seg[0].x + out.seg[0].w);
-    ASSERT_EQ(out.seg[0].y, out.seg[1].y);
-    ASSERT_EQ(out.seg[0].h, out.seg[1].h);
+    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
+    ASSERT_EQ(out.policy.x, status.x);
+    ASSERT_EQ(out.policy.w, TEST_POLICY_W);
+    ASSERT_TRUE(out.policy.h > 0 && out.policy.h < status.h);
+    ASSERT_EQ(out.policy.y - status.y, (status.h - out.policy.h) / 2);
+
+    NsRect tiny = { 7, 11, 90, 28 };
+    ai_status_layout(tiny, 96, TEST_POLICY_W, 60, &out);
+    ASSERT_EQ(out.policy.w, TEST_POLICY_W);
     TEST_END();
 }
 
@@ -149,7 +159,7 @@ int test_ai_status_layout_wide_line_shows_full_meter(void)
     TEST_BEGIN();
     NsRect status = { 0, 0, 600, 28 };
     AiStatusLayout out;
-    ai_status_layout(status, 96, 50, 70, 90, 60, &out);
+    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
     ASSERT_TRUE(out.meter_bar.w > 0 && out.meter_bar.h > 0);
     ASSERT_TRUE(out.meter_text.w > 0 && out.meter_text.h > 0);
     ASSERT_TRUE(out.meter_bar.x < out.meter_text.x);
@@ -159,11 +169,11 @@ int test_ai_status_layout_wide_line_shows_full_meter(void)
 int test_ai_status_layout_meter_bar_dropped_when_narrow(void)
 {
     TEST_BEGIN();
-    /* Narrow enough that the bar collides with the segments/auto label,
-     * but wide enough that the meter text alone still fits. */
-    NsRect status = { 0, 0, 350, 28 };
+    /* Narrow enough that the bar collides with the policy control, but wide
+     * enough that the meter text alone still fits. */
+    NsRect status = { 0, 0, 360, 28 };
     AiStatusLayout out;
-    ai_status_layout(status, 96, 50, 70, 90, 60, &out);
+    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
     ASSERT_EQ(out.meter_bar.w, 0);
     ASSERT_EQ(out.meter_bar.h, 0);
     ASSERT_TRUE(out.meter_text.w > 0);
@@ -175,43 +185,26 @@ int test_ai_status_layout_meter_text_dropped_when_very_narrow(void)
 {
     TEST_BEGIN();
     /* Narrow enough that even the meter text alone would collide with the
-     * segments/auto label (which are never squeezed), but still wide
-     * enough that the segments and auto label themselves fit. */
-    NsRect status = { 0, 0, 280, 28 };
+     * policy control (which is never squeezed). */
+    NsRect status = { 0, 0, 290, 28 };
     AiStatusLayout out;
-    ai_status_layout(status, 96, 50, 70, 90, 60, &out);
+    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
     ASSERT_EQ(out.meter_bar.w, 0);
     ASSERT_EQ(out.meter_text.w, 0);
     ASSERT_TRUE(status_no_overlap_and_inside(&out, status));
     TEST_END();
 }
 
-/* ---- ai_modes_label / ai_permit_label ---------------------------------------- */
-
-int test_ai_modes_label_off_safe_and_all(void)
+int test_ai_status_layout_negative_widths_are_clamped(void)
 {
     TEST_BEGIN();
-    ASSERT_STR_EQ(ai_modes_label(0, 0), "off");
-    ASSERT_STR_EQ(ai_modes_label(0, 1), "off");
-    ASSERT_STR_EQ(ai_modes_label(0, 2), "off");
-    /* Five modes since UNKNOWN became its own category: the permitted sets
-     * are not nested, so "safe + write" (2) deliberately excludes unknown. */
-    ASSERT_STR_EQ(ai_modes_label(1, 0), "safe only");
-    ASSERT_STR_EQ(ai_modes_label(1, 1), "safe + unknown");
-    ASSERT_STR_EQ(ai_modes_label(1, 2), "safe + write");
-    ASSERT_STR_EQ(ai_modes_label(1, 3), "safe + unknown + write");
-    ASSERT_STR_EQ(ai_modes_label(1, 4), "all");
-    /* Out-of-range levels clamp rather than misbehave. */
-    ASSERT_STR_EQ(ai_modes_label(1, -1), "safe only");
-    ASSERT_STR_EQ(ai_modes_label(1, 5), "all");
-    TEST_END();
-}
-
-int test_ai_permit_label_off_and_on(void)
-{
-    TEST_BEGIN();
-    ASSERT_STR_EQ(ai_permit_label(0), "off");
-    ASSERT_STR_EQ(ai_permit_label(1), "on");
+    NsRect status = { 0, 0, 600, 28 };
+    AiStatusLayout out;
+    ai_status_layout(status, 96, -40, -10, &out);
+    ASSERT_EQ(out.policy.w, 0);
+    ASSERT_EQ(out.meter_text.w, 0);
+    ASSERT_EQ(out.meter_bar.w, 0);
+    ai_status_layout(status, 96, TEST_POLICY_W, 60, NULL);  /* must not crash */
     TEST_END();
 }
 

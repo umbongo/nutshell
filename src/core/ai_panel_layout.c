@@ -35,15 +35,13 @@ void ai_panel_layout(NsRect panel, int dpi, int composer_h, AiPanelLayout *out)
     if (out->thread.h < 0) out->thread.h = 0;
 }
 
-void ai_status_layout(NsRect status, int dpi, int seg0_text_w, int seg1_text_w,
-                       int auto_text_w, int meter_text_w, AiStatusLayout *out)
+void ai_status_layout(NsRect status, int dpi, int policy_w, int meter_text_w,
+                       AiStatusLayout *out)
 {
     if (!out) return;
     memset(out, 0, sizeof(*out));
 
-    if (seg0_text_w < 0) seg0_text_w = 0;
-    if (seg1_text_w < 0) seg1_text_w = 0;
-    if (auto_text_w < 0) auto_text_w = 0;
+    if (policy_w < 0) policy_w = 0;
     if (meter_text_w < 0) meter_text_w = 0;
 
     int pad_sm = ns_scale(SP_SM, dpi);
@@ -52,26 +50,12 @@ void ai_status_layout(NsRect status, int dpi, int seg0_text_w, int seg1_text_w,
     if (seg_h < 0) seg_h = 0;
     int seg_y  = status.y + (status.h - seg_h) / 2;
 
-    int seg0_w = seg0_text_w + 2 * pad_sm;
-    int seg1_w = seg1_text_w + 2 * pad_sm;
+    out->policy.x = status.x;
+    out->policy.y = seg_y;
+    out->policy.w = policy_w;
+    out->policy.h = seg_h;
 
-    out->seg[0].x = status.x;
-    out->seg[0].y = seg_y;
-    out->seg[0].w = seg0_w;
-    out->seg[0].h = seg_h;
-
-    /* Touching seg[0] -- the two segments read as one control. */
-    out->seg[1].x = out->seg[0].x + seg0_w;
-    out->seg[1].y = seg_y;
-    out->seg[1].w = seg1_w;
-    out->seg[1].h = seg_h;
-
-    out->auto_label.x = out->seg[1].x + seg1_w + gap_md;
-    out->auto_label.y = seg_y;
-    out->auto_label.w = auto_text_w;
-    out->auto_label.h = seg_h;
-
-    int content_right_limit = out->auto_label.x + out->auto_label.w;
+    int content_right_limit = out->policy.x + out->policy.w + gap_md;
     int right_edge = status.x + status.w;
     int bar_w = ns_scale(60, dpi);
 
@@ -96,21 +80,6 @@ void ai_status_layout(NsRect status, int dpi, int seg0_text_w, int seg1_text_w,
         out->meter_bar.w = bar_w;
         out->meter_bar.h = seg_h;
     }
-}
-
-const char *ai_modes_label(int auto_on, int level)
-{
-    if (!auto_on) return "off";
-    if (level <= 0) return "safe only";
-    if (level == 1) return "safe + unknown";
-    if (level == 2) return "safe + write";
-    if (level == 3) return "safe + unknown + write";
-    return "all"; /* level >= 4, including out-of-range values */
-}
-
-const char *ai_permit_label(int on)
-{
-    return on ? "on" : "off";
 }
 
 void thinking_layout(NsRect avail, int expanded, int body_text_h, int max_body_h,

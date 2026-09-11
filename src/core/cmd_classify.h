@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 typedef enum {
-    CMD_SAFE     = 0,  /* Provably read-only: matched an explicit safe rule */
+    CMD_READ     = 0,  /* Provably read-only: matched an explicit read rule */
     CMD_UNKNOWN  = 1,  /* No rule claimed it -- could be anything. Gated like
                         * a write: "I don't recognise this" is not a promise
                         * that it only reads. */
@@ -36,7 +36,7 @@ typedef enum {
 } CmdPlatform;
 
 /* Classify a single command string.
- * Returns CMD_SAFE for NULL or empty input.
+ * Returns CMD_READ for NULL or empty input.
  * For pipelines/semicolons, returns the highest risk level across all segments. */
 CmdSafetyLevel cmd_classify(const char *command, CmdPlatform platform);
 

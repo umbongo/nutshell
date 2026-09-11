@@ -6,38 +6,38 @@
 /* --- NULL and empty input --- */
 int test_cmd_classify_null(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify(NULL, CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify(NULL, CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_empty(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 /* --- Linux safe commands --- */
 int test_cmd_classify_linux_ls(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("ls -la /etc", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ls -la /etc", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_linux_cat(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("cat /etc/hostname", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("cat /etc/hostname", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_linux_grep(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("grep -r 'foo' /var/log", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("grep -r 'foo' /var/log", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_linux_ping(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("ping -c 4 8.8.8.8", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ping -c 4 8.8.8.8", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -160,7 +160,7 @@ int test_cmd_classify_linux_kubectl_delete(void) {
 /* --- Whitespace handling --- */
 int test_cmd_classify_leading_whitespace(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("   ls -la", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("   ls -la", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -179,7 +179,7 @@ int test_cmd_classify_path_prefix(void) {
 
 int test_cmd_classify_path_prefix_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("/usr/bin/cat /etc/hosts", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("/usr/bin/cat /etc/hosts", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -199,7 +199,7 @@ int test_cmd_classify_sudo_rm(void) {
 /* --- Pipelines: highest risk wins --- */
 int test_cmd_classify_pipe_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("cat /etc/hosts | grep localhost", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("cat /etc/hosts | grep localhost", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -249,32 +249,32 @@ int test_cmd_classify_redirect_append(void) {
 
 int test_cmd_classify_redirect_dev_null(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("ls > /dev/null", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ls > /dev/null", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_redirect_stderr_null(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("ls 2>/dev/null", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ls 2>/dev/null", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_redirect_stderr_stdout(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("ls 2>&1", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ls 2>&1", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 /* --- Subcommand sensitivity --- */
 int test_cmd_classify_systemctl_status_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("systemctl status nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("systemctl status nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_sed_plain_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("sed 's/foo/bar/' file.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("sed 's/foo/bar/' file.txt", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -286,7 +286,7 @@ int test_cmd_classify_sed_i_write(void) {
 
 int test_cmd_classify_curl_plain_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("curl http://example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("curl http://example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -299,7 +299,7 @@ int test_cmd_classify_curl_o_write(void) {
 /* --- Database CLI --- */
 int test_cmd_classify_mysql_select_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("mysql -e \"SELECT * FROM users\"", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("mysql -e \"SELECT * FROM users\"", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -342,19 +342,19 @@ int test_cmd_classify_ex_null_reason(void) {
 /* --- Cisco IOS --- */
 int test_cmd_classify_ios_show_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show ip route", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show ip route", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_ios_ping_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_ios_enable_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("enable", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("enable", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -408,14 +408,14 @@ int test_cmd_classify_ios_shutdown_critical(void) {
 
 int test_cmd_classify_ios_case_insensitive(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("SHOW ip route", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("SHOW ip route", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
     TEST_END();
 }
 
 /* --- Cisco NX-OS (IOS rules plus NX-OS extras) --- */
 int test_cmd_classify_nxos_show_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show vlan", CMD_PLATFORM_CISCO_NXOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show vlan", CMD_PLATFORM_CISCO_NXOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -440,7 +440,7 @@ int test_cmd_classify_nxos_reload_module_critical(void) {
 /* --- Cisco ASA --- */
 int test_cmd_classify_asa_show_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show running-config", CMD_PLATFORM_CISCO_ASA), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show running-config", CMD_PLATFORM_CISCO_ASA), (int)CMD_READ);
     TEST_END();
 }
 
@@ -465,7 +465,7 @@ int test_cmd_classify_asa_clear_configure_all_critical(void) {
 /* --- Aruba OS-CX --- */
 int test_cmd_classify_aruba_cx_show_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show running-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show running-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -490,7 +490,7 @@ int test_cmd_classify_aruba_cx_no_vsx_critical(void) {
 /* --- ArubaOS (wireless) --- */
 int test_cmd_classify_aruba_os_show_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show ap database", CMD_PLATFORM_ARUBA_OS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show ap database", CMD_PLATFORM_ARUBA_OS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -515,25 +515,25 @@ int test_cmd_classify_aruba_os_ap_wipe_critical(void) {
 /* --- PAN-OS --- */
 int test_cmd_classify_panos_show_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show system info", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show system info", CMD_PLATFORM_PANOS), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_panos_ping_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("ping host 10.0.0.1", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ping host 10.0.0.1", CMD_PLATFORM_PANOS), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_panos_commit_validate_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("commit validate", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("commit validate", CMD_PLATFORM_PANOS), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_panos_test_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("test security-policy-match", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("test security-policy-match", CMD_PLATFORM_PANOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -581,7 +581,7 @@ int test_cmd_classify_panos_request_restart_critical(void) {
 
 int test_cmd_classify_panos_request_license_info_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("request license info", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("request license info", CMD_PLATFORM_PANOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -594,7 +594,7 @@ int test_cmd_classify_panos_request_license_deactivate_critical(void) {
 int test_cmd_classify_panos_pipe_modifier(void) {
     TEST_BEGIN();
     /* Pipe modifiers (| match, | except) should not change safety level */
-    ASSERT_EQ((int)cmd_classify("show running-config | match ssl", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show running-config | match ssl", CMD_PLATFORM_PANOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -607,9 +607,9 @@ int test_cmd_classify_panos_clear_session_all_critical(void) {
 /* --- Cross-platform heuristics (spec section 7.10) --- */
 int test_cmd_classify_heuristic_show_always_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show version", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("show version", CMD_PLATFORM_ARUBA_CX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("show version", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show version", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("show version", CMD_PLATFORM_ARUBA_CX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("show version", CMD_PLATFORM_PANOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -746,19 +746,19 @@ int test_cmd_classify_linux_pkg_remove_critical_extra(void) {
 /* Package manager query forms -- one per manager (spec 3.3, corner case) */
 int test_cmd_classify_linux_pkg_query_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("apt list --installed", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("apt-get upgrade --simulate", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("dnf list installed", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("yum list installed", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("zypper search nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("pacman -Qi nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("apk info nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("rpm -qa", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("dpkg -l", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("snap list", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("flatpak list", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("pip list", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("npm ls", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("apt list --installed", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("apt-get upgrade --simulate", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dnf list installed", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("yum list installed", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("zypper search nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("pacman -Qi nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("apk info nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("rpm -qa", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dpkg -l", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("snap list", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("flatpak list", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("pip list", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("npm ls", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -949,77 +949,77 @@ int test_cmd_classify_linux_write_scheduling_net(void) {
 
 int test_cmd_classify_linux_safe_readonly_tools(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("wc -l /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("sort /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("uniq /var/log/access.log", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("cut -d: -f1 /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("diff file1.txt file2.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("md5sum file.iso", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("sha256sum file.iso", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("file /bin/bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("stat /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("readlink /etc/alternatives/editor", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("basename /usr/bin/bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("tree /etc", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("pwd", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("echo hello", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("uname -a", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("hostname", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("whoami", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("id", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ps aux", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("top -bn1", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("df -h", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("du -sh /var/log", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("lsblk", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("wc -l /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sort /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("uniq /var/log/access.log", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("cut -d: -f1 /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("diff file1.txt file2.txt", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("md5sum file.iso", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sha256sum file.iso", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("file /bin/bash", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("stat /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("readlink /etc/alternatives/editor", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("basename /usr/bin/bash", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("tree /etc", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("pwd", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("echo hello", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("uname -a", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("hostname", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("whoami", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("id", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ps aux", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("top -bn1", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("df -h", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("du -sh /var/log", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("lsblk", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_linux_safe_network_tools(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("netstat -tulpn", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ss -tulpn", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ip addr show", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ip route show", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ip link show", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("dig example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("nslookup example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("journalctl -u nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("iptables -L -n", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("iptables -S", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("nft list ruleset", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("firewall-cmd --list-all", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("netstat -tulpn", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ss -tulpn", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ip addr show", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ip route show", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ip link show", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dig example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("nslookup example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("journalctl -u nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("iptables -L -n", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("iptables -S", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("nft list ruleset", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("firewall-cmd --list-all", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_linux_safe_service_status(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("systemctl is-active nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("systemctl is-enabled nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("systemctl list-units", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("systemctl cat nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("systemctl is-active nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("systemctl is-enabled nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("systemctl list-units", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("systemctl cat nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_linux_safe_orchestration_status(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("docker ps -a", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("docker images", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("docker logs mycontainer", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("docker inspect mycontainer", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("kubectl get pods", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("kubectl describe pod mypod", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("helm list", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("helm status myrelease", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("terraform plan", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("terraform show", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("docker ps -a", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("docker images", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("docker logs mycontainer", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("docker inspect mycontainer", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("kubectl get pods", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("kubectl describe pod mypod", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("helm list", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("helm status myrelease", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("terraform plan", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("terraform show", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 /* --- Corner case: ufw status vs ufw reset (spec 3.1 F8, section 17) --- */
 int test_cmd_classify_linux_ufw_status_vs_reset(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("ufw status", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ufw status", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("ufw reset", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
     TEST_END();
 }
@@ -1028,10 +1028,10 @@ int test_cmd_classify_linux_ufw_status_vs_reset(void) {
 
 int test_cmd_classify_ios_safe_additions(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("more flash:running-config.txt", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("where", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("who", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("reload cancel", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("more flash:running-config.txt", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("where", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("who", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("reload cancel", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1240,18 +1240,18 @@ int test_cmd_classify_asa_write_additions(void) {
 
 int test_cmd_classify_procurve_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show running-config", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("traceroute 10.0.0.1", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("dir", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("menu", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("getmib sysDescr.0", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("walkmib system", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("exit", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("end", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("logout", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("page", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("terminal length 1000", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show running-config", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("traceroute 10.0.0.1", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dir", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("menu", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("getmib sysDescr.0", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("walkmib system", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("exit", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("end", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("logout", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("page", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("terminal length 1000", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1319,15 +1319,15 @@ int test_cmd_classify_procurve_critical_negation_disable(void) {
 
 int test_cmd_classify_comware_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("display current-configuration", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("tracert 10.0.0.1", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("dir", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("more startup.cfg", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("quit", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("return", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("terminal monitor", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("screen-length 0 temporary", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("display current-configuration", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("tracert 10.0.0.1", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dir", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("more startup.cfg", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("quit", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("return", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("terminal monitor", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("screen-length 0 temporary", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1472,10 +1472,10 @@ int test_cmd_classify_aruba_cx_write_additions(void) {
 
 int test_cmd_classify_aruba_cx_safe_additions(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("checkpoint diff startup-config running-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("diff running-config startup-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("less running-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("top", CMD_PLATFORM_ARUBA_CX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("checkpoint diff startup-config running-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("diff running-config startup-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("less running-config", CMD_PLATFORM_ARUBA_CX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("top", CMD_PLATFORM_ARUBA_CX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1522,16 +1522,16 @@ int test_cmd_classify_aruba_os_write_additions(void) {
 /* Corner case: "set cli config-output-format set" -> SAFE (spec 11, F15, section 17) */
 int test_cmd_classify_panos_set_cli_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("set cli config-output-format set", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("set cli pager off", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("set cli config-output-format set", CMD_PLATFORM_PANOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("set cli pager off", CMD_PLATFORM_PANOS), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_panos_safe_additions(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("request support info", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("check", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("debug show routing", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("request support info", CMD_PLATFORM_PANOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("check", CMD_PLATFORM_PANOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("debug show routing", CMD_PLATFORM_PANOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1540,7 +1540,7 @@ int test_cmd_classify_panos_safe_additions(void) {
  * waved through as a validation (spec 11, section 17). */
 int test_cmd_classify_panos_commit_check_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("commit validate", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("commit validate", CMD_PLATFORM_PANOS), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("commit check", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
     TEST_END();
 }
@@ -1576,24 +1576,24 @@ int test_cmd_classify_panos_write_additions(void) {
 
 int test_cmd_classify_junos_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show interfaces terse", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("run show route", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("traceroute 10.0.0.1", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("monitor traffic interface ge-0/0/0", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("monitor interface traffic", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("file show /var/log/messages", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("file list /var/tmp", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("file compare files a.conf b.conf", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("compare", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("help apropos commit", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("exit", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("quit", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("top", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("up", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("commit check", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("test policy from-zone trust to-zone untrust policy allow-web match-source-address any", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("request support information", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show interfaces terse", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("run show route", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("traceroute 10.0.0.1", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("monitor traffic interface ge-0/0/0", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("monitor interface traffic", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("file show /var/log/messages", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("file list /var/tmp", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("file compare files a.conf b.conf", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("compare", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("help apropos commit", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("exit", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("quit", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("top", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("up", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("commit check", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("test policy from-zone trust to-zone untrust policy allow-web match-source-address any", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("request support information", CMD_PLATFORM_JUNOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1660,20 +1660,20 @@ int test_cmd_classify_junos_critical(void) {
 
 int test_cmd_classify_fortios_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("get system status", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("show full-configuration", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("end", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("next", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("abort", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("exit", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("execute ping 10.0.0.1", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("execute traceroute 10.0.0.1", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("execute telnet 10.0.0.1", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("execute ssh admin@10.0.0.1", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("execute time", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("diagnose sys top", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("diagnose debug enable", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("diagnose sniffer packet any \"host 10.0.0.1\" 4", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("get system status", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("show full-configuration", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("end", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("next", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("abort", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("exit", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("execute ping 10.0.0.1", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("execute traceroute 10.0.0.1", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("execute telnet 10.0.0.1", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("execute ssh admin@10.0.0.1", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("execute time", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("diagnose sys top", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("diagnose debug enable", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("diagnose sniffer packet any \"host 10.0.0.1\" 4", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1725,16 +1725,16 @@ int test_cmd_classify_fortios_critical(void) {
 
 int test_cmd_classify_vyos_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show interfaces", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("run show version", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("compare", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("traceroute 10.0.0.1", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("monitor interface ethernet eth0 traffic", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("exit", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("top", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("up", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("commit-check", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show interfaces", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("run show version", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("compare", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ping 10.0.0.1", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("traceroute 10.0.0.1", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("monitor interface ethernet eth0 traffic", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("exit", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("top", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("up", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("commit-check", CMD_PLATFORM_VYOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1775,12 +1775,12 @@ int test_cmd_classify_vyos_critical(void) {
 
 int test_cmd_classify_mikrotik_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("/ip firewall filter print", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("/interface ethernet get [find default-name=ether1]", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("/system identity export", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("/ip route find", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("/tool monitor-traffic interface=ether1", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("/system routerboard print", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("/ip firewall filter print", CMD_PLATFORM_MIKROTIK), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("/interface ethernet get [find default-name=ether1]", CMD_PLATFORM_MIKROTIK), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("/system identity export", CMD_PLATFORM_MIKROTIK), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("/ip route find", CMD_PLATFORM_MIKROTIK), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("/tool monitor-traffic interface=ether1", CMD_PLATFORM_MIKROTIK), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("/system routerboard print", CMD_PLATFORM_MIKROTIK), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1824,7 +1824,7 @@ int test_cmd_classify_mikrotik_critical_wins_over_find(void) {
 /* Corner case (section 17): verb-last SAFE vs CRITICAL pair, asserted together */
 int test_cmd_classify_mikrotik_print_vs_remove(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("/ip firewall filter print", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("/ip firewall filter print", CMD_PLATFORM_MIKROTIK), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("/ip firewall filter remove numbers=0", CMD_PLATFORM_MIKROTIK), (int)CMD_CRITICAL);
     TEST_END();
 }
@@ -1836,18 +1836,18 @@ int test_cmd_classify_mikrotik_print_vs_remove(void) {
 /* display filter is a filter, not a pipe, on every network platform (F2) */
 int test_cmd_classify_display_filter_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_CISCO_NXOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_CISCO_ASA), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_ARUBA_CX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_ARUBA_OS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_CISCO_NXOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_CISCO_ASA), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_ARUBA_CX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_ARUBA_OS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_comware_display_filter_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("display current-configuration | include ospf", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("display current-configuration | include ospf", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1855,8 +1855,8 @@ int test_cmd_classify_comware_display_filter_safe(void) {
  * CRITICAL on both (spec 11, 12, section 17) */
 int test_cmd_classify_commit_check_validate_vs_bare_commit(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("commit check", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("commit validate", CMD_PLATFORM_PANOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("commit check", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("commit validate", CMD_PLATFORM_PANOS), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("commit", CMD_PLATFORM_JUNOS), (int)CMD_CRITICAL);
     ASSERT_EQ((int)cmd_classify("commit", CMD_PLATFORM_PANOS), (int)CMD_CRITICAL);
     TEST_END();
@@ -1866,23 +1866,23 @@ int test_cmd_classify_commit_check_validate_vs_bare_commit(void) {
  * (spec section 17) */
 int test_cmd_classify_new_platforms_empty_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("", CMD_PLATFORM_MIKROTIK), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_new_platforms_lone_separator_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_HP_PROCURVE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_HP_COMWARE), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_FORTIOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_VYOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_MIKROTIK), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_HP_PROCURVE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_HP_COMWARE), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_JUNOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_FORTIOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_VYOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify(";", CMD_PLATFORM_MIKROTIK), (int)CMD_READ);
     TEST_END();
 }
 
@@ -1914,11 +1914,11 @@ int test_cmd_classify_unknown_overlay_critical_verbs(void) {
  * "write" is not a real Linux command either.
  *
  * CHANGED (UNKNOWN safety category, C2 fix): "write memory" used to assert
- * CMD_SAFE here because an unrecognised Linux command fell through to SAFE.
+ * CMD_READ here because an unrecognised Linux command fell through to SAFE.
  * That fallthrough is now CMD_UNKNOWN (classify_linux_segment() reaches SAFE
  * only via its explicit allow-list, and "write" is not on it), so the
  * CMD_PLATFORM_UNKNOWN overlay -- which just delegates -- now honestly
- * reports CMD_UNKNOWN too. Old -> CMD_SAFE, new -> CMD_UNKNOWN. */
+ * reports CMD_UNKNOWN too. Old -> CMD_READ, new -> CMD_UNKNOWN. */
 int test_cmd_classify_unknown_overlay_write_erase(void) {
     TEST_BEGIN();
     ASSERT_EQ((int)cmd_classify("write erase", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
@@ -1930,8 +1930,8 @@ int test_cmd_classify_unknown_overlay_write_erase(void) {
  * fall through to Linux, where "request" is not a real command either.
  *
  * CHANGED (UNKNOWN safety category, C2 fix): "request support info" used to
- * assert CMD_SAFE for the same reason as "write memory" above -- an
- * unrecognised Linux command is now CMD_UNKNOWN, not SAFE. Old -> CMD_SAFE,
+ * assert CMD_READ for the same reason as "write memory" above -- an
+ * unrecognised Linux command is now CMD_UNKNOWN, not SAFE. Old -> CMD_READ,
  * new -> CMD_UNKNOWN. */
 int test_cmd_classify_unknown_overlay_request_verbs(void) {
     TEST_BEGIN();
@@ -1946,8 +1946,8 @@ int test_cmd_classify_unknown_overlay_request_verbs(void) {
  * forms fall through to Linux, where "execute" is not a real command either.
  *
  * CHANGED (UNKNOWN safety category, C2 fix): "execute ping 8.8.8.8" used to
- * assert CMD_SAFE for the same reason as above -- an unrecognised Linux
- * command is now CMD_UNKNOWN, not SAFE. Old -> CMD_SAFE, new ->
+ * assert CMD_READ for the same reason as above -- an unrecognised Linux
+ * command is now CMD_UNKNOWN, not SAFE. Old -> CMD_READ, new ->
  * CMD_UNKNOWN. */
 int test_cmd_classify_unknown_overlay_execute_verbs(void) {
     TEST_BEGIN();
@@ -1978,9 +1978,9 @@ int test_cmd_classify_unknown_overlay_write_verbs(void) {
  * unchanged -- proving the Linux path is intact under CMD_PLATFORM_UNKNOWN. */
 int test_cmd_classify_unknown_linux_safe_commands_intact(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("ls -la", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("cat /etc/hosts", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("grep -r x /var/log", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ls -la", CMD_PLATFORM_UNKNOWN), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("cat /etc/hosts", CMD_PLATFORM_UNKNOWN), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("grep -r x /var/log", CMD_PLATFORM_UNKNOWN), (int)CMD_READ);
     TEST_END();
 }
 
@@ -2072,12 +2072,12 @@ int test_cmd_classify_unknown_overlay_reset_forms(void) {
     ASSERT_EQ((int)cmd_classify("reset bgp all", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
     ASSERT_EQ((int)cmd_classify("reset ospf process", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
     /* bare "reset" is the terminfo terminal reset on a Linux host */
-    ASSERT_EQ((int)cmd_classify("reset", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("reset", CMD_PLATFORM_UNKNOWN), (int)CMD_READ);
     TEST_END();
 }
 
 /* CHANGED (UNKNOWN safety category, C2 fix): "/ip firewall filter print"
- * used to assert CMD_SAFE. The RouterOS-verb-last overlay above only claims
+ * used to assert CMD_READ. The RouterOS-verb-last overlay above only claims
  * a short critical-verb list for "/..." segments (none of which is "print"),
  * so this falls through to classify_linux_segment(), which strips the
  * leading path down to base command "ip" -- a real but subcommand-sensitive
@@ -2085,7 +2085,7 @@ int test_cmd_classify_unknown_overlay_reset_forms(void) {
  * through to the old SAFE bug; it is now honestly CMD_UNKNOWN, same as any
  * other unrecognised Linux invocation. The absolute-path Linux command below
  * is unaffected: it strips to base command "uptime", which is a genuine
- * Linux allow-list entry. Old -> CMD_SAFE, new -> CMD_UNKNOWN. */
+ * Linux allow-list entry. Old -> CMD_READ, new -> CMD_UNKNOWN. */
 int test_cmd_classify_unknown_overlay_routeros_paths(void) {
     TEST_BEGIN();
     ASSERT_EQ((int)cmd_classify("/system reset-configuration", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
@@ -2094,7 +2094,7 @@ int test_cmd_classify_unknown_overlay_routeros_paths(void) {
     /* a Linux absolute-path invocation of a real allow-listed command must
      * stay out of the way */
     ASSERT_EQ((int)cmd_classify("/ip firewall filter print", CMD_PLATFORM_UNKNOWN), (int)CMD_UNKNOWN);
-    ASSERT_EQ((int)cmd_classify("/usr/bin/uptime", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("/usr/bin/uptime", CMD_PLATFORM_UNKNOWN), (int)CMD_READ);
     TEST_END();
 }
 
@@ -2127,7 +2127,7 @@ int test_cmd_classify_linux_unrecognised_with_redirect_is_write(void) {
 int test_cmd_classify_linux_allow_list_vs_redirect(void) {
     TEST_BEGIN();
     ASSERT_EQ((int)cmd_classify("cat x > y", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
-    ASSERT_EQ((int)cmd_classify("cat x", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("cat x", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -2142,95 +2142,95 @@ int test_cmd_classify_linux_allow_list_does_not_downgrade_write_or_critical(void
     TEST_END();
 }
 
-/* New single-token linux_safe_cmds[] entries (coverage spec 3.3), grouped
+/* New single-token linux_read_cmds[] entries (coverage spec 3.3), grouped
  * roughly as the spec groups them. Every category of the section 3
  * allow-list gets at least one assertion here. */
 int test_cmd_classify_linux_safe_allow_list_file_and_text_tools(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("tac /var/log/syslog", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("less /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("tail -f /var/log/syslog", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("egrep 'foo|bar' file.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("fgrep literal file.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("rg pattern .", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("column -t file.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("cmp a.txt b.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("sha1sum file.iso", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("realpath ./file", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("dirname /usr/bin/bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("printf 'hi\\n'", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("true", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("false", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("tac /var/log/syslog", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("less /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("tail -f /var/log/syslog", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("egrep 'foo|bar' file.txt", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("fgrep literal file.txt", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("rg pattern .", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("column -t file.txt", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("cmp a.txt b.txt", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sha1sum file.iso", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("realpath ./file", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dirname /usr/bin/bash", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("printf 'hi\\n'", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("true", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("false", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_linux_safe_allow_list_system_inspectors(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("cal", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("w", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("who", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("groups", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("lsb_release -a", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("arch", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("nproc", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("free -h", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("vmstat 1", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("iostat", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("mpstat", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("sar -u", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("pidstat", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("pstree", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("htop", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("blkid", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("findmnt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("lsof -i", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("lspci", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("lsusb", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("lscpu", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("lsmod", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("dmidecode", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("sensors", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("getenforce", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("sestatus", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("env", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("printenv PATH", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("locale", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("which bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("whereis bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("type bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("man ls", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("history", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("cal", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("w", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("who", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("groups", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("lsb_release -a", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("arch", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("nproc", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("free -h", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("vmstat 1", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("iostat", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("mpstat", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sar -u", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("pidstat", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("pstree", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("htop", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("blkid", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("findmnt", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("lsof -i", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("lspci", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("lsusb", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("lscpu", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("lsmod", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dmidecode", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sensors", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("getenforce", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sestatus", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("env", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("printenv PATH", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("locale", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("which bash", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("whereis bash", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("type bash", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("man ls", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("history", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 int test_cmd_classify_linux_safe_allow_list_network_diagnostics(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("arp -a", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ping6 ::1", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("tracepath example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("mtr example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("host example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("whois example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("arp -a", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ping6 ::1", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("tracepath example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("mtr example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("host example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("whois example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
 /* Multi-token allow-list entries that don't fit the single-token
- * linux_safe_cmds[] table and so were added to linux_subcmd_rules
+ * linux_read_cmds[] table and so were added to linux_subcmd_rules
  * instead. */
 int test_cmd_classify_linux_safe_allow_list_multitoken(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("systemctl cat nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("systemctl show nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("systemctl list-timers", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("nft list ruleset", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("ip neigh show", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("route -n", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("docker stats --no-stream", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("docker top mycontainer", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("kubectl top pods", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("kubectl explain pod.spec", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("kubectl api-resources", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("kubectl version", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("systemctl cat nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("systemctl show nginx", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("systemctl list-timers", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("nft list ruleset", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ip neigh show", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("route -n", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("docker stats --no-stream", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("docker top mycontainer", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("kubectl top pods", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("kubectl explain pod.spec", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("kubectl api-resources", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("kubectl version", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -2238,9 +2238,9 @@ int test_cmd_classify_linux_safe_allow_list_multitoken(void) {
  * and -Q/-Qs/-Qi forms is still read-only. */
 int test_cmd_classify_linux_safe_rpm_pacman_query_prefix(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("rpm -qf /bin/bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("rpm -qc bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("pacman -Qo /bin/bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("rpm -qf /bin/bash", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("rpm -qc bash", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("pacman -Qo /bin/bash", CMD_PLATFORM_LINUX), (int)CMD_READ);
     /* a non-query rpm/pacman invocation is still flat WRITE by default */
     ASSERT_EQ((int)cmd_classify("rpm -ivh package.rpm", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
     TEST_END();
@@ -2250,7 +2250,7 @@ int test_cmd_classify_linux_safe_rpm_pacman_query_prefix(void) {
  * covered by linux_subcmd_rules); both are read-only. */
 int test_cmd_classify_linux_safe_iptables_save(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("iptables-save", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("iptables-save", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
 
@@ -2260,18 +2260,18 @@ int test_cmd_classify_linux_safe_iptables_save(void) {
  * new. */
 int test_cmd_classify_linux_bare_only_safe_forms(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("date", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("date", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("date -s \"2026-09-11 12:00:00\"", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
     ASSERT_EQ((int)cmd_classify("date +%Y-%m-%d", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
 
-    ASSERT_EQ((int)cmd_classify("hostname", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("hostname", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("hostname newname", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
 
-    ASSERT_EQ((int)cmd_classify("dmesg", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("dmesg", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("dmesg -C", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
     ASSERT_EQ((int)cmd_classify("dmesg -T", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
 
-    ASSERT_EQ((int)cmd_classify("mount", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("mount", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("mount /dev/sdb1 /mnt/data", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
     TEST_END();
 }
@@ -2303,8 +2303,8 @@ int test_cmd_classify_network_platforms_unrecognised_is_unknown(void) {
  * treating "include ospf" as a second, unrecognised segment. */
 int test_cmd_classify_network_display_filter_still_safe(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
-    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_JUNOS), (int)CMD_READ);
     TEST_END();
 }
 
@@ -2316,7 +2316,7 @@ int test_cmd_classify_network_display_filter_still_safe(void) {
 
 int test_cmd_classify_mask_all_safe_pipeline(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify_mask("ls | grep x", CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_SAFE));
+    ASSERT_EQ((int)cmd_classify_mask("ls | grep x", CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_READ));
     TEST_END();
 }
 
@@ -2327,7 +2327,7 @@ int test_cmd_classify_mask_all_safe_pipeline(void) {
 int test_cmd_classify_mask_unknown_and_safe_pipeline(void) {
     TEST_BEGIN();
     unsigned mask = cmd_classify_mask("frobnicate | grep x", CMD_PLATFORM_LINUX);
-    ASSERT_EQ((int)mask, (int)(CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN)));
+    ASSERT_EQ((int)mask, (int)(CMD_MASK_OF(CMD_READ) | CMD_MASK_OF(CMD_UNKNOWN)));
     ASSERT_EQ((int)cmd_classify("frobnicate | grep x", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
     TEST_END();
 }
@@ -2347,7 +2347,7 @@ int test_cmd_classify_mask_unknown_and_write_pipeline(void) {
 
 int test_cmd_classify_mask_null_and_empty(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)cmd_classify_mask(NULL, CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_SAFE));
-    ASSERT_EQ((int)cmd_classify_mask("", CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_SAFE));
+    ASSERT_EQ((int)cmd_classify_mask(NULL, CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_READ));
+    ASSERT_EQ((int)cmd_classify_mask("", CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_READ));
     TEST_END();
 }

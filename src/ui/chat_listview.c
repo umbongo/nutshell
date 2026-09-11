@@ -236,7 +236,7 @@ static int draw_text_utf8(HDC hdc, const char *text, RECT *rc, UINT flags)
 /* ── Safety tag colour ──────────────────────────────────────────────── */
 
 /* Safety tag chip colours, from ns_tokens() per the design spec's table:
- * SAFE -> text_dim, UNKNOWN -> info ("needs attention, not yet alarming"),
+ * READ -> text_dim, UNKNOWN -> info ("needs attention, not yet alarming"),
  * WRITE -> warning, CRITICAL -> danger. */
 static void safety_tag_colors(CmdSafetyLevel level, COLORREF *bg, COLORREF *fg)
 {
@@ -267,7 +267,7 @@ static const char *safety_tag_text(CmdSafetyLevel level)
     case CMD_UNKNOWN:  return "UNKNOWN";
     case CMD_WRITE:    return "WRITE";
     case CMD_CRITICAL: return "CRITICAL";
-    default:           return "SAFE";
+    default:           return "READ";
     }
 }
 
@@ -1827,7 +1827,7 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, ChatMsgItem *first,
 
     SetBkMode(hdc, TRANSPARENT);
 
-    /* ── Header: "N commands · M held" [— Permit write is off] ──────── */
+    /* ── Header: "N commands · M held" [— above the allowed ceiling] ── */
     {
         RECT hdr_rc = { g.layout.header.x, g.layout.header.y,
                         g.layout.header.x + g.layout.header.w,
@@ -1856,7 +1856,7 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, ChatMsgItem *first,
             SetTextColor(hdc, RGB_FROM_THEME(tok->text_dim));
             HGDIOBJ rf = SelectObject(hdc, lv->hFont ? lv->hFont
                                            : GetStockObject(DEFAULT_GUI_FONT));
-            draw_text_utf8(hdc, " \xE2\x80\x94 Permit write is off", &reason_rc,
+            draw_text_utf8(hdc, " \xE2\x80\x94 above the allowed ceiling", &reason_rc,
                            DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT
                            | DT_END_ELLIPSIS);
             SelectObject(hdc, rf);

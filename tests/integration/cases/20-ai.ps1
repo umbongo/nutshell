@@ -15,12 +15,14 @@ Invoke-AiCase "ai_panel_docks_with_key" {
     "panel docked (hwnd $p)"
 }
 
-Invoke-AiCase "ai_runs_safe_command_with_auto_approve" {
+Invoke-AiCase "ai_runs_read_command_unattended" {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     Open-NutshellAiPanel -Session $s | Out-Null
-    Set-NutshellAiAutoApprove -Session $s
+    # Ceiling stays at Read (the default); move only the unattended marker,
+    # so a READ command runs with no card to click.
+    Set-NutshellAiPolicy -Session $s -Unattended Read
     $marker = "AI_PONG_" + (Get-Random -Minimum 100 -Maximum 999)
     Send-NutshellAiPrompt -Session $s -Text "Run exactly this shell command and nothing else, no explanation: echo $marker"
     $ok = Wait-NutshellLog -Session $s -Pattern ("(?m)^" + $marker + "\s*$") -TimeoutSec 90
@@ -40,7 +42,7 @@ Invoke-AiCase "ai_commands_run_one_at_a_time" {
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     Open-NutshellAiPanel -Session $s | Out-Null
-    Set-NutshellAiAutoApprove -Session $s
+    Set-NutshellAiPolicy -Session $s -Unattended Read
     Send-NutshellAiPrompt -Session $s -Text ("Run these two commands as two separate EXEC blocks, in this order, " +
         "nothing else and no explanation: sleep 6 && echo FIRST_DONE ; then: echo SECOND_DONE")
     $ok = Wait-NutshellLog -Session $s -Pattern '(?m)^SECOND_DONE\s*$' -TimeoutSec 90
@@ -61,32 +63,36 @@ Invoke-AiCase "ai_commands_run_one_at_a_time" {
     "commands ran one at a time: FIRST_DONE (index $($mFirst.Index)) before echo SECOND_DONE was typed (index $idxEcho)"
 }
 
-Invoke-AiCase "ai_write_command_held_then_runs_after_permit" {
+Invoke-AiCase "ai_write_command_held_then_runs_after_allow" {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     $p = Open-NutshellAiPanel -Session $s
-    Set-NutshellAiAutoApprove -Session $s          # auto-approve on, Permit Write still off
+    # Read runs unattended, but the ceiling is still Read -- so a WRITE
+    # command must be held, not run.
+    Set-NutshellAiPolicy -Session $s -Unattended Read
     $file = "/tmp/nutshell_it_blocked_" + (Get-Random -Minimum 100 -Maximum 999)
     Send-NutshellAiPrompt -Session $s -Text "Run exactly this shell command and nothing else, no explanation: touch $file"
     Start-Sleep -Seconds 45
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_blocked_command.png") | Out-Null
     $ran = (Get-NutshellLogText -Session $s) -match [regex]::Escape("touch $file")
-    Assert-True (-not $ran) "a write command reached the terminal although Permit Write is off"
+    Assert-True (-not $ran) "a write command reached the terminal although the policy ceiling is Read"
     Set-NutshellTerminalFocus -Session $s   # the panel took keyboard focus; the check must go to the shell
     Send-NutshellLine -Session $s -Line "test -e $file && echo BLOCK_FAIL || echo BLOCK_OK"
     # Anchor to a line start: the echoed command line itself contains both words.
     Assert-True (Wait-NutshellLog -Session $s -Pattern '(?m)^BLOCK_(OK|FAIL)\s*$' -TimeoutSec 8) "the existence check never reached the shell"
     Assert-True ((Get-NutshellLogText -Session $s) -notmatch '(?m)^BLOCK_FAIL\s*$') "the file exists: the write command was executed"
 
-    # Bug 2 regression: switch to Read + write (IDC_CHAT_PERMIT) and run the
-    # held command via "Run N selected" (IDC_CMD_APPROVE_SEL) -- before the
-    # fix, the write-only batch was never queued (only safe commands were),
-    # so queued_count stayed 0 and nothing ran even after unblocking.
-    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4005, [IntPtr]::Zero) | Out-Null   # IDC_CHAT_PERMIT
+    # Bug 2 regression: raise the ceiling to Write and run the held command
+    # via "Run N selected" (IDC_CMD_APPROVE_SEL) -- before the fix, the
+    # write-only batch was never queued (only read commands were), so
+    # queued_count stayed 0 and nothing ran even after unblocking.
+    # Note the ceiling goes to Write, not Critical: the new control can
+    # allow writes while still refusing outage-class commands outright.
+    Set-NutshellAiPolicy -Session $s -Allowed Write
     Start-Sleep -Seconds 1
     [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]3045, [IntPtr]::Zero) | Out-Null   # IDC_CMD_APPROVE_SEL
-    Assert-True (Wait-NutshellLog -Session $s -Pattern ([regex]::Escape("touch $file")) -TimeoutSec 10) "the held command never reached the terminal after switching to Read + write and running it"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern ([regex]::Escape("touch $file")) -TimeoutSec 10) "the held command never reached the terminal after raising the ceiling to Write and running it"
 
     # Running the card moved the caret to the panel's input box; put the
     # keyboard back in the terminal before typing the check.
@@ -94,14 +100,15 @@ Invoke-AiCase "ai_write_command_held_then_runs_after_permit" {
     Send-NutshellLine -Session $s -Line "test -e $file && echo RAN_OK || echo RAN_FAIL"
     Assert-True (Wait-NutshellLog -Session $s -Pattern '(?m)^RAN_(OK|FAIL)\s*$' -TimeoutSec 8) "the post-run existence check never reached the shell"
     Assert-True ((Get-NutshellLogText -Session $s) -match '(?m)^RAN_OK\s*$') "the file still does not exist: the held command was not actually run"
-    "write command held back, then ran after Permit Write + Run selected; $file created"
+    "write command held back at ceiling Read, then ran after raising it to Write + Run selected; $file created"
 }
 
 Invoke-AiCase "ai_prompt_while_approval_pending" {
     param($s)
     # Pending command batches (docs/superpowers/specs/
     # 2026-09-09-pending-command-batches.md, rule 1): a card must never
-    # block the input. Auto-approve stays off (the default) so the first
+    # block the input. The policy stays at its default (read-only, nothing
+    # unattended) so the first
     # reply's command lands in a pending card; a second prompt must still
     # get a normal reply while that card sits there, and the card must
     # still be actionable afterwards.

@@ -41,8 +41,8 @@ CmdBatch *cmd_batch_add(CmdBatchSet *set, const ApprovalQueue *defaults,
     nb->id = set->next_id++;
     chat_approval_init(&nb->q);
     if (defaults) {
-        nb->q.auto_approve = defaults->auto_approve;
-        nb->q.auto_approve_level = defaults->auto_approve_level;
+        nb->q.policy = defaults->policy;
+        cmd_policy_clamp(&nb->q.policy);
     }
 
     set->b[set->count++] = nb;

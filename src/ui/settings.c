@@ -11,6 +11,7 @@
 #include "settings_layout.h"
 #include "ai_prompt.h"
 #include "ai_http.h"
+#include "cmd_policy.h"
 #include "json_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -423,12 +424,15 @@ static const TooltipEntry k_tooltips[] = {
       "Allow the AI to fetch arbitrary URLs as a tool call." },
     { IDC_AI_MD_RENDER,
       "Render AI replies as formatted markdown. Turn off to see raw text." },
-    { IDC_AI_AUTO_APPROVE_DEFAULT,
-      "Starting Auto approve level for new sessions. Safe only runs "
-      "read-only commands without asking; Safe + write adds write "
-      "commands; All adds critical ones. The status line in the AI panel "
-      "changes it per session. Write and critical commands still need "
-      "Permit write." },
+    { IDC_AI_POLICY_ALLOWED,
+      "How far a new session may go. Commands above this are blocked "
+      "outright and show as held; commands at or below it are allowed, "
+      "and still ask first unless 'Runs unattended' covers them." },
+    { IDC_AI_POLICY_UNATTENDED,
+      "How far a new session runs without asking. Anything at or below "
+      "this runs the moment the AI suggests it; anything between here and "
+      "'Allowed' asks first. Never goes above 'Allowed'. The status line "
+      "in the AI panel changes both markers per session." },
     { IDC_SSH_IDLE_EDIT,
       "Disconnect SSH sessions after this many minutes of no user "
       "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
@@ -1122,16 +1126,30 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
         }
         {
-            HWND lbl = make_label2(nd->hPage, "Auto Approve:");
-            HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_AUTO_APPROVE_DEFAULT,
-                                   CBS_DROPDOWNLIST);
-            int sel = nd->cfg->settings.ai_auto_approve_default;
-            if (sel < 0 || sel > 5) sel = 0;
-            for (int i = 0; i < 6; i++)
-                SendMessage(cmb, CB_ADDSTRING, 0,
-                            (LPARAM)auto_approve_mode_label(i));
-            SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
-            add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
+            /* The one policy setting, shown as its two markers -- the same
+             * pair the AI panel's status-line control carries. */
+            CmdPolicy pol = nd->cfg->settings.ai_policy_default;
+            cmd_policy_clamp(&pol);
+            {
+                HWND lbl = make_label2(nd->hPage, "Allowed:");
+                HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_POLICY_ALLOWED,
+                                       CBS_DROPDOWNLIST);
+                for (int i = 0; i < POLICY_STOP_COUNT; i++)
+                    SendMessage(cmb, CB_ADDSTRING, 0,
+                                (LPARAM)cmd_policy_stop_label(i));
+                SendMessage(cmb, CB_SETCURSEL, (WPARAM)pol.allowed, 0);
+                add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
+            }
+            {
+                HWND lbl = make_label2(nd->hPage, "Runs unattended:");
+                HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_POLICY_UNATTENDED,
+                                       CBS_DROPDOWNLIST);
+                for (int i = POLICY_NONE; i < POLICY_STOP_COUNT; i++)
+                    SendMessage(cmb, CB_ADDSTRING, 0,
+                                (LPARAM)cmd_policy_stop_label(i));
+                SendMessage(cmb, CB_SETCURSEL, (WPARAM)(pol.unattended + 1), 0);
+                add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
+            }
         }
 
         /* ==== AI_WEB ==== */
@@ -1671,11 +1689,18 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             s->markdown_render_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_MD_RENDER)
                                            == BST_CHECKED) ? 1 : 0;
 
-            /* Auto approve level for new sessions */
+            /* Command policy for new sessions. The setters clamp, so an
+             * unattended marker picked above the ceiling comes back down
+             * rather than being silently honoured. */
             {
-                int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_AUTO_APPROVE_DEFAULT,
-                                                  CB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel <= 5) s->ai_auto_approve_default = sel;
+                int a = (int)SendDlgItemMessage(d->hPage, IDC_AI_POLICY_ALLOWED,
+                                                CB_GETCURSEL, 0, 0);
+                int u = (int)SendDlgItemMessage(d->hPage, IDC_AI_POLICY_UNATTENDED,
+                                                CB_GETCURSEL, 0, 0);
+                if (a >= 0 && u >= 0) {
+                    cmd_policy_set_allowed(&s->ai_policy_default, a);
+                    cmd_policy_set_unattended(&s->ai_policy_default, u - 1);
+                }
             }
 
             /* SSH user idle timeout */
