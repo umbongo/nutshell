@@ -242,6 +242,16 @@ them into the same scope.
    literal. This is the two-line change that closes H2; everything else in this document exists
    to make the value it passes correct.
 
+4. **The third site, removed rather than plumbed.** `ai_command_is_readonly()`
+   (`ai_prompt.{c,h}`) hardcoded `CMD_PLATFORM_LINUX` the same way, and was missed by the H2
+   sweep because nothing called it — it had no callers in `src/` at all, only tests. It is
+   deleted rather than given a `CmdPlatform` parameter: a boolean "read-only or not" is the
+   wrong shape for this classifier now. It collapses the four-level `CmdSafetyLevel` into two
+   answers and has no way to express a segment set, which is exactly what `cmd_classify_mask()`
+   exists for (section 4) — the permitted sets are not nested, so a caller that reached for the
+   boolean would land back in the bug class this document is about. A future caller wants
+   `cmd_classify()` or `cmd_classify_mask()` directly; both already take the platform.
+
 Per-session, not global: `AiSessionState` is embedded in each `Session`, the AI panel tracks
 the displayed one in `AiChatData.active_state` (`ai_chat.c:265`), and `on_tab_select`
 (`window.c:305-328`) repoints it on every tab switch. So a Linux tab and a switch tab open at

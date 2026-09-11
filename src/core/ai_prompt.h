@@ -221,10 +221,6 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
 size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
                               char *buf, size_t buf_size);
 
-/* Check if a shell command is read-only (does not modify files or system state).
- * Returns 1 if read-only, 0 if the command may write/modify. */
-int ai_command_is_readonly(const char *cmd);
-
 /* Split an AI response into pre-command and post-command text.
  * pre_cmd receives text before the first [EXEC] marker.
  * post_cmd receives text after the last [/EXEC] marker.
