@@ -79,6 +79,14 @@ TEST_SYS_LIBS = $(ZLIB) -lcrypt32 -lbcrypt -lws2_32 -lwinhttp -lgdi32 -luser32 -
                 -Wl,--stack,16777216
 else
 TEST_SYS_LIBS =
+# -std=c11 is strict ISO C, so glibc hides every POSIX declaration behind
+# __STRICT_ANSI__ -- including fdopen(), which tests/test_framework.h needs
+# to create scratch files with owner-only permissions. Without this the
+# call compiles to an implicit int-returning declaration, the FILE* is
+# truncated to 32 bits, and the first fputs() segfaults. MinGW declares
+# these regardless, so the Windows test build must NOT set this: there it
+# would hide the MS-specific declarations instead.
+TEST_CFLAGS += -D_POSIX_C_SOURCE=200809L
 endif
 
 # Auto-detect libssh2 availability for test linking.

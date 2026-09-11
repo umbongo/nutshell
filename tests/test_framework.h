@@ -4,6 +4,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+/* test_fopen_private() below needs POSIX open()/fdopen(). Under -std=c11
+ * glibc hides those behind __STRICT_ANSI__, and an implicit declaration
+ * truncates the returned FILE* to int -- a segfault at the first write,
+ * not a compile error. Fail loudly instead; the Makefile passes this for
+ * the native test build. */
+#if !defined(_WIN32) && defined(__STRICT_ANSI__) && !defined(_POSIX_C_SOURCE)
+#error "tests need -D_POSIX_C_SOURCE=200809L (see TEST_CFLAGS in the Makefile)"
+#endif
 #include <fcntl.h>
 #include <sys/stat.h>
 #ifdef _WIN32
