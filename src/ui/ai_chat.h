@@ -87,13 +87,13 @@ void ai_chat_refresh_fonts(HWND hwnd);
 void ai_chat_set_markdown(HWND hwnd, int enabled);
 
 /* Set the configured Auto Approve default for new sessions
- * (settings.ai_auto_approve_default, 0..3: off / safe only / safe + write /
- * all). Only seeds a session that hasn't had its auto-approve state set yet
+ * (settings.ai_auto_approve_default, 0..5: off / safe only / safe + unknown /
+ * safe + write / safe + unknown + write / all). Only seeds a session that hasn't had its auto-approve state set yet
  * (fresh AiSessionState, or the panel's initial session) -- a session the
  * user has already toggled via the status line keeps its own choice across
  * this call and across chat_approval_reset(). Call whenever the setting
  * itself changes, and once right after the panel is created. */
-void ai_chat_set_auto_approve_default(HWND hwnd, int level0to3);
+void ai_chat_set_auto_approve_default(HWND hwnd, int level0to5);
 
 /* Set how many terminal lines are sent to the AI as context (1-50000). */
 void ai_chat_set_context_lines(HWND hwnd, int lines);

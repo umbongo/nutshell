@@ -4,6 +4,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+#endif
 
 /* Scratch directory for tests that write files.  Linux: /tmp.  Windows: the
  * build/ directory (a MinGW binary has no /tmp), relative to the repo root
@@ -13,6 +18,25 @@
 #else
 #define TEST_TMP_DIR "/tmp"
 #endif
+
+/* Create a scratch file for writing, readable and writable only by its owner.
+ * A plain fopen() creates with 0666 masked by the umask, which on a shared
+ * machine can leave a world-writable file behind -- and which CodeQL's
+ * "file created without restricting permissions" rule flags. Tests that write
+ * a config or fixture file should use this instead of fopen(path, "w").
+ * Returns NULL on failure, like fopen(). */
+static inline FILE *test_fopen_private(const char *path)
+{
+#ifdef _WIN32
+    int fd = _open(path, _O_WRONLY | _O_CREAT | _O_TRUNC, _S_IREAD | _S_IWRITE);
+    if (fd < 0) return NULL;
+    return _fdopen(fd, "w");
+#else
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (fd < 0) return NULL;
+    return fdopen(fd, "w");
+#endif
+}
 
 extern int _tf_failed;
 extern int _tf_run;

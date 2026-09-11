@@ -263,6 +263,39 @@ int test_cmd_platform_label_unknown_is_auto_detect(void);
 int test_config_profile_platform_missing_defaults_to_auto(void);
 int test_config_profile_platform_roundtrip(void);
 int test_config_profile_platform_garbage_maps_unknown(void);
+/* UNKNOWN safety category and the five auto-approve modes */
+int test_approval_mask_five_modes_by_four_categories(void);
+int test_approval_mixed_pipeline_unknown_and_write_not_approved_under_safe_write(void);
+int test_approval_unknown_blocked_when_permit_write_off(void);
+int test_approval_unknown_unblock_and_reblock(void);
+int test_auto_approve_mask_per_level(void);
+int test_auto_approve_mode_name_round_trip(void);
+int test_auto_approve_mode_label_per_mode(void);
+int test_auto_approve_mode_from_name_garbage_is_off(void);
+int test_auto_approve_mode_name_and_label_clamp_out_of_range(void);
+int test_config_auto_approve_mode_token_round_trip(void);
+int test_config_save_writes_new_token_not_old_numeric_key(void);
+int test_config_load_migrates_legacy_numeric_auto_approve(void);
+int test_config_load_new_token_wins_over_legacy_numeric(void);
+int test_config_load_garbage_auto_approve_mode_token_is_off(void);
+/* SAFE allow-list, UNKNOWN fallthroughs and the classification mask */
+int test_cmd_classify_linux_unrecognised_is_unknown(void);
+int test_cmd_classify_linux_unrecognised_with_redirect_is_write(void);
+int test_cmd_classify_linux_allow_list_vs_redirect(void);
+int test_cmd_classify_linux_allow_list_does_not_downgrade_write_or_critical(void);
+int test_cmd_classify_linux_safe_allow_list_file_and_text_tools(void);
+int test_cmd_classify_linux_safe_allow_list_system_inspectors(void);
+int test_cmd_classify_linux_safe_allow_list_network_diagnostics(void);
+int test_cmd_classify_linux_safe_allow_list_multitoken(void);
+int test_cmd_classify_linux_safe_rpm_pacman_query_prefix(void);
+int test_cmd_classify_linux_safe_iptables_save(void);
+int test_cmd_classify_linux_bare_only_safe_forms(void);
+int test_cmd_classify_network_platforms_unrecognised_is_unknown(void);
+int test_cmd_classify_network_display_filter_still_safe(void);
+int test_cmd_classify_mask_all_safe_pipeline(void);
+int test_cmd_classify_mask_unknown_and_safe_pipeline(void);
+int test_cmd_classify_mask_unknown_and_write_pipeline(void);
+int test_cmd_classify_mask_null_and_empty(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -2445,6 +2478,39 @@ int main(void) {
     failed += test_config_profile_platform_missing_defaults_to_auto();
     failed += test_config_profile_platform_roundtrip();
     failed += test_config_profile_platform_garbage_maps_unknown();
+    /* UNKNOWN safety category and the five auto-approve modes */
+    failed += test_approval_mask_five_modes_by_four_categories();
+    failed += test_approval_mixed_pipeline_unknown_and_write_not_approved_under_safe_write();
+    failed += test_approval_unknown_blocked_when_permit_write_off();
+    failed += test_approval_unknown_unblock_and_reblock();
+    failed += test_auto_approve_mask_per_level();
+    failed += test_auto_approve_mode_name_round_trip();
+    failed += test_auto_approve_mode_label_per_mode();
+    failed += test_auto_approve_mode_from_name_garbage_is_off();
+    failed += test_auto_approve_mode_name_and_label_clamp_out_of_range();
+    failed += test_config_auto_approve_mode_token_round_trip();
+    failed += test_config_save_writes_new_token_not_old_numeric_key();
+    failed += test_config_load_migrates_legacy_numeric_auto_approve();
+    failed += test_config_load_new_token_wins_over_legacy_numeric();
+    failed += test_config_load_garbage_auto_approve_mode_token_is_off();
+    /* SAFE allow-list, UNKNOWN fallthroughs and the classification mask */
+    failed += test_cmd_classify_linux_unrecognised_is_unknown();
+    failed += test_cmd_classify_linux_unrecognised_with_redirect_is_write();
+    failed += test_cmd_classify_linux_allow_list_vs_redirect();
+    failed += test_cmd_classify_linux_allow_list_does_not_downgrade_write_or_critical();
+    failed += test_cmd_classify_linux_safe_allow_list_file_and_text_tools();
+    failed += test_cmd_classify_linux_safe_allow_list_system_inspectors();
+    failed += test_cmd_classify_linux_safe_allow_list_network_diagnostics();
+    failed += test_cmd_classify_linux_safe_allow_list_multitoken();
+    failed += test_cmd_classify_linux_safe_rpm_pacman_query_prefix();
+    failed += test_cmd_classify_linux_safe_iptables_save();
+    failed += test_cmd_classify_linux_bare_only_safe_forms();
+    failed += test_cmd_classify_network_platforms_unrecognised_is_unknown();
+    failed += test_cmd_classify_network_display_filter_still_safe();
+    failed += test_cmd_classify_mask_all_safe_pipeline();
+    failed += test_cmd_classify_mask_unknown_and_safe_pipeline();
+    failed += test_cmd_classify_mask_unknown_and_write_pipeline();
+    failed += test_cmd_classify_mask_null_and_empty();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();

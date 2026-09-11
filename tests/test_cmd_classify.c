@@ -1911,33 +1911,50 @@ int test_cmd_classify_unknown_overlay_critical_verbs(void) {
 
 /* "write erase" is claimed; a bare "write" (no "erase" second token) is not
  * a network verb the overlay recognises and falls through to Linux, where
- * "write" is unclassified -> SAFE. */
+ * "write" is not a real Linux command either.
+ *
+ * CHANGED (UNKNOWN safety category, C2 fix): "write memory" used to assert
+ * CMD_SAFE here because an unrecognised Linux command fell through to SAFE.
+ * That fallthrough is now CMD_UNKNOWN (classify_linux_segment() reaches SAFE
+ * only via its explicit allow-list, and "write" is not on it), so the
+ * CMD_PLATFORM_UNKNOWN overlay -- which just delegates -- now honestly
+ * reports CMD_UNKNOWN too. Old -> CMD_SAFE, new -> CMD_UNKNOWN. */
 int test_cmd_classify_unknown_overlay_write_erase(void) {
     TEST_BEGIN();
     ASSERT_EQ((int)cmd_classify("write erase", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
-    ASSERT_EQ((int)cmd_classify("write memory", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("write memory", CMD_PLATFORM_UNKNOWN), (int)CMD_UNKNOWN);
     TEST_END();
 }
 
 /* "request system/restart/shutdown" is claimed; other "request ..." forms
- * fall through to Linux ("request" is not a Linux command -> SAFE). */
+ * fall through to Linux, where "request" is not a real command either.
+ *
+ * CHANGED (UNKNOWN safety category, C2 fix): "request support info" used to
+ * assert CMD_SAFE for the same reason as "write memory" above -- an
+ * unrecognised Linux command is now CMD_UNKNOWN, not SAFE. Old -> CMD_SAFE,
+ * new -> CMD_UNKNOWN. */
 int test_cmd_classify_unknown_overlay_request_verbs(void) {
     TEST_BEGIN();
     ASSERT_EQ((int)cmd_classify("request system reboot", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
     ASSERT_EQ((int)cmd_classify("request restart system", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
     ASSERT_EQ((int)cmd_classify("request shutdown system", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
-    ASSERT_EQ((int)cmd_classify("request support info", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("request support info", CMD_PLATFORM_UNKNOWN), (int)CMD_UNKNOWN);
     TEST_END();
 }
 
 /* "execute factoryreset/reboot/restore" is claimed; other "execute ..."
- * forms fall through to Linux ("execute" is not a Linux command -> SAFE). */
+ * forms fall through to Linux, where "execute" is not a real command either.
+ *
+ * CHANGED (UNKNOWN safety category, C2 fix): "execute ping 8.8.8.8" used to
+ * assert CMD_SAFE for the same reason as above -- an unrecognised Linux
+ * command is now CMD_UNKNOWN, not SAFE. Old -> CMD_SAFE, new ->
+ * CMD_UNKNOWN. */
 int test_cmd_classify_unknown_overlay_execute_verbs(void) {
     TEST_BEGIN();
     ASSERT_EQ((int)cmd_classify("execute factoryreset", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
     ASSERT_EQ((int)cmd_classify("execute reboot", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
     ASSERT_EQ((int)cmd_classify("execute restore config", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
-    ASSERT_EQ((int)cmd_classify("execute ping 8.8.8.8", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("execute ping 8.8.8.8", CMD_PLATFORM_UNKNOWN), (int)CMD_UNKNOWN);
     TEST_END();
 }
 
@@ -2059,14 +2076,278 @@ int test_cmd_classify_unknown_overlay_reset_forms(void) {
     TEST_END();
 }
 
+/* CHANGED (UNKNOWN safety category, C2 fix): "/ip firewall filter print"
+ * used to assert CMD_SAFE. The RouterOS-verb-last overlay above only claims
+ * a short critical-verb list for "/..." segments (none of which is "print"),
+ * so this falls through to classify_linux_segment(), which strips the
+ * leading path down to base command "ip" -- a real but subcommand-sensitive
+ * Linux command whose "firewall" token matches no rule. That used to fall
+ * through to the old SAFE bug; it is now honestly CMD_UNKNOWN, same as any
+ * other unrecognised Linux invocation. The absolute-path Linux command below
+ * is unaffected: it strips to base command "uptime", which is a genuine
+ * Linux allow-list entry. Old -> CMD_SAFE, new -> CMD_UNKNOWN. */
 int test_cmd_classify_unknown_overlay_routeros_paths(void) {
     TEST_BEGIN();
     ASSERT_EQ((int)cmd_classify("/system reset-configuration", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
     ASSERT_EQ((int)cmd_classify("/ip firewall filter remove numbers=0", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
     ASSERT_EQ((int)cmd_classify("/interface disable ether1", CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
-    /* a read-only RouterOS command, and a Linux absolute-path invocation,
-     * must both stay out of the way */
-    ASSERT_EQ((int)cmd_classify("/ip firewall filter print", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    /* a Linux absolute-path invocation of a real allow-listed command must
+     * stay out of the way */
+    ASSERT_EQ((int)cmd_classify("/ip firewall filter print", CMD_PLATFORM_UNKNOWN), (int)CMD_UNKNOWN);
     ASSERT_EQ((int)cmd_classify("/usr/bin/uptime", CMD_PLATFORM_UNKNOWN), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* ===================================================================
+ * CMD_UNKNOWN safety category (2026-09-11-unknown-safety-category-design.md
+ * section 3): Linux SAFE becomes an allow-list, and every network platform's
+ * "conservative -> CMD_WRITE" fallthrough becomes CMD_UNKNOWN.
+ * =================================================================== */
+
+/* An unrecognised Linux command is CMD_UNKNOWN, not SAFE -- this is the C2
+ * fix in its most direct form: classify_linux_segment() only reaches SAFE
+ * by matching an explicit rule now. */
+int test_cmd_classify_linux_unrecognised_is_unknown(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate --deeply -x", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    TEST_END();
+}
+
+/* A redirect still raises an unrecognised command to WRITE: the write comes
+ * from the shell redirect itself, not from recognising "frobnicate". */
+int test_cmd_classify_linux_unrecognised_with_redirect_is_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("frobnicate > /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* "cat x > y" is WRITE (the redirect beats the allow-list); "cat x" alone
+ * is SAFE (spec section 3, "Redirects still raise"). */
+int test_cmd_classify_linux_allow_list_vs_redirect(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("cat x > y", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("cat x", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* An allow-listed command that a write/critical rule also claims keeps the
+ * higher level: the allow-list is consulted last, not first (spec section
+ * 3). "tar" is on the write list; "find ... -delete" is caught by the
+ * critical scan before either list is reached. */
+int test_cmd_classify_linux_allow_list_does_not_downgrade_write_or_critical(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("tar czf backup.tar.gz /etc", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("find / -delete", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    TEST_END();
+}
+
+/* New single-token linux_safe_cmds[] entries (coverage spec 3.3), grouped
+ * roughly as the spec groups them. Every category of the section 3
+ * allow-list gets at least one assertion here. */
+int test_cmd_classify_linux_safe_allow_list_file_and_text_tools(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("tac /var/log/syslog", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("less /etc/passwd", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("tail -f /var/log/syslog", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("egrep 'foo|bar' file.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("fgrep literal file.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("rg pattern .", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("column -t file.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("cmp a.txt b.txt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("sha1sum file.iso", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("realpath ./file", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("dirname /usr/bin/bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("printf 'hi\\n'", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("true", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("false", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_linux_safe_allow_list_system_inspectors(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("cal", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("w", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("who", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("groups", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("lsb_release -a", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("arch", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("nproc", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("free -h", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("vmstat 1", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("iostat", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("mpstat", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("sar -u", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("pidstat", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("pstree", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("htop", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("blkid", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("findmnt", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("lsof -i", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("lspci", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("lsusb", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("lscpu", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("lsmod", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("dmidecode", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("sensors", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("getenforce", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("sestatus", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("env", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("printenv PATH", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("locale", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("which bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("whereis bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("type bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("man ls", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("history", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+int test_cmd_classify_linux_safe_allow_list_network_diagnostics(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("arp -a", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ping6 ::1", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("tracepath example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("mtr example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("host example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("whois example.com", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* Multi-token allow-list entries that don't fit the single-token
+ * linux_safe_cmds[] table and so were added to linux_subcmd_rules
+ * instead. */
+int test_cmd_classify_linux_safe_allow_list_multitoken(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("systemctl cat nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("systemctl show nginx", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("systemctl list-timers", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("nft list ruleset", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("ip neigh show", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("route -n", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("docker stats --no-stream", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("docker top mycontainer", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("kubectl top pods", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("kubectl explain pod.spec", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("kubectl api-resources", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("kubectl version", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* rpm -q* / pacman -Q*: any query subcommand beyond the exact -qa/-qi/-ql
+ * and -Q/-Qs/-Qi forms is still read-only. */
+int test_cmd_classify_linux_safe_rpm_pacman_query_prefix(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("rpm -qf /bin/bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("rpm -qc bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("pacman -Qo /bin/bash", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    /* a non-query rpm/pacman invocation is still flat WRITE by default */
+    ASSERT_EQ((int)cmd_classify("rpm -ivh package.rpm", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* "iptables-save" is its own binary, distinct from "iptables -S" (already
+ * covered by linux_subcmd_rules); both are read-only. */
+int test_cmd_classify_linux_safe_iptables_save(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("iptables-save", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* "date", "hostname", "dmesg" and "mount" are safe only bare -- any argument
+ * takes them off the blanket allow-list (spec 3.3's "*(bare)*" entries).
+ * "mount" already had its own bare-check before this change; the others are
+ * new. */
+int test_cmd_classify_linux_bare_only_safe_forms(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("date", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("date -s \"2026-09-11 12:00:00\"", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("date +%Y-%m-%d", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+
+    ASSERT_EQ((int)cmd_classify("hostname", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("hostname newname", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+
+    ASSERT_EQ((int)cmd_classify("dmesg", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("dmesg -C", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("dmesg -T", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+
+    ASSERT_EQ((int)cmd_classify("mount", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("mount /dev/sdb1 /mnt/data", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* An unrecognised command on every network platform is CMD_UNKNOWN, not the
+ * old "conservative" CMD_WRITE guess (spec section 3, covers IOS, NX-OS,
+ * ASA, ProCurve, Comware, Aruba CX, ArubaOS, PAN-OS, Junos, FortiOS, VyOS,
+ * MikroTik). */
+int test_cmd_classify_network_platforms_unrecognised_is_unknown(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_CISCO_IOS), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_CISCO_NXOS), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_CISCO_ASA), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_ARUBA_CX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_ARUBA_OS), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_PANOS), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_HP_PROCURVE), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_HP_COMWARE), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_JUNOS), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_FORTIOS), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_VYOS), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("frobnicate", CMD_PLATFORM_MIKROTIK), (int)CMD_UNKNOWN);
+    TEST_END();
+}
+
+/* The F2 display-filter fix (M1: "|" is a filter, not a pipe, on every
+ * platform but Linux) still holds with the new fallthrough -- a recognised
+ * "show ... | include ..." line must not be dragged down to CMD_UNKNOWN by
+ * treating "include ospf" as a second, unrecognised segment. */
+int test_cmd_classify_network_display_filter_still_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_CISCO_IOS), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("show running-config | include ospf", CMD_PLATFORM_JUNOS), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* ===== cmd_classify_mask() (design spec section 4 / section 8) =====
+ * A pipeline's mask is the set of categories across all its segments, not
+ * just the maximum -- this is what lets the auto-approve gate refuse a
+ * pipeline containing an unknown segment even when the pipeline's overall
+ * maximum would otherwise be permitted. */
+
+int test_cmd_classify_mask_all_safe_pipeline(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify_mask("ls | grep x", CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_SAFE));
+    TEST_END();
+}
+
+/* {SAFE, UNKNOWN}: the unrecognised first segment must show up in the mask
+ * even though the pipeline's plain maximum (via cmd_classify()) is also
+ * just CMD_UNKNOWN here -- this is the easy case before the harder one
+ * below. */
+int test_cmd_classify_mask_unknown_and_safe_pipeline(void) {
+    TEST_BEGIN();
+    unsigned mask = cmd_classify_mask("frobnicate | grep x", CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)mask, (int)(CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN)));
+    ASSERT_EQ((int)cmd_classify("frobnicate | grep x", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    TEST_END();
+}
+
+/* {UNKNOWN, WRITE}, maximum WRITE: the case the mask exists for. Collapsing
+ * to a maximum alone would lose the fact that the pipeline also contains an
+ * unrecognised segment -- under a "safe + write" auto-approve mode that
+ * excludes unknown, this pipeline must not auto-approve just because its
+ * maximum is a permitted category (design spec section 4). */
+int test_cmd_classify_mask_unknown_and_write_pipeline(void) {
+    TEST_BEGIN();
+    unsigned mask = cmd_classify_mask("frobnicate | tee /etc/f", CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)mask, (int)(CMD_MASK_OF(CMD_UNKNOWN) | CMD_MASK_OF(CMD_WRITE)));
+    ASSERT_EQ((int)cmd_classify("frobnicate | tee /etc/f", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_mask_null_and_empty(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify_mask(NULL, CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_SAFE));
+    ASSERT_EQ((int)cmd_classify_mask("", CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_SAFE));
     TEST_END();
 }

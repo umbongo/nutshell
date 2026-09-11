@@ -236,11 +236,16 @@ static int draw_text_utf8(HDC hdc, const char *text, RECT *rc, UINT flags)
 /* ── Safety tag colour ──────────────────────────────────────────────── */
 
 /* Safety tag chip colours, from ns_tokens() per the design spec's table:
- * SAFE -> text_dim, WRITE -> warning, CRITICAL -> danger. */
+ * SAFE -> text_dim, UNKNOWN -> info ("needs attention, not yet alarming"),
+ * WRITE -> warning, CRITICAL -> danger. */
 static void safety_tag_colors(CmdSafetyLevel level, COLORREF *bg, COLORREF *fg)
 {
     const ThemeTokens *tok = ns_tokens();
     switch (level) {
+    case CMD_UNKNOWN:
+        *bg = RGB_FROM_THEME(tok->info.base);
+        *fg = RGB_FROM_THEME(tok->info.label);
+        break;
     case CMD_WRITE:
         *bg = RGB_FROM_THEME(tok->warning.base);
         *fg = RGB_FROM_THEME(tok->warning.label);
@@ -259,6 +264,7 @@ static void safety_tag_colors(CmdSafetyLevel level, COLORREF *bg, COLORREF *fg)
 static const char *safety_tag_text(CmdSafetyLevel level)
 {
     switch (level) {
+    case CMD_UNKNOWN:  return "UNKNOWN";
     case CMD_WRITE:    return "WRITE";
     case CMD_CRITICAL: return "CRITICAL";
     default:           return "SAFE";

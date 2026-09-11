@@ -88,7 +88,7 @@ int test_config_load_invalid_json(void)
 {
     TEST_BEGIN();
     /* Write invalid JSON to tmp file. */
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs("not valid json", f);
     fclose(f);
@@ -104,7 +104,7 @@ int test_config_load_empty_object(void)
     TEST_BEGIN();
     /* Valid JSON but no "settings" or "profiles" keys — should return
      * a Config with defaults and an empty profile list. */
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs("{}", f);
     fclose(f);
@@ -451,7 +451,7 @@ int test_config_validate_empty_font(void)
 int test_config_load_realistic(void)
 {
     TEST_BEGIN();
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs(
         "{\n"
@@ -505,7 +505,7 @@ int test_config_load_realistic(void)
 int test_config_load_missing_ai_fields(void)
 {
     TEST_BEGIN();
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs(
         "{\n"
@@ -536,7 +536,7 @@ int test_config_load_missing_ai_fields(void)
 int test_config_load_unknown_fields(void)
 {
     TEST_BEGIN();
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs(
         "{\n"
@@ -566,7 +566,7 @@ int test_config_load_unknown_fields(void)
 int test_config_load_out_of_range(void)
 {
     TEST_BEGIN();
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs(
         "{\n"
@@ -937,7 +937,7 @@ int test_config_load_legacy_no_auto_connect(void)
 {
     TEST_BEGIN();
     /* A config written before these fields existed must default them. */
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}", f);
     fclose(f);
@@ -979,7 +979,7 @@ int test_config_validate_review_fix_settings_clamp(void)
     settings_validate(&s);
     ASSERT_EQ(s.paste_confirm, 1);
     ASSERT_EQ(s.open_session_manager_at_start, 1);
-    ASSERT_EQ(s.ai_auto_approve_default, 3);
+    ASSERT_EQ(s.ai_auto_approve_default, 5);
 
     s.paste_confirm = 0;
     s.open_session_manager_at_start = 0;
@@ -1024,7 +1024,7 @@ int test_config_load_legacy_no_review_fix_settings(void)
 {
     TEST_BEGIN();
     /* A config written before these fields existed must default them. */
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs("{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": []}", f);
     fclose(f);
@@ -1045,10 +1045,135 @@ int test_config_load_ignores_old_auto_approve_all_key(void)
     /* The old boolean key is dropped with no migration: a config file that
      * still has it must fall back to the ai_auto_approve_default default
      * (0), not read/coerce the stale key. */
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs("{\"settings\": {\"font\": \"Consolas\", "
           "\"ai_auto_approve_all\": true}, \"profiles\": []}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(cfg->settings.ai_auto_approve_default, 0);
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * Auto Approve mode: the new string-token key and migration from the old
+ * numeric ai_auto_approve_default key
+ * (2026-09-11-unknown-safety-category-design.md §7/§8)
+ * ============================================================ */
+
+int test_config_auto_approve_mode_token_round_trip(void)
+{
+    TEST_BEGIN();
+    /* Every one of the six modes (0 = off .. 5 = all) round-trips through
+     * save/load via the new "ai_auto_approve_mode" string token. */
+    for (int i = 0; i <= 5; i++) {
+        Config *orig = config_new_default();
+        ASSERT_NOT_NULL(orig);
+        orig->settings.ai_auto_approve_default = i;
+
+        int rc = config_save(orig, TMP_CFG);
+        ASSERT_EQ(rc, 0);
+
+        Config *loaded = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(loaded);
+        ASSERT_EQ(loaded->settings.ai_auto_approve_default, i);
+
+        config_free(orig);
+        config_free(loaded);
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+int test_config_save_writes_new_token_not_old_numeric_key(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+    orig->settings.ai_auto_approve_default = 3; /* safe+write */
+    int rc = config_save(orig, TMP_CFG);
+    ASSERT_EQ(rc, 0);
+
+    FILE *f = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(f);
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    buf[n] = '\0';
+    fclose(f);
+
+    ASSERT_TRUE(strstr(buf, "\"ai_auto_approve_mode\": \"safe+write\"") != NULL);
+    /* The old numeric key is not written back. */
+    ASSERT_NULL(strstr(buf, "ai_auto_approve_default"));
+
+    config_free(orig);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_migrates_legacy_numeric_auto_approve(void)
+{
+    TEST_BEGIN();
+    /* No new token present: migrate the old numeric key. 0->off, 1->safe,
+     * 2->safe+write, 3->all. Old 2 must land on new mode 3 ("safe+write"),
+     * NOT new mode 2 (now "safe+unknown") -- that remap, caused by
+     * CMD_UNKNOWN's insertion shifting the meaning of the numbers after it,
+     * is the whole reason this migration exists. */
+    static const int k_legacy_to_mode[4] = { 0, 1, 3, 5 };
+    for (int legacy = 0; legacy <= 3; legacy++) {
+        char json[256];
+        snprintf(json, sizeof(json),
+                 "{\"settings\": {\"font\": \"Consolas\", "
+                 "\"ai_auto_approve_default\": %d}, \"profiles\": []}", legacy);
+        FILE *f = test_fopen_private(TMP_CFG);
+        ASSERT_NOT_NULL(f);
+        fputs(json, f);
+        fclose(f);
+
+        Config *cfg = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(cfg);
+        if (cfg->settings.ai_auto_approve_default != k_legacy_to_mode[legacy]) {
+            printf("  legacy=%d: expected mode %d, got %d\n", legacy,
+                   k_legacy_to_mode[legacy], cfg->settings.ai_auto_approve_default);
+            _tf_local_fail = 1;
+        }
+        config_free(cfg);
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+int test_config_load_new_token_wins_over_legacy_numeric(void)
+{
+    TEST_BEGIN();
+    /* Both keys present: the new string token is authoritative and the
+     * legacy numeric key is ignored, not merged or preferred. */
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs("{\"settings\": {\"font\": \"Consolas\", "
+          "\"ai_auto_approve_default\": 1, "
+          "\"ai_auto_approve_mode\": \"safe+unknown\"}, \"profiles\": []}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    /* mode 2 = safe+unknown, from the token -- not legacy 1's "safe". */
+    ASSERT_EQ(cfg->settings.ai_auto_approve_default, 2);
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_garbage_auto_approve_mode_token_is_off(void)
+{
+    TEST_BEGIN();
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs("{\"settings\": {\"font\": \"Consolas\", "
+          "\"ai_auto_approve_mode\": \"nonsense\"}, \"profiles\": []}", f);
     fclose(f);
 
     Config *cfg = config_load(TMP_CFG);
@@ -1068,7 +1193,7 @@ int test_config_profile_platform_missing_defaults_to_auto(void)
     TEST_BEGIN();
     /* A profile written before "platform" existed must default to "auto",
      * same as config_profile_new() does for a brand-new profile. */
-    FILE *f = fopen(TMP_CFG, "w");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs("{\"settings\": {}, \"profiles\": ["
           "{\"name\": \"Old Box\", \"host\": \"old.example.com\"}"

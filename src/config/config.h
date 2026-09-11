@@ -45,7 +45,11 @@ typedef struct {
     int  paste_confirm;                  /* confirm before pasting: 1 = on (default) */
     int  open_session_manager_at_start;  /* show Session Manager at startup: 0 = off (default) */
     int  ai_auto_approve_default;        /* Auto approve level for new sessions: 0 = off (default),
-                                           * 1 = safe only, 2 = safe + write, 3 = all */
+                                           * 1 = safe only, 2 = safe + unknown,
+                                           * 3 = safe + write, 4 = safe + unknown + write,
+                                           * 5 = all. Persisted as a string token
+                                           * (ai_auto_approve_mode); the old numeric key is
+                                           * migrated on load. */
 } Settings;
 
 typedef struct {

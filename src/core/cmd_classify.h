@@ -5,9 +5,12 @@
 #include <stddef.h>
 
 typedef enum {
-    CMD_SAFE,       /* Read-only, always allowed */
-    CMD_WRITE,      /* Modifies state, requires permit_write */
-    CMD_CRITICAL    /* Can cause outage/data loss, requires permit_write + visual warning */
+    CMD_SAFE     = 0,  /* Provably read-only: matched an explicit safe rule */
+    CMD_UNKNOWN  = 1,  /* No rule claimed it -- could be anything. Gated like
+                        * a write: "I don't recognise this" is not a promise
+                        * that it only reads. */
+    CMD_WRITE    = 2,  /* Modifies state, requires permit_write */
+    CMD_CRITICAL = 3   /* Can cause outage/data loss, requires permit_write + visual warning */
 } CmdSafetyLevel;
 
 typedef enum {
@@ -41,6 +44,17 @@ CmdSafetyLevel cmd_classify(const char *command, CmdPlatform platform);
  * reason_buf may be NULL. Returns safety level. */
 CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
                                 char *reason_buf, size_t reason_buf_size);
+
+/* The set of categories a command's segments span, as a bitmask.
+ *
+ * cmd_classify() returns the single worst category, which is what the
+ * approval card shows. That is not enough to decide auto-approval: the
+ * permitted sets are not nested (a "safe and write" mode deliberately
+ * excludes unknown), so a pipeline of {UNKNOWN, WRITE} must not pass a
+ * write-permitting mode just because WRITE is its maximum. The mask keeps
+ * every segment's category so the gate can test the whole set. */
+#define CMD_MASK_OF(level) (1u << (unsigned)(level))
+unsigned cmd_classify_mask(const char *command, CmdPlatform platform);
 
 /* Config-token and UI-label mappings for the platform setting.
  * cmd_platform_from_name() maps an unrecognised or NULL name -- and the

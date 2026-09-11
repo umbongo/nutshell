@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.1.15 \
+**Version**: v1.1.16 \
 **Build Date**: 2026-09-10 \
 **Author**: Thomas Sulkiewicz
 
@@ -21,7 +21,7 @@ The standout feature: an integrated AI panel that sits alongside your terminal s
 - **Streaming responses** — real-time token streaming, with a collapsible "Thinking" disclosure for chain-of-thought / reasoning
 - **Multi-provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or any OpenAI-compatible endpoint
 - **Per-session context** — attach notes to each server profile (e.g. "production database — read-only") that guide the AI's behaviour
-- **Safety controls** — a Read-only / Read + write mode switch and an Auto approve level (off / safe only / safe + write / all) sit directly above the input, next to a context-usage meter
+- **Safety controls** — a Read-only / Read + write mode switch and an Auto approve level (off / safe only / safe + unknown / safe + write / safe + unknown + write / all) sit directly above the input, next to a context-usage meter
 - **Guided empty states** — the panel always opens: it shows starter suggestions with nothing to ask yet, a button straight to Settings when no API key is set, and a button to the Session Manager when no session is connected
 
 ## Pre-built Binary
@@ -64,6 +64,7 @@ Open the **Session Manager** with **Ctrl+T** or by clicking the **+** area in th
 | **Port** | SSH port (default: 22) |
 | **Username** | Login username |
 | **Auth Type** | Password or SSH Key |
+| **Platform** | Which CLI this host speaks, used to classify command safety. **Auto-detect** (the default) reads the login banner and prompt; pin it explicitly to Linux/Unix, Cisco IOS/IOS-XE, Cisco NX-OS, Cisco ASA, HP ProCurve, HPE Comware, Aruba OS-CX, ArubaOS, PAN-OS, Junos, FortiOS, VyOS or RouterOS when you'd rather not rely on detection |
 | **Password / Key Path** | Password for password auth, or path to private key file for key auth |
 | **Passphrase** | Passphrase for encrypted SSH keys (shown when auth type is Key) |
 | **AI Notes** | Per-session context notes sent to the AI assistant (optional) |
@@ -183,7 +184,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 - **Max terminal lines** — how much of the terminal the assistant reads as context, from 1 to 50,000 lines (default: 1,000). Each line becomes part of the context sent with every message: a larger window gives the assistant more of your session to reason about, at a proportionate cost in tokens.
 - **System instructions** — global instructions included in every AI conversation (per-session AI Notes take precedence)
 - **Render AI markdown** — format AI replies as markdown; turn off to see raw text. Headings, list/blockquote markers, and table header text pick up the theme's link hue, and code (inline and fenced) picks up the theme's info hue, so the structure of a reply reads at a glance
-- **Auto approve for new sessions** — the starting Auto approve level for each new session: Off / Safe only / Safe + write / All (default: Off). Safe only runs read-only commands without asking; Safe + write adds write commands; All adds critical ones. Write and critical commands still need Permit write, and the status line in the AI panel can change the level per session from there.
+- **Auto approve for new sessions** — the starting Auto approve level for each new session: Off / Safe only / Safe + unknown / Safe + write / Safe + unknown + write / All (default: Off). The levels are a *set* of permitted categories rather than a sliding scale — **Safe + write** deliberately excludes unknown commands, so pick **Safe + unknown + write** if you want both. Anything above safe still needs Read + write, and the status line in the AI panel can change the level per session from there.
 
 #### AI Assistant > Web Access
 - **Search engine** — None, DuckDuckGo (API), DuckDuckGo (HTML), or Custom
@@ -207,8 +208,8 @@ The AI assistant can see the recent history of your terminal output (1,000 lines
 
 A line above the input box, always visible once a session is connected:
 
-- **Mode switch** — a two-segment control, **Read-only** / **Read + write**. Read-only restricts the AI to safe, non-mutating commands (`ls`, `cat`, `pwd`, etc.); **Read + write** is tinted with a warning colour whenever it's selected, so a permissive session stays visible at a glance
-- **Auto approve** — click to cycle **off** → **safe only** → **safe + write** → **all** → **off**. A new session starts from the **Auto approve for new sessions** level set in Settings under AI Assistant > Behaviour; clicking here only changes the current session
+- **Mode switch** — a two-segment control, **Read-only** / **Read + write**. Read-only restricts the AI to commands that are *provably* read-only (`ls`, `cat`, `pwd`, etc.) — anything the classifier can't vouch for, including commands it doesn't recognise, is held back; **Read + write** is tinted with a warning colour whenever it's selected, so a permissive session stays visible at a glance
+- **Auto approve** — click to cycle **off** → **safe only** → **safe + unknown** → **safe + write** → **safe + unknown + write** → **all** → **off**. A new session starts from the **Auto approve for new sessions** level set in Settings under AI Assistant > Behaviour; clicking here only changes the current session
 - **Context meter** — a small bar plus `used / limit` numbers showing how much of the model's context window the conversation is using; hover it for the exact token counts
 
 #### Sending Messages
@@ -224,12 +225,47 @@ A line above the input box, always visible once a session is connected:
 When the AI suggests commands, they land in an approval card in the chat thread:
 
 - **Header** — "N commands · M held", plus the reason (e.g. "Permit write is off") when any are held back
-- **Rows** — a checkbox, the command text, and a risk tag (**SAFE** / **WRITE** / **CRITICAL**). Held rows show a disabled checkbox and dimmed text. Pending safe commands start checked
+- **Rows** — a checkbox, the command text, and a risk tag (**SAFE** / **UNKNOWN** / **WRITE** / **CRITICAL**). Held rows show a disabled checkbox and dimmed text. Pending safe commands start checked
 - **Actions** — **Deny all** rejects every row; **Run N selected** executes the checked rows (disabled when nothing is checked)
 
 A card never blocks the input — keep chatting, ask something else, or just scroll past it, and it stays right there, pending, for as long as the session lasts. Every reply that suggests commands gets its own card, so more than one can be pending at once; acting on one (or letting its approved commands finish running) never touches any other. Sending is only held up while a reply is actually streaming in or the dispatcher is mid-run sending an already-approved batch.
 
 With session Auto approve on, safe rows are approved and start running the moment they arrive, same as before — the card just shows them as executing instead of waiting for a click. Approved commands are sent one at a time: each one waits for the terminal to return to a shell prompt before the next is typed, so a command that stops at a password or confirmation prompt simply holds the queue instead of racing ahead. Once the last command's prompt has returned, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed; if another card's commands are waiting to run, they start the moment that continuation finishes.
+
+#### How Commands Are Classified
+
+Every command the AI proposes is classified before it can run, and the result drives both the
+risk tag on the card and whether Auto approve may run it unattended.
+
+| Category | Meaning | Examples |
+|----------|---------|----------|
+| **SAFE** | Provably read-only — it matched an explicit rule saying so | `ls -la`, `show running-config`, `systemctl status nginx`, `apt list`, `kubectl get pods` |
+| **UNKNOWN** | No rule claimed it. It might read, it might wipe the disk — the classifier isn't guessing | anything not in the tables: a local script, an unusual tool, a vendor command Nutshell hasn't been taught |
+| **WRITE** | Changes state, recoverable with another command | `mv`, `apt install`, `configure terminal`, `docker restart` |
+| **CRITICAL** | Outage, data loss or lock-out | `rm -rf`, `reload`, `write erase`, `commit`, `no username admin`, `kubectl drain` |
+
+**UNKNOWN is a real answer, not a fallback.** "I don't recognise this" is a different claim from
+"this writes", and it is the honest one for a command no rule matched. It is gated like a write:
+under **Read-only** an unrecognised command is held back, because nothing proved it safe.
+
+**Classification is per-device.** A profile's **Platform** decides which ruleset applies, since
+the same word means different things on different systems — `reload` reboots a Cisco switch,
+`commit` applies a firewall policy on PAN-OS and Junos, `undo` removes configuration on Comware.
+Ten CLI families are covered: Linux/Unix, Cisco IOS/IOS-XE, NX-OS and ASA, HP ProCurve and HPE
+Comware, Aruba OS-CX and ArubaOS, PAN-OS, Junos, FortiOS, VyOS and RouterOS.
+
+With **Auto-detect** (the default) Nutshell reads the login banner and first prompt. It only
+resolves on a positive signal and never guesses between families that share a prompt shape —
+`hostname#` belongs to six of them, and `user@host>` to both Junos and PAN-OS. Until it resolves,
+and for good if it never does, the session classifies with the Linux rules plus an overlay of
+verbs that are destructive on some network CLI and aren't Linux commands at all (`reload`,
+`erase`, `commit`, `rollback`, `undo`, `request system …`), so an unrecognised switch can't slip
+a reboot through as a safe command. The overlay only ever raises a command's category.
+
+**A pipeline is classified segment by segment**, and Auto approve runs it only when *every*
+segment is permitted. `unknown-thing | tee /etc/hosts` is both unknown and write, so a
+"safe + write" session leaves it for you to approve by hand, even though the card shows it as
+WRITE — the worst single category.
 
 #### Thought Process
 

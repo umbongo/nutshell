@@ -313,6 +313,23 @@ static const SubcmdRule linux_subcmd_rules[] = {
     { "npm", "ls",   CMD_SAFE },
     { "npm", "view", CMD_SAFE },
 
+    /* --- further spec 3.3 additions: multi-token allow-list entries that
+     * don't fit the single-token linux_safe_cmds[] table (added while
+     * wiring up the C2 allow-list fallthrough -- see the report for what
+     * was deliberately left off) --- */
+    { "systemctl", "cat",          CMD_SAFE },
+    { "systemctl", "show",         CMD_SAFE },
+    { "systemctl", "list-timers",  CMD_SAFE },
+    { "nft",       "list",         CMD_SAFE },
+    { "ip",        "neigh",        CMD_SAFE },
+    { "route",     "-n",           CMD_SAFE },
+    { "docker",    "stats",        CMD_SAFE },
+    { "docker",    "top",          CMD_SAFE },
+    { "kubectl",   "top",          CMD_SAFE },
+    { "kubectl",   "explain",      CMD_SAFE },
+    { "kubectl",   "api-resources", CMD_SAFE },
+    { "kubectl",   "version",      CMD_SAFE },
+
     { NULL, NULL, CMD_SAFE }
 };
 
@@ -357,6 +374,50 @@ static const ThreeTokenRule linux_3token_rules[] = {
 
 /* kill with -9 flag is critical, plain kill is write */
 static const char *kill_critical_flags[] = { "-9", "-KILL", "-SIGKILL", NULL };
+
+/* ----- C2 fix / spec 3.3: Linux SAFE allow-list -----
+ * classify_linux_segment() no longer treats "no rule matched" as SAFE --
+ * that was audit finding C2, where an unrecognised command classified SAFE
+ * and auto-approved at the lowest auto-approve level. The table below is
+ * coverage-spec section 3.3 lifted into an explicit allow-list, consulted
+ * last -- after every write/critical rule above has had its chance to claim
+ * the command, so "tar" (write list) and "find ... -delete" (critical,
+ * scanned above) are unaffected by anything in it.
+ *
+ * Left out of this table, and handled separately, because they are safe
+ * only in a bare/no-argument form and a blanket listing would wrongly wave
+ * through their write forms too: "mount" (existing bare-check further
+ * down, WRITE with any argument), "date" and "dmesg" (bare-check added
+ * below; "date -s" / "dmesg -C" are already WRITE via linux_subcmd_rules),
+ * "hostname" (bare-check added below).
+ *
+ * "reset" names no command in coverage spec 3.3, but is included here
+ * because a bare "reset" really is the harmless terminfo terminal reset --
+ * see test_cmd_classify_unknown_overlay_reset_forms, which relies on
+ * classify_linux_segment("reset", ...) staying SAFE when the
+ * CMD_PLATFORM_UNKNOWN overlay delegates a bare "reset" to it. */
+static const char *linux_safe_cmds[] = {
+    "ls", "dir", "cat", "tac", "less", "more", "head", "tail",
+    "grep", "egrep", "fgrep", "rg", "wc", "sort", "uniq", "cut", "tr",
+    "column", "diff", "cmp", "md5sum", "sha1sum", "sha256sum",
+    "file", "stat", "readlink", "realpath", "basename", "dirname", "tree",
+    "pwd", "echo", "printf", "true", "false", "cal", "uptime",
+    "w", "who", "whoami", "id", "groups", "uname",
+    "lsb_release", "arch", "nproc",
+    "free", "vmstat", "iostat", "mpstat", "sar", "pidstat",
+    "ps", "pstree", "top", "htop",
+    "df", "du", "lsblk", "blkid", "findmnt",
+    "lsof", "lspci", "lsusb", "lscpu", "lsmod", "dmidecode", "sensors",
+    "getenforce", "sestatus",
+    "env", "printenv", "locale", "which", "whereis", "type", "man", "history",
+    "netstat", "ss", "arp",
+    "ping", "ping6", "traceroute", "tracepath", "mtr",
+    "dig", "host", "nslookup", "whois",
+    "last", "lastlog",
+    "iptables-save",
+    "reset",
+    NULL
+};
 
 /* ----- Token extraction helpers ----- */
 
@@ -749,6 +810,31 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         }
     }
 
+    /* rpm -q* / pacman -Q*: any query subcommand is read-only (spec 3.3
+     * writes these as "-q*" / "-Q*" -- the exact -qa/-qi/-ql and
+     * -Q/-Qs/-Qi rows above in linux_subcmd_rules only cover the common
+     * forms; this prefix check catches the rest, e.g. "-qf", "-Qo"). Must
+     * run before the linux_write_cmds check below, since both "rpm" and
+     * "pacman" are flat WRITE by default. */
+    if (tok_eq(base1, base1_len, "rpm")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_prefix(tok2_start, tok2_len, "-q")) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "rpm -q*: query, read-only");
+            return redir;
+        }
+    }
+    if (tok_eq(base1, base1_len, "pacman")) {
+        const char *p2 = p;
+        if (next_token(&p2, &tok2_start, &tok2_len) &&
+            tok_prefix(tok2_start, tok2_len, "-Q")) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "pacman -Q*: query, read-only");
+            return redir;
+        }
+    }
+
     if (tok_in_list(base1, base1_len, linux_write_cmds)) {
         CmdSafetyLevel level = CMD_WRITE;
         if (reason_buf && reason_buf_size > 0)
@@ -776,6 +862,10 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
                 return level > redir ? level : redir;
             }
         }
+        /* No in-place flag: sed/perl without "-i"/"-pi" writes to stdout,
+         * not to the file -- read-only (C2 fix: explicit now rather than
+         * an implicit fall-through to the old SAFE bug). */
+        return redir;
     }
 
     if (tok_eq(base1, base1_len, "curl")) {
@@ -931,6 +1021,35 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         return level > redir ? level : redir;
     }
 
+    /* date: bare (queries the current time) is SAFE. "date -s ..." is
+     * already WRITE via the linux_subcmd_rules two-token match above; any
+     * other argument form is not blanket-SAFE (spec 3.3: "date" *(bare)*)
+     * -- falls through unclassified rather than being listed in
+     * linux_safe_cmds. */
+    if (tok_eq(base1, base1_len, "date")) {
+        const char *p2 = p;
+        if (!next_token(&p2, &tok2_start, &tok2_len))
+            return redir;
+    }
+
+    /* hostname: bare (queries the current host name) is SAFE. "hostname
+     * newname" changes it, so -- like "date" above -- this is not
+     * blanket-SAFE (spec 3.3: "hostname" *(bare)*). */
+    if (tok_eq(base1, base1_len, "hostname")) {
+        const char *p2 = p;
+        if (!next_token(&p2, &tok2_start, &tok2_len))
+            return redir;
+    }
+
+    /* dmesg: bare (prints the kernel ring buffer) is SAFE. "dmesg -C" is
+     * already WRITE via linux_subcmd_rules above; other forms are not
+     * blanket-SAFE (spec 3.3: "dmesg" *(bare)*). */
+    if (tok_eq(base1, base1_len, "dmesg")) {
+        const char *p2 = p;
+        if (!next_token(&p2, &tok2_start, &tok2_len))
+            return redir;
+    }
+
     /* journalctl --vacuum-*: prefix match on the subcommand */
     if (tok_eq(base1, base1_len, "journalctl")) {
         const char *scan = p;
@@ -968,7 +1087,26 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         return level > redir ? level : redir;
     }
 
-    return redir;
+    /* C2 fix (spec 3, coverage spec 3.3): no write/critical rule and no
+     * sudo escalation claimed this command. This used to fall through to
+     * SAFE here -- the audit C2 bug, where an unrecognised command
+     * auto-approved at the lowest auto-approve level. It now reaches SAFE
+     * only by matching the explicit allow-list above (the subcommand rules)
+     * or linux_safe_cmds below; anything else is honestly CMD_UNKNOWN,
+     * combined with whatever scan_redirects already found -- a redirect
+     * still raises UNKNOWN to WRITE ("frobnicate > /etc/passwd" is WRITE,
+     * not UNKNOWN, because the redirect itself writes regardless of
+     * whether "frobnicate" is recognised). */
+    if (tok_in_list(base1, base1_len, linux_safe_cmds))
+        return redir;
+
+    {
+        CmdSafetyLevel level = CMD_UNKNOWN;
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "unrecognised command: %.*s",
+                     (int)base1_len, base1);
+        return level > redir ? level : redir;
+    }
 }
 
 /* ----- Per-segment Cisco IOS classification ----- */
@@ -1396,8 +1534,16 @@ static CmdSafetyLevel classify_cisco_ios_segment(const char *seg, size_t seg_len
         return CMD_WRITE;
     }
 
-    /* Default for network devices: conservative -> CMD_WRITE */
-    return CMD_WRITE;
+    /* No write/critical rule claimed this IOS line. It used to guess
+     * CMD_WRITE here ("conservative"); that was still a guess, not a
+     * finding, so an unrecognised command on the switch is now honestly
+     * CMD_UNKNOWN rather than asserted as a write (spec section 3, "Network
+     * platforms fall through to UNKNOWN"). NX-OS and ASA inherit this via
+     * their delegation to classify_cisco_ios_segment() below. */
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "unrecognised IOS command: %.*s",
+                 (int)tok1_len, tok1_start);
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment Cisco NX-OS classification (inherits IOS + extras) ----- */
@@ -2003,8 +2149,12 @@ static CmdSafetyLevel classify_aruba_cx_segment(const char *seg, size_t seg_len,
         return CMD_WRITE;
     }
 
-    /* Default for network devices: conservative -> CMD_WRITE */
-    return CMD_WRITE;
+    /* No write/critical rule claimed this AOS-CX line: honestly CMD_UNKNOWN
+     * rather than a guessed CMD_WRITE (spec section 3). */
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "unrecognised AOS-CX command: %.*s",
+                 (int)tok1_len, tok1_start);
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment ArubaOS (wireless) classification ----- */
@@ -2261,8 +2411,12 @@ static CmdSafetyLevel classify_aruba_os_segment(const char *seg, size_t seg_len,
         return CMD_WRITE;
     }
 
-    /* Default for network devices: conservative -> CMD_WRITE */
-    return CMD_WRITE;
+    /* No write/critical rule claimed this ArubaOS line: honestly
+     * CMD_UNKNOWN rather than a guessed CMD_WRITE (spec section 3). */
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "unrecognised ArubaOS command: %.*s",
+                 (int)tok1_len, tok1_start);
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment PAN-OS classification ----- */
@@ -2663,8 +2817,12 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
         return CMD_WRITE;
     }
 
-    /* Default for PAN-OS: conservative -> CMD_WRITE */
-    return CMD_WRITE;
+    /* No write/critical rule claimed this PAN-OS line: honestly CMD_UNKNOWN
+     * rather than a guessed CMD_WRITE (spec section 3). */
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "unrecognised PAN-OS command: %.*s",
+                 (int)tok1_len, tok1_start);
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment HP ProCurve / ProVision classification ----- */
@@ -2837,8 +2995,12 @@ static CmdSafetyLevel classify_hp_procurve_segment(const char *seg, size_t seg_l
         return CMD_WRITE;
     }
 
-    /* Default for network devices: conservative -> CMD_WRITE */
-    return CMD_WRITE;
+    /* No write/critical rule claimed this ProCurve line: honestly
+     * CMD_UNKNOWN rather than a guessed CMD_WRITE (spec section 3). */
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "unrecognised ProCurve command: %.*s",
+                 (int)tok1_len, tok1_start);
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment HPE Comware 5/7 (H3C) classification ----- */
@@ -3086,8 +3248,12 @@ static CmdSafetyLevel classify_hp_comware_segment(const char *seg, size_t seg_le
         return CMD_WRITE;
     }
 
-    /* Default for network devices: conservative -> CMD_WRITE */
-    return CMD_WRITE;
+    /* No write/critical rule claimed this Comware line: honestly
+     * CMD_UNKNOWN rather than a guessed CMD_WRITE (spec section 3). */
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "unrecognised Comware command: %.*s",
+                 (int)tok1_len, tok1_start);
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment Juniper Junos classification ----- */
@@ -3349,8 +3515,12 @@ static CmdSafetyLevel classify_junos_segment(const char *seg, size_t seg_len,
         return CMD_WRITE;
     }
 
-    /* Default for network devices: conservative -> CMD_WRITE */
-    return CMD_WRITE;
+    /* No write/critical rule claimed this Junos line: honestly CMD_UNKNOWN
+     * rather than a guessed CMD_WRITE (spec section 3). */
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "unrecognised Junos command: %.*s",
+                 (int)tok1_len, tok1_start);
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment Fortinet FortiOS classification ----- */
@@ -3537,8 +3707,12 @@ static CmdSafetyLevel classify_fortios_segment(const char *seg, size_t seg_len,
         return CMD_WRITE;
     }
 
-    /* Default for network devices: conservative -> CMD_WRITE */
-    return CMD_WRITE;
+    /* No write/critical rule claimed this FortiOS line: honestly
+     * CMD_UNKNOWN rather than a guessed CMD_WRITE (spec section 3). */
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "unrecognised FortiOS command: %.*s",
+                 (int)tok1_len, tok1_start);
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment VyOS classification ----- */
@@ -3654,8 +3828,12 @@ static CmdSafetyLevel classify_vyos_segment(const char *seg, size_t seg_len,
         return CMD_WRITE;
     }
 
-    /* Default for network devices: conservative -> CMD_WRITE */
-    return CMD_WRITE;
+    /* No write/critical rule claimed this VyOS line: honestly CMD_UNKNOWN
+     * rather than a guessed CMD_WRITE (spec section 3). */
+    if (reason_buf && reason_buf_size > 0)
+        snprintf(reason_buf, reason_buf_size, "unrecognised VyOS command: %.*s",
+                 (int)tok1_len, tok1_start);
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment MikroTik RouterOS classification -----
@@ -3724,10 +3902,12 @@ static CmdSafetyLevel classify_mikrotik_segment(const char *seg, size_t seg_len,
             return CMD_SAFE;
     }
 
-    /* Otherwise WRITE, as with the other network platforms */
+    /* No critical/write/safe verb found anywhere in the segment: honestly
+     * CMD_UNKNOWN rather than a guessed CMD_WRITE, as with the other
+     * network platforms (spec section 3). */
     if (reason_buf && reason_buf_size > 0)
-        snprintf(reason_buf, reason_buf_size, "RouterOS command");
-    return CMD_WRITE;
+        snprintf(reason_buf, reason_buf_size, "unrecognised RouterOS command");
+    return CMD_UNKNOWN;
 }
 
 /* ----- Per-segment CMD_PLATFORM_UNKNOWN classification (spec section 2) -----
@@ -3974,16 +4154,23 @@ const char *cmd_platform_choice_label(int index)
 
 /* ----- Top-level command classification ----- */
 
-CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
-                                char *reason_buf, size_t reason_buf_size)
+/* The one classification pass. Returns the worst category across the
+ * command's segments and, when mask_out is non-NULL, the set of every
+ * category present -- see CMD_MASK_OF in the header for why the set
+ * matters to the auto-approve gate. */
+static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
+                                    char *reason_buf, size_t reason_buf_size,
+                                    unsigned *mask_out)
 {
     if (!command || !command[0]) {
         if (reason_buf && reason_buf_size > 0)
             reason_buf[0] = '\0';
+        if (mask_out) *mask_out = CMD_MASK_OF(CMD_SAFE);
         return CMD_SAFE;
     }
 
     CmdSafetyLevel worst = CMD_SAFE;
+    unsigned mask = 0;
     const char *p = command;
     int is_pipe_target = 0;
 
@@ -4089,7 +4276,9 @@ CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
         }
 
         if (seg_level > worst) worst = seg_level;
-        if (worst == CMD_CRITICAL) return worst;
+        mask |= CMD_MASK_OF(seg_level);
+        /* No early-out on CRITICAL: every remaining segment still has
+         * to contribute its bit to the mask. */
 
         is_pipe_target = (*p == '|' && *(p+1) != '|');
         if (*p == '|' && *(p+1) == '|') p += 2;
@@ -4097,10 +4286,24 @@ CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
         else if (*p) p++;
     }
 
+    if (mask_out) *mask_out = mask ? mask : CMD_MASK_OF(CMD_SAFE);
     return worst;
+}
+
+CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
+                                char *reason_buf, size_t reason_buf_size)
+{
+    return classify_core(command, platform, reason_buf, reason_buf_size, NULL);
 }
 
 CmdSafetyLevel cmd_classify(const char *command, CmdPlatform platform)
 {
-    return cmd_classify_ex(command, platform, NULL, 0);
+    return classify_core(command, platform, NULL, 0, NULL);
+}
+
+unsigned cmd_classify_mask(const char *command, CmdPlatform platform)
+{
+    unsigned mask = CMD_MASK_OF(CMD_SAFE);
+    classify_core(command, platform, NULL, 0, &mask);
+    return mask;
 }

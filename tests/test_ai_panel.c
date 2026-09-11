@@ -194,12 +194,16 @@ int test_ai_modes_label_off_safe_and_all(void)
     ASSERT_STR_EQ(ai_modes_label(0, 0), "off");
     ASSERT_STR_EQ(ai_modes_label(0, 1), "off");
     ASSERT_STR_EQ(ai_modes_label(0, 2), "off");
+    /* Five modes since UNKNOWN became its own category: the permitted sets
+     * are not nested, so "safe + write" (2) deliberately excludes unknown. */
     ASSERT_STR_EQ(ai_modes_label(1, 0), "safe only");
-    ASSERT_STR_EQ(ai_modes_label(1, 1), "safe + write");
-    ASSERT_STR_EQ(ai_modes_label(1, 2), "all");
+    ASSERT_STR_EQ(ai_modes_label(1, 1), "safe + unknown");
+    ASSERT_STR_EQ(ai_modes_label(1, 2), "safe + write");
+    ASSERT_STR_EQ(ai_modes_label(1, 3), "safe + unknown + write");
+    ASSERT_STR_EQ(ai_modes_label(1, 4), "all");
     /* Out-of-range levels clamp rather than misbehave. */
     ASSERT_STR_EQ(ai_modes_label(1, -1), "safe only");
-    ASSERT_STR_EQ(ai_modes_label(1, 3), "all");
+    ASSERT_STR_EQ(ai_modes_label(1, 5), "all");
     TEST_END();
 }
 

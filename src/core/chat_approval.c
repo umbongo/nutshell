@@ -8,6 +8,57 @@ void chat_approval_init(ApprovalQueue *q)
     memset(q, 0, sizeof(*q));
 }
 
+unsigned auto_approve_mask(AutoApproveLevel level)
+{
+    switch (level) {
+    case AUTO_APPROVE_SAFE:
+        return CMD_MASK_OF(CMD_SAFE);
+    case AUTO_APPROVE_SAFE_UNKNOWN:
+        return CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN);
+    case AUTO_APPROVE_SAFE_WRITE:
+        return CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_WRITE);
+    case AUTO_APPROVE_SAFE_UNKNOWN_WRITE:
+        return CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN) | CMD_MASK_OF(CMD_WRITE);
+    case AUTO_APPROVE_ALL:
+        return CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN) |
+               CMD_MASK_OF(CMD_WRITE) | CMD_MASK_OF(CMD_CRITICAL);
+    default:
+        return CMD_MASK_OF(CMD_SAFE);
+    }
+}
+
+/* Config token / UI label tables, indexed by mode 0..5 (0 = off). Kept as
+ * parallel arrays indexed identically so the three functions below agree by
+ * construction. */
+static const char *const k_auto_approve_mode_names[6] = {
+    "off", "safe", "safe+unknown", "safe+write", "safe+unknown+write", "all"
+};
+static const char *const k_auto_approve_mode_labels[6] = {
+    "Off", "Safe only", "Safe + unknown", "Safe + write",
+    "Safe + unknown + write", "All"
+};
+
+int auto_approve_mode_from_name(const char *name)
+{
+    if (!name) return 0;
+    for (int i = 0; i < 6; i++) {
+        if (strcmp(name, k_auto_approve_mode_names[i]) == 0) return i;
+    }
+    return 0;
+}
+
+const char *auto_approve_mode_name(int mode0to5)
+{
+    if (mode0to5 < 0 || mode0to5 > 5) mode0to5 = 0;
+    return k_auto_approve_mode_names[mode0to5];
+}
+
+const char *auto_approve_mode_label(int mode0to5)
+{
+    if (mode0to5 < 0 || mode0to5 > 5) mode0to5 = 0;
+    return k_auto_approve_mode_labels[mode0to5];
+}
+
 static int is_whitespace_only(const char *s)
 {
     if (!s) return 1;
@@ -45,13 +96,13 @@ int chat_approval_add(ApprovalQueue *q, const char *command,
     memcpy(e->command, command, len);
     e->command[len] = '\0';
     e->safety = cmd_classify(command, platform);
+    e->safety_mask = cmd_classify_mask(command, platform);
 
     if (e->safety > CMD_SAFE && !permit_write) {
         e->status = APPROVE_BLOCKED;
     } else if (q->auto_approve &&
-               (e->safety == CMD_SAFE ||
-                (e->safety == CMD_WRITE && q->auto_approve_level >= AUTO_APPROVE_WRITE) ||
-                q->auto_approve_level == AUTO_APPROVE_ALL)) {
+               (e->safety_mask &
+                ~auto_approve_mask((AutoApproveLevel)q->auto_approve_level)) == 0) {
         e->status = APPROVE_APPROVED;
     } else {
         e->status = APPROVE_PENDING;

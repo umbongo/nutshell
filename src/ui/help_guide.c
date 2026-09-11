@@ -23,7 +23,12 @@ static const char *GUIDE_CLASS = "Nutshell_HelpGuide";
 
 /* ---- Guide text --------------------------------------------------------- */
 
-static const char GUIDE_TEXT[] =
+/* The guide is one document, split into GUIDE_PART_1..6 only because C99
+   caps a single string literal at 4095 chars. They are declared in reading
+   order and joined in that order by GUIDE_PARTS below; when a part outgrows
+   the limit, split it at a section heading and add the new part to that
+   table. */
+static const char GUIDE_PART_1[] =
 "NUTSHELL USER GUIDE\r\n"
 "===================\r\n"
 "\r\n"
@@ -42,6 +47,11 @@ static const char GUIDE_TEXT[] =
 "   - Port:  SSH port (default 22)\r\n"
 "   - User:  Your username on the server\r\n"
 "   - Auth:  Password or SSH Key\r\n"
+"   - Platform: which CLI this host speaks, used to judge\r\n"
+"      command safety. Auto-detect (default) reads the login\r\n"
+"      banner and prompt; or pin it to Linux, Cisco IOS /\r\n"
+"      NX-OS / ASA, HP ProCurve, HPE Comware, Aruba OS-CX,\r\n"
+"      ArubaOS, PAN-OS, Junos, FortiOS, VyOS or RouterOS\r\n"
 "4. Click \"Save\" to store the profile\r\n"
 "5. Select the profile and click \"Connect\"\r\n"
 "\r\n"
@@ -106,6 +116,9 @@ static const char GUIDE_TEXT[] =
 "The terminal grid resizes automatically when you zoom.\r\n"
 "\r\n"
 "\r\n"
+;
+
+static const char GUIDE_PART_2[] =
 "SETTINGS\r\n"
 "--------\r\n"
 "\r\n"
@@ -153,8 +166,7 @@ static const char GUIDE_TEXT[] =
 "Files are named <Log Name Format>_<name>.log (name = profile\r\n"
 "name, falling back to host) in the configured Log Directory.\r\n";
 
-/* Second part — kept under 4095 chars for C99 compliance */
-static const char GUIDE_TEXT_2[] =
+static const char GUIDE_PART_3[] =
 "\r\n"
 "AI ASSIST\r\n"
 "---------\r\n"
@@ -185,25 +197,54 @@ static const char GUIDE_TEXT_2[] =
 "    conversation as a text file), Undock/Dock (pop the panel\r\n"
 "    into its own window, or dock it back)\r\n"
 "\r\n"
+;
+
+/* Split purely to stay under the C99 4095-char string-literal limit --
+   GUIDE_PARTS below joins every block back into one document. */
+static const char GUIDE_PART_4[] =
 "Status line (above the input box):\r\n"
 "  - Mode switch:  Read-only / Read + write. Read-only allows\r\n"
-"      only safe commands (ls, cat, pwd, etc); Read + write is\r\n"
+"      only commands that are provably read-only (ls, cat,\r\n"
+"      pwd, etc); anything else -- including commands it\r\n"
+"      does not recognise -- is held back. Read + write is\r\n"
 "      tinted with a warning colour while selected\r\n"
-"  - Auto approve: click to cycle off -> safe only -> all.\r\n"
-"      \"safe only\" runs safe commands without prompting;\r\n"
-"      \"all\" also runs write/critical commands and only\r\n"
-"      appears when Settings > AI Assistant > Behaviour >\r\n"
-"      \"Auto Approve also covers write/critical commands\"\r\n"
-"      is enabled\r\n"
+"  - Auto approve: click to cycle off -> safe only ->\r\n"
+"      safe + unknown -> safe + write ->\r\n"
+"      safe + unknown + write -> all -> off. These are sets,\r\n"
+"      not a scale: \"safe + write\" leaves unknown commands\r\n"
+"      for you to approve. Anything above safe still needs\r\n"
+"      Read + write. New sessions start from Settings >\r\n"
+"      AI Assistant > Behaviour > \"Auto approve for new\r\n"
+"      sessions\"; clicking here changes only this session\r\n"
 "  - Context meter: a bar plus used/limit showing how much of\r\n"
 "      the model's context window the conversation is using\r\n"
 "\r\n"
 "When the AI suggests commands, they land in one approval card:\r\n"
 "a header (\"N commands . M held\"), a checkbox + risk tag\r\n"
-"(SAFE/WRITE/CRITICAL) per row, and two actions -- \"Deny all\"\r\n"
-"and \"Run N selected\" (runs the checked rows; disabled when\r\n"
-"none are checked). With Auto approve on, safe rows run as soon\r\n"
-"as they arrive, same as before.\r\n"
+"(SAFE/UNKNOWN/WRITE/CRITICAL) per row, and two actions --\r\n"
+"\"Deny all\" and \"Run N selected\" (runs the checked rows;\r\n"
+"disabled when none are checked). With Auto approve on, safe\r\n"
+"rows run as soon as they arrive, same as before.\r\n"
+"\r\n"
+;
+
+static const char GUIDE_PART_5[] =
+"The four risk tags:\r\n"
+"  SAFE      provably read-only -- it matched a rule saying so\r\n"
+"  UNKNOWN   no rule claimed it. Might read, might wipe the\r\n"
+"            disk -- Nutshell does not guess, and gates it\r\n"
+"            like a write\r\n"
+"  WRITE     changes state, recoverable (mv, apt install,\r\n"
+"            configure terminal)\r\n"
+"  CRITICAL  outage, data loss or lock-out (rm -rf, reload,\r\n"
+"            write erase, commit, no username admin)\r\n"
+"\r\n"
+"Which rules apply depends on the profile's Platform, since\r\n"
+"the same word differs by system: reload reboots a Cisco\r\n"
+"switch, commit applies a firewall policy on PAN-OS and\r\n"
+"Junos, undo removes config on Comware. A pipeline is judged\r\n"
+"segment by segment, and Auto approve runs it only if every\r\n"
+"segment is permitted.\r\n"
 "\r\n"
 "When a reply carries reasoning, a \"Thinking\" row appears above\r\n"
 "it -- click to expand or collapse. It opens automatically while\r\n"
@@ -255,8 +296,7 @@ static const char GUIDE_TEXT_2[] =
 "  3. If the key has a passphrase, enter it in the Password field\r\n"
 ;
 
-/* Third part — kept under 4095 chars for C99 compliance */
-static const char GUIDE_TEXT_3[] =
+static const char GUIDE_PART_6[] =
 "\r\n"
 "\r\n"
 "SECURITY\r\n"
@@ -396,16 +436,27 @@ static LRESULT CALLBACK HelpGuideWndProc(HWND hwnd, UINT msg,
         themed_apply_title_bar(hwnd, d->theme);
         themed_apply_borders(hwnd, d->theme);
 
-        /* Set text after font is applied — three parts for C99 string limit */
+        /* Set text after font is applied. The guide is split into blocks
+           only because C99 caps a single string literal at 4095 chars; they
+           are one document, joined here in order. */
         {
-            size_t len1 = strlen(GUIDE_TEXT);
-            size_t len2 = strlen(GUIDE_TEXT_2);
-            size_t len3 = strlen(GUIDE_TEXT_3);
-            char *full = (char *)malloc(len1 + len2 + len3 + 1);
+            static const char *const GUIDE_PARTS[] = {
+                GUIDE_PART_1, GUIDE_PART_2, GUIDE_PART_3,
+                GUIDE_PART_4, GUIDE_PART_5, GUIDE_PART_6
+            };
+            const size_t part_n = sizeof GUIDE_PARTS / sizeof GUIDE_PARTS[0];
+            size_t total = 0;
+            for (size_t i = 0; i < part_n; i++)
+                total += strlen(GUIDE_PARTS[i]);
+            char *full = (char *)malloc(total + 1);
             if (full) {
-                memcpy(full, GUIDE_TEXT, len1);
-                memcpy(full + len1, GUIDE_TEXT_2, len2);
-                memcpy(full + len1 + len2, GUIDE_TEXT_3, len3 + 1);
+                size_t at = 0;
+                for (size_t i = 0; i < part_n; i++) {
+                    size_t len = strlen(GUIDE_PARTS[i]);
+                    memcpy(full + at, GUIDE_PARTS[i], len);
+                    at += len;
+                }
+                full[at] = '\0';
                 SetWindowTextA(hEdit, full);
                 free(full);
             }
