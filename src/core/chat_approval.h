@@ -17,17 +17,54 @@ typedef enum {
 
 typedef struct {
     char command[1024];
-    CmdSafetyLevel safety;
+    CmdSafetyLevel safety;      /* the worst category across the command's segments --
+                                  * what the approval card's chip shows */
+    unsigned safety_mask;       /* the SET of categories across the command's segments
+                                  * (CMD_MASK_OF(level) per segment) -- what the
+                                  * auto-approve gate tests. Not the same information
+                                  * as `safety`: a {CMD_UNKNOWN, CMD_WRITE} pipeline has
+                                  * safety == CMD_WRITE, but must not auto-approve under
+                                  * a mode that permits write and not unknown. */
     ApprovalStatus status;
 } ApprovalEntry;
 
-/* How far session-level Auto Approve reaches. Values are ordered so a
- * higher level is a strict superset of a lower one's safety coverage. */
+/* How far session-level Auto Approve reaches. The five modes are NOT nested:
+ * "safe and write" deliberately excludes unknown, so a level is a set of
+ * permitted categories, not a threshold. auto_approve_mask() gives that set;
+ * a command auto-approves when every category in its safety_mask is in it:
+ *   (entry->safety_mask & ~auto_approve_mask(level)) == 0
+ */
 typedef enum {
-    AUTO_APPROVE_SAFE  = 0,  /* only CMD_SAFE commands auto-approve */
-    AUTO_APPROVE_WRITE = 1,  /* CMD_SAFE and CMD_WRITE auto-approve */
-    AUTO_APPROVE_ALL   = 2   /* CMD_SAFE, CMD_WRITE and CMD_CRITICAL auto-approve */
+    AUTO_APPROVE_SAFE               = 0,  /* safe only */
+    AUTO_APPROVE_SAFE_UNKNOWN       = 1,  /* safe + unknown */
+    AUTO_APPROVE_SAFE_WRITE         = 2,  /* safe + write */
+    AUTO_APPROVE_SAFE_UNKNOWN_WRITE = 3,  /* safe + unknown + write */
+    AUTO_APPROVE_ALL                = 4   /* safe + unknown + write + critical */
 } AutoApproveLevel;
+
+/* The set of CmdSafetyLevel categories permitted to auto-approve at `level`,
+ * as a bitmask of CMD_MASK_OF(level) bits. CMD_SAFE is in every mode. An
+ * out-of-range level is treated as AUTO_APPROVE_SAFE. */
+unsigned auto_approve_mask(AutoApproveLevel level);
+
+/* Config-token / UI-label mappings for the auto-approve mode, over the range
+ * 0..5 (0 = off, 1..5 = AutoApproveLevel 0..4, i.e. "on" at that level) --
+ * the convention ai_chat.c already uses for its "level0to5" seed value.
+ * Mappings live here (rather than in the UI or config layer) so they are
+ * natively testable. */
+
+/* Token -> mode. Recognises "off", "safe", "safe+unknown", "safe+write",
+ * "safe+unknown+write", "all". Returns 0 (off) for NULL or an unrecognised
+ * token. */
+int         auto_approve_mode_from_name(const char *name);
+
+/* Mode -> stable config token (the inverse of auto_approve_mode_from_name).
+ * An out-of-range mode clamps to 0 ("off"). */
+const char *auto_approve_mode_name(int mode0to5);
+
+/* Mode -> UI label ("Off", "Safe only", "Safe + unknown", "Safe + write",
+ * "Safe + unknown + write", "All"). An out-of-range mode clamps to 0. */
+const char *auto_approve_mode_label(int mode0to5);
 
 typedef struct {
     ApprovalEntry entries[APPROVAL_MAX_CMDS];
@@ -41,11 +78,17 @@ typedef struct {
 /* Initialize approval queue. */
 void chat_approval_init(ApprovalQueue *q);
 
-/* Add a command to the approval queue. Classifies it against the given platform.
- * If permit_write is 0 and the command is write/critical, it's auto-blocked.
- * If auto_approve is active, it's auto-approved when the command's safety is
- * within reach of auto_approve_level (SAFE always; WRITE needs level >=
- * AUTO_APPROVE_WRITE; CRITICAL needs level == AUTO_APPROVE_ALL).
+/* Add a command to the approval queue. Classifies it against the given platform,
+ * filling both `safety` (the worst category) and `safety_mask` (the set of
+ * categories across its segments).
+ * If permit_write is 0 and the command is not provably read-only (safety >
+ * CMD_SAFE -- this includes CMD_UNKNOWN), it's auto-blocked.
+ * If auto_approve is active, it's auto-approved when every category in the
+ * command's safety_mask is permitted at auto_approve_level:
+ *   (safety_mask & ~auto_approve_mask(auto_approve_level)) == 0
+ * This is a set test, not a threshold -- a {CMD_UNKNOWN, CMD_WRITE} pipeline
+ * does not auto-approve under AUTO_APPROVE_SAFE_WRITE even though its
+ * `safety` maximum is CMD_WRITE, because CMD_UNKNOWN is not in that mode's set.
  * Returns the entry index, or -1 if queue is full. */
 int chat_approval_add(ApprovalQueue *q, const char *command,
                       CmdPlatform platform, int permit_write);
@@ -95,8 +138,9 @@ void chat_approval_set_completed(ApprovalQueue *q, int index);
  * Changes BLOCKED → PENDING. Returns number unblocked. */
 int chat_approval_unblock_all(ApprovalQueue *q);
 
-/* Block all pending write/critical commands (permit_write was disabled).
- * Changes PENDING → BLOCKED for entries with safety > CMD_SAFE.
+/* Block all pending not-provably-safe commands (permit_write was disabled).
+ * Changes PENDING → BLOCKED for entries with safety > CMD_SAFE -- write,
+ * critical, and unknown alike.
  * Returns number blocked. */
 int chat_approval_block_pending_writes(ApprovalQueue *q);
 

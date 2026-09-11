@@ -216,6 +216,86 @@ int test_config_validate_review_fix_settings_clamp(void);
 int test_config_roundtrip_review_fix_settings(void);
 int test_config_load_legacy_no_review_fix_settings(void);
 int test_config_load_ignores_old_auto_approve_all_key(void);
+/* Per-profile device platform (audit H2) */
+/* cmd_detect.c - banner/prompt platform detection */
+int test_cmd_detect_null_text(void);
+int test_cmd_detect_empty_text(void);
+int test_cmd_detect_null_confidence_out(void);
+int test_cmd_detect_banner_nxos(void);
+int test_cmd_detect_banner_asa(void);
+int test_cmd_detect_banner_ios(void);
+int test_cmd_detect_banner_aruba_cx(void);
+int test_cmd_detect_banner_aruba_os(void);
+int test_cmd_detect_banner_procurve(void);
+int test_cmd_detect_banner_comware(void);
+int test_cmd_detect_banner_panos(void);
+int test_cmd_detect_banner_junos(void);
+int test_cmd_detect_banner_fortios(void);
+int test_cmd_detect_banner_vyos(void);
+int test_cmd_detect_banner_routeros(void);
+int test_cmd_detect_banner_linux(void);
+int test_cmd_detect_banner_wins_over_ambiguous_prompt(void);
+int test_cmd_detect_prompt_comware(void);
+int test_cmd_detect_prompt_aruba_os(void);
+int test_cmd_detect_prompt_routeros(void);
+int test_cmd_detect_prompt_linux(void);
+int test_cmd_detect_ambiguous_user_at_host(void);
+int test_cmd_detect_ambiguous_hostname_hash_or_gt(void);
+int test_cmd_detect_no_prompt_at_all(void);
+int test_cmd_detect_trailing_blank_lines(void);
+int test_cmd_detect_banner_split_across_chunks(void);
+/* cmd_classify.c - unknown-platform overlay and name mapping */
+int test_cmd_classify_unknown_overlay_critical_verbs(void);
+int test_cmd_classify_unknown_overlay_write_erase(void);
+int test_cmd_classify_unknown_overlay_request_verbs(void);
+int test_cmd_classify_unknown_overlay_execute_verbs(void);
+int test_cmd_classify_unknown_overlay_write_verbs(void);
+int test_cmd_classify_unknown_overlay_reset_forms(void);
+int test_cmd_classify_unknown_overlay_routeros_paths(void);
+int test_cmd_classify_unknown_linux_safe_commands_intact(void);
+int test_cmd_classify_unknown_linux_critical_command_intact(void);
+int test_cmd_platform_from_name_round_trip(void);
+int test_cmd_platform_name_round_trip(void);
+int test_cmd_platform_from_name_unknown_token(void);
+int test_cmd_platform_from_name_null(void);
+int test_cmd_platform_from_name_auto(void);
+int test_cmd_platform_label_unknown_is_auto_detect(void);
+int test_config_profile_platform_missing_defaults_to_auto(void);
+int test_config_profile_platform_roundtrip(void);
+int test_config_profile_platform_garbage_maps_unknown(void);
+/* UNKNOWN safety category and the five auto-approve modes */
+int test_approval_mask_five_modes_by_four_categories(void);
+int test_approval_mixed_pipeline_unknown_and_write_not_approved_under_safe_write(void);
+int test_approval_unknown_blocked_when_permit_write_off(void);
+int test_approval_unknown_unblock_and_reblock(void);
+int test_auto_approve_mask_per_level(void);
+int test_auto_approve_mode_name_round_trip(void);
+int test_auto_approve_mode_label_per_mode(void);
+int test_auto_approve_mode_from_name_garbage_is_off(void);
+int test_auto_approve_mode_name_and_label_clamp_out_of_range(void);
+int test_config_auto_approve_mode_token_round_trip(void);
+int test_config_save_writes_new_token_not_old_numeric_key(void);
+int test_config_load_migrates_legacy_numeric_auto_approve(void);
+int test_config_load_new_token_wins_over_legacy_numeric(void);
+int test_config_load_garbage_auto_approve_mode_token_is_off(void);
+/* SAFE allow-list, UNKNOWN fallthroughs and the classification mask */
+int test_cmd_classify_linux_unrecognised_is_unknown(void);
+int test_cmd_classify_linux_unrecognised_with_redirect_is_write(void);
+int test_cmd_classify_linux_allow_list_vs_redirect(void);
+int test_cmd_classify_linux_allow_list_does_not_downgrade_write_or_critical(void);
+int test_cmd_classify_linux_safe_allow_list_file_and_text_tools(void);
+int test_cmd_classify_linux_safe_allow_list_system_inspectors(void);
+int test_cmd_classify_linux_safe_allow_list_network_diagnostics(void);
+int test_cmd_classify_linux_safe_allow_list_multitoken(void);
+int test_cmd_classify_linux_safe_rpm_pacman_query_prefix(void);
+int test_cmd_classify_linux_safe_iptables_save(void);
+int test_cmd_classify_linux_bare_only_safe_forms(void);
+int test_cmd_classify_network_platforms_unrecognised_is_unknown(void);
+int test_cmd_classify_network_display_filter_still_safe(void);
+int test_cmd_classify_mask_all_safe_pipeline(void);
+int test_cmd_classify_mask_unknown_and_safe_pipeline(void);
+int test_cmd_classify_mask_unknown_and_write_pipeline(void);
+int test_cmd_classify_mask_null_and_empty(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -1417,6 +1497,109 @@ int test_cmd_classify_heuristic_show_always_safe(void);
 int test_cmd_classify_heuristic_negation_write(void);
 int test_cmd_classify_heuristic_reload_always_critical(void);
 int test_cmd_classify_heuristic_clear_write(void);
+/* test_cmd_classify.c - Linux additions: CRITICAL (spec 3.1) */
+int test_cmd_classify_linux_critical_filesystem_destruction(void);
+int test_cmd_classify_linux_critical_resource_removal(void);
+int test_cmd_classify_linux_critical_kernel_module(void);
+int test_cmd_classify_linux_critical_setenforce(void);
+int test_cmd_classify_linux_critical_firewall_wholesale(void);
+int test_cmd_classify_linux_critical_systemctl_subcommands(void);
+int test_cmd_classify_linux_critical_service_stop(void);
+int test_cmd_classify_linux_pkg_remove_critical(void);
+int test_cmd_classify_linux_pkg_remove_critical_extra(void);
+int test_cmd_classify_linux_pkg_query_safe(void);
+int test_cmd_classify_linux_critical_system_upgrade(void);
+int test_cmd_classify_linux_critical_account_removal(void);
+int test_cmd_classify_linux_critical_container(void);
+int test_cmd_classify_linux_critical_orchestration(void);
+int test_cmd_classify_linux_critical_terraform(void);
+int test_cmd_classify_linux_critical_network_iface(void);
+int test_cmd_classify_linux_critical_tc_netns(void);
+int test_cmd_classify_linux_critical_find_delete(void);
+int test_cmd_classify_linux_critical_zfs_btrfs(void);
+/* test_cmd_classify.c - Linux additions: WRITE (spec 3.2) */
+int test_cmd_classify_linux_write_files_and_archives(void);
+int test_cmd_classify_linux_write_boot_and_system(void);
+int test_cmd_classify_linux_write_pkg_install(void);
+int test_cmd_classify_linux_write_containers(void);
+int test_cmd_classify_linux_write_orchestration_iac(void);
+int test_cmd_classify_linux_write_scheduling_net(void);
+/* test_cmd_classify.c - Linux additions: SAFE (spec 3.3) */
+int test_cmd_classify_linux_safe_readonly_tools(void);
+int test_cmd_classify_linux_safe_network_tools(void);
+int test_cmd_classify_linux_safe_service_status(void);
+int test_cmd_classify_linux_safe_orchestration_status(void);
+/* test_cmd_classify.c - Linux corner case: ufw (spec 3.1 F8) */
+int test_cmd_classify_linux_ufw_status_vs_reset(void);
+/* test_cmd_classify.c - Cisco IOS additions (spec section 4) */
+int test_cmd_classify_ios_safe_additions(void);
+int test_cmd_classify_ios_configure_replace_critical(void);
+int test_cmd_classify_ios_device_fs_delete_critical(void);
+int test_cmd_classify_ios_copy_into_config_critical(void);
+int test_cmd_classify_ios_boot_system_critical(void);
+int test_cmd_classify_ios_default_interface_critical(void);
+int test_cmd_classify_ios_no_forms_critical(void);
+int test_cmd_classify_ios_clear_adjacency_critical(void);
+int test_cmd_classify_ios_hardware_reset_critical(void);
+int test_cmd_classify_ios_install_critical(void);
+int test_cmd_classify_ios_iosxr_critical(void);
+int test_cmd_classify_ios_crash_core_critical(void);
+int test_cmd_classify_ios_write_additions(void);
+/* test_cmd_classify.c - Cisco NX-OS additions (spec section 5) */
+int test_cmd_classify_nxos_critical_additions(void);
+int test_cmd_classify_nxos_write_additions(void);
+/* test_cmd_classify.c - Cisco ASA additions (spec section 6) */
+int test_cmd_classify_asa_critical_additions(void);
+int test_cmd_classify_asa_write_additions(void);
+/* test_cmd_classify.c - HP ProCurve / ProVision (spec section 7) */
+int test_cmd_classify_procurve_safe(void);
+int test_cmd_classify_procurve_write(void);
+int test_cmd_classify_procurve_critical_reboot_erase_copy(void);
+int test_cmd_classify_procurve_critical_negation_disable(void);
+/* test_cmd_classify.c - HPE Comware 5/7 (spec section 8) */
+int test_cmd_classify_comware_safe(void);
+int test_cmd_classify_comware_write(void);
+int test_cmd_classify_comware_critical_reset_reboot(void);
+int test_cmd_classify_comware_critical_undo(void);
+int test_cmd_classify_comware_critical_hidden_shell(void);
+int test_cmd_classify_comware_reboot_vs_linux_reboot(void);
+/* test_cmd_classify.c - Aruba OS-CX additions (spec section 9) */
+int test_cmd_classify_aruba_cx_critical_additions(void);
+int test_cmd_classify_aruba_cx_write_additions(void);
+int test_cmd_classify_aruba_cx_safe_additions(void);
+/* test_cmd_classify.c - ArubaOS additions (spec section 10) */
+int test_cmd_classify_aruba_os_critical_additions(void);
+int test_cmd_classify_aruba_os_write_additions(void);
+/* test_cmd_classify.c - PAN-OS additions (spec section 11) */
+int test_cmd_classify_panos_set_cli_safe(void);
+int test_cmd_classify_panos_safe_additions(void);
+int test_cmd_classify_panos_commit_check_safe(void);
+int test_cmd_classify_panos_critical_additions(void);
+int test_cmd_classify_panos_write_additions(void);
+/* test_cmd_classify.c - Juniper Junos (spec section 12) */
+int test_cmd_classify_junos_safe(void);
+int test_cmd_classify_junos_write(void);
+int test_cmd_classify_junos_critical(void);
+/* test_cmd_classify.c - Fortinet FortiOS (spec section 13) */
+int test_cmd_classify_fortios_safe(void);
+int test_cmd_classify_fortios_write(void);
+int test_cmd_classify_fortios_critical(void);
+/* test_cmd_classify.c - VyOS (spec section 14) */
+int test_cmd_classify_vyos_safe(void);
+int test_cmd_classify_vyos_write(void);
+int test_cmd_classify_vyos_critical(void);
+/* test_cmd_classify.c - MikroTik RouterOS (spec section 15) */
+int test_cmd_classify_mikrotik_safe(void);
+int test_cmd_classify_mikrotik_write(void);
+int test_cmd_classify_mikrotik_critical(void);
+int test_cmd_classify_mikrotik_critical_wins_over_find(void);
+int test_cmd_classify_mikrotik_print_vs_remove(void);
+/* test_cmd_classify.c - Section 17 cross-platform corner cases */
+int test_cmd_classify_display_filter_safe(void);
+int test_cmd_classify_comware_display_filter_safe(void);
+int test_cmd_classify_commit_check_validate_vs_bare_commit(void);
+int test_cmd_classify_new_platforms_empty_safe(void);
+int test_cmd_classify_new_platforms_lone_separator_safe(void);
 
 /* test_chat_msg.c */
 int test_chat_msg_list_init(void);
@@ -2248,6 +2431,86 @@ int main(void) {
     failed += test_config_roundtrip_review_fix_settings();
     failed += test_config_load_legacy_no_review_fix_settings();
     failed += test_config_load_ignores_old_auto_approve_all_key();
+    /* Per-profile device platform (audit H2) */
+    /* Platform detection */
+    failed += test_cmd_detect_null_text();
+    failed += test_cmd_detect_empty_text();
+    failed += test_cmd_detect_null_confidence_out();
+    failed += test_cmd_detect_banner_nxos();
+    failed += test_cmd_detect_banner_asa();
+    failed += test_cmd_detect_banner_ios();
+    failed += test_cmd_detect_banner_aruba_cx();
+    failed += test_cmd_detect_banner_aruba_os();
+    failed += test_cmd_detect_banner_procurve();
+    failed += test_cmd_detect_banner_comware();
+    failed += test_cmd_detect_banner_panos();
+    failed += test_cmd_detect_banner_junos();
+    failed += test_cmd_detect_banner_fortios();
+    failed += test_cmd_detect_banner_vyos();
+    failed += test_cmd_detect_banner_routeros();
+    failed += test_cmd_detect_banner_linux();
+    failed += test_cmd_detect_banner_wins_over_ambiguous_prompt();
+    failed += test_cmd_detect_prompt_comware();
+    failed += test_cmd_detect_prompt_aruba_os();
+    failed += test_cmd_detect_prompt_routeros();
+    failed += test_cmd_detect_prompt_linux();
+    failed += test_cmd_detect_ambiguous_user_at_host();
+    failed += test_cmd_detect_ambiguous_hostname_hash_or_gt();
+    failed += test_cmd_detect_no_prompt_at_all();
+    failed += test_cmd_detect_trailing_blank_lines();
+    failed += test_cmd_detect_banner_split_across_chunks();
+    /* Unknown-platform overlay and name mapping */
+    failed += test_cmd_classify_unknown_overlay_critical_verbs();
+    failed += test_cmd_classify_unknown_overlay_write_erase();
+    failed += test_cmd_classify_unknown_overlay_request_verbs();
+    failed += test_cmd_classify_unknown_overlay_execute_verbs();
+    failed += test_cmd_classify_unknown_overlay_write_verbs();
+    failed += test_cmd_classify_unknown_overlay_reset_forms();
+    failed += test_cmd_classify_unknown_overlay_routeros_paths();
+    failed += test_cmd_classify_unknown_linux_safe_commands_intact();
+    failed += test_cmd_classify_unknown_linux_critical_command_intact();
+    failed += test_cmd_platform_from_name_round_trip();
+    failed += test_cmd_platform_name_round_trip();
+    failed += test_cmd_platform_from_name_unknown_token();
+    failed += test_cmd_platform_from_name_null();
+    failed += test_cmd_platform_from_name_auto();
+    failed += test_cmd_platform_label_unknown_is_auto_detect();
+    failed += test_config_profile_platform_missing_defaults_to_auto();
+    failed += test_config_profile_platform_roundtrip();
+    failed += test_config_profile_platform_garbage_maps_unknown();
+    /* UNKNOWN safety category and the five auto-approve modes */
+    failed += test_approval_mask_five_modes_by_four_categories();
+    failed += test_approval_mixed_pipeline_unknown_and_write_not_approved_under_safe_write();
+    failed += test_approval_unknown_blocked_when_permit_write_off();
+    failed += test_approval_unknown_unblock_and_reblock();
+    failed += test_auto_approve_mask_per_level();
+    failed += test_auto_approve_mode_name_round_trip();
+    failed += test_auto_approve_mode_label_per_mode();
+    failed += test_auto_approve_mode_from_name_garbage_is_off();
+    failed += test_auto_approve_mode_name_and_label_clamp_out_of_range();
+    failed += test_config_auto_approve_mode_token_round_trip();
+    failed += test_config_save_writes_new_token_not_old_numeric_key();
+    failed += test_config_load_migrates_legacy_numeric_auto_approve();
+    failed += test_config_load_new_token_wins_over_legacy_numeric();
+    failed += test_config_load_garbage_auto_approve_mode_token_is_off();
+    /* SAFE allow-list, UNKNOWN fallthroughs and the classification mask */
+    failed += test_cmd_classify_linux_unrecognised_is_unknown();
+    failed += test_cmd_classify_linux_unrecognised_with_redirect_is_write();
+    failed += test_cmd_classify_linux_allow_list_vs_redirect();
+    failed += test_cmd_classify_linux_allow_list_does_not_downgrade_write_or_critical();
+    failed += test_cmd_classify_linux_safe_allow_list_file_and_text_tools();
+    failed += test_cmd_classify_linux_safe_allow_list_system_inspectors();
+    failed += test_cmd_classify_linux_safe_allow_list_network_diagnostics();
+    failed += test_cmd_classify_linux_safe_allow_list_multitoken();
+    failed += test_cmd_classify_linux_safe_rpm_pacman_query_prefix();
+    failed += test_cmd_classify_linux_safe_iptables_save();
+    failed += test_cmd_classify_linux_bare_only_safe_forms();
+    failed += test_cmd_classify_network_platforms_unrecognised_is_unknown();
+    failed += test_cmd_classify_network_display_filter_still_safe();
+    failed += test_cmd_classify_mask_all_safe_pipeline();
+    failed += test_cmd_classify_mask_unknown_and_safe_pipeline();
+    failed += test_cmd_classify_mask_unknown_and_write_pipeline();
+    failed += test_cmd_classify_mask_null_and_empty();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();
@@ -3387,6 +3650,109 @@ int main(void) {
     failed += test_cmd_classify_heuristic_negation_write();
     failed += test_cmd_classify_heuristic_reload_always_critical();
     failed += test_cmd_classify_heuristic_clear_write();
+    /* Linux additions: CRITICAL (spec 3.1) */
+    failed += test_cmd_classify_linux_critical_filesystem_destruction();
+    failed += test_cmd_classify_linux_critical_resource_removal();
+    failed += test_cmd_classify_linux_critical_kernel_module();
+    failed += test_cmd_classify_linux_critical_setenforce();
+    failed += test_cmd_classify_linux_critical_firewall_wholesale();
+    failed += test_cmd_classify_linux_critical_systemctl_subcommands();
+    failed += test_cmd_classify_linux_critical_service_stop();
+    failed += test_cmd_classify_linux_pkg_remove_critical();
+    failed += test_cmd_classify_linux_pkg_remove_critical_extra();
+    failed += test_cmd_classify_linux_pkg_query_safe();
+    failed += test_cmd_classify_linux_critical_system_upgrade();
+    failed += test_cmd_classify_linux_critical_account_removal();
+    failed += test_cmd_classify_linux_critical_container();
+    failed += test_cmd_classify_linux_critical_orchestration();
+    failed += test_cmd_classify_linux_critical_terraform();
+    failed += test_cmd_classify_linux_critical_network_iface();
+    failed += test_cmd_classify_linux_critical_tc_netns();
+    failed += test_cmd_classify_linux_critical_find_delete();
+    failed += test_cmd_classify_linux_critical_zfs_btrfs();
+    /* Linux additions: WRITE (spec 3.2) */
+    failed += test_cmd_classify_linux_write_files_and_archives();
+    failed += test_cmd_classify_linux_write_boot_and_system();
+    failed += test_cmd_classify_linux_write_pkg_install();
+    failed += test_cmd_classify_linux_write_containers();
+    failed += test_cmd_classify_linux_write_orchestration_iac();
+    failed += test_cmd_classify_linux_write_scheduling_net();
+    /* Linux additions: SAFE (spec 3.3) */
+    failed += test_cmd_classify_linux_safe_readonly_tools();
+    failed += test_cmd_classify_linux_safe_network_tools();
+    failed += test_cmd_classify_linux_safe_service_status();
+    failed += test_cmd_classify_linux_safe_orchestration_status();
+    /* Linux corner case: ufw (spec 3.1 F8) */
+    failed += test_cmd_classify_linux_ufw_status_vs_reset();
+    /* Cisco IOS additions (spec section 4) */
+    failed += test_cmd_classify_ios_safe_additions();
+    failed += test_cmd_classify_ios_configure_replace_critical();
+    failed += test_cmd_classify_ios_device_fs_delete_critical();
+    failed += test_cmd_classify_ios_copy_into_config_critical();
+    failed += test_cmd_classify_ios_boot_system_critical();
+    failed += test_cmd_classify_ios_default_interface_critical();
+    failed += test_cmd_classify_ios_no_forms_critical();
+    failed += test_cmd_classify_ios_clear_adjacency_critical();
+    failed += test_cmd_classify_ios_hardware_reset_critical();
+    failed += test_cmd_classify_ios_install_critical();
+    failed += test_cmd_classify_ios_iosxr_critical();
+    failed += test_cmd_classify_ios_crash_core_critical();
+    failed += test_cmd_classify_ios_write_additions();
+    /* Cisco NX-OS additions (spec section 5) */
+    failed += test_cmd_classify_nxos_critical_additions();
+    failed += test_cmd_classify_nxos_write_additions();
+    /* Cisco ASA additions (spec section 6) */
+    failed += test_cmd_classify_asa_critical_additions();
+    failed += test_cmd_classify_asa_write_additions();
+    /* HP ProCurve / ProVision (spec section 7) */
+    failed += test_cmd_classify_procurve_safe();
+    failed += test_cmd_classify_procurve_write();
+    failed += test_cmd_classify_procurve_critical_reboot_erase_copy();
+    failed += test_cmd_classify_procurve_critical_negation_disable();
+    /* HPE Comware 5/7 (spec section 8) */
+    failed += test_cmd_classify_comware_safe();
+    failed += test_cmd_classify_comware_write();
+    failed += test_cmd_classify_comware_critical_reset_reboot();
+    failed += test_cmd_classify_comware_critical_undo();
+    failed += test_cmd_classify_comware_critical_hidden_shell();
+    failed += test_cmd_classify_comware_reboot_vs_linux_reboot();
+    /* Aruba OS-CX additions (spec section 9) */
+    failed += test_cmd_classify_aruba_cx_critical_additions();
+    failed += test_cmd_classify_aruba_cx_write_additions();
+    failed += test_cmd_classify_aruba_cx_safe_additions();
+    /* ArubaOS additions (spec section 10) */
+    failed += test_cmd_classify_aruba_os_critical_additions();
+    failed += test_cmd_classify_aruba_os_write_additions();
+    /* PAN-OS additions (spec section 11) */
+    failed += test_cmd_classify_panos_set_cli_safe();
+    failed += test_cmd_classify_panos_safe_additions();
+    failed += test_cmd_classify_panos_commit_check_safe();
+    failed += test_cmd_classify_panos_critical_additions();
+    failed += test_cmd_classify_panos_write_additions();
+    /* Juniper Junos (spec section 12) */
+    failed += test_cmd_classify_junos_safe();
+    failed += test_cmd_classify_junos_write();
+    failed += test_cmd_classify_junos_critical();
+    /* Fortinet FortiOS (spec section 13) */
+    failed += test_cmd_classify_fortios_safe();
+    failed += test_cmd_classify_fortios_write();
+    failed += test_cmd_classify_fortios_critical();
+    /* VyOS (spec section 14) */
+    failed += test_cmd_classify_vyos_safe();
+    failed += test_cmd_classify_vyos_write();
+    failed += test_cmd_classify_vyos_critical();
+    /* MikroTik RouterOS (spec section 15) */
+    failed += test_cmd_classify_mikrotik_safe();
+    failed += test_cmd_classify_mikrotik_write();
+    failed += test_cmd_classify_mikrotik_critical();
+    failed += test_cmd_classify_mikrotik_critical_wins_over_find();
+    failed += test_cmd_classify_mikrotik_print_vs_remove();
+    /* Section 17 cross-platform corner cases */
+    failed += test_cmd_classify_display_filter_safe();
+    failed += test_cmd_classify_comware_display_filter_safe();
+    failed += test_cmd_classify_commit_check_validate_vs_bare_commit();
+    failed += test_cmd_classify_new_platforms_empty_safe();
+    failed += test_cmd_classify_new_platforms_lone_separator_safe();
 
     printf("\n--- Chat Message List ---\n");
     failed += test_chat_msg_list_init();

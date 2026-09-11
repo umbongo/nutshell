@@ -244,9 +244,9 @@ int test_approval_auto_approve_direct_toggle_with_write(void) {
      * commands — they stay PENDING for the user to decide. */
     chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
     ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_PENDING);
-    /* With auto_approve_level raised to AUTO_APPROVE_WRITE, write commands
-     * auto-approve too. */
-    q.auto_approve_level = AUTO_APPROVE_WRITE;
+    /* With auto_approve_level raised to AUTO_APPROVE_SAFE_WRITE, write
+     * commands auto-approve too. */
+    q.auto_approve_level = AUTO_APPROVE_SAFE_WRITE;
     chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
     ASSERT_EQ((int)q.entries[2].status, (int)APPROVE_APPROVED);
     TEST_END();
@@ -358,7 +358,7 @@ int test_approval_level_safe_always_approves_safe(void) {
     ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
 
     chat_approval_reset(&q);
-    q.auto_approve_level = AUTO_APPROVE_WRITE;
+    q.auto_approve_level = AUTO_APPROVE_SAFE_WRITE;
     chat_approval_add(&q, "ls -la", CMD_PLATFORM_LINUX, 1);
     ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
 
@@ -398,8 +398,8 @@ int test_approval_level_write_approves_write(void) {
     ApprovalQueue q;
     chat_approval_init(&q);
     q.auto_approve = 1;
-    q.auto_approve_level = AUTO_APPROVE_WRITE;
-    /* Write command, permit_write on, level WRITE -> APPROVED */
+    q.auto_approve_level = AUTO_APPROVE_SAFE_WRITE;
+    /* Write command, permit_write on, level SAFE_WRITE -> APPROVED */
     chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 1);
     ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
     TEST_END();
@@ -410,7 +410,7 @@ int test_approval_level_write_permit_off_blocked(void) {
     ApprovalQueue q;
     chat_approval_init(&q);
     q.auto_approve = 1;
-    q.auto_approve_level = AUTO_APPROVE_WRITE;
+    q.auto_approve_level = AUTO_APPROVE_SAFE_WRITE;
     /* permit_write off -> BLOCKED regardless of level */
     chat_approval_add(&q, "mv a b", CMD_PLATFORM_LINUX, 0);
     ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_BLOCKED);
@@ -422,8 +422,8 @@ int test_approval_level_write_critical_pending(void) {
     ApprovalQueue q;
     chat_approval_init(&q);
     q.auto_approve = 1;
-    q.auto_approve_level = AUTO_APPROVE_WRITE;
-    /* Critical command, permit_write on, level WRITE (not ALL) -> PENDING */
+    q.auto_approve_level = AUTO_APPROVE_SAFE_WRITE;
+    /* Critical command, permit_write on, level SAFE_WRITE (not ALL) -> PENDING */
     chat_approval_add(&q, "rm -rf /tmp", CMD_PLATFORM_LINUX, 1);
     ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_PENDING);
     TEST_END();
@@ -473,11 +473,11 @@ int test_approval_reset_preserves_level(void) {
     ApprovalQueue q;
     chat_approval_init(&q);
     q.auto_approve = 1;
-    q.auto_approve_level = AUTO_APPROVE_WRITE;
+    q.auto_approve_level = AUTO_APPROVE_SAFE_WRITE;
     chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX, 1);
     chat_approval_reset(&q);
     ASSERT_EQ(q.auto_approve, 1);
-    ASSERT_EQ((int)q.auto_approve_level, (int)AUTO_APPROVE_WRITE);
+    ASSERT_EQ((int)q.auto_approve_level, (int)AUTO_APPROVE_SAFE_WRITE);
     TEST_END();
 }
 
@@ -662,5 +662,168 @@ int test_permit_toggle_corrective_msg_is_last(void) {
     int prev = conv.msg_count - 2;
     ASSERT_EQ((int)conv.messages[prev].role, (int)AI_ROLE_USER);
     ASSERT_TRUE(strstr(conv.messages[prev].content, "BLOCKED") != NULL);
+    TEST_END();
+}
+
+/* --- The five auto-approve modes, tested against all four safety
+ * categories (2026-09-11-unknown-safety-category-design.md §8): 20 cases. --- */
+
+int test_approval_mask_five_modes_by_four_categories(void) {
+    TEST_BEGIN();
+
+    /* One representative command per CmdSafetyLevel. "frobnicate" matches
+     * no rule on any platform, so it classifies CMD_UNKNOWN. */
+    static const char *const k_cmd_by_category[4] = {
+        "ls -la",       /* CMD_SAFE */
+        "frobnicate",   /* CMD_UNKNOWN */
+        "mv a b",       /* CMD_WRITE */
+        "rm -rf /tmp",  /* CMD_CRITICAL */
+    };
+    static const AutoApproveLevel k_levels[5] = {
+        AUTO_APPROVE_SAFE, AUTO_APPROVE_SAFE_UNKNOWN, AUTO_APPROVE_SAFE_WRITE,
+        AUTO_APPROVE_SAFE_UNKNOWN_WRITE, AUTO_APPROVE_ALL
+    };
+    /* expect[level][category] = 1 if that category auto-approves at that level. */
+    static const int k_expect[5][4] = {
+        /*              SAFE  UNKNOWN  WRITE  CRITICAL */
+        /* SAFE               */ { 1, 0, 0, 0 },
+        /* SAFE_UNKNOWN       */ { 1, 1, 0, 0 },
+        /* SAFE_WRITE         */ { 1, 0, 1, 0 },
+        /* SAFE_UNKNOWN_WRITE */ { 1, 1, 1, 0 },
+        /* ALL                */ { 1, 1, 1, 1 },
+    };
+
+    for (int lvl = 0; lvl < 5; lvl++) {
+        for (int cat = 0; cat < 4; cat++) {
+            ApprovalQueue q;
+            chat_approval_init(&q);
+            q.auto_approve = 1;
+            q.auto_approve_level = (int)k_levels[lvl];
+            chat_approval_add(&q, k_cmd_by_category[cat], CMD_PLATFORM_LINUX, 1);
+            int want_approved = k_expect[lvl][cat];
+            int got_approved = (q.entries[0].status == APPROVE_APPROVED);
+            if (got_approved != want_approved) {
+                printf("  level=%d category=%d cmd=\"%s\": expected approved=%d, got status=%d\n",
+                       lvl, cat, k_cmd_by_category[cat], want_approved,
+                       (int)q.entries[0].status);
+                _tf_local_fail = 1;
+            }
+        }
+    }
+    TEST_END();
+}
+
+/* The mask, not the maximum, gates approval: a {UNKNOWN, WRITE} pipeline
+ * must not auto-approve under SAFE_WRITE even though its `safety` maximum
+ * (what the chip shows) is CMD_WRITE. */
+int test_approval_mixed_pipeline_unknown_and_write_not_approved_under_safe_write(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.auto_approve = 1;
+    q.auto_approve_level = AUTO_APPROVE_SAFE_WRITE;
+    chat_approval_add(&q, "frobnicate | tee /etc/f", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[0].safety, (int)CMD_WRITE);
+    ASSERT_TRUE((q.entries[0].safety_mask & CMD_MASK_OF(CMD_UNKNOWN)) != 0);
+    ASSERT_TRUE((q.entries[0].safety_mask & CMD_MASK_OF(CMD_WRITE)) != 0);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_PENDING);
+
+    /* The same pipeline DOES auto-approve once UNKNOWN is also permitted. */
+    chat_approval_reset(&q);
+    q.auto_approve_level = AUTO_APPROVE_SAFE_UNKNOWN_WRITE;
+    chat_approval_add(&q, "frobnicate | tee /etc/f", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_APPROVED);
+    TEST_END();
+}
+
+int test_approval_unknown_blocked_when_permit_write_off(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    /* UNKNOWN is gated like WRITE/CRITICAL: safety (1) > CMD_SAFE (0). */
+    int idx = chat_approval_add(&q, "frobnicate", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ(idx, 0);
+    ASSERT_EQ((int)q.entries[0].safety, (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_BLOCKED);
+    TEST_END();
+}
+
+int test_approval_unknown_unblock_and_reblock(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "frobnicate", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_BLOCKED);
+
+    /* Permit Write turns on: unblock_all() moves it to PENDING. */
+    int n = chat_approval_unblock_all(&q);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_PENDING);
+
+    /* Permit Write turns back off: block_pending_writes() re-blocks it,
+     * exactly like a WRITE or CRITICAL entry would (safety > CMD_SAFE). */
+    n = chat_approval_block_pending_writes(&q);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_BLOCKED);
+    TEST_END();
+}
+
+/* --- auto_approve_mask() --- */
+
+int test_auto_approve_mask_per_level(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(auto_approve_mask(AUTO_APPROVE_SAFE), CMD_MASK_OF(CMD_SAFE));
+    ASSERT_EQ(auto_approve_mask(AUTO_APPROVE_SAFE_UNKNOWN),
+              CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN));
+    ASSERT_EQ(auto_approve_mask(AUTO_APPROVE_SAFE_WRITE),
+              CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_WRITE));
+    ASSERT_EQ(auto_approve_mask(AUTO_APPROVE_SAFE_UNKNOWN_WRITE),
+              CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN) | CMD_MASK_OF(CMD_WRITE));
+    ASSERT_EQ(auto_approve_mask(AUTO_APPROVE_ALL),
+              CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN) |
+              CMD_MASK_OF(CMD_WRITE) | CMD_MASK_OF(CMD_CRITICAL));
+    TEST_END();
+}
+
+/* --- auto_approve_mode_from_name() / _name() / _label() --- */
+
+int test_auto_approve_mode_name_round_trip(void) {
+    TEST_BEGIN();
+    static const char *const k_names[6] = {
+        "off", "safe", "safe+unknown", "safe+write", "safe+unknown+write", "all"
+    };
+    for (int i = 0; i < 6; i++) {
+        ASSERT_STR_EQ(auto_approve_mode_name(i), k_names[i]);
+        ASSERT_EQ(auto_approve_mode_from_name(k_names[i]), i);
+    }
+    TEST_END();
+}
+
+int test_auto_approve_mode_label_per_mode(void) {
+    TEST_BEGIN();
+    ASSERT_STR_EQ(auto_approve_mode_label(0), "Off");
+    ASSERT_STR_EQ(auto_approve_mode_label(1), "Safe only");
+    ASSERT_STR_EQ(auto_approve_mode_label(2), "Safe + unknown");
+    ASSERT_STR_EQ(auto_approve_mode_label(3), "Safe + write");
+    ASSERT_STR_EQ(auto_approve_mode_label(4), "Safe + unknown + write");
+    ASSERT_STR_EQ(auto_approve_mode_label(5), "All");
+    TEST_END();
+}
+
+int test_auto_approve_mode_from_name_garbage_is_off(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(auto_approve_mode_from_name(NULL), 0);
+    ASSERT_EQ(auto_approve_mode_from_name(""), 0);
+    ASSERT_EQ(auto_approve_mode_from_name("not-a-real-mode"), 0);
+    ASSERT_EQ(auto_approve_mode_from_name("SAFE"), 0); /* case-sensitive */
+    TEST_END();
+}
+
+int test_auto_approve_mode_name_and_label_clamp_out_of_range(void) {
+    TEST_BEGIN();
+    ASSERT_STR_EQ(auto_approve_mode_name(-1), "off");
+    ASSERT_STR_EQ(auto_approve_mode_name(6), "off");
+    ASSERT_STR_EQ(auto_approve_mode_label(-1), "Off");
+    ASSERT_STR_EQ(auto_approve_mode_label(6), "Off");
     TEST_END();
 }

@@ -949,81 +949,90 @@ int test_ai_cmd_write_stderr_to_file(void) {
 }
 
 /* --- ai_command_is_readonly: network device commands --- */
-/* Note: ai_command_is_readonly() now delegates to cmd_classify() with
- * CMD_PLATFORM_LINUX. Network-device-specific commands (configure, write,
- * commit, reload, rollback, erase, execute) are handled by their
- * respective platform classifiers, not the Linux classifier. On Linux
- * these are unknown commands and correctly return readonly/safe. */
+/* ai_command_is_readonly() asks cmd_classify() with CMD_PLATFORM_LINUX and
+ * reports whether the answer is CMD_SAFE. A network-device command is not a
+ * Linux command, so the Linux ruleset classifies it CMD_UNKNOWN -- it cannot
+ * vouch for it either way -- and this returns 0, "not provably read-only".
+ *
+ * That holds for the read-only ones (`show`, `display`) as much as the
+ * destructive ones: under the wrong ruleset, a safe answer would be a guess.
+ * Classified against their own platform they come out SAFE and CRITICAL
+ * respectively; tests/test_cmd_classify.c covers that.
+ *
+ * These assertions read 0 across the board for that reason. Before the
+ * UNKNOWN category existed they all read 1, because the Linux classifier
+ * fell through to SAFE for anything it did not recognise -- security audit
+ * C2, and the reason `reload` used to auto-approve on a switch. */
 
 int test_ai_cmd_write_configure_terminal(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("configure terminal"), 1);
+    ASSERT_EQ(ai_command_is_readonly("configure terminal"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_write_conf_t(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("conf t"), 1);
+    ASSERT_EQ(ai_command_is_readonly("conf t"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_write_configure_paloalto(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("configure"), 1);
+    ASSERT_EQ(ai_command_is_readonly("configure"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_write_write_memory(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("write memory"), 1);
+    ASSERT_EQ(ai_command_is_readonly("write memory"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_write_commit(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("commit"), 1);
+    ASSERT_EQ(ai_command_is_readonly("commit"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_write_reload(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("reload"), 1);
+    ASSERT_EQ(ai_command_is_readonly("reload"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_write_rollback(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("rollback"), 1);
+    ASSERT_EQ(ai_command_is_readonly("rollback"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_write_erase(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("erase startup-config"), 1);
+    ASSERT_EQ(ai_command_is_readonly("erase startup-config"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_write_execute(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("execute reboot"), 1);
+    ASSERT_EQ(ai_command_is_readonly("execute reboot"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_readonly_show_running(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("show running-config"), 1);
+    ASSERT_EQ(ai_command_is_readonly("show running-config"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_readonly_show_interfaces(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("show interfaces"), 1);
+    ASSERT_EQ(ai_command_is_readonly("show interfaces"), 0);
     TEST_END();
 }
 
 int test_ai_cmd_readonly_display_version(void) {
     TEST_BEGIN();
-    ASSERT_EQ(ai_command_is_readonly("display version"), 1);
+    ASSERT_EQ(ai_command_is_readonly("display version"), 0);
     TEST_END();
 }
 

@@ -49,11 +49,11 @@ int test_cmd_batch_add_copies_defaults(void) {
     ApprovalQueue defaults;
     chat_approval_init(&defaults);
     defaults.auto_approve = 1;
-    defaults.auto_approve_level = AUTO_APPROVE_WRITE;
+    defaults.auto_approve_level = AUTO_APPROVE_SAFE_WRITE;
     CmdBatch *a = cmd_batch_add(&set, &defaults, NULL);
     ASSERT_NOT_NULL(a);
     ASSERT_EQ(a->q.auto_approve, 1);
-    ASSERT_EQ((int)a->q.auto_approve_level, (int)AUTO_APPROVE_WRITE);
+    ASSERT_EQ((int)a->q.auto_approve_level, (int)AUTO_APPROVE_SAFE_WRITE);
     cmd_batch_set_free(&set);
     TEST_END();
 }

@@ -102,8 +102,10 @@ const char *ai_modes_label(int auto_on, int level)
 {
     if (!auto_on) return "off";
     if (level <= 0) return "safe only";
-    if (level == 1) return "safe + write";
-    return "all"; /* level >= 2, including out-of-range values */
+    if (level == 1) return "safe + unknown";
+    if (level == 2) return "safe + write";
+    if (level == 3) return "safe + unknown + write";
+    return "all"; /* level >= 4, including out-of-range values */
 }
 
 const char *ai_permit_label(int on)

@@ -1122,16 +1122,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
         }
         {
-            static const char *k_auto_approve_default_items[] = {
-                "Off", "Safe only", "Safe + write", "All"
-            };
             HWND lbl = make_label2(nd->hPage, "Auto Approve:");
             HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_AUTO_APPROVE_DEFAULT,
                                    CBS_DROPDOWNLIST);
             int sel = nd->cfg->settings.ai_auto_approve_default;
-            if (sel < 0 || sel > 3) sel = 0;
-            for (int i = 0; i < 4; i++)
-                SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)k_auto_approve_default_items[i]);
+            if (sel < 0 || sel > 5) sel = 0;
+            for (int i = 0; i < 6; i++)
+                SendMessage(cmb, CB_ADDSTRING, 0,
+                            (LPARAM)auto_approve_mode_label(i));
             SendMessage(cmb, CB_SETCURSEL, (WPARAM)sel, 0);
             add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
         }
@@ -1677,7 +1675,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             {
                 int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_AUTO_APPROVE_DEFAULT,
                                                   CB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel <= 3) s->ai_auto_approve_default = sel;
+                if (sel >= 0 && sel <= 5) s->ai_auto_approve_default = sel;
             }
 
             /* SSH user idle timeout */

@@ -14,6 +14,7 @@
 #include "../config/profile.h"
 #include "../config/config.h"
 #include "../core/vector.h"
+#include "../core/cmd_classify.h"
 #include "resource.h"
 #include "dpi_util.h"
 
@@ -113,6 +114,7 @@ static void form_clear(HWND hwnd)
     SetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, "");
     SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, "");
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL, 0, 0);
+    SendMessage(GetDlgItem(hwnd, IDC_COMBO_PLATFORM), CB_SETCURSEL, 0, 0);
 }
 
 /* Populate form fields from an existing profile. */
@@ -127,6 +129,22 @@ static void form_load(HWND hwnd, const Profile *pr)
     SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, pr->ai_notes);
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL,
                 pr->auth_type == AUTH_KEY ? 1 : 0, 0);
+
+    /* Select the dropdown row whose config token matches the profile's
+     * platform string; fall back to row 0 (Auto-detect) for "auto", an
+     * empty field (pre-existing profile struct with no platform saved
+     * yet), or a token the current build doesn't recognise. */
+    int plat_idx = 0;
+    int plat_count = cmd_platform_choice_count();
+    for (int i = 0; i < plat_count; i++) {
+        const char *tok = cmd_platform_choice_name(i);
+        if (tok && strcmp(tok, pr->platform) == 0) {
+            plat_idx = i;
+            break;
+        }
+    }
+    SendMessage(GetDlgItem(hwnd, IDC_COMBO_PLATFORM), CB_SETCURSEL,
+                (WPARAM)plat_idx, 0);
 }
 
 /* Show/hide Key path row and update Pass cue banner based on auth type. */
@@ -198,6 +216,11 @@ static int form_read(HWND hwnd, Profile *pr)
                                      CB_GETCURSEL, 0, 0);
     pr->auth_type = (auth_idx == 1) ? AUTH_KEY : AUTH_PASSWORD;
 
+    int plat_idx = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_PLATFORM),
+                                    CB_GETCURSEL, 0, 0);
+    const char *plat_tok = cmd_platform_choice_name(plat_idx);
+    snprintf(pr->platform, sizeof(pr->platform), "%s", plat_tok ? plat_tok : "auto");
+
     BOOL ok;
     UINT port = GetDlgItemInt(hwnd, IDC_EDIT_PORT, &ok, FALSE);
     pr->port  = (ok && port >= 1u && port <= 65535u) ? (int)port : 22;
@@ -222,6 +245,16 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         SendMessageA(hCombo, CB_ADDSTRING, 0, (LPARAM)"Password");
         SendMessageA(hCombo, CB_ADDSTRING, 0, (LPARAM)"SSH Key");
         SendMessage (hCombo, CB_SETCURSEL, 0, 0);
+
+        /* Device platform: populated entirely from cmd_classify's table, so
+         * adding a vendor later touches one place there and nothing here. */
+        HWND hPlatform = GetDlgItem(hwnd, IDC_COMBO_PLATFORM);
+        int plat_count = cmd_platform_choice_count();
+        for (int i = 0; i < plat_count; i++) {
+            const char *label = cmd_platform_choice_label(i);
+            SendMessageA(hPlatform, CB_ADDSTRING, 0, (LPARAM)(label ? label : ""));
+        }
+        SendMessage(hPlatform, CB_SETCURSEL, 0, 0);
 
         /* Limit AI Notes to ~400 words (2559 chars) */
         SendDlgItemMessage(hwnd, IDC_EDIT_AI_NOTES, EM_SETLIMITTEXT, 2559, 0);

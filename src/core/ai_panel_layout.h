@@ -35,8 +35,9 @@ void ai_status_layout(NsRect status, int dpi, int seg0_text_w, int seg1_text_w,
                        int auto_text_w, int meter_text_w, AiStatusLayout *out);
 
 /* "Auto approve: <label>" text: "off" when auto-approve is off; otherwise
- * "safe only" / "safe + write" / "all" for level 0/1/2 (AutoApproveLevel).
- * Out-of-range levels clamp: <0 to "safe only", >2 to "all". */
+ * "safe only" / "safe + unknown" / "safe + write" / "safe + unknown + write" /
+ * "all" for level 0/1/2/3/4 (AutoApproveLevel). Out-of-range levels clamp:
+ * <0 to "safe only", >4 to "all". */
 const char *ai_modes_label(int auto_on, int level);
 
 /* Read + write segment label: "off" / "on". */

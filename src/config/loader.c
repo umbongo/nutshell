@@ -113,7 +113,7 @@ void settings_validate(Settings *s)
     if (s->paste_confirm != 0) s->paste_confirm = 1;
     if (s->open_session_manager_at_start != 0) s->open_session_manager_at_start = 1;
     if (s->ai_auto_approve_default < 0) s->ai_auto_approve_default = 0;
-    if (s->ai_auto_approve_default > 3) s->ai_auto_approve_default = 3;
+    if (s->ai_auto_approve_default > 5) s->ai_auto_approve_default = 5;
 }
 
 void config_default_settings(Settings *s)
@@ -152,6 +152,7 @@ Profile *config_profile_new(void)
     Profile *p = xcalloc(1u, sizeof(Profile));
     p->port      = 22;
     p->auth_type = AUTH_PASSWORD;
+    field_copy(p->platform, sizeof(p->platform), "auto");
     return p;
 }
 
@@ -305,8 +306,25 @@ Config *config_load(const char *path)
                           s->open_session_manager_at_start);
         /* The old "ai_auto_approve_all" boolean key is dropped and ignored
          * on read -- no migration, callers get the 0 (off) default. */
-        s->ai_auto_approve_default = (int)json_obj_num(jset, "ai_auto_approve_default",
-                                                        (double)s->ai_auto_approve_default);
+
+        /* Auto Approve mode: the new string token "ai_auto_approve_mode" is
+         * authoritative when present. When it's absent (a config written
+         * before this token existed), migrate the old numeric
+         * "ai_auto_approve_default" key instead: 0 -> off, 1 -> safe,
+         * 2 -> safe+write, 3 -> all. Old 2 must land on the new mode
+         * 3 ("safe+write"), NOT the new mode 2 (now "safe+unknown") -- that
+         * remap is the whole reason this migration exists, since inserting
+         * CMD_UNKNOWN shifted what the numbers after it mean. A garbage or
+         * out-of-range legacy value migrates to 0 (off). Save writes only
+         * the new key; the old one is never written back. */
+        if ((sv = json_obj_str(jset, "ai_auto_approve_mode"))) {
+            s->ai_auto_approve_default = auto_approve_mode_from_name(sv);
+        } else {
+            static const int k_legacy_to_mode[4] = { 0, 1, 3, 5 };
+            int legacy = (int)json_obj_num(jset, "ai_auto_approve_default", 0.0);
+            s->ai_auto_approve_default =
+                (legacy >= 0 && legacy <= 3) ? k_legacy_to_mode[legacy] : 0;
+        }
         settings_validate(s);
     }
 
@@ -355,6 +373,11 @@ Config *config_load(const char *path)
             }
             if ((sv = json_obj_str(jp, "ai_notes"))) {
                 field_copy(pr->ai_notes, sizeof(pr->ai_notes), sv);
+            }
+            /* Missing key (older config) keeps the "auto" default that
+             * config_profile_new() already set. */
+            if ((sv = json_obj_str(jp, "platform"))) {
+                field_copy(pr->platform, sizeof(pr->platform), sv);
             }
             vec_push(&cfg->profiles, pr);
         }
@@ -464,7 +487,9 @@ int config_save(const Config *cfg, const char *path)
             s->paste_confirm ? "true" : "false");
     fprintf(f, "    \"open_session_manager_at_start\": %s,\n",
             s->open_session_manager_at_start ? "true" : "false");
-    fprintf(f, "    \"ai_auto_approve_default\": %d\n", s->ai_auto_approve_default);
+    fputs("    \"ai_auto_approve_mode\": ", f);
+    fprint_json_str(f, auto_approve_mode_name(s->ai_auto_approve_default));
+    fputs("\n", f);
     fputs("  },\n  \"profiles\": [\n", f);
 
     size_t n = vec_size(&cfg->profiles);
@@ -500,6 +525,9 @@ int config_save(const Config *cfg, const char *path)
         fputs(",\n", f);
         fputs("      \"ai_notes\": ", f);
         fprint_json_str(f, pr->ai_notes);
+        fputs(",\n", f);
+        fputs("      \"platform\": ", f);
+        fprint_json_str(f, pr->platform);
         fputs("\n    }", f);
         if (i + 1u < n) {
             fputc(',', f);

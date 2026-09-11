@@ -3106,7 +3106,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             }
             return 0;
         case IDC_CHAT_AUTOAPPROVE:
-            /* Cycle: off -> safe only -> safe + write -> all -> off. */
+            /* Cycle: off -> safe only -> safe + unknown -> safe + write ->
+             * safe + unknown + write -> all -> off. */
             if (d) {
                 if (!d->approval_q.auto_approve) {
                     d->approval_q.auto_approve = 1;
@@ -3597,7 +3598,7 @@ next_coalesce:;
                         batch->conv_mark = src->conv.msg_count;
                         for (int ci = 0; ci < ncmds; ci++)
                             chat_approval_add(&batch->q, cmds[ci],
-                                              CMD_PLATFORM_LINUX,
+                                              (CmdPlatform)src->platform,
                                               d->permit_write);
                     }
                 }
@@ -3746,7 +3747,7 @@ next_coalesce:;
                      * (see chat_approval_needs_user below). */
                     for (int ci = 0; ci < ncmds; ci++) {
                         int idx = chat_approval_add(&batch->q, cmds[ci],
-                                                    CMD_PLATFORM_LINUX,
+                                                    (CmdPlatform)d->active_state->platform,
                                                     d->permit_write);
                         if (idx < 0) continue;  /* queue full or blank -- drop it */
 
@@ -4411,24 +4412,24 @@ void ai_chat_set_markdown(HWND hwnd, int enabled)
 /* Seed state->auto_approve/auto_approve_level from d->auto_approve_default
  * if (and only if) this session's approval state has never been set --
  * a session the user has already toggled (or that was already seeded)
- * keeps its own choice. level0to3: 0 = off, 1..3 = on with level 0..2. */
+ * keeps its own choice. level0to5: 0 = off, 1..5 = on with level 0..4. */
 static void ai_chat_seed_auto_approve(AiChatData *d, AiSessionState *state)
 {
     if (!state || state->auto_approve_seeded) return;
-    int level0to3 = d->auto_approve_default;
-    state->auto_approve = level0to3 > 0 ? 1 : 0;
-    state->auto_approve_level = level0to3 > 0 ? (level0to3 - 1) : AUTO_APPROVE_SAFE;
+    int level0to5 = d->auto_approve_default;
+    state->auto_approve = level0to5 > 0 ? 1 : 0;
+    state->auto_approve_level = level0to5 > 0 ? (level0to5 - 1) : AUTO_APPROVE_SAFE;
     state->auto_approve_seeded = 1;
 }
 
-void ai_chat_set_auto_approve_default(HWND hwnd, int level0to3)
+void ai_chat_set_auto_approve_default(HWND hwnd, int level0to5)
 {
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
-    if (level0to3 < 0) level0to3 = 0;
-    if (level0to3 > 3) level0to3 = 3;
-    d->auto_approve_default = level0to3;
+    if (level0to5 < 0) level0to5 = 0;
+    if (level0to5 > 5) level0to5 = 5;
+    d->auto_approve_default = level0to5;
     /* Apply immediately to the active session if it hasn't been seeded yet
      * (e.g. the panel was just created and this is the first call). A
      * session the user has already touched is left alone. */

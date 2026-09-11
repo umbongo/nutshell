@@ -6,20 +6,20 @@
  *   Left  (x=4..187):   saved session list + New / Edit / Delete
  *   Right (x=191..526): connection form + Save / Connect / Cancel
  *
- * Dialog units:  530 wide × 317 tall
- * At 96 DPI / MS Shell Dlg 8pt this is roughly 795 × 513 px.
+ * Dialog units:  530 wide × 337 tall
+ * At 96 DPI / MS Shell Dlg 8pt this is roughly 795 × 546 px.
  */
-IDD_SESSION_MANAGER DIALOGEX 0, 0, 530, 317
+IDD_SESSION_MANAGER DIALOGEX 0, 0, 530, 337
 STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Session Manager"
 FONT 8, "MS Shell Dlg", 400, 0, 0x1
 BEGIN
     /* ---- Left column: saved sessions ---- */
     LTEXT           "Sessions",         -1,            12,   6, 158,   8
-    LISTBOX         IDC_LIST_SESSIONS,                 12,  18, 158, 272, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_TABSTOP
-    PUSHBUTTON      "New",              IDC_BTN_NEW,   12, 295,  47,  14
-    PUSHBUTTON      "Edit",             IDC_BTN_EDIT,  65, 295,  47,  14
-    PUSHBUTTON      "Delete",           IDC_BTN_DELETE,128, 295,  55,  14
+    LISTBOX         IDC_LIST_SESSIONS,                 12,  18, 158, 292, LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | WS_TABSTOP
+    PUSHBUTTON      "New",              IDC_BTN_NEW,   12, 315,  47,  14
+    PUSHBUTTON      "Edit",             IDC_BTN_EDIT,  65, 315,  47,  14
+    PUSHBUTTON      "Delete",           IDC_BTN_DELETE,128, 315,  55,  14
 
     /* ---- Right column: connection form ---- */
 
@@ -37,19 +37,22 @@ BEGIN
     LTEXT           "Auth:",            -1,           198,  72,  35,   8
     COMBOBOX        IDC_COMBO_AUTH,                   237,  70, 281,  40, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
-    RTEXT           "Password:",        -1,           181,  92,  52,   8
-    EDITTEXT        IDC_EDIT_PASS,                    237,  90, 281,  14, ES_PASSWORD | ES_AUTOHSCROLL
+    LTEXT           "Platform:",        -1,           198,  92,  45,   8
+    COMBOBOX        IDC_COMBO_PLATFORM,               237,  90, 281, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
-    LTEXT           "Key:",             IDC_STATIC_KEY,198, 112,  35,   8
-    EDITTEXT        IDC_EDIT_KEYPATH,                 237, 110, 259,  14, ES_AUTOHSCROLL
-    PUSHBUTTON      "...", IDC_BTN_BROWSE_KEY,        498, 110,  20,  14
+    RTEXT           "Password:",        -1,           181, 112,  52,   8
+    EDITTEXT        IDC_EDIT_PASS,                    237, 110, 281,  14, ES_PASSWORD | ES_AUTOHSCROLL
 
-    RTEXT           "AI Notes:",        -1,           191, 133,  42,   8
-    EDITTEXT        IDC_EDIT_AI_NOTES,                237, 130, 267, 117, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN
+    LTEXT           "Key:",             IDC_STATIC_KEY,198, 132,  35,   8
+    EDITTEXT        IDC_EDIT_KEYPATH,                 237, 130, 259,  14, ES_AUTOHSCROLL
+    PUSHBUTTON      "...", IDC_BTN_BROWSE_KEY,        498, 130,  20,  14
 
-    PUSHBUTTON      "Save",             IDC_BTN_SAVE, 198, 262,  50,  14
-    DEFPUSHBUTTON   "Connect",          IDOK,         412, 262,  55,  14
-    PUSHBUTTON      "Cancel",           IDCANCEL,     471, 262,  55,  14
+    RTEXT           "AI Notes:",        -1,           191, 153,  42,   8
+    EDITTEXT        IDC_EDIT_AI_NOTES,                237, 150, 267, 117, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN
+
+    PUSHBUTTON      "Save",             IDC_BTN_SAVE, 198, 282,  50,  14
+    DEFPUSHBUTTON   "Connect",          IDOK,         412, 282,  55,  14
+    PUSHBUTTON      "Cancel",           IDCANCEL,     471, 282,  55,  14
 END
 
 IDR_ACORN_PNG  RCDATA  "../../images/nutshell_acorn_transparent.png"
