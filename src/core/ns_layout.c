@@ -238,3 +238,98 @@ int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out)
     }
     return HIT_NONE;
 }
+
+/* Cell k's painted width: max(1, stop_text_w[k] + 2*pad_sm). A NULL
+ * stop_text_w, or a negative entry, counts as 0. */
+static int policy_cell_w(const int stop_text_w[NS_POLICY_STOPS], int k, int pad_sm)
+{
+    int text_w = (stop_text_w && stop_text_w[k] > 0) ? stop_text_w[k] : 0;
+    int w = text_w + 2 * pad_sm;
+    return (w > 1) ? w : 1;
+}
+
+int ns_policy_width(const int stop_text_w[NS_POLICY_STOPS], int dpi)
+{
+    int pad_sm = ns_scale(SP_SM, dpi);
+    int total = 0;
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        total += policy_cell_w(stop_text_w, k, pad_sm);
+    }
+    return total;
+}
+
+void ns_policy_layout(NsRect r, const int stop_text_w[NS_POLICY_STOPS],
+                      int unattended, int hit_h, int dpi,
+                      NsPolicyLayout *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+
+    int pad_sm = ns_scale(SP_SM, dpi);
+    int label_h = (r.h * 2) / 3;
+    int rail_h = r.h - label_h;
+
+    int H = (hit_h > r.h) ? hit_h : r.h;
+    int hit_top = r.y + (r.h - H) / 2;
+    int split_y = r.y + label_h;
+
+    int x = r.x;
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        int w = policy_cell_w(stop_text_w, k, pad_sm);
+
+        out->cell[k].x = x;
+        out->cell[k].y = r.y;
+        out->cell[k].w = w;
+        out->cell[k].h = r.h;
+
+        out->label[k].x = x;
+        out->label[k].y = r.y;
+        out->label[k].w = w;
+        out->label[k].h = label_h;
+
+        out->rail[k].x = x;
+        out->rail[k].y = r.y + label_h;
+        out->rail[k].w = w;
+        out->rail[k].h = rail_h;
+
+        out->hit_label[k].x = x;
+        out->hit_label[k].y = hit_top;
+        out->hit_label[k].w = w;
+        out->hit_label[k].h = split_y - hit_top;
+
+        out->hit_rail[k].x = x;
+        out->hit_rail[k].y = split_y;
+        out->hit_rail[k].w = w;
+        out->hit_rail[k].h = (hit_top + H) - split_y;
+
+        x += w;
+    }
+    out->total_w = x - r.x;
+
+    out->rail_fill.x = r.x;
+    out->rail_fill.y = out->rail[0].y;
+    out->rail_fill.h = rail_h;
+    if (unattended >= 0 && unattended < NS_POLICY_STOPS) {
+        out->rail_fill.w = (out->rail[unattended].x + out->rail[unattended].w) - r.x;
+    } else {
+        out->rail_fill.w = 0;
+    }
+}
+
+int ns_policy_hit(const NsPolicyLayout *l, int x, int y, int *stop_out)
+{
+    if (stop_out) *stop_out = -1;
+    if (!l) return HIT_NONE;
+
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        if (point_in(l->hit_label[k], x, y)) {
+            if (stop_out) *stop_out = k;
+            return HIT_POLICY_ALLOWED;
+        }
+        if (point_in(l->hit_rail[k], x, y)) {
+            if (stop_out) *stop_out = k;
+            return HIT_POLICY_UNATTENDED;
+        }
+    }
+    return HIT_NONE;
+}

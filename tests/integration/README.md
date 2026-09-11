@@ -161,10 +161,10 @@ required check, so the PR stays blocked. Only a `pull_request`-triggered run
 | `terminal_holds_position_while_output_arrives` | a view scrolled back with Page Up stays on the same lines while background output arrives; Enter returns to the live view (smart scrolling) |
 | `resize_applies_to_inactive_tab` | a tab resized while in the background comes back with the same grid as the tab that was in front, and a bigger one than it had before the resize |
 | `ai_panel_docks_with_key` | View › AI Assist docks the panel without a dialog |
-| `ai_runs_safe_command_with_auto_approve` | a prompted `echo` runs in the terminal via `[EXEC]` + Auto Approve |
+| `ai_runs_read_command_unattended` | a prompted `echo` runs in the terminal via `[EXEC]` once the policy control's unattended marker is on Read |
 | `ai_commands_run_one_at_a_time` | two `[EXEC]` blocks (`sleep 6 && echo FIRST_DONE`, then `echo SECOND_DONE`) run in order: the second command's echoed text only reaches the log after `FIRST_DONE`'s output, proving commands are gated on the shell prompt rather than burst-sent |
-| `ai_write_command_held_then_runs_after_permit` | a prompted `touch` is held back while Permit Write is off, then runs via "Run N selected" once Permit Write is switched on |
-| `ai_prompt_while_approval_pending` | a second prompt gets a normal reply while the first prompt's command batch sits pending (auto-approve off); "Run N selected" with `lParam` 0 (the integration-harness "oldest pending batch" convention) then still runs the first batch's command — see docs/superpowers/specs/2026-09-09-pending-command-batches.md |
+| `ai_write_command_held_then_runs_after_allow` | a prompted `touch` is held back while the policy ceiling is Read, then runs via "Run N selected" once the ceiling is raised to Write |
+| `ai_prompt_while_approval_pending` | a second prompt gets a normal reply while the first prompt's command batch sits pending (default policy, nothing unattended); "Run N selected" with `lParam` 0 (the integration-harness "oldest pending batch" convention) then still runs the first batch's command — see docs/superpowers/specs/2026-09-09-pending-command-batches.md |
 | `ui_gallery` | contact sheet of every `--ui-demo` state x theme (10 states x 4 themes = 40 captures); no SSH host or AI key needed |
 | `approval_card_run_selected_settles` | "Run N selected" on a live approval card (`--ui-demo=approval`) settles without crashing; no SSH host or AI key needed |
 | `ai_panel_opens_without_key` | the panel opens straight into the no-key empty state with `ai_api_key` empty, no dialog; no AI key needed despite the `ai_` prefix |
@@ -203,8 +203,8 @@ model default to Moonshot / `kimi-k3` and can be changed with `-AiProvider` and
 key-gated cases makes about nine model calls: `ai_panel_docks_with_key` sends
 none; the other four each send one or two prompts, plus one dispatcher
 follow-up call for every command batch that actually finishes running
-(`ai_runs_safe_command_with_auto_approve` 2, `ai_commands_run_one_at_a_time` 2,
-`ai_write_command_held_then_runs_after_permit` 2, `ai_prompt_while_approval_pending` 3).
+(`ai_runs_read_command_unattended` 2, `ai_commands_run_one_at_a_time` 2,
+`ai_write_command_held_then_runs_after_allow` 2, `ai_prompt_while_approval_pending` 3).
 
 ## Dialog helpers
 

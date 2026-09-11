@@ -80,7 +80,7 @@ static ChatMsgItem *add_commands(ChatMsgList *list, int n)
     ChatMsgItem *last = NULL;
     for (int i = 0; i < n; i++) {
         ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
-        chat_msg_set_command(item, "ls -la", CMD_SAFE, 0);
+        chat_msg_set_command(item, "ls -la", CMD_READ, 0);
         last = item;
     }
     return last;
@@ -93,7 +93,7 @@ int test_cmd_index_single(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *cmd = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(cmd, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(cmd, "ls", CMD_READ, 0);
     ASSERT_EQ(command_index_of(&list, cmd), 0);
     chat_msg_list_clear(&list);
     TEST_END();
@@ -105,10 +105,10 @@ int test_cmd_index_with_mixed_items(void) {
     chat_msg_list_init(&list);
     chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "thinking...");
     ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c0, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
     chat_msg_append(&list, CHAT_ITEM_STATUS, "running");
     ChatMsgItem *c1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c1, "pwd", CMD_SAFE, 0);
+    chat_msg_set_command(c1, "pwd", CMD_READ, 0);
     ASSERT_EQ(command_index_of(&list, c0), 0);
     ASSERT_EQ(command_index_of(&list, c1), 1);
     chat_msg_list_clear(&list);
@@ -134,7 +134,7 @@ int test_cmd_first_last_single(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *cmd = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(cmd, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(cmd, "ls", CMD_READ, 0);
     ASSERT_EQ(is_first_command(&list, cmd), 1);
     ASSERT_EQ(is_last_command(&list, cmd), 1);
     chat_msg_list_clear(&list);
@@ -146,11 +146,11 @@ int test_cmd_first_last_multiple(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c0, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
     ChatMsgItem *c1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c1, "pwd", CMD_SAFE, 0);
+    chat_msg_set_command(c1, "pwd", CMD_READ, 0);
     ChatMsgItem *c2 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c2, "cat", CMD_SAFE, 0);
+    chat_msg_set_command(c2, "cat", CMD_READ, 0);
     ASSERT_EQ(is_first_command(&list, c0), 1);
     ASSERT_EQ(is_first_command(&list, c1), 0);
     ASSERT_EQ(is_last_command(&list, c0), 0);
@@ -167,7 +167,7 @@ int test_collapse_few_commands_all_visible(void) {
     ChatMsgItem *cmds[3];
     for (int i = 0; i < 3; i++) {
         cmds[i] = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-        chat_msg_set_command(cmds[i], "ls", CMD_SAFE, 0);
+        chat_msg_set_command(cmds[i], "ls", CMD_READ, 0);
     }
     for (int i = 0; i < 3; i++)
         ASSERT_EQ(cmd_is_visible(&list, cmds[i], 0), 1);
@@ -183,7 +183,7 @@ int test_collapse_exact_threshold_all_visible(void) {
     ChatMsgItem *cmds[4];
     for (int i = 0; i < 4; i++) {
         cmds[i] = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-        chat_msg_set_command(cmds[i], "ls", CMD_SAFE, 0);
+        chat_msg_set_command(cmds[i], "ls", CMD_READ, 0);
     }
     for (int i = 0; i < 4; i++)
         ASSERT_EQ(cmd_is_visible(&list, cmds[i], 0), 1);
@@ -199,7 +199,7 @@ int test_collapse_hides_beyond_threshold(void) {
     ChatMsgItem *cmds[6];
     for (int i = 0; i < 6; i++) {
         cmds[i] = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-        chat_msg_set_command(cmds[i], "ls", CMD_SAFE, 0);
+        chat_msg_set_command(cmds[i], "ls", CMD_READ, 0);
     }
     /* First 4 visible when collapsed */
     for (int i = 0; i < 4; i++)
@@ -219,7 +219,7 @@ int test_expand_shows_all(void) {
     ChatMsgItem *cmds[8];
     for (int i = 0; i < 8; i++) {
         cmds[i] = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-        chat_msg_set_command(cmds[i], "ls", CMD_SAFE, 0);
+        chat_msg_set_command(cmds[i], "ls", CMD_READ, 0);
     }
     for (int i = 0; i < 8; i++)
         ASSERT_EQ(cmd_is_visible(&list, cmds[i], 1), 1);
@@ -235,7 +235,7 @@ int test_collapse_max_commands(void) {
     ChatMsgItem *cmds[16];
     for (int i = 0; i < 16; i++) {
         cmds[i] = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-        chat_msg_set_command(cmds[i], "ls", CMD_SAFE, 0);
+        chat_msg_set_command(cmds[i], "ls", CMD_READ, 0);
     }
     int visible = 0, hidden = 0;
     for (int i = 0; i < 16; i++) {
@@ -255,11 +255,11 @@ int test_count_commands_with_pending(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c0, "ls", CMD_SAFE, 0);  /* pending */
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);  /* pending */
     ChatMsgItem *c1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
     chat_msg_set_command(c1, "rm x", CMD_WRITE, 1);  /* blocked */
     ChatMsgItem *c2 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c2, "pwd", CMD_SAFE, 0);  /* pending */
+    chat_msg_set_command(c2, "pwd", CMD_READ, 0);  /* pending */
     c0->u.cmd.approved = 1;  /* approve first */
     int total, pending;
     count_commands(&list, &total, &pending);
@@ -275,9 +275,9 @@ int test_allow_all_button_visibility(void) {
     chat_msg_list_init(&list);
     /* Action buttons row should show on last command when pending > 0 */
     ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c0, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
     ChatMsgItem *c1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c1, "pwd", CMD_SAFE, 0);
+    chat_msg_set_command(c1, "pwd", CMD_READ, 0);
     int total, pending;
     count_commands(&list, &total, &pending);
     int show_actions = (pending > 0 && is_last_command(&list, c1));
@@ -301,7 +301,7 @@ int test_expand_button_visibility(void) {
     ChatMsgItem *cmds[6];
     for (int i = 0; i < 6; i++) {
         cmds[i] = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-        chat_msg_set_command(cmds[i], "ls", CMD_SAFE, 0);
+        chat_msg_set_command(cmds[i], "ls", CMD_READ, 0);
     }
     int total, pending;
     count_commands(&list, &total, &pending);
@@ -326,7 +326,7 @@ int test_single_command_no_allow_all(void) {
     chat_msg_list_init(&list);
     /* With only 1 command, action buttons still show (pending > 0) */
     ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c0, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
     int total, pending;
     count_commands(&list, &total, &pending);
     int show = (pending > 0 && is_last_command(&list, c0));
@@ -360,7 +360,7 @@ int test_cmd_selected_default_checked(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c0, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
     ASSERT_EQ(c0->u.cmd.selected, 1);
     ASSERT_EQ(count_selected(&list), 1);
     chat_msg_list_clear(&list);
@@ -385,11 +385,11 @@ int test_cmd_selected_toggle(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c0, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
     ChatMsgItem *c1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c1, "pwd", CMD_SAFE, 0);
+    chat_msg_set_command(c1, "pwd", CMD_READ, 0);
     ChatMsgItem *c2 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c2, "cat f", CMD_SAFE, 0);
+    chat_msg_set_command(c2, "cat f", CMD_READ, 0);
 
     /* All three start checked by default -- deselect the middle one,
      * leaving first and third checked. */
@@ -420,7 +420,7 @@ int test_cmd_selected_approved_not_counted(void) {
     ChatMsgList list;
     chat_msg_list_init(&list);
     ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
-    chat_msg_set_command(c0, "ls", CMD_SAFE, 0);
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
     c0->u.cmd.selected = 1;
     c0->u.cmd.approved = 1; /* already approved */
     ASSERT_EQ(count_selected(&list), 0);

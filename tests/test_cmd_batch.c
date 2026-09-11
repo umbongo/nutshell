@@ -37,7 +37,10 @@ int test_cmd_batch_add_inits_queue(void) {
     CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
     ASSERT_NOT_NULL(a);
     ASSERT_EQ(a->q.count, 0);
-    ASSERT_EQ(a->q.auto_approve, 0);
+    /* NULL defaults leaves the new batch's policy at cmd_policy_default() */
+    CmdPolicy def = cmd_policy_default();
+    ASSERT_EQ(a->q.policy.allowed, def.allowed);
+    ASSERT_EQ(a->q.policy.unattended, def.unattended);
     cmd_batch_set_free(&set);
     TEST_END();
 }
@@ -48,12 +51,14 @@ int test_cmd_batch_add_copies_defaults(void) {
     cmd_batch_set_init(&set);
     ApprovalQueue defaults;
     chat_approval_init(&defaults);
-    defaults.auto_approve = 1;
-    defaults.auto_approve_level = AUTO_APPROVE_SAFE_WRITE;
+    /* A non-default policy on both markers -- this is what must carry
+     * over from the session into a freshly added batch. */
+    cmd_policy_set_allowed(&defaults.policy, CMD_WRITE);
+    cmd_policy_set_unattended(&defaults.policy, CMD_READ);
     CmdBatch *a = cmd_batch_add(&set, &defaults, NULL);
     ASSERT_NOT_NULL(a);
-    ASSERT_EQ(a->q.auto_approve, 1);
-    ASSERT_EQ((int)a->q.auto_approve_level, (int)AUTO_APPROVE_SAFE_WRITE);
+    ASSERT_EQ(a->q.policy.allowed, CMD_WRITE);
+    ASSERT_EQ(a->q.policy.unattended, CMD_READ);
     cmd_batch_set_free(&set);
     TEST_END();
 }
@@ -155,9 +160,9 @@ int test_cmd_batch_first_pending_oldest_needing_user(void) {
     CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
 
     /* a fully decided (nothing pending); b still has a pending entry */
-    chat_approval_add(&a->q, "echo a", CMD_PLATFORM_LINUX, 1);
+    chat_approval_add(&a->q, "echo a", CMD_PLATFORM_LINUX);
     chat_approval_approve(&a->q, 0);
-    chat_approval_add(&b->q, "echo b", CMD_PLATFORM_LINUX, 1);
+    chat_approval_add(&b->q, "echo b", CMD_PLATFORM_LINUX);
 
     CmdBatch *pending = cmd_batch_first_pending(&set);
     ASSERT_TRUE(pending == b);
@@ -171,7 +176,7 @@ int test_cmd_batch_first_pending_none(void) {
     CmdBatchSet set;
     cmd_batch_set_init(&set);
     CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
-    chat_approval_add(&a->q, "echo a", CMD_PLATFORM_LINUX, 1);
+    chat_approval_add(&a->q, "echo a", CMD_PLATFORM_LINUX);
     chat_approval_approve(&a->q, 0);
     ASSERT_NULL(cmd_batch_first_pending(&set));
     cmd_batch_set_free(&set);
@@ -186,8 +191,8 @@ int test_cmd_batch_next_runnable_oldest_with_approved(void) {
     CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
 
     /* a has nothing approved yet (still pending); b has an approved entry */
-    chat_approval_add(&a->q, "echo a", CMD_PLATFORM_LINUX, 1);
-    chat_approval_add(&b->q, "echo b", CMD_PLATFORM_LINUX, 1);
+    chat_approval_add(&a->q, "echo a", CMD_PLATFORM_LINUX);
+    chat_approval_add(&b->q, "echo b", CMD_PLATFORM_LINUX);
     chat_approval_approve(&b->q, 0);
 
     CmdBatch *runnable = cmd_batch_next_runnable(&set);
@@ -222,7 +227,7 @@ int test_cmd_batch_next_runnable_none(void) {
     CmdBatchSet set;
     cmd_batch_set_init(&set);
     CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
-    chat_approval_add(&a->q, "echo a", CMD_PLATFORM_LINUX, 1);
+    chat_approval_add(&a->q, "echo a", CMD_PLATFORM_LINUX);
     ASSERT_NULL(cmd_batch_next_runnable(&set));
     cmd_batch_set_free(&set);
     TEST_END();

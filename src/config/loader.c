@@ -112,8 +112,7 @@ void settings_validate(Settings *s)
     if (s->auto_connect != 0) s->auto_connect = 1;
     if (s->paste_confirm != 0) s->paste_confirm = 1;
     if (s->open_session_manager_at_start != 0) s->open_session_manager_at_start = 1;
-    if (s->ai_auto_approve_default < 0) s->ai_auto_approve_default = 0;
-    if (s->ai_auto_approve_default > 5) s->ai_auto_approve_default = 5;
+    cmd_policy_clamp(&s->ai_policy_default);
 }
 
 void config_default_settings(Settings *s)
@@ -144,7 +143,7 @@ void config_default_settings(Settings *s)
     /* auto_connect_session defaults to empty (already zeroed by memset) */
     s->paste_confirm = 1;
     s->open_session_manager_at_start = 0;
-    s->ai_auto_approve_default = 0;
+    s->ai_policy_default = cmd_policy_default();
 }
 
 Profile *config_profile_new(void)
@@ -305,25 +304,51 @@ Config *config_load(const char *path)
             json_obj_bool(jset, "open_session_manager_at_start",
                           s->open_session_manager_at_start);
         /* The old "ai_auto_approve_all" boolean key is dropped and ignored
-         * on read -- no migration, callers get the 0 (off) default. */
+         * on read -- no migration, callers get the default. */
 
-        /* Auto Approve mode: the new string token "ai_auto_approve_mode" is
-         * authoritative when present. When it's absent (a config written
-         * before this token existed), migrate the old numeric
-         * "ai_auto_approve_default" key instead: 0 -> off, 1 -> safe,
-         * 2 -> safe+write, 3 -> all. Old 2 must land on the new mode
-         * 3 ("safe+write"), NOT the new mode 2 (now "safe+unknown") -- that
-         * remap is the whole reason this migration exists, since inserting
-         * CMD_UNKNOWN shifted what the numbers after it mean. A garbage or
-         * out-of-range legacy value migrates to 0 (off). Save writes only
-         * the new key; the old one is never written back. */
-        if ((sv = json_obj_str(jset, "ai_auto_approve_mode"))) {
-            s->ai_auto_approve_default = auto_approve_mode_from_name(sv);
+        /* The session policy for new sessions. First match wins:
+         *
+         *   1. "ai_policy_default", the one key this version writes.
+         *   2. "ai_auto_approve_mode" (v1.1.16): a five-mode auto-approve
+         *      set, with no ceiling of its own.
+         *   3. "ai_auto_approve_default" (pre-v1.1.16): the numeric form of
+         *      the same thing, 0 -> off, 1 -> safe, 2 -> safe+write,
+         *      3 -> all (old 2 lands on the *third* mode, not the second --
+         *      inserting CMD_UNKNOWN shifted what the numbers mean).
+         *
+         * Rules 2 and 3 both land on ceiling `read`, and on unattended
+         * `read` for any mode except "off". That looks lossy, and is -- but
+         * only of intent that never took effect. The old permit-write flag
+         * was per session and ALWAYS started off, so a fresh session blocked
+         * everything above READ before the auto-approve gate ever saw it:
+         * READ was the only category that could actually run unattended,
+         * whatever the stored mode said. Migrating the mode's top category
+         * onto the new ceiling instead would start new sessions more
+         * permissively than the same config starts them today, and a
+         * migration must never do that. The user raises the ceiling
+         * deliberately, in Settings or in the status line.
+         *
+         * Save writes "ai_policy_default" only; neither old key is written
+         * back. */
+        if ((sv = json_obj_str(jset, "ai_policy_default"))) {
+            cmd_policy_from_token(sv, &s->ai_policy_default);
         } else {
-            static const int k_legacy_to_mode[4] = { 0, 1, 3, 5 };
-            int legacy = (int)json_obj_num(jset, "ai_auto_approve_default", 0.0);
-            s->ai_auto_approve_default =
-                (legacy >= 0 && legacy <= 3) ? k_legacy_to_mode[legacy] : 0;
+            /* Was the superseded setting on at all? "off" and anything
+             * unrecognised count as off, so a corrupt value can only ever
+             * migrate to the safer state. */
+            static const char *const k_legacy_on_modes[5] = {
+                "safe", "safe+unknown", "safe+write", "safe+unknown+write", "all"
+            };
+            int legacy_on = 0;
+            if ((sv = json_obj_str(jset, "ai_auto_approve_mode"))) {
+                for (int i = 0; i < 5; i++)
+                    if (strcmp(sv, k_legacy_on_modes[i]) == 0) { legacy_on = 1; break; }
+            } else {
+                int num = (int)json_obj_num(jset, "ai_auto_approve_default", 0.0);
+                legacy_on = (num >= 1 && num <= 3);
+            }
+            s->ai_policy_default.allowed = CMD_READ;
+            s->ai_policy_default.unattended = legacy_on ? CMD_READ : POLICY_NONE;
         }
         settings_validate(s);
     }
@@ -487,8 +512,12 @@ int config_save(const Config *cfg, const char *path)
             s->paste_confirm ? "true" : "false");
     fprintf(f, "    \"open_session_manager_at_start\": %s,\n",
             s->open_session_manager_at_start ? "true" : "false");
-    fputs("    \"ai_auto_approve_mode\": ", f);
-    fprint_json_str(f, auto_approve_mode_name(s->ai_auto_approve_default));
+    {
+        char policy_tok[32];
+        cmd_policy_to_token(s->ai_policy_default, policy_tok, sizeof(policy_tok));
+        fputs("    \"ai_policy_default\": ", f);
+        fprint_json_str(f, policy_tok);
+    }
     fputs("\n", f);
     fputs("  },\n  \"profiles\": [\n", f);
 

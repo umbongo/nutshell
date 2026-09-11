@@ -98,20 +98,20 @@ static const SubcmdRule linux_subcmd_rules[] = {
     { "systemctl", "restart", CMD_WRITE },
     { "systemctl", "reload",  CMD_WRITE },
     { "systemctl", "enable",  CMD_WRITE },
-    { "systemctl", "status",  CMD_SAFE },
-    { "systemctl", "is-active", CMD_SAFE },
-    { "systemctl", "is-enabled", CMD_SAFE },
-    { "systemctl", "list-units", CMD_SAFE },
+    { "systemctl", "status",  CMD_READ },
+    { "systemctl", "is-active", CMD_READ },
+    { "systemctl", "is-enabled", CMD_READ },
+    { "systemctl", "list-units", CMD_READ },
     /* docker subcommands */
     { "docker", "run",    CMD_WRITE },
     { "docker", "build",  CMD_WRITE },
     { "docker", "exec",   CMD_WRITE },
     { "docker", "rm",     CMD_CRITICAL },
     { "docker", "system", CMD_CRITICAL },
-    { "docker", "ps",     CMD_SAFE },
-    { "docker", "images", CMD_SAFE },
-    { "docker", "logs",   CMD_SAFE },
-    { "docker", "inspect", CMD_SAFE },
+    { "docker", "ps",     CMD_READ },
+    { "docker", "images", CMD_READ },
+    { "docker", "logs",   CMD_READ },
+    { "docker", "inspect", CMD_READ },
     /* kubectl subcommands */
     { "kubectl", "delete", CMD_CRITICAL },
     { "kubectl", "apply",  CMD_WRITE },
@@ -119,34 +119,34 @@ static const SubcmdRule linux_subcmd_rules[] = {
     { "kubectl", "edit",   CMD_WRITE },
     { "kubectl", "patch",  CMD_WRITE },
     { "kubectl", "scale",  CMD_WRITE },
-    { "kubectl", "get",    CMD_SAFE },
-    { "kubectl", "describe", CMD_SAFE },
-    { "kubectl", "logs",   CMD_SAFE },
+    { "kubectl", "get",    CMD_READ },
+    { "kubectl", "describe", CMD_READ },
+    { "kubectl", "logs",   CMD_READ },
     /* iptables */
     { "iptables", "-F", CMD_CRITICAL },
     { "iptables", "-P", CMD_CRITICAL },
     { "iptables", "-A", CMD_WRITE },
     { "iptables", "-I", CMD_WRITE },
     { "iptables", "-D", CMD_WRITE },
-    { "iptables", "-L", CMD_SAFE },
-    { "iptables", "-S", CMD_SAFE },
+    { "iptables", "-L", CMD_READ },
+    { "iptables", "-S", CMD_READ },
     /* ip subcommands */
-    { "ip", "addr",  CMD_SAFE },
-    { "ip", "route", CMD_SAFE },
-    { "ip", "link",  CMD_SAFE },
+    { "ip", "addr",  CMD_READ },
+    { "ip", "route", CMD_READ },
+    { "ip", "link",  CMD_READ },
     /* git subcommands */
     { "git", "push",   CMD_WRITE },
     { "git", "reset",  CMD_WRITE },
     { "git", "rebase", CMD_WRITE },
     { "git", "merge",  CMD_WRITE },
-    { "git", "status", CMD_SAFE },
-    { "git", "log",    CMD_SAFE },
-    { "git", "diff",   CMD_SAFE },
-    { "git", "show",   CMD_SAFE },
-    { "git", "branch", CMD_SAFE },
+    { "git", "status", CMD_READ },
+    { "git", "log",    CMD_READ },
+    { "git", "diff",   CMD_READ },
+    { "git", "show",   CMD_READ },
+    { "git", "branch", CMD_READ },
     /* crontab */
-    { "crontab", "-l", CMD_SAFE },
-    { "crontab", "--list", CMD_SAFE },
+    { "crontab", "-l", CMD_READ },
+    { "crontab", "--list", CMD_READ },
     /* sed */
     { "sed", "-i", CMD_WRITE },
     /* curl/wget with output */
@@ -172,9 +172,9 @@ static const SubcmdRule linux_subcmd_rules[] = {
     { "nft", "delete", CMD_CRITICAL },
     { "nft", "-f",     CMD_CRITICAL },
     /* firewall-cmd: wholesale firewall change */
-    { "firewall-cmd", "--list-all",        CMD_SAFE },
-    { "firewall-cmd", "--list-all-zones",  CMD_SAFE },
-    { "firewall-cmd", "--state",           CMD_SAFE },
+    { "firewall-cmd", "--list-all",        CMD_READ },
+    { "firewall-cmd", "--list-all-zones",  CMD_READ },
+    { "firewall-cmd", "--state",           CMD_READ },
     { "firewall-cmd", "--panic-on",        CMD_CRITICAL },
     { "firewall-cmd", "--complete-reload", CMD_CRITICAL },
     /* passwd / usermod: account lock-out */
@@ -248,17 +248,17 @@ static const SubcmdRule linux_subcmd_rules[] = {
     { "helm", "install",   CMD_WRITE },
     { "helm", "upgrade",   CMD_WRITE },
     /* terraform */
-    { "helm", "list",    CMD_SAFE },
-    { "helm", "status",  CMD_SAFE },
-    { "helm", "get",     CMD_SAFE },
-    { "helm", "history", CMD_SAFE },
+    { "helm", "list",    CMD_READ },
+    { "helm", "status",  CMD_READ },
+    { "helm", "get",     CMD_READ },
+    { "helm", "history", CMD_READ },
     { "terraform", "destroy", CMD_CRITICAL },
     { "terraform", "apply",   CMD_WRITE },
     { "terraform", "init",    CMD_WRITE },
-    { "terraform", "plan",     CMD_SAFE },
-    { "terraform", "show",     CMD_SAFE },
-    { "terraform", "output",   CMD_SAFE },
-    { "terraform", "validate", CMD_SAFE },
+    { "terraform", "plan",     CMD_READ },
+    { "terraform", "show",     CMD_READ },
+    { "terraform", "output",   CMD_READ },
+    { "terraform", "validate", CMD_READ },
     /* netplan */
     { "netplan", "apply", CMD_CRITICAL },
     /* wg (WireGuard) */
@@ -276,61 +276,61 @@ static const SubcmdRule linux_subcmd_rules[] = {
     /* --- spec 3.3 additions (narrow: only the package-manager query
      * subcommands and "ufw status" that section 17's corner cases
      * require -- see the report for what was deliberately left out) --- */
-    { "apt", "list", CMD_SAFE },
-    { "apt", "show", CMD_SAFE },
-    { "apt", "search", CMD_SAFE },
-    { "apt", "policy", CMD_SAFE },
-    { "dnf", "list", CMD_SAFE },
-    { "dnf", "info", CMD_SAFE },
-    { "dnf", "search", CMD_SAFE },
-    { "dnf", "repolist", CMD_SAFE },
-    { "yum", "list", CMD_SAFE },
-    { "yum", "info", CMD_SAFE },
-    { "rpm", "-qa", CMD_SAFE },
-    { "rpm", "-qi", CMD_SAFE },
-    { "rpm", "-ql", CMD_SAFE },
-    { "dpkg", "-l", CMD_SAFE },
-    { "dpkg", "-L", CMD_SAFE },
-    { "dpkg", "-S", CMD_SAFE },
-    { "pacman", "-Q",  CMD_SAFE },
-    { "pacman", "-Qs", CMD_SAFE },
-    { "pacman", "-Qi", CMD_SAFE },
-    { "zypper", "se", CMD_SAFE },
-    { "zypper", "search", CMD_SAFE },
-    { "zypper", "info", CMD_SAFE },
-    { "zypper", "repos", CMD_SAFE },
-    { "zypper", "if", CMD_SAFE },
-    { "zypper", "lr", CMD_SAFE },
-    { "apk", "info", CMD_SAFE },
-    { "snap", "list", CMD_SAFE },
-    { "flatpak", "list", CMD_SAFE },
-    { "pip",  "list",   CMD_SAFE },
-    { "pip",  "show",   CMD_SAFE },
-    { "pip",  "freeze", CMD_SAFE },
-    { "pip3", "list",   CMD_SAFE },
-    { "pip3", "show",   CMD_SAFE },
-    { "pip3", "freeze", CMD_SAFE },
-    { "npm", "ls",   CMD_SAFE },
-    { "npm", "view", CMD_SAFE },
+    { "apt", "list", CMD_READ },
+    { "apt", "show", CMD_READ },
+    { "apt", "search", CMD_READ },
+    { "apt", "policy", CMD_READ },
+    { "dnf", "list", CMD_READ },
+    { "dnf", "info", CMD_READ },
+    { "dnf", "search", CMD_READ },
+    { "dnf", "repolist", CMD_READ },
+    { "yum", "list", CMD_READ },
+    { "yum", "info", CMD_READ },
+    { "rpm", "-qa", CMD_READ },
+    { "rpm", "-qi", CMD_READ },
+    { "rpm", "-ql", CMD_READ },
+    { "dpkg", "-l", CMD_READ },
+    { "dpkg", "-L", CMD_READ },
+    { "dpkg", "-S", CMD_READ },
+    { "pacman", "-Q",  CMD_READ },
+    { "pacman", "-Qs", CMD_READ },
+    { "pacman", "-Qi", CMD_READ },
+    { "zypper", "se", CMD_READ },
+    { "zypper", "search", CMD_READ },
+    { "zypper", "info", CMD_READ },
+    { "zypper", "repos", CMD_READ },
+    { "zypper", "if", CMD_READ },
+    { "zypper", "lr", CMD_READ },
+    { "apk", "info", CMD_READ },
+    { "snap", "list", CMD_READ },
+    { "flatpak", "list", CMD_READ },
+    { "pip",  "list",   CMD_READ },
+    { "pip",  "show",   CMD_READ },
+    { "pip",  "freeze", CMD_READ },
+    { "pip3", "list",   CMD_READ },
+    { "pip3", "show",   CMD_READ },
+    { "pip3", "freeze", CMD_READ },
+    { "npm", "ls",   CMD_READ },
+    { "npm", "view", CMD_READ },
 
     /* --- further spec 3.3 additions: multi-token allow-list entries that
-     * don't fit the single-token linux_safe_cmds[] table (added while
+     * don't fit the single-token linux_read_cmds[] table (added while
      * wiring up the C2 allow-list fallthrough -- see the report for what
      * was deliberately left off) --- */
-    { "systemctl", "cat",          CMD_SAFE },
-    { "systemctl", "show",         CMD_SAFE },
-    { "systemctl", "list-timers",  CMD_SAFE },
-    { "nft",       "list",         CMD_SAFE },
-    { "ip",        "neigh",        CMD_SAFE },
-    { "route",     "-n",           CMD_SAFE },
-    { "docker",    "stats",        CMD_SAFE },
-    { "docker",    "top",          CMD_SAFE },
-    { "kubectl",   "top",          CMD_SAFE },
-    { "kubectl",   "explain",      CMD_SAFE },
-    { "kubectl",   "api-resources", CMD_SAFE },
-    { "kubectl",   "version",      CMD_SAFE },
+    { "systemctl", "cat",          CMD_READ },
+    { "systemctl", "show",         CMD_READ },
+    { "systemctl", "list-timers",  CMD_READ },
+    { "nft",       "list",         CMD_READ },
+    { "ip",        "neigh",        CMD_READ },
+    { "route",     "-n",           CMD_READ },
+    { "docker",    "stats",        CMD_READ },
+    { "docker",    "top",          CMD_READ },
+    { "kubectl",   "top",          CMD_READ },
+    { "kubectl",   "explain",      CMD_READ },
+    { "kubectl",   "api-resources", CMD_READ },
+    { "kubectl",   "version",      CMD_READ },
 
-    { NULL, NULL, CMD_SAFE }
+    { NULL, NULL, CMD_READ }
 };
 
 /* ip subcommand + action rules (3-token sensitivity) */
@@ -369,7 +369,7 @@ static const ThreeTokenRule linux_3token_rules[] = {
     { "nmcli", "device",  "disconnect", CMD_CRITICAL },
     { "nmcli", "con",    "up",     CMD_WRITE },
     { "nmcli", "con",    "modify", CMD_WRITE },
-    { NULL, NULL, NULL, CMD_SAFE }
+    { NULL, NULL, NULL, CMD_READ }
 };
 
 /* kill with -9 flag is critical, plain kill is write */
@@ -396,7 +396,7 @@ static const char *kill_critical_flags[] = { "-9", "-KILL", "-SIGKILL", NULL };
  * see test_cmd_classify_unknown_overlay_reset_forms, which relies on
  * classify_linux_segment("reset", ...) staying SAFE when the
  * CMD_PLATFORM_UNKNOWN overlay delegates a bare "reset" to it. */
-static const char *linux_safe_cmds[] = {
+static const char *linux_read_cmds[] = {
     "ls", "dir", "cat", "tac", "less", "more", "head", "tail",
     "grep", "egrep", "fgrep", "rg", "wc", "sort", "uniq", "cut", "tr",
     "column", "diff", "cmp", "md5sum", "sha1sum", "sha256sum",
@@ -574,7 +574,7 @@ static CmdSafetyLevel scan_redirects(const char *seg, size_t seg_len)
             return CMD_WRITE;
         }
     }
-    return CMD_SAFE;
+    return CMD_READ;
 }
 
 /* ----- Pipe-to-dangerous scanning ----- */
@@ -585,7 +585,7 @@ static CmdSafetyLevel scan_pipe_target(const char *seg)
     const char *tok_start;
     size_t tok_len;
 
-    if (!next_token(&p, &tok_start, &tok_len)) return CMD_SAFE;
+    if (!next_token(&p, &tok_start, &tok_len)) return CMD_READ;
 
     const char *base;
     size_t base_len;
@@ -616,7 +616,7 @@ static CmdSafetyLevel scan_pipe_target(const char *seg)
         }
     }
 
-    return CMD_SAFE;
+    return CMD_READ;
 }
 
 /* ----- SQL in database CLI detection ----- */
@@ -644,14 +644,14 @@ static CmdSafetyLevel scan_db_cli_args(const char *p)
                 if (ci_memcmp(sql, "SELECT", 6) == 0 ||
                     ci_memcmp(sql, "SHOW", 4) == 0 ||
                     ci_memcmp(sql, "DESCRIBE", 8) == 0)
-                    return CMD_SAFE;
+                    return CMD_READ;
                 sql++;
             }
             return CMD_WRITE;
         }
         p++;
     }
-    return CMD_SAFE;
+    return CMD_READ;
 }
 
 /* ----- Per-segment Linux classification ----- */
@@ -740,7 +740,7 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
     if (is_db_cli(base1, base1_len)) {
         CmdSafetyLevel db_level = scan_db_cli_args(p);
         if (db_level > redir) redir = db_level;
-        if (reason_buf && reason_buf_size > 0 && db_level > CMD_SAFE)
+        if (reason_buf && reason_buf_size > 0 && db_level > CMD_READ)
             snprintf(reason_buf, reason_buf_size, "destructive SQL via %.*s",
                      (int)base1_len, base1);
         return redir;
@@ -918,7 +918,7 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
              * / 17 corner case) -- narrow SAFE override, doesn't touch any
              * other ufw form */
             if (tok_eq(tok2_start, tok2_len, "status"))
-                return CMD_SAFE;
+                return CMD_READ;
         }
         return CMD_WRITE;
     }
@@ -1025,7 +1025,7 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
      * already WRITE via the linux_subcmd_rules two-token match above; any
      * other argument form is not blanket-SAFE (spec 3.3: "date" *(bare)*)
      * -- falls through unclassified rather than being listed in
-     * linux_safe_cmds. */
+     * linux_read_cmds. */
     if (tok_eq(base1, base1_len, "date")) {
         const char *p2 = p;
         if (!next_token(&p2, &tok2_start, &tok2_len))
@@ -1092,12 +1092,12 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
      * SAFE here -- the audit C2 bug, where an unrecognised command
      * auto-approved at the lowest auto-approve level. It now reaches SAFE
      * only by matching the explicit allow-list above (the subcommand rules)
-     * or linux_safe_cmds below; anything else is honestly CMD_UNKNOWN,
+     * or linux_read_cmds below; anything else is honestly CMD_UNKNOWN,
      * combined with whatever scan_redirects already found -- a redirect
      * still raises UNKNOWN to WRITE ("frobnicate > /etc/passwd" is WRITE,
      * not UNKNOWN, because the redirect itself writes regardless of
      * whether "frobnicate" is recognised). */
-    if (tok_in_list(base1, base1_len, linux_safe_cmds))
+    if (tok_in_list(base1, base1_len, linux_read_cmds))
         return redir;
 
     {
@@ -1121,11 +1121,11 @@ static CmdSafetyLevel classify_cisco_ios_segment(const char *seg, size_t seg_len
     (void)seg_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Safe commands --- */
     if (tok_prefix_ci(tok1_start, tok1_len, "show"))
-        return CMD_SAFE;
+        return CMD_READ;
     if (tok_eq_ci(tok1_start, tok1_len, "ping") ||
         tok_eq_ci(tok1_start, tok1_len, "traceroute") ||
         tok_eq_ci(tok1_start, tok1_len, "terminal") ||
@@ -1138,7 +1138,7 @@ static CmdSafetyLevel classify_cisco_ios_segment(const char *seg, size_t seg_len
         tok_eq_ci(tok1_start, tok1_len, "more") ||
         tok_eq_ci(tok1_start, tok1_len, "where") ||
         tok_eq_ci(tok1_start, tok1_len, "who"))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* reload cancel: cancels a pending reload, explicitly SAFE -- must be
      * checked before the general "reload" -> CRITICAL rule below */
@@ -1146,7 +1146,7 @@ static CmdSafetyLevel classify_cisco_ios_segment(const char *seg, size_t seg_len
         const char *p2 = p;
         if (next_token(&p2, &tok2_start, &tok2_len) &&
             tok_eq_ci(tok2_start, tok2_len, "cancel"))
-            return CMD_SAFE;
+            return CMD_READ;
     }
 
     /* --- Critical: standalone commands --- */
@@ -1519,7 +1519,7 @@ static CmdSafetyLevel classify_cisco_ios_segment(const char *seg, size_t seg_len
     if (tok_eq_ci(tok1_start, tok1_len, "enable")) {
         /* Already returned SAFE for bare "enable" above; if we get here
          * it means there's a subcommand like "enable secret" */
-        return CMD_SAFE;  /* bare enable already handled */
+        return CMD_READ;  /* bare enable already handled */
     }
     if (tok_eq_ci(tok1_start, tok1_len, "ntp") ||
         tok_eq_ci(tok1_start, tok1_len, "interface") ||
@@ -1558,7 +1558,7 @@ static CmdSafetyLevel classify_cisco_nxos_segment(const char *seg, size_t seg_le
     (void)seg_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* NX-OS specific critical: reload module */
     if (tok_eq_ci(tok1_start, tok1_len, "reload")) {
@@ -1733,7 +1733,7 @@ static CmdSafetyLevel classify_cisco_asa_segment(const char *seg, size_t seg_len
     (void)seg_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* ASA specific critical: no failover, failover active/reload-standby/
      * reset, no crypto map/access-group/nat/object-group/route/
@@ -1935,11 +1935,11 @@ static CmdSafetyLevel classify_aruba_cx_segment(const char *seg, size_t seg_len,
     (void)seg_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Safe commands --- */
     if (tok_prefix_ci(tok1_start, tok1_len, "show"))
-        return CMD_SAFE;
+        return CMD_READ;
     if (tok_eq_ci(tok1_start, tok1_len, "ping") ||
         tok_eq_ci(tok1_start, tok1_len, "traceroute") ||
         tok_eq_ci(tok1_start, tok1_len, "enable") ||
@@ -1951,7 +1951,7 @@ static CmdSafetyLevel classify_aruba_cx_segment(const char *seg, size_t seg_len,
         tok_eq_ci(tok1_start, tok1_len, "diff") ||
         tok_eq_ci(tok1_start, tok1_len, "less") ||
         tok_eq_ci(tok1_start, tok1_len, "top"))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Critical: standalone --- */
     if (tok_eq_ci(tok1_start, tok1_len, "reload") ||
@@ -1998,7 +1998,7 @@ static CmdSafetyLevel classify_aruba_cx_segment(const char *seg, size_t seg_len,
                     return CMD_CRITICAL;
                 }
                 if (tok_eq_ci(tok2_start, tok2_len, "diff"))
-                    return CMD_SAFE;
+                    return CMD_READ;
                 if (tok_eq_ci(tok2_start, tok2_len, "auto") ||
                     tok_eq_ci(tok2_start, tok2_len, "post-configuration")) {
                     if (reason_buf && reason_buf_size > 0)
@@ -2171,18 +2171,18 @@ static CmdSafetyLevel classify_aruba_os_segment(const char *seg, size_t seg_len,
     (void)tok3_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Safe commands --- */
     if (tok_prefix_ci(tok1_start, tok1_len, "show"))
-        return CMD_SAFE;
+        return CMD_READ;
     if (tok_eq_ci(tok1_start, tok1_len, "ping") ||
         tok_eq_ci(tok1_start, tok1_len, "traceroute") ||
         tok_eq_ci(tok1_start, tok1_len, "enable") ||
         tok_eq_ci(tok1_start, tok1_len, "disable") ||
         tok_eq_ci(tok1_start, tok1_len, "exit") ||
         tok_eq_ci(tok1_start, tok1_len, "end"))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Critical: standalone --- */
     if (tok_eq_ci(tok1_start, tok1_len, "reload")) {
@@ -2431,7 +2431,7 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
     (void)seg_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Safe commands --- */
     if (tok_prefix_ci(tok1_start, tok1_len, "show") ||
@@ -2448,7 +2448,7 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
         tok_eq_ci(tok1_start, tok1_len, "up") ||
         /* spec 11 SAFE additions */
         tok_eq_ci(tok1_start, tok1_len, "check"))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* set cli: output-format preference only, not a config change (F15) --
      * must be checked before the generic "set" -> WRITE rule below */
@@ -2456,7 +2456,7 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
         const char *p2 = p;
         if (next_token(&p2, &tok2_start, &tok2_len)) {
             if (tok_eq_ci(tok2_start, tok2_len, "cli"))
-                return CMD_SAFE;
+                return CMD_READ;
             /* set deviceconfig system ip-address/netmask/default-gateway:
              * can strand the management session (F15) */
             if (tok_eq_ci(tok2_start, tok2_len, "deviceconfig")) {
@@ -2484,7 +2484,7 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
 
     /* tail follow -> safe */
     if (tok_eq_ci(tok1_start, tok1_len, "tail")) {
-        return CMD_SAFE;
+        return CMD_READ;
     }
 
     /* scp export -> safe, scp import -> write */
@@ -2492,7 +2492,7 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
         const char *p2 = p;
         if (next_token(&p2, &tok2_start, &tok2_len)) {
             if (tok_eq_ci(tok2_start, tok2_len, "export"))
-                return CMD_SAFE;
+                return CMD_READ;
             if (tok_eq_ci(tok2_start, tok2_len, "import")) {
                 if (reason_buf && reason_buf_size > 0)
                     snprintf(reason_buf, reason_buf_size, "scp import");
@@ -2508,7 +2508,7 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
         if (next_token(&p2, &tok2_start, &tok2_len)) {
             /* commit validate -> safe */
             if (tok_eq_ci(tok2_start, tok2_len, "validate"))
-                return CMD_SAFE;
+                return CMD_READ;
             /* commit force / commit partial -> critical */
             if (reason_buf && reason_buf_size > 0)
                 snprintf(reason_buf, reason_buf_size, "commit: applies config changes");
@@ -2620,7 +2620,7 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
                         return CMD_CRITICAL;
                     }
                     if (tok_eq_ci(tok3_start, tok3_len, "info"))
-                        return CMD_SAFE;
+                        return CMD_READ;
                     if (tok_eq_ci(tok3_start, tok3_len, "activate") ||
                         tok_eq_ci(tok3_start, tok3_len, "fetch")) {
                         if (reason_buf && reason_buf_size > 0)
@@ -2711,7 +2711,7 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
                 const char *p3 = p2;
                 if (next_token(&p3, &tok3_start, &tok3_len) &&
                     tok_eq_ci(tok3_start, tok3_len, "info"))
-                    return CMD_SAFE;
+                    return CMD_READ;
             }
         }
         /* Default request -> write */
@@ -2772,7 +2772,7 @@ static CmdSafetyLevel classify_panos_segment(const char *seg, size_t seg_len,
         const char *p2 = p;
         if (next_token(&p2, &tok2_start, &tok2_len)) {
             if (tok_eq_ci(tok2_start, tok2_len, "show"))
-                return CMD_SAFE;
+                return CMD_READ;
             if (tok_eq_ci(tok2_start, tok2_len, "software")) {
                 const char *p3 = p2;
                 if (next_token(&p3, &tok3_start, &tok3_len) &&
@@ -2837,7 +2837,7 @@ static CmdSafetyLevel classify_hp_procurve_segment(const char *seg, size_t seg_l
     (void)seg_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Safe commands --- */
     if (tok_prefix_ci(tok1_start, tok1_len, "show") ||
@@ -2852,7 +2852,7 @@ static CmdSafetyLevel classify_hp_procurve_segment(const char *seg, size_t seg_l
         tok_eq_ci(tok1_start, tok1_len, "logout") ||
         tok_eq_ci(tok1_start, tok1_len, "page") ||
         tok_eq_ci(tok1_start, tok1_len, "terminal"))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Critical standalone --- */
     if (tok_eq_ci(tok1_start, tok1_len, "reload") ||
@@ -3015,7 +3015,7 @@ static CmdSafetyLevel classify_hp_comware_segment(const char *seg, size_t seg_le
     (void)seg_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Safe commands: display, ping, tracert, ... --- */
     if (tok_prefix_ci(tok1_start, tok1_len, "display") ||
@@ -3027,7 +3027,7 @@ static CmdSafetyLevel classify_hp_comware_segment(const char *seg, size_t seg_le
         tok_eq_ci(tok1_start, tok1_len, "return") ||
         tok_eq_ci(tok1_start, tok1_len, "terminal") ||
         tok_eq_ci(tok1_start, tok1_len, "screen-length"))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Critical: reboot / schedule reboot --- */
     if (tok_eq_ci(tok1_start, tok1_len, "reboot")) {
@@ -3268,7 +3268,7 @@ static CmdSafetyLevel classify_junos_segment(const char *seg, size_t seg_len,
     (void)seg_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Safe commands --- */
     if (tok_prefix_ci(tok1_start, tok1_len, "show") ||
@@ -3280,21 +3280,21 @@ static CmdSafetyLevel classify_junos_segment(const char *seg, size_t seg_len,
         tok_eq_ci(tok1_start, tok1_len, "top") ||
         tok_eq_ci(tok1_start, tok1_len, "up") ||
         tok_eq_ci(tok1_start, tok1_len, "compare"))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* run show / monitor traffic / monitor interface */
     if (tok_eq_ci(tok1_start, tok1_len, "run")) {
         const char *p2 = p;
         if (next_token(&p2, &tok2_start, &tok2_len) &&
             tok_prefix_ci(tok2_start, tok2_len, "show"))
-            return CMD_SAFE;
+            return CMD_READ;
     }
     if (tok_eq_ci(tok1_start, tok1_len, "monitor")) {
         const char *p2 = p;
         if (next_token(&p2, &tok2_start, &tok2_len) &&
             (tok_eq_ci(tok2_start, tok2_len, "traffic") ||
              tok_eq_ci(tok2_start, tok2_len, "interface")))
-            return CMD_SAFE;
+            return CMD_READ;
     }
     /* file show / file list / file compare (safe); file copy / file
      * archive (write); file delete (critical) */
@@ -3304,7 +3304,7 @@ static CmdSafetyLevel classify_junos_segment(const char *seg, size_t seg_len,
             if (tok_eq_ci(tok2_start, tok2_len, "show") ||
                 tok_eq_ci(tok2_start, tok2_len, "list") ||
                 tok_eq_ci(tok2_start, tok2_len, "compare"))
-                return CMD_SAFE;
+                return CMD_READ;
             if (tok_eq_ci(tok2_start, tok2_len, "delete")) {
                 if (reason_buf && reason_buf_size > 0)
                     snprintf(reason_buf, reason_buf_size, "file delete: file removal");
@@ -3326,7 +3326,7 @@ static CmdSafetyLevel classify_junos_segment(const char *seg, size_t seg_len,
             const char *p3 = p2;
             if (next_token(&p3, &tok3_start, &tok3_len) &&
                 tok_prefix_ci(tok3_start, tok3_len, "information"))
-                return CMD_SAFE;
+                return CMD_READ;
         }
         /* request system reboot / halt / power-off / zeroize /
          * software add / partition; request chassis cluster failover.
@@ -3437,7 +3437,7 @@ static CmdSafetyLevel classify_junos_segment(const char *seg, size_t seg_len,
         const char *p2 = p;
         if (next_token(&p2, &tok2_start, &tok2_len) &&
             tok_eq_ci(tok2_start, tok2_len, "policy"))
-            return CMD_SAFE;
+            return CMD_READ;
     }
     /* commit: applies the candidate config (critical); commit check
      * stays safe; commit confirmed is the safer auto-reverting form
@@ -3446,7 +3446,7 @@ static CmdSafetyLevel classify_junos_segment(const char *seg, size_t seg_len,
         const char *p2 = p;
         if (next_token(&p2, &tok2_start, &tok2_len)) {
             if (tok_eq_ci(tok2_start, tok2_len, "check"))
-                return CMD_SAFE;
+                return CMD_READ;
             if (tok_eq_ci(tok2_start, tok2_len, "confirmed")) {
                 if (reason_buf && reason_buf_size > 0)
                     snprintf(reason_buf, reason_buf_size, "commit confirmed: auto-reverting apply");
@@ -3537,7 +3537,7 @@ static CmdSafetyLevel classify_fortios_segment(const char *seg, size_t seg_len,
     (void)tok3_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Safe commands --- */
     if (tok_eq_ci(tok1_start, tok1_len, "get") ||
@@ -3546,7 +3546,7 @@ static CmdSafetyLevel classify_fortios_segment(const char *seg, size_t seg_len,
         tok_eq_ci(tok1_start, tok1_len, "next") ||
         tok_eq_ci(tok1_start, tok1_len, "abort") ||
         tok_eq_ci(tok1_start, tok1_len, "exit"))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* execute: mostly safe (ping/traceroute/telnet/ssh/time) or write
      * (backup config / update-now / date <value> / ha manage / cli),
@@ -3559,7 +3559,7 @@ static CmdSafetyLevel classify_fortios_segment(const char *seg, size_t seg_len,
                 tok_eq_ci(tok2_start, tok2_len, "telnet") ||
                 tok_eq_ci(tok2_start, tok2_len, "ssh") ||
                 tok_eq_ci(tok2_start, tok2_len, "time"))
-                return CMD_SAFE;
+                return CMD_READ;
             if (tok_eq_ci(tok2_start, tok2_len, "factoryreset") ||
                 tok_eq_ci(tok2_start, tok2_len, "factoryreset2") ||
                 tok_eq_ci(tok2_start, tok2_len, "erase-disk") ||
@@ -3634,7 +3634,7 @@ static CmdSafetyLevel classify_fortios_segment(const char *seg, size_t seg_len,
                 const char *ts;
                 size_t tl;
                 while (next_token(&scan, &ts, &tl)) {
-                    if (tok_eq_ci(ts, tl, "top")) return CMD_SAFE;
+                    if (tok_eq_ci(ts, tl, "top")) return CMD_READ;
                     if (tok_eq_ci(ts, tl, "kill")) {
                         if (reason_buf && reason_buf_size > 0)
                             snprintf(reason_buf, reason_buf_size, "diagnose sys kill: process kill");
@@ -3653,10 +3653,10 @@ static CmdSafetyLevel classify_fortios_segment(const char *seg, size_t seg_len,
                 return CMD_WRITE;
             }
             if (tok_eq_ci(tok2_start, tok2_len, "debug"))
-                return CMD_SAFE;
+                return CMD_READ;
             if (tok_eq_ci(tok2_start, tok2_len, "sniffer")) {
                 if (seg_has_token_ci(p2, (size_t)((seg + seg_len) - p2), "packet"))
-                    return CMD_SAFE;
+                    return CMD_READ;
             }
             if (tok_eq_ci(tok2_start, tok2_len, "hardware")) {
                 if (seg_has_token_ci(p2, (size_t)((seg + seg_len) - p2), "test")) {
@@ -3729,7 +3729,7 @@ static CmdSafetyLevel classify_vyos_segment(const char *seg, size_t seg_len,
     (void)tok3_len;
 
     if (!next_token(&p, &tok1_start, &tok1_len))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* --- Safe commands --- */
     if (tok_prefix_ci(tok1_start, tok1_len, "show") ||
@@ -3741,14 +3741,14 @@ static CmdSafetyLevel classify_vyos_segment(const char *seg, size_t seg_len,
         tok_eq_ci(tok1_start, tok1_len, "top") ||
         tok_eq_ci(tok1_start, tok1_len, "up") ||
         tok_eq_ci(tok1_start, tok1_len, "commit-check"))
-        return CMD_SAFE;
+        return CMD_READ;
 
     /* run show -> safe */
     if (tok_eq_ci(tok1_start, tok1_len, "run")) {
         const char *p2 = p;
         if (next_token(&p2, &tok2_start, &tok2_len) &&
             tok_prefix_ci(tok2_start, tok2_len, "show"))
-            return CMD_SAFE;
+            return CMD_READ;
     }
 
     /* --- Critical standalone --- */
@@ -3853,13 +3853,13 @@ static CmdSafetyLevel classify_mikrotik_segment(const char *seg, size_t seg_len,
         "set", "add", "edit", "comment", "move", "enable", "upload",
         "fetch", "import", NULL
     };
-    static const char *safe_verbs[] = {
+    static const char *read_verbs[] = {
         "print", "get", "find", "export", "monitor", "monitor-traffic",
         "info", NULL
     };
 
     if (seg_len == 0)
-        return CMD_SAFE;
+        return CMD_READ;
 
     for (int i = 0; critical_verbs[i]; i++) {
         if (seg_has_token_ci(seg, seg_len, critical_verbs[i])) {
@@ -3897,9 +3897,9 @@ static CmdSafetyLevel classify_mikrotik_segment(const char *seg, size_t seg_len,
         return CMD_WRITE;
     }
 
-    for (int i = 0; safe_verbs[i]; i++) {
-        if (seg_has_token_ci(seg, seg_len, safe_verbs[i]))
-            return CMD_SAFE;
+    for (int i = 0; read_verbs[i]; i++) {
+        if (seg_has_token_ci(seg, seg_len, read_verbs[i]))
+            return CMD_READ;
     }
 
     /* No critical/write/safe verb found anywhere in the segment: honestly
@@ -4165,11 +4165,11 @@ static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
     if (!command || !command[0]) {
         if (reason_buf && reason_buf_size > 0)
             reason_buf[0] = '\0';
-        if (mask_out) *mask_out = CMD_MASK_OF(CMD_SAFE);
-        return CMD_SAFE;
+        if (mask_out) *mask_out = CMD_MASK_OF(CMD_READ);
+        return CMD_READ;
     }
 
-    CmdSafetyLevel worst = CMD_SAFE;
+    CmdSafetyLevel worst = CMD_READ;
     unsigned mask = 0;
     const char *p = command;
     int is_pipe_target = 0;
@@ -4199,74 +4199,74 @@ static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
         switch (platform) {
         case CMD_PLATFORM_CISCO_IOS:
             seg_level = classify_cisco_ios_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_CISCO_NXOS:
             seg_level = classify_cisco_nxos_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_CISCO_ASA:
             seg_level = classify_cisco_asa_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_ARUBA_CX:
             seg_level = classify_aruba_cx_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_ARUBA_OS:
             seg_level = classify_aruba_os_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_PANOS:
             seg_level = classify_panos_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_HP_PROCURVE:
             seg_level = classify_hp_procurve_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_HP_COMWARE:
             seg_level = classify_hp_comware_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_JUNOS:
             seg_level = classify_junos_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_FORTIOS:
             seg_level = classify_fortios_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_VYOS:
             seg_level = classify_vyos_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_MIKROTIK:
             seg_level = classify_mikrotik_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_UNKNOWN:
             seg_level = classify_unknown_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         case CMD_PLATFORM_LINUX:
         default:
             seg_level = classify_linux_segment(seg_start, seg_len,
-                            worst == CMD_SAFE ? reason_buf : NULL,
-                            worst == CMD_SAFE ? reason_buf_size : 0);
+                            worst == CMD_READ ? reason_buf : NULL,
+                            worst == CMD_READ ? reason_buf_size : 0);
             break;
         }
 
@@ -4286,7 +4286,7 @@ static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
         else if (*p) p++;
     }
 
-    if (mask_out) *mask_out = mask ? mask : CMD_MASK_OF(CMD_SAFE);
+    if (mask_out) *mask_out = mask ? mask : CMD_MASK_OF(CMD_READ);
     return worst;
 }
 
@@ -4303,7 +4303,7 @@ CmdSafetyLevel cmd_classify(const char *command, CmdPlatform platform)
 
 unsigned cmd_classify_mask(const char *command, CmdPlatform platform)
 {
-    unsigned mask = CMD_MASK_OF(CMD_SAFE);
+    unsigned mask = CMD_MASK_OF(CMD_READ);
     classify_core(command, platform, NULL, 0, &mask);
     return mask;
 }
