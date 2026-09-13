@@ -2351,3 +2351,82 @@ int test_cmd_classify_mask_null_and_empty(void) {
     ASSERT_EQ((int)cmd_classify_mask("", CMD_PLATFORM_LINUX), CMD_MASK_OF(CMD_SAFE));
     TEST_END();
 }
+
+/* ===== Cases inherited from the old ai_command_is_readonly() suite =====
+ * ai_command_is_readonly() was a boolean wrapper that asked cmd_classify()
+ * with a hardcoded CMD_PLATFORM_LINUX. It had no callers and was deleted;
+ * these are the cases its tests covered that nothing here did, restated
+ * against cmd_classify() directly so the coverage survives the removal. */
+
+/* Interactive editors and ownership changes are writes: they are not on the
+ * read-only allow-list and must never be mistaken for it. */
+int test_cmd_classify_linux_editors_and_chown_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("touch newfile.txt", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("vim file.txt", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("nano file.txt", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("chown root:root file", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* Redirect forms the existing redirect tests above do not spell out: the
+ * `&>` both-streams form, and `2>` with a space before the target. Both go
+ * to /dev/null, so both stay SAFE. */
+int test_cmd_classify_redirect_devnull_spacing_and_ampersand(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ls &>/dev/null", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("find / -name '*.log' 2> /dev/null", CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* The same `2>` spacing against a real file is still a write -- the space is
+ * not what makes /dev/null harmless, the target is. The leading command is
+ * unrecognised here, which makes the point sharper: the redirect alone
+ * carries it past UNKNOWN to WRITE. */
+int test_cmd_classify_redirect_stderr_to_real_file_write(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("cmd 2> errors.log", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* The exact command from the original user bug report: a long read-only
+ * pipeline whose `2>/dev/null` must not drag it out of SAFE. This is the
+ * regression the harmless-redirect handling exists for. */
+int test_cmd_classify_linux_readonly_du_pipeline_regression(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify(
+        "find ~ -type f -exec du -h {} + 2>/dev/null | sort -rh | head -20",
+        CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    ASSERT_EQ((int)cmd_classify("du -sh /* 2>/dev/null | sort -rh",
+        CMD_PLATFORM_LINUX), (int)CMD_SAFE);
+    TEST_END();
+}
+
+/* A network-device command classified against the Linux ruleset is
+ * CMD_UNKNOWN, not SAFE and not CRITICAL: the wrong ruleset cannot vouch for
+ * it either way. This holds for the read-only verbs (`show`, `display`) as
+ * much as the destructive ones -- under Linux rules a SAFE answer would be a
+ * guess. Classified against their own platform they come out SAFE and
+ * CRITICAL respectively, which the per-platform tests above cover.
+ *
+ * Before the UNKNOWN category existed these all fell through to SAFE
+ * (security audit C2) -- that is why `reload` used to auto-approve on a
+ * switch. The sibling test above pins the same behaviour for
+ * CMD_PLATFORM_UNKNOWN; this one pins it for a session explicitly set to
+ * Linux. */
+int test_cmd_classify_network_verbs_under_linux_are_unknown(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("show running-config", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("show interfaces", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("display version", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("configure terminal", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("conf t", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("configure", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("write memory", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("commit", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("reload", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("rollback", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("erase startup-config", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("execute reboot", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    TEST_END();
+}
