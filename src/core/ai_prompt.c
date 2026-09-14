@@ -1,6 +1,5 @@
 #include "ai_prompt.h"
 #include "ai_tools.h"
-#include "cmd_classify.h"
 #include "json_parser.h"
 #include "json_validate.h"
 #include "string_utils.h"
@@ -1248,13 +1247,6 @@ int ai_response_split(const char *response,
     }
 
     return count;
-}
-
-/* ---- Command read-only classification ---- */
-
-int ai_command_is_readonly(const char *cmd)
-{
-    return cmd_classify(cmd, CMD_PLATFORM_LINUX) == CMD_SAFE;
 }
 
 const char *ai_provider_url(const char *provider)

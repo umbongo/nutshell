@@ -103,7 +103,7 @@ three dots on `NS_ICON_THINKING` and the LED on `NS_ICON_SERVER`, so those detai
 invisible too. Fix belongs in foundation section 3 (shared primitives): add an `OP_DOT`
 op backed by `GdipAddPathEllipse` and re-run `wintest` until it is green.
 
-## Todo (compacted at the 2026-09-10 checkpoint)
+## Todo (compacted at the 2026-09-11 checkpoint)
 
 Done, in order (details in the commit messages and the specs named):
 - v1.0.77 native Windows build and test environment · v1.0.78 six review fixes
@@ -127,12 +127,59 @@ Done, in order (details in the commit messages and the specs named):
   shell for the self-hosted runner (it starts from the Startup shortcut and inherits
   Restricted).
 
+- v1.1.14-v1.1.17 command safety classification (PR #24, 2b06b1e), four commits:
+  coverage across ten CLI families incl. HP ProCurve/Comware, Junos, FortiOS, VyOS,
+  RouterOS (`2026-09-11-command-classification-coverage.md`) - fixes the `|`
+  display-filter and device-filesystem bugs; audit **H2** per-profile Platform with
+  banner/prompt auto-detection (`2026-09-11-platform-plumbing-design.md`); audit **C2**
+  as an UNKNOWN category plus a five-mode auto-approve over a category *set*
+  (`2026-09-11-unknown-safety-category-design.md`); and a Linux-only segfault the CI
+  caught (`fdopen` is POSIX, hidden by `-std=c11` under glibc, so the test build now
+  passes `-D_POSIX_C_SOURCE=200809L`).
+
 Open, in priority order:
-- [ ] Runner `k2so-bvt` offline since 2026-09-09 15:56Z — start `C:\actions-runner\run.cmd`.
-      PRs #12, #13 and #18 were merged by hand while it was down, so `main` is owed its
-      first green BVT. Dependabot PRs #14–#17 bump actions to new majors (Node 24
-      runner support needed): check before merging, or ignore semver-major updates in
-      `dependabot.yml`.
+- [ ] **Status-line policy control** (branch `status-policy-control` created, empty).
+      Verbatim ask: *"no need for a mock-up, use the cleaner-still version, also change
+      the wording throughout from 'safe' to 'read'. create a new branch for this."*
+
+      Replaces the two-segment `Read-only` / `Read + write` switch **and** the separate
+      `Auto approve: off` cycle with ONE control: a four-stop scale
+      `Read > Unknown > Write > Critical` carrying **two markers** -
+      *runs unattended* and *allowed, asks first* - where the unattended marker can
+      never pass the allowed one. The two axes are already in the model and must stay
+      distinct: `permit_write` decides whether a command may run at all (above the
+      ceiling it is BLOCKED, the card says "N held"), `auto_approve`/`auto_approve_level`
+      decide whether it runs without asking. Collapsing them loses the common posture
+      "allow writes, but always show me first".
+
+      Also rename the category **SAFE -> READ** throughout: the chip in
+      `chat_listview.c`, `ai_modes_label()`, the Settings combo, README, the User Guide,
+      and the `CMD_SAFE` / `AUTO_APPROVE_SAFE*` identifiers and `safe+...` config tokens
+      (keep reading the old tokens so existing configs survive - `ai_auto_approve_mode`
+      shipped in v1.1.16). Careful with blanket search-and-replace: `CmdSafetyLevel`,
+      `safety_mask` and `safety_tag_*` name the *axis*, not the category, and should keep
+      their names.
+
+      Touches: `ns_layout.c` (pure geometry + hit-test, so it is testable),
+      `chat_approval.[ch]`, `cmd_classify.h`, `ai_panel_layout.c`, `ai_chat.c`,
+      `chat_listview.c`, `settings.c`, `loader.c` + `config.h` (one default policy
+      instead of two settings, with migration), `ui_demo.c`, the User Guide and README,
+      and `tests/integration/` - `NutshellIT.psm1` and `cases/20-ai.ps1` drive the
+      current switch, so the gate will fail until they follow. Design-system rules apply:
+      colours from `ns_tokens()`, sizes from `ns_type.h`, hover via `ns_hover`, motion via
+      `ns_motion`; `tests/test_ui_tokens.c` enforces this as an exact allow-list.
+- [ ] Dependabot PRs #14–#17 bump actions to new majors (Node 24 runner support
+      needed): check before merging, or ignore semver-major updates in `dependabot.yml`.
+      (Runner `k2so-bvt` was offline from 2026-09-09 until 2026-09-11; started again this
+      session and PR #24 got the first green `Integration tests` on a real run. It had no
+      Startup shortcut at all, which is why it stayed down — one now exists, wrapping
+      `run.cmd` in a titled console so the window is findable rather than a nameless
+      `cmd.exe`. Two caveats: the stale pre-rename `Nutshell BVT runner.lnk` is still in
+      that Startup folder and `Install-IntegrationRunner.ps1` warns it starts a second
+      runner instance at logon, so delete it; and the shortcut went to `C:\Users\thoma`
+      while this session ran as `K2SO\thomas` — confirm which profile actually logs in,
+      or it will not fire. The runner is interactive by design, so it survives an RDP
+      disconnect but not a logout.)
 - [ ] Ctrl+W bug — `window.c` on_tab_close leaves `g_active_session` NULL, tab A blank
       and unresponsive. Fix in progress in a separate session as uncommitted edits in
       the main checkout (tab_manager, tabs.c, window.c, tests, `60-tabs-logging.ps1`);
@@ -150,11 +197,15 @@ Open, in priority order:
       else is in flight.
 - [ ] BVT batches B (sessions, auth, host key, connection), C (terminal, clipboard,
       settings), D (AI extras) — 31 cases; `bvtuser` exists on tompi for auth cases.
-- [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local): C2
-      classifier allow-list + H2 platform; H3/H4 host-key fail-closed and default No;
+- [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
+      landed in PR #24): H3/H4 host-key fail-closed and default No;
       H5/H6 config in %APPDATA% with DPAPI and absolute save path; H7/H8 window-message
       hardening; then Medium and Low.
 - [ ] Older review findings: AI-stream thread lifetime bugs; Session Manager phantom row.
+- [ ] `ai_command_is_readonly()` (`ai_prompt.h:226`) has no callers and hardcodes the
+      Linux ruleset - the H2 pattern, missed because nothing calls it. Delete it with its
+      tests, or give it a platform parameter. **A cloud session was already started on
+      this** (spun off 2026-09-11); check it before picking this up.
 - [ ] `md_render.c` renders at raw 96-DPI pixels — fold into sub-project 3.
 - [ ] Sub-project 3 (main window chrome): spec first, mockups before choosing, as with
       sub-project 2.
