@@ -1,23 +1,22 @@
-# Protect-Main.ps1 — make "the integration tests passed" the guardrail for
-# main, as a repository ruleset (the legacy branch-protection API is disabled
-# on repositories that use rulesets, which this one does).
+# Protect-Main.ps1 — make "the hosted gate passed" the guardrail for main, as
+# a repository ruleset (the legacy branch-protection API is disabled on
+# repositories that use rulesets, which this one does).
 #
 # The ruleset makes main accept changes only through a pull request whose
-# required status checks -- "Integration tests" (the job in
-# .github/workflows/integration.yml) and "Version bump" (the job in
-# .github/workflows/checks.yml) -- have succeeded on the pull request's latest
-# commit, with the branch up to date with main so the checks ran against what
+# required status check -- "Version bump" (the job in
+# .github/workflows/checks.yml: version bumped, README current, committed exe
+# built from that version) -- has succeeded on the pull request's latest
+# commit, with the branch up to date with main so the check ran against what
 # will actually land. Force pushes and deletion of main are blocked. No
 # reviewer approval is required (a one-person project); raise
 # required_approving_review_count if that changes. No bypass actors are
 # configured, so the rule binds administrators too.
 #
-# The integration tests run once per pull request, when it is marked ready for
-# review -- so a draft pull request is expected to sit with that check absent,
-# and `gh pr ready` is what opens the gate. strict_required_status_checks_policy
-# stays on, which means a pull request that has already gone green has to run
-# again if main moves under it: that re-run is testing a genuinely different
-# tree, which is the point.
+# The self-hosted "Integration tests" check was removed from the ruleset on
+# 2026-09-15 when the desktop runner was decommissioned.
+# strict_required_status_checks_policy stays on, which means a pull request
+# that has already gone green has to run again if main moves under it: that
+# re-run is testing a genuinely different tree, which is the point.
 #
 # Prerequisites: GitHub CLI logged in as a repository administrator.
 # Usage:  .\tests\integration\Protect-Main.ps1          (create or update)
@@ -27,8 +26,8 @@
 param(
     [string] $Repo = "umbongo/nutshell",
     [string] $Branch = "main",
-    [string[]] $CheckNames = @("Integration tests", "Version bump"),
-    [string] $RulesetName = "main: pull requests with green integration tests",
+    [string[]] $CheckNames = @("Version bump"),
+    [string] $RulesetName = "main: pull requests with a green hosted gate",
     # Pre-rename ruleset name. Matched as a fallback so that re-running this
     # updates the existing ruleset in place rather than creating a second one
     # beside it -- two active rulesets both apply, and the stale one would go

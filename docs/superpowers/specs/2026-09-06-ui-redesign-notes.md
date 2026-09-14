@@ -137,80 +137,65 @@ Done, in order (details in the commit messages and the specs named):
   caught (`fdopen` is POSIX, hidden by `-std=c11` under glibc, so the test build now
   passes `-D_POSIX_C_SOURCE=200809L`).
 
+- v1.1.18 `ai_command_is_readonly()` deleted with its tests, the coverage restated
+  against `cmd_classify()` (PR #25, a33ea3d).
+- v1.1.19–v1.1.21 **status-line policy control and SAFE → READ** (PR #27, 9ac664e;
+  `2026-09-11-status-policy-control-design.md`): one four-stop scale
+  `Read · Unknown · Write · Critical` with the *allowed* ceiling and the *unattended*
+  marker (`src/core/cmd_policy.[ch]`, pure geometry in `ns_layout.c`), replacing the
+  `Read-only`/`Read + write` switch and the `Auto approve` cycle; the old `safe+write`
+  set is gone by design (not a prefix of the scale; migration rounds down); one
+  `ai_policy_default` config token with migration from both old keys; harness drives it
+  through absolute command ids (`Set-NutshellAiPolicy`).
+- Harness: `cli_no_connect_opens_idle` waits for the window to settle before timing
+  it (PR #28, 5cc1dd9) — the empty window paints its version watermark on a second
+  paint under load.
+- **2026-09-15: the desktop integration gate is decommissioned.** Runner `k2so-bvt`
+  died whenever its console was closed from the in-use RDP desktop and the
+  screenshot-comparison cases flaked under interactive use, so `integration.yml` is
+  gone and the ruleset requires `Version bump` only. That check is now the whole
+  release gate: version bumped, README current, and `build/win/nutshell.exe` both
+  changed with the build inputs and built from `APP_VERSION` (its FileVersion is read
+  out of the UPX-packed exe). `tests/integration/` stays as a manual tool.
+
 Open, in priority order:
-- [ ] **Status-line policy control** (branch `status-policy-control` created, empty).
-      Verbatim ask: *"no need for a mock-up, use the cleaner-still version, also change
-      the wording throughout from 'safe' to 'read'. create a new branch for this."*
-
-      Replaces the two-segment `Read-only` / `Read + write` switch **and** the separate
-      `Auto approve: off` cycle with ONE control: a four-stop scale
-      `Read > Unknown > Write > Critical` carrying **two markers** -
-      *runs unattended* and *allowed, asks first* - where the unattended marker can
-      never pass the allowed one. The two axes are already in the model and must stay
-      distinct: `permit_write` decides whether a command may run at all (above the
-      ceiling it is BLOCKED, the card says "N held"), `auto_approve`/`auto_approve_level`
-      decide whether it runs without asking. Collapsing them loses the common posture
-      "allow writes, but always show me first".
-
-      Also rename the category **SAFE -> READ** throughout: the chip in
-      `chat_listview.c`, `ai_modes_label()`, the Settings combo, README, the User Guide,
-      and the `CMD_SAFE` / `AUTO_APPROVE_SAFE*` identifiers and `safe+...` config tokens
-      (keep reading the old tokens so existing configs survive - `ai_auto_approve_mode`
-      shipped in v1.1.16). Careful with blanket search-and-replace: `CmdSafetyLevel`,
-      `safety_mask` and `safety_tag_*` name the *axis*, not the category, and should keep
-      their names.
-
-      Touches: `ns_layout.c` (pure geometry + hit-test, so it is testable),
-      `chat_approval.[ch]`, `cmd_classify.h`, `ai_panel_layout.c`, `ai_chat.c`,
-      `chat_listview.c`, `settings.c`, `loader.c` + `config.h` (one default policy
-      instead of two settings, with migration), `ui_demo.c`, the User Guide and README,
-      and `tests/integration/` - `NutshellIT.psm1` and `cases/20-ai.ps1` drive the
-      current switch, so the gate will fail until they follow. Design-system rules apply:
-      colours from `ns_tokens()`, sizes from `ns_type.h`, hover via `ns_hover`, motion via
-      `ns_motion`; `tests/test_ui_tokens.c` enforces this as an exact allow-list.
+- [ ] `release.yml` still targets the decommissioned `nutshell-desktop` runner label:
+      either build releases on a hosted runner (MinGW cross-compile on Ubuntu, as the
+      Makefile already supports) or cut them by hand from the committed exe.
 - [ ] Dependabot PRs #14–#17 bump actions to new majors (Node 24 runner support
       needed): check before merging, or ignore semver-major updates in `dependabot.yml`.
-      (Runner `k2so-bvt` was offline from 2026-09-09 until 2026-09-11; started again this
-      session and PR #24 got the first green `Integration tests` on a real run. It had no
-      Startup shortcut at all, which is why it stayed down — one now exists, wrapping
-      `run.cmd` in a titled console so the window is findable rather than a nameless
-      `cmd.exe`. Two caveats: the stale pre-rename `Nutshell BVT runner.lnk` is still in
-      that Startup folder and `Install-IntegrationRunner.ps1` warns it starts a second
-      runner instance at logon, so delete it; and the shortcut went to `C:\Users\thoma`
-      while this session ran as `K2SO\thomas` — confirm which profile actually logs in,
-      or it will not fire. The runner is interactive by design, so it survives an RDP
-      disconnect but not a logout.)
 - [ ] Ctrl+W bug — `window.c` on_tab_close leaves `g_active_session` NULL, tab A blank
       and unresponsive. Fix in progress in a separate session as uncommitted edits in
       the main checkout (tab_manager, tabs.c, window.c, tests, `60-tabs-logging.ps1`);
       it must land on a branch rebased onto `main` (#12 and #18 touched the same files),
       unwrapping both known-bug blocks (`tabs_open_switch_close`, `minimise_restore_repaints`).
-- [ ] CI review follow-ups (2026-09-10 review): fork-PR approval to all external
-      contributors plus a same-repo guard on the BVT job (public repo, self-hosted
-      runner on the dev box); CodeQL installs no libssh2, so the SSH/known-hosts files
+- [ ] CI review follow-ups (2026-09-10 review, minus the items the desktop gate's
+      retirement made moot): CodeQL installs no libssh2, so the SSH/known-hosts files
       and all of `src/ui` go unscanned — install `libssh2-1-dev`, fail if the Makefile
-      probe still says no, and consider a Windows CodeQL run for `src/ui`; BVT artifacts
-      are public and carry the LAN address, hostname, user and banners — upload on
-      failure only or scrub; a nightly scheduled BVT to catch environment drift;
-      untrack `build/win/nutshell.exe` (every product PR commits a 5 MB binary);
+      probe still says no, and consider a Windows CodeQL run for `src/ui`;
       `.gitattributes` and renormalise (90 CRLF-indexed files) in a lone PR when nothing
-      else is in flight.
-- [ ] BVT batches B (sessions, auth, host key, connection), C (terminal, clipboard,
+      else is in flight. (Untracking `build/win/nutshell.exe` is off the list: the gate
+      now relies on the committed exe being built from `APP_VERSION`.)
+- [ ] Harness batches B (sessions, auth, host key, connection), C (terminal, clipboard,
       settings), D (AI extras) — 31 cases; `bvtuser` exists on tompi for auth cases.
+      Manual runs only now; still worth having for release checks.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
       landed in PR #24): H3/H4 host-key fail-closed and default No;
       H5/H6 config in %APPDATA% with DPAPI and absolute save path; H7/H8 window-message
       hardening; then Medium and Low.
 - [ ] Older review findings: AI-stream thread lifetime bugs; Session Manager phantom row.
-- [ ] `ai_command_is_readonly()` (`ai_prompt.h:226`) has no callers and hardcodes the
-      Linux ruleset - the H2 pattern, missed because nothing calls it. Delete it with its
-      tests, or give it a platform parameter. **A cloud session was already started on
-      this** (spun off 2026-09-11); check it before picking this up.
+- [ ] Policy control follow-ups from the PR #27 review: the AI-tier harness cases it
+      rewrote (`ai_runs_read_command_unattended`, `ai_write_command_held_then_runs_after_allow`)
+      have not been run yet — needs the Kimi key in `tests\integration\.ai_key`; and the
+      status line still has no keyboard path (a whole-line design-system job, the four
+      `WM_COMMAND` ids 4030–4044 are ready for a menu or accelerator).
 - [ ] `md_render.c` renders at raw 96-DPI pixels — fold into sub-project 3.
 - [ ] Sub-project 3 (main window chrome): spec first, mockups before choosing, as with
       sub-project 2.
 
 Process (CLAUDE.md): Opus orchestrates each package in its own worktree and picks
 models; Fable reviews at PR level; `gh pr merge N --merge --auto` queues the merge for
-a green `BVT` and `Version bump`. "Create a checkpoint" = compact this list, compact
-memory, delete temp files and worktrees, leave the tree ready for a new session.
+a green `Version bump` (the hosted gate: version, README, committed exe). Run the
+harness tier a change touches by hand first. "Create a checkpoint" = compact this
+list, compact memory, delete temp files and worktrees, leave the tree ready for a new
+session.
