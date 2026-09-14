@@ -119,10 +119,11 @@ avoided rather than merely guarded against.
 `-Tier gate|ai|nightly|all` (default `all`, i.e. today's behaviour) filters which
 cases run:
 
-- **`gate`** — the merge gate: every case that needs no AI key, i.e. all cases in
-  the table below except the five key-gated `ai_*` ones. About 8–10 minutes with
-  the section 1/4/5/8 additions below (was 3–4 minutes for the original set).
-  This is the tier `.github/workflows/integration.yml` runs.
+- **`gate`** — every case that needs no AI key, i.e. all cases in the table below
+  except the five key-gated `ai_*` ones. About 8–10 minutes with the section
+  1/4/5/8 additions below (was 3–4 minutes for the original set). This was the
+  tier the decommissioned desktop-runner workflow ran per pull request; run it
+  yourself before opening the gate on a change that touches what it covers.
 - **`ai`** — the five key-gated `ai_*` cases (see "AI Assist cases" below).
 - **`nightly`** — reserved, currently empty; no case in this suite is slow/flaky
   enough yet to warrant it (idle-timeout and host-unreachable scenarios from
@@ -132,20 +133,16 @@ cases run:
 `-Only` and `-Tier` combine (a case must be in both the requested tier(s) and, if
 given, `-Only`'s list).
 
-#### When CI runs the `gate` tier
+#### CI does not run this suite
 
-`.github/workflows/integration.yml` runs it **once per pull request, when the
-pull request is marked ready for review** — not on every push. It holds the one
-self-hosted machine that can drive a real desktop for 10–15 minutes, so the
-workflow triggers on `ready_for_review` only: work in a draft pull request and
-run `gh pr ready` when the change is done. A push afterwards leaves the
-`Integration tests` check missing on the new commit, which blocks the merge;
-re-gate with the draft round-trip `gh pr ready --undo N && gh pr ready N`, which
-is also how to gate a pull request opened non-draft (Dependabot's). Note that
-`gh workflow run integration.yml --ref <branch>` does **not** work for a PR: a
-`workflow_dispatch` run goes green but GitHub does not count it toward the PR's
-required check, so the PR stays blocked. Only a `pull_request`-triggered run
-(the draft round-trip, or a fresh push) satisfies the gate.
+Until 2026-09-15 `.github/workflows/integration.yml` ran the `gate` tier once
+per pull request on a self-hosted runner on the dev box. That was
+decommissioned: the runner died whenever its console was closed from the
+in-use desktop, and the screenshot-comparison cases flaked whenever someone
+was using that desktop. The merge gate is now the hosted `Version bump` check
+alone (version bumped, README current, committed exe built from that version —
+see CLAUDE.md). This suite is a manual tool: run the tier a change touches
+before marking its pull request ready.
 
 ## Cases
 
@@ -293,8 +290,8 @@ $known = Invoke-KnownBugBlock -Bug "what is broken, and where" {
 
 The block still runs, and the outcome — `[XFAIL]` (still failing) or `[XPASS]`
 (unexpectedly passing: time to unwrap it) — lands in the case's detail column,
-but it does not fail the tier, so the `Integration tests` gate keeps saying "nothing
-regressed" rather than "the same known bugs are still open". Wrap only the
+but it does not fail the tier, so a run keeps saying "nothing regressed" rather
+than "the same known bugs are still open". Wrap only the
 checks the named bug actually breaks; everything else in the case stays a
 normal assertion. Two cases use this today: `minimise_restore_repaints` and
 `tabs_open_switch_close`.

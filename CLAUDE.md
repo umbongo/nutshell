@@ -130,8 +130,12 @@ a live SSH host — see `tests/integration/README.md` for the case list, the
 helpers, prerequisites and how to run a subset. Typing and dialog driving go
 through posted window messages (`Send-NutshellLine`, `Wait-NutshellDialog`,
 `Get-NutshellControl`, …), so **no** case needs a foreground window: the suite
-runs on the self-hosted runner, on a locked desktop and on an
-RDP-disconnected session alike. Two hard rules:
+runs on a locked desktop and on an RDP-disconnected session alike. It is a
+**manual tool, not a merge gate**: the self-hosted desktop runner that used to
+run it per pull request was decommissioned on 2026-09-15 (it died whenever its
+console was closed from the in-use desktop, and the screenshot cases flaked
+under interactive use). Run the tier a change touches yourself before opening
+the gate, and never restart or wait on a runner. Two hard rules:
 
 - **Never stop a `nutshell` process you did not start.** Each case launches
   its own scratch copy of the exe and tears it down itself; killing an
@@ -145,57 +149,42 @@ RDP-disconnected session alike. Two hard rules:
   foreground. If a case seems to need one, the mechanism is wrong, not the
   desktop.
 
-The tiers: `-Tier gate` is the merge gate — every case that needs no AI key —
-`-Tier ai` the key-gated cases (they cost model credits), `-Tier nightly` the
-slow ones.
+The tiers: `-Tier gate` — every case that needs no AI key — `-Tier ai` the
+key-gated cases (they cost model credits), `-Tier nightly` the slow ones.
 
-## Branches, pull requests and the integration-test gate
+## Branches, pull requests and the merge gate
 
 `main` is protected: changes land only through a pull request whose
-`Integration tests` status check (`.github/workflows/integration.yml`,
-self-hosted runner labelled `nutshell-desktop` on the dev box) has passed. The
-`Version bump` check (`.github/workflows/checks.yml`) is required too.
+`Version bump` status check (`.github/workflows/checks.yml`, hosted runner,
+script `.github/scripts/check-version.sh`) has passed on the pull request's
+latest commit, with the branch up to date with `main`. Despite the name it is
+the whole release gate, and it verifies three things:
 
-**That check runs once per pull request, when the pull request is marked ready
-for review** — not on every push. It occupies the one machine that can drive a
-real desktop for 10–15 minutes, so work in a draft and open the gate when the
-change is actually done:
+- **the version number is bumped** — `APP_VERSION` and `APP_VERSION_BINARY` in
+  `src/ui/resource.h` agree, and are strictly greater than `main`'s whenever
+  `src/`, the `Makefile` or `nutshell.rc` changed;
+- **the documentation is current** — README's `**Version**:` line says the
+  same version;
+- **the binary has been compiled** — `build/win/nutshell.exe` is part of the
+  change whenever build inputs changed, and the version resource embedded in
+  the committed exe equals `APP_VERSION`. A stale or forgotten binary fails.
+
+It runs on every push, so the flow is simply:
 
 ```
 git switch -c my-change && git push -u origin my-change
-gh pr create --draft            # push as often as you like: no desktop runs
-gh pr ready N                   # fires the integration tests, once
-gh pr merge N --merge --auto    # auto-merge lands it when both checks go green
+gh pr create --draft            # work in a draft until the change is done
+gh pr ready N
+gh pr merge N --merge --auto    # auto-merge lands it when the check is green
 ```
 
 `gh pr ready` before `gh pr merge --auto`, in that order — auto-merge cannot be
-enabled while a pull request is still a draft.
+enabled while a pull request is still a draft. Never push to `main` directly;
+never merge a red check. There is no desktop-runner gate any more: do not
+restart, register or wait on a self-hosted runner for a pull request.
 
-Never push to `main` directly; never merge a red gate. Two consequences of
-running the gate once, both deliberate:
-
-- **Push after it has gone green and the check goes missing on the new commit,
-  which blocks the merge** rather than passing it on a stale result.
-- **A pull request opened non-draft never fires `ready_for_review`**
-  (Dependabot's, or one opened by mistake), so it has no gate result at all.
-
-Re-gate in both cases with the draft round-trip:
-
-```
-gh pr ready --undo N && gh pr ready N    # fires a fresh gate run on the new head
-```
-
-Do **not** reach for `gh workflow run integration.yml --ref <branch>` here: a
-`workflow_dispatch` run goes green but GitHub does not count it toward a pull
-request's required check (it only counts runs it associates with the PR through
-a `pull_request` event), so the PR stays blocked on `Integration tests` with a
-green run sitting on its head commit. Only the draft round-trip (or a fresh
-push) fires a `pull_request`-associated run. `workflow_dispatch` remains useful
-for a branch with no PR.
-
-`tests/integration/Protect-Main.ps1` applies the ruleset and
-`tests/integration/Install-IntegrationRunner.ps1` registers the runner (both
-need `gh auth login` by a repository administrator).
+`tests/integration/Protect-Main.ps1` applies the ruleset (it needs
+`gh auth login` by a repository administrator).
 
 ## Terminal Buffer
 
