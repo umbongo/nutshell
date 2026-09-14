@@ -1,13 +1,18 @@
 name: Release
 
-# Cuts a GitHub release from a v* tag. Runs on the self-hosted Windows runner
-# because that is the only machine with the MSYS2 / mingw64 toolchain.
+# Cuts a GitHub release from a v* tag by publishing the COMMITTED
+# build/win/nutshell.exe -- nothing is built here.
 #
 #   git tag v1.2.3 && git push origin v1.2.3
 #
-# The tag must match APP_VERSION in src/ui/resource.h, or the job fails before
-# publishing anything. workflow_dispatch builds the same way but only uploads
-# the exe as a workflow artifact -- it publishes no release.
+# The merge gate (checks.yml / check-version.sh) has already verified that the
+# exe on main was built from APP_VERSION, and the build is not reproducible
+# (PE timestamps + UPX), so rebuilding on a release runner would only ship a
+# different binary from the one that was checked. This job re-verifies that
+# the tag, src/ui/resource.h and the exe's own version resource all say the
+# same version, then publishes that exe. workflow_dispatch does the same
+# verification and uploads the exe as a workflow artifact instead of
+# publishing a release.
 
 on:
   push:
@@ -20,46 +25,38 @@ permissions:
 jobs:
   release:
     name: Release
-    runs-on: [self-hosted, windows, nutshell-desktop]
-    timeout-minutes: 20
-    defaults:
-      run:
-        # Windows PowerShell 5.1 -- the runner has no pwsh. Same spelled-out
-        # invocation as integration.yml (see the comment there): the runner
-        # process inherits a Restricted execution policy, and the built-in
-        # `powershell` shell cannot survive that.
-        shell: powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference = 'Stop'; . '{0}'; if ($LASTEXITCODE) {{ exit $LASTEXITCODE }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Toolchain on PATH
+      - name: Verify the tag, resource.h and the committed exe agree
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
         run: |
-          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
-          "C:\msys64\usr\bin"     | Out-File -FilePath $env:GITHUB_PATH -Append
-
-      - name: Release build
-        run: |
-          mingw32-make clean
-          mingw32-make release
-
-      - name: Verify version matches the tag
-        if: github.event_name == 'push'
-        run: |
-          $tag = "${{ github.ref_name }}"
-          $expected = $tag -replace '^v', ''
-          $line = Select-String -Path "src\ui\resource.h" -Pattern '#define\s+APP_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"' | Select-Object -First 1
-          if (-not $line) { throw "No APP_VERSION in src\ui\resource.h" }
-          $declared = $line.Matches[0].Groups[1].Value
-          $exe = (Get-Item "build\win\nutshell.exe").VersionInfo.ProductVersion
-          Write-Host "tag=$tag  resource.h=$declared  exe=$exe"
-          if ($declared -ne $expected) { throw "Tag $tag does not match APP_VERSION $declared in src\ui\resource.h" }
-          if ($exe -notlike "$expected*") { throw "Built exe reports version '$exe', expected $expected" }
+          set -u
+          declared=$(sed -n 's/^[[:space:]]*#define[[:space:]]\+APP_VERSION[[:space:]]\+"\([0-9]\+\.[0-9]\+\.[0-9]\+\)".*/\1/p' src/ui/resource.h | head -n 1)
+          [ -n "$declared" ] || { echo "No APP_VERSION in src/ui/resource.h" >&2; exit 1; }
+          exe=$(bash .github/scripts/exe-version.sh build/win/nutshell.exe) || exit 1
+          echo "ref=$REF_NAME  resource.h=$declared  exe=$exe"
+          if [ "$exe" != "$declared" ]; then
+            echo "Committed exe was built as $exe but src/ui/resource.h says $declared" >&2
+            exit 1
+          fi
+          if [ "$EVENT" = "push" ]; then
+            expected="${REF_NAME#v}"
+            if [ "$declared" != "$expected" ]; then
+              echo "Tag $REF_NAME does not match APP_VERSION $declared in src/ui/resource.h" >&2
+              exit 1
+            fi
+          fi
 
       - name: Publish release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" "build\win\nutshell.exe" --title "${{ github.ref_name }}" --generate-notes
+        run: gh release create "${{ github.ref_name }}" build/win/nutshell.exe --title "${{ github.ref_name }}" --generate-notes
 
       - name: Upload exe (manual run)
         if: github.event_name == 'workflow_dispatch'
