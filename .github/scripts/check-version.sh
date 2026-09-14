@@ -58,22 +58,9 @@ binary_fourth=$(echo "$binary_clean" | cut -d, -f4)
 readme_version=$(sed -n 's/^[[:space:]]*\*\*Version\*\*:[[:space:]]*v\?\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p' "$README" | head -n 1)
 [ -n "$readme_version" ] || fail "no '**Version**: X.Y.Z' line in $README"
 
-# FileVersion from the exe's version resource: the UTF-16LE key, then the
-# NUL padding, then the UTF-16LE value up to its terminator.
-exe_version=$(python3 - "$EXE" <<'PY'
-import sys
-b = open(sys.argv[1], 'rb').read()
-key = "FileVersion".encode('utf-16-le')
-i = b.find(key)
-if i < 0:
-    sys.exit(0)
-j = i + len(key)
-while b[j:j+2] == b'\0\0':
-    j += 2
-print(b[j:j+64].decode('utf-16-le', 'ignore').split('\0')[0].strip())
-PY
-)
-[ -n "$exe_version" ] || fail "no FileVersion string in $EXE's version resource"
+# FileVersion from the exe's version resource (shared with release.yml).
+exe_version=$(bash "$(dirname "$0")/exe-version.sh" "$EXE") || \
+    fail "cannot read FileVersion from $EXE"
 
 echo "check-version: $RESOURCE_H APP_VERSION        = $app_version"
 echo "check-version: $RESOURCE_H APP_VERSION_BINARY = $binary_clean"

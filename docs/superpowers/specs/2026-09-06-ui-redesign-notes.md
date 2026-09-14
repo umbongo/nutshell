@@ -157,11 +157,14 @@ Done, in order (details in the commit messages and the specs named):
   release gate: version bumped, README current, and `build/win/nutshell.exe` both
   changed with the build inputs and built from `APP_VERSION` (its FileVersion is read
   out of the UPX-packed exe). `tests/integration/` stays as a manual tool.
+- `release.yml` publishes the **committed** exe from a hosted runner: it re-verifies
+  that the tag, `resource.h` and the exe's version resource agree
+  (`.github/scripts/exe-version.sh`, shared with the gate) and runs `gh release create`.
+  Nothing is built at release time — the build is not reproducible, so rebuilding would
+  ship a different binary from the one the gate checked. No self-hosted runner is
+  referenced anywhere any more.
 
 Open, in priority order:
-- [ ] `release.yml` still targets the decommissioned `nutshell-desktop` runner label:
-      either build releases on a hosted runner (MinGW cross-compile on Ubuntu, as the
-      Makefile already supports) or cut them by hand from the committed exe.
 - [ ] Dependabot PRs #14–#17 bump actions to new majors (Node 24 runner support
       needed): check before merging, or ignore semver-major updates in `dependabot.yml`.
 - [ ] Ctrl+W bug — `window.c` on_tab_close leaves `g_active_session` NULL, tab A blank
