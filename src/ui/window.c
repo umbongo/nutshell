@@ -35,6 +35,8 @@
 #include "ns_draw.h"
 #include "ui_theme.h"
 #include "ns_tokens.h"
+#include "themed_button.h"
+#include "about_layout.h"
 #include "ns_motion.h"
 #include "ns_reduced_motion.h"
 #include "custom_scrollbar.h"
@@ -1689,104 +1691,124 @@ static void copy_selection_and_clear(HWND hwnd)
 
 /* ---- Custom About dialog with acorn icon ---- */
 
-#define ABOUT_ICON_SIZE  78
-#define ABOUT_DLG_W     320
-#define ABOUT_DLG_H     290
 #define ABOUT_CLASS     "Nutshell_About"
+#define ABOUT_TAGLINE   "Windows SSH terminal with built-in AI assistance."
+#define ABOUT_COPYRIGHT "Copyright \xA9 2026 Thomas Sulkiewicz"
+
+/* Pixel height of one row of `role` text: the ramp's pixel size times its
+ * line height, both from ns_type.h. */
+static int about_line_h(NsFontRole role, int dpi)
+{
+    const NsFontSpec *spec = ns_type_font(role);
+    double px = (double)ns_type_font_px(role, dpi, 0) * spec->line_height;
+    return (int)(px + 0.5);
+}
+
+/* The About window's content stack, measured from the type ramp. */
+static void about_compute_layout(AboutLayout *out, int dpi)
+{
+    about_layout_compute(out, dpi, ns_scale(ABOUT_ICON_96, dpi),
+                         about_line_h(FONT_HEADING, dpi),
+                         about_line_h(FONT_BODY, dpi),
+                         about_line_h(FONT_CAPTION, dpi));
+}
+
+/* Draw one centred text row of the About stack. The row spans the real
+ * client width so the text stays centred whatever the window ended up. */
+static void about_draw_row(HDC hdc, const AboutRect *row, int client_w,
+                           NsFontRole role, unsigned int colour, int dpi,
+                           const char *text)
+{
+    RECT rc = { 0, row->y, client_w, row->y + row->h };
+    HFONT font = ns_font(role, dpi);
+    HGDIOBJ old = font ? SelectObject(hdc, (HGDIOBJ)font) : NULL;
+    SetTextColor(hdc, theme_cr(colour));
+    DrawTextA(hdc, text, -1, &rc,
+              DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    if (old) SelectObject(hdc, old);
+}
+
+/* Centre the OK button on the current client width, at the layout's y. */
+static void about_place_button(HWND hwnd)
+{
+    HWND hBtn = GetDlgItem(hwnd, IDOK);
+    if (!hBtn) return;
+    AboutLayout lay;
+    about_compute_layout(&lay, get_window_dpi(hwnd));
+    RECT cr;
+    GetClientRect(hwnd, &cr);
+    MoveWindow(hBtn, (cr.right - lay.button.w) / 2, lay.button.y,
+               lay.button.w, lay.button.h, TRUE);
+}
 
 static LRESULT CALLBACK AboutDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE: {
-            /* Place OK button using actual client area */
-            RECT cr;
-            GetClientRect(hwnd, &cr);
             int dpi = get_window_dpi(hwnd);
-            int btnW = ns_scale(80, dpi);
-            int btnH = ns_scale(28, dpi);
-            int btnX = (cr.right - btnW) / 2;
-            int btnY = cr.bottom - btnH - ns_scale(16, dpi);
-            CreateWindowA("BUTTON", "OK", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                          btnX, btnY, btnW, btnH, hwnd, (HMENU)IDOK, g_hInst, NULL);
+            /* Themed owner-draw button; WM_SIZE does the placing. */
+            HWND hBtn = CreateWindowA("BUTTON", "OK",
+                          WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                          0, 0, 10, 10, hwnd, (HMENU)IDOK, g_hInst, NULL);
+            if (hBtn) {
+                HFONT font = ns_font(FONT_BODY, dpi);
+                if (font)
+                    SendMessage(hBtn, WM_SETFONT, (WPARAM)font, TRUE);
+            }
+            about_place_button(hwnd);
+            if (g_theme)
+                themed_apply_title_bar(hwnd, g_theme);
             return 0;
         }
+        case WM_SIZE:
+            about_place_button(hwnd);
+            return 0;
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
             RECT rc;
             GetClientRect(hwnd, &rc);
             int dpi = get_window_dpi(hwnd);
+            const ThemeTokens *tk = ns_tokens();
+            AboutLayout lay;
+            about_compute_layout(&lay, dpi);
 
             /* Background */
-            HBRUSH bgBrush = CreateSolidBrush(
-                g_theme ? RGB((g_theme->bg_primary >> 16) & 0xFF,
-                              (g_theme->bg_primary >> 8) & 0xFF,
-                              g_theme->bg_primary & 0xFF)
-                        : GetSysColor(COLOR_3DFACE));
+            HBRUSH bgBrush = CreateSolidBrush(theme_cr(tk->bg_primary.base));
             FillRect(hdc, &rc, bgBrush);
             DeleteObject(bgBrush);
 
-            /* Draw acorn icon centered at top */
-            int iconSz = ns_scale(ABOUT_ICON_SIZE, dpi);
-            int iconX = (rc.right - iconSz) / 2;
-            int iconY = ns_scale(20, dpi);
+            /* Acorn icon, centred at the top */
             HICON hIcon = (HICON)LoadImage(g_hInst, MAKEINTRESOURCE(IDI_APPICON),
-                                           IMAGE_ICON, iconSz, iconSz, LR_DEFAULTCOLOR);
+                                           IMAGE_ICON, lay.icon.w, lay.icon.h,
+                                           LR_DEFAULTCOLOR);
             if (hIcon) {
-                DrawIconEx(hdc, iconX, iconY, hIcon, iconSz, iconSz,
-                           0, NULL, DI_NORMAL);
+                DrawIconEx(hdc, (rc.right - lay.icon.w) / 2, lay.icon.y,
+                           hIcon, lay.icon.w, lay.icon.h, 0, NULL, DI_NORMAL);
                 DestroyIcon(hIcon);
             }
 
-            /* Text below icon */
+            /* Title, tagline, copyright */
             SetBkMode(hdc, TRANSPARENT);
-            COLORREF textClr = g_theme
-                ? RGB((g_theme->text_main >> 16) & 0xFF,
-                      (g_theme->text_main >> 8) & 0xFF,
-                      g_theme->text_main & 0xFF)
-                : GetSysColor(COLOR_WINDOWTEXT);
-            SetTextColor(hdc, textClr);
+            about_draw_row(hdc, &lay.title, rc.right, FONT_HEADING,
+                           tk->text_main, dpi, "Nutshell v" APP_VERSION);
+            about_draw_row(hdc, &lay.tagline, rc.right, FONT_BODY,
+                           tk->text_main, dpi, ABOUT_TAGLINE);
+            about_draw_row(hdc, &lay.copyright, rc.right, FONT_CAPTION,
+                           tk->text_dim, dpi, ABOUT_COPYRIGHT);
 
-            int titlePt = MulDiv(ABOUT_ICON_SIZE, 18, 100);
-            if (titlePt < 14) titlePt = 14;
-            int bodyPt = MulDiv(ABOUT_ICON_SIZE, 14, 100);
-            if (bodyPt < 11) bodyPt = 11;
-
-            HFONT hBold = CreateFontA(
-                -ns_scale(titlePt, dpi), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Inter");
-            HFONT hNormal = CreateFontA(
-                -ns_scale(bodyPt, dpi), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, "Inter");
-
-            int textY = iconY + iconSz + ns_scale(16, dpi);
-            int lineH = ns_scale(titlePt + 10, dpi);
-            RECT textRc = { 0, textY, rc.right, textY + lineH };
-            HFONT oldFont = SelectObject(hdc, hBold);
-            DrawTextA(hdc, "Nutshell v" APP_VERSION, -1, &textRc,
-                      DT_CENTER | DT_SINGLELINE);
-
-            textY += lineH + ns_scale(4, dpi);
-            lineH = ns_scale(bodyPt + 8, dpi);
-            textRc.top = textY;
-            textRc.bottom = textY + lineH;
-            SelectObject(hdc, hNormal);
-            DrawTextA(hdc, "A lightweight SSH terminal emulator.", -1, &textRc,
-                      DT_CENTER | DT_SINGLELINE);
-
-            textY += lineH + ns_scale(2, dpi);
-            textRc.top = textY;
-            textRc.bottom = textY + lineH;
-            DrawTextA(hdc, "Copyright \xA9 2026 Thomas Sulkiewicz", -1, &textRc,
-                      DT_CENTER | DT_SINGLELINE);
-
-            SelectObject(hdc, oldFont);
-            DeleteObject(hBold);
-            DeleteObject(hNormal);
             EndPaint(hwnd, &ps);
             return 0;
         }
+        case WM_DRAWITEM: {
+            LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
+            if (g_theme && dis && (int)dis->CtlID == IDOK) {
+                draw_themed_button(dis, g_theme, 1);
+                return TRUE;
+            }
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+        }
         case WM_COMMAND:
-            if (LOWORD(wParam) == IDOK)
+            if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
                 DestroyWindow(hwnd);
             return 0;
         case WM_KEYDOWN:
@@ -1816,8 +1838,17 @@ static void show_about_dialog(HWND parent) {
         registered = 1;
     }
 
-    int dlgW = ns_scale(ABOUT_DLG_W, g_dpi);
-    int dlgH = ns_scale(ABOUT_DLG_H, g_dpi);
+    /* Size the window from its content, not a magic constant. */
+    int dpi = get_window_dpi(parent);
+    AboutLayout lay;
+    about_compute_layout(&lay, dpi);
+
+    const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+    RECT wr = { 0, 0, lay.client_w, lay.client_h };
+    AdjustWindowRectEx(&wr, style, FALSE, WS_EX_DLGMODALFRAME);
+    int dlgW = wr.right - wr.left;
+    int dlgH = wr.bottom - wr.top;
+
     RECT parentRc;
     GetWindowRect(parent, &parentRc);
     int x = parentRc.left + (parentRc.right - parentRc.left - dlgW) / 2;
@@ -1825,14 +1856,48 @@ static void show_about_dialog(HWND parent) {
 
     HWND dlg = CreateWindowExA(
         WS_EX_DLGMODALFRAME, ABOUT_CLASS, "About Nutshell",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        style | WS_VISIBLE,
         x, y, dlgW, dlgH,
         parent, NULL, g_hInst, NULL);
+    if (!dlg) return;
+
+    /* AdjustWindowRectEx sizes the caption at the system DPI; on a
+     * per-monitor-DPI window that can be off by a few pixels, so trim the
+     * window until the client area is exactly the computed layout. */
+    {
+        RECT cr, outer;
+        GetClientRect(dlg, &cr);
+        GetWindowRect(dlg, &outer);
+        int dw = lay.client_w - cr.right;
+        int dh = lay.client_h - cr.bottom;
+        if (dw != 0 || dh != 0)
+            SetWindowPos(dlg, NULL, x - dw / 2, y,
+                         (outer.right - outer.left) + dw,
+                         (outer.bottom - outer.top) + dh,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+    }
 
     EnableWindow(parent, FALSE);
 
+    /* Focus the OK button now the popup is shown and activated -- doing it
+     * in WM_CREATE would be undone by the activation that follows. */
+    {
+        HWND hBtn = GetDlgItem(dlg, IDOK);
+        if (hBtn) SetFocus(hBtn);
+    }
+
     MSG m;
     while (IsWindow(dlg) && GetMessage(&m, NULL, 0, 0) > 0) {
+        /* Enter/Escape close the dialog wherever the focus is: once the OK
+         * button has focus the key goes to the button, not here, and
+         * IsDialogMessage's default-button handling never reaches an
+         * owner-draw button. */
+        if (m.message == WM_KEYDOWN &&
+            (m.wParam == VK_ESCAPE || m.wParam == VK_RETURN) &&
+            (m.hwnd == dlg || IsChild(dlg, m.hwnd))) {
+            DestroyWindow(dlg);
+            continue;
+        }
         if (!IsDialogMessage(dlg, &m)) {
             TranslateMessage(&m);
             DispatchMessage(&m);
