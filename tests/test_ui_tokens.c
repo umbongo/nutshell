@@ -121,6 +121,59 @@ int test_ui_tokens_onyx_light_accent_contrast(void)
     TEST_END();
 }
 
+/* Onyx Synapse's accent used to be 0x007AFF -- a fully saturated signal
+ * blue (R=0x00, B=0xFF) that glared against the 0x121212 ground.  It is now
+ * a steel/denim blue of the same hue but roughly half the chroma; this test
+ * pins the value and the properties that make it calm:
+ *   - the channel spread (a stand-in for chroma) is well below 0x007AFF's,
+ *     and the red channel is lifted off the floor;
+ *   - CIE L* stays in the mid range, so it did not get brighter to
+ *     compensate;
+ *   - it still clears 4.5:1 against bg_primary (it is painted as a flat
+ *     mark: the AI glyph, the command-block bar, the focus ring) and its
+ *     resolved label clears 4.5:1 on it.
+ * The chat block carries the same blue, so the AI avatar's sparkle glyph --
+ * drawn with ns_tokens()->accent.label over chat.ai_accent in
+ * chat_listview.c -- keeps its contrast. */
+int test_ui_tokens_onyx_synapse_accent_calm(void)
+{
+    TEST_BEGIN();
+    const ThemeColors *base = ui_theme_get(ui_theme_find("Onyx Synapse"));
+    ASSERT_EQ((int)base->accent, (int)0x5C88C4);
+
+    /* Calmer than the old 0x007AFF: less chroma, red lifted off zero. */
+    unsigned int a = base->accent;
+    unsigned int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+    unsigned int amax = ar > ag ? (ar > ab ? ar : ab) : (ag > ab ? ag : ab);
+    unsigned int amin = ar < ag ? (ar < ab ? ar : ab) : (ag < ab ? ag : ab);
+    ASSERT_TRUE(amax - amin < 0x80u);          /* old spread was the full 0xFF */
+    ASSERT_TRUE(ar > 0x20u);                   /* old red channel was 0x00 */
+
+    /* Not brighter: L* stays mid-range (old 0x007AFF was L* 53.1). */
+    double lstar = theme_lstar(a);
+    ASSERT_TRUE(lstar >= 48.0);
+    ASSERT_TRUE(lstar <= 58.0);
+
+    /* Readable as a flat mark on the dark ground, and its label on it. */
+    ThemeTokens tok;
+    ui_theme_resolve(base, &tok);
+    ASSERT_TRUE(theme_contrast(a, base->bg_primary) >= MIN_CONTRAST);
+    ASSERT_TRUE(theme_contrast(tok.accent.label, tok.accent.base) >= MIN_CONTRAST);
+
+    /* The chat block speaks the same blue. */
+    ASSERT_EQ((int)base->chat.user_bubble, (int)a);
+    ASSERT_EQ((int)base->chat.ai_accent, (int)a);
+    ASSERT_EQ((int)base->chat.thinking_border, (int)a);
+
+    /* User-bubble text over that fill, and the white paper-plane glyph
+     * ai_chat.c draws over chat.send_btn, both clear 4.5:1. */
+    ASSERT_TRUE(theme_contrast(base->chat.user_text, base->chat.user_bubble) >= MIN_CONTRAST);
+    ASSERT_TRUE(theme_contrast(0xFFFFFFu, base->chat.send_btn) >= MIN_CONTRAST);
+    /* send_btn is a deeper shade of the accent, not the old 0x6BAAFF. */
+    ASSERT_TRUE(theme_luminance(base->chat.send_btn) < theme_luminance(a));
+    TEST_END();
+}
+
 /* Links must be readable and, on light themes, visibly darker than the
  * theme's own accent (spec section 1). */
 int test_ui_tokens_link_darker_than_accent_on_light_themes(void)

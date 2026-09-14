@@ -16,7 +16,17 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .name         = "Onyx Synapse",
         .bg_primary   = 0x121212,
         .bg_secondary = 0x1E1E1E,
-        .accent       = 0x007AFF,
+        .accent       = 0x5C88C4, /* calmed from 0x007AFF: that was a fully
+                                    * saturated signal blue (R=0x00, B=0xFF)
+                                    * and the glare was chroma, not lightness.
+                                    * Same hue (215 deg), about half the
+                                    * chroma (S 53% vs 100%), L* 56.0 vs 53.1
+                                    * so it is not brighter. Contrast 5.15:1
+                                    * on bg_primary (was 4.66) and 4.58:1 on
+                                    * bg_secondary (was 4.15, below AA), so
+                                    * accent-filled buttons now clear 4.5:1
+                                    * against the panels they sit on. The
+                                    * label resolves to bg_primary at 5.15:1. */
         .text_main    = 0xE0E0E0,
         .text_dim     = 0x919191, /* lightened from 0x888888: text_dim on raised
                                     * (bg_secondary + 1 L* step) was 4.05:1 */
@@ -29,19 +39,28 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .info         = 0x8969A8, /* darkened from the old [EXEC] purple 0xB48CDC */
         .link         = 0x4A78B7,
         .chat = {
-            0x007AFF, /* user_bubble — accent blue */
-            0xFFFFFF, /* user_text — white on blue */
-            0x007AFF, /* ai_accent — blue */
+            0x5C88C4, /* user_bubble — accent blue */
+            0x121212, /* user_text — the accent surface's resolved label
+                        * (bg_primary) at 5.15:1; the old white was 4.02:1
+                        * on 0x007AFF and would be 3.64:1 here, and the AI
+                        * avatar next to it already draws its glyph with
+                        * ns_tokens()->accent.label over the same fill */
+            0x5C88C4, /* ai_accent — accent */
             0x1A1A2E, /* cmd_bg — darker than bg */
             0x2A2A3E, /* cmd_border */
             0xC0C0C0, /* cmd_text — monospace light */
-            0x007AFF, /* thinking_border — accent */
+            0x5C88C4, /* thinking_border — accent */
             0x888888, /* thinking_text — dim */
             0x666666, /* status_text — dimmer */
             0x34C759, /* indicator_green */
             0xFFCC00, /* indicator_yellow */
             0xFF3B30, /* indicator_red */
-            0x6BAAFF, /* send_btn — soft periwinkle */
+            0x4D76AE, /* send_btn — the accent taken down ~7 L* (to 49.0).
+                        * ai_chat.c fills this and draws the white paper-
+                        * plane glyph over it, so it has to stay dark enough
+                        * for white: 4.65:1 here, where the old periwinkle
+                        * 0x6BAAFF (L* 68.8) managed only 2.38:1 and was the
+                        * brightest blue in the window. */
             0xFF6B6B, /* stop_btn — soft coral red */
         },
     },

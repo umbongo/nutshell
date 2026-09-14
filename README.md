@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.1.22 \
+**Version**: v1.1.23 \
 **Build Date**: 2026-09-10 \
 **Author**: Thomas Sulkiewicz
 
@@ -146,7 +146,7 @@ scrolls if you shrink it below the content.
 
 #### General > Appearance
 - **Colour scheme** — choose from 4 built-in themes:
-  - **Onyx Synapse** (dark, default) — dark background with green accents
+  - **Onyx Synapse** (dark, default) — dark background with blue accents
   - **Onyx Light** — light background variant
   - **Sage & Sand** — dark earthy tones
   - **Moss & Mist** — light pastel colours

@@ -2048,6 +2048,7 @@ int test_ui_tokens_intent_label_contrast(void);
 int test_ui_tokens_label_is_one_of_the_three_candidates(void);
 int test_ui_tokens_text_dim_label_contrast(void);
 int test_ui_tokens_onyx_light_accent_contrast(void);
+int test_ui_tokens_onyx_synapse_accent_calm(void);
 int test_ui_tokens_link_darker_than_accent_on_light_themes(void);
 int test_ui_tokens_md_role_color_contrast(void);
 int test_ui_tokens_derivation_all_surfaces(void);
@@ -4264,6 +4265,7 @@ int main(void) {
     failed += test_ui_tokens_label_is_one_of_the_three_candidates();
     failed += test_ui_tokens_text_dim_label_contrast();
     failed += test_ui_tokens_onyx_light_accent_contrast();
+    failed += test_ui_tokens_onyx_synapse_accent_calm();
     failed += test_ui_tokens_link_darker_than_accent_on_light_themes();
     failed += test_ui_tokens_md_role_color_contrast();
     failed += test_ui_tokens_derivation_all_surfaces();
