@@ -235,10 +235,6 @@ size_t ai_build_policy_raised_note(int allowed_stop, char *buf, size_t buf_size)
  * Returns bytes written (excluding NUL), or 0 on error. */
 size_t ai_build_policy_blocked_note(const char *list, char *buf, size_t buf_size);
 
-/* Check if a shell command is read-only (does not modify files or system state).
- * Returns 1 if read-only, 0 if the command may write/modify. */
-int ai_command_is_readonly(const char *cmd);
-
 /* Split an AI response into pre-command and post-command text.
  * pre_cmd receives text before the first [EXEC] marker.
  * post_cmd receives text after the last [/EXEC] marker.
