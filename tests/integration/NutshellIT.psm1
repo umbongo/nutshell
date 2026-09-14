@@ -753,13 +753,41 @@ function Set-NutshellTerminalFocus {
     Start-Sleep -Milliseconds 300
 }
 
-function Set-NutshellAiAutoApprove {
-    <# Toggle the session's Auto Approve button (IDC_CHAT_AUTOAPPROVE). #>
-    param([Parameter(Mandatory)] $Session)
+function Set-NutshellAiPolicy {
+    <# Put the session's policy markers on named stops of the status line's
+       policy control (docs/superpowers/specs/2026-09-11-status-policy-control-design.md).
+
+       -Allowed     the ceiling: Read | Unknown | Write | Critical. Commands
+                    above it are blocked and show as held.
+       -Unattended  how far the session runs without asking: Nothing | Read |
+                    Unknown | Write | Critical. Never above -Allowed.
+
+       Both are posted as ABSOLUTE setters (IDC_CHAT_POLICY_ALLOW_BASE 4030 +
+       stop, IDC_CHAT_POLICY_AUTO_BASE 4040 + stop + 1), not as cycles of the
+       control, so a case never has to count clicks or read a painted label.
+       Posted, so no foreground window is needed. Omit either to leave that
+       marker where it is; -Allowed is applied first, since lowering the
+       ceiling drags the unattended marker down with it. #>
+    param(
+        [Parameter(Mandatory)] $Session,
+        [ValidateSet("Read", "Unknown", "Write", "Critical")] [string] $Allowed,
+        [ValidateSet("Nothing", "Read", "Unknown", "Write", "Critical")] [string] $Unattended
+    )
     $p = Get-NutshellAiPanel -Session $Session
     if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel is not open" }
-    [NutshellNative]::PostMessage($p, $script:WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
-    Start-Sleep -Milliseconds 300
+
+    $stop = @{ Read = 0; Unknown = 1; Write = 2; Critical = 3 }
+    if ($PSBoundParameters.ContainsKey("Allowed")) {
+        [NutshellNative]::PostMessage($p, $script:WM_COMMAND,
+            [IntPtr](4030 + $stop[$Allowed]), [IntPtr]::Zero) | Out-Null
+        Start-Sleep -Milliseconds 300
+    }
+    if ($PSBoundParameters.ContainsKey("Unattended")) {
+        $u = if ($Unattended -eq "Nothing") { -1 } else { $stop[$Unattended] }
+        [NutshellNative]::PostMessage($p, $script:WM_COMMAND,
+            [IntPtr](4040 + $u + 1), [IntPtr]::Zero) | Out-Null
+        Start-Sleep -Milliseconds 300
+    }
 }
 
 function Wait-NutshellAiSendIdle {
@@ -1297,7 +1325,7 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Get-NutshellWorkArea, `
     Get-NutshellTabStripRegion, Save-NutshellScreenshot, `
     Open-NutshellSecondTab, Select-NutshellTab, `
-    Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiAutoApprove, Set-NutshellTerminalFocus, `
+    Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiPolicy, Set-NutshellTerminalFocus, `
     Wait-NutshellAiSendIdle, `
     Wait-NutshellDialog, Get-NutshellControl, Set-NutshellControlText, Get-NutshellControlText, Invoke-NutshellButton, `
     Select-NutshellCombo, Get-NutshellComboSelection, Set-NutshellCheckbox, Get-NutshellCheckbox, `

@@ -110,21 +110,27 @@ static void build_approval(AiConversation *conv, ApprovalQueue *approval)
     }
     if (!approval) return;
 
+    /* Raise the ceiling to Critical so the write and critical rows below
+     * land PENDING (approve/deny only act on PENDING), then settle them
+     * by hand exactly like a live approval card. */
+    cmd_policy_set_allowed(&approval->policy, CMD_CRITICAL);
+
     /* Approved (write) */
     int approved = chat_approval_add(approval, "systemctl restart nginx",
-                                     CMD_PLATFORM_LINUX, 1);
+                                     CMD_PLATFORM_LINUX);
     chat_approval_approve(approval, approved);
 
     /* Denied (critical) */
     int denied = chat_approval_add(approval, "docker rm -f web_old",
-                                   CMD_PLATFORM_LINUX, 1);
+                                   CMD_PLATFORM_LINUX);
     chat_approval_deny(approval, denied);
 
-    /* Pending (safe) -- permit_write doesn't matter for a safe command */
-    chat_approval_add(approval, "ls -la /var/log", CMD_PLATFORM_LINUX, 1);
+    /* Pending (read) -- the ceiling doesn't matter for a read command */
+    chat_approval_add(approval, "ls -la /var/log", CMD_PLATFORM_LINUX);
 
-    /* Blocked (critical, permit_write off) */
-    chat_approval_add(approval, "rm -rf /var/log/old", CMD_PLATFORM_LINUX, 0);
+    /* Blocked (critical) -- lower the ceiling so this row is held */
+    cmd_policy_set_allowed(&approval->policy, CMD_READ);
+    chat_approval_add(approval, "rm -rf /var/log/old", CMD_PLATFORM_LINUX);
 }
 
 /* ---------------------------------------------------------------------
@@ -146,14 +152,19 @@ static void build_executing(AiConversation *conv, ApprovalQueue *approval)
     }
     if (!approval) return;
 
+    /* Raise the ceiling to Critical so both rows land PENDING and can be
+     * approved by hand, regardless of where an earlier build_* call left
+     * the queue's policy. */
+    cmd_policy_set_allowed(&approval->policy, CMD_CRITICAL);
+
     int completed = chat_approval_add(approval, "apt-get update",
-                                      CMD_PLATFORM_LINUX, 1);
+                                      CMD_PLATFORM_LINUX);
     chat_approval_approve(approval, completed);
     chat_approval_set_executing(approval, completed);
     chat_approval_set_completed(approval, completed);
 
     int executing = chat_approval_add(approval, "systemctl restart nginx",
-                                      CMD_PLATFORM_LINUX, 1);
+                                      CMD_PLATFORM_LINUX);
     chat_approval_approve(approval, executing);
     chat_approval_set_executing(approval, executing);
 }
@@ -261,10 +272,12 @@ static void build_batches(AiConversation *conv, ApprovalQueue *approval,
         ai_conv_add(conv, AI_ROLE_ASSISTANT, BATCH1_ASSISTANT_MSG);
     }
     if (approval) {
-        /* Pending (safe) */
-        chat_approval_add(approval, "ls -la /var/log", CMD_PLATFORM_LINUX, 1);
-        /* Blocked (critical, permit_write off) */
-        chat_approval_add(approval, "rm -rf /var/log/old", CMD_PLATFORM_LINUX, 0);
+        /* Pending (read) -- the ceiling doesn't matter for a read command */
+        chat_approval_add(approval, "ls -la /var/log", CMD_PLATFORM_LINUX);
+        /* Blocked (critical) -- lower the ceiling so this row is held,
+         * regardless of where an earlier build_* call left it. */
+        cmd_policy_set_allowed(&approval->policy, CMD_READ);
+        chat_approval_add(approval, "rm -rf /var/log/old", CMD_PLATFORM_LINUX);
     }
 
     if (conv) {
@@ -272,10 +285,14 @@ static void build_batches(AiConversation *conv, ApprovalQueue *approval,
         ai_conv_add(conv, AI_ROLE_ASSISTANT, BATCH2_ASSISTANT_MSG);
     }
     if (approval2) {
-        /* Pending (safe) */
-        chat_approval_add(approval2, "systemctl status nginx", CMD_PLATFORM_LINUX, 1);
-        /* Blocked (write, permit_write off) */
-        chat_approval_add(approval2, "sudo apt update", CMD_PLATFORM_LINUX, 0);
+        /* approval2 is freshly initialized (chat_approval_init) with the
+         * default policy (allowed = Read, unattended = none), which is
+         * already the ceiling both rows below need. */
+
+        /* Pending (read) */
+        chat_approval_add(approval2, "systemctl status nginx", CMD_PLATFORM_LINUX);
+        /* Blocked (write) -- above the default Read ceiling */
+        chat_approval_add(approval2, "sudo apt update", CMD_PLATFORM_LINUX);
     }
 }
 

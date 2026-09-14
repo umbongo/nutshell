@@ -6,57 +6,7 @@
 void chat_approval_init(ApprovalQueue *q)
 {
     memset(q, 0, sizeof(*q));
-}
-
-unsigned auto_approve_mask(AutoApproveLevel level)
-{
-    switch (level) {
-    case AUTO_APPROVE_SAFE:
-        return CMD_MASK_OF(CMD_SAFE);
-    case AUTO_APPROVE_SAFE_UNKNOWN:
-        return CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN);
-    case AUTO_APPROVE_SAFE_WRITE:
-        return CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_WRITE);
-    case AUTO_APPROVE_SAFE_UNKNOWN_WRITE:
-        return CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN) | CMD_MASK_OF(CMD_WRITE);
-    case AUTO_APPROVE_ALL:
-        return CMD_MASK_OF(CMD_SAFE) | CMD_MASK_OF(CMD_UNKNOWN) |
-               CMD_MASK_OF(CMD_WRITE) | CMD_MASK_OF(CMD_CRITICAL);
-    default:
-        return CMD_MASK_OF(CMD_SAFE);
-    }
-}
-
-/* Config token / UI label tables, indexed by mode 0..5 (0 = off). Kept as
- * parallel arrays indexed identically so the three functions below agree by
- * construction. */
-static const char *const k_auto_approve_mode_names[6] = {
-    "off", "safe", "safe+unknown", "safe+write", "safe+unknown+write", "all"
-};
-static const char *const k_auto_approve_mode_labels[6] = {
-    "Off", "Safe only", "Safe + unknown", "Safe + write",
-    "Safe + unknown + write", "All"
-};
-
-int auto_approve_mode_from_name(const char *name)
-{
-    if (!name) return 0;
-    for (int i = 0; i < 6; i++) {
-        if (strcmp(name, k_auto_approve_mode_names[i]) == 0) return i;
-    }
-    return 0;
-}
-
-const char *auto_approve_mode_name(int mode0to5)
-{
-    if (mode0to5 < 0 || mode0to5 > 5) mode0to5 = 0;
-    return k_auto_approve_mode_names[mode0to5];
-}
-
-const char *auto_approve_mode_label(int mode0to5)
-{
-    if (mode0to5 < 0 || mode0to5 > 5) mode0to5 = 0;
-    return k_auto_approve_mode_labels[mode0to5];
+    q->policy = cmd_policy_default();
 }
 
 static int is_whitespace_only(const char *s)
@@ -83,7 +33,7 @@ static int has_control_char(const char *s)
 }
 
 int chat_approval_add(ApprovalQueue *q, const char *command,
-                      CmdPlatform platform, int permit_write)
+                      CmdPlatform platform)
 {
     if (!command || is_whitespace_only(command)) return -1;
     if (has_control_char(command)) return -1;
@@ -98,11 +48,9 @@ int chat_approval_add(ApprovalQueue *q, const char *command,
     e->safety = cmd_classify(command, platform);
     e->safety_mask = cmd_classify_mask(command, platform);
 
-    if (e->safety > CMD_SAFE && !permit_write) {
+    if (cmd_policy_blocks(q->policy, e->safety)) {
         e->status = APPROVE_BLOCKED;
-    } else if (q->auto_approve &&
-               (e->safety_mask &
-                ~auto_approve_mask((AutoApproveLevel)q->auto_approve_level)) == 0) {
+    } else if (cmd_policy_runs_unattended(q->policy, e->safety_mask)) {
         e->status = APPROVE_APPROVED;
     } else {
         e->status = APPROVE_PENDING;
@@ -138,32 +86,6 @@ int chat_approval_approve_all(ApprovalQueue *q)
         }
     }
     return n;
-}
-
-int chat_approval_auto_approve_click(ApprovalQueue *q, float current_time,
-                                      float confirm_timeout)
-{
-    if (!q->auto_approve_confirming) {
-        q->auto_approve_confirming = 1;
-        q->confirm_start_time = current_time;
-        return 0;
-    }
-
-    float elapsed = current_time - q->confirm_start_time;
-    if (elapsed > confirm_timeout) {
-        q->auto_approve_confirming = 0;
-        return -1;
-    }
-
-    q->auto_approve = 1;
-    q->auto_approve_confirming = 0;
-    return 1;
-}
-
-void chat_approval_revoke_auto(ApprovalQueue *q)
-{
-    q->auto_approve = 0;
-    q->auto_approve_confirming = 0;
 }
 
 int chat_approval_all_decided(const ApprovalQueue *q)
@@ -215,7 +137,8 @@ int chat_approval_unblock_all(ApprovalQueue *q)
 {
     int n = 0;
     for (int i = 0; i < q->count; i++) {
-        if (q->entries[i].status == APPROVE_BLOCKED) {
+        if (q->entries[i].status == APPROVE_BLOCKED &&
+            !cmd_policy_blocks(q->policy, q->entries[i].safety)) {
             q->entries[i].status = APPROVE_PENDING;
             n++;
         }
@@ -223,12 +146,12 @@ int chat_approval_unblock_all(ApprovalQueue *q)
     return n;
 }
 
-int chat_approval_block_pending_writes(ApprovalQueue *q)
+int chat_approval_block_disallowed(ApprovalQueue *q)
 {
     int n = 0;
     for (int i = 0; i < q->count; i++) {
         if (q->entries[i].status == APPROVE_PENDING &&
-            q->entries[i].safety > CMD_SAFE) {
+            cmd_policy_blocks(q->policy, q->entries[i].safety)) {
             q->entries[i].status = APPROVE_BLOCKED;
             n++;
         }
@@ -238,11 +161,8 @@ int chat_approval_block_pending_writes(ApprovalQueue *q)
 
 void chat_approval_reset(ApprovalQueue *q)
 {
-    int saved_auto = q->auto_approve;
-    int saved_level = q->auto_approve_level;
+    CmdPolicy saved = q->policy;
     memset(q->entries, 0, sizeof(q->entries));
     q->count = 0;
-    q->auto_approve = saved_auto;
-    q->auto_approve_level = saved_level;
-    q->auto_approve_confirming = 0;
+    q->policy = saved;
 }

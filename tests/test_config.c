@@ -953,7 +953,7 @@ int test_config_load_legacy_no_auto_connect(void)
 
 /* ============================================================
  * Review-fixes settings: paste_confirm, open_session_manager_at_start,
- * ai_auto_approve_default
+ * ai_policy_default
  * ============================================================ */
 
 int test_config_default_review_fix_settings(void)
@@ -963,7 +963,8 @@ int test_config_default_review_fix_settings(void)
     config_default_settings(&s);
     ASSERT_EQ(s.paste_confirm, 1);
     ASSERT_EQ(s.open_session_manager_at_start, 0);
-    ASSERT_EQ(s.ai_auto_approve_default, 0);
+    ASSERT_EQ(s.ai_policy_default.allowed, (int)CMD_READ);
+    ASSERT_EQ(s.ai_policy_default.unattended, POLICY_NONE);
     TEST_END();
 }
 
@@ -975,24 +976,38 @@ int test_config_validate_review_fix_settings_clamp(void)
 
     s.paste_confirm = 7;
     s.open_session_manager_at_start = -3;
-    s.ai_auto_approve_default = 42;
+    s.ai_policy_default.allowed = 42;
+    s.ai_policy_default.unattended = 42;
     settings_validate(&s);
     ASSERT_EQ(s.paste_confirm, 1);
     ASSERT_EQ(s.open_session_manager_at_start, 1);
-    ASSERT_EQ(s.ai_auto_approve_default, 5);
+    ASSERT_EQ(s.ai_policy_default.allowed, (int)CMD_CRITICAL);
+    ASSERT_EQ(s.ai_policy_default.unattended, (int)CMD_CRITICAL);
 
     s.paste_confirm = 0;
     s.open_session_manager_at_start = 0;
-    s.ai_auto_approve_default = -1;
+    s.ai_policy_default.allowed = -1;
+    s.ai_policy_default.unattended = -9;
     settings_validate(&s);
     ASSERT_EQ(s.paste_confirm, 0);
     ASSERT_EQ(s.open_session_manager_at_start, 0);
-    ASSERT_EQ(s.ai_auto_approve_default, 0);
+    ASSERT_EQ(s.ai_policy_default.allowed, (int)CMD_READ);
+    ASSERT_EQ(s.ai_policy_default.unattended, POLICY_NONE);
+
+    /* The invariant survives validation: an unattended marker above the
+     * ceiling comes down to it, and the ceiling is never raised. */
+    s.ai_policy_default.allowed = CMD_UNKNOWN;
+    s.ai_policy_default.unattended = CMD_CRITICAL;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_policy_default.allowed, (int)CMD_UNKNOWN);
+    ASSERT_EQ(s.ai_policy_default.unattended, (int)CMD_UNKNOWN);
 
     /* In-range values pass through untouched. */
-    s.ai_auto_approve_default = 2;
+    s.ai_policy_default.allowed = CMD_WRITE;
+    s.ai_policy_default.unattended = CMD_READ;
     settings_validate(&s);
-    ASSERT_EQ(s.ai_auto_approve_default, 2);
+    ASSERT_EQ(s.ai_policy_default.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(s.ai_policy_default.unattended, (int)CMD_READ);
     TEST_END();
 }
 
@@ -1003,7 +1018,8 @@ int test_config_roundtrip_review_fix_settings(void)
     ASSERT_NOT_NULL(orig);
     orig->settings.paste_confirm = 0;
     orig->settings.open_session_manager_at_start = 1;
-    orig->settings.ai_auto_approve_default = 3;
+    orig->settings.ai_policy_default.allowed = CMD_WRITE;
+    orig->settings.ai_policy_default.unattended = CMD_READ;
 
     int rc = config_save(orig, TMP_CFG);
     ASSERT_EQ(rc, 0);
@@ -1012,7 +1028,8 @@ int test_config_roundtrip_review_fix_settings(void)
     ASSERT_NOT_NULL(loaded);
     ASSERT_EQ(loaded->settings.paste_confirm, 0);
     ASSERT_EQ(loaded->settings.open_session_manager_at_start, 1);
-    ASSERT_EQ(loaded->settings.ai_auto_approve_default, 3);
+    ASSERT_EQ(loaded->settings.ai_policy_default.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(loaded->settings.ai_policy_default.unattended, (int)CMD_READ);
 
     config_free(orig);
     config_free(loaded);
@@ -1033,7 +1050,8 @@ int test_config_load_legacy_no_review_fix_settings(void)
     ASSERT_NOT_NULL(cfg);
     ASSERT_EQ(cfg->settings.paste_confirm, 1);
     ASSERT_EQ(cfg->settings.open_session_manager_at_start, 0);
-    ASSERT_EQ(cfg->settings.ai_auto_approve_default, 0);
+    ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_READ);
+    ASSERT_EQ(cfg->settings.ai_policy_default.unattended, POLICY_NONE);
     config_free(cfg);
     remove(TMP_CFG);
     TEST_END();
@@ -1042,9 +1060,9 @@ int test_config_load_legacy_no_review_fix_settings(void)
 int test_config_load_ignores_old_auto_approve_all_key(void)
 {
     TEST_BEGIN();
-    /* The old boolean key is dropped with no migration: a config file that
-     * still has it must fall back to the ai_auto_approve_default default
-     * (0), not read/coerce the stale key. */
+    /* The oldest boolean key is dropped with no migration: a config file
+     * that still has it must fall back to the default policy, not
+     * read/coerce the stale key into a permissive one. */
     FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs("{\"settings\": {\"font\": \"Consolas\", "
@@ -1053,48 +1071,60 @@ int test_config_load_ignores_old_auto_approve_all_key(void)
 
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NOT_NULL(cfg);
-    ASSERT_EQ(cfg->settings.ai_auto_approve_default, 0);
+    ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_READ);
+    ASSERT_EQ(cfg->settings.ai_policy_default.unattended, POLICY_NONE);
     config_free(cfg);
     remove(TMP_CFG);
     TEST_END();
 }
 
 /* ============================================================
- * Auto Approve mode: the new string-token key and migration from the old
- * numeric ai_auto_approve_default key
- * (2026-09-11-unknown-safety-category-design.md §7/§8)
+ * ai_policy_default: the one policy key, and migration from the two
+ * settings it replaces
+ * (2026-09-11-status-policy-control-design.md section 6)
  * ============================================================ */
 
-int test_config_auto_approve_mode_token_round_trip(void)
+int test_config_policy_token_round_trips_every_pair(void)
 {
     TEST_BEGIN();
-    /* Every one of the six modes (0 = off .. 5 = all) round-trips through
-     * save/load via the new "ai_auto_approve_mode" string token. */
-    for (int i = 0; i <= 5; i++) {
-        Config *orig = config_new_default();
-        ASSERT_NOT_NULL(orig);
-        orig->settings.ai_auto_approve_default = i;
+    /* All 14 legal (allowed, unattended) pairs survive save/load. */
+    int pairs = 0;
+    for (int a = 0; a < POLICY_STOP_COUNT; a++) {
+        for (int u = POLICY_NONE; u <= a; u++) {
+            Config *orig = config_new_default();
+            ASSERT_NOT_NULL(orig);
+            orig->settings.ai_policy_default.allowed = a;
+            orig->settings.ai_policy_default.unattended = u;
 
-        int rc = config_save(orig, TMP_CFG);
-        ASSERT_EQ(rc, 0);
+            int rc = config_save(orig, TMP_CFG);
+            ASSERT_EQ(rc, 0);
 
-        Config *loaded = config_load(TMP_CFG);
-        ASSERT_NOT_NULL(loaded);
-        ASSERT_EQ(loaded->settings.ai_auto_approve_default, i);
-
-        config_free(orig);
-        config_free(loaded);
-        remove(TMP_CFG);
+            Config *loaded = config_load(TMP_CFG);
+            ASSERT_NOT_NULL(loaded);
+            if (loaded->settings.ai_policy_default.allowed != a ||
+                loaded->settings.ai_policy_default.unattended != u) {
+                printf("  {%d,%d} round-tripped as {%d,%d}\n", a, u,
+                       loaded->settings.ai_policy_default.allowed,
+                       loaded->settings.ai_policy_default.unattended);
+                _tf_local_fail = 1;
+            }
+            config_free(orig);
+            config_free(loaded);
+            remove(TMP_CFG);
+            pairs++;
+        }
     }
+    ASSERT_EQ(pairs, 14);
     TEST_END();
 }
 
-int test_config_save_writes_new_token_not_old_numeric_key(void)
+int test_config_save_writes_policy_key_and_neither_old_key(void)
 {
     TEST_BEGIN();
     Config *orig = config_new_default();
     ASSERT_NOT_NULL(orig);
-    orig->settings.ai_auto_approve_default = 3; /* safe+write */
+    orig->settings.ai_policy_default.allowed = CMD_WRITE;
+    orig->settings.ai_policy_default.unattended = CMD_READ;
     int rc = config_save(orig, TMP_CFG);
     ASSERT_EQ(rc, 0);
 
@@ -1105,8 +1135,9 @@ int test_config_save_writes_new_token_not_old_numeric_key(void)
     buf[n] = '\0';
     fclose(f);
 
-    ASSERT_TRUE(strstr(buf, "\"ai_auto_approve_mode\": \"safe+write\"") != NULL);
-    /* The old numeric key is not written back. */
+    ASSERT_TRUE(strstr(buf, "\"ai_policy_default\": \"write/read\"") != NULL);
+    /* Neither superseded key is written back. */
+    ASSERT_NULL(strstr(buf, "ai_auto_approve_mode"));
     ASSERT_NULL(strstr(buf, "ai_auto_approve_default"));
 
     config_free(orig);
@@ -1114,20 +1145,25 @@ int test_config_save_writes_new_token_not_old_numeric_key(void)
     TEST_END();
 }
 
-int test_config_load_migrates_legacy_numeric_auto_approve(void)
+int test_config_load_migrates_v1_1_16_auto_approve_mode(void)
 {
     TEST_BEGIN();
-    /* No new token present: migrate the old numeric key. 0->off, 1->safe,
-     * 2->safe+write, 3->all. Old 2 must land on new mode 3 ("safe+write"),
-     * NOT new mode 2 (now "safe+unknown") -- that remap, caused by
-     * CMD_UNKNOWN's insertion shifting the meaning of the numbers after it,
-     * is the whole reason this migration exists. */
-    static const int k_legacy_to_mode[4] = { 0, 1, 3, 5 };
-    for (int legacy = 0; legacy <= 3; legacy++) {
+    /* A v1.1.16 config carries an auto-approve mode and no ceiling of its
+     * own, because the old permit-write flag was per session and always
+     * started off. So every mode migrates to ceiling `read`, and to
+     * unattended `read` unless the mode was "off" -- READ was the only
+     * category such a session could ever actually run unattended. Migrating
+     * the mode's top category onto the new ceiling would start new sessions
+     * MORE permissively than the same config starts them today, which a
+     * migration must never do. */
+    static const char *const modes[6] = {
+        "off", "safe", "safe+unknown", "safe+write", "safe+unknown+write", "all"
+    };
+    for (int i = 0; i < 6; i++) {
         char json[256];
         snprintf(json, sizeof(json),
                  "{\"settings\": {\"font\": \"Consolas\", "
-                 "\"ai_auto_approve_default\": %d}, \"profiles\": []}", legacy);
+                 "\"ai_auto_approve_mode\": \"%s\"}, \"profiles\": []}", modes[i]);
         FILE *f = test_fopen_private(TMP_CFG);
         ASSERT_NOT_NULL(f);
         fputs(json, f);
@@ -1135,9 +1171,13 @@ int test_config_load_migrates_legacy_numeric_auto_approve(void)
 
         Config *cfg = config_load(TMP_CFG);
         ASSERT_NOT_NULL(cfg);
-        if (cfg->settings.ai_auto_approve_default != k_legacy_to_mode[legacy]) {
-            printf("  legacy=%d: expected mode %d, got %d\n", legacy,
-                   k_legacy_to_mode[legacy], cfg->settings.ai_auto_approve_default);
+        int want_u = (i == 0) ? POLICY_NONE : (int)CMD_READ;
+        if (cfg->settings.ai_policy_default.allowed != (int)CMD_READ ||
+            cfg->settings.ai_policy_default.unattended != want_u) {
+            printf("  \"%s\" -> {%d,%d}, expected {%d,%d}\n", modes[i],
+                   cfg->settings.ai_policy_default.allowed,
+                   cfg->settings.ai_policy_default.unattended,
+                   (int)CMD_READ, want_u);
             _tf_local_fail = 1;
         }
         config_free(cfg);
@@ -1146,39 +1186,112 @@ int test_config_load_migrates_legacy_numeric_auto_approve(void)
     TEST_END();
 }
 
-int test_config_load_new_token_wins_over_legacy_numeric(void)
+int test_config_load_migrates_pre_v1_1_16_numeric_auto_approve(void)
 {
     TEST_BEGIN();
-    /* Both keys present: the new string token is authoritative and the
-     * legacy numeric key is ignored, not merged or preferred. */
+    /* Older still: the numeric key, 0 = off and 1..3 = on at some level.
+     * Same rule -- ceiling `read`, unattended `read` unless it was off.
+     * An out-of-range number is treated as off, never as on. */
+    static const int legacy[6]  = { 0, 1, 2, 3, 4, -1 };
+    static const int want_on[6] = { 0, 1, 1, 1, 0,  0 };
+    for (int i = 0; i < 6; i++) {
+        char json[256];
+        snprintf(json, sizeof(json),
+                 "{\"settings\": {\"font\": \"Consolas\", "
+                 "\"ai_auto_approve_default\": %d}, \"profiles\": []}", legacy[i]);
+        FILE *f = test_fopen_private(TMP_CFG);
+        ASSERT_NOT_NULL(f);
+        fputs(json, f);
+        fclose(f);
+
+        Config *cfg = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(cfg);
+        int want_u = want_on[i] ? (int)CMD_READ : POLICY_NONE;
+        if (cfg->settings.ai_policy_default.allowed != (int)CMD_READ ||
+            cfg->settings.ai_policy_default.unattended != want_u) {
+            printf("  legacy %d -> {%d,%d}, expected {%d,%d}\n", legacy[i],
+                   cfg->settings.ai_policy_default.allowed,
+                   cfg->settings.ai_policy_default.unattended,
+                   (int)CMD_READ, want_u);
+            _tf_local_fail = 1;
+        }
+        config_free(cfg);
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+int test_config_load_policy_key_wins_over_both_old_keys(void)
+{
+    TEST_BEGIN();
+    /* All three present: the new key is authoritative, and neither old key
+     * is merged into it. */
     FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs("{\"settings\": {\"font\": \"Consolas\", "
           "\"ai_auto_approve_default\": 1, "
-          "\"ai_auto_approve_mode\": \"safe+unknown\"}, \"profiles\": []}", f);
+          "\"ai_auto_approve_mode\": \"all\", "
+          "\"ai_policy_default\": \"write/unknown\"}, \"profiles\": []}", f);
     fclose(f);
 
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NOT_NULL(cfg);
-    /* mode 2 = safe+unknown, from the token -- not legacy 1's "safe". */
-    ASSERT_EQ(cfg->settings.ai_auto_approve_default, 2);
+    ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(cfg->settings.ai_policy_default.unattended, (int)CMD_UNKNOWN);
     config_free(cfg);
     remove(TMP_CFG);
     TEST_END();
 }
 
-int test_config_load_garbage_auto_approve_mode_token_is_off(void)
+int test_config_load_garbage_policy_token_is_the_default(void)
 {
     TEST_BEGIN();
+    /* Garbage must fall back to read-only/nothing-unattended -- never to
+     * something more permissive, and never leave the field uninitialised. */
+    static const char *const bad[] = {
+        "nonsense", "", "critical", "safe+write", "none/none", "critical/"
+    };
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        char json[256];
+        snprintf(json, sizeof(json),
+                 "{\"settings\": {\"font\": \"Consolas\", "
+                 "\"ai_policy_default\": \"%s\"}, \"profiles\": []}", bad[i]);
+        FILE *f = test_fopen_private(TMP_CFG);
+        ASSERT_NOT_NULL(f);
+        fputs(json, f);
+        fclose(f);
+
+        Config *cfg = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(cfg);
+        if (cfg->settings.ai_policy_default.allowed != (int)CMD_READ ||
+            cfg->settings.ai_policy_default.unattended != POLICY_NONE) {
+            printf("  \"%s\" -> {%d,%d}\n", bad[i],
+                   cfg->settings.ai_policy_default.allowed,
+                   cfg->settings.ai_policy_default.unattended);
+            _tf_local_fail = 1;
+        }
+        config_free(cfg);
+        remove(TMP_CFG);
+    }
+    TEST_END();
+}
+
+int test_config_load_inverted_policy_token_clamps_down(void)
+{
+    TEST_BEGIN();
+    /* A hand-edited config asking to run Critical unattended under a Write
+     * ceiling gets the unattended marker clamped DOWN to the ceiling, not
+     * the ceiling raised. */
     FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     fputs("{\"settings\": {\"font\": \"Consolas\", "
-          "\"ai_auto_approve_mode\": \"nonsense\"}, \"profiles\": []}", f);
+          "\"ai_policy_default\": \"write/critical\"}, \"profiles\": []}", f);
     fclose(f);
 
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NOT_NULL(cfg);
-    ASSERT_EQ(cfg->settings.ai_auto_approve_default, 0);
+    ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(cfg->settings.ai_policy_default.unattended, (int)CMD_WRITE);
     config_free(cfg);
     remove(TMP_CFG);
     TEST_END();

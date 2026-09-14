@@ -1886,7 +1886,7 @@ int test_inline_approval_readonly_filter_then_approve(void)
     char filtered[16][1024];
     int nfiltered = 0;
     for (int i = 0; i < ncmds; i++) {
-        if (cmd_classify(cmds[i], CMD_PLATFORM_LINUX) == CMD_SAFE) {
+        if (cmd_classify(cmds[i], CMD_PLATFORM_LINUX) == CMD_READ) {
             memcpy(filtered[nfiltered], cmds[i], sizeof(filtered[0]));
             nfiltered++;
         }
@@ -1925,11 +1925,13 @@ int test_session_state_batches_two_sessions_independent(void)
 
     CmdBatch *ba = cmd_batch_add(&state_a.batches, NULL, NULL);
     ASSERT_NOT_NULL(ba);
-    chat_approval_add(&ba->q, "ls -la", CMD_PLATFORM_LINUX, 1);
+    cmd_policy_set_allowed(&ba->q.policy, CMD_CRITICAL);
+    chat_approval_add(&ba->q, "ls -la", CMD_PLATFORM_LINUX);
 
     CmdBatch *bb = cmd_batch_add(&state_b.batches, NULL, NULL);
     ASSERT_NOT_NULL(bb);
-    chat_approval_add(&bb->q, "df -h", CMD_PLATFORM_LINUX, 1);
+    cmd_policy_set_allowed(&bb->q.policy, CMD_CRITICAL);
+    chat_approval_add(&bb->q, "df -h", CMD_PLATFORM_LINUX);
 
     /* Deny + remove on B must not affect A */
     chat_approval_deny(&bb->q, 0);
@@ -1956,14 +1958,16 @@ int test_session_state_batches_survive_switch_away(void)
 
     CmdBatch *b1 = cmd_batch_add(&state.batches, NULL, NULL);
     ASSERT_NOT_NULL(b1);
-    chat_approval_add(&b1->q, "uptime", CMD_PLATFORM_LINUX, 1);
+    cmd_policy_set_allowed(&b1->q.policy, CMD_CRITICAL);
+    chat_approval_add(&b1->q, "uptime", CMD_PLATFORM_LINUX);
 
     /* A second reply while still on this session adds its own batch --
      * the first is untouched (rule 2: a new reply never settles earlier
      * cards). */
     CmdBatch *b2 = cmd_batch_add(&state.batches, NULL, NULL);
     ASSERT_NOT_NULL(b2);
-    chat_approval_add(&b2->q, "free -m", CMD_PLATFORM_LINUX, 1);
+    cmd_policy_set_allowed(&b2->q.policy, CMD_CRITICAL);
+    chat_approval_add(&b2->q, "free -m", CMD_PLATFORM_LINUX);
 
     ASSERT_EQ(state.batches.count, 2);
     ASSERT_TRUE(cmd_batch_find(&state.batches, b1->id) == b1);
@@ -2162,7 +2166,8 @@ int test_session_state_cleanup_on_close(void)
     state.stream_thinking = (char *)calloc(1, AI_MSG_MAX);
     CmdBatch *b = cmd_batch_add(&state.batches, NULL, NULL);
     ASSERT_NOT_NULL(b);
-    chat_approval_add(&b->q, "uptime", CMD_PLATFORM_LINUX, 1);
+    cmd_policy_set_allowed(&b->q.policy, CMD_CRITICAL);
+    chat_approval_add(&b->q, "uptime", CMD_PLATFORM_LINUX);
     ASSERT_EQ(state.batches.count, 1);
 
     /* Simulate cleanup */

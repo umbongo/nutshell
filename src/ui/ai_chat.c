@@ -110,6 +110,12 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define IDC_CHAT_DENY     4012
 #define IDC_CHAT_UNDOCK   4013
 #define IDC_CHAT_AUTOAPPROVE 4015
+/* The policy control's absolute setters: post one of these to put a marker
+ * on a named stop, rather than counting cycles of the two ids above. The
+ * integration harness drives the control through these. */
+#define IDC_CHAT_POLICY_ALLOW_BASE 4030  /* 4030..4033: allowed = stop 0..3 */
+#define IDC_CHAT_POLICY_AUTO_BASE  4040  /* 4040..4044: unattended = index-1,
+                                           * i.e. 4040 = POLICY_NONE */
 /* Empty/no-key/no-session state (ai_panel_states.h), posted by
  * chat_listview.c when the message list is empty -- see
  * chatlv_empty_state_hit()/on_lbuttondown() there (AI Assist Panel
@@ -165,23 +171,22 @@ typedef struct {
     HWND hUndockBtn;
     /* Old floating Allow/Deny buttons, and the owner-drawn Permit Write /
      * Auto Approve tab buttons, are gone — approval is inline in
-     * chat_listview and the two modes are shown/clicked in the status
+     * chat_listview and the session policy is shown/clicked in the status
      * line (painted, not child windows; see ai_chat_status_hit()). */
     /* Pending command batches: approval_q.entries/count are unused --
      * decisions live per-batch in d->active_state->batches (CmdBatchSet).
-     * approval_q survives only as the panel-wide template of
-     * auto_approve/auto_approve_level (copied into every new batch by
-     * cmd_batch_add()) and as the auto_approve_confirming/confirm_start_time
-     * state for the status line's "click twice to confirm" flow. */
+     * approval_q survives only as the panel-wide template of the session's
+     * CmdPolicy, copied into every new batch by cmd_batch_add(). It is the
+     * one place the live policy lives; the status-line control reads and
+     * writes it directly. */
     ApprovalQueue approval_q;
-    int auto_approve_default;  /* settings.ai_auto_approve_default, 0..3: seeds
-                                 * a fresh session's auto_approve/level (see
-                                 * ai_chat_set_auto_approve_default()). */
+    CmdPolicy policy_default;  /* settings.ai_policy_default: seeds a fresh
+                                 * session's policy (see
+                                 * ai_chat_set_policy_default()). */
     HWND hThinkingBtn;
     HWND hTooltip;        /* Win32 tooltip control */
-    int permit_write;     /* 0 = read-only (red), 1 = read/write (green) */
-    /* Hover/press tracking for the painted status line (mode segments,
-     * auto-approve text) -- see ai_chat_status_hit()/ai_chat_status_rect(). */
+    /* Hover/press tracking for the painted status line (the policy control's
+     * eight bands) -- see ai_chat_status_hit()/ai_chat_status_rect(). */
     NsHover status_hover;
     int status_hover_tracking;  /* TrackMouseEvent armed for WM_MOUSELEAVE */
     int show_thinking;    /* 1 = user has manually opened a Thinking
@@ -189,7 +194,7 @@ typedef struct {
                             * auto-collapse at reply-start (chat_listview.c)
                             * and is also passed to ai_build_save_text() so
                             * a session where the user looked at reasoning
-                            * saves it too. Mirrors auto_approve: persisted
+                            * saves it too. Mirrors the policy: persisted
                             * per-session in AiSessionState, reset on New Chat. */
     HFONT hFont;
     HFONT hSmallFont;     /* small bold font for indicator label */
@@ -847,8 +852,8 @@ static void ai_chat_compute_layout(AiChatData *d, AiPanelLayout *out)
     ai_panel_layout(panel, d->dpi, composer_h, out);
 }
 
-/* Invalidate just the status line -- called whenever permit_write,
- * auto-approve or the context numbers change. */
+/* Invalidate just the status line -- called whenever the policy or the
+ * context numbers change. */
 static void invalidate_status_line(AiChatData *d)
 {
     if (!d || !d->hwnd) return;
@@ -857,6 +862,74 @@ static void invalidate_status_line(AiChatData *d)
     RECT r = { l.status.x, l.status.y, l.status.x + l.status.w,
                l.status.y + l.status.h };
     InvalidateRect(d->hwnd, &r, FALSE);
+}
+
+/* Move the session to `next` and bring every pending card into line with it.
+ *
+ * Raising the ceiling unblocks held rows in EVERY pending batch (not just
+ * the newest) and tells the AI so, because it has a stale "blocked by
+ * policy" message in its history and will otherwise keep advising the user
+ * to change a setting they just changed. Lowering it re-blocks pending rows
+ * the new ceiling no longer allows. The unattended marker only affects
+ * commands that have not arrived yet, so it needs neither pass -- but it
+ * shares this path so a single gesture that moves both markers (lowering the
+ * ceiling drags the marker down) is applied once. */
+static void apply_policy_change(AiChatData *d, CmdPolicy next)
+{
+    if (!d) return;
+    cmd_policy_clamp(&next);
+    CmdPolicy prev = d->approval_q.policy;
+    if (next.allowed == prev.allowed && next.unattended == prev.unattended)
+        return;
+
+    d->approval_q.policy = next;
+    if (d->active_state) {
+        d->active_state->policy = next;
+        d->active_state->policy_seeded = 1;
+        for (int bi = 0; bi < d->active_state->batches.count; bi++)
+            d->active_state->batches.b[bi]->q.policy = next;
+    }
+    invalidate_status_line(d);
+
+    if (next.allowed > prev.allowed) {
+        if (d->active_state)
+            for (int bi = 0; bi < d->active_state->batches.count; bi++)
+                chat_approval_unblock_all(&d->active_state->batches.b[bi]->q);
+        ChatMsgItem *it = d->msg_list.head;
+        while (it) {
+            if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.blocked &&
+                (int)it->u.cmd.safety <= next.allowed) {
+                it->u.cmd.blocked = 0;
+                it->u.cmd.approved = -1;
+                it->u.cmd.selected = 1;  /* no longer held -- starts checked */
+            }
+            it = it->next;
+        }
+        if (d->conv.msg_count > 0) {
+            char note[256];
+            if (ai_build_policy_raised_note(next.allowed, note, sizeof(note)) > 0) {
+                EnterCriticalSection(&d->cs);
+                ai_conv_add(&d->conv, AI_ROLE_USER, note);
+                LeaveCriticalSection(&d->cs);
+            }
+        }
+    } else if (next.allowed < prev.allowed) {
+        if (d->active_state)
+            for (int bi = 0; bi < d->active_state->batches.count; bi++)
+                chat_approval_block_disallowed(&d->active_state->batches.b[bi]->q);
+        ChatMsgItem *it = d->msg_list.head;
+        while (it) {
+            if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
+                it->u.cmd.approved == -1 &&
+                (int)it->u.cmd.safety > next.allowed) {
+                it->u.cmd.blocked = 1;
+            }
+            it = it->next;
+        }
+    }
+
+    if (d->hChatList)
+        chat_listview_invalidate(d->hChatList);
 }
 
 /* Recompute the context meter/usage state and clear any busy-indicator
@@ -2109,20 +2182,26 @@ static void relayout(AiChatData *d)
 }
 
 /* ── Status line: geometry, hit-test, tooltip, paint ──────────────────
- * The mode segments (Read-only / Read + write) and the auto-approve text
- * are painted directly on the panel's own client area (not child
- * windows), so hover/click/tooltip all go through a hit-test against a
- * freshly measured AiStatusLayout rather than window messages. See
- * docs/superpowers/specs/2026-09-07-ai-assist-panel-design.md "Structure
- * (frame B)".
+ * The policy control is painted directly on the panel's own client area
+ * (not child windows), so hover/click/tooltip all go through a hit-test
+ * against a freshly measured AiStatusLayout + NsPolicyLayout rather than
+ * window messages. See
+ * docs/superpowers/specs/2026-09-11-status-policy-control-design.md
+ * section 4.
  */
 
-enum { STATUS_HIT_SEG0 = 0, STATUS_HIT_SEG1 = 1, STATUS_HIT_AUTO = 2 };
+/* The policy control has eight hittable bands -- an `allowed` band and an
+ * `unattended` band per stop -- and ns_hover wants a single small int per
+ * element, so pack (band, stop) into one id. -1 stays "nothing". */
+#define STATUS_HIT_ID(band, stop) ((band) * NS_POLICY_STOPS + (stop))
+#define STATUS_HIT_BAND(id)       ((id) / NS_POLICY_STOPS)
+#define STATUS_HIT_STOP(id)       ((id) % NS_POLICY_STOPS)
+#define STATUS_HIT_COUNT          (2 * NS_POLICY_STOPS)
 
 typedef struct {
     NsRect status;
     AiStatusLayout sl;
-    char auto_text[64];
+    NsPolicyLayout pl;
     char meter_text[32];
     int has_meter;   /* context_limit > 0 -- meter numbers are meaningful */
 } AiStatusPaint;
@@ -2146,14 +2225,14 @@ static void ai_chat_format_meter_text(int tokens, int limit,
     snprintf(buf, cap, "%s / %s", tok_str, lim_str);
 }
 
-static NsRect ai_chat_status_rect_for_id(const AiStatusLayout *sl, int id)
+/* Client rect to invalidate when a hover id gains or loses hover. Hover
+ * changes the whole cell (label fill and rail alike), so both bands of a
+ * stop map to that stop's painted cell. */
+static NsRect ai_chat_status_rect_for_id(const NsPolicyLayout *pl, int id)
 {
-    switch (id) {
-    case STATUS_HIT_SEG0: return sl->seg[0];
-    case STATUS_HIT_SEG1: return sl->seg[1];
-    case STATUS_HIT_AUTO: return sl->auto_label;
-    default: { NsRect z = {0, 0, 0, 0}; return z; }
-    }
+    NsRect z = { 0, 0, 0, 0 };
+    if (id < 0 || id >= STATUS_HIT_COUNT) return z;
+    return pl->cell[STATUS_HIT_STOP(id)];
 }
 
 static int ai_chat_pt_in_rect(NsRect r, int x, int y)
@@ -2183,17 +2262,13 @@ static void ai_chat_get_status_paint(AiChatData *d, HDC hdc, AiStatusPaint *out)
     HGDIOBJ old = font ? SelectObject(use_hdc, font) : NULL;
 
     SIZE sz;
-    static const char seg0_label[] = "Read-only";
-    static const char seg1_label[] = "Read + write";
-    GetTextExtentPoint32A(use_hdc, seg0_label, (int)strlen(seg0_label), &sz);
-    int seg0_w = sz.cx;
-    GetTextExtentPoint32A(use_hdc, seg1_label, (int)strlen(seg1_label), &sz);
-    int seg1_w = sz.cx;
-
-    snprintf(out->auto_text, sizeof(out->auto_text), "Auto approve: %s",
-            ai_modes_label(d->approval_q.auto_approve, d->approval_q.auto_approve_level));
-    GetTextExtentPoint32A(use_hdc, out->auto_text, (int)strlen(out->auto_text), &sz);
-    int auto_w = sz.cx;
+    int stop_w[NS_POLICY_STOPS];
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        const char *lbl = cmd_policy_stop_label(k);
+        GetTextExtentPoint32A(use_hdc, lbl, (int)strlen(lbl), &sz);
+        stop_w[k] = sz.cx;
+    }
+    int policy_w = ns_policy_width(stop_w, d->dpi);
 
     int meter_w = 0;
     out->has_meter = d->context_limit > 0;
@@ -2210,21 +2285,25 @@ static void ai_chat_get_status_paint(AiChatData *d, HDC hdc, AiStatusPaint *out)
     if (old) SelectObject(use_hdc, old);
     if (own_hdc) ReleaseDC(d->hwnd, own_hdc);
 
-    ai_status_layout(out->status, d->dpi, seg0_w, seg1_w, auto_w, meter_w,
-                     &out->sl);
+    ai_status_layout(out->status, d->dpi, policy_w, meter_w, &out->sl);
+    /* The painted pill is inset inside the status row; the click bands are
+     * the full row tall, so a 3 px rail is not a 3 px target. */
+    ns_policy_layout(out->sl.policy, stop_w, d->approval_q.policy.unattended,
+                     out->status.h, d->dpi, &out->pl);
 }
 
-/* Hit-test a client point against the status line's clickable elements.
- * Returns STATUS_HIT_SEG0/SEG1/AUTO, or -1 for nothing hittable. */
+/* Hit-test a client point against the policy control. Returns a packed
+ * (band, stop) id, or -1 for nothing hittable. */
 static int ai_chat_status_hit(AiChatData *d, int x, int y)
 {
     AiStatusPaint sp;
     ai_chat_get_status_paint(d, NULL, &sp);
-    static const int ids[3] = { STATUS_HIT_SEG0, STATUS_HIT_SEG1, STATUS_HIT_AUTO };
-    for (int i = 0; i < 3; i++) {
-        NsRect r = ai_chat_status_rect_for_id(&sp.sl, ids[i]);
-        if (ai_chat_pt_in_rect(r, x, y)) return ids[i];
-    }
+    int stop = -1;
+    int what = ns_policy_hit(&sp.pl, x, y, &stop);
+    if (what == HIT_POLICY_ALLOWED)
+        return STATUS_HIT_ID(POLICY_BAND_ALLOWED, stop);
+    if (what == HIT_POLICY_UNATTENDED)
+        return STATUS_HIT_ID(POLICY_BAND_UNATTENDED, stop);
     return -1;
 }
 
@@ -2236,7 +2315,7 @@ static int ai_chat_status_rect(AiChatData *d, int id, RECT *out_rc)
     if (id < 0) return 0;
     AiStatusPaint sp;
     ai_chat_get_status_paint(d, NULL, &sp);
-    NsRect r = ai_chat_status_rect_for_id(&sp.sl, id);
+    NsRect r = ai_chat_status_rect_for_id(&sp.pl, id);
     if (r.w <= 0 || r.h <= 0) return 0;
     SetRect(out_rc, r.x, r.y, r.x + r.w, r.y + r.h);
     return 1;
@@ -2352,9 +2431,8 @@ static void paint_header(AiChatData *d, HDC hdc)
 }
 
 /* Paint the status line: bg_secondary fill with a border rule on top, the
- * mode segmented control, the auto-approve text (or, while a
- * start_indicator() busy override is set, that text instead of the
- * meter), and the context meter + used/limit numbers. */
+ * policy control, and the context meter + used/limit numbers (or, while a
+ * start_indicator() busy override is set, that text instead of the meter). */
 static void paint_status_line(AiChatData *d, HDC hdc)
 {
     const ThemeTokens *tok = ns_tokens();
@@ -2372,50 +2450,16 @@ static void paint_status_line(AiChatData *d, HDC hdc)
     HGDIOBJ old_font = cap_font ? SelectObject(hdc, cap_font) : NULL;
     int old_bk = SetBkMode(hdc, TRANSPARENT);
 
-    /* Mode segmented control */
+    /* The one policy control */
     {
-        const char *labels[2] = { "Read-only", "Read + write" };
-        int hover_state[2] = {
-            ns_hover_state_for(&d->status_hover, STATUS_HIT_SEG0),
-            ns_hover_state_for(&d->status_hover, STATUS_HIT_SEG1)
-        };
-        NsRect seg[2] = { sp.sl.seg[0], sp.sl.seg[1] };
-        ns_draw_segmented(hdc, seg, labels, d->permit_write, d->permit_write,
-                          tok, hover_state, cap_font, d->dpi);
-    }
-
-    /* Auto-approve text: "Auto approve: " in text_dim, the state word in
-     * text_main when on / text_dim when off; underlined while hovered. */
-    if (sp.sl.auto_label.w > 0) {
-        RECT rc = ai_chat_to_RECT(sp.sl.auto_label);
-        const char *prefix = "Auto approve: ";
-        const char *state = sp.auto_text + strlen(prefix);
-        SIZE prefix_sz;
-        GetTextExtentPoint32A(hdc, prefix, (int)strlen(prefix), &prefix_sz);
-
-        SetTextColor(hdc, theme_cr(tok->text_dim));
-        DrawTextA(hdc, prefix, -1, &rc,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
-        RECT state_rc = rc;
-        state_rc.left += prefix_sz.cx;
-        SetTextColor(hdc, d->approval_q.auto_approve
-                          ? theme_cr(tok->text_main) : theme_cr(tok->text_dim));
-        DrawTextA(hdc, state, -1, &state_rc,
-                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-
-        if (ns_hover_state_for(&d->status_hover, STATUS_HIT_AUTO) > 0) {
-            SIZE full_sz;
-            GetTextExtentPoint32A(hdc, sp.auto_text, (int)strlen(sp.auto_text), &full_sz);
-            int text_top = rc.top + ((rc.bottom - rc.top) - full_sz.cy) / 2;
-            int underline_y = text_top + full_sz.cy - 1;
-            HPEN pen = CreatePen(PS_SOLID, 1, theme_cr(tok->text_dim));
-            HGDIOBJ old_pen = SelectObject(hdc, pen);
-            MoveToEx(hdc, rc.left, underline_y, NULL);
-            LineTo(hdc, rc.left + full_sz.cx, underline_y);
-            SelectObject(hdc, old_pen);
-            DeleteObject(pen);
+        int hot = d->status_hover.hot_id;
+        int hover_band = -1, hover_stop = -1;
+        if (hot >= 0 && hot < STATUS_HIT_COUNT) {
+            hover_band = STATUS_HIT_BAND(hot);
+            hover_stop = STATUS_HIT_STOP(hot);
         }
+        ns_draw_policy(hdc, &sp.pl, d->approval_q.policy, hover_band,
+                       hover_stop, tok, cap_font, d->dpi);
     }
 
     /* Busy override, or the context meter + used/limit numbers */
@@ -2546,8 +2590,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             0, 0, btn_h, btn_h,
             hwnd, (HMENU)IDC_CHAT_NEWCHAT, NULL, NULL);
-
-        nd->permit_write = 0; /* default: read-only; shown/toggled in the status line */
 
         nd->show_thinking = 0; /* default: collapsed (user must click '>' to expand) */
         nd->hThinkingBtn = NULL; /* Thinking button removed - now inline in chat */
@@ -2788,16 +2830,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             GetCursorPos(&pt);
             ScreenToClient(hwnd, &pt);
             int hit = ai_chat_status_hit(d, pt.x, pt.y);
-            if (hit == STATUS_HIT_SEG0) {
-                nm->lpszText = (LPSTR)"Commands can only read.";
-                return 0;
-            }
-            if (hit == STATUS_HIT_SEG1) {
-                nm->lpszText = (LPSTR)"Commands may change the system.";
-                return 0;
-            }
-            if (hit == STATUS_HIT_AUTO) {
-                nm->lpszText = (LPSTR)"Approve safe commands automatically.";
+            if (hit >= 0 && hit < STATUS_HIT_COUNT) {
+                cmd_policy_tip(d->approval_q.policy, STATUS_HIT_BAND(hit),
+                               STATUS_HIT_STOP(hit),
+                               d->tooltip_buf, sizeof(d->tooltip_buf));
+                nm->lpszText = d->tooltip_buf;
                 return 0;
             }
             /* Otherwise: is the cursor over the context meter? */
@@ -2882,18 +2919,23 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             int mx = GET_X_LPARAM(lParam);
             int my = GET_Y_LPARAM(lParam);
             int hit_id = ai_chat_status_hit(d, mx, my);
-            if (hit_id == STATUS_HIT_SEG0) {
-                if (d->permit_write != 0)
-                    PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CHAT_PERMIT, 0), 0);
-                return 0;
-            }
-            if (hit_id == STATUS_HIT_SEG1) {
-                if (d->permit_write != 1)
-                    PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CHAT_PERMIT, 0), 0);
-                return 0;
-            }
-            if (hit_id == STATUS_HIT_AUTO) {
-                PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CHAT_AUTOAPPROVE, 0), 0);
+            if (hit_id >= 0 && hit_id < STATUS_HIT_COUNT) {
+                int band = STATUS_HIT_BAND(hit_id);
+                int stop = STATUS_HIT_STOP(hit_id);
+                if (band == POLICY_BAND_ALLOWED) {
+                    PostMessage(hwnd, WM_COMMAND,
+                                MAKEWPARAM(IDC_CHAT_POLICY_ALLOW_BASE + stop, 0), 0);
+                } else if (stop <= d->approval_q.policy.allowed) {
+                    /* Clicking the rail under the stop the marker already
+                     * sits on is the way back to "nothing unattended". */
+                    int want = (stop == d->approval_q.policy.unattended)
+                             ? POLICY_NONE : stop;
+                    PostMessage(hwnd, WM_COMMAND,
+                                MAKEWPARAM(IDC_CHAT_POLICY_AUTO_BASE + want + 1, 0), 0);
+                }
+                /* A rail click above the ceiling does nothing: you cannot
+                 * run unattended what you have not allowed (the tooltip
+                 * says so). */
                 return 0;
             }
         }
@@ -3050,84 +3092,52 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                 MAKEWPARAM(IDM_VIEW_AI_UNDOCK, 0), 0);
             }
             return 0;
+        /* ── The one policy control ──────────────────────────────────
+         * Every gesture lands here: the two cycle ids (kept for a menu or
+         * accelerator), and the absolute setters the control and the
+         * integration harness post. apply_policy_change() then does the
+         * work both old controls used to do separately -- unblock or
+         * re-block pending rows against the new ceiling. */
         case IDC_CHAT_PERMIT:
             if (d) {
-                d->permit_write = !d->permit_write;
-                invalidate_status_line(d);
-                if (d->permit_write) {
-                    /* Enabling: unblock all blocked commands, in every
-                     * pending batch (rule: this must cover every card, not
-                     * just the newest). */
-                    if (d->active_state)
-                        for (int bi = 0; bi < d->active_state->batches.count; bi++)
-                            chat_approval_unblock_all(&d->active_state->batches.b[bi]->q);
-                    ChatMsgItem *it = d->msg_list.head;
-                    while (it) {
-                        if (it->type == CHAT_ITEM_COMMAND &&
-                            it->u.cmd.blocked) {
-                            it->u.cmd.blocked = 0;
-                            it->u.cmd.approved = -1;
-                            it->u.cmd.selected = 1;  /* no longer held -- starts checked */
-                        }
-                        it = it->next;
-                    }
-                    /* Inject a corrective note so the AI knows that any
-                     * previously-blocked commands are now allowed.  Without
-                     * this, the AI sees the stale "blocked by read-only
-                     * policy" message in its history and keeps telling the
-                     * user to enable Permit Write even though they just did. */
-                    if (d->conv.msg_count > 0) {
-                        EnterCriticalSection(&d->cs);
-                        ai_conv_add(&d->conv, AI_ROLE_USER,
-                            "NOTE: The user has enabled 'Permit Write'. "
-                            "Write commands are now allowed and will no longer be blocked. "
-                            "Do not reference any previous security policy blocks.");
-                        LeaveCriticalSection(&d->cs);
-                    }
-                } else {
-                    /* Disabling: re-block pending write/critical commands,
-                     * in every pending batch. */
-                    if (d->active_state)
-                        for (int bi = 0; bi < d->active_state->batches.count; bi++)
-                            chat_approval_block_pending_writes(&d->active_state->batches.b[bi]->q);
-                    ChatMsgItem *it = d->msg_list.head;
-                    while (it) {
-                        if (it->type == CHAT_ITEM_COMMAND &&
-                            !it->u.cmd.settled &&
-                            it->u.cmd.approved == -1 &&
-                            it->u.cmd.safety > CMD_SAFE) {
-                            it->u.cmd.blocked = 1;
-                        }
-                        it = it->next;
-                    }
-                }
-                if (d->hChatList)
-                    chat_listview_invalidate(d->hChatList);
+                CmdPolicy next = d->approval_q.policy;
+                cmd_policy_cycle_allowed(&next);
+                apply_policy_change(d, next);
             }
             return 0;
         case IDC_CHAT_AUTOAPPROVE:
-            /* Cycle: off -> safe only -> safe + unknown -> safe + write ->
-             * safe + unknown + write -> all -> off. */
             if (d) {
-                if (!d->approval_q.auto_approve) {
-                    d->approval_q.auto_approve = 1;
-                    d->approval_q.auto_approve_level = AUTO_APPROVE_SAFE;
-                } else if (d->approval_q.auto_approve_level < AUTO_APPROVE_ALL) {
-                    d->approval_q.auto_approve_level++;
-                } else {
-                    d->approval_q.auto_approve = 0;
-                    d->approval_q.auto_approve_level = AUTO_APPROVE_SAFE;
-                }
-                invalidate_status_line(d);
-                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                CmdPolicy next = d->approval_q.policy;
+                cmd_policy_cycle_unattended(&next);
+                apply_policy_change(d, next);
             }
             return 0;
-
         /* IDC_CHAT_THINKING removed - thinking toggle now inline in chat */
 
         /* ── Inline command approval from chat_listview ───────────── */
         default: {
             int ctl_id = LOWORD(wParam);
+
+            /* IDC_CHAT_POLICY_ALLOW_BASE + stop → put the ceiling on that
+             * stop; IDC_CHAT_POLICY_AUTO_BASE + (stop + 1) → the unattended
+             * marker, index 0 meaning POLICY_NONE. Absolute rather than a
+             * cycle so a caller (the control, the integration harness, a
+             * future menu) can ask for a named position. */
+            if (d && ctl_id >= IDC_CHAT_POLICY_ALLOW_BASE &&
+                ctl_id < IDC_CHAT_POLICY_ALLOW_BASE + NS_POLICY_STOPS) {
+                CmdPolicy next = d->approval_q.policy;
+                cmd_policy_set_allowed(&next, ctl_id - IDC_CHAT_POLICY_ALLOW_BASE);
+                apply_policy_change(d, next);
+                return 0;
+            }
+            if (d && ctl_id >= IDC_CHAT_POLICY_AUTO_BASE &&
+                ctl_id <= IDC_CHAT_POLICY_AUTO_BASE + NS_POLICY_STOPS) {
+                CmdPolicy next = d->approval_q.policy;
+                cmd_policy_set_unattended(&next,
+                    ctl_id - IDC_CHAT_POLICY_AUTO_BASE - 1);
+                apply_policy_change(d, next);
+                return 0;
+            }
 
             /* IDC_CMD_APPROVE_BASE + index → approve single command.
              * lParam is the batch id (0 = oldest batch still needing the
@@ -3345,14 +3355,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (d && ctl_id == IDC_CHAT_THINKING_CLOSED) {
                 d->show_thinking = 0;
                 if (d->active_state) d->active_state->show_thinking = 0;
-                return 0;
-            }
-
-            /* IDC_AUTO_APPROVE → toggle session auto-approve */
-            if (d && ctl_id == IDC_AUTO_APPROVE) {
-                float now = (float)GetTickCount() / 1000.0f;
-                chat_approval_auto_approve_click(&d->approval_q, now, 3.0f);
-                if (d->hChatList) chat_listview_invalidate(d->hChatList);
                 return 0;
             }
 
@@ -3589,8 +3591,8 @@ next_coalesce:;
                 if (ncmds > 0) {
                     ApprovalQueue bg_defaults;
                     chat_approval_init(&bg_defaults);
-                    bg_defaults.auto_approve = src->auto_approve;
-                    bg_defaults.auto_approve_level = src->auto_approve_level;
+                    bg_defaults.policy = src->policy;
+                    cmd_policy_clamp(&bg_defaults.policy);
 
                     CmdBatch *batch = cmd_batch_add(&src->batches,
                                                     &bg_defaults, NULL);
@@ -3598,8 +3600,7 @@ next_coalesce:;
                         batch->conv_mark = src->conv.msg_count;
                         for (int ci = 0; ci < ncmds; ci++)
                             chat_approval_add(&batch->q, cmds[ci],
-                                              (CmdPlatform)src->platform,
-                                              d->permit_write);
+                                              (CmdPlatform)src->platform);
                     }
                 }
                 if (rejected > 0) {
@@ -3715,9 +3716,9 @@ next_coalesce:;
              * 2026-09-09-pending-command-batches.md). No settle-all here. */
 
             if (ncmds > 0 && d->active_state) {
-                /* New batch for this reply. approval_q's auto_approve/
-                 * auto_approve_level are the only fields cmd_batch_add()
-                 * reads from `defaults` -- they seed the new batch's queue. */
+                /* New batch for this reply. approval_q's CmdPolicy is the
+                 * only field cmd_batch_add() reads from `defaults` -- it
+                 * seeds the new batch's queue. */
                 int evicted_id = 0;
                 CmdBatch *batch = cmd_batch_add(&d->active_state->batches,
                                                 &d->approval_q, &evicted_id);
@@ -3737,18 +3738,17 @@ next_coalesce:;
                     }
 
                     /* Classify and queue every extracted command in order
-                     * -- including write commands when permit_write is
-                     * off, which chat_approval_add marks APPROVE_BLOCKED
-                     * rather than silently dropping. This keeps item order
-                     * == queue order always, so index-based execution
-                     * (APPROVE_SEL etc.) can never run the wrong command,
-                     * and a write-only batch still shows up as a held card
-                     * the user can run after switching to Read + write
-                     * (see chat_approval_needs_user below). */
+                     * -- including ones above the policy ceiling, which
+                     * chat_approval_add marks APPROVE_BLOCKED rather than
+                     * silently dropping. This keeps item order == queue
+                     * order always, so index-based execution (APPROVE_SEL
+                     * etc.) can never run the wrong command, and a batch of
+                     * nothing but held commands still shows up as a card the
+                     * user can run after raising the ceiling (see
+                     * chat_approval_needs_user below). */
                     for (int ci = 0; ci < ncmds; ci++) {
                         int idx = chat_approval_add(&batch->q, cmds[ci],
-                                                    (CmdPlatform)d->active_state->platform,
-                                                    d->permit_write);
+                                                    (CmdPlatform)d->active_state->platform);
                         if (idx < 0) continue;  /* queue full or blank -- drop it */
 
                         ChatMsgItem *cmd_item = chat_msg_append(
@@ -3772,28 +3772,22 @@ next_coalesce:;
                             if (batch->q.entries[qi].status == APPROVE_BLOCKED)
                                 nblocked++;
                         if (nblocked > 0) {
-                            char bmsg[2048];
-                            size_t bp = 0;
-                            bmsg[0] = '\0';
-                            if (str_append_fmt(bmsg, sizeof(bmsg), &bp,
-                                    "NOTE: The following commands were BLOCKED by "
-                                    "the user's read-only security policy and were "
-                                    "NOT executed:\n")) {
-                                for (int qi = 0; qi < batch->q.count; qi++) {
-                                    if (batch->q.entries[qi].status == APPROVE_BLOCKED) {
-                                        if (!str_append_fmt(bmsg, sizeof(bmsg), &bp,
-                                                "  - %s\n", batch->q.entries[qi].command))
-                                            break;
-                                    }
+                            char list[1536];
+                            size_t lp = 0;
+                            list[0] = '\0';
+                            for (int qi = 0; qi < batch->q.count; qi++) {
+                                if (batch->q.entries[qi].status == APPROVE_BLOCKED) {
+                                    if (!str_append_fmt(list, sizeof(list), &lp,
+                                            "  - %s\n", batch->q.entries[qi].command))
+                                        break;
                                 }
-                                str_append_fmt(bmsg, sizeof(bmsg), &bp,
-                                    "Do NOT claim these commands were executed. "
-                                    "If the user needs these actions, tell them "
-                                    "to enable 'Permit Write' and try again.");
                             }
-                            EnterCriticalSection(&d->cs);
-                            ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
-                            LeaveCriticalSection(&d->cs);
+                            char bmsg[2048];
+                            if (ai_build_policy_blocked_note(list, bmsg, sizeof(bmsg)) > 0) {
+                                EnterCriticalSection(&d->cs);
+                                ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
+                                LeaveCriticalSection(&d->cs);
+                            }
                         }
                     }
 
@@ -4089,8 +4083,8 @@ next_coalesce:;
             /* Old IDC_CHAT_ALLOW / IDC_CHAT_DENY draw code removed —
              * approval buttons are now inline in chat_listview. The
              * owner-drawn Permit Write / Auto Approve "tab" buttons are
-             * gone too -- both are shown/clicked in the status line
-             * instead (WM_PAINT / ai_chat_status_hit()). */
+             * gone too -- the one policy control replaced both, painted in
+             * the status line (WM_PAINT / ai_chat_status_hit()). */
             return TRUE;
         }
         break;
@@ -4409,34 +4403,30 @@ void ai_chat_set_markdown(HWND hwnd, int enabled)
         chat_listview_set_render_markdown(d->hChatList, enabled);
 }
 
-/* Seed state->auto_approve/auto_approve_level from d->auto_approve_default
- * if (and only if) this session's approval state has never been set --
- * a session the user has already toggled (or that was already seeded)
- * keeps its own choice. level0to5: 0 = off, 1..5 = on with level 0..4. */
-static void ai_chat_seed_auto_approve(AiChatData *d, AiSessionState *state)
+/* Seed state->policy from d->policy_default if (and only if) this session's
+ * policy has never been set -- a session the user has already moved a marker
+ * on (or that was already seeded) keeps its own choice. */
+static void ai_chat_seed_policy(AiChatData *d, AiSessionState *state)
 {
-    if (!state || state->auto_approve_seeded) return;
-    int level0to5 = d->auto_approve_default;
-    state->auto_approve = level0to5 > 0 ? 1 : 0;
-    state->auto_approve_level = level0to5 > 0 ? (level0to5 - 1) : AUTO_APPROVE_SAFE;
-    state->auto_approve_seeded = 1;
+    if (!state || state->policy_seeded) return;
+    state->policy = d->policy_default;
+    cmd_policy_clamp(&state->policy);
+    state->policy_seeded = 1;
 }
 
-void ai_chat_set_auto_approve_default(HWND hwnd, int level0to5)
+void ai_chat_set_policy_default(HWND hwnd, CmdPolicy policy)
 {
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
-    if (level0to5 < 0) level0to5 = 0;
-    if (level0to5 > 5) level0to5 = 5;
-    d->auto_approve_default = level0to5;
+    cmd_policy_clamp(&policy);
+    d->policy_default = policy;
     /* Apply immediately to the active session if it hasn't been seeded yet
      * (e.g. the panel was just created and this is the first call). A
      * session the user has already touched is left alone. */
     if (d->active_state) {
-        ai_chat_seed_auto_approve(d, d->active_state);
-        d->approval_q.auto_approve = d->active_state->auto_approve;
-        d->approval_q.auto_approve_level = d->active_state->auto_approve_level;
+        ai_chat_seed_policy(d, d->active_state);
+        d->approval_q.policy = d->active_state->policy;
         invalidate_status_line(d);
     }
 }
@@ -4478,11 +4468,10 @@ static void do_session_switch(AiChatData *d,
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
     dispatch_cancel(d, NULL);
 
-    /* Save auto-approve, show-thinking and activity phase to old session */
+    /* Save policy, show-thinking and activity phase to old session */
     if (d->active_state && d->active_state != new_state) {
-        d->active_state->auto_approve = d->approval_q.auto_approve;
-        d->active_state->auto_approve_level = d->approval_q.auto_approve_level;
-        d->active_state->auto_approve_seeded = 1;
+        d->active_state->policy = d->approval_q.policy;
+        d->active_state->policy_seeded = 1;
         d->active_state->show_thinking = d->show_thinking;
         d->active_state->activity_phase = (int)d->activity.phase;
     }
@@ -4529,19 +4518,17 @@ static void do_session_switch(AiChatData *d,
     d->pending_request[0] = '\0';
     d->stream_phase = 0;
 
-    /* Restore auto-approve, show-thinking and activity phase from new session.
-     * A session that has never had its approval state set (fresh tab) is
-     * seeded from the configured default first. */
+    /* Restore policy, show-thinking and activity phase from new session.
+     * A session that has never had its policy set (fresh tab) is seeded
+     * from the configured default first. */
     if (new_state) {
-        ai_chat_seed_auto_approve(d, new_state);
-        d->approval_q.auto_approve = new_state->auto_approve;
-        d->approval_q.auto_approve_level = new_state->auto_approve_level;
+        ai_chat_seed_policy(d, new_state);
+        d->approval_q.policy = new_state->policy;
         d->show_thinking = new_state->show_thinking;
         chat_activity_set_phase(&d->activity,
                                 (ActivityPhase)new_state->activity_phase, 0.0f);
     } else {
-        d->approval_q.auto_approve = 0;
-        d->approval_q.auto_approve_level = AUTO_APPROVE_SAFE;
+        d->approval_q.policy = cmd_policy_default();
         d->show_thinking = 0;
         chat_activity_reset(&d->activity);
     }

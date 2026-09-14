@@ -92,7 +92,7 @@ typedef struct {
     /* Whichever of white/bg_primary/text_main reads best against text_dim
      * -- the same rule ThemeSurface.label uses for its base, needed because
      * text_dim itself is occasionally painted as a chip/badge background
-     * (e.g. the "SAFE" safety tag) rather than only used as text (Task 10). */
+     * (e.g. the "READ" safety tag) rather than only used as text (Task 10). */
     unsigned int text_dim_label;
     unsigned int terminal_fg, terminal_bg;
     ThemeChatColors chat;   /* copied through unchanged for the migration window */

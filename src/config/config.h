@@ -13,6 +13,7 @@
 
 #include "profile.h"
 #include "../core/vector.h"
+#include "../core/cmd_policy.h"
 
 typedef struct {
     char font[CFG_STR_MAX];
@@ -44,12 +45,15 @@ typedef struct {
     char auto_connect_session[CFG_STR_MAX];  /* session name (or host) to auto-connect */
     int  paste_confirm;                  /* confirm before pasting: 1 = on (default) */
     int  open_session_manager_at_start;  /* show Session Manager at startup: 0 = off (default) */
-    int  ai_auto_approve_default;        /* Auto approve level for new sessions: 0 = off (default),
-                                           * 1 = safe only, 2 = safe + unknown,
-                                           * 3 = safe + write, 4 = safe + unknown + write,
-                                           * 5 = all. Persisted as a string token
-                                           * (ai_auto_approve_mode); the old numeric key is
-                                           * migrated on load. */
+    CmdPolicy ai_policy_default;         /* Command policy a new AI session starts from:
+                                           * the `allowed` ceiling and the `unattended`
+                                           * marker. Default {read, none} -- read-only,
+                                           * nothing runs without asking. Persisted as one
+                                           * "<allowed>/<unattended>" token under
+                                           * "ai_policy_default"; the v1.1.16
+                                           * "ai_auto_approve_mode" key and the older
+                                           * numeric "ai_auto_approve_default" are migrated
+                                           * on load (see loader.c). */
 } Settings;
 
 typedef struct {

@@ -40,9 +40,9 @@ void cmd_batch_set_init(CmdBatchSet *set);
 /* Free every batch still in the set. */
 void cmd_batch_set_free(CmdBatchSet *set);
 
-/* Allocate a new batch, chat_approval_init() its queue, and copy
- * auto_approve/auto_approve_level from `defaults` (may be NULL, leaving
- * both 0) so per-session settings carry over to the new batch. Appends it
+/* Allocate a new batch, chat_approval_init() its queue, and copy the
+ * CmdPolicy from `defaults` (may be NULL, leaving the queue's own default)
+ * so the session's policy carries over to the new batch. Appends it
  * to the set (oldest-first order). If the set is already at CMD_BATCH_MAX,
  * evicts the oldest batch first (freeing it) and, when evicted_id is
  * non-NULL, writes its id there so the caller can settle its rows in the

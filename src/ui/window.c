@@ -27,6 +27,7 @@
 #include "ai_chat.h"
 #include "ai_chat_testable.h"
 #include "ui_demo.h"
+#include "cmd_policy.h"
 #include "selection.h"
 #include "app_font.h"
 #include "ns_font.h"
@@ -864,8 +865,8 @@ static void on_settings_clicked_page(int initial_page) {
                             g_config->settings.ai_system_notes);
         ai_chat_set_markdown(g_hwndAiChat,
                              g_config->settings.markdown_render_enabled);
-        ai_chat_set_auto_approve_default(g_hwndAiChat,
-                                     g_config->settings.ai_auto_approve_default);
+        ai_chat_set_policy_default(g_hwndAiChat,
+                                   g_config->settings.ai_policy_default);
         ai_chat_set_theme(g_hwndAiChat,
                           g_config->settings.colour_scheme);
         ai_chat_update_tools(g_hwndAiChat,
@@ -935,7 +936,7 @@ static HWND create_ai_chat(HWND parent)
                              g_config->settings.ai_web_fetch_enabled);
         ai_chat_set_markdown(hwnd, g_config->settings.markdown_render_enabled);
         ai_chat_set_context_lines(hwnd, g_config->settings.ai_max_context_lines);
-        ai_chat_set_auto_approve_default(hwnd, g_config->settings.ai_auto_approve_default);
+        ai_chat_set_policy_default(hwnd, g_config->settings.ai_policy_default);
     }
     return hwnd;
 }
@@ -974,6 +975,17 @@ static void create_demo_session(HWND hwnd)
                       term_buf, sizeof(term_buf));
     }
     s->ai_state.valid = 1;
+
+    /* Give the demo a policy with both markers off their defaults, so the
+     * gallery actually covers the status-line control's three cell states
+     * (unattended / allowed-but-asks / blocked) and a partly-filled rail
+     * rather than four identical screenshots of {read, none}. The demo's
+     * approval cards are static data built by ui_demo_build() against their
+     * own queue policies, so this only changes what the control paints. */
+    cmd_policy_set_allowed(&s->ai_state.policy, CMD_WRITE);
+    cmd_policy_set_unattended(&s->ai_state.policy, CMD_READ);
+    s->ai_state.policy_seeded = 1;
+
     term_process(s->term, term_buf, strlen(term_buf));
 
     int idx = tabs_add(g_hwndTabs, "demo", s);

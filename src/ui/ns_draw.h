@@ -98,6 +98,29 @@ void ns_draw_segmented(HDC hdc, const NsRect seg[2],
                        int selected_is_warning, const ThemeTokens *tokens,
                        const int hover_state[2], HFONT font, int dpi);
 
+/* The AI status line's command-policy control: one pill of four touching
+ * cells (Read / Unknown / Write / Critical) carrying two markers, laid out
+ * by ns_policy_layout(). See
+ * docs/superpowers/specs/2026-09-11-status-policy-control-design.md section 4.
+ *
+ * The control's intent surface is chosen by `policy->allowed`
+ * (Read -> success, Unknown -> info, Write -> warning, Critical -> danger),
+ * so a permissive session stays visible at a glance. Each cell is then
+ * painted by where it sits relative to the two markers: at or below
+ * `unattended` it is filled with the intent surface, up to `allowed` with a
+ * wash of it over `bg_secondary`, and above `allowed` with plain
+ * `bg_secondary` and `text_disabled` text. The rail band below the labels is
+ * filled with the intent colour as far as the unattended marker reaches and
+ * `border` beyond it, so the filled length IS that marker and an empty rail
+ * IS "nothing runs unattended".
+ *
+ * `hover_band` is POLICY_BAND_ALLOWED / POLICY_BAND_UNATTENDED and
+ * `hover_stop` the cell under the cursor (-1 for none); the hovered cell
+ * steps one state brighter. */
+void ns_draw_policy(HDC hdc, const NsPolicyLayout *l, CmdPolicy policy,
+                    int hover_band, int hover_stop, const ThemeTokens *tokens,
+                    HFONT font, int dpi);
+
 /* A context-usage meter: a `raised.base` pill-shaped track filling `bar`
  * and an `accent.base` pill-shaped fill over the left `fraction` of it
  * (clamped to [0, 1]). Pill radius via ns_type_pill(bar->h). */

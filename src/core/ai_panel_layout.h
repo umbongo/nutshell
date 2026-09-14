@@ -22,26 +22,18 @@ typedef struct { NsRect header, thread, status, composer; } AiPanelLayout;
 
 void ai_panel_layout(NsRect panel, int dpi, int composer_h, AiPanelLayout *out);
 
-/* Status-line controls, left to right: the two-segment mode control
- * (Read-only / Read + write) as one touching control, the auto-approve
- * label, a spacer, then the context meter (bar + "used / limit" text)
- * right-aligned. `seg0_text_w`/`seg1_text_w`/`auto_text_w`/`meter_text_w`
- * are pixel widths the caller measured for each label in its own font.
- * When the line is too narrow to fit everything, meter_bar is dropped
- * first (zero-size), then meter_text, before anything else is squeezed. */
-typedef struct { NsRect seg[2], auto_label, meter_bar, meter_text; } AiStatusLayout;
+/* Status-line controls, left to right: the command-policy control (one
+ * pill of four stops, sliced up by ns_policy_layout() -- this module only
+ * places it), a spacer, then the context meter (bar + "used / limit" text)
+ * right-aligned. `policy_w` is the control's pixel width, from
+ * ns_policy_width() over the caller's measured stop labels; `meter_text_w`
+ * is the measured width of the meter numbers. When the line is too narrow
+ * to fit everything, meter_bar is dropped first (zero-size), then
+ * meter_text, before the policy control is squeezed. */
+typedef struct { NsRect policy, meter_bar, meter_text; } AiStatusLayout;
 
-void ai_status_layout(NsRect status, int dpi, int seg0_text_w, int seg1_text_w,
-                       int auto_text_w, int meter_text_w, AiStatusLayout *out);
-
-/* "Auto approve: <label>" text: "off" when auto-approve is off; otherwise
- * "safe only" / "safe + unknown" / "safe + write" / "safe + unknown + write" /
- * "all" for level 0/1/2/3/4 (AutoApproveLevel). Out-of-range levels clamp:
- * <0 to "safe only", >4 to "all". */
-const char *ai_modes_label(int auto_on, int level);
-
-/* Read + write segment label: "off" / "on". */
-const char *ai_permit_label(int on);
+void ai_status_layout(NsRect status, int dpi, int policy_w, int meter_text_w,
+                       AiStatusLayout *out);
 
 /* The "Thinking" disclosure above a reply that carried reasoning: a
  * clickable row (chevron, "Thinking" label, a dimmed summary) and, when

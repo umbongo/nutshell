@@ -66,8 +66,60 @@ enum {
     HIT_CHECKBOX,
     HIT_TAG,
     HIT_DENY_ALL,
-    HIT_RUN_SELECTED
+    HIT_RUN_SELECTED,
+    HIT_POLICY_ALLOWED,
+    HIT_POLICY_UNATTENDED
 };
+
+/* Stops on the status line's AI policy control: Read / Unknown / Write /
+ * Critical, one cell per CmdSafetyLevel. See cmd_policy.h and
+ * docs/superpowers/specs/2026-09-11-status-policy-control-design.md
+ * section 4 ("The control"). */
+#define NS_POLICY_STOPS 4
+
+/* One pill, NS_POLICY_STOPS touching cells, each split into an upper label
+ * band (click -> `allowed`) and a lower rail band (click -> `unattended`).
+ * `cell[k]` is the painted cell (full height of the input rect); `label[k]`
+ * and `rail[k]` are its painted upper/lower bands, split at 2/3 height.
+ * `hit_label[k]` and `hit_rail[k]` are the click targets for those two
+ * bands -- taller than the painted bands (see ns_policy_layout's `hit_h`),
+ * because the painted rail is a thin bar and a hit target that thin would
+ * be a bug. `rail_fill` is the filled portion of the rail for the current
+ * `unattended` marker. `total_w` is the pill's total width, matching
+ * ns_policy_width() for the same inputs. */
+typedef struct {
+    NsRect cell[NS_POLICY_STOPS];
+    NsRect label[NS_POLICY_STOPS];
+    NsRect rail[NS_POLICY_STOPS];
+    NsRect hit_label[NS_POLICY_STOPS];
+    NsRect hit_rail[NS_POLICY_STOPS];
+    NsRect rail_fill;
+    int total_w;
+} NsPolicyLayout;
+
+/* Total pixel width of the policy pill at `dpi`: the sum of each cell's
+ * width, max(1, stop_text_w[k] + 2*ns_scale(SP_SM, dpi)). A NULL
+ * `stop_text_w`, or a negative entry, counts that cell's text as 0 wide.
+ * Agrees with `out->total_w` from ns_policy_layout for the same inputs. */
+int ns_policy_width(const int stop_text_w[NS_POLICY_STOPS], int dpi);
+
+/* Lay out the policy pill inside `r` (full status-line height -- cells
+ * span all of r.h). `unattended` positions `rail_fill` (POLICY_NONE or
+ * anything outside 0..NS_POLICY_STOPS-1 gives a zero-width fill). `hit_h`
+ * is the minimum height of the click bands: H = max(hit_h, r.h), centred
+ * on r (so the hit box can extend above r.y when hit_h > r.h), split at
+ * the same y the painted label/rail bands split at. NULL-safe; a
+ * non-positive r.w or r.h lays out zero-size rects without crashing. */
+void ns_policy_layout(NsRect r, const int stop_text_w[NS_POLICY_STOPS],
+                      int unattended, int hit_h, int dpi,
+                      NsPolicyLayout *out);
+
+/* Hit-test a point against a laid-out policy pill. Returns HIT_POLICY_ALLOWED
+ * with `*stop_out` set to the cell index when (x, y) is inside that cell's
+ * hit_label, HIT_POLICY_UNATTENDED with `*stop_out` set when it's inside
+ * hit_rail, otherwise HIT_NONE with `*stop_out = -1`. Zero-size rects never
+ * hit. NULL `l` and NULL `stop_out` are safe. */
+int ns_policy_hit(const NsPolicyLayout *l, int x, int y, int *stop_out);
 
 void ns_button_layout(NsRect r, int has_icon, int dpi, NsButtonLayout *out);
 void ns_card_layout(NsRect r, int dpi, NsCardLayout *out);

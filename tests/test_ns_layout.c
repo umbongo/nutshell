@@ -1,6 +1,9 @@
 #include "test_framework.h"
 #include "ns_layout.h"
 #include "chat_approval.h"
+#include "cmd_policy.h"
+#include "ns_scale.h"
+#include "ns_type.h"
 
 /* ===========================================================================
  * ns_layout tests (Design-System Foundation, task 5; approval card v2 per
@@ -604,5 +607,376 @@ int test_settled_row_layout_text_starts_at_rect_left(void)
     ApprovalRowLayout out;
     settled_row_layout(r, 50, 40, 16, 96, &out);
     ASSERT_EQ(out.text.x, r.x);
+    TEST_END();
+}
+
+/* ===========================================================================
+ * ns_policy_layout / ns_policy_width / ns_policy_hit -- status line AI
+ * policy control (Read / Unknown / Write / Critical), per
+ * docs/superpowers/specs/2026-09-11-status-policy-control-design.md
+ * section 4 ("The control").
+ * ===========================================================================
+ */
+
+static const int POLICY_TEXT_W[NS_POLICY_STOPS] = { 40, 30, 50, 60 };
+
+/* ---- cells touch, in order, sum to total_w == ns_policy_width() -------- */
+
+int test_ns_policy_layout_cells_touch_and_sum_to_total_w_96(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 10, 5, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 1, r.h, 96, &out);
+
+    ASSERT_EQ(out.cell[0].x, r.x);
+    for (int k = 1; k < NS_POLICY_STOPS; k++) {
+        ASSERT_EQ(out.cell[k].x, out.cell[k - 1].x + out.cell[k - 1].w);
+        ASSERT_EQ(out.cell[k].y, r.y);
+        ASSERT_EQ(out.cell[k].h, r.h);
+    }
+    int sum = 0;
+    for (int k = 0; k < NS_POLICY_STOPS; k++) sum += out.cell[k].w;
+    ASSERT_EQ(sum, out.total_w);
+    ASSERT_EQ(out.total_w, ns_policy_width(POLICY_TEXT_W, 96));
+    TEST_END();
+}
+
+int test_ns_policy_layout_cells_touch_and_sum_to_total_w_192(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 10, 5, 0, 56 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 192);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 1, r.h, 192, &out);
+
+    ASSERT_EQ(out.cell[0].x, r.x);
+    for (int k = 1; k < NS_POLICY_STOPS; k++) {
+        ASSERT_EQ(out.cell[k].x, out.cell[k - 1].x + out.cell[k - 1].w);
+        ASSERT_EQ(out.cell[k].y, r.y);
+        ASSERT_EQ(out.cell[k].h, r.h);
+    }
+    int sum = 0;
+    for (int k = 0; k < NS_POLICY_STOPS; k++) sum += out.cell[k].w;
+    ASSERT_EQ(sum, out.total_w);
+    ASSERT_EQ(out.total_w, ns_policy_width(POLICY_TEXT_W, 192));
+    TEST_END();
+}
+
+/* ---- label+rail tile each painted cell exactly, stay inside r ---------- */
+
+int test_ns_policy_layout_bands_tile_cell_96(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, r.h, 96, &out);
+
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        ASSERT_EQ(out.label[k].x, out.cell[k].x);
+        ASSERT_EQ(out.label[k].w, out.cell[k].w);
+        ASSERT_EQ(out.rail[k].x, out.cell[k].x);
+        ASSERT_EQ(out.rail[k].w, out.cell[k].w);
+
+        /* No gap, no overlap: label starts at the cell top, rail starts
+         * exactly where label ends, rail ends at the cell bottom. */
+        ASSERT_EQ(out.label[k].y, out.cell[k].y);
+        ASSERT_EQ(out.label[k].y + out.label[k].h, out.rail[k].y);
+        ASSERT_EQ(out.rail[k].y + out.rail[k].h, out.cell[k].y + out.cell[k].h);
+
+        ASSERT_TRUE(rect_inside(out.label[k], r));
+        ASSERT_TRUE(rect_inside(out.rail[k], r));
+    }
+    TEST_END();
+}
+
+int test_ns_policy_layout_bands_tile_cell_192(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 56 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 192);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, r.h, 192, &out);
+
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        ASSERT_EQ(out.label[k].x, out.cell[k].x);
+        ASSERT_EQ(out.label[k].w, out.cell[k].w);
+        ASSERT_EQ(out.rail[k].x, out.cell[k].x);
+        ASSERT_EQ(out.rail[k].w, out.cell[k].w);
+
+        ASSERT_EQ(out.label[k].y, out.cell[k].y);
+        ASSERT_EQ(out.label[k].y + out.label[k].h, out.rail[k].y);
+        ASSERT_EQ(out.rail[k].y + out.rail[k].h, out.cell[k].y + out.cell[k].h);
+
+        ASSERT_TRUE(rect_inside(out.label[k], r));
+        ASSERT_TRUE(rect_inside(out.rail[k], r));
+    }
+    TEST_END();
+}
+
+/* ---- hit bands tile the taller hit box, split at the painted split line */
+
+int test_ns_policy_layout_hit_bands_tile_taller_box_96(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    int hit_h = 56; /* hit_h > r.h */
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, hit_h, 96, &out);
+
+    int H = (hit_h > r.h) ? hit_h : r.h;
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        ASSERT_EQ(out.hit_label[k].x, out.cell[k].x);
+        ASSERT_EQ(out.hit_label[k].w, out.cell[k].w);
+        ASSERT_EQ(out.hit_rail[k].x, out.cell[k].x);
+        ASSERT_EQ(out.hit_rail[k].w, out.cell[k].w);
+
+        /* Split at the same y the painted bands split at. */
+        ASSERT_EQ(out.hit_label[k].y + out.hit_label[k].h, out.rail[k].y);
+        ASSERT_EQ(out.hit_rail[k].y, out.rail[k].y);
+
+        /* Together they exactly tile the taller box H. */
+        ASSERT_EQ(out.hit_label[k].h + out.hit_rail[k].h, H);
+    }
+    TEST_END();
+}
+
+int test_ns_policy_layout_hit_bands_tile_taller_box_192(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 56 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 192);
+    int hit_h = 112; /* hit_h > r.h */
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, hit_h, 192, &out);
+
+    int H = (hit_h > r.h) ? hit_h : r.h;
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        ASSERT_EQ(out.hit_label[k].x, out.cell[k].x);
+        ASSERT_EQ(out.hit_label[k].w, out.cell[k].w);
+        ASSERT_EQ(out.hit_rail[k].x, out.cell[k].x);
+        ASSERT_EQ(out.hit_rail[k].w, out.cell[k].w);
+
+        ASSERT_EQ(out.hit_label[k].y + out.hit_label[k].h, out.rail[k].y);
+        ASSERT_EQ(out.hit_rail[k].y, out.rail[k].y);
+
+        ASSERT_EQ(out.hit_label[k].h + out.hit_rail[k].h, H);
+    }
+    TEST_END();
+}
+
+/* ---- point-in-zone hit-tests to the right (result, stop) pair ---------- */
+
+int test_ns_policy_hit_all_eight_zones(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 20, 20, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, r.h, 96, &out);
+
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        int stop = -99;
+        NsRect lab = out.hit_label[k];
+        int lx = lab.x + lab.w / 2;
+        int ly = lab.y + lab.h / 2;
+        ASSERT_EQ(ns_policy_hit(&out, lx, ly, &stop), HIT_POLICY_ALLOWED);
+        ASSERT_EQ(stop, k);
+
+        NsRect rail = out.hit_rail[k];
+        int rx = rail.x + rail.w / 2;
+        int ry = rail.y + rail.h / 2;
+        stop = -99;
+        ASSERT_EQ(ns_policy_hit(&out, rx, ry, &stop), HIT_POLICY_UNATTENDED);
+        ASSERT_EQ(stop, k);
+    }
+    TEST_END();
+}
+
+/* ---- points outside the control miss ------------------------------------ */
+
+int test_ns_policy_hit_outside_returns_none(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 20, 20, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, r.h, 96, &out); /* hit_h == r.h */
+
+    int cy = r.y + r.h / 2;
+    int stop = -99;
+
+    ASSERT_EQ(ns_policy_hit(&out, r.x - 5, cy, &stop), HIT_NONE);
+    ASSERT_EQ(stop, -1);
+
+    stop = -99;
+    ASSERT_EQ(ns_policy_hit(&out, r.x + out.total_w + 5, cy, &stop), HIT_NONE);
+    ASSERT_EQ(stop, -1);
+
+    int cx = r.x + out.total_w / 2;
+    stop = -99;
+    ASSERT_EQ(ns_policy_hit(&out, cx, r.y - 5, &stop), HIT_NONE);
+    ASSERT_EQ(stop, -1);
+
+    stop = -99;
+    ASSERT_EQ(ns_policy_hit(&out, cx, r.y + r.h + 5, &stop), HIT_NONE);
+    ASSERT_EQ(stop, -1);
+    TEST_END();
+}
+
+/* ---- rail_fill --------------------------------------------------------- */
+
+int test_ns_policy_layout_rail_fill_zero_at_none_and_out_of_range(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    NsPolicyLayout out;
+
+    ns_policy_layout(r, POLICY_TEXT_W, POLICY_NONE, r.h, 96, &out);
+    ASSERT_EQ(out.rail_fill.w, 0);
+
+    ns_policy_layout(r, POLICY_TEXT_W, NS_POLICY_STOPS, r.h, 96, &out);
+    ASSERT_EQ(out.rail_fill.w, 0);
+
+    ns_policy_layout(r, POLICY_TEXT_W, -5, r.h, 96, &out);
+    ASSERT_EQ(out.rail_fill.w, 0);
+    TEST_END();
+}
+
+int test_ns_policy_layout_rail_fill_reaches_cell0_at_unattended_0(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, r.h, 96, &out);
+    ASSERT_EQ(out.rail_fill.x, r.x);
+    ASSERT_EQ(out.rail_fill.x + out.rail_fill.w, out.cell[0].x + out.cell[0].w);
+    TEST_END();
+}
+
+int test_ns_policy_layout_rail_fill_reaches_full_width_at_unattended_3(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 3, r.h, 96, &out);
+    ASSERT_EQ(out.rail_fill.x + out.rail_fill.w, r.x + out.total_w);
+    TEST_END();
+}
+
+/* ---- NULL-safety, zero-height rect, negative stop_text_w --------------- */
+
+int test_ns_policy_layout_null_out_is_noop(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 200, 28 };
+    ns_policy_layout(r, POLICY_TEXT_W, 0, 28, 96, NULL); /* must not crash */
+    TEST_END();
+}
+
+int test_ns_policy_width_null_stop_text_w_safe(void)
+{
+    TEST_BEGIN();
+    int pad = ns_scale(SP_SM, 96);
+    ASSERT_EQ(ns_policy_width(NULL, 96), 4 * (2 * pad > 1 ? 2 * pad : 1));
+    TEST_END();
+}
+
+int test_ns_policy_layout_null_stop_text_w_no_negative_widths(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 200, 28 };
+    NsPolicyLayout out;
+    ns_policy_layout(r, NULL, 0, 28, 96, &out);
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        ASSERT_TRUE(out.cell[k].w >= 1);
+    }
+    TEST_END();
+}
+
+int test_ns_policy_layout_zero_height_rect_safe(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 200, 0 };
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, 0, 96, &out); /* must not crash */
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        ASSERT_TRUE(out.cell[k].w >= 1);
+    }
+    TEST_END();
+}
+
+int test_ns_policy_layout_negative_stop_text_w_no_negative_widths(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 200, 28 };
+    int text_w[NS_POLICY_STOPS] = { 40, -50, 50, 60 };
+    NsPolicyLayout out;
+    ns_policy_layout(r, text_w, 0, 28, 96, &out);
+    ASSERT_TRUE(out.cell[1].w >= 1);
+    int pad = ns_scale(SP_SM, 96);
+    int expect = 2 * pad;
+    if (expect < 1) expect = 1;
+    ASSERT_EQ(out.cell[1].w, expect);
+    ASSERT_TRUE(ns_policy_width(text_w, 96) > 0);
+    TEST_END();
+}
+
+int test_ns_policy_hit_null_layout_safe(void)
+{
+    TEST_BEGIN();
+    int stop = -99;
+    ASSERT_EQ(ns_policy_hit(NULL, 5, 5, &stop), HIT_NONE);
+    ASSERT_EQ(stop, -1);
+    TEST_END();
+}
+
+int test_ns_policy_hit_null_stop_out_safe(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, r.h, 96, &out);
+    NsRect lab = out.hit_label[0];
+    ns_policy_hit(&out, lab.x + lab.w / 2, lab.y + lab.h / 2, NULL); /* must not crash */
+    TEST_END();
+}
+
+/* ---- hit_h shorter than r.h still gives bands >= the painted ones ------ */
+
+int test_ns_policy_layout_hit_h_smaller_than_r_h_96(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 28 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 96);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, 10 /* hit_h < r.h */, 96, &out);
+
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        ASSERT_TRUE(out.hit_label[k].h >= out.label[k].h);
+        ASSERT_TRUE(out.hit_rail[k].h >= out.rail[k].h);
+    }
+    TEST_END();
+}
+
+int test_ns_policy_layout_hit_h_smaller_than_r_h_192(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 0, 56 };
+    r.w = ns_policy_width(POLICY_TEXT_W, 192);
+    NsPolicyLayout out;
+    ns_policy_layout(r, POLICY_TEXT_W, 0, 20 /* hit_h < r.h */, 192, &out);
+
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        ASSERT_TRUE(out.hit_label[k].h >= out.label[k].h);
+        ASSERT_TRUE(out.hit_rail[k].h >= out.rail[k].h);
+    }
     TEST_END();
 }
