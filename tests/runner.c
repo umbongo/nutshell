@@ -1963,6 +1963,19 @@ int test_validate_mismatched_brackets(void);
 int test_validate_negative_number(void);
 int test_validate_array_of_objects(void);
 
+/* test_about_layout.c */
+int test_about_layout_96_exact_positions(void);
+int test_about_layout_192_is_exactly_double_96(void);
+int test_about_layout_dpi_le_zero_treated_as_96(void);
+int test_about_layout_grows_with_dpi(void);
+int test_about_layout_elements_ordered_and_do_not_overlap(void);
+int test_about_layout_text_rows_span_full_width(void);
+int test_about_layout_button_centred_and_on_grid(void);
+int test_about_layout_total_height_is_button_bottom_plus_margin(void);
+int test_about_layout_zero_line_heights_still_sane(void);
+int test_about_layout_negative_sizes_clamp_to_zero(void);
+int test_about_layout_null_out_is_safe(void);
+
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
 int test_sl_scale_144_is_one_and_half(void);
@@ -4165,6 +4178,19 @@ int main(void) {
     failed += test_validate_mismatched_brackets();
     failed += test_validate_negative_number();
     failed += test_validate_array_of_objects();
+
+    printf("\n--- About Layout ---\n");
+    failed += test_about_layout_96_exact_positions();
+    failed += test_about_layout_192_is_exactly_double_96();
+    failed += test_about_layout_dpi_le_zero_treated_as_96();
+    failed += test_about_layout_grows_with_dpi();
+    failed += test_about_layout_elements_ordered_and_do_not_overlap();
+    failed += test_about_layout_text_rows_span_full_width();
+    failed += test_about_layout_button_centred_and_on_grid();
+    failed += test_about_layout_total_height_is_button_bottom_plus_margin();
+    failed += test_about_layout_zero_line_heights_still_sane();
+    failed += test_about_layout_negative_sizes_clamp_to_zero();
+    failed += test_about_layout_null_out_is_safe();
 
     printf("\n--- Settings Layout ---\n");
     failed += test_sl_scale_identity_at_96();
