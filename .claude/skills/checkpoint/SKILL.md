@@ -1,0 +1,57 @@
+---
+name: checkpoint
+description: Run the Nutshell checkpoint or retrospective ritual — compact the todo in the notes document, update project memory and skills, record the changes in the changelog, write a dated retrospective when asked, and leave the tree ready for a new session. Use when asked to "create a checkpoint", "do a retrospective", or "update your memory".
+---
+
+# Checkpoint and retrospective
+
+Last updated: 2026-09-21. Changes are recorded in `.claude/CHANGELOG.md`.
+
+The notes document defines a checkpoint as: compact the todo list, compact
+memory, delete temp files and worktrees, leave the tree ready for a new
+session. This skill is that, plus the record-keeping added on 2026-09-21.
+
+## Files involved
+
+| File | Role |
+|---|---|
+| `docs/superpowers/specs/2026-09-06-ui-redesign-notes.md` | Running todo and checkpoint log. Authoritative open list. |
+| `.claude/memory/MEMORY.md` | Durable facts for future sessions. Imported by CLAUDE.md. |
+| `.claude/skills/*/SKILL.md` | Repo procedures. |
+| `.claude/CHANGELOG.md` | Record of every change to memory and skills. |
+| `docs/retrospectives/YYYY-MM-DD-*.md` | Dated retrospectives, marked DRAFT until the maintainer reviews. |
+
+## Procedure
+
+1. **Measure before writing.** Unshallow `main`, run `make test`, list
+   PRs with `merged_at`, count what the notes document claims (test
+   totals, open items) and check each open item against the log with
+   `git log --grep`. Stale items are the most common finding.
+2. **Compact the notes document.** Move finished items to "Done" with the
+   PR number and commit, keep "Open" in priority order, fix any counts.
+   Do not delete history; the done list is the project's memory of why.
+3. **Update `MEMORY.md`.** Add only facts that will still be true next
+   session (host limits, gate rules, API quirks, ref layout). Remove
+   anything the docs now state better. Bump its "Last updated" line.
+4. **Update or add skills** when a procedure was learned the hard way.
+   One skill per job; keep each under about 100 lines.
+5. **Record the change.** Add a dated entry to `.claude/CHANGELOG.md`
+   naming each memory or skill file touched and why, in the same commit.
+6. **Retrospective (only when asked).** Write it under
+   `docs/retrospectives/`, headed DRAFT, with a scope-and-method section,
+   measured numbers in a table, findings ranked by cost of inaction, and
+   recommendations clearly separated from changes made.
+7. **Verify the gate will pass.** These files are not build inputs, so no
+   version bump; but `check-version.sh` still runs its consistency check,
+   so never edit the version strings in a checkpoint.
+8. **Clean up.** Remove scratch files and worktrees, then commit on the
+   session branch as `docs: checkpoint YYYY-MM-DD — <one line>` (or
+   `docs: retrospective YYYY-MM-DD`), push, open a draft PR.
+
+## What not to do
+
+- Do not change `src/`, the Makefile or `nutshell.rc` in a checkpoint
+  commit; that drags in a version bump and a Windows rebuild.
+- Do not mark an item done without the commit or PR that closed it.
+- Do not put session-specific detail in memory; that belongs in the
+  retrospective or the commit message.
