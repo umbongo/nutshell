@@ -13,6 +13,19 @@ The patch number never goes past 99: after `1.0.99` comes `1.1.0` (`1,1,0,0`), n
 
 CI enforces this: the `Version bump` check (`.github/scripts/check-version.sh`) fails any pull request that touches `src/`, the `Makefile` or `nutshell.rc` without raising `APP_VERSION`, or that leaves the three version strings disagreeing.
 
+## Memory and skills
+
+@.claude/memory/MEMORY.md
+
+Project memory is `.claude/memory/MEMORY.md`, imported above so every
+session loads it. Repository skills are `.claude/skills/*/SKILL.md`
+(`steward` for driving a pull request through the gate, `repo-status` for
+surveying branches and checks, `checkpoint` for the checkpoint and
+retrospective ritual). All are tracked in git. Every change to memory or a
+skill gets a dated entry in `.claude/CHANGELOG.md` in the same commit; that
+file is the record of change. Retrospectives go in `docs/retrospectives/`,
+headed DRAFT until reviewed.
+
 ## Build Commands
 
 - **Always `make clean && make release`** — never `make release` alone.

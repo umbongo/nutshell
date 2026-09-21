@@ -4,15 +4,14 @@
 landed at v1.0.92/v1.0.96 (see "Landed since v1.0.96" below for what's
 shipped since — approval-card fixes, prompt-gated dispatch, four-level auto
 approve, markdown tables, role colour, smart scrolling, and pending command
-batches). Native suite: **1,804 tests**, 0 failures. Integration suite
-(`tests/integration/Run-Integration.ps1`): 17 cases (9 core + 5 AI +
-`ui_gallery` + `approval_card_run_selected_settles` +
-`ai_panel_opens_without_key`); `ui_gallery` now captures 10 `--ui-demo`
-states x 4 themes = 40 images. Next action is sub-project 3 (main window
+batches). Native suite: **1,960 tests**, 0 failures (2026-09-21). Integration suite
+(`tests/integration/Run-Integration.ps1`): 30 cases in seven case files
+(`cases\10-terminal` … `70-cli`), manual only since 2026-09-15; `ui_gallery`
+captures 10 `--ui-demo` states x 4 themes = 40 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.1.9.
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.1.23.
 
 ## Decisions so far
 
@@ -164,14 +163,17 @@ Done, in order (details in the commit messages and the specs named):
   ship a different binary from the one the gate checked. No self-hosted runner is
   referenced anywhere any more.
 
+- v1.1.13 Ctrl+W reattaches the surviving tab (PR #20, 6fd0970); both harness
+  known-bug blocks (`tabs_open_switch_close`, `minimise_restore_repaints`) are
+  unwrapped.
+- Dependabot #14–#17 (per-action major bumps) were closed unmerged, superseded by
+  the grouped PR #22 (3c48c09: checkout 7.0.1, upload-artifact 7.0.1, codeql-action
+  4.37.9). PR #33 (codeql-action 4.38.0) is green and unmerged as of 2026-09-21.
+- 2026-09-21 retrospective (`docs/retrospectives/2026-09-21-repository-retrospective.md`):
+  project memory and skills now live in `.claude/` (`memory/`, `skills/`), with
+  `.claude/CHANGELOG.md` as their record of change and an import from CLAUDE.md.
+
 Open, in priority order:
-- [ ] Dependabot PRs #14–#17 bump actions to new majors (Node 24 runner support
-      needed): check before merging, or ignore semver-major updates in `dependabot.yml`.
-- [ ] Ctrl+W bug — `window.c` on_tab_close leaves `g_active_session` NULL, tab A blank
-      and unresponsive. Fix in progress in a separate session as uncommitted edits in
-      the main checkout (tab_manager, tabs.c, window.c, tests, `60-tabs-logging.ps1`);
-      it must land on a branch rebased onto `main` (#12 and #18 touched the same files),
-      unwrapping both known-bug blocks (`tabs_open_switch_close`, `minimise_restore_repaints`).
 - [ ] CI review follow-ups (2026-09-10 review, minus the items the desktop gate's
       retirement made moot): CodeQL installs no libssh2, so the SSH/known-hosts files
       and all of `src/ui` go unscanned — install `libssh2-1-dev`, fail if the Makefile
