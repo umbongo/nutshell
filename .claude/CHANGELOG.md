@@ -4,6 +4,23 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-21 — model roles restated by the maintainer
+
+Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w
+Model: claude-fable-5-1.
+
+- **CLAUDE.md, "Software Development Rules for Claude".** Rewritten as
+  "who does what": Fable is the session the maintainer talks to and owns
+  architectural and design decisions; Opus orchestrates each work package
+  and peer-reviews Fable's decisions before they are committed; Sonnet and
+  Haiku implement under Opus's review; sub-agents are the default so
+  Fable's context holds only decisions, reports and learnings. Same
+  escalation rule as before; attribution line added.
+- **Why.** The maintainer restated the model after a session in which
+  Fable did every task directly, including reading the workflows, gate
+  scripts and notes into its own context. The old text allowed that; the
+  new text does not.
+
 ## 2026-09-21 — retrospective cadence: every 10 merges
 
 Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w

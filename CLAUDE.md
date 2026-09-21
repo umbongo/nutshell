@@ -57,23 +57,38 @@ Write tests before implementation code. Include corner cases, positive and negat
 - Tests that write files must build paths from `TEST_TMP_DIR` (in `test_framework.h`), never a literal `/tmp/` — that path does not exist for a MinGW binary.
 - Windows threads default to a 1 MB stack (Linux: 8 MB). The Makefile links the Windows test runner with 16 MB; keep very large structs off the stack in product code anyway.
 
-## Software Development Rules for Claude
+## Software Development Rules for Claude — who does what
 
-- **Opus orchestrates each work package.** One Opus agent owns the package
-  end to end: it decides which model does each sub-task — Sonnet or Haiku
-  for mechanical implementation, Opus itself for review and the tricky
-  parts — spawns those agents with narrow briefs (the files and cases they
-  touch, not the whole tree; agent cost is driven by what they read and
-  re-run, not by the model), reviews their diffs, and opens the pull request.
-- **Escalation**: Opus hands a problem to Fable 5.1 (the main session) only
-  when it cannot work it out or wants a peer consult, and says so explicitly
-  in its report.
-- **Fable checks Opus's work**: the main session reviews the orchestrator's
-  deliverable at pull-request level before it merges. Fable is not spent on
-  mechanical implementation.
-- **Context discipline**: only preserve sub-agent results and key learnings in
-  the main context — discard intermediate details, and never poll a running
-  agent in a loop; its completion notification is the signal.
+- **Fable 5.1 (`claude-fable-5-1`) is the main session, the one the
+  maintainer talks to.** Fable makes the architectural and design decisions
+  (specs, module boundaries, gate and process changes) and reviews each work
+  package at pull-request level before it merges. Fable does no mechanical
+  implementation and reads as little of the tree as possible: anything that
+  can be delegated is delegated, so Fable's context holds only the
+  decisions, the sub-agent reports and the key learnings.
+- **Opus (`claude-opus-5`) orchestrates each work package** end to end. It
+  receives the package from Fable, splits it into narrow briefs (the files
+  and cases they touch, not the whole tree; agent cost is driven by what
+  they read and re-run, not by the model), assigns each brief to Sonnet or
+  Haiku, reviews every diff they produce, runs the tests, and opens the
+  pull request.
+- **Opus peer-reviews Fable's decisions.** Before a spec or a design
+  decision is committed, Fable hands it to an Opus agent to critique:
+  assumptions, missed cases, cheaper alternatives, what the tests will not
+  catch. Fable decides; Opus argues.
+- **Sonnet (`claude-sonnet-5`) and Haiku (`claude-haiku-4-5-20251001`)
+  implement.** Sonnet for code and tests, Haiku for the mechanical and
+  repetitive (renames, fixture generation, doc tables). Neither opens a
+  pull request; Opus does, after review.
+- **Escalation**: Opus hands a problem to Fable only when it cannot work it
+  out or wants a peer consult, and says so explicitly in its report.
+- **Context discipline**: sub-agents wherever possible. Surveys go to an
+  Explore agent that returns conclusions, never a direct read of many files
+  into Fable's context. Only sub-agent results and key learnings are kept
+  in the main context; intermediate detail is discarded. Never poll a
+  running agent; its completion notification is the signal.
+- **Attribution**: every commit and pull request lists each model that
+  touched the change and what it did (see "Git commits" below).
 
 ## Config Header
 
