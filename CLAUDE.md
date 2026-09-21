@@ -19,11 +19,11 @@ CI enforces this: the `Version bump` check (`.github/scripts/check-version.sh`) 
 
 Project memory is `.claude/memory/MEMORY.md`, imported above so every
 session loads it. Repository skills are `.claude/skills/*/SKILL.md`
-(`steward` for driving a pull request through the gate, `repo-status` for
-surveying branches and checks, `checkpoint` for the checkpoint and
-retrospective ritual, `critique` for a sub-agent second opinion on a decision,
-`feature-workflow` for the end-to-end feature process and the bot allocation).
-All are tracked in git. Every change to memory or a
+(`feature-workflow` for the end-to-end feature process, the bot allocation
+and driving a pull request through the gate, `repo-status` for surveying
+branches and checks, `checkpoint` for the checkpoint and retrospective
+ritual, `critique` for a sub-agent second opinion on a decision). All are
+tracked in git. Every change to memory or a
 skill gets a dated entry in `.claude/CHANGELOG.md` in the same commit; that
 file is the record of change. Retrospectives go in `docs/retrospectives/`,
 headed DRAFT until reviewed. **Every 10 merges into `main`** the `checkpoint`

@@ -24,7 +24,7 @@ decision.
   key, a policy default, or anything a later change would have to migrate.
 - A change to what the merge gate or CI enforces (`check-version.sh`, a
   required check, a workflow's triggers or steps). Not a pin bump: the
-  `steward` skill's Dependabot procedure covers those.
+  `feature-workflow` skill's Dependabot procedure covers those.
 - A change to the process sections of CLAUDE.md, or a new or materially
   changed skill under `.claude/skills/`.
 

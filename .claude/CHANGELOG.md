@@ -4,6 +4,29 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-21 — steward folded into feature-workflow
+
+Session: Claude desktop app, Windows dev box.
+Model: claude-fable-5-1, direct: both skills were already in context and
+a brief would have been longer than the change. No critique: nothing the
+gate or CI enforces changes, only where the procedure is written down.
+
+- **Removed `skills/steward/SKILL.md`.** Instruction from the maintainer
+  after a side-by-side comparison: two skills restated the same gate,
+  build and merge rules, so every gate change had to land in three places.
+- **`skills/feature-workflow/SKILL.md`** absorbs everything steward had
+  that it lacked: the diff-classification command and the rule never to
+  bump the version for a docs-only change (step 5), a new step 7 on
+  checking a PR (the three check names, `mergeable_state`, no base run to
+  compare against), the `gh`-less merge path (step 9), the subject-line
+  convention with the version in parentheses (Attribution), the full
+  Dependabot procedure with the Node-runtime warning (Standing rules),
+  and the "not flakes" section. The description now covers the PR
+  triggers so the skill fires where steward used to.
+- **CLAUDE.md** skill list and **`skills/critique/SKILL.md`** cross-
+  reference updated. Retrospective and older changelog entries keep the
+  historical name.
+
 ## 2026-09-21 — feature-workflow skill
 
 Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w
