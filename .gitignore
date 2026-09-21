@@ -14,8 +14,12 @@ settings.ini
 # Session log files
 *.log
 
-# Claude Code project data
-.claude/
+# Claude Code project data: local state stays ignored; tracked memory,
+# skills and their change log are re-included (see CLAUDE.md).
+.claude/*
+!.claude/memory/
+!.claude/skills/
+!.claude/CHANGELOG.md
 .superpowers/
 
 
