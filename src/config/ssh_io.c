@@ -1,7 +1,9 @@
 #include "ssh_io.h"
 #include "string_utils.h"
+#include "../term/ssh_pty.h"
 #include <libssh2.h>
 #include <stdio.h>
+#include <string.h>
 
 /* Write data to the log file with ANSI escapes stripped. */
 static void log_chunk(FILE *f, const char *data, size_t len)
@@ -86,4 +88,55 @@ int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file,
     }
 
     return (total_read > 0) ? 1 : 0;
+}
+
+/* ---- SessionIo vtable (spec section 2) ---------------------------------- *
+ * The context is the SSHChannel: it carries a back-pointer to the SshSession
+ * it was opened on (ssh_channel_open() sets ch->ssh), so one void * is enough
+ * to poll, write, resize and tear the whole transport down.
+ * Each wrapper is a straight forward to the function the call sites used
+ * before the seam existed, so behaviour is unchanged. */
+
+static int ssh_io_vt_poll(void *ctx, Terminal *term, FILE *log_file,
+                          FILE *debug_log)
+{
+    return ssh_io_poll((SSHChannel *)ctx, term, log_file, debug_log);
+}
+
+static int ssh_io_vt_write(void *ctx, const char *data, size_t len)
+{
+    return ssh_channel_write((SSHChannel *)ctx, data, len);
+}
+
+static int ssh_io_vt_resize(void *ctx, int cols, int rows)
+{
+    return ssh_pty_resize((SSHChannel *)ctx, cols, rows);
+}
+
+/* Releases the channel and then the session it was opened on -- the two
+ * halves the close paths in window.c used to free one after the other. */
+static void ssh_io_vt_close(void *ctx)
+{
+    SSHChannel *ch = (SSHChannel *)ctx;
+    if (!ch) return;
+    SshSession *ssh = ch->ssh;
+    ssh_channel_free(ch);
+    ssh_session_free(ssh);   /* tolerates NULL */
+}
+
+SessionIo session_io_ssh(SshSession *ssh, SSHChannel *channel)
+{
+    SessionIo io;
+    memset(&io, 0, sizeof(io));
+    io.kind = SESSION_SSH;
+    if (!channel) return io;          /* ctx stays NULL: no transport */
+    /* ssh is the session the channel was opened on; the channel's own
+     * back-pointer is what close() uses, so keep the two in agreement. */
+    if (ssh && channel->ssh != ssh) channel->ssh = ssh;
+    io.poll   = ssh_io_vt_poll;
+    io.write  = ssh_io_vt_write;
+    io.resize = ssh_io_vt_resize;
+    io.close  = ssh_io_vt_close;
+    io.ctx    = channel;
+    return io;
 }

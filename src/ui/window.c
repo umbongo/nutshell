@@ -5,6 +5,7 @@
 #include "logger.h"
 #include "renderer.h"
 #include "term.h"
+#include "session_io.h"
 #include "tabs.h"
 #include "xmalloc.h"
 #include "config.h"
@@ -67,7 +68,7 @@ static int g_left_margin = TERM_LEFT_MARGIN;
 #define WM_STARTUP_CONNECT      (WM_USER + 3)
 
 /* Bound on platform-detection attempts per session: counts poll ticks that
- * delivered new bytes (ssh_io_poll(...) > 0), not raw timer ticks, so a
+ * delivered new bytes (the transport poll returning > 0), not raw timer ticks, so a
  * quiet session doesn't burn through the budget while idle. A login banner
  * that hasn't shown up within this many data-bearing reads isn't coming --
  * give up and stay on CMD_PLATFORM_UNKNOWN (still safe: see cmd_classify's
@@ -78,8 +79,12 @@ typedef enum { CONN_IDLE, CONN_CONNECTING } ConnState;
 
 typedef struct Session {
     Terminal   *term;
+    /* ssh/channel now exist only for the SSH-specific paths -- the
+     * connection thread, the host-key prompt, keepalive/idle timeout and
+     * bytes_read_total -- everything else goes through io. */
     SshSession *ssh;
     SSHChannel *channel;
+    SessionIo   io;            /* transport vtable; io.ctx != NULL is the "connected" predicate */
     FILE       *session_log;   /* NULL when logging disabled */
     FILE       *debug_log;    /* NULL when debug_terminal disabled */
     /* Connection thread state */
@@ -215,7 +220,7 @@ static void force_full_terminal_repaint(HWND hwnd, Terminal *term)
  * area. WM_SIZE only touches the active session, so this is needed whenever a
  * session becomes visible after the window may have changed size without it:
  * on tab switch, and when a connection completes (auth can take seconds and
- * WM_SIZE skips the PTY while channel is NULL). No-op when nothing changed. */
+ * WM_SIZE skips the PTY while io.ctx is NULL). No-op when nothing changed. */
 static void sync_session_grid(HWND hwnd, Session *s)
 {
     if (!s || !s->term)
@@ -240,8 +245,7 @@ static void sync_session_grid(HWND hwnd, Session *s)
         term_resize(s->term, rows, cols);
         term_mark_all_dirty(s->term);
         dispbuf_resize(&g_renderer.dispbuf, rows, cols);
-        if (s->channel)
-            ssh_pty_resize(s->channel, cols, rows);
+        if (s->io.ctx) s->io.resize(s->io.ctx, cols, rows);
     }
 }
 
@@ -263,7 +267,8 @@ typedef struct {
     char       *pos;       /* current read position within buf */
     HWND        hwnd;      /* window to repaint */
     int         delay_ms;  /* inter-line delay */
-    SSHChannel *channel;   /* target channel (paste continues across tab switches) */
+    void       *io_ctx;    /* target transport, compared by identity (paste continues across tab switches) */
+    int       (*io_write)(void *ctx, const char *data, size_t len);
     bool        bracketed; /* send \033[201~ when paste completes */
 } PasteState;
 
@@ -281,6 +286,7 @@ static Session *create_session(int rows, int cols) {
     s->term = term_init(rows, cols, 3000);
     s->ssh = NULL;
     s->channel = NULL;
+    memset(&s->io, 0, sizeof(s->io));
     s->session_log = NULL;
     s->debug_log = NULL;
     s->conn_state = CONN_IDLE;
@@ -304,6 +310,41 @@ static Session *create_session(int rows, int cols) {
     return s;
 }
 
+/* The pointer the AI panel is handed: NULL unless this session actually has
+ * a transport, so "no session" reads exactly as it did when the panel was
+ * given s->channel. */
+static SessionIo *session_io_ptr(Session *s)
+{
+    return (s && s->io.ctx) ? &s->io : NULL;
+}
+
+/* Tear the transport down through the vtable and put the SSH-specific fields
+ * back in sync: io.close() releases the channel and the SSH session together
+ * (session_io_ssh(), src/config/ssh_io.c), so both pointers are cleared here.
+ * A session that got as far as ssh_session_new() but never opened a channel
+ * has no io at all; its session is freed directly. */
+static void session_close_io(Session *s)
+{
+    if (!s) return;
+    if (s->io.ctx && s->io.close) {
+        s->io.close(s->io.ctx);
+        s->channel = NULL;
+        s->ssh     = NULL;
+    }
+    memset(&s->io, 0, sizeof(s->io));
+    if (s->ssh) { ssh_session_free(s->ssh); s->ssh = NULL; }
+    s->channel = NULL;
+}
+
+/* Drop the AI panel's pointers into this session before its transport dies.
+ * The panel holds a SessionIo * into the Session struct, so it must be
+ * cleared BEFORE io.close() -- spec section 2, "EOF and close order". */
+static void ai_panel_detach(Session *s)
+{
+    if (s == g_active_session && g_hwndAiChat && IsWindow(g_hwndAiChat))
+        ai_chat_set_session(g_hwndAiChat, NULL, NULL);
+}
+
 static void free_session(Session *s) {
     if (s) {
         if (s->conn_thread) {
@@ -312,8 +353,7 @@ static void free_session(Session *s) {
             CloseHandle(s->conn_thread);
         }
         DeleteCriticalSection(&s->conn_cs);  /* H-1 */
-        if (s->channel) ssh_channel_free(s->channel);
-        if (s->ssh) ssh_session_free(s->ssh);
+        session_close_io(s);
         if (s->session_log) fclose(s->session_log);
         if (s->debug_log)   fclose(s->debug_log);
         cmd_batch_set_free(&s->ai_state.batches);
@@ -344,7 +384,7 @@ static void on_tab_select(int index, void *user_data) {
         ai_chat_switch_session(g_hwndAiChat,
                                &g_active_session->ai_state,
                                g_active_session->term,
-                               g_active_session->channel,
+                               session_io_ptr(g_active_session),
                                g_active_session->conn_profile.ai_notes,
                                g_config->settings.ai_system_notes,
                                g_active_session->conn_profile.name);
@@ -376,6 +416,9 @@ static void on_tab_close(int index, void *user_data) {
 
     if (g_active_session == s) {
         g_active_session = NULL;
+        /* The panel must not keep pointers into a session about to be freed. */
+        if (g_hwndAiChat && IsWindow(g_hwndAiChat))
+            ai_chat_set_session(g_hwndAiChat, NULL, NULL);
     }
 
     /* Notify AI chat before freeing so it can clear dangling pointers */
@@ -1111,7 +1154,7 @@ static void on_ai_clicked(void) {
     if (g_hwndAiChat && g_active_session) {
         ai_chat_set_session(g_hwndAiChat,
                            g_active_session->term,
-                           g_active_session->channel);
+                           session_io_ptr(g_active_session));
     }
 
     if (g_ai_docked && g_hwndAiChat) {
@@ -1149,6 +1192,16 @@ static void on_ai_dock_toggle(HWND hwnd) {
     on_ai_clicked();
 }
 
+/* Profile kind dispatch for reconnect. Profile has no `kind` field yet -- it
+ * arrives with the local shell itself in 1.2.1 -- so every profile is an SSH
+ * profile for now and this always returns 0. See
+ * docs/superpowers/specs/2026-09-22-local-shell-design.md section 5. */
+static int profile_is_local(const Profile *p)
+{
+    (void)p;
+    return 0;
+}
+
 static void on_status_click(int index, void *user_data, TabStatus status) {
     Session *s = (Session *)user_data;
     if (!s) return;
@@ -1161,11 +1214,11 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
                               "Disconnect",
                               MB_YESNO | MB_ICONQUESTION);
         if (ans == IDYES) {
-            if (g_paste.channel == s->channel)
+            if (g_paste.io_ctx == s->io.ctx)
                 paste_cancel();
             term_process(s->term, "\r\n[Disconnected by user]\r\n", 25);
-            if (s->channel) { ssh_channel_free(s->channel); s->channel = NULL; }
-            if (s->ssh)     { ssh_session_free(s->ssh);     s->ssh = NULL; }
+            ai_panel_detach(s);
+            session_close_io(s);
             if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
             if (s->debug_log)   { fclose(s->debug_log);   s->debug_log   = NULL; }
             int tidx = tabs_find(g_hwndTabs, s);
@@ -1177,27 +1230,29 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
         }
     } else if (status == TAB_DISCONNECTED) {
         /* Attempt reconnect using stored profile */
-        if (s->conn_profile.host[0] == '\0') {
+        int is_local = profile_is_local(&s->conn_profile);
+        if (!is_local && s->conn_profile.host[0] == '\0') {
             MessageBoxA(hParent,
                         "No connection profile available for reconnection.",
                         "Reconnect", MB_OK | MB_ICONINFORMATION);
             return;
         }
-        /* Clean up any leftover SSH state */
-        if (s->channel) { ssh_channel_free(s->channel); s->channel = NULL; }
-        if (s->ssh)     { ssh_session_free(s->ssh);     s->ssh = NULL; }
+        /* Clean up any leftover transport state */
+        session_close_io(s);
         if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
         if (s->debug_log)   { fclose(s->debug_log);   s->debug_log   = NULL; }
 
-        /* Re-populate password from config — it was zeroed after first auth */
-        for (size_t i = 0; i < vec_size(&g_config->profiles); i++) {
-            const Profile *pr = (const Profile *)vec_get(&g_config->profiles, i);
-            if (strcmp(pr->host, s->conn_profile.host) == 0 &&
-                strcmp(pr->username, s->conn_profile.username) == 0 &&
-                pr->port == s->conn_profile.port) {
-                memcpy(s->conn_profile.password, pr->password,
-                       sizeof(s->conn_profile.password));
-                break;
+        if (!is_local) {
+            /* Re-populate password from config — it was zeroed after first auth */
+            for (size_t i = 0; i < vec_size(&g_config->profiles); i++) {
+                const Profile *pr = (const Profile *)vec_get(&g_config->profiles, i);
+                if (strcmp(pr->host, s->conn_profile.host) == 0 &&
+                    strcmp(pr->username, s->conn_profile.username) == 0 &&
+                    pr->port == s->conn_profile.port) {
+                    memcpy(s->conn_profile.password, pr->password,
+                           sizeof(s->conn_profile.password));
+                    break;
+                }
             }
         }
 
@@ -1215,6 +1270,8 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
         s->conn_dots     = 0;
         s->conn_hwnd     = hParent;
 
+        /* 1.2.1: a local profile will re-spawn its shell here instead of
+         * launching the connection thread. */
         s->conn_thread = CreateThread(NULL, 0, connection_thread, s, 0, NULL);
         if (!s->conn_thread) {
             term_process(s->term, "\r\nFailed to start connection thread.\r\n", 38);
@@ -1276,7 +1333,7 @@ static void on_log_toggle(int index, void *user_data) {
 static bool paste_send_next_line(void)
 {
     if (!g_paste.buf || !g_paste.pos || !*g_paste.pos) return false;
-    if (!g_paste.channel) return false;
+    if (!g_paste.io_ctx || !g_paste.io_write) return false;
 
     const char *p = g_paste.pos;
     const char *nl = strchr(p, '\n');
@@ -1284,7 +1341,7 @@ static bool paste_send_next_line(void)
 
     for (size_t i = 0; i < chunk; i++) {
         if (p[i] != '\r')
-            ssh_channel_write(g_paste.channel, &p[i], 1);
+            g_paste.io_write(g_paste.io_ctx, &p[i], 1);
     }
 
     g_paste.pos += chunk;
@@ -1299,7 +1356,8 @@ static void paste_cancel(void)
         free(g_paste.buf);
         g_paste.buf      = NULL;
         g_paste.pos      = NULL;
-        g_paste.channel  = NULL;
+        g_paste.io_ctx   = NULL;
+        g_paste.io_write = NULL;
         g_paste.bracketed = false;
     }
 }
@@ -1308,8 +1366,8 @@ static void paste_cancel(void)
 static void paste_finish(void)
 {
     static const char BRACKET_CLOSE[] = "\033[201~";
-    if (g_paste.bracketed && g_paste.channel)
-        ssh_channel_write(g_paste.channel, BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
+    if (g_paste.bracketed && g_paste.io_ctx)
+        g_paste.io_write(g_paste.io_ctx, BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
     paste_cancel();
 }
 
@@ -1327,7 +1385,7 @@ static void paste_timer_tick(void)
 
 static void do_paste(HWND hwnd)
 {
-    if (!g_active_session || !g_active_session->channel) return;
+    if (!g_active_session || !g_active_session->io.ctx) return;
     session_mark_user_active();
 
     /* Cancel any in-progress paste */
@@ -1384,7 +1442,7 @@ static void do_paste(HWND hwnd)
      * would only add pointless latency. */
     if (line_count == 0 || delay_ms <= 0 || bpm) {
         if (bpm)
-            ssh_channel_write(g_active_session->channel,
+            g_active_session->io.write(g_active_session->io.ctx,
                               BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
         const char *p = local;
         while (*p) {
@@ -1392,12 +1450,12 @@ static void do_paste(HWND hwnd)
             size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
             for (size_t i = 0; i < chunk; i++) {
                 if (p[i] != '\r')
-                    ssh_channel_write(g_active_session->channel, &p[i], 1);
+                    g_active_session->io.write(g_active_session->io.ctx, &p[i], 1);
             }
             p += chunk;
         }
         if (bpm)
-            ssh_channel_write(g_active_session->channel,
+            g_active_session->io.write(g_active_session->io.ctx,
                               BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
         g_active_session->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
@@ -1408,11 +1466,12 @@ static void do_paste(HWND hwnd)
         g_paste.pos       = g_paste.buf;
         g_paste.hwnd      = hwnd;
         g_paste.delay_ms  = delay_ms;
-        g_paste.channel   = g_active_session->channel;
+        g_paste.io_ctx    = g_active_session->io.ctx;
+        g_paste.io_write  = g_active_session->io.write;
         g_paste.bracketed = bpm;
 
         if (bpm)
-            ssh_channel_write(g_active_session->channel,
+            g_active_session->io.write(g_active_session->io.ctx,
                               BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
 
         /* Send the first line immediately */
@@ -2273,8 +2332,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 /* Poll connected sessions only (skip those still connecting) */
                 Session *s = g_session_list;
                 while (s) {
-                    if (s->channel && s->conn_state == CONN_IDLE) {
-                        int poll_rc = ssh_io_poll(s->channel, s->term,
+                    if (s->io.ctx && s->conn_state == CONN_IDLE) {
+                        int poll_rc = s->io.poll(s->io.ctx, s->term,
                                                       s->session_log,
                                                       s->debug_log);
                         if (poll_rc > 0) {
@@ -2302,85 +2361,90 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             }
                         }
 
-                        DWORD now_tick = GetTickCount();
+                        /* Keepalive, the socket-liveness counter and the two
+                         * timeout rails are libssh2-specific and are skipped
+                         * for a local session (spec section 2). */
+                        if (s->io.kind == SESSION_SSH) {
+                            DWORD now_tick = GetTickCount();
 
-                        /* Track socket-level liveness via the libssh2 RECV
-                         * callback's byte counter.  Any change since last
-                         * tick — including silently-consumed keepalive
-                         * replies — proves the link is alive. */
-                        if (s->ssh) {
-                            uint64_t curr = s->ssh->bytes_read_total;
-                            if (curr != s->prev_bytes_read) {
-                                s->last_socket_data_tick = now_tick;
-                                s->prev_bytes_read = curr;
+                            /* Track socket-level liveness via the libssh2 RECV
+                             * callback's byte counter.  Any change since last
+                             * tick — including silently-consumed keepalive
+                             * replies — proves the link is alive. */
+                            if (s->ssh) {
+                                uint64_t curr = s->ssh->bytes_read_total;
+                                if (curr != s->prev_bytes_read) {
+                                    s->last_socket_data_tick = now_tick;
+                                    s->prev_bytes_read = curr;
+                                }
                             }
-                        }
 
-                        /* Drive libssh2 keepalive ~once per second.  The
-                         * library handles the 30s send cadence internally;
-                         * we just need to give it CPU time. */
-                        if (now_tick - s->last_keepalive_tick >= 1000u) {
-                            int next_secs = 0;
-                            if (s->ssh && s->ssh->session)
-                                libssh2_keepalive_send(s->ssh->session,
-                                                       &next_secs);
-                            s->last_keepalive_tick = now_tick;
-                        }
+                            /* Drive libssh2 keepalive ~once per second.  The
+                             * library handles the 30s send cadence internally;
+                             * we just need to give it CPU time. */
+                            if (now_tick - s->last_keepalive_tick >= 1000u) {
+                                int next_secs = 0;
+                                if (s->ssh && s->ssh->session)
+                                    libssh2_keepalive_send(s->ssh->session,
+                                                           &next_secs);
+                                s->last_keepalive_tick = now_tick;
+                            }
 
-                        /* Network-failure rail: no socket bytes at all
-                         * (not even keepalive replies) for the threshold. */
-                        if (poll_rc != -2 && s->channel &&
-                            ssh_network_should_timeout(now_tick,
-                                                       s->last_socket_data_tick,
-                                                       NETWORK_FAILURE_TIMEOUT_MS)) {
-                            dispbuf_invalidate(&g_renderer.dispbuf);
-                            if (g_paste.channel == s->channel)
-                                paste_cancel();
-                            term_process(s->term,
-                                         "\r\n[Connection timed out]\r\n", 26);
-                            ssh_channel_free(s->channel);
-                            s->channel = NULL;
-                            int tidx_net = tabs_find(g_hwndTabs, s);
-                            if (tidx_net >= 0)
-                                tabs_set_status(g_hwndTabs, tidx_net, TAB_DISCONNECTED);
-                            if (s == g_active_session) hide_ai_panel(hwnd);
-                        }
+                            /* Network-failure rail: no socket bytes at all
+                             * (not even keepalive replies) for the threshold. */
+                            if (poll_rc != -2 && s->io.ctx &&
+                                ssh_network_should_timeout(now_tick,
+                                                           s->last_socket_data_tick,
+                                                           NETWORK_FAILURE_TIMEOUT_MS)) {
+                                dispbuf_invalidate(&g_renderer.dispbuf);
+                                if (g_paste.io_ctx == s->io.ctx)
+                                    paste_cancel();
+                                term_process(s->term,
+                                             "\r\n[Connection timed out]\r\n", 26);
+                                ai_panel_detach(s);
+                                session_close_io(s);
+                                int tidx_net = tabs_find(g_hwndTabs, s);
+                                if (tidx_net >= 0)
+                                    tabs_set_status(g_hwndTabs, tidx_net, TAB_DISCONNECTED);
+                                if (s == g_active_session) hide_ai_panel(hwnd);
+                            }
 
-                        /* User-idle rail: configurable, 0 = disabled. */
-                        if (poll_rc != -2 && s->channel &&
-                            ssh_idle_should_timeout(
-                                now_tick,
-                                s->last_user_input_tick,
-                                g_config->settings.ssh_user_idle_timeout_mins)) {
-                            char banner[64];
-                            int n = snprintf(banner, sizeof(banner),
-                                             "\r\n[Disconnected after %d min idle]\r\n",
-                                             g_config->settings.ssh_user_idle_timeout_mins);
-                            if (n < 0) n = 0;
-                            if (n > (int)sizeof(banner)) n = (int)sizeof(banner) - 1;
-                            dispbuf_invalidate(&g_renderer.dispbuf);
-                            if (g_paste.channel == s->channel)
-                                paste_cancel();
-                            term_process(s->term, banner, (size_t)n);
-                            ssh_channel_free(s->channel);
-                            s->channel = NULL;
-                            int tidx_idle = tabs_find(g_hwndTabs, s);
-                            if (tidx_idle >= 0)
-                                tabs_set_status(g_hwndTabs, tidx_idle, TAB_DISCONNECTED);
-                            if (s == g_active_session) hide_ai_panel(hwnd);
+                            /* User-idle rail: configurable, 0 = disabled. */
+                            if (poll_rc != -2 && s->io.ctx &&
+                                ssh_idle_should_timeout(
+                                    now_tick,
+                                    s->last_user_input_tick,
+                                    g_config->settings.ssh_user_idle_timeout_mins)) {
+                                char banner[64];
+                                int n = snprintf(banner, sizeof(banner),
+                                                 "\r\n[Disconnected after %d min idle]\r\n",
+                                                 g_config->settings.ssh_user_idle_timeout_mins);
+                                if (n < 0) n = 0;
+                                if (n > (int)sizeof(banner)) n = (int)sizeof(banner) - 1;
+                                dispbuf_invalidate(&g_renderer.dispbuf);
+                                if (g_paste.io_ctx == s->io.ctx)
+                                    paste_cancel();
+                                term_process(s->term, banner, (size_t)n);
+                                ai_panel_detach(s);
+                                session_close_io(s);
+                                int tidx_idle = tabs_find(g_hwndTabs, s);
+                                if (tidx_idle >= 0)
+                                    tabs_set_status(g_hwndTabs, tidx_idle, TAB_DISCONNECTED);
+                                if (s == g_active_session) hide_ai_panel(hwnd);
+                            }
                         }
 
                         if (poll_rc == -2) {
                             /* EOF — the final data chunk (e.g. alt-screen-exit
                              * sequence) was already fed to term_process by
-                             * ssh_io_poll, so force a full display-buffer
+                             * the transport poll, so force a full display-buffer
                              * invalidation before handling the disconnect. */
                             dispbuf_invalidate(&g_renderer.dispbuf);
-                            if (g_paste.channel == s->channel)
+                            if (g_paste.io_ctx == s->io.ctx)
                                 paste_cancel();
                             term_process(s->term, "\r\n[Connection Closed]\r\n", 23);
-                            ssh_channel_free(s->channel);
-                            s->channel = NULL;
+                            ai_panel_detach(s);
+                            session_close_io(s);
                             int tidx = tabs_find(g_hwndTabs, s);
                             if (tidx >= 0)
                                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
@@ -2526,6 +2590,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (tidx >= 0)
                     tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
             } else {
+                /* Publish the transport here, on the UI thread, so no other
+                 * UI-thread reader (WM_SIZE, sync_session_grid) can see a
+                 * half-copied SessionIo with ctx set and resize NULL. The
+                 * channel and session were opened by the connection thread,
+                 * which has posted this message and touches neither again. */
+                s->io = session_io_ssh(s->ssh, s->channel);
                 term_process(s->term, "\r\nConnected.\r\n", 14);
                 /* Keep a log the user already started from the File menu
                  * while the tab was still connecting; only auto-open one
@@ -2550,9 +2620,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (ai_chat_should_update_channel(
                         g_hwndAiChat != NULL,
                         NULL,  /* don't care about current chat channel */
-                        s->channel,
+                        s->io.ctx,
                         s == g_active_session)) {
-                    ai_chat_set_session(g_hwndAiChat, s->term, s->channel);
+                    ai_chat_set_session(g_hwndAiChat, s->term, session_io_ptr(s));
                 }
 
                 /* Reopen AI panel that was closed before first session */
@@ -2563,8 +2633,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             /* Sync PTY size to actual window dimensions — the window may have
              * been resized while the connection thread was running (auth can
-             * take several seconds), and WM_SIZE skips ssh_pty_resize when
-             * channel is NULL. Without this, TUI apps like nano start with
+             * take several seconds), and WM_SIZE skips the transport resize
+             * while io.ctx is NULL. Without this, TUI apps like nano start with
              * the pre-connection window size and appear blank until the user
              * manually resizes. */
             if (conn_result == 0)
@@ -2664,8 +2734,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     term_resize(g_active_session->term, rows, cols);
                     term_mark_all_dirty(g_active_session->term);
                     dispbuf_resize(&g_renderer.dispbuf, rows, cols);
-                    if (g_active_session->channel)
-                        ssh_pty_resize(g_active_session->channel, cols, rows);
+                    if (g_active_session->io.ctx)
+                        g_active_session->io.resize(g_active_session->io.ctx, cols, rows);
                 }
             }
             /* Always repaint the full window on resize so gutter areas
@@ -2954,19 +3024,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     g_ctrlc_swallow_char = false;
                     return 0;
                 }
-                if (g_active_session->channel) {
+                if (g_active_session->io.ctx) {
                     /* Drain pending transport data so the write can
                      * succeed in non-blocking mode.  Without this,
                      * libssh2_channel_write returns EAGAIN when the
                      * session has unread inbound data, and the retry
-                     * loop in ssh_channel_write blocks the UI thread
-                     * (preventing WM_TIMER / ssh_io_poll from running)
+                     * loop in the transport write blocks the UI thread
+                     * (preventing WM_TIMER / the transport poll from running)
                      * — a deadlock that silently drops keystrokes. */
-                    ssh_io_poll(g_active_session->channel,
+                    g_active_session->io.poll(g_active_session->io.ctx,
                                 g_active_session->term,
                                 g_active_session->session_log,
                                 g_active_session->debug_log);
-                    ssh_channel_write(g_active_session->channel, &c, 1);
+                    g_active_session->io.write(g_active_session->io.ctx, &c, 1);
                 }
                 /* Only invalidate if we were scrolled back */
                 if (g_active_session->term->scrollback_offset != 0) {
@@ -3058,12 +3128,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         return 0;
                 }
                 if (seq) {
-                    if (g_active_session->channel) {
-                        ssh_io_poll(g_active_session->channel,
+                    if (g_active_session->io.ctx) {
+                        g_active_session->io.poll(g_active_session->io.ctx,
                                     g_active_session->term,
                                     g_active_session->session_log,
                                     g_active_session->debug_log);
-                        ssh_channel_write(g_active_session->channel, seq, strlen(seq));
+                        g_active_session->io.write(g_active_session->io.ctx, seq, strlen(seq));
                     }
                     if (g_active_session->term->scrollback_offset != 0) {
                         g_active_session->term->scrollback_offset = 0;

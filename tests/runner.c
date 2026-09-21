@@ -846,6 +846,7 @@ int test_ai_build_auth_headers_deepseek(void);
 int test_ai_build_auth_headers_custom(void);
 int test_ai_system_prompt_with_terminal(void);
 int test_ai_system_prompt_no_terminal(void);
+int test_ai_system_prompt_local_shell(void);
 int test_ai_extract_commands_multiple(void);
 int test_ai_extract_commands_single(void);
 int test_ai_extract_commands_none(void);
@@ -2903,6 +2904,7 @@ int main(void) {
     failed += test_ai_build_auth_headers_custom();
     failed += test_ai_system_prompt_with_terminal();
     failed += test_ai_system_prompt_no_terminal();
+    failed += test_ai_system_prompt_local_shell();
     failed += test_ai_extract_commands_multiple();
     failed += test_ai_extract_commands_single();
     failed += test_ai_extract_commands_none();

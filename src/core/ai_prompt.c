@@ -155,16 +155,40 @@ int ai_conv_set_system(AiConversation *conv, const char *content)
 void ai_build_system_prompt(char *buf, size_t buf_size,
                             const char *terminal_text,
                             const char *session_notes,
-                            const char *system_notes)
+                            const char *system_notes,
+                            SessionKind kind,
+                            const char *shell_name)
 {
     if (!buf || buf_size == 0) return;
 
-    const char *base =
+    /* The opening two sentences are the only part that depends on where the
+     * shell is running: an SSH session talks about "the remote server", a
+     * local one about this PC, so the model does not suggest apt or
+     * systemctl on a busybox shell (spec section 6). Everything after them
+     * is identical, and the SSH text is byte-for-byte what it was before the
+     * kind parameter existed. */
+    const char *opening =
         "You are an AI assistant for an SSH terminal session. "
         "You can see the terminal output and help the user with tasks.\n"
         "When you want to execute a command on the remote server, "
         "wrap it in [EXEC] and [/EXEC] markers like this:\n"
-        "[EXEC]ls -la[/EXEC]\n\n"
+        "[EXEC]ls -la[/EXEC]\n\n";
+
+    char local_opening[512];
+    if (kind == SESSION_LOCAL) {
+        const char *shell = (shell_name && shell_name[0])
+                              ? shell_name
+                              : "busybox / Git bash / MSYS2 / custom";
+        int on = snprintf(local_opening, sizeof(local_opening),
+            "You are an AI assistant for a local shell (%s) on a Windows PC. "
+            "You can see the terminal output and help the user with tasks.\n"
+            "When you want to execute a command on this PC, "
+            "wrap it in [EXEC] and [/EXEC] markers like this:\n"
+            "[EXEC]ls -la[/EXEC]\n\n", shell);
+        if (on > 0) opening = local_opening;
+    }
+
+    const char *rest =
         "IMPORTANT: Always include ALL commands needed in a SINGLE response. "
         "Do NOT split commands across multiple responses. "
         "Each command must have its own [EXEC]...[/EXEC] markers.\n"
@@ -177,7 +201,7 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
         "Include every command the user needs in one response.";
 
     size_t pos = 0;
-    int n = snprintf(buf, buf_size, "%s", base);
+    int n = snprintf(buf, buf_size, "%s%s", opening, rest);
     if (n < 0) return;
     pos = (size_t)n;
 
