@@ -4,6 +4,20 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-21 — feature-workflow skill
+
+Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w
+Model: claude-fable-5-1, direct: the text was already in hand, a brief
+would have been longer than the change. No critique: it restates rules
+already on main and decides nothing new.
+
+- **Added `skills/feature-workflow/SKILL.md`.** The allocation rule and
+  model guidance, then the nine-step feature workflow from branch to
+  release, then the standing rules (10-merge retrospective, record of
+  change, Dependabot, branch survey). Points at CLAUDE.md as the source
+  of truth where the two could drift.
+- **CLAUDE.md.** Skill list gains `feature-workflow`.
+
 ## 2026-09-21 — one rule replaces the hierarchy: hand off to curate context
 
 Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w
