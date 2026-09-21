@@ -4,6 +4,24 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-21 — critique skill and triage rule (draft, critique pending)
+
+Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w
+Model: claude-fable-5-1 (draft); claude-opus-5 (critique, next commit).
+
+- **Added `skills/critique/SKILL.md`.** How to brief an Opus critic on a
+  Fable decision so it argues instead of agreeing: the artefact and the
+  files, never Fable's reasoning or preferred option; the five questions;
+  ranked findings with a "not verified" list; every finding accepted or
+  rejected in writing; two rounds at most, fresh critic each time.
+- **CLAUDE.md.** The "Opus peer-reviews" bullet now points at the skill.
+  New "Triage before delegating" bullet with three size classes: direct,
+  small code, package; gate and process changes get a critique whatever
+  their size; the class is stated in the first line of the reply.
+- **Status.** Draft committed so the record shows it before critique. An
+  Opus critic is reviewing both artefacts; the next entry records what
+  was accepted and rejected.
+
 ## 2026-09-21 — model roles restated by the maintainer
 
 Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w

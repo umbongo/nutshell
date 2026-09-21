@@ -75,7 +75,19 @@ Write tests before implementation code. Include corner cases, positive and negat
 - **Opus peer-reviews Fable's decisions.** Before a spec or a design
   decision is committed, Fable hands it to an Opus agent to critique:
   assumptions, missed cases, cheaper alternatives, what the tests will not
-  catch. Fable decides; Opus argues.
+  catch. Fable decides; Opus argues. The brief follows the `critique`
+  skill: the artefact and the files, never Fable's reasoning or preferred
+  option, and every finding is accepted or rejected in writing.
+- **Triage before delegating.** The full package (spec, critique, Opus
+  orchestration) is for work with a design decision in it, or touching
+  more than a couple of files, or adding a module. Two lighter classes:
+  *direct* — docs, CI, `tests/` or `.claude/` only, no `src/`, one or two
+  files: Fable does it, or hands the mechanical part to one Sonnet or
+  Haiku agent; *small code* — one file under `src/`, no new interface, no
+  design choice: one Sonnet agent under Fable's diff review, still through
+  a pull request and the gate. A change to what the gate enforces, or to
+  the process, gets a critique whatever its size. State the class in the
+  first line of the reply so the maintainer can overrule it.
 - **Sonnet (`claude-sonnet-5`) and Haiku (`claude-haiku-4-5-20251001`)
   implement.** Sonnet for code and tests, Haiku for the mechanical and
   repetitive (renames, fixture generation, doc tables). Neither opens a
