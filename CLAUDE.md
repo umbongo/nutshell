@@ -21,7 +21,8 @@ Project memory is `.claude/memory/MEMORY.md`, imported above so every
 session loads it. Repository skills are `.claude/skills/*/SKILL.md`
 (`steward` for driving a pull request through the gate, `repo-status` for
 surveying branches and checks, `checkpoint` for the checkpoint and
-retrospective ritual). All are tracked in git. Every change to memory or a
+retrospective ritual, `critique` for the Opus review of a Fable decision).
+All are tracked in git. Every change to memory or a
 skill gets a dated entry in `.claude/CHANGELOG.md` in the same commit; that
 file is the record of change. Retrospectives go in `docs/retrospectives/`,
 headed DRAFT until reviewed. **Every 10 merges into `main`** the `checkpoint`
@@ -63,9 +64,10 @@ Write tests before implementation code. Include corner cases, positive and negat
   maintainer talks to.** Fable makes the architectural and design decisions
   (specs, module boundaries, gate and process changes) and reviews each work
   package at pull-request level before it merges. Fable does no mechanical
-  implementation and reads as little of the tree as possible: anything that
-  can be delegated is delegated, so Fable's context holds only the
-  decisions, the sub-agent reports and the key learnings.
+  implementation beyond what the triage rule below calls *direct*, and
+  reads as little of the tree as possible: anything that can be delegated
+  cheaply is delegated, so Fable's context holds only the decisions, the
+  diffs under review, the sub-agent reports and the key learnings.
 - **Opus (`claude-opus-5`) orchestrates each work package** end to end. It
   receives the package from Fable, splits it into narrow briefs (the files
   and cases they touch, not the whole tree; agent cost is driven by what
@@ -78,16 +80,26 @@ Write tests before implementation code. Include corner cases, positive and negat
   catch. Fable decides; Opus argues. The brief follows the `critique`
   skill: the artefact and the files, never Fable's reasoning or preferred
   option, and every finding is accepted or rejected in writing.
-- **Triage before delegating.** The full package (spec, critique, Opus
-  orchestration) is for work with a design decision in it, or touching
-  more than a couple of files, or adding a module. Two lighter classes:
-  *direct* — docs, CI, `tests/` or `.claude/` only, no `src/`, one or two
-  files: Fable does it, or hands the mechanical part to one Sonnet or
-  Haiku agent; *small code* — one file under `src/`, no new interface, no
-  design choice: one Sonnet agent under Fable's diff review, still through
-  a pull request and the gate. A change to what the gate enforces, or to
-  the process, gets a critique whatever its size. State the class in the
-  first line of the reply so the maintainer can overrule it.
+- **Triage before delegating.** Two questions decide the route, and the
+  answer is stated in the first line of the reply to a work request so the
+  maintainer can overrule it.
+  1. *Does it decide something a later change would have to migrate?* A
+     spec, an interface, a data format, a config key, a policy default,
+     what the gate or CI enforces, a process rule, a skill. Yes → the
+     `critique` skill runs, whatever the size.
+  2. *Does it need a Windows rebuild?* Anything under `src/`, the Makefile
+     or `nutshell.rc` (the `steward` skill's build-input test). Yes → the
+     version bump and the exe must come from the Windows box; from a
+     Linux session the deliverable is a pushed branch.
+  The three routes: **direct** — no to question 1, and the change is a
+  mechanical or single-pattern edit (a docs fix, a pin bump, a rename, a
+  renormalise), however many files: Fable does it, or hands the mechanical
+  part to one Sonnet or Haiku agent. **small code** — no to question 1,
+  one source file under `src/` (the version bump, README and exe do not
+  count), no new interface: one Sonnet agent under Fable's diff review,
+  through a pull request and the gate. **package** — yes to question 1,
+  or a non-mechanical change across several files: spec, critique, Opus
+  orchestration, Fable's PR review.
 - **Sonnet (`claude-sonnet-5`) and Haiku (`claude-haiku-4-5-20251001`)
   implement.** Sonnet for code and tests, Haiku for the mechanical and
   repetitive (renames, fixture generation, doc tables). Neither opens a

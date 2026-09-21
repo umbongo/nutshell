@@ -55,19 +55,25 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
    and did any finding in this retrospective change it? Fix what is
    stale; propose, do not apply, anything that changes what the gate
    enforces.
-6. **Record the change.** Add a dated entry to `.claude/CHANGELOG.md`
-   naming each memory, skill or workflow file touched and why, in the
-   same commit. Move the "Last retrospective" marker in `MEMORY.md` to
+6. **Critique the process edits.** Any skill added or materially changed,
+   and any edit to the process sections of CLAUDE.md or to what a
+   workflow enforces, goes through the `critique` skill before it is
+   recorded. In a fresh session with nobody to ask, a decision the
+   critique leaves unsettled stays in the draft pull request with the
+   open findings in its body.
+7. **Record the change.** Add a dated entry to `.claude/CHANGELOG.md`
+   naming each memory, skill or workflow file touched and why, and the
+   critique dispositions, in the same commit. Move the "Last retrospective" marker in `MEMORY.md` to
    the merge commit that closed the previous retrospective's PR and reset
    the count.
-7. **Retrospective (when the cadence fires or when asked).** Write it under
+8. **Retrospective (when the cadence fires or when asked).** Write it under
    `docs/retrospectives/`, headed DRAFT, with a scope-and-method section,
    measured numbers in a table, findings ranked by cost of inaction, and
    recommendations clearly separated from changes made.
-8. **Verify the gate will pass.** These files are not build inputs, so no
+9. **Verify the gate will pass.** These files are not build inputs, so no
    version bump; but `check-version.sh` still runs its consistency check,
    so never edit the version strings in a checkpoint.
-9. **Clean up.** Remove scratch files and worktrees, then commit on the
+10. **Clean up.** Remove scratch files and worktrees, then commit on the
    session branch as `docs: checkpoint YYYY-MM-DD — <one line>` (or
    `docs: retrospective YYYY-MM-DD`), push, open a draft PR.
 

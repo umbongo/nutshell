@@ -4,23 +4,56 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
-## 2026-09-21 — critique skill and triage rule (draft, critique pending)
+## 2026-09-21 — critique skill and triage rule, after their own critique
 
 Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w
-Model: claude-fable-5-1 (draft); claude-opus-5 (critique, next commit).
+Models: claude-fable-5-1 (draft, dispositions, revision);
+claude-opus-5 (critique of the draft, 15 findings).
 
 - **Added `skills/critique/SKILL.md`.** How to brief an Opus critic on a
-  Fable decision so it argues instead of agreeing: the artefact and the
-  files, never Fable's reasoning or preferred option; the five questions;
-  ranked findings with a "not verified" list; every finding accepted or
-  rejected in writing; two rounds at most, fresh critic each time.
-- **CLAUDE.md.** The "Opus peer-reviews" bullet now points at the skill.
-  New "Triage before delegating" bullet with three size classes: direct,
-  small code, package; gate and process changes get a critique whatever
-  their size; the class is stated in the first line of the reply.
-- **Status.** Draft committed so the record shows it before critique. An
-  Opus critic is reviewing both artefacts; the next entry records what
-  was accepted and rejected.
+  Fable decision so it argues instead of agreeing; what to ask; the output
+  shape; how every finding is answered; two rounds at most, ending in the
+  draft PR if still unsettled.
+- **CLAUDE.md.** "Opus peer-reviews" points at the skill; `critique` added
+  to the skill list; bullet 1 softened to "delegated cheaply" with Fable
+  reading the diffs it reviews; new "Triage before delegating" built on
+  two questions (migration-bearing decision? Windows rebuild?) with the
+  three routes direct / small code / package derived from them.
+- **`skills/checkpoint/SKILL.md`.** New step 6: critique any skill or
+  process edit before recording it; unsettled decisions stay in the draft
+  PR. Dispositions go in the changelog entry.
+- **Critique dispositions** (Opus, first run of the skill on itself):
+  1. small-code class unreachable because the version triplet counts as
+     files — accepted, triplet and exe excluded. 2. a new spec classed
+     *direct* and skipping critique — accepted, specs are question 1.
+     3. every `.github` change critique-worthy, contradicting steward's
+     Dependabot procedure — accepted, narrowed to what CI enforces. 4. the
+     skill untracked and unlisted — accepted, listed in CLAUDE.md (the
+     draft commit had already tracked it with its entry). 5. "ask once
+     for the ranking" not executable — accepted, Fable ranks. 6. empty
+     critique both valid and a failure — accepted, the failure signal is
+     now empty findings plus empty "not verified". 7. withholding rejected
+     options makes the critic re-propose them — accepted, options listed
+     without preference or reasons. 8. retrospective edits skills with no
+     critique and no one to escalate to — accepted, checkpoint step 6 and
+     the draft-PR terminal state. 9. mechanical multi-file work classed as
+     a package — accepted, file count subordinated to "mechanical".
+     10. small code from Linux hits the rebuild wall — accepted, question
+     2. 11. the ask-list demanded a tests item for non-code and lacked the
+     contradictions item — accepted. 12. dispositions split from the
+     record of change — accepted for `.claude/` artefacts. 13.
+     `run_in_background: false` rejected by the harness — rejected as
+     stated (the parameter is accepted) but the line is removed as
+     harness-specific; "wait for the report" says what matters.
+     14. class names inconsistent and the first-line rule unscoped —
+     accepted. 15. bullet 1 absolute versus triage — accepted.
+     Cheaper way (two-question triage) — accepted as the frame; the three
+     routes are kept because they name who does the work.
+- **Not verified, resolved.** The Agent tool does accept
+  `run_in_background`, and a sub-agent with full tools can spawn agents;
+  the skill now says only Fable runs it. Whether Opus finds what Fable
+  missed: first data point is 13 of 15 accepted. No critique had been run
+  on the draft before this one; it was the first.
 
 ## 2026-09-21 — model roles restated by the maintainer
 
