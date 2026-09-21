@@ -4,6 +4,25 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-21 — retrospective cadence: every 10 merges
+
+Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w
+Model: claude-fable-5-1. Standing rule from the maintainer.
+
+- **`memory/MEMORY.md`.** New "Retrospective cadence" section: the rule,
+  how merges are counted, the last-retrospective marker (`3f0f540`, PR
+  #34) and the count since (1). Open-items line refreshed: #33 and #34
+  merged, `terminal1` pushed.
+- **`skills/checkpoint/SKILL.md`.** "When it runs" section with the
+  10-merge trigger and the counting command; a workflows-review step
+  (`.github/workflows`, `.github/scripts`, the process sections of
+  CLAUDE.md); the marker reset folded into the record-the-change step.
+- **CLAUDE.md.** One sentence stating the cadence in "Memory and skills".
+- **Outside the repo.** A daily Routine in the maintainer's Claude
+  account counts merges since the marker and starts a fresh session with
+  the `checkpoint` skill at 10. It is not a repo file; this entry is its
+  record.
+
 ## 2026-09-21 — first checkpoint from a cloud session
 
 Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w

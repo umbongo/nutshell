@@ -5,7 +5,24 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-09-21.
+Last updated: 2026-09-21 (second edit: retrospective cadence).
+
+## Retrospective cadence (standing rule from the maintainer, 2026-09-21)
+
+- **Every 10 merges into `main`, run a retrospective** with the `checkpoint`
+  skill: refresh this memory file, the skills under `.claude/skills/`, and
+  the workflows (`.github/workflows/*.yml` and the process sections of
+  CLAUDE.md), record it in `.claude/CHANGELOG.md`, and open a draft PR.
+- **Counter.** Merges are pull requests merged into `main` (`merged_at`
+  set) after the last retrospective marker below. Count them with
+  `list_pull_requests` (state closed, sort updated, desc) or
+  `git log --merges --first-parent origin/main <marker>..`.
+- **Last retrospective:** 2026-09-21, marker commit `3f0f540` (merge of
+  PR #34). Merges since: 1 (PR #33). Update this line at every
+  retrospective.
+- A daily Routine in the maintainer's Claude account performs the count
+  and starts the retrospective in a fresh session when it reaches 10. Any
+  session that notices the count is at or past 10 should run it too.
 
 ## Working from a cloud (Linux) session
 
@@ -75,8 +92,8 @@ Last updated: 2026-09-21.
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-09-21: PR #33 (CodeQL action 4.38.0) is green and unmerged;
-CodeQL libssh2 gap; `.gitattributes` renormalise; harness batches B–D;
+As of 2026-09-21 (PR #33 and #34 merged, `terminal1` branch pushed from
+`main` for the next feature, no pull request open): CodeQL libssh2 gap; `.gitattributes` renormalise; harness batches B–D;
 security audit H3–H8; AI-stream thread lifetime; Session Manager phantom
 row; status-line keyboard path; `md_render.c` DPI; sub-project 3 (main
 window chrome) needs a spec first.
