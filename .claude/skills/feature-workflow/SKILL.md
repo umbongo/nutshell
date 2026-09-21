@@ -1,6 +1,6 @@
 ---
 name: feature-workflow
-description: The end-to-end workflow for a Nutshell feature or fix, and how work is allocated to sub-agents. Use when starting a feature branch, when asked "what is the process" or "who does what", or before the first push of any change. Restates the rules on main; it decides nothing new.
+description: The end-to-end workflow for a Nutshell feature or fix, how work is allocated to sub-agents, and how a pull request is driven through the Version bump gate to a merge, including Dependabot bumps. Use when starting a feature branch, when asked "what is the process" or "who does what", before the first push of any change, and when watching, fixing or merging a PR in umbongo/nutshell. Restates the rules on main; it decides nothing new.
 ---
 
 # Feature workflow and bot allocation
@@ -8,7 +8,9 @@ description: The end-to-end workflow for a Nutshell feature or fix, and how work
 Last updated: 2026-09-21. Changes are recorded in `.claude/CHANGELOG.md`.
 The rules themselves live in CLAUDE.md ("Software Development Rules",
 "Branches, pull requests and the merge gate"); this skill is the walk
-through them in order. Where they disagree, CLAUDE.md wins.
+through them in order. Where they disagree, CLAUDE.md wins. It absorbed
+the former `steward` skill on 2026-09-21; the pull-request steps below
+are that skill's content.
 
 ## Allocation
 
@@ -43,7 +45,12 @@ signal.
 
 **Attribution:** every commit and pull request carries a `Models:` line
 naming each model that touched the change and what it did, then the
-co-author trailer (CLAUDE.md, "Git commits").
+co-author trailer (CLAUDE.md, "Git commits"). Subject and body are
+written as the maintainer would write them: imperative, with the version
+in parentheses when one was bumped, e.g.
+`fix(tabs): Ctrl+W reattaches the surviving tab (v1.1.13)`. Pull requests
+open as drafts and their body ends with the same `Models:` line and the
+`🤖 Generated with [Claude Code](https://claude.com/claude-code)` footer.
 
 ## The workflow, in order
 
@@ -64,10 +71,21 @@ co-author trailer (CLAUDE.md, "Git commits").
    the mechanical parts. Tests first (CLAUDE.md, "Test-Driven
    Development"). `make test` before every push. What returns to the main
    session is the diff and the test summary line.
-5. **Draft pull request.** The first push opens it. Subscribe and drive
-   it with the `steward` skill. The main session reads the diff in full
-   before the maintainer merges; that is the one place its context is
-   spent on raw material.
+5. **Draft pull request.** The first push opens it. Before touching it,
+   classify the diff:
+
+   ```
+   git diff --name-only origin/main...HEAD | grep -E '^(src/|Makefile$|nutshell\.rc$)'
+   ```
+
+   - **Empty**: the gate only checks internal consistency. Docs, CI,
+     `tests/`, `docs/` and `.claude/` changes can be finished from any
+     host. Never bump the version for such a change; the gate does not
+     require it and the committed exe would then disagree.
+   - **Non-empty**: step 6 applies in full.
+
+   The main session reads the diff in full before the maintainer merges;
+   that is the one place its context is spent on raw material.
 6. **The gate.** Any change under `src/`, the Makefile or `nutshell.rc`
    needs `APP_VERSION` and `APP_VERSION_BINARY` raised in
    `src/ui/resource.h`, README's `**Version**:` line to match, and a
@@ -75,18 +93,37 @@ co-author trailer (CLAUDE.md, "Git commits").
    the maintainer's Windows box (`mingw32-make clean && mingw32-make
    release`). From a Linux session the deliverable is a pushed branch;
    the maintainer builds, commits the exe, and the `Version bump` check
-   goes green. Docs, CI, `tests/` and `.claude/` changes need none of
-   this.
-7. **Integration tier.** Before marking ready, the maintainer runs the
+   goes green. Say so and stop at the pushed branch with everything else
+   done.
+7. **Checking the pull request.** Checks: `gh pr checks N`, or
+   `mcp__github__pull_request_read` with `get_check_runs` when `gh` is
+   absent. Expect `Version bump`, `analyze` and `CodeQL`; all three must
+   be `success`. Mergeability: `pull_request_read` with `get`;
+   `mergeable_state` should be `clean`, and the ruleset also requires the
+   branch be up to date with `main`. `Version bump` runs on
+   `pull_request` only, so there is no base-branch run to compare
+   against; a red gate is always the PR's.
+8. **Integration tier.** Before marking ready, the maintainer runs the
    integration tier the change touches by hand on Windows
    (`tests/integration/Run-Integration.ps1 -Tier gate`); it is a manual
    tool, not a gate.
-8. **Merge.** Mark ready, then enable auto-merge with a merge commit. It
-   lands when `Version bump` is green and the branch is up to date with
-   `main`. Never merge a red check; never push to `main`.
-9. **Release**, separately: tag `vX.Y.Z` matching `APP_VERSION` and push
-   the tag; the release workflow re-verifies and publishes the committed
-   exe. Nothing is built at release time.
+9. **Merge.** `gh pr ready N` then `gh pr merge N --merge --auto`, in that
+   order. Without `gh`, `mcp__github__update_pull_request` to leave
+   draft, then `mcp__github__enable_pr_auto_merge` with merge method
+   `merge`. It lands when `Version bump` is green and the branch is up to
+   date with `main`. Never merge a red check; never push to `main`; never
+   rewrite someone else's branch.
+10. **Release**, separately: tag `vX.Y.Z` matching `APP_VERSION` and push
+    the tag; the release workflow re-verifies and publishes the committed
+    exe. Nothing is built at release time.
+
+## Failures that are not flakes
+
+- A `Version bump` failure is deterministic: read its log, it names the
+  exact mismatch.
+- A CodeQL `analyze` failure in `apt-get` is the hosted image's stale
+  third-party repositories; the workflow already strips them by host. If
+  it recurs, extend that list, do not ignore the exit code.
 
 ## Standing rules around it
 
@@ -96,8 +133,14 @@ co-author trailer (CLAUDE.md, "Git commits").
   session at ten. It never merges.
 - **Record of change.** Every edit to memory or a skill gets a dated
   entry in `.claude/CHANGELOG.md` in the same commit.
-- **Dependabot.** A grouped actions bump is merged after confirming the
-  diff is pins only, reading the upstream changelog, and seeing the
-  checks green (`steward`, "Dependabot bumps").
+- **Dependabot.** Weekly, grouped, one open at a time. For an
+  actions-only bump: confirm the diff is only `.github/workflows/*.yml`
+  pins with updated `# vX.Y.Z` comments; read the upstream changelog for
+  the new version (the PR body quotes it); confirm all three checks are
+  green on the head commit; merge with a merge commit. Dependabot deletes
+  its branch. Only the CodeQL push run fires afterwards; no release, no
+  version bump. Semver-major bumps of `actions/checkout` or
+  `upload-artifact` change the Node runtime the runner needs; check the
+  release notes before merging.
 - **Branch survey.** "What are my branches" goes through `repo-status`;
   the clone is shallow and two names are both a branch and a tag.
