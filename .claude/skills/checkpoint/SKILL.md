@@ -5,7 +5,18 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-09-21. Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-09-21 (cadence added). Changes are recorded in `.claude/CHANGELOG.md`.
+
+## When it runs
+
+- **Every 10 merges into `main`** (maintainer's standing rule). The
+  counter and the last-retrospective marker live in
+  `.claude/memory/MEMORY.md` under "Retrospective cadence". Count with
+  `git log --merges --first-parent origin/main <marker>..` on an
+  unshallowed clone, or `list_pull_requests` filtered on `merged_at`.
+- On request: "create a checkpoint", "do a retrospective".
+- A daily Routine performs the count and starts a fresh session with this
+  skill when the count reaches 10.
 
 The notes document defines a checkpoint as: compact the todo list, compact
 memory, delete temp files and worktrees, leave the tree ready for a new
@@ -20,6 +31,7 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
 | `.claude/skills/*/SKILL.md` | Repo procedures. |
 | `.claude/CHANGELOG.md` | Record of every change to memory and skills. |
 | `docs/retrospectives/YYYY-MM-DD-*.md` | Dated retrospectives, marked DRAFT until the maintainer reviews. |
+| `.github/workflows/*.yml`, `.github/scripts/*` | The workflows. Reviewed at every retrospective (see step 5). |
 
 ## Procedure
 
@@ -35,16 +47,33 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
    anything the docs now state better. Bump its "Last updated" line.
 4. **Update or add skills** when a procedure was learned the hard way.
    One skill per job; keep each under about 100 lines.
-5. **Record the change.** Add a dated entry to `.claude/CHANGELOG.md`
-   naming each memory or skill file touched and why, in the same commit.
-6. **Retrospective (only when asked).** Write it under
+5. **Review the workflows.** Read every file under `.github/workflows/`
+   and `.github/scripts/`, and the "Branches, pull requests and the merge
+   gate" and "Software Development Rules" sections of CLAUDE.md. For each,
+   ask: does it still describe what actually happens (compare against the
+   last ten merges), are its pins current (Dependabot may have a PR open),
+   and did any finding in this retrospective change it? Fix what is
+   stale; propose, do not apply, anything that changes what the gate
+   enforces.
+6. **Second opinion on the process edits.** A skill added or materially
+   changed, or an edit to the process sections of CLAUDE.md or to what a
+   workflow enforces, gets a sub-agent review (the `critique` skill)
+   before it is recorded; it is the one check on an unattended session
+   rewriting the rules. A decision the review leaves unsettled stays in
+   the draft pull request with the open findings in its body.
+7. **Record the change.** Add a dated entry to `.claude/CHANGELOG.md`
+   naming each memory, skill or workflow file touched and why, and the
+   critique dispositions, in the same commit. Move the "Last retrospective" marker in `MEMORY.md` to
+   the merge commit that closed the previous retrospective's PR and reset
+   the count.
+8. **Retrospective (when the cadence fires or when asked).** Write it under
    `docs/retrospectives/`, headed DRAFT, with a scope-and-method section,
    measured numbers in a table, findings ranked by cost of inaction, and
    recommendations clearly separated from changes made.
-7. **Verify the gate will pass.** These files are not build inputs, so no
+9. **Verify the gate will pass.** These files are not build inputs, so no
    version bump; but `check-version.sh` still runs its consistency check,
    so never edit the version strings in a checkpoint.
-8. **Clean up.** Remove scratch files and worktrees, then commit on the
+10. **Clean up.** Remove scratch files and worktrees, then commit on the
    session branch as `docs: checkpoint YYYY-MM-DD — <one line>` (or
    `docs: retrospective YYYY-MM-DD`), push, open a draft PR.
 

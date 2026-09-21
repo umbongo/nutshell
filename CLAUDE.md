@@ -21,10 +21,13 @@ Project memory is `.claude/memory/MEMORY.md`, imported above so every
 session loads it. Repository skills are `.claude/skills/*/SKILL.md`
 (`steward` for driving a pull request through the gate, `repo-status` for
 surveying branches and checks, `checkpoint` for the checkpoint and
-retrospective ritual). All are tracked in git. Every change to memory or a
+retrospective ritual, `critique` for a sub-agent second opinion on a decision).
+All are tracked in git. Every change to memory or a
 skill gets a dated entry in `.claude/CHANGELOG.md` in the same commit; that
 file is the record of change. Retrospectives go in `docs/retrospectives/`,
-headed DRAFT until reviewed.
+headed DRAFT until reviewed. **Every 10 merges into `main`** the `checkpoint`
+skill runs a retrospective that refreshes memory, skills and workflows; the
+counter and last-retrospective marker are in `MEMORY.md`.
 
 ## Build Commands
 
@@ -57,21 +60,28 @@ Write tests before implementation code. Include corner cases, positive and negat
 
 ## Software Development Rules for Claude
 
-- **Opus orchestrates each work package.** One Opus agent owns the package
-  end to end: it decides which model does each sub-task — Sonnet or Haiku
-  for mechanical implementation, Opus itself for review and the tricky
-  parts — spawns those agents with narrow briefs (the files and cases they
-  touch, not the whole tree; agent cost is driven by what they read and
-  re-run, not by the model), reviews their diffs, and opens the pull request.
-- **Escalation**: Opus hands a problem to Fable 5.1 (the main session) only
-  when it cannot work it out or wants a peer consult, and says so explicitly
-  in its report.
-- **Fable checks Opus's work**: the main session reviews the orchestrator's
-  deliverable at pull-request level before it merges. Fable is not spent on
-  mechanical implementation.
-- **Context discipline**: only preserve sub-agent results and key learnings in
-  the main context — discard intermediate details, and never poll a running
-  agent in a loop; its completion notification is the signal.
+- **Hand off to sub-agents wherever possible, without letting the quality
+  of the result suffer.** The purpose is to curate what enters the main
+  session's context. A survey returns conclusions; an implementation
+  returns a diff and a test summary; a review returns ranked findings.
+  Raw file contents, transcripts and intermediate detail stay in the
+  sub-agent. The main session keeps the decisions, the diffs it reviews,
+  the reports and the key learnings.
+- **Choose the model for the job.** Opus for judgement: review, critique,
+  orchestrating a multi-step package. Sonnet for code and tests. Haiku for
+  mechanical, single-pattern work. A sub-agent may spawn its own.
+- **Brief narrowly.** The files and cases the task touches, not the whole
+  tree; what to return and in what shape. A brief that cannot be written
+  clearly means the task is not understood well enough to hand off.
+- **Do it directly only when handing off would curate nothing**: the main
+  session already holds everything the task needs and a brief would be
+  longer than the change. Say so in one line.
+- **Quality checks are sub-agents too.** A second opinion on a decision is
+  the `critique` skill; a review of a diff is an Opus agent given the diff,
+  not a summary of it. Never poll a running agent; its completion
+  notification is the signal.
+- **Attribution**: every commit and pull request lists each model that
+  touched the change and what it did (see "Git commits" below).
 
 ## Config Header
 
