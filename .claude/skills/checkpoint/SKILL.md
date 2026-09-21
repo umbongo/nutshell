@@ -55,12 +55,12 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
    and did any finding in this retrospective change it? Fix what is
    stale; propose, do not apply, anything that changes what the gate
    enforces.
-6. **Critique the process edits.** Any skill added or materially changed,
-   and any edit to the process sections of CLAUDE.md or to what a
-   workflow enforces, goes through the `critique` skill before it is
-   recorded. In a fresh session with nobody to ask, a decision the
-   critique leaves unsettled stays in the draft pull request with the
-   open findings in its body.
+6. **Second opinion on the process edits.** A skill added or materially
+   changed, or an edit to the process sections of CLAUDE.md or to what a
+   workflow enforces, gets a sub-agent review (the `critique` skill)
+   before it is recorded; it is the one check on an unattended session
+   rewriting the rules. A decision the review leaves unsettled stays in
+   the draft pull request with the open findings in its body.
 7. **Record the change.** Add a dated entry to `.claude/CHANGELOG.md`
    naming each memory, skill or workflow file touched and why, and the
    critique dispositions, in the same commit. Move the "Last retrospective" marker in `MEMORY.md` to

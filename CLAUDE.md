@@ -21,7 +21,7 @@ Project memory is `.claude/memory/MEMORY.md`, imported above so every
 session loads it. Repository skills are `.claude/skills/*/SKILL.md`
 (`steward` for driving a pull request through the gate, `repo-status` for
 surveying branches and checks, `checkpoint` for the checkpoint and
-retrospective ritual, `critique` for the Opus review of a Fable decision).
+retrospective ritual, `critique` for a sub-agent second opinion on a decision).
 All are tracked in git. Every change to memory or a
 skill gets a dated entry in `.claude/CHANGELOG.md` in the same commit; that
 file is the record of change. Retrospectives go in `docs/retrospectives/`,
@@ -58,59 +58,28 @@ Write tests before implementation code. Include corner cases, positive and negat
 - Tests that write files must build paths from `TEST_TMP_DIR` (in `test_framework.h`), never a literal `/tmp/` — that path does not exist for a MinGW binary.
 - Windows threads default to a 1 MB stack (Linux: 8 MB). The Makefile links the Windows test runner with 16 MB; keep very large structs off the stack in product code anyway.
 
-## Software Development Rules for Claude — who does what
+## Software Development Rules for Claude
 
-- **Fable 5.1 (`claude-fable-5-1`) is the main session, the one the
-  maintainer talks to.** Fable makes the architectural and design decisions
-  (specs, module boundaries, gate and process changes) and reviews each work
-  package at pull-request level before it merges. Fable does no mechanical
-  implementation beyond what the triage rule below calls *direct*, and
-  reads as little of the tree as possible: anything that can be delegated
-  cheaply is delegated, so Fable's context holds only the decisions, the
-  diffs under review, the sub-agent reports and the key learnings.
-- **Opus (`claude-opus-5`) orchestrates each work package** end to end. It
-  receives the package from Fable, splits it into narrow briefs (the files
-  and cases they touch, not the whole tree; agent cost is driven by what
-  they read and re-run, not by the model), assigns each brief to Sonnet or
-  Haiku, reviews every diff they produce, runs the tests, and opens the
-  pull request.
-- **Opus peer-reviews Fable's decisions.** Before a spec or a design
-  decision is committed, Fable hands it to an Opus agent to critique:
-  assumptions, missed cases, cheaper alternatives, what the tests will not
-  catch. Fable decides; Opus argues. The brief follows the `critique`
-  skill: the artefact and the files, never Fable's reasoning or preferred
-  option, and every finding is accepted or rejected in writing.
-- **Triage before delegating.** Two questions decide the route, and the
-  answer is stated in the first line of the reply to a work request so the
-  maintainer can overrule it.
-  1. *Does it decide something a later change would have to migrate?* A
-     spec, an interface, a data format, a config key, a policy default,
-     what the gate or CI enforces, a process rule, a skill. Yes → the
-     `critique` skill runs, whatever the size.
-  2. *Does it need a Windows rebuild?* Anything under `src/`, the Makefile
-     or `nutshell.rc` (the `steward` skill's build-input test). Yes → the
-     version bump and the exe must come from the Windows box; from a
-     Linux session the deliverable is a pushed branch.
-  The three routes: **direct** — no to question 1, and the change is a
-  mechanical or single-pattern edit (a docs fix, a pin bump, a rename, a
-  renormalise), however many files: Fable does it, or hands the mechanical
-  part to one Sonnet or Haiku agent. **small code** — no to question 1,
-  one source file under `src/` (the version bump, README and exe do not
-  count), no new interface: one Sonnet agent under Fable's diff review,
-  through a pull request and the gate. **package** — yes to question 1,
-  or a non-mechanical change across several files: spec, critique, Opus
-  orchestration, Fable's PR review.
-- **Sonnet (`claude-sonnet-5`) and Haiku (`claude-haiku-4-5-20251001`)
-  implement.** Sonnet for code and tests, Haiku for the mechanical and
-  repetitive (renames, fixture generation, doc tables). Neither opens a
-  pull request; Opus does, after review.
-- **Escalation**: Opus hands a problem to Fable only when it cannot work it
-  out or wants a peer consult, and says so explicitly in its report.
-- **Context discipline**: sub-agents wherever possible. Surveys go to an
-  Explore agent that returns conclusions, never a direct read of many files
-  into Fable's context. Only sub-agent results and key learnings are kept
-  in the main context; intermediate detail is discarded. Never poll a
-  running agent; its completion notification is the signal.
+- **Hand off to sub-agents wherever possible, without letting the quality
+  of the result suffer.** The purpose is to curate what enters the main
+  session's context. A survey returns conclusions; an implementation
+  returns a diff and a test summary; a review returns ranked findings.
+  Raw file contents, transcripts and intermediate detail stay in the
+  sub-agent. The main session keeps the decisions, the diffs it reviews,
+  the reports and the key learnings.
+- **Choose the model for the job.** Opus for judgement: review, critique,
+  orchestrating a multi-step package. Sonnet for code and tests. Haiku for
+  mechanical, single-pattern work. A sub-agent may spawn its own.
+- **Brief narrowly.** The files and cases the task touches, not the whole
+  tree; what to return and in what shape. A brief that cannot be written
+  clearly means the task is not understood well enough to hand off.
+- **Do it directly only when handing off would curate nothing**: the main
+  session already holds everything the task needs and a brief would be
+  longer than the change. Say so in one line.
+- **Quality checks are sub-agents too.** A second opinion on a decision is
+  the `critique` skill; a review of a diff is an Opus agent given the diff,
+  not a summary of it. Never poll a running agent; its completion
+  notification is the signal.
 - **Attribution**: every commit and pull request lists each model that
   touched the change and what it did (see "Git commits" below).
 

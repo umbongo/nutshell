@@ -4,6 +4,31 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-21 — one rule replaces the hierarchy: hand off to curate context
+
+Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w
+Model: claude-fable-5-1. Instruction from the maintainer, applied
+directly: handing this edit off would have curated nothing.
+
+- **CLAUDE.md, "Software Development Rules for Claude".** The
+  Fable/Opus/Sonnet/Haiku hierarchy and the triage rule are replaced by
+  one rule: hand off to sub-agents wherever possible without letting
+  quality suffer, so that the main session's context holds decisions,
+  reviewed diffs, reports and learnings rather than raw material. Model
+  choice is guidance (Opus judgement, Sonnet code, Haiku mechanical), not
+  a chain of command. Direct work is allowed when a handoff would curate
+  nothing, stated in one line. Attribution unchanged.
+- **`skills/critique/SKILL.md`.** No longer a mandatory step; a judgement
+  call for decisions that would be expensive to migrate. "Fable" replaced
+  by "the main session" throughout, since the skill is a handoff any main
+  session can make.
+- **`skills/checkpoint/SKILL.md`.** Step 6 reworded as a sub-agent second
+  opinion on process edits rather than a required critique; kept because
+  it is the one check on an unattended retrospective rewriting the rules.
+- **Why.** The maintainer's stated goal is curating what is ingested into
+  the main session's memory. The hierarchy served a different goal
+  (division of labour) and was heavier than that needs.
+
 ## 2026-09-21 — critique skill and triage rule, after their own critique
 
 Session: https://claude.ai/code/session_01JJ2vavMqdPNaq745qRsW4w
