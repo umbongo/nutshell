@@ -60,20 +60,6 @@ static void spec_for(LocalShellSpec *spec, const char *command)
     spec->env_count = 1;
 }
 
-/* Drain until poll() reports EOF or the deadline passes. Returns the poll
- * result that ended it. */
-static int drain_until_eof(LocalPty *pty, Terminal *term, DWORD timeout_ms)
-{
-    ULONGLONG deadline = GetTickCount64() + timeout_ms;
-    int rc = 0;
-    while (GetTickCount64() < deadline) {
-        rc = local_pty_poll(pty, term, NULL, NULL);
-        if (rc == -2 || rc == -1) return rc;
-        Sleep(20);
-    }
-    return rc;
-}
-
 /* The screen as the app reads it -- the same extractor the AI panel uses. */
 static void screen_text(Terminal *term, char *out, size_t out_size)
 {
@@ -131,8 +117,18 @@ int test_local_pty_echo_through_cmd(void)
     Terminal *term = term_init(24, 80, 200);
     ASSERT_NOT_NULL(term);
 
-    int rc = drain_until_eof(pty, term, 10000u);
-    ASSERT_EQ(rc, -2);            /* EOF, not an error and not a timeout */
+    /* cmd.exe exits almost at once, but conhost keeps the pseudo-console's
+     * pipe open until ClosePseudoConsole is called -- poll() never sees a
+     * real EOF here without local_pty_close() (spec section 3, "Close"; and
+     * the review fix behind this: EOF is no longer inferred from the child
+     * process handle alone, only from the pipe actually closing, so a
+     * grandchild holding the pipe open is never cut off early). So this
+     * drains for a bounded number of iterations rather than waiting on -2. */
+    for (int i = 0; i < 40; i++) {
+        int rc = local_pty_poll(pty, term, NULL, NULL);
+        ASSERT_TRUE(rc != -1);   /* no read error */
+        Sleep(20);
+    }
 
     char screen[8192];
     screen_text(term, screen, sizeof(screen));

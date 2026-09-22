@@ -68,6 +68,11 @@ static int fake_env(void *ctx, const char *name, char *out, size_t out_size)
     for (size_t i = 0; i < d->env_count; i++) {
         if (strcmp(d->env_names[i], name) == 0) {
             if (!d->env_values[i] || d->env_values[i][0] == '\0') return 0;
+            /* Mirror window.c's real probe_env: a value that does not fit
+             * the caller's buffer is reported as "not found" (0), not
+             * silently truncated -- that's what lets a too-long parent PATH
+             * exercise the exact same fill_env() branch as an unset one. */
+            if (strlen(d->env_values[i]) >= out_size) return 0;
             (void)snprintf(out, out_size, "%s", d->env_values[i]);
             return 1;
         }
@@ -529,9 +534,14 @@ int test_local_shell_env_path_prepends_dir_keeps_parent(void)
     TEST_END();
 }
 
-int test_local_shell_env_path_present_without_parent(void)
+int test_local_shell_env_path_absent_when_parent_unavailable(void)
 {
     TEST_BEGIN();
+    /* When the PATH probe returns 0 (no parent PATH set, or no probe at
+     * all), adding a PATH entry with just the shell's directory would
+     * REPLACE the child's inherited PATH rather than extend it. So no PATH
+     * entry at all is added -- the child inherits the parent block's PATH
+     * unchanged (spec 4.3). */
     FakeProbeData d;
     fake_reset(&d);
     fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
@@ -541,14 +551,36 @@ int test_local_shell_env_path_present_without_parent(void)
     LocalShellSpec spec;
     local_shell_resolve(NULL, &p, &spec);
 
-    int found = 0;
     for (int i = 0; i < spec.env_count; i++) {
-        if (strcmp(spec.env[i].name, "PATH") == 0) {
-            ASSERT_STR_EQ(spec.env[i].value, "C:\\nutshell");
-            found = 1;
-        }
+        ASSERT_TRUE(strcmp(spec.env[i].name, "PATH") != 0);
     }
-    ASSERT_TRUE(found);
+    TEST_END();
+}
+
+int test_local_shell_env_path_absent_when_parent_does_not_fit(void)
+{
+    TEST_BEGIN();
+    /* A parent PATH longer than LOCAL_SHELL_ENV_VALUE_MAX (32768, Windows'
+     * own per-variable max): window.c's real probe_env reports "not found"
+     * (0) rather than truncate, same as an unset PATH, so this must land in
+     * the same no-PATH-entry branch as the unset case above. */
+    static char huge_path[LOCAL_SHELL_ENV_VALUE_MAX + 100];
+    size_t i = 0;
+    for (; i + 1 < sizeof(huge_path); i++) huge_path[i] = 'A';
+    huge_path[i] = '\0';
+
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
+    fake_add_env(&d, "PATH", huge_path);
+    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+
+    LocalShellSpec spec;
+    local_shell_resolve(NULL, &p, &spec);
+
+    for (int j = 0; j < spec.env_count; j++) {
+        ASSERT_TRUE(strcmp(spec.env[j].name, "PATH") != 0);
+    }
     TEST_END();
 }
 
@@ -659,6 +691,16 @@ int test_local_shell_quote_with_space(void)
     size_t n = local_shell_quote("C:\\Program Files\\a.exe", out, sizeof(out));
     ASSERT_EQ((int)n, (int)strlen("\"C:\\Program Files\\a.exe\""));
     ASSERT_STR_EQ(out, "\"C:\\Program Files\\a.exe\"");
+    TEST_END();
+}
+
+int test_local_shell_quote_with_tab(void)
+{
+    TEST_BEGIN();
+    char out[64];
+    size_t n = local_shell_quote("C:\\Program\tFiles\\a.exe", out, sizeof(out));
+    ASSERT_EQ((int)n, (int)strlen("\"C:\\Program\tFiles\\a.exe\""));
+    ASSERT_STR_EQ(out, "\"C:\\Program\tFiles\\a.exe\"");
     TEST_END();
 }
 

@@ -26,7 +26,7 @@ typedef enum {
 #define LOCAL_SHELL_PATH_MAX      ((size_t)512)
 #define LOCAL_SHELL_ENV_MAX       6
 #define LOCAL_SHELL_ENV_NAME_MAX  ((size_t)32)
-#define LOCAL_SHELL_ENV_VALUE_MAX ((size_t)4096)
+#define LOCAL_SHELL_ENV_VALUE_MAX ((size_t)32768) /* Windows' own per-variable max */
 
 typedef struct LocalShellEnv {
     char name[LOCAL_SHELL_ENV_NAME_MAX];
@@ -71,8 +71,10 @@ typedef struct LocalShellProbe {
  *   6. nothing                                            -> SHELL_NONE
  *
  * Also fills out->env with the additions of spec 4.3: TERM, HOME, SHELL,
- * NUTSHELL, PATH (the shell's directory prepended to the parent's) and,
- * for MSYS2 only, MSYSTEM. Nothing is ever removed from the parent block.
+ * NUTSHELL, PATH (the shell's directory prepended to the parent's -- or
+ * omitted entirely when the parent's own PATH can't be read, so the child
+ * simply inherits it unchanged rather than losing it) and, for MSYS2 only,
+ * MSYSTEM. Nothing is ever removed from the parent block.
  *
  * Returns out->kind. Tolerates out == NULL by doing nothing. */
 LocalShellKind local_shell_resolve(const char *profile_shell,
@@ -86,7 +88,8 @@ int local_shell_runtime_dir(const LocalShellProbe *probe,
                             char *out, size_t out_size);
 
 /* Copy `path` into out, wrapping it in double quotes when it contains a
- * space (and only then). Returns the length written, 0 on overflow. */
+ * space or a tab (and only then). Returns the length written, 0 on
+ * overflow. */
 size_t local_shell_quote(const char *path, char *out, size_t out_size);
 
 /* The shell's name as the AI system prompt wants it: "busybox", "Git bash",

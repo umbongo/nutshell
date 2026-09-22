@@ -47,7 +47,7 @@ size_t local_shell_quote(const char *path, char *out, size_t out_size)
     if (out && out_size > 0) out[0] = '\0';
     if (!path || !out || out_size == 0) return 0;
 
-    int needs_quotes = strchr(path, ' ') != NULL;
+    int needs_quotes = strpbrk(path, " \t") != NULL;
     size_t len = strlen(path);
     size_t needed = needs_quotes ? len + 2 : len; /* +2 for the quote pair */
 
@@ -172,13 +172,20 @@ static void fill_env(LocalShellSpec *out, const LocalShellProbe *probe)
     if (out->dir[0] != '\0') {
         char parent_path[LOCAL_SHELL_ENV_VALUE_MAX];
         int have_parent = probe_env(probe, "PATH", parent_path, sizeof(parent_path));
-        char combined[LOCAL_SHELL_ENV_VALUE_MAX];
+        /* When the parent PATH can't be read -- probe->env is NULL, PATH is
+         * unset, or (a real possibility now that the buffer is 32768 bytes,
+         * Windows' own per-variable max) it simply doesn't fit -- adding a
+         * PATH entry here would REPLACE the child's inherited PATH with just
+         * out->dir, losing everything else on it. Leaving PATH out of
+         * spec->env entirely means the child inherits the parent block's
+         * PATH unchanged, which is the safe fallback (spec 4.3). */
         if (have_parent) {
+            char combined[LOCAL_SHELL_ENV_VALUE_MAX];
             /* out->dir is at most LOCAL_SHELL_PATH_MAX (512), far under
-             * LOCAL_SHELL_ENV_VALUE_MAX (4096), so the prepended directory
-             * always survives in full; only a very long parent PATH's tail
-             * is ever truncated by snprintf -- deliberately (spec 4.3), not
-             * a bug, so the truncation warning is suppressed for this call. */
+             * LOCAL_SHELL_ENV_VALUE_MAX, so the prepended directory always
+             * survives in full; only a very long parent PATH's tail is ever
+             * truncated by snprintf -- deliberately (spec 4.3), not a bug,
+             * so the truncation warning is suppressed for this call. */
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
@@ -187,10 +194,8 @@ static void fill_env(LocalShellSpec *out, const LocalShellProbe *probe)
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
-        } else {
-            (void)snprintf(combined, sizeof(combined), "%s", out->dir);
+            env_add(out, "PATH", combined);
         }
-        env_add(out, "PATH", combined);
     }
 
     if (out->kind == SHELL_MSYS2) {

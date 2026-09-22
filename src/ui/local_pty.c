@@ -100,7 +100,6 @@ struct LocalPty {
     CRITICAL_SECTION cs;  /* guards ring, first[], first_len                 */
     PtyRing ring;
 
-    volatile LONG stop;   /* set before the close sequence starts            */
     int     opened;       /* the pseudo-console exists                       */
     int     cols, rows;   /* size currently applied                          */
     int     want_cols;    /* size requested; applied at open when it arrives */
@@ -110,7 +109,12 @@ struct LocalPty {
      * bullet: does it open with ESC[6n / ESC[c / ESC[>c?). */
     unsigned char first[LOCAL_PTY_FIRST_MAX];
     size_t  first_len;
-    int     wrote_anything;
+    volatile LONG wrote_anything; /* set/read with Interlocked*, not under cs */
+
+    int     env_inherited; /* build_env_block() failed: the child got our own
+                             * environment verbatim, not spec->env. Cleared by
+                             * local_pty_poll() once it has logged this once
+                             * (diagnostics only).                            */
 };
 
 /* ---- log helpers -------------------------------------------------------- */
@@ -283,7 +287,8 @@ static DWORD WINAPI reader_thread(LPVOID param)
         /* Record the opening bytes once, before anything has been written
          * to the shell -- that is the window in which a DSR/DA query would
          * appear (spec section 3, last bullet). */
-        if (!p->wrote_anything && p->first_len < LOCAL_PTY_FIRST_MAX) {
+        if (!InterlockedCompareExchange(&p->wrote_anything, 0, 0) &&
+            p->first_len < LOCAL_PTY_FIRST_MAX) {
             size_t room = LOCAL_PTY_FIRST_MAX - p->first_len;
             size_t take = ((size_t)got < room) ? (size_t)got : room;
             memcpy(p->first + p->first_len, buf, take);
@@ -292,7 +297,9 @@ static DWORD WINAPI reader_thread(LPVOID param)
         (void)pty_ring_push(&p->ring, buf, (size_t)got);
         LeaveCriticalSection(&p->cs);
 
-        if (InterlockedCompareExchange(&p->stop, 0, 0) != 0) break;
+        /* No stop check here: keep draining until ReadFile itself fails or
+         * returns 0. Closing the handle (and CancelSynchronousIo as a
+         * backstop) is what ends this loop -- see local_pty_close(). */
     }
 
     EnterCriticalSection(&p->cs);
@@ -398,6 +405,14 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
     }
 
     envblock = build_env_block(spec);
+    if (!envblock) {
+        /* GetEnvironmentStringsW or an allocation inside it failed: the
+         * child inherits our own environment block verbatim (CreateProcessW
+         * with a NULL environment does that), so spec->env's additions never
+         * reach it. Not fatal -- worth one line in the debug log the first
+         * time poll() runs, so it is recorded rather than silently dropped. */
+        p->env_inherited = 1;
+    }
 
     {
         SIZE_T attr_size = 0;
@@ -492,6 +507,13 @@ int local_pty_poll(void *ctx, Terminal *term, FILE *log_file, FILE *debug_log)
     LocalPty *p = (LocalPty *)ctx;
     if (!p || !term) return -1;
 
+    if (p->env_inherited && debug_log) {
+        fputs("[nutshell: could not build the shell environment; "
+              "parent block inherited]\n", debug_log);
+        fflush(debug_log);
+        p->env_inherited = 0;
+    }
+
     char buf[LOCAL_PTY_READ_CHUNK];
     size_t total = 0u;
     int ring_done = 0;
@@ -521,10 +543,15 @@ int local_pty_poll(void *ctx, Terminal *term, FILE *log_file, FILE *debug_log)
 
     if (total > 0u) return 1;
 
-    /* EOF once the reader has seen the end AND the ring is empty, or once
-     * the child is gone and nothing is left to hand over. */
+    /* EOF once the reader has seen the end AND the ring is empty. The
+     * process handle being signalled is not by itself EOF -- a grandchild
+     * can keep the pseudo-console's pipe (and so the reader) alive well
+     * after the shell itself has exited (spec section 3, "Close"). The
+     * fallback below only steps in once the READER thread itself is known
+     * to have returned, which happens only after ReadFile has failed or
+     * returned 0. */
     if (ring_done) return -2;
-    if (p->proc && WaitForSingleObject(p->proc, 0) == WAIT_OBJECT_0) {
+    if (p->reader && WaitForSingleObject(p->reader, 0) == WAIT_OBJECT_0) {
         EnterCriticalSection(&p->cs);
         int empty = (pty_ring_available(&p->ring) == 0u);
         LeaveCriticalSection(&p->cs);
@@ -545,7 +572,7 @@ int local_pty_write(void *ctx, const char *data, size_t len)
     if (!p || !p->in_write || !data) return -1;
     if (len == 0u) return 0;
 
-    p->wrote_anything = 1;
+    InterlockedExchange(&p->wrote_anything, 1);
 
     size_t off = 0u;
     while (off < len) {
@@ -592,34 +619,42 @@ int local_pty_resize(void *ctx, int cols, int rows)
 
 /* The order matters and is the spec's (section 3, "Close"):
  *
- *   ClosePseudoConsole   ends conhost, which closes the pipe and unblocks a
- *                        well-behaved reader
- *   close our handles    unblocks it even when the tree is not well behaved
- *   CancelSynchronousIo  unblocks a ReadFile that somehow survived both
- *   wait 500 ms          for the child; TerminateProcess if it is still alive
- *   wait 500 ms          for the reader; detach it if it still has not returned
+ *   (a) ClosePseudoConsole  ends conhost, which closes the pipe and unblocks
+ *                           a well-behaved reader
+ *   (b) CancelSynchronousIo unblocks a ReadFile that survived (a) -- conhost
+ *                           gone but a grandchild still holding the pipe
+ *   (c) wait 500 ms for the child process; TerminateProcess if still alive;
+ *       close the process handle
+ *   (d) wait 500 ms for the reader thread
  *
- * Detaching means leaking this LocalPty: the thread still holds the pointer,
- * and freeing the ring and the critical section under it would be a
- * use-after-free in exchange for a few hundred bytes. A bounded leak on a
- * path that should never be taken is the right trade; blocking the UI thread
- * for ever is not.
+ * Only once the reader is confirmed to have returned (d) are in_write and
+ * out_read closed, along with everything else. Closing a handle while
+ * another thread may still be blocked in a syscall on it invites handle
+ * reuse -- a later CreateFile/CreatePipe elsewhere in the process could be
+ * handed that same handle value while the reader still thinks it owns it.
+ * So when the reader has NOT returned within its 500 ms, this detaches
+ * instead: close only the reader thread handle (harmless -- nothing waits
+ * on it again), leave in_write and out_read open (the reader, wherever it
+ * is stuck, still owns out_read; leaking two handles is cheaper than a
+ * reuse bug), and leak this LocalPty itself, since the thread still holds
+ * the pointer and freeing the ring or the critical section under it would
+ * be a use-after-free. A bounded leak on a path that should never be taken
+ * is the right trade; blocking the UI thread for ever is not.
  */
 void local_pty_close(void *ctx)
 {
     LocalPty *p = (LocalPty *)ctx;
     if (!p) return;
 
-    InterlockedExchange(&p->stop, 1);
-
+    /* (a) End conhost; unblocks a well-behaved reader on its own. */
     if (p->hpc && g_close_pcon) { g_close_pcon(p->hpc); p->hpc = NULL; }
     p->opened = 0;
 
-    if (p->in_write) { CloseHandle(p->in_write); p->in_write = NULL; }
-    if (p->out_read) { CloseHandle(p->out_read); p->out_read = NULL; }
-
+    /* (b) Unblocks a ReadFile that (a) alone did not -- e.g. a grandchild
+     * still holding the pseudo-console's write end of the pipe. */
     if (p->reader) CancelSynchronousIo(p->reader);
 
+    /* (c) The shell itself, bounded. */
     if (p->proc) {
         if (WaitForSingleObject(p->proc, LOCAL_PTY_CLOSE_WAIT) != WAIT_OBJECT_0)
             TerminateProcess(p->proc, 1);
@@ -627,9 +662,12 @@ void local_pty_close(void *ctx)
         p->proc = NULL;
     }
 
+    /* (d) The reader thread, bounded. */
     if (p->reader) {
         if (WaitForSingleObject(p->reader, LOCAL_PTY_CLOSE_WAIT) != WAIT_OBJECT_0) {
-            /* Detached: the thread outlives us. Leak deliberately. */
+            /* Detached: the thread outlives us. Close only the thread
+             * handle; in_write/out_read stay open and this LocalPty is
+             * leaked deliberately (see the block comment above). */
             CloseHandle(p->reader);
             p->reader = NULL;
             return;
@@ -637,6 +675,9 @@ void local_pty_close(void *ctx)
         CloseHandle(p->reader);
         p->reader = NULL;
     }
+
+    if (p->in_write) { CloseHandle(p->in_write); p->in_write = NULL; }
+    if (p->out_read) { CloseHandle(p->out_read); p->out_read = NULL; }
 
     DeleteCriticalSection(&p->cs);
     pty_ring_free(&p->ring);

@@ -451,8 +451,10 @@ static void on_tab_close(int index, void *user_data) {
     if (g_active_session == s) {
         g_active_session = NULL;
         /* The panel must not keep pointers into a session about to be freed. */
-        if (g_hwndAiChat && IsWindow(g_hwndAiChat))
+        if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
             ai_chat_set_session(g_hwndAiChat, NULL, NULL);
+            ai_chat_set_shell_name(g_hwndAiChat, NULL);
+        }
     }
 
     /* Notify AI chat before freeing so it can clear dangling pointers */
@@ -1512,7 +1514,8 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
             /* Re-populate password from config — it was zeroed after first auth */
             for (size_t i = 0; i < vec_size(&g_config->profiles); i++) {
                 const Profile *pr = (const Profile *)vec_get(&g_config->profiles, i);
-                if (strcmp(pr->host, s->conn_profile.host) == 0 &&
+                if (strcmp(pr->kind, s->conn_profile.kind) == 0 &&
+                    strcmp(pr->host, s->conn_profile.host) == 0 &&
                     strcmp(pr->username, s->conn_profile.username) == 0 &&
                     pr->port == s->conn_profile.port) {
                     memcpy(s->conn_profile.password, pr->password,
@@ -1745,6 +1748,7 @@ static void do_paste(HWND hwnd)
         g_paste.io_ctx    = g_active_session->io.ctx;
         g_paste.io_write  = g_active_session->io.write;
         g_paste.bracketed = bpm;
+        g_paste.local     = local_line_ends;
 
         if (bpm)
             g_active_session->io.write(g_active_session->io.ctx,
@@ -2619,6 +2623,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         int poll_rc = s->io.poll(s->io.ctx, s->term,
                                                       s->session_log,
                                                       s->debug_log);
+
+                        /* ConPTY never delivers a real pipe EOF just because
+                         * the shell exited -- conhost keeps the session
+                         * alive until ClosePseudoConsole runs (local_pty.c,
+                         * local_pty_close()), so local_pty_poll() correctly
+                         * never reports -2 for that by itself any more. A
+                         * local session's "disconnected" signal is instead
+                         * the shell process itself, watched here once this
+                         * tick's pending output (if any) has been drained. */
+                        if (poll_rc == 0 && s->io.kind == SESSION_LOCAL &&
+                            local_pty_child_exited((const LocalPty *)s->io.ctx)) {
+                            poll_rc = -2;
+                        }
+
                         if (poll_rc > 0) {
                             update_scrollbar(hwnd);
 
