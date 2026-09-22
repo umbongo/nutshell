@@ -4,7 +4,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include "term.h"
-#include "ssh_channel.h"
+#include "session_io.h"
 #include "ai_prompt.h"
 #include "chat_approval.h"
 
@@ -32,7 +32,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
  * session_name: profile name shown in the chat header (may be NULL). */
 void ai_chat_switch_session(HWND hwnd,
                             AiSessionState *new_state,
-                            Terminal *term, SSHChannel *channel,
+                            Terminal *term, SessionIo *io,
                             const char *session_notes,
                             const char *system_notes,
                             const char *session_name);
@@ -41,13 +41,16 @@ void ai_chat_switch_session(HWND hwnd,
  * Clears any internal pointers to the dying session's state. */
 void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state);
 
-/* Update the active session's terminal/channel pointers (without switching conversation). */
-void ai_chat_set_session(HWND hwnd, Terminal *term, SSHChannel *channel);
+/* Update the active session's terminal/transport pointers (without switching
+ * conversation). Pass io = NULL when the session has no live transport --
+ * window.c does this BEFORE closing a transport, so the panel never holds a
+ * freed ctx. */
+void ai_chat_set_session(HWND hwnd, Terminal *term, SessionIo *io);
 
 /* Force the empty/no-key/no-session state (an AiPanelStateId from
  * src/core/ai_panel_states.h), overriding the usual decision from
- * active_channel/api_key. -1 clears the override and returns to the
- * normal decision. --ui-demo only: the demo session has no channel, so
+ * active_io/api_key. -1 clears the override and returns to the
+ * normal decision. --ui-demo only: the demo session has no transport, so
  * without this every demo state would otherwise read as
  * AI_STATE_NO_SESSION whenever its conversation happens to be empty. */
 void ai_chat_force_state(HWND hwnd, int state_id);

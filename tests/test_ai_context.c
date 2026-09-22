@@ -280,7 +280,7 @@ int test_ai_system_prompt_with_notes(void) {
     char buf[4096];
     ai_build_system_prompt(buf, sizeof(buf), "$ ls\nfile.txt",
                            "Ubuntu 22.04 production DB server",
-                           "Be concise. Use sudo sparingly.");
+                           "Be concise. Use sudo sparingly.", SESSION_SSH, NULL);
     /* Base prompt present */
     ASSERT_TRUE(strstr(buf, "AI assistant") != NULL);
     /* System notes present */
@@ -298,7 +298,7 @@ int test_ai_system_prompt_notes_null(void) {
     TEST_BEGIN();
     char buf[4096];
     /* NULL notes should work fine */
-    ai_build_system_prompt(buf, sizeof(buf), "$ whoami", NULL, NULL);
+    ai_build_system_prompt(buf, sizeof(buf), "$ whoami", NULL, NULL, SESSION_SSH, NULL);
     ASSERT_TRUE(strstr(buf, "AI assistant") != NULL);
     ASSERT_TRUE(strstr(buf, "$ whoami") != NULL);
     /* No notes sections */
@@ -306,7 +306,7 @@ int test_ai_system_prompt_notes_null(void) {
     ASSERT_TRUE(strstr(buf, "About this server") == NULL);
 
     /* Empty string notes should also be skipped */
-    ai_build_system_prompt(buf, sizeof(buf), NULL, "", "");
+    ai_build_system_prompt(buf, sizeof(buf), NULL, "", "", SESSION_SSH, NULL);
     ASSERT_TRUE(strstr(buf, "AI assistant") != NULL);
     ASSERT_TRUE(strstr(buf, "system-wide") == NULL);
     TEST_END();
