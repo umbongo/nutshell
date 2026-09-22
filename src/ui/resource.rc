@@ -23,29 +23,38 @@ BEGIN
 
     /* ---- Right column: connection form ---- */
 
-    LTEXT           "Name:",            -1,           198,  18,  35,   8
-    EDITTEXT        IDC_EDIT_NAME,                    237,  16, 281,  14, ES_AUTOHSCROLL
+    LTEXT           "Type:",            -1,           198,   4,  35,   8
+    COMBOBOX        IDC_COMBO_KIND,                   237,   2, 281,  40, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
-    LTEXT           "Host:",            -1,           198,  36,  35,   8
-    EDITTEXT        IDC_EDIT_HOST,                    237,  34, 202,  14, ES_AUTOHSCROLL
-    LTEXT           "Port:",            -1,           444,  36,  22,   8
-    EDITTEXT        IDC_EDIT_PORT,                    469,  34,  49,  14, ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Name:",            -1,           198,  22,  35,   8
+    EDITTEXT        IDC_EDIT_NAME,                    237,  20, 281,  14, ES_AUTOHSCROLL
 
-    LTEXT           "User:",            -1,           198,  54,  35,   8
-    EDITTEXT        IDC_EDIT_USER,                    237,  52, 281,  14, ES_AUTOHSCROLL
+    LTEXT           "Host:",            IDC_STATIC_HOST,198,  40,  35,   8
+    EDITTEXT        IDC_EDIT_HOST,                    237,  38, 202,  14, ES_AUTOHSCROLL
+    LTEXT           "Port:",            IDC_STATIC_PORT,444,  40,  22,   8
+    EDITTEXT        IDC_EDIT_PORT,                    469,  38,  49,  14, ES_AUTOHSCROLL | ES_NUMBER
 
-    LTEXT           "Auth:",            -1,           198,  72,  35,   8
-    COMBOBOX        IDC_COMBO_AUTH,                   237,  70, 281,  40, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "User:",            IDC_STATIC_USER,198,  58,  35,   8
+    EDITTEXT        IDC_EDIT_USER,                    237,  56, 281,  14, ES_AUTOHSCROLL
 
-    LTEXT           "Platform:",        -1,           198,  92,  45,   8
-    COMBOBOX        IDC_COMBO_PLATFORM,               237,  90, 281, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Auth:",            IDC_STATIC_AUTH,198,  76,  35,   8
+    COMBOBOX        IDC_COMBO_AUTH,                   237,  74, 281,  40, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
-    RTEXT           "Password:",        -1,           181, 112,  52,   8
-    EDITTEXT        IDC_EDIT_PASS,                    237, 110, 281,  14, ES_PASSWORD | ES_AUTOHSCROLL
+    LTEXT           "Platform:",        -1,           198,  94,  45,   8
+    COMBOBOX        IDC_COMBO_PLATFORM,               237,  92, 281, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
-    LTEXT           "Key:",             IDC_STATIC_KEY,198, 132,  35,   8
-    EDITTEXT        IDC_EDIT_KEYPATH,                 237, 130, 259,  14, ES_AUTOHSCROLL
-    PUSHBUTTON      "...", IDC_BTN_BROWSE_KEY,        498, 130,  20,  14
+    RTEXT           "Password:",        IDC_STATIC_PASS,181, 114,  52,   8
+    EDITTEXT        IDC_EDIT_PASS,                    237, 112, 281,  14, ES_PASSWORD | ES_AUTOHSCROLL
+
+    LTEXT           "Key:",             IDC_STATIC_KEY,198, 134,  35,   8
+    EDITTEXT        IDC_EDIT_KEYPATH,                 237, 132, 259,  14, ES_AUTOHSCROLL
+    PUSHBUTTON      "...", IDC_BTN_BROWSE_KEY,        498, 132,  20,  14
+
+    /* Local only: occupies the space Host/Port/User/Auth vacate.  Declared
+     * last so it z-orders on top of the rows above; the two sets are never
+     * visible at the same time (see toggle_kind_fields in session_manager.c). */
+    LTEXT           "Shell command (blank = automatic):", IDC_STATIC_SHELL, 198, 40, 160, 8
+    EDITTEXT        IDC_EDIT_SHELL,                   198,  52, 320,  14, ES_AUTOHSCROLL
 
     RTEXT           "AI Notes:",        -1,           191, 153,  42,   8
     EDITTEXT        IDC_EDIT_AI_NOTES,                237, 150, 267, 117, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN

@@ -151,6 +151,7 @@ Profile *config_profile_new(void)
     Profile *p = xcalloc(1u, sizeof(Profile));
     p->port      = 22;
     p->auth_type = AUTH_PASSWORD;
+    field_copy(p->kind, sizeof(p->kind), "ssh");
     field_copy(p->platform, sizeof(p->platform), "auto");
     return p;
 }
@@ -368,6 +369,11 @@ Config *config_load(const char *path)
             if ((sv = json_obj_str(jp, "name"))) {
                 field_copy(pr->name, sizeof(pr->name), sv);
             }
+            /* Missing key (older config) keeps the "ssh" default that
+             * config_profile_new() already set. */
+            if ((sv = json_obj_str(jp, "kind"))) {
+                field_copy(pr->kind, sizeof(pr->kind), sv);
+            }
             if ((sv = json_obj_str(jp, "host"))) {
                 field_copy(pr->host, sizeof(pr->host), sv);
             }
@@ -395,6 +401,9 @@ Config *config_load(const char *path)
             }
             if ((sv = json_obj_str(jp, "key_path"))) {
                 field_copy(pr->key_path, sizeof(pr->key_path), sv);
+            }
+            if ((sv = json_obj_str(jp, "shell"))) {
+                field_copy(pr->shell, sizeof(pr->shell), sv);
             }
             if ((sv = json_obj_str(jp, "ai_notes"))) {
                 field_copy(pr->ai_notes, sizeof(pr->ai_notes), sv);
@@ -528,6 +537,9 @@ int config_save(const Config *cfg, const char *path)
         fputs("      \"name\": ", f);
         fprint_json_str(f, pr->name);
         fputs(",\n", f);
+        fputs("      \"kind\": ", f);
+        fprint_json_str(f, pr->kind);
+        fputs(",\n", f);
         fputs("      \"host\": ", f);
         fprint_json_str(f, pr->host);
         fputs(",\n", f);
@@ -551,6 +563,9 @@ int config_save(const Config *cfg, const char *path)
         fputs(",\n", f);
         fputs("      \"key_path\": ", f);
         fprint_json_str(f, pr->key_path);
+        fputs(",\n", f);
+        fputs("      \"shell\": ", f);
+        fprint_json_str(f, pr->shell);
         fputs(",\n", f);
         fputs("      \"ai_notes\": ", f);
         fprint_json_str(f, pr->ai_notes);
@@ -620,4 +635,24 @@ Profile *config_find_profile_by_host(const Config *cfg, const char *host)
         }
     }
     return NULL;
+}
+
+int config_ensure_local_profile(Config *cfg)
+{
+    if (!cfg) {
+        return 0;
+    }
+    size_t n = vec_size(&cfg->profiles);
+    for (size_t i = 0u; i < n; i++) {
+        Profile *p = (Profile *)vec_get(&cfg->profiles, i);
+        if (p && strcmp(p->kind, "local") == 0) {
+            return 0;
+        }
+    }
+
+    Profile *p = config_profile_new();
+    field_copy(p->name, sizeof(p->name), "Local shell");
+    field_copy(p->kind, sizeof(p->kind), "local");
+    vec_insert(&cfg->profiles, 0u, p);
+    return 1;
 }

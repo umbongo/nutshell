@@ -112,9 +112,11 @@ static void form_clear(HWND hwnd)
     SetDlgItemTextA(hwnd, IDC_EDIT_USER,    "");
     SetDlgItemTextA(hwnd, IDC_EDIT_PASS,    "");
     SetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, "");
+    SetDlgItemTextA(hwnd, IDC_EDIT_SHELL,   "");
     SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, "");
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL, 0, 0);
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_PLATFORM), CB_SETCURSEL, 0, 0);
+    SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND), CB_SETCURSEL, 0, 0);
 }
 
 /* Populate form fields from an existing profile. */
@@ -126,9 +128,12 @@ static void form_load(HWND hwnd, const Profile *pr)
     SetDlgItemTextA(hwnd, IDC_EDIT_USER,    pr->username);
     SetDlgItemTextA(hwnd, IDC_EDIT_PASS,    pr->password);
     SetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, pr->key_path);
+    SetDlgItemTextA(hwnd, IDC_EDIT_SHELL,   pr->shell);
     SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, pr->ai_notes);
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL,
                 pr->auth_type == AUTH_KEY ? 1 : 0, 0);
+    SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND), CB_SETCURSEL,
+                strcmp(pr->kind, "local") == 0 ? 1 : 0, 0);
 
     /* Select the dropdown row whose config token matches the profile's
      * platform string; fall back to row 0 (Auto-detect) for "auto", an
@@ -160,6 +165,59 @@ static void toggle_auth_fields(HWND hwnd)
     SendMessage(GetDlgItem(hwnd, IDC_EDIT_PASS), EM_SETCUEBANNER, 0,
                 (LPARAM)(is_key ? L"Key passphrase (leave blank if none)"
                                 : L"Password"));
+}
+
+/* Show/hide the SSH connection rows vs. the Local shell command row based
+ * on the Type combo's selection. Never leave focus in a control being
+ * hidden. */
+static void toggle_kind_fields(HWND hwnd)
+{
+    int  idx      = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND),
+                                     CB_GETCURSEL, 0, 0);
+    BOOL is_local = (idx == 1);
+
+    static const int ssh_ids[] = {
+        IDC_STATIC_HOST, IDC_EDIT_HOST, IDC_STATIC_PORT, IDC_EDIT_PORT,
+        IDC_STATIC_USER, IDC_EDIT_USER, IDC_STATIC_AUTH, IDC_COMBO_AUTH,
+        IDC_STATIC_PASS, IDC_EDIT_PASS, IDC_STATIC_KEY, IDC_EDIT_KEYPATH,
+        IDC_BTN_BROWSE_KEY
+    };
+    static const int shell_ids[] = { IDC_STATIC_SHELL, IDC_EDIT_SHELL };
+
+    const int *hide_ids = is_local ? ssh_ids   : shell_ids;
+    int        hide_n   = is_local ? (int)(sizeof(ssh_ids)/sizeof(ssh_ids[0]))
+                                    : (int)(sizeof(shell_ids)/sizeof(shell_ids[0]));
+
+    HWND hFocus = GetFocus();
+    for (int i = 0; i < hide_n; i++) {
+        HWND hCtl = GetDlgItem(hwnd, hide_ids[i]);
+        if (hCtl && hFocus == hCtl) {
+            SetFocus(GetDlgItem(hwnd, IDC_EDIT_NAME));
+            hFocus = NULL;
+        }
+    }
+
+    if (is_local) {
+        for (int i = 0; i < hide_n; i++)
+            ShowWindow(GetDlgItem(hwnd, ssh_ids[i]), SW_HIDE);
+        ShowWindow(GetDlgItem(hwnd, IDC_STATIC_SHELL), SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_EDIT_SHELL),   SW_SHOW);
+    } else {
+        ShowWindow(GetDlgItem(hwnd, IDC_STATIC_SHELL), SW_HIDE);
+        ShowWindow(GetDlgItem(hwnd, IDC_EDIT_SHELL),   SW_HIDE);
+        ShowWindow(GetDlgItem(hwnd, IDC_STATIC_HOST),  SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_EDIT_HOST),    SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_STATIC_PORT),  SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_EDIT_PORT),    SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_STATIC_USER),  SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_EDIT_USER),    SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_STATIC_AUTH),  SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_COMBO_AUTH),   SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_STATIC_PASS),  SW_SHOW);
+        ShowWindow(GetDlgItem(hwnd, IDC_EDIT_PASS),    SW_SHOW);
+        /* Key row's own visibility rule (key auth only) wins. */
+        toggle_auth_fields(hwnd);
+    }
 }
 
 /* Sync the AI notes edit control's scroll state to the custom scrollbar. */
@@ -202,11 +260,34 @@ static void list_sync_scroll(HWND hwnd, SessMgrState *st)
  */
 static int form_read(HWND hwnd, Profile *pr)
 {
+    int kind_idx  = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND),
+                                     CB_GETCURSEL, 0, 0);
+    BOOL is_local = (kind_idx == 1);
+
+    GetDlgItemTextA(hwnd, IDC_EDIT_NAME, pr->name, sizeof(pr->name));
+
+    if (is_local) {
+        snprintf(pr->kind, sizeof(pr->kind), "%s", "local");
+        GetDlgItemTextA(hwnd, IDC_EDIT_SHELL, pr->shell, sizeof(pr->shell));
+        GetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, pr->ai_notes, sizeof(pr->ai_notes));
+
+        int plat_idx = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_PLATFORM),
+                                        CB_GETCURSEL, 0, 0);
+        const char *plat_tok = cmd_platform_choice_name(plat_idx);
+        snprintf(pr->platform, sizeof(pr->platform), "%s", plat_tok ? plat_tok : "auto");
+
+        pr->port      = 22;
+        pr->auth_type = AUTH_PASSWORD;
+        return 1;
+    }
+
+    snprintf(pr->kind, sizeof(pr->kind), "%s", "ssh");
+    pr->shell[0] = '\0';
+
     GetDlgItemTextA(hwnd, IDC_EDIT_HOST, pr->host, sizeof(pr->host));
     if (pr->host[0] == '\0') {
         return 0;
     }
-    GetDlgItemTextA(hwnd, IDC_EDIT_NAME,    pr->name,     sizeof(pr->name));
     GetDlgItemTextA(hwnd, IDC_EDIT_USER,    pr->username, sizeof(pr->username));
     GetDlgItemTextA(hwnd, IDC_EDIT_PASS,    pr->password, sizeof(pr->password));
     GetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, pr->key_path, sizeof(pr->key_path));
@@ -245,6 +326,15 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         SendMessageA(hCombo, CB_ADDSTRING, 0, (LPARAM)"Password");
         SendMessageA(hCombo, CB_ADDSTRING, 0, (LPARAM)"SSH Key");
         SendMessage (hCombo, CB_SETCURSEL, 0, 0);
+
+        /* Session type: SSH (default) or Local shell */
+        HWND hKind = GetDlgItem(hwnd, IDC_COMBO_KIND);
+        SendMessageA(hKind, CB_ADDSTRING, 0, (LPARAM)"SSH");
+        SendMessageA(hKind, CB_ADDSTRING, 0, (LPARAM)"Local shell");
+        SendMessage (hKind, CB_SETCURSEL, 0, 0);
+
+        SendMessage(GetDlgItem(hwnd, IDC_EDIT_SHELL), EM_SETCUEBANNER, 0,
+                    (LPARAM)L"e.g. \"C:\\Program Files\\Git\\bin\\bash.exe\" --login -i");
 
         /* Device platform: populated entirely from cmd_classify's table, so
          * adding a vendor later touches one place there and nothing here. */
@@ -350,6 +440,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
 
         list_rebuild(GetDlgItem(hwnd, IDC_LIST_SESSIONS), st->cfg);
         form_clear(hwnd);
+        toggle_kind_fields(hwnd);
         toggle_auth_fields(hwnd);
         return TRUE;
     }
@@ -361,6 +452,12 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         /* Auth combo changed */
         if (id == IDC_COMBO_AUTH && ntf == CBN_SELCHANGE) {
             toggle_auth_fields(hwnd);
+            return TRUE;
+        }
+
+        /* Session type combo changed */
+        if (id == IDC_COMBO_KIND && ntf == CBN_SELCHANGE) {
+            toggle_kind_fields(hwnd);
             return TRUE;
         }
 
@@ -376,6 +473,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                     form_load(hwnd,
                         (const Profile *)vec_get(&st->cfg->profiles,
                                                  (size_t)sel));
+                    toggle_kind_fields(hwnd);
                     toggle_auth_fields(hwnd);
                 }
                 return TRUE;
@@ -400,6 +498,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             SendMessage(GetDlgItem(hwnd, IDC_LIST_SESSIONS),
                         LB_SETCURSEL, (WPARAM)-1, 0);
             form_clear(hwnd);
+            toggle_kind_fields(hwnd);
             toggle_auth_fields(hwnd);
             SetFocus(GetDlgItem(hwnd, IDC_EDIT_NAME));
             return TRUE;
@@ -417,6 +516,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                 form_load(hwnd,
                     (const Profile *)vec_get(&st->cfg->profiles,
                                              (size_t)sel));
+                toggle_kind_fields(hwnd);
                 toggle_auth_fields(hwnd);
                 SetFocus(GetDlgItem(hwnd, IDC_EDIT_NAME));
             }
@@ -448,6 +548,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             list_rebuild(hList, st->cfg);
             st->edit_idx = -1;
             form_clear(hwnd);
+            toggle_kind_fields(hwnd);
             toggle_auth_fields(hwnd);
             return TRUE;
         }

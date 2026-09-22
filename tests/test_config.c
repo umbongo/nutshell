@@ -1383,3 +1383,262 @@ int test_config_profile_platform_garbage_maps_unknown(void)
     TEST_END();
 }
 
+/* ============================================================
+ * Profile kind / shell (local shell design, section 5)
+ * ============================================================ */
+
+int test_config_profile_new_defaults_kind_ssh_shell_empty(void)
+{
+    TEST_BEGIN();
+    Profile *p = config_profile_new();
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->kind, "ssh");
+    ASSERT_STR_EQ(p->shell, "");
+    config_profile_free(p);
+    TEST_END();
+}
+
+int test_config_profile_kind_missing_defaults_to_ssh(void)
+{
+    TEST_BEGIN();
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs("{\"settings\": {}, \"profiles\": ["
+          "{\"name\": \"Old Box\", \"host\": \"old.example.com\"}"
+          "]}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ((int)vec_size(&cfg->profiles), 1);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0u);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->kind, "ssh");
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_profile_kind_local_allows_empty_host_user_password(void)
+{
+    TEST_BEGIN();
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs("{\"settings\": {}, \"profiles\": ["
+          "{\"name\": \"Local shell\", \"kind\": \"local\", "
+          "\"host\": \"\", \"username\": \"\", \"password\": \"\"}"
+          "]}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ((int)vec_size(&cfg->profiles), 1);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0u);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->kind, "local");
+    ASSERT_STR_EQ(p->host, "");
+    ASSERT_STR_EQ(p->username, "");
+    ASSERT_STR_EQ(p->password, "");
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_profile_shell_roundtrip_with_backslashes_and_spaces(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+
+    Profile *p = config_profile_new();
+    (void)snprintf(p->name, sizeof(p->name), "%s", "Local shell");
+    (void)snprintf(p->kind, sizeof(p->kind), "%s", "local");
+    (void)snprintf(p->shell, sizeof(p->shell), "%s",
+                   "C:\\Program Files\\Git\\bin\\bash.exe --login -i");
+    vec_push(&orig->profiles, p);
+
+    int rc = config_save(orig, TMP_CFG);
+    ASSERT_EQ(rc, 0);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_EQ((int)vec_size(&loaded->profiles), 1);
+    Profile *lp = (Profile *)vec_get(&loaded->profiles, 0u);
+    ASSERT_NOT_NULL(lp);
+    ASSERT_STR_EQ(lp->shell, "C:\\Program Files\\Git\\bin\\bash.exe --login -i");
+
+    config_free(orig);
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_profile_kind_shell_roundtrip_multiple_profiles(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+
+    Profile *a = config_profile_new();
+    (void)snprintf(a->name, sizeof(a->name), "%s", "Server A");
+    (void)snprintf(a->host, sizeof(a->host), "%s", "a.example.com");
+    vec_push(&orig->profiles, a);
+
+    Profile *b = config_profile_new();
+    (void)snprintf(b->name, sizeof(b->name), "%s", "Local shell");
+    (void)snprintf(b->kind, sizeof(b->kind), "%s", "local");
+    (void)snprintf(b->shell, sizeof(b->shell), "%s", "/bin/zsh -l");
+    vec_push(&orig->profiles, b);
+
+    Profile *c = config_profile_new();
+    (void)snprintf(c->name, sizeof(c->name), "%s", "Server C");
+    (void)snprintf(c->host, sizeof(c->host), "%s", "c.example.com");
+    vec_push(&orig->profiles, c);
+
+    int rc = config_save(orig, TMP_CFG);
+    ASSERT_EQ(rc, 0);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_EQ((int)vec_size(&loaded->profiles), 3);
+
+    Profile *la = (Profile *)vec_get(&loaded->profiles, 0u);
+    Profile *lb = (Profile *)vec_get(&loaded->profiles, 1u);
+    Profile *lc = (Profile *)vec_get(&loaded->profiles, 2u);
+    ASSERT_NOT_NULL(la);
+    ASSERT_NOT_NULL(lb);
+    ASSERT_NOT_NULL(lc);
+    ASSERT_STR_EQ(la->kind, "ssh");
+    ASSERT_STR_EQ(la->shell, "");
+    ASSERT_STR_EQ(lb->kind, "local");
+    ASSERT_STR_EQ(lb->shell, "/bin/zsh -l");
+    ASSERT_STR_EQ(lc->kind, "ssh");
+    ASSERT_STR_EQ(lc->shell, "");
+
+    config_free(orig);
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * config_ensure_local_profile
+ * ============================================================ */
+
+int test_config_ensure_local_profile_inserts_when_absent(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_NOT_NULL(cfg);
+    Profile *first = config_profile_new();
+    (void)snprintf(first->name, sizeof(first->name), "%s", "Server A");
+    (void)snprintf(first->host, sizeof(first->host), "%s", "a.example.com");
+    vec_push(&cfg->profiles, first);
+
+    int rc = config_ensure_local_profile(cfg);
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ((int)vec_size(&cfg->profiles), 2);
+
+    Profile *p0 = (Profile *)vec_get(&cfg->profiles, 0u);
+    ASSERT_NOT_NULL(p0);
+    ASSERT_STR_EQ(p0->name, "Local shell");
+    ASSERT_STR_EQ(p0->kind, "local");
+    ASSERT_STR_EQ(p0->shell, "");
+
+    Profile *p1 = (Profile *)vec_get(&cfg->profiles, 1u);
+    ASSERT_EQ(p1, first);
+    ASSERT_STR_EQ(p1->name, "Server A");
+
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_config_ensure_local_profile_second_call_is_noop(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_NOT_NULL(cfg);
+
+    ASSERT_EQ(config_ensure_local_profile(cfg), 1);
+    ASSERT_EQ((int)vec_size(&cfg->profiles), 1);
+    ASSERT_EQ(config_ensure_local_profile(cfg), 0);
+    ASSERT_EQ((int)vec_size(&cfg->profiles), 1);
+
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_config_ensure_local_profile_noop_when_local_already_first(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_NOT_NULL(cfg);
+    Profile *local = config_profile_new();
+    (void)snprintf(local->name, sizeof(local->name), "%s", "Local shell");
+    (void)snprintf(local->kind, sizeof(local->kind), "%s", "local");
+    vec_push(&cfg->profiles, local);
+
+    int rc = config_ensure_local_profile(cfg);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ((int)vec_size(&cfg->profiles), 1);
+
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_config_ensure_local_profile_noop_when_local_at_end(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_NOT_NULL(cfg);
+    Profile *a = config_profile_new();
+    (void)snprintf(a->name, sizeof(a->name), "%s", "Server A");
+    vec_push(&cfg->profiles, a);
+    Profile *local = config_profile_new();
+    (void)snprintf(local->name, sizeof(local->name), "%s", "My Terminal");
+    (void)snprintf(local->kind, sizeof(local->kind), "%s", "local");
+    vec_push(&cfg->profiles, local);
+
+    int rc = config_ensure_local_profile(cfg);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ((int)vec_size(&cfg->profiles), 2);
+
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_config_ensure_local_profile_null(void)
+{
+    TEST_BEGIN();
+    int rc = config_ensure_local_profile(NULL);
+    ASSERT_EQ(rc, 0);
+    TEST_END();
+}
+
+int test_config_ensure_local_profile_survives_save_load_roundtrip(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_NOT_NULL(cfg);
+    Profile *a = config_profile_new();
+    (void)snprintf(a->name, sizeof(a->name), "%s", "Server A");
+    (void)snprintf(a->host, sizeof(a->host), "%s", "a.example.com");
+    vec_push(&cfg->profiles, a);
+
+    ASSERT_EQ(config_ensure_local_profile(cfg), 1);
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_EQ((int)vec_size(&loaded->profiles), 2);
+    Profile *lp0 = (Profile *)vec_get(&loaded->profiles, 0u);
+    ASSERT_NOT_NULL(lp0);
+    ASSERT_STR_EQ(lp0->name, "Local shell");
+    ASSERT_STR_EQ(lp0->kind, "local");
+
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+

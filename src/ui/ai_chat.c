@@ -214,6 +214,10 @@ typedef struct {
     /* Active session references */
     Terminal   *active_term;
     SessionIo  *active_io;   /* transport of the active session, or NULL */
+    /* Local sessions only: the shell the resolver picked, as
+     * ai_build_system_prompt() names it. Empty means "not a local shell" --
+     * for an SSH session, and for a local one before window.c has set it. */
+    char        shell_name[32];
 
     /* Background thread */
     CRITICAL_SECTION cs;
@@ -370,6 +374,14 @@ typedef struct {
 static SessionKind active_session_kind(const AiChatData *d)
 {
     return (d && d->active_io) ? d->active_io->kind : SESSION_SSH;
+}
+
+/* The shell name that goes with that kind: NULL unless a local session has
+ * actually told us which shell it is, in which case
+ * ai_build_system_prompt() names it instead of listing the possibilities. */
+static const char *active_shell_name(const AiChatData *d)
+{
+    return (d && d->shell_name[0]) ? d->shell_name : NULL;
 }
 
 /* Helper: check if the currently active session has a busy AI stream */
@@ -1530,7 +1542,7 @@ static void send_user_message(AiChatData *d)
         size_t sys_prompt_cap = d->ctx_prompt_cap;
         ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
                                d->session_notes, d->system_notes,
-                               active_session_kind(d), NULL);
+                               active_session_kind(d), active_shell_name(d));
         /* Append tool descriptions if tools are registered and provider supports them */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
@@ -1557,7 +1569,7 @@ static void send_user_message(AiChatData *d)
         size_t sys_prompt_cap = d->ctx_prompt_cap;
         ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
                                d->session_notes, d->system_notes,
-                               active_session_kind(d), NULL);
+                               active_session_kind(d), active_shell_name(d));
         /* Append tool descriptions */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
@@ -1672,7 +1684,7 @@ static void send_continue_message(AiChatData *d, const char *msg_text)
         size_t sys_prompt_cap = d->ctx_prompt_cap;
         ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
                                d->session_notes, d->system_notes,
-                               active_session_kind(d), NULL);
+                               active_session_kind(d), active_shell_name(d));
         ai_conv_set_system(&d->conv, sys_prompt);
     }
 
@@ -4289,6 +4301,15 @@ void ai_chat_set_session(HWND hwnd, Terminal *term, SessionIo *io)
     d->active_term = term;
     d->active_io = io;
     update_panel_state(d);
+}
+
+void ai_chat_set_shell_name(HWND hwnd, const char *shell_name)
+{
+    if (!hwnd) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    (void)snprintf(d->shell_name, sizeof(d->shell_name), "%s",
+                   shell_name ? shell_name : "");
 }
 
 void ai_chat_force_state(HWND hwnd, int state_id)

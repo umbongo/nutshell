@@ -9,6 +9,7 @@ static const char USAGE[] =
     "  -sn, --session-name <name>   Connect to the saved session with this name\n"
     "  -h,  --host <host>           Connect to the saved session with this host\n"
     "  -nc, --no-connect            Start without auto-connecting\n"
+    "       --local                 Open a local shell instead of connecting by SSH\n"
     "  -l,  --list                  List saved sessions\n"
     "  -v,  --version               Show version\n"
     "  -?,  --help                  Show this help\n";
@@ -80,6 +81,8 @@ void cli_parse(int argc, char **argv, CliOptions *out)
             (void)snprintf(out->theme, sizeof(out->theme), "%s", value);
             theme_seen = 1;
             continue; /* --theme is a modifier, not a mutually-exclusive action */
+        } else if (flag_eq(a, "--local", "--local")) {
+            act = CLI_CONNECT_LOCAL;
         } else if (flag_eq(a, "-sn", "--session-name")) {
             act = CLI_CONNECT_NAME;
             takes_value = 1;
