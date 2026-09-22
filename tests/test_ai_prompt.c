@@ -500,7 +500,7 @@ int test_ai_extract_commands_ex_embedded_newline_rejected(void) {
     const char *resp = "[EXEC]echo ok\nrm -rf ~[/EXEC]";
     char cmds[16][1024];
     int rejected = -1;
-    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, NULL);
     ASSERT_EQ(n, 0);
     ASSERT_EQ(rejected, 1);
     TEST_END();
@@ -511,7 +511,7 @@ int test_ai_extract_commands_ex_embedded_tab_rejected(void) {
     const char *resp = "[EXEC]echo ok\trm -rf ~[/EXEC]";
     char cmds[16][1024];
     int rejected = -1;
-    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, NULL);
     ASSERT_EQ(n, 0);
     ASSERT_EQ(rejected, 1);
     TEST_END();
@@ -522,7 +522,7 @@ int test_ai_extract_commands_ex_embedded_esc_rejected(void) {
     const char *resp = "[EXEC]echo ok\x1brm -rf ~[/EXEC]";
     char cmds[16][1024];
     int rejected = -1;
-    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, NULL);
     ASSERT_EQ(n, 0);
     ASSERT_EQ(rejected, 1);
     TEST_END();
@@ -533,7 +533,7 @@ int test_ai_extract_commands_ex_embedded_del_rejected(void) {
     const char *resp = "[EXEC]echo ok\x7frm -rf ~[/EXEC]";
     char cmds[16][1024];
     int rejected = -1;
-    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, NULL);
     ASSERT_EQ(n, 0);
     ASSERT_EQ(rejected, 1);
     TEST_END();
@@ -544,7 +544,7 @@ int test_ai_extract_commands_ex_clean_block_still_extracts(void) {
     const char *resp = "[EXEC]ls -la[/EXEC]";
     char cmds[16][1024];
     int rejected = -1;
-    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, NULL);
     ASSERT_EQ(n, 1);
     ASSERT_EQ(rejected, 0);
     ASSERT_STR_EQ(cmds[0], "ls -la");
@@ -559,7 +559,7 @@ int test_ai_extract_commands_ex_only_second_bad(void) {
     const char *resp = "[EXEC]df -h[/EXEC][EXEC]echo ok\nrm -rf ~[/EXEC]";
     char cmds[16][1024];
     int rejected = -1;
-    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, NULL);
     ASSERT_EQ(n, 1);
     ASSERT_EQ(rejected, 1);
     ASSERT_STR_EQ(cmds[0], "df -h");
@@ -574,7 +574,7 @@ int test_ai_extract_commands_ex_surrounding_newline_trimmed(void) {
     const char *resp = "[EXEC]\nls\n[/EXEC]";
     char cmds[16][1024];
     int rejected = -1;
-    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected);
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, NULL);
     ASSERT_EQ(n, 1);
     ASSERT_EQ(rejected, 0);
     ASSERT_STR_EQ(cmds[0], "ls");
@@ -587,9 +587,176 @@ int test_ai_extract_commands_ex_null_rejected_ok(void) {
      * itself) must not crash. */
     const char *resp = "[EXEC]echo ok\nrm -rf ~[/EXEC][EXEC]ls[/EXEC]";
     char cmds[16][1024];
-    int n = ai_extract_commands_ex(resp, cmds, 16, NULL);
+    int n = ai_extract_commands_ex(resp, cmds, 16, NULL, NULL);
     ASSERT_EQ(n, 1);
     ASSERT_STR_EQ(cmds[0], "ls");
+    TEST_END();
+}
+
+/* ---- section 1 of docs/superpowers/specs/2026-09-23-command-dispatch-
+ * states-design.md: an [EXEC] block too long for cmds[][1024] is skipped
+ * entirely, never truncated. ---- */
+
+int test_ai_extract_commands_ex_oversized_block_skipped_others_intact(void) {
+    TEST_BEGIN();
+    /* Built on the heap: a 5,000-byte payload, well past the 1023-byte
+     * limit, bracketed by two ordinary commands. This function also
+     * declares cmds[16][1024] (16KB already), so the big block goes on
+     * the heap rather than adding another large array to the stack. */
+    size_t huge_len = 5000;
+    size_t resp_cap = huge_len + 256;
+    char *resp = malloc(resp_cap);
+    ASSERT_NOT_NULL(resp);
+
+    size_t pos = 0;
+    pos += (size_t)snprintf(resp + pos, resp_cap - pos,
+                            "[EXEC]echo before[/EXEC][EXEC]");
+    memset(resp + pos, 'x', huge_len);
+    pos += huge_len;
+    resp[pos] = '\0';
+    pos += (size_t)snprintf(resp + pos, resp_cap - pos,
+                            "[/EXEC][EXEC]echo after[/EXEC]");
+
+    char cmds[16][1024];
+    int rejected = -1, rejected_long = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, &rejected_long);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(rejected, 0);
+    ASSERT_EQ(rejected_long, 1);
+    ASSERT_STR_EQ(cmds[0], "echo before");
+    ASSERT_STR_EQ(cmds[1], "echo after");
+
+    free(resp);
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_oversized_with_newline_counts_as_long_only(void) {
+    TEST_BEGIN();
+    /* A block that is BOTH over the 1024-byte limit AND contains an
+     * embedded control character (newline): the length check runs first
+     * and `continue`s past the block before the control-character check
+     * ever sees it, so it must count only as "too long" -- rejected_long
+     * == 1, rejected == 0, not both. */
+    size_t huge_len = 5000;
+    size_t resp_cap = huge_len + 64;
+    char *resp = malloc(resp_cap);
+    ASSERT_NOT_NULL(resp);
+
+    size_t pos = 0;
+    pos += (size_t)snprintf(resp + pos, resp_cap - pos, "[EXEC]line one\n");
+    memset(resp + pos, 'x', huge_len);
+    pos += huge_len;
+    resp[pos] = '\0';
+    pos += (size_t)snprintf(resp + pos, resp_cap - pos, "[/EXEC]");
+
+    char cmds[16][1024];
+    int rejected = -1, rejected_long = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, &rejected_long);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(rejected_long, 1);
+    ASSERT_EQ(rejected, 0);
+
+    free(resp);
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_exactly_1023_bytes_accepted(void) {
+    TEST_BEGIN();
+    /* CMD_MAX_LEN is 1023 (1024 minus the NUL) -- a block trimming down
+     * to exactly that many bytes must be accepted whole, not rejected as
+     * "too long". */
+    char payload[1024];
+    memset(payload, 'a', sizeof(payload) - 1);
+    payload[sizeof(payload) - 1] = '\0';
+    ASSERT_EQ((int)strlen(payload), 1023);
+
+    char resp[1024 + 32];
+    snprintf(resp, sizeof(resp), "[EXEC]%s[/EXEC]", payload);
+
+    char cmds[16][1024];
+    int rejected = -1, rejected_long = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, &rejected_long);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ(rejected, 0);
+    ASSERT_EQ(rejected_long, 0);
+    ASSERT_EQ((int)strlen(cmds[0]), 1023);
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_1024_bytes_skipped(void) {
+    TEST_BEGIN();
+    /* One byte over the limit: skipped, not truncated to 1023. */
+    char payload[1025];
+    memset(payload, 'b', sizeof(payload) - 1);
+    payload[sizeof(payload) - 1] = '\0';
+    ASSERT_EQ((int)strlen(payload), 1024);
+
+    char resp[1025 + 32];
+    snprintf(resp, sizeof(resp), "[EXEC]%s[/EXEC]", payload);
+
+    char cmds[16][1024];
+    int rejected = -1, rejected_long = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, &rejected_long);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(rejected, 0);
+    ASSERT_EQ(rejected_long, 1);
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_rejected_counters_independent(void) {
+    TEST_BEGIN();
+    /* One block with an embedded control character, one block too long --
+     * each must bump only its own counter, proving `rejected` and
+     * `rejected_long` are not the same tally under a different name. */
+    size_t huge_len = 2000;
+    size_t resp_cap = huge_len + 256;
+    char *resp = malloc(resp_cap);
+    ASSERT_NOT_NULL(resp);
+
+    size_t pos = 0;
+    pos += (size_t)snprintf(resp + pos, resp_cap - pos,
+                            "[EXEC]echo ok\nrm -rf ~[/EXEC][EXEC]");
+    memset(resp + pos, 'y', huge_len);
+    pos += huge_len;
+    resp[pos] = '\0';
+    pos += (size_t)snprintf(resp + pos, resp_cap - pos, "[/EXEC]");
+
+    char cmds[16][1024];
+    int rejected = -1, rejected_long = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, &rejected_long);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(rejected, 1);
+    ASSERT_EQ(rejected_long, 1);
+
+    free(resp);
+    TEST_END();
+}
+
+int test_ai_extract_commands_ex_both_out_params_null_safe(void) {
+    TEST_BEGIN();
+    /* A mix of a clean, a control-character, an oversized, and another
+     * clean block, with both out-parameters NULL -- must not crash and
+     * must still extract exactly the two clean commands, in order. */
+    size_t huge_len = 3000;
+    size_t resp_cap = huge_len + 256;
+    char *resp = malloc(resp_cap);
+    ASSERT_NOT_NULL(resp);
+
+    size_t pos = 0;
+    pos += (size_t)snprintf(resp + pos, resp_cap - pos,
+                            "[EXEC]ls[/EXEC][EXEC]echo ok\nrm -rf ~[/EXEC][EXEC]");
+    memset(resp + pos, 'z', huge_len);
+    pos += huge_len;
+    resp[pos] = '\0';
+    pos += (size_t)snprintf(resp + pos, resp_cap - pos, "[/EXEC][EXEC]pwd[/EXEC]");
+
+    char cmds[16][1024];
+    int n = ai_extract_commands_ex(resp, cmds, 16, NULL, NULL);
+    ASSERT_EQ(n, 2);
+    ASSERT_STR_EQ(cmds[0], "ls");
+    ASSERT_STR_EQ(cmds[1], "pwd");
+
+    free(resp);
     TEST_END();
 }
 
@@ -792,7 +959,7 @@ int test_ai_confirm_text_numbering(void) {
 int test_ai_continue_text_no_newer_exchanges_is_default(void) {
     TEST_BEGIN();
     char buf[512];
-    size_t n = ai_build_continue_text(0, NULL, buf, sizeof(buf));
+    size_t n = ai_build_continue_text(0, NULL, NULL, buf, sizeof(buf));
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "The commands above have been executed") != NULL);
     ASSERT_TRUE(strstr(buf, "earlier request") == NULL);
@@ -804,7 +971,7 @@ int test_ai_continue_text_no_newer_exchanges_ignores_first_cmd(void) {
     char buf[512];
     /* Even if first_cmd is supplied, newer_exchanges == 0 means unchanged
      * default text -- only newer_exchanges decides which message is used. */
-    size_t n = ai_build_continue_text(0, "ls -la", buf, sizeof(buf));
+    size_t n = ai_build_continue_text(0, "ls -la", NULL, buf, sizeof(buf));
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "The commands above have been executed") != NULL);
     TEST_END();
@@ -813,7 +980,7 @@ int test_ai_continue_text_no_newer_exchanges_ignores_first_cmd(void) {
 int test_ai_continue_text_newer_exchanges_names_batch(void) {
     TEST_BEGIN();
     char buf[512];
-    size_t n = ai_build_continue_text(1, "df -h", buf, sizeof(buf));
+    size_t n = ai_build_continue_text(1, "df -h", NULL, buf, sizeof(buf));
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "earlier request") != NULL);
     ASSERT_TRUE(strstr(buf, "df -h") != NULL);
@@ -824,7 +991,7 @@ int test_ai_continue_text_newer_exchanges_names_batch(void) {
 int test_ai_continue_text_newer_exchanges_multiple(void) {
     TEST_BEGIN();
     char buf[512];
-    size_t n = ai_build_continue_text(3, "echo hi", buf, sizeof(buf));
+    size_t n = ai_build_continue_text(3, "echo hi", NULL, buf, sizeof(buf));
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "echo hi") != NULL);
     TEST_END();
@@ -835,7 +1002,7 @@ int test_ai_continue_text_newer_exchanges_null_first_cmd_falls_back(void) {
     char buf[512];
     /* newer_exchanges > 0 but no first_cmd -- fall back to the default
      * text rather than emitting a broken "()" reference. */
-    size_t n = ai_build_continue_text(2, NULL, buf, sizeof(buf));
+    size_t n = ai_build_continue_text(2, NULL, NULL, buf, sizeof(buf));
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "The commands above have been executed") != NULL);
     TEST_END();
@@ -843,19 +1010,225 @@ int test_ai_continue_text_newer_exchanges_null_first_cmd_falls_back(void) {
 
 int test_ai_continue_text_null_buf(void) {
     TEST_BEGIN();
-    ASSERT_EQ((int)ai_build_continue_text(0, NULL, NULL, 512), 0);
+    ASSERT_EQ((int)ai_build_continue_text(0, NULL, NULL, NULL, 512), 0);
     char buf[512];
-    ASSERT_EQ((int)ai_build_continue_text(0, NULL, buf, 0), 0);
+    ASSERT_EQ((int)ai_build_continue_text(0, NULL, NULL, buf, 0), 0);
     TEST_END();
 }
 
 int test_ai_continue_text_overflow_returns_zero(void) {
     TEST_BEGIN();
     char buf[8]; /* too small for either message */
-    size_t n = ai_build_continue_text(0, NULL, buf, sizeof(buf));
+    size_t n = ai_build_continue_text(0, NULL, NULL, buf, sizeof(buf));
     ASSERT_EQ((int)n, 0);
-    size_t n2 = ai_build_continue_text(1, "ls -la", buf, sizeof(buf));
+    size_t n2 = ai_build_continue_text(1, "ls -la", NULL, buf, sizeof(buf));
     ASSERT_EQ((int)n2, 0);
+    TEST_END();
+}
+
+/* ---- ai_build_continue_text with a queue: per-command outcomes
+ * (docs/superpowers/specs/2026-09-23-command-dispatch-states-design.md
+ * section 3) ---- */
+
+int test_ai_continue_text_empty_queue_same_as_null(void) {
+    TEST_BEGIN();
+    /* q non-NULL but count == 0 must behave exactly like q == NULL --
+     * only q->count > 0 triggers the outcomes list. */
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    char buf[512];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "The commands above have been executed") != NULL);
+    ASSERT_NULL(strstr(buf, "did not"));
+    TEST_END();
+}
+
+int test_ai_continue_text_lists_batch_outcomes_and_elides_long_command(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+
+    /* A command longer than 60 characters, to prove elision. */
+    const char *long_cmd =
+        "printf 'this is a very long single line command that goes past sixty chars'";
+    ASSERT_TRUE(strlen(long_cmd) > 60);
+
+    chat_approval_add(&q, "ls -la", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, long_cmd, CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "rm -rf /tmp/x", CMD_PLATFORM_LINUX);
+
+    /* Force the exact statuses the three-entry scenario needs, regardless
+     * of what the default policy would have decided on its own: the
+     * first completed, the second approved but never sent (the batch was
+     * stopped), the third denied. */
+    q.entries[0].status = APPROVE_COMPLETED;
+    q.entries[1].status = APPROVE_APPROVED;
+    q.entries[2].status = APPROVE_DENIED;
+
+    char buf[4096];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    /* Entry 1 is still APPROVED (never sent) -- the batch was stopped, so
+     * the aborted opening applies, not the "have been executed" default. */
+    ASSERT_TRUE(strstr(buf, "stopped before it finished") != NULL);
+    ASSERT_NULL(strstr(buf, "have been executed"));
+
+    ASSERT_TRUE(strstr(buf, "1. ran: ls -la") != NULL);
+    ASSERT_TRUE(strstr(buf, "2. not run (batch stopped): ") != NULL);
+    ASSERT_TRUE(strstr(buf, "3. not run (denied): rm -rf /tmp/x") != NULL);
+
+    /* Elided to 60 characters of the command plus "...", never the full
+     * (78-character) command. */
+    ASSERT_TRUE(strstr(buf, long_cmd) == NULL);
+    char elided60[64];
+    memcpy(elided60, long_cmd, 60);
+    elided60[60] = '\0';
+    ASSERT_TRUE(strstr(buf, elided60) != NULL);
+    ASSERT_TRUE(strstr(buf, "...") != NULL);
+    TEST_END();
+}
+
+int test_ai_continue_text_executing_outcome_named(void) {
+    TEST_BEGIN();
+    /* The spec's three-entry scenario allows the third entry to be
+     * DENIED or EXECUTING -- pin EXECUTING's wording separately since its
+     * shape differs from the "not run (...)" phrases. */
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "cat f", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "pwd", CMD_PLATFORM_LINUX);
+    q.entries[0].status = APPROVE_COMPLETED;
+    q.entries[1].status = APPROVE_APPROVED;
+    q.entries[2].status = APPROVE_EXECUTING;
+
+    char buf[4096];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "1. ran: ls") != NULL);
+    ASSERT_TRUE(strstr(buf, "2. not run (batch stopped): cat f") != NULL);
+    ASSERT_TRUE(strstr(buf, "3. started, stopped before it finished: pwd") != NULL);
+    TEST_END();
+}
+
+int test_ai_continue_text_blocked_and_pending_outcomes_named(void) {
+    TEST_BEGIN();
+    /* Round out the outcome table: BLOCKED and PENDING get their own
+     * words too, not folded into DENIED. */
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "cat f", CMD_PLATFORM_LINUX);
+    q.entries[0].status = APPROVE_BLOCKED;
+    q.entries[1].status = APPROVE_PENDING;
+
+    char buf[4096];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "1. not run (above the command policy ceiling): ls") != NULL);
+    ASSERT_TRUE(strstr(buf, "2. not run (never decided): cat f") != NULL);
+    TEST_END();
+}
+
+int test_ai_continue_text_queue_overflow_returns_zero(void) {
+    TEST_BEGIN();
+    /* A buffer that fits the opening message but not the outcomes list
+     * must fail closed (return 0), not emit a message that silently
+     * drops which commands ran. */
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls -la", CMD_PLATFORM_LINUX);
+    q.entries[0].status = APPROVE_COMPLETED;
+
+    char buf[300]; /* enough for the opening sentence (259 bytes), not the
+                     * outcomes preamble and list on top of it */
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_EQ((int)n, 0);
+    TEST_END();
+}
+
+/* ---- 2026-09-23 dispatch-states design, section 3: a batch that still
+ * has an APPROVED/EXECUTING entry was stopped mid-flight -- its opening
+ * must say so instead of claiming completion or asking for more work. */
+
+int test_ai_continue_text_stopped_batch_opening(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls -la", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "rm -rf /tmp/x", CMD_PLATFORM_LINUX);
+    q.entries[0].status = APPROVE_COMPLETED;
+    q.entries[1].status = APPROVE_APPROVED; /* never sent -- batch stopped */
+
+    char buf[4096];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "stopped before it finished") != NULL);
+    ASSERT_NULL(strstr(buf, "have been executed"));
+    ASSERT_NULL(strstr(buf, "include ALL of them"));
+    TEST_END();
+}
+
+int test_ai_continue_text_completed_batch_opening_unchanged(void) {
+    TEST_BEGIN();
+    /* Every entry finished -- nothing APPROVED or EXECUTING -- so the
+     * opening is the same "have been executed" text as before this batch
+     * ever had a queue attached. */
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls -la", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "pwd", CMD_PLATFORM_LINUX);
+    q.entries[0].status = APPROVE_COMPLETED;
+    q.entries[1].status = APPROVE_COMPLETED;
+
+    char buf[4096];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "The commands above have been executed") != NULL);
+    ASSERT_TRUE(strstr(buf, "include ALL of them") != NULL);
+    ASSERT_NULL(strstr(buf, "stopped before it finished"));
+    TEST_END();
+}
+
+int test_ai_continue_text_elide_utf8_char_boundary(void) {
+    TEST_BEGIN();
+    /* A command made entirely of 3-byte UTF-8 characters (the euro sign,
+     * 0xE2 0x82 0xAC), 72 bytes long -- past the 60-byte elision cutoff,
+     * and every single byte is >= 0x80. The old back-off ("any byte >=
+     * 0x80 needs backing off") would walk cut all the way down to 0,
+     * producing an empty prefix. The fixed back-off only clears
+     * continuation bytes (10xxxxxx), and byte 60 here is itself a fresh
+     * lead byte (60 is a multiple of 3), so no back-off should happen at
+     * all: the elided prefix must be the full 60 bytes, ending cleanly on
+     * a character boundary, plus "...". */
+    char cmd[73];
+    for (int i = 0; i < 24; i++) {
+        cmd[i * 3]     = (char)0xE2;
+        cmd[i * 3 + 1] = (char)0x82;
+        cmd[i * 3 + 2] = (char)0xAC;
+    }
+    cmd[72] = '\0';
+    ASSERT_EQ((int)strlen(cmd), 72);
+
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, cmd, CMD_PLATFORM_LINUX);
+    q.entries[0].status = APPROVE_COMPLETED;
+
+    char buf[4096];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+
+    char expected[64];
+    memcpy(expected, cmd, 60);
+    expected[60] = '\0';
+    char expected_elided[68];
+    snprintf(expected_elided, sizeof(expected_elided), "%s...", expected);
+    /* Non-empty prefix ending on a character boundary, plus "...". */
+    ASSERT_TRUE(strstr(buf, expected_elided) != NULL);
+    /* Must not have collapsed to just "..." with nothing before it. */
+    ASSERT_NULL(strstr(buf, "1. ran: ...\n"));
     TEST_END();
 }
 

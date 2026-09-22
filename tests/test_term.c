@@ -584,6 +584,46 @@ int test_term_at_prompt_trailing_content_after_cursor(void) {
     TEST_END();
 }
 
+/* ---- term_at_continuation_prompt() ----------------------------------- */
+
+int test_term_at_continuation_prompt_true(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "printf 'abc'\r\n> ", 16);
+    ASSERT_EQ(term_at_continuation_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_continuation_prompt_false(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "user@host:~$ ", 13);
+    ASSERT_EQ(term_at_continuation_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_prompt_dollar_still_positive(void) {
+    TEST_BEGIN();
+    /* term_at_prompt() is unchanged for an ordinary primary prompt. */
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "$ ", 2);
+    ASSERT_EQ(term_at_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_prompt_continuation_negative(void) {
+    TEST_BEGIN();
+    /* A zsh continuation prompt is not a primary prompt. */
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "dquote> ", 8);
+    ASSERT_EQ(term_at_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_write_seq_increments_on_data(void) {
     TEST_BEGIN();
     Terminal *t = term_init(24, 80, 100);

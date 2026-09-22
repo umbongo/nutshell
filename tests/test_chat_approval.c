@@ -164,6 +164,42 @@ int test_approval_add_embedded_newline_rejected(void) {
     TEST_END();
 }
 
+/* chat_approval_add() rejects rather than clamps a command too long for
+ * ApprovalEntry.command (spec 2026-09-23-command-dispatch-states-design.md
+ * section 1) -- a command that doesn't fit must not run with its tail
+ * silently cut off. */
+int test_approval_add_1024_bytes_rejected(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    char cmd[1025];
+    memset(cmd, 'a', sizeof(cmd) - 1);
+    cmd[sizeof(cmd) - 1] = '\0';
+    ASSERT_EQ((int)strlen(cmd), 1024);
+
+    int idx = chat_approval_add(&q, cmd, CMD_PLATFORM_LINUX);
+    ASSERT_EQ(idx, -1);
+    ASSERT_EQ(q.count, 0);
+    TEST_END();
+}
+
+int test_approval_add_1023_bytes_round_trips(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    char cmd[1024];
+    memset(cmd, 'a', sizeof(cmd) - 1);
+    cmd[sizeof(cmd) - 1] = '\0';
+    ASSERT_EQ((int)strlen(cmd), 1023);
+
+    int idx = chat_approval_add(&q, cmd, CMD_PLATFORM_LINUX);
+    ASSERT_EQ(idx, 0);
+    ASSERT_EQ(q.count, 1);
+    ASSERT_STR_EQ(q.entries[0].command, cmd);
+    ASSERT_EQ((int)strlen(q.entries[0].command), 1023);
+    TEST_END();
+}
+
 int test_approval_queue_full(void) {
     TEST_BEGIN();
     ApprovalQueue q;

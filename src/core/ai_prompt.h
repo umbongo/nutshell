@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include "ai_tools.h"
 #include "cmd_batch.h"
+#include "chat_approval.h" /* ApprovalQueue for ai_build_continue_text() */
 #include "session_io.h"   /* SessionKind for the system-prompt opening */
 
 /* Default AI provider — must match the first entry in the provider list
@@ -169,16 +170,32 @@ int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size);
  * A block is trimmed of surrounding whitespace/CR/LF, then dropped (not
  * returned, not sanitised) if what remains still contains a control
  * character (< 0x20 or 0x7F) -- e.g. an embedded newline that would let
- * one [EXEC] block smuggle a second, unclassified command. Use
- * ai_extract_commands_ex() to find out how many blocks were dropped. */
+ * one [EXEC] block smuggle a second, unclassified command. A block whose
+ * trimmed payload is 1024 bytes or longer (too long for the 1023-byte
+ * cmds[] slot plus NUL) is also dropped, never truncated. Use
+ * ai_extract_commands_ex() to find out how many blocks were dropped, and
+ * why. */
 int ai_extract_commands(const char *response, char cmds[][1024],
                         int max_cmds);
 
 /* Same as ai_extract_commands(), but also reports how many [EXEC] blocks
- * were dropped for containing a control character after trimming.
- * *rejected is set to 0 up front (if non-NULL) and incremented per drop. */
+ * were dropped, and why:
+ *   *rejected      -- blocks whose trimmed payload still contained a
+ *                      control character (set to 0 up front, incremented
+ *                      per drop).
+ *   *rejected_long -- blocks whose trimmed payload was 1024 bytes or
+ *                      longer, i.e. would not fit cmds[][1024] (CMD_MAX_LEN
+ *                      1023 plus NUL) without truncation. These are
+ *                      skipped entirely: no cmds[] slot is filled, no
+ *                      count is added. The length is measured from the
+ *                      [EXEC]/[/EXEC] span itself (after the same
+ *                      whitespace trim as an accepted block), so an
+ *                      oversized block never needs to be copied to be
+ *                      recognised as oversized. (Also set to 0 up front,
+ *                      incremented per drop.)
+ * Either out-parameter may be NULL. */
 int ai_extract_commands_ex(const char *response, char cmds[][1024],
-                           int max_cmds, int *rejected);
+                           int max_cmds, int *rejected, int *rejected_long);
 
 /* Get the API endpoint URL for a provider name.
  * Returns NULL for unknown providers. */
@@ -217,16 +234,44 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
                               char *buf, size_t buf_size);
 
 /* Build the "continue" message sent to the AI after a pending command
- * batch finishes running (see docs/superpowers/specs/
- * 2026-09-09-pending-command-batches.md, rule 4). When newer_exchanges is
- * 0 (no other exchange has happened since this batch's card appeared),
- * the message is the plain "the commands above" text unchanged from
- * before batching existed. When newer_exchanges > 0, the message names
- * which batch just ran via its first command, since "above" would
- * otherwise be ambiguous once newer exchanges are in between.
- * first_cmd may be NULL/empty only when newer_exchanges == 0.
- * Returns bytes written (excluding NUL), or 0 on error. */
+ * batch finishes running, or is stopped/abandoned (see docs/superpowers/
+ * specs/2026-09-09-pending-command-batches.md, rule 4, and
+ * docs/superpowers/specs/2026-09-23-command-dispatch-states-design.md
+ * section 3). When newer_exchanges is 0 (no other exchange has happened
+ * since this batch's card appeared), the opening is the plain "the
+ * commands above" text unchanged from before batching existed. When
+ * newer_exchanges > 0, the opening names which batch just ran via its
+ * first command, since "above" would otherwise be ambiguous once newer
+ * exchanges are in between. first_cmd may be NULL/empty only when
+ * newer_exchanges == 0.
+ *
+ * q is the batch's queue and may be NULL, in which case the function
+ * behaves exactly as it always has (only the opening text, unchanged).
+ * When q is non-NULL and any entry is still APPROVE_APPROVED or
+ * APPROVE_EXECUTING, the batch was stopped mid-flight: the opening
+ * ignores newer_exchanges/first_cmd entirely and becomes "The command
+ * batch was stopped before it finished. Do not re-send the commands that
+ * did not run unless I ask for them." -- never the "have been executed"
+ * or "include ALL of them" wording, since neither is true of a batch that
+ * didn't finish.
+ * When q is non-NULL and q->count > 0, the opening is followed by a
+ * blank line, one short sentence telling the model these are the actual
+ * per-command outcomes and it must not claim a command ran when its line
+ * says otherwise, and then one numbered line per queue entry in queue
+ * order ("  1. ran: printf ...\n"), the command elided to 60 characters
+ * (adding "..." when longer, never splitting a UTF-8 sequence). The
+ * outcome word comes from the entry's ApprovalStatus: APPROVE_COMPLETED
+ * "ran", APPROVE_EXECUTING "started, stopped before it finished",
+ * APPROVE_APPROVED "not run (batch stopped)", APPROVE_DENIED "not run
+ * (denied)", APPROVE_BLOCKED "not run (above the command policy
+ * ceiling)", APPROVE_PENDING "not run (never decided)".
+ *
+ * Callers should pass a 4096-byte buffer and check the return value:
+ * every snprintf inside is checked, and the function returns 0 (writing
+ * nothing usable) if anything would overflow buf_size, rather than
+ * silently truncating the note the model receives. */
 size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
+                              const ApprovalQueue *q,
                               char *buf, size_t buf_size);
 
 /* The corrective note injected into the conversation when the user raises
