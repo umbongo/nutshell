@@ -14,6 +14,9 @@ void vec_push(Vector *v, void *item);
 void *vec_get(const Vector *v, size_t index);
 void vec_set(Vector *v, size_t index, void *item);
 void vec_remove(Vector *v, size_t index);
+/* Insert item before index, shifting later elements right; grows exactly as
+ * vec_push does. An index >= size appends. Tolerates a NULL vector (no-op). */
+void vec_insert(Vector *v, size_t index, void *item);
 size_t vec_size(const Vector *v);
 void vec_free(Vector *v);
 

@@ -76,4 +76,13 @@ void config_profile_free(Profile *p);
 Profile *config_find_profile_by_name(const Config *cfg, const char *name);
 Profile *config_find_profile_by_host(const Config *cfg, const char *host);
 
+/* Insert a saved "Local shell" profile at index 0 when the config has no
+ * profile of kind "local" yet (spec section 5). Returns 1 when it
+ * inserted one (the caller should then config_save()), 0 when a local
+ * profile already existed or cfg is NULL. This is a plain saved profile
+ * like any other -- Edit and Delete act on it by index, and deleting it
+ * means it does NOT come back unless the whole config has no local
+ * profile at the next start. */
+int config_ensure_local_profile(Config *cfg);
+
 #endif

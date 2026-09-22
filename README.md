@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.0 \
+**Version**: v1.2.1 \
 **Build Date**: 2026-09-10 \
 **Author**: Thomas Sulkiewicz
 
@@ -32,6 +32,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 
 - AI chat assistant with terminal context, pending approval cards for command execution (never block the input, up to eight per session), streaming, and a Thinking disclosure for reasoning
 - Multi-tab SSH sessions with owner-drawn tab strip (status dots, log indicator, close button)
+- **Local shell** sessions over ConPTY — the same window, terminal and assistant with no remote host at all ([see below](#local-shell))
 - VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
 - Password and SSH key authentication with passphrase prompt and retry
 - AES-256-GCM password encryption at rest (PBKDF2-SHA256 derived key, OpenSSL)
@@ -41,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 1,804 unit tests, zero lint warnings
+- 2,062 unit tests, zero lint warnings
 
 ---
 
@@ -59,6 +60,7 @@ Open the **Session Manager** with **Ctrl+T** or by clicking the **+** area in th
 
 | Field | Description |
 |-------|-------------|
+| **Type** | **SSH** (the default) or **Local shell**. Local hides Host, Port, User and Auth and shows **Shell command** instead — see [Local shell](#local-shell) |
 | **Name** | Optional friendly label (shown in the tab and tooltips) |
 | **Host** | Hostname or IP address |
 | **Port** | SSH port (default: 22) |
@@ -67,6 +69,7 @@ Open the **Session Manager** with **Ctrl+T** or by clicking the **+** area in th
 | **Platform** | Which CLI this host speaks, used to classify command safety. **Auto-detect** (the default) reads the login banner and prompt; pin it explicitly to Linux/Unix, Cisco IOS/IOS-XE, Cisco NX-OS, Cisco ASA, HP ProCurve, HPE Comware, Aruba OS-CX, ArubaOS, PAN-OS, Junos, FortiOS, VyOS or RouterOS when you'd rather not rely on detection |
 | **Password / Key Path** | Password for password auth, or path to private key file for key auth |
 | **Passphrase** | Passphrase for encrypted SSH keys (shown when auth type is Key) |
+| **Shell command** | Local sessions only: the command line to run, blank for automatic detection |
 | **AI Notes** | Per-session context notes sent to the AI assistant (optional) |
 
 Saved profiles appear in the list on the left. **Double-click** a profile to connect immediately. Use **Save** to store changes, **Delete** to remove a profile.
@@ -326,6 +329,70 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 
 ---
 
+## Local shell
+
+Nutshell can open a shell **on the machine it is running on**, with no SSH
+host involved: the same window, the same terminal, the same AI assistant,
+driving a bash on your own PC. Start one with
+
+```
+nutshell.exe --local
+```
+
+or pick **Local shell** in the Session Manager's **Type** dropdown and press
+Connect. A saved profile named "Local shell" is added at the top of the
+session list the first time this version starts, so it is also available as
+an autoconnect target or as `-sn "Local shell"`. It is an ordinary profile:
+rename it, edit it or delete it like any other.
+
+### Which shell it runs
+
+Resolved at session start, first match wins:
+
+1. the **Shell command** field in the profile, if you set one — used verbatim;
+2. **`busybox64.exe`** (or `busybox.exe`) sitting next to `nutshell.exe`;
+3. the same file in `%LOCALAPPDATA%\Nutshell\runtime\`;
+4. **Git for Windows** bash (`HKLM\SOFTWARE\GitForWindows\InstallPath`, else `%ProgramFiles%\Git\bin\bash.exe`);
+5. **MSYS2** bash at `C:\msys64\usr\bin\bash.exe`.
+
+If none of those exists the terminal says so and the tab stays disconnected.
+
+The portable case is option 2: drop a [busybox-w32](https://frippery.org/busybox/)
+`busybox64.exe` beside `nutshell.exe` and you have a two-file folder that
+gives any Windows 10 (1809 or later) or Windows 11 PC a shell with `ls`,
+`grep`, `sed`, `awk`, `find`, `tar`, `vi`, pipes and scripts, offline. Nothing
+is installed and nothing is extracted; busybox is not shipped inside
+`nutshell.exe`.
+
+The shell is given `TERM=xterm-256color`, `HOME=%USERPROFILE%`, `SHELL`,
+`NUTSHELL=<version>`, its own directory prepended to `PATH` (and `MSYSTEM=MSYS`
+for MSYS2). Nothing is removed from your environment, so `git`, `python` and
+the rest keep working. It starts in `%USERPROFILE%`.
+
+### What busybox's shell does not have
+
+busybox's ash in bash-compatibility mode covers `[[ ]]`, functions, `local`,
+arithmetic, here-documents, `source`, brace expansion and process
+substitution. It has **no arrays** (`declare -a`, `mapfile`), no associative
+arrays and no `coproc`. Git for Windows and MSYS2 give you a real GNU bash 5
+with none of those gaps.
+
+### Safety
+
+The AI assistant drives a local session exactly as it drives an SSH one, and
+the command classifier does not know the difference — **`rm -rf` now runs on
+your own disk**. The approval cards and auto-approve levels work the same
+way; set them with that in mind.
+
+### Upgrading and downgrading
+
+The profile's `kind` and `shell` keys are new in v1.2.1. Opening the same
+`nutshell.config` with v1.1.x or earlier and saving will **drop them**, which
+turns a local profile back into an empty SSH one. Keep a copy of the config
+if you need to move between versions.
+
+---
+
 ## Directory Structure
 
 ```
@@ -423,7 +490,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 1,804 unit tests across 76 test files
+├── tests/                              # 2,062 unit tests across 83 test files
 │   └── stubs/libssh2.h                 #   libssh2 stub for test builds without the real library
 ├── build/win/                          # Build output (nutshell.exe)
 ├── images/                             # Application icon and assets

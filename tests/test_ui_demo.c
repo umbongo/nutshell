@@ -19,14 +19,49 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
     return n;
 }
 
-int test_ui_demo_states_lists_ten_ending_in_all(void)
+/* Eleven since v1.2.1 added "local" (the local-shell tab chrome demo,
+ * spec 2026-09-22-local-shell-design.md section 5). "all" stays last and
+ * still means the union of the panel states, which "local" is not part of:
+ * it only swaps the terminal transcript. */
+int test_ui_demo_states_list_ends_in_all(void)
 {
     TEST_BEGIN();
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 10);
+    ASSERT_EQ(count, 11);
     ASSERT_STR_EQ(states[count - 1], "all");
+    ASSERT_STR_EQ(states[count - 2], "local");
+    TEST_END();
+}
+
+/* "local" is a real state, and it changes the terminal transcript without
+ * adding anything to the conversation or the approval queues. */
+int test_ui_demo_build_local_swaps_terminal_text_only(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    char term_buf[8192];
+
+    ASSERT_TRUE(ui_demo_state_valid("local"));
+    ASSERT_EQ(ui_demo_build("local", &conv, &approval, &approval2,
+                            term_buf, sizeof(term_buf)), 0);
+    /* System message only -- no user/assistant turns, no commands. */
+    ASSERT_EQ(conv.msg_count, 1);
+    ASSERT_EQ(approval.count, 0);
+    ASSERT_EQ(approval2.count, 0);
+    ASSERT_TRUE(strstr(term_buf, "busybox") != NULL);
+    ASSERT_TRUE(strstr(term_buf, "web-01") == NULL);
+
+    /* Every other state keeps the SSH transcript. */
+    char ssh_buf[8192];
+    ASSERT_EQ(ui_demo_build("chat", &conv, &approval, &approval2,
+                            ssh_buf, sizeof(ssh_buf)), 0);
+    ASSERT_TRUE(strstr(ssh_buf, "web-01") != NULL);
+    ASSERT_EQ(ui_demo_build("all", &conv, &approval, &approval2,
+                            ssh_buf, sizeof(ssh_buf)), 0);
+    ASSERT_TRUE(strstr(ssh_buf, "web-01") != NULL);
     TEST_END();
 }
 

@@ -311,6 +311,95 @@ int test_cli_theme_missing_value_is_error(void)
     TEST_END();
 }
 
+/* ---- --local (local shell) ---- */
+
+int test_cli_local_alone(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--local" };
+    CliOptions o;
+    cli_parse(2, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_CONNECT_LOCAL);
+    ASSERT_STR_EQ(o.arg, "");
+    ASSERT_STR_EQ(o.error, "");
+    TEST_END();
+}
+
+int test_cli_local_with_session_name(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "--local", "-sn", "prod" };
+    char *a2[] = { "nutshell", "-sn", "prod", "--local" };
+    cli_parse(4, a1, &o); ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    cli_parse(4, a2, &o); ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_local_with_host(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "--local", "-h", "box.example.com" };
+    char *a2[] = { "nutshell", "-h", "box.example.com", "--local" };
+    cli_parse(4, a1, &o); ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    cli_parse(4, a2, &o); ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_local_with_no_connect(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--local", "-nc" };
+    CliOptions o;
+    cli_parse(3, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_local_twice(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--local", "--local" };
+    CliOptions o;
+    cli_parse(3, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_local_with_theme_is_error(void)
+{
+    TEST_BEGIN();
+    char *argv[] = { "nutshell", "--local", "--theme", "Onyx Light" };
+    CliOptions o;
+    cli_parse(4, argv, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    TEST_END();
+}
+
+int test_cli_local_not_matched_by_prefix(void)
+{
+    TEST_BEGIN();
+    CliOptions o;
+    char *a1[] = { "nutshell", "--localx" };
+    char *a2[] = { "nutshell", "--local=foo" };
+    cli_parse(2, a1, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    ASSERT_NOT_NULL(strstr(o.error, "Unknown option"));
+    cli_parse(2, a2, &o);
+    ASSERT_EQ((int)o.action, (int)CLI_ERROR);
+    ASSERT_NOT_NULL(strstr(o.error, "Unknown option"));
+    TEST_END();
+}
+
+int test_cli_usage_text_mentions_local(void)
+{
+    TEST_BEGIN();
+    const char *u = cli_usage_text();
+    ASSERT_NOT_NULL(strstr(u, "--local"));
+    TEST_END();
+}
+
 int test_cli_usage_text_omits_hidden_flags(void)
 {
     TEST_BEGIN();

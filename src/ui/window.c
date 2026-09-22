@@ -21,6 +21,8 @@
 #include "ssh_session.h"
 #include "ssh_pty.h"
 #include "ssh_io.h"
+#include "local_shell.h"
+#include "local_pty.h"
 #include "knownhosts.h"
 #include "log_format.h"
 #include "edit_scroll.h"
@@ -99,6 +101,10 @@ typedef struct Session {
     int             conn_dots;     /* dots appended so far */
     CRITICAL_SECTION conn_cs;      /* H-1: guards conn_result/conn_error/ssh/channel */
     AiSessionState ai_state;       /* per-session AI conversation */
+    /* Local sessions only: which shell the resolver picked, as the AI system
+     * prompt names it ("busybox", "Git bash", "MSYS2", "custom"). Empty for
+     * an SSH session, which is what the panel is told then. */
+    char      shell_name[32];
     int       platform_locked;   /* profile named an explicit platform -- detection may not override it */
     int       platform_scanned;  /* detection is done (resolved via banner, or gave up after the tick bound) */
     int       platform_scan_ticks; /* data-bearing poll ticks spent scanning so far; bounds platform_scanned */
@@ -146,6 +152,7 @@ const ThemeTokens *ns_tokens(void) { return &g_tokens; }
 static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
 static HMENU create_app_menu(void);      /* forward declaration */
+static void on_ai_clicked(void);         /* forward declaration */
 
 /* ---- Docked AI panel state ---- */
 #include "ai_dock.h"
@@ -270,7 +277,28 @@ typedef struct {
     void       *io_ctx;    /* target transport, compared by identity (paste continues across tab switches) */
     int       (*io_write)(void *ctx, const char *data, size_t len);
     bool        bracketed; /* send \033[201~ when paste completes */
+    bool        local;     /* send \r for a line end: a console child reads Enter, not LF */
 } PasteState;
+
+/* Send one clipboard line to a transport, mapping line ends the way that
+ * transport expects. SSH gets what it always got -- \r dropped, \n sent. A
+ * local session gets \r for the line end instead, because the console child
+ * on the other side of the pseudo-console reads Enter, not LF (spec section
+ * 3, "Writing"). */
+static void paste_chunk_write(void *ctx,
+                              int (*write_fn)(void *, const char *, size_t),
+                              const char *p, size_t chunk, bool local)
+{
+    for (size_t i = 0; i < chunk; i++) {
+        if (p[i] == '\r') continue;
+        if (p[i] == '\n' && local) {
+            static const char CR = '\r';
+            write_fn(ctx, &CR, 1);
+        } else {
+            write_fn(ctx, &p[i], 1);
+        }
+    }
+}
 
 static PasteState g_paste = {0};
 static Selection g_selection = {0};
@@ -302,6 +330,7 @@ static Session *create_session(int rows, int cols) {
     cmd_batch_set_init(&s->ai_state.batches);
     /* Unconnected/pre-detect state must be the safe one, not Linux (value 0). */
     s->ai_state.platform = (int)CMD_PLATFORM_UNKNOWN;
+    s->shell_name[0] = '\0';
     s->platform_locked = 0;
     s->platform_scanned = 0;
     s->platform_scan_ticks = 0;
@@ -341,8 +370,10 @@ static void session_close_io(Session *s)
  * cleared BEFORE io.close() -- spec section 2, "EOF and close order". */
 static void ai_panel_detach(Session *s)
 {
-    if (s == g_active_session && g_hwndAiChat && IsWindow(g_hwndAiChat))
+    if (s == g_active_session && g_hwndAiChat && IsWindow(g_hwndAiChat)) {
         ai_chat_set_session(g_hwndAiChat, NULL, NULL);
+        ai_chat_set_shell_name(g_hwndAiChat, NULL);
+    }
 }
 
 static void free_session(Session *s) {
@@ -388,6 +419,9 @@ static void on_tab_select(int index, void *user_data) {
                                g_active_session->conn_profile.ai_notes,
                                g_config->settings.ai_system_notes,
                                g_active_session->conn_profile.name);
+        ai_chat_set_shell_name(g_hwndAiChat,
+                               g_active_session->shell_name[0]
+                                 ? g_active_session->shell_name : NULL);
     }
 }
 
@@ -417,8 +451,10 @@ static void on_tab_close(int index, void *user_data) {
     if (g_active_session == s) {
         g_active_session = NULL;
         /* The panel must not keep pointers into a session about to be freed. */
-        if (g_hwndAiChat && IsWindow(g_hwndAiChat))
+        if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
             ai_chat_set_session(g_hwndAiChat, NULL, NULL);
+            ai_chat_set_shell_name(g_hwndAiChat, NULL);
+        }
     }
 
     /* Notify AI chat before freeing so it can clear dangling pointers */
@@ -579,7 +615,11 @@ static FILE *open_session_log(const char *name, const char *hostname)
     /* Create the directory (OK if already exists) */
     CreateDirectoryA(log_dir, NULL);
 
-    const char *safe_name = (name && name[0]) ? name : hostname;
+    /* Prefer the profile name, then the host. A local profile has no host at
+     * all, so the name is what names the log (spec section 5); "session" is
+     * the last resort for a profile with neither. */
+    const char *safe_name = (name && name[0]) ? name
+                          : ((hostname && hostname[0]) ? hostname : "session");
     time_t now = time(NULL);
     char path[MAX_PATH];
     log_format_filename(safe_name, log_dir, g_config->settings.log_format,
@@ -623,6 +663,200 @@ static FILE *open_debug_log(const char *session_name)
     char path[MAX_PATH];
     (void)snprintf(path, sizeof(path), "%s\\%s-debug-%s.log", dir, safe_name, ts);
     return fopen(path, "wb");
+}
+
+/* ---- Local shell sessions (spec 2026-09-22-local-shell-design.md) -------- */
+
+/* A local profile has kind "local"; everything else, including a profile
+ * saved by a version that predates the key, is an SSH profile. */
+static int profile_is_local(const Profile *p)
+{
+    return (p && strcmp(p->kind, "local") == 0) ? 1 : 0;
+}
+
+/* The three questions local_shell_resolve() may ask the machine. They live
+ * here rather than in src/core/local_shell.c so that file stays free of
+ * <windows.h> and testable on any host. */
+
+static int probe_exists(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (!path || !path[0]) return 0;
+    DWORD attr = GetFileAttributesA(path);
+    return (attr != INVALID_FILE_ATTRIBUTES &&
+            !(attr & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
+}
+
+static int probe_env(void *ctx, const char *name, char *out, size_t out_size)
+{
+    (void)ctx;
+    if (!name || !out || out_size == 0u) return 0;
+    out[0] = '\0';
+    DWORD n = GetEnvironmentVariableA(name, out, (DWORD)out_size);
+    if (n == 0u || n >= (DWORD)out_size) { out[0] = '\0'; return 0; }
+    return out[0] ? 1 : 0;
+}
+
+/* key is "HKLM\\SOFTWARE\\..." -- only HKLM and HKCU are understood, which
+ * is all spec 4.2 asks for. Reads both the 64- and 32-bit views so a 32-bit
+ * Git install is still found. */
+static int probe_registry_string(void *ctx, const char *key, const char *value,
+                                 char *out, size_t out_size)
+{
+    (void)ctx;
+    if (!key || !value || !out || out_size == 0u) return 0;
+    out[0] = '\0';
+
+    HKEY root;
+    const char *sub;
+    if (strncmp(key, "HKLM\\", 5) == 0)      { root = HKEY_LOCAL_MACHINE; sub = key + 5; }
+    else if (strncmp(key, "HKCU\\", 5) == 0) { root = HKEY_CURRENT_USER;  sub = key + 5; }
+    else return 0;
+
+    static const DWORD views[2] = { KEY_WOW64_64KEY, KEY_WOW64_32KEY };
+    for (int i = 0; i < 2; i++) {
+        HKEY h;
+        if (RegOpenKeyExA(root, sub, 0,
+                          KEY_QUERY_VALUE | views[i], &h) != ERROR_SUCCESS)
+            continue;
+        DWORD type = 0;
+        DWORD len = (DWORD)out_size;
+        LONG rc = RegQueryValueExA(h, value, NULL, &type,
+                                   (LPBYTE)out, &len);
+        RegCloseKey(h);
+        if (rc == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)) {
+            if (len >= (DWORD)out_size) len = (DWORD)out_size - 1u;
+            out[len] = '\0';
+            /* RegQueryValueExA counts the NUL; trim any extra. */
+            out[out_size - 1u] = '\0';
+            if (out[0]) return 1;
+        }
+        out[0] = '\0';
+    }
+    return 0;
+}
+
+static void fill_local_probe(LocalShellProbe *probe, const char *exe_dir)
+{
+    memset(probe, 0, sizeof(*probe));
+    probe->exists          = probe_exists;
+    probe->env             = probe_env;
+    probe->registry_string = probe_registry_string;
+    probe->ctx             = NULL;
+    probe->exe_dir         = exe_dir;
+}
+
+/* Hand the AI panel this session's terminal, transport and shell name in one
+ * place, so the three never drift apart. NULL detaches. */
+static void ai_panel_attach(Session *s)
+{
+    if (!g_hwndAiChat || !IsWindow(g_hwndAiChat)) return;
+    ai_chat_set_session(g_hwndAiChat, s ? s->term : NULL, session_io_ptr(s));
+    ai_chat_set_shell_name(g_hwndAiChat,
+                           (s && s->shell_name[0]) ? s->shell_name : NULL);
+}
+
+/* Resolve the shell, spawn it and publish the transport on `s`. Everything
+ * happens on the UI thread: there is no handshake and no authentication to
+ * wait for, so the connection thread the SSH path needs would only add a
+ * round trip. Returns 1 when the shell is running, 0 when it is not (the
+ * reason is already in the terminal and the tab is DISCONNECTED).
+ *
+ * `tidx` is the session's tab index, or -1 if it has none. */
+static int start_local_shell(HWND hwnd, Session *s, int tidx)
+{
+    if (!s) return 0;
+
+    char exe_dir[MAX_PATH];
+    get_exe_dir(exe_dir, sizeof(exe_dir));
+
+    LocalShellProbe probe;
+    fill_local_probe(&probe, exe_dir[0] ? exe_dir : NULL);
+
+    /* LocalShellSpec carries a full PATH, so it is too big for the stack of
+     * a thread with the Windows default reserve; the UI thread has room, but
+     * the heap keeps it honest either way. */
+    LocalShellSpec *spec = (LocalShellSpec *)calloc(1u, sizeof(*spec));
+    if (!spec) {
+        term_process(s->term, "\r\nOut of memory starting the local shell.\r\n", 43);
+        if (tidx >= 0) tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
+        return 0;
+    }
+
+    LocalShellKind kind = local_shell_resolve(s->conn_profile.shell, &probe, spec);
+
+    char err[512];
+    err[0] = '\0';
+    LocalPty *pty = NULL;
+    if (kind != SHELL_NONE) {
+        int cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
+        int rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
+        pty = local_pty_open(spec, cols, rows, err, sizeof(err));
+    } else {
+        (void)snprintf(err, sizeof(err), "%s",
+                       spec->error[0] ? spec->error : LOCAL_SHELL_NONE_MESSAGE);
+    }
+
+    if (!pty) {
+        char msg[600];
+        int n = snprintf(msg, sizeof(msg), "\r\n%s\r\n",
+                         err[0] ? err : "Could not start the local shell.");
+        if (n > 0) term_process(s->term, msg, strlen(msg));
+        if (tidx >= 0) tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
+        free(spec);
+        return 0;
+    }
+
+    s->io = session_io_local(pty);
+
+    /* The shell's name, for the AI system prompt (spec section 6). */
+    {
+        const char *name = local_shell_kind_name(kind);
+        (void)snprintf(s->shell_name, sizeof(s->shell_name), "%s",
+                       name ? name : "");
+    }
+
+    /* Platform. An explicit profile setting always wins (on_session_connect
+     * already locked it). Otherwise a known POSIX-ish shell pins Linux with
+     * no banner scan -- there is no login banner to scan; a custom command
+     * could be anything, so it stays on `auto` and the scan runs. */
+    if (!s->platform_locked && local_shell_kind_is_posix(kind)) {
+        s->ai_state.platform  = (int)CMD_PLATFORM_LINUX;
+        s->platform_locked    = 1;
+        s->platform_scanned   = 1;
+    }
+
+    DWORD tick_now = GetTickCount();
+    s->last_socket_data_tick = tick_now;
+    s->last_keepalive_tick   = tick_now;
+    s->last_user_input_tick  = tick_now;
+    s->conn_state            = CONN_IDLE;
+
+    if (!s->session_log) {
+        /* Host is empty for a local profile, so the log is named after the
+         * profile (spec section 5). */
+        s->session_log = open_session_log(s->conn_profile.name, "local");
+    }
+    s->debug_log = open_debug_log(s->conn_profile.name[0]
+                                    ? s->conn_profile.name : "local");
+
+    if (tidx >= 0) {
+        char user[256], machine[256];
+        if (!probe_env(NULL, "USERNAME", user, sizeof(user)))
+            (void)snprintf(user, sizeof(user), "%s", "local");
+        if (!probe_env(NULL, "COMPUTERNAME", machine, sizeof(machine)))
+            (void)snprintf(machine, sizeof(machine), "%s", "this PC");
+        tabs_set_connect_info(g_hwndTabs, tidx, user, machine,
+                              (unsigned long long)GetTickCount64());
+        tabs_set_status(g_hwndTabs, tidx, TAB_CONNECTED);
+        tabs_set_logging(g_hwndTabs, tidx, s->session_log ? 1 : 0);
+    }
+
+    if (s == g_active_session) ai_panel_attach(s);
+
+    sync_session_grid(hwnd, s);
+    free(spec);
+    return 1;
 }
 
 /* ---- Background connection thread --------------------------------------- */
@@ -796,7 +1030,13 @@ static void on_session_connect(const Profile *info) {
     s->platform_scanned  = 0;
     s->platform_scan_ticks = 0;
 
-    term_process(s->term, "Connecting", 10); /* dots appended by 500ms timer */
+    int is_local = profile_is_local(info);
+
+    /* A local shell has nothing to connect to, so it never shows the
+     * "Connecting..." animation -- start_local_shell() below either has a
+     * running shell a moment later or an error line in the terminal. */
+    if (!is_local)
+        term_process(s->term, "Connecting", 10); /* dots appended by 500ms timer */
 
     char title[32];
     snprintf(title, sizeof(title), "%s",
@@ -815,6 +1055,23 @@ static void on_session_connect(const Profile *info) {
     tabs_set_active(g_hwndTabs, idx);
     tabs_set_status(g_hwndTabs, idx, TAB_CONNECTING);
     invalidate_terminal(GetParent(g_hwndTabs));
+
+    if (is_local) {
+        HWND parent = GetParent(g_hwndTabs);
+        s->conn_state = CONN_IDLE;
+        if (start_local_shell(parent, s, idx)) {
+            /* Reopen the AI panel that was closed for the first session --
+             * the SSH path does this in WM_CONN_DONE, which a local session
+             * never reaches. */
+            if (g_ai_reopen_after_connect && s == g_active_session) {
+                g_ai_reopen_after_connect = 0;
+                on_ai_clicked();
+            }
+        }
+        update_scrollbar(parent);
+        force_full_terminal_repaint(parent, s->term);
+        return;
+    }
 
     /* Store state for the worker thread */
     s->conn_state    = CONN_CONNECTING;
@@ -1002,13 +1259,22 @@ static void create_demo_session(HWND hwnd)
         rows = term_h / g_renderer.charHeight;
     }
 
+    const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
+    int demo_local = (strcmp(state, "local") == 0);
+
     Session *s = create_session(rows, cols);
     memset(&s->conn_profile, 0, sizeof(s->conn_profile));
-    snprintf(s->conn_profile.name, sizeof(s->conn_profile.name), "demo");
+    snprintf(s->conn_profile.name, sizeof(s->conn_profile.name), "%s",
+             demo_local ? "Local shell" : "demo");
+    if (demo_local) {
+        snprintf(s->conn_profile.kind, sizeof(s->conn_profile.kind), "local");
+        snprintf(s->shell_name, sizeof(s->shell_name), "busybox");
+    }
     /* s->channel / s->ssh are already NULL from create_session -- no
-     * connection exists or ever will for this tab. */
+     * connection exists or ever will for this tab, local demo included:
+     * the "local" state is tab chrome and a status line, no process
+     * (spec section 5). */
 
-    const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
     char term_buf[8192];
     ApprovalQueue demo_approval, demo_approval2;
     if (ui_demo_build(state, &s->ai_state.conv, &demo_approval, &demo_approval2,
@@ -1033,14 +1299,28 @@ static void create_demo_session(HWND hwnd)
 
     term_process(s->term, term_buf, strlen(term_buf));
 
-    int idx = tabs_add(g_hwndTabs, "demo", s);
+    int idx = tabs_add(g_hwndTabs, demo_local ? "Local shell" : "demo", s);
     if (idx < 0) {
         if (g_session_list == s) g_session_list = s->next;
         free_session(s);
         return;
     }
     tabs_set_active(g_hwndTabs, idx);        /* -> on_tab_select: g_active_session = s */
-    tabs_set_status(g_hwndTabs, idx, TAB_IDLE); /* neutral -- never connects */
+    if (demo_local) {
+        /* The local demo shows the chrome a live local session has: a
+         * CONNECTED dot and a user@machine status line, from the real
+         * environment, with no process behind it. */
+        char user[256], machine[256];
+        if (!probe_env(NULL, "USERNAME", user, sizeof(user)))
+            (void)snprintf(user, sizeof(user), "%s", "local");
+        if (!probe_env(NULL, "COMPUTERNAME", machine, sizeof(machine)))
+            (void)snprintf(machine, sizeof(machine), "%s", "this PC");
+        tabs_set_connect_info(g_hwndTabs, idx, user, machine,
+                              (unsigned long long)GetTickCount64());
+        tabs_set_status(g_hwndTabs, idx, TAB_CONNECTED);
+    } else {
+        tabs_set_status(g_hwndTabs, idx, TAB_IDLE); /* neutral -- never connects */
+    }
     invalidate_terminal(hwnd);
 
     /* --theme <name>: apply only if it names a real theme; an unknown
@@ -1152,9 +1432,7 @@ static void on_ai_clicked(void) {
 
     /* Set the active session if one exists */
     if (g_hwndAiChat && g_active_session) {
-        ai_chat_set_session(g_hwndAiChat,
-                           g_active_session->term,
-                           session_io_ptr(g_active_session));
+        ai_panel_attach(g_active_session);
     }
 
     if (g_ai_docked && g_hwndAiChat) {
@@ -1190,16 +1468,6 @@ static void on_ai_dock_toggle(HWND hwnd) {
 
     /* Reopen in new mode */
     on_ai_clicked();
-}
-
-/* Profile kind dispatch for reconnect. Profile has no `kind` field yet -- it
- * arrives with the local shell itself in 1.2.1 -- so every profile is an SSH
- * profile for now and this always returns 0. See
- * docs/superpowers/specs/2026-09-22-local-shell-design.md section 5. */
-static int profile_is_local(const Profile *p)
-{
-    (void)p;
-    return 0;
 }
 
 static void on_status_click(int index, void *user_data, TabStatus status) {
@@ -1246,7 +1514,8 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
             /* Re-populate password from config — it was zeroed after first auth */
             for (size_t i = 0; i < vec_size(&g_config->profiles); i++) {
                 const Profile *pr = (const Profile *)vec_get(&g_config->profiles, i);
-                if (strcmp(pr->host, s->conn_profile.host) == 0 &&
+                if (strcmp(pr->kind, s->conn_profile.kind) == 0 &&
+                    strcmp(pr->host, s->conn_profile.host) == 0 &&
                     strcmp(pr->username, s->conn_profile.username) == 0 &&
                     pr->port == s->conn_profile.port) {
                     memcpy(s->conn_profile.password, pr->password,
@@ -1256,9 +1525,23 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
             }
         }
 
+        int tidx = tabs_find(g_hwndTabs, s);
+
+        /* A local profile re-spawns its shell instead of launching the
+         * connection thread (spec section 2, "Reconnect"). */
+        if (is_local) {
+            s->conn_state = CONN_IDLE;
+            s->conn_error[0] = '\0';
+            s->shell_name[0] = '\0';
+            term_process(s->term, "\r\n", 2);
+            start_local_shell(hParent, s, tidx);
+            update_scrollbar(hParent);
+            force_full_terminal_repaint(hParent, s->term);
+            return;
+        }
+
         term_process(s->term, "\r\nReconnecting", 14);
 
-        int tidx = tabs_find(g_hwndTabs, s);
         if (tidx >= 0)
             tabs_set_status(g_hwndTabs, tidx, TAB_CONNECTING);
 
@@ -1270,8 +1553,6 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
         s->conn_dots     = 0;
         s->conn_hwnd     = hParent;
 
-        /* 1.2.1: a local profile will re-spawn its shell here instead of
-         * launching the connection thread. */
         s->conn_thread = CreateThread(NULL, 0, connection_thread, s, 0, NULL);
         if (!s->conn_thread) {
             term_process(s->term, "\r\nFailed to start connection thread.\r\n", 38);
@@ -1339,10 +1620,7 @@ static bool paste_send_next_line(void)
     const char *nl = strchr(p, '\n');
     size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
 
-    for (size_t i = 0; i < chunk; i++) {
-        if (p[i] != '\r')
-            g_paste.io_write(g_paste.io_ctx, &p[i], 1);
-    }
+    paste_chunk_write(g_paste.io_ctx, g_paste.io_write, p, chunk, g_paste.local);
 
     g_paste.pos += chunk;
     return *g_paste.pos != '\0';
@@ -1359,6 +1637,7 @@ static void paste_cancel(void)
         g_paste.io_ctx   = NULL;
         g_paste.io_write = NULL;
         g_paste.bracketed = false;
+        g_paste.local     = false;
     }
 }
 
@@ -1432,6 +1711,7 @@ static void do_paste(HWND hwnd)
 
     bool bpm = g_active_session->term &&
                g_active_session->term->bracketed_paste_mode;
+    bool local_line_ends = (g_active_session->io.kind == SESSION_LOCAL);
     int  delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
 
     static const char BRACKET_OPEN[]  = "\033[200~";
@@ -1448,10 +1728,9 @@ static void do_paste(HWND hwnd)
         while (*p) {
             const char *nl = strchr(p, '\n');
             size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
-            for (size_t i = 0; i < chunk; i++) {
-                if (p[i] != '\r')
-                    g_active_session->io.write(g_active_session->io.ctx, &p[i], 1);
-            }
+            paste_chunk_write(g_active_session->io.ctx,
+                              g_active_session->io.write,
+                              p, chunk, local_line_ends);
             p += chunk;
         }
         if (bpm)
@@ -1469,6 +1748,7 @@ static void do_paste(HWND hwnd)
         g_paste.io_ctx    = g_active_session->io.ctx;
         g_paste.io_write  = g_active_session->io.write;
         g_paste.bracketed = bpm;
+        g_paste.local     = local_line_ends;
 
         if (bpm)
             g_active_session->io.write(g_active_session->io.ctx,
@@ -1993,6 +2273,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     (void)snprintf(g_config->settings.log_dir,
                                    sizeof(g_config->settings.log_dir),
                                    "%s", exe_dir);
+
+                /* First start by a version that knows about local shells:
+                 * give the user a real saved "Local shell" profile at the
+                 * top of the list (spec section 5). It is an ordinary row
+                 * from then on -- rename it, edit it, delete it. */
+                if (config_ensure_local_profile(g_config))
+                    (void)config_save(g_config, g_config_path);
             }
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;
@@ -2336,6 +2623,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         int poll_rc = s->io.poll(s->io.ctx, s->term,
                                                       s->session_log,
                                                       s->debug_log);
+
+                        /* ConPTY never delivers a real pipe EOF just because
+                         * the shell exited -- conhost keeps the session
+                         * alive until ClosePseudoConsole runs (local_pty.c,
+                         * local_pty_close()), so local_pty_poll() correctly
+                         * never reports -2 for that by itself any more. A
+                         * local session's "disconnected" signal is instead
+                         * the shell process itself, watched here once this
+                         * tick's pending output (if any) has been drained. */
+                        if (poll_rc == 0 && s->io.kind == SESSION_LOCAL &&
+                            local_pty_child_exited((const LocalPty *)s->io.ctx)) {
+                            poll_rc = -2;
+                        }
+
                         if (poll_rc > 0) {
                             update_scrollbar(hwnd);
 
@@ -2523,6 +2824,24 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 create_demo_session(hwnd);
                 return 0;
             }
+            if (g_startup_action == CLI_CONNECT_LOCAL) {
+                /* --local starts from a transient profile and never looks a
+                 * name up, so a saved profile called "Local shell" that
+                 * points at a host cannot hijack the flag (spec section 5).
+                 * Nothing is saved: this profile exists for one session. */
+                Profile local_pr;
+                memset(&local_pr, 0, sizeof(local_pr));
+                (void)snprintf(local_pr.name, sizeof(local_pr.name), "%s",
+                               "Local shell");
+                (void)snprintf(local_pr.kind, sizeof(local_pr.kind), "%s",
+                               "local");
+                (void)snprintf(local_pr.platform, sizeof(local_pr.platform),
+                               "%s", "auto");
+                local_pr.port = 22;
+                local_pr.auth_type = AUTH_PASSWORD;
+                on_session_connect(&local_pr);
+                return 0;
+            }
             const Profile *pr = NULL;
             const char *wanted = NULL;
             if (g_startup_action == CLI_CONNECT_NAME) {
@@ -2623,6 +2942,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         s->io.ctx,
                         s == g_active_session)) {
                     ai_chat_set_session(g_hwndAiChat, s->term, session_io_ptr(s));
+                    /* SSH: no shell name, so the prompt keeps its SSH text. */
+                    ai_chat_set_shell_name(g_hwndAiChat, NULL);
                 }
 
                 /* Reopen AI panel that was closed before first session */
