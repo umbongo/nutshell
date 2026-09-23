@@ -110,13 +110,18 @@ Invoke-Case "pty_resizes_with_window" @{} {
 Invoke-Case "page_up_scrolls_history" @{} {
     param($s)
     # No programmatic read of the screen exists yet; this case produces the
-    # evidence screenshots (before/after Page Up) for eyeballing.
+    # evidence screenshots (before/after Page Up) for eyeballing. Plain PgUp
+    # on the primary screen no longer reaches the shell at all (it only
+    # scrolls local history; see 90-keys.ps1's
+    # pgup_pages_on_alt_screen_and_scrolls_on_primary for the assertion on
+    # that), so scrolling is driven with Shift+PgUp, which always scrolls
+    # history regardless of screen.
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     Send-NutshellLine -Session $s -Line "seq 1 300"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^300\s*$" -TimeoutSec 5) "seq output incomplete"
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "page_up_before.png") | Out-Null
-    Send-NutshellKey -Session $s -Key PgUp -SettleMs 400
+    Send-NutshellChord -Session $s -Key PgUp -Shift -SettleMs 400
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "page_up_after.png") | Out-Null
     "screenshots saved (visual check)"
 }
@@ -151,9 +156,12 @@ Invoke-Case "terminal_holds_position_while_output_arrives" @{} {
     Send-NutshellLine -Session $s -Line "seq 1 300"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^300\s*$" -TimeoutSec 5) "seq output incomplete"
     # Output that arrives with no keypress: 101 lines after a 4 s delay.
+    # Plain PgUp on the primary screen no longer reaches the shell (see
+    # cases\90-keys.ps1's pgup_pages_on_alt_screen_and_scrolls_on_primary), so
+    # Shift+PgUp -- which always scrolls history -- drives the scroll-back.
     Send-NutshellLine -Session $s -Line "(sleep 4; seq 1000 1100) &"
-    Send-NutshellKey -Session $s -Key PgUp -SettleMs 250
-    Send-NutshellKey -Session $s -Key PgUp -SettleMs 500
+    Send-NutshellChord -Session $s -Key PgUp -Shift -SettleMs 250
+    Send-NutshellChord -Session $s -Key PgUp -Shift -SettleMs 500
     $before = Join-Path $Artifacts "smart_scroll_before.png"
     $after  = Join-Path $Artifacts "smart_scroll_after.png"
     $live   = Join-Path $Artifacts "smart_scroll_live.png"

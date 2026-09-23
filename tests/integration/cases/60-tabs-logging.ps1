@@ -2,7 +2,7 @@
 # TABS-1, TABS-2, LOG-1, LOG-2.
 # Dot-sourced by Run-Integration.ps1; depends on its Invoke-Case/Assert-True/
 # $Artifacts/$HostName/$User/$KeyPath/$Exe/$ActiveTiers/$Only/$results/
-# $WM_COMMAND/$WM_CHAR.
+# $WM_COMMAND.
 
 function Find-NutshellColorInRegion {
     <# Scan a proportional region of a capture (step-2px, cheap) for the
@@ -48,9 +48,11 @@ function Find-NutshellColorInRegion {
 # ---- TABS-1: open, switch (implicitly), close, the other tab is active ----------
 # Open-NutshellSecondTab is fully posted (Session Manager listbox selection +
 # IDOK) so the tab it opens becomes active on its own. Closing it is then just
-# Ctrl+W (WM_CHAR 0x17) on the *already*-active tab -- window.c's WM_CHAR
-# handler closes whichever tab is active, so this whole case needs no
-# Select-NutshellTab at all, unlike what the case plan assumed. Get-NutshellTabCount is not implementable (see
+# Ctrl+Shift+W (Send-NutshellChord -Key W -Ctrl -Shift) on the *already*-active
+# tab -- window.c's WM_KEYDOWN handler now closes whichever tab is active on
+# that chord (moved from plain Ctrl+W, which now reaches the shell instead;
+# see docs/superpowers/specs/2026-09-23-special-keys-design.md section 3), so
+# this whole case needs no Select-NutshellTab at all, unlike what the case plan assumed. Get-NutshellTabCount is not implementable (see
 # its doc comment), so "the count drops" is shown via a tab-strip capture
 # hash changing when the second tab opens, and "the other tab is active" via
 # a marker landing in tab A's already-running log after the close.
@@ -90,7 +92,7 @@ Invoke-Case "tabs_open_switch_close" @{} {
     Assert-True ((Get-NutshellRegionHash -Path $before -Region $stripRegion) -ne (Get-NutshellRegionHash -Path $afterOpen -Region $stripRegion)) `
         "tab strip capture did not change after opening a second tab"
 
-    [NutshellNative]::PostMessage($s.Main, $WM_CHAR, [IntPtr]0x17, [IntPtr]::Zero) | Out-Null  # Ctrl+W closes the active tab (B)
+    Send-NutshellChord -Session $s -Key W -Ctrl -Shift -SettleMs 0   # Ctrl+Shift+W closes the active tab (B)
     Start-Sleep -Milliseconds 2500
     $afterClose = Join-Path $Artifacts "tabs_strip_3closed.png"
     Save-NutshellScreenshot -Session $s -Path $afterClose | Out-Null
@@ -110,7 +112,7 @@ Invoke-Case "tabs_open_switch_close" @{} {
     Send-NutshellLine -Session $s -Line "echo TAB_A_STILL_ACTIVE_AFTER_CLOSE"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "TAB_A_STILL_ACTIVE_AFTER_CLOSE" -TimeoutSec 10) `
         "marker typed after closing tab B never reached tab A's log -- tab A is not the active tab"
-    "opened tab B (posted, no click), strip changed, Ctrl+W closed it, strip back to one tab, tab A still receives input"
+    "opened tab B (posted, no click), strip changed, Ctrl+Shift+W closed it, strip back to one tab, tab A still receives input"
 }
 
 # ---- TABS-2: status dot colours ---------------------------------------------------

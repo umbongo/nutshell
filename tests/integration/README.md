@@ -9,9 +9,9 @@ No case needs a desktop session: typing and driving dialogs go through
 input, so the suite works with the desktop locked, the RDP session disconnected,
 or another app in the foreground (a self-hosted CI runner's normal state). Even
 the modifier chords the app reads via `GetKeyState` (Ctrl+C/V, Ctrl+Shift+C/V,
-Shift+Insert, Ctrl+= zoom) are posted — `Send-NutshellChord` borrows the app's own
-keyboard state with `AttachThreadInput` instead of synthesising real input. See
-"Posted input" below.
+Ctrl+Shift+W/T, Shift+Insert, Ctrl+= zoom, Alt+letter) are posted — `Send-NutshellChord`
+borrows the app's own keyboard state with `AttachThreadInput` instead of synthesising
+real input. See "Posted input" below.
 
 ## How it works
 
@@ -42,6 +42,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | `cases\50-window.ps1` | launch/window/shutdown/menu (`LAUNCH-*`, `RESIZE-1`, `WINDOW-*`, `CLOSE-1`, `MENU-1`) |
 | `cases\60-tabs-logging.ps1` | tabs (`TABS-*`) and logging (`LOG-*`) |
 | `cases\70-cli.ps1` | CLI flags (`CLI-1`'s several small cases) |
+| `cases\90-keys.ps1` | special keys: F-keys, Alt+letter, Shift+Tab/Ctrl+arrows, Ctrl+Space, PgUp/PgDn by screen, the Send Key menu (including "Send Next Key with Alt"), Backspace over SSH, Ctrl+W/T vs. Ctrl+Shift+W/T |
 
 Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
 `cases\*.ps1` is picked up automatically) rather than growing one giant script.
@@ -50,19 +51,24 @@ Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
 
 - **Plain keys and text:** `Send-NutshellText`, `Send-NutshellKey` (named keys:
   Enter, Tab, Escape, Backspace, PgUp, PgDn, Home, End, Up, Down, Left, Right,
-  Insert, F1–F12, plus the letters the chords need), `Send-NutshellLine`,
+  Insert, Delete, F1–F12, plus the letters the chords need), `Send-NutshellLine`,
   `Wait-NutshellShell`, `Send-NutshellCommand`, and every dialog helper below.
   These post `WM_CHAR`/`WM_KEYDOWN`+`WM_KEYUP`/`WM_COMMAND`/`BM_CLICK`/etc.
   straight to the target window's message queue, exactly mirroring what
   `src/ui/window.c`'s `WM_CHAR`/`WM_KEYDOWN` handlers (and each dialog's own
   `WM_COMMAND` handler) already do for real input. `Send-NutshellKey -Hwnd`
   aims the pair at another window of the app — used for the paste preview's
-  Escape, which `paste_dlg.c`'s own modal loop watches for.
-- **Modifier chords:** `Send-NutshellChord -Key <name> [-Ctrl] [-Shift]`.
-  `window.c` decides Ctrl+C/V, Ctrl+Shift+C/V, Shift+Insert and Ctrl+=/Ctrl+-
-  with `GetKeyState(VK_CONTROL/VK_SHIFT)` rather than from the message, so a
-  bare posted `WM_KEYDOWN` takes the wrong branch. `GetKeyState` reads the
-  keyboard-state table of the calling thread's input queue, and
+  Escape, which `paste_dlg.c`'s own modal loop watches for. F10 is the one
+  exception: `Send-NutshellKey` posts it as `WM_SYSKEYDOWN`/`WM_SYSKEYUP`
+  rather than `WM_KEYDOWN`/`WM_KEYUP`, because that is how real Windows
+  delivers F10 even with no Alt held (historically because F10 alone used to
+  activate the menu bar) — `src/ui/window.c` and the special-keys design spec
+  both rely on that.
+- **Modifier chords:** `Send-NutshellChord -Key <name> [-Ctrl] [-Shift] [-Alt]`.
+  `window.c` decides Ctrl+C/V, Ctrl+Shift+C/V, Ctrl+Shift+W/T, Shift+Insert and
+  Ctrl+=/Ctrl+- with `GetKeyState(VK_CONTROL/VK_SHIFT)` rather than from the
+  message, so a bare posted `WM_KEYDOWN` takes the wrong branch. `GetKeyState`
+  reads the keyboard-state table of the calling thread's input queue, and
   `AttachThreadInput` makes two threads share one input queue — so the helper
   attaches to Nutshell's UI thread, `SetKeyboardState`s the modifier down,
   posts the key, waits for a `WM_NULL` round trip, then restores and detaches.
@@ -70,6 +76,13 @@ Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
   with no selection — which `window.c` deliberately falls through on — still
   produces the `WM_CHAR` `0x03` that reaches the shell as SIGINT. No real
   input, no input desktop, nothing to lock.
+  `-Alt` posts `WM_SYSKEYDOWN`/`WM_SYSKEYUP` (or, with `-Ctrl` also given,
+  plain `WM_KEYDOWN`/`WM_KEYUP` — that is how real Windows delivers Ctrl+Alt)
+  with lParam bit 29 (the "context code") set on both the down and the up,
+  exactly as a real Alt-held key arrives; it never posts a `WM_SYSCHAR`
+  itself, so it is the app's own `TranslateMessage` that synthesises the
+  Alt+letter escape sequence, same as for real input. F10 always goes out as
+  `WM_SYSKEYDOWN`/`WM_SYSKEYUP` through this helper too, `-Ctrl`/`-Alt` or not.
 
 That is the whole of it: `Send-NutshellKeys` (real `SendKeys`, and the
 `SetForegroundWindow`/`keybd_event` dance it needed) is gone, and no case is
@@ -154,8 +167,8 @@ before marking its pull request ready.
 | `paste_without_confirmation` | `paste_confirm=false` pastes straight through |
 | `paste_with_confirmation_shows_dialog` | `paste_confirm=true` shows the preview window |
 | `pty_resizes_with_window` | shrinking the window shrinks `tput lines`/`tput cols` |
-| `page_up_scrolls_history` | evidence screenshots before/after Page Up |
-| `terminal_holds_position_while_output_arrives` | a view scrolled back with Page Up stays on the same lines while background output arrives; Enter returns to the live view (smart scrolling) |
+| `page_up_scrolls_history` | evidence screenshots before/after Shift+Page Up (plain PgUp no longer reaches the shell on the primary screen — see `pgup_pages_on_alt_screen_and_scrolls_on_primary` below — so scrolling is driven with the always-scrolls Shift+PgUp chord) |
+| `terminal_holds_position_while_output_arrives` | a view scrolled back with Shift+Page Up stays on the same lines while background output arrives; Enter returns to the live view (smart scrolling) |
 | `resize_applies_to_inactive_tab` | a tab resized while in the background comes back with the same grid as the tab that was in front, and a bigger one than it had before the resize |
 | `ai_panel_docks_with_key` | View › AI Assist docks the panel without a dialog |
 | `ai_runs_read_command_unattended` | a prompted `echo` runs in the terminal via `[EXEC]` once the policy control's unattended marker is on Read |
@@ -176,8 +189,8 @@ before marking its pull request ready.
 | `minimise_restore_repaints` | (`WINDOW-1`) SW_MINIMIZE then SW_RESTORE: iconic/restored state and the "repaints identically" comparison all asserted normally. Regression guard for the `WM_SIZE` `SIZE_MINIMIZED` bug this case found, fixed in v1.1.12 (see the case comment) |
 | `fullscreen_toggle_changes_pty` | (`WINDOW-2`) `IDM_VIEW_FULLSCREEN` twice: `tput cols` grows then returns to its original value |
 | `close_with_live_session_exits_cleanly` | (`CLOSE-1`) `WM_CLOSE` with a connected tab: process exits within 5s, exit code 0, no dialog (none exists today) |
-| `menus_open_and_list_items` | (`MENU-1`) message-free: `GetMenu`/`GetSubMenu`/`GetMenuItemCount`/`GetMenuItemID` against the 4 top-level menus and every item's real `WM_COMMAND` id (0 = separator), hand-derived from `create_app_menu()` in `src/ui/window.c` — captions are **not** checked: the menu is entirely owner-drawn (`MF_OWNERDRAW`, no `MENU` resource in `resource.rc`) so `GetMenuString` returns empty for every item |
-| `tabs_open_switch_close` | (`TABS-1`) open a second tab (fully posted — no click needed), the tab strip capture changes, Ctrl+W closes the active one; the post-close checks (strip hashes back to the one-tab strip, a marker still reaches the surviving tab's log) are asserted normally. Regression guard for the tab-close bug this case found, fixed in v1.1.13 (see the case comment) |
+| `menus_open_and_list_items` | (`MENU-1`) message-free: `GetMenu`/`GetSubMenu`/`GetMenuItemCount`/`GetMenuItemID` against the 4 top-level menus and every item's real `WM_COMMAND` id (0 = separator, -1 = a popup item), hand-derived from `create_app_menu()` in `src/ui/window.c`, including a walk of the Edit menu's new "Send Key" popup submenu (F1-F12, PgUp/PgDn, Ctrl+V/Shift+Insert/Ctrl+=/Ctrl+-, Send Next Key Raw/with Alt) — captions are **not** checked: the menu is entirely owner-drawn (`MF_OWNERDRAW`, no `MENU` resource in `resource.rc`) so `GetMenuString` returns empty for every item |
+| `tabs_open_switch_close` | (`TABS-1`) open a second tab (fully posted — no click needed), the tab strip capture changes, Ctrl+Shift+W closes the active one (moved off plain Ctrl+W, which now reaches the shell instead — see `cases\90-keys.ps1`'s `ctrl_w_reaches_shell_and_shift_closes_tab`); the post-close checks (strip hashes back to the one-tab strip, a marker still reaches the surviving tab's log) are asserted normally. Regression guard for the tab-close bug this case found, fixed in v1.1.13 (see the case comment) |
 | `tab_status_dot_colours` | (`TABS-2`) three phases (unroutable host / tompi / `kill -9 $$`), each at a fixed 1200×800 so the tab-strip scan band is meaningful: the status dot samples to the theme's `warning`/`success`/`danger` token colour respectively |
 | `logging_stop_then_restart_new_file` | (`LOG-1`) `IDM_FILE_LOG_STOP` then a marker is absent from the old file; `IDM_FILE_LOG_START` opens a new file and a second marker lands in it |
 | `debug_terminal_log_written` | (`LOG-2`) `debug_terminal=true`: a `<profile>-debug-<timestamp>.log` appears next to the exe (not in `log_dir` — see `open_debug_log()` in `window.c`) containing the sent sequence rendered as the literal text `ESC[1m` followed by `BOLD` |
@@ -187,6 +200,15 @@ before marking its pull request ready.
 | `cli_unknown_flag_errors` | (`CLI-1`) an unrecognised flag: non-zero exit code, "Unknown option" text |
 | `cli_no_connect_opens_idle` | (`CLI-1`) `-nc`: main window, no dialog, and no repaint over 5s (nothing animates a connecting-state tab, since nothing tried to connect) |
 | `cli_host_flag_connects` | (`CLI-1`) `-h tompi` resolves the generated profile by host (`config_find_profile_by_host`) and connects, same as `-sn` |
+| `f_keys_reach_shell` | F1-F4 -> SS3 P-S, F5-F10 -> CSI 15/17/18/19/20/21~ (F10 posted as `WM_SYSKEYDOWN`, matching real Windows), Shift+F11 -> CSI 23;2~ (plain F11 stays the fullscreen toggle), F12 -> CSI 24~, read back from `cat -v` |
+| `alt_letter_reaches_shell` | Alt+F (posted as `WM_SYSKEYDOWN`/`WM_SYSKEYUP` with no `WM_SYSCHAR` of its own) produces exactly one `^[f` in `cat -v`, proving the app's own `TranslateMessage` synthesises it once, not twice |
+| `shift_tab_and_ctrl_arrows` | Shift+Tab -> CSI Z; Ctrl+Up/Down/Right/Left -> CSI 1;5 A/B/C/D, read back from `cat -v` |
+| `ctrl_space_sends_nul_only` | Ctrl+Space sends NUL (`^@`) and nothing else — no stray space or extra byte before the next character |
+| `pgup_pages_on_alt_screen_and_scrolls_on_primary` | plain PgUp reaches `cat -v` as nothing (only a following marker arrives) on the primary screen; plain PgDn/PgUp page `less` (alternate screen) — PgDn's paging is a hard assertion (line numbers well past the first screen), PgUp's return-to-top is asserted only when cleanly detectable and otherwise just documented |
+| `send_key_menu_posts_f1` | Edit > Send Key > F1 (`WM_COMMAND` 2040) writes `ESC O P` to the active session with no dialog up |
+| `ctrl_w_reaches_shell_and_shift_closes_tab` | plain Ctrl+W/Ctrl+T now reach the shell as `^W`/`^T` (moved off tab close/new-session); Ctrl+Shift+W closes the active tab (tab strip back to the one-tab hash) without leaking a `^W` into the surviving tab's `cat -v` |
+| `send_key_alt_next_prefixes_escape` | Edit > Send Key > Send Next Key with Alt (`WM_COMMAND` 2059) arms the one-shot; a plain `f` key-down with no Alt held arrives as exactly one `^[f`, proving the one-shot -- not a real Alt chord -- supplied the ESC prefix |
+| `backspace_sends_bs_over_ssh` | Backspace sends BS (`^H`, 0x08) over SSH, read back from `cat -v` |
 
 ## AI Assist cases
 
@@ -250,7 +272,7 @@ One thing the harness cannot do, documented rather than faked:
   without clicking around and diffing captures.
 
 **Tab switching** (`Select-NutshellTab`, and `Close-NutshellTab`, which selects
-before posting Ctrl+W) *is* posted: `tabs.c`'s `WM_LBUTTONDOWN` handler
+before sending Ctrl+Shift+W) *is* posted: `tabs.c`'s `WM_LBUTTONDOWN` handler
 hit-tests the message's own `lParam` and never reads the cursor, so the helper
 posts `WM_LBUTTONDOWN`+`WM_LBUTTONUP` to the `Nutshell_Tabs` child window at the
 tab's computed rect — no foreground, no mouse, works desktop-locked. (It used to

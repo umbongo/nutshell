@@ -184,7 +184,10 @@ the shell bypassing every app shortcut) and **"Send next key with Alt"** (the ne
 gets the `ESC` prefix). Each is a `WM_COMMAND` id, so the harness drives it by posting the
 id as it does the File menu; no dialog, no drawn surface. The critique's point stands that a
 posted `WM_COMMAND` is dispatched even while a modal dialog has the window disabled, so the
-harness case for it must run with no dialog up.
+harness case for it must run with no dialog up. The raw one-shot bypasses only Nutshell's
+own shortcuts: a key-down Windows keeps for itself (Alt+F4, Alt+Space, Alt+Esc, Alt+Enter,
+Alt+Tab, Alt+numpad) still goes to `DefWindowProc` while armed, and the one-shot stays armed
+for the keystroke that follows it.
 
 **Option B, a special-keys strip** above the terminal, hidden by default, toggled from View:
 Esc, Tab, sticky Ctrl and Alt, arrows, F1-F12, PgUp, PgDn, as mobile terminals have. Built

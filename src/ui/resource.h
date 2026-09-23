@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.2"
-#define APP_VERSION_BINARY  1,2,2,0
+#define APP_VERSION        "1.2.4"
+#define APP_VERSION_BINARY  1,2,4,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -27,6 +27,20 @@
 #define IDM_VIEW_AI_UNDOCK    2022
 #define IDM_HELP_GUIDE        2029
 #define IDM_ABOUT             2030
+
+/* Edit > Send Key: write a key the app or Windows keeps for itself straight
+ * to the active session (special-keys spec, section 4A). F1..F12 are
+ * consecutive: IDM_SENDKEY_F1 + n is F(n+1). */
+#define IDM_SENDKEY_F1           2040  /* .. 2051 = F12 */
+#define IDM_SENDKEY_F12          2051
+#define IDM_SENDKEY_PGUP         2052
+#define IDM_SENDKEY_PGDN         2053
+#define IDM_SENDKEY_CTRL_V       2054
+#define IDM_SENDKEY_SHIFT_INSERT 2055
+#define IDM_SENDKEY_CTRL_EQUALS  2056
+#define IDM_SENDKEY_CTRL_MINUS   2057
+#define IDM_SENDKEY_RAW_NEXT     2058  /* one-shot: next key bypasses every shortcut */
+#define IDM_SENDKEY_ALT_NEXT     2059  /* one-shot: next key gets the Alt (ESC) prefix */
 
 /* Session list panel */
 #define IDC_LIST_SESSIONS   1000

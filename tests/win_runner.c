@@ -22,6 +22,11 @@ extern FILE *nspty_report;
 int test_local_pty_echo_through_cmd(void);
 int test_local_pty_close_with_sleeping_grandchild(void);
 int test_local_pty_records_opening_bytes(void);
+int test_local_pty_records_key_mapping(void);
+int test_local_pty_records_busybox_cat_v(void);
+int test_local_pty_records_fullscreen_modes(void);
+int test_key_layout_records_ctrl_space(void);
+int nspty_key_dump_main(void);
 
 /* ---- why the ConPTY cases run in a re-executed child --------------------
  *
@@ -58,6 +63,10 @@ int test_local_pty_records_opening_bytes(void);
  */
 
 #define PTY_CHILD_FLAG "--pty-child"
+/* test_local_pty_records_key_mapping runs this executable again, under a
+ * pseudo-console, as the program whose console input it records. */
+#define KEY_DUMP_FLAG  "--dump-keys"
+#define PTY_CASE_COUNT 7
 
 struct PtyCase { const char *name; int (*fn)(void); };
 
@@ -69,6 +78,14 @@ static int run_pty_cases(void)
           test_local_pty_close_with_sleeping_grandchild },
         { "test_local_pty_records_opening_bytes",
           test_local_pty_records_opening_bytes },
+        { "test_local_pty_records_key_mapping",
+          test_local_pty_records_key_mapping },
+        { "test_local_pty_records_busybox_cat_v",
+          test_local_pty_records_busybox_cat_v },
+        { "test_local_pty_records_fullscreen_modes",
+          test_local_pty_records_fullscreen_modes },
+        { "test_key_layout_records_ctrl_space",
+          test_key_layout_records_ctrl_space },
     };
     int failed = 0;
     for (size_t i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
@@ -139,6 +156,8 @@ static int spawn_pty_child(void)
 
 int main(int argc, char **argv)
 {
+    if (argc >= 2 && strcmp(argv[1], KEY_DUMP_FLAG) == 0)
+        return nspty_key_dump_main();
     if (argc >= 3 && strcmp(argv[1], PTY_CHILD_FLAG) == 0) {
         /* Re-executed half. Swap the inherited console for a fresh hidden
          * one, then open the report file -- in that order, and with fopen
@@ -169,7 +188,7 @@ int main(int argc, char **argv)
         printf("[SKIP] ConPTY cases -- could not re-execute this harness\n");
     } else {
         failed += pty_failed;
-        _tf_run += 3;
+        _tf_run += PTY_CASE_COUNT;
         _tf_failed += pty_failed;
     }
 
