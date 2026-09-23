@@ -50,7 +50,10 @@ void chat_approval_init(ApprovalQueue *q);
  *
  * The second test is a set test over safety_mask, not a threshold over
  * `safety` -- see cmd_policy_runs_unattended().
- * Returns the entry index, or -1 if queue is full. */
+ * Returns the entry index, or -1 if the queue is full, the command is
+ * blank, contains a control character, or is too long for
+ * ApprovalEntry.command (strlen(command) >= sizeof(e->command)) -- the
+ * command is rejected outright rather than clamped to fit. */
 int chat_approval_add(ApprovalQueue *q, const char *command,
                       CmdPlatform platform);
 

@@ -47,6 +47,7 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
         item->u.cmd.blocked = 0;
         item->u.cmd.settled = 0;
         item->u.cmd.batch = 0;
+        item->u.cmd.run = CHAT_RUN_NONE;
         item->u.cmd.container_scroll = 0;
     }
 
@@ -151,6 +152,7 @@ int chat_msg_set_command(ChatMsgItem *item, const char *command,
     item->u.cmd.safety = safety;
     item->u.cmd.approved = -1;
     item->u.cmd.blocked = blocked;
+    item->u.cmd.run = CHAT_RUN_NONE;
     /* Approval card v2: pending, non-held rows start checked (the user
      * unchecks the ones they don't want before "Run N selected"); a held
      * (blocked) row's checkbox paints disabled regardless, so leave it
@@ -227,6 +229,83 @@ int chat_msg_batch_settle(ChatMsgList *list, int batch)
             it->dirty = 1;
             n++;
         }
+    }
+    return n;
+}
+
+const char *chat_cmd_label(int approved, int blocked, int run,
+                           ChatCmdIntent *intent)
+{
+    ChatCmdIntent i;
+    const char *label;
+
+    if (blocked) {
+        label = "held";
+        i = CHAT_CMD_INTENT_WARNING;
+    } else if (approved == 0) {
+        label = "denied";
+        i = CHAT_CMD_INTENT_DIM;
+    } else if (approved == -1) {
+        label = "skipped";
+        i = CHAT_CMD_INTENT_DIM;
+    } else if (run == CHAT_RUN_RUNNING) {
+        label = "running";
+        i = CHAT_CMD_INTENT_INFO;
+    } else if (run == CHAT_RUN_DONE) {
+        label = "ran";
+        i = CHAT_CMD_INTENT_SUCCESS;
+    } else if (run == CHAT_RUN_ABORTED) {
+        label = "not run";
+        i = CHAT_CMD_INTENT_WARNING;
+    } else {
+        /* approved == 1, CHAT_RUN_NONE, or any unexpected run value */
+        label = "queued";
+        i = CHAT_CMD_INTENT_DIM;
+    }
+
+    if (intent) *intent = i;
+    return label;
+}
+
+int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
+                            const ApprovalQueue *q, int batch_ending)
+{
+    if (!list || !q) return 0;
+
+    int n = 0;
+    int idx = 0;
+    for (ChatMsgItem *it = list->head; it; it = it->next) {
+        if (it->type != CHAT_ITEM_COMMAND || it->u.cmd.batch != batch_id)
+            continue;
+
+        if (idx >= q->count) {
+            idx++;
+            continue;
+        }
+
+        const ApprovalEntry *e = &q->entries[idx];
+        int run;
+        switch (e->status) {
+        case APPROVE_EXECUTING:
+            run = batch_ending ? CHAT_RUN_ABORTED : CHAT_RUN_RUNNING;
+            break;
+        case APPROVE_COMPLETED:
+            run = CHAT_RUN_DONE;
+            break;
+        case APPROVE_APPROVED:
+            run = batch_ending ? CHAT_RUN_ABORTED : CHAT_RUN_NONE;
+            break;
+        default:
+            run = CHAT_RUN_NONE;
+            break;
+        }
+
+        if (it->u.cmd.run != run) {
+            it->u.cmd.run = run;
+            it->dirty = 1;
+        }
+        n++;
+        idx++;
     }
     return n;
 }

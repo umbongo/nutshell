@@ -149,4 +149,10 @@ void term_mark_all_dirty(Terminal *term);
  * (see shell_prompt_line() in src/core/shell_prompt.h). */
 int term_at_prompt(const Terminal *term);
 
+/* Same cursor-row text as term_at_prompt(), tested against
+ * shell_prompt_is_continuation() instead: true when the shell is sitting
+ * at a continuation prompt (an open quote, heredoc, etc.), waiting for the
+ * rest of a multi-line command rather than a new one. */
+int term_at_continuation_prompt(const Terminal *term);
+
 #endif

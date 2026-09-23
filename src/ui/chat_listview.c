@@ -1590,7 +1590,8 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 }
 
 /* ── Paint a settled command as one compact inline row: command text on
- *    the left, an outcome chip ("ran"/"held"/"denied"/"skipped") right-
+ *    the left, an outcome chip ("ran"/"running"/"queued"/"not run"/
+ *    "held"/"denied"/"skipped", from chat_cmd_label()) right-
  *    aligned. No card, no header, no checkbox, no buttons -- the command
  *    has already been decided and (for approved ones) already ran; this
  *    is just a record of what happened, matching the AI text's own
@@ -1612,36 +1613,44 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     int box_right = rc->right - side_pad;
     if (box_right < box_left) box_right = box_left;
 
-    /* Outcome -> label + colours, per priority: an approved (ran) command
-     * always shows "ran" even if it was momentarily held before being
-     * unblocked; otherwise a still-blocked command shows "held"; then an
-     * explicit denial; anything else (approved == -1, not blocked) means
-     * the command was superseded before ever being decided -- "skipped". */
-    const char *label;
+    /* Outcome -> label + intent from chat_cmd_label() (src/core/chat_msg.c),
+     * the single, natively tested place where the (approved, blocked, run)
+     * triple becomes words: "held" for a blocked row, "denied", "skipped"
+     * for one superseded before it was decided, and -- for an approved one
+     * -- "queued" / "running" / "ran" / "not run" from u.cmd.run, which
+     * chat_msg_batch_sync_run() keeps in step with the batch's
+     * ApprovalQueue. Only the intent -> token mapping is decided here; no
+     * colour is chosen from the outcome itself. */
+    ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
+    const char *label = chat_cmd_label(item->u.cmd.approved,
+                                       item->u.cmd.blocked,
+                                       item->u.cmd.run, &intent);
     COLORREF chip_bg, chip_fg, text_clr;
     COLORREF dim = RGB_FROM_THEME(tok->text_dim);
     COLORREF panel_bg = RGB_FROM_THEME(tok->bg_primary.base);
 
-    if (item->u.cmd.approved == 1) {
-        label = "ran";
+    switch (intent) {
+    case CHAT_CMD_INTENT_SUCCESS:
         chip_bg = RGB_FROM_THEME(tok->success.base);
         chip_fg = RGB_FROM_THEME(tok->success.label);
         text_clr = RGB_FROM_THEME(tok->text_main);
-    } else if (item->u.cmd.blocked) {
-        label = "held";
+        break;
+    case CHAT_CMD_INTENT_INFO:
+        chip_bg = RGB_FROM_THEME(tok->info.base);
+        chip_fg = RGB_FROM_THEME(tok->info.label);
+        text_clr = RGB_FROM_THEME(tok->text_main);
+        break;
+    case CHAT_CMD_INTENT_WARNING:
         chip_bg = RGB_FROM_THEME(tok->warning.base);
         chip_fg = RGB_FROM_THEME(tok->warning.label);
         text_clr = dim;
-    } else if (item->u.cmd.approved == 0) {
-        label = "denied";
+        break;
+    case CHAT_CMD_INTENT_DIM:
+    default:
         chip_bg = rgb_alpha(dim, panel_bg, 0.18f);
         chip_fg = dim;
         text_clr = dim;
-    } else {
-        label = "skipped";
-        chip_bg = rgb_alpha(dim, panel_bg, 0.18f);
-        chip_fg = dim;
-        text_clr = dim;
+        break;
     }
 
     /* Chip label width, measured with the small font: label width plus

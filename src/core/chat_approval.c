@@ -42,7 +42,12 @@ int chat_approval_add(ApprovalQueue *q, const char *command,
     int idx = q->count;
     ApprovalEntry *e = &q->entries[idx];
     size_t len = strlen(command);
-    if (len >= sizeof(e->command)) len = sizeof(e->command) - 1;
+    /* Reject outright rather than clamp -- a clamped command would run
+     * with its tail silently cut off, which is worse than not running at
+     * all (spec: 2026-09-23-command-dispatch-states-design.md section 1).
+     * Nothing has been written into *e or q->count yet, so this leaves
+     * the queue exactly as it was. */
+    if (len >= sizeof(e->command)) return -1;
     memcpy(e->command, command, len);
     e->command[len] = '\0';
     e->safety = cmd_classify(command, platform);

@@ -251,6 +251,11 @@ typedef struct {
     DWORD dispatch_last_change_tick; /* GetTickCount() of the last write_seq change */
     int dispatch_last_idx;           /* batch queue index last set EXECUTING, or -1 */
     int dispatch_sent_count;         /* commands sent so far in this dispatch run */
+    int dispatch_stall_reported;     /* 1 once the "shell is waiting for more
+                                       * input" status line has been posted for
+                                       * the current stall; cleared the moment
+                                       * the terminal produces output again, so
+                                       * the line appears once per stall */
     int stream_phase;  /* 0=not started, 1=in thinking, 2=in content */
 
     /* AI notes for system prompt context */
@@ -1056,6 +1061,13 @@ static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
             break;  /* stays unsettled -- part of the active card */
         }
     }
+
+    /* Run state comes from the same queue, so a rebuilt display (session
+     * switch, --ui-demo=executing) shows "running"/"ran" exactly where the
+     * live panel does instead of falling back to "queued". The batch is
+     * alive here by definition -- a rebuild only ever replays batches still
+     * in the set -- hence batch_ending = 0. */
+    chat_msg_batch_sync_run(list, batch->id, &batch->q, 0);
 }
 
 /* Rebuild the chat display from the conversation history.
@@ -1723,6 +1735,7 @@ static void dispatch_start(AiChatData *d, int batch_id)
     d->dispatch_last_change_tick = GetTickCount();
     d->dispatch_last_idx = -1;
     d->dispatch_sent_count = 0;
+    d->dispatch_stall_reported = 0;
 
     SetTimer(d->hwnd, TIMER_CMD_QUEUE, CMD_QUEUE_POLL_MS, NULL);
 
@@ -1747,34 +1760,78 @@ static void maybe_start_next_batch(AiChatData *d)
     if (nb) dispatch_start(d, nb->id);
 }
 
-/* Stop the dispatcher: kill the timer, deny any commands in the running
- * batch that were approved but not yet sent (so a later dispatch_start()
- * can't resurrect them), settle and remove just that batch's card, and
- * restore the Send button. Other pending batches are untouched -- "Stop
- * cancels the running batch only" (rule 3). When status_msg is non-NULL
- * it is appended as a status line (the Stop button path); a session
- * switch or panel close cancels silently (NULL). A no-op when the
- * dispatcher isn't running. */
-static void dispatch_cancel(AiChatData *d, const char *status_msg)
+/* Stop the dispatcher: kill the timer, mark the running batch's cards with
+ * what actually happened to them, settle and remove just that batch's card,
+ * and restore the Send button. Other pending batches are untouched -- "Stop
+ * cancels the running batch only" (rule 3). When status_msg is non-NULL it
+ * is appended as a status line (the Stop button path); a session switch or
+ * panel close cancels silently (NULL). A no-op when the dispatcher isn't
+ * running.
+ *
+ * Nothing is force-denied any more (2026-09-23 dispatch-states spec,
+ * section 2): a command the dispatcher never sent stays APPROVE_APPROVED in
+ * the queue and chat_msg_batch_sync_run(..., batch_ending = 1) paints it
+ * "not run", which is the honest label -- the user denied nothing. The
+ * batch is removed from the set on the next line, so a later
+ * dispatch_start() cannot resurrect it either way.
+ *
+ * `notify` marks the two paths the user can see the end of -- the Stop
+ * button and the session ending mid-batch. Those additionally (a) send
+ * Ctrl+C when the terminal is sitting at a continuation prompt, so the
+ * shell discards the half-finished line and gives the user a prompt back,
+ * and (b) tell the model what ran and what did not, instead of leaving it
+ * to assume every command it proposed was executed (section 3). */
+static void dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
 {
     if (!d || !d->dispatch_active) return;
 
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
     d->dispatch_active = 0;
+    d->dispatch_stall_reported = 0;
+
+    char continue_text[4096] = "";
+    int have_continue = 0;
 
     CmdBatch *batch = d->active_state
         ? cmd_batch_find(&d->active_state->batches, d->dispatch_batch_id)
         : NULL;
     if (batch) {
-        for (int i = 0; i < batch->q.count; i++) {
-            if (batch->q.entries[i].status == APPROVE_APPROVED)
-                batch->q.entries[i].status = APPROVE_DENIED;
+        chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 1);
+
+        if (notify) {
+            int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;
+            char first_cmd[1024] = "";
+            if (batch->q.count > 0)
+                snprintf(first_cmd, sizeof(first_cmd), "%s",
+                         batch->q.entries[0].command);
+            have_continue = ai_build_continue_text(newer_exchanges, first_cmd,
+                                                   &batch->q, continue_text,
+                                                   sizeof(continue_text)) > 0;
+            /* The per-command outcomes list can overflow the buffer on a
+             * batch with many/long commands -- fall back to the opening
+             * sentence alone so a continue message is still sent and
+             * maybe_start_next_batch() still gets its turn once it
+             * completes, rather than silently dropping the continue. */
+            if (!have_continue)
+                have_continue = ai_build_continue_text(newer_exchanges,
+                                                       first_cmd, NULL,
+                                                       continue_text,
+                                                       sizeof(continue_text)) > 0;
         }
+
         chat_msg_batch_settle(&d->msg_list, batch->id);
         cmd_batch_remove(&d->active_state->batches, batch->id);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
     }
     d->dispatch_batch_id = 0;
+
+    /* Stop at a continuation prompt: the shell is holding an unfinished
+     * line (an unclosed quote, a half-typed here-doc). Ctrl+C throws it
+     * away so the next thing the user types isn't swallowed by it. At a
+     * primary prompt nothing is sent, as before. */
+    if (notify && d->active_io && d->active_io->write && d->active_term &&
+        term_at_continuation_prompt(d->active_term))
+        d->active_io->write(d->active_io->ctx, "\x03", 1);
 
     if (status_msg) {
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, status_msg);
@@ -1785,6 +1842,8 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg)
         SetWindowText(d->hSendBtn, ">");
         InvalidateRect(d->hSendBtn, NULL, TRUE);
     }
+
+    if (have_continue) send_continue_message(d, continue_text);
 }
 
 /* TIMER_CMD_QUEUE tick: advance the dispatcher (on d->dispatch_batch_id)
@@ -1805,7 +1864,10 @@ static void dispatch_tick(AiChatData *d)
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                         "[session ended -- remaining commands cancelled]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
-        dispatch_cancel(d, NULL);
+        /* notify: the model is told which commands ran and which did not,
+         * rather than being left to assume the whole batch executed. No
+         * Ctrl+C -- active_io is already gone, which is why we're here. */
+        dispatch_cancel(d, NULL, 1);
         return;
     }
 
@@ -1819,6 +1881,7 @@ static void dispatch_tick(AiChatData *d)
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
         d->dispatch_active = 0;
         d->dispatch_batch_id = 0;
+        d->dispatch_stall_reported = 0;
         if (d->hSendBtn) {
             SetWindowText(d->hSendBtn, ">");
             InvalidateRect(d->hSendBtn, NULL, TRUE);
@@ -1831,12 +1894,33 @@ static void dispatch_tick(AiChatData *d)
         d->dispatch_seq = seq;
         d->dispatch_last_change_tick = GetTickCount();
         d->dispatch_await_echo = 0;
+        /* Output means the stall (if there was one) is over: the next one
+         * gets its own status line. */
+        d->dispatch_stall_reported = 0;
     }
 
-    int ready = !d->dispatch_await_echo &&
-                term_at_prompt(d->active_term) &&
-                (GetTickCount() - d->dispatch_last_change_tick) >= PROMPT_QUIET_MS;
-    if (!ready) return;
+    int quiet = (GetTickCount() - d->dispatch_last_change_tick) >= PROMPT_QUIET_MS;
+    int ready = !d->dispatch_await_echo && quiet &&
+                term_at_prompt(d->active_term);
+    if (!ready) {
+        /* A shell waiting for the rest of an unfinished line looks exactly
+         * like a hang from here: no output, and no primary prompt to send
+         * the next command to. Say so once per stall and keep waiting --
+         * never a Ctrl+C of our own accord, because a command that prompts
+         * with "> " itself (read -p, a REPL) is indistinguishable from an
+         * unclosed quote and killing it would be worse. The check runs
+         * whether or not a command has been sent, so a quote the user
+         * opened by hand before the batch is reported too. */
+        if (quiet && !d->dispatch_await_echo && !d->dispatch_stall_reported &&
+            term_at_continuation_prompt(d->active_term)) {
+            d->dispatch_stall_reported = 1;
+            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                "[the shell is waiting for more input (a \">\" prompt). "
+                "Finish the line in the terminal, or press Stop to cancel.]");
+            if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        }
+        return;
+    }
 
     int idx = chat_approval_next_approved(&batch->q);
     if (idx >= 0) {
@@ -1853,6 +1937,10 @@ static void dispatch_tick(AiChatData *d)
         int total = d->dispatch_sent_count + approved_now;
 
         chat_approval_set_executing(&batch->q, idx);
+        /* The cards follow the queue: the one just finished turns "ran",
+         * this one turns "running", the rest stay "queued". */
+        chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 0);
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
         execute_command(d, batch->q.entries[idx].command);
         d->dispatch_last_idx = idx;
         d->dispatch_sent_count++;
@@ -1880,9 +1968,31 @@ static void dispatch_tick(AiChatData *d)
             snprintf(first_cmd, sizeof(first_cmd), "%s",
                      batch->q.entries[0].command);
 
+        /* Final card states, and the per-command outcome list for the
+         * model -- both read the queue, which cmd_batch_remove() is about
+         * to free. batch_ending = 1: nothing should still be APPROVED here
+         * (next_approved just said so), but anything that were would be
+         * "not run", never "queued". */
+        chat_msg_batch_sync_run(&d->msg_list, batch_id, &batch->q, 1);
+
+        char continue_text[4096] = "";
+        int have_continue = ai_build_continue_text(newer_exchanges, first_cmd,
+                                                   &batch->q, continue_text,
+                                                   sizeof(continue_text)) > 0;
+        /* The per-command outcomes list can overflow the buffer on a batch
+         * with many/long commands -- fall back to the opening sentence
+         * alone so a continue message is still sent and
+         * maybe_start_next_batch() still gets its turn once it completes,
+         * rather than silently dropping the continue. */
+        if (!have_continue)
+            have_continue = ai_build_continue_text(newer_exchanges, first_cmd,
+                                                    NULL, continue_text,
+                                                    sizeof(continue_text)) > 0;
+
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
         d->dispatch_active = 0;
         d->dispatch_batch_id = 0;
+        d->dispatch_stall_reported = 0;
 
         chat_msg_batch_settle(&d->msg_list, batch_id);
         cmd_batch_remove(&d->active_state->batches, batch_id);
@@ -1893,10 +2003,7 @@ static void dispatch_tick(AiChatData *d)
             InvalidateRect(d->hSendBtn, NULL, TRUE);
         }
 
-        char continue_text[1024];
-        ai_build_continue_text(newer_exchanges, first_cmd,
-                               continue_text, sizeof(continue_text));
-        send_continue_message(d, continue_text);
+        if (have_continue) send_continue_message(d, continue_text);
     }
 }
 
@@ -2971,7 +3078,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         switch (LOWORD(wParam)) {
         case IDC_CHAT_SEND:
             if (d && d->dispatch_active) {
-                dispatch_cancel(d, "[command queue stopped]");
+                dispatch_cancel(d, "[command queue stopped]", 1);
                 if (d->hChatList)
                     chat_listview_scroll_to_bottom(d->hChatList);
             } else if (d && ACTIVE_BUSY(d)) {
@@ -3030,7 +3137,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (ACTIVE_BUSY(d))
                     cancel_active_stream(d);
                 if (d->dispatch_active)
-                    dispatch_cancel(d, NULL);
+                    dispatch_cancel(d, NULL, 0);
 
                 /* Reset only the ACTIVE session's conversation.
                  * Other sessions' AiSessionState objects are untouched. */
@@ -3611,9 +3718,9 @@ next_coalesce:;
         if (src != d->active_state) {
             if (wParam == 2 && src && rmsg->content) {
                 char cmds[16][1024];
-                int rejected = 0;
+                int rejected = 0, rejected_long = 0;
                 int ncmds = ai_extract_commands_ex(rmsg->content, cmds, 16,
-                                                   &rejected);
+                                                   &rejected, &rejected_long);
                 if (ncmds > 0) {
                     ApprovalQueue bg_defaults;
                     chat_approval_init(&bg_defaults);
@@ -3624,10 +3731,26 @@ next_coalesce:;
                                                     &bg_defaults, NULL);
                     if (batch) {
                         batch->conv_mark = src->conv.msg_count;
-                        for (int ci = 0; ci < ncmds; ci++)
-                            chat_approval_add(&batch->q, cmds[ci],
-                                              (CmdPlatform)src->platform);
+                        for (int ci = 0; ci < ncmds; ci++) {
+                            /* -1 means the queue refused it (full, blank,
+                             * control characters, or too long) -- not
+                             * added, and no card is ever built for it. */
+                            (void)chat_approval_add(&batch->q, cmds[ci],
+                                                    (CmdPlatform)src->platform);
+                        }
                     }
+                }
+                if (rejected_long > 0) {
+                    char lnote[256];
+                    snprintf(lnote, sizeof(lnote),
+                        "NOTE: %d command(s) were NOT run because they are "
+                        "longer than the %d-byte limit for a single EXEC "
+                        "block. Do not claim they ran. Break the work into "
+                        "smaller steps (write a file a few lines at a time) "
+                        "and send them again.", rejected_long, 1023);
+                    EnterCriticalSection(&d->cs);
+                    ai_conv_add(&src->conv, AI_ROLE_USER, lnote);
+                    LeaveCriticalSection(&d->cs);
                 }
                 if (rejected > 0) {
                     char note[256];
@@ -3688,8 +3811,9 @@ next_coalesce:;
 
             /* Extract commands from the full accumulated content */
             char cmds[16][1024];
-            int rejected = 0;
-            int ncmds = text ? ai_extract_commands_ex(text, cmds, 16, &rejected) : 0;
+            int rejected = 0, rejected_long = 0;
+            int ncmds = text ? ai_extract_commands_ex(text, cmds, 16, &rejected,
+                                                      &rejected_long) : 0;
 
             /* Finalize the AI item text.  When commands were found, show
              * only the pre-command portion — the summary/analysis after
@@ -3717,8 +3841,34 @@ next_coalesce:;
              * [EXEC] blocks were dropped for containing control
              * characters (a newline is the classic way to smuggle a
              * second, unclassified command past the approval card). */
+            /* An EXEC block too long for ApprovalEntry.command used to be
+             * truncated mid-argument and run anyway (a printf losing its
+             * closing quote left the shell on its continuation prompt).
+             * It is skipped now -- no card, no queue entry -- and both the
+             * user and the model are told, with the limit, so the model can
+             * break the work into smaller steps. */
+            if (rejected_long > 0) {
+                char status_text[160];
+                snprintf(status_text, sizeof(status_text),
+                    "[%d command(s) not run: over the %d-byte limit; ask for "
+                    "them in smaller steps]", rejected_long, 1023);
+                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, status_text);
+                if (d->hChatList) chat_listview_invalidate(d->hChatList);
+
+                char long_note[256];
+                snprintf(long_note, sizeof(long_note),
+                    "NOTE: %d command(s) were NOT run because they are longer "
+                    "than the %d-byte limit for a single EXEC block. Do not "
+                    "claim they ran. Break the work into smaller steps (write "
+                    "a file a few lines at a time) and send them again.",
+                    rejected_long, 1023);
+                EnterCriticalSection(&d->cs);
+                ai_conv_add(&d->conv, AI_ROLE_USER, long_note);
+                LeaveCriticalSection(&d->cs);
+            }
+
             if (rejected > 0) {
-                char status_text[80];
+                char status_text[160];
                 snprintf(status_text, sizeof(status_text),
                     "[%d command(s) rejected: control characters inside "
                     "an EXEC block]", rejected);
@@ -3832,6 +3982,11 @@ next_coalesce:;
                             }
                             it = it->next;
                         }
+                        /* Every entry was decided by policy alone -- settle
+                         * the batch immediately so its rows show "queued"/
+                         * "running"/"ran" instead of sitting on the pending
+                         * card's un-settled styling while it runs. */
+                        settle_batch_if_done(d, batch);
                         /* Let the dispatcher send the approved commands one
                          * at a time, only once the terminal is at a prompt. */
                         dispatch_start(d, batch->id);
@@ -4494,14 +4649,14 @@ static void do_session_switch(AiChatData *d,
     /* Kill command timers — they belong to the old session. The dispatcher
      * itself is per-panel, not per-session, so switching away just stops
      * it silently (no "[command queue stopped]" -- that's the Stop button's
-     * message); dispatch_cancel() denies whatever was left APPROVED in the
-     * old session's running batch (so a later dispatch_start() can't
-     * resurrect it), settles and removes just that one batch, and restores
-     * the Send button. Every other pending batch in the old session stays
+     * message); dispatch_cancel() marks whatever was left APPROVED in the
+     * old session's running batch "not run" on its card, settles and
+     * removes just that one batch (so a later dispatch_start() can't
+     * resurrect it), and restores the Send button. Every other pending batch in the old session stays
      * in its CmdBatchSet untouched -- chat_rebuild_display() re-creates
      * their cards when the user switches back (rule 6). */
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-    dispatch_cancel(d, NULL);
+    dispatch_cancel(d, NULL, 0);
 
     /* Save policy, show-thinking and activity phase to old session */
     if (d->active_state && d->active_state != new_state) {
@@ -4660,7 +4815,7 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
      * freed below. */
     if (d->active_state == state) {
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
-        dispatch_cancel(d, NULL);
+        dispatch_cancel(d, NULL, 0);
     }
 
     /* Free every pending batch (the caller frees the AiSessionState itself

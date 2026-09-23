@@ -444,6 +444,285 @@ int test_chat_msg_batch_settle_unknown_batch_returns_zero(void) {
     TEST_END();
 }
 
+/* ── chat_cmd_label() ────────────────────────────────────────────────
+ * Pure label + intent for a command card's status chip. Table order from
+ * the dispatch-states design spec, section 2. */
+
+int test_chat_cmd_label_blocked_is_held(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
+    /* blocked wins regardless of approved/run */
+    ASSERT_STR_EQ(chat_cmd_label(1, 1, CHAT_RUN_DONE, &intent), "held");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_WARNING);
+    ASSERT_STR_EQ(chat_cmd_label(-1, 1, CHAT_RUN_NONE, &intent), "held");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_WARNING);
+    TEST_END();
+}
+
+int test_chat_cmd_label_denied(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_WARNING;
+    /* approved == 0 wins over any run value */
+    ASSERT_STR_EQ(chat_cmd_label(0, 0, CHAT_RUN_RUNNING, &intent), "denied");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
+    TEST_END();
+}
+
+int test_chat_cmd_label_skipped(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_WARNING;
+    ASSERT_STR_EQ(chat_cmd_label(-1, 0, CHAT_RUN_NONE, &intent), "skipped");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
+    TEST_END();
+}
+
+int test_chat_cmd_label_queued(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_WARNING;
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_NONE, &intent), "queued");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
+    TEST_END();
+}
+
+int test_chat_cmd_label_running(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_RUNNING, &intent), "running");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_INFO);
+    TEST_END();
+}
+
+int test_chat_cmd_label_done(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_DONE, &intent), "ran");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_SUCCESS);
+    TEST_END();
+}
+
+int test_chat_cmd_label_aborted(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_ABORTED, &intent), "not run");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_WARNING);
+    TEST_END();
+}
+
+int test_chat_cmd_label_unexpected_run_falls_back_to_queued(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_WARNING;
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 999, &intent), "queued");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
+    TEST_END();
+}
+
+int test_chat_cmd_label_null_intent_ok(void) {
+    TEST_BEGIN();
+    /* Must not crash, and must still return the right label. */
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_RUNNING, NULL), "running");
+    ASSERT_STR_EQ(chat_cmd_label(1, 1, CHAT_RUN_NONE, NULL), "held");
+    TEST_END();
+}
+
+/* ── chat_msg_batch_sync_run() ───────────────────────────────────────
+ * Syncs u.cmd.run from a batch's ApprovalQueue, in list order paired with
+ * q->entries[i]. */
+
+int test_chat_msg_batch_sync_run_basic(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
+    chat_msg_set_batch(c0, 5);
+    ChatMsgItem *c1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c1, "pwd", CMD_READ, 0);
+    chat_msg_set_batch(c1, 5);
+    ChatMsgItem *c2 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c2, "whoami", CMD_READ, 0);
+    chat_msg_set_batch(c2, 5);
+    c0->dirty = 0; c1->dirty = 0; c2->dirty = 0;
+
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_TRUE(chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX) == 0);
+    ASSERT_TRUE(chat_approval_add(&q, "pwd", CMD_PLATFORM_LINUX) == 1);
+    ASSERT_TRUE(chat_approval_add(&q, "whoami", CMD_PLATFORM_LINUX) == 2);
+    ASSERT_EQ(chat_approval_approve(&q, 0), 0);
+    ASSERT_EQ(chat_approval_approve(&q, 1), 0);
+    ASSERT_EQ(chat_approval_approve(&q, 2), 0);
+    chat_approval_set_completed(&q, 0);
+    chat_approval_set_executing(&q, 1);
+    /* entry 2 stays APPROVED, never sent */
+
+    int n = chat_msg_batch_sync_run(&list, 5, &q, 0);
+    ASSERT_EQ(n, 3);
+    ASSERT_EQ(c0->u.cmd.run, CHAT_RUN_DONE);
+    ASSERT_EQ(c1->u.cmd.run, CHAT_RUN_RUNNING);
+    ASSERT_EQ(c2->u.cmd.run, CHAT_RUN_NONE);
+    ASSERT_EQ(c0->dirty, 1);
+    ASSERT_EQ(c1->dirty, 1);
+    ASSERT_EQ(c2->dirty, 0); /* unchanged: was already CHAT_RUN_NONE */
+
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_batch_sync_run_batch_ending(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
+    chat_msg_set_batch(c0, 9);
+    ChatMsgItem *c1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c1, "pwd", CMD_READ, 0);
+    chat_msg_set_batch(c1, 9);
+    ChatMsgItem *c2 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c2, "whoami", CMD_READ, 0);
+    chat_msg_set_batch(c2, 9);
+
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "pwd", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "whoami", CMD_PLATFORM_LINUX);
+    chat_approval_approve(&q, 0);
+    chat_approval_approve(&q, 1);
+    chat_approval_approve(&q, 2);
+    chat_approval_set_completed(&q, 0);
+    chat_approval_set_executing(&q, 1);
+    /* entry 2 stays APPROVED, never sent, and the batch is stopping */
+
+    int n = chat_msg_batch_sync_run(&list, 9, &q, 1 /* batch_ending */);
+    ASSERT_EQ(n, 3);
+    ASSERT_EQ(c0->u.cmd.run, CHAT_RUN_DONE);     /* COMPLETED unaffected by batch_ending */
+    ASSERT_EQ(c1->u.cmd.run, CHAT_RUN_ABORTED);  /* EXECUTING + ending -> ABORTED */
+    ASSERT_EQ(c2->u.cmd.run, CHAT_RUN_ABORTED);  /* APPROVED + ending -> ABORTED */
+
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_batch_sync_run_settled_items_still_synced(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
+    chat_msg_set_batch(c0, 4);
+    ChatMsgItem *c1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c1, "pwd", CMD_READ, 0);
+    chat_msg_set_batch(c1, 4);
+
+    /* The panel already settled this batch's rows (rendered inline), while
+     * the dispatcher is still running them. */
+    ASSERT_EQ(chat_msg_batch_settle(&list, 4), 2);
+    ASSERT_EQ(c0->u.cmd.settled, 1);
+    ASSERT_EQ(c1->u.cmd.settled, 1);
+
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "pwd", CMD_PLATFORM_LINUX);
+    chat_approval_approve(&q, 0);
+    chat_approval_approve(&q, 1);
+    chat_approval_set_executing(&q, 0);
+    chat_approval_set_completed(&q, 1);
+
+    int n = chat_msg_batch_sync_run(&list, 4, &q, 0);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(c0->u.cmd.run, CHAT_RUN_RUNNING);
+    ASSERT_EQ(c1->u.cmd.run, CHAT_RUN_DONE);
+
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_batch_sync_run_unrelated_batch_untouched(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    /* Batch 1 and batch 2 interleaved in the list. */
+    ChatMsgItem *a0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(a0, "echo a0", CMD_READ, 0);
+    chat_msg_set_batch(a0, 1);
+    ChatMsgItem *b0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(b0, "echo b0", CMD_READ, 0);
+    chat_msg_set_batch(b0, 2);
+    ChatMsgItem *a1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(a1, "echo a1", CMD_READ, 0);
+    chat_msg_set_batch(a1, 1);
+    ChatMsgItem *b1 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(b1, "echo b1", CMD_READ, 0);
+    chat_msg_set_batch(b1, 2);
+    b0->dirty = 0; b1->dirty = 0;
+
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "echo a0", CMD_PLATFORM_LINUX);
+    chat_approval_add(&q, "echo a1", CMD_PLATFORM_LINUX);
+    chat_approval_approve(&q, 0);
+    chat_approval_approve(&q, 1);
+    chat_approval_set_executing(&q, 0);
+    chat_approval_set_completed(&q, 1);
+
+    int n = chat_msg_batch_sync_run(&list, 1, &q, 0);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(a0->u.cmd.run, CHAT_RUN_RUNNING);
+    ASSERT_EQ(a1->u.cmd.run, CHAT_RUN_DONE);
+    /* batch 2's items are untouched */
+    ASSERT_EQ(b0->u.cmd.run, CHAT_RUN_NONE);
+    ASSERT_EQ(b1->u.cmd.run, CHAT_RUN_NONE);
+    ASSERT_EQ(b0->dirty, 0);
+    ASSERT_EQ(b1->dirty, 0);
+
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_batch_sync_run_null_list_returns_zero(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    ASSERT_EQ(chat_msg_batch_sync_run(NULL, 1, &q, 0), 0);
+    TEST_END();
+}
+
+int test_chat_msg_batch_sync_run_null_queue_returns_zero(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
+    chat_msg_set_batch(c0, 1);
+    ASSERT_EQ(chat_msg_batch_sync_run(&list, 1, NULL, 0), 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_batch_sync_run_empty_queue_leaves_items_untouched(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *c0 = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(c0, "ls", CMD_READ, 0);
+    chat_msg_set_batch(c0, 1);
+    c0->dirty = 0;
+
+    ApprovalQueue q;
+    chat_approval_init(&q); /* count == 0 */
+
+    int n = chat_msg_batch_sync_run(&list, 1, &q, 0);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(c0->u.cmd.run, CHAT_RUN_NONE);
+    ASSERT_EQ(c0->dirty, 0);
+
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
 int test_chat_msg_status_after_empty_ai(void) {
     TEST_BEGIN();
     ChatMsgList list;

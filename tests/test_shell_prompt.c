@@ -113,3 +113,98 @@ int test_shell_prompt_all_whitespace_negative(void) {
     ASSERT_EQ(shell_prompt_line("   \t  "), 0);
     TEST_END();
 }
+
+/* ---- shell_prompt_is_continuation() -------------------------------- */
+
+int test_shell_prompt_is_continuation_bare_gt(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation(">"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_bare_gt_trailing_space(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation("> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_dquote(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation("dquote> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_cmdsubst(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation("cmdsubst>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_heredoc(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation("heredoc>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_then(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation("then>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_foo_negative(void) {
+    TEST_BEGIN();
+    /* "foo" is not one of zsh's secondary-prompt words. */
+    ASSERT_EQ(shell_prompt_is_continuation("foo>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_router_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation("router>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_word_prefix_negative(void) {
+    TEST_BEGIN();
+    /* "mydquote" is not an exact match for "dquote" -- must be the whole
+     * word before the '>', not merely a suffix of it. */
+    ASSERT_EQ(shell_prompt_is_continuation("mydquote>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_dollar_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation("$"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_empty_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation(""), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_null_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation(NULL), 0);
+    TEST_END();
+}
+
+/* ---- shell_prompt_line() deferring to shell_prompt_is_continuation() -- */
+
+int test_shell_prompt_line_dquote_continuation_negative(void) {
+    TEST_BEGIN();
+    /* zsh's "dquote> " continuation prompt must not pass as a primary
+     * prompt just because it ends in '>'. */
+    ASSERT_EQ(shell_prompt_line("dquote> "), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_line_router_positive(void) {
+    TEST_BEGIN();
+    /* An ordinary prompt ending in '>' (not one of zsh's secondary-prompt
+     * words) still passes, same as "foo>" already does. */
+    ASSERT_EQ(shell_prompt_line("router>"), 1);
+    TEST_END();
+}

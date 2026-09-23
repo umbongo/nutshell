@@ -3,6 +3,7 @@
 #include "json_parser.h"
 #include "json_validate.h"
 #include "string_utils.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1153,9 +1154,10 @@ static int ai_command_has_control_char(const char *s)
 }
 
 int ai_extract_commands_ex(const char *response, char cmds[][1024],
-                           int max_cmds, int *rejected)
+                           int max_cmds, int *rejected, int *rejected_long)
 {
     if (rejected) *rejected = 0;
+    if (rejected_long) *rejected_long = 0;
     if (!response || !cmds || max_cmds <= 0) return 0;
 
     int count = 0;
@@ -1169,28 +1171,37 @@ int ai_extract_commands_ex(const char *response, char cmds[][1024],
         const char *end = strstr(start, "[/EXEC]");
         if (!end) break;
 
-        size_t len = (size_t)(end - start);
-        if (len == 0) {
+        /* Find the trimmed span within the raw [EXEC]/[/EXEC] block
+         * directly (same whitespace/CR/LF trim as str_trim()), without
+         * copying anything yet -- a block can be far larger than the
+         * 1024-byte cmds[] slot, and it must be measured, not truncated,
+         * to tell a too-long block from an acceptable one. */
+        const char *ts = start;
+        const char *te = end;
+        while (te > ts && isspace((unsigned char)*(te - 1))) te--;
+        while (ts < te && isspace((unsigned char)*ts)) ts++;
+        size_t trimmed_len = (size_t)(te - ts);
+
+        if (trimmed_len == 0) {
+            /* Whitespace-only (or empty) block -- treat the same as an
+             * empty one. */
             pos = end + 7;
             continue;
         }
-        if (len >= 1024) len = 1023;
+
+        if (trimmed_len >= 1024) {
+            /* Won't fit CMD_MAX_LEN (1023) plus NUL -- skip the block
+             * entirely rather than truncate it into a broken command: no
+             * cmds[] slot, no count, so the card-to-queue-entry mapping
+             * downstream is never asked to account for it. */
+            if (rejected_long) (*rejected_long)++;
+            pos = end + 7;
+            continue;
+        }
 
         char tmp[1024];
-        memcpy(tmp, start, len);
-        tmp[len] = '\0';
-
-        /* Trim whitespace (including any CR/LF the marker parsing leaves
-         * around the model's formatting, e.g. "[EXEC]\nls\n[/EXEC]") before
-         * judging the payload -- a command must be a single line once
-         * trimmed, not merely at its edges. */
-        str_trim(tmp);
-
-        if (tmp[0] == '\0') {
-            /* Whitespace-only block -- treat the same as an empty one. */
-            pos = end + 7;
-            continue;
-        }
+        memcpy(tmp, ts, trimmed_len);
+        tmp[trimmed_len] = '\0';
 
         if (ai_command_has_control_char(tmp)) {
             /* A control character survived trimming -- the block contains
@@ -1202,7 +1213,7 @@ int ai_extract_commands_ex(const char *response, char cmds[][1024],
             continue;
         }
 
-        memcpy(cmds[count], tmp, strlen(tmp) + 1);
+        memcpy(cmds[count], tmp, trimmed_len + 1);
         count++;
 
         pos = end + 7; /* skip "[/EXEC]" */
@@ -1214,7 +1225,7 @@ int ai_extract_commands_ex(const char *response, char cmds[][1024],
 int ai_extract_commands(const char *response, char cmds[][1024],
                         int max_cmds)
 {
-    return ai_extract_commands_ex(response, cmds, max_cmds, NULL);
+    return ai_extract_commands_ex(response, cmds, max_cmds, NULL, NULL);
 }
 
 /* ---- Response splitting ---- */
@@ -1384,13 +1395,78 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
     return (size_t)pos;
 }
 
+/* Map a queue entry's status to the outcome word ai_build_continue_text()
+ * lists it under. Every ApprovalStatus is covered explicitly (see the
+ * table in docs/superpowers/specs/2026-09-23-command-dispatch-states-
+ * design.md section 3); the trailing return is unreachable but keeps the
+ * function total if the enum ever grows a member this switch forgets. */
+static const char *ai_continue_outcome_word(ApprovalStatus status)
+{
+    switch (status) {
+        case APPROVE_COMPLETED: return "ran";
+        case APPROVE_EXECUTING: return "started, stopped before it finished";
+        case APPROVE_APPROVED:  return "not run (batch stopped)";
+        case APPROVE_DENIED:    return "not run (denied)";
+        case APPROVE_BLOCKED:   return "not run (above the command policy ceiling)";
+        case APPROVE_PENDING:   return "not run (never decided)";
+    }
+    return "not run (never decided)";
+}
+
+/* Elide cmd to at most 60 characters for the continue-text command list,
+ * appending "..." when longer. Never splits a UTF-8 multi-byte sequence:
+ * if the cut would land inside one, backs off only far enough to clear
+ * the run of continuation bytes (10xxxxxx) it landed on, stopping at the
+ * lead byte -- i.e. it drops the one partial character the cut fell
+ * inside, not every preceding multi-byte character too. Backing off on
+ * any byte >= 0x80 (the earlier approach) would also treat a lead byte as
+ * needing a back-off, so a command made entirely of multi-byte characters
+ * could back off all the way to an empty prefix. out must be at least 64
+ * bytes. */
+static void ai_elide_command_60(const char *cmd, char *out, size_t out_size)
+{
+    if (!out || out_size == 0) return;
+    out[0] = '\0';
+    if (!cmd) return;
+
+    size_t len = strlen(cmd);
+    if (len <= 60) {
+        snprintf(out, out_size, "%s", cmd);
+        return;
+    }
+
+    size_t cut = 60;
+    while (cut > 0 && ((unsigned char)cmd[cut] & 0xC0) == 0x80) cut--;
+    snprintf(out, out_size, "%.*s...", (int)cut, cmd);
+}
+
 size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
+                              const ApprovalQueue *q,
                               char *buf, size_t buf_size)
 {
     if (!buf || buf_size == 0) return 0;
 
+    /* A batch that still has an entry APPROVED (approved but never sent)
+     * or EXECUTING (sent but the batch was stopped before its prompt came
+     * back) was cut short, not finished -- the opening must say so instead
+     * of claiming the commands ran or asking for more of them. */
+    int aborted = 0;
+    if (q) {
+        for (int i = 0; i < q->count; i++) {
+            if (q->entries[i].status == APPROVE_APPROVED ||
+                q->entries[i].status == APPROVE_EXECUTING) {
+                aborted = 1;
+                break;
+            }
+        }
+    }
+
     int n;
-    if (newer_exchanges > 0 && first_cmd && first_cmd[0]) {
+    if (aborted) {
+        n = snprintf(buf, buf_size,
+            "The command batch was stopped before it finished. Do not "
+            "re-send the commands that did not run unless I ask for them.");
+    } else if (newer_exchanges > 0 && first_cmd && first_cmd[0]) {
         n = snprintf(buf, buf_size,
             "The commands from my earlier request (`%s` \xE2\x80\xA6) have "
             "now been executed. Look at the updated terminal output and "
@@ -1404,7 +1480,29 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
             "was accomplished.");
     }
     if (n < 0 || (size_t)n >= buf_size) return 0;
-    return (size_t)n;
+    size_t pos = (size_t)n;
+
+    if (q && q->count > 0) {
+        int w = snprintf(buf + pos, buf_size - pos,
+            "\n\nHere is what actually happened to each command in that "
+            "batch -- do not claim a command ran if its line below says it "
+            "did not:\n");
+        if (w < 0 || (size_t)w >= buf_size - pos) return 0;
+        pos += (size_t)w;
+
+        for (int i = 0; i < q->count; i++) {
+            const char *outcome = ai_continue_outcome_word(q->entries[i].status);
+            char elided[64];
+            ai_elide_command_60(q->entries[i].command, elided, sizeof(elided));
+
+            w = snprintf(buf + pos, buf_size - pos,
+                "  %d. %s: %s\n", i + 1, outcome, elided);
+            if (w < 0 || (size_t)w >= buf_size - pos) return 0;
+            pos += (size_t)w;
+        }
+    }
+
+    return pos;
 }
 
 size_t ai_build_policy_raised_note(int allowed_stop, char *buf, size_t buf_size)

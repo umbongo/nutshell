@@ -489,7 +489,13 @@ void term_alt_screen_exit(Terminal *term)
     term->full_redraw_needed = true;
 }
 
-int term_at_prompt(const Terminal *term)
+/* Shared by term_at_prompt() and term_at_continuation_prompt(): every guard
+ * and the row-text build, leaving only which shell_prompt_*() call to make
+ * to the two callers. Returns 1 with `buf` filled (the row's text up to the
+ * cursor column) when the terminal could plausibly be sitting at a prompt
+ * of some kind, or 0 when it cannot be (in which case `buf` is untouched
+ * and callers must not use it). */
+static int term_cursor_row_text(const Terminal *term, char *buf, size_t buf_size)
 {
     if (!term) return 0;
     if (term->alt_screen_active) return 0;
@@ -497,7 +503,7 @@ int term_at_prompt(const Terminal *term)
     if (term->cursor.col < 0) return 0;
 
     /* Same screen-row -> physical-ring-index mapping as screen_to_phys(),
-     * kept const-correct here since term_at_prompt() takes a const Terminal*. */
+     * kept const-correct here since this takes a const Terminal*. */
     int top = (term->lines_count >= term->rows)
             ? (term->lines_count - term->rows) : 0;
     int logical = top + term->cursor.row;
@@ -519,13 +525,12 @@ int term_at_prompt(const Terminal *term)
     }
 
     /* Build the row's text up to the cursor column (ASCII as-is, other
-     * codepoints as '?') and test it for a shell-prompt ending. A huge
+     * codepoints as '?') and hand it back for a shell-prompt test. A huge
      * cursor column (implausible for a real terminal) is clamped to the
-     * buffer, keeping the tail -- which is all shell_prompt_line() looks
-     * at -- intact. */
-    char buf[1024];
+     * buffer, keeping the tail -- which is all shell_prompt_line() and
+     * shell_prompt_is_continuation() look at -- intact. */
     int n = col;
-    if (n > (int)sizeof(buf) - 1) n = (int)sizeof(buf) - 1;
+    if (n > (int)buf_size - 1) n = (int)buf_size - 1;
     int start = col - n;
     for (int i = 0; i < n; i++) {
         uint32_t cp = row->cells[start + i].codepoint;
@@ -535,5 +540,19 @@ int term_at_prompt(const Terminal *term)
     }
     buf[n] = '\0';
 
+    return 1;
+}
+
+int term_at_prompt(const Terminal *term)
+{
+    char buf[1024];
+    if (!term_cursor_row_text(term, buf, sizeof(buf))) return 0;
     return shell_prompt_line(buf);
+}
+
+int term_at_continuation_prompt(const Terminal *term)
+{
+    char buf[1024];
+    if (!term_cursor_row_text(term, buf, sizeof(buf))) return 0;
+    return shell_prompt_is_continuation(buf);
 }

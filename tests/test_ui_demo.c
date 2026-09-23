@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "ui_demo.h"
+#include "chat_msg.h"
 #include <string.h>
 
 /* ===========================================================================
@@ -143,6 +144,54 @@ int test_ui_demo_build_executing_counts_and_statuses(void)
     ASSERT_EQ(count_status(&approval, APPROVE_COMPLETED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_EXECUTING), 1);
     ASSERT_EQ(approval2.count, 0);
+    TEST_END();
+}
+
+/* The "executing" state replayed the way ai_chat.c's
+ * append_batch_command_items() rebuilds a card -- one CHAT_ITEM_COMMAND per
+ * queue entry, then chat_msg_batch_sync_run() from that same queue -- must
+ * carry the live panel's run states: the COMPLETED command reads "ran", the
+ * EXECUTING one "running". Before the 2026-09-23 dispatch-states change a
+ * rebuild painted both of them "ran". */
+int test_ui_demo_executing_rebuild_carries_run_states(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("executing", &conv, &approval, &approval2, NULL, 0), 0);
+    ASSERT_EQ(approval.count, 2);
+
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    for (int i = 0; i < approval.count; i++) {
+        ChatMsgItem *it = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+        ASSERT_NOT_NULL(it);
+        chat_msg_set_command(it, approval.entries[i].command,
+                             approval.entries[i].safety,
+                             approval.entries[i].status == APPROVE_BLOCKED);
+        chat_msg_set_batch(it, 7);
+        /* Both are past the approval card: the replay settles them. */
+        it->u.cmd.approved = 1;
+        it->u.cmd.settled = 1;
+    }
+    ASSERT_EQ(chat_msg_batch_sync_run(&list, 7, &approval, 0), 2);
+
+    ChatMsgItem *first = list.head;
+    ASSERT_NOT_NULL(first);
+    ChatMsgItem *second = first->next;
+    ASSERT_NOT_NULL(second);
+    ASSERT_EQ(first->u.cmd.run, CHAT_RUN_DONE);
+    ASSERT_EQ(second->u.cmd.run, CHAT_RUN_RUNNING);
+
+    ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
+    ASSERT_STR_EQ(chat_cmd_label(first->u.cmd.approved, first->u.cmd.blocked,
+                                 first->u.cmd.run, &intent), "ran");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_SUCCESS);
+    ASSERT_STR_EQ(chat_cmd_label(second->u.cmd.approved, second->u.cmd.blocked,
+                                 second->u.cmd.run, &intent), "running");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_INFO);
+
+    chat_msg_list_clear(&list);
     TEST_END();
 }
 
