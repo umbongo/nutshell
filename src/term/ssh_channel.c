@@ -6,6 +6,8 @@
 #include <winsock2.h>
 #else
 #include <sys/socket.h>
+#include <sys/select.h>  /* select, fd_set: not pulled in by libssh2.h on Linux */
+#include <sys/time.h>    /* struct timeval under _POSIX_C_SOURCE */
 #endif
 
 

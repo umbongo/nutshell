@@ -12,6 +12,8 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>   /* fcntl, F_GETFL, F_SETFL, O_NONBLOCK */
+#include <sys/select.h>  /* select, fd_set: not pulled in by libssh2.h on Linux */
+#include <sys/time.h>    /* struct timeval under _POSIX_C_SOURCE */
 #define closesocket close
 typedef int SOCKET;
 #define INVALID_SOCKET (-1)
