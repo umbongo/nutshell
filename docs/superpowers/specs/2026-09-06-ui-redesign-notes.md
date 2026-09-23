@@ -195,6 +195,8 @@ Done, in order (details in the commit messages and the specs named):
   and `cases/90-keys.ps1`. ConPTY measured: 0x7F Backspace, 0x08 Ctrl+Backspace, ?1049h
   forwarded, ?1h not. Manual checklist (spec 8.6) still to run (Open).
 - 2026-09-24 retrospective (`docs/retrospectives/2026-09-24-eleven-merges-retrospective.md`).
+- Manual checks passed by the maintainer, 2026-09-23: the dispatch fix (v1.2.2) live
+  scenario and the special-keys checklist (spec 2026-09-23 section 8.6), on 1.2.7.
 - `codeql.yml` concurrency keyed on the sha for pushes to `main` and cancelling only
   pull-request runs, so fast merges no longer cancel the `main` baseline (bc78b5c).
 - The merge gate compiles: `Native tests` job in `checks.yml` (Ubuntu, real libssh2,
@@ -203,11 +205,6 @@ Done, in order (details in the commit messages and the specs named):
   the maintainer after the 2026-09-24 retrospective's F1.
 
 Open, in priority order:
-- [ ] Test by hand, against the current exe (1.2.7): (a) the dispatch fix -- an unclosed-quote
-      command followed by two more; expect running / queued / queued, the stall line
-      once, then Stop giving not run on all three and a prompt back; (b) the special-keys
-      checklist in `2026-09-23-special-keys-design.md` section 8.6 (lone Alt tap, Alt+F
-      in Edit, F10, Alt+0233, AltGr, Backspace in Edit, PgUp at a prompt and in less).
 - [ ] Review and critique the whole repository, security first (maintainer's request,
       2026-09-24). A fresh audit, not a re-read of `2026-09-09-security-audit.md`: the
       local shell (ConPTY spawn, environment, PATH, the busybox sidecar search order),
@@ -217,7 +214,12 @@ Open, in priority order:
       messages, and CI/workflow permissions. Then the general code-health critique
       (`window.c` and `ai_chat.c` size, `src/ui` logic that belongs in `src/core`).
       Findings ranked by severity, each answered in writing; folds in the open H3-H8
-      items below.
+      items below. Known classifier holes to start from (PR #50 review, 2026-09-23):
+      `env rm -rf /`, `perl -e "unlink ..."`, `echo $(rm -rf /)` and backtick
+      substitution classify READ on Linux and unresolved platforms (wrappers and
+      command substitution are not looked through); no PowerShell ruleset, so
+      destructive cmdlets are UNKNOWN rather than CRITICAL; the `>>` prompt test uses
+      synthetic bytes rather than a captured PSReadLine/ConPTY stream.
 - [ ] Local shell follow-ups: test PowerShell as the local shell (a profile whose shell
       command is `powershell.exe` or `pwsh.exe`; custom kind, platform auto -- prompt
       detection on `PS C:\...>`, paste line ends, Ctrl+C, the AI ruleset); run the
