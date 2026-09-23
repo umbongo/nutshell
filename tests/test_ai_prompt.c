@@ -280,7 +280,7 @@ int test_ai_provider_models_url_unknown(void) {
 int test_ai_system_prompt_with_terminal(void) {
     TEST_BEGIN();
     char buf[2048];
-    ai_build_system_prompt(buf, sizeof(buf), "user@host:~$ ls\nfile.txt", NULL, NULL);
+    ai_build_system_prompt(buf, sizeof(buf), "user@host:~$ ls\nfile.txt", NULL, NULL, SESSION_SSH, NULL);
     ASSERT_TRUE(strstr(buf, "SSH terminal") != NULL);
     ASSERT_TRUE(strstr(buf, "[EXEC]") != NULL);
     ASSERT_TRUE(strstr(buf, "user@host") != NULL);
@@ -391,7 +391,7 @@ int test_ai_extract_commands_null(void) {
 int test_ai_system_prompt_multi_command(void) {
     TEST_BEGIN();
     char buf[4096];
-    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL, SESSION_SSH, NULL);
     /* System prompt should mention multiple commands */
     ASSERT_TRUE(strstr(buf, "multiple commands") != NULL);
     TEST_END();
@@ -596,7 +596,7 @@ int test_ai_extract_commands_ex_null_rejected_ok(void) {
 int test_ai_system_prompt_all_commands_instruction(void) {
     TEST_BEGIN();
     char buf[4096];
-    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL, SESSION_SSH, NULL);
     /* Must instruct to include ALL commands */
     ASSERT_TRUE(strstr(buf, "ALL commands") != NULL);
     /* Must discourage splitting across responses */
@@ -611,7 +611,7 @@ int test_ai_system_prompt_all_commands_instruction(void) {
 int test_ai_system_prompt_no_partial_plan(void) {
     TEST_BEGIN();
     char buf[4096];
-    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL, SESSION_SSH, NULL);
     /* Must discourage "let's start with" partial plans */
     ASSERT_TRUE(strstr(buf, "Never say") != NULL);
     ASSERT_TRUE(strstr(buf, "first step") != NULL);
@@ -621,10 +621,34 @@ int test_ai_system_prompt_no_partial_plan(void) {
 int test_ai_system_prompt_no_terminal(void) {
     TEST_BEGIN();
     char buf[2048];
-    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL, SESSION_SSH, NULL);
     ASSERT_TRUE(strstr(buf, "SSH terminal") != NULL);
     /* Without terminal text, the "Current terminal output:" section is absent */
     ASSERT_TRUE(strstr(buf, "Current terminal output") == NULL);
+    TEST_END();
+}
+
+/* A local session's prompt opens by naming the local shell instead of an SSH
+ * session, so the model does not suggest apt or systemctl on a busybox shell
+ * (spec 2026-09-22-local-shell-design.md section 6). */
+int test_ai_system_prompt_local_shell(void) {
+    TEST_BEGIN();
+    char buf[4096];
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
+                           SESSION_LOCAL, NULL);
+    ASSERT_TRUE(strstr(buf, "a local shell") != NULL);
+    ASSERT_TRUE(strstr(buf, "on a Windows PC") != NULL);
+    /* The SSH wording is gone entirely */
+    ASSERT_TRUE(strstr(buf, "SSH terminal") == NULL);
+    ASSERT_TRUE(strstr(buf, "remote server") == NULL);
+    /* Everything after the opening is shared with the SSH prompt */
+    ASSERT_TRUE(strstr(buf, "ALL commands") != NULL);
+    ASSERT_TRUE(strstr(buf, "[EXEC]ls -la[/EXEC]") != NULL);
+
+    /* A named shell is used verbatim; NULL lists the possibilities */
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
+                           SESSION_LOCAL, "busybox");
+    ASSERT_TRUE(strstr(buf, "a local shell (busybox) on a Windows PC") != NULL);
     TEST_END();
 }
 

@@ -5,6 +5,7 @@
 #include "logger.h"
 #include "renderer.h"
 #include "term.h"
+#include "session_io.h"
 #include "tabs.h"
 #include "xmalloc.h"
 #include "config.h"
@@ -20,6 +21,8 @@
 #include "ssh_session.h"
 #include "ssh_pty.h"
 #include "ssh_io.h"
+#include "local_shell.h"
+#include "local_pty.h"
 #include "knownhosts.h"
 #include "log_format.h"
 #include "edit_scroll.h"
@@ -67,7 +70,7 @@ static int g_left_margin = TERM_LEFT_MARGIN;
 #define WM_STARTUP_CONNECT      (WM_USER + 3)
 
 /* Bound on platform-detection attempts per session: counts poll ticks that
- * delivered new bytes (ssh_io_poll(...) > 0), not raw timer ticks, so a
+ * delivered new bytes (the transport poll returning > 0), not raw timer ticks, so a
  * quiet session doesn't burn through the budget while idle. A login banner
  * that hasn't shown up within this many data-bearing reads isn't coming --
  * give up and stay on CMD_PLATFORM_UNKNOWN (still safe: see cmd_classify's
@@ -78,8 +81,12 @@ typedef enum { CONN_IDLE, CONN_CONNECTING } ConnState;
 
 typedef struct Session {
     Terminal   *term;
+    /* ssh/channel now exist only for the SSH-specific paths -- the
+     * connection thread, the host-key prompt, keepalive/idle timeout and
+     * bytes_read_total -- everything else goes through io. */
     SshSession *ssh;
     SSHChannel *channel;
+    SessionIo   io;            /* transport vtable; io.ctx != NULL is the "connected" predicate */
     FILE       *session_log;   /* NULL when logging disabled */
     FILE       *debug_log;    /* NULL when debug_terminal disabled */
     /* Connection thread state */
@@ -94,6 +101,10 @@ typedef struct Session {
     int             conn_dots;     /* dots appended so far */
     CRITICAL_SECTION conn_cs;      /* H-1: guards conn_result/conn_error/ssh/channel */
     AiSessionState ai_state;       /* per-session AI conversation */
+    /* Local sessions only: which shell the resolver picked, as the AI system
+     * prompt names it ("busybox", "Git bash", "MSYS2", "custom"). Empty for
+     * an SSH session, which is what the panel is told then. */
+    char      shell_name[32];
     int       platform_locked;   /* profile named an explicit platform -- detection may not override it */
     int       platform_scanned;  /* detection is done (resolved via banner, or gave up after the tick bound) */
     int       platform_scan_ticks; /* data-bearing poll ticks spent scanning so far; bounds platform_scanned */
@@ -141,6 +152,7 @@ const ThemeTokens *ns_tokens(void) { return &g_tokens; }
 static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
 static HMENU create_app_menu(void);      /* forward declaration */
+static void on_ai_clicked(void);         /* forward declaration */
 
 /* ---- Docked AI panel state ---- */
 #include "ai_dock.h"
@@ -215,7 +227,7 @@ static void force_full_terminal_repaint(HWND hwnd, Terminal *term)
  * area. WM_SIZE only touches the active session, so this is needed whenever a
  * session becomes visible after the window may have changed size without it:
  * on tab switch, and when a connection completes (auth can take seconds and
- * WM_SIZE skips the PTY while channel is NULL). No-op when nothing changed. */
+ * WM_SIZE skips the PTY while io.ctx is NULL). No-op when nothing changed. */
 static void sync_session_grid(HWND hwnd, Session *s)
 {
     if (!s || !s->term)
@@ -240,8 +252,7 @@ static void sync_session_grid(HWND hwnd, Session *s)
         term_resize(s->term, rows, cols);
         term_mark_all_dirty(s->term);
         dispbuf_resize(&g_renderer.dispbuf, rows, cols);
-        if (s->channel)
-            ssh_pty_resize(s->channel, cols, rows);
+        if (s->io.ctx) s->io.resize(s->io.ctx, cols, rows);
     }
 }
 
@@ -263,9 +274,31 @@ typedef struct {
     char       *pos;       /* current read position within buf */
     HWND        hwnd;      /* window to repaint */
     int         delay_ms;  /* inter-line delay */
-    SSHChannel *channel;   /* target channel (paste continues across tab switches) */
+    void       *io_ctx;    /* target transport, compared by identity (paste continues across tab switches) */
+    int       (*io_write)(void *ctx, const char *data, size_t len);
     bool        bracketed; /* send \033[201~ when paste completes */
+    bool        local;     /* send \r for a line end: a console child reads Enter, not LF */
 } PasteState;
+
+/* Send one clipboard line to a transport, mapping line ends the way that
+ * transport expects. SSH gets what it always got -- \r dropped, \n sent. A
+ * local session gets \r for the line end instead, because the console child
+ * on the other side of the pseudo-console reads Enter, not LF (spec section
+ * 3, "Writing"). */
+static void paste_chunk_write(void *ctx,
+                              int (*write_fn)(void *, const char *, size_t),
+                              const char *p, size_t chunk, bool local)
+{
+    for (size_t i = 0; i < chunk; i++) {
+        if (p[i] == '\r') continue;
+        if (p[i] == '\n' && local) {
+            static const char CR = '\r';
+            write_fn(ctx, &CR, 1);
+        } else {
+            write_fn(ctx, &p[i], 1);
+        }
+    }
+}
 
 static PasteState g_paste = {0};
 static Selection g_selection = {0};
@@ -281,6 +314,7 @@ static Session *create_session(int rows, int cols) {
     s->term = term_init(rows, cols, 3000);
     s->ssh = NULL;
     s->channel = NULL;
+    memset(&s->io, 0, sizeof(s->io));
     s->session_log = NULL;
     s->debug_log = NULL;
     s->conn_state = CONN_IDLE;
@@ -296,12 +330,50 @@ static Session *create_session(int rows, int cols) {
     cmd_batch_set_init(&s->ai_state.batches);
     /* Unconnected/pre-detect state must be the safe one, not Linux (value 0). */
     s->ai_state.platform = (int)CMD_PLATFORM_UNKNOWN;
+    s->shell_name[0] = '\0';
     s->platform_locked = 0;
     s->platform_scanned = 0;
     s->platform_scan_ticks = 0;
     s->next = g_session_list;
     g_session_list = s;
     return s;
+}
+
+/* The pointer the AI panel is handed: NULL unless this session actually has
+ * a transport, so "no session" reads exactly as it did when the panel was
+ * given s->channel. */
+static SessionIo *session_io_ptr(Session *s)
+{
+    return (s && s->io.ctx) ? &s->io : NULL;
+}
+
+/* Tear the transport down through the vtable and put the SSH-specific fields
+ * back in sync: io.close() releases the channel and the SSH session together
+ * (session_io_ssh(), src/config/ssh_io.c), so both pointers are cleared here.
+ * A session that got as far as ssh_session_new() but never opened a channel
+ * has no io at all; its session is freed directly. */
+static void session_close_io(Session *s)
+{
+    if (!s) return;
+    if (s->io.ctx && s->io.close) {
+        s->io.close(s->io.ctx);
+        s->channel = NULL;
+        s->ssh     = NULL;
+    }
+    memset(&s->io, 0, sizeof(s->io));
+    if (s->ssh) { ssh_session_free(s->ssh); s->ssh = NULL; }
+    s->channel = NULL;
+}
+
+/* Drop the AI panel's pointers into this session before its transport dies.
+ * The panel holds a SessionIo * into the Session struct, so it must be
+ * cleared BEFORE io.close() -- spec section 2, "EOF and close order". */
+static void ai_panel_detach(Session *s)
+{
+    if (s == g_active_session && g_hwndAiChat && IsWindow(g_hwndAiChat)) {
+        ai_chat_set_session(g_hwndAiChat, NULL, NULL);
+        ai_chat_set_shell_name(g_hwndAiChat, NULL);
+    }
 }
 
 static void free_session(Session *s) {
@@ -312,8 +384,7 @@ static void free_session(Session *s) {
             CloseHandle(s->conn_thread);
         }
         DeleteCriticalSection(&s->conn_cs);  /* H-1 */
-        if (s->channel) ssh_channel_free(s->channel);
-        if (s->ssh) ssh_session_free(s->ssh);
+        session_close_io(s);
         if (s->session_log) fclose(s->session_log);
         if (s->debug_log)   fclose(s->debug_log);
         cmd_batch_set_free(&s->ai_state.batches);
@@ -344,10 +415,13 @@ static void on_tab_select(int index, void *user_data) {
         ai_chat_switch_session(g_hwndAiChat,
                                &g_active_session->ai_state,
                                g_active_session->term,
-                               g_active_session->channel,
+                               session_io_ptr(g_active_session),
                                g_active_session->conn_profile.ai_notes,
                                g_config->settings.ai_system_notes,
                                g_active_session->conn_profile.name);
+        ai_chat_set_shell_name(g_hwndAiChat,
+                               g_active_session->shell_name[0]
+                                 ? g_active_session->shell_name : NULL);
     }
 }
 
@@ -376,6 +450,11 @@ static void on_tab_close(int index, void *user_data) {
 
     if (g_active_session == s) {
         g_active_session = NULL;
+        /* The panel must not keep pointers into a session about to be freed. */
+        if (g_hwndAiChat && IsWindow(g_hwndAiChat)) {
+            ai_chat_set_session(g_hwndAiChat, NULL, NULL);
+            ai_chat_set_shell_name(g_hwndAiChat, NULL);
+        }
     }
 
     /* Notify AI chat before freeing so it can clear dangling pointers */
@@ -536,7 +615,11 @@ static FILE *open_session_log(const char *name, const char *hostname)
     /* Create the directory (OK if already exists) */
     CreateDirectoryA(log_dir, NULL);
 
-    const char *safe_name = (name && name[0]) ? name : hostname;
+    /* Prefer the profile name, then the host. A local profile has no host at
+     * all, so the name is what names the log (spec section 5); "session" is
+     * the last resort for a profile with neither. */
+    const char *safe_name = (name && name[0]) ? name
+                          : ((hostname && hostname[0]) ? hostname : "session");
     time_t now = time(NULL);
     char path[MAX_PATH];
     log_format_filename(safe_name, log_dir, g_config->settings.log_format,
@@ -580,6 +663,200 @@ static FILE *open_debug_log(const char *session_name)
     char path[MAX_PATH];
     (void)snprintf(path, sizeof(path), "%s\\%s-debug-%s.log", dir, safe_name, ts);
     return fopen(path, "wb");
+}
+
+/* ---- Local shell sessions (spec 2026-09-22-local-shell-design.md) -------- */
+
+/* A local profile has kind "local"; everything else, including a profile
+ * saved by a version that predates the key, is an SSH profile. */
+static int profile_is_local(const Profile *p)
+{
+    return (p && strcmp(p->kind, "local") == 0) ? 1 : 0;
+}
+
+/* The three questions local_shell_resolve() may ask the machine. They live
+ * here rather than in src/core/local_shell.c so that file stays free of
+ * <windows.h> and testable on any host. */
+
+static int probe_exists(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (!path || !path[0]) return 0;
+    DWORD attr = GetFileAttributesA(path);
+    return (attr != INVALID_FILE_ATTRIBUTES &&
+            !(attr & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
+}
+
+static int probe_env(void *ctx, const char *name, char *out, size_t out_size)
+{
+    (void)ctx;
+    if (!name || !out || out_size == 0u) return 0;
+    out[0] = '\0';
+    DWORD n = GetEnvironmentVariableA(name, out, (DWORD)out_size);
+    if (n == 0u || n >= (DWORD)out_size) { out[0] = '\0'; return 0; }
+    return out[0] ? 1 : 0;
+}
+
+/* key is "HKLM\\SOFTWARE\\..." -- only HKLM and HKCU are understood, which
+ * is all spec 4.2 asks for. Reads both the 64- and 32-bit views so a 32-bit
+ * Git install is still found. */
+static int probe_registry_string(void *ctx, const char *key, const char *value,
+                                 char *out, size_t out_size)
+{
+    (void)ctx;
+    if (!key || !value || !out || out_size == 0u) return 0;
+    out[0] = '\0';
+
+    HKEY root;
+    const char *sub;
+    if (strncmp(key, "HKLM\\", 5) == 0)      { root = HKEY_LOCAL_MACHINE; sub = key + 5; }
+    else if (strncmp(key, "HKCU\\", 5) == 0) { root = HKEY_CURRENT_USER;  sub = key + 5; }
+    else return 0;
+
+    static const DWORD views[2] = { KEY_WOW64_64KEY, KEY_WOW64_32KEY };
+    for (int i = 0; i < 2; i++) {
+        HKEY h;
+        if (RegOpenKeyExA(root, sub, 0,
+                          KEY_QUERY_VALUE | views[i], &h) != ERROR_SUCCESS)
+            continue;
+        DWORD type = 0;
+        DWORD len = (DWORD)out_size;
+        LONG rc = RegQueryValueExA(h, value, NULL, &type,
+                                   (LPBYTE)out, &len);
+        RegCloseKey(h);
+        if (rc == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)) {
+            if (len >= (DWORD)out_size) len = (DWORD)out_size - 1u;
+            out[len] = '\0';
+            /* RegQueryValueExA counts the NUL; trim any extra. */
+            out[out_size - 1u] = '\0';
+            if (out[0]) return 1;
+        }
+        out[0] = '\0';
+    }
+    return 0;
+}
+
+static void fill_local_probe(LocalShellProbe *probe, const char *exe_dir)
+{
+    memset(probe, 0, sizeof(*probe));
+    probe->exists          = probe_exists;
+    probe->env             = probe_env;
+    probe->registry_string = probe_registry_string;
+    probe->ctx             = NULL;
+    probe->exe_dir         = exe_dir;
+}
+
+/* Hand the AI panel this session's terminal, transport and shell name in one
+ * place, so the three never drift apart. NULL detaches. */
+static void ai_panel_attach(Session *s)
+{
+    if (!g_hwndAiChat || !IsWindow(g_hwndAiChat)) return;
+    ai_chat_set_session(g_hwndAiChat, s ? s->term : NULL, session_io_ptr(s));
+    ai_chat_set_shell_name(g_hwndAiChat,
+                           (s && s->shell_name[0]) ? s->shell_name : NULL);
+}
+
+/* Resolve the shell, spawn it and publish the transport on `s`. Everything
+ * happens on the UI thread: there is no handshake and no authentication to
+ * wait for, so the connection thread the SSH path needs would only add a
+ * round trip. Returns 1 when the shell is running, 0 when it is not (the
+ * reason is already in the terminal and the tab is DISCONNECTED).
+ *
+ * `tidx` is the session's tab index, or -1 if it has none. */
+static int start_local_shell(HWND hwnd, Session *s, int tidx)
+{
+    if (!s) return 0;
+
+    char exe_dir[MAX_PATH];
+    get_exe_dir(exe_dir, sizeof(exe_dir));
+
+    LocalShellProbe probe;
+    fill_local_probe(&probe, exe_dir[0] ? exe_dir : NULL);
+
+    /* LocalShellSpec carries a full PATH, so it is too big for the stack of
+     * a thread with the Windows default reserve; the UI thread has room, but
+     * the heap keeps it honest either way. */
+    LocalShellSpec *spec = (LocalShellSpec *)calloc(1u, sizeof(*spec));
+    if (!spec) {
+        term_process(s->term, "\r\nOut of memory starting the local shell.\r\n", 43);
+        if (tidx >= 0) tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
+        return 0;
+    }
+
+    LocalShellKind kind = local_shell_resolve(s->conn_profile.shell, &probe, spec);
+
+    char err[512];
+    err[0] = '\0';
+    LocalPty *pty = NULL;
+    if (kind != SHELL_NONE) {
+        int cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
+        int rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
+        pty = local_pty_open(spec, cols, rows, err, sizeof(err));
+    } else {
+        (void)snprintf(err, sizeof(err), "%s",
+                       spec->error[0] ? spec->error : LOCAL_SHELL_NONE_MESSAGE);
+    }
+
+    if (!pty) {
+        char msg[600];
+        int n = snprintf(msg, sizeof(msg), "\r\n%s\r\n",
+                         err[0] ? err : "Could not start the local shell.");
+        if (n > 0) term_process(s->term, msg, strlen(msg));
+        if (tidx >= 0) tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
+        free(spec);
+        return 0;
+    }
+
+    s->io = session_io_local(pty);
+
+    /* The shell's name, for the AI system prompt (spec section 6). */
+    {
+        const char *name = local_shell_kind_name(kind);
+        (void)snprintf(s->shell_name, sizeof(s->shell_name), "%s",
+                       name ? name : "");
+    }
+
+    /* Platform. An explicit profile setting always wins (on_session_connect
+     * already locked it). Otherwise a known POSIX-ish shell pins Linux with
+     * no banner scan -- there is no login banner to scan; a custom command
+     * could be anything, so it stays on `auto` and the scan runs. */
+    if (!s->platform_locked && local_shell_kind_is_posix(kind)) {
+        s->ai_state.platform  = (int)CMD_PLATFORM_LINUX;
+        s->platform_locked    = 1;
+        s->platform_scanned   = 1;
+    }
+
+    DWORD tick_now = GetTickCount();
+    s->last_socket_data_tick = tick_now;
+    s->last_keepalive_tick   = tick_now;
+    s->last_user_input_tick  = tick_now;
+    s->conn_state            = CONN_IDLE;
+
+    if (!s->session_log) {
+        /* Host is empty for a local profile, so the log is named after the
+         * profile (spec section 5). */
+        s->session_log = open_session_log(s->conn_profile.name, "local");
+    }
+    s->debug_log = open_debug_log(s->conn_profile.name[0]
+                                    ? s->conn_profile.name : "local");
+
+    if (tidx >= 0) {
+        char user[256], machine[256];
+        if (!probe_env(NULL, "USERNAME", user, sizeof(user)))
+            (void)snprintf(user, sizeof(user), "%s", "local");
+        if (!probe_env(NULL, "COMPUTERNAME", machine, sizeof(machine)))
+            (void)snprintf(machine, sizeof(machine), "%s", "this PC");
+        tabs_set_connect_info(g_hwndTabs, tidx, user, machine,
+                              (unsigned long long)GetTickCount64());
+        tabs_set_status(g_hwndTabs, tidx, TAB_CONNECTED);
+        tabs_set_logging(g_hwndTabs, tidx, s->session_log ? 1 : 0);
+    }
+
+    if (s == g_active_session) ai_panel_attach(s);
+
+    sync_session_grid(hwnd, s);
+    free(spec);
+    return 1;
 }
 
 /* ---- Background connection thread --------------------------------------- */
@@ -753,7 +1030,13 @@ static void on_session_connect(const Profile *info) {
     s->platform_scanned  = 0;
     s->platform_scan_ticks = 0;
 
-    term_process(s->term, "Connecting", 10); /* dots appended by 500ms timer */
+    int is_local = profile_is_local(info);
+
+    /* A local shell has nothing to connect to, so it never shows the
+     * "Connecting..." animation -- start_local_shell() below either has a
+     * running shell a moment later or an error line in the terminal. */
+    if (!is_local)
+        term_process(s->term, "Connecting", 10); /* dots appended by 500ms timer */
 
     char title[32];
     snprintf(title, sizeof(title), "%s",
@@ -772,6 +1055,23 @@ static void on_session_connect(const Profile *info) {
     tabs_set_active(g_hwndTabs, idx);
     tabs_set_status(g_hwndTabs, idx, TAB_CONNECTING);
     invalidate_terminal(GetParent(g_hwndTabs));
+
+    if (is_local) {
+        HWND parent = GetParent(g_hwndTabs);
+        s->conn_state = CONN_IDLE;
+        if (start_local_shell(parent, s, idx)) {
+            /* Reopen the AI panel that was closed for the first session --
+             * the SSH path does this in WM_CONN_DONE, which a local session
+             * never reaches. */
+            if (g_ai_reopen_after_connect && s == g_active_session) {
+                g_ai_reopen_after_connect = 0;
+                on_ai_clicked();
+            }
+        }
+        update_scrollbar(parent);
+        force_full_terminal_repaint(parent, s->term);
+        return;
+    }
 
     /* Store state for the worker thread */
     s->conn_state    = CONN_CONNECTING;
@@ -959,13 +1259,22 @@ static void create_demo_session(HWND hwnd)
         rows = term_h / g_renderer.charHeight;
     }
 
+    const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
+    int demo_local = (strcmp(state, "local") == 0);
+
     Session *s = create_session(rows, cols);
     memset(&s->conn_profile, 0, sizeof(s->conn_profile));
-    snprintf(s->conn_profile.name, sizeof(s->conn_profile.name), "demo");
+    snprintf(s->conn_profile.name, sizeof(s->conn_profile.name), "%s",
+             demo_local ? "Local shell" : "demo");
+    if (demo_local) {
+        snprintf(s->conn_profile.kind, sizeof(s->conn_profile.kind), "local");
+        snprintf(s->shell_name, sizeof(s->shell_name), "busybox");
+    }
     /* s->channel / s->ssh are already NULL from create_session -- no
-     * connection exists or ever will for this tab. */
+     * connection exists or ever will for this tab, local demo included:
+     * the "local" state is tab chrome and a status line, no process
+     * (spec section 5). */
 
-    const char *state = g_startup_demo_state[0] ? g_startup_demo_state : "all";
     char term_buf[8192];
     ApprovalQueue demo_approval, demo_approval2;
     if (ui_demo_build(state, &s->ai_state.conv, &demo_approval, &demo_approval2,
@@ -990,14 +1299,28 @@ static void create_demo_session(HWND hwnd)
 
     term_process(s->term, term_buf, strlen(term_buf));
 
-    int idx = tabs_add(g_hwndTabs, "demo", s);
+    int idx = tabs_add(g_hwndTabs, demo_local ? "Local shell" : "demo", s);
     if (idx < 0) {
         if (g_session_list == s) g_session_list = s->next;
         free_session(s);
         return;
     }
     tabs_set_active(g_hwndTabs, idx);        /* -> on_tab_select: g_active_session = s */
-    tabs_set_status(g_hwndTabs, idx, TAB_IDLE); /* neutral -- never connects */
+    if (demo_local) {
+        /* The local demo shows the chrome a live local session has: a
+         * CONNECTED dot and a user@machine status line, from the real
+         * environment, with no process behind it. */
+        char user[256], machine[256];
+        if (!probe_env(NULL, "USERNAME", user, sizeof(user)))
+            (void)snprintf(user, sizeof(user), "%s", "local");
+        if (!probe_env(NULL, "COMPUTERNAME", machine, sizeof(machine)))
+            (void)snprintf(machine, sizeof(machine), "%s", "this PC");
+        tabs_set_connect_info(g_hwndTabs, idx, user, machine,
+                              (unsigned long long)GetTickCount64());
+        tabs_set_status(g_hwndTabs, idx, TAB_CONNECTED);
+    } else {
+        tabs_set_status(g_hwndTabs, idx, TAB_IDLE); /* neutral -- never connects */
+    }
     invalidate_terminal(hwnd);
 
     /* --theme <name>: apply only if it names a real theme; an unknown
@@ -1109,9 +1432,7 @@ static void on_ai_clicked(void) {
 
     /* Set the active session if one exists */
     if (g_hwndAiChat && g_active_session) {
-        ai_chat_set_session(g_hwndAiChat,
-                           g_active_session->term,
-                           g_active_session->channel);
+        ai_panel_attach(g_active_session);
     }
 
     if (g_ai_docked && g_hwndAiChat) {
@@ -1161,11 +1482,11 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
                               "Disconnect",
                               MB_YESNO | MB_ICONQUESTION);
         if (ans == IDYES) {
-            if (g_paste.channel == s->channel)
+            if (g_paste.io_ctx == s->io.ctx)
                 paste_cancel();
             term_process(s->term, "\r\n[Disconnected by user]\r\n", 25);
-            if (s->channel) { ssh_channel_free(s->channel); s->channel = NULL; }
-            if (s->ssh)     { ssh_session_free(s->ssh);     s->ssh = NULL; }
+            ai_panel_detach(s);
+            session_close_io(s);
             if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
             if (s->debug_log)   { fclose(s->debug_log);   s->debug_log   = NULL; }
             int tidx = tabs_find(g_hwndTabs, s);
@@ -1177,33 +1498,50 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
         }
     } else if (status == TAB_DISCONNECTED) {
         /* Attempt reconnect using stored profile */
-        if (s->conn_profile.host[0] == '\0') {
+        int is_local = profile_is_local(&s->conn_profile);
+        if (!is_local && s->conn_profile.host[0] == '\0') {
             MessageBoxA(hParent,
                         "No connection profile available for reconnection.",
                         "Reconnect", MB_OK | MB_ICONINFORMATION);
             return;
         }
-        /* Clean up any leftover SSH state */
-        if (s->channel) { ssh_channel_free(s->channel); s->channel = NULL; }
-        if (s->ssh)     { ssh_session_free(s->ssh);     s->ssh = NULL; }
+        /* Clean up any leftover transport state */
+        session_close_io(s);
         if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
         if (s->debug_log)   { fclose(s->debug_log);   s->debug_log   = NULL; }
 
-        /* Re-populate password from config — it was zeroed after first auth */
-        for (size_t i = 0; i < vec_size(&g_config->profiles); i++) {
-            const Profile *pr = (const Profile *)vec_get(&g_config->profiles, i);
-            if (strcmp(pr->host, s->conn_profile.host) == 0 &&
-                strcmp(pr->username, s->conn_profile.username) == 0 &&
-                pr->port == s->conn_profile.port) {
-                memcpy(s->conn_profile.password, pr->password,
-                       sizeof(s->conn_profile.password));
-                break;
+        if (!is_local) {
+            /* Re-populate password from config — it was zeroed after first auth */
+            for (size_t i = 0; i < vec_size(&g_config->profiles); i++) {
+                const Profile *pr = (const Profile *)vec_get(&g_config->profiles, i);
+                if (strcmp(pr->kind, s->conn_profile.kind) == 0 &&
+                    strcmp(pr->host, s->conn_profile.host) == 0 &&
+                    strcmp(pr->username, s->conn_profile.username) == 0 &&
+                    pr->port == s->conn_profile.port) {
+                    memcpy(s->conn_profile.password, pr->password,
+                           sizeof(s->conn_profile.password));
+                    break;
+                }
             }
+        }
+
+        int tidx = tabs_find(g_hwndTabs, s);
+
+        /* A local profile re-spawns its shell instead of launching the
+         * connection thread (spec section 2, "Reconnect"). */
+        if (is_local) {
+            s->conn_state = CONN_IDLE;
+            s->conn_error[0] = '\0';
+            s->shell_name[0] = '\0';
+            term_process(s->term, "\r\n", 2);
+            start_local_shell(hParent, s, tidx);
+            update_scrollbar(hParent);
+            force_full_terminal_repaint(hParent, s->term);
+            return;
         }
 
         term_process(s->term, "\r\nReconnecting", 14);
 
-        int tidx = tabs_find(g_hwndTabs, s);
         if (tidx >= 0)
             tabs_set_status(g_hwndTabs, tidx, TAB_CONNECTING);
 
@@ -1276,16 +1614,13 @@ static void on_log_toggle(int index, void *user_data) {
 static bool paste_send_next_line(void)
 {
     if (!g_paste.buf || !g_paste.pos || !*g_paste.pos) return false;
-    if (!g_paste.channel) return false;
+    if (!g_paste.io_ctx || !g_paste.io_write) return false;
 
     const char *p = g_paste.pos;
     const char *nl = strchr(p, '\n');
     size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
 
-    for (size_t i = 0; i < chunk; i++) {
-        if (p[i] != '\r')
-            ssh_channel_write(g_paste.channel, &p[i], 1);
-    }
+    paste_chunk_write(g_paste.io_ctx, g_paste.io_write, p, chunk, g_paste.local);
 
     g_paste.pos += chunk;
     return *g_paste.pos != '\0';
@@ -1299,8 +1634,10 @@ static void paste_cancel(void)
         free(g_paste.buf);
         g_paste.buf      = NULL;
         g_paste.pos      = NULL;
-        g_paste.channel  = NULL;
+        g_paste.io_ctx   = NULL;
+        g_paste.io_write = NULL;
         g_paste.bracketed = false;
+        g_paste.local     = false;
     }
 }
 
@@ -1308,8 +1645,8 @@ static void paste_cancel(void)
 static void paste_finish(void)
 {
     static const char BRACKET_CLOSE[] = "\033[201~";
-    if (g_paste.bracketed && g_paste.channel)
-        ssh_channel_write(g_paste.channel, BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
+    if (g_paste.bracketed && g_paste.io_ctx)
+        g_paste.io_write(g_paste.io_ctx, BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
     paste_cancel();
 }
 
@@ -1327,7 +1664,7 @@ static void paste_timer_tick(void)
 
 static void do_paste(HWND hwnd)
 {
-    if (!g_active_session || !g_active_session->channel) return;
+    if (!g_active_session || !g_active_session->io.ctx) return;
     session_mark_user_active();
 
     /* Cancel any in-progress paste */
@@ -1374,6 +1711,7 @@ static void do_paste(HWND hwnd)
 
     bool bpm = g_active_session->term &&
                g_active_session->term->bracketed_paste_mode;
+    bool local_line_ends = (g_active_session->io.kind == SESSION_LOCAL);
     int  delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
 
     static const char BRACKET_OPEN[]  = "\033[200~";
@@ -1384,20 +1722,19 @@ static void do_paste(HWND hwnd)
      * would only add pointless latency. */
     if (line_count == 0 || delay_ms <= 0 || bpm) {
         if (bpm)
-            ssh_channel_write(g_active_session->channel,
+            g_active_session->io.write(g_active_session->io.ctx,
                               BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
         const char *p = local;
         while (*p) {
             const char *nl = strchr(p, '\n');
             size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
-            for (size_t i = 0; i < chunk; i++) {
-                if (p[i] != '\r')
-                    ssh_channel_write(g_active_session->channel, &p[i], 1);
-            }
+            paste_chunk_write(g_active_session->io.ctx,
+                              g_active_session->io.write,
+                              p, chunk, local_line_ends);
             p += chunk;
         }
         if (bpm)
-            ssh_channel_write(g_active_session->channel,
+            g_active_session->io.write(g_active_session->io.ctx,
                               BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
         g_active_session->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
@@ -1408,11 +1745,13 @@ static void do_paste(HWND hwnd)
         g_paste.pos       = g_paste.buf;
         g_paste.hwnd      = hwnd;
         g_paste.delay_ms  = delay_ms;
-        g_paste.channel   = g_active_session->channel;
+        g_paste.io_ctx    = g_active_session->io.ctx;
+        g_paste.io_write  = g_active_session->io.write;
         g_paste.bracketed = bpm;
+        g_paste.local     = local_line_ends;
 
         if (bpm)
-            ssh_channel_write(g_active_session->channel,
+            g_active_session->io.write(g_active_session->io.ctx,
                               BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
 
         /* Send the first line immediately */
@@ -1934,6 +2273,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     (void)snprintf(g_config->settings.log_dir,
                                    sizeof(g_config->settings.log_dir),
                                    "%s", exe_dir);
+
+                /* First start by a version that knows about local shells:
+                 * give the user a real saved "Local shell" profile at the
+                 * top of the list (spec section 5). It is an ordinary row
+                 * from then on -- rename it, edit it, delete it. */
+                if (config_ensure_local_profile(g_config))
+                    (void)config_save(g_config, g_config_path);
             }
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;
@@ -2273,10 +2619,24 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 /* Poll connected sessions only (skip those still connecting) */
                 Session *s = g_session_list;
                 while (s) {
-                    if (s->channel && s->conn_state == CONN_IDLE) {
-                        int poll_rc = ssh_io_poll(s->channel, s->term,
+                    if (s->io.ctx && s->conn_state == CONN_IDLE) {
+                        int poll_rc = s->io.poll(s->io.ctx, s->term,
                                                       s->session_log,
                                                       s->debug_log);
+
+                        /* ConPTY never delivers a real pipe EOF just because
+                         * the shell exited -- conhost keeps the session
+                         * alive until ClosePseudoConsole runs (local_pty.c,
+                         * local_pty_close()), so local_pty_poll() correctly
+                         * never reports -2 for that by itself any more. A
+                         * local session's "disconnected" signal is instead
+                         * the shell process itself, watched here once this
+                         * tick's pending output (if any) has been drained. */
+                        if (poll_rc == 0 && s->io.kind == SESSION_LOCAL &&
+                            local_pty_child_exited((const LocalPty *)s->io.ctx)) {
+                            poll_rc = -2;
+                        }
+
                         if (poll_rc > 0) {
                             update_scrollbar(hwnd);
 
@@ -2302,85 +2662,90 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             }
                         }
 
-                        DWORD now_tick = GetTickCount();
+                        /* Keepalive, the socket-liveness counter and the two
+                         * timeout rails are libssh2-specific and are skipped
+                         * for a local session (spec section 2). */
+                        if (s->io.kind == SESSION_SSH) {
+                            DWORD now_tick = GetTickCount();
 
-                        /* Track socket-level liveness via the libssh2 RECV
-                         * callback's byte counter.  Any change since last
-                         * tick — including silently-consumed keepalive
-                         * replies — proves the link is alive. */
-                        if (s->ssh) {
-                            uint64_t curr = s->ssh->bytes_read_total;
-                            if (curr != s->prev_bytes_read) {
-                                s->last_socket_data_tick = now_tick;
-                                s->prev_bytes_read = curr;
+                            /* Track socket-level liveness via the libssh2 RECV
+                             * callback's byte counter.  Any change since last
+                             * tick — including silently-consumed keepalive
+                             * replies — proves the link is alive. */
+                            if (s->ssh) {
+                                uint64_t curr = s->ssh->bytes_read_total;
+                                if (curr != s->prev_bytes_read) {
+                                    s->last_socket_data_tick = now_tick;
+                                    s->prev_bytes_read = curr;
+                                }
                             }
-                        }
 
-                        /* Drive libssh2 keepalive ~once per second.  The
-                         * library handles the 30s send cadence internally;
-                         * we just need to give it CPU time. */
-                        if (now_tick - s->last_keepalive_tick >= 1000u) {
-                            int next_secs = 0;
-                            if (s->ssh && s->ssh->session)
-                                libssh2_keepalive_send(s->ssh->session,
-                                                       &next_secs);
-                            s->last_keepalive_tick = now_tick;
-                        }
+                            /* Drive libssh2 keepalive ~once per second.  The
+                             * library handles the 30s send cadence internally;
+                             * we just need to give it CPU time. */
+                            if (now_tick - s->last_keepalive_tick >= 1000u) {
+                                int next_secs = 0;
+                                if (s->ssh && s->ssh->session)
+                                    libssh2_keepalive_send(s->ssh->session,
+                                                           &next_secs);
+                                s->last_keepalive_tick = now_tick;
+                            }
 
-                        /* Network-failure rail: no socket bytes at all
-                         * (not even keepalive replies) for the threshold. */
-                        if (poll_rc != -2 && s->channel &&
-                            ssh_network_should_timeout(now_tick,
-                                                       s->last_socket_data_tick,
-                                                       NETWORK_FAILURE_TIMEOUT_MS)) {
-                            dispbuf_invalidate(&g_renderer.dispbuf);
-                            if (g_paste.channel == s->channel)
-                                paste_cancel();
-                            term_process(s->term,
-                                         "\r\n[Connection timed out]\r\n", 26);
-                            ssh_channel_free(s->channel);
-                            s->channel = NULL;
-                            int tidx_net = tabs_find(g_hwndTabs, s);
-                            if (tidx_net >= 0)
-                                tabs_set_status(g_hwndTabs, tidx_net, TAB_DISCONNECTED);
-                            if (s == g_active_session) hide_ai_panel(hwnd);
-                        }
+                            /* Network-failure rail: no socket bytes at all
+                             * (not even keepalive replies) for the threshold. */
+                            if (poll_rc != -2 && s->io.ctx &&
+                                ssh_network_should_timeout(now_tick,
+                                                           s->last_socket_data_tick,
+                                                           NETWORK_FAILURE_TIMEOUT_MS)) {
+                                dispbuf_invalidate(&g_renderer.dispbuf);
+                                if (g_paste.io_ctx == s->io.ctx)
+                                    paste_cancel();
+                                term_process(s->term,
+                                             "\r\n[Connection timed out]\r\n", 26);
+                                ai_panel_detach(s);
+                                session_close_io(s);
+                                int tidx_net = tabs_find(g_hwndTabs, s);
+                                if (tidx_net >= 0)
+                                    tabs_set_status(g_hwndTabs, tidx_net, TAB_DISCONNECTED);
+                                if (s == g_active_session) hide_ai_panel(hwnd);
+                            }
 
-                        /* User-idle rail: configurable, 0 = disabled. */
-                        if (poll_rc != -2 && s->channel &&
-                            ssh_idle_should_timeout(
-                                now_tick,
-                                s->last_user_input_tick,
-                                g_config->settings.ssh_user_idle_timeout_mins)) {
-                            char banner[64];
-                            int n = snprintf(banner, sizeof(banner),
-                                             "\r\n[Disconnected after %d min idle]\r\n",
-                                             g_config->settings.ssh_user_idle_timeout_mins);
-                            if (n < 0) n = 0;
-                            if (n > (int)sizeof(banner)) n = (int)sizeof(banner) - 1;
-                            dispbuf_invalidate(&g_renderer.dispbuf);
-                            if (g_paste.channel == s->channel)
-                                paste_cancel();
-                            term_process(s->term, banner, (size_t)n);
-                            ssh_channel_free(s->channel);
-                            s->channel = NULL;
-                            int tidx_idle = tabs_find(g_hwndTabs, s);
-                            if (tidx_idle >= 0)
-                                tabs_set_status(g_hwndTabs, tidx_idle, TAB_DISCONNECTED);
-                            if (s == g_active_session) hide_ai_panel(hwnd);
+                            /* User-idle rail: configurable, 0 = disabled. */
+                            if (poll_rc != -2 && s->io.ctx &&
+                                ssh_idle_should_timeout(
+                                    now_tick,
+                                    s->last_user_input_tick,
+                                    g_config->settings.ssh_user_idle_timeout_mins)) {
+                                char banner[64];
+                                int n = snprintf(banner, sizeof(banner),
+                                                 "\r\n[Disconnected after %d min idle]\r\n",
+                                                 g_config->settings.ssh_user_idle_timeout_mins);
+                                if (n < 0) n = 0;
+                                if (n > (int)sizeof(banner)) n = (int)sizeof(banner) - 1;
+                                dispbuf_invalidate(&g_renderer.dispbuf);
+                                if (g_paste.io_ctx == s->io.ctx)
+                                    paste_cancel();
+                                term_process(s->term, banner, (size_t)n);
+                                ai_panel_detach(s);
+                                session_close_io(s);
+                                int tidx_idle = tabs_find(g_hwndTabs, s);
+                                if (tidx_idle >= 0)
+                                    tabs_set_status(g_hwndTabs, tidx_idle, TAB_DISCONNECTED);
+                                if (s == g_active_session) hide_ai_panel(hwnd);
+                            }
                         }
 
                         if (poll_rc == -2) {
                             /* EOF — the final data chunk (e.g. alt-screen-exit
                              * sequence) was already fed to term_process by
-                             * ssh_io_poll, so force a full display-buffer
+                             * the transport poll, so force a full display-buffer
                              * invalidation before handling the disconnect. */
                             dispbuf_invalidate(&g_renderer.dispbuf);
-                            if (g_paste.channel == s->channel)
+                            if (g_paste.io_ctx == s->io.ctx)
                                 paste_cancel();
                             term_process(s->term, "\r\n[Connection Closed]\r\n", 23);
-                            ssh_channel_free(s->channel);
-                            s->channel = NULL;
+                            ai_panel_detach(s);
+                            session_close_io(s);
                             int tidx = tabs_find(g_hwndTabs, s);
                             if (tidx >= 0)
                                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
@@ -2459,6 +2824,24 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 create_demo_session(hwnd);
                 return 0;
             }
+            if (g_startup_action == CLI_CONNECT_LOCAL) {
+                /* --local starts from a transient profile and never looks a
+                 * name up, so a saved profile called "Local shell" that
+                 * points at a host cannot hijack the flag (spec section 5).
+                 * Nothing is saved: this profile exists for one session. */
+                Profile local_pr;
+                memset(&local_pr, 0, sizeof(local_pr));
+                (void)snprintf(local_pr.name, sizeof(local_pr.name), "%s",
+                               "Local shell");
+                (void)snprintf(local_pr.kind, sizeof(local_pr.kind), "%s",
+                               "local");
+                (void)snprintf(local_pr.platform, sizeof(local_pr.platform),
+                               "%s", "auto");
+                local_pr.port = 22;
+                local_pr.auth_type = AUTH_PASSWORD;
+                on_session_connect(&local_pr);
+                return 0;
+            }
             const Profile *pr = NULL;
             const char *wanted = NULL;
             if (g_startup_action == CLI_CONNECT_NAME) {
@@ -2526,6 +2909,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (tidx >= 0)
                     tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
             } else {
+                /* Publish the transport here, on the UI thread, so no other
+                 * UI-thread reader (WM_SIZE, sync_session_grid) can see a
+                 * half-copied SessionIo with ctx set and resize NULL. The
+                 * channel and session were opened by the connection thread,
+                 * which has posted this message and touches neither again. */
+                s->io = session_io_ssh(s->ssh, s->channel);
                 term_process(s->term, "\r\nConnected.\r\n", 14);
                 /* Keep a log the user already started from the File menu
                  * while the tab was still connecting; only auto-open one
@@ -2550,9 +2939,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (ai_chat_should_update_channel(
                         g_hwndAiChat != NULL,
                         NULL,  /* don't care about current chat channel */
-                        s->channel,
+                        s->io.ctx,
                         s == g_active_session)) {
-                    ai_chat_set_session(g_hwndAiChat, s->term, s->channel);
+                    ai_chat_set_session(g_hwndAiChat, s->term, session_io_ptr(s));
+                    /* SSH: no shell name, so the prompt keeps its SSH text. */
+                    ai_chat_set_shell_name(g_hwndAiChat, NULL);
                 }
 
                 /* Reopen AI panel that was closed before first session */
@@ -2563,8 +2954,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             /* Sync PTY size to actual window dimensions — the window may have
              * been resized while the connection thread was running (auth can
-             * take several seconds), and WM_SIZE skips ssh_pty_resize when
-             * channel is NULL. Without this, TUI apps like nano start with
+             * take several seconds), and WM_SIZE skips the transport resize
+             * while io.ctx is NULL. Without this, TUI apps like nano start with
              * the pre-connection window size and appear blank until the user
              * manually resizes. */
             if (conn_result == 0)
@@ -2664,8 +3055,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     term_resize(g_active_session->term, rows, cols);
                     term_mark_all_dirty(g_active_session->term);
                     dispbuf_resize(&g_renderer.dispbuf, rows, cols);
-                    if (g_active_session->channel)
-                        ssh_pty_resize(g_active_session->channel, cols, rows);
+                    if (g_active_session->io.ctx)
+                        g_active_session->io.resize(g_active_session->io.ctx, cols, rows);
                 }
             }
             /* Always repaint the full window on resize so gutter areas
@@ -2954,19 +3345,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     g_ctrlc_swallow_char = false;
                     return 0;
                 }
-                if (g_active_session->channel) {
+                if (g_active_session->io.ctx) {
                     /* Drain pending transport data so the write can
                      * succeed in non-blocking mode.  Without this,
                      * libssh2_channel_write returns EAGAIN when the
                      * session has unread inbound data, and the retry
-                     * loop in ssh_channel_write blocks the UI thread
-                     * (preventing WM_TIMER / ssh_io_poll from running)
+                     * loop in the transport write blocks the UI thread
+                     * (preventing WM_TIMER / the transport poll from running)
                      * — a deadlock that silently drops keystrokes. */
-                    ssh_io_poll(g_active_session->channel,
+                    g_active_session->io.poll(g_active_session->io.ctx,
                                 g_active_session->term,
                                 g_active_session->session_log,
                                 g_active_session->debug_log);
-                    ssh_channel_write(g_active_session->channel, &c, 1);
+                    g_active_session->io.write(g_active_session->io.ctx, &c, 1);
                 }
                 /* Only invalidate if we were scrolled back */
                 if (g_active_session->term->scrollback_offset != 0) {
@@ -3058,12 +3449,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         return 0;
                 }
                 if (seq) {
-                    if (g_active_session->channel) {
-                        ssh_io_poll(g_active_session->channel,
+                    if (g_active_session->io.ctx) {
+                        g_active_session->io.poll(g_active_session->io.ctx,
                                     g_active_session->term,
                                     g_active_session->session_log,
                                     g_active_session->debug_log);
-                        ssh_channel_write(g_active_session->channel, seq, strlen(seq));
+                        g_active_session->io.write(g_active_session->io.ctx, seq, strlen(seq));
                     }
                     if (g_active_session->term->scrollback_offset != 0) {
                         g_active_session->term->scrollback_offset = 0;

@@ -110,7 +110,7 @@ endif
 NON_TEST_SRCS = src/main.c $(wildcard src/ui/*.c)
 
 # Win32-only tests belong to the `wintest` harness, never to `test`
-WIN_ONLY_TESTS = tests/test_icons.c tests/win_runner.c
+WIN_ONLY_TESTS = tests/test_icons.c tests/test_local_pty.c tests/win_runner.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -134,12 +134,23 @@ TEST_TARGET = build/test_runner$(EXE)
 
 .PHONY: all clean test lint debug release redraw-debug wintest
 
-# ── Win32-only test harness (icon renderer). Links GDI+ via MinGW.
-# Runs directly on a Windows host, under Wine on Linux if available;
-# otherwise prints a skip notice.  Kept separate from `test`.
+# ── Win32-only test harness: the icon renderer (GDI+) and the ConPTY
+# backend (real pseudo-consoles, real child processes).  Runs directly on a
+# Windows host, under Wine on Linux if available; otherwise prints a skip
+# notice.  Kept separate from `test`, which never touches Win32.
+#
+# local_pty.c drags in the shell resolver, the ring, the emulator and the
+# two small helpers they use -- term_process() is what the ConPTY bytes are
+# drained into, exactly as the app does it.
 WIN_TEST_CC      = x86_64-w64-mingw32-gcc
 WIN_TEST_TARGET  = build/win/test_runner.exe
-WIN_TEST_SRCS    = src/ui/icons.c tests/test_icons.c tests/win_runner.c
+WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
+                   src/core/local_shell.c src/core/pty_ring.c \
+                   src/core/string_utils.c src/core/shell_prompt.c \
+                   src/core/xmalloc.c \
+                   src/term/buffer.c src/term/parser.c src/term/term.c \
+                   src/core/term_extract.c \
+                   tests/test_icons.c tests/test_local_pty.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \

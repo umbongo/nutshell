@@ -17,12 +17,14 @@ typedef enum {
 
 typedef struct {
     char name[256];
+    char kind[16];        /* "ssh" (default) or "local" */
     char host[256];
     int port;
     char username[256];
     AuthType auth_type;
     char password[256]; // Or passphrase for key
     char key_path[MAX_PATH];
+    char shell[MAX_PATH]; /* local only: custom command line; empty = automatic */
     char platform[32]; // Device platform token: "auto" (default), "linux", "cisco-ios", ...
 #ifndef AI_NOTES_MAX
 #define AI_NOTES_MAX 2560

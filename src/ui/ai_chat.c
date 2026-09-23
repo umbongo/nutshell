@@ -28,7 +28,7 @@
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
 #include "term_extract.h"
-#include "ssh_channel.h"
+#include "session_io.h"
 #include "resource.h"
 #include "ai_dock.h"
 #include "string_utils.h"
@@ -213,7 +213,11 @@ typedef struct {
 
     /* Active session references */
     Terminal   *active_term;
-    SSHChannel *active_channel;
+    SessionIo  *active_io;   /* transport of the active session, or NULL */
+    /* Local sessions only: the shell the resolver picked, as
+     * ai_build_system_prompt() names it. Empty means "not a local shell" --
+     * for an SSH session, and for a local one before window.c has set it. */
+    char        shell_name[32];
 
     /* Background thread */
     CRITICAL_SECTION cs;
@@ -358,12 +362,27 @@ typedef struct {
     /* Empty/no-key/no-session state (ai_panel_states.h), pushed to
      * hChatList whenever it might change -- see update_panel_state()
      * below (AI Assist Panel task 4). -1 = no forced override: the state
-     * is decided from active_channel/api_key. --ui-demo's "empty" state
+     * is decided from active_io/api_key. --ui-demo's "empty" state
      * forces AI_STATE_EMPTY via ai_chat_force_state() even though the
-     * demo session has no channel (it would otherwise read as
+     * demo session has no transport (it would otherwise read as
      * AI_STATE_NO_SESSION). */
     int forced_state;
 } AiChatData;
+
+/* Session kind for the system prompt: SSH unless the active transport
+ * says otherwise (a panel with no session keeps today's SSH wording). */
+static SessionKind active_session_kind(const AiChatData *d)
+{
+    return (d && d->active_io) ? d->active_io->kind : SESSION_SSH;
+}
+
+/* The shell name that goes with that kind: NULL unless a local session has
+ * actually told us which shell it is, in which case
+ * ai_build_system_prompt() names it instead of listing the possibilities. */
+static const char *active_shell_name(const AiChatData *d)
+{
+    return (d && d->shell_name[0]) ? d->shell_name : NULL;
+}
 
 /* Helper: check if the currently active session has a busy AI stream */
 #define ACTIVE_BUSY(d) ((d)->active_state && (d)->active_state->busy)
@@ -371,7 +390,7 @@ typedef struct {
 /* Forward declarations */
 static void do_session_switch(AiChatData *d,
                               AiSessionState *new_state,
-                              Terminal *term, SSHChannel *channel,
+                              Terminal *term, SessionIo *io,
                               const char *session_notes,
                               const char *system_notes,
                               const char *session_name);
@@ -958,7 +977,7 @@ static void update_panel_state(AiChatData *d)
     int state;
     if (d->forced_state >= 0)
         state = d->forced_state;
-    else if (!d->active_channel)
+    else if (!d->active_io)
         state = AI_STATE_NO_SESSION;
     else if (d->api_key[0] == '\0')
         state = AI_STATE_NO_KEY;
@@ -1522,7 +1541,8 @@ static void send_user_message(AiChatData *d)
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
         ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
-                               d->session_notes, d->system_notes);
+                               d->session_notes, d->system_notes,
+                               active_session_kind(d), active_shell_name(d));
         /* Append tool descriptions if tools are registered and provider supports them */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
@@ -1548,7 +1568,8 @@ static void send_user_message(AiChatData *d)
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
         ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
-                               d->session_notes, d->system_notes);
+                               d->session_notes, d->system_notes,
+                               active_session_kind(d), active_shell_name(d));
         /* Append tool descriptions */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
@@ -1611,9 +1632,10 @@ static int command_has_control_char(const char *cmd)
 static void execute_command(AiChatData *d, const char *cmd)
 {
     if (!d || !cmd || !cmd[0]) return;
-    if (!d->active_channel) {
+    SessionIo *io = d->active_io;
+    if (!io || !io->write) {
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                        "[error: no active SSH channel]");
+                        "[error: no active session]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
         return;
     }
@@ -1626,11 +1648,11 @@ static void execute_command(AiChatData *d, const char *cmd)
 
     /* Clear any existing text on the line before pasting:
        Ctrl+E (end of line) + Ctrl+U (kill to start of line) */
-    ssh_channel_write(d->active_channel, "\x05\x15", 2);
+    io->write(io->ctx, "\x05\x15", 2);
 
-    /* Send command + CR to SSH channel (CR = Enter key, same as WM_CHAR) */
-    ssh_channel_write(d->active_channel, cmd, (size_t)strlen(cmd));
-    ssh_channel_write(d->active_channel, "\r", 1);
+    /* Send command + CR to the session (CR = Enter key, same as WM_CHAR) */
+    io->write(io->ctx, cmd, (size_t)strlen(cmd));
+    io->write(io->ctx, "\r", 1);
 
 }
 
@@ -1661,7 +1683,8 @@ static void send_continue_message(AiChatData *d, const char *msg_text)
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
         ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
-                               d->session_notes, d->system_notes);
+                               d->session_notes, d->system_notes,
+                               active_session_kind(d), active_shell_name(d));
         ai_conv_set_system(&d->conv, sys_prompt);
     }
 
@@ -1775,9 +1798,12 @@ static void dispatch_tick(AiChatData *d)
 {
     if (!d || !d->dispatch_active) return;
 
-    if (!d->active_term || !d->active_channel) {
+    /* The transport can vanish mid-batch (window.c clears active_io before
+     * closing it at EOF), and the batch must be abandoned visibly rather
+     * than waiting for a prompt that cannot come. */
+    if (!d->active_term || !d->active_io) {
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                        "[error: no active SSH channel]");
+                        "[session ended -- remaining commands cancelled]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
         dispatch_cancel(d, NULL);
         return;
@@ -2780,7 +2806,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Replays any loaded conversation, or leaves msg_list empty for
          * chat_listview to paint the empty/no-key/no-session state
-         * (set just below -- active_channel isn't known yet at this
+         * (set just below -- active_io isn't known yet at this
          * point, ai_chat_set_session() corrects it right after). */
         chat_rebuild_display(nd);
         update_panel_state(nd);
@@ -2985,10 +3011,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (!d) return 0;
             HWND main_hwnd = GetParent(hwnd);
             if (!main_hwnd) return 0;
-            /* Same precedence as update_panel_state(): no channel means
+            /* Same precedence as update_panel_state(): no transport means
              * NO_SESSION is showing (even if the key is also empty), so
-             * check active_channel first rather than api_key. */
-            if (!d->active_channel) {
+             * check active_io first rather than api_key. */
+            if (!d->active_io) {
                 PostMessage(main_hwnd, WM_COMMAND,
                            MAKEWPARAM(IDM_FILE_CONNECT, 0), 0);
             } else {
@@ -4267,14 +4293,23 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     return hwnd;
 }
 
-void ai_chat_set_session(HWND hwnd, Terminal *term, SSHChannel *channel)
+void ai_chat_set_session(HWND hwnd, Terminal *term, SessionIo *io)
 {
     if (!hwnd) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
     d->active_term = term;
-    d->active_channel = channel;
+    d->active_io = io;
     update_panel_state(d);
+}
+
+void ai_chat_set_shell_name(HWND hwnd, const char *shell_name)
+{
+    if (!hwnd) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    (void)snprintf(d->shell_name, sizeof(d->shell_name), "%s",
+                   shell_name ? shell_name : "");
 }
 
 void ai_chat_force_state(HWND hwnd, int state_id)
@@ -4443,7 +4478,7 @@ void ai_chat_set_context_lines(HWND hwnd, int lines)
  * Safe to call even while busy — each thread targets its own session. */
 static void do_session_switch(AiChatData *d,
                               AiSessionState *new_state,
-                              Terminal *term, SSHChannel *channel,
+                              Terminal *term, SessionIo *io,
                               const char *session_notes,
                               const char *system_notes,
                               const char *session_name)
@@ -4493,7 +4528,7 @@ static void do_session_switch(AiChatData *d,
 
     d->active_state = new_state;
     d->active_term = term;
-    d->active_channel = channel;
+    d->active_io = io;
 
     /* Update notes */
     if (session_notes)
@@ -4584,7 +4619,7 @@ static void do_session_switch(AiChatData *d,
 
 void ai_chat_switch_session(HWND hwnd,
                             AiSessionState *new_state,
-                            Terminal *term, SSHChannel *channel,
+                            Terminal *term, SessionIo *io,
                             const char *session_notes,
                             const char *system_notes,
                             const char *session_name)
@@ -4608,7 +4643,7 @@ void ai_chat_switch_session(HWND hwnd,
 
     /* Switch immediately — any running thread continues in the background
      * targeting its own session directly. */
-    do_session_switch(d, new_state, term, channel,
+    do_session_switch(d, new_state, term, io,
                       session_notes, system_notes, session_name);
 }
 

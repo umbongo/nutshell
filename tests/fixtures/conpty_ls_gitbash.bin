@@ -1,0 +1,5 @@
+[?9001h[?1004h[?25l[2J[m[Htotal 3
+]0;C:\Program Files\Git\bin\bash.exe[?25h-rw-r--r-- 1 thomas 197121  6 Sep 22 01:14 alpha.txt
+-rw-r--r-- 1 thomas 197121 11 Sep 22 01:14 bravo.txt
+-rwxr-xr-x 1 thomas 197121 18 Sep 22 01:14 run.sh
+drwxr-xr-x 1 thomas 197121  0 Sep 22 01:14 subdir

@@ -13,6 +13,7 @@ typedef enum {
     CLI_VERSION,        /* -v: show version                                 */
     CLI_HELP,           /* -?: show usage                                   */
     CLI_UI_DEMO,        /* --ui-demo[=<state>]: hidden screenshot harness   */
+    CLI_CONNECT_LOCAL,  /* --local: start a local shell session             */
     CLI_ERROR           /* bad command line — see .error                    */
 } CliAction;
 

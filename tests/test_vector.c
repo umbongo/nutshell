@@ -169,3 +169,124 @@ int test_vector_free_reuse(void)
     vec_free(&v);
     TEST_END();
 }
+
+int test_vector_insert_at_zero_into_empty(void)
+{
+    TEST_BEGIN();
+    Vector v;
+    vec_init(&v);
+
+    vec_insert(&v, 0, (void *)42);
+
+    ASSERT_EQ(vec_size(&v), (size_t)1);
+    ASSERT_EQ(vec_get(&v, 0), (void *)42);
+
+    vec_free(&v);
+    TEST_END();
+}
+
+int test_vector_insert_at_zero_shifts_existing(void)
+{
+    TEST_BEGIN();
+    Vector v;
+    vec_init(&v);
+    vec_push(&v, (void *)1);
+    vec_push(&v, (void *)2);
+
+    vec_insert(&v, 0, (void *)99);
+
+    ASSERT_EQ(vec_size(&v), (size_t)3);
+    ASSERT_EQ(vec_get(&v, 0), (void *)99);
+    ASSERT_EQ(vec_get(&v, 1), (void *)1);
+    ASSERT_EQ(vec_get(&v, 2), (void *)2);
+
+    vec_free(&v);
+    TEST_END();
+}
+
+int test_vector_insert_in_middle(void)
+{
+    TEST_BEGIN();
+    Vector v;
+    vec_init(&v);
+    vec_push(&v, (void *)1);
+    vec_push(&v, (void *)2);
+    vec_push(&v, (void *)3);
+
+    vec_insert(&v, 1, (void *)77);
+
+    ASSERT_EQ(vec_size(&v), (size_t)4);
+    ASSERT_EQ(vec_get(&v, 0), (void *)1);
+    ASSERT_EQ(vec_get(&v, 1), (void *)77);
+    ASSERT_EQ(vec_get(&v, 2), (void *)2);
+    ASSERT_EQ(vec_get(&v, 3), (void *)3);
+
+    vec_free(&v);
+    TEST_END();
+}
+
+int test_vector_insert_at_size_appends(void)
+{
+    TEST_BEGIN();
+    Vector v;
+    vec_init(&v);
+    vec_push(&v, (void *)1);
+    vec_push(&v, (void *)2);
+
+    vec_insert(&v, 2, (void *)3);
+
+    ASSERT_EQ(vec_size(&v), (size_t)3);
+    ASSERT_EQ(vec_get(&v, 0), (void *)1);
+    ASSERT_EQ(vec_get(&v, 1), (void *)2);
+    ASSERT_EQ(vec_get(&v, 2), (void *)3);
+
+    vec_free(&v);
+    TEST_END();
+}
+
+int test_vector_insert_past_size_appends(void)
+{
+    TEST_BEGIN();
+    Vector v;
+    vec_init(&v);
+    vec_push(&v, (void *)1);
+
+    vec_insert(&v, 99, (void *)2);
+
+    ASSERT_EQ(vec_size(&v), (size_t)2);
+    ASSERT_EQ(vec_get(&v, 0), (void *)1);
+    ASSERT_EQ(vec_get(&v, 1), (void *)2);
+
+    vec_free(&v);
+    TEST_END();
+}
+
+int test_vector_insert_null_vector_is_noop(void)
+{
+    TEST_BEGIN();
+    vec_insert(NULL, 0, (void *)1);  /* must not crash */
+    ASSERT_TRUE(1);
+    TEST_END();
+}
+
+int test_vector_insert_grows_past_initial_capacity(void)
+{
+    TEST_BEGIN();
+    Vector v;
+    vec_init(&v);
+
+    /* Initial capacity is 8; insert enough to force reallocation. */
+    for (int i = 0; i < 20; i++) {
+        vec_insert(&v, 0, (void *)(size_t)i);
+    }
+
+    ASSERT_EQ(vec_size(&v), (size_t)20);
+    /* Each insert at 0 pushes the previous ones back, so the last
+     * inserted item (0) ends up at the front and the first inserted
+     * (19) ends up at the back. */
+    ASSERT_EQ(vec_get(&v, 0),  (void *)(size_t)19);
+    ASSERT_EQ(vec_get(&v, 19), (void *)(size_t)0);
+
+    vec_free(&v);
+    TEST_END();
+}

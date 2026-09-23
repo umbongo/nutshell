@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.1.23"
-#define APP_VERSION_BINARY  1,1,23,0
+#define APP_VERSION        "1.2.1"
+#define APP_VERSION_BINARY  1,2,1,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -47,6 +47,14 @@
 #define IDC_BTN_BROWSE_KEY  1019
 #define IDC_EDIT_AI_NOTES   1020
 #define IDC_COMBO_PLATFORM  1021
+#define IDC_COMBO_KIND      1022  /* Session type: SSH / Local shell */
+#define IDC_STATIC_SHELL    1023
+#define IDC_EDIT_SHELL      1024
+#define IDC_STATIC_HOST     1025
+#define IDC_STATIC_PORT     1026
+#define IDC_STATIC_USER     1027
+#define IDC_STATIC_AUTH     1028
+#define IDC_STATIC_PASS     1029
 
 /* Inline command approval buttons (in chat_listview → WM_COMMAND to chat panel) */
 #define IDC_CMD_APPROVE_BASE 3000  /* 3000..3015 for up to 16 commands */

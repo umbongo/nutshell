@@ -22,6 +22,26 @@ void vec_push(Vector *v, void *item)
     v->size++;
 }
 
+void vec_insert(Vector *v, size_t index, void *item)
+{
+    if (!v) {
+        return;
+    }
+    if (index > v->size) {
+        index = v->size;
+    }
+    if (v->size >= v->capacity) {
+        size_t new_cap = (v->capacity == 0) ? VEC_INIT_CAP : v->capacity * 2u;
+        v->data     = xrealloc(v->data, new_cap * sizeof(void *));
+        v->capacity = new_cap;
+    }
+    for (size_t i = v->size; i > index; i--) {
+        v->data[i] = v->data[i - 1u];
+    }
+    v->data[index] = item;
+    v->size++;
+}
+
 void *vec_get(const Vector *v, size_t index)
 {
     if (index >= v->size) {
