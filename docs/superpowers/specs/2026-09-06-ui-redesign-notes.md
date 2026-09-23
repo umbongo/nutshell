@@ -197,6 +197,15 @@ Open, in priority order:
 - [ ] `md_render.c` renders at raw 96-DPI pixels — fold into sub-project 3.
 - [ ] Sub-project 3 (main window chrome): spec first, mockups before choosing, as with
       sub-project 2.
+- [ ] Local shell follow-ups (v1.2.0-v1.2.2, `2026-09-22-local-shell-design.md`,
+      `2026-09-23-command-dispatch-states-design.md`): test PowerShell as the local
+      shell (a profile whose shell command is `powershell.exe` or `pwsh.exe`; the
+      resolver treats it as custom, platform stays auto -- check prompt detection on
+      `PS C:\...>`, paste line ends, Ctrl+C, the AI ruleset); run the local_shell case
+      with the busybox sidecar; decide on embedding busybox (GPLv2 source with each
+      release, spec 4.4); move the dispatcher out of `src/ui` so it can be tested
+      natively; a timeout for commands that never return; WSL; tab title from the
+      shell's directory (OSC 7).
 
 Process (CLAUDE.md): Opus orchestrates each package in its own worktree and picks
 models; Fable reviews at PR level; `gh pr merge N --merge --auto` queues the merge for
