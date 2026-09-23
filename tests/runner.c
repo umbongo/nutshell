@@ -332,6 +332,9 @@ int test_cmd_classify_network_verbs_under_linux_are_unknown(void);
 int test_cmd_classify_powershell_cmdlets_under_unknown(void);
 int test_cmd_classify_pipe_into_invoke_expression_is_critical(void);
 int test_cmd_classify_unknown_platform_splits_pipelines(void);
+int test_cmd_classify_ampersand_separator(void);
+int test_cmd_classify_pipe_to_interpreter_is_critical(void);
+int test_cmd_classify_v1_2_9_unaffected_pipelines(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -906,6 +909,7 @@ int test_ai_build_auth_headers_custom(void);
 int test_ai_system_prompt_with_terminal(void);
 int test_ai_system_prompt_no_terminal(void);
 int test_ai_system_prompt_local_shell(void);
+int test_ai_system_prompt_powershell_examples(void);
 int test_ai_extract_commands_multiple(void);
 int test_ai_extract_commands_single(void);
 int test_ai_extract_commands_none(void);
@@ -2779,6 +2783,9 @@ int main(void) {
     failed += test_cmd_classify_powershell_cmdlets_under_unknown();
     failed += test_cmd_classify_pipe_into_invoke_expression_is_critical();
     failed += test_cmd_classify_unknown_platform_splits_pipelines();
+    failed += test_cmd_classify_ampersand_separator();
+    failed += test_cmd_classify_pipe_to_interpreter_is_critical();
+    failed += test_cmd_classify_v1_2_9_unaffected_pipelines();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();
@@ -3211,6 +3218,7 @@ int main(void) {
     failed += test_ai_system_prompt_with_terminal();
     failed += test_ai_system_prompt_no_terminal();
     failed += test_ai_system_prompt_local_shell();
+    failed += test_ai_system_prompt_powershell_examples();
     failed += test_ai_extract_commands_multiple();
     failed += test_ai_extract_commands_single();
     failed += test_ai_extract_commands_none();

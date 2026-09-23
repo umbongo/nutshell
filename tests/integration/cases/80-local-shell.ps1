@@ -96,6 +96,13 @@ Invoke-Case "local_shell" @{} {
 # injected via New-NutshellTestEnv's -ExtraProfiles (passed through
 # Invoke-Case), which appends it after the generated SSH profile without
 # touching that profile or any other case's config.
+#
+# This case checks terminal behaviour only -- the prompt appearing, a paste
+# running both lines, Ctrl+C, and exit -- and would still pass with the
+# command-classifier holes fix and the PowerShell-examples system-prompt
+# change (both v1.2.9) reverted: neither one touches what this case drives
+# through the UI. Those two are covered by tests/test_cmd_classify.c and
+# tests/test_ai_prompt.c instead.
 
 function Wait-NutshellPowerShellPrompt {
     <# Like Wait-NutshellShell, but for a "PS <path>> " prompt instead of a
