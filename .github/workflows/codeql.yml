@@ -44,7 +44,7 @@ jobs:
           stale=$(grep -rlE 'dl[.]google[.]com|packages[.]microsoft[.]com' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true)
           if [ -n "$stale" ]; then sudo rm -vf $stale; fi
           sudo apt-get update
-          sudo apt-get install -y libssl-dev
+          sudo apt-get install -y libssl-dev libssh2-1-dev zlib1g-dev
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0

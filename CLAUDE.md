@@ -178,11 +178,14 @@ key-gated cases (they cost model credits), `-Tier nightly` the slow ones.
 
 ## Branches, pull requests and the merge gate
 
-`main` is protected: changes land only through a pull request whose
-`Version bump` status check (`.github/workflows/checks.yml`, hosted runner,
-script `.github/scripts/check-version.sh`) has passed on the pull request's
-latest commit, with the branch up to date with `main`. Despite the name it is
-the whole release gate, and it verifies three things:
+`main` is protected: changes land only through a pull request whose two
+required status checks, both in `.github/workflows/checks.yml` on a hosted
+runner, have passed on the pull request's latest commit, with the branch up to
+date with `main`. `Native tests` compiles the committed sources on a clean
+Ubuntu machine with the real libssh2 and runs `make test`; it exists because
+an exe built locally proves a build happened, not that it came from the
+committed files. `Version bump` (script `.github/scripts/check-version.sh`)
+verifies three things:
 
 - **the version number is bumped** — `APP_VERSION` and `APP_VERSION_BINARY` in
   `src/ui/resource.h` agree, and are strictly greater than `main`'s whenever
@@ -193,18 +196,31 @@ the whole release gate, and it verifies three things:
   change whenever build inputs changed, and the version resource embedded in
   the committed exe equals `APP_VERSION`. A stale or forgotten binary fails.
 
-It runs on every push, so the flow is simply:
+Both run on every push, so the flow is simply:
 
 ```
 git switch -c my-change && git push -u origin my-change
 gh pr create --draft            # work in a draft until the change is done
 gh pr ready N
-gh pr merge N --merge --auto    # auto-merge lands it when the check is green
+gh pr checks N --watch          # every check green, CodeQL included
+gh pr merge N --merge --auto    # merges at once when the PR is mergeable
 ```
 
 `gh pr ready` before `gh pr merge --auto`, in that order — auto-merge cannot be
-enabled while a pull request is still a draft. Never push to `main` directly;
-never merge a red check. There is no desktop-runner gate any more: do not
+enabled while a pull request is still a draft. `gh pr merge --auto` merges at
+once when the pull request is already mergeable, and CodeQL's `analyze` is not
+required, so run `gh pr checks N --watch` until every check is green before
+merging (on 2026-09-23 PR #44 was merged with `analyze` red and `main` did not
+build; `Native tests` now catches that, CodeQL findings it does not). Never
+push to `main` directly; never merge a red check.
+
+**From a cloud (Linux) session, do not merge: stop and warn the maintainer.**
+The gate needs `make test` to pass on the hosted runner and the Windows exe to
+have been compiled from the committed sources on the maintainer's box; a cloud
+session can do neither, so it must not mark a pull request ready or enable
+auto-merge. Say, in one line, that the pipeline requires a successful
+`make test` and compiled code before it can merge and that this cannot be done
+from a cloud instance, and stop at the pushed branch. There is no desktop-runner gate any more: do not
 restart, register or wait on a self-hosted runner for a pull request.
 
 `tests/integration/Protect-Main.ps1` applies the ruleset (it needs
@@ -228,6 +244,9 @@ restart, register or wait on a self-hosted runner for a pull request.
 
 ## Git commits
 
+- Stage new files by path and read every `??` line of `git status --short`
+  before committing: `git add -u` skips new files (PR #44 shipped without four
+  of them and `main` did not build).
 - Write the subject and body as if I authored them.
 - Keep the attribution: end every commit with the
   `Co-Authored-By: Claude <model> <noreply@anthropic.com>` trailer the tooling

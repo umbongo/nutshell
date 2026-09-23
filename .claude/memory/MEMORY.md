@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-09-23 (merge counter).
+Last updated: 2026-09-24 (retrospective).
 
 ## Retrospective cadence (standing rule from the maintainer, 2026-09-21)
 
@@ -17,9 +17,10 @@ Last updated: 2026-09-23 (merge counter).
   set) after the last retrospective marker below. Count them with
   `list_pull_requests` (state closed, sort updated, desc) or
   `git log --merges --first-parent origin/main <marker>..`.
-- **Last retrospective:** 2026-09-21, marker commit `3f0f540` (merge of
-  PR #34). Merges since: 6 (PR #33, #35, #36, #37, #39, #40; counted
-  2026-09-23, `main` at `0696257`). Update this line at every
+- **Last retrospective:** 2026-09-24, marker commit `21e4d5d` (merge of
+  PR #45, the head of `main` when the retrospective was written). Merges
+  since: 0 (the retrospective's own PR will be the first). Update this line
+  at every
   retrospective.
 - A daily Routine in the maintainer's Claude account performs the count
   and starts the retrospective in a fresh session when it reaches 10. Any
@@ -33,14 +34,19 @@ Last updated: 2026-09-23 (merge counter).
   `nutshell.rc` cannot pass the `Version bump` gate from here** because the
   gate requires a rebuilt, committed `build/win/nutshell.exe`. Finish such
   changes on the Windows dev box. Docs, CI, `tests/`, `docs/` and
-  `.claude/` changes merge fine from here.
+  `.claude/` changes can be pushed from here, but **never merged from
+  here**: the maintainer's standing rule (2026-09-24) is that a cloud
+  session stops and warns that the pipeline requires a successful
+  `make test` and compiled code before it can merge, which cannot be done
+  on a cloud instance.
 - The clone arrives shallow (depth 50) with only `main` and the session
   branch fetched. `git fetch --unshallow origin main` takes about a minute
   and brings the pack to roughly 610 MiB; do it before any ahead/behind or
   merge-base question, or the answer is wrong.
 - No `gh` CLI. Pull requests, check runs and branch listings go through the
   `mcp__github__*` tools. Network is proxied; do not disable TLS checks.
-- Native suite baseline on 2026-09-21: 1,960 tests, 0 failures.
+- Native suite baseline on 2026-09-21 (Linux): 1,960 tests. On 2026-09-24 the
+  Windows host ran 2,157; the Linux count may differ by the libssh2-gated files.
 
 ## Repository facts
 
@@ -63,19 +69,34 @@ Last updated: 2026-09-23 (merge counter).
 
 ## The merge gate, precisely
 
-- One required check, `Version bump` (`.github/workflows/checks.yml`,
-  `.github/scripts/check-version.sh`), on `pull_request` only. It always
+- Two required checks, both in `.github/workflows/checks.yml` on
+  `pull_request` only: `Native tests` (Ubuntu, real libssh2, `make test`;
+  since 2026-09-24) and `Version bump` (`.github/scripts/check-version.sh`).
+  The ruleset is applied by `tests/integration/Protect-Main.ps1`, whose
+  default `-CheckNames` lists both. `Version bump` always
   checks that `APP_VERSION`, `APP_VERSION_BINARY`, README's `**Version**:`
   line and the exe's FileVersion agree. If `src/`, `Makefile` or
   `nutshell.rc` changed against the base, it also requires the version to
   be strictly greater than the base's and the exe to be in the diff.
+- **`gh pr merge --auto` merges at once when the PR is already mergeable**
+  and prints nothing on success. CodeQL's `analyze` is not required, so a
+  red one does not block. PR #44 was merged with `analyze` red (four new
+  files unstaged), #45 with it pending, which is why `Native tests` exists.
+  The rule is in CLAUDE.md: `gh pr checks N --watch` until every check is
+  green, then merge.
+- **A stacked PR**: GitHub retargets it to `main` when its base branch is
+  deleted on merge (else `gh pr edit N --base main`); it then needs
+  `gh api -X PUT repos/umbongo/nutshell/pulls/N/update-branch` because the
+  ruleset requires up-to-date, and the checks rerun on the new head.
+- `git add -u` skips new files: that is how PR #44 shipped without four of
+  them. The staging rule is in CLAUDE.md ("Git commits").
 - Nothing rebuilds anywhere in CI. `release.yml` fires on a `v*` tag (or
   manual dispatch), re-verifies tag == `resource.h` == exe version, and
   publishes the committed exe with `gh release create`.
 - CodeQL (`codeql.yml`) runs on pull requests and on pushes to `main`,
-  builds `make test` on ubuntu, installs only `libssl-dev`: SSH files
-  compile against the stub and `src/ui` is never scanned. Open item since
-  2026-09-10.
+  builds `make test` on ubuntu; since 2026-09-24 it installs `libssh2-1-dev`
+  too, so the SSH files are scanned for real. `src/ui` is still never
+  scanned (Win32 only).
 - Dependabot (`.github/dependabot.yml`): github-actions only, weekly, all
   actions grouped into one pull request, open-pull-requests-limit 1. A
   merged actions-only bump triggers just the CodeQL push run; no release.
@@ -93,8 +114,27 @@ Last updated: 2026-09-23 (merge counter).
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-09-21 (PR #33 and #34 merged, `terminal1` branch pushed from
-`main` for the next feature, no pull request open): CodeQL libssh2 gap; `.gitattributes` renormalise; harness batches B–D;
-security audit H3–H8; AI-stream thread lifetime; Session Manager phantom
-row; status-line keyboard path; `md_render.c` DPI; sub-project 3 (main
-window chrome) needs a spec first.
+As of 2026-09-24 (`main` at v1.2.5, PR #45; PR #42 open, superseded by
+the 2026-09-24 checkpoint): two manual checks for the maintainer (the
+dispatch fix and the special-keys checklist); the merge gate compiles
+nothing (require `analyze` or add a `make test` job); local shell
+follow-ups (PowerShell as shell, busybox sidecar run, GPL decision on
+embedding, dispatcher out of `src/ui`, timeout, WSL, OSC 7, mouse
+reporting); then the older items: CodeQL libssh2 gap; `.gitattributes`
+renormalise (89 files); harness batches B–D; security audit H3–H8;
+AI-stream thread lifetime; Session Manager phantom row; status-line
+keyboard path; `md_render.c` DPI; sub-project 3 needs a spec first.
+
+## Local shell and keys, facts that outlive the session
+
+- The shell resolver order (`src/core/local_shell.c`): profile command,
+  `busybox64.exe` beside the exe, the same in `%LOCALAPPDATA%\Nutshell\runtime`,
+  Git for Windows bash, MSYS2 bash. busybox-w32 is GPLv2; embedding it in the
+  MIT exe is deferred until the maintainer decides on shipping its source.
+- ConPTY, measured by `make wintest`: `0x7F` is Backspace, `0x08` is
+  Ctrl+Backspace, `?1049h` is forwarded to the terminal, `?1h` is not, no
+  DSR/DA query on open, a lone ESC arrives as Escape. Never answer `?9001h`.
+- The message loop runs `TranslateMessage` first, so a handled key-down does
+  not stop its `WM_CHAR`; `window.c` removes the queued character by scan
+  code. Alt chords are sent and also passed to `DefWindowProc` so a lone Alt
+  tap still opens the menu.

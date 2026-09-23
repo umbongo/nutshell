@@ -168,16 +168,59 @@ Done, in order (details in the commit messages and the specs named):
   unwrapped.
 - Dependabot #14–#17 (per-action major bumps) were closed unmerged, superseded by
   the grouped PR #22 (3c48c09: checkout 7.0.1, upload-artifact 7.0.1, codeql-action
-  4.37.9). PR #33 (codeql-action 4.38.0) is green and unmerged as of 2026-09-21.
+  4.37.9). PR #33 (codeql-action 4.38.0) merged 2026-09-21.
 - 2026-09-21 retrospective (`docs/retrospectives/2026-09-21-repository-retrospective.md`):
   project memory and skills now live in `.claude/` (`memory/`, `skills/`), with
   `.claude/CHANGELOG.md` as their record of change and an import from CLAUDE.md.
+- Process, 2026-09-21: the model hierarchy replaced by one hand-off rule (PR #35), the
+  `critique` and `feature-workflow` skills (PR #35, #36), `steward` folded into
+  `feature-workflow` (PR #37), merge counter (PR #38).
+- Local shell, 2026-09-22 (`2026-09-22-local-shell-design.md`, 16 critique findings):
+  v1.2.0 `SessionIo` seam between the terminal and its transport (PR #39, 35dfd1d; gate
+  tier 34/34 by hand); v1.2.1 ConPTY backend, `src/core/local_shell.c` resolver
+  (profile command, busybox sidecar, Git bash, MSYS2), `Profile.kind`/`shell`, a saved
+  "Local shell" profile, `--local`, Session Manager Type row, `--ui-demo=local`,
+  `make wintest` pseudo-console cases, `local_shell` gate case (PR #40, 87cfacb +
+  1bfe29e). Embedding busybox in the exe (spec 4.4) waits on the GPLv2 decision.
+- v1.2.2 command cards tell the truth (PR #41, `2026-09-23-command-dispatch-states-
+  design.md`, 12 critique findings): over-long `[EXEC]` blocks rejected and reported
+  instead of cut at 1024 bytes; card labels synced from the approval queue (queued /
+  running / ran / not run); a shell on a continuation prompt reported, Stop sends Ctrl+C,
+  the model told each command's outcome. Live check still to run (Open).
+- Special keys (PR #43 spec, 13 critique findings; PR #44 v1.2.4; PR #45 v1.2.5 adds the
+  four files #44 left unstaged): `src/core/key_encode.c` xterm encoder (modifiers, F1-F12,
+  Shift+Tab, Ctrl+Space, Alt as ESC prefix, Backspace DEL local / BS SSH), Alt chords to
+  the shell with a lone Alt tap keeping the menu, Ctrl+W/T/Space back to the shell with
+  the app functions on Ctrl+Shift, PgUp/PgDn by screen, Edit > Send Key, harness `-Alt`
+  and `cases/90-keys.ps1`. ConPTY measured: 0x7F Backspace, 0x08 Ctrl+Backspace, ?1049h
+  forwarded, ?1h not. Manual checklist (spec 8.6) still to run (Open).
+- 2026-09-24 retrospective (`docs/retrospectives/2026-09-24-eleven-merges-retrospective.md`).
+- The merge gate compiles: `Native tests` job in `checks.yml` (Ubuntu, real libssh2,
+  `make test`), required alongside `Version bump` via `Protect-Main.ps1`; CodeQL now
+  installs libssh2 too, closing the 2026-09-10 scan gap for the SSH files. Decided by
+  the maintainer after the 2026-09-24 retrospective's F1.
 
 Open, in priority order:
+- [ ] Test by hand, against the 1.2.5 exe: (a) the dispatch fix -- an unclosed-quote
+      command followed by two more; expect running / queued / queued, the stall line
+      once, then Stop giving not run on all three and a prompt back; (b) the special-keys
+      checklist in `2026-09-23-special-keys-design.md` section 8.6 (lone Alt tap, Alt+F
+      in Edit, F10, Alt+0233, AltGr, Backspace in Edit, PgUp at a prompt and in less).
+- [ ] `codeql.yml`'s concurrency group cancels the `main` push run when merges come
+      fast (bc78b5c was never analysed on `main`): key it on the sha for pushes.
+- [ ] Local shell follow-ups: test PowerShell as the local shell (a profile whose shell
+      command is `powershell.exe` or `pwsh.exe`; custom kind, platform auto -- prompt
+      detection on `PS C:\...>`, paste line ends, Ctrl+C, the AI ruleset); run the
+      `local_shell` case with the busybox sidecar; decide on embedding busybox (GPLv2
+      source with each release, spec 4.4); move the dispatcher out of `src/ui` so it can
+      be tested natively; a timeout for commands that never return; WSL; tab title from
+      the shell's directory (OSC 7); mouse reporting (special-keys spec section 5, own
+      spec); Backspace on SSH and a per-profile terminal type (special-keys spec 7).
 - [ ] CI review follow-ups (2026-09-10 review, minus the items the desktop gate's
       retirement made moot): CodeQL installs no libssh2, so the SSH/known-hosts files
       and all of `src/ui` go unscanned — install `libssh2-1-dev`, fail if the Makefile
-      probe still says no, and consider a Windows CodeQL run for `src/ui`;
+      probe still says no (done 2026-09-24 in both workflows), and consider a Windows
+      CodeQL run for `src/ui`;
       `.gitattributes` and renormalise (90 CRLF-indexed files) in a lone PR when nothing
       else is in flight. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)
@@ -198,9 +241,11 @@ Open, in priority order:
 - [ ] Sub-project 3 (main window chrome): spec first, mockups before choosing, as with
       sub-project 2.
 
-Process (CLAUDE.md): Opus orchestrates each package in its own worktree and picks
-models; Fable reviews at PR level; `gh pr merge N --merge --auto` queues the merge for
-a green `Version bump` (the hosted gate: version, README, committed exe). Run the
-harness tier a change touches by hand first. "Create a checkpoint" = compact this
+Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
+package and reviews diffs, Sonnet writes code and tests, the main session keeps the
+decisions and reads the diff in full; `gh pr merge N --merge --auto` merges at once
+when the PR is mergeable and only `Version bump` is required (version, README,
+committed exe -- nothing is compiled), so `gh pr checks N --watch` until every check
+is green first. Run the harness tier a change touches by hand first. "Create a checkpoint" = compact this
 list, compact memory, delete temp files and worktrees, leave the tree ready for a new
 session.

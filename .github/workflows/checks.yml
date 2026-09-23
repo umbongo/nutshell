@@ -1,9 +1,15 @@
 name: Checks
 
 # Hosted-runner checks that need neither the MSYS2 toolchain nor a desktop.
-# The "Version bump" job is the one required status check on main -- despite
-# the name it is the whole merge gate: version bumped, README current, and the
-# committed exe built from that version (see .github/scripts/check-version.sh).
+# Two jobs are the required status checks on main, together the whole merge
+# gate:
+#   "Version bump"  -- version bumped, README current, and the committed exe
+#                      built from that version (.github/scripts/check-version.sh).
+#   "Native tests"  -- the committed sources compile on a clean machine, with
+#                      the real libssh2, and the native suite passes. Added
+#                      2026-09-24 after PR #44 merged with four files unstaged:
+#                      an exe built locally proves a build happened, not that
+#                      it came from the committed sources.
 
 on:
   pull_request:
@@ -31,3 +37,36 @@ jobs:
 
       - name: Check version, README and the committed exe agree
         run: bash .github/scripts/check-version.sh "${{ github.event.pull_request.base.sha }}"
+
+  native-tests:
+    name: Native tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install build dependencies
+        run: |
+          # The hosted image ships third-party apt sources (Google, Microsoft)
+          # whose index hashes go stale between image refreshes; apt then
+          # exits 100 over a repository we never read from. Drop them by host
+          # before updating rather than ignoring apt's exit code, which would
+          # also hide a real failure to fetch the libraries below (same
+          # treatment as codeql.yml).
+          stale=$(grep -rlE 'dl[.]google[.]com|packages[.]microsoft[.]com' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true)
+          if [ -n "$stale" ]; then sudo rm -vf $stale; fi
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libssh2-1-dev zlib1g-dev
+
+      - name: Confirm the Makefile will find libssh2
+        run: |
+          # The same probe the Makefile runs (HAS_LIBSSH2). If it fails, the
+          # test build silently falls back to tests/stubs/libssh2.h and the
+          # SSH files are compiled against a fake; fail here instead.
+          echo 'int main(void){return 0;}' | gcc -xc - -lssh2 -lssl -lcrypto -o /tmp/libssh2-probe
+          echo "libssh2 linkable"
+
+      - name: Build and run the native suite
+        run: make test
+        env:
+          CI: true

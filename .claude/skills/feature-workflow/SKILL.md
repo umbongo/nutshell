@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-09-21. Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-09-24. Changes are recorded in `.claude/CHANGELOG.md`.
 The rules themselves live in CLAUDE.md ("Software Development Rules",
 "Branches, pull requests and the merge gate"); this skill is the walk
 through them in order. Where they disagree, CLAUDE.md wins. It absorbed
@@ -85,7 +85,13 @@ open as drafts and their body ends with the same `Models:` line and the
    - **Non-empty**: step 6 applies in full.
 
    The main session reads the diff in full before the maintainer merges;
-   that is the one place its context is spent on raw material.
+   that is the one place its context is spent on raw material. Stage new
+   files by path and read every `??` line first (CLAUDE.md, "Git commits";
+   PR #44 shipped without four files). A pull request stacked on an
+   unmerged branch is retargeted to `main` by GitHub when its base is
+   deleted on merge (else `gh pr edit N --base main`); it then needs
+   `gh api -X PUT repos/umbongo/nutshell/pulls/N/update-branch`, and about
+   2.5 minutes for the checks to rerun on the new head.
 6. **The gate.** Any change under `src/`, the Makefile or `nutshell.rc`
    needs `APP_VERSION` and `APP_VERSION_BINARY` raised in
    `src/ui/resource.h`, README's `**Version**:` line to match, and a
@@ -94,25 +100,39 @@ open as drafts and their body ends with the same `Models:` line and the
    release`). From a Linux session the deliverable is a pushed branch;
    the maintainer builds, commits the exe, and the `Version bump` check
    goes green. Say so and stop at the pushed branch with everything else
-   done.
+   done. Docs, CI, `tests/` and `.claude/` changes need none of this, but
+   `Native tests` still has to compile the tree, so a test-only change is
+   gated too.
 7. **Checking the pull request.** Checks: `gh pr checks N`, or
    `mcp__github__pull_request_read` with `get_check_runs` when `gh` is
-   absent. Expect `Version bump`, `analyze` and `CodeQL`; all three must
-   be `success`. Mergeability: `pull_request_read` with `get`;
-   `mergeable_state` should be `clean`, and the ruleset also requires the
-   branch be up to date with `main`. `Version bump` runs on
-   `pull_request` only, so there is no base-branch run to compare
-   against; a red gate is always the PR's.
+   absent. Expect `Version bump`, `Native tests`, `analyze` and `CodeQL`;
+   all four must be `success`. The first two are required (`Native tests`
+   compiles the committed sources with the real libssh2 and runs the
+   suite; `Version bump` compiles nothing); `analyze` and `CodeQL` are
+   not, so a red one does not block auto-merge. Mergeability:
+   `pull_request_read` with `get`; `mergeable_state` should be `clean`,
+   and the ruleset also requires the branch be up to date with `main`.
+   The checks run on `pull_request` only, so there is no base-branch run
+   to compare against; a red gate is always the PR's.
 8. **Integration tier.** Before marking ready, the maintainer runs the
    integration tier the change touches by hand on Windows
    (`tests/integration/Run-Integration.ps1 -Tier gate`); it is a manual
    tool, not a gate.
-9. **Merge.** `gh pr ready N` then `gh pr merge N --merge --auto`, in that
-   order. Without `gh`, `mcp__github__update_pull_request` to leave
-   draft, then `mcp__github__enable_pr_auto_merge` with merge method
-   `merge`. It lands when `Version bump` is green and the branch is up to
-   date with `main`. Never merge a red check; never push to `main`; never
-   rewrite someone else's branch.
+9. **Merge.** First, where are you: **in a cloud (Linux) session, stop
+   here and warn the maintainer** that the pipeline requires a successful
+   `make test` and compiled code before it can merge and that this cannot
+   be done from a cloud instance (CLAUDE.md, the gate section); do not
+   mark ready, do not enable auto-merge. On the Windows box:
+   `gh pr ready N`, then `gh pr checks N --watch` until every
+   check is green, then `gh pr merge N --merge --auto`, in that order. The
+   reason is in CLAUDE.md ("Branches, pull requests and the merge gate"):
+   auto-merge merges at once when the PR is mergeable and only `Version
+   bump`, which compiles nothing, is required. It prints nothing on
+   success; read the PR state afterwards. Without `gh`,
+   `mcp__github__update_pull_request` to leave draft, then
+   `mcp__github__enable_pr_auto_merge` with merge method `merge`. Never
+   merge a red check; never push to `main`; never rewrite someone else's
+   branch.
 10. **Release**, separately: tag `vX.Y.Z` matching `APP_VERSION` and push
     the tag; the release workflow re-verifies and publishes the committed
     exe. Nothing is built at release time.

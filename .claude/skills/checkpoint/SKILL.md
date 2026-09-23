@@ -5,7 +5,7 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-09-21 (cadence added). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-09-24 (marker rule made concrete). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
@@ -63,9 +63,11 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
    the draft pull request with the open findings in its body.
 7. **Record the change.** Add a dated entry to `.claude/CHANGELOG.md`
    naming each memory, skill or workflow file touched and why, and the
-   critique dispositions, in the same commit. Move the "Last retrospective" marker in `MEMORY.md` to
-   the merge commit that closed the previous retrospective's PR and reset
-   the count.
+   critique dispositions, in the same commit. Move the "Last retrospective"
+   marker in `MEMORY.md` to the head of `origin/main` at the time of
+   writing (the last merge the retrospective covers) and reset the count
+   to 0; the retrospective's own pull request is then the first merge of
+   the next cycle.
 8. **Retrospective (when the cadence fires or when asked).** Write it under
    `docs/retrospectives/`, headed DRAFT, with a scope-and-method section,
    measured numbers in a table, findings ranked by cost of inaction, and

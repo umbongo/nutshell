@@ -3,11 +3,13 @@
 # repositories that use rulesets, which this one does).
 #
 # The ruleset makes main accept changes only through a pull request whose
-# required status check -- "Version bump" (the job in
-# .github/workflows/checks.yml: version bumped, README current, committed exe
-# built from that version) -- has succeeded on the pull request's latest
-# commit, with the branch up to date with main so the check ran against what
-# will actually land. Force pushes and deletion of main are blocked. No
+# required status checks -- "Version bump" and "Native tests" (the two jobs
+# in .github/workflows/checks.yml: version bumped, README current, committed
+# exe built from that version; and the committed sources compiling on a clean
+# machine with the native suite passing) -- have succeeded on the pull
+# request's latest commit, with the branch up to date with main so the checks
+# ran against what will actually land. "Native tests" was added on 2026-09-24
+# after a merge whose exe was built from files never committed. Force pushes and deletion of main are blocked. No
 # reviewer approval is required (a one-person project); raise
 # required_approving_review_count if that changes. No bypass actors are
 # configured, so the rule binds administrators too.
@@ -26,7 +28,7 @@
 param(
     [string] $Repo = "umbongo/nutshell",
     [string] $Branch = "main",
-    [string[]] $CheckNames = @("Version bump"),
+    [string[]] $CheckNames = @("Version bump", "Native tests"),
     [string] $RulesetName = "main: pull requests with a green hosted gate",
     # Pre-rename ruleset name. Matched as a fallback so that re-running this
     # updates the existing ruleset in place rather than creating a second one

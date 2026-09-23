@@ -43,8 +43,10 @@ A short table: branch, tip subject, relation to `main` (ahead/behind or
 which have an open PR, which are stale. Say explicitly when a number could
 not be measured (shallow history) rather than reporting a wrong one.
 
-## Known state on 2026-09-21
+## Known state on 2026-09-24
 
-Remote branches: `main`, `dependabot/github_actions/actions-03ad6eec6c`
-(PR #33, green), `v1.0.76` (pre-redesign main, also a tag), `v1.1.21`
-(contained in main, also a tag). Tags: `v1.0.76`, `v1.1.21`.
+Remote branches: `main` (v1.2.5, PR #45), `todo-local-shell-followups`
+(PR #42, open draft, superseded by the 2026-09-24 checkpoint), `v1.0.76`
+(pre-redesign main, also a tag), `v1.1.21` (contained in main, also a
+tag). Merged feature branches are deleted by GitHub on merge. Tags:
+`v1.0.76`, `v1.1.21`; no tag has been cut since v1.1.21.
