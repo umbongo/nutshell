@@ -816,6 +816,11 @@ int test_ai_system_prompt_local_shell(void) {
     ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
                            SESSION_LOCAL, "busybox");
     ASSERT_TRUE(strstr(buf, "a local shell (busybox) on a Windows PC") != NULL);
+
+    /* local_shell_spec_name()'s "PowerShell" reaches the prompt the same way */
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
+                           SESSION_LOCAL, "PowerShell");
+    ASSERT_TRUE(strstr(buf, "a local shell (PowerShell) on a Windows PC") != NULL);
     TEST_END();
 }
 

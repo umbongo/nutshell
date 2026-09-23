@@ -359,3 +359,49 @@ int test_cmd_detect_banner_split_across_chunks(void) {
     ASSERT_EQ((int)conf, (int)CMD_DETECT_BANNER);
     TEST_END();
 }
+
+/* --- PowerShell as a custom local shell ---
+ * There is no Windows/PowerShell platform, so neither the banner nor the
+ * "PS <path>> " prompt may resolve to a device family: the session must stay
+ * on CMD_PLATFORM_UNKNOWN (Linux rules plus the network-verb overlay). In
+ * particular the prompt ends in '>' with no ':' before a '$'/'#', so it must
+ * not be read as Linux, and the banner's words must not trip a signal. */
+
+int test_cmd_detect_powershell_nologo_prompt_unknown(void) {
+    TEST_BEGIN();
+    const char *text = "PS C:\\Users\\thoma> ";
+    CmdDetectConfidence conf = CMD_DETECT_BANNER; /* poisoned */
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
+    TEST_END();
+}
+
+int test_cmd_detect_windows_powershell_banner_unknown(void) {
+    TEST_BEGIN();
+    const char *text =
+        "Windows PowerShell\r\n"
+        "Copyright (C) Microsoft Corporation. All rights reserved.\r\n"
+        "\r\n"
+        "Install the latest PowerShell for new features and improvements! "
+        "https://aka.ms/PSWindows\r\n"
+        "\r\n"
+        "PS C:\\Users\\thoma> ";
+    CmdDetectConfidence conf = CMD_DETECT_BANNER;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
+    TEST_END();
+}
+
+int test_cmd_detect_pwsh7_banner_unknown(void) {
+    TEST_BEGIN();
+    const char *text =
+        "PowerShell 7.4.5\r\n"
+        "PS C:\\Windows\\System32> ";
+    CmdDetectConfidence conf = CMD_DETECT_BANNER;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
+    TEST_END();
+}

@@ -21,7 +21,9 @@ int shell_prompt_line(const char *text);
  *
  * `text` is trimmed of leading and trailing spaces/tabs by this function.
  * Returns 1 when the trimmed text is a bare ">" (a generic PS2-style
- * continuation prompt), or one of zsh's secondary-prompt words immediately
+ * continuation prompt), a bare ">>" (PowerShell's continuation prompt --
+ * not "PS C:\>>", a nested primary prompt, nor ">>>", Python's), or one of
+ * zsh's secondary-prompt words immediately
  * followed by ">" with no space in between -- dquote, quote, bquote,
  * cmdsubst, heredoc, pipe, cmdand, cmdor, braceparam, math, cursh, then,
  * do, done, for, foreach, while, until, repeat, if, elif, else, fi, case,

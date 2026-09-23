@@ -594,6 +594,12 @@ static CmdSafetyLevel scan_pipe_target(const char *seg)
     if (tok_eq(base, base_len, "sh") || tok_eq(base, base_len, "bash"))
         return CMD_CRITICAL;
 
+    /* PowerShell's `curl | sh`: a download piped into Invoke-Expression.
+     * PowerShell ignores letter case, so neither does this. */
+    if (tok_eq_ci(base, base_len, "iex") ||
+        tok_eq_ci(base, base_len, "Invoke-Expression"))
+        return CMD_CRITICAL;
+
     if (tok_eq(base, base_len, "xargs")) {
         const char *next_start;
         size_t next_len;
@@ -4184,9 +4190,13 @@ static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
             if (*p == '\'' && !in_dq) in_sq = !in_sq;
             else if (*p == '"' && !in_sq) in_dq = !in_dq;
             else if (!in_sq && !in_dq) {
-                /* M1: every platform but Linux uses | as a display filter,
-                 * not a shell pipe -- only Linux splits on it (fixes F2). */
-                if (*p == '|' && platform == CMD_PLATFORM_LINUX) break;
+                /* M1: every device platform uses | as a display filter,
+                 * not a shell pipe -- only Linux splits on it (fixes F2).
+                 * So does an unresolved platform, which is Linux plus an
+                 * overlay: without the split, everything after the first
+                 * '|' went unclassified ("cat x | sh" came out READ). */
+                if (*p == '|' && (platform == CMD_PLATFORM_LINUX ||
+                                  platform == CMD_PLATFORM_UNKNOWN)) break;
                 if (*p == ';') break;
                 if (*p == '&' && *(p+1) == '&') break;
             }
