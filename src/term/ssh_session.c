@@ -231,9 +231,22 @@ int ssh_connect(SshSession *s, const char *host, int port) {
      * -EAGAIN/-errno contract because the handshake itself reads through it. */
     void **abstract = libssh2_session_abstract(s->session);
     if (abstract) *abstract = s;
+#if defined(LIBSSH2_VERSION_NUM) && LIBSSH2_VERSION_NUM >= 0x010b01
     libssh2_session_callback_set2(s->session,
                                   LIBSSH2_CALLBACK_RECV,
                                   (libssh2_cb_generic *)nutshell_recv_cb);
+#else
+    /* libssh2 before 1.11.1 (Ubuntu 24.04 ships 1.11.0) has neither
+     * libssh2_cb_generic nor callback_set2; the older setter takes a
+     * void *. Go through a union so no function-to-object pointer cast
+     * trips -Wpedantic. */
+    union {
+        void *obj;
+        ssize_t (*fn)(libssh2_socket_t, void *, size_t, int, void **);
+    } cb;
+    cb.fn = nutshell_recv_cb;
+    libssh2_session_callback_set(s->session, LIBSSH2_CALLBACK_RECV, cb.obj);
+#endif
 
     if (libssh2_session_handshake(s->session, (libssh2_socket_t)s->socket)) {
         snprintf(s->last_error, sizeof(s->last_error), "SSH handshake failed");
