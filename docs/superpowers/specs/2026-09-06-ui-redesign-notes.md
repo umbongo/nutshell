@@ -203,11 +203,21 @@ Done, in order (details in the commit messages and the specs named):
   the maintainer after the 2026-09-24 retrospective's F1.
 
 Open, in priority order:
-- [ ] Test by hand, against the 1.2.5 exe: (a) the dispatch fix -- an unclosed-quote
+- [ ] Test by hand, against the current exe (1.2.7): (a) the dispatch fix -- an unclosed-quote
       command followed by two more; expect running / queued / queued, the stall line
       once, then Stop giving not run on all three and a prompt back; (b) the special-keys
       checklist in `2026-09-23-special-keys-design.md` section 8.6 (lone Alt tap, Alt+F
       in Edit, F10, Alt+0233, AltGr, Backspace in Edit, PgUp at a prompt and in less).
+- [ ] Review and critique the whole repository, security first (maintainer's request,
+      2026-09-24). A fresh audit, not a re-read of `2026-09-09-security-audit.md`: the
+      local shell (ConPTY spawn, environment, PATH, the busybox sidecar search order),
+      the AI command path (what the model can make the terminal run, the approval
+      policy, the 1023-byte limit, auto-approve levels), secrets (API keys, profile
+      passwords, `secure_zero`, what reaches logs), config loading, host keys, window
+      messages, and CI/workflow permissions. Then the general code-health critique
+      (`window.c` and `ai_chat.c` size, `src/ui` logic that belongs in `src/core`).
+      Findings ranked by severity, each answered in writing; folds in the open H3-H8
+      items below.
 - [ ] Local shell follow-ups: test PowerShell as the local shell (a profile whose shell
       command is `powershell.exe` or `pwsh.exe`; custom kind, platform auto -- prompt
       detection on `PS C:\...>`, paste line ends, Ctrl+C, the AI ruleset); run the
