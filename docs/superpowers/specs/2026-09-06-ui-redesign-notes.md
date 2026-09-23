@@ -195,6 +195,8 @@ Done, in order (details in the commit messages and the specs named):
   and `cases/90-keys.ps1`. ConPTY measured: 0x7F Backspace, 0x08 Ctrl+Backspace, ?1049h
   forwarded, ?1h not. Manual checklist (spec 8.6) still to run (Open).
 - 2026-09-24 retrospective (`docs/retrospectives/2026-09-24-eleven-merges-retrospective.md`).
+- `codeql.yml` concurrency keyed on the sha for pushes to `main` and cancelling only
+  pull-request runs, so fast merges no longer cancel the `main` baseline (bc78b5c).
 - The merge gate compiles: `Native tests` job in `checks.yml` (Ubuntu, real libssh2,
   `make test`), required alongside `Version bump` via `Protect-Main.ps1`; CodeQL now
   installs libssh2 too, closing the 2026-09-10 scan gap for the SSH files. Decided by
@@ -206,8 +208,6 @@ Open, in priority order:
       once, then Stop giving not run on all three and a prompt back; (b) the special-keys
       checklist in `2026-09-23-special-keys-design.md` section 8.6 (lone Alt tap, Alt+F
       in Edit, F10, Alt+0233, AltGr, Backspace in Edit, PgUp at a prompt and in less).
-- [ ] `codeql.yml`'s concurrency group cancels the `main` push run when merges come
-      fast (bc78b5c was never analysed on `main`): key it on the sha for pushes.
 - [ ] Local shell follow-ups: test PowerShell as the local shell (a profile whose shell
       command is `powershell.exe` or `pwsh.exe`; custom kind, platform auto -- prompt
       detection on `PS C:\...>`, paste line ends, Ctrl+C, the AI ruleset); run the
