@@ -197,6 +197,9 @@ Open, in priority order:
 - [ ] `md_render.c` renders at raw 96-DPI pixels — fold into sub-project 3.
 - [ ] Sub-project 3 (main window chrome): spec first, mockups before choosing, as with
       sub-project 2.
+- [ ] Test the dispatch fix live (v1.2.2, merged untested by hand): an unclosed-quote
+      command followed by two more -- expect running / queued / queued, the stall line
+      once, then Stop giving not run on all three and a prompt back.
 - [ ] Local shell follow-ups (v1.2.0-v1.2.2, `2026-09-22-local-shell-design.md`,
       `2026-09-23-command-dispatch-states-design.md`): test PowerShell as the local
       shell (a profile whose shell command is `powershell.exe` or `pwsh.exe`; the
