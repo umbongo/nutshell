@@ -4,6 +4,46 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-24 — retrospective after eleven merges
+
+Session: Claude desktop app, Windows dev box. Model: claude-fable-5-1
+(measurement brief, edits, retrospective); claude-sonnet-5 (measurement);
+claude-opus-5 (critique of the process edits).
+
+- **`memory/MEMORY.md`.** Marker moved to `21e4d5d` (PR #45), count 0.
+  Three facts learned the hard way, the rules themselves living in
+  CLAUDE.md: `gh pr merge --auto` merges at once when the PR is mergeable
+  and only the non-compiling `Version bump` is required (PR #44 merged with
+  `analyze` red, #45 with it pending); a stacked PR needs `update-branch`
+  after its base merges; `git add -u` skips new files. Baseline line
+  reworded (Windows 2,157 versus the Linux 1,960). Open-items line
+  rewritten. New section with the local shell and keys facts that outlive
+  the session (resolver order, ConPTY measurements, `TranslateMessage`).
+- **`skills/feature-workflow/SKILL.md`.** Step 5 points at CLAUDE.md's
+  staging rule and gives the stacked-PR procedure; step 7 says what each
+  check does and does not compile; step 9 is now ready, `gh pr checks
+  --watch` until every check is green, then merge.
+- **`skills/repo-status/SKILL.md`.** Known state refreshed to 2026-09-24.
+- **`skills/checkpoint/SKILL.md`.** The marker rule **changed**: the marker
+  is the head of `origin/main` when the retrospective is written and the
+  count restarts at 0, so the retrospective's own pull request is merge 1
+  of the next cycle. The daily Routine counts from the marker line and
+  needs no change.
+- **CLAUDE.md.** The gate section's flow block gains `gh pr checks N
+  --watch` and the sentence explaining why; "Git commits" gains the
+  staging rule.
+- **`.gitignore`.** `/busybox64.exe` and `/build/win/busybox64.exe`,
+  anchored so a future committed payload is not ignored.
+- **Proposed, not applied** (changes what the gate or a workflow enforces,
+  the maintainer's call): require `analyze` in the ruleset or add a hosted
+  `make test` job to `checks.yml`; fix `codeql.yml`'s concurrency key,
+  which cancels the `main` push run when merges come fast. Recorded in the
+  retrospective and the notes document's Open list.
+- **Critique dispositions:** one Opus round, twelve findings, all accepted;
+  the first three overturned the retrospective's central diagnosis (the
+  merge of #44 was issued with `analyze` already red, not raced by
+  auto-merge). Recorded in the retrospective's section 5.
+
 ## 2026-09-22 — merge counter refreshed
 
 Session: Claude desktop app, Windows dev box.

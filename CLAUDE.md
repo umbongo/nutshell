@@ -199,12 +199,18 @@ It runs on every push, so the flow is simply:
 git switch -c my-change && git push -u origin my-change
 gh pr create --draft            # work in a draft until the change is done
 gh pr ready N
-gh pr merge N --merge --auto    # auto-merge lands it when the check is green
+gh pr checks N --watch          # every check green, not just Version bump
+gh pr merge N --merge --auto    # merges at once when the PR is mergeable
 ```
 
 `gh pr ready` before `gh pr merge --auto`, in that order — auto-merge cannot be
-enabled while a pull request is still a draft. Never push to `main` directly;
-never merge a red check. There is no desktop-runner gate any more: do not
+enabled while a pull request is still a draft. `gh pr merge --auto` merges at
+once when the pull request is already mergeable, and only `Version bump` is
+required: it compiles nothing, while `analyze` (CodeQL) is the one check that
+builds `make test` and finishes about two minutes later. So run
+`gh pr checks N --watch` until every check is green before merging; on
+2026-09-23 PR #44 was merged with `analyze` red and `main` did not build. Never
+push to `main` directly; never merge a red check. There is no desktop-runner gate any more: do not
 restart, register or wait on a self-hosted runner for a pull request.
 
 `tests/integration/Protect-Main.ps1` applies the ruleset (it needs
@@ -228,6 +234,9 @@ restart, register or wait on a self-hosted runner for a pull request.
 
 ## Git commits
 
+- Stage new files by path and read every `??` line of `git status --short`
+  before committing: `git add -u` skips new files (PR #44 shipped without four
+  of them and `main` did not build).
 - Write the subject and body as if I authored them.
 - Keep the attribution: end every commit with the
   `Co-Authored-By: Claude <model> <noreply@anthropic.com>` trailer the tooling

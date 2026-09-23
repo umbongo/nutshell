@@ -37,3 +37,9 @@ build/.detect*
 tests/integration/artifacts/
 tests/integration/.ai_key
 tests/integration/.ai_config/
+
+# busybox-w32 sidecar copies used for local shell testing, anchored so a
+# future committed payload under third_party/ is not ignored (local shell
+# spec 2026-09-22, section 4.4)
+/busybox64.exe
+/build/win/busybox64.exe
