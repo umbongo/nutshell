@@ -65,18 +65,21 @@ Last updated: 2026-09-24 (retrospective).
 
 ## The merge gate, precisely
 
-- One required check, `Version bump` (`.github/workflows/checks.yml`,
-  `.github/scripts/check-version.sh`), on `pull_request` only. It always
+- Two required checks, both in `.github/workflows/checks.yml` on
+  `pull_request` only: `Native tests` (Ubuntu, real libssh2, `make test`;
+  since 2026-09-24) and `Version bump` (`.github/scripts/check-version.sh`).
+  The ruleset is applied by `tests/integration/Protect-Main.ps1`, whose
+  default `-CheckNames` lists both. `Version bump` always
   checks that `APP_VERSION`, `APP_VERSION_BINARY`, README's `**Version**:`
   line and the exe's FileVersion agree. If `src/`, `Makefile` or
   `nutshell.rc` changed against the base, it also requires the version to
   be strictly greater than the base's and the exe to be in the diff.
 - **`gh pr merge --auto` merges at once when the PR is already mergeable**
-  and prints nothing on success. Only `Version bump` is required and it
-  compiles nothing; `analyze` builds `make test` and finishes about two
-  minutes later. PR #44 was merged with `analyze` red (four new files
-  unstaged), #45 with it pending. The rule is in CLAUDE.md: `gh pr checks N
-  --watch` until every check is green, then merge.
+  and prints nothing on success. CodeQL's `analyze` is not required, so a
+  red one does not block. PR #44 was merged with `analyze` red (four new
+  files unstaged), #45 with it pending, which is why `Native tests` exists.
+  The rule is in CLAUDE.md: `gh pr checks N --watch` until every check is
+  green, then merge.
 - **A stacked PR**: GitHub retargets it to `main` when its base branch is
   deleted on merge (else `gh pr edit N --base main`); it then needs
   `gh api -X PUT repos/umbongo/nutshell/pulls/N/update-branch` because the
@@ -87,9 +90,9 @@ Last updated: 2026-09-24 (retrospective).
   manual dispatch), re-verifies tag == `resource.h` == exe version, and
   publishes the committed exe with `gh release create`.
 - CodeQL (`codeql.yml`) runs on pull requests and on pushes to `main`,
-  builds `make test` on ubuntu, installs only `libssl-dev`: SSH files
-  compile against the stub and `src/ui` is never scanned. Open item since
-  2026-09-10.
+  builds `make test` on ubuntu; since 2026-09-24 it installs `libssh2-1-dev`
+  too, so the SSH files are scanned for real. `src/ui` is still never
+  scanned (Win32 only).
 - Dependabot (`.github/dependabot.yml`): github-actions only, weekly, all
   actions grouped into one pull request, open-pull-requests-limit 1. A
   merged actions-only bump triggers just the CodeQL push run; no release.

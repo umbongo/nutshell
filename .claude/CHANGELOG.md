@@ -4,6 +4,24 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-24 — the gate compiles: Native tests required
+
+Session: Claude desktop app, Windows dev box. Model: claude-fable-5-1.
+Decided by the maintainer after the retrospective's finding F1.
+
+- **`.github/workflows/checks.yml`.** New job `Native tests`: Ubuntu,
+  `libssh2-1-dev` installed and its linkability asserted, `make test`.
+- **`.github/workflows/codeql.yml`.** Installs `libssh2-1-dev` too, so the
+  SSH files are scanned against the real library (the 2026-09-10 gap).
+- **`tests/integration/Protect-Main.ps1`.** Default `-CheckNames` is now
+  `Version bump` and `Native tests`; applied to the ruleset once this
+  change is on `main`, because the check must exist before it is required.
+- **CLAUDE.md, `skills/feature-workflow/SKILL.md`, `memory/MEMORY.md`,
+  `tests/integration/README.md`.** Two required checks instead of one;
+  step 7 lists four checks and which two are required.
+- No critique round: the decision was the maintainer's, made on the
+  retrospective's options; the edits describe it.
+
 ## 2026-09-24 — retrospective after eleven merges
 
 Session: Claude desktop app, Windows dev box. Model: claude-fable-5-1

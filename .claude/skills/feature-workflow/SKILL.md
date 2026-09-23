@@ -100,18 +100,20 @@ open as drafts and their body ends with the same `Models:` line and the
    release`). From a Linux session the deliverable is a pushed branch;
    the maintainer builds, commits the exe, and the `Version bump` check
    goes green. Say so and stop at the pushed branch with everything else
-   done.
+   done. Docs, CI, `tests/` and `.claude/` changes need none of this, but
+   `Native tests` still has to compile the tree, so a test-only change is
+   gated too.
 7. **Checking the pull request.** Checks: `gh pr checks N`, or
    `mcp__github__pull_request_read` with `get_check_runs` when `gh` is
-   absent. Expect `Version bump`, `analyze` and `CodeQL`; all three must
-   be `success`. Mergeability: `pull_request_read` with `get`;
-   `mergeable_state` should be `clean`, and the ruleset also requires the
-   branch be up to date with `main`. `Version bump` runs on
-   `pull_request` only, so there is no base-branch run to compare
-   against; a red gate is always the PR's. Only `Version bump` is
-   required and it compiles nothing: `analyze` is the only check that
-   builds `make test`, so a red or pending `analyze` means the branch may
-   not build.
+   absent. Expect `Version bump`, `Native tests`, `analyze` and `CodeQL`;
+   all four must be `success`. The first two are required (`Native tests`
+   compiles the committed sources with the real libssh2 and runs the
+   suite; `Version bump` compiles nothing); `analyze` and `CodeQL` are
+   not, so a red one does not block auto-merge. Mergeability:
+   `pull_request_read` with `get`; `mergeable_state` should be `clean`,
+   and the ruleset also requires the branch be up to date with `main`.
+   The checks run on `pull_request` only, so there is no base-branch run
+   to compare against; a red gate is always the PR's.
 8. **Integration tier.** Before marking ready, the maintainer runs the
    integration tier the change touches by hand on Windows
    (`tests/integration/Run-Integration.ps1 -Tier gate`); it is a manual

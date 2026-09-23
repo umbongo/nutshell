@@ -195,6 +195,10 @@ Done, in order (details in the commit messages and the specs named):
   and `cases/90-keys.ps1`. ConPTY measured: 0x7F Backspace, 0x08 Ctrl+Backspace, ?1049h
   forwarded, ?1h not. Manual checklist (spec 8.6) still to run (Open).
 - 2026-09-24 retrospective (`docs/retrospectives/2026-09-24-eleven-merges-retrospective.md`).
+- The merge gate compiles: `Native tests` job in `checks.yml` (Ubuntu, real libssh2,
+  `make test`), required alongside `Version bump` via `Protect-Main.ps1`; CodeQL now
+  installs libssh2 too, closing the 2026-09-10 scan gap for the SSH files. Decided by
+  the maintainer after the 2026-09-24 retrospective's F1.
 
 Open, in priority order:
 - [ ] Test by hand, against the 1.2.5 exe: (a) the dispatch fix -- an unclosed-quote
@@ -202,14 +206,8 @@ Open, in priority order:
       once, then Stop giving not run on all three and a prompt back; (b) the special-keys
       checklist in `2026-09-23-special-keys-design.md` section 8.6 (lone Alt tap, Alt+F
       in Edit, F10, Alt+0233, AltGr, Backspace in Edit, PgUp at a prompt and in less).
-- [ ] Make the merge gate compile something: only `Version bump` is required and it
-      checks versions and the committed exe but builds nothing; PR #44 was merged with
-      CodeQL's `analyze` red (four unstaged files) and #45 with it pending, and `main`
-      was unbuildable for four minutes. Options, for the maintainer: require `analyze`
-      in the ruleset (`Protect-Main.ps1`), or add a hosted `make test` job to
-      `checks.yml` and require it. Also `codeql.yml`'s concurrency group cancels the
-      `main` push run when merges come fast (bc78b5c was never analysed on `main`).
-      Until then: `gh pr checks N --watch` before every merge (CLAUDE.md).
+- [ ] `codeql.yml`'s concurrency group cancels the `main` push run when merges come
+      fast (bc78b5c was never analysed on `main`): key it on the sha for pushes.
 - [ ] Local shell follow-ups: test PowerShell as the local shell (a profile whose shell
       command is `powershell.exe` or `pwsh.exe`; custom kind, platform auto -- prompt
       detection on `PS C:\...>`, paste line ends, Ctrl+C, the AI ruleset); run the
@@ -221,7 +219,8 @@ Open, in priority order:
 - [ ] CI review follow-ups (2026-09-10 review, minus the items the desktop gate's
       retirement made moot): CodeQL installs no libssh2, so the SSH/known-hosts files
       and all of `src/ui` go unscanned — install `libssh2-1-dev`, fail if the Makefile
-      probe still says no, and consider a Windows CodeQL run for `src/ui`;
+      probe still says no (done 2026-09-24 in both workflows), and consider a Windows
+      CodeQL run for `src/ui`;
       `.gitattributes` and renormalise (90 CRLF-indexed files) in a lone PR when nothing
       else is in flight. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)

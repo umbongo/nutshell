@@ -152,10 +152,11 @@ Until 2026-09-15 `.github/workflows/integration.yml` ran the `gate` tier once
 per pull request on a self-hosted runner on the dev box. That was
 decommissioned: the runner died whenever its console was closed from the
 in-use desktop, and the screenshot-comparison cases flaked whenever someone
-was using that desktop. The merge gate is now the hosted `Version bump` check
-alone (version bumped, README current, committed exe built from that version —
-see CLAUDE.md). This suite is a manual tool: run the tier a change touches
-before marking its pull request ready.
+was using that desktop. The merge gate is now two hosted checks, `Version
+bump` (version bumped, README current, committed exe built from that version)
+and `Native tests` (the committed sources compile and the native suite passes
+on Ubuntu) — see CLAUDE.md. This suite is a manual tool: run the tier a change
+touches before marking its pull request ready.
 
 ## Cases
 
