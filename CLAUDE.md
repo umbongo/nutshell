@@ -212,7 +212,15 @@ once when the pull request is already mergeable, and CodeQL's `analyze` is not
 required, so run `gh pr checks N --watch` until every check is green before
 merging (on 2026-09-23 PR #44 was merged with `analyze` red and `main` did not
 build; `Native tests` now catches that, CodeQL findings it does not). Never
-push to `main` directly; never merge a red check. There is no desktop-runner gate any more: do not
+push to `main` directly; never merge a red check.
+
+**From a cloud (Linux) session, do not merge: stop and warn the maintainer.**
+The gate needs `make test` to pass on the hosted runner and the Windows exe to
+have been compiled from the committed sources on the maintainer's box; a cloud
+session can do neither, so it must not mark a pull request ready or enable
+auto-merge. Say, in one line, that the pipeline requires a successful
+`make test` and compiled code before it can merge and that this cannot be done
+from a cloud instance, and stop at the pushed branch. There is no desktop-runner gate any more: do not
 restart, register or wait on a self-hosted runner for a pull request.
 
 `tests/integration/Protect-Main.ps1` applies the ruleset (it needs

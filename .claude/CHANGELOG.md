@@ -19,8 +19,13 @@ Decided by the maintainer after the retrospective's finding F1.
 - **CLAUDE.md, `skills/feature-workflow/SKILL.md`, `memory/MEMORY.md`,
   `tests/integration/README.md`.** Two required checks instead of one;
   step 7 lists four checks and which two are required.
-- No critique round: the decision was the maintainer's, made on the
-  retrospective's options; the edits describe it.
+- **Standing rule from the maintainer (2026-09-24), in CLAUDE.md, the
+  `feature-workflow` skill (step 9) and `memory/MEMORY.md`:** a cloud
+  (Linux) session never merges; it stops and warns that the pipeline
+  requires a successful `make test` and compiled code before it can merge
+  and that this cannot be done from a cloud instance.
+- No critique round: the decisions were the maintainer's, made on the
+  retrospective's options; the edits describe them.
 
 ## 2026-09-24 — retrospective after eleven merges
 

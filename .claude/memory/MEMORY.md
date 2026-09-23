@@ -34,7 +34,11 @@ Last updated: 2026-09-24 (retrospective).
   `nutshell.rc` cannot pass the `Version bump` gate from here** because the
   gate requires a rebuilt, committed `build/win/nutshell.exe`. Finish such
   changes on the Windows dev box. Docs, CI, `tests/`, `docs/` and
-  `.claude/` changes merge fine from here.
+  `.claude/` changes can be pushed from here, but **never merged from
+  here**: the maintainer's standing rule (2026-09-24) is that a cloud
+  session stops and warns that the pipeline requires a successful
+  `make test` and compiled code before it can merge, which cannot be done
+  on a cloud instance.
 - The clone arrives shallow (depth 50) with only `main` and the session
   branch fetched. `git fetch --unshallow origin main` takes about a minute
   and brings the pack to roughly 610 MiB; do it before any ahead/behind or

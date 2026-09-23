@@ -118,7 +118,12 @@ open as drafts and their body ends with the same `Models:` line and the
    integration tier the change touches by hand on Windows
    (`tests/integration/Run-Integration.ps1 -Tier gate`); it is a manual
    tool, not a gate.
-9. **Merge.** `gh pr ready N`, then `gh pr checks N --watch` until every
+9. **Merge.** First, where are you: **in a cloud (Linux) session, stop
+   here and warn the maintainer** that the pipeline requires a successful
+   `make test` and compiled code before it can merge and that this cannot
+   be done from a cloud instance (CLAUDE.md, the gate section); do not
+   mark ready, do not enable auto-merge. On the Windows box:
+   `gh pr ready N`, then `gh pr checks N --watch` until every
    check is green, then `gh pr merge N --merge --auto`, in that order. The
    reason is in CLAUDE.md ("Branches, pull requests and the merge gate"):
    auto-merge merges at once when the PR is mergeable and only `Version
