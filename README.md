@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.2 \
+**Version**: v1.2.4 \
 **Build Date**: 2026-09-10 \
 **Author**: Thomas Sulkiewicz
 
@@ -51,12 +51,12 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 ### Getting Started
 
 1. Place `nutshell.exe` anywhere on your Windows machine. Configuration is stored in `nutshell.config` in the same directory.
-2. Launch the application. The session manager opens on demand via **Ctrl+T** or the **+** area in the tab strip. To have it open automatically at launch, enable **Open Session Manager at startup** in Settings (Connection > Startup) — off by default.
+2. Launch the application. The session manager opens on demand via **Ctrl+Shift+T** or the **+** area in the tab strip. To have it open automatically at launch, enable **Open Session Manager at startup** in Settings (Connection > Startup) — off by default.
 3. Create a session profile by entering a hostname, port, username, and authentication credentials, then click **Connect**.
 
 ### Connecting to a Server
 
-Open the **Session Manager** with **Ctrl+T** or by clicking the **+** area in the tab strip.
+Open the **Session Manager** with **Ctrl+Shift+T** or by clicking the **+** area in the tab strip.
 
 | Field | Description |
 |-------|-------------|
@@ -82,8 +82,8 @@ Each SSH connection runs in its own tab. The tab strip at the top of the window 
 
 | Action | How |
 |--------|-----|
-| **New tab** | **Ctrl+T** opens the session manager |
-| **Close tab** | **Ctrl+W** or click the **x** button on the tab |
+| **New tab** | **Ctrl+Shift+T** opens the session manager |
+| **Close tab** | **Ctrl+Shift+W** or click the **x** button on the tab |
 | **Switch tab** | Click the tab |
 | **Tab tooltip** | Hover over a tab to see session name, user@host, connection status with elapsed time, and logging status |
 
@@ -110,7 +110,9 @@ The terminal emulates a VT100/ANSI-compatible display. It supports:
 #### Scrolling
 
 - **Mouse wheel** scrolls through scrollback history
-- **Page Up / Page Down** scroll a full page (screen height minus one line) at a time
+- **Page Up / Page Down** scroll a full page (screen height minus one line) at a time at a normal shell prompt (the primary screen); when a full-screen program is running (vim, less, man, Edit — the alternate screen) they're sent to the program instead
+- **Shift+Page Up / Shift+Page Down** always scroll the history, even over a full-screen program
+- One catch: a pager started with `-X` (git's default `LESS=FRX`) stays on the primary screen, so there Page Up scrolls the history rather than paging; Space and the arrows still page it
 - **Vertical scrollbar** on the right tracks the scrollback position (drag to seek)
 
 #### Text Selection and Clipboard
@@ -120,6 +122,20 @@ The terminal emulates a VT100/ANSI-compatible display. It supports:
 - **Ctrl+V** or **Shift+Insert** pastes from the clipboard; **Ctrl+Shift+V** always pastes
 - **Confirm before pasting** (Settings > Terminal, on by default) shows a preview dialog before every paste, so you can review what's about to be sent
 - **Paste delay**: an optional inter-line delay (0 to 5000 ms) can be set in Settings for servers that need time between lines
+
+#### Keyboard
+
+Most keys reach the shell the way xterm sends them, so remote-side editing and program shortcuts work as expected:
+
+- **Alt+key** is sent as **Esc** then the key (xterm's `metaSendsEscape`) — Alt+F opens Microsoft Edit's File menu, Alt+B/Alt+F move by word in bash. A lone tap of Alt still opens Nutshell's menu bar; Alt+F4, Alt+Space, Alt+Esc, Alt+Enter and Alt+numpad codes are left to Windows
+- **Function keys F1-F12** reach the shell (xterm sequences), including F10 and Shift+F10 — F10 no longer opens Nutshell's menu bar. **F11** stays Nutshell's fullscreen toggle; Shift+F11 goes to the shell
+- **Modifiers on arrows, Home, End, Insert, Delete, Page Up/Down and the F-keys** are sent in xterm's form — Ctrl+Left/Right move by word in bash and vim. Shift+Tab sends back-tab. Home/End follow application cursor mode
+- **Page Up / Page Down** go to a full-screen program when one is running, otherwise they scroll the history; **Shift+Page Up / Shift+Page Down** always scroll the history — see [Scrolling](#scrolling)
+- **Backspace** sends DEL (0x7F) in a local shell and BS (0x08) over SSH
+- Plain **Ctrl+T**, **Ctrl+W** and **Ctrl+Space** now go to the shell (transpose, kill-word, and Emacs/tmux `0x00`) since **Ctrl+Shift+T**, **Ctrl+Shift+W** and **Ctrl+Shift+Space** took over the app shortcuts — see [Keyboard Shortcuts](#keyboard-shortcuts)
+- **Edit > Send Key** sends a key Nutshell or Windows would otherwise keep for itself — F1-F12, Page Up, Page Down, Ctrl+V, Shift+Insert, Ctrl+=, Ctrl+- — straight to the shell, plus two one-shot items: **Send Next Key Raw** (the next keystroke bypasses every Nutshell shortcut) and **Send Next Key with Alt** (the next key gets the Alt/Esc prefix). Handy for F11, the paste chords, Page Up at a prompt, or a laptop with no function row
+- With **AltGr** (Ctrl+Alt) held, none of the Ctrl shortcuts fire, so AltGr characters type normally
+- When the AI panel's input box has focus, none of this applies — keys go to the panel. Click the terminal to return focus
 
 ### Zoom
 
@@ -198,7 +214,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 
 ### AI Chat Assistant
 
-Click the **AI** button in the tab strip (or press **Ctrl+Space**, or use View > AI Assist) to open the panel. The button is green when an API key is configured, grey otherwise — either way the panel opens; it just shows one of the [empty states](#empty-no-key-and-no-session-states) below when there's nothing to display yet.
+Click the **AI** button in the tab strip (or press **Ctrl+Shift+Space**, or use View > AI Assist) to open the panel. The button is green when an API key is configured, grey otherwise — either way the panel opens; it just shows one of the [empty states](#empty-no-key-and-no-session-states) below when there's nothing to display yet.
 
 The AI assistant can see the recent history of your terminal output (1,000 lines by default, configurable up to 50,000) and execute commands over SSH. Each tab maintains its own independent conversation history.
 
@@ -314,8 +330,8 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 
 | Shortcut | Action |
 |----------|--------|
-| **Ctrl+T** | New session (open session manager) |
-| **Ctrl+W** | Close active tab |
+| **Ctrl+Shift+T** | New session (open session manager) |
+| **Ctrl+Shift+W** | Close active tab |
 | **Ctrl+C** | Copy selection to clipboard and clear it; sends SIGINT if there is no selection |
 | **Ctrl+Shift+C** | Copy selection to clipboard (no-op if none); never sent to the shell |
 | **Ctrl+V** | Paste from clipboard |
@@ -324,8 +340,17 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 | **Ctrl+=** | Zoom in |
 | **Ctrl+-** | Zoom out |
 | **Ctrl+Scroll** | Zoom in/out with mouse wheel |
-| **Page Up** | Scroll up a full page through scrollback |
-| **Page Down** | Scroll down a full page through scrollback |
+| **Ctrl+Shift+Space** | Toggle the AI Assist panel |
+| **Page Up** | Scroll up a full page through scrollback (or page a full-screen program, if one is running) |
+| **Page Down** | Scroll down a full page through scrollback (or page a full-screen program, if one is running) |
+| **Shift+Page Up** | Scroll up a full page through scrollback, always |
+| **Shift+Page Down** | Scroll down a full page through scrollback, always |
+| **F1-F12** | Sent to the shell (xterm sequences); F10 and Shift+F10 included |
+| **F11** | Toggle fullscreen; Shift+F11 is sent to the shell |
+| **Alt+key** | Sent to the shell as Esc + key; a lone Alt tap opens Nutshell's menu bar |
+| **Ctrl+T, Ctrl+W, Ctrl+Space** (no Shift) | Sent to the shell — transpose, kill-word, and NUL (0x00) |
+
+See [Keyboard](#keyboard) above for the full rundown, and **Edit > Send Key** for a menu that sends F1-F12, Page Up, Page Down, Ctrl+V, Shift+Insert, Ctrl+= and Ctrl+- straight to the shell.
 
 ---
 

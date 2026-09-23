@@ -49,6 +49,7 @@
 #include "cmd_classify.h"
 #include "cmd_detect.h"
 #include "term_extract.h"
+#include "key_encode.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <dwmapi.h>
 #include <gdiplus.h>       /* GDI+ flat API (includes gdiplusflat.h) */
@@ -153,6 +154,7 @@ static void update_scrollbar(HWND hwnd); /* forward declaration */
 static void paste_cancel(void);          /* forward declaration */
 static HMENU create_app_menu(void);      /* forward declaration */
 static void on_ai_clicked(void);         /* forward declaration */
+static void key_oneshot_clear(void);     /* forward declaration */
 
 /* ---- Docked AI panel state ---- */
 #include "ai_dock.h"
@@ -378,6 +380,7 @@ static void ai_panel_detach(Session *s)
 
 static void free_session(Session *s) {
     if (s) {
+        key_oneshot_clear();
         if (s->conn_thread) {
             s->conn_cancelled = 1;
             WaitForSingleObject(s->conn_thread, 30000);
@@ -397,6 +400,7 @@ static void free_session(Session *s) {
 
 static void on_tab_select(int index, void *user_data) {
     (void)index;
+    key_oneshot_clear();
     g_active_session = (Session *)user_data;
     if (g_active_session)
         g_active_session->last_user_input_tick = GetTickCount();
@@ -427,6 +431,7 @@ static void on_tab_select(int index, void *user_data) {
 
 static void on_tab_close(int index, void *user_data) {
     Session *s = (Session *)user_data;
+    key_oneshot_clear();
 
     if (s->conn_state == CONN_CONNECTING) {
         MessageBoxA(GetParent(g_hwndTabs),
@@ -1866,10 +1871,11 @@ typedef struct {
     char   text[64];     /* display text */
     char   accel[32];    /* accelerator text (after \t), or "" */
     int    is_separator; /* 1 = separator line */
+    int    nested;       /* 1 = a submenu inside a drop-down, not on the bar */
 } MenuItemData;
 
 /* Small pool of MenuItemData — never freed (lives for app lifetime) */
-#define MAX_MENU_ITEMS 32
+#define MAX_MENU_ITEMS 64
 static MenuItemData g_menu_items[MAX_MENU_ITEMS];
 static int g_menu_item_count;
 
@@ -1886,6 +1892,7 @@ static void menu_add_item(HMENU menu, UINT id, const char *label)
     mi->id   = id;
     mi->hSub = NULL;
     mi->is_separator = 0;
+    mi->nested = 0;
     /* Split "Text\tAccel" */
     const char *tab = strchr(label, '\t');
     if (tab) {
@@ -1907,20 +1914,30 @@ static void menu_add_separator(HMENU menu)
     mi->id = 0;
     mi->hSub = NULL;
     mi->is_separator = 1;
+    mi->nested = 0;
     mi->text[0] = '\0';
     mi->accel[0] = '\0';
     AppendMenu(menu, MF_OWNERDRAW | MF_SEPARATOR, 0, (LPCSTR)mi);
 }
 
-static void menu_add_popup(HMENU bar, HMENU sub, const char *label)
+static MenuItemData *menu_add_popup(HMENU bar, HMENU sub, const char *label)
 {
     MenuItemData *mi = alloc_menu_item();
     mi->id   = 0;
     mi->hSub = sub;
     mi->is_separator = 0;
+    mi->nested = 0;
     mi->accel[0] = '\0';
     (void)snprintf(mi->text, sizeof(mi->text), "%s", label);
     AppendMenu(bar, MF_OWNERDRAW | MF_POPUP, (UINT_PTR)sub, (LPCSTR)mi);
+    return mi;
+}
+
+/* A submenu inside a drop-down (Edit > Send Key): measured like an item,
+ * with room for the arrow Windows draws, not like a menu-bar title. */
+static void menu_add_submenu(HMENU menu, HMENU sub, const char *label)
+{
+    menu_add_popup(menu, sub, label)->nested = 1;
 }
 
 /* Apply theme background to a menu handle */
@@ -1947,7 +1964,7 @@ static HMENU create_app_menu(void)
 
     HMENU hMenu = CreateMenu();
     HMENU hFile = CreatePopupMenu();
-    menu_add_item(hFile, IDM_FILE_NEW_SESSION, "New Session\tCtrl+T");
+    menu_add_item(hFile, IDM_FILE_NEW_SESSION, "New Session\tCtrl+Shift+T");
     menu_add_separator(hFile);
     menu_add_item(hFile, IDM_FILE_CONNECT, "Session Manager...");
     menu_add_item(hFile, IDM_FILE_DISCONNECT, "Disconnect");
@@ -1964,12 +1981,33 @@ static HMENU create_app_menu(void)
     menu_add_item(hEdit, IDM_EDIT_COPY, "Copy\tCtrl+C");
     menu_add_item(hEdit, IDM_EDIT_PASTE, "Paste\tCtrl+V");
     menu_add_item(hEdit, IDM_EDIT_SELECT_ALL, "Select All");
+    /* Send Key: the keys Nutshell or Windows keep for themselves, and
+     * the function row a compact keyboard lacks (special-keys spec,
+     * section 4A). */
+    HMENU hSendKey = CreatePopupMenu();
+    for (int f = 0; f < 12; f++) {
+        char label[8];
+        (void)snprintf(label, sizeof(label), "F%d", f + 1);
+        menu_add_item(hSendKey, (UINT)(IDM_SENDKEY_F1 + f), label);
+    }
+    menu_add_separator(hSendKey);
+    menu_add_item(hSendKey, IDM_SENDKEY_PGUP, "Page Up");
+    menu_add_item(hSendKey, IDM_SENDKEY_PGDN, "Page Down");
+    menu_add_separator(hSendKey);
+    menu_add_item(hSendKey, IDM_SENDKEY_CTRL_V, "Ctrl+V");
+    menu_add_item(hSendKey, IDM_SENDKEY_SHIFT_INSERT, "Shift+Insert");
+    menu_add_item(hSendKey, IDM_SENDKEY_CTRL_EQUALS, "Ctrl+=");
+    menu_add_item(hSendKey, IDM_SENDKEY_CTRL_MINUS, "Ctrl+-");
+    menu_add_separator(hSendKey);
+    menu_add_item(hSendKey, IDM_SENDKEY_RAW_NEXT, "Send Next Key Raw");
+    menu_add_item(hSendKey, IDM_SENDKEY_ALT_NEXT, "Send Next Key with Alt");
+    menu_add_submenu(hEdit, hSendKey, "Send Key");
     menu_add_separator(hEdit);
     menu_add_item(hEdit, IDM_EDIT_SETTINGS, "Settings...");
     menu_add_popup(hMenu, hEdit, "Edit");
 
     HMENU hView = CreatePopupMenu();
-    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist\tCtrl+Space");
+    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist\tCtrl+Shift+Space");
     menu_add_item(hView, IDM_VIEW_AI_UNDOCK, "Undock AI Assist");
     menu_add_item(hView, IDM_VIEW_FULLSCREEN, "Fullscreen\tF11");
     menu_add_popup(hMenu, hView, "View");
@@ -1986,6 +2024,7 @@ static HMENU create_app_menu(void)
         menu_set_bg(hMenu, bg);
         menu_set_bg(hFile, bg);
         menu_set_bg(hEdit, bg);
+        menu_set_bg(hSendKey, bg);
         menu_set_bg(hView, bg);
         menu_set_bg(hHelp, bg);
     }
@@ -2244,6 +2283,508 @@ static void show_about_dialog(HWND parent) {
     }
 }
 
+/* ---- Keyboard: what each key sends (special-keys spec, 2026-09-23) -------
+ *
+ * The bytes come from key_encode() (src/core/key_encode.c, xterm's
+ * encoding); this block only maps Win32 onto it and decides which message
+ * handles which key:
+ *
+ *   - keys that never produce a character (arrows, Home, End, Insert,
+ *     Delete, PgUp, PgDn, F1-F12) are encoded from WM_KEYDOWN /
+ *     WM_SYSKEYDOWN;
+ *   - keys that do are encoded from WM_CHAR / WM_SYSCHAR, where Windows has
+ *     already applied the layout, AltGr, dead keys and the IME;
+ *   - a key-down that is handled here and must not be followed by its
+ *     character (Backspace, Shift+Tab, Ctrl+Shift+W/T/Space) removes that
+ *     character from the queue: ui_run() calls TranslateMessage before
+ *     DispatchMessage, so by the time WndProc sees the key-down the WM_CHAR
+ *     is already queued and returning 0 does not stop it. A dead-key layout
+ *     can queue two characters off one key-down (the accent, then the
+ *     key's own character), both sharing that key-down's scan code, so
+ *     drop_queued_char() loops rather than dropping just the first;
+ *   - an Alt chord that key_on_syskeydown sends to the shell still lets its
+ *     WM_SYSKEYDOWN reach DefWindowProc afterward (key_on_syskeydown
+ *     returns SYSKEYDOWN_SENT_AND_PASS, not SYSKEYDOWN_HANDLED), so
+ *     Windows' own "Alt pressed alone" tracking clears the same way it
+ *     would for a key it handled itself; there is no g_alt_consumed flag to
+ *     swallow the matching WM_SYSKEYUP any more. WM_SYSCHAR for the
+ *     character itself stays fully consumed, since passing that on to
+ *     DefWindowProc is what would open menu mode;
+ *   - g_key_oneshot / g_key_oneshot_char are cleared together, via
+ *     key_oneshot_clear(), whenever the active session changes or focus
+ *     leaves the terminal, so an armed one-shot never lands on a key meant
+ *     for a different tab or window.
+ */
+
+/* Edit > Send Key's two one-shot items. g_key_oneshot is armed by the menu
+ * and consumed by the next non-modifier key-down; when that key produces a
+ * character, the key-down hands the state on to g_key_oneshot_char for the
+ * WM_CHAR that follows. A key-down Windows keeps for itself (Alt+F4,
+ * Alt+Space, Alt+Esc, Alt+Enter, Alt+Tab, Alt+numpad) leaves the one-shot
+ * armed rather than consuming it: the raw one-shot bypasses Nutshell's own
+ * shortcuts, not the chords Windows keeps. */
+typedef enum { KEY_ONESHOT_NONE = 0, KEY_ONESHOT_RAW, KEY_ONESHOT_ALT } KeyOneShot;
+static KeyOneShot g_key_oneshot      = KEY_ONESHOT_NONE;
+static KeyOneShot g_key_oneshot_char = KEY_ONESHOT_NONE;
+
+/* Clears both one-shots when the active session changes or focus leaves the
+ * terminal (on_tab_select, on_tab_close, free_session, WM_KILLFOCUS), so a
+ * stale arm from a previous tab or window never reaches an unrelated key. */
+static void key_oneshot_clear(void)
+{
+    g_key_oneshot      = KEY_ONESHOT_NONE;
+    g_key_oneshot_char = KEY_ONESHOT_NONE;
+}
+
+static bool key_is_down(int vk)
+{
+    return (GetKeyState(vk) & 0x8000) != 0;
+}
+
+static unsigned int key_mods(bool shift, bool ctrl, bool alt)
+{
+    return (shift ? NSK_MOD_SHIFT : 0u) | (alt ? NSK_MOD_ALT : 0u) |
+           (ctrl ? NSK_MOD_CTRL : 0u);
+}
+
+/* Keys that only change the state of others: their key-downs never consume
+ * a one-shot and never reach the encoder. */
+static bool key_is_modifier(WPARAM vk)
+{
+    switch (vk) {
+        case VK_SHIFT: case VK_CONTROL: case VK_MENU:
+        case VK_LSHIFT: case VK_RSHIFT: case VK_LCONTROL: case VK_RCONTROL:
+        case VK_LMENU: case VK_RMENU: case VK_LWIN: case VK_RWIN:
+        case VK_CAPITAL: case VK_NUMLOCK: case VK_SCROLL: case VK_PROCESSKEY:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* The keys that never produce a character, or NSK_NONE. */
+static NsKey key_special_from_vk(WPARAM vk)
+{
+    switch (vk) {
+        case VK_UP:     return NSK_UP;
+        case VK_DOWN:   return NSK_DOWN;
+        case VK_RIGHT:  return NSK_RIGHT;
+        case VK_LEFT:   return NSK_LEFT;
+        case VK_HOME:   return NSK_HOME;
+        case VK_END:    return NSK_END;
+        case VK_INSERT: return NSK_INSERT;
+        case VK_DELETE: return NSK_DELETE;
+        case VK_PRIOR:  return NSK_PGUP;
+        case VK_NEXT:   return NSK_PGDN;
+        default: break;
+    }
+    if (vk >= VK_F1 && vk <= VK_F12)
+        return (NsKey)((int)NSK_F1 + (int)(vk - VK_F1));
+    return NSK_NONE;
+}
+
+/* Write bytes to the active session: drain pending transport data first so
+ * the write can succeed in non-blocking mode (without it
+ * libssh2_channel_write returns EAGAIN when the session has unread inbound
+ * data, and the transport's retry loop blocks the UI thread -- a deadlock
+ * that silently drops keystrokes), then return a scrolled-back view to the
+ * live screen. */
+static void session_send_bytes(HWND hwnd, const char *bytes, size_t n)
+{
+    Session *s = g_active_session;
+    if (!s || !s->term || n == 0) return;
+    if (s->io.ctx) {
+        s->io.poll(s->io.ctx, s->term, s->session_log, s->debug_log);
+        s->io.write(s->io.ctx, bytes, n);
+    }
+    if (s->term->scrollback_offset != 0) {
+        s->term->scrollback_offset = 0;
+        update_scrollbar(hwnd);
+        invalidate_terminal(hwnd);
+    }
+}
+
+/* Encode one key for the active session and send it. */
+static void session_send_key(HWND hwnd, NsKey key, unsigned char ch,
+                             unsigned int mods)
+{
+    Session *s = g_active_session;
+    if (!s || !s->term) return;
+    unsigned int flags = 0;
+    if (s->term->app_cursor_keys)   flags |= NSK_FLAG_APP_CURSOR;
+    if (s->io.kind == SESSION_LOCAL) flags |= NSK_FLAG_LOCAL;
+    char buf[KEY_ENCODE_MAX];
+    size_t n = key_encode(key, ch, mods, flags, buf, sizeof(buf));
+    if (n > 0) session_send_bytes(hwnd, buf, n);
+}
+
+/* Remove the character(s) TranslateMessage queued for a key-down this
+ * window has handled itself. Matched on the scan code (and extended bit)
+ * that the WM_CHAR copies from the key-down's lParam, so a character
+ * belonging to some other key is never eaten. A dead-key layout can queue
+ * two messages off a single key-down -- the dead accent, then the key's own
+ * character -- both stamped with that key-down's scan code, so each range
+ * is drained in a loop rather than dropping only the first match. */
+static void drop_queued_char(HWND hwnd, LPARAM keydown_lparam)
+{
+    const ULONG_PTR scan = ((ULONG_PTR)keydown_lparam >> 16) & 0x1FFu;
+    static const UINT ranges[2][2] = {
+        { WM_CHAR,    WM_DEADCHAR },
+        { WM_SYSCHAR, WM_SYSDEADCHAR },
+    };
+    for (int i = 0; i < 2; i++) {
+        MSG m;
+        while (PeekMessage(&m, hwnd, ranges[i][0], ranges[i][1], PM_NOREMOVE) &&
+               (((ULONG_PTR)m.lParam >> 16) & 0x1FFu) == scan) {
+            (void)PeekMessage(&m, hwnd, ranges[i][0], ranges[i][1], PM_REMOVE);
+        }
+    }
+}
+
+/* Ctrl+Alt+key: is it AltGr on this layout (a character, which the WM_CHAR
+ * that follows sends), or a Ctrl+Alt chord for the shell? Asks the layout
+ * with ToUnicodeEx's "do not change keyboard state" flag (0x4, honoured
+ * from Windows 10 1607 -- older than anything ConPTY runs on), so a pending
+ * dead key survives the question. If the keyboard state cannot be read,
+ * answer "a character": that leaves the key to WM_CHAR, today's behaviour. */
+static bool key_layout_has_char(WPARAM vk, LPARAM lParam)
+{
+    BYTE ks[256];
+    if (!GetKeyboardState(ks)) return true;
+    WCHAR buf[8];
+    UINT scan = (UINT)(((ULONG_PTR)lParam >> 16) & 0xFFu);
+    int rc = ToUnicodeEx((UINT)vk, scan, ks, buf, 8, 0x4u, GetKeyboardLayout(0));
+    if (rc < 0) return true;              /* a dead key: the layout is composing */
+    return rc > 0 && buf[0] >= 0x20;      /* a control character is not AltGr */
+}
+
+static void close_active_tab(void)
+{
+    /* Close the tab that owns g_active_session -- the same pair the X
+     * button hands on_tab_close -- rather than pairing the strip's active
+     * index with our session pointer and trusting they still agree. */
+    if (!g_active_session) return;
+    int idx = tabs_find(g_hwndTabs, g_active_session);
+    if (idx >= 0) on_tab_close(idx, g_active_session);
+}
+
+/* WM_KEYDOWN. Returns true when the key was handled (WndProc returns 0). */
+static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
+{
+    if (key_is_modifier(vk)) return false;
+
+    const bool shift = key_is_down(VK_SHIFT);
+    const bool ctrl  = key_is_down(VK_CONTROL);
+    const bool alt   = key_is_down(VK_MENU);
+    /* The AltGr guard: during an AltGr character GetKeyState(VK_CONTROL)
+     * is down too, so every Ctrl shortcut requires Alt up. */
+    const bool ctrl_only = ctrl && !alt;
+    /* Auto-repeat (lParam bit 30, "the key was already down"): the toggle
+     * shortcuts below must fire once per press, not once per repeated
+     * WM_KEYDOWN while the chord is held. */
+    const bool is_repeat = (lParam & (1L << 30)) != 0;
+
+    /* The previous key's character has been dispatched by now. */
+    g_key_oneshot_char = KEY_ONESHOT_NONE;
+
+    /* Edit > Send Key's one-shots: this key bypasses every shortcut. */
+    if (g_key_oneshot != KEY_ONESHOT_NONE) {
+        KeyOneShot shot = g_key_oneshot;
+        g_key_oneshot = KEY_ONESHOT_NONE;
+        unsigned int mods = key_mods(shift, ctrl, alt) |
+                            (shot == KEY_ONESHOT_ALT ? NSK_MOD_ALT : 0u);
+        NsKey k = key_special_from_vk(vk);
+        if (vk == VK_BACK) k = NSK_BACKSPACE;
+        if (vk == VK_TAB)  k = NSK_TAB;
+        if (k != NSK_NONE) {
+            drop_queued_char(hwnd, lParam);
+            session_send_key(hwnd, k, 0, mods);
+        } else {
+            g_key_oneshot_char = shot;   /* WM_CHAR finishes the job */
+        }
+        return true;
+    }
+
+    /* F11 -- toggle fullscreen; with any modifier it goes to the shell.
+     * Auto-repeat is consumed but ignored, so holding F11 toggles once. */
+    if (vk == VK_F11 && !shift && !ctrl && !alt) {
+        if (!is_repeat) SendMessage(hwnd, WM_COMMAND, IDM_VIEW_FULLSCREEN, 0);
+        return true;
+    }
+    /* Ctrl+Shift+T new tab, Ctrl+Shift+W close tab, Ctrl+Shift+Space AI
+     * panel. Plain Ctrl+T (transpose), Ctrl+W (kill word) and Ctrl+Space
+     * (NUL) belong to the shell. Each still drops the queued character on
+     * auto-repeat (so it never leaks to the shell) but skips the action
+     * itself, so holding the chord fires it once. */
+    if (ctrl_only && shift) {
+        if (vk == (WPARAM)'T') {
+            drop_queued_char(hwnd, lParam);
+            if (!is_repeat) on_tab_new();
+            return true;
+        }
+        if (vk == (WPARAM)'W') {
+            drop_queued_char(hwnd, lParam);
+            if (!is_repeat) close_active_tab();
+            return true;
+        }
+        if (vk == VK_SPACE) {
+            drop_queued_char(hwnd, lParam);
+            if (!is_repeat) on_ai_clicked();
+            return true;
+        }
+    }
+    /* Ctrl+C -- copy selection if one exists, otherwise fall through so
+     * WM_CHAR sends 0x03 (SIGINT) as before. Ctrl+Shift+C always copies
+     * (no-op if nothing selected) and never reaches the shell. */
+    if (ctrl_only && vk == (WPARAM)'C') {
+        if (shift || g_selection.valid) {
+            copy_selection_and_clear(hwnd);
+            g_ctrlc_swallow_char = true;
+            return true;
+        }
+    }
+    /* Ctrl+V / Ctrl+Shift+V -- paste with confirmation (WM_CHAR swallows
+     * the 0x16). */
+    if (ctrl_only && vk == (WPARAM)'V') {
+        do_paste(hwnd);
+        return true;
+    }
+    /* Shift+Insert -- alternative paste shortcut */
+    if (shift && !alt && vk == VK_INSERT) {
+        do_paste(hwnd);
+        return true;
+    }
+    /* Ctrl+= / Ctrl+- zoom */
+    if (ctrl_only) {
+        if (vk == VK_OEM_PLUS || vk == (WPARAM)'=') {
+            apply_zoom(hwnd, 1);
+            return true;
+        }
+        if (vk == VK_OEM_MINUS || vk == (WPARAM)'-') {
+            apply_zoom(hwnd, -1);
+            return true;
+        }
+    }
+
+    if (!g_active_session || !g_active_session->term) return false;
+    Terminal *t = g_active_session->term;
+
+    /* PgUp/PgDn: the local scrollback on the primary screen, the program on
+     * the alternate screen (less, vim, man, Edit -- it has no scrollback);
+     * Shift+PgUp/PgDn always scroll back. */
+    if (vk == VK_PRIOR || vk == VK_NEXT) {
+        bool scroll = !ctrl && !alt && (shift || !t->alt_screen_active);
+        if (scroll) {
+            if (vk == VK_PRIOR)
+                t->scrollback_offset = scroll_page_up(t->scrollback_offset,
+                                                      t->rows,
+                                                      t->max_scrollback);
+            else
+                t->scrollback_offset = scroll_page_down(t->scrollback_offset,
+                                                        t->rows);
+            update_scrollbar(hwnd);
+            invalidate_terminal(hwnd);
+            return true;
+        }
+    }
+    /* Backspace: DEL for a local session, BS over SSH (with Alt, ESC
+     * first). Ctrl+Backspace is left to its WM_CHAR (0x7F) as before. */
+    if (vk == VK_BACK && !ctrl) {
+        drop_queued_char(hwnd, lParam);
+        session_send_key(hwnd, NSK_BACKSPACE, 0, key_mods(shift, false, alt));
+        return true;
+    }
+    /* Shift+Tab: back-tab, CSI Z. Plain Tab is its WM_CHAR. */
+    if (vk == VK_TAB && shift && !ctrl) {
+        drop_queued_char(hwnd, lParam);
+        session_send_key(hwnd, NSK_TAB, 0, NSK_MOD_SHIFT);
+        return true;
+    }
+    /* Ctrl+Alt+letter the layout does not turn into a character: ESC then
+     * the control byte. When it is AltGr, the WM_CHAR sends the character. */
+    if (ctrl && alt && vk >= (WPARAM)'A' && vk <= (WPARAM)'Z' &&
+        !key_layout_has_char(vk, lParam)) {
+        drop_queued_char(hwnd, lParam);
+        session_send_key(hwnd, NSK_CHAR, (unsigned char)('a' + (vk - 'A')),
+                         NSK_MOD_CTRL | NSK_MOD_ALT);
+        return true;
+    }
+
+    NsKey k = key_special_from_vk(vk);
+    if (k != NSK_NONE) {
+        session_send_key(hwnd, k, 0, key_mods(shift, ctrl, alt));
+        return true;
+    }
+    return false;   /* a character key: its WM_CHAR does the sending */
+}
+
+/* WM_SYSKEYDOWN's outcome: whether -- and how -- the key was handled.
+ * SENT_AND_PASS exists because an Alt chord sent to the shell must still
+ * reach DefWindowProc afterward, so Windows' own "Alt pressed alone"
+ * tracking clears the same way it would for a key it handled itself; only
+ * HANDLED (F10 and Shift+F10) fully consumes the key-down. */
+typedef enum {
+    SYSKEYDOWN_NOT_HANDLED = 0,  /* DefWindowProc runs, nothing was sent */
+    SYSKEYDOWN_HANDLED,          /* consumed: WndProc returns 0 */
+    SYSKEYDOWN_SENT_AND_PASS     /* sent to the shell, DefWindowProc still runs */
+} SysKeyDownResult;
+
+/* WM_SYSKEYDOWN: Alt held without Ctrl, or F10. */
+static SysKeyDownResult key_on_syskeydown(HWND hwnd, WPARAM vk, LPARAM lParam)
+{
+    const bool alt_ctx  = (lParam & (1L << 29)) != 0;
+    const bool extended = (lParam & (1L << 24)) != 0;
+
+    if (key_is_modifier(vk)) return SYSKEYDOWN_NOT_HANDLED;
+    /* No transport (a disconnected tab): Alt behaves as before -- untouched
+     * by any of this, straight to DefWindowProc. */
+    if (!g_active_session || !g_active_session->term || !g_active_session->io.ctx)
+        return SYSKEYDOWN_NOT_HANDLED;
+
+    const bool shift = key_is_down(VK_SHIFT);
+    const bool ctrl  = key_is_down(VK_CONTROL);
+
+    if (!alt_ctx) {
+        /* F10 and Shift+F10 arrive here without Alt: the shell's, not the
+         * menu bar's (and Shift+F10 no longer becomes WM_CONTEXTMENU). */
+        if (vk == VK_F10) {
+            KeyOneShot shot = g_key_oneshot;
+            g_key_oneshot = KEY_ONESHOT_NONE;
+            g_key_oneshot_char = KEY_ONESHOT_NONE;
+            const unsigned int shot_alt = shot == KEY_ONESHOT_ALT ? NSK_MOD_ALT : 0u;
+            session_send_key(hwnd, NSK_F10, 0,
+                             key_mods(shift, ctrl, false) | shot_alt);
+            return SYSKEYDOWN_HANDLED;
+        }
+        return SYSKEYDOWN_NOT_HANDLED;
+    }
+
+    /* Left to Windows, one-shot armed or not: Alt+F4 (close), Alt+Space
+     * (system menu; its WM_SYSCHAR is passed too), Alt+Esc (window
+     * cycling), Alt+Enter, Alt+Tab, and Alt with a numpad key or a
+     * non-extended navigation key, so Alt+0233 still composes a character.
+     * A one-shot armed for one of these key-downs is left armed rather than
+     * consumed: the raw one-shot bypasses Nutshell's own shortcuts, not the
+     * chords Windows keeps for itself. */
+    switch (vk) {
+        case VK_F4: case VK_SPACE: case VK_ESCAPE: case VK_RETURN: case VK_TAB:
+        case VK_CLEAR:
+            return SYSKEYDOWN_NOT_HANDLED;
+        case VK_INSERT: case VK_DELETE: case VK_HOME: case VK_END:
+        case VK_PRIOR: case VK_NEXT:
+        case VK_UP: case VK_DOWN: case VK_LEFT: case VK_RIGHT:
+            if (!extended) return SYSKEYDOWN_NOT_HANDLED;
+            break;
+        default:
+            if (vk >= VK_NUMPAD0 && vk <= VK_DIVIDE) return SYSKEYDOWN_NOT_HANDLED;
+            break;
+    }
+
+    /* Past this point the key-down is ours: any armed one-shot has done its
+     * job (this key already reaches the shell) and is consumed. */
+    g_key_oneshot = KEY_ONESHOT_NONE;
+    g_key_oneshot_char = KEY_ONESHOT_NONE;
+
+    NsKey k = key_special_from_vk(vk);
+    if (k != NSK_NONE) {
+        session_send_key(hwnd, k, 0, key_mods(shift, ctrl, true));
+        return SYSKEYDOWN_SENT_AND_PASS;
+    }
+    if (vk == VK_BACK) {
+        drop_queued_char(hwnd, lParam);
+        session_send_key(hwnd, NSK_BACKSPACE, 0, NSK_MOD_ALT);
+        return SYSKEYDOWN_SENT_AND_PASS;
+    }
+    /* A character key: its WM_SYSCHAR sends ESC and the character. The
+     * key-down itself still reaches DefWindowProc (SYSKEYDOWN_SENT_AND_PASS)
+     * so Windows' Alt-alone tracking clears, but WM_SYSCHAR stays fully
+     * consumed below so the character itself never opens menu mode. */
+    return SYSKEYDOWN_SENT_AND_PASS;
+}
+
+/* WM_SYSCHAR: an Alt+character. Returns true when sent to the shell (and
+ * therefore consumed, not passed to DefWindowProc). */
+static bool key_on_syschar(HWND hwnd, WPARAM ch, LPARAM lParam)
+{
+    if (ch == (WPARAM)' ') return false;             /* Alt+Space: system menu */
+    if (!(lParam & (1L << 29))) return false;         /* not an Alt character */
+    /* No transport (a disconnected tab): Alt behaves as before. */
+    if (!g_active_session || !g_active_session->term || !g_active_session->io.ctx)
+        return false;
+    if (ch == (WPARAM)'\r' || ch == (WPARAM)0x1B) return false;  /* Alt+Enter, Alt+Esc */
+    /* Alt+numpad composition keys (non-extended scan codes 0x47-0x53). */
+    UINT scan = (UINT)(((ULONG_PTR)lParam >> 16) & 0xFFu);
+    if (!(lParam & (1L << 24)) && scan >= 0x47u && scan <= 0x53u) return false;
+
+    g_key_oneshot_char = KEY_ONESHOT_NONE;
+    session_send_key(hwnd, NSK_CHAR, (unsigned char)ch, NSK_MOD_ALT);
+    return true;
+}
+
+/* WM_CHAR: a character from the layout -- printable, Ctrl+letter's control
+ * byte, Enter, Tab, Escape. */
+static void key_on_char(HWND hwnd, WPARAM wParam)
+{
+    if (!g_active_session || !g_active_session->term) return;
+    unsigned char c = (unsigned char)wParam;
+    KeyOneShot shot = g_key_oneshot_char;
+    g_key_oneshot_char = KEY_ONESHOT_NONE;
+
+    if (shot == KEY_ONESHOT_NONE) {
+        if (c == 0x16) return;  /* Ctrl+V -- handled via do_paste in WM_KEYDOWN */
+        if (c == 0x03 && g_ctrlc_swallow_char) {
+            /* Ctrl+C copied a selection in WM_KEYDOWN -- don't send SIGINT */
+            g_ctrlc_swallow_char = false;
+            return;
+        }
+    }
+    unsigned int mods = 0;
+    /* Ctrl+Space arrives as 0x20 with Ctrl down: NUL (Emacs set-mark, a
+     * common tmux prefix). The AltGr guard keeps an AltGr space a space. */
+    if (c == 0x20 && key_is_down(VK_CONTROL) && !key_is_down(VK_MENU))
+        mods |= NSK_MOD_CTRL;
+    if (shot == KEY_ONESHOT_ALT) mods |= NSK_MOD_ALT;
+    session_send_key(hwnd, NSK_CHAR, c, mods);
+}
+
+/* Edit > Send Key. */
+static void key_on_send_menu(HWND hwnd, UINT id)
+{
+    if (id >= IDM_SENDKEY_F1 && id <= IDM_SENDKEY_F12) {
+        session_send_key(hwnd, (NsKey)((int)NSK_F1 + (int)(id - IDM_SENDKEY_F1)),
+                         0, 0);
+        return;
+    }
+    switch (id) {
+        case IDM_SENDKEY_PGUP:
+            session_send_key(hwnd, NSK_PGUP, 0, 0);
+            break;
+        case IDM_SENDKEY_PGDN:
+            session_send_key(hwnd, NSK_PGDN, 0, 0);
+            break;
+        case IDM_SENDKEY_CTRL_V:
+            session_send_key(hwnd, NSK_CHAR, (unsigned char)'v', NSK_MOD_CTRL);
+            break;
+        case IDM_SENDKEY_SHIFT_INSERT:
+            session_send_key(hwnd, NSK_INSERT, 0, NSK_MOD_SHIFT);
+            break;
+        case IDM_SENDKEY_CTRL_EQUALS:
+            session_send_key(hwnd, NSK_CHAR, (unsigned char)'=', NSK_MOD_CTRL);
+            break;
+        case IDM_SENDKEY_CTRL_MINUS:
+            session_send_key(hwnd, NSK_CHAR, (unsigned char)'-', NSK_MOD_CTRL);
+            break;
+        case IDM_SENDKEY_RAW_NEXT:
+            g_key_oneshot = KEY_ONESHOT_RAW;
+            break;
+        case IDM_SENDKEY_ALT_NEXT:
+            g_key_oneshot = KEY_ONESHOT_ALT;
+            break;
+        default:
+            break;
+    }
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
@@ -2404,6 +2945,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_COMMAND:
+            if (LOWORD(wParam) >= IDM_SENDKEY_F1 &&
+                LOWORD(wParam) <= IDM_SENDKEY_ALT_NEXT) {
+                key_on_send_menu(hwnd, LOWORD(wParam));
+                return 0;
+            }
             switch (LOWORD(wParam)) {
                 case IDM_FILE_NEW_SESSION:
                     on_tab_new();
@@ -2528,8 +3074,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     SIZE sz = {0, 0};
                     GetTextExtentPoint32A(hdc, mi->text, (int)strlen(mi->text), &sz);
                     /* Top-level menu bar items: tighter padding */
-                    int hpad = mi->hSub ? ns_scale(10, g_dpi)
-                                        : ns_scale(24, g_dpi);
+                    int hpad = (mi->hSub && !mi->nested) ? ns_scale(10, g_dpi)
+                                                         : ns_scale(24, g_dpi);
                     mis->itemWidth = (UINT)sz.cx + (UINT)hpad;
                     if (mi->accel[0]) {
                         SIZE az;
@@ -3324,148 +3870,49 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return res;
         }
 
-        case WM_CHAR: {
+        case WM_CHAR:
             session_mark_user_active();
-            if (g_active_session && g_active_session->term) {
-                char c = (char)wParam;
-                if (c == 0x17) { /* Ctrl+W */
-                     /* Close the tab that owns g_active_session — the same
-                      * pair the ✕ button hands on_tab_close — rather than
-                      * pairing the strip's active index with our session
-                      * pointer and trusting they still agree. */
-                     int idx = tabs_find(g_hwndTabs, g_active_session);
-                     if (idx >= 0) on_tab_close(idx, g_active_session);
-                     return 0;
-                }
-                if (c == 0x16) { /* Ctrl+V — handled via do_paste in WM_KEYDOWN */
-                    return 0;
-                }
-                if (c == 0x03 && g_ctrlc_swallow_char) {
-                    /* Ctrl+C copied a selection in WM_KEYDOWN — don't send SIGINT */
-                    g_ctrlc_swallow_char = false;
-                    return 0;
-                }
-                if (g_active_session->io.ctx) {
-                    /* Drain pending transport data so the write can
-                     * succeed in non-blocking mode.  Without this,
-                     * libssh2_channel_write returns EAGAIN when the
-                     * session has unread inbound data, and the retry
-                     * loop in the transport write blocks the UI thread
-                     * (preventing WM_TIMER / the transport poll from running)
-                     * — a deadlock that silently drops keystrokes. */
-                    g_active_session->io.poll(g_active_session->io.ctx,
-                                g_active_session->term,
-                                g_active_session->session_log,
-                                g_active_session->debug_log);
-                    g_active_session->io.write(g_active_session->io.ctx, &c, 1);
-                }
-                /* Only invalidate if we were scrolled back */
-                if (g_active_session->term->scrollback_offset != 0) {
-                    g_active_session->term->scrollback_offset = 0;
-                    update_scrollbar(hwnd);
-                    invalidate_terminal(hwnd);
-                }
-            }
+            key_on_char(hwnd, wParam);
             return 0;
+
+        case WM_SYSCHAR:
+            session_mark_user_active();
+            if (key_on_syschar(hwnd, wParam, lParam)) return 0;
+            break;  /* Alt+Space, Alt+Enter, ... : DefWindowProc */
+
+        case WM_KEYDOWN:
+            session_mark_user_active();
+            if (key_on_keydown(hwnd, wParam, lParam)) return 0;
+            break;  /* a character key: TranslateMessage has queued its WM_CHAR */
+
+        case WM_SYSKEYDOWN: {
+            session_mark_user_active();
+            SysKeyDownResult r = key_on_syskeydown(hwnd, wParam, lParam);
+            if (r == SYSKEYDOWN_HANDLED) return 0;
+            if (r == SYSKEYDOWN_SENT_AND_PASS)
+                /* Sent to the shell, but the key-down still reaches
+                 * DefWindowProc so Windows' "Alt pressed alone" tracking
+                 * clears as it would for any key it handled itself. */
+                return DefWindowProc(hwnd, msg, wParam, lParam);
+            break;  /* SYSKEYDOWN_NOT_HANDLED: Alt+F4, Alt+numpad, a lone Alt, ... */
         }
 
-        case WM_KEYDOWN: {
-            session_mark_user_active();
-            /* F11 — toggle fullscreen */
-            if (wParam == VK_F11) {
-                SendMessage(hwnd, WM_COMMAND, IDM_VIEW_FULLSCREEN, 0);
+        case WM_SYSKEYUP:
+            /* F10's key-up is where DefWindowProc would enter menu mode for
+             * it; keep it consumed like the key-down. A lone Alt tap's
+             * release, and the release after a chord passed through above,
+             * both reach DefWindowProc -- there is no swallow flag for Alt
+             * any more. */
+            if (wParam == VK_F10 && g_active_session && g_active_session->term)
                 return 0;
-            }
-            /* Ctrl+T — new tab */
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == (WPARAM)'T') {
-                on_tab_new();
-                return 0;
-            }
-            /* Ctrl+Space — toggle AI Assist panel */
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == VK_SPACE) {
-                on_ai_clicked();
-                return 0;
-            }
-            /* Ctrl+C — copy selection if one exists, otherwise fall through
-             * so WM_CHAR sends 0x03 (SIGINT) as before. Ctrl+Shift+C always
-             * copies (no-op if nothing selected) and never reaches the shell. */
-            if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == (WPARAM)'C') {
-                bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-                if (shift || g_selection.valid) {
-                    copy_selection_and_clear(hwnd);
-                    g_ctrlc_swallow_char = true;
-                    return 0;
-                }
-                /* No selection, no shift: let 0x03 go to the shell. */
-            }
-            /* Ctrl+V / Ctrl+Shift+V — paste with confirmation */
-            if ((GetKeyState(VK_CONTROL) & 0x8000) &&
-                (wParam == (WPARAM)'V' || wParam == (WPARAM)0x56)) {
-                do_paste(hwnd);
-                return 0;
-            }
-            /* Shift+Insert — alternative paste shortcut */
-            if ((GetKeyState(VK_SHIFT) & 0x8000) && wParam == VK_INSERT) {
-                do_paste(hwnd);
-                return 0;
-            }
-            /* Ctrl+= / Ctrl+- zoom keyboard shortcuts */
-            if (GetKeyState(VK_CONTROL) & 0x8000) {
-                if (wParam == VK_OEM_PLUS || wParam == (WPARAM)'=') {
-                    apply_zoom(hwnd, 1);
-                    return 0;
-                }
-                if (wParam == VK_OEM_MINUS || wParam == (WPARAM)'-') {
-                    apply_zoom(hwnd, -1);
-                    return 0;
-                }
-            }
-            if (g_active_session && g_active_session->term) {
-                const char *seq = NULL;
-                bool app_keys = g_active_session->term->app_cursor_keys;
-                switch (wParam) {
-                    case VK_UP:    seq = app_keys ? "\x1BOA" : "\x1B[A"; break;
-                    case VK_DOWN:  seq = app_keys ? "\x1BOB" : "\x1B[B"; break;
-                    case VK_RIGHT: seq = app_keys ? "\x1BOC" : "\x1B[C"; break;
-                    case VK_LEFT:  seq = app_keys ? "\x1BOD" : "\x1B[D"; break;
-                    case VK_HOME:  seq = "\x1B[H"; break;
-                    case VK_END:   seq = "\x1B[4~"; break; /* VT sequence for End */
-                    case VK_DELETE: seq = "\x1B[3~"; break;
-                    case VK_INSERT: seq = "\x1B[2~"; break;
-                    case VK_PRIOR: /* Page Up */
-                        g_active_session->term->scrollback_offset = scroll_page_up(
-                            g_active_session->term->scrollback_offset,
-                            g_active_session->term->rows,
-                            g_active_session->term->max_scrollback);
-                        update_scrollbar(hwnd);
-                        invalidate_terminal(hwnd);
-                        return 0;
-                    case VK_NEXT:  /* Page Down */
-                        g_active_session->term->scrollback_offset = scroll_page_down(
-                            g_active_session->term->scrollback_offset,
-                            g_active_session->term->rows);
-                        update_scrollbar(hwnd);
-                        invalidate_terminal(hwnd);
-                        return 0;
-                }
-                if (seq) {
-                    if (g_active_session->io.ctx) {
-                        g_active_session->io.poll(g_active_session->io.ctx,
-                                    g_active_session->term,
-                                    g_active_session->session_log,
-                                    g_active_session->debug_log);
-                        g_active_session->io.write(g_active_session->io.ctx, seq, strlen(seq));
-                    }
-                    if (g_active_session->term->scrollback_offset != 0) {
-                        g_active_session->term->scrollback_offset = 0;
-                        update_scrollbar(hwnd);
-                        invalidate_terminal(hwnd);
-                    }
-                    return 0;
-                }
-            }
-            break; /* Let DefWindowProc generate WM_CHAR for unhandled keys */
-        }
+            break;
+
+        case WM_KILLFOCUS:
+            /* Focus leaving the terminal (e.g. to the AI panel or another
+             * window) must not leave an armed one-shot for a keystroke that
+             * lands somewhere else entirely. */
+            key_oneshot_clear();
+            break;
 
         case WM_MOUSEWHEEL: {
             /* Ctrl+Scroll zooms the font */

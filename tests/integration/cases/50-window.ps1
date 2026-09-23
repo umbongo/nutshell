@@ -297,7 +297,11 @@ Invoke-Case "minimise_restore_repaints" @{} {
     # (see Get-TerminalAreaHash's doc comment in 10-terminal.ps1).
     Send-NutshellLine -Session $s -Line "clear; seq 1 200"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^200\s*$" -TimeoutSec 5) "seq output incomplete"
-    Send-NutshellKey -Session $s -Key PgUp -SettleMs 300
+    # Plain PgUp on the primary screen no longer reaches the shell (it only
+    # scrolls local history; see cases\90-keys.ps1's
+    # pgup_pages_on_alt_screen_and_scrolls_on_primary), so Shift+PgUp, which
+    # always scrolls history, is what drives the scroll-back here.
+    Send-NutshellChord -Session $s -Key PgUp -Shift -SettleMs 300
     $before = Join-Path $Artifacts "minimise_before.png"
     Save-NutshellScreenshot -Session $s -Path $before | Out-Null
 
@@ -435,9 +439,14 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
 # helper). What message APIs DO expose regardless of owner-draw -- and what
 # this case asserts -- is structure: top-level menu count, each submenu's
 # item count (separators included), and each item's real WM_COMMAND id in
-# order (GetMenuItemID returns 0 for a separator, the id itself otherwise),
-# hand-derived here from create_app_menu()'s call order and cross-checked
-# against src/ui/resource.h's IDM_* constants.
+# order (GetMenuItemID returns 0 for a separator, the id itself otherwise, and
+# -1 for a popup item such as the Edit menu's "Send Key" submenu -- the
+# NutshellNative Add-Type block above declares GetMenuItemID's return as a
+# plain `int`, so that comes back as -1 directly rather than the unsigned
+# 0xFFFFFFFF the Win32 docs describe), hand-derived here from
+# create_app_menu()'s call order and cross-checked against src/ui/resource.h's
+# IDM_* constants. The Edit menu's "Send Key" popup (special-keys design
+# section 4A) is walked as its own submenu (GetSubMenu(editMenu, 3)).
 if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "menus_open_and_list_items")) {
     $name = "menus_open_and_list_items"
     Write-Host ("[RUN ] " + $name)
@@ -452,10 +461,13 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
         $topCount = [NutshellNative]::GetMenuItemCount($hMenu)
         Assert-True ($topCount -eq 4) "expected 4 top-level menus (File/Edit/View/Help), got $topCount"
 
-        # 0 = separator; other values are the IDM_* constants from resource.h.
+        # 0 = separator; -1 = a popup item (submenu, walked separately below
+        # for Edit's "Send Key"); other values are the IDM_* constants from
+        # resource.h. New Edit layout: Copy, Paste, Select All, "Send Key"
+        # (popup), separator, Settings.
         $expected = @{
             0 = @(2001, 0, 2002, 2003, 0, 2004, 2005, 0, 2007, 0, 2006)  # File
-            1 = @(2010, 2011, 2012, 0, 2013)                              # Edit
+            1 = @(2010, 2011, 2012, -1, 0, 2013)                          # Edit
             2 = @(2020, 2022, 2021)                                       # View
             3 = @(2029, 0, 2030)                                          # Help
         }
@@ -471,9 +483,25 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
                 Assert-True ($id -eq $want[$j]) "$($names[$i]) item $j : id $id, expected $($want[$j])"
             }
         }
+
+        # The Edit menu's "Send Key" submenu (item index 3): F1..F12, sep,
+        # Page Up, Page Down, sep, Ctrl+V, Shift+Insert, Ctrl+=, Ctrl+-, sep,
+        # Send Next Key Raw, Send Next Key with Alt.
+        $editMenu = [NutshellNative]::GetSubMenu($hMenu, 1)
+        $sendKeyMenu = [NutshellNative]::GetSubMenu($editMenu, 3)
+        Assert-True ($sendKeyMenu -ne [IntPtr]::Zero) "Edit menu item 3 (Send Key) has no submenu"
+        $wantSendKey = @(2040, 2041, 2042, 2043, 2044, 2045, 2046, 2047, 2048, 2049, 2050, 2051, `
+                          0, 2052, 2053, 0, 2054, 2055, 2056, 2057, 0, 2058, 2059)
+        $countSK = [NutshellNative]::GetMenuItemCount($sendKeyMenu)
+        Assert-True ($countSK -eq $wantSendKey.Count) "Send Key submenu has $countSK item(s), expected $($wantSendKey.Count)"
+        for ($k = 0; $k -lt $countSK; $k++) {
+            $idSK = [NutshellNative]::GetMenuItemID($sendKeyMenu, $k)
+            Assert-True ($idSK -eq $wantSendKey[$k]) "Send Key item $k : id $idSK, expected $($wantSendKey[$k])"
+        }
+
         $path = Join-Path $Artifacts "$name.png"
         Save-NutshellScreenshot -Session $session -Path $path | Out-Null
-        $detail = "4 top-level menus; File 11 items, Edit 5, View 3, Help 3; every WM_COMMAND id matched resource.h/create_app_menu() in order (captions not API-observable -- owner-drawn, see case comment)"
+        $detail = "4 top-level menus; File 11 items, Edit 6 (incl. Send Key popup), View 3, Help 3; Send Key submenu 23 items (F1-F12, PgUp/PgDn, Ctrl+V/Shift+Insert/Ctrl+=/Ctrl+-, raw/Alt one-shots); every WM_COMMAND id matched resource.h/create_app_menu() in order (captions not API-observable -- owner-drawn, see case comment)"
         $ok = $true
     } catch {
         $detail = $_.Exception.Message

@@ -11,10 +11,18 @@
 #     through PostMessage(WM_CHAR / WM_KEYDOWN+WM_KEYUP) straight to the main
 #     window's queue — no foreground window, no focus, and no unlocked desktop
 #     required. The modifier chords the app reads via GetKeyState (Ctrl+C/V,
-#     Ctrl+Shift+C/V, Shift+Insert, Ctrl+= zoom) go through Send-NutshellChord,
-#     which attaches this thread's input state to the app's UI thread
-#     (AttachThreadInput) so a posted key sees the modifier down. Nothing in
-#     this module needs a foreground window or an unlocked desktop.
+#     Ctrl+Shift+C/V, Shift+Insert, Ctrl+= zoom, Ctrl+Shift+W/T) go through
+#     Send-NutshellChord, which attaches this thread's input state to the
+#     app's UI thread (AttachThreadInput) so a posted key sees the modifier
+#     down. Send-NutshellChord also takes -Alt: it sets VK_MENU/VK_LMENU in
+#     the shared keyboard-state table and posts WM_SYSKEYDOWN/WM_SYSKEYUP
+#     (WM_KEYDOWN/WM_KEYUP when Ctrl is also down) with lParam bit 29 (the
+#     context code) set, exactly as real Windows delivers an Alt-held key --
+#     the app's own TranslateMessage then synthesises the WM_SYSCHAR for
+#     Alt+letter, so this module never posts one itself. F10 (real Windows
+#     always delivers it as WM_SYSKEYDOWN/WM_SYSKEYUP, Alt or not) gets the
+#     same treatment in both Send-NutshellKey and Send-NutshellChord. Nothing
+#     in this module needs a foreground window or an unlocked desktop.
 #   * Dialogs (Session Manager, Settings, paste preview, passphrase prompt,
 #     host-key/error MessageBoxes, About) are driven the same posted way:
 #     GetDlgItem/EnumChildWindows to find a control by its resource id, then
@@ -269,6 +277,8 @@ $script:WM_NULL            = 0x0000
 $script:WM_CHAR            = 0x0102
 $script:WM_KEYDOWN         = 0x0100
 $script:WM_KEYUP           = 0x0101
+$script:WM_SYSKEYDOWN      = 0x0104
+$script:WM_SYSKEYUP        = 0x0105
 $script:WM_LBUTTONDOWN     = 0x0201
 $script:WM_LBUTTONUP       = 0x0202
 $script:MK_LBUTTON         = 0x0001
@@ -300,16 +310,21 @@ $script:LBN_SELCHANGE      = 1
 # real typing does. PgUp/PgDn/Home/End/arrows/Insert/F-keys ARE handled
 # directly in that switch and never produce a WM_CHAR either way.
 #
-# Letter keys are here for Send-NutshellChord's sake: window.c's WM_KEYDOWN
-# switch compares wParam against the character literals 'C'/'V'/'T', which are
-# exactly the VK codes 0x43/0x56/0x54. Add more as chords need them.
+# Letter/other keys are here for Send-NutshellChord's sake: window.c's
+# WM_KEYDOWN switch (and, for Alt+letter, its WM_SYSCHAR path) compares
+# wParam against character literals like 'C'/'V'/'T'/'W'/'F', which are
+# exactly the VK codes below (VK_SPACE and VK_DELETE are their own constants,
+# not character literals). Add more as chords need them: W (Ctrl+Shift+W tab
+# close), F (Alt+F reaches the shell), B (spare), Space (Ctrl+Space -> NUL),
+# Delete (special-keys encoding).
 $script:VK_MAP = @{
     Enter = 0x0D; Tab = 0x09; Escape = 0x1B; Backspace = 0x08
     PgUp = 0x21; PgDn = 0x22; Home = 0x24; End = 0x23
-    Up = 0x26; Down = 0x28; Left = 0x25; Right = 0x27; Insert = 0x2D
+    Up = 0x26; Down = 0x28; Left = 0x25; Right = 0x27; Insert = 0x2D; Delete = 0x2E
     F1 = 0x70; F2 = 0x71; F3 = 0x72; F4 = 0x73; F5 = 0x74; F6 = 0x75
     F7 = 0x76; F8 = 0x77; F9 = 0x78; F10 = 0x79; F11 = 0x7A; F12 = 0x7B
-    C = 0x43; T = 0x54; V = 0x56; Plus = 0xBB; Minus = 0xBD
+    C = 0x43; T = 0x54; V = 0x56; W = 0x57; F = 0x46; B = 0x42; Space = 0x20
+    Plus = 0xBB; Minus = 0xBD
 }
 $script:VK_EXTENDED = @(0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x2E)
 
@@ -458,14 +473,19 @@ function Start-NutshellLogging {
 }
 
 function New-NutshellKeyLParam {
-    <# Build a plausible WM_KEYDOWN/WM_KEYUP lParam: real scan code (via
-       MapVirtualKey), repeat count 1, the extended-key bit for the grey
-       nav-cluster keys, and (for a key-up) the transition-state/prev-state
-       bits a real key-up carries. Not exported -- internal to this module. #>
-    param([Parameter(Mandatory)] [byte] $Vk, [bool] $Extended = $false, [bool] $KeyUp = $false)
+    <# Build a plausible WM_KEYDOWN/WM_KEYUP (or WM_SYSKEYDOWN/WM_SYSKEYUP)
+       lParam: real scan code (via MapVirtualKey), repeat count 1, the
+       extended-key bit for the grey nav-cluster keys, and (for a key-up) the
+       transition-state/prev-state bits a real key-up carries. -Context sets
+       bit 29 (0x20000000), the "context code" a WM_SYSKEYDOWN/WM_SYSKEYUP
+       carries when Alt is down at the time (real Windows sets it on both the
+       down and the up); it is meaningless outside a SYS message and callers
+       leave it $false there. Not exported -- internal to this module. #>
+    param([Parameter(Mandatory)] [byte] $Vk, [bool] $Extended = $false, [bool] $KeyUp = $false, [bool] $Context = $false)
     $scan = [NutshellNative]::MapVirtualKey([uint32]$Vk, 0)   # MAPVK_VK_TO_VSC
     $l = [uint32]1 -bor ([uint32]$scan -shl 16)
     if ($Extended) { $l = $l -bor 0x01000000 }
+    if ($Context) { $l = $l -bor 0x20000000 }
     if ($KeyUp) { $l = $l -bor 0x40000000 -bor 0x80000000 }
     return [IntPtr][int64]$l
 }
@@ -500,6 +520,13 @@ function Send-NutshellKey {
        a real keypress). PgUp/PgDn/Home/End/arrows/Insert/F-keys ARE handled
        directly in that switch and act on WM_KEYDOWN alone.
 
+       F10 is the one exception: real Windows always delivers it (and
+       Shift+F10) as WM_SYSKEYDOWN/WM_SYSKEYUP, not WM_KEYDOWN/WM_KEYUP, even
+       with no Alt held -- historically because F10 alone used to activate the
+       menu bar -- so this posts the SYS pair for it (with the context bit,
+       lParam bit 29, clear, since Alt is not down). Every other key is
+       unaffected.
+
        -Hwnd sends the pair to another window of the app instead of the main
        one -- used for the paste preview's Escape, which its own modal loop
        (paste_dlg.c's `GetMessage(&msg, NULL, ...)` with an explicit
@@ -512,10 +539,13 @@ function Send-NutshellKey {
     $target = if ($Hwnd -ne [IntPtr]::Zero) { $Hwnd } else { $Session.Main }
     $vk = [byte]$script:VK_MAP[$Key]
     $ext = $script:VK_EXTENDED -contains $vk
+    $isF10 = ($Key -eq "F10")
+    $msgDown = if ($isF10) { $script:WM_SYSKEYDOWN } else { $script:WM_KEYDOWN }
+    $msgUp   = if ($isF10) { $script:WM_SYSKEYUP }   else { $script:WM_KEYUP }
     $down = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $false
     $up   = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $true
-    [NutshellNative]::PostMessage($target, $script:WM_KEYDOWN, [IntPtr]$vk, $down) | Out-Null
-    [NutshellNative]::PostMessage($target, $script:WM_KEYUP,   [IntPtr]$vk, $up)   | Out-Null
+    [NutshellNative]::PostMessage($target, $msgDown, [IntPtr]$vk, $down) | Out-Null
+    [NutshellNative]::PostMessage($target, $msgUp,   [IntPtr]$vk, $up)   | Out-Null
     Start-Sleep -Milliseconds $SettleMs
 }
 
@@ -544,16 +574,32 @@ function Send-NutshellChord {
        SIGINT, exactly as a real Ctrl+C does. Nothing here touches the input
        desktop, so it behaves identically locked, unlocked or disconnected.
 
-       -Key is a $script:VK_MAP name (C, V, Insert, Plus, ...); -Ctrl/-Shift
-       pick the modifiers. Both the generic (VK_CONTROL/VK_SHIFT) and the
-       left-hand (VK_LCONTROL/VK_LSHIFT) entries are set, as a real key press
-       does -- GetKeyState(VK_CONTROL) reports the generic one, but leaving the
-       side-specific entry clear would be an inconsistent table.
+       -Key is a $script:VK_MAP name (C, V, Insert, Plus, ...); -Ctrl/-Shift/
+       -Alt pick the modifiers. Both the generic (VK_CONTROL/VK_SHIFT/VK_MENU)
+       and the left-hand (VK_LCONTROL/VK_LSHIFT/VK_LMENU) entries are set, as
+       a real key press does -- GetKeyState(VK_CONTROL) reports the generic
+       one, but leaving the side-specific entry clear would be an inconsistent
+       table.
+
+       -Alt: real Windows delivers an Alt-held key as WM_SYSKEYDOWN/
+       WM_SYSKEYUP (not WM_KEYDOWN/WM_KEYUP) with lParam bit 29 (the "context
+       code") set on both the down and the up -- EXCEPT when Ctrl is also
+       down, where Windows still delivers plain WM_KEYDOWN/WM_KEYUP but keeps
+       bit 29 set. (The app tells Ctrl+Alt+letter from an AltGr character
+       by asking the keyboard layout with ToUnicodeEx, not by this bit.)
+       F10 is always posted as WM_SYSKEYDOWN/
+       WM_SYSKEYUP regardless of -Ctrl/-Alt (Windows does that for every F10,
+       historically because it alone used to activate the menu bar), with the
+       context bit only when -Alt is actually given. This function posts only
+       the key-down/up pair -- never a WM_SYSCHAR -- so the app's own
+       TranslateMessage is what synthesises the WM_SYSCHAR for Alt+letter,
+       exactly as it does for a real keystroke; nothing here may post one
+       itself, or a real send and a harness-posted one could double up.
 
        The saved table is restored and the input detached in a finally block,
-       so an assertion failure mid-case cannot leave a phantom Ctrl down. #>
+       so an assertion failure mid-case cannot leave a phantom Ctrl/Alt down. #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Key,
-          [switch] $Ctrl, [switch] $Shift, [int] $SettleMs = 500)
+          [switch] $Ctrl, [switch] $Shift, [switch] $Alt, [int] $SettleMs = 500)
     if (-not $script:VK_MAP.ContainsKey($Key)) {
         throw "Unknown key name '$Key' (known: $($script:VK_MAP.Keys -join ', '))"
     }
@@ -573,25 +619,34 @@ function Send-NutshellChord {
         [Array]::Copy($saved, $state, 256)
         if ($Ctrl)  { $state[0x11] = 0x80; $state[0xA2] = 0x80 }   # VK_CONTROL, VK_LCONTROL
         if ($Shift) { $state[0x10] = 0x80; $state[0xA0] = 0x80 }   # VK_SHIFT,   VK_LSHIFT
+        if ($Alt)   { $state[0x12] = 0x80; $state[0xA4] = 0x80 }   # VK_MENU,    VK_LMENU
         [NutshellNative]::SetKeyboardState($state) | Out-Null
         try {
-            $down = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $false
-            $up   = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $true
-            [NutshellNative]::PostMessage($Session.Main, $script:WM_KEYDOWN, [IntPtr]$vk, $down) | Out-Null
+            # F10 is always a SYS message on real Windows, Alt-without-Ctrl is
+            # a SYS message too (Ctrl+Alt stays a plain KEYDOWN/KEYUP pair but
+            # still carries the context bit) -- see the doc comment above.
+            $forceSys = ($Key -eq "F10") -or ($Alt -and -not $Ctrl)
+            $msgDown = if ($forceSys) { $script:WM_SYSKEYDOWN } else { $script:WM_KEYDOWN }
+            $msgUp   = if ($forceSys) { $script:WM_SYSKEYUP }   else { $script:WM_KEYUP }
+            $ctx = [bool]$Alt
+            $down = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $false -Context $ctx
+            $up   = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $true  -Context $ctx
+            [NutshellNative]::PostMessage($Session.Main, $msgDown, [IntPtr]$vk, $down) | Out-Null
             # The modifier must still be down in the shared table when the app
-            # pulls that WM_KEYDOWN off its queue, so wait for the UI thread to
-            # come back to us before letting go: a WM_NULL round trip returns
-            # only once the thread is pumping messages again (it answers sent
-            # messages from inside GetMessage, so this works even while the
-            # paste preview's modal loop owns the thread). Sent messages jump
-            # the queue ahead of posted ones, so the short sleep after it is
-            # what actually covers the dispatch of the key itself; 120 ms is
-            # far more than a WndProc branch needs and costs nothing.
+            # pulls that WM_KEYDOWN/WM_SYSKEYDOWN off its queue, so wait for
+            # the UI thread to come back to us before letting go: a WM_NULL
+            # round trip returns only once the thread is pumping messages
+            # again (it answers sent messages from inside GetMessage, so this
+            # works even while the paste preview's modal loop owns the
+            # thread). Sent messages jump the queue ahead of posted ones, so
+            # the short sleep after it is what actually covers the dispatch of
+            # the key itself; 120 ms is far more than a WndProc branch needs
+            # and costs nothing.
             $res = [IntPtr]::Zero
             [NutshellNative]::SendMessageTimeout($Session.Main, $script:WM_NULL,
                 [IntPtr]::Zero, [IntPtr]::Zero, 0, 2000, [ref]$res) | Out-Null
             Start-Sleep -Milliseconds 120
-            [NutshellNative]::PostMessage($Session.Main, $script:WM_KEYUP, [IntPtr]$vk, $up) | Out-Null
+            [NutshellNative]::PostMessage($Session.Main, $msgUp, [IntPtr]$vk, $up) | Out-Null
         } finally {
             [NutshellNative]::SetKeyboardState($saved) | Out-Null
         }
@@ -1176,15 +1231,17 @@ function Get-NutshellTabCount {
 
 function Close-NutshellTab {
     <# Make tab -Index active (Select-NutshellTab, a posted WM_LBUTTONDOWN to
-       the tab strip), then post Ctrl+W's WM_CHAR (0x17) to close the now-
-       active tab -- window.c's WM_CHAR handler special-cases 0x17
-       (on_tab_close on the active tab) independent of actual keyboard focus.
-       Both halves are posted, so this needs no foreground and works
-       desktop-locked. #>
+       the tab strip), then send Ctrl+Shift+W to close the now-active tab --
+       window.c's WM_KEYDOWN now special-cases Ctrl+Shift+W (on_tab_close on
+       the active tab, decided from GetKeyState with a swallow flag so no
+       WM_CHAR follows) independent of actual keyboard focus. Plain Ctrl+W
+       (WM_CHAR 0x17) no longer closes a tab -- it now reaches the shell
+       (readline kill-word, vim's window prefix), so this goes through
+       Send-NutshellChord instead of a bare posted WM_CHAR. That helper
+       already needs no foreground and works desktop-locked. #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int] $Index)
     Select-NutshellTab -Session $Session -Index $Index
-    [NutshellNative]::PostMessage($Session.Main, $script:WM_CHAR, [IntPtr]0x17, [IntPtr]::Zero) | Out-Null
-    Start-Sleep -Milliseconds 400
+    Send-NutshellChord -Session $Session -Key W -Ctrl -Shift -SettleMs 400
 }
 
 function Get-NutshellWindowText {
