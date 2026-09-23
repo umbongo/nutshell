@@ -4,6 +4,19 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-22 — merge counter refreshed
+
+Session: Claude desktop app, Windows dev box.
+Model: claude-fable-5-1, direct: a one-line count, verified with
+`git log --merges --first-parent 3f0f540..origin/main`.
+
+- **`memory/MEMORY.md`.** Merges since the 2026-09-21 marker: 6
+  (#33, #35, #36, #37, #39, #40), up from the 1 recorded at the
+  retrospective; refreshed 2026-09-23 before this landed.
+  The line now also records when the count was taken and where
+  `main` stood, so the next reader can tell a stale count from a
+  current one. Marker unchanged; no retrospective is due until 10.
+
 ## 2026-09-21 — steward folded into feature-workflow
 
 Session: Claude desktop app, Windows dev box.

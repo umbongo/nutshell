@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-09-21 (second edit: retrospective cadence).
+Last updated: 2026-09-23 (merge counter).
 
 ## Retrospective cadence (standing rule from the maintainer, 2026-09-21)
 
@@ -18,7 +18,8 @@ Last updated: 2026-09-21 (second edit: retrospective cadence).
   `list_pull_requests` (state closed, sort updated, desc) or
   `git log --merges --first-parent origin/main <marker>..`.
 - **Last retrospective:** 2026-09-21, marker commit `3f0f540` (merge of
-  PR #34). Merges since: 1 (PR #33). Update this line at every
+  PR #34). Merges since: 6 (PR #33, #35, #36, #37, #39, #40; counted
+  2026-09-23, `main` at `0696257`). Update this line at every
   retrospective.
 - A daily Routine in the maintainer's Claude account performs the count
   and starts the retrospective in a fresh session when it reaches 10. Any
