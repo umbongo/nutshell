@@ -275,3 +275,113 @@ int test_shell_prompt_double_gt_change_keeps_existing_results(void) {
     ASSERT_EQ(shell_prompt_is_continuation(">"), 1);
     TEST_END();
 }
+
+/* ---- shell_prompt_line_unambiguous() ----------------------------------
+ * The no-prefix dispatch safety check (dispatch_line_clear.h): true only
+ * for a bare prompt with nothing else typed on the line. */
+
+int test_shell_prompt_unambiguous_powershell_bare(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line_unambiguous("PS C:\\Users\\thoma>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_powershell_trailing_space(void) {
+    TEST_BEGIN();
+    /* PowerShell's real prompt has a trailing space after '>' -- trimmed
+     * away before the terminator check, same as shell_prompt_line(). */
+    ASSERT_EQ(shell_prompt_line_unambiguous("PS C:\\Users\\thoma> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_powershell_path_with_spaces_positive(void) {
+    TEST_BEGIN();
+    /* A directory name with spaces in it ("Program Files") must not be
+     * mistaken for typed content paused before the terminator -- the
+     * character right before '>' is 's', not whitespace, regardless of
+     * what earlier in the line contains. */
+    ASSERT_EQ(shell_prompt_line_unambiguous("PS C:\\Program Files> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_powershell_drive_root_positive(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line_unambiguous("PS C:\\> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_powershell_typed_redirect_negative(void) {
+    TEST_BEGIN();
+    /* The bug case: "ls -la >" ends in '>' too, but it's the redirection
+     * operator mid-command, with a space right before it -- not a prompt. */
+    ASSERT_EQ(shell_prompt_line_unambiguous("PS C:\\Users\\thoma> ls -la >"), 0);
+    /* shell_prompt_line() itself still reads this row as prompt-shaped --
+     * that is exactly the gap this stricter check closes. */
+    ASSERT_EQ(shell_prompt_line("PS C:\\Users\\thoma> ls -la >"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_cmd_bare(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line_unambiguous("C:\\Users\\thoma>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_cmd_typed_redirect_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line_unambiguous("C:\\Users\\thoma>dir >"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_bash_bare(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line_unambiguous("thomas@tompi:~$"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_bash_typed_text_negative(void) {
+    TEST_BEGIN();
+    /* "echo hi #" ends in '#', one of shell_prompt_line()'s terminator
+     * characters, but it is a shell comment the user is mid-typing, not a
+     * root prompt -- the space right before the '#' is what this guards
+     * against, regardless of shell family. */
+    ASSERT_EQ(shell_prompt_line_unambiguous("thomas@tompi:~$ echo hi #"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_single_char_prompt_positive(void) {
+    TEST_BEGIN();
+    /* Nothing precedes the terminator -- not "preceded by whitespace",
+     * so this passes. */
+    ASSERT_EQ(shell_prompt_line_unambiguous("$"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_tab_before_terminator_negative(void) {
+    TEST_BEGIN();
+    /* A tab directly before the terminator is rejected the same as a
+     * space. */
+    ASSERT_EQ(shell_prompt_line_unambiguous("PS C:\\Users\\thoma>\t>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_non_prompt_negative(void) {
+    TEST_BEGIN();
+    /* Anything shell_prompt_line() already rejects stays rejected. */
+    ASSERT_EQ(shell_prompt_line_unambiguous("Reading package lists..."), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_continuation_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line_unambiguous("dquote>"), 0);
+    ASSERT_EQ(shell_prompt_line_unambiguous(">"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_unambiguous_empty_and_null_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line_unambiguous(""), 0);
+    ASSERT_EQ(shell_prompt_line_unambiguous(NULL), 0);
+    TEST_END();
+}

@@ -39,6 +39,8 @@
 #include "chat_activity.h"
 #include "chat_approval.h"
 #include "cmd_batch.h"
+#include "dispatch_line_clear.h"
+#include "logger.h"
 #include "chat_listview.h"
 #include "ui_demo.h"
 #include "icons.h"
@@ -254,6 +256,25 @@ typedef struct {
                                        * the current stall; cleared the moment
                                        * the terminal produces output again, so
                                        * the line appears once per stall */
+    /* No-prefix safety wait (dispatch_line_clear.h): set the first tick
+     * the command about to be sent finds the line ambiguous (or a
+     * keystroke too recent) rather than clearly clear; 0 while not
+     * currently waiting on it. Mirrors dispatch_stall_reported's
+     * report-once behaviour, but unlike a continuation-prompt stall this
+     * one is bounded -- see dispatch_ambiguous_prompt_timed_out(). */
+    DWORD dispatch_ambiguous_since_tick;
+    int   dispatch_ambiguous_reported; /* 1 once this stall's status line
+                                         * has been posted */
+    /* Diagnostic-only (dispatch_log_stall_if_due(), %TEMP%\nutshell.log):
+     * dispatch_start_tick is set once per dispatch_start() and never
+     * touched again, for "settled after X ms". dispatch_last_progress_tick
+     * is set at dispatch_start() and every actual send (execute_command())
+     * -- a batch that hasn't moved either in >3 s is "stalled".
+     * dispatch_last_diag_log_tick rate-limits the stall log itself to
+     * once per 2 s so a long-stuck batch does not flood the file. */
+    DWORD dispatch_start_tick;
+    DWORD dispatch_last_progress_tick;
+    DWORD dispatch_last_diag_log_tick;
     int stream_phase;  /* 0=not started, 1=in thinking, 2=in content */
 
     /* AI notes for system prompt context */
@@ -1650,9 +1671,19 @@ static void execute_command(AiChatData *d, const char *cmd)
         return;
     }
 
-    /* Clear any existing text on the line before pasting:
-       Ctrl+E (end of line) + Ctrl+U (kill to start of line) */
-    io->write(io->ctx, "\x05\x15", 2);
+    /* Clear any existing text on the line before pasting -- but only for a
+     * shell known to treat Ctrl+E (end of line) + Ctrl+U (kill to start of
+     * line) as the readline line-editing idiom it is. PSReadLine
+     * (PowerShell) and cmd.exe both take those two bytes as literal input
+     * instead, which used to land "^E^U" in front of every dispatched
+     * command (see dispatch_line_clear.h). The caller (dispatch_tick) has
+     * already confirmed the line is otherwise empty and quiet since the
+     * user's last keystroke when no prefix is about to be sent -- see
+     * term_at_unambiguous_prompt() and dispatch_keystroke_too_recent(). */
+    if (dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d)) ==
+        DISPATCH_LINE_CLEAR_READLINE) {
+        io->write(io->ctx, "\x05\x15", 2);
+    }
 
     /* Send command + CR to the session (CR = Enter key, same as WM_CHAR) */
     io->write(io->ctx, cmd, (size_t)strlen(cmd));
@@ -1718,14 +1749,33 @@ static void dispatch_start(AiChatData *d, int batch_id)
     CmdBatch *batch = cmd_batch_find(&d->active_state->batches, batch_id);
     if (!batch || chat_approval_next_approved(&batch->q) < 0) return;
 
+    DWORD now = GetTickCount();
+
     d->dispatch_active = 1;
     d->dispatch_batch_id = batch->id;
     d->dispatch_seq = d->active_term ? d->active_term->write_seq : 0;
     d->dispatch_await_echo = 0;
-    d->dispatch_last_change_tick = GetTickCount();
+    d->dispatch_last_change_tick = now;
     d->dispatch_last_idx = -1;
     d->dispatch_sent_count = 0;
     d->dispatch_stall_reported = 0;
+    d->dispatch_ambiguous_since_tick = 0;
+    d->dispatch_ambiguous_reported = 0;
+    d->dispatch_start_tick = now;
+    d->dispatch_last_progress_tick = now;
+    d->dispatch_last_diag_log_tick = 0;
+
+    {
+        char line[160];
+        snprintf(line, sizeof(line),
+            "dispatch_start: batch=%d kind=%s shell=%s mode=%s",
+            batch->id,
+            active_session_kind(d) == SESSION_LOCAL ? "local" : "ssh",
+            active_shell_name(d) ? active_shell_name(d) : "(none)",
+            dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d))
+                == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE");
+        LOG_INFO(line);
+    }
 
     SetTimer(d->hwnd, TIMER_CMD_QUEUE, CMD_QUEUE_POLL_MS, NULL);
 
@@ -1778,6 +1828,8 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
     d->dispatch_active = 0;
     d->dispatch_stall_reported = 0;
+    d->dispatch_ambiguous_since_tick = 0;
+    d->dispatch_ambiguous_reported = 0;
 
     char continue_text[4096] = "";
     int have_continue = 0;
@@ -1836,6 +1888,160 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
     if (have_continue) send_continue_message(d, continue_text);
 }
 
+/* Diagnostic only, for dispatch_log_stall_if_due() below -- never used by
+ * term_at_prompt()/term_at_unambiguous_prompt() etc. themselves. Mirrors
+ * term_cursor_row_text()'s guards (src/term/buffer.c, private to that
+ * file) in the same order, so buf holding text vs. a reason lines up
+ * exactly with whether that function would have produced a row -- but
+ * explains a failure instead of returning 0 silently, and represents the
+ * row's raw content instead of that function's lossy ASCII-only copy
+ * (every non-ASCII codepoint becomes '?' there, and a real space cell is
+ * indistinguishable from a blank one). buf always ends up NUL-terminated
+ * within buf_size: on success, the row's text up to the cursor with
+ * control bytes and codepoints above ASCII written as \xNN and a blank
+ * cell as a literal space (so trailing spaces stay visible); on failure,
+ * the reason, including -- for the one case worth pinpointing -- the
+ * column and codepoint of the non-blank cell found after the cursor.
+ * Returns 1/0 matching term_cursor_row_text()'s own return. */
+static int describe_cursor_row(const Terminal *term, char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+    buf[0] = '\0';
+
+    if (!term) { snprintf(buf, buf_size, "no terminal"); return 0; }
+    if (term->alt_screen_active) {
+        snprintf(buf, buf_size, "alt screen active");
+        return 0;
+    }
+    if (term->cursor.row < 0 || term->cursor.row >= term->rows) {
+        snprintf(buf, buf_size, "cursor row %d out of range [0,%d)",
+                 term->cursor.row, term->rows);
+        return 0;
+    }
+    if (term->cursor.col < 0) {
+        snprintf(buf, buf_size, "cursor col %d < 0", term->cursor.col);
+        return 0;
+    }
+
+    /* term_screen_to_phys() (term.h) -- the exact mapping
+     * term_cursor_row_text() itself uses -- not a hand-rolled copy. This
+     * diagnostic's own former copy added a `logical < lines_count` check
+     * that production's term_cursor_row_text() no longer has (see
+     * term_screen_to_phys()'s comment): that extra check is what made
+     * this very function log "logical row 7 out of range [0,1)" for the
+     * regression report that led here -- the diagnostic was reproducing
+     * the bug it was added to diagnose, not just describing it. */
+    int physical = term_screen_to_phys(term, term->cursor.row);
+    if (physical < 0 || physical >= term->lines_capacity) {
+        snprintf(buf, buf_size, "physical row %d out of range [0,%d)",
+                 physical, term->lines_capacity);
+        return 0;
+    }
+    TermRow *row = term->lines[physical];
+    if (!row) { snprintf(buf, buf_size, "row slot empty"); return 0; }
+
+    int col = term->cursor.col;
+    if (col > term->cols) col = term->cols;
+
+    for (int c = col; c < row->len && c < term->cols; c++) {
+        uint32_t cp = row->cells[c].codepoint;
+        if (cp != 0 && cp != ' ') {
+            snprintf(buf, buf_size,
+                     "non-blank cell after cursor: column %d, U+%04X",
+                     c, (unsigned)cp);
+            return 0;
+        }
+    }
+
+    size_t pos = 0;
+    for (int i = 0; i < col && pos + 5 < buf_size; i++) {
+        uint32_t cp = row->cells[i].codepoint;
+        if (cp == 0) cp = ' ';
+        if (cp >= 0x20 && cp < 0x7F) {
+            buf[pos++] = (char)cp;
+        } else {
+            int n = snprintf(buf + pos, buf_size - pos, "\\x%02X",
+                              cp <= 0xFFu ? (unsigned)cp : 0xFFu);
+            if (n < 0) break;
+            pos += (size_t)n;
+        }
+    }
+    buf[pos < buf_size ? pos : buf_size - 1] = '\0';
+    return 1;
+}
+
+/* Diagnostic only, added for a 2026-09-25 regression report: a maintainer's
+ * single-command PowerShell batch ran to completion in the terminal but
+ * the AI panel never settled -- card stuck "running" forever, no status
+ * line, so nothing in the product's own UI said why. A live reproduction
+ * against a real ConPTY-hosted PowerShell could not reproduce it (see the
+ * wintest case below), which points at something particular to the
+ * reporter's own machine/session -- this exists to capture that, without
+ * asking for a debugger attach. Logs at LOG_INFO (%TEMP%\nutshell.log,
+ * always on -- see init_app_log(), src/main.c) every field the settle
+ * gate (`ready = !dispatch_await_echo && quiet && term_at_prompt(term)`,
+ * dispatch_tick() below) and the no-prefix safety checks actually read,
+ * but only once a batch has gone >3 s without sending a command or
+ * settling (d->dispatch_last_progress_tick), and at most once every 2 s
+ * after that (d->dispatch_last_diag_log_tick) -- cheap in the case that
+ * matters (nothing happening) and silent otherwise. Never logs command
+ * text beyond the cursor row (which may hold whatever the user typed
+ * there -- acceptable for a local diagnostic log -- but never the AI
+ * conversation). */
+static void dispatch_log_stall_if_due(AiChatData *d, CmdBatch *batch)
+{
+    if (!d || !batch) return;
+
+    DWORD now = GetTickCount();
+    if (now - d->dispatch_last_progress_tick <= 3000u) return;
+    if (d->dispatch_last_diag_log_tick != 0 &&
+        now - d->dispatch_last_diag_log_tick < 2000u) return;
+    d->dispatch_last_diag_log_tick = now;
+
+    Terminal *term = d->active_term;
+
+    int next_idx = chat_approval_next_approved(&batch->q);
+    unsigned long seq = term ? term->write_seq : 0;
+    int quiet = (int)((now - d->dispatch_last_change_tick) >= PROMPT_QUIET_MS);
+    int at_prompt = term_at_prompt(term);
+    int unambiguous = term_at_unambiguous_prompt(term);
+    int continuation = term_at_continuation_prompt(term);
+
+    DispatchLineClearMode mode = dispatch_line_clear_mode(
+        active_session_kind(d), active_shell_name(d));
+
+    char keystroke_desc[24] = "none";
+    if (d->active_io && d->active_io->last_input_tick)
+        snprintf(keystroke_desc, sizeof(keystroke_desc), "%lu",
+                 (unsigned long)(now - *d->active_io->last_input_tick));
+
+    char row_desc[220];
+    (void)describe_cursor_row(term, row_desc, sizeof(row_desc));
+
+    char idx_desc[16];
+    if (next_idx >= 0)
+        snprintf(idx_desc, sizeof(idx_desc), "%d", next_idx);
+    else
+        snprintf(idx_desc, sizeof(idx_desc), "settle");
+
+    char line[600];
+    snprintf(line, sizeof(line),
+        "dispatch stall: batch=%d next=%s sent=%d await_echo=%d "
+        "quiet=%d(%lums) write_seq=%lu/%lu at_prompt=%d unambiguous=%d "
+        "continuation=%d mode=%s keystroke_ms=%s alt_screen=%d "
+        "cursor=%d,%d term=%dx%d row=\"%s\"",
+        batch->id, idx_desc, d->dispatch_sent_count, d->dispatch_await_echo,
+        quiet, (unsigned long)(now - d->dispatch_last_change_tick),
+        seq, d->dispatch_seq, at_prompt, unambiguous, continuation,
+        mode == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE",
+        keystroke_desc,
+        term ? (int)term->alt_screen_active : -1,
+        term ? term->cursor.row : -1, term ? term->cursor.col : -1,
+        term ? term->rows : -1, term ? term->cols : -1,
+        row_desc);
+    LOG_INFO(line);
+}
+
 /* TIMER_CMD_QUEUE tick: advance the dispatcher (on d->dispatch_batch_id)
  * by at most one command. Tracks "quiet" (no terminal writes) and
  * "changed since the last send" (dispatch_await_echo) off
@@ -1872,6 +2078,8 @@ static void dispatch_tick(AiChatData *d)
         d->dispatch_active = 0;
         d->dispatch_batch_id = 0;
         d->dispatch_stall_reported = 0;
+        d->dispatch_ambiguous_since_tick = 0;
+        d->dispatch_ambiguous_reported = 0;
         if (d->hSendBtn) {
             SetWindowText(d->hSendBtn, ">");
             InvalidateRect(d->hSendBtn, NULL, TRUE);
@@ -1879,13 +2087,22 @@ static void dispatch_tick(AiChatData *d)
         return;
     }
 
+    dispatch_log_stall_if_due(d, batch);
+
     unsigned long seq = d->active_term->write_seq;
     if (seq != d->dispatch_seq) {
         d->dispatch_seq = seq;
         d->dispatch_last_change_tick = GetTickCount();
         d->dispatch_await_echo = 0;
         /* Output means the stall (if there was one) is over: the next one
-         * gets its own status line. */
+         * gets its own status line. The ambiguous-prompt wait is *not*
+         * reset here, deliberately: a command that updates a line ending
+         * in something prompt-shaped (a progress bar's "... 50 %",
+         * redirection's "... >") on every burst of output would otherwise
+         * re-arm and re-report every cycle without ever timing out --
+         * dispatch_ambiguous_since_tick/_reported are cleared only when
+         * the check actually passes, or the batch starts, cancels or
+         * finishes (see below and dispatch_start()/dispatch_cancel()). */
         d->dispatch_stall_reported = 0;
     }
 
@@ -1914,8 +2131,114 @@ static void dispatch_tick(AiChatData *d)
 
     int idx = chat_approval_next_approved(&batch->q);
     if (idx >= 0) {
-        if (d->dispatch_last_idx >= 0)
+        if (d->dispatch_last_idx >= 0) {
             chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
+            /* Sync the display now, not only right before the next send
+             * below: the checks that follow can return without sending
+             * anything this tick (a no-prefix wait, possibly for several
+             * ticks in a row), and the card for the command that just
+             * finished must not sit showing "running" for that whole
+             * wait. */
+            chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 0);
+            if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        }
+
+        /* For a local shell that gets no clear-line prefix (PowerShell,
+         * cmd, custom, or one not yet resolved -- see execute_command()
+         * and dispatch_line_clear.h; SSH always gets the prefix, whatever
+         * its CmdPlatform), term_at_prompt()'s loose check above -- the
+         * cursor row simply ends in a prompt character -- is not enough to
+         * send on: "PS C:\Users\thoma> ls -la >" also ends in '>' (a
+         * redirection operator mid-command) and would have the AI's
+         * command appended to a line the user is still typing. A readline
+         * shell (or any SSH session) always gets the Ctrl+E Ctrl+U prefix
+         * regardless of what is on the line first, so the loose check
+         * already covers it -- this block runs only for the no-prefix
+         * path, and only here (inside idx >= 0, after the previous entry
+         * is marked completed), so a fully-sent batch settling below is
+         * never at risk of it and every card reflects reality before any
+         * cancel below. */
+        if (dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d)) ==
+                DISPATCH_LINE_CLEAR_NONE) {
+            DWORD now_tick = GetTickCount();
+
+            /* A keystroke landed too recently to trust the cursor row
+             * (ConPTY echoes asynchronously, so a character just typed
+             * but not yet echoed is invisible to the row text below --
+             * see dispatch_keystroke_too_recent()). Delay silently: this
+             * is not "an ambiguous prompt" -- it resolves on its own the
+             * moment the echo catches up (almost always well under a
+             * second), so it must not post the status line below, nor
+             * start or advance the 5 s cancel clock -- only a prompt row
+             * that is genuinely ambiguous does either of those.
+             * last_input_tick (SessionIo.last_input_tick,
+             * src/term/session_io.h) points at Session.last_term_input_tick
+             * specifically, bumped only where a keystroke or paste is
+             * actually written to *this* terminal's session -- not AI-panel
+             * typing or mouse-wheel scrolling, neither of which can glue
+             * text onto a dispatched command, so typing the AI's next
+             * question cannot stall or cancel this batch. NULL when
+             * nothing tracks one for this session, in which case there is
+             * nothing to guard against. */
+            if (d->active_io && d->active_io->last_input_tick) {
+                unsigned long since_keystroke = (unsigned long)
+                    (now_tick - *d->active_io->last_input_tick);
+                if (dispatch_keystroke_too_recent(since_keystroke))
+                    return;
+            }
+
+            /* The stricter, bare-prompt-only check: an ordinary prompt can
+             * legitimately have a space right before its terminator (cmd's
+             * default "$P $G" renders as "C:\x >"; a themed prompt like
+             * "[main] >"), so this alone must not cancel the batch
+             * outright. */
+            if (!term_at_unambiguous_prompt(d->active_term)) {
+                /* Not something waiting out can necessarily fix -- unlike
+                 * a continuation prompt, finishing the command does not
+                 * make an oddly-shaped prompt stop looking ambiguous --
+                 * but a single failed check must not cancel outright
+                 * either: report once and keep waiting, the same pattern
+                 * as the continuation-prompt stall above, and cancel only
+                 * once the condition has persisted past
+                 * DISPATCH_AMBIGUOUS_PROMPT_TIMEOUT_MS (see
+                 * dispatch_line_clear.h for why that bound exists and how
+                 * it was chosen). The timer and the report-once flag are
+                 * cleared only when this check passes below, or the batch
+                 * starts, cancels or finishes -- never merely because
+                 * output arrived (see the write_seq handling above) --
+                 * so a command that keeps refreshing a prompt-shaped line
+                 * cannot re-arm this every burst without ever timing out. */
+                if (d->dispatch_ambiguous_since_tick == 0)
+                    d->dispatch_ambiguous_since_tick = now_tick;
+
+                unsigned long since_ambiguous = (unsigned long)
+                    (now_tick - d->dispatch_ambiguous_since_tick);
+
+                if (dispatch_ambiguous_prompt_timed_out(since_ambiguous)) {
+                    dispatch_cancel(d,
+                        "[not sent: the input line isn't empty, or the "
+                        "prompt ends with a space before its last "
+                        "character]", 1);
+                    return;
+                }
+
+                if (!d->dispatch_ambiguous_reported) {
+                    d->dispatch_ambiguous_reported = 1;
+                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                        "[not sent yet: the input line isn't empty, or the "
+                        "prompt ends with a space before its last "
+                        "character. Waiting...]");
+                    if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                }
+                return;
+            }
+
+            /* Clear -- reset the wait so a later, unrelated ambiguity
+             * (a different command, later in the batch) gets its own
+             * timeout window and its own status line. */
+            d->dispatch_ambiguous_since_tick = 0;
+            d->dispatch_ambiguous_reported = 0;
+        }
 
         /* N = commands already sent plus everything still APPROVED right
          * now (idx included) -- so the label tracks correctly even when
@@ -1935,6 +2258,7 @@ static void dispatch_tick(AiChatData *d)
         d->dispatch_last_idx = idx;
         d->dispatch_sent_count++;
         d->dispatch_await_echo = 1;
+        d->dispatch_last_progress_tick = GetTickCount();
 
         float now = (float)GetTickCount() / 1000.0f;
         chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now);
@@ -1950,6 +2274,14 @@ static void dispatch_tick(AiChatData *d)
          * continue. */
         if (d->dispatch_last_idx >= 0)
             chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
+
+        {
+            char line[96];
+            snprintf(line, sizeof(line), "settled batch %d after %lu ms",
+                     batch->id,
+                     (unsigned long)(GetTickCount() - d->dispatch_start_tick));
+            LOG_INFO(line);
+        }
 
         int batch_id = batch->id;
         int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;
@@ -1983,6 +2315,8 @@ static void dispatch_tick(AiChatData *d)
         d->dispatch_active = 0;
         d->dispatch_batch_id = 0;
         d->dispatch_stall_reported = 0;
+        d->dispatch_ambiguous_since_tick = 0;
+        d->dispatch_ambiguous_reported = 0;
 
         chat_msg_batch_settle(&d->msg_list, batch_id);
         cmd_batch_remove(&d->active_state->batches, batch_id);

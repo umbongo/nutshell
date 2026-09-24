@@ -292,8 +292,14 @@ void term_scroll(Terminal *term) {
     }
 }
 
-/* Helper: convert screen row (0-based) to physical ring-buffer index */
-static int screen_to_phys(Terminal *term, int screen_row) {
+/* Convert screen row (0-based) to physical ring-buffer index. Declared in
+ * term.h (see there for the full rationale) so every screen-row consumer
+ * -- inside this file and out -- shares this exact mapping instead of
+ * keeping a copy that can drift out of step, which is exactly what
+ * produced the bug that comment describes. const Terminal* so
+ * term_cursor_row_text() below, which only ever sees one, can call it
+ * too. */
+int term_screen_to_phys(const Terminal *term, int screen_row) {
     int top = (term->lines_count >= term->rows)
             ? (term->lines_count - term->rows) : 0;
     return (term->lines_start + top + screen_row) % term->lines_capacity;
@@ -327,18 +333,18 @@ void term_scroll_up(Terminal *term, int top, int bot, int n) {
         /* Save the chunk row pointers that will be recycled */
         TermRow *saved[64];
         for (int i = 0; i < chunk; i++)
-            saved[i] = term->lines[screen_to_phys(term, top + i)];
+            saved[i] = term->lines[term_screen_to_phys(term, top + i)];
 
         /* Shift rows [top+chunk .. bot] up to [top .. bot-chunk] */
         for (int i = top; i <= bot - chunk; i++) {
-            int dst = screen_to_phys(term, i);
-            int src = screen_to_phys(term, i + chunk);
+            int dst = term_screen_to_phys(term, i);
+            int src = term_screen_to_phys(term, i + chunk);
             term->lines[dst] = term->lines[src];
         }
 
         /* Place recycled (cleared) rows at [bot-chunk+1 .. bot] */
         for (int i = 0; i < chunk; i++) {
-            int idx = screen_to_phys(term, bot - chunk + 1 + i);
+            int idx = term_screen_to_phys(term, bot - chunk + 1 + i);
             term->lines[idx] = saved[i];
             term_row_fill(saved[i], term->cols, term->current_attr);
         }
@@ -348,7 +354,7 @@ void term_scroll_up(Terminal *term, int top, int bot, int n) {
 
     /* Mark all rows in the region dirty */
     for (int i = top; i <= bot; i++)
-        term->lines[screen_to_phys(term, i)]->dirty = true;
+        term->lines[term_screen_to_phys(term, i)]->dirty = true;
 }
 
 void term_scroll_down(Terminal *term, int top, int bot, int n) {
@@ -366,18 +372,18 @@ void term_scroll_down(Terminal *term, int top, int bot, int n) {
         /* Save the chunk row pointers that will be recycled (bottom of region) */
         TermRow *saved[64];
         for (int i = 0; i < chunk; i++)
-            saved[i] = term->lines[screen_to_phys(term, bot - chunk + 1 + i)];
+            saved[i] = term->lines[term_screen_to_phys(term, bot - chunk + 1 + i)];
 
         /* Shift rows [top .. bot-chunk] down to [top+chunk .. bot] */
         for (int i = bot - chunk; i >= top; i--) {
-            int dst = screen_to_phys(term, i + chunk);
-            int src = screen_to_phys(term, i);
+            int dst = term_screen_to_phys(term, i + chunk);
+            int src = term_screen_to_phys(term, i);
             term->lines[dst] = term->lines[src];
         }
 
         /* Place recycled (cleared) rows at [top .. top+chunk-1] */
         for (int i = 0; i < chunk; i++) {
-            int idx = screen_to_phys(term, top + i);
+            int idx = term_screen_to_phys(term, top + i);
             term->lines[idx] = saved[i];
             term_row_fill(saved[i], term->cols, term->current_attr);
         }
@@ -387,14 +393,14 @@ void term_scroll_down(Terminal *term, int top, int bot, int n) {
 
     /* Mark all rows in the region dirty */
     for (int i = top; i <= bot; i++)
-        term->lines[screen_to_phys(term, i)]->dirty = true;
+        term->lines[term_screen_to_phys(term, i)]->dirty = true;
 }
 
 void term_clear_dirty(Terminal *term)
 {
     if (!term) return;
     for (int i = 0; i < term->rows; i++) {
-        int idx = screen_to_phys(term, i);
+        int idx = term_screen_to_phys(term, i);
         if (idx >= 0 && idx < term->lines_capacity && term->lines[idx])
             term->lines[idx]->dirty = false;
     }
@@ -404,7 +410,7 @@ bool term_has_dirty_rows(Terminal *term)
 {
     if (!term) return false;
     for (int i = 0; i < term->rows; i++) {
-        int idx = screen_to_phys(term, i);
+        int idx = term_screen_to_phys(term, i);
         if (idx >= 0 && idx < term->lines_capacity &&
             term->lines[idx] && term->lines[idx]->dirty)
             return true;
@@ -416,7 +422,7 @@ void term_mark_all_dirty(Terminal *term)
 {
     if (!term) return;
     for (int i = 0; i < term->rows; i++) {
-        int idx = screen_to_phys(term, i);
+        int idx = term_screen_to_phys(term, i);
         if (idx >= 0 && idx < term->lines_capacity && term->lines[idx])
             term->lines[idx]->dirty = true;
     }
@@ -480,7 +486,7 @@ void term_alt_screen_exit(Terminal *term)
      * When lines_count < rows (sparse buffer), rows beyond lines_count
      * are still visible on screen and must be repainted. */
     for (int i = 0; i < term->rows; i++) {
-        int idx = screen_to_phys(term, i);
+        int idx = term_screen_to_phys(term, i);
         if (idx >= 0 && idx < term->lines_capacity && term->lines[idx])
             term->lines[idx]->dirty = true;
     }
@@ -504,13 +510,14 @@ static int term_cursor_row_text(const Terminal *term, char *buf, size_t buf_size
     if (term->cursor.row < 0 || term->cursor.row >= term->rows) return 0;
     if (term->cursor.col < 0) return 0;
 
-    /* Same screen-row -> physical-ring-index mapping as screen_to_phys(),
-     * kept const-correct here since this takes a const Terminal*. */
-    int top = (term->lines_count >= term->rows)
-            ? (term->lines_count - term->rows) : 0;
-    int logical = top + term->cursor.row;
-    if (logical < 0 || logical >= term->lines_count) return 0;
-    int physical = (term->lines_start + logical) % term->lines_capacity;
+    /* term_screen_to_phys() -- the exact mapping every other screen-row
+     * consumer in this file uses -- not a second copy of it. No
+     * `logical < lines_count` check: the row's slot is guaranteed
+     * allocated and non-NULL for the whole visible screen regardless of
+     * lines_count (term_init()/term_reflow_buffer() fill every slot up to
+     * lines_capacity up front), so requiring it was always wrong, not
+     * just incomplete -- see term_screen_to_phys()'s own comment. */
+    int physical = term_screen_to_phys(term, term->cursor.row);
     if (physical < 0 || physical >= term->lines_capacity) return 0;
     TermRow *row = term->lines[physical];
     if (!row) return 0;
@@ -557,4 +564,11 @@ int term_at_continuation_prompt(const Terminal *term)
     char buf[1024];
     if (!term_cursor_row_text(term, buf, sizeof(buf))) return 0;
     return shell_prompt_is_continuation(buf);
+}
+
+int term_at_unambiguous_prompt(const Terminal *term)
+{
+    char buf[1024];
+    if (!term_cursor_row_text(term, buf, sizeof(buf))) return 0;
+    return shell_prompt_line_unambiguous(buf);
 }

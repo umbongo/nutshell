@@ -54,7 +54,14 @@ size_t selection_extract_text(const Selection *sel, const Terminal *term,
 
     for (int row = r0; row <= r1; row++) {
         int logical = vis_start + row;
-        if (logical < 0 || logical >= term->lines_count) continue;
+        /* term_logical_rows(), not lines_count directly: a selection can
+         * cover a row in the sparse gap right after a resize (lines_count
+         * < rows, but every row of the new screen is real and written
+         * to -- see term.h) just as easily as older, already-scrolled
+         * content, and Ctrl+C copying that row as blank would be the
+         * user-visible version of the bug that left term_at_prompt()
+         * false forever in the same situation. */
+        if (logical < 0 || logical >= term_logical_rows(term)) continue;
         int physical = (term->lines_start + logical) % term->lines_capacity;
         TermRow *trow = term->lines[physical];
         if (!trow) continue;

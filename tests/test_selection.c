@@ -118,6 +118,36 @@ int test_sel_extract_single_row(void)
     TEST_END();
 }
 
+/* Regression (2026-09-25): in the sparse-buffer state right after a
+ * resize (lines_count < rows -- term_screen_to_phys()'s comment,
+ * src/term/term.h), a row can be genuinely on screen and selectable
+ * (drag-select still clamps to term_rows, not lines_count) yet sit past
+ * lines_count. selection_extract_text() used to skip any such row
+ * silently, so Ctrl+C after selecting freshly-typed text in a just-resized
+ * window could copy blank lines instead. Same 50-rows-shrunk-to-29
+ * reproduction as the term_at_prompt()/term_extract_last_n() regression
+ * tests (test_term.c, test_term_extract.c). */
+int test_sel_extract_sparse_after_resize_shrink(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(50, 76, 3000);
+    term_resize(t, 29, 76);
+    ASSERT_EQ(t->lines_count, 1);
+
+    feed(t, "line one\r\nline two");
+    ASSERT_TRUE(t->cursor.row >= t->lines_count);
+
+    /* Select all of screen row 1 ("line two"), the sparse row. */
+    Selection sel = { .start_row = 1, .start_col = 0, .end_row = 1, .end_col = 7 };
+    char buf[64];
+    size_t n = selection_extract_text(&sel, t, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_EQ(strcmp(buf, "line two"), 0);
+
+    term_free(t);
+    TEST_END();
+}
+
 int test_sel_extract_multi_row(void)
 {
     TEST_BEGIN();
