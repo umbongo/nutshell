@@ -164,6 +164,32 @@ int test_approval_add_embedded_newline_rejected(void) {
     TEST_END();
 }
 
+/* Same defense in depth, for a UTF-8-encoded C1 control (U+009B) -- not a
+ * raw byte < 0x20, so it needs the shared text_has_unsafe_command_char()
+ * classifier (src/core/paste_filter.h) rather than a plain byte scan. */
+int test_approval_add_embedded_c1_rejected(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    int idx = chat_approval_add(&q, "echo ok\xC2\x9Brm -rf ~", CMD_PLATFORM_LINUX);
+    ASSERT_EQ(idx, -1);
+    ASSERT_EQ(q.count, 0);
+    TEST_END();
+}
+
+/* And for a bidi override (U+202E RIGHT-TO-LEFT OVERRIDE): could make the
+ * approval card show the command in an order that doesn't match what
+ * actually runs. */
+int test_approval_add_embedded_bidi_override_rejected(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    int idx = chat_approval_add(&q, "echo ok\xE2\x80\xAErm -rf ~", CMD_PLATFORM_LINUX);
+    ASSERT_EQ(idx, -1);
+    ASSERT_EQ(q.count, 0);
+    TEST_END();
+}
+
 /* chat_approval_add() rejects rather than clamps a command too long for
  * ApprovalEntry.command (spec 2026-09-23-command-dispatch-states-design.md
  * section 1) -- a command that doesn't fit must not run with its tail

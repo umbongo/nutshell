@@ -33,6 +33,7 @@
 #include "resource.h"
 #include "ai_dock.h"
 #include "string_utils.h"
+#include "paste_filter.h"
 #include "chat_msg.h"
 #include "chat_thinking.h"
 #include "chat_activity.h"
@@ -1630,18 +1631,6 @@ static void send_user_message(AiChatData *d)
     ai_attachment_free(&d->pending_attachment);
 }
 
-/* Defense in depth against C1: even though ai_extract_commands() and
- * chat_approval_add() already refuse a command containing a raw control
- * byte, refuse to write one to the channel here too -- this is the last
- * point before the bytes reach the remote shell. */
-static int command_has_control_char(const char *cmd)
-{
-    for (const unsigned char *p = (const unsigned char *)cmd; *p; p++) {
-        if (*p < 0x20 || *p == 0x7F) return 1;
-    }
-    return 0;
-}
-
 static void execute_command(AiChatData *d, const char *cmd)
 {
     if (!d || !cmd || !cmd[0]) return;
@@ -1652,7 +1641,14 @@ static void execute_command(AiChatData *d, const char *cmd)
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
         return;
     }
-    if (command_has_control_char(cmd)) {
+    /* Defense in depth: even though ai_extract_commands() and
+     * chat_approval_add() already refuse a command containing a raw
+     * control byte, a UTF-8-encoded C1 control, or a bidi override/isolate
+     * character, refuse to write one to the channel here too -- this is
+     * the last point before the bytes reach the remote shell. Shared with
+     * paste_filter_controls() -- see text_has_unsafe_command_char() in
+     * src/core/paste_filter.h. */
+    if (text_has_unsafe_command_char(cmd)) {
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
             "[command rejected: control characters inside an EXEC block]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
@@ -3802,8 +3798,9 @@ next_coalesce:;
                     snprintf(note, sizeof(note),
                         "NOTE: %d EXEC block(s) were rejected because they "
                         "contained control characters (newline, tab, "
-                        "escape). Put exactly one single-line command in "
-                        "each EXEC block.", rejected);
+                        "escape, etc.) or bidirectional text formatting "
+                        "characters. Put exactly one single-line command "
+                        "in each EXEC block.", rejected);
                     EnterCriticalSection(&d->cs);
                     ai_conv_add(&src->conv, AI_ROLE_USER, note);
                     LeaveCriticalSection(&d->cs);
@@ -3926,7 +3923,8 @@ next_coalesce:;
                 char rej_note[256];
                 snprintf(rej_note, sizeof(rej_note),
                     "NOTE: %d EXEC block(s) were rejected because they "
-                    "contained control characters (newline, tab, escape). "
+                    "contained control characters (newline, tab, escape, "
+                    "etc.) or bidirectional text formatting characters. "
                     "Put exactly one single-line command in each EXEC "
                     "block.", rejected);
                 EnterCriticalSection(&d->cs);
@@ -4356,10 +4354,26 @@ next_coalesce:;
             /* Abort and orphan every reply in flight -- the active session's
              * and any background tab's -- and put those sessions back to
              * idle: the threads free their own streams, and a panel built
-             * later (undock/redock) starts with no stale busy flag. */
-            while (d->streams.count > 0)
-                abort_session_stream(d,
-                    (AiSessionState *)ai_stream_table_owner_at(&d->streams, 0));
+             * later (undock/redock) starts with no stale busy flag.
+             *
+             * A table entry can have a NULL owner (defensive: nothing
+             * today launches a stream with d->active_state NULL, but
+             * nothing guarantees it never will). abort_session_stream()
+             * no-ops on a NULL state without touching the table at all, so
+             * looping on d->streams.count while resolving owner-at-slot-0
+             * would spin forever the moment slot 0 held one: remove such
+             * an entry directly instead of routing it through
+             * abort_session_stream() (there is no session to update
+             * anyway). Either branch always shrinks the table by at least
+             * one entry, so the loop always terminates. */
+            while (d->streams.count > 0) {
+                AiSessionState *owner =
+                    (AiSessionState *)ai_stream_table_owner_at(&d->streams, 0);
+                if (owner)
+                    abort_session_stream(d, owner);
+                else
+                    ai_stream_table_abort_owner(&d->streams, NULL);
+            }
             ai_stream_table_abort_all(&d->streams);   /* nothing left; belt and braces */
             if (d->active_state) d->active_state->busy = 0;
             drain_stream_messages(hwnd);
@@ -5044,12 +5058,42 @@ void ai_chat_close(HWND hwnd)
         DestroyWindow(hwnd);
 }
 
+/* True once no AiStream is left live process-wide (ai_stream_live_count()
+ * only drops once a worker thread has actually released its reference and
+ * exited, not merely been asked to cancel). */
+static int ai_streams_done(void)
+{
+    return ai_stream_live_count() <= 0;
+}
+
 void ai_chat_wait_for_streams(DWORD timeout_ms)
 {
+    /* Pumps this thread's inbound sent messages while waiting, instead of
+     * blocking in Sleep(): called from window.c's WM_DESTROY, after the
+     * panel has orphaned every stream it knew about, to give those worker
+     * threads a moment to actually exit before WSACleanup/OpenSSL's exit
+     * handlers run. A worker can still be blocked showing a host-key or
+     * credential prompt owned by the main window, and Windows delivers
+     * that dialog's own housekeeping to its owner via a cross-thread
+     * SendMessage -- which only unblocks once this thread services its
+     * message queue. A plain Sleep loop here never does that, so it can
+     * turn a dismissable prompt into a full-timeout hang on every exit. */
     DWORD start = GetTickCount();
-    while (ai_stream_live_count() > 0 &&
-           GetTickCount() - start < timeout_ms)
-        Sleep(10);
+    for (;;) {
+        if (ai_streams_done()) return;
+        DWORD elapsed = GetTickCount() - start;
+        if (elapsed >= timeout_ms) return;
+        DWORD slice = timeout_ms - elapsed;
+        if (slice > 20) slice = 20;
+
+        MsgWaitForMultipleObjects(0, NULL, FALSE, slice, QS_SENDMESSAGE);
+
+        MSG msg;
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE | PM_QS_SENDMESSAGE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
 }
 
 int ai_chat_has_content(HWND hwnd)

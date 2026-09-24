@@ -261,3 +261,184 @@ int test_paste_visualize_long_run_grows_buffer(void)
     free(vis);
     TEST_END();
 }
+
+/* Boundary case for the one-byte heap overflow fixed in
+ * append_control_picture()/ensure_cap(): an input that is ENTIRELY controls
+ * so the very last byte written by the loop lands exactly at the buffer's
+ * capacity, with nothing left over for the NUL terminator, forcing the
+ * growth path to run again right at the end. There is no allocation-failure
+ * injection hook in this codebase to reproduce the overflow directly (the
+ * bug was `buf[len] = '\0'` after a downsize realloc that could fail
+ * without anyone checking the resulting capacity) -- this instead pins the
+ * post-condition the fix guarantees unconditionally: the returned buffer is
+ * always validly NUL-terminated at exactly `strlen()`, for a range of
+ * lengths that walk right through where cap == len can occur. */
+int test_paste_visualize_exact_capacity_boundary_terminates_safely(void)
+{
+    TEST_BEGIN();
+    for (int n = 1; n <= 40; n++) {
+        char *in = (char *)malloc((size_t)n);
+        ASSERT_NOT_NULL(in);
+        for (int i = 0; i < n; i++) in[i] = '\x01';   /* SOH: always stripped */
+
+        size_t removed = 999;
+        char *vis = paste_visualize_controls(in, (size_t)n, &removed);
+        free(in);
+
+        ASSERT_NOT_NULL(vis);
+        ASSERT_EQ((int)removed, n);
+        ASSERT_EQ(strlen(vis), (size_t)(n * 3));   /* 1 SOH -> 3-byte picture */
+        free(vis);
+    }
+    TEST_END();
+}
+
+/* ---- Bidi override/isolate stripping (Trojan Source hardening) ---------- */
+
+int test_paste_filter_removes_bidi_override(void)
+{
+    TEST_BEGIN();
+    /* U+202E RIGHT-TO-LEFT OVERRIDE, UTF-8 E2 80 AE. */
+    const char in[] = "a\xE2\x80\xAE" "b";
+    char out[16];
+    size_t removed = 0;
+    size_t n = paste_filter_controls(in, sizeof(in) - 1, out, &removed);
+    out[n] = '\0';
+    ASSERT_STR_EQ(out, "ab");
+    ASSERT_EQ((int)removed, 1);
+    TEST_END();
+}
+
+int test_paste_filter_removes_bidi_isolate(void)
+{
+    TEST_BEGIN();
+    /* U+2066 LEFT-TO-RIGHT ISOLATE, UTF-8 E2 81 A6. */
+    const char in[] = "a\xE2\x81\xA6" "b";
+    char out[16];
+    size_t removed = 0;
+    size_t n = paste_filter_controls(in, sizeof(in) - 1, out, &removed);
+    out[n] = '\0';
+    ASSERT_STR_EQ(out, "ab");
+    ASSERT_EQ((int)removed, 1);
+    TEST_END();
+}
+
+int test_paste_filter_keeps_bytes_just_outside_bidi_ranges(void)
+{
+    TEST_BEGIN();
+    /* E2 80 A9 (U+2029 PARAGRAPH SEPARATOR, just below the LRE..RLO range)
+     * and E2 81 AA (U+206A INHIBIT SYMMETRIC SWAPPING, just above the
+     * LRI..PDI range) must both survive untouched. */
+    const char in[] = "\xE2\x80\xA9" "\xE2\x81\xAA";
+    char out[16];
+    size_t removed = 999;
+    size_t n = paste_filter_controls(in, sizeof(in) - 1, out, &removed);
+    out[n] = '\0';
+    ASSERT_STR_EQ(out, in);
+    ASSERT_EQ((int)removed, 0);
+    TEST_END();
+}
+
+int test_paste_visualize_bidi_override_becomes_tag(void)
+{
+    TEST_BEGIN();
+    size_t removed = 0;
+    char *vis = paste_visualize_controls("a\xE2\x80\xAE" "b", 5, &removed);
+    ASSERT_NOT_NULL(vis);
+    ASSERT_EQ((int)removed, 1);
+    ASSERT_STR_EQ(vis, "a[RLO]b");
+    free(vis);
+    TEST_END();
+}
+
+int test_paste_visualize_bidi_isolate_becomes_tag(void)
+{
+    TEST_BEGIN();
+    size_t removed = 0;
+    char *vis = paste_visualize_controls("\xE2\x81\xA9" "x", 4, &removed);
+    ASSERT_NOT_NULL(vis);
+    ASSERT_EQ((int)removed, 1);
+    ASSERT_STR_EQ(vis, "[PDI]x");
+    free(vis);
+    TEST_END();
+}
+
+/* ---- text_has_unsafe_command_char ---------------------------------------- */
+
+int test_unsafe_cmd_char_plain_command_is_safe(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(text_has_unsafe_command_char("ls -la /tmp"), 0);
+    TEST_END();
+}
+
+int test_unsafe_cmd_char_rejects_c0(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(text_has_unsafe_command_char("echo ok\nrm -rf ~"), 1);
+    TEST_END();
+}
+
+int test_unsafe_cmd_char_rejects_tab(void)
+{
+    TEST_BEGIN();
+    /* Unlike paste_filter_controls(), a command must be a single line: TAB
+     * is rejected here even though it passes through a paste unchanged. */
+    ASSERT_EQ(text_has_unsafe_command_char("echo\tok"), 1);
+    TEST_END();
+}
+
+int test_unsafe_cmd_char_rejects_del(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(text_has_unsafe_command_char("echo ok\x7f"), 1);
+    TEST_END();
+}
+
+int test_unsafe_cmd_char_rejects_c1(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(text_has_unsafe_command_char("echo ok\xC2\x9B"), 1);
+    TEST_END();
+}
+
+int test_unsafe_cmd_char_keeps_c2_a0_and_above(void)
+{
+    TEST_BEGIN();
+    /* NBSP (0xC2 0xA0) is not a C1 control -- must not be rejected. */
+    ASSERT_EQ(text_has_unsafe_command_char("echo ok\xC2\xA0" "there"), 0);
+    TEST_END();
+}
+
+int test_unsafe_cmd_char_rejects_bidi_override(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(text_has_unsafe_command_char("echo ok\xE2\x80\xAA"), 1);
+    TEST_END();
+}
+
+int test_unsafe_cmd_char_rejects_bidi_isolate(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(text_has_unsafe_command_char("echo ok\xE2\x81\xA9"), 1);
+    TEST_END();
+}
+
+int test_unsafe_cmd_char_null_safe(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(text_has_unsafe_command_char(NULL), 0);
+    TEST_END();
+}
+
+int test_unsafe_cmd_char_trailing_lone_lead_bytes_safe(void)
+{
+    TEST_BEGIN();
+    /* A truncated 0xC2 or 0xE2 lead byte at the very end of the string:
+     * reading past the terminator must never happen, and neither is a
+     * match (not this function's job to validate UTF-8). */
+    ASSERT_EQ(text_has_unsafe_command_char("echo ok\xC2"), 0);
+    ASSERT_EQ(text_has_unsafe_command_char("echo ok\xE2"), 0);
+    ASSERT_EQ(text_has_unsafe_command_char("echo ok\xE2\x80"), 0);
+    TEST_END();
+}

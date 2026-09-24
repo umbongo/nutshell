@@ -16,11 +16,12 @@ void paste_line_free(char **lines, int count);
 void paste_build_summary(int line_count, size_t char_count,
                          char *buf, size_t buf_sz);
 
-/* Format a warning line for the paste-confirm dialog: "N control
+/* Format a warning line for the paste-confirm dialog: "N control/bidi
  * character(s) will be removed." -- `removed` is the count
  * paste_filter_controls() (src/core/paste_filter.h) reports for the same
- * text.  Writes an empty string when removed == 0, so callers can test
- * buf[0] to decide whether to show the warning line at all. */
+ * text, covering both control characters and bidi override/isolate
+ * characters.  Writes an empty string when removed == 0, so callers can
+ * test buf[0] to decide whether to show the warning line at all. */
 void paste_build_warning(size_t removed, char *buf, size_t buf_sz);
 
 /* Clamp a desired window size so it fits within 90% of the given

@@ -126,6 +126,17 @@ int utf8_encode(uint32_t cp, char *buf)
     return 0;
 }
 
+size_t utf8_codepoint_count(const char *s, size_t len)
+{
+    if (!s) return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if ((c & 0xC0u) != 0x80u) n++;
+    }
+    return n;
+}
+
 /* ---- Cell-text hardening ------------------------------------------------ */
 
 uint32_t cell_text_codepoint(uint32_t cp)

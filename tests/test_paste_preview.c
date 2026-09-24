@@ -184,7 +184,9 @@ int test_paste_build_warning_singular(void)
     TEST_BEGIN();
     char buf[128];
     paste_build_warning(1, buf, sizeof(buf));
-    ASSERT_STR_EQ(buf, "1 control character will be removed.");
+    /* Covers both control characters and bidi override/isolate
+     * characters -- paste_filter_controls() strips both under one count. */
+    ASSERT_STR_EQ(buf, "1 control/bidi character will be removed.");
     TEST_END();
 }
 
@@ -193,7 +195,7 @@ int test_paste_build_warning_plural(void)
     TEST_BEGIN();
     char buf[128];
     paste_build_warning(3, buf, sizeof(buf));
-    ASSERT_STR_EQ(buf, "3 control characters will be removed.");
+    ASSERT_STR_EQ(buf, "3 control/bidi characters will be removed.");
     TEST_END();
 }
 

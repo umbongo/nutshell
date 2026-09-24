@@ -78,7 +78,11 @@ void paste_build_warning(size_t removed, char *buf, size_t buf_sz)
 {
     if (!buf || buf_sz == 0) return;
     if (removed == 0) { buf[0] = '\0'; return; }
-    (void)snprintf(buf, buf_sz, "%zu control character%s will be removed.",
+    /* `removed` counts both control characters and bidi override/isolate
+     * characters (paste_filter_controls() strips both) -- the wording
+     * covers either so a bidi-only paste isn't reported as containing
+     * "control characters" it doesn't have. */
+    (void)snprintf(buf, buf_sz, "%zu control/bidi character%s will be removed.",
                    removed, removed == 1 ? "" : "s");
 }
 

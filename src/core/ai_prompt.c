@@ -3,6 +3,7 @@
 #include "json_parser.h"
 #include "json_validate.h"
 #include "string_utils.h"
+#include "paste_filter.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1220,20 +1221,6 @@ int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size)
     return 1;
 }
 
-/* True if s (NUL-terminated) contains any byte that would let a single
- * [EXEC] block masquerade as more than one command -- a raw control
- * character (< 0x20) or DEL (0x7F). Newline/CR/tab are the ones that
- * matter in practice (see C1 in the security audit), but any control
- * byte is rejected on the same principle: an [EXEC] block must contain
- * exactly one single-line shell command. */
-static int ai_command_has_control_char(const char *s)
-{
-    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-        if (*p < 0x20 || *p == 0x7F) return 1;
-    }
-    return 0;
-}
-
 int ai_extract_commands_ex(const char *response, char cmds[][1024],
                            int max_cmds, int *rejected, int *rejected_long)
 {
@@ -1284,11 +1271,15 @@ int ai_extract_commands_ex(const char *response, char cmds[][1024],
         memcpy(tmp, ts, trimmed_len);
         tmp[trimmed_len] = '\0';
 
-        if (ai_command_has_control_char(tmp)) {
-            /* A control character survived trimming -- the block contains
-             * more than one line (or another embedded control byte). Do
-             * not sanitise it into something runnable: drop it and let
-             * the caller tell the model. */
+        if (text_has_unsafe_command_char(tmp)) {
+            /* A control character, UTF-8-encoded C1 control, or bidi
+             * override/isolate character survived trimming -- the block
+             * contains more than one line (or another embedded control
+             * byte), or is trying to make the command read differently
+             * than it runs. Do not sanitise it into something runnable:
+             * drop it and let the caller tell the model. Shared with
+             * paste_filter_controls() -- see text_has_unsafe_command_char()
+             * in src/core/paste_filter.h. */
             if (rejected) (*rejected)++;
             pos = end + 7;
             continue;

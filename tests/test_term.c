@@ -444,6 +444,49 @@ int test_term_utf8_incomplete_stays_pending(void) {
     TEST_END();
 }
 
+/* Hardening: a pending sequence must not survive an intervening escape
+ * sequence. Two bytes of a 3-byte euro sign, then a complete (and
+ * otherwise harmless) SGR escape sequence, then the byte that would have
+ * completed the euro sign had it not been interrupted. Before the fix this
+ * byte (0x80, within the generic 0x80-0xBF continuation range the pending
+ * state was left in) silently completed a codepoint built from bytes on
+ * both sides of the escape sequence; after the fix the pending sequence is
+ * flushed as one replacement character the moment ESC arrives, the escape
+ * sequence is handled normally, and the leftover 0x80 is then decoded
+ * fresh as its own (stray-continuation) replacement character. */
+int test_term_utf8_pending_reset_by_escape_sequence(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xE2\x82" "\x1B[31m" "\x80" "X", 9);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);  /* flushed at ESC */
+    ASSERT_EQ(get_cell(t, 0, 1).codepoint, 0xFFFDu);  /* stray 0x80, decoded fresh */
+    ASSERT_EQ(get_cell(t, 0, 2).codepoint, (uint32_t)'X');
+    ASSERT_EQ(t->utf8_remaining, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* Same hardening, but the intervening byte is a plain C0 control (LF)
+ * rather than the start of an escape sequence -- LF is handled directly in
+ * TERM_STATE_NORMAL and never calls term_put_char_utf8() either, so it
+ * needs the same flush-before-handling treatment. */
+int test_term_utf8_pending_reset_by_control_byte(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xE2\x82" "\n", 3);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(t->cursor.row, 1);   /* LF still advanced the cursor normally */
+    ASSERT_EQ(t->utf8_remaining, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_sgr_bold_off(void) {
     TEST_BEGIN();
     Terminal *t = term_init(24, 80, 100);
