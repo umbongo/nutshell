@@ -2266,14 +2266,28 @@ int test_cmd_classify_linux_bare_only_safe_forms(void) {
     TEST_BEGIN();
     ASSERT_EQ((int)cmd_classify("date", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("date -s \"2026-09-11 12:00:00\"", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
-    ASSERT_EQ((int)cmd_classify("date +%Y-%m-%d", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    /* date, hostname and dmesg now have flag allow-lists: a format
+     * operand and the display flags are READ, anything that sets state is
+     * WRITE, an unlisted flag is UNKNOWN. */
+    ASSERT_EQ((int)cmd_classify("date +%Y-%m-%d", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("date -u", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("date 010100002030", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("date --se=x", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("date -Z", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
 
     ASSERT_EQ((int)cmd_classify("hostname", CMD_PLATFORM_LINUX), (int)CMD_READ);
-    ASSERT_EQ((int)cmd_classify("hostname newname", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("hostname -I", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("hostname -f", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("hostname newname", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("hostname -F F", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
 
     ASSERT_EQ((int)cmd_classify("dmesg", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("dmesg -C", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
-    ASSERT_EQ((int)cmd_classify("dmesg -T", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("dmesg -TC", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("dmesg --cl", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("dmesg -T", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dmesg --level=err", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dmesg -Q", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
 
     ASSERT_EQ((int)cmd_classify("mount", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("mount /dev/sdb1 /mnt/data", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
@@ -3422,6 +3436,442 @@ int test_cmd_classify_hardened_flags_sudo_never_below_write(void) {
         { "sudo nice -n 10 ls",                  CMD_WRITE },
     };
     if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ===================================================================
+ * Review round 2: quote-aware word splitting, flag allow-lists, ip verbs,
+ * curl output/upload rules, the PowerShell reading, sed brackets, the
+ * device display filters and glued redirect targets. Placeholders: F, G
+ * for files, x for anything else, https://x for a URL.
+ * =================================================================== */
+
+/* Asserts cmd_classify(cmd, platform) >= min for one platform. */
+static int check_min_on(const ClassifyMinCase *cases, size_t n, CmdPlatform plat)
+{
+    int bad = 0;
+    for (size_t i = 0; i < n; i++) {
+        CmdSafetyLevel got = cmd_classify(cases[i].cmd, plat);
+        if (got < cases[i].min_level) {
+            printf("  [platform %d] \"%s\": got %d, want >= %d\n",
+                   (int)plat, cases[i].cmd, (int)got, (int)cases[i].min_level);
+            bad = 1;
+        }
+    }
+    return bad;
+}
+
+/* A quoted or escaped separator ( ; | < > ) is part of a word, so a flag
+ * after it is still seen: env, curl, sort, git and ip, with single quotes,
+ * double quotes and a backslash escape. */
+int test_cmd_classify_quoted_separator_before_flag(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "env -u 'x;y' rm F",                      CMD_CRITICAL },
+        { "env -u 'x|y' rm F",                      CMD_CRITICAL },
+        { "env -u 'x<y' rm F",                      CMD_CRITICAL },
+        { "env -u 'x>y' rm F",                      CMD_CRITICAL },
+        { "env -u \"x;y\" rm F",                    CMD_CRITICAL },
+        { "env LANG='x;y' rm F",                    CMD_CRITICAL },
+
+        { "curl -H 'x;y' -o F https://x",           CMD_WRITE },
+        { "curl -H 'x|y' -o F https://x",           CMD_WRITE },
+        { "curl -H 'x<y' -o F https://x",           CMD_WRITE },
+        { "curl -H 'x>y' -o F https://x",           CMD_WRITE },
+        { "curl -A \"x;y\" -T F https://x",         CMD_WRITE },
+
+        { "sort -t ';' -o F G",                     CMD_WRITE },
+        { "sort -t '|' -o F G",                     CMD_WRITE },
+        { "sort -t '<' -o F G",                     CMD_WRITE },
+        { "sort -t '>' -o F G",                     CMD_WRITE },
+        { "sort -t \";\" -o F G",                   CMD_WRITE },
+        { "sort -t \\; -o F G",                     CMD_WRITE },
+
+        { "git log --grep='x;y' --output=F",        CMD_WRITE },
+        { "git log --grep='x|y' --output=F",        CMD_WRITE },
+        { "git log --grep='x<y' --output=F",        CMD_WRITE },
+        { "git log --grep='x>y' --output=F",        CMD_WRITE },
+        { "git -C 'x;y' log --output=F",            CMD_WRITE },
+        { "git branch --list 'x;y' -D x",           CMD_WRITE },
+
+        { "ip -n 'x;y' route flush all",            CMD_CRITICAL },
+        { "ip -n 'x|y' link set dev x down",        CMD_CRITICAL },
+        { "ip -n 'x<y' addr del x dev x",           CMD_CRITICAL },
+        { "ip -n 'x>y' addr flush dev x",           CMD_CRITICAL },
+
+        /* An input redirection or an fd redirect before the flag no longer
+         * ends the scan. */
+        { "sort <F -o G",                           CMD_WRITE },
+        { "sort 2>/dev/null -o G F",                CMD_WRITE },
+        { "git log >/dev/null --output=F",          CMD_WRITE },
+        /* A quote hiding the leading '-' of a flag. */
+        { "sort '-o' F G",                          CMD_UNKNOWN },
+        { "curl \"-o\" F https://x",                CMD_UNKNOWN },
+        { "ip '-b' F",                              CMD_UNKNOWN },
+        /* One word to a POSIX shell, two to PowerShell: both readings. */
+        { "sort x\\ -o F",                          CMD_WRITE },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* Allow-lists: a flag outside the list is at least UNKNOWN, an
+ * abbreviation of a flag known to write is WRITE, an attached value on an
+ * unlisted letter is not mistaken for harmless letters. */
+int test_cmd_classify_allow_list_unlisted_flags(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "sort --o=F G",                  CMD_WRITE },
+        { "sort --outp F G",               CMD_WRITE },
+        { "sort -oF G",                    CMD_WRITE },
+        { "sort -no F G",                  CMD_WRITE },
+        { "sort --compress-prog=x G",      CMD_UNKNOWN },
+        { "sort --compress-program=x G",   CMD_UNKNOWN },
+        { "sort --rev G",                  CMD_UNKNOWN },
+        { "uniq F G",                      CMD_WRITE },
+        { "uniq -c F G",                   CMD_WRITE },
+        { "uniq --gro F",                  CMD_UNKNOWN },
+        { "man --pag=x ls",                CMD_UNKNOWN },
+        { "man -Px ls",                    CMD_UNKNOWN },
+        { "man -P x ls",                   CMD_UNKNOWN },
+        { "man -Hx ls",                    CMD_UNKNOWN },
+        { "man -l F",                      CMD_UNKNOWN },
+        { "less --log-f=F G",              CMD_WRITE },
+        { "less -oF G",                    CMD_WRITE },
+        { "less -O F G",                   CMD_WRITE },
+        { "less -k F G",                   CMD_UNKNOWN },
+        { "less +v G",                     CMD_UNKNOWN },
+        { "less '+!x' G",                  CMD_UNKNOWN },
+        { "less '+|x' G",                  CMD_UNKNOWN },
+        { "less +sF G",                    CMD_UNKNOWN },
+        { "rg --pre=x x",                  CMD_UNKNOWN },
+        { "rg --pre x x",                  CMD_UNKNOWN },
+        { "rg --pr x x",                   CMD_UNKNOWN },
+        { "history -c",                    CMD_WRITE },
+        { "history -w F",                  CMD_WRITE },
+        { "history -p x",                  CMD_UNKNOWN },
+        { "git branch --unset-ups",        CMD_WRITE },
+        { "git branch --edit-desc",        CMD_WRITE },
+        { "git branch x",                  CMD_WRITE },
+        { "git branch -f x",               CMD_WRITE },
+        { "git log --outp=F",              CMD_WRITE },
+        { "git log --o=F",                 CMD_WRITE },
+        { "git diff --output F",           CMD_WRITE },
+        { "git log --ext-diff",            CMD_UNKNOWN },
+        { "git log --onel",                CMD_UNKNOWN },
+        { "git status --frob",             CMD_UNKNOWN },
+        { "git -c x=y log",                CMD_UNKNOWN },
+        { "git --exec-path=x log",         CMD_UNKNOWN },
+        { "git --git-dir=x log",           CMD_UNKNOWN },
+        { "git remote add x https://x",    CMD_WRITE },
+        { "git push",                      CMD_WRITE },
+        { "time -o F ls",                  CMD_WRITE },
+        { "time -oF ls",                   CMD_WRITE },
+        { "/usr/bin/time --out=F ls",      CMD_WRITE },
+        { "/usr/bin/time --output F ls",   CMD_WRITE },
+        { "time -a -o F ls",               CMD_WRITE },
+        { "time --frob ls",                CMD_UNKNOWN },
+        { "time rm F",                     CMD_CRITICAL },
+        { "nohup ls",                      CMD_WRITE },
+        { "nohup rm F",                    CMD_CRITICAL },
+        { "env LD_PRELOAD=x ls",           CMD_UNKNOWN },
+        { "env PAGER=x man ls",            CMD_UNKNOWN },
+        { "env --frob ls",                 CMD_UNKNOWN },
+        { "env -S 'rm F'",                 CMD_CRITICAL },
+        { "env --split-string='rm F'",     CMD_CRITICAL },
+        { "timeout --frob 5 ls",           CMD_UNKNOWN },
+        { "timeout 5 rm F",                CMD_CRITICAL },
+        { "nice --frob ls",                CMD_UNKNOWN },
+        { "ionice -p 1",                   CMD_WRITE },
+        { "ionice -c3 rm F",               CMD_CRITICAL },
+        { "stdbuf -oL rm F",               CMD_CRITICAL },
+        { "setsid -f rm F",                CMD_CRITICAL },
+        { "tree -o F",                     CMD_WRITE },
+        { "sar -o F 1 1",                  CMD_WRITE },
+        { "ss -K dst x",                   CMD_WRITE },
+        { "ss --kill",                     CMD_WRITE },
+        { "ss -D F",                       CMD_WRITE },
+        { "arp -d x",                      CMD_WRITE },
+        { "arp -s x y",                    CMD_WRITE },
+        { "file -C -m F",                  CMD_WRITE },
+        { "dmidecode --dump-bin F",        CMD_WRITE },
+        { "sensors -s",                    CMD_WRITE },
+        { "iptables-save -f F",            CMD_WRITE },
+        { "iptables-save -M x",            CMD_UNKNOWN },
+        { "lastlog -C -u x",               CMD_WRITE },
+        { "journalctl --rotate",           CMD_WRITE },
+        { "journalctl --vac=1",            CMD_WRITE },
+        { "journalctl --vacuum-size=1M",   CMD_WRITE },
+        { "journalctl -n --rotate",        CMD_WRITE },
+        { "journalctl --frob",             CMD_UNKNOWN },
+        { "route add default gw x",        CMD_WRITE },
+        { "route -n del default",          CMD_CRITICAL },
+        { "route -n add default gw x",     CMD_WRITE },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* Ordinary read-only usage stays READ under the allow-lists, on both
+ * LINUX and UNKNOWN. */
+int test_cmd_classify_allow_list_keeps_read(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase exact[] = {
+        { "ls -la",                                        CMD_READ },
+        { "cat f",                                         CMD_READ },
+        { "grep -r x .",                                   CMD_READ },
+        { "find . -name '*.c'",                            CMD_READ },
+        { "curl -s https://x",                             CMD_READ },
+        { "sed -n 1,5p f",                                 CMD_READ },
+        { "git log --oneline",                             CMD_READ },
+        { "git -C dir log --oneline",                      CMD_READ },
+        { "ip a",                                          CMD_READ },
+        { "ip -s link show eth0",                          CMD_READ },
+        { "ip -j addr show",                               CMD_READ },
+        { "sort f",                                        CMD_READ },
+        { "sort -n f",                                     CMD_READ },
+        { "uniq -c f",                                     CMD_READ },
+        { "df -h",                                         CMD_READ },
+        { "man ls",                                        CMD_READ },
+        { "less f",                                        CMD_READ },
+        { "rg x",                                          CMD_READ },
+        /* further common read forms */
+        { "git status",                                    CMD_READ },
+        { "git status -sb",                                CMD_READ },
+        { "git status --porcelain=v1",                     CMD_READ },
+        { "git diff --stat",                               CMD_READ },
+        { "git diff --cached",                             CMD_READ },
+        { "git diff HEAD~1 -- f",                          CMD_READ },
+        { "git log -n 5 --format='%h %s'",                 CMD_READ },
+        { "git log -5 --graph --decorate --all",           CMD_READ },
+        { "git log --since='2 weeks ago' --author=x",      CMD_READ },
+        { "git log -p -S x -- f",                          CMD_READ },
+        { "git show HEAD --stat",                          CMD_READ },
+        { "git --no-pager log -3",                         CMD_READ },
+        { "git branch -vv",                                CMD_READ },
+        { "git branch -a --contains HEAD",                 CMD_READ },
+        { "git branch --list 'f*'",                        CMD_READ },
+        { "git branch --merged main",                      CMD_READ },
+        { "git rev-parse --show-toplevel",                 CMD_READ },
+        { "git rev-parse --abbrev-ref HEAD",               CMD_READ },
+        { "git remote -v",                                 CMD_READ },
+        { "git ls-files",                                  CMD_READ },
+        { "git blame -L 1,5 f",                            CMD_READ },
+        { "ip -br a",                                      CMD_READ },
+        { "ip -c link",                                    CMD_READ },
+        { "ip -4 addr show dev eth0",                      CMD_READ },
+        { "ip route get 1.1.1.1",                          CMD_READ },
+        { "ip route list table all",                       CMD_READ },
+        { "ip -details link show",                         CMD_READ },
+        { "ip neigh show",                                 CMD_READ },
+        { "ip link help",                                  CMD_READ },
+        { "route -n",                                      CMD_READ },
+        { "sort -t, -k2 -n f",                             CMD_READ },
+        { "sort -u f",                                     CMD_READ },
+        { "sort -rh f",                                    CMD_READ },
+        { "uniq -d f",                                     CMD_READ },
+        { "less -R f",                                     CMD_READ },
+        { "less +G f",                                     CMD_READ },
+        { "less -N +/x f",                                 CMD_READ },
+        { "man -k x",                                      CMD_READ },
+        { "man 5 passwd",                                  CMD_READ },
+        { "rg -n --hidden -g '*.c' x",                     CMD_READ },
+        { "rg -i -C 3 x src",                              CMD_READ },
+        { "journalctl -u x -n 50 --no-pager",              CMD_READ },
+        { "journalctl -f",                                 CMD_READ },
+        { "journalctl -b -1 -p err",                       CMD_READ },
+        { "journalctl --since today",                      CMD_READ },
+        { "dmesg -T",                                      CMD_READ },
+        { "date +%s",                                      CMD_READ },
+        { "hostname -I",                                   CMD_READ },
+        { "env",                                           CMD_READ },
+        { "env LANG=C sort f",                             CMD_READ },
+        { "time ls",                                       CMD_READ },
+        { "nice -n 10 ls",                                 CMD_READ },
+        { "timeout 5 ls",                                  CMD_READ },
+        { "curl -sS -o /dev/null -w '%{http_code}' https://x", CMD_READ },
+        { "curl -s -D - -o /dev/null https://x",           CMD_READ },
+        { "curl --silent --location https://x",            CMD_READ },
+        { "curl -H 'Accept: x' https://x",                 CMD_READ },
+        { "curl -b 'a=b' https://x",                       CMD_READ },
+        { "ss -tlnp",                                      CMD_READ },
+        { "tree -L 2",                                     CMD_READ },
+        { "history 20",                                    CMD_READ },
+        { "ls 2>/dev/null",                                CMD_READ },
+        { "ls >/dev/null 2>&1",                            CMD_READ },
+        { "ls &>/dev/null",                                CMD_READ },
+        { "cut -d' ' -f1 f",                               CMD_READ },
+        { "sed 's/[/]/x/' f",                              CMD_READ },
+        /* An escaped blank splits differently in the two readings; both
+         * are READ, so the command is. */
+        { "ls My\\ Documents",                             CMD_READ },
+        { "sed -n '/[[:space:]]x/p' f",                    CMD_READ },
+    };
+    if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ip: READ only with no verb or exactly show/list/lst/get/help. Any other
+ * verb, abbreviations included, is WRITE; flush/delete forms and link set
+ * are CRITICAL. Global options consume their values. */
+int test_cmd_classify_ip_verbs(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase exact[] = {
+        { "ip a d 10.0.0.1/24 dev x",            CMD_CRITICAL },
+        { "ip a f dev x",                        CMD_CRITICAL },
+        { "ip r fl all",                         CMD_CRITICAL },
+        { "ip addr del x dev x",                 CMD_CRITICAL },
+        { "ip route delete default",             CMD_CRITICAL },
+        { "ip neigh flush all",                  CMD_CRITICAL },
+        { "ip link set dev x down",              CMD_CRITICAL },
+        { "ip l s x down",                       CMD_CRITICAL },
+        { "ip -f inet a flush",                  CMD_CRITICAL },
+        { "ip -family inet addr del x dev x",    CMD_CRITICAL },
+        { "ip -n x link set x down",             CMD_CRITICAL },
+        { "ip -netns x addr flush dev x",        CMD_CRITICAL },
+        { "ip -rc 1 route del x",                CMD_CRITICAL },
+        { "ip -l 1 addr flush dev x",            CMD_CRITICAL },
+        { "ip -loops 1 addr flush dev x",        CMD_CRITICAL },
+        { "ip --json route flush all",           CMD_CRITICAL },
+        { "ip a s",                              CMD_WRITE },
+        { "ip a add x dev x",                    CMD_WRITE },
+        { "ip route replace x via x",            CMD_WRITE },
+        { "ip addr change x dev x",              CMD_WRITE },
+        { "ip route save",                       CMD_WRITE },
+        { "ip -b F",                             CMD_UNKNOWN },
+        { "ip -batch F",                         CMD_UNKNOWN },
+        { "ip -force a",                         CMD_UNKNOWN },
+        { "ip -frob a",                          CMD_UNKNOWN },
+        { "ip firewall x",                       CMD_UNKNOWN },
+        { "ip a",                                CMD_READ },
+        { "ip",                                  CMD_READ },
+        { "ip addr show",                        CMD_READ },
+        { "ip addr lst",                         CMD_READ },
+        { "ip route list",                       CMD_READ },
+        { "ip -color=always a",                  CMD_READ },
+        { "ip xfrm state",                       CMD_READ },
+        { "ip xfrm policy list",                 CMD_READ },
+        { "ip xfrm state flush",                 CMD_CRITICAL },
+        { "ip -all netns exec rm F",             CMD_CRITICAL },
+        { "ip netns exec x rm F",                CMD_CRITICAL },
+    };
+    if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* curl: -w writes with %output{}, reads its format from a file with @;
+ * -H/-b read local files; -K reads a config; the -o /dev/null exception
+ * needs every other output, upload and config flag to be absent. */
+int test_cmd_classify_curl_output_rules(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "curl -w '%output{F}' https://x",               CMD_WRITE },
+        { "curl --write-out '%output{F}x' https://x",     CMD_WRITE },
+        { "curl -w @F https://x",                         CMD_UNKNOWN },
+        { "curl -H @F https://x",                         CMD_WRITE },
+        { "curl --header @F https://x",                   CMD_WRITE },
+        { "curl -H'@F' https://x",                        CMD_WRITE },
+        { "curl -b F https://x",                          CMD_WRITE },
+        { "curl -b @F https://x",                         CMD_WRITE },
+        { "curl --cookie F https://x",                    CMD_WRITE },
+        { "curl -K F https://x",                          CMD_UNKNOWN },
+        { "curl --config F https://x",                    CMD_UNKNOWN },
+        { "curl -o /dev/null -O https://x",               CMD_WRITE },
+        { "curl -o /dev/null -o F https://x https://x",   CMD_WRITE },
+        { "curl -o /dev/null -o /dev/null https://x https://x", CMD_WRITE },
+        { "curl -o - -D F https://x",                     CMD_WRITE },
+        { "curl -o /dev/null -T F https://x",             CMD_WRITE },
+        { "curl -o /dev/null --next https://x",           CMD_WRITE },
+        { "curl -o /dev/null -: https://x",               CMD_WRITE },
+        { "curl -o /dev/null -K F https://x",             CMD_WRITE },
+        { "curl -o /dev/null -d @F https://x",            CMD_WRITE },
+        { "curl -o /dev/null -w @F https://x",            CMD_WRITE },
+        { "curl -o /dev/null -w '%output{F}' https://x",  CMD_WRITE },
+        { "curl -o '/dev/null' --upload-file F https://x", CMD_WRITE },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* PowerShell reading on an unresolved platform: typographic quotes are
+ * string delimiters there, and an unquoted "(" / "@(" / "$(" runs the
+ * command inside it. */
+int test_cmd_classify_powershell_quotes_and_subexpressions(void) {
+    TEST_BEGIN();
+    const CmdPlatform u = CMD_PLATFORM_UNKNOWN;
+    static const ClassifyMinCase unknown_cases[] = {
+        /* \xE2\x80\x98 / \xE2\x80\x99 are U+2018 / U+2019, \xE2\x80\x9C /
+         * \xE2\x80\x9D are U+201C / U+201D. */
+        { "echo \xE2\x80\x98x\xE2\x80\x99",               CMD_UNKNOWN },
+        { "ls \xE2\x80\x9C" "F\xE2\x80\x9D",              CMD_UNKNOWN },
+        /* A typographic quote closes an ASCII one in PowerShell, which
+         * leaves the rm active there. */
+        { "echo '\xE2\x80\x98; rm F'",                    CMD_CRITICAL },
+        { "echo \"\xE2\x80\x9D; rm F\"",                  CMD_CRITICAL },
+        { "echo (rm F)",                                  CMD_CRITICAL },
+        { "echo @(rm F)",                                 CMD_CRITICAL },
+        { "echo x(ls)",                                   CMD_UNKNOWN },
+        { "echo $(rm F)",                                 CMD_CRITICAL },
+    };
+    if (check_min_on(unknown_cases, sizeof unknown_cases / sizeof unknown_cases[0], u))
+        _tf_local_fail = 1;
+    /* On a Linux session the typographic quotes are ordinary characters. */
+    ASSERT_EQ((int)cmd_classify("echo \xE2\x80\x98x\xE2\x80\x99", CMD_PLATFORM_LINUX),
+              (int)CMD_READ);
+    /* Substitution is classified inside on every platform. */
+    ASSERT_EQ((int)cmd_classify("echo $(rm F)", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("ls `rm F`", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("echo $(ls)", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    /* Quoted parentheses are text. */
+    ASSERT_EQ((int)cmd_classify("echo '(rm F)'", u), (int)CMD_READ);
+    TEST_END();
+}
+
+/* sed: a bracket expression may hide the delimiter; both readings are
+ * taken. Anything left unparsed is UNKNOWN. */
+int test_cmd_classify_sed_brackets_and_unparsed(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "sed '/[/]/w F' G",            CMD_WRITE },
+        { "sed 's/[/]/x/w F' G",         CMD_WRITE },
+        { "sed '/[]/]/w F' G",           CMD_WRITE },
+        { "sed -n '/[[:alpha:]/]/w F' G", CMD_WRITE },
+        { "sed -n '/x' G",               CMD_UNKNOWN },
+        { "sed 's/a/b' G",               CMD_UNKNOWN },
+        { "sed 'y/abc/xyz' G",           CMD_UNKNOWN },
+        { "sed '/[x/w F' G",             CMD_UNKNOWN },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* A redirect target glued to its operator is a file of that name, not the
+ * safe target it starts with. */
+int test_cmd_classify_glued_redirect_targets(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "ls >&2F",          CMD_WRITE },
+        { "ls >/dev/nullF",   CMD_WRITE },
+        { "ls 2>/dev/nullx",  CMD_WRITE },
+        { "ls >&1x",          CMD_WRITE },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    static const ClassifyMinCase exact[] = {
+        { "ls 2>&1",          CMD_READ },
+        { "ls >&2",           CMD_READ },
+        { "ls >/dev/null",    CMD_READ },
+        { "ls > /dev/null",   CMD_READ },
+        { "ls 2>&-",          CMD_READ },
+    };
+    if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
         _tf_local_fail = 1;
     TEST_END();
 }

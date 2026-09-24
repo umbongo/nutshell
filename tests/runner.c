@@ -349,6 +349,14 @@ int test_cmd_classify_device_floor_keeps_display_filters(void);
 int test_cmd_classify_hardened_flags_raise_level(void);
 int test_cmd_classify_hardened_flags_keep_read(void);
 int test_cmd_classify_hardened_flags_sudo_never_below_write(void);
+int test_cmd_classify_quoted_separator_before_flag(void);
+int test_cmd_classify_allow_list_unlisted_flags(void);
+int test_cmd_classify_allow_list_keeps_read(void);
+int test_cmd_classify_ip_verbs(void);
+int test_cmd_classify_curl_output_rules(void);
+int test_cmd_classify_powershell_quotes_and_subexpressions(void);
+int test_cmd_classify_sed_brackets_and_unparsed(void);
+int test_cmd_classify_glued_redirect_targets(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -2824,6 +2832,14 @@ int main(void) {
     failed += test_cmd_classify_hardened_flags_raise_level();
     failed += test_cmd_classify_hardened_flags_keep_read();
     failed += test_cmd_classify_hardened_flags_sudo_never_below_write();
+    failed += test_cmd_classify_quoted_separator_before_flag();
+    failed += test_cmd_classify_allow_list_unlisted_flags();
+    failed += test_cmd_classify_allow_list_keeps_read();
+    failed += test_cmd_classify_ip_verbs();
+    failed += test_cmd_classify_curl_output_rules();
+    failed += test_cmd_classify_powershell_quotes_and_subexpressions();
+    failed += test_cmd_classify_sed_brackets_and_unparsed();
+    failed += test_cmd_classify_glued_redirect_targets();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();

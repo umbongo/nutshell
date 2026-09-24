@@ -421,17 +421,9 @@ static const char *linux_read_cmds[] = {
 
 /* ----- Token extraction helpers ----- */
 
-static int next_token(const char **p, const char **start, size_t *len)
-{
-    while (**p == ' ' || **p == '\t') (*p)++;
-    if (!**p || **p == '|' || **p == ';' || **p == '&') return 0;
-    *start = *p;
-    while (**p && **p != ' ' && **p != '\t' && **p != '|'
-           && **p != ';' && **p != '&' && **p != '>' && **p != '<')
-        (*p)++;
-    *len = (size_t)(*p - *start);
-    return *len > 0;
-}
+/* Defined after the quoting model below: splits one shell word, quote-aware,
+ * skipping redirections. */
+static int next_token(const char **p, const char **start, size_t *len);
 
 static int ci_lower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
 
@@ -492,7 +484,7 @@ static int tok_prefix_ci(const char *tok, size_t tlen, const char *prefix)
     return ci_memcmp(tok, prefix, plen) == 0;
 }
 
-static int tok_in_list(const char *tok, size_t tlen, const char **list)
+static int tok_in_list(const char *tok, size_t tlen, const char *const *list)
 {
     for (int i = 0; list[i]; i++) {
         if (tok_eq(tok, tlen, list[i])) return 1;
@@ -500,7 +492,7 @@ static int tok_in_list(const char *tok, size_t tlen, const char **list)
     return 0;
 }
 
-static int tok_has_prefix(const char *tok, size_t tlen, const char **list)
+static int tok_has_prefix(const char *tok, size_t tlen, const char *const *list)
 {
     for (int i = 0; list[i]; i++) {
         if (tok_prefix(tok, tlen, list[i])) return 1;
@@ -572,12 +564,43 @@ static int seg_has_token_ci(const char *seg, size_t len, const char *lit)
  * never reports it better than CMD_UNKNOWN. */
 typedef enum { QMODE_POSIX = 0, QMODE_PWSH = 1 } QuoteMode;
 
+/* The quoting reading every word-level scan (next_token, next_shell_word)
+ * uses. classify_pass() sets it for the duration of one pass, so the
+ * per-command flag checks split words exactly the way that pass's segment
+ * splitter did. Thread-local: classification may run on more than one
+ * thread. */
+static _Thread_local QuoteMode tok_mode = QMODE_POSIX;
+
+/* Recursion depth of classify_core() through command substitutions. */
+static _Thread_local int subst_depth = 0;
+
 typedef struct {
     QuoteMode mode;
     int in_sq;
     int in_dq;
     int dangling;   /* an escape character was the last thing in the input */
 } QuoteScan;
+
+/* PowerShell also accepts the typographic quotes as string delimiters:
+ * U+2018..U+201B as single quotes and U+201C..U+201E as double quotes
+ * (UTF-8 E2 80 98..9E). Returns 1 for a single, 2 for a double, else 0. */
+static int pwsh_typo_quote(const char *p, const char *end)
+{
+    if (end - p >= 3 && (unsigned char)p[0] == 0xE2 && (unsigned char)p[1] == 0x80) {
+        unsigned char c = (unsigned char)p[2];
+        if (c >= 0x98 && c <= 0x9B) return 1;
+        if (c >= 0x9C && c <= 0x9E) return 2;
+    }
+    return 0;
+}
+
+static int has_typo_quote(const char *s)
+{
+    const char *end = s + strlen(s);
+    for (const char *p = s; p < end; p++)
+        if (pwsh_typo_quote(p, end)) return 1;
+    return 0;
+}
 
 static void quote_scan_init(QuoteScan *qs, QuoteMode mode)
 {
@@ -602,6 +625,16 @@ static int quote_step(QuoteScan *qs, const char **pp, const char *end)
     char esc = (qs->mode == QMODE_POSIX) ? '\\' : '`';
 
     *pp = p + 1;
+    if (qs->mode == QMODE_PWSH) {
+        int tq = pwsh_typo_quote(p, end);
+        if (tq) {
+            *pp = p + 3;
+            if (qs->in_sq) { if (tq == 1) qs->in_sq = 0; return 0; }
+            if (qs->in_dq) { if (tq == 2) qs->in_dq = 0; return 0; }
+            if (tq == 1) qs->in_sq = 1; else qs->in_dq = 1;
+            return 0;
+        }
+    }
     if (qs->in_sq) {
         if (c == '\'') qs->in_sq = 0;
         return 0;
@@ -625,20 +658,26 @@ static int is_shell_meta(char c)
     return c == '|' || c == ';' || c == '&' || c == '<' || c == '>';
 }
 
-/* Next active metacharacter at or after *pp, or NULL at end of input. */
-static const char *next_active_meta(QuoteScan *qs, const char **pp, const char *end)
+/* Next active metacharacter (and, with blanks set, word-splitting blank) at
+ * or after *pp, or NULL at end of input. */
+static const char *next_active_sep(QuoteScan *qs, const char **pp, const char *end,
+                                   int blanks)
 {
     while (*pp < end) {
         const char *here = *pp;
-        if (quote_step(qs, pp, end) && is_shell_meta(*here))
+        if (quote_step(qs, pp, end) &&
+            (is_shell_meta(*here) || (blanks && (*here == ' ' || *here == '\t'))))
             return here;
     }
     return NULL;
 }
 
 /* 1 when the POSIX and PowerShell readings of the command activate exactly
- * the same metacharacters and both close every quote and escape. */
-static int quoting_unambiguous(const char *command)
+ * the same metacharacters (and, with blanks set, split words at the same
+ * blanks), and both close every quote and escape. Blanks matter because the
+ * per-command flag checks work word by word: "a\ -o F" is one word to a
+ * POSIX shell and two to PowerShell. */
+static int quoting_agrees(const char *command, int blanks)
 {
     const char *end = command + strlen(command);
     QuoteScan a, b;
@@ -646,47 +685,234 @@ static int quoting_unambiguous(const char *command)
     quote_scan_init(&a, QMODE_POSIX);
     quote_scan_init(&b, QMODE_PWSH);
     for (;;) {
-        const char *ma = next_active_meta(&a, &pa, end);
-        const char *mb = next_active_meta(&b, &pb, end);
+        const char *ma = next_active_sep(&a, &pa, end, blanks);
+        const char *mb = next_active_sep(&b, &pb, end, blanks);
         if (ma != mb) return 0;
         if (!ma) break;
     }
     return quote_scan_balanced(&a) && quote_scan_balanced(&b);
 }
 
-/* Command or process substitution outside single quotes: "$(" (POSIX and
- * PowerShell), a POSIX backtick, "<(" / ">(". What such a segment runs is
- * not visible to the per-segment rules, so it is never READ. */
-static int seg_has_substitution_mode(const char *seg, size_t seg_len, QuoteMode mode)
+/* ----- Word splitting -----
+ * next_token() returns the next shell word of a segment as a raw span (the
+ * quotes are still in it), reading quotes and escapes with tok_mode: a ';',
+ * '|', '&', '<' or '>' inside quotes or escaped is part of the word, so a
+ * flag after a quoted separator is still seen. It stops, returning 0, at an
+ * active '|', ';' or '&' (the end of the segment). A redirection -- an
+ * optional fd number, the operator (<, >, >>, >|, <>, <<, <<<, >&, <&, &>,
+ * &>>) and its target word -- is skipped as a whole: it is not an argument
+ * of the command, and scan_redirects() judges it separately. */
+
+/* If p starts a redirection operator, returns the first character after the
+ * operator; else NULL. */
+static const char *redirect_op_end(const char *p, const char *end)
+{
+    const char *r = p;
+    if (r + 1 < end && *r == '&' && r[1] == '>') {
+        r += 2;
+        if (r < end && *r == '>') r++;
+        return r;
+    }
+    while (r < end && *r >= '0' && *r <= '9') r++;
+    if (r >= end || (*r != '<' && *r != '>')) return NULL;
+    if (*r == '>') {
+        r++;
+        if (r < end && (*r == '>' || *r == '&' || *r == '|')) r++;
+    } else {
+        r++;
+        if (r < end && *r == '<') {
+            r++;
+            if (r < end && (*r == '<' || *r == '-')) r++;
+        } else if (r < end && (*r == '&' || *r == '>')) {
+            r++;
+        }
+    }
+    return r;
+}
+
+/* End of the word starting at p (quote-aware, tok_mode). */
+static const char *word_end(const char *p, const char *end)
+{
+    QuoteScan qs;
+    quote_scan_init(&qs, tok_mode);
+    while (p < end) {
+        const char *here = p;
+        char c = *here;
+        if (quote_step(&qs, &p, end) &&
+            (c == ' ' || c == '\t' || is_shell_meta(c)))
+            return here;
+    }
+    return end;
+}
+
+static int next_token(const char **p, const char **start, size_t *len)
+{
+    const char *end = *p + strlen(*p);
+    const char *q = *p;
+    for (;;) {
+        while (q < end && (*q == ' ' || *q == '\t')) q++;
+        if (q >= end) { *p = q; return 0; }
+        const char *r = redirect_op_end(q, end);
+        if (r) {
+            while (r < end && (*r == ' ' || *r == '\t')) r++;
+            q = (r < end && !is_shell_meta(*r)) ? word_end(r, end) : r;
+            continue;
+        }
+        if (*q == '|' || *q == ';' || *q == '&') { *p = q; return 0; }
+        break;
+    }
+    *start = q;
+    q = word_end(q, end);
+    *p = q;
+    *len = (size_t)(q - *start);
+    return *len > 0;
+}
+
+/* 1 when a word's raw text hides a leading '-' behind a quote or an escape
+ * ("'-o'", "\-o", "\"--output\""): a flag the per-command checks would
+ * otherwise mistake for an operand. */
+static int tok_is_obscured_flag(const char *tok, size_t len)
+{
+    size_t i = 0;
+    int quoted = 0;
+    while (i < len) {
+        char c = tok[i];
+        if (c == '\'' || c == '"') { quoted = 1; i++; continue; }
+        if (c == '\\' || c == '`') { quoted = 1; i++; break; }
+        if ((unsigned char)c == 0xE2 && pwsh_typo_quote(tok + i, tok + len)) {
+            quoted = 1; i += 3; continue;
+        }
+        break;
+    }
+    return quoted && i < len && tok[i] == '-';
+}
+
+/* ----- Command substitution -----
+ * "$(" (POSIX and PowerShell), a POSIX backtick, "<(" / ">(", and -- on an
+ * unresolved platform, where the command may reach PowerShell -- any
+ * unquoted "(" (PowerShell's "(...)" and "@(...)" run the command inside
+ * them as part of an argument). What such a segment runs is not visible to
+ * the per-segment rules, so it is never READ; the inner command is also
+ * classified in full (up to a small nesting depth) and the segment gets its
+ * level if that is worse. */
+
+static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
+                                    char *reason_buf, size_t reason_buf_size,
+                                    unsigned *mask_out);
+
+/* Classifies the text between open (just after the opening '(' or '`') and
+ * its matching close, read with mode. *resume is set just past the close
+ * (or to end), so the caller's scan does not revisit the inner text. */
+static CmdSafetyLevel inner_level(const char *open, const char *end, QuoteMode mode,
+                                  int backtick, CmdPlatform platform,
+                                  const char **resume)
+{
+    char buf[1024];
+    const char *p = open;
+    const char *close = end;
+    *resume = end;
+    if (backtick) {
+        while (p < end) {
+            if (*p == '\\' && p + 1 < end) { p += 2; continue; }
+            if (*p == '`') { close = p; break; }
+            p++;
+        }
+    } else {
+        QuoteScan qs;
+        int depth = 1;
+        quote_scan_init(&qs, mode);
+        while (p < end) {
+            const char *here = p;
+            if (!quote_step(&qs, &p, end)) continue;
+            if (*here == '(') depth++;
+            else if (*here == ')' && --depth == 0) { close = here; break; }
+        }
+    }
+    if (close < end) *resume = close + 1;
+    size_t n = (size_t)(close - open);
+    if (n == 0) return CMD_UNKNOWN;
+    if (n >= sizeof buf || subst_depth >= 4) return CMD_UNKNOWN;
+    memcpy(buf, open, n);
+    buf[n] = '\0';
+    QuoteMode saved = tok_mode;
+    subst_depth++;
+    CmdSafetyLevel lvl = classify_core(buf, platform, NULL, 0, NULL);
+    subst_depth--;
+    tok_mode = saved;
+    return lvl < CMD_UNKNOWN ? CMD_UNKNOWN : lvl;
+}
+
+/* CMD_READ when the segment has no substitution under mode, else at least
+ * CMD_UNKNOWN (the inner command's level when that is worse). */
+static CmdSafetyLevel seg_substitution_level_mode(const char *seg, size_t seg_len,
+                                                  QuoteMode mode, CmdPlatform platform)
 {
     const char *end = seg + seg_len;
     const char *p = seg;
-    int in_sq = 0;
+    int in_sq = 0, in_dq = 0;
     char esc = (mode == QMODE_POSIX) ? '\\' : '`';
+    CmdSafetyLevel worst = CMD_READ;
     while (p < end) {
         char c = *p;
+        if (mode == QMODE_PWSH) {
+            int tq = pwsh_typo_quote(p, end);
+            if (tq) {
+                if (in_sq) { if (tq == 1) in_sq = 0; }
+                else if (in_dq) { if (tq == 2) in_dq = 0; }
+                else if (tq == 1) in_sq = 1;
+                else in_dq = 1;
+                p += 3;
+                continue;
+            }
+        }
         if (in_sq) {
             if (c == '\'') in_sq = 0;
             p++;
             continue;
         }
         if (c == esc) { p += (p + 1 < end) ? 2 : 1; continue; }
-        if (c == '\'') { in_sq = 1; p++; continue; }
-        if (c == '`') return 1; /* POSIX command substitution */
-        if ((c == '$' || c == '<' || c == '>') && p + 1 < end && p[1] == '(')
-            return 1;
+        if (c == '\'' && !in_dq) { in_sq = 1; p++; continue; }
+        if (c == '"') { in_dq = !in_dq; p++; continue; }
+        if (c == '`') { /* POSIX command substitution */
+            CmdSafetyLevel l = inner_level(p + 1, end, mode, 1, platform, &p);
+            if (l > worst) worst = l;
+            continue;
+        }
+        if ((c == '$' || c == '<' || c == '>') && p + 1 < end && p[1] == '(') {
+            CmdSafetyLevel l = inner_level(p + 2, end, mode, 0, platform, &p);
+            if (l > worst) worst = l;
+            continue;
+        }
+        if (c == '(' && !in_dq && mode == QMODE_PWSH &&
+            platform == CMD_PLATFORM_UNKNOWN) {
+            CmdSafetyLevel l = inner_level(p + 1, end, mode, 0, platform, &p);
+            if (l > worst) worst = l;
+            continue;
+        }
         p++;
     }
-    return 0;
+    return worst;
 }
 
-static int seg_has_substitution(const char *seg, size_t seg_len)
+static CmdSafetyLevel seg_substitution_level(const char *seg, size_t seg_len,
+                                             CmdPlatform platform)
 {
-    return seg_has_substitution_mode(seg, seg_len, QMODE_POSIX) ||
-           seg_has_substitution_mode(seg, seg_len, QMODE_PWSH);
+    CmdSafetyLevel a = seg_substitution_level_mode(seg, seg_len, QMODE_POSIX, platform);
+    CmdSafetyLevel b = seg_substitution_level_mode(seg, seg_len, QMODE_PWSH, platform);
+    return a > b ? a : b;
 }
 
 /* ----- Redirect scanning ----- */
+
+/* 1 when the redirect target starting at r is exactly lit: the next
+ * character ends the word. "/dev/nullF" and "&2F" are other files. */
+static int redirect_target_is(const char *r, const char *end, const char *lit)
+{
+    size_t n = strlen(lit);
+    if ((size_t)(end - r) < n || memcmp(r, lit, n) != 0) return 0;
+    r += n;
+    return r >= end || *r == ' ' || *r == '\t' || *r == ')' || is_shell_meta(*r);
+}
 
 static CmdSafetyLevel scan_redirects_mode(const char *seg, size_t seg_len,
                                           QuoteMode mode)
@@ -704,9 +930,10 @@ static CmdSafetyLevel scan_redirects_mode(const char *seg, size_t seg_len,
             r++;
             if (r < end && *r == '>') r++;
             while (r < end && (*r == ' ' || *r == '\t')) r++;
-            if (r + 9 <= end && memcmp(r, "/dev/null", 9) == 0)
+            if (redirect_target_is(r, end, "/dev/null"))
                 { p = r + 9; continue; }
-            if (r + 2 <= end && *r == '&' && (*(r+1) == '1' || *(r+1) == '2'))
+            if (redirect_target_is(r, end, "&1") || redirect_target_is(r, end, "&2") ||
+                redirect_target_is(r, end, "&-"))
                 { p = r + 2; continue; }
             return CMD_WRITE;
         }
@@ -898,21 +1125,117 @@ static CmdSafetyLevel scan_db_cli_args(const char *p)
 static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
                                               char *reason_buf, size_t reason_buf_size);
 
-/* Consumes a value for the flag character at tok[i]: the rest of the token
- * if anything follows it there ("-oFILE"), otherwise the next whitespace
- * token ("-o FILE"). Advances *scan past a separate-token value. */
-static void consume_flag_value(const char *tok, size_t tlen, size_t i,
-                                const char **scan, const char **val, size_t *vlen)
+/* ----- Flag allow-lists -----
+ * A command that is READ only because it is allow-listed stays READ only
+ * while every flag on the line is one known not to write, upload, delete or
+ * run another program. Each such command lists those flags in a FlagSpec;
+ * any other flag -- including an abbreviated long option, which getopt_long
+ * and git accept ("--o=F" for "--output=F") and an attached short value on
+ * a letter that is not listed ("-PX", "-oF") -- makes the segment at least
+ * UNKNOWN, or WRITE when it is (or abbreviates) one known to write. */
+
+typedef struct {
+    const char *name;   /* "--name" */
+    int val;            /* LV_NONE, LV_OPT (only as "=value"), LV_REQ */
+} LongOpt;
+
+enum { LV_NONE = 0, LV_OPT = 1, LV_REQ = 2 };
+
+typedef struct {
+    const char *short_noval;   /* letters that take no value */
+    const char *short_val;     /* letters whose value is the rest of the word or the next word */
+    const char *short_optval;  /* letters whose optional value is the rest of the word */
+    const char *short_write;   /* letters known to write: WRITE */
+    int short_digits;          /* "-5" (a count) is allowed */
+    const LongOpt *longs;      /* allowed long options, {NULL,0}-terminated */
+    const char *const *long_write; /* long options known to write: exact or abbreviated -> WRITE */
+    int long_no_separate;      /* LV_REQ values only as "--name=value" (git's revision options) */
+} FlagSpec;
+
+static int long_in_write_list(const char *name, size_t nlen, const char *const *list)
 {
-    if (i + 1 < tlen) {
-        *val = tok + i + 1;
-        *vlen = tlen - i - 1;
-        return;
+    if (!list || nlen < 3) return 0;          /* "--" plus at least one letter */
+    for (int i = 0; list[i]; i++) {
+        size_t l = strlen(list[i]);
+        if (nlen <= l && memcmp(name, list[i], nlen) == 0) return 1;
     }
-    if (!next_token(scan, val, vlen)) {
-        *val = NULL;
-        *vlen = 0;
+    return 0;
+}
+
+/* Classifies one argument word against fs. Returns 1 when the word is an
+ * operand (not a flag) and 0 when it was a flag (its level folded into
+ * *level). A separate value word is consumed from *scan. "--" sets
+ * *operands_only. */
+static int flag_word(const FlagSpec *fs, const char *ts, size_t tl, const char **scan,
+                     CmdSafetyLevel *level, int *operands_only)
+{
+    if (*operands_only) return 1;
+    if (tok_is_obscured_flag(ts, tl)) {
+        if (*level < CMD_UNKNOWN) *level = CMD_UNKNOWN;
+        return 0;
     }
+    if (tl < 2 || ts[0] != '-') return 1;     /* operand, or "-" (stdin) */
+    if (tl == 2 && ts[1] == '-') { *operands_only = 1; return 0; }
+
+    if (ts[1] == '-') {
+        size_t nlen = 0;
+        while (nlen < tl && ts[nlen] != '=') nlen++;
+        int has_eq = nlen < tl;
+        if (fs->longs) {
+            for (int i = 0; fs->longs[i].name; i++) {
+                const LongOpt *lo = &fs->longs[i];
+                if (strlen(lo->name) != nlen || memcmp(ts, lo->name, nlen) != 0) continue;
+                if (has_eq && lo->val == LV_NONE) break;          /* value on a no-value flag */
+                if (!has_eq && lo->val == LV_REQ && !fs->long_no_separate) {
+                    const char *v; size_t vl;
+                    (void)next_token(scan, &v, &vl);
+                }
+                return 0;
+            }
+        }
+        if (long_in_write_list(ts, nlen, fs->long_write)) {
+            if (*level < CMD_WRITE) *level = CMD_WRITE;
+        } else if (*level < CMD_UNKNOWN) {
+            *level = CMD_UNKNOWN;
+        }
+        return 0;
+    }
+
+    for (size_t i = 1; i < tl; i++) {
+        char c = ts[i];
+        if (fs->short_write && strchr(fs->short_write, c)) {
+            if (*level < CMD_WRITE) *level = CMD_WRITE;
+            return 0;
+        }
+        if (fs->short_noval && strchr(fs->short_noval, c)) continue;
+        if (fs->short_digits && c >= '0' && c <= '9') continue;
+        if (fs->short_optval && strchr(fs->short_optval, c)) return 0;
+        if (fs->short_val && strchr(fs->short_val, c)) {
+            if (i + 1 == tl) {
+                const char *v; size_t vl;
+                (void)next_token(scan, &v, &vl);
+            }
+            return 0;
+        }
+        if (*level < CMD_UNKNOWN) *level = CMD_UNKNOWN;
+        return 0;
+    }
+    return 0;
+}
+
+/* Every word from p to the end of the segment against fs. *operands gets
+ * the number of operand words (may be NULL). */
+static CmdSafetyLevel flag_scan(const FlagSpec *fs, const char *p, int *operands)
+{
+    CmdSafetyLevel level = CMD_READ;
+    int only = 0, n = 0;
+    const char *ts;
+    size_t tl;
+    while (next_token(&p, &ts, &tl)) {
+        if (flag_word(fs, ts, tl, &p, &level, &only)) n++;
+    }
+    if (operands) *operands = n;
+    return level;
 }
 
 /* ----- sed: -i in any spelling, and a script that writes (w/W command,
@@ -946,31 +1269,44 @@ static int next_shell_word(const char **pp, const char *end,
     const char *p = *pp;
     size_t n = 0;
     int in_sq = 0, in_dq = 0;
+    int pwsh = (tok_mode == QMODE_PWSH);
+    char esc = pwsh ? '`' : '\\';
 
     *truncated = 0;
-    while (p < end && (*p == ' ' || *p == '\t')) p++;
-    if (p >= end || *p == '|' || *p == ';' || *p == '&' || *p == '<' || *p == '>') {
+    for (;;) {
+        while (p < end && (*p == ' ' || *p == '\t')) p++;
+        if (p >= end) { *pp = p; return 0; }
+        const char *r = redirect_op_end(p, end);
+        if (!r) break;
+        while (r < end && (*r == ' ' || *r == '\t')) r++;
+        p = (r < end && !is_shell_meta(*r)) ? word_end(r, end) : r;
+    }
+    if (*p == '|' || *p == ';' || *p == '&') {
         *pp = p;
         return 0;
     }
     *raw_start = p;
     while (p < end) {
         char c = *p;
+        int tq = pwsh ? pwsh_typo_quote(p, end) : 0;
         if (in_sq) {
+            if (tq == 1) { p += 3; in_sq = 0; continue; }
             p++;
             if (c == '\'') { in_sq = 0; continue; }
         } else if (in_dq) {
+            if (tq == 2) { p += 3; in_dq = 0; continue; }
             p++;
             if (c == '"') { in_dq = 0; continue; }
-            if (c == '\\' && p < end) c = *p++;
+            if (c == esc && p < end) c = *p++;
         } else {
             if (c == ' ' || c == '\t' || c == '|' || c == ';' || c == '&' ||
                 c == '<' || c == '>')
                 break;
+            if (tq) { p += 3; if (tq == 1) in_sq = 1; else in_dq = 1; continue; }
             p++;
             if (c == '\'') { in_sq = 1; continue; }
             if (c == '"')  { in_dq = 1; continue; }
-            if (c == '\\' && p < end) c = *p++;
+            if (c == esc && p < end) c = *p++;
         }
         if (n + 1 < out_size) out[n++] = c;
         else *truncated = 1;
@@ -987,7 +1323,41 @@ static int next_shell_word(const char **pp, const char *end,
  * seen. Parsing errs towards finding a command: anything that is not an s
  * or y command runs to the next ';' or newline, so a w/e hidden after a
  * ';' in text a real sed would treat as an argument still counts. */
-static CmdSafetyLevel sed_script_level(const char *s)
+/* Skips a regex body up to (not past) its delimiter d. With brackets set,
+ * a bracket expression "[...]" is skipped whole, so a delimiter inside it
+ * ("[/]") does not end the regex -- what GNU sed does. Returns NULL when
+ * the delimiter never comes. */
+static const char *sed_skip_regex(const char *p, char d, int brackets)
+{
+    while (*p && *p != d) {
+        if (*p == '\\' && p[1]) { p += 2; continue; }
+        if (brackets && *p == '[') {
+            const char *q = p + 1;
+            if (*q == '^') q++;
+            if (*q == ']') q++;              /* a leading ']' is literal */
+            while (*q && *q != ']') {
+                if (*q == '[' && (q[1] == ':' || q[1] == '.' || q[1] == '=')) {
+                    char k = q[1];
+                    q += 2;
+                    while (*q && !(*q == k && q[1] == ']')) q++;
+                    if (*q) q += 2;
+                    continue;
+                }
+                q++;
+            }
+            if (!*q) return NULL;
+            p = q + 1;
+            continue;
+        }
+        p++;
+    }
+    return *p ? p : NULL;
+}
+
+/* One reading of the script: brackets says whether bracket expressions
+ * hide the delimiter. Anything left unparsed -- an address, regex or s/y
+ * command that never closes -- is UNKNOWN: a w, W or e may be in it. */
+static CmdSafetyLevel sed_script_level_read(const char *s, int brackets)
 {
     CmdSafetyLevel level = CMD_READ;
     const char *p = s;
@@ -1002,11 +1372,9 @@ static CmdSafetyLevel sed_script_level(const char *s)
                 char d = '/';
                 if (*p == '\\') { d = p[1]; p++; }
                 p++;
-                while (*p && *p != d) {
-                    if (*p == '\\' && p[1]) p++;
-                    p++;
-                }
-                if (*p) p++;
+                p = sed_skip_regex(p, d, brackets);
+                if (!p) return CMD_UNKNOWN;
+                p++;
                 while (*p == 'I' || *p == 'M') p++;
                 continue;
             }
@@ -1032,10 +1400,13 @@ static CmdSafetyLevel sed_script_level(const char *s)
             char d = *p;
             if (!d || d == '\n' || d == '\\') return CMD_UNKNOWN;
             p++;
-            for (int seen = 0; *p && seen < 2; p++) {
-                if (*p == '\\' && p[1]) { p++; continue; }
-                if (*p == d) seen++;
-            }
+            /* The pattern (brackets apply only to an s regex), then the
+             * replacement or y target, which has no bracket syntax. */
+            p = sed_skip_regex(p, d, brackets && c == 's');
+            if (!p) return CMD_UNKNOWN;
+            p = sed_skip_regex(p + 1, d, 0);
+            if (!p) return CMD_UNKNOWN;
+            p++;
             if (c == 's') {
                 while (*p && *p != ';' && *p != '\n' && *p != '}' &&
                        *p != ' ' && *p != '\t') {
@@ -1051,6 +1422,16 @@ static CmdSafetyLevel sed_script_level(const char *s)
     return level;
 }
 
+/* Bracket expressions are read both ways -- as GNU sed does (a delimiter
+ * inside "[...]" is literal) and as a plain character scan -- and the
+ * worse reading wins, so neither parse can hide a w/W/e from the other. */
+static CmdSafetyLevel sed_script_level(const char *s)
+{
+    CmdSafetyLevel a = sed_script_level_read(s, 1);
+    CmdSafetyLevel b = sed_script_level_read(s, 0);
+    return a > b ? a : b;
+}
+
 /* ----- curl: flags that write, send data, or run/leak something, against
  * an explicit known-safe allow-list. ----- */
 
@@ -1062,23 +1443,6 @@ static int curl_value_is_devnull_or_dash(const char *v, size_t vlen)
 static int curl_method_is_safe(const char *v, size_t vlen)
 {
     return v != NULL && (tok_eq_ci(v, vlen, "GET") || tok_eq_ci(v, vlen, "HEAD"));
-}
-
-static int curl_is_safe_long(const char *tok, size_t len)
-{
-    static const char *exact[] = {
-        "--fail", "--fail-with-body", "--header", "--user-agent", "--referer",
-        "--max-time", "--connect-timeout", "--compressed", "--get", "--proxy",
-        "--user", "--http1.1", "--http2", "--write-out", "--cookie",
-        "--noproxy", "--resolve", "--cacert", "--capath", "--cert", "--key",
-        "--location-trusted", "--max-redirs", "--range", "--continue-at",
-        "--progress-bar", "--no-progress-meter", "--url", "--help", "--version",
-        NULL
-    };
-    for (int i = 0; exact[i]; i++)
-        if (tok_eq(tok, len, exact[i])) return 1;
-    if (tok_prefix(tok, len, "--retry")) return 1;
-    return 0;
 }
 
 /* ----- find: the -exec/-execdir/-ok/-okdir sub-command, run through the
@@ -1121,6 +1485,666 @@ static int is_wrapper_cmd(const char *tok, size_t len)
         "time", "stdbuf", "ionice", "setsid", NULL
     };
     return tok_in_list(tok, len, wrappers);
+}
+
+/* ----- Flag allow-lists of the READ commands -----
+ * The commands below have at least one flag that writes a file, changes
+ * system state or runs another program, so they are READ only with the
+ * flags listed here. The other entries of linux_read_cmds (ls, cat, grep,
+ * head, tail, wc, cut, tr, ps, df, du, ...) take any flag: no documented
+ * flag of theirs writes, uploads, deletes or runs another program. */
+
+static const LongOpt sort_longs[] = {
+    { "--ignore-leading-blanks", LV_NONE }, { "--dictionary-order", LV_NONE },
+    { "--ignore-case", LV_NONE }, { "--general-numeric-sort", LV_NONE },
+    { "--ignore-nonprinting", LV_NONE }, { "--month-sort", LV_NONE },
+    { "--human-numeric-sort", LV_NONE }, { "--numeric-sort", LV_NONE },
+    { "--random-sort", LV_NONE }, { "--reverse", LV_NONE },
+    { "--version-sort", LV_NONE }, { "--check", LV_OPT }, { "--merge", LV_NONE },
+    { "--stable", LV_NONE }, { "--unique", LV_NONE }, { "--zero-terminated", LV_NONE },
+    { "--debug", LV_NONE }, { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--sort", LV_REQ }, { "--key", LV_REQ }, { "--field-separator", LV_REQ },
+    { "--buffer-size", LV_REQ }, { "--temporary-directory", LV_REQ },
+    { "--parallel", LV_REQ }, { "--batch-size", LV_REQ }, { "--random-source", LV_REQ },
+    { "--files0-from", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const sort_long_write[] = { "--output", NULL };
+static const FlagSpec sort_spec = {
+    "bdfghiMnRrVcCsumz", "ktST", NULL, "o", 0, sort_longs, sort_long_write, 0
+};
+
+static const LongOpt uniq_longs[] = {
+    { "--count", LV_NONE }, { "--repeated", LV_NONE }, { "--all-repeated", LV_OPT },
+    { "--group", LV_OPT }, { "--ignore-case", LV_NONE }, { "--unique", LV_NONE },
+    { "--zero-terminated", LV_NONE }, { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--skip-fields", LV_REQ }, { "--skip-chars", LV_REQ }, { "--check-chars", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec uniq_spec = {
+    "cdDiuz", "fsw", NULL, NULL, 1, uniq_longs, NULL, 0
+};
+
+static const LongOpt man_longs[] = {
+    { "--all", LV_NONE }, { "--whatis", LV_NONE }, { "--apropos", LV_NONE },
+    { "--where", LV_NONE }, { "--path", LV_NONE }, { "--location", LV_NONE },
+    { "--where-cat", LV_NONE }, { "--location-cat", LV_NONE },
+    { "--ignore-case", LV_NONE }, { "--match-case", LV_NONE }, { "--regex", LV_NONE },
+    { "--wildcard", LV_NONE }, { "--names-only", LV_NONE },
+    { "--global-apropos", LV_NONE }, { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--usage", LV_NONE }, { "--no-hyphenation", LV_NONE },
+    { "--no-justification", LV_NONE }, { "--no-subpages", LV_NONE },
+    { "--sections", LV_REQ }, { "--manpath", LV_REQ }, { "--locale", LV_REQ },
+    { "--systems", LV_REQ }, { "--extension", LV_REQ }, { "--encoding", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec man_spec = {
+    "afkKwWiIhV", "sSMLmeER", NULL, NULL, 0, man_longs, NULL, 0
+};
+
+static const LongOpt less_longs[] = {
+    { "--LINE-NUMBERS", LV_NONE }, { "--line-numbers", LV_NONE },
+    { "--chop-long-lines", LV_NONE }, { "--RAW-CONTROL-CHARS", LV_NONE },
+    { "--raw-control-chars", LV_NONE }, { "--ignore-case", LV_NONE },
+    { "--IGNORE-CASE", LV_NONE }, { "--quit-if-one-screen", LV_NONE },
+    { "--no-init", LV_NONE }, { "--long-prompt", LV_NONE }, { "--quiet", LV_NONE },
+    { "--QUIET", LV_NONE }, { "--silent", LV_NONE }, { "--SILENT", LV_NONE },
+    { "--squeeze-blank-lines", LV_NONE }, { "--follow-name", LV_NONE },
+    { "--mouse", LV_NONE }, { "--status-column", LV_NONE }, { "--incsearch", LV_NONE },
+    { "--use-color", LV_NONE }, { "--no-lessopen", LV_NONE }, { "--quit-at-eof", LV_NONE },
+    { "--QUIT-AT-EOF", LV_NONE }, { "--hilite-search", LV_NONE },
+    { "--HILITE-SEARCH", LV_NONE }, { "--hilite-unread", LV_NONE },
+    { "--HILITE-UNREAD", LV_NONE }, { "--search-skip-screen", LV_NONE },
+    { "--tilde", LV_NONE }, { "--no-keypad", LV_NONE }, { "--help", LV_NONE },
+    { "--version", LV_NONE }, { "--wordwrap", LV_NONE },
+    { "--tabs", LV_REQ }, { "--pattern", LV_REQ }, { "--prompt", LV_REQ },
+    { "--jump-target", LV_REQ }, { "--header", LV_REQ }, { "--shift", LV_REQ },
+    { "--window", LV_REQ }, { "--max-back-scroll", LV_REQ },
+    { "--max-forw-scroll", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const less_long_write[] = { "--log-file", "--LOG-FILE", NULL };
+static const FlagSpec less_spec = {
+    "NnSRrIiFXMmsqQeEfgGJKLwWacCBuUV~", "xzyhbjpPtT", NULL, "oO", 0,
+    less_longs, less_long_write, 0
+};
+
+static const LongOpt rg_longs[] = {
+    { "--ignore-case", LV_NONE }, { "--smart-case", LV_NONE },
+    { "--case-sensitive", LV_NONE }, { "--word-regexp", LV_NONE },
+    { "--line-regexp", LV_NONE }, { "--invert-match", LV_NONE },
+    { "--line-number", LV_NONE }, { "--no-line-number", LV_NONE },
+    { "--files-with-matches", LV_NONE }, { "--files-without-match", LV_NONE },
+    { "--count", LV_NONE }, { "--count-matches", LV_NONE },
+    { "--fixed-strings", LV_NONE }, { "--hidden", LV_NONE }, { "--no-ignore", LV_NONE },
+    { "--no-ignore-vcs", LV_NONE }, { "--files", LV_NONE }, { "--type-list", LV_NONE },
+    { "--json", LV_NONE }, { "--vimgrep", LV_NONE }, { "--no-heading", LV_NONE },
+    { "--heading", LV_NONE }, { "--column", LV_NONE }, { "--no-column", LV_NONE },
+    { "--only-matching", LV_NONE }, { "--multiline", LV_NONE },
+    { "--multiline-dotall", LV_NONE }, { "--pcre2", LV_NONE }, { "--follow", LV_NONE },
+    { "--trim", LV_NONE }, { "--stats", LV_NONE }, { "--pretty", LV_NONE },
+    { "--no-messages", LV_NONE }, { "--quiet", LV_NONE }, { "--text", LV_NONE },
+    { "--null", LV_NONE }, { "--no-filename", LV_NONE }, { "--with-filename", LV_NONE },
+    { "--search-zip", LV_NONE }, { "--debug", LV_NONE }, { "--help", LV_NONE },
+    { "--version", LV_NONE }, { "--unrestricted", LV_NONE }, { "--binary", LV_NONE },
+    { "--no-config", LV_NONE }, { "--sort-files", LV_NONE }, { "--byte-offset", LV_NONE },
+    { "--passthru", LV_NONE }, { "--no-unicode", LV_NONE }, { "--crlf", LV_NONE },
+    { "--color", LV_REQ }, { "--colors", LV_REQ }, { "--sort", LV_REQ },
+    { "--sortr", LV_REQ }, { "--max-depth", LV_REQ }, { "--glob", LV_REQ },
+    { "--iglob", LV_REQ }, { "--type", LV_REQ }, { "--type-not", LV_REQ },
+    { "--context", LV_REQ }, { "--after-context", LV_REQ },
+    { "--before-context", LV_REQ }, { "--max-count", LV_REQ },
+    { "--max-columns", LV_REQ }, { "--replace", LV_REQ }, { "--regexp", LV_REQ },
+    { "--file", LV_REQ }, { "--pre-glob", LV_REQ }, { "--threads", LV_REQ },
+    { "--encoding", LV_REQ }, { "--ignore-file", LV_REQ }, { "--type-add", LV_REQ },
+    { "--max-filesize", LV_REQ }, { "--path-separator", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec rg_spec = {
+    "iSswxvnNlcFLHIopzUPaq0hVu", "CABgtTefmMjrEd", NULL, NULL, 0, rg_longs, NULL, 0
+};
+
+static const LongOpt tree_longs[] = {
+    { "--gitignore", LV_NONE }, { "--ignore-case", LV_NONE }, { "--matchdirs", LV_NONE },
+    { "--metafirst", LV_NONE }, { "--prune", LV_NONE }, { "--info", LV_NONE },
+    { "--noreport", LV_NONE }, { "--dirsfirst", LV_NONE }, { "--filesfirst", LV_NONE },
+    { "--si", LV_NONE }, { "--du", LV_NONE }, { "--inodes", LV_NONE },
+    { "--device", LV_NONE }, { "--nolinks", LV_NONE }, { "--help", LV_NONE },
+    { "--version", LV_NONE },
+    { "--charset", LV_REQ }, { "--filelimit", LV_REQ }, { "--timefmt", LV_REQ },
+    { "--sort", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec tree_spec = {
+    "adlfxRqNQpugshDFvtcUriASnCXJ", "LPIHT", NULL, "o", 0, tree_longs, NULL, 0
+};
+
+static const LongOpt sar_longs[] = {
+    { "--human", LV_NONE }, { "--pretty", LV_NONE }, { "--help", LV_NONE },
+    { "--dev", LV_REQ }, { "--fs", LV_REQ }, { "--iface", LV_REQ },
+    { "--dec", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec sar_spec = {
+    "ABbCdFHhpqRrStuvWwyzx", "IijmnPseEf", NULL, "o", 0, sar_longs, NULL, 0
+};
+
+static const LongOpt dmidecode_longs[] = {
+    { "--quiet", LV_NONE }, { "--dump", LV_NONE }, { "--no-sysfs", LV_NONE },
+    { "--no-quirks", LV_NONE }, { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--dev-mem", LV_REQ }, { "--string", LV_REQ }, { "--type", LV_REQ },
+    { "--handle", LV_REQ }, { "--from-dump", LV_REQ }, { "--oem-string", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const dmidecode_long_write[] = { "--dump-bin", NULL };
+static const FlagSpec dmidecode_spec = {
+    "quhV", "dstH", NULL, NULL, 0, dmidecode_longs, dmidecode_long_write, 0
+};
+
+static const LongOpt file_longs[] = {
+    { "--mime", LV_NONE }, { "--mime-type", LV_NONE }, { "--mime-encoding", LV_NONE },
+    { "--brief", LV_NONE }, { "--extension", LV_NONE }, { "--apple", LV_NONE },
+    { "--keep-going", LV_NONE }, { "--no-dereference", LV_NONE },
+    { "--dereference", LV_NONE }, { "--raw", LV_NONE }, { "--special-files", LV_NONE },
+    { "--uncompress", LV_NONE }, { "--uncompress-noreport", LV_NONE },
+    { "--no-pad", LV_NONE }, { "--no-buffer", LV_NONE }, { "--print0", LV_NONE },
+    { "--preserve-date", LV_NONE }, { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--files-from", LV_REQ }, { "--separator", LV_REQ }, { "--magic-file", LV_REQ },
+    { "--exclude", LV_REQ }, { "--exclude-quiet", LV_REQ }, { "--parameter", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const file_long_write[] = { "--compile", NULL };
+static const FlagSpec file_spec = {
+    "bcdEhiIkLlNnprsSvzZ0", "eFfmP", NULL, "C", 0, file_longs, file_long_write, 0
+};
+
+static const LongOpt ss_longs[] = {
+    { "--numeric", LV_NONE }, { "--resolve", LV_NONE }, { "--all", LV_NONE },
+    { "--listening", LV_NONE }, { "--options", LV_NONE }, { "--extended", LV_NONE },
+    { "--memory", LV_NONE }, { "--processes", LV_NONE }, { "--threads", LV_NONE },
+    { "--info", LV_NONE }, { "--tos", LV_NONE }, { "--cgroup", LV_NONE },
+    { "--tipcinfo", LV_NONE }, { "--summary", LV_NONE }, { "--events", LV_NONE },
+    { "--context", LV_NONE }, { "--contexts", LV_NONE }, { "--bpf", LV_NONE },
+    { "--tcp", LV_NONE }, { "--udp", LV_NONE }, { "--dccp", LV_NONE },
+    { "--raw", LV_NONE }, { "--unix", LV_NONE }, { "--sctp", LV_NONE },
+    { "--packet", LV_NONE }, { "--vsock", LV_NONE }, { "--xdp", LV_NONE },
+    { "--mptcp", LV_NONE }, { "--tipc", LV_NONE }, { "--oneline", LV_NONE },
+    { "--no-header", LV_NONE }, { "--ipv4", LV_NONE }, { "--ipv6", LV_NONE },
+    { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--net", LV_REQ }, { "--family", LV_REQ }, { "--query", LV_REQ },
+    { "--socket", LV_REQ }, { "--filter", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const ss_long_write[] = { "--kill", "--diag", NULL };
+static const FlagSpec ss_spec = {
+    "hVHnraloempiTsEZzb460tudwxSMO", "NfAF", NULL, "KD", 0, ss_longs, ss_long_write, 0
+};
+
+static const LongOpt arp_longs[] = {
+    { "--all", LV_NONE }, { "--numeric", LV_NONE }, { "--verbose", LV_NONE },
+    { "--use-device", LV_NONE }, { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--device", LV_REQ }, { "--hw-type", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const arp_long_write[] = { "--delete", "--set", "--file", NULL };
+static const FlagSpec arp_spec = {
+    "anveDV", "iHtA", NULL, "dsf", 0, arp_longs, arp_long_write, 0
+};
+
+static const LongOpt sensors_longs[] = {
+    { "--no-adapter", LV_NONE }, { "--fahrenheit", LV_NONE },
+    { "--bus-list", LV_NONE }, { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--config-file", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const sensors_long_write[] = { "--set", NULL };
+static const FlagSpec sensors_spec = {
+    "fAujvhB", "c", NULL, "s", 0, sensors_longs, sensors_long_write, 0
+};
+
+static const LongOpt iptables_save_longs[] = {
+    { "--counters", LV_NONE }, { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--table", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const iptables_save_long_write[] = { "--file", NULL };
+static const FlagSpec iptables_save_spec = {
+    "chV", "t", NULL, "f", 0, iptables_save_longs, iptables_save_long_write, 0
+};
+
+static const LongOpt lastlog_longs[] = {
+    { "--help", LV_NONE },
+    { "--before", LV_REQ }, { "--time", LV_REQ }, { "--user", LV_REQ },
+    { "--root", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const lastlog_long_write[] = { "--clear", "--set", NULL };
+static const FlagSpec lastlog_spec = {
+    "h", "btuR", NULL, "CS", 0, lastlog_longs, lastlog_long_write, 0
+};
+
+static const LongOpt blkid_longs[] = {
+    { "--help", LV_NONE }, { "--version", LV_NONE }, { "--probe", LV_NONE },
+    { "--label", LV_REQ }, { "--uuid", LV_REQ }, { "--output", LV_REQ },
+    { "--offset", LV_REQ }, { "--match-tag", LV_REQ }, { "--size", LV_REQ },
+    { "--match-token", LV_REQ }, { "--usages", LV_REQ }, { "--match-types", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const blkid_long_write[] = { "--cache-file", "--garbage-collect", NULL };
+static const FlagSpec blkid_spec = {
+    "dhiklpV", "LUnoOsStu", NULL, "cgw", 0, blkid_longs, blkid_long_write, 0
+};
+
+static const LongOpt journalctl_longs[] = {
+    { "--follow", LV_NONE }, { "--reverse", LV_NONE }, { "--pager-end", LV_NONE },
+    { "--catalog", LV_NONE }, { "--quiet", LV_NONE }, { "--all", LV_NONE },
+    { "--full", LV_NONE }, { "--no-full", LV_NONE }, { "--no-pager", LV_NONE },
+    { "--no-hostname", LV_NONE }, { "--utc", LV_NONE }, { "--merge", LV_NONE },
+    { "--system", LV_NONE }, { "--user", LV_NONE }, { "--dmesg", LV_NONE },
+    { "--list-boots", LV_NONE }, { "--disk-usage", LV_NONE }, { "--header", LV_NONE },
+    { "--list-catalog", LV_NONE }, { "--dump-catalog", LV_NONE }, { "--verify", LV_NONE },
+    { "--show-cursor", LV_NONE }, { "--no-tail", LV_NONE }, { "--fields", LV_NONE },
+    { "--case-sensitive", LV_OPT }, { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--lines", LV_OPT }, { "--boot", LV_OPT },
+    { "--unit", LV_REQ }, { "--user-unit", LV_REQ }, { "--since", LV_REQ },
+    { "--until", LV_REQ }, { "--priority", LV_REQ }, { "--identifier", LV_REQ },
+    { "--exclude-identifier", LV_REQ }, { "--grep", LV_REQ }, { "--output", LV_REQ },
+    { "--output-fields", LV_REQ }, { "--directory", LV_REQ }, { "--file", LV_REQ },
+    { "--machine", LV_REQ }, { "--field", LV_REQ }, { "--cursor", LV_REQ },
+    { "--after-cursor", LV_REQ }, { "--facility", LV_REQ }, { "--namespace", LV_REQ },
+    { "--root", LV_REQ }, { "--image", LV_REQ }, { "--invocation", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const journalctl_long_write[] = {
+    "--vacuum-size", "--vacuum-time", "--vacuum-files", "--rotate", "--flush",
+    "--sync", "--relinquish-var", "--smart-relinquish-var", "--setup-keys",
+    "--update-catalog", "--cursor-file", NULL
+};
+static const FlagSpec journalctl_spec = {
+    /* -n, -b and -I take an optional value, attached only: a separate
+     * word after them is never theirs, so it is still checked. */
+    "frexqamklNh", "uSUptgoDFMTic", "nbI", NULL, 1, journalctl_longs, journalctl_long_write, 0
+};
+
+static const LongOpt dmesg_longs[] = {
+    { "--ctime", LV_NONE }, { "--human", LV_NONE }, { "--follow", LV_NONE },
+    { "--follow-new", LV_NONE }, { "--decode", LV_NONE }, { "--kernel", LV_NONE },
+    { "--userspace", LV_NONE }, { "--raw", LV_NONE }, { "--notime", LV_NONE },
+    { "--show-delta", LV_NONE }, { "--nopager", LV_NONE }, { "--json", LV_NONE },
+    { "--reltime", LV_NONE }, { "--syslog", LV_NONE }, { "--force-prefix", LV_NONE },
+    { "--help", LV_NONE }, { "--version", LV_NONE },
+    { "--color", LV_OPT }, { "--time-format", LV_REQ }, { "--level", LV_REQ },
+    { "--facility", LV_REQ }, { "--buffer-size", LV_REQ }, { "--file", LV_REQ },
+    { "--kmsg-file", LV_REQ }, { "--since", LV_REQ }, { "--until", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const dmesg_long_write[] = {
+    "--clear", "--read-clear", "--console-off", "--console-on", "--console-level", NULL
+};
+static const FlagSpec dmesg_spec = {
+    "TtHwWxkurdeSJPhV", "lfsFK", "L", "CcDEn", 0, dmesg_longs, dmesg_long_write, 0
+};
+
+static const LongOpt date_longs[] = {
+    { "--utc", LV_NONE }, { "--universal", LV_NONE }, { "--rfc-email", LV_NONE },
+    { "--rfc-2822", LV_NONE }, { "--debug", LV_NONE }, { "--help", LV_NONE },
+    { "--version", LV_NONE }, { "--iso-8601", LV_OPT }, { "--rfc-3339", LV_REQ },
+    { "--resolution", LV_NONE },
+    { "--date", LV_REQ }, { "--reference", LV_REQ }, { "--file", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const date_long_write[] = { "--set", NULL };
+static const FlagSpec date_spec = {
+    "uR", "drf", "I", "s", 0, date_longs, date_long_write, 0
+};
+
+static const LongOpt hostname_longs[] = {
+    { "--short", LV_NONE }, { "--fqdn", LV_NONE }, { "--long", LV_NONE },
+    { "--ip-address", LV_NONE }, { "--all-ip-addresses", LV_NONE },
+    { "--all-fqdns", LV_NONE }, { "--domain", LV_NONE }, { "--alias", LV_NONE },
+    { "--yp", LV_NONE }, { "--nis", LV_NONE }, { "--verbose", LV_NONE },
+    { "--help", LV_NONE }, { "--version", LV_NONE },
+    { NULL, 0 }
+};
+static const char *const hostname_long_write[] = { "--file", "--boot", NULL };
+static const FlagSpec hostname_spec = {
+    "sflIiAdaynvhV", NULL, NULL, "Fb", 0, hostname_longs, hostname_long_write, 0
+};
+
+static const LongOpt route_longs[] = {
+    { "--numeric", LV_NONE }, { "--extend", LV_NONE }, { "--verbose", LV_NONE },
+    { "--fib", LV_NONE }, { "--cache", LV_NONE }, { "--help", LV_NONE },
+    { "--version", LV_NONE }, { "--family", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec route_spec = {
+    "neveFC46hV", "A", NULL, NULL, 0, route_longs, NULL, 0
+};
+
+/* git log / show / diff: revision and diff options. git accepts any
+ * unambiguous abbreviation of a long option, so an abbreviation of
+ * --output is WRITE and any other abbreviation is UNKNOWN. Values of the
+ * value-taking long options are only taken as "--name=value": a separate
+ * word after them is still checked. --ext-diff (runs an external diff
+ * program) is not listed. */
+static const LongOpt git_log_longs[] = {
+    { "--oneline", LV_NONE }, { "--graph", LV_NONE }, { "--all", LV_NONE },
+    { "--decorate", LV_OPT }, { "--no-decorate", LV_NONE }, { "--stat", LV_OPT },
+    { "--shortstat", LV_NONE }, { "--numstat", LV_NONE }, { "--name-only", LV_NONE },
+    { "--name-status", LV_NONE }, { "--patch", LV_NONE }, { "--no-patch", LV_NONE },
+    { "--reverse", LV_NONE }, { "--first-parent", LV_NONE }, { "--no-merges", LV_NONE },
+    { "--merges", LV_NONE }, { "--follow", LV_NONE }, { "--color", LV_OPT },
+    { "--no-color", LV_NONE }, { "--abbrev-commit", LV_NONE },
+    { "--no-abbrev-commit", LV_NONE }, { "--abbrev", LV_OPT }, { "--no-abbrev", LV_NONE },
+    { "--summary", LV_NONE }, { "--raw", LV_NONE }, { "--full-diff", LV_NONE },
+    { "--word-diff", LV_OPT }, { "--color-words", LV_OPT },
+    { "--ignore-all-space", LV_NONE }, { "--ignore-space-change", LV_NONE },
+    { "--ignore-blank-lines", LV_NONE }, { "--ignore-cr-at-eol", LV_NONE },
+    { "--ignore-space-at-eol", LV_NONE }, { "--check", LV_NONE },
+    { "--minimal", LV_NONE }, { "--patience", LV_NONE }, { "--histogram", LV_NONE },
+    { "--dirstat", LV_OPT }, { "--date-order", LV_NONE }, { "--topo-order", LV_NONE },
+    { "--author-date-order", LV_NONE }, { "--branches", LV_OPT }, { "--tags", LV_OPT },
+    { "--remotes", LV_OPT }, { "--left-right", LV_NONE }, { "--cherry-pick", LV_NONE },
+    { "--cherry-mark", LV_NONE }, { "--cherry", LV_NONE }, { "--boundary", LV_NONE },
+    { "--simplify-by-decoration", LV_NONE }, { "--source", LV_NONE },
+    { "--show-signature", LV_NONE }, { "--no-ext-diff", LV_NONE },
+    { "--no-textconv", LV_NONE }, { "--textconv", LV_NONE }, { "--cached", LV_NONE },
+    { "--staged", LV_NONE }, { "--full-index", LV_NONE }, { "--binary", LV_NONE },
+    { "--no-renames", LV_NONE }, { "--find-renames", LV_OPT }, { "--find-copies", LV_OPT },
+    { "--relative", LV_OPT }, { "--no-relative", LV_NONE }, { "--exit-code", LV_NONE },
+    { "--quiet", LV_NONE }, { "--compact-summary", LV_NONE }, { "--pretty", LV_OPT },
+    { "--format", LV_OPT }, { "--no-walk", LV_OPT }, { "--do-walk", LV_NONE },
+    { "--walk-reflogs", LV_NONE }, { "--reflog", LV_NONE }, { "--not", LV_NONE },
+    { "--regexp-ignore-case", LV_NONE }, { "--extended-regexp", LV_NONE },
+    { "--fixed-strings", LV_NONE }, { "--perl-regexp", LV_NONE },
+    { "--all-match", LV_NONE }, { "--invert-grep", LV_NONE }, { "--no-notes", LV_NONE },
+    { "--notes", LV_OPT }, { "--show-notes", LV_OPT }, { "--children", LV_NONE },
+    { "--parents", LV_NONE }, { "--use-mailmap", LV_NONE }, { "--mailmap", LV_NONE },
+    { "--no-mailmap", LV_NONE }, { "--log-size", LV_NONE }, { "--full-history", LV_NONE },
+    { "--dense", LV_NONE }, { "--sparse", LV_NONE }, { "--simplify-merges", LV_NONE },
+    { "--ancestry-path", LV_OPT }, { "--show-pulls", LV_NONE }, { "--merge", LV_NONE },
+    { "--no-prefix", LV_NONE }, { "--default-prefix", LV_NONE },
+    { "--patch-with-stat", LV_NONE }, { "--patch-with-raw", LV_NONE },
+    { "--function-context", LV_NONE }, { "--remerge-diff", LV_NONE }, { "--cc", LV_NONE },
+    { "--combined-all-paths", LV_NONE }, { "--no-diff-merges", LV_NONE },
+    { "--dd", LV_NONE }, { "--no-index", LV_NONE }, { "--merge-base", LV_NONE },
+    { "--submodule", LV_OPT }, { "--expand-tabs", LV_OPT }, { "--no-expand-tabs", LV_NONE },
+    { "--show-linear-break", LV_OPT }, { "--irreversible-delete", LV_NONE },
+    { "--text", LV_NONE }, { "--no-stat", LV_NONE }, { "--indent-heuristic", LV_NONE },
+    { "--no-indent-heuristic", LV_NONE }, { "--help", LV_NONE },
+    { "--since", LV_REQ }, { "--until", LV_REQ }, { "--after", LV_REQ },
+    { "--before", LV_REQ }, { "--author", LV_REQ }, { "--committer", LV_REQ },
+    { "--grep", LV_REQ }, { "--max-count", LV_REQ }, { "--skip", LV_REQ },
+    { "--date", LV_REQ }, { "--diff-filter", LV_REQ }, { "--unified", LV_REQ },
+    { "--min-parents", LV_REQ }, { "--max-parents", LV_REQ }, { "--glob", LV_REQ },
+    { "--exclude", LV_REQ }, { "--encoding", LV_REQ }, { "--diff-algorithm", LV_REQ },
+    { "--anchored", LV_REQ }, { "--word-diff-regex", LV_REQ }, { "--color-moved", LV_OPT },
+    { "--color-moved-ws", LV_REQ }, { "--ws-error-highlight", LV_REQ },
+    { "--src-prefix", LV_REQ }, { "--dst-prefix", LV_REQ }, { "--line-prefix", LV_REQ },
+    { "--inter-hunk-context", LV_REQ }, { "--stat-width", LV_REQ },
+    { "--stat-name-width", LV_REQ }, { "--stat-count", LV_REQ },
+    { "--stat-graph-width", LV_REQ }, { "--ignore-submodules", LV_OPT },
+    { "--diff-merges", LV_REQ }, { "--decorate-refs", LV_REQ },
+    { "--decorate-refs-exclude", LV_REQ }, { "--since-as-filter", LV_REQ },
+    { NULL, 0 }
+};
+static const char *const git_output_write[] = { "--output", NULL };
+static const FlagSpec git_log_spec = {
+    "puswbzRiEFWamctrgqPDh", "nSGLI", "BMCUXlO", NULL, 1,
+    git_log_longs, git_output_write, 1
+};
+
+static const LongOpt git_status_longs[] = {
+    { "--short", LV_NONE }, { "--branch", LV_NONE }, { "--long", LV_NONE },
+    { "--verbose", LV_NONE }, { "--show-stash", LV_NONE }, { "--ahead-behind", LV_NONE },
+    { "--no-ahead-behind", LV_NONE }, { "--renames", LV_NONE }, { "--no-renames", LV_NONE },
+    { "--no-column", LV_NONE }, { "--null", LV_NONE }, { "--porcelain", LV_OPT },
+    { "--untracked-files", LV_OPT }, { "--ignored", LV_OPT },
+    { "--ignore-submodules", LV_OPT }, { "--column", LV_OPT }, { "--find-renames", LV_OPT },
+    { "--help", LV_NONE },
+    { NULL, 0 }
+};
+static const FlagSpec git_status_spec = {
+    "sbvzh", NULL, "uM", NULL, 0, git_status_longs, NULL, 0
+};
+
+/* git branch: the listing options. --contains, --merged and friends
+ * switch it to list mode, where operands are patterns; anywhere else an
+ * operand names a branch to create. */
+static const LongOpt git_branch_longs[] = {
+    { "--all", LV_NONE }, { "--remotes", LV_NONE }, { "--verbose", LV_NONE },
+    { "--quiet", LV_NONE }, { "--list", LV_NONE }, { "--show-current", LV_NONE },
+    { "--ignore-case", LV_NONE }, { "--no-color", LV_NONE }, { "--no-column", LV_NONE },
+    { "--no-abbrev", LV_NONE }, { "--omit-empty", LV_NONE }, { "--color", LV_OPT },
+    { "--column", LV_OPT }, { "--abbrev", LV_OPT }, { "--sort", LV_REQ },
+    { "--format", LV_REQ }, { "--contains", LV_REQ }, { "--no-contains", LV_REQ },
+    { "--merged", LV_REQ }, { "--no-merged", LV_REQ }, { "--points-at", LV_REQ },
+    { "--help", LV_NONE },
+    { NULL, 0 }
+};
+static const char *const git_branch_long_write[] = {
+    "--delete", "--move", "--copy", "--force", "--set-upstream-to",
+    "--unset-upstream", "--edit-description", "--track", "--no-track",
+    "--create-reflog", "--recurse-submodules", "--set-upstream", NULL
+};
+static const FlagSpec git_branch_spec = {
+    "arvqilh", NULL, NULL, "dDmMcCfut", 0, git_branch_longs, git_branch_long_write, 0
+};
+
+static const LongOpt git_rev_parse_longs[] = {
+    { "--show-toplevel", LV_NONE }, { "--show-prefix", LV_NONE },
+    { "--show-cdup", LV_NONE }, { "--git-dir", LV_NONE }, { "--git-common-dir", LV_NONE },
+    { "--absolute-git-dir", LV_NONE }, { "--is-inside-work-tree", LV_NONE },
+    { "--is-inside-git-dir", LV_NONE }, { "--is-bare-repository", LV_NONE },
+    { "--is-shallow-repository", LV_NONE }, { "--show-superproject-working-tree", LV_NONE },
+    { "--show-object-format", LV_OPT }, { "--show-ref-format", LV_NONE },
+    { "--verify", LV_NONE }, { "--quiet", LV_NONE }, { "--symbolic", LV_NONE },
+    { "--symbolic-full-name", LV_NONE }, { "--abbrev-ref", LV_OPT }, { "--short", LV_OPT },
+    { "--all", LV_NONE }, { "--branches", LV_OPT }, { "--tags", LV_OPT },
+    { "--remotes", LV_OPT }, { "--revs-only", LV_NONE }, { "--no-revs", LV_NONE },
+    { "--flags", LV_NONE }, { "--no-flags", LV_NONE }, { "--sq", LV_NONE },
+    { "--not", LV_NONE }, { "--local-env-vars", LV_NONE }, { "--help", LV_NONE },
+    { "--git-path", LV_REQ }, { "--since", LV_REQ }, { "--until", LV_REQ },
+    { "--after", LV_REQ }, { "--before", LV_REQ }, { "--default", LV_REQ },
+    { "--prefix", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec git_rev_parse_spec = {
+    "qh", NULL, NULL, NULL, 0, git_rev_parse_longs, NULL, 1
+};
+
+static const LongOpt git_ls_files_longs[] = {
+    { "--cached", LV_NONE }, { "--deleted", LV_NONE }, { "--modified", LV_NONE },
+    { "--others", LV_NONE }, { "--ignored", LV_NONE }, { "--stage", LV_NONE },
+    { "--unmerged", LV_NONE }, { "--killed", LV_NONE }, { "--directory", LV_NONE },
+    { "--no-empty-directory", LV_NONE }, { "--exclude-standard", LV_NONE },
+    { "--error-unmatch", LV_NONE }, { "--full-name", LV_NONE },
+    { "--recurse-submodules", LV_NONE }, { "--eol", LV_NONE }, { "--deduplicate", LV_NONE },
+    { "--debug", LV_NONE }, { "--sparse", LV_NONE }, { "--resolve-undo", LV_NONE },
+    { "--abbrev", LV_OPT }, { "--help", LV_NONE },
+    { "--exclude", LV_REQ }, { "--exclude-from", LV_REQ },
+    { "--exclude-per-directory", LV_REQ }, { "--with-tree", LV_REQ }, { "--format", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec git_ls_files_spec = {
+    "cdmoisukvtfzh", "xX", NULL, NULL, 0, git_ls_files_longs, NULL, 0
+};
+
+static const LongOpt git_blame_longs[] = {
+    { "--porcelain", LV_NONE }, { "--line-porcelain", LV_NONE },
+    { "--incremental", LV_NONE }, { "--root", LV_NONE }, { "--show-stats", LV_NONE },
+    { "--show-name", LV_NONE }, { "--show-number", LV_NONE }, { "--show-email", LV_NONE },
+    { "--reverse", LV_NONE }, { "--first-parent", LV_NONE }, { "--progress", LV_NONE },
+    { "--no-progress", LV_NONE }, { "--color-lines", LV_NONE },
+    { "--color-by-age", LV_NONE }, { "--minimal", LV_NONE }, { "--help", LV_NONE },
+    { "--date", LV_REQ }, { "--abbrev", LV_OPT }, { "--ignore-rev", LV_REQ },
+    { "--ignore-revs-file", LV_REQ }, { "--contents", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec git_blame_spec = {
+    "bcflnpstweh", "LS", "MC", NULL, 0, git_blame_longs, NULL, 0
+};
+
+typedef struct {
+    const char *cmd;
+    const FlagSpec *spec;
+    int operands;   /* 0: any operand is fine; 1: any operand is WRITE */
+} ReadCmdSpec;
+
+/* Commands whose operands are data (files, patterns, sections) and whose
+ * flags are checked against the spec. date, hostname and route have their
+ * own operand rules below. */
+static const ReadCmdSpec read_cmd_specs[] = {
+    { "man",           &man_spec,           0 },
+    { "rg",            &rg_spec,            0 },
+    { "tree",          &tree_spec,          0 },
+    { "sar",           &sar_spec,           0 },
+    { "dmidecode",     &dmidecode_spec,     0 },
+    { "file",          &file_spec,          0 },
+    { "ss",            &ss_spec,            0 },
+    { "arp",           &arp_spec,           0 },
+    { "sensors",       &sensors_spec,       0 },
+    { "iptables-save", &iptables_save_spec, 0 },
+    { "lastlog",       &lastlog_spec,       0 },
+    { "blkid",         &blkid_spec,         0 },
+    { "journalctl",    &journalctl_spec,    0 },
+    { "dmesg",         &dmesg_spec,         0 },
+    { "hostname",      &hostname_spec,      1 },
+    { NULL, NULL, 0 }
+};
+
+/* Variables an "env NAME=value cmd" may set while the wrapped command keeps
+ * its own level. Anything else (LD_PRELOAD, PAGER, LESSOPEN, GIT_*, HOME,
+ * PATH, ...) can make a read command load or run another program. */
+static int env_var_is_benign(const char *name, size_t len)
+{
+    static const char *vars[] = {
+        "LANG", "LANGUAGE", "TZ", "TERM", "COLUMNS", "LINES", "NO_COLOR",
+        "CLICOLOR", "CLICOLOR_FORCE", "POSIXLY_CORRECT", "GREP_COLOR",
+        "GREP_COLORS", "LS_COLORS", "TIME_STYLE", "QUOTING_STYLE", NULL
+    };
+    if (tok_in_list(name, len, vars)) return 1;
+    if (len > 3 && memcmp(name, "LC_", 3) == 0) return 1;
+    return 0;
+}
+
+/* The raw word ts[0..tl) with its quotes and escapes removed (tok_mode). */
+static void tok_unquote(const char *ts, size_t tl, char *out, size_t out_size)
+{
+    const char *pp = ts;
+    const char *rs, *re;
+    int trunc = 0;
+    out[0] = '\0';
+    (void)next_shell_word(&pp, ts + tl, out, out_size, &trunc, &rs, &re);
+}
+
+/* "-x" (value in the next word: *takes = 1) or "-xVALUE" (attached). */
+static int short_opt(const char *ts, size_t tl, char c, int *takes)
+{
+    if (tl < 2 || ts[0] != '-' || ts[1] != c) return 0;
+    *takes = (tl == 2);
+    return 1;
+}
+
+/* "--name" (value in the next word when want_value: *takes = 1) or
+ * "--name=VALUE". */
+static int long_opt(const char *ts, size_t tl, const char *name, int want_value, int *takes)
+{
+    size_t n = strlen(name);
+    if (tl == n && memcmp(ts, name, n) == 0) { *takes = want_value; return 1; }
+    if (want_value && tl > n && memcmp(ts, name, n) == 0 && ts[n] == '=') {
+        *takes = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* One option word of a wrapper command (env, nice, nohup, timeout,
+ * command, exec, time, stdbuf, ionice, setsid). Returns 1 when it is one of
+ * the wrapper's own known options; *takes is set when its value is the next
+ * word and *lvl raised for an option that writes. */
+static int wrapper_flag(const char *w, size_t wl, const char *ts, size_t tl,
+                        int *takes, CmdSafetyLevel *lvl)
+{
+    *takes = 0;
+    if (tok_eq(w, wl, "env")) {
+        if (tok_eq(ts, tl, "-") || tok_eq(ts, tl, "-i") ||
+            tok_eq(ts, tl, "--ignore-environment") || tok_eq(ts, tl, "-0") ||
+            tok_eq(ts, tl, "--null") || tok_eq(ts, tl, "-v") || tok_eq(ts, tl, "--debug"))
+            return 1;
+        return short_opt(ts, tl, 'u', takes) || long_opt(ts, tl, "--unset", 1, takes) ||
+               short_opt(ts, tl, 'C', takes) || long_opt(ts, tl, "--chdir", 1, takes) ||
+               short_opt(ts, tl, 'S', takes) || long_opt(ts, tl, "--split-string", 1, takes);
+    }
+    if (tok_eq(w, wl, "nice")) {
+        if (tl >= 2 && ts[0] == '-') {
+            size_t k = 1;
+            while (k < tl && isdigit((unsigned char)ts[k])) k++;
+            if (k == tl) return 1;                       /* -10 */
+        }
+        return short_opt(ts, tl, 'n', takes) || long_opt(ts, tl, "--adjustment", 1, takes);
+    }
+    if (tok_eq(w, wl, "timeout")) {
+        if (tok_eq(ts, tl, "--preserve-status") || tok_eq(ts, tl, "--foreground") ||
+            tok_eq(ts, tl, "-v") || tok_eq(ts, tl, "--verbose") ||
+            tok_eq(ts, tl, "-p") || tok_eq(ts, tl, "-f"))
+            return 1;
+        return short_opt(ts, tl, 's', takes) || long_opt(ts, tl, "--signal", 1, takes) ||
+               short_opt(ts, tl, 'k', takes) || long_opt(ts, tl, "--kill-after", 1, takes);
+    }
+    if (tok_eq(w, wl, "command"))
+        return tok_eq(ts, tl, "-p");
+    if (tok_eq(w, wl, "exec")) {
+        if (tok_eq(ts, tl, "-c") || tok_eq(ts, tl, "-l") || tok_eq(ts, tl, "-cl") ||
+            tok_eq(ts, tl, "-lc"))
+            return 1;
+        if (tok_eq(ts, tl, "-a")) { *takes = 1; return 1; }
+        return 0;
+    }
+    if (tok_eq(w, wl, "time")) {
+        static const char *const time_write[] = { "--output", "--append", NULL };
+        size_t nlen = 0;
+        if (tok_eq(ts, tl, "-p") || tok_eq(ts, tl, "--portability") ||
+            tok_eq(ts, tl, "-v") || tok_eq(ts, tl, "--verbose") ||
+            tok_eq(ts, tl, "-q") || tok_eq(ts, tl, "--quiet"))
+            return 1;
+        if (short_opt(ts, tl, 'f', takes) || long_opt(ts, tl, "--format", 1, takes))
+            return 1;
+        if (short_opt(ts, tl, 'o', takes) || long_opt(ts, tl, "--output", 1, takes) ||
+            tok_eq(ts, tl, "-a") || tok_eq(ts, tl, "--append")) {
+            *lvl = CMD_WRITE;
+            return 1;
+        }
+        while (nlen < tl && ts[nlen] != '=') nlen++;
+        if (tl > 2 && ts[1] == '-' && long_in_write_list(ts, nlen, time_write)) {
+            *lvl = CMD_WRITE;          /* an abbreviation of --output / --append */
+            *takes = (nlen == tl);
+            return 1;
+        }
+        return 0;
+    }
+    if (tok_eq(w, wl, "stdbuf"))
+        return short_opt(ts, tl, 'i', takes) || short_opt(ts, tl, 'o', takes) ||
+               short_opt(ts, tl, 'e', takes) || long_opt(ts, tl, "--input", 1, takes) ||
+               long_opt(ts, tl, "--output", 1, takes) || long_opt(ts, tl, "--error", 1, takes);
+    if (tok_eq(w, wl, "ionice")) {
+        if (tok_eq(ts, tl, "-t") || tok_eq(ts, tl, "--ignore")) return 1;
+        if (short_opt(ts, tl, 'c', takes) || long_opt(ts, tl, "--class", 1, takes) ||
+            short_opt(ts, tl, 'n', takes) || long_opt(ts, tl, "--classdata", 1, takes))
+            return 1;
+        /* Changes the I/O priority of processes already running. */
+        if (short_opt(ts, tl, 'p', takes) || long_opt(ts, tl, "--pid", 1, takes) ||
+            short_opt(ts, tl, 'P', takes) || long_opt(ts, tl, "--pgid", 1, takes) ||
+            short_opt(ts, tl, 'u', takes) || long_opt(ts, tl, "--uid", 1, takes)) {
+            *lvl = CMD_WRITE;
+            return 1;
+        }
+        return 0;
+    }
+    if (tok_eq(w, wl, "setsid"))
+        return tok_eq(ts, tl, "-c") || tok_eq(ts, tl, "--ctty") || tok_eq(ts, tl, "-f") ||
+               tok_eq(ts, tl, "--fork") || tok_eq(ts, tl, "-w") || tok_eq(ts, tl, "--wait");
+    return 0;   /* nohup: no options of its own */
 }
 
 /* ----- Per-segment Linux classification ----- */
@@ -1175,21 +2199,21 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         }
     }
 
-    /* Wrappers: peel the wrapper's own options/arguments and recursively
-     * classify whatever it runs. The result is never lower than the
-     * wrapped command alone -- run before any allow-list rule so "env rm F"
-     * cannot ride "env"'s bare-form READ. */
+    /* Wrappers: env, nice, nohup, timeout, command, exec, time (and
+     * /usr/bin/time), stdbuf, ionice and setsid run another command. Their
+     * own options are checked against an allow-list -- anything else is at
+     * least UNKNOWN, time -o/-a and ionice -p/-P/-u are WRITE -- and the
+     * wrapped command is classified recursively, so the result is never
+     * lower than the wrapped command alone. Run before any allow-list rule
+     * so "env rm F" cannot ride "env"'s bare-form READ. nohup is at least
+     * WRITE: it writes nohup.out. */
     if (is_wrapper_cmd(base1, base1_len)) {
         int is_env     = tok_eq(base1, base1_len, "env");
-        int is_nice    = tok_eq(base1, base1_len, "nice");
         int is_timeout = tok_eq(base1, base1_len, "timeout");
-        int is_exec    = tok_eq(base1, base1_len, "exec");
         int is_command = tok_eq(base1, base1_len, "command");
-        int is_cheap   = tok_eq(base1, base1_len, "time")
-                       || tok_eq(base1, base1_len, "stdbuf")
-                       || tok_eq(base1, base1_len, "ionice")
-                       || tok_eq(base1, base1_len, "setsid");
-
+        int is_nohup   = tok_eq(base1, base1_len, "nohup");
+        int need_duration = is_timeout;
+        CmdSafetyLevel wlvl = redir;
         const char *scan = p;
         const char *ts;
         size_t tl;
@@ -1200,84 +2224,71 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
             const char *look = scan;
             if (next_token(&look, &ts, &tl) &&
                 (tok_eq(ts, tl, "-v") || tok_eq(ts, tl, "-V"))) {
-                return redir;
+                return has_sudo && redir < CMD_WRITE ? CMD_WRITE : redir;
             }
         }
 
         for (;;) {
             const char *look = scan;
-            if (!next_token(&look, &ts, &tl) || tl == 0) break;
-            int matched = 0;
-
-            if (ts[0] == '-') {
-                if (is_env && (tok_eq(ts, tl, "-i") || tok_eq(ts, tl, "--ignore-environment"))) {
-                    scan = look; matched = 1;
-                } else if (is_env && (tok_eq(ts, tl, "-u") || tok_eq(ts, tl, "--unset"))) {
-                    scan = look; next_token(&scan, &ts, &tl); matched = 1;
-                } else if (is_env && tok_prefix(ts, tl, "--unset=")) {
-                    scan = look; matched = 1;
-                } else if (is_env && (tok_eq(ts, tl, "-C") || tok_eq(ts, tl, "--chdir"))) {
-                    scan = look; next_token(&scan, &ts, &tl); matched = 1;
-                } else if (is_env && tok_prefix(ts, tl, "--chdir=")) {
-                    scan = look; matched = 1;
-                } else if (is_env && (tok_eq(ts, tl, "-S") || tok_eq(ts, tl, "--split-string"))) {
-                    if (redir < CMD_UNKNOWN) redir = CMD_UNKNOWN;
-                    scan = look; next_token(&scan, &ts, &tl); matched = 1;
-                } else if (is_env && tok_prefix(ts, tl, "--split-string=")) {
-                    if (redir < CMD_UNKNOWN) redir = CMD_UNKNOWN;
-                    scan = look; matched = 1;
-                } else if (is_env && (tok_eq(ts, tl, "-0") || tok_eq(ts, tl, "--null")
-                                       || tok_eq(ts, tl, "-v") || tok_eq(ts, tl, "--verbose"))) {
-                    scan = look; matched = 1;
-                } else if (is_nice && (tok_eq(ts, tl, "-n") || tok_eq(ts, tl, "-N"))) {
-                    scan = look;
-                    if (tok_eq(ts, tl, "-n")) next_token(&scan, &ts, &tl);
-                    matched = 1;
-                } else if (is_nice && tok_prefix(ts, tl, "--adjustment")) {
-                    scan = look; matched = 1;
-                } else if (is_timeout && (tok_eq(ts, tl, "-s") || tok_eq(ts, tl, "--signal"))) {
-                    scan = look;
-                    if (tok_eq(ts, tl, "-s")) next_token(&scan, &ts, &tl);
-                    matched = 1;
-                } else if (is_timeout && tok_prefix(ts, tl, "--signal=")) {
-                    scan = look; matched = 1;
-                } else if (is_timeout && (tok_eq(ts, tl, "-k") || tok_eq(ts, tl, "--kill-after"))) {
-                    scan = look;
-                    if (tok_eq(ts, tl, "-k")) next_token(&scan, &ts, &tl);
-                    matched = 1;
-                } else if (is_timeout && tok_prefix(ts, tl, "--kill-after=")) {
-                    scan = look; matched = 1;
-                } else if (is_timeout && (tok_eq(ts, tl, "--preserve-status")
-                                           || tok_eq(ts, tl, "-v") || tok_eq(ts, tl, "--verbose")
-                                           || tok_eq(ts, tl, "--foreground"))) {
-                    scan = look; matched = 1;
-                } else if (is_exec && tok_eq(ts, tl, "-a")) {
-                    scan = look; next_token(&scan, &ts, &tl); matched = 1;
-                } else if (is_exec && (tok_eq(ts, tl, "-c") || tok_eq(ts, tl, "-l"))) {
-                    scan = look; matched = 1;
-                } else if (is_command && tok_eq(ts, tl, "-p")) {
-                    scan = look; matched = 1;
-                } else if (is_cheap) {
-                    /* Cheap: skip any of the wrapper's own flags without
-                     * telling attached values from separate ones apart. */
-                    scan = look; matched = 1;
+            if (!next_token(&look, &ts, &tl)) break;
+            if (tok_is_obscured_flag(ts, tl)) {
+                if (wlvl < CMD_UNKNOWN) wlvl = CMD_UNKNOWN;
+                scan = look;
+                continue;
+            }
+            if (tl >= 1 && ts[0] == '-' && !(need_duration && tl > 1 &&
+                                              isdigit((unsigned char)ts[1]))) {
+                int takes = 0;
+                CmdSafetyLevel fl = CMD_READ;
+                scan = look;
+                if (tok_eq(ts, tl, "--")) break;
+                if (!wrapper_flag(base1, base1_len, ts, tl, &takes, &fl)) {
+                    if (fl < CMD_UNKNOWN) fl = CMD_UNKNOWN;
                 }
-            } else if (is_env) {
+                if (fl > wlvl) wlvl = fl;
+                if (is_env && (tok_eq(ts, tl, "-S") || tok_prefix(ts, tl, "-S") ||
+                               tok_eq(ts, tl, "--split-string") ||
+                               tok_prefix(ts, tl, "--split-string="))) {
+                    /* The value is itself a command line. */
+                    char buf[1024];
+                    const char *v = NULL; size_t vl = 0;
+                    if (takes) {
+                        if (next_token(&scan, &v, &vl)) tok_unquote(v, vl, buf, sizeof buf);
+                        else buf[0] = '\0';
+                        takes = 0;
+                    } else {
+                        const char *eq = memchr(ts, '=', tl);
+                        const char *vs = eq ? eq + 1 : ts + 2;
+                        tok_unquote(vs, (size_t)((ts + tl) - vs), buf, sizeof buf);
+                    }
+                    if (buf[0]) {
+                        CmdSafetyLevel sl = classify_linux_segment(buf, strlen(buf), NULL, 0);
+                        if (sl > wlvl) wlvl = sl;
+                    }
+                    if (wlvl < CMD_UNKNOWN) wlvl = CMD_UNKNOWN;
+                }
+                if (takes) {
+                    const char *v; size_t vl;
+                    (void)next_token(&scan, &v, &vl);
+                }
+                continue;
+            }
+            if (is_env) {
                 size_t k = 0;
                 while (k < tl && (isalnum((unsigned char)ts[k]) || ts[k] == '_')) k++;
-                if (k > 0 && k < tl && ts[k] == '=') { scan = look; matched = 1; }
-            } else if (is_nice) {
-                size_t k = 0;
-                if (k < tl && (ts[k] == '-' || ts[k] == '+')) k++;
-                int all_digits = (k < tl);
-                for (size_t j = k; j < tl && all_digits; j++)
-                    if (!isdigit((unsigned char)ts[j])) all_digits = 0;
-                if (all_digits) { scan = look; matched = 1; }
-            } else if (is_timeout) {
-                if (isdigit((unsigned char)ts[0])) { scan = look; matched = 1; }
+                if (k > 0 && k < tl && ts[k] == '=') {
+                    if (!env_var_is_benign(ts, k) && wlvl < CMD_UNKNOWN)
+                        wlvl = CMD_UNKNOWN;
+                    scan = look;
+                    continue;
+                }
             }
-
-            if (!matched) break;
+            if (need_duration) { /* timeout DURATION */
+                need_duration = 0;
+                scan = look;
+                continue;
+            }
+            break;
         }
 
         const char *cmd_start = NULL;
@@ -1287,17 +2298,22 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
             cmd_end = ts + tl;
         }
 
+        if (is_nohup && wlvl < CMD_WRITE) wlvl = CMD_WRITE;
         if (cmd_start) {
             CmdSafetyLevel sub = classify_linux_segment(cmd_start,
                                                           (size_t)(cmd_end - cmd_start),
                                                           NULL, 0);
-            CmdSafetyLevel lvl = sub > redir ? sub : redir;
+            CmdSafetyLevel lvl = sub > wlvl ? sub : wlvl;
             if (has_sudo && lvl < CMD_WRITE) lvl = CMD_WRITE;
             if (reason_buf && reason_buf_size > 0)
                 snprintf(reason_buf, reason_buf_size, "%.*s wraps: %.*s",
                          (int)base1_len, base1, (int)(cmd_end - cmd_start), cmd_start);
             return lvl;
         }
+        if (wlvl > redir && reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "%.*s: option outside the known-safe set",
+                     (int)base1_len, base1);
+        if (wlvl > redir) return has_sudo && wlvl < CMD_WRITE ? CMD_WRITE : wlvl;
         /* Nothing left after the wrapper's own options/arguments: fall
          * through unclassified, keeping today's level for the bare
          * wrapper (env/printenv via linux_read_cmds below, everything
@@ -1390,209 +2406,435 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         }
     }
 
-    /* curl: evaluated before linux_subcmd_rules below, whose exact
-     * "curl"+"-o"/"-O" -> WRITE rows don't know about the "-o /dev/null"/
-     * "-o -" exception and would otherwise pre-empt this finer-grained
-     * scan. */
+    /* curl: every flag against an explicit allow-list. Evaluated before
+     * linux_subcmd_rules below, whose "curl"+"-o"/"-O" rows do not know the
+     * "-o /dev/null" / "-o -" exception. That exception holds only while
+     * nothing else on the line writes output (a second -o, -O, -D to a
+     * file, -w with %output{} or an @file format), uploads (-T, data or a
+     * form), reads a
+     * config (-K) or starts a second transfer (--next). -H/-b values that
+     * name a local file ("@F", or a -b value without "=") are WRITE. */
     if (tok_eq(base1, base1_len, "curl")) {
+        static const char *const safe_noval[] = {
+            "--fail", "--fail-with-body", "--compressed", "--get", "--http1.0",
+            "--http1.1", "--http2", "--http3", "--location", "--location-trusted",
+            "--progress-bar", "--no-progress-meter", "--help", "--version",
+            "--silent", "--show-error", "--insecure", "--head", "--include",
+            "--verbose", "--ipv4", "--ipv6", "--retry-connrefused",
+            "--retry-all-errors", "--globoff", "--no-buffer", "--disable",
+            "--no-keepalive", "--tcp-nodelay", "--tlsv1.2", "--tlsv1.3",
+            "--fail-early", "--path-as-is", "--show-headers", NULL
+        };
+        static const char *const safe_val[] = {
+            "--user-agent", "--referer", "--max-time", "--connect-timeout",
+            "--proxy", "--user", "--noproxy", "--resolve", "--cacert", "--capath",
+            "--cert", "--key", "--max-redirs", "--range", "--continue-at", "--url",
+            "--retry", "--retry-delay", "--retry-max-time", "--limit-rate",
+            "--interface", "--connect-to", "--proxy-user", NULL
+        };
+        static const char *const write_prefix[] = {
+            "--data", "--form", "--trace", NULL
+        };
+        static const char *const write_exact[] = {
+            "--output-dir", "--create-dirs", "--upload-file", "--json",
+            "--cookie-jar", "--libcurl", "--stderr", "--etag-save", "--hsts",
+            "--alt-svc", "--remote-name", "--remote-name-all",
+            "--remote-header-name", NULL
+        };
         const char *scan = p;
         const char *ts;
         size_t tl;
         CmdSafetyLevel level = CMD_READ;
+        int outputs = 0, null_outputs = 0, other_io = 0;
+        char val[512];
         while (next_token(&scan, &ts, &tl)) {
-            if (tl == 0) continue;
-            if (tl > 1 && ts[0] == '-' && ts[1] == '-') {
-                if (tok_prefix(ts, tl, "--output-dir") || tok_eq(ts, tl, "--create-dirs")
-                    || tok_prefix(ts, tl, "--upload-file") || tok_prefix(ts, tl, "--data")
-                    || tok_eq(ts, tl, "--json") || tok_prefix(ts, tl, "--form")
-                    || tok_prefix(ts, tl, "--cookie-jar") || tok_prefix(ts, tl, "--trace")
-                    || tok_eq(ts, tl, "--libcurl") || tok_eq(ts, tl, "--stderr")
-                    || tok_eq(ts, tl, "--etag-save") || tok_eq(ts, tl, "--hsts")
-                    || tok_eq(ts, tl, "--alt-svc") || tok_eq(ts, tl, "--remote-name")
-                    || tok_eq(ts, tl, "--remote-name-all") || tok_eq(ts, tl, "--remote-header-name")) {
-                    level = CMD_WRITE;
-                    continue;
-                }
-                if (tok_eq(ts, tl, "--output") || tok_prefix(ts, tl, "--output=")) {
-                    const char *val = NULL; size_t vlen = 0;
-                    if (tok_prefix(ts, tl, "--output=")) { val = ts + 9; vlen = tl - 9; }
-                    else next_token(&scan, &val, &vlen);
-                    if (!curl_value_is_devnull_or_dash(val, vlen)) level = CMD_WRITE;
-                    continue;
-                }
-                if (tok_eq(ts, tl, "--dump-header") || tok_prefix(ts, tl, "--dump-header=")) {
-                    const char *val = NULL; size_t vlen = 0;
-                    if (tok_prefix(ts, tl, "--dump-header=")) { val = ts + 14; vlen = tl - 14; }
-                    else next_token(&scan, &val, &vlen);
-                    if (!curl_value_is_devnull_or_dash(val, vlen)) level = CMD_WRITE;
-                    continue;
-                }
-                if (tok_eq(ts, tl, "--request") || tok_prefix(ts, tl, "--request=")) {
-                    const char *val = NULL; size_t vlen = 0;
-                    if (tok_prefix(ts, tl, "--request=")) { val = ts + 10; vlen = tl - 10; }
-                    else next_token(&scan, &val, &vlen);
-                    if (!curl_method_is_safe(val, vlen)) level = CMD_WRITE;
-                    continue;
-                }
-                if (tok_eq(ts, tl, "--config") || tok_prefix(ts, tl, "--config=")) {
-                    if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
-                    continue;
-                }
-                if (curl_is_safe_long(ts, tl)) continue;
+            if (tok_is_obscured_flag(ts, tl)) {
                 if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
                 continue;
             }
-            if (ts[0] == '-' && tl > 1) {
-                size_t i = 1;
-                while (i < tl) {
-                    char c = ts[i];
-                    const char *val; size_t vlen;
-                    switch (c) {
-                    case 's': case 'S': case 'L': case 'I': case 'i': case 'v':
-                    case 'k': case 'f': case '4': case '6': case 'G': case '#':
-                    case 'h': case 'V':
-                        i++; continue;
-                    case 'O': case 'J':
-                        level = CMD_WRITE; i++; continue;
-                    case 'o':
-                        consume_flag_value(ts, tl, i, &scan, &val, &vlen);
-                        if (!curl_value_is_devnull_or_dash(val, vlen)) level = CMD_WRITE;
-                        i = tl; break;
-                    case 'T': case 'd': case 'F': case 'c':
-                        consume_flag_value(ts, tl, i, &scan, &val, &vlen);
-                        level = CMD_WRITE;
-                        i = tl; break;
-                    case 'D':
-                        consume_flag_value(ts, tl, i, &scan, &val, &vlen);
-                        if (!curl_value_is_devnull_or_dash(val, vlen)) level = CMD_WRITE;
-                        i = tl; break;
-                    case 'X':
-                        consume_flag_value(ts, tl, i, &scan, &val, &vlen);
-                        if (!curl_method_is_safe(val, vlen)) level = CMD_WRITE;
-                        i = tl; break;
-                    case 'H': case 'A': case 'e': case 'm': case 'x': case 'u':
-                    case 'w': case 'b': case 'E': case 'r': case 'C':
-                        consume_flag_value(ts, tl, i, &scan, &val, &vlen);
-                        i = tl; break;
-                    case 'K':
-                        consume_flag_value(ts, tl, i, &scan, &val, &vlen);
+            if (tl < 2 || ts[0] != '-') continue;      /* URL or other operand */
+            if (ts[1] == '-') {
+                size_t nlen = 0;
+                while (nlen < tl && ts[nlen] != '=') nlen++;
+                int has_eq = nlen < tl;
+                char name[64];
+                if (nlen >= sizeof name) { if (level < CMD_UNKNOWN) level = CMD_UNKNOWN; continue; }
+                memcpy(name, ts, nlen);
+                name[nlen] = '\0';
+                int wants = tok_in_list(name, nlen, safe_val) ||
+                            tok_eq(name, nlen, "--output") || tok_eq(name, nlen, "--dump-header") ||
+                            tok_eq(name, nlen, "--request") || tok_eq(name, nlen, "--config") ||
+                            tok_eq(name, nlen, "--header") || tok_eq(name, nlen, "--cookie") ||
+                            tok_eq(name, nlen, "--write-out");
+                val[0] = '\0';
+                if (wants) {
+                    const char *v; size_t vl;
+                    if (has_eq) tok_unquote(ts + nlen + 1, tl - nlen - 1, val, sizeof val);
+                    else if (next_token(&scan, &v, &vl)) tok_unquote(v, vl, val, sizeof val);
+                }
+                size_t vlen = strlen(val);
+                if (tok_in_list(name, nlen, safe_noval) && !has_eq) continue;
+                if (tok_in_list(name, nlen, safe_val)) continue;
+                if (tok_in_list(name, nlen, write_exact) || tok_has_prefix(name, nlen, write_prefix)) {
+                    level = CMD_WRITE;
+                    other_io = 1;
+                } else if (tok_eq(name, nlen, "--output")) {
+                    outputs++;
+                    if (curl_value_is_devnull_or_dash(val, vlen)) null_outputs++;
+                    else level = CMD_WRITE;
+                } else if (tok_eq(name, nlen, "--dump-header")) {
+                    if (!curl_value_is_devnull_or_dash(val, vlen)) { level = CMD_WRITE; other_io = 1; }
+                } else if (tok_eq(name, nlen, "--request")) {
+                    if (!curl_method_is_safe(val, vlen)) level = CMD_WRITE;
+                } else if (tok_eq(name, nlen, "--header")) {
+                    if (val[0] == '@') level = CMD_WRITE;
+                } else if (tok_eq(name, nlen, "--cookie")) {
+                    if (val[0] == '@' || !strchr(val, '=')) level = CMD_WRITE;
+                } else if (tok_eq(name, nlen, "--write-out")) {
+                    if (strstr(val, "%output{")) { level = CMD_WRITE; other_io = 1; }
+                    else if (val[0] == '@') {
+                        other_io = 1;
                         if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
-                        i = tl; break;
-                    default:
-                        if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
-                        i = tl; break;
                     }
+                } else {
+                    /* --config, --next and everything not listed */
+                    if (tok_eq(name, nlen, "--config") || tok_eq(name, nlen, "--next"))
+                        other_io = 1;
+                    if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
                 }
                 continue;
             }
-            /* bare positional argument (the URL): ignored */
+            for (size_t i = 1; i < tl; i++) {
+                char c = ts[i];
+                if (strchr("sSLIivkf46G#hVqgN", c)) continue;
+                if (c == 'O' || c == 'J') {
+                    level = CMD_WRITE;
+                    other_io = 1;
+                    continue;
+                }
+                if (!strchr("oTdFcDXHbwAemxuErCUK", c)) {
+                    if (c == ':') other_io = 1;                 /* -: is --next */
+                    if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+                    break;
+                }
+                /* A value-taking letter: the rest of the word, or the next
+                 * word. */
+                val[0] = '\0';
+                if (i + 1 < tl) {
+                    tok_unquote(ts + i + 1, tl - i - 1, val, sizeof val);
+                } else {
+                    const char *v; size_t vl;
+                    if (next_token(&scan, &v, &vl)) tok_unquote(v, vl, val, sizeof val);
+                }
+                size_t vlen = strlen(val);
+                switch (c) {
+                case 'o':
+                    outputs++;
+                    if (curl_value_is_devnull_or_dash(val, vlen)) null_outputs++;
+                    else level = CMD_WRITE;
+                    break;
+                case 'T': case 'd': case 'F': case 'c':
+                    level = CMD_WRITE;
+                    other_io = 1;
+                    break;
+                case 'D':
+                    if (!curl_value_is_devnull_or_dash(val, vlen)) { level = CMD_WRITE; other_io = 1; }
+                    break;
+                case 'X':
+                    if (!curl_method_is_safe(val, vlen)) level = CMD_WRITE;
+                    break;
+                case 'H':
+                    if (val[0] == '@') level = CMD_WRITE;
+                    break;
+                case 'b':
+                    if (val[0] == '@' || !strchr(val, '=')) level = CMD_WRITE;
+                    break;
+                case 'w':
+                    if (strstr(val, "%output{")) { level = CMD_WRITE; other_io = 1; }
+                    else if (val[0] == '@') {
+                        other_io = 1;
+                        if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+                    }
+                    break;
+                case 'K':
+                    other_io = 1;
+                    if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+                    break;
+                default:        /* A e m x u E r C U: values that stay local */
+                    break;
+                }
+                break;
+            }
         }
+        if (null_outputs && (outputs > 1 || other_io) && level < CMD_WRITE)
+            level = CMD_WRITE;
         if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
         if (reason_buf && reason_buf_size > 0 && level > CMD_READ)
             snprintf(reason_buf, reason_buf_size, "curl: flag outside the known-safe set");
         return level > redir ? level : redir;
     }
 
-    /* git: a global option before the subcommand, and the subcommand's own
-     * risky flags, evaluated before linux_subcmd_rules below so they are
-     * not pre-empted by its "git log"/"git diff"/"git show"/"git branch"
-     * -> READ rows. */
+    /* git: global options against an allow-list (-c, --git-dir,
+     * --work-tree, --exec-path and anything unlisted can point git at
+     * another program, config or tree: UNKNOWN), then the subcommand. Only
+     * log/show/diff/whatchanged, status, branch (listing), rev-parse,
+     * ls-files, blame and a bare or -v "remote" can be READ, each with its
+     * own flag allow-list; every other subcommand is WRITE. */
     if (tok_eq(base1, base1_len, "git")) {
+        static const char *const git_safe_globals[] = {
+            "--no-pager", "-P", "-p", "--paginate", "--no-optional-locks",
+            "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs",
+            "--icase-pathspecs", "--no-replace-objects", "--no-lazy-fetch",
+            "--no-advice", "--version", "--help", NULL
+        };
+        static const char *const git_valued_globals[] = {
+            "-c", "--git-dir", "--work-tree", "--namespace", "--config-env",
+            "--super-prefix", NULL
+        };
         const char *scan = p;
         const char *ts;
         size_t tl;
-        if (next_token(&scan, &ts, &tl) && tl > 0 && ts[0] == '-') {
-            if (tok_eq(ts, tl, "-c") || tok_prefix(ts, tl, "--config-env")
-                || tok_prefix(ts, tl, "--exec-path") || tok_prefix(ts, tl, "--git-dir")
-                || tok_prefix(ts, tl, "--work-tree")) {
-                /* Can point git at an arbitrary pager/program/tree. */
-                if (redir < CMD_UNKNOWN) redir = CMD_UNKNOWN;
-            } else if (tok_eq(ts, tl, "-C")) {
-                /* Benign cwd change -- skip it and its directory argument
-                 * so the subcommand rules below see the real subcommand. */
-                p = scan;
-                next_token(&p, &ts, &tl);
-            }
-        }
-
-        const char *p2 = p;
-        const char *sub_s; size_t sub_l;
-        if (next_token(&p2, &sub_s, &sub_l)) {
-            if (tok_eq(sub_s, sub_l, "log") || tok_eq(sub_s, sub_l, "diff")
-                || tok_eq(sub_s, sub_l, "show")) {
-                const char *scan2 = p2;
-                CmdSafetyLevel git_level = CMD_READ;
-                while (next_token(&scan2, &ts, &tl)) {
-                    if (tok_eq(ts, tl, "--output") || tok_prefix(ts, tl, "--output="))
-                        git_level = CMD_WRITE;
-                    else if (tok_eq(ts, tl, "--ext-diff") && git_level < CMD_UNKNOWN)
-                        git_level = CMD_UNKNOWN;
-                }
-                if (has_sudo && git_level < CMD_WRITE) git_level = CMD_WRITE;
-                if (git_level > CMD_READ) {
-                    if (reason_buf && reason_buf_size > 0)
-                        snprintf(reason_buf, reason_buf_size, "git %.*s with %s",
-                                 (int)sub_l, sub_s,
-                                 git_level == CMD_WRITE ? "--output" : "--ext-diff");
-                    return git_level > redir ? git_level : redir;
-                }
-            } else if (tok_eq(sub_s, sub_l, "branch")) {
-                static const char *branch_write_flags[] = {
-                    "-d", "-D", "--delete", "-m", "-M", "--move",
-                    "-c", "-C", "--copy", "-f", "--force", "-u",
-                    "--set-upstream-to", "--unset-upstream", "--edit-description",
-                    NULL
-                };
-                const char *scan2 = p2;
-                int saw_write = 0, saw_positional = 0, prev_was_sort = 0;
-                while (next_token(&scan2, &ts, &tl)) {
-                    if (prev_was_sort) { prev_was_sort = 0; continue; }
-                    if (tl > 0 && ts[0] == '-') {
-                        if (tok_in_list(ts, tl, branch_write_flags)
-                            || tok_prefix(ts, tl, "--set-upstream-to=")) {
-                            saw_write = 1;
-                            break;
-                        }
-                        if (tok_eq(ts, tl, "--sort")) prev_was_sort = 1;
-                        continue;
-                    }
-                    saw_positional = 1;
-                }
-                if (saw_write || saw_positional) {
-                    if (reason_buf && reason_buf_size > 0)
-                        snprintf(reason_buf, reason_buf_size,
-                                 "git branch: creates, renames or deletes a branch");
-                    CmdSafetyLevel level = CMD_WRITE;
-                    return level > redir ? level : redir;
-                }
-                if (reason_buf && reason_buf_size > 0)
-                    snprintf(reason_buf, reason_buf_size, "git branch: query only");
-                return has_sudo && redir < CMD_WRITE ? CMD_WRITE : redir;
-            }
-        }
-    }
-
-    /* ip: skip recognised global display/format options so the object
-     * token (addr/route/link/...) is what the rules below see. -b/-batch
-     * and -force are opaque/error-suppressing rather than purely
-     * cosmetic, so they float the floor instead of just being skipped. */
-    if (tok_eq(base1, base1_len, "ip")) {
-        for (;;) {
-            const char *look = p;
-            const char *ts; size_t tl;
-            if (!next_token(&look, &ts, &tl) || tl == 0 || ts[0] != '-') break;
-            if (tok_eq(ts, tl, "-b") || tok_prefix(ts, tl, "-batch")
-                || tok_eq(ts, tl, "-force")) {
-                if (redir < CMD_UNKNOWN) redir = CMD_UNKNOWN;
-                p = look;
-                if (tok_eq(ts, tl, "-b") || tok_prefix(ts, tl, "-batch")) {
-                    const char *v; size_t vl;
-                    next_token(&p, &v, &vl); /* batch file */
-                }
+        const char *sub_s = NULL;
+        size_t sub_l = 0;
+        CmdSafetyLevel level = CMD_READ;
+        while (next_token(&scan, &ts, &tl)) {
+            if (tok_is_obscured_flag(ts, tl)) {
+                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
                 continue;
             }
-            p = look;
+            if (ts[0] != '-') { sub_s = ts; sub_l = tl; break; }
+            if (tok_eq(ts, tl, "-C")) {
+                const char *v; size_t vl;
+                (void)next_token(&scan, &v, &vl);
+                continue;
+            }
+            if (tok_in_list(ts, tl, git_safe_globals)) continue;
+            if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+            if (tok_in_list(ts, tl, git_valued_globals)) {
+                const char *v; size_t vl;
+                (void)next_token(&scan, &v, &vl);
+            }
         }
+        if (sub_s) {
+            CmdSafetyLevel sl = CMD_READ;
+            const FlagSpec *spec = NULL;
+            if (tok_eq(sub_s, sub_l, "log") || tok_eq(sub_s, sub_l, "show") ||
+                tok_eq(sub_s, sub_l, "diff") || tok_eq(sub_s, sub_l, "whatchanged"))
+                spec = &git_log_spec;
+            else if (tok_eq(sub_s, sub_l, "status"))
+                spec = &git_status_spec;
+            else if (tok_eq(sub_s, sub_l, "rev-parse"))
+                spec = &git_rev_parse_spec;
+            else if (tok_eq(sub_s, sub_l, "ls-files"))
+                spec = &git_ls_files_spec;
+            else if (tok_eq(sub_s, sub_l, "blame"))
+                spec = &git_blame_spec;
+
+            if (spec) {
+                sl = flag_scan(spec, scan, NULL);
+            } else if (tok_eq(sub_s, sub_l, "branch")) {
+                /* Listing only while every operand is a pattern of a list
+                 * mode; an operand anywhere else names a branch to create. */
+                static const char *const list_mode_flags[] = {
+                    "--list", "--contains", "--no-contains", "--merged",
+                    "--no-merged", "--points-at", NULL
+                };
+                int list_mode = 0, operands = 0, only = 0;
+                const char *s2 = scan;
+                while (next_token(&s2, &ts, &tl)) {
+                    size_t nlen = 0;
+                    while (nlen < tl && ts[nlen] != '=') nlen++;
+                    if (!only && (tok_eq(ts, tl, "-l") || tok_in_list(ts, nlen, list_mode_flags)))
+                        list_mode = 1;
+                    if (flag_word(&git_branch_spec, ts, tl, &s2, &sl, &only)) operands++;
+                }
+                if (operands && !list_mode && sl < CMD_WRITE) sl = CMD_WRITE;
+            } else if (tok_eq(sub_s, sub_l, "remote")) {
+                const char *s2 = scan;
+                while (next_token(&s2, &ts, &tl)) {
+                    if (tok_eq(ts, tl, "-v") || tok_eq(ts, tl, "--verbose")) continue;
+                    sl = CMD_WRITE;
+                    break;
+                }
+            } else {
+                sl = CMD_WRITE;
+            }
+            if (sl > level) level = sl;
+        }
+        if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
+        if (reason_buf && reason_buf_size > 0 && level > CMD_READ) {
+            if (sub_s)
+                snprintf(reason_buf, reason_buf_size,
+                         level == CMD_WRITE ? "git %.*s: changes the repository or writes a file"
+                                            : "git %.*s: option outside the known-safe set",
+                         (int)sub_l, sub_s);
+            else
+                snprintf(reason_buf, reason_buf_size, "git: option outside the known-safe set");
+        }
+        return level > redir ? level : redir;
+    }
+
+    /* ip: READ only when the verb after the object is absent or exactly
+     * show/list/lst/get/help. Any other verb -- including an abbreviation,
+     * which ip accepts ("ip a d" is "ip addr delete") -- is WRITE; one that
+     * abbreviates flush or delete, and "link set", are CRITICAL. Global
+     * options are matched by prefix in iproute2's own order, value-taking
+     * ones consume their value, -batch/-force and unknown ones are
+     * UNKNOWN. */
+    if (tok_eq(base1, base1_len, "ip")) {
+        static const struct {
+            const char *name;
+            unsigned char exact, takes, unknown;
+        } ip_globals[] = {
+            { "-loops", 0, 1, 0 }, { "-family", 0, 1, 0 }, { "-4", 1, 0, 0 },
+            { "-6", 1, 0, 0 }, { "-0", 1, 0, 0 }, { "-M", 1, 0, 0 }, { "-B", 1, 0, 0 },
+            { "-human", 0, 0, 0 }, { "-human-readable", 0, 0, 0 }, { "-iec", 0, 0, 0 },
+            { "-stats", 0, 0, 0 }, { "-statistics", 0, 0, 0 }, { "-details", 0, 0, 0 },
+            { "-resolve", 0, 0, 0 }, { "-oneline", 0, 0, 0 }, { "-timestamp", 0, 0, 0 },
+            { "-tshort", 0, 0, 0 }, { "-Version", 0, 0, 0 }, { "-force", 0, 0, 1 },
+            { "-batch", 0, 1, 1 }, { "-brief", 0, 0, 0 }, { "-json", 0, 0, 0 },
+            { "-pretty", 0, 0, 0 }, { "-rcvbuf", 0, 1, 0 }, { "-color", 0, 0, 0 },
+            { "-help", 0, 0, 0 }, { "-netns", 0, 1, 0 }, { "-Numeric", 0, 0, 0 },
+            { "-all", 0, 0, 0 }, { "-echo", 1, 0, 0 },
+            { NULL, 0, 0, 0 }
+        };
+        const char *scan = p;
+        const char *ts;
+        size_t tl;
+        CmdSafetyLevel level = CMD_READ;
+        int all_ns = 0;
+        const char *obj_s = NULL, *verb_s = NULL;
+        size_t obj_l = 0, verb_l = 0;
+        while (next_token(&scan, &ts, &tl)) {
+            if (tok_is_obscured_flag(ts, tl)) {
+                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+                continue;
+            }
+            if (ts[0] != '-') { obj_s = ts; obj_l = tl; break; }
+            if (tok_eq(ts, tl, "--")) {
+                if (next_token(&scan, &ts, &tl)) { obj_s = ts; obj_l = tl; }
+                break;
+            }
+            const char *o = ts;
+            size_t ol = tl;
+            if (ol > 2 && o[1] == '-') { o++; ol--; }        /* "--json" */
+            size_t nl = 0;
+            while (nl < ol && o[nl] != '=') nl++;              /* "-color=always" */
+            int found = -1;
+            for (int i = 0; ip_globals[i].name; i++) {
+                size_t gl = strlen(ip_globals[i].name);
+                if (ip_globals[i].exact ? (nl == gl && memcmp(o, ip_globals[i].name, gl) == 0)
+                                        : (nl <= gl && memcmp(o, ip_globals[i].name, nl) == 0)) {
+                    found = i;
+                    break;
+                }
+            }
+            if (found < 0 || (nl < ol && strcmp(ip_globals[found].name, "-color") != 0)) {
+                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+                continue;
+            }
+            if (ip_globals[found].unknown && level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+            if (strcmp(ip_globals[found].name, "-all") == 0) all_ns = 1;
+            if (ip_globals[found].takes) {
+                const char *v; size_t vl;
+                (void)next_token(&scan, &v, &vl);
+            }
+        }
+        if (obj_s && next_token(&scan, &ts, &tl)) { verb_s = ts; verb_l = tl; }
+        /* Objects with a second level ("ip xfrm state list", "ip mptcp
+         * endpoint show"): the verb follows the sub-object. */
+        if (verb_s && (tok_eq(obj_s, obj_l, "xfrm") || tok_eq(obj_s, obj_l, "mptcp") ||
+                       tok_eq(obj_s, obj_l, "ioam") || tok_eq(obj_s, obj_l, "sr"))) {
+            verb_s = NULL;
+            verb_l = 0;
+            if (next_token(&scan, &ts, &tl)) { verb_s = ts; verb_l = tl; }
+        }
+
+        if (obj_s && verb_s && tok_eq(obj_s, obj_l, "netns") && tok_eq(verb_s, verb_l, "exec")) {
+            /* ip netns exec NAME CMD... (with -all: ip -all netns exec CMD...) */
+            const char *name_s; size_t name_l;
+            if (all_ns || next_token(&scan, &name_s, &name_l)) {
+                const char *cmd_start = NULL, *cmd_end = NULL;
+                while (next_token(&scan, &ts, &tl)) {
+                    if (!cmd_start) cmd_start = ts;
+                    cmd_end = ts + tl;
+                }
+                CmdSafetyLevel sub = CMD_UNKNOWN;
+                if (cmd_start && cmd_end > cmd_start)
+                    sub = classify_linux_segment(cmd_start, (size_t)(cmd_end - cmd_start), NULL, 0);
+                if (sub < CMD_UNKNOWN) sub = CMD_UNKNOWN;
+                if (sub > level) level = sub;
+                if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size,
+                             "ip netns exec: runs a command in another namespace");
+                return level > redir ? level : redir;
+            }
+        }
+
+        /* An object ip does not know ("/ip firewall ..." is RouterOS, not
+         * iproute2) makes ip exit with an error: UNKNOWN, not a verb rule. */
+        if (obj_s) {
+            static const char *const ip_objects[] = {
+                "address", "addrlabel", "maddress", "route", "rule", "neighbor",
+                "neighbour", "ntable", "ntbl", "link", "l2tp", "fou", "ila",
+                "macsec", "tunnel", "tunl", "tuntap", "tap", "token", "tcpmetrics",
+                "tcp_metrics", "monitor", "xfrm", "mroute", "mrule", "netns",
+                "netconf", "vrf", "sr", "nexthop", "mptcp", "ioam", "stats",
+                "help", NULL
+            };
+            int known = 0;
+            for (int i = 0; ip_objects[i]; i++)
+                if (obj_l <= strlen(ip_objects[i]) &&
+                    memcmp(obj_s, ip_objects[i], obj_l) == 0) { known = 1; break; }
+            if (!known) {
+                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+                verb_s = NULL;
+            }
+        }
+
+        if (verb_s && !(tok_eq(verb_s, verb_l, "show") || tok_eq(verb_s, verb_l, "list") ||
+                        tok_eq(verb_s, verb_l, "lst") || tok_eq(verb_s, verb_l, "get") ||
+                        tok_eq(verb_s, verb_l, "help"))) {
+            CmdSafetyLevel vl = CMD_WRITE;
+            if ((verb_l <= 5 && memcmp(verb_s, "flush", verb_l) == 0) ||
+                (verb_l <= 6 && memcmp(verb_s, "delete", verb_l) == 0) ||
+                (obj_l <= 4 && memcmp(obj_s, "link", obj_l) == 0 &&
+                 verb_l <= 3 && memcmp(verb_s, "set", verb_l) == 0))
+                vl = CMD_CRITICAL;
+            if (vl > level) level = vl;
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "ip %.*s %.*s: changes network state",
+                         (int)obj_l, obj_s, (int)verb_l, verb_s);
+        }
+        if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
+        if (level == CMD_UNKNOWN && reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "ip: option outside the known-safe set");
+        if (level == CMD_CRITICAL) return level;
+        return level > redir ? level : redir;
+    }
+
+    /* route: READ with the display options only. An operand is a change
+     * (add, ...); del/delete/flush drop routes and are CRITICAL. */
+    if (tok_eq(base1, base1_len, "route")) {
+        const char *scan = p;
+        const char *ts;
+        size_t tl;
+        CmdSafetyLevel level = CMD_READ;
+        int only = 0;
+        while (next_token(&scan, &ts, &tl)) {
+            if (!flag_word(&route_spec, ts, tl, &scan, &level, &only)) continue;
+            if (tok_eq(ts, tl, "del") || tok_eq(ts, tl, "delete") || tok_eq(ts, tl, "flush"))
+                level = CMD_CRITICAL;
+            else if (level < CMD_WRITE)
+                level = CMD_WRITE;
+            break;
+        }
+        if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
+        if (reason_buf && reason_buf_size > 0 && level > CMD_READ)
+            snprintf(reason_buf, reason_buf_size, "route: changes the routing table");
+        if (level == CMD_CRITICAL) return level;
+        return level > redir ? level : redir;
     }
 
     /* Three-token rules */
@@ -1613,73 +2855,6 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
                                      r->cmd, r->sub1, r->sub2);
                         return level > redir ? level : redir;
                     }
-                }
-            }
-        }
-    }
-
-    /* ip: generalises the per-object 3-token rules above to every ip
-     * object -- flush/delete/del is CRITICAL and add/append/replace/
-     * change/set/prepend/save/restore is WRITE regardless of which object
-     * they act on, not only the ones with their own table row. Runs after
-     * the exact 3-token matches (so e.g. "ip link set" keeps its pinned
-     * CRITICAL) and before the two-token object-only rules (so e.g. "ip
-     * route replace" isn't pre-empted by "route" -> READ). */
-    if (tok_eq(base1, base1_len, "ip")) {
-        const char *p2 = p;
-        const char *obj_s; size_t obj_l;
-        if (next_token(&p2, &obj_s, &obj_l)) {
-            if (tok_eq(obj_s, obj_l, "a")) {
-                const char *p3 = p2;
-                const char *v; size_t vl;
-                if (!next_token(&p3, &v, &vl)) /* bare "ip a": alias for "ip addr" */
-                    return has_sudo && redir < CMD_WRITE ? CMD_WRITE : redir;
-            }
-            if (tok_eq(obj_s, obj_l, "netns")) {
-                const char *p3 = p2;
-                const char *verb_s; size_t verb_l;
-                if (next_token(&p3, &verb_s, &verb_l) && tok_eq(verb_s, verb_l, "exec")) {
-                    const char *p4 = p3;
-                    const char *name_s; size_t name_l;
-                    if (next_token(&p4, &name_s, &name_l)) {
-                        const char *cmd_start = NULL, *cmd_end = NULL;
-                        const char *scan2 = p4;
-                        const char *ts2; size_t tl2;
-                        while (next_token(&scan2, &ts2, &tl2)) {
-                            if (!cmd_start) cmd_start = ts2;
-                            cmd_end = ts2 + tl2;
-                        }
-                        CmdSafetyLevel sub = CMD_UNKNOWN;
-                        if (cmd_start && cmd_end > cmd_start)
-                            sub = classify_linux_segment(cmd_start,
-                                                          (size_t)(cmd_end - cmd_start), NULL, 0);
-                        CmdSafetyLevel lvl = sub > CMD_UNKNOWN ? sub : CMD_UNKNOWN;
-                        if (has_sudo && lvl < CMD_WRITE) lvl = CMD_WRITE;
-                        if (reason_buf && reason_buf_size > 0)
-                            snprintf(reason_buf, reason_buf_size, "ip netns exec: runs a command in another namespace");
-                        return lvl > redir ? lvl : redir;
-                    }
-                }
-            }
-            const char *p3 = p2;
-            const char *verb_s; size_t verb_l;
-            if (next_token(&p3, &verb_s, &verb_l)) {
-                if (tok_eq(verb_s, verb_l, "flush") || tok_eq(verb_s, verb_l, "delete")
-                    || tok_eq(verb_s, verb_l, "del")) {
-                    if (reason_buf && reason_buf_size > 0)
-                        snprintf(reason_buf, reason_buf_size, "ip %.*s %.*s",
-                                 (int)obj_l, obj_s, (int)verb_l, verb_s);
-                    return CMD_CRITICAL;
-                }
-                if (tok_eq(verb_s, verb_l, "add") || tok_eq(verb_s, verb_l, "append")
-                    || tok_eq(verb_s, verb_l, "replace") || tok_eq(verb_s, verb_l, "change")
-                    || tok_eq(verb_s, verb_l, "set") || tok_eq(verb_s, verb_l, "prepend")
-                    || tok_eq(verb_s, verb_l, "save") || tok_eq(verb_s, verb_l, "restore")) {
-                    CmdSafetyLevel level = CMD_WRITE;
-                    if (reason_buf && reason_buf_size > 0)
-                        snprintf(reason_buf, reason_buf_size, "ip %.*s %.*s",
-                                 (int)obj_l, obj_s, (int)verb_l, verb_s);
-                    return level > redir ? level : redir;
                 }
             }
         }
@@ -2024,85 +3199,50 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         return level > redir ? level : redir;
     }
 
-    /* sort -o/--output: writes the sorted result to a file instead of
-     * stdout. --compress-program: runs an external program. */
+    /* sort: -o/--output (and any abbreviation of it) writes a file;
+     * --compress-program and every other unlisted flag are UNKNOWN. */
     if (tok_eq(base1, base1_len, "sort")) {
-        const char *scan = p;
-        const char *ts;
-        size_t tl;
-        CmdSafetyLevel level = CMD_READ;
-        while (next_token(&scan, &ts, &tl)) {
-            if (tl == 0) continue;
-            if (tok_eq(ts, tl, "--compress-program") || tok_prefix(ts, tl, "--compress-program=")) {
-                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
-                if (tok_eq(ts, tl, "--compress-program")) {
-                    const char *v; size_t vl; next_token(&scan, &v, &vl);
-                }
-                continue;
-            }
-            if (tok_eq(ts, tl, "--output") || tok_prefix(ts, tl, "--output=")) {
-                level = CMD_WRITE;
-                continue;
-            }
-            if (tl > 1 && ts[0] == '-' && ts[1] != '-') {
-                for (size_t i = 1; i < tl; i++) {
-                    if (ts[i] == 'o') { level = CMD_WRITE; break; }
-                }
-            }
-        }
+        CmdSafetyLevel level = flag_scan(&sort_spec, p, NULL);
         if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
         if (reason_buf && reason_buf_size > 0 && level > CMD_READ)
             snprintf(reason_buf, reason_buf_size,
                      level == CMD_WRITE ? "sort -o/--output: writes to a file"
-                                        : "sort --compress-program: runs an external program");
+                                        : "sort: flag outside the known-safe set");
         return level > redir ? level : redir;
     }
 
-    /* uniq: a second non-option argument is the output file. */
+    /* uniq: a second operand is the output file. */
     if (tok_eq(base1, base1_len, "uniq")) {
-        const char *scan = p;
-        const char *ts;
-        size_t tl;
-        int positional = 0;
-        CmdSafetyLevel level = CMD_READ;
-        while (next_token(&scan, &ts, &tl)) {
-            if (tl == 0) continue;
-            if (ts[0] == '-') {
-                if (tok_eq(ts, tl, "-f") || tok_eq(ts, tl, "--skip-fields")
-                    || tok_eq(ts, tl, "-s") || tok_eq(ts, tl, "--skip-chars")
-                    || tok_eq(ts, tl, "-w") || tok_eq(ts, tl, "--check-chars")) {
-                    const char *v; size_t vl; next_token(&scan, &v, &vl);
-                }
-                continue;
-            }
-            positional++;
-            if (positional == 2) { level = CMD_WRITE; break; }
-        }
+        int operands = 0;
+        CmdSafetyLevel level = flag_scan(&uniq_spec, p, &operands);
+        if (operands >= 2) level = CMD_WRITE;
         if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
         if (reason_buf && reason_buf_size > 0 && level > CMD_READ)
-            snprintf(reason_buf, reason_buf_size, "uniq: a second file argument is the output file");
+            snprintf(reason_buf, reason_buf_size,
+                     level == CMD_WRITE ? "uniq: a second file argument is the output file"
+                                        : "uniq: flag outside the known-safe set");
         return level > redir ? level : redir;
     }
 
-    /* history: -c/-w/-d/-a/-r/-n/-s change the history state or file;
-     * -p performs expansion only, not itself a write but not a pure query
-     * either. Bare "history" or "history N" (a count) stays READ. */
+    /* history: bare or "history N" lists. -p only expands (UNKNOWN); every
+     * other option (-c -w -d -a -r -n -s, however combined) changes the
+     * history list or file. */
     if (tok_eq(base1, base1_len, "history")) {
         const char *scan = p;
         const char *ts;
         size_t tl;
         CmdSafetyLevel level = CMD_READ;
         while (next_token(&scan, &ts, &tl)) {
-            if (tl == 0) continue;
-            if (tok_eq(ts, tl, "-p")) {
+            if (tok_is_obscured_flag(ts, tl)) {
                 if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
-                continue;
-            }
-            /* Every other option (-c -w -d -a -r -n -s, combined as "-cw"
-             * or attached as "-d5") changes the list or the file. */
-            if (ts[0] == '-') {
+            } else if (tok_eq(ts, tl, "-p")) {
+                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+            } else if (ts[0] == '-') {
                 level = CMD_WRITE;
-                continue;
+            } else {
+                size_t k = 0;
+                while (k < tl && isdigit((unsigned char)ts[k])) k++;
+                if (k != tl && level < CMD_UNKNOWN) level = CMD_UNKNOWN;
             }
         }
         if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
@@ -2111,86 +3251,73 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         return level > redir ? level : redir;
     }
 
-    /* man -P/--pager/-H/--html: runs an external pager/browser to display
-     * the page. */
-    if (tok_eq(base1, base1_len, "man")) {
-        const char *scan = p;
-        const char *ts;
-        size_t tl;
-        CmdSafetyLevel level = CMD_READ;
-        while (next_token(&scan, &ts, &tl)) {
-            if (tl == 0) continue;
-            if (tok_eq(ts, tl, "-P") || tok_eq(ts, tl, "--pager")) {
-                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
-                const char *v; size_t vl; next_token(&scan, &v, &vl);
-                continue;
-            }
-            if (tok_prefix(ts, tl, "--pager=") || tok_eq(ts, tl, "-H") || tok_eq(ts, tl, "--html")) {
-                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
-                continue;
-            }
-        }
-        if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
-        if (reason_buf && reason_buf_size > 0 && level > CMD_READ)
-            snprintf(reason_buf, reason_buf_size, "man: pager/browser flag runs another program");
-        return level > redir ? level : redir;
-    }
-
-    /* rg --pre: filters input through an external command before
-     * searching. --pre-glob alone (which just restricts --pre to matching
-     * files) stays READ. */
-    if (tok_eq(base1, base1_len, "rg")) {
-        const char *scan = p;
-        const char *ts;
-        size_t tl;
-        CmdSafetyLevel level = CMD_READ;
-        while (next_token(&scan, &ts, &tl)) {
-            if (tl == 0) continue;
-            if (tok_eq(ts, tl, "--pre") || tok_prefix(ts, tl, "--pre=")) {
-                level = CMD_UNKNOWN;
-                if (tok_eq(ts, tl, "--pre")) {
-                    const char *v; size_t vl; next_token(&scan, &v, &vl);
-                }
-            }
-        }
-        if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
-        if (reason_buf && reason_buf_size > 0 && level > CMD_READ)
-            snprintf(reason_buf, reason_buf_size, "rg --pre: filters input through an external command");
-        return level > redir ? level : redir;
-    }
-
-    /* less: "+!cmd" runs a shell command on start; -o/-O/--log-file write
-     * the input to a file. A "+!..." argument is often shell-quoted (e.g.
-     * '+!sh'), so one layer of surrounding quote is stripped first. */
+    /* less: flags from less_spec (-o/-O/--log-file write a log file); a
+     * "+cmd" operand is a command run on start, READ only for a line
+     * number, G, g, F, or a /pattern or ?pattern search -- anything else
+     * ("+!cmd" runs a shell, "+|" pipes, "+v" starts an editor, "+s" saves)
+     * is UNKNOWN. */
     if (tok_eq(base1, base1_len, "less")) {
         const char *scan = p;
-        char w[512];
-        int trunc = 0;
-        const char *rs, *re;
+        const char *ts;
+        size_t tl;
         CmdSafetyLevel level = CMD_READ;
-        while (next_shell_word(&scan, seg_end, w, sizeof w, &trunc, &rs, &re)) {
-            size_t wl = strlen(w);
-            if (wl == 0) continue;
-            /* A "+" initial command containing '!' (shell escape) or '|'
-             * (pipe to a shell command) runs another program. */
-            if (wl >= 2 && w[0] == '+' &&
-                (strchr(w, '!') != NULL || strchr(w, '|') != NULL)) {
-                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
-                continue;
+        int only = 0;
+        while (next_token(&scan, &ts, &tl)) {
+            if (!flag_word(&less_spec, ts, tl, &scan, &level, &only)) continue;
+            char w[512];
+            tok_unquote(ts, tl, w, sizeof w);
+            if (w[0] != '+') continue;
+            const char *c = w + 1;
+            if (*c == '+') c++;
+            int ok;
+            if (*c == '/' || *c == '?') ok = 1;
+            else {
+                while (isdigit((unsigned char)*c)) c++;
+                if (*c && strchr("gGpF%", *c)) c++;
+                ok = (*c == '\0');
             }
-            if (tok_eq(w, wl, "--log-file") || tok_eq(w, wl, "--LOG-FILE") ||
-                tok_prefix(w, wl, "--log-file=") || tok_prefix(w, wl, "--LOG-FILE=") ||
-                tok_prefix(w, wl, "-o") || tok_prefix(w, wl, "-O")) {
-                /* -o F / -oF / -O F / --log-file[=]F: writes a log file */
-                level = CMD_WRITE;
-                continue;
-            }
+            if (!ok && level < CMD_UNKNOWN) level = CMD_UNKNOWN;
         }
         if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
         if (reason_buf && reason_buf_size > 0 && level > CMD_READ)
             snprintf(reason_buf, reason_buf_size,
                      level == CMD_WRITE ? "less: log-file flag writes to a file"
-                                        : "less: '+!' runs a shell command on start");
+                                        : "less: start-up command or flag outside the known-safe set");
+        return level > redir ? level : redir;
+    }
+
+    /* date: "+FORMAT" and the display options are READ; any other operand
+     * sets the clock (as does -s/--set, also caught above). */
+    if (tok_eq(base1, base1_len, "date")) {
+        const char *scan = p;
+        const char *ts;
+        size_t tl;
+        CmdSafetyLevel level = CMD_READ;
+        int only = 0;
+        while (next_token(&scan, &ts, &tl)) {
+            if (!flag_word(&date_spec, ts, tl, &scan, &level, &only)) continue;
+            char w[8];
+            tok_unquote(ts, tl, w, sizeof w);
+            if (w[0] != '+') level = CMD_WRITE;
+        }
+        if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
+        if (reason_buf && reason_buf_size > 0 && level > CMD_READ)
+            snprintf(reason_buf, reason_buf_size, "date: sets the clock or uses an unlisted flag");
+        return level > redir ? level : redir;
+    }
+
+    /* The other READ commands with a flag allow-list (read_cmd_specs). */
+    for (int i = 0; read_cmd_specs[i].cmd; i++) {
+        if (!tok_eq(base1, base1_len, read_cmd_specs[i].cmd)) continue;
+        int operands = 0;
+        CmdSafetyLevel level = flag_scan(read_cmd_specs[i].spec, p, &operands);
+        if (read_cmd_specs[i].operands && operands > 0) level = CMD_WRITE;
+        if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
+        if (reason_buf && reason_buf_size > 0 && level > CMD_READ)
+            snprintf(reason_buf, reason_buf_size,
+                     level == CMD_WRITE ? "%s: flag or argument that writes or changes state"
+                                        : "%s: flag outside the known-safe set",
+                     read_cmd_specs[i].cmd);
         return level > redir ? level : redir;
     }
 
@@ -2204,51 +3331,6 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         if (reason_buf && reason_buf_size > 0)
             snprintf(reason_buf, reason_buf_size, "mount: mounts a filesystem");
         return level > redir ? level : redir;
-    }
-
-    /* date: bare (queries the current time) is SAFE. "date -s ..." is
-     * already WRITE via the linux_subcmd_rules two-token match above; any
-     * other argument form is not blanket-SAFE (spec 3.3: "date" *(bare)*)
-     * -- falls through unclassified rather than being listed in
-     * linux_read_cmds. */
-    if (tok_eq(base1, base1_len, "date")) {
-        const char *p2 = p;
-        if (!next_token(&p2, &tok2_start, &tok2_len))
-            return redir;
-    }
-
-    /* hostname: bare (queries the current host name) is SAFE. "hostname
-     * newname" changes it, so -- like "date" above -- this is not
-     * blanket-SAFE (spec 3.3: "hostname" *(bare)*). */
-    if (tok_eq(base1, base1_len, "hostname")) {
-        const char *p2 = p;
-        if (!next_token(&p2, &tok2_start, &tok2_len))
-            return redir;
-    }
-
-    /* dmesg: bare (prints the kernel ring buffer) is SAFE. "dmesg -C" is
-     * already WRITE via linux_subcmd_rules above; other forms are not
-     * blanket-SAFE (spec 3.3: "dmesg" *(bare)*). */
-    if (tok_eq(base1, base1_len, "dmesg")) {
-        const char *p2 = p;
-        if (!next_token(&p2, &tok2_start, &tok2_len))
-            return redir;
-    }
-
-    /* journalctl --vacuum-*: prefix match on the subcommand */
-    if (tok_eq(base1, base1_len, "journalctl")) {
-        const char *scan = p;
-        const char *ts;
-        size_t tl;
-        while (next_token(&scan, &ts, &tl)) {
-            if (tok_prefix(ts, tl, "--vacuum-")) {
-                CmdSafetyLevel level = CMD_WRITE;
-                if (reason_buf && reason_buf_size > 0)
-                    snprintf(reason_buf, reason_buf_size, "journalctl --vacuum: deletes old logs");
-                return level > redir ? level : redir;
-            }
-        }
-        return redir;
     }
 
     /* timedatectl set-*: prefix match on the subcommand */
@@ -5571,6 +6653,7 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
     int is_pipe_target = 0;
     QuoteScan qs;
     quote_scan_init(&qs, mode);
+    tok_mode = mode;
 
     while (*p) {
         while (*p == ' ' || *p == '\t') p++;
@@ -5718,11 +6801,15 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
             if (pipe_level > seg_level) seg_level = pipe_level;
         }
 
-        if (seg_level < CMD_UNKNOWN && seg_has_substitution(seg_start, seg_len)) {
-            if (worst == CMD_READ && reason_buf && reason_buf_size > 0)
-                snprintf(reason_buf, reason_buf_size,
-                         "command substitution: runs a command the rules cannot see");
-            seg_level = CMD_UNKNOWN;
+        {
+            CmdSafetyLevel sub = seg_substitution_level(seg_start, seg_len, platform);
+            tok_mode = mode; /* the inner classification ran its own passes */
+            if (sub > seg_level) {
+                if (worst == CMD_READ && reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size,
+                             "command substitution: runs a command the rules cannot see");
+                seg_level = sub;
+            }
         }
 
         if (seg_level > worst) worst = seg_level;
@@ -5756,10 +6843,20 @@ static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
         return CMD_READ;
     }
 
+    QuoteMode saved_mode = tok_mode;
     unsigned mask_a = 0;
     CmdSafetyLevel level_a = classify_pass(command, platform, QMODE_POSIX,
                                            reason_buf, reason_buf_size, &mask_a);
-    if (quoting_unambiguous(command)) {
+    /* On an unresolved platform the command may reach PowerShell, which
+     * also takes the typographic quotes as string delimiters: any of them
+     * makes the quoting shell-dependent. When the two readings differ only
+     * in where words split (an escaped blank, "My\ File"), both readings
+     * are classified and the worse taken, without the UNKNOWN floor: the
+     * segments are the same, only a flag could hide in one reading. */
+    int typo = (platform == CMD_PLATFORM_UNKNOWN && has_typo_quote(command));
+    int metas_agree = !typo && quoting_agrees(command, 0);
+    if (metas_agree && quoting_agrees(command, 1)) {
+        tok_mode = saved_mode;
         if (mask_out) *mask_out = mask_a;
         return level_a;
     }
@@ -5769,11 +6866,16 @@ static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
     reason_b[0] = '\0';
     CmdSafetyLevel level_b = classify_pass(command, platform, QMODE_PWSH,
                                            reason_b, sizeof reason_b, &mask_b);
+    tok_mode = saved_mode;
     CmdSafetyLevel worst = level_a;
     if (level_b > worst) {
         worst = level_b;
         if (reason_buf && reason_buf_size > 0)
             snprintf(reason_buf, reason_buf_size, "%s", reason_b);
+    }
+    if (metas_agree) {
+        if (mask_out) *mask_out = mask_a | mask_b;
+        return worst;
     }
     if (worst < CMD_UNKNOWN) {
         worst = CMD_UNKNOWN;
