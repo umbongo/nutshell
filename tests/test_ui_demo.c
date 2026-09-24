@@ -20,19 +20,22 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
     return n;
 }
 
-/* Eleven since v1.2.1 added "local" (the local-shell tab chrome demo,
- * spec 2026-09-22-local-shell-design.md section 5). "all" stays last and
- * still means the union of the panel states, which "local" is not part of:
- * it only swaps the terminal transcript. */
+/* Twelve since 2026-09-24 added "thinking" (the 50-line scrollable
+ * Thinking box demo). "all" stays last and still means the union of the
+ * panel states, which neither "local" (v1.2.1, spec
+ * 2026-09-22-local-shell-design.md section 5) nor "thinking" is part of:
+ * "local" only swaps the terminal transcript, "thinking" is "chat" with a
+ * longer reasoning block "all" doesn't need a second copy of. */
 int test_ui_demo_states_list_ends_in_all(void)
 {
     TEST_BEGIN();
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 11);
+    ASSERT_EQ(count, 12);
     ASSERT_STR_EQ(states[count - 1], "all");
-    ASSERT_STR_EQ(states[count - 2], "local");
+    ASSERT_STR_EQ(states[count - 2], "thinking");
+    ASSERT_STR_EQ(states[count - 3], "local");
     TEST_END();
 }
 
@@ -319,3 +322,43 @@ int test_ui_demo_thinking_text_non_empty(void)
     ASSERT_TRUE(t[0] != '\0');
     TEST_END();
 }
+
+/* "thinking" state: the 50-line scrollable Thinking box demo. Its
+ * conversation is exactly "chat"'s (same user/assistant turns); only the
+ * attached thinking text differs (ai_chat.c's demo wiring, not this
+ * module's job to prove). */
+int test_ui_demo_thinking_text_long_non_empty_and_much_longer(void)
+{
+    TEST_BEGIN();
+    const char *t = ui_demo_thinking_text_long();
+    ASSERT_NOT_NULL(t);
+    ASSERT_TRUE(t[0] != '\0');
+    /* Comfortably over THINKING_MAX_LINES (50) lines' worth of prose at
+     * any plausible panel width -- see ai_thinking_max_body_h() in
+     * ai_panel_layout.h. */
+    ASSERT_TRUE(strlen(t) > 2000);
+    TEST_END();
+}
+
+int test_ui_demo_build_thinking_matches_chat_conversation(void)
+{
+    TEST_BEGIN();
+    AiConversation chat_conv, thinking_conv;
+    ApprovalQueue approval, approval2;
+
+    ASSERT_TRUE(ui_demo_state_valid("thinking"));
+    ASSERT_EQ(ui_demo_build("chat", &chat_conv, &approval, &approval2, NULL, 0), 0);
+    ASSERT_EQ(ui_demo_build("thinking", &thinking_conv, &approval, &approval2, NULL, 0), 0);
+
+    ASSERT_EQ(thinking_conv.msg_count, chat_conv.msg_count);
+    for (int i = 0; i < chat_conv.msg_count; i++) {
+        ASSERT_EQ((int)thinking_conv.messages[i].role, (int)chat_conv.messages[i].role);
+        ASSERT_STR_EQ(thinking_conv.messages[i].content, chat_conv.messages[i].content);
+    }
+    TEST_END();
+}
+
+/* "thinking" is deliberately not in the is_all chain (see ui_demo_build())
+ * -- test_ui_demo_build_all_is_union() above pins "all"'s exact message
+ * count at 17, unchanged by adding "thinking", so that test failing would
+ * be the signal if this ever regresses. */

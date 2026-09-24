@@ -47,6 +47,19 @@ typedef struct { NsRect row, chevron, label, summary, body; int total_h; } Think
 void thinking_layout(NsRect avail, int expanded, int body_text_h, int max_body_h,
                       int dpi, ThinkingLayout *out);
 
+/* The expanded Thinking body is capped at THINKING_MAX_LINES lines of its
+ * own text (maintainer request, 2026-09-24: collapsed by default, but if
+ * opened, up to 50 lines and smart-scrollable) -- shorter content gets its
+ * natural height instead (see thinking_layout()'s body_text_h/max_body_h
+ * clamp above). ai_thinking_max_body_h() turns that line count into the
+ * max_body_h pixel value thinking_layout() wants, given the body font's
+ * actual measured line height (e.g. a Win32 TEXTMETRIC's tmHeight at the
+ * font thinking_layout()'s caller paints with) -- already DPI-correct at
+ * that font, so this is a straight multiply, no further DPI math needed.
+ * Returns 0 if line_height_px <= 0. */
+#define THINKING_MAX_LINES 50
+int ai_thinking_max_body_h(int line_height_px);
+
 /* Formats the collapsed/streaming summary text into `buf` (UTF-8 middle
  * dot U+00B7 lead-in): "· 240 words" or, while still streaming, "·
  * streaming…" (U+2026 ellipsis). Returns the formatted length (like

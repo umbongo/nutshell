@@ -13,22 +13,25 @@
 # it: it must not call Wait-NutshellShell or Start-NutshellLogging, both of
 # which assume a live shell prompt.
 #
-# $galleryStates is a hand-kept copy of src/core/ui_demo.c's STATE_NAMES --
-# there is no cheap way for a PowerShell script to query the C array at
-# build time, and --ui-demo=<unknown>'s error text ("Unknown demo state:
-# <name>") does not enumerate the valid ones. Native coverage that this
-# list can't silently drift from ui_demo_states() lives in
-# tests/test_ui_demo.c (test_ui_demo_states_lists_ten_ending_in_all et al.)
-# -- keep both lists in sync by hand when a state is added/removed.
+# $galleryStates is a hand-kept copy of src/core/ui_demo.c's STATE_NAMES,
+# minus "local" (tab-chrome-only, covered by its own case,
+# 80-local-shell.ps1) -- there is no cheap way for a PowerShell script to
+# query the C array at build time, and --ui-demo=<unknown>'s error text
+# ("Unknown demo state: <name>") does not enumerate the valid ones. Native
+# coverage that this list can't silently drift from ui_demo_states() lives
+# in tests/test_ui_demo.c (test_ui_demo_states_list_ends_in_all et al.) --
+# keep both lists in sync by hand when a state is added/removed.
 # "batches" (docs/superpowers/specs/2026-09-09-pending-command-batches.md)
 # is the one state whose whole point is two independent pending cards at
 # once -- its capture is the visual proof that both render side by side.
+# "thinking" (2026-09-24) is "chat" with a much longer reasoning block, so
+# the capture shows the Thinking box at its 50-line cap with a scrollbar.
 
 if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "ui_gallery")) {
     Write-Host ("[RUN ] ui_gallery")
     $galleryDir = Join-Path $Artifacts "gallery"
     New-Item -ItemType Directory -Force $galleryDir | Out-Null
-    $galleryStates = @("chat", "approval", "executing", "tool", "error", "empty", "nokey", "nosession", "batches", "all")
+    $galleryStates = @("chat", "approval", "executing", "tool", "error", "empty", "nokey", "nosession", "batches", "thinking", "all")
     $galleryThemes = @("Onyx Synapse", "Onyx Light", "Sage & Sand", "Moss & Mist")
     $galleryOk = $true
     $galleryDetail = New-Object System.Collections.ArrayList
