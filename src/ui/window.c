@@ -3276,10 +3276,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             update_scrollbar(hwnd);
 
                             /* Platform auto-detect: only while the profile
-                             * didn't pin an explicit platform and we haven't
-                             * already resolved (or given up). Re-scanning
-                             * every data-bearing tick is what lets a banner
-                             * split across multiple reads still be caught. */
+                             * didn't pin an explicit platform (platform_locked,
+                             * item 4 -- an operator's choice is never
+                             * overridden by anything below). Re-scanning every
+                             * data-bearing tick during the initial window is
+                             * what lets a banner split across multiple reads
+                             * still be caught. */
                             if (!s->platform_locked && !s->platform_scanned) {
                                 char detect_buf[4096];
                                 size_t detect_len = term_extract_last_n(
@@ -3294,6 +3296,31 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 if (detect_conf == CMD_DETECT_BANNER ||
                                     s->platform_scan_ticks >= PLATFORM_DETECT_MAX_TICKS)
                                     s->platform_scanned = 1;
+                            } else if (!s->platform_locked) {
+                                /* Resolved (or gave up) once already, but stay
+                                 * alert for a live contradiction: the session
+                                 * hopped to a different, unambiguous prompt
+                                 * (another device, or back to Linux) since we
+                                 * stopped actively scanning. cmd_detect_platform
+                                 * itself prefers the most recent evidence when a
+                                 * banner and a later prompt disagree within one
+                                 * call (see its header comment); this is the
+                                 * same idea across calls, bounded to only the
+                                 * case that is unambiguous evidence of drift.
+                                 * A CMD_DETECT_NONE result (nothing resolves in
+                                 * the current tail any more) is not evidence of
+                                 * anything and must never reset the session back
+                                 * to CMD_PLATFORM_UNKNOWN. */
+                                char detect_buf[4096];
+                                size_t detect_len = term_extract_last_n(
+                                    s->term, 40, detect_buf, sizeof detect_buf);
+                                CmdDetectConfidence detect_conf = CMD_DETECT_NONE;
+                                CmdPlatform detected = cmd_detect_platform(
+                                    detect_buf, detect_len, &detect_conf);
+                                if (detect_conf == CMD_DETECT_PROMPT &&
+                                    detected != CMD_PLATFORM_UNKNOWN &&
+                                    detected != (CmdPlatform)s->ai_state.platform)
+                                    s->ai_state.platform = (int)detected;
                             }
                         }
 
