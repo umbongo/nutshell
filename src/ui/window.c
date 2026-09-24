@@ -22,6 +22,7 @@
 #include "ssh_pty.h"
 #include "ssh_io.h"
 #include "local_shell.h"
+#include "local_shell_probe.h"
 #include "local_pty.h"
 #include "knownhosts.h"
 #include "log_format.h"
@@ -52,7 +53,6 @@
 #include "term_extract.h"
 #include "key_encode.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
-#include <dwmapi.h>
 #include <gdiplus.h>       /* GDI+ flat API (includes gdiplusflat.h) */
 
 static void hide_ai_panel(HWND parent);
@@ -107,8 +107,8 @@ typedef struct Session {
     CRITICAL_SECTION conn_cs;      /* H-1: guards conn_result/conn_error/ssh/channel */
     AiSessionState ai_state;       /* per-session AI conversation */
     /* Local sessions only: which shell the resolver picked, as the AI system
-     * prompt names it ("busybox", "Git bash", "MSYS2", "custom"). Empty for
-     * an SSH session, which is what the panel is told then. */
+     * prompt names it ("PowerShell", "Git bash", "MSYS2", "cmd", "custom").
+     * Empty for an SSH session, which is what the panel is told then. */
     char      shell_name[32];
     int       platform_locked;   /* profile named an explicit platform -- detection may not override it */
     int       platform_scanned;  /* detection is done (resolved via banner, or gave up after the tick bound) */
@@ -701,76 +701,16 @@ static int profile_is_local(const Profile *p)
     return (p && strcmp(p->kind, "local") == 0) ? 1 : 0;
 }
 
-/* The three questions local_shell_resolve() may ask the machine. They live
- * here rather than in src/core/local_shell.c so that file stays free of
- * <windows.h> and testable on any host. */
-
-static int probe_exists(void *ctx, const char *path)
+/* GetEnvironmentVariableA, for the "user@machine" tab status line only --
+ * unrelated to local_shell_probe.c's LocalShellProbe callbacks, which are
+ * asked only from local_shell_resolve()/local_shell_resolve_bare(). */
+static int env_str(const char *name, char *out, size_t out_size)
 {
-    (void)ctx;
-    if (!path || !path[0]) return 0;
-    DWORD attr = GetFileAttributesA(path);
-    return (attr != INVALID_FILE_ATTRIBUTES &&
-            !(attr & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
-}
-
-static int probe_env(void *ctx, const char *name, char *out, size_t out_size)
-{
-    (void)ctx;
     if (!name || !out || out_size == 0u) return 0;
     out[0] = '\0';
     DWORD n = GetEnvironmentVariableA(name, out, (DWORD)out_size);
     if (n == 0u || n >= (DWORD)out_size) { out[0] = '\0'; return 0; }
     return out[0] ? 1 : 0;
-}
-
-/* key is "HKLM\\SOFTWARE\\..." -- only HKLM and HKCU are understood, which
- * is all spec 4.2 asks for. Reads both the 64- and 32-bit views so a 32-bit
- * Git install is still found. */
-static int probe_registry_string(void *ctx, const char *key, const char *value,
-                                 char *out, size_t out_size)
-{
-    (void)ctx;
-    if (!key || !value || !out || out_size == 0u) return 0;
-    out[0] = '\0';
-
-    HKEY root;
-    const char *sub;
-    if (strncmp(key, "HKLM\\", 5) == 0)      { root = HKEY_LOCAL_MACHINE; sub = key + 5; }
-    else if (strncmp(key, "HKCU\\", 5) == 0) { root = HKEY_CURRENT_USER;  sub = key + 5; }
-    else return 0;
-
-    static const DWORD views[2] = { KEY_WOW64_64KEY, KEY_WOW64_32KEY };
-    for (int i = 0; i < 2; i++) {
-        HKEY h;
-        if (RegOpenKeyExA(root, sub, 0,
-                          KEY_QUERY_VALUE | views[i], &h) != ERROR_SUCCESS)
-            continue;
-        DWORD type = 0;
-        DWORD len = (DWORD)out_size;
-        LONG rc = RegQueryValueExA(h, value, NULL, &type,
-                                   (LPBYTE)out, &len);
-        RegCloseKey(h);
-        if (rc == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)) {
-            if (len >= (DWORD)out_size) len = (DWORD)out_size - 1u;
-            out[len] = '\0';
-            /* RegQueryValueExA counts the NUL; trim any extra. */
-            out[out_size - 1u] = '\0';
-            if (out[0]) return 1;
-        }
-        out[0] = '\0';
-    }
-    return 0;
-}
-
-static void fill_local_probe(LocalShellProbe *probe, const char *exe_dir)
-{
-    memset(probe, 0, sizeof(*probe));
-    probe->exists          = probe_exists;
-    probe->env             = probe_env;
-    probe->registry_string = probe_registry_string;
-    probe->ctx             = NULL;
-    probe->exe_dir         = exe_dir;
 }
 
 /* Hand the AI panel this session's terminal, transport and shell name in one
@@ -794,11 +734,8 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
 {
     if (!s) return 0;
 
-    char exe_dir[MAX_PATH];
-    get_exe_dir(exe_dir, sizeof(exe_dir));
-
     LocalShellProbe probe;
-    fill_local_probe(&probe, exe_dir[0] ? exe_dir : NULL);
+    local_shell_fill_probe(&probe);
 
     /* LocalShellSpec carries a full PATH, so it is too big for the stack of
      * a thread with the Windows default reserve; the UI thread has room, but
@@ -816,9 +753,22 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
     err[0] = '\0';
     LocalPty *pty = NULL;
     if (kind != SHELL_NONE) {
-        int cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
-        int rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
-        pty = local_pty_open(spec, cols, rows, err, sizeof(err));
+        /* Security: a bare custom executable name ("powershell.exe", no
+         * path) must never be handed to CreateProcess as-is -- its own
+         * search would try the exe's folder and the current directory
+         * before System32. Resolve it ourselves first, against System32,
+         * the Windows directory and absolute PATH entries only; refuse to
+         * launch anything CreateProcess itself would have had to search
+         * CWD or the exe's own directory to find. */
+        if (!local_shell_resolve_bare(spec, &probe)) {
+            (void)snprintf(err, sizeof(err),
+                           "Could not find \"%s\" in System32, the Windows "
+                           "directory, or PATH.", spec->exe);
+        } else {
+            int cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
+            int rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
+            pty = local_pty_open(spec, cols, rows, err, sizeof(err));
+        }
     } else {
         (void)snprintf(err, sizeof(err), "%s",
                        spec->error[0] ? spec->error : LOCAL_SHELL_NONE_MESSAGE);
@@ -871,9 +821,9 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
 
     if (tidx >= 0) {
         char user[256], machine[256];
-        if (!probe_env(NULL, "USERNAME", user, sizeof(user)))
+        if (!env_str("USERNAME", user, sizeof(user)))
             (void)snprintf(user, sizeof(user), "%s", "local");
-        if (!probe_env(NULL, "COMPUTERNAME", machine, sizeof(machine)))
+        if (!env_str("COMPUTERNAME", machine, sizeof(machine)))
             (void)snprintf(machine, sizeof(machine), "%s", "this PC");
         tabs_set_connect_info(g_hwndTabs, tidx, user, machine,
                               (unsigned long long)GetTickCount64());
@@ -1369,7 +1319,7 @@ static void create_demo_session(HWND hwnd)
              demo_local ? "Local shell" : "demo");
     if (demo_local) {
         snprintf(s->conn_profile.kind, sizeof(s->conn_profile.kind), "local");
-        snprintf(s->shell_name, sizeof(s->shell_name), "busybox");
+        snprintf(s->shell_name, sizeof(s->shell_name), "PowerShell");
     }
     /* s->channel / s->ssh are already NULL from create_session -- no
      * connection exists or ever will for this tab, local demo included:
@@ -1412,9 +1362,9 @@ static void create_demo_session(HWND hwnd)
          * CONNECTED dot and a user@machine status line, from the real
          * environment, with no process behind it. */
         char user[256], machine[256];
-        if (!probe_env(NULL, "USERNAME", user, sizeof(user)))
+        if (!env_str("USERNAME", user, sizeof(user)))
             (void)snprintf(user, sizeof(user), "%s", "local");
-        if (!probe_env(NULL, "COMPUTERNAME", machine, sizeof(machine)))
+        if (!env_str("COMPUTERNAME", machine, sizeof(machine)))
             (void)snprintf(machine, sizeof(machine), "%s", "this PC");
         tabs_set_connect_info(g_hwndTabs, idx, user, machine,
                               (unsigned long long)GetTickCount64());

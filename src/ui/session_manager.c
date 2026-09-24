@@ -15,6 +15,8 @@
 #include "../config/config.h"
 #include "../core/vector.h"
 #include "../core/cmd_classify.h"
+#include "local_shell.h"
+#include "local_shell_probe.h"
 #include "resource.h"
 #include "dpi_util.h"
 
@@ -35,6 +37,15 @@ typedef struct {
     HWND        hAiScrollbar; /* custom scrollbar for AI notes edit */
     int         ai_line_h;    /* cached line height in px for AI notes */
     HWND        hListScrollbar; /* custom scrollbar for session listbox */
+
+    /* Shell combo (IDC_EDIT_SHELL): row 0 is always "Automatic (...)",
+     * stored value "" (index 0 of shell_cmd is unused/empty); rows 1..n
+     * mirror local_shell_list_available(), stored value shell_cmd[i] is
+     * that row's full quoted command line. Selecting a row copies the
+     * stored value into the edit text (CBN_SELCHANGE below); the user can
+     * still type over it freely. */
+    char        shell_cmd[LOCAL_SHELL_CHOICE_MAX + 1][LOCAL_SHELL_CMD_MAX];
+    int         shell_choice_count;
 } SessMgrState;
 
 /* ---- Helpers ---- */
@@ -220,6 +231,67 @@ static void toggle_kind_fields(HWND hwnd)
     }
 }
 
+/* ANSI (the display names and command lines local_shell.c builds are all
+ * plain ASCII) -> wide, for EM_SETCUEBANNER, which takes nothing else. */
+static void set_cue_banner(HWND ctrl, const char *text)
+{
+    if (!ctrl || !text) return;
+    wchar_t wbuf[LOCAL_SHELL_CMD_MAX];
+    int n = MultiByteToWideChar(CP_UTF8, 0, text, -1, wbuf, (int)(sizeof(wbuf) / sizeof(wbuf[0])));
+    if (n <= 0) return;
+    SendMessage(ctrl, EM_SETCUEBANNER, 0, (LPARAM)wbuf);
+}
+
+/* Populate the Shell combo: row 0 "Automatic (<whatever it resolves to
+ * right now>)" (stored value ""), then one row per
+ * local_shell_list_available() result (stored value: that row's full
+ * command line). Called once, from WM_INITDIALOG. */
+static void shell_combo_populate(HWND hwnd, SessMgrState *st)
+{
+    HWND hShell = GetDlgItem(hwnd, IDC_EDIT_SHELL);
+    if (!hShell) return;
+
+    LocalShellProbe probe;
+    local_shell_fill_probe(&probe);
+
+    LocalShellChoice choices[LOCAL_SHELL_CHOICE_MAX];
+    int n = local_shell_list_available(&probe, choices, LOCAL_SHELL_CHOICE_MAX);
+    if (n < 0) n = 0;
+    if (n > LOCAL_SHELL_CHOICE_MAX) n = LOCAL_SHELL_CHOICE_MAX;
+
+    char auto_label[96];
+    if (n > 0) {
+        snprintf(auto_label, sizeof(auto_label), "Automatic (%s)", choices[0].display);
+    } else {
+        snprintf(auto_label, sizeof(auto_label), "Automatic (no shell found)");
+    }
+    SendMessageA(hShell, CB_ADDSTRING, 0, (LPARAM)auto_label);
+    st->shell_cmd[0][0] = '\0';
+
+    for (int i = 0; i < n; i++) {
+        SendMessageA(hShell, CB_ADDSTRING, 0, (LPARAM)choices[i].display);
+        snprintf(st->shell_cmd[i + 1], sizeof(st->shell_cmd[i + 1]),
+                "%s", choices[i].command);
+    }
+    st->shell_choice_count = n;
+
+    SendMessage(hShell, CB_SETCURSEL, 0, 0);
+    set_cue_banner(hShell, auto_label);
+}
+
+/* CBN_SELCHANGE on the Shell combo: row 0 (Automatic) clears the edit text
+ * back to "" -- the cue banner (set once, at populate time) then shows
+ * through -- any other row copies in that row's full command line, ready
+ * to edit further. Out-of-range indexes (CB_ERR, or a stale selection from
+ * before a repopulate) are left alone. */
+static void shell_combo_selchange(HWND hwnd, SessMgrState *st)
+{
+    HWND hShell = GetDlgItem(hwnd, IDC_EDIT_SHELL);
+    int idx = (int)SendMessage(hShell, CB_GETCURSEL, 0, 0);
+    if (idx < 0 || idx > st->shell_choice_count) return;
+    SetDlgItemTextA(hwnd, IDC_EDIT_SHELL, st->shell_cmd[idx]);
+}
+
 /* Sync the AI notes edit control's scroll state to the custom scrollbar. */
 static void ai_notes_sync_scroll(HWND hwnd, SessMgrState *st)
 {
@@ -333,8 +405,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         SendMessageA(hKind, CB_ADDSTRING, 0, (LPARAM)"Local shell");
         SendMessage (hKind, CB_SETCURSEL, 0, 0);
 
-        SendMessage(GetDlgItem(hwnd, IDC_EDIT_SHELL), EM_SETCUEBANNER, 0,
-                    (LPARAM)L"e.g. \"C:\\Program Files\\Git\\bin\\bash.exe\" --login -i");
+        shell_combo_populate(hwnd, st);
 
         /* Device platform: populated entirely from cmd_classify's table, so
          * adding a vendor later touches one place there and nothing here. */
@@ -458,6 +529,13 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         /* Session type combo changed */
         if (id == IDC_COMBO_KIND && ntf == CBN_SELCHANGE) {
             toggle_kind_fields(hwnd);
+            return TRUE;
+        }
+
+        /* Shell combo: a row picked from the dropdown -- not the user
+         * typing, which is CBN_EDITCHANGE and needs no help from here. */
+        if (id == IDC_EDIT_SHELL && ntf == CBN_SELCHANGE) {
+            shell_combo_selchange(hwnd, st);
             return TRUE;
         }
 

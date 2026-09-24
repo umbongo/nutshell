@@ -47,7 +47,10 @@ CFLAGS = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow -Wformat=2 -Wconvers
          -Isrc -Isrc/core -Isrc/config -Isrc/crypto $(DEP_INC) -Isrc/term -Isrc/ssh -Isrc/ui
 LDFLAGS = -mwindows -Os -flto -Wl,--gc-sections -s $(LINK_MODE) \
           $(DEP_LIB) -lssh2 -lssl -lcrypto $(ZLIB) -lcrypt32 -lbcrypt \
-          -lgdiplus -lole32 -lshlwapi -lshell32 -lws2_32 -lgdi32 -luser32 -lcomctl32 -ldwmapi -lwinhttp -lm
+          -lgdiplus -lole32 -lshlwapi -lshell32 -lws2_32 -lgdi32 -luser32 -lcomctl32 -lwinhttp -lm
+# dwmapi.dll is not a KnownDLL, unlike everything else above (DLL
+# search-order hardening, 2026-09-24): DwmSetWindowAttribute is resolved at
+# runtime instead (src/ui/dwm_util.c), so -ldwmapi is deliberately absent.
 
 # Source directories
 SRC_DIRS = src src/core src/config src/crypto src/term src/ssh src/ui
