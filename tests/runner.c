@@ -2322,6 +2322,10 @@ int test_thinking_layout_expanded_body_capped(void);
 int test_thinking_layout_row_at_top_and_chevron_inset(void);
 int test_thinking_layout_all_rects_inside_avail_when_expanded(void);
 int test_thinking_layout_no_overlap_between_row_elements_and_body(void);
+int test_ai_thinking_max_body_h_multiplies_by_50_lines(void);
+int test_ai_thinking_max_body_h_scales_with_dpi(void);
+int test_ai_thinking_max_body_h_zero_or_negative_line_height(void);
+int test_thinking_layout_with_50_line_cap_end_to_end(void);
 int test_ai_thinking_summary_words_format(void);
 int test_ai_thinking_summary_streaming_format(void);
 int test_ai_thinking_summary_truncates_safely(void);
@@ -2446,6 +2450,8 @@ int test_ui_demo_build_batches_counts_and_statuses(void);
 int test_ui_demo_build_all_is_union(void);
 int test_ui_demo_term_text_ends_with_prompt(void);
 int test_ui_demo_thinking_text_non_empty(void);
+int test_ui_demo_thinking_text_long_non_empty_and_much_longer(void);
+int test_ui_demo_build_thinking_matches_chat_conversation(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -4793,6 +4799,10 @@ int main(void) {
     failed += test_thinking_layout_row_at_top_and_chevron_inset();
     failed += test_thinking_layout_all_rects_inside_avail_when_expanded();
     failed += test_thinking_layout_no_overlap_between_row_elements_and_body();
+    failed += test_ai_thinking_max_body_h_multiplies_by_50_lines();
+    failed += test_ai_thinking_max_body_h_scales_with_dpi();
+    failed += test_ai_thinking_max_body_h_zero_or_negative_line_height();
+    failed += test_thinking_layout_with_50_line_cap_end_to_end();
     failed += test_ai_thinking_summary_words_format();
     failed += test_ai_thinking_summary_streaming_format();
     failed += test_ai_thinking_summary_truncates_safely();
@@ -4911,6 +4921,8 @@ int main(void) {
     failed += test_ui_demo_build_all_is_union();
     failed += test_ui_demo_term_text_ends_with_prompt();
     failed += test_ui_demo_thinking_text_non_empty();
+    failed += test_ui_demo_thinking_text_long_non_empty_and_much_longer();
+    failed += test_ui_demo_build_thinking_matches_chat_conversation();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

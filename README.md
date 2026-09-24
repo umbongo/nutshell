@@ -294,7 +294,7 @@ as WRITE, the worst single category.
 
 #### Thought Process
 
-When a reply carries reasoning, a **Thinking** disclosure appears above the reply text: a chevron, the word "Thinking", and a dimmed summary (`· 240 words` once finished, `· streaming…` while still arriving). Click anywhere on the row to expand or collapse it. It opens automatically while a reply is streaming so you can watch the reasoning live, then collapses back to the summary once the reply text starts — unless you've expanded it yourself, in which case it stays open for the rest of the session. Replies with no reasoning show no disclosure at all.
+When a reply carries reasoning, a **Thinking** disclosure appears above the reply text: a chevron, the word "Thinking", and a dimmed summary (`· 240 words` once finished, `· streaming…` while still arriving). It starts collapsed — including while a reply is still streaming — since most people don't want to watch the raw reasoning go by; click anywhere on the row to expand or collapse it. Once you've expanded a disclosure yourself, later replies in the same session open already-expanded too, so you're not re-clicking every turn; a manual click on any individual disclosure always overrides that for the rest of its own reply. Expanded, the box grows with the reasoning up to 50 lines (measured in its own text's line height); past that it holds at 50 lines and the reasoning scrolls inside the box instead of pushing the reply down, with a thin scrollbar when it overflows. While a reply is still streaming, the box follows the newest text as long as you're scrolled to its bottom; scroll up inside it and it stops following and stays where you left it until you scroll back down. Replies with no reasoning show no disclosure at all.
 
 #### Empty, No-Key, and No-Session States
 
@@ -603,7 +603,7 @@ actual painting. Two native tests (`tests/test_ui_tokens.c`) gate this: a
 `RGB(` literal outside `ns_draw.c`, or a local DPI-scale macro anywhere in
 `src/ui`, fails `make test`. See
 `docs/superpowers/specs/2026-09-07-design-system-foundation-design.md` for
-the full design, and run `nutshell.exe --ui-demo=all` (or any of the nine
+the full design, and run `nutshell.exe --ui-demo=all` (or any of the eleven
 individual states) to preview every themed panel without a live SSH session
 — the same states the integration suite's `ui_gallery` case screenshots
 across all four themes.

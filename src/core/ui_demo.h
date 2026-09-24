@@ -18,7 +18,13 @@
  * addition). See docs/superpowers/specs/
  * 2026-09-09-pending-command-batches.md for "batches": two independent
  * pending command cards from two separate assistant replies, with a user
- * turn in between so the transcript shows the interleaving. */
+ * turn in between so the transcript shows the interleaving.
+ *
+ * "local" (spec 2026-09-22-local-shell-design.md section 5) and "thinking"
+ * (2026-09-24, the 50-line scrollable Thinking box) are each a real state
+ * but not part of "all": "local" only swaps the terminal transcript, and
+ * "thinking" is "chat" with a much longer reasoning block attached, which
+ * "all" doesn't need a second copy of. */
 
 /* Build the canned conversation, approval queue(s) and terminal text for
  * one demo state.
@@ -54,5 +60,11 @@ const char *const *ui_demo_states(int *count);
  * to show it must set it there themselves after loading the conversation
  * this module built. */
 const char *ui_demo_thinking_text(void);
+
+/* The "thinking" state's much longer reasoning block -- well over
+ * THINKING_MAX_LINES (ai_panel_layout.h) lines wrapped at a typical panel
+ * width, so the expanded Thinking box hits its 50-line cap and scrolls.
+ * Same side-table caveat as ui_demo_thinking_text() above. */
+const char *ui_demo_thinking_text_long(void);
 
 #endif /* NUTSHELL_UI_DEMO_H */

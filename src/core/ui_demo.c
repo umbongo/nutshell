@@ -11,7 +11,7 @@
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
-    "nokey", "nosession", "batches", "local", "all"
+    "nokey", "nosession", "batches", "local", "thinking", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
 
@@ -81,6 +81,75 @@ static const char CHAT_THINKING[] =
 const char *ui_demo_thinking_text(void)
 {
     return CHAT_THINKING;
+}
+
+/* ---------------------------------------------------------------------
+ * "thinking": same user turn as "chat", but with a much longer reasoning
+ * block -- well over THINKING_MAX_LINES (50) lines wrapped at a typical
+ * panel width, so the expanded Thinking box actually hits its cap and
+ * scrolls (maintainer request, 2026-09-24: collapsed by default, but up
+ * to 50 lines and smart-scrollable once opened). Not part of "all": like
+ * "local", it exists to show one specific thing (the scrollable box) the
+ * union state doesn't need a second copy of.
+ * --------------------------------------------------------------------- */
+static const char LONG_THINKING[] =
+    "The user wants a disk usage summary, so let me work through this "
+    "methodically rather than just firing off df -h and calling it done. "
+    "First, what does 'eating space' actually mean here -- total capacity "
+    "used, or growth rate? Both matter, but they point at different "
+    "commands, so I should gather both and let the numbers tell me which "
+    "one is the actual story.\n\n"
+    "Step 1: df -h for the mount table. That gives me per-filesystem "
+    "totals and lets me see at a glance whether any single mount is near "
+    "full -- 90%+ used is the usual alarm threshold, but on a box that's "
+    "been running a while, 70-80% on /var is already worth flagging since "
+    "logs and package caches tend to be the fastest-growing thing there.\n\n"
+    "Step 2: du on the usual suspects -- /var/log first, since that's "
+    "where an unrotated or unusually chatty service log tends to hide. "
+    "I'll sort by size and take the top handful rather than dumping the "
+    "whole tree; nobody wants to scroll through hundreds of tiny files "
+    "when three big ones are the actual problem.\n\n"
+    "Step 3: while I'm at it, /var/cache and /tmp are worth a quick check "
+    "too -- package manager caches in particular can balloon after a lot "
+    "of upgrades and are always safe to clear, unlike log files which "
+    "might still be needed for an ongoing investigation.\n\n"
+    "Step 4: home directories. Probably not the culprit on a server box, "
+    "but a stray core dump or a forgotten database export sitting in "
+    "someone's home directory has bitten people before, so a quick du "
+    "-sh on /home costs nothing and rules it out.\n\n"
+    "Now, how to present this. A raw command dump is the least useful "
+    "answer I could give -- the user asked what's eating space, not for "
+    "a transcript. I should lead with the headline number (root partition "
+    "at whatever percent), then a short table of the mounts so they can "
+    "see the shape of things, then name the single biggest offender by "
+    "file, since that's the actionable part.\n\n"
+    "I also want to think about what happens after this reply. If the "
+    "biggest offender is an access log, the natural next step is log "
+    "rotation and compression -- I should offer that concretely rather "
+    "than leaving it as an exercise, since 'you could rotate your logs' "
+    "is not nearly as useful as 'want me to rotate and compress the old "
+    "ones for you'. If it turns out to be something like a docker image "
+    "layer or an orphaned container volume instead, the advice changes "
+    "completely, so I shouldn't commit to the rotate-and-compress framing "
+    "until I've actually seen which case this is.\n\n"
+    "One more thing worth considering: is there a risk in any of the "
+    "commands I'm about to suggest? df and du are both read-only and "
+    "safe to run unattended. Rotating logs is a write operation but a "
+    "routine, low-risk one as long as I use logrotate or an equivalent "
+    "rather than just deleting files out from under a process that might "
+    "still have them open -- truncating a log a service is actively "
+    "writing to can crash the write, so if I do offer to compress things "
+    "I should reach for copytruncate semantics rather than a bare rm.\n\n"
+    "Okay, I think I have enough of a plan: gather df -h and the /var/log "
+    "breakdown, summarize with a table, name the largest file by name and "
+    "size, and end with a concrete offer to rotate and compress rather "
+    "than an open-ended question. That gives the user something they can "
+    "say yes to in one word instead of having to think about what to ask "
+    "for next.";
+
+const char *ui_demo_thinking_text_long(void)
+{
+    return LONG_THINKING;
 }
 
 static void build_chat(AiConversation *conv)
@@ -392,6 +461,13 @@ int ui_demo_build(const char *state, AiConversation *conv,
     int is_all = strcmp(state, "all") == 0;
 
     if (is_all || strcmp(state, "chat") == 0)
+        build_chat(conv);
+    /* "thinking" reuses "chat"'s own turns -- the only difference is which
+     * thinking text ai_chat_apply_demo_extras() (src/ui/ai_chat.c) attaches
+     * to the reply afterwards. Deliberately not part of "all": it exists
+     * only to demo the 50-line scrollable box, which "all" doesn't need a
+     * second copy of. */
+    if (strcmp(state, "thinking") == 0)
         build_chat(conv);
     if (is_all || strcmp(state, "approval") == 0)
         build_approval(conv, approval);

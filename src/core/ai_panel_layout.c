@@ -143,6 +143,12 @@ void thinking_layout(NsRect avail, int expanded, int body_text_h, int max_body_h
     out->total_h = row_h + (expanded ? pad_xs + body_h : 0);
 }
 
+int ai_thinking_max_body_h(int line_height_px)
+{
+    if (line_height_px <= 0) return 0;
+    return line_height_px * THINKING_MAX_LINES;
+}
+
 int ai_thinking_summary(int words, int streaming, char *buf, size_t cap)
 {
     if (!buf || cap == 0) return 0;

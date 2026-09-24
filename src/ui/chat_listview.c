@@ -272,16 +272,21 @@ static const char *safety_tag_text(CmdSafetyLevel level)
 }
 
 /* ── Thinking disclosure geometry ──────────────────────────────────────
- * Wraps ai_panel_layout's thinking_layout() with the one thing it can't
+ * Wraps ai_panel_layout's thinking_layout() with the two things it can't
  * know on its own: the wrapped reasoning text's measured height at the
- * body box's width. thinking_layout() needs that height as an input (to
- * clamp it to max_body_h and compute total_h), but the body box's width
- * is itself an output of thinking_layout() -- so this calls it twice when
- * expanded: once to learn body.w (any body_text_h works for that, since
- * row/chevron/label/summary/body.x/body.w never depend on it), then again
- * with the real measured height. Shared by measure_item(), paint_ai_item(),
- * the click/hover hit-tests and the wheel-scroll handler so they can never
- * disagree about where the row and body actually are. */
+ * body box's width, and the box's height cap. thinking_layout() needs the
+ * measured height as an input (to clamp it to max_body_h and compute
+ * total_h), but the body box's width is itself an output of
+ * thinking_layout() -- so this calls it twice when expanded: once to learn
+ * body.w (any body_text_h works for that, since row/chevron/label/summary/
+ * body.x/body.w never depend on it), then again with the real measured
+ * height. The cap is THINKING_MAX_LINES (50) lines of lv->hFont's own
+ * measured line height via ai_thinking_max_body_h() (src/core/
+ * ai_panel_layout.h) -- collapsed by default, but up to 50 lines and
+ * smart-scrollable once opened (maintainer request, 2026-09-24). Shared by
+ * measure_item(), paint_ai_item(), the click/hover hit-tests and the
+ * wheel-scroll handler so they can never disagree about where the row and
+ * body actually are. */
 static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                   int box_left, int box_right, int content_top,
                                   ThinkingLayout *out, int *out_full_body_h)
@@ -289,7 +294,17 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     int dpi = CLV_DPI(lv);
     NsRect avail = { box_left, content_top, box_right - box_left, 0 };
     int expanded = !item->u.ai.thinking_collapsed;
-    int max_body_h = lv->viewport_height / 2;
+
+    int line_h = ns_scale(20, dpi);  /* fallback if hdc is unavailable */
+    if (hdc) {
+        HGDIOBJ old = SelectObject(hdc, lv->hFont ? lv->hFont
+                                        : GetStockObject(DEFAULT_GUI_FONT));
+        TEXTMETRICA tm;
+        GetTextMetricsA(hdc, &tm);
+        line_h = tm.tmHeight;
+        SelectObject(hdc, old);
+    }
+    int max_body_h = ai_thinking_max_body_h(line_h);
     if (max_body_h < 1) max_body_h = 1;
 
     thinking_layout(avail, expanded, 0, max_body_h, dpi, out);
@@ -306,6 +321,27 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         SelectObject(hdc, tf);
 
         thinking_layout(avail, expanded, full_h, max_body_h, dpi, out);
+
+        /* Smart scroll: settle this item's persisted scroll offset now that
+         * the real content height (full_h) and visible box height
+         * (out->body.h) are known -- reuses stick_scroll_on_layout()
+         * (src/core/stick_scroll.c), the same "stuck vs released" logic the
+         * outer chat list uses for its own stick-to-bottom behaviour. While
+         * thinking_autoscroll (this item's "stuck" bit, updated by the
+         * wheel handler below on every user scroll) is set, this snaps to
+         * the new bottom on every call -- i.e. it keeps following freshly
+         * streamed text; otherwise it just re-clamps the existing position
+         * into range, so scrolling up stops following and stays put, and
+         * collapsing/re-expanding (which resets scroll_y to 0 and
+         * thinking_autoscroll to 1 -- see the click handler) starts back at
+         * the bottom instead of an out-of-range offset. Idempotent, so
+         * running it from every geometry recompute (measure, paint, hover,
+         * hit-test) is harmless. */
+        int vis_h = out->body.h;
+        int max_scroll = (full_h > vis_h) ? full_h - vis_h : 0;
+        item->u.ai.thinking_scroll_y = stick_scroll_on_layout(
+            item->u.ai.thinking_autoscroll, item->u.ai.thinking_scroll_y,
+            max_scroll);
     }
     if (out_full_body_h) *out_full_body_h = full_h;
 }
@@ -3408,19 +3444,19 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                         && pt.y < tl.body.y + vis_h) {
                         int max_scroll = full_h - vis_h;
                         int old_sy = wi->u.ai.thinking_scroll_y;
-                        wi->u.ai.thinking_scroll_y +=
+                        int new_sy = old_sy +
                             (-delta * scroll_amount) / WHEEL_DELTA;
-                        if (wi->u.ai.thinking_scroll_y < 0)
-                            wi->u.ai.thinking_scroll_y = 0;
-                        if (wi->u.ai.thinking_scroll_y > max_scroll)
-                            wi->u.ai.thinking_scroll_y = max_scroll;
-                        /* Auto-scroll: disengage on scroll-up,
-                         * re-engage when user reaches bottom */
-                        if (wi->u.ai.thinking_scroll_y >= max_scroll)
-                            wi->u.ai.thinking_autoscroll = 1;
-                        else
-                            wi->u.ai.thinking_autoscroll = 0;
-                        if (wi->u.ai.thinking_scroll_y != old_sy) {
+                        if (new_sy < 0) new_sy = 0;
+                        if (new_sy > max_scroll) new_sy = max_scroll;
+                        wi->u.ai.thinking_scroll_y = new_sy;
+                        /* Same "stuck vs released" rule as the outer chat
+                         * list's own stick-to-bottom (stick_scroll.c,
+                         * reused here): disengage the moment the user
+                         * scrolls off the bottom, re-engage the moment they
+                         * scroll back to it. */
+                        wi->u.ai.thinking_autoscroll =
+                            stick_scroll_after_user(new_sy, max_scroll);
+                        if (new_sy != old_sy) {
                             InvalidateRect(hwnd, NULL, FALSE);
                             return 0;  /* consumed by thinking scroll */
                         }

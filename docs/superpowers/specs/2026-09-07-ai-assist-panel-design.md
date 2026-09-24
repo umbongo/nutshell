@@ -79,18 +79,41 @@ Every AI reply that carried reasoning keeps it, and it is always reachable:
   toggles it; `ns_hover` gives it the hand cursor.
 - **Expanded** shows the full reasoning in `text_dim` on `bg_secondary` with a
   `STROKE_BAR` `accent` bar down the left, wrapped, in `FONT_BODY`; long
-  reasoning scrolls inside a box capped at half the thread height rather than
-  pushing the reply off screen.
-- **While streaming** the disclosure is open so the reasoning can be watched
-  live; when the reply text starts it collapses to the summary unless the user
-  has opened it themselves in this session (per-session preference,
-  `show_thinking`, remembered until the panel closes).
+  reasoning scrolls inside a box capped at `THINKING_MAX_LINES` (50) lines of
+  its own text (`ai_thinking_max_body_h()`, `ai_panel_layout.h`) rather than
+  pushing the reply off screen, with a thin scrollbar once it overflows.
+  Amended 2026-09-24 (maintainer request): originally capped at half the
+  thread height; a fixed line count reads more predictably regardless of
+  panel size.
+- **Every disclosure starts collapsed**, including while its reply is still
+  streaming — amended 2026-09-24 (maintainer request: "most people don't
+  want to see it"). It no longer opens itself just because reasoning is
+  arriving. The one carry-over from the original design is a per-session
+  preference (`show_thinking`): once the user has opened a disclosure
+  themselves this session, later replies open already-expanded too, so
+  they aren't re-clicking every turn; a manual click on any one disclosure
+  always overrides that for the rest of its own reply
+  (`thinking_user_set`).
+- **While an expanded box is streaming**, it follows the newest text as long
+  as the user is scrolled to its bottom; scrolling up inside it stops the
+  follow and holds the position until they scroll back down
+  (`stick_scroll_on_layout()`/`stick_scroll_after_user()`,
+  `src/core/stick_scroll.c` — the same "stuck vs released" logic the outer
+  chat list already used for its own stick-to-bottom behaviour, reused
+  rather than reimplemented for the box).
 - Providers that send no reasoning show no disclosure at all — no empty row.
 - Geometry comes from `ai_panel_layout`'s `thinking_layout(rect, expanded,
-  dpi) → { row, chevron, label, summary, body }`; the existing
-  `chat_thinking` core state machine keeps owning open/closed/streaming.
-- The demo `chat` state carries a thinking block so the gallery shows both the
-  collapsed and expanded forms (`chat` collapsed, `all` expanded).
+  dpi) → { row, chevron, label, summary, body }`. The `chat_thinking` core
+  module (`ThinkingState`/`chat_thinking_init()` et al.) this section
+  originally pointed to turned out unused in practice — the real
+  open/closed/streaming state lives on `ChatMsgItem.u.ai` instead
+  (`thinking_collapsed`, `thinking_user_set`, `thinking_autoscroll`,
+  `thinking_scroll_y`, `thinking_elapsed`, `thinking_complete` —
+  `src/core/chat_msg.h`), owned by `src/ui/ai_chat.c` and
+  `src/ui/chat_listview.c`.
+- The demo `chat` state carries a thinking block so the gallery shows the
+  collapsed form; the `thinking` state (2026-09-24) carries a much longer one
+  so it can be expanded to show the box at its 50-line cap with a scrollbar.
 
 ## Empty and blocked states (frame C)
 
