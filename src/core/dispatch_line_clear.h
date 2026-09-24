@@ -33,6 +33,15 @@ typedef enum {
  * (src/core/local_shell.h) returns for the resolved local shell --
  * "PowerShell", "Git bash", "MSYS2", "cmd", "custom" -- or NULL/empty when
  * it has not resolved yet. Ignored for SESSION_SSH.
+ *
+ * cursor_row_is_windows_prompt: the caller's
+ * term_cursor_row_is_windows_prompt(active_term) (src/term/term.h) --
+ * whether the terminal's live cursor row currently looks like a
+ * PowerShell or cmd.exe prompt (shell_prompt_is_windows(),
+ * src/core/shell_prompt.h). True forces NONE outright, before either
+ * parameter above is even considered -- see the rationale below.
+ *
+ * With cursor_row_is_windows_prompt false:
  *   - "Git bash" and "MSYS2" run on a real readline (bash) or a
  *     readline-alike that treats Ctrl+E/Ctrl+U the same way -> READLINE.
  *   - "PowerShell" and "cmd" are the shells that motivated this function:
@@ -40,30 +49,59 @@ typedef enum {
  *   - "custom" (a user-supplied executable) and an unresolved shell
  *     (NULL or "") are unknown quantities that must not be guessed at ->
  *     NONE, the same safe default as PowerShell/cmd.
+ *   - SESSION_SSH always gets READLINE, regardless of the session's
+ *     CmdPlatform (src/core/cmd_classify.h) -- kept rather than keyed off
+ *     platform:
+ *       - CMD_PLATFORM_UNKNOWN covers plenty of ordinary, undetected
+ *         Linux hosts. Gating on platform would key NONE off "not yet
+ *         classified", and an unrelated prompt shape (Gentoo's
+ *         "user@host ~ $", zsh's "host ~ %" -- a space before the
+ *         terminator) would then also fail the stricter no-prefix check
+ *         in dispatch_tick(), cancelling the batch outright on what is
+ *         otherwise the main use case.
+ *       - The network-device CLIs (Cisco IOS/NX-OS/ASA, Junos, EOS, ...)
+ *         this app classifies also support Ctrl+E/Ctrl+U as a line-kill
+ *         idiom, so READLINE is correct for them too, not just for Linux.
  *
- * SESSION_SSH always gets READLINE, regardless of the session's
- * CmdPlatform (src/core/cmd_classify.h) -- this is today's behaviour,
- * kept rather than keyed off platform:
- *   - CMD_PLATFORM_UNKNOWN covers plenty of ordinary, undetected Linux
- *     hosts. Gating on platform would key NONE off "not yet classified",
- *     and an unrelated prompt shape (Gentoo's "user@host ~ $", zsh's
- *     "host ~ %" -- a space before the terminator) would then also fail
- *     the stricter no-prefix check in dispatch_tick(), cancelling the
- *     batch outright on what is otherwise the main use case.
- *   - The network-device CLIs (Cisco IOS/NX-OS/ASA, Junos, EOS, ...) this
- *     app classifies also support Ctrl+E/Ctrl+U as a line-kill idiom, so
- *     READLINE is correct for them too, not just for Linux.
- *   - SSH has no CmdPlatform for "Windows" -- cmd_classify.h's platforms
- *     are Linux plus named network-device families -- so there is nothing
- *     to key a PowerShell/cmd exception off even if one were wanted here.
- *     A remote Windows host reached over OpenSSH and running PowerShell
- *     or cmd as the login shell therefore still gets the Ctrl+E Ctrl+U
- *     prefix and can still hit this function's original bug; recognising
- *     that case is an open item pending Windows/PowerShell platform
- *     detection over SSH, not something this function can safely guess
- *     at today. */
+ * cursor_row_is_windows_prompt exists because kind and local_shell_name
+ * describe the session's transport and configured shell, not what is
+ * actually running right now: an SSH session (always READLINE above) can
+ * be to a Windows host whose login shell is PowerShell or cmd, and a
+ * local Git bash/MSYS2 session (READLINE above, correctly, for bash
+ * itself) can have the user start `pwsh` or `cmd` as a nested shell
+ * inside it. Both would otherwise still get the Ctrl+E Ctrl+U prefix and
+ * hit this function's original bug despite the kind/local_shell_name
+ * logic being individually correct for the session's own transport and
+ * default shell. Once the live prompt is recognisably PowerShell or cmd,
+ * that overrides both: neither SSH's "no Windows CmdPlatform to key off"
+ * limitation nor a readline local shell's own normal case matters once
+ * the thing actually reading the bytes right now is PSReadLine or
+ * cmd.exe.
+ *
+ * Residual gap, not fixed by this parameter: a prompt customised enough
+ * not to match shell_prompt_is_windows() (an oh-my-posh or Starship theme
+ * with no "PS "/drive-letter shape at all) still reads as whatever
+ * kind/local_shell_name says, and a POSIX shell whose $PS1 happens to be
+ * shaped like "PS /some/path> " will be read as a Windows prompt and
+ * lose the prefix it did not need to lose. Both are considered
+ * acceptable: the former is unchanged from today's behaviour, and the
+ * latter only ever suppresses a prefix, never sends a wrong one, and
+ * shell_prompt_is_windows()'s own header documents why the shape is
+ * matched this loosely.
+ *
+ * A related case, also accepted: pwsh running as the shell of an SSH
+ * session to a Linux host (or as a nested shell under local Git
+ * bash/MSYS2) matches shell_prompt_is_windows() and so also loses the
+ * prefix here, even though pwsh's default Emacs-mode PSReadLine key
+ * bindings would in fact have accepted Ctrl+E/Ctrl+U the readline way --
+ * unlike Windows PowerShell/cmd, this is not the bug this parameter
+ * exists to fix. This is safe, just unnecessarily cautious: NONE never
+ * sends a wrong prefix, only withholds one that would have worked, and
+ * cursor_row_is_windows_prompt cannot distinguish "PowerShell on Windows"
+ * from "PowerShell on Linux" from the prompt shape alone. */
 DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
-                                                const char *local_shell_name);
+                                                const char *local_shell_name,
+                                                int cursor_row_is_windows_prompt);
 
 /* The two timing decisions dispatch_tick() (src/ui/ai_chat.c) makes on the
  * no-prefix path (DISPATCH_LINE_CLEAR_NONE above), where a command is

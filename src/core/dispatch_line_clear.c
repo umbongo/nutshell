@@ -3,8 +3,17 @@
 #include <string.h>
 
 DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
-                                                const char *local_shell_name)
+                                                const char *local_shell_name,
+                                                int cursor_row_is_windows_prompt)
 {
+    /* The live prompt overrides everything below it -- see the header:
+     * whatever kind/local_shell_name says about the session's own
+     * transport and configured shell, the thing actually reading the
+     * bytes right now is PSReadLine or cmd.exe once the cursor row looks
+     * like one. */
+    if (cursor_row_is_windows_prompt)
+        return DISPATCH_LINE_CLEAR_NONE;
+
     if (kind == SESSION_LOCAL) {
         if (!local_shell_name || !local_shell_name[0])
             return DISPATCH_LINE_CLEAR_NONE;

@@ -169,6 +169,17 @@ int term_at_continuation_prompt(const Terminal *term);
  * dispatch_line_clear.h and shell_prompt_line_unambiguous(). */
 int term_at_unambiguous_prompt(const Terminal *term);
 
+/* Same cursor-row text as term_at_prompt(), tested against
+ * shell_prompt_is_windows() instead: true when the shell is currently
+ * sitting at a PowerShell or cmd.exe prompt, whatever the session's kind
+ * or configured shell name -- an SSH session to a Windows host, or a
+ * pwsh/cmd started as a nested shell inside a local Git bash/MSYS2
+ * session. Note this can be true even when term_at_unambiguous_prompt()
+ * is false for the same row (a command paused mid-line under a "PS
+ * ...>" prompt still "is a Windows prompt"); the two answer different
+ * questions -- see dispatch_line_clear.h. */
+int term_cursor_row_is_windows_prompt(const Terminal *term);
+
 /* The physical ring-buffer index (into Terminal.lines[]) holding screen
  * row `screen_row` -- 0-based, 0 is the top of the currently visible
  * screen. The one mapping every screen-row consumer in this codebase

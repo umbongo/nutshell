@@ -1,5 +1,6 @@
 /* src/core/shell_prompt.c */
 #include "shell_prompt.h"
+#include <ctype.h>
 #include <string.h>
 
 /* zsh's secondary-prompt ($PS2) words, each valid immediately before a
@@ -85,4 +86,68 @@ int shell_prompt_line_unambiguous(const char *text)
     }
 
     return 1;
+}
+
+/* True when trimming trailing spaces/tabs off `text` (assumed non-NULL)
+ * leaves it ending in '>'. Shared by the two shapes in
+ * shell_prompt_is_windows() below. */
+static int ends_in_gt_trimmed(const char *text)
+{
+    size_t len = strlen(text);
+    while (len > 0 && (text[len - 1] == ' ' || text[len - 1] == '\t'))
+        len--;
+    return len > 0 && text[len - 1] == '>';
+}
+
+int shell_prompt_is_windows(const char *row)
+{
+    if (!row || !row[0]) return 0;
+
+    const char *p = row;
+
+    /* Skip zero or more PowerShell Remoting/debugger prefixes -- "[host]:
+     * " or "[DBG]: ", each the literal shape a nested PSSession or a
+     * debug session prepends to the prompt line, one per level of nesting
+     * ("[DBG]: [srv]: PS C:\> " is Enter-PSSession inside a
+     * Debug-Runspace). A '[' that is not this exact shape (no matching
+     * "]: " right after it) stops the loop and falls through to the
+     * checks below as-is, so a device CLI's own bracketed prompt
+     * ("[admin@MikroTik] >") is never silently unwrapped into a false
+     * match. */
+    while (p[0] == '[') {
+        const char *close = strchr(p, ']');
+        if (!close || close[1] != ':' || close[2] != ' ') break;
+        p = close + 3;
+    }
+
+    /* PowerShell: the literal token "PS", then either an immediate '>'
+     * (the fallback prompt PowerShell falls back to when it cannot build
+     * a location-based one, just "PS> ") or a space and then anything,
+     * ending in '>'. Deliberately not constrained beyond that: a Windows
+     * path ("PS C:\...>"), a PSDrive that is not the filesystem at all
+     * ("PS HKLM:\>", "PS Cert:\>", "PS Temp:\>"), a provider-qualified
+     * path ("PS Microsoft.PowerShell.Core\FileSystem::\\srv\share>"), and
+     * a POSIX path for pwsh on a POSIX host ("PS /home/thoma>") all match
+     * the same way. This only decides whether a clear-line prefix should
+     * be sent, never whether the line is safe to send a command to
+     * (term_at_unambiguous_prompt() gates that separately), so a command
+     * paused mid-line under any of these is fine to also read as "a
+     * PowerShell prompt". Requiring the character right after "PS" to be
+     * a space or '>' -- nothing else -- is what keeps this from matching
+     * a row that merely starts with those two letters: "PS1>" and "PSX>"
+     * are not PowerShell prompts and must not match. */
+    if (p[0] == 'P' && p[1] == 'S') {
+        if (p[2] == ' ')
+            return ends_in_gt_trimmed(p + 3);
+        if (p[2] == '>')
+            return ends_in_gt_trimmed(p + 2);
+        return 0;
+    }
+
+    /* cmd.exe: a bare drive-letter path ending in '>', with no "PS "
+     * token -- "C:\...>". */
+    if (isalpha((unsigned char)p[0]) && p[1] == ':' && p[2] == '\\')
+        return ends_in_gt_trimmed(p);
+
+    return 0;
 }
