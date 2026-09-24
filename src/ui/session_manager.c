@@ -246,6 +246,24 @@ static void shell_combo_show(HWND hwnd, const SessMgrState *st, const char *shel
             return;
         }
     }
+    /* A profile saved by the earlier buggy build (see the SessMgrState
+     * comment on shell_label[]) may hold the LABEL text itself as shell --
+     * e.g. "PowerShell 7" -- rather than the command line it names, because
+     * that build saved whatever the edit box was showing without mapping
+     * it back first. Recognise that shape too and show (and, the moment
+     * this dialog is saved again, persist) that row's real command rather
+     * than silently treating the label text as a bogus custom command that
+     * resolves to no real executable. Row 0's "Automatic (...)" label is
+     * deliberately not matched here -- it embeds this machine's current
+     * detection result, not a fixed name, so a stale copy of it is not a
+     * reliable signal either way. */
+    for (int i = 1; i <= st->shell_choice_count; i++) {
+        if (strcmp(shell, st->shell_label[i]) == 0) {
+            SendMessage(hShell, CB_SETCURSEL, (WPARAM)i, 0);
+            SetDlgItemTextA(hwnd, IDC_EDIT_SHELL, st->shell_label[i]);
+            return;
+        }
+    }
     SendMessage(hShell, CB_SETCURSEL, (WPARAM)-1, 0);
     SetDlgItemTextA(hwnd, IDC_EDIT_SHELL, shell);
 }
@@ -708,7 +726,16 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             config_profile_free(
                 (Profile *)vec_get(&st->cfg->profiles, (size_t)sel));
             vec_remove(&st->cfg->profiles, (size_t)sel);
-            config_save(st->cfg, st->config_path);
+            /* M5: the profile is already gone from cfg->profiles in memory
+             * either way -- report it when it could not also be removed
+             * from disk, rather than leaving the user to discover the
+             * deleted session is still there on the next launch. */
+            if (config_save(st->cfg, st->config_path) != 0) {
+                MessageBoxA(hwnd,
+                    "Could not save nutshell.config. The deletion has not "
+                    "been written to disk.",
+                    "Save Failed", MB_OK | MB_ICONWARNING);
+            }
             list_rebuild(hList, st->cfg);
             st->edit_idx = -1;
             form_clear(hwnd, st);
@@ -744,7 +771,14 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                         tmp.name[0]      ? tmp.name      : "(unnamed)");
                     int rc = MessageBoxA(hwnd, prompt, "Save Profile",
                                          MB_YESNOCANCEL | MB_ICONQUESTION);
-                    if (rc == IDCANCEL) return TRUE;
+                    if (rc == IDCANCEL) {
+                        /* tmp.password already holds whatever the user
+                         * typed in the form (form_read() succeeded above) --
+                         * wipe it before abandoning the save, same as every
+                         * other exit from this handler. */
+                        secure_zero(&tmp, sizeof(tmp));
+                        return TRUE;
+                    }
                     do_append = (rc == IDYES);
                 }
             } else {
@@ -794,7 +828,16 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                 vec_push(&st->cfg->profiles, pr);
                 st->edit_idx = (int)vec_size(&st->cfg->profiles) - 1;
             }
-            config_save(st->cfg, st->config_path);
+            /* M5: report a save failure -- the edit is already applied to
+             * cfg->profiles in memory (and will still show in this list),
+             * so a silent failure here means the user believes a password
+             * or a changed host was saved when it was not. */
+            if (config_save(st->cfg, st->config_path) != 0) {
+                MessageBoxA(hwnd,
+                    "Could not save nutshell.config. This session has not "
+                    "been written to disk.",
+                    "Save Failed", MB_OK | MB_ICONWARNING);
+            }
             list_rebuild(hList, st->cfg);
             SendMessage(hList, LB_SETCURSEL, (WPARAM)st->edit_idx, 0);
             secure_zero(&tmp, sizeof(tmp));

@@ -2166,6 +2166,102 @@ int test_config_bare_plaintext_ai_key_migrates_on_load(void)
 }
 
 /* ============================================================
+ * L: a value shaped like an encrypted blob this build doesn't recognise
+ * ("$name$vN$...") must be preserved verbatim, like a foreign/corrupt
+ * blob -- never treated as plaintext and re-encrypted, which would
+ * silently and permanently discard whatever program or future version
+ * actually understands that format.
+ * ============================================================ */
+
+int test_config_unknown_blob_shape_preserved_not_reencrypted(void)
+{
+    TEST_BEGIN();
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(
+        "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+        "{\"name\": \"box1\", \"host\": \"example.com\", "
+        "\"password\": \"$futurefmt$v3$opaquepayload\"}"
+        "]}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0);
+    ASSERT_NOT_NULL(p);
+    /* Not decrypted (this build doesn't know the format) -- plaintext
+     * stays empty, exactly like an undecryptable DPAPI/legacy blob. */
+    ASSERT_STR_EQ(p->password, "");
+    ASSERT_STR_EQ(p->password_enc_preserved, "$futurefmt$v3$opaquepayload");
+    config_free(cfg);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_unknown_blob_shape_survives_a_save(void)
+{
+    TEST_BEGIN();
+    /* The real-world consequence of the above: saving the config back
+     * (nothing touched the password field) must write the foreign blob
+     * back byte-for-byte, not something re-encrypted from an empty or
+     * bogus plaintext. */
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(
+        "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+        "{\"name\": \"box1\", \"host\": \"example.com\", "
+        "\"password\": \"$futurefmt$v3$opaquepayload\"}"
+        "]}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    FILE *rf = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, rf);
+    raw[n] = '\0';
+    fclose(rf);
+    ASSERT_TRUE(strstr(raw, "$futurefmt$v3$opaquepayload") != NULL);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_dollar_sign_password_still_plaintext(void)
+{
+    TEST_BEGIN();
+    /* A password that merely starts with '$' but isn't shaped like
+     * "$name$vN$..." (no second '$', or no "vN" after it) is an ordinary
+     * plaintext password some user actually chose -- still migrated
+     * (re-encrypted), same as any other bare value, not preserved as if it
+     * were a foreign blob. */
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(
+        "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+        "{\"name\": \"box1\", \"host\": \"example.com\", "
+        "\"password\": \"$uper$ecret\"}"
+        "]}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->password, "$uper$ecret");
+    config_free(cfg);
+
+    remove(TMP_CFG);
+    test_config_remove_all_bad_backups();
+    TEST_END();
+}
+
+/* ============================================================
  * M-4: entering a new secret value must drop any preserved foreign/
  * corrupt blob in memory, so a later clear-and-save doesn't resurrect it.
  * ============================================================ */
@@ -2338,6 +2434,141 @@ int test_config_load_backs_up_unparseable_file(void)
     TEST_END();
 }
 
+int test_config_backup_unparseable_never_clobbers_same_second(void)
+{
+    TEST_BEGIN();
+    /* M4: config_backup_unparseable_file() used to REPLACE_EXISTING onto a
+     * plain "<path>.bad-<timestamp>" name, so a second unparseable load
+     * within the same second silently destroyed the first backup. Two
+     * loads back-to-back (whether or not they land in the same second --
+     * either way each backup must survive) must leave BOTH backups behind,
+     * never just one. */
+    test_config_remove_all_bad_backups();
+
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs("first unparseable ((((", f);
+    fclose(f);
+    Config *cfg1 = config_load(TMP_CFG);
+    ASSERT_NULL(cfg1);
+
+    f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs("second unparseable ))))", f);
+    fclose(f);
+    Config *cfg2 = config_load(TMP_CFG);
+    ASSERT_NULL(cfg2);
+
+    DIR *d = opendir(TEST_TMP_DIR);
+    ASSERT_NOT_NULL(d);
+    int count = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (strstr(de->d_name, "nutshell_test.config.bad-") == de->d_name) count++;
+    }
+    closedir(d);
+    ASSERT_EQ(count, 2);
+
+    test_config_remove_all_bad_backups();
+    TEST_END();
+}
+
+/* ============================================================
+ * config_load_ex(): M3 -- distinguishing "no file there" from "a file is
+ * there but this process could not read it", so a caller never saves
+ * defaults over a config it merely failed to open this run.
+ * ============================================================ */
+
+int test_config_load_ex_missing_reports_missing(void)
+{
+    TEST_BEGIN();
+    ConfigLoadStatus st = CONFIG_LOAD_OK;
+    Config *cfg = config_load_ex(TEST_TMP_DIR "/nutshell_missing_xyz.json", &st);
+    ASSERT_NULL(cfg);
+    ASSERT_EQ((int)st, (int)CONFIG_LOAD_MISSING);
+    TEST_END();
+}
+
+int test_config_load_ex_null_path_reports_missing(void)
+{
+    TEST_BEGIN();
+    ConfigLoadStatus st = CONFIG_LOAD_OK;
+    Config *cfg = config_load_ex(NULL, &st);
+    ASSERT_NULL(cfg);
+    ASSERT_EQ((int)st, (int)CONFIG_LOAD_MISSING);
+    TEST_END();
+}
+
+int test_config_load_ex_null_status_out_is_safe(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_load_ex(TEST_TMP_DIR "/nutshell_missing_xyz.json", NULL);
+    ASSERT_NULL(cfg);
+    TEST_END();
+}
+
+int test_config_load_ex_valid_reports_ok(void)
+{
+    TEST_BEGIN();
+    Config *saved = config_new_default();
+    ASSERT_EQ(config_save(saved, TMP_CFG), 0);
+    config_free(saved);
+
+    ConfigLoadStatus st = CONFIG_LOAD_MISSING;
+    Config *loaded = config_load_ex(TMP_CFG, &st);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_EQ((int)st, (int)CONFIG_LOAD_OK);
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_ex_unparseable_reports_invalid(void)
+{
+    TEST_BEGIN();
+    /* M4: the backup succeeded (this is a fresh, writable temp dir), so the
+     * caller is told it's safe to save fresh defaults -- the original
+     * survives under its ".bad-*" name either way. */
+    test_config_remove_all_bad_backups();
+
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs("not json {{{", f);
+    fclose(f);
+
+    ConfigLoadStatus st = CONFIG_LOAD_OK;
+    Config *cfg = config_load_ex(TMP_CFG, &st);
+    ASSERT_NULL(cfg);
+    ASSERT_EQ((int)st, (int)CONFIG_LOAD_INVALID);
+
+    test_config_remove_all_bad_backups();
+    TEST_END();
+}
+
+int test_config_load_ex_oversized_reports_unreadable(void)
+{
+    TEST_BEGIN();
+    /* M3: bigger than the (raised, still generous) size limit -- reported
+     * as UNREADABLE, not silently treated as if there were no file there at
+     * all (which would let a caller save defaults right over it). */
+    FILE *f = fopen(TMP_CFG, "wb");
+    ASSERT_NOT_NULL(f);
+    char chunk[65536];
+    memset(chunk, 'a', sizeof(chunk));
+    for (int i = 0; i < 129; i++) {
+        ASSERT_EQ(fwrite(chunk, 1, sizeof(chunk), f), sizeof(chunk));
+    }
+    fclose(f);
+
+    ConfigLoadStatus st = CONFIG_LOAD_OK;
+    Config *cfg = config_load_ex(TMP_CFG, &st);
+    ASSERT_NULL(cfg);
+    ASSERT_EQ((int)st, (int)CONFIG_LOAD_UNREADABLE);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
 /* ============================================================
  * config_fallback_path(): pure string helper for the absolute per-user
  * fallback location, used when the exe's own directory can't be found.
@@ -2361,6 +2592,26 @@ int test_config_fallback_path_core(void)
     char tiny[8];
     ASSERT_EQ(config_fallback_path("C:\\Users\\alice\\AppData\\Local", tiny, sizeof(tiny)), 0);
 
+    /* Forward-slash drive-absolute and UNC forms are still accepted. */
+    ASSERT_EQ(config_fallback_path("C:/Users/alice/AppData/Local", out, sizeof(out)), 1);
+    ASSERT_EQ(config_fallback_path("\\\\server\\share\\Local", out, sizeof(out)), 1);
+
+    TEST_END();
+}
+
+int test_config_fallback_path_rejects_relative(void)
+{
+    TEST_BEGIN();
+    /* L: a relative LOCALAPPDATA value (a hand-edited or hostile
+     * environment) would make the "absolute, per-user" path this function
+     * promises actually resolve against the current directory -- refuse
+     * rather than silently build one. */
+    char out[300];
+    (void)snprintf(out, sizeof(out), "%s", "unset-before-call");
+
+    ASSERT_EQ(config_fallback_path("AppData\\Local", out, sizeof(out)), 0);
+    ASSERT_EQ(config_fallback_path(".\\AppData\\Local", out, sizeof(out)), 0);
+    ASSERT_EQ(config_fallback_path("Local", out, sizeof(out)), 0);
     TEST_END();
 }
 

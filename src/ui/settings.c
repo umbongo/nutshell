@@ -1741,7 +1741,17 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
             /* Clamp out-of-range values before persisting */
             settings_validate(s);
-            config_save(d->cfg, d->config_path);
+            /* M5: report a save failure instead of silently discarding the
+             * changes just applied above -- the file may be read-only,
+             * locked by another program, or saving may have been disabled
+             * for this session because nutshell.config could not be read
+             * at startup (see window.c's WM_CREATE / M3). */
+            if (config_save(d->cfg, d->config_path) != 0) {
+                MessageBox(hwnd,
+                    "Could not save nutshell.config. Your settings changes "
+                    "have not been written to disk.",
+                    "Save Failed", MB_OK | MB_ICONWARNING);
+            }
             DestroyWindow(hwnd);
             break;
         }

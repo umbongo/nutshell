@@ -42,6 +42,21 @@ static int probe_registry(const LocalShellProbe *probe, const char *key,
     return probe->registry_string(probe->ctx, key, value, out, out_size) ? 1 : 0;
 }
 
+/* M2: canonicalise `path` via the probe when it can, else just copy it
+ * verbatim -- either way `out` always ends up filled, so callers never need
+ * to branch on the return value; they only need two comparably-normalised
+ * strings to compare. */
+static int probe_normalize(const LocalShellProbe *probe, const char *path,
+                           char *out, size_t out_size)
+{
+    if (out && out_size > 0) (void)snprintf(out, out_size, "%s", path ? path : "");
+    if (!probe || !probe->normalize_path || !path) return 0;
+    char tmp[LOCAL_SHELL_PATH_MAX];
+    if (!probe->normalize_path(probe->ctx, path, tmp, sizeof(tmp))) return 0;
+    (void)snprintf(out, out_size, "%s", tmp);
+    return 1;
+}
+
 /* ---- local_shell_quote --------------------------------------------------- */
 
 size_t local_shell_quote(const char *path, char *out, size_t out_size)
@@ -392,24 +407,71 @@ static int base_eq_ci(const char *s, size_t len, const char *lit)
  * the caller's stack (window.c's start_local_shell() runs on the UI
  * thread, same concern as local_shell_list_available()). Best effort: an
  * allocation failure just leaves the spec as SHELL_CUSTOM. */
+/* M2: base name of `exe` -- after the last '\' or '/' -- with a trailing
+ * ".exe" stripped, as a (pointer, length) pair rather than a copy. */
+static const char *base_name_len(const char *exe, size_t *len_out)
+{
+    const char *base = exe;
+    for (const char *c = exe; *c; c++)
+        if (*c == '\\' || *c == '/') base = c + 1;
+    size_t len = strlen(base);
+    if (len > 4 && base_eq_ci(base + len - 4, 4, ".exe")) len -= 4;
+    *len_out = len;
+    return base;
+}
+
+/* M2: powershell.exe, pwsh.exe and cmd.exe are names Windows itself gives
+ * to exactly one thing each -- unlike "bash.exe", which WSL's own launcher
+ * also uses for something that is emphatically not Git bash or MSYS2, so
+ * bash recognition stays exact-path-only (reclassify_if_known_shell()'s own
+ * loop, above). A custom command whose executable is positively one of
+ * these three, wherever it actually lives (a portable copy, a second
+ * install, WindowsApps) -- not just at the one path the automatic search
+ * itself would have found -- is reclassified the same as an exact path
+ * match would be. Returns 1 (spec->kind set) or 0 (spec->kind untouched). */
+static int reclassify_by_base_name(LocalShellSpec *spec)
+{
+    size_t len;
+    const char *base = base_name_len(spec->exe, &len);
+
+    if (base_eq_ci(base, len, "pwsh"))       { spec->kind = SHELL_PWSH;       return 1; }
+    if (base_eq_ci(base, len, "powershell")) { spec->kind = SHELL_POWERSHELL; return 1; }
+    if (base_eq_ci(base, len, "cmd"))        { spec->kind = SHELL_CMD;        return 1; }
+    return 0;
+}
+
 static void reclassify_if_known_shell(LocalShellSpec *spec, const LocalShellProbe *probe)
 {
     if (!spec || spec->kind != SHELL_CUSTOM || spec->exe[0] == '\0') return;
 
-    LocalShellSpec *detected = (LocalShellSpec *)malloc(sizeof(*detected));
-    if (!detected) return;
+    char spec_norm[LOCAL_SHELL_PATH_MAX];
+    (void)probe_normalize(probe, spec->exe, spec_norm, sizeof(spec_norm));
 
-    size_t step_count = sizeof(SHELL_STEPS) / sizeof(SHELL_STEPS[0]);
-    for (size_t i = 0; i < step_count; i++) {
-        memset(detected, 0, sizeof(*detected));
-        if (SHELL_STEPS[i].try_fn(probe, detected) &&
-            base_eq_ci(spec->exe, strlen(spec->exe), detected->exe)) {
-            spec->kind = detected->kind;
-            fill_env(spec, probe);
-            break;
+    LocalShellSpec *detected = (LocalShellSpec *)malloc(sizeof(*detected));
+    if (detected) {
+        size_t step_count = sizeof(SHELL_STEPS) / sizeof(SHELL_STEPS[0]);
+        for (size_t i = 0; i < step_count; i++) {
+            memset(detected, 0, sizeof(*detected));
+            if (!SHELL_STEPS[i].try_fn(probe, detected)) continue;
+
+            char detected_norm[LOCAL_SHELL_PATH_MAX];
+            (void)probe_normalize(probe, detected->exe, detected_norm,
+                                  sizeof(detected_norm));
+            if (base_eq_ci(spec_norm, strlen(spec_norm), detected_norm)) {
+                spec->kind = detected->kind;
+                fill_env(spec, probe);
+                free(detected);
+                return;
+            }
         }
+        free(detected);
     }
-    free(detected);
+
+    /* No exact (normalised) path match to a detected install -- M2's base
+     * name fallback, powershell/pwsh/cmd only. */
+    if (reclassify_by_base_name(spec)) {
+        fill_env(spec, probe);
+    }
 }
 
 /* ---- local_shell_resolve_bare(): a custom command's executable, resolved
@@ -562,19 +624,32 @@ static int candidate_exe_exists(const LocalShellProbe *probe, const char *cmd,
     return 0;
 }
 
-/* An unquoted custom command line already known to start with an absolute
- * path and to contain at least one space: the executable and its arguments
- * cannot be told apart by punctuation alone, so this tries every prefix
- * ending at a space, LONGEST first -- the fullest path the user could have
- * meant -- and accepts the first one that names a real file.
+/* H4: an unquoted custom command line already known to start with an
+ * absolute path and to contain at least one space: the executable and its
+ * arguments cannot be told apart by punctuation alone. This tries only the
+ * whole (trimmed) command as the executable -- covering a path whose own
+ * name has embedded spaces and no separate arguments at all -- and, that
+ * failing, exactly ONE split: the substring up to the LAST space in the
+ * command, covering the common case of a single trailing argument (e.g.
+ * "C:\Program Files\My Shell\shell.exe --arg", or an unquoted exe with no
+ * embedded space of its own plus one argument, like "cmd.exe /k"). Either
+ * candidate may also be tried with ".exe" appended, same as
+ * candidate_exe_exists() always allows.
  *
- * This is deliberately the OPPOSITE order from CreateProcessW's own
- * NULL-lpApplicationName search, which tries the shortest prefix first;
- * that is exactly how a file planted at that shorter guess (e.g.
- * "C:\Program.exe" ahead of the intended "C:\Program Files\...\shell.exe")
- * gets run instead of the one the user meant. Finding nothing at any
- * prefix is a refusal, never a fall back to that shorter, riskier guess --
- * the caller shows the user local_shell.h's suggestion to quote the path. */
+ * Nothing shorter than that single split is EVER tried. The previous
+ * version of this function kept shrinking the candidate leftward, one
+ * space at a time, all the way back toward the first space in the whole
+ * command if nothing longer existed -- which is exactly how a file
+ * planted at that naive, shortest guess (e.g. "C:\Program.exe", sitting
+ * where a first-space split alone would have landed, ahead of the intended
+ * "C:\Program Files\...\shell.exe") could get run instead of the one the
+ * user meant, the classic unquoted-path hazard this whole function exists
+ * to avoid. Finding nothing at either of the two candidates is a refusal,
+ * never a fall back to a shorter, riskier guess -- the caller shows the
+ * user local_shell.h's suggestion to quote the path. A command with more
+ * than one trailing argument (or a trailing argument that itself contains
+ * a space) is refused the same way: quoting the executable path is the
+ * only way to make it unambiguous. */
 static int resolve_unquoted_spaced(const LocalShellProbe *probe, const char *cmd,
                                    char *exe_out, size_t exe_size,
                                    char *suffix_out, size_t suffix_size)
@@ -583,21 +658,29 @@ static int resolve_unquoted_spaced(const LocalShellProbe *probe, const char *cmd
     while (len > 0 && cmd[len - 1] == ' ') len--;
     if (len == 0) return 0;
 
-    size_t end = len;
-    for (;;) {
-        if (candidate_exe_exists(probe, cmd, end, exe_out, exe_size)) {
-            const char *rest = cmd + end;
-            while (*rest == ' ') rest++;
-            (void)snprintf(suffix_out, suffix_size, "%s", rest);
-            return 1;
-        }
-        if (end == 0) return 0;
-        size_t i = end;
-        while (i > 0 && cmd[i - 1] != ' ') i--;
-        if (i == 0) return 0; /* no earlier space: nothing left to try */
-        end = i - 1;
-        while (end > 0 && cmd[end - 1] == ' ') end--; /* collapse repeats */
+    /* Candidate 1: the whole trimmed command, unsplit. */
+    if (candidate_exe_exists(probe, cmd, len, exe_out, exe_size)) {
+        if (suffix_size > 0) suffix_out[0] = '\0';
+        return 1;
     }
+
+    /* Candidate 2, and the last one tried: up to the single last space in
+     * the command. */
+    size_t i = len;
+    while (i > 0 && cmd[i - 1] != ' ') i--;
+    if (i == 0) return 0; /* no space at all: nothing left to try */
+    size_t end = i - 1;
+    while (end > 0 && cmd[end - 1] == ' ') end--; /* collapse repeated spaces */
+    if (end == 0) return 0;
+
+    if (candidate_exe_exists(probe, cmd, end, exe_out, exe_size)) {
+        const char *rest = cmd + end;
+        while (*rest == ' ') rest++;
+        (void)snprintf(suffix_out, suffix_size, "%s", rest);
+        return 1;
+    }
+
+    return 0;
 }
 
 /* Rewrites spec->exe/dir/command to `resolved_exe` plus `suffix`, shared by
@@ -623,7 +706,21 @@ int local_shell_resolve_bare(LocalShellSpec *spec, const LocalShellProbe *probe)
 {
     if (!spec) return 1;
     if (spec->kind != SHELL_CUSTOM) return 1;
-    if (spec->exe[0] == '\0') return 1;
+    if (spec->exe[0] == '\0') {
+        /* M1: an empty exe is not "nothing to do" -- it means
+         * first_token_exe_and_dir() could not work out an executable at
+         * all (the command was blank after quote-stripping, or its first
+         * token was too long to fit LOCAL_SHELL_PATH_MAX). Returning 1 here
+         * used to hand the caller a spec that looked resolved but whose
+         * exe was empty; local_pty_open() then fell back to a NULL
+         * lpApplicationName, handing CreateProcess back exactly the
+         * PATH/CWD-searching guess this whole function exists to remove.
+         * Refuse instead. */
+        (void)snprintf(spec->error, sizeof(spec->error), "%s",
+            "Could not find an executable in the shell command (it may be "
+            "empty, or its first token too long).");
+        return 0;
+    }
 
     if (strpbrk(spec->exe, "\\/") == NULL) {
         /* Bare name: search System32, the Windows directory, then each
@@ -860,4 +957,34 @@ int local_shell_kind_is_posix(LocalShellKind kind)
         default:
             return 0;
     }
+}
+
+/* H3: fixes window.c's start_local_shell(), which used to test the local
+ * `kind` variable captured from local_shell_resolve() -- BEFORE
+ * local_shell_resolve_bare() had a chance to correct it (reclassify a
+ * custom command to SHELL_GITBASH/MSYS2/PWSH/POWERSHELL/CMD, M2) -- rather
+ * than spec->kind afterward. A custom command pointing at PowerShell or
+ * cmd by an unreclassified path never got the strict lock at all: it kept
+ * whatever `kind` had been before resolve_bare ran (always SHELL_CUSTOM for
+ * a non-blank profile shell), which fell through to neither branch and
+ * stayed on the looser auto-scan. */
+LocalShellPlatformLock local_shell_platform_lock(const LocalShellSpec *spec)
+{
+    if (!spec) return LOCAL_SHELL_LOCK_NONE;
+
+    if (local_shell_kind_is_posix(spec->kind)) {
+        return LOCAL_SHELL_LOCK_LINUX;
+    }
+    if (spec->kind == SHELL_NONE) {
+        return LOCAL_SHELL_LOCK_NONE;
+    }
+    /* SHELL_PWSH, SHELL_POWERSHELL, SHELL_CMD, or SHELL_CUSTOM (anything
+     * that reached here as SHELL_CUSTOM was not reclassified to a known
+     * POSIX shell by local_shell_resolve_bare() -- reclassify_by_base_name()
+     * already turned a positively-identified PowerShell/cmd custom command
+     * into one of the three kinds above, so nothing further needs checking
+     * here): none of these has a Windows ruleset to loosen to, and an
+     * unreclassified custom command could be anything, so every one of them
+     * is locked strict rather than left on the auto-scan by default. */
+    return LOCAL_SHELL_LOCK_STRICT;
 }

@@ -804,12 +804,18 @@ int test_local_shell_resolve_bare_unquoted_spaced_appends_exe(void)
     TEST_END();
 }
 
-int test_local_shell_resolve_bare_unquoted_spaced_falls_back_to_shorter_match(void)
+int test_local_shell_resolve_bare_unquoted_spaced_refuses_shorter_match(void)
 {
     TEST_BEGIN();
-    /* Only a shorter prefix exists on this machine (the "real" longer path
-     * is absent) -- the scan takes whatever it can find, longest first;
-     * this is the documented limit of what's possible without quotes. */
+    /* H4: only a shorter prefix exists on this machine (the "real" longer
+     * path is absent) -- resolve_unquoted_spaced() must NEVER shrink past
+     * the single last-space split (the whole string, then everything up to
+     * the last space) to find it. Falling back further, all the way to a
+     * short guess like "C:\Program.exe", is exactly the classic
+     * unquoted-path hazard: a file planted at that shorter, more easily
+     * guessed/written-to location would run instead of the shell the user
+     * actually named. This must refuse, with a message suggesting the fix
+     * (quote the path), not silently accept the shorter match. */
     FakeProbeData d;
     fake_reset(&d);
     fake_add_path(&d, "C:\\Program.exe");
@@ -818,10 +824,48 @@ int test_local_shell_resolve_bare_unquoted_spaced_falls_back_to_shorter_match(vo
     LocalShellSpec spec;
     local_shell_resolve("C:\\Program Files\\My Shell\\shell.exe --arg",
                         &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 0);
+    ASSERT_STR_EQ(spec.exe, "C:\\Program"); /* untouched -- the naive first-space parse */
+    ASSERT_TRUE(strstr(spec.error, "quote") != NULL);
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_unquoted_spaced_refuses_second_argument(void)
+{
+    TEST_BEGIN();
+    /* H4: a command with TWO trailing arguments after an exe path that
+     * itself has embedded spaces -- resolve_unquoted_spaced() only ever
+     * tries the whole string and the single split at the last space, so
+     * this must refuse (the real exe is two splits back), never guess at
+     * a second split. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\Program Files\\My Shell\\shell.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("C:\\Program Files\\My Shell\\shell.exe --arg1 --arg2",
+                        &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 0);
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_unquoted_spaced_no_args_matches_whole_string(void)
+{
+    TEST_BEGIN();
+    /* H4: an unquoted absolute path with embedded spaces and NO trailing
+     * arguments at all -- the whole (trimmed) command is itself the
+     * candidate, tried before any split, with an empty suffix. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\Program Files\\My Shell\\shell.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("C:\\Program Files\\My Shell\\shell.exe", &p, &spec);
     ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
-    ASSERT_STR_EQ(spec.exe, "C:\\Program.exe");
-    ASSERT_STR_EQ(spec.command,
-                 "C:\\Program.exe Files\\My Shell\\shell.exe --arg");
+    ASSERT_STR_EQ(spec.exe, "C:\\Program Files\\My Shell\\shell.exe");
+    ASSERT_STR_EQ(spec.command, "\"C:\\Program Files\\My Shell\\shell.exe\"");
     TEST_END();
 }
 
@@ -1073,6 +1117,187 @@ int test_local_shell_resolve_bare_unmatched_custom_stays_custom(void)
     local_shell_resolve("\"C:\\msys64\\usr\\bin\\zsh.exe\" -l", &p, &spec);
     ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
     ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM);
+    TEST_END();
+}
+
+/* =========================================================================
+ * M2: reclassifying by base name, and by a normalised path, when no exact
+ * (unnormalised) path match to a detected install is found
+ * ========================================================================= */
+
+int test_local_shell_resolve_bare_reclassifies_powershell_by_base_name(void)
+{
+    TEST_BEGIN();
+    /* A portable pwsh.exe living somewhere the automatic search would never
+     * itself look (no PowerShell 7 registered under %ProgramFiles%) is
+     * still positively a PowerShell executable by its unmistakable name --
+     * unlike "bash.exe" (WSL's own launcher uses that name too), so this
+     * reclassifies on base name alone. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "D:\\Portable\\pwsh.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("\"D:\\Portable\\pwsh.exe\" -NoLogo", &p, &spec);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_PWSH);
+    /* The user's own command line is untouched. */
+    ASSERT_STR_EQ(spec.command, "\"D:\\Portable\\pwsh.exe\" -NoLogo");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_reclassifies_cmd_by_base_name_any_case(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\Tools\\CMD.EXE");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("\"C:\\Tools\\CMD.EXE\"", &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CMD);
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_bash_named_exe_not_reclassified(void)
+{
+    TEST_BEGIN();
+    /* M2: unlike powershell/pwsh/cmd, a bare "bash.exe" name is NOT enough
+     * to reclassify -- WSL's own launcher is also named bash.exe, and it is
+     * not Git bash or MSYS2 (no HOME/SHELL/PATH additions belong on it, and
+     * it does not deserve the Linux platform lock without the exact-path
+     * match that confirms it really is one of the two known installs). */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\Windows\\System32\\bash.exe"); /* WSL's launcher */
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("\"C:\\Windows\\System32\\bash.exe\"", &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM);
+    TEST_END();
+}
+
+/* Fake probe's normalize_path: a tiny table, {input -> normalised}, so
+ * tests can simulate GetFullPathNameA collapsing a differently-spelled
+ * path to the same one the real filesystem answers would use. */
+typedef struct {
+    const char *in;
+    const char *out;
+} NormEntry;
+
+static NormEntry g_norm_table[FAKE_MAX];
+static size_t g_norm_count;
+
+static void norm_reset(void) { g_norm_count = 0; }
+
+static void norm_add(const char *in, const char *out)
+{
+    g_norm_table[g_norm_count].in = in;
+    g_norm_table[g_norm_count].out = out;
+    g_norm_count++;
+}
+
+static int fake_normalize(void *ctx, const char *path, char *out, size_t out_size)
+{
+    (void)ctx;
+    for (size_t i = 0; i < g_norm_count; i++) {
+        if (strcmp(g_norm_table[i].in, path) == 0) {
+            (void)snprintf(out, out_size, "%s", g_norm_table[i].out);
+            return 1;
+        }
+    }
+    /* No table entry: identity, same as a real GetFullPathNameA on an
+     * already-canonical path. */
+    (void)snprintf(out, out_size, "%s", path);
+    return 1;
+}
+
+int test_local_shell_resolve_bare_reclassifies_via_normalized_path(void)
+{
+    TEST_BEGIN();
+    /* The user typed a doubled separator and a forward slash; byte-for-byte
+     * this does not match the detected Git bash path at all, but both
+     * normalise (as GetFullPathNameA would) to the same canonical path. */
+    norm_reset();
+    norm_add("C:\\Git\\\\bin/bash.exe", "C:\\Git\\bin\\bash.exe");
+
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
+    fake_add_path(&d, "C:\\Git\\bin\\bash.exe");
+    LocalShellProbe p = fake_probe(&d);
+    p.normalize_path = fake_normalize;
+
+    LocalShellSpec spec;
+    local_shell_resolve("\"C:\\Git\\\\bin/bash.exe\" -i", &p, &spec);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_GITBASH);
+    ASSERT_EQ(local_shell_kind_is_posix(spec.kind), 1);
+    /* The literal command line the user typed is never rewritten by this. */
+    ASSERT_STR_EQ(spec.command, "\"C:\\Git\\\\bin/bash.exe\" -i");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_without_normalize_probe_falls_back_to_raw(void)
+{
+    TEST_BEGIN();
+    /* No normalize_path callback at all (the common case for a fake probe
+     * in every other test in this file): probe_normalize() falls back to a
+     * plain copy, so a differently-spelled path simply does not match --
+     * exactly today's behaviour, unaffected by M2. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
+    fake_add_path(&d, "C:\\Git\\bin\\bash.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("\"C:\\Git\\\\bin/bash.exe\" -i", &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM);
+    TEST_END();
+}
+
+/* =========================================================================
+ * M1: an empty spec->exe (e.g. a first token too long to fit
+ * LOCAL_SHELL_PATH_MAX) is a refusal, not a silent no-op
+ * ========================================================================= */
+
+int test_local_shell_resolve_bare_refuses_empty_exe_from_long_token(void)
+{
+    TEST_BEGIN();
+    static char huge_token[LOCAL_SHELL_PATH_MAX + 100];
+    size_t i = 0;
+    huge_token[i++] = 'C'; huge_token[i++] = ':'; huge_token[i++] = '\\';
+    for (; i + 1 < sizeof(huge_token); i++) huge_token[i] = 'a';
+    huge_token[i] = '\0';
+
+    LocalShellSpec spec;
+    LocalShellKind k = local_shell_resolve(huge_token, NULL, &spec);
+    ASSERT_EQ((int)k, (int)SHELL_CUSTOM);
+    ASSERT_STR_EQ(spec.exe, ""); /* first_token_exe_and_dir() gave up */
+
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 0);
+    ASSERT_TRUE(spec.error[0] != '\0');
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_refuses_empty_exe_from_blank_quoted_token(void)
+{
+    TEST_BEGIN();
+    /* An empty quoted first token ("" with nothing between the quotes) is
+     * also an empty exe -- not a crash, and not treated as "already fine". */
+    LocalShellSpec spec;
+    local_shell_resolve("\"\" -i", NULL, &spec);
+    ASSERT_STR_EQ(spec.exe, "");
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 0);
     TEST_END();
 }
 
@@ -1355,6 +1580,74 @@ int test_local_shell_kind_name_and_is_posix(void)
     ASSERT_EQ(local_shell_kind_is_posix(SHELL_GITBASH), 1);
     ASSERT_EQ(local_shell_kind_is_posix(SHELL_MSYS2), 1);
     ASSERT_EQ(local_shell_kind_is_posix(SHELL_CMD), 0);
+    TEST_END();
+}
+
+/* =========================================================================
+ * H3: local_shell_platform_lock() -- the platform lock decision, as its own
+ * tested core function rather than inline in window.c
+ * ========================================================================= */
+
+int test_local_shell_platform_lock_null_is_none(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)local_shell_platform_lock(NULL), (int)LOCAL_SHELL_LOCK_NONE);
+    TEST_END();
+}
+
+int test_local_shell_platform_lock_none_for_shell_none(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    memset(&spec, 0, sizeof(spec));
+    spec.kind = SHELL_NONE;
+    ASSERT_EQ((int)local_shell_platform_lock(&spec), (int)LOCAL_SHELL_LOCK_NONE);
+    TEST_END();
+}
+
+int test_local_shell_platform_lock_linux_for_posix_kinds(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    memset(&spec, 0, sizeof(spec));
+
+    spec.kind = SHELL_GITBASH;
+    ASSERT_EQ((int)local_shell_platform_lock(&spec), (int)LOCAL_SHELL_LOCK_LINUX);
+
+    spec.kind = SHELL_MSYS2;
+    ASSERT_EQ((int)local_shell_platform_lock(&spec), (int)LOCAL_SHELL_LOCK_LINUX);
+    TEST_END();
+}
+
+int test_local_shell_platform_lock_strict_for_detected_windows_shells(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    memset(&spec, 0, sizeof(spec));
+
+    spec.kind = SHELL_PWSH;
+    ASSERT_EQ((int)local_shell_platform_lock(&spec), (int)LOCAL_SHELL_LOCK_STRICT);
+
+    spec.kind = SHELL_POWERSHELL;
+    ASSERT_EQ((int)local_shell_platform_lock(&spec), (int)LOCAL_SHELL_LOCK_STRICT);
+
+    spec.kind = SHELL_CMD;
+    ASSERT_EQ((int)local_shell_platform_lock(&spec), (int)LOCAL_SHELL_LOCK_STRICT);
+    TEST_END();
+}
+
+int test_local_shell_platform_lock_strict_for_unmatched_custom(void)
+{
+    TEST_BEGIN();
+    /* H3: this is the actual finding -- a custom command that stayed
+     * SHELL_CUSTOM (not reclassified to a known POSIX shell) must be
+     * locked strict, exactly like a detected PowerShell/cmd, not left on
+     * the looser auto-scan. */
+    LocalShellSpec spec;
+    memset(&spec, 0, sizeof(spec));
+    spec.kind = SHELL_CUSTOM;
+    (void)snprintf(spec.exe, sizeof(spec.exe), "%s", "C:\\Tools\\myrepl.exe");
+    ASSERT_EQ((int)local_shell_platform_lock(&spec), (int)LOCAL_SHELL_LOCK_STRICT);
     TEST_END();
 }
 
