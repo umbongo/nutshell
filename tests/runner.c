@@ -356,6 +356,7 @@ int test_cmd_classify_ip_verbs(void);
 int test_cmd_classify_curl_output_rules(void);
 int test_cmd_classify_powershell_quotes_and_subexpressions(void);
 int test_cmd_classify_sed_brackets_and_unparsed(void);
+int test_cmd_classify_device_filter_abbreviations(void);
 int test_cmd_classify_glued_redirect_targets(void);
 
 /* test_session_manager.c */
@@ -2839,6 +2840,7 @@ int main(void) {
     failed += test_cmd_classify_curl_output_rules();
     failed += test_cmd_classify_powershell_quotes_and_subexpressions();
     failed += test_cmd_classify_sed_brackets_and_unparsed();
+    failed += test_cmd_classify_device_filter_abbreviations();
     failed += test_cmd_classify_glued_redirect_targets();
 
     /* Session Manager / Profile / Config */

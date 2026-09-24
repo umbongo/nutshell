@@ -6489,34 +6489,104 @@ const char *cmd_platform_choice_label(int index)
  * ends up interpreting the text, and the classifier does not get to
  * assume the friendlier one. */
 
-/* Word that follows a pipe and is itself a write on the device: exports
- * captured/filtered output to the device filesystem instead of just
- * paging it. Deliberately narrow -- an unrecognised filter word (display,
- * no-more, compare, trim, resolve, hold, json, xml, details, and so on)
- * adds nothing, same as it does today. */
-static const char *device_pipe_write_words[] = {
-    "redirect", "append", "tee", "save", NULL
+/* Display-filter keywords after a device "|", per CLI family. The CLI
+ * takes a keyword case-insensitively and abbreviated to any prefix that is
+ * unique among its keywords, so on IOS "red", "REDIRECT" and "appe" are
+ * redirect and append, and "t" is tee. A word writes (exports the output
+ * to the device filesystem, or sends it away) when it is, or abbreviates, a
+ * write keyword and is not also a prefix of a read keyword -- such a
+ * prefix is ambiguous and the device rejects it. An unrecognised word adds
+ * nothing. */
+typedef struct {
+    const char *const *read;
+    const char *const *write;
+} FilterWords;
+
+static const char *const filter_write_common[] = {
+    "append", "redirect", "save", "tee", NULL
+};
+static const char *const ios_filter_read[] = {
+    "begin", "count", "exclude", "format", "include", "section", NULL
+};
+static const char *const asa_filter_read[] = {
+    "begin", "count", "exclude", "format", "grep", "include", "section", NULL
+};
+static const char *const nxos_filter_read[] = {
+    "begin", "count", "cut", "diff", "egrep", "exclude", "grep", "head", "human",
+    "include", "json", "json-pretty", "last", "less", "no-more", "section", "sed",
+    "sort", "tr", "uniq", "wc", "xml", NULL
+};
+static const char *const nxos_filter_write[] = {
+    "append", "email", "redirect", "save", "tee", NULL
+};
+static const char *const junos_filter_read[] = {
+    "compare", "count", "display", "except", "find", "hold", "last", "match",
+    "no-more", "refresh", "request", "resolve", "trim", NULL
+};
+static const char *const generic_filter_read[] = {
+    "begin", "compare", "count", "cut", "details", "diff", "display", "egrep",
+    "except", "exclude", "find", "format", "grep", "head", "hold", "include",
+    "json", "last", "less", "match", "more", "no-more", "refresh", "request",
+    "resolve", "section", "sort", "trim", "uniq", "wc", "xml", NULL
 };
 
+static FilterWords device_filter_words(CmdPlatform platform)
+{
+    FilterWords fw;
+    fw.write = filter_write_common;
+    switch (platform) {
+    case CMD_PLATFORM_CISCO_IOS:  fw.read = ios_filter_read; break;
+    case CMD_PLATFORM_CISCO_ASA:  fw.read = asa_filter_read; break;
+    case CMD_PLATFORM_CISCO_NXOS: fw.read = nxos_filter_read; fw.write = nxos_filter_write; break;
+    case CMD_PLATFORM_JUNOS:      fw.read = junos_filter_read; break;
+    default:                      fw.read = generic_filter_read; break;
+    }
+    return fw;
+}
+
+static int word_prefix_of_any_ci(const char *w, size_t wl, const char *const *list)
+{
+    for (int i = 0; list[i]; i++)
+        if (wl <= strlen(list[i]) && ci_memcmp(w, list[i], wl) == 0) return 1;
+    return 0;
+}
+
+static int word_in_list_ci(const char *w, size_t wl, const char *const *list)
+{
+    for (int i = 0; list[i]; i++)
+        if (tok_eq_ci(w, wl, list[i])) return 1;
+    return 0;
+}
+
+static int filter_word_writes(CmdPlatform platform, const char *w, size_t wl)
+{
+    FilterWords fw = device_filter_words(platform);
+    if (wl == 0) return 0;
+    if (word_in_list_ci(w, wl, fw.write)) return 1;
+    if (word_in_list_ci(w, wl, fw.read)) return 0;
+    return word_prefix_of_any_ci(w, wl, fw.write) && !word_prefix_of_any_ci(w, wl, fw.read);
+}
+
 /* An output redirect ("show run > bootflash:x", "show run >> flash:y") is
- * a write only when a real target word follows the '>' (after optional
- * spaces) -- a trailing '>' with nothing after it is not a redirect at
- * all, it is a display artifact: a BGP best-path marker ("show ip bgp |
- * include *>") or a filter argument that happens to end in '>' ("show
- * version | i >"). Built on quote_step() directly rather than reusing
- * scan_redirects(), which treats any trailing '>' as a write -- correct
- * for a real shell, wrong for a device display filter. */
+ * a write only on a CLI that has shell-style redirection (NX-OS), only in
+ * the command before the first display-filter "|" (after it, '>' is part
+ * of a filter pattern: "| include *>i"), and only when a real target word
+ * follows the '>' -- a trailing '>' is a display artifact. Built on
+ * quote_step() directly rather than reusing scan_redirects(), which treats
+ * any '>' as a write -- correct for a real shell, wrong here. */
 static CmdSafetyLevel scan_device_redirect_mode(const char *seg, size_t seg_len,
-                                                 QuoteMode mode)
+                                                 QuoteMode mode, CmdPlatform platform)
 {
     const char *end = seg + seg_len;
     const char *p = seg;
     QuoteScan qs;
+    if (platform != CMD_PLATFORM_CISCO_NXOS) return CMD_READ;
     quote_scan_init(&qs, mode);
 
     while (p < end) {
         const char *here = p;
         if (!quote_step(&qs, &p, end)) continue;
+        if (*here == '|') break;                    /* display filter from here */
         if (*here != '>') continue;
 
         const char *r = here + 1;
@@ -6535,16 +6605,17 @@ static CmdSafetyLevel scan_device_redirect_mode(const char *seg, size_t seg_len,
  * convention classify_pass() itself uses -- the caller passes NULL/0 once
  * a reason has already been captured. */
 static CmdSafetyLevel device_shell_floor_mode(const char *seg, size_t seg_len,
-                                               QuoteMode mode,
+                                               QuoteMode mode, CmdPlatform platform,
                                                char *reason_buf, size_t reason_buf_size)
 {
     CmdSafetyLevel floor = CMD_READ;
     const char *end = seg + seg_len;
     const char *p = seg;
+    int in_filter = 0;   /* past the first display-filter "|" */
     QuoteScan qs;
     quote_scan_init(&qs, mode);
 
-    CmdSafetyLevel redir = scan_device_redirect_mode(seg, seg_len, mode);
+    CmdSafetyLevel redir = scan_device_redirect_mode(seg, seg_len, mode, platform);
     if (redir > floor) {
         floor = redir;
         if (reason_buf && reason_buf_size > 0)
@@ -6558,17 +6629,25 @@ static CmdSafetyLevel device_shell_floor_mode(const char *seg, size_t seg_len,
         if (*here != '|') continue;
 
         if ((here + 1) < end && here[1] == '|') {
-            /* Rule 1: "||" -- never a device display filter. What comes
-             * after it runs as a shell command if the first part fails,
-             * read the way a real Linux shell would read it.
-             * classify_linux_segment() reads only the first command of
-             * the remainder, so scanning continues after the "||" (its
-             * second '|' skipped, so it is not re-read as a single pipe):
-             * a later "| sh" in the remainder still meets rule 2. */
+            /* Rule 1: "||" in the command itself is never a display
+             * filter. What comes after it runs as a shell command if the
+             * first part fails, read the way a real Linux shell would read
+             * it, and never counts for less than UNKNOWN. Inside a filter
+             * pattern ("| include a||b") it is regex alternation, so there
+             * it only raises the floor when the Linux reading of the rest
+             * is WRITE or worse. classify_linux_segment() reads only the
+             * first command of the remainder, so scanning continues after
+             * the "||" (its second '|' skipped, so it is not re-read as a
+             * single pipe): a later "| sh" in the remainder still meets
+             * rule 2. */
             const char *rem = here + 2;
             CmdSafetyLevel rl = classify_linux_segment(rem, (size_t)(end - rem),
                                                          NULL, 0);
-            if (rl < CMD_UNKNOWN) rl = CMD_UNKNOWN;
+            if (!in_filter) {
+                if (rl < CMD_UNKNOWN) rl = CMD_UNKNOWN;
+            } else if (rl < CMD_WRITE) {
+                rl = CMD_READ;
+            }
             if (rl > floor) {
                 floor = rl;
                 if (reason_buf && reason_buf_size > 0)
@@ -6580,6 +6659,7 @@ static CmdSafetyLevel device_shell_floor_mode(const char *seg, size_t seg_len,
         }
 
         /* Rule 2: a single active '|' -- look at what it feeds. */
+        in_filter = 1;
         const char *tgt_start = here + 1;
         CmdSafetyLevel pipe_level = scan_pipe_target(tgt_start);
         if (pipe_level > floor) {
@@ -6592,8 +6672,7 @@ static CmdSafetyLevel device_shell_floor_mode(const char *seg, size_t seg_len,
             const char *tp = tgt_start;
             const char *ts;
             size_t tl;
-            if (next_token(&tp, &ts, &tl) &&
-                tok_in_list(ts, tl, device_pipe_write_words)) {
+            if (next_token(&tp, &ts, &tl) && filter_word_writes(platform, ts, tl)) {
                 if (CMD_WRITE > floor) {
                     floor = CMD_WRITE;
                     if (reason_buf && reason_buf_size > 0)
@@ -6610,7 +6689,7 @@ static CmdSafetyLevel device_shell_floor_mode(const char *seg, size_t seg_len,
 /* The floor applied in classify_pass() to every platform except Linux and
  * Unknown (which already get the full shell reading on their own terms).
  * Reads the segment under both quoting modes and takes the worse. */
-static CmdSafetyLevel device_shell_floor(const char *seg, size_t seg_len,
+static CmdSafetyLevel device_shell_floor(const char *seg, size_t seg_len, CmdPlatform platform,
                                           char *reason_buf, size_t reason_buf_size)
 {
     char reason_a[128];
@@ -6618,12 +6697,16 @@ static CmdSafetyLevel device_shell_floor(const char *seg, size_t seg_len,
     reason_a[0] = '\0';
     reason_b[0] = '\0';
 
-    CmdSafetyLevel a = device_shell_floor_mode(seg, seg_len, QMODE_POSIX,
+    QuoteMode saved = tok_mode;
+    tok_mode = QMODE_POSIX;
+    CmdSafetyLevel a = device_shell_floor_mode(seg, seg_len, QMODE_POSIX, platform,
                             reason_buf ? reason_a : NULL,
                             reason_buf ? sizeof reason_a : 0);
-    CmdSafetyLevel b = device_shell_floor_mode(seg, seg_len, QMODE_PWSH,
+    tok_mode = QMODE_PWSH;
+    CmdSafetyLevel b = device_shell_floor_mode(seg, seg_len, QMODE_PWSH, platform,
                             reason_buf ? reason_b : NULL,
                             reason_buf ? sizeof reason_b : 0);
+    tok_mode = saved;
 
     if (a >= b) {
         if (reason_buf && reason_buf_size > 0 && reason_a[0])
@@ -6785,7 +6868,7 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
         if (platform != CMD_PLATFORM_LINUX && platform != CMD_PLATFORM_UNKNOWN) {
             char floor_reason[256];
             floor_reason[0] = '\0';
-            CmdSafetyLevel floor = device_shell_floor(seg_start, seg_len,
+            CmdSafetyLevel floor = device_shell_floor(seg_start, seg_len, platform,
                             worst == CMD_READ ? floor_reason : NULL,
                             worst == CMD_READ ? sizeof floor_reason : 0);
             if (floor > seg_level) {

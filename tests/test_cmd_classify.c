@@ -2950,28 +2950,35 @@ int test_cmd_classify_device_floor_raises_double_pipe(void) {
     TEST_END();
 }
 
-/* An output redirect is a write only when a real target word follows the
- * '>' -- these all have one (a file, or NX-OS's "bootflash:x"). */
+/* An output redirect is a write only on a CLI with shell-style
+ * redirection (NX-OS), only before the first display-filter '|', and only
+ * when a real target word follows the '>'. Elsewhere '>' is not a
+ * redirect, and the segment keeps the level the command alone has. */
 int test_cmd_classify_device_floor_raises_redirect_with_target(void) {
     TEST_BEGIN();
     static const DeviceFloorCase cases[] = {
-        { CMD_PLATFORM_CISCO_IOS,  "show run > F",                CMD_WRITE },
         { CMD_PLATFORM_CISCO_NXOS, "show run > F",                CMD_WRITE },
-        { CMD_PLATFORM_CISCO_ASA,  "show run > F",                CMD_WRITE },
-        { CMD_PLATFORM_JUNOS,      "show run > F",                CMD_WRITE },
-        { CMD_PLATFORM_PANOS,      "show run > F",                CMD_WRITE },
-
-        { CMD_PLATFORM_CISCO_IOS,  "show run >> F",               CMD_WRITE },
         { CMD_PLATFORM_CISCO_NXOS, "show run >> F",               CMD_WRITE },
-        { CMD_PLATFORM_CISCO_ASA,  "show run >> F",               CMD_WRITE },
-        { CMD_PLATFORM_JUNOS,      "show run >> F",               CMD_WRITE },
-        { CMD_PLATFORM_PANOS,      "show run >> F",               CMD_WRITE },
-
         /* NX-OS's own filesystem target spelling. */
         { CMD_PLATFORM_CISCO_NXOS, "show run > bootflash:x",      CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "show run >bootflash:x",       CMD_WRITE },
     };
     if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
         _tf_local_fail = 1;
+
+    static const CmdPlatform no_redirect[] = {
+        CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_CISCO_ASA, CMD_PLATFORM_JUNOS,
+        CMD_PLATFORM_PANOS, CMD_PLATFORM_ARUBA_CX, CMD_PLATFORM_ARUBA_OS,
+    };
+    for (size_t i = 0; i < sizeof no_redirect / sizeof no_redirect[0]; i++) {
+        CmdSafetyLevel alone = cmd_classify("show run", no_redirect[i]);
+        ASSERT_EQ((int)cmd_classify("show run > F", no_redirect[i]), (int)alone);
+        ASSERT_EQ((int)cmd_classify("show run >> F", no_redirect[i]), (int)alone);
+    }
+    /* After the first display-filter '|', a '>' is part of the pattern,
+     * even on NX-OS. */
+    ASSERT_EQ((int)cmd_classify("show ip bgp | include *>i", CMD_PLATFORM_CISCO_NXOS),
+              (int)cmd_classify("show ip bgp", CMD_PLATFORM_CISCO_NXOS));
     TEST_END();
 }
 
@@ -3849,6 +3856,49 @@ int test_cmd_classify_sed_brackets_and_unparsed(void) {
     };
     if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
         _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* Device display filters: keywords match case-insensitively and by unique
+ * prefix, as the CLI does; ordinary BGP filters keep their level. */
+int test_cmd_classify_device_filter_abbreviations(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase raised[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show run | red flash:x",          CMD_WRITE },
+        { CMD_PLATFORM_CISCO_IOS,  "show run | REDIRECT flash:x",     CMD_WRITE },
+        { CMD_PLATFORM_CISCO_IOS,  "show run | appe flash:x",         CMD_WRITE },
+        { CMD_PLATFORM_CISCO_IOS,  "show run | t flash:x",            CMD_WRITE },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | Red flash:x",          CMD_WRITE },
+        { CMD_PLATFORM_JUNOS,      "show configuration | sa F",       CMD_WRITE },
+        { CMD_PLATFORM_JUNOS,      "show configuration | SAVE F",     CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | em x",                 CMD_WRITE },
+        { CMD_PLATFORM_CISCO_IOS,  "show run | i x || rm F",          CMD_CRITICAL },
+    };
+    if (check_device_floor_min(raised, sizeof raised / sizeof raised[0]))
+        _tf_local_fail = 1;
+
+    static const struct { CmdPlatform plat; const char *cmd; const char *base; } kept[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show run | s bgp",               "show run" },
+        { CMD_PLATFORM_CISCO_IOS,  "show ip bgp | i *>i",            "show ip bgp" },
+        { CMD_PLATFORM_CISCO_IOS,  "show ip bgp | include *> 10.0",  "show ip bgp" },
+        { CMD_PLATFORM_CISCO_IOS,  "show ip bgp | i a||b",           "show ip bgp" },
+        { CMD_PLATFORM_CISCO_NXOS, "show ip bgp | i *>i",            "show ip bgp" },
+        { CMD_PLATFORM_CISCO_NXOS, "show ip bgp | include *> 10.0",  "show ip bgp" },
+        { CMD_PLATFORM_CISCO_NXOS, "show ip bgp | i a||b",           "show ip bgp" },
+        { CMD_PLATFORM_CISCO_ASA,  "show ip bgp | i *>i",            "show ip bgp" },
+        { CMD_PLATFORM_JUNOS,      "show interfaces | t",            "show interfaces" },
+        { CMD_PLATFORM_JUNOS,      "show route | m x",               "show route" },
+    };
+    for (size_t i = 0; i < sizeof kept / sizeof kept[0]; i++) {
+        CmdSafetyLevel got = cmd_classify(kept[i].cmd, kept[i].plat);
+        CmdSafetyLevel want = cmd_classify(kept[i].base, kept[i].plat);
+        if (got != want) {
+            printf("  [platform %d] \"%s\": got %d, want %d\n",
+                   (int)kept[i].plat, kept[i].cmd, (int)got, (int)want);
+            _tf_local_fail = 1;
+        }
+    }
+    ASSERT_EQ((int)cmd_classify("show ip bgp | i *>i", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
     TEST_END();
 }
 
