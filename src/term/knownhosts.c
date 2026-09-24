@@ -384,7 +384,23 @@ static int knownhosts_write_atomic(const char *path, LIBSSH2_KNOWNHOSTS *store)
              (long)getpid(), unique_counter++);
 #endif
 
+#ifdef _WIN32
     FILE *f = fopen(tmp_path, "wb");
+#else
+    /* Owner-only permissions, and O_EXCL so a file or symlink already at
+     * this predictable name is never opened or followed. */
+    FILE *f = NULL;
+    {
+        int fd = open(tmp_path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+        if (fd >= 0) {
+            f = fdopen(fd, "wb");
+            if (!f) {
+                close(fd);
+                (void)unlink(tmp_path);
+            }
+        }
+    }
+#endif
     if (!f) return KNOWNHOSTS_ERROR;
 
     int fault = 0;
