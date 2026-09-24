@@ -50,6 +50,13 @@ int ui_demo_build(const char *state, AiConversation *conv,
  * NULL). */
 int ui_demo_state_valid(const char *state);
 
+/* 1 if `state`'s canned reply is long enough that the AI chat panel's
+ * initial scroll-to-bottom would push the Thinking disclosure off the top
+ * of the thread, so ai_chat_apply_demo_extras() (src/ui/ai_chat.c) should
+ * scroll back to the top after loading it; 0 (including for NULL) if the
+ * state should keep the bottom scroll instead. */
+int ui_demo_scrolls_to_top(const char *state);
+
 /* Every recognised state name, in a stable order ending with "all".
  * *count receives the array length. Never returns NULL. */
 const char *const *ui_demo_states(int *count);

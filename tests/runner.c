@@ -2666,6 +2666,8 @@ int test_ui_demo_term_text_ends_with_prompt(void);
 int test_ui_demo_thinking_text_non_empty(void);
 int test_ui_demo_thinking_text_long_non_empty_and_much_longer(void);
 int test_ui_demo_build_thinking_matches_chat_conversation(void);
+int test_ui_demo_scrolls_to_top_chat_all_and_thinking(void);
+int test_ui_demo_scrolls_to_top_false_for_other_states(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
@@ -5332,6 +5334,8 @@ int main(void) {
     failed += test_ui_demo_thinking_text_non_empty();
     failed += test_ui_demo_thinking_text_long_non_empty_and_much_longer();
     failed += test_ui_demo_build_thinking_matches_chat_conversation();
+    failed += test_ui_demo_scrolls_to_top_chat_all_and_thinking();
+    failed += test_ui_demo_scrolls_to_top_false_for_other_states();
 
     failed += test_ai_conv_take_moves_overflow_and_clears_source();
     failed += test_ai_conv_take_frees_previous_destination();

@@ -30,6 +30,30 @@ int ui_demo_state_valid(const char *state)
     return 0;
 }
 
+/* States whose canned reply is long enough to push the Thinking disclosure
+ * (right above it) off the top of the thread once chat_rebuild_display()
+ * lands its usual scroll-to-bottom (src/ui/ai_chat.c's
+ * ai_chat_apply_demo_extras()) -- these need to be pulled back to the top
+ * afterwards so the gallery capture actually shows the disclosure instead
+ * of scrolling past it. "chat"/"thinking" show it collapsed, "all" shows
+ * it expanded (ai_chat_apply_demo_extras() forces that). Every other state
+ * keeps the bottom scroll, to show its most recent activity.
+ *
+ * "thinking" was missing from this set until 2026-09-24: left scrolled to
+ * the bottom, chat_listview's sticky-user-message repaint (on_paint()'s
+ * "last_user" pin) found the last user bubble above the viewport and
+ * pinned it at y=0 -- stale paint directly on top of the reply's own
+ * heading (see tests/integration/artifacts/gallery/<Theme>-thinking.png
+ * before this fix; nothing else about the still-collapsed box was
+ * actually wrong). */
+int ui_demo_scrolls_to_top(const char *state)
+{
+    if (!state) return 0;
+    return strcmp(state, "chat") == 0 ||
+           strcmp(state, "all") == 0 ||
+           strcmp(state, "thinking") == 0;
+}
+
 /* System prompt shared by every state -- index 0 of every conversation,
  * always skipped by the chat panel's replay (see ai_chat.c
  * chat_rebuild_display). Content doesn't matter for the screenshots; it

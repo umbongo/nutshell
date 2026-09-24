@@ -5048,15 +5048,15 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     relayout(d);
     if (d->hChatList) {
         chat_listview_invalidate(d->hChatList);
-        /* "chat"/"all": the markdown reply is long enough to push the
-         * Thinking disclosure (right above it) off the top of the thread
-         * if scrolled to the bottom -- chat_rebuild_display() above always
-         * leaves it scrolled to the bottom, so pull it back to the top
-         * here for these two states so the gallery review set actually
-         * shows the disclosure (collapsed in "chat", expanded in "all").
-         * Every other state keeps the bottom scroll, to show its most
-         * recent activity. */
-        if (state && (strcmp(state, "chat") == 0 || strcmp(state, "all") == 0))
+        /* chat_rebuild_display() above always leaves the list scrolled to
+         * the bottom; ui_demo_scrolls_to_top() (src/core/ui_demo.c) names
+         * the states whose canned reply is long enough that this would
+         * push the Thinking disclosure off the top of the thread, and
+         * pulls it back for those so the gallery review set actually shows
+         * the disclosure. See that function's own comment for why
+         * "thinking" had to be added to the set on 2026-09-24 (a stale
+         * paint, not just a scroll position, was riding on this). */
+        if (ui_demo_scrolls_to_top(state))
             chat_listview_scroll_to_top(d->hChatList);
     }
 }

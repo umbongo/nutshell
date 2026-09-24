@@ -362,3 +362,40 @@ int test_ui_demo_build_thinking_matches_chat_conversation(void)
  * -- test_ui_demo_build_all_is_union() above pins "all"'s exact message
  * count at 17, unchanged by adding "thinking", so that test failing would
  * be the signal if this ever regresses. */
+
+/* ui_demo_scrolls_to_top(): "chat"/"all"/"thinking" have a canned reply
+ * long enough to push the Thinking disclosure off the top of the thread
+ * once ai_chat_apply_demo_extras() (src/ui/ai_chat.c) finishes its usual
+ * scroll-to-bottom, so those three need the panel pulled back to the top
+ * afterwards. "thinking" was missing from this set until 2026-09-24: left
+ * scrolled to the bottom with the disclosure off-screen, chat_listview's
+ * sticky-user-message repaint found the last user bubble above the
+ * viewport and pinned it at y=0, stale paint directly on top of the
+ * reply's own heading (tests/integration/artifacts/gallery/
+ * <Theme>-thinking.png showed it before this fix). Every other state
+ * (including "local", and unrecognised/NULL) keeps the bottom scroll. */
+int test_ui_demo_scrolls_to_top_chat_all_and_thinking(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(ui_demo_scrolls_to_top("chat"));
+    ASSERT_TRUE(ui_demo_scrolls_to_top("all"));
+    ASSERT_TRUE(ui_demo_scrolls_to_top("thinking"));
+    TEST_END();
+}
+
+int test_ui_demo_scrolls_to_top_false_for_other_states(void)
+{
+    TEST_BEGIN();
+    int count = 0;
+    const char *const *states = ui_demo_states(&count);
+    for (int i = 0; i < count; i++) {
+        const char *s = states[i];
+        if (strcmp(s, "chat") == 0 || strcmp(s, "all") == 0 ||
+            strcmp(s, "thinking") == 0)
+            continue;
+        ASSERT_TRUE(!ui_demo_scrolls_to_top(s));
+    }
+    ASSERT_TRUE(!ui_demo_scrolls_to_top("bogus-state"));
+    ASSERT_TRUE(!ui_demo_scrolls_to_top(NULL));
+    TEST_END();
+}
