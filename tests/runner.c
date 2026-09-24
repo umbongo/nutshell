@@ -335,6 +335,20 @@ int test_cmd_classify_unknown_platform_splits_pipelines(void);
 int test_cmd_classify_ampersand_separator(void);
 int test_cmd_classify_pipe_to_interpreter_is_critical(void);
 int test_cmd_classify_v1_2_9_unaffected_pipelines(void);
+int test_cmd_classify_escaped_quote_does_not_hide_segments(void);
+int test_cmd_classify_escaped_quote_redirect_is_write(void);
+int test_cmd_classify_ordinary_quoting_unchanged(void);
+int test_cmd_classify_unbalanced_quoting_is_unknown(void);
+int test_cmd_classify_substitution_is_unknown(void);
+int test_cmd_classify_device_floor_raises_pipe_to_interpreter(void);
+int test_cmd_classify_device_floor_raises_double_pipe(void);
+int test_cmd_classify_device_floor_raises_redirect_with_target(void);
+int test_cmd_classify_device_floor_raises_write_filter_words(void);
+int test_cmd_classify_device_floor_enable_secret_is_write(void);
+int test_cmd_classify_device_floor_keeps_display_filters(void);
+int test_cmd_classify_hardened_flags_raise_level(void);
+int test_cmd_classify_hardened_flags_keep_read(void);
+int test_cmd_classify_hardened_flags_sudo_never_below_write(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -2786,6 +2800,20 @@ int main(void) {
     failed += test_cmd_classify_ampersand_separator();
     failed += test_cmd_classify_pipe_to_interpreter_is_critical();
     failed += test_cmd_classify_v1_2_9_unaffected_pipelines();
+    failed += test_cmd_classify_escaped_quote_does_not_hide_segments();
+    failed += test_cmd_classify_escaped_quote_redirect_is_write();
+    failed += test_cmd_classify_ordinary_quoting_unchanged();
+    failed += test_cmd_classify_unbalanced_quoting_is_unknown();
+    failed += test_cmd_classify_substitution_is_unknown();
+    failed += test_cmd_classify_device_floor_raises_pipe_to_interpreter();
+    failed += test_cmd_classify_device_floor_raises_double_pipe();
+    failed += test_cmd_classify_device_floor_raises_redirect_with_target();
+    failed += test_cmd_classify_device_floor_raises_write_filter_words();
+    failed += test_cmd_classify_device_floor_enable_secret_is_write();
+    failed += test_cmd_classify_device_floor_keeps_display_filters();
+    failed += test_cmd_classify_hardened_flags_raise_level();
+    failed += test_cmd_classify_hardened_flags_keep_read();
+    failed += test_cmd_classify_hardened_flags_sudo_never_below_write();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();
