@@ -2551,7 +2551,7 @@ int test_config_load_ex_oversized_reports_unreadable(void)
     /* M3: bigger than the (raised, still generous) size limit -- reported
      * as UNREADABLE, not silently treated as if there were no file there at
      * all (which would let a caller save defaults right over it). */
-    FILE *f = fopen(TMP_CFG, "wb");
+    FILE *f = test_fopen_private(TMP_CFG);
     ASSERT_NOT_NULL(f);
     char chunk[65536];
     memset(chunk, 'a', sizeof(chunk));
