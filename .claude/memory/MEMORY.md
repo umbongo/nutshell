@@ -127,10 +127,18 @@ keyboard path; `md_render.c` DPI; sub-project 3 needs a spec first.
 
 ## Local shell and keys, facts that outlive the session
 
-- The shell resolver order (`src/core/local_shell.c`): profile command,
-  `busybox64.exe` beside the exe, the same in `%LOCALAPPDATA%\Nutshell\runtime`,
-  Git for Windows bash, MSYS2 bash. busybox-w32 is GPLv2; embedding it in the
-  MIT exe is deferred until the maintainer decides on shipping its source.
+- The shell resolver order (`src/core/local_shell.c`, v1.2.14): profile
+  command, then PowerShell 7, Windows PowerShell, Git for Windows bash, MSYS2
+  bash, cmd -- only shells installed on the PC, absolute paths only. busybox
+  was removed as a shell on 2026-09-24 by the maintainer's decision (the
+  classifier still knows the `busybox` command on remote hosts). PowerShell
+  and cmd local sessions are locked to the unresolved (strictest) ruleset.
+- Secrets are per-user DPAPI (`$dpapi$v1$`) since v1.2.14; the config stays
+  beside the exe and travels, a blob another PC or user cannot decrypt is kept
+  verbatim and written back. Legacy `$aes256gcm$v1$` blobs are read once and
+  migrated. No ACL checks on the config (maintainer's decision).
+- Platform auto-detection may only ever move a session to a stricter ruleset
+  after its first resolution (v1.2.14); host output never loosens it.
 - ConPTY, measured by `make wintest`: `0x7F` is Backspace, `0x08` is
   Ctrl+Backspace, `?1049h` is forwarded to the terminal, `?1h` is not, no
   DSR/DA query on open, a lone ESC arrives as Escape. Never answer `?9001h`.

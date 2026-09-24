@@ -203,11 +203,20 @@ Done, in order (details in the commit messages and the specs named):
   `make test`), required alongside `Version bump` via `Protect-Main.ps1`; CodeQL now
   installs libssh2 too, closing the 2026-09-10 scan gap for the SSH files. Decided by
   the maintainer after the 2026-09-24 retrospective's F1.
+- Security review fixes, v1.2.14 (full backup of v1.2.13 on branch `v1.2.13`):
+  secrets moved to per-user DPAPI with the config kept beside the exe; absolute
+  config save path, OFN_NOCHANGEDIR; busybox removed, installed shells detected
+  (PowerShell first) and listed in the profile editor; DLL search hardening
+  (SetDefaultDllDirectories, dwmapi at runtime, crypt32/winhttp delay-loaded);
+  paste strips control and bidi characters and shows them in the preview, UTF-8
+  decoder rejects malformed forms, copy/extract blank control cells; AI stream
+  and connection-thread lifetimes refcounted (double free and use-after-free
+  fixed); platform detection anchored and only ever tightens after resolution.
 
 Open, in priority order:
 - [ ] Review and critique the whole repository, security first (maintainer's request,
       2026-09-24). A fresh audit, not a re-read of `2026-09-09-security-audit.md`: the
-      local shell (ConPTY spawn, environment, PATH, the busybox sidecar search order),
+      local shell (ConPTY spawn, environment, PATH, the shell search order),
       the AI command path (what the model can make the terminal run, the approval
       policy, the 1023-byte limit, auto-approve levels), secrets (API keys, profile
       passwords, `secure_zero`, what reaches logs), config loading, host keys, window
@@ -222,9 +231,9 @@ Open, in priority order:
       synthetic bytes rather than a captured PSReadLine/ConPTY stream.
 - [ ] Local shell follow-ups: test PowerShell as the local shell (a profile whose shell
       command is `powershell.exe` or `pwsh.exe`; custom kind, platform auto -- prompt
-      detection on `PS C:\...>`, paste line ends, Ctrl+C, the AI ruleset); run the
-      `local_shell` case with the busybox sidecar; decide on embedding busybox (GPLv2
-      source with each release, spec 4.4); move the dispatcher out of `src/ui` so it can
+      detection on `PS C:\...>`, paste line ends, Ctrl+C, the AI ruleset); busybox
+      is gone as a shell (maintainer, 2026-09-24; v1.2.14), so no embedding decision is
+      needed; move the dispatcher out of `src/ui` so it can
       be tested natively; a timeout for commands that never return; WSL; tab title from
       the shell's directory (OSC 7); mouse reporting (special-keys spec section 5, own
       spec); Backspace on SSH and a per-profile terminal type (special-keys spec 7).
@@ -240,10 +249,14 @@ Open, in priority order:
       settings), D (AI extras) — 31 cases; `bvtuser` exists on tompi for auth cases.
       Manual runs only now; still worth having for release checks.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
-      landed in PR #24): H3/H4 host-key fail-closed and default No;
-      H5/H6 config in %APPDATA% with DPAPI and absolute save path; H7/H8 window-message
-      hardening; then Medium and Low.
-- [ ] Older review findings: AI-stream thread lifetime bugs; Session Manager phantom row.
+      landed in PR #24, H3/H4 in PR #54, H5/H6 in v1.2.14 -- DPAPI with the config
+      kept beside the exe, absolute save path): H7/H8 window-message hardening;
+      release and supply chain (exe tied to source, tag ruleset, immutable releases,
+      provenance, secret scanning -- the settings changes need the maintainer's
+      say-so); web_fetch destination filter; then Medium and Low.
+- [ ] Older review findings: Session Manager phantom row; a stopped AI reply leaves
+      two user turns in a row in the conversation; a stream posting during the AI
+      panel's destruction leaks its payload (tiny).
 - [ ] Policy control follow-ups from the PR #27 review: the AI-tier harness cases it
       rewrote (`ai_runs_read_command_unattended`, `ai_write_command_held_then_runs_after_allow`)
       have not been run yet — needs the Kimi key in `tests\integration\.ai_key`; and the

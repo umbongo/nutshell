@@ -4,6 +4,17 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-09-24 — security review fixes (v1.2.14)
+
+Session: Claude desktop app, Windows dev box. Model: claude-opus-5-5.
+
+- **`memory/MEMORY.md`, "Local shell and keys".** The resolver order changed
+  (busybox removed by the maintainer's decision; PowerShell first), secrets
+  are DPAPI with the config beside the exe, and platform detection only ever
+  tightens after resolution. Old busybox facts would mislead the next
+  session.
+- No skill or workflow changed.
+
 ## 2026-09-24 — the gate compiles: Native tests required
 
 Session: Claude desktop app, Windows dev box. Model: claude-fable-5-1.
