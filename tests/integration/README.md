@@ -42,6 +42,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | `cases\50-window.ps1` | launch/window/shutdown/menu (`LAUNCH-*`, `RESIZE-1`, `WINDOW-*`, `CLOSE-1`, `MENU-1`) |
 | `cases\60-tabs-logging.ps1` | tabs (`TABS-*`) and logging (`LOG-*`) |
 | `cases\70-cli.ps1` | CLI flags (`CLI-1`'s several small cases) |
+| `cases\80-local-shell.ps1` | `local_shell` (`--local`: echo, exit, silent reconnect) and `local_shell_powershell` (a saved local profile running `powershell.exe -NoLogo`: prompt, two-line paste, Ctrl+C on `Start-Sleep`, exit) |
 | `cases\90-keys.ps1` | special keys: F-keys, Alt+letter, Shift+Tab/Ctrl+arrows, Ctrl+Space, PgUp/PgDn by screen, the Send Key menu (including "Send Next Key with Alt"), Backspace over SSH, Ctrl+W/T vs. Ctrl+Shift+W/T |
 
 Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
@@ -293,7 +294,10 @@ throw (via `Assert-True`) on failure and return a short string on success.
 `Invoke-Case` also takes `-ExtraArgs` (launch with these args instead of
 `-sn <profile>`, e.g. `@("-h", "tompi")` or `@("-nc")`) and `-NoConfig` (skip
 writing `nutshell.config` — see `New-NutshellTestEnv`'s `-NoConfig` switch, used
-by the `LAUNCH-2`/`LAUNCH-3` first-run/corrupt-config cases). A case that needs to
+by the `LAUNCH-2`/`LAUNCH-3` first-run/corrupt-config cases), and `-ExtraProfiles`
+(an array of hashtables, each one more saved profile appended after the
+generated SSH one, e.g. `@(@{ name = "ps"; kind = "local"; shell = "powershell.exe -NoLogo" })`
+with `-ExtraArgs @("-sn", "ps")`). A case that needs to
 observe a dialog that blocks the main window from becoming visible in the first
 place (config-missing/corrupt — `WM_CREATE` shows a modal `MessageBoxA` before
 `CreateWindowEx` even returns) can't use `Invoke-Case`'s `Start-Nutshell` at all;

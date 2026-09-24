@@ -110,8 +110,23 @@ the negation prefix, `display` as the show verb). Under the Linux ruleset a Comw
 ## 2. Shared mechanics to change
 
 **M1 — display filters.** In `cmd_classify_ex`, treat `|` as a segment separator **only** for
-`CMD_PLATFORM_LINUX`. Every other platform uses it as a display filter. (Fixes F2; the existing
-PAN-OS special case generalises.)
+`CMD_PLATFORM_LINUX` and `CMD_PLATFORM_UNKNOWN`. Every other platform uses it as a display
+filter. (Fixes F2; the existing PAN-OS special case generalises.) `CMD_PLATFORM_UNKNOWN` needs
+the same split because it is Linux plus an overlay, not a platform of its own: without it,
+`cat x | sh` and `true || rm -rf` both classified READ on an unresolved session -- every
+auto-detect session, SSH included, before the platform banner resolved.
+
+**M1b — the `&` separator and the pipe-target interpreter set (v1.2.9).** A lone `&`
+(not `&&`, not part of a redirect such as `>&`, `&>`, `2>&1`) is also a segment separator on
+`CMD_PLATFORM_LINUX` and `CMD_PLATFORM_UNKNOWN` -- PowerShell's call operator (`& Remove-Item
+...`) and a backgrounded command ahead of a destructive one (`cat x & rm -rf /tmp/x`) both
+classified READ without it, because `next_token()` treats a bare `&` as end-of-input and the
+unsplit segment never reached a first token. `scan_pipe_target()`'s interpreter set grew from
+sh/bash to also cover zsh, dash, ksh, fish, busybox, python/python2/python3(.x), perl, ruby,
+node, php, pwsh, powershell and cmd (the last three case-insensitively, like iex and
+Invoke-Expression already were), skipping sudo/doas/env/nice/exec/command wrappers and their
+flags first; `strip_path()` now also splits on `\` and drops a trailing `.exe`, so
+`C:\Windows\System32\cmd.exe` resolves the same as `cmd`.
 
 **M2 — device-filesystem helper.** Add
 

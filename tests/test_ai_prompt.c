@@ -816,6 +816,60 @@ int test_ai_system_prompt_local_shell(void) {
     ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
                            SESSION_LOCAL, "busybox");
     ASSERT_TRUE(strstr(buf, "a local shell (busybox) on a Windows PC") != NULL);
+
+    /* local_shell_spec_name()'s "PowerShell" reaches the prompt the same way */
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
+                           SESSION_LOCAL, "PowerShell");
+    ASSERT_TRUE(strstr(buf, "a local shell (PowerShell) on a Windows PC") != NULL);
+    TEST_END();
+}
+
+/* PowerShell's local session gets PowerShell-flavoured [EXEC] examples
+ * instead of the bash ones ("Write PowerShell syntax, not bash."), because
+ * a worked example in the wrong language reliably makes the model write
+ * bash into a session that has no bash to run it. Every other local shell,
+ * and SSH, keep the bash examples byte-for-byte (there are tests pinning
+ * the SSH text). */
+int test_ai_system_prompt_powershell_examples(void) {
+    TEST_BEGIN();
+    char buf[4096];
+
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
+                           SESSION_LOCAL, "PowerShell");
+    ASSERT_TRUE(strstr(buf, "[EXEC]Get-ChildItem[/EXEC]") != NULL);
+    ASSERT_TRUE(strstr(buf, "Write PowerShell syntax, not bash.") != NULL);
+    ASSERT_TRUE(strstr(buf, "[EXEC]ls -la[/EXEC]") == NULL);
+    ASSERT_TRUE(strstr(buf, "[EXEC]df -h[/EXEC]") == NULL);
+    ASSERT_TRUE(strstr(buf, "[EXEC]free -m[/EXEC]") == NULL);
+    ASSERT_TRUE(strstr(buf, "[EXEC]uptime[/EXEC]") == NULL);
+
+    /* A non-PowerShell local shell keeps the bash examples. */
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
+                           SESSION_LOCAL, "busybox");
+    ASSERT_TRUE(strstr(buf, "[EXEC]ls -la[/EXEC]") != NULL);
+    ASSERT_TRUE(strstr(buf, "Write PowerShell syntax, not bash.") == NULL);
+
+    /* SSH text is untouched, byte for byte. */
+    char ssh_buf[4096];
+    ai_build_system_prompt(ssh_buf, sizeof(ssh_buf), NULL, NULL, NULL,
+                           SESSION_SSH, NULL);
+    static const char *expected_ssh =
+        "You are an AI assistant for an SSH terminal session. "
+        "You can see the terminal output and help the user with tasks.\n"
+        "When you want to execute a command on the remote server, "
+        "wrap it in [EXEC] and [/EXEC] markers like this:\n"
+        "[EXEC]ls -la[/EXEC]\n\n"
+        "IMPORTANT: Always include ALL commands needed in a SINGLE response. "
+        "Do NOT split commands across multiple responses. "
+        "Each command must have its own [EXEC]...[/EXEC] markers.\n"
+        "Example with multiple commands:\n"
+        "1. First, check disk usage\n[EXEC]df -h[/EXEC]\n"
+        "2. Then check memory\n[EXEC]free -m[/EXEC]\n"
+        "3. Finally check uptime\n[EXEC]uptime[/EXEC]\n\n"
+        "Always explain what each command does before its marker. "
+        "Never say 'let's start with' or do only the first step. "
+        "Include every command the user needs in one response.";
+    ASSERT_STR_EQ(ssh_buf, expected_ssh);
     TEST_END();
 }
 

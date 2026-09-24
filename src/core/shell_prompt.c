@@ -31,6 +31,12 @@ int shell_prompt_is_continuation(const char *text)
     size_t word_len = (len - 1) - start;
     if (word_len == 0) return 1; /* bare '>' */
 
+    /* PowerShell's continuation prompt, ">> " (PSReadLine's default
+     * ContinuationPrompt and the console host's own). Only a ">>" with
+     * nothing else on the line: "PS C:\>> " is a nested primary prompt and
+     * ">>>" is Python's. */
+    if (word_len == 1 && text[start] == '>') return 1;
+
     for (size_t i = 0; i < CONTINUATION_WORDS_COUNT; i++) {
         size_t wl = strlen(CONTINUATION_WORDS[i]);
         if (wl == word_len && strncmp(text + start, CONTINUATION_WORDS[i], wl) == 0)

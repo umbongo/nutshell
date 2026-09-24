@@ -586,6 +586,40 @@ int test_term_at_prompt_trailing_content_after_cursor(void) {
 
 /* ---- term_at_continuation_prompt() ----------------------------------- */
 
+/* Windows PowerShell 5.1 under ConPTY, started without -NoLogo: the banner,
+ * then a primary prompt wrapped in the cursor hide/show ConPTY emits. */
+int test_term_at_prompt_powershell_primary(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] =
+        "Windows PowerShell\r\n"
+        "Copyright (C) Microsoft Corporation. All rights reserved.\r\n"
+        "\r\n"
+        "Install the latest PowerShell for new features and improvements! "
+        "https://aka.ms/PSWindows\r\n"
+        "\r\n"
+        "\x1b[?25lPS C:\\Users\\thoma> \x1b[?25h";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_at_prompt(t), 1);
+    ASSERT_EQ(term_at_continuation_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+/* An unfinished pipeline: PSReadLine moves to a new line and shows ">> ". */
+int test_term_at_prompt_powershell_continuation(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] =
+        "PS C:\\Users\\thoma> \x1b[93mGet-ChildItem\x1b[0m |\r\n"
+        ">> ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_at_prompt(t), 0);
+    ASSERT_EQ(term_at_continuation_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_at_continuation_prompt_true(void) {
     TEST_BEGIN();
     Terminal *t = term_init(24, 80, 100);

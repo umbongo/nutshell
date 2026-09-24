@@ -98,13 +98,17 @@ function Invoke-Case {
        since New-NutshellTestEnv must return before Start-Nutshell runs, a
        case needing a *pre-existing corrupt* file can't use Invoke-Case at all
        (see LAUNCH-3's standalone block in 50-window.ps1) and instead calls
-       New-NutshellTestEnv/Start-Nutshell itself. #>
+       New-NutshellTestEnv/Start-Nutshell itself. -ExtraProfiles is passed
+       straight through to New-NutshellTestEnv's own -ExtraProfiles (extra
+       saved profiles appended after the generated SSH one, e.g. a local
+       PowerShell profile to connect to by name) -- default @() leaves every
+       existing case's config byte-for-byte unaffected. #>
     param([string] $Name, [hashtable] $Settings, [scriptblock] $Body, [string] $CaseTier = "gate",
-          [string[]] $ExtraArgs = @(), [switch] $NoConfig)
+          [string[]] $ExtraArgs = @(), [switch] $NoConfig, [hashtable[]] $ExtraProfiles = @())
     if ($ActiveTiers -notcontains $CaseTier) { return }
     if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
     Write-Host ("[RUN ] " + $Name)
-    $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath -Settings $Settings -NoConfig:$NoConfig
+    $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath -Settings $Settings -NoConfig:$NoConfig -ExtraProfiles $ExtraProfiles
     $session = $null
     $ok = $false; $detail = ""
     try {

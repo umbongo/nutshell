@@ -347,6 +347,36 @@ const char *local_shell_kind_name(LocalShellKind kind)
     }
 }
 
+/* Case-insensitive ASCII equality of s[0..len) and the whole of lit. */
+static int base_eq_ci(const char *s, size_t len, const char *lit)
+{
+    size_t i = 0;
+    for (; i < len && lit[i] != '\0'; i++) {
+        int a = (unsigned char)s[i];
+        int b = (unsigned char)lit[i];
+        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+        if (a != b) return 0;
+    }
+    return i == len && lit[i] == '\0';
+}
+
+const char *local_shell_spec_name(const LocalShellSpec *spec)
+{
+    if (!spec) return NULL;
+    if (spec->kind == SHELL_CUSTOM) {
+        /* Base name of the executable: after the last '\' or '/'. */
+        const char *base = spec->exe;
+        for (const char *c = spec->exe; *c; c++)
+            if (*c == '\\' || *c == '/') base = c + 1;
+        size_t len = strlen(base);
+        if (len > 4 && base_eq_ci(base + len - 4, 4, ".exe")) len -= 4;
+        if (base_eq_ci(base, len, "powershell") || base_eq_ci(base, len, "pwsh"))
+            return "PowerShell";
+    }
+    return local_shell_kind_name(spec->kind);
+}
+
 int local_shell_kind_is_posix(LocalShellKind kind)
 {
     switch (kind) {
