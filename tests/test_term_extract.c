@@ -73,6 +73,34 @@ int test_extract_utf8_codepoint(void) {
     TEST_END();
 }
 
+/* Hardening: a cell holding a raw control byte must extract as a space,
+ * never the control byte itself -- term_extract_visible() feeds the AI
+ * context, so a stray control character here would reach the model raw. */
+int test_extract_control_cell_becomes_space(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 100);
+    term_process(t, "A\x7F" "B", 3);   /* DEL lands in the middle cell */
+    char buf[1024];
+    size_t n = term_extract_visible(t, buf, sizeof(buf));
+    ASSERT_EQ((int)n, 3);
+    ASSERT_STR_EQ(buf, "A B");
+    term_free(t);
+    TEST_END();
+}
+
+/* Same, for a C1 control reached via its UTF-8 encoding. */
+int test_extract_c1_control_becomes_space(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 100);
+    term_process(t, "A\xC2\x80" "B", 4);   /* U+0080 lands in the middle cell */
+    char buf[1024];
+    size_t n = term_extract_visible(t, buf, sizeof(buf));
+    ASSERT_EQ((int)n, 3);
+    ASSERT_STR_EQ(buf, "A B");
+    term_free(t);
+    TEST_END();
+}
+
 int test_extract_buf_too_small(void) {
     TEST_BEGIN();
     Terminal *t = term_init(5, 10, 100);

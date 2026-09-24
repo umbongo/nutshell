@@ -1,5 +1,6 @@
 #include "paste_dlg.h"
 #include "paste_preview.h"
+#include "paste_filter.h"
 #include "dpi_util.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +28,9 @@ static const char *PASTE_CLASS = "Nutshell_PastePreview";
 typedef struct {
     int       result;       /* 1 = confirmed, 0 = cancelled */
     char     *edit_text;    /* CRLF-joined text for the EDIT control */
-    char      summary[256];
+    char      summary[256]; /* summary line, plus a "\r\nN control character(s)..."
+                             * warning line when summary_lines == 2 */
+    int       summary_lines;
     COLORREF  fg;
     COLORREF  bg;
     HBRUSH    hBgBrush;
@@ -113,7 +116,7 @@ static void layout_controls(PasteDlgData *d, int cw, int ch)
     int btn_w = ns_scale(BTN_W_BASE, dpi);
     int btn_h = ns_scale(BTN_H_BASE, dpi);
     int btn_gap = ns_scale(BTN_GAP_BASE, dpi);
-    int summ_h = ns_scale(SUMMARY_H_BASE, dpi);
+    int summ_h = ns_scale(SUMMARY_H_BASE, dpi) * (d->summary_lines > 1 ? 2 : 1);
     int footer_h = margin + btn_h + margin;
     int sb_w = ns_scale(CSB_WIDTH, dpi);
 
@@ -177,7 +180,7 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
         int btn_w = ns_scale(BTN_W_BASE, nd->dpi);
         int btn_h = ns_scale(BTN_H_BASE, nd->dpi);
         int btn_gap = ns_scale(BTN_GAP_BASE, nd->dpi);
-        int summ_h = ns_scale(SUMMARY_H_BASE, nd->dpi);
+        int summ_h = ns_scale(SUMMARY_H_BASE, nd->dpi) * (nd->summary_lines > 1 ? 2 : 1);
         int footer_h = margin + btn_h + margin;
         int sb_w = ns_scale(CSB_WIDTH, nd->dpi);
 
@@ -371,10 +374,21 @@ int paste_preview_show(HWND parent, const char *raw_text,
 {
     if (!raw_text) return 0;
 
-    /* Format lines */
+    /* Build a display copy with every control character paste_filter_controls()
+     * would strip (ESC, other C0 controls, DEL, C1 controls) replaced by a
+     * visible "control picture" glyph -- the EDIT control must never see
+     * the raw bytes themselves (some, like BEL or a bare CR/backspace-ish
+     * control, would visibly misbehave in a plain EDIT), and the user
+     * should be able to see exactly what a hostile paste contained. */
+    size_t removed = 0;
+    char *vis = paste_visualize_controls(raw_text, strlen(raw_text), &removed);
+    if (!vis) return 0;
+
+    /* Format lines from the visualized text -- TAB/LF/CR are unchanged by
+     * paste_visualize_controls(), so line boundaries match the raw text. */
     int line_count = 0;
-    char **lines = paste_format_lines(raw_text, &line_count);
-    if (!lines) return 0;
+    char **lines = paste_format_lines(vis, &line_count);
+    if (!lines) { free(vis); return 0; }
 
     /* Prepare dialog data */
     PasteDlgData d;
@@ -392,11 +406,25 @@ int paste_preview_show(HWND parent, const char *raw_text,
     d.fg = hex_to_cr(fg_hex, RGB_FROM_THEME(d.theme->terminal_fg));
     d.bg = hex_to_cr(bg_hex, RGB_FROM_THEME(d.theme->terminal_bg));
 
-    paste_build_summary(line_count, strlen(raw_text),
-                        d.summary, sizeof(d.summary));
+    {
+        char summary_line[256];
+        paste_build_summary(line_count, strlen(raw_text),
+                            summary_line, sizeof(summary_line));
+        if (removed > 0) {
+            char warn[128];
+            paste_build_warning(removed, warn, sizeof(warn));
+            (void)snprintf(d.summary, sizeof(d.summary), "%s\r\n%s",
+                          summary_line, warn);
+            d.summary_lines = 2;
+        } else {
+            (void)snprintf(d.summary, sizeof(d.summary), "%s", summary_line);
+            d.summary_lines = 1;
+        }
+    }
 
     d.edit_text = build_edit_text(lines, line_count);
     paste_line_free(lines, line_count);
+    free(vis);
 
     if (!d.edit_text) return 0;
 

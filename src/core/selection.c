@@ -62,19 +62,20 @@ size_t selection_extract_text(const Selection *sel, const Terminal *term,
         int col_start = (row == r0) ? c0 : 0;
         int col_end   = (row == r1) ? c1 : (trow->len > 0 ? trow->len - 1 : 0);
 
-        /* Find last non-space cell in the selected range to trim trailing spaces */
+        /* Find last non-space cell in the selected range to trim trailing spaces.
+         * A cell holding a stray control codepoint counts as blank here too --
+         * cell_text_codepoint() is what actually gets emitted below. */
         int last_content = -1;
         for (int c = col_start; c <= col_end && c < trow->len; c++) {
-            uint32_t cp = trow->cells[c].codepoint;
-            if (cp != 0 && cp != ' ') last_content = c;
+            uint32_t cp = cell_text_codepoint(trow->cells[c].codepoint);
+            if (cp != ' ') last_content = c;
         }
 
         /* If the row has no content in the range, still add newline between rows */
         int effective_end = (last_content >= col_start) ? last_content : -1;
 
         for (int c = col_start; c <= effective_end && c < trow->len; c++) {
-            uint32_t cp = trow->cells[c].codepoint;
-            if (cp == 0) cp = ' ';
+            uint32_t cp = cell_text_codepoint(trow->cells[c].codepoint);
             char u8[4];
             int n = utf8_encode(cp, u8);
             if (pos + (size_t)n >= buf_size) goto done;

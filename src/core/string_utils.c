@@ -126,6 +126,17 @@ int utf8_encode(uint32_t cp, char *buf)
     return 0;
 }
 
+/* ---- Cell-text hardening ------------------------------------------------ */
+
+uint32_t cell_text_codepoint(uint32_t cp)
+{
+    if (cp == 0u) return (uint32_t)' ';
+    if (cp <= 0x1Fu) return (uint32_t)' ';                    /* C0 */
+    if (cp == 0x7Fu) return (uint32_t)' ';                    /* DEL */
+    if (cp >= 0x80u && cp <= 0x9Fu) return (uint32_t)' ';     /* C1 */
+    return cp;
+}
+
 /* ---- ANSI escape sequence stripper ------------------------------------- */
 
 typedef enum {

@@ -67,6 +67,11 @@ int test_str_append_fmt_does_not_fit_leaves_buf_intact(void);
 int test_str_append_fmt_does_not_fit_partial_overflow(void);
 int test_str_append_fmt_repeated_stops_cleanly_at_capacity(void);
 int test_str_append_fmt_null_args_safe(void);
+int test_cell_text_codepoint_empty_cell_is_space(void);
+int test_cell_text_codepoint_c0_becomes_space(void);
+int test_cell_text_codepoint_del_becomes_space(void);
+int test_cell_text_codepoint_c1_becomes_space(void);
+int test_cell_text_codepoint_passthrough(void);
 
 /* test_logger.c */
 int test_logger_init_stderr_only(void);
@@ -550,6 +555,31 @@ int test_paste_clamp_both(void);
 int test_paste_clamp_exact_boundary(void);
 int test_paste_clamp_small_screen(void);
 int test_paste_clamp_small_screen_overflow(void);
+int test_paste_build_warning_none(void);
+int test_paste_build_warning_singular(void);
+int test_paste_build_warning_plural(void);
+int test_paste_build_warning_null_buf(void);
+
+/* test_paste_filter.c */
+int test_paste_filter_no_controls_unchanged(void);
+int test_paste_filter_removes_esc(void);
+int test_paste_filter_keeps_tab_lf_cr(void);
+int test_paste_filter_removes_other_c0(void);
+int test_paste_filter_removes_del(void);
+int test_paste_filter_removes_c1_control(void);
+int test_paste_filter_keeps_c2_a0_and_above(void);
+int test_paste_filter_in_place_aliasing(void);
+int test_paste_filter_all_stripped_gives_empty(void);
+int test_paste_filter_empty_input(void);
+int test_paste_filter_null_input_safe(void);
+int test_paste_filter_null_removed_out_safe(void);
+int test_paste_filter_trailing_lone_c2_passthrough(void);
+int test_paste_visualize_no_controls_unchanged(void);
+int test_paste_visualize_esc_becomes_symbol(void);
+int test_paste_visualize_keeps_tab_lf_cr(void);
+int test_paste_visualize_matches_filter_count(void);
+int test_paste_visualize_null_input_safe(void);
+int test_paste_visualize_long_run_grows_buffer(void);
 
 /* test_settings.c */
 int test_settings_validate_defaults(void);
@@ -686,6 +716,15 @@ int test_term_resize_reflow(void);
 int test_term_resize_cursor_edge(void);
 int test_term_resize_degenerate_round_trip_keeps_scroll_anchor(void);
 int test_term_utf8(void);
+int test_term_utf8_reject_overlong_2byte(void);
+int test_term_utf8_reject_overlong_3byte(void);
+int test_term_utf8_reject_surrogate(void);
+int test_term_utf8_surrogate_boundary_valid(void);
+int test_term_utf8_max_codepoint_valid(void);
+int test_term_utf8_reject_above_max_codepoint(void);
+int test_term_utf8_truncated_by_ascii(void);
+int test_term_utf8_lone_continuation_byte(void);
+int test_term_utf8_incomplete_stays_pending(void);
 int test_term_sgr_bold_off(void);
 int test_term_sgr_underline_off(void);
 int test_term_sgr_blink_off(void);
@@ -1199,6 +1238,8 @@ int test_extract_single_line(void);
 int test_extract_multi_line(void);
 int test_extract_trims_trailing_spaces(void);
 int test_extract_utf8_codepoint(void);
+int test_extract_control_cell_becomes_space(void);
+int test_extract_c1_control_becomes_space(void);
 int test_extract_buf_too_small(void);
 int test_extract_null_safety(void);
 int test_extract_last_n_basic(void);
@@ -1391,6 +1432,8 @@ int test_sel_extract_trims_trailing_spaces(void);
 int test_sel_extract_backward_selection(void);
 int test_sel_extract_single_char(void);
 int test_sel_extract_includes_last_char(void);
+int test_sel_extract_del_becomes_space(void);
+int test_sel_extract_c1_control_becomes_space(void);
 
 /* test_ui_theme.c */
 int test_ui_theme_count(void);
@@ -2512,6 +2555,11 @@ int main(void) {
     failed += test_str_append_fmt_does_not_fit_partial_overflow();
     failed += test_str_append_fmt_repeated_stops_cleanly_at_capacity();
     failed += test_str_append_fmt_null_args_safe();
+    failed += test_cell_text_codepoint_empty_cell_is_space();
+    failed += test_cell_text_codepoint_c0_becomes_space();
+    failed += test_cell_text_codepoint_del_becomes_space();
+    failed += test_cell_text_codepoint_c1_becomes_space();
+    failed += test_cell_text_codepoint_passthrough();
     failed += test_logger_init_stderr_only();
     failed += test_logger_creates_file();
     failed += test_logger_file_contains_message();
@@ -2963,6 +3011,29 @@ int main(void) {
     failed += test_paste_clamp_exact_boundary();
     failed += test_paste_clamp_small_screen();
     failed += test_paste_clamp_small_screen_overflow();
+    failed += test_paste_build_warning_none();
+    failed += test_paste_build_warning_singular();
+    failed += test_paste_build_warning_plural();
+    failed += test_paste_build_warning_null_buf();
+    failed += test_paste_filter_no_controls_unchanged();
+    failed += test_paste_filter_removes_esc();
+    failed += test_paste_filter_keeps_tab_lf_cr();
+    failed += test_paste_filter_removes_other_c0();
+    failed += test_paste_filter_removes_del();
+    failed += test_paste_filter_removes_c1_control();
+    failed += test_paste_filter_keeps_c2_a0_and_above();
+    failed += test_paste_filter_in_place_aliasing();
+    failed += test_paste_filter_all_stripped_gives_empty();
+    failed += test_paste_filter_empty_input();
+    failed += test_paste_filter_null_input_safe();
+    failed += test_paste_filter_null_removed_out_safe();
+    failed += test_paste_filter_trailing_lone_c2_passthrough();
+    failed += test_paste_visualize_no_controls_unchanged();
+    failed += test_paste_visualize_esc_becomes_symbol();
+    failed += test_paste_visualize_keeps_tab_lf_cr();
+    failed += test_paste_visualize_matches_filter_count();
+    failed += test_paste_visualize_null_input_safe();
+    failed += test_paste_visualize_long_run_grows_buffer();
 
     /* Settings Validation */
     failed += test_settings_validate_defaults();
@@ -3099,6 +3170,15 @@ int main(void) {
     failed += test_term_resize_cursor_edge();
     failed += test_term_resize_degenerate_round_trip_keeps_scroll_anchor();
     failed += test_term_utf8();
+    failed += test_term_utf8_reject_overlong_2byte();
+    failed += test_term_utf8_reject_overlong_3byte();
+    failed += test_term_utf8_reject_surrogate();
+    failed += test_term_utf8_surrogate_boundary_valid();
+    failed += test_term_utf8_max_codepoint_valid();
+    failed += test_term_utf8_reject_above_max_codepoint();
+    failed += test_term_utf8_truncated_by_ascii();
+    failed += test_term_utf8_lone_continuation_byte();
+    failed += test_term_utf8_incomplete_stays_pending();
     failed += test_term_sgr_bold_off();
     failed += test_term_sgr_underline_off();
     failed += test_term_sgr_blink_off();
@@ -3566,6 +3646,8 @@ int main(void) {
     failed += test_extract_multi_line();
     failed += test_extract_trims_trailing_spaces();
     failed += test_extract_utf8_codepoint();
+    failed += test_extract_control_cell_becomes_space();
+    failed += test_extract_c1_control_becomes_space();
     failed += test_extract_buf_too_small();
     failed += test_extract_null_safety();
     failed += test_extract_last_n_basic();
@@ -3882,6 +3964,8 @@ int main(void) {
     failed += test_sel_extract_backward_selection();
     failed += test_sel_extract_single_char();
     failed += test_sel_extract_includes_last_char();
+    failed += test_sel_extract_del_becomes_space();
+    failed += test_sel_extract_c1_control_becomes_space();
 
     /* test_cursor_scroll.c */
     failed += test_cursor_visible_at_bottom();

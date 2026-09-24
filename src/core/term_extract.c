@@ -14,15 +14,14 @@ static size_t row_byte_len(const Terminal *term, int logical)
 
     int last = -1;
     for (int c = 0; c < row->len; c++) {
-        uint32_t cp = row->cells[c].codepoint;
-        if (cp != 0 && cp != ' ') last = c;
+        uint32_t cp = cell_text_codepoint(row->cells[c].codepoint);
+        if (cp != ' ') last = c;
     }
 
     size_t len = 0;
     char u8[4];
     for (int c = 0; c <= last; c++) {
-        uint32_t cp = row->cells[c].codepoint;
-        if (cp == 0) cp = ' ';
+        uint32_t cp = cell_text_codepoint(row->cells[c].codepoint);
         len += (size_t)utf8_encode(cp, u8);
     }
     return len;
@@ -77,17 +76,17 @@ static size_t extract_rows(const Terminal *term, int start_logical, int count,
         TermRow *row = term->lines[physical];
         if (!row) continue;
 
-        /* Find last non-space, non-NUL cell to trim trailing whitespace */
+        /* Find last non-space, non-NUL cell to trim trailing whitespace.
+         * A cell holding a stray control codepoint is blank here too. */
         int last = -1;
         for (int c = 0; c < row->len; c++) {
-            uint32_t cp = row->cells[c].codepoint;
-            if (cp != 0 && cp != ' ') last = c;
+            uint32_t cp = cell_text_codepoint(row->cells[c].codepoint);
+            if (cp != ' ') last = c;
         }
 
         /* Write cells [0..last] */
         for (int c = 0; c <= last; c++) {
-            uint32_t cp = row->cells[c].codepoint;
-            if (cp == 0) cp = ' '; /* empty cell → space */
+            uint32_t cp = cell_text_codepoint(row->cells[c].codepoint);
 
             char u8[4];
             int n = utf8_encode(cp, u8);

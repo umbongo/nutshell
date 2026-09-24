@@ -86,30 +86,72 @@ static void term_put_char(Terminal *term, uint32_t c) {
     term->cursor.col++;
 }
 
+/* Hardening: decode UTF-8 one byte at a time, rejecting overlong encodings,
+ * UTF-16 surrogates (U+D800-U+DFFF), codepoints past U+10FFFF, unexpected
+ * continuation bytes and truncated sequences. Follows the Unicode standard's
+ * recommended "maximal subpart" substitution: a malformed sequence emits
+ * exactly one U+FFFD for the longest valid prefix it had, and the byte that
+ * broke it is re-examined as a fresh character rather than swallowed --
+ * that byte was never actually part of the bad sequence. See term.h's
+ * utf8_lo/utf8_hi doc comment for how the per-lead-byte bounds work. */
 static void term_put_char_utf8(Terminal *term, unsigned char c) {
     if (term->utf8_remaining > 0) {
-        if ((c & 0xC0) == 0x80) {
-            term->utf8_codepoint = (term->utf8_codepoint << 6) | (c & 0x3F);
+        if (c >= term->utf8_lo && c <= term->utf8_hi) {
+            term->utf8_codepoint = (term->utf8_codepoint << 6) | (uint32_t)(c & 0x3F);
             term->utf8_remaining--;
+            /* Only the first continuation byte after the lead byte is
+             * range-restricted; every one after that is generic. */
+            term->utf8_lo = 0x80;
+            term->utf8_hi = 0xBF;
             if (term->utf8_remaining == 0) {
                 term_put_char(term, term->utf8_codepoint);
             }
-        } else {
-            term->utf8_remaining = 0;
+            return;
         }
+        /* Sequence broke before completing: emit one replacement character
+         * for the maximal subpart and reprocess this byte fresh -- it is
+         * either plain ASCII, a new lead byte, or itself invalid. */
+        term->utf8_remaining = 0;
+        term_put_char(term, 0xFFFDu);
+        term_put_char_utf8(term, c);
+        return;
+    }
+
+    if (c < 0x80) {
+        term_put_char(term, (uint32_t)c);
+    } else if (c >= 0xC2 && c <= 0xDF) {           /* 2-byte lead */
+        term->utf8_codepoint = (uint32_t)(c & 0x1F);
+        term->utf8_remaining = 1;
+        term->utf8_lo = 0x80; term->utf8_hi = 0xBF;
+    } else if (c == 0xE0) {                        /* 3-byte, excl. overlong */
+        term->utf8_codepoint = (uint32_t)(c & 0x0F);
+        term->utf8_remaining = 2;
+        term->utf8_lo = 0xA0; term->utf8_hi = 0xBF;
+    } else if (c == 0xED) {                        /* 3-byte, excl. surrogates */
+        term->utf8_codepoint = (uint32_t)(c & 0x0F);
+        term->utf8_remaining = 2;
+        term->utf8_lo = 0x80; term->utf8_hi = 0x9F;
+    } else if ((c >= 0xE1 && c <= 0xEC) || c == 0xEE || c == 0xEF) {
+        term->utf8_codepoint = (uint32_t)(c & 0x0F);
+        term->utf8_remaining = 2;
+        term->utf8_lo = 0x80; term->utf8_hi = 0xBF;
+    } else if (c == 0xF0) {                        /* 4-byte, excl. overlong */
+        term->utf8_codepoint = (uint32_t)(c & 0x07);
+        term->utf8_remaining = 3;
+        term->utf8_lo = 0x90; term->utf8_hi = 0xBF;
+    } else if (c >= 0xF1 && c <= 0xF3) {
+        term->utf8_codepoint = (uint32_t)(c & 0x07);
+        term->utf8_remaining = 3;
+        term->utf8_lo = 0x80; term->utf8_hi = 0xBF;
+    } else if (c == 0xF4) {                        /* 4-byte, excl. > U+10FFFF */
+        term->utf8_codepoint = (uint32_t)(c & 0x07);
+        term->utf8_remaining = 3;
+        term->utf8_lo = 0x80; term->utf8_hi = 0x8F;
     } else {
-        if (c < 0x80) {
-            term_put_char(term, (uint32_t)c);
-        } else if ((c & 0xE0) == 0xC0) {
-            term->utf8_codepoint = c & 0x1F;
-            term->utf8_remaining = 1;
-        } else if ((c & 0xF0) == 0xE0) {
-            term->utf8_codepoint = c & 0x0F;
-            term->utf8_remaining = 2;
-        } else if ((c & 0xF8) == 0xF0) {
-            term->utf8_codepoint = c & 0x07;
-            term->utf8_remaining = 3;
-        }
+        /* 0x80-0xC1: stray continuation byte or overlong 2-byte lead.
+         * 0xF5-0xFF: would only ever encode past U+10FFFF. Either way,
+         * one invalid byte, one replacement character. */
+        term_put_char(term, 0xFFFDu);
     }
 }
 
