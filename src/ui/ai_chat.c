@@ -3776,8 +3776,9 @@ next_coalesce:;
                             /* -1 means the queue refused it (full, blank,
                              * control characters, or too long) -- not
                              * added, and no card is ever built for it. */
-                            (void)chat_approval_add(&batch->q, cmds[ci],
-                                                    (CmdPlatform)src->platform);
+                            (void)chat_approval_add_session(&batch->q, cmds[ci],
+                                (CmdPlatform)src->platform,
+                                src->platform_contradicted);
                         }
                     }
                 }
@@ -3969,8 +3970,9 @@ next_coalesce:;
                      * user can run after raising the ceiling (see
                      * chat_approval_needs_user below). */
                     for (int ci = 0; ci < ncmds; ci++) {
-                        int idx = chat_approval_add(&batch->q, cmds[ci],
-                                                    (CmdPlatform)d->active_state->platform);
+                        int idx = chat_approval_add_session(&batch->q, cmds[ci],
+                            (CmdPlatform)d->active_state->platform,
+                            d->active_state->platform_contradicted);
                         if (idx < 0) continue;  /* queue full or blank -- drop it */
 
                         ChatMsgItem *cmd_item = chat_msg_append(

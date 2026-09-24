@@ -57,6 +57,15 @@ void chat_approval_init(ApprovalQueue *q);
 int chat_approval_add(ApprovalQueue *q, const char *command,
                       CmdPlatform platform);
 
+/* chat_approval_add() for a live AI session: classifies with
+ * cmd_classify_session(), so a session whose platform host output has
+ * contradicted (cmd_detect.h) is judged under the worse of its platform's
+ * ruleset and CMD_PLATFORM_UNKNOWN's. Every caller queueing an AI session's
+ * commands passes the session's platform AND its contradicted flag through
+ * this; chat_approval_add() is this with contradicted = 0. */
+int chat_approval_add_session(ApprovalQueue *q, const char *command,
+                              CmdPlatform platform, int contradicted);
+
 /* Approve a specific command by index. Returns 0 on success. */
 int chat_approval_approve(ApprovalQueue *q, int index);
 

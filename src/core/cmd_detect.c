@@ -263,23 +263,28 @@ CmdPlatform cmd_detect_platform(const char *text, size_t len,
     if (!text || len == 0)
         return CMD_PLATFORM_UNKNOWN;
 
-    /* An anchored banner decides outright once found -- it does not matter
-     * what the capture's last line says, even if it unambiguously names a
-     * different platform (e.g. the session hopped to another device and
-     * back within the same scan window). Reconciling that kind of drift is
-     * cmd_detect_last_line_contradicts()'s job, run tick by tick by the
-     * caller only *after* a platform has already resolved -- not this
-     * function's, which only ever resolves once, from a clean read of
-     * whatever it is given. */
+    size_t line_len;
+    const char *line = find_last_nonempty_line(text, len, &line_len);
+
+    /* An anchored banner decides -- unless the capture's last line is an
+     * unambiguous prompt shape naming a different platform. Then the two
+     * disagree (a cat'ed file line that looks like a banner under a Linux
+     * prompt, or a hop to another device and back), and neither is trusted:
+     * the result is unresolved, flagged CMD_DETECT_CONFLICT so the caller
+     * can mark the session contradicted (cmd_detect_scan_step()). */
     for (size_t i = 0; i < banner_signal_count; i++) {
         if (banner_anchor_match(text, len, banner_signals[i].needle)) {
+            CmdPlatform banner_platform = banner_signals[i].platform;
+            if (line && cmd_detect_last_line_contradicts(line, line_len,
+                                                         banner_platform)) {
+                if (confidence_out) *confidence_out = CMD_DETECT_CONFLICT;
+                return CMD_PLATFORM_UNKNOWN;
+            }
             if (confidence_out) *confidence_out = CMD_DETECT_BANNER;
-            return banner_signals[i].platform;
+            return banner_platform;
         }
     }
 
-    size_t line_len;
-    const char *line = find_last_nonempty_line(text, len, &line_len);
     if (!line)
         return CMD_PLATFORM_UNKNOWN;
 
@@ -314,10 +319,47 @@ int cmd_detect_last_line_contradicts(const char *text, size_t len,
     return 1;
 }
 
-int cmd_detect_transition_allowed(CmdPlatform from, CmdPlatform to)
+/* Does a detection result `detected` agree with a session already on
+ * `platform`? Same platform, or VyOS's Linux-shaped prompt read as Linux. */
+static int detection_agrees(CmdPlatform platform, CmdPlatform detected)
 {
-    /* A no-op is always fine; otherwise the only place a resolved session
-     * may move to, ever, is CMD_PLATFORM_UNKNOWN -- see this function's
-     * header comment for why that is always at least as strict. */
-    return to == from || to == CMD_PLATFORM_UNKNOWN;
+    if (detected == platform) return 1;
+    return detected == CMD_PLATFORM_LINUX &&
+           platform_shares_linux_prompt_shape(platform);
+}
+
+CmdDetectConfidence cmd_detect_scan_step(const char *text, size_t len,
+                                         CmdPlatform *platform,
+                                         int *contradicted)
+{
+    if (!platform || !contradicted)
+        return CMD_DETECT_NONE;
+
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform detected = cmd_detect_platform(text, len, &conf);
+
+    switch (conf) {
+    case CMD_DETECT_NONE:
+        break;
+    case CMD_DETECT_CONFLICT:
+        *contradicted = 1;
+        break;
+    case CMD_DETECT_PROMPT:
+    case CMD_DETECT_BANNER:
+        if (*platform == CMD_PLATFORM_UNKNOWN)
+            *platform = detected;          /* unresolved -> resolved */
+        else if (!detection_agrees(*platform, detected))
+            *contradicted = 1;             /* never sideways */
+        break;
+    }
+    return conf;
+}
+
+void cmd_detect_watch_step(const char *text, size_t len,
+                           CmdPlatform platform, int *contradicted)
+{
+    if (!contradicted || platform == CMD_PLATFORM_UNKNOWN)
+        return;
+    if (cmd_detect_last_line_contradicts(text, len, platform))
+        *contradicted = 1;
 }

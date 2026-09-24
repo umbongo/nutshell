@@ -3521,14 +3521,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                              * what lets a banner split across multiple reads
                              * still be caught. */
                             if (!s->platform_locked && !s->platform_scanned) {
-                                char detect_buf[4096];
-                                size_t detect_len = term_extract_last_n(
-                                    s->term, 40, detect_buf, sizeof detect_buf);
-                                CmdDetectConfidence detect_conf = CMD_DETECT_NONE;
-                                CmdPlatform detected = cmd_detect_platform(
-                                    detect_buf, detect_len, &detect_conf);
-                                if (detect_conf != CMD_DETECT_NONE)
-                                    s->ai_state.platform = (int)detected;
+                                /* Sized to the rows' content, not a fixed
+                                 * buffer: a fixed one cut a wide last row
+                                 * short and lost the prompt at its end. The
+                                 * step only ever moves an unresolved session
+                                 * to a platform; a resolved one that reads
+                                 * differently is marked contradicted instead
+                                 * of moved (cmd_detect.h). */
+                                size_t detect_len = 0;
+                                char *detect_buf = term_extract_last_n_dup(
+                                    s->term, 40, &detect_len);
+                                CmdPlatform plat = (CmdPlatform)s->ai_state.platform;
+                                CmdDetectConfidence detect_conf = cmd_detect_scan_step(
+                                    detect_buf, detect_len, &plat,
+                                    &s->ai_state.platform_contradicted);
+                                s->ai_state.platform = (int)plat;
+                                free(detect_buf);
 
                                 s->platform_scan_ticks++;
                                 if (detect_conf == CMD_DETECT_BANNER ||
@@ -3537,26 +3545,27 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             } else if (!s->platform_locked) {
                                 /* Resolved (or gave up) once already. The
                                  * invariant from here on (CLAUDE.md): host
-                                 * output may only make the session's ruleset
-                                 * STRICTER, never looser -- so continued
-                                 * checking may move it to CMD_PLATFORM_UNKNOWN
-                                 * (always at least as strict, see
-                                 * cmd_detect_transition_allowed()'s doc
-                                 * comment) and nowhere else. It never guesses
-                                 * a *different* specific platform from here,
-                                 * and once at CMD_PLATFORM_UNKNOWN it never
-                                 * leaves. Cheap on purpose: only the last
-                                 * line's prompt shape is checked, no banner
-                                 * scan, so this is safe to run every tick. */
-                                char last_line_buf[256];
-                                size_t last_line_len = term_extract_last_n(
-                                    s->term, 4, last_line_buf, sizeof last_line_buf);
-                                CmdPlatform resolved = (CmdPlatform)s->ai_state.platform;
-                                if (cmd_detect_last_line_contradicts(
-                                        last_line_buf, last_line_len, resolved) &&
-                                    cmd_detect_transition_allowed(
-                                        resolved, CMD_PLATFORM_UNKNOWN))
-                                    s->ai_state.platform = (int)CMD_PLATFORM_UNKNOWN;
+                                 * output may only make the session's
+                                 * classification STRICTER, never looser. The
+                                 * platform never changes again: a last row
+                                 * that contradicts it sets the sticky
+                                 * contradicted flag, and from then on the
+                                 * session's commands are judged under the
+                                 * worse of its platform's ruleset and
+                                 * UNKNOWN's (cmd_classify_session()) --
+                                 * UNKNOWN alone is looser than every device
+                                 * ruleset somewhere. Cheap on purpose: only
+                                 * the last non-empty row, no banner scan,
+                                 * sized to its content so a wide row keeps
+                                 * its prompt. */
+                                size_t last_len = 0;
+                                char *last_row = term_extract_last_n_dup(
+                                    s->term, 1, &last_len);
+                                cmd_detect_watch_step(
+                                    last_row, last_len,
+                                    (CmdPlatform)s->ai_state.platform,
+                                    &s->ai_state.platform_contradicted);
+                                free(last_row);
                             }
                         }
 

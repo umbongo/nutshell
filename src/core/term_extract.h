@@ -24,4 +24,16 @@ size_t term_extract_visible(const Terminal *term, char *buf, size_t buf_size);
  */
 size_t term_extract_last_n(const Terminal *term, int n, char *buf, size_t buf_size);
 
+/*
+ * term_extract_last_n() into a heap buffer sized exactly for the content, so
+ * nothing is ever truncated however wide the rows are -- what a detector
+ * that judges a prompt by its first and last characters needs (a fixed
+ * buffer keeps the newest rows, but cuts a single row wider than itself,
+ * and on wide output a prompt row can be). Returns the NUL-terminated text
+ * (caller frees) with its length in *len_out, or NULL with *len_out = 0 when
+ * term is NULL, n <= 0, every row is blank, or allocation fails. len_out may
+ * be NULL.
+ */
+char *term_extract_last_n_dup(const Terminal *term, int n, size_t *len_out);
+
 #endif /* NUTSHELL_TERM_EXTRACT_H */

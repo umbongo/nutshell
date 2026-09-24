@@ -7171,3 +7171,36 @@ unsigned cmd_classify_mask(const char *command, CmdPlatform platform)
     classify_core(command, platform, NULL, 0, &mask);
     return mask;
 }
+
+/* ----- A session whose resolved platform host output has contradicted -----
+ * CMD_PLATFORM_UNKNOWN is not a strictest ruleset: it is never looser than
+ * Linux, but it is looser than every device ruleset somewhere (IOS's "copy
+ * running-config startup-config" is CRITICAL under IOS and only UNKNOWN
+ * under UNKNOWN; Junos's "file delete" CRITICAL against READ). So a
+ * contradicted session keeps its resolved platform and is judged under BOTH
+ * rulesets, taking the worse of the two -- never looser than either. */
+
+static int session_needs_second_ruleset(CmdPlatform platform, int contradicted)
+{
+    return contradicted && platform != CMD_PLATFORM_UNKNOWN;
+}
+
+CmdSafetyLevel cmd_classify_session(const char *command, CmdPlatform platform,
+                                    int contradicted)
+{
+    CmdSafetyLevel level = cmd_classify(command, platform);
+    if (session_needs_second_ruleset(platform, contradicted)) {
+        CmdSafetyLevel other = cmd_classify(command, CMD_PLATFORM_UNKNOWN);
+        if (other > level) level = other;
+    }
+    return level;
+}
+
+unsigned cmd_classify_mask_session(const char *command, CmdPlatform platform,
+                                   int contradicted)
+{
+    unsigned mask = cmd_classify_mask(command, platform);
+    if (session_needs_second_ruleset(platform, contradicted))
+        mask |= cmd_classify_mask(command, CMD_PLATFORM_UNKNOWN);
+    return mask;
+}

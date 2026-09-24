@@ -706,3 +706,37 @@ int test_approval_unknown_unblocks_and_reblocks_with_the_ceiling(void) {
  * reachable old mode's mask equals the mask of the unattended stop it maps
  * to. AUTO_APPROVE_SAFE_WRITE has no equivalent (the documented loss) and
  * is not exercised here -- see the mixed-pipeline test above. */
+
+/* A contradicted session's commands are judged under the worse of its
+ * platform's ruleset and UNKNOWN's (H1, 2026-09-24). Junos's "file delete"
+ * is READ under UNKNOWN alone -- a demoted session would have run it
+ * unattended under a Read marker; it must stay CRITICAL and be held. */
+int test_approval_add_session_contradicted_takes_worse(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    cmd_policy_set_allowed(&q.policy, CMD_WRITE);
+    cmd_policy_set_unattended(&q.policy, CMD_READ);
+
+    int a = chat_approval_add_session(&q, "file delete /var/tmp/old.tgz",
+                                      CMD_PLATFORM_JUNOS, 1);
+    ASSERT_EQ(a, 0);
+    ASSERT_EQ((int)q.entries[a].safety, (int)CMD_CRITICAL);
+    ASSERT_EQ((int)q.entries[a].status, (int)APPROVE_BLOCKED);
+
+    /* "reload" is UNKNOWN under Linux, CRITICAL under UNKNOWN. */
+    int b = chat_approval_add_session(&q, "reload", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[b].safety, (int)CMD_CRITICAL);
+    ASSERT_EQ((int)q.entries[b].status, (int)APPROVE_BLOCKED);
+
+    /* A read under both still runs unattended. */
+    int c = chat_approval_add_session(&q, "ls -la", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[c].safety, (int)CMD_READ);
+    ASSERT_EQ((int)q.entries[c].status, (int)APPROVE_APPROVED);
+
+    /* Not contradicted: the platform's ruleset alone, as chat_approval_add(). */
+    int d = chat_approval_add_session(&q, "reload", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ((int)q.entries[d].safety,
+              (int)cmd_classify("reload", CMD_PLATFORM_LINUX));
+    TEST_END();
+}

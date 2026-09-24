@@ -23,6 +23,12 @@ static int is_whitespace_only(const char *s)
 int chat_approval_add(ApprovalQueue *q, const char *command,
                       CmdPlatform platform)
 {
+    return chat_approval_add_session(q, command, platform, 0);
+}
+
+int chat_approval_add_session(ApprovalQueue *q, const char *command,
+                              CmdPlatform platform, int contradicted)
+{
     if (!command || is_whitespace_only(command)) return -1;
     /* Defense in depth: a command containing a raw control byte, a
      * UTF-8-encoded C1 control, or a bidi override/isolate character is
@@ -44,8 +50,8 @@ int chat_approval_add(ApprovalQueue *q, const char *command,
     if (len >= sizeof(e->command)) return -1;
     memcpy(e->command, command, len);
     e->command[len] = '\0';
-    e->safety = cmd_classify(command, platform);
-    e->safety_mask = cmd_classify_mask(command, platform);
+    e->safety = cmd_classify_session(command, platform, contradicted);
+    e->safety_mask = cmd_classify_mask_session(command, platform, contradicted);
 
     if (cmd_policy_blocks(q->policy, e->safety)) {
         e->status = APPROVE_BLOCKED;
