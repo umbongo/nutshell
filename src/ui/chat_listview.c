@@ -3426,28 +3426,40 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                                           content_top, &tl, &full_h);
                     if (tdc) ReleaseDC(hwnd, tdc);
 
-                    int vis_h = tl.body.h;
-
-                    /* The inner box may take the wheel only while it is
-                     * fully inside the viewport. A box cut off at the
-                     * bottom (a streaming reply's Thinking block) used to
-                     * swallow every wheel-down, so the outer list could
-                     * never reach the bottom and re-engage stick-to-bottom;
-                     * a partly visible box scrolls the list instead. */
-                    int box_fully_visible = tl.body.y >= 0
-                        && tl.body.y + vis_h <= lv->viewport_height;
-
-                    /* Is cursor in the thinking body area and is there overflow? */
-                    if (box_fully_visible && full_h > vis_h
-                        && pt.x >= tl.body.x && pt.x < tl.body.x + tl.body.w
-                        && pt.y >= tl.body.y
-                        && pt.y < tl.body.y + vis_h) {
-                        int max_scroll = full_h - vis_h;
+                    /* thinking_wheel_over_box()/thinking_wheel_should_chain()
+                     * (src/core/ai_panel_layout.c) own the routing decision.
+                     * over_box only asks whether the cursor is on the box's
+                     * currently *visible* part -- the box is capped at
+                     * THINKING_MAX_LINES (50 lines, ~800-1000px) regardless
+                     * of viewport size, so on a typical ~700-800px thread it
+                     * routinely can't fit on screen at all; requiring the
+                     * *whole* box to be visible (the original rule) meant
+                     * it could never take the wheel past ~40 lines of
+                     * reasoning. should_chain then decides, per notch,
+                     * whether the box is already at the limit the wheel is
+                     * pushing toward (ordinary nested-scroll chaining) --
+                     * this is also what now covers the streaming case a
+                     * fully-visible box cut off at the bottom used to
+                     * guard: while auto-following, the box's scroll sits at
+                     * its own max almost continuously, so wheel-down chains
+                     * to the outer list immediately and it can still reach
+                     * bottom to re-engage its own stick-to-bottom. */
+                    if (thinking_wheel_over_box(tl.body, lv->viewport_height,
+                                                 full_h, pt.x, pt.y)) {
+                        int max_scroll = full_h - tl.body.h;
+                        if (max_scroll < 0) max_scroll = 0;
                         int old_sy = wi->u.ai.thinking_scroll_y;
-                        int new_sy = old_sy +
-                            (-delta * scroll_amount) / WHEEL_DELTA;
-                        if (new_sy < 0) new_sy = 0;
-                        if (new_sy > max_scroll) new_sy = max_scroll;
+
+                        if (thinking_wheel_should_chain(old_sy, max_scroll,
+                                                         delta)) {
+                            /* At its own top/bottom limit -- bubble to the
+                             * outer list scroll below. */
+                            break;
+                        }
+
+                        int new_sy = thinking_wheel_scroll(old_sy, delta,
+                                                            scroll_amount,
+                                                            max_scroll);
                         wi->u.ai.thinking_scroll_y = new_sy;
                         /* Same "stuck vs released" rule as the outer chat
                          * list's own stick-to-bottom (stick_scroll.c,
@@ -3456,12 +3468,14 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                          * scroll back to it. */
                         wi->u.ai.thinking_autoscroll =
                             stick_scroll_after_user(new_sy, max_scroll);
-                        if (new_sy != old_sy) {
+                        if (new_sy != old_sy)
                             InvalidateRect(hwnd, NULL, FALSE);
-                            return 0;  /* consumed by thinking scroll */
-                        }
-                        /* At boundary — bubble to parent list scroll */
-                        break;
+                        /* This notch belongs to the box even when it moved
+                         * nothing (e.g. a touchpad's sub-pixel delta) --
+                         * should_chain() already ruled out the boundary
+                         * case above, so consume it rather than leaking it
+                         * to the outer list. */
+                        return 0;
                     }
                     break;
                 }
@@ -3498,9 +3512,12 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                     if (cinfo.total_h > cinfo.visible_h) {
                         int max_cs = cinfo.total_h - cinfo.visible_h;
                         int old_cs = wi2->u.cmd.container_scroll;
-                        int new_cs = old_cs - (delta * scroll_amount) / WHEEL_DELTA;
-                        if (new_cs < 0) new_cs = 0;
-                        if (new_cs > max_cs) new_cs = max_cs;
+                        /* Same clamped-notch arithmetic as the Thinking
+                         * box's own scroll (ai_panel_layout.c) -- reused
+                         * rather than duplicated. */
+                        int new_cs = thinking_wheel_scroll(old_cs, delta,
+                                                            scroll_amount,
+                                                            max_cs);
                         wi2->u.cmd.container_scroll = new_cs;
                         if (new_cs != old_cs) {
                             InvalidateRect(hwnd, NULL, FALSE);

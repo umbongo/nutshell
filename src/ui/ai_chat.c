@@ -2126,6 +2126,38 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
             if (parent) SendMessage(parent, msg, wParam, lParam);
             return 0;
         }
+        /* Whether WM_MOUSEWHEEL targets the window under the cursor or the
+         * window with keyboard focus is a per-machine setting
+         * (HKCU\Control Panel\Desktop\MouseWheelRouting: 2 = under cursor,
+         * the Windows 10/11 default; 0/1 = focus window). On the
+         * maintainer's box it's 2, so this handler mostly only ever sees a
+         * wheel message when the cursor really is over the input -- this
+         * check is defence for the 0/1 case (and for any other host where
+         * it differs), not the fix for the reported bug (that turned out
+         * to be the box's own hit-test in ai_panel_layout.c -- see
+         * thinking_wheel_over_box()/thinking_wheel_should_chain()). Route
+         * an under-cursor wheel to whatever one of our own windows is
+         * actually under it (same pattern settings.c uses for its
+         * multiline notes field, generalised with WindowFromPoint instead
+         * of a single hard-coded control): if that's this input box,
+         * handle it below; if it's some other child of ours (typically
+         * the chat list), hand it there directly; if the mouse is over
+         * neither, hand off to the panel, whose own WM_MOUSEWHEEL default
+         * forwards to the chat list anyway. GetWindowThreadProcessId scopes
+         * this to our own thread's windows so a wheel over some unrelated
+         * window (routed here only under setting 0/1, where it follows
+         * focus regardless of the cursor) doesn't get redirected into it. */
+        POINT wpt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        HWND hit = WindowFromPoint(wpt);
+        if (hit && hit != hwnd &&
+            GetWindowThreadProcessId(hit, NULL) == GetCurrentThreadId()) {
+            return SendMessage(hit, msg, wParam, lParam);
+        }
+        if (!hit || hit != hwnd) {
+            HWND panel = GetParent(hwnd);
+            if (panel) return SendMessage(panel, msg, wParam, lParam);
+            return 0;
+        }
         int scroll = edit_scroll_wheel_delta(zdelta, WHEEL_DELTA, 3);
         SendMessage(hwnd, EM_LINESCROLL, 0, (LPARAM)scroll);
         /* Sync input scrollbar */

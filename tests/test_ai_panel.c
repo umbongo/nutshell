@@ -374,6 +374,250 @@ int test_ai_thinking_summary_truncates_safely(void)
     TEST_END();
 }
 
+/* ---- thinking_wheel_over_box -----------------------------------------------------
+ * Root-cause bug (maintainer report, 2026-09-25): "I can't stop or scroll
+ * the thinking window. Instead, I only control the AI assist panel." The
+ * first fix here (input-box wheel handler swallowing WM_MOUSEWHEEL) was
+ * real but not the actual cause on the maintainer's machine: its
+ * MouseWheelRouting is 2 (route to the window under the cursor, the
+ * Windows 10/11 default), so the wheel does reach the chat list. The
+ * actual bug was this hit-test's old "box must be fully visible" rule: the
+ * box is capped at THINKING_MAX_LINES (50 lines, ~800-1000px) regardless
+ * of viewport size, so on a typical ~700-800px thread viewport it
+ * routinely can't fit on screen at all once past ~40 lines of reasoning --
+ * meaning it could *never* take the wheel, exactly matching "I only
+ * control the AI assist panel". Renamed from thinking_wheel_hits_box to
+ * thinking_wheel_over_box: it now tests the box's visible (viewport-
+ * clipped) area rather than requiring the whole box on screen; see
+ * thinking_wheel_should_chain below for the boundary/streaming logic that
+ * rule used to (incorrectly) fold in here.
+ * ------------------------------------------------------------------------ */
+
+int test_thinking_wheel_over_box_cursor_inside_overflowing_box(void)
+{
+    TEST_BEGIN();
+    NsRect body = { 20, 40, 300, 200 };
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 100, 100), 1);
+    TEST_END();
+}
+
+int test_thinking_wheel_over_box_content_shorter_than_box_no_overflow(void)
+{
+    TEST_BEGIN();
+    /* Content fits entirely inside the box -- nothing to scroll, so the
+     * wheel must bubble to the outer list even with the cursor over it. */
+    NsRect body = { 20, 40, 300, 200 };
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 200, 100, 100), 0);
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 150, 100, 100), 0);
+    TEST_END();
+}
+
+int test_thinking_wheel_over_box_cursor_outside_body_rect(void)
+{
+    TEST_BEGIN();
+    NsRect body = { 20, 40, 300, 200 };
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 10, 100), 0);   /* left of box */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 400, 100), 0);  /* right of box */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 100, 10), 0);   /* above box */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 100, 300), 0);  /* below box */
+    TEST_END();
+}
+
+int test_thinking_wheel_over_box_cursor_at_edges_is_inclusive_low_exclusive_high(void)
+{
+    TEST_BEGIN();
+    NsRect body = { 20, 40, 300, 200 };
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 20, 40), 1);    /* top-left corner: in */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 319, 239), 1);  /* last in-bounds pixel */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 320, 100), 0);  /* one past right edge */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 100, 240), 0);  /* one past bottom edge */
+    TEST_END();
+}
+
+int test_thinking_wheel_over_box_partially_visible_at_bottom_still_hits_visible_part(void)
+{
+    TEST_BEGIN();
+    /* A box taller than the viewport, cut off at the bottom -- the
+     * fixed bug: this must still take the wheel over the part that IS on
+     * screen, or a reply past ~40 lines of reasoning could never be
+     * scrolled by wheel at all. */
+    NsRect body = { 20, 500, 300, 400 };  /* body.y + h = 900, viewport 600 */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 1000, 100, 550), 1);  /* inside visible slice */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 1000, 100, 650), 0);  /* below viewport entirely */
+    TEST_END();
+}
+
+int test_thinking_wheel_over_box_partially_visible_above_top_still_hits_visible_part(void)
+{
+    TEST_BEGIN();
+    NsRect body = { 20, -300, 300, 400 };  /* scrolled mostly above the viewport top */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 1000, 100, 50), 1);   /* inside visible slice */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 1000, 100, -50), 0);  /* above viewport entirely */
+    TEST_END();
+}
+
+int test_thinking_wheel_over_box_taller_than_viewport_50_lines(void)
+{
+    TEST_BEGIN();
+    /* The concrete scenario from the bug report: a 50-line box (~1000px
+     * at a 20px line height, capped and still overflowing -- reasoning
+     * longer than 50 lines) in a ~700px thread viewport. The box itself
+     * can never be fully on screen, but the middle of it is still visible
+     * and must take the wheel there. */
+    int line_h = 20;
+    int max_h = ai_thinking_max_body_h(line_h);  /* 1000, the box's own cap */
+    int full_content_h = max_h + 500;            /* reasoning overflows even the cap */
+    NsRect body = { 20, 0, 300, max_h };
+    ASSERT_EQ(thinking_wheel_over_box(body, 700, full_content_h, 100, 350), 1);
+    TEST_END();
+}
+
+int test_thinking_wheel_over_box_collapsed_zero_size_never_hits(void)
+{
+    TEST_BEGIN();
+    NsRect body = { 20, 40, 0, 0 };  /* collapsed: thinking_layout() zeroes body */
+    ASSERT_EQ(thinking_wheel_over_box(body, 600, 500, 20, 40), 0);
+    TEST_END();
+}
+
+/* ---- thinking_wheel_should_chain -------------------------------------------------
+ * Decides, once the cursor is already known to be over the box, whether a
+ * given notch should still bubble to the outer list because the box is at
+ * the limit the wheel is pushing toward. */
+
+int test_thinking_wheel_should_chain_scrolling_down_mid_content_stays_in_box(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_should_chain(100, 500, -NS_WHEEL_DELTA), 0);
+    TEST_END();
+}
+
+int test_thinking_wheel_should_chain_scrolling_up_mid_content_stays_in_box(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_should_chain(100, 500, NS_WHEEL_DELTA), 0);
+    TEST_END();
+}
+
+int test_thinking_wheel_should_chain_down_at_bottom_chains(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_should_chain(500, 500, -NS_WHEEL_DELTA), 1);
+    TEST_END();
+}
+
+int test_thinking_wheel_should_chain_up_at_top_chains(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_should_chain(0, 500, NS_WHEEL_DELTA), 1);
+    TEST_END();
+}
+
+int test_thinking_wheel_should_chain_down_not_yet_at_bottom_stays(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_should_chain(499, 500, -NS_WHEEL_DELTA), 0);
+    TEST_END();
+}
+
+int test_thinking_wheel_should_chain_up_not_yet_at_top_stays(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_should_chain(1, 500, NS_WHEEL_DELTA), 0);
+    TEST_END();
+}
+
+int test_thinking_wheel_should_chain_no_overflow_always_chains(void)
+{
+    TEST_BEGIN();
+    /* max_scroll <= 0: nothing to scroll, so any direction chains --
+     * covers both the "content fits" case and a not-yet-measured box. */
+    ASSERT_EQ(thinking_wheel_should_chain(0, 0, -NS_WHEEL_DELTA), 1);
+    ASSERT_EQ(thinking_wheel_should_chain(0, 0, NS_WHEEL_DELTA), 1);
+    ASSERT_EQ(thinking_wheel_should_chain(0, -10, -NS_WHEEL_DELTA), 1);
+    TEST_END();
+}
+
+int test_thinking_wheel_should_chain_streaming_auto_follow_at_max_chains_down(void)
+{
+    TEST_BEGIN();
+    /* The scenario the old "fully visible" rule was guarding against: a
+     * streaming, auto-following box sits at scroll_y == max_scroll almost
+     * continuously (stick_scroll_on_layout keeps snapping it to the new
+     * bottom as content grows). A wheel-down notch here must chain to the
+     * outer list immediately so it can still reach bottom and re-engage
+     * its own stick-to-bottom -- regardless of the box's on-screen size. */
+    int max_scroll = 5000;  /* a long, still-growing reasoning stream */
+    ASSERT_EQ(thinking_wheel_should_chain(max_scroll, max_scroll, -NS_WHEEL_DELTA), 1);
+    /* Scrolling up (away from the streamed bottom) does NOT chain -- the
+     * user is reading back through what already arrived. */
+    ASSERT_EQ(thinking_wheel_should_chain(max_scroll, max_scroll, NS_WHEEL_DELTA), 0);
+    TEST_END();
+}
+
+/* ---- thinking_wheel_scroll ------------------------------------------------------ */
+
+int test_thinking_wheel_scroll_down_notch_moves_forward(void)
+{
+    TEST_BEGIN();
+    /* Wheel toward the user (negative delta) scrolls content forward. */
+    ASSERT_EQ(thinking_wheel_scroll(0, -NS_WHEEL_DELTA, 40, 500), 40);
+    TEST_END();
+}
+
+int test_thinking_wheel_scroll_up_notch_moves_backward(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_scroll(100, NS_WHEEL_DELTA, 40, 500), 60);
+    TEST_END();
+}
+
+int test_thinking_wheel_scroll_clamps_to_zero(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_scroll(10, NS_WHEEL_DELTA, 40, 500), 0);
+    TEST_END();
+}
+
+int test_thinking_wheel_scroll_overshoot_clamps_to_max(void)
+{
+    TEST_BEGIN();
+    /* A single huge/fast wheel delta must not overshoot past max_scroll. */
+    ASSERT_EQ(thinking_wheel_scroll(0, -NS_WHEEL_DELTA * 50, 40, 500), 500);
+    TEST_END();
+}
+
+int test_thinking_wheel_scroll_exactly_at_bottom_stays_at_max(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_scroll(500, -NS_WHEEL_DELTA, 40, 500), 500);
+    TEST_END();
+}
+
+int test_thinking_wheel_scroll_negative_max_scroll_clamps_to_zero(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(thinking_wheel_scroll(0, -NS_WHEEL_DELTA, 40, -10), 0);
+    TEST_END();
+}
+
+int test_thinking_wheel_scroll_touchpad_fractional_delta_rounds_to_no_movement(void)
+{
+    TEST_BEGIN();
+    /* A high-resolution touchpad can report a delta far smaller than one
+     * full WHEEL_DELTA notch (2026-09-25 review, item 3): 2*40/120 truncates
+     * to 0px. thinking_wheel_scroll() itself just reports "no movement" --
+     * it is the caller's job (see thinking_wheel_should_chain(), and
+     * chat_listview.c's WM_MOUSEWHEEL handler) not to mistake that for "at
+     * a boundary, let the outer list have it": should_chain() is evaluated
+     * BEFORE this call and only looks at old_scroll vs. max_scroll, so a
+     * mid-content notch that happens to move 0px is still consumed by the
+     * box rather than leaking to the outer list. */
+    ASSERT_EQ(thinking_wheel_scroll(100, -2, 40, 500), 100);
+    ASSERT_EQ(thinking_wheel_should_chain(100, 500, -2), 0);
+    TEST_END();
+}
+
 /* ---- ai_panel_states ------------------------------------------------------------ */
 
 int test_ai_panel_state_titles_actions_and_suggestions_flag(void)
