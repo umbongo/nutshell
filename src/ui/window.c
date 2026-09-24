@@ -1206,7 +1206,7 @@ static void apply_config_colors(void)
  * no-key state's "Open Settings" button land on Provider. */
 static void on_settings_clicked_page(int initial_page) {
     HWND parent = GetParent(g_hwndTabs);
-    settings_dlg_show(parent, g_config, initial_page);
+    settings_dlg_show(parent, g_config, g_config_path, initial_page);
 
     /* Reload theme from config (colour scheme may have changed) */
     {

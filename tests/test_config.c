@@ -2,6 +2,9 @@
 #include "ai_prompt.h"
 #include "config.h"
 #include "cmd_classify.h"
+#include "crypto.h"
+#include "crypto_dpapi.h"
+#include "fake_dpapi.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -295,8 +298,11 @@ int test_config_ai_key_encrypted_on_disk(void)
     fclose(f);
 
     ASSERT_TRUE(strstr(raw, "secret-api-key") == NULL);
-    /* Should contain the encryption prefix instead */
-    ASSERT_TRUE(strstr(raw, "$aes256gcm$v1$") != NULL);
+    /* Should contain the DPAPI encryption prefix instead -- every new
+     * write uses DPAPI; the legacy AES-256-GCM prefix is load-only, for
+     * migrating an older config. */
+    ASSERT_TRUE(strstr(raw, "$dpapi$v1$") != NULL);
+    ASSERT_TRUE(strstr(raw, "$aes256gcm$v1$") == NULL);
 
     /* Verify round-trip: load should decrypt back to original */
     Config *loaded = config_load(TMP_CFG);
@@ -1638,6 +1644,299 @@ int test_config_ensure_local_profile_survives_save_load_roundtrip(void)
     ASSERT_STR_EQ(lp0->kind, "local");
 
     config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * Secrets: DPAPI encryption, legacy migration, foreign-blob preservation
+ *
+ * All of these rely on the deterministic fake DPAPI backend that
+ * tests/runner.c installs for the whole run (see tests/fake_dpapi.h) --
+ * real DPAPI is per-user/per-machine state a test binary cannot control.
+ * ============================================================ */
+
+int test_config_password_dpapi_encrypted_on_disk(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    Profile *p = config_profile_new();
+    (void)snprintf(p->name, sizeof(p->name), "%s", "box1");
+    (void)snprintf(p->host, sizeof(p->host), "%s", "example.com");
+    (void)snprintf(p->password, sizeof(p->password), "%s", "hunter2");
+    vec_push(&cfg->profiles, p);
+
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+
+    FILE *f = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(f);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, f);
+    raw[n] = '\0';
+    fclose(f);
+
+    ASSERT_TRUE(strstr(raw, "hunter2") == NULL);
+    ASSERT_TRUE(strstr(raw, "$dpapi$v1$") != NULL);
+    ASSERT_TRUE(strstr(raw, "$aes256gcm$v1$") == NULL);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    ASSERT_EQ((int)vec_size(&loaded->profiles), 1);
+    Profile *lp = (Profile *)vec_get(&loaded->profiles, 0);
+    ASSERT_NOT_NULL(lp);
+    ASSERT_STR_EQ(lp->password, "hunter2");
+    ASSERT_STR_EQ(lp->password_enc_preserved, "");
+    config_free(loaded);
+
+    config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_ai_key_foreign_blob_preserved_through_load_save(void)
+{
+    TEST_BEGIN();
+    fake_dpapi_set_identity(0x11);
+    char enc[256];
+    ASSERT_EQ(crypto_encrypt_dpapi("my-api-key", enc, sizeof(enc)), CRYPTO_OK);
+
+    char json[1024];
+    (void)snprintf(json, sizeof(json),
+             "{\"settings\": {\"font\": \"Consolas\", \"ai_api_key\": \"%s\"}, "
+             "\"profiles\": []}", enc);
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(json, f);
+    fclose(f);
+
+    /* Switch identity: simulates the config file arriving on another
+     * PC/user, where this blob cannot be decrypted. */
+    fake_dpapi_set_identity(0x22);
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_STR_EQ(cfg->settings.ai_api_key, "");
+    ASSERT_STR_EQ(cfg->settings.ai_api_key_enc_preserved, enc);
+
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    /* The file on disk must carry the original blob byte-for-byte -- not
+     * re-encrypted, not dropped. */
+    FILE *rf = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, rf);
+    raw[n] = '\0';
+    fclose(rf);
+    ASSERT_TRUE(strstr(raw, enc) != NULL);
+
+    /* Switch back to the original identity: the preserved blob still
+     * decrypts -- moving the config back to its original PC/user works. */
+    fake_dpapi_set_identity(0x11);
+    Config *cfg2 = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg2);
+    ASSERT_STR_EQ(cfg2->settings.ai_api_key, "my-api-key");
+    config_free(cfg2);
+
+    fake_dpapi_set_identity(0x42); /* restore default identity */
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_new_password_replaces_preserved_blob(void)
+{
+    TEST_BEGIN();
+    fake_dpapi_set_identity(0x11);
+    char enc[256];
+    ASSERT_EQ(crypto_encrypt_dpapi("old-pw", enc, sizeof(enc)), CRYPTO_OK);
+
+    char json[1024];
+    (void)snprintf(json, sizeof(json),
+             "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+             "{\"name\": \"box1\", \"host\": \"example.com\", \"password\": \"%s\"}"
+             "]}", enc);
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(json, f);
+    fclose(f);
+
+    fake_dpapi_set_identity(0x22); /* foreign: cannot decrypt old-pw */
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->password, "");
+    ASSERT_STR_EQ(p->password_enc_preserved, enc);
+
+    /* The user enters a brand-new password. */
+    (void)snprintf(p->password, sizeof(p->password), "%s", "new-pw");
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    /* Reload (still under the identity foreign to the OLD blob): the new
+     * password decrypts, and the old blob is gone -- not written back. */
+    Config *reloaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(reloaded);
+    Profile *rp = (Profile *)vec_get(&reloaded->profiles, 0);
+    ASSERT_NOT_NULL(rp);
+    ASSERT_STR_EQ(rp->password, "new-pw");
+    ASSERT_STR_EQ(rp->password_enc_preserved, "");
+    config_free(reloaded);
+
+    fake_dpapi_set_identity(0x42);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_cleared_password_drops_blob(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    Profile *p = config_profile_new();
+    (void)snprintf(p->name, sizeof(p->name), "%s", "box1");
+    (void)snprintf(p->host, sizeof(p->host), "%s", "example.com");
+    (void)snprintf(p->password, sizeof(p->password), "%s", "hunter2");
+    vec_push(&cfg->profiles, p);
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    Profile *lp = (Profile *)vec_get(&loaded->profiles, 0);
+    ASSERT_NOT_NULL(lp);
+    ASSERT_STR_EQ(lp->password, "hunter2");
+
+    /* The user clears the password field (as session_manager.c's form_read
+     * would leave pr->password) and saves. */
+    lp->password[0] = '\0';
+    ASSERT_EQ(config_save(loaded, TMP_CFG), 0);
+    config_free(loaded);
+
+    FILE *rf = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, rf);
+    raw[n] = '\0';
+    fclose(rf);
+    ASSERT_TRUE(strstr(raw, "$dpapi$v1$") == NULL);
+    ASSERT_TRUE(strstr(raw, "\"password\": \"\"") != NULL);
+
+    Config *reloaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(reloaded);
+    Profile *rp = (Profile *)vec_get(&reloaded->profiles, 0);
+    ASSERT_NOT_NULL(rp);
+    ASSERT_STR_EQ(rp->password, "");
+    ASSERT_STR_EQ(rp->password_enc_preserved, "");
+    config_free(reloaded);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_password_legacy_migrates_to_dpapi_on_save(void)
+{
+    TEST_BEGIN();
+    char legacy[600];
+    ASSERT_EQ(crypto_encrypt("legacy-pw", legacy, sizeof(legacy)), CRYPTO_OK);
+    ASSERT_TRUE(strncmp(legacy, CRYPTO_ENC_PREFIX, strlen(CRYPTO_ENC_PREFIX)) == 0);
+
+    char json[1024];
+    (void)snprintf(json, sizeof(json),
+             "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+             "{\"name\": \"box1\", \"host\": \"example.com\", \"password\": \"%s\"}"
+             "]}", legacy);
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(json, f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_EQ((int)vec_size(&cfg->profiles), 1);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->password, "legacy-pw");
+    config_free(cfg);
+
+    /* config_load() must have re-saved once on its own: the file should
+     * now carry the DPAPI prefix, and the legacy one must be gone. */
+    FILE *rf = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, rf);
+    raw[n] = '\0';
+    fclose(rf);
+    ASSERT_TRUE(strstr(raw, "$dpapi$v1$") != NULL);
+    ASSERT_TRUE(strstr(raw, "$aes256gcm$v1$") == NULL);
+
+    Config *reloaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(reloaded);
+    Profile *rp = (Profile *)vec_get(&reloaded->profiles, 0);
+    ASSERT_NOT_NULL(rp);
+    ASSERT_STR_EQ(rp->password, "legacy-pw");
+    config_free(reloaded);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_garbage_password_blob_does_not_crash_and_is_preserved(void)
+{
+    TEST_BEGIN();
+    const char *garbage = "$dpapi$v1$!!!not-base64-and-also-way-too-short";
+    char json[512];
+    (void)snprintf(json, sizeof(json),
+             "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+             "{\"name\": \"box1\", \"host\": \"example.com\", \"password\": \"%s\"}"
+             "]}", garbage);
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(json, f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->password, "");
+    ASSERT_STR_EQ(p->password_enc_preserved, garbage);
+
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    Config *reloaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(reloaded);
+    Profile *rp = (Profile *)vec_get(&reloaded->profiles, 0);
+    ASSERT_NOT_NULL(rp);
+    ASSERT_STR_EQ(rp->password, "");
+    ASSERT_STR_EQ(rp->password_enc_preserved, garbage);
+    config_free(reloaded);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_empty_password_writes_empty_no_prefix(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    Profile *p = config_profile_new();
+    (void)snprintf(p->name, sizeof(p->name), "%s", "box1");
+    (void)snprintf(p->host, sizeof(p->host), "%s", "example.com");
+    /* password left empty */
+    vec_push(&cfg->profiles, p);
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+
+    FILE *rf = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, rf);
+    raw[n] = '\0';
+    fclose(rf);
+    ASSERT_TRUE(strstr(raw, "$dpapi$v1$") == NULL);
+    ASSERT_TRUE(strstr(raw, "\"password\": \"\"") != NULL);
+
+    config_free(cfg);
     remove(TMP_CFG);
     TEST_END();
 }

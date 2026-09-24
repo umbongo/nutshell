@@ -1,4 +1,6 @@
 #include "test_framework.h"
+#include "crypto_dpapi.h"
+#include "fake_dpapi.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -183,6 +185,13 @@ int test_config_ensure_local_profile_noop_when_local_already_first(void);
 int test_config_ensure_local_profile_noop_when_local_at_end(void);
 int test_config_ensure_local_profile_null(void);
 int test_config_ensure_local_profile_survives_save_load_roundtrip(void);
+int test_config_password_dpapi_encrypted_on_disk(void);
+int test_config_ai_key_foreign_blob_preserved_through_load_save(void);
+int test_config_new_password_replaces_preserved_blob(void);
+int test_config_cleared_password_drops_blob(void);
+int test_config_password_legacy_migrates_to_dpapi_on_save(void);
+int test_config_garbage_password_blob_does_not_crash_and_is_preserved(void);
+int test_config_empty_password_writes_empty_no_prefix(void);
 /* test_cli_args.c */
 int test_cli_no_args(void);
 int test_cli_session_name_short(void);
@@ -597,6 +606,18 @@ int test_crypto_output_too_small(void);
 int test_crypto_decrypt_not_encrypted(void);
 int test_crypto_decrypt_empty_payload(void);
 int test_crypto_decrypt_invalid_base64(void);
+int test_crypto_dpapi_roundtrip_basic(void);
+int test_crypto_dpapi_roundtrip_empty(void);
+int test_crypto_dpapi_roundtrip_long(void);
+int test_crypto_dpapi_prefix_differs_from_legacy(void);
+int test_crypto_is_dpapi_yes_no(void);
+int test_crypto_is_any_encrypted(void);
+int test_crypto_dpapi_foreign_blob_fails_and_stays_empty(void);
+int test_crypto_dpapi_corrupt_blob_fails(void);
+int test_crypto_dpapi_truncated_blob_does_not_crash(void);
+int test_crypto_dpapi_null_inputs(void);
+int test_crypto_dpapi_output_too_small(void);
+int test_crypto_dpapi_backend_get_set(void);
 
 #ifndef NO_SSH_LIBS
 /* test_ssh.c */
@@ -2460,6 +2481,15 @@ int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered so a crash shows the last [RUN ] line */
     int failed = 0;
 
+    /* Every secret (profile password, AI API key) now goes through DPAPI.
+     * Real DPAPI is per-user/per-machine state a test binary cannot rely on
+     * -- it does not exist at all on the Linux host that runs `make test`
+     * in CI -- so the whole run uses the deterministic fake backend
+     * (tests/fake_dpapi.h) instead. Individual crypto tests that need to
+     * simulate a blob from a different user/PC switch the fake identity
+     * and restore it before returning. */
+    crypto_dpapi_set_backend(&k_fake_dpapi_backend);
+
     printf("\n--- Core ---\n");
     failed += test_vector_init();
     failed += test_vector_push_and_get();
@@ -2689,6 +2719,13 @@ int main(void) {
     failed += test_config_ensure_local_profile_noop_when_local_at_end();
     failed += test_config_ensure_local_profile_null();
     failed += test_config_ensure_local_profile_survives_save_load_roundtrip();
+    failed += test_config_password_dpapi_encrypted_on_disk();
+    failed += test_config_ai_key_foreign_blob_preserved_through_load_save();
+    failed += test_config_new_password_replaces_preserved_blob();
+    failed += test_config_cleared_password_drops_blob();
+    failed += test_config_password_legacy_migrates_to_dpapi_on_save();
+    failed += test_config_garbage_password_blob_does_not_crash_and_is_preserved();
+    failed += test_config_empty_password_writes_empty_no_prefix();
 
     printf("\n--- CLI args ---\n");
     failed += test_cli_no_args();
@@ -3017,6 +3054,18 @@ int main(void) {
     failed += test_crypto_decrypt_not_encrypted();
     failed += test_crypto_decrypt_empty_payload();
     failed += test_crypto_decrypt_invalid_base64();
+    failed += test_crypto_dpapi_roundtrip_basic();
+    failed += test_crypto_dpapi_roundtrip_empty();
+    failed += test_crypto_dpapi_roundtrip_long();
+    failed += test_crypto_dpapi_prefix_differs_from_legacy();
+    failed += test_crypto_is_dpapi_yes_no();
+    failed += test_crypto_is_any_encrypted();
+    failed += test_crypto_dpapi_foreign_blob_fails_and_stays_empty();
+    failed += test_crypto_dpapi_corrupt_blob_fails();
+    failed += test_crypto_dpapi_truncated_blob_does_not_crash();
+    failed += test_crypto_dpapi_null_inputs();
+    failed += test_crypto_dpapi_output_too_small();
+    failed += test_crypto_dpapi_backend_get_set();
 
 #ifndef NO_SSH_LIBS
     printf("\n--- SSH ---\n");

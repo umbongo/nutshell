@@ -590,6 +590,16 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             if (!do_append) {
                 Profile *pr = (Profile *)vec_get(
                     &st->cfg->profiles, (size_t)st->edit_idx);
+                /* form_read() never touches password_enc_preserved -- it
+                 * isn't a form field -- so carry the existing profile's
+                 * preserved blob (a password that could not be decrypted
+                 * on this PC/user) forward. Otherwise every edit of this
+                 * profile, even an unrelated field, would silently drop it.
+                 * save_secret() (loader.c) ignores it the moment
+                 * tmp.password is non-empty, so a real new password still
+                 * always wins and replaces it. */
+                memcpy(tmp.password_enc_preserved, pr->password_enc_preserved,
+                       sizeof(tmp.password_enc_preserved));
                 *pr = tmp;
             } else {
                 Profile *pr = config_profile_new();
@@ -615,7 +625,8 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                               "All files (*.*)\0*.*\0";
             ofn.lpstrFile   = path;
             ofn.nMaxFile    = MAX_PATH;
-            ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST
+                              | OFN_NOCHANGEDIR;
             if (GetOpenFileNameA(&ofn))
                 SetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, path);
             return TRUE;

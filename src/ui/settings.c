@@ -147,6 +147,9 @@ typedef struct {
 
 typedef struct {
     Config  *cfg;
+    const char *config_path; /* M-8/H6: absolute path resolved at startup --
+                               * never the bare CONFIG_FILENAME, which would
+                               * save into whatever the CWD has become. */
     HWND     hTooltip;
     HFONT    hDlgFont;   /* MS Shell Dlg 8pt — applied to all child controls */
     HFONT    hBoldFont;  /* same face, bold — nav headers + breadcrumb title */
@@ -1723,7 +1726,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
             /* Clamp out-of-range values before persisting */
             settings_validate(s);
-            config_save(d->cfg, CONFIG_FILENAME);
+            config_save(d->cfg, d->config_path);
             DestroyWindow(hwnd);
             break;
         }
@@ -1756,7 +1759,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
 /* ---- Public API --------------------------------------------------------- */
 
-void settings_dlg_show(HWND parent, Config *cfg, int initial_page)
+void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
+                        int initial_page)
 {
     if (!cfg) return;
 
@@ -1764,6 +1768,7 @@ void settings_dlg_show(HWND parent, Config *cfg, int initial_page)
     SettingsDlgData *d = (SettingsDlgData *)calloc(1u, sizeof(SettingsDlgData));
     if (!d) return;
     d->cfg = cfg;
+    d->config_path = config_path;
     d->initial_page = initial_page;
 
     WNDCLASSEX wc;

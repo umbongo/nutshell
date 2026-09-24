@@ -35,7 +35,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - **Local shell** sessions over ConPTY — the same window, terminal and assistant with no remote host at all ([see below](#local-shell))
 - VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
 - Password and SSH key authentication with passphrase prompt and retry
-- AES-256-GCM password encryption at rest (PBKDF2-SHA256 derived key, OpenSSL)
+- Windows DPAPI password encryption at rest, per-user (legacy AES-256-GCM configs migrate automatically)
 - TOFU host key verification (first-connect dialog, mismatch warning)
 - Dynamic PTY resize on window resize and zoom
 - Paste confirmation dialog with configurable inter-line delay
@@ -195,7 +195,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 
 #### AI Assistant > Provider
 - **Provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or Custom
-- **API key** — encrypted at rest with AES-256-GCM (same encryption as saved passwords)
+- **API key** — encrypted at rest with Windows DPAPI, per Windows user (same protection as saved passwords)
 - **Model** — type one, or press the refresh button to fetch the provider's model list
 - **Base URL** — shown only for the Custom provider, for self-hosted or alternative endpoints
 
@@ -322,7 +322,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 
 ### Security
 
-- **Passwords and API keys** are encrypted at rest in `nutshell.config` using AES-256-GCM with a PBKDF2-SHA256 derived key
+- **Passwords and API keys** are encrypted at rest in `nutshell.config` with Windows DPAPI (`CryptProtectData`), tied to the current Windows user and machine — not a portable key. The rest of the config (settings, hostnames, etc.) still travels freely with the file; only the secret fields are locked down. A config moved to another PC or user account loses just its stored passwords/API key (you are prompted to re-enter them, as if none were saved) — the original encrypted value is kept untouched in the file in case it comes back to its original PC/user, and is only replaced once you enter a new one. Configs from before this change (AES-256-GCM with a PBKDF2-SHA256 derived key) are decrypted and migrated to DPAPI automatically the first time they load.
 - **Host key verification** follows a Trust-On-First-Use (TOFU) model. Known hosts are stored at `%APPDATA%\sshclient\known_hosts`. A mismatch triggers a warning dialog (possible man-in-the-middle)
 - **SSH key passphrases** are cached in memory only for the duration of the session and securely zeroed on close
 
@@ -481,7 +481,8 @@ if you need to move between versions.
 │   │   ├── xmalloc.c/.h              #   Aborting allocator wrappers
 │   │   └── zoom.c/.h                  #   Zoom level calculations
 │   ├── crypto/                         # Cryptography
-│   │   └── crypto.c/.h                #   AES-256-GCM encrypt/decrypt (OpenSSL, PBKDF2)
+│   │   ├── crypto.c/.h                #   DPAPI-backed secret encrypt/decrypt; legacy AES-256-GCM decrypt for migration
+│   │   └── crypto_dpapi.c/.h          #   DPAPI backend (real CryptProtectData/CryptUnprotectData, runtime-loaded; test-injectable)
 │   ├── term/                           # Terminal emulator & SSH
 │   │   ├── buffer.c                   #   Ring buffer management (scrollback, resize, reflow)
 │   │   ├── parser.c                   #   VT100/ANSI escape sequence parser
