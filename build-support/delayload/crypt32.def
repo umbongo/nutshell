@@ -1,0 +1,17 @@
+; DLL search-order hardening (2026-09-24): crypt32.dll is not a KnownDLL, so
+; it must not be a static import (see Makefile's DELAY_LIBS comment and
+; src/main.c's SetDefaultDllDirectories/SetDllDirectoryW call). This lists
+; only the symbols nutshell.exe actually calls -- statically-linked
+; OpenSSL's Windows certificate-store loader (libcrypto.a's
+; libdefault-lib-winstore_store.obj, pulled in by the default provider's
+; store-loader table even though the app never asks for the "winstore:"
+; scheme) -- so `dlltool --output-delaylib` can build a delay-import
+; library for exactly what's used, no more. Hand-written, not gendef'd:
+; gendef needs the real DLL and reads its whole export table, which is far
+; more than this build calls.
+LIBRARY crypt32.dll
+EXPORTS
+CertCloseStore
+CertFindCertificateInStore
+CertFreeCertificateContext
+CertOpenSystemStoreW
