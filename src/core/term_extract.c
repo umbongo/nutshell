@@ -1,6 +1,7 @@
 #include "term_extract.h"
 #include "string_utils.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* Returns the trimmed UTF-8 byte length of logical row `logical` (0 if the
  * row doesn't exist). Uses the same trimming rule as the writer below:
@@ -117,10 +118,11 @@ size_t term_extract_visible(const Terminal *term, char *buf, size_t buf_size)
     return extract_rows(term, top, term->rows, buf, buf_size);
 }
 
-size_t term_extract_last_n(const Terminal *term, int n, char *buf, size_t buf_size)
+/* The logical row range term_extract_last_n() covers: `count` rows ending
+ * at the last row with content. Returns 0 (nothing to extract) when every
+ * row is blank. */
+static int last_n_range(const Terminal *term, int n, int *start, int *count)
 {
-    if (!term || !buf || buf_size == 0 || n <= 0) return 0;
-
     /* Anchor at the last row that actually has content — lines_count is
      * fixed at term->rows for a screen that has never scrolled, so blank
      * rows below the cursor must not count toward "the last N lines". */
@@ -128,14 +130,44 @@ size_t term_extract_last_n(const Terminal *term, int n, char *buf, size_t buf_si
     for (int r = term->lines_count - 1; r >= 0; r--) {
         if (row_byte_len(term, r) > 0) { end_row = r; break; }
     }
-    if (end_row < 0) {
+    if (end_row < 0) return 0;
+
+    int c = n;
+    if (c > end_row + 1) c = end_row + 1;
+    *start = end_row + 1 - c;
+    *count = c;
+    return 1;
+}
+
+size_t term_extract_last_n(const Terminal *term, int n, char *buf, size_t buf_size)
+{
+    if (!term || !buf || buf_size == 0 || n <= 0) return 0;
+
+    int start, count;
+    if (!last_n_range(term, n, &start, &count)) {
         buf[0] = '\0';
         return 0;
     }
-
-    int count = n;
-    if (count > end_row + 1) count = end_row + 1;
-    int start = end_row + 1 - count;
-
     return extract_rows(term, start, count, buf, buf_size);
+}
+
+char *term_extract_last_n_dup(const Terminal *term, int n, size_t *len_out)
+{
+    if (len_out) *len_out = 0;
+    if (!term || n <= 0) return NULL;
+
+    int start, count;
+    if (!last_n_range(term, n, &start, &count)) return NULL;
+
+    /* Every row's bytes, a newline between rows, and the NUL: exactly what
+     * extract_rows() writes, so its drop-the-oldest path never triggers. */
+    size_t cap = 1;
+    for (int r = 0; r < count; r++)
+        cap += row_byte_len(term, start + r) + 1;
+
+    char *buf = malloc(cap);
+    if (!buf) return NULL;
+    size_t len = extract_rows(term, start, count, buf, cap);
+    if (len_out) *len_out = len;
+    return buf;
 }

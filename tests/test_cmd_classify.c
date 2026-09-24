@@ -4108,3 +4108,130 @@ int test_cmd_classify_ip_netns_vrf_exec_prefix(void) {
         _tf_local_fail = 1;
     TEST_END();
 }
+
+/* ===== Contradicted sessions: cmd_classify_session() (H1, 2026-09-24) =====
+ * CMD_PLATFORM_UNKNOWN is not the strictest ruleset -- it covers Linux, but
+ * every device ruleset rates some of its own commands above it. A session
+ * whose platform host output has contradicted keeps that platform and is
+ * judged under the worse of the two. */
+
+typedef struct {
+    CmdPlatform    plat;
+    const char    *cmd;
+    CmdSafetyLevel expect;   /* the worse of the two, as measured */
+} SessionCase;
+
+int test_cmd_classify_session_contradicted_device_examples(void) {
+    TEST_BEGIN();
+    static const SessionCase cases[] = {
+        /* Stricter under the device ruleset than under UNKNOWN. */
+        { CMD_PLATFORM_CISCO_IOS, "copy running-config startup-config", CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_IOS, "clear ip bgp *",                     CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_IOS, "format flash:",                      CMD_CRITICAL },
+        { CMD_PLATFORM_JUNOS,     "file delete /var/tmp/old.tgz",       CMD_CRITICAL },
+        { CMD_PLATFORM_VYOS,      "reset ip bgp all",                   CMD_CRITICAL },
+        { CMD_PLATFORM_MIKROTIK,  "reset",                              CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_IOS, "hostname core1",                     CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS,"hostname core1",                     CMD_WRITE },
+        { CMD_PLATFORM_CISCO_ASA, "hostname fw1",                       CMD_WRITE },
+        { CMD_PLATFORM_CISCO_IOS, "ip route 0.0.0.0 0.0.0.0 10.0.0.1",  CMD_WRITE },
+        /* Stricter under UNKNOWN than under the resolved ruleset. */
+        { CMD_PLATFORM_LINUX,     "reload",                             CMD_CRITICAL },
+        { CMD_PLATFORM_LINUX,     "commit",                             CMD_CRITICAL },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const SessionCase *c = &cases[i];
+        CmdSafetyLevel own = cmd_classify(c->cmd, c->plat);
+        CmdSafetyLevel unk = cmd_classify(c->cmd, CMD_PLATFORM_UNKNOWN);
+        CmdSafetyLevel got = cmd_classify_session(c->cmd, c->plat, 1);
+        ASSERT_TRUE(got >= own);
+        ASSERT_TRUE(got >= unk);
+        ASSERT_EQ((int)got, (int)c->expect);
+
+        unsigned mask = cmd_classify_mask_session(c->cmd, c->plat, 1);
+        unsigned own_m = cmd_classify_mask(c->cmd, c->plat);
+        unsigned unk_m = cmd_classify_mask(c->cmd, CMD_PLATFORM_UNKNOWN);
+        ASSERT_EQ(mask & own_m, own_m);
+        ASSERT_EQ(mask & unk_m, unk_m);
+        ASSERT_TRUE((mask & CMD_MASK_OF(got)) != 0);
+    }
+    TEST_END();
+}
+
+/* Not contradicted: exactly the resolved platform's ruleset, nothing more --
+ * and an unresolved session is just UNKNOWN whichever way the flag is set. */
+int test_cmd_classify_session_not_contradicted_is_plain(void) {
+    TEST_BEGIN();
+    static const SessionCase cases[] = {
+        { CMD_PLATFORM_LINUX,     "reload",                       CMD_UNKNOWN },
+        { CMD_PLATFORM_JUNOS,     "file delete /var/tmp/old.tgz", CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_IOS, "show version",                 CMD_READ },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const SessionCase *c = &cases[i];
+        ASSERT_EQ((int)cmd_classify_session(c->cmd, c->plat, 0),
+                  (int)cmd_classify(c->cmd, c->plat));
+        ASSERT_EQ(cmd_classify_mask_session(c->cmd, c->plat, 0),
+                  cmd_classify_mask(c->cmd, c->plat));
+    }
+    ASSERT_EQ((int)cmd_classify_session("reload", CMD_PLATFORM_LINUX, 0),
+              (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify_session("reload", CMD_PLATFORM_UNKNOWN, 1),
+              (int)cmd_classify("reload", CMD_PLATFORM_UNKNOWN));
+    ASSERT_EQ(cmd_classify_mask_session("ls; reload", CMD_PLATFORM_UNKNOWN, 1),
+              cmd_classify_mask("ls; reload", CMD_PLATFORM_UNKNOWN));
+    ASSERT_EQ((int)cmd_classify_session(NULL, CMD_PLATFORM_CISCO_IOS, 1),
+              (int)CMD_READ);
+    TEST_END();
+}
+
+/* Property over a corpus drawn from this file's per-platform cases, every
+ * platform: contradicted is never looser than the platform alone nor than
+ * UNKNOWN alone, its mask covers both, and it is the max of the two. */
+int test_cmd_classify_session_worse_of_two_property(void) {
+    TEST_BEGIN();
+    static const char *corpus[] = {
+        "ls -la", "cat /etc/passwd", "rm -rf /tmp/x", "reboot", "reload",
+        "shutdown -h now", "systemctl restart nginx", "apt-get install vim",
+        "echo hi > /etc/motd", "find / -name x -delete", "sudo -i", "commit",
+        "rollback", "undo", "purge", "boot", "restore", "factory-reset",
+        "show running-config", "show version", "show ip bgp summary",
+        "show interfaces", "copy running-config startup-config",
+        "copy tftp: flash:", "write memory", "write erase",
+        "erase startup-config", "clear ip bgp *", "clear counters",
+        "format flash:", "delete flash:old.bin", "configure terminal",
+        "hostname core1", "ip route 0.0.0.0 0.0.0.0 10.0.0.1",
+        "interface GigabitEthernet0/1", "no shutdown", "shutdown",
+        "reload in 5", "debug all", "terminal length 0",
+        "file delete /var/tmp/old.tgz", "file show /var/log/messages",
+        "request system reboot", "request system zeroize",
+        "request support info", "set system host-name r1", "delete interfaces",
+        "run show route", "show configuration", "commit confirmed 5",
+        "reset ip bgp all", "reset conntrack", "reset",
+        "/system reset-configuration", "/system reboot", "/ip address print",
+        "/interface print", "/export", "execute reboot",
+        "execute factoryreset", "get system status", "config system global",
+        "diagnose sys top", "save", "display current-configuration",
+        "reset saved-configuration", "system-view", "sysname sw1",
+        "debug", "test", "ping 10.0.0.1", "traceroute 10.0.0.1",
+        "ls | xargs rm", "cat x; reload", "show run | include hostname",
+        "", "   ", "zzz-not-a-command --flag",
+    };
+    for (int pi = 0; pi <= (int)CMD_PLATFORM_UNKNOWN; pi++) {
+        CmdPlatform plat = (CmdPlatform)pi;
+        for (size_t i = 0; i < sizeof(corpus) / sizeof(corpus[0]); i++) {
+            const char *cmd = corpus[i];
+            CmdSafetyLevel own = cmd_classify(cmd, plat);
+            CmdSafetyLevel unk = cmd_classify(cmd, CMD_PLATFORM_UNKNOWN);
+            CmdSafetyLevel got = cmd_classify_session(cmd, plat, 1);
+            ASSERT_TRUE(got >= own);
+            ASSERT_TRUE(got >= unk);
+            ASSERT_EQ((int)got, (int)(own > unk ? own : unk));
+
+            unsigned own_m = cmd_classify_mask(cmd, plat);
+            unsigned unk_m = cmd_classify_mask(cmd, CMD_PLATFORM_UNKNOWN);
+            ASSERT_EQ(cmd_classify_mask_session(cmd, plat, 1), own_m | unk_m);
+        }
+    }
+    TEST_END();
+}

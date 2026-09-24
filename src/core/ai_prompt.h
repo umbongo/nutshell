@@ -431,6 +431,12 @@ typedef struct {
     size_t stream_thinking_len;
     int stream_phase;            /* 0=not started, 1=thinking, 2=content */
     int platform;                /* CmdPlatform for this session */
+    int platform_contradicted;   /* sticky: host output disagreed with
+                                  * `platform` after it resolved (cmd_detect.h).
+                                  * Set, the session's commands are classified
+                                  * under the worse of `platform` and
+                                  * CMD_PLATFORM_UNKNOWN (cmd_classify_session());
+                                  * never cleared for the session's life. */
     CmdPolicy policy;            /* This session's command policy: the `allowed`
                                    * ceiling and the `unattended` marker
                                    * (src/core/cmd_policy.h) */

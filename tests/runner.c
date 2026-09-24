@@ -307,7 +307,9 @@ int test_cmd_detect_vendor_word_in_catted_file_after_linux_prompt_stays_linux(vo
 int test_cmd_detect_last_login_alone_is_no_longer_linux_evidence(void);
 int test_cmd_detect_junos_after_last_login_banner(void);
 int test_cmd_detect_panos_after_last_login_stays_unresolved_not_linux(void);
-int test_cmd_detect_hop_from_linux_to_switch_and_back_banner_decides(void);
+int test_cmd_detect_hop_from_linux_to_switch_and_back_is_conflict(void);
+int test_cmd_detect_catted_banner_line_under_linux_prompt_is_conflict(void);
+int test_cmd_detect_banner_with_agreeing_prompt_is_banner(void);
 int test_cmd_detect_ios_banner_then_colon_hash_last_line_never_linux(void);
 int test_cmd_detect_vyos_banner_and_linux_shaped_prompt_agree(void);
 int test_cmd_detect_prompt_fortios_padded_hash_now_ambiguous(void);
@@ -318,7 +320,15 @@ int test_cmd_detect_last_line_contradicts_agreement_is_not_contradiction(void);
 int test_cmd_detect_last_line_contradicts_ambiguous_shape_is_not_contradiction(void);
 int test_cmd_detect_last_line_contradicts_vyos_linux_shape_agrees(void);
 int test_cmd_detect_last_line_contradicts_no_line_is_not_contradiction(void);
-int test_cmd_detect_transition_allowed_table(void);
+int test_cmd_detect_scan_linux_then_banner_looking_line_not_ios(void);
+int test_cmd_detect_scan_linux_then_catted_banner_conflict(void);
+int test_cmd_detect_scan_unresolved_then_banner_resolves(void);
+int test_cmd_detect_vendor_then_linux_prompt_stays_vendor_contradicted(void);
+int test_cmd_detect_scan_resolved_never_moves_sideways(void);
+int test_cmd_detect_contradicted_is_sticky(void);
+int test_cmd_detect_scan_conflict_while_unresolved_marks_session(void);
+int test_cmd_detect_steps_agreement_leaves_session_alone(void);
+int test_cmd_detect_watch_unresolved_and_null_safety(void);
 /* cmd_classify.c - unknown-platform overlay and name mapping */
 int test_cmd_classify_unknown_overlay_critical_verbs(void);
 int test_cmd_classify_unknown_overlay_write_erase(void);
@@ -1323,6 +1333,9 @@ int test_extract_last_n_ignores_trailing_blank_rows(void);
 int test_extract_last_n_all_blank(void);
 int test_extract_last_n_utf8_fits_context_buffer(void);
 int test_extract_buf_too_small_keeps_newest(void);
+int test_extract_last_n_dup_wide_row_keeps_prompt(void);
+int test_extract_last_n_dup_many_wide_rows_whole(void);
+int test_extract_last_n_dup_empty_and_null(void);
 
 /* test_scroll_region.c */
 int test_sr_init_defaults(void);
@@ -1792,6 +1805,9 @@ int test_cmd_classify_comware_display_filter_safe(void);
 int test_cmd_classify_commit_check_validate_vs_bare_commit(void);
 int test_cmd_classify_new_platforms_empty_safe(void);
 int test_cmd_classify_new_platforms_lone_separator_safe(void);
+int test_cmd_classify_session_contradicted_device_examples(void);
+int test_cmd_classify_session_not_contradicted_is_plain(void);
+int test_cmd_classify_session_worse_of_two_property(void);
 
 /* test_chat_msg.c */
 int test_chat_msg_list_init(void);
@@ -2419,6 +2435,7 @@ int test_approval_card_hit_null_layout_safe(void);
 int test_approval_card_hit_scrolled_out_rows_not_hit(void);
 int test_approval_card_layout_narrow_card_keeps_text_width(void);
 int test_approval_row_height_matches_layout(void);
+int test_approval_add_session_contradicted_takes_worse(void);
 int test_settled_row_layout_chip_right_aligned(void);
 int test_settled_row_layout_text_never_overlaps_chip(void);
 int test_settled_row_layout_ellipsis_only_when_too_wide(void);
@@ -2984,7 +3001,9 @@ int main(void) {
     failed += test_cmd_detect_last_login_alone_is_no_longer_linux_evidence();
     failed += test_cmd_detect_junos_after_last_login_banner();
     failed += test_cmd_detect_panos_after_last_login_stays_unresolved_not_linux();
-    failed += test_cmd_detect_hop_from_linux_to_switch_and_back_banner_decides();
+    failed += test_cmd_detect_hop_from_linux_to_switch_and_back_is_conflict();
+    failed += test_cmd_detect_catted_banner_line_under_linux_prompt_is_conflict();
+    failed += test_cmd_detect_banner_with_agreeing_prompt_is_banner();
     failed += test_cmd_detect_ios_banner_then_colon_hash_last_line_never_linux();
     failed += test_cmd_detect_vyos_banner_and_linux_shaped_prompt_agree();
     failed += test_cmd_detect_prompt_fortios_padded_hash_now_ambiguous();
@@ -2995,7 +3014,15 @@ int main(void) {
     failed += test_cmd_detect_last_line_contradicts_ambiguous_shape_is_not_contradiction();
     failed += test_cmd_detect_last_line_contradicts_vyos_linux_shape_agrees();
     failed += test_cmd_detect_last_line_contradicts_no_line_is_not_contradiction();
-    failed += test_cmd_detect_transition_allowed_table();
+    failed += test_cmd_detect_scan_linux_then_banner_looking_line_not_ios();
+    failed += test_cmd_detect_scan_linux_then_catted_banner_conflict();
+    failed += test_cmd_detect_scan_unresolved_then_banner_resolves();
+    failed += test_cmd_detect_vendor_then_linux_prompt_stays_vendor_contradicted();
+    failed += test_cmd_detect_scan_resolved_never_moves_sideways();
+    failed += test_cmd_detect_contradicted_is_sticky();
+    failed += test_cmd_detect_scan_conflict_while_unresolved_marks_session();
+    failed += test_cmd_detect_steps_agreement_leaves_session_alone();
+    failed += test_cmd_detect_watch_unresolved_and_null_safety();
     /* Unknown-platform overlay and name mapping */
     failed += test_cmd_classify_unknown_overlay_critical_verbs();
     failed += test_cmd_classify_unknown_overlay_write_erase();
@@ -3866,6 +3893,9 @@ int main(void) {
     failed += test_extract_last_n_all_blank();
     failed += test_extract_last_n_utf8_fits_context_buffer();
     failed += test_extract_buf_too_small_keeps_newest();
+    failed += test_extract_last_n_dup_wide_row_keeps_prompt();
+    failed += test_extract_last_n_dup_many_wide_rows_whole();
+    failed += test_extract_last_n_dup_empty_and_null();
 
     printf("\n--- AI Chat Indicator ---\n");
     failed += test_indicator_removal_with_newlines();
@@ -4400,6 +4430,9 @@ int main(void) {
     failed += test_cmd_classify_commit_check_validate_vs_bare_commit();
     failed += test_cmd_classify_new_platforms_empty_safe();
     failed += test_cmd_classify_new_platforms_lone_separator_safe();
+    failed += test_cmd_classify_session_contradicted_device_examples();
+    failed += test_cmd_classify_session_not_contradicted_is_plain();
+    failed += test_cmd_classify_session_worse_of_two_property();
 
     printf("\n--- Chat Message List ---\n");
     failed += test_chat_msg_list_init();
@@ -5042,6 +5075,7 @@ int main(void) {
     failed += test_approval_card_hit_scrolled_out_rows_not_hit();
     failed += test_approval_card_layout_narrow_card_keeps_text_width();
     failed += test_approval_row_height_matches_layout();
+    failed += test_approval_add_session_contradicted_takes_worse();
     failed += test_settled_row_layout_chip_right_aligned();
     failed += test_settled_row_layout_text_never_overlaps_chip();
     failed += test_settled_row_layout_ellipsis_only_when_too_wide();

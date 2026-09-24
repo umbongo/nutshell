@@ -498,20 +498,16 @@ int test_cmd_detect_panos_after_last_login_stays_unresolved_not_linux(void) {
     TEST_END();
 }
 
-/* --- Initial detection no longer reconciles a banner against a later,
- * disagreeing last line (item 3: cmd_detect_platform() reverts to deciding
- * from the banner outright, same as before the 2026-09-24 branch, anchoring
- * aside) --- */
+/* --- A banner and a disagreeing last line resolve nothing (H2,
+ * 2026-09-24 security review): an anchored banner decides only while the
+ * last line's prompt shape is ambiguous, absent, or agrees with it. --- */
 
 /* Hop from a Linux prompt into a switch (real, anchored IOS banner along the
- * way) and back out to a Linux prompt, all within one capture: the anchored
- * IOS banner decides outright, even though the capture's last line has
- * since gone back to an unambiguous Linux shape. (window.c's post-resolution
- * poll is what catches this kind of drift after the fact -- see the
- * cmd_detect_last_line_contradicts()/cmd_detect_transition_allowed() tests
- * below -- and even then it can only step down to CMD_PLATFORM_UNKNOWN, not
- * back to CMD_PLATFORM_LINUX.) */
-int test_cmd_detect_hop_from_linux_to_switch_and_back_banner_decides(void) {
+ * way) and back out to a Linux prompt, all within one capture. The banner
+ * says IOS, the live last line unambiguously says Linux: the capture is
+ * unresolved and flagged CMD_DETECT_CONFLICT -- neither IOS (the banner is
+ * history) nor Linux (the banner says the session has been elsewhere). */
+int test_cmd_detect_hop_from_linux_to_switch_and_back_is_conflict(void) {
     TEST_BEGIN();
     const char *text =
         "tom@webhost:~$ ssh switch1\r\n"
@@ -522,14 +518,14 @@ int test_cmd_detect_hop_from_linux_to_switch_and_back_banner_decides(void) {
         "tom@webhost:~$";
     CmdDetectConfidence conf = CMD_DETECT_NONE;
     CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
-    ASSERT_EQ((int)p, (int)CMD_PLATFORM_CISCO_IOS);
-    ASSERT_EQ((int)conf, (int)CMD_DETECT_BANNER);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_CONFLICT);
     TEST_END();
 }
 
-/* An anchored IOS banner followed by a last line that happens to look like
- * the Linux ":"-before-"#" shape ("foo: bar #") must still resolve to IOS,
- * from the banner -- never Linux. */
+/* An anchored IOS banner followed by a last line that has the Linux
+ * ":"-before-"#" shape ("foo: bar #") is a disagreement too: unresolved,
+ * CMD_DETECT_CONFLICT -- and never Linux. */
 int test_cmd_detect_ios_banner_then_colon_hash_last_line_never_linux(void) {
     TEST_BEGIN();
     const char *text =
@@ -539,7 +535,37 @@ int test_cmd_detect_ios_banner_then_colon_hash_last_line_never_linux(void) {
     CmdDetectConfidence conf = CMD_DETECT_NONE;
     CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
     ASSERT_TRUE(p != CMD_PLATFORM_LINUX);
-    ASSERT_EQ((int)p, (int)CMD_PLATFORM_CISCO_IOS);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_CONFLICT);
+    TEST_END();
+}
+
+/* A file the user cats whose line happens to open with a vendor banner
+ * string, under a Linux prompt: the anchored "banner" and the Linux prompt
+ * disagree, so this is a conflict -- never IOS. */
+int test_cmd_detect_catted_banner_line_under_linux_prompt_is_conflict(void) {
+    TEST_BEGIN();
+    const char *text =
+        "tom@webhost:~$ cat switch1-show-version.txt\r\n"
+        "Cisco IOS Software, C3560 Software (C3560-IPSERVICESK9-M), Version 15.2(4)E\r\n"
+        "tom@webhost:~$";
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_TRUE(p != CMD_PLATFORM_CISCO_IOS);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_CONFLICT);
+    TEST_END();
+}
+
+/* A banner with an agreeing unambiguous prompt is still a banner result. */
+int test_cmd_detect_banner_with_agreeing_prompt_is_banner(void) {
+    TEST_BEGIN();
+    const char *text =
+        "MikroTik RouterOS 7.12.1 (c) 1999-2023 http://www.mikrotik.com/\r\n"
+        "[admin@MikroTik] > ";
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_MIKROTIK);
     ASSERT_EQ((int)conf, (int)CMD_DETECT_BANNER);
     TEST_END();
 }
@@ -661,44 +687,191 @@ int test_cmd_detect_last_line_contradicts_no_line_is_not_contradiction(void) {
     TEST_END();
 }
 
-/* --- Post-resolution: cmd_detect_transition_allowed() (item 4) ---
- * Pure function: the one invariant continued detection must never violate
- * -- host output can tighten a session's ruleset, never loosen it. */
+/* --- Session state: cmd_detect_scan_step() / cmd_detect_watch_step() ---
+ * The rule (H1/H2, 2026-09-24 security review): host output may move an
+ * unresolved session to a platform and may set the sticky contradicted
+ * flag; it never replaces a platform once set and never clears the flag. */
 
-typedef struct {
-    CmdPlatform from;
-    CmdPlatform to;
-    int         allowed;
-} CmdDetectTransitionCase;
-
-int test_cmd_detect_transition_allowed_table(void) {
+/* Linux prompt first, then a vendor-banner-looking line (a cat'ed file):
+ * the session stays Linux -- never IOS -- and is contradicted. */
+int test_cmd_detect_scan_linux_then_banner_looking_line_not_ios(void) {
     TEST_BEGIN();
-    static const CmdDetectTransitionCase cases[] = {
-        /* A no-op is always fine. */
-        { CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_CISCO_IOS, 1 },
-        { CMD_PLATFORM_LINUX,     CMD_PLATFORM_LINUX,     1 },
-        { CMD_PLATFORM_UNKNOWN,   CMD_PLATFORM_UNKNOWN,   1 },
-        /* Any resolved platform may step down to unresolved -- always at
-         * least as strict, see classify_unknown_segment(). */
-        { CMD_PLATFORM_LINUX,     CMD_PLATFORM_UNKNOWN,   1 },
-        { CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_UNKNOWN,   1 },
-        { CMD_PLATFORM_JUNOS,     CMD_PLATFORM_UNKNOWN,   1 },
-        { CMD_PLATFORM_FORTIOS,   CMD_PLATFORM_UNKNOWN,   1 },
-        { CMD_PLATFORM_VYOS,      CMD_PLATFORM_UNKNOWN,   1 },
-        /* Once unresolved, never leaves -- moving to any concrete platform
-         * would be a loosening. */
-        { CMD_PLATFORM_UNKNOWN,   CMD_PLATFORM_LINUX,     0 },
-        { CMD_PLATFORM_UNKNOWN,   CMD_PLATFORM_CISCO_IOS, 0 },
-        { CMD_PLATFORM_UNKNOWN,   CMD_PLATFORM_JUNOS,     0 },
-        /* Never sideways to a different concrete platform. */
-        { CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_LINUX,     0 },
-        { CMD_PLATFORM_LINUX,     CMD_PLATFORM_CISCO_IOS, 0 },
-        { CMD_PLATFORM_JUNOS,     CMD_PLATFORM_PANOS,     0 },
-        { CMD_PLATFORM_VYOS,      CMD_PLATFORM_LINUX,     0 },
-    };
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        int got = cmd_detect_transition_allowed(cases[i].from, cases[i].to) ? 1 : 0;
-        ASSERT_EQ(got, cases[i].allowed);
-    }
+    CmdPlatform plat = CMD_PLATFORM_UNKNOWN;
+    int contradicted = 0;
+
+    const char *t1 = "tom@webhost:~$";
+    ASSERT_EQ((int)cmd_detect_scan_step(t1, strlen(t1), &plat, &contradicted),
+              (int)CMD_DETECT_PROMPT);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ(contradicted, 0);
+
+    /* Mid-cat: the banner-looking line is in the capture, the prompt has
+     * not come back yet -- detection alone would say IOS BANNER. */
+    const char *t2 =
+        "tom@webhost:~$ cat notes.txt\r\n"
+        "Cisco IOS Software, C3560 Software, Version 15.2(4)E\r\n";
+    (void)cmd_detect_scan_step(t2, strlen(t2), &plat, &contradicted);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ(contradicted, 1);
+    TEST_END();
+}
+
+/* The same, but the Linux prompt is back by the time of the read: the
+ * capture itself is a conflict. Still Linux, contradicted. */
+int test_cmd_detect_scan_linux_then_catted_banner_conflict(void) {
+    TEST_BEGIN();
+    CmdPlatform plat = CMD_PLATFORM_LINUX;
+    int contradicted = 0;
+    const char *t =
+        "tom@webhost:~$ cat notes.txt\r\n"
+        "Cisco IOS Software, C3560 Software, Version 15.2(4)E\r\n"
+        "tom@webhost:~$";
+    ASSERT_EQ((int)cmd_detect_scan_step(t, strlen(t), &plat, &contradicted),
+              (int)CMD_DETECT_CONFLICT);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ(contradicted, 1);
+    TEST_END();
+}
+
+/* Unresolved, then a vendor banner: resolves to the vendor, not contradicted. */
+int test_cmd_detect_scan_unresolved_then_banner_resolves(void) {
+    TEST_BEGIN();
+    CmdPlatform plat = CMD_PLATFORM_UNKNOWN;
+    int contradicted = 0;
+
+    const char *t0 = "connecting...";
+    ASSERT_EQ((int)cmd_detect_scan_step(t0, strlen(t0), &plat, &contradicted),
+              (int)CMD_DETECT_NONE);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_UNKNOWN);
+
+    const char *t1 =
+        "Cisco IOS Software, C3560 Software (C3560-IPSERVICESK9-M), Version 15.2(4)E\r\n"
+        "switch1>";
+    ASSERT_EQ((int)cmd_detect_scan_step(t1, strlen(t1), &plat, &contradicted),
+              (int)CMD_DETECT_BANNER);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_CISCO_IOS);
+    ASSERT_EQ(contradicted, 0);
+    TEST_END();
+}
+
+/* A vendor session, then a Linux-looking prompt: stays the vendor and is
+ * contradicted -- both in the scan window and after it. */
+int test_cmd_detect_vendor_then_linux_prompt_stays_vendor_contradicted(void) {
+    TEST_BEGIN();
+    const char *linux_line = "tom@webhost:~$";
+
+    CmdPlatform plat = CMD_PLATFORM_JUNOS;
+    int contradicted = 0;
+    ASSERT_EQ((int)cmd_detect_scan_step(linux_line, strlen(linux_line),
+                                        &plat, &contradicted),
+              (int)CMD_DETECT_PROMPT);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_JUNOS);
+    ASSERT_EQ(contradicted, 1);
+
+    contradicted = 0;
+    cmd_detect_watch_step(linux_line, strlen(linux_line),
+                          CMD_PLATFORM_CISCO_IOS, &contradicted);
+    ASSERT_EQ(contradicted, 1);
+    TEST_END();
+}
+
+/* A different banner in a later scan read never moves a resolved session
+ * sideways -- not even banner over prompt. */
+int test_cmd_detect_scan_resolved_never_moves_sideways(void) {
+    TEST_BEGIN();
+    CmdPlatform plat = CMD_PLATFORM_LINUX;
+    int contradicted = 0;
+    const char *t =
+        "Junos OS 21.4R3.15\r\n"
+        "admin@srx1500>";
+    ASSERT_EQ((int)cmd_detect_scan_step(t, strlen(t), &plat, &contradicted),
+              (int)CMD_DETECT_BANNER);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ(contradicted, 1);
+    TEST_END();
+}
+
+/* The flag is sticky: agreeing reads afterwards never clear it. */
+int test_cmd_detect_contradicted_is_sticky(void) {
+    TEST_BEGIN();
+    CmdPlatform plat = CMD_PLATFORM_CISCO_IOS;
+    int contradicted = 0;
+    const char *linux_line = "tom@webhost:~$";
+    cmd_detect_watch_step(linux_line, strlen(linux_line), plat, &contradicted);
+    ASSERT_EQ(contradicted, 1);
+
+    const char *ios = "Cisco IOS Software, Version 15.2(4)E\r\nswitch1#";
+    (void)cmd_detect_scan_step(ios, strlen(ios), &plat, &contradicted);
+    cmd_detect_watch_step("switch1#", 8, plat, &contradicted);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_CISCO_IOS);
+    ASSERT_EQ(contradicted, 1);
+    TEST_END();
+}
+
+/* A conflict seen while still unresolved marks the session, so a later
+ * resolution is classified under the worse of the two rulesets. */
+int test_cmd_detect_scan_conflict_while_unresolved_marks_session(void) {
+    TEST_BEGIN();
+    CmdPlatform plat = CMD_PLATFORM_UNKNOWN;
+    int contradicted = 0;
+    const char *t =
+        "Cisco IOS Software, Version 15.2(4)E\r\n"
+        "tom@webhost:~$";
+    ASSERT_EQ((int)cmd_detect_scan_step(t, strlen(t), &plat, &contradicted),
+              (int)CMD_DETECT_CONFLICT);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ(contradicted, 1);
+
+    const char *linux_line = "tom@webhost:~$";
+    (void)cmd_detect_scan_step(linux_line, strlen(linux_line), &plat, &contradicted);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ(contradicted, 1);
+    TEST_END();
+}
+
+/* Agreement is not contradiction: the same platform again, or VyOS's own
+ * Linux-shaped prompt; an ambiguous shape is not evidence either. */
+int test_cmd_detect_steps_agreement_leaves_session_alone(void) {
+    TEST_BEGIN();
+    CmdPlatform plat = CMD_PLATFORM_LINUX;
+    int contradicted = 0;
+    const char *linux_line = "tom@webhost:~$";
+    (void)cmd_detect_scan_step(linux_line, strlen(linux_line), &plat, &contradicted);
+    cmd_detect_watch_step(linux_line, strlen(linux_line), plat, &contradicted);
+    cmd_detect_watch_step("switch1#", 8, plat, &contradicted);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ(contradicted, 0);
+
+    plat = CMD_PLATFORM_VYOS;
+    const char *vyos_line = "vyos@vyos:~$";
+    (void)cmd_detect_scan_step(vyos_line, strlen(vyos_line), &plat, &contradicted);
+    cmd_detect_watch_step(vyos_line, strlen(vyos_line), plat, &contradicted);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_VYOS);
+    ASSERT_EQ(contradicted, 0);
+    TEST_END();
+}
+
+/* An unresolved session has nothing to contradict after the window closes,
+ * and the watch step never resolves it either. NULL pointers are no-ops. */
+int test_cmd_detect_watch_unresolved_and_null_safety(void) {
+    TEST_BEGIN();
+    int contradicted = 0;
+    const char *linux_line = "tom@webhost:~$";
+    cmd_detect_watch_step(linux_line, strlen(linux_line),
+                          CMD_PLATFORM_UNKNOWN, &contradicted);
+    ASSERT_EQ(contradicted, 0);
+    cmd_detect_watch_step(NULL, 0, CMD_PLATFORM_LINUX, &contradicted);
+    ASSERT_EQ(contradicted, 0);
+    cmd_detect_watch_step(linux_line, strlen(linux_line),
+                          CMD_PLATFORM_CISCO_IOS, NULL);
+
+    CmdPlatform plat = CMD_PLATFORM_UNKNOWN;
+    ASSERT_EQ((int)cmd_detect_scan_step(linux_line, strlen(linux_line), NULL,
+                                        &contradicted),
+              (int)CMD_DETECT_NONE);
+    ASSERT_EQ((int)cmd_detect_scan_step(linux_line, strlen(linux_line), &plat,
+                                        NULL),
+              (int)CMD_DETECT_NONE);
+    ASSERT_EQ((int)plat, (int)CMD_PLATFORM_UNKNOWN);
     TEST_END();
 }
