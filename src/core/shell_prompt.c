@@ -67,3 +67,22 @@ int shell_prompt_line(const char *text)
 
     return 1;
 }
+
+int shell_prompt_line_unambiguous(const char *text)
+{
+    if (!shell_prompt_line(text)) return 0;
+
+    /* shell_prompt_line() already confirmed text is non-NULL/non-empty and
+     * that its right-trimmed form ends in one of $ # % >. Re-trim the same
+     * way to look at the character just before that terminator. */
+    size_t len = strlen(text);
+    while (len > 0 && (text[len - 1] == ' ' || text[len - 1] == '\t'))
+        len--;
+
+    if (len >= 2) {
+        char prev = text[len - 2];
+        if (prev == ' ' || prev == '\t') return 0;
+    }
+
+    return 1;
+}

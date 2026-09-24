@@ -794,6 +794,31 @@ int test_shell_prompt_is_continuation_ps_double_gt(void);
 int test_shell_prompt_line_ps_double_gt_negative(void);
 int test_shell_prompt_triple_gt_unchanged(void);
 int test_shell_prompt_double_gt_change_keeps_existing_results(void);
+int test_shell_prompt_unambiguous_powershell_bare(void);
+int test_shell_prompt_unambiguous_powershell_trailing_space(void);
+int test_shell_prompt_unambiguous_powershell_path_with_spaces_positive(void);
+int test_shell_prompt_unambiguous_powershell_drive_root_positive(void);
+int test_shell_prompt_unambiguous_powershell_typed_redirect_negative(void);
+int test_shell_prompt_unambiguous_cmd_bare(void);
+int test_shell_prompt_unambiguous_cmd_typed_redirect_negative(void);
+int test_shell_prompt_unambiguous_bash_bare(void);
+int test_shell_prompt_unambiguous_bash_typed_text_negative(void);
+int test_shell_prompt_unambiguous_single_char_prompt_positive(void);
+int test_shell_prompt_unambiguous_tab_before_terminator_negative(void);
+int test_shell_prompt_unambiguous_non_prompt_negative(void);
+int test_shell_prompt_unambiguous_continuation_negative(void);
+int test_shell_prompt_unambiguous_empty_and_null_negative(void);
+
+/* test_dispatch_line_clear.c */
+int test_dispatch_line_clear_local_gitbash_is_readline(void);
+int test_dispatch_line_clear_local_msys2_is_readline(void);
+int test_dispatch_line_clear_local_powershell_is_none(void);
+int test_dispatch_line_clear_local_cmd_is_none(void);
+int test_dispatch_line_clear_local_custom_is_none(void);
+int test_dispatch_line_clear_local_empty_name_is_none(void);
+int test_dispatch_line_clear_local_null_name_is_none(void);
+int test_dispatch_line_clear_ssh_is_always_readline(void);
+int test_dispatch_line_clear_ssh_ignores_local_shell_name(void);
 
 /* test_term.c */
 int test_term_buffer(void);
@@ -844,6 +869,12 @@ int test_term_at_continuation_prompt_true(void);
 int test_term_at_continuation_prompt_false(void);
 int test_term_at_prompt_dollar_still_positive(void);
 int test_term_at_prompt_continuation_negative(void);
+int test_term_at_unambiguous_prompt_bare_powershell(void);
+int test_term_at_unambiguous_prompt_typed_redirect_negative(void);
+int test_term_at_unambiguous_prompt_cmd_bare(void);
+int test_term_at_unambiguous_prompt_bash_bare(void);
+int test_term_at_unambiguous_prompt_trailing_typed_text_negative(void);
+int test_term_at_unambiguous_prompt_alt_screen_active(void);
 int test_term_write_seq_increments_on_data(void);
 int test_term_write_seq_unchanged_on_zero_len(void);
 
@@ -1136,6 +1167,7 @@ int test_ai_confirm_text_null(void);
 int test_ai_confirm_text_overflow(void);
 int test_ai_confirm_text_numbering(void);
 int test_ai_continue_text_no_newer_exchanges_is_default(void);
+int test_ai_continue_text_default_tells_model_to_check_for_errors(void);
 int test_ai_continue_text_no_newer_exchanges_ignores_first_cmd(void);
 int test_ai_continue_text_newer_exchanges_names_batch(void);
 int test_ai_continue_text_newer_exchanges_multiple(void);
@@ -3434,6 +3466,30 @@ int main(void) {
     failed += test_shell_prompt_line_ps_double_gt_negative();
     failed += test_shell_prompt_triple_gt_unchanged();
     failed += test_shell_prompt_double_gt_change_keeps_existing_results();
+    failed += test_shell_prompt_unambiguous_powershell_bare();
+    failed += test_shell_prompt_unambiguous_powershell_trailing_space();
+    failed += test_shell_prompt_unambiguous_powershell_path_with_spaces_positive();
+    failed += test_shell_prompt_unambiguous_powershell_drive_root_positive();
+    failed += test_shell_prompt_unambiguous_powershell_typed_redirect_negative();
+    failed += test_shell_prompt_unambiguous_cmd_bare();
+    failed += test_shell_prompt_unambiguous_cmd_typed_redirect_negative();
+    failed += test_shell_prompt_unambiguous_bash_bare();
+    failed += test_shell_prompt_unambiguous_bash_typed_text_negative();
+    failed += test_shell_prompt_unambiguous_single_char_prompt_positive();
+    failed += test_shell_prompt_unambiguous_tab_before_terminator_negative();
+    failed += test_shell_prompt_unambiguous_non_prompt_negative();
+    failed += test_shell_prompt_unambiguous_continuation_negative();
+    failed += test_shell_prompt_unambiguous_empty_and_null_negative();
+
+    failed += test_dispatch_line_clear_local_gitbash_is_readline();
+    failed += test_dispatch_line_clear_local_msys2_is_readline();
+    failed += test_dispatch_line_clear_local_powershell_is_none();
+    failed += test_dispatch_line_clear_local_cmd_is_none();
+    failed += test_dispatch_line_clear_local_custom_is_none();
+    failed += test_dispatch_line_clear_local_empty_name_is_none();
+    failed += test_dispatch_line_clear_local_null_name_is_none();
+    failed += test_dispatch_line_clear_ssh_is_always_readline();
+    failed += test_dispatch_line_clear_ssh_ignores_local_shell_name();
 
     printf("\n--- Term ---\n");
     failed += test_term_buffer();
@@ -3484,6 +3540,12 @@ int main(void) {
     failed += test_term_at_continuation_prompt_false();
     failed += test_term_at_prompt_dollar_still_positive();
     failed += test_term_at_prompt_continuation_negative();
+    failed += test_term_at_unambiguous_prompt_bare_powershell();
+    failed += test_term_at_unambiguous_prompt_typed_redirect_negative();
+    failed += test_term_at_unambiguous_prompt_cmd_bare();
+    failed += test_term_at_unambiguous_prompt_bash_bare();
+    failed += test_term_at_unambiguous_prompt_trailing_typed_text_negative();
+    failed += test_term_at_unambiguous_prompt_alt_screen_active();
     failed += test_term_write_seq_increments_on_data();
     failed += test_term_write_seq_unchanged_on_zero_len();
 
@@ -3718,6 +3780,7 @@ int main(void) {
     failed += test_ai_confirm_text_overflow();
     failed += test_ai_confirm_text_numbering();
     failed += test_ai_continue_text_no_newer_exchanges_is_default();
+    failed += test_ai_continue_text_default_tells_model_to_check_for_errors();
     failed += test_ai_continue_text_no_newer_exchanges_ignores_first_cmd();
     failed += test_ai_continue_text_newer_exchanges_names_batch();
     failed += test_ai_continue_text_newer_exchanges_multiple();

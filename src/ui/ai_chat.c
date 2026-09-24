@@ -39,6 +39,7 @@
 #include "chat_activity.h"
 #include "chat_approval.h"
 #include "cmd_batch.h"
+#include "dispatch_line_clear.h"
 #include "chat_listview.h"
 #include "ui_demo.h"
 #include "icons.h"
@@ -387,6 +388,7 @@ static const char *active_shell_name(const AiChatData *d)
 {
     return (d && d->shell_name[0]) ? d->shell_name : NULL;
 }
+
 
 /* Helper: check if the currently active session has a busy AI stream */
 #define ACTIVE_BUSY(d) ((d)->active_state && (d)->active_state->busy)
@@ -1655,9 +1657,18 @@ static void execute_command(AiChatData *d, const char *cmd)
         return;
     }
 
-    /* Clear any existing text on the line before pasting:
-       Ctrl+E (end of line) + Ctrl+U (kill to start of line) */
-    io->write(io->ctx, "\x05\x15", 2);
+    /* Clear any existing text on the line before pasting -- but only for a
+     * shell known to treat Ctrl+E (end of line) + Ctrl+U (kill to start of
+     * line) as the readline line-editing idiom it is. PSReadLine
+     * (PowerShell) and cmd.exe both take those two bytes as literal input
+     * instead, which used to land "^E^U" in front of every dispatched
+     * command (see dispatch_line_clear.h). The caller (dispatch_tick) has
+     * already confirmed the line is otherwise empty when no prefix is
+     * about to be sent -- see term_at_unambiguous_prompt(). */
+    if (dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d)) ==
+        DISPATCH_LINE_CLEAR_READLINE) {
+        io->write(io->ctx, "\x05\x15", 2);
+    }
 
     /* Send command + CR to the session (CR = Enter key, same as WM_CHAR) */
     io->write(io->ctx, cmd, (size_t)strlen(cmd));
@@ -1916,6 +1927,28 @@ static void dispatch_tick(AiChatData *d)
                 "Finish the line in the terminal, or press Stop to cancel.]");
             if (d->hChatList) chat_listview_invalidate(d->hChatList);
         }
+        return;
+    }
+
+    /* For a local shell that gets no clear-line prefix (PowerShell, cmd,
+     * custom, or one not yet resolved -- see execute_command() and
+     * dispatch_line_clear.h; SSH always gets the prefix, whatever its
+     * CmdPlatform), term_at_prompt()'s loose check -- the cursor row
+     * simply ends in a prompt character -- is not enough to send on: "PS
+     * C:\Users\thoma> ls -la >" also ends in '>' (a redirection operator
+     * mid-command) and would have the AI's command appended to a line the
+     * user is still typing. Require the stricter, bare-prompt-only check
+     * on that path. A readline shell (or any SSH session) always gets the
+     * Ctrl+E Ctrl+U prefix regardless of what is on the line first, so the
+     * loose check above already covers it. Unlike the continuation-prompt
+     * stall above, this is not something waiting out can fix -- the
+     * dispatcher never presses Enter for the user -- so the batch is
+     * cancelled outright rather than left spinning forever. */
+    if (dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d)) ==
+            DISPATCH_LINE_CLEAR_NONE &&
+        !term_at_unambiguous_prompt(d->active_term)) {
+        dispatch_cancel(d,
+            "[not sent: the terminal's input line is not empty]", 1);
         return;
     }
 

@@ -162,4 +162,11 @@ int term_at_prompt(const Terminal *term);
  * rest of a multi-line command rather than a new one. */
 int term_at_continuation_prompt(const Terminal *term);
 
+/* Same cursor-row text as term_at_prompt(), tested against the stricter
+ * shell_prompt_line_unambiguous() instead: true only when the row is a
+ * bare prompt with nothing else typed on it, safe for a caller that will
+ * not clear the line first to append a command to. See
+ * dispatch_line_clear.h and shell_prompt_line_unambiguous(). */
+int term_at_unambiguous_prompt(const Terminal *term);
+
 #endif

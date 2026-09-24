@@ -1547,9 +1547,12 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
         n = snprintf(buf, buf_size,
             "The commands above have been executed. Look at the updated "
             "terminal output and continue with any remaining tasks from my "
-            "original request. If there are more commands to run, include "
-            "ALL of them now. If everything is done, just summarize what "
-            "was accomplished.");
+            "original request. Check the output of every command for "
+            "errors before summarising, and report any failure plainly -- "
+            "never claim a command succeeded unless its output shows it "
+            "did. If there are more commands to run, include ALL of them "
+            "now. If everything is done, just summarize what was "
+            "accomplished.");
     }
     if (n < 0 || (size_t)n >= buf_size) return 0;
     size_t pos = (size_t)n;

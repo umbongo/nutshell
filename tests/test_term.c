@@ -850,6 +850,77 @@ int test_term_at_prompt_continuation_negative(void) {
     TEST_END();
 }
 
+/* ---- term_at_unambiguous_prompt() (dispatch_line_clear.h no-prefix
+ * safety check) ----------------------------------------------------- */
+
+int test_term_at_unambiguous_prompt_bare_powershell(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "PS C:\\Users\\thoma> ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_at_prompt(t), 1);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_unambiguous_prompt_typed_redirect_negative(void) {
+    TEST_BEGIN();
+    /* The bug case: the user paused mid-command after typing a trailing
+     * '>' redirection -- term_at_prompt() alone reads this row as
+     * prompt-shaped, which is exactly the gap term_at_unambiguous_prompt()
+     * closes for a no-prefix shell. */
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "PS C:\\Users\\thoma> ls -la >";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_at_prompt(t), 1);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_unambiguous_prompt_cmd_bare(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "C:\\Users\\thoma>";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_unambiguous_prompt_bash_bare(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "thomas@tompi:~$ ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_unambiguous_prompt_trailing_typed_text_negative(void) {
+    TEST_BEGIN();
+    /* Cursor lands right after "ls" -- not even term_at_prompt() reads
+     * this as a prompt, and term_at_unambiguous_prompt() agrees. */
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "$ ls", 4);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_at_unambiguous_prompt_alt_screen_active(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "$ ", 2);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 1);
+    term_alt_screen_enter(t);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_write_seq_increments_on_data(void) {
     TEST_BEGIN();
     Terminal *t = term_init(24, 80, 100);
