@@ -54,7 +54,20 @@ static int run_list(void)
     if (dir[0] != '\0') {
         (void)snprintf(cfg_path, sizeof(cfg_path), "%s\\" CONFIG_FILENAME, dir);
     } else {
-        (void)snprintf(cfg_path, sizeof(cfg_path), CONFIG_FILENAME);
+        /* Could not determine the exe's own directory: fall back to the
+         * same absolute per-user location the running app would use
+         * (window.c), never a bare relative CONFIG_FILENAME -- that would
+         * silently read from wherever this process's current working
+         * directory happens to be. */
+        char local_appdata[MAX_PATH];
+        DWORD la_len = GetEnvironmentVariableA("LOCALAPPDATA", local_appdata,
+                                                (DWORD)sizeof(local_appdata));
+        if (la_len == 0 || la_len >= sizeof(local_appdata) ||
+            !config_fallback_path(local_appdata, cfg_path, sizeof(cfg_path))) {
+            cli_output("Could not find a folder to store " CONFIG_FILENAME " in.\n",
+                       "Nutshell Sessions", 1);
+            return 2;
+        }
     }
 
     if (GetFileAttributesA(cfg_path) == INVALID_FILE_ATTRIBUTES) {

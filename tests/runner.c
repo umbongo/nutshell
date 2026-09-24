@@ -202,6 +202,16 @@ int test_config_cleared_password_drops_blob(void);
 int test_config_password_legacy_migrates_to_dpapi_on_save(void);
 int test_config_garbage_password_blob_does_not_crash_and_is_preserved(void);
 int test_config_empty_password_writes_empty_no_prefix(void);
+int test_config_save_aborts_when_dpapi_encrypt_fails(void);
+int test_config_ai_key_save_aborts_when_dpapi_encrypt_fails(void);
+int test_config_migration_resave_failure_leaves_file_untouched(void);
+int test_config_bare_plaintext_password_migrates_on_load(void);
+int test_config_bare_plaintext_ai_key_migrates_on_load(void);
+int test_config_secret_drop_stale_preserved_core(void);
+int test_config_new_password_then_cleared_same_session_drops_blob(void);
+int test_config_oversized_preserved_blob_is_dropped_not_truncated(void);
+int test_config_load_backs_up_unparseable_file(void);
+int test_config_fallback_path_core(void);
 /* test_cli_args.c */
 int test_cli_no_args(void);
 int test_cli_session_name_short(void);
@@ -2859,6 +2869,16 @@ int main(void) {
     failed += test_config_password_legacy_migrates_to_dpapi_on_save();
     failed += test_config_garbage_password_blob_does_not_crash_and_is_preserved();
     failed += test_config_empty_password_writes_empty_no_prefix();
+    failed += test_config_save_aborts_when_dpapi_encrypt_fails();
+    failed += test_config_ai_key_save_aborts_when_dpapi_encrypt_fails();
+    failed += test_config_migration_resave_failure_leaves_file_untouched();
+    failed += test_config_bare_plaintext_password_migrates_on_load();
+    failed += test_config_bare_plaintext_ai_key_migrates_on_load();
+    failed += test_config_secret_drop_stale_preserved_core();
+    failed += test_config_new_password_then_cleared_same_session_drops_blob();
+    failed += test_config_oversized_preserved_blob_is_dropped_not_truncated();
+    failed += test_config_load_backs_up_unparseable_file();
+    failed += test_config_fallback_path_core();
 
     printf("\n--- CLI args ---\n");
     failed += test_cli_no_args();

@@ -8,8 +8,50 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <dirent.h>
 
 #define TMP_CFG TEST_TMP_DIR "/nutshell_test.config"
+
+/* Any config_load() of an unparseable TMP_CFG renames it to
+ * "nutshell_test.config.bad-<timestamp>" beside it (config_backup_unparseable_file()
+ * in loader.c). Several tests below trigger that as a side effect without
+ * caring about it -- these two helpers find/remove those backups so they
+ * don't accumulate in TEST_TMP_DIR across runs. */
+static int test_config_find_latest_bad_backup(char *out, size_t out_cap)
+{
+    if (out && out_cap > 0) out[0] = '\0';
+    DIR *d = opendir(TEST_TMP_DIR);
+    if (!d) return 0;
+    char latest_name[300] = "";
+    int found = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (strstr(de->d_name, "nutshell_test.config.bad-") != de->d_name) continue;
+        found = 1;
+        if (strcmp(de->d_name, latest_name) > 0) {
+            (void)snprintf(latest_name, sizeof(latest_name), "%s", de->d_name);
+        }
+    }
+    closedir(d);
+    if (found && out) {
+        (void)snprintf(out, out_cap, "%s/%s", TEST_TMP_DIR, latest_name);
+    }
+    return found;
+}
+
+static void test_config_remove_all_bad_backups(void)
+{
+    DIR *d = opendir(TEST_TMP_DIR);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (strstr(de->d_name, "nutshell_test.config.bad-") != de->d_name) continue;
+        char full[600];
+        (void)snprintf(full, sizeof(full), "%s/%s", TEST_TMP_DIR, de->d_name);
+        (void)remove(full);
+    }
+    closedir(d);
+}
 
 /* ============================================================
  * Settings defaults
@@ -99,6 +141,10 @@ int test_config_load_invalid_json(void)
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NULL(cfg);
     remove(TMP_CFG);
+    /* config_load() renames the unparseable file to a ".bad-<timestamp>"
+     * backup rather than just dropping it (see the backup tests further
+     * down) -- clean that up here too, so it doesn't linger. */
+    test_config_remove_all_bad_backups();
     TEST_END();
 }
 
@@ -1938,6 +1984,383 @@ int test_config_empty_password_writes_empty_no_prefix(void)
 
     config_free(cfg);
     remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * M-2: a DPAPI encrypt failure at save time must abort the save --
+ * never write "" and wipe the secret.
+ * ============================================================ */
+
+int test_config_save_aborts_when_dpapi_encrypt_fails(void)
+{
+    TEST_BEGIN();
+    remove(TMP_CFG);
+
+    Config *cfg = config_new_default();
+    Profile *p = config_profile_new();
+    (void)snprintf(p->name, sizeof(p->name), "%s", "box1");
+    (void)snprintf(p->host, sizeof(p->host), "%s", "example.com");
+    (void)snprintf(p->password, sizeof(p->password), "%s", "hunter2");
+    vec_push(&cfg->profiles, p);
+
+    fake_dpapi_set_fail_protect(1);
+    int rc = config_save(cfg, TMP_CFG);
+    fake_dpapi_set_fail_protect(0);
+
+    ASSERT_TRUE(rc != 0);
+    /* The save must have aborted before ever opening the temp file --
+     * neither the real config nor a stray ".tmp" exists. */
+    FILE *f = fopen(TMP_CFG, "r");
+    ASSERT_NULL(f);
+    char tmp_path[300];
+    (void)snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", TMP_CFG);
+    FILE *tf = fopen(tmp_path, "r");
+    ASSERT_NULL(tf);
+
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_config_ai_key_save_aborts_when_dpapi_encrypt_fails(void)
+{
+    TEST_BEGIN();
+    remove(TMP_CFG);
+
+    Config *cfg = config_new_default();
+    (void)snprintf(cfg->settings.ai_api_key, sizeof(cfg->settings.ai_api_key),
+                    "%s", "sk-secret");
+
+    fake_dpapi_set_fail_protect(1);
+    int rc = config_save(cfg, TMP_CFG);
+    fake_dpapi_set_fail_protect(0);
+
+    ASSERT_TRUE(rc != 0);
+    FILE *f = fopen(TMP_CFG, "r");
+    ASSERT_NULL(f);
+
+    config_free(cfg);
+    TEST_END();
+}
+
+int test_config_migration_resave_failure_leaves_file_untouched(void)
+{
+    TEST_BEGIN();
+    char legacy[600];
+    ASSERT_EQ(crypto_encrypt("legacy-pw", legacy, sizeof(legacy)), CRYPTO_OK);
+
+    char json[1024];
+    (void)snprintf(json, sizeof(json),
+             "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+             "{\"name\": \"box1\", \"host\": \"example.com\", \"password\": \"%s\"}"
+             "]}", legacy);
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(json, f);
+    fclose(f);
+
+    /* config_load() must try its automatic migration re-save, have it fail,
+     * and simply skip it -- not crash, and not corrupt the file it could
+     * not rewrite. */
+    fake_dpapi_set_fail_protect(1);
+    Config *cfg = config_load(TMP_CFG);
+    fake_dpapi_set_fail_protect(0);
+
+    ASSERT_NOT_NULL(cfg);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->password, "legacy-pw");
+    config_free(cfg);
+
+    /* The file on disk must be exactly as it was: still the legacy blob,
+     * not wiped, not partially rewritten. */
+    FILE *rf = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, rf);
+    raw[n] = '\0';
+    fclose(rf);
+    ASSERT_TRUE(strstr(raw, legacy) != NULL);
+
+    /* And now that DPAPI works again, a normal load does migrate it. */
+    Config *reloaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(reloaded);
+    FILE *rf2 = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf2);
+    char raw2[4096];
+    size_t n2 = fread(raw2, 1, sizeof(raw2) - 1, rf2);
+    raw2[n2] = '\0';
+    fclose(rf2);
+    ASSERT_TRUE(strstr(raw2, "$aes256gcm$v1$") == NULL);
+    ASSERT_TRUE(strstr(raw2, "$dpapi$v1$") != NULL);
+    config_free(reloaded);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * M-3: a bare (unencrypted) secret must be flagged for migration too,
+ * same as a decrypted legacy blob -- not left in the clear.
+ * ============================================================ */
+
+int test_config_bare_plaintext_password_migrates_on_load(void)
+{
+    TEST_BEGIN();
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(
+        "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+        "{\"name\": \"box1\", \"host\": \"example.com\", \"password\": \"plain-pw\"}"
+        "]}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->password, "plain-pw");
+    config_free(cfg);
+
+    /* config_load() must have re-saved once on its own: the bare value is
+     * gone from disk, replaced with a DPAPI-encrypted blob. */
+    FILE *rf = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, rf);
+    raw[n] = '\0';
+    fclose(rf);
+    ASSERT_TRUE(strstr(raw, "plain-pw") == NULL);
+    ASSERT_TRUE(strstr(raw, "$dpapi$v1$") != NULL);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_bare_plaintext_ai_key_migrates_on_load(void)
+{
+    TEST_BEGIN();
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(
+        "{\"settings\": {\"font\": \"Consolas\", \"ai_api_key\": \"plain-key\"}, "
+        "\"profiles\": []}", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    ASSERT_STR_EQ(cfg->settings.ai_api_key, "plain-key");
+    config_free(cfg);
+
+    FILE *rf = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, rf);
+    raw[n] = '\0';
+    fclose(rf);
+    ASSERT_TRUE(strstr(raw, "plain-key") == NULL);
+    ASSERT_TRUE(strstr(raw, "$dpapi$v1$") != NULL);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * M-4: entering a new secret value must drop any preserved foreign/
+ * corrupt blob in memory, so a later clear-and-save doesn't resurrect it.
+ * ============================================================ */
+
+int test_config_secret_drop_stale_preserved_core(void)
+{
+    TEST_BEGIN();
+    char preserved[CFG_BLOB_MAX];
+
+    /* A non-empty new value drops the stale preserved blob. */
+    (void)snprintf(preserved, sizeof(preserved), "%s", "$dpapi$v1$stale-blob");
+    config_secret_drop_stale_preserved("new-value", preserved, sizeof(preserved));
+    ASSERT_STR_EQ(preserved, "");
+
+    /* An empty "new" value (nothing supplied) is a no-op. */
+    (void)snprintf(preserved, sizeof(preserved), "%s", "$dpapi$v1$stale-blob");
+    config_secret_drop_stale_preserved("", preserved, sizeof(preserved));
+    ASSERT_STR_EQ(preserved, "$dpapi$v1$stale-blob");
+
+    /* NULL plain is also a no-op, not a crash. */
+    (void)snprintf(preserved, sizeof(preserved), "%s", "$dpapi$v1$stale-blob");
+    config_secret_drop_stale_preserved(NULL, preserved, sizeof(preserved));
+    ASSERT_STR_EQ(preserved, "$dpapi$v1$stale-blob");
+
+    TEST_END();
+}
+
+/* Simulates session_manager.c's IDC_BTN_SAVE flow: an edited profile with a
+ * preserved foreign blob gets a new password typed in, then (in the same
+ * run, no reload) has that password cleared again -- the old blob must
+ * NOT come back. */
+int test_config_new_password_then_cleared_same_session_drops_blob(void)
+{
+    TEST_BEGIN();
+    fake_dpapi_set_identity(0x11);
+    char enc[256];
+    ASSERT_EQ(crypto_encrypt_dpapi("old-pw", enc, sizeof(enc)), CRYPTO_OK);
+
+    char json[1024];
+    (void)snprintf(json, sizeof(json),
+             "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+             "{\"name\": \"box1\", \"host\": \"example.com\", \"password\": \"%s\"}"
+             "]}", enc);
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(json, f);
+    fclose(f);
+
+    fake_dpapi_set_identity(0x22); /* foreign: cannot decrypt old-pw */
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->password_enc_preserved, enc);
+
+    /* Session 1: user types a new password. The session_manager.c/
+     * settings.c fix drops the stale preserved blob at this point --
+     * simulate that here at the core level. */
+    (void)snprintf(p->password, sizeof(p->password), "%s", "new-pw");
+    config_secret_drop_stale_preserved(p->password, p->password_enc_preserved,
+                                        sizeof(p->password_enc_preserved));
+    ASSERT_STR_EQ(p->password_enc_preserved, "");
+
+    /* Session 2 (same run, no reload): user clears the password again. */
+    p->password[0] = '\0';
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    /* The old foreign blob must not have resurfaced. */
+    Config *reloaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(reloaded);
+    Profile *rp = (Profile *)vec_get(&reloaded->profiles, 0);
+    ASSERT_NOT_NULL(rp);
+    ASSERT_STR_EQ(rp->password, "");
+    ASSERT_STR_EQ(rp->password_enc_preserved, "");
+    config_free(reloaded);
+
+    fake_dpapi_set_identity(0x42);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * A preserved blob that doesn't fit the field must be dropped, not
+ * truncated (which would silently corrupt it and write it back that way).
+ * ============================================================ */
+
+int test_config_oversized_preserved_blob_is_dropped_not_truncated(void)
+{
+    TEST_BEGIN();
+    char oversized[1200];
+    memcpy(oversized, "$dpapi$v1$", 10);
+    memset(oversized + 10, 'A', sizeof(oversized) - 11u);
+    oversized[sizeof(oversized) - 1u] = '\0';
+
+    char json[2048];
+    (void)snprintf(json, sizeof(json),
+             "{\"settings\": {\"font\": \"Consolas\"}, \"profiles\": ["
+             "{\"name\": \"box1\", \"host\": \"example.com\", \"password\": \"%s\"}"
+             "]}", oversized);
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs(json, f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(cfg);
+    Profile *p = (Profile *)vec_get(&cfg->profiles, 0);
+    ASSERT_NOT_NULL(p);
+    ASSERT_STR_EQ(p->password, "");
+    /* Dropped, not a truncated (corrupt) copy of the oversized blob. */
+    ASSERT_STR_EQ(p->password_enc_preserved, "");
+
+    ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+    config_free(cfg);
+
+    FILE *rf = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(rf);
+    char raw[4096];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, rf);
+    raw[n] = '\0';
+    fclose(rf);
+    ASSERT_TRUE(strstr(raw, "\"password\": \"\"") != NULL);
+
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * A config file that fails to parse must be preserved under a
+ * ".bad-<timestamp>" name, never silently destroyed by the caller's
+ * fallback-to-defaults save.
+ * ============================================================ */
+
+int test_config_load_backs_up_unparseable_file(void)
+{
+    TEST_BEGIN();
+    /* Start from a clean slate: other tests intentionally feed config_load()
+     * unparseable content too and don't care about the resulting backup
+     * (see test_config_load_invalid_json), which would otherwise make
+     * "the latest backup" ambiguous here. */
+    test_config_remove_all_bad_backups();
+
+    FILE *f = test_fopen_private(TMP_CFG);
+    ASSERT_NOT_NULL(f);
+    fputs("this is not valid json at all {{{", f);
+    fclose(f);
+
+    Config *cfg = config_load(TMP_CFG);
+    ASSERT_NULL(cfg);
+
+    /* The original path no longer holds the bad content. */
+    FILE *gone = fopen(TMP_CFG, "r");
+    ASSERT_NULL(gone);
+
+    /* Find the ".bad-<timestamp>" backup beside it, and check the original
+     * content survived under the new name. */
+    char backup_path[600];
+    ASSERT_TRUE(test_config_find_latest_bad_backup(backup_path, sizeof(backup_path)));
+
+    FILE *bf = fopen(backup_path, "r");
+    ASSERT_NOT_NULL(bf);
+    char raw[256];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, bf);
+    raw[n] = '\0';
+    fclose(bf);
+    ASSERT_TRUE(strstr(raw, "this is not valid json") != NULL);
+
+    test_config_remove_all_bad_backups();
+    TEST_END();
+}
+
+/* ============================================================
+ * config_fallback_path(): pure string helper for the absolute per-user
+ * fallback location, used when the exe's own directory can't be found.
+ * ============================================================ */
+
+int test_config_fallback_path_core(void)
+{
+    TEST_BEGIN();
+    char out[300];
+
+    ASSERT_EQ(config_fallback_path("C:\\Users\\alice\\AppData\\Local", out, sizeof(out)), 1);
+    ASSERT_STR_EQ(out, "C:\\Users\\alice\\AppData\\Local\\Nutshell\\nutshell.config");
+
+    /* Empty or NULL local_appdata: refuse rather than build a bogus path
+     * (the caller must fall back to refusing to save, never the CWD). */
+    ASSERT_EQ(config_fallback_path("", out, sizeof(out)), 0);
+    ASSERT_EQ(config_fallback_path(NULL, out, sizeof(out)), 0);
+
+    /* Doesn't fit the output buffer: refuse rather than truncate into a
+     * bogus (and possibly wrong-directory) path. */
+    char tiny[8];
+    ASSERT_EQ(config_fallback_path("C:\\Users\\alice\\AppData\\Local", tiny, sizeof(tiny)), 0);
+
     TEST_END();
 }
 

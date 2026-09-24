@@ -3,10 +3,16 @@
 #include <string.h>
 
 static unsigned char g_fake_dpapi_identity = 0x42;
+static int g_fake_dpapi_fail_protect = 0;
 
 void fake_dpapi_set_identity(unsigned char identity)
 {
     g_fake_dpapi_identity = identity;
+}
+
+void fake_dpapi_set_fail_protect(int fail)
+{
+    g_fake_dpapi_fail_protect = fail;
 }
 
 /* Simple additive checksum over the plaintext, folded into one byte --
@@ -26,6 +32,7 @@ static int fake_dpapi_protect(const unsigned char *in, size_t in_len,
                                size_t *out_len)
 {
     if (!in || !out || !out_len) return CRYPTO_ERR_ARGS;
+    if (g_fake_dpapi_fail_protect) return CRYPTO_ERR_ENCRYPT;
     if (out_cap < in_len + 3u) return CRYPTO_ERR_BUFSIZE;
     out[0] = g_fake_dpapi_identity;
     out[1] = 0xA5; /* fixed marker so truncated/garbage blobs are detectable */
