@@ -828,6 +828,18 @@ int test_shell_prompt_is_windows_arubaos_negative(void);
 int test_shell_prompt_is_windows_posix_path_without_ps_token_negative(void);
 int test_shell_prompt_is_windows_powershell_continuation_negative(void);
 int test_shell_prompt_is_windows_empty_and_null_negative(void);
+int test_shell_prompt_is_windows_psdrive_hklm(void);
+int test_shell_prompt_is_windows_psdrive_cert(void);
+int test_shell_prompt_is_windows_psdrive_temp(void);
+int test_shell_prompt_is_windows_provider_qualified_path(void);
+int test_shell_prompt_is_windows_fallback_bare(void);
+int test_shell_prompt_is_windows_fallback_bare_no_trailing_space(void);
+int test_shell_prompt_is_windows_repeated_remoting_debugger_prefix(void);
+int test_shell_prompt_is_windows_repeated_remoting_prefix_triple(void);
+int test_shell_prompt_is_windows_ps1_negative(void);
+int test_shell_prompt_is_windows_psx_negative(void);
+int test_shell_prompt_is_windows_ps_bare_no_terminator_negative(void);
+int test_shell_prompt_is_windows_bracket_prefix_then_non_ps_negative(void);
 
 /* test_dispatch_line_clear.c */
 int test_dispatch_line_clear_local_gitbash_is_readline(void);
@@ -3538,6 +3550,18 @@ int main(void) {
     failed += test_shell_prompt_is_windows_posix_path_without_ps_token_negative();
     failed += test_shell_prompt_is_windows_powershell_continuation_negative();
     failed += test_shell_prompt_is_windows_empty_and_null_negative();
+    failed += test_shell_prompt_is_windows_psdrive_hklm();
+    failed += test_shell_prompt_is_windows_psdrive_cert();
+    failed += test_shell_prompt_is_windows_psdrive_temp();
+    failed += test_shell_prompt_is_windows_provider_qualified_path();
+    failed += test_shell_prompt_is_windows_fallback_bare();
+    failed += test_shell_prompt_is_windows_fallback_bare_no_trailing_space();
+    failed += test_shell_prompt_is_windows_repeated_remoting_debugger_prefix();
+    failed += test_shell_prompt_is_windows_repeated_remoting_prefix_triple();
+    failed += test_shell_prompt_is_windows_ps1_negative();
+    failed += test_shell_prompt_is_windows_psx_negative();
+    failed += test_shell_prompt_is_windows_ps_bare_no_terminator_negative();
+    failed += test_shell_prompt_is_windows_bracket_prefix_then_non_ps_negative();
 
     failed += test_dispatch_line_clear_local_gitbash_is_readline();
     failed += test_dispatch_line_clear_local_msys2_is_readline();

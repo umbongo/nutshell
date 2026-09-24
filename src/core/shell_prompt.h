@@ -68,12 +68,21 @@ int shell_prompt_line_unambiguous(const char *text);
  * as shell_prompt_line(). Matches two anchored shapes, both requiring the
  * trimmed line to end in '>' (trailing spaces/tabs ignored, same trim as
  * shell_prompt_line()):
- *   - PowerShell: the literal token "PS ", then a path -- a Windows one
- *     starting "<letter>:\" or, for pwsh running on a POSIX host, a Unix
- *     one starting "/". An optional PowerShell Remoting prefix,
- *     "[host]: " (the shape Enter-PSSession prepends), may precede the
- *     "PS " token.
- *   - cmd.exe: a bare "<letter>:\" path with no "PS " token.
+ *   - PowerShell: the literal token "PS", then either an immediate '>'
+ *     (the fallback prompt, just "PS> ") or a space and then anything.
+ *     Not constrained beyond that, so this covers every location-based
+ *     PowerShell prompt shape, not just the filesystem drive: a Windows
+ *     path ("PS C:\...>"), a non-filesystem PSDrive ("PS HKLM:\>", "PS
+ *     Cert:\>", "PS Temp:\>"), a provider-qualified path ("PS
+ *     Microsoft.PowerShell.Core\FileSystem::\\srv\share>"), and a POSIX
+ *     path for pwsh running on a POSIX host ("PS /home/thoma>"). Zero or
+ *     more PowerShell Remoting/debugger prefixes, each "[host]: " or
+ *     "[DBG]: " (the shape a nested Enter-PSSession or Debug-Runspace
+ *     prepends -- "[DBG]: [srv]: PS C:\> " for one nested inside the
+ *     other), may precede the "PS" token. The character right after "PS"
+ *     must be a space or '>' and nothing else -- "PS1>" and "PSX>" do not
+ *     match; see the .c file for why that boundary matters.
+ *   - cmd.exe: a bare "<letter>:\" path with no "PS" token.
  * Neither shape constrains what comes between the path's start and the
  * final '>' -- this only decides which prefix to send, never whether the
  * line is safe to send a command to (term_at_unambiguous_prompt() gates
@@ -82,10 +91,11 @@ int shell_prompt_line_unambiguous(const char *text);
  *
  * Returns 0 for anything else, including: a bash prompt ("user@host:~$ ",
  * "user@host ~ $ "), zsh's ("host% "), a network-device CLI ("Router>",
- * "<Comware>", "[admin@MikroTik] >", "(ArubaOS) #" -- none start with "PS
- * " or "<letter>:\"), a bare POSIX path with no "PS " token (a Git-bash
+ * "<Comware>", "[admin@MikroTik] >", "(ArubaOS) #" -- none start with
+ * "PS" or "<letter>:\"), a bare POSIX path with no "PS" token (a Git-bash
  * style "/c/Users/x>" prompt), PowerShell's own continuation prompt
- * (">> " -- it has neither token either), and a NULL or empty row. */
+ * (">> " -- it has neither token either), a row that merely starts with
+ * the two letters "PS" ("PS1>", "PSX>"), and a NULL or empty row. */
 int shell_prompt_is_windows(const char *row);
 
 #endif /* NUTSHELL_CORE_SHELL_PROMPT_H */

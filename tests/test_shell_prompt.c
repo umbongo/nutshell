@@ -528,3 +528,89 @@ int test_shell_prompt_is_windows_empty_and_null_negative(void) {
     ASSERT_EQ(shell_prompt_is_windows(NULL), 0);
     TEST_END();
 }
+
+/* ---- shell_prompt_is_windows(): PSDrive, provider-qualified, fallback
+ * and repeated-prefix shapes (2026-09-25 follow-up) -------------------- */
+
+int test_shell_prompt_is_windows_psdrive_hklm(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PS HKLM:\\> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_psdrive_cert(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PS Cert:\\>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_psdrive_temp(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PS Temp:\\>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_provider_qualified_path(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows(
+        "PS Microsoft.PowerShell.Core\\FileSystem::\\\\srv\\share> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_fallback_bare(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PS> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_fallback_bare_no_trailing_space(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PS>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_repeated_remoting_debugger_prefix(void) {
+    TEST_BEGIN();
+    /* Enter-PSSession nested inside a Debug-Runspace: two "[...]: "
+     * prefixes in a row before the "PS" token. */
+    ASSERT_EQ(shell_prompt_is_windows("[DBG]: [srv]: PS C:\\> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_repeated_remoting_prefix_triple(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("[DBG]: [DBG]: [srv]: PS C:\\> "), 1);
+    TEST_END();
+}
+
+/* A row starting "PS" then anything other than a space or '>' is not a
+ * PowerShell prompt -- decided as "PS followed by end (bare '>') or a
+ * space", nothing else. */
+int test_shell_prompt_is_windows_ps1_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PS1>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_psx_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PSX>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_ps_bare_no_terminator_negative(void) {
+    TEST_BEGIN();
+    /* "PS" alone, nothing after it at all -- no '>' to match either
+     * shape. */
+    ASSERT_EQ(shell_prompt_is_windows("PS"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_bracket_prefix_then_non_ps_negative(void) {
+    TEST_BEGIN();
+    /* The "[...]: " prefix strips, but what follows still is not a
+     * PowerShell or cmd shape -- must not match just because the prefix
+     * happened to look like one. */
+    ASSERT_EQ(shell_prompt_is_windows("[srv]: Router>"), 0);
+    TEST_END();
+}

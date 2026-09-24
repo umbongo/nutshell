@@ -87,7 +87,18 @@ typedef enum {
  * acceptable: the former is unchanged from today's behaviour, and the
  * latter only ever suppresses a prefix, never sends a wrong one, and
  * shell_prompt_is_windows()'s own header documents why the shape is
- * matched this loosely. */
+ * matched this loosely.
+ *
+ * A related case, also accepted: pwsh running as the shell of an SSH
+ * session to a Linux host (or as a nested shell under local Git
+ * bash/MSYS2) matches shell_prompt_is_windows() and so also loses the
+ * prefix here, even though pwsh's default Emacs-mode PSReadLine key
+ * bindings would in fact have accepted Ctrl+E/Ctrl+U the readline way --
+ * unlike Windows PowerShell/cmd, this is not the bug this parameter
+ * exists to fix. This is safe, just unnecessarily cautious: NONE never
+ * sends a wrong prefix, only withholds one that would have worked, and
+ * cursor_row_is_windows_prompt cannot distinguish "PowerShell on Windows"
+ * from "PowerShell on Linux" from the prompt shape alone. */
 DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
                                                 const char *local_shell_name,
                                                 int cursor_row_is_windows_prompt);
