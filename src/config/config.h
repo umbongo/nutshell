@@ -68,8 +68,31 @@ typedef struct {
     Vector profiles; /* Vector of Profile* */
 } Config;
 
+/* M3: why config_load_ex() returned NULL (or, on CONFIG_LOAD_INVALID,
+ * still returned NULL but the original was preserved as a ".bad-*" backup
+ * -- see loader.c's config_backup_unparseable_file()). Distinguishing
+ * MISSING from UNREADABLE matters because a caller that then falls back to
+ * config_new_default() must NOT save that over a file it could not read
+ * (locked, too large, a permissions problem) -- there is nothing wrong
+ * with the user's real config in that case, just this process's ability to
+ * see it right now. Set even when the return is non-NULL (CONFIG_LOAD_OK)
+ * so callers that only care about the success/failure boundary can ignore
+ * it. */
+typedef enum {
+    CONFIG_LOAD_OK      = 0, /* parsed successfully; the returned Config is it */
+    CONFIG_LOAD_MISSING = 1, /* no file there -- fine to write defaults */
+    CONFIG_LOAD_UNREADABLE = 2, /* file exists but couldn't be safely read or
+                                  * backed up -- do NOT save over it */
+    CONFIG_LOAD_INVALID = 3, /* file existed, wasn't valid config JSON, and
+                               * WAS backed up -- safe to save fresh defaults,
+                               * the original survives as ".bad-*" */
+} ConfigLoadStatus;
+
 Config *config_new_default(void);
 Config *config_load(const char *path);
+/* Same as config_load(), plus *status_out (when non-NULL) is set to why,
+ * on every return -- see ConfigLoadStatus above. */
+Config *config_load_ex(const char *path, ConfigLoadStatus *status_out);
 int config_save(const Config *cfg, const char *path);
 void config_free(Config *cfg);
 

@@ -334,6 +334,21 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
                 (spec && spec->error[0]) ? spec->error : LOCAL_SHELL_NONE_MESSAGE);
         return NULL;
     }
+    /* M1: refuse a spec whose exe is empty as a second line of defence,
+     * independent of local_shell_resolve_bare() (which now also refuses
+     * this itself -- see local_shell.c). spec->command[0] != '\0' alone
+     * does not catch this: a custom command whose first token was too long
+     * for LOCAL_SHELL_PATH_MAX leaves spec->exe empty while spec->command
+     * still holds the (unusable) full text. Without this check, wapp below
+     * stays NULL and CreateProcess is handed a NULL lpApplicationName --
+     * exactly the PATH/CWD-searching guess this file's own comment (see
+     * below) says must never happen. */
+    if (spec->exe[0] == '\0') {
+        set_err(err, err_size,
+                spec->error[0] ? spec->error :
+                "Could not find an executable in the shell command.");
+        return NULL;
+    }
     if (!conpty_available()) {
         set_err(err, err_size,
                 "Local shell needs Windows 10 version 1809 or later.");

@@ -62,11 +62,27 @@ static int probe_registry_string(void *ctx, const char *key, const char *value,
     return 0;
 }
 
+/* M2: GetFullPathNameA collapses "." and "..", doubled separators, and
+ * forward slashes to back -- exactly the canonicalisation local_shell.c
+ * needs to compare a hand-typed custom executable path against a detected
+ * install's own path. `path` reaching here is always already absolute (see
+ * local_shell.h's doc comment on this callback), so this never resolves
+ * anything against the current directory. */
+static int probe_normalize_path(void *ctx, const char *path, char *out, size_t out_size)
+{
+    (void)ctx;
+    if (!path || !path[0] || !out || out_size == 0u) return 0;
+    DWORD n = GetFullPathNameA(path, (DWORD)out_size, out, NULL);
+    if (n == 0u || n >= (DWORD)out_size) { out[0] = '\0'; return 0; }
+    return 1;
+}
+
 void local_shell_fill_probe(LocalShellProbe *probe)
 {
     memset(probe, 0, sizeof(*probe));
     probe->exists          = probe_exists;
     probe->env             = probe_env;
     probe->registry_string = probe_registry_string;
+    probe->normalize_path   = probe_normalize_path;
     probe->ctx             = NULL;
 }

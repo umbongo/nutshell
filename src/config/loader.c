@@ -12,22 +12,46 @@
 #include <ctype.h>
 #include <time.h>
 #include <dirent.h>
+#include <errno.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 /* ---- File I/O helper ------------------------------------------------------ */
 
-/* M-3: reject config files larger than 1 MB to prevent abuse. */
-#define MAX_CONFIG_FILE_SIZE (1024L * 1024L)
+/* M-3: reject config files larger than the size limit, to prevent abuse.
+ * M3 (2026-09-24 review): a real config with a large ai_system_notes
+ * (AI_NOTES_MAX 2560 bytes) and many profiles can get closer to 1 MB than
+ * expected once several are saved with long notes each; raised to 8 MB --
+ * still nowhere near what a legitimate config approaches, but with real
+ * headroom before a real user's file is mistaken for abuse. */
+#define MAX_CONFIG_FILE_SIZE (8L * 1024L * 1024L)
 
-/* Read entire file at path into a heap buffer (null-terminated).
- * Returns NULL if the file cannot be opened, read, or exceeds the size limit.
- * Caller must free() the returned pointer. */
-static char *read_file(const char *path)
+/* M3: distinguishes "no file there yet" (the normal first run -- fine to
+ * write defaults) from "a file is there but this process could not read
+ * it" (locked by another program or AV, too large, a permissions problem
+ * -- NOT fine to silently overwrite with defaults, since whatever is in it
+ * is still the user's real config) and from "read fine, but not valid
+ * config JSON" (handled separately -- see config_backup_unparseable_file()). */
+typedef enum {
+    CONFIG_READ_OK        = 0,
+    CONFIG_READ_MISSING   = 1,
+    CONFIG_READ_UNREADABLE = 2,
+} ConfigReadStatus;
+
+/* Read entire file at path into a heap buffer (null-terminated), and report
+ * why in *status when it fails. Caller must free() the returned pointer. */
+static char *read_file_status(const char *path, ConfigReadStatus *status)
 {
+    if (status) *status = CONFIG_READ_UNREADABLE;
+    errno = 0;
     FILE *f = fopen(path, "rb");
     if (!f) {
+        /* ENOENT is specifically "not there"; anything else (EACCES, too
+         * many open files, a sharing violation surfaced some other way) is
+         * "there, but this process couldn't get at it". */
+        if (status) *status = (errno == ENOENT) ? CONFIG_READ_MISSING
+                                                 : CONFIG_READ_UNREADABLE;
         return NULL;
     }
     if (fseek(f, 0, SEEK_END) != 0) {
@@ -45,6 +69,7 @@ static char *read_file(const char *path)
     size_t rd = fread(buf, 1u, (size_t)sz, f);
     fclose(f);
     buf[rd] = '\0';
+    if (status) *status = CONFIG_READ_OK;
     return buf;
 }
 
@@ -145,6 +170,30 @@ static void preserve_blob_or_drop(const char *raw, char *preserved_out,
     field_copy(preserved_out, preserved_cap, raw);
 }
 
+/* L (2026-09-24 review): non-zero when `s` has the shape of an
+ * encrypted-blob prefix this build doesn't recognise -- "$<name>$v<digits>$..."
+ * -- as opposed to a plain password or API key a user or a hand edit would
+ * type, which essentially never starts with '$'. crypto_is_dpapi() and
+ * crypto_is_encrypted() must already have said no by the time load_secret()
+ * calls this. Treating a string shaped like this as plaintext (the old
+ * behaviour) meant re-encrypting whatever followed the second '$' as if it
+ * were the real secret -- silently and permanently discarding a blob format
+ * this build doesn't understand (a future Nutshell version's, or another
+ * program's) the next time the config saves. Preserving it verbatim
+ * instead, exactly like a recognised-but-undecryptable blob, keeps it
+ * intact for whatever does understand it. */
+static int looks_like_unknown_blob(const char *s)
+{
+    if (s[0] != '$') return 0;
+    const char *p = strchr(s + 1, '$');
+    if (!p || p == s + 1) return 0; /* "$$..." or no closing '$': not this shape */
+    const char *q = p + 1;
+    if (*q != 'v' || !isdigit((unsigned char)q[1])) return 0;
+    q++;
+    while (isdigit((unsigned char)*q)) q++;
+    return *q == '$';
+}
+
 /* Load one secret field from its raw JSON string value. `plain_out` and
  * `preserved_out` are cleared first, so exactly one of "decrypted
  * plaintext" or "blob preserved verbatim" holds afterward (both empty for
@@ -184,6 +233,15 @@ static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
             preserve_blob_or_drop(raw, preserved_out, preserved_cap);
         }
         secure_zero(tmp, sizeof(tmp));
+        return;
+    }
+
+    /* L: shaped like an encrypted blob this build just doesn't recognise --
+     * not a plain password/API key at all -- preserve it verbatim instead
+     * of treating it as plaintext (which would re-encrypt it as the "real"
+     * secret and lose the original for good on the next save). */
+    if (looks_like_unknown_blob(raw)) {
+        preserve_blob_or_drop(raw, preserved_out, preserved_cap);
         return;
     }
 
@@ -316,24 +374,67 @@ static void config_prune_old_backups(const char *path)
     closedir(d);
 }
 
+/* True when a file already exists at `path` (any type, readable or not) --
+ * used only to pick a free backup name below, so a false negative (a file
+ * that exists but this process cannot even stat) just means that name is
+ * tried and its own rename fails, same as before this existed. */
+static int file_exists_stdio(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (f) { fclose(f); return 1; }
+    return 0;
+}
+
+/* M4: picks a "<path>.bad-<unix timestamp>[-<n>]" name that does not
+ * currently exist, trying suffixes -1, -2, ... when the bare timestamp (or
+ * an earlier suffix) is already taken -- e.g. two unparseable loads within
+ * the same second. Returns 1 and fills `out`, or 0 if every candidate up to
+ * a generous cap is taken (essentially unreachable in practice). */
+#define MAX_BAD_BACKUP_ATTEMPTS 100
+
+static int pick_unique_bad_path(const char *path, char *out, size_t out_size)
+{
+    long ts = (long)time(NULL);
+    for (int attempt = 0; attempt < MAX_BAD_BACKUP_ATTEMPTS; attempt++) {
+        int n = (attempt == 0)
+            ? snprintf(out, out_size, "%s.bad-%ld", path, ts)
+            : snprintf(out, out_size, "%s.bad-%ld-%d", path, ts, attempt);
+        if (n < 0 || (size_t)n >= out_size) return 0;
+        if (!file_exists_stdio(out)) return 1;
+    }
+    return 0;
+}
+
 /* A config file that exists but fails to parse (corrupt, hand-edited
  * badly, truncated by a crash, ...) used to simply vanish the moment the
  * caller fell back to config_new_default() and saved -- config_save()
  * overwrites `path` unconditionally, so the original content was gone for
- * good. Rename it out of the way first, to "<path>.bad-<unix timestamp>",
- * so it survives that overwrite; the caller's own message tells the user.
- * Best-effort: a rename failure just means the file is lost the way it
- * always was before this fix -- no worse than the pre-existing behaviour. */
-static void config_backup_unparseable_file(const char *path)
+ * good. Rename it out of the way first, to "<path>.bad-<unix timestamp>"
+ * (M4: uniqued with a counter suffix rather than REPLACE_EXISTING, so a
+ * second unparseable load in the same second cannot clobber the first
+ * backup), so it survives that overwrite; the caller's own message tells
+ * the user. Returns 1 on success, 0 when the original is NOT safely
+ * preserved (no free name found, or the rename itself failed) -- M4: the
+ * caller must treat that the same as "unreadable" (config_load_ex()'s
+ * CONFIG_LOAD_UNREADABLE) and not save defaults over it, rather than
+ * assuming (as the old, unchecked call did) that the backup always
+ * succeeded. */
+static int config_backup_unparseable_file(const char *path)
 {
-    char bad_path[620];
-    (void)snprintf(bad_path, sizeof(bad_path), "%s.bad-%ld", path, (long)time(NULL));
+    char bad_path[700];
+    if (!pick_unique_bad_path(path, bad_path, sizeof(bad_path))) {
+        return 0;
+    }
 #ifdef _WIN32
-    (void)MoveFileExA(path, bad_path, MOVEFILE_REPLACE_EXISTING);
+    /* No REPLACE_EXISTING: pick_unique_bad_path() already confirmed this
+     * exact name is free, so replacing anything here would only ever paper
+     * over a TOCTOU race, never a real need. */
+    int ok = MoveFileExA(path, bad_path, 0) ? 1 : 0;
 #else
-    (void)rename(path, bad_path);
+    int ok = (rename(path, bad_path) == 0) ? 1 : 0;
 #endif
     config_prune_old_backups(path);
+    return ok;
 }
 
 /* ---- Public API ----------------------------------------------------------- */
@@ -440,14 +541,21 @@ void config_free(Config *cfg)
     free(cfg);
 }
 
-Config *config_load(const char *path)
+Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
 {
+    if (status_out) *status_out = CONFIG_LOAD_MISSING;
+
     if (!path) {
         return NULL;
     }
 
-    char *src = read_file(path);
+    ConfigReadStatus rs;
+    char *src = read_file_status(path, &rs);
     if (!src) {
+        if (status_out) {
+            *status_out = (rs == CONFIG_READ_MISSING) ? CONFIG_LOAD_MISSING
+                                                       : CONFIG_LOAD_UNREADABLE;
+        }
         return NULL;
     }
 
@@ -455,13 +563,22 @@ Config *config_load(const char *path)
     free(src);
     if (!root || root->type != JSON_OBJECT) {
         json_free(root);
-        /* The file exists (read_file() succeeded) but is not valid config
-         * JSON: preserve it under a new name before the caller's fallback
-         * to defaults gets a chance to overwrite it. See the comment on
-         * config_backup_unparseable_file(). */
-        config_backup_unparseable_file(path);
+        /* The file exists (read_file_status() succeeded) but is not valid
+         * config JSON: preserve it under a new name before the caller's
+         * fallback to defaults gets a chance to overwrite it. See the
+         * comment on config_backup_unparseable_file(). M4: only report this
+         * as the (safe-to-overwrite) INVALID case when the backup actually
+         * succeeded -- a failed backup leaves the original the only copy of
+         * whatever was in it, exactly like an unreadable file, so the
+         * caller must not save over it either. */
+        int backed_up = config_backup_unparseable_file(path);
+        if (status_out) {
+            *status_out = backed_up ? CONFIG_LOAD_INVALID : CONFIG_LOAD_UNREADABLE;
+        }
         return NULL;
     }
+
+    if (status_out) *status_out = CONFIG_LOAD_OK;
 
     Config *cfg = config_new_default();
 
@@ -683,6 +800,11 @@ Config *config_load(const char *path)
     return cfg;
 }
 
+Config *config_load(const char *path)
+{
+    return config_load_ex(path, NULL);
+}
+
 int config_save(const Config *cfg, const char *path)
 {
     if (!cfg || !path || path[0] == '\0') {
@@ -866,14 +988,51 @@ int config_save(const Config *cfg, const char *path)
     }
 
     fputs("  ]\n}\n", f);
-    fclose(f);
 
-    /* Atomically replace the real config file with the completed temp file. */
+    /* M5: a write error anywhere above (disk full, a transient I/O error)
+     * only ever shows up here, at fflush/fclose time -- stdio buffers
+     * output and a single fputs()/fprintf() call has no useful return value
+     * to check for it. ferror() must be read BEFORE fclose(), which resets
+     * the stream's error indicator; fclose()'s own return additionally
+     * catches the final flush failing. Either one means the temp file is
+     * incomplete or corrupt: remove it (it holds nothing the real config
+     * file at `path` doesn't already have -- only encrypted blobs, no
+     * plaintext secrets, but still not worth leaving around) and leave the
+     * real file at `path` completely untouched, rather than renaming
+     * something broken over it. */
+    int write_failed = ferror(f);
+    if (fclose(f) != 0) write_failed = 1;
+    if (write_failed) {
+        (void)remove(tmp_path);
+        free(tmp_path);
+        if (pw_blobs) {
+            for (size_t i = 0u; i < n; i++) secure_zero(pw_blobs[i], CFG_BLOB_MAX);
+            free(pw_blobs);
+        }
+        secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+        return -1;
+    }
+
+    /* Atomically replace the real config file with the completed temp file.
+     * M5: MOVEFILE_WRITE_THROUGH makes MoveFileExA wait for the rename (and
+     * the data behind it) to actually reach disk before returning, instead
+     * of a cached, technically-successful rename that a crash or power loss
+     * moments later could still lose -- the whole point of the temp-file
+     * dance above. */
 #ifdef _WIN32
-    int moved = MoveFileExA(tmp_path, path, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
+    int moved = MoveFileExA(tmp_path, path,
+                            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+                ? 0 : -1;
 #else
     int moved = rename(tmp_path, path);
 #endif
+    if (moved != 0) {
+        /* The temp file never made it into place -- clean it up rather
+         * than leaving an orphaned ".tmp" (holding the same encrypted
+         * blobs as the real file) beside the config indefinitely. The real
+         * file at `path`, if any, is untouched either way. */
+        (void)remove(tmp_path);
+    }
     free(tmp_path);
 
     if (pw_blobs) {
@@ -960,9 +1119,31 @@ void config_secret_drop_stale_preserved(const char *plain, char *preserved,
     }
 }
 
+/* L: non-zero when `s` is an absolute Windows path -- a drive letter
+ * ("C:\..." or "C:/...") or a UNC prefix ("\\server\..."). %LOCALAPPDATA%
+ * is always one of these on a real Windows install; a relative value (a
+ * hand-edited or otherwise hostile environment) would make the "absolute,
+ * per-user" path this function promises actually resolve against whatever
+ * the process's current directory happens to be -- exactly the hazard its
+ * own doc comment says building an absolute path here exists to avoid. */
+static int is_absolute_windows_path(const char *s)
+{
+    size_t len = strlen(s);
+    if (len >= 3 &&
+        ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z')) &&
+        s[1] == ':' && (s[2] == '\\' || s[2] == '/')) {
+        return 1;
+    }
+    if (len >= 2 && s[0] == '\\' && s[1] == '\\') return 1;
+    return 0;
+}
+
 int config_fallback_path(const char *local_appdata, char *out, size_t out_cap)
 {
     if (!local_appdata || local_appdata[0] == '\0' || !out || out_cap == 0u) {
+        return 0;
+    }
+    if (!is_absolute_windows_path(local_appdata)) {
         return 0;
     }
     int n = snprintf(out, out_cap, "%s\\Nutshell\\" CONFIG_FILENAME, local_appdata);

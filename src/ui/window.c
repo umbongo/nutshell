@@ -192,6 +192,16 @@ static HINSTANCE g_hInst = NULL;
 static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
+/* M3: set at startup when nutshell.config exists but this process could not
+ * read it (locked by another program or AV, larger than the size limit, a
+ * permissions problem) -- as opposed to no file being there at all, the
+ * ordinary first-run case. Saving over a file this process merely failed
+ * to open would replace the user's real config with defaults for no
+ * reason; every save site (this file, session_manager.c, settings.c) is
+ * passed an empty config_path instead of g_config_path whenever this is
+ * set, which config_save() already refuses to write to (see its own top-of
+ * -function comment), so nothing needs to check this flag directly. */
+static int g_config_save_disabled = 0;
 static CliAction g_startup_action = CLI_RUN;
 static char g_startup_arg[256];
 static char g_startup_demo_state[CLI_DEMO_STATE_MAX];
@@ -654,10 +664,35 @@ static int prompt_passphrase(HWND parent, char *out, int out_size)
 /* Return the directory that contains the running executable. */
 static void get_exe_dir(char *buf, size_t n)
 {
-    GetModuleFileNameA(NULL, buf, (DWORD)n);
+    if (!buf || n == 0) return;
+    /* L: GetModuleFileNameA returns the buffer's own length (not 0, and not
+     * an error GetLastError() reliably reports pre-Vista) when the path
+     * was truncated to fit -- and does not guarantee NUL termination in
+     * that case either. A truncated path is not safe to derive a
+     * directory from: strrchr() below could find a '\\' that belongs to a
+     * completely different, shorter, wrong directory (e.g. nutshell.exe
+     * sitting under a very deeply nested path). Refuse rather than guess,
+     * same as every other caller of this function already does when it
+     * comes back empty. */
+    DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)n);
+    if (len == 0u || len >= (DWORD)n) {
+        buf[0] = '\0';
+        return;
+    }
     char *last = strrchr(buf, '\\');
     if (last) *last = '\0';
-    else if (n > 0) buf[0] = '\0';
+    else buf[0] = '\0';
+}
+
+/* M3: the config path to hand a dialog that may go on to config_save() --
+ * "" (never g_config_path) once g_config_save_disabled is set, so every
+ * such dialog's own config_save() call refuses to write (config_save()
+ * already treats an empty path as "nowhere safe to save", see its own
+ * top-of-function comment) instead of overwriting a config file this
+ * process only failed to READ this run. */
+static const char *active_config_path(void)
+{
+    return g_config_save_disabled ? "" : g_config_path;
 }
 
 /* Open a timestamped session log file under log_dir.
@@ -849,18 +884,31 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
      * its own output -- something it printed, something piped through it --
      * could otherwise walk the session to a *looser* ruleset than the one it
      * starts on, which the invariant in CLAUDE.md never allows. A custom
-     * command could be anything, so it alone stays on `auto` and the scan
-     * runs. */
-    if (!s->platform_locked && local_shell_kind_is_posix(kind)) {
-        s->ai_state.platform  = (int)CMD_PLATFORM_LINUX;
-        s->platform_locked    = 1;
-        s->platform_scanned   = 1;
-    } else if (!s->platform_locked &&
-               (kind == SHELL_PWSH || kind == SHELL_POWERSHELL ||
-                kind == SHELL_CMD)) {
-        s->ai_state.platform  = (int)CMD_PLATFORM_UNKNOWN;
-        s->platform_locked    = 1;
-        s->platform_scanned   = 1;
+     * command that isn't positively identified as one of the known POSIX
+     * shells is locked the same strict way (H3): it could be anything, so
+     * it never gets the looser auto-scan by default either.
+     *
+     * H3: this reads spec->kind, not the local `kind` captured above from
+     * local_shell_resolve() -- local_shell_resolve_bare() (already called,
+     * a few lines up) may have reclassified spec->kind since then (a custom
+     * command whose executable turned out to be, or turned out to name, an
+     * already-detected or positively-recognised shell -- see
+     * local_shell.c's reclassify_if_known_shell()/reclassify_by_base_name(),
+     * M2), and it is that corrected kind the lock must act on. Using the
+     * stale `kind` here let a custom command pointing at PowerShell or cmd
+     * keep whichever ruleset the profile-level check above left it on --
+     * usually `auto` -- rather than ever getting this strict lock. */
+    if (!s->platform_locked) {
+        LocalShellPlatformLock lock = local_shell_platform_lock(spec);
+        if (lock == LOCAL_SHELL_LOCK_LINUX) {
+            s->ai_state.platform  = (int)CMD_PLATFORM_LINUX;
+            s->platform_locked    = 1;
+            s->platform_scanned   = 1;
+        } else if (lock == LOCAL_SHELL_LOCK_STRICT) {
+            s->ai_state.platform  = (int)CMD_PLATFORM_UNKNOWN;
+            s->platform_locked    = 1;
+            s->platform_scanned   = 1;
+        }
     }
 
     DWORD tick_now = GetTickCount();
@@ -1242,7 +1290,8 @@ static void on_tab_new(void) {
     Profile p;
     memset(&p, 0, sizeof(Profile));
 
-    if (SessionManager_Show(g_hInst, GetParent(g_hwndTabs), g_config, g_config_path, &p)) {
+    if (SessionManager_Show(g_hInst, GetParent(g_hwndTabs), g_config,
+                            active_config_path(), &p)) {
         on_session_connect(&p);
     }
 }
@@ -1264,7 +1313,7 @@ static void apply_config_colors(void)
  * no-key state's "Open Settings" button land on Provider. */
 static void on_settings_clicked_page(int initial_page) {
     HWND parent = GetParent(g_hwndTabs);
-    settings_dlg_show(parent, g_config, g_config_path, initial_page);
+    settings_dlg_show(parent, g_config, active_config_path(), initial_page);
 
     /* Reload theme from config (colour scheme may have changed) */
     {
@@ -3116,7 +3165,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                 }
 
-                g_config = (g_config_path[0] != '\0') ? config_load(g_config_path) : NULL;
+                ConfigLoadStatus load_status = CONFIG_LOAD_MISSING;
+                g_config = (g_config_path[0] != '\0')
+                          ? config_load_ex(g_config_path, &load_status)
+                          : NULL;
                 if (!g_config) {
                     if (g_config_path[0] == '\0') {
                         MessageBoxA(hwnd,
@@ -3125,13 +3177,38 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             "is available).\n\nSettings and sessions will not be "
                             "saved this run.",
                             "Configuration Warning", MB_OK | MB_ICONWARNING);
-                    } else {
+                        g_config_save_disabled = 1;
+                    } else if (load_status == CONFIG_LOAD_UNREADABLE) {
+                        /* M3/M4: the file is there, but this process could
+                         * not safely read it (or, for an unparseable file,
+                         * could not even back it up first) -- there is
+                         * nothing wrong with the user's real config, only
+                         * with this run's ability to see it. Saving
+                         * defaults over it would destroy it for good, so
+                         * saving is refused for the rest of this run
+                         * instead (every save site is passed "" in place
+                         * of g_config_path -- see g_config_save_disabled's
+                         * own comment). */
                         MessageBoxA(hwnd,
-                            "Could not load " CONFIG_FILENAME ".\n\nIf a previous "
-                            "file existed but could not be read, it was kept "
-                            "alongside it as " CONFIG_FILENAME ".bad-<timestamp>."
-                            "\n\nStarting with default settings.",
+                            "Could not read " CONFIG_FILENAME " (it may be locked "
+                            "by another program, or larger than expected).\n\n"
+                            "Starting with default settings for this run only -- "
+                            "nothing will be saved until the file is readable "
+                            "again and Nutshell is restarted.",
                             "Configuration Warning", MB_OK | MB_ICONWARNING);
+                        g_config_save_disabled = 1;
+                    } else {
+                        /* CONFIG_LOAD_MISSING (first run) or CONFIG_LOAD_INVALID
+                         * (unparseable, but backed up successfully): safe to
+                         * save fresh defaults over `path`. */
+                        if (load_status == CONFIG_LOAD_INVALID) {
+                            MessageBoxA(hwnd,
+                                "Could not load " CONFIG_FILENAME ": it was not "
+                                "valid. The previous file was kept alongside it "
+                                "as " CONFIG_FILENAME ".bad-<timestamp>."
+                                "\n\nStarting with default settings.",
+                                "Configuration Warning", MB_OK | MB_ICONWARNING);
+                        }
                     }
                     g_config = config_new_default();
                 }
@@ -3145,9 +3222,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 /* First start by a version that knows about local shells:
                  * give the user a real saved "Local shell" profile at the
                  * top of the list (spec section 5). It is an ordinary row
-                 * from then on -- rename it, edit it, delete it. */
-                if (config_ensure_local_profile(g_config))
-                    (void)config_save(g_config, g_config_path);
+                 * from then on -- rename it, edit it, delete it. M5: report
+                 * it if this fails to save -- silently doing nothing here
+                 * would leave the profile showing for this run only, gone
+                 * again the moment Nutshell restarts, with no indication
+                 * why. */
+                if (config_ensure_local_profile(g_config) && !g_config_save_disabled &&
+                    config_save(g_config, g_config_path) != 0) {
+                    MessageBoxA(hwnd,
+                        "Could not save " CONFIG_FILENAME ". The \"Local shell\" "
+                        "profile just added will not persist to the next run.",
+                        "Save Failed", MB_OK | MB_ICONWARNING);
+                }
             }
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;

@@ -54,17 +54,53 @@ FILE *nspty_report = NULL;
 
 /* ---- helpers ------------------------------------------------------------ */
 
-/* A custom-command spec: the one LocalShellSpec shape a test can build
- * without probing the machine. */
+/* A tiny real LocalShellProbe -- just enough of local_shell_probe.c's real
+ * Win32 callbacks (that file itself isn't in WIN_TEST_SRCS) for
+ * local_shell_resolve_bare()'s bare-name search (System32, the Windows
+ * directory, PATH) to work against the real machine these wintest cases
+ * already run real processes on. No registry_string: nothing here resolves
+ * a bare name that would need it. */
+static int probe_exists(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (!path || !path[0]) return 0;
+    DWORD attr = GetFileAttributesA(path);
+    return (attr != INVALID_FILE_ATTRIBUTES &&
+            !(attr & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
+}
+
+static int probe_env(void *ctx, const char *name, char *out, size_t out_size)
+{
+    (void)ctx;
+    if (!name || !out || out_size == 0u) return 0;
+    out[0] = '\0';
+    DWORD n = GetEnvironmentVariableA(name, out, (DWORD)out_size);
+    if (n == 0u || n >= (DWORD)out_size) { out[0] = '\0'; return 0; }
+    return out[0] ? 1 : 0;
+}
+
+/* A custom-command spec, resolved exactly the way window.c's
+ * start_local_shell() resolves one -- local_shell_resolve() to split
+ * `command` into spec->exe/dir/command, then local_shell_resolve_bare()
+ * to turn a bare name (e.g. "cmd.exe") into the absolute path
+ * local_pty_open() now requires (M1: an empty spec->exe is a refusal, not
+ * a NULL-lpApplicationName fallback) -- rather than leaving spec->exe
+ * empty, which every caller in production always resolves first. */
 static void spec_for(LocalShellSpec *spec, const char *command)
 {
+    LocalShellProbe probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.exists = probe_exists;
+    probe.env    = probe_env;
+
     memset(spec, 0, sizeof(*spec));
-    spec->kind = SHELL_CUSTOM;
-    (void)snprintf(spec->command, sizeof(spec->command), "%s", command);
-    (void)snprintf(spec->env[0].name,  sizeof(spec->env[0].name),  "%s", "TERM");
-    (void)snprintf(spec->env[0].value, sizeof(spec->env[0].value), "%s",
-                   "xterm-256color");
-    spec->env_count = 1;
+    (void)local_shell_resolve(command, &probe, spec);
+    (void)local_shell_resolve_bare(spec, &probe);
+
+    /* fill_env() inside the calls above already added TERM (and NUTSHELL);
+     * these cases only ever look at the emulator's own output, not the
+     * child's environment, so that's harmless -- kept only for the log
+     * line a failed resolve prints via spec->error. */
 }
 
 /* The screen as the app reads it -- the same extractor the AI panel uses. */

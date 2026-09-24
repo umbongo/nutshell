@@ -59,6 +59,17 @@ typedef struct LocalShellProbe {
      * path such as "HKLM\\SOFTWARE\\GitForWindows". */
     int (*registry_string)(void *ctx, const char *key, const char *value,
                            char *out, size_t out_size);
+    /* M2: canonicalise `path` the way Windows' own path resolution would
+     * (GetFullPathNameA on the real probe) -- collapsing "." and "..",
+     * doubled separators, and forward slashes to back -- so a hand-typed
+     * custom executable path compares equal to a detected install's own
+     * path even when it is spelled differently. `path` is always already
+     * absolute by the time local_shell.c calls this (never used to resolve
+     * a relative path against the current directory). Returns 1 and fills
+     * out on success; 0 otherwise (out left untouched -- the caller
+     * supplies its own plain-copy fallback first). May be NULL, in which
+     * case comparisons fall back to the two paths' raw spelling. */
+    int (*normalize_path)(void *ctx, const char *path, char *out, size_t out_size);
     void *ctx;
 } LocalShellProbe;
 
@@ -129,14 +140,27 @@ LocalShellKind local_shell_resolve(const char *profile_shell,
  * to match: the absolute, correctly quoted path plus whatever arguments
  * followed in the original command.
  *
- * Every success path then also checks spec->exe against what the automatic
- * search (local_shell_resolve()'s steps 2-6) would itself find on this
- * machine right now; an exact match reclassifies spec->kind to that shell
- * (and re-fills spec->env to match), so a hand-typed path to the detected
- * Git bash or MSYS2 gets the same bash HOME/SHELL/PATH additions and
- * Linux platform-lock eligibility (local_shell_kind_is_posix()) as picking
- * it from the profile editor's dropdown would -- the command line itself is
- * never rewritten by this step, only spec->kind and spec->env.
+ * Every success path then also checks spec->exe (normalised via the probe's
+ * normalize_path -- M2 -- so a differently-spelled but equal path still
+ * matches) against what the automatic search (local_shell_resolve()'s steps
+ * 2-6) would itself find on this machine right now; an exact match
+ * reclassifies spec->kind to that shell (and re-fills spec->env to match),
+ * so a hand-typed path to the detected Git bash or MSYS2 gets the same bash
+ * HOME/SHELL/PATH additions and Linux platform-lock eligibility
+ * (local_shell_kind_is_posix()) as picking it from the profile editor's
+ * dropdown would. Failing that exact-path match, spec->exe's base name is
+ * also checked against the three unmistakable Windows shell names --
+ * powershell.exe, pwsh.exe, cmd.exe -- and reclassifies just the same when
+ * it matches (M2); bash recognition stays exact-path-only, since
+ * "bash.exe" is also WSL's own launcher name for something that is not Git
+ * bash or MSYS2. The command line itself is never rewritten by either
+ * step, only spec->kind and spec->env.
+ *
+ * A spec whose exe ends up empty (M1: e.g. a custom command whose first
+ * token was too long to fit LOCAL_SHELL_PATH_MAX) is a refusal, not a
+ * silent no-op -- an empty exe would otherwise reach local_pty_open() as a
+ * NULL lpApplicationName, handing CreateProcess back the very search this
+ * function exists to avoid.
  *
  * Returns 1 when spec is safe to launch, 0 (spec->error filled, everything
  * else in spec left untouched) when it must be refused. A spec whose kind
@@ -185,15 +209,47 @@ const char *local_shell_kind_name(LocalShellKind kind);
 /* The name for a resolved spec: local_shell_kind_name(spec->kind), except
  * that a SHELL_CUSTOM whose executable's base name is powershell or pwsh
  * (with or without .exe, any letter case, any directory) is "PowerShell",
- * so the model is told which syntax to write. The kind stays SHELL_CUSTOM:
- * this is a name only, and the platform still goes through the banner scan.
- * NULL for a NULL spec or SHELL_NONE. */
+ * so the model is told which syntax to write. A spec that has already been
+ * through local_shell_resolve_bare() never actually reaches this fallback
+ * with kind still SHELL_CUSTOM in that case any more (M2:
+ * reclassify_by_base_name() there reclassifies spec->kind itself, so both
+ * the name and the platform lock agree); this is the name for a spec that
+ * has not, or whose probe could not confirm it. NULL for a NULL spec or
+ * SHELL_NONE. */
 const char *local_shell_spec_name(const LocalShellSpec *spec);
 
 /* Non-zero when this kind is a known POSIX-ish shell whose platform the AI
  * panel may pin to Linux without a banner scan (spec section 6): Git bash
  * and MSYS2 yes, custom, PowerShell, cmd and none no. */
 int local_shell_kind_is_posix(LocalShellKind kind);
+
+/* The local-session platform lock a resolved spec gets (spec section 6;
+ * CLAUDE.md's invariant that a session's ruleset is never loosened by
+ * something the session itself printed):
+ *
+ *   LOCAL_SHELL_LOCK_NONE   -- SHELL_NONE only: nothing to lock, the
+ *                              session never starts.
+ *   LOCAL_SHELL_LOCK_LINUX  -- a known POSIX shell (local_shell_kind_is_posix()):
+ *                              pin Linux, no banner scan -- there is no
+ *                              login banner to scan.
+ *   LOCAL_SHELL_LOCK_STRICT -- everything else: a known Windows shell
+ *                              (PowerShell, cmd) has no Windows ruleset to
+ *                              loosen to, and a custom command could be
+ *                              anything, so it is never left on the
+ *                              looser auto-scan by default either -- only
+ *                              a positively identified POSIX shell is.
+ *                              Callers map this to whatever "no ruleset to
+ *                              resolve to" means to them (e.g.
+ *                              CMD_PLATFORM_UNKNOWN).
+ *
+ * Tolerates a NULL spec (returns LOCAL_SHELL_LOCK_NONE). */
+typedef enum {
+    LOCAL_SHELL_LOCK_NONE   = 0,
+    LOCAL_SHELL_LOCK_LINUX  = 1,
+    LOCAL_SHELL_LOCK_STRICT = 2,
+} LocalShellPlatformLock;
+
+LocalShellPlatformLock local_shell_platform_lock(const LocalShellSpec *spec);
 
 /* Shown in the terminal when the search comes up empty (spec section 10 step 7).
  * Should be unreachable on a live Windows install -- cmd.exe is always
