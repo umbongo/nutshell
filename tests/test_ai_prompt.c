@@ -1087,6 +1087,22 @@ int test_ai_continue_text_newer_exchanges_names_batch(void) {
     TEST_END();
 }
 
+/* The newer-exchanges branch needs the same error-checking instruction as
+ * the default branch (test_ai_continue_text_default_tells_model_to_check_
+ * for_errors above) -- this is the branch the "all six commands ran
+ * successfully" hallucination actually hits when the batch follows an
+ * earlier request in the same turn. */
+int test_ai_continue_text_newer_exchanges_tells_model_to_check_for_errors(void) {
+    TEST_BEGIN();
+    char buf[512];
+    size_t n = ai_build_continue_text(1, "df -h", NULL, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "Check the output of every command for errors") != NULL);
+    ASSERT_TRUE(strstr(buf, "never claim a command succeeded unless its "
+                            "output shows it did") != NULL);
+    TEST_END();
+}
+
 int test_ai_continue_text_newer_exchanges_multiple(void) {
     TEST_BEGIN();
     char buf[512];

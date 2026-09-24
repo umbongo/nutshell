@@ -65,4 +65,58 @@ typedef enum {
 DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
                                                 const char *local_shell_name);
 
+/* The two timing decisions dispatch_tick() (src/ui/ai_chat.c) makes on the
+ * no-prefix path (DISPATCH_LINE_CLEAR_NONE above), where a command is
+ * written straight onto the input line rather than after a clear-line
+ * prefix. Both take an already-computed elapsed-milliseconds value so this
+ * header stays free of GetTickCount()/DWORD -- the caller does the
+ * GetTickCount() subtraction (which is safe across a wraparound: unsigned
+ * arithmetic) and hands the result in. */
+
+/* Minimum time, in milliseconds, that must have passed since the user's
+ * last keystroke in the session's terminal before a no-prefix dispatch may
+ * write a command onto the input line.
+ *
+ * ConPTY echoes a keystroke asynchronously. Without this guard, a
+ * character the user just typed but that has not reached the terminal
+ * buffer yet is invisible to term_at_unambiguous_prompt() -- the
+ * terminal's write_seq has not changed yet either, so the dispatcher's own
+ * "quiet" tracking (PROMPT_QUIET_MS in ai_chat.c) does not catch it -- and
+ * the AI's command gets glued onto the front of whatever the user typed
+ * (e.g. "xGet-ChildItem"). Set to the same 400 ms as PROMPT_QUIET_MS: the
+ * rest of the dispatcher already treats that as long enough for the
+ * terminal to have caught up with anything in flight. */
+#define DISPATCH_KEYSTROKE_GUARD_MS 400u
+
+/* True when elapsed_ms (time since the session's last keystroke) is too
+ * recent to trust the terminal's current cursor row for a no-prefix
+ * dispatch. */
+int dispatch_keystroke_too_recent(unsigned long elapsed_ms);
+
+/* How long, in milliseconds, dispatch_tick() may wait on an ambiguous
+ * no-prefix prompt -- term_at_prompt() true but
+ * term_at_unambiguous_prompt() false, or dispatch_keystroke_too_recent()
+ * true -- before giving up and cancelling the batch.
+ *
+ * A single failed check must not cancel outright: an ordinary prompt can
+ * legitimately have a space before its terminator (cmd's default "$P $G"
+ * renders as "C:\x >"; a themed PowerShell/posh-git prompt like
+ * "[main] >"), and output going quiet for a moment on a line that happens
+ * to end "... 50 %" is not a hang. But nothing here will ever make the
+ * line become unambiguous on its own -- unlike a continuation prompt,
+ * where the user finishing the command resolves it -- so waiting forever
+ * is not an option either; the dispatcher would sit forever on a
+ * genuinely custom, always-ambiguous prompt shape. 5000 ms is about 12x
+ * PROMPT_QUIET_MS (400 ms) and 20x the dispatcher's own poll interval
+ * (CMD_QUEUE_POLL_MS, 250 ms) -- long enough that a momentary read is
+ * never mistaken for a real stall, short enough that a genuine stall is
+ * still reported and cleared up within a few seconds rather than left
+ * hanging indefinitely. */
+#define DISPATCH_AMBIGUOUS_PROMPT_TIMEOUT_MS 5000u
+
+/* True when elapsed_ms (time since dispatch_tick() first saw the
+ * ambiguous-prompt condition for the command it is trying to send) means
+ * the dispatcher should stop waiting and cancel the batch. */
+int dispatch_ambiguous_prompt_timed_out(unsigned long elapsed_ms);
+
 #endif /* NUTSHELL_DISPATCH_LINE_CLEAR_H */

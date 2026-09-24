@@ -865,7 +865,16 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
         return 0;
     }
 
-    s->io = session_io_local(pty);
+    {
+        /* session_io_local() only has the pty handle, not this Session --
+         * fill in the keystroke-tick pointer the AI dispatcher's no-prefix
+         * safety check reads (SessionIo.last_input_tick,
+         * src/term/session_io.h) on the local copy, then publish s->io in
+         * one assignment rather than two, same as the SSH connect path. */
+        SessionIo io = session_io_local(pty);
+        io.last_input_tick = &s->last_user_input_tick;
+        s->io = io;
+    }
 
     /* The shell's name, for the AI system prompt (spec section 6). A custom
      * powershell/pwsh command is named "PowerShell", so the model does not
@@ -3925,8 +3934,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                  * UI-thread reader (WM_SIZE, sync_session_grid) can see a
                  * half-copied SessionIo with ctx set and resize NULL. The
                  * channel and session were opened by the connection thread,
-                 * which has posted this message and touches neither again. */
-                s->io = session_io_ssh(s->ssh, s->channel);
+                 * which has posted this message and touches neither again.
+                 * session_io_ssh() only has the channel/session handles,
+                 * not this Session -- fill in the keystroke-tick pointer
+                 * (SessionIo.last_input_tick, src/term/session_io.h) on the
+                 * local copy first, so s->io is still published in one
+                 * assignment. */
+                SessionIo io = session_io_ssh(s->ssh, s->channel);
+                io.last_input_tick = &s->last_user_input_tick;
+                s->io = io;
                 term_process(s->term, "\r\nConnected.\r\n", 14);
                 /* Keep a log the user already started from the File menu
                  * while the tab was still connecting; only auto-open one

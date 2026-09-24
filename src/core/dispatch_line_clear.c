@@ -22,3 +22,13 @@ DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
      * not keyed off CmdPlatform. */
     return DISPATCH_LINE_CLEAR_READLINE;
 }
+
+int dispatch_keystroke_too_recent(unsigned long elapsed_ms)
+{
+    return elapsed_ms < DISPATCH_KEYSTROKE_GUARD_MS;
+}
+
+int dispatch_ambiguous_prompt_timed_out(unsigned long elapsed_ms)
+{
+    return elapsed_ms >= DISPATCH_AMBIGUOUS_PROMPT_TIMEOUT_MS;
+}

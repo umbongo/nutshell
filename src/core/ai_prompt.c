@@ -1542,7 +1542,10 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
         n = snprintf(buf, buf_size,
             "The commands from my earlier request (`%s` \xE2\x80\xA6) have "
             "now been executed. Look at the updated terminal output and "
-            "continue with that request.", first_cmd);
+            "continue with that request. Check the output of every command "
+            "for errors before summarising, and report any failure plainly "
+            "-- never claim a command succeeded unless its output shows it "
+            "did.", first_cmd);
     } else {
         n = snprintf(buf, buf_size,
             "The commands above have been executed. Look at the updated "

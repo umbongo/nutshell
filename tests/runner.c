@@ -819,6 +819,15 @@ int test_dispatch_line_clear_local_empty_name_is_none(void);
 int test_dispatch_line_clear_local_null_name_is_none(void);
 int test_dispatch_line_clear_ssh_is_always_readline(void);
 int test_dispatch_line_clear_ssh_ignores_local_shell_name(void);
+int test_dispatch_line_clear_matches_local_shell_kind_name(void);
+int test_dispatch_keystroke_too_recent_zero_elapsed(void);
+int test_dispatch_keystroke_too_recent_just_under_guard(void);
+int test_dispatch_keystroke_too_recent_at_guard_is_not_recent(void);
+int test_dispatch_keystroke_too_recent_well_past_guard(void);
+int test_dispatch_ambiguous_prompt_not_timed_out_at_zero(void);
+int test_dispatch_ambiguous_prompt_not_timed_out_just_under_bound(void);
+int test_dispatch_ambiguous_prompt_timed_out_at_bound(void);
+int test_dispatch_ambiguous_prompt_timed_out_well_past_bound(void);
 
 /* test_term.c */
 int test_term_buffer(void);
@@ -1170,6 +1179,7 @@ int test_ai_continue_text_no_newer_exchanges_is_default(void);
 int test_ai_continue_text_default_tells_model_to_check_for_errors(void);
 int test_ai_continue_text_no_newer_exchanges_ignores_first_cmd(void);
 int test_ai_continue_text_newer_exchanges_names_batch(void);
+int test_ai_continue_text_newer_exchanges_tells_model_to_check_for_errors(void);
 int test_ai_continue_text_newer_exchanges_multiple(void);
 int test_ai_continue_text_newer_exchanges_null_first_cmd_falls_back(void);
 int test_ai_continue_text_null_buf(void);
@@ -3490,6 +3500,15 @@ int main(void) {
     failed += test_dispatch_line_clear_local_null_name_is_none();
     failed += test_dispatch_line_clear_ssh_is_always_readline();
     failed += test_dispatch_line_clear_ssh_ignores_local_shell_name();
+    failed += test_dispatch_line_clear_matches_local_shell_kind_name();
+    failed += test_dispatch_keystroke_too_recent_zero_elapsed();
+    failed += test_dispatch_keystroke_too_recent_just_under_guard();
+    failed += test_dispatch_keystroke_too_recent_at_guard_is_not_recent();
+    failed += test_dispatch_keystroke_too_recent_well_past_guard();
+    failed += test_dispatch_ambiguous_prompt_not_timed_out_at_zero();
+    failed += test_dispatch_ambiguous_prompt_not_timed_out_just_under_bound();
+    failed += test_dispatch_ambiguous_prompt_timed_out_at_bound();
+    failed += test_dispatch_ambiguous_prompt_timed_out_well_past_bound();
 
     printf("\n--- Term ---\n");
     failed += test_term_buffer();
@@ -3783,6 +3802,7 @@ int main(void) {
     failed += test_ai_continue_text_default_tells_model_to_check_for_errors();
     failed += test_ai_continue_text_no_newer_exchanges_ignores_first_cmd();
     failed += test_ai_continue_text_newer_exchanges_names_batch();
+    failed += test_ai_continue_text_newer_exchanges_tells_model_to_check_for_errors();
     failed += test_ai_continue_text_newer_exchanges_multiple();
     failed += test_ai_continue_text_newer_exchanges_null_first_cmd_falls_back();
     failed += test_ai_continue_text_null_buf();

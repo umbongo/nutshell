@@ -29,6 +29,21 @@ typedef struct SessionIo {
     void (*close)(void *ctx);        /* releases the transport; the SessionIo is dead after */
     void *ctx;
     SessionKind kind;
+    /* Pointer to a monotonic tick count (GetTickCount() on Windows,
+     * `unsigned long` rather than DWORD so this header stays Windows-free)
+     * of the user's last keystroke in this session's terminal, owned by
+     * whoever holds the SessionIo (window.c's Session.last_user_input_tick)
+     * and kept live for as long as this SessionIo is. NULL when the owner
+     * does not track one -- callers must treat that as "no recent
+     * keystroke", not as "keystroke at time zero". Set by the owner right
+     * after assigning session_io_local()/session_io_ssh() (neither
+     * constructor can fill it in itself: both are given only a transport
+     * handle, not the enclosing session). See
+     * dispatch_keystroke_too_recent() in src/core/dispatch_line_clear.h,
+     * which is the reason this field exists: a no-prefix AI dispatch must
+     * not write a command onto the input line while a keystroke the user
+     * just made has not been echoed into the terminal buffer yet. */
+    const unsigned long *last_input_tick;
 } SessionIo;
 
 #endif /* NUTSHELL_SESSION_IO_H */
