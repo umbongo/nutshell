@@ -33,6 +33,13 @@
  * this is how tests simulate a config file moved to another PC. */
 void fake_dpapi_set_identity(unsigned char identity);
 
+/* Force protect() (encryption) to fail with CRYPTO_ERR_ENCRYPT until
+ * switched back off. Real DPAPI can fail to encrypt (profile unloaded,
+ * out of memory, ...); this is how tests simulate that deterministically
+ * to exercise the save-time failure path (M-2) without needing to break
+ * the real backend. Does not affect unprotect(). */
+void fake_dpapi_set_fail_protect(int fail);
+
 extern const CryptoDpapiBackend k_fake_dpapi_backend;
 
 #endif /* NUTSHELL_TEST_FAKE_DPAPI_H */

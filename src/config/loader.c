@@ -10,6 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
+#include <dirent.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -117,11 +119,40 @@ static void field_copy(char *dst, size_t dst_size, const char *src)
  *       clearing the field naturally clears the blob on save too).
  */
 
+/* Preserve `raw` verbatim into preserved_out, UNLESS it doesn't fit --
+ * field_copy()'s snprintf would silently truncate it, and a truncated
+ * blob is corrupt: it will never decrypt again, yet save_secret() would
+ * happily write the truncated garbage straight back to disk. Drop it
+ * instead (leave preserved_out empty, same as "no blob") and log why, so
+ * the secret is simply lost -- same outcome as if it had never been set --
+ * rather than silently corrupted. A well-formed blob from this program
+ * never gets close to CFG_BLOB_MAX; this only fires for a hand-edited or
+ * otherwise corrupt config file. */
+static void preserve_blob_or_drop(const char *raw, char *preserved_out,
+                                   size_t preserved_cap)
+{
+    size_t len = strlen(raw);
+    if (len >= preserved_cap) {
+        fprintf(stderr,
+                "nutshell: a stored secret blob is %zu bytes, longer than "
+                "the %zu-byte limit -- dropping it rather than saving it "
+                "back truncated (which would corrupt it). The affected "
+                "password or API key will need to be re-entered.\n",
+                len, preserved_cap - 1u);
+        preserved_out[0] = '\0';
+        return;
+    }
+    field_copy(preserved_out, preserved_cap, raw);
+}
+
 /* Load one secret field from its raw JSON string value. `plain_out` and
  * `preserved_out` are cleared first, so exactly one of "decrypted
  * plaintext" or "blob preserved verbatim" holds afterward (both empty for
- * a missing/empty raw value). Sets *out_migrated to 1 (never clears it) when
- * a legacy blob was successfully decrypted, so the caller knows to re-save. */
+ * a missing/empty raw value). Sets *out_migrated to 1 (never clears it)
+ * when a legacy blob, or a bare (unencrypted) value, was found -- either
+ * way the caller should re-save once so the secret ends up DPAPI-encrypted
+ * on disk (M-3: a bare value is no better than the legacy format -- it
+ * isn't encrypted at all -- so it needs the same migration re-save). */
 static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
                          char *preserved_out, size_t preserved_cap,
                          int *out_migrated)
@@ -138,7 +169,7 @@ static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
         if (crypto_decrypt_dpapi(raw, tmp, sizeof(tmp)) == CRYPTO_OK) {
             field_copy(plain_out, plain_cap, tmp);
         } else {
-            field_copy(preserved_out, preserved_cap, raw);
+            preserve_blob_or_drop(raw, preserved_out, preserved_cap);
         }
         secure_zero(tmp, sizeof(tmp));
         return;
@@ -150,34 +181,159 @@ static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
             field_copy(plain_out, plain_cap, tmp);
             if (out_migrated) *out_migrated = 1;
         } else {
-            field_copy(preserved_out, preserved_cap, raw);
+            preserve_blob_or_drop(raw, preserved_out, preserved_cap);
         }
         secure_zero(tmp, sizeof(tmp));
         return;
     }
 
-    /* Not a recognised encrypted-blob prefix at all: treat as plaintext. */
+    /* Not a recognised encrypted-blob prefix at all: a bare (unencrypted)
+     * value -- a very old config, or a hand edit. Used as plaintext
+     * directly, but flagged for migration (M-3) so the caller re-saves it
+     * encrypted rather than leaving it sitting in the clear on disk
+     * indefinitely, exactly as a decrypted legacy blob is above. */
     field_copy(plain_out, plain_cap, raw);
+    if (out_migrated) *out_migrated = 1;
 }
 
-/* Write one secret field's JSON string value (the caller has already
- * written the closing quote's surrounding key/whitespace). See the
- * load/save contract above. */
-static void save_secret(FILE *f, const char *plain, const char *preserved)
+/* Prepare one secret field's JSON string value into `out` (the raw string
+ * content only -- the caller writes the surrounding quotes via
+ * fprint_json_str()). See the load/save contract above.
+ *
+ * M-2: when `plain` is non-empty and DPAPI encryption fails, returns the
+ * crypto error and leaves `out` untouched instead of falling back to an
+ * empty string. The old behaviour -- write "" on encrypt failure -- meant
+ * a save (including the automatic migration re-save inside config_load())
+ * could silently wipe a password or API key that a moment earlier had
+ * decrypted, or was preserved, just fine. config_save() calls this for
+ * every secret BEFORE writing anything, and aborts the whole save (config
+ * on disk left untouched) if any of them fails -- see there. */
+static int secret_prepare(const char *plain, const char *preserved,
+                           char *out, size_t out_cap)
 {
     if (plain[0] != '\0') {
         char enc[CFG_BLOB_MAX];
-        if (crypto_encrypt_dpapi(plain, enc, sizeof(enc)) == CRYPTO_OK) {
-            fprint_json_str(f, enc);
-        } else {
-            fprint_json_str(f, ""); /* write empty on encrypt failure */
+        int rc = crypto_encrypt_dpapi(plain, enc, sizeof(enc));
+        if (rc != CRYPTO_OK) {
+            secure_zero(enc, sizeof(enc));
+            return rc;
         }
+        field_copy(out, out_cap, enc);
         secure_zero(enc, sizeof(enc));
-    } else if (preserved[0] != '\0') {
-        fprint_json_str(f, preserved);
-    } else {
-        fprint_json_str(f, "");
+        return CRYPTO_OK;
     }
+    if (preserved[0] != '\0') {
+        field_copy(out, out_cap, preserved);
+        return CRYPTO_OK;
+    }
+    out[0] = '\0';
+    return CRYPTO_OK;
+}
+
+/* ---- Unparseable-config backup ---------------------------------------- */
+
+#define MAX_BAD_BACKUPS 5
+
+/* Split `path` into its directory (no trailing separator; "." when path
+ * has no directory component) and base filename, for building sibling
+ * "<base>.bad-*" backup names. */
+static void split_dir_base(const char *path, char *dir_out, size_t dir_cap,
+                            const char **base_out)
+{
+    const char *slash  = strrchr(path, '/');
+    const char *bslash = strrchr(path, '\\');
+    if (bslash && (!slash || bslash > slash)) slash = bslash;
+    if (slash) {
+        size_t dir_len = (size_t)(slash - path);
+        if (dir_len >= dir_cap) dir_len = dir_cap - 1u;
+        memcpy(dir_out, path, dir_len);
+        dir_out[dir_len] = '\0';
+        *base_out = slash + 1;
+    } else {
+        (void)snprintf(dir_out, dir_cap, ".");
+        *base_out = path;
+    }
+}
+
+/* Keep at most MAX_BAD_BACKUPS "<base>.bad-*" files beside `path`, deleting
+ * the rest -- the suffix is a decimal Unix timestamp, so lexicographic
+ * order is chronological order. Best-effort: opendir()/remove() failures
+ * just leave extra backup files lying around, which is harmless. */
+static void config_prune_old_backups(const char *path)
+{
+    char dir[512];
+    const char *base;
+    split_dir_base(path, dir, sizeof(dir), &base);
+
+    char prefix[300];
+    (void)snprintf(prefix, sizeof(prefix), "%s.bad-", base);
+    size_t prefix_len = strlen(prefix);
+
+    /* Pass 1: track the MAX_BAD_BACKUPS newest matching names. */
+    char keep[MAX_BAD_BACKUPS][300];
+    size_t keep_n = 0u;
+
+    DIR *d = opendir(dir);
+    if (!d) return;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        if (strncmp(de->d_name, prefix, prefix_len) != 0) continue;
+        if (keep_n < MAX_BAD_BACKUPS) {
+            (void)snprintf(keep[keep_n], sizeof(keep[keep_n]), "%s", de->d_name);
+            keep_n++;
+        } else {
+            size_t oldest = 0u;
+            for (size_t i = 1u; i < keep_n; i++) {
+                if (strcmp(keep[i], keep[oldest]) < 0) oldest = i;
+            }
+            if (strcmp(de->d_name, keep[oldest]) > 0) {
+                (void)snprintf(keep[oldest], sizeof(keep[oldest]), "%s", de->d_name);
+            }
+        }
+    }
+    closedir(d);
+
+    if (keep_n < MAX_BAD_BACKUPS) return; /* at/under the cap already */
+
+    /* Pass 2: delete every match not in `keep`. */
+    d = opendir(dir);
+    if (!d) return;
+    while ((de = readdir(d)) != NULL) {
+        if (strncmp(de->d_name, prefix, prefix_len) != 0) continue;
+        int kept = 0;
+        for (size_t i = 0u; i < keep_n; i++) {
+            if (strcmp(de->d_name, keep[i]) == 0) { kept = 1; break; }
+        }
+        if (!kept) {
+            /* dir[512] + '/' + d_name (up to sizeof(de->d_name), 260 on
+             * MinGW) + NUL: size generously so -Wformat-truncation can
+             * prove this never truncates. */
+            char full[900];
+            (void)snprintf(full, sizeof(full), "%s/%s", dir, de->d_name);
+            (void)remove(full);
+        }
+    }
+    closedir(d);
+}
+
+/* A config file that exists but fails to parse (corrupt, hand-edited
+ * badly, truncated by a crash, ...) used to simply vanish the moment the
+ * caller fell back to config_new_default() and saved -- config_save()
+ * overwrites `path` unconditionally, so the original content was gone for
+ * good. Rename it out of the way first, to "<path>.bad-<unix timestamp>",
+ * so it survives that overwrite; the caller's own message tells the user.
+ * Best-effort: a rename failure just means the file is lost the way it
+ * always was before this fix -- no worse than the pre-existing behaviour. */
+static void config_backup_unparseable_file(const char *path)
+{
+    char bad_path[620];
+    (void)snprintf(bad_path, sizeof(bad_path), "%s.bad-%ld", path, (long)time(NULL));
+#ifdef _WIN32
+    (void)MoveFileExA(path, bad_path, MOVEFILE_REPLACE_EXISTING);
+#else
+    (void)rename(path, bad_path);
+#endif
+    config_prune_old_backups(path);
 }
 
 /* ---- Public API ----------------------------------------------------------- */
@@ -278,6 +434,9 @@ void config_free(Config *cfg)
         config_profile_free((Profile *)vec_get(&cfg->profiles, i));
     }
     vec_free(&cfg->profiles);
+    /* Wipe the one secret that lives directly in Settings (profile
+     * passwords are wiped by config_profile_free() above already). */
+    secure_zero(cfg->settings.ai_api_key, sizeof(cfg->settings.ai_api_key));
     free(cfg);
 }
 
@@ -296,6 +455,11 @@ Config *config_load(const char *path)
     free(src);
     if (!root || root->type != JSON_OBJECT) {
         json_free(root);
+        /* The file exists (read_file() succeeded) but is not valid config
+         * JSON: preserve it under a new name before the caller's fallback
+         * to defaults gets a chance to overwrite it. See the comment on
+         * config_backup_unparseable_file(). */
+        config_backup_unparseable_file(path);
         return NULL;
     }
 
@@ -521,8 +685,48 @@ Config *config_load(const char *path)
 
 int config_save(const Config *cfg, const char *path)
 {
-    if (!cfg || !path) {
+    if (!cfg || !path || path[0] == '\0') {
+        /* An empty path means the caller could not find anywhere safe to
+         * write (see config_fallback_path()) -- never fall through to
+         * building a relative ".tmp" path, which would silently land in
+         * the process's current working directory. */
         return -1;
+    }
+
+    const Settings *s = &cfg->settings;
+    size_t n = vec_size(&cfg->profiles);
+
+    /* M-2: encrypt every secret BEFORE opening or writing the temp file,
+     * and abort the whole save -- the file on disk is left completely
+     * untouched -- the moment any of them fails. secret_prepare() used to
+     * be called while streaming the file (as save_secret()) and fell back
+     * to writing "" on a DPAPI failure, so a save (including the automatic
+     * migration re-save inside config_load()) could silently wipe a
+     * password or API key that had decrypted, or was preserved, just fine
+     * a moment earlier. Preparing every blob up front also means each
+     * secret is only ever encrypted once per save. */
+    char ai_api_key_blob[CFG_BLOB_MAX];
+    if (secret_prepare(s->ai_api_key, s->ai_api_key_enc_preserved,
+                        ai_api_key_blob, sizeof(ai_api_key_blob)) != CRYPTO_OK) {
+        secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+        return -1;
+    }
+
+    char (*pw_blobs)[CFG_BLOB_MAX] = NULL;
+    if (n > 0u) {
+        pw_blobs = xmalloc(n * sizeof(*pw_blobs));
+        for (size_t i = 0u; i < n; i++) {
+            const Profile *pr = (const Profile *)vec_get(&cfg->profiles, i);
+            if (secret_prepare(pr->password, pr->password_enc_preserved,
+                                pw_blobs[i], CFG_BLOB_MAX) != CRYPTO_OK) {
+                for (size_t j = 0u; j <= i; j++) {
+                    secure_zero(pw_blobs[j], CFG_BLOB_MAX);
+                }
+                free(pw_blobs);
+                secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+                return -1;
+            }
+        }
     }
 
     /* M-4: write to a temp file first, then atomically replace the target.
@@ -535,10 +739,13 @@ int config_save(const Config *cfg, const char *path)
     FILE *f = fopen(tmp_path, "w");
     if (!f) {
         free(tmp_path);
+        if (pw_blobs) {
+            for (size_t i = 0u; i < n; i++) secure_zero(pw_blobs[i], CFG_BLOB_MAX);
+            free(pw_blobs);
+        }
+        secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
         return -1;
     }
-
-    const Settings *s = &cfg->settings;
 
     fputs("{\n  \"settings\": {\n", f);
     fputs("    \"font\": ", f);
@@ -582,7 +789,7 @@ int config_save(const Config *cfg, const char *path)
     fprint_json_str(f, s->ai_custom_model);
     fputs(",\n", f);
     fputs("    \"ai_api_key\": ", f);
-    save_secret(f, s->ai_api_key, s->ai_api_key_enc_preserved);
+    fprint_json_str(f, ai_api_key_blob);
     fputs(",\n", f);
     fputs("    \"ai_system_notes\": ", f);
     fprint_json_str(f, s->ai_system_notes);
@@ -619,7 +826,6 @@ int config_save(const Config *cfg, const char *path)
     fputs("\n", f);
     fputs("  },\n  \"profiles\": [\n", f);
 
-    size_t n = vec_size(&cfg->profiles);
     for (size_t i = 0u; i < n; i++) {
         const Profile *pr = (const Profile *)vec_get(&cfg->profiles, i);
         fputs("    {\n", f);
@@ -639,7 +845,7 @@ int config_save(const Config *cfg, const char *path)
         fprintf(f, "      \"auth_type\": \"%s\",\n",
                 pr->auth_type == AUTH_KEY ? "key" : "password");
         fputs("      \"password\": ", f);
-        save_secret(f, pr->password, pr->password_enc_preserved);
+        fprint_json_str(f, pw_blobs[i]);
         fputs(",\n", f);
         fputs("      \"key_path\": ", f);
         fprint_json_str(f, pr->key_path);
@@ -669,6 +875,13 @@ int config_save(const Config *cfg, const char *path)
     int moved = rename(tmp_path, path);
 #endif
     free(tmp_path);
+
+    if (pw_blobs) {
+        for (size_t i = 0u; i < n; i++) secure_zero(pw_blobs[i], CFG_BLOB_MAX);
+        free(pw_blobs);
+    }
+    secure_zero(ai_api_key_blob, sizeof(ai_api_key_blob));
+
     return moved;
 }
 
@@ -734,5 +947,28 @@ int config_ensure_local_profile(Config *cfg)
     field_copy(p->name, sizeof(p->name), "Local shell");
     field_copy(p->kind, sizeof(p->kind), "local");
     vec_insert(&cfg->profiles, 0u, p);
+    return 1;
+}
+
+/* ---- Secret-field helpers (public; see config.h) --------------------- */
+
+void config_secret_drop_stale_preserved(const char *plain, char *preserved,
+                                         size_t preserved_cap)
+{
+    if (plain && plain[0] != '\0' && preserved && preserved_cap > 0u) {
+        preserved[0] = '\0';
+    }
+}
+
+int config_fallback_path(const char *local_appdata, char *out, size_t out_cap)
+{
+    if (!local_appdata || local_appdata[0] == '\0' || !out || out_cap == 0u) {
+        return 0;
+    }
+    int n = snprintf(out, out_cap, "%s\\Nutshell\\" CONFIG_FILENAME, local_appdata);
+    if (n < 0 || (size_t)n >= out_cap) {
+        out[0] = '\0';
+        return 0;
+    }
     return 1;
 }

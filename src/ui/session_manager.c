@@ -19,6 +19,7 @@
 #include "local_shell_probe.h"
 #include "resource.h"
 #include "dpi_util.h"
+#include "secure_zero.h"
 
 #define IDT_AINOTES_SCROLL 50  /* timer ID for AI notes scroll sync */
 #define IDT_LIST_SCROLL    51  /* timer ID for session list scroll sync */
@@ -422,6 +423,13 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         SendMessage(GetDlgItem(hwnd, IDC_EDIT_AI_NOTES), EM_SETCUEBANNER, 0,
                     (LPARAM)L"Notes for AI about this server (max 400 words)");
 
+        /* Match the password field's edit-box limit to Profile.password's
+         * buffer size: form_read()'s GetDlgItemTextA() already truncates
+         * safely at that size, but without this the box lets the user type
+         * (and believe they saved) more than will ever actually be kept. */
+        SendDlgItemMessage(hwnd, IDC_EDIT_PASS, EM_SETLIMITTEXT,
+                            (WPARAM)(sizeof(((Profile *)0)->password) - 1u), 0);
+
         /* Theme: look up from config, create brushes, apply title bar + borders.
          * Must happen BEFORE font application, because WM_SETFONT with
          * fRedraw=TRUE triggers WM_CTLCOLOR* messages that need st->theme. */
@@ -673,21 +681,45 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                  * preserved blob (a password that could not be decrypted
                  * on this PC/user) forward. Otherwise every edit of this
                  * profile, even an unrelated field, would silently drop it.
-                 * save_secret() (loader.c) ignores it the moment
+                 * secret_prepare() (loader.c) ignores it the moment
                  * tmp.password is non-empty, so a real new password still
                  * always wins and replaces it. */
                 memcpy(tmp.password_enc_preserved, pr->password_enc_preserved,
                        sizeof(tmp.password_enc_preserved));
+                /* M-4: ... but if the user just typed a new password into
+                 * the form, drop that carried-forward blob rather than
+                 * leaving it sitting in tmp (and then pr) unused. Otherwise
+                 * it lingers in memory, and a later save this same session
+                 * that clears the password field again would resurrect the
+                 * old foreign blob instead of writing "" like it should. */
+                config_secret_drop_stale_preserved(tmp.password,
+                    tmp.password_enc_preserved, sizeof(tmp.password_enc_preserved));
                 *pr = tmp;
             } else {
                 Profile *pr = config_profile_new();
                 *pr = tmp;
+                /* Duplicating a profile ("save as new", the Yes answer
+                 * above): carry the source profile's preserved blob to the
+                 * duplicate only when the password field was left
+                 * untouched (still empty -- the box never shows an
+                 * undecryptable blob's plaintext, so "untouched" and
+                 * "empty" are the same thing here). If the user typed a
+                 * new password for the duplicate, that new password always
+                 * wins and there is nothing of the old blob worth keeping. */
+                if (tmp.password[0] == '\0' && st->edit_idx >= 0 &&
+                    (size_t)st->edit_idx < vec_size(&st->cfg->profiles)) {
+                    const Profile *src = (const Profile *)vec_get(
+                        &st->cfg->profiles, (size_t)st->edit_idx);
+                    memcpy(pr->password_enc_preserved, src->password_enc_preserved,
+                           sizeof(pr->password_enc_preserved));
+                }
                 vec_push(&st->cfg->profiles, pr);
                 st->edit_idx = (int)vec_size(&st->cfg->profiles) - 1;
             }
             config_save(st->cfg, st->config_path);
             list_rebuild(hList, st->cfg);
             SendMessage(hList, LB_SETCURSEL, (WPARAM)st->edit_idx, 0);
+            secure_zero(&tmp, sizeof(tmp));
             return TRUE;
         }
 
@@ -720,6 +752,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                 return TRUE;
             }
             *st->out_profile = tmp;
+            secure_zero(&tmp, sizeof(tmp));
             EndDialog(hwnd, IDOK);
             return TRUE;
         }

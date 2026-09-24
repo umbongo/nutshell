@@ -3001,18 +3001,51 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             {
                 char exe_dir[MAX_PATH];
                 get_exe_dir(exe_dir, sizeof(exe_dir));
-                if (exe_dir[0] != '\0')
+                if (exe_dir[0] != '\0') {
                     (void)snprintf(g_config_path, sizeof(g_config_path),
                                    "%s\\" CONFIG_FILENAME, exe_dir);
-                else
-                    (void)snprintf(g_config_path, sizeof(g_config_path),
-                                   CONFIG_FILENAME);
+                } else {
+                    /* Could not determine the exe's own directory: fall
+                     * back to an absolute per-user location instead of a
+                     * bare relative CONFIG_FILENAME, which would silently
+                     * read/write into whatever the process's current
+                     * working directory happens to be. If even
+                     * %LOCALAPPDATA% is unavailable, refuse to guess --
+                     * leave g_config_path empty so config_save() (which
+                     * itself refuses an empty path) never writes to the
+                     * CWD either. */
+                    char local_appdata[MAX_PATH];
+                    DWORD la_len = GetEnvironmentVariableA(
+                        "LOCALAPPDATA", local_appdata, (DWORD)sizeof(local_appdata));
+                    if (la_len > 0 && la_len < sizeof(local_appdata) &&
+                        config_fallback_path(local_appdata, g_config_path,
+                                             sizeof(g_config_path))) {
+                        char nutshell_dir[MAX_PATH];
+                        (void)snprintf(nutshell_dir, sizeof(nutshell_dir),
+                                       "%s\\Nutshell", local_appdata);
+                        CreateDirectoryA(nutshell_dir, NULL);
+                    } else {
+                        g_config_path[0] = '\0';
+                    }
+                }
 
-                g_config = config_load(g_config_path);
+                g_config = (g_config_path[0] != '\0') ? config_load(g_config_path) : NULL;
                 if (!g_config) {
-                    MessageBoxA(hwnd,
-                        "Could not load " CONFIG_FILENAME ".\n\nStarting with default settings.",
-                        "Configuration Warning", MB_OK | MB_ICONWARNING);
+                    if (g_config_path[0] == '\0') {
+                        MessageBoxA(hwnd,
+                            "Could not find a folder to store " CONFIG_FILENAME " in "
+                            "(neither the program's own folder nor %LOCALAPPDATA% "
+                            "is available).\n\nSettings and sessions will not be "
+                            "saved this run.",
+                            "Configuration Warning", MB_OK | MB_ICONWARNING);
+                    } else {
+                        MessageBoxA(hwnd,
+                            "Could not load " CONFIG_FILENAME ".\n\nIf a previous "
+                            "file existed but could not be read, it was kept "
+                            "alongside it as " CONFIG_FILENAME ".bad-<timestamp>."
+                            "\n\nStarting with default settings.",
+                            "Configuration Warning", MB_OK | MB_ICONWARNING);
+                    }
                     g_config = config_new_default();
                 }
 

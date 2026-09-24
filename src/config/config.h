@@ -92,4 +92,29 @@ Profile *config_find_profile_by_host(const Config *cfg, const char *host);
  * profile at the next start. */
 int config_ensure_local_profile(Config *cfg);
 
+/* ---- Secret-field helpers (see loader.c's load/save contract comment) ---- */
+
+/* M-4: when the caller has just stored a new, user-supplied value into a
+ * secret's plaintext field (a password or API key edit box), call this to
+ * drop any foreign/corrupt blob still sitting in the matching `preserved`
+ * field. Without it, a value entered and then cleared again later in the
+ * same run (without reloading the config from disk) would resurrect the
+ * stale blob on save: save writes `preserved` back verbatim the moment
+ * `plain` is empty, and nothing else clears it in memory between the two
+ * saves. No-op when `plain` is empty (nothing new was supplied). */
+void config_secret_drop_stale_preserved(const char *plain, char *preserved,
+                                         size_t preserved_cap);
+
+/* Build an absolute, per-user fallback config path,
+ * "<local_appdata>\Nutshell\nutshell.config", for use when the caller
+ * cannot determine the exe's own directory. Falling back to a bare
+ * relative CONFIG_FILENAME instead would silently read or write into the
+ * process's current working directory -- whatever that happens to be.
+ * Returns 1 and fills `out` when `local_appdata` is non-empty and the
+ * result fits; returns 0 (out untouched) otherwise, so the caller can
+ * refuse to save rather than fall back to the CWD. Pure string logic --
+ * no filesystem access -- so it is callable from a native test without
+ * Windows APIs; the caller creates the "Nutshell" directory itself. */
+int config_fallback_path(const char *local_appdata, char *out, size_t out_cap);
+
 #endif
