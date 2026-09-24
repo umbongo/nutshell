@@ -27,6 +27,7 @@
 #include "log_format.h"
 #include "edit_scroll.h"
 #include "paste_dlg.h"
+#include "paste_filter.h"
 #include "ai_chat.h"
 #include "ai_chat_testable.h"
 #include "ui_demo.h"
@@ -451,6 +452,15 @@ static void on_tab_close(int index, void *user_data) {
                     "Close Tab", MB_OK | MB_ICONINFORMATION);
         return;
     }
+
+    /* A timed/chunked paste (WM_TIMER-driven, see paste_send_next_line())
+     * keeps a raw io_ctx/io_write pair in g_paste that isn't freed until
+     * the paste finishes or is cancelled. free_session() below tears down
+     * s->io through session_close_io(), so an in-progress paste targeting
+     * this tab must be cancelled first -- otherwise the next timer tick
+     * writes through a transport that free_session() just released. */
+    if (g_paste.io_ctx == s->io.ctx)
+        paste_cancel();
 
     /* Remove from linked list */
     if (g_session_list == s) {
@@ -1756,6 +1766,57 @@ static void paste_timer_tick(void)
     if (!more) paste_finish();
 }
 
+/* Read the clipboard as text, preferring CF_UNICODETEXT (converted to
+ * UTF-8) so non-ASCII pastes survive intact; CF_TEXT (the system ANSI
+ * codepage) is a fallback for a source that never offers Unicode.  Returns
+ * a malloc'd, NUL-terminated UTF-8 buffer, or NULL if the clipboard has no
+ * usable text. */
+static char *read_clipboard_text_utf8(HWND hwnd)
+{
+    char *local = NULL;
+
+    if (IsClipboardFormatAvailable(CF_UNICODETEXT) && OpenClipboard(hwnd)) {
+        HANDLE hClip = GetClipboardData(CF_UNICODETEXT);
+        if (hClip) {
+            const wchar_t *wraw = (const wchar_t *)GlobalLock(hClip);
+            if (wraw) {
+                int need = WideCharToMultiByte(CP_UTF8, 0, wraw, -1,
+                                               NULL, 0, NULL, NULL);
+                if (need > 0) {
+                    local = (char *)malloc((size_t)need);
+                    if (local && WideCharToMultiByte(CP_UTF8, 0, wraw, -1,
+                                     local, need, NULL, NULL) <= 0) {
+                        free(local);
+                        local = NULL;
+                    }
+                }
+                GlobalUnlock(hClip);
+            }
+        }
+        CloseClipboard();
+    }
+
+    if (local) return local;
+
+    /* Fallback: CF_TEXT only. */
+    if (!IsClipboardFormatAvailable(CF_TEXT)) return NULL;
+    if (!OpenClipboard(hwnd)) return NULL;
+
+    HANDLE hClip = GetClipboardData(CF_TEXT);
+    if (!hClip) { CloseClipboard(); return NULL; }
+
+    const char *raw = (const char *)GlobalLock(hClip);
+    if (!raw) { CloseClipboard(); return NULL; }
+
+    /* Copy to a local buffer so the clipboard is free before the dialog
+     * blocks.  The user must be able to copy new text while the preview is
+     * open. */
+    local = _strdup(raw);
+    GlobalUnlock(hClip);
+    CloseClipboard();
+    return local;
+}
+
 static void do_paste(HWND hwnd)
 {
     if (!g_active_session || !g_active_session->io.ctx) return;
@@ -1764,30 +1825,27 @@ static void do_paste(HWND hwnd)
     /* Cancel any in-progress paste */
     paste_cancel();
 
-    if (!IsClipboardFormatAvailable(CF_TEXT)) return;
-    if (!OpenClipboard(hwnd)) return;
+    /* The session this paste targets. Captured up front and re-checked
+     * after the confirm dialog returns (below) -- the dialog runs its own
+     * modal message loop, during which a background event (idle/network
+     * timeout) can still disconnect this session's transport even though
+     * the tab itself cannot be closed (the main window is disabled while
+     * the dialog is up). */
+    Session *target = g_active_session;
 
-    HANDLE hClip = GetClipboardData(CF_TEXT);
-    if (!hClip) { CloseClipboard(); return; }
-
-    const char *raw = (const char *)GlobalLock(hClip);
-    if (!raw) { CloseClipboard(); return; }
-
-    /* Copy to a local buffer so the clipboard is free before the dialog blocks.
-     * The user must be able to copy new text while the preview is open. */
-    char *local = _strdup(raw);
-    GlobalUnlock(hClip);
-    CloseClipboard();
-
+    char *local = read_clipboard_text_utf8(hwnd);
     if (!local) return;
 
-    /* Count newlines */
+    /* Count newlines (pre-filter — TAB/LF/CR survive filtering unchanged,
+     * so this count is the same before and after). */
     int line_count = 0;
     for (size_t i = 0; local[i]; i++) {
         if (local[i] == '\n') line_count++;
     }
 
-    /* Ask for confirmation before pasting, unless disabled in settings */
+    /* Ask for confirmation before pasting, unless disabled in settings.
+     * The dialog shows the raw text (control characters rendered visibly)
+     * and a warning of how many will be stripped -- see paste_dlg.c. */
     int confirmed = 1;
     if (g_config->settings.paste_confirm) {
         confirmed = paste_preview_show(hwnd, local,
@@ -1803,9 +1861,30 @@ static void do_paste(HWND hwnd)
         return;
     }
 
-    bool bpm = g_active_session->term &&
-               g_active_session->term->bracketed_paste_mode;
-    bool local_line_ends = (g_active_session->io.kind == SESSION_LOCAL);
+    /* Re-check the target tab still exists (by identity, via the tab list
+     * -- never by dereferencing `target` first: that's the whole point)
+     * and is still connected before sending anything or touching its
+     * fields. Nothing today can free a session tab while this dialog's
+     * modal loop is running (the main window is disabled), but the check
+     * costs nothing and stops this from becoming a use-after-free if that
+     * ever changes. */
+    if (tabs_find(g_hwndTabs, target) < 0 || !target->io.ctx) {
+        free(local);
+        return;
+    }
+
+    /* Hardening: strip ESC, other C0 controls (except TAB/LF/CR), DEL and
+     * C1 controls from the paste in place, always -- not just under
+     * bracketed paste mode. This is what stops a hostile clipboard from
+     * embedding the bracketed-paste close sequence (or any other control
+     * sequence) to make part of the paste run as if it were typed; xterm
+     * and Windows Terminal filter every paste the same way. */
+    size_t filtered_len = paste_filter_controls(local, strlen(local), local, NULL);
+    local[filtered_len] = '\0';
+
+    bool bpm = target->term &&
+               target->term->bracketed_paste_mode;
+    bool local_line_ends = (target->io.kind == SESSION_LOCAL);
     int  delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
 
     static const char BRACKET_OPEN[]  = "\033[200~";
@@ -1816,21 +1895,21 @@ static void do_paste(HWND hwnd)
      * would only add pointless latency. */
     if (line_count == 0 || delay_ms <= 0 || bpm) {
         if (bpm)
-            g_active_session->io.write(g_active_session->io.ctx,
+            target->io.write(target->io.ctx,
                               BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
         const char *p = local;
         while (*p) {
             const char *nl = strchr(p, '\n');
             size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
-            paste_chunk_write(g_active_session->io.ctx,
-                              g_active_session->io.write,
+            paste_chunk_write(target->io.ctx,
+                              target->io.write,
                               p, chunk, local_line_ends);
             p += chunk;
         }
         if (bpm)
-            g_active_session->io.write(g_active_session->io.ctx,
+            target->io.write(target->io.ctx,
                               BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
-        g_active_session->term->scrollback_offset = 0;
+        target->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
         free(local);
     } else {
@@ -1839,18 +1918,18 @@ static void do_paste(HWND hwnd)
         g_paste.pos       = g_paste.buf;
         g_paste.hwnd      = hwnd;
         g_paste.delay_ms  = delay_ms;
-        g_paste.io_ctx    = g_active_session->io.ctx;
-        g_paste.io_write  = g_active_session->io.write;
+        g_paste.io_ctx    = target->io.ctx;
+        g_paste.io_write  = target->io.write;
         g_paste.bracketed = bpm;
         g_paste.local     = local_line_ends;
 
         if (bpm)
-            g_active_session->io.write(g_active_session->io.ctx,
+            target->io.write(target->io.ctx,
                               BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
 
         /* Send the first line immediately */
         paste_send_next_line();
-        g_active_session->term->scrollback_offset = 0;
+        target->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
 
         /* Start timer for remaining lines, or finish if buffer exhausted */
@@ -2121,6 +2200,28 @@ static HMENU create_app_menu(void)
     return hMenu;
 }
 
+/* Copy UTF-8 text to the clipboard as CF_UNICODETEXT (converting via
+ * MultiByteToWideChar). Terminal text is UTF-8; CF_TEXT would hand it out
+ * as if it were the system ANSI codepage, mangling anything outside plain
+ * ASCII. Windows auto-synthesizes CF_TEXT from CF_UNICODETEXT for any app
+ * that only asks for the old format, so this loses nothing.  Caller must
+ * have the clipboard open (and should EmptyClipboard() first, as before);
+ * this only sets the one format. */
+static void set_clipboard_utf8(const char *utf8, size_t len)
+{
+    if (!utf8 || len == 0) return;
+    int wneed = MultiByteToWideChar(CP_UTF8, 0, utf8, (int)len, NULL, 0);
+    if (wneed <= 0) return;
+    HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, ((size_t)wneed + 1) * sizeof(wchar_t));
+    if (!hg) return;
+    wchar_t *dst = (wchar_t *)GlobalLock(hg);
+    if (!dst) { GlobalFree(hg); return; }
+    int written = MultiByteToWideChar(CP_UTF8, 0, utf8, (int)len, dst, wneed);
+    dst[written > 0 ? written : 0] = L'\0';
+    GlobalUnlock(hg);
+    SetClipboardData(CF_UNICODETEXT, hg);
+}
+
 /* Copy current selection to clipboard */
 static void do_copy(HWND hwnd)
 {
@@ -2131,13 +2232,7 @@ static void do_copy(HWND hwnd)
         g_active_session->term, buf, sizeof(buf));
     if (n > 0 && OpenClipboard(hwnd)) {
         EmptyClipboard();
-        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, n + 1);
-        if (hg) {
-            char *dst = (char *)GlobalLock(hg);
-            memcpy(dst, buf, n + 1);
-            GlobalUnlock(hg);
-            SetClipboardData(CF_TEXT, hg);
-        }
+        set_clipboard_utf8(buf, n);
         CloseClipboard();
     }
 }
@@ -4174,13 +4269,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_active_session->term, buf, sizeof(buf));
             if (n > 0 && OpenClipboard(hwnd)) {
                 EmptyClipboard();
-                HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, n + 1);
-                if (hg) {
-                    char *dst = (char *)GlobalLock(hg);
-                    memcpy(dst, buf, n + 1);
-                    GlobalUnlock(hg);
-                    SetClipboardData(CF_TEXT, hg);
-                }
+                set_clipboard_utf8(buf, n);
                 CloseClipboard();
             }
             g_selection.valid = false;

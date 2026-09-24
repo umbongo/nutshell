@@ -74,6 +74,14 @@ void paste_build_summary(int line_count, size_t char_count,
                    char_count);
 }
 
+void paste_build_warning(size_t removed, char *buf, size_t buf_sz)
+{
+    if (!buf || buf_sz == 0) return;
+    if (removed == 0) { buf[0] = '\0'; return; }
+    (void)snprintf(buf, buf_sz, "%zu control character%s will be removed.",
+                   removed, removed == 1 ? "" : "s");
+}
+
 void paste_clamp_size(int desired_w, int desired_h,
                       int screen_w, int screen_h,
                       int *out_w, int *out_h)

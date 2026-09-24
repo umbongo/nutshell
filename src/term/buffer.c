@@ -59,6 +59,8 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
 
     term->utf8_codepoint = 0;
     term->utf8_remaining = 0;
+    term->utf8_lo = 0x80;
+    term->utf8_hi = 0xBF;
 
     term->title[0]         = '\0';
     term->app_cursor_keys  = false;

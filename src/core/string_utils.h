@@ -32,6 +32,17 @@ int str_append_fmt(char *buf, size_t cap, size_t *len, const char *fmt, ...)
  * Returns the number of bytes written, or 0 for invalid codepoints. */
 int utf8_encode(uint32_t cp, char *buf);
 
+/* Hardening: sanitise a terminal cell codepoint before it leaves the
+ * terminal buffer as text (selection copy, clipboard, AI context). A
+ * well-behaved emulator never stores a control character in a cell, but
+ * nothing should rely on that holding under a hostile or buggy remote --
+ * this is the one place selection_extract_text() and term_extract_*() both
+ * call before emitting a cell. Maps the empty-cell sentinel (0), any C0
+ * control (U+0000-U+001F), DEL (U+007F) and any C1 control
+ * (U+0080-U+009F) to a plain space; every other codepoint passes through
+ * unchanged. */
+uint32_t cell_text_codepoint(uint32_t cp);
+
 /* Strip ANSI/VT escape sequences from src (length src_len) and write the
  * plain-text result into dst (capacity dst_size).  Always null-terminates dst.
  * Returns the number of bytes written (excluding the null terminator). */
