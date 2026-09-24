@@ -1,0 +1,24 @@
+; DLL search-order hardening (2026-09-24): winhttp.dll is not a KnownDLL, so
+; it must not be a static import (see Makefile's DELAY_LIBS comment and
+; src/main.c's SetDefaultDllDirectories/SetDllDirectoryW call). This lists
+; only the symbols nutshell.exe actually calls -- the AI panel's HTTP client
+; (src/ui/ai_http_win.c) and its URL parsing (src/core/ai_tool_web_fetch.c,
+; src/core/ai_tool_web_search.c) -- so `dlltool --output-delaylib` can build
+; a delay-import library for exactly what's used, no more. Hand-written,
+; not gendef'd: gendef needs the real DLL and reads its whole export table,
+; which is far more than this build calls.
+LIBRARY winhttp.dll
+EXPORTS
+WinHttpAddRequestHeaders
+WinHttpCloseHandle
+WinHttpConnect
+WinHttpCrackUrl
+WinHttpOpen
+WinHttpOpenRequest
+WinHttpQueryDataAvailable
+WinHttpQueryHeaders
+WinHttpReadData
+WinHttpReceiveResponse
+WinHttpSendRequest
+WinHttpSetOption
+WinHttpSetTimeouts
