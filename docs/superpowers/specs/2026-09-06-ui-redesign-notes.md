@@ -257,6 +257,15 @@ Open, in priority order:
 - [ ] Older review findings: Session Manager phantom row; a stopped AI reply leaves
       two user turns in a row in the conversation; a stream posting during the AI
       panel's destruction leaks its payload (tiny).
+- [ ] v1.2.15 review follow-ups: a local custom command that is an SSH client to a
+      device (`ssh.exe`, plink) is locked to the unresolved ruleset, which is looser
+      than device rulesets -- keep detecting on strict-locked sessions and add a
+      detected device's rules on top (worse of the two), or ask for an explicit
+      platform; a session contradicted after a weak prompt match counts only the
+      first platform plus unresolved, not every platform seen; no tests yet for save
+      write/flush failure, failed backup rename, locked config, forward-slash/UNC
+      custom paths. Harness: `resize_applies_to_inactive_tab` fails on v1.2.13 too
+      (tab B never reports its grid) -- investigate.
 - [ ] Policy control follow-ups from the PR #27 review: the AI-tier harness cases it
       rewrote (`ai_runs_read_command_unattended`, `ai_write_command_held_then_runs_after_allow`)
       have not been run yet — needs the Kimi key in `tests\integration\.ai_key`; and the

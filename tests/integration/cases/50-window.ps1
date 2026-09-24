@@ -112,17 +112,15 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
 }
 
 # ---- LAUNCH-2: no config file (first run) ----------------------------------------
-# config_load() (src/config/loader.c) returns NULL both when the file is
-# missing and when it's malformed -- either way src/ui/window.c's WM_CREATE
-# shows a "Configuration Warning" MessageBox (#32770) and falls back to
-# config_new_default(). That MessageBox is unavoidable and not mentioned in
-# the case plan, so this case asserts around it: dismiss it, confirm no
-# config file exists yet (nothing auto-saves defaults to disk), then open
-# Settings and Save (IDOK) -- src/ui/settings.c's IDOK handler is the only
-# thing that calls config_save() outside Session Manager -- and confirm the
-# file now exists with recognisable default keys. open_session_manager_at_start
-# defaults to 0 (loader.c), so no Session Manager auto-opens; the plan's "handle
-# both" is therefore moot in the shipped default, noted here rather than guessed at.
+# Since v1.2.15 config_load_ex() (src/config/loader.c) tells a missing file
+# (first run) from an unreadable or invalid one, and src/ui/window.c's
+# WM_CREATE warns only for the latter two. A first run shows no dialog: it
+# starts from config_new_default(), adds the saved "Local shell" profile
+# (config_ensure_local_profile, since v1.2.1) and saves, so the file exists
+# as soon as the main window does. This case asserts that, then that
+# Settings > Save (IDOK) still writes recognisable default keys.
+# open_session_manager_at_start defaults to 0 (loader.c), so no Session
+# Manager auto-opens.
 if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "launch_without_config_writes_defaults")) {
     $name = "launch_without_config_writes_defaults"
     Write-Host ("[RUN ] " + $name)
@@ -132,24 +130,23 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
     $ok = $false; $detail = ""
     try {
         Assert-True (-not (Test-Path $cfgPath)) "test bug: nutshell.config already exists before launch"
-        # config_load() (src/config/loader.c) returns NULL for a missing file,
-        # and WM_CREATE (src/ui/window.c) shows a synchronous "Configuration
-        # Warning" MessageBoxA *before* CreateWindowEx returns -- the main
-        # window is not yet visible while that's up, so Start-Nutshell's own
-        # wait (which only polls for the visible main window) would time out
-        # with the dialog never dismissed. Launch and wait for whichever
-        # shows up first instead.
+        # Wait for whichever shows up first, so an unexpected dialog is
+        # reported rather than timing out behind it.
         $launch = Start-NutshellUntilDialogOrWindow -Env $testEnv -ExtraArgs @()
-        Assert-True ($launch.Dialog -ne [IntPtr]::Zero) "no Configuration Warning dialog appeared for a missing config (main window appeared first: $($launch.Main -ne [IntPtr]::Zero))"
-        $dlgTitle = Get-NutshellWindowText -Hwnd $launch.Dialog
-        Assert-True ($dlgTitle -match "Configuration Warning") "dialog title was '$dlgTitle', expected 'Configuration Warning'"
-        Close-NutshellDialog -Dialog $launch.Dialog -Button OK
-        Assert-True (-not (Test-Path $cfgPath)) "a config file was written just from starting -- defaults are not auto-saved to disk"
+        if ($launch.Dialog -ne [IntPtr]::Zero) {
+            $dlgTitle = Get-NutshellWindowText -Hwnd $launch.Dialog
+            Close-NutshellDialog -Dialog $launch.Dialog -Button OK
+            throw "a first run (no config) showed a dialog '$dlgTitle' -- a missing config is not an error"
+        }
 
         $mainHwnd = Wait-NutshellMainWindowOnly -Process $launch.Process -TimeoutSec 10
-        Assert-True ($mainHwnd -ne [IntPtr]::Zero) "main window never appeared after dismissing the Configuration Warning"
+        Assert-True ($mainHwnd -ne [IntPtr]::Zero) "main window never appeared on a first run"
         $session = [pscustomobject]@{ Process = $launch.Process; Main = $mainHwnd; Env = $testEnv; Log = $null }
-        Assert-True $session.Process.Responding "app stopped responding after dismissing the warning"
+        Assert-True $session.Process.Responding "app stopped responding on a first run"
+        Start-Sleep -Milliseconds 500
+        Assert-True (Test-Path $cfgPath) "no nutshell.config after a first run -- the Local shell profile should have been saved"
+        $first = Get-Content $cfgPath -Raw | ConvertFrom-Json
+        Assert-True ($null -ne $first.profiles -and @($first.profiles).Count -ge 1) "first-run config has no profiles -- the Local shell profile is missing"
 
         $set = Open-NutshellSettings -Session $session
         Close-NutshellDialog -Dialog $set -Button OK   # Settings' IDOK is Save
@@ -158,7 +155,7 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
         $json = Get-Content $cfgPath -Raw | ConvertFrom-Json
         Assert-True ($null -ne $json.settings) "written config has no 'settings' object"
         Assert-True ($null -ne $json.settings.font -and $json.settings.font -ne "") "written config's settings.font is empty -- doesn't look like real defaults"
-        $detail = "Configuration Warning shown and dismissed; no config on disk until Settings > Save; then config written with default keys (font='$($json.settings.font)')"
+        $detail = "no dialog on a first run; config saved at start with the Local shell profile; Settings > Save wrote default keys (font='$($json.settings.font)')"
         $ok = $true
     } catch {
         $detail = $_.Exception.Message
