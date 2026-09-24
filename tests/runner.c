@@ -358,6 +358,14 @@ int test_cmd_classify_powershell_quotes_and_subexpressions(void);
 int test_cmd_classify_sed_brackets_and_unparsed(void);
 int test_cmd_classify_device_filter_abbreviations(void);
 int test_cmd_classify_glued_redirect_targets(void);
+int test_cmd_classify_expansion_floor_at_least_unknown(void);
+int test_cmd_classify_expansion_floor_exempt_stays_read(void);
+int test_cmd_classify_pidstat_dig_tree_flag_specs(void);
+int test_cmd_classify_device_floor_ampersand_and_pipeamp(void);
+int test_cmd_classify_device_floor_redirect_vyos_comware(void);
+int test_cmd_classify_exec_not_pass_through_wrapper(void);
+int test_cmd_classify_pipe_amp_is_pipe(void);
+int test_cmd_classify_ip_netns_vrf_exec_prefix(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -2847,6 +2855,14 @@ int main(void) {
     failed += test_cmd_classify_sed_brackets_and_unparsed();
     failed += test_cmd_classify_device_filter_abbreviations();
     failed += test_cmd_classify_glued_redirect_targets();
+    failed += test_cmd_classify_expansion_floor_at_least_unknown();
+    failed += test_cmd_classify_expansion_floor_exempt_stays_read();
+    failed += test_cmd_classify_pidstat_dig_tree_flag_specs();
+    failed += test_cmd_classify_device_floor_ampersand_and_pipeamp();
+    failed += test_cmd_classify_device_floor_redirect_vyos_comware();
+    failed += test_cmd_classify_exec_not_pass_through_wrapper();
+    failed += test_cmd_classify_pipe_amp_is_pipe();
+    failed += test_cmd_classify_ip_netns_vrf_exec_prefix();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();

@@ -787,6 +787,91 @@ static int tok_is_obscured_flag(const char *tok, size_t len)
     return quoted && i < len && tok[i] == '-';
 }
 
+/* ----- Active shell expansion detection -----
+ * Some allow-listed READ commands are safe only while every argument is
+ * literal: an unquoted (or double-quoted, where it still expands) shell
+ * expansion can produce a flag or path the per-command checks never see, so
+ * a word containing one makes the segment at least UNKNOWN. Checked on the
+ * word's raw span, quotes and escapes still in it -- callers that already
+ * unquote a word (find, sed) must check the raw span before they do. */
+
+static const char *const expansion_exempt_vars[] = {
+    "HOME", "PWD", "USER", "LOGNAME", "HOSTNAME", NULL
+};
+
+static int is_exempt_var_name(const char *name, size_t len)
+{
+    return tok_in_list(name, len, expansion_exempt_vars);
+}
+
+/* Length of the shell identifier (letter/underscore then alnum/underscore)
+ * starting at p, up to end; 0 when p does not start one. */
+static size_t var_name_len(const char *p, const char *end)
+{
+    if (p >= end || !(isalpha((unsigned char)*p) || *p == '_')) return 0;
+    size_t n = 1;
+    while (p + n < end && (isalnum((unsigned char)p[n]) || p[n] == '_')) n++;
+    return n;
+}
+
+/* 1 when tok[0..len) contains a shell expansion active under the word's own
+ * quoting: brace expansion ("{a,b}" / "{1..3}") and $'...'/$"..." only when
+ * fully unquoted (bash never expands either inside single or double
+ * quotes); $@ $* $# $? $- $$ $! $0-$9, ${...} and $NAME whenever not inside
+ * single quotes (double quotes do not block a variable expansion). A
+ * leading '~' is never treated as an expansion here -- tilde expansion is
+ * exempt. HOME/PWD/USER/LOGNAME/HOSTNAME are exempt too, bare or spelled
+ * "${NAME}". */
+static int tok_has_active_expansion(const char *tok, size_t len)
+{
+    int in_sq = 0, in_dq = 0;
+    for (size_t i = 0; i < len; i++) {
+        char c = tok[i];
+        if (in_sq) {
+            if (c == '\'') in_sq = 0;
+            continue;
+        }
+        if (c == '\\') { if (i + 1 < len) i++; continue; }
+        if (c == '\'') { in_sq = 1; continue; }
+        if (c == '"') { in_dq = !in_dq; continue; }
+        if (c == '{' && !in_dq) {
+            size_t j = i + 1;
+            int has_comma = 0, has_range = 0;
+            while (j < len && tok[j] != '}') {
+                if (tok[j] == ',') has_comma = 1;
+                if (tok[j] == '.' && j + 1 < len && tok[j + 1] == '.') has_range = 1;
+                j++;
+            }
+            if (j < len && (has_comma || has_range)) return 1;
+            continue;
+        }
+        if (c != '$') continue;
+        size_t j = i + 1;
+        if (j >= len) continue;
+        if (!in_dq && (tok[j] == '\'' || tok[j] == '"')) return 1;   /* $'...' $"..." */
+        if (strchr("@*#?$!-", tok[j])) return 1;
+        if (tok[j] >= '0' && tok[j] <= '9') return 1;
+        if (tok[j] == '{') {
+            size_t k = j + 1;
+            size_t nlen = var_name_len(tok + k, tok + len);
+            if (nlen > 0 && k + nlen < len && tok[k + nlen] == '}' &&
+                is_exempt_var_name(tok + k, nlen)) {
+                i = k + nlen;      /* skip past the exempt "${NAME}" */
+                continue;
+            }
+            return 1;
+        }
+        {
+            size_t nlen = var_name_len(tok + j, tok + len);
+            if (nlen > 0) {
+                if (is_exempt_var_name(tok + j, nlen)) { i = j + nlen - 1; continue; }
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* ----- Command substitution -----
  * "$(" (POSIX and PowerShell), a POSIX backtick, "<(" / ">(", and -- on an
  * unresolved platform, where the command may reach PowerShell -- any
@@ -1170,6 +1255,9 @@ static int flag_word(const FlagSpec *fs, const char *ts, size_t tl, const char *
                      CmdSafetyLevel *level, int *operands_only)
 {
     if (*operands_only) return 1;
+    if (tok_has_active_expansion(ts, tl)) {
+        if (*level < CMD_UNKNOWN) *level = CMD_UNKNOWN;
+    }
     if (tok_is_obscured_flag(ts, tl)) {
         if (*level < CMD_UNKNOWN) *level = CMD_UNKNOWN;
         return 0;
@@ -1480,8 +1568,13 @@ static int find_primary_is_allowed(const char *tok, size_t len, int *takes_value
 
 static int is_wrapper_cmd(const char *tok, size_t len)
 {
+    /* "exec" is deliberately not a wrapper here: it replaces the current
+     * shell process rather than running the command alongside it, so
+     * "exec CMD" is at least UNKNOWN, not whatever CMD alone would be (it
+     * still counts as a wrapper for scan_pipe_target()'s narrower purpose
+     * via tok_is_pipe_wrapper(), which is unaffected by this list). */
     static const char *wrappers[] = {
-        "env", "nice", "nohup", "timeout", "command", "exec",
+        "env", "nice", "nohup", "timeout", "command",
         "time", "stdbuf", "ionice", "setsid", NULL
     };
     return tok_in_list(tok, len, wrappers);
@@ -1615,8 +1708,11 @@ static const LongOpt tree_longs[] = {
     { "--sort", LV_REQ },
     { NULL, 0 }
 };
+/* "R" removed from the allowed no-value flags (round-3 review): it was
+ * never a reviewed-safe tree option and now falls through to the UNKNOWN
+ * default like any other unlisted flag. */
 static const FlagSpec tree_spec = {
-    "adlfxRqNQpugshDFvtcUriASnCXJ", "LPIHT", NULL, "o", 0, tree_longs, NULL, 0
+    "adlfxqNQpugshDFvtcUriASnCXJ", "LPIHT", NULL, "o", 0, tree_longs, NULL, 0
 };
 
 static const LongOpt sar_longs[] = {
@@ -1821,6 +1917,25 @@ static const FlagSpec route_spec = {
     "neveFC46hV", "A", NULL, NULL, 0, route_longs, NULL, 0
 };
 
+/* pidstat: "-e program args" starts and monitors a program of its own --
+ * left off the allow-list entirely (not in short_noval/short_val/
+ * short_optval), so it falls through to flag_word()'s UNKNOWN default like
+ * any other unrecognised flag. */
+static const LongOpt pidstat_longs[] = {
+    { "--human", LV_NONE }, { "--dec", LV_REQ },
+    { NULL, 0 }
+};
+static const FlagSpec pidstat_spec = {
+    "dHhIlRrstuVvwx", "CGpT", "U", NULL, 0, pidstat_longs, NULL, 0
+};
+
+/* dig: "-f file" batch-reads a list of lookups from a local file and sends
+ * each as a query -- left off the allow-list (UNKNOWN, not WRITE: dig
+ * itself never writes the file, it only reads and transmits it). */
+static const FlagSpec dig_spec = {
+    "46hmv", "bckpqtxy", NULL, NULL, 0, NULL, NULL, 0
+};
+
 /* git log / show / diff: revision and diff options. git accepts any
  * unambiguous abbreviation of a long option, so an abbreviation of
  * --output is WRITE and any other abbreviation is UNKNOWN. Values of the
@@ -2010,6 +2125,8 @@ static const ReadCmdSpec read_cmd_specs[] = {
     { "journalctl",    &journalctl_spec,    0 },
     { "dmesg",         &dmesg_spec,         0 },
     { "hostname",      &hostname_spec,      1 },
+    { "pidstat",       &pidstat_spec,       0 },
+    { "dig",           &dig_spec,           0 },
     { NULL, NULL, 0 }
 };
 
@@ -2452,6 +2569,9 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
                 if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
                 continue;
             }
+            if (tok_has_active_expansion(ts, tl)) {
+                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+            }
             if (tl < 2 || ts[0] != '-') continue;      /* URL or other operand */
             if (ts[1] == '-') {
                 size_t nlen = 0;
@@ -2750,24 +2870,39 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
             if (next_token(&scan, &ts, &tl)) { verb_s = ts; verb_l = tl; }
         }
 
-        if (obj_s && verb_s && tok_eq(obj_s, obj_l, "netns") && tok_eq(verb_s, verb_l, "exec")) {
-            /* ip netns exec NAME CMD... (with -all: ip -all netns exec CMD...) */
+        /* "ip netns exec" / "ip vrf exec", by any unambiguous prefix ip
+         * itself would accept ("ip netn e", "ip n e", "ip vrf e"): the
+         * object matches when the token is a prefix of the full name and
+         * the verb matches when it is a prefix of "exec". */
+        if (obj_s && verb_s &&
+            ((obj_l >= 1 && obj_l <= 5 && memcmp(obj_s, "netns", obj_l) == 0) ||
+             (obj_l >= 1 && obj_l <= 3 && memcmp(obj_s, "vrf", obj_l) == 0)) &&
+            verb_l >= 1 && verb_l <= 4 && memcmp(verb_s, "exec", verb_l) == 0) {
+            int is_netns = (obj_l <= 5 && memcmp(obj_s, "netns", obj_l) == 0);
+            /* ip [-all] netns exec [NAME] CMD... / ip vrf exec NAME CMD...
+             * -- classify what runs inside the namespace/VRF recursively,
+             * and never counted for less than WRITE regardless of what
+             * that turns out to be: this always changes what's reachable
+             * from this shell, even when the inner command only reads. */
             const char *name_s; size_t name_l;
-            if (all_ns || next_token(&scan, &name_s, &name_l)) {
+            if ((is_netns && all_ns) || next_token(&scan, &name_s, &name_l)) {
                 const char *cmd_start = NULL, *cmd_end = NULL;
                 while (next_token(&scan, &ts, &tl)) {
                     if (!cmd_start) cmd_start = ts;
                     cmd_end = ts + tl;
                 }
-                CmdSafetyLevel sub = CMD_UNKNOWN;
-                if (cmd_start && cmd_end > cmd_start)
-                    sub = classify_linux_segment(cmd_start, (size_t)(cmd_end - cmd_start), NULL, 0);
-                if (sub < CMD_UNKNOWN) sub = CMD_UNKNOWN;
+                CmdSafetyLevel sub = CMD_WRITE;
+                if (cmd_start && cmd_end > cmd_start) {
+                    CmdSafetyLevel inner = classify_linux_segment(cmd_start,
+                                             (size_t)(cmd_end - cmd_start), NULL, 0);
+                    if (inner > sub) sub = inner;
+                }
                 if (sub > level) level = sub;
                 if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
                 if (reason_buf && reason_buf_size > 0)
                     snprintf(reason_buf, reason_buf_size,
-                             "ip netns exec: runs a command in another namespace");
+                             is_netns ? "ip netns exec: runs a command in another namespace"
+                                      : "ip vrf exec: runs a command in another VRF");
                 return level > redir ? level : redir;
             }
         }
@@ -2927,6 +3062,9 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
             size_t wl = strlen(w);
             CmdSafetyLevel wlv = CMD_READ;
             if (trunc && level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+            if (!operands_only && tok_has_active_expansion(rs, (size_t)(re - rs))) {
+                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+            }
             if (expect_script) {
                 wlv = sed_script_level(w);
                 expect_script = 0;
@@ -3123,6 +3261,9 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         CmdSafetyLevel level = CMD_READ;
         while (next_shell_word(&scan, seg_end, w, sizeof w, &trunc, &rs, &re)) {
             size_t wl = strlen(w);
+            if (tok_has_active_expansion(rs, (size_t)(re - rs))) {
+                if (level < CMD_UNKNOWN) level = CMD_UNKNOWN;
+            }
             if (wl == 0 || w[0] != '-') continue; /* path, operand, ( ) ! */
 
             if (tok_eq(w, wl, "-delete")) {
@@ -6580,7 +6721,13 @@ static CmdSafetyLevel scan_device_redirect_mode(const char *seg, size_t seg_len,
     const char *end = seg + seg_len;
     const char *p = seg;
     QuoteScan qs;
-    if (platform != CMD_PLATFORM_CISCO_NXOS) return CMD_READ;
+    /* NX-OS has genuine shell-style redirection; VyOS's operational mode is
+     * bash underneath and HP Comware's CLI also writes a file on a bare
+     * '>' before any display filter -- everywhere else (IOS, ASA, Junos,
+     * ...) '>' is never special outside a filter pattern. */
+    if (platform != CMD_PLATFORM_CISCO_NXOS && platform != CMD_PLATFORM_VYOS &&
+        platform != CMD_PLATFORM_HP_COMWARE)
+        return CMD_READ;
     quote_scan_init(&qs, mode);
 
     while (p < end) {
@@ -6626,6 +6773,39 @@ static CmdSafetyLevel device_shell_floor_mode(const char *seg, size_t seg_len,
     while (p < end) {
         const char *here = p;
         if (!quote_step(&qs, &p, end)) continue;
+
+        /* A lone '&' backgrounds what precedes it and starts a new shell
+         * command with whatever follows it -- device platforms don't split
+         * on it at the top level the way Linux and an unresolved platform
+         * do (classify_pass() gates that split on platform), so this floor
+         * has to catch it itself, the same way it already catches "||":
+         * read the way a real Linux shell would read it, never counted for
+         * less than UNKNOWN outside a filter pattern (or, inside one, only
+         * when the Linux reading is WRITE or worse). Never a redirect's own
+         * '&' ("2>&1", "&>file"), never "&&" (already a top-level split on
+         * every platform), and never a trailing '&' with nothing after it
+         * (plain backgrounding, nothing further to classify). */
+        if (*here == '&' && !(here + 1 < end && here[1] == '&') &&
+            !(here + 1 < end && here[1] == '>') &&
+            !(here > seg && here[-1] == '>')) {
+            const char *rem = here + 1;
+            while (rem < end && (*rem == ' ' || *rem == '\t')) rem++;
+            if (rem >= end) continue;
+            CmdSafetyLevel rl = classify_linux_segment(rem, (size_t)(end - rem), NULL, 0);
+            if (!in_filter) {
+                if (rl < CMD_UNKNOWN) rl = CMD_UNKNOWN;
+            } else if (rl < CMD_WRITE) {
+                rl = CMD_READ;
+            }
+            if (rl > floor) {
+                floor = rl;
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size,
+                             "&: backgrounds and runs a shell command");
+            }
+            continue;
+        }
+
         if (*here != '|') continue;
 
         if ((here + 1) < end && here[1] == '|') {
@@ -6658,9 +6838,11 @@ static CmdSafetyLevel device_shell_floor_mode(const char *seg, size_t seg_len,
             continue;
         }
 
-        /* Rule 2: a single active '|' -- look at what it feeds. */
+        /* Rule 2: a single active '|', or '|&' (a bash-ism that also
+         * redirects stderr into the pipe) -- look at what it feeds. */
+        int amp = (here + 1) < end && here[1] == '&';
         in_filter = 1;
-        const char *tgt_start = here + 1;
+        const char *tgt_start = here + (amp ? 2 : 1);
         CmdSafetyLevel pipe_level = scan_pipe_target(tgt_start);
         if (pipe_level > floor) {
             floor = pipe_level;
@@ -6682,6 +6864,7 @@ static CmdSafetyLevel device_shell_floor_mode(const char *seg, size_t seg_len,
                 }
             }
         }
+        if (amp) p = here + 2;
     }
     return floor;
 }
@@ -6902,6 +7085,7 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
 
         is_pipe_target = (*p == '|' && *(p+1) != '|');
         if (*p == '|' && *(p+1) == '|') p += 2;
+        else if (*p == '|' && *(p+1) == '&') p += 2;   /* "|&": stderr+stdout pipe */
         else if (*p == '&' && *(p+1) == '&') p += 2;
         else if (*p) p++;
     }

@@ -2,6 +2,7 @@
 #include <winsock2.h>   /* Must come before windows.h */
 #include <windows.h>
 #include <io.h>
+#include <sddl.h>       /* ConvertSidToStringSidA */
 #else
 #include <unistd.h>
 #include <fcntl.h>
@@ -545,12 +546,55 @@ static void hash_path_hex(const char *path, char *out_hex, size_t out_size)
     out_hex[bytes * 2u] = '\0';
 }
 
+/* The current process's user SID as a string ("S-1-5-21-...-1001"), used to
+ * make the known-hosts lock mutex identify the *user*, not the logon
+ * session: "Local\" names are already scoped to the calling session by
+ * Windows itself, so without this, the same user's two logon sessions (an
+ * RDP session and a console session, say) contend for two different mutex
+ * objects even though both may write the same known_hosts file in that
+ * user's profile. Returns 0 and fills out_sid on success; on any failure
+ * returns -1 and the caller falls back to a name without a SID (the
+ * previous behaviour). */
+static int current_user_sid_string(char *out_sid, size_t out_size)
+{
+    HANDLE token = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return -1;
+
+    DWORD needed = 0;
+    GetTokenInformation(token, TokenUser, NULL, 0, &needed);
+    if (needed == 0) { CloseHandle(token); return -1; }
+
+    int ok = -1;
+    BYTE *buf = (BYTE *)malloc(needed);
+    if (buf) {
+        if (GetTokenInformation(token, TokenUser, buf, needed, &needed)) {
+            TOKEN_USER *tu = (TOKEN_USER *)buf;
+            char *sid_str = NULL;
+            if (ConvertSidToStringSidA(tu->User.Sid, &sid_str) && sid_str) {
+                int written = snprintf(out_sid, out_size, "%s", sid_str);
+                LocalFree(sid_str);
+                if (written > 0 && (size_t)written < out_size) ok = 0;
+            }
+        }
+        free(buf);
+    }
+    CloseHandle(token);
+    return ok;
+}
+
 static int kh_lock_acquire(const char *path, KhLock *lock)
 {
-    char hex[65];
+    char hex[33];
     hash_path_hex(path, hex, sizeof(hex));
-    char name[96];
-    snprintf(name, sizeof(name), "Local\\nutshell-known-hosts-%s", hex);
+    char sid[192];      /* documented max SID string length is ~184 chars */
+    char name[256];     /* well under the 260-char named-object limit */
+    if (current_user_sid_string(sid, sizeof(sid)) == 0) {
+        snprintf(name, sizeof(name), "Local\\nutshell-known-hosts-%s-%s", sid, hex);
+    } else {
+        /* SID unavailable: fall back to the path-only name (today's
+         * behaviour) rather than fail the lock outright. */
+        snprintf(name, sizeof(name), "Local\\nutshell-known-hosts-%s", hex);
+    }
 
     HANDLE h = CreateMutexA(NULL, FALSE, name);
     if (!h) return -1;

@@ -3338,8 +3338,12 @@ int test_cmd_classify_hardened_flags_raise_level(void) {
         { "env VAR=x rm F",                     CMD_CRITICAL },
         { "nohup touch F",                      CMD_WRITE },
         { "nice -n 10 rm F",                    CMD_CRITICAL },
-        { "exec rm F",                          CMD_CRITICAL },
-        { "exec -a NAME rm F",                  CMD_CRITICAL },
+        /* exec is no longer a pass-through wrapper (round 3): it replaces
+         * the current shell process rather than running the command
+         * alongside it, so "exec CMD" is at least UNKNOWN, not whatever CMD
+         * alone would be -- see test_cmd_classify_exec_not_pass_through_wrapper. */
+        { "exec rm F",                          CMD_UNKNOWN },
+        { "exec -a NAME rm F",                  CMD_UNKNOWN },
         { "command -p rm F",                    CMD_CRITICAL },
         { "time rm F",                          CMD_CRITICAL },
         { "stdbuf -oL rm F",                    CMD_CRITICAL },
@@ -3922,6 +3926,185 @@ int test_cmd_classify_glued_redirect_targets(void) {
         { "ls 2>&-",          CMD_READ },
     };
     if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Round 3: expansion floor for allow-listed READ commands ---- */
+
+/* An active (unquoted, or double-quoted where it still expands) shell
+ * expansion in an argument of find/sort/git log/curl/sed/less/uniq can
+ * produce a flag or run something the per-command checks never see, so it
+ * makes the segment at least UNKNOWN, even though the raw word looks like
+ * a harmless operand (does not itself start with '-'). Each command's word
+ * is deliberately shaped so the pre-fix classifier saw nothing to object
+ * to: a brace/dollar-quote token that does not start with '-', or a plain
+ * "$@"/"${IFS}" operand next to (not glued to) a genuine flag. */
+int test_cmd_classify_expansion_floor_at_least_unknown(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        /* Brace expansion with a comma. */
+        { "find . {-delete,-print}",       CMD_UNKNOWN },
+        { "sort {-o,-r} F",                CMD_UNKNOWN },
+        { "git log {--oneline,--output=F}", CMD_UNKNOWN },
+        { "curl {-o,-s} http://x/F",       CMD_UNKNOWN },
+        { "sed 's/a/b/' {-i,-n}",          CMD_UNKNOWN },
+        { "less {-o,-O} F",                CMD_UNKNOWN },
+        { "uniq {-c,-d}",                  CMD_UNKNOWN },
+        /* $'...' (ANSI-C quoting) can also produce a flag. */
+        { "find . $'-delete'",             CMD_UNKNOWN },
+        { "sort $'-o' F",                  CMD_UNKNOWN },
+        { "git log $'-oneline'",           CMD_UNKNOWN },
+        { "curl $'-o' F http://x",         CMD_UNKNOWN },
+        { "sed 's/a/b/' $'-i'",            CMD_UNKNOWN },
+        { "less $'-o' F",                  CMD_UNKNOWN },
+        { "uniq $'-w'",                    CMD_UNKNOWN },
+        /* $@/${IFS} ahead of, or in place of, a flag word. */
+        { "find . $@ -true",               CMD_UNKNOWN },
+        { "sort ${IFS} F",                 CMD_UNKNOWN },
+        { "git log $@",                    CMD_UNKNOWN },
+        { "curl $@ http://x",              CMD_UNKNOWN },
+        { "sed 's/a/b/' $@",               CMD_UNKNOWN },
+        { "less $@ F",                     CMD_UNKNOWN },
+        { "uniq $@",                       CMD_UNKNOWN },
+        /* A plain, non-exempt variable in an ordinary operand position. */
+        { "sort $X F",                     CMD_UNKNOWN },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* The exemption (HOME/PWD/USER/LOGNAME/HOSTNAME, bare or "${NAME}", and a
+ * leading '~') holds regardless of whether the command is one the
+ * expansion floor checks at all. */
+int test_cmd_classify_expansion_floor_exempt_stays_read(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ls $HOME", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("cat ~/F", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ls \"$PWD\"", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("echo $USER", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("grep x ~/F", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sort $HOME/F", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("git log ${HOME}", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    TEST_END();
+}
+
+/* ---- Round 3: pidstat -e, dig -f, tree -R ---- */
+
+int test_cmd_classify_pidstat_dig_tree_flag_specs(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase unknown_cases[] = {
+        { "pidstat -e sh -c x",   CMD_UNKNOWN },   /* -e starts and monitors a program */
+        { "dig -f F example.com", CMD_UNKNOWN },   /* -f reads a local file and sends it */
+        { "tree -R",              CMD_UNKNOWN },   /* not a reviewed-safe tree flag */
+    };
+    if (check_min_level_linuxish(unknown_cases, sizeof unknown_cases / sizeof unknown_cases[0]))
+        _tf_local_fail = 1;
+
+    /* Everyday forms of all three stay READ. */
+    ASSERT_EQ((int)cmd_classify("pidstat 1 5", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("pidstat -u -p 1234", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dig +short example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dig -t MX example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dig -x 8.8.8.8", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("tree -a -L 2", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    TEST_END();
+}
+
+/* ---- Round 3: device floor '&' split and '|&' pipe scan ---- */
+
+/* Device platforms don't split on a lone '&' at the top level the way
+ * Linux and an unresolved platform do, so the floor has to catch it (and a
+ * "|&" pipe) itself -- the same way it already catches "||" and "|". */
+int test_cmd_classify_device_floor_ampersand_and_pipeamp(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show run & rm -rf F", CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_NXOS, "show run & rm -rf F", CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_IOS,  "show run |& sh",      CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_NXOS, "show run |& sh",      CMD_CRITICAL },
+    };
+    if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+
+    /* A trailing bare '&' with nothing after it is plain backgrounding, not
+     * a shell escape: no floor bump over "show run" alone. */
+    ASSERT_EQ((int)cmd_classify("show run &", CMD_PLATFORM_CISCO_IOS),
+              (int)cmd_classify("show run", CMD_PLATFORM_CISCO_IOS));
+    TEST_END();
+}
+
+/* VyOS's operational mode is bash underneath and HP Comware also writes a
+ * file on a bare '>' before any display filter, like NX-OS. */
+int test_cmd_classify_device_floor_redirect_vyos_comware(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_VYOS,       "show configuration > F",             CMD_WRITE },
+        { CMD_PLATFORM_VYOS,       "show configuration >> F",            CMD_WRITE },
+        { CMD_PLATFORM_HP_COMWARE, "display current-configuration > F",  CMD_WRITE },
+        { CMD_PLATFORM_HP_COMWARE, "display current-configuration >> F", CMD_WRITE },
+    };
+    if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+
+    /* Ordinary display and BGP filters are unaffected: '>' after the first
+     * '|' is part of the pattern, not a redirect, on these two either. */
+    ASSERT_EQ((int)cmd_classify("show configuration | match >x", CMD_PLATFORM_VYOS),
+              (int)cmd_classify("show configuration", CMD_PLATFORM_VYOS));
+    ASSERT_EQ((int)cmd_classify("display ip bgp | i *>i", CMD_PLATFORM_HP_COMWARE),
+              (int)cmd_classify("display ip bgp", CMD_PLATFORM_HP_COMWARE));
+    TEST_END();
+}
+
+/* ---- Round 3: exec is no longer a pass-through wrapper ---- */
+
+/* "exec CMD" replaces the current shell process rather than running CMD
+ * alongside it, so it is at least UNKNOWN, not whatever CMD alone would be
+ * ("exec ls" used to classify exactly like "ls": READ). */
+int test_cmd_classify_exec_not_pass_through_wrapper(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "exec ls",      CMD_UNKNOWN },
+        { "exec -a x ls", CMD_UNKNOWN },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Round 3: "|&" is a pipe ---- */
+
+int test_cmd_classify_pipe_amp_is_pipe(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "cat F |& sh",  CMD_CRITICAL },
+        { "cat F|& sh",   CMD_CRITICAL },
+    };
+    if (check_exact_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Round 3: "ip netns exec" / "ip vrf exec" by prefix ---- */
+
+int test_cmd_classify_ip_netns_vrf_exec_prefix(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "ip netns exec ns1 ls",       CMD_WRITE },
+        { "ip vrf exec blue ls",        CMD_WRITE },
+        { "ip netn e ns1 ls",           CMD_WRITE },
+        { "ip n e ns1 ls",              CMD_WRITE },
+        { "ip vrf e blue ls",           CMD_WRITE },
+        /* The inner command's own level wins when it is worse than WRITE --
+         * an abbreviated object/verb must still be classified recursively,
+         * not just fall through to the flat WRITE any other unrecognised ip
+         * verb gets regardless of what follows it. */
+        { "ip netns exec ns1 rm -rf F", CMD_CRITICAL },
+        { "ip n e ns1 rm -rf F",        CMD_CRITICAL },
+        { "ip vrf e blue rm -rf F",     CMD_CRITICAL },
+    };
+    if (check_exact_level_linuxish(cases, sizeof cases / sizeof cases[0]))
         _tf_local_fail = 1;
     TEST_END();
 }
