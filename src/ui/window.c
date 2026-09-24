@@ -98,6 +98,9 @@ typedef struct Session {
     Profile         conn_profile;  /* copy of profile for thread */
     int             conn_result;   /* 0=ok, 1=tcp/ssh, 2=auth, 3=channel */
     char            conn_error[512];
+    int             conn_hostkey_strict; /* snapshot of host_key_verification == "strict",
+                                             taken on the UI thread before the connection
+                                             thread starts so it never reads g_config */
     ULONGLONG       conn_start_ms;
     int             conn_dots;     /* dots appended so far */
     CRITICAL_SECTION conn_cs;      /* H-1: guards conn_result/conn_error/ssh/channel */
@@ -116,19 +119,28 @@ typedef struct Session {
     struct Session *next;
 } Session;
 
-/* Build the known_hosts file path: %APPDATA%\sshclient\known_hosts */
-static void get_knownhosts_path(char *buf, size_t n)
+/* Build the known_hosts file path: %APPDATA%\sshclient\known_hosts.
+ * Returns -1 if APPDATA is unset/empty or the resulting path would be
+ * truncated -- callers must not fall back to a relative "known_hosts": that
+ * would read/write whatever happens to be in the process's current
+ * directory, silently trusting or losing host keys. Returns 0 on success. */
+static int get_knownhosts_path(char *buf, size_t n)
 {
     char appdata[MAX_PATH];
-    if (GetEnvironmentVariableA("APPDATA", appdata, sizeof(appdata)) == 0) {
-        snprintf(buf, n, "known_hosts");
-        return;
+    DWORD len = GetEnvironmentVariableA("APPDATA", appdata, sizeof(appdata));
+    if (len == 0 || len >= sizeof(appdata)) {
+        return -1;
     }
-    snprintf(buf, n, "%s\\sshclient\\known_hosts", appdata);
-    /* Create the directory if it doesn't exist */
+    int written = snprintf(buf, n, "%s\\sshclient\\known_hosts", appdata);
+    if (written <= 0 || (size_t)written >= n) {
+        return -1;
+    }
+    /* Create the directory if it doesn't exist -- its failure surfaces
+     * later as a write error from knownhosts_add(). */
     char dir[MAX_PATH];
     snprintf(dir, sizeof(dir), "%s\\sshclient", appdata);
     CreateDirectoryA(dir, NULL); /* OK if already exists */
+    return 0;
 }
 
 static HWND g_hwndTabs = NULL;
@@ -892,7 +904,11 @@ static DWORD WINAPI connection_thread(LPVOID param)
 
     if (s->conn_cancelled) { snprintf(s->conn_error, sizeof(s->conn_error), "Cancelled."); CONN_FAIL(1); }
 
-    /* TOFU host key verification (MessageBoxA is thread-safe on Win32) */
+    /* Host key verification (MessageBoxA is thread-safe on Win32).
+     * s->conn_hostkey_strict was snapshotted on the UI thread from
+     * g_config->settings.host_key_verification before this thread started --
+     * "strict" refuses an unknown or changed key outright; anything else
+     * (default "tofu") prompts, as before. */
     {
         size_t key_len = 0;
         int    key_type = 0;
@@ -903,47 +919,112 @@ static DWORD WINAPI connection_thread(LPVOID param)
         }
 
         char kh_path[MAX_PATH];
-        get_knownhosts_path(kh_path, sizeof(kh_path));
+        if (get_knownhosts_path(kh_path, sizeof(kh_path)) != 0) {
+            snprintf(s->conn_error, sizeof(s->conn_error),
+                "Cannot locate the known hosts file because the APPDATA environment "
+                "variable is not set.\n\nThe server's host key cannot be verified, "
+                "so the connection was stopped.");
+            CONN_FAIL(1);
+        }
 
         KnownHosts kh;
-        if (knownhosts_init(&kh, s->ssh->session, kh_path) == KNOWNHOSTS_OK) {
-            char fingerprint[128];
-            int tofu = knownhosts_check(&kh, info->host, info->port,
-                                        key, key_len,
-                                        fingerprint, sizeof(fingerprint));
-            if (tofu == KNOWNHOSTS_NEW || tofu == KNOWNHOSTS_MISMATCH) {
-                char dlg_msg[1024];
-                const char *title;
-                UINT icon;
-                if (tofu == KNOWNHOSTS_NEW) {
-                    snprintf(dlg_msg, sizeof(dlg_msg),
-                        "The authenticity of host '%s:%d' can't be established.\n\n"
-                        "Host key fingerprint:\n%s\n\n"
-                        "Do you want to trust this host and continue connecting?",
-                        info->host, info->port, fingerprint);
-                    title = "Unknown Host";
-                    icon  = MB_ICONWARNING;
+        if (knownhosts_init(&kh, s->ssh->session, kh_path) != KNOWNHOSTS_OK) {
+            snprintf(s->conn_error, sizeof(s->conn_error),
+                "Cannot read the known hosts file:\n%s\n\nThe server's host key "
+                "cannot be verified, so the connection was stopped. Check that "
+                "the file is readable and not damaged.", kh_path);
+            knownhosts_free(&kh);
+            CONN_FAIL(1);
+        }
+
+        KnownHostsResult res;
+        int lookup_rc = knownhosts_lookup(&kh, info->host, info->port,
+                                          key, key_len, key_type, &res);
+
+        if (lookup_rc == KNOWNHOSTS_ERROR) {
+            snprintf(s->conn_error, sizeof(s->conn_error),
+                "Cannot read the known hosts file:\n%s\n\nThe server's host key "
+                "cannot be verified, so the connection was stopped. Check that "
+                "the file is readable and not damaged.", kh_path);
+            knownhosts_free(&kh);
+            CONN_FAIL(1);
+        }
+
+        if (lookup_rc == KNOWNHOSTS_NEW || lookup_rc == KNOWNHOSTS_MISMATCH) {
+            if (s->conn_hostkey_strict) {
+                if (lookup_rc == KNOWNHOSTS_NEW) {
+                    snprintf(s->conn_error, sizeof(s->conn_error),
+                        "The host '%s:%d' is not in the known hosts file:\n%s\n\n"
+                        "Host key checking is set to strict, so the connection "
+                        "was stopped without prompting.\n\nKey type: %s\nFingerprint: %s",
+                        info->host, info->port, kh_path, res.key_type, res.fingerprint);
                 } else {
-                    snprintf(dlg_msg, sizeof(dlg_msg),
-                        "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\n\n"
-                        "Host: %s:%d\nNew fingerprint:\n%s\n\n"
-                        "This may indicate a MitM attack.\n"
-                        "Connect anyway and update the stored key?",
-                        info->host, info->port, fingerprint);
-                    title = "Host Key Changed!";
-                    icon  = MB_ICONSTOP;
+                    snprintf(s->conn_error, sizeof(s->conn_error),
+                        "The host key for '%s:%d' does not match the known hosts "
+                        "file:\n%s\n\nHost key checking is set to strict, so the "
+                        "connection was stopped without prompting.\n\n"
+                        "Presented key: %s %s\nStored key:    %s %s",
+                        info->host, info->port, kh_path,
+                        res.key_type, res.fingerprint,
+                        res.stored_key_type, res.stored_fingerprint);
                 }
-                int ans = MessageBoxA(hwnd, dlg_msg, title, (UINT)MB_YESNO | icon);
-                if (ans == IDYES) {
-                    knownhosts_add(&kh, info->host, info->port, key, key_len, key_type);
-                } else {
-                    snprintf(s->conn_error, sizeof(s->conn_error), "Connection aborted by user.");
+                knownhosts_free(&kh);
+                CONN_FAIL(1);
+            }
+
+            char dlg_msg[2048];
+            const char *title;
+            UINT flags;
+            if (lookup_rc == KNOWNHOSTS_NEW) {
+                snprintf(dlg_msg, sizeof(dlg_msg),
+                    "The authenticity of host '%s:%d' can't be established.\n\n"
+                    "Key type: %s\nFingerprint: %s\n\n"
+                    "Do you want to trust this host and continue connecting?",
+                    info->host, info->port, res.key_type, res.fingerprint);
+                title = "Unknown Host";
+                flags = (UINT)MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2;
+            } else {
+                /* snprintf's return value can exceed the buffer size to report
+                 * how much it would have written -- that's fine here, since a
+                 * truncated dialog is still legible; we only need it to not
+                 * overflow, which snprintf already guarantees. */
+                snprintf(dlg_msg, sizeof(dlg_msg),
+                    "WARNING: the host key for %s (port %d) has changed.\n\n"
+                    "The server presented a different key from the one stored "
+                    "for it. The connection may be intercepted, or the server's "
+                    "key may have been replaced.\n\n"
+                    "Presented key: %s %s\nStored key:    %s %s\n"
+                    "Known hosts file: %s\n\n"
+                    "The connection will not be made unless you choose Yes. "
+                    "Choose Yes only if you have confirmed the new fingerprint "
+                    "with the server's administrator; Yes replaces the stored key.",
+                    info->host, info->port,
+                    res.key_type, res.fingerprint,
+                    res.stored_key_type, res.stored_fingerprint,
+                    kh_path);
+                title = "Host key changed";
+                flags = (UINT)MB_YESNO | MB_ICONSTOP | MB_DEFBUTTON2;
+            }
+
+            int ans = MessageBoxA(hwnd, dlg_msg, title, flags);
+            if (ans == IDYES) {
+                if (knownhosts_add(&kh, info->host, info->port, key, key_len, key_type)
+                    != KNOWNHOSTS_OK) {
+                    snprintf(s->conn_error, sizeof(s->conn_error),
+                        "The host key was accepted but could not be saved to:\n%s\n\n"
+                        "The connection was stopped. Check that the folder is writable.",
+                        kh_path);
                     knownhosts_free(&kh);
                     CONN_FAIL(1);
                 }
+            } else {
+                snprintf(s->conn_error, sizeof(s->conn_error), "Connection aborted by user.");
+                knownhosts_free(&kh);
+                CONN_FAIL(1);
             }
-            knownhosts_free(&kh);
         }
+
+        knownhosts_free(&kh);
     }
 
     if (s->conn_cancelled) { snprintf(s->conn_error, sizeof(s->conn_error), "Cancelled."); CONN_FAIL(1); }
@@ -1087,6 +1168,9 @@ static void on_session_connect(const Profile *info) {
     s->conn_start_ms = GetTickCount64();
     s->conn_dots     = 0;
     s->conn_hwnd     = GetParent(g_hwndTabs);
+    /* Snapshot on the UI thread -- the worker thread never reads g_config. */
+    s->conn_hostkey_strict = (g_config &&
+        _stricmp(g_config->settings.host_key_verification, "strict") == 0) ? 1 : 0;
 
     s->conn_thread = CreateThread(NULL, 0, connection_thread, s, 0, NULL);
     if (!s->conn_thread) {
@@ -1559,6 +1643,9 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
         s->conn_start_ms = GetTickCount64();
         s->conn_dots     = 0;
         s->conn_hwnd     = hParent;
+        /* Snapshot on the UI thread -- the worker thread never reads g_config. */
+        s->conn_hostkey_strict = (g_config &&
+            _stricmp(g_config->settings.host_key_verification, "strict") == 0) ? 1 : 0;
 
         s->conn_thread = CreateThread(NULL, 0, connection_thread, s, 0, NULL);
         if (!s->conn_thread) {

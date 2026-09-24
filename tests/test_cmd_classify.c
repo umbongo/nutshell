@@ -1011,7 +1011,11 @@ int test_cmd_classify_linux_safe_orchestration_status(void) {
     ASSERT_EQ((int)cmd_classify("kubectl describe pod mypod", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("helm list", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("helm status myrelease", CMD_PLATFORM_LINUX), (int)CMD_READ);
-    ASSERT_EQ((int)cmd_classify("terraform plan", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    /* terraform plan can invoke arbitrary provider code, so it is no longer
+     * treated as flatly READ like "show"/"output" -- see the classifier
+     * hardening pass (harden-part-b) and
+     * test_cmd_classify_hardened_flags_raise_level below. */
+    ASSERT_EQ((int)cmd_classify("terraform plan", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
     ASSERT_EQ((int)cmd_classify("terraform show", CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
 }
@@ -2262,14 +2266,28 @@ int test_cmd_classify_linux_bare_only_safe_forms(void) {
     TEST_BEGIN();
     ASSERT_EQ((int)cmd_classify("date", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("date -s \"2026-09-11 12:00:00\"", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
-    ASSERT_EQ((int)cmd_classify("date +%Y-%m-%d", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    /* date, hostname and dmesg now have flag allow-lists: a format
+     * operand and the display flags are READ, anything that sets state is
+     * WRITE, an unlisted flag is UNKNOWN. */
+    ASSERT_EQ((int)cmd_classify("date +%Y-%m-%d", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("date -u", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("date 010100002030", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("date --se=x", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("date -Z", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
 
     ASSERT_EQ((int)cmd_classify("hostname", CMD_PLATFORM_LINUX), (int)CMD_READ);
-    ASSERT_EQ((int)cmd_classify("hostname newname", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("hostname -I", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("hostname -f", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("hostname newname", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("hostname -F F", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
 
     ASSERT_EQ((int)cmd_classify("dmesg", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("dmesg -C", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
-    ASSERT_EQ((int)cmd_classify("dmesg -T", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)cmd_classify("dmesg -TC", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("dmesg --cl", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("dmesg -T", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dmesg --level=err", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dmesg -Q", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
 
     ASSERT_EQ((int)cmd_classify("mount", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("mount /dev/sdb1 /mnt/data", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
@@ -2394,9 +2412,15 @@ int test_cmd_classify_redirect_stderr_to_real_file_write(void) {
  * regression the harmless-redirect handling exists for. */
 int test_cmd_classify_linux_readonly_du_pipeline_regression(void) {
     TEST_BEGIN();
+    /* find -exec now always floors at UNKNOWN even when the executed
+     * command (here "du") is itself a read command -- find -exec runs an
+     * arbitrary program per match, which "du" happening to be safe here
+     * does not make provably safe in general. See the classifier hardening
+     * pass (harden-part-b) and test_cmd_classify_hardened_flags_raise_level
+     * below ("find -exec cat ... -> at least UNKNOWN"). */
     ASSERT_EQ((int)cmd_classify(
         "find ~ -type f -exec du -h {} + 2>/dev/null | sort -rh | head -20",
-        CMD_PLATFORM_LINUX), (int)CMD_READ);
+        CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
     ASSERT_EQ((int)cmd_classify("du -sh /* 2>/dev/null | sort -rh",
         CMD_PLATFORM_LINUX), (int)CMD_READ);
     TEST_END();
@@ -2618,5 +2642,1469 @@ int test_cmd_classify_v1_2_9_unaffected_pipelines(void) {
     ASSERT_EQ((int)cmd_classify("show run | include ^interface|shutdown", u),
               (int)CMD_CRITICAL);
 
+    TEST_END();
+}
+
+/* ---- Quoting model: escaped quotes, unbalanced quoting, substitution ---- */
+
+typedef struct {
+    const char    *cmd;
+    CmdSafetyLevel min_level;
+} ClassifyMinCase;
+
+/* Asserts cmd_classify(cmd) >= min on both LINUX and UNKNOWN; prints the
+ * failing case so a table failure names its row. */
+static int check_min_level_linuxish(const ClassifyMinCase *cases, size_t n)
+{
+    const CmdPlatform plats[2] = { CMD_PLATFORM_LINUX, CMD_PLATFORM_UNKNOWN };
+    int bad = 0;
+    for (size_t i = 0; i < n; i++) {
+        for (int k = 0; k < 2; k++) {
+            CmdSafetyLevel got = cmd_classify(cases[i].cmd, plats[k]);
+            if (got < cases[i].min_level) {
+                printf("  [%s] \"%s\": got %d, want >= %d\n",
+                       plats[k] == CMD_PLATFORM_LINUX ? "linux" : "unknown",
+                       cases[i].cmd, (int)got, (int)cases[i].min_level);
+                bad = 1;
+            }
+        }
+    }
+    return bad;
+}
+
+/* Asserts cmd_classify(cmd) == level exactly on LINUX and UNKNOWN. */
+static int check_exact_level_linuxish(const ClassifyMinCase *cases, size_t n)
+{
+    const CmdPlatform plats[2] = { CMD_PLATFORM_LINUX, CMD_PLATFORM_UNKNOWN };
+    int bad = 0;
+    for (size_t i = 0; i < n; i++) {
+        for (int k = 0; k < 2; k++) {
+            CmdSafetyLevel got = cmd_classify(cases[i].cmd, plats[k]);
+            if (got != cases[i].min_level) {
+                printf("  [%s] \"%s\": got %d, want %d\n",
+                       plats[k] == CMD_PLATFORM_LINUX ? "linux" : "unknown",
+                       cases[i].cmd, (int)got, (int)cases[i].min_level);
+                bad = 1;
+            }
+        }
+    }
+    return bad;
+}
+
+/* An escaped quote is a literal character, not the start of a quoted span,
+ * so whatever sits between two of them is still classified. Each wrapped
+ * command must classify at least as severely as the command alone. */
+int test_cmd_classify_escaped_quote_does_not_hide_segments(void) {
+    TEST_BEGIN();
+    static const char *inner[] = { "touch F", "rm F", "mv F G", "chmod 600 F" };
+    static const char *wrap[] = {
+        "echo \\'; %s; echo \\'",    /* POSIX backslash-escaped single quote */
+        "echo \\\"; %s; echo \\\"",  /* POSIX backslash-escaped double quote */
+        "echo `'; %s; echo `'",      /* PowerShell backtick-escaped single quote */
+        "echo `\"; %s; echo `\"",    /* PowerShell backtick-escaped double quote */
+        "echo \\' && %s && echo \\'",
+        "echo \\' | %s",
+    };
+    const CmdPlatform plats[2] = { CMD_PLATFORM_LINUX, CMD_PLATFORM_UNKNOWN };
+    for (size_t i = 0; i < sizeof inner / sizeof inner[0]; i++) {
+        for (size_t w = 0; w < sizeof wrap / sizeof wrap[0]; w++) {
+            char buf[128];
+            snprintf(buf, sizeof buf, wrap[w], inner[i]);
+            for (int k = 0; k < 2; k++) {
+                CmdSafetyLevel alone = cmd_classify(inner[i], plats[k]);
+                CmdSafetyLevel got = cmd_classify(buf, plats[k]);
+                if (got < alone) {
+                    printf("  \"%s\": got %d, \"%s\" alone is %d\n",
+                           buf, (int)got, inner[i], (int)alone);
+                    _tf_local_fail = 1;
+                }
+                unsigned mask = cmd_classify_mask(buf, plats[k]);
+                if (!(mask & CMD_MASK_OF(alone))) {
+                    printf("  \"%s\": mask 0x%x lacks level %d\n",
+                           buf, mask, (int)alone);
+                    _tf_local_fail = 1;
+                }
+            }
+        }
+    }
+    /* The placeholders' own levels, pinned so the comparison above means
+     * what it says. */
+    ASSERT_EQ((int)cmd_classify("touch F", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("rm F", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("echo \\'; rm F; echo \\'", CMD_PLATFORM_LINUX),
+              (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("echo \\'; touch F; echo \\'", CMD_PLATFORM_LINUX),
+              (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_cmd_classify_escaped_quote_redirect_is_write(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase exact[] = {
+        { "echo it\\'s > F",   CMD_WRITE },
+        { "echo it\\'s >> F",  CMD_WRITE },
+        { "echo it`'s > F",    CMD_WRITE },
+        /* An escaped '>' is literal to a POSIX shell but a redirect to
+         * PowerShell (which does not treat a backslash as an escape). */
+        { "echo a \\> F",      CMD_WRITE },
+    };
+    if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+int test_cmd_classify_ordinary_quoting_unchanged(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase exact[] = {
+        { "echo 'a;b'",               CMD_READ },
+        { "grep \"x|y\" f",           CMD_READ },
+        { "echo \"it's\"",            CMD_READ },
+        { "echo 'a && b' \"c | d\"",  CMD_READ },
+        { "echo \"say \\\"hi\\\"\"",  CMD_READ },
+        { "echo '$(id)'",             CMD_READ },
+        { "echo 'a`b'",               CMD_READ },
+        { "grep -r 'x > y' .",        CMD_READ },
+        { "ls C:\\Users\\x",          CMD_READ },
+        { "echo 'it''s'",             CMD_READ },
+        { "cat f 2>&1 | grep x",      CMD_READ },
+        { "ls > /dev/null 2>&1",      CMD_READ },
+    };
+    if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+int test_cmd_classify_unbalanced_quoting_is_unknown(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "echo 'abc",          CMD_UNKNOWN },
+        { "echo \"abc",         CMD_UNKNOWN },
+        { "echo abc\\",         CMD_UNKNOWN },
+        { "echo abc`",          CMD_UNKNOWN },
+        { "echo don\\'t",       CMD_UNKNOWN }, /* open quote to PowerShell */
+        { "ls 'x; rm F",        CMD_UNKNOWN },
+        { "echo a\\;b",         CMD_UNKNOWN }, /* ';' is live to PowerShell */
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    /* The mask of an ambiguous command carries UNKNOWN, so a mode that
+     * permits only READ cannot auto-approve it. */
+    ASSERT_TRUE((cmd_classify_mask("echo 'abc", CMD_PLATFORM_LINUX)
+                 & CMD_MASK_OF(CMD_UNKNOWN)) != 0);
+    TEST_END();
+}
+
+int test_cmd_classify_substitution_is_unknown(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "echo $(id)",               CMD_UNKNOWN },
+        { "echo \"$(id)\"",           CMD_UNKNOWN },
+        { "echo `id`",                CMD_UNKNOWN },
+        { "diff <(ls a) <(ls b)",     CMD_UNKNOWN },
+        { "cat $(ls)",                CMD_UNKNOWN },
+        { "ls | grep $(whoami)",      CMD_UNKNOWN },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Device-platform shell-metacharacter floor (device_shell_floor) ----
+ *
+ * On a network-device platform "|" is a display filter, not a shell pipe
+ * (M1), so a device classifier's first-token check never even looks past
+ * "show". device_shell_floor() is the minimum level under that: a
+ * double-pipe "||" (never a display filter -- read the way a real Linux
+ * shell would read it), a single "|" whose target is a shell/interpreter
+ * or a filesystem-writing filter word, and an output redirect that has a
+ * real target word after it. It never lowers a level the platform's own
+ * classifier already found.
+ *
+ * The two tables below are pinned in different ways: "raised" is a
+ * minimum the floor must reach regardless of what a future change to the
+ * per-platform classifiers might also decide; "kept" is pinned to the
+ * *exact* level today's classifier (before the floor existed) gives an
+ * ordinary display filter or other unaffected command, computed by
+ * running cmd_classify() against the pre-floor code -- so a regression
+ * that makes the floor fire on a harmless filter is caught immediately,
+ * not just "still at least as safe". */
+
+typedef struct {
+    CmdPlatform    platform;
+    const char    *cmd;
+    CmdSafetyLevel level;
+} DeviceFloorCase;
+
+static const char *device_floor_platform_name(CmdPlatform p)
+{
+    switch (p) {
+    case CMD_PLATFORM_CISCO_IOS:  return "cisco_ios";
+    case CMD_PLATFORM_CISCO_NXOS: return "cisco_nxos";
+    case CMD_PLATFORM_CISCO_ASA:  return "cisco_asa";
+    case CMD_PLATFORM_ARUBA_CX:   return "aruba_cx";
+    case CMD_PLATFORM_ARUBA_OS:   return "aruba_os";
+    case CMD_PLATFORM_JUNOS:      return "junos";
+    case CMD_PLATFORM_PANOS:      return "panos";
+    default:                      return "?";
+    }
+}
+
+/* Asserts cmd_classify(cmd, platform) >= level for every row; prints the
+ * platform and command of any row that falls short. */
+static int check_device_floor_min(const DeviceFloorCase *cases, size_t n)
+{
+    int bad = 0;
+    for (size_t i = 0; i < n; i++) {
+        CmdSafetyLevel got = cmd_classify(cases[i].cmd, cases[i].platform);
+        if (got < cases[i].level) {
+            printf("  [%s (platform %d)] \"%s\": got %d, want >= %d\n",
+                   device_floor_platform_name(cases[i].platform),
+                   (int)cases[i].platform, cases[i].cmd,
+                   (int)got, (int)cases[i].level);
+            bad = 1;
+        }
+    }
+    return bad;
+}
+
+/* Asserts cmd_classify(cmd, platform) == level exactly for every row. */
+static int check_device_floor_exact(const DeviceFloorCase *cases, size_t n)
+{
+    int bad = 0;
+    for (size_t i = 0; i < n; i++) {
+        CmdSafetyLevel got = cmd_classify(cases[i].cmd, cases[i].platform);
+        if (got != cases[i].level) {
+            printf("  [%s (platform %d)] \"%s\": got %d, want %d\n",
+                   device_floor_platform_name(cases[i].platform),
+                   (int)cases[i].platform, cases[i].cmd,
+                   (int)got, (int)cases[i].level);
+            bad = 1;
+        }
+    }
+    return bad;
+}
+
+/* Pipe target is a shell/interpreter (bare, with args, or behind sudo):
+ * CRITICAL on every device platform, regardless of what "show version"
+ * alone would classify as. */
+int test_cmd_classify_device_floor_raises_pipe_to_interpreter(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show version | sh",           CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_NXOS, "show version | sh",           CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_ASA,  "show version | sh",           CMD_CRITICAL },
+        { CMD_PLATFORM_JUNOS,      "show version | sh",           CMD_CRITICAL },
+        { CMD_PLATFORM_PANOS,      "show version | sh",           CMD_CRITICAL },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show version | bash -c x",    CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_NXOS, "show version | bash -c x",    CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_ASA,  "show version | bash -c x",    CMD_CRITICAL },
+        { CMD_PLATFORM_JUNOS,      "show version | bash -c x",    CMD_CRITICAL },
+        { CMD_PLATFORM_PANOS,      "show version | bash -c x",    CMD_CRITICAL },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show version | python3",      CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_NXOS, "show version | python3",      CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_ASA,  "show version | python3",      CMD_CRITICAL },
+        { CMD_PLATFORM_JUNOS,      "show version | python3",      CMD_CRITICAL },
+        { CMD_PLATFORM_PANOS,      "show version | python3",      CMD_CRITICAL },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show run | sudo sh",          CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | sudo sh",          CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | sudo sh",          CMD_CRITICAL },
+        { CMD_PLATFORM_JUNOS,      "show run | sudo sh",          CMD_CRITICAL },
+        { CMD_PLATFORM_PANOS,      "show run | sudo sh",          CMD_CRITICAL },
+    };
+    if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* "||" is never a device display filter -- what runs after it is read the
+ * way a real Linux shell would read it, and is never better than
+ * UNKNOWN even when that reading is harmless. */
+int test_cmd_classify_device_floor_raises_double_pipe(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show version || rm F",        CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_IOS,  "show version || cat F | sh",  CMD_CRITICAL },
+        { CMD_PLATFORM_JUNOS,      "show version || cat F | sh",  CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_NXOS, "show version || rm F",        CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_ASA,  "show version || rm F",        CMD_CRITICAL },
+        { CMD_PLATFORM_JUNOS,      "show version || rm F",        CMD_CRITICAL },
+        { CMD_PLATFORM_PANOS,      "show version || rm F",        CMD_CRITICAL },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show version || touch F",     CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "show version || touch F",     CMD_WRITE },
+        { CMD_PLATFORM_CISCO_ASA,  "show version || touch F",     CMD_WRITE },
+        { CMD_PLATFORM_JUNOS,      "show version || touch F",     CMD_WRITE },
+        { CMD_PLATFORM_PANOS,      "show version || touch F",     CMD_WRITE },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show version || frobnicate",  CMD_UNKNOWN },
+        { CMD_PLATFORM_CISCO_NXOS, "show version || frobnicate",  CMD_UNKNOWN },
+        { CMD_PLATFORM_CISCO_ASA,  "show version || frobnicate",  CMD_UNKNOWN },
+        { CMD_PLATFORM_JUNOS,      "show version || frobnicate",  CMD_UNKNOWN },
+        { CMD_PLATFORM_PANOS,      "show version || frobnicate",  CMD_UNKNOWN },
+    };
+    if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* An output redirect is a write only on a CLI with shell-style
+ * redirection (NX-OS), only before the first display-filter '|', and only
+ * when a real target word follows the '>'. Elsewhere '>' is not a
+ * redirect, and the segment keeps the level the command alone has. */
+int test_cmd_classify_device_floor_raises_redirect_with_target(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_CISCO_NXOS, "show run > F",                CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "show run >> F",               CMD_WRITE },
+        /* NX-OS's own filesystem target spelling. */
+        { CMD_PLATFORM_CISCO_NXOS, "show run > bootflash:x",      CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "show run >bootflash:x",       CMD_WRITE },
+    };
+    if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+
+    static const CmdPlatform no_redirect[] = {
+        CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_CISCO_ASA, CMD_PLATFORM_JUNOS,
+        CMD_PLATFORM_PANOS, CMD_PLATFORM_ARUBA_CX, CMD_PLATFORM_ARUBA_OS,
+    };
+    for (size_t i = 0; i < sizeof no_redirect / sizeof no_redirect[0]; i++) {
+        CmdSafetyLevel alone = cmd_classify("show run", no_redirect[i]);
+        ASSERT_EQ((int)cmd_classify("show run > F", no_redirect[i]), (int)alone);
+        ASSERT_EQ((int)cmd_classify("show run >> F", no_redirect[i]), (int)alone);
+    }
+    /* After the first display-filter '|', a '>' is part of the pattern,
+     * even on NX-OS. */
+    ASSERT_EQ((int)cmd_classify("show ip bgp | include *>i", CMD_PLATFORM_CISCO_NXOS),
+              (int)cmd_classify("show ip bgp", CMD_PLATFORM_CISCO_NXOS));
+    TEST_END();
+}
+
+/* A pipe target whose first word is a filesystem-writing filter (not a
+ * shell) is at least WRITE: "redirect"/"append"/"tee" everywhere, "save"
+ * on Junos where it captures filtered output to a file. */
+int test_cmd_classify_device_floor_raises_write_filter_words(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show run | redirect flash:F", CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | redirect flash:F", CMD_WRITE },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | redirect flash:F", CMD_WRITE },
+        { CMD_PLATFORM_JUNOS,      "show run | redirect flash:F", CMD_WRITE },
+        { CMD_PLATFORM_PANOS,      "show run | redirect flash:F", CMD_WRITE },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show run | append flash:F",   CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | append flash:F",   CMD_WRITE },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | append flash:F",   CMD_WRITE },
+        { CMD_PLATFORM_JUNOS,      "show run | append flash:F",   CMD_WRITE },
+        { CMD_PLATFORM_PANOS,      "show run | append flash:F",   CMD_WRITE },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show run | tee flash:F",      CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | tee flash:F",      CMD_WRITE },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | tee flash:F",      CMD_WRITE },
+        { CMD_PLATFORM_JUNOS,      "show run | tee flash:F",      CMD_WRITE },
+        { CMD_PLATFORM_PANOS,      "show run | tee flash:F",      CMD_WRITE },
+
+        { CMD_PLATFORM_JUNOS,      "show configuration | save F", CMD_WRITE },
+    };
+    if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* enable secret / enable password set the privileged-mode secret -- a
+ * config change -- on every platform where a bare "enable" reads as the
+ * harmless mode change it is today (Cisco IOS and its NX-OS/ASA
+ * delegates, and both Aruba families; confirmed against the pre-change
+ * classifier that bare "enable" is CMD_READ on exactly these platforms). */
+int test_cmd_classify_device_floor_enable_secret_is_write(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "enable secret x",    CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "enable secret x",    CMD_WRITE },
+        { CMD_PLATFORM_CISCO_ASA,  "enable secret x",    CMD_WRITE },
+        { CMD_PLATFORM_ARUBA_CX,   "enable secret x",    CMD_WRITE },
+        { CMD_PLATFORM_ARUBA_OS,   "enable secret x",    CMD_WRITE },
+
+        { CMD_PLATFORM_CISCO_IOS,  "enable password x",  CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "enable password x",  CMD_WRITE },
+        { CMD_PLATFORM_CISCO_ASA,  "enable password x",  CMD_WRITE },
+        { CMD_PLATFORM_ARUBA_CX,   "enable password x",  CMD_WRITE },
+        { CMD_PLATFORM_ARUBA_OS,   "enable password x",  CMD_WRITE },
+    };
+    if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* Pinned to the exact level today's classifier (pre-floor) gives an
+ * ordinary display filter, a BGP best-path marker that ends in '>' with
+ * nothing after it, a quoted '|' inside a filter argument, and bare
+ * "enable" -- none of these may move even a single level, in either
+ * direction, or the floor is misfiring on harmless input. Values for
+ * "enable" differ by platform because they differed before this change:
+ * CMD_READ where the platform recognises the bare verb, CMD_UNKNOWN
+ * where it does not. */
+int test_cmd_classify_device_floor_keeps_display_filters(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show run | include x",              CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | include x",              CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | include x",              CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show run | include x",              CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show run | include x",              CMD_READ },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show run | exclude x",              CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | exclude x",              CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | exclude x",              CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show run | exclude x",              CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show run | exclude x",              CMD_READ },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show run | begin x",                CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | begin x",                CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | begin x",                CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show run | begin x",                CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show run | begin x",                CMD_READ },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show run | section x",              CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | section x",              CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | section x",              CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show run | section x",              CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show run | section x",              CMD_READ },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show run | count x",                CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | count x",                CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | count x",                CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show run | count x",                CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show run | count x",                CMD_READ },
+
+        /* BGP best-path marker: trailing '>' with nothing after it is not
+         * a redirect. */
+        { CMD_PLATFORM_CISCO_IOS,  "show ip bgp | include *>",          CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show ip bgp | include *>",          CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show ip bgp | include *>",          CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show ip bgp | include *>",          CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show ip bgp | include *>",          CMD_READ },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show interfaces | i up",            CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show interfaces | i up",            CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show interfaces | i up",            CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show interfaces | i up",            CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show interfaces | i up",            CMD_READ },
+
+        { CMD_PLATFORM_JUNOS,      "show configuration | display set",  CMD_READ },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show route | match x",              CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show route | match x",              CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show route | match x",              CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show route | match x",              CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show route | match x",              CMD_READ },
+
+        { CMD_PLATFORM_CISCO_IOS,  "show interfaces terse | except down", CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show interfaces terse | except down", CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show interfaces terse | except down", CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show interfaces terse | except down", CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show interfaces terse | except down", CMD_READ },
+
+        { CMD_PLATFORM_PANOS,      "show system info | match x",        CMD_READ },
+
+        /* A '|' inside single quotes is not active -- not a second pipe
+         * target. */
+        { CMD_PLATFORM_CISCO_IOS,  "show run | include 'a|b'",          CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | include 'a|b'",          CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | include 'a|b'",          CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "show run | include 'a|b'",          CMD_READ },
+        { CMD_PLATFORM_PANOS,      "show run | include 'a|b'",          CMD_READ },
+
+        /* Bare "enable": unaffected either way -- READ where recognised,
+         * UNKNOWN where it was already unrecognised before this change. */
+        { CMD_PLATFORM_CISCO_IOS,  "enable",                            CMD_READ },
+        { CMD_PLATFORM_CISCO_NXOS, "enable",                            CMD_READ },
+        { CMD_PLATFORM_CISCO_ASA,  "enable",                            CMD_READ },
+        { CMD_PLATFORM_JUNOS,      "enable",                            CMD_UNKNOWN },
+        { CMD_PLATFORM_PANOS,      "enable",                            CMD_UNKNOWN },
+    };
+    if (check_device_floor_exact(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Hardening: a flag that writes, sends data, changes state or runs
+ * another program must lift a command that would otherwise be READ purely
+ * because it matched an allow-list entry. Table-driven, checked on both
+ * CMD_PLATFORM_LINUX and CMD_PLATFORM_UNKNOWN via check_min_level_linuxish
+ * (>= min, not necessarily exact -- some rows may legitimately classify
+ * higher, e.g. via a redirect or sudo elevation elsewhere in the
+ * classifier). Placeholder file names ("F", "G") and a placeholder URL
+ * ("https://x") stand in for real arguments throughout. */
+int test_cmd_classify_hardened_flags_raise_level(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        /* sed -i in any spelling: WRITE */
+        { "sed -i s/a/b/ F",                    CMD_WRITE },
+        { "sed -i.bak s/a/b/ F",                CMD_WRITE },
+        { "sed -i'' s/a/b/ F",                  CMD_WRITE },
+        { "sed --in-place s/a/b/ F",            CMD_WRITE },
+        { "sed --in-place=.bak s/a/b/ F",       CMD_WRITE },
+        { "sed -Ei s/a/b/ F",                   CMD_WRITE },
+        { "sed -ni s/a/b/p F",                  CMD_WRITE },
+        { "sed -si s/a/b/ F",                   CMD_WRITE },
+        /* sed script writes (w/W command, s///w flag): WRITE */
+        { "sed 'w G' F",                        CMD_WRITE },
+        { "sed 'W G' F",                        CMD_WRITE },
+        { "sed 's/a/b/w G' F",                  CMD_WRITE },
+        /* sed script runs a shell command (e command, s///e flag): UNKNOWN */
+        { "sed 's/a/b/e' F",                    CMD_UNKNOWN },
+        { "sed 'e' F",                          CMD_UNKNOWN },
+        /* sed -f/--file: script from a file, contents unknown: UNKNOWN */
+        /* write/exec commands behind an address, or later in the script */
+        { "sed '1w G' F",                       CMD_WRITE },
+        { "sed '/x/w G' F",                     CMD_WRITE },
+        { "sed '$W G' F",                       CMD_WRITE },
+        { "sed -n '1,5p;w G' F",                CMD_WRITE },
+        { "sed -e p -e 'w G' F",                CMD_WRITE },
+        { "sed --expression='w G' F",           CMD_WRITE },
+        { "sed -n -e '1{w G' -e '}' F",         CMD_WRITE },
+        { "sed 's/a b/c d/w G' F",              CMD_WRITE },
+        { "sed 's|a|b|gw G' F",                 CMD_WRITE },
+        { "sed '1e id' F",                      CMD_UNKNOWN },
+        { "sed '/x/e' F",                       CMD_UNKNOWN },
+        { "sed 's/a/b/ge' F",                   CMD_UNKNOWN },
+        { "sed -f script.sed F",                CMD_UNKNOWN },
+        { "sed --file=script.sed F",            CMD_UNKNOWN },
+
+        /* perl -i in any spelling: WRITE */
+        { "perl -i -e 's/a/b/' F",              CMD_WRITE },
+        { "perl -pi -e 's/a/b/' F",             CMD_WRITE },
+        { "perl -i.bak -e 's/a/b/' F",          CMD_WRITE },
+        { "perl -pie s/a/b/ F",                 CMD_WRITE },
+        { "perl -0pi -e 's/a/b/' F",            CMD_WRITE },
+        /* perl is never READ, in-place or not: at least UNKNOWN */
+        { "perl -e 'print 1'",                  CMD_UNKNOWN },
+        { "perl -ne 'print' F",                 CMD_UNKNOWN },
+        { "perl -lne 'print' F",                CMD_UNKNOWN },
+        { "perl F",                             CMD_UNKNOWN },
+        /* ruby -e / python(3) -c: at least UNKNOWN */
+        { "ruby -e 'puts 1'",                   CMD_UNKNOWN },
+        { "python -c 'print(1)'",               CMD_UNKNOWN },
+        { "python3 -c 'print(1)'",              CMD_UNKNOWN },
+
+        /* find -exec/-execdir/-ok/-okdir: classify the executed command */
+        { "find . -exec mv {} G \\;",           CMD_WRITE },
+        { "find . -exec shred {} \\;",          CMD_CRITICAL },
+        { "find . -exec cat {} \\;",            CMD_UNKNOWN },
+        { "find . -exec rm {} +",               CMD_CRITICAL },
+        { "find . -ok rm {} \\;",               CMD_CRITICAL },
+        { "find . -execdir shred {} \\;",       CMD_CRITICAL },
+        /* the scan continues past the -exec terminator */
+        { "find . -exec cat {} \\; -exec rm {} \\;", CMD_CRITICAL },
+        { "find . -exec cat {} ';' -exec rm {} ';'", CMD_CRITICAL },
+        { "find . -exec cat {} \\; -delete",    CMD_CRITICAL },
+        { "find . -exec cat {} + -fprint G",    CMD_WRITE },
+        { "find . -exec /bin/rm -f {} +",       CMD_CRITICAL },
+        { "find . -exec",                       CMD_UNKNOWN },
+        /* find -fprint/-fprint0/-fprintf/-fls: WRITE */
+        { "find . -fprint G",                   CMD_WRITE },
+        { "find . -fprint0 G",                  CMD_WRITE },
+        { "find . -fprintf G '%p\\n'",          CMD_WRITE },
+        { "find . -fls G",                      CMD_WRITE },
+        /* find primary outside the known-safe allow-list: at least UNKNOWN */
+        { "find . -something-unknown",          CMD_UNKNOWN },
+
+        /* curl: writes, sends data, or leaks something -> WRITE */
+        { "curl -o F https://x",                CMD_WRITE },
+        { "curl -oF https://x",                 CMD_WRITE },
+        { "curl -sSLo F https://x",             CMD_WRITE },
+        { "curl --output=F https://x",          CMD_WRITE },
+        { "curl --output F https://x",          CMD_WRITE },
+        { "curl -O https://x",                  CMD_WRITE },
+        { "curl --remote-name https://x",       CMD_WRITE },
+        { "curl --remote-name-all https://x",   CMD_WRITE },
+        { "curl -J -O https://x",               CMD_WRITE },
+        { "curl --output-dir G -O https://x",   CMD_WRITE },
+        { "curl --create-dirs -o G/F https://x", CMD_WRITE },
+        { "curl -T F https://x",                CMD_WRITE },
+        { "curl --upload-file F https://x",     CMD_WRITE },
+        { "curl -d data https://x",             CMD_WRITE },
+        { "curl --data data https://x",         CMD_WRITE },
+        { "curl --data-raw data https://x",     CMD_WRITE },
+        { "curl --json '{}' https://x",         CMD_WRITE },
+        { "curl -F field=val https://x",        CMD_WRITE },
+        { "curl --form field=val https://x",    CMD_WRITE },
+        { "curl -X POST https://x",             CMD_WRITE },
+        { "curl --request POST https://x",      CMD_WRITE },
+        { "curl -c G https://x",                CMD_WRITE },
+        { "curl --cookie-jar G https://x",      CMD_WRITE },
+        { "curl -D F https://x",                CMD_WRITE },
+        { "curl --dump-header F https://x",     CMD_WRITE },
+        { "curl --trace F https://x",           CMD_WRITE },
+        { "curl --libcurl F https://x",         CMD_WRITE },
+        { "curl --etag-save F https://x",       CMD_WRITE },
+        /* curl -K/--config: UNKNOWN */
+        { "curl -K F https://x",                CMD_UNKNOWN },
+        { "curl --config F https://x",          CMD_UNKNOWN },
+        /* curl flag outside the known-safe set: at least UNKNOWN */
+        { "curl --weird-unknown-flag https://x", CMD_UNKNOWN },
+
+        /* sort -o/--output (incl. combined and attached): WRITE */
+        { "sort -o G F",                        CMD_WRITE },
+        { "sort -oG F",                         CMD_WRITE },
+        { "sort -uo G F",                       CMD_WRITE },
+        { "sort --output=G F",                  CMD_WRITE },
+        { "sort --output G F",                  CMD_WRITE },
+        /* sort --compress-program: UNKNOWN */
+        { "sort --compress-program gzip F",     CMD_UNKNOWN },
+        /* uniq: a second file argument is the output file: WRITE */
+        { "uniq F G",                           CMD_WRITE },
+
+        /* git branch: creating/renaming/deleting is WRITE */
+        { "git branch -d G",                    CMD_WRITE },
+        { "git branch -D G",                    CMD_WRITE },
+        { "git branch --delete G",              CMD_WRITE },
+        { "git branch G",                       CMD_WRITE },
+        { "git branch -u origin/main",          CMD_WRITE },
+        /* git log/diff/show --output: WRITE; --ext-diff: UNKNOWN */
+        { "git log --output=F",                 CMD_WRITE },
+        { "git diff --output=F",                CMD_WRITE },
+        { "git show --output=F",                CMD_WRITE },
+        { "git log --ext-diff",                 CMD_UNKNOWN },
+        /* git global options that can run an arbitrary program: UNKNOWN */
+        { "git -c core.pager=cat log",          CMD_UNKNOWN },
+        { "git --exec-path=/tmp log",           CMD_UNKNOWN },
+        { "git --git-dir=/tmp log",             CMD_UNKNOWN },
+        { "git --work-tree=/tmp log",           CMD_UNKNOWN },
+
+        /* ip: flush/delete/del -> CRITICAL; add/append/replace/change/set/
+         * prepend/save/restore -> WRITE, generalised to every object */
+        { "ip route flush cache",               CMD_CRITICAL },
+        { "ip route del default",               CMD_CRITICAL },
+        { "ip addr add 10.0.0.1/24 dev eth0",   CMD_WRITE },
+        { "ip link set eth0 up",                CMD_CRITICAL },
+        { "ip rule add from 10.0.0.0/24 table 1", CMD_WRITE },
+        { "ip route replace default via 10.0.0.1", CMD_WRITE },
+        { "ip netns delete myns",               CMD_CRITICAL },
+        { "ip netns add myns",                  CMD_WRITE },
+        /* ip netns exec: classify the executed command, at least UNKNOWN */
+        { "ip netns exec myns rm F",            CMD_CRITICAL },
+        { "ip netns exec myns ls",              CMD_UNKNOWN },
+        /* ip -batch/-b/-force: UNKNOWN */
+        { "ip -batch F",                        CMD_UNKNOWN },
+        { "ip -b F",                            CMD_UNKNOWN },
+        { "ip -force route del default",        CMD_CRITICAL },
+
+        /* history: state/file-changing flags -> WRITE */
+        { "history -c",                         CMD_WRITE },
+        { "history -w",                         CMD_WRITE },
+        { "history -d 5",                       CMD_WRITE },
+        { "history -a",                         CMD_WRITE },
+        { "history -r",                         CMD_WRITE },
+        { "history -n",                         CMD_WRITE },
+        { "history -s echo hi",                 CMD_WRITE },
+        /* history -p: expansion only, not a pure query either -> UNKNOWN */
+        { "history -p",                         CMD_UNKNOWN },
+
+        /* terraform plan: can run arbitrary provider code -> UNKNOWN */
+        { "terraform plan",                     CMD_UNKNOWN },
+
+        /* man: pager/browser flag runs another program -> UNKNOWN */
+        { "man -P less ls",                     CMD_UNKNOWN },
+        { "man --pager=less ls",                CMD_UNKNOWN },
+        { "man -H ls",                          CMD_UNKNOWN },
+        { "man --html ls",                      CMD_UNKNOWN },
+        /* rg --pre: filters through an external command -> UNKNOWN */
+        { "rg --pre cat x",                     CMD_UNKNOWN },
+        { "rg --pre=cat x",                     CMD_UNKNOWN },
+        /* less: "+!cmd" runs a shell command -> UNKNOWN; log-file -> WRITE */
+        { "less +!sh",                          CMD_UNKNOWN },
+        { "less '+!sh'",                        CMD_UNKNOWN },
+        { "less -o G",                          CMD_WRITE },
+        { "less -O G",                          CMD_WRITE },
+        { "less --log-file=G",                  CMD_WRITE },
+        { "less --LOG-FILE=G",                  CMD_WRITE },
+        { "less -oG F",                         CMD_WRITE },
+        { "less -OG F",                         CMD_WRITE },
+        { "less '+|sh' F",                      CMD_UNKNOWN },
+        { "less +G!sh F",                       CMD_UNKNOWN },
+        { "history -cw",                        CMD_WRITE },
+        { "history -d5",                        CMD_WRITE },
+
+        /* Wrappers: the result is never lower than the wrapped command */
+        { "timeout 5 rm F",                     CMD_CRITICAL },
+        { "timeout -k 5 -s TERM 5 rm F",        CMD_CRITICAL },
+        { "env rm F",                           CMD_CRITICAL },
+        { "env -i rm F",                        CMD_CRITICAL },
+        { "env -u PATH rm F",                   CMD_CRITICAL },
+        { "env VAR=x rm F",                     CMD_CRITICAL },
+        { "nohup touch F",                      CMD_WRITE },
+        { "nice -n 10 rm F",                    CMD_CRITICAL },
+        /* exec is no longer a pass-through wrapper (round 3): it replaces
+         * the current shell process rather than running the command
+         * alongside it, so "exec CMD" is at least UNKNOWN, not whatever CMD
+         * alone would be -- see test_cmd_classify_exec_not_pass_through_wrapper. */
+        { "exec rm F",                          CMD_UNKNOWN },
+        { "exec -a NAME rm F",                  CMD_UNKNOWN },
+        { "command -p rm F",                    CMD_CRITICAL },
+        { "time rm F",                          CMD_CRITICAL },
+        { "stdbuf -oL rm F",                    CMD_CRITICAL },
+        { "ionice -c2 rm F",                    CMD_CRITICAL },
+        { "setsid rm F",                        CMD_CRITICAL },
+        /* env -S: re-parses a whole string as a command line -> UNKNOWN */
+        { "env -S 'rm F' G",                    CMD_UNKNOWN },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Hardening: commands the classifier must still recognise as READ --
+ * an explicit regression table alongside the "raised" one above, so a
+ * change that widened the hardening too far shows up here. Checked on both
+ * CMD_PLATFORM_LINUX and CMD_PLATFORM_UNKNOWN via check_exact_level_linuxish
+ * (== READ exactly). */
+int test_cmd_classify_hardened_flags_keep_read(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase exact[] = {
+        { "ls -la",                                    CMD_READ },
+        { "cat f",                                      CMD_READ },
+        { "grep -r x .",                                 CMD_READ },
+        { "find . -name '*.c'",                          CMD_READ },
+        { "find /var/log -type f -mtime +7 -print",       CMD_READ },
+        { "find . -iname '*.c' -o -perm -4000",          CMD_READ },
+        { "find . -newerXY reference",                    CMD_READ },
+        { "curl -s https://x",                            CMD_READ },
+        { "curl -sSL https://x",                          CMD_READ },
+        { "curl -s -o /dev/null -w '%{http_code}' https://x", CMD_READ },
+        { "curl -I https://x",                            CMD_READ },
+        { "curl -o /dev/null https://x",                  CMD_READ },
+        { "curl -o - https://x",                          CMD_READ },
+        { "curl -D - https://x",                          CMD_READ },
+        { "curl -D /dev/null https://x",                  CMD_READ },
+        { "curl -X GET https://x",                        CMD_READ },
+        { "curl -X HEAD https://x",                       CMD_READ },
+        { "sed -n 1,5p f",                                CMD_READ },
+        { "sed 's/a/b/' f",                               CMD_READ },
+        { "sed -e 's/a/b/g' f",                           CMD_READ },
+        /* file operands are not script: names starting with w or e */
+        { "sed -n 1p error.log",                          CMD_READ },
+        { "sed -n '/x/p' www.log",                        CMD_READ },
+        { "sed 's/w/e/' f",                               CMD_READ },
+        { "sed -n '$p' f",                                CMD_READ },
+        { "sed '/^#/d;s/a b/c/' f",                       CMD_READ },
+        { "sed -e p -e 's/x/y/g' wfile efile",            CMD_READ },
+        { "less +G F",                                    CMD_READ },
+        { "less -N F",                                    CMD_READ },
+        { "find . -name x -o -name y -print",             CMD_READ },
+        { "sort f",                                       CMD_READ },
+        { "sort -k1 f",                                   CMD_READ },
+        { "uniq -c in",                                   CMD_READ },
+        { "df -h",                                        CMD_READ },
+        { "git log --oneline",                            CMD_READ },
+        { "git branch",                                   CMD_READ },
+        { "git branch -a",                                CMD_READ },
+        { "git branch --show-current",                    CMD_READ },
+        { "git branch --sort=-committerdate",             CMD_READ },
+        { "git -C dir log --oneline",                     CMD_READ },
+        { "ip addr show",                                 CMD_READ },
+        { "ip a",                                         CMD_READ },
+        { "ip route",                                     CMD_READ },
+        { "ip -br link",                                  CMD_READ },
+        { "ip -s link show eth0",                         CMD_READ },
+        { "ip route get 1.1.1.1",                         CMD_READ },
+        { "ip neigh",                                     CMD_READ },
+        { "history",                                      CMD_READ },
+        { "history 5",                                    CMD_READ },
+        { "rg --pre-glob '*.gz' x",                       CMD_READ },
+        { "man ls",                                       CMD_READ },
+        { "command -v ls",                                CMD_READ },
+        { "command -V ls",                                CMD_READ },
+        { "nice -n 10 ls",                                CMD_READ },
+        { "env",                                          CMD_READ },
+        { "printenv",                                     CMD_READ },
+    };
+    if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Hardening: sudo'd forms of the newly-hardened commands never
+ * classify below WRITE, same as every other sudo'd command. */
+int test_cmd_classify_hardened_flags_sudo_never_below_write(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "sudo sed -n p f",                    CMD_WRITE },
+        { "sudo curl -s https://x",              CMD_WRITE },
+        { "sudo find . -name x",                 CMD_WRITE },
+        { "sudo sort f",                         CMD_WRITE },
+        { "sudo uniq f",                         CMD_WRITE },
+        { "sudo history",                        CMD_WRITE },
+        { "sudo man ls",                         CMD_WRITE },
+        { "sudo rg x f",                         CMD_WRITE },
+        { "sudo less f",                         CMD_WRITE },
+        { "sudo git branch",                     CMD_WRITE },
+        { "sudo ip a",                           CMD_WRITE },
+        { "sudo terraform plan",                 CMD_WRITE },
+        { "sudo nice -n 10 ls",                  CMD_WRITE },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ===================================================================
+ * Review round 2: quote-aware word splitting, flag allow-lists, ip verbs,
+ * curl output/upload rules, the PowerShell reading, sed brackets, the
+ * device display filters and glued redirect targets. Placeholders: F, G
+ * for files, x for anything else, https://x for a URL.
+ * =================================================================== */
+
+/* Asserts cmd_classify(cmd, platform) >= min for one platform. */
+static int check_min_on(const ClassifyMinCase *cases, size_t n, CmdPlatform plat)
+{
+    int bad = 0;
+    for (size_t i = 0; i < n; i++) {
+        CmdSafetyLevel got = cmd_classify(cases[i].cmd, plat);
+        if (got < cases[i].min_level) {
+            printf("  [platform %d] \"%s\": got %d, want >= %d\n",
+                   (int)plat, cases[i].cmd, (int)got, (int)cases[i].min_level);
+            bad = 1;
+        }
+    }
+    return bad;
+}
+
+/* A quoted or escaped separator ( ; | < > ) is part of a word, so a flag
+ * after it is still seen: env, curl, sort, git and ip, with single quotes,
+ * double quotes and a backslash escape. */
+int test_cmd_classify_quoted_separator_before_flag(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "env -u 'x;y' rm F",                      CMD_CRITICAL },
+        { "env -u 'x|y' rm F",                      CMD_CRITICAL },
+        { "env -u 'x<y' rm F",                      CMD_CRITICAL },
+        { "env -u 'x>y' rm F",                      CMD_CRITICAL },
+        { "env -u \"x;y\" rm F",                    CMD_CRITICAL },
+        { "env LANG='x;y' rm F",                    CMD_CRITICAL },
+
+        { "curl -H 'x;y' -o F https://x",           CMD_WRITE },
+        { "curl -H 'x|y' -o F https://x",           CMD_WRITE },
+        { "curl -H 'x<y' -o F https://x",           CMD_WRITE },
+        { "curl -H 'x>y' -o F https://x",           CMD_WRITE },
+        { "curl -A \"x;y\" -T F https://x",         CMD_WRITE },
+
+        { "sort -t ';' -o F G",                     CMD_WRITE },
+        { "sort -t '|' -o F G",                     CMD_WRITE },
+        { "sort -t '<' -o F G",                     CMD_WRITE },
+        { "sort -t '>' -o F G",                     CMD_WRITE },
+        { "sort -t \";\" -o F G",                   CMD_WRITE },
+        { "sort -t \\; -o F G",                     CMD_WRITE },
+
+        { "git log --grep='x;y' --output=F",        CMD_WRITE },
+        { "git log --grep='x|y' --output=F",        CMD_WRITE },
+        { "git log --grep='x<y' --output=F",        CMD_WRITE },
+        { "git log --grep='x>y' --output=F",        CMD_WRITE },
+        { "git -C 'x;y' log --output=F",            CMD_WRITE },
+        { "git branch --list 'x;y' -D x",           CMD_WRITE },
+
+        { "ip -n 'x;y' route flush all",            CMD_CRITICAL },
+        { "ip -n 'x|y' link set dev x down",        CMD_CRITICAL },
+        { "ip -n 'x<y' addr del x dev x",           CMD_CRITICAL },
+        { "ip -n 'x>y' addr flush dev x",           CMD_CRITICAL },
+
+        /* An input redirection or an fd redirect before the flag no longer
+         * ends the scan. */
+        { "sort <F -o G",                           CMD_WRITE },
+        { "sort 2>/dev/null -o G F",                CMD_WRITE },
+        { "git log >/dev/null --output=F",          CMD_WRITE },
+        /* A quote hiding the leading '-' of a flag. */
+        { "sort '-o' F G",                          CMD_UNKNOWN },
+        { "curl \"-o\" F https://x",                CMD_UNKNOWN },
+        { "ip '-b' F",                              CMD_UNKNOWN },
+        /* One word to a POSIX shell, two to PowerShell: both readings. */
+        { "sort x\\ -o F",                          CMD_WRITE },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* Allow-lists: a flag outside the list is at least UNKNOWN, an
+ * abbreviation of a flag known to write is WRITE, an attached value on an
+ * unlisted letter is not mistaken for harmless letters. */
+int test_cmd_classify_allow_list_unlisted_flags(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "sort --o=F G",                  CMD_WRITE },
+        { "sort --outp F G",               CMD_WRITE },
+        { "sort -oF G",                    CMD_WRITE },
+        { "sort -no F G",                  CMD_WRITE },
+        { "sort --compress-prog=x G",      CMD_UNKNOWN },
+        { "sort --compress-program=x G",   CMD_UNKNOWN },
+        { "sort --rev G",                  CMD_UNKNOWN },
+        { "uniq F G",                      CMD_WRITE },
+        { "uniq -c F G",                   CMD_WRITE },
+        { "uniq --gro F",                  CMD_UNKNOWN },
+        { "man --pag=x ls",                CMD_UNKNOWN },
+        { "man -Px ls",                    CMD_UNKNOWN },
+        { "man -P x ls",                   CMD_UNKNOWN },
+        { "man -Hx ls",                    CMD_UNKNOWN },
+        { "man -l F",                      CMD_UNKNOWN },
+        { "less --log-f=F G",              CMD_WRITE },
+        { "less -oF G",                    CMD_WRITE },
+        { "less -O F G",                   CMD_WRITE },
+        { "less -k F G",                   CMD_UNKNOWN },
+        { "less +v G",                     CMD_UNKNOWN },
+        { "less '+!x' G",                  CMD_UNKNOWN },
+        { "less '+|x' G",                  CMD_UNKNOWN },
+        { "less +sF G",                    CMD_UNKNOWN },
+        { "rg --pre=x x",                  CMD_UNKNOWN },
+        { "rg --pre x x",                  CMD_UNKNOWN },
+        { "rg --pr x x",                   CMD_UNKNOWN },
+        { "history -c",                    CMD_WRITE },
+        { "history -w F",                  CMD_WRITE },
+        { "history -p x",                  CMD_UNKNOWN },
+        { "git branch --unset-ups",        CMD_WRITE },
+        { "git branch --edit-desc",        CMD_WRITE },
+        { "git branch x",                  CMD_WRITE },
+        { "git branch -f x",               CMD_WRITE },
+        { "git log --outp=F",              CMD_WRITE },
+        { "git log --o=F",                 CMD_WRITE },
+        { "git diff --output F",           CMD_WRITE },
+        { "git log --ext-diff",            CMD_UNKNOWN },
+        { "git log --onel",                CMD_UNKNOWN },
+        { "git status --frob",             CMD_UNKNOWN },
+        { "git -c x=y log",                CMD_UNKNOWN },
+        { "git --exec-path=x log",         CMD_UNKNOWN },
+        { "git --git-dir=x log",           CMD_UNKNOWN },
+        { "git remote add x https://x",    CMD_WRITE },
+        { "git push",                      CMD_WRITE },
+        { "time -o F ls",                  CMD_WRITE },
+        { "time -oF ls",                   CMD_WRITE },
+        { "/usr/bin/time --out=F ls",      CMD_WRITE },
+        { "/usr/bin/time --output F ls",   CMD_WRITE },
+        { "time -a -o F ls",               CMD_WRITE },
+        { "time --frob ls",                CMD_UNKNOWN },
+        { "time rm F",                     CMD_CRITICAL },
+        { "nohup ls",                      CMD_WRITE },
+        { "nohup rm F",                    CMD_CRITICAL },
+        { "env LD_PRELOAD=x ls",           CMD_UNKNOWN },
+        { "env PAGER=x man ls",            CMD_UNKNOWN },
+        { "env --frob ls",                 CMD_UNKNOWN },
+        { "env -S 'rm F'",                 CMD_CRITICAL },
+        { "env --split-string='rm F'",     CMD_CRITICAL },
+        { "timeout --frob 5 ls",           CMD_UNKNOWN },
+        { "timeout 5 rm F",                CMD_CRITICAL },
+        { "nice --frob ls",                CMD_UNKNOWN },
+        { "ionice -p 1",                   CMD_WRITE },
+        { "ionice -c3 rm F",               CMD_CRITICAL },
+        { "stdbuf -oL rm F",               CMD_CRITICAL },
+        { "setsid -f rm F",                CMD_CRITICAL },
+        { "tree -o F",                     CMD_WRITE },
+        { "sar -o F 1 1",                  CMD_WRITE },
+        { "ss -K dst x",                   CMD_WRITE },
+        { "ss --kill",                     CMD_WRITE },
+        { "ss -D F",                       CMD_WRITE },
+        { "arp -d x",                      CMD_WRITE },
+        { "arp -s x y",                    CMD_WRITE },
+        { "file -C -m F",                  CMD_WRITE },
+        { "dmidecode --dump-bin F",        CMD_WRITE },
+        { "sensors -s",                    CMD_WRITE },
+        { "iptables-save -f F",            CMD_WRITE },
+        { "iptables-save -M x",            CMD_UNKNOWN },
+        { "lastlog -C -u x",               CMD_WRITE },
+        { "journalctl --rotate",           CMD_WRITE },
+        { "journalctl --vac=1",            CMD_WRITE },
+        { "journalctl --vacuum-size=1M",   CMD_WRITE },
+        { "journalctl -n --rotate",        CMD_WRITE },
+        { "journalctl --frob",             CMD_UNKNOWN },
+        { "route add default gw x",        CMD_WRITE },
+        { "route -n del default",          CMD_CRITICAL },
+        { "route -n add default gw x",     CMD_WRITE },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* Ordinary read-only usage stays READ under the allow-lists, on both
+ * LINUX and UNKNOWN. */
+int test_cmd_classify_allow_list_keeps_read(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase exact[] = {
+        { "ls -la",                                        CMD_READ },
+        { "cat f",                                         CMD_READ },
+        { "grep -r x .",                                   CMD_READ },
+        { "find . -name '*.c'",                            CMD_READ },
+        { "curl -s https://x",                             CMD_READ },
+        { "sed -n 1,5p f",                                 CMD_READ },
+        { "git log --oneline",                             CMD_READ },
+        { "git -C dir log --oneline",                      CMD_READ },
+        { "ip a",                                          CMD_READ },
+        { "ip -s link show eth0",                          CMD_READ },
+        { "ip -j addr show",                               CMD_READ },
+        { "sort f",                                        CMD_READ },
+        { "sort -n f",                                     CMD_READ },
+        { "uniq -c f",                                     CMD_READ },
+        { "df -h",                                         CMD_READ },
+        { "man ls",                                        CMD_READ },
+        { "less f",                                        CMD_READ },
+        { "rg x",                                          CMD_READ },
+        /* further common read forms */
+        { "git status",                                    CMD_READ },
+        { "git status -sb",                                CMD_READ },
+        { "git status --porcelain=v1",                     CMD_READ },
+        { "git diff --stat",                               CMD_READ },
+        { "git diff --cached",                             CMD_READ },
+        { "git diff HEAD~1 -- f",                          CMD_READ },
+        { "git log -n 5 --format='%h %s'",                 CMD_READ },
+        { "git log -5 --graph --decorate --all",           CMD_READ },
+        { "git log --since='2 weeks ago' --author=x",      CMD_READ },
+        { "git log -p -S x -- f",                          CMD_READ },
+        { "git show HEAD --stat",                          CMD_READ },
+        { "git --no-pager log -3",                         CMD_READ },
+        { "git branch -vv",                                CMD_READ },
+        { "git branch -a --contains HEAD",                 CMD_READ },
+        { "git branch --list 'f*'",                        CMD_READ },
+        { "git branch --merged main",                      CMD_READ },
+        { "git rev-parse --show-toplevel",                 CMD_READ },
+        { "git rev-parse --abbrev-ref HEAD",               CMD_READ },
+        { "git remote -v",                                 CMD_READ },
+        { "git ls-files",                                  CMD_READ },
+        { "git blame -L 1,5 f",                            CMD_READ },
+        { "ip -br a",                                      CMD_READ },
+        { "ip -c link",                                    CMD_READ },
+        { "ip -4 addr show dev eth0",                      CMD_READ },
+        { "ip route get 1.1.1.1",                          CMD_READ },
+        { "ip route list table all",                       CMD_READ },
+        { "ip -details link show",                         CMD_READ },
+        { "ip neigh show",                                 CMD_READ },
+        { "ip link help",                                  CMD_READ },
+        { "route -n",                                      CMD_READ },
+        { "sort -t, -k2 -n f",                             CMD_READ },
+        { "sort -u f",                                     CMD_READ },
+        { "sort -rh f",                                    CMD_READ },
+        { "uniq -d f",                                     CMD_READ },
+        { "less -R f",                                     CMD_READ },
+        { "less +G f",                                     CMD_READ },
+        { "less -N +/x f",                                 CMD_READ },
+        { "man -k x",                                      CMD_READ },
+        { "man 5 passwd",                                  CMD_READ },
+        { "rg -n --hidden -g '*.c' x",                     CMD_READ },
+        { "rg -i -C 3 x src",                              CMD_READ },
+        { "journalctl -u x -n 50 --no-pager",              CMD_READ },
+        { "journalctl -f",                                 CMD_READ },
+        { "journalctl -b -1 -p err",                       CMD_READ },
+        { "journalctl --since today",                      CMD_READ },
+        { "dmesg -T",                                      CMD_READ },
+        { "date +%s",                                      CMD_READ },
+        { "hostname -I",                                   CMD_READ },
+        { "env",                                           CMD_READ },
+        { "env LANG=C sort f",                             CMD_READ },
+        { "time ls",                                       CMD_READ },
+        { "nice -n 10 ls",                                 CMD_READ },
+        { "timeout 5 ls",                                  CMD_READ },
+        { "curl -sS -o /dev/null -w '%{http_code}' https://x", CMD_READ },
+        { "curl -s -D - -o /dev/null https://x",           CMD_READ },
+        { "curl --silent --location https://x",            CMD_READ },
+        { "curl -H 'Accept: x' https://x",                 CMD_READ },
+        { "curl -b 'a=b' https://x",                       CMD_READ },
+        { "ss -tlnp",                                      CMD_READ },
+        { "tree -L 2",                                     CMD_READ },
+        { "history 20",                                    CMD_READ },
+        { "ls 2>/dev/null",                                CMD_READ },
+        { "ls >/dev/null 2>&1",                            CMD_READ },
+        { "ls &>/dev/null",                                CMD_READ },
+        { "cut -d' ' -f1 f",                               CMD_READ },
+        { "sed 's/[/]/x/' f",                              CMD_READ },
+        /* An escaped blank splits differently in the two readings; both
+         * are READ, so the command is. */
+        { "ls My\\ Documents",                             CMD_READ },
+        { "sed -n '/[[:space:]]x/p' f",                    CMD_READ },
+    };
+    if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ip: READ only with no verb or exactly show/list/lst/get/help. Any other
+ * verb, abbreviations included, is WRITE; flush/delete forms and link set
+ * are CRITICAL. Global options consume their values. */
+int test_cmd_classify_ip_verbs(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase exact[] = {
+        { "ip a d 10.0.0.1/24 dev x",            CMD_CRITICAL },
+        { "ip a f dev x",                        CMD_CRITICAL },
+        { "ip r fl all",                         CMD_CRITICAL },
+        { "ip addr del x dev x",                 CMD_CRITICAL },
+        { "ip route delete default",             CMD_CRITICAL },
+        { "ip neigh flush all",                  CMD_CRITICAL },
+        { "ip link set dev x down",              CMD_CRITICAL },
+        { "ip l s x down",                       CMD_CRITICAL },
+        { "ip -f inet a flush",                  CMD_CRITICAL },
+        { "ip -family inet addr del x dev x",    CMD_CRITICAL },
+        { "ip -n x link set x down",             CMD_CRITICAL },
+        { "ip -netns x addr flush dev x",        CMD_CRITICAL },
+        { "ip -rc 1 route del x",                CMD_CRITICAL },
+        { "ip -l 1 addr flush dev x",            CMD_CRITICAL },
+        { "ip -loops 1 addr flush dev x",        CMD_CRITICAL },
+        { "ip --json route flush all",           CMD_CRITICAL },
+        { "ip a s",                              CMD_WRITE },
+        { "ip a add x dev x",                    CMD_WRITE },
+        { "ip route replace x via x",            CMD_WRITE },
+        { "ip addr change x dev x",              CMD_WRITE },
+        { "ip route save",                       CMD_WRITE },
+        { "ip -b F",                             CMD_UNKNOWN },
+        { "ip -batch F",                         CMD_UNKNOWN },
+        { "ip -force a",                         CMD_UNKNOWN },
+        { "ip -frob a",                          CMD_UNKNOWN },
+        { "ip firewall x",                       CMD_UNKNOWN },
+        { "ip a",                                CMD_READ },
+        { "ip",                                  CMD_READ },
+        { "ip addr show",                        CMD_READ },
+        { "ip addr lst",                         CMD_READ },
+        { "ip route list",                       CMD_READ },
+        { "ip -color=always a",                  CMD_READ },
+        { "ip xfrm state",                       CMD_READ },
+        { "ip xfrm policy list",                 CMD_READ },
+        { "ip xfrm state flush",                 CMD_CRITICAL },
+        { "ip -all netns exec rm F",             CMD_CRITICAL },
+        { "ip netns exec x rm F",                CMD_CRITICAL },
+    };
+    if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* curl: -w writes with %output{}, reads its format from a file with @;
+ * -H/-b read local files; -K reads a config; the -o /dev/null exception
+ * needs every other output, upload and config flag to be absent. */
+int test_cmd_classify_curl_output_rules(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "curl -w '%output{F}' https://x",               CMD_WRITE },
+        { "curl --write-out '%output{F}x' https://x",     CMD_WRITE },
+        { "curl -w @F https://x",                         CMD_UNKNOWN },
+        { "curl -H @F https://x",                         CMD_WRITE },
+        { "curl --header @F https://x",                   CMD_WRITE },
+        { "curl -H'@F' https://x",                        CMD_WRITE },
+        { "curl -b F https://x",                          CMD_WRITE },
+        { "curl -b @F https://x",                         CMD_WRITE },
+        { "curl --cookie F https://x",                    CMD_WRITE },
+        { "curl -K F https://x",                          CMD_UNKNOWN },
+        { "curl --config F https://x",                    CMD_UNKNOWN },
+        { "curl -o /dev/null -O https://x",               CMD_WRITE },
+        { "curl -o /dev/null -o F https://x https://x",   CMD_WRITE },
+        { "curl -o /dev/null -o /dev/null https://x https://x", CMD_WRITE },
+        { "curl -o - -D F https://x",                     CMD_WRITE },
+        { "curl -o /dev/null -T F https://x",             CMD_WRITE },
+        { "curl -o /dev/null --next https://x",           CMD_WRITE },
+        { "curl -o /dev/null -: https://x",               CMD_WRITE },
+        { "curl -o /dev/null -K F https://x",             CMD_WRITE },
+        { "curl -o /dev/null -d @F https://x",            CMD_WRITE },
+        { "curl -o /dev/null -w @F https://x",            CMD_WRITE },
+        { "curl -o /dev/null -w '%output{F}' https://x",  CMD_WRITE },
+        { "curl -o '/dev/null' --upload-file F https://x", CMD_WRITE },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* PowerShell reading on an unresolved platform: typographic quotes are
+ * string delimiters there, and an unquoted "(" / "@(" / "$(" runs the
+ * command inside it. */
+int test_cmd_classify_powershell_quotes_and_subexpressions(void) {
+    TEST_BEGIN();
+    const CmdPlatform u = CMD_PLATFORM_UNKNOWN;
+    static const ClassifyMinCase unknown_cases[] = {
+        /* \xE2\x80\x98 / \xE2\x80\x99 are U+2018 / U+2019, \xE2\x80\x9C /
+         * \xE2\x80\x9D are U+201C / U+201D. */
+        { "echo \xE2\x80\x98x\xE2\x80\x99",               CMD_UNKNOWN },
+        { "ls \xE2\x80\x9C" "F\xE2\x80\x9D",              CMD_UNKNOWN },
+        /* A typographic quote closes an ASCII one in PowerShell, which
+         * leaves the rm active there. */
+        { "echo '\xE2\x80\x98; rm F'",                    CMD_CRITICAL },
+        { "echo \"\xE2\x80\x9D; rm F\"",                  CMD_CRITICAL },
+        { "echo (rm F)",                                  CMD_CRITICAL },
+        { "echo @(rm F)",                                 CMD_CRITICAL },
+        { "echo x(ls)",                                   CMD_UNKNOWN },
+        { "echo $(rm F)",                                 CMD_CRITICAL },
+    };
+    if (check_min_on(unknown_cases, sizeof unknown_cases / sizeof unknown_cases[0], u))
+        _tf_local_fail = 1;
+    /* On a Linux session the typographic quotes are ordinary characters. */
+    ASSERT_EQ((int)cmd_classify("echo \xE2\x80\x98x\xE2\x80\x99", CMD_PLATFORM_LINUX),
+              (int)CMD_READ);
+    /* Substitution is classified inside on every platform. */
+    ASSERT_EQ((int)cmd_classify("echo $(rm F)", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("ls `rm F`", CMD_PLATFORM_LINUX), (int)CMD_CRITICAL);
+    ASSERT_EQ((int)cmd_classify("echo $(ls)", CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+    /* Quoted parentheses are text. */
+    ASSERT_EQ((int)cmd_classify("echo '(rm F)'", u), (int)CMD_READ);
+    TEST_END();
+}
+
+/* sed: a bracket expression may hide the delimiter; both readings are
+ * taken. Anything left unparsed is UNKNOWN. */
+int test_cmd_classify_sed_brackets_and_unparsed(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "sed '/[/]/w F' G",            CMD_WRITE },
+        { "sed 's/[/]/x/w F' G",         CMD_WRITE },
+        { "sed '/[]/]/w F' G",           CMD_WRITE },
+        { "sed -n '/[[:alpha:]/]/w F' G", CMD_WRITE },
+        { "sed -n '/x' G",               CMD_UNKNOWN },
+        { "sed 's/a/b' G",               CMD_UNKNOWN },
+        { "sed 'y/abc/xyz' G",           CMD_UNKNOWN },
+        { "sed '/[x/w F' G",             CMD_UNKNOWN },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* Device display filters: keywords match case-insensitively and by unique
+ * prefix, as the CLI does; ordinary BGP filters keep their level. */
+int test_cmd_classify_device_filter_abbreviations(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase raised[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show run | red flash:x",          CMD_WRITE },
+        { CMD_PLATFORM_CISCO_IOS,  "show run | REDIRECT flash:x",     CMD_WRITE },
+        { CMD_PLATFORM_CISCO_IOS,  "show run | appe flash:x",         CMD_WRITE },
+        { CMD_PLATFORM_CISCO_IOS,  "show run | t flash:x",            CMD_WRITE },
+        { CMD_PLATFORM_CISCO_ASA,  "show run | Red flash:x",          CMD_WRITE },
+        { CMD_PLATFORM_JUNOS,      "show configuration | sa F",       CMD_WRITE },
+        { CMD_PLATFORM_JUNOS,      "show configuration | SAVE F",     CMD_WRITE },
+        { CMD_PLATFORM_CISCO_NXOS, "show run | em x",                 CMD_WRITE },
+        { CMD_PLATFORM_CISCO_IOS,  "show run | i x || rm F",          CMD_CRITICAL },
+    };
+    if (check_device_floor_min(raised, sizeof raised / sizeof raised[0]))
+        _tf_local_fail = 1;
+
+    static const struct { CmdPlatform plat; const char *cmd; const char *base; } kept[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show run | s bgp",               "show run" },
+        { CMD_PLATFORM_CISCO_IOS,  "show ip bgp | i *>i",            "show ip bgp" },
+        { CMD_PLATFORM_CISCO_IOS,  "show ip bgp | include *> 10.0",  "show ip bgp" },
+        { CMD_PLATFORM_CISCO_IOS,  "show ip bgp | i a||b",           "show ip bgp" },
+        { CMD_PLATFORM_CISCO_NXOS, "show ip bgp | i *>i",            "show ip bgp" },
+        { CMD_PLATFORM_CISCO_NXOS, "show ip bgp | include *> 10.0",  "show ip bgp" },
+        { CMD_PLATFORM_CISCO_NXOS, "show ip bgp | i a||b",           "show ip bgp" },
+        { CMD_PLATFORM_CISCO_ASA,  "show ip bgp | i *>i",            "show ip bgp" },
+        { CMD_PLATFORM_JUNOS,      "show interfaces | t",            "show interfaces" },
+        { CMD_PLATFORM_JUNOS,      "show route | m x",               "show route" },
+    };
+    for (size_t i = 0; i < sizeof kept / sizeof kept[0]; i++) {
+        CmdSafetyLevel got = cmd_classify(kept[i].cmd, kept[i].plat);
+        CmdSafetyLevel want = cmd_classify(kept[i].base, kept[i].plat);
+        if (got != want) {
+            printf("  [platform %d] \"%s\": got %d, want %d\n",
+                   (int)kept[i].plat, kept[i].cmd, (int)got, (int)want);
+            _tf_local_fail = 1;
+        }
+    }
+    ASSERT_EQ((int)cmd_classify("show ip bgp | i *>i", CMD_PLATFORM_CISCO_IOS), (int)CMD_READ);
+    TEST_END();
+}
+
+/* A redirect target glued to its operator is a file of that name, not the
+ * safe target it starts with. */
+int test_cmd_classify_glued_redirect_targets(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "ls >&2F",          CMD_WRITE },
+        { "ls >/dev/nullF",   CMD_WRITE },
+        { "ls 2>/dev/nullx",  CMD_WRITE },
+        { "ls >&1x",          CMD_WRITE },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    static const ClassifyMinCase exact[] = {
+        { "ls 2>&1",          CMD_READ },
+        { "ls >&2",           CMD_READ },
+        { "ls >/dev/null",    CMD_READ },
+        { "ls > /dev/null",   CMD_READ },
+        { "ls 2>&-",          CMD_READ },
+    };
+    if (check_exact_level_linuxish(exact, sizeof exact / sizeof exact[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Round 3: expansion floor for allow-listed READ commands ---- */
+
+/* An active (unquoted, or double-quoted where it still expands) shell
+ * expansion in an argument of find/sort/git log/curl/sed/less/uniq can
+ * produce a flag or run something the per-command checks never see, so it
+ * makes the segment at least UNKNOWN, even though the raw word looks like
+ * a harmless operand (does not itself start with '-'). Each command's word
+ * is deliberately shaped so the pre-fix classifier saw nothing to object
+ * to: a brace/dollar-quote token that does not start with '-', or a plain
+ * "$@"/"${IFS}" operand next to (not glued to) a genuine flag. */
+int test_cmd_classify_expansion_floor_at_least_unknown(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        /* Brace expansion with a comma. */
+        { "find . {-delete,-print}",       CMD_UNKNOWN },
+        { "sort {-o,-r} F",                CMD_UNKNOWN },
+        { "git log {--oneline,--output=F}", CMD_UNKNOWN },
+        { "curl {-o,-s} http://x/F",       CMD_UNKNOWN },
+        { "sed 's/a/b/' {-i,-n}",          CMD_UNKNOWN },
+        { "less {-o,-O} F",                CMD_UNKNOWN },
+        { "uniq {-c,-d}",                  CMD_UNKNOWN },
+        /* $'...' (ANSI-C quoting) can also produce a flag. */
+        { "find . $'-delete'",             CMD_UNKNOWN },
+        { "sort $'-o' F",                  CMD_UNKNOWN },
+        { "git log $'-oneline'",           CMD_UNKNOWN },
+        { "curl $'-o' F http://x",         CMD_UNKNOWN },
+        { "sed 's/a/b/' $'-i'",            CMD_UNKNOWN },
+        { "less $'-o' F",                  CMD_UNKNOWN },
+        { "uniq $'-w'",                    CMD_UNKNOWN },
+        /* $@/${IFS} ahead of, or in place of, a flag word. */
+        { "find . $@ -true",               CMD_UNKNOWN },
+        { "sort ${IFS} F",                 CMD_UNKNOWN },
+        { "git log $@",                    CMD_UNKNOWN },
+        { "curl $@ http://x",              CMD_UNKNOWN },
+        { "sed 's/a/b/' $@",               CMD_UNKNOWN },
+        { "less $@ F",                     CMD_UNKNOWN },
+        { "uniq $@",                       CMD_UNKNOWN },
+        /* A plain, non-exempt variable in an ordinary operand position. */
+        { "sort $X F",                     CMD_UNKNOWN },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* The exemption (HOME/PWD/USER/LOGNAME/HOSTNAME, bare or "${NAME}", and a
+ * leading '~') holds regardless of whether the command is one the
+ * expansion floor checks at all. */
+int test_cmd_classify_expansion_floor_exempt_stays_read(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("ls $HOME", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("cat ~/F", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("ls \"$PWD\"", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("echo $USER", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("grep x ~/F", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sort $HOME/F", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("git log ${HOME}", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    TEST_END();
+}
+
+/* ---- Round 3: pidstat -e, dig -f, tree -R ---- */
+
+int test_cmd_classify_pidstat_dig_tree_flag_specs(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase unknown_cases[] = {
+        { "pidstat -e sh -c x",   CMD_UNKNOWN },   /* -e starts and monitors a program */
+        { "dig -f F example.com", CMD_UNKNOWN },   /* -f reads a local file and sends it */
+        { "tree -R",              CMD_UNKNOWN },   /* not a reviewed-safe tree flag */
+    };
+    if (check_min_level_linuxish(unknown_cases, sizeof unknown_cases / sizeof unknown_cases[0]))
+        _tf_local_fail = 1;
+
+    /* Everyday forms of all three stay READ. */
+    ASSERT_EQ((int)cmd_classify("pidstat 1 5", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("pidstat -u -p 1234", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dig +short example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dig -t MX example.com", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("dig -x 8.8.8.8", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("tree -a -L 2", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    TEST_END();
+}
+
+/* ---- Round 3: device floor '&' split and '|&' pipe scan ---- */
+
+/* Device platforms don't split on a lone '&' at the top level the way
+ * Linux and an unresolved platform do, so the floor has to catch it (and a
+ * "|&" pipe) itself -- the same way it already catches "||" and "|". */
+int test_cmd_classify_device_floor_ampersand_and_pipeamp(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_CISCO_IOS,  "show run & rm -rf F", CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_NXOS, "show run & rm -rf F", CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_IOS,  "show run |& sh",      CMD_CRITICAL },
+        { CMD_PLATFORM_CISCO_NXOS, "show run |& sh",      CMD_CRITICAL },
+    };
+    if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+
+    /* A trailing bare '&' with nothing after it is plain backgrounding, not
+     * a shell escape: no floor bump over "show run" alone. */
+    ASSERT_EQ((int)cmd_classify("show run &", CMD_PLATFORM_CISCO_IOS),
+              (int)cmd_classify("show run", CMD_PLATFORM_CISCO_IOS));
+    TEST_END();
+}
+
+/* VyOS's operational mode is bash underneath and HP Comware also writes a
+ * file on a bare '>' before any display filter, like NX-OS. */
+int test_cmd_classify_device_floor_redirect_vyos_comware(void) {
+    TEST_BEGIN();
+    static const DeviceFloorCase cases[] = {
+        { CMD_PLATFORM_VYOS,       "show configuration > F",             CMD_WRITE },
+        { CMD_PLATFORM_VYOS,       "show configuration >> F",            CMD_WRITE },
+        { CMD_PLATFORM_HP_COMWARE, "display current-configuration > F",  CMD_WRITE },
+        { CMD_PLATFORM_HP_COMWARE, "display current-configuration >> F", CMD_WRITE },
+    };
+    if (check_device_floor_min(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+
+    /* Ordinary display and BGP filters are unaffected: '>' after the first
+     * '|' is part of the pattern, not a redirect, on these two either. */
+    ASSERT_EQ((int)cmd_classify("show configuration | match >x", CMD_PLATFORM_VYOS),
+              (int)cmd_classify("show configuration", CMD_PLATFORM_VYOS));
+    ASSERT_EQ((int)cmd_classify("display ip bgp | i *>i", CMD_PLATFORM_HP_COMWARE),
+              (int)cmd_classify("display ip bgp", CMD_PLATFORM_HP_COMWARE));
+    TEST_END();
+}
+
+/* ---- Round 3: exec is no longer a pass-through wrapper ---- */
+
+/* "exec CMD" replaces the current shell process rather than running CMD
+ * alongside it, so it is at least UNKNOWN, not whatever CMD alone would be
+ * ("exec ls" used to classify exactly like "ls": READ). */
+int test_cmd_classify_exec_not_pass_through_wrapper(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "exec ls",      CMD_UNKNOWN },
+        { "exec -a x ls", CMD_UNKNOWN },
+    };
+    if (check_min_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Round 3: "|&" is a pipe ---- */
+
+int test_cmd_classify_pipe_amp_is_pipe(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "cat F |& sh",  CMD_CRITICAL },
+        { "cat F|& sh",   CMD_CRITICAL },
+    };
+    if (check_exact_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
+    TEST_END();
+}
+
+/* ---- Round 3: "ip netns exec" / "ip vrf exec" by prefix ---- */
+
+int test_cmd_classify_ip_netns_vrf_exec_prefix(void) {
+    TEST_BEGIN();
+    static const ClassifyMinCase cases[] = {
+        { "ip netns exec ns1 ls",       CMD_WRITE },
+        { "ip vrf exec blue ls",        CMD_WRITE },
+        { "ip netn e ns1 ls",           CMD_WRITE },
+        { "ip n e ns1 ls",              CMD_WRITE },
+        { "ip vrf e blue ls",           CMD_WRITE },
+        /* The inner command's own level wins when it is worse than WRITE --
+         * an abbreviated object/verb must still be classified recursively,
+         * not just fall through to the flat WRITE any other unrecognised ip
+         * verb gets regardless of what follows it. */
+        { "ip netns exec ns1 rm -rf F", CMD_CRITICAL },
+        { "ip n e ns1 rm -rf F",        CMD_CRITICAL },
+        { "ip vrf e blue rm -rf F",     CMD_CRITICAL },
+    };
+    if (check_exact_level_linuxish(cases, sizeof cases / sizeof cases[0]))
+        _tf_local_fail = 1;
     TEST_END();
 }
