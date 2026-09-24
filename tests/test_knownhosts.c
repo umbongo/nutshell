@@ -635,4 +635,320 @@ int test_kh_key_type_name_table(void)
     TEST_END();
 }
 
+/* ---- H-8b: knownhosts_free safe on an early-returned struct --------------- */
+
+int test_kh_free_safe_after_failed_init(void)
+{
+    TEST_BEGIN();
+
+    /* NULL session: bails before touching kh->store; must still leave it
+     * zeroed so free is safe, including called twice. */
+    KnownHosts kh1;
+    ASSERT_EQ(knownhosts_init(&kh1, NULL, "irrelevant-path"), KNOWNHOSTS_ERROR);
+    knownhosts_free(&kh1);
+    knownhosts_free(&kh1);
+
+    /* NULL path: same requirement. */
+    KnownHosts kh2;
+    ASSERT_EQ(knownhosts_init(&kh2, g_sess->session, NULL), KNOWNHOSTS_ERROR);
+    knownhosts_free(&kh2);
+    knownhosts_free(&kh2);
+
+    /* Directory path: bails later (after the stat/fopen probe), same
+     * requirement -- and this path previously left kh->store uninitialized
+     * on this branch before the H-8b fix. */
+    char path[256];
+    tmp_path(path, sizeof(path), "nutshell_kh_test_free_dir");
+    UNLINK(path);
+    RMDIR(path);
+    MKDIR(path);
+
+    KnownHosts kh3;
+    ASSERT_EQ(knownhosts_init(&kh3, g_sess->session, path), KNOWNHOSTS_ERROR);
+    knownhosts_free(&kh3);
+    knownhosts_free(&kh3);
+
+    RMDIR(path);
+    TEST_END();
+}
+
+/* ---- H-6: compatibility with entries written by older versions ------------ */
+
+int test_kh_legacy_mixed_case_compat(void)
+{
+    TEST_BEGIN();
+    char path[256];
+    tmp_path(path, sizeof(path), "nutshell_kh_test_legacy_case.txt");
+    UNLINK(path);
+
+    /* Write a normal (lowercase) entry with the real writer, then rewrite
+     * its hostname in place to a mixed-case spelling of the same length --
+     * simulating an entry an older Nutshell (or a hand-edited file) wrote
+     * using the host exactly as typed, not lowercased. */
+    static const char LOWER_HOST[] = "legacycase.example";
+    static const char MIXED_HOST[] = "LegacyCase.Example";
+    /* Same layout, deliberately, so the in-place rewrite below cannot
+     * change the line length. */
+
+    KnownHosts kh;
+    ASSERT_EQ(knownhosts_init(&kh, g_sess->session, path), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_add(&kh, LOWER_HOST, 22,
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
+    knownhosts_free(&kh);
+
+    unsigned char *buf = NULL;
+    long len = read_file_bytes(path, &buf);
+    ASSERT_TRUE(len > 0);
+    ASSERT_NOT_NULL(buf);
+    if (buf) {
+        char *hit = strstr((char *)buf, LOWER_HOST);
+        ASSERT_NOT_NULL(hit);
+        if (hit) {
+            memcpy(hit, MIXED_HOST, strlen(MIXED_HOST));
+        }
+        FILE *f = test_fopen_private(path);
+        ASSERT_NOT_NULL(f);
+        if (f) {
+            fwrite(buf, 1, (size_t)len, f);
+            fclose(f);
+        }
+        free(buf);
+    }
+
+    /* Re-init from the rewritten (mixed-case) file. A lookup using the
+     * exact mixed-case host, as the user typed it, must still verify
+     * against the old entry for the same key, and show MISMATCH (with the
+     * stored fingerprint filled) for a different one. */
+    init_key_b();
+    KnownHosts kh2;
+    ASSERT_EQ(knownhosts_init(&kh2, g_sess->session, path), KNOWNHOSTS_OK);
+
+    ASSERT_EQ(knownhosts_check(&kh2, MIXED_HOST, 22,
+                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                                NULL, 0), KNOWNHOSTS_OK);
+
+    KnownHostsResult res;
+    ASSERT_EQ(knownhosts_lookup(&kh2, MIXED_HOST, 22,
+                                (const char *)TEST_KEY_B, TEST_KEY_B_LEN,
+                                LIBSSH2_HOSTKEY_TYPE_RSA, &res),
+              KNOWNHOSTS_MISMATCH);
+    ASSERT_TRUE(res.stored_fingerprint[0] != '\0');
+
+    /* Adding under the same (mixed-case, as typed) name must replace the
+     * old mixed-case line rather than add a second one -- the file ends up
+     * with exactly one entry for this host, lowercased. */
+    ASSERT_EQ(knownhosts_add(&kh2, MIXED_HOST, 22,
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
+    knownhosts_free(&kh2);
+
+    unsigned char *buf2 = NULL;
+    long len2 = read_file_bytes(path, &buf2);
+    ASSERT_TRUE(len2 > 0);
+    if (buf2) {
+        ASSERT_TRUE(strstr((char *)buf2, LOWER_HOST) != NULL);
+        ASSERT_TRUE(strstr((char *)buf2, MIXED_HOST) == NULL);
+
+        int count = 0;
+        const char *p = (const char *)buf2;
+        while ((p = strstr(p, LOWER_HOST)) != NULL) {
+            count++;
+            p += strlen(LOWER_HOST);
+        }
+        ASSERT_EQ(count, 1);
+        free(buf2);
+    }
+    TEST_END();
+}
+
+/* ---- H-7: cross-instance serialised add ------------------------------------ */
+
+int test_kh_two_instances_both_persist(void)
+{
+    TEST_BEGIN();
+    init_key_b();
+    char path[256];
+    tmp_path(path, sizeof(path), "nutshell_kh_test_two_instances.txt");
+    UNLINK(path);
+
+    /* Two instances on the same file before either has added anything. */
+    KnownHosts a, b;
+    ASSERT_EQ(knownhosts_init(&a, g_sess->session, path), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_init(&b, g_sess->session, path), KNOWNHOSTS_OK);
+
+    ASSERT_EQ(knownhosts_add(&a, "tabhost1.example", 22,
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_add(&b, "tabhost2.example", 22,
+                              (const char *)TEST_KEY_B, TEST_KEY_B_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
+
+    knownhosts_free(&a);
+    knownhosts_free(&b);
+
+    /* The file (checked via a fresh init) must hold both. */
+    KnownHosts fresh;
+    ASSERT_EQ(knownhosts_init(&fresh, g_sess->session, path), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_check(&fresh, "tabhost1.example", 22,
+                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                                NULL, 0), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_check(&fresh, "tabhost2.example", 22,
+                                (const char *)TEST_KEY_B, TEST_KEY_B_LEN,
+                                NULL, 0), KNOWNHOSTS_OK);
+    knownhosts_free(&fresh);
+    TEST_END();
+}
+
+int test_kh_two_instances_no_stale_overwrite(void)
+{
+    TEST_BEGIN();
+    init_key_b();
+    char path[256];
+    tmp_path(path, sizeof(path), "nutshell_kh_test_two_instances_rotate.txt");
+    UNLINK(path);
+
+    /* Seed the file with host1 -> K1. */
+    KnownHosts seed;
+    ASSERT_EQ(knownhosts_init(&seed, g_sess->session, path), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_add(&seed, "rothost.example", 22,
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
+    knownhosts_free(&seed);
+
+    /* A and B both load it: both now hold K1 for rothost.example in memory. */
+    KnownHosts a, b;
+    ASSERT_EQ(knownhosts_init(&a, g_sess->session, path), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_init(&b, g_sess->session, path), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_check(&a, "rothost.example", 22,
+                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                                NULL, 0), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_check(&b, "rothost.example", 22,
+                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                                NULL, 0), KNOWNHOSTS_OK);
+
+    /* A rotates rothost.example to K2 and persists it. */
+    ASSERT_EQ(knownhosts_add(&a, "rothost.example", 22,
+                              (const char *)TEST_KEY_B, TEST_KEY_B_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
+
+    /* B, still holding stale K1 in memory, adds an unrelated host. It must
+     * not write its stale rothost.example=K1 back over A's K2. */
+    ASSERT_EQ(knownhosts_add(&b, "otherhost.example", 22,
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              LIBSSH2_HOSTKEY_TYPE_RSA), KNOWNHOSTS_OK);
+
+    knownhosts_free(&a);
+    knownhosts_free(&b);
+
+    KnownHosts fresh;
+    ASSERT_EQ(knownhosts_init(&fresh, g_sess->session, path), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_check(&fresh, "rothost.example", 22,
+                                (const char *)TEST_KEY_B, TEST_KEY_B_LEN,
+                                NULL, 0), KNOWNHOSTS_OK);
+    /* Stale K1 must no longer verify for rothost.example. */
+    ASSERT_EQ(knownhosts_check(&fresh, "rothost.example", 22,
+                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                                NULL, 0), KNOWNHOSTS_MISMATCH);
+    ASSERT_EQ(knownhosts_check(&fresh, "otherhost.example", 22,
+                                (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                                NULL, 0), KNOWNHOSTS_OK);
+    knownhosts_free(&fresh);
+    TEST_END();
+}
+
+#ifdef _WIN32
+typedef struct {
+    KnownHosts *kh;
+    const char *prefix;
+    int count;
+} KhThreadAddArgs;
+
+static DWORD WINAPI kh_thread_add_hosts(LPVOID arg)
+{
+    KhThreadAddArgs *a = (KhThreadAddArgs *)arg;
+    for (int i = 0; i < a->count; i++) {
+        char host[64];
+        snprintf(host, sizeof(host), "%s%d.example", a->prefix, i);
+        knownhosts_add(a->kh, host, 22,
+                        (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                        LIBSSH2_HOSTKEY_TYPE_RSA);
+    }
+    return 0;
+}
+#endif
+
+/* Two KnownHosts instances on the same file, each adding many distinct
+ * hosts. On Windows this runs the two add sequences on separate threads,
+ * so the H-7 lock is actually contended; elsewhere (no portable
+ * always-linked thread primitive in the native POSIX test build) it runs
+ * them back-to-back, still exercising the same read-merge-write path. */
+int test_kh_concurrent_add_no_lost_update(void)
+{
+    TEST_BEGIN();
+    char path[256];
+    tmp_path(path, sizeof(path), "nutshell_kh_test_concurrent.txt");
+    UNLINK(path);
+
+    const int PER_INSTANCE = 15;
+
+    KnownHosts a, b;
+    ASSERT_EQ(knownhosts_init(&a, g_sess->session, path), KNOWNHOSTS_OK);
+    ASSERT_EQ(knownhosts_init(&b, g_sess->session, path), KNOWNHOSTS_OK);
+
+#ifdef _WIN32
+    KhThreadAddArgs args_a = { &a, "cta", PER_INSTANCE };
+    KhThreadAddArgs args_b = { &b, "ctb", PER_INSTANCE };
+    HANDLE th_a = CreateThread(NULL, 0, kh_thread_add_hosts, &args_a, 0, NULL);
+    HANDLE th_b = CreateThread(NULL, 0, kh_thread_add_hosts, &args_b, 0, NULL);
+    ASSERT_NOT_NULL(th_a);
+    ASSERT_NOT_NULL(th_b);
+    HANDLE handles[2];
+    int nh = 0;
+    if (th_a) handles[nh++] = th_a;
+    if (th_b) handles[nh++] = th_b;
+    if (nh > 0) WaitForMultipleObjects((DWORD)nh, handles, TRUE, 10000);
+    if (th_a) CloseHandle(th_a);
+    if (th_b) CloseHandle(th_b);
+#else
+    for (int i = 0; i < PER_INSTANCE; i++) {
+        char host[64];
+        snprintf(host, sizeof(host), "cta%d.example", i);
+        knownhosts_add(&a, host, 22, (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                        LIBSSH2_HOSTKEY_TYPE_RSA);
+    }
+    for (int i = 0; i < PER_INSTANCE; i++) {
+        char host[64];
+        snprintf(host, sizeof(host), "ctb%d.example", i);
+        knownhosts_add(&b, host, 22, (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                        LIBSSH2_HOSTKEY_TYPE_RSA);
+    }
+#endif
+
+    knownhosts_free(&a);
+    knownhosts_free(&b);
+
+    KnownHosts fresh;
+    ASSERT_EQ(knownhosts_init(&fresh, g_sess->session, path), KNOWNHOSTS_OK);
+    int missing = 0;
+    for (int i = 0; i < PER_INSTANCE; i++) {
+        char host[64];
+        snprintf(host, sizeof(host), "cta%d.example", i);
+        if (knownhosts_check(&fresh, host, 22,
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              NULL, 0) != KNOWNHOSTS_OK) {
+            missing++;
+        }
+        snprintf(host, sizeof(host), "ctb%d.example", i);
+        if (knownhosts_check(&fresh, host, 22,
+                              (const char *)TEST_KEY_A, TEST_KEY_A_LEN,
+                              NULL, 0) != KNOWNHOSTS_OK) {
+            missing++;
+        }
+    }
+    ASSERT_EQ(missing, 0);
+    knownhosts_free(&fresh);
+    TEST_END();
+}
+
 #endif /* NO_SSH_LIBS */

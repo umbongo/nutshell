@@ -46,7 +46,13 @@ int knownhosts_check(KnownHosts *kh,
 /*
  * knownhosts_add — store host:port → key and persist to disk.
  * key_type is the value returned by libssh2_session_hostkey() (LIBSSH2_HOSTKEY_TYPE_*).
- * Existing entry for the same host:port is replaced (handles key rotation).
+ * Existing entries for the same host:port are replaced (handles key rotation),
+ * including older entries whose name differs only in case.
+ * The read-merge-write is serialised across instances and processes (a named
+ * mutex on Windows, an fcntl lock on "<path>.lock" elsewhere): inside the
+ * lock the file is re-read from disk, this host's entries replaced, and the
+ * result written and adopted as kh's store, so two tabs accepting keys at
+ * once never lose each other's entry or write back a stale key.
  * The file is written atomically: a temp file in the same directory is
  * written, flushed to disk and then renamed over the target, so a crash or
  * power loss mid-write never leaves a truncated or half-written
@@ -92,6 +98,9 @@ typedef struct {
 /*
  * knownhosts_lookup — look up the exact entry for host:port (see
  * knownhosts_entry_name) — never a plain "host" entry for a non-22 port.
+ * When the lowercased name is not found, the host exactly as given is tried
+ * too, so an entry an older version wrote in mixed case still verifies (or
+ * still reports a changed key as MISMATCH).
  * Fills *out with the presented key's type/fingerprint always, and (on
  * KNOWNHOSTS_MISMATCH only) the stored entry's type/fingerprint. out may
  * be NULL if the caller does not need any of this.

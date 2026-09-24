@@ -613,6 +613,11 @@ int test_kh_case_insensitive_lookup(void);
 int test_kh_entry_name_table(void);
 int test_kh_mismatch_stored_fingerprint(void);
 int test_kh_key_type_name_table(void);
+int test_kh_free_safe_after_failed_init(void);
+int test_kh_legacy_mixed_case_compat(void);
+int test_kh_two_instances_both_persist(void);
+int test_kh_two_instances_no_stale_overwrite(void);
+int test_kh_concurrent_add_no_lost_update(void);
 
 /* test_key_auth.c */
 int test_key_auth_null_session(void);
@@ -3013,6 +3018,11 @@ int main(void) {
     failed += test_kh_entry_name_table();
     failed += test_kh_mismatch_stored_fingerprint();
     failed += test_kh_key_type_name_table();
+    failed += test_kh_free_safe_after_failed_init();
+    failed += test_kh_legacy_mixed_case_compat();
+    failed += test_kh_two_instances_both_persist();
+    failed += test_kh_two_instances_no_stale_overwrite();
+    failed += test_kh_concurrent_add_no_lost_update();
 
     printf("\n--- Key Auth ---\n");
     failed += test_key_auth_null_session();
