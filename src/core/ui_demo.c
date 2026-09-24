@@ -334,32 +334,32 @@ static const char DEMO_TERM_TEXT[] =
     "web-01:~$ ";
 
 /* ---------------------------------------------------------------------
- * "local": the same window with no remote host at all -- a busybox shell
- * on this PC (spec 2026-09-22-local-shell-design.md section 5). It changes
- * only the terminal transcript; the tab chrome and status line are the
- * win32 side's doing (create_demo_session in window.c) and there is no
- * process behind either. The conversation is left empty on purpose: this
- * state is about the terminal and the tab, not the panel.
+ * "local": the same window with no remote host at all -- PowerShell on
+ * this PC, the automatic local-shell search's first pick since busybox was
+ * removed as an option (2026-09-24; spec 2026-09-22-local-shell-design.md
+ * sections 5 and 9). It changes only the terminal transcript; the tab
+ * chrome and status line are the win32 side's doing (create_demo_session in
+ * window.c) and there is no process behind either. The conversation is left
+ * empty on purpose: this state is about the terminal and the tab, not the
+ * panel.
  * --------------------------------------------------------------------- */
 static const char LOCAL_TERM_TEXT[] =
-    "Nutshell local shell -- busybox64.exe, no SSH session.\r\n"
+    "Nutshell local shell -- PowerShell 7, no SSH session.\r\n"
     "\r\n"
-    "~ $ uname -o\r\n"
-    "MS/Windows\r\n"
-    "~ $ busybox | head -2\r\n"
-    "BusyBox v1.37.0 (2026-02-11) multi-call binary.\r\n"
-    "BusyBox is copyrighted by many authors between 1998-2015.\r\n"
-    "~ $ ls -l\r\n"
-    "total 12\r\n"
-    "drwxr-xr-x    1 thomas   thomas           0 Sep 21 18:02 Desktop\r\n"
-    "drwxr-xr-x    1 thomas   thomas           0 Sep 19 09:44 Documents\r\n"
-    "drwxr-xr-x    1 thomas   thomas           0 Sep 22 07:15 Downloads\r\n"
-    "-rw-r--r--    1 thomas   thomas        4096 Sep 22 07:51 notes.md\r\n"
-    "~ $ df -h . | tail -1\r\n"
-    "C:                  931.5G    412.8G    518.7G  44% /c\r\n"
-    "~ $ grep -c TODO notes.md\r\n"
+    "PS C:\\Users\\thomas> Get-ChildItem\r\n"
+    "\r\n"
+    "    Directory: C:\\Users\\thomas\r\n"
+    "\r\n"
+    "Mode                 LastWriteTime         Length Name\r\n"
+    "----                 -------------         ------ ----\r\n"
+    "d-----         9/21/2026   6:02 PM                Desktop\r\n"
+    "d-----         9/19/2026   9:44 AM                Documents\r\n"
+    "d-----         9/22/2026   7:15 AM                Downloads\r\n"
+    "-a----         9/22/2026   7:51 AM           4096 notes.md\r\n"
+    "\r\n"
+    "PS C:\\Users\\thomas> (Select-String notes.md -Pattern TODO).Count\r\n"
     "7\r\n"
-    "~ $ ";
+    "PS C:\\Users\\thomas> ";
 
 /* ---------------------------------------------------------------------
  * Entry point

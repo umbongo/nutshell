@@ -47,8 +47,8 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state);
  * freed ctx. */
 void ai_chat_set_session(HWND hwnd, Terminal *term, SessionIo *io);
 
-/* Name the shell a local session is running ("busybox", "Git bash",
- * "MSYS2", "PowerShell", "custom" -- local_shell_spec_name()), so the system prompt can
+/* Name the shell a local session is running ("PowerShell", "Git bash",
+ * "MSYS2", "cmd", "custom" -- local_shell_spec_name()), so the system prompt can
  * say which one it is rather than list the possibilities (spec
  * 2026-09-22-local-shell-design.md section 6). Pass NULL for an SSH session
  * or when there is no session: the prompt then keeps its SSH wording, which

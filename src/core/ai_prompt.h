@@ -84,7 +84,7 @@ int ai_conv_set_system(AiConversation *conv, const char *content);
  * kind selects the opening sentences: SESSION_SSH produces exactly the text
  * it always has; SESSION_LOCAL says the shell is a local one on a Windows PC
  * (spec 2026-09-22-local-shell-design.md section 6). shell_name names that
- * shell ("busybox", "Git bash", ...) and may be NULL, in which case the
+ * shell ("PowerShell", "Git bash", ...) and may be NULL, in which case the
  * prompt lists the possibilities. Ignored for SESSION_SSH. */
 void ai_build_system_prompt(char *buf, size_t buf_size,
                             const char *terminal_text,

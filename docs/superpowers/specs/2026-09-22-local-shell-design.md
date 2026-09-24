@@ -177,6 +177,12 @@ exercises it); the gallery unchanged.
 
 ## 4. The runtime: which shell, command line, environment
 
+> **Note (2026-09-24, security hardening):** the search order and environment below are
+> historical -- the busybox sidecar (4.1, 4.2 step 2/3, 4.4) was removed and replaced with
+> detecting shells actually installed on the machine, and a bare custom executable name is
+> now resolved against a fixed, safe set of directories rather than handed to `CreateProcess`
+> as-is. See the addendum, section 10, for what actually ships now.
+
 Pure logic in `src/core/local_shell.c` (tested natively); Win32 calls only in `local_pty.c`.
 
 ### 4.1 Runtime directory
@@ -338,3 +344,53 @@ Not verified by the critic, to be settled by the `make wintest` case in 1.2.1: b
 bash-compatibility surface; whether ConPTY treats a bare LF as Enter and whether it emits
 DA/DSR queries; whether `0x03` reaches only the child's process group; UPX behaviour with an
 embedded payload (moot until 4.4).
+
+---
+
+## 10. Security hardening (2026-09-24): busybox removed, detected shells, bare-name resolution
+
+Part of a broader security-hardening pass (local shell, DLL search order). The maintainer's
+decision: no busybox, bundled or embedded -- 4.1's runtime directory and 4.4's embedded
+payload are both gone, and `SHELL_BUSYBOX` no longer exists. `cmd_classify.c`'s handling of
+`busybox` as a *remote* command name (over SSH) is unrelated and untouched.
+
+**4.2 replaced.** `local_shell_resolve()`'s automatic search (profile names no shell) is now,
+first match wins, PowerShell first:
+
+1. `profile_shell` non-empty: used verbatim, kind `SHELL_CUSTOM` (unchanged);
+2. `%ProgramFiles%\PowerShell\7\pwsh.exe`: kind `SHELL_PWSH`;
+3. `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`: kind `SHELL_POWERSHELL`;
+4. Git for Windows (unchanged): kind `SHELL_GITBASH`;
+5. MSYS2 at `C:\msys64\usr\bin\bash.exe` (unchanged): kind `SHELL_MSYS2`;
+6. `%SystemRoot%\System32\cmd.exe`: kind `SHELL_CMD`;
+7. none: `SHELL_NONE` -- effectively unreachable on a live Windows install, since step 6 is
+   always there; the message no longer mentions busybox.
+
+A new `local_shell_list_available()` walks the same steps 2-6 without stopping at the first
+match, for the Session Manager's **Shell** field, now an editable dropdown (`CBS_DROPDOWN`)
+listing "Automatic (<what step 2-6 picks right now>)" plus every shell actually found, each
+row's stored value its full quoted command line; typing a custom line still works exactly as
+before.
+
+**4.3 narrowed.** `TERM` and `NUTSHELL` are added for every kind, as before. `HOME`, `SHELL`
+and the chosen shell's directory prepended to `PATH` are now added *only* for the two bash
+kinds (`SHELL_GITBASH`, `SHELL_MSYS2`) -- meaningless to PowerShell or `cmd.exe`, and no
+longer assumed of a custom command either. `MSYSTEM` remains MSYS2-only.
+
+**New: safe resolution of a bare custom executable.** `local_pty.c`'s `CreateProcess` call
+uses `lpApplicationName = NULL`, so its own search order tries the directory `nutshell.exe`
+loaded from and the current directory *before* System32 -- a bare custom `shell` value like
+`powershell.exe` would run whichever file of that name happened to be sitting in either place
+first. `local_shell_resolve_bare(LocalShellSpec *spec, const LocalShellProbe *probe)`
+(`src/core/local_shell.c`, tested against the same fake-probe table) runs after
+`local_shell_resolve()` and before `local_pty_open()`, only for `SHELL_CUSTOM` whose
+executable token has no path separator: it searches *only* `%SystemRoot%\System32`,
+`%SystemRoot%` and PATH entries that are themselves absolute (never a relative PATH entry,
+never the exe's own directory, never the current directory), trying the bare name and, when
+it has no extension, the same name with `.exe` appended. On success `spec` is rewritten to
+the absolute, correctly quoted path plus whatever arguments followed; on failure the session
+refuses to start with a clear error rather than fall back to the unsafe default search.
+
+Not touched by this addendum: section 2 (the `SessionIo` seam), section 3 (the ConPTY
+backend), section 6 (the AI assistant), or the profile/config shape in section 5 beyond the
+Shell field becoming a dropdown.

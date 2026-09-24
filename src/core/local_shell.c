@@ -3,7 +3,8 @@
  * file existence check and registry read goes through the LocalShellProbe
  * callbacks (any of which may be NULL, meaning "answers no").
  *
- * See docs/superpowers/specs/2026-09-22-local-shell-design.md section 4.
+ * See docs/superpowers/specs/2026-09-22-local-shell-design.md sections 4
+ * and 10 (2026-09-24: busybox removed, installed shells detected instead).
  */
 
 #include "local_shell.h"
@@ -13,8 +14,8 @@
 #include <string.h>
 
 const char LOCAL_SHELL_NONE_MESSAGE[] =
-    "No shell found. Put busybox64.exe next to nutshell.exe, install Git "
-    "for Windows, or set a shell command in the profile.";
+    "No shell found. Install PowerShell, Git for Windows, or set a shell "
+    "command in the profile.";
 
 /* ---- probe wrappers: NULL probe or NULL callback both mean "no" --------- */
 
@@ -122,6 +123,30 @@ static void first_token_exe_and_dir(const char *s, char *exe_out, size_t exe_siz
     }
 }
 
+/* Whatever follows the first token of `s` (quoted or space-delimited),
+ * leading spaces trimmed -- "" when there is nothing after it. Used by
+ * local_shell_resolve_bare() to keep the user's arguments when it rewrites
+ * the executable to an absolute path. */
+static void command_suffix(const char *s, char *out, size_t out_size)
+{
+    if (out_size > 0) out[0] = '\0';
+    if (!s) return;
+
+    while (*s == ' ') s++;
+    if (*s == '\0') return;
+
+    const char *rest;
+    if (*s == '"') {
+        const char *close = strchr(s + 1, '"');
+        rest = close ? close + 1 : s + strlen(s);
+    } else {
+        const char *sp = strchr(s, ' ');
+        rest = sp ? sp : s + strlen(s);
+    }
+    while (*rest == ' ') rest++;
+    (void)snprintf(out, out_size, "%s", rest);
+}
+
 /* dir + "\\" + name -> out. Returns 1 on success, 0 if it would not fit. */
 static int join_path(const char *dir, const char *name, char *out, size_t out_size)
 {
@@ -130,7 +155,7 @@ static int join_path(const char *dir, const char *name, char *out, size_t out_si
 }
 
 /* Builds `"<exe_path>" <suffix>` (quoted only if exe_path has a space) into
- * out->command. */
+ * out->command. An empty suffix ("") leaves no trailing space. */
 static void build_command(LocalShellSpec *out, const char *exe_path, const char *suffix)
 {
     char quoted[LOCAL_SHELL_PATH_MAX + 2];
@@ -139,7 +164,11 @@ static void build_command(LocalShellSpec *out, const char *exe_path, const char 
         /* Overflow (a pathologically long path): best effort, unquoted. */
         (void)snprintf(quoted, sizeof(quoted), "%s", exe_path);
     }
-    (void)snprintf(out->command, sizeof(out->command), "%s %s", quoted, suffix);
+    if (suffix && suffix[0] != '\0') {
+        (void)snprintf(out->command, sizeof(out->command), "%s %s", quoted, suffix);
+    } else {
+        (void)snprintf(out->command, sizeof(out->command), "%s", quoted);
+    }
 }
 
 static void env_add(LocalShellSpec *out, const char *name, const char *value)
@@ -151,25 +180,34 @@ static void env_add(LocalShellSpec *out, const char *name, const char *value)
     out->env_count++;
 }
 
-/* Spec 4.3, in the fixed order the tests index by. */
+/* Spec section 10, in the fixed order the tests index by. HOME, SHELL, the PATH
+ * prepend and MSYSTEM are bash-specific -- meaningless to PowerShell or
+ * cmd.exe, and no longer assumed of a custom command either, now that a
+ * bare custom executable is resolved against the same system directories
+ * those two use (local_shell_resolve_bare()). TERM and NUTSHELL are always
+ * added. */
 static void fill_env(LocalShellSpec *out, const LocalShellProbe *probe)
 {
     out->env_count = 0;
 
     env_add(out, "TERM", "xterm-256color");
 
-    char userprofile[LOCAL_SHELL_PATH_MAX];
-    if (probe_env(probe, "USERPROFILE", userprofile, sizeof(userprofile))) {
-        env_add(out, "HOME", userprofile);
-    }
+    int is_bash = (out->kind == SHELL_GITBASH || out->kind == SHELL_MSYS2);
 
-    if (out->exe[0] != '\0') {
-        env_add(out, "SHELL", out->exe);
+    if (is_bash) {
+        char userprofile[LOCAL_SHELL_PATH_MAX];
+        if (probe_env(probe, "USERPROFILE", userprofile, sizeof(userprofile))) {
+            env_add(out, "HOME", userprofile);
+        }
+
+        if (out->exe[0] != '\0') {
+            env_add(out, "SHELL", out->exe);
+        }
     }
 
     env_add(out, "NUTSHELL", APP_VERSION);
 
-    if (out->dir[0] != '\0') {
+    if (is_bash && out->dir[0] != '\0') {
         char parent_path[LOCAL_SHELL_ENV_VALUE_MAX];
         int have_parent = probe_env(probe, "PATH", parent_path, sizeof(parent_path));
         /* When the parent PATH can't be read -- probe->env is NULL, PATH is
@@ -203,23 +241,50 @@ static void fill_env(LocalShellSpec *out, const LocalShellProbe *probe)
     }
 }
 
-/* ---- the search steps of spec 4.2 ---------------------------------------- */
+/* ---- the search steps of spec section 10 ----------------------------------------
+ *
+ * Each try_* has the same shape -- (probe, out) -> 1 on success, spec filled
+ * in; 0 otherwise, spec untouched -- so local_shell_resolve() and
+ * local_shell_list_available() can both walk them uniformly. */
 
-static int try_busybox(const LocalShellProbe *probe, const char *dir, LocalShellSpec *out)
+static int try_pwsh(const LocalShellProbe *probe, LocalShellSpec *out)
 {
-    static const char *names[2] = { "busybox64.exe", "busybox.exe" };
-    for (size_t i = 0; i < 2; i++) {
-        char full[LOCAL_SHELL_PATH_MAX];
-        if (!join_path(dir, names[i], full, sizeof(full))) continue;
-        if (probe_exists(probe, full)) {
-            out->kind = SHELL_BUSYBOX;
-            (void)snprintf(out->exe, sizeof(out->exe), "%s", full);
-            (void)snprintf(out->dir, sizeof(out->dir), "%s", dir);
-            build_command(out, full, "bash -l");
-            return 1;
-        }
-    }
-    return 0;
+    char program_files[LOCAL_SHELL_PATH_MAX];
+    if (!probe_env(probe, "ProgramFiles", program_files, sizeof(program_files)))
+        return 0;
+
+    char ps_dir[LOCAL_SHELL_PATH_MAX];
+    char exe_path[LOCAL_SHELL_PATH_MAX];
+    if (!join_path(program_files, "PowerShell\\7", ps_dir, sizeof(ps_dir))) return 0;
+    if (!join_path(ps_dir, "pwsh.exe", exe_path, sizeof(exe_path))) return 0;
+    if (!probe_exists(probe, exe_path)) return 0;
+
+    out->kind = SHELL_PWSH;
+    (void)snprintf(out->exe, sizeof(out->exe), "%s", exe_path);
+    (void)snprintf(out->dir, sizeof(out->dir), "%s", ps_dir);
+    build_command(out, exe_path, "-NoLogo");
+    return 1;
+}
+
+static int try_powershell(const LocalShellProbe *probe, LocalShellSpec *out)
+{
+    char system_root[LOCAL_SHELL_PATH_MAX];
+    if (!probe_env(probe, "SystemRoot", system_root, sizeof(system_root)))
+        return 0;
+
+    char ps_dir[LOCAL_SHELL_PATH_MAX];
+    char exe_path[LOCAL_SHELL_PATH_MAX];
+    if (!join_path(system_root, "System32\\WindowsPowerShell\\v1.0",
+                   ps_dir, sizeof(ps_dir)))
+        return 0;
+    if (!join_path(ps_dir, "powershell.exe", exe_path, sizeof(exe_path))) return 0;
+    if (!probe_exists(probe, exe_path)) return 0;
+
+    out->kind = SHELL_POWERSHELL;
+    (void)snprintf(out->exe, sizeof(out->exe), "%s", exe_path);
+    (void)snprintf(out->dir, sizeof(out->dir), "%s", ps_dir);
+    build_command(out, exe_path, "-NoLogo");
+    return 1;
 }
 
 static int try_gitbash(const LocalShellProbe *probe, LocalShellSpec *out)
@@ -263,7 +328,148 @@ static int try_msys2(const LocalShellProbe *probe, LocalShellSpec *out)
     return 1;
 }
 
-/* ---- public API ----------------------------------------------------------- */
+static int try_cmd(const LocalShellProbe *probe, LocalShellSpec *out)
+{
+    char system_root[LOCAL_SHELL_PATH_MAX];
+    if (!probe_env(probe, "SystemRoot", system_root, sizeof(system_root)))
+        return 0;
+
+    char sys32[LOCAL_SHELL_PATH_MAX];
+    char exe_path[LOCAL_SHELL_PATH_MAX];
+    if (!join_path(system_root, "System32", sys32, sizeof(sys32))) return 0;
+    if (!join_path(sys32, "cmd.exe", exe_path, sizeof(exe_path))) return 0;
+    if (!probe_exists(probe, exe_path)) return 0;
+
+    out->kind = SHELL_CMD;
+    (void)snprintf(out->exe, sizeof(out->exe), "%s", exe_path);
+    (void)snprintf(out->dir, sizeof(out->dir), "%s", sys32);
+    build_command(out, exe_path, "");
+    return 1;
+}
+
+/* ---- local_shell_resolve_bare(): bare custom executable, resolved safely - */
+
+/* Non-zero when `s[0..len)` (not NUL-terminated beyond len) is an absolute
+ * Windows path: a drive letter ("C:\\..." or "C:/...") or a UNC prefix
+ * ("\\\\server\\..."). A relative PATH entry never matches -- it would
+ * resolve against the current directory, exactly the hazard
+ * local_shell_resolve_bare() exists to avoid. */
+static int path_is_absolute(const char *s, size_t len)
+{
+    if (len >= 3 &&
+        ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z')) &&
+        s[1] == ':' && (s[2] == '\\' || s[2] == '/')) {
+        return 1;
+    }
+    if (len >= 2 && s[0] == '\\' && s[1] == '\\') return 1;
+    return 0;
+}
+
+static int name_has_extension(const char *name)
+{
+    const char *dot = strrchr(name, '.');
+    return dot != NULL;
+}
+
+/* Tries dir\name, and, when name has no extension, dir\name.exe -- the
+ * second so a bare "powershell" resolves the same way CreateProcess itself
+ * would have appended ".exe" to it. */
+static int try_dir_for_bare(const LocalShellProbe *probe, const char *dir,
+                            const char *name, char *out, size_t out_size)
+{
+    if (!dir || dir[0] == '\0') return 0;
+
+    char full[LOCAL_SHELL_PATH_MAX];
+    if (join_path(dir, name, full, sizeof(full)) && probe_exists(probe, full)) {
+        (void)snprintf(out, out_size, "%s", full);
+        return 1;
+    }
+
+    if (!name_has_extension(name)) {
+        char with_exe[LOCAL_SHELL_PATH_MAX];
+        int n = snprintf(with_exe, sizeof(with_exe), "%s.exe", name);
+        if (n > 0 && (size_t)n < sizeof(with_exe) &&
+            join_path(dir, with_exe, full, sizeof(full)) &&
+            probe_exists(probe, full)) {
+            (void)snprintf(out, out_size, "%s", full);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* System32, then the Windows directory, then each absolute PATH entry --
+ * never the exe's own directory, never the current directory. */
+static int find_bare_exe(const char *name, const LocalShellProbe *probe,
+                         char *out, size_t out_size)
+{
+    if (out_size > 0) out[0] = '\0';
+    if (!name || name[0] == '\0') return 0;
+
+    char system_root[LOCAL_SHELL_PATH_MAX];
+    if (probe_env(probe, "SystemRoot", system_root, sizeof(system_root))) {
+        char sys32[LOCAL_SHELL_PATH_MAX];
+        if (join_path(system_root, "System32", sys32, sizeof(sys32)) &&
+            try_dir_for_bare(probe, sys32, name, out, out_size)) {
+            return 1;
+        }
+        if (try_dir_for_bare(probe, system_root, name, out, out_size)) {
+            return 1;
+        }
+    }
+
+    char path_val[LOCAL_SHELL_ENV_VALUE_MAX];
+    if (probe_env(probe, "PATH", path_val, sizeof(path_val))) {
+        const char *p = path_val;
+        while (*p != '\0') {
+            const char *semi = strchr(p, ';');
+            size_t len = semi ? (size_t)(semi - p) : strlen(p);
+            if (len > 0 && len < LOCAL_SHELL_PATH_MAX && path_is_absolute(p, len)) {
+                char dir[LOCAL_SHELL_PATH_MAX];
+                memcpy(dir, p, len);
+                dir[len] = '\0';
+                if (try_dir_for_bare(probe, dir, name, out, out_size)) {
+                    return 1;
+                }
+            }
+            p += len;
+            if (*p == ';') p++;
+        }
+    }
+
+    return 0;
+}
+
+int local_shell_resolve_bare(LocalShellSpec *spec, const LocalShellProbe *probe)
+{
+    if (!spec) return 1;
+    if (spec->kind != SHELL_CUSTOM) return 1;
+    if (spec->exe[0] == '\0') return 1;
+    if (strpbrk(spec->exe, "\\/") != NULL) return 1; /* already has a path */
+
+    char resolved[LOCAL_SHELL_PATH_MAX];
+    if (!find_bare_exe(spec->exe, probe, resolved, sizeof(resolved))) {
+        return 0;
+    }
+
+    char suffix[LOCAL_SHELL_CMD_MAX];
+    command_suffix(spec->command, suffix, sizeof(suffix));
+
+    (void)snprintf(spec->exe, sizeof(spec->exe), "%s", resolved);
+    spec->dir[0] = '\0';
+    const char *last_slash = strrchr(resolved, '\\');
+    if (last_slash) {
+        size_t dlen = (size_t)(last_slash - resolved);
+        if (dlen < sizeof(spec->dir)) {
+            memcpy(spec->dir, resolved, dlen);
+            spec->dir[dlen] = '\0';
+        }
+    }
+    build_command(spec, resolved, suffix);
+    return 1;
+}
+
+/* ---- public API ------------------------------------------------------------ */
 
 int local_shell_runtime_dir(const LocalShellProbe *probe, char *out, size_t out_size)
 {
@@ -299,21 +505,16 @@ LocalShellKind local_shell_resolve(const char *profile_shell,
         return out->kind;
     }
 
-    /* Step 2: busybox64.exe / busybox.exe next to nutshell.exe. */
-    if (probe && probe->exe_dir && probe->exe_dir[0] != '\0') {
-        if (try_busybox(probe, probe->exe_dir, out)) {
-            fill_env(out, probe);
-            return out->kind;
-        }
+    /* Step 2: PowerShell 7. */
+    if (try_pwsh(probe, out)) {
+        fill_env(out, probe);
+        return out->kind;
     }
 
-    /* Step 3: the same two names in the runtime directory. */
-    char runtime_dir[LOCAL_SHELL_PATH_MAX];
-    if (local_shell_runtime_dir(probe, runtime_dir, sizeof(runtime_dir))) {
-        if (try_busybox(probe, runtime_dir, out)) {
-            fill_env(out, probe);
-            return out->kind;
-        }
+    /* Step 3: Windows PowerShell. */
+    if (try_powershell(probe, out)) {
+        fill_env(out, probe);
+        return out->kind;
     }
 
     /* Step 4: Git for Windows. */
@@ -328,19 +529,62 @@ LocalShellKind local_shell_resolve(const char *profile_shell,
         return out->kind;
     }
 
-    /* Step 6: nothing found. */
+    /* Step 6: cmd.exe. */
+    if (try_cmd(probe, out)) {
+        fill_env(out, probe);
+        return out->kind;
+    }
+
+    /* Step 7: nothing found. */
     out->kind = SHELL_NONE;
     (void)snprintf(out->error, sizeof(out->error), "%s", LOCAL_SHELL_NONE_MESSAGE);
     return out->kind;
 }
 
+typedef int (*ShellTryFn)(const LocalShellProbe *, LocalShellSpec *);
+
+static const struct {
+    ShellTryFn  try_fn;
+    const char *display;
+} SHELL_STEPS[] = {
+    { try_pwsh,       "PowerShell 7" },
+    { try_powershell, "Windows PowerShell" },
+    { try_gitbash,    "Git for Windows bash" },
+    { try_msys2,      "MSYS2 bash" },
+    { try_cmd,        "Command Prompt" },
+};
+
+int local_shell_list_available(const LocalShellProbe *probe,
+                               LocalShellChoice *out, int out_max)
+{
+    if (!out || out_max <= 0) return 0;
+
+    int n = 0;
+    size_t step_count = sizeof(SHELL_STEPS) / sizeof(SHELL_STEPS[0]);
+    for (size_t i = 0; i < step_count && n < out_max; i++) {
+        LocalShellSpec spec;
+        memset(&spec, 0, sizeof(spec));
+        if (SHELL_STEPS[i].try_fn(probe, &spec)) {
+            out[n].kind = spec.kind;
+            (void)snprintf(out[n].display, sizeof(out[n].display),
+                           "%s", SHELL_STEPS[i].display);
+            (void)snprintf(out[n].command, sizeof(out[n].command),
+                           "%s", spec.command);
+            n++;
+        }
+    }
+    return n;
+}
+
 const char *local_shell_kind_name(LocalShellKind kind)
 {
     switch (kind) {
-        case SHELL_BUSYBOX: return "busybox";
-        case SHELL_GITBASH:  return "Git bash";
-        case SHELL_MSYS2:    return "MSYS2";
-        case SHELL_CUSTOM:   return "custom";
+        case SHELL_PWSH:
+        case SHELL_POWERSHELL: return "PowerShell";
+        case SHELL_GITBASH:    return "Git bash";
+        case SHELL_MSYS2:      return "MSYS2";
+        case SHELL_CMD:        return "cmd";
+        case SHELL_CUSTOM:     return "custom";
         case SHELL_NONE:
         default:
             return NULL;
@@ -380,11 +624,13 @@ const char *local_shell_spec_name(const LocalShellSpec *spec)
 int local_shell_kind_is_posix(LocalShellKind kind)
 {
     switch (kind) {
-        case SHELL_BUSYBOX:
         case SHELL_GITBASH:
         case SHELL_MSYS2:
             return 1;
         case SHELL_CUSTOM:
+        case SHELL_PWSH:
+        case SHELL_POWERSHELL:
+        case SHELL_CMD:
         case SHELL_NONE:
         default:
             return 0;

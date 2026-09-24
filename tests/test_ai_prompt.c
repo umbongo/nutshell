@@ -796,7 +796,7 @@ int test_ai_system_prompt_no_terminal(void) {
 }
 
 /* A local session's prompt opens by naming the local shell instead of an SSH
- * session, so the model does not suggest apt or systemctl on a busybox shell
+ * session, so the model does not suggest apt or systemctl on a Windows shell
  * (spec 2026-09-22-local-shell-design.md section 6). */
 int test_ai_system_prompt_local_shell(void) {
     TEST_BEGIN();
@@ -814,8 +814,8 @@ int test_ai_system_prompt_local_shell(void) {
 
     /* A named shell is used verbatim; NULL lists the possibilities */
     ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
-                           SESSION_LOCAL, "busybox");
-    ASSERT_TRUE(strstr(buf, "a local shell (busybox) on a Windows PC") != NULL);
+                           SESSION_LOCAL, "cmd");
+    ASSERT_TRUE(strstr(buf, "a local shell (cmd) on a Windows PC") != NULL);
 
     /* local_shell_spec_name()'s "PowerShell" reaches the prompt the same way */
     ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
@@ -845,7 +845,7 @@ int test_ai_system_prompt_powershell_examples(void) {
 
     /* A non-PowerShell local shell keeps the bash examples. */
     ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
-                           SESSION_LOCAL, "busybox");
+                           SESSION_LOCAL, "cmd");
     ASSERT_TRUE(strstr(buf, "[EXEC]ls -la[/EXEC]") != NULL);
     ASSERT_TRUE(strstr(buf, "Write PowerShell syntax, not bash.") == NULL);
 

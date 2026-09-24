@@ -23,7 +23,6 @@ int test_local_pty_echo_through_cmd(void);
 int test_local_pty_close_with_sleeping_grandchild(void);
 int test_local_pty_records_opening_bytes(void);
 int test_local_pty_records_key_mapping(void);
-int test_local_pty_records_busybox_cat_v(void);
 int test_local_pty_records_fullscreen_modes(void);
 int test_key_layout_records_ctrl_space(void);
 int nspty_key_dump_main(void);
@@ -66,7 +65,7 @@ int nspty_key_dump_main(void);
 /* test_local_pty_records_key_mapping runs this executable again, under a
  * pseudo-console, as the program whose console input it records. */
 #define KEY_DUMP_FLAG  "--dump-keys"
-#define PTY_CASE_COUNT 7
+#define PTY_CASE_COUNT 6
 
 struct PtyCase { const char *name; int (*fn)(void); };
 
@@ -80,8 +79,6 @@ static int run_pty_cases(void)
           test_local_pty_records_opening_bytes },
         { "test_local_pty_records_key_mapping",
           test_local_pty_records_key_mapping },
-        { "test_local_pty_records_busybox_cat_v",
-          test_local_pty_records_busybox_cat_v },
         { "test_local_pty_records_fullscreen_modes",
           test_local_pty_records_fullscreen_modes },
         { "test_key_layout_records_ctrl_space",

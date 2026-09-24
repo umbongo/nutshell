@@ -19,7 +19,8 @@
  *
  * The fixture is a real recording made on the maintainer's Windows box on
  * 2026-09-22: Git for Windows bash 5 -- which is what local_shell_resolve()
- * picks on that host, there being no busybox sidecar -- running `ls -l` on a
+ * picked on that host at the time (busybox has since been removed as a
+ * local-shell option entirely, 2026-09-24) -- running `ls -l` on a
  * four-entry directory, captured straight off the pseudo-console's pipe.
  * It is a fixture, not a golden master of the emulator: what is asserted is
  * that the *content* survives the dialect.

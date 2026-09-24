@@ -52,7 +52,7 @@ int test_ui_demo_build_local_swaps_terminal_text_only(void)
     ASSERT_EQ(conv.msg_count, 1);
     ASSERT_EQ(approval.count, 0);
     ASSERT_EQ(approval2.count, 0);
-    ASSERT_TRUE(strstr(term_buf, "busybox") != NULL);
+    ASSERT_TRUE(strstr(term_buf, "PS C:\\Users\\thomas>") != NULL);
     ASSERT_TRUE(strstr(term_buf, "web-01") == NULL);
 
     /* Every other state keeps the SSH transcript. */

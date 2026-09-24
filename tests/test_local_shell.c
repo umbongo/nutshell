@@ -92,7 +92,7 @@ static int fake_registry(void *ctx, const char *key, const char *value,
     return 1;
 }
 
-static LocalShellProbe fake_probe(FakeProbeData *d, const char *exe_dir)
+static LocalShellProbe fake_probe(FakeProbeData *d)
 {
     LocalShellProbe p;
     memset(&p, 0, sizeof(p));
@@ -100,7 +100,6 @@ static LocalShellProbe fake_probe(FakeProbeData *d, const char *exe_dir)
     p.env = fake_env;
     p.registry_string = fake_registry;
     p.ctx = d;
-    p.exe_dir = exe_dir;
     return p;
 }
 
@@ -113,12 +112,13 @@ int test_local_shell_custom_wins_over_everything(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    /* Both busybox and Git bash are available too. */
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
+    /* pwsh, Git bash and MSYS2 are all available too. */
+    fake_add_env(&d, "ProgramFiles", "C:\\Program Files");
+    fake_add_path(&d, "C:\\Program Files\\PowerShell\\7\\pwsh.exe");
     fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
     fake_add_path(&d, "C:\\Git\\bin\\bash.exe");
     fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve("mycustomshell.exe --flag", &p, &spec);
@@ -148,7 +148,7 @@ int test_local_shell_custom_blank_profile_shell_falls_through(void)
     FakeProbeData d;
     fake_reset(&d);
     fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve("   ", &p, &spec);
@@ -180,100 +180,91 @@ int test_local_shell_custom_exe_without_dir_when_no_backslash(void)
 }
 
 /* =========================================================================
- * Busybox sidecar (steps 2 and 3)
+ * PowerShell 7 (step 2)
  * ========================================================================= */
 
-int test_local_shell_busybox64_beside_exe_wins(void)
+int test_local_shell_pwsh_from_program_files(void)
 {
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
-    fake_add_path(&d, "C:\\nutshell\\busybox.exe");
-    fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
-    fake_add_path(&d, "C:\\Git\\bin\\bash.exe");
+    fake_add_env(&d, "ProgramFiles", "C:\\Program Files");
+    fake_add_path(&d, "C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
+
+    ASSERT_EQ((int)k, (int)SHELL_PWSH);
+    ASSERT_STR_EQ(spec.exe, "C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    ASSERT_STR_EQ(spec.dir, "C:\\Program Files\\PowerShell\\7");
+    ASSERT_STR_EQ(spec.command,
+                 "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoLogo");
+    ASSERT_STR_EQ(local_shell_kind_name(spec.kind), "PowerShell");
+    ASSERT_EQ(local_shell_kind_is_posix(spec.kind), 0);
+    TEST_END();
+}
+
+int test_local_shell_pwsh_absent_falls_through(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "ProgramFiles", "C:\\Program Files");
+    /* pwsh.exe does not exist there. */
     fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
-    LocalShellKind k = local_shell_resolve("", &p, &spec);
-
-    ASSERT_EQ((int)k, (int)SHELL_BUSYBOX);
-    ASSERT_STR_EQ(spec.exe, "C:\\nutshell\\busybox64.exe");
-    ASSERT_STR_EQ(spec.dir, "C:\\nutshell");
-    ASSERT_STR_EQ(spec.command, "C:\\nutshell\\busybox64.exe bash -l");
-    ASSERT_STR_EQ(local_shell_kind_name(spec.kind), "busybox");
-    ASSERT_EQ(local_shell_kind_is_posix(spec.kind), 1);
+    LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
+    ASSERT_EQ((int)k, (int)SHELL_MSYS2);
     TEST_END();
 }
 
-int test_local_shell_busybox_plain_when_64_absent(void)
+/* =========================================================================
+ * Windows PowerShell (step 3)
+ * ========================================================================= */
+
+int test_local_shell_powershell_from_system_root(void)
 {
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox.exe"); /* no busybox64.exe */
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d,
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
 
-    ASSERT_EQ((int)k, (int)SHELL_BUSYBOX);
-    ASSERT_STR_EQ(spec.exe, "C:\\nutshell\\busybox.exe");
-    ASSERT_STR_EQ(spec.command, "C:\\nutshell\\busybox.exe bash -l");
+    ASSERT_EQ((int)k, (int)SHELL_POWERSHELL);
+    ASSERT_STR_EQ(spec.exe,
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    ASSERT_STR_EQ(spec.dir,
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0");
+    ASSERT_STR_EQ(spec.command,
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo");
+    ASSERT_STR_EQ(local_shell_kind_name(spec.kind), "PowerShell");
+    ASSERT_EQ(local_shell_kind_is_posix(spec.kind), 0);
     TEST_END();
 }
 
-int test_local_shell_busybox_runtime_dir_used_when_exe_dir_absent(void)
+int test_local_shell_pwsh_wins_over_powershell(void)
 {
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_env(&d, "LOCALAPPDATA", "C:\\Users\\tom\\AppData\\Local");
-    fake_add_path(&d, "C:\\Users\\tom\\AppData\\Local\\Nutshell\\runtime\\busybox64.exe");
-    LocalShellProbe p = fake_probe(&d, NULL); /* no sidecar directory */
+    fake_add_env(&d, "ProgramFiles", "C:\\Program Files");
+    fake_add_path(&d, "C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d,
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
-
-    ASSERT_EQ((int)k, (int)SHELL_BUSYBOX);
-    ASSERT_STR_EQ(spec.dir, "C:\\Users\\tom\\AppData\\Local\\Nutshell\\runtime");
-    TEST_END();
-}
-
-int test_local_shell_busybox_exe_dir_wins_over_runtime_dir(void)
-{
-    TEST_BEGIN();
-    FakeProbeData d;
-    fake_reset(&d);
-    fake_add_env(&d, "LOCALAPPDATA", "C:\\Users\\tom\\AppData\\Local");
-    fake_add_path(&d, "C:\\Users\\tom\\AppData\\Local\\Nutshell\\runtime\\busybox64.exe");
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
-
-    LocalShellSpec spec;
-    LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
-
-    ASSERT_EQ((int)k, (int)SHELL_BUSYBOX);
-    ASSERT_STR_EQ(spec.dir, "C:\\nutshell");
-    TEST_END();
-}
-
-int test_local_shell_busybox_runtime_dir_not_used_when_localappdata_unset(void)
-{
-    TEST_BEGIN();
-    FakeProbeData d;
-    fake_reset(&d);
-    /* No LOCALAPPDATA entry at all. If the resolver mistakenly searched a
-     * literal "\Nutshell\runtime" it would find this. */
-    fake_add_path(&d, "\\Nutshell\\runtime\\busybox64.exe");
-    LocalShellProbe p = fake_probe(&d, NULL);
-
-    LocalShellSpec spec;
-    LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
-
-    ASSERT_TRUE(k != SHELL_BUSYBOX);
-    ASSERT_EQ((int)k, (int)SHELL_NONE);
+    ASSERT_EQ((int)k, (int)SHELL_PWSH);
     TEST_END();
 }
 
@@ -288,7 +279,7 @@ int test_local_shell_gitbash_from_registry(void)
     fake_reset(&d);
     fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
     fake_add_path(&d, "C:\\Git\\bin\\bash.exe");
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
@@ -310,7 +301,7 @@ int test_local_shell_gitbash_from_programfiles_when_registry_missing(void)
     /* No registry answer configured -> fake_registry always fails. */
     fake_add_env(&d, "ProgramFiles", "C:\\Program Files");
     fake_add_path(&d, "C:\\Program Files\\Git\\bin\\bash.exe");
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
@@ -329,7 +320,7 @@ int test_local_shell_gitbash_not_accepted_when_bash_missing(void)
     fake_reset(&d);
     fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
     /* bash.exe does NOT exist at C:\Git\bin\bash.exe. */
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
@@ -340,16 +331,16 @@ int test_local_shell_gitbash_not_accepted_when_bash_missing(void)
 }
 
 /* =========================================================================
- * MSYS2 (step 5) — last resort, only kind that adds MSYSTEM
+ * MSYS2 (step 5)
  * ========================================================================= */
 
-int test_local_shell_msys2_last_resort(void)
+int test_local_shell_msys2_used_when_no_ps_or_gitbash(void)
 {
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
     fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
@@ -377,12 +368,13 @@ int test_local_shell_only_msys2_sets_msystem(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
+    fake_add_path(&d, "C:\\Git\\bin\\bash.exe");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
-    ASSERT_EQ((int)k, (int)SHELL_BUSYBOX);
+    ASSERT_EQ((int)k, (int)SHELL_GITBASH);
     for (int i = 0; i < spec.env_count; i++) {
         ASSERT_TRUE(strcmp(spec.env[i].name, "MSYSTEM") != 0);
     }
@@ -390,7 +382,32 @@ int test_local_shell_only_msys2_sets_msystem(void)
 }
 
 /* =========================================================================
- * Nothing found (step 6)
+ * cmd.exe (step 6) -- the guaranteed-present fallback
+ * ========================================================================= */
+
+int test_local_shell_cmd_used_as_last_resort(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d, "C:\\Windows\\System32\\cmd.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
+
+    ASSERT_EQ((int)k, (int)SHELL_CMD);
+    ASSERT_STR_EQ(spec.exe, "C:\\Windows\\System32\\cmd.exe");
+    ASSERT_STR_EQ(spec.dir, "C:\\Windows\\System32");
+    ASSERT_STR_EQ(spec.command, "C:\\Windows\\System32\\cmd.exe");
+    ASSERT_STR_EQ(local_shell_kind_name(spec.kind), "cmd");
+    ASSERT_EQ(local_shell_kind_is_posix(spec.kind), 0);
+    TEST_END();
+}
+
+/* =========================================================================
+ * Nothing found (step 7)
  * ========================================================================= */
 
 int test_local_shell_none_when_nothing_found(void)
@@ -398,7 +415,7 @@ int test_local_shell_none_when_nothing_found(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
@@ -412,7 +429,8 @@ int test_local_shell_none_when_nothing_found(void)
 }
 
 /* =========================================================================
- * Environment additions (spec 4.3)
+ * Environment additions -- TERM/NUTSHELL always; HOME/SHELL/PATH-prepend/
+ * MSYSTEM only for the two bash kinds (spec 9.3)
  * ========================================================================= */
 
 int test_local_shell_env_term_always_present(void)
@@ -420,8 +438,8 @@ int test_local_shell_env_term_always_present(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     local_shell_resolve(NULL, &p, &spec);
@@ -432,14 +450,55 @@ int test_local_shell_env_term_always_present(void)
     TEST_END();
 }
 
+int test_local_shell_env_term_and_nutshell_only_for_powershell(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "ProgramFiles", "C:\\Program Files");
+    fake_add_path(&d, "C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    fake_add_env(&d, "USERPROFILE", "C:\\Users\\tom"); /* ignored: not bash */
+    fake_add_env(&d, "PATH", "C:\\Windows");            /* ignored: not bash */
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
+    ASSERT_EQ((int)k, (int)SHELL_PWSH);
+    ASSERT_EQ(spec.env_count, 2);
+    ASSERT_STR_EQ(spec.env[0].name, "TERM");
+    ASSERT_STR_EQ(spec.env[1].name, "NUTSHELL");
+    for (int i = 0; i < spec.env_count; i++) {
+        ASSERT_TRUE(strcmp(spec.env[i].name, "HOME") != 0);
+        ASSERT_TRUE(strcmp(spec.env[i].name, "SHELL") != 0);
+        ASSERT_TRUE(strcmp(spec.env[i].name, "PATH") != 0);
+    }
+    TEST_END();
+}
+
+int test_local_shell_env_term_and_nutshell_only_for_cmd(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d, "C:\\Windows\\System32\\cmd.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
+    ASSERT_EQ((int)k, (int)SHELL_CMD);
+    ASSERT_EQ(spec.env_count, 2);
+    TEST_END();
+}
+
 int test_local_shell_env_home_present_when_userprofile_set(void)
 {
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
     fake_add_env(&d, "USERPROFILE", "C:\\Users\\tom");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     local_shell_resolve(NULL, &p, &spec);
@@ -454,8 +513,8 @@ int test_local_shell_env_home_absent_when_userprofile_unset(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     local_shell_resolve(NULL, &p, &spec);
@@ -471,8 +530,8 @@ int test_local_shell_env_shell_equals_exe(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     local_shell_resolve(NULL, &p, &spec);
@@ -493,8 +552,8 @@ int test_local_shell_env_nutshell_equals_app_version(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     local_shell_resolve(NULL, &p, &spec);
@@ -515,9 +574,9 @@ int test_local_shell_env_path_prepends_dir_keeps_parent(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
     fake_add_env(&d, "PATH", "C:\\Windows;C:\\Windows\\System32");
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     local_shell_resolve(NULL, &p, &spec);
@@ -526,7 +585,7 @@ int test_local_shell_env_path_prepends_dir_keeps_parent(void)
     for (int i = 0; i < spec.env_count; i++) {
         if (strcmp(spec.env[i].name, "PATH") == 0) {
             ASSERT_STR_EQ(spec.env[i].value,
-                         "C:\\nutshell;C:\\Windows;C:\\Windows\\System32");
+                         "C:\\msys64\\usr\\bin;C:\\Windows;C:\\Windows\\System32");
             found = 1;
         }
     }
@@ -544,9 +603,9 @@ int test_local_shell_env_path_absent_when_parent_unavailable(void)
      * unchanged (spec 4.3). */
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
     /* No parent PATH set. */
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     local_shell_resolve(NULL, &p, &spec);
@@ -571,9 +630,9 @@ int test_local_shell_env_path_absent_when_parent_does_not_fit(void)
 
     FakeProbeData d;
     fake_reset(&d);
-    fake_add_path(&d, "C:\\nutshell\\busybox64.exe");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
     fake_add_env(&d, "PATH", huge_path);
-    LocalShellProbe p = fake_probe(&d, "C:\\nutshell");
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     local_shell_resolve(NULL, &p, &spec);
@@ -587,7 +646,9 @@ int test_local_shell_env_path_absent_when_parent_does_not_fit(void)
 int test_local_shell_env_path_absent_when_dir_empty(void)
 {
     TEST_BEGIN();
-    /* A custom shell with a token that has no directory component. */
+    /* A custom shell with a token that has no directory component -- and
+     * no probe, so local_shell_resolve_bare() (run separately by the
+     * caller) never gets the chance to give it one either. */
     LocalShellSpec spec;
     local_shell_resolve("mycmd", NULL, &spec);
     ASSERT_STR_EQ(spec.dir, "");
@@ -610,13 +671,291 @@ int test_local_shell_env_count_never_exceeds_max(void)
     fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
     fake_add_env(&d, "USERPROFILE", "C:\\Users\\tom");
     fake_add_env(&d, "PATH", "C:\\Windows");
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
     ASSERT_EQ((int)k, (int)SHELL_MSYS2);
     ASSERT_EQ(spec.env_count, LOCAL_SHELL_ENV_MAX);
     ASSERT_TRUE(spec.env_count <= LOCAL_SHELL_ENV_MAX);
+    TEST_END();
+}
+
+/* =========================================================================
+ * local_shell_resolve_bare(): a bare custom executable resolved safely,
+ * never against the exe's own directory or the current directory
+ * ========================================================================= */
+
+int test_local_shell_resolve_bare_noop_for_non_custom(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    memset(&spec, 0, sizeof(spec));
+    spec.kind = SHELL_MSYS2;
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 1);
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_noop_when_already_has_path(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    local_shell_resolve("C:\\Windows\\System32\\cmd.exe /k", NULL, &spec);
+    char before[LOCAL_SHELL_PATH_MAX];
+    (void)snprintf(before, sizeof(before), "%s", spec.exe);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 1);
+    ASSERT_STR_EQ(spec.exe, before);
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_noop_for_relative_path_token(void)
+{
+    TEST_BEGIN();
+    /* Has a '/' -- treated as "already has a path", not bare, even though
+     * it isn't absolute. Whatever local_pty.c does with a relative custom
+     * path is a separate concern; this function only guards bare names. */
+    LocalShellSpec spec;
+    local_shell_resolve("tools/shell.exe", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 1);
+    ASSERT_STR_EQ(spec.exe, "tools/shell.exe");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_found_in_system32(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d, "C:\\Windows\\System32\\notepad.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("notepad.exe -foo", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_STR_EQ(spec.exe, "C:\\Windows\\System32\\notepad.exe");
+    ASSERT_STR_EQ(spec.dir, "C:\\Windows\\System32");
+    ASSERT_STR_EQ(spec.command, "C:\\Windows\\System32\\notepad.exe -foo");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_appends_exe_when_no_extension(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d, "C:\\Windows\\System32\\powershell.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("powershell", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_STR_EQ(spec.exe, "C:\\Windows\\System32\\powershell.exe");
+    ASSERT_STR_EQ(spec.command, "C:\\Windows\\System32\\powershell.exe");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_found_in_windows_dir(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d, "C:\\Windows\\write.exe"); /* not in System32 */
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("write.exe", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_STR_EQ(spec.exe, "C:\\Windows\\write.exe");
+    ASSERT_STR_EQ(spec.dir, "C:\\Windows");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_found_via_absolute_path_entry(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows"); /* not found there */
+    fake_add_env(&d, "PATH",
+                "C:\\tools;C:\\Program Files\\MyApp");
+    fake_add_path(&d, "C:\\Program Files\\MyApp\\myapp.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("myapp.exe", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_STR_EQ(spec.exe, "C:\\Program Files\\MyApp\\myapp.exe");
+    ASSERT_STR_EQ(spec.dir, "C:\\Program Files\\MyApp");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_skips_relative_path_entries(void)
+{
+    TEST_BEGIN();
+    /* A relative PATH entry ("." or "sub\dir") is never searched -- that
+     * would resolve against the current directory, exactly the hazard this
+     * function exists to prevent. The file "exists" there in the fake, but
+     * must not be found because the entry that would find it is relative. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_env(&d, "PATH", ".;tools");
+    fake_add_path(&d, ".\\evil.exe");
+    fake_add_path(&d, "tools\\evil.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("evil.exe", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 0);
+    ASSERT_STR_EQ(spec.exe, "evil.exe"); /* untouched */
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_never_searches_exe_dir_or_cwd(void)
+{
+    TEST_BEGIN();
+    /* The whole point: a bare name is not looked up the way CreateProcess
+     * itself would (exe folder, then CWD, before System32). No probe
+     * callback here can even express "beside nutshell.exe" or "the current
+     * directory" any more -- there is no exe_dir field left to abuse, and
+     * nothing here mentions LOCALAPPDATA either. A malicious
+     * "C:\nutshell\powershell.exe" some other program dropped next to the
+     * real one must never be picked. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d, "C:\\nutshell\\powershell.exe"); /* beside the exe */
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("powershell.exe", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 0);
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_fails_clearly_when_not_found(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("nosuchtool.exe --flag", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 0);
+    /* Untouched: still the bare, unresolved (and therefore unsafe to run)
+     * form -- the caller is expected to refuse to launch it. */
+    ASSERT_STR_EQ(spec.exe, "nosuchtool.exe");
+    ASSERT_STR_EQ(spec.command, "nosuchtool.exe --flag");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_null_safety(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(local_shell_resolve_bare(NULL, NULL), 1);
+    TEST_END();
+}
+
+/* =========================================================================
+ * local_shell_list_available(): the profile editor's dropdown contents
+ * ========================================================================= */
+
+int test_local_shell_list_available_empty_machine(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellChoice choices[LOCAL_SHELL_CHOICE_MAX];
+    int n = local_shell_list_available(&p, choices, LOCAL_SHELL_CHOICE_MAX);
+    ASSERT_EQ(n, 0);
+    TEST_END();
+}
+
+int test_local_shell_list_available_everything_installed(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "ProgramFiles", "C:\\Program Files");
+    fake_add_path(&d, "C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d,
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    fake_add_path(&d, "C:\\Windows\\System32\\cmd.exe");
+    fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
+    fake_add_path(&d, "C:\\Git\\bin\\bash.exe");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellChoice choices[LOCAL_SHELL_CHOICE_MAX];
+    int n = local_shell_list_available(&p, choices, LOCAL_SHELL_CHOICE_MAX);
+    ASSERT_EQ(n, LOCAL_SHELL_CHOICE_MAX);
+
+    /* Same order as the automatic search. */
+    ASSERT_EQ((int)choices[0].kind, (int)SHELL_PWSH);
+    ASSERT_STR_EQ(choices[0].display, "PowerShell 7");
+    ASSERT_STR_EQ(choices[0].command,
+                 "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoLogo");
+    ASSERT_EQ((int)choices[1].kind, (int)SHELL_POWERSHELL);
+    ASSERT_STR_EQ(choices[1].display, "Windows PowerShell");
+    ASSERT_EQ((int)choices[2].kind, (int)SHELL_GITBASH);
+    ASSERT_STR_EQ(choices[2].display, "Git for Windows bash");
+    ASSERT_EQ((int)choices[3].kind, (int)SHELL_MSYS2);
+    ASSERT_STR_EQ(choices[3].display, "MSYS2 bash");
+    ASSERT_EQ((int)choices[4].kind, (int)SHELL_CMD);
+    ASSERT_STR_EQ(choices[4].display, "Command Prompt");
+    TEST_END();
+}
+
+int test_local_shell_list_available_only_cmd(void)
+{
+    TEST_BEGIN();
+    /* The realistic minimum on any live Windows install. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d, "C:\\Windows\\System32\\cmd.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellChoice choices[LOCAL_SHELL_CHOICE_MAX];
+    int n = local_shell_list_available(&p, choices, LOCAL_SHELL_CHOICE_MAX);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ((int)choices[0].kind, (int)SHELL_CMD);
+    TEST_END();
+}
+
+int test_local_shell_list_available_respects_out_max(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d,
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+    fake_add_path(&d, "C:\\Windows\\System32\\cmd.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellChoice choices[1];
+    int n = local_shell_list_available(&p, choices, 1);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ((int)choices[0].kind, (int)SHELL_POWERSHELL);
+    TEST_END();
+}
+
+int test_local_shell_list_available_null_safety(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(local_shell_list_available(NULL, NULL, LOCAL_SHELL_CHOICE_MAX), 0);
+    LocalShellChoice choices[LOCAL_SHELL_CHOICE_MAX];
+    ASSERT_EQ(local_shell_list_available(NULL, choices, 0), 0);
+    /* A NULL probe finds nothing, but must not crash. */
+    ASSERT_EQ(local_shell_list_available(NULL, choices, LOCAL_SHELL_CHOICE_MAX), 0);
     TEST_END();
 }
 
@@ -630,7 +969,7 @@ int test_local_shell_runtime_dir_with_localappdata(void)
     FakeProbeData d;
     fake_reset(&d);
     fake_add_env(&d, "LOCALAPPDATA", "C:\\Users\\tom\\AppData\\Local");
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
 
     char out[LOCAL_SHELL_PATH_MAX];
     int ok = local_shell_runtime_dir(&p, out, sizeof(out));
@@ -644,7 +983,7 @@ int test_local_shell_runtime_dir_without_localappdata(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
 
     char out[LOCAL_SHELL_PATH_MAX];
     (void)snprintf(out, sizeof(out), "%s", "sentinel");
@@ -665,7 +1004,7 @@ int test_local_shell_runtime_dir_null_safety(void)
     FakeProbeData d;
     fake_reset(&d);
     fake_add_env(&d, "LOCALAPPDATA", "C:\\x");
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
     ASSERT_EQ(local_shell_runtime_dir(&p, NULL, 0), 0);
     TEST_END();
 }
@@ -738,7 +1077,7 @@ int test_local_shell_resolve_null_out_is_safe(void)
     FakeProbeData d;
     fake_reset(&d);
     fake_add_path(&d, "C:\\msys64\\usr\\bin\\bash.exe");
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
     LocalShellKind k = local_shell_resolve("something", &p, NULL);
     ASSERT_EQ((int)k, (int)SHELL_NONE);
     TEST_END();
@@ -759,7 +1098,6 @@ int test_local_shell_resolve_null_callbacks_is_safe(void)
     TEST_BEGIN();
     LocalShellProbe p;
     memset(&p, 0, sizeof(p));
-    p.exe_dir = "C:\\nutshell"; /* present, but exists/env/registry are NULL */
 
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
@@ -772,7 +1110,7 @@ int test_local_shell_resolve_null_profile_shell_is_safe(void)
     TEST_BEGIN();
     FakeProbeData d;
     fake_reset(&d);
-    LocalShellProbe p = fake_probe(&d, NULL);
+    LocalShellProbe p = fake_probe(&d);
     LocalShellSpec spec;
     LocalShellKind k = local_shell_resolve(NULL, &p, &spec);
     ASSERT_EQ((int)k, (int)SHELL_NONE);
@@ -788,15 +1126,19 @@ int test_local_shell_kind_name_and_is_posix(void)
     TEST_BEGIN();
     ASSERT_NULL(local_shell_kind_name(SHELL_NONE));
     ASSERT_STR_EQ(local_shell_kind_name(SHELL_CUSTOM), "custom");
-    ASSERT_STR_EQ(local_shell_kind_name(SHELL_BUSYBOX), "busybox");
+    ASSERT_STR_EQ(local_shell_kind_name(SHELL_PWSH), "PowerShell");
+    ASSERT_STR_EQ(local_shell_kind_name(SHELL_POWERSHELL), "PowerShell");
     ASSERT_STR_EQ(local_shell_kind_name(SHELL_GITBASH), "Git bash");
     ASSERT_STR_EQ(local_shell_kind_name(SHELL_MSYS2), "MSYS2");
+    ASSERT_STR_EQ(local_shell_kind_name(SHELL_CMD), "cmd");
 
     ASSERT_EQ(local_shell_kind_is_posix(SHELL_NONE), 0);
     ASSERT_EQ(local_shell_kind_is_posix(SHELL_CUSTOM), 0);
-    ASSERT_EQ(local_shell_kind_is_posix(SHELL_BUSYBOX), 1);
+    ASSERT_EQ(local_shell_kind_is_posix(SHELL_PWSH), 0);
+    ASSERT_EQ(local_shell_kind_is_posix(SHELL_POWERSHELL), 0);
     ASSERT_EQ(local_shell_kind_is_posix(SHELL_GITBASH), 1);
     ASSERT_EQ(local_shell_kind_is_posix(SHELL_MSYS2), 1);
+    ASSERT_EQ(local_shell_kind_is_posix(SHELL_CMD), 0);
     TEST_END();
 }
 
@@ -837,6 +1179,22 @@ int test_local_shell_spec_name_powershell_with_path(void)
         "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoLogo", &spec),
         "PowerShell");
     ASSERT_STR_EQ(spec_name_of("C:/tools/pwsh.exe", &spec), "PowerShell");
+    TEST_END();
+}
+
+int test_local_shell_spec_name_natively_detected_powershell(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "ProgramFiles", "C:\\Program Files");
+    fake_add_path(&d, "C:\\Program Files\\PowerShell\\7\\pwsh.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve(NULL, &p, &spec);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_PWSH);
+    ASSERT_STR_EQ(local_shell_spec_name(&spec), "PowerShell");
     TEST_END();
 }
 

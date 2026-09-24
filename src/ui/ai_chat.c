@@ -4338,9 +4338,13 @@ next_coalesce:;
 
 void ai_chat_init(HINSTANCE hInstance)
 {
-    /* Load RichEdit control library (still needed for input field) */
-    LoadLibrary("Riched20.dll");
-    LoadLibrary("Msftedit.dll");
+    /* Load RichEdit control library (still needed for input field).
+     * LoadLibraryExW + LOAD_LIBRARY_SEARCH_SYSTEM32 (DLL search-order
+     * hardening): search System32 only, never the exe's own directory or
+     * the current directory, so a same-named DLL planted in either can't be
+     * loaded instead of the real one. */
+    LoadLibraryExW(L"Riched20.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    LoadLibraryExW(L"Msftedit.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
 
     /* Register the ChatListView window class */
     chat_listview_register(hInstance);

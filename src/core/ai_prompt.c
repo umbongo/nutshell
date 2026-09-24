@@ -165,7 +165,7 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
     /* The opening two sentences are the only part that depends on where the
      * shell is running: an SSH session talks about "the remote server", a
      * local one about this PC, so the model does not suggest apt or
-     * systemctl on a busybox shell (spec section 6). Everything after them
+     * systemctl on a Windows shell (spec section 6). Everything after them
      * is identical, and the SSH text is byte-for-byte what it was before the
      * kind parameter existed. */
     const char *opening =
@@ -186,7 +186,7 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
     if (kind == SESSION_LOCAL) {
         const char *shell = (shell_name && shell_name[0])
                               ? shell_name
-                              : "busybox / Git bash / MSYS2 / custom";
+                              : "PowerShell / cmd / Git bash / MSYS2 / custom";
         const char *example = is_powershell ? "Get-ChildItem" : "ls -la";
         int on = snprintf(local_opening, sizeof(local_opening),
             "You are an AI assistant for a local shell (%s) on a Windows PC. "
