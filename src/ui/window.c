@@ -799,11 +799,17 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
          * before System32. Resolve it ourselves first, against System32,
          * the Windows directory and absolute PATH entries only; refuse to
          * launch anything CreateProcess itself would have had to search
-         * CWD or the exe's own directory to find. */
+         * CWD or the exe's own directory to find (also covers a relative
+         * custom path, or an unquoted absolute one whose split point
+         * between path and arguments can't be told apart -- see
+         * local_shell_resolve_bare()'s own doc comment). spec->error
+         * already names which of those it was; fall back to the bare-name
+         * wording only on the (unreachable in practice) chance it's empty. */
         if (!local_shell_resolve_bare(spec, &probe)) {
-            (void)snprintf(err, sizeof(err),
-                           "Could not find \"%s\" in System32, the Windows "
-                           "directory, or PATH.", spec->exe);
+            (void)snprintf(err, sizeof(err), "%s",
+                           spec->error[0] ? spec->error :
+                           "Could not find the shell executable in System32, "
+                           "the Windows directory, or PATH.");
         } else {
             int cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
             int rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
