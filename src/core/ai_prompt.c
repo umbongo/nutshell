@@ -127,6 +127,64 @@ void ai_conv_reset(AiConversation *conv)
     memcpy(conv->model, model, sizeof(conv->model));
 }
 
+void ai_conv_take(AiConversation *dst, AiConversation *src)
+{
+    if (!dst || !src || dst == src) return;
+    ai_conv_reset(dst);
+    memcpy(dst, src, sizeof(*dst));
+    /* src gives up every pointer it had -- including stale ones in slots
+     * past msg_count -- so no buffer ends up with two owners. */
+    char model[64];
+    memcpy(model, src->model, sizeof(model));
+    memset(src, 0, sizeof(*src));
+    memcpy(src->model, model, sizeof(src->model));
+}
+
+int ai_conv_copy(AiConversation *dst, const AiConversation *src)
+{
+    if (!dst || !src) return -1;
+    if (dst == src) return 0;
+    ai_conv_reset(dst);
+    memcpy(dst->model, src->model, sizeof(dst->model));
+
+    int n = src->msg_count;
+    if (n < 0) n = 0;
+    if (n > AI_MAX_MESSAGES) n = AI_MAX_MESSAGES;
+    for (int i = 0; i < n; i++) {
+        const AiMessage *sm = &src->messages[i];
+        AiMessage *m = &dst->messages[i];
+        *m = *sm;
+        m->content_overflow = NULL;
+        m->attachment = NULL;
+        m->tool_calls = NULL;
+        m->n_tool_calls = 0;
+        dst->msg_count = i + 1;   /* a failure below frees what we have */
+
+        if (sm->content_overflow) {
+            m->content_overflow = (char *)malloc(sm->content_len + 1);
+            if (!m->content_overflow) goto fail;
+            memcpy(m->content_overflow, sm->content_overflow, sm->content_len);
+            m->content_overflow[sm->content_len] = '\0';
+        }
+        if (sm->attachment) {
+            m->attachment = ai_attachment_dup(sm->attachment);
+            if (!m->attachment) goto fail;
+        }
+        if (sm->tool_calls && sm->n_tool_calls > 0) {
+            size_t sz = (size_t)sm->n_tool_calls * sizeof(AiToolCall);
+            m->tool_calls = (AiToolCall *)malloc(sz);
+            if (!m->tool_calls) goto fail;
+            memcpy(m->tool_calls, sm->tool_calls, sz);
+            m->n_tool_calls = sm->n_tool_calls;
+        }
+    }
+    return 0;
+
+fail:
+    ai_conv_reset(dst);
+    return -1;
+}
+
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
 {
     if (!conv || !content) return -1;

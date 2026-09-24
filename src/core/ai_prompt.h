@@ -69,6 +69,19 @@ void ai_conv_init(AiConversation *conv, const char *model);
 /* Reset a conversation: clear all messages but keep the model. */
 void ai_conv_reset(AiConversation *conv);
 
+/* Move a conversation: free dst's messages, give dst every message of src
+ * together with the heap buffers they own (overflow content, attachments,
+ * tool calls), and leave src empty with its model kept. Afterwards exactly
+ * one conversation owns each buffer, so both can be reset or taken again
+ * safely. dst == src, or either NULL, is a no-op. */
+void ai_conv_take(AiConversation *dst, AiConversation *src);
+
+/* Deep copy: free dst's messages, then copy src into dst with its own
+ * copies of every heap buffer. Returns 0; -1 on a NULL argument (dst
+ * untouched) or allocation failure (dst left empty with src's model, never
+ * half-shared). dst == src is a no-op returning 0. */
+int ai_conv_copy(AiConversation *dst, const AiConversation *src);
+
 /* Add a message. Returns 0 on success, -1 if full. */
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
 

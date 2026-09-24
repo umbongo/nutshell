@@ -1794,6 +1794,29 @@ int test_chat_msg_batch_sync_run_null_list_returns_zero(void);
 int test_chat_msg_batch_sync_run_null_queue_returns_zero(void);
 int test_chat_msg_batch_sync_run_empty_queue_leaves_items_untouched(void);
 
+/* test_ai_stream.c */
+int test_ai_conv_take_moves_overflow_and_clears_source(void);
+int test_ai_conv_take_frees_previous_destination(void);
+int test_ai_conv_take_self_and_null_are_noops(void);
+int test_ai_conv_take_repeated_switch_then_send(void);
+int test_ai_conv_copy_replaces_destination(void);
+int test_worker_life_last_release_frees(void);
+int test_worker_life_cancel_is_sticky(void);
+int test_worker_life_ids_unique_nonzero(void);
+int test_ai_stream_finish_before_close(void);
+int test_ai_stream_close_before_finish(void);
+int test_ai_stream_double_close(void);
+int test_ai_stream_abort_then_late_chunk(void);
+int test_ai_stream_stale_generation(void);
+int test_ai_stream_abort_is_per_owner(void);
+int test_ai_stream_abort_all_on_panel_close(void);
+int test_ai_stream_table_full_and_bad_args(void);
+int test_ai_stream_copy_tools_rebinds_context(void);
+int test_ai_stream_release_frees_conversation(void);
+
+/* test_ai_stream.c */
+int test_ai_stream_lost_final_message_is_found(void);
+
 /* test_cmd_batch.c */
 int test_cmd_batch_set_init_empty(void);
 int test_cmd_batch_add_assigns_sequential_ids(void);
@@ -5096,6 +5119,27 @@ int main(void) {
     failed += test_ui_demo_build_all_is_union();
     failed += test_ui_demo_term_text_ends_with_prompt();
     failed += test_ui_demo_thinking_text_non_empty();
+
+    failed += test_ai_conv_take_moves_overflow_and_clears_source();
+    failed += test_ai_conv_take_frees_previous_destination();
+    failed += test_ai_conv_take_self_and_null_are_noops();
+    failed += test_ai_conv_take_repeated_switch_then_send();
+    failed += test_ai_conv_copy_replaces_destination();
+    failed += test_worker_life_last_release_frees();
+    failed += test_worker_life_cancel_is_sticky();
+    failed += test_worker_life_ids_unique_nonzero();
+    failed += test_ai_stream_finish_before_close();
+    failed += test_ai_stream_close_before_finish();
+    failed += test_ai_stream_double_close();
+    failed += test_ai_stream_abort_then_late_chunk();
+    failed += test_ai_stream_stale_generation();
+    failed += test_ai_stream_abort_is_per_owner();
+    failed += test_ai_stream_abort_all_on_panel_close();
+    failed += test_ai_stream_table_full_and_bad_args();
+    failed += test_ai_stream_copy_tools_rebinds_context();
+    failed += test_ai_stream_release_frees_conversation();
+
+    failed += test_ai_stream_lost_final_message_is_found();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
