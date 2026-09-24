@@ -96,21 +96,52 @@ LocalShellKind local_shell_resolve(const char *profile_shell,
  * System32, the Windows directory and PATH -- so a bare custom shell name
  * like "powershell.exe" would run whatever file of that name happened to
  * sit next to nutshell.exe or in the working directory, ahead of the real
- * one. When spec->kind == SHELL_CUSTOM and spec->exe has no path separator,
- * this resolves it ourselves first, searching *only* %SystemRoot%\System32,
- * %SystemRoot% and each PATH entry that is itself an absolute path (a
- * relative PATH entry is skipped, not searched, for the same reason CWD is
- * never searched) -- trying the bare name as given, and, when it has no
- * extension, also with ".exe" appended. On success, spec->exe, spec->dir
- * and spec->command are rewritten to the absolute, correctly quoted path
- * plus whatever arguments followed the bare name in the original command.
+ * one. When spec->kind == SHELL_CUSTOM, this resolves spec->exe to a single
+ * unambiguous absolute path -- the one local_pty.c then passes as
+ * lpApplicationName, so CreateProcess never has to guess at all -- or
+ * refuses outright:
  *
- * Returns 1 when spec is safe to launch: either the executable already had
- * a path (a no-op) or the bare name was resolved and spec was rewritten.
- * Returns 0, leaving spec untouched, when it was bare and could not be
- * found anywhere in that search -- the caller must refuse to launch it.
- * A spec whose kind isn't SHELL_CUSTOM, or NULL, is untouched and returns 1
- * (nothing of this applies to it). */
+ *   - bare (no '\' or '/'): searched ourselves, *only* against
+ *     %SystemRoot%\System32, %SystemRoot% and each PATH entry that is
+ *     itself an absolute path (a relative PATH entry is skipped, not
+ *     searched, for the same reason CWD is never searched) -- the bare
+ *     name as given, and, when it has no extension, also with ".exe"
+ *     appended. Not found anywhere in that search -> refused.
+ *   - has a separator and is relative: always refused. A relative path
+ *     resolves against whatever directory the shell happens to start in --
+ *     the same hazard the bare-name search avoids by never touching CWD.
+ *   - has a separator, is absolute, and the first token was quoted: already
+ *     unambiguous (the quotes say exactly where the path ends) -- accepted
+ *     as-is.
+ *   - has a separator, is absolute, and was NOT quoted: unambiguous only
+ *     when the whole command has no space in it at all. Otherwise the
+ *     executable path may itself contain a space (e.g. "C:\Program
+ *     Files\...\shell.exe") that the naive first-space split can't tell
+ *     apart from the boundary between the path and its arguments,
+ *     resolved by trying every prefix ending at a space, LONGEST first,
+ *     and accepting the first that names a real file -- refused, with a
+ *     message suggesting quotes, if none does. (Deliberately the reverse
+ *     of CreateProcess's own shortest-first search, which is what lets a
+ *     file planted at the shorter guess run instead of the intended one.)
+ *
+ * On any success that rewrites spec->exe (the bare-name and
+ * ambiguous-unquoted-path cases), spec->dir and spec->command are rewritten
+ * to match: the absolute, correctly quoted path plus whatever arguments
+ * followed in the original command.
+ *
+ * Every success path then also checks spec->exe against what the automatic
+ * search (local_shell_resolve()'s steps 2-6) would itself find on this
+ * machine right now; an exact match reclassifies spec->kind to that shell
+ * (and re-fills spec->env to match), so a hand-typed path to the detected
+ * Git bash or MSYS2 gets the same bash HOME/SHELL/PATH additions and
+ * Linux platform-lock eligibility (local_shell_kind_is_posix()) as picking
+ * it from the profile editor's dropdown would -- the command line itself is
+ * never rewritten by this step, only spec->kind and spec->env.
+ *
+ * Returns 1 when spec is safe to launch, 0 (spec->error filled, everything
+ * else in spec left untouched) when it must be refused. A spec whose kind
+ * isn't SHELL_CUSTOM, or NULL, is untouched and returns 1 (nothing of this
+ * applies to it). */
 int local_shell_resolve_bare(LocalShellSpec *spec, const LocalShellProbe *probe);
 
 /* One shell found on this machine, for the profile editor's "Automatic"

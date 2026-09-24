@@ -41,7 +41,16 @@ typedef struct {
      * works; it is only replaced when the user enters a new password. */
     char password_enc_preserved[CFG_BLOB_MAX];
     char key_path[MAX_PATH];
-    char shell[MAX_PATH]; /* local only: custom command line; empty = automatic */
+    /* local only: custom command line; empty = automatic. Sized to match
+     * src/core/local_shell.h's LOCAL_SHELL_CMD_MAX (1024), not MAX_PATH
+     * (260) -- a shell command line is "<quoted path> <args>", which can
+     * exceed a bare path's length well before it exceeds the shell's own
+     * command-line limit. profile.h can't include local_shell.h (config/
+     * doesn't depend on core/), so this is a plain literal kept in step
+     * with it by hand; tests/test_local_shell.c's
+     * test_local_shell_env_count_never_exceeds_max-style assertions would
+     * need updating if the two ever needed to diverge. */
+    char shell[1024];
     char platform[32]; // Device platform token: "auto" (default), "linux", "cisco-ios", ...
 #ifndef AI_NOTES_MAX
 #define AI_NOTES_MAX 2560

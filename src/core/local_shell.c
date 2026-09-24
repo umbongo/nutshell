@@ -11,6 +11,7 @@
 #include "resource.h"   /* APP_VERSION -- -Isrc/ui is on both build paths */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 const char LOCAL_SHELL_NONE_MESSAGE[] =
@@ -347,7 +348,91 @@ static int try_cmd(const LocalShellProbe *probe, LocalShellSpec *out)
     return 1;
 }
 
-/* ---- local_shell_resolve_bare(): bare custom executable, resolved safely - */
+typedef int (*ShellTryFn)(const LocalShellProbe *, LocalShellSpec *);
+
+static const struct {
+    ShellTryFn  try_fn;
+    const char *display;
+} SHELL_STEPS[] = {
+    { try_pwsh,       "PowerShell 7" },
+    { try_powershell, "Windows PowerShell" },
+    { try_gitbash,    "Git for Windows bash" },
+    { try_msys2,      "MSYS2 bash" },
+    { try_cmd,        "Command Prompt" },
+};
+
+/* Case-insensitive ASCII equality of s[0..len) and the whole of lit. */
+static int base_eq_ci(const char *s, size_t len, const char *lit)
+{
+    size_t i = 0;
+    for (; i < len && lit[i] != '\0'; i++) {
+        int a = (unsigned char)s[i];
+        int b = (unsigned char)lit[i];
+        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
+        if (a != b) return 0;
+    }
+    return i == len && lit[i] == '\0';
+}
+
+/* If a custom command's resolved executable is exactly the path one of the
+ * automatic search's own steps would itself find on this machine right now,
+ * adopt that shell's kind -- and so its env additions (fill_env()) and its
+ * eligibility for the POSIX platform lock (local_shell_kind_is_posix()) --
+ * while leaving the user's own command line and arguments untouched. Typing
+ * the exact path of the detected Git bash by hand must behave identically
+ * to picking "Git bash" from the profile editor's dropdown; without this, a
+ * hand-typed match would stay SHELL_CUSTOM and silently lose the bash
+ * HOME/SHELL/PATH additions and the Linux platform lock. Only called once
+ * spec->exe is already an absolute, resolved path (the end of
+ * local_shell_resolve_bare()'s job) -- comparing against a still-bare or
+ * still-relative name would be meaningless. A detected LocalShellSpec is
+ * ~200 KB (LOCAL_SHELL_ENV_MAX * LOCAL_SHELL_ENV_VALUE_MAX dominates) so it
+ * is heap-allocated once and reused across the up-to-5 steps, not put on
+ * the caller's stack (window.c's start_local_shell() runs on the UI
+ * thread, same concern as local_shell_list_available()). Best effort: an
+ * allocation failure just leaves the spec as SHELL_CUSTOM. */
+static void reclassify_if_known_shell(LocalShellSpec *spec, const LocalShellProbe *probe)
+{
+    if (!spec || spec->kind != SHELL_CUSTOM || spec->exe[0] == '\0') return;
+
+    LocalShellSpec *detected = (LocalShellSpec *)malloc(sizeof(*detected));
+    if (!detected) return;
+
+    size_t step_count = sizeof(SHELL_STEPS) / sizeof(SHELL_STEPS[0]);
+    for (size_t i = 0; i < step_count; i++) {
+        memset(detected, 0, sizeof(*detected));
+        if (SHELL_STEPS[i].try_fn(probe, detected) &&
+            base_eq_ci(spec->exe, strlen(spec->exe), detected->exe)) {
+            spec->kind = detected->kind;
+            fill_env(spec, probe);
+            break;
+        }
+    }
+    free(detected);
+}
+
+/* ---- local_shell_resolve_bare(): a custom command's executable, resolved
+ * to an absolute path safely ------------------------------------------------
+ *
+ * Three shapes of spec->exe reach here (spec->kind == SHELL_CUSTOM):
+ *
+ *   - bare (no '\' or '/'): searched against System32, the Windows
+ *     directory and absolute PATH entries only -- never the exe's own
+ *     directory or the current directory (see find_bare_exe() below).
+ *   - has a separator and is relative: refused outright. A relative path
+ *     resolves against whatever directory the shell happens to start in,
+ *     the same hazard a bare name search avoids by never touching CWD.
+ *   - has a separator and is absolute: safe to use once it names a single,
+ *     unambiguous file. A quoted token already does; an UNQUOTED one that
+ *     contains a space does not, because first_token_exe_and_dir() (which
+ *     built spec->exe) stopped at the first space and so may hold only a
+ *     prefix of the real path (e.g. "C:\Program" out of "C:\Program
+ *     Files\...\shell.exe"). That case is re-resolved against the raw
+ *     command line by trying every prefix ending at a space, LONGEST
+ *     first, and accepting the first one that names a real file -- see
+ *     resolve_unquoted_spaced() below for why longest-first and not
+ *     CreateProcess's own shortest-first search. */
 
 /* Non-zero when `s[0..len)` (not NUL-terminated beyond len) is an absolute
  * Windows path: a drive letter ("C:\\..." or "C:/...") or a UNC prefix
@@ -440,32 +525,191 @@ static int find_bare_exe(const char *name, const LocalShellProbe *probe,
     return 0;
 }
 
+/* Non-zero when `cmd`'s first non-space character is a double quote. */
+static int cmd_first_token_quoted(const char *cmd)
+{
+    if (!cmd) return 0;
+    while (*cmd == ' ') cmd++;
+    return *cmd == '"';
+}
+
+/* cmd[0..end) as a candidate executable path: tried as-is, and, when it has
+ * no extension, with ".exe" appended -- the same two tries
+ * try_dir_for_bare() makes against dir+name, here against a full path
+ * lifted straight out of the raw command line. Copies whichever form
+ * exists into exe_out and returns 1 on success. */
+static int candidate_exe_exists(const LocalShellProbe *probe, const char *cmd,
+                                size_t end, char *exe_out, size_t exe_size)
+{
+    if (end == 0 || end >= LOCAL_SHELL_PATH_MAX) return 0;
+
+    char candidate[LOCAL_SHELL_PATH_MAX];
+    memcpy(candidate, cmd, end);
+    candidate[end] = '\0';
+
+    if (probe_exists(probe, candidate)) {
+        (void)snprintf(exe_out, exe_size, "%s", candidate);
+        return 1;
+    }
+    if (!name_has_extension(candidate)) {
+        char with_exe[LOCAL_SHELL_PATH_MAX];
+        int n = snprintf(with_exe, sizeof(with_exe), "%s.exe", candidate);
+        if (n > 0 && (size_t)n < sizeof(with_exe) && probe_exists(probe, with_exe)) {
+            (void)snprintf(exe_out, exe_size, "%s", with_exe);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* An unquoted custom command line already known to start with an absolute
+ * path and to contain at least one space: the executable and its arguments
+ * cannot be told apart by punctuation alone, so this tries every prefix
+ * ending at a space, LONGEST first -- the fullest path the user could have
+ * meant -- and accepts the first one that names a real file.
+ *
+ * This is deliberately the OPPOSITE order from CreateProcessW's own
+ * NULL-lpApplicationName search, which tries the shortest prefix first;
+ * that is exactly how a file planted at that shorter guess (e.g.
+ * "C:\Program.exe" ahead of the intended "C:\Program Files\...\shell.exe")
+ * gets run instead of the one the user meant. Finding nothing at any
+ * prefix is a refusal, never a fall back to that shorter, riskier guess --
+ * the caller shows the user local_shell.h's suggestion to quote the path. */
+static int resolve_unquoted_spaced(const LocalShellProbe *probe, const char *cmd,
+                                   char *exe_out, size_t exe_size,
+                                   char *suffix_out, size_t suffix_size)
+{
+    size_t len = strlen(cmd);
+    while (len > 0 && cmd[len - 1] == ' ') len--;
+    if (len == 0) return 0;
+
+    size_t end = len;
+    for (;;) {
+        if (candidate_exe_exists(probe, cmd, end, exe_out, exe_size)) {
+            const char *rest = cmd + end;
+            while (*rest == ' ') rest++;
+            (void)snprintf(suffix_out, suffix_size, "%s", rest);
+            return 1;
+        }
+        if (end == 0) return 0;
+        size_t i = end;
+        while (i > 0 && cmd[i - 1] != ' ') i--;
+        if (i == 0) return 0; /* no earlier space: nothing left to try */
+        end = i - 1;
+        while (end > 0 && cmd[end - 1] == ' ') end--; /* collapse repeats */
+    }
+}
+
+/* Rewrites spec->exe/dir/command to `resolved_exe` plus `suffix`, shared by
+ * both rewrite paths (a bare name found on the search, or an unquoted
+ * absolute path whose real split point was found). */
+static void adopt_resolved_exe(LocalShellSpec *spec, const char *resolved_exe,
+                               const char *suffix)
+{
+    (void)snprintf(spec->exe, sizeof(spec->exe), "%s", resolved_exe);
+    spec->dir[0] = '\0';
+    const char *last_slash = strrchr(resolved_exe, '\\');
+    if (last_slash) {
+        size_t dlen = (size_t)(last_slash - resolved_exe);
+        if (dlen < sizeof(spec->dir)) {
+            memcpy(spec->dir, resolved_exe, dlen);
+            spec->dir[dlen] = '\0';
+        }
+    }
+    build_command(spec, resolved_exe, suffix);
+}
+
 int local_shell_resolve_bare(LocalShellSpec *spec, const LocalShellProbe *probe)
 {
     if (!spec) return 1;
     if (spec->kind != SHELL_CUSTOM) return 1;
     if (spec->exe[0] == '\0') return 1;
-    if (strpbrk(spec->exe, "\\/") != NULL) return 1; /* already has a path */
 
-    char resolved[LOCAL_SHELL_PATH_MAX];
-    if (!find_bare_exe(spec->exe, probe, resolved, sizeof(resolved))) {
+    if (strpbrk(spec->exe, "\\/") == NULL) {
+        /* Bare name: search System32, the Windows directory, then each
+         * absolute PATH entry -- never the exe's own directory or CWD. */
+        char resolved[LOCAL_SHELL_PATH_MAX];
+        if (!find_bare_exe(spec->exe, probe, resolved, sizeof(resolved))) {
+            /* spec->exe (up to LOCAL_SHELL_PATH_MAX, 512) can exceed what's
+             * left of spec->error (256) once the fixed wording is
+             * accounted for -- a merely-cosmetic truncation of an already
+             * pathological path, not a bug, so -Wformat-truncation's
+             * warning is suppressed for this call (same rationale as
+             * fill_env()'s PATH combine above). */
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
+            (void)snprintf(spec->error, sizeof(spec->error),
+                "Could not find \"%s\" in System32, the Windows directory, "
+                "or PATH.", spec->exe);
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+            return 0;
+        }
+        char suffix[LOCAL_SHELL_CMD_MAX];
+        command_suffix(spec->command, suffix, sizeof(suffix));
+        adopt_resolved_exe(spec, resolved, suffix);
+        reclassify_if_known_shell(spec, probe);
+        return 1;
+    }
+
+    /* Has a separator: a relative path resolves against whatever directory
+     * the shell happens to start in -- the same hazard a bare name search
+     * avoids by never touching CWD -- so it is refused outright rather
+     * than silently launched from an unexpected place. */
+    if (!path_is_absolute(spec->exe, strlen(spec->exe))) {
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
+        (void)snprintf(spec->error, sizeof(spec->error),
+            "\"%s\" is a relative path. Use an absolute path, or a bare "
+            "executable name (searched in System32, the Windows directory "
+            "and PATH).", spec->exe);
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
         return 0;
     }
 
-    char suffix[LOCAL_SHELL_CMD_MAX];
-    command_suffix(spec->command, suffix, sizeof(suffix));
-
-    (void)snprintf(spec->exe, sizeof(spec->exe), "%s", resolved);
-    spec->dir[0] = '\0';
-    const char *last_slash = strrchr(resolved, '\\');
-    if (last_slash) {
-        size_t dlen = (size_t)(last_slash - resolved);
-        if (dlen < sizeof(spec->dir)) {
-            memcpy(spec->dir, resolved, dlen);
-            spec->dir[dlen] = '\0';
-        }
+    if (cmd_first_token_quoted(spec->command)) {
+        /* Quoted: the token is exact, spaces and all -- no ambiguity. */
+        reclassify_if_known_shell(spec, probe);
+        return 1;
     }
-    build_command(spec, resolved, suffix);
+
+    const char *cmd = spec->command;
+    while (*cmd == ' ') cmd++;
+
+    if (strchr(cmd, ' ') == NULL) {
+        /* Unquoted, absolute, and not one space anywhere in the whole
+         * command: spec->exe already equals the entire command, so there
+         * is nothing to split and nothing ambiguous about it. */
+        reclassify_if_known_shell(spec, probe);
+        return 1;
+    }
+
+    char resolved_exe[LOCAL_SHELL_PATH_MAX];
+    char suffix[LOCAL_SHELL_CMD_MAX];
+    if (!resolve_unquoted_spaced(probe, cmd, resolved_exe, sizeof(resolved_exe),
+                                 suffix, sizeof(suffix))) {
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
+        (void)snprintf(spec->error, sizeof(spec->error),
+            "Could not tell where the executable path ends and the "
+            "arguments begin in \"%s\" -- quote the executable path.", cmd);
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+        return 0;
+    }
+
+    adopt_resolved_exe(spec, resolved_exe, suffix);
+    reclassify_if_known_shell(spec, probe);
     return 1;
 }
 
@@ -541,38 +785,33 @@ LocalShellKind local_shell_resolve(const char *profile_shell,
     return out->kind;
 }
 
-typedef int (*ShellTryFn)(const LocalShellProbe *, LocalShellSpec *);
-
-static const struct {
-    ShellTryFn  try_fn;
-    const char *display;
-} SHELL_STEPS[] = {
-    { try_pwsh,       "PowerShell 7" },
-    { try_powershell, "Windows PowerShell" },
-    { try_gitbash,    "Git for Windows bash" },
-    { try_msys2,      "MSYS2 bash" },
-    { try_cmd,        "Command Prompt" },
-};
-
+/* A LocalShellSpec is ~200 KB (LOCAL_SHELL_ENV_MAX *
+ * LOCAL_SHELL_ENV_VALUE_MAX dominates); this is called from
+ * session_manager.c's WM_INITDIALOG, a dialog procedure, so it is
+ * heap-allocated once and reused across the up-to-5 steps rather than
+ * living on the dialog thread's stack. */
 int local_shell_list_available(const LocalShellProbe *probe,
                                LocalShellChoice *out, int out_max)
 {
     if (!out || out_max <= 0) return 0;
 
+    LocalShellSpec *spec = (LocalShellSpec *)malloc(sizeof(*spec));
+    if (!spec) return 0;
+
     int n = 0;
     size_t step_count = sizeof(SHELL_STEPS) / sizeof(SHELL_STEPS[0]);
     for (size_t i = 0; i < step_count && n < out_max; i++) {
-        LocalShellSpec spec;
-        memset(&spec, 0, sizeof(spec));
-        if (SHELL_STEPS[i].try_fn(probe, &spec)) {
-            out[n].kind = spec.kind;
+        memset(spec, 0, sizeof(*spec));
+        if (SHELL_STEPS[i].try_fn(probe, spec)) {
+            out[n].kind = spec->kind;
             (void)snprintf(out[n].display, sizeof(out[n].display),
                            "%s", SHELL_STEPS[i].display);
             (void)snprintf(out[n].command, sizeof(out[n].command),
-                           "%s", spec.command);
+                           "%s", spec->command);
             n++;
         }
     }
+    free(spec);
     return n;
 }
 
@@ -589,20 +828,6 @@ const char *local_shell_kind_name(LocalShellKind kind)
         default:
             return NULL;
     }
-}
-
-/* Case-insensitive ASCII equality of s[0..len) and the whole of lit. */
-static int base_eq_ci(const char *s, size_t len, const char *lit)
-{
-    size_t i = 0;
-    for (; i < len && lit[i] != '\0'; i++) {
-        int a = (unsigned char)s[i];
-        int b = (unsigned char)lit[i];
-        if (a >= 'A' && a <= 'Z') a += 'a' - 'A';
-        if (b >= 'A' && b <= 'Z') b += 'a' - 'A';
-        if (a != b) return 0;
-    }
-    return i == len && lit[i] == '\0';
 }
 
 const char *local_shell_spec_name(const LocalShellSpec *spec)

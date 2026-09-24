@@ -699,25 +699,159 @@ int test_local_shell_resolve_bare_noop_for_non_custom(void)
 int test_local_shell_resolve_bare_noop_when_already_has_path(void)
 {
     TEST_BEGIN();
+    /* Absolute, unquoted, and the exe itself has no embedded space (only a
+     * space delimiting it from " /k") -- unambiguous once the executable is
+     * confirmed to exist, so this is a no-op on the already-correct
+     * spec->exe. A working probe is required now: telling an unambiguous
+     * split from an ambiguous one (a longer path with an embedded space)
+     * means checking what actually exists. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\Windows\\System32\\cmd.exe");
+    LocalShellProbe p = fake_probe(&d);
+
     LocalShellSpec spec;
-    local_shell_resolve("C:\\Windows\\System32\\cmd.exe /k", NULL, &spec);
+    local_shell_resolve("C:\\Windows\\System32\\cmd.exe /k", &p, &spec);
     char before[LOCAL_SHELL_PATH_MAX];
     (void)snprintf(before, sizeof(before), "%s", spec.exe);
-    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 1);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
     ASSERT_STR_EQ(spec.exe, before);
+    ASSERT_STR_EQ(spec.command, "C:\\Windows\\System32\\cmd.exe /k");
     TEST_END();
 }
 
-int test_local_shell_resolve_bare_noop_for_relative_path_token(void)
+int test_local_shell_resolve_bare_rejects_relative_path_with_separator(void)
 {
     TEST_BEGIN();
-    /* Has a '/' -- treated as "already has a path", not bare, even though
-     * it isn't absolute. Whatever local_pty.c does with a relative custom
-     * path is a separate concern; this function only guards bare names. */
+    /* Has a '/' but no drive letter or UNC prefix: a relative path resolves
+     * against whatever directory the shell happens to start in -- the same
+     * hazard the bare-name search avoids by never touching CWD -- so it is
+     * refused outright, not silently launched from an unexpected place. */
     LocalShellSpec spec;
     local_shell_resolve("tools/shell.exe", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 0);
+    ASSERT_STR_EQ(spec.exe, "tools/shell.exe"); /* untouched */
+    ASSERT_TRUE(spec.error[0] != '\0');
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_rejects_relative_path_quoted(void)
+{
+    TEST_BEGIN();
+    /* Quoting doesn't rescue a relative path -- it only removes the
+     * space-splitting ambiguity, not the CWD hazard. */
+    LocalShellSpec spec;
+    local_shell_resolve("\"tools\\shell.exe\" -i", NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 0);
+    ASSERT_STR_EQ(spec.exe, "tools\\shell.exe");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_noop_for_quoted_absolute_with_spaces(void)
+{
+    TEST_BEGIN();
+    /* Quoted: the token is exact, spaces and all -- already unambiguous,
+     * no probing needed. */
+    LocalShellSpec spec;
+    local_shell_resolve("\"C:\\Program Files\\My Shell\\shell.exe\" --arg",
+                        NULL, &spec);
     ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 1);
-    ASSERT_STR_EQ(spec.exe, "tools/shell.exe");
+    ASSERT_STR_EQ(spec.exe, "C:\\Program Files\\My Shell\\shell.exe");
+    ASSERT_STR_EQ(spec.command,
+                 "\"C:\\Program Files\\My Shell\\shell.exe\" --arg");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_unquoted_spaced_picks_longest_existing_prefix(void)
+{
+    TEST_BEGIN();
+    /* Unquoted and absolute, with the real executable path itself
+     * containing spaces: first_token_exe_and_dir() only got "C:\Program"
+     * (up to the first space). The full path is the longest candidate and
+     * is tried first; it exists, so it wins over any shorter guess. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\Program Files\\My Shell\\shell.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("C:\\Program Files\\My Shell\\shell.exe --arg",
+                        &p, &spec);
+    ASSERT_STR_EQ(spec.exe, "C:\\Program"); /* the naive first-space parse */
+
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_STR_EQ(spec.exe, "C:\\Program Files\\My Shell\\shell.exe");
+    ASSERT_STR_EQ(spec.dir, "C:\\Program Files\\My Shell");
+    ASSERT_STR_EQ(spec.command,
+                 "\"C:\\Program Files\\My Shell\\shell.exe\" --arg");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_unquoted_spaced_appends_exe(void)
+{
+    TEST_BEGIN();
+    /* The longest-prefix scan appends ".exe" the same way a bare-name
+     * search does, when the candidate itself has no extension. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\Program Files\\My Shell\\shell.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("C:\\Program Files\\My Shell\\shell --arg", &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_STR_EQ(spec.exe, "C:\\Program Files\\My Shell\\shell.exe");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_unquoted_spaced_falls_back_to_shorter_match(void)
+{
+    TEST_BEGIN();
+    /* Only a shorter prefix exists on this machine (the "real" longer path
+     * is absent) -- the scan takes whatever it can find, longest first;
+     * this is the documented limit of what's possible without quotes. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\Program.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("C:\\Program Files\\My Shell\\shell.exe --arg",
+                        &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_STR_EQ(spec.exe, "C:\\Program.exe");
+    ASSERT_STR_EQ(spec.command,
+                 "C:\\Program.exe Files\\My Shell\\shell.exe --arg");
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_unquoted_spaced_rejected_when_nothing_exists(void)
+{
+    TEST_BEGIN();
+    /* Nothing along the chain of prefixes exists: refused, with a message
+     * suggesting the fix (quote the path), rather than guessing. */
+    FakeProbeData d;
+    fake_reset(&d);
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("C:\\Program Files\\My Shell\\shell.exe --arg",
+                        &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 0);
+    ASSERT_STR_EQ(spec.exe, "C:\\Program"); /* untouched */
+    ASSERT_TRUE(strstr(spec.error, "quote") != NULL);
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_unquoted_spaced_null_probe_rejected(void)
+{
+    TEST_BEGIN();
+    /* A NULL probe can confirm nothing exists, so the ambiguous case must
+     * refuse rather than guess -- the safe default, not a crash. */
+    LocalShellSpec spec;
+    local_shell_resolve("C:\\Program Files\\My Shell\\shell.exe --arg",
+                        NULL, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, NULL), 0);
     TEST_END();
 }
 
@@ -857,6 +991,88 @@ int test_local_shell_resolve_bare_null_safety(void)
 {
     TEST_BEGIN();
     ASSERT_EQ(local_shell_resolve_bare(NULL, NULL), 1);
+    TEST_END();
+}
+
+/* =========================================================================
+ * Reclassification: a custom command that resolves to exactly one of the
+ * automatic search's own detected shells behaves as if "Automatic" had
+ * found it -- same env additions, same platform-lock eligibility -- while
+ * keeping the user's own command line untouched. Picking a shell from the
+ * profile editor's dropdown just writes that shell's exact command line as
+ * a custom one, so this is also what makes that path behave correctly.
+ * ========================================================================= */
+
+int test_local_shell_resolve_bare_reclassifies_quoted_path_to_gitbash(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
+    fake_add_path(&d, "C:\\Git\\bin\\bash.exe");
+    fake_add_env(&d, "USERPROFILE", "C:\\Users\\tom");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("\"C:\\Git\\bin\\bash.exe\" -i", &p, &spec);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM); /* not yet -- bare resolve does it */
+
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_GITBASH);
+    ASSERT_EQ(local_shell_kind_is_posix(spec.kind), 1);
+    /* The user's own command line and arguments are untouched. */
+    ASSERT_STR_EQ(spec.command, "\"C:\\Git\\bin\\bash.exe\" -i");
+
+    /* And it now gets the bash env additions, same as automatic detection
+     * would have given it. */
+    int found_home = 0, found_shell = 0;
+    for (int i = 0; i < spec.env_count; i++) {
+        if (strcmp(spec.env[i].name, "HOME") == 0) {
+            ASSERT_STR_EQ(spec.env[i].value, "C:\\Users\\tom");
+            found_home = 1;
+        }
+        if (strcmp(spec.env[i].name, "SHELL") == 0) found_shell = 1;
+    }
+    ASSERT_TRUE(found_home);
+    ASSERT_TRUE(found_shell);
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_reclassifies_bare_name_to_cmd(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_env(&d, "SystemRoot", "C:\\Windows");
+    fake_add_path(&d, "C:\\Windows\\System32\\cmd.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("cmd.exe /k dir", &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CMD);
+    ASSERT_STR_EQ(spec.command, "C:\\Windows\\System32\\cmd.exe /k dir");
+    ASSERT_EQ(local_shell_kind_is_posix(spec.kind), 0);
+    TEST_END();
+}
+
+int test_local_shell_resolve_bare_unmatched_custom_stays_custom(void)
+{
+    TEST_BEGIN();
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_set_registry(&d, "HKLM\\SOFTWARE\\GitForWindows", "InstallPath", "C:\\Git");
+    fake_add_path(&d, "C:\\Git\\bin\\bash.exe");
+    fake_add_path(&d, "C:\\msys64\\usr\\bin\\zsh.exe");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    /* zsh.exe at that path isn't anything the automatic search would ever
+     * itself produce (it only looks for bash.exe there), so this must stay
+     * SHELL_CUSTOM even though Git bash is also detected on this machine. */
+    local_shell_resolve("\"C:\\msys64\\usr\\bin\\zsh.exe\" -l", &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 1);
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM);
     TEST_END();
 }
 
