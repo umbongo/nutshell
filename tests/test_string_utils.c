@@ -540,3 +540,44 @@ int test_cell_text_codepoint_passthrough(void)
     ASSERT_EQ(cell_text_codepoint(0x20AC), (uint32_t)0x20AC); /* Euro sign */
     TEST_END();
 }
+
+/* ---- utf8_codepoint_count (paste-confirm dialog's "(N chars)" count) ---- */
+
+int test_utf8_codepoint_count_ascii(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)utf8_codepoint_count("hello", 5), 5);
+    TEST_END();
+}
+
+int test_utf8_codepoint_count_multibyte(void)
+{
+    TEST_BEGIN();
+    /* "€5" -- euro sign (3 UTF-8 bytes, 1 codepoint) + '5': 4 bytes, 2 chars. */
+    const char s[] = "\xE2\x82\xAC" "5";
+    ASSERT_EQ((int)utf8_codepoint_count(s, sizeof(s) - 1), 2);
+    TEST_END();
+}
+
+int test_utf8_codepoint_count_emoji_4byte(void)
+{
+    TEST_BEGIN();
+    /* Grinning face U+1F600: 4 UTF-8 bytes, 1 codepoint. */
+    const char s[] = "\xF0\x9F\x98\x80";
+    ASSERT_EQ((int)utf8_codepoint_count(s, sizeof(s) - 1), 1);
+    TEST_END();
+}
+
+int test_utf8_codepoint_count_empty(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)utf8_codepoint_count("", 0), 0);
+    TEST_END();
+}
+
+int test_utf8_codepoint_count_null_safe(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ((int)utf8_codepoint_count(NULL, 10), 0);
+    TEST_END();
+}

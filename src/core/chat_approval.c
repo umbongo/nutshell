@@ -1,5 +1,6 @@
 /* src/core/chat_approval.c */
 #include "chat_approval.h"
+#include "paste_filter.h"
 #include <string.h>
 #include <ctype.h>
 
@@ -19,24 +20,17 @@ static int is_whitespace_only(const char *s)
     return 1;
 }
 
-/* Defense in depth against C1: a command containing a raw control byte
- * (< 0x20 or 0x7F) is refused here too, even though ai_extract_commands()
- * already drops such payloads -- any other caller that reaches this queue
- * gets the same guarantee. */
-static int has_control_char(const char *s)
-{
-    if (!s) return 0;
-    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-        if (*p < 0x20 || *p == 0x7F) return 1;
-    }
-    return 0;
-}
-
 int chat_approval_add(ApprovalQueue *q, const char *command,
                       CmdPlatform platform)
 {
     if (!command || is_whitespace_only(command)) return -1;
-    if (has_control_char(command)) return -1;
+    /* Defense in depth: a command containing a raw control byte, a
+     * UTF-8-encoded C1 control, or a bidi override/isolate character is
+     * refused here too, even though ai_extract_commands() already drops
+     * such payloads -- any other caller that reaches this queue gets the
+     * same guarantee. Shared with paste_filter_controls() so there is one
+     * place that defines "control-ish byte a command must not contain". */
+    if (text_has_unsafe_command_char(command)) return -1;
     if (q->count >= APPROVAL_MAX_CMDS) return -1;
 
     int idx = q->count;

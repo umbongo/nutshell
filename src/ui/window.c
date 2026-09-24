@@ -1821,7 +1821,13 @@ static char *read_clipboard_text_utf8(HWND hwnd)
 
     if (local) return local;
 
-    /* Fallback: CF_TEXT only. */
+    /* Fallback: CF_TEXT only, which Windows hands out in the system ANSI
+     * codepage (CP_ACP), not UTF-8. Convert it the same way
+     * set_clipboard_utf8() converts the other direction: ANSI -> UTF-16
+     * (MultiByteToWideChar(CP_ACP)) -> UTF-8 (WideCharToMultiByte(CP_UTF8))
+     * -- a raw _strdup() here would hand non-ASCII ANSI bytes to code that
+     * expects UTF-8 throughout (paste_filter_controls(), the terminal
+     * write, the confirm dialog), mangling anything outside plain ASCII. */
     if (!IsClipboardFormatAvailable(CF_TEXT)) return NULL;
     if (!OpenClipboard(hwnd)) return NULL;
 
@@ -1831,10 +1837,24 @@ static char *read_clipboard_text_utf8(HWND hwnd)
     const char *raw = (const char *)GlobalLock(hClip);
     if (!raw) { CloseClipboard(); return NULL; }
 
-    /* Copy to a local buffer so the clipboard is free before the dialog
-     * blocks.  The user must be able to copy new text while the preview is
-     * open. */
-    local = _strdup(raw);
+    int wneed = MultiByteToWideChar(CP_ACP, 0, raw, -1, NULL, 0);
+    if (wneed > 0) {
+        wchar_t *wraw = (wchar_t *)malloc((size_t)wneed * sizeof(wchar_t));
+        if (wraw && MultiByteToWideChar(CP_ACP, 0, raw, -1, wraw, wneed) > 0) {
+            int need = WideCharToMultiByte(CP_UTF8, 0, wraw, -1,
+                                           NULL, 0, NULL, NULL);
+            if (need > 0) {
+                local = (char *)malloc((size_t)need);
+                if (local && WideCharToMultiByte(CP_UTF8, 0, wraw, -1,
+                                 local, need, NULL, NULL) <= 0) {
+                    free(local);
+                    local = NULL;
+                }
+            }
+        }
+        free(wraw);
+    }
+
     GlobalUnlock(hClip);
     CloseClipboard();
     return local;
@@ -2990,6 +3010,55 @@ static void key_on_send_menu(HWND hwnd, UINT id)
         default:
             break;
     }
+}
+
+/* Wait up to timeout_ms for is_done() to become true, pumping this
+ * thread's inbound *sent* messages the whole time instead of blocking in
+ * Sleep(). Used only in the WM_DESTROY exit path, waiting for background
+ * workers (a connection thread, an AI stream) this window orphaned to
+ * finish on their own.
+ *
+ * A plain Sleep loop here can deadlock: a connection thread can be
+ * blocked showing a host-key or passphrase MessageBox owned by hwnd, and
+ * Windows delivers some of that dialog's own housekeeping (WM_ENABLE and
+ * similar) to the owner via a cross-thread SendMessage -- which blocks
+ * the sending thread until hwnd's thread (this one) calls
+ * GetMessage/PeekMessage/WaitMessage and lets the system dispatch it.
+ * While this thread sits in Sleep(), that dispatch never happens, so the
+ * dialog can never finish, so the worker never reaches the code that
+ * would let is_done() become true: the wait -- and thus the whole
+ * shutdown -- hangs for its full timeout, or a very long time, every time.
+ *
+ * MsgWaitForMultipleObjects(..., QS_SENDMESSAGE) both wakes promptly when
+ * such a message arrives and, like any of the wait/peek/get calls, causes
+ * the system to dispatch it. The explicit PeekMessage drain right after is
+ * a belt-and-braces catch for anything the wait alone didn't already
+ * hand off; it is filtered to PM_QS_SENDMESSAGE so it can never pick up an
+ * ordinary posted message (WM_PAINT, WM_TIMER, ...) and re-enter state
+ * that is mid-teardown here. */
+static void pump_wait_ms(DWORD timeout_ms, int (*is_done)(void))
+{
+    DWORD start = GetTickCount();
+    for (;;) {
+        if (is_done()) return;
+        DWORD elapsed = GetTickCount() - start;
+        if (elapsed >= timeout_ms) return;
+        DWORD slice = timeout_ms - elapsed;
+        if (slice > 20) slice = 20;   /* re-check is_done() often */
+
+        MsgWaitForMultipleObjects(0, NULL, FALSE, slice, QS_SENDMESSAGE);
+
+        MSG msg;
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE | PM_QS_SENDMESSAGE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+}
+
+static int conn_jobs_done(void)
+{
+    return InterlockedCompareExchange(&g_live_conn_jobs, 0, 0) <= 0;
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -4384,13 +4453,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* free_session() cancelled and orphaned any connection still in
              * progress; give those threads a moment to notice and leave
              * libssh2/OpenSSL before the exit handlers and WSACleanup run.
-             * ui_run() deals with one that is still stuck after this. */
-            {
-                DWORD t0 = GetTickCount();
-                while (InterlockedCompareExchange(&g_live_conn_jobs, 0, 0) > 0 &&
-                       GetTickCount() - t0 < 3000)
-                    Sleep(20);
-            }
+             * ui_run() deals with one that is still stuck after this.
+             * Pumps sent messages while waiting -- see pump_wait_ms(): a
+             * plain Sleep loop here can deadlock against a connection
+             * thread blocked in a host-key MessageBox owned by hwnd. */
+            pump_wait_ms(3000, conn_jobs_done);
             if (g_config) config_free(g_config);
             renderer_free(&g_renderer);
             g_hMenuFont = NULL;

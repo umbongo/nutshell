@@ -32,6 +32,14 @@ int str_append_fmt(char *buf, size_t cap, size_t *len, const char *fmt, ...)
  * Returns the number of bytes written, or 0 for invalid codepoints. */
 int utf8_encode(uint32_t cp, char *buf);
 
+/* Count the Unicode codepoints (not bytes) in the first `len` bytes of a
+ * UTF-8 string: every byte that is not a continuation byte (0x80-0xBF)
+ * starts a new codepoint. A malformed sequence still counts its lead byte
+ * once, same as a well-formed one -- this is a display character count for
+ * a UI label (the paste-confirm dialog's "(N chars)"), not a validator. A
+ * NULL `s` counts as zero. */
+size_t utf8_codepoint_count(const char *s, size_t len);
+
 /* Hardening: sanitise a terminal cell codepoint before it leaves the
  * terminal buffer as text (selection copy, clipboard, AI context). A
  * well-behaved emulator never stores a control character in a cell, but

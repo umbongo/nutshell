@@ -397,6 +397,56 @@ int test_ai_stream_abort_all_on_panel_close(void)
     TEST_END();
 }
 
+/* Hardening: the AI panel's WM_DESTROY drains its table with
+ *   while (t.count > 0) {
+ *       owner = ai_stream_table_owner_at(&t, 0);
+ *       if (owner) abort_session_stream(d, owner);   // ai_chat.c only
+ *       else       ai_stream_table_abort_owner(&t, NULL);
+ *   }
+ * -- exercised here at the table-primitive level, since abort_session_stream()
+ * itself lives in src/ui/ai_chat.c (Win32-only, not built for native tests).
+ * A NULL owner is defensive (nothing today calls ai_stream_table_add()
+ * with one), but the primitive it falls back to -- ai_stream_table_abort_owner()
+ * matching and removing entries whose owner is exactly NULL -- must work,
+ * or that loop spins forever the moment one exists: entries with a real
+ * owner are left in place by a NULL-targeted abort (owner comparison is by
+ * identity), so the drain always terminates only if this removes the NULL
+ * entry every time it's tried. */
+int test_ai_stream_table_null_owner_entry_drains(void)
+{
+    TEST_BEGIN();
+    int live0 = ai_stream_live_count();
+    AiStreamTable t;
+    ai_stream_table_init(&t);
+    int owner_a = 0;
+    AiStream *with_owner = ai_stream_new();
+    AiStream *no_owner   = ai_stream_new();
+    ai_stream_table_add(&t, with_owner, &owner_a);
+    ai_stream_table_add(&t, no_owner, NULL);
+    ASSERT_EQ(t.count, 2);
+
+    /* The exact drain the panel's WM_DESTROY performs -- must terminate. */
+    int iterations = 0;
+    while (t.count > 0 && iterations < 10) {
+        void *owner = ai_stream_table_owner_at(&t, 0);
+        if (owner)
+            ai_stream_table_abort_owner(&t, owner);
+        else
+            ai_stream_table_abort_owner(&t, NULL);
+        iterations++;
+    }
+
+    ASSERT_EQ(t.count, 0);
+    ASSERT_TRUE(iterations <= 2);   /* one entry removed per iteration */
+    ASSERT_TRUE(ai_stream_aborted(with_owner));
+    ASSERT_TRUE(ai_stream_aborted(no_owner));
+    ASSERT_EQ(ai_stream_live_count(), live0 + 2);   /* workers still out */
+    ai_stream_release(with_owner);
+    ai_stream_release(no_owner);
+    ASSERT_EQ(ai_stream_live_count(), live0);
+    TEST_END();
+}
+
 int test_ai_stream_table_full_and_bad_args(void)
 {
     TEST_BEGIN();

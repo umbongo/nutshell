@@ -607,6 +607,27 @@ void term_process(Terminal *term, const char *data, size_t len) {
 
         switch (term->state) {
             case TERM_STATE_NORMAL:
+                /* Hardening: a pending multi-byte UTF-8 sequence must not
+                 * survive a C0 control or DEL, and especially not the ESC
+                 * that starts an escape/CSI/OSC sequence -- none of those
+                 * call term_put_char_utf8(), so without this the pending
+                 * state (utf8_remaining/utf8_lo/utf8_hi, left over from
+                 * before the control byte) would still be waiting when
+                 * TERM_STATE_NORMAL resumes, and a continuation byte
+                 * arriving after the intervening bytes could complete a
+                 * codepoint built from lead/continuation bytes that never
+                 * belonged together. Flush with one replacement character,
+                 * matching term_put_char_utf8()'s own resync behaviour for
+                 * a sequence broken by an invalid continuation byte, then
+                 * fall through to handle the control normally. DEL (0x7F)
+                 * is included here even though it is also >= 0x20 and so
+                 * would otherwise reach term_put_char_utf8() (which already
+                 * resyncs) -- handling it in the same place as every other
+                 * control keeps this one rule easy to audit. */
+                if ((c < 0x20 || c == 0x7F) && term->utf8_remaining > 0) {
+                    term->utf8_remaining = 0;
+                    term_put_char(term, 0xFFFDu);
+                }
                 if (c == 0x1B) {
                     term->state = TERM_STATE_ESC;
                 } else if (c == '\r') {
