@@ -33,6 +33,11 @@ typedef struct {
     char colour_scheme[CFG_STR_MAX];
     char ai_provider[CFG_STR_MAX];
     char ai_api_key[CFG_STR_MAX];
+    /* Verbatim copy of the last encrypted API-key blob this process could
+     * NOT decrypt (moved from another user/PC, or corrupt). See
+     * Profile.password_enc_preserved in profile.h for the exact rules --
+     * this field follows the same load/save contract. */
+    char ai_api_key_enc_preserved[CFG_BLOB_MAX];
     char ai_custom_url[CFG_STR_MAX];
     char ai_custom_model[CFG_STR_MAX];
     char ai_system_notes[AI_NOTES_MAX];

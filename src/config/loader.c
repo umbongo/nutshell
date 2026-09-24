@@ -87,6 +87,99 @@ static void field_copy(char *dst, size_t dst_size, const char *src)
     (void)snprintf(dst, dst_size, "%s", src);
 }
 
+/* ---- Encrypted-secret load/save helpers ------------------------------------
+ *
+ * Every secret (profile password, AI API key) shares one contract:
+ *
+ *   Load:
+ *     - A DPAPI blob ("$dpapi$v1$...") that decrypts -> plaintext used.
+ *     - A legacy blob ("$aes256gcm$v1$...", MachineGuid-derived key) that
+ *       decrypts -> plaintext used, and *out_migrated is set so the caller
+ *       re-saves once (writing it back as DPAPI; the legacy code stays for
+ *       this migration read only, new writes never produce it again).
+ *     - Any blob that fails to decrypt (wrong user/machine, or corrupt) ->
+ *       plaintext left empty, but the raw blob string is preserved
+ *       verbatim so a save before the user supplies a new value writes it
+ *       back unchanged (moving the config back to its original PC/user
+ *       still works).
+ *     - A bare (unencrypted) value -- a very old config, or a hand-edited
+ *       one -- is used as plaintext directly.
+ *
+ *   Save:
+ *     - Plaintext present -> encrypt fresh with DPAPI; any previously
+ *       preserved foreign/corrupt blob is dropped (the user supplied a new
+ *       value, so there is nothing left to preserve it for).
+ *     - Plaintext empty, a preserved blob present -> write the preserved
+ *       blob back verbatim, unre-encrypted.
+ *     - Plaintext empty, nothing preserved -> write "" (this is also what
+ *       happens when the user explicitly clears a password that had
+ *       decrypted successfully: no blob was ever preserved for it, so
+ *       clearing the field naturally clears the blob on save too).
+ */
+
+/* Load one secret field from its raw JSON string value. `plain_out` and
+ * `preserved_out` are cleared first, so exactly one of "decrypted
+ * plaintext" or "blob preserved verbatim" holds afterward (both empty for
+ * a missing/empty raw value). Sets *out_migrated to 1 (never clears it) when
+ * a legacy blob was successfully decrypted, so the caller knows to re-save. */
+static void load_secret(const char *raw, char *plain_out, size_t plain_cap,
+                         char *preserved_out, size_t preserved_cap,
+                         int *out_migrated)
+{
+    plain_out[0] = '\0';
+    preserved_out[0] = '\0';
+
+    if (!raw || raw[0] == '\0') {
+        return;
+    }
+
+    if (crypto_is_dpapi(raw)) {
+        char tmp[CFG_STR_MAX];
+        if (crypto_decrypt_dpapi(raw, tmp, sizeof(tmp)) == CRYPTO_OK) {
+            field_copy(plain_out, plain_cap, tmp);
+        } else {
+            field_copy(preserved_out, preserved_cap, raw);
+        }
+        secure_zero(tmp, sizeof(tmp));
+        return;
+    }
+
+    if (crypto_is_encrypted(raw)) {
+        char tmp[CFG_STR_MAX];
+        if (crypto_decrypt(raw, tmp, sizeof(tmp)) == CRYPTO_OK) {
+            field_copy(plain_out, plain_cap, tmp);
+            if (out_migrated) *out_migrated = 1;
+        } else {
+            field_copy(preserved_out, preserved_cap, raw);
+        }
+        secure_zero(tmp, sizeof(tmp));
+        return;
+    }
+
+    /* Not a recognised encrypted-blob prefix at all: treat as plaintext. */
+    field_copy(plain_out, plain_cap, raw);
+}
+
+/* Write one secret field's JSON string value (the caller has already
+ * written the closing quote's surrounding key/whitespace). See the
+ * load/save contract above. */
+static void save_secret(FILE *f, const char *plain, const char *preserved)
+{
+    if (plain[0] != '\0') {
+        char enc[CFG_BLOB_MAX];
+        if (crypto_encrypt_dpapi(plain, enc, sizeof(enc)) == CRYPTO_OK) {
+            fprint_json_str(f, enc);
+        } else {
+            fprint_json_str(f, ""); /* write empty on encrypt failure */
+        }
+        secure_zero(enc, sizeof(enc));
+    } else if (preserved[0] != '\0') {
+        fprint_json_str(f, preserved);
+    } else {
+        fprint_json_str(f, "");
+    }
+}
+
 /* ---- Public API ----------------------------------------------------------- */
 
 void settings_validate(Settings *s)
@@ -208,6 +301,14 @@ Config *config_load(const char *path)
 
     Config *cfg = config_new_default();
 
+    /* Set by load_secret() when a legacy AES-GCM blob decrypted fine, so we
+     * know to re-save once with DPAPI before returning -- see the bottom of
+     * this function. Without that resave, a plaintext-equivalent legacy
+     * blob (a MachineGuid-derived key is much weaker than DPAPI) could sit
+     * in the file indefinitely if the user never happens to trigger a save
+     * some other way. */
+    int migrated = 0;
+
     /* ---- Settings ---- */
     const JsonNode *jset = json_obj_get(root, "settings");
     if (jset && jset->type == JSON_OBJECT) {
@@ -265,15 +366,9 @@ Config *config_load(const char *path)
             field_copy(s->ai_custom_model, sizeof(s->ai_custom_model), sv);
         }
         if ((sv = json_obj_str(jset, "ai_api_key"))) {
-            if (crypto_is_encrypted(sv)) {
-                char plaintext[256];
-                if (crypto_decrypt(sv, plaintext, sizeof(plaintext)) == CRYPTO_OK) {
-                    field_copy(s->ai_api_key, sizeof(s->ai_api_key), plaintext);
-                    memset(plaintext, 0, sizeof(plaintext));
-                }
-            } else {
-                field_copy(s->ai_api_key, sizeof(s->ai_api_key), sv);
-            }
+            load_secret(sv, s->ai_api_key, sizeof(s->ai_api_key),
+                        s->ai_api_key_enc_preserved, sizeof(s->ai_api_key_enc_preserved),
+                        &migrated);
         }
         if ((sv = json_obj_str(jset, "ai_system_notes"))) {
             field_copy(s->ai_system_notes, sizeof(s->ai_system_notes), sv);
@@ -388,16 +483,9 @@ Config *config_load(const char *path)
                 pr->auth_type = AUTH_PASSWORD;
             }
             if ((sv = json_obj_str(jp, "password"))) {
-                if (crypto_is_encrypted(sv)) {
-                    char plaintext[256];
-                    if (crypto_decrypt(sv, plaintext, sizeof(plaintext)) == CRYPTO_OK) {
-                        field_copy(pr->password, sizeof(pr->password), plaintext);
-                        secure_zero(plaintext, sizeof(plaintext));
-                    }
-                    /* On decrypt failure, leave password empty */
-                } else {
-                    field_copy(pr->password, sizeof(pr->password), sv);
-                }
+                load_secret(sv, pr->password, sizeof(pr->password),
+                            pr->password_enc_preserved, sizeof(pr->password_enc_preserved),
+                            &migrated);
             }
             if ((sv = json_obj_str(jp, "key_path"))) {
                 field_copy(pr->key_path, sizeof(pr->key_path), sv);
@@ -418,6 +506,16 @@ Config *config_load(const char *path)
     }
 
     json_free(root);
+
+    /* At least one legacy-encrypted secret decrypted successfully above:
+     * re-save immediately so it is written back as DPAPI rather than
+     * lingering in the weaker MachineGuid-derived format. A failed save
+     * here just means the migration is retried on the next load/save --
+     * the config the caller gets back is correct either way. */
+    if (migrated) {
+        (void)config_save(cfg, path);
+    }
+
     return cfg;
 }
 
@@ -484,16 +582,7 @@ int config_save(const Config *cfg, const char *path)
     fprint_json_str(f, s->ai_custom_model);
     fputs(",\n", f);
     fputs("    \"ai_api_key\": ", f);
-    if (s->ai_api_key[0] != '\0') {
-        char enc_key[512];
-        if (crypto_encrypt(s->ai_api_key, enc_key, sizeof(enc_key)) == CRYPTO_OK) {
-            fprint_json_str(f, enc_key);
-        } else {
-            fprint_json_str(f, ""); /* write empty on encrypt failure */
-        }
-    } else {
-        fprint_json_str(f, "");
-    }
+    save_secret(f, s->ai_api_key, s->ai_api_key_enc_preserved);
     fputs(",\n", f);
     fputs("    \"ai_system_notes\": ", f);
     fprint_json_str(f, s->ai_system_notes);
@@ -550,16 +639,7 @@ int config_save(const Config *cfg, const char *path)
         fprintf(f, "      \"auth_type\": \"%s\",\n",
                 pr->auth_type == AUTH_KEY ? "key" : "password");
         fputs("      \"password\": ", f);
-        if (pr->password[0] != '\0') {
-            char enc[512];
-            if (crypto_encrypt(pr->password, enc, sizeof(enc)) == CRYPTO_OK) {
-                fprint_json_str(f, enc);
-            } else {
-                fprint_json_str(f, ""); /* write empty on encrypt failure */
-            }
-        } else {
-            fprint_json_str(f, "");
-        }
+        save_secret(f, pr->password, pr->password_enc_preserved);
         fputs(",\n", f);
         fputs("      \"key_path\": ", f);
         fprint_json_str(f, pr->key_path);

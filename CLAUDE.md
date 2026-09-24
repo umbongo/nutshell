@@ -240,7 +240,27 @@ restart, register or wait on a self-hosted runner for a pull request.
 ## Secrets
 
 - Use `secure_zero()` (from `src/core/secure_zero.h`) to wipe passwords and keys — never plain `memset`, which the compiler can optimize away.
-- API keys are stored encrypted in `nutshell.config` using `crypto_encrypt()`/`crypto_decrypt()`, same as profile passwords.
+- Every secret (profile passwords, the AI API key) is protected with Windows DPAPI
+  (`CryptProtectData`/`CryptUnprotectData`, `src/crypto/crypto_dpapi.c`), per Windows
+  user, not a machine-wide or portable key — `crypto_encrypt_dpapi()`/`crypto_decrypt_dpapi()`
+  in `src/crypto/crypto.c`, prefix `"$dpapi$v1$"`. crypt32.dll is loaded at runtime
+  (`LoadLibraryExW` + `GetProcAddress`), never a static `-lcrypt32` import. The backend is a
+  function-pointer interface (`CryptoDpapiBackend`, `src/crypto/crypto_dpapi.h`) so tests
+  inject a deterministic fake (`tests/fake_dpapi.h`/`.c`) instead of depending on real
+  per-machine DPAPI state — `tests/runner.c` installs it once for the whole run.
+- `nutshell.config` itself still travels with the exe (portability is a hard requirement) —
+  only the secret fields inside it are locked to the user/machine. Moving the config to
+  another PC or user account means its stored passwords and API key cannot be decrypted
+  there: the app treats them as absent (prompts as if no password were saved) but preserves
+  the encrypted blob verbatim in a `*_enc_preserved` field (`Profile.password_enc_preserved`,
+  `Settings.ai_api_key_enc_preserved`, `src/config/profile.h`/`config.h`) and writes it back
+  unchanged on every save, so moving the file back to its original PC/user restores it. The
+  preserved blob is dropped only when the user supplies a new value, or explicitly clears the
+  field in the profile editor.
+- A legacy `"$aes256gcm$v1$"` blob (MachineGuid-derived key, `crypto_encrypt()`/`crypto_decrypt()`)
+  is still decrypted on load for migration, but no code writes that format any more —
+  `config_load()` re-saves once immediately after migrating a legacy secret, so it does not
+  linger in the weaker format.
 
 ## Git commits
 

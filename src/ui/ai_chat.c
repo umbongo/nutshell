@@ -3195,7 +3195,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                           "All Files (*.*)\0*.*\0";
                         ofn.lpstrFile = fname;
                         ofn.nMaxFile = MAX_PATH;
-                        ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+                        ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST
+                                    | OFN_NOCHANGEDIR;
                         ofn.lpstrDefExt = "txt";
                         if (GetSaveFileName(&ofn)) {
                             FILE *f = fopen(fname, "w");

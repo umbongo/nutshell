@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200112L
 #endif
 #include "crypto.h"
+#include "crypto_dpapi.h"
 #include "secure_zero.h"
 #include <string.h>
 #include <stdlib.h>
@@ -400,10 +401,101 @@ dec_done:
     return CRYPTO_OK;
 }
 
-/* ---- Predicate ----------------------------------------------------------- */
+/* ---- Predicates ------------------------------------------------------------ */
 
 bool crypto_is_encrypted(const char *s)
 {
     if (!s) return false;
     return strncmp(s, CRYPTO_ENC_PREFIX, strlen(CRYPTO_ENC_PREFIX)) == 0;
+}
+
+bool crypto_is_dpapi(const char *s)
+{
+    if (!s) return false;
+    return strncmp(s, CRYPTO_DPAPI_PREFIX, strlen(CRYPTO_DPAPI_PREFIX)) == 0;
+}
+
+bool crypto_is_any_encrypted(const char *s)
+{
+    return crypto_is_dpapi(s) || crypto_is_encrypted(s);
+}
+
+/* ---- DPAPI-backed high-level wrappers -------------------------------------
+ *
+ * Format: CRYPTO_DPAPI_PREFIX + base64(opaque DPAPI blob). Unlike
+ * crypto_encrypt()/crypto_decrypt() above, there is no machine-derived key
+ * material here at all -- protection is delegated entirely to the active
+ * CryptoDpapiBackend (real DPAPI on Windows; see crypto_dpapi.h). */
+
+int crypto_encrypt_dpapi(const char *plaintext, char *out, size_t out_size)
+{
+    if (!plaintext || !out || out_size == 0u) return CRYPTO_ERR_ARGS;
+
+    size_t pt_len = strlen(plaintext);
+    if (pt_len > 65536u) return CRYPTO_ERR_ARGS;
+
+    /* Headroom for whatever fixed overhead the backend adds (DPAPI's is a
+     * few hundred bytes at most for inputs this size). */
+    size_t raw_cap = pt_len + 1024u;
+    unsigned char *raw = (unsigned char *)malloc(raw_cap);
+    if (!raw) return CRYPTO_ERR_ENCRYPT;
+
+    const CryptoDpapiBackend *be = crypto_dpapi_backend();
+    size_t raw_len = 0u;
+    int rc = be->protect((const unsigned char *)plaintext, pt_len,
+                          raw, raw_cap, &raw_len);
+    if (rc != CRYPTO_OK) {
+        secure_zero(raw, raw_cap);
+        free(raw);
+        return rc;
+    }
+
+    size_t prefix_len = strlen(CRYPTO_DPAPI_PREFIX);
+    size_t b64_len     = b64_enc_size(raw_len);
+    if (out_size < prefix_len + b64_len) {
+        secure_zero(raw, raw_cap);
+        free(raw);
+        return CRYPTO_ERR_BUFSIZE;
+    }
+
+    memcpy(out, CRYPTO_DPAPI_PREFIX, prefix_len);
+    size_t written = b64_encode(raw, raw_len, out + prefix_len, out_size - prefix_len);
+    secure_zero(raw, raw_cap);
+    free(raw);
+    return (written == 0u) ? CRYPTO_ERR_B64 : CRYPTO_OK;
+}
+
+int crypto_decrypt_dpapi(const char *blob, char *out, size_t out_size)
+{
+    if (!blob || !out || out_size == 0u) return CRYPTO_ERR_ARGS;
+
+    size_t prefix_len = strlen(CRYPTO_DPAPI_PREFIX);
+    if (strncmp(blob, CRYPTO_DPAPI_PREFIX, prefix_len) != 0) return CRYPTO_ERR_ARGS;
+
+    const char *b64 = blob + prefix_len;
+    size_t b64_len  = strlen(b64);
+    if (b64_len == 0u) return CRYPTO_ERR_B64;
+
+    size_t raw_max = b64_dec_max(b64_len);
+    unsigned char *raw = (unsigned char *)malloc(raw_max);
+    if (!raw) return CRYPTO_ERR_DECRYPT;
+
+    size_t raw_len = b64_decode(b64, b64_len, raw, raw_max);
+    if (raw_len == 0u) {
+        free(raw);
+        return CRYPTO_ERR_B64;
+    }
+
+    const CryptoDpapiBackend *be = crypto_dpapi_backend();
+    size_t out_len = 0u;
+    /* Reserve the trailing NUL: out_size - 1u bytes for the backend. */
+    int rc = be->unprotect(raw, raw_len, (unsigned char *)out, out_size - 1u, &out_len);
+    secure_zero(raw, raw_max);
+    free(raw);
+    if (rc != CRYPTO_OK) {
+        secure_zero(out, out_size);
+        return rc;
+    }
+    out[out_len] = '\0';
+    return CRYPTO_OK;
 }
