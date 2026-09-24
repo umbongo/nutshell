@@ -18,7 +18,13 @@
  * addition). See docs/superpowers/specs/
  * 2026-09-09-pending-command-batches.md for "batches": two independent
  * pending command cards from two separate assistant replies, with a user
- * turn in between so the transcript shows the interleaving. */
+ * turn in between so the transcript shows the interleaving.
+ *
+ * "local" (spec 2026-09-22-local-shell-design.md section 5) and "thinking"
+ * (2026-09-24, the 50-line scrollable Thinking box) are each a real state
+ * but not part of "all": "local" only swaps the terminal transcript, and
+ * "thinking" is "chat" with a much longer reasoning block attached, which
+ * "all" doesn't need a second copy of. */
 
 /* Build the canned conversation, approval queue(s) and terminal text for
  * one demo state.
@@ -44,6 +50,13 @@ int ui_demo_build(const char *state, AiConversation *conv,
  * NULL). */
 int ui_demo_state_valid(const char *state);
 
+/* 1 if `state`'s canned reply is long enough that the AI chat panel's
+ * initial scroll-to-bottom would push the Thinking disclosure off the top
+ * of the thread, so ai_chat_apply_demo_extras() (src/ui/ai_chat.c) should
+ * scroll back to the top after loading it; 0 (including for NULL) if the
+ * state should keep the bottom scroll instead. */
+int ui_demo_scrolls_to_top(const char *state);
+
 /* Every recognised state name, in a stable order ending with "all".
  * *count receives the array length. Never returns NULL. */
 const char *const *ui_demo_states(int *count);
@@ -54,5 +67,11 @@ const char *const *ui_demo_states(int *count);
  * to show it must set it there themselves after loading the conversation
  * this module built. */
 const char *ui_demo_thinking_text(void);
+
+/* The "thinking" state's much longer reasoning block -- well over
+ * THINKING_MAX_LINES (ai_panel_layout.h) lines wrapped at a typical panel
+ * width, so the expanded Thinking box hits its 50-line cap and scrolls.
+ * Same side-table caveat as ui_demo_thinking_text() above. */
+const char *ui_demo_thinking_text_long(void);
 
 #endif /* NUTSHELL_UI_DEMO_H */

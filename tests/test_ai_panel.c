@@ -288,6 +288,60 @@ int test_thinking_layout_no_overlap_between_row_elements_and_body(void)
     TEST_END();
 }
 
+/* ---- ai_thinking_max_body_h ---------------------------------------------------
+ * The expanded Thinking body's height cap: THINKING_MAX_LINES (50) lines of
+ * the body font's own measured line height (maintainer request,
+ * 2026-09-24: collapsed by default, but up to 50 lines and smart-scrollable
+ * once opened). See ai_panel_layout.h. */
+
+int test_ai_thinking_max_body_h_multiplies_by_50_lines(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ai_thinking_max_body_h(16), 800);   /* 16px line at 96 DPI */
+    ASSERT_EQ(ai_thinking_max_body_h(1), 50);
+    TEST_END();
+}
+
+int test_ai_thinking_max_body_h_scales_with_dpi(void)
+{
+    TEST_BEGIN();
+    /* A caller measuring the same font role at a higher DPI gets a taller
+     * line height (e.g. ns_font()/TEXTMETRIC at 2x DPI); the cap scales
+     * with it exactly, same as thinking_layout()'s own DPI-scaled row/pad
+     * values -- 50 lines always means 50 lines, at any DPI. */
+    ASSERT_EQ(ai_thinking_max_body_h(32), 2 * ai_thinking_max_body_h(16));
+    TEST_END();
+}
+
+int test_ai_thinking_max_body_h_zero_or_negative_line_height(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ai_thinking_max_body_h(0), 0);
+    ASSERT_EQ(ai_thinking_max_body_h(-5), 0);
+    TEST_END();
+}
+
+/* End-to-end: the real 50-line cap, fed through thinking_layout() exactly
+ * as build_thinking_layout() (src/ui/chat_listview.c) does. */
+int test_thinking_layout_with_50_line_cap_end_to_end(void)
+{
+    TEST_BEGIN();
+    int line_h = 20;
+    int max_h = ai_thinking_max_body_h(line_h);  /* 1000 */
+    NsRect avail = { 0, 0, 400, 300 };
+    ThinkingLayout out;
+
+    /* Short content (5 lines) -> natural height, no clamp. */
+    thinking_layout(avail, 1, line_h * 5, max_h, 96, &out);
+    ASSERT_EQ(out.body.h, line_h * 5);
+
+    /* Long content (80 lines) -> clamped at exactly 50 lines. */
+    thinking_layout(avail, 1, line_h * 80, max_h, 96, &out);
+    ASSERT_EQ(out.body.h, max_h);
+    ASSERT_EQ(out.body.h, line_h * THINKING_MAX_LINES);
+    TEST_END();
+}
+
 /* ---- ai_thinking_summary ------------------------------------------------------ */
 
 int test_ai_thinking_summary_words_format(void)

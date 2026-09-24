@@ -3562,7 +3562,6 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
 
         int display_dirty = 0;
-        int prev_phase = d->stream_phase;  /* before this batch's chunks */
 
         /* Process this chunk and all queued WM_AI_STREAM messages */
         WPARAM cur_wp = wParam;
@@ -3660,35 +3659,34 @@ next_coalesce:;
             chat_activity_token(&d->activity, now);
 
             if (d->stream_ai_item) {
-                /* Thinking disclosure: open while reasoning is still
-                 * streaming in; once the reply text starts, collapse back
-                 * to the summary unless the user opened it themselves this
-                 * session (show_thinking) -- see the design spec's "Thought
-                 * process" section. Only decide the collapse once, right
-                 * when this batch is the one that crosses into content
-                 * (prev_phase < 2), so a later manual expand isn't fought.
-                 * If the user has manually opened or closed *this item's*
-                 * disclosure (thinking_user_set), that choice sticks for
-                 * the rest of the stream -- neither the auto-open nor the
-                 * auto-collapse below may touch thinking_collapsed again. */
+                /* Thinking disclosure: starts (and stays) collapsed, even
+                 * while reasoning is still streaming in -- most people
+                 * don't want to see the raw reasoning (maintainer request,
+                 * 2026-09-24). chat_msg_append() already defaults every new
+                 * item's thinking_collapsed to 1, so there is nothing to do
+                 * for that case here. The one exception is a session-wide
+                 * preference: once the user has manually opened a Thinking
+                 * disclosure this session (d->show_thinking), later replies
+                 * open already-expanded too, so they aren't re-clicking the
+                 * same disclosure every turn. A manual per-item toggle
+                 * (thinking_user_set) always wins over this -- once set, it
+                 * must never be touched again from here. */
                 if (d->stream_thinking_len > 0 &&
-                    !d->stream_ai_item->u.ai.thinking_user_set) {
-                    if (d->stream_phase < 2) {
-                        d->stream_ai_item->u.ai.thinking_collapsed = 0;
-                        d->stream_ai_item->dirty = 1;
-                    } else if (prev_phase < 2 && !d->show_thinking) {
-                        d->stream_ai_item->u.ai.thinking_collapsed = 1;
-                        d->stream_ai_item->dirty = 1;
-                    }
+                    !d->stream_ai_item->u.ai.thinking_user_set &&
+                    d->show_thinking &&
+                    d->stream_ai_item->u.ai.thinking_collapsed) {
+                    d->stream_ai_item->u.ai.thinking_collapsed = 0;
+                    d->stream_ai_item->dirty = 1;
                 }
-                /* Always update thinking text if we have any */
+                /* Always update thinking text if we have any -- the box's
+                 * own follow-vs-pinned scroll (stick_scroll_on_layout(),
+                 * reused from the outer chat list) is settled inside
+                 * build_thinking_layout() itself (chat_listview.c) the next
+                 * time its geometry is computed, so there is no scroll_y
+                 * bookkeeping to do here. */
                 if (d->stream_thinking_len > 0) {
                     chat_msg_set_thinking(d->stream_ai_item,
                                           d->stream_thinking);
-                    if (!d->stream_ai_item->u.ai.thinking_collapsed
-                        && d->stream_ai_item->u.ai.thinking_autoscroll) {
-                        d->stream_ai_item->u.ai.thinking_scroll_y = 999999;
-                    }
                 }
                 /* Always update content text if we have any */
                 if (d->stream_content_len > 0) {
@@ -4954,6 +4952,15 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         free(d->thinking_history[2]);
         d->thinking_history[2] = _strdup(ui_demo_thinking_text());
     }
+    /* "thinking": same reply, but with the much longer reasoning block --
+     * see ui_demo_thinking_text_long()'s comment for why (the 50-line
+     * scrollable Thinking box). */
+    if (state && strcmp(state, "thinking") == 0 &&
+        d->conv.msg_count > 2 &&
+        d->conv.messages[2].role == AI_ROLE_ASSISTANT) {
+        free(d->thinking_history[2]);
+        d->thinking_history[2] = _strdup(ui_demo_thinking_text_long());
+    }
 
     /* Pending command batches: build real CmdBatch entries (real, unique
      * ids) in the demo session's own batch set from the canned queues --
@@ -5041,15 +5048,15 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     relayout(d);
     if (d->hChatList) {
         chat_listview_invalidate(d->hChatList);
-        /* "chat"/"all": the markdown reply is long enough to push the
-         * Thinking disclosure (right above it) off the top of the thread
-         * if scrolled to the bottom -- chat_rebuild_display() above always
-         * leaves it scrolled to the bottom, so pull it back to the top
-         * here for these two states so the gallery review set actually
-         * shows the disclosure (collapsed in "chat", expanded in "all").
-         * Every other state keeps the bottom scroll, to show its most
-         * recent activity. */
-        if (state && (strcmp(state, "chat") == 0 || strcmp(state, "all") == 0))
+        /* chat_rebuild_display() above always leaves the list scrolled to
+         * the bottom; ui_demo_scrolls_to_top() (src/core/ui_demo.c) names
+         * the states whose canned reply is long enough that this would
+         * push the Thinking disclosure off the top of the thread, and
+         * pulls it back for those so the gallery review set actually shows
+         * the disclosure. See that function's own comment for why
+         * "thinking" had to be added to the set on 2026-09-24 (a stale
+         * paint, not just a scroll position, was riding on this). */
+        if (ui_demo_scrolls_to_top(state))
             chat_listview_scroll_to_top(d->hChatList);
     }
 }
