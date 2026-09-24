@@ -273,6 +273,13 @@ int test_cmd_detect_banner_split_across_chunks(void);
 int test_cmd_detect_powershell_nologo_prompt_unknown(void);
 int test_cmd_detect_windows_powershell_banner_unknown(void);
 int test_cmd_detect_pwsh7_banner_unknown(void);
+int test_cmd_detect_linux_motd_mentions_vendor_names_stays_linux(void);
+int test_cmd_detect_vendor_word_in_catted_file_after_linux_prompt_stays_linux(void);
+int test_cmd_detect_last_login_line_is_linux_evidence(void);
+int test_cmd_detect_hop_from_linux_to_switch_and_back_stays_linux(void);
+int test_cmd_detect_vyos_banner_and_linux_shaped_prompt_agree(void);
+int test_cmd_detect_prompt_fortios_padded_hash(void);
+int test_cmd_detect_prompt_hostname_hash_tight_stays_ambiguous(void);
 /* cmd_classify.c - unknown-platform overlay and name mapping */
 int test_cmd_classify_unknown_overlay_critical_verbs(void);
 int test_cmd_classify_unknown_overlay_write_erase(void);
@@ -2772,6 +2779,13 @@ int main(void) {
     failed += test_cmd_detect_powershell_nologo_prompt_unknown();
     failed += test_cmd_detect_windows_powershell_banner_unknown();
     failed += test_cmd_detect_pwsh7_banner_unknown();
+    failed += test_cmd_detect_linux_motd_mentions_vendor_names_stays_linux();
+    failed += test_cmd_detect_vendor_word_in_catted_file_after_linux_prompt_stays_linux();
+    failed += test_cmd_detect_last_login_line_is_linux_evidence();
+    failed += test_cmd_detect_hop_from_linux_to_switch_and_back_stays_linux();
+    failed += test_cmd_detect_vyos_banner_and_linux_shaped_prompt_agree();
+    failed += test_cmd_detect_prompt_fortios_padded_hash();
+    failed += test_cmd_detect_prompt_hostname_hash_tight_stays_ambiguous();
     /* Unknown-platform overlay and name mapping */
     failed += test_cmd_classify_unknown_overlay_critical_verbs();
     failed += test_cmd_classify_unknown_overlay_write_erase();

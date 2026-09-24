@@ -405,3 +405,122 @@ int test_cmd_detect_pwsh7_banner_unknown(void) {
     ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
     TEST_END();
 }
+
+/* --- Anchoring: vendor words only count in a real banner line, never
+ * mid-sentence --- */
+
+/* A Linux motd that happens to mention several vendor product names in
+ * ordinary prose must still resolve to Linux: none of those mentions opens
+ * a line, so none of them anchors. */
+int test_cmd_detect_linux_motd_mentions_vendor_names_stays_linux(void) {
+    TEST_BEGIN();
+    const char *text =
+        "Welcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-91-generic x86_64)\r\n"
+        "\r\n"
+        "This jump host also reaches the Cisco IOS Software core switches,\r\n"
+        "the PAN-OS firewalls, the Palo Alto Networks management plane and\r\n"
+        "the Juniper Networks JUNOS Software edge routers used by the\r\n"
+        "network team.\r\n"
+        "\r\n"
+        "Last login: Mon Sep  1 08:00:00 2026 from 10.0.0.5\r\n"
+        "ops@jumphost:~$";
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_BANNER);
+    TEST_END();
+}
+
+/* A vendor word inside a file the user cats, with no banner text at all,
+ * must not resolve to that vendor -- the surrounding Linux prompt (before
+ * and after) is the only real evidence, so the session stays Linux. */
+int test_cmd_detect_vendor_word_in_catted_file_after_linux_prompt_stays_linux(void) {
+    TEST_BEGIN();
+    const char *text =
+        "tom@webhost:~$ cat notes.txt\r\n"
+        "Remember to update the Cisco IOS Software image on the core switch\r\n"
+        "and check the PAN-OS firewall license before Friday.\r\n"
+        "tom@webhost:~$";
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_PROMPT);
+    TEST_END();
+}
+
+/* "Last login:" on its own (no distro name, no resolving prompt shape) is
+ * enough to anchor Linux. */
+int test_cmd_detect_last_login_line_is_linux_evidence(void) {
+    TEST_BEGIN();
+    const char *text =
+        "Last login: Mon Sep  1 08:00:00 2026 from 10.0.0.5\r\n"
+        "some other scrolled output that is not a prompt";
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_BANNER);
+    TEST_END();
+}
+
+/* --- Reconciliation: the last line wins a genuine conflict --- */
+
+/* Hop from a Linux prompt into a switch (real, anchored IOS banner along
+ * the way) and back out to a Linux prompt: the capture still contains the
+ * switch's banner, but the *live* prompt -- the last line -- is Linux
+ * again, and that must be what resolves. */
+int test_cmd_detect_hop_from_linux_to_switch_and_back_stays_linux(void) {
+    TEST_BEGIN();
+    const char *text =
+        "tom@webhost:~$ ssh switch1\r\n"
+        "Cisco IOS Software, C3560 Software (C3560-IPSERVICESK9-M), Version 15.2(4)E\r\n"
+        "Copyright (c) 1986-2018 by Cisco Systems, Inc.\r\n"
+        "switch1#\r\n"
+        "switch1#exit\r\n"
+        "tom@webhost:~$";
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_PROMPT);
+    TEST_END();
+}
+
+/* VyOS's own default prompt has the Linux shape (it is Debian underneath);
+ * that must not read as a banner/prompt conflict -- the banner still wins,
+ * confidence BANNER, platform VyOS, not Linux. */
+int test_cmd_detect_vyos_banner_and_linux_shaped_prompt_agree(void) {
+    TEST_BEGIN();
+    const char *text =
+        "Welcome to VyOS!\r\n"
+        "\r\n"
+        "Last login: Mon Sep  1 08:00:00 2026 from 10.0.0.5\r\n"
+        "vyos@vyos:~$";
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_VYOS);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_BANNER);
+    TEST_END();
+}
+
+/* --- FortiOS's padded-hash prompt, no banner present --- */
+
+int test_cmd_detect_prompt_fortios_padded_hash(void) {
+    TEST_BEGIN();
+    const char *text = "some scrolled output\r\ncore-fw # ";
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_FORTIOS);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_PROMPT);
+    TEST_END();
+}
+
+/* The tight, unpadded "hostname#" shape must stay ambiguous -- only the
+ * padded "hostname # " form is claimed for FortiOS. */
+int test_cmd_detect_prompt_hostname_hash_tight_stays_ambiguous(void) {
+    TEST_BEGIN();
+    const char *text = "some scrolled output\r\ncore-fw#";
+    CmdDetectConfidence conf = CMD_DETECT_BANNER; /* poisoned */
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
+    TEST_END();
+}

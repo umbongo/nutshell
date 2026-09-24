@@ -19,21 +19,6 @@ static int ci_char_eq(char a, char b)
     return ci_lower((unsigned char)a) == ci_lower((unsigned char)b);
 }
 
-/* Case-insensitive "does hay[0..hay_len) contain needle" (needle is a plain
- * NUL-terminated C string). Naive O(n*m) scan -- banner text is at most a
- * few KB (term_extract_last_n caps it), so this is plenty fast. */
-static int ci_contains(const char *hay, size_t hay_len, const char *needle)
-{
-    size_t needle_len = strlen(needle);
-    if (needle_len == 0 || needle_len > hay_len) return 0;
-    for (size_t i = 0; i + needle_len <= hay_len; i++) {
-        size_t j = 0;
-        while (j < needle_len && ci_char_eq(hay[i + j], needle[j])) j++;
-        if (j == needle_len) return 1;
-    }
-    return 0;
-}
-
 /* Does line[0..len) end with suffix? Delimiter characters only (<, >, (, ),
  * [, ], #, $, @, : and space) so plain memcmp is fine -- no case folding
  * needed. */
@@ -85,7 +70,16 @@ static const char *find_last_nonempty_line(const char *text, size_t len, size_t 
     return best;
 }
 
-/* ----- Banner signals (spec 3.1) ----- */
+/* ----- Banner signals (spec 3.1), anchored -----
+ * A real login banner or motd puts its identifying product string at the
+ * very start of a line -- "Cisco IOS Software, ...", "Welcome to Ubuntu
+ * ...", "Last login: ...". A vendor's name showing up mid-sentence --
+ * someone's motd blurb ("reaches the Cisco IOS core switches"), a file the
+ * user cats, ordinary scrollback -- never does. Anchoring the search to
+ * "case-insensitive prefix of some (leading-whitespace-trimmed) line"
+ * throws out that whole class of false positive without needing to name
+ * every possible sentence shape: it is what "the vendor's actual banner
+ * format" cashes out to mechanically. */
 
 typedef struct {
     const char  *needle;
@@ -144,11 +138,47 @@ static const BannerSignal banner_signals[] = {
     { "SUSE Linux",               CMD_PLATFORM_LINUX },
     { "Alpine Linux",             CMD_PLATFORM_LINUX },
     { "Arch Linux",               CMD_PLATFORM_LINUX },
+    { "Last login:",              CMD_PLATFORM_LINUX }, /* sshd/login's own line */
     { "Linux ",                   CMD_PLATFORM_LINUX }, /* uname line of a motd */
 };
 
 static const size_t banner_signal_count =
     sizeof(banner_signals) / sizeof(banner_signals[0]);
+
+/* True if `needle` is a case-insensitive prefix of some line in
+ * hay[0..hay_len), once that line's leading whitespace is trimmed. This is
+ * the anchoring check described above the table: it accepts a genuine
+ * banner/motd line and rejects the same words sitting mid-sentence. */
+static int banner_anchor_match(const char *hay, size_t hay_len, const char *needle)
+{
+    size_t needle_len = strlen(needle);
+    if (needle_len == 0 || needle_len > hay_len) return 0;
+
+    const char *p = hay;
+    const char *end = hay + hay_len;
+
+    while (p <= end) {
+        const char *line_start = p;
+        const char *nl = memchr(p, '\n', (size_t)(end - p));
+        const char *line_end = nl ? nl : end;
+
+        const char *trim_start = line_start;
+        while (trim_start < line_end &&
+               (*trim_start == ' ' || *trim_start == '\t' || *trim_start == '\r'))
+            trim_start++;
+
+        size_t avail = (size_t)(line_end - trim_start);
+        if (avail >= needle_len) {
+            size_t j = 0;
+            while (j < needle_len && ci_char_eq(trim_start[j], needle[j])) j++;
+            if (j == needle_len) return 1;
+        }
+
+        if (!nl) break;
+        p = nl + 1;
+    }
+    return 0;
+}
 
 /* ----- Prompt shapes (spec 3.2) -----
  * Matched against the last non-empty line only. Checked in an order where
@@ -158,7 +188,16 @@ static const size_t banner_signal_count =
  * shapes, "user@host>" (Junos/PAN-OS) and bare "hostname#"/"hostname>" (six
  * families) -- falls through to CMD_PLATFORM_UNKNOWN, which is exactly the
  * "resolve to NONE" the spec calls for: the caller sees no difference
- * between an ambiguous shape and no shape at all. */
+ * between an ambiguous shape and no shape at all.
+ *
+ * "hostname#"/"hostname>" and "user@host>" stay deliberately unresolved:
+ * IOS/NX-OS/ASA/ProCurve/Aruba-CX/FortiOS genuinely share the first shape,
+ * and Junos/PAN-OS genuinely share the second, so picking one by shape
+ * alone would just be a guess (see the ambiguous-shape tests). FortiOS is
+ * the one exception worth carving out of the first group: its default
+ * prompt pads a space before the '#' ("hostname # "), which the other five
+ * families do not conventionally do -- that survives trailing-whitespace
+ * trimming as a real, if narrow, distinguishing feature. */
 static CmdPlatform match_prompt_shape(const char *line, size_t len)
 {
     if (len == 0) return CMD_PLATFORM_UNKNOWN;
@@ -189,9 +228,26 @@ static CmdPlatform match_prompt_shape(const char *line, size_t len)
                     return CMD_PLATFORM_LINUX;
             }
         }
+
+        /* "hostname # " (trimmed to "hostname #") -- FortiOS's padded-hash
+         * convention, checked only once the colon/Linux case above has had
+         * its shot, so a hypothetical "user@host: #" (colon present) still
+         * reads as Linux, never FortiOS. */
+        if (last == '#' && len >= 2 && line[len - 2] == ' ')
+            return CMD_PLATFORM_FORTIOS;
     }
 
     return CMD_PLATFORM_UNKNOWN;
+}
+
+/* Platforms whose default interactive prompt is the same
+ * "user@host:path$/#" shape Linux uses, so a match_prompt_shape() result of
+ * CMD_PLATFORM_LINUX does not, by itself, contradict an anchored banner
+ * naming one of these. VyOS is Debian underneath and keeps Debian's default
+ * bash prompt; nothing else in the table shares that convention. */
+static int platform_shares_linux_prompt_shape(CmdPlatform platform)
+{
+    return platform == CMD_PLATFORM_VYOS;
 }
 
 /* ----- Top-level detection ----- */
@@ -204,19 +260,46 @@ CmdPlatform cmd_detect_platform(const char *text, size_t len,
     if (!text || len == 0)
         return CMD_PLATFORM_UNKNOWN;
 
+    CmdPlatform banner_platform = CMD_PLATFORM_UNKNOWN;
+    int banner_found = 0;
     for (size_t i = 0; i < banner_signal_count; i++) {
-        if (ci_contains(text, len, banner_signals[i].needle)) {
-            if (confidence_out) *confidence_out = CMD_DETECT_BANNER;
-            return banner_signals[i].platform;
+        if (banner_anchor_match(text, len, banner_signals[i].needle)) {
+            banner_platform = banner_signals[i].platform;
+            banner_found = 1;
+            break;
         }
     }
 
     size_t line_len;
     const char *line = find_last_nonempty_line(text, len, &line_len);
-    if (!line)
-        return CMD_PLATFORM_UNKNOWN;
+    CmdPlatform prompt_platform = line ? match_prompt_shape(line, line_len)
+                                        : CMD_PLATFORM_UNKNOWN;
 
-    CmdPlatform prompt_platform = match_prompt_shape(line, line_len);
+    if (banner_found) {
+        if (prompt_platform == CMD_PLATFORM_UNKNOWN ||
+            prompt_platform == banner_platform ||
+            (prompt_platform == CMD_PLATFORM_LINUX &&
+             platform_shares_linux_prompt_shape(banner_platform))) {
+            /* No prompt evidence to disagree with (ambiguous or absent),
+             * or the two sources agree: the banner is the stronger of the
+             * two and wins, as before. */
+            if (confidence_out) *confidence_out = CMD_DETECT_BANNER;
+            return banner_platform;
+        }
+
+        /* Genuine conflict: an anchored banner names one platform, but the
+         * *last* line of the capture -- the live prompt, right now --
+         * unambiguously names a different one. This is the reconciliation
+         * spec item 3 calls for: rather than trusting a banner that may
+         * have scrolled out of relevance (the session hopped to another
+         * device and back, or an earlier device's banner is still sitting
+         * in the scan window behind it), prefer whichever evidence is
+         * closest to the end of the capture. The last line is by
+         * definition the most recent, so this always resolves to it. */
+        if (confidence_out) *confidence_out = CMD_DETECT_PROMPT;
+        return prompt_platform;
+    }
+
     if (prompt_platform != CMD_PLATFORM_UNKNOWN) {
         if (confidence_out) *confidence_out = CMD_DETECT_PROMPT;
         return prompt_platform;
