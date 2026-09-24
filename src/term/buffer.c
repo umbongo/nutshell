@@ -565,3 +565,10 @@ int term_at_unambiguous_prompt(const Terminal *term)
     if (!term_cursor_row_text(term, buf, sizeof(buf))) return 0;
     return shell_prompt_line_unambiguous(buf);
 }
+
+int term_cursor_row_is_windows_prompt(const Terminal *term)
+{
+    char buf[1024];
+    if (!term_cursor_row_text(term, buf, sizeof(buf))) return 0;
+    return shell_prompt_is_windows(buf);
+}

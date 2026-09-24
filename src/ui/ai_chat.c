@@ -1641,7 +1641,14 @@ static void send_user_message(AiChatData *d)
     ai_attachment_free(&d->pending_attachment);
 }
 
-static void execute_command(AiChatData *d, const char *cmd)
+/* line_clear_mode is the caller's (dispatch_tick's) already-decided
+ * DispatchLineClearMode -- computed once per tick from the same
+ * term_cursor_row_is_windows_prompt() reading dispatch_tick used for its
+ * own no-prefix safety gate, and handed in rather than recomputed here,
+ * so the prefix actually written can never disagree with the check that
+ * decided it was safe to send at all (dispatch_line_clear.h). */
+static void execute_command(AiChatData *d, const char *cmd,
+                             DispatchLineClearMode line_clear_mode)
 {
     if (!d || !cmd || !cmd[0]) return;
     SessionIo *io = d->active_io;
@@ -1674,8 +1681,7 @@ static void execute_command(AiChatData *d, const char *cmd)
      * already confirmed the line is otherwise empty and quiet since the
      * user's last keystroke when no prefix is about to be sent -- see
      * term_at_unambiguous_prompt() and dispatch_keystroke_too_recent(). */
-    if (dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d)) ==
-        DISPATCH_LINE_CLEAR_READLINE) {
+    if (line_clear_mode == DISPATCH_LINE_CLEAR_READLINE) {
         io->write(io->ctx, "\x05\x15", 2);
     }
 
@@ -1954,23 +1960,36 @@ static void dispatch_tick(AiChatData *d)
         if (d->dispatch_last_idx >= 0)
             chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
 
+        /* Computed once per tick and reused for both the safety gate below
+         * and the execute_command() call further down, so the prefix
+         * actually written can never disagree with the check that decided
+         * it was safe to send (see execute_command()'s line_clear_mode
+         * parameter doc). term_cursor_row_is_windows_prompt() overrides
+         * the session's own kind/shell name to NONE whenever the live
+         * cursor row looks like a PowerShell or cmd prompt -- an SSH
+         * session to a Windows host, or a pwsh/cmd started as a nested
+         * shell inside a local Git bash/MSYS2 session (dispatch_line_clear.h). */
+        int windows_prompt = term_cursor_row_is_windows_prompt(d->active_term);
+        DispatchLineClearMode line_clear_mode = dispatch_line_clear_mode(
+            active_session_kind(d), active_shell_name(d), windows_prompt);
+
         /* For a local shell that gets no clear-line prefix (PowerShell,
          * cmd, custom, or one not yet resolved -- see execute_command()
-         * and dispatch_line_clear.h; SSH always gets the prefix, whatever
-         * its CmdPlatform), term_at_prompt()'s loose check above -- the
-         * cursor row simply ends in a prompt character -- is not enough to
-         * send on: "PS C:\Users\thoma> ls -la >" also ends in '>' (a
-         * redirection operator mid-command) and would have the AI's
-         * command appended to a line the user is still typing. A readline
-         * shell (or any SSH session) always gets the Ctrl+E Ctrl+U prefix
-         * regardless of what is on the line first, so the loose check
-         * already covers it -- this block runs only for the no-prefix
-         * path, and only here (inside idx >= 0, after the previous entry
-         * is marked completed), so a fully-sent batch settling below is
-         * never at risk of it and every card reflects reality before any
-         * cancel below. */
-        if (dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d)) ==
-                DISPATCH_LINE_CLEAR_NONE) {
+         * and dispatch_line_clear.h; SSH normally always gets the prefix,
+         * whatever its CmdPlatform, unless windows_prompt overrides it),
+         * term_at_prompt()'s loose check above -- the cursor row simply
+         * ends in a prompt character -- is not enough to send on: "PS
+         * C:\Users\thoma> ls -la >" also ends in '>' (a redirection
+         * operator mid-command) and would have the AI's command appended
+         * to a line the user is still typing. A readline shell (or any SSH
+         * session not currently at a Windows prompt) always gets the
+         * Ctrl+E Ctrl+U prefix regardless of what is on the line first, so
+         * the loose check already covers it -- this block runs only for
+         * the no-prefix path, and only here (inside idx >= 0, after the
+         * previous entry is marked completed), so a fully-sent batch
+         * settling below is never at risk of it and every card reflects
+         * reality before any cancel below. */
+        if (line_clear_mode == DISPATCH_LINE_CLEAR_NONE) {
             DWORD now_tick = GetTickCount();
 
             /* The stricter, bare-prompt-only check: an ordinary prompt can
@@ -2053,7 +2072,7 @@ static void dispatch_tick(AiChatData *d)
          * this one turns "running", the rest stay "queued". */
         chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 0);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
-        execute_command(d, batch->q.entries[idx].command);
+        execute_command(d, batch->q.entries[idx].command, line_clear_mode);
         d->dispatch_last_idx = idx;
         d->dispatch_sent_count++;
         d->dispatch_await_echo = 1;

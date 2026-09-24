@@ -385,3 +385,146 @@ int test_shell_prompt_unambiguous_empty_and_null_negative(void) {
     ASSERT_EQ(shell_prompt_line_unambiguous(NULL), 0);
     TEST_END();
 }
+
+/* ---- shell_prompt_is_windows() -----------------------------------------
+ * Used by dispatch_line_clear_mode() (dispatch_line_clear.h) to force no
+ * clear-line prefix at a live PowerShell/cmd prompt regardless of session
+ * kind -- an SSH session to a Windows host, or a pwsh/cmd nested inside a
+ * local Git bash/MSYS2 session. */
+
+int test_shell_prompt_is_windows_powershell_user_path(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PS C:\\Users\\thoma> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_powershell_drive_root(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PS C:\\> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_powershell_path_with_spaces(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("PS C:\\Program Files> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_pwsh_on_unix_path(void) {
+    TEST_BEGIN();
+    /* pwsh running on a POSIX host still shows "PS " -- must still get
+     * NONE, since it is PSReadLine either way. */
+    ASSERT_EQ(shell_prompt_is_windows("PS /home/thoma> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_powershell_remoting_prefix(void) {
+    TEST_BEGIN();
+    /* Enter-PSSession prepends "[host]: " to every prompt line. */
+    ASSERT_EQ(shell_prompt_is_windows("[web01]: PS C:\\Users\\admin> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_powershell_remoting_prefix_fqdn(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("[web01.corp.example.com]: PS C:\\> "), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_cmd_bare(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("C:\\Users\\thoma>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_cmd_drive_root(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("C:\\>"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_cmd_customized_space_before_terminator(void) {
+    TEST_BEGIN();
+    /* "prompt $P $G" renders as "C:\x >" -- a space before the '>' is
+     * still a legitimate cmd prompt shape; this function only decides the
+     * prefix, not whether the line is safe to send to. */
+    ASSERT_EQ(shell_prompt_is_windows("C:\\x >"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_typed_redirect_still_matches(void) {
+    TEST_BEGIN();
+    /* Deliberately over-matches a command paused mid-line: this function
+     * only decides which prefix to send (always NONE here either way),
+     * never whether the line is safe to send to --
+     * term_at_unambiguous_prompt() is what must (and does, separately)
+     * reject this row for sending. */
+    ASSERT_EQ(shell_prompt_is_windows("PS C:\\Users\\thoma> ls -la >"), 1);
+    ASSERT_EQ(shell_prompt_line_unambiguous("PS C:\\Users\\thoma> ls -la >"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_bash_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("thomas@tompi:~$ "), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_bash_space_before_terminator_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("user@host ~ $"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_zsh_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("host%"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_cisco_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("Router>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_comware_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("<Comware>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_mikrotik_negative(void) {
+    TEST_BEGIN();
+    /* A bracketed device prompt that is not the "[host]: " remoting
+     * shape -- must not be mistaken for one. */
+    ASSERT_EQ(shell_prompt_is_windows("[admin@MikroTik] >"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_arubaos_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows("(ArubaOS) #"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_posix_path_without_ps_token_negative(void) {
+    TEST_BEGIN();
+    /* Git bash's own path-only prompt style -- no "PS " token, so this
+     * must not be read as pwsh-on-Unix. */
+    ASSERT_EQ(shell_prompt_is_windows("/c/Users/thoma>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_powershell_continuation_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows(">> "), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_windows_empty_and_null_negative(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_windows(""), 0);
+    ASSERT_EQ(shell_prompt_is_windows(NULL), 0);
+    TEST_END();
+}

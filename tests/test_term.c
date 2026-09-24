@@ -921,6 +921,51 @@ int test_term_at_unambiguous_prompt_alt_screen_active(void) {
     TEST_END();
 }
 
+/* ---- term_cursor_row_is_windows_prompt() (dispatch_line_clear.h no-
+ * prefix-at-a-Windows-prompt override) ------------------------------- */
+
+int test_term_cursor_row_is_windows_prompt_powershell(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "PS C:\\Users\\thoma> ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_cursor_row_is_windows_prompt_cmd(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "C:\\Users\\thoma>";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_cursor_row_is_windows_prompt_bash_negative(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "thomas@tompi:~$ ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_cursor_row_is_windows_prompt_alt_screen_active(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "C:\\Users\\thoma>";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 1);
+    term_alt_screen_enter(t);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_write_seq_increments_on_data(void) {
     TEST_BEGIN();
     Terminal *t = term_init(24, 80, 100);
