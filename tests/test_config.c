@@ -469,7 +469,7 @@ int test_config_load_realistic(void)
         "    \"ai_provider\": \"deepseek\",\n"
         "    \"ai_custom_url\": \"https://api.deepseek.com/v1\",\n"
         "    \"ai_custom_model\": \"deepseek-chat\",\n"
-        "    \"ai_api_key\": \"sk-3b016e9b5afc4000b28120f57bd6c7d9\"\n"
+        "    \"ai_api_key\": \"sk-test-placeholder-not-a-real-key\"\n"
         "  },\n"
         "  \"profiles\": [\n"
         "  ]\n"
@@ -488,7 +488,7 @@ int test_config_load_realistic(void)
     ASSERT_STR_EQ(cfg->settings.ai_provider, "deepseek");
     ASSERT_STR_EQ(cfg->settings.ai_custom_url, "https://api.deepseek.com/v1");
     ASSERT_STR_EQ(cfg->settings.ai_custom_model, "deepseek-chat");
-    ASSERT_STR_EQ(cfg->settings.ai_api_key, "sk-3b016e9b5afc4000b28120f57bd6c7d9");
+    ASSERT_STR_EQ(cfg->settings.ai_api_key, "sk-test-placeholder-not-a-real-key");
     /* Legacy config has no colour_scheme — migration fills in default */
     ASSERT_STR_EQ(cfg->settings.colour_scheme, "Onyx Synapse");
     ASSERT_EQ((int)vec_size(&cfg->profiles), 0);
