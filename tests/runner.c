@@ -594,6 +594,16 @@ int test_kh_file_created_on_add(void);
 int test_kh_multiple_hosts(void);
 int test_kh_null_inputs(void);
 int test_kh_key_rotation(void);
+int test_kh_missing_file_ok_and_new(void);
+int test_kh_directory_path_init_error(void);
+int test_kh_garbled_file_init_error(void);
+int test_kh_add_atomic_faults(void);
+int test_kh_add_missing_dir_error(void);
+int test_kh_port_specific_entries(void);
+int test_kh_case_insensitive_lookup(void);
+int test_kh_entry_name_table(void);
+int test_kh_mismatch_stored_fingerprint(void);
+int test_kh_key_type_name_table(void);
 
 /* test_key_auth.c */
 int test_key_auth_null_session(void);
@@ -2975,6 +2985,16 @@ int main(void) {
     failed += test_kh_multiple_hosts();
     failed += test_kh_null_inputs();
     failed += test_kh_key_rotation();
+    failed += test_kh_missing_file_ok_and_new();
+    failed += test_kh_directory_path_init_error();
+    failed += test_kh_garbled_file_init_error();
+    failed += test_kh_add_atomic_faults();
+    failed += test_kh_add_missing_dir_error();
+    failed += test_kh_port_specific_entries();
+    failed += test_kh_case_insensitive_lookup();
+    failed += test_kh_entry_name_table();
+    failed += test_kh_mismatch_stored_fingerprint();
+    failed += test_kh_key_type_name_table();
 
     printf("\n--- Key Auth ---\n");
     failed += test_key_auth_null_session();

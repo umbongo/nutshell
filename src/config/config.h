@@ -25,7 +25,9 @@ typedef struct {
     char log_format[CFG_STR_MAX];
     char log_dir[CFG_STR_MAX];
     int debug_terminal;  /* raw terminal data log for escape-sequence debugging */
-    char host_key_verification[CFG_STR_MAX];
+    char host_key_verification[CFG_STR_MAX]; /* "strict" refuses an unknown or changed
+                                                 host key without prompting; anything
+                                                 else (default "tofu") prompts. No UI. */
     char foreground_colour[CFG_STR_MAX];
     char background_colour[CFG_STR_MAX];
     char colour_scheme[CFG_STR_MAX];
