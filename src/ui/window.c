@@ -113,6 +113,17 @@ typedef struct Session {
     DWORD     last_socket_data_tick;  /* GetTickCount() of last libssh2 recv() */
     DWORD     last_keepalive_tick;    /* GetTickCount() of last keepalive_send() */
     DWORD     last_user_input_tick;   /* GetTickCount() of last user activity */
+    /* GetTickCount() of the last keystroke or paste actually written to
+     * *this* session's terminal -- a narrower subset of
+     * last_user_input_tick above, which also counts AI-panel typing and
+     * mouse-wheel scrolling. Bumped only from session_mark_terminal_input()
+     * (the WM_CHAR/WM_SYSCHAR/WM_KEYDOWN/WM_SYSKEYDOWN handlers and the
+     * paste path). SessionIo.last_input_tick points here, not at
+     * last_user_input_tick, so the AI dispatcher's no-prefix keystroke
+     * guard (dispatch_keystroke_too_recent(), src/core/dispatch_line_clear.h)
+     * cannot be triggered by typing the AI's next question or scrolling
+     * the terminal to look at earlier output. */
+    DWORD     last_term_input_tick;
     uint64_t  prev_bytes_read;        /* SshSession.bytes_read_total snapshot */
     struct Session *next;
 } Session;
@@ -263,6 +274,21 @@ static void refresh_reduced_motion(void)
 void session_mark_user_active(void) {
     if (g_active_session) {
         g_active_session->last_user_input_tick = GetTickCount();
+    }
+}
+
+/* A narrower version of session_mark_user_active() for the handlers that
+ * actually write a keystroke or a paste to the active session's terminal
+ * -- also bumps last_term_input_tick (see the Session field's comment),
+ * which is all the AI dispatcher's no-prefix keystroke guard reads. Every
+ * call site here already called session_mark_user_active() before this
+ * function existed; this replaces that call, not adds to it, so the two
+ * ticks never drift apart at a real terminal keystroke. */
+static void session_mark_terminal_input(void) {
+    if (g_active_session) {
+        DWORD now = GetTickCount();
+        g_active_session->last_user_input_tick = now;
+        g_active_session->last_term_input_tick = now;
     }
 }
 
@@ -870,9 +896,12 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
          * fill in the keystroke-tick pointer the AI dispatcher's no-prefix
          * safety check reads (SessionIo.last_input_tick,
          * src/term/session_io.h) on the local copy, then publish s->io in
-         * one assignment rather than two, same as the SSH connect path. */
+         * one assignment rather than two, same as the SSH connect path.
+         * Points at last_term_input_tick, not last_user_input_tick: only
+         * a keystroke/paste actually written to this terminal may hold
+         * the dispatcher back, not AI-panel typing or wheel scrolling. */
         SessionIo io = session_io_local(pty);
-        io.last_input_tick = &s->last_user_input_tick;
+        io.last_input_tick = &s->last_term_input_tick;
         s->io = io;
     }
 
@@ -1856,7 +1885,7 @@ static void paste_finish(void)
 /* Called by WM_TIMER when wParam == PASTE_TIMER_ID */
 static void paste_timer_tick(void)
 {
-    session_mark_user_active();
+    session_mark_terminal_input();
     bool more = paste_send_next_line();
     if (g_active_session && g_active_session->term) {
         g_active_session->term->scrollback_offset = 0;
@@ -1939,7 +1968,7 @@ static char *read_clipboard_text_utf8(HWND hwnd)
 static void do_paste(HWND hwnd)
 {
     if (!g_active_session || !g_active_session->io.ctx) return;
-    session_mark_user_active();
+    session_mark_terminal_input();
 
     /* Cancel any in-progress paste */
     paste_cancel();
@@ -3939,9 +3968,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                  * not this Session -- fill in the keystroke-tick pointer
                  * (SessionIo.last_input_tick, src/term/session_io.h) on the
                  * local copy first, so s->io is still published in one
-                 * assignment. */
+                 * assignment. Points at last_term_input_tick, not
+                 * last_user_input_tick: only a keystroke/paste actually
+                 * written to this terminal may hold the dispatcher back. */
                 SessionIo io = session_io_ssh(s->ssh, s->channel);
-                io.last_input_tick = &s->last_user_input_tick;
+                io.last_input_tick = &s->last_term_input_tick;
                 s->io = io;
                 term_process(s->term, "\r\nConnected.\r\n", 14);
                 /* Keep a log the user already started from the File menu
@@ -4353,22 +4384,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_CHAR:
-            session_mark_user_active();
+            session_mark_terminal_input();
             key_on_char(hwnd, wParam);
             return 0;
 
         case WM_SYSCHAR:
-            session_mark_user_active();
+            session_mark_terminal_input();
             if (key_on_syschar(hwnd, wParam, lParam)) return 0;
             break;  /* Alt+Space, Alt+Enter, ... : DefWindowProc */
 
         case WM_KEYDOWN:
-            session_mark_user_active();
+            session_mark_terminal_input();
             if (key_on_keydown(hwnd, wParam, lParam)) return 0;
             break;  /* a character key: TranslateMessage has queued its WM_CHAR */
 
         case WM_SYSKEYDOWN: {
-            session_mark_user_active();
+            session_mark_terminal_input();
             SysKeyDownResult r = key_on_syskeydown(hwnd, wParam, lParam);
             if (r == SYSKEYDOWN_HANDLED) return 0;
             if (r == SYSKEYDOWN_SENT_AND_PASS)

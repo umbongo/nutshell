@@ -1918,12 +1918,15 @@ static void dispatch_tick(AiChatData *d)
         d->dispatch_last_change_tick = GetTickCount();
         d->dispatch_await_echo = 0;
         /* Output means the stall (if there was one) is over: the next one
-         * gets its own status line. Same for the ambiguous-prompt wait --
-         * new output means the row that looked ambiguous is gone, so any
-         * new ambiguity starts its own timeout window. */
+         * gets its own status line. The ambiguous-prompt wait is *not*
+         * reset here, deliberately: a command that updates a line ending
+         * in something prompt-shaped (a progress bar's "... 50 %",
+         * redirection's "... >") on every burst of output would otherwise
+         * re-arm and re-report every cycle without ever timing out --
+         * dispatch_ambiguous_since_tick/_reported are cleared only when
+         * the check actually passes, or the batch starts, cancels or
+         * finishes (see below and dispatch_start()/dispatch_cancel()). */
         d->dispatch_stall_reported = 0;
-        d->dispatch_ambiguous_since_tick = 0;
-        d->dispatch_ambiguous_reported = 0;
     }
 
     int quiet = (GetTickCount() - d->dispatch_last_change_tick) >= PROMPT_QUIET_MS;
@@ -1951,8 +1954,17 @@ static void dispatch_tick(AiChatData *d)
 
     int idx = chat_approval_next_approved(&batch->q);
     if (idx >= 0) {
-        if (d->dispatch_last_idx >= 0)
+        if (d->dispatch_last_idx >= 0) {
             chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
+            /* Sync the display now, not only right before the next send
+             * below: the checks that follow can return without sending
+             * anything this tick (a no-prefix wait, possibly for several
+             * ticks in a row), and the card for the command that just
+             * finished must not sit showing "running" for that whole
+             * wait. */
+            chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 0);
+            if (d->hChatList) chat_listview_invalidate(d->hChatList);
+        }
 
         /* For a local shell that gets no clear-line prefix (PowerShell,
          * cmd, custom, or one not yet resolved -- see execute_command()
@@ -1973,30 +1985,37 @@ static void dispatch_tick(AiChatData *d)
                 DISPATCH_LINE_CLEAR_NONE) {
             DWORD now_tick = GetTickCount();
 
-            /* The stricter, bare-prompt-only check: an ordinary prompt can
-             * legitimately have a space right before its terminator (cmd's
-             * default "$P $G" renders as "C:\x >"; a themed prompt like
-             * "[main] >"), so this alone must not cancel the batch -- see
-             * "ambiguous" below. */
-            int ambiguous = !term_at_unambiguous_prompt(d->active_term);
-
-            /* Also require a quiet spell since the user's last keystroke
-             * in this terminal (SessionIo.last_input_tick,
-             * src/term/session_io.h): ConPTY echoes asynchronously, so a
-             * character just typed but not yet echoed is invisible to the
-             * check above (write_seq has not changed yet either, so
-             * "quiet" above does not catch it), and would get the AI's
-             * command glued onto its front (e.g. "xGet-ChildItem").
-             * last_input_tick is NULL when nothing tracks one for this
-             * session, in which case there is nothing to guard against. */
-            if (!ambiguous && d->active_io && d->active_io->last_input_tick) {
+            /* A keystroke landed too recently to trust the cursor row
+             * (ConPTY echoes asynchronously, so a character just typed
+             * but not yet echoed is invisible to the row text below --
+             * see dispatch_keystroke_too_recent()). Delay silently: this
+             * is not "an ambiguous prompt" -- it resolves on its own the
+             * moment the echo catches up (almost always well under a
+             * second), so it must not post the status line below, nor
+             * start or advance the 5 s cancel clock -- only a prompt row
+             * that is genuinely ambiguous does either of those.
+             * last_input_tick (SessionIo.last_input_tick,
+             * src/term/session_io.h) points at Session.last_term_input_tick
+             * specifically, bumped only where a keystroke or paste is
+             * actually written to *this* terminal's session -- not AI-panel
+             * typing or mouse-wheel scrolling, neither of which can glue
+             * text onto a dispatched command, so typing the AI's next
+             * question cannot stall or cancel this batch. NULL when
+             * nothing tracks one for this session, in which case there is
+             * nothing to guard against. */
+            if (d->active_io && d->active_io->last_input_tick) {
                 unsigned long since_keystroke = (unsigned long)
                     (now_tick - *d->active_io->last_input_tick);
                 if (dispatch_keystroke_too_recent(since_keystroke))
-                    ambiguous = 1;
+                    return;
             }
 
-            if (ambiguous) {
+            /* The stricter, bare-prompt-only check: an ordinary prompt can
+             * legitimately have a space right before its terminator (cmd's
+             * default "$P $G" renders as "C:\x >"; a themed prompt like
+             * "[main] >"), so this alone must not cancel the batch
+             * outright. */
+            if (!term_at_unambiguous_prompt(d->active_term)) {
                 /* Not something waiting out can necessarily fix -- unlike
                  * a continuation prompt, finishing the command does not
                  * make an oddly-shaped prompt stop looking ambiguous --
@@ -2006,7 +2025,12 @@ static void dispatch_tick(AiChatData *d)
                  * once the condition has persisted past
                  * DISPATCH_AMBIGUOUS_PROMPT_TIMEOUT_MS (see
                  * dispatch_line_clear.h for why that bound exists and how
-                 * it was chosen). */
+                 * it was chosen). The timer and the report-once flag are
+                 * cleared only when this check passes below, or the batch
+                 * starts, cancels or finishes -- never merely because
+                 * output arrived (see the write_seq handling above) --
+                 * so a command that keeps refreshing a prompt-shaped line
+                 * cannot re-arm this every burst without ever timing out. */
                 if (d->dispatch_ambiguous_since_tick == 0)
                     d->dispatch_ambiguous_since_tick = now_tick;
 
