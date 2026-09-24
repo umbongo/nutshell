@@ -448,27 +448,70 @@ int test_cmd_detect_vendor_word_in_catted_file_after_linux_prompt_stays_linux(vo
     TEST_END();
 }
 
-/* "Last login:" on its own (no distro name, no resolving prompt shape) is
- * enough to anchor Linux. */
-int test_cmd_detect_last_login_line_is_linux_evidence(void) {
+/* "Last login:" is no longer a Linux signal at all (removed 2026-09-24:
+ * Junos, PAN-OS and Arista print their own "Last login:" line too, so it
+ * does not distinguish Linux from them). On its own, with no distro banner
+ * and no resolving prompt shape, this must now stay unresolved. */
+int test_cmd_detect_last_login_alone_is_no_longer_linux_evidence(void) {
     TEST_BEGIN();
     const char *text =
         "Last login: Mon Sep  1 08:00:00 2026 from 10.0.0.5\r\n"
         "some other scrolled output that is not a prompt";
+    CmdDetectConfidence conf = CMD_DETECT_BANNER; /* poisoned */
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
+    TEST_END();
+}
+
+/* A Junos device's login flow prints its own "Last login:" line, then
+ * "--- JUNOS <version> built ..." -- the line "JUNOS " alone does not anchor
+ * (it starts with "--- "), so this needs its own needle. */
+int test_cmd_detect_junos_after_last_login_banner(void) {
+    TEST_BEGIN();
+    const char *text =
+        "Last login: Mon Sep  1 08:00:00 2026 from 10.0.0.5\r\n"
+        "--- JUNOS 21.4R3.15 built 2022-08-19 15:57:59 UTC\r\n"
+        "admin@srx1500>";
     CmdDetectConfidence conf = CMD_DETECT_NONE;
     CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
-    ASSERT_EQ((int)p, (int)CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_JUNOS);
     ASSERT_EQ((int)conf, (int)CMD_DETECT_BANNER);
     TEST_END();
 }
 
-/* --- Reconciliation: the last line wins a genuine conflict --- */
+/* A PAN-OS device's login flow can print an sshd-style "Last login:" line
+ * too. With no PAN-OS banner text in this capture and only the ambiguous
+ * "user@host>" prompt shape (shared with Junos) on the last line, this must
+ * stay CMD_PLATFORM_UNKNOWN -- and, crucially, must NOT resolve to Linux the
+ * way it would have while "Last login:" was still a Linux signal. */
+int test_cmd_detect_panos_after_last_login_stays_unresolved_not_linux(void) {
+    TEST_BEGIN();
+    const char *text =
+        "Last login: Mon Sep  1 08:00:00 2026 from 10.0.0.5\r\n"
+        "admin@fw1>";
+    CmdDetectConfidence conf = CMD_DETECT_BANNER; /* poisoned */
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_TRUE(p != CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
+    TEST_END();
+}
 
-/* Hop from a Linux prompt into a switch (real, anchored IOS banner along
- * the way) and back out to a Linux prompt: the capture still contains the
- * switch's banner, but the *live* prompt -- the last line -- is Linux
- * again, and that must be what resolves. */
-int test_cmd_detect_hop_from_linux_to_switch_and_back_stays_linux(void) {
+/* --- Initial detection no longer reconciles a banner against a later,
+ * disagreeing last line (item 3: cmd_detect_platform() reverts to deciding
+ * from the banner outright, same as before the 2026-09-24 branch, anchoring
+ * aside) --- */
+
+/* Hop from a Linux prompt into a switch (real, anchored IOS banner along the
+ * way) and back out to a Linux prompt, all within one capture: the anchored
+ * IOS banner decides outright, even though the capture's last line has
+ * since gone back to an unambiguous Linux shape. (window.c's post-resolution
+ * poll is what catches this kind of drift after the fact -- see the
+ * cmd_detect_last_line_contradicts()/cmd_detect_transition_allowed() tests
+ * below -- and even then it can only step down to CMD_PLATFORM_UNKNOWN, not
+ * back to CMD_PLATFORM_LINUX.) */
+int test_cmd_detect_hop_from_linux_to_switch_and_back_banner_decides(void) {
     TEST_BEGIN();
     const char *text =
         "tom@webhost:~$ ssh switch1\r\n"
@@ -479,8 +522,25 @@ int test_cmd_detect_hop_from_linux_to_switch_and_back_stays_linux(void) {
         "tom@webhost:~$";
     CmdDetectConfidence conf = CMD_DETECT_NONE;
     CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
-    ASSERT_EQ((int)p, (int)CMD_PLATFORM_LINUX);
-    ASSERT_EQ((int)conf, (int)CMD_DETECT_PROMPT);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_CISCO_IOS);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_BANNER);
+    TEST_END();
+}
+
+/* An anchored IOS banner followed by a last line that happens to look like
+ * the Linux ":"-before-"#" shape ("foo: bar #") must still resolve to IOS,
+ * from the banner -- never Linux. */
+int test_cmd_detect_ios_banner_then_colon_hash_last_line_never_linux(void) {
+    TEST_BEGIN();
+    const char *text =
+        "Cisco IOS Software, C3560 Software (C3560-IPSERVICESK9-M), Version 15.2(4)E\r\n"
+        "Copyright (c) 1986-2018 by Cisco Systems, Inc.\r\n"
+        "foo: bar #";
+    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
+    ASSERT_TRUE(p != CMD_PLATFORM_LINUX);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_CISCO_IOS);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_BANNER);
     TEST_END();
 }
 
@@ -501,20 +561,22 @@ int test_cmd_detect_vyos_banner_and_linux_shaped_prompt_agree(void) {
     TEST_END();
 }
 
-/* --- FortiOS's padded-hash prompt, no banner present --- */
+/* --- FortiOS's padded-hash prompt shape was removed (item 2): it matched
+ * ordinary Linux root prompts too, so both the padded and the tight
+ * "hostname#" forms stay ambiguous, with no banner present. --- */
 
-int test_cmd_detect_prompt_fortios_padded_hash(void) {
+/* The padded "hostname # " form -- no longer claimed for FortiOS. */
+int test_cmd_detect_prompt_fortios_padded_hash_now_ambiguous(void) {
     TEST_BEGIN();
     const char *text = "some scrolled output\r\ncore-fw # ";
-    CmdDetectConfidence conf = CMD_DETECT_NONE;
+    CmdDetectConfidence conf = CMD_DETECT_BANNER; /* poisoned */
     CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
-    ASSERT_EQ((int)p, (int)CMD_PLATFORM_FORTIOS);
-    ASSERT_EQ((int)conf, (int)CMD_DETECT_PROMPT);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
     TEST_END();
 }
 
-/* The tight, unpadded "hostname#" shape must stay ambiguous -- only the
- * padded "hostname # " form is claimed for FortiOS. */
+/* The tight, unpadded "hostname#" shape stays ambiguous, as before. */
 int test_cmd_detect_prompt_hostname_hash_tight_stays_ambiguous(void) {
     TEST_BEGIN();
     const char *text = "some scrolled output\r\ncore-fw#";
@@ -522,5 +584,121 @@ int test_cmd_detect_prompt_hostname_hash_tight_stays_ambiguous(void) {
     CmdPlatform p = cmd_detect_platform(text, strlen(text), &conf);
     ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
     ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
+    TEST_END();
+}
+
+/* The padded shape's real-world false positives: ordinary Linux root
+ * prompts ("/ #" from a minimal/busybox root shell, "host ~ #" from a
+ * customised PS1) must never read as FortiOS. */
+int test_cmd_detect_linux_root_prompts_not_fortios(void) {
+    TEST_BEGIN();
+    const char *slash = "some scrolled output\r\n/ #";
+    const char *tilde = "some scrolled output\r\nhost ~ #";
+
+    CmdDetectConfidence conf = CMD_DETECT_BANNER; /* poisoned */
+    CmdPlatform p = cmd_detect_platform(slash, strlen(slash), &conf);
+    ASSERT_TRUE(p != CMD_PLATFORM_FORTIOS);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
+
+    conf = CMD_DETECT_BANNER;
+    p = cmd_detect_platform(tilde, strlen(tilde), &conf);
+    ASSERT_TRUE(p != CMD_PLATFORM_FORTIOS);
+    ASSERT_EQ((int)p, (int)CMD_PLATFORM_UNKNOWN);
+    ASSERT_EQ((int)conf, (int)CMD_DETECT_NONE);
+    TEST_END();
+}
+
+/* --- Post-resolution: cmd_detect_last_line_contradicts() (item 4) ---
+ * Cheap, last-line-only check used after a platform has already resolved.
+ * No banner scan -- a banner-looking string elsewhere in the tail is not
+ * examined at all, only the last non-empty line's prompt shape. */
+
+int test_cmd_detect_last_line_contradicts_unambiguous_disagreement(void) {
+    TEST_BEGIN();
+    const char *linux_line = "tom@webhost:~$";
+    ASSERT_TRUE(cmd_detect_last_line_contradicts(
+        linux_line, strlen(linux_line), CMD_PLATFORM_CISCO_IOS) != 0);
+    TEST_END();
+}
+
+int test_cmd_detect_last_line_contradicts_agreement_is_not_contradiction(void) {
+    TEST_BEGIN();
+    const char *linux_line = "tom@webhost:~$";
+    ASSERT_TRUE(cmd_detect_last_line_contradicts(
+        linux_line, strlen(linux_line), CMD_PLATFORM_LINUX) == 0);
+    TEST_END();
+}
+
+int test_cmd_detect_last_line_contradicts_ambiguous_shape_is_not_contradiction(void) {
+    TEST_BEGIN();
+    /* "switch1#" is the ambiguous hostname# shape -- not unambiguous
+     * evidence of anything, so this must never read as a contradiction,
+     * whichever platform the session already resolved to. */
+    const char *ambiguous = "switch1#";
+    ASSERT_TRUE(cmd_detect_last_line_contradicts(
+        ambiguous, strlen(ambiguous), CMD_PLATFORM_CISCO_IOS) == 0);
+    ASSERT_TRUE(cmd_detect_last_line_contradicts(
+        ambiguous, strlen(ambiguous), CMD_PLATFORM_LINUX) == 0);
+    TEST_END();
+}
+
+int test_cmd_detect_last_line_contradicts_vyos_linux_shape_agrees(void) {
+    TEST_BEGIN();
+    const char *linux_shaped = "vyos@vyos:~$";
+    ASSERT_TRUE(cmd_detect_last_line_contradicts(
+        linux_shaped, strlen(linux_shaped), CMD_PLATFORM_VYOS) == 0);
+    TEST_END();
+}
+
+int test_cmd_detect_last_line_contradicts_no_line_is_not_contradiction(void) {
+    TEST_BEGIN();
+    const char *nothing = "just some scrolled log output\r\n";
+    ASSERT_TRUE(cmd_detect_last_line_contradicts(
+        nothing, strlen(nothing), CMD_PLATFORM_CISCO_IOS) == 0);
+    ASSERT_TRUE(cmd_detect_last_line_contradicts(
+        NULL, 0, CMD_PLATFORM_CISCO_IOS) == 0);
+    TEST_END();
+}
+
+/* --- Post-resolution: cmd_detect_transition_allowed() (item 4) ---
+ * Pure function: the one invariant continued detection must never violate
+ * -- host output can tighten a session's ruleset, never loosen it. */
+
+typedef struct {
+    CmdPlatform from;
+    CmdPlatform to;
+    int         allowed;
+} CmdDetectTransitionCase;
+
+int test_cmd_detect_transition_allowed_table(void) {
+    TEST_BEGIN();
+    static const CmdDetectTransitionCase cases[] = {
+        /* A no-op is always fine. */
+        { CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_CISCO_IOS, 1 },
+        { CMD_PLATFORM_LINUX,     CMD_PLATFORM_LINUX,     1 },
+        { CMD_PLATFORM_UNKNOWN,   CMD_PLATFORM_UNKNOWN,   1 },
+        /* Any resolved platform may step down to unresolved -- always at
+         * least as strict, see classify_unknown_segment(). */
+        { CMD_PLATFORM_LINUX,     CMD_PLATFORM_UNKNOWN,   1 },
+        { CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_UNKNOWN,   1 },
+        { CMD_PLATFORM_JUNOS,     CMD_PLATFORM_UNKNOWN,   1 },
+        { CMD_PLATFORM_FORTIOS,   CMD_PLATFORM_UNKNOWN,   1 },
+        { CMD_PLATFORM_VYOS,      CMD_PLATFORM_UNKNOWN,   1 },
+        /* Once unresolved, never leaves -- moving to any concrete platform
+         * would be a loosening. */
+        { CMD_PLATFORM_UNKNOWN,   CMD_PLATFORM_LINUX,     0 },
+        { CMD_PLATFORM_UNKNOWN,   CMD_PLATFORM_CISCO_IOS, 0 },
+        { CMD_PLATFORM_UNKNOWN,   CMD_PLATFORM_JUNOS,     0 },
+        /* Never sideways to a different concrete platform. */
+        { CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_LINUX,     0 },
+        { CMD_PLATFORM_LINUX,     CMD_PLATFORM_CISCO_IOS, 0 },
+        { CMD_PLATFORM_JUNOS,     CMD_PLATFORM_PANOS,     0 },
+        { CMD_PLATFORM_VYOS,      CMD_PLATFORM_LINUX,     0 },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int got = cmd_detect_transition_allowed(cases[i].from, cases[i].to) ? 1 : 0;
+        ASSERT_EQ(got, cases[i].allowed);
+    }
     TEST_END();
 }

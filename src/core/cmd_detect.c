@@ -116,6 +116,11 @@ static const BannerSignal banner_signals[] = {
     { "Palo Alto Networks", CMD_PLATFORM_PANOS },
     /* ----- Banner: Junos ----- */
     { "JUNOS ",           CMD_PLATFORM_JUNOS },
+    { "--- JUNOS",        CMD_PLATFORM_JUNOS }, /* "--- JUNOS 21.4R3... built" --
+                                                  * the line after a Junos device's
+                                                  * own "Last login:" line; "JUNOS "
+                                                  * above does not anchor it since
+                                                  * the line starts with "--- ". */
     { "Junos OS",         CMD_PLATFORM_JUNOS },
     { "Juniper Networks", CMD_PLATFORM_JUNOS },
     /* ----- Banner: FortiOS ----- */
@@ -138,8 +143,11 @@ static const BannerSignal banner_signals[] = {
     { "SUSE Linux",               CMD_PLATFORM_LINUX },
     { "Alpine Linux",             CMD_PLATFORM_LINUX },
     { "Arch Linux",               CMD_PLATFORM_LINUX },
-    { "Last login:",              CMD_PLATFORM_LINUX }, /* sshd/login's own line */
     { "Linux ",                   CMD_PLATFORM_LINUX }, /* uname line of a motd */
+    /* NOTE: "Last login:" is deliberately NOT a Linux signal (removed
+     * 2026-09-24) -- it is sshd/login's own line, and Junos, PAN-OS and
+     * Arista print it too on their own login flows, so it does not
+     * distinguish Linux from them the way every other entry above does. */
 };
 
 static const size_t banner_signal_count =
@@ -193,11 +201,13 @@ static int banner_anchor_match(const char *hay, size_t hay_len, const char *need
  * "hostname#"/"hostname>" and "user@host>" stay deliberately unresolved:
  * IOS/NX-OS/ASA/ProCurve/Aruba-CX/FortiOS genuinely share the first shape,
  * and Junos/PAN-OS genuinely share the second, so picking one by shape
- * alone would just be a guess (see the ambiguous-shape tests). FortiOS is
- * the one exception worth carving out of the first group: its default
- * prompt pads a space before the '#' ("hostname # "), which the other five
- * families do not conventionally do -- that survives trailing-whitespace
- * trimming as a real, if narrow, distinguishing feature. */
+ * alone would just be a guess (see the ambiguous-shape tests). FortiOS's
+ * padded "hostname # " form was briefly carved out of the first group
+ * (2026-09-24), on the theory that the space before the '#' was a real
+ * FortiOS-only tell; it also matches ordinary Linux root prompts ("/ #",
+ * "host ~ #") and plenty of plain non-prompt output ending in " #", so it
+ * was removed again -- FortiOS stays in the ambiguous group like the other
+ * five. */
 static CmdPlatform match_prompt_shape(const char *line, size_t len)
 {
     if (len == 0) return CMD_PLATFORM_UNKNOWN;
@@ -228,13 +238,6 @@ static CmdPlatform match_prompt_shape(const char *line, size_t len)
                     return CMD_PLATFORM_LINUX;
             }
         }
-
-        /* "hostname # " (trimmed to "hostname #") -- FortiOS's padded-hash
-         * convention, checked only once the colon/Linux case above has had
-         * its shot, so a hypothetical "user@host: #" (colon present) still
-         * reads as Linux, never FortiOS. */
-        if (last == '#' && len >= 2 && line[len - 2] == ' ')
-            return CMD_PLATFORM_FORTIOS;
     }
 
     return CMD_PLATFORM_UNKNOWN;
@@ -260,50 +263,61 @@ CmdPlatform cmd_detect_platform(const char *text, size_t len,
     if (!text || len == 0)
         return CMD_PLATFORM_UNKNOWN;
 
-    CmdPlatform banner_platform = CMD_PLATFORM_UNKNOWN;
-    int banner_found = 0;
+    /* An anchored banner decides outright once found -- it does not matter
+     * what the capture's last line says, even if it unambiguously names a
+     * different platform (e.g. the session hopped to another device and
+     * back within the same scan window). Reconciling that kind of drift is
+     * cmd_detect_last_line_contradicts()'s job, run tick by tick by the
+     * caller only *after* a platform has already resolved -- not this
+     * function's, which only ever resolves once, from a clean read of
+     * whatever it is given. */
     for (size_t i = 0; i < banner_signal_count; i++) {
         if (banner_anchor_match(text, len, banner_signals[i].needle)) {
-            banner_platform = banner_signals[i].platform;
-            banner_found = 1;
-            break;
+            if (confidence_out) *confidence_out = CMD_DETECT_BANNER;
+            return banner_signals[i].platform;
         }
     }
 
     size_t line_len;
     const char *line = find_last_nonempty_line(text, len, &line_len);
-    CmdPlatform prompt_platform = line ? match_prompt_shape(line, line_len)
-                                        : CMD_PLATFORM_UNKNOWN;
+    if (!line)
+        return CMD_PLATFORM_UNKNOWN;
 
-    if (banner_found) {
-        if (prompt_platform == CMD_PLATFORM_UNKNOWN ||
-            prompt_platform == banner_platform ||
-            (prompt_platform == CMD_PLATFORM_LINUX &&
-             platform_shares_linux_prompt_shape(banner_platform))) {
-            /* No prompt evidence to disagree with (ambiguous or absent),
-             * or the two sources agree: the banner is the stronger of the
-             * two and wins, as before. */
-            if (confidence_out) *confidence_out = CMD_DETECT_BANNER;
-            return banner_platform;
-        }
-
-        /* Genuine conflict: an anchored banner names one platform, but the
-         * *last* line of the capture -- the live prompt, right now --
-         * unambiguously names a different one. This is the reconciliation
-         * spec item 3 calls for: rather than trusting a banner that may
-         * have scrolled out of relevance (the session hopped to another
-         * device and back, or an earlier device's banner is still sitting
-         * in the scan window behind it), prefer whichever evidence is
-         * closest to the end of the capture. The last line is by
-         * definition the most recent, so this always resolves to it. */
-        if (confidence_out) *confidence_out = CMD_DETECT_PROMPT;
-        return prompt_platform;
-    }
-
+    CmdPlatform prompt_platform = match_prompt_shape(line, line_len);
     if (prompt_platform != CMD_PLATFORM_UNKNOWN) {
         if (confidence_out) *confidence_out = CMD_DETECT_PROMPT;
         return prompt_platform;
     }
 
     return CMD_PLATFORM_UNKNOWN;
+}
+
+int cmd_detect_last_line_contradicts(const char *text, size_t len,
+                                      CmdPlatform resolved)
+{
+    if (!text || len == 0)
+        return 0;
+
+    size_t line_len;
+    const char *line = find_last_nonempty_line(text, len, &line_len);
+    if (!line)
+        return 0;
+
+    CmdPlatform shape = match_prompt_shape(line, line_len);
+    if (shape == CMD_PLATFORM_UNKNOWN)
+        return 0; /* ambiguous shape -- not evidence of anything */
+    if (shape == resolved)
+        return 0; /* agrees */
+    if (shape == CMD_PLATFORM_LINUX && platform_shares_linux_prompt_shape(resolved))
+        return 0; /* VyOS's own prompt is Linux-shaped -- agreement, not conflict */
+
+    return 1;
+}
+
+int cmd_detect_transition_allowed(CmdPlatform from, CmdPlatform to)
+{
+    /* A no-op is always fine; otherwise the only place a resolved session
+     * may move to, ever, is CMD_PLATFORM_UNKNOWN -- see this function's
+     * header comment for why that is always at least as strict. */
+    return to == from || to == CMD_PLATFORM_UNKNOWN;
 }

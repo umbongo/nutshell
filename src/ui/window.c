@@ -837,10 +837,22 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
 
     /* Platform. An explicit profile setting always wins (on_session_connect
      * already locked it). Otherwise a known POSIX-ish shell pins Linux with
-     * no banner scan -- there is no login banner to scan; a custom command
-     * could be anything, so it stays on `auto` and the scan runs. */
+     * no banner scan -- there is no login banner to scan. A known Windows
+     * shell (PowerShell, cmd) is locked the other way: there is no Windows
+     * ruleset for it to resolve to, and letting it auto-detect would mean
+     * its own output -- something it printed, something piped through it --
+     * could otherwise walk the session to a *looser* ruleset than the one it
+     * starts on, which the invariant in CLAUDE.md never allows. A custom
+     * command could be anything, so it alone stays on `auto` and the scan
+     * runs. */
     if (!s->platform_locked && local_shell_kind_is_posix(kind)) {
         s->ai_state.platform  = (int)CMD_PLATFORM_LINUX;
+        s->platform_locked    = 1;
+        s->platform_scanned   = 1;
+    } else if (!s->platform_locked &&
+               (kind == SHELL_PWSH || kind == SHELL_POWERSHELL ||
+                kind == SHELL_CMD)) {
+        s->ai_state.platform  = (int)CMD_PLATFORM_UNKNOWN;
         s->platform_locked    = 1;
         s->platform_scanned   = 1;
     }
@@ -3415,30 +3427,28 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                     s->platform_scan_ticks >= PLATFORM_DETECT_MAX_TICKS)
                                     s->platform_scanned = 1;
                             } else if (!s->platform_locked) {
-                                /* Resolved (or gave up) once already, but stay
-                                 * alert for a live contradiction: the session
-                                 * hopped to a different, unambiguous prompt
-                                 * (another device, or back to Linux) since we
-                                 * stopped actively scanning. cmd_detect_platform
-                                 * itself prefers the most recent evidence when a
-                                 * banner and a later prompt disagree within one
-                                 * call (see its header comment); this is the
-                                 * same idea across calls, bounded to only the
-                                 * case that is unambiguous evidence of drift.
-                                 * A CMD_DETECT_NONE result (nothing resolves in
-                                 * the current tail any more) is not evidence of
-                                 * anything and must never reset the session back
-                                 * to CMD_PLATFORM_UNKNOWN. */
-                                char detect_buf[4096];
-                                size_t detect_len = term_extract_last_n(
-                                    s->term, 40, detect_buf, sizeof detect_buf);
-                                CmdDetectConfidence detect_conf = CMD_DETECT_NONE;
-                                CmdPlatform detected = cmd_detect_platform(
-                                    detect_buf, detect_len, &detect_conf);
-                                if (detect_conf == CMD_DETECT_PROMPT &&
-                                    detected != CMD_PLATFORM_UNKNOWN &&
-                                    detected != (CmdPlatform)s->ai_state.platform)
-                                    s->ai_state.platform = (int)detected;
+                                /* Resolved (or gave up) once already. The
+                                 * invariant from here on (CLAUDE.md): host
+                                 * output may only make the session's ruleset
+                                 * STRICTER, never looser -- so continued
+                                 * checking may move it to CMD_PLATFORM_UNKNOWN
+                                 * (always at least as strict, see
+                                 * cmd_detect_transition_allowed()'s doc
+                                 * comment) and nowhere else. It never guesses
+                                 * a *different* specific platform from here,
+                                 * and once at CMD_PLATFORM_UNKNOWN it never
+                                 * leaves. Cheap on purpose: only the last
+                                 * line's prompt shape is checked, no banner
+                                 * scan, so this is safe to run every tick. */
+                                char last_line_buf[256];
+                                size_t last_line_len = term_extract_last_n(
+                                    s->term, 4, last_line_buf, sizeof last_line_buf);
+                                CmdPlatform resolved = (CmdPlatform)s->ai_state.platform;
+                                if (cmd_detect_last_line_contradicts(
+                                        last_line_buf, last_line_len, resolved) &&
+                                    cmd_detect_transition_allowed(
+                                        resolved, CMD_PLATFORM_UNKNOWN))
+                                    s->ai_state.platform = (int)CMD_PLATFORM_UNKNOWN;
                             }
                         }
 
