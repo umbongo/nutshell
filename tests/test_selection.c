@@ -204,6 +204,38 @@ int test_sel_extract_single_char(void)
     TEST_END();
 }
 
+/* Hardening: a cell holding a raw DEL byte (0x7F) must be copied as a
+ * space, never the control byte itself. */
+int test_sel_extract_del_becomes_space(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 0);
+    feed(t, "A\x7F" "B");  /* DEL lands in a cell: NORMAL state passes any byte >= 0x20 through */
+    Selection sel = { .start_row=0, .start_col=0, .end_row=0, .end_col=2 };
+    char buf[64];
+    size_t n = selection_extract_text(&sel, t, buf, sizeof(buf));
+    ASSERT_EQ(n, 3u);
+    ASSERT_EQ(strcmp(buf, "A B"), 0);
+    term_free(t);
+    TEST_END();
+}
+
+/* Hardening: a cell holding a C1 control (U+0080-U+009F, reached via a
+ * UTF-8-encoded remote byte sequence) must also come out as a space. */
+int test_sel_extract_c1_control_becomes_space(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 0);
+    feed(t, "A\xC2\x80" "B");  /* U+0080 in a cell */
+    Selection sel = { .start_row=0, .start_col=0, .end_row=0, .end_col=2 };
+    char buf[64];
+    size_t n = selection_extract_text(&sel, t, buf, sizeof(buf));
+    ASSERT_EQ(n, 3u);
+    ASSERT_EQ(strcmp(buf, "A B"), 0);
+    term_free(t);
+    TEST_END();
+}
+
 /* Verify that the last character of a full-row selection is included. */
 int test_sel_extract_includes_last_char(void)
 {

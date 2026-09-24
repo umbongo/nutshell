@@ -53,8 +53,8 @@ BEGIN
     /* Local only: occupies the space Host/Port/User/Auth vacate.  Declared
      * last so it z-orders on top of the rows above; the two sets are never
      * visible at the same time (see toggle_kind_fields in session_manager.c). */
-    LTEXT           "Shell command (blank = automatic):", IDC_STATIC_SHELL, 198, 40, 160, 8
-    EDITTEXT        IDC_EDIT_SHELL,                   198,  52, 320,  14, ES_AUTOHSCROLL
+    LTEXT           "Shell (blank = automatic):", IDC_STATIC_SHELL, 198, 40, 160, 8
+    COMBOBOX        IDC_EDIT_SHELL,                   198,  52, 320, 100, CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL | WS_TABSTOP
 
     RTEXT           "AI Notes:",        -1,           191, 153,  42,   8
     EDITTEXT        IDC_EDIT_AI_NOTES,                237, 150, 267, 117, ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN

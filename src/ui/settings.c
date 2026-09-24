@@ -147,6 +147,9 @@ typedef struct {
 
 typedef struct {
     Config  *cfg;
+    const char *config_path; /* M-8/H6: absolute path resolved at startup --
+                               * never the bare CONFIG_FILENAME, which would
+                               * save into whatever the CWD has become. */
     HWND     hTooltip;
     HFONT    hDlgFont;   /* MS Shell Dlg 8pt — applied to all child controls */
     HFONT    hBoldFont;  /* same face, bold — nav headers + breadcrumb title */
@@ -1066,6 +1069,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             HWND lbl = make_label2(nd->hPage, "API Key:");
             HWND ed = make_edit2(nd->hPage, nd->cfg->settings.ai_api_key,
                                  (HMENU)IDC_AI_KEY_EDIT, ES_PASSWORD);
+            /* Match the edit box's limit to Settings.ai_api_key's buffer
+             * size -- the IDOK handler's GetDlgItemText() already
+             * truncates safely at that size, but without this the box
+             * lets the user type (and believe they saved) more than will
+             * ever actually be kept. */
+            SendMessage(ed, EM_SETLIMITTEXT,
+                        (WPARAM)(sizeof(nd->cfg->settings.ai_api_key) - 1u), 0);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 0);
         }
         {
@@ -1631,6 +1641,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             /* AI API key */
             GetDlgItemText(d->hPage, IDC_AI_KEY_EDIT,
                            s->ai_api_key, (int)sizeof(s->ai_api_key));
+            /* M-4: a new, non-empty key just typed in drops any stale
+             * foreign/corrupt blob sitting in memory from before -- see
+             * config_secret_drop_stale_preserved()'s doc comment. Without
+             * this, clearing the field again later in the same run (no
+             * config reload in between) would resurrect that old blob on
+             * save instead of writing "". */
+            config_secret_drop_stale_preserved(s->ai_api_key,
+                s->ai_api_key_enc_preserved, sizeof(s->ai_api_key_enc_preserved));
 
             /* AI custom URL */
             GetDlgItemText(d->hPage, IDC_AI_CUSTOM_URL,
@@ -1723,7 +1741,17 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
             /* Clamp out-of-range values before persisting */
             settings_validate(s);
-            config_save(d->cfg, CONFIG_FILENAME);
+            /* M5: report a save failure instead of silently discarding the
+             * changes just applied above -- the file may be read-only,
+             * locked by another program, or saving may have been disabled
+             * for this session because nutshell.config could not be read
+             * at startup (see window.c's WM_CREATE / M3). */
+            if (config_save(d->cfg, d->config_path) != 0) {
+                MessageBox(hwnd,
+                    "Could not save nutshell.config. Your settings changes "
+                    "have not been written to disk.",
+                    "Save Failed", MB_OK | MB_ICONWARNING);
+            }
             DestroyWindow(hwnd);
             break;
         }
@@ -1756,7 +1784,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
 /* ---- Public API --------------------------------------------------------- */
 
-void settings_dlg_show(HWND parent, Config *cfg, int initial_page)
+void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
+                        int initial_page)
 {
     if (!cfg) return;
 
@@ -1764,6 +1793,7 @@ void settings_dlg_show(HWND parent, Config *cfg, int initial_page)
     SettingsDlgData *d = (SettingsDlgData *)calloc(1u, sizeof(SettingsDlgData));
     if (!d) return;
     d->cfg = cfg;
+    d->config_path = config_path;
     d->initial_page = initial_page;
 
     WNDCLASSEX wc;

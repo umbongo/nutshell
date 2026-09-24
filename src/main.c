@@ -54,7 +54,20 @@ static int run_list(void)
     if (dir[0] != '\0') {
         (void)snprintf(cfg_path, sizeof(cfg_path), "%s\\" CONFIG_FILENAME, dir);
     } else {
-        (void)snprintf(cfg_path, sizeof(cfg_path), CONFIG_FILENAME);
+        /* Could not determine the exe's own directory: fall back to the
+         * same absolute per-user location the running app would use
+         * (window.c), never a bare relative CONFIG_FILENAME -- that would
+         * silently read from wherever this process's current working
+         * directory happens to be. */
+        char local_appdata[MAX_PATH];
+        DWORD la_len = GetEnvironmentVariableA("LOCALAPPDATA", local_appdata,
+                                                (DWORD)sizeof(local_appdata));
+        if (la_len == 0 || la_len >= sizeof(local_appdata) ||
+            !config_fallback_path(local_appdata, cfg_path, sizeof(cfg_path))) {
+            cli_output("Could not find a folder to store " CONFIG_FILENAME " in.\n",
+                       "Nutshell Sessions", 1);
+            return 2;
+        }
     }
 
     if (GetFileAttributesA(cfg_path) == INVALID_FILE_ATTRIBUTES) {
@@ -147,6 +160,25 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     (void)hPrevInstance;
     (void)lpCmdLine;
     (void)nCmdShow;
+
+    /* DLL search-order hardening: the very first thing this process does.
+     * SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) makes every
+     * later LoadLibraryEx call that does not pass its own flags search only
+     * System32 (plus any directory explicitly added with
+     * AddDllDirectory, of which there are none), never the application
+     * directory or the current directory. SetDllDirectoryW(L"") on top of
+     * that removes the current directory from the search path used by the
+     * classic LoadLibrary/CreateProcess-without-lpApplicationName lookup,
+     * which SetDefaultDllDirectories does not touch. Between the two, a
+     * malicious DLL planted next to nutshell.exe or in whatever directory it
+     * happened to be launched from cannot be picked up ahead of the real,
+     * System32 one by any LoadLibrary* call made from here on. Static
+     * imports the loader resolves before this line ever runs, and any
+     * LoadLibrary* call that explicitly passes its own search flags, are
+     * unaffected -- see ai_chat.c's Riched20.dll/Msftedit.dll load and
+     * dwm_util.c for the two places that do. */
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    SetDllDirectoryW(L"");
 
     char **argv = NULL;
     int argc = build_utf8_argv(&argv);

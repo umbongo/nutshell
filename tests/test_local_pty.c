@@ -15,11 +15,12 @@
  *      printed -- so we can see whether it queries the terminal (ESC[6n
  *      DSR, ESC[c or ESC[>c DA), which the emulator has no reply path for.
  *
- * Cases 4-7 record what the special-keys spec (2026-09-23, section 9) left
+ * Cases 4-6 record what the special-keys spec (2026-09-23, section 9) left
  * unverified: ConPTY's mapping of xterm key bytes to console key events,
- * busybox `cat -v` under the pseudo-console, whether ConPTY forwards ?1049h
- * and ?1h from full-screen programs, and what the loaded keyboard layouts
- * make of Ctrl+Space, Ctrl+Shift+Space and Ctrl+Alt+F.
+ * whether ConPTY forwards ?1049h and ?1h from full-screen programs (Windows's
+ * own edit.exe -- there being no busybox sidecar any more, 2026-09-24 local
+ * shell hardening), and what the loaded keyboard layouts make of Ctrl+Space,
+ * Ctrl+Shift+Space and Ctrl+Alt+F.
  */
 
 #ifdef _WIN32
@@ -53,17 +54,53 @@ FILE *nspty_report = NULL;
 
 /* ---- helpers ------------------------------------------------------------ */
 
-/* A custom-command spec: the one LocalShellSpec shape a test can build
- * without probing the machine. */
+/* A tiny real LocalShellProbe -- just enough of local_shell_probe.c's real
+ * Win32 callbacks (that file itself isn't in WIN_TEST_SRCS) for
+ * local_shell_resolve_bare()'s bare-name search (System32, the Windows
+ * directory, PATH) to work against the real machine these wintest cases
+ * already run real processes on. No registry_string: nothing here resolves
+ * a bare name that would need it. */
+static int probe_exists(void *ctx, const char *path)
+{
+    (void)ctx;
+    if (!path || !path[0]) return 0;
+    DWORD attr = GetFileAttributesA(path);
+    return (attr != INVALID_FILE_ATTRIBUTES &&
+            !(attr & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
+}
+
+static int probe_env(void *ctx, const char *name, char *out, size_t out_size)
+{
+    (void)ctx;
+    if (!name || !out || out_size == 0u) return 0;
+    out[0] = '\0';
+    DWORD n = GetEnvironmentVariableA(name, out, (DWORD)out_size);
+    if (n == 0u || n >= (DWORD)out_size) { out[0] = '\0'; return 0; }
+    return out[0] ? 1 : 0;
+}
+
+/* A custom-command spec, resolved exactly the way window.c's
+ * start_local_shell() resolves one -- local_shell_resolve() to split
+ * `command` into spec->exe/dir/command, then local_shell_resolve_bare()
+ * to turn a bare name (e.g. "cmd.exe") into the absolute path
+ * local_pty_open() now requires (M1: an empty spec->exe is a refusal, not
+ * a NULL-lpApplicationName fallback) -- rather than leaving spec->exe
+ * empty, which every caller in production always resolves first. */
 static void spec_for(LocalShellSpec *spec, const char *command)
 {
+    LocalShellProbe probe;
+    memset(&probe, 0, sizeof(probe));
+    probe.exists = probe_exists;
+    probe.env    = probe_env;
+
     memset(spec, 0, sizeof(*spec));
-    spec->kind = SHELL_CUSTOM;
-    (void)snprintf(spec->command, sizeof(spec->command), "%s", command);
-    (void)snprintf(spec->env[0].name,  sizeof(spec->env[0].name),  "%s", "TERM");
-    (void)snprintf(spec->env[0].value, sizeof(spec->env[0].value), "%s",
-                   "xterm-256color");
-    spec->env_count = 1;
+    (void)local_shell_resolve(command, &probe, spec);
+    (void)local_shell_resolve_bare(spec, &probe);
+
+    /* fill_env() inside the calls above already added TERM (and NUTSHELL);
+     * these cases only ever look at the emulator's own output, not the
+     * child's environment, so that's harmless -- kept only for the log
+     * line a failed resolve prints via spec->error. */
 }
 
 /* The screen as the app reads it -- the same extractor the AI panel uses. */
@@ -442,63 +479,6 @@ int test_local_pty_records_key_mapping(void)
     TEST_END();
 }
 
-/* 5. The same bytes into busybox-w32's `cat -v`, if busybox64.exe sits
- * beside this executable (build/win/, untracked). Skips otherwise. */
-int test_local_pty_records_busybox_cat_v(void)
-{
-    TEST_BEGIN();
-
-    char dir[MAX_PATH], bb[MAX_PATH * 2], cmd[MAX_PATH * 3];
-    ASSERT_TRUE(self_dir(dir, sizeof(dir)));
-    (void)snprintf(bb, sizeof(bb), "%sbusybox64.exe", dir);
-    if (!file_exists(bb)) {
-        RPT("  [skip] no %s\n", bb);
-        TEST_END();
-    }
-    (void)snprintf(cmd, sizeof(cmd), "\"%s\" sh -c \"cat -v\"", bb);
-
-    LocalShellSpec spec;
-    spec_for(&spec, cmd);
-    char err[512];
-    err[0] = '\0';
-    LocalPty *pty = local_pty_open(&spec, 120, 40, err, sizeof(err));
-    if (!pty) {
-        RPT("  [skip] local_pty_open failed: %s\n", err);
-        ASSERT_TRUE(err[0] != '\0');
-        TEST_END();
-    }
-    Terminal *term = term_init(40, 120, 200);
-    ASSERT_NOT_NULL(term);
-    drain(pty, term, NULL, 1000);
-
-    /* a <0x7F> b <0x08> c <ESC f> d <CSI 1;5A> e <CSI Z> g <SS3 P> h Enter */
-    static const KeyInput SEQ[] = {
-        { "a", "a", 1 }, { "0x7F", "\x7f", 1 },
-        { "b", "b", 1 }, { "0x08", "\x08", 1 },
-        { "c", "c", 1 }, { "ESC f", "\x1b" "f", 2 },
-        { "d", "d", 1 }, { "CSI 1;5A", "\x1b[1;5A", 6 },
-        { "e", "e", 1 }, { "CSI Z", "\x1b[Z", 3 },
-        { "g", "g", 1 }, { "SS3 P", "\x1bOP", 3 },
-        { "h", "h", 1 }, { "Enter", "\r", 1 },
-    };
-    for (size_t i = 0; i < sizeof(SEQ) / sizeof(SEQ[0]); i++) {
-        (void)local_pty_write(pty, SEQ[i].bytes, SEQ[i].len);
-        drain(pty, term, NULL, 120);
-    }
-    drain(pty, term, NULL, 800);
-
-    static char screen[16384];
-    screen_text(term, screen, sizeof(screen));
-    RPT("  [busybox cat -v] wrote: a DEL b BS c ESC-f d CSI1;5A e CSI-Z g SS3-P h CR\n");
-    print_escaped("busybox cat -v screen", screen, strlen(screen));
-
-    (void)local_pty_write(pty, "\x04", 1);   /* Ctrl+D: end of input */
-    drain(pty, term, NULL, 300);
-    local_pty_close(pty);
-    term_free(term);
-    TEST_END();
-}
-
 /* Run a full-screen console program under the pseudo-console and record
  * whether Nutshell's emulator is told about the alternate screen (?1049h)
  * and application cursor keys (?1h) -- whether ConPTY forwards them. */
@@ -563,21 +543,12 @@ static void record_fullscreen(const char *label, const char *command,
     term_free(term);
 }
 
-/* 6. Does ConPTY forward ?1049h / ?1h? busybox vi and Windows's edit.exe. */
+/* 6. Does ConPTY forward ?1049h / ?1h? Windows's own edit.exe. */
 int test_local_pty_records_fullscreen_modes(void)
 {
     TEST_BEGIN();
 
-    char dir[MAX_PATH], bb[MAX_PATH * 2], cmd[MAX_PATH * 3];
-    ASSERT_TRUE(self_dir(dir, sizeof(dir)));
-    (void)snprintf(bb, sizeof(bb), "%sbusybox64.exe", dir);
-    if (file_exists(bb)) {
-        (void)snprintf(cmd, sizeof(cmd), "\"%s\" vi", bb);
-        record_fullscreen("busybox vi", cmd, "\x1b:q!\r", 5);
-    } else {
-        RPT("  [skip] busybox vi: no %s\n", bb);
-    }
-
+    char cmd[MAX_PATH * 3];
     char sysdir[MAX_PATH], edit[MAX_PATH * 2];
     UINT sn = GetSystemDirectoryA(sysdir, (UINT)sizeof(sysdir));
     if (sn > 0u && sn < sizeof(sysdir)) {

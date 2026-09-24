@@ -21,23 +21,42 @@ function Get-NutshellNewestLog {
     return $null
 }
 
+function Wait-NutshellPowerShellPrompt {
+    <# Like Wait-NutshellShell, but for a "PS <path>> " prompt instead of a
+       bash-style "$"/"#" one -- Wait-NutshellShell's '[$#]\s*$' pattern never
+       matches PowerShell's prompt, which ends in ">". Presses Enter (posted)
+       until the pattern shows up in the log. Throws on timeout. #>
+    param([Parameter(Mandatory)] $Session, [int] $TimeoutSec = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        Send-NutshellKey -Session $Session -Key Enter -SettleMs 700
+        if ((Get-NutshellLogText -Session $Session) -match 'PS [A-Za-z]:\\[^\r\n]*>\s*$') { return }
+    }
+    throw "no PowerShell prompt within ${TimeoutSec}s (still starting, or the shell field did not launch powershell.exe)"
+}
+
 # ---- local_shell: --local runs a shell, exits, and reconnects ------------------
+# The automatic search picks PowerShell first (2026-09-24 hardening: busybox
+# removed, installed shells detected -- PowerShell 7, else Windows
+# PowerShell, else Git bash, else MSYS2, else cmd.exe, in that order), and
+# Windows PowerShell ships with every live Windows install, so this is
+# effectively always a PowerShell session now.
 Invoke-Case "local_shell" @{} {
     param($s)
 
     # 1. A shell is running and its bytes reach the terminal.
     Start-NutshellLogging -Session $s | Out-Null
-    Wait-NutshellShell -Session $s
+    Wait-NutshellPowerShellPrompt -Session $s
     $marker = "nutshell-" + (Get-Random -Minimum 100000 -Maximum 999999)
-    Send-NutshellLine -Session $s -Line ("echo " + $marker)
+    Send-NutshellLine -Session $s -Line ("Write-Output " + $marker)
     Assert-True (Wait-NutshellLog -Session $s -Pattern ([regex]::Escape($marker)) -TimeoutSec 15) `
         "the local shell never echoed '$marker' into the session log -- no shell, or its output is not reaching the terminal"
 
-    # `echo nutshell-$$` as the spec writes it: proof the shell is really
-    # expanding, not a remote host echoing a literal.
-    Send-NutshellLine -Session $s -Line 'echo pid-$$'
+    # Write-Output ("pid-" + $PID): proof the shell is really expanding a
+    # variable, not a remote host echoing a literal.
+    Send-NutshellLine -Session $s -Line 'Write-Output ("pid-" + $PID)'
     Assert-True (Wait-NutshellLog -Session $s -Pattern "pid-\d+" -TimeoutSec 15) `
-        "the local shell did not expand \$\$ -- 'echo pid-`$`$' produced no pid-<number>"
+        "the local shell did not expand `$PID -- 'Write-Output (`"pid-`" + `$PID)' produced no pid-<number>"
 
     # 2. `exit` ends the shell. window.c writes "[Connection Closed]" into the
     #    *terminal* on EOF, not through the transport, so it never reaches the
@@ -47,7 +66,7 @@ Invoke-Case "local_shell" @{} {
     Send-NutshellLine -Session $s -Line "exit"
     Start-Sleep -Seconds 2
     $gone = "gone-" + (Get-Random -Minimum 100000 -Maximum 999999)
-    Send-NutshellLine -Session $s -Line ("echo " + $gone)
+    Send-NutshellLine -Session $s -Line ("Write-Output " + $gone)
     Assert-True (-not (Wait-NutshellLog -Session $s -Pattern ([regex]::Escape($gone)) -TimeoutSec 5)) `
         "the shell was still echoing after 'exit' -- the session did not end"
     $oldLog = $s.Log
@@ -77,23 +96,25 @@ Invoke-Case "local_shell" @{} {
     Assert-True ($newLog -ne $oldLog) `
         "logging after reconnect reused the old file '$oldLog' -- the first session's log was never closed"
 
-    Wait-NutshellShell -Session $s -TimeoutSec 30
+    Wait-NutshellPowerShellPrompt -Session $s -TimeoutSec 30
     $marker2 = "again-" + (Get-Random -Minimum 100000 -Maximum 999999)
-    Send-NutshellLine -Session $s -Line ("echo " + $marker2)
+    Send-NutshellLine -Session $s -Line ("Write-Output " + $marker2)
     Assert-True (Wait-NutshellLog -Session $s -Pattern ([regex]::Escape($marker2)) -TimeoutSec 15) `
         "the re-spawned local shell did not echo '$marker2' -- reconnect produced no working shell"
 
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "local_shell.png") | Out-Null
-    "--local ran a shell (echo + PID expansion), exit ended it (nothing echoed after), reconnect re-spawned it silently into a fresh log and echoed again"
+    "--local ran a shell (Write-Output + `$PID expansion), exit ended it (nothing echoed after), reconnect re-spawned it silently into a fresh log and echoed again"
 } -ExtraArgs @("--local")
 
 # ---- local_shell_powershell: a saved local profile whose shell is PowerShell ---
-# Unlike local_shell (--local, transient profile, no shell override -> busybox/
-# Git bash/MSYS2), this connects by name (-sn ps) to a saved profile of kind
-# "local" whose shell field is "powershell.exe -NoLogo" (src/config/loader.c's
+# Unlike local_shell (--local, transient profile, no shell override -> the
+# automatic search, PowerShell too as of 2026-09-24), this connects by name
+# (-sn ps) to a saved profile of kind "local" whose shell field is
+# "powershell.exe -NoLogo" -- a bare executable name with no path, resolved
+# safely against System32 by local_shell_resolve_bare() (src/config/loader.c's
 # profile loader reads both fields; --local never sets a shell override, so
-# PowerShell can only be reached through a saved profile). The profile is
-# injected via New-NutshellTestEnv's -ExtraProfiles (passed through
+# this is the only way to exercise that resolution through the full UI). The
+# profile is injected via New-NutshellTestEnv's -ExtraProfiles (passed through
 # Invoke-Case), which appends it after the generated SSH profile without
 # touching that profile or any other case's config.
 #
@@ -103,20 +124,6 @@ Invoke-Case "local_shell" @{} {
 # change (both v1.2.9) reverted: neither one touches what this case drives
 # through the UI. Those two are covered by tests/test_cmd_classify.c and
 # tests/test_ai_prompt.c instead.
-
-function Wait-NutshellPowerShellPrompt {
-    <# Like Wait-NutshellShell, but for a "PS <path>> " prompt instead of a
-       bash-style "$"/"#" one -- Wait-NutshellShell's '[$#]\s*$' pattern never
-       matches PowerShell's prompt, which ends in ">". Presses Enter (posted)
-       until the pattern shows up in the log. Throws on timeout. #>
-    param([Parameter(Mandatory)] $Session, [int] $TimeoutSec = 30)
-    $deadline = (Get-Date).AddSeconds($TimeoutSec)
-    while ((Get-Date) -lt $deadline) {
-        Send-NutshellKey -Session $Session -Key Enter -SettleMs 700
-        if ((Get-NutshellLogText -Session $Session) -match 'PS [A-Za-z]:\\[^\r\n]*>\s*$') { return }
-    }
-    throw "no PowerShell prompt within ${TimeoutSec}s (still starting, or the shell field did not launch powershell.exe)"
-}
 
 Invoke-Case "local_shell_powershell" @{ paste_confirm = $false } {
     param($s)

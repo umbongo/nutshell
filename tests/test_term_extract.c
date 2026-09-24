@@ -73,6 +73,34 @@ int test_extract_utf8_codepoint(void) {
     TEST_END();
 }
 
+/* Hardening: a cell holding a raw control byte must extract as a space,
+ * never the control byte itself -- term_extract_visible() feeds the AI
+ * context, so a stray control character here would reach the model raw. */
+int test_extract_control_cell_becomes_space(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 100);
+    term_process(t, "A\x7F" "B", 3);   /* DEL lands in the middle cell */
+    char buf[1024];
+    size_t n = term_extract_visible(t, buf, sizeof(buf));
+    ASSERT_EQ((int)n, 3);
+    ASSERT_STR_EQ(buf, "A B");
+    term_free(t);
+    TEST_END();
+}
+
+/* Same, for a C1 control reached via its UTF-8 encoding. */
+int test_extract_c1_control_becomes_space(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 100);
+    term_process(t, "A\xC2\x80" "B", 4);   /* U+0080 lands in the middle cell */
+    char buf[1024];
+    size_t n = term_extract_visible(t, buf, sizeof(buf));
+    ASSERT_EQ((int)n, 3);
+    ASSERT_STR_EQ(buf, "A B");
+    term_free(t);
+    TEST_END();
+}
+
 int test_extract_buf_too_small(void) {
     TEST_BEGIN();
     Terminal *t = term_init(5, 10, 100);
@@ -247,6 +275,81 @@ int test_extract_buf_too_small_keeps_newest(void) {
     term_extract_last_n(t, 3, buf2, sizeof(buf2));
     ASSERT_STR_EQ(buf2, "cccc");
 
+    term_free(t);
+    TEST_END();
+}
+
+/* term_extract_last_n_dup(): sized to the content, so a row wider than any
+ * fixed buffer keeps its end -- where a prompt's closing '$'/'#'/'>' is
+ * (M6, 2026-09-24: the contradiction check read 4 rows into 256 bytes and a
+ * wide prompt row lost its end). */
+int test_extract_last_n_dup_wide_row_keeps_prompt(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 400, 100);
+    char line[400];
+    memset(line, 'x', 300);
+    memcpy(line + 300, " tom@webhost:~$", 15);
+    term_process(t, "some output\r\n", 13);
+    term_process(t, line, 315);
+
+    size_t len = 0;
+    char *row = term_extract_last_n_dup(t, 1, &len);
+    ASSERT_NOT_NULL(row);
+    if (row) {
+        ASSERT_EQ((int)len, 315);
+        ASSERT_EQ((int)strlen(row), 315);
+        ASSERT_EQ(row[len - 1], '$');
+        ASSERT_TRUE(strchr(row, '\n') == NULL);   /* one row only */
+    }
+    free(row);
+
+    /* The fixed-buffer path this replaces cuts the same row short. */
+    char small[256];
+    size_t n = term_extract_last_n(t, 4, small, sizeof small);
+    ASSERT_TRUE(n < 315);
+    ASSERT_TRUE(small[n - 1] != '$');
+
+    term_free(t);
+    TEST_END();
+}
+
+/* The 40-row scan: wide rows of multi-byte text that would overflow a 4 KB
+ * buffer come back whole, oldest row first, newest row last. */
+int test_extract_last_n_dup_many_wide_rows_whole(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(50, 200, 200);
+    /* 40 rows of 200 box-drawing cells (3 bytes each) = 24,000 bytes. */
+    for (int r = 0; r < 40; r++) {
+        for (int c = 0; c < 200; c++)
+            term_process(t, "\xe2\x94\x80", 3);
+        if (r < 39) term_process(t, "\r\n", 2);
+    }
+    size_t len = 0;
+    char *buf = term_extract_last_n_dup(t, 40, &len);
+    ASSERT_NOT_NULL(buf);
+    ASSERT_EQ((int)len, 40 * 600 + 39);
+    if (buf) ASSERT_EQ((int)strlen(buf), (int)len);
+    free(buf);
+    term_free(t);
+    TEST_END();
+}
+
+/* Nothing to extract, or bad arguments: NULL with a zero length. */
+int test_extract_last_n_dup_empty_and_null(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 10);
+    size_t len = 99;
+    ASSERT_NULL(term_extract_last_n_dup(t, 3, &len));
+    ASSERT_EQ((int)len, 0);
+    len = 99;
+    ASSERT_NULL(term_extract_last_n_dup(NULL, 3, &len));
+    ASSERT_EQ((int)len, 0);
+    term_process(t, "abc", 3);
+    ASSERT_NULL(term_extract_last_n_dup(t, 0, &len));
+    char *s = term_extract_last_n_dup(t, 3, NULL);
+    ASSERT_NOT_NULL(s);
+    if (s) ASSERT_STR_EQ(s, "abc");
+    free(s);
     term_free(t);
     TEST_END();
 }

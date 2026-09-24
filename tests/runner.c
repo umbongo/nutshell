@@ -1,4 +1,6 @@
 #include "test_framework.h"
+#include "crypto_dpapi.h"
+#include "fake_dpapi.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -67,6 +69,16 @@ int test_str_append_fmt_does_not_fit_leaves_buf_intact(void);
 int test_str_append_fmt_does_not_fit_partial_overflow(void);
 int test_str_append_fmt_repeated_stops_cleanly_at_capacity(void);
 int test_str_append_fmt_null_args_safe(void);
+int test_cell_text_codepoint_empty_cell_is_space(void);
+int test_cell_text_codepoint_c0_becomes_space(void);
+int test_cell_text_codepoint_del_becomes_space(void);
+int test_cell_text_codepoint_c1_becomes_space(void);
+int test_cell_text_codepoint_passthrough(void);
+int test_utf8_codepoint_count_ascii(void);
+int test_utf8_codepoint_count_multibyte(void);
+int test_utf8_codepoint_count_emoji_4byte(void);
+int test_utf8_codepoint_count_empty(void);
+int test_utf8_codepoint_count_null_safe(void);
 
 /* test_logger.c */
 int test_logger_init_stderr_only(void);
@@ -183,6 +195,34 @@ int test_config_ensure_local_profile_noop_when_local_already_first(void);
 int test_config_ensure_local_profile_noop_when_local_at_end(void);
 int test_config_ensure_local_profile_null(void);
 int test_config_ensure_local_profile_survives_save_load_roundtrip(void);
+int test_config_password_dpapi_encrypted_on_disk(void);
+int test_config_ai_key_foreign_blob_preserved_through_load_save(void);
+int test_config_new_password_replaces_preserved_blob(void);
+int test_config_cleared_password_drops_blob(void);
+int test_config_password_legacy_migrates_to_dpapi_on_save(void);
+int test_config_garbage_password_blob_does_not_crash_and_is_preserved(void);
+int test_config_empty_password_writes_empty_no_prefix(void);
+int test_config_save_aborts_when_dpapi_encrypt_fails(void);
+int test_config_ai_key_save_aborts_when_dpapi_encrypt_fails(void);
+int test_config_migration_resave_failure_leaves_file_untouched(void);
+int test_config_bare_plaintext_password_migrates_on_load(void);
+int test_config_bare_plaintext_ai_key_migrates_on_load(void);
+int test_config_unknown_blob_shape_preserved_not_reencrypted(void);
+int test_config_unknown_blob_shape_survives_a_save(void);
+int test_config_dollar_sign_password_still_plaintext(void);
+int test_config_secret_drop_stale_preserved_core(void);
+int test_config_new_password_then_cleared_same_session_drops_blob(void);
+int test_config_oversized_preserved_blob_is_dropped_not_truncated(void);
+int test_config_load_backs_up_unparseable_file(void);
+int test_config_backup_unparseable_never_clobbers_same_second(void);
+int test_config_load_ex_missing_reports_missing(void);
+int test_config_load_ex_null_path_reports_missing(void);
+int test_config_load_ex_null_status_out_is_safe(void);
+int test_config_load_ex_valid_reports_ok(void);
+int test_config_load_ex_unparseable_reports_invalid(void);
+int test_config_load_ex_oversized_reports_unreadable(void);
+int test_config_fallback_path_core(void);
+int test_config_fallback_path_rejects_relative(void);
 /* test_cli_args.c */
 int test_cli_no_args(void);
 int test_cli_session_name_short(void);
@@ -273,6 +313,33 @@ int test_cmd_detect_banner_split_across_chunks(void);
 int test_cmd_detect_powershell_nologo_prompt_unknown(void);
 int test_cmd_detect_windows_powershell_banner_unknown(void);
 int test_cmd_detect_pwsh7_banner_unknown(void);
+int test_cmd_detect_linux_motd_mentions_vendor_names_stays_linux(void);
+int test_cmd_detect_vendor_word_in_catted_file_after_linux_prompt_stays_linux(void);
+int test_cmd_detect_last_login_alone_is_no_longer_linux_evidence(void);
+int test_cmd_detect_junos_after_last_login_banner(void);
+int test_cmd_detect_panos_after_last_login_stays_unresolved_not_linux(void);
+int test_cmd_detect_hop_from_linux_to_switch_and_back_is_conflict(void);
+int test_cmd_detect_catted_banner_line_under_linux_prompt_is_conflict(void);
+int test_cmd_detect_banner_with_agreeing_prompt_is_banner(void);
+int test_cmd_detect_ios_banner_then_colon_hash_last_line_never_linux(void);
+int test_cmd_detect_vyos_banner_and_linux_shaped_prompt_agree(void);
+int test_cmd_detect_prompt_fortios_padded_hash_now_ambiguous(void);
+int test_cmd_detect_prompt_hostname_hash_tight_stays_ambiguous(void);
+int test_cmd_detect_linux_root_prompts_not_fortios(void);
+int test_cmd_detect_last_line_contradicts_unambiguous_disagreement(void);
+int test_cmd_detect_last_line_contradicts_agreement_is_not_contradiction(void);
+int test_cmd_detect_last_line_contradicts_ambiguous_shape_is_not_contradiction(void);
+int test_cmd_detect_last_line_contradicts_vyos_linux_shape_agrees(void);
+int test_cmd_detect_last_line_contradicts_no_line_is_not_contradiction(void);
+int test_cmd_detect_scan_linux_then_banner_looking_line_not_ios(void);
+int test_cmd_detect_scan_linux_then_catted_banner_conflict(void);
+int test_cmd_detect_scan_unresolved_then_banner_resolves(void);
+int test_cmd_detect_vendor_then_linux_prompt_stays_vendor_contradicted(void);
+int test_cmd_detect_scan_resolved_never_moves_sideways(void);
+int test_cmd_detect_contradicted_is_sticky(void);
+int test_cmd_detect_scan_conflict_while_unresolved_marks_session(void);
+int test_cmd_detect_steps_agreement_leaves_session_alone(void);
+int test_cmd_detect_watch_unresolved_and_null_safety(void);
 /* cmd_classify.c - unknown-platform overlay and name mapping */
 int test_cmd_classify_unknown_overlay_critical_verbs(void);
 int test_cmd_classify_unknown_overlay_write_erase(void);
@@ -550,6 +617,47 @@ int test_paste_clamp_both(void);
 int test_paste_clamp_exact_boundary(void);
 int test_paste_clamp_small_screen(void);
 int test_paste_clamp_small_screen_overflow(void);
+int test_paste_build_warning_none(void);
+int test_paste_build_warning_singular(void);
+int test_paste_build_warning_plural(void);
+int test_paste_build_warning_null_buf(void);
+
+/* test_paste_filter.c */
+int test_paste_filter_no_controls_unchanged(void);
+int test_paste_filter_removes_esc(void);
+int test_paste_filter_keeps_tab_lf_cr(void);
+int test_paste_filter_removes_other_c0(void);
+int test_paste_filter_removes_del(void);
+int test_paste_filter_removes_c1_control(void);
+int test_paste_filter_keeps_c2_a0_and_above(void);
+int test_paste_filter_in_place_aliasing(void);
+int test_paste_filter_all_stripped_gives_empty(void);
+int test_paste_filter_empty_input(void);
+int test_paste_filter_null_input_safe(void);
+int test_paste_filter_null_removed_out_safe(void);
+int test_paste_filter_trailing_lone_c2_passthrough(void);
+int test_paste_visualize_no_controls_unchanged(void);
+int test_paste_visualize_esc_becomes_symbol(void);
+int test_paste_visualize_keeps_tab_lf_cr(void);
+int test_paste_visualize_matches_filter_count(void);
+int test_paste_visualize_null_input_safe(void);
+int test_paste_visualize_long_run_grows_buffer(void);
+int test_paste_visualize_exact_capacity_boundary_terminates_safely(void);
+int test_paste_filter_removes_bidi_override(void);
+int test_paste_filter_removes_bidi_isolate(void);
+int test_paste_filter_keeps_bytes_just_outside_bidi_ranges(void);
+int test_paste_visualize_bidi_override_becomes_tag(void);
+int test_paste_visualize_bidi_isolate_becomes_tag(void);
+int test_unsafe_cmd_char_plain_command_is_safe(void);
+int test_unsafe_cmd_char_rejects_c0(void);
+int test_unsafe_cmd_char_rejects_tab(void);
+int test_unsafe_cmd_char_rejects_del(void);
+int test_unsafe_cmd_char_rejects_c1(void);
+int test_unsafe_cmd_char_keeps_c2_a0_and_above(void);
+int test_unsafe_cmd_char_rejects_bidi_override(void);
+int test_unsafe_cmd_char_rejects_bidi_isolate(void);
+int test_unsafe_cmd_char_null_safe(void);
+int test_unsafe_cmd_char_trailing_lone_lead_bytes_safe(void);
 
 /* test_settings.c */
 int test_settings_validate_defaults(void);
@@ -590,6 +698,18 @@ int test_crypto_output_too_small(void);
 int test_crypto_decrypt_not_encrypted(void);
 int test_crypto_decrypt_empty_payload(void);
 int test_crypto_decrypt_invalid_base64(void);
+int test_crypto_dpapi_roundtrip_basic(void);
+int test_crypto_dpapi_roundtrip_empty(void);
+int test_crypto_dpapi_roundtrip_long(void);
+int test_crypto_dpapi_prefix_differs_from_legacy(void);
+int test_crypto_is_dpapi_yes_no(void);
+int test_crypto_is_any_encrypted(void);
+int test_crypto_dpapi_foreign_blob_fails_and_stays_empty(void);
+int test_crypto_dpapi_corrupt_blob_fails(void);
+int test_crypto_dpapi_truncated_blob_does_not_crash(void);
+int test_crypto_dpapi_null_inputs(void);
+int test_crypto_dpapi_output_too_small(void);
+int test_crypto_dpapi_backend_get_set(void);
 
 #ifndef NO_SSH_LIBS
 /* test_ssh.c */
@@ -686,6 +806,17 @@ int test_term_resize_reflow(void);
 int test_term_resize_cursor_edge(void);
 int test_term_resize_degenerate_round_trip_keeps_scroll_anchor(void);
 int test_term_utf8(void);
+int test_term_utf8_reject_overlong_2byte(void);
+int test_term_utf8_reject_overlong_3byte(void);
+int test_term_utf8_reject_surrogate(void);
+int test_term_utf8_surrogate_boundary_valid(void);
+int test_term_utf8_max_codepoint_valid(void);
+int test_term_utf8_reject_above_max_codepoint(void);
+int test_term_utf8_truncated_by_ascii(void);
+int test_term_utf8_lone_continuation_byte(void);
+int test_term_utf8_incomplete_stays_pending(void);
+int test_term_utf8_pending_reset_by_escape_sequence(void);
+int test_term_utf8_pending_reset_by_control_byte(void);
 int test_term_sgr_bold_off(void);
 int test_term_sgr_underline_off(void);
 int test_term_sgr_blink_off(void);
@@ -973,6 +1104,8 @@ int test_ai_extract_commands_ex_embedded_newline_rejected(void);
 int test_ai_extract_commands_ex_embedded_tab_rejected(void);
 int test_ai_extract_commands_ex_embedded_esc_rejected(void);
 int test_ai_extract_commands_ex_embedded_del_rejected(void);
+int test_ai_extract_commands_ex_embedded_c1_rejected(void);
+int test_ai_extract_commands_ex_embedded_bidi_override_rejected(void);
 int test_ai_extract_commands_ex_clean_block_still_extracts(void);
 int test_ai_extract_commands_ex_only_second_bad(void);
 int test_ai_extract_commands_ex_surrounding_newline_trimmed(void);
@@ -1199,6 +1332,8 @@ int test_extract_single_line(void);
 int test_extract_multi_line(void);
 int test_extract_trims_trailing_spaces(void);
 int test_extract_utf8_codepoint(void);
+int test_extract_control_cell_becomes_space(void);
+int test_extract_c1_control_becomes_space(void);
 int test_extract_buf_too_small(void);
 int test_extract_null_safety(void);
 int test_extract_last_n_basic(void);
@@ -1209,6 +1344,9 @@ int test_extract_last_n_ignores_trailing_blank_rows(void);
 int test_extract_last_n_all_blank(void);
 int test_extract_last_n_utf8_fits_context_buffer(void);
 int test_extract_buf_too_small_keeps_newest(void);
+int test_extract_last_n_dup_wide_row_keeps_prompt(void);
+int test_extract_last_n_dup_many_wide_rows_whole(void);
+int test_extract_last_n_dup_empty_and_null(void);
 
 /* test_scroll_region.c */
 int test_sr_init_defaults(void);
@@ -1391,6 +1529,8 @@ int test_sel_extract_trims_trailing_spaces(void);
 int test_sel_extract_backward_selection(void);
 int test_sel_extract_single_char(void);
 int test_sel_extract_includes_last_char(void);
+int test_sel_extract_del_becomes_space(void);
+int test_sel_extract_c1_control_becomes_space(void);
 
 /* test_ui_theme.c */
 int test_ui_theme_count(void);
@@ -1676,6 +1816,9 @@ int test_cmd_classify_comware_display_filter_safe(void);
 int test_cmd_classify_commit_check_validate_vs_bare_commit(void);
 int test_cmd_classify_new_platforms_empty_safe(void);
 int test_cmd_classify_new_platforms_lone_separator_safe(void);
+int test_cmd_classify_session_contradicted_device_examples(void);
+int test_cmd_classify_session_not_contradicted_is_plain(void);
+int test_cmd_classify_session_worse_of_two_property(void);
 
 /* test_chat_msg.c */
 int test_chat_msg_list_init(void);
@@ -1722,6 +1865,30 @@ int test_chat_msg_batch_sync_run_unrelated_batch_untouched(void);
 int test_chat_msg_batch_sync_run_null_list_returns_zero(void);
 int test_chat_msg_batch_sync_run_null_queue_returns_zero(void);
 int test_chat_msg_batch_sync_run_empty_queue_leaves_items_untouched(void);
+
+/* test_ai_stream.c */
+int test_ai_conv_take_moves_overflow_and_clears_source(void);
+int test_ai_conv_take_frees_previous_destination(void);
+int test_ai_conv_take_self_and_null_are_noops(void);
+int test_ai_conv_take_repeated_switch_then_send(void);
+int test_ai_conv_copy_replaces_destination(void);
+int test_worker_life_last_release_frees(void);
+int test_worker_life_cancel_is_sticky(void);
+int test_worker_life_ids_unique_nonzero(void);
+int test_ai_stream_finish_before_close(void);
+int test_ai_stream_close_before_finish(void);
+int test_ai_stream_double_close(void);
+int test_ai_stream_abort_then_late_chunk(void);
+int test_ai_stream_stale_generation(void);
+int test_ai_stream_abort_is_per_owner(void);
+int test_ai_stream_abort_all_on_panel_close(void);
+int test_ai_stream_table_null_owner_entry_drains(void);
+int test_ai_stream_table_full_and_bad_args(void);
+int test_ai_stream_copy_tools_rebinds_context(void);
+int test_ai_stream_release_frees_conversation(void);
+
+/* test_ai_stream.c */
+int test_ai_stream_lost_final_message_is_found(void);
 
 /* test_cmd_batch.c */
 int test_cmd_batch_set_init_empty(void);
@@ -1820,6 +1987,8 @@ int test_approval_execute_complete(void);
 int test_approval_empty_command(void);
 int test_approval_whitespace_command(void);
 int test_approval_add_embedded_newline_rejected(void);
+int test_approval_add_embedded_c1_rejected(void);
+int test_approval_add_embedded_bidi_override_rejected(void);
 int test_approval_add_1024_bytes_rejected(void);
 int test_approval_add_1023_bytes_round_trips(void);
 int test_approval_queue_full(void);
@@ -2277,6 +2446,7 @@ int test_approval_card_hit_null_layout_safe(void);
 int test_approval_card_hit_scrolled_out_rows_not_hit(void);
 int test_approval_card_layout_narrow_card_keeps_text_width(void);
 int test_approval_row_height_matches_layout(void);
+int test_approval_add_session_contradicted_takes_worse(void);
 int test_settled_row_layout_chip_right_aligned(void);
 int test_settled_row_layout_text_never_overlaps_chip(void);
 int test_settled_row_layout_ellipsis_only_when_too_wide(void);
@@ -2386,18 +2556,20 @@ int test_local_shell_custom_command_is_verbatim_not_requoted(void);
 int test_local_shell_custom_blank_profile_shell_falls_through(void);
 int test_local_shell_custom_exe_and_dir_from_quoted_token(void);
 int test_local_shell_custom_exe_without_dir_when_no_backslash(void);
-int test_local_shell_busybox64_beside_exe_wins(void);
-int test_local_shell_busybox_plain_when_64_absent(void);
-int test_local_shell_busybox_runtime_dir_used_when_exe_dir_absent(void);
-int test_local_shell_busybox_exe_dir_wins_over_runtime_dir(void);
-int test_local_shell_busybox_runtime_dir_not_used_when_localappdata_unset(void);
+int test_local_shell_pwsh_from_program_files(void);
+int test_local_shell_pwsh_absent_falls_through(void);
+int test_local_shell_powershell_from_system_root(void);
+int test_local_shell_pwsh_wins_over_powershell(void);
 int test_local_shell_gitbash_from_registry(void);
 int test_local_shell_gitbash_from_programfiles_when_registry_missing(void);
 int test_local_shell_gitbash_not_accepted_when_bash_missing(void);
-int test_local_shell_msys2_last_resort(void);
+int test_local_shell_msys2_used_when_no_ps_or_gitbash(void);
 int test_local_shell_only_msys2_sets_msystem(void);
+int test_local_shell_cmd_used_as_last_resort(void);
 int test_local_shell_none_when_nothing_found(void);
 int test_local_shell_env_term_always_present(void);
+int test_local_shell_env_term_and_nutshell_only_for_powershell(void);
+int test_local_shell_env_term_and_nutshell_only_for_cmd(void);
 int test_local_shell_env_home_present_when_userprofile_set(void);
 int test_local_shell_env_home_absent_when_userprofile_unset(void);
 int test_local_shell_env_shell_equals_exe(void);
@@ -2407,6 +2579,42 @@ int test_local_shell_env_path_absent_when_parent_unavailable(void);
 int test_local_shell_env_path_absent_when_parent_does_not_fit(void);
 int test_local_shell_env_path_absent_when_dir_empty(void);
 int test_local_shell_env_count_never_exceeds_max(void);
+int test_local_shell_resolve_bare_noop_for_non_custom(void);
+int test_local_shell_resolve_bare_noop_when_already_has_path(void);
+int test_local_shell_resolve_bare_rejects_relative_path_with_separator(void);
+int test_local_shell_resolve_bare_rejects_relative_path_quoted(void);
+int test_local_shell_resolve_bare_noop_for_quoted_absolute_with_spaces(void);
+int test_local_shell_resolve_bare_unquoted_spaced_picks_longest_existing_prefix(void);
+int test_local_shell_resolve_bare_unquoted_spaced_appends_exe(void);
+int test_local_shell_resolve_bare_unquoted_spaced_refuses_shorter_match(void);
+int test_local_shell_resolve_bare_unquoted_spaced_refuses_cut_path(void);
+int test_local_shell_resolve_bare_unquoted_spaced_refuses_second_argument(void);
+int test_local_shell_resolve_bare_unquoted_spaced_no_args_matches_whole_string(void);
+int test_local_shell_resolve_bare_unquoted_spaced_rejected_when_nothing_exists(void);
+int test_local_shell_resolve_bare_unquoted_spaced_null_probe_rejected(void);
+int test_local_shell_resolve_bare_found_in_system32(void);
+int test_local_shell_resolve_bare_appends_exe_when_no_extension(void);
+int test_local_shell_resolve_bare_found_in_windows_dir(void);
+int test_local_shell_resolve_bare_found_via_absolute_path_entry(void);
+int test_local_shell_resolve_bare_skips_relative_path_entries(void);
+int test_local_shell_resolve_bare_never_searches_exe_dir_or_cwd(void);
+int test_local_shell_resolve_bare_fails_clearly_when_not_found(void);
+int test_local_shell_resolve_bare_null_safety(void);
+int test_local_shell_resolve_bare_reclassifies_quoted_path_to_gitbash(void);
+int test_local_shell_resolve_bare_reclassifies_bare_name_to_cmd(void);
+int test_local_shell_resolve_bare_unmatched_custom_stays_custom(void);
+int test_local_shell_resolve_bare_reclassifies_powershell_by_base_name(void);
+int test_local_shell_resolve_bare_reclassifies_cmd_by_base_name_any_case(void);
+int test_local_shell_resolve_bare_bash_named_exe_not_reclassified(void);
+int test_local_shell_resolve_bare_reclassifies_via_normalized_path(void);
+int test_local_shell_resolve_bare_without_normalize_probe_falls_back_to_raw(void);
+int test_local_shell_resolve_bare_refuses_empty_exe_from_long_token(void);
+int test_local_shell_resolve_bare_refuses_empty_exe_from_blank_quoted_token(void);
+int test_local_shell_list_available_empty_machine(void);
+int test_local_shell_list_available_everything_installed(void);
+int test_local_shell_list_available_only_cmd(void);
+int test_local_shell_list_available_respects_out_max(void);
+int test_local_shell_list_available_null_safety(void);
 int test_local_shell_runtime_dir_with_localappdata(void);
 int test_local_shell_runtime_dir_without_localappdata(void);
 int test_local_shell_runtime_dir_null_safety(void);
@@ -2420,8 +2628,14 @@ int test_local_shell_resolve_null_probe_is_safe(void);
 int test_local_shell_resolve_null_callbacks_is_safe(void);
 int test_local_shell_resolve_null_profile_shell_is_safe(void);
 int test_local_shell_kind_name_and_is_posix(void);
+int test_local_shell_platform_lock_null_is_none(void);
+int test_local_shell_platform_lock_none_for_shell_none(void);
+int test_local_shell_platform_lock_linux_for_posix_kinds(void);
+int test_local_shell_platform_lock_strict_for_detected_windows_shells(void);
+int test_local_shell_platform_lock_strict_for_unmatched_custom(void);
 int test_local_shell_spec_name_powershell(void);
 int test_local_shell_spec_name_powershell_with_path(void);
+int test_local_shell_spec_name_natively_detected_powershell(void);
 int test_local_shell_spec_name_other_custom_stays_custom(void);
 int test_local_shell_spec_name_non_custom_and_null(void);
 
@@ -2452,6 +2666,15 @@ int test_ui_demo_thinking_text_non_empty(void);
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered so a crash shows the last [RUN ] line */
     int failed = 0;
+
+    /* Every secret (profile password, AI API key) now goes through DPAPI.
+     * Real DPAPI is per-user/per-machine state a test binary cannot rely on
+     * -- it does not exist at all on the Linux host that runs `make test`
+     * in CI -- so the whole run uses the deterministic fake backend
+     * (tests/fake_dpapi.h) instead. Individual crypto tests that need to
+     * simulate a blob from a different user/PC switch the fake identity
+     * and restore it before returning. */
+    crypto_dpapi_set_backend(&k_fake_dpapi_backend);
 
     printf("\n--- Core ---\n");
     failed += test_vector_init();
@@ -2512,6 +2735,16 @@ int main(void) {
     failed += test_str_append_fmt_does_not_fit_partial_overflow();
     failed += test_str_append_fmt_repeated_stops_cleanly_at_capacity();
     failed += test_str_append_fmt_null_args_safe();
+    failed += test_cell_text_codepoint_empty_cell_is_space();
+    failed += test_cell_text_codepoint_c0_becomes_space();
+    failed += test_cell_text_codepoint_del_becomes_space();
+    failed += test_cell_text_codepoint_c1_becomes_space();
+    failed += test_cell_text_codepoint_passthrough();
+    failed += test_utf8_codepoint_count_ascii();
+    failed += test_utf8_codepoint_count_multibyte();
+    failed += test_utf8_codepoint_count_emoji_4byte();
+    failed += test_utf8_codepoint_count_empty();
+    failed += test_utf8_codepoint_count_null_safe();
     failed += test_logger_init_stderr_only();
     failed += test_logger_creates_file();
     failed += test_logger_file_contains_message();
@@ -2682,6 +2915,34 @@ int main(void) {
     failed += test_config_ensure_local_profile_noop_when_local_at_end();
     failed += test_config_ensure_local_profile_null();
     failed += test_config_ensure_local_profile_survives_save_load_roundtrip();
+    failed += test_config_password_dpapi_encrypted_on_disk();
+    failed += test_config_ai_key_foreign_blob_preserved_through_load_save();
+    failed += test_config_new_password_replaces_preserved_blob();
+    failed += test_config_cleared_password_drops_blob();
+    failed += test_config_password_legacy_migrates_to_dpapi_on_save();
+    failed += test_config_garbage_password_blob_does_not_crash_and_is_preserved();
+    failed += test_config_empty_password_writes_empty_no_prefix();
+    failed += test_config_save_aborts_when_dpapi_encrypt_fails();
+    failed += test_config_ai_key_save_aborts_when_dpapi_encrypt_fails();
+    failed += test_config_migration_resave_failure_leaves_file_untouched();
+    failed += test_config_bare_plaintext_password_migrates_on_load();
+    failed += test_config_bare_plaintext_ai_key_migrates_on_load();
+    failed += test_config_unknown_blob_shape_preserved_not_reencrypted();
+    failed += test_config_unknown_blob_shape_survives_a_save();
+    failed += test_config_dollar_sign_password_still_plaintext();
+    failed += test_config_secret_drop_stale_preserved_core();
+    failed += test_config_new_password_then_cleared_same_session_drops_blob();
+    failed += test_config_oversized_preserved_blob_is_dropped_not_truncated();
+    failed += test_config_load_backs_up_unparseable_file();
+    failed += test_config_backup_unparseable_never_clobbers_same_second();
+    failed += test_config_load_ex_missing_reports_missing();
+    failed += test_config_load_ex_null_path_reports_missing();
+    failed += test_config_load_ex_null_status_out_is_safe();
+    failed += test_config_load_ex_valid_reports_ok();
+    failed += test_config_load_ex_unparseable_reports_invalid();
+    failed += test_config_load_ex_oversized_reports_unreadable();
+    failed += test_config_fallback_path_core();
+    failed += test_config_fallback_path_rejects_relative();
 
     printf("\n--- CLI args ---\n");
     failed += test_cli_no_args();
@@ -2772,6 +3033,33 @@ int main(void) {
     failed += test_cmd_detect_powershell_nologo_prompt_unknown();
     failed += test_cmd_detect_windows_powershell_banner_unknown();
     failed += test_cmd_detect_pwsh7_banner_unknown();
+    failed += test_cmd_detect_linux_motd_mentions_vendor_names_stays_linux();
+    failed += test_cmd_detect_vendor_word_in_catted_file_after_linux_prompt_stays_linux();
+    failed += test_cmd_detect_last_login_alone_is_no_longer_linux_evidence();
+    failed += test_cmd_detect_junos_after_last_login_banner();
+    failed += test_cmd_detect_panos_after_last_login_stays_unresolved_not_linux();
+    failed += test_cmd_detect_hop_from_linux_to_switch_and_back_is_conflict();
+    failed += test_cmd_detect_catted_banner_line_under_linux_prompt_is_conflict();
+    failed += test_cmd_detect_banner_with_agreeing_prompt_is_banner();
+    failed += test_cmd_detect_ios_banner_then_colon_hash_last_line_never_linux();
+    failed += test_cmd_detect_vyos_banner_and_linux_shaped_prompt_agree();
+    failed += test_cmd_detect_prompt_fortios_padded_hash_now_ambiguous();
+    failed += test_cmd_detect_prompt_hostname_hash_tight_stays_ambiguous();
+    failed += test_cmd_detect_linux_root_prompts_not_fortios();
+    failed += test_cmd_detect_last_line_contradicts_unambiguous_disagreement();
+    failed += test_cmd_detect_last_line_contradicts_agreement_is_not_contradiction();
+    failed += test_cmd_detect_last_line_contradicts_ambiguous_shape_is_not_contradiction();
+    failed += test_cmd_detect_last_line_contradicts_vyos_linux_shape_agrees();
+    failed += test_cmd_detect_last_line_contradicts_no_line_is_not_contradiction();
+    failed += test_cmd_detect_scan_linux_then_banner_looking_line_not_ios();
+    failed += test_cmd_detect_scan_linux_then_catted_banner_conflict();
+    failed += test_cmd_detect_scan_unresolved_then_banner_resolves();
+    failed += test_cmd_detect_vendor_then_linux_prompt_stays_vendor_contradicted();
+    failed += test_cmd_detect_scan_resolved_never_moves_sideways();
+    failed += test_cmd_detect_contradicted_is_sticky();
+    failed += test_cmd_detect_scan_conflict_while_unresolved_marks_session();
+    failed += test_cmd_detect_steps_agreement_leaves_session_alone();
+    failed += test_cmd_detect_watch_unresolved_and_null_safety();
     /* Unknown-platform overlay and name mapping */
     failed += test_cmd_classify_unknown_overlay_critical_verbs();
     failed += test_cmd_classify_unknown_overlay_write_erase();
@@ -2963,6 +3251,45 @@ int main(void) {
     failed += test_paste_clamp_exact_boundary();
     failed += test_paste_clamp_small_screen();
     failed += test_paste_clamp_small_screen_overflow();
+    failed += test_paste_build_warning_none();
+    failed += test_paste_build_warning_singular();
+    failed += test_paste_build_warning_plural();
+    failed += test_paste_build_warning_null_buf();
+    failed += test_paste_filter_no_controls_unchanged();
+    failed += test_paste_filter_removes_esc();
+    failed += test_paste_filter_keeps_tab_lf_cr();
+    failed += test_paste_filter_removes_other_c0();
+    failed += test_paste_filter_removes_del();
+    failed += test_paste_filter_removes_c1_control();
+    failed += test_paste_filter_keeps_c2_a0_and_above();
+    failed += test_paste_filter_in_place_aliasing();
+    failed += test_paste_filter_all_stripped_gives_empty();
+    failed += test_paste_filter_empty_input();
+    failed += test_paste_filter_null_input_safe();
+    failed += test_paste_filter_null_removed_out_safe();
+    failed += test_paste_filter_trailing_lone_c2_passthrough();
+    failed += test_paste_visualize_no_controls_unchanged();
+    failed += test_paste_visualize_esc_becomes_symbol();
+    failed += test_paste_visualize_keeps_tab_lf_cr();
+    failed += test_paste_visualize_matches_filter_count();
+    failed += test_paste_visualize_null_input_safe();
+    failed += test_paste_visualize_long_run_grows_buffer();
+    failed += test_paste_visualize_exact_capacity_boundary_terminates_safely();
+    failed += test_paste_filter_removes_bidi_override();
+    failed += test_paste_filter_removes_bidi_isolate();
+    failed += test_paste_filter_keeps_bytes_just_outside_bidi_ranges();
+    failed += test_paste_visualize_bidi_override_becomes_tag();
+    failed += test_paste_visualize_bidi_isolate_becomes_tag();
+    failed += test_unsafe_cmd_char_plain_command_is_safe();
+    failed += test_unsafe_cmd_char_rejects_c0();
+    failed += test_unsafe_cmd_char_rejects_tab();
+    failed += test_unsafe_cmd_char_rejects_del();
+    failed += test_unsafe_cmd_char_rejects_c1();
+    failed += test_unsafe_cmd_char_keeps_c2_a0_and_above();
+    failed += test_unsafe_cmd_char_rejects_bidi_override();
+    failed += test_unsafe_cmd_char_rejects_bidi_isolate();
+    failed += test_unsafe_cmd_char_null_safe();
+    failed += test_unsafe_cmd_char_trailing_lone_lead_bytes_safe();
 
     /* Settings Validation */
     failed += test_settings_validate_defaults();
@@ -3003,6 +3330,18 @@ int main(void) {
     failed += test_crypto_decrypt_not_encrypted();
     failed += test_crypto_decrypt_empty_payload();
     failed += test_crypto_decrypt_invalid_base64();
+    failed += test_crypto_dpapi_roundtrip_basic();
+    failed += test_crypto_dpapi_roundtrip_empty();
+    failed += test_crypto_dpapi_roundtrip_long();
+    failed += test_crypto_dpapi_prefix_differs_from_legacy();
+    failed += test_crypto_is_dpapi_yes_no();
+    failed += test_crypto_is_any_encrypted();
+    failed += test_crypto_dpapi_foreign_blob_fails_and_stays_empty();
+    failed += test_crypto_dpapi_corrupt_blob_fails();
+    failed += test_crypto_dpapi_truncated_blob_does_not_crash();
+    failed += test_crypto_dpapi_null_inputs();
+    failed += test_crypto_dpapi_output_too_small();
+    failed += test_crypto_dpapi_backend_get_set();
 
 #ifndef NO_SSH_LIBS
     printf("\n--- SSH ---\n");
@@ -3099,6 +3438,17 @@ int main(void) {
     failed += test_term_resize_cursor_edge();
     failed += test_term_resize_degenerate_round_trip_keeps_scroll_anchor();
     failed += test_term_utf8();
+    failed += test_term_utf8_reject_overlong_2byte();
+    failed += test_term_utf8_reject_overlong_3byte();
+    failed += test_term_utf8_reject_surrogate();
+    failed += test_term_utf8_surrogate_boundary_valid();
+    failed += test_term_utf8_max_codepoint_valid();
+    failed += test_term_utf8_reject_above_max_codepoint();
+    failed += test_term_utf8_truncated_by_ascii();
+    failed += test_term_utf8_lone_continuation_byte();
+    failed += test_term_utf8_incomplete_stays_pending();
+    failed += test_term_utf8_pending_reset_by_escape_sequence();
+    failed += test_term_utf8_pending_reset_by_control_byte();
     failed += test_term_sgr_bold_off();
     failed += test_term_sgr_underline_off();
     failed += test_term_sgr_blink_off();
@@ -3328,6 +3678,8 @@ int main(void) {
     failed += test_ai_extract_commands_ex_embedded_tab_rejected();
     failed += test_ai_extract_commands_ex_embedded_esc_rejected();
     failed += test_ai_extract_commands_ex_embedded_del_rejected();
+    failed += test_ai_extract_commands_ex_embedded_c1_rejected();
+    failed += test_ai_extract_commands_ex_embedded_bidi_override_rejected();
     failed += test_ai_extract_commands_ex_clean_block_still_extracts();
     failed += test_ai_extract_commands_ex_only_second_bad();
     failed += test_ai_extract_commands_ex_surrounding_newline_trimmed();
@@ -3566,6 +3918,8 @@ int main(void) {
     failed += test_extract_multi_line();
     failed += test_extract_trims_trailing_spaces();
     failed += test_extract_utf8_codepoint();
+    failed += test_extract_control_cell_becomes_space();
+    failed += test_extract_c1_control_becomes_space();
     failed += test_extract_buf_too_small();
     failed += test_extract_null_safety();
     failed += test_extract_last_n_basic();
@@ -3576,6 +3930,9 @@ int main(void) {
     failed += test_extract_last_n_all_blank();
     failed += test_extract_last_n_utf8_fits_context_buffer();
     failed += test_extract_buf_too_small_keeps_newest();
+    failed += test_extract_last_n_dup_wide_row_keeps_prompt();
+    failed += test_extract_last_n_dup_many_wide_rows_whole();
+    failed += test_extract_last_n_dup_empty_and_null();
 
     printf("\n--- AI Chat Indicator ---\n");
     failed += test_indicator_removal_with_newlines();
@@ -3882,6 +4239,8 @@ int main(void) {
     failed += test_sel_extract_backward_selection();
     failed += test_sel_extract_single_char();
     failed += test_sel_extract_includes_last_char();
+    failed += test_sel_extract_del_becomes_space();
+    failed += test_sel_extract_c1_control_becomes_space();
 
     /* test_cursor_scroll.c */
     failed += test_cursor_visible_at_bottom();
@@ -4108,6 +4467,9 @@ int main(void) {
     failed += test_cmd_classify_commit_check_validate_vs_bare_commit();
     failed += test_cmd_classify_new_platforms_empty_safe();
     failed += test_cmd_classify_new_platforms_lone_separator_safe();
+    failed += test_cmd_classify_session_contradicted_device_examples();
+    failed += test_cmd_classify_session_not_contradicted_is_plain();
+    failed += test_cmd_classify_session_worse_of_two_property();
 
     printf("\n--- Chat Message List ---\n");
     failed += test_chat_msg_list_init();
@@ -4231,6 +4593,8 @@ int main(void) {
     failed += test_approval_empty_command();
     failed += test_approval_whitespace_command();
     failed += test_approval_add_embedded_newline_rejected();
+    failed += test_approval_add_embedded_c1_rejected();
+    failed += test_approval_add_embedded_bidi_override_rejected();
     failed += test_approval_add_1024_bytes_rejected();
     failed += test_approval_add_1023_bytes_round_trips();
     failed += test_approval_queue_full();
@@ -4748,6 +5112,7 @@ int main(void) {
     failed += test_approval_card_hit_scrolled_out_rows_not_hit();
     failed += test_approval_card_layout_narrow_card_keeps_text_width();
     failed += test_approval_row_height_matches_layout();
+    failed += test_approval_add_session_contradicted_takes_worse();
     failed += test_settled_row_layout_chip_right_aligned();
     failed += test_settled_row_layout_text_never_overlaps_chip();
     failed += test_settled_row_layout_ellipsis_only_when_too_wide();
@@ -4853,18 +5218,20 @@ int main(void) {
     failed += test_local_shell_custom_blank_profile_shell_falls_through();
     failed += test_local_shell_custom_exe_and_dir_from_quoted_token();
     failed += test_local_shell_custom_exe_without_dir_when_no_backslash();
-    failed += test_local_shell_busybox64_beside_exe_wins();
-    failed += test_local_shell_busybox_plain_when_64_absent();
-    failed += test_local_shell_busybox_runtime_dir_used_when_exe_dir_absent();
-    failed += test_local_shell_busybox_exe_dir_wins_over_runtime_dir();
-    failed += test_local_shell_busybox_runtime_dir_not_used_when_localappdata_unset();
+    failed += test_local_shell_pwsh_from_program_files();
+    failed += test_local_shell_pwsh_absent_falls_through();
+    failed += test_local_shell_powershell_from_system_root();
+    failed += test_local_shell_pwsh_wins_over_powershell();
     failed += test_local_shell_gitbash_from_registry();
     failed += test_local_shell_gitbash_from_programfiles_when_registry_missing();
     failed += test_local_shell_gitbash_not_accepted_when_bash_missing();
-    failed += test_local_shell_msys2_last_resort();
+    failed += test_local_shell_msys2_used_when_no_ps_or_gitbash();
     failed += test_local_shell_only_msys2_sets_msystem();
+    failed += test_local_shell_cmd_used_as_last_resort();
     failed += test_local_shell_none_when_nothing_found();
     failed += test_local_shell_env_term_always_present();
+    failed += test_local_shell_env_term_and_nutshell_only_for_powershell();
+    failed += test_local_shell_env_term_and_nutshell_only_for_cmd();
     failed += test_local_shell_env_home_present_when_userprofile_set();
     failed += test_local_shell_env_home_absent_when_userprofile_unset();
     failed += test_local_shell_env_shell_equals_exe();
@@ -4874,6 +5241,42 @@ int main(void) {
     failed += test_local_shell_env_path_absent_when_parent_does_not_fit();
     failed += test_local_shell_env_path_absent_when_dir_empty();
     failed += test_local_shell_env_count_never_exceeds_max();
+    failed += test_local_shell_resolve_bare_noop_for_non_custom();
+    failed += test_local_shell_resolve_bare_noop_when_already_has_path();
+    failed += test_local_shell_resolve_bare_rejects_relative_path_with_separator();
+    failed += test_local_shell_resolve_bare_rejects_relative_path_quoted();
+    failed += test_local_shell_resolve_bare_noop_for_quoted_absolute_with_spaces();
+    failed += test_local_shell_resolve_bare_unquoted_spaced_picks_longest_existing_prefix();
+    failed += test_local_shell_resolve_bare_unquoted_spaced_appends_exe();
+    failed += test_local_shell_resolve_bare_unquoted_spaced_refuses_shorter_match();
+    failed += test_local_shell_resolve_bare_unquoted_spaced_refuses_cut_path();
+    failed += test_local_shell_resolve_bare_unquoted_spaced_refuses_second_argument();
+    failed += test_local_shell_resolve_bare_unquoted_spaced_no_args_matches_whole_string();
+    failed += test_local_shell_resolve_bare_unquoted_spaced_rejected_when_nothing_exists();
+    failed += test_local_shell_resolve_bare_unquoted_spaced_null_probe_rejected();
+    failed += test_local_shell_resolve_bare_found_in_system32();
+    failed += test_local_shell_resolve_bare_appends_exe_when_no_extension();
+    failed += test_local_shell_resolve_bare_found_in_windows_dir();
+    failed += test_local_shell_resolve_bare_found_via_absolute_path_entry();
+    failed += test_local_shell_resolve_bare_skips_relative_path_entries();
+    failed += test_local_shell_resolve_bare_never_searches_exe_dir_or_cwd();
+    failed += test_local_shell_resolve_bare_fails_clearly_when_not_found();
+    failed += test_local_shell_resolve_bare_null_safety();
+    failed += test_local_shell_resolve_bare_reclassifies_quoted_path_to_gitbash();
+    failed += test_local_shell_resolve_bare_reclassifies_bare_name_to_cmd();
+    failed += test_local_shell_resolve_bare_unmatched_custom_stays_custom();
+    failed += test_local_shell_resolve_bare_reclassifies_powershell_by_base_name();
+    failed += test_local_shell_resolve_bare_reclassifies_cmd_by_base_name_any_case();
+    failed += test_local_shell_resolve_bare_bash_named_exe_not_reclassified();
+    failed += test_local_shell_resolve_bare_reclassifies_via_normalized_path();
+    failed += test_local_shell_resolve_bare_without_normalize_probe_falls_back_to_raw();
+    failed += test_local_shell_resolve_bare_refuses_empty_exe_from_long_token();
+    failed += test_local_shell_resolve_bare_refuses_empty_exe_from_blank_quoted_token();
+    failed += test_local_shell_list_available_empty_machine();
+    failed += test_local_shell_list_available_everything_installed();
+    failed += test_local_shell_list_available_only_cmd();
+    failed += test_local_shell_list_available_respects_out_max();
+    failed += test_local_shell_list_available_null_safety();
     failed += test_local_shell_runtime_dir_with_localappdata();
     failed += test_local_shell_runtime_dir_without_localappdata();
     failed += test_local_shell_runtime_dir_null_safety();
@@ -4887,8 +5290,14 @@ int main(void) {
     failed += test_local_shell_resolve_null_callbacks_is_safe();
     failed += test_local_shell_resolve_null_profile_shell_is_safe();
     failed += test_local_shell_kind_name_and_is_posix();
+    failed += test_local_shell_platform_lock_null_is_none();
+    failed += test_local_shell_platform_lock_none_for_shell_none();
+    failed += test_local_shell_platform_lock_linux_for_posix_kinds();
+    failed += test_local_shell_platform_lock_strict_for_detected_windows_shells();
+    failed += test_local_shell_platform_lock_strict_for_unmatched_custom();
     failed += test_local_shell_spec_name_powershell();
     failed += test_local_shell_spec_name_powershell_with_path();
+    failed += test_local_shell_spec_name_natively_detected_powershell();
     failed += test_local_shell_spec_name_other_custom_stays_custom();
     failed += test_local_shell_spec_name_non_custom_and_null();
     failed += test_term_conpty_ls_screen_contents();
@@ -4911,6 +5320,28 @@ int main(void) {
     failed += test_ui_demo_build_all_is_union();
     failed += test_ui_demo_term_text_ends_with_prompt();
     failed += test_ui_demo_thinking_text_non_empty();
+
+    failed += test_ai_conv_take_moves_overflow_and_clears_source();
+    failed += test_ai_conv_take_frees_previous_destination();
+    failed += test_ai_conv_take_self_and_null_are_noops();
+    failed += test_ai_conv_take_repeated_switch_then_send();
+    failed += test_ai_conv_copy_replaces_destination();
+    failed += test_worker_life_last_release_frees();
+    failed += test_worker_life_cancel_is_sticky();
+    failed += test_worker_life_ids_unique_nonzero();
+    failed += test_ai_stream_finish_before_close();
+    failed += test_ai_stream_close_before_finish();
+    failed += test_ai_stream_double_close();
+    failed += test_ai_stream_abort_then_late_chunk();
+    failed += test_ai_stream_stale_generation();
+    failed += test_ai_stream_abort_is_per_owner();
+    failed += test_ai_stream_abort_all_on_panel_close();
+    failed += test_ai_stream_table_null_owner_entry_drains();
+    failed += test_ai_stream_table_full_and_bad_args();
+    failed += test_ai_stream_copy_tools_rebinds_context();
+    failed += test_ai_stream_release_frees_conversation();
+
+    failed += test_ai_stream_lost_final_message_is_found();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

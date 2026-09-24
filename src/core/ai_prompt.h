@@ -69,6 +69,19 @@ void ai_conv_init(AiConversation *conv, const char *model);
 /* Reset a conversation: clear all messages but keep the model. */
 void ai_conv_reset(AiConversation *conv);
 
+/* Move a conversation: free dst's messages, give dst every message of src
+ * together with the heap buffers they own (overflow content, attachments,
+ * tool calls), and leave src empty with its model kept. Afterwards exactly
+ * one conversation owns each buffer, so both can be reset or taken again
+ * safely. dst == src, or either NULL, is a no-op. */
+void ai_conv_take(AiConversation *dst, AiConversation *src);
+
+/* Deep copy: free dst's messages, then copy src into dst with its own
+ * copies of every heap buffer. Returns 0; -1 on a NULL argument (dst
+ * untouched) or allocation failure (dst left empty with src's model, never
+ * half-shared). dst == src is a no-op returning 0. */
+int ai_conv_copy(AiConversation *dst, const AiConversation *src);
+
 /* Add a message. Returns 0 on success, -1 if full. */
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
 
@@ -84,7 +97,7 @@ int ai_conv_set_system(AiConversation *conv, const char *content);
  * kind selects the opening sentences: SESSION_SSH produces exactly the text
  * it always has; SESSION_LOCAL says the shell is a local one on a Windows PC
  * (spec 2026-09-22-local-shell-design.md section 6). shell_name names that
- * shell ("busybox", "Git bash", ...) and may be NULL, in which case the
+ * shell ("PowerShell", "Git bash", ...) and may be NULL, in which case the
  * prompt lists the possibilities. Ignored for SESSION_SSH. */
 void ai_build_system_prompt(char *buf, size_t buf_size,
                             const char *terminal_text,
@@ -418,6 +431,12 @@ typedef struct {
     size_t stream_thinking_len;
     int stream_phase;            /* 0=not started, 1=thinking, 2=content */
     int platform;                /* CmdPlatform for this session */
+    int platform_contradicted;   /* sticky: host output disagreed with
+                                  * `platform` after it resolved (cmd_detect.h).
+                                  * Set, the session's commands are classified
+                                  * under the worse of `platform` and
+                                  * CMD_PLATFORM_UNKNOWN (cmd_classify_session());
+                                  * never cleared for the session's life. */
     CmdPolicy policy;            /* This session's command policy: the `allowed`
                                    * ceiling and the `unattended` marker
                                    * (src/core/cmd_policy.h) */

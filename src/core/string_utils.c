@@ -126,6 +126,28 @@ int utf8_encode(uint32_t cp, char *buf)
     return 0;
 }
 
+size_t utf8_codepoint_count(const char *s, size_t len)
+{
+    if (!s) return 0;
+    size_t n = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if ((c & 0xC0u) != 0x80u) n++;
+    }
+    return n;
+}
+
+/* ---- Cell-text hardening ------------------------------------------------ */
+
+uint32_t cell_text_codepoint(uint32_t cp)
+{
+    if (cp == 0u) return (uint32_t)' ';
+    if (cp <= 0x1Fu) return (uint32_t)' ';                    /* C0 */
+    if (cp == 0x7Fu) return (uint32_t)' ';                    /* DEL */
+    if (cp >= 0x80u && cp <= 0x9Fu) return (uint32_t)' ';     /* C1 */
+    return cp;
+}
+
 /* ---- ANSI escape sequence stripper ------------------------------------- */
 
 typedef enum {

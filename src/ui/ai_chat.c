@@ -12,6 +12,7 @@
 #include "ai_tool_web_fetch.h"
 #include "ai_agentic.h"
 #include "ai_http.h"
+#include "ai_stream.h"
 #include "app_font.h"
 #include "ns_font.h"
 #include "ns_draw.h"
@@ -32,6 +33,7 @@
 #include "resource.h"
 #include "ai_dock.h"
 #include "string_utils.h"
+#include "paste_filter.h"
 #include "chat_msg.h"
 #include "chat_thinking.h"
 #include "chat_activity.h"
@@ -84,15 +86,6 @@ static const GPCLSID CLSID_PNG = {
     {0x9A, 0x73, 0x00, 0x00, 0xF8, 0x1E, 0xF3, 0x2E}
 };
 
-/* Move an AiConversation from src to dst.  Attachment ownership transfers
- * to dst; src attachment pointers are NULLed to prevent double-free. */
-static void ai_conv_move(AiConversation *dst, AiConversation *src)
-{
-    memcpy(dst, src, sizeof(AiConversation));
-    for (int i = 0; i < src->msg_count; i++)
-        src->messages[i].attachment = NULL;
-}
-
 static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 
 #define IDC_CHAT_DISPLAY  4001
@@ -134,6 +127,8 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define TIMER_SCROLL_SYNC 4     /* Sync custom scrollbar with RichEdit */
 #define TIMER_THINKING    5     /* Animated thinking indicator */
 #define TIMER_HEARTBEAT   6     /* Activity monitor heartbeat (1s) */
+#define TIMER_STREAM_REAP 7     /* Finds replies whose final message was lost */
+#define STREAM_REAP_MS    1000
 #define THINKING_ANIM_MS  400   /* Dot animation interval */
 #define HEARTBEAT_MS      1000  /* Heartbeat interval */
 #define CMD_QUEUE_POLL_MS 250   /* Dispatcher tick interval */
@@ -349,8 +344,10 @@ typedef struct {
     ActivityState activity;
     int pulse_toggle;          /* 0/1 for pulsing dot animation */
 
-    /* Stream abort: UI thread sets to 1, stream callback checks it */
-    volatile int abort_stream;
+    /* Replies in flight, one per session at most (src/core/ai_stream.h).
+     * Each stream has its own abort flag; stream-thread messages carry a
+     * stream id that is resolved here before anything is touched. */
+    AiStreamTable streams;
 
     /* GDI+ token for image conversion */
     ULONG_PTR gdip_token;
@@ -362,6 +359,8 @@ typedef struct {
     AiToolRegistry tool_registry;
     WebSearchContext search_ctx;
     WebFetchContext  fetch_ctx;
+    unsigned tools_gen;         /* bumped on every reconfigure; each stream
+                                  * records the generation it snapshotted */
     int tool_support_notified;  /* 1 after showing "tools unavailable" message */
 
     /* Empty/no-key/no-session state (ai_panel_states.h), pushed to
@@ -402,46 +401,30 @@ static void do_session_switch(AiChatData *d,
 
 #include "markdown.h"
 
-/* Heap-allocated struct to pass both content and thinking from thread to UI.
- * Also carries the target session so the UI thread can route the response
- * to the correct session when multiple streams run concurrently. */
+/* Messages from a stream thread carry its stream id, never a pointer into
+ * the panel or a session: the UI resolves the id in d->streams
+ * (src/core/ai_stream.h) and drops the message if the stream is gone --
+ * stopped, retried, its tab closed, or the panel rebuilt since. */
+
+/* WM_AI_RESPONSE payload: the finished reply (wParam 2) or an error (0). */
 typedef struct {
-    AiSessionState *session;   /* which session this response is for */
+    unsigned stream_id;
     char *content;
     char *thinking;
     int input_tokens;          /* actual input token count from API (0 if unavailable) */
     int output_tokens;         /* actual output token count from API (0 if unavailable) */
 } AiResponseMsg;
 
-/* Heap-allocated chunk posted via WM_AI_STREAM.  Replaces the old plain
- * char* lParam so the UI thread can tell which session the chunk belongs to. */
+/* WM_AI_STREAM payload (one delta) and WM_AI_TOOL_MSG payload (one status
+ * line; wParam is the ChatItemType). */
 typedef struct {
-    AiSessionState *session;
+    unsigned stream_id;
     char *delta;
 } AiStreamChunk;
 
-/* Thread argument: everything the background thread needs, decoupled from
- * AiChatData so multiple threads can run for different sessions. */
-typedef struct {
-    HWND hwnd;                      /* target window for PostMessage */
-    AiSessionState *target;         /* session this request is for */
-    CRITICAL_SECTION *cs;           /* shared CS for conv writes */
-    volatile int *abort_flag;       /* set to 1 by UI thread to cancel stream */
-    char api_key[256];
-    char provider[64];
-    char custom_url[256];
-    char body[AI_BODY_MAX];         /* pre-built JSON request body */
-    size_t body_len;
-    /* Tool use — non-NULL when tools are registered */
-    AiToolRegistry *tool_registry;  /* pointer into AiChatData (valid while window alive) */
-    char tools_json[AI_TOOL_SCHEMA_MAX * AI_TOOL_MAX]; /* serialized tool defs */
-} AiStreamThreadArg;
-
 /* Context for SSE streaming callback */
 typedef struct {
-    HWND hwnd;                   /* target window for PostMessage */
-    AiSessionState *target;      /* session this stream belongs to */
-    volatile int *abort_flag;    /* checked each chunk — non-zero aborts */
+    AiStream *stream;            /* owns the abort flag and the post target */
     char line_buf[8192];     /* SSE line accumulation buffer */
     size_t line_len;
     char full_content[AI_MSG_MAX];   /* accumulated full content */
@@ -457,6 +440,22 @@ typedef struct {
     int input_tokens;        /* actual input token count from API (0 until received) */
     int output_tokens;       /* actual output token count from API (0 until received) */
 } StreamContext;
+
+/* Post a text payload tagged with the stream's id. If the panel is gone the
+ * post fails and the payload is freed here, so nothing leaks. */
+static void stream_post_text(AiStream *s, UINT msg, WPARAM wp, const char *text)
+{
+    if (ai_stream_aborted(s)) return;   /* nobody is listening any more */
+    AiStreamChunk *chunk = (AiStreamChunk *)calloc(1, sizeof(*chunk));
+    if (!chunk) return;
+    chunk->stream_id = s->id;
+    chunk->delta = _strdup(text ? text : "");
+    if (!chunk->delta ||
+        !PostMessage((HWND)s->post_target, msg, wp, (LPARAM)chunk)) {
+        free(chunk->delta);
+        free(chunk);
+    }
+}
 
 /* Process a single SSE line from the stream */
 static void stream_process_line(StreamContext *ctx, const char *line, size_t len)
@@ -511,12 +510,7 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
             ctx->full_thinking[ctx->thinking_len] = '\0';
         }
         /* Post to UI for realtime display */
-        AiStreamChunk *chunk = calloc(1, sizeof(*chunk));
-        if (chunk) {
-            chunk->session = ctx->target;
-            chunk->delta = _strdup(thinking_delta);
-            PostMessage(ctx->hwnd, WM_AI_STREAM, 0, (LPARAM)chunk);
-        }
+        stream_post_text(ctx->stream, WM_AI_STREAM, 0, thinking_delta);
     }
 
     /* Post content delta to UI */
@@ -529,12 +523,7 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
             ctx->full_content[ctx->content_len] = '\0';
         }
         /* Post to UI for realtime display */
-        AiStreamChunk *chunk = calloc(1, sizeof(*chunk));
-        if (chunk) {
-            chunk->session = ctx->target;
-            chunk->delta = _strdup(content_delta);
-            PostMessage(ctx->hwnd, WM_AI_STREAM, 1, (LPARAM)chunk);
-        }
+        stream_post_text(ctx->stream, WM_AI_STREAM, 1, content_delta);
     }
 }
 
@@ -543,8 +532,9 @@ static int stream_callback(const char *data, size_t len, void *userdata)
 {
     StreamContext *ctx = (StreamContext *)userdata;
 
-    /* Check abort flag (set by UI thread on Cancel / New Chat / window close) */
-    if (ctx->abort_flag && *ctx->abort_flag)
+    /* Stop at once if this stream was aborted (Stop, New Chat, tab closed,
+     * panel closed or undocked, app exit). */
+    if (ai_stream_aborted(ctx->stream))
         return 1; /* abort stream */
 
     for (size_t i = 0; i < len; i++) {
@@ -564,56 +554,62 @@ static int stream_callback(const char *data, size_t len, void *userdata)
     return 0;
 }
 
-/* Helper: post an error AiResponseMsg tagged with the target session.
- * The WM_AI_RESPONSE handler is responsible for setting busy = 0. */
-static void post_error_response(HWND hwnd, AiSessionState *target, const char *msg)
+/* Post a WM_AI_RESPONSE. The handler clears the session's busy flag -- if
+ * this stream is still the session's current one. */
+static void post_response(AiStream *s, WPARAM kind, const char *content,
+                          const char *thinking, int in_tok, int out_tok)
 {
     AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(*rmsg));
-    if (rmsg) {
-        rmsg->session = target;
-        rmsg->content = _strdup(msg);
-        PostMessage(hwnd, WM_AI_RESPONSE, 0, (LPARAM)rmsg);
-    } else {
-        /* Fallback: can't allocate — clear busy here since handler won't run */
-        target->busy = 0;
+    if (!rmsg) return;
+    rmsg->stream_id = s->id;
+    rmsg->content = _strdup(content ? content : "");
+    rmsg->thinking = (thinking && thinking[0]) ? _strdup(thinking) : NULL;
+    rmsg->input_tokens = in_tok;
+    rmsg->output_tokens = out_tok;
+    if (!PostMessage((HWND)s->post_target, WM_AI_RESPONSE, kind, (LPARAM)rmsg)) {
+        free(rmsg->content);
+        free(rmsg->thinking);
+        free(rmsg);
+        return;
     }
+    ai_stream_note_delivered(s);
+}
+
+static void post_error_response(AiStream *s, const char *msg)
+{
+    post_response(s, 0, msg, NULL, 0, 0);
 }
 
 /* Post a tool-related status message to the UI thread.
- * type is CHAT_ITEM_TOOL_CALL or CHAT_ITEM_TOOL_RESULT.
- * Heap-allocates the text; the WM_AI_TOOL_MSG handler frees it. */
-static void post_tool_msg(HWND hwnd, ChatItemType type, const char *text)
+ * type is CHAT_ITEM_TOOL_CALL, CHAT_ITEM_TOOL_RESULT or CHAT_ITEM_STATUS. */
+static void post_tool_msg(AiStream *s, ChatItemType type, const char *text)
 {
-    char *dup = _strdup(text ? text : "");
-    if (dup)
-        PostMessage(hwnd, WM_AI_TOOL_MSG, (WPARAM)type, (LPARAM)dup);
+    stream_post_text(s, WM_AI_TOOL_MSG, (WPARAM)type, text);
 }
 
 /* Background thread: streaming AI API call.
- * Receives a heap-allocated AiStreamThreadArg and frees it before returning.
- * When arg->tool_registry is non-NULL, runs the agentic tool-use loop. */
+ *
+ * Owns one reference to its AiStream and reads and writes nothing else: no
+ * AiChatData, no session. It drops its reference on every way out; if the
+ * panel orphaned the stream meanwhile, that frees it. When s->has_tools,
+ * runs the agentic tool-use loop on the stream's own conversation. */
 static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 {
-    AiStreamThreadArg *arg = (AiStreamThreadArg *)raw_arg;
+    AiStream *s = (AiStream *)raw_arg;
 
-    if (arg->body_len == 0) {
-        post_error_response(arg->hwnd, arg->target, "Error: failed to build request");
-        free(arg);
-        return 0;
-    }
-
-    const char *url = ai_provider_url(arg->provider);
-    if (!url && strcmp(arg->provider, "custom") == 0 && arg->custom_url[0])
-        url = arg->custom_url;
+    const char *url = ai_provider_url(s->provider);
+    if (!url && strcmp(s->provider, "custom") == 0 && s->custom_url[0])
+        url = s->custom_url;
     if (!url) {
-        post_error_response(arg->hwnd, arg->target, "Error: unknown AI provider");
-        free(arg);
+        post_error_response(s, "Error: unknown AI provider");
+        ai_stream_mark_finished(s);
+        ai_stream_release(s);
         return 0;
     }
 
     char hdr0[300], hdr1[64];
     const char *req_headers[3];
-    ai_build_auth_headers(arg->provider, arg->api_key,
+    ai_build_auth_headers(s->provider, s->api_key,
                           hdr0, sizeof(hdr0), hdr1, sizeof(hdr1),
                           req_headers);
 
@@ -624,7 +620,7 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
     /* Tool streaming state (heap-allocated so we can reset between loops) */
     AiToolStreamState tool_stream_state;
     AiToolStreamState *tool_stream_ptr = NULL;
-    if (arg->tool_registry) {
+    if (s->has_tools) {
         ai_tools_stream_init(&tool_stream_state);
         tool_stream_ptr = &tool_stream_state;
     }
@@ -638,12 +634,10 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
     while (!loop_done) {
         StreamContext ctx;
         memset(&ctx, 0, sizeof(ctx));
-        ctx.hwnd = arg->hwnd;
-        ctx.target = arg->target;
-        ctx.abort_flag = arg->abort_flag;
+        ctx.stream = s;
         ctx.tool_stream = tool_stream_ptr;
         if (tool_stream_ptr)
-            strncpy(ctx.provider, arg->provider, sizeof(ctx.provider) - 1);
+            strncpy(ctx.provider, s->provider, sizeof(ctx.provider) - 1);
 
         /* Reset tool stream state for this loop iteration */
         if (tool_stream_ptr)
@@ -651,16 +645,13 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 
         int status = 0;
         char errbuf[256] = "";
-        int rc = ai_http_post_stream(url, req_headers, arg->body, arg->body_len,
+        int rc = ai_http_post_stream(url, req_headers, s->body, s->body_len,
                                      stream_callback, &ctx,
                                      &status, errbuf, sizeof(errbuf));
 
         /* If stream was aborted (user cancelled), discard partial results */
-        if (arg->abort_flag && *arg->abort_flag) {
-            if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
-            free(arg);
-            return 0;
-        }
+        if (ai_stream_aborted(s))
+            goto out;
 
         if (rc != 0 || status < 200 || status >= 300) {
             char msg[1024];
@@ -668,10 +659,8 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                 snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
             else
                 snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
-            if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
-            post_error_response(arg->hwnd, arg->target, msg);
-            free(arg);
-            return 0;
+            post_error_response(s, msg);
+            goto out;
         }
 
         /* Accumulate final content/thinking across all iterations */
@@ -701,23 +690,17 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
             tool_stream_ptr->pending_tool_count > 0) {
 
             /* Add assistant message with tool_use blocks */
-            EnterCriticalSection(arg->cs);
-            agentic_add_assistant_tool_msg(&arg->target->conv,
+            agentic_add_assistant_tool_msg(&s->conv,
                                           ctx.full_content,
                                           tool_stream_ptr->pending_tool_calls,
                                           tool_stream_ptr->pending_tool_count);
-            arg->target->valid = 1;
-            LeaveCriticalSection(arg->cs);
 
             /* Execute each tool call */
             AiToolResult *results = (AiToolResult *)calloc(
                 (size_t)tool_stream_ptr->pending_tool_count, sizeof(AiToolResult));
             if (!results) {
-                ai_tools_stream_reset(tool_stream_ptr);
-                post_error_response(arg->hwnd, arg->target,
-                                    "Error: out of memory for tool results");
-                free(arg);
-                return 0;
+                post_error_response(s, "Error: out of memory for tool results");
+                goto out;
             }
 
             for (int ti = 0; ti < tool_stream_ptr->pending_tool_count; ti++) {
@@ -734,15 +717,13 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     results[ti].content_len = results[ti].content
                                            ? strlen(results[ti].content) : 0;
                     results[ti].is_error = 1;
-                    post_tool_msg(arg->hwnd, CHAT_ITEM_TOOL_CALL,
-                                  "[tool rate-limited]");
+                    post_tool_msg(s, CHAT_ITEM_TOOL_CALL, "[tool rate-limited]");
                     continue;
                 }
 
                 /* Notify UI of tool call (include provider for web_search) */
                 char tool_call_text[256];
-                const AiToolDef *tdef = ai_tools_find(arg->tool_registry,
-                                                      call->name);
+                const AiToolDef *tdef = ai_tools_find(&s->tools, call->name);
                 const char *provider_suffix = NULL;
                 if (tdef && tdef->tool_data &&
                     strcmp(call->name, "web_search") == 0) {
@@ -758,10 +739,10 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                 else
                     snprintf(tool_call_text, sizeof(tool_call_text),
                              "using tool: %s", call->name);
-                post_tool_msg(arg->hwnd, CHAT_ITEM_TOOL_CALL, tool_call_text);
+                post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
 
-                /* Execute */
-                ai_tool_execute(arg->tool_registry, call, arg->abort_flag,
+                /* Execute (the stream's own registry snapshot and abort flag) */
+                ai_tool_execute(&s->tools, call, ai_stream_abort_flag(s),
                                 &results[ti]);
                 agentic_record_tool_call(&agentic, call->name);
 
@@ -769,7 +750,7 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                 if (results[ti].was_truncated) {
                     char warn[256];
                     agentic_truncation_warning(call->name, warn, sizeof(warn));
-                    post_tool_msg(arg->hwnd, CHAT_ITEM_STATUS, warn);
+                    post_tool_msg(s, CHAT_ITEM_STATUS, warn);
                 }
 
                 /* Show brief result in UI (skip error results) */
@@ -780,17 +761,15 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                                 ? results[ti].content_len : 200;
                     memcpy(preview, results[ti].content, plen);
                     preview[plen] = '\0';
-                    post_tool_msg(arg->hwnd, CHAT_ITEM_TOOL_RESULT, preview);
+                    post_tool_msg(s, CHAT_ITEM_TOOL_RESULT, preview);
                 }
             }
 
             /* Add tool results to conversation */
-            EnterCriticalSection(arg->cs);
-            agentic_add_tool_results(&arg->target->conv,
+            agentic_add_tool_results(&s->conv,
                                      tool_stream_ptr->pending_tool_calls,
                                      results,
                                      tool_stream_ptr->pending_tool_count);
-            LeaveCriticalSection(arg->cs);
 
             /* Free tool results */
             for (int ti = 0; ti < tool_stream_ptr->pending_tool_count; ti++)
@@ -800,28 +779,29 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
             ai_tools_stream_reset(tool_stream_ptr);
             agentic.loop_iter++;
 
+            if (ai_stream_aborted(s))
+                goto out;
+
             /* Check if we can continue */
             if (!agentic_can_continue(&agentic)) {
-                post_tool_msg(arg->hwnd, CHAT_ITEM_STATUS,
+                post_tool_msg(s, CHAT_ITEM_STATUS,
                     "[tool loop limit reached — stopping]");
                 loop_done = 1;
             } else {
                 /* Rebuild request body with updated conversation (including tool results) */
-                EnterCriticalSection(arg->cs);
-                int last_msg = arg->target->conv.msg_count - 1;
+                int last_msg = s->conv.msg_count - 1;
                 const AiAttachment *att2 = (last_msg >= 0)
-                    ? arg->target->conv.messages[last_msg].attachment : NULL;
-                arg->body_len = ai_build_request_body_tools(
-                    &arg->target->conv, att2,
-                    arg->tools_json[0] ? arg->tools_json : NULL,
-                    arg->body, sizeof(arg->body),
-                    1, arg->provider);
-                LeaveCriticalSection(arg->cs);
+                    ? s->conv.messages[last_msg].attachment : NULL;
+                s->body_len = ai_build_request_body_tools(
+                    &s->conv, att2,
+                    s->tools_json[0] ? s->tools_json : NULL,
+                    s->body, AI_BODY_MAX,
+                    1, s->provider);
                 {
                     char json_err[256] = "";
-                    if (arg->body_len == 0 ||
-                        !json_validate(arg->body, arg->body_len, json_err, sizeof(json_err))) {
-                        post_tool_msg(arg->hwnd, CHAT_ITEM_STATUS,
+                    if (s->body_len == 0 ||
+                        !json_validate(s->body, s->body_len, json_err, sizeof(json_err))) {
+                        post_tool_msg(s, CHAT_ITEM_STATUS,
                             json_err[0] ? json_err : "JSON rebuild failed in tool loop");
                         loop_done = 1;
                     }
@@ -831,31 +811,23 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
         } else {
             /* Normal end (no tool-use stop) — add assistant message and exit loop */
             loop_done = 1;
-            EnterCriticalSection(arg->cs);
-            ai_conv_add(&arg->target->conv, AI_ROLE_ASSISTANT, ctx.full_content);
-            arg->target->valid = 1;
-            LeaveCriticalSection(arg->cs);
+            ai_conv_add(&s->conv, AI_ROLE_ASSISTANT, ctx.full_content);
         }
     } /* end agentic loop */
 
-    if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
+    /* Signal stream done — wParam=2 means "streaming complete, do command
+     * extraction". This is the thread's last message: after it, the UI may
+     * take s->conv. busy is cleared by the WM_AI_RESPONSE handler on the UI
+     * thread to prevent a race where the user sends a new message before
+     * cleanup completes. */
+    if (!ai_stream_aborted(s))
+        post_response(s, 2, final_content, final_thinking,
+                      total_input_tokens, total_output_tokens);
 
-    /* Signal stream done — wParam=2 means "streaming complete, do command extraction".
-     * busy is cleared by the WM_AI_RESPONSE handler on the UI thread to prevent
-     * a race where the user sends a new message before cleanup completes. */
-    AiResponseMsg *rmsg = (AiResponseMsg *)calloc(1, sizeof(*rmsg));
-    if (rmsg) {
-        rmsg->session = arg->target;
-        rmsg->content = _strdup(final_content);
-        rmsg->thinking = (final_thinking[0] != '\0') ? _strdup(final_thinking) : NULL;
-        rmsg->input_tokens = total_input_tokens;
-        rmsg->output_tokens = total_output_tokens;
-        PostMessage(arg->hwnd, WM_AI_RESPONSE, 2, (LPARAM)rmsg);
-    } else {
-        /* Fallback: can't allocate — clear busy here */
-        arg->target->busy = 0;
-    }
-    free(arg);
+out:
+    if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
+    ai_stream_mark_finished(s);   /* the panel reaps it if nothing got through */
+    ai_stream_release(s);
     return 0;
 }
 
@@ -1209,25 +1181,39 @@ static void chat_register_tools(AiChatData *d,
 
     /* Reset notification flag whenever tools are reconfigured */
     d->tool_support_notified = 0;
+    d->tools_gen++;
 }
 
-/* Build an AiStreamThreadArg from current AiChatData state under the CS,
- * and launch the background thread.  Sets active_state->busy = 1. */
+/* A reply that never started: stop the thinking indicator the send path
+ * started, and say why in a status line. */
+static void launch_failed(AiChatData *d, const char *why)
+{
+    KillTimer(d->hwnd, TIMER_THINKING);
+    d->indicator_pos = -1;
+    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, why);
+    if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    update_context_bar(d);
+}
+
+/* Build an AiStream from the current AiChatData state -- its own copies of
+ * the key, provider, request body, tool registry and conversation -- and
+ * launch the background thread on it. Sets active_state->busy = 1. */
 static void launch_stream_thread(AiChatData *d)
 {
-    AiStreamThreadArg *arg = (AiStreamThreadArg *)calloc(1, sizeof(*arg));
-    if (!arg) return;
+    if (!d || !d->active_state) return;
 
-    arg->hwnd = d->hwnd;
-    arg->target = d->active_state;
-    arg->cs = &d->cs;
-    d->abort_stream = 0;  /* reset before launching */
-    arg->abort_flag = &d->abort_stream;
+    AiStream *s = ai_stream_new();
+    if (!s) {
+        launch_failed(d, "[out of memory starting the AI request]");
+        return;
+    }
+    s->post_target = (uintptr_t)d->hwnd;
 
     EnterCriticalSection(&d->cs);
-    strncpy(arg->api_key, d->api_key, sizeof(arg->api_key) - 1);
-    strncpy(arg->provider, d->provider, sizeof(arg->provider) - 1);
-    strncpy(arg->custom_url, d->custom_url, sizeof(arg->custom_url) - 1);
+    strncpy(s->api_key, d->api_key, sizeof(s->api_key) - 1);
+    strncpy(s->provider, d->provider, sizeof(s->provider) - 1);
+    strncpy(s->custom_url, d->custom_url, sizeof(s->custom_url) - 1);
+    int conv_ok = ai_conv_copy(&s->conv, &d->conv) == 0;
     {
         int last_msg = d->conv.msg_count - 1;
         const AiAttachment *att = (last_msg >= 0)
@@ -1238,72 +1224,70 @@ static void launch_stream_thread(AiChatData *d)
         int provider_supports = ai_provider_supports_tools(d->provider);
 
         if (has_tools && provider_supports) {
+            /* Snapshot the registry: the thread runs the tools from its own
+             * copy, never the panel's (which settings can change, and which
+             * dies with the panel). */
+            ai_stream_copy_tools(s, &d->tool_registry, d->tools_gen,
+                                 &d->search_ctx, &d->fetch_ctx);
+            s->has_tools = 1;
             /* Serialize tool definitions for this provider */
-            arg->tools_json[0] = '\0';
+            s->tools_json[0] = '\0';
             if (strcmp(d->provider, "anthropic") == 0)
-                ai_tools_serialize_anthropic(&d->tool_registry, arg->tools_json,
-                                             sizeof(arg->tools_json));
+                ai_tools_serialize_anthropic(&s->tools, s->tools_json,
+                                             sizeof(s->tools_json));
             else
-                ai_tools_serialize_openai(&d->tool_registry, arg->tools_json,
-                                          sizeof(arg->tools_json));
+                ai_tools_serialize_openai(&s->tools, s->tools_json,
+                                          sizeof(s->tools_json));
 
-            arg->tool_registry = &d->tool_registry;
-            arg->body_len = ai_build_request_body_tools(&d->conv, att,
-                                                         arg->tools_json[0] ? arg->tools_json : NULL,
-                                                         arg->body, sizeof(arg->body),
-                                                         1, arg->provider);
+            s->body_len = ai_build_request_body_tools(&d->conv, att,
+                                                      s->tools_json[0] ? s->tools_json : NULL,
+                                                      s->body, AI_BODY_MAX,
+                                                      1, s->provider);
         } else {
-            arg->tool_registry = NULL;
-            arg->body_len = ai_build_request_body_ex(&d->conv, att, arg->body,
-                                                      sizeof(arg->body), 1,
-                                                      arg->provider);
+            s->has_tools = 0;
+            s->body_len = ai_build_request_body_ex(&d->conv, att, s->body,
+                                                   AI_BODY_MAX, 1,
+                                                   s->provider);
         }
     }
-
-    /* Sync conversation to session state so the agentic loop can rebuild
-     * follow-up requests from target->conv (which needs model, system
-     * prompt, and user messages — not just the tool messages added later). */
-    {
-        /* Free any existing messages in the session conv */
-        for (int ci = 0; ci < d->active_state->conv.msg_count; ci++)
-            ai_msg_free(&d->active_state->conv.messages[ci]);
-
-        /* Copy struct (model, msg_count, fixed-size content arrays) */
-        memcpy(&d->active_state->conv, &d->conv, sizeof(AiConversation));
-
-        /* Duplicate heap resources so both convs can be freed independently */
-        for (int ci = 0; ci < d->active_state->conv.msg_count; ci++) {
-            AiMessage *m = &d->active_state->conv.messages[ci];
-            if (m->content_overflow) {
-                char *dup = (char *)malloc(m->content_len + 1);
-                if (dup) memcpy(dup, m->content_overflow, m->content_len + 1);
-                m->content_overflow = dup;
-            }
-            m->attachment = m->attachment
-                ? ai_attachment_dup(d->conv.messages[ci].attachment) : NULL;
-            if (m->tool_calls && m->n_tool_calls > 0) {
-                size_t tc_sz = (size_t)m->n_tool_calls * sizeof(AiToolCall);
-                AiToolCall *tc = (AiToolCall *)malloc(tc_sz);
-                if (tc) memcpy(tc, d->conv.messages[ci].tool_calls, tc_sz);
-                m->tool_calls = tc;
-            }
-        }
-        d->active_state->valid = 1;
-    }
-
     LeaveCriticalSection(&d->cs);
+
+    if (!conv_ok) {
+        ai_stream_discard(s);
+        launch_failed(d, "[out of memory starting the AI request]");
+        return;
+    }
 
     {
         char json_err[256] = "";
-        if (arg->body_len == 0 ||
-            !json_validate(arg->body, arg->body_len, json_err, sizeof(json_err))) {
-            chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                json_err[0] ? json_err : "JSON build failed");
-            if (d->hChatList) chat_listview_invalidate(d->hChatList);
-            free(arg);
+        if (s->body_len == 0 ||
+            !json_validate(s->body, s->body_len, json_err, sizeof(json_err))) {
+            ai_stream_discard(s);
+            launch_failed(d, json_err[0] ? json_err : "JSON build failed");
             return;
         }
     }
+
+    /* Register it for this session. Any stream the session still had (a
+     * retry) is aborted and orphaned here, so its late messages are stale. */
+    if (ai_stream_table_add(&d->streams, s, d->active_state) != 0) {
+        ai_stream_discard(s);
+        launch_failed(d, "[too many AI replies in progress]");
+        return;
+    }
+    unsigned stream_id = s->id;
+
+    HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, ai_stream_thread_proc, s, 0, NULL);
+    if (!hThread) {
+        /* No thread: drop its reference for it, then ours. */
+        ai_stream_release(s);
+        ai_stream_table_finish(&d->streams, stream_id);
+        launch_failed(d, "[could not start the AI request thread]");
+        return;
+    }
+    CloseHandle(hThread);
+    s = NULL;   /* the thread may free it from here on; only the id is ours */
+    SetTimer(d->hwnd, TIMER_STREAM_REAP, STREAM_REAP_MS, NULL);
 
     /* One-time notification when tools are configured but provider doesn't support them */
     if (d->tool_registry.count > 0 && !ai_provider_supports_tools(d->provider)
@@ -1353,13 +1337,45 @@ static void launch_stream_thread(AiChatData *d)
         chat_listview_scroll_to_bottom(d->hChatList);
     }
 
-    HANDLE hThread = (HANDLE)_beginthreadex(NULL, 0, ai_stream_thread_proc, arg, 0, NULL);
-    if (hThread) CloseHandle(hThread);
-
     /* Switch Send button to Stop while streaming */
     if (d->hSendBtn) {
         SetWindowTextW(d->hSendBtn, L"\x25A0"); /* ■ solid square = stop */
         InvalidateRect(d->hSendBtn, NULL, TRUE);
+    }
+}
+
+/* Abort and orphan the reply `state` has in flight, and put the session
+ * back to idle: its busy flag and its stream accumulators. Touches no
+ * panel UI -- see cancel_active_stream() for that. Safe with no stream. */
+static void abort_session_stream(AiChatData *d, AiSessionState *state)
+{
+    if (!d || !state) return;
+    ai_stream_table_abort_owner(&d->streams, state);
+    state->busy = 0;
+    free(state->stream_content);
+    state->stream_content = NULL;
+    state->stream_content_len = 0;
+    free(state->stream_thinking);
+    state->stream_thinking = NULL;
+    state->stream_thinking_len = 0;
+    state->stream_phase = 0;
+    state->activity_phase = (int)ACTIVITY_IDLE;
+}
+
+/* Free the payloads of stream messages still queued for a panel that is
+ * being destroyed; the system would drop them unread once the window is
+ * gone. Their streams are already orphaned, so nothing else is owed. */
+static void drain_stream_messages(HWND hwnd)
+{
+    MSG m;
+    while (PeekMessage(&m, hwnd, WM_AI_RESPONSE, WM_AI_TOOL_MSG, PM_REMOVE)) {
+        if (m.message == WM_AI_RESPONSE) {
+            AiResponseMsg *r = (AiResponseMsg *)m.lParam;
+            if (r) { free(r->content); free(r->thinking); free(r); }
+        } else if (m.message == WM_AI_STREAM || m.message == WM_AI_TOOL_MSG) {
+            AiStreamChunk *c = (AiStreamChunk *)m.lParam;
+            if (c) { free(c->delta); free(c); }
+        }
     }
 }
 
@@ -1407,11 +1423,9 @@ static void cancel_active_stream(AiChatData *d)
 {
     if (!d) return;
 
-    /* Signal the background thread to abort */
-    d->abort_stream = 1;
-
-    /* Force-clear busy so we can proceed */
-    if (d->active_state) d->active_state->busy = 0;
+    /* Abort and orphan this session's stream only -- another tab's reply
+     * keeps running -- and put the session back to idle. */
+    abort_session_stream(d, d->active_state);
 
     /* Kill timers */
     KillTimer(d->hwnd, TIMER_HEARTBEAT);
@@ -1440,24 +1454,12 @@ static void cancel_active_stream(AiChatData *d)
     EnterCriticalSection(&d->cs);
     if (d->conv.msg_count > 0 &&
         d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
-        d->conv.msg_count--;
+        ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
     LeaveCriticalSection(&d->cs);
 
     /* Update UI */
     update_context_bar(d);
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
-
-    /* Free per-session stream accumulators (normally freed in WM_AI_RESPONSE,
-     * but stale response may not arrive after cancel) */
-    if (d->active_state) {
-        free(d->active_state->stream_content);
-        d->active_state->stream_content = NULL;
-        d->active_state->stream_content_len = 0;
-        free(d->active_state->stream_thinking);
-        d->active_state->stream_thinking = NULL;
-        d->active_state->stream_thinking_len = 0;
-        d->active_state->stream_phase = 0;
-    }
 
     /* Restore Send button from Stop */
     if (d->hSendBtn) {
@@ -1629,18 +1631,6 @@ static void send_user_message(AiChatData *d)
     ai_attachment_free(&d->pending_attachment);
 }
 
-/* Defense in depth against C1: even though ai_extract_commands() and
- * chat_approval_add() already refuse a command containing a raw control
- * byte, refuse to write one to the channel here too -- this is the last
- * point before the bytes reach the remote shell. */
-static int command_has_control_char(const char *cmd)
-{
-    for (const unsigned char *p = (const unsigned char *)cmd; *p; p++) {
-        if (*p < 0x20 || *p == 0x7F) return 1;
-    }
-    return 0;
-}
-
 static void execute_command(AiChatData *d, const char *cmd)
 {
     if (!d || !cmd || !cmd[0]) return;
@@ -1651,7 +1641,14 @@ static void execute_command(AiChatData *d, const char *cmd)
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
         return;
     }
-    if (command_has_control_char(cmd)) {
+    /* Defense in depth: even though ai_extract_commands() and
+     * chat_approval_add() already refuse a command containing a raw
+     * control byte, a UTF-8-encoded C1 control, or a bidi override/isolate
+     * character, refuse to write one to the channel here too -- this is
+     * the last point before the bytes reach the remote shell. Shared with
+     * paste_filter_controls() -- see text_has_unsafe_command_char() in
+     * src/core/paste_filter.h. */
+    if (text_has_unsafe_command_char(cmd)) {
         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
             "[command rejected: control characters inside an EXEC block]");
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
@@ -3195,7 +3192,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                           "All Files (*.*)\0*.*\0";
                         ofn.lpstrFile = fname;
                         ofn.nMaxFile = MAX_PATH;
-                        ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+                        ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST
+                                    | OFN_NOCHANGEDIR;
                         ofn.lpstrDefExt = "txt";
                         if (GetSaveFileName(&ofn)) {
                             FILE *f = fopen(fname, "w");
@@ -3438,7 +3436,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_ACTIVITY_RETRY → cancel current request and resend */
             if (d && ctl_id == IDC_ACTIVITY_RETRY) {
                 /* Cancel current stream if possible, reset activity */
-                if (d->active_state) d->active_state->busy = 0;
+                abort_session_stream(d, d->active_state);
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
                 if (d->hChatList) {
@@ -3461,7 +3459,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 EnterCriticalSection(&d->cs);
                 if (d->conv.msg_count > 0 &&
                     d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
-                    d->conv.msg_count--;
+                    ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
                 LeaveCriticalSection(&d->cs);
 
                 /* Re-launch stream */
@@ -3527,12 +3525,21 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     case WM_AI_TOOL_MSG: {
         /* Tool call/result notification from background thread.
          * wParam: ChatItemType (CHAT_ITEM_TOOL_CALL or CHAT_ITEM_TOOL_RESULT or CHAT_ITEM_STATUS)
-         * lParam: heap-allocated char* text (we must free) */
-        if (!d) { free((void *)lParam); break; }
-        char *tool_text = (char *)lParam;
-        ChatItemType tool_type = (ChatItemType)(WPARAM)wParam;
-        chat_msg_append(&d->msg_list, tool_type, tool_text);
-        free(tool_text);
+         * lParam: heap AiStreamChunk (stream id + text; we must free) */
+        AiStreamChunk *tmsg = (AiStreamChunk *)lParam;
+        if (!tmsg) return 0;
+        void *tool_owner = NULL;
+        int tool_live = d && ai_stream_table_find(&d->streams, tmsg->stream_id,
+                                                  &tool_owner) != NULL;
+        /* A stale stream's line, or a background session's, is dropped:
+         * msg_list is the displayed session's thread. */
+        if (tool_live && tool_owner == (void *)d->active_state && tmsg->delta) {
+            ChatItemType tool_type = (ChatItemType)(WPARAM)wParam;
+            chat_msg_append(&d->msg_list, tool_type, tmsg->delta);
+        }
+        free(tmsg->delta);
+        free(tmsg);
+        if (!tool_live || tool_owner != (void *)d->active_state) return 0;
         /* Following the tool call/result into view (if the user hasn't
          * scrolled away) is now automatic: chat_listview_invalidate()
          * recalcs layout, which applies the list's stick-to-bottom state. */
@@ -3548,7 +3555,11 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
          * update (remeasure + repaint) once.  This prevents the UI
          * thread from being starved when tokens arrive faster than
          * we can repaint. */
-        if (!d) break;
+        if (!d) {
+            AiStreamChunk *orphan = (AiStreamChunk *)lParam;
+            if (orphan) { free(orphan->delta); free(orphan); }
+            break;
+        }
 
         int display_dirty = 0;
         int prev_phase = d->stream_phase;  /* before this batch's chunks */
@@ -3560,11 +3571,16 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             AiStreamChunk *chunk = (AiStreamChunk *)cur_lp;
             if (!chunk) goto next_coalesce;
             char *delta = chunk->delta;
-            AiSessionState *src = chunk->session;
+            void *chunk_owner = NULL;
+            AiStream *chunk_stream = ai_stream_table_find(&d->streams,
+                                                          chunk->stream_id,
+                                                          &chunk_owner);
             free(chunk);
             if (!delta) goto next_coalesce;
 
-            if (d->abort_stream) { free(delta); goto next_coalesce; }
+            /* Stale: stopped, retried, or its session is gone. */
+            if (!chunk_stream) { free(delta); goto next_coalesce; }
+            AiSessionState *src = (AiSessionState *)chunk_owner;
 
             /* Accumulate to source session buffers */
             if (src) {
@@ -3693,10 +3709,35 @@ next_coalesce:;
     }
 
     case WM_AI_RESPONSE: {
-        if (!d) break;
         AiResponseMsg *rmsg = (AiResponseMsg *)lParam;
         if (!rmsg) break;
-        AiSessionState *src = rmsg->session;
+        void *resp_owner = NULL;
+        AiStream *resp_stream = d ? ai_stream_table_find(&d->streams,
+                                                         rmsg->stream_id,
+                                                         &resp_owner) : NULL;
+        if (!resp_stream) {
+            /* Stale: the reply was stopped or retried, its tab closed, or
+             * the panel rebuilt. Nothing of it may touch a session. */
+            free(rmsg->content);
+            free(rmsg->thinking);
+            free(rmsg);
+            return 0;
+        }
+        AiSessionState *src = (AiSessionState *)resp_owner;
+
+        /* A reply for a session that isn't displayed: the thread's own
+         * conversation (the send-time copy plus any tool turns and, on a
+         * normal end, the reply) becomes the session's, so nothing the
+         * thread wrote is lost. When the tool loop stopped at its limit or
+         * on a failed rebuild it ends on the tool results instead -- the
+         * same as before this conversation was the thread's own. */
+        if (src != d->active_state && wParam == 2) {
+            ai_conv_take(&src->conv, &resp_stream->conv);
+            src->valid = 1;
+        }
+        /* The done/error message is the thread's last: drop our reference. */
+        ai_stream_table_finish(&d->streams, rmsg->stream_id);
+        resp_stream = NULL;
 
         /* Free per-session stream accumulators */
         if (src) {
@@ -3735,8 +3776,9 @@ next_coalesce:;
                             /* -1 means the queue refused it (full, blank,
                              * control characters, or too long) -- not
                              * added, and no card is ever built for it. */
-                            (void)chat_approval_add(&batch->q, cmds[ci],
-                                                    (CmdPlatform)src->platform);
+                            (void)chat_approval_add_session(&batch->q, cmds[ci],
+                                (CmdPlatform)src->platform,
+                                src->platform_contradicted);
                         }
                     }
                 }
@@ -3757,14 +3799,18 @@ next_coalesce:;
                     snprintf(note, sizeof(note),
                         "NOTE: %d EXEC block(s) were rejected because they "
                         "contained control characters (newline, tab, "
-                        "escape). Put exactly one single-line command in "
-                        "each EXEC block.", rejected);
+                        "escape, etc.) or bidirectional text formatting "
+                        "characters. Put exactly one single-line command "
+                        "in each EXEC block.", rejected);
                     EnterCriticalSection(&d->cs);
                     ai_conv_add(&src->conv, AI_ROLE_USER, note);
                     LeaveCriticalSection(&d->cs);
                 }
             }
-            if (src) src->busy = 0;
+            if (src) {
+                src->busy = 0;
+                src->activity_phase = (int)ACTIVITY_IDLE;
+            }
             free(rmsg->content);
             free(rmsg->thinking);
             free(rmsg);
@@ -3878,7 +3924,8 @@ next_coalesce:;
                 char rej_note[256];
                 snprintf(rej_note, sizeof(rej_note),
                     "NOTE: %d EXEC block(s) were rejected because they "
-                    "contained control characters (newline, tab, escape). "
+                    "contained control characters (newline, tab, escape, "
+                    "etc.) or bidirectional text formatting characters. "
                     "Put exactly one single-line command in each EXEC "
                     "block.", rejected);
                 EnterCriticalSection(&d->cs);
@@ -3923,8 +3970,9 @@ next_coalesce:;
                      * user can run after raising the ceiling (see
                      * chat_approval_needs_user below). */
                     for (int ci = 0; ci < ncmds; ci++) {
-                        int idx = chat_approval_add(&batch->q, cmds[ci],
-                                                    (CmdPlatform)d->active_state->platform);
+                        int idx = chat_approval_add_session(&batch->q, cmds[ci],
+                            (CmdPlatform)d->active_state->platform,
+                            d->active_state->platform_contradicted);
                         if (idx < 0) continue;  /* queue full or blank -- drop it */
 
                         ChatMsgItem *cmd_item = chat_msg_append(
@@ -4054,6 +4102,23 @@ next_coalesce:;
         if (!d) return 0;
         if (wParam == TIMER_CMD_QUEUE) {
             dispatch_tick(d);
+        } else if (wParam == TIMER_STREAM_REAP) {
+            /* A reply whose thread ended without its final message getting
+             * through (out of memory, or the post failed) would leave its
+             * session busy for ever: end it here as if Stop were pressed. */
+            void *lost;
+            while ((lost = ai_stream_table_lost_owner(&d->streams)) != NULL) {
+                if (lost == (void *)d->active_state) {
+                    cancel_active_stream(d);
+                    chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                    "[the AI reply was lost]");
+                    if (d->hChatList) chat_listview_invalidate(d->hChatList);
+                } else {
+                    abort_session_stream(d, (AiSessionState *)lost);
+                }
+            }
+            if (d->streams.count == 0)
+                KillTimer(hwnd, TIMER_STREAM_REAP);
         } else if (wParam == TIMER_HEARTBEAT) {
             /* Activity monitor heartbeat: tick health + toggle pulse */
             float now = (float)GetTickCount() / 1000.0f;
@@ -4288,19 +4353,44 @@ next_coalesce:;
 
     case WM_DESTROY:
         if (d) {
-            /* Signal any running stream thread to abort before cleanup */
-            d->abort_stream = 1;
+            /* Abort and orphan every reply in flight -- the active session's
+             * and any background tab's -- and put those sessions back to
+             * idle: the threads free their own streams, and a panel built
+             * later (undock/redock) starts with no stale busy flag.
+             *
+             * A table entry can have a NULL owner (defensive: nothing
+             * today launches a stream with d->active_state NULL, but
+             * nothing guarantees it never will). abort_session_stream()
+             * no-ops on a NULL state without touching the table at all, so
+             * looping on d->streams.count while resolving owner-at-slot-0
+             * would spin forever the moment slot 0 held one: remove such
+             * an entry directly instead of routing it through
+             * abort_session_stream() (there is no session to update
+             * anyway). Either branch always shrinks the table by at least
+             * one entry, so the loop always terminates. */
+            while (d->streams.count > 0) {
+                AiSessionState *owner =
+                    (AiSessionState *)ai_stream_table_owner_at(&d->streams, 0);
+                if (owner)
+                    abort_session_stream(d, owner);
+                else
+                    ai_stream_table_abort_owner(&d->streams, NULL);
+            }
+            ai_stream_table_abort_all(&d->streams);   /* nothing left; belt and braces */
             if (d->active_state) d->active_state->busy = 0;
+            drain_stream_messages(hwnd);
 
             KillTimer(hwnd, TIMER_SCROLL_SYNC);
             KillTimer(hwnd, TIMER_HEARTBEAT);
             KillTimer(hwnd, TIMER_CMD_QUEUE);
+            KillTimer(hwnd, TIMER_STREAM_REAP);
             d->dispatch_active = 0;
             /* Save conversation back to session before cleanup */
             if (d->active_state) {
-                ai_conv_move(&d->active_state->conv, &d->conv);
+                ai_conv_take(&d->active_state->conv, &d->conv);
                 d->active_state->valid = 1;
             }
+            ai_conv_reset(&d->conv);   /* no session: nothing may leak */
             thinking_history_clear(d);
             ai_attachment_free(&d->pending_attachment);
             chat_msg_list_clear(&d->msg_list);
@@ -4338,9 +4428,13 @@ next_coalesce:;
 
 void ai_chat_init(HINSTANCE hInstance)
 {
-    /* Load RichEdit control library (still needed for input field) */
-    LoadLibrary("Riched20.dll");
-    LoadLibrary("Msftedit.dll");
+    /* Load RichEdit control library (still needed for input field).
+     * LoadLibraryExW + LOAD_LIBRARY_SEARCH_SYSTEM32 (DLL search-order
+     * hardening): search System32 only, never the exe's own directory or
+     * the current directory, so a same-named DLL planted in either can't be
+     * loaded instead of the real one. */
+    LoadLibraryExW(L"Riched20.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    LoadLibraryExW(L"Msftedit.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
 
     /* Register the ChatListView window class */
     chat_listview_register(hInstance);
@@ -4412,7 +4506,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     /* Load existing conversation from session state if available */
     d->active_state = initial_state;
     if (initial_state && initial_state->valid) {
-        ai_conv_move(&d->conv, &initial_state->conv);
+        ai_conv_take(&d->conv, &initial_state->conv);
     }
 
     if (session_notes)
@@ -4441,6 +4535,12 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
         parent, NULL, GetModuleHandle(NULL), d);
 
     if (!hwnd) {
+        /* No panel: the session keeps its conversation. (WM_CREATE never
+         * fails, so a NULL here means it never ran and nothing else was
+         * set up.) */
+        if (initial_state && initial_state->valid)
+            ai_conv_take(&initial_state->conv, &d->conv);
+        ai_conv_reset(&d->conv);
         DeleteCriticalSection(&d->cs);
         free(d);
     }
@@ -4638,11 +4738,11 @@ static void do_session_switch(AiChatData *d,
                               const char *system_notes,
                               const char *session_name)
 {
-    /* Save current conversation to old session state.
-     * Skip if the session is busy — the thread will commit to its own conv. */
-    if (d->active_state && d->active_state != new_state &&
-        !d->active_state->busy) {
-        ai_conv_move(&d->active_state->conv, &d->conv);
+    /* Save current conversation to old session state. A busy session's
+     * thread works on its own copy, so this is safe mid-reply; when the
+     * reply lands, WM_AI_RESPONSE replaces it with the thread's copy. */
+    if (d->active_state && d->active_state != new_state) {
+        ai_conv_take(&d->active_state->conv, &d->conv);
         d->active_state->valid = 1;
     }
 
@@ -4672,12 +4772,9 @@ static void do_session_switch(AiChatData *d,
     /* Load new session's conversation */
     if (new_state && new_state != d->active_state) {
         if (new_state->valid) {
-            ai_conv_move(&d->conv, &new_state->conv);
+            ai_conv_take(&d->conv, &new_state->conv);
         } else {
-            char model[64];
-            strncpy(model, d->conv.model, sizeof(model) - 1);
-            model[sizeof(model) - 1] = '\0';
-            ai_conv_init(&d->conv, model);
+            ai_conv_reset(&d->conv);   /* frees, keeps the model */
         }
     }
 
@@ -4766,6 +4863,16 @@ static void do_session_switch(AiChatData *d,
                                   d->stream_thinking);
     }
 
+    /* Send/Stop follows the displayed session's own stream: Stop must never
+     * be offered for another tab's reply, and a busy tab shows it again. */
+    if (d->hSendBtn) {
+        if (new_state && new_state->busy)
+            SetWindowTextW(d->hSendBtn, L"\x25A0"); /* ■ solid square = stop */
+        else
+            SetWindowText(d->hSendBtn, ">");
+        InvalidateRect(d->hSendBtn, NULL, TRUE);
+    }
+
     if (d->hChatList) {
         chat_listview_invalidate(d->hChatList);
         chat_listview_scroll_to_bottom(d->hChatList);
@@ -4782,13 +4889,6 @@ void ai_chat_switch_session(HWND hwnd,
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
-
-    /* If the active session is busy, save the current conversation so the
-     * thread can commit its result on top of this snapshot. */
-    if (d->active_state && d->active_state->busy) {
-        ai_conv_move(&d->active_state->conv, &d->conv);
-        d->active_state->valid = 1;
-    }
 
     /* Kill any indicator timer — it belongs to the old session's display */
     if (d->indicator_pos >= 0) {
@@ -4816,18 +4916,17 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
     if (d->active_state == state) {
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
         dispatch_cancel(d, NULL, 0);
+        if (state->busy) cancel_active_stream(d);
     }
+
+    /* Abort and orphan its reply in flight, if any: the thread frees its
+     * own stream, and its late messages no longer resolve to this state.
+     * Also frees the session's stream buffers and clears busy. */
+    abort_session_stream(d, state);
 
     /* Free every pending batch (the caller frees the AiSessionState itself
      * right after this call returns). */
     cmd_batch_set_free(&state->batches);
-
-    /* Free per-session stream buffers */
-    free(state->stream_content);
-    state->stream_content = NULL;
-    free(state->stream_thinking);
-    state->stream_thinking = NULL;
-    state->busy = 0;
 
     if (d->active_state == state)
         d->active_state = NULL;
@@ -4959,6 +5058,44 @@ void ai_chat_close(HWND hwnd)
 {
     if (hwnd && IsWindow(hwnd))
         DestroyWindow(hwnd);
+}
+
+/* True once no AiStream is left live process-wide (ai_stream_live_count()
+ * only drops once a worker thread has actually released its reference and
+ * exited, not merely been asked to cancel). */
+static int ai_streams_done(void)
+{
+    return ai_stream_live_count() <= 0;
+}
+
+void ai_chat_wait_for_streams(DWORD timeout_ms)
+{
+    /* Pumps this thread's inbound sent messages while waiting, instead of
+     * blocking in Sleep(): called from window.c's WM_DESTROY, after the
+     * panel has orphaned every stream it knew about, to give those worker
+     * threads a moment to actually exit before WSACleanup/OpenSSL's exit
+     * handlers run. A worker can still be blocked showing a host-key or
+     * credential prompt owned by the main window, and Windows delivers
+     * that dialog's own housekeeping to its owner via a cross-thread
+     * SendMessage -- which only unblocks once this thread services its
+     * message queue. A plain Sleep loop here never does that, so it can
+     * turn a dismissable prompt into a full-timeout hang on every exit. */
+    DWORD start = GetTickCount();
+    for (;;) {
+        if (ai_streams_done()) return;
+        DWORD elapsed = GetTickCount() - start;
+        if (elapsed >= timeout_ms) return;
+        DWORD slice = timeout_ms - elapsed;
+        if (slice > 20) slice = 20;
+
+        MsgWaitForMultipleObjects(0, NULL, FALSE, slice, QS_SENDMESSAGE);
+
+        MSG msg;
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE | PM_QS_SENDMESSAGE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
 }
 
 int ai_chat_has_content(HWND hwnd)

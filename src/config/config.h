@@ -33,6 +33,11 @@ typedef struct {
     char colour_scheme[CFG_STR_MAX];
     char ai_provider[CFG_STR_MAX];
     char ai_api_key[CFG_STR_MAX];
+    /* Verbatim copy of the last encrypted API-key blob this process could
+     * NOT decrypt (moved from another user/PC, or corrupt). See
+     * Profile.password_enc_preserved in profile.h for the exact rules --
+     * this field follows the same load/save contract. */
+    char ai_api_key_enc_preserved[CFG_BLOB_MAX];
     char ai_custom_url[CFG_STR_MAX];
     char ai_custom_model[CFG_STR_MAX];
     char ai_system_notes[AI_NOTES_MAX];
@@ -63,8 +68,31 @@ typedef struct {
     Vector profiles; /* Vector of Profile* */
 } Config;
 
+/* M3: why config_load_ex() returned NULL (or, on CONFIG_LOAD_INVALID,
+ * still returned NULL but the original was preserved as a ".bad-*" backup
+ * -- see loader.c's config_backup_unparseable_file()). Distinguishing
+ * MISSING from UNREADABLE matters because a caller that then falls back to
+ * config_new_default() must NOT save that over a file it could not read
+ * (locked, too large, a permissions problem) -- there is nothing wrong
+ * with the user's real config in that case, just this process's ability to
+ * see it right now. Set even when the return is non-NULL (CONFIG_LOAD_OK)
+ * so callers that only care about the success/failure boundary can ignore
+ * it. */
+typedef enum {
+    CONFIG_LOAD_OK      = 0, /* parsed successfully; the returned Config is it */
+    CONFIG_LOAD_MISSING = 1, /* no file there -- fine to write defaults */
+    CONFIG_LOAD_UNREADABLE = 2, /* file exists but couldn't be safely read or
+                                  * backed up -- do NOT save over it */
+    CONFIG_LOAD_INVALID = 3, /* file existed, wasn't valid config JSON, and
+                               * WAS backed up -- safe to save fresh defaults,
+                               * the original survives as ".bad-*" */
+} ConfigLoadStatus;
+
 Config *config_new_default(void);
 Config *config_load(const char *path);
+/* Same as config_load(), plus *status_out (when non-NULL) is set to why,
+ * on every return -- see ConfigLoadStatus above. */
+Config *config_load_ex(const char *path, ConfigLoadStatus *status_out);
 int config_save(const Config *cfg, const char *path);
 void config_free(Config *cfg);
 
@@ -86,5 +114,30 @@ Profile *config_find_profile_by_host(const Config *cfg, const char *host);
  * means it does NOT come back unless the whole config has no local
  * profile at the next start. */
 int config_ensure_local_profile(Config *cfg);
+
+/* ---- Secret-field helpers (see loader.c's load/save contract comment) ---- */
+
+/* M-4: when the caller has just stored a new, user-supplied value into a
+ * secret's plaintext field (a password or API key edit box), call this to
+ * drop any foreign/corrupt blob still sitting in the matching `preserved`
+ * field. Without it, a value entered and then cleared again later in the
+ * same run (without reloading the config from disk) would resurrect the
+ * stale blob on save: save writes `preserved` back verbatim the moment
+ * `plain` is empty, and nothing else clears it in memory between the two
+ * saves. No-op when `plain` is empty (nothing new was supplied). */
+void config_secret_drop_stale_preserved(const char *plain, char *preserved,
+                                         size_t preserved_cap);
+
+/* Build an absolute, per-user fallback config path,
+ * "<local_appdata>\Nutshell\nutshell.config", for use when the caller
+ * cannot determine the exe's own directory. Falling back to a bare
+ * relative CONFIG_FILENAME instead would silently read or write into the
+ * process's current working directory -- whatever that happens to be.
+ * Returns 1 and fills `out` when `local_appdata` is non-empty and the
+ * result fits; returns 0 (out untouched) otherwise, so the caller can
+ * refuse to save rather than fall back to the CWD. Pure string logic --
+ * no filesystem access -- so it is callable from a native test without
+ * Windows APIs; the caller creates the "Nutshell" directory itself. */
+int config_fallback_path(const char *local_appdata, char *out, size_t out_cap);
 
 #endif

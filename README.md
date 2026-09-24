@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.13 \
+**Version**: v1.2.15 \
 **Build Date**: 2026-09-10 \
 **Author**: Thomas Sulkiewicz
 
@@ -35,7 +35,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - **Local shell** sessions over ConPTY — the same window, terminal and assistant with no remote host at all ([see below](#local-shell))
 - VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
 - Password and SSH key authentication with passphrase prompt and retry
-- AES-256-GCM password encryption at rest (PBKDF2-SHA256 derived key, OpenSSL)
+- Windows DPAPI password encryption at rest, per-user (legacy AES-256-GCM configs migrate automatically)
 - TOFU host key verification (first-connect dialog, mismatch warning)
 - Dynamic PTY resize on window resize and zoom
 - Paste confirmation dialog with configurable inter-line delay
@@ -195,7 +195,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 
 #### AI Assistant > Provider
 - **Provider** — Anthropic (default), OpenAI, Gemini, Moonshot, DeepSeek, or Custom
-- **API key** — encrypted at rest with AES-256-GCM (same encryption as saved passwords)
+- **API key** — encrypted at rest with Windows DPAPI, per Windows user (same protection as saved passwords)
 - **Model** — type one, or press the refresh button to fetch the provider's model list
 - **Base URL** — shown only for the Custom provider, for self-hosted or alternative endpoints
 
@@ -322,7 +322,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 
 ### Security
 
-- **Passwords and API keys** are encrypted at rest in `nutshell.config` using AES-256-GCM with a PBKDF2-SHA256 derived key
+- **Passwords and API keys** are encrypted at rest in `nutshell.config` with Windows DPAPI (`CryptProtectData`), tied to the current Windows user and machine — not a portable key. The rest of the config (settings, hostnames, etc.) still travels freely with the file; only the secret fields are locked down. A config moved to another PC or user account loses just its stored passwords/API key (you are prompted to re-enter them, as if none were saved) — the original encrypted value is kept untouched in the file in case it comes back to its original PC/user, and is only replaced once you enter a new one. Configs from before this change (AES-256-GCM with a PBKDF2-SHA256 derived key) are decrypted and migrated to DPAPI automatically the first time they load.
 - **Host key verification** follows a Trust-On-First-Use (TOFU) model. Known hosts are stored at `%APPDATA%\sshclient\known_hosts`. A mismatch triggers a warning dialog (possible man-in-the-middle)
 - **SSH key passphrases** are cached in memory only for the duration of the session and securely zeroed on close
 
@@ -372,35 +372,47 @@ rename it, edit it or delete it like any other.
 
 ### Which shell it runs
 
-Resolved at session start, first match wins:
+Only shells actually installed on the PC are ever offered — there is no
+bundled or downloaded shell any more (busybox support was removed
+2026-09-24; see "Upgrading and downgrading" below). Resolved at session
+start, first match wins:
 
-1. the **Shell command** field in the profile, if you set one — used verbatim;
-2. **`busybox64.exe`** (or `busybox.exe`) sitting next to `nutshell.exe`;
-3. the same file in `%LOCALAPPDATA%\Nutshell\runtime\`;
+1. the **Shell** field in the profile, if you set one — a full command line,
+   used verbatim (see "Custom shell commands" below);
+2. **PowerShell 7** — `%ProgramFiles%\PowerShell\7\pwsh.exe`;
+3. **Windows PowerShell** — `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`;
 4. **Git for Windows** bash (`HKLM\SOFTWARE\GitForWindows\InstallPath`, else `%ProgramFiles%\Git\bin\bash.exe`);
-5. **MSYS2** bash at `C:\msys64\usr\bin\bash.exe`.
+5. **MSYS2** bash at `C:\msys64\usr\bin\bash.exe`;
+6. **cmd.exe** at `%SystemRoot%\System32\cmd.exe`.
 
-If none of those exists the terminal says so and the tab stays disconnected.
+cmd.exe is part of every live Windows install, so step 6 is effectively a
+guarantee: the "no shell found" message is only ever seen if `%SystemRoot%`
+itself can't be read. The Session Manager's **Shell** field is an editable
+dropdown listing "Automatic (⟨whatever step 2-6 currently picks⟩)" plus every
+shell steps 2-6 actually found on this PC — pick one to fill in its full
+command line, or leave it blank/on Automatic, or type any other command line
+by hand.
 
-The portable case is option 2: drop a [busybox-w32](https://frippery.org/busybox/)
-`busybox64.exe` beside `nutshell.exe` and you have a two-file folder that
-gives any Windows 10 (1809 or later) or Windows 11 PC a shell with `ls`,
-`grep`, `sed`, `awk`, `find`, `tar`, `vi`, pipes and scripts, offline. Nothing
-is installed and nothing is extracted; busybox is not shipped inside
-`nutshell.exe`.
-
-The shell is given `TERM=xterm-256color`, `HOME=%USERPROFILE%`, `SHELL`,
-`NUTSHELL=<version>`, its own directory prepended to `PATH` (and `MSYSTEM=MSYS`
-for MSYS2). Nothing is removed from your environment, so `git`, `python` and
+The shell is always given `TERM=xterm-256color` and `NUTSHELL=<version>`.
+`HOME=%USERPROFILE%`, `SHELL`, its own directory prepended to `PATH`, and (for
+MSYS2 only) `MSYSTEM=MSYS` are added *only* for the two bash kinds (Git for
+Windows, MSYS2) — PowerShell and cmd.exe get none of those, they mean nothing
+there. Nothing is ever removed from your environment, so `git`, `python` and
 the rest keep working. It starts in `%USERPROFILE%`.
 
-### What busybox's shell does not have
+### Custom shell commands
 
-busybox's ash in bash-compatibility mode covers `[[ ]]`, functions, `local`,
-arithmetic, here-documents, `source`, brace expansion and process
-substitution. It has **no arrays** (`declare -a`, `mapfile`), no associative
-arrays and no `coproc`. Git for Windows and MSYS2 give you a real GNU bash 5
-with none of those gaps.
+A custom **Shell** command whose executable is a bare name with no path
+(`powershell.exe`, not `C:\...\powershell.exe`) is resolved to an absolute
+path before it is ever run — searching only `%SystemRoot%\System32`,
+`%SystemRoot%` itself, and absolute (never relative) `PATH` entries, the same
+places Windows would eventually find it, but *never* the folder `nutshell.exe`
+is running from and never the current directory. That is deliberate: letting
+Windows' own default search run would try those two locations first, so a
+malicious file dropped next to `nutshell.exe` under a well-known shell's name
+would run instead of the real one. If the name can't be found there, the
+session refuses to start rather than guess. A command that already names a
+path (custom or one of the detected entries above) is unaffected.
 
 ### Safety
 
@@ -481,7 +493,8 @@ if you need to move between versions.
 │   │   ├── xmalloc.c/.h              #   Aborting allocator wrappers
 │   │   └── zoom.c/.h                  #   Zoom level calculations
 │   ├── crypto/                         # Cryptography
-│   │   └── crypto.c/.h                #   AES-256-GCM encrypt/decrypt (OpenSSL, PBKDF2)
+│   │   ├── crypto.c/.h                #   DPAPI-backed secret encrypt/decrypt; legacy AES-256-GCM decrypt for migration
+│   │   └── crypto_dpapi.c/.h          #   DPAPI backend (real CryptProtectData/CryptUnprotectData, runtime-loaded; test-injectable)
 │   ├── term/                           # Terminal emulator & SSH
 │   │   ├── buffer.c                   #   Ring buffer management (scrollback, resize, reflow)
 │   │   ├── parser.c                   #   VT100/ANSI escape sequence parser

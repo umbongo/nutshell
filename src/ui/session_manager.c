@@ -15,8 +15,11 @@
 #include "../config/config.h"
 #include "../core/vector.h"
 #include "../core/cmd_classify.h"
+#include "local_shell.h"
+#include "local_shell_probe.h"
 #include "resource.h"
 #include "dpi_util.h"
+#include "secure_zero.h"
 
 #define IDT_AINOTES_SCROLL 50  /* timer ID for AI notes scroll sync */
 #define IDT_LIST_SCROLL    51  /* timer ID for session list scroll sync */
@@ -35,6 +38,28 @@ typedef struct {
     HWND        hAiScrollbar; /* custom scrollbar for AI notes edit */
     int         ai_line_h;    /* cached line height in px for AI notes */
     HWND        hListScrollbar; /* custom scrollbar for session listbox */
+
+    /* Shell combo (IDC_EDIT_SHELL): row 0 is always "Automatic (...)",
+     * stored command "" (index 0 of shell_cmd is unused/empty); rows 1..n
+     * mirror local_shell_list_available(), stored command shell_cmd[i] is
+     * that row's full quoted command line and shell_label[i] its display
+     * text (row 0's own label too, at index 0).
+     *
+     * CBS_DROPDOWN's own default processing copies the selected row's
+     * LIST TEXT (the label) into the edit control right after CBN_SELCHANGE
+     * returns -- unconditionally, so any attempt here to instead show the
+     * resolved command line in the edit box is silently overwritten by it.
+     * Rather than fight that (a former version of this dialog tried to, and
+     * ended up saving the label text itself as the profile's shell command
+     * -- see the review finding), form_read() below maps whatever text is
+     * showing back to a command by comparing it against shell_label[]: a
+     * match uses that row's shell_cmd[] (empty, i.e. automatic, for row 0);
+     * anything else is the user's own typed command, stored verbatim. This
+     * works regardless of exactly when the label gets copied in, because
+     * shell_combo_selchange() below sets the very same label text itself. */
+    char        shell_cmd[LOCAL_SHELL_CHOICE_MAX + 1][LOCAL_SHELL_CMD_MAX];
+    char        shell_label[LOCAL_SHELL_CHOICE_MAX + 1][96];
+    int         shell_choice_count;
 } SessMgrState;
 
 /* ---- Helpers ---- */
@@ -103,8 +128,148 @@ static void list_rebuild(HWND hList, const Config *cfg)
     }
 }
 
+/* ANSI (the display names and command lines local_shell.c builds are all
+ * plain ASCII) -> wide, for CB_SETCUEBANNER -- the combobox-edit-control
+ * form of the message, not EM_SETCUEBANNER, which a combo box's own HWND
+ * does not respond to (only the plain edit control comctl32 creates as its
+ * child does, and that child is never what GetDlgItem/SendDlgItemMessage on
+ * the combo's own ID reaches). CB_SETCUEBANNER additionally needs comctl32
+ * v6, i.e. the app manifest's isolationAwareness/common-controls dependency
+ * -- nutshell.manifest does not currently declare one, so this is a no-op
+ * on this build; that is acceptable (the field is still usable, it just
+ * shows no placeholder text), and sending EM_SETCUEBANNER at a combo box
+ * HWND instead would silently do nothing either way, just for the wrong
+ * reason. */
+static void set_cue_banner(HWND ctrl, const char *text)
+{
+    if (!ctrl || !text) return;
+    wchar_t wbuf[LOCAL_SHELL_CMD_MAX];
+    int n = MultiByteToWideChar(CP_UTF8, 0, text, -1, wbuf, (int)(sizeof(wbuf) / sizeof(wbuf[0])));
+    if (n <= 0) return;
+    SendMessage(ctrl, CB_SETCUEBANNER, 0, (LPARAM)wbuf);
+}
+
+/* Populate the Shell combo: row 0 "Automatic (<whatever it resolves to
+ * right now>)" (stored command ""), then one row per
+ * local_shell_list_available() result (stored command: that row's full
+ * command line). Also limits the edit portion to sizeof(Profile.shell)-1
+ * chars, so a long custom command line is refused at the keystroke rather
+ * than silently truncated at save. Called once, from WM_INITDIALOG. */
+static void shell_combo_populate(HWND hwnd, SessMgrState *st)
+{
+    HWND hShell = GetDlgItem(hwnd, IDC_EDIT_SHELL);
+    if (!hShell) return;
+
+    SendMessage(hShell, CB_LIMITTEXT, (WPARAM)(sizeof(((Profile *)0)->shell) - 1), 0);
+
+    LocalShellProbe probe;
+    local_shell_fill_probe(&probe);
+
+    LocalShellChoice choices[LOCAL_SHELL_CHOICE_MAX];
+    int n = local_shell_list_available(&probe, choices, LOCAL_SHELL_CHOICE_MAX);
+    if (n < 0) n = 0;
+    if (n > LOCAL_SHELL_CHOICE_MAX) n = LOCAL_SHELL_CHOICE_MAX;
+
+    if (n > 0) {
+        snprintf(st->shell_label[0], sizeof(st->shell_label[0]),
+                "Automatic (%s)", choices[0].display);
+    } else {
+        snprintf(st->shell_label[0], sizeof(st->shell_label[0]),
+                "Automatic (no shell found)");
+    }
+    SendMessageA(hShell, CB_ADDSTRING, 0, (LPARAM)st->shell_label[0]);
+    st->shell_cmd[0][0] = '\0';
+
+    for (int i = 0; i < n; i++) {
+        snprintf(st->shell_label[i + 1], sizeof(st->shell_label[i + 1]),
+                "%s", choices[i].display);
+        SendMessageA(hShell, CB_ADDSTRING, 0, (LPARAM)st->shell_label[i + 1]);
+        snprintf(st->shell_cmd[i + 1], sizeof(st->shell_cmd[i + 1]),
+                "%s", choices[i].command);
+    }
+    st->shell_choice_count = n;
+
+    SendMessage(hShell, CB_SETCURSEL, 0, 0);
+    SetDlgItemTextA(hwnd, IDC_EDIT_SHELL, "");
+    set_cue_banner(hShell, st->shell_label[0]);
+}
+
+/* CBN_SELCHANGE on the Shell combo: sets the edit text to the selected
+ * row's label (row 0, Automatic, clears it instead so the cue banner shows
+ * through). This is also exactly what CBS_DROPDOWN's own default
+ * processing does right after CBN_SELCHANGE returns, so setting it here
+ * too is belt and braces, not a race with it -- see the SessMgrState
+ * comment on shell_label[]. Out-of-range indexes (CB_ERR, or a stale
+ * selection from before a repopulate) are left alone. */
+static void shell_combo_selchange(HWND hwnd, SessMgrState *st)
+{
+    HWND hShell = GetDlgItem(hwnd, IDC_EDIT_SHELL);
+    int idx = (int)SendMessage(hShell, CB_GETCURSEL, 0, 0);
+    if (idx < 0 || idx > st->shell_choice_count) return;
+    SetDlgItemTextA(hwnd, IDC_EDIT_SHELL, idx == 0 ? "" : st->shell_label[idx]);
+}
+
+/* Maps the Shell combo's current edit text back to what should be saved in
+ * Profile.shell: the text matches one of the populated rows' labels
+ * exactly -> that row's command (empty, i.e. automatic, for row 0);
+ * anything else -> the typed text itself, verbatim, as a custom command.
+ * See the SessMgrState comment on shell_label[] for why matching against
+ * the label (not the command) is what makes this robust regardless of
+ * combo box internals. */
+static void shell_combo_read(HWND hwnd, const SessMgrState *st, char *out, size_t out_size)
+{
+    char text[LOCAL_SHELL_CMD_MAX];
+    GetDlgItemTextA(hwnd, IDC_EDIT_SHELL, text, sizeof(text));
+
+    for (int i = 0; i <= st->shell_choice_count; i++) {
+        if (strcmp(text, st->shell_label[i]) == 0) {
+            snprintf(out, out_size, "%s", st->shell_cmd[i]);
+            return;
+        }
+    }
+    snprintf(out, out_size, "%s", text);
+}
+
+/* The reverse of shell_combo_read(): given a profile's saved shell command,
+ * selects the combo row whose stored command matches it exactly (row 0,
+ * empty, for automatic) and shows that row's label, exactly as if the user
+ * had just picked it from the dropdown; a command that matches no row (a
+ * custom one) deselects the combo and shows the raw command text instead,
+ * ready to edit further. */
+static void shell_combo_show(HWND hwnd, const SessMgrState *st, const char *shell)
+{
+    HWND hShell = GetDlgItem(hwnd, IDC_EDIT_SHELL);
+    for (int i = 0; i <= st->shell_choice_count; i++) {
+        if (strcmp(shell, st->shell_cmd[i]) == 0) {
+            SendMessage(hShell, CB_SETCURSEL, (WPARAM)i, 0);
+            SetDlgItemTextA(hwnd, IDC_EDIT_SHELL, i == 0 ? "" : st->shell_label[i]);
+            return;
+        }
+    }
+    /* A profile saved by the earlier buggy build (see the SessMgrState
+     * comment on shell_label[]) may hold the LABEL text itself as shell --
+     * e.g. "PowerShell 7" -- rather than the command line it names, because
+     * that build saved whatever the edit box was showing without mapping
+     * it back first. Recognise that shape too and show (and, the moment
+     * this dialog is saved again, persist) that row's real command rather
+     * than silently treating the label text as a bogus custom command that
+     * resolves to no real executable. Row 0's "Automatic (...)" label is
+     * deliberately not matched here -- it embeds this machine's current
+     * detection result, not a fixed name, so a stale copy of it is not a
+     * reliable signal either way. */
+    for (int i = 1; i <= st->shell_choice_count; i++) {
+        if (strcmp(shell, st->shell_label[i]) == 0) {
+            SendMessage(hShell, CB_SETCURSEL, (WPARAM)i, 0);
+            SetDlgItemTextA(hwnd, IDC_EDIT_SHELL, st->shell_label[i]);
+            return;
+        }
+    }
+    SendMessage(hShell, CB_SETCURSEL, (WPARAM)-1, 0);
+    SetDlgItemTextA(hwnd, IDC_EDIT_SHELL, shell);
+}
+
 /* Clear all form fields and reset auth combo to Password. */
-static void form_clear(HWND hwnd)
+static void form_clear(HWND hwnd, SessMgrState *st)
 {
     SetDlgItemTextA(hwnd, IDC_EDIT_NAME,    "");
     SetDlgItemTextA(hwnd, IDC_EDIT_HOST,    "");
@@ -112,7 +277,7 @@ static void form_clear(HWND hwnd)
     SetDlgItemTextA(hwnd, IDC_EDIT_USER,    "");
     SetDlgItemTextA(hwnd, IDC_EDIT_PASS,    "");
     SetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, "");
-    SetDlgItemTextA(hwnd, IDC_EDIT_SHELL,   "");
+    shell_combo_show(hwnd, st, "");
     SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, "");
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL, 0, 0);
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_PLATFORM), CB_SETCURSEL, 0, 0);
@@ -120,7 +285,7 @@ static void form_clear(HWND hwnd)
 }
 
 /* Populate form fields from an existing profile. */
-static void form_load(HWND hwnd, const Profile *pr)
+static void form_load(HWND hwnd, SessMgrState *st, const Profile *pr)
 {
     SetDlgItemTextA(hwnd, IDC_EDIT_NAME,    pr->name);
     SetDlgItemTextA(hwnd, IDC_EDIT_HOST,    pr->host);
@@ -128,7 +293,11 @@ static void form_load(HWND hwnd, const Profile *pr)
     SetDlgItemTextA(hwnd, IDC_EDIT_USER,    pr->username);
     SetDlgItemTextA(hwnd, IDC_EDIT_PASS,    pr->password);
     SetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, pr->key_path);
-    SetDlgItemTextA(hwnd, IDC_EDIT_SHELL,   pr->shell);
+    /* Select the row whose stored command matches pr->shell exactly (row 0,
+     * automatic, when pr->shell is empty) and show its label, same as if
+     * the user had just picked it; a custom command that matches none of
+     * the detected shells shows as typed text instead. */
+    shell_combo_show(hwnd, st, pr->shell);
     SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, pr->ai_notes);
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL,
                 pr->auth_type == AUTH_KEY ? 1 : 0, 0);
@@ -258,7 +427,7 @@ static void list_sync_scroll(HWND hwnd, SessMgrState *st)
  * Read form fields into *pr.
  * Returns 1 on success, 0 if host is empty (caller shows error).
  */
-static int form_read(HWND hwnd, Profile *pr)
+static int form_read(HWND hwnd, const SessMgrState *st, Profile *pr)
 {
     int kind_idx  = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND),
                                      CB_GETCURSEL, 0, 0);
@@ -268,7 +437,7 @@ static int form_read(HWND hwnd, Profile *pr)
 
     if (is_local) {
         snprintf(pr->kind, sizeof(pr->kind), "%s", "local");
-        GetDlgItemTextA(hwnd, IDC_EDIT_SHELL, pr->shell, sizeof(pr->shell));
+        shell_combo_read(hwnd, st, pr->shell, sizeof(pr->shell));
         GetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, pr->ai_notes, sizeof(pr->ai_notes));
 
         int plat_idx = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_PLATFORM),
@@ -333,8 +502,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         SendMessageA(hKind, CB_ADDSTRING, 0, (LPARAM)"Local shell");
         SendMessage (hKind, CB_SETCURSEL, 0, 0);
 
-        SendMessage(GetDlgItem(hwnd, IDC_EDIT_SHELL), EM_SETCUEBANNER, 0,
-                    (LPARAM)L"e.g. \"C:\\Program Files\\Git\\bin\\bash.exe\" --login -i");
+        shell_combo_populate(hwnd, st);
 
         /* Device platform: populated entirely from cmd_classify's table, so
          * adding a vendor later touches one place there and nothing here. */
@@ -350,6 +518,13 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         SendDlgItemMessage(hwnd, IDC_EDIT_AI_NOTES, EM_SETLIMITTEXT, 2559, 0);
         SendMessage(GetDlgItem(hwnd, IDC_EDIT_AI_NOTES), EM_SETCUEBANNER, 0,
                     (LPARAM)L"Notes for AI about this server (max 400 words)");
+
+        /* Match the password field's edit-box limit to Profile.password's
+         * buffer size: form_read()'s GetDlgItemTextA() already truncates
+         * safely at that size, but without this the box lets the user type
+         * (and believe they saved) more than will ever actually be kept. */
+        SendDlgItemMessage(hwnd, IDC_EDIT_PASS, EM_SETLIMITTEXT,
+                            (WPARAM)(sizeof(((Profile *)0)->password) - 1u), 0);
 
         /* Theme: look up from config, create brushes, apply title bar + borders.
          * Must happen BEFORE font application, because WM_SETFONT with
@@ -439,7 +614,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         }
 
         list_rebuild(GetDlgItem(hwnd, IDC_LIST_SESSIONS), st->cfg);
-        form_clear(hwnd);
+        form_clear(hwnd, st);
         toggle_kind_fields(hwnd);
         toggle_auth_fields(hwnd);
         return TRUE;
@@ -461,6 +636,13 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             return TRUE;
         }
 
+        /* Shell combo: a row picked from the dropdown -- not the user
+         * typing, which is CBN_EDITCHANGE and needs no help from here. */
+        if (id == IDC_EDIT_SHELL && ntf == CBN_SELCHANGE) {
+            shell_combo_selchange(hwnd, st);
+            return TRUE;
+        }
+
         /* --- List box notifications --- */
         if (id == IDC_LIST_SESSIONS) {
             HWND hList = GetDlgItem(hwnd, IDC_LIST_SESSIONS);
@@ -470,7 +652,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                 int sel = (int)SendMessage(hList, LB_GETCURSEL, 0, 0);
                 if (sel >= 0 && (size_t)sel < vec_size(&st->cfg->profiles)) {
                     st->edit_idx = sel;
-                    form_load(hwnd,
+                    form_load(hwnd, st,
                         (const Profile *)vec_get(&st->cfg->profiles,
                                                  (size_t)sel));
                     toggle_kind_fields(hwnd);
@@ -497,7 +679,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             st->edit_idx = -1;
             SendMessage(GetDlgItem(hwnd, IDC_LIST_SESSIONS),
                         LB_SETCURSEL, (WPARAM)-1, 0);
-            form_clear(hwnd);
+            form_clear(hwnd, st);
             toggle_kind_fields(hwnd);
             toggle_auth_fields(hwnd);
             SetFocus(GetDlgItem(hwnd, IDC_EDIT_NAME));
@@ -513,7 +695,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                             MB_ICONINFORMATION);
             } else {
                 st->edit_idx = sel;
-                form_load(hwnd,
+                form_load(hwnd, st,
                     (const Profile *)vec_get(&st->cfg->profiles,
                                              (size_t)sel));
                 toggle_kind_fields(hwnd);
@@ -544,10 +726,19 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             config_profile_free(
                 (Profile *)vec_get(&st->cfg->profiles, (size_t)sel));
             vec_remove(&st->cfg->profiles, (size_t)sel);
-            config_save(st->cfg, st->config_path);
+            /* M5: the profile is already gone from cfg->profiles in memory
+             * either way -- report it when it could not also be removed
+             * from disk, rather than leaving the user to discover the
+             * deleted session is still there on the next launch. */
+            if (config_save(st->cfg, st->config_path) != 0) {
+                MessageBoxA(hwnd,
+                    "Could not save nutshell.config. The deletion has not "
+                    "been written to disk.",
+                    "Save Failed", MB_OK | MB_ICONWARNING);
+            }
             list_rebuild(hList, st->cfg);
             st->edit_idx = -1;
-            form_clear(hwnd);
+            form_clear(hwnd, st);
             toggle_kind_fields(hwnd);
             toggle_auth_fields(hwnd);
             return TRUE;
@@ -557,7 +748,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         if (id == IDC_BTN_SAVE) {
             Profile tmp;
             memset(&tmp, 0, sizeof(tmp));
-            if (!form_read(hwnd, &tmp)) {
+            if (!form_read(hwnd, st, &tmp)) {
                 MessageBoxA(hwnd, "Please enter a hostname.", "Save",
                             MB_ICONWARNING);
                 return TRUE;
@@ -580,7 +771,14 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                         tmp.name[0]      ? tmp.name      : "(unnamed)");
                     int rc = MessageBoxA(hwnd, prompt, "Save Profile",
                                          MB_YESNOCANCEL | MB_ICONQUESTION);
-                    if (rc == IDCANCEL) return TRUE;
+                    if (rc == IDCANCEL) {
+                        /* tmp.password already holds whatever the user
+                         * typed in the form (form_read() succeeded above) --
+                         * wipe it before abandoning the save, same as every
+                         * other exit from this handler. */
+                        secure_zero(&tmp, sizeof(tmp));
+                        return TRUE;
+                    }
                     do_append = (rc == IDYES);
                 }
             } else {
@@ -590,16 +788,59 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             if (!do_append) {
                 Profile *pr = (Profile *)vec_get(
                     &st->cfg->profiles, (size_t)st->edit_idx);
+                /* form_read() never touches password_enc_preserved -- it
+                 * isn't a form field -- so carry the existing profile's
+                 * preserved blob (a password that could not be decrypted
+                 * on this PC/user) forward. Otherwise every edit of this
+                 * profile, even an unrelated field, would silently drop it.
+                 * secret_prepare() (loader.c) ignores it the moment
+                 * tmp.password is non-empty, so a real new password still
+                 * always wins and replaces it. */
+                memcpy(tmp.password_enc_preserved, pr->password_enc_preserved,
+                       sizeof(tmp.password_enc_preserved));
+                /* M-4: ... but if the user just typed a new password into
+                 * the form, drop that carried-forward blob rather than
+                 * leaving it sitting in tmp (and then pr) unused. Otherwise
+                 * it lingers in memory, and a later save this same session
+                 * that clears the password field again would resurrect the
+                 * old foreign blob instead of writing "" like it should. */
+                config_secret_drop_stale_preserved(tmp.password,
+                    tmp.password_enc_preserved, sizeof(tmp.password_enc_preserved));
                 *pr = tmp;
             } else {
                 Profile *pr = config_profile_new();
                 *pr = tmp;
+                /* Duplicating a profile ("save as new", the Yes answer
+                 * above): carry the source profile's preserved blob to the
+                 * duplicate only when the password field was left
+                 * untouched (still empty -- the box never shows an
+                 * undecryptable blob's plaintext, so "untouched" and
+                 * "empty" are the same thing here). If the user typed a
+                 * new password for the duplicate, that new password always
+                 * wins and there is nothing of the old blob worth keeping. */
+                if (tmp.password[0] == '\0' && st->edit_idx >= 0 &&
+                    (size_t)st->edit_idx < vec_size(&st->cfg->profiles)) {
+                    const Profile *src = (const Profile *)vec_get(
+                        &st->cfg->profiles, (size_t)st->edit_idx);
+                    memcpy(pr->password_enc_preserved, src->password_enc_preserved,
+                           sizeof(pr->password_enc_preserved));
+                }
                 vec_push(&st->cfg->profiles, pr);
                 st->edit_idx = (int)vec_size(&st->cfg->profiles) - 1;
             }
-            config_save(st->cfg, st->config_path);
+            /* M5: report a save failure -- the edit is already applied to
+             * cfg->profiles in memory (and will still show in this list),
+             * so a silent failure here means the user believes a password
+             * or a changed host was saved when it was not. */
+            if (config_save(st->cfg, st->config_path) != 0) {
+                MessageBoxA(hwnd,
+                    "Could not save nutshell.config. This session has not "
+                    "been written to disk.",
+                    "Save Failed", MB_OK | MB_ICONWARNING);
+            }
             list_rebuild(hList, st->cfg);
             SendMessage(hList, LB_SETCURSEL, (WPARAM)st->edit_idx, 0);
+            secure_zero(&tmp, sizeof(tmp));
             return TRUE;
         }
 
@@ -615,7 +856,8 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
                               "All files (*.*)\0*.*\0";
             ofn.lpstrFile   = path;
             ofn.nMaxFile    = MAX_PATH;
-            ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST
+                              | OFN_NOCHANGEDIR;
             if (GetOpenFileNameA(&ofn))
                 SetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, path);
             return TRUE;
@@ -625,12 +867,13 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         if (id == IDOK) {
             Profile tmp;
             memset(&tmp, 0, sizeof(tmp));
-            if (!form_read(hwnd, &tmp)) {
+            if (!form_read(hwnd, st, &tmp)) {
                 MessageBoxA(hwnd, "Please enter a hostname.", "Connect",
                             MB_ICONWARNING);
                 return TRUE;
             }
             *st->out_profile = tmp;
+            secure_zero(&tmp, sizeof(tmp));
             EndDialog(hwnd, IDOK);
             return TRUE;
         }

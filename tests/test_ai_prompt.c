@@ -539,6 +539,36 @@ int test_ai_extract_commands_ex_embedded_del_rejected(void) {
     TEST_END();
 }
 
+/* UTF-8-encoded C1 control (U+009B, CSI) -- not caught by a bare "< 0x20
+ * or == 0x7F" byte scan, since it arrives as the two bytes 0xC2 0x9B, but
+ * text_has_unsafe_command_char() (shared with paste_filter_controls())
+ * decodes it and rejects the block the same way. */
+int test_ai_extract_commands_ex_embedded_c1_rejected(void) {
+    TEST_BEGIN();
+    const char *resp = "[EXEC]echo ok\xC2\x9Brm -rf ~[/EXEC]";
+    char cmds[16][1024];
+    int rejected = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, NULL);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(rejected, 1);
+    TEST_END();
+}
+
+/* A bidi override (U+202E RIGHT-TO-LEFT OVERRIDE, E2 80 AE) could make the
+ * command shown to the user in an approval card read differently from the
+ * command actually run -- rejected on the same principle as a control
+ * character. */
+int test_ai_extract_commands_ex_embedded_bidi_override_rejected(void) {
+    TEST_BEGIN();
+    const char *resp = "[EXEC]echo ok\xE2\x80\xAErm -rf ~[/EXEC]";
+    char cmds[16][1024];
+    int rejected = -1;
+    int n = ai_extract_commands_ex(resp, cmds, 16, &rejected, NULL);
+    ASSERT_EQ(n, 0);
+    ASSERT_EQ(rejected, 1);
+    TEST_END();
+}
+
 int test_ai_extract_commands_ex_clean_block_still_extracts(void) {
     TEST_BEGIN();
     const char *resp = "[EXEC]ls -la[/EXEC]";
@@ -796,7 +826,7 @@ int test_ai_system_prompt_no_terminal(void) {
 }
 
 /* A local session's prompt opens by naming the local shell instead of an SSH
- * session, so the model does not suggest apt or systemctl on a busybox shell
+ * session, so the model does not suggest apt or systemctl on a Windows shell
  * (spec 2026-09-22-local-shell-design.md section 6). */
 int test_ai_system_prompt_local_shell(void) {
     TEST_BEGIN();
@@ -814,8 +844,8 @@ int test_ai_system_prompt_local_shell(void) {
 
     /* A named shell is used verbatim; NULL lists the possibilities */
     ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
-                           SESSION_LOCAL, "busybox");
-    ASSERT_TRUE(strstr(buf, "a local shell (busybox) on a Windows PC") != NULL);
+                           SESSION_LOCAL, "cmd");
+    ASSERT_TRUE(strstr(buf, "a local shell (cmd) on a Windows PC") != NULL);
 
     /* local_shell_spec_name()'s "PowerShell" reaches the prompt the same way */
     ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
@@ -845,7 +875,7 @@ int test_ai_system_prompt_powershell_examples(void) {
 
     /* A non-PowerShell local shell keeps the bash examples. */
     ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
-                           SESSION_LOCAL, "busybox");
+                           SESSION_LOCAL, "cmd");
     ASSERT_TRUE(strstr(buf, "[EXEC]ls -la[/EXEC]") != NULL);
     ASSERT_TRUE(strstr(buf, "Write PowerShell syntax, not bash.") == NULL);
 

@@ -3,17 +3,13 @@
 
 #ifdef _WIN32
 #include <windows.h>
-#include <dwmapi.h>
 #include <commctrl.h>
 #include "ui_theme.h"
 #include "theme.h"  /* theme_is_dark() */
 #include "ns_draw.h"
 #include "ns_tokens.h"
 #include "dpi_util.h"
-
-#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
-#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
-#endif
+#include "dwm_util.h"
 
 /* Convert 0xRRGGBB to COLORREF */
 static inline COLORREF theme_cr(unsigned int rgb)
@@ -29,8 +25,7 @@ static inline void themed_apply_title_bar(HWND hwnd, const ThemeColors *theme)
 {
     if (!hwnd || !theme) return;
     BOOL dark = theme_is_dark(theme->bg_primary) ? TRUE : FALSE;
-    DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE,
-                          &dark, sizeof(dark));
+    ns_dwm_set_dark_mode(hwnd, dark);
 }
 
 /*

@@ -82,6 +82,13 @@ typedef struct {
 
     uint32_t utf8_codepoint;
     int utf8_remaining;
+    /* Hardening: bounds the NEXT continuation byte. Only the byte right
+     * after the lead byte needs a restricted range (it excludes overlong
+     * encodings, UTF-16 surrogates and codepoints past U+10FFFF); every
+     * continuation byte after that is the generic 0x80-0xBF. Set together
+     * with utf8_remaining whenever a new sequence starts. */
+    unsigned char utf8_lo;
+    unsigned char utf8_hi;
 
     /* Window title (set by OSC 0/2) */
     char title[128];

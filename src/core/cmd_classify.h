@@ -56,6 +56,21 @@ CmdSafetyLevel cmd_classify_ex(const char *command, CmdPlatform platform,
 #define CMD_MASK_OF(level) (1u << (unsigned)(level))
 unsigned cmd_classify_mask(const char *command, CmdPlatform platform);
 
+/* Classification for an AI session, which is what every caller that judges
+ * a session's commands must use. `platform` is the session's resolved
+ * platform (CMD_PLATFORM_UNKNOWN while unresolved); `contradicted` is its
+ * sticky flag, set once host output has disagreed with that platform (see
+ * cmd_detect.h). Not contradicted: exactly cmd_classify()/_mask(). Once
+ * contradicted, the command is classified under both `platform` and
+ * CMD_PLATFORM_UNKNOWN and the worse wins -- the higher level, and the union
+ * of the two category masks -- because neither ruleset is uniformly the
+ * stricter one: UNKNOWN covers Linux, but each device ruleset has commands
+ * it rates above UNKNOWN. The result is never looser than either. */
+CmdSafetyLevel cmd_classify_session(const char *command, CmdPlatform platform,
+                                    int contradicted);
+unsigned cmd_classify_mask_session(const char *command, CmdPlatform platform,
+                                   int contradicted);
+
 /* Config-token and UI-label mappings for the platform setting.
  * cmd_platform_from_name() maps an unrecognised or NULL name -- and the
  * "auto" token, which means "no override, detect it" -- to

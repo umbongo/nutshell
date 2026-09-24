@@ -168,6 +168,45 @@ int test_paste_build_summary_small_buf(void)
     TEST_END();
 }
 
+/* ---- paste_build_warning -------------------------------------------------- */
+
+int test_paste_build_warning_none(void)
+{
+    TEST_BEGIN();
+    char buf[128] = "unchanged";
+    paste_build_warning(0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "");
+    TEST_END();
+}
+
+int test_paste_build_warning_singular(void)
+{
+    TEST_BEGIN();
+    char buf[128];
+    paste_build_warning(1, buf, sizeof(buf));
+    /* Covers both control characters and bidi override/isolate
+     * characters -- paste_filter_controls() strips both under one count. */
+    ASSERT_STR_EQ(buf, "1 control/bidi character will be removed.");
+    TEST_END();
+}
+
+int test_paste_build_warning_plural(void)
+{
+    TEST_BEGIN();
+    char buf[128];
+    paste_build_warning(3, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "3 control/bidi characters will be removed.");
+    TEST_END();
+}
+
+int test_paste_build_warning_null_buf(void)
+{
+    TEST_BEGIN();
+    paste_build_warning(2, NULL, 0);  /* must not crash */
+    ASSERT_TRUE(1);
+    TEST_END();
+}
+
 /* ---- paste_clamp_size --------------------------------------------------- */
 
 int test_paste_clamp_fits(void)

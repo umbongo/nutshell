@@ -19,8 +19,10 @@ CC = x86_64-w64-mingw32-gcc
 
 ifeq ($(HOST_WINDOWS),yes)
 WINDRES = windres
+DLLTOOL = dlltool
 else
 WINDRES = x86_64-w64-mingw32-windres
+DLLTOOL = x86_64-w64-mingw32-dlltool
 endif
 
 ifeq ($(HOST_WINDOWS),yes)
@@ -46,8 +48,35 @@ CFLAGS = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow -Wformat=2 -Wconvers
          -Os -ffunction-sections -fdata-sections -flto \
          -Isrc -Isrc/core -Isrc/config -Isrc/crypto $(DEP_INC) -Isrc/term -Isrc/ssh -Isrc/ui
 LDFLAGS = -mwindows -Os -flto -Wl,--gc-sections -s $(LINK_MODE) \
-          $(DEP_LIB) -lssh2 -lssl -lcrypto $(ZLIB) -lcrypt32 -lbcrypt \
-          -lgdiplus -lole32 -lshlwapi -lshell32 -lws2_32 -lgdi32 -luser32 -lcomctl32 -ldwmapi -lwinhttp -lm
+          $(DEP_LIB) -lssh2 -lssl -lcrypto $(ZLIB) $(DELAY_LIBS) -ldelayimp -lbcrypt \
+          -lgdiplus -lole32 -lshlwapi -lshell32 -lws2_32 -lgdi32 -luser32 -lcomctl32 -lm
+# dwmapi.dll is not a KnownDLL, unlike everything else above (DLL
+# search-order hardening, 2026-09-24): DwmSetWindowAttribute is resolved at
+# runtime instead (src/ui/dwm_util.c), so -ldwmapi is deliberately absent.
+# crypt32.dll and winhttp.dll are not KnownDLLs either, but unlike dwmapi
+# they are pulled in by statically-linked code this build doesn't own
+# (crypt32: OpenSSL's Windows cert-store loader inside libcrypto.a) or that
+# calls through many entry points (winhttp: the AI panel's HTTP client) --
+# hand-resolving each call site the way dwm_util.c/crypto_dpapi.c do isn't
+# practical, so these two are linked as delay-imports instead: dlltool
+# builds an import library ($(DELAY_LIBS), below) whose thunks call
+# LoadLibrary/GetProcAddress through libdelayimp.a's __delayLoadHelper2 the
+# first time each function is actually called, by which point WinMain's
+# SetDefaultDllDirectories/SetDllDirectoryW (src/main.c) has already
+# restricted the search path. -ldelayimp must come after $(DELAY_LIBS) on
+# the command line -- its thunks are what reference __delayLoadHelper2.
+
+# See build-support/delayload/*.def for exactly which symbols each of these
+# two DLLs needs to export (only what nutshell.exe actually calls -- the
+# .def files are hand-written, not gendef'd against the real DLLs' full
+# export tables). Built under build/, never committed (*.a is gitignored).
+DELAY_DEF_DIR = build-support/delayload
+DELAY_LIB_DIR = build/delayload
+DELAY_LIBS    = $(DELAY_LIB_DIR)/libcrypt32_delay.a $(DELAY_LIB_DIR)/libwinhttp_delay.a
+
+$(DELAY_LIB_DIR)/lib%_delay.a: $(DELAY_DEF_DIR)/%.def
+	@mkdir -p $(DELAY_LIB_DIR)
+	$(DLLTOOL) --input-def $< --dllname $*.dll --output-delaylib $@
 
 # Source directories
 SRC_DIRS = src src/core src/config src/crypto src/term src/ssh src/ui
@@ -167,7 +196,7 @@ release: $(TARGET)
 redraw-debug:
 	$(MAKE) CFLAGS="$(CFLAGS) -DREDRAW_DEBUG"
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(DELAY_LIBS)
 	@mkdir -p $(dir $@)
 	$(CC) $(OBJS) -o $@ $(LDFLAGS)
 
@@ -197,6 +226,7 @@ endif
 
 clean:
 	rm -f $(OBJS) $(TARGET) $(TEST_TARGET) $(WIN_TEST_TARGET) $(DETECT_OUT) *.o tests/*.o
+	rm -rf $(DELAY_LIB_DIR)
 
 lint:
 	cppcheck --enable=warning,style,performance,portability --std=c11 src/

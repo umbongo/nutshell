@@ -295,6 +295,198 @@ int test_term_utf8(void) {
     TEST_END();
 }
 
+/* ---- Hardening: UTF-8 decoder corner cases ------------------------------ */
+
+/* Overlong 2-byte encoding of NUL (C0 80): both bytes are individually
+ * invalid lead bytes (0xC0/0xC1 never start a valid sequence), so each
+ * gets its own replacement character. */
+int test_term_utf8_reject_overlong_2byte(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xC0\x80" "A", 3);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 1).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 2).codepoint, (uint32_t)'A');
+
+    term_free(t);
+    TEST_END();
+}
+
+/* Overlong 3-byte encoding (E0 80 80 would be U+0000): the lead byte's
+ * maximal subpart is itself alone (second byte out of the E0-specific
+ * A0-BF range), then each remaining byte is its own stray continuation. */
+int test_term_utf8_reject_overlong_3byte(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xE0\x80\x80", 3);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 1).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 2).codepoint, 0xFFFDu);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* Classic surrogate-encoding attack: ED A0 80 would encode U+D800 (a UTF-16
+ * high surrogate) if the second-byte range weren't restricted to 80-9F for
+ * lead byte ED. */
+int test_term_utf8_reject_surrogate(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xED\xA0\x80" "A", 4);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 1).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 2).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 3).codepoint, (uint32_t)'A');
+
+    term_free(t);
+    TEST_END();
+}
+
+/* U+D7FF is the highest codepoint before the surrogate range -- must still
+ * decode normally. */
+int test_term_utf8_surrogate_boundary_valid(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xED\x9F\xBF", 3);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xD7FFu);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* U+10FFFF is the highest valid Unicode codepoint -- must still decode. */
+int test_term_utf8_max_codepoint_valid(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xF4\x8F\xBF\xBF", 4);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0x10FFFFu);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* One past the maximum: F4 90 80 80 would encode U+110000. The lead byte's
+ * maximal subpart is itself alone, then three more stray bytes. */
+int test_term_utf8_reject_above_max_codepoint(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xF4\x90\x80\x80" "A", 5);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 1).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 2).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 3).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 4).codepoint, (uint32_t)'A');
+
+    term_free(t);
+    TEST_END();
+}
+
+/* A 3-byte sequence cut short by an ASCII byte: the two consumed bytes
+ * collapse into ONE replacement character (a single maximal subpart), not
+ * one per byte -- distinct from the stray-continuation-byte cases above. */
+int test_term_utf8_truncated_by_ascii(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xE2\x82X", 3);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 1).codepoint, (uint32_t)'X');
+
+    term_free(t);
+    TEST_END();
+}
+
+/* An unexpected lone continuation byte with no pending sequence at all. */
+int test_term_utf8_lone_continuation_byte(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\x80" "A", 2);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(get_cell(t, 0, 1).codepoint, (uint32_t)'A');
+
+    term_free(t);
+    TEST_END();
+}
+
+/* A sequence genuinely truncated at the end of the buffer (more bytes due
+ * later) must not emit anything early, and must leave the decoder state
+ * pending rather than resetting it. */
+int test_term_utf8_incomplete_stays_pending(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xE2\x82", 2);
+
+    ASSERT_EQ(t->utf8_remaining, 1);
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0u);
+
+    /* Completing it later in a second term_process() call still works. */
+    term_process(t, "\xAC", 1);
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0x20ACu);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* Hardening: a pending sequence must not survive an intervening escape
+ * sequence. Two bytes of a 3-byte euro sign, then a complete (and
+ * otherwise harmless) SGR escape sequence, then the byte that would have
+ * completed the euro sign had it not been interrupted. Before the fix this
+ * byte (0x80, within the generic 0x80-0xBF continuation range the pending
+ * state was left in) silently completed a codepoint built from bytes on
+ * both sides of the escape sequence; after the fix the pending sequence is
+ * flushed as one replacement character the moment ESC arrives, the escape
+ * sequence is handled normally, and the leftover 0x80 is then decoded
+ * fresh as its own (stray-continuation) replacement character. */
+int test_term_utf8_pending_reset_by_escape_sequence(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xE2\x82" "\x1B[31m" "\x80" "X", 9);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);  /* flushed at ESC */
+    ASSERT_EQ(get_cell(t, 0, 1).codepoint, 0xFFFDu);  /* stray 0x80, decoded fresh */
+    ASSERT_EQ(get_cell(t, 0, 2).codepoint, (uint32_t)'X');
+    ASSERT_EQ(t->utf8_remaining, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* Same hardening, but the intervening byte is a plain C0 control (LF)
+ * rather than the start of an escape sequence -- LF is handled directly in
+ * TERM_STATE_NORMAL and never calls term_put_char_utf8() either, so it
+ * needs the same flush-before-handling treatment. */
+int test_term_utf8_pending_reset_by_control_byte(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    term_process(t, "\xE2\x82" "\n", 3);
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 0xFFFDu);
+    ASSERT_EQ(t->cursor.row, 1);   /* LF still advanced the cursor normally */
+    ASSERT_EQ(t->utf8_remaining, 0);
+
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_sgr_bold_off(void) {
     TEST_BEGIN();
     Terminal *t = term_init(24, 80, 100);

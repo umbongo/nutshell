@@ -3,6 +3,7 @@
 #include "json_parser.h"
 #include "json_validate.h"
 #include "string_utils.h"
+#include "paste_filter.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -127,6 +128,64 @@ void ai_conv_reset(AiConversation *conv)
     memcpy(conv->model, model, sizeof(conv->model));
 }
 
+void ai_conv_take(AiConversation *dst, AiConversation *src)
+{
+    if (!dst || !src || dst == src) return;
+    ai_conv_reset(dst);
+    memcpy(dst, src, sizeof(*dst));
+    /* src gives up every pointer it had -- including stale ones in slots
+     * past msg_count -- so no buffer ends up with two owners. */
+    char model[64];
+    memcpy(model, src->model, sizeof(model));
+    memset(src, 0, sizeof(*src));
+    memcpy(src->model, model, sizeof(src->model));
+}
+
+int ai_conv_copy(AiConversation *dst, const AiConversation *src)
+{
+    if (!dst || !src) return -1;
+    if (dst == src) return 0;
+    ai_conv_reset(dst);
+    memcpy(dst->model, src->model, sizeof(dst->model));
+
+    int n = src->msg_count;
+    if (n < 0) n = 0;
+    if (n > AI_MAX_MESSAGES) n = AI_MAX_MESSAGES;
+    for (int i = 0; i < n; i++) {
+        const AiMessage *sm = &src->messages[i];
+        AiMessage *m = &dst->messages[i];
+        *m = *sm;
+        m->content_overflow = NULL;
+        m->attachment = NULL;
+        m->tool_calls = NULL;
+        m->n_tool_calls = 0;
+        dst->msg_count = i + 1;   /* a failure below frees what we have */
+
+        if (sm->content_overflow) {
+            m->content_overflow = (char *)malloc(sm->content_len + 1);
+            if (!m->content_overflow) goto fail;
+            memcpy(m->content_overflow, sm->content_overflow, sm->content_len);
+            m->content_overflow[sm->content_len] = '\0';
+        }
+        if (sm->attachment) {
+            m->attachment = ai_attachment_dup(sm->attachment);
+            if (!m->attachment) goto fail;
+        }
+        if (sm->tool_calls && sm->n_tool_calls > 0) {
+            size_t sz = (size_t)sm->n_tool_calls * sizeof(AiToolCall);
+            m->tool_calls = (AiToolCall *)malloc(sz);
+            if (!m->tool_calls) goto fail;
+            memcpy(m->tool_calls, sm->tool_calls, sz);
+            m->n_tool_calls = sm->n_tool_calls;
+        }
+    }
+    return 0;
+
+fail:
+    ai_conv_reset(dst);
+    return -1;
+}
+
 int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
 {
     if (!conv || !content) return -1;
@@ -165,7 +224,7 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
     /* The opening two sentences are the only part that depends on where the
      * shell is running: an SSH session talks about "the remote server", a
      * local one about this PC, so the model does not suggest apt or
-     * systemctl on a busybox shell (spec section 6). Everything after them
+     * systemctl on a Windows shell (spec section 6). Everything after them
      * is identical, and the SSH text is byte-for-byte what it was before the
      * kind parameter existed. */
     const char *opening =
@@ -186,7 +245,7 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
     if (kind == SESSION_LOCAL) {
         const char *shell = (shell_name && shell_name[0])
                               ? shell_name
-                              : "busybox / Git bash / MSYS2 / custom";
+                              : "PowerShell / cmd / Git bash / MSYS2 / custom";
         const char *example = is_powershell ? "Get-ChildItem" : "ls -la";
         int on = snprintf(local_opening, sizeof(local_opening),
             "You are an AI assistant for a local shell (%s) on a Windows PC. "
@@ -1162,20 +1221,6 @@ int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size)
     return 1;
 }
 
-/* True if s (NUL-terminated) contains any byte that would let a single
- * [EXEC] block masquerade as more than one command -- a raw control
- * character (< 0x20) or DEL (0x7F). Newline/CR/tab are the ones that
- * matter in practice (see C1 in the security audit), but any control
- * byte is rejected on the same principle: an [EXEC] block must contain
- * exactly one single-line shell command. */
-static int ai_command_has_control_char(const char *s)
-{
-    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-        if (*p < 0x20 || *p == 0x7F) return 1;
-    }
-    return 0;
-}
-
 int ai_extract_commands_ex(const char *response, char cmds[][1024],
                            int max_cmds, int *rejected, int *rejected_long)
 {
@@ -1226,11 +1271,15 @@ int ai_extract_commands_ex(const char *response, char cmds[][1024],
         memcpy(tmp, ts, trimmed_len);
         tmp[trimmed_len] = '\0';
 
-        if (ai_command_has_control_char(tmp)) {
-            /* A control character survived trimming -- the block contains
-             * more than one line (or another embedded control byte). Do
-             * not sanitise it into something runnable: drop it and let
-             * the caller tell the model. */
+        if (text_has_unsafe_command_char(tmp)) {
+            /* A control character, UTF-8-encoded C1 control, or bidi
+             * override/isolate character survived trimming -- the block
+             * contains more than one line (or another embedded control
+             * byte), or is trying to make the command read differently
+             * than it runs. Do not sanitise it into something runnable:
+             * drop it and let the caller tell the model. Shared with
+             * paste_filter_controls() -- see text_has_unsafe_command_char()
+             * in src/core/paste_filter.h. */
             if (rejected) (*rejected)++;
             pos = end + 7;
             continue;

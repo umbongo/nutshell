@@ -47,8 +47,8 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state);
  * freed ctx. */
 void ai_chat_set_session(HWND hwnd, Terminal *term, SessionIo *io);
 
-/* Name the shell a local session is running ("busybox", "Git bash",
- * "MSYS2", "PowerShell", "custom" -- local_shell_spec_name()), so the system prompt can
+/* Name the shell a local session is running ("PowerShell", "Git bash",
+ * "MSYS2", "cmd", "custom" -- local_shell_spec_name()), so the system prompt can
  * say which one it is rather than list the possibilities (spec
  * 2026-09-22-local-shell-design.md section 6). Pass NULL for an SSH session
  * or when there is no session: the prompt then keeps its SSH wording, which
@@ -130,8 +130,15 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
                                const ApprovalQueue *approval,
                                const ApprovalQueue *approval2);
 
-/* Close and destroy the AI assist window. */
+/* Close and destroy the AI assist window. Every AI reply in flight is
+ * aborted; its thread frees its own state when it notices. */
 void ai_chat_close(HWND hwnd);
+
+/* On exit, after ai_chat_close(): give aborted stream threads up to
+ * timeout_ms to notice and free their state. Returns early once none are
+ * left; a thread still blocked in a network read after that owns nothing
+ * the app frees, so exiting under it is safe. */
+void ai_chat_wait_for_streams(DWORD timeout_ms);
 
 /* Returns non-zero if the AI chat has saveable conversation content. */
 int ai_chat_has_content(HWND hwnd);

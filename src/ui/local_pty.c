@@ -334,6 +334,21 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
                 (spec && spec->error[0]) ? spec->error : LOCAL_SHELL_NONE_MESSAGE);
         return NULL;
     }
+    /* M1: refuse a spec whose exe is empty as a second line of defence,
+     * independent of local_shell_resolve_bare() (which now also refuses
+     * this itself -- see local_shell.c). spec->command[0] != '\0' alone
+     * does not catch this: a custom command whose first token was too long
+     * for LOCAL_SHELL_PATH_MAX leaves spec->exe empty while spec->command
+     * still holds the (unusable) full text. Without this check, wapp below
+     * stays NULL and CreateProcess is handed a NULL lpApplicationName --
+     * exactly the PATH/CWD-searching guess this file's own comment (see
+     * below) says must never happen. */
+    if (spec->exe[0] == '\0') {
+        set_err(err, err_size,
+                spec->error[0] ? spec->error :
+                "Could not find an executable in the shell command.");
+        return NULL;
+    }
     if (!conpty_available()) {
         set_err(err, err_size,
                 "Local shell needs Windows 10 version 1809 or later.");
@@ -359,7 +374,7 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
     p->want_rows = (rows > 0) ? rows : 24;
 
     HANDLE in_read = NULL, out_write = NULL;
-    WCHAR *wcmd = NULL, *wcwd = NULL, *envblock = NULL;
+    WCHAR *wcmd = NULL, *wapp = NULL, *wcwd = NULL, *envblock = NULL;
     LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
     PROCESS_INFORMATION pi;
     memset(&pi, 0, sizeof(pi));
@@ -390,6 +405,26 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
     if (!wcmd) {
         set_err(err, err_size, "Could not convert the shell command line.");
         goto fail;
+    }
+
+    /* lpApplicationName, explicitly, rather than leaving it NULL: with a
+     * NULL lpApplicationName, CreateProcess parses lpCommandLine itself to
+     * find the executable, trying progressively longer prefixes at each
+     * unquoted space -- shortest first -- which is exactly what lets a
+     * file planted at a shorter guess run instead of the one meant. Every
+     * LocalShellSpec's exe (local_shell_resolve() for a detected shell,
+     * local_shell_resolve_bare() for a custom one) is already an absolute,
+     * unambiguous, single path by the time it reaches here, so handing it
+     * straight to CreateProcess removes that search entirely; argv[0] in
+     * wcmd stays quoted for the child's own GetCommandLineW parsing, but
+     * Windows never uses it to choose which file to run once
+     * lpApplicationName is set. */
+    if (spec->exe[0] != '\0') {
+        wapp = utf8_to_wide(spec->exe);
+        if (!wapp) {
+            set_err(err, err_size, "Could not convert the shell executable path.");
+            goto fail;
+        }
     }
 
     /* Working directory: %USERPROFILE%, or inherit ours when it is unset. */
@@ -447,7 +482,7 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
 
         /* CreateProcessW may write to lpCommandLine, so it gets its own
          * mutable copy even though wcmd is already ours. */
-        BOOL started = CreateProcessW(NULL, wcmd, NULL, NULL, FALSE,
+        BOOL started = CreateProcessW(wapp, wcmd, NULL, NULL, FALSE,
                                       EXTENDED_STARTUPINFO_PRESENT
                                         | CREATE_UNICODE_ENVIRONMENT,
                                       envblock, wcwd,
@@ -468,6 +503,7 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
     DeleteProcThreadAttributeList(attrs);
     free(attrs); attrs = NULL;
     free(wcmd);     wcmd = NULL;
+    free(wapp);     wapp = NULL;
     free(wcwd);     wcwd = NULL;
     free(envblock); envblock = NULL;
 
@@ -482,6 +518,7 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
 fail:
     if (attrs) { DeleteProcThreadAttributeList(attrs); free(attrs); }
     free(wcmd);
+    free(wapp);
     free(wcwd);
     free(envblock);
     if (pi.hProcess) { TerminateProcess(pi.hProcess, 1); CloseHandle(pi.hProcess); }

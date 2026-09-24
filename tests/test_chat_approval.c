@@ -164,6 +164,32 @@ int test_approval_add_embedded_newline_rejected(void) {
     TEST_END();
 }
 
+/* Same defense in depth, for a UTF-8-encoded C1 control (U+009B) -- not a
+ * raw byte < 0x20, so it needs the shared text_has_unsafe_command_char()
+ * classifier (src/core/paste_filter.h) rather than a plain byte scan. */
+int test_approval_add_embedded_c1_rejected(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    int idx = chat_approval_add(&q, "echo ok\xC2\x9Brm -rf ~", CMD_PLATFORM_LINUX);
+    ASSERT_EQ(idx, -1);
+    ASSERT_EQ(q.count, 0);
+    TEST_END();
+}
+
+/* And for a bidi override (U+202E RIGHT-TO-LEFT OVERRIDE): could make the
+ * approval card show the command in an order that doesn't match what
+ * actually runs. */
+int test_approval_add_embedded_bidi_override_rejected(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    int idx = chat_approval_add(&q, "echo ok\xE2\x80\xAErm -rf ~", CMD_PLATFORM_LINUX);
+    ASSERT_EQ(idx, -1);
+    ASSERT_EQ(q.count, 0);
+    TEST_END();
+}
+
 /* chat_approval_add() rejects rather than clamps a command too long for
  * ApprovalEntry.command (spec 2026-09-23-command-dispatch-states-design.md
  * section 1) -- a command that doesn't fit must not run with its tail
@@ -680,3 +706,37 @@ int test_approval_unknown_unblocks_and_reblocks_with_the_ceiling(void) {
  * reachable old mode's mask equals the mask of the unattended stop it maps
  * to. AUTO_APPROVE_SAFE_WRITE has no equivalent (the documented loss) and
  * is not exercised here -- see the mixed-pipeline test above. */
+
+/* A contradicted session's commands are judged under the worse of its
+ * platform's ruleset and UNKNOWN's (H1, 2026-09-24). Junos's "file delete"
+ * is READ under UNKNOWN alone -- a demoted session would have run it
+ * unattended under a Read marker; it must stay CRITICAL and be held. */
+int test_approval_add_session_contradicted_takes_worse(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    cmd_policy_set_allowed(&q.policy, CMD_WRITE);
+    cmd_policy_set_unattended(&q.policy, CMD_READ);
+
+    int a = chat_approval_add_session(&q, "file delete /var/tmp/old.tgz",
+                                      CMD_PLATFORM_JUNOS, 1);
+    ASSERT_EQ(a, 0);
+    ASSERT_EQ((int)q.entries[a].safety, (int)CMD_CRITICAL);
+    ASSERT_EQ((int)q.entries[a].status, (int)APPROVE_BLOCKED);
+
+    /* "reload" is UNKNOWN under Linux, CRITICAL under UNKNOWN. */
+    int b = chat_approval_add_session(&q, "reload", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[b].safety, (int)CMD_CRITICAL);
+    ASSERT_EQ((int)q.entries[b].status, (int)APPROVE_BLOCKED);
+
+    /* A read under both still runs unattended. */
+    int c = chat_approval_add_session(&q, "ls -la", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[c].safety, (int)CMD_READ);
+    ASSERT_EQ((int)q.entries[c].status, (int)APPROVE_APPROVED);
+
+    /* Not contradicted: the platform's ruleset alone, as chat_approval_add(). */
+    int d = chat_approval_add_session(&q, "reload", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ((int)q.entries[d].safety,
+              (int)cmd_classify("reload", CMD_PLATFORM_LINUX));
+    TEST_END();
+}

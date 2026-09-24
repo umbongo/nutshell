@@ -22,11 +22,13 @@
 #include "ssh_pty.h"
 #include "ssh_io.h"
 #include "local_shell.h"
+#include "local_shell_probe.h"
 #include "local_pty.h"
 #include "knownhosts.h"
 #include "log_format.h"
 #include "edit_scroll.h"
 #include "paste_dlg.h"
+#include "paste_filter.h"
 #include "ai_chat.h"
 #include "ai_chat_testable.h"
 #include "ui_demo.h"
@@ -50,8 +52,10 @@
 #include "cmd_detect.h"
 #include "term_extract.h"
 #include "key_encode.h"
+#include "worker_life.h"
+#include "ai_stream.h"
+#include "secure_zero.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
-#include <dwmapi.h>
 #include <gdiplus.h>       /* GDI+ flat API (includes gdiplusflat.h) */
 
 static void hide_ai_panel(HWND parent);
@@ -92,22 +96,16 @@ typedef struct Session {
     FILE       *debug_log;    /* NULL when debug_terminal disabled */
     /* Connection thread state */
     ConnState       conn_state;
-    volatile int    conn_cancelled;
-    HANDLE          conn_thread;
-    HWND            conn_hwnd;      /* main window HWND for PostMessage */
-    Profile         conn_profile;  /* copy of profile for thread */
-    int             conn_result;   /* 0=ok, 1=tcp/ssh, 2=auth, 3=channel */
-    char            conn_error[512];
-    int             conn_hostkey_strict; /* snapshot of host_key_verification == "strict",
-                                             taken on the UI thread before the connection
-                                             thread starts so it never reads g_config */
+    struct ConnJob *conn_job;      /* the attempt in flight, or NULL; this
+                                     * session holds the UI's reference */
+    Profile         conn_profile;  /* the profile; the thread gets a copy */
+    char            conn_error[512]; /* last connection error (UI thread only) */
     ULONGLONG       conn_start_ms;
     int             conn_dots;     /* dots appended so far */
-    CRITICAL_SECTION conn_cs;      /* H-1: guards conn_result/conn_error/ssh/channel */
     AiSessionState ai_state;       /* per-session AI conversation */
     /* Local sessions only: which shell the resolver picked, as the AI system
-     * prompt names it ("busybox", "Git bash", "MSYS2", "custom"). Empty for
-     * an SSH session, which is what the panel is told then. */
+     * prompt names it ("PowerShell", "Git bash", "MSYS2", "cmd", "custom").
+     * Empty for an SSH session, which is what the panel is told then. */
     char      shell_name[32];
     int       platform_locked;   /* profile named an explicit platform -- detection may not override it */
     int       platform_scanned;  /* detection is done (resolved via banner, or gave up after the tick bound) */
@@ -118,6 +116,50 @@ typedef struct Session {
     uint64_t  prev_bytes_read;        /* SshSession.bytes_read_total snapshot */
     struct Session *next;
 } Session;
+
+/* One SSH connection attempt. The connection thread works only on this --
+ * never on the Session -- so closing the tab or exiting while it is still
+ * connecting (host-key prompt, passphrase prompt, slow TCP connect) cannot
+ * free memory under it. Two references (src/core/worker_life.h): the
+ * session's (Session.conn_job) and the thread's. WM_CONN_DONE carries the
+ * job id, which the UI resolves against the session list; a session that
+ * is gone just orphans its job, and the thread frees it on the way out,
+ * together with any SSH session it opened. */
+typedef struct ConnJob {
+    WorkerLife  life;
+    unsigned    id;
+    HWND        hwnd;           /* main window: PostMessage and prompt owner */
+    Profile     profile;        /* copy, wiped on free */
+    int         hostkey_strict; /* host_key_verification == "strict", snapshotted
+                                  * on the UI thread -- the thread never reads
+                                  * g_config */
+    int         cols, rows;     /* PTY size at start */
+    SshSession *ssh;            /* results: handed to the Session on success */
+    SSHChannel *channel;
+    int         result;         /* 0=ok, 1=tcp/ssh, 2=auth, 3=channel */
+    char        error[512];
+} ConnJob;
+
+/* Connection jobs allocated and not yet freed, process-wide. Exit waits a
+ * bounded time for orphaned ones to finish (see WM_DESTROY and ui_run). */
+static volatile LONG g_live_conn_jobs = 0;
+
+static void conn_job_free(ConnJob *j)
+{
+    if (!j) return;
+    if (j->channel) ssh_channel_free(j->channel);
+    if (j->ssh) ssh_session_free(j->ssh);
+    secure_zero(&j->profile, sizeof(j->profile));
+    free(j);
+    InterlockedDecrement(&g_live_conn_jobs);
+}
+
+/* Drop one side's reference; the last one frees the job. */
+static void conn_job_release(ConnJob *j)
+{
+    if (j && worker_life_release(&j->life))
+        conn_job_free(j);
+}
 
 /* Build the known_hosts file path: %APPDATA%\sshclient\known_hosts.
  * Returns -1 if APPDATA is unset/empty or the resulting path would be
@@ -150,6 +192,16 @@ static HINSTANCE g_hInst = NULL;
 static Session *g_active_session = NULL;
 static Session *g_session_list = NULL;
 static char g_config_path[MAX_PATH]; /* M-8: absolute path resolved at startup */
+/* M3: set at startup when nutshell.config exists but this process could not
+ * read it (locked by another program or AV, larger than the size limit, a
+ * permissions problem) -- as opposed to no file being there at all, the
+ * ordinary first-run case. Saving over a file this process merely failed
+ * to open would replace the user's real config with defaults for no
+ * reason; every save site (this file, session_manager.c, settings.c) is
+ * passed an empty config_path instead of g_config_path whenever this is
+ * set, which config_save() already refuses to write to (see its own top-of
+ * -function comment), so nothing needs to check this flag directly. */
+static int g_config_save_disabled = 0;
 static CliAction g_startup_action = CLI_RUN;
 static char g_startup_arg[256];
 static char g_startup_demo_state[CLI_DEMO_STATE_MAX];
@@ -332,14 +384,10 @@ static Session *create_session(int rows, int cols) {
     s->session_log = NULL;
     s->debug_log = NULL;
     s->conn_state = CONN_IDLE;
-    s->conn_cancelled = 0;
-    s->conn_thread = NULL;
-    s->conn_hwnd = NULL;
-    s->conn_result = 0;
+    s->conn_job = NULL;
     s->conn_error[0] = '\0';
     s->conn_start_ms = 0;
     s->conn_dots = 0;
-    InitializeCriticalSection(&s->conn_cs);  /* H-1 */
     memset(&s->ai_state, 0, sizeof(s->ai_state));
     cmd_batch_set_init(&s->ai_state.batches);
     /* Unconnected/pre-detect state must be the safe one, not Linux (value 0). */
@@ -393,18 +441,21 @@ static void ai_panel_detach(Session *s)
 static void free_session(Session *s) {
     if (s) {
         key_oneshot_clear();
-        if (s->conn_thread) {
-            s->conn_cancelled = 1;
-            WaitForSingleObject(s->conn_thread, 30000);
-            CloseHandle(s->conn_thread);
+        /* Never free a session under its connection thread: cancel the
+         * attempt and let go of it. The thread frees the job (and any SSH
+         * session it opened) when it finishes. */
+        if (s->conn_job) {
+            worker_life_cancel(&s->conn_job->life);
+            conn_job_release(s->conn_job);
+            s->conn_job = NULL;
         }
-        DeleteCriticalSection(&s->conn_cs);  /* H-1 */
         session_close_io(s);
         if (s->session_log) fclose(s->session_log);
         if (s->debug_log)   fclose(s->debug_log);
         cmd_batch_set_free(&s->ai_state.batches);
         free(s->ai_state.stream_content);
         free(s->ai_state.stream_thinking);
+        ai_conv_reset(&s->ai_state.conv);   /* its overflow/attachment buffers */
         term_free(s->term);
         free(s);
     }
@@ -451,6 +502,15 @@ static void on_tab_close(int index, void *user_data) {
                     "Close Tab", MB_OK | MB_ICONINFORMATION);
         return;
     }
+
+    /* A timed/chunked paste (WM_TIMER-driven, see paste_send_next_line())
+     * keeps a raw io_ctx/io_write pair in g_paste that isn't freed until
+     * the paste finishes or is cancelled. free_session() below tears down
+     * s->io through session_close_io(), so an in-progress paste targeting
+     * this tab must be cancelled first -- otherwise the next timer tick
+     * writes through a transport that free_session() just released. */
+    if (g_paste.io_ctx == s->io.ctx)
+        paste_cancel();
 
     /* Remove from linked list */
     if (g_session_list == s) {
@@ -604,10 +664,35 @@ static int prompt_passphrase(HWND parent, char *out, int out_size)
 /* Return the directory that contains the running executable. */
 static void get_exe_dir(char *buf, size_t n)
 {
-    GetModuleFileNameA(NULL, buf, (DWORD)n);
+    if (!buf || n == 0) return;
+    /* L: GetModuleFileNameA returns the buffer's own length (not 0, and not
+     * an error GetLastError() reliably reports pre-Vista) when the path
+     * was truncated to fit -- and does not guarantee NUL termination in
+     * that case either. A truncated path is not safe to derive a
+     * directory from: strrchr() below could find a '\\' that belongs to a
+     * completely different, shorter, wrong directory (e.g. nutshell.exe
+     * sitting under a very deeply nested path). Refuse rather than guess,
+     * same as every other caller of this function already does when it
+     * comes back empty. */
+    DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)n);
+    if (len == 0u || len >= (DWORD)n) {
+        buf[0] = '\0';
+        return;
+    }
     char *last = strrchr(buf, '\\');
     if (last) *last = '\0';
-    else if (n > 0) buf[0] = '\0';
+    else buf[0] = '\0';
+}
+
+/* M3: the config path to hand a dialog that may go on to config_save() --
+ * "" (never g_config_path) once g_config_save_disabled is set, so every
+ * such dialog's own config_save() call refuses to write (config_save()
+ * already treats an empty path as "nowhere safe to save", see its own
+ * top-of-function comment) instead of overwriting a config file this
+ * process only failed to READ this run. */
+static const char *active_config_path(void)
+{
+    return g_config_save_disabled ? "" : g_config_path;
 }
 
 /* Open a timestamped session log file under log_dir.
@@ -691,76 +776,16 @@ static int profile_is_local(const Profile *p)
     return (p && strcmp(p->kind, "local") == 0) ? 1 : 0;
 }
 
-/* The three questions local_shell_resolve() may ask the machine. They live
- * here rather than in src/core/local_shell.c so that file stays free of
- * <windows.h> and testable on any host. */
-
-static int probe_exists(void *ctx, const char *path)
+/* GetEnvironmentVariableA, for the "user@machine" tab status line only --
+ * unrelated to local_shell_probe.c's LocalShellProbe callbacks, which are
+ * asked only from local_shell_resolve()/local_shell_resolve_bare(). */
+static int env_str(const char *name, char *out, size_t out_size)
 {
-    (void)ctx;
-    if (!path || !path[0]) return 0;
-    DWORD attr = GetFileAttributesA(path);
-    return (attr != INVALID_FILE_ATTRIBUTES &&
-            !(attr & FILE_ATTRIBUTE_DIRECTORY)) ? 1 : 0;
-}
-
-static int probe_env(void *ctx, const char *name, char *out, size_t out_size)
-{
-    (void)ctx;
     if (!name || !out || out_size == 0u) return 0;
     out[0] = '\0';
     DWORD n = GetEnvironmentVariableA(name, out, (DWORD)out_size);
     if (n == 0u || n >= (DWORD)out_size) { out[0] = '\0'; return 0; }
     return out[0] ? 1 : 0;
-}
-
-/* key is "HKLM\\SOFTWARE\\..." -- only HKLM and HKCU are understood, which
- * is all spec 4.2 asks for. Reads both the 64- and 32-bit views so a 32-bit
- * Git install is still found. */
-static int probe_registry_string(void *ctx, const char *key, const char *value,
-                                 char *out, size_t out_size)
-{
-    (void)ctx;
-    if (!key || !value || !out || out_size == 0u) return 0;
-    out[0] = '\0';
-
-    HKEY root;
-    const char *sub;
-    if (strncmp(key, "HKLM\\", 5) == 0)      { root = HKEY_LOCAL_MACHINE; sub = key + 5; }
-    else if (strncmp(key, "HKCU\\", 5) == 0) { root = HKEY_CURRENT_USER;  sub = key + 5; }
-    else return 0;
-
-    static const DWORD views[2] = { KEY_WOW64_64KEY, KEY_WOW64_32KEY };
-    for (int i = 0; i < 2; i++) {
-        HKEY h;
-        if (RegOpenKeyExA(root, sub, 0,
-                          KEY_QUERY_VALUE | views[i], &h) != ERROR_SUCCESS)
-            continue;
-        DWORD type = 0;
-        DWORD len = (DWORD)out_size;
-        LONG rc = RegQueryValueExA(h, value, NULL, &type,
-                                   (LPBYTE)out, &len);
-        RegCloseKey(h);
-        if (rc == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)) {
-            if (len >= (DWORD)out_size) len = (DWORD)out_size - 1u;
-            out[len] = '\0';
-            /* RegQueryValueExA counts the NUL; trim any extra. */
-            out[out_size - 1u] = '\0';
-            if (out[0]) return 1;
-        }
-        out[0] = '\0';
-    }
-    return 0;
-}
-
-static void fill_local_probe(LocalShellProbe *probe, const char *exe_dir)
-{
-    memset(probe, 0, sizeof(*probe));
-    probe->exists          = probe_exists;
-    probe->env             = probe_env;
-    probe->registry_string = probe_registry_string;
-    probe->ctx             = NULL;
-    probe->exe_dir         = exe_dir;
 }
 
 /* Hand the AI panel this session's terminal, transport and shell name in one
@@ -784,11 +809,8 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
 {
     if (!s) return 0;
 
-    char exe_dir[MAX_PATH];
-    get_exe_dir(exe_dir, sizeof(exe_dir));
-
     LocalShellProbe probe;
-    fill_local_probe(&probe, exe_dir[0] ? exe_dir : NULL);
+    local_shell_fill_probe(&probe);
 
     /* LocalShellSpec carries a full PATH, so it is too big for the stack of
      * a thread with the Windows default reserve; the UI thread has room, but
@@ -806,9 +828,28 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
     err[0] = '\0';
     LocalPty *pty = NULL;
     if (kind != SHELL_NONE) {
-        int cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
-        int rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
-        pty = local_pty_open(spec, cols, rows, err, sizeof(err));
+        /* Security: a bare custom executable name ("powershell.exe", no
+         * path) must never be handed to CreateProcess as-is -- its own
+         * search would try the exe's folder and the current directory
+         * before System32. Resolve it ourselves first, against System32,
+         * the Windows directory and absolute PATH entries only; refuse to
+         * launch anything CreateProcess itself would have had to search
+         * CWD or the exe's own directory to find (also covers a relative
+         * custom path, or an unquoted absolute one whose split point
+         * between path and arguments can't be told apart -- see
+         * local_shell_resolve_bare()'s own doc comment). spec->error
+         * already names which of those it was; fall back to the bare-name
+         * wording only on the (unreachable in practice) chance it's empty. */
+        if (!local_shell_resolve_bare(spec, &probe)) {
+            (void)snprintf(err, sizeof(err), "%s",
+                           spec->error[0] ? spec->error :
+                           "Could not find the shell executable in System32, "
+                           "the Windows directory, or PATH.");
+        } else {
+            int cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
+            int rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
+            pty = local_pty_open(spec, cols, rows, err, sizeof(err));
+        }
     } else {
         (void)snprintf(err, sizeof(err), "%s",
                        spec->error[0] ? spec->error : LOCAL_SHELL_NONE_MESSAGE);
@@ -837,12 +878,37 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
 
     /* Platform. An explicit profile setting always wins (on_session_connect
      * already locked it). Otherwise a known POSIX-ish shell pins Linux with
-     * no banner scan -- there is no login banner to scan; a custom command
-     * could be anything, so it stays on `auto` and the scan runs. */
-    if (!s->platform_locked && local_shell_kind_is_posix(kind)) {
-        s->ai_state.platform  = (int)CMD_PLATFORM_LINUX;
-        s->platform_locked    = 1;
-        s->platform_scanned   = 1;
+     * no banner scan -- there is no login banner to scan. A known Windows
+     * shell (PowerShell, cmd) is locked the other way: there is no Windows
+     * ruleset for it to resolve to, and letting it auto-detect would mean
+     * its own output -- something it printed, something piped through it --
+     * could otherwise walk the session to a *looser* ruleset than the one it
+     * starts on, which the invariant in CLAUDE.md never allows. A custom
+     * command that isn't positively identified as one of the known POSIX
+     * shells is locked the same strict way (H3): it could be anything, so
+     * it never gets the looser auto-scan by default either.
+     *
+     * H3: this reads spec->kind, not the local `kind` captured above from
+     * local_shell_resolve() -- local_shell_resolve_bare() (already called,
+     * a few lines up) may have reclassified spec->kind since then (a custom
+     * command whose executable turned out to be, or turned out to name, an
+     * already-detected or positively-recognised shell -- see
+     * local_shell.c's reclassify_if_known_shell()/reclassify_by_base_name(),
+     * M2), and it is that corrected kind the lock must act on. Using the
+     * stale `kind` here let a custom command pointing at PowerShell or cmd
+     * keep whichever ruleset the profile-level check above left it on --
+     * usually `auto` -- rather than ever getting this strict lock. */
+    if (!s->platform_locked) {
+        LocalShellPlatformLock lock = local_shell_platform_lock(spec);
+        if (lock == LOCAL_SHELL_LOCK_LINUX) {
+            s->ai_state.platform  = (int)CMD_PLATFORM_LINUX;
+            s->platform_locked    = 1;
+            s->platform_scanned   = 1;
+        } else if (lock == LOCAL_SHELL_LOCK_STRICT) {
+            s->ai_state.platform  = (int)CMD_PLATFORM_UNKNOWN;
+            s->platform_locked    = 1;
+            s->platform_scanned   = 1;
+        }
     }
 
     DWORD tick_now = GetTickCount();
@@ -861,9 +927,9 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
 
     if (tidx >= 0) {
         char user[256], machine[256];
-        if (!probe_env(NULL, "USERNAME", user, sizeof(user)))
+        if (!env_str("USERNAME", user, sizeof(user)))
             (void)snprintf(user, sizeof(user), "%s", "local");
-        if (!probe_env(NULL, "COMPUTERNAME", machine, sizeof(machine)))
+        if (!env_str("COMPUTERNAME", machine, sizeof(machine)))
             (void)snprintf(machine, sizeof(machine), "%s", "this PC");
         tabs_set_connect_info(g_hwndTabs, tidx, user, machine,
                               (unsigned long long)GetTickCount64());
@@ -880,47 +946,87 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
 
 /* ---- Background connection thread --------------------------------------- */
 
+static DWORD WINAPI connection_thread(LPVOID param);
+
+/* Start the connection thread for `s` on a ConnJob of its own. Returns 1 if
+ * it is running (s->conn_job holds the UI's reference), 0 if it could not
+ * be started. */
+static int start_connection(Session *s, HWND hwnd)
+{
+    if (!s) return 0;
+    if (s->conn_job) {                    /* never two attempts at once */
+        worker_life_cancel(&s->conn_job->life);
+        conn_job_release(s->conn_job);
+        s->conn_job = NULL;
+    }
+    ConnJob *j = (ConnJob *)calloc(1, sizeof(*j));
+    if (!j) return 0;
+    InterlockedIncrement(&g_live_conn_jobs);
+    worker_life_init(&j->life);
+    j->id      = worker_life_next_id();
+    j->hwnd    = hwnd;
+    j->profile = s->conn_profile;
+    /* Snapshot on the UI thread -- the worker thread never reads g_config. */
+    j->hostkey_strict = (g_config &&
+        _stricmp(g_config->settings.host_key_verification, "strict") == 0) ? 1 : 0;
+    j->cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
+    j->rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
+
+    HANDLE h = CreateThread(NULL, 0, connection_thread, j, 0, NULL);
+    if (!h) {
+        conn_job_free(j);                 /* never shared */
+        return 0;
+    }
+    CloseHandle(h);
+    s->conn_job = j;
+    return 1;
+}
+
+/* The connection thread. It reads and writes only its ConnJob -- the
+ * profile copy, the PTY size and the results -- and drops its reference on
+ * the way out, after posting WM_CONN_DONE (with the job id) unless the
+ * session has already let go of it. */
 static DWORD WINAPI connection_thread(LPVOID param)
 {
-    Session *s = (Session *)param;
-    const Profile *info = &s->conn_profile;
-    HWND hwnd = s->conn_hwnd;
+    ConnJob *j = (ConnJob *)param;
+    const Profile *info = &j->profile;
+    HWND hwnd = j->hwnd;
 
-/* H-1: guard conn_result/conn_error writes with conn_cs before posting. */
-#define CONN_FAIL(code) \
-    do { EnterCriticalSection(&s->conn_cs); \
-         s->conn_result = (code); \
-         LeaveCriticalSection(&s->conn_cs); \
-         PostMessage(hwnd, WM_CONN_DONE, 0, (LPARAM)s); return 0; } while(0)
+#define CONN_FAIL(code) do { j->result = (code); goto done; } while (0)
+#define CONN_CANCELLED() worker_life_cancelled(&j->life)
 
     /* TCP connect + SSH handshake */
-    s->ssh = ssh_session_new();
-    if (ssh_connect(s->ssh, info->host, info->port) != 0) {
-        snprintf(s->conn_error, sizeof(s->conn_error),
+    j->ssh = ssh_session_new();
+    if (!j->ssh) {
+        snprintf(j->error, sizeof(j->error), "Out of memory.");
+        CONN_FAIL(1);
+    }
+    if (ssh_connect(j->ssh, info->host, info->port) != 0) {
+        snprintf(j->error, sizeof(j->error),
                  "Cannot connect to %s:%d\n\n%s",
-                 info->host, info->port, s->ssh->last_error);
+                 info->host, info->port, j->ssh->last_error);
         CONN_FAIL(1);
     }
 
-    if (s->conn_cancelled) { snprintf(s->conn_error, sizeof(s->conn_error), "Cancelled."); CONN_FAIL(1); }
+    if (CONN_CANCELLED()) { snprintf(j->error, sizeof(j->error), "Cancelled."); CONN_FAIL(1); }
 
     /* Host key verification (MessageBoxA is thread-safe on Win32).
-     * s->conn_hostkey_strict was snapshotted on the UI thread from
+     * j->hostkey_strict was snapshotted on the UI thread from
      * g_config->settings.host_key_verification before this thread started --
      * "strict" refuses an unknown or changed key outright; anything else
      * (default "tofu") prompts, as before. */
     {
         size_t key_len = 0;
         int    key_type = 0;
-        const char *key = libssh2_session_hostkey(s->ssh->session, &key_len, &key_type);
+        const char *key = libssh2_session_hostkey(j->ssh->session, &key_len, &key_type);
         if (!key || key_len == 0) {
-            snprintf(s->conn_error, sizeof(s->conn_error), "Could not retrieve host key.");
+            snprintf(j->error, sizeof(j->error), "Could not retrieve host key.");
             CONN_FAIL(1);
         }
 
         char kh_path[MAX_PATH];
         if (get_knownhosts_path(kh_path, sizeof(kh_path)) != 0) {
-            snprintf(s->conn_error, sizeof(s->conn_error),
+            snprintf(j->error, sizeof(j->error),
                 "Cannot locate the known hosts file because the APPDATA environment "
                 "variable is not set.\n\nThe server's host key cannot be verified, "
                 "so the connection was stopped.");
@@ -928,8 +1034,8 @@ static DWORD WINAPI connection_thread(LPVOID param)
         }
 
         KnownHosts kh;
-        if (knownhosts_init(&kh, s->ssh->session, kh_path) != KNOWNHOSTS_OK) {
-            snprintf(s->conn_error, sizeof(s->conn_error),
+        if (knownhosts_init(&kh, j->ssh->session, kh_path) != KNOWNHOSTS_OK) {
+            snprintf(j->error, sizeof(j->error),
                 "Cannot read the known hosts file:\n%s\n\nThe server's host key "
                 "cannot be verified, so the connection was stopped. Check that "
                 "the file is readable and not damaged.", kh_path);
@@ -942,7 +1048,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
                                           key, key_len, key_type, &res);
 
         if (lookup_rc == KNOWNHOSTS_ERROR) {
-            snprintf(s->conn_error, sizeof(s->conn_error),
+            snprintf(j->error, sizeof(j->error),
                 "Cannot read the known hosts file:\n%s\n\nThe server's host key "
                 "cannot be verified, so the connection was stopped. Check that "
                 "the file is readable and not damaged.", kh_path);
@@ -951,15 +1057,15 @@ static DWORD WINAPI connection_thread(LPVOID param)
         }
 
         if (lookup_rc == KNOWNHOSTS_NEW || lookup_rc == KNOWNHOSTS_MISMATCH) {
-            if (s->conn_hostkey_strict) {
+            if (j->hostkey_strict) {
                 if (lookup_rc == KNOWNHOSTS_NEW) {
-                    snprintf(s->conn_error, sizeof(s->conn_error),
+                    snprintf(j->error, sizeof(j->error),
                         "The host '%s:%d' is not in the known hosts file:\n%s\n\n"
                         "Host key checking is set to strict, so the connection "
                         "was stopped without prompting.\n\nKey type: %s\nFingerprint: %s",
                         info->host, info->port, kh_path, res.key_type, res.fingerprint);
                 } else {
-                    snprintf(s->conn_error, sizeof(s->conn_error),
+                    snprintf(j->error, sizeof(j->error),
                         "The host key for '%s:%d' does not match the known hosts "
                         "file:\n%s\n\nHost key checking is set to strict, so the "
                         "connection was stopped without prompting.\n\n"
@@ -1010,7 +1116,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
             if (ans == IDYES) {
                 if (knownhosts_add(&kh, info->host, info->port, key, key_len, key_type)
                     != KNOWNHOSTS_OK) {
-                    snprintf(s->conn_error, sizeof(s->conn_error),
+                    snprintf(j->error, sizeof(j->error),
                         "The host key was accepted but could not be saved to:\n%s\n\n"
                         "The connection was stopped. Check that the folder is writable.",
                         kh_path);
@@ -1018,7 +1124,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
                     CONN_FAIL(1);
                 }
             } else {
-                snprintf(s->conn_error, sizeof(s->conn_error), "Connection aborted by user.");
+                snprintf(j->error, sizeof(j->error), "Connection aborted by user.");
                 knownhosts_free(&kh);
                 CONN_FAIL(1);
             }
@@ -1027,57 +1133,63 @@ static DWORD WINAPI connection_thread(LPVOID param)
         knownhosts_free(&kh);
     }
 
-    if (s->conn_cancelled) { snprintf(s->conn_error, sizeof(s->conn_error), "Cancelled."); CONN_FAIL(1); }
+    if (CONN_CANCELLED()) { snprintf(j->error, sizeof(j->error), "Cancelled."); CONN_FAIL(1); }
 
     /* Authentication */
     int auth_rc = -1;
     if (info->auth_type == AUTH_KEY) {
-        auth_rc = ssh_auth_key(s->ssh, info->username, info->key_path, info->password);
+        auth_rc = ssh_auth_key(j->ssh, info->username, info->key_path, info->password);
         if (auth_rc != 0) {
             char passphrase[256];
             memset(passphrase, 0, sizeof(passphrase));
             if (prompt_passphrase(hwnd, passphrase, (int)sizeof(passphrase))) {
-                auth_rc = ssh_auth_key(s->ssh, info->username, info->key_path, passphrase);
+                auth_rc = ssh_auth_key(j->ssh, info->username, info->key_path, passphrase);
                 if (auth_rc == 0) {
-                    strncpy(s->ssh->cached_passphrase, passphrase,
-                            sizeof(s->ssh->cached_passphrase) - 1u);
-                    s->ssh->cached_passphrase[sizeof(s->ssh->cached_passphrase) - 1u] = '\0';
+                    strncpy(j->ssh->cached_passphrase, passphrase,
+                            sizeof(j->ssh->cached_passphrase) - 1u);
+                    j->ssh->cached_passphrase[sizeof(j->ssh->cached_passphrase) - 1u] = '\0';
                 }
             }
             SecureZeroMemory(passphrase, sizeof(passphrase));
         }
     } else {
-        auth_rc = ssh_auth_password(s->ssh, info->username, info->password);
+        auth_rc = ssh_auth_password(j->ssh, info->username, info->password);
     }
 
     if (auth_rc != 0) {
-        snprintf(s->conn_error, sizeof(s->conn_error),
+        snprintf(j->error, sizeof(j->error),
                  "Authentication failed for %s@%s.", info->username, info->host);
         CONN_FAIL(2);
     }
 
-    if (s->conn_cancelled) { snprintf(s->conn_error, sizeof(s->conn_error), "Cancelled."); CONN_FAIL(2); }
+    if (CONN_CANCELLED()) { snprintf(j->error, sizeof(j->error), "Cancelled."); CONN_FAIL(2); }
 
     /* Open channel, request PTY, start shell */
-    s->channel = ssh_channel_open(s->ssh);
-    if (!s->channel) {
-        snprintf(s->conn_error, sizeof(s->conn_error),
+    j->channel = ssh_channel_open(j->ssh);
+    if (!j->channel) {
+        snprintf(j->error, sizeof(j->error),
                  "Could not open SSH channel to %s.", info->host);
         CONN_FAIL(3);
     }
-    ssh_pty_request(s->channel, "xterm", s->term->cols, s->term->rows);
-    ssh_pty_shell(s->channel);
-    ssh_session_set_blocking(s->ssh, false); /* non-blocking for I/O loop */
+    ssh_pty_request(j->channel, "xterm", j->cols, j->rows);
+    ssh_pty_shell(j->channel);
+    ssh_session_set_blocking(j->ssh, false); /* non-blocking for I/O loop */
 
-    /* H-3: zero plaintext password from memory once auth is complete */
-    SecureZeroMemory(s->conn_profile.password, sizeof(s->conn_profile.password));
+    /* H-3: zero plaintext password from memory once auth is complete (the
+     * session's own copy is wiped when WM_CONN_DONE hands the result over) */
+    SecureZeroMemory(j->profile.password, sizeof(j->profile.password));
 
-    EnterCriticalSection(&s->conn_cs);  /* H-1 */
-    s->conn_result = 0;
-    LeaveCriticalSection(&s->conn_cs);
-    PostMessage(hwnd, WM_CONN_DONE, 0, (LPARAM)s);
+    j->result = 0;
+
+done:
+    /* The last message: after it the thread touches nothing but its own
+     * reference. If the session let go meanwhile, nobody is listening. */
+    if (!CONN_CANCELLED())
+        PostMessage(hwnd, WM_CONN_DONE, (WPARAM)j->id, 0);
+    conn_job_release(j);
     return 0;
 
+#undef CONN_CANCELLED
 #undef CONN_FAIL
 }
 
@@ -1163,17 +1275,11 @@ static void on_session_connect(const Profile *info) {
 
     /* Store state for the worker thread */
     s->conn_state    = CONN_CONNECTING;
-    s->conn_result   = 0;
     s->conn_error[0] = '\0';
     s->conn_start_ms = GetTickCount64();
     s->conn_dots     = 0;
-    s->conn_hwnd     = GetParent(g_hwndTabs);
-    /* Snapshot on the UI thread -- the worker thread never reads g_config. */
-    s->conn_hostkey_strict = (g_config &&
-        _stricmp(g_config->settings.host_key_verification, "strict") == 0) ? 1 : 0;
 
-    s->conn_thread = CreateThread(NULL, 0, connection_thread, s, 0, NULL);
-    if (!s->conn_thread) {
+    if (!start_connection(s, GetParent(g_hwndTabs))) {
         term_process(s->term, "\r\nFailed to start connection thread.\r\n", 38);
         tabs_set_status(g_hwndTabs, idx, TAB_DISCONNECTED);
         s->conn_state = CONN_IDLE;
@@ -1184,7 +1290,8 @@ static void on_tab_new(void) {
     Profile p;
     memset(&p, 0, sizeof(Profile));
 
-    if (SessionManager_Show(g_hInst, GetParent(g_hwndTabs), g_config, g_config_path, &p)) {
+    if (SessionManager_Show(g_hInst, GetParent(g_hwndTabs), g_config,
+                            active_config_path(), &p)) {
         on_session_connect(&p);
     }
 }
@@ -1206,7 +1313,7 @@ static void apply_config_colors(void)
  * no-key state's "Open Settings" button land on Provider. */
 static void on_settings_clicked_page(int initial_page) {
     HWND parent = GetParent(g_hwndTabs);
-    settings_dlg_show(parent, g_config, initial_page);
+    settings_dlg_show(parent, g_config, active_config_path(), initial_page);
 
     /* Reload theme from config (colour scheme may have changed) */
     {
@@ -1359,7 +1466,7 @@ static void create_demo_session(HWND hwnd)
              demo_local ? "Local shell" : "demo");
     if (demo_local) {
         snprintf(s->conn_profile.kind, sizeof(s->conn_profile.kind), "local");
-        snprintf(s->shell_name, sizeof(s->shell_name), "busybox");
+        snprintf(s->shell_name, sizeof(s->shell_name), "PowerShell");
     }
     /* s->channel / s->ssh are already NULL from create_session -- no
      * connection exists or ever will for this tab, local demo included:
@@ -1402,9 +1509,9 @@ static void create_demo_session(HWND hwnd)
          * CONNECTED dot and a user@machine status line, from the real
          * environment, with no process behind it. */
         char user[256], machine[256];
-        if (!probe_env(NULL, "USERNAME", user, sizeof(user)))
+        if (!env_str("USERNAME", user, sizeof(user)))
             (void)snprintf(user, sizeof(user), "%s", "local");
-        if (!probe_env(NULL, "COMPUTERNAME", machine, sizeof(machine)))
+        if (!env_str("COMPUTERNAME", machine, sizeof(machine)))
             (void)snprintf(machine, sizeof(machine), "%s", "this PC");
         tabs_set_connect_info(g_hwndTabs, idx, user, machine,
                               (unsigned long long)GetTickCount64());
@@ -1637,18 +1744,11 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
             tabs_set_status(g_hwndTabs, tidx, TAB_CONNECTING);
 
         s->conn_state    = CONN_CONNECTING;
-        s->conn_cancelled = 0;
-        s->conn_result   = 0;
         s->conn_error[0] = '\0';
         s->conn_start_ms = GetTickCount64();
         s->conn_dots     = 0;
-        s->conn_hwnd     = hParent;
-        /* Snapshot on the UI thread -- the worker thread never reads g_config. */
-        s->conn_hostkey_strict = (g_config &&
-            _stricmp(g_config->settings.host_key_verification, "strict") == 0) ? 1 : 0;
 
-        s->conn_thread = CreateThread(NULL, 0, connection_thread, s, 0, NULL);
-        if (!s->conn_thread) {
+        if (!start_connection(s, hParent)) {
             term_process(s->term, "\r\nFailed to start connection thread.\r\n", 38);
             if (tidx >= 0)
                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
@@ -1756,6 +1856,77 @@ static void paste_timer_tick(void)
     if (!more) paste_finish();
 }
 
+/* Read the clipboard as text, preferring CF_UNICODETEXT (converted to
+ * UTF-8) so non-ASCII pastes survive intact; CF_TEXT (the system ANSI
+ * codepage) is a fallback for a source that never offers Unicode.  Returns
+ * a malloc'd, NUL-terminated UTF-8 buffer, or NULL if the clipboard has no
+ * usable text. */
+static char *read_clipboard_text_utf8(HWND hwnd)
+{
+    char *local = NULL;
+
+    if (IsClipboardFormatAvailable(CF_UNICODETEXT) && OpenClipboard(hwnd)) {
+        HANDLE hClip = GetClipboardData(CF_UNICODETEXT);
+        if (hClip) {
+            const wchar_t *wraw = (const wchar_t *)GlobalLock(hClip);
+            if (wraw) {
+                int need = WideCharToMultiByte(CP_UTF8, 0, wraw, -1,
+                                               NULL, 0, NULL, NULL);
+                if (need > 0) {
+                    local = (char *)malloc((size_t)need);
+                    if (local && WideCharToMultiByte(CP_UTF8, 0, wraw, -1,
+                                     local, need, NULL, NULL) <= 0) {
+                        free(local);
+                        local = NULL;
+                    }
+                }
+                GlobalUnlock(hClip);
+            }
+        }
+        CloseClipboard();
+    }
+
+    if (local) return local;
+
+    /* Fallback: CF_TEXT only, which Windows hands out in the system ANSI
+     * codepage (CP_ACP), not UTF-8. Convert it the same way
+     * set_clipboard_utf8() converts the other direction: ANSI -> UTF-16
+     * (MultiByteToWideChar(CP_ACP)) -> UTF-8 (WideCharToMultiByte(CP_UTF8))
+     * -- a raw _strdup() here would hand non-ASCII ANSI bytes to code that
+     * expects UTF-8 throughout (paste_filter_controls(), the terminal
+     * write, the confirm dialog), mangling anything outside plain ASCII. */
+    if (!IsClipboardFormatAvailable(CF_TEXT)) return NULL;
+    if (!OpenClipboard(hwnd)) return NULL;
+
+    HANDLE hClip = GetClipboardData(CF_TEXT);
+    if (!hClip) { CloseClipboard(); return NULL; }
+
+    const char *raw = (const char *)GlobalLock(hClip);
+    if (!raw) { CloseClipboard(); return NULL; }
+
+    int wneed = MultiByteToWideChar(CP_ACP, 0, raw, -1, NULL, 0);
+    if (wneed > 0) {
+        wchar_t *wraw = (wchar_t *)malloc((size_t)wneed * sizeof(wchar_t));
+        if (wraw && MultiByteToWideChar(CP_ACP, 0, raw, -1, wraw, wneed) > 0) {
+            int need = WideCharToMultiByte(CP_UTF8, 0, wraw, -1,
+                                           NULL, 0, NULL, NULL);
+            if (need > 0) {
+                local = (char *)malloc((size_t)need);
+                if (local && WideCharToMultiByte(CP_UTF8, 0, wraw, -1,
+                                 local, need, NULL, NULL) <= 0) {
+                    free(local);
+                    local = NULL;
+                }
+            }
+        }
+        free(wraw);
+    }
+
+    GlobalUnlock(hClip);
+    CloseClipboard();
+    return local;
+}
+
 static void do_paste(HWND hwnd)
 {
     if (!g_active_session || !g_active_session->io.ctx) return;
@@ -1764,30 +1935,27 @@ static void do_paste(HWND hwnd)
     /* Cancel any in-progress paste */
     paste_cancel();
 
-    if (!IsClipboardFormatAvailable(CF_TEXT)) return;
-    if (!OpenClipboard(hwnd)) return;
+    /* The session this paste targets. Captured up front and re-checked
+     * after the confirm dialog returns (below) -- the dialog runs its own
+     * modal message loop, during which a background event (idle/network
+     * timeout) can still disconnect this session's transport even though
+     * the tab itself cannot be closed (the main window is disabled while
+     * the dialog is up). */
+    Session *target = g_active_session;
 
-    HANDLE hClip = GetClipboardData(CF_TEXT);
-    if (!hClip) { CloseClipboard(); return; }
-
-    const char *raw = (const char *)GlobalLock(hClip);
-    if (!raw) { CloseClipboard(); return; }
-
-    /* Copy to a local buffer so the clipboard is free before the dialog blocks.
-     * The user must be able to copy new text while the preview is open. */
-    char *local = _strdup(raw);
-    GlobalUnlock(hClip);
-    CloseClipboard();
-
+    char *local = read_clipboard_text_utf8(hwnd);
     if (!local) return;
 
-    /* Count newlines */
+    /* Count newlines (pre-filter — TAB/LF/CR survive filtering unchanged,
+     * so this count is the same before and after). */
     int line_count = 0;
     for (size_t i = 0; local[i]; i++) {
         if (local[i] == '\n') line_count++;
     }
 
-    /* Ask for confirmation before pasting, unless disabled in settings */
+    /* Ask for confirmation before pasting, unless disabled in settings.
+     * The dialog shows the raw text (control characters rendered visibly)
+     * and a warning of how many will be stripped -- see paste_dlg.c. */
     int confirmed = 1;
     if (g_config->settings.paste_confirm) {
         confirmed = paste_preview_show(hwnd, local,
@@ -1803,9 +1971,30 @@ static void do_paste(HWND hwnd)
         return;
     }
 
-    bool bpm = g_active_session->term &&
-               g_active_session->term->bracketed_paste_mode;
-    bool local_line_ends = (g_active_session->io.kind == SESSION_LOCAL);
+    /* Re-check the target tab still exists (by identity, via the tab list
+     * -- never by dereferencing `target` first: that's the whole point)
+     * and is still connected before sending anything or touching its
+     * fields. Nothing today can free a session tab while this dialog's
+     * modal loop is running (the main window is disabled), but the check
+     * costs nothing and stops this from becoming a use-after-free if that
+     * ever changes. */
+    if (tabs_find(g_hwndTabs, target) < 0 || !target->io.ctx) {
+        free(local);
+        return;
+    }
+
+    /* Hardening: strip ESC, other C0 controls (except TAB/LF/CR), DEL and
+     * C1 controls from the paste in place, always -- not just under
+     * bracketed paste mode. This is what stops a hostile clipboard from
+     * embedding the bracketed-paste close sequence (or any other control
+     * sequence) to make part of the paste run as if it were typed; xterm
+     * and Windows Terminal filter every paste the same way. */
+    size_t filtered_len = paste_filter_controls(local, strlen(local), local, NULL);
+    local[filtered_len] = '\0';
+
+    bool bpm = target->term &&
+               target->term->bracketed_paste_mode;
+    bool local_line_ends = (target->io.kind == SESSION_LOCAL);
     int  delay_ms = g_config ? g_config->settings.paste_delay_ms : 0;
 
     static const char BRACKET_OPEN[]  = "\033[200~";
@@ -1816,21 +2005,21 @@ static void do_paste(HWND hwnd)
      * would only add pointless latency. */
     if (line_count == 0 || delay_ms <= 0 || bpm) {
         if (bpm)
-            g_active_session->io.write(g_active_session->io.ctx,
+            target->io.write(target->io.ctx,
                               BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
         const char *p = local;
         while (*p) {
             const char *nl = strchr(p, '\n');
             size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
-            paste_chunk_write(g_active_session->io.ctx,
-                              g_active_session->io.write,
+            paste_chunk_write(target->io.ctx,
+                              target->io.write,
                               p, chunk, local_line_ends);
             p += chunk;
         }
         if (bpm)
-            g_active_session->io.write(g_active_session->io.ctx,
+            target->io.write(target->io.ctx,
                               BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
-        g_active_session->term->scrollback_offset = 0;
+        target->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
         free(local);
     } else {
@@ -1839,18 +2028,18 @@ static void do_paste(HWND hwnd)
         g_paste.pos       = g_paste.buf;
         g_paste.hwnd      = hwnd;
         g_paste.delay_ms  = delay_ms;
-        g_paste.io_ctx    = g_active_session->io.ctx;
-        g_paste.io_write  = g_active_session->io.write;
+        g_paste.io_ctx    = target->io.ctx;
+        g_paste.io_write  = target->io.write;
         g_paste.bracketed = bpm;
         g_paste.local     = local_line_ends;
 
         if (bpm)
-            g_active_session->io.write(g_active_session->io.ctx,
+            target->io.write(target->io.ctx,
                               BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
 
         /* Send the first line immediately */
         paste_send_next_line();
-        g_active_session->term->scrollback_offset = 0;
+        target->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
 
         /* Start timer for remaining lines, or finish if buffer exhausted */
@@ -2121,6 +2310,28 @@ static HMENU create_app_menu(void)
     return hMenu;
 }
 
+/* Copy UTF-8 text to the clipboard as CF_UNICODETEXT (converting via
+ * MultiByteToWideChar). Terminal text is UTF-8; CF_TEXT would hand it out
+ * as if it were the system ANSI codepage, mangling anything outside plain
+ * ASCII. Windows auto-synthesizes CF_TEXT from CF_UNICODETEXT for any app
+ * that only asks for the old format, so this loses nothing.  Caller must
+ * have the clipboard open (and should EmptyClipboard() first, as before);
+ * this only sets the one format. */
+static void set_clipboard_utf8(const char *utf8, size_t len)
+{
+    if (!utf8 || len == 0) return;
+    int wneed = MultiByteToWideChar(CP_UTF8, 0, utf8, (int)len, NULL, 0);
+    if (wneed <= 0) return;
+    HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, ((size_t)wneed + 1) * sizeof(wchar_t));
+    if (!hg) return;
+    wchar_t *dst = (wchar_t *)GlobalLock(hg);
+    if (!dst) { GlobalFree(hg); return; }
+    int written = MultiByteToWideChar(CP_UTF8, 0, utf8, (int)len, dst, wneed);
+    dst[written > 0 ? written : 0] = L'\0';
+    GlobalUnlock(hg);
+    SetClipboardData(CF_UNICODETEXT, hg);
+}
+
 /* Copy current selection to clipboard */
 static void do_copy(HWND hwnd)
 {
@@ -2131,13 +2342,7 @@ static void do_copy(HWND hwnd)
         g_active_session->term, buf, sizeof(buf));
     if (n > 0 && OpenClipboard(hwnd)) {
         EmptyClipboard();
-        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, n + 1);
-        if (hg) {
-            char *dst = (char *)GlobalLock(hg);
-            memcpy(dst, buf, n + 1);
-            GlobalUnlock(hg);
-            SetClipboardData(CF_TEXT, hg);
-        }
+        set_clipboard_utf8(buf, n);
         CloseClipboard();
     }
 }
@@ -2874,6 +3079,55 @@ static void key_on_send_menu(HWND hwnd, UINT id)
     }
 }
 
+/* Wait up to timeout_ms for is_done() to become true, pumping this
+ * thread's inbound *sent* messages the whole time instead of blocking in
+ * Sleep(). Used only in the WM_DESTROY exit path, waiting for background
+ * workers (a connection thread, an AI stream) this window orphaned to
+ * finish on their own.
+ *
+ * A plain Sleep loop here can deadlock: a connection thread can be
+ * blocked showing a host-key or passphrase MessageBox owned by hwnd, and
+ * Windows delivers some of that dialog's own housekeeping (WM_ENABLE and
+ * similar) to the owner via a cross-thread SendMessage -- which blocks
+ * the sending thread until hwnd's thread (this one) calls
+ * GetMessage/PeekMessage/WaitMessage and lets the system dispatch it.
+ * While this thread sits in Sleep(), that dispatch never happens, so the
+ * dialog can never finish, so the worker never reaches the code that
+ * would let is_done() become true: the wait -- and thus the whole
+ * shutdown -- hangs for its full timeout, or a very long time, every time.
+ *
+ * MsgWaitForMultipleObjects(..., QS_SENDMESSAGE) both wakes promptly when
+ * such a message arrives and, like any of the wait/peek/get calls, causes
+ * the system to dispatch it. The explicit PeekMessage drain right after is
+ * a belt-and-braces catch for anything the wait alone didn't already
+ * hand off; it is filtered to PM_QS_SENDMESSAGE so it can never pick up an
+ * ordinary posted message (WM_PAINT, WM_TIMER, ...) and re-enter state
+ * that is mid-teardown here. */
+static void pump_wait_ms(DWORD timeout_ms, int (*is_done)(void))
+{
+    DWORD start = GetTickCount();
+    for (;;) {
+        if (is_done()) return;
+        DWORD elapsed = GetTickCount() - start;
+        if (elapsed >= timeout_ms) return;
+        DWORD slice = timeout_ms - elapsed;
+        if (slice > 20) slice = 20;   /* re-check is_done() often */
+
+        MsgWaitForMultipleObjects(0, NULL, FALSE, slice, QS_SENDMESSAGE);
+
+        MSG msg;
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE | PM_QS_SENDMESSAGE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+}
+
+static int conn_jobs_done(void)
+{
+    return InterlockedCompareExchange(&g_live_conn_jobs, 0, 0) <= 0;
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE:
@@ -2883,18 +3137,79 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             {
                 char exe_dir[MAX_PATH];
                 get_exe_dir(exe_dir, sizeof(exe_dir));
-                if (exe_dir[0] != '\0')
+                if (exe_dir[0] != '\0') {
                     (void)snprintf(g_config_path, sizeof(g_config_path),
                                    "%s\\" CONFIG_FILENAME, exe_dir);
-                else
-                    (void)snprintf(g_config_path, sizeof(g_config_path),
-                                   CONFIG_FILENAME);
+                } else {
+                    /* Could not determine the exe's own directory: fall
+                     * back to an absolute per-user location instead of a
+                     * bare relative CONFIG_FILENAME, which would silently
+                     * read/write into whatever the process's current
+                     * working directory happens to be. If even
+                     * %LOCALAPPDATA% is unavailable, refuse to guess --
+                     * leave g_config_path empty so config_save() (which
+                     * itself refuses an empty path) never writes to the
+                     * CWD either. */
+                    char local_appdata[MAX_PATH];
+                    DWORD la_len = GetEnvironmentVariableA(
+                        "LOCALAPPDATA", local_appdata, (DWORD)sizeof(local_appdata));
+                    if (la_len > 0 && la_len < sizeof(local_appdata) &&
+                        config_fallback_path(local_appdata, g_config_path,
+                                             sizeof(g_config_path))) {
+                        char nutshell_dir[MAX_PATH];
+                        (void)snprintf(nutshell_dir, sizeof(nutshell_dir),
+                                       "%s\\Nutshell", local_appdata);
+                        CreateDirectoryA(nutshell_dir, NULL);
+                    } else {
+                        g_config_path[0] = '\0';
+                    }
+                }
 
-                g_config = config_load(g_config_path);
+                ConfigLoadStatus load_status = CONFIG_LOAD_MISSING;
+                g_config = (g_config_path[0] != '\0')
+                          ? config_load_ex(g_config_path, &load_status)
+                          : NULL;
                 if (!g_config) {
-                    MessageBoxA(hwnd,
-                        "Could not load " CONFIG_FILENAME ".\n\nStarting with default settings.",
-                        "Configuration Warning", MB_OK | MB_ICONWARNING);
+                    if (g_config_path[0] == '\0') {
+                        MessageBoxA(hwnd,
+                            "Could not find a folder to store " CONFIG_FILENAME " in "
+                            "(neither the program's own folder nor %LOCALAPPDATA% "
+                            "is available).\n\nSettings and sessions will not be "
+                            "saved this run.",
+                            "Configuration Warning", MB_OK | MB_ICONWARNING);
+                        g_config_save_disabled = 1;
+                    } else if (load_status == CONFIG_LOAD_UNREADABLE) {
+                        /* M3/M4: the file is there, but this process could
+                         * not safely read it (or, for an unparseable file,
+                         * could not even back it up first) -- there is
+                         * nothing wrong with the user's real config, only
+                         * with this run's ability to see it. Saving
+                         * defaults over it would destroy it for good, so
+                         * saving is refused for the rest of this run
+                         * instead (every save site is passed "" in place
+                         * of g_config_path -- see g_config_save_disabled's
+                         * own comment). */
+                        MessageBoxA(hwnd,
+                            "Could not read " CONFIG_FILENAME " (it may be locked "
+                            "by another program, or larger than expected).\n\n"
+                            "Starting with default settings for this run only -- "
+                            "nothing will be saved until the file is readable "
+                            "again and Nutshell is restarted.",
+                            "Configuration Warning", MB_OK | MB_ICONWARNING);
+                        g_config_save_disabled = 1;
+                    } else {
+                        /* CONFIG_LOAD_MISSING (first run) or CONFIG_LOAD_INVALID
+                         * (unparseable, but backed up successfully): safe to
+                         * save fresh defaults over `path`. */
+                        if (load_status == CONFIG_LOAD_INVALID) {
+                            MessageBoxA(hwnd,
+                                "Could not load " CONFIG_FILENAME ": it was not "
+                                "valid. The previous file was kept alongside it "
+                                "as " CONFIG_FILENAME ".bad-<timestamp>."
+                                "\n\nStarting with default settings.",
+                                "Configuration Warning", MB_OK | MB_ICONWARNING);
+                        }
+                    }
                     g_config = config_new_default();
                 }
 
@@ -2907,9 +3222,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 /* First start by a version that knows about local shells:
                  * give the user a real saved "Local shell" profile at the
                  * top of the list (spec section 5). It is an ordinary row
-                 * from then on -- rename it, edit it, delete it. */
-                if (config_ensure_local_profile(g_config))
-                    (void)config_save(g_config, g_config_path);
+                 * from then on -- rename it, edit it, delete it. M5: report
+                 * it if this fails to save -- silently doing nothing here
+                 * would leave the profile showing for this run only, gone
+                 * again the moment Nutshell restarts, with no indication
+                 * why. */
+                if (config_ensure_local_profile(g_config) && !g_config_save_disabled &&
+                    config_save(g_config, g_config_path) != 0) {
+                    MessageBoxA(hwnd,
+                        "Could not save " CONFIG_FILENAME ". The \"Local shell\" "
+                        "profile just added will not persist to the next run.",
+                        "Save Failed", MB_OK | MB_ICONWARNING);
+                }
             }
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;
@@ -3276,24 +3600,58 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             update_scrollbar(hwnd);
 
                             /* Platform auto-detect: only while the profile
-                             * didn't pin an explicit platform and we haven't
-                             * already resolved (or given up). Re-scanning
-                             * every data-bearing tick is what lets a banner
-                             * split across multiple reads still be caught. */
+                             * didn't pin an explicit platform (platform_locked,
+                             * item 4 -- an operator's choice is never
+                             * overridden by anything below). Re-scanning every
+                             * data-bearing tick during the initial window is
+                             * what lets a banner split across multiple reads
+                             * still be caught. */
                             if (!s->platform_locked && !s->platform_scanned) {
-                                char detect_buf[4096];
-                                size_t detect_len = term_extract_last_n(
-                                    s->term, 40, detect_buf, sizeof detect_buf);
-                                CmdDetectConfidence detect_conf = CMD_DETECT_NONE;
-                                CmdPlatform detected = cmd_detect_platform(
-                                    detect_buf, detect_len, &detect_conf);
-                                if (detect_conf != CMD_DETECT_NONE)
-                                    s->ai_state.platform = (int)detected;
+                                /* Sized to the rows' content, not a fixed
+                                 * buffer: a fixed one cut a wide last row
+                                 * short and lost the prompt at its end. The
+                                 * step only ever moves an unresolved session
+                                 * to a platform; a resolved one that reads
+                                 * differently is marked contradicted instead
+                                 * of moved (cmd_detect.h). */
+                                size_t detect_len = 0;
+                                char *detect_buf = term_extract_last_n_dup(
+                                    s->term, 40, &detect_len);
+                                CmdPlatform plat = (CmdPlatform)s->ai_state.platform;
+                                CmdDetectConfidence detect_conf = cmd_detect_scan_step(
+                                    detect_buf, detect_len, &plat,
+                                    &s->ai_state.platform_contradicted);
+                                s->ai_state.platform = (int)plat;
+                                free(detect_buf);
 
                                 s->platform_scan_ticks++;
                                 if (detect_conf == CMD_DETECT_BANNER ||
                                     s->platform_scan_ticks >= PLATFORM_DETECT_MAX_TICKS)
                                     s->platform_scanned = 1;
+                            } else if (!s->platform_locked) {
+                                /* Resolved (or gave up) once already. The
+                                 * invariant from here on (CLAUDE.md): host
+                                 * output may only make the session's
+                                 * classification STRICTER, never looser. The
+                                 * platform never changes again: a last row
+                                 * that contradicts it sets the sticky
+                                 * contradicted flag, and from then on the
+                                 * session's commands are judged under the
+                                 * worse of its platform's ruleset and
+                                 * UNKNOWN's (cmd_classify_session()) --
+                                 * UNKNOWN alone is looser than every device
+                                 * ruleset somewhere. Cheap on purpose: only
+                                 * the last non-empty row, no banner scan,
+                                 * sized to its content so a wide row keeps
+                                 * its prompt. */
+                                size_t last_len = 0;
+                                char *last_row = term_extract_last_n_dup(
+                                    s->term, 1, &last_len);
+                                cmd_detect_watch_step(
+                                    last_row, last_len,
+                                    (CmdPlatform)s->ai_state.platform,
+                                    &s->ai_state.platform_contradicted);
+                                free(last_row);
                             }
                         }
 
@@ -3517,22 +3875,41 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         case WM_CONN_DONE: {
-            Session *s = (Session *)lParam;
+            /* wParam is the job id. Resolve it against the live sessions:
+             * if the tab was closed meanwhile, its job was orphaned and the
+             * thread has already freed (or is freeing) it -- nothing to do. */
+            Session *s = g_session_list;
+            while (s && !(s->conn_job && s->conn_job->id == (unsigned)wParam))
+                s = s->next;
+            (void)lParam;
+            if (!s) return 0;
+
+            /* The thread posted this as its last act on the job: take the
+             * results, then drop the session's reference. */
+            ConnJob *job = s->conn_job;
+            s->conn_job = NULL;
+            int conn_result  = job->result;
+            char conn_error[512];
+            memcpy(conn_error, job->error, sizeof(conn_error));
+            memcpy(s->conn_error, job->error, sizeof(s->conn_error));
+            if (conn_result == 0) {
+                s->ssh     = job->ssh;
+                s->channel = job->channel;
+                job->ssh     = NULL;
+                job->channel = NULL;
+                /* H-3: the session's copy of the password is not needed
+                 * until a reconnect, which re-reads it from the config. */
+                SecureZeroMemory(s->conn_profile.password,
+                                 sizeof(s->conn_profile.password));
+            }
+            conn_job_release(job);   /* a failed attempt's SSH session goes with it */
+
             s->conn_state = CONN_IDLE;
             DWORD tick_now = GetTickCount();
             s->last_socket_data_tick = tick_now;
             s->last_keepalive_tick   = tick_now;
             s->last_user_input_tick  = tick_now;
             s->prev_bytes_read       = (s->ssh ? s->ssh->bytes_read_total : 0);
-            CloseHandle(s->conn_thread);
-            s->conn_thread = NULL;
-
-            /* H-1: read shared fields under the lock */
-            EnterCriticalSection(&s->conn_cs);
-            int conn_result  = s->conn_result;
-            char conn_error[512];
-            memcpy(conn_error, s->conn_error, sizeof(conn_error));
-            LeaveCriticalSection(&s->conn_cs);
 
             int tidx = tabs_find(g_hwndTabs, s);
             if (conn_result != 0) {
@@ -4147,13 +4524,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_active_session->term, buf, sizeof(buf));
             if (n > 0 && OpenClipboard(hwnd)) {
                 EmptyClipboard();
-                HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, n + 1);
-                if (hg) {
-                    char *dst = (char *)GlobalLock(hg);
-                    memcpy(dst, buf, n + 1);
-                    GlobalUnlock(hg);
-                    SetClipboardData(CF_TEXT, hg);
-                }
+                set_clipboard_utf8(buf, n);
                 CloseClipboard();
             }
             g_selection.valid = false;
@@ -4205,6 +4576,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 1;
 
         case WM_DESTROY:
+            /* The AI panel first: its WM_DESTROY saves the conversation into
+             * the active session and aborts every reply in flight, so the
+             * sessions must still be alive. Then give the aborted stream
+             * threads a moment to free their own state. */
+            if (g_hwndAiChat && IsWindow(g_hwndAiChat))
+                ai_chat_close(g_hwndAiChat);
+            g_hwndAiChat = NULL;
+            ai_chat_wait_for_streams(2000);
             {
                 Session *s = g_session_list;
                 while (s) {
@@ -4212,10 +4591,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     free_session(s);
                     s = next;
                 }
+                g_session_list = NULL;
+                g_active_session = NULL;
             }
-            if (g_hwndAiChat && IsWindow(g_hwndAiChat))
-                ai_chat_close(g_hwndAiChat);
-            g_hwndAiChat = NULL;
+            /* free_session() cancelled and orphaned any connection still in
+             * progress; give those threads a moment to notice and leave
+             * libssh2/OpenSSL before the exit handlers and WSACleanup run.
+             * ui_run() deals with one that is still stuck after this.
+             * Pumps sent messages while waiting -- see pump_wait_ms(): a
+             * plain Sleep loop here can deadlock against a connection
+             * thread blocked in a host-key MessageBox owned by hwnd. */
+            pump_wait_ms(3000, conn_jobs_done);
             if (g_config) config_free(g_config);
             renderer_free(&g_renderer);
             g_hMenuFont = NULL;
@@ -4309,6 +4695,14 @@ void ui_run(void) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
+    /* A worker still running after the bounded waits in WM_DESTROY -- a
+     * connection blocked in a slow TCP connect or on an unanswered host-key
+     * prompt, or an AI stream blocked in a network read -- must not have
+     * WSACleanup and the CRT/OpenSSL exit handlers run under it. Everything
+     * worth saving is already saved and closed, so end the process here. */
+    if (InterlockedCompareExchange(&g_live_conn_jobs, 0, 0) > 0 ||
+        ai_stream_live_count() > 0)
+        TerminateProcess(GetCurrentProcess(), 0);
 }
 
 #endif /* _WIN32 */
