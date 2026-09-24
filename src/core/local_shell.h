@@ -96,6 +96,14 @@ size_t local_shell_quote(const char *path, char *out, size_t out_size);
  * "MSYS2", "custom". NULL for SHELL_NONE. */
 const char *local_shell_kind_name(LocalShellKind kind);
 
+/* The name for a resolved spec: local_shell_kind_name(spec->kind), except
+ * that a SHELL_CUSTOM whose executable's base name is powershell or pwsh
+ * (with or without .exe, any letter case, any directory) is "PowerShell",
+ * so the model is told which syntax to write. The kind stays SHELL_CUSTOM:
+ * this is a name only, and the platform still goes through the banner scan.
+ * NULL for a NULL spec or SHELL_NONE. */
+const char *local_shell_spec_name(const LocalShellSpec *spec);
+
 /* Non-zero when this kind is a known POSIX-ish shell whose platform the AI
  * panel may pin to Linux without a banner scan (spec section 6): busybox,
  * Git bash and MSYS2 yes, custom and none no. */

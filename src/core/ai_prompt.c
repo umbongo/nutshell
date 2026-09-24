@@ -175,17 +175,25 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
         "wrap it in [EXEC] and [/EXEC] markers like this:\n"
         "[EXEC]ls -la[/EXEC]\n\n";
 
+    /* A PowerShell local session gets PowerShell-flavoured [EXEC] examples
+     * below instead of the bash ones -- otherwise the model is shown a
+     * worked example in the wrong language and reliably writes bash into
+     * a session that has no bash to run it. */
+    int is_powershell = (kind == SESSION_LOCAL && shell_name &&
+                          strcmp(shell_name, "PowerShell") == 0);
+
     char local_opening[512];
     if (kind == SESSION_LOCAL) {
         const char *shell = (shell_name && shell_name[0])
                               ? shell_name
                               : "busybox / Git bash / MSYS2 / custom";
+        const char *example = is_powershell ? "Get-ChildItem" : "ls -la";
         int on = snprintf(local_opening, sizeof(local_opening),
             "You are an AI assistant for a local shell (%s) on a Windows PC. "
             "You can see the terminal output and help the user with tasks.\n"
             "When you want to execute a command on this PC, "
             "wrap it in [EXEC] and [/EXEC] markers like this:\n"
-            "[EXEC]ls -la[/EXEC]\n\n", shell);
+            "[EXEC]%s[/EXEC]\n\n", shell, example);
         if (on > 0) opening = local_opening;
     }
 
@@ -200,6 +208,21 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
         "Always explain what each command does before its marker. "
         "Never say 'let's start with' or do only the first step. "
         "Include every command the user needs in one response.";
+
+    const char *rest_powershell =
+        "IMPORTANT: Always include ALL commands needed in a SINGLE response. "
+        "Do NOT split commands across multiple responses. "
+        "Each command must have its own [EXEC]...[/EXEC] markers. "
+        "Write PowerShell syntax, not bash.\n"
+        "Example with multiple commands:\n"
+        "1. First, check disk usage\n[EXEC]Get-PSDrive[/EXEC]\n"
+        "2. Then check memory\n[EXEC]Get-CimInstance Win32_OperatingSystem[/EXEC]\n"
+        "3. Finally check uptime\n[EXEC]Get-Uptime[/EXEC]\n\n"
+        "Always explain what each command does before its marker. "
+        "Never say 'let's start with' or do only the first step. "
+        "Include every command the user needs in one response.";
+
+    if (is_powershell) rest = rest_powershell;
 
     size_t pos = 0;
     int n = snprintf(buf, buf_size, "%s%s", opening, rest);

@@ -270,6 +270,9 @@ int test_cmd_detect_ambiguous_hostname_hash_or_gt(void);
 int test_cmd_detect_no_prompt_at_all(void);
 int test_cmd_detect_trailing_blank_lines(void);
 int test_cmd_detect_banner_split_across_chunks(void);
+int test_cmd_detect_powershell_nologo_prompt_unknown(void);
+int test_cmd_detect_windows_powershell_banner_unknown(void);
+int test_cmd_detect_pwsh7_banner_unknown(void);
 /* cmd_classify.c - unknown-platform overlay and name mapping */
 int test_cmd_classify_unknown_overlay_critical_verbs(void);
 int test_cmd_classify_unknown_overlay_write_erase(void);
@@ -326,6 +329,12 @@ int test_cmd_classify_redirect_devnull_spacing_and_ampersand(void);
 int test_cmd_classify_redirect_stderr_to_real_file_write(void);
 int test_cmd_classify_linux_readonly_du_pipeline_regression(void);
 int test_cmd_classify_network_verbs_under_linux_are_unknown(void);
+int test_cmd_classify_powershell_cmdlets_under_unknown(void);
+int test_cmd_classify_pipe_into_invoke_expression_is_critical(void);
+int test_cmd_classify_unknown_platform_splits_pipelines(void);
+int test_cmd_classify_ampersand_separator(void);
+int test_cmd_classify_pipe_to_interpreter_is_critical(void);
+int test_cmd_classify_v1_2_9_unaffected_pipelines(void);
 
 /* test_session_manager.c */
 int test_profile_struct(void);
@@ -612,6 +621,13 @@ int test_shell_prompt_is_continuation_empty_negative(void);
 int test_shell_prompt_is_continuation_null_negative(void);
 int test_shell_prompt_line_dquote_continuation_negative(void);
 int test_shell_prompt_line_router_positive(void);
+int test_shell_prompt_ps_drive_root_positive(void);
+int test_shell_prompt_ps_home_trailing_space_positive(void);
+int test_shell_prompt_ps_nested_prompt_positive(void);
+int test_shell_prompt_is_continuation_ps_double_gt(void);
+int test_shell_prompt_line_ps_double_gt_negative(void);
+int test_shell_prompt_triple_gt_unchanged(void);
+int test_shell_prompt_double_gt_change_keeps_existing_results(void);
 
 /* test_term.c */
 int test_term_buffer(void);
@@ -645,6 +661,8 @@ int test_term_at_prompt_password_prompt(void);
 int test_term_at_prompt_text_typed_after_prompt(void);
 int test_term_at_prompt_alt_screen_active(void);
 int test_term_at_prompt_trailing_content_after_cursor(void);
+int test_term_at_prompt_powershell_primary(void);
+int test_term_at_prompt_powershell_continuation(void);
 int test_term_at_continuation_prompt_true(void);
 int test_term_at_continuation_prompt_false(void);
 int test_term_at_prompt_dollar_still_positive(void);
@@ -891,6 +909,7 @@ int test_ai_build_auth_headers_custom(void);
 int test_ai_system_prompt_with_terminal(void);
 int test_ai_system_prompt_no_terminal(void);
 int test_ai_system_prompt_local_shell(void);
+int test_ai_system_prompt_powershell_examples(void);
 int test_ai_extract_commands_multiple(void);
 int test_ai_extract_commands_single(void);
 int test_ai_extract_commands_none(void);
@@ -2355,6 +2374,10 @@ int test_local_shell_resolve_null_probe_is_safe(void);
 int test_local_shell_resolve_null_callbacks_is_safe(void);
 int test_local_shell_resolve_null_profile_shell_is_safe(void);
 int test_local_shell_kind_name_and_is_posix(void);
+int test_local_shell_spec_name_powershell(void);
+int test_local_shell_spec_name_powershell_with_path(void);
+int test_local_shell_spec_name_other_custom_stays_custom(void);
+int test_local_shell_spec_name_non_custom_and_null(void);
 
 /* test_term_conpty.c */
 int test_term_conpty_ls_screen_contents(void);
@@ -2700,6 +2723,9 @@ int main(void) {
     failed += test_cmd_detect_no_prompt_at_all();
     failed += test_cmd_detect_trailing_blank_lines();
     failed += test_cmd_detect_banner_split_across_chunks();
+    failed += test_cmd_detect_powershell_nologo_prompt_unknown();
+    failed += test_cmd_detect_windows_powershell_banner_unknown();
+    failed += test_cmd_detect_pwsh7_banner_unknown();
     /* Unknown-platform overlay and name mapping */
     failed += test_cmd_classify_unknown_overlay_critical_verbs();
     failed += test_cmd_classify_unknown_overlay_write_erase();
@@ -2754,6 +2780,12 @@ int main(void) {
     failed += test_cmd_classify_redirect_stderr_to_real_file_write();
     failed += test_cmd_classify_linux_readonly_du_pipeline_regression();
     failed += test_cmd_classify_network_verbs_under_linux_are_unknown();
+    failed += test_cmd_classify_powershell_cmdlets_under_unknown();
+    failed += test_cmd_classify_pipe_into_invoke_expression_is_critical();
+    failed += test_cmd_classify_unknown_platform_splits_pipelines();
+    failed += test_cmd_classify_ampersand_separator();
+    failed += test_cmd_classify_pipe_to_interpreter_is_critical();
+    failed += test_cmd_classify_v1_2_9_unaffected_pipelines();
 
     /* Session Manager / Profile / Config */
     failed += test_profile_struct();
@@ -2956,6 +2988,13 @@ int main(void) {
     failed += test_shell_prompt_is_continuation_null_negative();
     failed += test_shell_prompt_line_dquote_continuation_negative();
     failed += test_shell_prompt_line_router_positive();
+    failed += test_shell_prompt_ps_drive_root_positive();
+    failed += test_shell_prompt_ps_home_trailing_space_positive();
+    failed += test_shell_prompt_ps_nested_prompt_positive();
+    failed += test_shell_prompt_is_continuation_ps_double_gt();
+    failed += test_shell_prompt_line_ps_double_gt_negative();
+    failed += test_shell_prompt_triple_gt_unchanged();
+    failed += test_shell_prompt_double_gt_change_keeps_existing_results();
 
     printf("\n--- Term ---\n");
     failed += test_term_buffer();
@@ -2989,6 +3028,8 @@ int main(void) {
     failed += test_term_at_prompt_text_typed_after_prompt();
     failed += test_term_at_prompt_alt_screen_active();
     failed += test_term_at_prompt_trailing_content_after_cursor();
+    failed += test_term_at_prompt_powershell_primary();
+    failed += test_term_at_prompt_powershell_continuation();
     failed += test_term_at_continuation_prompt_true();
     failed += test_term_at_continuation_prompt_false();
     failed += test_term_at_prompt_dollar_still_positive();
@@ -3177,6 +3218,7 @@ int main(void) {
     failed += test_ai_system_prompt_with_terminal();
     failed += test_ai_system_prompt_no_terminal();
     failed += test_ai_system_prompt_local_shell();
+    failed += test_ai_system_prompt_powershell_examples();
     failed += test_ai_extract_commands_multiple();
     failed += test_ai_extract_commands_single();
     failed += test_ai_extract_commands_none();
@@ -4753,6 +4795,10 @@ int main(void) {
     failed += test_local_shell_resolve_null_callbacks_is_safe();
     failed += test_local_shell_resolve_null_profile_shell_is_safe();
     failed += test_local_shell_kind_name_and_is_posix();
+    failed += test_local_shell_spec_name_powershell();
+    failed += test_local_shell_spec_name_powershell_with_path();
+    failed += test_local_shell_spec_name_other_custom_stays_custom();
+    failed += test_local_shell_spec_name_non_custom_and_null();
     failed += test_term_conpty_ls_screen_contents();
     failed += test_term_conpty_ls_byte_at_a_time_matches();
     failed += test_term_conpty_opening_sequence_is_consumed();

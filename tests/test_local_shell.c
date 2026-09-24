@@ -799,3 +799,77 @@ int test_local_shell_kind_name_and_is_posix(void)
     ASSERT_EQ(local_shell_kind_is_posix(SHELL_MSYS2), 1);
     TEST_END();
 }
+
+/* =========================================================================
+ * local_shell_spec_name(): the AI prompt's name for a resolved shell
+ * ========================================================================= */
+
+static const char *spec_name_of(const char *profile_shell, LocalShellSpec *spec)
+{
+    (void)local_shell_resolve(profile_shell, NULL, spec);
+    return local_shell_spec_name(spec);
+}
+
+int test_local_shell_spec_name_powershell(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    ASSERT_STR_EQ(spec_name_of("powershell.exe -NoLogo", &spec), "PowerShell");
+    /* Still a custom command: only the name changes. */
+    ASSERT_EQ((int)spec.kind, (int)SHELL_CUSTOM);
+    ASSERT_EQ(local_shell_kind_is_posix(spec.kind), 0);
+    ASSERT_STR_EQ(spec_name_of("pwsh.exe -NoLogo", &spec), "PowerShell");
+    ASSERT_STR_EQ(spec_name_of("pwsh", &spec), "PowerShell");
+    ASSERT_STR_EQ(spec_name_of("powershell", &spec), "PowerShell");
+    ASSERT_STR_EQ(spec_name_of("PowerShell.EXE", &spec), "PowerShell");
+    ASSERT_STR_EQ(spec_name_of("PWSH.exe -NoProfile", &spec), "PowerShell");
+    TEST_END();
+}
+
+int test_local_shell_spec_name_powershell_with_path(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    ASSERT_STR_EQ(spec_name_of(
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoLogo",
+        &spec), "PowerShell");
+    ASSERT_STR_EQ(spec_name_of(
+        "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoLogo", &spec),
+        "PowerShell");
+    ASSERT_STR_EQ(spec_name_of("C:/tools/pwsh.exe", &spec), "PowerShell");
+    TEST_END();
+}
+
+int test_local_shell_spec_name_other_custom_stays_custom(void)
+{
+    TEST_BEGIN();
+    LocalShellSpec spec;
+    ASSERT_STR_EQ(spec_name_of("cmd.exe", &spec), "custom");
+    ASSERT_STR_EQ(spec_name_of("C:\\msys64\\usr\\bin\\zsh.exe -l", &spec), "custom");
+    /* Near misses: the executable's base name must match exactly. */
+    ASSERT_STR_EQ(spec_name_of("mypwsh.exe", &spec), "custom");
+    ASSERT_STR_EQ(spec_name_of("pwsh2.exe", &spec), "custom");
+    ASSERT_STR_EQ(spec_name_of("powershell_ise.exe", &spec), "custom");
+    ASSERT_STR_EQ(spec_name_of("C:\\pwsh\\bash.exe", &spec), "custom");
+    /* PowerShell as an argument, not the executable, is not PowerShell. */
+    ASSERT_STR_EQ(spec_name_of("cmd.exe /k powershell.exe", &spec), "custom");
+    TEST_END();
+}
+
+int test_local_shell_spec_name_non_custom_and_null(void)
+{
+    TEST_BEGIN();
+    ASSERT_NULL(local_shell_spec_name(NULL));
+    LocalShellSpec spec;
+    memset(&spec, 0, sizeof(spec));
+    spec.kind = SHELL_NONE;
+    ASSERT_NULL(local_shell_spec_name(&spec));
+    spec.kind = SHELL_GITBASH;
+    /* A non-custom kind keeps its kind name, whatever exe says. */
+    (void)snprintf(spec.exe, sizeof(spec.exe), "%s", "C:\\x\\pwsh.exe");
+    ASSERT_STR_EQ(local_shell_spec_name(&spec), "Git bash");
+    spec.kind = SHELL_CUSTOM;
+    spec.exe[0] = '\0';
+    ASSERT_STR_EQ(local_shell_spec_name(&spec), "custom");
+    TEST_END();
+}

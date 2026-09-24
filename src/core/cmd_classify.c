@@ -433,16 +433,6 @@ static int next_token(const char **p, const char **start, size_t *len)
     return *len > 0;
 }
 
-static const char *strip_path(const char *tok, size_t len, size_t *out_len)
-{
-    const char *base = tok;
-    for (size_t i = 0; i < len; i++) {
-        if (tok[i] == '/') base = tok + i + 1;
-    }
-    *out_len = (size_t)((tok + len) - base);
-    return base;
-}
-
 static int ci_lower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
 
 static int ci_memcmp(const char *a, const char *b, size_t n)
@@ -453,6 +443,25 @@ static int ci_memcmp(const char *a, const char *b, size_t n)
         if (ca != cb) return ca - cb;
     }
     return 0;
+}
+
+/* Strips a leading path off a token -- POSIX '/' or Windows '\',
+ * whichever appears last, so "/usr/bin/sh" and "C:\Windows\System32\
+ * cmd.exe" both resolve to their final component -- and a trailing
+ * ".exe", matched case-insensitively so "cmd.exe" and "CMD.EXE" both
+ * become "cmd". This lets a Windows interpreter invoked by its full path
+ * be recognised as a pipe target the same way as its bare name. */
+static const char *strip_path(const char *tok, size_t len, size_t *out_len)
+{
+    const char *base = tok;
+    for (size_t i = 0; i < len; i++) {
+        if (tok[i] == '/' || tok[i] == '\\') base = tok + i + 1;
+    }
+    size_t blen = (size_t)((tok + len) - base);
+    if (blen >= 4 && ci_memcmp(base + blen - 4, ".exe", 4) == 0)
+        blen -= 4;
+    *out_len = blen;
+    return base;
 }
 
 static int tok_eq(const char *tok, size_t tlen, const char *lit)
@@ -579,6 +588,77 @@ static CmdSafetyLevel scan_redirects(const char *seg, size_t seg_len)
 
 /* ----- Pipe-to-dangerous scanning ----- */
 
+/* Matches "iex" / "Invoke-Expression" (PowerShell's call-a-string-as-code
+ * cmdlet and its alias), case-insensitively -- PowerShell itself ignores
+ * case -- and also the call-operator form glued directly to an opening
+ * paren with no space: "IEX(iwr x)" tokenises as one word, "IEX(iwr",
+ * since next_token() only stops on whitespace and the shell
+ * metacharacters. The 3-letter prefix only matches when the following
+ * character is not an identifier character, so "iexplore" (a different,
+ * real program) is never caught by it. */
+static int tok_is_iex_or_invoke_expression(const char *tok, size_t len)
+{
+    if (tok_eq_ci(tok, len, "iex") || tok_eq_ci(tok, len, "Invoke-Expression"))
+        return 1;
+    if (len > 3 && ci_memcmp(tok, "iex", 3) == 0) {
+        char c = tok[3];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-'))
+            return 1;
+    }
+    return 0;
+}
+
+/* The interpreters CRITICAL as a pipe target: "curl ... | <this>" runs
+ * whatever was downloaded. sh/bash/zsh/dash/ksh/fish/busybox and the
+ * scripting-language REPLs are matched case-sensitively (their names are
+ * case-sensitive on the platforms that ship them); pwsh/powershell/cmd
+ * are matched case-insensitively, like iex/Invoke-Expression above,
+ * because PowerShell and cmd.exe both ignore case. python3.x (any minor
+ * version) is covered by the "python3." prefix. */
+static int is_critical_pipe_interpreter(const char *base, size_t base_len)
+{
+    static const char *case_sensitive_interpreters[] = {
+        "sh", "bash", "zsh", "dash", "ksh", "fish", "busybox",
+        "python", "python2", "python3",
+        "perl", "ruby", "node", "php",
+        NULL
+    };
+    if (tok_in_list(base, base_len, case_sensitive_interpreters))
+        return 1;
+    if (tok_prefix(base, base_len, "python3."))
+        return 1;
+    if (tok_eq_ci(base, base_len, "pwsh") || tok_eq_ci(base, base_len, "powershell")
+        || tok_eq_ci(base, base_len, "cmd"))
+        return 1;
+    if (tok_is_iex_or_invoke_expression(base, base_len))
+        return 1;
+    return 0;
+}
+
+/* Wrappers that never themselves decide a pipe target's severity -- the
+ * command they launch does. Peeled off (with their flags and, for "env",
+ * VAR=value assignments) so "curl x | sudo bash" and "curl x | env sh"
+ * are recognised through them. */
+static int tok_is_pipe_wrapper(const char *tok, size_t len)
+{
+    return tok_eq(tok, len, "sudo") || tok_eq(tok, len, "doas")
+        || tok_eq(tok, len, "env") || tok_eq(tok, len, "nice")
+        || tok_eq(tok, len, "exec") || tok_eq(tok, len, "command");
+}
+
+/* A "-flag" or a VAR=value assignment (env's own syntax): skipped while
+ * peeling wrappers off a pipe target, neither is itself the interpreter. */
+static int tok_is_flag_or_assignment(const char *tok, size_t len)
+{
+    if (len == 0) return 0;
+    if (tok[0] == '-') return 1;
+    for (size_t i = 0; i < len; i++) {
+        if (tok[i] == '=') return 1;
+    }
+    return 0;
+}
+
 static CmdSafetyLevel scan_pipe_target(const char *seg)
 {
     const char *p = seg;
@@ -591,7 +671,7 @@ static CmdSafetyLevel scan_pipe_target(const char *seg)
     size_t base_len;
     base = strip_path(tok_start, tok_len, &base_len);
 
-    if (tok_eq(base, base_len, "sh") || tok_eq(base, base_len, "bash"))
+    if (is_critical_pipe_interpreter(base, base_len))
         return CMD_CRITICAL;
 
     if (tok_eq(base, base_len, "xargs")) {
@@ -607,13 +687,30 @@ static CmdSafetyLevel scan_pipe_target(const char *seg)
         return CMD_WRITE;
     }
 
+    /* "sudo tee ..." writes as root through what looks like an ordinary
+     * pipe target; checked before the generic wrapper peel below because
+     * "tee" is not an interpreter and would otherwise read as harmless. */
     if (tok_eq(base, base_len, "sudo")) {
+        const char *save_p = p;
         const char *next_start;
         size_t next_len;
         if (next_token(&p, &next_start, &next_len)) {
             if (tok_eq(next_start, next_len, "tee"))
                 return CMD_CRITICAL;
         }
+        p = save_p;
+    }
+
+    /* Peel off wrapper commands and their flags/assignments to find the
+     * real interpreter: "curl x | sudo bash", "curl x | env sh". */
+    while (tok_is_pipe_wrapper(base, base_len)) {
+        if (!next_token(&p, &tok_start, &tok_len)) return CMD_READ;
+        while (tok_is_flag_or_assignment(tok_start, tok_len)) {
+            if (!next_token(&p, &tok_start, &tok_len)) return CMD_READ;
+        }
+        base = strip_path(tok_start, tok_len, &base_len);
+        if (is_critical_pipe_interpreter(base, base_len))
+            return CMD_CRITICAL;
     }
 
     return CMD_READ;
@@ -717,6 +814,15 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
         if (reason_buf && reason_buf_size > 0)
             snprintf(reason_buf, reason_buf_size, "critical prefix: %.*s",
                      (int)base1_len, base1);
+        return CMD_CRITICAL;
+    }
+
+    /* PowerShell's iex / Invoke-Expression executes a string as code --
+     * CRITICAL as the command itself, not only as a pipe target. */
+    if (tok_is_iex_or_invoke_expression(base1, base1_len)) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size,
+                     "iex/Invoke-Expression: executes a string as code");
         return CMD_CRITICAL;
     }
 
@@ -4184,11 +4290,32 @@ static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
             if (*p == '\'' && !in_dq) in_sq = !in_sq;
             else if (*p == '"' && !in_sq) in_dq = !in_dq;
             else if (!in_sq && !in_dq) {
-                /* M1: every platform but Linux uses | as a display filter,
-                 * not a shell pipe -- only Linux splits on it (fixes F2). */
-                if (*p == '|' && platform == CMD_PLATFORM_LINUX) break;
+                /* M1: every device platform uses | as a display filter,
+                 * not a shell pipe -- only Linux splits on it (fixes F2).
+                 * So does an unresolved platform, which is Linux plus an
+                 * overlay: without the split, everything after the first
+                 * '|' went unclassified ("cat x | sh" came out READ). */
+                if (*p == '|' && (platform == CMD_PLATFORM_LINUX ||
+                                  platform == CMD_PLATFORM_UNKNOWN)) break;
                 if (*p == ';') break;
                 if (*p == '&' && *(p+1) == '&') break;
+                /* A lone '&' -- the background operator, and PowerShell's
+                 * call operator, as in "& Remove-Item ..." -- is also a
+                 * separator on Linux and an unresolved platform, but
+                 * never when it's part of a redirect (">&2",
+                 * "&>/dev/null", "2>&1"): those never split. Before this,
+                 * next_token() treated a bare '&' as end-of-input, so an
+                 * unsplit segment starting with '&' never reached a first
+                 * token and classified READ: a call-operator launch of
+                 * evil.exe, and a background "cat x" ahead of a
+                 * destructive "rm -rf", both did (classifier holes v1.2.9
+                 * audit). */
+                if (*p == '&' &&
+                    (platform == CMD_PLATFORM_LINUX ||
+                     platform == CMD_PLATFORM_UNKNOWN) &&
+                    *(p + 1) != '>' &&
+                    !(p > command && *(p - 1) == '>'))
+                    break;
             }
             p++;
         }

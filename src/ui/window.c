@@ -814,9 +814,11 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
 
     s->io = session_io_local(pty);
 
-    /* The shell's name, for the AI system prompt (spec section 6). */
+    /* The shell's name, for the AI system prompt (spec section 6). A custom
+     * powershell/pwsh command is named "PowerShell", so the model does not
+     * write bash at it; the kind (and so the platform scan) is unchanged. */
     {
-        const char *name = local_shell_kind_name(kind);
+        const char *name = local_shell_spec_name(spec);
         (void)snprintf(s->shell_name, sizeof(s->shell_name), "%s",
                        name ? name : "");
     }

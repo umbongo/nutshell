@@ -208,3 +208,70 @@ int test_shell_prompt_line_router_positive(void) {
     ASSERT_EQ(shell_prompt_line("router>"), 1);
     TEST_END();
 }
+
+/* ---- PowerShell: "PS <path>> " is primary, PSReadLine's ">> " is not ---- */
+
+int test_shell_prompt_ps_drive_root_positive(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line("PS C:\\>"), 1);
+    ASSERT_EQ(shell_prompt_is_continuation("PS C:\\>"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_ps_home_trailing_space_positive(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line("PS C:\\Users\\x> "), 1);
+    ASSERT_EQ(shell_prompt_is_continuation("PS C:\\Users\\x> "), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_ps_nested_prompt_positive(void) {
+    TEST_BEGIN();
+    /* PowerShell's default prompt adds one '>' per nested prompt level
+     * ($NestedPromptLevel), so "PS C:\>> " is a live primary prompt. Only a
+     * ">>" with nothing before it is the continuation prompt. */
+    ASSERT_EQ(shell_prompt_line("PS C:\\>> "), 1);
+    ASSERT_EQ(shell_prompt_is_continuation("PS C:\\>> "), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_is_continuation_ps_double_gt(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_is_continuation(">>"), 1);
+    ASSERT_EQ(shell_prompt_is_continuation(">> "), 1);
+    ASSERT_EQ(shell_prompt_is_continuation(">>   "), 1);
+    ASSERT_EQ(shell_prompt_is_continuation(" >>\t"), 1);
+    TEST_END();
+}
+
+int test_shell_prompt_line_ps_double_gt_negative(void) {
+    TEST_BEGIN();
+    /* PSReadLine's (and the plain console host's) continuation prompt: the
+     * dispatcher must not send the next command into it. */
+    ASSERT_EQ(shell_prompt_line(">>"), 0);
+    ASSERT_EQ(shell_prompt_line(">> "), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_triple_gt_unchanged(void) {
+    TEST_BEGIN();
+    /* ">>>" (Python's REPL prompt) and "> >" are not PowerShell's
+     * continuation prompt and keep their earlier results. */
+    ASSERT_EQ(shell_prompt_is_continuation(">>>"), 0);
+    ASSERT_EQ(shell_prompt_line(">>>"), 1);
+    ASSERT_EQ(shell_prompt_is_continuation("> >"), 0);
+    TEST_END();
+}
+
+int test_shell_prompt_double_gt_change_keeps_existing_results(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(shell_prompt_line("router>"), 1);
+    ASSERT_EQ(shell_prompt_is_continuation("router>"), 0);
+    ASSERT_EQ(shell_prompt_line("foo>"), 1);
+    ASSERT_EQ(shell_prompt_is_continuation("foo>"), 0);
+    ASSERT_EQ(shell_prompt_line("dquote>"), 0);
+    ASSERT_EQ(shell_prompt_is_continuation("dquote>"), 1);
+    ASSERT_EQ(shell_prompt_line(">"), 0);
+    ASSERT_EQ(shell_prompt_is_continuation(">"), 1);
+    TEST_END();
+}

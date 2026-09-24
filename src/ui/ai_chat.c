@@ -1915,7 +1915,7 @@ static void dispatch_tick(AiChatData *d)
             term_at_continuation_prompt(d->active_term)) {
             d->dispatch_stall_reported = 1;
             chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
-                "[the shell is waiting for more input (a \">\" prompt). "
+                "[the shell is waiting for more input (a \">\" or \">>\" prompt). "
                 "Finish the line in the terminal, or press Stop to cancel.]");
             if (d->hChatList) chat_listview_invalidate(d->hChatList);
         }

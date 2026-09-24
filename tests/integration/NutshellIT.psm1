@@ -350,6 +350,22 @@ function New-NutshellTestEnv {
                          Caller is responsible for writing its own config (or
                          none at all) before launching. HostName/User/KeyPath
                          are still required (unused) to keep one call shape.
+    .PARAMETER ExtraProfiles
+                         Additional saved profiles appended after the generated
+                         SSH one, each a hashtable of the same fields
+                         New-NutshellTestEnv itself writes (name/host/port/
+                         username/auth_type/password/key_path/ai_notes, plus
+                         kind/shell/platform -- see src/config/loader.c's
+                         profile loader for the full field list). Missing
+                         fields are left out of the JSON, so the app's own
+                         config_profile_new() defaults apply (kind "ssh",
+                         platform "auto", port 22, everything else empty) --
+                         e.g. a local PowerShell profile only needs
+                         @{ name = "ps"; kind = "local"; shell = "powershell.exe -NoLogo" }.
+                         Connect to one by name with -sn/-ExtraArgs, same as the
+                         generated profile. Ignored with -NoConfig. Default @()
+                         leaves every existing case's config byte-for-byte
+                         unaffected.
     #>
     param(
         [Parameter(Mandatory)] [string] $Exe,
@@ -358,7 +374,8 @@ function New-NutshellTestEnv {
         [Parameter(Mandatory)] [string] $KeyPath,
         [string] $ProfileName = "it",
         [hashtable] $Settings = @{},
-        [switch] $NoConfig
+        [switch] $NoConfig,
+        [hashtable[]] $ExtraProfiles = @()
     )
     # Scratch lives under the git-ignored artifacts folder, not %TEMP%, so a run
     # whose cleanup was interrupted leaves something visible next to its logs.
@@ -392,7 +409,14 @@ function New-NutshellTestEnv {
             name = $ProfileName; host = $HostName; port = 22; username = $User
             auth_type = "key"; password = ""; key_path = $KeyPath; ai_notes = ""
         }
-        $cfg = [ordered]@{ settings = $s; profiles = @($profile) }
+        $profiles = New-Object System.Collections.ArrayList
+        [void]$profiles.Add($profile)
+        foreach ($p in $ExtraProfiles) {
+            $extra = [ordered]@{}
+            foreach ($k in $p.Keys) { $extra[$k] = $p[$k] }
+            [void]$profiles.Add($extra)
+        }
+        $cfg = [ordered]@{ settings = $s; profiles = @($profiles) }
         $json = $cfg | ConvertTo-Json -Depth 5
         [IO.File]::WriteAllText((Join-Path $root "nutshell.config"), $json, (New-Object Text.UTF8Encoding $false))
     }
