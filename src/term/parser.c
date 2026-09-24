@@ -770,13 +770,15 @@ void term_process(Terminal *term, const char *data, size_t len) {
     }
 
     /* If the cursor moved to a different row, mark the old row dirty
-     * so the renderer erases the old cursor block. */
+     * so the renderer erases the old cursor block. term_screen_to_phys()
+     * (term.h), not a hand-rolled copy of the mapping with its own
+     * `< lines_count` check: prev_cursor_row is a screen row (clamp_cursor()
+     * keeps cursor.row in [0, rows) always), and the row it names is
+     * exactly as real in the sparse state right after a resize as any
+     * other -- the old cursor block needs erasing there too. */
     if (term->cursor.row != prev_cursor_row) {
-        int screen_top = (term->lines_count >= term->rows)
-                         ? (term->lines_count - term->rows) : 0;
-        int logical_old = screen_top + prev_cursor_row;
-        if (logical_old >= 0 && logical_old < term->lines_count) {
-            int phys = (term->lines_start + logical_old) % term->lines_capacity;
+        int phys = term_screen_to_phys(term, prev_cursor_row);
+        if (phys >= 0 && phys < term->lines_capacity && term->lines[phys]) {
             term->lines[phys]->dirty = true;
         }
     }

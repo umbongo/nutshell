@@ -169,4 +169,42 @@ int term_at_continuation_prompt(const Terminal *term);
  * dispatch_line_clear.h and shell_prompt_line_unambiguous(). */
 int term_at_unambiguous_prompt(const Terminal *term);
 
+/* The physical ring-buffer index (into Terminal.lines[]) holding screen
+ * row `screen_row` -- 0-based, 0 is the top of the currently visible
+ * screen. The one mapping every screen-row consumer in this codebase
+ * shares (src/term/buffer.c's internal callers, term_cursor_row_text()
+ * behind term_at_prompt() and friends, src/ui/renderer.c's
+ * get_visible_row(), src/term/parser.c's get_screen_row()) -- or, for
+ * ai_chat.c's dispatch-stall diagnostic, should: a second, hand-written
+ * copy of this mapping is exactly how term_cursor_row_text() used to
+ * disagree with it (see the "sparse state" note on
+ * term_logical_rows() below). Does not itself bound-check the result
+ * against anything but lines_capacity (the modulo); screen_row must
+ * already be known valid (0 <= screen_row < term->rows). */
+int term_screen_to_phys(const Terminal *term, int screen_row);
+
+/* The number of logical rows [0, this) the terminal currently holds real,
+ * readable content for: every row of scrolled history (lines_count), or,
+ * in the sparse state right after a resize (lines_count < rows --
+ * term_resize()/term_reflow_buffer() can leave a freshly resized,
+ * not-yet-scrolled window with fewer committed rows than the screen has,
+ * even though every row of the new screen is pre-allocated, filled and
+ * written to -- see term_screen_to_phys()'s comment above), every row of
+ * the current screen instead, since those are real too.
+ *
+ * A logical index at or past this bound has never been written, or wraps
+ * (via the ring buffer's modulo) into a slot that belongs to something
+ * else entirely. Every consumer that walks *logical* rows by hand --
+ * scrolled history, a selection, the text handed to the AI model, "last N
+ * lines" -- must use this instead of comparing against lines_count
+ * directly, or it inherits the exact bug this replaced: a fresh,
+ * never-scrolled window whose cursor sits past lines_count read as
+ * "nothing here" forever, which is what made term_at_prompt() false
+ * forever after a resize until enough output happened to scroll the
+ * buffer full. (A *screen-row* consumer doesn't need this at all --
+ * term_screen_to_phys() above has no such bound because it needs none.) */
+static inline int term_logical_rows(const Terminal *term) {
+    return term->lines_count > term->rows ? term->lines_count : term->rows;
+}
+
 #endif

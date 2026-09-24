@@ -137,6 +137,36 @@ int test_extract_last_n_basic(void) {
     TEST_END();
 }
 
+/* Regression (2026-09-25): in the sparse-buffer state right after a
+ * resize (lines_count < rows -- see term_screen_to_phys()'s comment in
+ * src/term/term.h), the newest output can sit in a screen row past
+ * lines_count. term_extract_last_n() -- what feeds the AI model's view of
+ * the terminal -- used to scan only [0, lines_count) for "the last row
+ * with content", so it could miss that output entirely and hand the
+ * model a stale or empty screen in a freshly resized tab. Same
+ * 50-rows-shrunk-to-29 reproduction as test_term_at_prompt_sparse_after_
+ * resize_shrink (test_term.c), which pins lines_count == 1 here too. */
+int test_extract_last_n_sparse_after_resize_shrink(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(50, 76, 3000);
+    term_resize(t, 29, 76);
+    ASSERT_EQ(t->lines_count, 1);
+
+    static const char out[] = "line one\r\nline two\r\nPS C:\\Users\\thoma> ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_TRUE(t->cursor.row >= t->lines_count);
+
+    char buf[1024];
+    size_t n = term_extract_last_n(t, 50, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "line one") != NULL);
+    ASSERT_TRUE(strstr(buf, "line two") != NULL);
+    ASSERT_TRUE(strstr(buf, "PS C:\\Users\\thoma>") != NULL);
+
+    term_free(t);
+    TEST_END();
+}
+
 int test_extract_last_n_with_scrollback(void) {
     TEST_BEGIN();
     /* 3 rows, 5 scrollback. Write 6 lines to push into scrollback. */

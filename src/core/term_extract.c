@@ -8,7 +8,7 @@
  * trailing NUL/space cells are dropped; a NUL cell counts as one space byte. */
 static size_t row_byte_len(const Terminal *term, int logical)
 {
-    if (logical < 0 || logical >= term->lines_count) return 0;
+    if (logical < 0 || logical >= term_logical_rows(term)) return 0;
     int physical = (term->lines_start + logical) % term->lines_capacity;
     TermRow *row = term->lines[physical];
     if (!row) return 0;
@@ -42,7 +42,7 @@ static size_t extract_rows(const Terminal *term, int start_logical, int count,
     int last_nonempty = -1;
     for (int r = 0; r < count; r++) {
         int logical = start_logical + r;
-        if (logical < 0 || logical >= term->lines_count) continue;
+        if (logical < 0 || logical >= term_logical_rows(term)) continue;
         int physical = (term->lines_start + logical) % term->lines_capacity;
         TermRow *row = term->lines[physical];
         if (row && row->len > 0) last_nonempty = r;
@@ -71,7 +71,7 @@ static size_t extract_rows(const Terminal *term, int start_logical, int count,
 
     for (int r = first; r <= last_nonempty; r++) {
         int logical = start_logical + r;
-        if (logical < 0 || logical >= term->lines_count) continue;
+        if (logical < 0 || logical >= term_logical_rows(term)) continue;
 
         int physical = (term->lines_start + logical) % term->lines_capacity;
         TermRow *row = term->lines[physical];
@@ -125,9 +125,15 @@ static int last_n_range(const Terminal *term, int n, int *start, int *count)
 {
     /* Anchor at the last row that actually has content — lines_count is
      * fixed at term->rows for a screen that has never scrolled, so blank
-     * rows below the cursor must not count toward "the last N lines". */
+     * rows below the cursor must not count toward "the last N lines".
+     * The scan itself must run over term_logical_rows(term), not
+     * lines_count directly: in the sparse state right after a resize
+     * (lines_count < rows), the newest output can sit in a row past
+     * lines_count -- scanning only [0, lines_count) missed exactly that
+     * output, which is what could leave the model looking at a stale
+     * screen in a freshly resized tab. */
     int end_row = -1;
-    for (int r = term->lines_count - 1; r >= 0; r--) {
+    for (int r = term_logical_rows(term) - 1; r >= 0; r--) {
         if (row_byte_len(term, r) > 0) { end_row = r; break; }
     }
     if (end_row < 0) return 0;
