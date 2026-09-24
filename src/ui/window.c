@@ -55,6 +55,7 @@
 #include "worker_life.h"
 #include "ai_stream.h"
 #include "secure_zero.h"
+#include "conn_prompt.h"
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <gdiplus.h>       /* GDI+ flat API (includes gdiplusflat.h) */
 
@@ -73,6 +74,11 @@ static int g_left_margin = TERM_LEFT_MARGIN;
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
 #define WM_CONN_DONE            (WM_USER + 2)
 #define WM_STARTUP_CONNECT      (WM_USER + 3)
+/* Posted by connection_thread (worker) to ask the UI thread to show the
+ * host-key or passphrase dialog for the job and slot generation packed
+ * into `wParam` (CONN_PROMPT_WPARAM() below); lParam is the
+ * ConnUiRequest* the worker is blocked on (see conn_ui_ask() below). */
+#define WM_CONN_PROMPT          (WM_USER + 4)
 
 /* Bound on platform-detection attempts per session: counts poll ticks that
  * delivered new bytes (the transport poll returning > 0), not raw timer ticks, so a
@@ -149,6 +155,16 @@ typedef struct ConnJob {
     SSHChannel *channel;
     int         result;         /* 0=ok, 1=tcp/ssh, 2=auth, 3=channel */
     char        error[512];
+    /* The ConnUiRequest the worker is currently blocked on (conn_ui_ask()),
+     * if any -- see src/core/conn_prompt.h for the ownership protocol this
+     * slot implements and conn_ui_request_cancel()/the WM_CONN_PROMPT
+     * handler below for how it's used. This slot says nothing about
+     * whether `job` itself (this ConnJob) is still alive: showing a modal
+     * dialog pumps the whole thread's message queue, so anything can
+     * happen underneath it, including this job being cancelled and freed.
+     * Never hold a ConnJob* across a call that can pump messages -- always
+     * re-resolve it from the live session list by job id first. */
+    ConnPromptSlot pending_req;
 } ConnJob;
 
 /* Connection jobs allocated and not yet freed, process-wide. Exit waits a
@@ -170,6 +186,169 @@ static void conn_job_release(ConnJob *j)
 {
     if (j && worker_life_release(&j->life))
         conn_job_free(j);
+}
+
+/* ---- Connect-thread UI prompts (host-key decision, passphrase) --------- */
+/*
+ * The connection thread cannot show a modal dialog itself -- a window
+ * owned by the main (UI) thread's hwnd must be created and pumped on that
+ * thread, not on a background thread. Instead it fills in a ConnUiRequest,
+ * publishes it on the job's slot (ConnJob.pending_req, src/core/conn_prompt.h)
+ * and posts WM_CONN_PROMPT, then blocks on `done_event`. The UI thread's
+ * WM_CONN_PROMPT handler (see WndProc) shows the same dialog it always
+ * has, writes the answer into the request and signals the event.
+ *
+ * If the window is closing, the connection is cancelled, or the tab is
+ * closed while the worker waits, conn_ui_request_cancel() -- called from
+ * the same places that already call worker_life_cancel() on the job, in
+ * that order (see the comment there) -- claims the request itself,
+ * resolves it as rejected and signals the event, so the worker never
+ * hangs. conn_prompt_slot_claim()/conn_prompt_slot_cancel_and_claim()
+ * (src/core/conn_prompt.h) are what make it safe for either side to touch
+ * the request's memory at all: whichever one wins the claim is its sole,
+ * exclusive owner from then on. See the WM_CONN_PROMPT handler for why
+ * the UI side must still re-derive both the ConnJob and the request from
+ * scratch (by job id, then conn_prompt_slot_holds()) after showing the
+ * dialog, rather than trust the pointers it started with.
+ *
+ * WM_CONN_PROMPT's wParam packs both the job id and the slot's generation
+ * number for this publish (conn_prompt_slot_publish()'s return value)
+ * into one 64-bit WPARAM -- see CONN_PROMPT_WPARAM()/_JOB_ID()/_SEQ()
+ * below. The generation is what stops a stale message from matching a
+ * request it doesn't belong to: connection_thread can ask twice in a row
+ * on the same job (host-key, then passphrase), each from a `ConnUiRequest
+ * req` local at the very same call site, which a compiler is free to
+ * place at the exact same stack address once the first call has
+ * returned. A message carrying only the address and the job id could
+ * then, in principle, be read as referring to the second request even
+ * though it was posted for the first -- the generation number, carried
+ * in the message itself rather than read back out of the (possibly
+ * already-reused) request memory, rules that out.
+ *
+ * Two jobs can end up with prompts nested inside each other's dialogs
+ * (GetMessage pumps the whole thread, so WM_CONN_PROMPT for job B can be
+ * dispatched from inside job A's own modal loop). Nesting isn't prevented
+ * -- each prompt's loop now watches only its own window (see
+ * prompt_passphrase()), so one closing can no longer be confused for the
+ * other closing, and each job's slot/claim protocol is independent of
+ * every other job's. Deferring the second prompt until the first closes
+ * would avoid the double dialog on screen, but needs its own queue and
+ * its own interaction with cancellation (what happens to a deferred
+ * request for a job that gets cancelled before its turn?) for a rare
+ * case (two connections needing a decision at nearly the same moment)
+ * that is already correct, just not the prettiest possible UI -- not
+ * worth it here.
+ */
+typedef enum { CONN_UI_HOSTKEY, CONN_UI_PASSPHRASE } ConnUiKind;
+
+typedef struct ConnUiRequest {
+    ConnUiKind kind;
+    /* CONN_UI_HOSTKEY: dlg_msg/title/flags are stack buffers owned by the
+     * worker, valid for the request's whole lifetime (the worker only
+     * frees its stack frame after done_event is signalled). */
+    const char *title;
+    const char *message;
+    UINT        mb_flags;
+    /* CONN_UI_PASSPHRASE: filled by the UI thread iff it resolves the
+     * request with answer=1 (OK pressed); wiped by whichever side last
+     * touches it. */
+    char        passphrase[256];
+    HANDLE      done_event;
+    /* Written by whichever side wins the slot claim, always *before*
+     * SetEvent(done_event) -- that ordering (a plain write, then the
+     * Win32 event) is what makes it safe for conn_ui_ask() to read this
+     * back after WaitForSingleObject() returns without its own atomics:
+     * the claim already guarantees exclusive access, so there is nothing
+     * left to race. */
+    int         answer;
+} ConnUiRequest;
+
+/* WPARAM is 64-bit on this project's one target (x86_64-w64-mingw32, per
+ * CLAUDE.md) -- plenty of room for two 32-bit values. */
+#define CONN_PROMPT_WPARAM(job_id, seq) \
+    (((WPARAM)(seq) << 32) | (WPARAM)(unsigned)(job_id))
+#define CONN_PROMPT_WPARAM_JOB_ID(wp) ((unsigned)((wp) & 0xFFFFFFFFu))
+#define CONN_PROMPT_WPARAM_SEQ(wp)    ((unsigned)((wp) >> 32))
+
+/* Take ownership of job `j`'s currently pending request, if any, resolve it
+ * as rejected and wake whichever thread is waiting on it. Idempotent and
+ * safe to call from either thread, any number of times (a second call
+ * after the request has already been claimed -- by this same cancel, or by
+ * the UI thread resolving it with a real answer -- is a no-op, per
+ * conn_prompt_slot_cancel_and_claim()), which is also what performs the
+ * "cancel the slot, then claim" ordering this depends on -- see its doc
+ * in src/core/conn_prompt.h for why that has to be one function. */
+static void conn_ui_request_cancel(ConnJob *j)
+{
+    if (!j) return;
+    ConnUiRequest *owned =
+        (ConnUiRequest *)conn_prompt_slot_cancel_and_claim(&j->pending_req);
+    if (!owned) return;
+    if (owned->kind == CONN_UI_PASSPHRASE)
+        secure_zero(owned->passphrase, sizeof(owned->passphrase));
+    owned->answer = 0;
+    SetEvent(owned->done_event);
+}
+
+/* Worker-thread side: ask the UI thread to show the host-key or passphrase
+ * dialog and block until it is answered or the job is cancelled. Returns
+ * the dialog's answer (e.g. IDYES/IDNO for the host-key box, 1/0 for
+ * "passphrase entered") or 0 (reject) if the request was cancelled instead
+ * of answered, including a PostMessage failure -- treated the same as a
+ * cancel, fail closed. On CONN_UI_PASSPHRASE, `passphrase_out` (a
+ * caller-owned buffer of at least 256 bytes) receives the entered
+ * passphrase iff the return value is nonzero; the request's own copy is
+ * always wiped with secure_zero() before returning, whether or not it was
+ * used. */
+static int conn_ui_ask(ConnJob *j, ConnUiKind kind, const char *title,
+                        const char *message, UINT mb_flags,
+                        char *passphrase_out)
+{
+    ConnUiRequest req;
+    memset(&req, 0, sizeof(req));
+    req.kind     = kind;
+    req.title    = title;
+    req.message  = message;
+    req.mb_flags = mb_flags;
+    req.answer   = 0;
+
+    req.done_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (!req.done_event) return 0; /* fail closed: can't wait, so reject */
+
+    /* Publish before checking whether we've been cancelled -- see
+     * conn_prompt_slot_publish()'s doc for why that order is required.
+     * Checked two ways, belt and suspenders: the slot's own sticky flag
+     * (self-contained -- correct regardless of call-site ordering, since
+     * conn_ui_request_cancel() always cancels its slot before claiming)
+     * and WorkerLife's (which free_session()/start_connection() set
+     * *before* calling conn_ui_request_cancel(), specifically so this
+     * check sees it too). */
+    unsigned seq = conn_prompt_slot_publish(&j->pending_req, &req);
+
+    if (worker_life_cancelled(&j->life) ||
+        conn_prompt_slot_cancelled(&j->pending_req) ||
+        !PostMessage(j->hwnd, WM_CONN_PROMPT,
+                      CONN_PROMPT_WPARAM(j->id, seq), (LPARAM)&req)) {
+        /* Either already cancelled, or the post failed (window gone) --
+         * reclaim it ourselves; a no-op if a concurrent UI-thread cancel
+         * already claimed it first (conn_prompt_slot_claim() is safe to
+         * call either way). */
+        if (conn_prompt_slot_claim(&j->pending_req, &req, seq)) {
+            req.answer = 0;
+            SetEvent(req.done_event);
+        }
+    }
+
+    WaitForSingleObject(req.done_event, INFINITE);
+    CloseHandle(req.done_event);
+
+    int answer = req.answer;
+    if (kind == CONN_UI_PASSPHRASE && passphrase_out && answer) {
+        strncpy(passphrase_out, req.passphrase, 255);
+        passphrase_out[255] = '\0';
+    }
+    secure_zero(req.passphrase, sizeof(req.passphrase));
+    return answer;
 }
 
 /* Build the known_hosts file path: %APPDATA%\sshclient\known_hosts.
@@ -430,8 +609,8 @@ static Session *create_session(int rows, int cols) {
      * reads it) and for the SSH-only last_socket_data_tick,
      * last_keepalive_tick and prev_bytes_read fields (nothing reads them
      * before session_connect() or the first successful recv() sets them).
-     * last_term_input_tick is
-     * different: a session driven entirely from the AI panel may never
+     * last_term_input_tick is different: a session driven entirely from
+     * the AI panel may never
      * get a single terminal keystroke, and dispatch_tick()'s no-prefix
      * safety check (SessionIo.last_input_tick, src/term/session_io.h)
      * reads it on the very first command of such a session -- an
@@ -490,9 +669,19 @@ static void free_session(Session *s) {
         key_oneshot_clear();
         /* Never free a session under its connection thread: cancel the
          * attempt and let go of it. The thread frees the job (and any SSH
-         * session it opened) when it finishes. */
+         * session it opened) when it finishes. worker_life_cancel() must
+         * run *before* conn_ui_request_cancel(): the worker's conn_ui_ask()
+         * publishes its request and only then checks whether it has been
+         * cancelled (conn_prompt_slot_publish()'s doc explains why that
+         * order matters on its side); cancelling the WorkerLife first
+         * guarantees that check -- whenever it runs -- observes the
+         * cancellation even if conn_ui_request_cancel()'s own claim raced
+         * ahead of the worker's publish and found nothing pending yet.
+         * Reversing these two calls reopens a window where the worker
+         * ends up PostMessage'd and waiting with nobody left to answer it. */
         if (s->conn_job) {
             worker_life_cancel(&s->conn_job->life);
+            conn_ui_request_cancel(s->conn_job);
             conn_job_release(s->conn_job);
             s->conn_job = NULL;
         }
@@ -600,6 +789,18 @@ static void on_tab_close(int index, void *user_data) {
         g_active_session ? g_active_session->term : NULL);
 }
 
+/* The ordinary "not handled specially" step of a message loop --
+ * ui_run()'s main loop and every nested modal loop in this file
+ * (prompt_passphrase() below; show_about_dialog() has its own, smaller
+ * variant since it has no fallback-dispatch branch to share) call this
+ * for a message they don't intercept themselves, so they can never drift
+ * apart on what "just pump it" means. */
+static void pump_dispatch(MSG *m)
+{
+    TranslateMessage(m);
+    DispatchMessage(m);
+}
+
 /* ---- Passphrase prompt --------------------------------------------------- */
 
 typedef struct { char buf[256]; int ok; } PassCtx;
@@ -639,7 +840,30 @@ static LRESULT CALLBACK pass_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         }
         return 0;
     case WM_DESTROY:
-        PostQuitMessage(0);
+        /* Clear the EDIT control's own text (control id 101, created in
+         * WM_CREATE above) before it -- and this window -- go away. The
+         * IDOK handler already copied it into ctx->buf; the control's own
+         * internal text buffer is a second copy of the passphrase this
+         * process would otherwise leave sitting in memory. WM_DESTROY is
+         * the one place that runs on every path this dialog can end on --
+         * OK, Cancel, the WM_QUIT path in prompt_passphrase(), and (Win32
+         * destroys owned windows when their owner is destroyed) the main
+         * window going away while this one is still up -- so it covers
+         * all of them without needing the same call at every DestroyWindow
+         * site. The child windows are still valid here; they aren't torn
+         * down until after this handler returns. */
+        SetDlgItemTextA(hwnd, 101, "");
+        /* No PostQuitMessage() here: prompt_passphrase()'s loop watches
+         * this window's own handle (IsWindow(hwnd)) to know when to stop,
+         * not WM_QUIT. Posting WM_QUIT on every ordinary close (which is
+         * what happens whenever the user answers this dialog -- the
+         * common case, not just shutdown) used to be swallowed by that
+         * same loop and worked only by coincidence when nothing else was
+         * pumping messages concurrently; nested inside another modal loop
+         * (a host-key MessageBox, another tab's own passphrase prompt) it
+         * could instead terminate the *wrong* loop, or eat the real
+         * app-exit WM_QUIT so ui_run() never sees it and the process
+         * hangs after its window is gone. See prompt_passphrase(). */
         return 0;
     }
     return DefWindowProcA(hwnd, msg, wp, lp);
@@ -683,28 +907,62 @@ static int prompt_passphrase(HWND parent, char *out, int out_size)
         SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
     }
 
-    if (parent) EnableWindow(parent, FALSE);
+    /* was_disabled: re-enable `parent` only if we're the one who disabled
+     * it. Skipping that check used to always re-enable it, which is wrong
+     * whenever this prompt is showing nested inside some other modal that
+     * had already disabled `parent` itself (another tab's own prompt, a
+     * host-key MessageBox, the Settings window) -- this prompt closing
+     * would then prematurely re-enable the main window out from under
+     * whichever outer modal is still on screen. */
+    BOOL was_disabled = FALSE;
+    if (parent) was_disabled = EnableWindow(parent, FALSE);
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
 
+    /* IsWindow(hwnd), not WM_QUIT, ends this loop -- see pass_wnd_proc's
+     * WM_DESTROY comment. GetMessageA still pumps the whole thread's
+     * queue (so other windows -- Settings, another tab's own prompt --
+     * keep receiving and, via the fallback pump_dispatch() below, keep
+     * handling their own messages exactly as ui_run()'s main loop would),
+     * but if it ever does return 0 -- a genuine WM_QUIT, meaning the
+     * process is actually exiting -- that message must not be swallowed
+     * here: repost it for ui_run()'s own loop to see, and treat the
+     * prompt itself as cancelled. */
     MSG m;
-    while (GetMessageA(&m, NULL, 0, 0) > 0) {
-        if (!IsDialogMessageA(hwnd, &m)) {
-            TranslateMessage(&m);
-            DispatchMessageA(&m);
-        }
+    int gm = 0;
+    while (IsWindow(hwnd) && (gm = GetMessageA(&m, NULL, 0, 0)) > 0) {
+        if (!IsDialogMessageA(hwnd, &m))
+            pump_dispatch(&m);
+    }
+    if (IsWindow(hwnd)) {
+        /* The loop exited without the dialog destroying itself (OK/Cancel
+         * already would have via pass_wnd_proc's WM_COMMAND, which also
+         * clears the edit control's own text -- see its WM_DESTROY). Two
+         * ways that happens: gm == 0 is a real WM_QUIT (the process is
+         * actually exiting) and must be forwarded so ui_run()'s own loop
+         * still sees it; gm == -1 is a GetMessageA error (e.g. some
+         * unrelated invalid window handle on this thread) with no real
+         * quit involved and `m` not meaningfully populated -- reposting
+         * m.wParam in that case would forward garbage as an exit code.
+         * Either way the prompt itself is cancelled (ctx.ok stays at its
+         * default, 0) and the window must go -- DestroyWindow() also
+         * clears its own edit text via WM_DESTROY, so no zombie dialog is
+         * left with a GWLP_USERDATA pointing at this returning frame. */
+        DestroyWindow(hwnd);
+        if (gm == 0)
+            PostQuitMessage((int)m.wParam);
     }
 
-    if (parent) EnableWindow(parent, TRUE);
+    if (parent && !was_disabled) EnableWindow(parent, TRUE);
 
     if (ctx.ok && out && out_size > 0) {
         strncpy(out, ctx.buf, (size_t)(out_size - 1));
         out[out_size - 1] = '\0';
-        SecureZeroMemory(ctx.buf, sizeof(ctx.buf));
+        secure_zero(ctx.buf, sizeof(ctx.buf));
         return 1;
     }
     /* M-5: zero passphrase buffer on cancellation too */
-    SecureZeroMemory(ctx.buf, sizeof(ctx.buf));
+    secure_zero(ctx.buf, sizeof(ctx.buf));
     return 0;
 }
 
@@ -1014,7 +1272,10 @@ static int start_connection(Session *s, HWND hwnd)
 {
     if (!s) return 0;
     if (s->conn_job) {                    /* never two attempts at once */
+        /* worker_life_cancel() before conn_ui_request_cancel() -- see the
+         * matching comment in free_session(). */
         worker_life_cancel(&s->conn_job->life);
+        conn_ui_request_cancel(s->conn_job);
         conn_job_release(s->conn_job);
         s->conn_job = NULL;
     }
@@ -1022,6 +1283,7 @@ static int start_connection(Session *s, HWND hwnd)
     if (!j) return 0;
     InterlockedIncrement(&g_live_conn_jobs);
     worker_life_init(&j->life);
+    conn_prompt_slot_init(&j->pending_req);
     j->id      = worker_life_next_id();
     j->hwnd    = hwnd;
     j->profile = s->conn_profile;
@@ -1069,7 +1331,10 @@ static DWORD WINAPI connection_thread(LPVOID param)
 
     if (CONN_CANCELLED()) { snprintf(j->error, sizeof(j->error), "Cancelled."); CONN_FAIL(1); }
 
-    /* Host key verification (MessageBoxA is thread-safe on Win32).
+    /* Host key verification. The decision dialog is shown by the UI thread
+     * (conn_ui_ask() below posts WM_CONN_PROMPT and blocks) -- never a
+     * modal window created directly on this thread, even though its owner
+     * (hwnd) belongs to the UI thread.
      * j->hostkey_strict was snapshotted on the UI thread from
      * g_config->settings.host_key_verification before this thread started --
      * "strict" refuses an unknown or changed key outright; anything else
@@ -1171,7 +1436,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
                 flags = (UINT)MB_YESNO | MB_ICONSTOP | MB_DEFBUTTON2;
             }
 
-            int ans = MessageBoxA(hwnd, dlg_msg, title, flags);
+            int ans = conn_ui_ask(j, CONN_UI_HOSTKEY, title, dlg_msg, flags, NULL);
             if (ans == IDYES) {
                 if (knownhosts_add(&kh, info->host, info->port, key, key_len, key_type)
                     != KNOWNHOSTS_OK) {
@@ -1201,7 +1466,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
         if (auth_rc != 0) {
             char passphrase[256];
             memset(passphrase, 0, sizeof(passphrase));
-            if (prompt_passphrase(hwnd, passphrase, (int)sizeof(passphrase))) {
+            if (conn_ui_ask(j, CONN_UI_PASSPHRASE, NULL, NULL, 0, passphrase)) {
                 auth_rc = ssh_auth_key(j->ssh, info->username, info->key_path, passphrase);
                 if (auth_rc == 0) {
                     strncpy(j->ssh->cached_passphrase, passphrase,
@@ -1209,7 +1474,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
                     j->ssh->cached_passphrase[sizeof(j->ssh->cached_passphrase) - 1u] = '\0';
                 }
             }
-            SecureZeroMemory(passphrase, sizeof(passphrase));
+            secure_zero(passphrase, sizeof(passphrase));
         }
     } else {
         auth_rc = ssh_auth_password(j->ssh, info->username, info->password);
@@ -3933,6 +4198,84 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
+        case WM_CONN_PROMPT: {
+            /* Posted by connection_thread (a worker) to have the UI thread
+             * show the host-key or passphrase dialog it is blocked on --
+             * see the ConnUiRequest comment above ConnJob and conn_ui_ask().
+             * wParam packs the job id and the slot generation this request
+             * was published under (CONN_PROMPT_WPARAM()); lParam is a
+             * ConnUiRequest* that is only safe to dereference for as long
+             * as this job's slot still holds it *on that generation*
+             * (src/core/conn_prompt.h -- the generation is what tells a
+             * stale message for an address-reused request apart from a
+             * live one) -- so this handler never trusts it (or the
+             * ConnJob it belongs to) without checking first, and checks
+             * *again* after showing the dialog: that call pumps this
+             * thread's whole message queue, and a nested WM_CLOSE/
+             * WM_DESTROY (the window closing, Task Manager "End task") can
+             * run free_session() for this very job in the middle of it,
+             * which cancels and may drop the job's last reference --
+             * freeing it -- before this handler gets control back. Holding
+             * onto the ConnJob* or reading req's fields across that gap
+             * would be a use-after-free.
+             *
+             * Known UX gap, not a correctness one: if job B's prompt gets
+             * dispatched nested inside job A's still-open passphrase
+             * dialog (see the section comment above), B's dialog closing
+             * re-enables the main window (was_disabled inside
+             * prompt_passphrase() only tracks *that* call's own disable,
+             * not any outer one) while A's is still on screen. This
+             * handler holds no pointers across that gap either way, and
+             * on_tab_close() refuses to close a tab that is still
+             * CONN_CONNECTING, so the prematurely-enabled window cannot be
+             * used to tear down a job whose prompt is up -- just a window
+             * that looks more interactive than it safely is for a moment. */
+            unsigned job_id = CONN_PROMPT_WPARAM_JOB_ID(wParam);
+            unsigned seq    = CONN_PROMPT_WPARAM_SEQ(wParam);
+            ConnUiRequest *req = (ConnUiRequest *)lParam;
+
+            Session *s = g_session_list;
+            while (s && !(s->conn_job && s->conn_job->id == job_id))
+                s = s->next;
+            if (!s || !conn_prompt_slot_holds(&s->conn_job->pending_req, req, seq))
+                return 0;   /* already claimed by a cancellation, or stale */
+
+            int ans = 0;
+            char passbuf[256];
+            passbuf[0] = '\0';
+
+            /* MessageBoxA manages its owner's enabled state itself;
+             * prompt_passphrase() does the same for its own parent
+             * (restoring only the state it found, not unconditionally --
+             * see its own comment) -- neither needs an extra wrap here,
+             * and an extra one here could only prematurely re-enable hwnd
+             * out from under some other modal still on screen (Settings,
+             * WM_CONN_DONE's error box, another tab's prompt). */
+            if (req->kind == CONN_UI_HOSTKEY) {
+                ans = MessageBoxA(hwnd, req->message, req->title, req->mb_flags);
+            } else {
+                ans = prompt_passphrase(hwnd, passbuf, (int)sizeof(passbuf));
+            }
+
+            /* Re-resolve from scratch -- do not reuse `s`/its conn_job from
+             * above, per the comment at the top of this handler. */
+            Session *s2 = g_session_list;
+            while (s2 && !(s2->conn_job && s2->conn_job->id == job_id))
+                s2 = s2->next;
+            if (s2 && conn_prompt_slot_claim(&s2->conn_job->pending_req, req, seq)) {
+                if (req->kind == CONN_UI_PASSPHRASE && ans)
+                    strncpy(req->passphrase, passbuf, sizeof(req->passphrase) - 1);
+                req->answer = ans;
+                SetEvent(req->done_event);
+            }
+            /* Else: a cancellation already claimed and resolved it while
+             * the dialog was up -- nothing left for us to do, and nothing
+             * above was unsafe to reach (s2/its conn_job, not the stale
+             * s/job from before the dialog). */
+            secure_zero(passbuf, sizeof(passbuf));
+            return 0;
+        }
+
         case WM_CONN_DONE: {
             /* wParam is the job id. Resolve it against the live sessions:
              * if the tab was closed meanwhile, its job was orphaned and the
@@ -4760,8 +5103,7 @@ void ui_init(HINSTANCE instance) {
 void ui_run(void) {
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0) > 0) {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        pump_dispatch(&msg);
     }
     /* A worker still running after the bounded waits in WM_DESTROY -- a
      * connection blocked in a slow TCP connect or on an unanswered host-key

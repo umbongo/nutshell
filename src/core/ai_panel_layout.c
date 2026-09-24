@@ -161,3 +161,43 @@ int ai_thinking_summary(int words, int streaming, char *buf, size_t cap)
     }
     return (int)strlen(buf);
 }
+
+int thinking_wheel_over_box(NsRect body, int viewport_h, int full_content_h,
+                             int cursor_x, int cursor_y)
+{
+    if (body.w <= 0 || body.h <= 0) return 0;
+    if (full_content_h <= body.h) return 0;   /* nothing to scroll */
+
+    /* Clip the body rect to the viewport -- a box taller than the
+     * viewport, or scrolled partly above/below it, is still interactive
+     * over whichever part of it is actually on screen. */
+    int vis_top = body.y > 0 ? body.y : 0;
+    int vis_bottom = body.y + body.h < viewport_h ? body.y + body.h : viewport_h;
+    if (vis_top >= vis_bottom) return 0;  /* entirely off-screen */
+
+    if (cursor_x < body.x || cursor_x >= body.x + body.w) return 0;
+    if (cursor_y < vis_top || cursor_y >= vis_bottom) return 0;
+
+    return 1;
+}
+
+int thinking_wheel_should_chain(int old_scroll, int max_scroll, int wheel_delta)
+{
+    if (max_scroll < 0) max_scroll = 0;
+    if (max_scroll <= 0) return 1;  /* nothing to scroll: always chain */
+
+    if (wheel_delta > 0) return old_scroll <= 0;             /* at top */
+    if (wheel_delta < 0) return old_scroll >= max_scroll;    /* at bottom */
+    return 1;  /* no motion at all: nothing for the box to do */
+}
+
+int thinking_wheel_scroll(int old_scroll, int wheel_delta, int scroll_amount_px,
+                           int max_scroll)
+{
+    if (max_scroll < 0) max_scroll = 0;
+
+    int new_scroll = old_scroll - (wheel_delta * scroll_amount_px) / NS_WHEEL_DELTA;
+    if (new_scroll < 0) new_scroll = 0;
+    if (new_scroll > max_scroll) new_scroll = max_scroll;
+    return new_scroll;
+}
