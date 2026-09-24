@@ -422,6 +422,27 @@ static Session *create_session(int rows, int cols) {
     s->platform_locked = 0;
     s->platform_scanned = 0;
     s->platform_scan_ticks = 0;
+    /* xmalloc() does not zero: every DWORD/uint64_t tick field left out of
+     * this list is indeterminate heap content until its own code path
+     * first assigns it. That was harmless for last_user_input_tick (every
+     * real session gets a keystroke, a wheel scroll or an AI-panel
+     * keypress within moments, self-healing the garbage before anything
+     * reads it) and for the SSH-only last_socket_data_tick,
+     * last_keepalive_tick and prev_bytes_read fields (nothing reads them
+     * before session_connect() or the first successful recv() sets them).
+     * last_term_input_tick is
+     * different: a session driven entirely from the AI panel may never
+     * get a single terminal keystroke, and dispatch_tick()'s no-prefix
+     * safety check (SessionIo.last_input_tick, src/term/session_io.h)
+     * reads it on the very first command of such a session -- an
+     * indeterminate value there is compared against GetTickCount() as if
+     * it meant something. Zero reads as "long ago", the correct default
+     * for "never". */
+    s->last_socket_data_tick = 0;
+    s->last_keepalive_tick   = 0;
+    s->last_user_input_tick  = 0;
+    s->last_term_input_tick  = 0;
+    s->prev_bytes_read       = 0;
     s->next = g_session_list;
     g_session_list = s;
     return s;
