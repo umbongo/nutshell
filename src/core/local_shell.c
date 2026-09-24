@@ -673,6 +673,17 @@ static int resolve_unquoted_spaced(const LocalShellProbe *probe, const char *cmd
     while (end > 0 && cmd[end - 1] == ' ') end--; /* collapse repeated spaces */
     if (end == 0) return 0;
 
+    /* The part after the split is taken as arguments. If it holds a path
+     * separator, the split most likely cut the path itself (a missing
+     * "C:\Program Files\Foo\foo.exe" would otherwise try "C:\Program" and
+     * then "C:\Program.exe"): refuse and ask for quotes rather than run a
+     * shorter, unintended path. A '/' that starts an argument is a Windows
+     * switch ("/k"), not a path separator. */
+    for (const char *r = cmd + i; r < cmd + len; r++) {
+        if (*r == '\\') return 0;
+        if (*r == '/' && r > cmd + i && r[-1] != ' ') return 0;
+    }
+
     if (candidate_exe_exists(probe, cmd, end, exe_out, exe_size)) {
         const char *rest = cmd + end;
         while (*rest == ' ') rest++;

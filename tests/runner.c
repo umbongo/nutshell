@@ -2587,6 +2587,7 @@ int test_local_shell_resolve_bare_noop_for_quoted_absolute_with_spaces(void);
 int test_local_shell_resolve_bare_unquoted_spaced_picks_longest_existing_prefix(void);
 int test_local_shell_resolve_bare_unquoted_spaced_appends_exe(void);
 int test_local_shell_resolve_bare_unquoted_spaced_refuses_shorter_match(void);
+int test_local_shell_resolve_bare_unquoted_spaced_refuses_cut_path(void);
 int test_local_shell_resolve_bare_unquoted_spaced_refuses_second_argument(void);
 int test_local_shell_resolve_bare_unquoted_spaced_no_args_matches_whole_string(void);
 int test_local_shell_resolve_bare_unquoted_spaced_rejected_when_nothing_exists(void);
@@ -5248,6 +5249,7 @@ int main(void) {
     failed += test_local_shell_resolve_bare_unquoted_spaced_picks_longest_existing_prefix();
     failed += test_local_shell_resolve_bare_unquoted_spaced_appends_exe();
     failed += test_local_shell_resolve_bare_unquoted_spaced_refuses_shorter_match();
+    failed += test_local_shell_resolve_bare_unquoted_spaced_refuses_cut_path();
     failed += test_local_shell_resolve_bare_unquoted_spaced_refuses_second_argument();
     failed += test_local_shell_resolve_bare_unquoted_spaced_no_args_matches_whole_string();
     failed += test_local_shell_resolve_bare_unquoted_spaced_rejected_when_nothing_exists();

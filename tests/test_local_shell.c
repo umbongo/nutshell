@@ -830,6 +830,26 @@ int test_local_shell_resolve_bare_unquoted_spaced_refuses_shorter_match(void)
     TEST_END();
 }
 
+int test_local_shell_resolve_bare_unquoted_spaced_refuses_cut_path(void)
+{
+    TEST_BEGIN();
+    /* A missing exe whose path has a single space: the one split candidate
+     * would be "C:\Program" (+ ".exe"). The remainder holds a path
+     * separator, so the split cut the path -- refuse, never run the
+     * shorter file. */
+    FakeProbeData d;
+    fake_reset(&d);
+    fake_add_path(&d, "C:\\Program.exe");
+    fake_add_path(&d, "C:\\Program");
+    LocalShellProbe p = fake_probe(&d);
+
+    LocalShellSpec spec;
+    local_shell_resolve("C:\\Program Files\\Foo\\foo.exe", &p, &spec);
+    ASSERT_EQ(local_shell_resolve_bare(&spec, &p), 0);
+    ASSERT_TRUE(strstr(spec.error, "quote") != NULL);
+    TEST_END();
+}
+
 int test_local_shell_resolve_bare_unquoted_spaced_refuses_second_argument(void)
 {
     TEST_BEGIN();
