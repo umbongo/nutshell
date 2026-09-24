@@ -850,6 +850,86 @@ int test_term_at_prompt_continuation_negative(void) {
     TEST_END();
 }
 
+/* ---- term_at_prompt() in the sparse-buffer state after a resize -------
+ *
+ * Regression (2026-09-25, from the maintainer's diagnostic log against a
+ * real local PowerShell tab, window 29x76): term_at_prompt() stayed false
+ * forever after a resize left lines_count < rows -- term_cursor_row_text()
+ * (src/term/buffer.c) rejected any cursor row at or past lines_count,
+ * even though term_resize()/term_reflow_buffer() pre-allocate, fill and
+ * write to every row of the new screen regardless of lines_count. A
+ * shrink from a taller terminal reproduces it reliably: term_reflow_buffer()
+ * strips a blank buffer down to just the cursor's own row (lines_count =
+ * cursor row + 1) whenever the "push content to the bottom" padding does
+ * not apply, which it never does on a shrink (it is gated on
+ * new_rows > old_rows). */
+
+int test_term_at_prompt_sparse_after_resize_shrink(void) {
+    TEST_BEGIN();
+    /* 50 rows, blank, so the whole buffer is the trivial single-line
+     * cursor row after reflow -- then shrink to 29x76, the exact
+     * dimensions from the diagnostic log. */
+    Terminal *t = term_init(50, 76, 3000);
+    term_resize(t, 29, 76);
+    ASSERT_EQ(t->rows, 29);
+    ASSERT_EQ(t->cols, 76);
+    ASSERT_TRUE(t->lines_count < t->rows);
+    ASSERT_EQ(t->lines_count, 1); /* pins the exact reflow behaviour this relies on */
+
+    /* Two lines of ordinary output, then a prompt -- cursor lands on
+     * screen row 2, at or past lines_count either way. */
+    static const char out[] =
+        "line one\r\n"
+        "line two\r\n"
+        "PS C:\\Users\\thoma> ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(t->cursor.row, 2);
+    ASSERT_TRUE(t->cursor.row >= t->lines_count);
+
+    ASSERT_EQ(term_at_prompt(t), 1);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 1);
+    ASSERT_EQ(term_at_continuation_prompt(t), 0);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* A second cursor position within the same sparse buffer -- row 1 rather
+ * than row 2 -- so the fix is pinned at more than one point past
+ * lines_count, not just the specific row the diagnostic log happened to
+ * report (cursor row 7 there, out of a differently-sized window). */
+int test_term_at_prompt_sparse_after_resize_shrink_row1(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(50, 76, 3000);
+    term_resize(t, 29, 76);
+    ASSERT_EQ(t->lines_count, 1);
+
+    static const char out[] = "line one\r\nPS C:\\Users\\thoma> ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(t->cursor.row, 1);
+    ASSERT_TRUE(t->cursor.row >= t->lines_count);
+
+    ASSERT_EQ(term_at_prompt(t), 1);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 1);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* The plain fresh-terminal case must keep working exactly as before:
+ * lines_count == rows, no sparse gap, term_screen_to_phys() alone (no
+ * lines_count check) must still agree with shell_prompt_line(). */
+int test_term_at_prompt_fresh_terminal_not_sparse(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    ASSERT_EQ(t->lines_count, t->rows);
+    term_process(t, "thomas@tompi:~$ ", 17);
+    ASSERT_EQ(term_at_prompt(t), 1);
+    ASSERT_EQ(term_at_unambiguous_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
 /* ---- term_at_unambiguous_prompt() (dispatch_line_clear.h no-prefix
  * safety check) ----------------------------------------------------- */
 

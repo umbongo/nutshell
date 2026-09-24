@@ -4941,11 +4941,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             g_selection.valid = false;
             /* Force full repaint so highlighted cells are redrawn without highlight.
              * The dirty-row optimisation in the renderer would skip clean rows,
-             * leaving stale highlighted pixels on screen. */
-            for (int i = 0; i < g_active_session->term->lines_count; i++) {
-                int idx = (g_active_session->term->lines_start + i) % g_active_session->term->lines_capacity;
-                if (g_active_session->term->lines[idx])
-                    g_active_session->term->lines[idx]->dirty = true;
+             * leaving stale highlighted pixels on screen. term_logical_rows(),
+             * not lines_count: a selection that reached into the sparse gap
+             * right after a resize (lines_count < rows) needs its highlight
+             * cleared there too, same as any other row. */
+            {
+                Terminal *_t = g_active_session->term;
+                int _bound = term_logical_rows(_t);
+                for (int i = 0; i < _bound; i++) {
+                    int idx = (_t->lines_start + i) % _t->lines_capacity;
+                    if (_t->lines[idx])
+                        _t->lines[idx]->dirty = true;
+                }
             }
             invalidate_terminal(hwnd);
             return 0;

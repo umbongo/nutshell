@@ -1931,15 +1931,15 @@ static int describe_cursor_row(const Terminal *term, char *buf, size_t buf_size)
         return 0;
     }
 
-    int top = (term->lines_count >= term->rows)
-            ? (term->lines_count - term->rows) : 0;
-    int logical = top + term->cursor.row;
-    if (logical < 0 || logical >= term->lines_count) {
-        snprintf(buf, buf_size, "logical row %d out of range [0,%d)",
-                 logical, term->lines_count);
-        return 0;
-    }
-    int physical = (term->lines_start + logical) % term->lines_capacity;
+    /* term_screen_to_phys() (term.h) -- the exact mapping
+     * term_cursor_row_text() itself uses -- not a hand-rolled copy. This
+     * diagnostic's own former copy added a `logical < lines_count` check
+     * that production's term_cursor_row_text() no longer has (see
+     * term_screen_to_phys()'s comment): that extra check is what made
+     * this very function log "logical row 7 out of range [0,1)" for the
+     * regression report that led here -- the diagnostic was reproducing
+     * the bug it was added to diagnose, not just describing it. */
+    int physical = term_screen_to_phys(term, term->cursor.row);
     if (physical < 0 || physical >= term->lines_capacity) {
         snprintf(buf, buf_size, "physical row %d out of range [0,%d)",
                  physical, term->lines_capacity);
