@@ -100,9 +100,11 @@ DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
  * GetTickCount() subtraction (which is safe across a wraparound: unsigned
  * arithmetic) and hands the result in. */
 
-/* Minimum time, in milliseconds, that must have passed since the user's
- * last keystroke in the session's terminal before a no-prefix dispatch may
- * write a command onto the input line.
+/* Minimum time, in milliseconds, that must have passed since the last
+ * keystroke or paste actually written to the session's terminal (not any
+ * other UI activity -- see SessionIo.last_input_tick,
+ * src/term/session_io.h) before a no-prefix dispatch may write a command
+ * onto the input line.
  *
  * ConPTY echoes a keystroke asynchronously. Without this guard, a
  * character the user just typed but that has not reached the terminal
@@ -112,18 +114,28 @@ DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
  * the AI's command gets glued onto the front of whatever the user typed
  * (e.g. "xGet-ChildItem"). Set to the same 400 ms as PROMPT_QUIET_MS: the
  * rest of the dispatcher already treats that as long enough for the
- * terminal to have caught up with anything in flight. */
+ * terminal to have caught up with anything in flight.
+ *
+ * dispatch_tick() treats a true result as a silent delay, not an
+ * "ambiguous prompt": it must not post the wait status line below, and
+ * must not start or advance DISPATCH_AMBIGUOUS_PROMPT_TIMEOUT_MS's clock
+ * either, unlike a failed term_at_unambiguous_prompt() check. A recent
+ * keystroke resolves itself the moment the echo catches up -- almost
+ * always well under a second -- so treating it the same as a genuinely
+ * ambiguous prompt would report and, worse, eventually cancel a batch
+ * over nothing more than typing having briefly outrun the terminal. */
 #define DISPATCH_KEYSTROKE_GUARD_MS 400u
 
-/* True when elapsed_ms (time since the session's last keystroke) is too
- * recent to trust the terminal's current cursor row for a no-prefix
- * dispatch. */
+/* True when elapsed_ms (time since the session's last terminal keystroke
+ * or paste) is too recent to trust the terminal's current cursor row for
+ * a no-prefix dispatch. */
 int dispatch_keystroke_too_recent(unsigned long elapsed_ms);
 
-/* How long, in milliseconds, dispatch_tick() may wait on an ambiguous
- * no-prefix prompt -- term_at_prompt() true but
- * term_at_unambiguous_prompt() false, or dispatch_keystroke_too_recent()
- * true -- before giving up and cancelling the batch.
+/* How long, in milliseconds, dispatch_tick() may wait on a no-prefix
+ * prompt that term_at_prompt() accepts but term_at_unambiguous_prompt()
+ * does not, before giving up and cancelling the batch. (A too-recent
+ * keystroke, dispatch_keystroke_too_recent() above, is a separate, silent
+ * delay that never reaches this clock -- see its own doc comment.)
  *
  * A single failed check must not cancel outright: an ordinary prompt can
  * legitimately have a space before its terminator (cmd's default "$P $G"
@@ -138,7 +150,12 @@ int dispatch_keystroke_too_recent(unsigned long elapsed_ms);
  * (CMD_QUEUE_POLL_MS, 250 ms) -- long enough that a momentary read is
  * never mistaken for a real stall, short enough that a genuine stall is
  * still reported and cleared up within a few seconds rather than left
- * hanging indefinitely. */
+ * hanging indefinitely. dispatch_tick() measures elapsed_ms from when it
+ * first saw the condition, not reset by output arriving in between (a
+ * command that keeps refreshing a prompt-shaped line, e.g. a progress
+ * percentage, must not re-arm this every burst without ever timing out)
+ * -- only clearing it when the check passes, or the batch starts,
+ * cancels or finishes. */
 #define DISPATCH_AMBIGUOUS_PROMPT_TIMEOUT_MS 5000u
 
 /* True when elapsed_ms (time since dispatch_tick() first saw the
