@@ -40,6 +40,7 @@
 #include "chat_approval.h"
 #include "cmd_batch.h"
 #include "dispatch_line_clear.h"
+#include "logger.h"
 #include "chat_listview.h"
 #include "ui_demo.h"
 #include "icons.h"
@@ -264,6 +265,16 @@ typedef struct {
     DWORD dispatch_ambiguous_since_tick;
     int   dispatch_ambiguous_reported; /* 1 once this stall's status line
                                          * has been posted */
+    /* Diagnostic-only (dispatch_log_stall_if_due(), %TEMP%\nutshell.log):
+     * dispatch_start_tick is set once per dispatch_start() and never
+     * touched again, for "settled after X ms". dispatch_last_progress_tick
+     * is set at dispatch_start() and every actual send (execute_command())
+     * -- a batch that hasn't moved either in >3 s is "stalled".
+     * dispatch_last_diag_log_tick rate-limits the stall log itself to
+     * once per 2 s so a long-stuck batch does not flood the file. */
+    DWORD dispatch_start_tick;
+    DWORD dispatch_last_progress_tick;
+    DWORD dispatch_last_diag_log_tick;
     int stream_phase;  /* 0=not started, 1=in thinking, 2=in content */
 
     /* AI notes for system prompt context */
@@ -1744,16 +1755,35 @@ static void dispatch_start(AiChatData *d, int batch_id)
     CmdBatch *batch = cmd_batch_find(&d->active_state->batches, batch_id);
     if (!batch || chat_approval_next_approved(&batch->q) < 0) return;
 
+    DWORD now = GetTickCount();
+
     d->dispatch_active = 1;
     d->dispatch_batch_id = batch->id;
     d->dispatch_seq = d->active_term ? d->active_term->write_seq : 0;
     d->dispatch_await_echo = 0;
-    d->dispatch_last_change_tick = GetTickCount();
+    d->dispatch_last_change_tick = now;
     d->dispatch_last_idx = -1;
     d->dispatch_sent_count = 0;
     d->dispatch_stall_reported = 0;
     d->dispatch_ambiguous_since_tick = 0;
     d->dispatch_ambiguous_reported = 0;
+    d->dispatch_start_tick = now;
+    d->dispatch_last_progress_tick = now;
+    d->dispatch_last_diag_log_tick = 0;
+
+    {
+        int windows_prompt = term_cursor_row_is_windows_prompt(d->active_term);
+        char line[176];
+        snprintf(line, sizeof(line),
+            "dispatch_start: batch=%d kind=%s shell=%s mode=%s",
+            batch->id,
+            active_session_kind(d) == SESSION_LOCAL ? "local" : "ssh",
+            active_shell_name(d) ? active_shell_name(d) : "(none)",
+            dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d),
+                                      windows_prompt)
+                == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE");
+        LOG_INFO(line);
+    }
 
     SetTimer(d->hwnd, TIMER_CMD_QUEUE, CMD_QUEUE_POLL_MS, NULL);
 
@@ -1866,6 +1896,162 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
     if (have_continue) send_continue_message(d, continue_text);
 }
 
+/* Diagnostic only, for dispatch_log_stall_if_due() below -- never used by
+ * term_at_prompt()/term_at_unambiguous_prompt() etc. themselves. Mirrors
+ * term_cursor_row_text()'s guards (src/term/buffer.c, private to that
+ * file) in the same order, so buf holding text vs. a reason lines up
+ * exactly with whether that function would have produced a row -- but
+ * explains a failure instead of returning 0 silently, and represents the
+ * row's raw content instead of that function's lossy ASCII-only copy
+ * (every non-ASCII codepoint becomes '?' there, and a real space cell is
+ * indistinguishable from a blank one). buf always ends up NUL-terminated
+ * within buf_size: on success, the row's text up to the cursor with
+ * control bytes and codepoints above ASCII written as \xNN and a blank
+ * cell as a literal space (so trailing spaces stay visible); on failure,
+ * the reason, including -- for the one case worth pinpointing -- the
+ * column and codepoint of the non-blank cell found after the cursor.
+ * Returns 1/0 matching term_cursor_row_text()'s own return. */
+static int describe_cursor_row(const Terminal *term, char *buf, size_t buf_size)
+{
+    if (!buf || buf_size == 0) return 0;
+    buf[0] = '\0';
+
+    if (!term) { snprintf(buf, buf_size, "no terminal"); return 0; }
+    if (term->alt_screen_active) {
+        snprintf(buf, buf_size, "alt screen active");
+        return 0;
+    }
+    if (term->cursor.row < 0 || term->cursor.row >= term->rows) {
+        snprintf(buf, buf_size, "cursor row %d out of range [0,%d)",
+                 term->cursor.row, term->rows);
+        return 0;
+    }
+    if (term->cursor.col < 0) {
+        snprintf(buf, buf_size, "cursor col %d < 0", term->cursor.col);
+        return 0;
+    }
+
+    int top = (term->lines_count >= term->rows)
+            ? (term->lines_count - term->rows) : 0;
+    int logical = top + term->cursor.row;
+    if (logical < 0 || logical >= term->lines_count) {
+        snprintf(buf, buf_size, "logical row %d out of range [0,%d)",
+                 logical, term->lines_count);
+        return 0;
+    }
+    int physical = (term->lines_start + logical) % term->lines_capacity;
+    if (physical < 0 || physical >= term->lines_capacity) {
+        snprintf(buf, buf_size, "physical row %d out of range [0,%d)",
+                 physical, term->lines_capacity);
+        return 0;
+    }
+    TermRow *row = term->lines[physical];
+    if (!row) { snprintf(buf, buf_size, "row slot empty"); return 0; }
+
+    int col = term->cursor.col;
+    if (col > term->cols) col = term->cols;
+
+    for (int c = col; c < row->len && c < term->cols; c++) {
+        uint32_t cp = row->cells[c].codepoint;
+        if (cp != 0 && cp != ' ') {
+            snprintf(buf, buf_size,
+                     "non-blank cell after cursor: column %d, U+%04X",
+                     c, (unsigned)cp);
+            return 0;
+        }
+    }
+
+    size_t pos = 0;
+    for (int i = 0; i < col && pos + 5 < buf_size; i++) {
+        uint32_t cp = row->cells[i].codepoint;
+        if (cp == 0) cp = ' ';
+        if (cp >= 0x20 && cp < 0x7F) {
+            buf[pos++] = (char)cp;
+        } else {
+            int n = snprintf(buf + pos, buf_size - pos, "\\x%02X",
+                              cp <= 0xFFu ? (unsigned)cp : 0xFFu);
+            if (n < 0) break;
+            pos += (size_t)n;
+        }
+    }
+    buf[pos < buf_size ? pos : buf_size - 1] = '\0';
+    return 1;
+}
+
+/* Diagnostic only, added for a 2026-09-25 regression report: a maintainer's
+ * single-command PowerShell batch ran to completion in the terminal but
+ * the AI panel never settled -- card stuck "running" forever, no status
+ * line, so nothing in the product's own UI said why. A live reproduction
+ * against a real ConPTY-hosted PowerShell could not reproduce it (see the
+ * wintest case below), which points at something particular to the
+ * reporter's own machine/session -- this exists to capture that, without
+ * asking for a debugger attach. Logs at LOG_INFO (%TEMP%\nutshell.log,
+ * always on -- see init_app_log(), src/main.c) every field the settle
+ * gate (`ready = !dispatch_await_echo && quiet && term_at_prompt(term)`,
+ * dispatch_tick() below) and the no-prefix safety checks actually read,
+ * but only once a batch has gone >3 s without sending a command or
+ * settling (d->dispatch_last_progress_tick), and at most once every 2 s
+ * after that (d->dispatch_last_diag_log_tick) -- cheap in the case that
+ * matters (nothing happening) and silent otherwise. Never logs command
+ * text beyond the cursor row (which may hold whatever the user typed
+ * there -- acceptable for a local diagnostic log -- but never the AI
+ * conversation). */
+static void dispatch_log_stall_if_due(AiChatData *d, CmdBatch *batch)
+{
+    if (!d || !batch) return;
+
+    DWORD now = GetTickCount();
+    if (now - d->dispatch_last_progress_tick <= 3000u) return;
+    if (d->dispatch_last_diag_log_tick != 0 &&
+        now - d->dispatch_last_diag_log_tick < 2000u) return;
+    d->dispatch_last_diag_log_tick = now;
+
+    Terminal *term = d->active_term;
+
+    int next_idx = chat_approval_next_approved(&batch->q);
+    unsigned long seq = term ? term->write_seq : 0;
+    int quiet = (int)((now - d->dispatch_last_change_tick) >= PROMPT_QUIET_MS);
+    int at_prompt = term_at_prompt(term);
+    int unambiguous = term_at_unambiguous_prompt(term);
+    int continuation = term_at_continuation_prompt(term);
+    int windows_prompt = term_cursor_row_is_windows_prompt(term);
+
+    DispatchLineClearMode mode = dispatch_line_clear_mode(
+        active_session_kind(d), active_shell_name(d), windows_prompt);
+
+    char keystroke_desc[24] = "none";
+    if (d->active_io && d->active_io->last_input_tick)
+        snprintf(keystroke_desc, sizeof(keystroke_desc), "%lu",
+                 (unsigned long)(now - *d->active_io->last_input_tick));
+
+    char row_desc[220];
+    (void)describe_cursor_row(term, row_desc, sizeof(row_desc));
+
+    char idx_desc[16];
+    if (next_idx >= 0)
+        snprintf(idx_desc, sizeof(idx_desc), "%d", next_idx);
+    else
+        snprintf(idx_desc, sizeof(idx_desc), "settle");
+
+    char line[620];
+    snprintf(line, sizeof(line),
+        "dispatch stall: batch=%d next=%s sent=%d await_echo=%d "
+        "quiet=%d(%lums) write_seq=%lu/%lu at_prompt=%d unambiguous=%d "
+        "continuation=%d windows_prompt=%d mode=%s keystroke_ms=%s "
+        "alt_screen=%d cursor=%d,%d term=%dx%d row=\"%s\"",
+        batch->id, idx_desc, d->dispatch_sent_count, d->dispatch_await_echo,
+        quiet, (unsigned long)(now - d->dispatch_last_change_tick),
+        seq, d->dispatch_seq, at_prompt, unambiguous, continuation,
+        windows_prompt,
+        mode == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE",
+        keystroke_desc,
+        term ? (int)term->alt_screen_active : -1,
+        term ? term->cursor.row : -1, term ? term->cursor.col : -1,
+        term ? term->rows : -1, term ? term->cols : -1,
+        row_desc);
+    LOG_INFO(line);
+}
+
 /* TIMER_CMD_QUEUE tick: advance the dispatcher (on d->dispatch_batch_id)
  * by at most one command. Tracks "quiet" (no terminal writes) and
  * "changed since the last send" (dispatch_await_echo) off
@@ -1910,6 +2096,8 @@ static void dispatch_tick(AiChatData *d)
         }
         return;
     }
+
+    dispatch_log_stall_if_due(d, batch);
 
     unsigned long seq = d->active_term->write_seq;
     if (seq != d->dispatch_seq) {
@@ -2093,6 +2281,7 @@ static void dispatch_tick(AiChatData *d)
         d->dispatch_last_idx = idx;
         d->dispatch_sent_count++;
         d->dispatch_await_echo = 1;
+        d->dispatch_last_progress_tick = GetTickCount();
 
         float now = (float)GetTickCount() / 1000.0f;
         chat_activity_set_phase(&d->activity, ACTIVITY_EXECUTING, now);
@@ -2108,6 +2297,14 @@ static void dispatch_tick(AiChatData *d)
          * continue. */
         if (d->dispatch_last_idx >= 0)
             chat_approval_set_completed(&batch->q, d->dispatch_last_idx);
+
+        {
+            char line[96];
+            snprintf(line, sizeof(line), "settled batch %d after %lu ms",
+                     batch->id,
+                     (unsigned long)(GetTickCount() - d->dispatch_start_tick));
+            LOG_INFO(line);
+        }
 
         int batch_id = batch->id;
         int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;

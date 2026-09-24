@@ -5,10 +5,37 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/cli_args.h"
+#include "core/logger.h"
 #include "config/config.h"
 #include "ui/ui.h"
 #include "ui/icons.h"
 #include "ui/resource.h"
+
+/* The app-wide diagnostic log (src/core/logger.c) was wired into every
+ * error path (window.c's WM_CREATE/RegisterClass failures, and -- since
+ * 2026-09-25 -- dispatch_tick()'s prompt-gated command dispatcher, see
+ * ai_chat.c) but log_init() was never actually called anywhere in
+ * production, only in tests/test_logger.c: every LOG_* call reached only
+ * stderr, invisible for a GUI-subsystem (-mwindows) process with no
+ * console. Point it at %TEMP%\nutshell.log unconditionally, at
+ * LOG_LEVEL_INFO -- no setting gates this, unlike the per-session
+ * debug_terminal log (Settings > Debug), so it is there for a bug report
+ * without the user having to change anything first. Same file, directory
+ * and "no setting required" shape as REDRAW_DEBUG's
+ * %TEMP%\nutshell_redraw.log (src/ui/redraw_log.h), which is opt-in at
+ * build time instead. */
+static void init_app_log(void)
+{
+    char tmp[MAX_PATH];
+    DWORD n = GetTempPathA((DWORD)sizeof(tmp), tmp);
+    if (n == 0 || n >= sizeof(tmp)) {
+        log_init(NULL, LOG_LEVEL_INFO);
+        return;
+    }
+    char path[MAX_PATH * 2];
+    (void)snprintf(path, sizeof(path), "%snutshell.log", tmp);
+    log_init(path, LOG_LEVEL_INFO);
+}
 
 /* Print to the parent console when launched from a terminal; fall back
  * to a MessageBox when there is none (double-click, Run dialog). */
@@ -208,6 +235,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     ui_set_startup_action(opts.action, opts.arg, opts.demo_state, opts.theme);
 
+    init_app_log();
+
     /* I-2: initialise WSA once for the process lifetime */
     WSADATA wsadata;
     WSAStartup(MAKEWORD(2, 2), &wsadata);
@@ -218,5 +247,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ns_icons_shutdown();
 
     WSACleanup();
+    log_close();
     return 0;
 }
