@@ -563,6 +563,136 @@ int test_local_pty_records_fullscreen_modes(void)
     TEST_END();
 }
 
+/* ---- 7. does the dispatcher's readiness gate ever recover after a
+ * PowerShell command errors, sent with no Ctrl+E Ctrl+U prefix? ----------
+ *
+ * Regression (2026-09-25, reported against ai-dispatch-shell-prefix
+ * f5bbfa8): a real local PowerShell tab, single-command batch
+ * `Get-Item C:\this-path-does-not-exist-12345`. PowerShell prints the
+ * ItemNotFoundException and returns to its prompt, but the AI panel never
+ * settles -- "running" forever, no continue message. Mirrors
+ * dispatch_tick()'s own readiness gate (write_seq quiet for
+ * PROMPT_QUIET_MS, then term_at_prompt()) against a real pseudo-console,
+ * the same way execute_command() writes for a no-prefix shell: the
+ * command text, then a bare "\r", with no "\x05\x15" ahead of it. */
+int test_local_pty_powershell_settles_after_command_error(void)
+{
+    TEST_BEGIN();
+
+    LocalShellSpec spec;
+    spec_for(&spec, "powershell.exe -NoLogo -NoExit");
+
+    char err[512];
+    err[0] = '\0';
+    LocalPty *pty = local_pty_open(&spec, 100, 30, err, sizeof(err));
+    if (!pty) {
+        RPT("  [skip] local_pty_open failed: %s\n", err);
+        ASSERT_TRUE(err[0] != '\0');
+        TEST_END();
+    }
+    ASSERT_NOT_NULL(pty);
+
+    Terminal *term = term_init(30, 100, 500);
+    ASSERT_NOT_NULL(term);
+
+    /* Drain the banner and let the first prompt settle, using the same
+     * "quiet since the last write_seq change, then term_at_prompt()"
+     * shape dispatch_tick() itself uses (PROMPT_QUIET_MS is 400 ms in
+     * ai_chat.c) -- bounded generously since a first PowerShell launch on
+     * a cold profile can be slow. */
+    unsigned long last_seq = term->write_seq;
+    ULONGLONG last_change = GetTickCount64();
+    ULONGLONG deadline = GetTickCount64() + 15000u;
+    while (GetTickCount64() < deadline) {
+        (void)local_pty_poll(pty, term, NULL, NULL);
+        if (term->write_seq != last_seq) {
+            last_seq = term->write_seq;
+            last_change = GetTickCount64();
+        }
+        if (GetTickCount64() - last_change >= 400u && term_at_prompt(term))
+            break;
+        Sleep(20);
+    }
+    char screen[8192];
+    screen_text(term, screen, sizeof(screen));
+    RPT("  [initial prompt]\n%s", screen);
+    RPT("  [cursor row=%d col=%d alt_screen=%d]\n",
+        term->cursor.row, term->cursor.col, (int)term->alt_screen_active);
+    if (!term_at_prompt(term)) {
+        local_pty_close(pty);
+        term_free(term);
+        RPT("  [skip] initial PowerShell prompt never settled -- nothing "
+            "to regress-test here\n");
+        TEST_END();
+    }
+
+    /* The command execute_command() would send for a no-prefix shell:
+     * the text, then Enter, nothing ahead of it. */
+    static const char CMD[] = "Get-Item C:\\this-path-does-not-exist-12345";
+    ASSERT_TRUE(local_pty_write(pty, CMD, sizeof(CMD) - 1) >= 0);
+    ASSERT_TRUE(local_pty_write(pty, "\r", 1) >= 0);
+
+    /* dispatch_tick()'s own readiness gate: quiet for 400 ms since the
+     * last write_seq change, and term_at_prompt() true. Bounded at 10 s --
+     * production's own ambiguous-prompt cancel is 5 s, so anything not
+     * settled by 10 s here is the "never settles" bug, not a slow host. */
+    last_seq = term->write_seq;
+    last_change = GetTickCount64();
+    int settled = 0;
+    int seq_changes = 0;
+    deadline = GetTickCount64() + 10000u;
+    while (GetTickCount64() < deadline) {
+        (void)local_pty_poll(pty, term, NULL, NULL);
+        if (term->write_seq != last_seq) {
+            last_seq = term->write_seq;
+            last_change = GetTickCount64();
+            seq_changes++;
+        }
+        if (GetTickCount64() - last_change >= 400u && term_at_prompt(term)) {
+            settled = 1;
+            break;
+        }
+        Sleep(20);
+    }
+
+    screen_text(term, screen, sizeof(screen));
+    RPT("  [after error -- settled=%d, write_seq changes after send=%d]\n%s",
+        settled, seq_changes, screen);
+    RPT("  [cursor row=%d col=%d alt_screen=%d write_seq=%lu]\n",
+        term->cursor.row, term->cursor.col, (int)term->alt_screen_active,
+        term->write_seq);
+
+    ASSERT_TRUE(strstr(screen, "ItemNotFoundException") != NULL ||
+                strstr(screen, "does not exist") != NULL);
+    ASSERT_TRUE(settled);
+
+    /* Guard against the other suspect the regression report named: ConPTY
+     * spontaneously nudging write_seq while genuinely idle at the prompt
+     * (a repaint/blink) would make "quiet" never hold in the live app even
+     * though this harness just saw it settle once. It does not, on this
+     * host -- kept as a real assertion, not just a printed observation. */
+    {
+        unsigned long idle_seq = term->write_seq;
+        int idle_changes = 0;
+        ULONGLONG idle_deadline = GetTickCount64() + 3000u;
+        while (GetTickCount64() < idle_deadline) {
+            (void)local_pty_poll(pty, term, NULL, NULL);
+            if (term->write_seq != idle_seq) {
+                idle_seq = term->write_seq;
+                idle_changes++;
+            }
+            Sleep(20);
+        }
+        RPT("  [idle 3s at prompt] write_seq changes=%d, final write_seq=%lu\n",
+            idle_changes, term->write_seq);
+        ASSERT_EQ(idle_changes, 0);
+    }
+
+    local_pty_close(pty);
+    term_free(term);
+    TEST_END();
+}
+
 /* 7. What character does the layout make of Ctrl+Space, Ctrl+Shift+Space
  * and Ctrl+Alt+F, for every layout loaded in this session? (What WM_CHAR
  * the window gets; ToUnicodeEx with flag 0x4 leaves the keyboard state
