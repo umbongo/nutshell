@@ -271,6 +271,10 @@ Open, in priority order:
       have not been run yet — needs the Kimi key in `tests\integration\.ai_key`; and the
       status line still has no keyboard path (a whole-line design-system job, the four
       `WM_COMMAND` ids 4030–4044 are ready for a menu or accelerator).
+- [ ] AI command origin marker (external reviewer, 2026-09-25): a bar in the terminal's
+      left margin on rows carrying an AI-dispatched command, stamped at write time —
+      spec `2026-09-25-ai-command-origin-marker-design.md` (DRAFT, critique and seven
+      open questions before implementation; ConPTY repaint behaviour to measure first).
 - [ ] `md_render.c` renders at raw 96-DPI pixels — fold into sub-project 3.
 - [ ] Sub-project 3 (main window chrome): spec first, mockups before choosing, as with
       sub-project 2.

@@ -1875,6 +1875,21 @@ int test_ai_conv_copy_replaces_destination(void);
 int test_worker_life_last_release_frees(void);
 int test_worker_life_cancel_is_sticky(void);
 int test_worker_life_ids_unique_nonzero(void);
+
+/* test_conn_prompt.c */
+int test_conn_prompt_slot_starts_empty_and_not_cancelled(void);
+int test_conn_prompt_publish_then_claim_by_identity(void);
+int test_conn_prompt_publish_then_cancel_and_claim(void);
+int test_conn_prompt_claim_wrong_identity_does_not_drop_real_request(void);
+int test_conn_prompt_cancel_is_sticky(void);
+int test_conn_prompt_cancel_before_publish_is_still_caught(void);
+int test_conn_prompt_publish_then_cancel_ui_wins_claim(void);
+int test_conn_prompt_answered_path_no_cancellation(void);
+int test_conn_prompt_claim_after_claim_by_identity_finds_nothing(void);
+int test_conn_prompt_stale_seq_is_refused_by_a_newer_request(void);
+int test_conn_prompt_seq_is_never_zero(void);
+int test_conn_prompt_null_is_safe(void);
+
 int test_ai_stream_finish_before_close(void);
 int test_ai_stream_close_before_finish(void);
 int test_ai_stream_double_close(void);
@@ -5391,6 +5406,20 @@ int main(void) {
     failed += test_worker_life_last_release_frees();
     failed += test_worker_life_cancel_is_sticky();
     failed += test_worker_life_ids_unique_nonzero();
+
+    failed += test_conn_prompt_slot_starts_empty_and_not_cancelled();
+    failed += test_conn_prompt_publish_then_claim_by_identity();
+    failed += test_conn_prompt_publish_then_cancel_and_claim();
+    failed += test_conn_prompt_claim_wrong_identity_does_not_drop_real_request();
+    failed += test_conn_prompt_cancel_is_sticky();
+    failed += test_conn_prompt_cancel_before_publish_is_still_caught();
+    failed += test_conn_prompt_publish_then_cancel_ui_wins_claim();
+    failed += test_conn_prompt_answered_path_no_cancellation();
+    failed += test_conn_prompt_claim_after_claim_by_identity_finds_nothing();
+    failed += test_conn_prompt_stale_seq_is_refused_by_a_newer_request();
+    failed += test_conn_prompt_seq_is_never_zero();
+    failed += test_conn_prompt_null_is_safe();
+
     failed += test_ai_stream_finish_before_close();
     failed += test_ai_stream_close_before_finish();
     failed += test_ai_stream_double_close();

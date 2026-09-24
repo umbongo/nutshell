@@ -155,6 +155,12 @@ static LRESULT CALLBACK btn_noerase_subclass(
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 
+/* Every AiChatData field is read and written on the UI thread only. The AI
+ * stream thread (ai_stream_thread_proc) owns nothing here -- it reads and
+ * writes only its own AiStream (src/core/ai_stream.h), including its own
+ * copy of the tool registry and search/fetch contexts snapshotted before
+ * the thread starts (ai_stream_copy_tools(), called under launch_stream_thread
+ * before _beginthreadex) -- so no lock guards this struct. */
 typedef struct {
     HWND hwnd;
     HWND hDisplay;
@@ -213,9 +219,6 @@ typedef struct {
      * ai_build_system_prompt() names it. Empty means "not a local shell" --
      * for an SSH session, and for a local one before window.c has set it. */
     char        shell_name[32];
-
-    /* Background thread */
-    CRITICAL_SECTION cs;
 
     /* Auto-continue: when AI only gives partial commands, re-prompt */
     char pending_request[2048]; /* original user request for context */
@@ -904,9 +907,7 @@ static void apply_policy_change(AiChatData *d, CmdPolicy next)
         if (d->conv.msg_count > 0) {
             char note[256];
             if (ai_build_policy_raised_note(next.allowed, note, sizeof(note)) > 0) {
-                EnterCriticalSection(&d->cs);
                 ai_conv_add(&d->conv, AI_ROLE_USER, note);
-                LeaveCriticalSection(&d->cs);
             }
         }
     } else if (next.allowed < prev.allowed) {
@@ -1209,7 +1210,6 @@ static void launch_stream_thread(AiChatData *d)
     }
     s->post_target = (uintptr_t)d->hwnd;
 
-    EnterCriticalSection(&d->cs);
     strncpy(s->api_key, d->api_key, sizeof(s->api_key) - 1);
     strncpy(s->provider, d->provider, sizeof(s->provider) - 1);
     strncpy(s->custom_url, d->custom_url, sizeof(s->custom_url) - 1);
@@ -1250,7 +1250,6 @@ static void launch_stream_thread(AiChatData *d)
                                                    s->provider);
         }
     }
-    LeaveCriticalSection(&d->cs);
 
     if (!conv_ok) {
         ai_stream_discard(s);
@@ -1451,11 +1450,9 @@ static void cancel_active_stream(AiChatData *d)
     d->stream_thinking_len = 0;
 
     /* Remove the last assistant message from conv if partially added */
-    EnterCriticalSection(&d->cs);
     if (d->conv.msg_count > 0 &&
         d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
         ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
-    LeaveCriticalSection(&d->cs);
 
     /* Update UI */
     update_context_bar(d);
@@ -1548,7 +1545,6 @@ static void send_user_message(AiChatData *d)
         term_text = d->ctx_term;
     }
 
-    EnterCriticalSection(&d->cs);
 
     /* On first message, add system prompt */
     if (ctx_ok && d->conv.msg_count == 0) {
@@ -1618,7 +1614,6 @@ static void send_user_message(AiChatData *d)
         }
     }
 
-    LeaveCriticalSection(&d->cs);
 
     update_context_bar(d);
 
@@ -1685,7 +1680,6 @@ static void send_continue_message(AiChatData *d, const char *msg_text)
         term_text = d->ctx_term;
     }
 
-    EnterCriticalSection(&d->cs);
 
     /* Update system prompt with fresh terminal context */
     if (ctx_ok && d->conv.msg_count > 0 && d->active_term) {
@@ -1699,7 +1693,6 @@ static void send_continue_message(AiChatData *d, const char *msg_text)
 
     ai_conv_add(&d->conv, AI_ROLE_USER, msg_text);
 
-    LeaveCriticalSection(&d->cs);
 
     start_indicator(d, "continuing");
 
@@ -3488,11 +3481,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->stream_thinking_len = 0;
 
                 /* Remove the last assistant message from conv if added */
-                EnterCriticalSection(&d->cs);
                 if (d->conv.msg_count > 0 &&
                     d->conv.messages[d->conv.msg_count - 1].role == AI_ROLE_ASSISTANT)
                     ai_msg_free(&d->conv.messages[--d->conv.msg_count]);
-                LeaveCriticalSection(&d->cs);
 
                 /* Re-launch stream */
                 start_indicator(d, "retrying");
@@ -3820,9 +3811,7 @@ next_coalesce:;
                         "block. Do not claim they ran. Break the work into "
                         "smaller steps (write a file a few lines at a time) "
                         "and send them again.", rejected_long, 1023);
-                    EnterCriticalSection(&d->cs);
                     ai_conv_add(&src->conv, AI_ROLE_USER, lnote);
-                    LeaveCriticalSection(&d->cs);
                 }
                 if (rejected > 0) {
                     char note[256];
@@ -3832,9 +3821,7 @@ next_coalesce:;
                         "escape, etc.) or bidirectional text formatting "
                         "characters. Put exactly one single-line command "
                         "in each EXEC block.", rejected);
-                    EnterCriticalSection(&d->cs);
                     ai_conv_add(&src->conv, AI_ROLE_USER, note);
-                    LeaveCriticalSection(&d->cs);
                 }
             }
             if (src) {
@@ -3869,9 +3856,7 @@ next_coalesce:;
             /* The thread committed the assistant message to src->conv.
              * Sync d->conv (the working copy) so it includes the response. */
             if (text) {
-                EnterCriticalSection(&d->cs);
                 ai_conv_add(&d->conv, AI_ROLE_ASSISTANT, text);
-                LeaveCriticalSection(&d->cs);
             }
 
             /* Save thinking for this assistant message in history. */
@@ -3938,9 +3923,7 @@ next_coalesce:;
                     "claim they ran. Break the work into smaller steps (write "
                     "a file a few lines at a time) and send them again.",
                     rejected_long, 1023);
-                EnterCriticalSection(&d->cs);
                 ai_conv_add(&d->conv, AI_ROLE_USER, long_note);
-                LeaveCriticalSection(&d->cs);
             }
 
             if (rejected > 0) {
@@ -3958,9 +3941,7 @@ next_coalesce:;
                     "etc.) or bidirectional text formatting characters. "
                     "Put exactly one single-line command in each EXEC "
                     "block.", rejected);
-                EnterCriticalSection(&d->cs);
                 ai_conv_add(&d->conv, AI_ROLE_USER, rej_note);
-                LeaveCriticalSection(&d->cs);
             }
 
             /* Pending command batches: earlier cards are never touched by
@@ -4038,9 +4019,7 @@ next_coalesce:;
                             }
                             char bmsg[2048];
                             if (ai_build_policy_blocked_note(list, bmsg, sizeof(bmsg)) > 0) {
-                                EnterCriticalSection(&d->cs);
                                 ai_conv_add(&d->conv, AI_ROLE_USER, bmsg);
-                                LeaveCriticalSection(&d->cs);
                             }
                         }
                     }
@@ -4425,7 +4404,6 @@ next_coalesce:;
             ai_attachment_free(&d->pending_attachment);
             chat_msg_list_clear(&d->msg_list);
             d->stream_ai_item = NULL;
-            DeleteCriticalSection(&d->cs);
             /* d->hFont comes from the ns_font cache — owned there, not here. */
             if (d->hSmallFont) DeleteObject(d->hSmallFont);
             if (d->hChatFont) DeleteObject(d->hChatFont);
@@ -4494,7 +4472,6 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     AiChatData *d = (AiChatData *)calloc(1, sizeof(AiChatData));
     if (!d) return NULL;
 
-    InitializeCriticalSection(&d->cs);
     d->indicator_pos = -1;
     d->stream_display_start = -1;
     d->forced_state = -1;
@@ -4571,7 +4548,6 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
         if (initial_state && initial_state->valid)
             ai_conv_take(&initial_state->conv, &d->conv);
         ai_conv_reset(&d->conv);
-        DeleteCriticalSection(&d->cs);
         free(d);
     }
 
@@ -4613,7 +4589,6 @@ void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
 
-    EnterCriticalSection(&d->cs);
     if (api_key)
         snprintf(d->api_key, sizeof(d->api_key), "%s", api_key);
     if (custom_url)
@@ -4627,7 +4602,6 @@ void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
         if (model)
             snprintf(d->conv.model, sizeof(d->conv.model), "%s", model);
     }
-    LeaveCriticalSection(&d->cs);
 
     /* Update model name on chat listview */
     if (d->hChatList)
@@ -4658,12 +4632,10 @@ void ai_chat_update_notes(HWND hwnd, const char *session_notes,
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
-    EnterCriticalSection(&d->cs);
     if (session_notes)
         strncpy(d->session_notes, session_notes, sizeof(d->session_notes) - 1);
     if (system_notes)
         strncpy(d->system_notes, system_notes, sizeof(d->system_notes) - 1);
-    LeaveCriticalSection(&d->cs);
 }
 
 void ai_chat_refresh_fonts(HWND hwnd)
