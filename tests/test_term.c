@@ -282,6 +282,70 @@ int test_term_resize_cursor_edge(void) {
     TEST_END();
 }
 
+int test_term_resize_keeps_screen_within_lines_count(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 20, 100);
+    term_process(t, "hello\r\nworld", 12);
+
+    term_resize(t, 10, 15);
+    ASSERT_TRUE(t->lines_count >= t->rows);
+
+    term_resize(t, 6, 15);
+    ASSERT_TRUE(t->lines_count >= t->rows);
+
+    term_resize(t, 12, 30);
+    ASSERT_TRUE(t->lines_count >= t->rows);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_resize_then_scroll_does_not_wipe_midscreen(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 100);
+    term_process(t, "A\r\nB", 4);
+    ASSERT_EQ(t->cursor.row, 1);
+
+    term_resize(t, 5, 10);
+
+    const char *more = "\r\nC\r\nD\r\nE\r\nF\r\nG";
+    term_process(t, more, (int)strlen(more));
+
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, 'C');
+    ASSERT_EQ(get_cell(t, 1, 0).codepoint, 'D');
+    ASSERT_EQ(get_cell(t, 2, 0).codepoint, 'E');
+    ASSERT_EQ(get_cell(t, 3, 0).codepoint, 'F');
+    ASSERT_EQ(get_cell(t, 4, 0).codepoint, 'G');
+    ASSERT_EQ(t->cursor.row, 4);
+    ASSERT_EQ(t->lines_count, 7);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_double_resize_preserves_cursor_row(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 20, 100);
+    term_process(t, "line1\r\nline2\r\n", 14);
+    ASSERT_EQ(t->cursor.row, 2);
+    ASSERT_EQ(t->cursor.col, 0);
+
+    term_resize(t, 10, 15);
+
+    term_process(t, "line3\r\nline4\r\n", 14);
+    ASSERT_EQ(t->cursor.row, 4);
+
+    term_resize(t, 10, 12);
+
+    ASSERT_EQ(t->cursor.row, 4);
+    ASSERT_EQ(t->cursor.col, 0);
+    ASSERT_EQ(get_cell(t, 3, 0).codepoint, 'l');
+    ASSERT_EQ(get_cell(t, 3, 4).codepoint, '4');
+
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_utf8(void) {
     TEST_BEGIN();
     Terminal *t = term_init(24, 80, 100);
@@ -862,7 +926,13 @@ int test_term_at_prompt_continuation_negative(void) {
  * strips a blank buffer down to just the cursor's own row (lines_count =
  * cursor row + 1) whenever the "push content to the bottom" padding does
  * not apply, which it never does on a shrink (it is gated on
- * new_rows > old_rows). */
+ * new_rows > old_rows).
+ *
+ * Since the term_reflow_buffer() fix that keeps lines_count >= rows, a
+ * resize no longer produces this state on its own. These tests therefore
+ * force it by hand (t->lines_count = 1 after the resize, as test_dirty.c
+ * does) so the consumer-side tolerance of a cursor row at or past
+ * lines_count stays pinned. */
 
 int test_term_at_prompt_sparse_after_resize_shrink(void) {
     TEST_BEGIN();
@@ -873,8 +943,11 @@ int test_term_at_prompt_sparse_after_resize_shrink(void) {
     term_resize(t, 29, 76);
     ASSERT_EQ(t->rows, 29);
     ASSERT_EQ(t->cols, 76);
+    /* term_reflow_buffer() now keeps lines_count >= rows, so force the
+     * sparse state manually; the consumer tolerance is still worth pinning. */
+    t->lines_count = 1;
     ASSERT_TRUE(t->lines_count < t->rows);
-    ASSERT_EQ(t->lines_count, 1); /* pins the exact reflow behaviour this relies on */
+    ASSERT_EQ(t->lines_count, 1);
 
     /* Two lines of ordinary output, then a prompt -- cursor lands on
      * screen row 2, at or past lines_count either way. */
@@ -902,6 +975,8 @@ int test_term_at_prompt_sparse_after_resize_shrink_row1(void) {
     TEST_BEGIN();
     Terminal *t = term_init(50, 76, 3000);
     term_resize(t, 29, 76);
+    /* Forced manually: term_reflow_buffer() keeps lines_count >= rows now. */
+    t->lines_count = 1;
     ASSERT_EQ(t->lines_count, 1);
 
     static const char out[] = "line one\r\nPS C:\\Users\\thoma> ";
@@ -997,6 +1072,51 @@ int test_term_at_unambiguous_prompt_alt_screen_active(void) {
     ASSERT_EQ(term_at_unambiguous_prompt(t), 1);
     term_alt_screen_enter(t);
     ASSERT_EQ(term_at_unambiguous_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- term_cursor_row_is_windows_prompt() (dispatch_line_clear.h no-
+ * prefix-at-a-Windows-prompt override) ------------------------------- */
+
+int test_term_cursor_row_is_windows_prompt_powershell(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "PS C:\\Users\\thoma> ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_cursor_row_is_windows_prompt_cmd(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "C:\\Users\\thoma>";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_cursor_row_is_windows_prompt_bash_negative(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "thomas@tompi:~$ ";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_cursor_row_is_windows_prompt_alt_screen_active(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    static const char out[] = "C:\\Users\\thoma>";
+    term_process(t, out, sizeof(out) - 1);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 1);
+    term_alt_screen_enter(t);
+    ASSERT_EQ(term_cursor_row_is_windows_prompt(t), 0);
     term_free(t);
     TEST_END();
 }
