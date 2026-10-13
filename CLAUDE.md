@@ -184,7 +184,13 @@ runner, have passed on the pull request's latest commit, with the branch up to
 date with `main`. `Native tests` compiles the committed sources on a clean
 Ubuntu machine with the real libssh2 and runs `make test`; it exists because
 an exe built locally proves a build happened, not that it came from the
-committed files. `Version bump` (script `.github/scripts/check-version.sh`)
+committed files. On a pull request that changes nothing under `src/`,
+`tests/`, `build-support/`, the Makefile, `nutshell.rc` or the workflow
+itself (docs, `.claude/`, README) it skips the compile and the suite but
+still reports green, so the ruleset is satisfied; the skip is a step
+condition inside the job, never a `paths` filter on the trigger, because a
+required check that never reports blocks the pull request forever.
+`Version bump` (script `.github/scripts/check-version.sh`)
 verifies three things:
 
 - **the version number is bumped** — `APP_VERSION` and `APP_VERSION_BINARY` in
