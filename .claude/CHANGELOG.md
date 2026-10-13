@@ -4,6 +4,19 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-10-13 — retrospective (13 merges)
+
+Session: scheduled Routine, cloud (Linux). Model: claude-sonnet-5-5.
+
+- **`memory/MEMORY.md`.** Marker moved to `c593796` (PR #59), count reset;
+  noted that the previous retrospective's PR merged after its own marker;
+  native baseline 2,485; "open items" rewritten for v1.2.27 (manual checks
+  done, gate compiles, PR #60/#61 open); last-updated line.
+- **No skill, workflow or CLAUDE.md change.** Reviewed both workflows, both
+  scripts and the CLAUDE.md process sections; all accurate. No critique round
+  needed. Findings and recommendations are in
+  `docs/retrospectives/2026-10-13-thirteen-merges-retrospective.md` (DRAFT).
+
 ## 2026-09-24 — security review fixes (v1.2.14)
 
 Session: Claude desktop app, Windows dev box. Model: claude-opus-5-5.
