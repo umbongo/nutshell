@@ -214,6 +214,13 @@ Done, in order (details in the commit messages and the specs named):
   fixed); platform detection anchored and only ever tightens after resolution.
 
 Open, in priority order:
+- [ ] AI panel: commands of a **finished** batch have no details popup and no copy icon
+      after a session switch. `cmd_batch_remove` drops the batch, so `chat_rebuild_display`
+      shows them only as inline `[EXEC]` segments of the AI text. Either keep finished
+      batches (dispatcher change) or parse the rebuilt text into settled rows. Known limit
+      from `2026-10-13-command-detail-and-copy-design.md`, section 1. The same spec lists
+      two smaller follow-ups: the classifier's reason string as a "why this level" line in
+      the popup, and a Unicode input box.
 - [ ] Review and critique the whole repository, security first (maintainer's request,
       2026-09-24). A fresh audit, not a re-read of `2026-09-09-security-audit.md`: the
       local shell (ConPTY spawn, environment, PATH, the shell search order),
