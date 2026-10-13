@@ -145,11 +145,14 @@ int test_extract_last_n_basic(void) {
  * with content", so it could miss that output entirely and hand the
  * model a stale or empty screen in a freshly resized tab. Same
  * 50-rows-shrunk-to-29 reproduction as test_term_at_prompt_sparse_after_
- * resize_shrink (test_term.c), which pins lines_count == 1 here too. */
+ * resize_shrink (test_term.c). The sparse state is now forced manually
+ * (lines_count = 1) because term_reflow_buffer() keeps lines_count >= rows
+ * since the fix; the consumer tolerance is still worth pinning. */
 int test_extract_last_n_sparse_after_resize_shrink(void) {
     TEST_BEGIN();
     Terminal *t = term_init(50, 76, 3000);
     term_resize(t, 29, 76);
+    t->lines_count = 1; /* forced: the resize no longer leaves it sparse */
     ASSERT_EQ(t->lines_count, 1);
 
     static const char out[] = "line one\r\nline two\r\nPS C:\\Users\\thoma> ";

@@ -126,12 +126,16 @@ int test_sel_extract_single_row(void)
  * silently, so Ctrl+C after selecting freshly-typed text in a just-resized
  * window could copy blank lines instead. Same 50-rows-shrunk-to-29
  * reproduction as the term_at_prompt()/term_extract_last_n() regression
- * tests (test_term.c, test_term_extract.c). */
+ * tests (test_term.c, test_term_extract.c). The sparse state is now forced
+ * manually (lines_count = 1) because term_reflow_buffer() keeps
+ * lines_count >= rows since the fix; the consumer tolerance is still worth
+ * pinning. */
 int test_sel_extract_sparse_after_resize_shrink(void)
 {
     TEST_BEGIN();
     Terminal *t = term_init(50, 76, 3000);
     term_resize(t, 29, 76);
+    t->lines_count = 1; /* forced: the resize no longer leaves it sparse */
     ASSERT_EQ(t->lines_count, 1);
 
     feed(t, "line one\r\nline two");
