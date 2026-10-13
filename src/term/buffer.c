@@ -195,6 +195,15 @@ static void term_reflow_buffer(
         new_count = new_rows;
     }
 
+    /* Restore the invariant lines_count >= rows: the visible screen must
+     * lie entirely within the counted lines.  Stripping trailing blanks
+     * above can leave new_count < new_rows; rows [new_count, new_rows)
+     * are freshly allocated blanks, so just count them.  Without this,
+     * term_scroll() "appends" into a row that is already on screen
+     * (wiping it mid-screen instead of scrolling), and a later reflow
+     * drops rows and the cursor that live beyond lines_count. */
+    if (new_count < new_rows) new_count = new_rows;
+
     /* Convert cursor back to screen-relative */
     int screen_top = (new_count >= new_rows) ? (new_count - new_rows) : 0;
     new_cursor_row -= screen_top;
