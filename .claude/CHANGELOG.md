@@ -12,7 +12,8 @@ Session: scheduled Routine, cloud (Linux). Model: claude-sonnet-5-5.
   noted that the previous retrospective's PR merged after its own marker;
   native baseline 2,485; "open items" rewritten for v1.2.27 (manual checks
   done, gate compiles, PR #60/#61 open); last-updated line.
-- **No skill, workflow or CLAUDE.md change.** Reviewed both workflows, both
+- **`skills/checkpoint/SKILL.md` step 9.** Maintainer instruction: skip `make test` for changes with no code modifications. Gate unchanged (`Native tests` still runs in CI).
+- **No workflow or CLAUDE.md change.** Reviewed both workflows, both
   scripts and the CLAUDE.md process sections; all accurate. No critique round
   needed. Findings and recommendations are in
   `docs/retrospectives/2026-10-13-thirteen-merges-retrospective.md` (DRAFT).
