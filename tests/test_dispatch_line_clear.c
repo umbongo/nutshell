@@ -4,49 +4,49 @@
 
 int test_dispatch_line_clear_local_gitbash_is_readline(void) {
     TEST_BEGIN();
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "Git bash"),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "Git bash", 0),
               DISPATCH_LINE_CLEAR_READLINE);
     TEST_END();
 }
 
 int test_dispatch_line_clear_local_msys2_is_readline(void) {
     TEST_BEGIN();
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "MSYS2"),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "MSYS2", 0),
               DISPATCH_LINE_CLEAR_READLINE);
     TEST_END();
 }
 
 int test_dispatch_line_clear_local_powershell_is_none(void) {
     TEST_BEGIN();
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "PowerShell"),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "PowerShell", 0),
               DISPATCH_LINE_CLEAR_NONE);
     TEST_END();
 }
 
 int test_dispatch_line_clear_local_cmd_is_none(void) {
     TEST_BEGIN();
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "cmd"),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "cmd", 0),
               DISPATCH_LINE_CLEAR_NONE);
     TEST_END();
 }
 
 int test_dispatch_line_clear_local_custom_is_none(void) {
     TEST_BEGIN();
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "custom"),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "custom", 0),
               DISPATCH_LINE_CLEAR_NONE);
     TEST_END();
 }
 
 int test_dispatch_line_clear_local_empty_name_is_none(void) {
     TEST_BEGIN();
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, ""),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "", 0),
               DISPATCH_LINE_CLEAR_NONE);
     TEST_END();
 }
 
 int test_dispatch_line_clear_local_null_name_is_none(void) {
     TEST_BEGIN();
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, NULL),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, NULL, 0),
               DISPATCH_LINE_CLEAR_NONE);
     TEST_END();
 }
@@ -55,11 +55,12 @@ int test_dispatch_line_clear_local_null_name_is_none(void) {
  * CmdPlatform (see the header's rationale): CMD_PLATFORM_UNKNOWN covers
  * plenty of ordinary undetected Linux hosts, and the network-device CLIs
  * this app classifies support Ctrl+E/Ctrl+U too. A remote Windows host
- * running PowerShell/cmd over OpenSSH is the one case this still gets
- * wrong -- an open item, since SSH has no Windows CmdPlatform to key off. */
+ * running PowerShell/cmd over OpenSSH used to be the one case this got
+ * wrong -- now covered by the cursor_row_is_windows_prompt override
+ * tested below, not by CmdPlatform. */
 int test_dispatch_line_clear_ssh_is_always_readline(void) {
     TEST_BEGIN();
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, NULL),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, NULL, 0),
               DISPATCH_LINE_CLEAR_READLINE);
     TEST_END();
 }
@@ -68,11 +69,11 @@ int test_dispatch_line_clear_ssh_is_always_readline(void) {
  * that would mean NONE for SESSION_LOCAL) must not change the decision. */
 int test_dispatch_line_clear_ssh_ignores_local_shell_name(void) {
     TEST_BEGIN();
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, "PowerShell"),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, "PowerShell", 0),
               DISPATCH_LINE_CLEAR_READLINE);
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, "cmd"),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, "cmd", 0),
               DISPATCH_LINE_CLEAR_READLINE);
-    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, "Git bash"),
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, "Git bash", 0),
               DISPATCH_LINE_CLEAR_READLINE);
     TEST_END();
 }
@@ -87,20 +88,63 @@ int test_dispatch_line_clear_ssh_ignores_local_shell_name(void) {
 int test_dispatch_line_clear_matches_local_shell_kind_name(void) {
     TEST_BEGIN();
     ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL,
-                                        local_shell_kind_name(SHELL_GITBASH)),
+                                        local_shell_kind_name(SHELL_GITBASH), 0),
               DISPATCH_LINE_CLEAR_READLINE);
     ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL,
-                                        local_shell_kind_name(SHELL_MSYS2)),
+                                        local_shell_kind_name(SHELL_MSYS2), 0),
               DISPATCH_LINE_CLEAR_READLINE);
     ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL,
-                                        local_shell_kind_name(SHELL_PWSH)),
+                                        local_shell_kind_name(SHELL_PWSH), 0),
               DISPATCH_LINE_CLEAR_NONE);
     ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL,
-                                        local_shell_kind_name(SHELL_POWERSHELL)),
+                                        local_shell_kind_name(SHELL_POWERSHELL), 0),
               DISPATCH_LINE_CLEAR_NONE);
     ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL,
-                                        local_shell_kind_name(SHELL_CMD)),
+                                        local_shell_kind_name(SHELL_CMD), 0),
               DISPATCH_LINE_CLEAR_NONE);
+    TEST_END();
+}
+
+/* ---- cursor_row_is_windows_prompt override ----------------------------- */
+
+/* An SSH session (always READLINE above) to a Windows host running
+ * PowerShell or cmd as the login shell: the live prompt overrides SSH's
+ * usual READLINE. */
+int test_dispatch_line_clear_ssh_windows_prompt_overrides_to_none(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, NULL, 1),
+              DISPATCH_LINE_CLEAR_NONE);
+    TEST_END();
+}
+
+/* A local Git bash/MSYS2 session (READLINE above, correctly, for bash
+ * itself) with the user having started `pwsh`/`cmd` as a nested shell:
+ * the live prompt overrides the session's own configured shell too. */
+int test_dispatch_line_clear_local_readline_shell_windows_prompt_overrides_to_none(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "Git bash", 1),
+              DISPATCH_LINE_CLEAR_NONE);
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "MSYS2", 1),
+              DISPATCH_LINE_CLEAR_NONE);
+    TEST_END();
+}
+
+/* Already NONE without the override -- must stay NONE, not somehow flip. */
+int test_dispatch_line_clear_local_none_shell_windows_prompt_stays_none(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "PowerShell", 1),
+              DISPATCH_LINE_CLEAR_NONE);
+    TEST_END();
+}
+
+/* False leaves every existing decision unchanged -- this parameter only
+ * ever pulls a decision toward NONE, never toward READLINE. */
+int test_dispatch_line_clear_windows_prompt_false_is_unchanged(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_SSH, NULL, 0),
+              DISPATCH_LINE_CLEAR_READLINE);
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_LOCAL, "Git bash", 0),
+              DISPATCH_LINE_CLEAR_READLINE);
     TEST_END();
 }
 

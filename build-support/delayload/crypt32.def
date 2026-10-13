@@ -9,9 +9,20 @@
 ; library for exactly what's used, no more. Hand-written, not gendef'd:
 ; gendef needs the real DLL and reads its whole export table, which is far
 ; more than this build calls.
+;
+; The last four are referenced only by OpenSSL's CAPI engine
+; (libcrypto.a's libcrypto-lib-e_capi.obj), which the vcpkg build of
+; OpenSSL used by the Linux cross-compile links in and the MSYS2 build on
+; the Windows host does not. They are still delay-imported, never static;
+; they resolve only if the engine is ever activated, which nutshell.exe
+; never does.
 LIBRARY crypt32.dll
 EXPORTS
 CertCloseStore
 CertFindCertificateInStore
 CertFreeCertificateContext
 CertOpenSystemStoreW
+CertDuplicateCertificateContext
+CertEnumCertificatesInStore
+CertGetCertificateContextProperty
+CertOpenStore
