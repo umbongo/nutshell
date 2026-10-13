@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-09-24 (retrospective).
+Last updated: 2026-10-13 (retrospective).
 
 ## Retrospective cadence (standing rule from the maintainer, 2026-09-21)
 
@@ -17,11 +17,12 @@ Last updated: 2026-09-24 (retrospective).
   set) after the last retrospective marker below. Count them with
   `list_pull_requests` (state closed, sort updated, desc) or
   `git log --merges --first-parent origin/main <marker>..`.
-- **Last retrospective:** 2026-09-24, marker commit `21e4d5d` (merge of
-  PR #45, the head of `main` when the retrospective was written). Merges
+- **Last retrospective:** 2026-10-13, marker commit `c593796` (merge of
+  PR #59, the head of `main` when the retrospective was written). Merges
   since: 0 (the retrospective's own PR will be the first). Update this line
-  at every
-  retrospective.
+  at every retrospective. The previous one (2026-09-24, PR #46) was merged
+  *after* its own marker `21e4d5d`, so it fell inside the next cycle's
+  count; the 2026-10-13 count of 13 includes #46's neighbours #47-#59.
 - A daily Routine in the maintainer's Claude account performs the count
   and starts the retrospective in a fresh session when it reaches 10. Any
   session that notices the count is at or past 10 should run it too.
@@ -45,8 +46,8 @@ Last updated: 2026-09-24 (retrospective).
   merge-base question, or the answer is wrong.
 - No `gh` CLI. Pull requests, check runs and branch listings go through the
   `mcp__github__*` tools. Network is proxied; do not disable TLS checks.
-- Native suite baseline on 2026-09-21 (Linux): 1,960 tests. On 2026-09-24 the
-  Windows host ran 2,157; the Linux count may differ by the libssh2-gated files.
+- Native suite baseline on 2026-10-13 (Linux, stub-free libssh2 absent): 2,485 tests,
+  0 failed (1,960 on 2026-09-21; Windows host ran 2,157 on 2026-09-24); the Linux count may differ by the libssh2-gated files.
 
 ## Repository facts
 
@@ -114,16 +115,15 @@ Last updated: 2026-09-24 (retrospective).
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-09-24 (`main` at v1.2.5, PR #45; PR #42 open, superseded by
-the 2026-09-24 checkpoint): two manual checks for the maintainer (the
-dispatch fix and the special-keys checklist); the merge gate compiles
-nothing (require `analyze` or add a `make test` job); local shell
-follow-ups (PowerShell as shell, busybox sidecar run, GPL decision on
-embedding, dispatcher out of `src/ui`, timeout, WSL, OSC 7, mouse
-reporting); then the older items: CodeQL libssh2 gap; `.gitattributes`
-renormalise (89 files); harness batches B–D; security audit H3–H8;
-AI-stream thread lifetime; Session Manager phantom row; status-line
-keyboard path; `md_render.c` DPI; sub-project 3 needs a spec first.
+As of 2026-10-13 (`main` at v1.2.27, PR #59; PR #60 and Dependabot #61 open):
+the manual checks are done and the merge gate now compiles (`Native tests`
+is required). Remaining: the whole-repository security review (classifier
+holes: `env rm -rf /`, command substitution, no PowerShell ruleset); local
+shell follow-ups (dispatcher out of `src/ui`, timeout, WSL, OSC 7, mouse
+reporting); `.gitattributes` renormalise (about 90 files); harness batches
+B-D; security audit H7/H8 and supply chain; Session Manager phantom row;
+status-line keyboard path; `md_render.c` DPI; sub-project 3 needs a spec
+first. `src/ui/window.c` is 5,124 lines and `ai_chat.c` 5,455.
 
 ## Local shell and keys, facts that outlive the session
 

@@ -72,7 +72,8 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
    `docs/retrospectives/`, headed DRAFT, with a scope-and-method section,
    measured numbers in a table, findings ranked by cost of inaction, and
    recommendations clearly separated from changes made.
-9. **Verify the gate will pass.** These files are not build inputs, so no
+9. **Verify the gate will pass.** Skip `make test` when the change has no code modifications (docs, `.claude/`, retrospectives only; maintainer's instruction, 2026-10-13); run `check-version.sh` regardless. The hosted `Native tests` check still runs on the PR.
+    These files are not build inputs, so no
    version bump; but `check-version.sh` still runs its consistency check,
    so never edit the version strings in a checkpoint.
 10. **Clean up.** Remove scratch files and worktrees, then commit on the
