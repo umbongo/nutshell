@@ -9,7 +9,11 @@ name: Checks
 #                      the real libssh2, and the native suite passes. Added
 #                      2026-09-24 after PR #44 merged with four files unstaged:
 #                      an exe built locally proves a build happened, not that
-#                      it came from the committed sources.
+#                      it came from the committed sources. Since 2026-10-13 a
+#                      pull request that changes no code (docs/, .claude/,
+#                      README, ...) skips the compile and the suite but still
+#                      reports green -- see the "scope" step for why the
+#                      trigger has no paths filter.
 
 on:
   pull_request:
@@ -45,7 +49,35 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Decide whether the suite needs to run
+        id: scope
+        run: |
+          # A docs-only pull request has nothing to compile, so the three
+          # steps below are skipped when nothing under src/, tests/,
+          # build-support/, the Makefile, nutshell.rc or this workflow
+          # changed. tests/ counts as code (a test-only change still has to
+          # compile the runner) and so does this file (the gate must test
+          # itself). The skip lives here, inside the job, and NOT as a
+          # paths-ignore on the trigger: this job is a required status
+          # check, and a required check that never reports leaves the pull
+          # request stuck on "Expected -- waiting for status to be reported".
+          # The checkout is shallow (depth 1, the merge commit), so fetch the
+          # base commit explicitly; comparing the two trees needs no history.
+          base='${{ github.event.pull_request.base.sha }}'
+          git fetch --no-tags --depth=1 origin "$base"
+          changed=$(git diff --name-only "$base" HEAD)
+          printf 'changed against %s:\n' "$base"
+          printf '%s\n' "$changed" | sed 's/^/  /'
+          if printf '%s\n' "$changed" | grep -qE '^(src/|tests/|build-support/|Makefile$|nutshell\.rc$|\.github/workflows/checks\.yml$)'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "code changed: running the native suite"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "no code changed: skipping the native suite"
+          fi
+
       - name: Install build dependencies
+        if: steps.scope.outputs.code == 'true'
         run: |
           # The hosted image ships third-party apt sources (Google, Microsoft)
           # whose index hashes go stale between image refreshes; apt then
@@ -59,6 +91,7 @@ jobs:
           sudo apt-get install -y libssl-dev libssh2-1-dev zlib1g-dev
 
       - name: Confirm the Makefile will find libssh2
+        if: steps.scope.outputs.code == 'true'
         run: |
           # The same probe the Makefile runs (HAS_LIBSSH2). If it fails, the
           # test build silently falls back to tests/stubs/libssh2.h and the
@@ -67,6 +100,7 @@ jobs:
           echo "libssh2 linkable"
 
       - name: Build and run the native suite
+        if: steps.scope.outputs.code == 'true'
         run: make test
         env:
           CI: true
