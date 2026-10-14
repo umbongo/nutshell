@@ -114,7 +114,8 @@ list items the popup does not reference. The loop re-posts `WM_QUIT` if it sees 
 the text box does not have focus) or the close box.
 
 **Appearance.** Colours from `ns_tokens()`, fonts from `ns_font()`, sizes from `ns_scale()`
-and `ns_type.h`, title bar through `themed_apply_title_bar`. Layout from a pure
+and `ns_type.h`, dark title bar through `ns_dwm_set_dark_mode(hwnd, ns_tokens()->is_dark)`
+(what `themed_apply_title_bar` does, without needing a `ThemeColors`). Layout from a pure
 `cmd_detail_layout()` in `src/core/cmd_detail_layout.c`, tested in
 `tests/test_cmd_detail_layout.c` the way `about_layout` is:
 
@@ -143,8 +144,9 @@ and `ns_type.h`, title bar through `themed_apply_title_bar`. Layout from a pure
   popup handles both and returns the `cmd_bg` brush.
 - `WM_DPICHANGED`: re-fetch fonts with `ns_font(role, new_dpi)` and relayout. Never
   `ns_font_flush()` from the popup: that deletes the panel's cached fonts.
-- Copy copies the command (section 4) and relabels itself "Copied" for 1.5 s via an
-  `ns_motion` timer, then reverts. No toast system exists and none is added.
+- Copy copies the command (section 4) and relabels itself "Copied" for 1.5 s on a plain
+  one-shot `WM_TIMER`, then reverts (`ns_motion` eases progress for animations and would
+  keep a 16 ms timer running for a label swap). No toast system exists and none is added.
 - Informational only: no Approve or Deny. Those stay on the card so no decision is taken from
   a window showing one command out of context.
 - `chatlv_hit_is_actionable()` adds `HIT_TEXT` and `HIT_TAG`; the row text gets an `ns_hover`
@@ -332,3 +334,23 @@ One round, Opus, 2026-10-13. Dispositions:
 14. Minor: tag opens the popup (accepted); long notes get an ellipsis (accepted); controls stripped (accepted); `secure_zero` (accepted); band selection from row text (accepted, intended); entry size (accepted, 256 bytes); version wording (accepted); Linux build vs skill text (accepted, skill corrected); demo state for the gallery (accepted).
 
 Not-verified items: `ui_demo.c`'s approval state does go through `append_batch_command_items()` (survey, `ai_chat.c:5294`); the cross-compile on automaton did produce the gate-passing v1.2.29 exe. The rest are line references already used above.
+
+## Diff review
+
+One round, Opus, 2026-10-14, on the core and UI commits. No high-severity finding.
+Dispositions:
+
+1. Block copy could end in a newline (splitter trimmed one line end): **accepted**, all trailing CR/LF trimmed, tested.
+2. Tab trapped in the popup's text box (`DLGC_WANTALLKEYS`, `WM_NEXTDLGCTL` unhandled): **accepted**, handled in the window procedure and the loop.
+3. Prose on the same line after a closing marker became the next command's note: **accepted**, the note starts after the first newline following the previous marker.
+4. Popup had minimise and maximise boxes: **accepted**, removed.
+5. Enter on a focused Copy button closed without copying: **accepted**, it presses Copy.
+6. "Copied" shown on a failed copy, and `EmptyClipboard` before a conversion that can fail: **accepted**, build first, empty and set only on success, label only on success.
+7. Code-glyph hit rects are a snapshot of the last paint: **accepted in part**. Hits under the pinned user bubble are excluded. A click queued between a wheel notch and the repaint can hit a stale rect; the Retry link has the same window and the cost is a wrong copy the user sees in the clipboard, not a crash. Rejected for this change.
+8. A lone bullet or dash counted as a note: **accepted**, common punctuation code points no longer count as text.
+9. Two departures from the spec (timer, title bar): **accepted**, the spec is amended above.
+10. Thinking hover ids reach the empty-state chip range after 61,183 item ids: **rejected** here, pre-existing and unrelated to the new ranges; the effect is a full repaint instead of a partial one. Left for the list view's next change.
+11. Transcript copy could end in a partial UTF-8 sequence when stripping brought it under the cap: **accepted**, the cut happens before the strip.
+
+Not verified by the reviewer and left to the Windows eyeball check: the `cmddetail` demo's modal loop against the gallery case's teardown, `WM_DPICHANGED` across monitors, and a font flush on the main window while the popup is open (the main window is disabled, so no settings change can reach it while the popup is up).
+
