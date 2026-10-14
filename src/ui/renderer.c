@@ -1,5 +1,6 @@
 #include "renderer.h"
 #include "display_buffer.h"
+#include "paint_cover.h"
 #include "selection.h"
 #include "theme.h"
 #include "redraw_log.h"
@@ -162,7 +163,7 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         int _in_rect = 0;
         for (int _ri = 0; _ri < term->rows; _ri++) {
             LONG _py = (LONG)y + (LONG)_ri * r->charHeight;
-            if (!(_py + r->charHeight < paintRect->top || _py > paintRect->bottom))
+            if (!(_py + r->charHeight <= paintRect->top || _py >= paintRect->bottom))
                 _in_rect++;
         }
         REDRAW_LOG("[REDRAW] renderer_draw: rows=%d in_paintrect=%d "
@@ -210,11 +211,31 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         force_all_rows = true;
     }
 
+    /* A row's dirty flag may be cleared only when this paint contained the
+     * row's whole rectangle. A partial update region (the 14px gutter
+     * exposed when the scrollbar hides for the alternate screen,
+     * 2026-10-14) paints only the cells inside it; marking the row clean
+     * then strands the rest of the row until some later full-width paint.
+     * Left dirty, the row is finished by the next full-window invalidate.
+     * A row the paint only partly contained also gets its shadow row
+     * poisoned, because GDI clips a cell that straddles the paint edge
+     * while the bookkeeping below would record it as painted
+     * (src/core/paint_cover.h, display_buffer.h). All range tests are
+     * half-open: RECT right and bottom are exclusive. */
+    const long content_left  = (long)x;
+    const long content_right = (long)x + (long)term->cols * (long)r->charWidth;
+
     for (int row_idx = 0; row_idx < term->rows; row_idx++) {
         LONG py = (LONG)y + (LONG)row_idx * r->charHeight;
 
         /* Skip rows outside paint rect */
-        if (py + r->charHeight < paintRect->top || py > paintRect->bottom) continue;
+        if (py + r->charHeight <= paintRect->top || py >= paintRect->bottom) continue;
+
+        bool covered = paint_covers_rect(
+            (long)paintRect->left, (long)paintRect->top,
+            (long)paintRect->right, (long)paintRect->bottom,
+            content_left, (long)py,
+            content_right, (long)py + (long)r->charHeight) != 0;
 
         TermRow *row = get_visible_row(term, row_idx);
         if (!row) {
@@ -248,9 +269,9 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             LONG px_start = (LONG)x + (LONG)col_idx * r->charWidth;
 
             /* Skip cols before paint rect */
-            if (px_start + r->charWidth < paintRect->left) { col_idx++; continue; }
+            if (px_start + r->charWidth <= paintRect->left) { col_idx++; continue; }
             /* Stop if we're past the paint rect */
-            if (px_start > paintRect->right) break;
+            if (px_start >= paintRect->right) break;
 
             /* Resolve first cell */
             TermCell *cell = &row->cells[col_idx];
@@ -384,7 +405,10 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             }
         }
 
-        row->dirty = false;
+        if (covered)
+            row->dirty = false;
+        else
+            dispbuf_invalidate_row(&r->dispbuf, row_idx);
     }
 
     /* Restore normal font */

@@ -464,6 +464,15 @@ void term_alt_screen_enter(Terminal *term)
     term->scroll_top      = 0;
     term->scroll_bot      = term->rows - 1;
     term->alt_screen_active = true;
+
+    /* Same signal as term_alt_screen_exit(): the whole screen changed
+     * under the renderer. Besides invalidating the display-buffer shadow,
+     * window.c's poll loop treats this as "critical" and repaints at once
+     * instead of waiting out the 16 ms cooldown -- which is the window in
+     * which, on 2026-10-14, a partial-width gutter repaint (the scrollbar
+     * hiding for the alternate screen) was the only paint to run and left
+     * the previous screen's text on view. */
+    term->full_redraw_needed = true;
 }
 
 void term_alt_screen_exit(Terminal *term)

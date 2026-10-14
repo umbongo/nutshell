@@ -285,6 +285,23 @@ Open, in priority order:
 - [ ] `md_render.c` renders at raw 96-DPI pixels — fold into sub-project 3.
 - [ ] Sub-project 3 (main window chrome): spec first, mockups before choosing, as with
       sub-project 2.
+- [ ] Paint-path follow-ups from the 2026-10-14 stale-band investigation (v1.2.34 fixed
+      the seed: `renderer_draw` cleared `row->dirty` on a paint that did not contain
+      the row, and `term_alt_screen_enter()` now requests a full redraw like the exit
+      path). Two weaknesses the REDRAW_DEBUG log exposed remain: (a) a disconnected
+      background session keeps a row dirty forever, so `term_has_dirty_rows()` makes
+      the WM_TIMER poll loop invalidate the window at 60 fps indefinitely — find why
+      the row never clears (rows of a non-active session are never painted) and stop
+      polling dirty state for sessions that are not on screen; (b) the poll path calls
+      `dispbuf_invalidate()` without `force_all_rows`, so a shadow-invalidating repaint
+      cannot rescue a row already marked clean — consider making `dispbuf_invalidate`
+      also mark all rows dirty, or routing it through `full_redraw_needed`. The 16 ms
+      cooldown's `g_last_paint_tick` is shared by all sessions, which is what let the
+      background tab's no-op paints starve nano's. Also noted by the review: the poll
+      loop only repaints for connected idle sessions, so a disconnected or connecting
+      tab that takes a partial paint waits for the next full invalidate from elsewhere
+      (as before); and `rcPaint` is the update region's bounding box, which the per-row
+      shadow poisoning now makes harmless.
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the

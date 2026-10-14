@@ -198,3 +198,31 @@ int test_dispbuf_resize_shrink_dimensions(void) {
     dispbuf_free(&db);
     TEST_END();
 }
+
+/* dispbuf_invalidate_row: renderer_draw poisons the shadow row of a row the
+ * paint rectangle did not fully contain (2026-10-14), so a cell GDI clipped
+ * at the paint edge is re-checked next time. Other rows are untouched and
+ * out-of-range rows are ignored. */
+int test_dispbuf_invalidate_row_only_that_row(void)
+{
+    TEST_BEGIN();
+    DisplayBuffer db;
+    dispbuf_init(&db, 4, 3);
+    for (int r = 0; r < 4; r++)
+        for (int c = 0; c < 3; c++)
+            dispbuf_cell_update(&db, r, c, 'a', 1, 2, 0);
+    dispbuf_invalidate_row(&db, 2);
+    ASSERT_FALSE(dispbuf_cell_clean(&db, 2, 0, 'a', 1, 2, 0));
+    ASSERT_FALSE(dispbuf_cell_clean(&db, 2, 1, 'a', 1, 2, 0));
+    ASSERT_FALSE(dispbuf_cell_clean(&db, 2, 2, 'a', 1, 2, 0));
+    ASSERT_TRUE(dispbuf_cell_clean(&db, 1, 0, 'a', 1, 2, 0));
+    ASSERT_TRUE(dispbuf_cell_clean(&db, 1, 2, 'a', 1, 2, 0));
+    ASSERT_TRUE(dispbuf_cell_clean(&db, 3, 0, 'a', 1, 2, 0));
+    dispbuf_invalidate_row(&db, -1);
+    dispbuf_invalidate_row(&db, 4);
+    dispbuf_invalidate_row(NULL, 0);
+    ASSERT_TRUE(dispbuf_cell_clean(&db, 0, 0, 'a', 1, 2, 0));
+    ASSERT_TRUE(dispbuf_cell_clean(&db, 3, 2, 'a', 1, 2, 0));
+    dispbuf_free(&db);
+    TEST_END();
+}
