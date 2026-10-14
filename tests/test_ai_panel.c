@@ -39,8 +39,13 @@ int test_ai_panel_layout_tiles_exact_sum_96(void)
     ASSERT_EQ(out.status.h, 28);   /* SZ_CTRL_H at 96 */
     ASSERT_EQ(out.composer.h, 40);
     ASSERT_TRUE(out.thread.h >= 0);
-    ASSERT_EQ(out.header.h + out.thread.h + out.status.h + out.composer.h, panel.h);
+    ASSERT_EQ(out.sash.h, 8);      /* SP_SM at 96 */
+    ASSERT_EQ(out.header.h + out.thread.h + out.status.h + out.sash.h + out.composer.h, panel.h);
 
+    ASSERT_TRUE(rect_inside(out.sash, panel));
+    ASSERT_TRUE(!rects_overlap(out.sash, out.thread));
+    ASSERT_TRUE(!rects_overlap(out.sash, out.status));
+    ASSERT_TRUE(!rects_overlap(out.sash, out.composer));
     ASSERT_TRUE(rect_inside(out.header, panel));
     ASSERT_TRUE(rect_inside(out.thread, panel));
     ASSERT_TRUE(rect_inside(out.status, panel));
@@ -70,7 +75,9 @@ int test_ai_panel_layout_tiles_exact_sum_192(void)
     ASSERT_EQ(out.status.h, 56);   /* SZ_CTRL_H at 192 */
     ASSERT_EQ(out.composer.h, 80);
     ASSERT_TRUE(out.thread.h >= 0);
-    ASSERT_EQ(out.header.h + out.thread.h + out.status.h + out.composer.h, panel.h);
+    ASSERT_EQ(out.sash.h, 16);     /* SP_SM at 192 */
+    ASSERT_EQ(out.header.h + out.thread.h + out.status.h + out.sash.h + out.composer.h, panel.h);
+    ASSERT_TRUE(rect_inside(out.sash, panel));
     ASSERT_TRUE(rect_inside(out.header, panel));
     ASSERT_TRUE(rect_inside(out.thread, panel));
     ASSERT_TRUE(rect_inside(out.status, panel));
@@ -86,6 +93,82 @@ int test_ai_panel_layout_thread_nonnegative_when_panel_tiny(void)
     ai_panel_layout(panel, 96, 40, &out);
     ASSERT_TRUE(out.thread.h >= 0);
     ASSERT_EQ(out.thread.h, 0);
+    TEST_END();
+}
+
+int test_ai_panel_layout_sash_between_status_and_composer(void)
+{
+    TEST_BEGIN();
+    NsRect panel = { 10, 20, 400, 600 };
+    AiPanelLayout out;
+    ai_panel_layout(panel, 96, 60, &out);
+
+    ASSERT_EQ(out.sash.x, panel.x);
+    ASSERT_EQ(out.sash.w, panel.w);
+    ASSERT_EQ(out.sash.h, 8);
+    /* sash sits directly above the composer, status directly above the sash */
+    ASSERT_EQ(out.sash.y + out.sash.h, out.composer.y);
+    ASSERT_EQ(out.status.y + out.status.h, out.sash.y);
+    ASSERT_EQ(out.thread.y + out.thread.h, out.status.y);
+    ASSERT_EQ(out.composer.y + out.composer.h, panel.y + panel.h);
+    TEST_END();
+}
+
+int test_ai_panel_layout_sash_tiny_panel_keeps_thread_nonnegative(void)
+{
+    TEST_BEGIN();
+    NsRect panel = { 0, 0, 100, 10 };
+    AiPanelLayout out;
+    ai_panel_layout(panel, 96, 40, &out);
+    ASSERT_EQ(out.thread.h, 0);
+    ASSERT_EQ(out.sash.h, 8);
+    TEST_END();
+}
+
+/* ---- ai_composer_clamp_h ------------------------------------------------------ */
+
+int test_ai_composer_clamp_h_96(void)
+{
+    TEST_BEGIN();
+    /* min = 2*16 + 2*8 = 48, max = 600/2 = 300 */
+    ASSERT_EQ(ai_composer_clamp_h(46, 600, 16, 96), 48);    /* below min */
+    ASSERT_EQ(ai_composer_clamp_h(48, 600, 16, 96), 48);    /* at min */
+    ASSERT_EQ(ai_composer_clamp_h(120, 600, 16, 96), 120);  /* in range */
+    ASSERT_EQ(ai_composer_clamp_h(300, 600, 16, 96), 300);  /* at max */
+    ASSERT_EQ(ai_composer_clamp_h(900, 600, 16, 96), 300);  /* above max */
+    TEST_END();
+}
+
+int test_ai_composer_clamp_h_192(void)
+{
+    TEST_BEGIN();
+    /* min = 2*32 + 2*16 = 96, max = 1200/2 = 600 */
+    ASSERT_EQ(ai_composer_clamp_h(10, 1200, 32, 192), 96);
+    ASSERT_EQ(ai_composer_clamp_h(200, 1200, 32, 192), 200);
+    ASSERT_EQ(ai_composer_clamp_h(5000, 1200, 32, 192), 600);
+    TEST_END();
+}
+
+int test_ai_composer_clamp_h_minimum_wins_on_tiny_panel(void)
+{
+    TEST_BEGIN();
+    /* panel_h/2 = 25 < min 48: the minimum wins */
+    ASSERT_EQ(ai_composer_clamp_h(100, 50, 16, 96), 48);
+    ASSERT_EQ(ai_composer_clamp_h(10, 50, 16, 96), 48);
+    ASSERT_EQ(ai_composer_clamp_h(100, 0, 16, 96), 48);
+    TEST_END();
+}
+
+int test_ai_composer_clamp_h_bad_inputs(void)
+{
+    TEST_BEGIN();
+    /* line_h <= 0 -> ns_scale(16, dpi): min = 32 + 16 = 48 at 96 DPI */
+    ASSERT_EQ(ai_composer_clamp_h(0, 600, 0, 96), 48);
+    ASSERT_EQ(ai_composer_clamp_h(100, 600, -5, 96), 100);
+    ASSERT_EQ(ai_composer_clamp_h(0, 1200, 0, 192), 96);
+    /* negative want and negative panel */
+    ASSERT_EQ(ai_composer_clamp_h(-50, 600, 16, 96), 48);
+    ASSERT_EQ(ai_composer_clamp_h(-50, -600, 16, 96), 48);
     TEST_END();
 }
 

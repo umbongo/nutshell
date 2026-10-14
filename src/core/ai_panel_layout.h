@@ -15,12 +15,20 @@
 #include <stddef.h>
 
 /* Top-level panel tiling, top to bottom: header (SP_XXL tall), thread
- * (the rest, never negative), status line (SZ_CTRL_H tall, directly above
- * the composer), composer (the caller's own height, e.g. a multi-line
- * input that grows). */
-typedef struct { NsRect header, thread, status, composer; } AiPanelLayout;
+ * (the rest, never negative), status line (SZ_CTRL_H tall), sash (SP_SM
+ * tall, the drag handle that resizes the composer), composer (the caller's
+ * own height, e.g. a multi-line input that grows). The sash is directly
+ * above the composer and the status line directly above the sash; header
+ * + thread + status + sash + composer sum to the panel height. */
+typedef struct { NsRect header, thread, status, sash, composer; } AiPanelLayout;
 
 void ai_panel_layout(NsRect panel, int dpi, int composer_h, AiPanelLayout *out);
+
+/* Clamps a requested composer height to [2 * line_h + 2 * ns_scale(SP_SM,
+ * dpi), panel_h / 2]. The minimum wins when the two conflict (a tiny
+ * panel). line_h is the input font's line height in device pixels; a
+ * value <= 0 is treated as ns_scale(16, dpi). */
+int ai_composer_clamp_h(int want_h, int panel_h, int line_h, int dpi);
 
 /* Status-line controls, left to right: the command-policy control (one
  * pill of four stops, sliced up by ns_policy_layout() -- this module only
