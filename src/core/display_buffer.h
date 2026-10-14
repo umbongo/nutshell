@@ -33,6 +33,12 @@ void dispbuf_resize(DisplayBuffer *db, int rows, int cols);
  * that cannot match real content (codepoint = 0xFFFFFFFF). */
 void dispbuf_invalidate(DisplayBuffer *db);
 
+/* Mark one row's cells with the same sentinel. renderer_draw() calls this
+ * for a row the paint rectangle did not fully contain (2026-10-14): GDI
+ * clipped part of what it drew, so the shadow must not claim those cells
+ * were painted. Out-of-range rows are ignored. */
+void dispbuf_invalidate_row(DisplayBuffer *db, int row);
+
 /* Compare a cell against the shadow.  Returns true if the cell is clean
  * (i.e., codepoint, fg, bg, and flags all match). */
 static inline bool dispbuf_cell_clean(const DisplayBuffer *db,

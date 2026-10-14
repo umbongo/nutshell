@@ -42,3 +42,12 @@ void dispbuf_invalidate(DisplayBuffer *db)
         db->cells[i].codepoint = 0xFFFFFFFFu;  /* sentinel — won't match real content */
     }
 }
+
+void dispbuf_invalidate_row(DisplayBuffer *db, int row)
+{
+    if (!db || !db->cells || row < 0 || row >= db->rows) return;
+    DisplayCell *c = &db->cells[(size_t)row * (size_t)db->cols];
+    for (int i = 0; i < db->cols; i++) {
+        c[i].codepoint = 0xFFFFFFFFu;
+    }
+}

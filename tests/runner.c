@@ -1110,6 +1110,7 @@ int test_resize_sparse_rows_accessible(void);
 int test_resize_type_beyond_old_content(void);
 int test_dispbuf_empty_rows_dirty_after_invalidate(void);
 int test_dirty_alt_screen_sparse(void);
+int test_dirty_alt_screen_enter_requests_full_redraw(void);
 int test_mark_all_dirty_sparse(void);
 int test_has_dirty_rows_sparse(void);
 
@@ -1661,6 +1662,7 @@ int test_dispbuf_init_all_dirty(void);
 int test_dispbuf_resize_all_dirty(void);
 int test_dispbuf_resize_dimensions_sync(void);
 int test_dispbuf_resize_shrink_dimensions(void);
+int test_dispbuf_invalidate_row_only_that_row(void);
 
 /* test_color.c */
 int test_color256_palette_ansi(void);
@@ -2615,6 +2617,19 @@ int test_cli_write_all_zero_bytes_is_none(void);
 int test_cli_write_all_error_after_partial_is_stopped(void);
 int test_cli_write_all_closed_is_stopped(void);
 int test_cli_write_all_empty_text_is_done(void);
+
+/* test_paint_cover.c */
+int test_paint_cover_full_rect_covers(void);
+int test_paint_cover_exact_bounds_cover(void);
+int test_paint_cover_right_sliver_does_not_cover(void);
+int test_paint_cover_left_margin_still_covers(void);
+int test_paint_cover_missing_left_column_does_not_cover(void);
+int test_paint_cover_missing_right_column_does_not_cover(void);
+int test_paint_cover_middle_band_does_not_cover(void);
+int test_paint_cover_vertical_partial_row_does_not_cover(void);
+int test_paint_cover_edge_touching_row_boundary(void);
+int test_paint_cover_row_above_or_below_paint_does_not_cover(void);
+int test_paint_cover_degenerate_rect_is_covered(void);
 
 int test_ai_status_layout_no_overlap_inside_line_96(void);
 int test_ai_status_layout_no_overlap_inside_line_192(void);
@@ -3950,6 +3965,7 @@ int main(void) {
     failed += test_resize_type_beyond_old_content();
     failed += test_dispbuf_empty_rows_dirty_after_invalidate();
     failed += test_dirty_alt_screen_sparse();
+    failed += test_dirty_alt_screen_enter_requests_full_redraw();
     failed += test_mark_all_dirty_sparse();
     failed += test_has_dirty_rows_sparse();
 
@@ -4373,6 +4389,7 @@ int main(void) {
     failed += test_dispbuf_resize_all_dirty();
     failed += test_dispbuf_resize_dimensions_sync();
     failed += test_dispbuf_resize_shrink_dimensions();
+    failed += test_dispbuf_invalidate_row_only_that_row();
 
     printf("\n--- Color ---\n");
     failed += test_color256_palette_ansi();
@@ -5513,6 +5530,17 @@ int main(void) {
     failed += test_cli_write_all_error_after_partial_is_stopped();
     failed += test_cli_write_all_closed_is_stopped();
     failed += test_cli_write_all_empty_text_is_done();
+    failed += test_paint_cover_full_rect_covers();
+    failed += test_paint_cover_exact_bounds_cover();
+    failed += test_paint_cover_right_sliver_does_not_cover();
+    failed += test_paint_cover_left_margin_still_covers();
+    failed += test_paint_cover_missing_left_column_does_not_cover();
+    failed += test_paint_cover_missing_right_column_does_not_cover();
+    failed += test_paint_cover_middle_band_does_not_cover();
+    failed += test_paint_cover_vertical_partial_row_does_not_cover();
+    failed += test_paint_cover_edge_touching_row_boundary();
+    failed += test_paint_cover_row_above_or_below_paint_does_not_cover();
+    failed += test_paint_cover_degenerate_rect_is_covered();
     failed += test_ai_status_layout_no_overlap_inside_line_96();
     failed += test_ai_status_layout_no_overlap_inside_line_192();
     failed += test_ai_status_layout_policy_is_left_aligned_and_full_width();

@@ -368,3 +368,24 @@ int test_dispbuf_empty_rows_dirty_after_invalidate(void) {
     dispbuf_free(&db);
     TEST_END();
 }
+
+/* term_alt_screen_enter() must request a full redraw, as the exit path
+ * does: window.c treats the flag as critical and repaints at once instead
+ * of waiting out the paint cooldown (2026-10-14 stale-band investigation). */
+int test_dirty_alt_screen_enter_requests_full_redraw(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    t->full_redraw_needed = false;
+    term_alt_screen_enter(t);
+    ASSERT_TRUE(t->full_redraw_needed);
+    ASSERT_TRUE(t->alt_screen_active);
+    /* A second enter is a no-op and must not matter either way. */
+    t->full_redraw_needed = false;
+    term_alt_screen_enter(t);
+    ASSERT_FALSE(t->full_redraw_needed);
+    term_alt_screen_exit(t);
+    ASSERT_TRUE(t->full_redraw_needed);
+    term_free(t);
+    TEST_END();
+}
