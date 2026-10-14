@@ -879,7 +879,8 @@ int test_ai_system_prompt_powershell_examples(void) {
     ASSERT_TRUE(strstr(buf, "[EXEC]ls -la[/EXEC]") != NULL);
     ASSERT_TRUE(strstr(buf, "Write PowerShell syntax, not bash.") == NULL);
 
-    /* SSH text is untouched, byte for byte. */
+    /* SSH text is pinned byte for byte (one explanation-placement sentence was
+     * added 2026-10-13 for the per-command notes). */
     char ssh_buf[4096];
     ai_build_system_prompt(ssh_buf, sizeof(ssh_buf), NULL, NULL, NULL,
                            SESSION_SSH, NULL);
@@ -897,6 +898,8 @@ int test_ai_system_prompt_powershell_examples(void) {
         "2. Then check memory\n[EXEC]free -m[/EXEC]\n"
         "3. Finally check uptime\n[EXEC]uptime[/EXEC]\n\n"
         "Always explain what each command does before its marker. "
+        "Put the explanation on the line directly before its marker and "
+        "write nothing between a marker and the next explanation. "
         "Never say 'let's start with' or do only the first step. "
         "Include every command the user needs in one response.";
     ASSERT_STR_EQ(ssh_buf, expected_ssh);
@@ -3291,5 +3294,328 @@ int test_ai_build_body_tools_with_tools_json(void) {
     ASSERT_TRUE(strstr(buf, "my_tool") != NULL);
     /* Top-level object still closes properly */
     ASSERT_EQ(buf[n - 1], '}');
+    TEST_END();
+}
+
+/* --- ai_extract_commands_notes tests --- */
+
+#define NOTE_TEST_MAX 16
+
+static int note_is_valid_utf8(const char *s)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        int extra;
+        if (*p < 0x80) extra = 0;
+        else if ((*p & 0xE0) == 0xC0) extra = 1;
+        else if ((*p & 0xF0) == 0xE0) extra = 2;
+        else if ((*p & 0xF8) == 0xF0) extra = 3;
+        else return 0;
+        p++;
+        for (int i = 0; i < extra; i++, p++) {
+            if ((*p & 0xC0) != 0x80) return 0;
+        }
+    }
+    return 1;
+}
+
+int test_ai_notes_basic_pairs_with_commands(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    int rej = -1, rej_long = -1;
+    const char *resp = "Check disk usage\n[EXEC]df -h[/EXEC]\n"
+                       "Check memory\n[EXEC]free -m[/EXEC]\n";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      &rej, &rej_long);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(rej, 0);
+    ASSERT_EQ(rej_long, 0);
+    ASSERT_STR_EQ(cmds[0], "df -h");
+    ASSERT_STR_EQ(notes[0], "Check disk usage");
+    ASSERT_STR_EQ(cmds[1], "free -m");
+    ASSERT_STR_EQ(notes[1], "Check memory");
+    TEST_END();
+}
+
+int test_ai_notes_aligned_when_middle_block_has_control_char(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    int rej = 0;
+    const char *resp = "First thing\n[EXEC]a[/EXEC]\n"
+                       "Dropped thing\n[EXEC]b\nc[/EXEC]\n"
+                       "Third thing\n[EXEC]d[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      &rej, NULL);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(rej, 1);
+    ASSERT_STR_EQ(cmds[0], "a");
+    ASSERT_STR_EQ(notes[0], "First thing");
+    ASSERT_STR_EQ(cmds[1], "d");
+    /* The dropped block's prose must not leak into the next note. */
+    ASSERT_STR_EQ(notes[1], "Third thing");
+    TEST_END();
+}
+
+int test_ai_notes_aligned_when_middle_block_oversized(void) {
+    TEST_BEGIN();
+    static char resp[2600];
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    int rej_long = 0;
+    size_t off = 0;
+    off += (size_t)snprintf(resp + off, sizeof(resp) - off,
+                            "One\n[EXEC]a[/EXEC]\nHuge\n[EXEC]");
+    for (int i = 0; i < 1100; i++) resp[off++] = 'x';
+    snprintf(resp + off, sizeof(resp) - off, "[/EXEC]\nThree\n[EXEC]c[/EXEC]");
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, &rej_long);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(rej_long, 1);
+    ASSERT_STR_EQ(cmds[1], "c");
+    ASSERT_STR_EQ(notes[0], "One");
+    ASSERT_STR_EQ(notes[1], "Three");
+    TEST_END();
+}
+
+int test_ai_notes_aligned_when_empty_block_between(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "One\n[EXEC]a[/EXEC]\nBlank\n[EXEC]  [/EXEC]\n"
+                       "Two\n[EXEC]b[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 2);
+    ASSERT_STR_EQ(notes[0], "One");
+    ASSERT_STR_EQ(notes[1], "Two");
+    TEST_END();
+}
+
+int test_ai_notes_prose_only_before_first_block(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "Run these two\n[EXEC]a[/EXEC][EXEC]b[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 2);
+    ASSERT_STR_EQ(notes[0], "Run these two");
+    ASSERT_STR_EQ(notes[1], "");
+    TEST_END();
+}
+
+int test_ai_notes_last_paragraph_only(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "Here's the plan:\n\n1. Check disk usage\n"
+                       "[EXEC]df -h[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(notes[0], "1. Check disk usage");
+    TEST_END();
+}
+
+int test_ai_notes_trailing_blank_lines_ignored(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "Intro\n\nList the files\n\n\n[EXEC]ls[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(notes[0], "List the files");
+    TEST_END();
+}
+
+int test_ai_notes_multiline_paragraph_collapsed(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "  Appends   the\talias\nto the file  \n[EXEC]x[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(notes[0], "Appends the alias to the file");
+    TEST_END();
+}
+
+int test_ai_notes_digit_only_note_is_empty(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "Plan\n\n2.\n[EXEC]a[/EXEC]\n-\n[EXEC]b[/EXEC]\n"
+                       "Step 3\n[EXEC]c[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 3);
+    ASSERT_STR_EQ(notes[0], "");
+    ASSERT_STR_EQ(notes[1], "");
+    ASSERT_STR_EQ(notes[2], "Step 3");
+    TEST_END();
+}
+
+int test_ai_notes_long_note_cut_at_utf8_boundary(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    static char resp[1200];
+
+    /* 254 ASCII bytes then a 2-byte char: 256 bytes, one more than fits. */
+    size_t off = 0;
+    for (int i = 0; i < CMD_NOTE_MAX - 2; i++) resp[off++] = 'a';
+    memcpy(resp + off, "\xC3\xA9", 2); off += 2;
+    memcpy(resp + off, "tail[EXEC]x[/EXEC]", 19);
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ((int)strlen(notes[0]), CMD_NOTE_MAX - 2);
+    ASSERT_TRUE(note_is_valid_utf8(notes[0]));
+
+    /* 253 ASCII bytes then a 3-byte char straddling the limit. */
+    off = 0;
+    for (int i = 0; i < CMD_NOTE_MAX - 3; i++) resp[off++] = 'b';
+    memcpy(resp + off, "\xE2\x82\xAC", 3); off += 3;
+    memcpy(resp + off, "tail[EXEC]x[/EXEC]", 19);
+    n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                  NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_TRUE(strlen(notes[0]) <= (size_t)(CMD_NOTE_MAX - 1));
+    ASSERT_EQ((int)strlen(notes[0]), CMD_NOTE_MAX - 3);
+    ASSERT_TRUE(note_is_valid_utf8(notes[0]));
+
+    /* A char that fits exactly is kept whole. */
+    off = 0;
+    for (int i = 0; i < CMD_NOTE_MAX - 3; i++) resp[off++] = 'c';
+    memcpy(resp + off, "\xC3\xA9", 2); off += 2;
+    memcpy(resp + off, "tail[EXEC]x[/EXEC]", 19);
+    n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                  NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_EQ((int)strlen(notes[0]), CMD_NOTE_MAX - 1);
+    ASSERT_TRUE(note_is_valid_utf8(notes[0]));
+    TEST_END();
+}
+
+int test_ai_notes_fence_lines_removed(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "```bash\nList files\n```\n[EXEC]ls[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(notes[0], "List files");
+    /* A note that is nothing but a fence is empty. */
+    resp = "```\n[EXEC]ls[/EXEC]";
+    n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                  NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(notes[0], "");
+    TEST_END();
+}
+
+int test_ai_notes_crlf_input(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "Intro line\r\n\r\nList the files\r\nin here\r\n"
+                       "[EXEC]ls[/EXEC]\r\nThen\r\n[EXEC]pwd[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 2);
+    ASSERT_STR_EQ(notes[0], "List the files in here");
+    ASSERT_STR_EQ(notes[1], "Then");
+    TEST_END();
+}
+
+int test_ai_notes_controls_and_bidi_removed(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    /* ESC, DEL, C1 (U+0085), RLO U+202E, LRM U+200E, isolate U+2066/2069. */
+    const char *resp = "Safe\x1b[31m\x7f" "ly \xC2\x85" "run\xE2\x80\xAE"
+                       " it\xE2\x80\x8E \xE2\x81\xA6here\xE2\x81\xA9"
+                       "\n[EXEC]x[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(notes[0], "Safe[31mly run it here");
+    TEST_END();
+}
+
+int test_ai_notes_keeps_non_ascii_text(void) {
+    TEST_BEGIN();
+    char cmds[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "Liste les fichiers \xE2\x80\x94 d\xC3\xA9tails\n"
+                       "[EXEC]ls[/EXEC]";
+    int n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                      NULL, NULL);
+    ASSERT_EQ(n, 1);
+    ASSERT_STR_EQ(notes[0], "Liste les fichiers \xE2\x80\x94 d\xC3\xA9tails");
+    TEST_END();
+}
+
+int test_ai_notes_null_notes_matches_ex(void) {
+    TEST_BEGIN();
+    char cmds_a[NOTE_TEST_MAX][1024];
+    char cmds_b[NOTE_TEST_MAX][1024];
+    char notes[NOTE_TEST_MAX][CMD_NOTE_MAX];
+    const char *resp = "A\n[EXEC]a[/EXEC]\nB\n[EXEC]b\nc[/EXEC]\n"
+                       "C\n[EXEC]d[/EXEC]";
+    int rej_a = -1, rl_a = -1, rej_b = -1, rl_b = -1;
+    int na = ai_extract_commands_ex(resp, cmds_a, NOTE_TEST_MAX,
+                                    &rej_a, &rl_a);
+    int nb = ai_extract_commands_notes(resp, cmds_b, notes, NOTE_TEST_MAX,
+                                       &rej_b, &rl_b);
+    ASSERT_EQ(na, nb);
+    ASSERT_EQ(rej_a, rej_b);
+    ASSERT_EQ(rl_a, rl_b);
+    for (int i = 0; i < na; i++) ASSERT_STR_EQ(cmds_a[i], cmds_b[i]);
+    int nc = ai_extract_commands_notes(resp, cmds_b, NULL, NOTE_TEST_MAX,
+                                       NULL, NULL);
+    ASSERT_EQ(nc, na);
+    TEST_END();
+}
+
+int test_ai_notes_bad_args(void) {
+    TEST_BEGIN();
+    char cmds[2][1024];
+    char notes[2][CMD_NOTE_MAX];
+    int rej = 5, rl = 5;
+    ASSERT_EQ(ai_extract_commands_notes(NULL, cmds, notes, 2, &rej, &rl), 0);
+    ASSERT_EQ(rej, 0);
+    ASSERT_EQ(rl, 0);
+    ASSERT_EQ(ai_extract_commands_notes("[EXEC]a[/EXEC]", NULL, notes, 2,
+                                        NULL, NULL), 0);
+    ASSERT_EQ(ai_extract_commands_notes("[EXEC]a[/EXEC]", cmds, notes, 0,
+                                        NULL, NULL), 0);
+    TEST_END();
+}
+
+int test_ai_notes_respects_max_cmds(void) {
+    TEST_BEGIN();
+    char cmds[2][1024];
+    char notes[2][CMD_NOTE_MAX];
+    int n = ai_extract_commands_notes(
+        "A\n[EXEC]a[/EXEC]\nB\n[EXEC]b[/EXEC]\nC\n[EXEC]c[/EXEC]",
+        cmds, notes, 2, NULL, NULL);
+    ASSERT_EQ(n, 2);
+    ASSERT_STR_EQ(notes[1], "B");
+    TEST_END();
+}
+
+int test_ai_system_prompt_asks_for_explanation_before_marker(void) {
+    TEST_BEGIN();
+    char buf[8192];
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL,
+                           SESSION_SSH, NULL);
+    ASSERT_TRUE(strstr(buf, "Put the explanation on the line directly before "
+                            "its marker and write nothing between a marker "
+                            "and the next explanation.") != NULL);
     TEST_END();
 }

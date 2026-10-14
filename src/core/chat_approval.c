@@ -50,6 +50,7 @@ int chat_approval_add_session(ApprovalQueue *q, const char *command,
     if (len >= sizeof(e->command)) return -1;
     memcpy(e->command, command, len);
     e->command[len] = '\0';
+    memset(e->note, 0, sizeof(e->note));
     e->safety = cmd_classify_session(command, platform, contradicted);
     e->safety_mask = cmd_classify_mask_session(command, platform, contradicted);
 
@@ -63,6 +64,16 @@ int chat_approval_add_session(ApprovalQueue *q, const char *command,
 
     q->count++;
     return idx;
+}
+
+void chat_approval_set_note(ApprovalQueue *q, int idx, const char *note)
+{
+    if (!q || !note || idx < 0 || idx >= q->count) return;
+    ApprovalEntry *e = &q->entries[idx];
+    size_t len = strlen(note);
+    if (len > sizeof(e->note) - 1) len = sizeof(e->note) - 1;
+    memcpy(e->note, note, len);
+    e->note[len] = '\0';
 }
 
 int chat_approval_approve(ApprovalQueue *q, int index)

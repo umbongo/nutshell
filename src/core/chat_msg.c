@@ -42,6 +42,7 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
         item->u.ai.thinking_autoscroll = 1;
     } else if (type == CHAT_ITEM_COMMAND) {
         item->u.cmd.command = NULL;
+        item->u.cmd.note = NULL;
         item->u.cmd.safety = CMD_READ;
         item->u.cmd.approved = -1;
         item->u.cmd.blocked = 0;
@@ -81,6 +82,11 @@ static void free_item(ChatMsgItem *item)
         size_t clen = strlen(item->u.cmd.command);
         secure_zero(item->u.cmd.command, clen);
         free(item->u.cmd.command);
+    }
+    if (item->type == CHAT_ITEM_COMMAND && item->u.cmd.note) {
+        size_t nlen = strlen(item->u.cmd.note);
+        secure_zero(item->u.cmd.note, nlen);
+        free(item->u.cmd.note);
     }
     free(item);
 }
@@ -159,6 +165,24 @@ int chat_msg_set_command(ChatMsgItem *item, const char *command,
      * unchecked. */
     item->u.cmd.selected = blocked ? 0 : 1;
     item->dirty = 1;
+    return 0;
+}
+
+int chat_msg_set_note(ChatMsgItem *item, const char *note)
+{
+    if (!item || item->type != CHAT_ITEM_COMMAND) return -1;
+    char *copy = NULL;
+    if (note) {
+        size_t len = strlen(note);
+        copy = malloc(len + 1);
+        if (!copy) return -1;
+        memcpy(copy, note, len + 1);
+    }
+    if (item->u.cmd.note) {
+        secure_zero(item->u.cmd.note, strlen(item->u.cmd.note));
+        free(item->u.cmd.note);
+    }
+    item->u.cmd.note = copy;
     return 0;
 }
 
@@ -308,4 +332,40 @@ int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
         idx++;
     }
     return n;
+}
+
+void chat_strip_exec_markers(char *s)
+{
+    if (!s) return;
+    static const char open_m[] = "[EXEC]";
+    static const char close_m[] = "[/EXEC]";
+    char *w = s;
+    const char *r = s;
+    while (*r) {
+        if (*r == '[') {
+            if (strncmp(r, open_m, sizeof(open_m) - 1) == 0) {
+                r += sizeof(open_m) - 1;
+                continue;
+            }
+            if (strncmp(r, close_m, sizeof(close_m) - 1) == 0) {
+                r += sizeof(close_m) - 1;
+                continue;
+            }
+        }
+        *w++ = *r++;
+    }
+    *w = '\0';
+}
+
+size_t utf8_cut_at(char *buf, size_t max)
+{
+    if (!buf || max == 0) return 0;
+    size_t len = strlen(buf);
+    if (len <= max - 1) return len;
+    size_t cut = max - 1;
+    /* buf[cut] is the first byte that does not fit; while it is a UTF-8
+     * continuation byte the character it belongs to straddles the limit. */
+    while (cut > 0 && ((unsigned char)buf[cut] & 0xC0) == 0x80) cut--;
+    buf[cut] = '\0';
+    return cut;
 }

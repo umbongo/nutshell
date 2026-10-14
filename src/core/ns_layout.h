@@ -32,7 +32,12 @@ typedef struct { NsRect inset, header, body; } NsCardLayout;
 #define APPROVAL_VISIBLE_MAX 8
 
 /* One approval-card row, left to right: selection checkbox, command text
- * (single line, ellipsised when it doesn't fit), risk tag right-aligned.
+ * (single line, ellipsised when it doesn't fit), a copy-to-clipboard icon
+ * (SZ_ICON square, SP_XS gap either side, vertically centred like the
+ * checkbox), risk tag right-aligned. On a row too narrow to give the text at
+ * least SZ_ICON of width next to the copy icon, `copy` is zeroed (w = h = 0,
+ * and never hit) and the text takes the space back; the tag is the last to
+ * go.
  * `ellipsis` is set when the caller-supplied full-text pixel width exceeds
  * `text.w`. `held` mirrors the caller's held[] input for this row (a held
  * row paints its checkbox disabled and its text dimmed; it never counts
@@ -40,7 +45,7 @@ typedef struct { NsRect inset, header, body; } NsCardLayout;
  * wrapping (and the per-row Allow/Deny buttons that made it necessary) is
  * gone now that the card has a single Run N selected action. */
 typedef struct {
-    NsRect checkbox, text, tag;
+    NsRect checkbox, text, copy, tag;
     int ellipsis;
     int held;
 } ApprovalRowLayout;
@@ -68,7 +73,8 @@ enum {
     HIT_DENY_ALL,
     HIT_RUN_SELECTED,
     HIT_POLICY_ALLOWED,
-    HIT_POLICY_UNATTENDED
+    HIT_POLICY_UNATTENDED,
+    HIT_COPY            /* appended: the numeric values above are unchanged */
 };
 
 /* Stops on the status line's AI policy control: Read / Unknown / Write /
@@ -139,7 +145,7 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w,
 
 /* Hit-test a point against a laid-out approval card. Returns a HIT_*
  * constant; `*row_out` (when non-NULL) receives the row index for
- * HIT_TEXT/HIT_CHECKBOX/HIT_TAG, or -1 otherwise (including HIT_NONE,
+ * HIT_TEXT/HIT_CHECKBOX/HIT_TAG/HIT_COPY, or -1 otherwise (including HIT_NONE,
  * HIT_HEADER, HIT_DENY_ALL, HIT_RUN_SELECTED). Never crashes on a NULL
  * layout. */
 int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out);
@@ -155,13 +161,16 @@ int approval_row_height(int text_h, int dpi);
  * row: command text on the left starting at r.x, an outcome chip (ran/held/
  * denied/skipped) right-aligned at width `chip_w`, height SZ_TAG_H scaled,
  * both vertically centred in a row of height approval_row_height(text_h,
- * dpi). No checkbox (settled rows aren't interactive) -- `out->checkbox` is
+ * dpi). The copy icon is placed exactly as in approval_card_layout (left of
+ * the chip, or at the right edge when there is no chip) and dropped the same
+ * way when the text would get less than SZ_ICON. No checkbox (settled rows
+ * aren't interactive) -- `out->checkbox` is
  * zeroed and `out->held` is always 0 (unlike ApprovalRowLayout's live-card
  * use, "held" isn't a settled-row concept; the outcome chip carries that
  * meaning instead). `cmd_text_w` is the full (unellipsised) pixel width of
  * the command text, measured by the caller in its own font; `out->ellipsis`
- * is set when it exceeds the text rect's width. `chip_w` <= 0 gives the
- * text the full row width (no chip drawn). Never crashes on NULL `out`. */
+ * is set when it exceeds the text rect's width. `chip_w` <= 0 draws no chip
+ * (the copy icon then sits at the right edge). Never crashes on NULL `out`. */
 void settled_row_layout(NsRect r, int cmd_text_w, int chip_w, int text_h,
                         int dpi, ApprovalRowLayout *out);
 

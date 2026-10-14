@@ -42,6 +42,9 @@ typedef struct ChatMsgItem {
         } ai;
         struct {
             char *command;
+            char *note;         /* the assistant's explanation of the command
+                                  * (heap, may be NULL); secure_zero'd and freed
+                                  * with the item like `command` */
             CmdSafetyLevel safety;
             int approved;       /* -1=pending, 0=denied, 1=approved */
             int blocked;
@@ -90,6 +93,11 @@ int chat_msg_set_text(ChatMsgItem *item, const char *text);
  * with chat_msg_set_batch(), typically right after creating it. */
 int chat_msg_set_command(ChatMsgItem *item, const char *command,
                          CmdSafetyLevel safety, int blocked);
+
+/* Set (copy) or clear (NULL) the note on a CHAT_ITEM_COMMAND item. Returns 0
+ * on success, -1 for a NULL or non-command item or allocation failure. Does
+ * not mark the item dirty: a note is shown only in the details popup. */
+int chat_msg_set_note(ChatMsgItem *item, const char *note);
 
 /* Set the batch id on a CHAT_ITEM_COMMAND item (see cmd_batch.h). No-op on
  * a non-command item. */
@@ -178,5 +186,16 @@ const char *chat_cmd_label(int approved, int blocked, int run,
  * live panel. */
 int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
                             const ApprovalQueue *q, int batch_ending);
+
+/* Remove every "[EXEC]" and "[/EXEC]" marker from the NUL-terminated string
+ * in place, keeping the text between them. Nothing else changes. NULL is a
+ * no-op. Used on band-selection text before it goes to the clipboard. */
+void chat_strip_exec_markers(char *s);
+
+/* If the NUL-terminated string in buf is longer than max-1 bytes, truncate
+ * it at the last UTF-8 character boundary that fits in max-1 bytes and
+ * NUL-terminate. Returns the resulting length. Writes nothing and returns 0
+ * when buf is NULL or max is 0. */
+size_t utf8_cut_at(char *buf, size_t max);
 
 #endif /* NUTSHELL_CHAT_MSG_H */

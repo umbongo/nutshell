@@ -7,6 +7,12 @@
 
 #define APPROVAL_MAX_CMDS 16
 
+/* Longest per-command note (the assistant's one-line explanation shown in the
+ * command details popup), including the NUL. Defined here rather than in
+ * ai_prompt.h because ai_prompt.h includes this header; ai_prompt.h users
+ * still see it through that include. */
+#define CMD_NOTE_MAX 256
+
 typedef enum {
     APPROVE_PENDING,
     APPROVE_APPROVED,
@@ -27,6 +33,9 @@ typedef struct {
                                   * safety == CMD_WRITE, so a gate that only looked at
                                   * `safety` could not tell it from a plain write. */
     ApprovalStatus status;
+    char note[CMD_NOTE_MAX];    /* the assistant's explanation for this command
+                                  * (may be empty); set with
+                                  * chat_approval_set_note(), zeroed on add */
 } ApprovalEntry;
 
 typedef struct {
@@ -65,6 +74,12 @@ int chat_approval_add(ApprovalQueue *q, const char *command,
  * this; chat_approval_add() is this with contradicted = 0. */
 int chat_approval_add_session(ApprovalQueue *q, const char *command,
                               CmdPlatform platform, int contradicted);
+
+/* Attach the assistant's explanation to entry `idx` (the index returned by
+ * chat_approval_add_session()). Copies with truncation to CMD_NOTE_MAX-1
+ * bytes and always NUL-terminates. An out-of-range idx or a NULL queue or
+ * note is ignored. The status of the entry is not touched. */
+void chat_approval_set_note(ApprovalQueue *q, int idx, const char *note);
 
 /* Approve a specific command by index. Returns 0 on success. */
 int chat_approval_approve(ApprovalQueue *q, int index);

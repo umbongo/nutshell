@@ -566,8 +566,18 @@ int test_settled_row_layout_zero_chip_w_gives_text_full_width(void)
     NsRect r = { 0, 0, 400, 100 };
     ApprovalRowLayout out;
     settled_row_layout(r, 50, 0, 16, 96, &out);
-    ASSERT_EQ(out.text.w, r.w);
+    /* 2026-10-13: the copy icon now sits at the right edge even with no chip,
+     * so the text gets the row minus the icon and its SP_XS gap (it used to
+     * get the full row width). */
+    ASSERT_EQ(out.text.w, r.w - ns_scale(SZ_ICON, 96) - ns_scale(SP_XS, 96));
+    ASSERT_EQ(out.copy.x + out.copy.w, r.x + r.w);
     ASSERT_EQ(out.tag.w, 0);
+    /* A row too narrow for any text next to the icon drops the icon and the
+     * text takes the full width, as before. */
+    NsRect tiny = { 0, 0, 30, 100 };
+    settled_row_layout(tiny, 50, 0, 16, 96, &out);
+    ASSERT_EQ(out.copy.w, 0);
+    ASSERT_EQ(out.text.w, tiny.w);
     TEST_END();
 }
 
@@ -607,6 +617,238 @@ int test_settled_row_layout_text_starts_at_rect_left(void)
     ApprovalRowLayout out;
     settled_row_layout(r, 50, 40, 16, 96, &out);
     ASSERT_EQ(out.text.x, r.x);
+    TEST_END();
+}
+
+/* ---- copy icon (2026-10-13 command details / copy design) ---------------- */
+
+int test_hit_copy_appended_without_renumbering(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(HIT_NONE, 0);
+    ASSERT_EQ(HIT_POLICY_ALLOWED, 7);
+    ASSERT_EQ(HIT_POLICY_UNATTENDED, 8);
+    ASSERT_EQ(HIT_COPY, 9);
+    TEST_END();
+}
+
+/* Returns 1 if every check holds (the helper has no TEST_BEGIN of its own). */
+#define CK(cond) do { if (!(cond)) { printf("  Assertion failed: %s\n", #cond); return 0; } } while (0)
+
+static int check_copy_placement(int dpi, int text_h)
+{
+    NsRect r = { 0, 0, 700, 500 };
+    int widths[3] = { 40, 300, 9000 };
+    ApprovalCardLayout out;
+    approval_card_layout(r, 3, widths, NULL, NULL, text_h, dpi, &out);
+    int xs = ns_scale(SP_XS, dpi);
+    int icon = ns_scale(SZ_ICON, dpi);
+    for (int i = 0; i < 3; i++) {
+        const ApprovalRowLayout *row = &out.rows[i];
+        CK((row->copy.w) == (icon));
+        CK((row->copy.h) == (icon));
+        /* SP_XS on either side, between text and tag. */
+        CK((row->copy.x - xs) == (row->text.x + row->text.w));
+        CK((row->copy.x + row->copy.w + xs) == (row->tag.x));
+        /* Vertically centred like the checkbox (same size, same y). */
+        CK((row->copy.y) == (row->checkbox.y));
+        CK(rect_inside(row->copy, r));
+        CK(!rects_overlap(row->copy, row->text));
+        CK(!rects_overlap(row->copy, row->tag));
+        CK(!rects_overlap(row->copy, row->checkbox));
+        CK(!rects_overlap(row->copy, out.header));
+        CK(!rects_overlap(row->copy, out.deny_all));
+        CK(!rects_overlap(row->copy, out.run_selected));
+    }
+    /* Ellipsis follows the shrunk text rect. */
+    CK((out.rows[0].ellipsis) == (0));
+    CK((out.rows[2].ellipsis) == (1));
+    return 1;
+}
+#undef CK
+
+int test_approval_card_layout_copy_rect_placement_96(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(check_copy_placement(96, 16));
+    /* Exact numbers at 96 DPI: card 700 wide, pad 12 -> area 676; checkbox
+     * 20 + gap 8 -> text.x 28; tag 64 at x 624; copy 20 at x 600; text ends
+     * at 596 (SP_XS gap). Pinned so an accidental grid change is noticed. */
+    NsRect r = { 0, 0, 700, 500 };
+    ApprovalCardLayout out;
+    approval_card_layout(r, 1, NULL, NULL, NULL, 16, 96, &out);
+    ASSERT_EQ(out.rows[0].tag.x, 12 + 676 - 64);
+    ASSERT_EQ(out.rows[0].copy.x, 12 + 676 - 64 - 4 - 20);
+    ASSERT_EQ(out.rows[0].text.x + out.rows[0].text.w, out.rows[0].copy.x - 4);
+    TEST_END();
+}
+
+int test_approval_card_layout_copy_rect_placement_192(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(check_copy_placement(192, 24));
+    TEST_END();
+}
+
+int test_approval_card_layout_copy_shrinks_text_by_icon_and_gaps(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 700, 500 };
+    ApprovalCardLayout out;
+    approval_card_layout(r, 1, NULL, NULL, NULL, 16, 96, &out);
+    const ApprovalRowLayout *row = &out.rows[0];
+    /* text + gap + copy + gap + tag exactly tile checkbox-right to tag-right */
+    int left = row->checkbox.x + row->checkbox.w + ns_scale(SP_SM, 96);
+    ASSERT_EQ(row->text.x, left);
+    ASSERT_EQ(row->text.w,
+              row->tag.x - ns_scale(SP_XS, 96) * 2 - row->copy.w - left);
+    TEST_END();
+}
+
+int test_approval_card_hit_round_trip_copy(void)
+{
+    TEST_BEGIN();
+    NsRect r = big_card_rect();
+    int widths[4] = { 40, 300, 90, 20 };
+    ApprovalCardLayout out;
+    approval_card_layout(r, 4, widths, NULL, NULL, 16, 96, &out);
+    for (int i = 0; i < 4; i++) {
+        int row_out = -2;
+        NsRect c = rect_center(out.rows[i].copy);
+        ASSERT_EQ(approval_card_hit(&out, c.x, c.y, &row_out), HIT_COPY);
+        ASSERT_EQ(row_out, i);
+        /* All four corners of the rect hit it, one pixel outside does not. */
+        const NsRect *cr = &out.rows[i].copy;
+        ASSERT_EQ(approval_card_hit(&out, cr->x, cr->y, NULL), HIT_COPY);
+        ASSERT_EQ(approval_card_hit(&out, cr->x + cr->w - 1,
+                                    cr->y + cr->h - 1, NULL), HIT_COPY);
+        ASSERT_TRUE(approval_card_hit(&out, cr->x + cr->w, c.y, NULL) != HIT_COPY);
+        ASSERT_TRUE(approval_card_hit(&out, cr->x - 1, c.y, NULL) != HIT_COPY);
+        /* The text and tag still hit as before, next to it. */
+        NsRect t = rect_center(out.rows[i].text);
+        ASSERT_EQ(approval_card_hit(&out, t.x, t.y, NULL), HIT_TEXT);
+        NsRect g = rect_center(out.rows[i].tag);
+        ASSERT_EQ(approval_card_hit(&out, g.x, g.y, NULL), HIT_TAG);
+    }
+    TEST_END();
+}
+
+int test_approval_card_layout_copy_dropped_first_on_narrow_row(void)
+{
+    TEST_BEGIN();
+    /* 96 DPI, pad 12: area.w = r.w - 24. text.w with the copy icon =
+     * area.w - 120, so the icon survives while that is >= SZ_ICON (20):
+     * r.w >= 164. */
+    ApprovalCardLayout keep, drop;
+    NsRect rk = { 0, 0, 164, 400 };
+    NsRect rd = { 0, 0, 163, 400 };
+    approval_card_layout(rk, 1, NULL, NULL, NULL, 16, 96, &keep);
+    approval_card_layout(rd, 1, NULL, NULL, NULL, 16, 96, &drop);
+    ASSERT_EQ(keep.rows[0].copy.w, 20);
+    ASSERT_EQ(keep.rows[0].text.w, 20);
+    ASSERT_EQ(drop.rows[0].copy.w, 0);
+    ASSERT_EQ(drop.rows[0].copy.h, 0);
+    /* The text got its space back (old geometry: SP_SM before the tag). */
+    ASSERT_EQ(drop.rows[0].text.w,
+              drop.rows[0].tag.x - ns_scale(SP_SM, 96) - drop.rows[0].text.x);
+    ASSERT_TRUE(drop.rows[0].text.w > 0);
+    ASSERT_TRUE(drop.rows[0].tag.w > 0);
+
+    /* Zero-size copy rect is never returned by the hit test, anywhere. */
+    int copy_hits = 0;
+    for (int y = -2; y < 402; y++)
+        for (int x = -2; x < 170; x++)
+            if (approval_card_hit(&drop, x, y, NULL) == HIT_COPY) copy_hits++;
+    ASSERT_EQ(copy_hits, 0);
+    /* Including the old position, where the text now is. */
+    NsRect c = rect_center(drop.rows[0].text);
+    ASSERT_EQ(approval_card_hit(&drop, c.x, c.y, NULL), HIT_TEXT);
+    TEST_END();
+}
+
+int test_approval_card_layout_copy_invariants_over_widths(void)
+{
+    TEST_BEGIN();
+    const int dpis[2] = { 96, 192 };
+    for (int d = 0; d < 2; d++) {
+        int dpi = dpis[d];
+        int icon = ns_scale(SZ_ICON, dpi);
+        for (int w = 0; w <= 700; w += 3) {
+            NsRect r = { 0, 0, w, 300 };
+            ApprovalCardLayout out;
+            approval_card_layout(r, 2, NULL, NULL, NULL, 16, dpi, &out);
+            for (int i = 0; i < 2; i++) {
+                const ApprovalRowLayout *row = &out.rows[i];
+                if (row->copy.w > 0) {
+                    ASSERT_EQ(row->copy.w, icon);
+                    ASSERT_EQ(row->copy.h, icon);
+                    ASSERT_TRUE(row->text.w >= icon);
+                    ASSERT_TRUE(!rects_overlap(row->copy, row->text));
+                    ASSERT_TRUE(!rects_overlap(row->copy, row->tag));
+                    ASSERT_TRUE(!rects_overlap(row->copy, row->checkbox));
+                } else {
+                    ASSERT_EQ(row->copy.h, 0);
+                    ASSERT_TRUE(row->text.w >= 0);
+                    NsRect c = rect_center(row->copy);
+                    ASSERT_TRUE(approval_card_hit(&out, c.x, c.y, NULL) != HIT_COPY);
+                }
+                /* The tag is last to go: present whenever the row is. */
+                ASSERT_EQ(row->tag.w, ns_scale(64, dpi));
+            }
+        }
+    }
+    TEST_END();
+}
+
+int test_settled_row_layout_copy_rect_with_chip(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 10, 20, 400, 100 };
+    ApprovalRowLayout out;
+    settled_row_layout(r, 50, 40, 16, 96, &out);
+    ASSERT_EQ(out.copy.w, 20);
+    ASSERT_EQ(out.copy.h, 20);
+    ASSERT_EQ(out.copy.x + out.copy.w + 4, out.tag.x);
+    ASSERT_EQ(out.text.x + out.text.w + 4, out.copy.x);
+    ASSERT_EQ(out.copy.y, r.y + (approval_row_height(16, 96) - 20) / 2);
+    ASSERT_TRUE(!rects_overlap(out.copy, out.text));
+    ASSERT_TRUE(!rects_overlap(out.copy, out.tag));
+    ASSERT_TRUE(rect_inside(out.copy, r));
+    TEST_END();
+}
+
+int test_settled_row_layout_copy_rect_192(void)
+{
+    TEST_BEGIN();
+    NsRect r = { 0, 0, 800, 100 };
+    ApprovalRowLayout out;
+    settled_row_layout(r, 50, 80, 24, 192, &out);
+    ASSERT_EQ(out.copy.w, 40);
+    ASSERT_EQ(out.copy.x + out.copy.w + 8, out.tag.x);
+    ASSERT_EQ(out.text.x + out.text.w + 8, out.copy.x);
+    ASSERT_TRUE(!rects_overlap(out.copy, out.text));
+    ASSERT_TRUE(!rects_overlap(out.copy, out.tag));
+    TEST_END();
+}
+
+int test_settled_row_layout_copy_dropped_on_narrow_row(void)
+{
+    TEST_BEGIN();
+    /* chip 40, icon 20, two SP_XS gaps: icon survives while the text keeps
+     * >= 20, i.e. r.w >= 20 + 4 + 20 + 4 + 40 = 88. */
+    NsRect keep = { 0, 0, 88, 100 };
+    NsRect drop = { 0, 0, 87, 100 };
+    ApprovalRowLayout a, b;
+    settled_row_layout(keep, 50, 40, 16, 96, &a);
+    settled_row_layout(drop, 50, 40, 16, 96, &b);
+    ASSERT_EQ(a.copy.w, 20);
+    ASSERT_EQ(a.text.w, 20);
+    ASSERT_EQ(b.copy.w, 0);
+    ASSERT_EQ(b.copy.h, 0);
+    /* The chip survives, and the text gets the old SP_SM gap geometry. */
+    ASSERT_EQ(b.tag.w, 40);
+    ASSERT_EQ(b.text.w, b.tag.x - 8 - drop.x);
+    ASSERT_TRUE(!rects_overlap(b.text, b.tag));
     TEST_END();
 }
 

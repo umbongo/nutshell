@@ -2799,6 +2799,90 @@ int test_ui_demo_scrolls_to_top_false_for_other_states(void);
 
 /* ---- Main ---------------------------------------------------------------- */
 
+/* test_ai_prompt.c */
+int test_ai_notes_basic_pairs_with_commands(void);
+int test_ai_notes_aligned_when_middle_block_has_control_char(void);
+int test_ai_notes_aligned_when_middle_block_oversized(void);
+int test_ai_notes_aligned_when_empty_block_between(void);
+int test_ai_notes_prose_only_before_first_block(void);
+int test_ai_notes_last_paragraph_only(void);
+int test_ai_notes_trailing_blank_lines_ignored(void);
+int test_ai_notes_multiline_paragraph_collapsed(void);
+int test_ai_notes_digit_only_note_is_empty(void);
+int test_ai_notes_long_note_cut_at_utf8_boundary(void);
+int test_ai_notes_fence_lines_removed(void);
+int test_ai_notes_crlf_input(void);
+int test_ai_notes_controls_and_bidi_removed(void);
+int test_ai_notes_keeps_non_ascii_text(void);
+int test_ai_notes_null_notes_matches_ex(void);
+int test_ai_notes_bad_args(void);
+int test_ai_notes_respects_max_cmds(void);
+int test_ai_system_prompt_asks_for_explanation_before_marker(void);
+
+/* test_chat_approval.c */
+int test_approval_note_set_and_read(void);
+int test_approval_note_bounds_ignored(void);
+int test_approval_note_truncated_and_terminated(void);
+int test_approval_note_survives_state_changes(void);
+int test_approval_add_zeroes_note(void);
+
+/* test_chat_msg.c */
+int test_chat_msg_cmd_note_defaults_to_null(void);
+int test_chat_msg_set_note_copies_and_replaces(void);
+int test_chat_msg_set_note_rejects_non_command_and_null_item(void);
+int test_chat_msg_note_freed_with_item(void);
+int test_chat_strip_exec_markers_basic(void);
+int test_chat_strip_exec_markers_multiple_and_adjacent(void);
+int test_chat_strip_exec_markers_unpaired(void);
+int test_chat_strip_exec_markers_leaves_everything_else(void);
+int test_utf8_cut_at_short_string_untouched(void);
+int test_utf8_cut_at_ascii_truncates_to_max_minus_one(void);
+int test_utf8_cut_at_does_not_split_multibyte(void);
+int test_utf8_cut_at_degenerate_args(void);
+
+/* test_ns_layout.c */
+int test_hit_copy_appended_without_renumbering(void);
+int test_approval_card_layout_copy_rect_placement_96(void);
+int test_approval_card_layout_copy_rect_placement_192(void);
+int test_approval_card_layout_copy_shrinks_text_by_icon_and_gaps(void);
+int test_approval_card_hit_round_trip_copy(void);
+int test_approval_card_layout_copy_dropped_first_on_narrow_row(void);
+int test_approval_card_layout_copy_invariants_over_widths(void);
+int test_settled_row_layout_copy_rect_with_chip(void);
+int test_settled_row_layout_copy_rect_192(void);
+int test_settled_row_layout_copy_dropped_on_narrow_row(void);
+
+/* test_cmd_detail_layout.c */
+int test_cmd_detail_layout_all_rects_inside_client(void);
+int test_cmd_detail_layout_no_overlaps_and_vertical_order(void);
+int test_cmd_detail_layout_96_exact_positions(void);
+int test_cmd_detail_layout_command_box_shrinks_as_note_grows(void);
+int test_cmd_detail_layout_oversized_note_is_clipped_not_negative(void);
+int test_cmd_detail_layout_buttons_right_aligned(void);
+int test_cmd_detail_layout_192_is_double_96(void);
+int test_cmd_detail_layout_dpi_le_zero_is_96(void);
+int test_cmd_detail_layout_tag_wider_than_content_is_clamped(void);
+int test_cmd_detail_layout_never_negative_at_tiny_sizes(void);
+int test_cmd_detail_layout_inside_client_for_all_adequate_sizes(void);
+int test_cmd_detail_layout_null_out_is_safe(void);
+
+/* test_md_blocks.c */
+int test_md_blocks_none(void);
+int test_md_blocks_one(void);
+int test_md_blocks_multiline_body(void);
+int test_md_blocks_two(void);
+int test_md_blocks_language_tag(void);
+int test_md_blocks_unterminated(void);
+int test_md_blocks_empty_body(void);
+int test_md_blocks_crlf(void);
+int test_md_blocks_indented_fence_not_counted(void);
+int test_md_blocks_max_smaller_than_count_returns_full_count(void);
+int test_md_blocks_respects_len_not_nul(void);
+
+/* test_ui_demo.c */
+int test_ui_demo_approval_rows_have_notes_and_a_long_command(void);
+int test_ui_demo_cmddetail_matches_approval(void);
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered so a crash shows the last [RUN ] line */
     int failed = 0;
@@ -5612,6 +5696,83 @@ int main(void) {
     failed += test_ai_stream_release_frees_conversation();
 
     failed += test_ai_stream_lost_final_message_is_found();
+
+    failed += test_ai_notes_basic_pairs_with_commands();
+    failed += test_ai_notes_aligned_when_middle_block_has_control_char();
+    failed += test_ai_notes_aligned_when_middle_block_oversized();
+    failed += test_ai_notes_aligned_when_empty_block_between();
+    failed += test_ai_notes_prose_only_before_first_block();
+    failed += test_ai_notes_last_paragraph_only();
+    failed += test_ai_notes_trailing_blank_lines_ignored();
+    failed += test_ai_notes_multiline_paragraph_collapsed();
+    failed += test_ai_notes_digit_only_note_is_empty();
+    failed += test_ai_notes_long_note_cut_at_utf8_boundary();
+    failed += test_ai_notes_fence_lines_removed();
+    failed += test_ai_notes_crlf_input();
+    failed += test_ai_notes_controls_and_bidi_removed();
+    failed += test_ai_notes_keeps_non_ascii_text();
+    failed += test_ai_notes_null_notes_matches_ex();
+    failed += test_ai_notes_bad_args();
+    failed += test_ai_notes_respects_max_cmds();
+    failed += test_ai_system_prompt_asks_for_explanation_before_marker();
+
+    failed += test_approval_note_set_and_read();
+    failed += test_approval_note_bounds_ignored();
+    failed += test_approval_note_truncated_and_terminated();
+    failed += test_approval_note_survives_state_changes();
+    failed += test_approval_add_zeroes_note();
+
+    failed += test_chat_msg_cmd_note_defaults_to_null();
+    failed += test_chat_msg_set_note_copies_and_replaces();
+    failed += test_chat_msg_set_note_rejects_non_command_and_null_item();
+    failed += test_chat_msg_note_freed_with_item();
+    failed += test_chat_strip_exec_markers_basic();
+    failed += test_chat_strip_exec_markers_multiple_and_adjacent();
+    failed += test_chat_strip_exec_markers_unpaired();
+    failed += test_chat_strip_exec_markers_leaves_everything_else();
+    failed += test_utf8_cut_at_short_string_untouched();
+    failed += test_utf8_cut_at_ascii_truncates_to_max_minus_one();
+    failed += test_utf8_cut_at_does_not_split_multibyte();
+    failed += test_utf8_cut_at_degenerate_args();
+
+    failed += test_hit_copy_appended_without_renumbering();
+    failed += test_approval_card_layout_copy_rect_placement_96();
+    failed += test_approval_card_layout_copy_rect_placement_192();
+    failed += test_approval_card_layout_copy_shrinks_text_by_icon_and_gaps();
+    failed += test_approval_card_hit_round_trip_copy();
+    failed += test_approval_card_layout_copy_dropped_first_on_narrow_row();
+    failed += test_approval_card_layout_copy_invariants_over_widths();
+    failed += test_settled_row_layout_copy_rect_with_chip();
+    failed += test_settled_row_layout_copy_rect_192();
+    failed += test_settled_row_layout_copy_dropped_on_narrow_row();
+
+    failed += test_cmd_detail_layout_all_rects_inside_client();
+    failed += test_cmd_detail_layout_no_overlaps_and_vertical_order();
+    failed += test_cmd_detail_layout_96_exact_positions();
+    failed += test_cmd_detail_layout_command_box_shrinks_as_note_grows();
+    failed += test_cmd_detail_layout_oversized_note_is_clipped_not_negative();
+    failed += test_cmd_detail_layout_buttons_right_aligned();
+    failed += test_cmd_detail_layout_192_is_double_96();
+    failed += test_cmd_detail_layout_dpi_le_zero_is_96();
+    failed += test_cmd_detail_layout_tag_wider_than_content_is_clamped();
+    failed += test_cmd_detail_layout_never_negative_at_tiny_sizes();
+    failed += test_cmd_detail_layout_inside_client_for_all_adequate_sizes();
+    failed += test_cmd_detail_layout_null_out_is_safe();
+
+    failed += test_md_blocks_none();
+    failed += test_md_blocks_one();
+    failed += test_md_blocks_multiline_body();
+    failed += test_md_blocks_two();
+    failed += test_md_blocks_language_tag();
+    failed += test_md_blocks_unterminated();
+    failed += test_md_blocks_empty_body();
+    failed += test_md_blocks_crlf();
+    failed += test_md_blocks_indented_fence_not_counted();
+    failed += test_md_blocks_max_smaller_than_count_returns_full_count();
+    failed += test_md_blocks_respects_len_not_nul();
+
+    failed += test_ui_demo_approval_rows_have_notes_and_a_long_command();
+    failed += test_ui_demo_cmddetail_matches_approval();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

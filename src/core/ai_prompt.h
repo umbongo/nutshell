@@ -210,6 +210,24 @@ int ai_extract_commands(const char *response, char cmds[][1024],
 int ai_extract_commands_ex(const char *response, char cmds[][1024],
                            int max_cmds, int *rejected, int *rejected_long);
 
+/* CMD_NOTE_MAX (the longest note, with the NUL) is defined in
+ * chat_approval.h, which this header includes. */
+
+/* Same acceptance rules and the same return as ai_extract_commands_ex();
+ * additionally fills notes[i] for every ACCEPTED block i, so index i
+ * matches cmds[i] by construction. notes may be NULL (then this is
+ * ai_extract_commands_ex). The note is the LAST paragraph (text after the
+ * final blank line) of the prose between the end of the previous [EXEC]
+ * block -- accepted or dropped -- and this block's [EXEC]. It is trimmed,
+ * markdown fence lines removed, whitespace runs collapsed to one space,
+ * C0/C1 controls and Unicode bidi controls removed, and cut at the last
+ * UTF-8 boundary that fits CMD_NOTE_MAX-1 bytes. A note containing no
+ * letter (a bare "2." or "-") is stored as empty; a byte >= 0x80 counts as
+ * a letter, so non-Latin text is kept. */
+int ai_extract_commands_notes(const char *response, char cmds[][1024],
+                              char notes[][CMD_NOTE_MAX], int max_cmds,
+                              int *rejected, int *rejected_long);
+
 /* Get the API endpoint URL for a provider name.
  * Returns NULL for unknown providers. */
 const char *ai_provider_url(const char *provider);

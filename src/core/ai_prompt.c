@@ -265,6 +265,8 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
         "2. Then check memory\n[EXEC]free -m[/EXEC]\n"
         "3. Finally check uptime\n[EXEC]uptime[/EXEC]\n\n"
         "Always explain what each command does before its marker. "
+        "Put the explanation on the line directly before its marker and "
+        "write nothing between a marker and the next explanation. "
         "Never say 'let's start with' or do only the first step. "
         "Include every command the user needs in one response.";
 
@@ -278,6 +280,8 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
         "2. Then check memory\n[EXEC]Get-CimInstance Win32_OperatingSystem[/EXEC]\n"
         "3. Finally check uptime\n[EXEC]Get-Uptime[/EXEC]\n\n"
         "Always explain what each command does before its marker. "
+        "Put the explanation on the line directly before its marker and "
+        "write nothing between a marker and the next explanation. "
         "Never say 'let's start with' or do only the first step. "
         "Include every command the user needs in one response.";
 
@@ -1221,8 +1225,114 @@ int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size)
     return 1;
 }
 
-int ai_extract_commands_ex(const char *response, char cmds[][1024],
-                           int max_cmds, int *rejected, int *rejected_long)
+/* ---- Per-command notes ---- */
+
+/* True if [a, b) holds only whitespace. */
+static int note_line_blank(const char *a, const char *b)
+{
+    for (; a < b; a++) {
+        if (!isspace((unsigned char)*a)) return 0;
+    }
+    return 1;
+}
+
+/* True if the line [a, b) is a markdown fence (optional indentation, then
+ * three backticks). */
+static int note_line_is_fence(const char *a, const char *b)
+{
+    while (a < b && (*a == ' ' || *a == '\t')) a++;
+    return (b - a) >= 3 && a[0] == '`' && a[1] == '`' && a[2] == '`';
+}
+
+/* Bytes of an ignorable control starting at p (limit e), 0 if none:
+ * C0 (except whitespace, handled by the caller), DEL, a UTF-8 C1
+ * (C2 80..9F), U+200E/U+200F, U+202A..U+202E, U+2066..U+2069. */
+static size_t note_ignorable_len(const unsigned char *p, const unsigned char *e)
+{
+    if (*p < 0x20 || *p == 0x7F) return 1;
+    if (*p == 0xC2 && p + 1 < e && p[1] >= 0x80 && p[1] <= 0x9F) return 2;
+    if (*p == 0xE2 && p + 2 < e) {
+        if (p[1] == 0x80 &&
+            (p[2] == 0x8E || p[2] == 0x8F || (p[2] >= 0xAA && p[2] <= 0xAE)))
+            return 3;
+        if (p[1] == 0x81 && p[2] >= 0xA6 && p[2] <= 0xA9) return 3;
+    }
+    return 0;
+}
+
+/* Build the note for the prose [a, b) into out[CMD_NOTE_MAX]. */
+static void note_build(const char *a, const char *b, char *out)
+{
+    out[0] = '\0';
+    while (b > a && isspace((unsigned char)*(b - 1))) b--;
+    if (b <= a) return;
+
+    /* Start of the last paragraph: the line after the final blank line. */
+    const char *para = a;
+    for (const char *p = a; p < b; ) {
+        const char *nl = memchr(p, '\n', (size_t)(b - p));
+        const char *le = nl ? nl : b;
+        const char *next = nl ? nl + 1 : b;
+        if (note_line_blank(p, le)) para = next;
+        p = next;
+    }
+
+    const size_t cap = CMD_NOTE_MAX - 1;
+    size_t len = 0;
+    int pending_space = 0;
+    int full = 0;
+    const unsigned char *stop = NULL; /* first byte not copied when full */
+
+    for (const char *p = para; p < b && !full; ) {
+        const char *nl = memchr(p, '\n', (size_t)(b - p));
+        const char *le = nl ? nl : b;
+        const char *next = nl ? nl + 1 : b;
+        if (note_line_is_fence(p, le)) {
+            pending_space = len > 0;
+            p = next;
+            continue;
+        }
+        pending_space = len > 0 ? 1 : 0;
+        const unsigned char *q = (const unsigned char *)p;
+        const unsigned char *qe = (const unsigned char *)le;
+        while (q < qe) {
+            if (isspace(*q)) {
+                if (len > 0) pending_space = 1;
+                q++;
+                continue;
+            }
+            size_t ig = note_ignorable_len(q, qe);
+            if (ig) { q += ig; continue; }
+            size_t need = (size_t)(pending_space ? 2 : 1);
+            if (len + need > cap) { full = 1; stop = q; break; }
+            if (pending_space) { out[len++] = ' '; pending_space = 0; }
+            out[len++] = (char)*q++;
+        }
+        p = next;
+    }
+
+    /* A cut that lands inside a multibyte character: drop the partial one. */
+    if (full && stop && (*stop & 0xC0) == 0x80 && len > 0) {
+        do { len--; } while (len > 0 && ((unsigned char)out[len] & 0xC0) == 0x80);
+    }
+    while (len > 0 && out[len - 1] == ' ') len--;
+    out[len] = '\0';
+
+    /* Nothing but punctuation and digits ("2.", "-"): no explanation. */
+    int has_letter = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)out[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c >= 0x80) {
+            has_letter = 1;
+            break;
+        }
+    }
+    if (!has_letter) out[0] = '\0';
+}
+
+int ai_extract_commands_notes(const char *response, char cmds[][1024],
+                              char notes[][CMD_NOTE_MAX], int max_cmds,
+                              int *rejected, int *rejected_long)
 {
     if (rejected) *rejected = 0;
     if (rejected_long) *rejected_long = 0;
@@ -1232,9 +1342,9 @@ int ai_extract_commands_ex(const char *response, char cmds[][1024],
     const char *pos = response;
 
     while (count < max_cmds) {
-        const char *start = strstr(pos, "[EXEC]");
-        if (!start) break;
-        start += 6; /* skip "[EXEC]" */
+        const char *marker = strstr(pos, "[EXEC]");
+        if (!marker) break;
+        const char *start = marker + 6; /* skip "[EXEC]" */
 
         const char *end = strstr(start, "[/EXEC]");
         if (!end) break;
@@ -1286,12 +1396,20 @@ int ai_extract_commands_ex(const char *response, char cmds[][1024],
         }
 
         memcpy(cmds[count], tmp, trimmed_len + 1);
+        if (notes) note_build(pos, marker, notes[count]);
         count++;
 
         pos = end + 7; /* skip "[/EXEC]" */
     }
 
     return count;
+}
+
+int ai_extract_commands_ex(const char *response, char cmds[][1024],
+                           int max_cmds, int *rejected, int *rejected_long)
+{
+    return ai_extract_commands_notes(response, cmds, NULL, max_cmds,
+                                     rejected, rejected_long);
 }
 
 int ai_extract_commands(const char *response, char cmds[][1024],

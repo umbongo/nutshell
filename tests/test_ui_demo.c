@@ -20,7 +20,8 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
     return n;
 }
 
-/* Twelve since 2026-09-24 added "thinking" (the 50-line scrollable
+/* Thirteen since 2026-10-13 added "cmddetail" (the command details popup
+ * demo), twelve since 2026-09-24 added "thinking" (the 50-line scrollable
  * Thinking box demo). "all" stays last and still means the union of the
  * panel states, which neither "local" (v1.2.1, spec
  * 2026-09-22-local-shell-design.md section 5) nor "thinking" is part of:
@@ -32,10 +33,11 @@ int test_ui_demo_states_list_ends_in_all(void)
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 12);
+    ASSERT_EQ(count, 13);
     ASSERT_STR_EQ(states[count - 1], "all");
-    ASSERT_STR_EQ(states[count - 2], "thinking");
-    ASSERT_STR_EQ(states[count - 3], "local");
+    ASSERT_STR_EQ(states[count - 2], "cmddetail");
+    ASSERT_STR_EQ(states[count - 3], "thinking");
+    ASSERT_STR_EQ(states[count - 4], "local");
     TEST_END();
 }
 
@@ -127,8 +129,9 @@ int test_ui_demo_build_approval_counts_and_statuses(void)
     ApprovalQueue approval, approval2;
     ASSERT_EQ(ui_demo_build("approval", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 3);
-    ASSERT_EQ(approval.count, 4);
-    ASSERT_EQ(count_status(&approval, APPROVE_PENDING), 1);
+    /* 2026-10-13: a fifth row, the long pending command, was added. */
+    ASSERT_EQ(approval.count, 5);
+    ASSERT_EQ(count_status(&approval, APPROVE_PENDING), 2);
     ASSERT_EQ(count_status(&approval, APPROVE_APPROVED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_DENIED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_BLOCKED), 1);
@@ -294,10 +297,59 @@ int test_ui_demo_build_all_is_union(void)
     /* 1 shared system + (chat 2) + (approval 2) + (executing 2) + (tool 4)
      * + (error 2) + (batches 4) = 17 conversation messages. */
     ASSERT_EQ(conv.msg_count, 17);
-    /* approval(4) + executing(2) + batches' first batch(2) = 8 entries. */
-    ASSERT_EQ(approval.count, 8);
+    /* approval(5) + executing(2) + batches' first batch(2) = 9 entries
+     * (approval grew from 4 to 5 on 2026-10-13: the long pending command). */
+    ASSERT_EQ(approval.count, 9);
     /* batches' second batch. */
     ASSERT_EQ(approval2.count, 2);
+    TEST_END();
+}
+
+/* 2026-10-13 (command details popup): every "approval" row carries the
+ * assistant's note, and one pending row is long enough to truncate. */
+int test_ui_demo_approval_rows_have_notes_and_a_long_command(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    ASSERT_EQ(ui_demo_build("approval", &conv, &approval, &approval2, NULL, 0), 0);
+    int long_idx = -1;
+    for (int i = 0; i < approval.count; i++) {
+        ASSERT_TRUE(approval.entries[i].note[0] != '\0');
+        if (strlen(approval.entries[i].command) >= 100) long_idx = i;
+    }
+    ASSERT_TRUE(long_idx >= 0);
+    ASSERT_TRUE(strlen(approval.entries[long_idx].command) <= 140);
+    ASSERT_EQ((int)approval.entries[long_idx].status, (int)APPROVE_PENDING);
+    /* Notes sit on the right rows: the note belongs to its own command. */
+    for (int i = 0; i < approval.count; i++) {
+        if (strcmp(approval.entries[i].command, "ls -la /var/log") == 0)
+            ASSERT_NOT_NULL(strstr(approval.entries[i].note, "log directory"));
+        if (strcmp(approval.entries[i].command, "rm -rf /var/log/old") == 0)
+            ASSERT_NOT_NULL(strstr(approval.entries[i].note, "old rotated logs"));
+    }
+    TEST_END();
+}
+
+/* "cmddetail" is "approval" under another name: the same conversation, the
+ * same rows, statuses and notes; "all" does not repeat it. */
+int test_ui_demo_cmddetail_matches_approval(void)
+{
+    TEST_BEGIN();
+    AiConversation ca, cb;
+    ApprovalQueue a, a2, b, b2;
+    ASSERT_TRUE(ui_demo_state_valid("cmddetail"));
+    ASSERT_EQ(ui_demo_build("approval", &ca, &a, &a2, NULL, 0), 0);
+    ASSERT_EQ(ui_demo_build("cmddetail", &cb, &b, &b2, NULL, 0), 0);
+    ASSERT_EQ(ca.msg_count, cb.msg_count);
+    ASSERT_EQ(a.count, b.count);
+    ASSERT_EQ(b2.count, 0);
+    for (int i = 0; i < a.count; i++) {
+        ASSERT_STR_EQ(a.entries[i].command, b.entries[i].command);
+        ASSERT_STR_EQ(a.entries[i].note, b.entries[i].note);
+        ASSERT_EQ((int)a.entries[i].status, (int)b.entries[i].status);
+    }
+    ASSERT_TRUE(!ui_demo_scrolls_to_top("cmddetail"));
     TEST_END();
 }
 
