@@ -22,6 +22,7 @@
 #include "ns_reduced_motion.h"
 #include "ns_hover.h"
 #include "ai_panel_layout.h"
+#include "text_lines.h"
 #include "ai_panel_states.h"
 #include "settings_layout.h"
 #include "ui_theme.h"
@@ -38,6 +39,7 @@
 #include "chat_thinking.h"
 #include "chat_activity.h"
 #include "chat_approval.h"
+#include "cmd_detail_dlg.h"
 #include "cmd_batch.h"
 #include "dispatch_line_clear.h"
 #include "logger.h"
@@ -345,6 +347,13 @@ typedef struct {
     /* Custom scrollbar for input text box */
     HWND hInputScrollbar;
     int  input_line_h;     /* cached line height in px for input */
+    /* Composer (message box) height at 96 DPI, set by dragging the sash
+     * above it; 0 means AI_INPUT_BASE_H. Scaled and clamped by
+     * ai_chat_input_h(). Not persisted. */
+    int  input_base_h;
+    int  sash_dragging;         /* 1 while the sash is captured */
+    int  sash_drag_start_y;     /* client y at button-down */
+    int  sash_drag_start_base;  /* input_base_h at button-down */
 
     /* Docked mode: 1 = child window in main frame, 0 = floating */
     int docked;
@@ -856,10 +865,35 @@ out:
 }
 
 
-/* Compute the panel's top-level tiling (header/thread/status/composer) for
- * the current client size -- the one place composer_h is decided, shared by
- * relayout(), WM_PAINT and every status-line hit-test helper below so they
- * never disagree with each other. */
+/* Default message-box height at 96 DPI (about two lines) before the user
+ * drags the sash. */
+#define AI_INPUT_BASE_H 46
+
+/* Convert device pixels back to a 96-DPI base value (inverse of ns_scale,
+ * round-half-up). dpi <= 0 is treated as 96. */
+static int ai_chat_unscale(int px, int dpi)
+{
+    if (dpi <= 0) dpi = 96;
+    return (px * 96 + dpi / 2) / dpi;
+}
+
+/* The message box's height in device pixels: the stored 96-DPI base, scaled
+ * and clamped to what the panel can hold (never under two input lines, never
+ * over half the panel). The one place it is decided -- used by the layout,
+ * relayout() and the placeholder at creation so they cannot drift. */
+static int ai_chat_input_h(const AiChatData *d)
+{
+    RECT rc = {0, 0, 1, 1};
+    if (d->hwnd) GetClientRect(d->hwnd, &rc);
+    int base = d->input_base_h > 0 ? d->input_base_h : AI_INPUT_BASE_H;
+    return ai_composer_clamp_h(ns_scale(base, d->dpi), rc.bottom,
+                               d->input_line_h, d->dpi);
+}
+
+/* Compute the panel's top-level tiling (header/thread/status/sash/composer)
+ * for the current client size -- the one place composer_h is decided, shared
+ * by relayout(), WM_PAINT and every status-line hit-test helper below so
+ * they never disagree with each other. */
 static void ai_chat_compute_layout(AiChatData *d, AiPanelLayout *out)
 {
     RECT rc = {0, 0, 1, 1};
@@ -867,7 +901,7 @@ static void ai_chat_compute_layout(AiChatData *d, AiPanelLayout *out)
     NsRect panel = { 0, 0, rc.right, rc.bottom };
 
     int margin = ns_scale(5, d->dpi);
-    int input_h = ns_scale(46, d->dpi);
+    int input_h = ai_chat_input_h(d);
     int composer_h = input_h + margin;
     ai_panel_layout(panel, d->dpi, composer_h, out);
 }
@@ -1038,6 +1072,7 @@ static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
         chat_msg_set_command(item, e->command, e->safety,
                              e->status == APPROVE_BLOCKED);
         chat_msg_set_batch(item, batch->id);
+        chat_msg_set_note(item, e->note);
         switch (e->status) {
         case APPROVE_APPROVED:
         case APPROVE_EXECUTING:
@@ -2430,6 +2465,34 @@ static AiAttachment *clipboard_to_png_attachment(HWND owner)
 
 static void input_sync_scroll(AiChatData *d);
 
+/* Pastes the clipboard's CF_TEXT into the (ANSI) message box with every bare
+ * LF turned into CRLF, which is the only line end a multiline EDIT breaks on
+ * (the transcript copies lines joined with LF). Returns 1 when text was
+ * inserted, 0 when there was none (the caller then lets the control paste). */
+static int input_paste_text(HWND hInput, HWND clip_owner)
+{
+    int done = 0;
+    if (!hInput || !IsClipboardFormatAvailable(CF_TEXT)) return 0;
+    if (!OpenClipboard(clip_owner)) return 0;
+    HGLOBAL hg = GetClipboardData(CF_TEXT);
+    if (hg) {
+        const char *txt = (const char *)GlobalLock(hg);
+        if (txt) {
+            size_t need = text_lf_to_crlf(txt, NULL, 0);
+            char *buf = (char *)malloc(need + 1);
+            if (buf) {
+                text_lf_to_crlf(txt, buf, need + 1);
+                SendMessageA(hInput, EM_REPLACESEL, TRUE, (LPARAM)buf);
+                free(buf);
+                done = 1;
+            }
+            GlobalUnlock(hg);
+        }
+    }
+    CloseClipboard();
+    return done;
+}
+
 /* Subclass proc for the multiline input: Enter sends, Shift+Enter inserts newline */
 static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
                                            WPARAM wParam, LPARAM lParam,
@@ -2453,7 +2516,10 @@ static LRESULT CALLBACK InputSubclassProc(HWND hwnd, UINT msg,
                 return 0;
             }
         }
-        /* Fall through to default text paste */
+        /* Text: LF -> CRLF so pasted lines stay lines. Our own insert
+         * replaces the control's, so it must not run a second time. */
+        if (input_paste_text(hwnd, hwnd)) return 0;
+        /* Fall through to the control's own paste */
     }
     if (msg == WM_KEYDOWN && wParam == VK_RETURN) {
         int shift = GetKeyState(VK_SHIFT) & 0x8000;
@@ -2619,14 +2685,14 @@ static void ai_chat_header_chip(AiChatData *d, NsRect header, int buttons_left,
 }
 
 /* Reposition all child controls from ai_panel_layout()'s header/thread/
- * status/composer tiling (ai_chat_compute_layout()). Called once at the
+ * status/sash/composer tiling (ai_chat_compute_layout()). Called once at the
  * end of WM_CREATE and again on every WM_SIZE. */
 static void relayout(AiChatData *d)
 {
     if (!d || !d->hwnd) return;
 
     int margin = ns_scale(5, d->dpi);
-    int input_h = ns_scale(46, d->dpi);
+    int input_h = ai_chat_input_h(d);
     int send_w = ns_scale(40, d->dpi);
 
     AiPanelLayout l;
@@ -2751,6 +2817,24 @@ static int ai_chat_pt_in_rect(NsRect r, int x, int y)
 {
     return r.w > 0 && r.h > 0 &&
            x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
+/* Is (x, y), in client coordinates, over the composer's drag sash? */
+static int ai_chat_sash_hit(AiChatData *d, int x, int y)
+{
+    AiPanelLayout l;
+    ai_chat_compute_layout(d, &l);
+    return ai_chat_pt_in_rect(l.sash, x, y);
+}
+
+/* The sash is a border-coloured hairline across its vertical centre. */
+static void paint_sash(AiChatData *d, HDC hdc)
+{
+    AiPanelLayout l;
+    ai_chat_compute_layout(d, &l);
+    if (l.sash.w <= 0 || l.sash.h <= 0) return;
+    ns_draw_separator(hdc, l.sash.x, l.sash.x + l.sash.w,
+                      l.sash.y + l.sash.h / 2, theme_cr(ns_tokens()->border));
 }
 
 /* Measure the status line's variable-width text (segment labels,
@@ -3140,7 +3224,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         /* Chat display: owner-drawn ChatListView replaces RichEdit.
          * In docked mode the initial window may be 1x1, so clamp
          * all dimensions to >=1 — relayout() fixes them on first WM_SIZE. */
-        int input_h = ns_scale(46, nd->dpi); /* ~2 lines for multiline input */
+        int input_h = ai_chat_input_h(nd); /* placeholder; relayout() sets it */
         int margin = ns_scale(5, nd->dpi);
         int disp_w = 1, disp_h = 1;
 
@@ -3374,6 +3458,24 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
     }
 
     case WM_MOUSEMOVE: {
+        if (d && d->sash_dragging) {
+            /* Dragging up grows the box: the new height is the starting
+             * height minus how far the cursor has moved down. */
+            RECT crc;
+            GetClientRect(hwnd, &crc);
+            int dy = GET_Y_LPARAM(lParam) - d->sash_drag_start_y;
+            int want = ns_scale(d->sash_drag_start_base, d->dpi) - dy;
+            int new_h = ai_composer_clamp_h(want, crc.bottom,
+                                            d->input_line_h, d->dpi);
+            int new_base = ai_chat_unscale(new_h, d->dpi);
+            if (new_base != d->input_base_h) {
+                d->input_base_h = new_base;
+                relayout(d);
+                InvalidateRect(hwnd, NULL, TRUE);
+                UpdateWindow(hwnd);
+            }
+            return 0;
+        }
         if (d) {
             int mx = GET_X_LPARAM(lParam);
             int my = GET_Y_LPARAM(lParam);
@@ -3420,6 +3522,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             POINT pt;
             GetCursorPos(&pt);
             ScreenToClient(hwnd, &pt);
+            if (d->sash_dragging || ai_chat_sash_hit(d, pt.x, pt.y)) {
+                SetCursor(LoadCursor(NULL, IDC_SIZENS));
+                return TRUE;
+            }
             int hit_id = ai_chat_status_hit(d, pt.x, pt.y);
             SetCursor(LoadCursor(NULL, hit_id >= 0 ? IDC_HAND : IDC_ARROW));
             return TRUE;
@@ -3430,6 +3536,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         if (d) {
             int mx = GET_X_LPARAM(lParam);
             int my = GET_Y_LPARAM(lParam);
+            if (ai_chat_sash_hit(d, mx, my)) {
+                d->sash_dragging = 1;
+                d->sash_drag_start_y = my;
+                d->sash_drag_start_base =
+                    d->input_base_h > 0 ? d->input_base_h : AI_INPUT_BASE_H;
+                SetCapture(hwnd);
+                return 0;
+            }
             int hit_id = ai_chat_status_hit(d, mx, my);
             if (hit_id >= 0 && hit_id < STATUS_HIT_COUNT) {
                 int band = STATUS_HIT_BAND(hit_id);
@@ -3451,6 +3565,18 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 return 0;
             }
         }
+        break;
+
+    case WM_LBUTTONUP:
+        if (d && d->sash_dragging) {
+            d->sash_dragging = 0;
+            ReleaseCapture();
+            return 0;
+        }
+        break;
+
+    case WM_CAPTURECHANGED:
+        if (d) d->sash_dragging = 0;
         break;
 
     case WM_COMMAND:
@@ -3875,22 +4001,33 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 return 0;
             }
 
+            /* IDC_CMD_DETAIL → open the details popup for one command row.
+             * lParam is the ChatMsgItem id (the list view posts it rather
+             * than opening the popup itself, like every other card action).
+             * The popup copies command, note and safety before it runs its
+             * own modal loop, so nothing it shows points into msg_list --
+             * a stream chunk or rebuild that fires while it is open can
+             * free the items freely. */
+            if (d && ctl_id == IDC_CMD_DETAIL) {
+                int detail_id = (int)lParam;
+                for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+                    if (it->id != detail_id || it->type != CHAT_ITEM_COMMAND)
+                        continue;
+                    const char *dcmd = it->u.cmd.command ? it->u.cmd.command
+                                                         : it->text;
+                    HWND top = GetAncestor(hwnd, GA_ROOT);
+                    cmd_detail_show(top ? top : hwnd, dcmd ? dcmd : "",
+                                    it->u.cmd.note ? it->u.cmd.note : "",
+                                    it->u.cmd.safety, get_window_dpi(hwnd));
+                    break;
+                }
+                return 0;
+            }
+
             /* IDC_CHATLIST_PASTE → right-click paste from chat listview */
             if (d && ctl_id == IDC_CHATLIST_PASTE) {
-                if (d->hInput && IsClipboardFormatAvailable(CF_TEXT) &&
-                    OpenClipboard(hwnd)) {
-                    HGLOBAL hg = GetClipboardData(CF_TEXT);
-                    if (hg) {
-                        const char *txt = (const char *)GlobalLock(hg);
-                        if (txt) {
-                            SendMessageA(d->hInput, EM_REPLACESEL,
-                                         TRUE, (LPARAM)txt);
-                            GlobalUnlock(hg);
-                            SetFocus(d->hInput);
-                        }
-                    }
-                    CloseClipboard();
-                }
+                if (d->hInput && input_paste_text(d->hInput, hwnd))
+                    SetFocus(d->hInput);
                 return 0;
             }
             break;
@@ -4137,9 +4274,11 @@ next_coalesce:;
         if (src != d->active_state) {
             if (wParam == 2 && src && rmsg->content) {
                 char cmds[16][1024];
+                char notes[16][CMD_NOTE_MAX];
                 int rejected = 0, rejected_long = 0;
-                int ncmds = ai_extract_commands_ex(rmsg->content, cmds, 16,
-                                                   &rejected, &rejected_long);
+                int ncmds = ai_extract_commands_notes(rmsg->content, cmds,
+                                                      notes, 16, &rejected,
+                                                      &rejected_long);
                 if (ncmds > 0) {
                     ApprovalQueue bg_defaults;
                     chat_approval_init(&bg_defaults);
@@ -4154,9 +4293,15 @@ next_coalesce:;
                             /* -1 means the queue refused it (full, blank,
                              * control characters, or too long) -- not
                              * added, and no card is ever built for it. */
-                            (void)chat_approval_add_session(&batch->q, cmds[ci],
-                                (CmdPlatform)src->platform,
+                            int bidx = chat_approval_add_session(&batch->q,
+                                cmds[ci], (CmdPlatform)src->platform,
                                 src->platform_contradicted);
+                            /* The note goes on the index the queue returned,
+                             * never the loop index: a refused command shifts
+                             * every later one down. */
+                            if (bidx >= 0)
+                                chat_approval_set_note(&batch->q, bidx,
+                                                       notes[ci]);
                         }
                     }
                 }
@@ -4229,9 +4374,11 @@ next_coalesce:;
 
             /* Extract commands from the full accumulated content */
             char cmds[16][1024];
+            char notes[16][CMD_NOTE_MAX];
             int rejected = 0, rejected_long = 0;
-            int ncmds = text ? ai_extract_commands_ex(text, cmds, 16, &rejected,
-                                                      &rejected_long) : 0;
+            int ncmds = text ? ai_extract_commands_notes(text, cmds, notes, 16,
+                                                         &rejected,
+                                                         &rejected_long) : 0;
 
             /* Finalize the AI item text.  When commands were found, show
              * only the pre-command portion — the summary/analysis after
@@ -4342,6 +4489,7 @@ next_coalesce:;
                             (CmdPlatform)d->active_state->platform,
                             d->active_state->platform_contradicted);
                         if (idx < 0) continue;  /* queue full or blank -- drop it */
+                        chat_approval_set_note(&batch->q, idx, notes[ci]);
 
                         ChatMsgItem *cmd_item = chat_msg_append(
                             &d->msg_list, CHAT_ITEM_COMMAND, "");
@@ -4350,6 +4498,8 @@ next_coalesce:;
                                 batch->q.entries[idx].safety,
                                 batch->q.entries[idx].status == APPROVE_BLOCKED);
                             chat_msg_set_batch(cmd_item, batch->id);
+                            chat_msg_set_note(cmd_item,
+                                              batch->q.entries[idx].note);
                         }
                     }
 
@@ -4592,6 +4742,7 @@ next_coalesce:;
             HDC hdc = BeginPaint(hwnd, &ps);
             paint_header(d, hdc);
             paint_status_line(d, hdc);
+            paint_sash(d, hdc);
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -5352,6 +5503,24 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * just attached, plus any tool_call/tool_result items) and appends a
      * card for every batch just built above. */
     chat_rebuild_display(d);
+
+    /* "cmddetail": the "approval" state with the details popup already open
+     * on its longest command (the demo's long, truncated row), so the
+     * gallery can capture the popup without a click. Posted, not called:
+     * the popup runs its own modal loop and must not start inside this
+     * demo setup. */
+    if (state && strcmp(state, "cmddetail") == 0) {
+        ChatMsgItem *longest = NULL;
+        size_t longest_len = 0;
+        for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+            if (it->type != CHAT_ITEM_COMMAND || !it->u.cmd.command) continue;
+            size_t cl = strlen(it->u.cmd.command);
+            if (cl > longest_len) { longest = it; longest_len = cl; }
+        }
+        if (longest)
+            PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CMD_DETAIL, 0),
+                        (LPARAM)longest->id);
+    }
 
     /* The demo session has no channel (window.c's create_demo_session
      * passes NULL), so update_panel_state() would otherwise read every

@@ -739,3 +739,175 @@ int test_chat_msg_status_after_empty_ai(void) {
     chat_msg_list_clear(&list);
     TEST_END();
 }
+
+/* --- per-command note --- */
+
+int test_chat_msg_cmd_note_defaults_to_null(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    ASSERT_NOT_NULL(item);
+    ASSERT_NULL(item->u.cmd.note);
+    chat_msg_set_command(item, "ls", CMD_READ, 0);
+    ASSERT_NULL(item->u.cmd.note);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_set_note_copies_and_replaces(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *item = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(item, "ls", CMD_READ, 0);
+    char src[] = "Lists files";
+    ASSERT_EQ(chat_msg_set_note(item, src), 0);
+    ASSERT_NOT_NULL(item->u.cmd.note);
+    ASSERT_TRUE(item->u.cmd.note != src);
+    src[0] = 'X';
+    ASSERT_STR_EQ(item->u.cmd.note, "Lists files");
+    ASSERT_EQ(chat_msg_set_note(item, "Second"), 0);
+    ASSERT_STR_EQ(item->u.cmd.note, "Second");
+    /* set_command keeps the note. */
+    chat_msg_set_command(item, "pwd", CMD_READ, 0);
+    ASSERT_STR_EQ(item->u.cmd.note, "Second");
+    /* NULL clears it. */
+    ASSERT_EQ(chat_msg_set_note(item, NULL), 0);
+    ASSERT_NULL(item->u.cmd.note);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_set_note_rejects_non_command_and_null_item(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *user = chat_msg_append(&list, CHAT_ITEM_USER, "hi");
+    ASSERT_TRUE(chat_msg_set_note(user, "x") != 0);
+    ASSERT_TRUE(chat_msg_set_note(NULL, "x") != 0);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_note_freed_with_item(void) {
+    TEST_BEGIN();
+    /* Exercised under a leak/ASan run; here we prove remove and clear both
+     * accept an item carrying a note without touching freed memory. */
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    ChatMsgItem *b = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(a, "ls", CMD_READ, 0);
+    chat_msg_set_command(b, "pwd", CMD_READ, 0);
+    chat_msg_set_note(a, "note a");
+    chat_msg_set_note(b, "note b");
+    chat_msg_remove(&list, a);
+    ASSERT_EQ(list.count, 1);
+    ASSERT_STR_EQ(list.head->u.cmd.note, "note b");
+    chat_msg_list_clear(&list);
+    ASSERT_EQ(list.count, 0);
+    TEST_END();
+}
+
+/* --- chat_strip_exec_markers --- */
+
+int test_chat_strip_exec_markers_basic(void) {
+    TEST_BEGIN();
+    char s[] = "Run [EXEC]ls -la[/EXEC] now";
+    chat_strip_exec_markers(s);
+    ASSERT_STR_EQ(s, "Run ls -la now");
+    TEST_END();
+}
+
+int test_chat_strip_exec_markers_multiple_and_adjacent(void) {
+    TEST_BEGIN();
+    char s[] = "[EXEC]a[/EXEC][EXEC]b[/EXEC]\n[EXEC]c[/EXEC]";
+    chat_strip_exec_markers(s);
+    ASSERT_STR_EQ(s, "ab\nc");
+    TEST_END();
+}
+
+int test_chat_strip_exec_markers_unpaired(void) {
+    TEST_BEGIN();
+    char s1[] = "start [EXEC]no end";
+    chat_strip_exec_markers(s1);
+    ASSERT_STR_EQ(s1, "start no end");
+    char s2[] = "stray [/EXEC] close";
+    chat_strip_exec_markers(s2);
+    ASSERT_STR_EQ(s2, "stray  close");
+    TEST_END();
+}
+
+int test_chat_strip_exec_markers_leaves_everything_else(void) {
+    TEST_BEGIN();
+    char s[] = "[exec] [EXE] EXEC] [ EXEC ] **bold** \xE2\x80\x94 `code` [/EXE]";
+    char want[sizeof(s)];
+    memcpy(want, s, sizeof(s));
+    chat_strip_exec_markers(s);
+    ASSERT_STR_EQ(s, want);
+    char empty[] = "";
+    chat_strip_exec_markers(empty);
+    ASSERT_STR_EQ(empty, "");
+    chat_strip_exec_markers(NULL);
+    char only[] = "[EXEC][/EXEC]";
+    chat_strip_exec_markers(only);
+    ASSERT_STR_EQ(only, "");
+    TEST_END();
+}
+
+/* --- utf8_cut_at --- */
+
+int test_utf8_cut_at_short_string_untouched(void) {
+    TEST_BEGIN();
+    char s[16] = "hello";
+    ASSERT_EQ((int)utf8_cut_at(s, sizeof(s)), 5);
+    ASSERT_STR_EQ(s, "hello");
+    /* Exactly max-1 bytes fits. */
+    char t[6] = "hello";
+    ASSERT_EQ((int)utf8_cut_at(t, sizeof(t)), 5);
+    ASSERT_STR_EQ(t, "hello");
+    TEST_END();
+}
+
+int test_utf8_cut_at_ascii_truncates_to_max_minus_one(void) {
+    TEST_BEGIN();
+    char s[32] = "abcdefghij";
+    ASSERT_EQ((int)utf8_cut_at(s, 5), 4);
+    ASSERT_STR_EQ(s, "abcd");
+    TEST_END();
+}
+
+int test_utf8_cut_at_does_not_split_multibyte(void) {
+    TEST_BEGIN();
+    /* "ab" + U+00E9 (2 bytes) + "cd": limit 4 -> 3 usable bytes: the é would
+     * need bytes 2..3 so it fits only if max-1 >= 4. */
+    char s[32] = "ab\xC3\xA9" "cd";
+    ASSERT_EQ((int)utf8_cut_at(s, 4), 2);
+    ASSERT_STR_EQ(s, "ab");
+    char t[32] = "ab\xC3\xA9" "cd";
+    ASSERT_EQ((int)utf8_cut_at(t, 5), 4);
+    ASSERT_STR_EQ(t, "ab\xC3\xA9");
+    /* 3-byte and 4-byte characters. */
+    char u[32] = "a\xE2\x82\xAC" "z";          /* a EUR z */
+    ASSERT_EQ((int)utf8_cut_at(u, 4), 1);     /* 3 usable: EUR needs 3 after a */
+    ASSERT_STR_EQ(u, "a");
+    char v[32] = "\xF0\x9F\x98\x80" "x";       /* emoji x */
+    ASSERT_EQ((int)utf8_cut_at(v, 4), 0);
+    ASSERT_STR_EQ(v, "");
+    char w[32] = "\xF0\x9F\x98\x80" "x";
+    ASSERT_EQ((int)utf8_cut_at(w, 5), 4);
+    ASSERT_STR_EQ(w, "\xF0\x9F\x98\x80");
+    TEST_END();
+}
+
+int test_utf8_cut_at_degenerate_args(void) {
+    TEST_BEGIN();
+    char s[8] = "abc";
+    ASSERT_EQ((int)utf8_cut_at(s, 0), 0);
+    ASSERT_STR_EQ(s, "abc");           /* nothing may be written */
+    ASSERT_EQ((int)utf8_cut_at(s, 1), 0);
+    ASSERT_STR_EQ(s, "");
+    ASSERT_EQ((int)utf8_cut_at(NULL, 8), 0);
+    TEST_END();
+}

@@ -8,6 +8,20 @@
 #include "ui_theme.h"
 #include "ns_hover.h"
 
+/* One copy glyph on a fenced code block in a reply, as last painted:
+ * recorded by on_paint() so hover and click hit-test exactly what is on
+ * screen. `rc` is the glyph's rect in client coordinates, `text` a heap copy
+ * of the block body (no trailing newline) taken at paint time, so a click
+ * copies what the user saw even if the reply grew since. */
+#define CLV_CODE_HITS_MAX 64
+typedef struct {
+    int     item_id;    /* ChatMsgItem.id of the reply */
+    int     block;      /* block number within the item, 0..15 */
+    RECT    rc;
+    char   *text;       /* heap, owned by the list view */
+    size_t  len;
+} ClvCodeHit;
+
 typedef struct {
     HWND hwnd;              /* The owner-drawn panel window */
     ChatMsgList *msg_list;  /* Pointer to message list (not owned) */
@@ -89,7 +103,23 @@ typedef struct {
      * with where on_paint() actually drew it. */
     int indicator_y;
 
+    /* Copy glyphs on code blocks, rebuilt by every on_paint() (see
+     * ClvCodeHit). */
+    ClvCodeHit code_hits[CLV_CODE_HITS_MAX];
+    int n_code_hits;
+
+    /* Bottom edge (client y) of the pinned user bubble when on_paint() drew
+     * one over the list, 0 when it did not. Anything under it is covered, so
+     * the code-block and settled-row hit tests ignore points above it. */
+    int sticky_bottom;
+
 } ChatListView;
+
+/* The risk tag's chip colours and text for a command's safety level -- the
+ * one place the card, the settled rows and the command details popup take
+ * them from, so the tag always looks the same. */
+void chatlv_safety_tag_colors(CmdSafetyLevel level, COLORREF *bg, COLORREF *fg);
+const char *chatlv_safety_tag_text(CmdSafetyLevel level);
 
 /* Register the window class. Call once at startup. */
 void chat_listview_register(HINSTANCE hInstance);

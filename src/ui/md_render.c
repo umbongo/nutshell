@@ -718,8 +718,10 @@ static int md_render_table_block(HDC hdc, const char *first_line,
 static int md_render_core(HDC hdc, const char *text, int x, int y,
                           int max_width,
                           HFONT hFont, HFONT hMonoFont, HFONT hBoldFont,
-                          const ThemeColors *theme, int paint)
+                          const ThemeColors *theme, int paint,
+                          MdBlockOut *bo)
 {
+    if (bo) bo->count = 0;
     if (!text || !*text || max_width <= 0)
         return 0;
 
@@ -734,6 +736,7 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
 
     int cur_y = y;
     int in_code_block = 0;
+    int cur_block = -1;  /* index of the fenced block being walked, or -1 */
     int olist_num = 0;   /* current ordered list number */
 
     /* Process line by line */
@@ -782,9 +785,22 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
             if (in_code_block) {
                 /* Start of code block — add a small gap */
                 cur_y += MD_CODE_PAD_V;
+                /* One entry per fence opened, in the order md_code_blocks()
+                 * reports them (both walk md_classify_line), so an empty
+                 * body keeps its slot as a zero rect. */
+                cur_block = -1;
+                if (bo) {
+                    int bi = bo->count++;
+                    if (bi < bo->max_rects && bo->rects) {
+                        bo->rects[bi].x = bo->rects[bi].y = 0;
+                        bo->rects[bi].w = bo->rects[bi].h = 0;
+                        cur_block = bi;
+                    }
+                }
             } else {
                 /* End of code block */
                 cur_y += MD_CODE_PAD_V;
+                cur_block = -1;
             }
             break;
 
@@ -794,10 +810,18 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
             mdbuf_init(&wb, line_buf, line_len);
 
             HFONT old_font = (HFONT)SelectObject(hdc, hMonoFont);
+            /* A caller that draws a copy glyph on the block asks for its
+             * right-hand margin to stay free of text. Code lines never
+             * wrap (no DT_WORDBREAK), so this cannot change a height. */
+            int text_w = max_width;
+            if (bo && bo->reserve_w > 0) {
+                text_w = max_width - bo->reserve_w;
+                if (text_w < 1) text_w = 1;
+            }
             RECT rc_m;
             rc_m.left   = x;
             rc_m.top    = cur_y;
-            rc_m.right  = x + max_width;
+            rc_m.right  = x + text_w;
             rc_m.bottom = cur_y + 1000;
             int h = DrawTextW(hdc, wb.ptr, wb.len, &rc_m,
                               DT_LEFT | DT_TOP | DT_CALCRECT);
@@ -808,13 +832,29 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
                 h = tm.tmHeight;
             }
 
+            RECT bg_rc;
+            bg_rc.left   = x - MD_CODE_PAD_H;
+            bg_rc.top    = cur_y;
+            bg_rc.right  = x + max_width + MD_CODE_PAD_H;
+            bg_rc.bottom = cur_y + h;
+
+            /* Grow the block's rect to the union of its line backgrounds. */
+            if (bo && cur_block >= 0 && cur_block < bo->max_rects) {
+                NsRect *br = &bo->rects[cur_block];
+                if (br->w == 0 && br->h == 0) {
+                    br->x = bg_rc.left;
+                    br->y = bg_rc.top;
+                    br->w = bg_rc.right - bg_rc.left;
+                    br->h = bg_rc.bottom - bg_rc.top;
+                } else {
+                    int bot = bg_rc.bottom;
+                    if (br->y + br->h > bot) bot = br->y + br->h;
+                    br->h = bot - br->y;
+                }
+            }
+
             if (paint) {
                 /* Background rectangle */
-                RECT bg_rc;
-                bg_rc.left   = x - MD_CODE_PAD_H;
-                bg_rc.top    = cur_y;
-                bg_rc.right  = x + max_width + MD_CODE_PAD_H;
-                bg_rc.bottom = cur_y + h;
                 HBRUSH bg_br = CreateSolidBrush(
                     RGB_FROM_THEME(theme->chat.cmd_bg));
                 FillRect(hdc, &bg_rc, bg_br);
@@ -833,7 +873,7 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
                 RECT rc_d;
                 rc_d.left   = x;
                 rc_d.top    = cur_y;
-                rc_d.right  = x + max_width;
+                rc_d.right  = x + text_w;
                 rc_d.bottom = cur_y + h;
                 DrawTextW(hdc, wb.ptr, wb.len, &rc_d,
                           DT_LEFT | DT_TOP);
@@ -1034,7 +1074,7 @@ int md_render_text(HDC hdc, const char *text, int x, int y, int max_width,
     COLORREF old_color = GetTextColor(hdc);
     int result = md_render_core(hdc, text, x, y, max_width,
                                 hFont, hMonoFont, hBoldFont,
-                                theme, 1);
+                                theme, 1, NULL);
     SetTextColor(hdc, old_color);
     SetBkMode(hdc, old_bk);
     return result;
@@ -1049,7 +1089,25 @@ int md_measure_text(HDC hdc, const char *text, int max_width,
 
     return md_render_core(hdc, text, 0, 0, max_width,
                           hFont, hMonoFont, hBoldFont,
-                          theme, 0);
+                          theme, 0, NULL);
+}
+
+int md_render_text_blocks(HDC hdc, const char *text, int x, int y,
+                          int max_width,
+                          HFONT hFont, HFONT hMonoFont, HFONT hBoldFont,
+                          const ThemeColors *theme, MdBlockOut *blocks)
+{
+    if (!hdc || !text || !theme)
+        return 0;
+
+    int old_bk = SetBkMode(hdc, TRANSPARENT);
+    COLORREF old_color = GetTextColor(hdc);
+    int result = md_render_core(hdc, text, x, y, max_width,
+                                hFont, hMonoFont, hBoldFont,
+                                theme, 1, blocks);
+    SetTextColor(hdc, old_color);
+    SetBkMode(hdc, old_bk);
+    return result;
 }
 
 #endif /* _WIN32 */

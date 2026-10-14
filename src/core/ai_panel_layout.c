@@ -12,6 +12,7 @@ void ai_panel_layout(NsRect panel, int dpi, int composer_h, AiPanelLayout *out)
 
     int header_h = ns_scale(SP_XXL, dpi);
     int status_h = ns_scale(SZ_CTRL_H, dpi);
+    int sash_h = ns_scale(SP_SM, dpi);
 
     out->header.x = panel.x;
     out->header.y = panel.y;
@@ -23,16 +24,32 @@ void ai_panel_layout(NsRect panel, int dpi, int composer_h, AiPanelLayout *out)
     out->composer.h = composer_h;
     out->composer.y = panel.y + panel.h - composer_h;
 
+    out->sash.x = panel.x;
+    out->sash.w = panel.w;
+    out->sash.h = sash_h;
+    out->sash.y = out->composer.y - sash_h;
+
     out->status.x = panel.x;
     out->status.w = panel.w;
     out->status.h = status_h;
-    out->status.y = out->composer.y - status_h;
+    out->status.y = out->sash.y - status_h;
 
     out->thread.x = panel.x;
     out->thread.w = panel.w;
     out->thread.y = out->header.y + out->header.h;
     out->thread.h = out->status.y - out->thread.y;
     if (out->thread.h < 0) out->thread.h = 0;
+}
+
+int ai_composer_clamp_h(int want_h, int panel_h, int line_h, int dpi)
+{
+    if (line_h <= 0) line_h = ns_scale(16, dpi);
+    int min_h = 2 * line_h + 2 * ns_scale(SP_SM, dpi);
+    int max_h = panel_h / 2;
+
+    if (want_h > max_h) want_h = max_h;
+    if (want_h < min_h) want_h = min_h;   /* the minimum wins over the maximum */
+    return want_h;
 }
 
 void ai_status_layout(NsRect status, int dpi, int policy_w, int meter_text_w,

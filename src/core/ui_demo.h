@@ -24,7 +24,11 @@
  * (2026-09-24, the 50-line scrollable Thinking box) are each a real state
  * but not part of "all": "local" only swaps the terminal transcript, and
  * "thinking" is "chat" with a much longer reasoning block attached, which
- * "all" doesn't need a second copy of. */
+ * "all" doesn't need a second copy of. "cmddetail" (2026-10-13) builds the
+ * same content as "approval" (every row with an assistant note, plus one
+ * ~110 character pending command that the card truncates); the win32 side
+ * then opens the command details popup on that long row. Also not part of
+ * "all". */
 
 /* Build the canned conversation, approval queue(s) and terminal text for
  * one demo state.

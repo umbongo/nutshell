@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-09-24. Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-10-13. Changes are recorded in `.claude/CHANGELOG.md`.
 The rules themselves live in CLAUDE.md ("Software Development Rules",
 "Branches, pull requests and the merge gate"); this skill is the walk
 through them in order. Where they disagree, CLAUDE.md wins. It absorbed
@@ -95,9 +95,12 @@ open as drafts and their body ends with the same `Models:` line and the
 6. **The gate.** Any change under `src/`, the Makefile or `nutshell.rc`
    needs `APP_VERSION` and `APP_VERSION_BINARY` raised in
    `src/ui/resource.h`, README's `**Version**:` line to match, and a
-   rebuilt `build/win/nutshell.exe` committed. The build happens only on
-   the maintainer's Windows box (`mingw32-make clean && mingw32-make
-   release`). From a Linux session the deliverable is a pushed branch;
+   rebuilt `build/win/nutshell.exe` committed. The build happens on one
+   of the maintainer's own machines: the Windows box (`mingw32-make clean
+   && mingw32-make release`) or the Linux box `automaton`, whose
+   `x86_64-w64-mingw32-gcc` plus vcpkg cross-compile produced the gate-
+   passing v1.2.29 exe on 2026-10-13 (`make clean && make release`). From
+   a cloud session, which has neither, the deliverable is a pushed branch;
    the maintainer builds, commits the exe, and the `Version bump` check
    goes green. Say so and stop at the pushed branch with everything else
    done. Docs, CI, `tests/` and `.claude/` changes need none of this, but

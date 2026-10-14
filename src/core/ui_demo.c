@@ -7,11 +7,12 @@
 
 /* ---------------------------------------------------------------------
  * State names, in the order ui_demo_states() reports them.  "all" is
- * always last and always means "union of the other six".
+ * always last and always means "union of the panel states" (not "local",
+ * "thinking" or "cmddetail", which reuse or swap content).
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
-    "nokey", "nosession", "batches", "local", "thinking", "all"
+    "nokey", "nosession", "batches", "local", "thinking", "cmddetail", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
 
@@ -195,6 +196,11 @@ static const char APPROVAL_USER_MSG[] =
 static const char APPROVAL_ASSISTANT_MSG[] =
     "I'll need to run a few commands for that -- here's what I'd like to do:";
 
+/* 110 characters; see build_approval(). */
+#define DEMO_LONG_COMMAND \
+    "echo \"alias ls='ls --color=auto'; alias grep='grep --color=auto'; " \
+    "alias diff='diff --color=auto'\" >> ~/.bashrc"
+
 static void build_approval(AiConversation *conv, ApprovalQueue *approval)
 {
     if (conv) {
@@ -208,22 +214,45 @@ static void build_approval(AiConversation *conv, ApprovalQueue *approval)
      * by hand exactly like a live approval card. */
     cmd_policy_set_allowed(&approval->policy, CMD_CRITICAL);
 
+    /* Every row carries the assistant's one-line explanation (the details
+     * popup's note), set on the index chat_approval_add() returned. */
+
     /* Approved (write) */
     int approved = chat_approval_add(approval, "systemctl restart nginx",
                                      CMD_PLATFORM_LINUX);
     chat_approval_approve(approval, approved);
+    chat_approval_set_note(approval, approved,
+        "Restarts nginx so it reopens its log files.");
 
     /* Denied (critical) */
     int denied = chat_approval_add(approval, "docker rm -f web_old",
                                    CMD_PLATFORM_LINUX);
     chat_approval_deny(approval, denied);
+    chat_approval_set_note(approval, denied,
+        "Force-removes the old web_old container.");
 
     /* Pending (read) -- the ceiling doesn't matter for a read command */
-    chat_approval_add(approval, "ls -la /var/log", CMD_PLATFORM_LINUX);
+    int pending = chat_approval_add(approval, "ls -la /var/log",
+                                    CMD_PLATFORM_LINUX);
+    chat_approval_set_note(approval, pending,
+        "Lists the log directory so you can see what is taking the space.");
+
+    /* Pending (write), about 120 characters: too long for the narrow
+     * panel's command text, so the row truncates and the details popup is
+     * the only way to read it all. Added while the ceiling is still
+     * Critical so it lands PENDING rather than held. */
+    int long_cmd = chat_approval_add(approval, DEMO_LONG_COMMAND,
+                                     CMD_PLATFORM_LINUX);
+    chat_approval_set_note(approval, long_cmd,
+        "Appends colour aliases for ls, grep and diff to your .bashrc so "
+        "their output is coloured in every new shell.");
 
     /* Blocked (critical) -- lower the ceiling so this row is held */
     cmd_policy_set_allowed(&approval->policy, CMD_READ);
-    chat_approval_add(approval, "rm -rf /var/log/old", CMD_PLATFORM_LINUX);
+    int blocked = chat_approval_add(approval, "rm -rf /var/log/old",
+                                    CMD_PLATFORM_LINUX);
+    chat_approval_set_note(approval, blocked,
+        "Deletes the old rotated logs under /var/log/old.");
 }
 
 /* ---------------------------------------------------------------------
@@ -493,7 +522,12 @@ int ui_demo_build(const char *state, AiConversation *conv,
      * second copy of. */
     if (strcmp(state, "thinking") == 0)
         build_chat(conv);
-    if (is_all || strcmp(state, "approval") == 0)
+    /* "cmddetail" is "approval" with the command details popup opened on the
+     * long row by the win32 side (ai_chat_apply_demo_extras()); like
+     * "thinking" it is deliberately not part of "all", which already holds
+     * the approval rows once. */
+    if (is_all || strcmp(state, "approval") == 0 ||
+        strcmp(state, "cmddetail") == 0)
         build_approval(conv, approval);
     if (is_all || strcmp(state, "executing") == 0)
         build_executing(conv, approval);

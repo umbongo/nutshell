@@ -9,6 +9,13 @@
  * to stay on the same grid. */
 #define NS_TAG_W 64
 
+/* Minimum text width worth keeping next to a copy icon: SZ_ICON. Below it
+ * the copy rect is dropped (zeroed) and the text gets its space back. */
+static int copy_fits(int text_w_with_copy, int dpi)
+{
+    return text_w_with_copy >= ns_scale(SZ_ICON, dpi);
+}
+
 static int point_in(NsRect r, int x, int y)
 {
     return r.w > 0 && r.h > 0 &&
@@ -146,11 +153,26 @@ void approval_card_layout(NsRect r, int n, const int *cmd_text_w,
             row->tag.x = area.x + area.w - tag_w;
             row->tag.y = row_top + (row_h - tag_h) / 2;
 
-            /* text fills the space between */
+            /* text fills the space between the checkbox and the copy icon;
+             * the copy icon sits SP_XS left of the tag. */
             row->text.x = row->checkbox.x + chk_sz + gap_sm;
             row->text.y = row_top;
-            row->text.w = row->tag.x - gap_sm - row->text.x;
             row->text.h = row_h;
+
+            int xs = ns_scale(SP_XS, dpi);
+            int copy_x = row->tag.x - xs - chk_sz;
+            int text_w_with_copy = copy_x - xs - row->text.x;
+            if (copy_fits(text_w_with_copy, dpi)) {
+                row->copy.w = chk_sz;
+                row->copy.h = chk_sz;
+                row->copy.x = copy_x;
+                row->copy.y = row_top + (row_h - chk_sz) / 2;
+                row->text.w = text_w_with_copy;
+            } else {
+                /* Too narrow: drop the copy icon first (stays zeroed) and
+                 * give the text the old tag gap back. */
+                row->text.w = row->tag.x - gap_sm - row->text.x;
+            }
             if (row->text.w < 0) row->text.w = 0;
 
             row->ellipsis = (cmd_text_w && cmd_text_w[i] > row->text.w) ? 1 : 0;
@@ -194,18 +216,35 @@ void settled_row_layout(NsRect r, int cmd_text_w, int chip_w, int text_h,
     int gap_sm = ns_scale(SP_SM, dpi);
     int tag_h  = ns_scale(SZ_TAG_H, dpi);
 
+    int xs     = ns_scale(SP_XS, dpi);
+    int icon   = ns_scale(SZ_ICON, dpi);
+
     if (chip_w < 0) chip_w = 0;
 
+    /* Right edge the copy icon must stay clear of: the chip (minus SP_XS) or,
+     * with no chip, the row's own right edge. */
+    int copy_edge;
     if (chip_w > 0) {
         out->tag.w = chip_w;
         out->tag.h = tag_h;
         out->tag.x = r.x + r.w - chip_w;
         out->tag.y = r.y + (row_h - tag_h) / 2;
-
+        copy_edge = out->tag.x - xs;
         out->text.w = out->tag.x - gap_sm - r.x;
     } else {
         /* out->tag stays zeroed -- no chip drawn. */
+        copy_edge = r.x + r.w;
         out->text.w = r.w;
+    }
+
+    int copy_x = copy_edge - icon;
+    int text_w_with_copy = copy_x - xs - r.x;
+    if (copy_fits(text_w_with_copy, dpi)) {
+        out->copy.x = copy_x;
+        out->copy.y = r.y + (row_h - icon) / 2;
+        out->copy.w = icon;
+        out->copy.h = icon;
+        out->text.w = text_w_with_copy;
     }
     if (out->text.w < 0) out->text.w = 0;
 
@@ -233,6 +272,7 @@ int approval_card_hit(const ApprovalCardLayout *l, int x, int y, int *row_out)
     for (int i = 0; i < n; i++) {
         const ApprovalRowLayout *row = &l->rows[i];
         if (point_in(row->checkbox, x, y)) { if (row_out) *row_out = i; return HIT_CHECKBOX; }
+        if (point_in(row->copy, x, y)) { if (row_out) *row_out = i; return HIT_COPY; }
         if (point_in(row->tag, x, y)) { if (row_out) *row_out = i; return HIT_TAG; }
         if (point_in(row->text, x, y)) { if (row_out) *row_out = i; return HIT_TEXT; }
     }

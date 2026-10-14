@@ -4,6 +4,20 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-10-13 — feature-workflow: the Linux box can build too
+
+Session: https://claude.ai/code/session_017mWL2Y87nKcs9C3CcuQTND
+Model: claude-fable-5-1 (an Opus critique of the command-details spec
+flagged the contradiction).
+
+- **`skills/feature-workflow/SKILL.md`**, step 6. It said the Windows
+  rebuild happens only on the maintainer's Windows box. The maintainer's
+  Linux box `automaton` cross-compiles with `x86_64-w64-mingw32-gcc` and
+  vcpkg, and its `make clean && make release` produced the v1.2.29 exe
+  that passed the gate in PR #60 on 2026-10-13. The step now names both
+  machines and keeps the cloud-session rule (push the branch, stop) as it
+  was.
+
 ## 2026-10-13 — retrospective (13 merges)
 
 Session: scheduled Routine, cloud (Linux). Model: claude-sonnet-5-5.

@@ -740,3 +740,104 @@ int test_approval_add_session_contradicted_takes_worse(void) {
               (int)cmd_classify("reload", CMD_PLATFORM_LINUX));
     TEST_END();
 }
+
+/* --- per-command notes --- */
+
+int test_approval_note_set_and_read(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    int i = chat_approval_add(&q, "ls -la", CMD_PLATFORM_LINUX);
+    ASSERT_STR_EQ(q.entries[i].note, "");
+    chat_approval_set_note(&q, i, "Lists the files");
+    ASSERT_STR_EQ(q.entries[i].note, "Lists the files");
+    chat_approval_set_note(&q, i, "");
+    ASSERT_STR_EQ(q.entries[i].note, "");
+    TEST_END();
+}
+
+int test_approval_note_bounds_ignored(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    int i = chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    chat_approval_set_note(&q, i, "keep");
+    chat_approval_set_note(&q, -1, "x");
+    chat_approval_set_note(&q, 1, "x");               /* == count */
+    chat_approval_set_note(&q, APPROVAL_MAX_CMDS, "x");
+    chat_approval_set_note(&q, 9999, "x");
+    chat_approval_set_note(&q, i, NULL);
+    chat_approval_set_note(NULL, i, "x");
+    ASSERT_STR_EQ(q.entries[i].note, "keep");
+    /* An index past count never writes into an unused slot. */
+    ASSERT_STR_EQ(q.entries[1].note, "");
+    TEST_END();
+}
+
+int test_approval_note_truncated_and_terminated(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    int i = chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    char big[CMD_NOTE_MAX * 2];
+    memset(big, 'n', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    chat_approval_set_note(&q, i, big);
+    ASSERT_EQ((int)strlen(q.entries[i].note), CMD_NOTE_MAX - 1);
+    ASSERT_EQ(q.entries[i].note[CMD_NOTE_MAX - 1], '\0');
+    /* The next entry's storage is untouched. */
+    int j = chat_approval_add(&q, "pwd", CMD_PLATFORM_LINUX);
+    ASSERT_STR_EQ(q.entries[j].note, "");
+    /* Exactly CMD_NOTE_MAX-1 bytes fits whole. */
+    char fit[CMD_NOTE_MAX];
+    memset(fit, 'f', sizeof(fit) - 1);
+    fit[sizeof(fit) - 1] = '\0';
+    chat_approval_set_note(&q, j, fit);
+    ASSERT_STR_EQ(q.entries[j].note, fit);
+    TEST_END();
+}
+
+int test_approval_note_survives_state_changes(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    int a = chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    int b = chat_approval_add(&q, "cat f", CMD_PLATFORM_LINUX);
+    int c = chat_approval_add(&q, "uptime", CMD_PLATFORM_LINUX);
+    chat_approval_set_note(&q, a, "note a");
+    chat_approval_set_note(&q, b, "note b");
+    chat_approval_set_note(&q, c, "note c");
+    chat_approval_approve(&q, a);
+    chat_approval_deny(&q, b);
+    chat_approval_set_executing(&q, a);
+    ASSERT_STR_EQ(q.entries[a].note, "note a");
+    ASSERT_STR_EQ(q.entries[b].note, "note b");
+    chat_approval_set_completed(&q, a);
+    chat_approval_approve_all(&q);
+    ASSERT_STR_EQ(q.entries[a].note, "note a");
+    ASSERT_STR_EQ(q.entries[b].note, "note b");
+    ASSERT_STR_EQ(q.entries[c].note, "note c");
+    TEST_END();
+}
+
+int test_approval_add_zeroes_note(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    /* A stale note in a slot that is not yet in use must not leak into the
+     * entry that is added there. */
+    memset(q.entries[0].note, 'z', sizeof(q.entries[0].note));
+    int i = chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    ASSERT_EQ(i, 0);
+    ASSERT_STR_EQ(q.entries[0].note, "");
+    for (size_t k = 0; k < sizeof(q.entries[0].note); k++)
+        ASSERT_EQ(q.entries[0].note[k], '\0');
+    /* A rejected add leaves the notes alone. */
+    chat_approval_set_note(&q, 0, "x");
+    ASSERT_EQ(chat_approval_add(&q, "   ", CMD_PLATFORM_LINUX), -1);
+    ASSERT_STR_EQ(q.entries[0].note, "x");
+    /* Reset clears them. */
+    chat_approval_reset(&q);
+    ASSERT_STR_EQ(q.entries[0].note, "");
+    TEST_END();
+}

@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.29"
-#define APP_VERSION_BINARY  1,2,29,0
+#define APP_VERSION        "1.2.30"
+#define APP_VERSION_BINARY  1,2,30,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -80,6 +80,7 @@
 #define IDC_CMD_EXPAND_ALL   3044  /* Expand collapsed command list */
 #define IDC_CMD_APPROVE_SEL  3045  /* Approve selected (ticked) commands */
 #define IDC_CMD_CANCEL_ALL   3046  /* Cancel (deny) all pending commands */
+#define IDC_CMD_DETAIL       3047  /* Open the command details popup; lParam = ChatMsgItem id */
 #define IDC_CMD_TOGGLE_BASE  3050  /* 3050..3059 for up to 10 command tickboxes */
 #define IDC_DEBUG_TERMINAL   3060  /* Settings: raw debug log toggle */
 #define IDC_AI_SEARCH_COMBO  3061  /* Settings: search engine dropdown */
