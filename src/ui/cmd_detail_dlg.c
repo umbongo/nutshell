@@ -340,13 +340,29 @@ static LRESULT CALLBACK DetailProc(HWND hwnd, UINT msg, WPARAM wParam,
         }
         break;
 
+    /* IsDialogMessage hands Tab to a control that answers DLGC_WANTALLKEYS
+     * (the multiline EDIT does) and expects the dialog to move focus when
+     * the control sends WM_NEXTDLGCTL; DefWindowProc ignores it, which
+     * would trap Tab in the box. Follow the Win32 contract: lParam nonzero
+     * means wParam is the window to focus, else wParam nonzero is
+     * "previous" and zero is "next". */
+    case WM_NEXTDLGCTL:
+        if (lParam) {
+            SetFocus((HWND)wParam);
+        } else {
+            SetFocus(GetNextDlgTabItem(hwnd, GetFocus(), wParam ? TRUE : FALSE));
+        }
+        return 0;
+
     case WM_COMMAND:
         if (!d) break;
         if (LOWORD(wParam) == IDC_DETAIL_COPY) {
             /* The command, exactly as stored: no trailing newline, so
-             * pasting into a terminal cannot run it. */
-            if (d->command && d->command[0])
-                clip_copy_utf8(hwnd, d->command, strlen(d->command));
+             * pasting into a terminal cannot run it. "Copied" is only shown
+             * when the clipboard really took the text. */
+            if (!d->command || !d->command[0] ||
+                !clip_copy_utf8(hwnd, d->command, strlen(d->command)))
+                return 0;
             d->copied = 1;
             SetWindowTextW(d->hCopy, L"Copied");
             InvalidateRect(d->hCopy, NULL, FALSE);
@@ -429,7 +445,9 @@ void cmd_detail_show(HWND owner, const char *command, const char *note,
         registered = 1;
     }
 
-    const DWORD style = WS_OVERLAPPEDWINDOW;
+    /* No minimise/maximise: an owned popup minimised leaves the disabled
+     * main window with nothing on the taskbar to restore it from. */
+    const DWORD style = WS_OVERLAPPEDWINDOW & ~(DWORD)(WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
     int want_cw = ns_scale(WIN_BASE_W, dpi);
     int want_ch = ns_scale(WIN_BASE_H, dpi);
     RECT wr = { 0, 0, want_cw, want_ch };
@@ -487,11 +505,27 @@ void cmd_detail_show(HWND owner, const char *command, const char *note,
         }
         if (got < 0) break;
         if (m.message == WM_KEYDOWN &&
-            (m.hwnd == hwnd || IsChild(hwnd, m.hwnd)) &&
-            (m.wParam == VK_ESCAPE ||
-             (m.wParam == VK_RETURN && m.hwnd != d.hEdit))) {
-            DestroyWindow(hwnd);
-            continue;
+            (m.hwnd == hwnd || IsChild(hwnd, m.hwnd))) {
+            if (m.wParam == VK_TAB && m.hwnd == d.hEdit) {
+                /* Tab leaves the text box whatever the EDIT's dialog code
+                 * says; Shift+Tab goes back. */
+                BOOL shift = (GetKeyState(VK_SHIFT) & 0x8000) ? TRUE : FALSE;
+                HWND next = GetNextDlgTabItem(hwnd, d.hEdit, shift);
+                if (next) SetFocus(next);
+                continue;
+            }
+            if (m.wParam == VK_RETURN && m.hwnd == d.hCopy) {
+                /* Enter on the Copy button presses it, it does not close. */
+                SendMessage(hwnd, WM_COMMAND,
+                            MAKEWPARAM(IDC_DETAIL_COPY, BN_CLICKED),
+                            (LPARAM)d.hCopy);
+                continue;
+            }
+            if (m.wParam == VK_ESCAPE ||
+                (m.wParam == VK_RETURN && m.hwnd != d.hEdit)) {
+                DestroyWindow(hwnd);
+                continue;
+            }
         }
         /* Tab cycles Copy, Close and the text box. */
         if (!IsDialogMessage(hwnd, &m)) {

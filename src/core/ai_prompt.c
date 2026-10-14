@@ -1318,13 +1318,32 @@ static void note_build(const char *a, const char *b, char *out)
     while (len > 0 && out[len - 1] == ' ') len--;
     out[len] = '\0';
 
-    /* Nothing but punctuation and digits ("2.", "-"): no explanation. */
+    /* Nothing but punctuation and digits ("2.", "-", a lone bullet or dash):
+     * no explanation. A non-ASCII sequence counts as a letter unless it is
+     * one of the common typographic marks. */
     int has_letter = 0;
-    for (size_t i = 0; i < len; i++) {
+    for (size_t i = 0; i < len && !has_letter; ) {
         unsigned char c = (unsigned char)out[i];
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c >= 0x80) {
-            has_letter = 1;
-            break;
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9')) {
+            if (!(c >= '0' && c <= '9')) has_letter = 1;
+            i++;
+        } else if (c < 0x80) {
+            i++;
+        } else {
+            size_t n = (c >= 0xF0) ? 4 : (c >= 0xE0) ? 3 : (c >= 0xC0) ? 2 : 1;
+            unsigned long cp = 0;
+            if (n == 2 && i + 1 < len)
+                cp = ((unsigned long)(c & 0x1F) << 6) |
+                     ((unsigned char)out[i + 1] & 0x3F);
+            else if (n == 3 && i + 2 < len)
+                cp = ((unsigned long)(c & 0x0F) << 12) |
+                     ((unsigned long)((unsigned char)out[i + 1] & 0x3F) << 6) |
+                     ((unsigned char)out[i + 2] & 0x3F);
+            if (!(cp == 0x2022 || cp == 0x2013 || cp == 0x2014 ||
+                  cp == 0x00B7 || cp == 0x2026 || cp == 0x00A0))
+                has_letter = 1;
+            i += n;
         }
     }
     if (!has_letter) out[0] = '\0';
@@ -1396,7 +1415,17 @@ int ai_extract_commands_notes(const char *response, char cmds[][1024],
         }
 
         memcpy(cmds[count], tmp, trimmed_len + 1);
-        if (notes) note_build(pos, marker, notes[count]);
+        if (notes) {
+            /* After a previous command, the note is the prose from the next
+             * line on: whatever trails that command's closing marker on its
+             * own line belongs to that command, not to this one. */
+            const char *np = pos;
+            if (pos != response) {
+                const char *nl = memchr(pos, '\n', (size_t)(marker - pos));
+                np = nl ? nl + 1 : marker;
+            }
+            note_build(np, marker, notes[count]);
+        }
         count++;
 
         pos = end + 7; /* skip "[/EXEC]" */

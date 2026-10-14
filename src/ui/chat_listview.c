@@ -486,9 +486,12 @@ static void sel_copy_to_clipboard(ChatListView *lv)
     char buf[COPY_CAP + 4];
     size_t n = sel_extract_text(lv, buf, sizeof(buf));
     if (n == 0) return;
-    /* [EXEC] markers are transport syntax, not text the user wants. */
-    chat_strip_exec_markers(buf);
+    /* The extraction may have stopped mid-character at the end of the
+     * buffer: cut to valid UTF-8 first (stripping the [EXEC] markers, which
+     * are transport syntax rather than text the user wants, only shortens). */
     n = utf8_cut_at(buf, COPY_CAP);
+    chat_strip_exec_markers(buf);
+    n = strlen(buf);
     clip_copy_utf8(lv->hwnd, buf, n);
 }
 
@@ -2605,6 +2608,7 @@ static void on_paint(ChatListView *lv)
 
     /* Copy glyphs on code blocks are re-recorded by this paint. */
     clv_code_hits_clear(lv);
+    lv->sticky_bottom = 0;
 
     RECT client;
     GetClientRect(lv->hwnd, &client);
@@ -2754,6 +2758,7 @@ static void on_paint(ChatListView *lv)
         /* Clear the sticky area with background */
         RECT sticky_bg;
         SetRect(&sticky_bg, 0, 0, cw, last_user_h + ns_scale(2, CLV_DPI(lv)));
+        lv->sticky_bottom = sticky_bg.bottom;
         HBRUSH sbr = CreateSolidBrush(bg);
         FillRect(mem_dc, &sticky_bg, sbr);
         DeleteObject(sbr);
@@ -2993,6 +2998,9 @@ static int chatlv_settled_row_hit(ChatListView *lv, int mx, int my,
     GetClientRect(lv->hwnd, &client_rc);
     int cw = client_rc.right - client_rc.left;
 
+    /* The pinned user bubble is painted over the list: nothing under it. */
+    if (my < lv->sticky_bottom) return 0;
+
     int y = lv->msg_gap - lv->scroll_y;
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
     while (item) {
@@ -3031,6 +3039,8 @@ static int chatlv_settled_row_hit(ChatListView *lv, int mx, int my,
 static const ClvCodeHit *chatlv_code_hit_at(const ChatListView *lv, int mx,
                                             int my)
 {
+    /* The pinned user bubble covers whatever is drawn beneath it. */
+    if (my < lv->sticky_bottom) return NULL;
     for (int i = 0; i < lv->n_code_hits; i++) {
         const RECT *r = &lv->code_hits[i].rc;
         if (mx >= r->left && mx < r->right && my >= r->top && my < r->bottom)

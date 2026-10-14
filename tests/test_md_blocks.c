@@ -41,6 +41,20 @@ int test_md_blocks_multiline_body(void)
     MdCodeSpan sp[2];
     ASSERT_EQ(md_code_blocks(t, strlen(t), sp, 2), 1);
     ASSERT_TRUE(span_eq(t, sp[0], "one\ntwo\n\nfour"));
+
+    /* Trailing blank lines before the closing fence are not part of the body. */
+    const char *t2 = "```\nls\n\n```";
+    ASSERT_EQ(md_code_blocks(t2, strlen(t2), sp, 2), 1);
+    ASSERT_TRUE(span_eq(t2, sp[0], "ls"));
+    const char *t3 = "```bash\nls -la\r\n\r\n```";
+    ASSERT_EQ(md_code_blocks(t3, strlen(t3), sp, 2), 1);
+    ASSERT_TRUE(span_eq(t3, sp[0], "ls -la"));
+    const char *t4 = "```\n\n\n```";
+    ASSERT_EQ(md_code_blocks(t4, strlen(t4), sp, 2), 1);
+    ASSERT_EQ(sp[0].end, sp[0].start);
+    const char *t5 = "```\nls\n\n\n";
+    ASSERT_EQ(md_code_blocks(t5, strlen(t5), sp, 2), 1);
+    ASSERT_TRUE(span_eq(t5, sp[0], "ls"));
     TEST_END();
 }
 

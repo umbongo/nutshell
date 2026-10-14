@@ -31,11 +31,11 @@ int md_code_blocks(const char *text, size_t len, MdCodeSpan *out, int max)
                 body_start = next;
             } else {
                 in_code = 0;
-                /* The body ends before the line terminator of its last line,
-                 * which is the one just before this closing fence. */
+                /* The body ends before every trailing CR and LF (blank lines
+                 * included) that precede this closing fence. */
                 size_t end = p;
-                if (end > body_start && text[end - 1] == '\n') end--;
-                if (end > body_start && text[end - 1] == '\r') end--;
+                while (end > body_start &&
+                       (text[end - 1] == '\n' || text[end - 1] == '\r')) end--;
                 if (out && count < max) {
                     out[count].start = body_start;
                     out[count].end = end;
@@ -47,10 +47,10 @@ int md_code_blocks(const char *text, size_t len, MdCodeSpan *out, int max)
     }
 
     if (in_code) {
-        /* Unterminated: the body runs to the end (minus a final terminator). */
+        /* Unterminated: the body runs to the end (minus every trailing CR and LF). */
         size_t end = len;
-        if (end > body_start && text[end - 1] == '\n') end--;
-        if (end > body_start && text[end - 1] == '\r') end--;
+        while (end > body_start &&
+               (text[end - 1] == '\n' || text[end - 1] == '\r')) end--;
         if (body_start > end) body_start = end;
         if (out && count < max) {
             out[count].start = body_start;

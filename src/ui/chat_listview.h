@@ -108,6 +108,11 @@ typedef struct {
     ClvCodeHit code_hits[CLV_CODE_HITS_MAX];
     int n_code_hits;
 
+    /* Bottom edge (client y) of the pinned user bubble when on_paint() drew
+     * one over the list, 0 when it did not. Anything under it is covered, so
+     * the code-block and settled-row hit tests ignore points above it. */
+    int sticky_bottom;
+
 } ChatListView;
 
 /* The risk tag's chip colours and text for a command's safety level -- the

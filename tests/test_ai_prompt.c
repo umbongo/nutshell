@@ -3455,6 +3455,31 @@ int test_ai_notes_digit_only_note_is_empty(void) {
     ASSERT_STR_EQ(notes[0], "");
     ASSERT_STR_EQ(notes[1], "");
     ASSERT_STR_EQ(notes[2], "Step 3");
+
+    /* A lone bullet or dash is punctuation, not an explanation; text that
+     * follows one keeps the note. */
+    resp = "\xE2\x80\xA2\n[EXEC]a[/EXEC]\n\xE2\x80\x94\n[EXEC]b[/EXEC]\n"
+           "\xE2\x80\x94 fix it\n[EXEC]c[/EXEC]";
+    n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                  NULL, NULL);
+    ASSERT_EQ(n, 3);
+    ASSERT_STR_EQ(notes[0], "");
+    ASSERT_STR_EQ(notes[1], "");
+    ASSERT_STR_EQ(notes[2], "\xE2\x80\x94 fix it");
+
+    /* Prose on the same line as the previous command's closing marker is
+     * that command's, never the next one's note. */
+    resp = "[EXEC]df -h[/EXEC] shows usage.\n[EXEC]free -m[/EXEC]";
+    n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                  NULL, NULL);
+    ASSERT_EQ(n, 2);
+    ASSERT_STR_EQ(notes[1], "");
+
+    resp = "[EXEC]a[/EXEC]\nThen remove it:\n[EXEC]b[/EXEC]";
+    n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
+                                  NULL, NULL);
+    ASSERT_EQ(n, 2);
+    ASSERT_STR_EQ(notes[1], "Then remove it:");
     TEST_END();
 }
 

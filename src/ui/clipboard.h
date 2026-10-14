@@ -14,12 +14,15 @@
 
 /* Set the one CF_UNICODETEXT format from `len` bytes of UTF-8. The caller
  * must already have the clipboard open (and should EmptyClipboard() first).
- * NULL or empty text, and any failure, leave the clipboard untouched. */
-void clip_set_utf8(const char *utf8, size_t len);
+ * Returns 1 when the text was placed, 0 otherwise; NULL or empty text, and
+ * any failure, leave the clipboard as it was. */
+int clip_set_utf8(const char *utf8, size_t len);
 
-/* Open the clipboard for `owner`, replace its contents with the text and
- * close it again. Returns 1 when the text was placed, 0 otherwise (empty
- * text, or the clipboard was busy). */
+/* Convert the text first, then open the clipboard for `owner`, replace its
+ * contents and close it again. The existing contents are only emptied once
+ * the new text is ready, so a failed conversion never wipes the clipboard.
+ * Returns 1 when the text was placed, 0 otherwise (empty text, conversion or
+ * allocation failure, or the clipboard was busy). */
 int clip_copy_utf8(HWND owner, const char *utf8, size_t len);
 
 #endif /* _WIN32 */
