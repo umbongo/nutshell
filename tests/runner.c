@@ -2601,6 +2601,21 @@ int test_text_lf_lone_cr_unchanged(void);
 int test_text_lf_size_query(void);
 int test_text_lf_truncation_never_splits_crlf(void);
 int test_text_lf_null_input(void);
+
+/* test_cli_sink.c */
+int test_cli_sink_invalid_handle_is_console(void);
+int test_cli_sink_pipe_is_handle(void);
+int test_cli_sink_disk_is_handle(void);
+int test_cli_sink_console_device_is_console(void);
+int test_cli_sink_char_device_not_console_is_handle(void);
+int test_cli_sink_unknown_type_is_console(void);
+int test_cli_write_all_single_call_crlf(void);
+int test_cli_write_all_partial_writes_resume(void);
+int test_cli_write_all_zero_bytes_is_none(void);
+int test_cli_write_all_error_after_partial_is_stopped(void);
+int test_cli_write_all_closed_is_stopped(void);
+int test_cli_write_all_empty_text_is_done(void);
+
 int test_ai_status_layout_no_overlap_inside_line_96(void);
 int test_ai_status_layout_no_overlap_inside_line_192(void);
 int test_ai_status_layout_policy_is_left_aligned_and_full_width(void);
@@ -5486,6 +5501,18 @@ int main(void) {
     failed += test_text_lf_size_query();
     failed += test_text_lf_truncation_never_splits_crlf();
     failed += test_text_lf_null_input();
+    failed += test_cli_sink_invalid_handle_is_console();
+    failed += test_cli_sink_pipe_is_handle();
+    failed += test_cli_sink_disk_is_handle();
+    failed += test_cli_sink_console_device_is_console();
+    failed += test_cli_sink_char_device_not_console_is_handle();
+    failed += test_cli_sink_unknown_type_is_console();
+    failed += test_cli_write_all_single_call_crlf();
+    failed += test_cli_write_all_partial_writes_resume();
+    failed += test_cli_write_all_zero_bytes_is_none();
+    failed += test_cli_write_all_error_after_partial_is_stopped();
+    failed += test_cli_write_all_closed_is_stopped();
+    failed += test_cli_write_all_empty_text_is_done();
     failed += test_ai_status_layout_no_overlap_inside_line_96();
     failed += test_ai_status_layout_no_overlap_inside_line_192();
     failed += test_ai_status_layout_policy_is_left_aligned_and_full_width();

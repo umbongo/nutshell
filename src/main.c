@@ -5,7 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "core/cli_args.h"
+#include "core/cli_sink.h"
 #include "core/logger.h"
+#include "core/text_lines.h"
 #include "config/config.h"
 #include "ui/ui.h"
 #include "ui/icons.h"
@@ -37,22 +39,104 @@ static void init_app_log(void)
     log_init(path, LOG_LEVEL_INFO);
 }
 
-/* Print to the parent console when launched from a terminal; fall back
- * to a MessageBox when there is none (double-click, Run dialog). */
+/* cli_sink.h mirrors these so the portable decision can be tested; keep
+ * them in step with winbase.h. */
+_Static_assert(CLI_FT_UNKNOWN == FILE_TYPE_UNKNOWN, "cli_sink: FILE_TYPE_UNKNOWN");
+_Static_assert(CLI_FT_DISK == FILE_TYPE_DISK, "cli_sink: FILE_TYPE_DISK");
+_Static_assert(CLI_FT_CHAR == FILE_TYPE_CHAR, "cli_sink: FILE_TYPE_CHAR");
+_Static_assert(CLI_FT_PIPE == FILE_TYPE_PIPE, "cli_sink: FILE_TYPE_PIPE");
+
+/* WriteFile as a cli_write_all() writer. A pipe whose reader has exited
+ * ("| findstr /m") is reported CLOSED so the caller stops quietly instead
+ * of dumping the text on the console. */
+static CliIoStatus cli_writefile(void *ctx, const char *buf, size_t len,
+                                 size_t *written)
+{
+    HANDLE h = (HANDLE)ctx;
+    DWORD chunk = (len > 0x7FFFFFFFu) ? 0x7FFFFFFFu : (DWORD)len;
+    DWORD wrote = 0;
+    *written = 0;
+    if (!WriteFile(h, buf, chunk, &wrote, NULL)) {
+        DWORD err = GetLastError();
+        return (err == ERROR_BROKEN_PIPE || err == ERROR_NO_DATA)
+                   ? CLI_IO_CLOSED : CLI_IO_ERROR;
+    }
+    *written = wrote;
+    return CLI_IO_OK;
+}
+
+/* One inherited standard handle, classified for cli_sink_for(). */
+typedef struct {
+    HANDLE h;
+    int valid;
+    unsigned type;
+    int is_console;
+} CliStdHandle;
+
+static CliStdHandle cli_std_handle(DWORD which)
+{
+    CliStdHandle sh;
+    sh.h = GetStdHandle(which);
+    sh.valid = (sh.h != NULL && sh.h != INVALID_HANDLE_VALUE);
+    sh.type = sh.valid ? (unsigned)GetFileType(sh.h) : CLI_FT_UNKNOWN;
+    DWORD mode = 0;
+    sh.is_console = (sh.valid && sh.type == CLI_FT_CHAR &&
+                     GetConsoleMode(sh.h, &mode));
+    return sh;
+}
+
+/* Try the inherited handle for `which`; 1 if the text went there (fully,
+ * or as far as it could before a closed pipe or a write error, which must
+ * not be followed by a second copy elsewhere), 0 if it is not a redirect
+ * or nothing could be written. */
+static int cli_try_handle(DWORD which, const char *text)
+{
+    CliStdHandle sh = cli_std_handle(which);
+    if (cli_sink_for(sh.valid, sh.type, sh.is_console) != CLI_SINK_HANDLE) {
+        return 0;
+    }
+    return cli_write_all(cli_writefile, sh.h, text) != CLI_WRITE_NONE;
+}
+
+/* Print to the stream the shell redirected (a pipe, a file, NUL), else to
+ * the parent console when launched from a terminal, else to a MessageBox
+ * when there is none (double-click, Run dialog). A GUI process is not
+ * waited for by an interactive cmd or PowerShell, so the console path
+ * prints after the next prompt; a pipe's reader does wait, so
+ * "nutshell.exe --help | more" prints in order, and a file redirect at
+ * least receives the text. src/core/cli_sink.h has the full story. Errors
+ * follow stderr, everything else stdout, so "2>&1" and a plain "| more"
+ * both behave like any console tool. */
 static void cli_output(const char *text, const char *title, int is_error)
 {
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+    /* Attach before classifying: GetConsoleMode() on an inherited console
+     * handle can fail while this process is not attached to that
+     * console, which would make the console look like a NUL device. */
+    BOOL attached = AttachConsole(ATTACH_PARENT_PROCESS);
+    if (cli_try_handle(is_error ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE,
+                       text)) {
+        if (attached) {
+            FreeConsole();
+        }
+        return;
+    }
+    if (attached) {
         if (freopen("CONOUT$", "w", stdout) != NULL) {
             fputc('\n', stdout);
             fputs(text, stdout);
             fflush(stdout);
         }
         FreeConsole();
-    } else {
-        MessageBoxA(NULL, text, title,
-                    (UINT)(MB_OK | (is_error ? MB_ICONERROR
-                                             : MB_ICONINFORMATION)));
+        return;
     }
+    /* No console and no usable stderr: a parent that redirected only
+     * stdout still gets the error there rather than a blocking dialog. */
+    if (is_error && cli_try_handle(STD_OUTPUT_HANDLE, text)) {
+        return;
+    }
+    MessageBoxA(NULL, text, title,
+                (UINT)(MB_OK | (is_error ? MB_ICONERROR
+                                         : MB_ICONINFORMATION)));
 }
 
 /* Directory containing the running exe ("" on failure). */
@@ -116,7 +200,9 @@ static int run_list(void)
         return 0;
     }
 
-    /* name-or-host label, em-dash, host: one line per profile */
+    /* name-or-host label, hyphen, host: one line per profile. ASCII on
+     * purpose: PowerShell decodes native output with the OEM code page by
+     * default, so an em-dash came out as mojibake in a pipe or a file. */
     size_t cap = n * 560u + 32u;
     char *out = malloc(cap);
     if (!out) {
@@ -129,7 +215,7 @@ static int run_list(void)
     for (size_t i = 0; i < n; i++) {
         const Profile *pr = (const Profile *)vec_get(&cfg->profiles, i);
         const char *label = (pr->name[0] != '\0') ? pr->name : pr->host;
-        int wrote = snprintf(out + pos, cap - pos, "  %s — %s\n",
+        int wrote = snprintf(out + pos, cap - pos, "  %s - %s\n",
                              label, pr->host);
         if (wrote < 0 || (size_t)wrote >= cap - pos) {
             break;
