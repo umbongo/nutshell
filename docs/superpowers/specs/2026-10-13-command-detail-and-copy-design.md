@@ -225,7 +225,38 @@ Nothing is added to the input box, the user bubbles or the Thinking row.
   copy icons cover wanting one command, and the popup's EDIT gives character selection for the
   command text.
 
-### 5. Out of scope, said once
+### 5. Resizable composer, and line ends on paste (added 2026-10-14)
+
+The maintainer's fourth ask, from a screenshot of a pasted multi-line reply crammed onto one
+line of the input box: "make the ai textbox resizable".
+
+**The box is already multi-line** (`ES_MULTILINE | ES_WANTRETURN`, `ai_chat.c:3178`) but
+fixed at `ns_scale(46, dpi)`, about two lines (`:871`, `:2631`, `:3145`), and the panel's
+own `AiPanelLayout` already takes the composer height as an input. Two changes:
+
+- **A drag sash** between the status line and the composer. `ai_panel_layout()` gains a
+  `sash` rect in `AiPanelLayout`: `SP_SM` tall, full panel width, directly above the
+  composer, taken out of the thread's height (the status line keeps its place above it; the
+  tiling tests' exact-sum invariant extends to the new rect). A pure
+  `ai_composer_clamp_h(int want_h, int panel_h, int line_h, int dpi)` clamps a requested
+  height to `[2 * line_h + padding, panel_h / 2]`, never below the minimum even when the panel
+  is tiny; tested at 96 and 192 DPI. In `ai_chat.c` the panel handles `WM_SETCURSOR`
+  (`IDC_SIZENS` over the sash), `WM_LBUTTONDOWN` (capture, remember the start), `WM_MOUSEMOVE`
+  (new height from the cursor, clamped, relayout) and `WM_LBUTTONUP`/`WM_CAPTURECHANGED`
+  (release), the way `window.c`'s panel splitter does (`g_ai_splitter_dragging`, `:4836-4894`).
+  The chosen height lives in `AiChatData` as a 96-DPI base value and is rescaled on
+  `WM_DPICHANGED`; it is not persisted, matching the docked panel width, which is not either.
+  The sash is painted as a `border`-coloured hairline (`STROKE_HAIRLINE` or the nearest token)
+  so it is discoverable; no grip glyph.
+- **LF to CRLF on paste into the message box.** The transcript copies lines joined with
+  `\n`; a multiline `EDIT` only breaks on `\r\n`, which is why the pasted reply in the
+  screenshot ran on as one line. The `IDC_CHATLIST_PASTE` handler (`ai_chat.c:3879`) and the
+  input's `WM_PASTE` (which falls through to the control today) normalise bare `\n` to
+  `\r\n` before `EM_REPLACESEL`, through a pure, tested `text_lf_to_crlf()` in
+  `src/core` (returns the needed size, never splits an existing `\r\n`). The box stays ANSI
+  (section 4).
+
+### 6. Out of scope, said once
 
 - A description for code blocks that are not `[EXEC]` commands (section 3 copies them; the
   popup is for approval rows only).
@@ -253,8 +284,11 @@ Nothing is added to the input box, the user bubbles or the Thinking row.
 | ui | `src/ui/clipboard.h/.c` | `clip_set_utf8` |
 | ui | `src/ui/chat_listview.c` | `HIT_TEXT`/`HIT_TAG` click posts `IDC_CMD_DETAIL`; `HIT_COPY`; settled and code-block id ranges; hover on row text; context menu; marker stripping and cap |
 | ui | `src/ui/md_render.c` | block rect out array; reserved right margin |
-| ui | `src/ui/ai_chat.c` | set notes on the queue (returned index, both paths); copy note to items; `IDC_CMD_DETAIL` handler; demo state |
+| ui | `src/ui/ai_chat.c` | set notes on the queue (returned index, both paths); copy note to items; `IDC_CMD_DETAIL` handler; demo state; composer sash drag; CRLF on paste |
 | ui | `src/ui/window.c` | call `clip_set_utf8` |
+| core | `src/core/ai_panel_layout.h/.c` | `AiPanelLayout.sash`, `ai_composer_clamp_h()` |
+| core | `src/core/text_lines.h/.c` | `text_lf_to_crlf()` |
+| tests | `tests/test_ai_panel.c`, `tests/test_text_lines.c` | sash tiling, clamp, LF to CRLF |
 | ui | `src/ui/resource.h` | `IDC_CMD_DETAIL`; version |
 | tests | `tests/test_ai_prompt.c` | notes aligned with drops; last paragraph; empty and digit-only notes; UTF-8 cut; fences; CRLF; controls stripped |
 | tests | `tests/test_chat_approval.c` | `set_note` bounds; note survives approve/deny |
