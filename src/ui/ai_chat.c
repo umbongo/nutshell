@@ -38,6 +38,7 @@
 #include "chat_thinking.h"
 #include "chat_activity.h"
 #include "chat_approval.h"
+#include "cmd_detail_dlg.h"
 #include "cmd_batch.h"
 #include "dispatch_line_clear.h"
 #include "logger.h"
@@ -1038,6 +1039,7 @@ static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
         chat_msg_set_command(item, e->command, e->safety,
                              e->status == APPROVE_BLOCKED);
         chat_msg_set_batch(item, batch->id);
+        chat_msg_set_note(item, e->note);
         switch (e->status) {
         case APPROVE_APPROVED:
         case APPROVE_EXECUTING:
@@ -3875,6 +3877,29 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 return 0;
             }
 
+            /* IDC_CMD_DETAIL → open the details popup for one command row.
+             * lParam is the ChatMsgItem id (the list view posts it rather
+             * than opening the popup itself, like every other card action).
+             * The popup copies command, note and safety before it runs its
+             * own modal loop, so nothing it shows points into msg_list --
+             * a stream chunk or rebuild that fires while it is open can
+             * free the items freely. */
+            if (d && ctl_id == IDC_CMD_DETAIL) {
+                int detail_id = (int)lParam;
+                for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+                    if (it->id != detail_id || it->type != CHAT_ITEM_COMMAND)
+                        continue;
+                    const char *dcmd = it->u.cmd.command ? it->u.cmd.command
+                                                         : it->text;
+                    HWND top = GetAncestor(hwnd, GA_ROOT);
+                    cmd_detail_show(top ? top : hwnd, dcmd ? dcmd : "",
+                                    it->u.cmd.note ? it->u.cmd.note : "",
+                                    it->u.cmd.safety, get_window_dpi(hwnd));
+                    break;
+                }
+                return 0;
+            }
+
             /* IDC_CHATLIST_PASTE → right-click paste from chat listview */
             if (d && ctl_id == IDC_CHATLIST_PASTE) {
                 if (d->hInput && IsClipboardFormatAvailable(CF_TEXT) &&
@@ -4137,9 +4162,11 @@ next_coalesce:;
         if (src != d->active_state) {
             if (wParam == 2 && src && rmsg->content) {
                 char cmds[16][1024];
+                char notes[16][CMD_NOTE_MAX];
                 int rejected = 0, rejected_long = 0;
-                int ncmds = ai_extract_commands_ex(rmsg->content, cmds, 16,
-                                                   &rejected, &rejected_long);
+                int ncmds = ai_extract_commands_notes(rmsg->content, cmds,
+                                                      notes, 16, &rejected,
+                                                      &rejected_long);
                 if (ncmds > 0) {
                     ApprovalQueue bg_defaults;
                     chat_approval_init(&bg_defaults);
@@ -4154,9 +4181,15 @@ next_coalesce:;
                             /* -1 means the queue refused it (full, blank,
                              * control characters, or too long) -- not
                              * added, and no card is ever built for it. */
-                            (void)chat_approval_add_session(&batch->q, cmds[ci],
-                                (CmdPlatform)src->platform,
+                            int bidx = chat_approval_add_session(&batch->q,
+                                cmds[ci], (CmdPlatform)src->platform,
                                 src->platform_contradicted);
+                            /* The note goes on the index the queue returned,
+                             * never the loop index: a refused command shifts
+                             * every later one down. */
+                            if (bidx >= 0)
+                                chat_approval_set_note(&batch->q, bidx,
+                                                       notes[ci]);
                         }
                     }
                 }
@@ -4229,9 +4262,11 @@ next_coalesce:;
 
             /* Extract commands from the full accumulated content */
             char cmds[16][1024];
+            char notes[16][CMD_NOTE_MAX];
             int rejected = 0, rejected_long = 0;
-            int ncmds = text ? ai_extract_commands_ex(text, cmds, 16, &rejected,
-                                                      &rejected_long) : 0;
+            int ncmds = text ? ai_extract_commands_notes(text, cmds, notes, 16,
+                                                         &rejected,
+                                                         &rejected_long) : 0;
 
             /* Finalize the AI item text.  When commands were found, show
              * only the pre-command portion — the summary/analysis after
@@ -4342,6 +4377,7 @@ next_coalesce:;
                             (CmdPlatform)d->active_state->platform,
                             d->active_state->platform_contradicted);
                         if (idx < 0) continue;  /* queue full or blank -- drop it */
+                        chat_approval_set_note(&batch->q, idx, notes[ci]);
 
                         ChatMsgItem *cmd_item = chat_msg_append(
                             &d->msg_list, CHAT_ITEM_COMMAND, "");
@@ -4350,6 +4386,8 @@ next_coalesce:;
                                 batch->q.entries[idx].safety,
                                 batch->q.entries[idx].status == APPROVE_BLOCKED);
                             chat_msg_set_batch(cmd_item, batch->id);
+                            chat_msg_set_note(cmd_item,
+                                              batch->q.entries[idx].note);
                         }
                     }
 
@@ -5352,6 +5390,24 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * just attached, plus any tool_call/tool_result items) and appends a
      * card for every batch just built above. */
     chat_rebuild_display(d);
+
+    /* "cmddetail": the "approval" state with the details popup already open
+     * on its longest command (the demo's long, truncated row), so the
+     * gallery can capture the popup without a click. Posted, not called:
+     * the popup runs its own modal loop and must not start inside this
+     * demo setup. */
+    if (state && strcmp(state, "cmddetail") == 0) {
+        ChatMsgItem *longest = NULL;
+        size_t longest_len = 0;
+        for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+            if (it->type != CHAT_ITEM_COMMAND || !it->u.cmd.command) continue;
+            size_t cl = strlen(it->u.cmd.command);
+            if (cl > longest_len) { longest = it; longest_len = cl; }
+        }
+        if (longest)
+            PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CMD_DETAIL, 0),
+                        (LPARAM)longest->id);
+    }
 
     /* The demo session has no channel (window.c's create_demo_session
      * passes NULL), so update_panel_state() would otherwise read every

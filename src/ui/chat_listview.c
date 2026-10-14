@@ -22,6 +22,9 @@
 #include "ns_hover.h"
 #include "ns_reduced_motion.h"
 #include "chat_approval.h"
+#include "chat_msg.h"
+#include "clipboard.h"
+#include "md_blocks.h"
 #include "ai_panel_layout.h"
 #include "ai_panel_states.h"
 #include "ai_prompt.h"
@@ -140,6 +143,36 @@ static const char *CHATLIST_CLASS = "NutshellChatList";
 #define CLV_STATE_CHIP_HIT(i)    (CLV_STATE_CHIP_BASE + (i))
 #define CLV_STATE_BUTTON_HIT     (CLV_STATE_CHIP_BASE + 100)
 
+/* Two more ranges, far above every id above (the Thinking range is
+ * CLV_THINK_HOVER_BASE + item id and item ids only ever grow, so nothing
+ * "just above" it is safe; it would reach 0x20000000 only after half a
+ * billion items):
+ *
+ *   settled command row -> CLV_SETTLED_HIT_ID(item id, HIT_*)
+ *                          = 0x20000000 + item id * 16 + hit. The hit type
+ *                          is the low 4 bits (HIT_COPY is 9, so the spec's
+ *                          "* 8" would not have fitted). Unique for item
+ *                          ids below 0x2000000 (33 million); the range ends
+ *                          where the next one starts.
+ *   code-block copy glyph -> CLV_CODE_COPY_ID(item id, block)
+ *                          = 0x40000000 + item id * 16 + block, block 0..15.
+ *                          Unique for item ids below 0x3FFFFFF (67 million),
+ *                          which keeps the id inside a signed int. Blocks
+ *                          past the 15th in one reply get no glyph.
+ *
+ * Both are decoded by chatlv_hover_hit/chatlv_hover_rect_for_id and are
+ * always actionable (hand cursor). */
+#define CLV_SETTLED_HIT_BASE      0x20000000
+#define CLV_SETTLED_HIT_ID(iid, hit) \
+    (CLV_SETTLED_HIT_BASE + (iid) * 16 + (hit))
+#define CLV_CODE_COPY_BASE        0x40000000
+#define CLV_CODE_BLOCKS_PER_ITEM  16
+/* Item ids at or above this get no settled/code ids (see the bounds above);
+ * far beyond anything one session reaches. */
+#define CLV_ITEM_ID_LIMIT         0x2000000
+#define CLV_CODE_COPY_ID(iid, blk) \
+    (CLV_CODE_COPY_BASE + (iid) * CLV_CODE_BLOCKS_PER_ITEM + (blk))
+
 /* Geometry for the empty/no-key/no-session state, shared by
  * paint_empty_state() and chatlv_empty_state_hit()/
  * chatlv_hover_rect_for_id() so painting and hit-testing never drift
@@ -238,7 +271,7 @@ static int draw_text_utf8(HDC hdc, const char *text, RECT *rc, UINT flags)
 /* Safety tag chip colours, from ns_tokens() per the design spec's table:
  * READ -> text_dim, UNKNOWN -> info ("needs attention, not yet alarming"),
  * WRITE -> warning, CRITICAL -> danger. */
-static void safety_tag_colors(CmdSafetyLevel level, COLORREF *bg, COLORREF *fg)
+void chatlv_safety_tag_colors(CmdSafetyLevel level, COLORREF *bg, COLORREF *fg)
 {
     const ThemeTokens *tok = ns_tokens();
     switch (level) {
@@ -261,7 +294,7 @@ static void safety_tag_colors(CmdSafetyLevel level, COLORREF *bg, COLORREF *fg)
     }
 }
 
-static const char *safety_tag_text(CmdSafetyLevel level)
+const char *chatlv_safety_tag_text(CmdSafetyLevel level)
 {
     switch (level) {
     case CMD_UNKNOWN:  return "UNKNOWN";
@@ -269,6 +302,22 @@ static const char *safety_tag_text(CmdSafetyLevel level)
     case CMD_CRITICAL: return "CRITICAL";
     default:           return "READ";
     }
+}
+
+/* The copy glyph on an approval row (card or settled) or a code block:
+ * NS_ICON_COPY at text_dim, text_main while `hit_id` is the hovered
+ * element. `r` is the glyph's rect; a zero-size rect (dropped on a narrow
+ * row) draws nothing. */
+static void paint_copy_glyph(ChatListView *lv, HDC hdc, const NsRect *r,
+                             int hit_id)
+{
+    if (!r || r->w <= 0 || r->h <= 0) return;
+    const ThemeTokens *tok = ns_tokens();
+    int hot = hit_id >= 0 && ns_hover_state_for(&lv->hover, hit_id);
+    RECT grc = { r->x, r->y, r->x + r->w, r->y + r->h };
+    ns_icon_draw(hdc, NS_ICON_COPY, &grc,
+                 RGB_FROM_THEME(hot ? tok->text_main : tok->text_dim),
+                 (UINT)CLV_DPI(lv));
 }
 
 /* ── Thinking disclosure geometry ──────────────────────────────────────
@@ -431,19 +480,16 @@ static size_t sel_extract_text(const ChatListView *lv, char *buf, size_t buf_sz)
 
 static void sel_copy_to_clipboard(ChatListView *lv)
 {
-    char buf[32768];
+    enum { COPY_CAP = 32768 };
+    /* A few spare bytes past the cap let utf8_cut_at() see whether the cap
+     * would split a multi-byte character. */
+    char buf[COPY_CAP + 4];
     size_t n = sel_extract_text(lv, buf, sizeof(buf));
-    if (n > 0 && OpenClipboard(lv->hwnd)) {
-        EmptyClipboard();
-        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, n + 1);
-        if (hg) {
-            char *dst = (char *)GlobalLock(hg);
-            memcpy(dst, buf, n + 1);
-            GlobalUnlock(hg);
-            SetClipboardData(CF_TEXT, hg);
-        }
-        CloseClipboard();
-    }
+    if (n == 0) return;
+    /* [EXEC] markers are transport syntax, not text the user wants. */
+    chat_strip_exec_markers(buf);
+    n = utf8_cut_at(buf, COPY_CAP);
+    clip_copy_utf8(lv->hwnd, buf, n);
 }
 
 /* ── Selection: select all items ──────────────────────────────────── */
@@ -1218,13 +1264,93 @@ static int paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
  * plain word-wrapped UTF-8 in lv->hFont otherwise. The [EXEC] purple
  * monospace path is handled by draw_ai_text_with_exec — segments passed
  * here never contain [EXEC] markers. Returns height consumed in pixels. */
+/* Forget last frame's code-block copy glyphs (and free their text). */
+static void clv_code_hits_clear(ChatListView *lv)
+{
+    for (int i = 0; i < lv->n_code_hits; i++) {
+        free(lv->code_hits[i].text);
+        lv->code_hits[i].text = NULL;
+    }
+    lv->n_code_hits = 0;
+}
+
+/* Cap on the text one code-block copy glyph carries, in bytes. */
+#define CLV_CODE_COPY_MAX 65536
+
+/* After a markdown segment was rendered with `bo` asking for its fenced
+ * blocks: pair every block's painted rect with its body span from
+ * md_code_blocks() (run on `text` exactly as the renderer saw it), draw a
+ * copy glyph in the margin the renderer kept free, and remember it for
+ * hover and click. If the two counts disagree the segment gets no glyphs --
+ * never a glyph that copies the wrong block. A block with an empty body, or
+ * narrower than two icons, gets none either. `*blk_next` numbers the item's
+ * blocks across its [EXEC]-split segments; blocks past the 15th get no
+ * glyph. */
+static void paint_code_copy_glyphs(ChatListView *lv, HDC hdc,
+                                   const char *text, int item_id,
+                                   const MdBlockOut *bo, int *blk_next)
+{
+    int dpi = CLV_DPI(lv);
+    MdCodeSpan spans[CLV_CODE_BLOCKS_PER_ITEM];
+    int n_spans = md_code_blocks(text, strlen(text), spans,
+                                 CLV_CODE_BLOCKS_PER_ITEM);
+    int n = bo->count < CLV_CODE_BLOCKS_PER_ITEM ? bo->count
+                                                 : CLV_CODE_BLOCKS_PER_ITEM;
+    int first = *blk_next;
+    *blk_next += n;
+    if (n_spans != bo->count) return;
+
+    int icon = ns_scale(SZ_ICON, dpi);
+    int inset = ns_scale(SP_XS, dpi);
+    for (int i = 0; i < n; i++) {
+        int blk = first + i;
+        if (blk >= CLV_CODE_BLOCKS_PER_ITEM) break;
+        if (spans[i].end <= spans[i].start) continue;      /* empty body */
+        const NsRect *r = &bo->rects[i];
+        if (r->w < 2 * icon || r->h <= 0) continue;
+        if (lv->n_code_hits >= CLV_CODE_HITS_MAX) break;
+
+        NsRect g;
+        g.w = icon;
+        g.h = icon;
+        g.x = r->x + r->w - inset - icon;
+        g.y = r->h >= icon ? r->y : r->y + (r->h - icon) / 2;
+
+        ClvCodeHit *h = &lv->code_hits[lv->n_code_hits];
+        /* Copy a few bytes past the cap so utf8_cut_at() can tell whether
+         * the cap would split a multi-byte character. */
+        size_t blen = spans[i].end - spans[i].start;
+        if (blen > CLV_CODE_COPY_MAX + 4) blen = CLV_CODE_COPY_MAX + 4;
+        h->text = (char *)malloc(blen + 1);
+        if (!h->text) continue;
+        memcpy(h->text, text + spans[i].start, blen);
+        h->text[blen] = '\0';
+        h->len = utf8_cut_at(h->text, CLV_CODE_COPY_MAX + 1);
+        h->item_id = item_id;
+        h->block = blk;
+        SetRect(&h->rc, g.x, g.y, g.x + g.w, g.y + g.h);
+        lv->n_code_hits++;
+
+        paint_copy_glyph(lv, hdc, &g, CLV_CODE_COPY_ID(item_id, blk));
+    }
+}
+
 static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
-                           int x, int y, int width)
+                           int x, int y, int width, int item_id,
+                           int *blk_next)
 {
     if (lv->render_markdown) {
-        return md_render_text(hdc, text, x, y, width,
-                              lv->hFont, lv->hMonoFont, lv->hBoldFont,
-                              lv->theme);
+        int want = blk_next && item_id >= 0 && item_id < CLV_ITEM_ID_LIMIT;
+        NsRect rects[CLV_CODE_BLOCKS_PER_ITEM];
+        MdBlockOut bo = { rects, CLV_CODE_BLOCKS_PER_ITEM,
+                          ns_scale(SZ_ICON, CLV_DPI(lv))
+                              + ns_scale(SP_XS, CLV_DPI(lv)), 0 };
+        int h = md_render_text_blocks(hdc, text, x, y, width,
+                                      lv->hFont, lv->hMonoFont, lv->hBoldFont,
+                                      lv->theme, want ? &bo : NULL);
+        if (want && bo.count > 0)
+            paint_code_copy_glyphs(lv, hdc, text, item_id, &bo, blk_next);
+        return h;
     }
     /* Same calc measure_ai_segment() uses for this branch -- computed
      * once here so paint and its own height report can never drift. */
@@ -1248,8 +1374,9 @@ static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
  * measure_ai_text_with_exec()'s comment), so callers can find out when
  * this grew taller than measure_item() predicted. */
 static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
-                                   const char *text, RECT *rc)
+                                   const char *text, RECT *rc, int item_id)
 {
+    int blk = 0;   /* code-block number within this item, across segments */
     COLORREF exec_clr = RGB_FROM_THEME(ns_tokens()->info.base);
     HFONT mono_font = lv->hMonoFont ? lv->hMonoFont
                                      : (HFONT)GetStockObject(ANSI_FIXED_FONT);
@@ -1257,7 +1384,7 @@ static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
     /* If no [EXEC] markers, fast path */
     if (!strstr(text, "[EXEC]")) {
         return draw_ai_segment(lv, hdc, text, rc->left, rc->top,
-                               rc->right - rc->left);
+                               rc->right - rc->left, item_id, &blk);
     }
 
     /* Multi-segment rendering: split at [EXEC]/[/EXEC] boundaries */
@@ -1271,7 +1398,7 @@ static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
             /* Remaining text is normal */
             if (*pos) {
                 int h = draw_ai_segment(lv, hdc, pos, rc->left, y,
-                                        rc->right - rc->left);
+                                        rc->right - rc->left, item_id, &blk);
                 y += h;
             }
             break;
@@ -1292,7 +1419,8 @@ static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
                 seg[trim] = '\0';
                 if (trim > 0) {
                     int h = draw_ai_segment(lv, hdc, seg, rc->left, y,
-                                            rc->right - rc->left);
+                                            rc->right - rc->left, item_id,
+                                            &blk);
                     y += h;
                 }
                 free(seg);
@@ -1545,7 +1673,8 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     text_rc.top    = content_top;
     text_rc.right  = rc->right - side_pad;
     text_rc.bottom = rc->bottom;
-    int text_h = draw_ai_text_with_exec(lv, hdc, item->text, &text_rc);
+    int text_h = draw_ai_text_with_exec(lv, hdc, item->text, &text_rc,
+                                       item->id);
     SelectObject(hdc, old_font);
 
     /* Actual painted extent, not just the measured one -- see the Activity
@@ -1575,9 +1704,9 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         RECT tag_rc = { row->tag.x, row->tag.y,
                         row->tag.x + row->tag.w, row->tag.y + row->tag.h };
         COLORREF tbg, tfg;
-        safety_tag_colors(item->u.cmd.safety, &tbg, &tfg);
+        chatlv_safety_tag_colors(item->u.cmd.safety, &tbg, &tfg);
         ns_draw_chip(hdc, &tag_rc, tbg, tfg, lv->hSmallFont,
-                    safety_tag_text(item->u.cmd.safety));
+                    chatlv_safety_tag_text(item->u.cmd.safety));
     }
 
     /* Command text (single line, ellipsised when it doesn't fit) */
@@ -1586,8 +1715,13 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                          row->text.x + row->text.w, row->text.y + row->text.h };
         const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
                                                    : item->text;
-        SetTextColor(hdc, row->held ? RGB_FROM_THEME(tok->text_dim)
-                                     : RGB_FROM_THEME(tc->cmd_text));
+        /* Hovering the text brightens it to text_main; the click opens the
+         * details popup. */
+        int text_hot = ns_hover_state_for(&lv->hover,
+                           CLV_CMD_ROW_HIT_ID(container_idx, row_idx, HIT_TEXT));
+        SetTextColor(hdc, text_hot ? RGB_FROM_THEME(tok->text_main)
+                           : row->held ? RGB_FROM_THEME(tok->text_dim)
+                                       : RGB_FROM_THEME(tc->cmd_text));
         HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
                                           : GetStockObject(ANSI_FIXED_FONT));
         UINT flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT;
@@ -1595,6 +1729,10 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         draw_text_utf8(hdc, cmd_text, &text_rc, flags);
         SelectObject(hdc, old_f);
     }
+
+    /* Copy glyph between the text and the chip */
+    paint_copy_glyph(lv, hdc, &row->copy,
+                     CLV_CMD_ROW_HIT_ID(container_idx, row_idx, HIT_COPY));
 
     /* Selection checkbox */
     if (row->checkbox.w > 0 && row->checkbox.h > 0) {
@@ -1635,18 +1773,30 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
  *    so painting and measure_item() can never disagree about the row's
  *    height. ───────────────────────────────────────────────────────────── */
 
-static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                                 RECT *rc)
+/* Geometry of one settled command row, shared by paint_cmd_settled_row()
+ * and the hover/click hit-tests so they can never disagree. `left`/`right`
+ * are the item rect's edges (on_paint's item_rc: the panel inset by
+ * BASE_SIDE_PAD each side), `top` its top. Measures with `hdc`. */
+typedef struct {
+    ApprovalRowLayout layout;
+    const char *cmd_text;
+    const char *label;       /* outcome chip text */
+    ChatCmdIntent intent;
+    int text_h;
+} SettledGeom;
+
+static void settled_row_geometry(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                                 int left, int right, int top, SettledGeom *g)
 {
-    const ThemeTokens *tok = ns_tokens();
     int dpi = CLV_DPI(lv);
     int side_pad = ns_scale(BASE_SIDE_PAD, dpi);
 
-    /* Left/right edges match paint_ai_item's box -- rc is already inset by
-     * side_pad on both sides (on_paint), so only the AI indent and one more
-     * side_pad (matching paint_ai_item's box_right) are needed here. */
-    int box_left  = rc->left + lv->ai_indent;
-    int box_right = rc->right - side_pad;
+    /* Left/right edges match paint_ai_item's box -- the item rect is
+     * already inset by side_pad on both sides (on_paint), so only the AI
+     * indent and one more side_pad (matching paint_ai_item's box_right) are
+     * needed here. */
+    int box_left  = left + lv->ai_indent;
+    int box_right = right - side_pad;
     if (box_right < box_left) box_right = box_left;
 
     /* Outcome -> label + intent from chat_cmd_label() (src/core/chat_msg.c),
@@ -1655,17 +1805,56 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
      * for one superseded before it was decided, and -- for an approved one
      * -- "queued" / "running" / "ran" / "not run" from u.cmd.run, which
      * chat_msg_batch_sync_run() keeps in step with the batch's
-     * ApprovalQueue. Only the intent -> token mapping is decided here; no
-     * colour is chosen from the outcome itself. */
-    ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
-    const char *label = chat_cmd_label(item->u.cmd.approved,
-                                       item->u.cmd.blocked,
-                                       item->u.cmd.run, &intent);
+     * ApprovalQueue. */
+    g->intent = CHAT_CMD_INTENT_DIM;
+    g->label = chat_cmd_label(item->u.cmd.approved, item->u.cmd.blocked,
+                              item->u.cmd.run, &g->intent);
+
+    /* Chip label width, measured with the small font: label width plus
+     * SP_SM padding on both sides. */
+    HGDIOBJ old_sf = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                       : GetStockObject(DEFAULT_GUI_FONT));
+    SIZE lsz = { 0, 0 };
+    GetTextExtentPoint32A(hdc, g->label, (int)strlen(g->label), &lsz);
+    SelectObject(hdc, old_sf);
+    int chip_w = lsz.cx + 2 * ns_scale(SP_SM, dpi);
+
+    /* Command text width and line height, measured with the mono font
+     * (same font used to paint it) -- matches build_cmd_card_geometry's
+     * own measurement so ellipsis/height agree with the live card's rows. */
+    g->cmd_text = item->u.cmd.command ? item->u.cmd.command : item->text;
+    HGDIOBJ old_mf = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
+                                       : GetStockObject(ANSI_FIXED_FONT));
+    SIZE csz = { 0, 0 };
+    if (g->cmd_text && *g->cmd_text)
+        GetTextExtentPoint32A(hdc, g->cmd_text, (int)strlen(g->cmd_text), &csz);
+    TEXTMETRICA tm;
+    GetTextMetricsA(hdc, &tm);
+    SelectObject(hdc, old_mf);
+    g->text_h = tm.tmHeight;
+
+    NsRect row_r = { box_left, top, box_right - box_left,
+                     approval_row_height(tm.tmHeight, dpi) };
+    settled_row_layout(row_r, csz.cx, chip_w, tm.tmHeight, dpi, &g->layout);
+}
+
+static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
+                                 RECT *rc)
+{
+    const ThemeTokens *tok = ns_tokens();
+
+    SettledGeom sg;
+    settled_row_geometry(lv, hdc, item, rc->left, rc->right, rc->top, &sg);
+    const char *label = sg.label;
+    const char *cmd_text = sg.cmd_text;
+
+    /* Only the intent -> token mapping is decided here; no colour is chosen
+     * from the outcome itself. */
     COLORREF chip_bg, chip_fg, text_clr;
     COLORREF dim = RGB_FROM_THEME(tok->text_dim);
     COLORREF panel_bg = RGB_FROM_THEME(tok->bg_primary.base);
 
-    switch (intent) {
+    switch (sg.intent) {
     case CHAT_CMD_INTENT_SUCCESS:
         chip_bg = RGB_FROM_THEME(tok->success.base);
         chip_fg = RGB_FROM_THEME(tok->success.label);
@@ -1689,33 +1878,14 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         break;
     }
 
-    /* Chip label width, measured with the small font: label width plus
-     * SP_SM padding on both sides. */
-    HGDIOBJ old_sf = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                       : GetStockObject(DEFAULT_GUI_FONT));
-    SIZE lsz = { 0, 0 };
-    GetTextExtentPoint32A(hdc, label, (int)strlen(label), &lsz);
-    SelectObject(hdc, old_sf);
-    int chip_w = lsz.cx + 2 * ns_scale(SP_SM, dpi);
+    /* Hovering the text brightens it to text_main, the same cue the live
+     * card gives; the click opens the details popup. */
+    int id_ok = item->id >= 0 && item->id < CLV_ITEM_ID_LIMIT;
+    if (id_ok && ns_hover_state_for(&lv->hover,
+                    CLV_SETTLED_HIT_ID(item->id, HIT_TEXT)))
+        text_clr = RGB_FROM_THEME(tok->text_main);
 
-    /* Command text width and line height, measured with the mono font
-     * (same font used to paint it) -- matches build_cmd_card_geometry's
-     * own measurement so ellipsis/height agree with the live card's rows. */
-    const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
-                                               : item->text;
-    HGDIOBJ old_mf = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
-                                       : GetStockObject(ANSI_FIXED_FONT));
-    SIZE csz = { 0, 0 };
-    if (cmd_text && *cmd_text)
-        GetTextExtentPoint32A(hdc, cmd_text, (int)strlen(cmd_text), &csz);
-    TEXTMETRICA tm;
-    GetTextMetricsA(hdc, &tm);
-    SelectObject(hdc, old_mf);
-
-    NsRect row_r = { box_left, rc->top, box_right - box_left,
-                     approval_row_height(tm.tmHeight, dpi) };
-    ApprovalRowLayout layout;
-    settled_row_layout(row_r, csz.cx, chip_w, tm.tmHeight, dpi, &layout);
+    const ApprovalRowLayout layout = sg.layout;
 
     /* Command text (single line, ellipsised when it doesn't fit) */
     if (layout.text.w > 0 && layout.text.h > 0) {
@@ -1738,6 +1908,10 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                         layout.tag.y + layout.tag.h };
         ns_draw_chip(hdc, &tag_rc, chip_bg, chip_fg, lv->hSmallFont, label);
     }
+
+    /* Copy glyph, left of the chip (zero-size when the row is too narrow) */
+    paint_copy_glyph(lv, hdc, &layout.copy,
+                     id_ok ? CLV_SETTLED_HIT_ID(item->id, HIT_COPY) : -1);
 
     /* Fixed single-line row height -- exactly what measure_item()
      * returned via clv_cmd_row_h(), never wraps. */
@@ -2429,6 +2603,9 @@ static void on_paint(ChatListView *lv)
     PAINTSTRUCT ps;
     HDC hdc = BeginPaint(lv->hwnd, &ps);
 
+    /* Copy glyphs on code blocks are re-recorded by this paint. */
+    clv_code_hits_clear(lv);
+
     RECT client;
     GetClientRect(lv->hwnd, &client);
     int cw = client.right - client.left;
@@ -2763,6 +2940,7 @@ static int cmd_card_rect_for_hit(const ApprovalCardLayout *l, int hit,
         const ApprovalRowLayout *rl = &l->rows[row];
         switch (hit) {
         case HIT_TAG:      nr = rl->tag;      break;
+        case HIT_COPY:     nr = rl->copy;     break;
         case HIT_TEXT:     nr = rl->text;     break;
         case HIT_CHECKBOX: nr = rl->checkbox; break;
         default: return 0;
@@ -2776,6 +2954,110 @@ static int cmd_card_rect_for_hit(const ApprovalCardLayout *l, int hit,
         out->right = nr.x + nr.w; out->bottom = nr.y + nr.h;
     }
     return 1;
+}
+
+static void clv_nrect_to_rect(const NsRect *r, RECT *out)
+{
+    out->left = r->x;
+    out->top = r->y;
+    out->right = r->x + r->w;
+    out->bottom = r->y + r->h;
+}
+
+/* The rect of element `hit` (HIT_COPY / HIT_TAG / HIT_TEXT) of a settled
+ * row, or 0 when it has no size (dropped on a narrow row). */
+static int settled_elem_rect(const ApprovalRowLayout *l, int hit, RECT *out)
+{
+    const NsRect *r;
+    switch (hit) {
+    case HIT_COPY: r = &l->copy; break;
+    case HIT_TAG:  r = &l->tag;  break;
+    case HIT_TEXT: r = &l->text; break;
+    default: return 0;
+    }
+    if (r->w <= 0 || r->h <= 0) return 0;
+    if (out) clv_nrect_to_rect(r, out);
+    return 1;
+}
+
+/* Which element of a settled command row is under (mx, my)? Returns 1 and
+ * the item, the HIT_* type and the element's rect, or 0. Same geometry as
+ * paint_cmd_settled_row() via settled_row_geometry(). Order matches
+ * approval_card_hit(): copy, tag, text. */
+static int chatlv_settled_row_hit(ChatListView *lv, int mx, int my,
+                                  ChatMsgItem **out_item, int *out_hit,
+                                  RECT *out_rc)
+{
+    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    RECT client_rc;
+    GetClientRect(lv->hwnd, &client_rc);
+    int cw = client_rc.right - client_rc.left;
+
+    int y = lv->msg_gap - lv->scroll_y;
+    ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
+    while (item) {
+        int h = item->measured_height;
+        if (h == 0) { item = item->next; continue; }
+        if (item->type == CHAT_ITEM_COMMAND && item->u.cmd.settled &&
+            my >= y && my < y + h) {
+            if (item->id < 0 || item->id >= CLV_ITEM_ID_LIMIT) return 0;
+            HDC hdc = GetDC(lv->hwnd);
+            if (!hdc) return 0;
+            SettledGeom sg;
+            settled_row_geometry(lv, hdc, item, side_pad, cw - side_pad, y, &sg);
+            ReleaseDC(lv->hwnd, hdc);
+
+            static const int order[3] = { HIT_COPY, HIT_TAG, HIT_TEXT };
+            for (int k = 0; k < 3; k++) {
+                RECT er;
+                if (!settled_elem_rect(&sg.layout, order[k], &er)) continue;
+                if (mx >= er.left && mx < er.right &&
+                    my >= er.top && my < er.bottom) {
+                    if (out_item) *out_item = item;
+                    if (out_hit) *out_hit = order[k];
+                    if (out_rc) *out_rc = er;
+                    return 1;
+                }
+            }
+            return 0;
+        }
+        y += h + lv->msg_gap;
+        item = item->next;
+    }
+    return 0;
+}
+
+/* The code-block copy glyph under (mx, my), as recorded by the last paint. */
+static const ClvCodeHit *chatlv_code_hit_at(const ChatListView *lv, int mx,
+                                            int my)
+{
+    for (int i = 0; i < lv->n_code_hits; i++) {
+        const RECT *r = &lv->code_hits[i].rc;
+        if (mx >= r->left && mx < r->right && my >= r->top && my < r->bottom)
+            return &lv->code_hits[i];
+    }
+    return NULL;
+}
+
+/* What a click on a command row's text, tag or copy glyph does: the glyph
+ * copies the command (no trailing newline) to the clipboard, the text and
+ * the tag ask the panel to open the details popup. Posted rather than run
+ * here, like every other card action -- the panel looks the item up by id
+ * (lParam) and the popup copies what it needs. */
+static void chatlv_command_click(ChatListView *lv, const ChatMsgItem *citem,
+                                 int hit)
+{
+    if (!citem) return;
+    if (hit == HIT_COPY) {
+        const char *cmd = citem->u.cmd.command ? citem->u.cmd.command
+                                               : citem->text;
+        if (cmd && *cmd) clip_copy_utf8(lv->hwnd, cmd, strlen(cmd));
+        return;
+    }
+    HWND par = GetParent(lv->hwnd);
+    if (par)
+        PostMessage(par, WM_COMMAND, MAKEWPARAM(IDC_CMD_DETAIL, 0),
+                    (LPARAM)citem->id);
 }
 
 /* Find the Thinking disclosure row (if any) under (mx, my), across every
@@ -2861,6 +3143,26 @@ static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
         return CLV_THINK_HOVER_ID(think_item_id);
     }
 
+    /* Settled command rows: copy glyph, outcome chip, command text */
+    {
+        ChatMsgItem *sitem = NULL;
+        int shit = HIT_NONE;
+        RECT src;
+        if (chatlv_settled_row_hit(lv, mx, my, &sitem, &shit, &src)) {
+            if (out_rc) *out_rc = src;
+            return CLV_SETTLED_HIT_ID(sitem->id, shit);
+        }
+    }
+
+    /* Copy glyphs on fenced code blocks in replies */
+    {
+        const ClvCodeHit *ch_hit = chatlv_code_hit_at(lv, mx, my);
+        if (ch_hit) {
+            if (out_rc) *out_rc = ch_hit->rc;
+            return CLV_CODE_COPY_ID(ch_hit->item_id, ch_hit->block);
+        }
+    }
+
     /* [Retry] link, below all items */
     RECT client_rc;
     GetClientRect(lv->hwnd, &client_rc);
@@ -2888,6 +3190,47 @@ static int chatlv_hover_hit(ChatListView *lv, int mx, int my, RECT *out_rc)
 static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
 {
     if (id < 0) return 0;
+
+    if (id >= CLV_CODE_COPY_BASE) {
+        int item_id = (id - CLV_CODE_COPY_BASE) / CLV_CODE_BLOCKS_PER_ITEM;
+        int blk = (id - CLV_CODE_COPY_BASE) % CLV_CODE_BLOCKS_PER_ITEM;
+        for (int i = 0; i < lv->n_code_hits; i++) {
+            if (lv->code_hits[i].item_id == item_id &&
+                lv->code_hits[i].block == blk) {
+                *out = lv->code_hits[i].rc;
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    if (id >= CLV_SETTLED_HIT_BASE) {
+        int item_id = (id - CLV_SETTLED_HIT_BASE) / 16;
+        int hit = (id - CLV_SETTLED_HIT_BASE) % 16;
+        int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+        RECT client_rc;
+        GetClientRect(lv->hwnd, &client_rc);
+        int cw = client_rc.right - client_rc.left;
+        int y = lv->msg_gap - lv->scroll_y;
+        ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
+        while (item) {
+            int h = item->measured_height;
+            if (h == 0) { item = item->next; continue; }
+            if (item->id == item_id && item->type == CHAT_ITEM_COMMAND &&
+                item->u.cmd.settled) {
+                HDC hdc = GetDC(lv->hwnd);
+                if (!hdc) return 0;
+                SettledGeom sg;
+                settled_row_geometry(lv, hdc, item, side_pad, cw - side_pad,
+                                     y, &sg);
+                ReleaseDC(lv->hwnd, hdc);
+                return settled_elem_rect(&sg.layout, hit, out);
+            }
+            y += h + lv->msg_gap;
+            item = item->next;
+        }
+        return 0;
+    }
 
     if (id >= CLV_STATE_CHIP_BASE) {
         if (!chatlv_list_empty(lv) || lv->state_id < 0) return 0;
@@ -2977,11 +3320,14 @@ static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
 }
 
 /* Is `id` a link/button the user can click -- i.e. should the cursor be
- * IDC_HAND rather than IDC_ARROW? Tag/text are hit-testable (for id
- * completeness) but not interactive. */
+ * IDC_HAND rather than IDC_ARROW? A command row's text and tag open the
+ * details popup, its copy glyph and a code block's glyph copy. */
 static int chatlv_hit_is_actionable(int id)
 {
     if (id < 0) return 0;
+    /* Code-block copy glyphs and every element of a settled row (copy, chip,
+     * text) are hit-tested only where they are clickable. */
+    if (id >= CLV_SETTLED_HIT_BASE) return 1;
     if (id >= CLV_STATE_CHIP_BASE) return 1;   /* empty-state chip/button */
     if (id == CLV_HOVER_RETRY) return 1;
     if (id >= CLV_THINK_HOVER_BASE) return 1;
@@ -2992,7 +3338,10 @@ static int chatlv_hit_is_actionable(int id)
      * needed just to classify the hit type. */
     int hit = id % CLV_CMD_ROW_SLOTS;
     if (hit == HIT_DENY_ALL || hit == HIT_RUN_SELECTED) return 1;
-    return hit == HIT_CHECKBOX;
+    /* The command text and risk tag open the details popup, the glyph
+     * copies. */
+    return hit == HIT_CHECKBOX || hit == HIT_TEXT || hit == HIT_TAG ||
+           hit == HIT_COPY;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -3023,6 +3372,28 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
                        MAKEWPARAM(4020 + i /* IDC_CHAT_SUGGESTION_BASE */, 0), 0);
         }
         return 1;
+    }
+
+    /* Copy glyph on a fenced code block: copy its body (no trailing
+     * newline) and consume the click, so no band selection starts. */
+    {
+        const ClvCodeHit *code_hit = chatlv_code_hit_at(lv, mx, my);
+        if (code_hit) {
+            if (code_hit->text && code_hit->len > 0)
+                clip_copy_utf8(lv->hwnd, code_hit->text, code_hit->len);
+            return 1;
+        }
+    }
+
+    /* Settled command row: copy glyph copies the command, text and chip
+     * open the details popup. */
+    {
+        ChatMsgItem *sitem = NULL;
+        int shit = HIT_NONE;
+        if (chatlv_settled_row_hit(lv, mx, my, &sitem, &shit, NULL)) {
+            chatlv_command_click(lv, sitem, shit);
+            return 1;
+        }
     }
 
     int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
@@ -3148,6 +3519,16 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
                         InvalidateRect(lv->hwnd, NULL, FALSE);
                     }
                 }
+                return 1;
+            }
+            if (row_out >= 0 &&
+                (hit == HIT_TEXT || hit == HIT_TAG || hit == HIT_COPY)) {
+                /* Text and risk tag open the details popup, the glyph
+                 * copies the command. The click is consumed, so it does not
+                 * start a band selection. */
+                int real_idx = g.first_row + row_out;
+                if (real_idx >= 0 && real_idx < g.n)
+                    chatlv_command_click(lv, g.cmd_items[real_idx], hit);
                 return 1;
             }
             return 0;
@@ -3331,11 +3712,36 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     }
 
     case WM_RBUTTONDOWN: {
-        /* Right-click: paste clipboard into parent's input field */
-        HWND par = GetParent(hwnd);
-        if (par)
-            PostMessage(par, WM_COMMAND,
-                        MAKEWPARAM(IDC_CHATLIST_PASTE, 0), 0);
+        /* Right-click: a native context menu (system theme, like the
+         * menu bar) instead of the old silent paste. Copy acts as Ctrl+C
+         * does and is greyed when nothing is selected; Select all acts as
+         * Ctrl+A; Paste into message is the previous right-click action,
+         * now named. */
+        enum { CM_COPY = 1, CM_SELECT_ALL, CM_PASTE };
+        HMENU menu = CreatePopupMenu();
+        if (!menu) return 0;
+        UINT copy_flags = MF_STRING | (UINT)(lv->sel_valid ? MF_ENABLED
+                                                           : MF_GRAYED);
+        AppendMenuA(menu, copy_flags, CM_COPY, "Copy");
+        AppendMenuA(menu, MF_STRING, CM_SELECT_ALL, "Select all");
+        AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+        AppendMenuA(menu, MF_STRING, CM_PASTE, "Paste into message");
+        POINT mpt;
+        GetCursorPos(&mpt);
+        int pick = (int)TrackPopupMenu(menu,
+                       TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+                       mpt.x, mpt.y, 0, hwnd, NULL);
+        DestroyMenu(menu);
+        if (pick == CM_COPY) {
+            if (lv->sel_valid) sel_copy_to_clipboard(lv);
+        } else if (pick == CM_SELECT_ALL) {
+            sel_select_all(lv);
+        } else if (pick == CM_PASTE) {
+            HWND par = GetParent(hwnd);
+            if (par)
+                PostMessage(par, WM_COMMAND,
+                            MAKEWPARAM(IDC_CHATLIST_PASTE, 0), 0);
+        }
         return 0;
     }
 
@@ -3619,6 +4025,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     }
 
     case WM_DESTROY:
+        clv_code_hits_clear(lv);
         free(lv);
         SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
         return 0;

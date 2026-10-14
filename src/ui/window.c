@@ -28,6 +28,7 @@
 #include "log_format.h"
 #include "edit_scroll.h"
 #include "paste_dlg.h"
+#include "clipboard.h"
 #include "paste_filter.h"
 #include "ai_chat.h"
 #include "ai_chat_testable.h"
@@ -2214,7 +2215,7 @@ static char *read_clipboard_text_utf8(HWND hwnd)
 
     /* Fallback: CF_TEXT only, which Windows hands out in the system ANSI
      * codepage (CP_ACP), not UTF-8. Convert it the same way
-     * set_clipboard_utf8() converts the other direction: ANSI -> UTF-16
+     * clip_set_utf8() converts the other direction: ANSI -> UTF-16
      * (MultiByteToWideChar(CP_ACP)) -> UTF-8 (WideCharToMultiByte(CP_UTF8))
      * -- a raw _strdup() here would hand non-ASCII ANSI bytes to code that
      * expects UTF-8 throughout (paste_filter_controls(), the terminal
@@ -2634,28 +2635,6 @@ static HMENU create_app_menu(void)
     return hMenu;
 }
 
-/* Copy UTF-8 text to the clipboard as CF_UNICODETEXT (converting via
- * MultiByteToWideChar). Terminal text is UTF-8; CF_TEXT would hand it out
- * as if it were the system ANSI codepage, mangling anything outside plain
- * ASCII. Windows auto-synthesizes CF_TEXT from CF_UNICODETEXT for any app
- * that only asks for the old format, so this loses nothing.  Caller must
- * have the clipboard open (and should EmptyClipboard() first, as before);
- * this only sets the one format. */
-static void set_clipboard_utf8(const char *utf8, size_t len)
-{
-    if (!utf8 || len == 0) return;
-    int wneed = MultiByteToWideChar(CP_UTF8, 0, utf8, (int)len, NULL, 0);
-    if (wneed <= 0) return;
-    HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, ((size_t)wneed + 1) * sizeof(wchar_t));
-    if (!hg) return;
-    wchar_t *dst = (wchar_t *)GlobalLock(hg);
-    if (!dst) { GlobalFree(hg); return; }
-    int written = MultiByteToWideChar(CP_UTF8, 0, utf8, (int)len, dst, wneed);
-    dst[written > 0 ? written : 0] = L'\0';
-    GlobalUnlock(hg);
-    SetClipboardData(CF_UNICODETEXT, hg);
-}
-
 /* Copy current selection to clipboard */
 static void do_copy(HWND hwnd)
 {
@@ -2666,7 +2645,7 @@ static void do_copy(HWND hwnd)
         g_active_session->term, buf, sizeof(buf));
     if (n > 0 && OpenClipboard(hwnd)) {
         EmptyClipboard();
-        set_clipboard_utf8(buf, n);
+        clip_set_utf8(buf, n);
         CloseClipboard();
     }
 }
@@ -4935,7 +4914,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_active_session->term, buf, sizeof(buf));
             if (n > 0 && OpenClipboard(hwnd)) {
                 EmptyClipboard();
-                set_clipboard_utf8(buf, n);
+                clip_set_utf8(buf, n);
                 CloseClipboard();
             }
             g_selection.valid = false;
