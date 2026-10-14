@@ -27,10 +27,20 @@ function Test-NutshellHostConsole {
 function Invoke-NutshellCliCase {
     <# Runs nutshell.exe with -CliArgs and lets it exit on its own (no window,
        no session) -- for -v/-l/-?/an unknown flag, all handled by
-       src/main.c's cli_output(): AttachConsole(ATTACH_PARENT_PROCESS) then
-       write straight to CONOUT$ when a console is available, else a
-       MessageBox titled "Nutshell"/"Nutshell Sessions"/"Nutshell — Usage".
-       Both routes are exercised by the same case, whichever this host offers:
+       src/main.c's cli_output(): since v1.2.32, write to the inherited
+       stdout/stderr when the parent redirected it to a pipe or a file
+       (src/core/cli_sink.c; covered by Invoke-NutshellCliRedirectCase
+       below), else AttachConsole(ATTACH_PARENT_PROCESS) and write straight
+       to CONOUT$ when a console is available, else a MessageBox titled
+       "Nutshell"/"Nutshell Sessions"/"Nutshell — Usage". The console and
+       MessageBox routes are exercised by this function, whichever the host
+       offers. One caveat since v1.2.32: when this host's own stdout is a
+       pipe (the suite tee'd to a log) and the -NoNewWindow child inherits
+       it, the exe now writes to that pipe instead of the console, and the
+       console tail after the sentinel is empty. That is the redirect route
+       working, not a failure, so the case SKIPS with a reason; run the
+       console cases from a host whose stdout is the console to see them
+       pass.
 
        - With a console (Test-NutshellHostConsole true -- an ordinary
          interactive PowerShell): launch with -NoNewWindow so the child shares
@@ -106,6 +116,13 @@ function Invoke-NutshellCliCase {
             $cut = $tail.LastIndexOf($sentinel)
             if ($cut -ge 0) { $tail = $tail.Substring($cut + $sentinel.Length) }
             else { throw "sentinel '$sentinel' not found in the console buffer -- cannot tell this run's output from an earlier case's" }
+            if ([string]::IsNullOrWhiteSpace($tail) -and [Console]::IsOutputRedirected) {
+                # See the doc comment: the child inherited this host's piped
+                # stdout and wrote there (v1.2.32's redirect route), so there
+                # is nothing in the console to assert on.
+                Write-Host ("[SKIP] " + $Name + " -- this host's stdout is a pipe and the exe wrote to it instead of the console; run from an unredirected host, or see the *_redirect cases")
+                return
+            }
             $detail = & $Assert $p.ExitCode $tail $null
             $ok = $true
         } elseif ($exited) {
@@ -132,6 +149,84 @@ function Invoke-NutshellCliCase {
     }
     if ($ok) { Write-Host ("[PASS] " + $Name) } else { Write-Host ("[FAIL] " + $Name + " -- " + $detail) }
     [void]$results.Add([pscustomobject]@{ Name = $Name; Passed = $ok; Detail = $detail })
+}
+
+function Invoke-NutshellCliRedirectCase {
+    <# The redirect route (v1.2.32): launch nutshell.exe with stdout and
+       stderr redirected to files, as "nutshell.exe -v > out.txt 2> err.txt"
+       or a capturing script would, and hand the two files' contents to
+       -Assert. The GUI-subsystem exe inherits the two file handles, finds
+       them to be FILE_TYPE_DISK and writes there with CRLF line ends
+       (src/core/cli_sink.c, main.c's cli_output()); before v1.2.32 both files
+       stayed empty and the text went to the console. No console is needed
+       on this host and no sentinel: the files are this run's alone. Unlike
+       -NoNewWindow (see Test-NutshellHostConsole), -RedirectStandardOutput
+       is not known to hang on a console-less host; should it, the deadline
+       below ends the case as a failure rather than the suite.
+
+       -Assert receives ($exitCode, $stdoutText, $stderrText). #>
+    param([Parameter(Mandatory)] [string] $Name, [Parameter(Mandatory)] [string[]] $CliArgs,
+          [Parameter(Mandatory)] [scriptblock] $Assert, [int] $TimeoutSec = 8)
+    if ($ActiveTiers -notcontains "gate") { return }
+    if ($Only.Count -gt 0 -and $Only -notcontains $Name) { return }
+    Write-Host ("[RUN ] " + $Name)
+    $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+    $ok = $false; $detail = ""
+    $p = $null
+    $outPath = Join-Path $testEnv.Root "cli_stdout.txt"
+    $errPath = Join-Path $testEnv.Root "cli_stderr.txt"
+    try {
+        $p = Start-Process -FilePath $testEnv.Exe -ArgumentList $CliArgs -WorkingDirectory $testEnv.Root -PassThru `
+                           -RedirectStandardOutput $outPath -RedirectStandardError $errPath
+        $null = $p.Handle
+        if (-not $p.WaitForExit($TimeoutSec * 1000)) {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            throw "nutshell.exe did not exit within ${TimeoutSec}s with stdout/stderr redirected to files (a MessageBox would mean the redirect route was not taken)"
+        }
+        $outText = if (Test-Path $outPath) { [IO.File]::ReadAllText($outPath) } else { "" }
+        $errText = if (Test-Path $errPath) { [IO.File]::ReadAllText($errPath) } else { "" }
+        $detail = & $Assert $p.ExitCode $outText $errText
+        $ok = $true
+    } catch {
+        $detail = $_.Exception.Message
+    } finally {
+        if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        for ($try = 0; $try -lt 5 -and (Test-Path $testEnv.Root); $try++) {
+            Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+            if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
+        }
+    }
+    if ($ok) { Write-Host ("[PASS] " + $Name) } else { Write-Host ("[FAIL] " + $Name + " -- " + $detail) }
+    [void]$results.Add([pscustomobject]@{ Name = $Name; Passed = $ok; Detail = $detail })
+}
+
+Invoke-NutshellCliRedirectCase "cli_version_redirect_file" @("-v") {
+    param($exitCode, $out, $err)
+    Assert-True ($exitCode -eq 0) "exit code was $exitCode, expected 0"
+    # Exactly one CRLF-terminated line, nothing on stderr: what "> out.txt"
+    # should leave behind.
+    Assert-True ($out -match "^Nutshell \d+\.\d+\.\d+\r\n$") "stdout file was not one CRLF version line: [$out]"
+    Assert-True ([string]::IsNullOrEmpty($err)) "stderr file was not empty: [$err]"
+    "stdout file holds '$($out.TrimEnd())' with CRLF, stderr empty"
+}
+
+Invoke-NutshellCliRedirectCase "cli_help_redirect_file" @("-?") {
+    param($exitCode, $out, $err)
+    Assert-True ($exitCode -eq 0) "exit code was $exitCode, expected 0"
+    Assert-True ($out -match "Usage") "no usage text in the stdout file: [$out]"
+    Assert-True ($out -notmatch "(?<!\r)\n") "a bare LF survived in the stdout file (CRLF expected throughout)"
+    Assert-True ([string]::IsNullOrEmpty($err)) "stderr file was not empty: [$err]"
+    "usage text ($(($out -split "`r`n").Count) CRLF lines) in the stdout file, stderr empty"
+}
+
+Invoke-NutshellCliRedirectCase "cli_unknown_flag_redirect_stderr" @("--bogus-flag-xyz") {
+    param($exitCode, $out, $err)
+    Assert-True ($exitCode -ne 0) "exit code was 0, expected non-zero for an unknown flag"
+    # Errors follow stderr, so "2> err.txt" captures them and stdout stays
+    # clean for a script that only reads the latter.
+    Assert-True ($err -match "Unknown option") "no 'Unknown option' text in the stderr file: [$err]"
+    Assert-True ([string]::IsNullOrEmpty($out)) "stdout file was not empty for an error: [$out]"
+    "unknown flag rejected (exit $exitCode) on stderr, stdout empty"
 }
 
 Invoke-NutshellCliCase "cli_version_prints" @("-v") {
