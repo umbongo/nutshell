@@ -3201,6 +3201,24 @@ int test_render_stuck_a_clean_paint_before_the_threshold_resets_the_count(void);
 int test_render_stuck_switching_session_starts_a_new_episode(void);
 int test_render_stuck_the_number_of_dirty_rows_does_not_matter_only_that_one_is(void);
 int test_render_stuck_null_state_is_safe(void);
+/* test_ai_debug_tool.c */
+int test_ai_debug_tool_register_fills_the_definition(void);
+int test_ai_debug_tool_registered_only_while_debugging(void);
+int test_ai_debug_tool_registration_keeps_other_tools(void);
+int test_ai_debug_tool_stream_copy_rebinds_context(void);
+int test_ai_debug_tool_execute_reads_the_log(void);
+int test_ai_debug_tool_execute_empty_and_missing_input_use_defaults(void);
+int test_ai_debug_tool_execute_invalid_input_is_a_short_error(void);
+int test_ai_debug_tool_fifth_call_hits_the_limit(void);
+int test_ai_debug_tool_bad_calls_count_toward_the_limit(void);
+int test_ai_debug_tool_execute_null_arguments_are_safe(void);
+int test_ai_debug_tool_cancelled_before_reading(void);
+int test_ai_debug_tool_runs_through_ai_tool_execute(void);
+int test_ai_debug_tool_describe_for_the_using_tool_row(void);
+int test_ai_debug_tool_summary_line_is_the_first_header(void);
+int test_ai_debug_tool_summary_line_of_a_real_result(void);
+int test_ai_debug_tool_prompt_note_text(void);
+int test_ai_debug_tool_system_prompt_carries_the_note_only_when_asked(void);
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered so a crash shows the last [RUN ] line */
@@ -6398,6 +6416,24 @@ int main(void) {
     failed += test_render_stuck_switching_session_starts_a_new_episode();
     failed += test_render_stuck_the_number_of_dirty_rows_does_not_matter_only_that_one_is();
     failed += test_render_stuck_null_state_is_safe();
+    /* test_ai_debug_tool.c */
+    failed += test_ai_debug_tool_register_fills_the_definition();
+    failed += test_ai_debug_tool_registered_only_while_debugging();
+    failed += test_ai_debug_tool_registration_keeps_other_tools();
+    failed += test_ai_debug_tool_stream_copy_rebinds_context();
+    failed += test_ai_debug_tool_execute_reads_the_log();
+    failed += test_ai_debug_tool_execute_empty_and_missing_input_use_defaults();
+    failed += test_ai_debug_tool_execute_invalid_input_is_a_short_error();
+    failed += test_ai_debug_tool_fifth_call_hits_the_limit();
+    failed += test_ai_debug_tool_bad_calls_count_toward_the_limit();
+    failed += test_ai_debug_tool_execute_null_arguments_are_safe();
+    failed += test_ai_debug_tool_cancelled_before_reading();
+    failed += test_ai_debug_tool_runs_through_ai_tool_execute();
+    failed += test_ai_debug_tool_describe_for_the_using_tool_row();
+    failed += test_ai_debug_tool_summary_line_is_the_first_header();
+    failed += test_ai_debug_tool_summary_line_of_a_real_result();
+    failed += test_ai_debug_tool_prompt_note_text();
+    failed += test_ai_debug_tool_system_prompt_carries_the_note_only_when_asked();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

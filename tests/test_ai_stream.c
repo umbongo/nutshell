@@ -499,7 +499,7 @@ int test_ai_stream_copy_tools_rebinds_context(void)
     ai_tools_register(&reg, &def);
 
     AiStream *s = ai_stream_new();
-    ai_stream_copy_tools(s, &reg, 7u, &search, &fetch);
+    ai_stream_copy_tools(s, &reg, 7u, &search, &fetch, NULL);
     ASSERT_EQ(s->tools.count, 2);
     ASSERT_EQ(s->tools_gen, 7u);
     ASSERT_TRUE(s->tools.tools[0].tool_data == &s->search);
