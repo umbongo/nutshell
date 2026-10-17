@@ -4344,14 +4344,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                          * this poll invalidating (2026-10-14) is counted here,
                          * per session. Output arriving (poll_rc > 0) is ordinary
                          * and resets the streak; only a dirty tab with nothing
-                         * arriving counts. One line per episode. */
+                         * arriving counts. One line per episode, at Info: nothing paints a
+                         * background tab, so its rows stay dirty until it is
+                         * activated, and a WARN here would create an errors file
+                         * for anyone with two tabs even with debugging off. */
                         {
                             const int bg_dirty = term_dirty_row_flags(s->term, NULL, 0);
                             int stuck_ticks = 0;
                             if (render_stuck_poll(&s->poll_stuck, s->log_id, bg_dirty,
                                                   s == g_active_session ? 1 : 0,
                                                   poll_rc > 0 ? 1 : 0, &stuck_ticks))
-                                DLOG(DLOG_RENDER, DLOG_WARN, s->log_id, "render.stuck_dirty",
+                                DLOG(DLOG_RENDER, DLOG_INFO, s->log_id, "render.stuck_dirty",
                                      "src=poll rows=%d ticks=%d active=0", bg_dirty, stuck_ticks);
                         }
                         if (poll_rc > 0 || term_has_dirty_rows(s->term)) {
