@@ -14,6 +14,7 @@
 #include "cmd_policy.h"
 #include "json_parser.h"
 #include "dlog.h"
+#include "open_dir.h"
 #include "settings_debug.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -424,7 +425,9 @@ static const TooltipEntry k_tooltips[] = {
       "issue. It can show anything on screen." },
     { IDC_DBG_CONTENT,
       "Also log terminal text, AI commands, chat text and host names. "
-      "Passwords, keys and what you type are never logged." },
+      "The shell's echo of what you type is terminal text, so it is logged. "
+      "Passwords, passphrases and keys, and the keystrokes and pastes "
+      "themselves, are never logged." },
     { IDC_DBG_FOLDER,
       "Where the logs go. A relative folder is relative to nutshell.exe; "
       "%NAME% environment variables are expanded." },
@@ -1005,7 +1008,7 @@ static void debug_open_folder(HWND hwnd, SettingsDlgData *d)
     }
     const DlogPlatform *pf = dlog_platform_system();
     if (pf && pf->mkdir_p) (void)pf->mkdir_p(dir);
-    (void)ShellExecuteA(hwnd, "open", dir, NULL, NULL, SW_SHOWNORMAL);
+    (void)open_dir_in_explorer(hwnd, dir, "Open Log Folder");
 }
 
 /* The page's controls, in the order settings_debug_layout() packs them. */
@@ -1065,8 +1068,9 @@ static void debug_build_page(SettingsDlgData *nd)
         dbg_add(nd, SDBG_CONTENT, NULL, chk, NULL, 0, 0, 1);
     }
     dbg_add(nd, SDBG_CONTENT_WARN, NULL,
-            dbg_dim_static(nd, "Adds terminal text, AI commands, chat text and host "
-                               "names. Passwords and keys are never logged."),
+            dbg_dim_static(nd, "Adds terminal text and the echo of what you type, AI "
+                               "commands, chat text and host names. Passwords and "
+                               "keys are never logged."),
             NULL, 0, 0, 1);
 
     {

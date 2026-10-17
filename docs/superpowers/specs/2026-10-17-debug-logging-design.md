@@ -265,6 +265,10 @@ Never logged, with or without the tickbox:
 - OSC 52 clipboard payloads (`osc=52 bytes=N`), even in a raw dump: `dlog_escape_bytes()`
   carries a small per-session state so a payload split across reads is still withheld.
 
+With the tickbox on, the shell's echo of a command typed at an echoing prompt is terminal
+text and is logged as such (a password at a no-echo prompt is not echoed, so it is not
+there); the tickbox's warning line names the echo for that reason.
+
 Enforcement, in four layers:
 
 1. **Key-name redaction** in the formatter: any field whose key contains `pass`, `secret`,
@@ -386,8 +390,8 @@ the page's existing `WM_CTLCOLORSTATIC` path; dim lines use `text_dim`; no new f
      [x] Keep recent detail for issue marks   at [ Trace   v]   (last few minutes, in memory)
      [ ] Save a screenshot with each issue mark
      [ ] Include terminal content
-         Adds terminal text, AI commands, chat text and host names. Passwords and keys are
-         never logged.
+         Adds terminal text and the echo of what you type, AI commands, chat text and host
+         names. Passwords and keys are never logged.
            Log folder  [ logs                                  ] [Browse...] [Open]
    Max file size (MB)  [ 10  ]
      Keep at most (MB) [ 50  ]   using 37 MB in 9 files
@@ -459,8 +463,9 @@ Nutshell versions ignore the new keys, as the loader only reads keys it knows.
 > `nutshell.exe` unless you changed it) and flashes a confirmation. Then ask AI Assist "read the
 > debug log around the last issue", or point a Claude Code session at the folder: "Read
 > FORMAT.txt and the newest nutshell-*.issue*.log in C:\Tools\nutshell\logs and tell me what
-> happened." Passwords and keys are never logged, and neither are keystrokes or pastes. Terminal text, commands, chat
-> and host names appear only if you tick **Include terminal content**, and a screenshot is saved
+> happened." Passwords, passphrases and keys are never logged, and neither are keystrokes or pastes as such. Terminal text, commands, chat
+> and host names appear only if you tick **Include terminal content** (the terminal text then includes the shell's echo of the
+> commands you type, so keep secrets off the command line while it is on), and a screenshot is saved
 > only if you tick **Save a screenshot with each issue mark**; check before sharing a log.
 
 The Settings table row (`README.md:184`) loses "Debug terminal log" and the shortcuts table

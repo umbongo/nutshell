@@ -310,6 +310,8 @@ static void process_osc(Terminal *term)
     if (code == 0 || code == 2) {
         const char *text = term->osc_buffer + semi + 1;
         (void)snprintf(term->title, sizeof(term->title), "%s", text);
+        DLOG_CONTENT(DLOG_TERM, DLOG_DEBUG, term->log_id, "term.title", "text",
+                     text, strlen(text));
     }
 osc_done:
     term->osc_len = 0;

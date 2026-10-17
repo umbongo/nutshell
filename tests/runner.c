@@ -6437,6 +6437,26 @@ int main(void) {
     failed += test_ai_debug_tool_prompt_note_text();
     failed += test_ai_debug_tool_system_prompt_carries_the_note_only_when_asked();
 
+    /* debug-logging UI review fixes: poll-path stuck-dirty, key names for the log */
+    {
+        int test_render_stuck_poll_fires_once_for_a_background_session(void);
+        int test_render_stuck_poll_ignores_the_active_session(void);
+        int test_render_stuck_poll_a_clean_tick_or_becoming_active_rearms(void);
+        int test_render_stuck_poll_state_is_per_session(void);
+        int test_render_stuck_poll_null_state_is_safe(void);
+        int test_key_name_names_the_special_keys(void);
+        int test_key_name_never_names_a_character_and_is_never_null(void);
+        int test_key_mods_name_spells_every_combination(void);
+        failed += test_render_stuck_poll_fires_once_for_a_background_session();
+        failed += test_render_stuck_poll_ignores_the_active_session();
+        failed += test_render_stuck_poll_a_clean_tick_or_becoming_active_rearms();
+        failed += test_render_stuck_poll_state_is_per_session();
+        failed += test_render_stuck_poll_null_state_is_safe();
+        failed += test_key_name_names_the_special_keys();
+        failed += test_key_name_never_names_a_character_and_is_never_null();
+        failed += test_key_mods_name_spells_every_combination();
+    }
+
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;
 }

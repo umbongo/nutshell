@@ -427,7 +427,8 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
     int stuck_paints = 0;
     if (render_stuck_update(&r->stuck, r->log_sid, rows_left_dirty, &stuck_paints))
         DLOG(DLOG_RENDER, DLOG_WARN, r->log_sid, "render.stuck_dirty",
-             "rows=%d paints=%d first_row=%d", rows_left_dirty, stuck_paints, first_dirty);
+             "src=paint rows=%d paints=%d first_row=%d active=1", rows_left_dirty,
+             stuck_paints, first_dirty);
 
     LARGE_INTEGER t_end, freq;
     QueryPerformanceCounter(&t_end);

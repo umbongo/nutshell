@@ -80,6 +80,9 @@ typedef struct Settings {
 typedef struct {
     Settings settings;
     Vector profiles; /* Vector of Profile* */
+    int loaded_migrated; /* runtime only, never saved: config_load_ex() read a legacy-
+                          * encrypted secret and re-saved it as DPAPI (for the debug log's
+                          * config.load line) */
 } Config;
 
 /* M3: why config_load_ex() returned NULL (or, on CONFIG_LOAD_INVALID,

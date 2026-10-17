@@ -3,6 +3,7 @@
 #include <winsock2.h>   /* Must come before windows.h */
 #include "ui.h"
 #include "dlog.h"
+#include "open_dir.h"
 #include "renderer.h"
 #include "term.h"
 #include "session_io.h"
@@ -112,6 +113,7 @@ typedef struct Session {
     SessionIo   io;            /* transport vtable; io.ctx != NULL is the "connected" predicate */
     FILE       *session_log;   /* NULL when logging disabled */
     unsigned    log_id;        /* debug-log session id: prints as s<N> (0 = none) */
+    RenderStuck poll_stuck;    /* render.stuck_dirty from the poll tick: a background tab's dirty row */
     /* Connection thread state */
     ConnState       conn_state;
     struct ConnJob *conn_job;      /* the attempt in flight, or NULL; this
@@ -610,6 +612,7 @@ static Session *create_session(int rows, int cols) {
     s->term = term_init(rows, cols, 3000);
     s->log_id = ++g_next_log_id;
     s->term->log_id = s->log_id;
+    render_stuck_init(&s->poll_stuck);
     DLOG(DLOG_GENERAL, DLOG_INFO, s->log_id, "session.new", "rows=%d cols=%d", rows, cols);
     s->ssh = NULL;
     s->channel = NULL;
@@ -1318,6 +1321,12 @@ static DWORD WINAPI connection_thread(LPVOID param)
     const char *stage = "tcp";
     const ULONGLONG t_start = GetTickCount64();
     dlog_set_thread_tag("ssh");
+    /* The profile's password (or a key's stored passphrase) is a known secret
+     * for as long as this thread can log: any content line that happens to
+     * carry it is scrubbed. Removed on every exit (done:) -- or earlier, just
+     * before the buffer is wiped. info->password stays valid until then: it
+     * lives in the ConnJob, which this thread holds a reference to. */
+    int secret_registered = (info->password[0] != '\0') && dlog_secret_add(info->password);
     DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.start",
          "profile=%s auth_method=%s strict_hostkey=%d",
          info->name[0] ? info->name : "-",
@@ -1489,7 +1498,9 @@ static DWORD WINAPI connection_thread(LPVOID param)
             char passphrase[256];
             memset(passphrase, 0, sizeof(passphrase));
             if (conn_ui_ask(j, CONN_UI_PASSPHRASE, NULL, NULL, 0, passphrase)) {
+                const int pp_registered = dlog_secret_add(passphrase);
                 auth_rc = ssh_auth_key(j->ssh, info->username, info->key_path, passphrase);
+                if (pp_registered) dlog_secret_remove(passphrase);
                 if (auth_rc == 0) {
                     strncpy(j->ssh->cached_passphrase, passphrase,
                             sizeof(j->ssh->cached_passphrase) - 1u);
@@ -1529,11 +1540,19 @@ static DWORD WINAPI connection_thread(LPVOID param)
 
     /* H-3: zero plaintext password from memory once auth is complete (the
      * session's own copy is wiped when WM_CONN_DONE hands the result over) */
+    if (secret_registered) {
+        dlog_secret_remove(j->profile.password);
+        secret_registered = 0;
+    }
     SecureZeroMemory(j->profile.password, sizeof(j->profile.password));
 
     j->result = 0;
 
 done:
+    if (secret_registered) {          /* a failure path: the buffer is still intact */
+        dlog_secret_remove(j->profile.password);
+        secret_registered = 0;
+    }
     if (j->result == 0) {
         DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.done", "ms=%llu",
              (unsigned long long)(GetTickCount64() - t_start));
@@ -2369,6 +2388,11 @@ static void do_paste(HWND hwnd)
     static const char BRACKET_OPEN[]  = "\033[200~";
     static const char BRACKET_CLOSE[] = "\033[201~";
 
+    /* Debug log: how much was pasted, never what. */
+    DLOG(DLOG_TERM, DLOG_DEBUG, target->log_id, "term.paste",
+         "bytes=%zu lines=%d bracketed=%d paced=%d", filtered_len, line_count,
+         bpm ? 1 : 0, (line_count > 0 && delay_ms > 0 && !bpm) ? 1 : 0);
+
     /* Bracketed paste mode: send the whole block at once — the remote app
      * receives it as a unit and handles newlines itself, so inter-line delay
      * would only add pointless latency. */
@@ -3066,6 +3090,10 @@ static void session_send_key(HWND hwnd, NsKey key, unsigned char ch,
     if (s->io.kind == SESSION_LOCAL) flags |= NSK_FLAG_LOCAL;
     char buf[KEY_ENCODE_MAX];
     size_t n = key_encode(key, ch, mods, flags, buf, sizeof(buf));
+    /* Debug log: a special key by name, never a character (spec section 6). */
+    if (key != NSK_CHAR && n > 0)
+        DLOG(DLOG_TERM, DLOG_TRACE, s->log_id, "term.key", "name=%s mods=%s",
+             key_name(key), key_mods_name(mods));
     if (n > 0) session_send_bytes(hwnd, buf, n);
 }
 
@@ -3263,7 +3291,7 @@ static void open_debug_log_folder(HWND hwnd)
     }
     const DlogPlatform *pf = dlog_platform_system();
     if (pf && pf->mkdir_p) (void)pf->mkdir_p(dir);
-    (void)ShellExecuteA(hwnd, "open", dir, NULL, NULL, SW_SHOWNORMAL);
+    (void)open_dir_in_explorer(hwnd, dir, "Debug Log Folder");
 }
 
 /* WM_KEYDOWN. Returns true when the key was handled (WndProc returns 0). */
@@ -3750,6 +3778,30 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 /* The debug log follows the saved settings (hand-edited until the
                  * Settings > Debugging page exists). */
                 dlog_configure(&g_config->settings);
+
+                /* What was loaded, and the debug settings now in effect. The
+                 * path, status and counts only: no setting's value that could
+                 * be a secret ever reaches the log. */
+                {
+                    int preserved = g_config->settings.ai_api_key_enc_preserved[0] != '\0';
+                    for (size_t pi = 0; pi < g_config->profiles.size && !preserved; pi++) {
+                        const Profile *pp = (const Profile *)vec_get(&g_config->profiles, pi);
+                        if (pp && pp->password_enc_preserved[0] != '\0') preserved = 1;
+                    }
+                    const Settings *cs = &g_config->settings;
+                    DLOG(DLOG_GENERAL, DLOG_INFO, 0u, "config.load",
+                         "path=%s status=%s profiles=%d migrated=%d other_pc_blobs=%d "
+                         "debug=%d content=%d recorder=%d screenshot=%d "
+                         "max_file_mb=%d max_total_mb=%d",
+                         g_config_path[0] ? g_config_path : "-",
+                         load_status == CONFIG_LOAD_OK ? "ok"
+                             : load_status == CONFIG_LOAD_MISSING ? "missing"
+                             : load_status == CONFIG_LOAD_INVALID ? "invalid" : "unreadable",
+                         (int)g_config->profiles.size, g_config->loaded_migrated,
+                         preserved, cs->debug_enabled, cs->debug_include_content,
+                         cs->debug_recorder, cs->debug_screenshot,
+                         cs->debug_max_file_mb, cs->debug_max_total_mb);
+                }
             }
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;
@@ -4280,6 +4332,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             if (s == g_active_session)
                                 hide_ai_panel(hwnd);
                         }
+                        /* render.stuck_dirty for a session nothing paints: the
+                         * paint-path counter (renderer_draw) only ever sees the
+                         * active tab, so a background tab whose dirty row keeps
+                         * this poll invalidating (2026-10-14) is counted here,
+                         * per session. One line per episode. */
+                        {
+                            const int bg_dirty = term_dirty_row_flags(s->term, NULL, 0);
+                            int stuck_ticks = 0;
+                            if (render_stuck_poll(&s->poll_stuck, s->log_id, bg_dirty,
+                                                  s == g_active_session ? 1 : 0, &stuck_ticks))
+                                DLOG(DLOG_RENDER, DLOG_WARN, s->log_id, "render.stuck_dirty",
+                                     "src=poll rows=%d ticks=%d active=0", bg_dirty, stuck_ticks);
+                        }
                         if (poll_rc > 0 || term_has_dirty_rows(s->term)) {
                             DWORD now = GetTickCount();
                             bool critical = (s == g_active_session &&
@@ -4784,12 +4849,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 {
                     Terminal *pt = g_active_session->term;
                     DLOG(DLOG_RENDER, DLOG_TRACE, g_active_session->log_id, "paint",
-                         "rect=%ld,%ld,%ld,%ld dirty_rows=%d full_redraw=%d alt=%d sb=%d tick=%lu",
+                         "rect=%ld,%ld,%ld,%ld dirty_rows=%d full_redraw=%d alt=%d sb=%d",
                          (long)ps.rcPaint.left, (long)ps.rcPaint.top,
                          (long)ps.rcPaint.right, (long)ps.rcPaint.bottom,
                          term_dirty_row_flags(pt, NULL, 0), pt->full_redraw_needed ? 1 : 0,
-                         pt->alt_screen_active ? 1 : 0, pt->scrollback_offset,
-                         (unsigned long)GetTickCount());
+                         pt->alt_screen_active ? 1 : 0, pt->scrollback_offset);
                 }
                 g_renderer.log_sid = g_active_session->log_id;
                 renderer_draw(&g_renderer, hdc, g_active_session->term, g_left_margin, g_tab_height, &ps.rcPaint, &g_selection);
@@ -5344,10 +5408,14 @@ void ui_run(void) {
      * connection blocked in a slow TCP connect or on an unanswered host-key
      * prompt, or an AI stream blocked in a network read -- must not have
      * WSACleanup and the CRT/OpenSSL exit handlers run under it. Everything
-     * worth saving is already saved and closed, so end the process here. */
+     * worth saving is already saved and closed, so end the process here. The
+     * debug log is the exception: this path skips dlog_shutdown(), so give the
+     * writer a bounded moment to put the last lines on disk first. */
     if (InterlockedCompareExchange(&g_live_conn_jobs, 0, 0) > 0 ||
-        ai_stream_live_count() > 0)
+        ai_stream_live_count() > 0) {
+        (void)dlog_flush_wait(500);
         TerminateProcess(GetCurrentProcess(), 0);
+    }
 }
 
 #endif /* _WIN32 */

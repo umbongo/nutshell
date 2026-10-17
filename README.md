@@ -330,7 +330,7 @@ Nutshell can keep a debug log that an AI can read, so you can ask what went wron
 4. Ask AI Assist "read the debug log around the last issue". It uses the `read_debug_log` tool, which works only while debugging is on, and the log text it reads is sent to your AI provider.
 5. Or give the folder to a Claude Code session: "Read `FORMAT.txt` and the newest `nutshell-*.issue*.log` in `C:\Tools\nutshell\logs` and tell me what happened."
 
-Passwords and keys are never logged. Terminal text, commands, chat and host names appear only if you tick **Include terminal content** (off by default), and a screenshot is saved only if you tick **Save a screenshot with each issue mark** (also off). Check a log before you share it.
+Passwords, passphrases and keys are never logged, and neither are keystrokes or pastes as such. Terminal text, commands, chat and host names appear only if you tick **Include terminal content** (off by default); the terminal text then includes the shell's echo of the commands you type, so keep secrets off the command line while it is on, and a screenshot is saved only if you tick **Save a screenshot with each issue mark** (also off). Check a log before you share it.
 
 ### Security
 

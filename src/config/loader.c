@@ -859,6 +859,7 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
      * lingering in the weaker MachineGuid-derived format. A failed save
      * here just means the migration is retried on the next load/save --
      * the config the caller gets back is correct either way. */
+    cfg->loaded_migrated = migrated;
     if (migrated) {
         (void)config_save(cfg, path);
     }

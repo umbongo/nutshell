@@ -632,10 +632,20 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
     AiStream *s = (AiStream *)raw_arg;
     dlog_set_thread_tag("ai");
 
+    /* Debug log (spec section 2): the provider and model by name, never the
+     * request, the reply or a tool's arguments or result. */
+    const ULONGLONG t_stream = GetTickCount64();
+    const unsigned stream_id = s->id;
+    int stream_failed = 0;
+    DLOG(DLOG_AI, DLOG_INFO, 0, "stream.start", "stream=%u provider=%s model=%s tools=%d",
+         stream_id, s->provider, s->conv.model, s->has_tools ? s->tools.count : 0);
+
     const char *url = ai_provider_url(s->provider);
     if (!url && strcmp(s->provider, "custom") == 0 && s->custom_url[0])
         url = s->custom_url;
     if (!url) {
+        DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error", "stream=%u class=unknown_provider ms=%llu",
+             stream_id, (unsigned long long)(GetTickCount64() - t_stream));
         post_error_response(s, "Error: unknown AI provider");
         ai_stream_mark_finished(s);
         ai_stream_release(s);
@@ -694,6 +704,11 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                 snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
             else
                 snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
+            stream_failed = 1;
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error",
+                 "stream=%u class=%s status=%d ms=%llu", stream_id,
+                 rc != 0 ? "transport" : "http", status,
+                 (unsigned long long)(GetTickCount64() - t_stream));
             post_error_response(s, msg);
             goto out;
         }
@@ -734,6 +749,9 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
             AiToolResult *results = (AiToolResult *)calloc(
                 (size_t)tool_stream_ptr->pending_tool_count, sizeof(AiToolResult));
             if (!results) {
+                stream_failed = 1;
+                DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error", "stream=%u class=oom ms=%llu",
+                     stream_id, (unsigned long long)(GetTickCount64() - t_stream));
                 post_error_response(s, "Error: out of memory for tool results");
                 goto out;
             }
@@ -752,6 +770,8 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     results[ti].content_len = results[ti].content
                                            ? strlen(results[ti].content) : 0;
                     results[ti].is_error = 1;
+                    DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=0 rate_limited=1",
+                         stream_id, call->name);
                     post_tool_msg(s, CHAT_ITEM_TOOL_CALL, "[tool rate-limited]");
                     continue;
                 }
@@ -784,9 +804,14 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                 post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
 
                 /* Execute (the stream's own registry snapshot and abort flag) */
+                const ULONGLONG t_tool = GetTickCount64();
                 ai_tool_execute(&s->tools, call, ai_stream_abort_flag(s),
                                 &results[ti]);
                 agentic_record_tool_call(&agentic, call->name);
+                /* The tool's name and outcome only: never its arguments or result. */
+                DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=%d ms=%llu",
+                     stream_id, call->name, results[ti].is_error ? 0 : 1,
+                     (unsigned long long)(GetTickCount64() - t_tool));
 
                 /* Truncation warning */
                 if (results[ti].was_truncated) {
@@ -875,6 +900,16 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                       total_input_tokens, total_output_tokens);
 
 out:
+    if (!stream_failed) {
+        if (ai_stream_aborted(s))
+            DLOG(DLOG_AI, DLOG_INFO, 0, "stream.cancel", "stream=%u ms=%llu", stream_id,
+                 (unsigned long long)(GetTickCount64() - t_stream));
+        else
+            DLOG(DLOG_AI, DLOG_INFO, 0, "stream.done",
+                 "stream=%u ms=%llu tokens_in=%d tokens_out=%d", stream_id,
+                 (unsigned long long)(GetTickCount64() - t_stream),
+                 total_input_tokens, total_output_tokens);
+    }
     if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
     ai_stream_mark_finished(s);   /* the panel reaps it if nothing got through */
     ai_stream_release(s);
@@ -1310,13 +1345,21 @@ static void launch_stream_thread(AiChatData *d)
             /* read_debug_log joins the snapshot only while debugging is on
              * right now, whatever the panel's own registry holds; its call
              * counter is the stream's copy (one per user message). */
-            AiToolRegistry launch_reg = d->tool_registry;
+            /* The registry is ~42 KB: on the heap, not the UI thread's stack. */
+            AiToolRegistry *launch_reg = (AiToolRegistry *)malloc(sizeof(*launch_reg));
+            if (!launch_reg) {
+                ai_stream_discard(s);
+                launch_failed(d, "[out of memory starting the AI request]");
+                return;
+            }
+            *launch_reg = d->tool_registry;
             DebugLogToolContext debug_ctx;
             ai_debug_tool_ctx_init(&debug_ctx);
-            int with_debug = ai_debug_tool_register_if_enabled(&launch_reg, &debug_ctx);
-            ai_stream_copy_tools(s, &launch_reg, d->tools_gen,
+            int with_debug = ai_debug_tool_register_if_enabled(launch_reg, &debug_ctx);
+            ai_stream_copy_tools(s, launch_reg, d->tools_gen,
                                  &d->search_ctx, &d->fetch_ctx,
                                  with_debug ? &debug_ctx : NULL);
+            free(launch_reg);
             s->has_tools = 1;
             /* Serialize tool definitions for this provider */
             s->tools_json[0] = '\0';
