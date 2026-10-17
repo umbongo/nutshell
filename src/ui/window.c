@@ -2,7 +2,7 @@
 
 #include <winsock2.h>   /* Must come before windows.h */
 #include "ui.h"
-#include "logger.h"
+#include "dlog.h"
 #include "renderer.h"
 #include "term.h"
 #include "session_io.h"
@@ -1639,6 +1639,7 @@ static void apply_config_colors(void)
 static void on_settings_clicked_page(int initial_page) {
     HWND parent = GetParent(g_hwndTabs);
     settings_dlg_show(parent, g_config, active_config_path(), initial_page);
+    dlog_configure(&g_config->settings);
 
     /* Reload theme from config (colour scheme may have changed) */
     {
@@ -3537,6 +3538,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         "profile just added will not persist to the next run.",
                         "Save Failed", MB_OK | MB_ICONWARNING);
                 }
+
+                /* The debug log follows the saved settings (hand-edited until the
+                 * Settings > Debugging page exists). */
+                dlog_configure(&g_config->settings);
             }
 
             g_hInst = ((LPCREATESTRUCT)lParam)->hInstance;
@@ -5050,7 +5055,7 @@ void ui_init(HINSTANCE instance) {
     wc.lpszClassName = CLASS_NAME;
 
     if (!RegisterClassEx(&wc)) {
-        log_write(LOG_LEVEL_ERROR, "Window Registration Failed!");
+        DLOG_EV(DLOG_GENERAL, DLOG_ERROR, 0, "window.register_failed");
         MessageBox(NULL, "Window Registration Failed!", "Error", MB_ICONEXCLAMATION | MB_OK);
         return;
     }
@@ -5077,7 +5082,7 @@ void ui_init(HINSTANCE instance) {
     );
 
     if (hwnd == NULL) {
-        log_write(LOG_LEVEL_ERROR, "Window Creation Failed!");
+        DLOG_EV(DLOG_GENERAL, DLOG_ERROR, 0, "window.create_failed");
         MessageBox(NULL, "Window Creation Failed!", "Error", MB_ICONEXCLAMATION | MB_OK);
         return;
     }

@@ -42,7 +42,7 @@
 #include "cmd_detail_dlg.h"
 #include "cmd_batch.h"
 #include "dispatch_line_clear.h"
-#include "logger.h"
+#include "dlog.h"
 #include "chat_listview.h"
 #include "ui_demo.h"
 #include "icons.h"
@@ -1817,7 +1817,7 @@ static void dispatch_start(AiChatData *d, int batch_id)
             dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d),
                                       windows_prompt)
                 == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE");
-        LOG_INFO(line);
+        DLOG(DLOG_AI, DLOG_INFO, 0, "dispatch.start", "msg=%s", line);
     }
 
     SetTimer(d->hwnd, TIMER_CMD_QUEUE, CMD_QUEUE_POLL_MS, NULL);
@@ -2020,7 +2020,7 @@ static int describe_cursor_row(const Terminal *term, char *buf, size_t buf_size)
  * against a real ConPTY-hosted PowerShell could not reproduce it (see the
  * wintest case below), which points at something particular to the
  * reporter's own machine/session -- this exists to capture that, without
- * asking for a debugger attach. Logs at LOG_INFO (%TEMP%\nutshell.log,
+ * asking for a debugger attach. Logs at ai WARN (the debug log folder,
  * always on -- see init_app_log(), src/main.c) every field the settle
  * gate (`ready = !dispatch_await_echo && quiet && term_at_prompt(term)`,
  * dispatch_tick() below) and the no-prefix safety checks actually read,
@@ -2084,7 +2084,9 @@ static void dispatch_log_stall_if_due(AiChatData *d, CmdBatch *batch)
         term ? term->cursor.row : -1, term ? term->cursor.col : -1,
         term ? term->rows : -1, term ? term->cols : -1,
         row_desc);
-    LOG_INFO(line);
+    /* TODO(debug-log UI work): split into fields, and put the cursor-row text behind
+     * DLOG_CONTENT (spec section 6); until then this is the same text the old log held. */
+    DLOG(DLOG_AI, DLOG_WARN, 0, "dispatch.stall", "msg=%s", line);
 }
 
 /* TIMER_CMD_QUEUE tick: advance the dispatcher (on d->dispatch_batch_id)
@@ -2338,7 +2340,7 @@ static void dispatch_tick(AiChatData *d)
             snprintf(line, sizeof(line), "settled batch %d after %lu ms",
                      batch->id,
                      (unsigned long)(GetTickCount() - d->dispatch_start_tick));
-            LOG_INFO(line);
+            DLOG(DLOG_AI, DLOG_INFO, 0, "dispatch.settled", "msg=%s", line);
         }
 
         int batch_id = batch->id;

@@ -14,8 +14,9 @@
 #include "profile.h"
 #include "../core/vector.h"
 #include "../core/cmd_policy.h"
+#include "../core/dlog_types.h"
 
-typedef struct {
+typedef struct Settings {
     char font[CFG_STR_MAX];
     char ai_font[CFG_STR_MAX];
     int font_size;
@@ -24,7 +25,20 @@ typedef struct {
     int logging_enabled;
     char log_format[CFG_STR_MAX];
     char log_dir[CFG_STR_MAX];
-    int debug_terminal;  /* raw terminal data log for escape-sequence debugging */
+    int debug_terminal;  /* LEGACY, read-only: a config with "debug_terminal": true migrates to
+                          * debug_enabled + term=Trace + content on at load; it is never written.
+                          * Kept only until the old raw-byte log is removed from the UI. */
+    /* ---- Debug log (spec 2026-10-17-debug-logging-design.md) ---- */
+    int  debug_enabled;                       /* "Enable debugging"; default 0 */
+    unsigned char debug_levels[DLOG_CAT_COUNT]; /* DlogLevel per category (render, term, ai, ssh,
+                                                 * shell, general); default all Info */
+    int  debug_include_content;               /* terminal text, commands, chat; default 0 */
+    int  debug_screenshot;                    /* PNG with each issue mark; default 0 */
+    int  debug_recorder;                      /* in-memory recorder for issue marks; default 1 */
+    unsigned char debug_recorder_level;       /* DlogLevel the recorder captures; default Trace */
+    char debug_log_dir[CFG_STR_MAX];          /* default "logs" (beside the exe) */
+    int  debug_max_file_mb;                   /* 1-100, default 10 */
+    int  debug_max_total_mb;                  /* 5-5000, default 50 */
     char host_key_verification[CFG_STR_MAX]; /* "strict" refuses an unknown or changed
                                                  host key without prompting; anything
                                                  else (default "tofu") prompts. No UI. */
