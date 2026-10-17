@@ -587,3 +587,20 @@ A short README section:
 | `src/core/ui_demo.c`, `src/ui/resource.h` | demo state, `IDM_HELP_MARK_ISSUE`, control ids |
 | `tests/test_dlog.c`, `tests/test_dlog_query.c` (new), `tests/test_config.c`, `tests/test_settings_layout.c`, `tests/test_ui_demo.c`, `tests/runner.c` | tests |
 | `README.md` | the AI analysis section |
+
+## Decisions on the open questions (maintainer's session, 2026-10-17)
+
+1. Mark Issue is silent: it writes the mark and flashes a short status line. No
+   note dialog; a note can be given to the AI tool afterwards.
+2. Ctrl+Shift+M stays (the terminal only ever sent a plain CR for it).
+3. Host, user and profile names: the profile name and the session id are logged
+   at any setting; the host name and user name only with "Include terminal
+   content" on.
+4. The screenshot has its own tickbox, "Save a screenshot with each issue mark",
+   off by default, independent of the content tickbox.
+5. The recorder is on by default at 4 MB.
+6. One content tickbox.
+7. `debug_terminal: true` migrates to Terminal at Trace with content on.
+8. No Mark Issue button in the AI panel for now; menu and shortcut suffice.
+9. Defaults: 10 MB per file, 50 MB total (not 200; the exe may live on a USB
+   stick). Both adjustable in Settings.
