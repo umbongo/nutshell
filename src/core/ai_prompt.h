@@ -106,6 +106,18 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
                             SessionKind kind,
                             const char *shell_name);
 
+/* The same, plus (debug_log_tool != 0) the note that the read_debug_log tool
+ * exists (ai_debug_tool_prompt_note(), ai_tools.h). Pass it only while the
+ * tool is registered for the reply. debug_log_tool == 0 is byte for byte the
+ * function above. */
+void ai_build_system_prompt_ex(char *buf, size_t buf_size,
+                               const char *terminal_text,
+                               const char *session_notes,
+                               const char *system_notes,
+                               SessionKind kind,
+                               const char *shell_name,
+                               int debug_log_tool);
+
 /* Build the JSON request body from the conversation.
  * Returns bytes written (excluding NUL), or 0 on error. */
 size_t ai_build_request_body(const AiConversation *conv,
