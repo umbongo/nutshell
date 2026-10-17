@@ -158,7 +158,7 @@ scrolls if you shrink it below the content.
 
 | Group | Pages |
 |-------|-------|
-| **General** | Appearance, Terminal, Logging |
+| **General** | Appearance, Terminal, Logging, Debugging |
 | **Connection** | SSH, Startup |
 | **AI Assistant** | Provider, Behaviour, Web Access |
 | | About |
@@ -181,7 +181,7 @@ scrolls if you shrink it below the content.
 #### General > Logging
 - **Log directory** — where log files are saved (default: same directory as the executable)
 - **Log name format** — strftime format string for log filenames (e.g. `%Y-%m-%d_%H-%M-%S`)
-- **Debug terminal log** — capture the raw terminal byte stream for escape-sequence debugging
+- **Debugging** — see [Analysing an issue with AI](#analysing-an-issue-with-ai): the runtime debug log, its per-category levels, the issue marker and the `read_debug_log` tool (replaces the old debug terminal log)
 
 Logging itself is started and stopped from **File > Start/Stop Logging**, not here.
 
@@ -325,7 +325,7 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 Nutshell can keep a debug log that an AI can read, so you can ask what went wrong instead of reconstructing it.
 
 1. Turn on **Settings > Debugging > Enable debugging** and leave it on; the defaults cost almost nothing.
-2. When something looks wrong, press **Ctrl+Shift+M** (or **Help > Mark Issue**) *before* clicking or resizing. Nutshell silently records the state of every tab and the last few minutes of detail, and flashes a short confirmation in the status line.
+2. When something looks wrong, press **Ctrl+Shift+M** (or **Help > Mark Issue**) *before* clicking or resizing. Nutshell silently records the state of every tab and the last few minutes of detail, and flashes a short confirmation in the window title.
 3. The logs are written to `logs\` beside `nutshell.exe` (or the folder set in Settings). `FORMAT.txt` in that folder describes the file format, levels and categories.
 4. Ask AI Assist "read the debug log around the last issue". It uses the `read_debug_log` tool, which works only while debugging is on, and the log text it reads is sent to your AI provider.
 5. Or give the folder to a Claude Code session: "Read `FORMAT.txt` and the newest `nutshell-*.issue*.log` in `C:\Tools\nutshell\logs` and tell me what happened."

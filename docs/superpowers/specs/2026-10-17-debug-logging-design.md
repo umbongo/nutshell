@@ -317,7 +317,7 @@ marked"). Order still matters, because a dialog or repaint can heal the glitch b
    `issue.ai` (panel visible, stream live, dispatch batch, policy).
 3. Write the recorder to its own dump, `.issue<n>.log` (chronological, own `app.start`-style
    header). The main log only gets the mark and the snapshot.
-4. If **"Save a screenshot with each issue mark"** is ticked (`debug_issue_screenshot`,
+4. If **"Save a screenshot with each issue mark"** is ticked (`debug_screenshot`,
    default off, independent of the content tickbox): a PNG of the main window's client area,
    `BitBlt` into a DIB, saved through the GDI+ flat API already declared in
    `ai_chat.c:60-90` (`GdipCreateBitmapFromHBITMAP`, PNG CLSID; add `GdipSaveImageToFile`).
@@ -459,7 +459,7 @@ Nutshell versions ignore the new keys, as the loader only reads keys it knows.
 > `nutshell.exe` unless you changed it) and flashes a confirmation. Then ask AI Assist "read the
 > debug log around the last issue", or point a Claude Code session at the folder: "Read
 > FORMAT.txt and the newest nutshell-*.issue*.log in C:\Tools\nutshell\logs and tell me what
-> happened." Logs never contain passwords, keys or what you type. Terminal text, commands, chat
+> happened." Passwords and keys are never logged, and neither are keystrokes or pastes. Terminal text, commands, chat
 > and host names appear only if you tick **Include terminal content**, and a screenshot is saved
 > only if you tick **Save a screenshot with each issue mark**; check before sharing a log.
 
