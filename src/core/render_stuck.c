@@ -40,9 +40,10 @@ int render_stuck_update(RenderStuck *st, unsigned sid, int rows_dirty,
 }
 
 int render_stuck_poll(RenderStuck *st, unsigned sid, int rows_dirty, int is_active,
-                      int *ticks_out)
+                      int got_bytes, int *ticks_out)
 {
     if (!st) return 0;
     if (is_active) rows_dirty = 0;      /* the paint path owns the active session */
+    if (got_bytes) rows_dirty = 0;      /* output is arriving: busy, not stuck */
     return stuck_step(st, sid, rows_dirty, RENDER_STUCK_POLL_TICKS, ticks_out);
 }

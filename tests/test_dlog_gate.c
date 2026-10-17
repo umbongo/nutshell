@@ -5,10 +5,12 @@
  * dlog_emit_fields( -- may mention a secret-looking identifier anywhere in its
  * argument list, field names included: password, passphrase, api_key, apikey,
  * privkey, secret, passwd, bearer, or a name that is `token`, ends `_token`,
- * or starts `token_` + not a counter. Terminal, chat and command text must go
- * through DLOG_CONTENT() / dlog_emit_content(), whose data pointer and length
- * are not scanned (they are gated at run time and scrubbed of known secrets)
- * but whose category, level, session, EVENT and KEY arguments are. This is an
+ * or starts `token_` + not a counter, private_key, cookie, authorization.
+ * Terminal, chat and command text must go
+ * through DLOG_CONTENT() / dlog_emit_content(), whose length
+ * are gated at run time and scrubbed of known secrets, but whose category,
+ * level, session, EVENT, KEY and DATA-expression arguments are scanned too
+ * (the data text is never read; the identifier naming it is). This is an
  * exact allow-list, not a ratchet: a
  * line that really must name one of these is added to k_allow with a reason,
  * and the test fails if an allow-list entry no longer matches anything.
@@ -31,8 +33,9 @@ static const char *const k_allow[] = { NULL };
 
 static const char *const k_callers[] = { "DLOG_EV(", "DLOG(", "dlog_emit_fields(", "dlog_emit(",
                                          "DLOG_CONTENT(", "dlog_emit_content(" };
-/* how many leading arguments are scanned; 0 = all (content calls: cat, lvl, sid, event, key) */
-static const int k_scan_args[] = { 0, 0, 0, 0, 5, 5 };
+/* how many leading arguments are scanned; 0 = all (content calls: cat, lvl, sid, event, key,
+ * data -- the length, the 7th, is a number and is not scanned) */
+static const int k_scan_args[] = { 0, 0, 0, 0, 6, 6 };
 
 static int ident_char(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
@@ -55,7 +58,7 @@ static int ends_with_ci(const char *s, size_t n, const char *suffix)
 /* 1 when the word (n chars) is secret-looking. */
 static int word_is_secret(const char *w, size_t n)
 {
-    static const char *const contains[] = { "password", "passphrase", "api_key", "apikey", "privkey", "secret", "passwd", "bearer" };
+    static const char *const contains[] = { "password", "passphrase", "api_key", "apikey", "privkey", "private_key", "secret", "passwd", "bearer", "cookie", "authorization" };
     char low[128];
     if (n >= sizeof(low)) n = sizeof(low) - 1;
     for (size_t i = 0; i < n; i++) low[i] = (char)tolower((unsigned char)w[i]);
@@ -254,7 +257,7 @@ int test_dlog_gate_allows_safe_calls(void)
 int test_dlog_gate_ignores_the_content_macro_comments_and_other_code(void)
 {
     TEST_BEGIN();
-    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"term.rx\", \"data\", password_buffer, n);"), 0);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"term.rx\", \"data\", buf, n);"), 0);
     ASSERT_EQ(SCAN("/* DLOG(x, y, z, \"e\", \"password=%s\", p); */ int a;"), 0);
     ASSERT_EQ(SCAN("// DLOG(x, y, z, \"e\", \"password=%s\", p);\nint a;"), 0);
     ASSERT_EQ(SCAN("strcpy(profile->password, \"x\"); const char *s = \"DLOG( password )\";"), 0);
@@ -263,15 +266,24 @@ int test_dlog_gate_ignores_the_content_macro_comments_and_other_code(void)
     TEST_END();
 }
 
-int test_dlog_gate_scans_the_event_and_key_of_content_calls_but_not_their_data(void)
+int test_dlog_gate_scans_the_event_key_and_data_of_content_calls_but_not_the_length(void)
 {
     TEST_BEGIN();
     ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"term.rx\", \"password\", buf, n);"), 1);      /* the key */
     ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"secret.rx\", \"data\", buf, n);"), 1);       /* the event */
     ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_AI, DLOG_TRACE, password_sid, \"e\", \"data\", buf, n);"), 1);            /* the session expr */
     ASSERT_EQ(SCAN("dlog_emit_content(DLOG_TERM, DLOG_TRACE, 0, \"e\", api_key, buf, n);"), 1);
-    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"term.rx\", \"data\", password_buffer, secret_len);"), 0);
-    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, f(a, b), \"term.rx\", \"data\", get(token, 1), n);"), 0);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"term.rx\", \"data\", password_buffer, n);"), 1);   /* the data */
+    ASSERT_EQ(SCAN("dlog_emit_content(DLOG_TERM, DLOG_TRACE, 0, \"e\", \"text\", get(token, 1), n);"), 1);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"e\", \"text\", s->session_cookie, n);"), 1);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"e\", \"text\", authorization_hdr, n);"), 1);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"e\", \"text\", cfg->private_key, n);"), 1);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_AI, DLOG_TRACE, 0, \"e\", \"text\", apikey_copy, n);"), 1);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"term.rx\", \"data\", buf, secret_len);"), 0);   /* the length is not scanned */
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"e\", \"text\", data, n);"), 0);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"e\", \"text\", row_text, strlen(row_text));"), 0);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"e\", \"text\", title, strlen(title));"), 0);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, f(a, b), \"term.rx\", \"data\", get(buf, 1), n);"), 0);
     ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM,\n DLOG_TRACE, 0, \"e\",\n \"text\",\n buf, n);"), 0);
     TEST_END();
 }

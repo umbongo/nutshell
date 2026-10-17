@@ -53,6 +53,16 @@ size_t dlog_repeat_key(char *out, size_t cap, const char *body, size_t len);
  * still replaced. */
 size_t dlog_scrub_stream(char *dst, size_t dst_cap, const char *src, size_t n, int final, size_t *consumed);
 
+/* Held secret-prefix tails of the content streams (dlog_emit_content keeps, per thread, the end of a
+ * terminal read that could be the start of a known secret). dlog_streams_wipe_tails() secure_zero()s
+ * every tail of the CALLING thread; dlog_secret_remove()/dlog_secret_clear() call it when a secret's
+ * last registration ends and bump dlog_secret_epoch(), which every other thread compares on its next
+ * content call and wipes its own tails when it changed. dlog_streams_held_nonzero() counts the
+ * non-zero bytes still sitting in this thread's held buffers (tests). */
+void     dlog_streams_wipe_tails(void);
+unsigned dlog_secret_epoch(void);
+size_t   dlog_streams_held_nonzero(void);
+
 /* How long the writer thread sleeps before its next pass: 250 ms, or
  * DLOG_WAIT_FOREVER (until woken) when debugging is off and there is nothing
  * queued, pending or waiting for a repeat tick. */

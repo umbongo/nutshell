@@ -3251,12 +3251,18 @@ static void mark_issue(HWND hwnd)
     if (marked && iss.screenshot_path[0]) {
         const int ok = gdip_png_save_client(hwnd, iss.screenshot_path);
         DLOG(DLOG_GENERAL, DLOG_ISSUE, 0u, "issue.screenshot", "n=%u ok=%d", iss.n, ok);
+    } else if (marked && iss.dump_failed && dlog_screenshot_enabled()) {
+        /* No dump, so no path to save the PNG next to: say so rather than skip silently. */
+        DLOG(DLOG_GENERAL, DLOG_ISSUE, 0u, "issue.screenshot", "n=%u ok=0 reason=dump_failed", iss.n);
     }
 
     /* The flash: the title bar is the only status surface that needs no
      * repaint of the terminal area. */
     char title[96];
-    if (marked)
+    if (marked && iss.dump_failed)
+        (void)snprintf(title, sizeof(title), "%s - Issue %u marked (dump not written)",
+                       APP_TITLE, iss.n);
+    else if (marked)
         (void)snprintf(title, sizeof(title), "%s - Issue %u marked", APP_TITLE, iss.n);
     else
         (void)snprintf(title, sizeof(title), "%s - Issue not marked (logger unavailable)", APP_TITLE);
@@ -4336,12 +4342,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                          * paint-path counter (renderer_draw) only ever sees the
                          * active tab, so a background tab whose dirty row keeps
                          * this poll invalidating (2026-10-14) is counted here,
-                         * per session. One line per episode. */
+                         * per session. Output arriving (poll_rc > 0) is ordinary
+                         * and resets the streak; only a dirty tab with nothing
+                         * arriving counts. One line per episode. */
                         {
                             const int bg_dirty = term_dirty_row_flags(s->term, NULL, 0);
                             int stuck_ticks = 0;
                             if (render_stuck_poll(&s->poll_stuck, s->log_id, bg_dirty,
-                                                  s == g_active_session ? 1 : 0, &stuck_ticks))
+                                                  s == g_active_session ? 1 : 0,
+                                                  poll_rc > 0 ? 1 : 0, &stuck_ticks))
                                 DLOG(DLOG_RENDER, DLOG_WARN, s->log_id, "render.stuck_dirty",
                                      "src=poll rows=%d ticks=%d active=0", bg_dirty, stuck_ticks);
                         }

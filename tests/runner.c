@@ -6444,6 +6444,9 @@ int main(void) {
         int test_render_stuck_poll_a_clean_tick_or_becoming_active_rearms(void);
         int test_render_stuck_poll_state_is_per_session(void);
         int test_render_stuck_poll_null_state_is_safe(void);
+        int test_render_stuck_poll_a_background_tab_receiving_output_never_warns(void);
+        int test_render_stuck_poll_warns_once_on_a_dirty_silent_background_tab(void);
+        int test_render_stuck_poll_new_bytes_reset_the_streak(void);
         int test_key_name_names_the_special_keys(void);
         int test_key_name_never_names_a_character_and_is_never_null(void);
         int test_key_mods_name_spells_every_combination(void);
@@ -6452,6 +6455,9 @@ int main(void) {
         failed += test_render_stuck_poll_a_clean_tick_or_becoming_active_rearms();
         failed += test_render_stuck_poll_state_is_per_session();
         failed += test_render_stuck_poll_null_state_is_safe();
+        failed += test_render_stuck_poll_a_background_tab_receiving_output_never_warns();
+        failed += test_render_stuck_poll_warns_once_on_a_dirty_silent_background_tab();
+        failed += test_render_stuck_poll_new_bytes_reset_the_streak();
         failed += test_key_name_names_the_special_keys();
         failed += test_key_name_never_names_a_character_and_is_never_null();
         failed += test_key_mods_name_spells_every_combination();
@@ -6485,13 +6491,17 @@ int main(void) {
         int test_dlog_review_configure_and_the_loggers_own_lines_wake_the_writer(void);
         int test_dlog_review_issue_mark_hands_the_dump_to_the_writer_and_waits_bounded_real_time(void);
         int test_dlog_review_issue_marks_beyond_the_job_slots_fail_cleanly(void);
+        int test_dlog_review_issue_mark_whose_dump_is_written_is_not_a_dump_failure(void);
+        int test_dlog_review_removing_the_last_registration_wipes_the_held_tail(void);
+        int test_dlog_review_a_remaining_registration_keeps_the_held_tail(void);
+        int test_dlog_review_clearing_all_secrets_wipes_the_held_tails(void);
         int test_dlog_review_retention_skips_a_file_a_second_instance_has_open(void);
         int test_dlog_review_the_fake_refuses_to_delete_an_open_file_until_it_is_closed(void);
         int test_dlog_review_format_txt_names_the_shell_thread_and_the_repeat_rule(void);
         int test_dlog_review_known_safe_names_that_contain_key_are_not_redacted(void);
         int test_dlog_review_key_scanner_finds_sensitive_and_safe_keys_in_planted_calls(void);
         int test_dlog_review_no_real_call_site_key_is_redacted_by_name(void);
-        int test_dlog_gate_scans_the_event_and_key_of_content_calls_but_not_their_data(void);
+        int test_dlog_gate_scans_the_event_key_and_data_of_content_calls_but_not_the_length(void);
         failed += test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read();
         failed += test_dlog_review_osc52_introducer_after_the_output_filled_up_withholds_the_next_read();
         failed += test_dlog_review_escape_bytes_keeps_tracking_after_the_output_is_full();
@@ -6518,13 +6528,17 @@ int main(void) {
         failed += test_dlog_review_configure_and_the_loggers_own_lines_wake_the_writer();
         failed += test_dlog_review_issue_mark_hands_the_dump_to_the_writer_and_waits_bounded_real_time();
         failed += test_dlog_review_issue_marks_beyond_the_job_slots_fail_cleanly();
+        failed += test_dlog_review_issue_mark_whose_dump_is_written_is_not_a_dump_failure();
+        failed += test_dlog_review_removing_the_last_registration_wipes_the_held_tail();
+        failed += test_dlog_review_a_remaining_registration_keeps_the_held_tail();
+        failed += test_dlog_review_clearing_all_secrets_wipes_the_held_tails();
         failed += test_dlog_review_retention_skips_a_file_a_second_instance_has_open();
         failed += test_dlog_review_the_fake_refuses_to_delete_an_open_file_until_it_is_closed();
         failed += test_dlog_review_format_txt_names_the_shell_thread_and_the_repeat_rule();
         failed += test_dlog_review_known_safe_names_that_contain_key_are_not_redacted();
         failed += test_dlog_review_key_scanner_finds_sensitive_and_safe_keys_in_planted_calls();
         failed += test_dlog_review_no_real_call_site_key_is_redacted_by_name();
-        failed += test_dlog_gate_scans_the_event_and_key_of_content_calls_but_not_their_data();
+        failed += test_dlog_gate_scans_the_event_key_and_data_of_content_calls_but_not_the_length();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);

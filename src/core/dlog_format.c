@@ -743,6 +743,9 @@ static char g_secrets[DLOG_SECRETS_MAX][SECRET_CAP];
 static size_t g_secret_len[DLOG_SECRETS_MAX];
 static unsigned g_secret_refs[DLOG_SECRETS_MAX];
 static volatile char g_secret_busy;
+static unsigned g_secret_epoch;         /* bumped whenever a secret's last registration ends */
+
+unsigned dlog_secret_epoch(void) { return __atomic_load_n(&g_secret_epoch, __ATOMIC_ACQUIRE); }
 
 static void sec_lock(void)
 {
@@ -781,6 +784,7 @@ void dlog_secret_remove(const char *secret)
 {
     if (!secret) return;
     size_t n = strlen(secret);
+    int dropped = 0;
     sec_lock();
     for (int i = 0; i < DLOG_SECRETS_MAX; i++) {
         if (g_secret_len[i] == n && n > 0 && memcmp(g_secrets[i], secret, n) == 0) {
@@ -788,9 +792,14 @@ void dlog_secret_remove(const char *secret)
             secure_zero(g_secrets[i], SECRET_CAP);
             g_secret_len[i] = 0;
             g_secret_refs[i] = 0;
+            dropped = 1;
         }
     }
     sec_unlock();
+    if (dropped) {      /* a held tail may be a prefix of it: wipe ours, flag the other threads' */
+        (void)__atomic_add_fetch(&g_secret_epoch, 1u, __ATOMIC_ACQ_REL);
+        dlog_streams_wipe_tails();
+    }
 }
 
 void dlog_secret_clear(void)
@@ -802,6 +811,8 @@ void dlog_secret_clear(void)
         g_secret_refs[i] = 0;
     }
     sec_unlock();
+    (void)__atomic_add_fetch(&g_secret_epoch, 1u, __ATOMIC_ACQ_REL);
+    dlog_streams_wipe_tails();
 }
 
 /* The scrub proper, secrets lock held. Copies src[0..stop) to dst replacing each

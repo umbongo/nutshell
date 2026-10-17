@@ -111,12 +111,17 @@ int test_render_stuck_null_state_is_safe(void)
 
 /* ---- the poll path: a background session's dirty row ---- */
 
-static int feed_poll(RenderStuck *st, unsigned sid, int rows_dirty, int active, int n)
+static int feed_poll_b(RenderStuck *st, unsigned sid, int rows_dirty, int active, int bytes, int n)
 {
     int fired = 0;
     for (int i = 0; i < n; i++)
-        fired += render_stuck_poll(st, sid, rows_dirty, active, NULL);
+        fired += render_stuck_poll(st, sid, rows_dirty, active, bytes, NULL);
     return fired;
+}
+
+static int feed_poll(RenderStuck *st, unsigned sid, int rows_dirty, int active, int n)
+{
+    return feed_poll_b(st, sid, rows_dirty, active, 0, n);
 }
 
 int test_render_stuck_poll_fires_once_for_a_background_session(void)
@@ -126,7 +131,7 @@ int test_render_stuck_poll_fires_once_for_a_background_session(void)
     render_stuck_init(&st);
     ASSERT_EQ(feed_poll(&st, 2, 3, 0, RENDER_STUCK_POLL_TICKS - 1), 0);
     int ticks = 0;
-    ASSERT_EQ(render_stuck_poll(&st, 2, 3, 0, &ticks), 1);
+    ASSERT_EQ(render_stuck_poll(&st, 2, 3, 0, 0, &ticks), 1);
     ASSERT_EQ(ticks, RENDER_STUCK_POLL_TICKS);
     ASSERT_EQ(feed_poll(&st, 2, 3, 0, 22000), 0);               /* one line per episode */
     TEST_END();
@@ -147,11 +152,11 @@ int test_render_stuck_poll_a_clean_tick_or_becoming_active_rearms(void)
     RenderStuck st;
     render_stuck_init(&st);
     ASSERT_EQ(feed_poll(&st, 2, 1, 0, RENDER_STUCK_POLL_TICKS - 1), 0);
-    ASSERT_EQ(render_stuck_poll(&st, 2, 0, 0, NULL), 0);         /* painted clean */
+    ASSERT_EQ(render_stuck_poll(&st, 2, 0, 0, 0, NULL), 0);         /* painted clean */
     ASSERT_EQ(feed_poll(&st, 2, 1, 0, RENDER_STUCK_POLL_TICKS - 1), 0);
-    ASSERT_EQ(render_stuck_poll(&st, 2, 1, 1, NULL), 0);         /* the user switched to it */
+    ASSERT_EQ(render_stuck_poll(&st, 2, 1, 1, 0, NULL), 0);         /* the user switched to it */
     ASSERT_EQ(feed_poll(&st, 2, 1, 0, RENDER_STUCK_POLL_TICKS - 1), 0);
-    ASSERT_EQ(render_stuck_poll(&st, 2, 1, 0, NULL), 1);
+    ASSERT_EQ(render_stuck_poll(&st, 2, 1, 0, 0, NULL), 1);
     TEST_END();
 }
 
@@ -164,8 +169,8 @@ int test_render_stuck_poll_state_is_per_session(void)
     /* Interleaved ticks of two sessions must not reset each other's streak. */
     int fired_a = 0, fired_b = 0;
     for (int i = 0; i < RENDER_STUCK_POLL_TICKS; i++) {
-        fired_a += render_stuck_poll(&a, 2, 1, 0, NULL);
-        fired_b += render_stuck_poll(&b, 3, 1, 0, NULL);
+        fired_a += render_stuck_poll(&a, 2, 1, 0, 0, NULL);
+        fired_b += render_stuck_poll(&b, 3, 1, 0, 0, NULL);
     }
     ASSERT_EQ(fired_a, 1);
     ASSERT_EQ(fired_b, 1);
@@ -175,6 +180,45 @@ int test_render_stuck_poll_state_is_per_session(void)
 int test_render_stuck_poll_null_state_is_safe(void)
 {
     TEST_BEGIN();
-    ASSERT_EQ(render_stuck_poll(NULL, 1, 1, 0, NULL), 0);
+    ASSERT_EQ(render_stuck_poll(NULL, 1, 1, 0, 0, NULL), 0);
+    TEST_END();
+}
+
+int test_render_stuck_poll_a_background_tab_receiving_output_never_warns(void)
+{
+    TEST_BEGIN();
+    RenderStuck st;
+    render_stuck_init(&st);
+    /* Output every tick: the tab is dirty because it is busy, not stuck. */
+    ASSERT_EQ(feed_poll_b(&st, 2, 4, 0, 1, RENDER_STUCK_POLL_TICKS * 40), 0);
+    TEST_END();
+}
+
+int test_render_stuck_poll_warns_once_on_a_dirty_silent_background_tab(void)
+{
+    TEST_BEGIN();
+    RenderStuck st;
+    render_stuck_init(&st);
+    int ticks = 0;
+    ASSERT_EQ(feed_poll_b(&st, 2, 3, 0, 0, RENDER_STUCK_POLL_TICKS - 1), 0);
+    ASSERT_EQ(render_stuck_poll(&st, 2, 3, 0, 0, &ticks), 1);
+    ASSERT_EQ(ticks, RENDER_STUCK_POLL_TICKS);
+    ASSERT_EQ(feed_poll_b(&st, 2, 3, 0, 0, 5000), 0);           /* once per episode */
+    TEST_END();
+}
+
+int test_render_stuck_poll_new_bytes_reset_the_streak(void)
+{
+    TEST_BEGIN();
+    RenderStuck st;
+    render_stuck_init(&st);
+    ASSERT_EQ(feed_poll_b(&st, 2, 3, 0, 0, RENDER_STUCK_POLL_TICKS - 1), 0);
+    ASSERT_EQ(render_stuck_poll(&st, 2, 3, 0, 1, NULL), 0);      /* bytes arrived */
+    ASSERT_EQ(feed_poll_b(&st, 2, 3, 0, 0, RENDER_STUCK_POLL_TICKS - 1), 0);
+    ASSERT_EQ(render_stuck_poll(&st, 2, 3, 0, 0, NULL), 1);
+    /* and bytes after a report open a new episode */
+    ASSERT_EQ(render_stuck_poll(&st, 2, 3, 0, 1, NULL), 0);
+    ASSERT_EQ(feed_poll_b(&st, 2, 3, 0, 0, RENDER_STUCK_POLL_TICKS - 1), 0);
+    ASSERT_EQ(render_stuck_poll(&st, 2, 3, 0, 0, NULL), 1);
     TEST_END();
 }

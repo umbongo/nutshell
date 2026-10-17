@@ -140,9 +140,31 @@ typedef struct {
 } StreamState;
 static _Thread_local StreamState t_streams[STREAM_SLOTS];
 static _Thread_local unsigned t_stream_clock;
+static _Thread_local unsigned t_secret_epoch_seen;
+
+/* A secret's registration ended: its prefix must not stay in memory (see dlog_internal.h). */
+void dlog_streams_wipe_tails(void)
+{
+    for (int i = 0; i < STREAM_SLOTS; i++) {
+        secure_zero(t_streams[i].held, sizeof(t_streams[i].held));
+        t_streams[i].held_len = 0;
+    }
+    t_secret_epoch_seen = dlog_secret_epoch();
+}
+
+size_t dlog_streams_held_nonzero(void)
+{
+    size_t n = 0;
+    for (int i = 0; i < STREAM_SLOTS; i++)
+        for (size_t k = 0; k < sizeof(t_streams[i].held); k++)
+            if (t_streams[i].held[k]) n++;
+    return n;
+}
 
 static StreamState *stream_state(unsigned sid, int stream)
 {
+    if (t_secret_epoch_seen != dlog_secret_epoch())     /* another thread ended a secret */
+        dlog_streams_wipe_tails();
     for (int i = 0; i < STREAM_SLOTS; i++) {
         StreamState *s = &t_streams[i];
         if (s->stream == stream && s->sid == sid) { s->stamp = ++t_stream_clock; return s; }
@@ -1399,6 +1421,7 @@ int dlog_issue_mark(const DlogSnapshot *snap, int want_screenshot, DlogIssue *ou
 
     /* the dump is taken now (it ends with the lines above) and written by the writer thread */
     int slot = have_dir ? queue_dump(logname) : -1;
+    const int dump_failed = (have_dir && slot < 0);
     unsigned long long target = __atomic_load_n(&G.q_in, __ATOMIC_ACQUIRE);
     wake_writer();
     wait_issue(slot, target, 500);
@@ -1411,9 +1434,12 @@ int dlog_issue_mark(const DlogSnapshot *snap, int want_screenshot, DlogIssue *ou
         ul(h);
     }
     int ok = (slot >= 0 && state != 3);
+    if (dump_failed)       /* never silent: both dump job slots were still busy (or no memory) */
+        emit_forced((int)DLOG_GENERAL, (int)DLOG_WARN, 0, "issue.dump_failed", "n=%u reason=\"writer busy\"", n);
     if (out) {
         out->n = n;
         out->ok = ok;
+        out->dump_failed = dump_failed;
         out->pending = (ok && state == 1) ? 1 : 0;
         if (ok) join_or_empty(out->recorder_path, sizeof(out->recorder_path), dir, logname);
         if (ok && want_screenshot) join_or_empty(out->screenshot_path, sizeof(out->screenshot_path), dir, pngname);

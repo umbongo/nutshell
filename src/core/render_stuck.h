@@ -19,9 +19,11 @@
 #define RENDER_STUCK_DIRTY_PAINTS 30
 
 /* The poll-path twin: consecutive 10 ms poll ticks on which a background
- * session still reports a dirty row. Nothing paints a background tab, so its
- * dirty row is never cleared and drives the invalidate loop; the paint-path
- * counter cannot see that. Half a second of 10 ms ticks. */
+ * session has a dirty row and the poll delivered no new bytes. Nothing paints
+ * a background tab, so any output leaves its rows dirty (ordinary, not worth a
+ * line); what is abnormal is a tab that keeps driving the invalidate loop with
+ * nothing arriving, which the paint-path counter cannot see. Half a second of
+ * 10 ms ticks. */
 #define RENDER_STUCK_POLL_TICKS 50
 
 typedef struct {
@@ -40,13 +42,15 @@ void render_stuck_init(RenderStuck *st);
 int render_stuck_update(RenderStuck *st, unsigned sid, int rows_dirty,
                         int *paints_out);
 
-/* One poll tick of session `sid`, which reports `rows_dirty` dirty rows.
- * Each session keeps its own RenderStuck. The active session is the paint
- * path's business (a dirty row is normal between a poll and the next paint):
- * a tick with is_active set ends the episode and returns 0. Otherwise as
- * render_stuck_update(), with the threshold RENDER_STUCK_POLL_TICKS; the
- * streak length is returned through *ticks_out. NULL st returns 0. */
+/* One poll tick of session `sid`, which reports `rows_dirty` dirty rows;
+ * `got_bytes` is nonzero when this tick's poll delivered new bytes. Each
+ * session keeps its own RenderStuck. Only a tick that is not active (the active
+ * session is the paint path's business: a dirty row is normal between a poll
+ * and the next paint), has dirty rows, and got no bytes extends the streak;
+ * any other tick (active, clean, or new bytes) ends the episode and returns 0.
+ * Otherwise as render_stuck_update(), with the threshold RENDER_STUCK_POLL_TICKS;
+ * the streak length is returned through *ticks_out. NULL st returns 0. */
 int render_stuck_poll(RenderStuck *st, unsigned sid, int rows_dirty, int is_active,
-                      int *ticks_out);
+                      int got_bytes, int *ticks_out);
 
 #endif /* NUTSHELL_CORE_RENDER_STUCK_H */

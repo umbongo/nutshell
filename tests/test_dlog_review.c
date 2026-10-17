@@ -13,7 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-unsigned dlog_writer_wait_ms(void);     /* dlog_internal.h; the test only needs this one */
+unsigned dlog_writer_wait_ms(void);     /* dlog_internal.h; the test only needs these */
+unsigned dlog_secret_epoch(void);
+size_t   dlog_streams_held_nonzero(void);
 
 /* ---- helpers --------------------------------------------------------------- */
 
@@ -610,10 +612,20 @@ int test_dlog_review_issue_marks_beyond_the_job_slots_fail_cleanly(void)
     ASSERT_TRUE(dlog_issue_mark(NULL, 0, &c));          /* the writer never ran: both slots are busy */
     ASSERT_TRUE(a.ok && b.ok);
     ASSERT_FALSE(c.ok);
+    ASSERT_TRUE(c.dump_failed);                         /* not "no folder": the writer was busy */
+    ASSERT_FALSE(a.dump_failed || b.dump_failed);
     g_fk.advance_on_sleep = 0;
     dlog_shutdown();                                    /* shutdown drains: the queued dumps are written */
     ASSERT_NOT_NULL(fk_find(a.recorder_path));
     ASSERT_NOT_NULL(fk_find(b.recorder_path));
+    {
+        const char *t = fk_text(FK_LOG_FILE);
+        ASSERT_EQ(count_in(t, "issue.dump_failed"), 1);   /* one line, for issue 3 only */
+        ASSERT_TRUE(has(t, "issue.dump_failed"));
+        ASSERT_TRUE(has(t, "n=3"));
+        ASSERT_TRUE(has(t, "writer busy"));
+        ASSERT_EQ(count_in(t, "WARN"), 1);
+    }
     fk_free();
     TEST_END();
 }
@@ -856,5 +868,77 @@ int test_dlog_review_no_real_call_site_key_is_redacted_by_name(void)
     ASSERT_TRUE(files > 100);
     ASSERT_TRUE(checked > 100);                          /* it really found the call sites' keys */
     ASSERT_EQ(bad, 0);                                   /* real diagnostics never go through key redaction */
+    TEST_END();
+}
+
+/* ---- a dump that is queued and written is not a failure -------------------------------------------------- */
+
+int test_dlog_review_issue_mark_whose_dump_is_written_is_not_a_dump_failure(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(begin(0, 0));
+    DlogIssue iss;
+    ASSERT_TRUE(dlog_issue_mark(NULL, 0, &iss));       /* unthreaded fake: dump written by the pump */
+    ASSERT_FALSE(iss.dump_failed);
+    ASSERT_FALSE(has(logtext(), "issue.dump_failed"));
+    end();
+    TEST_END();
+}
+
+/* ---- a secret's tail is wiped when its last registration ends ----------------------------------------------- */
+
+int test_dlog_review_removing_the_last_registration_wipes_the_held_tail(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(begin(0, 0));
+    apply(1, DLOG_LVL_TRACE, 1);
+    ASSERT_TRUE(dlog_secret_add("hunter2xyz"));
+    READ_TERM(4, "login: hunt", 11);                    /* "hunt" is held back */
+    ASSERT_TRUE(dlog_streams_held_nonzero() > 0);
+    dlog_secret_remove("hunter2xyz");
+    ASSERT_EQ(dlog_streams_held_nonzero(), 0);          /* wiped, not merely forgotten */
+    READ_TERM(4, "er2xyz ok", 9);
+    const char *t = logtext();
+    ASSERT_TRUE(has(t, "login: "));
+    ASSERT_FALSE(has(t, "hunter2xyz"));                 /* the prefix is not joined back on */
+    ASSERT_FALSE(has(t, "hunt"));
+    end();
+    TEST_END();
+}
+
+int test_dlog_review_a_remaining_registration_keeps_the_held_tail(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(begin(0, 0));
+    apply(1, DLOG_LVL_TRACE, 1);
+    ASSERT_TRUE(dlog_secret_add("hunter2xyz"));
+    ASSERT_TRUE(dlog_secret_add("hunter2xyz"));         /* two connections */
+    READ_TERM(4, "login: hunt", 11);
+    unsigned e0 = dlog_secret_epoch();
+    dlog_secret_remove("hunter2xyz");                   /* one still holds it */
+    ASSERT_EQ(dlog_secret_epoch(), e0);
+    ASSERT_TRUE(dlog_streams_held_nonzero() > 0);
+    READ_TERM(4, "er2xyz ok", 9);
+    const char *t = logtext();
+    ASSERT_FALSE(has(t, "hunter2xyz"));
+    ASSERT_TRUE(has(t, "[REDACTED]"));
+    dlog_secret_remove("hunter2xyz");
+    ASSERT_TRUE(dlog_secret_epoch() != e0);             /* other threads wipe on their next use */
+    end();
+    TEST_END();
+}
+
+int test_dlog_review_clearing_all_secrets_wipes_the_held_tails(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(begin(0, 0));
+    apply(1, DLOG_LVL_TRACE, 1);
+    ASSERT_TRUE(dlog_secret_add("hunter2xyz"));
+    READ_TERM(4, "a hunt", 6);
+    READ_TERM(9, "b hun", 5);
+    ASSERT_TRUE(dlog_streams_held_nonzero() > 0);
+    dlog_secret_clear();
+    ASSERT_EQ(dlog_streams_held_nonzero(), 0);
+    end();
     TEST_END();
 }

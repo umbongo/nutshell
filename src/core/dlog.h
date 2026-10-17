@@ -321,6 +321,8 @@ typedef struct {
     unsigned n;                           /* the issue number, 1, 2, ... per process */
     int      ok;                          /* the recorder file was written, or is queued to be (pending) */
     int      pending;                     /* ok, but the writer had not finished within the wait */
+    int      dump_failed;                 /* a folder was wanted but the dump could not be queued (both job slots busy);
+                                           * an issue.dump_failed WARN line was written */
     char     recorder_path[DLOG_MAX_PATH];    /* full path of nutshell-...issue<n>.log, "" when !ok */
     char     screenshot_path[DLOG_MAX_PATH];  /* full path to save the PNG to, "" if not wanted/possible */
 } DlogIssue;
