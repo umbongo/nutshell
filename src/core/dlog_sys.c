@@ -78,10 +78,12 @@ static int s_thread_start(void (*fn)(void *), void *arg)
     return 1;
 }
 
-static void s_thread_join(void)
+/* 1 when the writer exited, 0 when it was still running after 5 s. A writer that did not exit keeps
+ * its thread and event handles (it may still use them); the logger leaks its state to match. */
+static int s_thread_join(void)
 {
     if (g_thread) {
-        WaitForSingleObject(g_thread, 5000);
+        if (WaitForSingleObject(g_thread, 5000) != WAIT_OBJECT_0) return 0;
         CloseHandle(g_thread);
         g_thread = NULL;
     }
@@ -90,9 +92,15 @@ static void s_thread_join(void)
         g_event = NULL;
         CloseHandle(ev);
     }
+    return 1;
 }
 
-static void s_wait(unsigned ms) { if (g_event) WaitForSingleObject(g_event, ms); else Sleep(ms); }
+/* ms == DLOG_WAIT_FOREVER (INFINITE) sleeps until wake(). */
+static void s_wait(unsigned ms)
+{
+    if (g_event) WaitForSingleObject(g_event, ms);
+    else Sleep(ms == DLOG_WAIT_FOREVER ? 250u : ms);
+}
 static void s_wake(void) { if (g_event) SetEvent(g_event); }
 
 static int s_mkdir_p(const char *dir)
@@ -119,7 +127,10 @@ static int s_mkdir_p(const char *dir)
 
 static int s_file_open(const char *path, void **handle, unsigned long long *size)
 {
-    HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
+    /* Shared for reading only, NOT for delete: another Nutshell's retention must not be able to
+     * delete the file this instance is writing (its DeleteFile fails with a sharing violation
+     * and retention moves on to the next oldest). Readers (the AI tool, tests) share write. */
+    HANDLE h = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ, NULL,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return (int)GetLastError();
     LARGE_INTEGER li;

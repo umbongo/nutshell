@@ -37,6 +37,27 @@ size_t dlog_out_finish(DlogOut *o, int newline);
 size_t dlog_make_prefix(char *buf, size_t cap, long long unix_ms, int offset_min,
                         int ev_level, int cat, unsigned sid, const char *thread);
 
+/* The text two lines are compared on to decide whether the second repeats the
+ * first: `body` (event and fields, no prefix, no LF) with the value of every
+ * volatile key (tick, us, ms, since_paint_ms, elapsed_ms, quiet_ms, anything
+ * ending _ms or _us) replaced by "~". NUL-terminated; returns the length. When
+ * the result does not fit it is cut, so such a line simply never repeats. */
+size_t dlog_repeat_key(char *out, size_t cap, const char *body, size_t len);
+
+/* Known-secret scrub for a stream (a terminal read split anywhere). Copies
+ * src[0..n) to dst with every known secret replaced by [REDACTED], except that
+ * unless `final` the longest tail of src that could still be the beginning of a
+ * secret is NOT consumed: *consumed (raw bytes used, at most n) tells the caller
+ * what to carry in front of the next read. dst is NUL-terminated; returns its
+ * length. A secret that starts before the held tail but ends inside it is
+ * still replaced. */
+size_t dlog_scrub_stream(char *dst, size_t dst_cap, const char *src, size_t n, int final, size_t *consumed);
+
+/* How long the writer thread sleeps before its next pass: 250 ms, or
+ * DLOG_WAIT_FOREVER (until woken) when debugging is off and there is nothing
+ * queued, pending or waiting for a repeat tick. */
+unsigned dlog_writer_wait_ms(void);
+
 /* Installs an unhandled-exception filter that calls dlog_crash_note() (Windows;
  * a no-op elsewhere). Called by dlog_start() with the system platform. */
 void dlog_sys_install_crash_filter(void);

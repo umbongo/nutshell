@@ -492,7 +492,7 @@ static const char k_format_body[] =
 "  LEVEL      ERROR, WARN, INFO, DEBUG, TRACE (padded to 5), or ISSUE (an issue mark or its snapshot)\n"
 "  category   render, term, ai, ssh, shell, general\n"
 "  sid        the session (tab) id such as s3, or - when the event is not about one session\n"
-"  thread     ui, ssh, ai, pty, set (settings model fetch), log (the writer), ? (unregistered)\n"
+"  thread     ui, ssh, ai, shell, set (settings model fetch), log (the writer), ? (unregistered)\n"
 "  event      a stable dotted name: paint, poll.cooldown_skip, ssh.auth.result ...\n"
 "Values containing a space, a double quote, '=' or a backslash are quoted, with \\\" and \\\\\n"
 "escapes inside. Bytes below 0x20 and 0x7F, and invalid UTF-8, appear as \\xNN. A line is cut\n"
@@ -502,7 +502,9 @@ static const char k_format_body[] =
 "  A line identical to the previous line of the same category and session is not written\n"
 "  again; the next different line (or 5 seconds) emits\n"
 "  repeat n=<count> last=<timestamp of the last one> of=<event>\n"
-"  so 22,000 identical paints are one line plus a repeat line.\n"
+"  so 22,000 identical paints are one line plus a repeat line. \"Identical\" ignores the value of\n"
+"  volatile fields: tick, us, ms, since_paint_ms, elapsed_ms, quiet_ms and any key ending _ms or\n"
+"  _us (a counter or a clock reading would otherwise make every paint unique).\n"
 "\n"
 "LEVELS\n"
 "  Each category has its own setting: Off, Errors (ERROR and WARN), Info, Debug, Trace.\n"
@@ -515,6 +517,11 @@ static const char k_format_body[] =
 "  was pasted are never logged. A field whose name suggests a secret is written\n"
 "  =[REDACTED]. Terminal text, AI commands and chat appear only when the user ticked\n"
 "  'Include terminal content' (see content= in app.start); treat such a log as private.\n"
+"  Known secrets (the AI API key, a password while it connects) are replaced by [REDACTED] in\n"
+"  that text, and so is the value of an environment-style NAME_TOKEN=/NAME_SECRET=/NAME_PASSWORD=.\n"
+"  The clipboard payload of an OSC 52 sequence is withheld ([osc52 bytes=N]). Limit: turning\n"
+"  content logging on while a terminal is in the middle of such a sequence logs the rest of\n"
+"  that one sequence.\n"
 "\n";
 
 static const char k_format_body2[] =

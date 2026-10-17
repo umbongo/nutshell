@@ -111,7 +111,9 @@ static const char *const k_safe_keys[] = {
     "auth_method", "auth_type", "auth_result", "auth_ok",
     "key_name", "key_type", "key_mods",
     "tokens", "tokens_in", "tokens_out", "token_count", "tokens_total",
-    "input_tokens", "output_tokens", "max_tokens", "total_tokens"
+    "input_tokens", "output_tokens", "max_tokens", "total_tokens",
+    /* real diagnostics whose names merely contain "key": a keystroke latency and a host-key policy flag */
+    "keystroke_ms", "strict_hostkey"
 };
 
 static const char *const k_bad_parts[] = { "pass", "secret", "token", "key", "auth", "cookie" };
@@ -527,6 +529,23 @@ static int rd_is_secret_key(const char *k, size_t n)
     return 0;
 }
 
+/* An environment-style name: only [A-Z0-9_] and containing SECRET, TOKEN, PASSWORD,
+ * PASSWD or API_KEY (export FOO_TOKEN=..., GITHUB_TOKEN=..., DB_PASSWORD=...). */
+static int rd_is_env_secret(const char *k, size_t n)
+{
+    static const char *const parts[] = { "SECRET", "TOKEN", "PASSWORD", "PASSWD", "API_KEY" };
+    for (size_t i = 0; i < n; i++) {
+        char c = k[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) return 0;
+    }
+    for (size_t p = 0; p < sizeof(parts) / sizeof(parts[0]); p++) {
+        size_t m = strlen(parts[p]);
+        for (size_t i = 0; i + m <= n; i++)
+            if (memcmp(k + i, parts[p], m) == 0) return 1;
+    }
+    return 0;
+}
+
 static size_t rd_value_end(const char *s, size_t n, size_t vs)
 {
     size_t k = vs;
@@ -616,7 +635,7 @@ size_t dlog_redact_line(char *line, size_t len, size_t cap)
         if (!prev_key && rd_key_char(c)) {
             size_t j = i;
             while (j < n && rd_key_char((unsigned char)s[j])) j++;
-            if (j < n && s[j] == '=' && rd_is_secret_key(s + i, j - i)) {
+            if (j < n && s[j] == '=' && (rd_is_secret_key(s + i, j - i) || rd_is_env_secret(s + i, j - i))) {
                 size_t ve = rd_value_end(s, n, j + 1);
                 if (ve > j + 1) {
                     RD_PUT(s + i, j + 1 - i);
@@ -674,11 +693,55 @@ size_t dlog_redact_line(char *line, size_t len, size_t cap)
     return pos;
 }
 
+/* ---- Repeat comparison ------------------------------------------------------------------------- */
+
+/* Volatile fields: a counter or a clock reading that differs on every line of an
+ * otherwise identical run (paint tick=, render.draw us=, poll.* since_paint_ms=). */
+static int rk_volatile_key(const char *k, size_t n)
+{
+    static const char *const fixed[] = { "tick", "us", "ms", "since_paint_ms", "elapsed_ms", "quiet_ms" };
+    for (size_t i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++)
+        if (strlen(fixed[i]) == n && memcmp(fixed[i], k, n) == 0) return 1;
+    if (n > 3 && (memcmp(k + n - 3, "_ms", 3) == 0 || memcmp(k + n - 3, "_us", 3) == 0)) return 1;
+    return 0;
+}
+
+size_t dlog_repeat_key(char *out, size_t cap, const char *body, size_t len)
+{
+    if (!out || cap == 0) return 0;
+    size_t o = 0;
+    size_t i = 0;
+    while (i < len && body[i] != ' ' && o + 1 < cap) out[o++] = body[i++];     /* the event */
+    while (i < len) {
+        if (o + 4 >= cap) { o = cap - 1; break; }                              /* cannot fit: never equal */
+        unsigned char c = (unsigned char)body[i];
+        int prev_ok = (i == 0) || body[i - 1] == ' ';
+        if (prev_ok && rd_key_char(c)) {
+            size_t j = i;
+            while (j < len && (rd_key_char((unsigned char)body[j]) || body[j] == '.' || body[j] == '-')) j++;
+            if (j < len && body[j] == '=' && rk_volatile_key(body + i, j - i)) {
+                size_t ve = rd_value_end(body, len, j + 1);
+                size_t kl = j + 1 - i;
+                if (o + kl + 1 >= cap) { o = cap - 1; break; }
+                memcpy(out + o, body + i, kl);
+                o += kl;
+                out[o++] = '~';
+                i = ve;
+                continue;
+            }
+        }
+        out[o++] = body[i++];
+    }
+    out[o] = '\0';
+    return o;
+}
+
 /* ---- Known secrets ------------------------------------------------------------------------------ */
 
 #define SECRET_CAP 256u
 static char g_secrets[DLOG_SECRETS_MAX][SECRET_CAP];
 static size_t g_secret_len[DLOG_SECRETS_MAX];
+static unsigned g_secret_refs[DLOG_SECRETS_MAX];
 static volatile char g_secret_busy;
 
 static void sec_lock(void)
@@ -696,12 +759,18 @@ int dlog_secret_add(const char *secret)
     sec_lock();
     int free_slot = -1;
     for (int i = 0; i < DLOG_SECRETS_MAX; i++) {
-        if (g_secret_len[i] == n && memcmp(g_secrets[i], secret, n) == 0) { ok = 1; free_slot = -2; break; }
+        if (g_secret_len[i] == n && memcmp(g_secrets[i], secret, n) == 0) {
+            g_secret_refs[i]++;                  /* the same secret registered again: counted */
+            ok = 1;
+            free_slot = -2;
+            break;
+        }
         if (g_secret_len[i] == 0 && free_slot == -1) free_slot = i;
     }
     if (free_slot >= 0) {
         memcpy(g_secrets[free_slot], secret, n + 1);
         g_secret_len[free_slot] = n;
+        g_secret_refs[free_slot] = 1;
         ok = 1;
     }
     sec_unlock();
@@ -715,8 +784,10 @@ void dlog_secret_remove(const char *secret)
     sec_lock();
     for (int i = 0; i < DLOG_SECRETS_MAX; i++) {
         if (g_secret_len[i] == n && n > 0 && memcmp(g_secrets[i], secret, n) == 0) {
+            if (g_secret_refs[i] > 1) { g_secret_refs[i]--; continue; }
             secure_zero(g_secrets[i], SECRET_CAP);
             g_secret_len[i] = 0;
+            g_secret_refs[i] = 0;
         }
     }
     sec_unlock();
@@ -728,16 +799,19 @@ void dlog_secret_clear(void)
     for (int i = 0; i < DLOG_SECRETS_MAX; i++) {
         secure_zero(g_secrets[i], SECRET_CAP);
         g_secret_len[i] = 0;
+        g_secret_refs[i] = 0;
     }
     sec_unlock();
 }
 
-size_t dlog_scrub_copy(char *dst, size_t dst_cap, const char *src, size_t n)
+/* The scrub proper, secrets lock held. Copies src[0..stop) to dst replacing each
+ * secret that STARTS before `stop` (it may end after it). *used_in = raw bytes
+ * consumed. Returns the bytes written; dst is NUL-terminated. */
+static size_t scrub_locked(char *dst, size_t dst_cap, const char *src, size_t n, size_t stop, size_t *used_in)
 {
-    if (!dst || dst_cap == 0) return 0;
     size_t o = 0;
-    sec_lock();
-    for (size_t i = 0; i < n; ) {
+    size_t i = 0;
+    while (i < stop) {
         int hit = 0;
         for (int s = 0; s < DLOG_SECRETS_MAX; s++) {
             size_t sl = g_secret_len[s];
@@ -755,8 +829,41 @@ size_t dlog_scrub_copy(char *dst, size_t dst_cap, const char *src, size_t n)
         if (o + 1 >= dst_cap) break;
         dst[o++] = src[i++];
     }
-    sec_unlock();
     dst[o] = '\0';
+    if (used_in) *used_in = i;
+    return o;
+}
+
+size_t dlog_scrub_copy(char *dst, size_t dst_cap, const char *src, size_t n)
+{
+    if (!dst || dst_cap == 0) return 0;
+    sec_lock();
+    size_t o = scrub_locked(dst, dst_cap, src, n, n, NULL);
+    sec_unlock();
+    return o;
+}
+
+size_t dlog_scrub_stream(char *dst, size_t dst_cap, const char *src, size_t n, int final, size_t *consumed)
+{
+    if (consumed) *consumed = 0;
+    if (!dst || dst_cap == 0) return 0;
+    sec_lock();
+    size_t stop = n;
+    if (!final) {                      /* hold back a tail that could be the start of a secret */
+        size_t hold = 0;
+        for (int s = 0; s < DLOG_SECRETS_MAX; s++) {
+            size_t sl = g_secret_len[s];
+            if (sl < 2) continue;
+            size_t m = (sl - 1 < n) ? sl - 1 : n;
+            for (; m > hold; m--)
+                if (memcmp(src + n - m, g_secrets[s], m) == 0) { hold = m; break; }
+        }
+        stop = n - hold;
+    }
+    size_t used_in = 0;
+    size_t o = scrub_locked(dst, dst_cap, src, n, stop, &used_in);
+    sec_unlock();
+    if (consumed) *consumed = used_in;
     return o;
 }
 
@@ -814,8 +921,14 @@ size_t dlog_escape_bytes(DlogEscState *st, const void *in, size_t n, char *out, 
     const unsigned char *u = (const unsigned char *)in;
     EscOut e = { out, cap, 0 };
     size_t i = 0;
+    size_t used = n;                          /* input bytes whose output was kept */
+    int full = 0;
     while (i < n) {
-        if (e.o + 48 >= cap) break;           /* room for the longest token */
+        if (!full && e.o + 48 >= cap) {       /* no room for the longest token: stop writing, keep tracking */
+            full = 1;
+            used = i;
+            e.cap = e.o;                      /* every later esc_put is refused */
+        }
         unsigned char c = u[i];
         size_t adv = 1;
         switch (st->state) {
@@ -856,6 +969,6 @@ size_t dlog_escape_bytes(DlogEscState *st, const void *in, size_t n, char *out, 
         }
     }
     out[e.o] = '\0';
-    if (consumed) *consumed = i;
+    if (consumed) *consumed = used;
     return e.o;
 }

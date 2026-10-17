@@ -140,13 +140,14 @@ static unsigned p_mono(void) { return g_fk.mono; }
 static void p_sleep(unsigned ms)
 {
     g_fk.sleeps++;
-    if (g_fk.advance_on_sleep) fk_advance(ms);
+    if (g_fk.advance_on_sleep) fk_advance(g_fk.sleep_quantum ? g_fk.sleep_quantum : ms);
     if (g_fk.drain_on_sleep) (void)dlog_pump();
 }
 static void p_wake(void) { g_fk.wakes++; }
 
 static int p_mkdir_p(const char *dir)
 {
+    g_fk.mkdirs++;
     if (g_fk.deny_prefix[0] && under(dir, g_fk.deny_prefix)) return 5;
     if (!dir_known(dir) && g_fk.ndirs < FK_MAX_DIRS)
         (void)snprintf(g_fk.dirs[g_fk.ndirs++], DLOG_MAX_PATH, "%s", dir);
@@ -155,10 +156,11 @@ static int p_mkdir_p(const char *dir)
 
 static int p_file_open(const char *path, void **handle, unsigned long long *size)
 {
+    g_fk.opens++;
     if (g_fk.deny_prefix[0] && under(path, g_fk.deny_prefix)) return 5;
     FkFile *f = fk_create(path);
     if (!f) return 4;
-    f->open = 1;
+    f->open++;
     *handle = f;
     *size = f->len;
     return 0;
@@ -172,10 +174,15 @@ static int p_file_write(void *h, const void *buf, size_t len)
     return 0;
 }
 
-static void p_file_close(void *h) { ((FkFile *)h)->open = 0; }
+static void p_file_close(void *h)
+{
+    FkFile *f = (FkFile *)h;
+    if (f->open > 0) f->open--;
+}
 
 static int p_write_all(const char *path, const void *buf, size_t len)
 {
+    g_fk.write_alls++;
     if (g_fk.deny_prefix[0] && under(path, g_fk.deny_prefix)) return 5;
     FkFile *f = fk_create(path);
     if (!f) return 4;
@@ -199,6 +206,7 @@ static long p_file_read(const char *path, unsigned long long off, void *buf, siz
 
 static int p_list_dir(const char *dir, DlogFileInfo *out, size_t cap)
 {
+    g_fk.list_calls++;
     int known = dir_known(dir);
     int n = 0;
     size_t dl = strlen(dir);
@@ -219,6 +227,7 @@ static int p_list_dir(const char *dir, DlogFileInfo *out, size_t cap)
 
 static int p_remove(const char *path)
 {
+    g_fk.remove_attempts++;
     for (int i = 0; i < g_fk.nfiles; i++) {
         if (strcmp(g_fk.files[i].path, path) != 0) continue;
         if (g_fk.files[i].undeletable || g_fk.files[i].open) return 32;
@@ -251,6 +260,29 @@ static const DlogPlatform k_fake = {
 };
 
 const DlogPlatform *fk_platform(void) { return &k_fake; }
+
+static int p_thread_start(void (*fn)(void *), void *arg)
+{
+    g_fk.thread_fn = fn;
+    g_fk.thread_arg = arg;
+    return 1;
+}
+
+static int p_thread_join(void)
+{
+    g_fk.joins++;
+    return g_fk.join_result;
+}
+
+static DlogPlatform k_fake_thread;
+
+const DlogPlatform *fk_platform_thread(void)
+{
+    k_fake_thread = k_fake;
+    k_fake_thread.thread_start = p_thread_start;
+    k_fake_thread.thread_join = p_thread_join;
+    return &k_fake_thread;
+}
 
 int fk_start(size_t queue_bytes, size_t recorder_bytes)
 {

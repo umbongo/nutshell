@@ -183,7 +183,7 @@ int test_dlog_sys_platform_files(void)
     TEST_END();
 }
 
-int test_dlog_sys_a_deleted_open_file_can_be_removed_by_the_logger(void)
+int test_dlog_sys_an_open_log_file_cannot_be_deleted_by_another_instance(void)
 {
     TEST_BEGIN();
 #ifdef _WIN32
@@ -196,9 +196,11 @@ int test_dlog_sys_a_deleted_open_file_can_be_removed_by_the_logger(void)
         unsigned long long size = 0;
         ASSERT_EQ(p->file_open("build\\dlogsys_td\\nutshell-20261017-120000-p1.log", &h, &size), 0);
         ASSERT_EQ(p->file_write(h, "x\n", 2), 0);
-        /* FILE_SHARE_DELETE: retention by another instance can remove a file we hold open */
-        ASSERT_EQ(p->remove_file("build\\dlogsys_td\\nutshell-20261017-120000-p1.log"), 0);
+        /* no FILE_SHARE_DELETE: another instance's retention cannot delete the file we hold open
+         * (ERROR_SHARING_VIOLATION); once we close it, it can */
+        ASSERT_EQ(p->remove_file("build\\dlogsys_td\\nutshell-20261017-120000-p1.log"), 32);
         p->file_close(h);
+        ASSERT_EQ(p->remove_file("build\\dlogsys_td\\nutshell-20261017-120000-p1.log"), 0);
     }
     rm_tree("build\\dlogsys_td");
 #else

@@ -6,8 +6,10 @@
  * argument list, field names included: password, passphrase, api_key, apikey,
  * privkey, secret, passwd, bearer, or a name that is `token`, ends `_token`,
  * or starts `token_` + not a counter. Terminal, chat and command text must go
- * through DLOG_CONTENT(), which is not scanned (it is gated at run time and
- * scrubbed of known secrets). This is an exact allow-list, not a ratchet: a
+ * through DLOG_CONTENT() / dlog_emit_content(), whose data pointer and length
+ * are not scanned (they are gated at run time and scrubbed of known secrets)
+ * but whose category, level, session, EVENT and KEY arguments are. This is an
+ * exact allow-list, not a ratchet: a
  * line that really must name one of these is added to k_allow with a reason,
  * and the test fails if an allow-list entry no longer matches anything.
  *
@@ -27,7 +29,10 @@ static const char *const k_allow[] = { NULL };
 
 /* ---- the scanner --------------------------------------------------------------- */
 
-static const char *const k_callers[] = { "DLOG_EV(", "DLOG(", "dlog_emit_fields(", "dlog_emit(" };
+static const char *const k_callers[] = { "DLOG_EV(", "DLOG(", "dlog_emit_fields(", "dlog_emit(",
+                                         "DLOG_CONTENT(", "dlog_emit_content(" };
+/* how many leading arguments are scanned; 0 = all (content calls: cat, lvl, sid, event, key) */
+static const int k_scan_args[] = { 0, 0, 0, 0, 5, 5 };
 
 static int ident_char(char c) { return isalnum((unsigned char)c) || c == '_'; }
 
@@ -121,6 +126,8 @@ static int gate_scan(const char *src, int *first_line, char *first_word, size_t 
             /* DLOG( must not be the prefix of DLOG_CONTENT( : the entry includes the paren */
             size_t j = i + cl;
             int depth = 1;
+            int argi = 0;                                    /* index of the argument being read */
+            int limit = k_scan_args[c];
             int start_line = line;
             int cur_line = line;
             while (j < n && depth > 0) {
@@ -128,10 +135,12 @@ static int gate_scan(const char *src, int *first_line, char *first_word, size_t 
                 if (ch == '\n') { cur_line++; j++; continue; }
                 if (ch == '(') { depth++; j++; continue; }
                 if (ch == ')') { depth--; j++; continue; }
+                if (ch == ',' && depth == 1) { argi++; j++; continue; }
+                int skip_arg = (limit > 0 && argi >= limit);
                 if (ident_char(ch) && !isdigit((unsigned char)ch)) {
                     size_t k = j;
                     while (k < n && ident_char(t[k])) k++;
-                    if (word_is_secret(t + j, k - j)) {
+                    if (!skip_arg && word_is_secret(t + j, k - j)) {
                         violations++;
                         if (violations == 1) {
                             if (first_line) *first_line = cur_line;
@@ -153,7 +162,7 @@ static int gate_scan(const char *src, int *first_line, char *first_word, size_t 
                         if (ident_char(t[j]) && !isdigit((unsigned char)t[j])) {
                             size_t k = j;
                             while (k < n && ident_char(t[k])) k++;
-                            if (word_is_secret(t + j, k - j)) {
+                            if (!skip_arg && word_is_secret(t + j, k - j)) {
                                 violations++;
                                 if (violations == 1) {
                                     if (first_line) *first_line = cur_line;
@@ -251,6 +260,19 @@ int test_dlog_gate_ignores_the_content_macro_comments_and_other_code(void)
     ASSERT_EQ(SCAN("strcpy(profile->password, \"x\"); const char *s = \"DLOG( password )\";"), 0);
     ASSERT_EQ(SCAN("static void my_DLOG(int password) { }"), 0);     /* a longer identifier, not a call */
     ASSERT_EQ(SCAN("MYDLOG(DLOG_AI, 1, 0, \"e\", \"password=%s\", p);"), 0);
+    TEST_END();
+}
+
+int test_dlog_gate_scans_the_event_and_key_of_content_calls_but_not_their_data(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"term.rx\", \"password\", buf, n);"), 1);      /* the key */
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"secret.rx\", \"data\", buf, n);"), 1);       /* the event */
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_AI, DLOG_TRACE, password_sid, \"e\", \"data\", buf, n);"), 1);            /* the session expr */
+    ASSERT_EQ(SCAN("dlog_emit_content(DLOG_TERM, DLOG_TRACE, 0, \"e\", api_key, buf, n);"), 1);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, 0, \"term.rx\", \"data\", password_buffer, secret_len);"), 0);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, f(a, b), \"term.rx\", \"data\", get(token, 1), n);"), 0);
+    ASSERT_EQ(SCAN("DLOG_CONTENT(DLOG_TERM,\n DLOG_TRACE, 0, \"e\",\n \"text\",\n buf, n);"), 0);
     TEST_END();
 }
 

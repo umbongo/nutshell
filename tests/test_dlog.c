@@ -891,7 +891,9 @@ int test_dlog_secret_table_limits(void)
         ASSERT_TRUE(dlog_secret_add(s));
     }
     ASSERT_FALSE(dlog_secret_add("one-too-many"));
-    ASSERT_TRUE(dlog_secret_add("secret-3"));               /* a duplicate is fine */
+    ASSERT_TRUE(dlog_secret_add("secret-3"));               /* a duplicate is fine (counted, same slot) */
+    dlog_secret_remove("secret-3");
+    ASSERT_FALSE(dlog_secret_add("one-more-now"));          /* still held by the first add */
     dlog_secret_remove("secret-3");
     ASSERT_TRUE(dlog_secret_add("one-more-now"));           /* room again */
     dlog_secret_remove("not-there");                        /* harmless */
@@ -1705,7 +1707,9 @@ int test_dlog_issue_mark_with_nowhere_to_write_still_marks_the_recorder(void)
     size_t n = dlog_recorder_copy(rec, sizeof(rec) - 1);
     rec[n] = '\0';
     ASSERT_EQ(count_lines(rec, "issue.mark"), 1);
-    ASSERT_TRUE(strstr(rec, "recorder=none") != NULL);
+    /* the folder is only tried by the writer now, so the mark line names the file and the failed
+     * dump is reported by a line of its own */
+    ASSERT_EQ(count_lines(rec, "issue.dump_failed"), 1);
     end();
     TEST_END();
 }

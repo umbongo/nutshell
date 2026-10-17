@@ -13,7 +13,8 @@ typedef struct {
     char  *data;
     size_t len;
     long long mtime;
-    int    open;          /* a handle is currently open on it */
+    int    open;          /* handles currently open on it. The logger opens without FILE_SHARE_DELETE
+                           * (as on Windows), so remove_file refuses while this is non-zero. */
     int    undeletable;   /* remove_file refuses (another instance holds it) */
 } FkFile;
 
@@ -39,6 +40,18 @@ typedef struct {
     int       removed;
     int       clock_calls;        /* unix_ms() calls: a skipped line must make none */
     int       lock_count;         /* lock() calls */
+    int       mkdirs;             /* mkdir_p() calls (allocation-bearing: never in the crash path) */
+    int       list_calls;         /* list_dir() calls */
+    int       write_alls;         /* file_write_all() calls */
+    int       opens;              /* file_open() calls */
+    int       remove_attempts;    /* remove_file() calls */
+    /* the threaded platform (fk_platform_thread): thread_start only records the entry point */
+    void    (*thread_fn)(void *);
+    void     *thread_arg;
+    int       join_result;        /* what thread_join() answers: 1 = writer exited, 0 = timed out */
+    int       joins;
+    unsigned  sleep_quantum;      /* if non-zero, sleep_ms() advances the clocks by this many ms, whatever was asked
+                                   * (a real Sleep(1) takes ~15 ms) */
 } FakeDlog;
 
 extern FakeDlog g_fk;
@@ -47,6 +60,10 @@ extern FakeDlog g_fk;
  * a +01:00 offset, mono 1000, local_appdata "C:\Users\me\AppData\Local". */
 void fk_reset(void);
 const DlogPlatform *fk_platform(void);
+/* Same, but with a writer thread that never runs by itself: thread_start records g_fk.thread_fn
+ * and answers 1, thread_join answers g_fk.join_result. The test calls thread_fn to play the
+ * writer. */
+const DlogPlatform *fk_platform_thread(void);
 
 /* dlog_start_with(fk_platform(), ...) with the standard info (exe_dir
  * "C:\Tools\nutshell", pid 8124, version "1.2.36") and, if the sizes are

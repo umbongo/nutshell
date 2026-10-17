@@ -320,7 +320,7 @@ int test_dlog_read_log_not_started_is_harmless(void);
 /* test_dlog_sys.c */
 int test_dlog_sys_platform_clock_and_offset(void);
 int test_dlog_sys_platform_files(void);
-int test_dlog_sys_a_deleted_open_file_can_be_removed_by_the_logger(void);
+int test_dlog_sys_an_open_log_file_cannot_be_deleted_by_another_instance(void);
 int test_dlog_sys_logger_writes_a_real_file_on_its_writer_thread(void);
 int test_dlog_sys_errors_reach_the_disk_without_waiting_for_the_timer(void);
 int test_dlog_sys_many_producers_every_line_is_written_or_counted(void);
@@ -3536,7 +3536,7 @@ int main(void) {
 
     failed += test_dlog_sys_platform_clock_and_offset();
     failed += test_dlog_sys_platform_files();
-    failed += test_dlog_sys_a_deleted_open_file_can_be_removed_by_the_logger();
+    failed += test_dlog_sys_an_open_log_file_cannot_be_deleted_by_another_instance();
     failed += test_dlog_sys_logger_writes_a_real_file_on_its_writer_thread();
     failed += test_dlog_sys_errors_reach_the_disk_without_waiting_for_the_timer();
     failed += test_dlog_sys_many_producers_every_line_is_written_or_counted();
@@ -6455,6 +6455,76 @@ int main(void) {
         failed += test_key_name_names_the_special_keys();
         failed += test_key_name_never_names_a_character_and_is_never_null();
         failed += test_key_mods_name_spells_every_combination();
+    }
+
+    /* dlog core review fixes (tests/test_dlog_review.c, test_dlog_gate.c) */
+    {
+        int test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read(void);
+        int test_dlog_review_osc52_introducer_after_the_output_filled_up_withholds_the_next_read(void);
+        int test_dlog_review_escape_bytes_keeps_tracking_after_the_output_is_full(void);
+        int test_dlog_review_osc52_state_is_per_exact_session_not_sid_modulo_16(void);
+        int test_dlog_review_many_sessions_evict_old_stream_state_without_trouble(void);
+        int test_dlog_review_secret_split_across_two_reads_is_scrubbed(void);
+        int test_dlog_review_a_held_tail_that_is_not_a_secret_is_delivered_with_the_next_read(void);
+        int test_dlog_review_the_held_tail_belongs_to_one_session_and_one_call_kind(void);
+        int test_dlog_review_secret_straddling_the_internal_slice_boundary_is_scrubbed(void);
+        int test_dlog_review_secrets_are_reference_counted(void);
+        int test_dlog_review_environment_style_assignments_lose_their_value(void);
+        int test_dlog_review_paint_lines_differing_only_in_tick_collapse(void);
+        int test_dlog_review_us_ms_and_suffix_keys_are_volatile_other_keys_are_not(void);
+        int test_dlog_review_a_volatile_value_may_be_quoted_and_the_event_still_matters(void);
+        int test_dlog_review_crash_with_the_file_open_touches_no_folder_or_listing(void);
+        int test_dlog_review_crash_before_any_file_does_one_plain_open_and_nothing_else(void);
+        int test_dlog_review_crash_after_a_failed_write_reopens_the_current_name_only(void);
+        int test_dlog_review_shutdown_with_a_stuck_writer_leaks_instead_of_freeing(void);
+        int test_dlog_review_shutdown_with_a_joined_writer_frees_and_later_emits_are_ignored(void);
+        int test_dlog_review_a_failed_write_keeps_the_chunk_for_the_reopened_file(void);
+        int test_dlog_review_lines_given_up_for_a_missing_folder_are_counted(void);
+        int test_dlog_review_the_dropped_line_follows_the_older_chunk_lines(void);
+        int test_dlog_review_the_writer_sleeps_until_woken_when_debugging_is_off_and_idle(void);
+        int test_dlog_review_configure_and_the_loggers_own_lines_wake_the_writer(void);
+        int test_dlog_review_issue_mark_hands_the_dump_to_the_writer_and_waits_bounded_real_time(void);
+        int test_dlog_review_issue_marks_beyond_the_job_slots_fail_cleanly(void);
+        int test_dlog_review_retention_skips_a_file_a_second_instance_has_open(void);
+        int test_dlog_review_the_fake_refuses_to_delete_an_open_file_until_it_is_closed(void);
+        int test_dlog_review_format_txt_names_the_shell_thread_and_the_repeat_rule(void);
+        int test_dlog_review_known_safe_names_that_contain_key_are_not_redacted(void);
+        int test_dlog_review_key_scanner_finds_sensitive_and_safe_keys_in_planted_calls(void);
+        int test_dlog_review_no_real_call_site_key_is_redacted_by_name(void);
+        int test_dlog_gate_scans_the_event_and_key_of_content_calls_but_not_their_data(void);
+        failed += test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read();
+        failed += test_dlog_review_osc52_introducer_after_the_output_filled_up_withholds_the_next_read();
+        failed += test_dlog_review_escape_bytes_keeps_tracking_after_the_output_is_full();
+        failed += test_dlog_review_osc52_state_is_per_exact_session_not_sid_modulo_16();
+        failed += test_dlog_review_many_sessions_evict_old_stream_state_without_trouble();
+        failed += test_dlog_review_secret_split_across_two_reads_is_scrubbed();
+        failed += test_dlog_review_a_held_tail_that_is_not_a_secret_is_delivered_with_the_next_read();
+        failed += test_dlog_review_the_held_tail_belongs_to_one_session_and_one_call_kind();
+        failed += test_dlog_review_secret_straddling_the_internal_slice_boundary_is_scrubbed();
+        failed += test_dlog_review_secrets_are_reference_counted();
+        failed += test_dlog_review_environment_style_assignments_lose_their_value();
+        failed += test_dlog_review_paint_lines_differing_only_in_tick_collapse();
+        failed += test_dlog_review_us_ms_and_suffix_keys_are_volatile_other_keys_are_not();
+        failed += test_dlog_review_a_volatile_value_may_be_quoted_and_the_event_still_matters();
+        failed += test_dlog_review_crash_with_the_file_open_touches_no_folder_or_listing();
+        failed += test_dlog_review_crash_before_any_file_does_one_plain_open_and_nothing_else();
+        failed += test_dlog_review_crash_after_a_failed_write_reopens_the_current_name_only();
+        failed += test_dlog_review_shutdown_with_a_stuck_writer_leaks_instead_of_freeing();
+        failed += test_dlog_review_shutdown_with_a_joined_writer_frees_and_later_emits_are_ignored();
+        failed += test_dlog_review_a_failed_write_keeps_the_chunk_for_the_reopened_file();
+        failed += test_dlog_review_lines_given_up_for_a_missing_folder_are_counted();
+        failed += test_dlog_review_the_dropped_line_follows_the_older_chunk_lines();
+        failed += test_dlog_review_the_writer_sleeps_until_woken_when_debugging_is_off_and_idle();
+        failed += test_dlog_review_configure_and_the_loggers_own_lines_wake_the_writer();
+        failed += test_dlog_review_issue_mark_hands_the_dump_to_the_writer_and_waits_bounded_real_time();
+        failed += test_dlog_review_issue_marks_beyond_the_job_slots_fail_cleanly();
+        failed += test_dlog_review_retention_skips_a_file_a_second_instance_has_open();
+        failed += test_dlog_review_the_fake_refuses_to_delete_an_open_file_until_it_is_closed();
+        failed += test_dlog_review_format_txt_names_the_shell_thread_and_the_repeat_rule();
+        failed += test_dlog_review_known_safe_names_that_contain_key_are_not_redacted();
+        failed += test_dlog_review_key_scanner_finds_sensitive_and_safe_keys_in_planted_calls();
+        failed += test_dlog_review_no_real_call_site_key_is_redacted_by_name();
+        failed += test_dlog_gate_scans_the_event_and_key_of_content_calls_but_not_their_data();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);

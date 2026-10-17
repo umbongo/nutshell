@@ -350,6 +350,7 @@ static void feed_cb(Run *r, const char *line, size_t stored, size_t true_len)
         if (!r->first_ts[0]) memcpy(r->first_ts, r->last_ts, 9);
         return;
     }
+    if (!r->slots) return;                     /* out of memory for the line ring: the lines are skipped */
     char *slot = r->slots + (size_t)((r->head + r->count) % r->max_lines) * SLOT_BYTES;
     if (r->count == r->max_lines) {            /* full: overwrite the oldest */
         slot = r->slots + (size_t)r->head * SLOT_BYTES;

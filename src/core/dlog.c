@@ -41,12 +41,23 @@ typedef struct {
     unsigned sid;
     int      lvl;
     size_t   body_len;
-    char     body[DLOG_LINE_MAX];
+    char     body[DLOG_LINE_MAX];       /* the repeat key (volatile values masked), not the line */
     unsigned since;          /* mono ms of the last line written for this run */
     long long last_ms;
     int      last_off;
     char     thread[8];
 } Rep;
+
+/* An issue mark's recorder dump, handed to the writer thread. The blob is the
+ * header plus a snapshot of the recorder; the writer owns it while state is 1. */
+#define JOB_SLOTS 2
+typedef struct {
+    int    state;            /* 0 free, 1 queued, 2 done ok, 3 done failed (guarded by the lock) */
+    char  *blob;
+    size_t len;
+    char   name[96];
+    char   dir[DLOG_MAX_PATH];      /* the folder the writer wrote it to */
+} DumpJob;
 
 static struct {
     const DlogPlatform *p;
@@ -73,6 +84,7 @@ static struct {
     unsigned long long dropped, dropped_total;
     unsigned long long q_in, q_out;
     char *chunk;
+    DumpJob jobs[JOB_SLOTS];
 
     Rep rep[REPEAT_SLOTS];
 
@@ -89,6 +101,8 @@ static struct {
     int   have_retry;
     int   format_written;
     int   file_open;         /* mirrors fh != NULL, atomic, for other threads */
+    size_t chunk_len, chunk_off;          /* a drained chunk not yet fully written */
+    unsigned long long pending_dropped;   /* a dlog.dropped line still to write */
 
     /* shared status, written under the lock */
     char path[DLOG_MAX_PATH];
@@ -99,9 +113,53 @@ static struct {
 } G;
 
 static _Thread_local char t_tag[8];
-static _Thread_local DlogEscState t_esc[16];
 
 static char g_api_key[256];
+
+/* A writer that did not stop within the join timeout still points into G, so G
+ * and the rings are left alone (leaked on purpose) and a new start is refused
+ * until that writer has really exited. */
+static int g_leaked;
+static int g_writer_exited;
+
+/* ---- per-stream content state ------------------------------------------------------------ */
+
+/* Terminal reads of one session arrive in arbitrary pieces. Per (session, stream)
+ * we keep the OSC 52 state and the tail of the previous read that could be the
+ * start of a known secret. Keyed by the exact session id, 16 entries per
+ * thread, least recently used evicted. */
+#define STREAM_SLOTS 16
+#define SECRET_TAIL  256
+typedef struct {
+    unsigned     sid;
+    int          stream;       /* 0 = free, 1 = term.rx, 2 = term.tx */
+    unsigned     stamp;
+    DlogEscState esc;
+    size_t       held_len;
+    char         held[SECRET_TAIL];
+} StreamState;
+static _Thread_local StreamState t_streams[STREAM_SLOTS];
+static _Thread_local unsigned t_stream_clock;
+
+static StreamState *stream_state(unsigned sid, int stream)
+{
+    for (int i = 0; i < STREAM_SLOTS; i++) {
+        StreamState *s = &t_streams[i];
+        if (s->stream == stream && s->sid == sid) { s->stamp = ++t_stream_clock; return s; }
+    }
+    StreamState *victim = &t_streams[0];
+    for (int i = 0; i < STREAM_SLOTS; i++) {
+        StreamState *s = &t_streams[i];
+        if (s->stream == 0) { victim = s; break; }
+        if ((int)(s->stamp - victim->stamp) < 0) victim = s;
+    }
+    memset(victim, 0, sizeof(*victim));
+    victim->sid = sid;
+    victim->stream = stream;
+    victim->stamp = ++t_stream_clock;
+    dlog_esc_init(&victim->esc);
+    return victim;
+}
 
 /* ---- lock helpers ----------------------------------------------------------------- */
 
@@ -116,7 +174,13 @@ static int lk(void)
 }
 static void ul(int held) { if (held) G.p->unlock(); }
 
-static void wake_writer(void) { if (G.p && G.p->wake) G.p->wake(); }
+static void teardown(void);
+
+static void wake_writer(void)
+{
+    const DlogPlatform *p = G.p;
+    if (p && p->wake) p->wake();
+}
 
 /* ---- rings -------------------------------------------------------------------------- */
 
@@ -271,6 +335,8 @@ static void emit_v(int cat, int lvl, unsigned sid, const char *event, const char
                    va_list ap, const char *raw, int force)
 {
     if (!__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return;
+    const DlogPlatform *pf = G.p;          /* read once: shutdown keeps it set, but never re-read it */
+    if (!pf) return;
     if (cat < 0 || cat >= (int)DLOG_CAT_COUNT) return;
     int fmax = (int)__atomic_load_n(&g_file_max[cat], __ATOMIC_RELAXED);
     int cmax = (int)__atomic_load_n(&g_dlog_capture[cat], __ATOMIC_RELAXED);
@@ -280,9 +346,9 @@ static void emit_v(int cat, int lvl, unsigned sid, const char *event, const char
     if (!to_file && !to_rec) return;
 
     char line[LINE_BUF];
-    long long ms = G.p->unix_ms();
-    int off = G.p->utc_offset_min();
-    unsigned mono = G.p->mono_ms();
+    long long ms = pf->unix_ms();
+    int off = pf->utc_offset_min();
+    unsigned mono = pf->mono_ms();
     const char *tag = thread_tag();
     size_t pl = dlog_make_prefix(line, sizeof(line), ms, off, lvl, cat, sid, tag);
     if (pl == 0) return;
@@ -297,13 +363,18 @@ static void emit_v(int cat, int lvl, unsigned sid, const char *event, const char
     len = pl + body;
     size_t body_len = body - 1;               /* without the LF */
 
-    int wake = 0;
+    /* what "identical to the previous line" means: the body with volatile values masked */
+    int collapsible = !force && lvl != (int)DLOG_ISSUE;
+    char rkey[DLOG_LINE_MAX];
+    size_t rkey_len = 0;
+    if (collapsible) rkey_len = dlog_repeat_key(rkey, sizeof(rkey), line + pl, body_len);
+
+    int wake = force ? 1 : 0;                 /* the logger's own lines must not wait for the next tick */
     int held = lk();
     if (G.started) {
         Rep *r = &G.rep[cat];
-        int collapsible = !force && lvl != (int)DLOG_ISSUE;
-        if (collapsible && r->valid && r->sid == sid && r->lvl == lvl && r->body_len == body_len &&
-            memcmp(r->body, line + pl, body_len) == 0) {
+        if (collapsible && r->valid && r->sid == sid && r->lvl == lvl && r->body_len == rkey_len &&
+            memcmp(r->body, rkey, rkey_len) == 0) {
             r->count++;
             r->last_ms = ms;
             r->last_off = off;
@@ -315,8 +386,8 @@ static void emit_v(int cat, int lvl, unsigned sid, const char *event, const char
                 r->count = 0;
                 r->sid = sid;
                 r->lvl = lvl;
-                r->body_len = body_len;
-                memcpy(r->body, line + pl, body_len);
+                r->body_len = rkey_len;
+                memcpy(r->body, rkey, rkey_len);
                 r->since = mono;
                 r->last_ms = ms;
                 r->last_off = off;
@@ -358,23 +429,66 @@ void dlog_emit_content(DlogCat cat, DlogEvLevel lvl, unsigned sid, const char *e
 {
     if (!dlog_content_enabled() || !data) return;
     if ((int)lvl > dlog_capture_level((int)cat)) return;
-    size_t take = len < 3900 ? len : 3900;
-    char scrubbed[3900 + 8 * 24];
-    size_t sl = dlog_scrub_copy(scrubbed, sizeof(scrubbed), (const char *)data, take);
+
+    /* A stream (terminal reads) keeps its OSC 52 state and the tail of a possible secret between
+     * calls, per exact session id; anything else is judged on its own. */
+    int stream = 0;
+    if (event && strcmp(event, "term.rx") == 0) stream = 1;
+    else if (event && strcmp(event, "term.tx") == 0) stream = 2;
+    StreamState fresh;
+    StreamState *ss = &fresh;
+    if (stream) {
+        ss = stream_state(sid, stream);
+    } else {
+        memset(&fresh, 0, sizeof(fresh));
+        dlog_esc_init(&fresh.esc);
+    }
+
+    /* Every byte goes through the secret scrub and the OSC 52 state machine; only what fits is
+     * written (about 4 KB of escaped text), the rest is counted in len= and marked truncated=1. */
+    enum { SLICE = 1024 };
+    const unsigned char *u = (const unsigned char *)data;
+    char in[SLICE + SECRET_TAIL];
+    char scrubbed[(SLICE + SECRET_TAIL) * 4 + 8];       /* a 3-byte secret becomes 10 bytes */
     char esc[4000];
     size_t used = 0;
-    DlogEscState fresh;
-    DlogEscState *st = &fresh;
-    dlog_esc_init(&fresh);
-    if (event && strcmp(event, "term.rx") == 0) st = &t_esc[sid % 16u];
-    (void)dlog_escape_bytes(st, scrubbed, sl, esc, sizeof(esc), &used);
+    int truncated = 0;
+    esc[0] = '\0';
+    size_t pos = 0;
+    while (pos < len) {
+        size_t take = len - pos;
+        if (take > SLICE) take = SLICE;
+        int last = (pos + take >= len);
+        if (!last) {            /* do not cut a UTF-8 sequence between slices */
+            size_t back = 0;
+            while (back < 3 && back < take && (u[pos + take - 1 - back] & 0xC0u) == 0x80u) back++;
+            if (back < take) {
+                unsigned char lead = u[pos + take - 1 - back];
+                size_t need = lead >= 0xF0u ? 4u : lead >= 0xE0u ? 3u : lead >= 0xC0u ? 2u : 0u;
+                if (need > back + 1) take -= back + 1;
+            }
+        }
+        size_t hl = ss->held_len;
+        memcpy(in, ss->held, hl);
+        memcpy(in + hl, u + pos, take);
+        size_t total = hl + take;
+        size_t consumed = 0;
+        size_t sl = dlog_scrub_stream(scrubbed, sizeof(scrubbed), in, total, (last && !stream) ? 1 : 0, &consumed);
+        size_t carry = total - consumed;
+        if (carry > SECRET_TAIL - 1) carry = SECRET_TAIL - 1;
+        memcpy(ss->held, in + consumed, carry);
+        ss->held_len = carry;
+        size_t got = 0;
+        used += dlog_escape_bytes(&ss->esc, scrubbed, sl, esc + used, sizeof(esc) - used, &got);
+        if (got < sl) truncated = 1;
+        pos += take;
+    }
     char k[48];
     set_str(k, sizeof(k), (key && key[0]) ? key : "data");
     for (char *c = k; *c; c++)
         if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '_')) *c = '_';
     char fields[4200];
-    (void)snprintf(fields, sizeof(fields), "%s=\"%s\" len=%zu%s", k, esc, len,
-                   (take < len || used < sl) ? " truncated=1" : "");
+    (void)snprintf(fields, sizeof(fields), "%s=\"%s\" len=%zu%s", k, esc, len, truncated ? " truncated=1" : "");
     va_list ap;
     memset(&ap, 0, sizeof(ap));
     emit_v((int)cat, (int)lvl, sid, event, NULL, ap, fields, 0);
@@ -382,14 +496,18 @@ void dlog_emit_content(DlogCat cat, DlogEvLevel lvl, unsigned sid, const char *e
 
 /* ---- the writer's side: files ------------------------------------------------------------------ */
 
+/* Take the pump, waiting at most timeout_ms of REAL time. The deadline is the platform's
+ * monotonic clock: counting Sleep(1) calls is not one (each can take ~15 ms). The spin
+ * count caps it too, so a platform whose clock stands still cannot hang the caller. */
 static int pump_acquire(unsigned timeout_ms)
 {
-    unsigned waited = 0;
+    unsigned start = G.p->mono_ms();
+    unsigned spins = 0;
     for (;;) {
         if (!__atomic_exchange_n(&G.pump_busy, 1, __ATOMIC_ACQUIRE)) return 1;
-        if (waited >= timeout_ms) return 0;
+        if ((unsigned)(G.p->mono_ms() - start) >= timeout_ms || spins >= timeout_ms) return 0;
         if (G.p->sleep_ms) G.p->sleep_ms(1);
-        waited++;
+        spins++;
     }
 }
 static void pump_release(void) { __atomic_store_n(&G.pump_busy, 0, __ATOMIC_RELEASE); }
@@ -405,6 +523,14 @@ static void set_path(const char *path)
 {
     int h = lk();
     set_str(G.path, sizeof(G.path), path);
+    ul(h);
+}
+
+/* dir_in_use is written only by the pump but read by other threads under the lock: write it there too. */
+static void set_dir_in_use(const char *dir)
+{
+    int h = lk();
+    set_str(G.dir_in_use, sizeof(G.dir_in_use), dir);
     ul(h);
 }
 
@@ -470,7 +596,9 @@ static void close_file(void)
 
 static void run_retention(void)
 {
+    if (G.crashing) return;                     /* allocates and lists: never inside the crash filter */
     if (!G.dir_in_use[0] || !G.p->list_dir || !G.p->remove_file) return;
+    unsigned long long total_cap = __atomic_load_n(&G.total_cap, __ATOMIC_RELAXED);
     enum { MAXF = 600 };
     DlogFileInfo *files = (DlogFileInfo *)malloc(sizeof(DlogFileInfo) * MAXF);
     unsigned char *state = (unsigned char *)calloc(MAXF, 1);
@@ -479,7 +607,7 @@ static void run_retention(void)
     if (n > 0) {
         int i;
         int guard = 0;
-        while ((i = dlog_retention_next(files, (size_t)n, G.cur_name, G.total_cap, state)) >= 0 && guard++ < MAXF) {
+        while ((i = dlog_retention_next(files, (size_t)n, G.cur_name, total_cap, state)) >= 0 && guard++ < MAXF) {
             char path[DLOG_MAX_PATH];
             if (dlog_join(path, sizeof(path), G.dir_in_use, files[i].name) && G.p->remove_file(path) == 0)
                 state[i] = 1;
@@ -509,12 +637,19 @@ static void join_or_empty(char *out, size_t cap, const char *dir, const char *na
 /* Open the next file of this run, falling back as the spec says. Pump-private. */
 static int open_next_file(void)
 {
+    if (G.crashing) return 0;                   /* never creates folders inside the crash filter */
     if (G.have_retry && (int)(G.p->mono_ms() - G.retry_at) < 0) return 0;
     G.have_retry = 0;
 
+    char resolved[DLOG_MAX_PATH];               /* written by dlog_apply under the lock: copy it there */
+    {
+        int h0 = lk();
+        set_str(resolved, sizeof(resolved), G.dir_resolved);
+        ul(h0);
+    }
     char cand[2][DLOG_MAX_PATH];
     int nc = 0;
-    if (!G.using_fallback && G.dir_resolved[0]) set_str(cand[nc++], DLOG_MAX_PATH, G.dir_resolved);
+    if (!G.using_fallback && resolved[0]) set_str(cand[nc++], DLOG_MAX_PATH, resolved);
     char fb[DLOG_MAX_PATH];
     if (G.p->local_appdata && dlog_fallback_dir(G.p->local_appdata(), fb, sizeof(fb))) {
         if (nc == 0 || strcmp(fb, cand[0]) != 0) set_str(cand[nc++], DLOG_MAX_PATH, fb);
@@ -546,8 +681,8 @@ static int open_next_file(void)
         G.cur_size = size;
         G.part = part;
         set_str(G.cur_name, sizeof(G.cur_name), name);
-        set_str(G.dir_in_use, sizeof(G.dir_in_use), cand[i]);
-        if (G.dir_resolved[0] && strcmp(cand[i], G.dir_resolved) != 0) G.using_fallback = 1;
+        set_dir_in_use(cand[i]);
+        if (resolved[0] && strcmp(cand[i], resolved) != 0) G.using_fallback = 1;
         set_path(path);
         __atomic_store_n(&G.file_open, 1, __ATOMIC_RELEASE);
 
@@ -574,7 +709,7 @@ static int open_next_file(void)
         run_retention();
         if (i > 0 && first_err[0]) {
             emit_forced((int)DLOG_GENERAL, (int)DLOG_WARN, 0, "log.fallback", "dir=%s reason=%s using=%s",
-                        G.dir_resolved, first_err, cand[i]);
+                        resolved, first_err, cand[i]);
         }
         return 1;
     }
@@ -591,10 +726,59 @@ static void rotate_file(void)
     close_file();
 }
 
-static void write_bytes(const char *buf, size_t n)
+/* Lines that must be given up (no folder is writable): counted, never silent. */
+static void count_lost(const char *buf, size_t n)
 {
-    if (__atomic_load_n(&G.mem_only, __ATOMIC_ACQUIRE)) return;
-    if (!G.fh && !open_next_file()) return;
+    unsigned long long lines = 0;
+    for (size_t i = 0; i < n; i++)
+        if (buf[i] == '\n') lines++;
+    if (!lines) return;
+    int h = lk();
+    G.dropped_total += lines;
+    ul(h);
+}
+
+/* Nothing more can be written now. Memory-only: the rest is lost for good (counted) and
+ * counts as consumed. Otherwise (a reopen is pending): not consumed, the caller keeps it. */
+static size_t give_up(const char *buf, size_t n, size_t off)
+{
+    if (__atomic_load_n(&G.mem_only, __ATOMIC_ACQUIRE)) {
+        count_lost(buf + off, n - off);
+        return n;
+    }
+    return off;
+}
+
+/* The crash path: one plain open of the file the run was writing, no folder creation, no
+ * retention, no listing, no allocation -- the filter may run while another thread holds the
+ * heap lock. Pump-private fields are read without the lock for the same reason. */
+static int crash_open(void)
+{
+    const char *dir = G.dir_in_use[0] ? G.dir_in_use : G.dir_resolved;
+    if (!dir[0]) return 0;
+    char name[96];
+    if (G.cur_name[0]) set_str(name, sizeof(name), G.cur_name);
+    else (void)dlog_file_name(name, sizeof(name), G.stem, G.part + 1);
+    char path[DLOG_MAX_PATH];
+    if (!dlog_join(path, sizeof(path), dir, name)) return 0;
+    void *h = NULL;
+    unsigned long long size = 0;
+    if (G.p->file_open(path, &h, &size) != 0) return 0;
+    G.fh = h;
+    G.cur_size = size;
+    return 1;
+}
+
+/* Writes whole lines of buf (n bytes). Returns the bytes consumed, always on a line boundary:
+ * less than n means the rest could not be written yet and must be offered again. */
+static size_t write_bytes(const char *buf, size_t n)
+{
+    if (__atomic_load_n(&G.mem_only, __ATOMIC_ACQUIRE)) { count_lost(buf, n); return n; }
+    if (G.crashing) {
+        if (!G.fh && !crash_open()) return 0;
+        return G.p->file_write(G.fh, buf, n) == 0 ? n : 0;
+    }
+    if (!G.fh && !open_next_file()) return give_up(buf, n, 0);
     size_t off = 0;
     int forced_one = 0;
     while (off < n) {
@@ -603,15 +787,15 @@ static void write_bytes(const char *buf, size_t n)
             const char *start = buf + off + batch;
             const char *nl = memchr(start, '\n', n - off - batch);
             size_t ll = nl ? (size_t)(nl - start) + 1u : n - off - batch;
-            int rot = (batch == 0) ? dlog_should_rotate(G.cur_size, ll, G.file_cap)
-                                   : (G.cur_size + batch + ll > G.file_cap);
+            int rot = (batch == 0) ? dlog_should_rotate(G.cur_size, ll, __atomic_load_n(&G.file_cap, __ATOMIC_RELAXED))
+                                   : (G.cur_size + batch + ll > __atomic_load_n(&G.file_cap, __ATOMIC_RELAXED));
             if (rot && !(batch == 0 && forced_one)) break;
             batch += ll;
             if (forced_one) break;           /* just the one line into a fresh file */
         }
         if (batch == 0) {
             rotate_file();
-            if (!open_next_file()) return;
+            if (!open_next_file()) return give_up(buf, n, off);
             forced_one = 1;
             continue;
         }
@@ -625,20 +809,24 @@ static void write_bytes(const char *buf, size_t n)
             close_file();
             G.retry_at = G.p->mono_ms() + 2000u;
             G.have_retry = 1;
-            return;
+            return off;                      /* the failed batch stays queued for the reopened file */
         }
         G.cur_size += batch;
         off += batch;
     }
+    return n;
 }
 
-static void write_dropped_line(unsigned long long n)
+/* 1 when the line is written (or pointless because nothing is written any more). */
+static int write_dropped_line(unsigned long long n)
 {
+    if (__atomic_load_n(&G.mem_only, __ATOMIC_ACQUIRE)) return 1;
     char line[LINE_BUF], f[48];
     (void)snprintf(f, sizeof(f), "n=%llu", n);
     size_t l = dlog_format_line(line, sizeof(line), G.p->unix_ms(), G.p->utc_offset_min(), (int)DLOG_WARN,
                                 (int)DLOG_GENERAL, 0, "log", "dlog.dropped", f);
-    if (l) write_bytes(line, l);
+    if (!l) return 1;
+    return write_bytes(line, l) == l;
 }
 
 static void handle_dir_change(void)
@@ -658,7 +846,7 @@ static void handle_dir_change(void)
         rotate_file();
     }
     G.using_fallback = 0;
-    G.dir_in_use[0] = '\0';
+    set_dir_in_use("");
     if (G.mem_only) {
         G.mem_only = 0;
         __atomic_store_n(&G.mem_only, 0, __ATOMIC_RELEASE);
@@ -666,21 +854,73 @@ static void handle_dir_change(void)
     set_note("");
 }
 
+/* Issue-mark dumps handed over by dlog_issue_mark(): open the folder if need be (retention and
+ * FORMAT.txt included), write <stem>.issue<n>.log, publish the result. Pump-private. */
+static void run_jobs(void)
+{
+    for (int i = 0; i < JOB_SLOTS; i++) {
+        int h = lk();
+        DumpJob *j = &G.jobs[i];
+        int queued = (j->state == 1);
+        char *blob = j->blob;
+        size_t len = j->len;
+        char name[96];
+        set_str(name, sizeof(name), j->name);
+        ul(h);
+        if (!queued) continue;
+        if (!G.fh && !__atomic_load_n(&G.mem_only, __ATOMIC_ACQUIRE)) (void)open_next_file();
+        int mem_only = __atomic_load_n(&G.mem_only, __ATOMIC_ACQUIRE);
+        if (!mem_only && !G.dir_in_use[0]) continue;       /* a reopen is pending: stay queued */
+        int ok = 0;
+        char dir[DLOG_MAX_PATH];
+        dir[0] = '\0';
+        if (!mem_only) {
+            char path[DLOG_MAX_PATH];
+            set_str(dir, sizeof(dir), G.dir_in_use);
+            join_or_empty(path, sizeof(path), dir, name);
+            if (path[0] && G.p->file_write_all(path, blob, len) == 0) ok = 1;
+        }
+        free(blob);
+        if (!ok)        /* the issue.mark line named the file before the writer knew it could not be made */
+            emit_forced((int)DLOG_GENERAL, (int)DLOG_WARN, 0, "issue.dump_failed", "name=%s reason=%s", name,
+                        mem_only ? "no writable log folder" : "write failed");
+        h = lk();
+        j->blob = NULL;
+        j->len = 0;
+        set_str(j->dir, sizeof(j->dir), dir);
+        j->state = ok ? 2 : 3;
+        ul(h);
+    }
+}
+
 static void do_pump(void)
 {
     dlog_tick();
-    handle_dir_change();
+    if (!G.crashing) handle_dir_change();
     for (;;) {
-        int h = lk();
-        size_t n = ring_take_lines(&G.q, G.chunk, CHUNK_BYTES);
-        unsigned long long dropped = G.dropped;
-        G.dropped = 0;
-        ul(h);
-        if (n == 0 && dropped == 0) break;
-        if (dropped) write_dropped_line(dropped);
-        if (n) write_bytes(G.chunk, n);
-        __atomic_add_fetch(&G.q_out, (unsigned long long)n, __ATOMIC_RELEASE);
+        if (G.chunk_off >= G.chunk_len) {
+            G.chunk_len = G.chunk_off = 0;
+            int h = lk();
+            size_t n = ring_take_lines(&G.q, G.chunk, CHUNK_BYTES);
+            G.pending_dropped += G.dropped;
+            G.dropped = 0;
+            ul(h);
+            G.chunk_len = n;
+            if (n == 0 && G.pending_dropped == 0) break;
+        }
+        if (G.chunk_off < G.chunk_len) {
+            size_t w = write_bytes(G.chunk + G.chunk_off, G.chunk_len - G.chunk_off);
+            G.chunk_off += w;
+            __atomic_add_fetch(&G.q_out, (unsigned long long)w, __ATOMIC_RELEASE);
+            if (G.chunk_off < G.chunk_len) break;           /* kept as is; offered again by the next pump */
+        }
+        /* the dropped notice goes out after the lines that were queued before it */
+        if (G.pending_dropped) {
+            if (!write_dropped_line(G.pending_dropped)) break;
+            G.pending_dropped = 0;
+        }
     }
+    if (!G.crashing) run_jobs();
 }
 
 int dlog_pump(void)
@@ -723,15 +963,35 @@ int dlog_flush_wait(unsigned ms)
     return 1;
 }
 
+/* True when the writer has nothing to do until somebody wakes it: debugging is off and nothing is
+ * queued, pending or waiting for a tick. Every path that creates work wakes the writer. */
+static int writer_idle(void)
+{
+    if (!__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return 0;
+    if (__atomic_load_n(&g_enabled, __ATOMIC_RELAXED)) return 0;
+    int h = lk();
+    int idle = G.q.used == 0 && G.chunk_off >= G.chunk_len && G.pending_dropped == 0 && !G.dir_changed;
+    for (int c = 0; idle && c < (int)DLOG_CAT_COUNT; c++)
+        if (G.rep[c].valid && G.rep[c].count) idle = 0;
+    for (int i = 0; idle && i < JOB_SLOTS; i++)
+        if (G.jobs[i].state == 1) idle = 0;
+    ul(h);
+    return idle;
+}
+
+unsigned dlog_writer_wait_ms(void) { return writer_idle() ? DLOG_WAIT_FOREVER : 250u; }
+
 static void writer_main(void *arg)
 {
     (void)arg;
     dlog_set_thread_tag("log");
     while (!__atomic_load_n(&G.stop, __ATOMIC_ACQUIRE)) {
-        if (G.p->wait) G.p->wait(250);
+        unsigned ms = dlog_writer_wait_ms();
+        if (G.p->wait) G.p->wait(ms);
         else if (G.p->sleep_ms) G.p->sleep_ms(250);
         (void)dlog_pump();
     }
+    __atomic_store_n(&g_writer_exited, 1, __ATOMIC_RELEASE);
 }
 
 void dlog_crash_note(unsigned long code, const void *addr)
@@ -817,8 +1077,8 @@ void dlog_apply(const DlogConfig *in)
     if (strcmp(resolved, G.dir_resolved) != 0) G.dir_changed = 1;
     set_str(G.dir_resolved, sizeof(G.dir_resolved), resolved);
     G.cfg = c;
-    G.file_cap = dlog_file_cap_bytes(c.enabled, c.max_file_mb);
-    G.total_cap = dlog_total_cap_bytes(c.max_total_mb);
+    __atomic_store_n(&G.file_cap, dlog_file_cap_bytes(c.enabled, c.max_file_mb), __ATOMIC_RELAXED);
+    __atomic_store_n(&G.total_cap, dlog_total_cap_bytes(c.max_total_mb), __ATOMIC_RELAXED);
     for (int i = 0; i < (int)DLOG_CAT_COUNT; i++) {
         __atomic_store_n(&g_file_max[i], fl[i], __ATOMIC_RELAXED);
         __atomic_store_n(&g_dlog_capture[i], cp[i], __ATOMIC_RELAXED);
@@ -835,6 +1095,7 @@ void dlog_apply(const DlogConfig *in)
                     c.enabled, levels, c.include_content ? 1 : 0, c.recorder ? 1 : 0,
                     dlog_level_name((int)c.recorder_level), resolved, c.max_file_mb, c.max_total_mb);
     }
+    wake_writer();          /* an idle writer must notice a changed folder or level */
 }
 
 void dlog_configure(const struct Settings *s)
@@ -849,7 +1110,7 @@ void dlog_configure(const struct Settings *s)
         dlog_secret_remove(g_api_key);
         secure_zero(g_api_key, sizeof(g_api_key));
     }
-    if (key[0] && dlog_secret_add(key)) set_str(g_api_key, sizeof(g_api_key), key);
+    if (key[0] && strcmp(g_api_key, key) != 0 && dlog_secret_add(key)) set_str(g_api_key, sizeof(g_api_key), key);
 }
 
 /* ---- lifecycle ------------------------------------------------------------------------------------ */
@@ -861,6 +1122,11 @@ int dlog_start_with(const DlogPlatform *p, const DlogStartInfo *info)
         !p->list_dir || !p->remove_file)
         return 0;
     if (__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return 0;
+    if (g_leaked) {                      /* a previous shutdown left its writer running */
+        if (!__atomic_load_n(&g_writer_exited, __ATOMIC_ACQUIRE)) return 0;
+        teardown();
+        g_leaked = 0;
+    }
 
     memset(&G, 0, sizeof(G));
     G.p = p;
@@ -906,18 +1172,48 @@ int dlog_start_with(const DlogPlatform *p, const DlogStartInfo *info)
     dlog_set_thread_tag("ui");
 
     __atomic_store_n(&G.started, 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_writer_exited, 0, __ATOMIC_RELEASE);
     if (p->thread_start && p->thread_start(writer_main, NULL)) G.threaded = 1;
     return 1;
+}
+
+/* Release everything the running logger owns. The platform pointer stays: late emitters read it. */
+static void teardown(void)
+{
+    const DlogPlatform *p = G.p;
+    close_file();
+    for (int i = 0; i < JOB_SLOTS; i++) free(G.jobs[i].blob);
+    ring_free(&G.q);
+    ring_free(&G.rec);
+    free(G.chunk);
+    memset(&G, 0, sizeof(G));
+    G.p = p;
 }
 
 void dlog_shutdown(void)
 {
     if (!__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return;
+    int joined = 1;
     if (G.threaded) {
         __atomic_store_n(&G.stop, 1, __ATOMIC_RELEASE);
         wake_writer();
-        if (G.p->thread_join) G.p->thread_join();
+        if (G.p->thread_join) joined = G.p->thread_join() ? 1 : 0;
         G.threaded = 0;
+    }
+    if (!joined) {
+        /* The writer is still running (stuck in an I/O call). It points into G and the rings, so
+         * they are leaked on purpose; the logger is marked stopped and a restart waits for the
+         * writer to exit. */
+        __atomic_store_n(&G.started, 0, __ATOMIC_RELEASE);
+        g_leaked = 1;
+        for (int i = 0; i < (int)DLOG_CAT_COUNT; i++) {
+            g_dlog_capture[i] = 0;
+            g_file_max[i] = 0;
+        }
+        g_content = g_screenshot = g_enabled = 0;
+        dlog_secret_clear();
+        secure_zero(g_api_key, sizeof(g_api_key));
+        return;
     }
     /* flush every pending repeat, then drain */
     {
@@ -943,10 +1239,7 @@ void dlog_shutdown(void)
     g_content = g_screenshot = g_enabled = 0;
     dlog_secret_clear();
     secure_zero(g_api_key, sizeof(g_api_key));
-    ring_free(&G.q);
-    ring_free(&G.rec);
-    free(G.chunk);
-    memset(&G, 0, sizeof(G));
+    teardown();
 }
 
 /* ---- status, recorder -------------------------------------------------------------------------------- */
@@ -959,7 +1252,7 @@ void dlog_status(DlogStatus *st)
     int h = lk();
     st->started = 1;
     st->enabled = G.cfg.enabled;
-    st->file_open = G.fh != NULL || __atomic_load_n(&G.file_open, __ATOMIC_RELAXED);
+    st->file_open = __atomic_load_n(&G.file_open, __ATOMIC_RELAXED);
     st->mem_only = G.mem_only;
     set_str(st->dir, sizeof(st->dir), G.dir_in_use[0] ? G.dir_in_use : G.dir_resolved);
     set_str(st->path, sizeof(st->path), st->file_open ? G.path : "");
@@ -1021,22 +1314,70 @@ size_t dlog_recorder_copy(char *buf, size_t cap)
 
 /* ---- issue marks ------------------------------------------------------------------------------------- */
 
+/* Snapshot header + recorder and hand them to the writer as a dump job. Returns the job slot, or
+ * -1 (no memory / both slots still busy). Cheap: one allocation and one copy, no I/O. */
+static int queue_dump(const char *logname)
+{
+    char header[1536];
+    int h = lk();
+    set_str(header, sizeof(header), G.header);
+    ul(h);
+    size_t hl = strlen(header);
+    size_t rs = dlog_recorder_size();
+    char *blob = (char *)malloc(hl + rs + 16);
+    if (!blob) return -1;
+    memcpy(blob, header, hl);
+    size_t got = dlog_recorder_copy(blob + hl, rs + 8);
+    int slot = -1;
+    h = lk();
+    for (int i = 0; i < JOB_SLOTS; i++) {
+        if (G.jobs[i].state == 1) continue;
+        DumpJob *j = &G.jobs[i];
+        j->blob = blob;
+        j->len = hl + got;
+        set_str(j->name, sizeof(j->name), logname);
+        j->dir[0] = '\0';
+        j->state = 1;
+        slot = i;
+        break;
+    }
+    ul(h);
+    if (slot < 0) free(blob);
+    return slot;
+}
+
+/* Wait until the writer has drained what was queued before `target` and finished the dump, at
+ * most `ms` of real time (a clock that stands still is capped by the spin count). */
+static void wait_issue(int slot, unsigned long long target, unsigned ms)
+{
+    if (!G.threaded) { (void)dlog_pump(); return; }
+    unsigned start = G.p->mono_ms();
+    unsigned spins = 0;
+    for (;;) {
+        int done = __atomic_load_n(&G.q_out, __ATOMIC_ACQUIRE) >= target;
+        if (done && slot >= 0) {
+            int h = lk();
+            done = G.jobs[slot].state != 1;
+            ul(h);
+        }
+        if (done) return;
+        if ((unsigned)(G.p->mono_ms() - start) >= ms || spins >= ms) return;
+        wake_writer();
+        if (G.p->sleep_ms) G.p->sleep_ms(1);
+        spins++;
+    }
+}
+
 int dlog_issue_mark(const DlogSnapshot *snap, int want_screenshot, DlogIssue *out)
 {
     if (out) memset(out, 0, sizeof(*out));
     if (!__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return 0;
 
-    /* make sure there is somewhere to write before the mark line names it */
-    if (pump_acquire(1000)) {
-        if (!G.fh && !G.mem_only) (void)open_next_file();
-        pump_release();
-    }
     int mem_only = __atomic_load_n(&G.mem_only, __ATOMIC_ACQUIRE);
-
     int h = lk();
     unsigned n = ++G.issues;
-    char dir[DLOG_MAX_PATH];
-    set_str(dir, sizeof(dir), G.dir_in_use);
+    char dir[DLOG_MAX_PATH];                    /* where the dump is expected; the writer has the last word */
+    set_str(dir, sizeof(dir), G.dir_in_use[0] ? G.dir_in_use : G.dir_resolved);
     ul(h);
     int have_dir = !mem_only && dir[0];
 
@@ -1056,31 +1397,25 @@ int dlog_issue_mark(const DlogSnapshot *snap, int want_screenshot, DlogIssue *ou
         }
     }
 
-    int ok = 0;
-    char recpath[DLOG_MAX_PATH];
-    recpath[0] = '\0';
-    if (have_dir) {
-        size_t rs = dlog_recorder_size();
-        char header[1536];
-        h = lk();
-        set_str(header, sizeof(header), G.header);
-        ul(h);
-        size_t hl = strlen(header);
-        char *blob = (char *)malloc(hl + rs + 16);
-        if (blob) {
-            memcpy(blob, header, hl);
-            size_t got = dlog_recorder_copy(blob + hl, rs + 8);
-            join_or_empty(recpath, sizeof(recpath), dir, logname);
-            if (recpath[0] && G.p->file_write_all(recpath, blob, hl + got) == 0) ok = 1;
-            free(blob);
-        }
-    }
-    (void)dlog_flush_wait(500);
+    /* the dump is taken now (it ends with the lines above) and written by the writer thread */
+    int slot = have_dir ? queue_dump(logname) : -1;
+    unsigned long long target = __atomic_load_n(&G.q_in, __ATOMIC_ACQUIRE);
+    wake_writer();
+    wait_issue(slot, target, 500);
 
+    int state = 0;
+    if (slot >= 0) {
+        h = lk();
+        state = G.jobs[slot].state;
+        if (state == 2) set_str(dir, sizeof(dir), G.jobs[slot].dir);
+        ul(h);
+    }
+    int ok = (slot >= 0 && state != 3);
     if (out) {
         out->n = n;
         out->ok = ok;
-        if (ok) set_str(out->recorder_path, sizeof(out->recorder_path), recpath);
+        out->pending = (ok && state == 1) ? 1 : 0;
+        if (ok) join_or_empty(out->recorder_path, sizeof(out->recorder_path), dir, logname);
         if (ok && want_screenshot) join_or_empty(out->screenshot_path, sizeof(out->screenshot_path), dir, pngname);
     }
     return 1;

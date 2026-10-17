@@ -36,6 +36,7 @@ struct Settings;
 #define DLOG_MAX_PATH       320
 #define DLOG_REPEAT_MS      5000u         /* a run of identical lines is flushed this often */
 #define DLOG_SECRETS_MAX    8
+#define DLOG_WAIT_FOREVER   0xFFFFFFFFu   /* DlogPlatform.wait(): until wake() */
 
 #if defined(__GNUC__)
 /* gnu_printf, not printf: on MinGW "printf" means the MSVCRT dialect, which rejects %zu and %lld. */
@@ -60,8 +61,8 @@ typedef struct DlogPlatform {
     /* The writer thread. thread_start NULL = synchronous mode: no thread, the
      * caller pumps (dlog_pump()), as the tests do. */
     int       (*thread_start)(void (*fn)(void *), void *arg);   /* (opt) 1 = started */
-    void      (*thread_join)(void);                              /* (opt) */
-    void      (*wait)(unsigned ms);                              /* (opt) writer sleeps until wake() or timeout */
+    int       (*thread_join)(void);                              /* (opt) 1 = the writer has exited, 0 = gave up waiting */
+    void      (*wait)(unsigned ms);                              /* (opt) writer sleeps until wake() or timeout; DLOG_WAIT_FOREVER = until wake() */
     void      (*wake)(void);                                     /* (opt) */
     /* Files. Errors are OS error codes (0 = success). */
     int       (*mkdir_p)(const char *dir);
@@ -143,7 +144,7 @@ static inline int dlog_capture_level(int cat)
     return (int)__atomic_load_n(&g_dlog_capture[cat], __ATOMIC_RELAXED);
 }
 
-/* Tag the calling thread for the file: "ui", "ssh", "ai", "pty", "set", "log"
+/* Tag the calling thread for the file: "ui", "ssh", "ai", "shell", "set", "log"
  * (up to 7 chars; anything else is cut). Untagged threads print "?". */
 void dlog_set_thread_tag(const char *tag);
 
@@ -223,22 +224,46 @@ size_t dlog_format_body(char *out, size_t cap, const char *event, const char *fm
  * returns the new length. Ported from the second implementation. */
 size_t dlog_redact_line(char *line, size_t len, size_t cap);
 
-/* Known secrets (up to DLOG_SECRETS_MAX, each at least 3 bytes) scrubbed from
- * content: the AI API key at config load, a profile password while its
- * connect runs. Copies are wiped with secure_zero() on removal and exit. */
+/* Known secrets, scrubbed from DLOG_CONTENT text (replaced by [REDACTED]).
+ *
+ *   dlog_secret_add(s)     register s: 3 to 255 bytes, at most DLOG_SECRETS_MAX at
+ *                          once; returns 1 if it is now registered (also when it
+ *                          already was: each add is counted), 0 if it is too short,
+ *                          too long, NULL or the table is full.
+ *   dlog_secret_remove(s)  undo ONE add of s (two connections with the same
+ *                          password share a slot and each remove releases one of
+ *                          them); the stored copy is wiped with secure_zero() when
+ *                          the last add is undone.
+ *   dlog_secret_clear()    forget everything (dlog_shutdown() calls it).
+ *
+ * The connect path registers a profile's password and key passphrase before it
+ * authenticates and removes them when the attempt ends (pair every add with a
+ * remove on every exit path); dlog_configure() registers the AI API key. Both
+ * calls are thread-safe and callable before dlog_start(). A secret split
+ * across two terminal reads of the same session is still caught: the scrub
+ * keeps the tail that could be the start of a secret and joins it to the next
+ * read. */
 int  dlog_secret_add(const char *secret);
 void dlog_secret_remove(const char *secret);
 void dlog_secret_clear(void);
 /* Copy src to dst replacing every known secret with [REDACTED]. Returns the
- * length written (NUL-terminated); stops when dst is full. */
+ * length written (NUL-terminated); stops when dst is full. Whole-buffer only:
+ * dlog_emit_content() uses the stream-aware scrub. */
 size_t dlog_scrub_copy(char *dst, size_t dst_cap, const char *src, size_t n);
 
 /* Escape raw terminal bytes for a log line (see dlog_emit_content). The state
  * persists per stream so an OSC 52 clipboard payload split across reads is
  * still withheld and replaced by "[osc52 bytes=N]". *consumed (optional) is how
- * many input bytes were used; fewer than n when `out` filled up. A partial
- * OSC introducer at the end of a chunk is held back for the next call.
- * Returns the output length (NUL-terminated if cap > 0). */
+ * many input bytes made it into `out`; fewer than n when `out` filled up. When
+ * it fills up the rest of the input is still run through the state machine
+ * (nothing more is written), so an OSC 52 introducer in the unwritten tail is
+ * seen and the next call withholds its payload. A partial OSC introducer at the
+ * end of a chunk is held back for the next call. Returns the output length
+ * (NUL-terminated if cap > 0).
+ *
+ * Limit: the state starts at "not inside a sequence", so turning "Include
+ * terminal content" on while a terminal is in the middle of an OSC 52 payload
+ * logs the rest of that one sequence (its introducer was never seen). */
 typedef struct {
     int    state;
     size_t osc_bytes;
@@ -294,14 +319,17 @@ size_t dlog_recorder_size(void);
 
 typedef struct {
     unsigned n;                           /* the issue number, 1, 2, ... per process */
-    int      ok;                          /* the recorder file was written */
+    int      ok;                          /* the recorder file was written, or is queued to be (pending) */
+    int      pending;                     /* ok, but the writer had not finished within the wait */
     char     recorder_path[DLOG_MAX_PATH];    /* full path of nutshell-...issue<n>.log, "" when !ok */
     char     screenshot_path[DLOG_MAX_PATH];  /* full path to save the PNG to, "" if not wanted/possible */
 } DlogIssue;
 
 /* Mark an issue: writes issue.mark (ISSUE level, always), the snapshot lines
- * (ISSUE), dumps the recorder to <stem>.issue<n>.log and waits for the writer
- * (up to 500 ms). Call it on the UI thread BEFORE anything is painted, with the
+ * (ISSUE), snapshots the recorder and hands the dump to <stem>.issue<n>.log to
+ * the writer thread (opening the folder, retention and the file write all
+ * happen there, never on the caller), then waits for the writer up to 500 real
+ * milliseconds. Call it on the UI thread BEFORE anything is painted, with the
  * snapshot filled in. want_screenshot = the "Save a screenshot" setting; the
  * caller saves the PNG to screenshot_path. snap may be NULL. Returns 1 if the
  * mark was recorded (ok reports the recorder file). */
