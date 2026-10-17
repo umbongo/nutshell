@@ -89,4 +89,14 @@ typedef enum {
 size_t key_encode(NsKey key, unsigned char ch, unsigned int mods,
                   unsigned int flags, char *out, size_t size);
 
+/* The key's name for the debug log ("Up", "PgUp", "F5", "Tab", "Backspace").
+ * NSK_CHAR, NSK_NONE and anything out of range give "-": a character is
+ * content and is never named. Static strings, never NULL. */
+const char *key_name(NsKey key);
+
+/* The modifiers as words for the debug log: "none", "shift", "alt",
+ * "shift+alt", "ctrl", "shift+ctrl", "alt+ctrl", "shift+alt+ctrl". Unknown
+ * bits are ignored. Static strings, never NULL. */
+const char *key_mods_name(unsigned int mods);
+
 #endif /* NUTSHELL_KEY_ENCODE_H */

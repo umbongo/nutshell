@@ -8,11 +8,12 @@
 /* ---------------------------------------------------------------------
  * State names, in the order ui_demo_states() reports them.  "all" is
  * always last and always means "union of the panel states" (not "local",
- * "thinking" or "cmddetail", which reuse or swap content).
+ * "thinking", "cmddetail" or "settings-debug", which reuse or swap content).
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
-    "nokey", "nosession", "batches", "local", "thinking", "cmddetail", "all"
+    "nokey", "nosession", "batches", "local", "thinking", "cmddetail",
+    "settings-debug", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
 
@@ -537,6 +538,11 @@ int ui_demo_build(const char *state, AiConversation *conv,
         build_error(conv);
     if (is_all || strcmp(state, "batches") == 0)
         build_batches(conv, approval, approval2);
+    /* "settings-debug" adds nothing either: the win32 side opens the Settings
+     * window on its Debugging page (debugging ticked in memory only, never
+     * saved) over the otherwise empty demo session. Not part of "all": the
+     * Settings window is modal and is not an AI panel state. */
+
     /* "empty", "nokey" and "nosession" add nothing beyond the system
      * message -- their distinct look comes entirely from the forced
      * AiPanelStateId the win32 side applies via ai_chat_force_state()

@@ -34,6 +34,11 @@ typedef struct LocalPty LocalPty;
 LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
                          char *err, size_t err_size);
 
+/* The same, with the session's debug-log id (the "s3" in a log line; 0 for
+ * none) so the shell.* events and the reader thread's lines carry it. */
+LocalPty *local_pty_open_ex(const LocalShellSpec *spec, int cols, int rows,
+                            unsigned log_id, char *err, size_t err_size);
+
 /* The vtable. kind is SESSION_LOCAL and ctx is the LocalPty; the SessionIo
  * is dead once close() has run, exactly as for session_io_ssh(). Returns a
  * zeroed SessionIo (ctx NULL) when pty is NULL. */
@@ -43,13 +48,17 @@ SessionIo session_io_local(LocalPty *pty);
  * (tests/test_local_pty.c) can drive them without a SessionIo.
  * poll() follows the ssh_io_poll contract: >0 read, 0 nothing, -1 error,
  * -2 EOF. */
-int  local_pty_poll(void *ctx, Terminal *term, FILE *log_file, FILE *debug_log);
+int  local_pty_poll(void *ctx, Terminal *term, FILE *log_file);
 int  local_pty_write(void *ctx, const char *data, size_t len);
 int  local_pty_resize(void *ctx, int cols, int rows);
 void local_pty_close(void *ctx);
 
 /* Non-zero once the child process has exited (the harness waits on this). */
 int local_pty_child_exited(const LocalPty *pty);
+
+/* The child's exit code once it has exited (-1 while it is still running or
+ * when it cannot be read). For the shell.exit log event. */
+long local_pty_exit_code(const LocalPty *pty);
 
 /* Copy out the first bytes ConPTY emitted on open (up to
  * LOCAL_PTY_FIRST_MAX, captured before anything was written to the shell).

@@ -120,6 +120,12 @@ typedef struct {
      * dispatcher) that need to detect terminal quiescence without diffing
      * screen content. */
     unsigned long write_seq;
+
+    /* The debug log's session id (the "s3" in a log line; 0 prints "-").
+     * Set by whoever owns the session (window.c) right after term_init();
+     * the buffer and parser events (term.resize, term.alt_screen.*,
+     * term.clear) carry it. */
+    unsigned log_id;
 } Terminal;
 
 Terminal *term_init(int rows, int cols, int max_scrollback);
@@ -144,6 +150,11 @@ void term_clear_dirty(Terminal *term);
 
 /* Return true if any visible row has its dirty flag set. */
 bool term_has_dirty_rows(Terminal *term);
+
+/* How many visible rows are dirty. When flags is non-NULL the first
+ * min(rows, max) entries are filled, 1 = dirty (the issue snapshot and the
+ * render log events use this). NULL term returns 0. */
+int term_dirty_row_flags(const Terminal *term, unsigned char *flags, int max);
 
 /* Mark every row dirty so the renderer repaints everything.
  * Call after font/zoom/resize changes that affect pixel layout. */

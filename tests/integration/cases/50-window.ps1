@@ -466,7 +466,7 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
             0 = @(2001, 0, 2002, 2003, 0, 2004, 2005, 0, 2007, 0, 2006)  # File
             1 = @(2010, 2011, 2012, -1, 0, 2013)                          # Edit
             2 = @(2020, 2022, 2021)                                       # View
-            3 = @(2029, 0, 2030)                                          # Help
+            3 = @(2029, 0, 2031, 2032, 0, 2030)                           # Help: guide, mark issue, log folder, about
         }
         $names = @("File", "Edit", "View", "Help")
         for ($i = 0; $i -lt $topCount; $i++) {

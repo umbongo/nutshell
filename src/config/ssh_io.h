@@ -6,10 +6,9 @@
 #include <stdio.h>
 /* Returns >0 if data read, 0 if nothing, -1 on error, -2 on EOF.
  * log_file may be NULL; if non-NULL, ANSI-stripped output is written there.
- * debug_log may be NULL; if non-NULL, raw bytes are written in readable form
- * (ESC shown as "ESC", printable ASCII as-is, others as \xHH). */
-int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file,
-                FILE *debug_log);
+ * The raw bytes also go to the debug log as the term.rx event (Trace, and
+ * only with "Include terminal content" on -- see DLOG_CONTENT in dlog.h). */
+int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file);
 
 /* Fill a SessionIo vtable for an open SSH channel (kind SESSION_SSH).
  * ssh must be the session the channel was opened on; channel may be NULL,

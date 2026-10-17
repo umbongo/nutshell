@@ -15,5 +15,10 @@
 void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
                         int initial_page);
 
+/* --ui-demo=settings-debug: Settings opened on the Debugging page with
+ * "Enable debugging" ticked in memory only. Save and Cancel both just close;
+ * nothing is written and cfg is not touched. */
+void settings_dlg_show_demo_debug(HWND parent, Config *cfg);
+
 #endif
 #endif

@@ -463,6 +463,19 @@ void settings_validate(Settings *s)
     if (s->paste_confirm != 0) s->paste_confirm = 1;
     if (s->open_session_manager_at_start != 0) s->open_session_manager_at_start = 1;
     cmd_policy_clamp(&s->ai_policy_default);
+    /* debug log */
+    s->debug_enabled = s->debug_enabled ? 1 : 0;
+    for (int i = 0; i < (int)DLOG_CAT_COUNT; i++)
+        if (s->debug_levels[i] >= (unsigned char)DLOG_LVL_COUNT) s->debug_levels[i] = (unsigned char)DLOG_DEFAULT_LEVEL;
+    if (s->debug_recorder_level >= (unsigned char)DLOG_LVL_COUNT) s->debug_recorder_level = (unsigned char)DLOG_LVL_TRACE;
+    s->debug_include_content = s->debug_include_content ? 1 : 0;
+    s->debug_screenshot = s->debug_screenshot ? 1 : 0;
+    s->debug_recorder = s->debug_recorder ? 1 : 0;
+    if (s->debug_log_dir[0] == '\0') (void)snprintf(s->debug_log_dir, sizeof(s->debug_log_dir), "logs");
+    if (s->debug_max_file_mb < 1)    s->debug_max_file_mb = 1;
+    if (s->debug_max_file_mb > 100)  s->debug_max_file_mb = 100;
+    if (s->debug_max_total_mb < 5)    s->debug_max_total_mb = 5;
+    if (s->debug_max_total_mb > 5000) s->debug_max_total_mb = 5000;
 }
 
 void config_default_settings(Settings *s)
@@ -475,6 +488,15 @@ void config_default_settings(Settings *s)
     s->paste_delay_ms   = 350;
     s->logging_enabled  = 0;
     s->debug_terminal   = 0;
+    s->debug_enabled    = 0;
+    for (int i = 0; i < (int)DLOG_CAT_COUNT; i++) s->debug_levels[i] = (unsigned char)DLOG_DEFAULT_LEVEL;
+    s->debug_include_content = 0;
+    s->debug_screenshot = 0;
+    s->debug_recorder   = 1;
+    s->debug_recorder_level = (unsigned char)DLOG_LVL_TRACE;
+    field_copy(s->debug_log_dir, sizeof(s->debug_log_dir), "logs");
+    s->debug_max_file_mb  = 10;
+    s->debug_max_total_mb = 50;
     field_copy(s->log_format,           sizeof(s->log_format),           "%Y-%m-%d_%H-%M-%S");
     field_copy(s->host_key_verification,sizeof(s->host_key_verification),"tofu");
     field_copy(s->foreground_colour,    sizeof(s->foreground_colour),    "#E0E0E0");
@@ -680,6 +702,50 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
         s->open_session_manager_at_start =
             json_obj_bool(jset, "open_session_manager_at_start",
                           s->open_session_manager_at_start);
+
+        /* Debug log. Old configs simply lack these keys and keep the defaults. */
+        const int has_debug_enabled = json_obj_get(jset, "debug_enabled") != NULL;
+        s->debug_enabled = json_obj_bool(jset, "debug_enabled", s->debug_enabled);
+        {
+            const JsonNode *jl = json_obj_get(jset, "debug_levels");
+            if (jl && jl->type == JSON_OBJECT) {
+                for (int i = 0; i < (int)DLOG_CAT_COUNT; i++) {
+                    const char *lv = json_obj_str(jl, dlog_cat_name(i));
+                    int parsed = dlog_level_from_name(lv);   /* unknown name: keep the default */
+                    if (parsed >= 0) s->debug_levels[i] = (unsigned char)parsed;
+                }
+            }
+        }
+        /* The flat spelling (debug_level_<category>, debug_issue_screenshot) is read too, so a
+         * hand-edited config works whichever the docs show; only the nested form is written. */
+        for (int i = 0; i < (int)DLOG_CAT_COUNT; i++) {
+            char dkey[48];
+            (void)snprintf(dkey, sizeof(dkey), "debug_level_%s", dlog_cat_name(i));
+            int parsed = dlog_level_from_name(json_obj_str(jset, dkey));
+            if (parsed >= 0) s->debug_levels[i] = (unsigned char)parsed;
+        }
+        s->debug_include_content = json_obj_bool(jset, "debug_include_content", s->debug_include_content);
+        s->debug_screenshot = json_obj_bool(jset, "debug_screenshot", s->debug_screenshot);
+        s->debug_screenshot = json_obj_bool(jset, "debug_issue_screenshot", s->debug_screenshot);
+        s->debug_recorder = json_obj_bool(jset, "debug_recorder", s->debug_recorder);
+        {
+            int parsed = dlog_level_from_name(json_obj_str(jset, "debug_recorder_level"));
+            if (parsed >= 0) s->debug_recorder_level = (unsigned char)parsed;
+        }
+        if ((sv = json_obj_str(jset, "debug_log_dir"))) {
+            field_copy(s->debug_log_dir, sizeof(s->debug_log_dir), sv);
+        }
+        s->debug_max_file_mb = (int)json_obj_num(jset, "debug_max_file_mb", (double)s->debug_max_file_mb);
+        s->debug_max_total_mb = (int)json_obj_num(jset, "debug_max_total_mb", (double)s->debug_max_total_mb);
+        /* Migration: the old raw-byte switch "debug_terminal": true becomes debugging on, the
+         * terminal category at Trace and content on (the user had already opted in to the
+         * bytes). Only when the new switch is absent, so it happens once: debug_terminal is
+         * never written back. */
+        if (s->debug_terminal && !has_debug_enabled) {
+            s->debug_enabled = 1;
+            s->debug_levels[DLOG_TERM] = (unsigned char)DLOG_LVL_TRACE;
+            s->debug_include_content = 1;
+        }
         /* The old "ai_auto_approve_all" boolean key is dropped and ignored
          * on read -- no migration, callers get the default. */
 
@@ -793,6 +859,7 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
      * lingering in the weaker MachineGuid-derived format. A failed save
      * here just means the migration is retried on the next load/save --
      * the config the caller gets back is correct either way. */
+    cfg->loaded_migrated = migrated;
     if (migrated) {
         (void)config_save(cfg, path);
     }
@@ -881,8 +948,25 @@ int config_save(const Config *cfg, const char *path)
     fprintf(f, "    \"paste_delay_ms\": %d,\n", s->paste_delay_ms);
     fprintf(f, "    \"logging_enabled\": %s,\n",
             s->logging_enabled ? "true" : "false");
-    fprintf(f, "    \"debug_terminal\": %s,\n",
-            s->debug_terminal ? "true" : "false");
+    fprintf(f, "    \"debug_enabled\": %s,\n", s->debug_enabled ? "true" : "false");
+    fputs("    \"debug_levels\": {", f);
+    for (int di = 0; di < (int)DLOG_CAT_COUNT; di++) {
+        const char *ln = dlog_level_name((int)s->debug_levels[di]);
+        fprintf(f, "%s\"%s\": \"%s\"", di ? ", " : "", dlog_cat_name(di), ln ? ln : "info");
+    }
+    fputs("},\n", f);
+    fprintf(f, "    \"debug_include_content\": %s,\n", s->debug_include_content ? "true" : "false");
+    fprintf(f, "    \"debug_screenshot\": %s,\n", s->debug_screenshot ? "true" : "false");
+    fprintf(f, "    \"debug_recorder\": %s,\n", s->debug_recorder ? "true" : "false");
+    {
+        const char *rl = dlog_level_name((int)s->debug_recorder_level);
+        fprintf(f, "    \"debug_recorder_level\": \"%s\",\n", rl ? rl : "trace");
+    }
+    fputs("    \"debug_log_dir\": ", f);
+    fprint_json_str(f, s->debug_log_dir);
+    fputs(",\n", f);
+    fprintf(f, "    \"debug_max_file_mb\": %d,\n", s->debug_max_file_mb);
+    fprintf(f, "    \"debug_max_total_mb\": %d,\n", s->debug_max_total_mb);
     fputs("    \"log_format\": ", f);
     fprint_json_str(f, s->log_format);
     fputs(",\n", f);

@@ -161,7 +161,7 @@ TEST_SRCS = $(APP_SRCS) $(TEST_IMPL_SRCS)
 TEST_TARGET = build/test_runner$(EXE)
 
 
-.PHONY: all clean test lint debug release redraw-debug wintest
+.PHONY: all clean test lint debug release wintest
 
 # ── Win32-only test harness: the icon renderer (GDI+) and the ConPTY
 # backend (real pseudo-consoles, real child processes).  Runs directly on a
@@ -179,6 +179,8 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/core/xmalloc.c \
                    src/term/buffer.c src/term/parser.c src/term/term.c \
                    src/core/term_extract.c \
+                   src/core/dlog.c src/core/dlog_format.c src/core/dlog_files.c \
+                   src/core/dlog_types.c src/core/dlog_snapshot.c src/core/dlog_sys.c \
                    tests/test_icons.c tests/test_local_pty.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
@@ -190,11 +192,6 @@ all: $(TARGET)
 
 release: $(TARGET)
 	upx --best --lzma $(TARGET)
-
-# Build with redraw diagnostic logging enabled (writes to OutputDebugString).
-# Use DebugView or a debugger to capture output.
-redraw-debug:
-	$(MAKE) CFLAGS="$(CFLAGS) -DREDRAW_DEBUG"
 
 $(TARGET): $(OBJS) $(DELAY_LIBS)
 	@mkdir -p $(dir $@)

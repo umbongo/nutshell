@@ -20,7 +20,8 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
     return n;
 }
 
-/* Thirteen since 2026-10-13 added "cmddetail" (the command details popup
+/* Fourteen since 2026-10-18 added "settings-debug" (Settings opened on the
+ * Debugging page), thirteen since 2026-10-13 added "cmddetail" (the command details popup
  * demo), twelve since 2026-09-24 added "thinking" (the 50-line scrollable
  * Thinking box demo). "all" stays last and still means the union of the
  * panel states, which neither "local" (v1.2.1, spec
@@ -33,11 +34,12 @@ int test_ui_demo_states_list_ends_in_all(void)
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 13);
+    ASSERT_EQ(count, 14);
     ASSERT_STR_EQ(states[count - 1], "all");
-    ASSERT_STR_EQ(states[count - 2], "cmddetail");
-    ASSERT_STR_EQ(states[count - 3], "thinking");
-    ASSERT_STR_EQ(states[count - 4], "local");
+    ASSERT_STR_EQ(states[count - 2], "settings-debug");
+    ASSERT_STR_EQ(states[count - 3], "cmddetail");
+    ASSERT_STR_EQ(states[count - 4], "thinking");
+    ASSERT_STR_EQ(states[count - 5], "local");
     TEST_END();
 }
 
@@ -449,5 +451,25 @@ int test_ui_demo_scrolls_to_top_false_for_other_states(void)
     }
     ASSERT_TRUE(!ui_demo_scrolls_to_top("bogus-state"));
     ASSERT_TRUE(!ui_demo_scrolls_to_top(NULL));
+    TEST_END();
+}
+
+/* "settings-debug" is a real state that builds an empty conversation (the
+ * Settings window is opened by the win32 side) and is not part of "all". */
+int test_ui_demo_settings_debug_is_an_empty_state(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    char term_buf[8192];
+    ASSERT_TRUE(ui_demo_state_valid("settings-debug"));
+    ASSERT_EQ(ui_demo_build("settings-debug", &conv, &approval, &approval2,
+                            term_buf, sizeof(term_buf)), 0);
+    ASSERT_EQ(conv.msg_count, 1);
+    ASSERT_EQ(approval.count, 0);
+    ASSERT_EQ(approval2.count, 0);
+    ASSERT_TRUE(!ui_demo_scrolls_to_top("settings-debug"));
+    ASSERT_TRUE(!ui_demo_state_valid("settings"));
+    ASSERT_TRUE(!ui_demo_state_valid("settings-debug "));
     TEST_END();
 }

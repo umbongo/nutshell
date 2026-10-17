@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.34 \
+**Version**: v1.2.36 \
 **Build Date**: 2026-09-10 \
 **Author**: Thomas Sulkiewicz
 
@@ -158,7 +158,7 @@ scrolls if you shrink it below the content.
 
 | Group | Pages |
 |-------|-------|
-| **General** | Appearance, Terminal, Logging |
+| **General** | Appearance, Terminal, Logging, Debugging |
 | **Connection** | SSH, Startup |
 | **AI Assistant** | Provider, Behaviour, Web Access |
 | | About |
@@ -181,7 +181,7 @@ scrolls if you shrink it below the content.
 #### General > Logging
 - **Log directory** — where log files are saved (default: same directory as the executable)
 - **Log name format** — strftime format string for log filenames (e.g. `%Y-%m-%d_%H-%M-%S`)
-- **Debug terminal log** — capture the raw terminal byte stream for escape-sequence debugging
+- **Debugging** — see [Analysing an issue with AI](#analysing-an-issue-with-ai): the runtime debug log, its per-category levels, the issue marker and the `read_debug_log` tool (replaces the old debug terminal log)
 
 Logging itself is started and stopped from **File > Start/Stop Logging**, not here.
 
@@ -319,6 +319,18 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 - Log files are named `<Log Name Format>_<name>.log` under the configured Log Directory — `<name>` is the session's profile name, falling back to its host. Log Name Format is a strftime format string (default: `%Y-%m-%d_%H-%M-%S`, e.g. `2026-09-07_14-30-00_myserver.log`). An empty or invalid format falls back to the default.
 - The **[L]** badge on a tab indicates active logging
 - Logging status is also shown in tab tooltips
+
+### Analysing an issue with AI
+
+Nutshell can keep a debug log that an AI can read, so you can ask what went wrong instead of reconstructing it.
+
+1. Turn on **Settings > Debugging > Enable debugging** and leave it on; the defaults cost almost nothing.
+2. When something looks wrong, press **Ctrl+Shift+M** (or **Help > Mark Issue**) *before* clicking or resizing. Nutshell silently records the state of every tab and the last few minutes of detail, and flashes a short confirmation in the window title.
+3. The logs are written to `logs\` beside `nutshell.exe` (or the folder set in Settings). `FORMAT.txt` in that folder describes the file format, levels and categories.
+4. Ask AI Assist "read the debug log around the last issue". It uses the `read_debug_log` tool, which works only while debugging is on, and the log text it reads is sent to your AI provider.
+5. Or give the folder to a Claude Code session: "Read `FORMAT.txt` and the newest `nutshell-*.issue*.log` in `C:\Tools\nutshell\logs` and tell me what happened."
+
+Passwords, passphrases and keys are never logged, and neither are keystrokes or pastes as such. Terminal text, commands, chat and host names appear only if you tick **Include terminal content** (off by default); the terminal text then includes the shell's echo of the commands you type, so keep secrets off the command line while it is on, and a screenshot is saved only if you tick **Save a screenshot with each issue mark** (also off). Check a log before you share it.
 
 ### Security
 
@@ -524,7 +536,6 @@ if you need to move between versions.
 │       ├── ns_font.c/.h              #   Font cache keyed on (role, dpi, face); replaces per-call CreateFont
 │       ├── ns_tokens.h               #   Read-only accessor for window.c's resolved ThemeTokens
 │       ├── ns_reduced_motion.h       #   SPI_GETCLIENTAREAANIMATION reduced-motion flag
-│       ├── redraw_log.h              #   Optional REDRAW_DEBUG file logging helper
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF

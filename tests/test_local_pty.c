@@ -31,6 +31,7 @@
 #include "local_shell.h"
 #include "term.h"
 #include "term_extract.h"
+#include "dlog.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -168,7 +169,7 @@ int test_local_pty_echo_through_cmd(void)
      * grandchild holding the pipe open is never cut off early). So this
      * drains for a bounded number of iterations rather than waiting on -2. */
     for (int i = 0; i < 40; i++) {
-        int rc = local_pty_poll(pty, term, NULL, NULL);
+        int rc = local_pty_poll(pty, term, NULL);
         ASSERT_TRUE(rc != -1);   /* no read error */
         Sleep(20);
     }
@@ -216,7 +217,7 @@ int test_local_pty_close_with_sleeping_grandchild(void)
 
     /* Let the tree get going, and drain whatever it says. */
     for (int i = 0; i < 50; i++) {
-        (void)local_pty_poll(pty, term, NULL, NULL);
+        (void)local_pty_poll(pty, term, NULL);
         Sleep(20);
     }
 
@@ -259,7 +260,7 @@ int test_local_pty_records_opening_bytes(void)
     ASSERT_NOT_NULL(term);
 
     for (int i = 0; i < 40; i++) {
-        (void)local_pty_poll(pty, term, NULL, NULL);
+        (void)local_pty_poll(pty, term, NULL);
         Sleep(25);
     }
 
@@ -316,10 +317,10 @@ static int file_exists(const char *path)
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-static void drain(LocalPty *pty, Terminal *term, FILE *dbg, int ms)
+static void drain(LocalPty *pty, Terminal *term, int ms)
 {
     for (int waited = 0; waited < ms; waited += 25) {
-        (void)local_pty_poll(pty, term, NULL, dbg);
+        (void)local_pty_poll(pty, term, NULL);
         Sleep(25);
     }
 }
@@ -329,7 +330,7 @@ static int wait_for_screen(LocalPty *pty, Terminal *term, const char *needle,
 {
     static char screen[16384];
     for (int waited = 0; waited < ms; waited += 50) {
-        (void)local_pty_poll(pty, term, NULL, NULL);
+        (void)local_pty_poll(pty, term, NULL);
         screen_text(term, screen, sizeof(screen));
         if (strstr(screen, needle)) return 1;
         Sleep(50);
@@ -438,9 +439,9 @@ int test_local_pty_records_key_mapping(void)
      * be told apart; the lone ESC gets 600 ms to show ConPTY's timeout. */
     for (size_t i = 0; i < KEY_INPUT_COUNT && ready; i++) {
         (void)local_pty_write(pty, ".", 1);
-        drain(pty, term, NULL, 150);
+        drain(pty, term, 150);
         (void)local_pty_write(pty, KEY_INPUTS[i].bytes, KEY_INPUTS[i].len);
-        drain(pty, term, NULL, (i + 1 == KEY_INPUT_COUNT) ? 600 : 250);
+        drain(pty, term, (i + 1 == KEY_INPUT_COUNT) ? 600 : 250);
     }
     (void)local_pty_write(pty, ".Q", 2);
     (void)wait_for_screen(pty, term, "KEYDUMP END", 3000);
@@ -497,30 +498,44 @@ static void record_fullscreen(const char *label, const char *command,
     Terminal *term = term_init(30, 100, 200);
     if (!term) { local_pty_close(pty); return; }
 
-    char dbg_path[MAX_PATH * 2], tmp_dir[MAX_PATH];
+    /* The raw byte stream comes from the debug log's recorder: the poll
+     * writes every chunk it feeds the emulator as a term.rx event (Trace,
+     * "Include terminal content" on), with ESC shown as \e. The files go to
+     * the temp folder. */
+    char tmp_dir[MAX_PATH];
     DWORD n = GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
     if (n == 0u || n >= sizeof(tmp_dir)) tmp_dir[0] = '\0';
-    (void)snprintf(dbg_path, sizeof(dbg_path), "%snutshell_wintest_fs.txt", tmp_dir);
-    FILE *dbg = fopen(dbg_path, "w");
+    {
+        DlogStartInfo si;
+        memset(&si, 0, sizeof(si));
+        si.exe_dir = tmp_dir;
+        si.exe_path = "test_runner.exe";
+        si.version = "wintest";
+        si.pid = (unsigned)GetCurrentProcessId();
+        (void)dlog_start(&si);
+        DlogConfig cfg;
+        dlog_config_defaults(&cfg);
+        cfg.enabled = 1;
+        cfg.levels[DLOG_TERM] = DLOG_LVL_TRACE;
+        cfg.include_content = 1;
+        cfg.recorder = 1;
+        cfg.recorder_level = DLOG_LVL_TRACE;
+        (void)snprintf(cfg.dir, sizeof(cfg.dir), "%.200snutshell_wintest_logs", tmp_dir);
+        dlog_apply(&cfg);
+    }
 
-    drain(pty, term, dbg, 2500);
+    drain(pty, term, 2500);
     bool alt_on = term->alt_screen_active;
     bool app_on = term->app_cursor_keys;
 
     (void)local_pty_write(pty, quit_bytes, quit_len);
-    drain(pty, term, dbg, 1000);
+    drain(pty, term, 1000);
     bool alt_after = term->alt_screen_active;
-    if (dbg) fclose(dbg);
 
-    static char raw[65536];
-    size_t got = 0;
-    FILE *f = fopen(dbg_path, "rb");
-    if (f) {
-        got = fread(raw, 1u, sizeof(raw) - 1u, f);
-        fclose(f);
-    }
+    static char raw[262144];
+    size_t got = dlog_recorder_copy(raw, sizeof(raw) - 1u);
     raw[got] = '\0';
-    DeleteFileA(dbg_path);
+    dlog_shutdown();
 
     RPT("  [%s] while running: alt_screen_active=%s app_cursor_keys=%s; "
         "after quit: alt_screen_active=%s\n", label,
@@ -528,14 +543,14 @@ static void record_fullscreen(const char *label, const char *command,
     RPT("  [%s] raw output (%u bytes) contains: ?1049h %s, ?1049l %s, ?1h %s, "
         "?1l %s, ?47h %s, ?1047h %s, ?9001h %s, ?1004h %s\n", label,
         (unsigned)got,
-        strstr(raw, "ESC[?1049h") ? "YES" : "no",
-        strstr(raw, "ESC[?1049l") ? "YES" : "no",
-        strstr(raw, "ESC[?1h")    ? "YES" : "no",
-        strstr(raw, "ESC[?1l")    ? "YES" : "no",
-        strstr(raw, "ESC[?47h")   ? "YES" : "no",
-        strstr(raw, "ESC[?1047h") ? "YES" : "no",
-        strstr(raw, "ESC[?9001h") ? "YES" : "no",
-        strstr(raw, "ESC[?1004h") ? "YES" : "no");
+        strstr(raw, "\\e[?1049h") ? "YES" : "no",
+        strstr(raw, "\\e[?1049l") ? "YES" : "no",
+        strstr(raw, "\\e[?1h")    ? "YES" : "no",
+        strstr(raw, "\\e[?1l")    ? "YES" : "no",
+        strstr(raw, "\\e[?47h")   ? "YES" : "no",
+        strstr(raw, "\\e[?1047h") ? "YES" : "no",
+        strstr(raw, "\\e[?9001h") ? "YES" : "no",
+        strstr(raw, "\\e[?1004h") ? "YES" : "no");
     /* The first few hundred bytes, for eyeballing the mode sets. */
     print_escaped(label, raw, got < 400u ? got : 400u);
 
@@ -604,7 +619,7 @@ int test_local_pty_powershell_settles_after_command_error(void)
     ULONGLONG last_change = GetTickCount64();
     ULONGLONG deadline = GetTickCount64() + 15000u;
     while (GetTickCount64() < deadline) {
-        (void)local_pty_poll(pty, term, NULL, NULL);
+        (void)local_pty_poll(pty, term, NULL);
         if (term->write_seq != last_seq) {
             last_seq = term->write_seq;
             last_change = GetTickCount64();
@@ -642,7 +657,7 @@ int test_local_pty_powershell_settles_after_command_error(void)
     int seq_changes = 0;
     deadline = GetTickCount64() + 10000u;
     while (GetTickCount64() < deadline) {
-        (void)local_pty_poll(pty, term, NULL, NULL);
+        (void)local_pty_poll(pty, term, NULL);
         if (term->write_seq != last_seq) {
             last_seq = term->write_seq;
             last_change = GetTickCount64();
@@ -676,7 +691,7 @@ int test_local_pty_powershell_settles_after_command_error(void)
         int idle_changes = 0;
         ULONGLONG idle_deadline = GetTickCount64() + 3000u;
         while (GetTickCount64() < idle_deadline) {
-            (void)local_pty_poll(pty, term, NULL, NULL);
+            (void)local_pty_poll(pty, term, NULL);
             if (term->write_seq != idle_seq) {
                 idle_seq = term->write_seq;
                 idle_changes++;
