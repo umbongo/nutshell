@@ -222,9 +222,13 @@ static int p_remove(const char *path)
     for (int i = 0; i < g_fk.nfiles; i++) {
         if (strcmp(g_fk.files[i].path, path) != 0) continue;
         if (g_fk.files[i].undeletable || g_fk.files[i].open) return 32;
+        /* Tombstone the slot, never compact the table: open handles are FkFile pointers into it.
+         * (Moving the last slot into the hole left the logger holding a stale pointer to the
+         * current file whose data buffer had been duplicated -- a use-after-free, 0xC0000374.) */
         free(g_fk.files[i].data);
-        g_fk.files[i] = g_fk.files[g_fk.nfiles - 1];
-        g_fk.nfiles--;
+        g_fk.files[i].data = NULL;
+        g_fk.files[i].len = 0;
+        g_fk.files[i].path[0] = '\0';
         g_fk.removed++;
         return 0;
     }

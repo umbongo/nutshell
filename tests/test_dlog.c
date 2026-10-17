@@ -1278,6 +1278,48 @@ int test_dlog_retention_skips_a_file_another_instance_holds_open(void)
     TEST_END();
 }
 
+/* Retention deletes old files while the current one is open: the fake file system must keep
+ * the open handle valid (it used to compact its table, leaving the logger's handle pointing
+ * at a moved slot: a use-after-free that corrupted the heap, 0xC0000374). */
+int test_dlog_retention_leaves_the_open_current_file_writable(void)
+{
+    TEST_BEGIN();
+    fk_reset();
+    char path[300];
+    for (int i = 0; i < 6; i++) {
+        (void)snprintf(path, sizeof(path), FK_LOG_DIR "\\nutshell-2026100%d-120000-p1.log", i + 1);
+        fk_put_file(path, "old\n", 1024ull * 1024ull, 1000 + i);
+    }
+    (void)snprintf(g_fk.dirs[g_fk.ndirs++], DLOG_MAX_PATH, "%s", FK_LOG_DIR);
+    ASSERT_TRUE(fk_start(0, 0));
+    DlogConfig c;
+    dlog_config_defaults(&c);
+    c.enabled = 1;
+    c.max_total_mb = 5;
+    dlog_apply(&c);
+    DLOG_EV(DLOG_GENERAL, DLOG_ERROR, 0, "before.retention");
+    (void)dlog_pump();                                  /* opens the file, then prunes the folder */
+    ASSERT_TRUE(g_fk.removed >= 2);
+    DLOG_EV(DLOG_GENERAL, DLOG_ERROR, 0, "after.retention");
+    DLOG_EV(DLOG_GENERAL, DLOG_ERROR, 0, "after.retention.two");
+    (void)dlog_pump();
+    const char *t = fk_text(FK_LOG_FILE);
+    ASSERT_NOT_NULL(t);
+    if (t) {
+        ASSERT_EQ(count_lines(t, "before.retention"), 1);
+        ASSERT_EQ(count_lines(t, "after.retention"), 2);   /* also matches the second name */
+    }
+    FkFile *f = fk_find(FK_LOG_FILE);
+    ASSERT_NOT_NULL(f);
+    if (f) ASSERT_TRUE(f->open);
+    dlog_shutdown();
+    f = fk_find(FK_LOG_FILE);
+    ASSERT_NOT_NULL(f);
+    if (f) ASSERT_FALSE(f->open);                       /* the close reached the real file */
+    fk_free();
+    TEST_END();
+}
+
 int test_dlog_unwritable_folder_falls_back_to_local_appdata_and_warns(void)
 {
     TEST_BEGIN();

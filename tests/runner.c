@@ -199,6 +199,7 @@ int test_dlog_rotation_continues_in_numbered_files_and_never_splits_a_line(void)
 int test_dlog_rotation_with_debugging_on_uses_the_configured_size(void);
 int test_dlog_retention_removes_oldest_files_at_creation(void);
 int test_dlog_retention_skips_a_file_another_instance_holds_open(void);
+int test_dlog_retention_leaves_the_open_current_file_writable(void);
 int test_dlog_unwritable_folder_falls_back_to_local_appdata_and_warns(void);
 int test_dlog_nothing_writable_keeps_events_in_memory_only(void);
 int test_dlog_write_failure_does_not_loop_or_lose_the_process(void);
@@ -3369,6 +3370,7 @@ int main(void) {
     failed += test_dlog_rotation_with_debugging_on_uses_the_configured_size();
     failed += test_dlog_retention_removes_oldest_files_at_creation();
     failed += test_dlog_retention_skips_a_file_another_instance_holds_open();
+    failed += test_dlog_retention_leaves_the_open_current_file_writable();
     failed += test_dlog_unwritable_folder_falls_back_to_local_appdata_and_warns();
     failed += test_dlog_nothing_writable_keeps_events_in_memory_only();
     failed += test_dlog_write_failure_does_not_loop_or_lose_the_process();
