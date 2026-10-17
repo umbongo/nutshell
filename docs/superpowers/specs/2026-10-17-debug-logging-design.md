@@ -408,27 +408,45 @@ folder closes the current file with `log.moved to=...` and continues in the new 
 
 ### 10. Config fields
 
-In `Settings` (`config.h:18-64`), defaults in `config_default_settings()` (`loader.c:468`),
-clamped in `settings_validate()` (`loader.c:442`). Config fields are flat, so each level is its
-own key rather than a nested object:
+In `Settings` (`config.h:18-64`), defaults in `config_default_settings()` (`loader.c:481`),
+clamped in `settings_validate()` (`loader.c:442`). The written form is one nested object for the
+six category levels, plus flat keys for everything else (`config_save()`, `loader.c:950-968`):
 
-| JSON key | Type | Default |
+```json
+"debug_enabled": false,
+"debug_levels": {"render":"info","term":"info","ai":"info","ssh":"info","shell":"info","general":"info"},
+"debug_include_content": false,
+"debug_screenshot": false,
+"debug_recorder": true,
+"debug_recorder_level": "trace",
+"debug_log_dir": "logs",
+"debug_max_file_mb": 10,
+"debug_max_total_mb": 50
+```
+
+| JSON key (as written) | Type | Default |
 |---|---|---|
 | `debug_enabled` | bool | 0 |
-| `debug_level_render`, `debug_level_term`, `debug_level_ai`, `debug_level_ssh`, `debug_level_shell`, `debug_level_general` | level name | `"info"` |
+| `debug_levels` | object: `render`, `term`, `ai`, `ssh`, `shell`, `general` each a level name | `"info"` each |
 | `debug_include_content` | bool | 0 |
+| `debug_screenshot` | bool | 0 |
 | `debug_recorder` | bool | 1 |
 | `debug_recorder_level` | level name | `"trace"` |
-| `debug_issue_screenshot` | bool | 0 |
 | `debug_log_dir` | string (`CFG_STR_MAX`) | `"logs"` |
 | `debug_max_file_mb` | number | 10 (1-100) |
 | `debug_max_total_mb` | number | 50 (5-5000) |
+
+The loader also accepts two alternative forms on read, but never writes them: the flat
+`debug_level_<category>` keys (`debug_level_render`, `debug_level_term`, ... `debug_level_general`),
+read after `debug_levels` so they win when both are present, and `debug_issue_screenshot`, read
+after `debug_screenshot` and winning likewise. A save writes only the nested and
+`debug_screenshot` forms.
 
 Levels are stored as names (`off`, `errors`, `info`, `debug`, `trace`) so a hand-edited config
 reads clearly; an unknown name keeps the default. `config.h` includes a tiny
 `src/core/dlog_types.h` for the enum, as it already includes `cmd_policy.h`. Backward
 compatibility: old configs simply lack the keys. A config with `"debug_terminal": true`
-migrates once to `debug_enabled=1`, `debug_level_term=trace` and `debug_include_content=1`
+migrates once to `debug_enabled=1`, `debug_levels.term=trace` and `debug_include_content=1`
 (the user had already opted in to raw bytes), and `debug_terminal` is no longer written. Older
 Nutshell versions ignore the new keys, as the loader only reads keys it knows.
 
@@ -595,4 +613,4 @@ The two drafts (`a5875bb`, `0660d44`) disagreed in places; this document reconci
 9. From the second draft: `render.stats` (Debug) and `render.stuck_dirty` (WARN) plus all `REDRAW_DEBUG` data; host and port in `connect.*` only with content on, profile name and session id always.
 10. Issue marker: silent status flash, Ctrl+Shift+M, Help > Mark Issue and Open Debug Log Folder, screenshot behind its own tickbox (off), GDI+ path, separate `.issue<n>.log`.
 11. `read_debug_log` as in the first draft (limits, six categories, 16 KB, 4 calls per message, only while debugging is on, provider note in Settings).
-12. Flat per-key config fields (`debug_level_<cat>` x6, `debug_recorder_level`, `debug_issue_screenshot`, ...); `debug_terminal: true` migrates to `debug_level_term=trace`, `debug_include_content=1` (and `debug_enabled=1` so it takes effect).
+12. Config keys: the file writes one nested `debug_levels` object (`render`, `term`, `ai`, `ssh`, `shell`, `general`) and the flat `debug_screenshot`, `debug_recorder`, `debug_recorder_level` and the rest of section 10; on read it also accepts the flat `debug_level_<cat>` keys and `debug_issue_screenshot`, the flat form winning when both are present. `debug_terminal: true` migrates to `debug_levels.term=trace`, `debug_include_content=1` (and `debug_enabled=1` so it takes effect).

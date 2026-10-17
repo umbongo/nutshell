@@ -320,6 +320,18 @@ When enabled in Settings, each connected session writes a log file with ANSI esc
 - The **[L]** badge on a tab indicates active logging
 - Logging status is also shown in tab tooltips
 
+### Analysing an issue with AI
+
+Nutshell can keep a debug log that an AI can read, so you can ask what went wrong instead of reconstructing it.
+
+1. Turn on **Settings > Debugging > Enable debugging** and leave it on; the defaults cost almost nothing.
+2. When something looks wrong, press **Ctrl+Shift+M** (or **Help > Mark Issue**) *before* clicking or resizing. Nutshell silently records the state of every tab and the last few minutes of detail, and flashes a short confirmation in the status line.
+3. The logs are written to `logs\` beside `nutshell.exe` (or the folder set in Settings). `FORMAT.txt` in that folder describes the file format, levels and categories.
+4. Ask AI Assist "read the debug log around the last issue". It uses the `read_debug_log` tool, which works only while debugging is on, and the log text it reads is sent to your AI provider.
+5. Or give the folder to a Claude Code session: "Read `FORMAT.txt` and the newest `nutshell-*.issue*.log` in `C:\Tools\nutshell\logs` and tell me what happened."
+
+Passwords and keys are never logged. Terminal text, commands, chat and host names appear only if you tick **Include terminal content** (off by default), and a screenshot is saved only if you tick **Save a screenshot with each issue mark** (also off). Check a log before you share it.
+
 ### Security
 
 - **Passwords and API keys** are encrypted at rest in `nutshell.config` with Windows DPAPI (`CryptProtectData`), tied to the current Windows user and machine — not a portable key. The rest of the config (settings, hostnames, etc.) still travels freely with the file; only the secret fields are locked down. A config moved to another PC or user account loses just its stored passwords/API key (you are prompted to re-enter them, as if none were saved) — the original encrypted value is kept untouched in the file in case it comes back to its original PC/user, and is only replaced once you enter a new one. Configs from before this change (AES-256-GCM with a PBKDF2-SHA256 derived key) are decrypted and migrated to DPAPI automatically the first time they load.
