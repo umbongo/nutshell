@@ -798,7 +798,12 @@ static int scan_keys(const char *src, int *checked, char *names, size_t names_ca
                 if (checked) (*checked)++;
                 if (dlog_key_is_sensitive(key)) {
                     bad++;
-                    if (names && strlen(names) + kl + 2 < names_cap) { strcat(names, key); strcat(names, " "); }
+                    size_t nl = names ? strlen(names) : 0;
+                    if (names && nl + kl + 2 < names_cap) {
+                        memcpy(names + nl, key, kl);
+                        names[nl + kl] = ' ';
+                        names[nl + kl + 1] = '\0';
+                    }
                 }
             }
             i = j - 1;
@@ -822,6 +827,26 @@ int test_dlog_review_key_scanner_finds_sensitive_and_safe_keys_in_planted_calls(
     ASSERT_EQ(checked, 5);
     ASSERT_EQ(bad, 2);
     ASSERT_TRUE(strstr(names, "api_key") != NULL && strstr(names, "hostkey") != NULL);
+    TEST_END();
+}
+
+int test_dlog_review_key_scanner_names_buffer_is_bounded_at_its_capacity(void)
+{
+    TEST_BEGIN();
+    const char *src =
+        "dlog_emit(DLOG_SSH, DLOG_INFO, 0, \"e\", \"api_key=%s hostkey=%s\", k, h);\n";
+    /* a canary after the names buffer must survive whatever the capacity */
+    for (size_t cap = 0; cap <= 20; cap++) {
+        struct { char names[20]; char canary[4]; } w;
+        memset(&w, 'Z', sizeof(w));
+        w.names[0] = '\0';
+        int checked = 0;
+        int bad = scan_keys(src, &checked, cap ? w.names : NULL, cap);
+        ASSERT_EQ(bad, 2);
+        ASSERT_EQ(checked, 2);
+        ASSERT_TRUE(memcmp(w.canary, "ZZZZ", 4) == 0);
+        if (cap) ASSERT_TRUE(strlen(w.names) < cap);
+    }
     TEST_END();
 }
 

@@ -26,6 +26,14 @@ static void addl(char *buf, size_t cap, int sec, int off_min, const char *lvl, c
     (void)snprintf(buf + n, cap - n, "%s %s %s %s ui %s\n", ts, lvl, cat, sid, rest);
 }
 
+/* Appends s to the NUL-terminated buf (capacity cap), cutting it if it does not fit. */
+static void fx_append(char *buf, size_t cap, const char *s)
+{
+    size_t n = strlen(buf);
+    if (n + 1 >= cap) return;
+    (void)snprintf(buf + n, cap - n, "%s", s);
+}
+
 static void fixture1(char *buf, size_t cap)
 {
     buf[0] = '\0';
@@ -381,7 +389,7 @@ int test_dlog_query_ignores_a_partial_last_line(void)
     TEST_BEGIN();
     char fx[4096], out[8192];
     fixture1(fx, sizeof(fx));
-    strcat(fx, "2026-10-17T14:01:10.000+01:00 INFO  general - ui being.writ");   /* no LF yet */
+    fx_append(fx, sizeof(fx), "2026-10-17T14:01:10.000+01:00 INFO  general - ui being.writ");   /* no LF yet */
     DlogQuery q = qdef();
     (void)dlog_query_text(&q, fx, strlen(fx), out, sizeof(out));
     ASSERT_TRUE(has(out, "7 matching lines"));
@@ -394,9 +402,9 @@ int test_dlog_query_skips_and_counts_malformed_lines(void)
     TEST_BEGIN();
     char fx[4096], out[8192];
     fixture1(fx, sizeof(fx));
-    strcat(fx, "this is not a log line\n");
-    strcat(fx, "\n");
-    strcat(fx, "2026-10-17T14:01:10.000+01:00 BOGUS render - ui x\n");
+    fx_append(fx, sizeof(fx), "this is not a log line\n");
+    fx_append(fx, sizeof(fx), "\n");
+    fx_append(fx, sizeof(fx), "2026-10-17T14:01:10.000+01:00 BOGUS render - ui x\n");
     DlogQuery q = qdef();
     (void)dlog_query_text(&q, fx, strlen(fx), out, sizeof(out));
     ASSERT_TRUE(has(out, "7 matching lines"));
@@ -644,7 +652,7 @@ int test_dlog_query_around_issue_reads_the_recorder_file_two_minutes_before(void
     addl(main_log, sizeof(main_log), 1, 60, "INFO ", "general", "-", "main.only");
     issue_fixture(i1, sizeof(i1));
     issue_fixture(i2, sizeof(i2));
-    strcat(i2, "2026-10-17T14:05:01.000+01:00 ISSUE general - ui issue.ai panel=1\n");
+    fx_append(i2, sizeof(i2), "2026-10-17T14:05:01.000+01:00 ISSUE general - ui issue.ai panel=1\n");
     FakeSrc f;
     memset(&f, 0, sizeof(f));
     f.n = 3;

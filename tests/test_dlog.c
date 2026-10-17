@@ -4,6 +4,7 @@
 #include "test_framework.h"
 #include "fake_dlog.h"
 #include "dlog.h"
+#include "dlog_internal.h"
 #include "config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -394,6 +395,38 @@ int test_dlog_thread_tag_is_printed_and_cut(void)
     ASSERT_TRUE(line_with(t, "from.none", l, sizeof(l)));
     ASSERT_TRUE(strstr(l, " general - ? from.none") != NULL);
     end();
+    TEST_END();
+}
+
+int test_dlog_thread_tag_boundary_at_seven_characters_reads_no_eighth(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(begin(0, 0));
+    /* exactly 7 characters, and no terminator: the byte after the array must never be read */
+    const char seven[7] = { 'a', 'b', 'c', 'd', 'e', 'f', 'g' };
+    dlog_set_thread_tag(seven);
+    DLOG_EV(DLOG_GENERAL, DLOG_ERROR, 0, "from.seven");
+    dlog_set_thread_tag("abcdefgh");
+    DLOG_EV(DLOG_GENERAL, DLOG_ERROR, 0, "from.eight");
+    dlog_set_thread_tag("ui");
+    const char *t = logtext();
+    char l[300];
+    ASSERT_TRUE(line_with(t, "from.seven", l, sizeof(l)));
+    ASSERT_TRUE(strstr(l, " general - abcdefg from.seven") != NULL);
+    ASSERT_TRUE(line_with(t, "from.eight", l, sizeof(l)));
+    ASSERT_TRUE(strstr(l, " general - abcdefg from.eight") != NULL);
+    end();
+
+    char buf[128];
+    size_t n = dlog_make_prefix(buf, sizeof(buf), 0, 0, DLOG_ERROR, DLOG_GENERAL, 0, seven);
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, " general - abcdefg ") != NULL);
+    n = dlog_make_prefix(buf, sizeof(buf), 0, 0, DLOG_ERROR, DLOG_GENERAL, 0, "abcdefgh");
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, " general - abcdefg ") != NULL);
+    n = dlog_make_prefix(buf, sizeof(buf), 0, 0, DLOG_ERROR, DLOG_GENERAL, 0, "");
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, " general - ? ") != NULL);
     TEST_END();
 }
 

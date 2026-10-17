@@ -459,7 +459,7 @@ size_t dlog_make_prefix(char *buf, size_t cap, long long unix_ms, int offset_min
     else (void)snprintf(sidbuf, sizeof(sidbuf), "s%u", sid);
     char th[8];
     size_t t = 0;
-    if (thread) for (; thread[t] && t < 7; t++) th[t] = thread[t];
+    if (thread) for (; t < 7 && thread[t]; t++) th[t] = thread[t];
     if (t == 0) th[t++] = '?';
     th[t] = '\0';
     int n = snprintf(buf, cap, "%s %s %s %s %s ", ts, lv ? lv : "?????", cn ? cn : "?", sidbuf, th);

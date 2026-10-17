@@ -157,6 +157,7 @@ int test_dlog_off_mode_recorder_holds_errors_only(void);
 int test_dlog_line_prefix_layout(void);
 int test_dlog_event_without_fields_has_no_trailing_space(void);
 int test_dlog_thread_tag_is_printed_and_cut(void);
+int test_dlog_thread_tag_boundary_at_seven_characters_reads_no_eighth(void);
 int test_dlog_offsets_negative_zero_and_half_hour(void);
 int test_dlog_format_plain_and_quoted_values(void);
 int test_dlog_format_control_bytes_and_invalid_utf8_are_hex_escaped(void);
@@ -3379,6 +3380,7 @@ int main(void) {
     failed += test_dlog_line_prefix_layout();
     failed += test_dlog_event_without_fields_has_no_trailing_space();
     failed += test_dlog_thread_tag_is_printed_and_cut();
+    failed += test_dlog_thread_tag_boundary_at_seven_characters_reads_no_eighth();
     failed += test_dlog_offsets_negative_zero_and_half_hour();
     failed += test_dlog_format_plain_and_quoted_values();
     failed += test_dlog_format_control_bytes_and_invalid_utf8_are_hex_escaped();
@@ -6500,6 +6502,7 @@ int main(void) {
         int test_dlog_review_format_txt_names_the_shell_thread_and_the_repeat_rule(void);
         int test_dlog_review_known_safe_names_that_contain_key_are_not_redacted(void);
         int test_dlog_review_key_scanner_finds_sensitive_and_safe_keys_in_planted_calls(void);
+        int test_dlog_review_key_scanner_names_buffer_is_bounded_at_its_capacity(void);
         int test_dlog_review_no_real_call_site_key_is_redacted_by_name(void);
         int test_dlog_gate_scans_the_event_key_and_data_of_content_calls_but_not_the_length(void);
         failed += test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read();
@@ -6537,6 +6540,7 @@ int main(void) {
         failed += test_dlog_review_format_txt_names_the_shell_thread_and_the_repeat_rule();
         failed += test_dlog_review_known_safe_names_that_contain_key_are_not_redacted();
         failed += test_dlog_review_key_scanner_finds_sensitive_and_safe_keys_in_planted_calls();
+        failed += test_dlog_review_key_scanner_names_buffer_is_bounded_at_its_capacity();
         failed += test_dlog_review_no_real_call_site_key_is_redacted_by_name();
         failed += test_dlog_gate_scans_the_event_key_and_data_of_content_calls_but_not_the_length();
     }

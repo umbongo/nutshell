@@ -286,7 +286,7 @@ static const char *thread_tag(void) { return t_tag[0] ? t_tag : "?"; }
 void dlog_set_thread_tag(const char *tag)
 {
     size_t i = 0;
-    if (tag) for (; tag[i] && i < 7; i++) t_tag[i] = tag[i];
+    if (tag) for (; i < 7 && tag[i]; i++) t_tag[i] = tag[i];
     t_tag[i] = '\0';
 }
 
