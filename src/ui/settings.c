@@ -13,12 +13,17 @@
 #include "ai_http.h"
 #include "cmd_policy.h"
 #include "json_parser.h"
+#include "dlog.h"
+#include "settings_debug.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
 #include <commctrl.h>
+#include <objbase.h>
+#include <shellapi.h>
+#include <shlobj.h>
 
 /* ---- Control IDs -------------------------------------------------------- */
 
@@ -130,10 +135,12 @@ typedef struct {
     HWND hLabel;    /* right-aligned label, or NULL (checkboxes / statics) */
     HWND hCtrl;     /* the control itself */
     HWND hExtra;    /* optional second control on the same row (refresh button), or NULL */
+    HWND hExtra2;   /* optional third control, right of hExtra (the Debugging folder row's Open), or NULL */
     int  page;      /* SETTINGS_PAGE_* */
     int  ctrl_w;    /* 96-dpi width hint; 0 = stretch to the content pane */
     int  extra_w;   /* 96-dpi width reserved on the right (hExtra, or a
                       * dedicated scrollbar with no companion control) */
+    int  extra2_w;  /* 96-dpi width of hExtra2, the rightmost control */
     int  rows;      /* minimum vertical row span (1 for a normal row) */
     int  stretch_v; /* 1 = absorb leftover vertical space on this page */
     int  visible;   /* conditional visibility (custom URL fields) */
@@ -141,7 +148,7 @@ typedef struct {
 } SettingsCtrl;
 
 /* Raise this when a page outgrows it; add_ctrl refuses to overflow. */
-#define MAX_SETTINGS_CTRLS 48
+#define MAX_SETTINGS_CTRLS 64
 
 /* ---- Dialog state ------------------------------------------------------- */
 
@@ -170,6 +177,10 @@ typedef struct {
     HWND     hSshHint;    /* dim wrapped SSH idle-timeout hint */
     HWND     hAboutBlurb; /* dim About tagline */
     HWND     hCtxHint;    /* dim wrapped AI max-context-lines hint */
+    HWND     hDbgDim[6];  /* dim statics on the Debugging page */
+    int      n_dbg_dim;
+    SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
+    int      demo;        /* --ui-demo=settings-debug: debugging ticked in memory, Save never writes */
 
     SettingsCtrl *ctrl_ai_base_url;   /* toggled by provider combo */
     SettingsCtrl *ctrl_ai_search_url; /* toggled by search-provider combo */
@@ -236,6 +247,8 @@ static SettingsCtrl *add_ctrl(SettingsDlgData *d, HWND lbl, HWND ctrl, HWND extr
     c->hLabel    = lbl;
     c->hCtrl     = ctrl;
     c->hExtra    = extra;
+    c->hExtra2   = NULL;
+    c->extra2_w  = 0;
     c->page      = page;
     c->ctrl_w    = ctrl_w;
     c->extra_w   = extra_w;
@@ -276,6 +289,7 @@ typedef struct {
 static DWORD WINAPI fetch_models_thread(LPVOID param)
 {
     FetchModelsCtx *ctx = (FetchModelsCtx *)param;
+    dlog_set_thread_tag("set");
 
     /* Build NULL-terminated header pointer array */
     const char *hdrs[4] = {NULL, NULL, NULL, NULL};
@@ -284,6 +298,8 @@ static DWORD WINAPI fetch_models_thread(LPVOID param)
 
     AiHttpResponse resp;
     int rc = ai_http_get(ctx->url, hdrs[0] ? hdrs : NULL, &resp);
+    DLOG(DLOG_GENERAL, DLOG_INFO, 0u, "settings.models", "rc=%d status=%d", rc,
+         resp.status_code);
 
     if (rc != 0 || resp.status_code < 200 || resp.status_code >= 300) {
         char err[512];
@@ -397,9 +413,26 @@ static const TooltipEntry k_tooltips[] = {
       "%M  minute (00-59)\r\n"
       "%S  second (00-59)\r\n"
       "Example: session-%Y%m%d_%H%M%S" },
-    { IDC_DEBUG_TERMINAL,
-      "Write raw terminal byte stream to a debug log "
-      "(useful for debugging escape-sequence handling)." },
+    { IDC_DBG_ENABLE,
+      "Record what Nutshell does in a log folder an AI can read. Errors and "
+      "warnings are written even when this is off." },
+    { IDC_DBG_RECORDER,
+      "Keep the last few minutes of detail in memory (4 MB) so Mark Issue "
+      "can write them out even when the log itself is set to a lower level." },
+    { IDC_DBG_SCREENSHOT,
+      "Save a PNG of the Nutshell window next to the log when you mark an "
+      "issue. It can show anything on screen." },
+    { IDC_DBG_CONTENT,
+      "Also log terminal text, AI commands, chat text and host names. "
+      "Passwords, keys and what you type are never logged." },
+    { IDC_DBG_FOLDER,
+      "Where the logs go. A relative folder is relative to nutshell.exe; "
+      "%NAME% environment variables are expanded." },
+    { IDC_DBG_MAX_FILE,
+      "A log file is closed and a new one started at this size (1 - 100 MB)." },
+    { IDC_DBG_MAX_TOTAL,
+      "The oldest log files are deleted to keep the folder under this size "
+      "(5 - 5000 MB)." },
     { IDC_AI_KEY_EDIT,
       "API key for the chosen AI provider. Stored encrypted in "
       "nutshell.config." },
@@ -597,6 +630,7 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
             if (c->hLabel) ShowWindow(c->hLabel, SW_HIDE);
             if (c->hCtrl)  ShowWindow(c->hCtrl, SW_HIDE);
             if (c->hExtra) ShowWindow(c->hExtra, SW_HIDE);
+            if (c->hExtra2) ShowWindow(c->hExtra2, SW_HIDE);
             continue;
         }
 
@@ -607,13 +641,26 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
         settings_row_rects(row, usable_w, ctrl_w_scaled, d->scroll, m, &lrc, &crc);
 
         if (c->full_w) {
+            /* No label column. An explicit ctrl_w still sizes the control
+             * (a tickbox with a combo beside it); 0 spans the pane. */
             crc.x = m->pad;
-            crc.w = usable_w - 2 * m->pad;
+            crc.w = ctrl_w_scaled > 0 ? ctrl_w_scaled : usable_w - 2 * m->pad;
             if (crc.w < 0) crc.w = 0;
         }
 
         if (eff_rows > 1)
             crc.h = eff_rows * m->row_h - (m->row_h - m->ctrl_h);
+
+        if (c->hExtra2) {
+            /* Rightmost control, carved off first; hExtra then sits left of it. */
+            int w2 = ns_scale(c->extra2_w, m->dpi);
+            int new_w = crc.w - w2 - m->gap;
+            if (new_w < 0) new_w = 0;
+            SetWindowPos(c->hExtra2, NULL, crc.x + new_w + m->gap, crc.y, w2, crc.h,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            ShowWindow(c->hExtra2, SW_SHOW);
+            crc.w = new_w;
+        }
 
         if (c->hExtra) {
             int extra_w_scaled = ns_scale(c->extra_w, m->dpi);
@@ -622,6 +669,8 @@ static void relayout_page(SettingsDlgData *d, const SettingsMetrics *m,
             SettingsRect erc = crc;
             erc.x = crc.x + new_w + m->gap;
             erc.w = extra_w_scaled;
+            if (is_combo_class(c->hExtra))
+                erc.h = m->ctrl_h + ns_scale(200, m->dpi);
             crc.w = new_w;
             SetWindowPos(c->hExtra, NULL, erc.x, erc.y, erc.w, erc.h,
                          SWP_NOZORDER | SWP_NOACTIVATE);
@@ -742,6 +791,8 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
             HWND hCtl = (HWND)lParam;
             int dim = (hCtl == d->hSshHint || hCtl == d->hAboutBlurb ||
                        hCtl == d->hCtxHint);
+            for (int di = 0; di < d->n_dbg_dim && !dim; di++)
+                dim = (hCtl == d->hDbgDim[di]);
             SetTextColor((HDC)wParam,
                          theme_cr(dim ? d->theme->text_dim : d->theme->text_main));
             SetBkColor((HDC)wParam, theme_cr(d->theme->bg_primary));
@@ -768,7 +819,9 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
     case WM_DRAWITEM:
         if (d && d->theme) {
             LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lParam;
-            if ((int)dis->CtlID == IDC_AI_REFRESH) {
+            if ((int)dis->CtlID == IDC_AI_REFRESH ||
+                (int)dis->CtlID == IDC_DBG_BROWSE ||
+                (int)dis->CtlID == IDC_DBG_OPEN) {
                 draw_themed_button(dis, d->theme, 0);
                 return TRUE;
             }
@@ -855,6 +908,253 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
     }
 
     return DefWindowProc(hwnd, umsg, wParam, lParam);
+}
+
+/* ---- Debugging page helpers -------------------------------------------------
+ * The row table is settings_debug_layout() (settings_layout.c) and the text
+ * and number rules are settings_debug.c; this is only the Win32 glue. */
+
+static SettingsCtrl *dbg_add(SettingsDlgData *d, int slot, HWND lbl, HWND ctrl,
+                             HWND extra, int ctrl_w, int extra_w, int full_w)
+{
+    SettingsCtrl *c = add_ctrl(d, lbl, ctrl, extra, SETTINGS_PAGE_DEBUG, ctrl_w,
+                               extra_w, settings_debug_slot_rows(slot), 0, 1, full_w);
+    if (slot >= 0 && slot < SDBG_COUNT) d->dbg[slot] = c;
+    return c;
+}
+
+/* A wrapped static in the dim text colour (WM_CTLCOLORSTATIC checks hDbgDim). */
+static HWND dbg_dim_static(SettingsDlgData *d, const char *text)
+{
+    HWND h = make_static2(d->hPage, text);
+    if (d->n_dbg_dim < (int)(sizeof(d->hDbgDim) / sizeof(d->hDbgDim[0])))
+        d->hDbgDim[d->n_dbg_dim++] = h;
+    return h;
+}
+
+static void dbg_fill_level_combo(HWND cmb, int level)
+{
+    for (int l = 0; l < DLOG_LVL_COUNT; l++)
+        SendMessage(cmb, CB_ADDSTRING, 0, (LPARAM)settings_debug_level_label(l));
+    if (level < 0 || level >= DLOG_LVL_COUNT) level = DLOG_DEFAULT_LEVEL;
+    SendMessage(cmb, CB_SETCURSEL, (WPARAM)level, 0);
+}
+
+/* Show the rows the tickbox calls for: unticked, the tickbox, its hint and the
+ * current file; ticked, everything else too. */
+static void debug_apply_visibility(SettingsDlgData *d)
+{
+    SettingsDebugPos pos[SDBG_COUNT];
+    int on = IsDlgButtonChecked(d->hPage, IDC_DBG_ENABLE) == BST_CHECKED;
+    (void)settings_debug_layout(on, pos);
+    for (int i = 0; i < SDBG_COUNT; i++)
+        if (d->dbg[i]) d->dbg[i]->visible = pos[i].visible;
+}
+
+/* The directory holding nutshell.exe ("" if it cannot be told). */
+static void settings_exe_dir(char *buf, size_t n)
+{
+    if (!buf || n == 0) return;
+    DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)n);
+    if (len == 0u || len >= (DWORD)n) { buf[0] = '\0'; return; }
+    char *last = strrchr(buf, '\\');
+    if (last) *last = '\0';
+    else buf[0] = '\0';
+}
+
+/* Browse...: pick a folder; one below the exe's folder is shown relative to it. */
+static void debug_browse_folder(HWND hwnd, SettingsDlgData *d)
+{
+    HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    char disp[MAX_PATH];
+    disp[0] = '\0';
+    BROWSEINFOA bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.hwndOwner      = hwnd;
+    bi.pszDisplayName = disp;
+    bi.lpszTitle      = "Choose the debug log folder";
+    bi.ulFlags        = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    LPITEMIDLIST pidl = SHBrowseForFolderA(&bi);
+    if (pidl) {
+        char path[MAX_PATH];
+        if (SHGetPathFromIDListA(pidl, path)) {
+            char exe_dir[MAX_PATH];
+            char rel[DLOG_MAX_PATH];
+            settings_exe_dir(exe_dir, sizeof(exe_dir));
+            if (dlog_relativize_dir(path, exe_dir, rel, sizeof(rel)))
+                SetDlgItemTextA(d->hPage, IDC_DBG_FOLDER, rel);
+        }
+        CoTaskMemFree(pidl);
+    }
+    if (SUCCEEDED(hr)) CoUninitialize();
+}
+
+/* Open: the folder as typed (resolved the way the logger resolves it), made if
+ * it does not exist yet so Explorer has something to show. */
+static void debug_open_folder(HWND hwnd, SettingsDlgData *d)
+{
+    char setting[CFG_STR_MAX];
+    char exe_dir[MAX_PATH];
+    char dir[DLOG_MAX_PATH];
+    GetDlgItemTextA(d->hPage, IDC_DBG_FOLDER, setting, (int)sizeof(setting));
+    settings_exe_dir(exe_dir, sizeof(exe_dir));
+    if (!dlog_resolve_dir(setting, exe_dir, dir, sizeof(dir))) {
+        MessageBoxA(hwnd, "That log folder path is not valid.", "Open Log Folder",
+                    MB_OK | MB_ICONWARNING);
+        return;
+    }
+    const DlogPlatform *pf = dlog_platform_system();
+    if (pf && pf->mkdir_p) (void)pf->mkdir_p(dir);
+    (void)ShellExecuteA(hwnd, "open", dir, NULL, NULL, SW_SHOWNORMAL);
+}
+
+/* The page's controls, in the order settings_debug_layout() packs them. */
+static void debug_build_page(SettingsDlgData *nd)
+{
+    const Settings *st = &nd->cfg->settings;
+    const int on = st->debug_enabled || nd->demo;
+    DlogStatus dst;
+    unsigned long long used_bytes = 0;
+    unsigned used_files = 0;
+    char line[2 * DLOG_MAX_PATH + 320];
+
+    dlog_status(&dst);
+    dlog_folder_usage(&used_bytes, &used_files);
+
+    {
+        HWND chk = make_check2(nd->hPage, "Enable debugging", (HMENU)IDC_DBG_ENABLE);
+        SendMessage(chk, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+        dbg_add(nd, SDBG_ENABLE, NULL, chk, NULL, 0, 0, 1);
+    }
+    dbg_add(nd, SDBG_HINT_ON, NULL,
+            dbg_dim_static(nd, "Records what Nutshell does so an AI can diagnose a "
+                               "problem you mark."), NULL, 0, 0, 1);
+    dbg_add(nd, SDBG_HINT_OFF, NULL,
+            dbg_dim_static(nd, "Errors are still written to the log folder."),
+            NULL, 0, 0, 1);
+
+    for (int cat = 0; cat < DLOG_CAT_COUNT; cat++) {
+        char lab[48];
+        (void)snprintf(lab, sizeof(lab), "%s:", settings_debug_cat_label(cat));
+        HWND lbl = make_label2(nd->hPage, lab);
+        HWND cmb = make_combo2(nd->hPage, (HMENU)(UINT_PTR)(IDC_DBG_LEVEL_BASE + cat),
+                               CBS_DROPDOWNLIST);
+        dbg_fill_level_combo(cmb, st->debug_levels[cat]);
+        dbg_add(nd, SDBG_LEVEL_RENDER + cat, lbl, cmb, NULL, 120, 0, 0);
+    }
+
+    {
+        /* A tickbox with its level combo beside it: ctrl_w covers both. */
+        HWND chk = make_check2(nd->hPage, "Keep recent detail for issue marks, at",
+                               (HMENU)IDC_DBG_RECORDER);
+        SendMessage(chk, BM_SETCHECK, st->debug_recorder ? BST_CHECKED : BST_UNCHECKED, 0);
+        HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_DBG_RECORDER_LEVEL, CBS_DROPDOWNLIST);
+        dbg_fill_level_combo(cmb, st->debug_recorder_level);
+        EnableWindow(cmb, st->debug_recorder ? TRUE : FALSE);
+        dbg_add(nd, SDBG_RECORDER, NULL, chk, cmb, 250 + 10 + 90, 90, 1);
+    }
+    {
+        HWND chk = make_check2(nd->hPage, "Save a screenshot with each issue mark",
+                               (HMENU)IDC_DBG_SCREENSHOT);
+        SendMessage(chk, BM_SETCHECK, st->debug_screenshot ? BST_CHECKED : BST_UNCHECKED, 0);
+        dbg_add(nd, SDBG_SCREENSHOT, NULL, chk, NULL, 0, 0, 1);
+    }
+    {
+        HWND chk = make_check2(nd->hPage, "Include terminal content", (HMENU)IDC_DBG_CONTENT);
+        SendMessage(chk, BM_SETCHECK, st->debug_include_content ? BST_CHECKED : BST_UNCHECKED, 0);
+        dbg_add(nd, SDBG_CONTENT, NULL, chk, NULL, 0, 0, 1);
+    }
+    dbg_add(nd, SDBG_CONTENT_WARN, NULL,
+            dbg_dim_static(nd, "Adds terminal text, AI commands, chat text and host "
+                               "names. Passwords and keys are never logged."),
+            NULL, 0, 0, 1);
+
+    {
+        HWND lbl = make_label2(nd->hPage, "Log folder:");
+        HWND ed  = make_edit2(nd->hPage, st->debug_log_dir, (HMENU)IDC_DBG_FOLDER, 0);
+        SendMessage(ed, EM_SETLIMITTEXT, (WPARAM)(sizeof(st->debug_log_dir) - 1u), 0);
+        HWND browse = CreateWindow("BUTTON", "Browse...",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 10, 10,
+            nd->hPage, (HMENU)IDC_DBG_BROWSE, NULL, NULL);
+        HWND open = CreateWindow("BUTTON", "Open",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 10, 10,
+            nd->hPage, (HMENU)IDC_DBG_OPEN, NULL, NULL);
+        SettingsCtrl *c = dbg_add(nd, SDBG_FOLDER, lbl, ed, browse, 0, 84, 0);
+        if (c) { c->hExtra2 = open; c->extra2_w = 56; }
+    }
+    {
+        char buf[16];
+        (void)snprintf(buf, sizeof(buf), "%d", st->debug_max_file_mb);
+        HWND lbl = make_label2(nd->hPage, "Max file size (MB):");
+        HWND ed  = make_edit2(nd->hPage, buf, (HMENU)IDC_DBG_MAX_FILE, ES_NUMBER);
+        dbg_add(nd, SDBG_MAX_FILE, lbl, ed, NULL, 70, 0, 0);
+    }
+    {
+        char buf[16];
+        (void)snprintf(buf, sizeof(buf), "%d", st->debug_max_total_mb);
+        HWND lbl = make_label2(nd->hPage, "Keep at most (MB):");
+        HWND ed  = make_edit2(nd->hPage, buf, (HMENU)IDC_DBG_MAX_TOTAL, ES_NUMBER);
+        (void)settings_debug_usage_text(line, sizeof(line), used_bytes, used_files);
+        HWND use = CreateWindow("STATIC", line,
+            WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE | SS_NOPREFIX,
+            0, 0, 10, 10, nd->hPage, NULL, NULL, NULL);
+        if (nd->n_dbg_dim < (int)(sizeof(nd->hDbgDim) / sizeof(nd->hDbgDim[0])))
+            nd->hDbgDim[nd->n_dbg_dim++] = use;
+        dbg_add(nd, SDBG_MAX_TOTAL, lbl, ed, use, 70 + 10 + 260, 260, 0);
+    }
+    {
+        HWND lbl = make_label2(nd->hPage, "Current log file:");
+        (void)settings_debug_current_text(line, sizeof(line), &dst);
+        HWND ed = make_edit2(nd->hPage, line, (HMENU)IDC_DBG_CURRENT, ES_READONLY);
+        dbg_add(nd, SDBG_CURRENT, lbl, ed, NULL, 0, 0, 0);
+    }
+    dbg_add(nd, SDBG_NOTE, NULL,
+            dbg_dim_static(nd, "Give this folder to a Claude Code session. AI Assist can "
+                               "read it too; what it reads goes to your AI provider. "
+                               "Mark issue: Ctrl+Shift+M"),
+            NULL, 0, 0, 1);
+
+    debug_apply_visibility(nd);
+}
+
+/* Save: read the page back into the settings. Controls that are hidden still
+ * hold the stored values, so unticking "Enable debugging" keeps the rest. */
+static void debug_read_page(SettingsDlgData *d, Settings *s)
+{
+    HWND h = d->hPage;
+    s->debug_enabled = IsDlgButtonChecked(h, IDC_DBG_ENABLE) == BST_CHECKED ? 1 : 0;
+    for (int cat = 0; cat < DLOG_CAT_COUNT; cat++) {
+        int sel = (int)SendDlgItemMessage(h, IDC_DBG_LEVEL_BASE + cat, CB_GETCURSEL, 0, 0);
+        if (sel >= 0 && sel < DLOG_LVL_COUNT) s->debug_levels[cat] = (unsigned char)sel;
+    }
+    s->debug_recorder = IsDlgButtonChecked(h, IDC_DBG_RECORDER) == BST_CHECKED ? 1 : 0;
+    {
+        int sel = (int)SendDlgItemMessage(h, IDC_DBG_RECORDER_LEVEL, CB_GETCURSEL, 0, 0);
+        if (sel >= 0 && sel < DLOG_LVL_COUNT) s->debug_recorder_level = (unsigned char)sel;
+    }
+    s->debug_screenshot = IsDlgButtonChecked(h, IDC_DBG_SCREENSHOT) == BST_CHECKED ? 1 : 0;
+    s->debug_include_content = IsDlgButtonChecked(h, IDC_DBG_CONTENT) == BST_CHECKED ? 1 : 0;
+    {
+        char buf[CFG_STR_MAX];
+        GetDlgItemTextA(h, IDC_DBG_FOLDER, buf, (int)sizeof(buf));
+        /* Trim spaces; an empty field is the default folder. */
+        char *a = buf;
+        while (*a == ' ' || *a == '\t') a++;
+        size_t n = strlen(a);
+        while (n > 0 && (a[n - 1] == ' ' || a[n - 1] == '\t')) a[--n] = '\0';
+        (void)snprintf(s->debug_log_dir, sizeof(s->debug_log_dir), "%s", n ? a : "logs");
+    }
+    {
+        char buf[32];
+        GetDlgItemTextA(h, IDC_DBG_MAX_FILE, buf, (int)sizeof(buf));
+        s->debug_max_file_mb = settings_debug_parse_mb(buf, SETTINGS_DEBUG_FILE_MB_MIN,
+                                                       SETTINGS_DEBUG_FILE_MB_MAX,
+                                                       s->debug_max_file_mb);
+        GetDlgItemTextA(h, IDC_DBG_MAX_TOTAL, buf, (int)sizeof(buf));
+        s->debug_max_total_mb = settings_debug_parse_mb(buf, SETTINGS_DEBUG_TOTAL_MB_MIN,
+                                                        SETTINGS_DEBUG_TOTAL_MB_MAX,
+                                                        s->debug_max_total_mb);
+    }
 }
 
 /* ---- Main window procedure ------------------------------------------------ */
@@ -987,12 +1287,6 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             HWND ed = make_edit2(nd->hPage, nd->cfg->settings.log_format,
                                  (HMENU)IDC_LOG_FMT_EDIT, 0);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_LOGGING, 0, 0, 1, 0, 1, 0);
-        }
-        {
-            HWND chk = make_check2(nd->hPage, "Debug Terminal Log", (HMENU)IDC_DEBUG_TERMINAL);
-            SendMessage(chk, BM_SETCHECK,
-                        nd->cfg->settings.debug_terminal ? BST_CHECKED : BST_UNCHECKED, 0);
-            add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_LOGGING, 0, 0, 1, 0, 1, 1);
         }
 
         /* ==== SSH ==== */
@@ -1202,6 +1496,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                         nd->cfg->settings.ai_web_fetch_enabled ? BST_CHECKED : BST_UNCHECKED, 0);
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_WEB, 0, 0, 1, 0, 1, 1);
         }
+
+        /* ==== DEBUGGING ==== */
+        debug_build_page(nd);
 
         /* ==== ABOUT ==== */
         {
@@ -1568,6 +1865,30 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             }
             break;
 
+        case IDC_DBG_ENABLE:
+            /* Show or hide every row below the tickbox. */
+            if (d && HIWORD(wParam) == BN_CLICKED) {
+                debug_apply_visibility(d);
+                relayout(hwnd, d);
+                InvalidateRect(d->hPage, NULL, TRUE);
+            }
+            break;
+
+        case IDC_DBG_RECORDER:
+            if (d)
+                EnableWindow(GetDlgItem(d->hPage, IDC_DBG_RECORDER_LEVEL),
+                             IsDlgButtonChecked(d->hPage, IDC_DBG_RECORDER)
+                                 == BST_CHECKED ? TRUE : FALSE);
+            break;
+
+        case IDC_DBG_BROWSE:
+            if (d && HIWORD(wParam) == BN_CLICKED) debug_browse_folder(hwnd, d);
+            break;
+
+        case IDC_DBG_OPEN:
+            if (d && HIWORD(wParam) == BN_CLICKED) debug_open_folder(hwnd, d);
+            break;
+
         case IDC_AUTOCONNECT_CHECK:
             if (d)
                 EnableWindow(GetDlgItem(d->hPage, IDC_AUTOCONNECT_COMBO),
@@ -1577,6 +1898,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         case IDOK: {
             if (!d) { DestroyWindow(hwnd); break; }
+            /* --ui-demo=settings-debug: show the page, change nothing. */
+            if (d->demo) { DestroyWindow(hwnd); break; }
             Settings *s = &d->cfg->settings;
 
             /* Terminal font from combo */
@@ -1622,10 +1945,6 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                            s->log_dir, (int)sizeof(s->log_dir));
             GetDlgItemText(d->hPage, IDC_LOG_FMT_EDIT,
                            s->log_format, (int)sizeof(s->log_format));
-
-            /* Debug terminal log checkbox */
-            s->debug_terminal = (IsDlgButtonChecked(d->hPage, IDC_DEBUG_TERMINAL)
-                                  == BST_CHECKED) ? 1 : 0;
 
             /* AI provider from combo */
             {
@@ -1739,6 +2058,10 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                            s->auto_connect_session,
                            (int)sizeof(s->auto_connect_session));
 
+            /* Debugging page. window.c applies it to the live logger
+             * (dlog_configure) once this dialog has closed. */
+            debug_read_page(d, s);
+
             /* Clamp out-of-range values before persisting */
             settings_validate(s);
             /* M5: report a save failure instead of silently discarding the
@@ -1784,8 +2107,8 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
 /* ---- Public API --------------------------------------------------------- */
 
-void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
-                        int initial_page)
+static void settings_dlg_run(HWND parent, Config *cfg, const char *config_path,
+                             int initial_page, int demo)
 {
     if (!cfg) return;
 
@@ -1795,6 +2118,7 @@ void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
     d->cfg = cfg;
     d->config_path = config_path;
     d->initial_page = initial_page;
+    d->demo = demo;
 
     WNDCLASSEX wc;
     memset(&wc, 0, sizeof(wc));
@@ -1847,6 +2171,17 @@ void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
     } else {
         free(d);
     }
+}
+
+void settings_dlg_show(HWND parent, Config *cfg, const char *config_path,
+                        int initial_page)
+{
+    settings_dlg_run(parent, cfg, config_path, initial_page, 0);
+}
+
+void settings_dlg_show_demo_debug(HWND parent, Config *cfg)
+{
+    settings_dlg_run(parent, cfg, "", SETTINGS_PAGE_DEBUG, 1);
 }
 
 #endif

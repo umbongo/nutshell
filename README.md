@@ -524,7 +524,6 @@ if you need to move between versions.
 │       ├── ns_font.c/.h              #   Font cache keyed on (role, dpi, face); replaces per-call CreateFont
 │       ├── ns_tokens.h               #   Read-only accessor for window.c's resolved ThemeTokens
 │       ├── ns_reduced_motion.h       #   SPI_GETCLIENTAREAANIMATION reduced-motion flag
-│       ├── redraw_log.h              #   Optional REDRAW_DEBUG file logging helper
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF

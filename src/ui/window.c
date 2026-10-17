@@ -48,7 +48,7 @@
 #include "custom_scrollbar.h"
 #include "menubar_line.h"
 #include "dpi_util.h"
-#include "redraw_log.h"
+#include "gdip_png.h"
 #include "cmd_classify.h"
 #include "cmd_detect.h"
 #include "term_extract.h"
@@ -57,6 +57,7 @@
 #include "ai_stream.h"
 #include "secure_zero.h"
 #include "conn_prompt.h"
+#include <shellapi.h>   /* ShellExecuteA: Help > Open Debug Log Folder */
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <gdiplus.h>       /* GDI+ flat API (includes gdiplusflat.h) */
 
@@ -72,6 +73,11 @@ static int g_dpi = 96;
 static int g_tab_height = TAB_HEIGHT_BASE;
 static int g_left_margin = TERM_LEFT_MARGIN;
 
+/* Debug log (spec 2026-10-17-debug-logging-design.md). */
+static unsigned g_next_log_id = 0;        /* Session.log_id counter */
+static unsigned g_cooldown_skips = 0;     /* poll ticks inside the paint cooldown since the last paint (render.stats) */
+static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT, 0 = none yet */
+
 #define WM_SHOW_SESSION_MANAGER (WM_USER + 1)
 #define WM_CONN_DONE            (WM_USER + 2)
 #define WM_STARTUP_CONNECT      (WM_USER + 3)
@@ -80,6 +86,11 @@ static int g_left_margin = TERM_LEFT_MARGIN;
  * into `wParam` (CONN_PROMPT_WPARAM() below); lParam is the
  * ConnUiRequest* the worker is blocked on (see conn_ui_ask() below). */
 #define WM_CONN_PROMPT          (WM_USER + 4)
+/* --ui-demo=settings-debug: posted once the demo session exists, to open
+ * Settings on the Debugging page (debugging ticked in memory only). */
+#define WM_OPEN_DEMO_SETTINGS   (WM_USER + 5)
+/* One-shot timer that puts the window title back after Mark Issue's flash. */
+#define IDT_ISSUE_TITLE         5
 
 /* Bound on platform-detection attempts per session: counts poll ticks that
  * delivered new bytes (the transport poll returning > 0), not raw timer ticks, so a
@@ -100,7 +111,7 @@ typedef struct Session {
     SSHChannel *channel;
     SessionIo   io;            /* transport vtable; io.ctx != NULL is the "connected" predicate */
     FILE       *session_log;   /* NULL when logging disabled */
-    FILE       *debug_log;    /* NULL when debug_terminal disabled */
+    unsigned    log_id;        /* debug-log session id: prints as s<N> (0 = none) */
     /* Connection thread state */
     ConnState       conn_state;
     struct ConnJob *conn_job;      /* the attempt in flight, or NULL; this
@@ -147,6 +158,7 @@ typedef struct ConnJob {
     WorkerLife  life;
     unsigned    id;
     HWND        hwnd;           /* main window: PostMessage and prompt owner */
+    unsigned    log_id;         /* the session's debug-log id (Session.log_id) */
     Profile     profile;        /* copy, wiped on free */
     int         hostkey_strict; /* host_key_verification == "strict", snapshotted
                                   * on the UI thread -- the thread never reads
@@ -472,15 +484,22 @@ static void session_mark_terminal_input(void) {
     }
 }
 
-/* Invalidate only the terminal area (below the tab strip), not the tabs. */
-static void invalidate_terminal(HWND hwnd)
+/* Invalidate only the terminal area (below the tab strip), not the tabs.
+ * `why` names the caller in the render "invalidate" log event. */
+static void invalidate_terminal_why(HWND hwnd, const char *why)
 {
     RECT rc;
     GetClientRect(hwnd, &rc);
     rc.top = g_tab_height;
-    REDRAW_LOG("[REDRAW] invalidate_terminal: rect=(%ld,%ld,%ld,%ld)\n",
-               rc.left, rc.top, rc.right, rc.bottom);
+    DLOG(DLOG_RENDER, DLOG_TRACE, g_active_session ? g_active_session->log_id : 0u,
+         "invalidate", "rect=%ld,%ld,%ld,%ld why=%s",
+         (long)rc.left, (long)rc.top, (long)rc.right, (long)rc.bottom, why);
     InvalidateRect(hwnd, &rc, FALSE);
+}
+
+static void invalidate_terminal(HWND hwnd)
+{
+    invalidate_terminal_why(hwnd, "other");
 }
 
 /* Force a full repaint: marks every terminal row dirty AND invalidates the
@@ -492,7 +511,9 @@ static void force_full_terminal_repaint(HWND hwnd, Terminal *term)
 {
     if (term) term_mark_all_dirty(term);
     dispbuf_invalidate(&g_renderer.dispbuf);
-    invalidate_terminal(hwnd);
+    DLOG(DLOG_RENDER, DLOG_TRACE, term ? term->log_id : 0u, "dispbuf.invalidate",
+         "why=full_repaint force_all_rows=0");
+    invalidate_terminal_why(hwnd, "full");
 }
 
 /* Bring a session's terminal grid and remote PTY up to the current client
@@ -521,6 +542,9 @@ static void sync_session_grid(HWND hwnd, Session *s)
         return;
 
     if (cols != s->term->cols || rows != s->term->rows) {
+        DLOG(DLOG_RENDER, DLOG_TRACE, s->log_id, "grid.sync",
+             "rows_before=%d rows=%d cols_before=%d cols=%d client_w=%ld client_h=%ld",
+             s->term->rows, rows, s->term->cols, cols, (long)rc.right, (long)rc.bottom);
         term_resize(s->term, rows, cols);
         term_mark_all_dirty(s->term);
         dispbuf_resize(&g_renderer.dispbuf, rows, cols);
@@ -584,11 +608,13 @@ static bool g_ctrlc_swallow_char = false;
 static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
     s->term = term_init(rows, cols, 3000);
+    s->log_id = ++g_next_log_id;
+    s->term->log_id = s->log_id;
+    DLOG(DLOG_GENERAL, DLOG_INFO, s->log_id, "session.new", "rows=%d cols=%d", rows, cols);
     s->ssh = NULL;
     s->channel = NULL;
     memset(&s->io, 0, sizeof(s->io));
     s->session_log = NULL;
-    s->debug_log = NULL;
     s->conn_state = CONN_IDLE;
     s->conn_job = NULL;
     s->conn_error[0] = '\0';
@@ -688,7 +714,7 @@ static void free_session(Session *s) {
         }
         session_close_io(s);
         if (s->session_log) fclose(s->session_log);
-        if (s->debug_log)   fclose(s->debug_log);
+        DLOG_EV(DLOG_GENERAL, DLOG_INFO, s->log_id, "session.free");
         cmd_batch_set_free(&s->ai_state.batches);
         free(s->ai_state.stream_content);
         free(s->ai_state.stream_thinking);
@@ -1036,43 +1062,6 @@ static FILE *open_session_log(const char *name, const char *hostname)
     return fopen(path, "ab");
 }
 
-/* Open a raw debug log file for escape-sequence diagnostics.
- * Filename: <session_name>-debug-<YYYY-MM-DD_HH-MM-SS>.log in the exe dir.
- * Returns NULL if debug_terminal is false or on error. */
-static FILE *open_debug_log(const char *session_name)
-{
-    if (!g_config || !g_config->settings.debug_terminal) return NULL;
-
-    char dir[MAX_PATH];
-    get_exe_dir(dir, sizeof(dir));
-    if (dir[0] == '\0') (void)snprintf(dir, sizeof(dir), ".");
-
-    /* Sanitise session name for use as a filename component */
-    char safe_name[64];
-    size_t ni = 0u;
-    for (const char *p = session_name; *p && ni < sizeof(safe_name) - 1u; p++) {
-        char c = *p;
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '-' || c == '_') {
-            safe_name[ni++] = c;
-        } else {
-            safe_name[ni++] = '_';
-        }
-    }
-    if (ni == 0u) { safe_name[0] = 's'; ni = 1u; }
-    safe_name[ni] = '\0';
-
-    time_t now = time(NULL);
-    const struct tm *t = localtime(&now);
-    char ts[32];
-    if (t) strftime(ts, sizeof(ts), "%Y-%m-%d_%H-%M-%S", t);
-    else   (void)snprintf(ts, sizeof(ts), "unknown");
-
-    char path[MAX_PATH];
-    (void)snprintf(path, sizeof(path), "%s\\%s-debug-%s.log", dir, safe_name, ts);
-    return fopen(path, "wb");
-}
-
 /* ---- Local shell sessions (spec 2026-09-22-local-shell-design.md) -------- */
 
 /* A local profile has kind "local"; everything else, including a profile
@@ -1154,7 +1143,7 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
         } else {
             int cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
             int rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
-            pty = local_pty_open(spec, cols, rows, err, sizeof(err));
+            pty = local_pty_open_ex(spec, cols, rows, s->log_id, err, sizeof(err));
         }
     } else {
         (void)snprintf(err, sizeof(err), "%s",
@@ -1162,6 +1151,8 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
     }
 
     if (!pty) {
+        DLOG(DLOG_SHELL, DLOG_WARN, s->log_id, "shell.start_failed", "reason=%s",
+             err[0] ? err : "unknown");
         char msg[600];
         int n = snprintf(msg, sizeof(msg), "\r\n%s\r\n",
                          err[0] ? err : "Could not start the local shell.");
@@ -1229,6 +1220,11 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
         }
     }
 
+    DLOG(DLOG_SHELL, DLOG_INFO, s->log_id, "shell.resolve",
+         "shell=%s kind=%d platform_locked=%d profile=%s",
+         s->shell_name[0] ? s->shell_name : "-", (int)spec->kind, s->platform_locked,
+         s->conn_profile.name[0] ? s->conn_profile.name : "-");
+
     DWORD tick_now = GetTickCount();
     s->last_socket_data_tick = tick_now;
     s->last_keepalive_tick   = tick_now;
@@ -1240,8 +1236,6 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
          * profile (spec section 5). */
         s->session_log = open_session_log(s->conn_profile.name, "local");
     }
-    s->debug_log = open_debug_log(s->conn_profile.name[0]
-                                    ? s->conn_profile.name : "local");
 
     if (tidx >= 0) {
         char user[256], machine[256];
@@ -1287,6 +1281,7 @@ static int start_connection(Session *s, HWND hwnd)
     conn_prompt_slot_init(&j->pending_req);
     j->id      = worker_life_next_id();
     j->hwnd    = hwnd;
+    j->log_id  = s->log_id;
     j->profile = s->conn_profile;
     /* Snapshot on the UI thread -- the worker thread never reads g_config. */
     j->hostkey_strict = (g_config &&
@@ -1317,6 +1312,20 @@ static DWORD WINAPI connection_thread(LPVOID param)
 #define CONN_FAIL(code) do { j->result = (code); goto done; } while (0)
 #define CONN_CANCELLED() worker_life_cancelled(&j->life)
 
+    /* Debug log: the stage names where a failure happened; the profile name
+     * and session id are logged at any setting, host/port/user only with
+     * "Include terminal content" on (spec section 6). */
+    const char *stage = "tcp";
+    const ULONGLONG t_start = GetTickCount64();
+    dlog_set_thread_tag("ssh");
+    DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.start",
+         "profile=%s auth_method=%s strict_hostkey=%d",
+         info->name[0] ? info->name : "-",
+         info->auth_type == AUTH_KEY ? "key" : "login", j->hostkey_strict);
+    if (dlog_content_enabled())
+        DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.target", "host=%s port=%d user=%s",
+             info->host, info->port, info->username);
+
     /* TCP connect + SSH handshake */
     j->ssh = ssh_session_new();
     if (!j->ssh) {
@@ -1331,6 +1340,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
     }
 
     if (CONN_CANCELLED()) { snprintf(j->error, sizeof(j->error), "Cancelled."); CONN_FAIL(1); }
+    stage = "hostkey";
 
     /* Host key verification. The decision dialog is shown by the UI thread
      * (conn_ui_ask() below posts WM_CONN_PROMPT and blocks) -- never a
@@ -1380,6 +1390,12 @@ static DWORD WINAPI connection_thread(LPVOID param)
             knownhosts_free(&kh);
             CONN_FAIL(1);
         }
+
+        DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.hostkey",
+             "result=%s key_type=%s strict=%d",
+             lookup_rc == KNOWNHOSTS_NEW ? "new"
+                 : (lookup_rc == KNOWNHOSTS_MISMATCH ? "mismatch" : "known"),
+             res.key_type, j->hostkey_strict);
 
         if (lookup_rc == KNOWNHOSTS_NEW || lookup_rc == KNOWNHOSTS_MISMATCH) {
             if (j->hostkey_strict) {
@@ -1438,6 +1454,8 @@ static DWORD WINAPI connection_thread(LPVOID param)
             }
 
             int ans = conn_ui_ask(j, CONN_UI_HOSTKEY, title, dlg_msg, flags, NULL);
+            DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.hostkey.answer", "accepted=%d",
+                 ans == IDYES ? 1 : 0);
             if (ans == IDYES) {
                 if (knownhosts_add(&kh, info->host, info->port, key, key_len, key_type)
                     != KNOWNHOSTS_OK) {
@@ -1461,10 +1479,13 @@ static DWORD WINAPI connection_thread(LPVOID param)
     if (CONN_CANCELLED()) { snprintf(j->error, sizeof(j->error), "Cancelled."); CONN_FAIL(1); }
 
     /* Authentication */
+    stage = "auth";
     int auth_rc = -1;
+    int auth_asked = 0;
     if (info->auth_type == AUTH_KEY) {
         auth_rc = ssh_auth_key(j->ssh, info->username, info->key_path, info->password);
         if (auth_rc != 0) {
+            auth_asked = 1;
             char passphrase[256];
             memset(passphrase, 0, sizeof(passphrase));
             if (conn_ui_ask(j, CONN_UI_PASSPHRASE, NULL, NULL, 0, passphrase)) {
@@ -1481,6 +1502,11 @@ static DWORD WINAPI connection_thread(LPVOID param)
         auth_rc = ssh_auth_password(j->ssh, info->username, info->password);
     }
 
+    DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.auth",
+         "auth_method=%s result=%s prompted=%d",
+         info->auth_type == AUTH_KEY ? "key" : "login",
+         auth_rc == 0 ? "ok" : "fail", auth_asked);
+
     if (auth_rc != 0) {
         snprintf(j->error, sizeof(j->error),
                  "Authentication failed for %s@%s.", info->username, info->host);
@@ -1490,6 +1516,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
     if (CONN_CANCELLED()) { snprintf(j->error, sizeof(j->error), "Cancelled."); CONN_FAIL(2); }
 
     /* Open channel, request PTY, start shell */
+    stage = "channel";
     j->channel = ssh_channel_open(j->ssh);
     if (!j->channel) {
         snprintf(j->error, sizeof(j->error),
@@ -1507,6 +1534,16 @@ static DWORD WINAPI connection_thread(LPVOID param)
     j->result = 0;
 
 done:
+    if (j->result == 0) {
+        DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.done", "ms=%llu",
+             (unsigned long long)(GetTickCount64() - t_start));
+    } else {
+        DLOG(DLOG_SSH, DLOG_WARN, j->log_id, "connect.fail",
+             "stage=%s code=%d cancelled=%d ms=%llu", stage, j->result,
+             CONN_CANCELLED() ? 1 : 0, (unsigned long long)(GetTickCount64() - t_start));
+        DLOG_CONTENT(DLOG_SSH, DLOG_WARN, j->log_id, "connect.fail.detail", "text",
+                     j->error, strlen(j->error));
+    }
     /* The last message: after it the thread touches nothing but its own
      * reference. If the session let go meanwhile, nobody is listening. */
     if (!CONN_CANCELLED())
@@ -1905,6 +1942,12 @@ static void create_demo_session(HWND hwnd)
 
     relayout_main(hwnd);
     force_full_terminal_repaint(hwnd, s->term);
+
+    /* --ui-demo=settings-debug: open Settings on the Debugging page, with
+     * debugging ticked in memory only. Posted, not called: the dialog runs
+     * its own modal loop and must not start inside the startup message. */
+    if (strcmp(state, "settings-debug") == 0)
+        PostMessage(hwnd, WM_OPEN_DEMO_SETTINGS, 0, 0);
 }
 
 static void hide_ai_panel(HWND parent) {
@@ -2012,7 +2055,7 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
             ai_panel_detach(s);
             session_close_io(s);
             if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
-            if (s->debug_log)   { fclose(s->debug_log);   s->debug_log   = NULL; }
+            DLOG_EV(DLOG_GENERAL, DLOG_INFO, s->log_id, "session.disconnect_by_user");
             int tidx = tabs_find(g_hwndTabs, s);
             if (tidx >= 0) {
                 tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
@@ -2032,7 +2075,7 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
         /* Clean up any leftover transport state */
         session_close_io(s);
         if (s->session_log) { fclose(s->session_log); s->session_log = NULL; }
-        if (s->debug_log)   { fclose(s->debug_log);   s->debug_log   = NULL; }
+        DLOG_EV(DLOG_GENERAL, DLOG_INFO, s->log_id, "session.reconnect");
 
         if (!is_local) {
             /* Re-populate password from config — it was zeroed after first auth */
@@ -2389,11 +2432,15 @@ static void update_scrollbar(HWND hwnd)
 {
     if (!g_hwndScrollbar) return;
 
+    const int vis_before = IsWindowVisible(g_hwndScrollbar) ? 1 : 0;
+
     if (!g_active_session || !g_active_session->term) {
         csb_set_range(g_hwndScrollbar, 0, 0, 1);
         csb_set_pos(g_hwndScrollbar, 0);
         if (IsWindowVisible(g_hwndScrollbar))
             ShowWindow(g_hwndScrollbar, SW_HIDE);
+        DLOG(DLOG_RENDER, DLOG_TRACE, 0u, "scrollbar",
+             "visible_before=%d visible=0 range=0 pos=0", vis_before);
         return;
     }
 
@@ -2415,6 +2462,9 @@ static void update_scrollbar(HWND hwnd)
         if (IsWindowVisible(g_hwndScrollbar))
             ShowWindow(g_hwndScrollbar, SW_HIDE);
     }
+    DLOG(DLOG_RENDER, DLOG_TRACE, g_active_session->log_id, "scrollbar",
+         "visible_before=%d visible=%d range=%d pos=%d", vis_before,
+         total > rows ? 1 : 0, nMax, nPos);
     (void)hwnd;
 }
 
@@ -2618,6 +2668,9 @@ static HMENU create_app_menu(void)
 
     HMENU hHelp = CreatePopupMenu();
     menu_add_item(hHelp, IDM_HELP_GUIDE, "User Guide");
+    menu_add_separator(hHelp);
+    menu_add_item(hHelp, IDM_HELP_MARK_ISSUE, "Mark Issue\tCtrl+Shift+M");
+    menu_add_item(hHelp, IDM_HELP_LOG_FOLDER, "Open Debug Log Folder");
     menu_add_separator(hHelp);
     menu_add_item(hHelp, IDM_ABOUT, "About");
     menu_add_popup(hMenu, hHelp, "Help");
@@ -2992,13 +3045,13 @@ static void session_send_bytes(HWND hwnd, const char *bytes, size_t n)
     Session *s = g_active_session;
     if (!s || !s->term || n == 0) return;
     if (s->io.ctx) {
-        s->io.poll(s->io.ctx, s->term, s->session_log, s->debug_log);
+        s->io.poll(s->io.ctx, s->term, s->session_log);
         s->io.write(s->io.ctx, bytes, n);
     }
     if (s->term->scrollback_offset != 0) {
         s->term->scrollback_offset = 0;
         update_scrollbar(hwnd);
-        invalidate_terminal(hwnd);
+        invalidate_terminal_why(hwnd, "scroll_to_live");
     }
 }
 
@@ -3066,6 +3119,153 @@ static void close_active_tab(void)
     if (idx >= 0) on_tab_close(idx, g_active_session);
 }
 
+/* ---- Debug log: Mark Issue, Open Debug Log Folder ----------------------------
+ * Spec 2026-10-17-debug-logging-design.md section 7. The mark is silent: no
+ * dialog and no repaint, because either could heal the glitch being recorded.
+ * The order is the point: the snapshot is read from the live state on this
+ * thread first, then handed to dlog_issue_mark(), which writes the mark, the
+ * snapshot lines and the recorder dump; the screenshot (if ticked) copies the
+ * screen as it is; only then does the title bar flash. */
+
+/* Fill the plain-struct snapshot the logger formats. `dirty` backs the
+ * per-row flags of the active terminal; `policy` the AI policy token. */
+static void fill_issue_snapshot(HWND hwnd, DlogSnapshot *snap, unsigned char *dirty,
+                                int dirty_cap, char *policy, size_t policy_cap)
+{
+    memset(snap, 0, sizeof(*snap));
+
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    DlogSnapWindow *w = &snap->window;
+    w->client_w   = (int)rc.right;
+    w->client_h   = (int)rc.bottom;
+    w->dpi        = g_dpi;
+    w->tab_height = g_tab_height;
+    w->left_margin = g_left_margin;
+    w->ai_docked  = g_ai_docked ? 1 : 0;
+    w->ai_width   = g_ai_panel_width;
+    w->scrollbar_visible = (g_hwndScrollbar && IsWindowVisible(g_hwndScrollbar)) ? 1 : 0;
+    w->iconic     = (IsIconic(hwnd) || g_iconic) ? 1 : 0;
+    w->fullscreen = (GetWindowLong(hwnd, GWL_STYLE) & WS_CAPTION) != WS_CAPTION ? 1 : 0;
+    w->ms_since_last_paint = g_last_wm_paint_tick
+        ? (long)(GetTickCount() - g_last_wm_paint_tick) : -1L;
+    w->cooldown_ms = PAINT_COOLDOWN_MS;
+    w->focus_hwnd  = (unsigned long long)(ULONG_PTR)GetFocus();
+
+    Session *act = g_active_session;
+    if (act && act->term) {
+        Terminal *t = act->term;
+        DlogSnapTerm *st = &snap->term;
+        snap->has_term = 1;
+        st->sid       = act->log_id;
+        st->kind      = (act->io.ctx ? act->io.kind == SESSION_LOCAL
+                                     : profile_is_local(&act->conn_profile)) ? "local" : "ssh";
+        st->connected = act->io.ctx ? 1 : 0;
+        st->rows = t->rows;
+        st->cols = t->cols;
+        st->lines_count    = t->lines_count;
+        st->lines_start    = t->lines_start;
+        st->lines_capacity = t->lines_capacity;
+        st->scrollback_offset = t->scrollback_offset;
+        st->cursor_row     = t->cursor.row;
+        st->cursor_col     = t->cursor.col;
+        st->cursor_visible = t->cursor.visible ? 1 : 0;
+        st->alt_screen     = t->alt_screen_active ? 1 : 0;
+        st->scroll_top     = t->scroll_top;
+        st->scroll_bottom  = t->scroll_bot;
+        st->full_redraw_needed = t->full_redraw_needed ? 1 : 0;
+        st->write_seq      = (unsigned long long)t->write_seq;
+        (void)term_dirty_row_flags(t, dirty, dirty_cap);
+        st->dirty   = dirty;
+        st->dirty_n = t->rows < dirty_cap ? t->rows : dirty_cap;
+    }
+
+    snap->render.char_w = g_renderer.charWidth;
+    snap->render.char_h = g_renderer.charHeight;
+    snap->render.dispbuf_rows = g_renderer.dispbuf.rows;
+    snap->render.dispbuf_cols = g_renderer.dispbuf.cols;
+    snap->render.prev_cursor_row = g_renderer.prev_cursor_row;
+    snap->render.prev_cursor_col = g_renderer.prev_cursor_col;
+
+    for (Session *o = g_session_list; o && snap->nsessions < DLOG_SNAP_MAX_SESSIONS; o = o->next) {
+        if (o == act || !o->term) continue;
+        DlogSnapSession *ss = &snap->sessions[snap->nsessions++];
+        ss->sid        = o->log_id;
+        ss->kind       = (o->io.ctx ? o->io.kind == SESSION_LOCAL
+                                    : profile_is_local(&o->conn_profile)) ? "local" : "ssh";
+        ss->connected  = o->io.ctx ? 1 : 0;
+        ss->dirty_rows = term_dirty_row_flags(o->term, NULL, 0);
+        ss->alt_screen = o->term->alt_screen_active ? 1 : 0;
+    }
+
+    snap->ai.panel_visible = (g_hwndAiChat && IsWindow(g_hwndAiChat) &&
+                              IsWindowVisible(g_hwndAiChat)) ? 1 : 0;
+    if (act) {
+        snap->ai.stream_live     = act->ai_state.busy ? 1 : 0;
+        snap->ai.dispatch_batch  = act->ai_state.batches.count;
+        policy[0] = '\0';
+        (void)cmd_policy_to_token(act->ai_state.policy, policy, policy_cap);
+        snap->ai.policy = policy;
+    }
+}
+
+static void mark_issue(HWND hwnd)
+{
+    static DlogSnapshot snap;                /* UI thread only; large, so not on the stack */
+    unsigned char dirty[1024];
+    char policy[32];
+    fill_issue_snapshot(hwnd, &snap, dirty, (int)sizeof(dirty), policy, sizeof(policy));
+
+    DlogIssue iss;
+    memset(&iss, 0, sizeof(iss));
+    const int marked = dlog_issue_mark(&snap, dlog_screenshot_enabled(), &iss);
+
+    if (marked && iss.screenshot_path[0]) {
+        const int ok = gdip_png_save_client(hwnd, iss.screenshot_path);
+        DLOG(DLOG_GENERAL, DLOG_ISSUE, 0u, "issue.screenshot", "n=%u ok=%d", iss.n, ok);
+    }
+
+    /* The flash: the title bar is the only status surface that needs no
+     * repaint of the terminal area. */
+    char title[96];
+    if (marked)
+        (void)snprintf(title, sizeof(title), "%s - Issue %u marked", APP_TITLE, iss.n);
+    else
+        (void)snprintf(title, sizeof(title), "%s - Issue not marked (logger unavailable)", APP_TITLE);
+    SetWindowTextA(hwnd, title);
+    SetTimer(hwnd, IDT_ISSUE_TITLE, 2500, NULL);
+}
+
+/* Help > Open Debug Log Folder: the folder in use (the fallback one when the
+ * configured folder could not be written), made if it does not exist yet. */
+static void open_debug_log_folder(HWND hwnd)
+{
+    DlogStatus st;
+    dlog_status(&st);
+    if (st.mem_only) {
+        MessageBoxA(hwnd,
+                    "No log folder is writable, so Nutshell is keeping the log "
+                    "in memory only. Mark Issue still works.",
+                    "Debug Log Folder", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    char dir[DLOG_MAX_PATH];
+    (void)snprintf(dir, sizeof(dir), "%s", st.dir);
+    if (dir[0] == '\0') {
+        char exe_dir[MAX_PATH];
+        get_exe_dir(exe_dir, sizeof(exe_dir));
+        if (!g_config || !dlog_resolve_dir(g_config->settings.debug_log_dir, exe_dir,
+                                            dir, sizeof(dir))) {
+            MessageBoxA(hwnd, "The log folder path is not valid.", "Debug Log Folder",
+                        MB_OK | MB_ICONWARNING);
+            return;
+        }
+    }
+    const DlogPlatform *pf = dlog_platform_system();
+    if (pf && pf->mkdir_p) (void)pf->mkdir_p(dir);
+    (void)ShellExecuteA(hwnd, "open", dir, NULL, NULL, SW_SHOWNORMAL);
+}
+
 /* WM_KEYDOWN. Returns true when the key was handled (WndProc returns 0). */
 static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
 {
@@ -3128,6 +3328,14 @@ static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
         if (vk == VK_SPACE) {
             drop_queued_char(hwnd, lParam);
             if (!is_repeat) on_ai_clicked();
+            return true;
+        }
+        /* Ctrl+Shift+M: Mark Issue. The terminal only ever sent a plain CR
+         * for it (indistinguishable from Ctrl+M and Enter), so no shell or
+         * full-screen program loses anything. */
+        if (vk == (WPARAM)'M') {
+            drop_queued_char(hwnd, lParam);
+            if (!is_repeat) mark_issue(hwnd);
             return true;
         }
     }
@@ -3559,6 +3767,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
             /* Compute DPI-scaled tab height and terminal left margin */
             g_dpi = get_window_dpi(hwnd);
+            DLOG(DLOG_GENERAL, DLOG_INFO, 0u, "app.env",
+                 "dpi=%d theme=%s monitors=%d font_size=%d", g_dpi,
+                 g_config->settings.colour_scheme, GetSystemMetrics(SM_CMONITORS),
+                 g_config->settings.font_size);
             g_tab_height = ns_scale(TAB_HEIGHT_BASE, g_dpi);
             g_left_margin = ns_scale(TERM_LEFT_MARGIN, g_dpi);
 
@@ -3777,6 +3989,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 case IDM_ABOUT:
                     show_about_dialog(hwnd);
                     return 0;
+                case IDM_HELP_MARK_ISSUE:
+                    mark_issue(hwnd);
+                    return 0;
+                case IDM_HELP_LOG_FOLDER:
+                    open_debug_log_folder(hwnd);
+                    return 0;
             }
             break;
 
@@ -3888,8 +4106,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 while (s) {
                     if (s->io.ctx && s->conn_state == CONN_IDLE) {
                         int poll_rc = s->io.poll(s->io.ctx, s->term,
-                                                      s->session_log,
-                                                      s->debug_log);
+                                                      s->session_log);
 
                         /* ConPTY never delivers a real pipe EOF just because
                          * the shell exited -- conhost keeps the session
@@ -3901,6 +4118,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                          * tick's pending output (if any) has been drained. */
                         if (poll_rc == 0 && s->io.kind == SESSION_LOCAL &&
                             local_pty_child_exited((const LocalPty *)s->io.ctx)) {
+                            DLOG(DLOG_SHELL, DLOG_INFO, s->log_id, "shell.exit", "code=%ld",
+                                 local_pty_exit_code((const LocalPty *)s->io.ctx));
                             poll_rc = -2;
                         }
 
@@ -4001,6 +4220,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 dispbuf_invalidate(&g_renderer.dispbuf);
                                 if (g_paste.io_ctx == s->io.ctx)
                                     paste_cancel();
+                                DLOG(DLOG_SSH, DLOG_WARN, s->log_id, "ssh.timeout.network",
+                                     "silent_ms=%lu", (unsigned long)(now_tick - s->last_socket_data_tick));
                                 term_process(s->term,
                                              "\r\n[Connection timed out]\r\n", 26);
                                 ai_panel_detach(s);
@@ -4026,6 +4247,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 dispbuf_invalidate(&g_renderer.dispbuf);
                                 if (g_paste.io_ctx == s->io.ctx)
                                     paste_cancel();
+                                DLOG(DLOG_SSH, DLOG_INFO, s->log_id, "ssh.timeout.idle", "mins=%d",
+                                     g_config->settings.ssh_user_idle_timeout_mins);
                                 term_process(s->term, banner, (size_t)n);
                                 ai_panel_detach(s);
                                 session_close_io(s);
@@ -4044,6 +4267,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             dispbuf_invalidate(&g_renderer.dispbuf);
                             if (g_paste.io_ctx == s->io.ctx)
                                 paste_cancel();
+                            DLOG(s->io.kind == SESSION_LOCAL ? DLOG_SHELL : DLOG_SSH, DLOG_INFO,
+                                 s->log_id, "session.eof", "kind=%s",
+                                 s->io.kind == SESSION_LOCAL ? "local" : "ssh");
                             term_process(s->term, "\r\n[Connection Closed]\r\n", 23);
                             ai_panel_detach(s);
                             session_close_io(s);
@@ -4061,8 +4287,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             if (critical || now - g_last_paint_tick >= PAINT_COOLDOWN_MS) {
                                 if (poll_rc > 0 || critical)
                                     dispbuf_invalidate(&g_renderer.dispbuf);
-                                invalidate_terminal(hwnd);
+                                DLOG(DLOG_RENDER, DLOG_TRACE, s->log_id, "poll.invalidate",
+                                     "poll_rc=%d dirty_rows=%d critical=%d since_paint_ms=%lu",
+                                     poll_rc, term_dirty_row_flags(s->term, NULL, 0),
+                                     critical ? 1 : 0, (unsigned long)(now - g_last_paint_tick));
+                                invalidate_terminal_why(hwnd, "poll");
                                 g_last_paint_tick = now;
+                            } else {
+                                /* The v1.2.34 diagnosis had to infer this one: a poll
+                                 * tick that wanted a paint but fell inside the cooldown. */
+                                g_cooldown_skips++;
+                                DLOG(DLOG_RENDER, DLOG_TRACE, s->log_id, "poll.cooldown_skip",
+                                     "poll_rc=%d dirty_rows=%d critical=0 since_paint_ms=%lu",
+                                     poll_rc, term_dirty_row_flags(s->term, NULL, 0),
+                                     (unsigned long)(now - g_last_paint_tick));
                             }
                         }
                     }
@@ -4088,7 +4326,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                     s = s->next;
                 }
-                if (needs_repaint) invalidate_terminal(hwnd);
+                if (needs_repaint) invalidate_terminal_why(hwnd, "connect_anim");
+            } else if (wParam == IDT_ISSUE_TITLE) {
+                KillTimer(hwnd, IDT_ISSUE_TITLE);
+                SetWindowTextA(hwnd, APP_TITLE);
             } else if (wParam == PASTE_TIMER_ID) {
                 paste_timer_tick();
             } else if (wParam == ANIM_TIMER_ID) {
@@ -4118,6 +4359,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_SHOW_SESSION_MANAGER:
             on_tab_new();
+            return 0;
+
+        case WM_OPEN_DEMO_SETTINGS:
+            settings_dlg_show_demo_debug(hwnd, g_config);
             return 0;
 
         case WM_STARTUP_CONNECT: {
@@ -4329,7 +4574,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 if (!s->session_log)
                     s->session_log = open_session_log(s->conn_profile.name,
                                                       s->conn_profile.host);
-                s->debug_log   = open_debug_log(s->conn_profile.name);
                 if (tidx >= 0) {
                     tabs_set_connect_info(g_hwndTabs, tidx,
                                          s->conn_profile.username,
@@ -4526,6 +4770,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
+            g_last_wm_paint_tick = GetTickCount();
 
             /* Determine terminal area right edge (excludes docked AI panel) */
             int ai_w = 0;
@@ -4536,24 +4781,23 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             int term_right_edge = client.right - ai_w;
 
             if (g_active_session && g_active_session->term) {
-#ifdef REDRAW_DEBUG
                 {
-                    Terminal *_t = g_active_session->term;
-                    int _dirty = 0;
-                    for (int _ri = 0; _ri < _t->rows; _ri++) {
-                        int _li = ((_t->lines_count >= _t->rows)
-                                   ? (_t->lines_count - _t->rows) : 0) + _ri;
-                        int _pi = (_t->lines_start + _li) % _t->lines_capacity;
-                        if (_t->lines[_pi] && _t->lines[_pi]->dirty) _dirty++;
-                    }
-                    REDRAW_LOG("[REDRAW] WM_PAINT: paintRect=(%ld,%ld,%ld,%ld) "
-                               "dirty_rows=%d full_redraw=%d\n",
-                               ps.rcPaint.left, ps.rcPaint.top,
-                               ps.rcPaint.right, ps.rcPaint.bottom,
-                               _dirty, _t->full_redraw_needed);
+                    Terminal *pt = g_active_session->term;
+                    DLOG(DLOG_RENDER, DLOG_TRACE, g_active_session->log_id, "paint",
+                         "rect=%ld,%ld,%ld,%ld dirty_rows=%d full_redraw=%d alt=%d sb=%d tick=%lu",
+                         (long)ps.rcPaint.left, (long)ps.rcPaint.top,
+                         (long)ps.rcPaint.right, (long)ps.rcPaint.bottom,
+                         term_dirty_row_flags(pt, NULL, 0), pt->full_redraw_needed ? 1 : 0,
+                         pt->alt_screen_active ? 1 : 0, pt->scrollback_offset,
+                         (unsigned long)GetTickCount());
                 }
-#endif
+                g_renderer.log_sid = g_active_session->log_id;
                 renderer_draw(&g_renderer, hdc, g_active_session->term, g_left_margin, g_tab_height, &ps.rcPaint, &g_selection);
+                DLOG(DLOG_RENDER, DLOG_DEBUG, g_active_session->log_id, "render.stats",
+                     "rows_painted=%d rows_skipped=%d cooldown_skips=%u",
+                     g_renderer.stat_rows_painted, g_renderer.stat_rows_skipped,
+                     g_cooldown_skips);
+                g_cooldown_skips = 0;
 
                 /* Fill gutter areas not covered by complete character cells. */
                 HBRUSH bg = CreateSolidBrush(g_renderer.defaultBg);

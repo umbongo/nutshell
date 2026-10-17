@@ -38,7 +38,7 @@ int test_ssh_io_safety(void) {
     TEST_BEGIN();
 
     // Test NULL inputs for IO poll
-    ASSERT_EQ(ssh_io_poll(NULL, NULL, NULL, NULL), -1);
+    ASSERT_EQ(ssh_io_poll(NULL, NULL, NULL), -1);
 
     // Test blocking mode setter safety
     SshSession *s = ssh_session_new();

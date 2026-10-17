@@ -39,6 +39,19 @@ static void start_debug_log(void)
     si.exe_path = exe;
     si.version = APP_VERSION;
     si.pid = (unsigned)GetCurrentProcessId();
+    /* The display facts known before any window exists. The theme is only
+     * known once the config is read; the window logs it with the window's own
+     * DPI in the app.env event. */
+    char extra[96];
+    int sys_dpi = 96;
+    HDC sdc = GetDC(NULL);
+    if (sdc) {
+        sys_dpi = GetDeviceCaps(sdc, LOGPIXELSX);
+        ReleaseDC(NULL, sdc);
+    }
+    (void)snprintf(extra, sizeof(extra), "monitors=%d system_dpi=%d",
+                   GetSystemMetrics(SM_CMONITORS), sys_dpi);
+    si.extra = extra;
     (void)dlog_start(&si);
 }
 

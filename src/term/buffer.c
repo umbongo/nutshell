@@ -1,6 +1,7 @@
 #include "term.h"
 #include "xmalloc.h"
 #include "shell_prompt.h"
+#include "dlog.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -72,6 +73,7 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->full_redraw_needed  = false;
     term->bracketed_paste_mode = false;
     term->write_seq            = 0;
+    term->log_id               = 0;
 
     term->lines = xcalloc((size_t)term->lines_capacity, sizeof(TermRow *));
     
@@ -226,6 +228,7 @@ void term_resize(Terminal *term, int rows, int cols) {
 
     int old_rows = term->rows;
     int old_cols = term->cols;
+    int old_lines = term->lines_count;
 
     /* Reflow the active buffer (alt-screen or primary).
      * Alt-screen has no scrollback — allocate rows only. */
@@ -258,6 +261,11 @@ void term_resize(Terminal *term, int rows, int cols) {
     term->cols = cols;
     term->scroll_top = 0;
     term->scroll_bot = rows - 1;
+
+    DLOG(DLOG_TERM, DLOG_DEBUG, term->log_id, "term.resize",
+         "rows_before=%d rows=%d cols_before=%d cols=%d lines_before=%d lines=%d alt=%d",
+         old_rows, rows, old_cols, cols, old_lines, term->lines_count,
+         term->alt_screen_active ? 1 : 0);
 }
 
 void term_scroll(Terminal *term) {
@@ -415,6 +423,20 @@ void term_clear_dirty(Terminal *term)
     }
 }
 
+int term_dirty_row_flags(const Terminal *term, unsigned char *flags, int max)
+{
+    if (!term) return 0;
+    int n = 0;
+    for (int i = 0; i < term->rows; i++) {
+        int idx = term_screen_to_phys(term, i);
+        int dirty = (idx >= 0 && idx < term->lines_capacity &&
+                     term->lines[idx] && term->lines[idx]->dirty) ? 1 : 0;
+        if (flags && i < max) flags[i] = (unsigned char)dirty;
+        n += dirty;
+    }
+    return n;
+}
+
 bool term_has_dirty_rows(Terminal *term)
 {
     if (!term) return false;
@@ -473,6 +495,10 @@ void term_alt_screen_enter(Terminal *term)
      * hiding for the alternate screen) was the only paint to run and left
      * the previous screen's text on view. */
     term->full_redraw_needed = true;
+
+    DLOG(DLOG_TERM, DLOG_DEBUG, term->log_id, "term.alt_screen.enter",
+         "rows=%d cols=%d primary_lines=%d", term->rows, term->cols,
+         term->primary_lines_count);
 }
 
 void term_alt_screen_exit(Terminal *term)
@@ -513,6 +539,10 @@ void term_alt_screen_exit(Terminal *term)
      * The shadow still holds the alt-screen content; cell-level dirty checks
      * would skip cells that happen to match, leaving stale pixels on screen. */
     term->full_redraw_needed = true;
+
+    DLOG(DLOG_TERM, DLOG_DEBUG, term->log_id, "term.alt_screen.exit",
+         "rows=%d cols=%d lines_count=%d", term->rows, term->cols,
+         term->lines_count);
 }
 
 /* Shared by term_at_prompt() and term_at_continuation_prompt(): every guard

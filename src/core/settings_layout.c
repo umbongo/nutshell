@@ -20,6 +20,7 @@ static const SettingsNavEntry NAV_TABLE[] = {
     { SETTINGS_PAGE_AI_PROVIDER,  1, 0, "Provider" },
     { SETTINGS_PAGE_AI_BEHAVIOUR, 1, 0, "Behaviour" },
     { SETTINGS_PAGE_AI_WEB,       1, 0, "Web Access" },
+    { SETTINGS_PAGE_DEBUG,        0, 0, "Debugging" },
     { SETTINGS_PAGE_ABOUT,        0, 0, "About" },
 };
 
@@ -77,6 +78,7 @@ const char *settings_page_title(int page_id)
         case SETTINGS_PAGE_AI_PROVIDER:  return "AI Assistant > Provider";
         case SETTINGS_PAGE_AI_BEHAVIOUR: return "AI Assistant > Behaviour";
         case SETTINGS_PAGE_AI_WEB:       return "AI Assistant > Web Access";
+        case SETTINGS_PAGE_DEBUG:        return "Debugging";
         case SETTINGS_PAGE_ABOUT:        return "About";
         default:                         return NULL;
     }
@@ -201,4 +203,48 @@ int settings_scroll_clamp(int pos, int max)
     if (pos < 0) return 0;
     if (pos > max) return max;
     return pos;
+}
+
+/* ---- The Debugging page ----------------------------------------------------- */
+
+static const struct { int rows; int when_on; int when_off; } DBG_SLOTS[SDBG_COUNT] = {
+    /* SDBG_ENABLE        */ { 1, 1, 1 },
+    /* SDBG_HINT_ON       */ { 1, 1, 0 },
+    /* SDBG_HINT_OFF      */ { 1, 0, 1 },
+    /* SDBG_LEVEL_RENDER  */ { 1, 1, 0 },
+    /* SDBG_LEVEL_TERM    */ { 1, 1, 0 },
+    /* SDBG_LEVEL_AI      */ { 1, 1, 0 },
+    /* SDBG_LEVEL_SSH     */ { 1, 1, 0 },
+    /* SDBG_LEVEL_SHELL   */ { 1, 1, 0 },
+    /* SDBG_LEVEL_GENERAL */ { 1, 1, 0 },
+    /* SDBG_RECORDER      */ { 1, 1, 0 },
+    /* SDBG_SCREENSHOT    */ { 1, 1, 0 },
+    /* SDBG_CONTENT       */ { 1, 1, 0 },
+    /* SDBG_CONTENT_WARN  */ { 2, 1, 0 },
+    /* SDBG_FOLDER        */ { 1, 1, 0 },
+    /* SDBG_MAX_FILE      */ { 1, 1, 0 },
+    /* SDBG_MAX_TOTAL     */ { 1, 1, 0 },
+    /* SDBG_CURRENT       */ { 1, 1, 1 },
+    /* SDBG_NOTE          */ { 3, 1, 0 },
+};
+
+int settings_debug_slot_rows(int slot)
+{
+    if (slot < 0 || slot >= SDBG_COUNT) return 0;
+    return DBG_SLOTS[slot].rows;
+}
+
+int settings_debug_layout(int enabled, SettingsDebugPos pos[SDBG_COUNT])
+{
+    int row = 1;   /* row 0 is the page title */
+    for (int i = 0; i < SDBG_COUNT; i++) {
+        int vis = enabled ? DBG_SLOTS[i].when_on : DBG_SLOTS[i].when_off;
+        if (pos) {
+            pos[i].visible = vis;
+            pos[i].row     = vis ? row : -1;
+            pos[i].rows    = vis ? DBG_SLOTS[i].rows : 0;
+        }
+        if (vis) row += DBG_SLOTS[i].rows;
+    }
+    return row;
 }

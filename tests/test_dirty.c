@@ -389,3 +389,88 @@ int test_dirty_alt_screen_enter_requests_full_redraw(void)
     term_free(t);
     TEST_END();
 }
+
+/* ---- term_dirty_row_flags: the count and the per-row flags the render log
+ * events and the issue snapshot use ---------------------------------------- */
+
+int test_dirty_flags_count_and_fill(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(6, 10, 0);
+    unsigned char flags[6];
+    memset(flags, 0xEE, sizeof(flags));
+    ASSERT_EQ(term_dirty_row_flags(t, flags, 6), 6);          /* all dirty at init */
+    for (int i = 0; i < 6; i++) ASSERT_EQ(flags[i], 1);
+
+    term_clear_dirty(t);
+    ASSERT_EQ(term_dirty_row_flags(t, flags, 6), 0);
+    for (int i = 0; i < 6; i++) ASSERT_EQ(flags[i], 0);
+
+    feed(t, "\033[3;1H");                                    /* the cursor to row 2 ... */
+    term_clear_dirty(t);
+    feed(t, "X");                                    /* row 2 (0-based) */
+    ASSERT_EQ(term_dirty_row_flags(t, flags, 6), 1);
+    for (int i = 0; i < 6; i++) ASSERT_EQ(flags[i], i == 2 ? 1 : 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_dirty_flags_null_buffer_and_small_max(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(6, 10, 0);
+    ASSERT_EQ(term_dirty_row_flags(t, NULL, 0), 6);           /* count only */
+    unsigned char two[2] = { 0xEE, 0xEE };
+    ASSERT_EQ(term_dirty_row_flags(t, two, 2), 6);            /* counts every row, fills two */
+    ASSERT_EQ(two[0], 1);
+    ASSERT_EQ(two[1], 1);
+    unsigned char none[1] = { 0xEE };
+    ASSERT_EQ(term_dirty_row_flags(t, none, 0), 6);           /* max 0 writes nothing */
+    ASSERT_EQ(none[0], 0xEE);
+    ASSERT_EQ(term_dirty_row_flags(NULL, two, 2), 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_dirty_flags_follow_the_screen_with_scrollback(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 50);
+    for (int i = 0; i < 30; i++) feed(t, "line\r\n");        /* fill the history */
+    term_clear_dirty(t);
+    unsigned char f[4];
+    ASSERT_EQ(term_dirty_row_flags(t, f, 4), 0);
+    feed(t, "\033[1;1H");
+    term_clear_dirty(t);
+    feed(t, "X");
+    ASSERT_EQ(term_dirty_row_flags(t, f, 4), 1);
+    ASSERT_EQ(f[0], 1);
+    ASSERT_EQ(term_has_dirty_rows(t), true);
+    term_free(t);
+    TEST_END();
+}
+
+int test_dirty_flags_alt_screen_enter_marks_every_row(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    term_clear_dirty(t);
+    feed(t, "\033[?1049h");
+    ASSERT_EQ(term_dirty_row_flags(t, NULL, 0), 5);
+    term_free(t);
+    TEST_END();
+}
+
+/* The session id the term events carry is zero until the owner sets it. */
+int test_term_log_id_defaults_to_zero(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(3, 8, 0);
+    ASSERT_EQ(t->log_id, 0u);
+    t->log_id = 7;
+    term_resize(t, 4, 9);                                     /* emits term.resize; must not crash with no logger */
+    ASSERT_EQ(t->rows, 4);
+    ASSERT_EQ(t->log_id, 7u);
+    term_free(t);
+    TEST_END();
+}

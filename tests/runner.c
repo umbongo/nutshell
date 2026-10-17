@@ -2688,7 +2688,7 @@ int test_sl_metrics_init_null_safe(void);
 int test_sl_metrics_monotonic_with_dpi(void);
 int test_sl_metrics_never_zero_across_dpis(void);
 int test_sl_min_h_fits_full_nav_list(void);
-int test_sl_nav_count_is_12(void);
+int test_sl_nav_count_is_13(void);
 int test_sl_nav_at_oob_null(void);
 int test_sl_nav_headers_well_formed(void);
 int test_sl_nav_children_well_formed(void);
@@ -3168,6 +3168,39 @@ int test_md_blocks_respects_len_not_nul(void);
 /* test_ui_demo.c */
 int test_ui_demo_approval_rows_have_notes_and_a_long_command(void);
 int test_ui_demo_cmddetail_matches_approval(void);
+
+int test_sdbg_level_labels(void);
+int test_sdbg_category_labels(void);
+int test_sdbg_parse_mb_plain_and_clamped(void);
+int test_sdbg_parse_mb_garbage_keeps_current(void);
+int test_sdbg_parse_mb_overflow_is_hi(void);
+int test_sdbg_usage_text(void);
+int test_sdbg_usage_text_small_buffer_is_cut_and_terminated(void);
+int test_sdbg_current_text_cases(void);
+int test_sdbg_current_text_null_and_tiny(void);
+int test_sdbg_layout_unticked_is_toggle_hint_and_current_file(void);
+int test_sdbg_layout_ticked_packs_every_slot_in_order(void);
+int test_sdbg_layout_slot_rows_bounds(void);
+int test_sdbg_layout_null_pos_still_counts(void);
+int test_sdbg_layout_row_pixels_96_and_192(void);
+int test_sdbg_layout_page_height_ticked_vs_unticked(void);
+
+int test_ui_demo_settings_debug_is_an_empty_state(void);
+
+int test_dirty_flags_count_and_fill(void);
+int test_dirty_flags_null_buffer_and_small_max(void);
+int test_dirty_flags_follow_the_screen_with_scrollback(void);
+int test_dirty_flags_alt_screen_enter_marks_every_row(void);
+int test_term_log_id_defaults_to_zero(void);
+int test_render_stuck_threshold_is_a_named_constant(void);
+int test_render_stuck_does_not_fire_below_the_threshold(void);
+int test_render_stuck_fires_once_at_the_threshold_with_the_streak_length(void);
+int test_render_stuck_stays_quiet_for_the_rest_of_the_episode(void);
+int test_render_stuck_a_clean_paint_ends_the_episode_and_rearms(void);
+int test_render_stuck_a_clean_paint_before_the_threshold_resets_the_count(void);
+int test_render_stuck_switching_session_starts_a_new_episode(void);
+int test_render_stuck_the_number_of_dirty_rows_does_not_matter_only_that_one_is(void);
+int test_render_stuck_null_state_is_safe(void);
 
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0); /* unbuffered so a crash shows the last [RUN ] line */
@@ -5838,7 +5871,7 @@ int main(void) {
     failed += test_sl_metrics_monotonic_with_dpi();
     failed += test_sl_metrics_never_zero_across_dpis();
     failed += test_sl_min_h_fits_full_nav_list();
-    failed += test_sl_nav_count_is_12();
+    failed += test_sl_nav_count_is_13();
     failed += test_sl_nav_at_oob_null();
     failed += test_sl_nav_headers_well_formed();
     failed += test_sl_nav_children_well_formed();
@@ -6332,6 +6365,39 @@ int main(void) {
 
     failed += test_ui_demo_approval_rows_have_notes_and_a_long_command();
     failed += test_ui_demo_cmddetail_matches_approval();
+
+    failed += test_sdbg_level_labels();
+    failed += test_sdbg_category_labels();
+    failed += test_sdbg_parse_mb_plain_and_clamped();
+    failed += test_sdbg_parse_mb_garbage_keeps_current();
+    failed += test_sdbg_parse_mb_overflow_is_hi();
+    failed += test_sdbg_usage_text();
+    failed += test_sdbg_usage_text_small_buffer_is_cut_and_terminated();
+    failed += test_sdbg_current_text_cases();
+    failed += test_sdbg_current_text_null_and_tiny();
+    failed += test_sdbg_layout_unticked_is_toggle_hint_and_current_file();
+    failed += test_sdbg_layout_ticked_packs_every_slot_in_order();
+    failed += test_sdbg_layout_slot_rows_bounds();
+    failed += test_sdbg_layout_null_pos_still_counts();
+    failed += test_sdbg_layout_row_pixels_96_and_192();
+    failed += test_sdbg_layout_page_height_ticked_vs_unticked();
+
+    failed += test_ui_demo_settings_debug_is_an_empty_state();
+
+    failed += test_dirty_flags_count_and_fill();
+    failed += test_dirty_flags_null_buffer_and_small_max();
+    failed += test_dirty_flags_follow_the_screen_with_scrollback();
+    failed += test_dirty_flags_alt_screen_enter_marks_every_row();
+    failed += test_term_log_id_defaults_to_zero();
+    failed += test_render_stuck_threshold_is_a_named_constant();
+    failed += test_render_stuck_does_not_fire_below_the_threshold();
+    failed += test_render_stuck_fires_once_at_the_threshold_with_the_streak_length();
+    failed += test_render_stuck_stays_quiet_for_the_rest_of_the_episode();
+    failed += test_render_stuck_a_clean_paint_ends_the_episode_and_rearms();
+    failed += test_render_stuck_a_clean_paint_before_the_threshold_resets_the_count();
+    failed += test_render_stuck_switching_session_starts_a_new_episode();
+    failed += test_render_stuck_the_number_of_dirty_rows_does_not_matter_only_that_one_is();
+    failed += test_render_stuck_null_state_is_safe();
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
     return failed > 0;

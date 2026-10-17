@@ -28,7 +28,10 @@
  * same content as "approval" (every row with an assistant note, plus one
  * ~110 character pending command that the card truncates); the win32 side
  * then opens the command details popup on that long row. Also not part of
- * "all". */
+ * "all". "settings-debug" (2026-10-18) builds an empty conversation; the
+ * win32 side opens Settings on the Debugging page over it, with debugging
+ * ticked in memory only (nothing is saved). Also not part of "all": the
+ * Settings window is modal and is not an AI panel state. */
 
 /* Build the canned conversation, approval queue(s) and terminal text for
  * one demo state.
