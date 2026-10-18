@@ -212,11 +212,6 @@ const char *chat_cmd_label(int approved, int blocked, int run,
 int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
                             const ApprovalQueue *q, int batch_ending);
 
-/* Remove every "[EXEC]" and "[/EXEC]" marker from the NUL-terminated string
- * in place, keeping the text between them. Nothing else changes. NULL is a
- * no-op. Used on band-selection text before it goes to the clipboard. */
-void chat_strip_exec_markers(char *s);
-
 /* If the NUL-terminated string in buf is longer than max-1 bytes, truncate
  * it at the last UTF-8 character boundary that fits in max-1 bytes and
  * NUL-terminate. Returns the resulting length. Writes nothing and returns 0

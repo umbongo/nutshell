@@ -33,8 +33,10 @@
 #include "chat_exec.h"
 #include "chat_copy.h"
 #include "text_runs.h"
+#include "secure_zero.h"
 #include <windowsx.h>
 #include <commctrl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -225,6 +227,8 @@ static void     paint_empty_state(ChatListView *lv, HDC hdc,
 static int      chatlv_empty_state_hit(ChatListView *lv, int mx, int my,
                                        RECT *out_rc);
 static int      chatlv_list_empty(const ChatListView *lv);
+static int      clv_sel_ordered(const ChatListView *lv, ChatSelPos *a,
+                                ChatSelPos *b);
 
 /* command_index_of and is_last_command removed — no longer needed
  * with the container-based command rendering approach. is_first_command()
@@ -494,92 +498,212 @@ static void draw_chevron_down(HDC hdc, const RECT *rc, COLORREF colour)
     DeleteObject(pen);
 }
 
-/* ── Selection: check if an item overlaps the selection range ──────── */
+/* ── Selection: hit-test the list (spec 2026-10-18 sections 4 and 5) ── */
 
-static int item_in_selection(const ChatListView *lv, int item_top, int item_h)
+/* The text of part `part` of `it` and its length. */
+static const char *clv_part_text(const ChatMsgItem *it, int part, int *len)
 {
-    if (!lv->sel_valid) return 0;
-    int sy = lv->sel_start_y, ey = lv->sel_end_y;
-    if (sy > ey) { int tmp = sy; sy = ey; ey = tmp; }
-    int item_bot = item_top + item_h;
-    return (item_bot > sy && item_top < ey);
+    const char *t = it->text;
+    if (part == TR_PART_THINKING && it->type == CHAT_ITEM_AI_TEXT)
+        t = it->u.ai.thinking_text;
+    if (!t) t = "";
+    *len = (t == it->text) ? (int)it->text_len : (int)strlen(t);
+    return t;
 }
 
-/* ── Selection: extract text from all items in the selection range ─── */
-
-static size_t sel_extract_text(const ChatListView *lv, char *buf, size_t buf_sz)
+/* The first (end = 0) or last (end = 1) offset of an item that has runs. */
+static ChatSelPos clv_item_edge(const ChatMsgItem *it, int end)
 {
-    if (!lv->sel_valid || !lv->msg_list || buf_sz == 0) return 0;
+    ChatSelPos p = { it->id, TR_PART_MAIN, 0 };
+    int part = TR_PART_MAIN;
+    int off = end ? text_runs_hit(&it->runs, 0, INT_MAX / 2, &part)
+                  : text_runs_hit(&it->runs, INT_MIN / 2, INT_MIN / 2, &part);
+    p.part = part;
+    p.off = off < 0 ? 0 : off;
+    return p;
+}
 
-    int sy = lv->sel_start_y, ey = lv->sel_end_y;
-    if (sy > ey) { int tmp = sy; sy = ey; ey = tmp; }
+/* Map a client point to a selection end. The pinned copy of a user bubble
+ * answers for the band it covers; otherwise the item whose band (its rect
+ * and the gap below it, laid out as on_paint() lays them) holds the point
+ * answers through its runs. An item with no runs there -- a command card,
+ * or an item this frame did not paint -- resolves to the nearer edge of the
+ * nearest item that has runs; below every item, the end of the last one.
+ * Returns 0 when no painted item has text. */
+static int clv_hit(ChatListView *lv, int mx, int my, ChatSelPos *out)
+{
+    if (!lv->msg_list) return 0;
 
-    size_t pos = 0;
-    int y = lv->msg_gap;  /* content Y (not scroll-adjusted) */
-    ChatMsgItem *item = lv->msg_list->head;
-
-    while (item && pos < buf_sz - 1) {
-        int h = item->measured_height;
-        int item_bot = y + h;
-
-        if (item_bot > sy && y < ey) {
-            const char *txt = NULL;
-            switch (item->type) {
-            case CHAT_ITEM_USER:
-            case CHAT_ITEM_AI_TEXT:
-            case CHAT_ITEM_STATUS:
-            case CHAT_ITEM_TOOL_CALL:
-            case CHAT_ITEM_TOOL_RESULT:
-                txt = item->text;
-                break;
-            case CHAT_ITEM_COMMAND:
-                txt = item->u.cmd.command ? item->u.cmd.command : item->text;
-                break;
-            }
-            if (txt && *txt) {
-                if (pos > 0 && pos < buf_sz - 1)
-                    buf[pos++] = '\n';
-                size_t len = strlen(txt);
-                if (len > buf_sz - 1 - pos) len = buf_sz - 1 - pos;
-                memcpy(buf + pos, txt, len);
-                pos += len;
+    if (lv->pinned_id && my < lv->sticky_bottom) {
+        ChatMsgItem *pu = chat_msg_find(lv->msg_list, lv->pinned_id);
+        if (pu && pu->pinned_runs.n > 0) {
+            int part = TR_PART_MAIN;
+            int off = text_runs_hit(&pu->pinned_runs, mx, my, &part);
+            if (off >= 0) {
+                out->msg_id = pu->id;
+                out->part = part;
+                out->off = off;
+                return 1;
             }
         }
-
-        y += h + lv->msg_gap;
-        item = item->next;
     }
 
-    buf[pos] = '\0';
-    return pos;
+    ChatMsgItem *band = NULL, *last = NULL;
+    int band_top = 0, band_bot = 0;
+    int y = lv->msg_gap - lv->scroll_y;
+    for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next) {
+        int h = it->measured_height;
+        if (h == 0) continue;
+        if (!band && my < y + h + lv->msg_gap) {
+            band = it;
+            band_top = y;
+            band_bot = y + h + lv->msg_gap;
+        }
+        if (it->runs.n > 0) last = it;
+        y += h + lv->msg_gap;
+    }
+    if (!last) return 0;
+    if (!band) {
+        *out = clv_item_edge(last, 1);
+        return 1;
+    }
+    if (band->runs.n > 0) {
+        int part = TR_PART_MAIN;
+        int off = text_runs_hit(&band->runs, mx, my, &part);
+        out->msg_id = band->id;
+        out->part = part;
+        out->off = off < 0 ? 0 : off;
+        return 1;
+    }
+    ChatMsgItem *prev = band->prev, *next = band->next;
+    while (prev && prev->runs.n == 0) prev = prev->prev;
+    while (next && next->runs.n == 0) next = next->next;
+    if (prev && (!next || my - band_top < band_bot - my))
+        *out = clv_item_edge(prev, 1);
+    else if (next)
+        *out = clv_item_edge(next, 0);
+    else
+        *out = clv_item_edge(last, 1);
+    return 1;
 }
 
-/* ── Selection: copy selected text to clipboard ───────────────────── */
-
-static void sel_copy_to_clipboard(ChatListView *lv)
+/* The run under the point and the item it belongs to -- the pinned copy
+ * first, where it covers the list. NULL when the point is on no run. */
+static ChatMsgItem *clv_run_at(ChatListView *lv, int mx, int my,
+                               const TextRuns **runs, const TextRun **run)
 {
-    enum { COPY_CAP = 32768 };
-    /* A few spare bytes past the cap let utf8_cut_at() see whether the cap
-     * would split a multi-byte character. */
-    char buf[COPY_CAP + 4];
-    size_t n = sel_extract_text(lv, buf, sizeof(buf));
-    if (n == 0) return;
-    /* The extraction may have stopped mid-character at the end of the
-     * buffer: cut to valid UTF-8 first (stripping the [EXEC] markers, which
-     * are transport syntax rather than text the user wants, only shortens). */
-    n = utf8_cut_at(buf, COPY_CAP);
-    chat_strip_exec_markers(buf);
-    n = strlen(buf);
-    clip_copy_utf8(lv->hwnd, buf, n);
+    if (!lv->msg_list) return NULL;
+    if (lv->pinned_id && my < lv->sticky_bottom) {
+        ChatMsgItem *pu = chat_msg_find(lv->msg_list, lv->pinned_id);
+        int ri = pu ? text_runs_run_at(&pu->pinned_runs, mx, my) : -1;
+        if (ri < 0) return NULL;
+        *runs = &pu->pinned_runs;
+        *run = &pu->pinned_runs.v[ri];
+        return pu;
+    }
+    for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next) {
+        int ri = text_runs_run_at(&it->runs, mx, my);
+        if (ri >= 0) {
+            *runs = &it->runs;
+            *run = &it->runs.v[ri];
+            return it;
+        }
+    }
+    return NULL;
+}
+
+static void clv_set_sel(ChatListView *lv, int id, int part, int s, int e)
+{
+    lv->sel_anchor.msg_id = id;
+    lv->sel_anchor.part = part;
+    lv->sel_anchor.off = s;
+    lv->sel_focus.msg_id = id;
+    lv->sel_focus.part = part;
+    lv->sel_focus.off = e;
+    lv->sel_valid = e > s;
+    lv->sel_active = 0;
+    InvalidateRect(lv->hwnd, NULL, FALSE);
+}
+
+/* Double-click: the word under the point (a prose run less its trailing
+ * blanks, or the whitespace-delimited token in a code line). Returns 1
+ * when it selected something. */
+static int clv_select_word(ChatListView *lv, int mx, int my)
+{
+    const TextRuns *runs = NULL;
+    const TextRun *run = NULL;
+    ChatMsgItem *it = clv_run_at(lv, mx, my, &runs, &run);
+    if (!it || !run || run->synthetic[0]) return 0;
+    int part = run->part;
+    int off = text_runs_hit(runs, mx, my, &part);
+    int len = 0;
+    const char *text = clv_part_text(it, run->part, &len);
+    int s = 0, e = 0;
+    text_runs_word(text, len, run, off, &s, &e);
+    if (e <= s) return 0;
+    clv_set_sel(lv, it->id, run->part, s, e);
+    return 1;
+}
+
+/* Triple-click: the source line under the point -- a paragraph, as every
+ * source newline is a hard break. Returns 1 when it selected something. */
+static int clv_select_line(ChatListView *lv, int mx, int my)
+{
+    ChatSelPos p;
+    if (!clv_hit(lv, mx, my, &p)) return 0;
+    ChatMsgItem *it = chat_msg_find(lv->msg_list, p.msg_id);
+    if (!it) return 0;
+    int len = 0;
+    const char *text = clv_part_text(it, p.part, &len);
+    int s = 0, e = 0;
+    text_line_at(text, len, p.off, &s, &e);
+    if (e <= s) return 0;
+    clv_set_sel(lv, it->id, p.part, s, e);
+    return 1;
+}
+
+/* Drag: the focus follows the point. The runs must be current, so any
+ * paint a scroll, wheel, resize or stream left pending happens first. */
+static void clv_drag_to(ChatListView *lv, int mx, int my)
+{
+    UpdateWindow(lv->hwnd);
+    ChatSelPos p;
+    if (clv_hit(lv, mx, my, &p)) lv->sel_focus = p;
+    lv->sel_valid = chat_sel_cmp(lv->sel_anchor, lv->sel_focus) != 0;
+    InvalidateRect(lv->hwnd, NULL, FALSE);
+}
+
+/* ── Selection: copy the visible text to the clipboard ──────────────── */
+
+/* Ctrl+C, the context menu and Edit > Copy: the visible text of the
+ * selection (chat_copy_selection), heap-sized, no cap. Returns 1 when the
+ * clipboard now holds it. */
+static int sel_copy_to_clipboard(ChatListView *lv)
+{
+    ChatSelPos a, b;
+    if (!clv_sel_ordered(lv, &a, &b)) return 0;
+    char *buf = NULL;
+    size_t n = chat_copy_selection(lv->msg_list, a, b, lv->render_markdown,
+                                   &buf);
+    int ok = 0;
+    if (buf && n > 0) ok = clip_copy_utf8(lv->hwnd, buf, n);
+    if (buf) {
+        secure_zero(buf, n);
+        free(buf);
+    }
+    return ok;
 }
 
 /* ── Selection: select all items ──────────────────────────────────── */
 
 static void sel_select_all(ChatListView *lv)
 {
-    lv->sel_start_y = 0;
-    lv->sel_end_y = lv->total_height;
+    ChatSelPos a, b;
+    if (!chat_sel_all(lv->msg_list, &a, &b)) return;
+    lv->sel_anchor = a;
+    lv->sel_focus = b;
     lv->sel_valid = 1;
+    lv->sel_active = 0;
     InvalidateRect(lv->hwnd, NULL, FALSE);
 }
 
@@ -587,7 +711,7 @@ static void sel_select_all(ChatListView *lv)
 
 static void sel_clear(ChatListView *lv)
 {
-    if (lv->sel_valid) {
+    if (lv->sel_valid || lv->sel_active) {
         lv->sel_valid = 0;
         lv->sel_active = 0;
         InvalidateRect(lv->hwnd, NULL, FALSE);
@@ -779,6 +903,14 @@ void chat_listview_set_state(HWND hwnd, int state_id, int context_lines)
     lv->state_id = state_id;
     lv->state_context_lines = context_lines;
     InvalidateRect(hwnd, NULL, FALSE);
+}
+
+int chat_listview_copy_selection(HWND hwnd)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv || GetFocus() != hwnd || !lv->sel_valid) return 0;
+    sel_copy_to_clipboard(lv);
+    return 1;
 }
 
 void chat_listview_invalidate(HWND hwnd)
@@ -2590,6 +2722,14 @@ static void paint_frame(ChatListView *lv, HDC hdc)
         text_runs_reset(&ri->pinned_runs);
         ri->painted_height = 0;
     }
+    /* A selection whose message is gone (session switch, stream cancel)
+     * is dropped: ends are resolved by id on every use. */
+    if ((lv->sel_valid || lv->sel_active) && lv->msg_list &&
+        (!chat_msg_find(lv->msg_list, lv->sel_anchor.msg_id) ||
+         !chat_msg_find(lv->msg_list, lv->sel_focus.msg_id))) {
+        lv->sel_valid = 0;
+        lv->sel_active = 0;
+    }
 
     RECT client;
     GetClientRect(lv->hwnd, &client);
@@ -2709,23 +2849,6 @@ static void paint_frame(ChatListView *lv, HDC hdc)
 
             int this_bottom = y + painted_h;
             if (this_bottom > painted_bottom) painted_bottom = this_bottom;
-
-            /* Selection highlight: invert colours for items in selection */
-            if (lv->sel_valid) {
-                int content_y = y + lv->scroll_y;
-                if (item_in_selection(lv, content_y, h)) {
-                    RECT sel_rc;
-                    sel_rc.left   = 0;
-                    sel_rc.right  = cw;
-                    sel_rc.top    = y;
-                    sel_rc.bottom = y + h;
-                    /* Clamp to viewport */
-                    if (sel_rc.top < 0) sel_rc.top = 0;
-                    if (sel_rc.bottom > ch) sel_rc.bottom = ch;
-                    if (sel_rc.top < sel_rc.bottom)
-                        InvertRect(mem_dc, &sel_rc);
-                }
-            }
         }
 
         /* Stop if we've gone past the viewport */
@@ -3617,16 +3740,67 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     case WM_LBUTTONDOWN: {
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
+        UpdateWindow(hwnd);  /* hit-test against current runs */
+
+        /* Triple-click: a down soon after a handled double-click, at the
+         * same point, selects the source line -- taken before the normal
+         * path so nothing clears it, and no capture is taken. */
+        if (lv->dbl_armed) {
+            lv->dbl_armed = 0;
+            int dx = mx - lv->dbl_x, dy = my - lv->dbl_y;
+            if (dx < 0) dx = -dx;
+            if (dy < 0) dy = -dy;
+            if (GetTickCount() - lv->dbl_time <= GetDoubleClickTime() &&
+                dx <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+                dy <= GetSystemMetrics(SM_CYDOUBLECLK) / 2) {
+                SetFocus(hwnd);
+                if (clv_select_line(lv, mx, my)) {
+                    lv->sel_keep_on_up = 1;
+                    return 0;
+                }
+            }
+        }
+
         if (on_lbuttondown(lv, mx, my)) {
             sel_clear(lv);
             return 0;  /* A button/link was clicked */
         }
-        /* Start text selection drag */
-        sel_clear(lv);
-        lv->sel_start_y = my + lv->scroll_y;
-        lv->sel_end_y   = lv->sel_start_y;
-        lv->sel_active  = 1;
+        /* Start a character selection: anchor = focus at the hit. */
+        ChatSelPos p;
+        if (!clv_hit(lv, mx, my, &p)) {
+            sel_clear(lv);
+            return 0;
+        }
+        lv->sel_anchor = p;
+        lv->sel_focus = p;
+        lv->sel_valid = 0;
+        lv->sel_active = 1;
+        lv->sel_moved = 0;
+        lv->sel_down_x = lv->sel_last_x = mx;
+        lv->sel_down_y = lv->sel_last_y = my;
         SetCapture(hwnd);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    }
+
+    case WM_LBUTTONDBLCLK: {
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        UpdateWindow(hwnd);  /* hit-test against current runs */
+        /* Over a glyph, tickbox, button, link or the Thinking header it
+         * does nothing, as the unhandled message did: the first click of
+         * the pair already acted, and it is not forwarded, so nothing
+         * toggles twice. */
+        if ((chatlv_list_empty(lv) && lv->state_id >= 0) ||
+            chatlv_code_hit_at(lv, mx, my) ||
+            chatlv_hit_is_actionable(chatlv_hover_hit(lv, mx, my, NULL)))
+            return 0;
+        if (clv_select_word(lv, mx, my)) {
+            lv->dbl_armed = 1;
+            lv->dbl_time = GetTickCount();
+            lv->dbl_x = mx;
+            lv->dbl_y = my;
+        }
         return 0;
     }
 
@@ -3656,9 +3830,18 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             }
         }
         if (!lv->sel_active) break;
+        int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
-        lv->sel_end_y = my + lv->scroll_y;
-        /* Auto-scroll when dragging near edges */
+        lv->sel_last_x = mx;
+        lv->sel_last_y = my;
+        if (!lv->sel_moved) {
+            int dx = mx - lv->sel_down_x, dy = my - lv->sel_down_y;
+            if (dx >= -4 && dx <= 4 && dy >= -4 && dy <= 4)
+                return 0;  /* under the 4 px threshold: still a click */
+            lv->sel_moved = 1;
+        }
+        /* Auto-scroll when dragging past an edge; clv_drag_to() repaints
+         * before it hit-tests, so the runs follow the scroll. */
         if (my < 0) {
             lv->scroll_y += my;  /* my is negative, scrolls up */
             clamp_scroll(lv);
@@ -3668,10 +3851,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             clamp_scroll(lv);
             after_user_scroll(lv);
         }
-        int sy = lv->sel_start_y, ey = lv->sel_end_y;
-        if (sy > ey) { int tmp = sy; sy = ey; ey = tmp; }
-        lv->sel_valid = (ey - sy > 4);  /* small threshold to avoid accidental select */
-        InvalidateRect(hwnd, NULL, FALSE);
+        clv_drag_to(lv, mx, my);
         return 0;
     }
 
@@ -3702,21 +3882,34 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     }
 
     case WM_LBUTTONUP: {
-        if (!lv->sel_active) break;
-        ReleaseCapture();
-        lv->sel_active = 0;
-        int my = GET_Y_LPARAM(lParam);
-        lv->sel_end_y = my + lv->scroll_y;
-        int sy = lv->sel_start_y, ey = lv->sel_end_y;
-        if (sy > ey) { int tmp = sy; sy = ey; ey = tmp; }
-        lv->sel_valid = (ey - sy > 4);
-        if (lv->sel_valid) {
-            /* Auto-copy to clipboard on mouse release (like the terminal) */
-            sel_copy_to_clipboard(lv);
+        /* A triple-click took no capture and keeps what it selected. */
+        if (lv->sel_keep_on_up) {
+            lv->sel_keep_on_up = 0;
+            return 0;
         }
-        InvalidateRect(hwnd, NULL, FALSE);
+        if (!lv->sel_active) {
+            if (GetCapture() == hwnd) ReleaseCapture();
+            break;
+        }
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        if (lv->sel_moved) {
+            clv_drag_to(lv, mx, my);      /* re-hit at the release point */
+        } else {
+            lv->sel_valid = 0;            /* a click: clears the selection */
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        lv->sel_active = 0;               /* before WM_CAPTURECHANGED */
+        ReleaseCapture();
+        /* Nothing is copied on release: Ctrl+C, Edit > Copy or the menu. */
         return 0;
     }
+
+    case WM_CAPTURECHANGED:
+        /* Capture taken away mid-drag (a menu, another window): end the
+         * drag where it is. */
+        lv->sel_active = 0;
+        return 0;
 
     case WM_RBUTTONDOWN: {
         /* Right-click: a native context menu (system theme, like the
@@ -3740,7 +3933,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                        mpt.x, mpt.y, 0, hwnd, NULL);
         DestroyMenu(menu);
         if (pick == CM_COPY) {
-            if (lv->sel_valid) sel_copy_to_clipboard(lv);
+            sel_copy_to_clipboard(lv);
         } else if (pick == CM_SELECT_ALL) {
             sel_select_all(lv);
         } else if (pick == CM_PASTE) {
@@ -3950,6 +4143,12 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
 
         if (lv->scroll_y != old_pos) {
             after_user_scroll(lv);
+            /* Wheel while dragging: the text moved under a still pointer,
+             * so the focus follows to what is now under it. */
+            if (lv->sel_active) {
+                lv->sel_moved = 1;
+                clv_drag_to(lv, lv->sel_last_x, lv->sel_last_y);
+            }
         }
         return 0;
     }
@@ -3979,10 +4178,9 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             if (parent) SendMessage(parent, msg, wParam, lParam);
             return 0;
         }
-        /* Ctrl+C: copy selection to clipboard */
+        /* Ctrl+C: copy the visible text of the selection */
         if (wParam == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
-            if (lv->sel_valid)
-                sel_copy_to_clipboard(lv);
+            sel_copy_to_clipboard(lv);
             return 0;
         }
         /* Ctrl+A: select all */

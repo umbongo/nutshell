@@ -810,52 +810,6 @@ int test_chat_msg_note_freed_with_item(void) {
     TEST_END();
 }
 
-/* --- chat_strip_exec_markers --- */
-
-int test_chat_strip_exec_markers_basic(void) {
-    TEST_BEGIN();
-    char s[] = "Run [EXEC]ls -la[/EXEC] now";
-    chat_strip_exec_markers(s);
-    ASSERT_STR_EQ(s, "Run ls -la now");
-    TEST_END();
-}
-
-int test_chat_strip_exec_markers_multiple_and_adjacent(void) {
-    TEST_BEGIN();
-    char s[] = "[EXEC]a[/EXEC][EXEC]b[/EXEC]\n[EXEC]c[/EXEC]";
-    chat_strip_exec_markers(s);
-    ASSERT_STR_EQ(s, "ab\nc");
-    TEST_END();
-}
-
-int test_chat_strip_exec_markers_unpaired(void) {
-    TEST_BEGIN();
-    char s1[] = "start [EXEC]no end";
-    chat_strip_exec_markers(s1);
-    ASSERT_STR_EQ(s1, "start no end");
-    char s2[] = "stray [/EXEC] close";
-    chat_strip_exec_markers(s2);
-    ASSERT_STR_EQ(s2, "stray  close");
-    TEST_END();
-}
-
-int test_chat_strip_exec_markers_leaves_everything_else(void) {
-    TEST_BEGIN();
-    char s[] = "[exec] [EXE] EXEC] [ EXEC ] **bold** \xE2\x80\x94 `code` [/EXE]";
-    char want[sizeof(s)];
-    memcpy(want, s, sizeof(s));
-    chat_strip_exec_markers(s);
-    ASSERT_STR_EQ(s, want);
-    char empty[] = "";
-    chat_strip_exec_markers(empty);
-    ASSERT_STR_EQ(empty, "");
-    chat_strip_exec_markers(NULL);
-    char only[] = "[EXEC][/EXEC]";
-    chat_strip_exec_markers(only);
-    ASSERT_STR_EQ(only, "");
-    TEST_END();
-}
-
 /* --- utf8_cut_at --- */
 
 int test_utf8_cut_at_short_string_untouched(void) {

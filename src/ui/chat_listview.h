@@ -44,16 +44,20 @@ typedef struct {
     ActivityState *activity;
     int pulse_toggle;           /* Animation toggle for pulsing dot */
 
-    /* Text selection (content-space Y coordinates) */
-    int sel_start_y;            /* Content Y where mouse-drag started */
-    int sel_end_y;              /* Content Y where mouse-drag currently is */
-    int sel_active;             /* 1 = mouse is held down, dragging */
-    int sel_valid;              /* 1 = a selection exists to highlight/copy */
-
     /* Character selection (spec 2026-10-18 section 5): anchor and focus as
-     * (message id, part, byte offset), resolved by id on every use. */
+     * (message id, part, byte offset), resolved by id on every use; the
+     * selection is dropped when either id no longer names an item. */
     ChatSelPos sel_anchor;
     ChatSelPos sel_focus;
+    int sel_active;             /* 1 = the button is down, dragging */
+    int sel_valid;              /* 1 = a non-empty selection exists */
+    int sel_moved;              /* 1 = this drag passed the 4 px threshold */
+    int sel_down_x, sel_down_y; /* where the button went down */
+    int sel_last_x, sel_last_y; /* last drag point, re-hit after a wheel */
+    int sel_keep_on_up;         /* a triple-click: keep it on button-up */
+    int dbl_armed;              /* a handled double-click may become triple */
+    DWORD dbl_time;             /* GetTickCount() of that double-click */
+    int dbl_x, dbl_y;           /* where it was */
 
     /* Id of the user item whose copy on_paint() pinned at the top of the
      * list this frame (its runs are in pinned_runs), 0 when none. */
@@ -144,6 +148,12 @@ void chat_listview_set_fonts(HWND hwnd, HFONT font, HFONT mono,
 
 /* Set theme (triggers full repaint). */
 void chat_listview_set_theme(HWND hwnd, const ThemeColors *theme);
+
+/* Edit > Copy: when this list view has keyboard focus and a selection,
+ * copy the selection's visible text to the clipboard and return 1;
+ * otherwise return 0 and touch nothing (the caller copies the terminal's
+ * selection instead). */
+int chat_listview_copy_selection(HWND hwnd);
 
 /* Notify that the message list has changed. Triggers remeasure + repaint. */
 void chat_listview_invalidate(HWND hwnd);

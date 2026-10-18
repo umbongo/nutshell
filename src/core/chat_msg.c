@@ -347,29 +347,6 @@ int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
     return n;
 }
 
-void chat_strip_exec_markers(char *s)
-{
-    if (!s) return;
-    static const char open_m[] = "[EXEC]";
-    static const char close_m[] = "[/EXEC]";
-    char *w = s;
-    const char *r = s;
-    while (*r) {
-        if (*r == '[') {
-            if (strncmp(r, open_m, sizeof(open_m) - 1) == 0) {
-                r += sizeof(open_m) - 1;
-                continue;
-            }
-            if (strncmp(r, close_m, sizeof(close_m) - 1) == 0) {
-                r += sizeof(close_m) - 1;
-                continue;
-            }
-        }
-        *w++ = *r++;
-    }
-    *w = '\0';
-}
-
 size_t utf8_cut_at(char *buf, size_t max)
 {
     if (!buf || max == 0) return 0;
