@@ -2607,6 +2607,10 @@ static void paint_frame(ChatListView *lv, HDC hdc)
     FillRect(mem_dc, &client, bg_br);
     DeleteObject(bg_br);
 
+    /* A fresh memory DC starts OPAQUE and md_render_ex() restores the mode
+     * it found, so every painter in the frame starts from TRANSPARENT. */
+    SetBkMode(mem_dc, TRANSPARENT);
+
     /* Empty/no-key/no-session state: replaces the normal item walk
      * entirely while the list has zero items and a state is set (AI
      * Assist Panel task 4). */
