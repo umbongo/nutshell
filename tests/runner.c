@@ -3208,6 +3208,12 @@ int test_chat_copy_selection_takes_open_thinking_only(void);
 int test_chat_copy_selection_clamps_and_drops_vanished_ids(void);
 int test_chat_sel_all_spans_text_items(void);
 
+/* test_chat_copy_paint.c */
+int test_paint_runs_carry_the_bytes_they_draw(void);
+int test_painted_words_equal_copied_text(void);
+int test_painted_words_equal_copied_text_markdown_off(void);
+int test_paint_synthetic_runs_cover_their_marker(void);
+
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
 int test_md_blocks_one(void);
@@ -6475,6 +6481,11 @@ int main(void) {
     failed += test_chat_copy_selection_takes_open_thinking_only();
     failed += test_chat_copy_selection_clamps_and_drops_vanished_ids();
     failed += test_chat_sel_all_spans_text_items();
+
+    failed += test_paint_runs_carry_the_bytes_they_draw();
+    failed += test_painted_words_equal_copied_text();
+    failed += test_painted_words_equal_copied_text_markdown_off();
+    failed += test_paint_synthetic_runs_cover_their_marker();
 
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();
