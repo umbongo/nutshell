@@ -314,6 +314,10 @@ Open, in priority order:
 - [ ] Wide characters: the parser gives every codepoint one cell, ConPTY and most terminals
       give East Asian wide characters and most emoji two, so such rows drift from the shell's
       idea of the cursor column. Pre-existing; needs a width table and two-cell rendering.
+- [ ] Parser quirk (pre-existing, left alone by the ConPTY resize spec because fixing it changes
+      SSH rendering): EL never updates `TermRow.len` or `wrapped`, ED 0/1 leave the cursor row's
+      `len` and the cleared rows' `wrapped`, and a line feed never clears `wrapped`
+      (`parser.c:368-458`, `:641-647`), so `len` can exceed the written width.
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the
