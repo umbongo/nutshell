@@ -45,23 +45,50 @@ typedef struct {
 CmdPolicy cmd_policy_default(void);
 
 /* Normalise anything that arrived from disk or from a sloppy caller:
- * `allowed` into 0..3, `unattended` into POLICY_NONE..allowed. NULL-safe. */
+ * `allowed` into 0..3 and `unattended` into POLICY_NONE..allowed, then a
+ * split marker (POLICY_NONE < unattended < allowed) rounds DOWN to
+ * POLICY_NONE. The invariant this enforces, since 2026-10-18
+ * (docs/superpowers/specs/2026-10-18-ai-auto-approve-button-design.md
+ * section 2): `unattended` is POLICY_NONE or equal to `allowed` -- the UI
+ * shows the policy as one level plus an Auto-approve button. NULL-safe. */
 void cmd_policy_clamp(CmdPolicy *p);
 
-/* Move the ceiling to `stop` (clamped to 0..3). Lowering it DRAGS the
- * unattended marker down with it -- tightening must never leave a higher
- * unattended marker behind. NULL-safe. */
+/* Move the level (the ceiling) to `stop`, clamped to 0..3. The policy is
+ * normalised first, so a split turns Auto-approve off. Then, if
+ * Auto-approve is on, the unattended marker moves with the level; if it
+ * is off it stays off. NULL-safe. */
 void cmd_policy_set_allowed(CmdPolicy *p, int stop);
 
-/* Move the unattended marker to `stop` (clamped to POLICY_NONE..allowed).
- * Never raises the ceiling: you cannot run unattended what you have not
- * first allowed. NULL-safe. */
+/* TESTS ONLY: test_chat_approval.c, test_cmd_batch.c and
+ * test_cmd_policy.c exercise the gate under split policies. No UI code
+ * calls this. Clamps `stop` to POLICY_NONE..allowed and does NOT
+ * normalise a split. NULL-safe. */
 void cmd_policy_set_unattended(CmdPolicy *p, int stop);
+
+/* Auto-approve on (unattended = allowed) or off (POLICY_NONE). The policy
+ * is clamped first. NULL-safe. */
+void cmd_policy_set_auto(CmdPolicy *p, int on);
+
+/* 1 when Auto-approve is on: after cmd_policy_clamp(), unattended ==
+ * allowed. A split reads as off. */
+int cmd_policy_auto_on(CmdPolicy p);
+
+/* 1 when moving from `cur` to `next` turns on "everything runs without
+ * asking" -- `next` is Critical with Auto-approve on and `cur` is not. The
+ * AI panel and Settings ask for confirmation exactly then. */
+int cmd_policy_needs_confirm(CmdPolicy cur, CmdPolicy next);
+
+/* The policy packed for the AI panel's WM_AI_GET_POLICY reply (the
+ * integration harness reads it): bits 0-7 the level, bit 8 (0x100) set
+ * when Auto-approve is on. */
+unsigned cmd_policy_status_word(CmdPolicy p);
 
 /* Ceiling cycle: Read -> Unknown -> Write -> Critical -> Read. NULL-safe. */
 void cmd_policy_cycle_allowed(CmdPolicy *p);
 
-/* Unattended cycle: none -> Read -> ... -> allowed -> none. NULL-safe. */
+/* Unattended cycle: none -> Read -> ... -> allowed -> none. NULL-safe.
+ * No UI code calls this since 2026-10-18; it keeps splits, like
+ * cmd_policy_set_unattended(). */
 void cmd_policy_cycle_unattended(CmdPolicy *p);
 
 /* The set of categories permitted to run unattended, as a bitmask of

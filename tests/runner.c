@@ -2319,7 +2319,15 @@ int test_policy_stop_names_and_labels(void);
 int test_policy_token_round_trips_every_legal_pair(void);
 int test_policy_token_rejects_and_clamps_bad_input(void);
 int test_policy_caption_reads_as_a_sentence(void);
-int test_policy_tip_covers_raise_lower_toggle_and_refusal(void);
+int test_policy_clamp_rounds_a_split_down(void);
+int test_policy_set_allowed_moves_both_markers_with_auto_on(void);
+int test_policy_set_allowed_leaves_auto_off(void);
+int test_policy_set_allowed_on_a_split_turns_auto_off(void);
+int test_policy_set_auto_on_and_off(void);
+int test_policy_auto_on_reads_a_split_as_off(void);
+int test_policy_no_sequence_of_set_allowed_and_set_auto_splits(void);
+int test_policy_needs_confirm_only_when_entering_critical_auto(void);
+int test_policy_status_word_packs_level_and_button(void);
 
 /* test_chat_approval.c */
 int test_approval_init(void);
@@ -5462,7 +5470,15 @@ int main(void) {
     failed += test_policy_token_round_trips_every_legal_pair();
     failed += test_policy_token_rejects_and_clamps_bad_input();
     failed += test_policy_caption_reads_as_a_sentence();
-    failed += test_policy_tip_covers_raise_lower_toggle_and_refusal();
+    failed += test_policy_clamp_rounds_a_split_down();
+    failed += test_policy_set_allowed_moves_both_markers_with_auto_on();
+    failed += test_policy_set_allowed_leaves_auto_off();
+    failed += test_policy_set_allowed_on_a_split_turns_auto_off();
+    failed += test_policy_set_auto_on_and_off();
+    failed += test_policy_auto_on_reads_a_split_as_off();
+    failed += test_policy_no_sequence_of_set_allowed_and_set_auto_splits();
+    failed += test_policy_needs_confirm_only_when_entering_critical_auto();
+    failed += test_policy_status_word_packs_level_and_button();
 
     printf("\n--- Command Approval ---\n");
     failed += test_approval_init();
