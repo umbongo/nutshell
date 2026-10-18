@@ -307,6 +307,13 @@ Open, in priority order:
       in 4.4 s had `dirty_rows` equal to the offset, driven by `poll.invalidate poll_rc=0`
       every ~16 ms, `rows_left_dirty=0`, and `render.stuck_dirty` never fired. The live rows
       below the scrolled view look never cleared; find why and teach the detector to see it.
+- [ ] SSH to a Windows host (Win32-OpenSSH runs the remote shell under a server-side ConPTY)
+      shows the same full-viewport repaints after a resize as the local shell. The top-anchored
+      reflow of `2026-10-18-conpty-resize-anchor-design.md` is per session: offer it as a
+      profile option, or switch to it when platform detection says Windows.
+- [ ] Wide characters: the parser gives every codepoint one cell, ConPTY and most terminals
+      give East Asian wide characters and most emoji two, so such rows drift from the shell's
+      idea of the cursor column. Pre-existing; needs a width table and two-cell rendering.
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the
