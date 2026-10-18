@@ -44,6 +44,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | `cases\70-cli.ps1` | CLI flags (`CLI-1`'s several small cases) |
 | `cases\80-local-shell.ps1` | `local_shell` (`--local`: echo, exit, silent reconnect) and `local_shell_powershell` (a saved local profile running `powershell.exe -NoLogo`: prompt, two-line paste, Ctrl+C on `Start-Sleep`, exit) |
 | `cases\90-keys.ps1` | special keys: F-keys, Alt+letter, Shift+Tab/Ctrl+arrows, Ctrl+Space, PgUp/PgDn by screen, the Send Key menu (including "Send Next Key with Alt"), Backspace over SSH, Ctrl+W/T vs. Ctrl+Shift+W/T |
+| `cases\95-ai-select.ps1` | character selection in the AI panel under `--ui-demo=chat`: exact copy, across items, auto-scroll, Edit > Copy and focus |
 
 Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
 `cases\*.ps1` is picked up automatically) rather than growing one giant script.
@@ -84,6 +85,13 @@ Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
   itself, so it is the app's own `TranslateMessage` that synthesises the
   Alt+letter escape sequence, same as for real input. F10 always goes out as
   `WM_SYSKEYDOWN`/`WM_SYSKEYUP` through this helper too, `-Ctrl`/`-Alt` or not.
+  `-Hwnd <window>` posts the key to that window of the app instead of the main
+  one — the AI panel's message list (`Get-NutshellChatList`) for Ctrl+C on a
+  selection there. The target matters: a Ctrl+C posted to the main window
+  reaches the terminal and, with no terminal selection, becomes the `WM_CHAR`
+  `0x03` (SIGINT), whereas the same chord posted to the list copies the panel's
+  selection. All windows of the app share one UI thread, so the attached
+  keyboard state holds for any of them.
 
 That is the whole of it: `Send-NutshellKeys` (real `SendKeys`, and the
 `SetForegroundWindow`/`keybd_event` dance it needed) is gone, and no case is
@@ -214,6 +222,10 @@ touches before marking its pull request ready.
 | `ctrl_w_reaches_shell_and_shift_closes_tab` | plain Ctrl+W/Ctrl+T now reach the shell as `^W`/`^T` (moved off tab close/new-session); Ctrl+Shift+W closes the active tab (tab strip back to the one-tab hash) without leaking a `^W` into the surviving tab's `cat -v` |
 | `send_key_alt_next_prefixes_escape` | Edit > Send Key > Send Next Key with Alt (`WM_COMMAND` 2059) arms the one-shot; a plain `f` key-down with no Alt held arrives as exactly one `^[f`, proving the one-shot -- not a real Alt chord -- supplied the ESC prefix |
 | `backspace_sends_bs_over_ssh` | Backspace sends BS (`^H`, 0x08) over SSH, read back from `cat -v` |
+| `ai_panel_select_copy` | `--ui-demo=chat`: drag over "mounts first:" in the reply (rects from `Get-NutshellChatWordRect`, no hardcoded coordinates), nothing copied on release, Ctrl+C posted to the list copies exactly `mounts first:`; no SSH host or AI key needed |
+| `ai_panel_select_across_items` | `--ui-demo=chat`: drag from "disk" in the user bubble to "found" in the reply, across the open Thinking body and an `[EXEC]` command; the clipboard equals the golden of `tests/test_ui_demo.c` exactly |
+| `ai_panel_select_scrolls` | `--ui-demo=chat` in a short window: the reply's last line starts below the list; a drag held past the bottom edge auto-scrolls and the copy runs from "disk" to the reply's last line |
+| `ai_panel_edit_copy_follows_focus` | `--ui-demo=chat`: Edit > Copy copies the panel selection while the list has focus, and leaves the clipboard alone once focus is on the terminal |
 
 ## AI Assist cases
 
@@ -253,6 +265,9 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Get-NutshellPixel -Path -X -Y` / `Test-NutshellPixelNear -Path -X -Y -Rgb -Tolerance` | read/compare a pixel in a saved capture |
 | `Get-NutshellThemeColor -Name -Token` | parses `src/core/ui_theme.c`'s per-theme initialisers for one of `bg_primary`, `bg_secondary`, `accent`, `text_main`, `text_dim`, `border`, `terminal_fg`, `terminal_bg`, `success`, `warning`, `danger`, `info`, `link` |
 | `Get-NutshellRegionHash -Path -Region` | MD5 of a proportional region `@{X;Y;W;H}` (each 0..1) of a saved capture — the general form of `cases-terminal.ps1`'s terminal-specific `Get-TerminalAreaHash`; used by `minimise_restore_repaints`, `tabs_open_switch_close` and `cli_no_connect_opens_idle` to compare a specific band (or the whole window) across two captures |
+| `Get-NutshellChatList -Session` / `Get-NutshellChatWordRect -Session -Word -Item [-Thinking]` | the AI panel's message list / where it painted a word (`CLV_MSG_QUERY_WORD`, `--ui-demo` only): `@{X;Y;W;H}` in the list's client pixels, W ending at the word's last character |
+| `Send-NutshellChatDrag -Session -FromX -FromY -ToX -ToY [-Steps] [-HoldMoves]` | a drag in the message list with sent `WM_LBUTTONDOWN`/`WM_MOUSEMOVE`/`WM_LBUTTONUP` (no cursor, no foreground); `-HoldMoves` repeats the last point, each past an edge auto-scrolling once |
+| `Set-NutshellFocus -Session -Hwnd` | keyboard focus to one of the app's windows via `AttachThreadInput` + `SetFocus`; `Send-NutshellChord -Hwnd` posts a chord to a window other than the main one |
 
 **Window geometry is never assumed.** `Set-NutshellWindowSize` treats its
 `-Width`/`-Height` as a *request*: it clamps them to the primary work area
