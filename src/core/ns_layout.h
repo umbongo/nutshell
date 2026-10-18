@@ -74,7 +74,10 @@ enum {
     HIT_RUN_SELECTED,
     HIT_POLICY_ALLOWED,
     HIT_POLICY_UNATTENDED,
-    HIT_COPY            /* appended: the numeric values above are unchanged */
+    HIT_COPY,           /* appended: the numeric values above are unchanged */
+    HIT_POLICY_AUTO     /* appended 2026-10-18: the status line's Auto-approve
+                         * button. HIT_POLICY_UNATTENDED keeps its value but is
+                         * never produced since the rail went. */
 };
 
 /* Stops on the status line's AI policy control: Read / Unknown / Write /
@@ -83,23 +86,19 @@ enum {
  * section 4 ("The control"). */
 #define NS_POLICY_STOPS 4
 
-/* One pill, NS_POLICY_STOPS touching cells, each split into an upper label
- * band (click -> `allowed`) and a lower rail band (click -> `unattended`).
- * `cell[k]` is the painted cell (full height of the input rect); `label[k]`
- * and `rail[k]` are its painted upper/lower bands, split at 2/3 height.
- * `hit_label[k]` and `hit_rail[k]` are the click targets for those two
- * bands -- taller than the painted bands (see ns_policy_layout's `hit_h`),
- * because the painted rail is a thin bar and a hit target that thin would
- * be a bug. `rail_fill` is the filled portion of the rail for the current
- * `unattended` marker. `total_w` is the pill's total width, matching
- * ns_policy_width() for the same inputs. */
+/* One pill, NS_POLICY_STOPS touching cells, one band each: clicking a cell
+ * sets the level (docs/superpowers/specs/2026-10-18-ai-auto-approve-button-
+ * design.md section 3). `cell[k]` is the painted cell (full height of the
+ * input rect). `hit[k]` is its click target: the cell's column, max(hit_h,
+ * r.h) tall and centred on r -- or zero-size when the cell does not end at
+ * or before `clip_right`, so a cell the Auto-approve button covers in part
+ * neither takes a click nor shows a tooltip. `clip_right` is the exclusive
+ * x past which nothing of the pill paints (ns_draw_policy() clips to it).
+ * `total_w` is the pill's unclipped width, matching ns_policy_width(). */
 typedef struct {
     NsRect cell[NS_POLICY_STOPS];
-    NsRect label[NS_POLICY_STOPS];
-    NsRect rail[NS_POLICY_STOPS];
-    NsRect hit_label[NS_POLICY_STOPS];
-    NsRect hit_rail[NS_POLICY_STOPS];
-    NsRect rail_fill;
+    NsRect hit[NS_POLICY_STOPS];
+    int clip_right;
     int total_w;
 } NsPolicyLayout;
 
@@ -109,22 +108,17 @@ typedef struct {
  * Agrees with `out->total_w` from ns_policy_layout for the same inputs. */
 int ns_policy_width(const int stop_text_w[NS_POLICY_STOPS], int dpi);
 
-/* Lay out the policy pill inside `r` (full status-line height -- cells
- * span all of r.h). `unattended` positions `rail_fill` (POLICY_NONE or
- * anything outside 0..NS_POLICY_STOPS-1 gives a zero-width fill). `hit_h`
- * is the minimum height of the click bands: H = max(hit_h, r.h), centred
- * on r (so the hit box can extend above r.y when hit_h > r.h), split at
- * the same y the painted label/rail bands split at. NULL-safe; a
- * non-positive r.w or r.h lays out zero-size rects without crashing. */
+/* Lay out the policy pill inside `r` (cells span all of r.h). A cell k is
+ * hittable when cell[k].x + cell[k].w <= clip_right. NULL-safe; a
+ * non-positive r.h lays out zero-height cells without crashing. */
 void ns_policy_layout(NsRect r, const int stop_text_w[NS_POLICY_STOPS],
-                      int unattended, int hit_h, int dpi,
+                      int clip_right, int hit_h, int dpi,
                       NsPolicyLayout *out);
 
-/* Hit-test a point against a laid-out policy pill. Returns HIT_POLICY_ALLOWED
- * with `*stop_out` set to the cell index when (x, y) is inside that cell's
- * hit_label, HIT_POLICY_UNATTENDED with `*stop_out` set when it's inside
- * hit_rail, otherwise HIT_NONE with `*stop_out = -1`. Zero-size rects never
- * hit. NULL `l` and NULL `stop_out` are safe. */
+/* Hit-test a point against a laid-out pill. Returns HIT_POLICY_ALLOWED with
+ * `*stop_out` set to the cell when (x, y) is inside that cell's hit rect,
+ * otherwise HIT_NONE with `*stop_out = -1`. Zero-size (clipped) rects
+ * never hit. NULL `l` and NULL `stop_out` are safe. */
 int ns_policy_hit(const NsPolicyLayout *l, int x, int y, int *stop_out);
 
 void ns_button_layout(NsRect r, int has_icon, int dpi, NsButtonLayout *out);
