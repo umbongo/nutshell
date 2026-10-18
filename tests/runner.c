@@ -3214,6 +3214,10 @@ int test_painted_words_equal_copied_text(void);
 int test_painted_words_equal_copied_text_markdown_off(void);
 int test_paint_synthetic_runs_cover_their_marker(void);
 
+/* test_sel_contrast.c */
+int test_sel_highlight_visible_on_every_surface(void);
+int test_sel_hue_is_focus_except_on_the_bubble(void);
+
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
 int test_md_blocks_one(void);
@@ -6486,6 +6490,9 @@ int main(void) {
     failed += test_painted_words_equal_copied_text();
     failed += test_painted_words_equal_copied_text_markdown_off();
     failed += test_paint_synthetic_runs_cover_their_marker();
+
+    failed += test_sel_highlight_visible_on_every_surface();
+    failed += test_sel_hue_is_focus_except_on_the_bubble();
 
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();

@@ -7,6 +7,7 @@
 #include "chat_activity.h"
 #include "ui_theme.h"
 #include "ns_hover.h"
+#include "chat_copy.h"
 
 /* One copy glyph on a fenced code block in a reply, as last painted:
  * recorded by on_paint() so hover and click hit-test exactly what is on
@@ -48,6 +49,15 @@ typedef struct {
     int sel_end_y;              /* Content Y where mouse-drag currently is */
     int sel_active;             /* 1 = mouse is held down, dragging */
     int sel_valid;              /* 1 = a selection exists to highlight/copy */
+
+    /* Character selection (spec 2026-10-18 section 5): anchor and focus as
+     * (message id, part, byte offset), resolved by id on every use. */
+    ChatSelPos sel_anchor;
+    ChatSelPos sel_focus;
+
+    /* Id of the user item whose copy on_paint() pinned at the top of the
+     * list this frame (its runs are in pinned_runs), 0 when none. */
+    int pinned_id;
 
     /* Command list collapse state (0 = collapsed, 1 = expanded) */
     int cmd_list_expanded;
