@@ -1,6 +1,8 @@
 #include "ai_tools.h"
 #include "json_parser.h"
 #include "json_validate.h"
+#include "dlog.h"
+#include "dlog_query.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -773,4 +775,127 @@ int ai_parse_tool_stream_openai(const char *chunk_json, AiToolStreamState *state
 
     json_free(root);
     return 0;
+}
+
+/* ---- read_debug_log ------------------------------------------------------ */
+
+void ai_debug_tool_ctx_init(DebugLogToolContext *ctx)
+{
+    if (ctx) ctx->calls = 0;
+}
+
+int ai_debug_tool_register(AiToolRegistry *reg, DebugLogToolContext *ctx)
+{
+    if (!reg || !ctx) return -1;
+    AiToolDef def;
+    memset(&def, 0, sizeof(def));
+    snprintf(def.name, sizeof(def.name), "%s", DLOG_TOOL_NAME);
+    snprintf(def.description, sizeof(def.description), "%s", dlog_tool_description());
+    snprintf(def.input_schema_json, sizeof(def.input_schema_json), "%s", dlog_tool_schema());
+    def.safety = TOOL_SAFE;            /* read-only: no approval */
+    def.execute = ai_debug_tool_execute;
+    def.tool_data = ctx;
+    return ai_tools_register(reg, &def);
+}
+
+int ai_debug_tool_register_if_enabled(AiToolRegistry *reg, DebugLogToolContext *ctx)
+{
+    if (!dlog_enabled()) return 0;
+    return ai_debug_tool_register(reg, ctx) == 0 ? 1 : 0;
+}
+
+/* Hand the caller a heap copy of a short text. Always returns non-zero (the
+ * tool's error code), so callers can `return debug_tool_text(...)`. */
+static int debug_tool_text(const char *msg, char **result_buf, size_t *result_len)
+{
+    size_t n = strlen(msg);
+    char *p = (char *)malloc(n + 1);
+    if (p) {
+        memcpy(p, msg, n + 1);
+        *result_buf = p;
+        *result_len = n;
+    }
+    return -1;
+}
+
+int ai_debug_tool_execute(const char *input_json, void *tool_data,
+                          volatile int *cancel_flag,
+                          char **result_buf, size_t *result_len,
+                          int *was_truncated)
+{
+    if (!result_buf || !result_len || !was_truncated) return -1;
+    *result_buf = NULL;
+    *result_len = 0;
+    *was_truncated = 0;
+
+    DebugLogToolContext *ctx = (DebugLogToolContext *)tool_data;
+    if (!ctx) return debug_tool_text("debug log tool is not available", result_buf, result_len);
+    if (cancel_flag && *cancel_flag)
+        return debug_tool_text("cancelled", result_buf, result_len);
+
+    /* The per-message cap. A refused call is not counted again, and a call
+     * with bad arguments counts: the model must not loop on them either. */
+    if (ctx->calls >= DLOG_TOOL_MAX_CALLS_PER_MSG)
+        return debug_tool_text(AI_DEBUG_TOOL_LIMIT_MSG, result_buf, result_len);
+    ctx->calls++;
+
+    DlogQuery q;
+    char err[160] = "";
+    if (!dlog_query_from_json(input_json, &q, err, sizeof(err))) {
+        char msg[220];
+        snprintf(msg, sizeof(msg), "invalid arguments: %s", err[0] ? err : "not understood");
+        DLOG(DLOG_AI, DLOG_INFO, 0, "ai.tool.read_debug_log", "n=%d ok=%d", ctx->calls, 0);
+        return debug_tool_text(msg, result_buf, result_len);
+    }
+
+    char *out = (char *)malloc(DLOG_QUERY_OUT_MAX);
+    if (!out) return debug_tool_text("out of memory", result_buf, result_len);
+    dlog_flush();
+    size_t n = dlog_read_log(&q, out, DLOG_QUERY_OUT_MAX);
+    if (n >= DLOG_QUERY_OUT_MAX) n = DLOG_QUERY_OUT_MAX - 1;
+    out[n] = '\0';
+
+    /* The use is logged, never the output: it is the log itself. */
+    DLOG(DLOG_AI, DLOG_INFO, 0, "ai.tool.read_debug_log",
+         "n=%d ok=%d cat=%d since=%d min_level=%d summary=%d around=%d bytes=%zu",
+         ctx->calls, 1, q.category, q.since_minutes, q.min_level,
+         q.summary, q.around_issue, n);
+
+    *result_buf = out;
+    *result_len = n;
+    return 0;
+}
+
+int ai_debug_tool_describe(const char *input_json, char *out, size_t cap)
+{
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    DlogQuery q;
+    char err[160] = "";
+    if (!dlog_query_from_json(input_json, &q, err, sizeof(err))) {
+        snprintf(out, cap, "arguments refused: %s", err[0] ? err : "not understood");
+        return 0;
+    }
+    dlog_query_describe(&q, out, cap);
+    return 1;
+}
+
+void ai_debug_tool_summary_line(const char *result, size_t len, char *out, size_t cap)
+{
+    if (!out || cap == 0) return;
+    out[0] = '\0';
+    if (!result) return;
+    size_t n = 0;
+    while (n < len && result[n] != '\0' && result[n] != '\n' && result[n] != '\r') n++;
+    if (n > cap - 1) n = cap - 1;
+    memcpy(out, result, n);
+    out[n] = '\0';
+}
+
+const char *ai_debug_tool_prompt_note(void)
+{
+    return "Debugging is on, so you also have the read_debug_log tool, which reads "
+           "Nutshell's own debug log. Use it when the user reports a glitch or a hang, "
+           "or says they just marked an issue (start with summary=true, then narrow with "
+           "around_issue or category), and call it at most a few times per turn.";
 }

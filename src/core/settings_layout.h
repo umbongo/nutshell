@@ -29,6 +29,7 @@ enum {
     SETTINGS_PAGE_AI_PROVIDER,
     SETTINGS_PAGE_AI_BEHAVIOUR,
     SETTINGS_PAGE_AI_WEB,
+    SETTINGS_PAGE_DEBUG,
     SETTINGS_PAGE_ABOUT,
     SETTINGS_PAGE_COUNT
 };
@@ -98,5 +99,49 @@ int settings_scroll_max(int view_h, int content_h);
 
 /* Clamp pos into [0, max]. */
 int settings_scroll_clamp(int pos, int max);
+
+/* ---- The Debugging page (spec 2026-10-17-debug-logging-design.md, section 9)
+ *
+ * Every control on the page below the "Enable debugging" tickbox appears only
+ * while the tickbox is ticked. The page is the usual stack of one-row slots;
+ * settings_debug_layout() says which slot is on which row for either state,
+ * so the Win32 page (src/ui/settings.c) and the tests share one table.
+ * Row 0 is the page title; the slots start at row 1. */
+typedef enum {
+    SDBG_ENABLE = 0,       /* "Enable debugging" tickbox                          */
+    SDBG_HINT_ON,          /* "Records what Nutshell does ..."  (enabled only)     */
+    SDBG_HINT_OFF,         /* "Errors are still written ..."    (disabled only)    */
+    SDBG_LEVEL_RENDER,     /* six level rows, in DlogCat order                      */
+    SDBG_LEVEL_TERM,
+    SDBG_LEVEL_AI,
+    SDBG_LEVEL_SSH,
+    SDBG_LEVEL_SHELL,
+    SDBG_LEVEL_GENERAL,
+    SDBG_RECORDER,         /* "Keep recent detail for issue marks" + level combo   */
+    SDBG_SCREENSHOT,       /* "Save a screenshot with each issue mark"             */
+    SDBG_CONTENT,          /* "Include terminal content"                           */
+    SDBG_CONTENT_WARN,     /* its warning (two rows: it wraps)                      */
+    SDBG_FOLDER,           /* Log folder + Browse + Open                           */
+    SDBG_MAX_FILE,         /* Max file size (MB)                                   */
+    SDBG_MAX_TOTAL,        /* Keep at most (MB) + "using N MB in K files"          */
+    SDBG_CURRENT,          /* Current log file (read-only; shown in both states)   */
+    SDBG_NOTE,             /* "Give this folder to ... Mark issue: Ctrl+Shift+M"   */
+    SDBG_COUNT
+} SettingsDebugSlot;
+
+typedef struct {
+    int visible;   /* 1 = shown in this state                                      */
+    int row;       /* first row of the slot (page title is row 0); -1 if hidden    */
+    int rows;      /* rows the slot spans (0 if hidden)                            */
+} SettingsDebugPos;
+
+/* Fill pos[SDBG_COUNT] for the ticked (enabled != 0) or unticked page and
+ * return the total number of rows the page needs, title row included.
+ * Visible slots are packed from row 1 in enum order; hidden ones take none.
+ * Unticked, the page is the tickbox, its one-line hint and the current file. */
+int settings_debug_layout(int enabled, SettingsDebugPos pos[SDBG_COUNT]);
+
+/* How many rows slot `slot` spans when visible (0 for an unknown slot). */
+int settings_debug_slot_rows(int slot);
 
 #endif

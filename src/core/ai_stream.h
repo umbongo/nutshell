@@ -46,7 +46,7 @@ typedef struct AiStream {
     char  *body;               /* AI_BODY_MAX bytes, rebuilt by the tool loop */
     size_t body_len;
 
-    /* Tool snapshot: tools[].tool_data points at search/fetch below, never
+    /* Tool snapshot: tools[].tool_data points at search/fetch/debug_log below, never
      * at the panel's own copies, so a settings change or a closed panel
      * cannot reach a running tool. */
     int              has_tools;
@@ -54,6 +54,7 @@ typedef struct AiStream {
     AiToolRegistry   tools;
     WebSearchContext search;
     WebFetchContext  fetch;
+    DebugLogToolContext debug_log;   /* read_debug_log's per-message call counter */
     char             tools_json[AI_TOOL_SCHEMA_MAX * AI_TOOL_MAX];
 
     /* The conversation this reply continues. The thread owns it while it
@@ -88,12 +89,13 @@ volatile int *ai_stream_abort_flag(AiStream *s);
 int ai_stream_live_count(void);
 
 /* Snapshot a tool registry into the stream. Any tool whose tool_data is
- * `search` or `fetch` is rebound to the stream's own copy of that context;
- * other tool_data pointers are kept as they are, so they must outlive the
- * stream (static data). Either context may be NULL. */
+ * `search`, `fetch` or `debug` is rebound to the stream's own copy of that
+ * context; other tool_data pointers are kept as they are, so they must
+ * outlive the stream (static data). Any context may be NULL. */
 void ai_stream_copy_tools(AiStream *s, const AiToolRegistry *reg,
                           unsigned gen, const WebSearchContext *search,
-                          const WebFetchContext *fetch);
+                          const WebFetchContext *fetch,
+                          const DebugLogToolContext *debug);
 
 /* Thread side: its final done/error message was posted successfully. */
 void ai_stream_note_delivered(AiStream *s);

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include "dlog.h"
 
 /* Standard ANSI Palette (indices 0-15)
  * Normal colours (0-7) are brightened from classic CGA values so that
@@ -309,6 +310,8 @@ static void process_osc(Terminal *term)
     if (code == 0 || code == 2) {
         const char *text = term->osc_buffer + semi + 1;
         (void)snprintf(term->title, sizeof(term->title), "%s", text);
+        DLOG_CONTENT(DLOG_TERM, DLOG_DEBUG, term->log_id, "term.title", "text",
+                     text, strlen(text));
     }
 osc_done:
     term->osc_len = 0;
@@ -426,6 +429,9 @@ static void handle_csi(Terminal *term, char final) {
                 /* Cursor position unchanged — applications that want cursor home
                  * send ESC[H separately.  Moving here was non-standard and caused
                  * the bash prompt to appear at the top after TUI apps exited. */
+                DLOG(DLOG_TERM, DLOG_DEBUG, term->log_id, "term.clear",
+                     "mode=2 alt=%d cursor_row=%d", term->alt_screen_active ? 1 : 0,
+                     term->cursor.row);
             }
             break;
         case 'K': // EL - Erase in Line

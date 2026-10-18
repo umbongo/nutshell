@@ -72,13 +72,15 @@ int ai_stream_live_count(void)
 
 void ai_stream_copy_tools(AiStream *s, const AiToolRegistry *reg,
                           unsigned gen, const WebSearchContext *search,
-                          const WebFetchContext *fetch)
+                          const WebFetchContext *fetch,
+                          const DebugLogToolContext *debug)
 {
     if (!s) return;
     ai_tools_init(&s->tools);
     s->tools_gen = gen;
     if (search) s->search = *search;
     if (fetch)  s->fetch  = *fetch;
+    if (debug)  s->debug_log = *debug;
     if (!reg) return;
     s->tools = *reg;
     for (int i = 0; i < s->tools.count && i < AI_TOOL_MAX; i++) {
@@ -87,6 +89,8 @@ void ai_stream_copy_tools(AiStream *s, const AiToolRegistry *reg,
             t->tool_data = &s->search;
         else if (fetch && t->tool_data == (const void *)fetch)
             t->tool_data = &s->fetch;
+        else if (debug && t->tool_data == (const void *)debug)
+            t->tool_data = &s->debug_log;
     }
 }
 

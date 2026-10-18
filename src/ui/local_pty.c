@@ -24,6 +24,7 @@
 #include "local_pty.h"
 #include "pty_ring.h"
 #include "string_utils.h"
+#include "dlog.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -115,13 +116,15 @@ struct LocalPty {
                              * environment verbatim, not spec->env. Cleared by
                              * local_pty_poll() once it has logged this once
                              * (diagnostics only).                            */
+    unsigned log_id;       /* the session's debug-log id; 0 = none            */
 };
 
 /* ---- log helpers -------------------------------------------------------- */
 
-/* The same two helpers ssh_io.c has (they are static there, and ssh_io.c is
- * not linked into the Windows test harness), so a local session's session
- * log and debug log read exactly like an SSH one's. */
+/* The same helper ssh_io.c has (it is static there, and ssh_io.c is not
+ * linked into the Windows test harness), so a local session's session log
+ * reads exactly like an SSH one's. The raw bytes go to the debug log as the
+ * term.rx event (see local_pty_poll). */
 
 static void log_chunk(FILE *f, const char *data, size_t len)
 {
@@ -134,21 +137,6 @@ static void log_chunk(FILE *f, const char *data, size_t len)
         if (stripped > 0u) fwrite(strip_buf, 1u, stripped, f);
         data += slice;
         len  -= slice;
-    }
-    fflush(f);
-}
-
-static void debug_log_chunk(FILE *f, const char *data, size_t len)
-{
-    if (!f || len == 0u) return;
-    for (size_t i = 0u; i < len; i++) {
-        unsigned char ch = (unsigned char)data[i];
-        if      (ch == 0x1Bu) fputs("ESC", f);
-        else if (ch >= 0x20u && ch < 0x7Fu) fputc((int)ch, f);
-        else if (ch == '\r')  fputs("\\r", f);
-        else if (ch == '\n')  fputs("\\n\n", f);
-        else if (ch == '\t')  fputs("\\t", f);
-        else fprintf(f, "\\x%02X", (unsigned int)ch);
     }
     fflush(f);
 }
@@ -277,11 +265,16 @@ static DWORD WINAPI reader_thread(LPVOID param)
 {
     LocalPty *p = (LocalPty *)param;
     char buf[LOCAL_PTY_READ_CHUNK];
+    unsigned long long bytes = 0ULL;
+
+    dlog_set_thread_tag("pty");
+    DLOG_EV(DLOG_SHELL, DLOG_DEBUG, p->log_id, "shell.reader.start");
 
     for (;;) {
         DWORD got = 0;
         BOOL ok = ReadFile(p->out_read, buf, (DWORD)sizeof(buf), &got, NULL);
         if (!ok || got == 0) break;   /* pipe closed, cancelled, or EOF */
+        bytes += (unsigned long long)got;
 
         EnterCriticalSection(&p->cs);
         /* Record the opening bytes once, before anything has been written
@@ -305,6 +298,7 @@ static DWORD WINAPI reader_thread(LPVOID param)
     EnterCriticalSection(&p->cs);
     pty_ring_set_eof(&p->ring);
     LeaveCriticalSection(&p->cs);
+    DLOG(DLOG_SHELL, DLOG_DEBUG, p->log_id, "shell.reader.stop", "bytes=%llu", bytes);
     return 0;
 }
 
@@ -326,6 +320,12 @@ static void set_err_code(char *err, size_t err_size, const char *text,
 
 LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
                          char *err, size_t err_size)
+{
+    return local_pty_open_ex(spec, cols, rows, 0u, err, err_size);
+}
+
+LocalPty *local_pty_open_ex(const LocalShellSpec *spec, int cols, int rows,
+                            unsigned log_id, char *err, size_t err_size)
 {
     if (err && err_size > 0u) err[0] = '\0';
 
@@ -366,6 +366,7 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
         return NULL;
     }
     InitializeCriticalSection(&p->cs);
+    p->log_id = log_id;
 
     /* A resize that arrived before the pseudo-console existed is simply the
      * size we create it at, so the grid can never be lost in that window
@@ -377,6 +378,7 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
     WCHAR *wcmd = NULL, *wapp = NULL, *wcwd = NULL, *envblock = NULL;
     LPPROC_THREAD_ATTRIBUTE_LIST attrs = NULL;
     PROCESS_INFORMATION pi;
+    DWORD pi_pid = 0;
     memset(&pi, 0, sizeof(pi));
 
     if (!CreatePipe(&in_read, &p->in_write, NULL, 0) ||
@@ -493,6 +495,7 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
             goto fail;
         }
         p->proc = pi.hProcess;
+        pi_pid = pi.dwProcessId;
         if (pi.hThread) CloseHandle(pi.hThread);
     }
 
@@ -513,6 +516,8 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
                      GetLastError());
         goto fail;
     }
+    DLOG(DLOG_SHELL, DLOG_INFO, log_id, "shell.spawn", "child_pid=%lu cols=%d rows=%d",
+         (unsigned long)pi_pid, p->cols, p->rows);
     return p;
 
 fail:
@@ -534,20 +539,20 @@ fail:
     }
     if (err && err_size > 0u && err[0] == '\0')
         set_err(err, err_size, "Could not start the local shell.");
+    DLOG(DLOG_SHELL, DLOG_WARN, log_id, "shell.spawn_failed", "reason=%s",
+         (err && err[0]) ? err : "unknown");
     return NULL;
 }
 
 /* ---- poll --------------------------------------------------------------- */
 
-int local_pty_poll(void *ctx, Terminal *term, FILE *log_file, FILE *debug_log)
+int local_pty_poll(void *ctx, Terminal *term, FILE *log_file)
 {
     LocalPty *p = (LocalPty *)ctx;
     if (!p || !term) return -1;
 
-    if (p->env_inherited && debug_log) {
-        fputs("[nutshell: could not build the shell environment; "
-              "parent block inherited]\n", debug_log);
-        fflush(debug_log);
+    if (p->env_inherited) {
+        DLOG_EV(DLOG_SHELL, DLOG_WARN, term->log_id, "shell.env_inherited");
         p->env_inherited = 0;
     }
 
@@ -566,17 +571,15 @@ int local_pty_poll(void *ctx, Terminal *term, FILE *log_file, FILE *debug_log)
         if (got > 0u) {
             term_process(term, buf, got);
             log_chunk(log_file, buf, got);
-            debug_log_chunk(debug_log, buf, got);
+            DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, term->log_id, "term.rx", "data",
+                         buf, got);
             total += got;
         }
         if (got < sizeof(buf)) break;   /* ring drained for now */
     }
 
-    if (dropped && debug_log) {
-        fputs("\n[nutshell: local shell output overran the 64K ring; "
-              "some bytes were dropped]\n", debug_log);
-        fflush(debug_log);
-    }
+    if (dropped)
+        DLOG_EV(DLOG_SHELL, DLOG_WARN, term->log_id, "shell.output_dropped");
 
     if (total > 0u) return 1;
 
@@ -646,7 +649,13 @@ int local_pty_resize(void *ctx, int cols, int rows)
     size.X = (SHORT)cols;
     size.Y = (SHORT)rows;
     HRESULT hr = g_resize_pcon(p->hpc, size);
-    if (FAILED(hr)) return -1;
+    if (FAILED(hr)) {
+        DLOG(DLOG_SHELL, DLOG_WARN, p->log_id, "shell.resize_failed",
+             "cols=%d rows=%d hr=%lx", cols, rows, (unsigned long)hr);
+        return -1;
+    }
+    DLOG(DLOG_SHELL, DLOG_DEBUG, p->log_id, "shell.resize", "cols_before=%d rows_before=%d cols=%d rows=%d",
+         p->cols, p->rows, cols, rows);
     p->cols = cols;
     p->rows = rows;
     return 0;
@@ -682,6 +691,8 @@ void local_pty_close(void *ctx)
 {
     LocalPty *p = (LocalPty *)ctx;
     if (!p) return;
+    DLOG(DLOG_SHELL, DLOG_INFO, p->log_id, "shell.close", "exited=%d",
+         local_pty_child_exited(p));
 
     /* (a) End conhost; unblocks a well-behaved reader on its own. */
     if (p->hpc && g_close_pcon) { g_close_pcon(p->hpc); p->hpc = NULL; }
@@ -743,6 +754,14 @@ int local_pty_child_exited(const LocalPty *pty)
 {
     if (!pty || !pty->proc) return 1;
     return WaitForSingleObject(pty->proc, 0) == WAIT_OBJECT_0 ? 1 : 0;
+}
+
+long local_pty_exit_code(const LocalPty *pty)
+{
+    if (!pty || !pty->proc) return -1;
+    DWORD code = 0;
+    if (!GetExitCodeProcess(pty->proc, &code) || code == STILL_ACTIVE) return -1;
+    return (long)code;
 }
 
 size_t local_pty_first_bytes(const LocalPty *pty, char *out, size_t out_size)

@@ -3,7 +3,7 @@
 #include "paint_cover.h"
 #include "selection.h"
 #include "theme.h"
-#include "redraw_log.h"
+#include "dlog.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -157,24 +157,9 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         if (!r->dispbuf.cells) return;
     }
 
-#ifdef REDRAW_DEBUG
-    {
-        /* Count rows that fall within paintRect */
-        int _in_rect = 0;
-        for (int _ri = 0; _ri < term->rows; _ri++) {
-            LONG _py = (LONG)y + (LONG)_ri * r->charHeight;
-            if (!(_py + r->charHeight <= paintRect->top || _py >= paintRect->bottom))
-                _in_rect++;
-        }
-        REDRAW_LOG("[REDRAW] renderer_draw: rows=%d in_paintrect=%d "
-                   "paintRect=(%ld,%ld,%ld,%ld) charH=%d\n",
-                   term->rows, _in_rect,
-                   paintRect->left, paintRect->top,
-                   paintRect->right, paintRect->bottom,
-                   r->charHeight);
-    }
-#endif
-
+    LARGE_INTEGER t_start;
+    QueryPerformanceCounter(&t_start);
+    int rows_in_rect = 0, rows_covered = 0, rows_painted = 0, rows_skipped = 0;
     HFONT oldFont = SelectObject(hdc, r->hFont);
     SetBkMode(hdc, OPAQUE);
     bool cur_bold = false;  /* track which font is selected */
@@ -209,6 +194,8 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         dispbuf_invalidate(&r->dispbuf);
         term->full_redraw_needed = false;
         force_all_rows = true;
+        DLOG(DLOG_RENDER, DLOG_TRACE, r->log_sid, "dispbuf.invalidate",
+             "why=full_redraw_needed force_all_rows=1");
     }
 
     /* A row's dirty flag may be cleared only when this paint contained the
@@ -230,14 +217,17 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
 
         /* Skip rows outside paint rect */
         if (py + r->charHeight <= paintRect->top || py >= paintRect->bottom) continue;
+        rows_in_rect++;
 
         bool covered = paint_covers_rect(
             (long)paintRect->left, (long)paintRect->top,
             (long)paintRect->right, (long)paintRect->bottom,
             content_left, (long)py,
             content_right, (long)py + (long)r->charHeight) != 0;
+        if (covered) rows_covered++;
 
         TermRow *row = get_visible_row(term, row_idx);
+        rows_painted++;   /* undone below if the row turns out clean and is skipped */
         if (!row) {
             /* No terminal content for this row (lines_count < rows after resize).
              * Paint background if the display buffer says these cells are dirty. */
@@ -263,7 +253,11 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         if (!force_all_rows &&
             term->scrollback_offset == 0 &&
             !row->dirty && row_idx != cursor_row && row_idx != prev_row &&
-            !has_sel) continue;
+            !has_sel) {
+            rows_painted--;
+            rows_skipped++;
+            continue;
+        }
 
         for (int col_idx = 0; col_idx < term->cols; ) {
             LONG px_start = (LONG)x + (LONG)col_idx * r->charWidth;
@@ -413,6 +407,39 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
 
     /* Restore normal font */
     SelectObject(hdc, oldFont);
+
+    /* What this paint left behind, and the events that describe it. The
+     * rows still dirty are the ones a partial update region could not
+     * finish (see the `covered` note above); a row that stays dirty paint
+     * after paint is the 2026-10-14 symptom, so it is counted here and
+     * RENDER_STUCK_DIRTY_PAINTS of them in a row raise render.stuck_dirty. */
+    int rows_left_dirty = 0, first_dirty = -1;
+    for (int ri = 0; ri < term->rows; ri++) {
+        TermRow *vr = get_visible_row(term, ri);
+        if (vr && vr->dirty) {
+            if (first_dirty < 0) first_dirty = ri;
+            rows_left_dirty++;
+        }
+    }
+    r->stat_rows_painted = rows_painted;
+    r->stat_rows_skipped = rows_skipped;
+
+    int stuck_paints = 0;
+    if (render_stuck_update(&r->stuck, r->log_sid, rows_left_dirty, &stuck_paints))
+        DLOG(DLOG_RENDER, DLOG_WARN, r->log_sid, "render.stuck_dirty",
+             "src=paint rows=%d paints=%d first_row=%d active=1", rows_left_dirty,
+             stuck_paints, first_dirty);
+
+    LARGE_INTEGER t_end, freq;
+    QueryPerformanceCounter(&t_end);
+    QueryPerformanceFrequency(&freq);
+    long long us = (freq.QuadPart > 0)
+        ? (long long)((t_end.QuadPart - t_start.QuadPart) * 1000000LL / freq.QuadPart) : 0LL;
+    DLOG(DLOG_RENDER, DLOG_TRACE, r->log_sid, "render.draw",
+         "rows=%d rows_in_rect=%d rows_covered=%d rows_painted=%d rows_left_dirty=%d "
+         "char_h=%d us=%lld",
+         term->rows, rows_in_rect, rows_covered, rows_painted, rows_left_dirty,
+         r->charHeight, us);
 }
 
 void renderer_apply_theme(HWND hwnd, COLORREF bg_colorref)

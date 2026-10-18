@@ -219,6 +219,18 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
                             SessionKind kind,
                             const char *shell_name)
 {
+    ai_build_system_prompt_ex(buf, buf_size, terminal_text, session_notes,
+                              system_notes, kind, shell_name, 0);
+}
+
+void ai_build_system_prompt_ex(char *buf, size_t buf_size,
+                               const char *terminal_text,
+                               const char *session_notes,
+                               const char *system_notes,
+                               SessionKind kind,
+                               const char *shell_name,
+                               int debug_log_tool)
+{
     if (!buf || buf_size == 0) return;
 
     /* The opening two sentences are the only part that depends on where the
@@ -291,6 +303,13 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
     int n = snprintf(buf, buf_size, "%s%s", opening, rest);
     if (n < 0) return;
     pos = (size_t)n;
+
+    /* Only while read_debug_log is registered for this reply: a model told
+     * about a tool it was not given would try to call it. */
+    if (debug_log_tool && pos < buf_size) {
+        n = snprintf(buf + pos, buf_size - pos, "\n\n%s", ai_debug_tool_prompt_note());
+        if (n > 0) pos += (size_t)n;
+    }
 
     if (system_notes && system_notes[0] && pos < buf_size) {
         n = snprintf(buf + pos, buf_size - pos,

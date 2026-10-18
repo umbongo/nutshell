@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.34"
-#define APP_VERSION_BINARY  1,2,34,0
+#define APP_VERSION        "1.2.36"
+#define APP_VERSION_BINARY  1,2,36,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -27,6 +27,8 @@
 #define IDM_VIEW_AI_UNDOCK    2022
 #define IDM_HELP_GUIDE        2029
 #define IDM_ABOUT             2030
+#define IDM_HELP_MARK_ISSUE   2031  /* Help > Mark Issue (Ctrl+Shift+M): snapshot + recorder dump */
+#define IDM_HELP_LOG_FOLDER   2032  /* Help > Open Debug Log Folder */
 
 /* Edit > Send Key: write a key the app or Windows keeps for itself straight
  * to the active session (special-keys spec, section 4A). F1..F12 are
@@ -82,7 +84,6 @@
 #define IDC_CMD_CANCEL_ALL   3046  /* Cancel (deny) all pending commands */
 #define IDC_CMD_DETAIL       3047  /* Open the command details popup; lParam = ChatMsgItem id */
 #define IDC_CMD_TOGGLE_BASE  3050  /* 3050..3059 for up to 10 command tickboxes */
-#define IDC_DEBUG_TERMINAL   3060  /* Settings: raw debug log toggle */
 #define IDC_AI_SEARCH_COMBO  3061  /* Settings: search engine dropdown */
 #define IDC_AI_SEARCH_URL    3062  /* Settings: custom search URL edit */
 #define IDC_AI_MAX_RESULTS   3063  /* Settings: max search results */
@@ -98,5 +99,19 @@
 #define IDC_AI_POLICY_UNATTENDED 3076 /* Settings: unattended marker for new sessions */
 #define IDC_CHAT_THINKING_OPENED 3074 /* Thinking disclosure manually expanded (chat_listview -> chat panel) */
 #define IDC_CHAT_THINKING_CLOSED 3075 /* Thinking disclosure manually collapsed (chat_listview -> chat panel) */
+
+/* Settings > Debugging (spec 2026-10-17-debug-logging-design.md section 9) */
+#define IDC_DBG_ENABLE           3080 /* "Enable debugging" tickbox */
+#define IDC_DBG_LEVEL_BASE       3081 /* 3081..3086: one level combo per category, DlogCat order */
+#define IDC_DBG_RECORDER         3087 /* "Keep recent detail for issue marks" tickbox */
+#define IDC_DBG_RECORDER_LEVEL   3088 /* the recorder's level combo */
+#define IDC_DBG_SCREENSHOT       3089 /* "Save a screenshot with each issue mark" tickbox */
+#define IDC_DBG_CONTENT          3090 /* "Include terminal content" tickbox */
+#define IDC_DBG_FOLDER           3091 /* log folder edit */
+#define IDC_DBG_BROWSE           3092 /* folder picker button */
+#define IDC_DBG_OPEN             3093 /* open the folder in Explorer */
+#define IDC_DBG_MAX_FILE         3094 /* Max file size (MB) */
+#define IDC_DBG_MAX_TOTAL        3095 /* Keep at most (MB) */
+#define IDC_DBG_CURRENT          3096 /* Current log file (read-only) */
 
 #endif

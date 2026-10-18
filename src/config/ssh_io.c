@@ -1,5 +1,6 @@
 #include "ssh_io.h"
 #include "string_utils.h"
+#include "dlog.h"
 #include "../term/ssh_pty.h"
 #include <libssh2.h>
 #include <stdio.h>
@@ -23,32 +24,7 @@ static void log_chunk(FILE *f, const char *data, size_t len)
     fflush(f);
 }
 
-/* Write raw bytes to the debug log in a readable format.
- * ESC (0x1B) → "ESC", printable ASCII → as-is, others → \xHH */
-static void debug_log_chunk(FILE *f, const char *data, size_t len)
-{
-    if (!f || len == 0u) return;
-    for (size_t i = 0u; i < len; i++) {
-        unsigned char ch = (unsigned char)data[i];
-        if (ch == 0x1Bu) {
-            fputs("ESC", f);
-        } else if (ch >= 0x20u && ch < 0x7Fu) {
-            fputc((int)ch, f);
-        } else if (ch == '\r') {
-            fputs("\\r", f);
-        } else if (ch == '\n') {
-            fputs("\\n\n", f);
-        } else if (ch == '\t') {
-            fputs("\\t", f);
-        } else {
-            fprintf(f, "\\x%02X", (unsigned int)ch);
-        }
-    }
-    fflush(f);
-}
-
-int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file,
-                FILE *debug_log) {
+int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file) {
     if (!channel || !term) return -1;
 
     char buf[4096];
@@ -64,7 +40,8 @@ int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file,
         if (rc > 0) {
             term_process(term, buf, (size_t)rc);
             log_chunk(log_file, buf, (size_t)rc);
-            debug_log_chunk(debug_log, buf, (size_t)rc);
+            DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, term->log_id, "term.rx", "data",
+                         buf, (size_t)rc);
             total_read += (size_t)rc;
             work_done = 1;
         } else if (rc == LIBSSH2_ERROR_EAGAIN || rc == 0) {
@@ -78,7 +55,8 @@ int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file,
         if (rc > 0) {
             term_process(term, buf, (size_t)rc);
             log_chunk(log_file, buf, (size_t)rc);
-            debug_log_chunk(debug_log, buf, (size_t)rc);
+            DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, term->log_id, "term.rx", "data",
+                         buf, (size_t)rc);
             total_read += (size_t)rc;
             work_done = 1;
         }
@@ -97,10 +75,9 @@ int ssh_io_poll(SSHChannel *channel, Terminal *term, FILE *log_file,
  * Each wrapper is a straight forward to the function the call sites used
  * before the seam existed, so behaviour is unchanged. */
 
-static int ssh_io_vt_poll(void *ctx, Terminal *term, FILE *log_file,
-                          FILE *debug_log)
+static int ssh_io_vt_poll(void *ctx, Terminal *term, FILE *log_file)
 {
-    return ssh_io_poll((SSHChannel *)ctx, term, log_file, debug_log);
+    return ssh_io_poll((SSHChannel *)ctx, term, log_file);
 }
 
 static int ssh_io_vt_write(void *ctx, const char *data, size_t len)

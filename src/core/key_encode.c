@@ -151,3 +151,27 @@ size_t key_encode(NsKey key, unsigned char ch, unsigned int mods,
     memcpy(out, buf, len);
     return len;
 }
+
+const char *key_name(NsKey key)
+{
+    static const char *const names[NSK_COUNT] = {
+        [NSK_UP] = "Up", [NSK_DOWN] = "Down", [NSK_RIGHT] = "Right", [NSK_LEFT] = "Left",
+        [NSK_HOME] = "Home", [NSK_END] = "End", [NSK_INSERT] = "Insert",
+        [NSK_DELETE] = "Delete", [NSK_PGUP] = "PgUp", [NSK_PGDN] = "PgDn",
+        [NSK_F1] = "F1", [NSK_F2] = "F2", [NSK_F3] = "F3", [NSK_F4] = "F4",
+        [NSK_F5] = "F5", [NSK_F6] = "F6", [NSK_F7] = "F7", [NSK_F8] = "F8",
+        [NSK_F9] = "F9", [NSK_F10] = "F10", [NSK_F11] = "F11", [NSK_F12] = "F12",
+        [NSK_TAB] = "Tab", [NSK_BACKSPACE] = "Backspace",
+    };
+    if ((int)key <= (int)NSK_CHAR || (int)key >= (int)NSK_COUNT) return "-";
+    return names[key] ? names[key] : "-";
+}
+
+const char *key_mods_name(unsigned int mods)
+{
+    static const char *const names[8] = {
+        "none", "shift", "alt", "shift+alt",
+        "ctrl", "shift+ctrl", "alt+ctrl", "shift+alt+ctrl",
+    };
+    return names[mods & 7u];
+}
