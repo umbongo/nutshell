@@ -667,6 +667,8 @@ static int clv_select_line(ChatListView *lv, int mx, int my)
 static void clv_drag_to(ChatListView *lv, int mx, int my)
 {
     UpdateWindow(lv->hwnd);
+    /* The paint may have dropped the selection (an id vanished mid-drag). */
+    if (!lv->sel_active) return;
     ChatSelPos p;
     if (clv_hit(lv, mx, my, &p)) lv->sel_focus = p;
     lv->sel_valid = chat_sel_cmp(lv->sel_anchor, lv->sel_focus) != 0;
@@ -3761,6 +3763,10 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             }
         }
 
+        /* An ordinary down: a triple-click whose button-up went to another
+         * window must not leave its keep-on-up flag to eat this one's up. */
+        lv->sel_keep_on_up = 0;
+
         if (on_lbuttondown(lv, mx, my)) {
             sel_clear(lv);
             return 0;  /* A button/link was clicked */
@@ -3883,7 +3889,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
 
     case WM_LBUTTONUP: {
         /* A triple-click took no capture and keeps what it selected. */
-        if (lv->sel_keep_on_up) {
+        if (lv->sel_keep_on_up && !lv->sel_active) {
             lv->sel_keep_on_up = 0;
             return 0;
         }
