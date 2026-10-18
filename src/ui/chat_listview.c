@@ -907,6 +907,12 @@ void chat_listview_set_state(HWND hwnd, int state_id, int context_lines)
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
+void chat_listview_enable_query(HWND hwnd)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (lv) lv->query_enabled = 1;
+}
+
 void chat_listview_set_selection(HWND hwnd, ChatSelPos a, ChatSelPos b)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);
@@ -3695,6 +3701,39 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
     return 0;  /* No interactive element was clicked */
 }
 
+/* CLV_MSG_QUERY_WORD (see chat_listview.h). */
+static LRESULT clv_query_word(ChatListView *lv, WPARAM wParam, LPARAM lParam)
+{
+    char word[128];
+    UINT n = GlobalGetAtomNameA((ATOM)lParam, word, (int)sizeof(word));
+    if (n == 0 || !lv->msg_list) return 0;
+    int ordinal = (int)LOWORD(wParam);
+    int part = HIWORD(wParam) ? TR_PART_THINKING : TR_PART_MAIN;
+    ChatMsgItem *it = lv->msg_list->head;
+    for (int i = 0; it && i < ordinal; i++) it = it->next;
+    if (!it) return 0;
+    int tlen = 0;
+    const char *text = clv_part_text(it, part, &tlen);
+    for (int i = 0; i < it->runs.n; i++) {
+        const TextRun *r = &it->runs.v[i];
+        if (r->part != part || r->synthetic[0] || r->end > tlen ||
+            r->end - r->start < (int)n)
+            continue;
+        if (memcmp(text + r->start, word, (size_t)n) != 0) continue;
+        int w = r->w;
+        for (int k = 0; k < r->n_cum; k++)
+            if (it->runs.cum_byte[r->first_cum + k] == (int)n)
+                w = it->runs.cum[r->first_cum + k];
+        if (r->x < 0 || r->y < 0 || r->x > 0xFFFF || r->y > 0xFFFF) return 0;
+        ULONG_PTR packed = (ULONG_PTR)(unsigned)(r->x & 0xFFFF)
+                         | ((ULONG_PTR)(unsigned)(r->y & 0xFFFF) << 16)
+                         | ((ULONG_PTR)(unsigned)(w & 0xFFFF) << 32)
+                         | ((ULONG_PTR)(unsigned)(r->h & 0xFFFF) << 48);
+        return (LRESULT)packed;
+    }
+    return 0;
+}
+
 /* ══════════════════════════════════════════════════════════════════════
  *  WndProc
  * ══════════════════════════════════════════════════════════════════════ */
@@ -3732,6 +3771,9 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     case WM_PAINT:
         on_paint(lv);
         return 0;
+
+    case CLV_MSG_QUERY_WORD:
+        return lv->query_enabled ? clv_query_word(lv, wParam, lParam) : 0;
 
     case WM_PRINTCLIENT:
         /* Paint into the caller's DC: the make wintest harness renders a

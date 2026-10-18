@@ -5695,6 +5695,9 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
 
     relayout(d);
     if (d->hChatList) {
+        /* The integration harness asks the list where words were painted
+         * (CLV_MSG_QUERY_WORD) -- under --ui-demo only. */
+        chat_listview_enable_query(d->hChatList);
         chat_listview_invalidate(d->hChatList);
         /* chat_rebuild_display() above always leaves the list scrolled to
          * the bottom; ui_demo_scrolls_to_top() (src/core/ui_demo.c) names

@@ -530,4 +530,49 @@ int test_chat_select_win_mouse_and_keys(void)
     TEST_END();
 }
 
+/* CLV_MSG_QUERY_WORD, the integration harness's way to find a word: off
+ * until enabled, then the rect of the run that begins with the word, the
+ * width cut at the word's end; the Thinking body through HIWORD = 1. */
+int test_chat_select_win_query_word(void)
+{
+    TEST_BEGIN();
+    ChatMsgList list;
+    fill_fixture(&list);
+    TestView tv;
+    int opened = view_open(&tv, &list, 760, 96, 1);
+    ASSERT_TRUE(opened);
+    if (opened) {
+        view_paint(&tv, 760);
+        ATOM atom = GlobalAddAtomA("mounts");
+        LRESULT off = SendMessageA(tv.lv, CLV_MSG_QUERY_WORD, 1, (LPARAM)atom);
+        ASSERT_EQ(off, 0);
+        chat_listview_enable_query(tv.lv);
+        LRESULT r = SendMessageA(tv.lv, CLV_MSG_QUERY_WORD, 1, (LPARAM)atom);
+        int wx = 0;
+        const TextRun *run = find_word(list.head->next, "mounts", &wx);
+        ASSERT_NOT_NULL(run);
+        if (run) {
+            ULONG_PTR v = (ULONG_PTR)r;
+            ASSERT_EQ((int)(v & 0xFFFF), run->x);
+            ASSERT_EQ((int)((v >> 16) & 0xFFFF), run->y);
+            ASSERT_EQ((int)((v >> 32) & 0xFFFF), wx);
+            ASSERT_EQ((int)((v >> 48) & 0xFFFF), run->h);
+            ASSERT_TRUE(wx < run->w);       /* "mounts " less its blank */
+        }
+        GlobalDeleteAtom(atom);
+        ATOM think = GlobalAddAtomA("Plan:");
+        LRESULT rt = SendMessageA(tv.lv, CLV_MSG_QUERY_WORD, MAKEWPARAM(1, 1),
+                                  (LPARAM)think);
+        ASSERT_TRUE(rt != 0);
+        GlobalDeleteAtom(think);
+        ATOM none = GlobalAddAtomA("zzzz");
+        LRESULT rn = SendMessageA(tv.lv, CLV_MSG_QUERY_WORD, 1, (LPARAM)none);
+        ASSERT_EQ(rn, 0);
+        GlobalDeleteAtom(none);
+    }
+    view_close(&tv);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
 #endif /* _WIN32 */

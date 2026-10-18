@@ -63,6 +63,10 @@ typedef struct {
      * list this frame (its runs are in pinned_runs), 0 when none. */
     int pinned_id;
 
+    /* 1 under --ui-demo: answer CLV_MSG_QUERY_WORD (the integration
+     * harness asks where a word was painted). */
+    int query_enabled;
+
     /* Command list collapse state (0 = collapsed, 1 = expanded) */
     int cmd_list_expanded;
 
@@ -148,6 +152,23 @@ void chat_listview_set_fonts(HWND hwnd, HFONT font, HFONT mono,
 
 /* Set theme (triggers full repaint). */
 void chat_listview_set_theme(HWND hwnd, const ThemeColors *theme);
+
+/* --ui-demo only (see chat_listview_enable_query): where was a word
+ * painted? wParam: LOWORD = the item's position in the list (0 = first),
+ * HIWORD = 1 for its Thinking body, 0 for its text; lParam: a global atom
+ * (GlobalAddAtom) naming the word, ASCII. Returns the rect, in list-view
+ * client pixels, from the left edge of the first painted run that begins
+ * with the word to the end of the word itself, packed as
+ * x | y << 16 | w << 32 | h << 48 (16 bits each), or 0 when no painted run
+ * begins with it, the rect lies above or left of the client area, or the
+ * query is not enabled. Runs are recorded for the whole of every item a
+ * paint touched, so a word below the visible area still answers (with
+ * y >= the client height). */
+#define CLV_MSG_QUERY_WORD (WM_APP + 0x51)
+
+/* Answer CLV_MSG_QUERY_WORD from now on. Called by the --ui-demo setup only. */
+void chat_listview_enable_query(HWND hwnd);
+
 
 /* Select from `a` to `b` (either order) and repaint -- the --ui-demo=chat
  * preset (spec 2026-10-18 section 6). */
