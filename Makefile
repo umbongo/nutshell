@@ -139,7 +139,8 @@ endif
 NON_TEST_SRCS = src/main.c $(wildcard src/ui/*.c)
 
 # Win32-only tests belong to the `wintest` harness, never to `test`
-WIN_ONLY_TESTS = tests/test_icons.c tests/test_local_pty.c tests/win_runner.c
+WIN_ONLY_TESTS = tests/test_icons.c tests/test_local_pty.c tests/win_runner.c \
+                 tests/test_md_render_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -181,7 +182,11 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/core/term_extract.c \
                    src/core/dlog.c src/core/dlog_format.c src/core/dlog_files.c \
                    src/core/dlog_types.c src/core/dlog_snapshot.c src/core/dlog_sys.c \
-                   tests/test_icons.c tests/test_local_pty.c tests/win_runner.c
+                   src/ui/md_render.c src/ui/ns_draw.c src/core/text_runs.c \
+                   src/core/md_table.c src/core/theme.c src/core/ui_theme.c \
+                   src/core/ns_scale.c src/core/ns_type.c src/core/cmd_policy.c \
+                   tests/test_icons.c tests/test_local_pty.c \
+                   tests/test_md_render_win.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \

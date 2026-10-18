@@ -17,6 +17,9 @@ int _tf_run    = 0;
 int test_icons_all_render_non_empty(void);
 int test_icons_render_at_multiple_sizes(void);
 
+/* test_md_render_win.c */
+int test_md_render_win_measure_equals_paint_and_runs(void);
+
 /* test_local_pty.c */
 extern FILE *nspty_report;
 int test_local_pty_echo_through_cmd(void);
@@ -180,6 +183,7 @@ int main(int argc, char **argv)
     int failed = 0;
     failed += test_icons_all_render_non_empty();
     failed += test_icons_render_at_multiple_sizes();
+    failed += test_md_render_win_measure_equals_paint_and_runs();
 
     printf("\n[pty] re-executing with a console of our own "
            "(see win_runner.c for why)\n");
