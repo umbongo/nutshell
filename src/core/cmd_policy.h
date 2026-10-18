@@ -33,9 +33,6 @@
 /* Stops on the scale are exactly CmdSafetyLevel 0..3. */
 #define POLICY_STOP_COUNT 4
 
-/* Which marker a gesture (or a tooltip) is about. */
-enum { POLICY_BAND_ALLOWED = 0, POLICY_BAND_UNATTENDED = 1 };
-
 typedef struct {
     int allowed;     /* CmdSafetyLevel 0..3 */
     int unattended;  /* CmdSafetyLevel 0..3, or POLICY_NONE */

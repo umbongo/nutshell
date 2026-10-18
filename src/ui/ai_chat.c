@@ -107,13 +107,16 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define IDC_THINKING_BOX  4014
 #define IDC_CHAT_DENY     4012
 #define IDC_CHAT_UNDOCK   4013
-#define IDC_CHAT_AUTOAPPROVE 4015
-/* The policy control's absolute setters: post one of these to put a marker
- * on a named stop, rather than counting cycles of the two ids above. The
- * integration harness drives the control through these. */
+#define IDC_CHAT_AUTOAPPROVE 4015  /* toggles the Auto-approve button */
+/* The level's absolute setter: post 4030 + stop to put the level on a
+ * named stop. The integration harness drives the control through these
+ * and 4015 (docs/superpowers/specs/2026-10-18-ai-auto-approve-button-
+ * design.md section 2). */
 #define IDC_CHAT_POLICY_ALLOW_BASE 4030  /* 4030..4033: allowed = stop 0..3 */
-#define IDC_CHAT_POLICY_AUTO_BASE  4040  /* 4040..4044: unattended = index-1,
-                                           * i.e. 4040 = POLICY_NONE */
+/* 4040..4044 set the old unattended marker. Retired 2026-10-18 with the
+ * rail: they are swallowed without effect so a stale caller can never
+ * fall through to another handler. */
+#define IDC_CHAT_POLICY_RETIRED_BASE 4040
 /* Empty/no-key/no-session state (ai_panel_states.h), posted by
  * chat_listview.c when the message list is empty -- see
  * chatlv_empty_state_hit()/on_lbuttondown() there (AI Assist Panel
@@ -127,6 +130,9 @@ static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 #define WM_AI_CONTINUE   (WM_USER + 101)
 #define WM_AI_STREAM     (WM_USER + 102)  /* wParam: 0=thinking, 1=content; lParam: char* */
 #define WM_AI_TOOL_MSG   (WM_USER + 103)  /* wParam: ChatItemType; lParam: heap char* text */
+/* Sent by the integration harness: returns cmd_policy_status_word() of
+ * the displayed session's policy -- bits 0-7 the level, bit 8 Auto-approve. */
+#define WM_AI_GET_POLICY (WM_USER + 104)
 
 #define TIMER_CMD_QUEUE   2     /* Command dispatcher poll (prompt-gated) */
 #define TIMER_SCROLL_SYNC 4     /* Sync custom scrollbar with RichEdit */
@@ -189,10 +195,15 @@ typedef struct {
     CmdPolicy policy_default;  /* settings.ai_policy_default: seeds a fresh
                                  * session's policy (see
                                  * ai_chat_set_policy_default()). */
+    unsigned session_gen;      /* bumped by do_session_switch(): a policy
+                                 * confirmation answered after a switch
+                                 * applies nothing (request_policy_change()) */
+    int policy_confirm_open;   /* 1 while the Critical confirmation is up:
+                                 * every policy gesture is then a no-op */
     HWND hThinkingBtn;
     HWND hTooltip;        /* Win32 tooltip control */
     /* Hover/press tracking for the painted status line (the policy control's
-     * eight bands) -- see ai_chat_status_hit()/ai_chat_status_rect(). */
+     * four cells and the Auto-approve button) -- see ai_chat_status_hit()/ai_chat_status_rect(). */
     NsHover status_hover;
     int status_hover_tracking;  /* TrackMouseEvent armed for WM_MOUSELEAVE */
     int show_thinking;    /* 1 = user has manually opened a Thinking
@@ -976,10 +987,11 @@ static void invalidate_status_line(AiChatData *d)
  * the newest) and tells the AI so, because it has a stale "blocked by
  * policy" message in its history and will otherwise keep advising the user
  * to change a setting they just changed. Lowering it re-blocks pending rows
- * the new ceiling no longer allows. The unattended marker only affects
- * commands that have not arrived yet, so it needs neither pass -- but it
- * shares this path so a single gesture that moves both markers (lowering the
- * ceiling drags the marker down) is applied once. */
+ * the new ceiling no longer allows. Auto-approve only affects commands that
+ * have not arrived yet, so turning it on releases nothing already waiting
+ * (spec 2026-10-18 section 6: one click on the card's own Run button does
+ * that); it shares this path so a single gesture that moves both the level
+ * and the switch is applied once. */
 static void apply_policy_change(AiChatData *d, CmdPolicy next)
 {
     if (!d) return;
@@ -987,6 +999,9 @@ static void apply_policy_change(AiChatData *d, CmdPolicy next)
     CmdPolicy prev = d->approval_q.policy;
     if (next.allowed == prev.allowed && next.unattended == prev.unattended)
         return;
+    /* The tip on screen describes the old policy; the next hover fetches
+     * the new text (spec section 4). */
+    if (d->hTooltip) SendMessage(d->hTooltip, TTM_POP, 0, 0);
 
     d->approval_q.policy = next;
     if (d->active_state) {
@@ -1034,6 +1049,39 @@ static void apply_policy_change(AiChatData *d, CmdPolicy next)
 
     if (d->hChatList)
         chat_listview_invalidate(d->hChatList);
+}
+
+/* Every policy gesture goes through here: the cells, the Auto-approve
+ * button, the cycle id 4005 and the harness's posted ids. Moving into
+ * "Critical with Auto-approve on" asks first (spec 2026-10-18 section 2).
+ * The box runs a modal loop, so: a second gesture while it is up is a
+ * no-op, the tooltip is hidden first, and after Yes the change applies
+ * only if the panel still exists, the same session is displayed and its
+ * policy has not moved. Dispatch ticks and replies keep running during the
+ * box; nothing here touches them. */
+static void request_policy_change(HWND hwnd, AiChatData *d, CmdPolicy next)
+{
+    if (!d || d->policy_confirm_open) return;
+    CmdPolicy cur = d->approval_q.policy;
+    if (!cmd_policy_needs_confirm(cur, next)) {
+        apply_policy_change(d, next);
+        return;
+    }
+    unsigned gen = d->session_gen;
+    d->policy_confirm_open = 1;
+    if (d->hTooltip) SendMessage(d->hTooltip, TTM_POP, 0, 0);
+    int answer = MessageBoxA(hwnd, CMD_POLICY_CONFIRM_TEXT, "Auto-approve",
+                             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+    /* The panel may have been destroyed (closed, undocked) while the box was
+     * up, freeing d: look it up again from the window. */
+    if (!IsWindow(hwnd)) return;
+    d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    d->policy_confirm_open = 0;
+    if (answer != IDYES || d->session_gen != gen) return;
+    if (d->approval_q.policy.allowed != cur.allowed ||
+        d->approval_q.policy.unattended != cur.unattended) return;
+    apply_policy_change(d, next);
 }
 
 /* Recompute the context meter/usage state and clear any busy-indicator
@@ -2850,13 +2898,11 @@ static void relayout(AiChatData *d)
  * section 4.
  */
 
-/* The policy control has eight hittable bands -- an `allowed` band and an
- * `unattended` band per stop -- and ns_hover wants a single small int per
- * element, so pack (band, stop) into one id. -1 stays "nothing". */
-#define STATUS_HIT_ID(band, stop) ((band) * NS_POLICY_STOPS + (stop))
-#define STATUS_HIT_BAND(id)       ((id) / NS_POLICY_STOPS)
-#define STATUS_HIT_STOP(id)       ((id) % NS_POLICY_STOPS)
-#define STATUS_HIT_COUNT          (2 * NS_POLICY_STOPS)
+/* Status-line hover/hit ids for ns_hover: 0..3 the four cells, 4 the
+ * Auto-approve button; -1 stays "nothing" (spec 2026-10-18 section 3). */
+#define STATUS_HIT_CELL(stop) (stop)
+#define STATUS_HIT_AUTO       NS_POLICY_STOPS
+#define STATUS_HIT_COUNT      (NS_POLICY_STOPS + 1)
 
 typedef struct {
     NsRect status;
@@ -2885,14 +2931,13 @@ static void ai_chat_format_meter_text(int tokens, int limit,
     snprintf(buf, cap, "%s / %s", tok_str, lim_str);
 }
 
-/* Client rect to invalidate when a hover id gains or loses hover. Hover
- * changes the whole cell (label fill and rail alike), so both bands of a
- * stop map to that stop's painted cell. */
-static NsRect ai_chat_status_rect_for_id(const NsPolicyLayout *pl, int id)
+/* Client rect to invalidate when a hover id gains or loses hover. */
+static NsRect ai_chat_status_rect_for_id(const AiStatusPaint *sp, int id)
 {
     NsRect z = { 0, 0, 0, 0 };
-    if (id < 0 || id >= STATUS_HIT_COUNT) return z;
-    return pl->cell[STATUS_HIT_STOP(id)];
+    if (id >= 0 && id < NS_POLICY_STOPS) return sp->pl.cell[id];
+    if (id == STATUS_HIT_AUTO) return sp->sl.auto_btn;
+    return z;
 }
 
 static int ai_chat_pt_in_rect(NsRect r, int x, int y)
@@ -2940,15 +2985,28 @@ static void ai_chat_get_status_paint(AiChatData *d, HDC hdc, AiStatusPaint *out)
     HGDIOBJ old = font ? SelectObject(use_hdc, font) : NULL;
 
     SIZE sz;
-    int stop_w[NS_POLICY_STOPS];
+    int full_w[NS_POLICY_STOPS], short_w[NS_POLICY_STOPS];
     for (int k = 0; k < NS_POLICY_STOPS; k++) {
         const char *lbl = cmd_policy_stop_label(k);
         GetTextExtentPoint32A(use_hdc, lbl, (int)strlen(lbl), &sz);
-        stop_w[k] = sz.cx;
+        full_w[k] = sz.cx;
+        const char *sh = cmd_policy_stop_short(k);
+        GetTextExtentPoint32A(use_hdc, sh, (int)strlen(sh), &sz);
+        short_w[k] = sz.cx;
     }
-    int policy_w = ns_policy_width(stop_w, d->dpi);
+    AiStatusMeasure m;
+    memset(&m, 0, sizeof(m));
+    m.policy_full_w    = ns_policy_width(full_w, d->dpi);
+    m.policy_compact_w = ns_policy_width(short_w, d->dpi);
+    {
+        const char *af = cmd_policy_auto_label(0);
+        const char *ac = cmd_policy_auto_label(1);
+        GetTextExtentPoint32A(use_hdc, af, (int)strlen(af), &sz);
+        m.auto_full_w = sz.cx;
+        GetTextExtentPoint32A(use_hdc, ac, (int)strlen(ac), &sz);
+        m.auto_compact_w = sz.cx;
+    }
 
-    int meter_w = 0;
     out->has_meter = d->context_limit > 0;
     if (out->has_meter) {
         int actual = d->actual_input_tokens + d->actual_output_tokens;
@@ -2957,43 +3015,40 @@ static void ai_chat_get_status_paint(AiChatData *d, HDC hdc, AiStatusPaint *out)
                                   out->meter_text, sizeof(out->meter_text));
         GetTextExtentPoint32A(use_hdc, out->meter_text,
                               (int)strlen(out->meter_text), &sz);
-        meter_w = sz.cx;
+        m.meter_text_w = sz.cx;
     }
 
     if (old) SelectObject(use_hdc, old);
     if (own_hdc) ReleaseDC(d->hwnd, own_hdc);
 
-    ai_status_layout(out->status, d->dpi, policy_w, meter_w, &out->sl);
-    /* The painted pill is inset inside the status row; the click bands are
-     * the full row tall, so a 3 px rail is not a 3 px target. */
-    ns_policy_layout(out->sl.policy, stop_w, d->approval_q.policy.unattended,
-                     out->status.h, d->dpi, &out->pl);
+    ai_status_layout(out->status, d->dpi, &m, &out->sl);
+    /* Cells are hit over the full row height; the pill is cut at the
+     * layout's clip so a cell under the button neither paints nor hits. */
+    ns_policy_layout(out->sl.policy, out->sl.compact ? short_w : full_w,
+                     out->sl.policy_clip, out->status.h, d->dpi, &out->pl);
 }
 
-/* Hit-test a client point against the policy control. Returns a packed
- * (band, stop) id, or -1 for nothing hittable. */
+/* Hit-test a client point against the status line. Returns 0..3 for a
+ * cell, STATUS_HIT_AUTO for the button, or -1. */
 static int ai_chat_status_hit(AiChatData *d, int x, int y)
 {
     AiStatusPaint sp;
     ai_chat_get_status_paint(d, NULL, &sp);
     int stop = -1;
-    int what = ns_policy_hit(&sp.pl, x, y, &stop);
-    if (what == HIT_POLICY_ALLOWED)
-        return STATUS_HIT_ID(POLICY_BAND_ALLOWED, stop);
-    if (what == HIT_POLICY_UNATTENDED)
-        return STATUS_HIT_ID(POLICY_BAND_UNATTENDED, stop);
+    int what = ai_status_hit(&sp.sl, &sp.pl, x, y, &stop);
+    if (what == HIT_POLICY_ALLOWED) return STATUS_HIT_CELL(stop);
+    if (what == HIT_POLICY_AUTO) return STATUS_HIT_AUTO;
     return -1;
 }
 
-/* Client rect for a given status-line hit id (for targeted invalidation
- * when hover moves off an element). Returns 0 if the id is out of range or
- * the element is currently zero-size (squeezed out on a narrow panel). */
+/* Client rect for a status-line hit id, for targeted invalidation. 0 when
+ * the id is out of range or the element is zero-size. */
 static int ai_chat_status_rect(AiChatData *d, int id, RECT *out_rc)
 {
-    if (id < 0) return 0;
+    if (id < 0 || id >= STATUS_HIT_COUNT) return 0;
     AiStatusPaint sp;
     ai_chat_get_status_paint(d, NULL, &sp);
-    NsRect r = ai_chat_status_rect_for_id(&sp.pl, id);
+    NsRect r = ai_chat_status_rect_for_id(&sp, id);
     if (r.w <= 0 || r.h <= 0) return 0;
     SetRect(out_rc, r.x, r.y, r.x + r.w, r.y + r.h);
     return 1;
@@ -3128,26 +3183,35 @@ static void paint_status_line(AiChatData *d, HDC hdc)
     HGDIOBJ old_font = cap_font ? SelectObject(hdc, cap_font) : NULL;
     int old_bk = SetBkMode(hdc, TRANSPARENT);
 
-    /* The one policy control */
+    /* The policy pill and the Auto-approve button */
     {
         int hot = d->status_hover.hot_id;
-        int hover_band = -1, hover_stop = -1;
-        if (hot >= 0 && hot < STATUS_HIT_COUNT) {
-            hover_band = STATUS_HIT_BAND(hot);
-            hover_stop = STATUS_HIT_STOP(hot);
-        }
-        ns_draw_policy(hdc, &sp.pl, d->approval_q.policy, hover_band,
+        int hover_stop = (hot >= 0 && hot < NS_POLICY_STOPS) ? hot : -1;
+        ns_draw_policy(hdc, &sp.pl, d->approval_q.policy, sp.sl.compact,
                        hover_stop, tok, cap_font, d->dpi);
+        /* Tier 5 lets the button sit partly left of a row narrower than it
+         * is: clip to the row so it never paints over the panel's edge. The
+         * hit test keeps the layout's rect. */
+        int saved_dc = SaveDC(hdc);
+        IntersectClipRect(hdc, status_rc.left, status_rc.top,
+                          status_rc.right, status_rc.bottom);
+        ns_draw_auto_button(hdc, &sp.sl.auto_btn, d->approval_q.policy,
+                            sp.sl.compact, hot == STATUS_HIT_AUTO, tok,
+                            cap_font, d->dpi);
+        if (saved_dc) RestoreDC(hdc, saved_dc);
     }
 
-    /* Busy override, or the context meter + used/limit numbers */
+    /* Busy override, or the context meter + used/limit numbers. The busy
+     * label uses the layout's label rect, which ends SP_SM short of the
+     * button, so it can never paint over it (spec section 3). */
     if (d->context_label[0]) {
-        RECT rc = ai_chat_to_RECT(sp.sl.meter_bar.w > 0 ? sp.sl.meter_bar
-                                                        : sp.sl.meter_text);
-        rc.right = status_rc.right - ns_scale(SP_SM, d->dpi);
-        SetTextColor(hdc, theme_cr(tok->text_main));
-        DrawTextA(hdc, d->context_label, -1, &rc,
-                  DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (sp.sl.label.w > 0) {
+            RECT rc = ai_chat_to_RECT(sp.sl.label);
+            SetTextColor(hdc, theme_cr(tok->text_main));
+            DrawTextA(hdc, d->context_label, -1, &rc,
+                      DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX |
+                      DT_END_ELLIPSIS);
+        }
     } else if (sp.has_meter) {
         if (sp.sl.meter_bar.w > 0) {
             int actual = d->actual_input_tokens + d->actual_output_tokens;
@@ -3627,23 +3691,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 return 0;
             }
             int hit_id = ai_chat_status_hit(d, mx, my);
-            if (hit_id >= 0 && hit_id < STATUS_HIT_COUNT) {
-                int band = STATUS_HIT_BAND(hit_id);
-                int stop = STATUS_HIT_STOP(hit_id);
-                if (band == POLICY_BAND_ALLOWED) {
-                    PostMessage(hwnd, WM_COMMAND,
-                                MAKEWPARAM(IDC_CHAT_POLICY_ALLOW_BASE + stop, 0), 0);
-                } else if (stop <= d->approval_q.policy.allowed) {
-                    /* Clicking the rail under the stop the marker already
-                     * sits on is the way back to "nothing unattended". */
-                    int want = (stop == d->approval_q.policy.unattended)
-                             ? POLICY_NONE : stop;
-                    PostMessage(hwnd, WM_COMMAND,
-                                MAKEWPARAM(IDC_CHAT_POLICY_AUTO_BASE + want + 1, 0), 0);
-                }
-                /* A rail click above the ceiling does nothing: you cannot
-                 * run unattended what you have not allowed (the tooltip
-                 * says so). */
+            if (hit_id >= 0 && hit_id < NS_POLICY_STOPS) {
+                PostMessage(hwnd, WM_COMMAND,
+                            MAKEWPARAM(IDC_CHAT_POLICY_ALLOW_BASE + hit_id, 0), 0);
+                return 0;
+            }
+            if (hit_id == STATUS_HIT_AUTO) {
+                PostMessage(hwnd, WM_COMMAND, MAKEWPARAM(IDC_CHAT_AUTOAPPROVE, 0), 0);
                 return 0;
             }
         }
@@ -3813,24 +3867,23 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                 MAKEWPARAM(IDM_VIEW_AI_UNDOCK, 0), 0);
             }
             return 0;
-        /* ── The one policy control ──────────────────────────────────
-         * Every gesture lands here: the two cycle ids (kept for a menu or
-         * accelerator), and the absolute setters the control and the
-         * integration harness post. apply_policy_change() then does the
-         * work both old controls used to do separately -- unblock or
-         * re-block pending rows against the new ceiling. */
+        /* ── The policy row ─────────────────────────────────────────
+         * Every gesture lands here and goes through request_policy_change(),
+         * which asks before Critical runs unattended and is a no-op while
+         * that box is up. apply_policy_change() then unblocks or re-blocks
+         * pending rows against the new level. */
         case IDC_CHAT_PERMIT:
             if (d) {
                 CmdPolicy next = d->approval_q.policy;
                 cmd_policy_cycle_allowed(&next);
-                apply_policy_change(d, next);
+                request_policy_change(hwnd, d, next);
             }
             return 0;
         case IDC_CHAT_AUTOAPPROVE:
             if (d) {
                 CmdPolicy next = d->approval_q.policy;
-                cmd_policy_cycle_unattended(&next);
-                apply_policy_change(d, next);
+                cmd_policy_set_auto(&next, !cmd_policy_auto_on(next));
+                request_policy_change(hwnd, d, next);
             }
             return 0;
         /* IDC_CHAT_THINKING removed - thinking toggle now inline in chat */
@@ -3839,26 +3892,19 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         default: {
             int ctl_id = LOWORD(wParam);
 
-            /* IDC_CHAT_POLICY_ALLOW_BASE + stop → put the ceiling on that
-             * stop; IDC_CHAT_POLICY_AUTO_BASE + (stop + 1) → the unattended
-             * marker, index 0 meaning POLICY_NONE. Absolute rather than a
-             * cycle so a caller (the control, the integration harness, a
-             * future menu) can ask for a named position. */
+            /* IDC_CHAT_POLICY_ALLOW_BASE + stop -> put the level on that
+             * stop; Auto-approve follows it when on (cmd_policy_set_allowed). */
             if (d && ctl_id >= IDC_CHAT_POLICY_ALLOW_BASE &&
                 ctl_id < IDC_CHAT_POLICY_ALLOW_BASE + NS_POLICY_STOPS) {
                 CmdPolicy next = d->approval_q.policy;
                 cmd_policy_set_allowed(&next, ctl_id - IDC_CHAT_POLICY_ALLOW_BASE);
-                apply_policy_change(d, next);
+                request_policy_change(hwnd, d, next);
                 return 0;
             }
-            if (d && ctl_id >= IDC_CHAT_POLICY_AUTO_BASE &&
-                ctl_id <= IDC_CHAT_POLICY_AUTO_BASE + NS_POLICY_STOPS) {
-                CmdPolicy next = d->approval_q.policy;
-                cmd_policy_set_unattended(&next,
-                    ctl_id - IDC_CHAT_POLICY_AUTO_BASE - 1);
-                apply_policy_change(d, next);
+            /* Retired unattended setters: swallowed, no effect. */
+            if (ctl_id >= IDC_CHAT_POLICY_RETIRED_BASE &&
+                ctl_id <= IDC_CHAT_POLICY_RETIRED_BASE + NS_POLICY_STOPS)
                 return 0;
-            }
 
             /* IDC_CMD_APPROVE_BASE + index → approve single command.
              * lParam is the batch id (0 = oldest batch still needing the
@@ -4304,6 +4350,9 @@ next_coalesce:;
 
         return 0;
     }
+
+    case WM_AI_GET_POLICY:
+        return d ? (LRESULT)cmd_policy_status_word(d->approval_q.policy) : 0;
 
     case WM_AI_RESPONSE: {
         AiResponseMsg *rmsg = (AiResponseMsg *)lParam;
@@ -5330,6 +5379,9 @@ static void do_session_switch(AiChatData *d,
                               const char *system_notes,
                               const char *session_name)
 {
+    /* A Critical confirmation still up from the old session must not apply
+     * to this one (request_policy_change()). */
+    d->session_gen++;
     /* Save current conversation to old session state. A busy session's
      * thread works on its own copy, so this is safe mid-reply; when the
      * reply lands, WM_AI_RESPONSE replaces it with the thread's copy. */
