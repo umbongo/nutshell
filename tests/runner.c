@@ -612,6 +612,10 @@ int test_config_load_migrates_pre_v1_1_16_numeric_auto_approve(void);
 int test_config_load_policy_key_wins_over_both_old_keys(void);
 int test_config_load_garbage_policy_token_is_the_default(void);
 int test_config_load_inverted_policy_token_clamps_down(void);
+int test_config_load_split_policy_token_turns_auto_off(void);
+int test_config_load_matched_policy_token_is_auto_on(void);
+int test_config_load_read_none_policy_token_unchanged(void);
+int test_config_save_after_load_writes_the_normalised_token(void);
 /* READ allow-list, UNKNOWN fallthroughs and the classification mask */
 int test_cmd_classify_linux_unrecognised_is_unknown(void);
 int test_cmd_classify_linux_unrecognised_with_redirect_is_write(void);
@@ -3902,6 +3906,10 @@ int main(void) {
     failed += test_config_load_policy_key_wins_over_both_old_keys();
     failed += test_config_load_garbage_policy_token_is_the_default();
     failed += test_config_load_inverted_policy_token_clamps_down();
+    failed += test_config_load_split_policy_token_turns_auto_off();
+    failed += test_config_load_matched_policy_token_is_auto_on();
+    failed += test_config_load_read_none_policy_token_unchanged();
+    failed += test_config_save_after_load_writes_the_normalised_token();
     /* READ allow-list, UNKNOWN fallthroughs and the classification mask */
     failed += test_cmd_classify_linux_unrecognised_is_unknown();
     failed += test_cmd_classify_linux_unrecognised_with_redirect_is_write();

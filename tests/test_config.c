@@ -1360,6 +1360,89 @@ int test_config_load_inverted_policy_token_clamps_down(void)
 }
 
 /* ============================================================
+ * ai_policy_default after the Auto-approve button
+ * (2026-10-18-ai-auto-approve-button-design.md section 2)
+ * ============================================================ */
+
+static Config *load_policy_token(const char *token)
+{
+    char json[256];
+    snprintf(json, sizeof(json),
+             "{\"settings\": {\"font\": \"Consolas\", "
+             "\"ai_policy_default\": \"%s\"}, \"profiles\": []}", token);
+    FILE *f = test_fopen_private(TMP_CFG);
+    if (!f) return NULL;
+    fputs(json, f);
+    fclose(f);
+    return config_load(TMP_CFG);
+}
+
+int test_config_load_split_policy_token_turns_auto_off(void)
+{
+    TEST_BEGIN();
+    Config *cfg = load_policy_token("write/read");   /* an older exe's split */
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_WRITE);
+        ASSERT_EQ(cfg->settings.ai_policy_default.unattended, POLICY_NONE);
+        config_free(cfg);
+    }
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_matched_policy_token_is_auto_on(void)
+{
+    TEST_BEGIN();
+    Config *cfg = load_policy_token("write/write");
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_WRITE);
+        ASSERT_EQ(cfg->settings.ai_policy_default.unattended, (int)CMD_WRITE);
+        config_free(cfg);
+    }
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_read_none_policy_token_unchanged(void)
+{
+    TEST_BEGIN();
+    Config *cfg = load_policy_token("read/none");
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_READ);
+        ASSERT_EQ(cfg->settings.ai_policy_default.unattended, POLICY_NONE);
+        config_free(cfg);
+    }
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_save_after_load_writes_the_normalised_token(void)
+{
+    TEST_BEGIN();
+    Config *cfg = load_policy_token("critical/unknown");
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+        config_free(cfg);
+        FILE *f = fopen(TMP_CFG, "r");
+        ASSERT_NOT_NULL(f);
+        if (f) {
+            char buf[8192];
+            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+            buf[n] = '\0';
+            fclose(f);
+            ASSERT_TRUE(strstr(buf, "\"ai_policy_default\": \"critical/none\"") != NULL);
+            ASSERT_NULL(strstr(buf, "critical/unknown"));
+        }
+    }
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
  * Profile platform (device platform setting, audit H2)
  * ============================================================ */
 
