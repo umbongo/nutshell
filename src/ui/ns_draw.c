@@ -346,92 +346,109 @@ static const ThemeSurface *policy_intent(const ThemeTokens *tokens, int allowed)
 }
 
 void ns_draw_policy(HDC hdc, const NsPolicyLayout *l, CmdPolicy policy,
-                    int hover_band, int hover_stop, const ThemeTokens *tokens,
+                    int compact, int hover_stop, const ThemeTokens *tokens,
                     HFONT font, int dpi)
 {
     if (!hdc || !l || !tokens) return;
+    if (l->total_w <= 0 || l->cell[0].h <= 0) return;
     cmd_policy_clamp(&policy);
+    int auto_on = cmd_policy_auto_on(policy);
 
     const ThemeSurface *intent = policy_intent(tokens, policy.allowed);
     COLORREF surface = NS_CR(tokens->bg_secondary.base);
-    int radius = ns_scale(R_CTRL, dpi);
+    int left = l->cell[0].x, top = l->cell[0].y;
+    int right = left + l->total_w, bottom = top + l->cell[0].h;
+    int clip_r = (l->clip_right < right) ? l->clip_right : right;
+    if (clip_r <= left) return;               /* wholly under the button */
+    int radius = ns_type_pill(l->cell[0].h);
 
-    RECT outer = { l->cell[0].x, l->cell[0].y,
-                   l->cell[0].x + l->total_w,
-                   l->cell[0].y + l->cell[0].h };
-    ns_draw_round_stroke(hdc, &outer, radius, NS_CR(tokens->border),
-                         STROKE_HAIRLINE);
-
+    /* Fills and labels: inside the clip AND the pill's rounded outline, so
+     * plain rect fills give rounded ends without a gap at the joins. */
+    int saved = SaveDC(hdc);
+    IntersectClipRect(hdc, left, top, clip_r, bottom);
+    HRGN pill = CreateRoundRectRgn(left, top, right + 1, bottom + 1,
+                                   2 * radius, 2 * radius);
+    if (pill) {
+        ExtSelectClipRgn(hdc, pill, RGN_AND);
+        DeleteObject(pill);
+    }
     HFONT old_font = font ? (HFONT)SelectObject(hdc, font) : NULL;
     int old_bk = SetBkMode(hdc, TRANSPARENT);
 
     for (int k = 0; k < NS_POLICY_STOPS; k++) {
-        if (l->cell[k].w <= 0 || l->cell[k].h <= 0) continue;
-
-        int hot_label = (hover_band == POLICY_BAND_ALLOWED && hover_stop == k);
-        int hot_rail  = (hover_band == POLICY_BAND_UNATTENDED && hover_stop == k);
-
+        if (l->cell[k].w <= 0) continue;
+        int hot = (hover_stop == k);
         COLORREF fill_cr, label_cr;
-        if (k <= policy.unattended) {
-            fill_cr  = hot_label ? NS_CR(intent->hover) : NS_CR(intent->base);
+        if (k <= policy.allowed && auto_on) {
+            fill_cr  = hot ? NS_CR(intent->hover) : NS_CR(intent->base);
             label_cr = NS_CR(intent->label);
         } else if (k <= policy.allowed) {
             fill_cr  = rgb_alpha(NS_CR(intent->base), surface,
-                                 hot_label ? 0.30f : 0.18f);
+                                 hot ? 0.30f : 0.18f);
             label_cr = NS_CR(tokens->text_main);
         } else {
-            fill_cr  = hot_label ? NS_CR(tokens->bg_secondary.hover) : surface;
+            fill_cr  = hot ? NS_CR(tokens->bg_secondary.hover) : surface;
             label_cr = NS_CR(tokens->text_disabled);
         }
-
         RECT rc = { l->cell[k].x, l->cell[k].y,
                     l->cell[k].x + l->cell[k].w,
                     l->cell[k].y + l->cell[k].h };
-        ns_draw_round_fill(hdc, &rc, radius, fill_cr, 255);
-
-        RECT lrc = { l->label[k].x, l->label[k].y,
-                     l->label[k].x + l->label[k].w,
-                     l->label[k].y + l->label[k].h };
-        COLORREF old_tc = SetTextColor(hdc, label_cr);
-        draw_utf8_text(hdc, &lrc, cmd_policy_stop_label(k),
-                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-        SetTextColor(hdc, old_tc);
-
-        /* The unfilled remainder of the rail, cell by cell, so a hovered
-         * rail band is visible even where the marker does not reach. */
-        if (k > policy.unattended && l->rail[k].w > 0 && l->rail[k].h > 0) {
-            RECT rr = { l->rail[k].x, l->rail[k].y + (l->rail[k].h - STROKE_BAR) / 2,
-                        l->rail[k].x + l->rail[k].w, 0 };
-            rr.bottom = rr.top + STROKE_BAR;
-            COLORREF rail_cr = hot_rail ? NS_CR(tokens->text_dim)
-                                        : NS_CR(tokens->border);
-            HBRUSH br = CreateSolidBrush(rail_cr);
-            FillRect(hdc, &rr, br);
-            DeleteObject(br);
-        }
-    }
-
-    /* The filled rail: its length is the unattended marker. */
-    if (l->rail_fill.w > 0 && l->rail_fill.h > 0) {
-        RECT rr = { l->rail_fill.x,
-                    l->rail_fill.y + (l->rail_fill.h - STROKE_BAR) / 2,
-                    l->rail_fill.x + l->rail_fill.w, 0 };
-        rr.bottom = rr.top + STROKE_BAR;
-        int hot = (hover_band == POLICY_BAND_UNATTENDED &&
-                   hover_stop >= 0 && hover_stop <= policy.unattended);
-        HBRUSH br = CreateSolidBrush(hot ? NS_CR(intent->hover)
-                                         : NS_CR(intent->label));
-        FillRect(hdc, &rr, br);
+        HBRUSH br = CreateSolidBrush(fill_cr);
+        FillRect(hdc, &rc, br);
         DeleteObject(br);
+        COLORREF old_tc = SetTextColor(hdc, label_cr);
+        draw_utf8_text(hdc, &rc,
+                       compact ? cmd_policy_stop_short(k) : cmd_policy_stop_label(k),
+                       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        SetTextColor(hdc, old_tc);
     }
-
     SetBkMode(hdc, old_bk);
     if (old_font) SelectObject(hdc, old_font);
+    RestoreDC(hdc, saved);
 
-    /* Re-stroke on top: the per-cell rounded fills slightly overpaint the
-     * outer edge, same as ns_draw_segmented(). */
+    /* The outline, clipped to the clip rect only (the round region would
+     * halve the antialiased stroke), so a cut pill ends at the clip. */
+    saved = SaveDC(hdc);
+    IntersectClipRect(hdc, left, top - 1, clip_r, bottom + 1);
+    RECT outer = { left, top, right, bottom };
     ns_draw_round_stroke(hdc, &outer, radius, NS_CR(tokens->border),
-                         STROKE_HAIRLINE);
+                         ns_scale(STROKE_HAIRLINE, dpi));
+    RestoreDC(hdc, saved);
+}
+
+void ns_draw_auto_button(HDC hdc, const NsRect *r, CmdPolicy policy,
+                         int compact, int hover, const ThemeTokens *tokens,
+                         HFONT font, int dpi)
+{
+    if (!hdc || !r || !tokens || r->w <= 0 || r->h <= 0) return;
+    cmd_policy_clamp(&policy);
+    int on = cmd_policy_auto_on(policy);
+    const ThemeSurface *intent = policy_intent(tokens, policy.allowed);
+
+    RECT rc = { r->x, r->y, r->x + r->w, r->y + r->h };
+    int radius = ns_type_pill(r->h);
+    COLORREF fill_cr, label_cr;
+    if (on) {
+        fill_cr  = hover ? NS_CR(intent->hover) : NS_CR(intent->base);
+        label_cr = NS_CR(intent->label);
+    } else {
+        fill_cr  = hover ? NS_CR(tokens->bg_secondary.hover)
+                         : NS_CR(tokens->bg_secondary.base);
+        label_cr = NS_CR(tokens->text_dim);
+    }
+    ns_draw_round_fill(hdc, &rc, radius, fill_cr, 255);
+    if (!on)
+        ns_draw_round_stroke(hdc, &rc, radius, NS_CR(tokens->border),
+                             ns_scale(STROKE_HAIRLINE, dpi));
+
+    HFONT old_font = font ? (HFONT)SelectObject(hdc, font) : NULL;
+    int old_bk = SetBkMode(hdc, TRANSPARENT);
+    COLORREF old_tc = SetTextColor(hdc, label_cr);
+    draw_utf8_text(hdc, &rc, cmd_policy_auto_label(compact),
+                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SetTextColor(hdc, old_tc);
+    SetBkMode(hdc, old_bk);
+    if (old_font) SelectObject(hdc, old_font);
 }
 
 /* ── Context meter ──────────────────────────────────────────────────── */
