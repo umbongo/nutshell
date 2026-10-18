@@ -109,10 +109,12 @@ void ns_draw_segmented(HDC hdc, const NsRect seg[2],
  * with Auto-approve on, solid intent .base with .label text, so the pill
  * itself says "these run on their own". Cells above the level are plain
  * bg_secondary with text_disabled labels. `hover_stop` (-1 for none) steps
- * that cell one state brighter. Everything paints inside
+ * that cell one state brighter. Fills and labels paint inside
  * IntersectClipRect(..., l->clip_right, ...), so a cell the Auto-approve
- * button covers in part never paints under it. Radius ns_type_pill(),
- * stroke STROKE_HAIRLINE through ns_scale(). */
+ * button covers in part never paints under it; the outline is clipped on
+ * the button side only (padded a pixel each side when the pill is
+ * uncovered, so the hairline of its round ends survives). Radius
+ * ns_type_pill(), stroke STROKE_HAIRLINE through ns_scale(). */
 void ns_draw_policy(HDC hdc, const NsPolicyLayout *l, CmdPolicy policy,
                     int compact, int hover_stop, const ThemeTokens *tokens,
                     HFONT font, int dpi);

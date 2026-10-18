@@ -406,10 +406,13 @@ void ns_draw_policy(HDC hdc, const NsPolicyLayout *l, CmdPolicy policy,
     if (old_font) SelectObject(hdc, old_font);
     RestoreDC(hdc, saved);
 
-    /* The outline, clipped to the clip rect only (the round region would
-     * halve the antialiased stroke), so a cut pill ends at the clip. */
+    /* The outline, clipped on the button side only (the round region would
+     * halve the antialiased stroke): a cut pill ends at the clip, an uncovered
+     * one is padded a pixel each side so the hairline of its round ends
+     * is not shaved. */
     saved = SaveDC(hdc);
-    IntersectClipRect(hdc, left, top - 1, clip_r, bottom + 1);
+    IntersectClipRect(hdc, left - 1, top - 1,
+                      clip_r < right ? clip_r : right + 1, bottom + 1);
     RECT outer = { left, top, right, bottom };
     ns_draw_round_stroke(hdc, &outer, radius, NS_CR(tokens->border),
                          ns_scale(STROKE_HAIRLINE, dpi));
