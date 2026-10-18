@@ -631,3 +631,45 @@ int test_key_unknown_flag_bits_ignored(void)
     ASSERT_TRUE(bytes_eq(out, n, "\x08"));
     TEST_END();
 }
+
+int test_key_name_names_the_special_keys(void)
+{
+    TEST_BEGIN();
+    ASSERT_STR_EQ(key_name(NSK_UP), "Up");
+    ASSERT_STR_EQ(key_name(NSK_PGUP), "PgUp");
+    ASSERT_STR_EQ(key_name(NSK_PGDN), "PgDn");
+    ASSERT_STR_EQ(key_name(NSK_DELETE), "Delete");
+    ASSERT_STR_EQ(key_name(NSK_F1), "F1");
+    ASSERT_STR_EQ(key_name(NSK_F12), "F12");
+    ASSERT_STR_EQ(key_name(NSK_TAB), "Tab");
+    ASSERT_STR_EQ(key_name(NSK_BACKSPACE), "Backspace");
+    TEST_END();
+}
+
+int test_key_name_never_names_a_character_and_is_never_null(void)
+{
+    TEST_BEGIN();
+    ASSERT_STR_EQ(key_name(NSK_CHAR), "-");
+    ASSERT_STR_EQ(key_name(NSK_NONE), "-");
+    ASSERT_STR_EQ(key_name(NSK_COUNT), "-");
+    ASSERT_STR_EQ(key_name((NsKey)999), "-");
+    ASSERT_STR_EQ(key_name((NsKey)-5), "-");
+    /* Every key between the first special and the last has a real name. */
+    for (int k = (int)NSK_UP; k < (int)NSK_COUNT; k++)
+        ASSERT_TRUE(strcmp(key_name((NsKey)k), "-") != 0);
+    TEST_END();
+}
+
+int test_key_mods_name_spells_every_combination(void)
+{
+    TEST_BEGIN();
+    ASSERT_STR_EQ(key_mods_name(0), "none");
+    ASSERT_STR_EQ(key_mods_name(NSK_MOD_SHIFT), "shift");
+    ASSERT_STR_EQ(key_mods_name(NSK_MOD_ALT), "alt");
+    ASSERT_STR_EQ(key_mods_name(NSK_MOD_CTRL), "ctrl");
+    ASSERT_STR_EQ(key_mods_name(NSK_MOD_SHIFT | NSK_MOD_CTRL), "shift+ctrl");
+    ASSERT_STR_EQ(key_mods_name(NSK_MOD_SHIFT | NSK_MOD_ALT | NSK_MOD_CTRL), "shift+alt+ctrl");
+    ASSERT_STR_EQ(key_mods_name(0xF0u), "none");               /* unknown bits ignored */
+    ASSERT_STR_EQ(key_mods_name(0xF0u | NSK_MOD_ALT), "alt");
+    TEST_END();
+}

@@ -4,7 +4,6 @@
 #include "ns_scale.h"
 #include "ui_theme.h"
 #include "xmalloc.h"
-#include "logger.h"
 #include "tooltip.h"
 #include <stdio.h>
 #include <commctrl.h>

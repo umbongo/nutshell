@@ -6,37 +6,53 @@
 #include <string.h>
 #include "core/cli_args.h"
 #include "core/cli_sink.h"
-#include "core/logger.h"
+#include "core/dlog.h"
 #include "core/text_lines.h"
 #include "config/config.h"
 #include "ui/ui.h"
 #include "ui/icons.h"
 #include "ui/resource.h"
 
-/* The app-wide diagnostic log (src/core/logger.c) was wired into every
- * error path (window.c's WM_CREATE/RegisterClass failures, and -- since
- * 2026-09-25 -- dispatch_tick()'s prompt-gated command dispatcher, see
- * ai_chat.c) but log_init() was never actually called anywhere in
- * production, only in tests/test_logger.c: every LOG_* call reached only
- * stderr, invisible for a GUI-subsystem (-mwindows) process with no
- * console. Point it at %TEMP%\nutshell.log unconditionally, at
- * LOG_LEVEL_INFO -- no setting gates this, unlike the per-session
- * debug_terminal log (Settings > Debug), so it is there for a bug report
- * without the user having to change anything first. Same file, directory
- * and "no setting required" shape as REDRAW_DEBUG's
- * %TEMP%\nutshell_redraw.log (src/ui/redraw_log.h), which is opt-in at
- * build time instead. */
-static void init_app_log(void)
+/* The debug log (src/core/dlog.c). Started here, before any window, with
+ * debugging off: errors and warnings from the very first line are kept in a
+ * "logs" folder beside the exe, which is created lazily at the first line that
+ * passes the filter (so --help / --version / --list never create it). The window
+ * applies the saved settings with dlog_configure() once the config is loaded;
+ * dlog_shutdown() at exit drains the writer. This replaces %TEMP%\nutshell.log. */
+static void start_debug_log(void)
 {
-    char tmp[MAX_PATH];
-    DWORD n = GetTempPathA((DWORD)sizeof(tmp), tmp);
-    if (n == 0 || n >= sizeof(tmp)) {
-        log_init(NULL, LOG_LEVEL_INFO);
-        return;
+    char exe[MAX_PATH];
+    char dir[MAX_PATH];
+    DWORD n = GetModuleFileNameA(NULL, exe, (DWORD)sizeof(exe));
+    if (n == 0 || n >= sizeof(exe)) {
+        exe[0] = '\0';
+        dir[0] = '\0';
+    } else {
+        (void)snprintf(dir, sizeof(dir), "%s", exe);
+        char *slash = strrchr(dir, '\\');
+        if (slash) *slash = '\0';
+        else dir[0] = '\0';
     }
-    char path[MAX_PATH * 2];
-    (void)snprintf(path, sizeof(path), "%snutshell.log", tmp);
-    log_init(path, LOG_LEVEL_INFO);
+    DlogStartInfo si;
+    memset(&si, 0, sizeof(si));
+    si.exe_dir = dir;
+    si.exe_path = exe;
+    si.version = APP_VERSION;
+    si.pid = (unsigned)GetCurrentProcessId();
+    /* The display facts known before any window exists. The theme is only
+     * known once the config is read; the window logs it with the window's own
+     * DPI in the app.env event. */
+    char extra[96];
+    int sys_dpi = 96;
+    HDC sdc = GetDC(NULL);
+    if (sdc) {
+        sys_dpi = GetDeviceCaps(sdc, LOGPIXELSX);
+        ReleaseDC(NULL, sdc);
+    }
+    (void)snprintf(extra, sizeof(extra), "monitors=%d system_dpi=%d",
+                   GetSystemMetrics(SM_CMONITORS), sys_dpi);
+    si.extra = extra;
+    (void)dlog_start(&si);
 }
 
 /* cli_sink.h mirrors these so the portable decision can be tested; keep
@@ -321,7 +337,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     ui_set_startup_action(opts.action, opts.arg, opts.demo_state, opts.theme);
 
-    init_app_log();
+    start_debug_log();
 
     /* I-2: initialise WSA once for the process lifetime */
     WSADATA wsadata;
@@ -333,6 +349,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ns_icons_shutdown();
 
     WSACleanup();
-    log_close();
+    dlog_shutdown();
     return 0;
 }

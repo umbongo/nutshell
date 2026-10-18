@@ -11,6 +11,7 @@
 #include "../term/term.h"
 #include "../core/selection.h"
 #include "../core/display_buffer.h"
+#include "../core/render_stuck.h"
 
 typedef struct {
 #ifdef _WIN32
@@ -26,6 +27,15 @@ typedef struct {
 #endif
     int charWidth;
     int charHeight;
+
+    /* Debug log (spec 2026-10-17-debug-logging-design.md section 2). The
+     * caller sets log_sid to the session being painted before renderer_draw();
+     * the counters below describe the last paint, for the render.stats event
+     * window.c writes (it adds the cooldown skips). */
+    unsigned    log_sid;
+    RenderStuck stuck;            /* render.stuck_dirty: rows left dirty paint after paint */
+    int         stat_rows_painted;   /* rows the last paint redrew                         */
+    int         stat_rows_skipped;   /* rows in the paint rect it found clean and skipped   */
 } Renderer;
 
 #ifdef _WIN32

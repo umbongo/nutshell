@@ -42,7 +42,8 @@
 #include "cmd_detail_dlg.h"
 #include "cmd_batch.h"
 #include "dispatch_line_clear.h"
-#include "logger.h"
+#include "dlog.h"
+#include "dlog_query.h"
 #include "chat_listview.h"
 #include "ui_demo.h"
 #include "icons.h"
@@ -629,11 +630,22 @@ static void post_tool_msg(AiStream *s, ChatItemType type, const char *text)
 static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
 {
     AiStream *s = (AiStream *)raw_arg;
+    dlog_set_thread_tag("ai");
+
+    /* Debug log (spec section 2): the provider and model by name, never the
+     * request, the reply or a tool's arguments or result. */
+    const ULONGLONG t_stream = GetTickCount64();
+    const unsigned stream_id = s->id;
+    int stream_failed = 0;
+    DLOG(DLOG_AI, DLOG_INFO, 0, "stream.start", "stream=%u provider=%s model=%s tools=%d",
+         stream_id, s->provider, s->conv.model, s->has_tools ? s->tools.count : 0);
 
     const char *url = ai_provider_url(s->provider);
     if (!url && strcmp(s->provider, "custom") == 0 && s->custom_url[0])
         url = s->custom_url;
     if (!url) {
+        DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error", "stream=%u class=unknown_provider ms=%llu",
+             stream_id, (unsigned long long)(GetTickCount64() - t_stream));
         post_error_response(s, "Error: unknown AI provider");
         ai_stream_mark_finished(s);
         ai_stream_release(s);
@@ -692,6 +704,11 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                 snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
             else
                 snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
+            stream_failed = 1;
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error",
+                 "stream=%u class=%s status=%d ms=%llu", stream_id,
+                 rc != 0 ? "transport" : "http", status,
+                 (unsigned long long)(GetTickCount64() - t_stream));
             post_error_response(s, msg);
             goto out;
         }
@@ -732,6 +749,9 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
             AiToolResult *results = (AiToolResult *)calloc(
                 (size_t)tool_stream_ptr->pending_tool_count, sizeof(AiToolResult));
             if (!results) {
+                stream_failed = 1;
+                DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error", "stream=%u class=oom ms=%llu",
+                     stream_id, (unsigned long long)(GetTickCount64() - t_stream));
                 post_error_response(s, "Error: out of memory for tool results");
                 goto out;
             }
@@ -750,6 +770,8 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     results[ti].content_len = results[ti].content
                                            ? strlen(results[ti].content) : 0;
                     results[ti].is_error = 1;
+                    DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=0 rate_limited=1",
+                         stream_id, call->name);
                     post_tool_msg(s, CHAT_ITEM_TOOL_CALL, "[tool rate-limited]");
                     continue;
                 }
@@ -765,6 +787,13 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     if (wsc->search_provider[0])
                         provider_suffix = wsc->search_provider;
                 }
+                /* read_debug_log: the query in words, not just the name. */
+                char debug_desc[160];
+                if (!provider_suffix && strcmp(call->name, DLOG_TOOL_NAME) == 0) {
+                    (void)ai_debug_tool_describe(call->input_json, debug_desc,
+                                                 sizeof(debug_desc));
+                    if (debug_desc[0]) provider_suffix = debug_desc;
+                }
                 if (provider_suffix)
                     snprintf(tool_call_text, sizeof(tool_call_text),
                              "using tool: %s - %s", call->name,
@@ -775,9 +804,14 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                 post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
 
                 /* Execute (the stream's own registry snapshot and abort flag) */
+                const ULONGLONG t_tool = GetTickCount64();
                 ai_tool_execute(&s->tools, call, ai_stream_abort_flag(s),
                                 &results[ti]);
                 agentic_record_tool_call(&agentic, call->name);
+                /* The tool's name and outcome only: never its arguments or result. */
+                DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=%d ms=%llu",
+                     stream_id, call->name, results[ti].is_error ? 0 : 1,
+                     (unsigned long long)(GetTickCount64() - t_tool));
 
                 /* Truncation warning */
                 if (results[ti].was_truncated) {
@@ -790,10 +824,18 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                 if (results[ti].content && results[ti].content_len > 0
                     && !results[ti].is_error) {
                     char preview[256];
-                    size_t plen = results[ti].content_len < 200
-                                ? results[ti].content_len : 200;
-                    memcpy(preview, results[ti].content, plen);
-                    preview[plen] = '\0';
+                    if (strcmp(call->name, DLOG_TOOL_NAME) == 0) {
+                        /* The header line only: the log lines are for the
+                         * model, not for the chat. */
+                        ai_debug_tool_summary_line(results[ti].content,
+                                                   results[ti].content_len,
+                                                   preview, 200);
+                    } else {
+                        size_t plen = results[ti].content_len < 200
+                                    ? results[ti].content_len : 200;
+                        memcpy(preview, results[ti].content, plen);
+                        preview[plen] = '\0';
+                    }
                     post_tool_msg(s, CHAT_ITEM_TOOL_RESULT, preview);
                 }
             }
@@ -858,6 +900,16 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                       total_input_tokens, total_output_tokens);
 
 out:
+    if (!stream_failed) {
+        if (ai_stream_aborted(s))
+            DLOG(DLOG_AI, DLOG_INFO, 0, "stream.cancel", "stream=%u ms=%llu", stream_id,
+                 (unsigned long long)(GetTickCount64() - t_stream));
+        else
+            DLOG(DLOG_AI, DLOG_INFO, 0, "stream.done",
+                 "stream=%u ms=%llu tokens_in=%d tokens_out=%d", stream_id,
+                 (unsigned long long)(GetTickCount64() - t_stream),
+                 total_input_tokens, total_output_tokens);
+    }
     if (tool_stream_ptr) ai_tools_stream_reset(tool_stream_ptr);
     ai_stream_mark_finished(s);   /* the panel reaps it if nothing got through */
     ai_stream_release(s);
@@ -1177,6 +1229,13 @@ static void chat_rebuild_display(AiChatData *d)
     update_context_bar(d);
 }
 
+/* 1 when the next reply will carry read_debug_log (launch_stream_thread adds
+ * it under the same two conditions), so the system prompt may mention it. */
+static int debug_tool_active(const AiChatData *d)
+{
+    return d && dlog_enabled() && ai_provider_supports_tools(d->provider);
+}
+
 /* Initialise the tool registry from the configured search/fetch settings. */
 static void chat_register_tools(AiChatData *d,
                                 const char *search_provider,
@@ -1276,15 +1335,31 @@ static void launch_stream_thread(AiChatData *d)
             ? d->conv.messages[last_msg].attachment : NULL;
 
         /* Use tool-aware request builder when tools are registered and provider supports them */
-        int has_tools = (d->tool_registry.count > 0);
+        int has_tools = (d->tool_registry.count > 0) || dlog_enabled();
         int provider_supports = ai_provider_supports_tools(d->provider);
 
         if (has_tools && provider_supports) {
             /* Snapshot the registry: the thread runs the tools from its own
              * copy, never the panel's (which settings can change, and which
              * dies with the panel). */
-            ai_stream_copy_tools(s, &d->tool_registry, d->tools_gen,
-                                 &d->search_ctx, &d->fetch_ctx);
+            /* read_debug_log joins the snapshot only while debugging is on
+             * right now, whatever the panel's own registry holds; its call
+             * counter is the stream's copy (one per user message). */
+            /* The registry is ~42 KB: on the heap, not the UI thread's stack. */
+            AiToolRegistry *launch_reg = (AiToolRegistry *)malloc(sizeof(*launch_reg));
+            if (!launch_reg) {
+                ai_stream_discard(s);
+                launch_failed(d, "[out of memory starting the AI request]");
+                return;
+            }
+            *launch_reg = d->tool_registry;
+            DebugLogToolContext debug_ctx;
+            ai_debug_tool_ctx_init(&debug_ctx);
+            int with_debug = ai_debug_tool_register_if_enabled(launch_reg, &debug_ctx);
+            ai_stream_copy_tools(s, launch_reg, d->tools_gen,
+                                 &d->search_ctx, &d->fetch_ctx,
+                                 with_debug ? &debug_ctx : NULL);
+            free(launch_reg);
             s->has_tools = 1;
             /* Serialize tool definitions for this provider */
             s->tools_json[0] = '\0';
@@ -1606,9 +1681,10 @@ static void send_user_message(AiChatData *d)
     if (ctx_ok && d->conv.msg_count == 0) {
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
-                               d->session_notes, d->system_notes,
-                               active_session_kind(d), active_shell_name(d));
+        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
+                                  d->session_notes, d->system_notes,
+                                  active_session_kind(d), active_shell_name(d),
+                                  debug_tool_active(d));
         /* Append tool descriptions if tools are registered and provider supports them */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
@@ -1633,9 +1709,10 @@ static void send_user_message(AiChatData *d)
         /* Update system prompt with fresh terminal context */
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
-                               d->session_notes, d->system_notes,
-                               active_session_kind(d), active_shell_name(d));
+        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
+                                  d->session_notes, d->system_notes,
+                                  active_session_kind(d), active_shell_name(d),
+                                  debug_tool_active(d));
         /* Append tool descriptions */
         if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
             size_t len = strlen(sys_prompt);
@@ -1757,9 +1834,10 @@ static void send_continue_message(AiChatData *d, const char *msg_text)
     if (ctx_ok && d->conv.msg_count > 0 && d->active_term) {
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt(sys_prompt, sys_prompt_cap, term_text,
-                               d->session_notes, d->system_notes,
-                               active_session_kind(d), active_shell_name(d));
+        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
+                                  d->session_notes, d->system_notes,
+                                  active_session_kind(d), active_shell_name(d),
+                                  debug_tool_active(d));
         ai_conv_set_system(&d->conv, sys_prompt);
     }
 
@@ -1817,7 +1895,7 @@ static void dispatch_start(AiChatData *d, int batch_id)
             dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d),
                                       windows_prompt)
                 == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE");
-        LOG_INFO(line);
+        DLOG(DLOG_AI, DLOG_INFO, 0, "dispatch.start", "msg=%s", line);
     }
 
     SetTimer(d->hwnd, TIMER_CMD_QUEUE, CMD_QUEUE_POLL_MS, NULL);
@@ -2020,7 +2098,7 @@ static int describe_cursor_row(const Terminal *term, char *buf, size_t buf_size)
  * against a real ConPTY-hosted PowerShell could not reproduce it (see the
  * wintest case below), which points at something particular to the
  * reporter's own machine/session -- this exists to capture that, without
- * asking for a debugger attach. Logs at LOG_INFO (%TEMP%\nutshell.log,
+ * asking for a debugger attach. Logs at ai WARN (the debug log folder,
  * always on -- see init_app_log(), src/main.c) every field the settle
  * gate (`ready = !dispatch_await_echo && quiet && term_at_prompt(term)`,
  * dispatch_tick() below) and the no-prefix safety checks actually read,
@@ -2060,7 +2138,7 @@ static void dispatch_log_stall_if_due(AiChatData *d, CmdBatch *batch)
                  (unsigned long)(now - *d->active_io->last_input_tick));
 
     char row_desc[220];
-    (void)describe_cursor_row(term, row_desc, sizeof(row_desc));
+    int row_ok = describe_cursor_row(term, row_desc, sizeof(row_desc));
 
     char idx_desc[16];
     if (next_idx >= 0)
@@ -2068,23 +2146,27 @@ static void dispatch_log_stall_if_due(AiChatData *d, CmdBatch *batch)
     else
         snprintf(idx_desc, sizeof(idx_desc), "settle");
 
-    char line[620];
-    snprintf(line, sizeof(line),
-        "dispatch stall: batch=%d next=%s sent=%d await_echo=%d "
-        "quiet=%d(%lums) write_seq=%lu/%lu at_prompt=%d unambiguous=%d "
-        "continuation=%d windows_prompt=%d mode=%s keystroke_ms=%s "
-        "alt_screen=%d cursor=%d,%d term=%dx%d row=\"%s\"",
-        batch->id, idx_desc, d->dispatch_sent_count, d->dispatch_await_echo,
-        quiet, (unsigned long)(now - d->dispatch_last_change_tick),
-        seq, d->dispatch_seq, at_prompt, unambiguous, continuation,
-        windows_prompt,
-        mode == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE",
-        keystroke_desc,
-        term ? (int)term->alt_screen_active : -1,
-        term ? term->cursor.row : -1, term ? term->cursor.col : -1,
-        term ? term->rows : -1, term ? term->cols : -1,
-        row_desc);
-    LOG_INFO(line);
+    /* Plain state as fields; the cursor-row text (what the user may have
+     * typed there) goes through DLOG_CONTENT, so it is written only when
+     * "Include terminal content" is on. row_ok says whether row_desc is the
+     * row or the reason there is none. */
+    DLOG(DLOG_AI, DLOG_WARN, 0, "dispatch.stall",
+         "batch=%d next=%s sent=%d await_echo=%d quiet=%d quiet_ms=%lu "
+         "write_seq=%lu dispatch_seq=%lu at_prompt=%d unambiguous=%d "
+         "continuation=%d windows_prompt=%d mode=%s keystroke_ms=%s "
+         "alt_screen=%d row=%d col=%d rows=%d cols=%d row_ok=%d",
+         batch->id, idx_desc, d->dispatch_sent_count, d->dispatch_await_echo,
+         quiet, (unsigned long)(now - d->dispatch_last_change_tick),
+         seq, d->dispatch_seq, at_prompt, unambiguous, continuation,
+         windows_prompt,
+         mode == DISPATCH_LINE_CLEAR_READLINE ? "READLINE" : "NONE",
+         keystroke_desc,
+         term ? (int)term->alt_screen_active : -1,
+         term ? term->cursor.row : -1, term ? term->cursor.col : -1,
+         term ? term->rows : -1, term ? term->cols : -1,
+         row_ok);
+    DLOG_CONTENT(DLOG_AI, DLOG_WARN, 0, "dispatch.stall.row", "text",
+                 row_desc, strlen(row_desc));
 }
 
 /* TIMER_CMD_QUEUE tick: advance the dispatcher (on d->dispatch_batch_id)
@@ -2338,7 +2420,7 @@ static void dispatch_tick(AiChatData *d)
             snprintf(line, sizeof(line), "settled batch %d after %lu ms",
                      batch->id,
                      (unsigned long)(GetTickCount() - d->dispatch_start_tick));
-            LOG_INFO(line);
+            DLOG(DLOG_AI, DLOG_INFO, 0, "dispatch.settled", "msg=%s", line);
         }
 
         int batch_id = batch->id;

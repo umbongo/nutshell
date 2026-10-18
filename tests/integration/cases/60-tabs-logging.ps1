@@ -233,32 +233,37 @@ Invoke-Case "logging_stop_then_restart_new_file" @{} {
     "stopped: AFTER_STOP_MARKER absent from $(Split-Path $log1 -Leaf); restarted: new file $(Split-Path $log2 -Leaf) has AFTER_RESTART_MARKER"
 }
 
-# ---- LOG-2: debug terminal log is written -----------------------------------------
-# open_debug_log() (src/ui/window.c) writes <profile-name>-debug-<timestamp>.log
-# in the *exe's own directory* (get_exe_dir()), not settings.log_dir -- so this
-# looks in $s.Env.Root, not $s.Env.Logs. debug_log_chunk() (src/config/ssh_io.c)
-# renders ESC (0x1B) as the literal text "ESC" and fflush()es every chunk, so no
-# waiting for a clean shutdown is needed.
-Invoke-Case "debug_terminal_log_written" @{ debug_terminal = $true } {
+# ---- LOG-2: the raw terminal bytes reach the debug log -----------------------------
+# Spec 2026-10-17-debug-logging-design.md (replaces the old debug_terminal file).
+# With debugging on, `term` at Trace and "Include terminal content" ticked, every
+# chunk the transport feeds the emulator is one `term.rx data="..."` line
+# (DLOG_CONTENT, src/config/ssh_io.c) in <debug_log_dir>\nutshell-<stamp>-p<pid>.log
+# beside the exe, escaped by dlog_escape_bytes(): ESC (0x1B) is the two characters
+# \e. The file is written by a writer thread every 250 ms, so a short wait is enough.
+Invoke-Case "debug_terminal_log_written" @{ debug_enabled = $true; debug_level_term = "trace"; debug_include_content = $true; debug_log_dir = "debuglogs" } {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     Send-NutshellLine -Session $s -Line 'printf "\033[1mBOLD\033[0m\n"'
     Start-Sleep -Seconds 2
-    $pattern = Join-Path $s.Env.Root ($s.Env.ProfileName + "-debug-*.log")
+    $dir = Join-Path $s.Env.Root "debuglogs"
     $found = $null
+    $content = ""
     $deadline = (Get-Date).AddSeconds(8)
-    while ((Get-Date) -lt $deadline -and -not $found) {
-        $found = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $found) { Start-Sleep -Milliseconds 300 }
+    while ((Get-Date) -lt $deadline) {
+        $found = Get-ChildItem -Path (Join-Path $dir "nutshell-*-p*.log") -ErrorAction SilentlyContinue |
+                 Where-Object { $_.Name -notmatch "\.issue\d+\.log$" } | Select-Object -First 1
+        if ($found) {
+            $content = Get-Content $found.FullName -Raw
+            if ($content -match 'term\.rx.*BOLD') { break }
+        }
+        Start-Sleep -Milliseconds 300
     }
-    Assert-True ($null -ne $found) "no debug log matching '$($s.Env.ProfileName)-debug-*.log' appeared in $($s.Env.Root)"
-    $content = Get-Content $found.FullName -Raw
-    # The exact sequence sent, not a bare "ESC" -- every coloured shell prompt
-    # puts an "ESC" in the log, so that alone would pass without our own
-    # printf ever being logged. debug_log_chunk() renders 0x1B as "ESC", so
-    # "\033[1m" comes out as the literal text "ESC[1m", followed by "BOLD".
-    Assert-True ($content -match "ESC\[1m") "debug log '$($found.Name)' exists but contains no 'ESC[1m' for the escape sequence sent"
-    Assert-True ($content -match "BOLD") "debug log '$($found.Name)' contains 'ESC[1m' but not the 'BOLD' text that followed it"
-    "debug log $($found.Name) written with the sent sequence rendered as literal 'ESC[1m' followed by BOLD"
+    Assert-True ($null -ne $found) "no nutshell-*.log appeared in $dir"
+    # The exact sequence sent, not a bare "\e": every coloured shell prompt puts
+    # one in the log, so that alone would pass without our own printf ever being
+    # logged. "\033[1m" comes out as the literal text \e[1m, followed by BOLD.
+    Assert-True ($content -match 'term\.rx') "log '$($found.Name)' exists but holds no term.rx event"
+    Assert-True ($content -match '\\e\[1mBOLD') "log '$($found.Name)' has term.rx lines but not the sequence sent (\e[1m then BOLD)"
+    "debug log $($found.Name) holds the sent sequence as a term.rx line: \e[1m followed by BOLD"
 }
