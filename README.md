@@ -243,6 +243,14 @@ A line above the input box, always visible once a session is connected:
 - **Ctrl+V** with an image on the clipboard attaches a screenshot (sent as base64 PNG to multimodal-capable providers)
 - Click **Send** (or press Enter) to submit; while a reply is streaming the button becomes **Stop**
 
+#### Selecting and Copying
+
+- **Click and drag** anywhere in the thread to select characters -- your messages, replies, the open Thinking text, commands, status lines -- across messages if you like; dragging past the top or bottom edge scrolls
+- **Double-click** selects a word (in a code block, the command token under the pointer); **triple-click** selects the whole line
+- **Ctrl+C**, **Edit > Copy** or right-click **Copy** puts the selection on the clipboard as it reads on screen: no markdown markers, list items with their bullet or number when the selection includes it, table cells separated by tabs, commands without their `[EXEC]` markers. Nothing is copied just by letting go of the mouse
+- **Ctrl+A** or right-click **Select all** selects the whole conversation; **Esc** clears the selection
+- The copy icons on code blocks and command rows still copy their raw text in one click
+
 #### Command Execution
 
 When the AI suggests commands, they land in an approval card in the chat thread:
@@ -467,6 +475,8 @@ if you need to move between versions.
 │   │   ├── base64.c/.h                #   Base64 encoding (OpenSSL)
 │   │   ├── chat_activity.c/.h         #   Activity indicator state machine
 │   │   ├── chat_approval.c/.h         #   Per-batch command approval queue
+│   │   ├── chat_copy.c/.h             #   Visible text of an AI-panel selection (what Ctrl+C copies)
+│   │   ├── chat_exec.c/.h             #   [EXEC] segment split of an AI reply, shared by painter and copier
 │   │   ├── chat_msg.c/.h              #   Chat message list with secure wipe
 │   │   ├── chat_thinking.c/.h         #   Thinking/reasoning display state
 │   │   ├── cli_args.c/.h              #   Command-line flag parsing (--ui-demo, --theme, -sn/-h/-nc/-l/-v/-?)
@@ -479,6 +489,7 @@ if you need to move between versions.
 │   │   ├── html_util.c/.h             #   HTML tag stripping for web-fetch/search tool results
 │   │   ├── json_validate.c/.h         #   JSON string escaping for AI request bodies
 │   │   ├── log_format.c/.h            #   Log filename formatting (strftime)
+│   │   ├── markdown.h                 #   Header-only markdown line classifier and inline parser
 │   │   ├── logger.c/.h                #   File and stderr logging
 │   │   ├── md_table.c/.h              #   Markdown table parsing/column layout (pure; src/ui/md_render.c paints them)
 │   │   ├── ns_hover.c/.h              #   Hover/hot-state tracker for painted controls
@@ -497,6 +508,8 @@ if you need to move between versions.
 │   │   ├── string_utils.c/.h          #   String helpers, ANSI stripping, UTF-8
 │   │   ├── tab_manager.c/.h           #   Tab data model
 │   │   ├── term_extract.c/.h          #   Terminal text extraction
+│   │   ├── text_lines.c/.h            #   LF <-> CR LF for the message box
+│   │   ├── text_runs.c/.h             #   Painted word geometry and the hit-test behind chat selection
 │   │   ├── theme.c/.h                 #   Color calculations (luminance, bg detection, per-role contrast)
 │   │   ├── tooltip.c/.h               #   Connection tooltip formatting
 │   │   ├── ui_demo.c/.h               #   Deterministic demo-state builder for --ui-demo and the gallery
@@ -520,7 +533,7 @@ if you need to move between versions.
 │       ├── ai_chat.c/.h              #   AI chat panel, streaming, image paste (140 KB)
 │       ├── ai_http_win.c             #   WinHTTP streaming implementation
 │       ├── chat_listview.c/.h        #   Chat message rendering, sticky scroll
-│       ├── md_render.c/.h, markdown.h #   Markdown rendering for AI responses
+│       ├── md_render.c/.h             #   Markdown and plain-text layout for the AI panel (records runs, draws the selection)
 │       ├── session_manager.c/.h       #   Session manager dialog
 │       ├── settings.c, settings_dlg.h #   Settings dialog (paged, resizable)
 │       ├── tabs.c/.h                  #   Double-buffered tab strip widget

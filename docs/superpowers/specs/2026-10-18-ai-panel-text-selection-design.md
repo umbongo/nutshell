@@ -351,3 +351,34 @@ the rect, which `TextOutW` with a clip region reproduces; `Send-NutshellChord` p
 the window that has focus after the harness's posted click, as the terminal cases
 already rely on; the table-header fill is listed as a highlight surface; the user bubble
 measure and paint widths come from the same layout call at every panel width.
+
+## Implementation notes (2026-10-18)
+
+What the plan and the reviews changed from the text above, one line each. The
+sections above are left as written; where they disagree, this list wins.
+
+- A list marker (bullet or number) is copied only when the selected range covers
+  its bytes; a range that starts inside the item's text does not gain a marker.
+- The user-bubble highlight hue is the bubble's text colour, through
+  `ui_theme_sel_hue()`; the focus tint is invisible on the accent bubble.
+- Leading whitespace at the start of a markdown line's content is not copied;
+  plain mode (no markdown) keeps it.
+- A table's column count follows what the painter draws, through
+  `md_table_drawn_cols()`, so the copy and the paint cannot disagree on a ragged
+  row.
+- `chat_copy_visible` takes a flags word (`CHAT_COPY_MD`, `CHAT_COPY_EXEC`), not a
+  markdown boolean.
+- `TextRuns` gained a `cum_byte[]` array (byte offset at each recorded boundary)
+  and `TextRun` a `flags` field.
+- Fence lines and a table's alignment row copy as nothing, including their line
+  break.
+- Every newline byte in range copies as `\n`.
+- The Thinking layout cache key is (text length, width, line height).
+- Table cells are not filled to the right edge of the table.
+- The harness gained `-Hwnd` on `Send-NutshellChord` and `Set-NutshellFocus`.
+- The input box is still an ANSI EDIT: `GetWindowTextW` fixes the cp1252 bytes but
+  cannot admit characters outside the code page.
+- The old 2,047-byte cut on the input text is gone; the only cap is the EDIT's own.
+- The `[EXEC]` split lives in `src/core/chat_exec.c`, shared by the painter and the
+  copier.
+- The glue that resolves a hit across items stays in `src/ui`, not in core.
