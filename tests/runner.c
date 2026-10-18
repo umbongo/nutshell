@@ -3181,6 +3181,9 @@ int test_text_runs_run_at_finds_the_rect(void);
 int test_text_runs_word_prose_code_and_synthetic(void);
 int test_text_line_at_and_next_line(void);
 
+int test_chat_msg_find_by_id(void);
+int test_chat_msg_item_starts_without_runs_and_frees_them(void);
+
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
 int test_md_blocks_one(void);
@@ -6424,6 +6427,8 @@ int main(void) {
     failed += test_text_runs_run_at_finds_the_rect();
     failed += test_text_runs_word_prose_code_and_synthetic();
     failed += test_text_line_at_and_next_line();
+    failed += test_chat_msg_find_by_id();
+    failed += test_chat_msg_item_starts_without_runs_and_frees_them();
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();
     failed += test_md_blocks_multiline_body();

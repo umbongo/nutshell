@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "cmd_classify.h"
 #include "chat_approval.h"
+#include "text_runs.h"
 
 /* Execution state of a command card, synced from the batch's ApprovalQueue
  * -- never set by hand (see chat_msg_batch_sync_run()). */
@@ -27,6 +28,16 @@ typedef struct ChatMsgItem {
     char *text;
     size_t text_len;
 
+    /* Character selection (spec 2026-10-18 section 3): what the list view's
+     * last paint drew of this item, reset for every item at the start of
+     * each paint, so an item that was not painted has none. `runs` holds the
+     * main text and the Thinking body (TextRun.part); `pinned_runs` the copy
+     * of a user bubble pinned at the top of the list. painted_height is the
+     * height that paint actually used (0 when not painted). */
+    TextRuns runs;
+    TextRuns pinned_runs;
+    int painted_height;
+
     union {
         struct {
             char *thinking_text;
@@ -39,6 +50,17 @@ typedef struct ChatMsgItem {
                                        * item's Thinking disclosure; once set, the
                                        * WM_AI_STREAM handler in ai_chat.c must never
                                        * change thinking_collapsed on this item again. */
+            /* The Thinking body's wrapped height, cached by the list view
+             * per (text length, box width, line height) so a hover move
+             * costs no layout; think_cache_len = -1 means nothing cached.
+             * think_cache_text_w is the width the text was laid out at
+             * (the box less its inset and, when it overflows, the
+             * scrollbar), shared by measure and paint. */
+            int think_cache_len;
+            int think_cache_w;
+            int think_cache_line_h;
+            int think_cache_full_h;
+            int think_cache_text_w;
         } ai;
         struct {
             char *command;
@@ -108,6 +130,9 @@ int chat_msg_set_thinking(ChatMsgItem *item, const char *thinking_text);
 
 /* Get item count. */
 int chat_msg_count(const ChatMsgList *list);
+
+/* The item with this id, or NULL (ids are unique and never reused). */
+ChatMsgItem *chat_msg_find(const ChatMsgList *list, int id);
 
 /* Position of `item` among the list's unsettled CHAT_ITEM_COMMAND items
  * that share its batch id, in list order (0-based) -- matches the order
