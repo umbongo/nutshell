@@ -5654,12 +5654,14 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     }
     ai_chat_force_state(hwnd, forced);
 
-    /* Gallery: "chat" shows the Thinking disclosure collapsed (the normal
-     * post-reply state); "all" shows it expanded so the review set covers
-     * both forms per the design spec's "Thought process" section. Setting
-     * the item's own flag (rather than d->show_thinking) is the smallest
-     * change -- chat_rebuild_display() always creates it collapsed. */
-    if (state && strcmp(state, "all") == 0) {
+    /* Gallery: "chat" and "all" show the Thinking disclosure expanded --
+     * "chat" because its selection crosses the Thinking body (spec
+     * 2026-10-18 section 6) -- and "thinking" shows it collapsed, so the
+     * review set still covers both forms per the design spec's "Thought
+     * process" section. Setting the item's own flag (rather than
+     * d->show_thinking) is the smallest change -- chat_rebuild_display()
+     * always creates it collapsed. */
+    if (state && (strcmp(state, "all") == 0 || strcmp(state, "chat") == 0)) {
         ChatMsgItem *ti = d->msg_list.head;
         while (ti) {
             if (ti->type == CHAT_ITEM_AI_TEXT && ti->u.ai.thinking_text &&
@@ -5704,6 +5706,24 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
          * paint, not just a scroll position, was riding on this). */
         if (ui_demo_scrolls_to_top(state))
             chat_listview_scroll_to_top(d->hChatList);
+    }
+
+    /* "chat": a character selection from the user bubble, across the
+     * Thinking body, into the reply's last line -- the screenshot the
+     * maintainer reviews in the four themes (spec 2026-10-18 section 6). */
+    if (state && strcmp(state, "chat") == 0 && d->hChatList) {
+        ChatMsgItem *u = NULL, *ai = NULL;
+        for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+            if (!u && it->type == CHAT_ITEM_USER) u = it;
+            if (!ai && it->type == CHAT_ITEM_AI_TEXT) ai = it;
+        }
+        if (u && ai) {
+            int uo = 0, ro = 0;
+            ui_demo_chat_selection(&uo, &ro);
+            ChatSelPos a = { u->id, TR_PART_MAIN, uo };
+            ChatSelPos b = { ai->id, TR_PART_MAIN, ro };
+            chat_listview_set_selection(d->hChatList, a, b);
+        }
     }
 }
 

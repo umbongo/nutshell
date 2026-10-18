@@ -907,6 +907,17 @@ void chat_listview_set_state(HWND hwnd, int state_id, int context_lines)
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
+void chat_listview_set_selection(HWND hwnd, ChatSelPos a, ChatSelPos b)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    lv->sel_anchor = a;
+    lv->sel_focus = b;
+    lv->sel_active = 0;
+    lv->sel_valid = chat_sel_cmp(a, b) != 0;
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
 int chat_listview_copy_selection(HWND hwnd)
 {
     ChatListView *lv = lv_from_hwnd(hwnd);

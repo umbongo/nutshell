@@ -81,4 +81,12 @@ const char *ui_demo_thinking_text(void);
  * Same side-table caveat as ui_demo_thinking_text() above. */
 const char *ui_demo_thinking_text_long(void);
 
+/* The character selection the "chat" state shows (spec 2026-10-18 section
+ * 6), as byte offsets: *user_off into the user turn's text (the start of
+ * "disk"), *reply_off into the assistant reply's text (just after "Want
+ * me" in its last line). The win32 side resolves the two items and selects
+ * from the first to the second; the reply's Thinking body, which "chat"
+ * shows expanded, lies between them. */
+void ui_demo_chat_selection(int *user_off, int *reply_off);
+
 #endif /* NUTSHELL_UI_DEMO_H */

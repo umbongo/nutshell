@@ -149,6 +149,10 @@ void chat_listview_set_fonts(HWND hwnd, HFONT font, HFONT mono,
 /* Set theme (triggers full repaint). */
 void chat_listview_set_theme(HWND hwnd, const ThemeColors *theme);
 
+/* Select from `a` to `b` (either order) and repaint -- the --ui-demo=chat
+ * preset (spec 2026-10-18 section 6). */
+void chat_listview_set_selection(HWND hwnd, ChatSelPos a, ChatSelPos b);
+
 /* Edit > Copy: when this list view has keyboard focus and a selection,
  * copy the selection's visible text to the clipboard and return 1;
  * otherwise return 0 and touch nothing (the caller copies the terminal's
