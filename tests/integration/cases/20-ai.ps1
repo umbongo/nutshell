@@ -149,3 +149,57 @@ Invoke-Case "ai_panel_opens_without_key" @{ ai_api_key = "" } {
     Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: ai_panel_no_key.png"
     "panel opened with no key (hwnd $p), no dialog"
 }
+
+# ---- Auto-approve at Critical asks first (gate tier, no key) ------------------
+# docs/superpowers/specs/2026-10-18-ai-auto-approve-button-design.md section 2:
+# turning the button on while the level is Critical shows a Yes/No box; No
+# leaves the policy as it was; a second toggle while the box is up is a no-op
+# (Review Focus 5); Yes applies it. Key-free like ai_panel_opens_without_key:
+# the policy ids and WM_AI_GET_POLICY are handled in every panel state.
+Invoke-Case "ai_auto_approve_critical_asks_first" @{ ai_api_key = "" } {
+    param($s)
+    Send-NutshellCommand -Session $s -Id 2020 -SettleMs 1500      # IDM_VIEW_AI_CHAT
+    $p = Get-NutshellAiPanel -Session $s
+    Assert-True ($p -ne [IntPtr]::Zero) "AI Assist panel did not open"
+
+    Set-NutshellAiPolicy -Session $s -Allowed Critical             # button off: no box
+    $before = Get-NutshellAiPolicy -Session $s
+    Assert-True ($before.Allowed -eq "Critical" -and -not $before.Auto) "setup: expected Critical with Auto-approve off, got $($before.Allowed)/$($before.Auto)"
+    Assert-True ((Wait-NutshellDialog -Session $s -Title "Auto-approve" -TimeoutSec 1) -eq [IntPtr]::Zero) "a confirmation appeared for Critical with the button off"
+
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null   # IDC_CHAT_AUTOAPPROVE
+    $dlg = Wait-NutshellDialog -Session $s -Title "Auto-approve" -TimeoutSec 5
+    Assert-True ($dlg -ne [IntPtr]::Zero) "no confirmation box for Auto-approve at Critical"
+
+    # A second toggle while the box is up must be a no-op: still one box, and
+    # the policy (read through a sent message, answered inside the modal loop)
+    # has not moved.
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 800
+    $boxes = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t#32770`tAuto-approve" })
+    Assert-True ($boxes.Count -eq 1) "expected one confirmation box, found $($boxes.Count)"
+    $during = Get-NutshellAiPolicy -Session $s
+    Assert-True (-not $during.Auto) "Auto-approve turned on while the box was still up"
+    Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_auto_approve_confirm.png") | Out-Null
+
+    Close-NutshellDialog -Dialog $dlg -Button No
+    Start-Sleep -Milliseconds 500
+    $after = Get-NutshellAiPolicy -Session $s
+    Assert-True ($after.Allowed -eq "Critical" -and -not $after.Auto) "No changed the policy: now $($after.Allowed)/$($after.Auto)"
+    Assert-True ((Wait-NutshellDialog -Session $s -Title "Auto-approve" -TimeoutSec 1) -eq [IntPtr]::Zero) "a second box appeared after No"
+
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
+    $dlg2 = Wait-NutshellDialog -Session $s -Title "Auto-approve" -TimeoutSec 5
+    Assert-True ($dlg2 -ne [IntPtr]::Zero) "no confirmation box the second time"
+    Close-NutshellDialog -Dialog $dlg2 -Button Yes
+    Start-Sleep -Milliseconds 500
+    $on = Get-NutshellAiPolicy -Session $s
+    Assert-True ($on.Allowed -eq "Critical" -and $on.Auto) "Yes did not turn Auto-approve on: $($on.Allowed)/$($on.Auto)"
+
+    # The retired unattended id does nothing.
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4040, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 300
+    $still = Get-NutshellAiPolicy -Session $s
+    Assert-True ($still.Allowed -eq "Critical" -and $still.Auto) "retired id 4040 changed the policy: $($still.Allowed)/$($still.Auto)"
+    "Critical + Auto-approve asked first; No kept Critical/off, a second toggle during the box was ignored, Yes turned it on, 4040 is inert"
+}

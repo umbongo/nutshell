@@ -35,7 +35,7 @@
 # visible to them without passing anything explicitly):
 #   10-terminal.ps1     connect, ctrl_c, log filename, paste x2, pty resize,
 #                        page up, holds position, inactive tab resize
-#   20-ai.ps1            the five key-gated ai_* cases + ai_panel_opens_without_key
+#   20-ai.ps1            the five key-gated ai_* cases + ai_panel_opens_without_key + ai_auto_approve_critical_asks_first
 #   30-ui-demo.ps1       ui_gallery, approval_card_run_selected_settles,
 #                        helpers_theme_pixel_matches_token
 #   40-helpers.ps1       the other helpers_* cases
