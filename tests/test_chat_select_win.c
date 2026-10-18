@@ -113,10 +113,11 @@ static void painted_text(const ChatMsgItem *it, int part, const char *text,
     }
 }
 
-static int check_item(const ChatMsgItem *it, int markdown)
+static int check_item(const ChatMsgItem *it, int markdown, int *checked)
 {
     int bad = 0;
     if (it->measured_height <= 0 || it->type == CHAT_ITEM_COMMAND) return 0;
+    (*checked)++;
     if (it->painted_height != it->measured_height) {
         printf("  item %d: measured %d, painted %d\n", it->id,
                it->measured_height, it->painted_height);
@@ -260,21 +261,50 @@ static void fill_fixture(ChatMsgList *list)
     chat_msg_append(list, CHAT_ITEM_STATUS, FIX_STATUS);
 }
 
-/* One configuration: list width, DPI, markdown on or off. */
+/* One configuration: list width, DPI, markdown on or off. "Off" is a real
+ * toggle: laid out and painted with markdown on first, then switched off,
+ * which must remeasure every item (a stale height is the bug this catches). */
 static int run_config(int width, int dpi, int markdown)
 {
     ChatMsgList list;
     fill_fixture(&list);
     TestView tv;
     int bad = 0;
-    if (!view_open(&tv, &list, width, dpi, markdown)) {
+    if (!view_open(&tv, &list, width, dpi, 1)) {
         printf("  could not create the windows (error %lu)\n",
                (unsigned long)GetLastError());
         bad = 1;
     } else {
         view_paint(&tv, width);
+        ChatMsgItem *user = list.head, *ai = user->next;
+        ChatMsgItem *card = ai->next, *status = card->next;
+        int h_on = ai->measured_height;
+        if (!markdown) {
+            chat_listview_set_render_markdown(tv.lv, 0);
+            view_paint(&tv, width);
+            if (ai->measured_height == h_on) {
+                printf("  AI height still %d after markdown off\n", h_on);
+                bad++;
+            }
+        }
+        if (user->measured_height <= 0 || ai->measured_height <= 0 ||
+            status->measured_height <= 0) {
+            printf("  nothing was laid out (heights %d %d %d)\n",
+                   user->measured_height, ai->measured_height,
+                   status->measured_height);
+            bad++;
+        }
+        if (card->runs.n != 0) {
+            printf("  the command card recorded %d runs\n", card->runs.n);
+            bad++;
+        }
+        int checked = 0;
         for (ChatMsgItem *it = list.head; it; it = it->next)
-            bad += check_item(it, markdown);
+            bad += check_item(it, markdown, &checked);
+        if (checked != 3) {
+            printf("  checked %d text items, want 3\n", checked);
+            bad++;
+        }
     }
     view_close(&tv);
     chat_msg_list_clear(&list);
@@ -386,16 +416,55 @@ int test_chat_select_win_mouse_and_keys(void)
             SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(d->x + w4 - 2, dy));
             ASSERT_TRUE(sel_is(tv.lv, &list, "ls"));
 
+            /* the third click takes the source line */
+            SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(d->x + w4 - 2, dy));
+            SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(d->x + w4 - 2, dy));
+            ASSERT_TRUE(sel_is(tv.lv, &list, "cd /var/log && ls -la | sort -rh | head -3"));
+
             /* a fourth click is paired into another double-click: the word
              * again, not the line */
-            SendMessageA(tv.lv, WM_LBUTTONDBLCLK, MK_LBUTTON, pt(d->x + w4 - 2, dy));
-            SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(d->x + w4 - 2, dy));
-            ASSERT_TRUE(sel_is(tv.lv, &list, "ls"));
             SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(d->x + w4 - 2, dy));
             SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(d->x + w4 - 2, dy));
             SendMessageA(tv.lv, WM_LBUTTONDBLCLK, MK_LBUTTON, pt(d->x + w4 - 2, dy));
             SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(d->x + w4 - 2, dy));
             ASSERT_TRUE(sel_is(tv.lv, &list, "ls"));
+
+            /* double-click on the blank between two code tokens: a blank is
+             * not a token, so the pointer's nearer neighbour is taken --
+             * left of the blank's middle "cd", right of it "/var/log" */
+            int wcd = 0, wcds = 0;
+            ASSERT_NOT_NULL(find_word(ai, "cd", &wcd));
+            ASSERT_NOT_NULL(find_word(ai, "cd ", &wcds));
+            ASSERT_TRUE(wcds > wcd);
+            SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(d->x + wcd + 1, dy));
+            SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(d->x + wcd + 1, dy));
+            SendMessageA(tv.lv, WM_LBUTTONDBLCLK, MK_LBUTTON, pt(d->x + wcd + 1, dy));
+            SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(d->x + wcd + 1, dy));
+            ASSERT_TRUE(sel_is(tv.lv, &list, "cd"));
+            SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(d->x + wcds - 1, dy));
+            SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(d->x + wcds - 1, dy));
+            SendMessageA(tv.lv, WM_LBUTTONDBLCLK, MK_LBUTTON, pt(d->x + wcds - 1, dy));
+            SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(d->x + wcds - 1, dy));
+            ASSERT_TRUE(sel_is(tv.lv, &list, "/var/log"));
+
+            /* double-click on a bullet marker's synthetic run selects
+             * nothing: the marker is never copied by a double-click */
+            SendMessageA(tv.lv, WM_KEYDOWN, VK_ESCAPE, 0);
+            ASSERT_TRUE(!lv->sel_valid);
+            const TextRun *mk = NULL;
+            for (int i = 0; i < ai->runs.n && !mk; i++)
+                if (ai->runs.v[i].part == TR_PART_MAIN &&
+                    ai->runs.v[i].synthetic[0] && ai->runs.v[i].w > 0)
+                    mk = &ai->runs.v[i];
+            ASSERT_NOT_NULL(mk);
+            if (mk) {
+                int mx = mk->x + mk->w / 2, my = mk->y + mk->h / 2;
+                SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(mx, my));
+                SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(mx, my));
+                SendMessageA(tv.lv, WM_LBUTTONDBLCLK, MK_LBUTTON, pt(mx, my));
+                SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(mx, my));
+                ASSERT_TRUE(!lv->sel_valid);
+            }
 
             /* a command card records no runs: a hit in its band resolves to
              * the edge of the nearest text item and never copies card text */
