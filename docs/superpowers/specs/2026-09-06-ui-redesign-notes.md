@@ -302,6 +302,11 @@ Open, in priority order:
       tab that takes a partial paint waits for the next full invalidate from elsewhere
       (as before); and `rcPaint` is the update region's bounding box, which the per-row
       shadow poisoning now makes harmless.
+- [ ] Scrolled-back repaint storm (2026-10-18 `issue3.log` lines 11761-12797, out of scope of
+      `2026-10-18-conpty-resize-anchor-design.md`): with `scrollback_offset` 12..6, 186 paints
+      in 4.4 s had `dirty_rows` equal to the offset, driven by `poll.invalidate poll_rc=0`
+      every ~16 ms, `rows_left_dirty=0`, and `render.stuck_dirty` never fired. The live rows
+      below the scrolled view look never cleared; find why and teach the detector to see it.
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the
