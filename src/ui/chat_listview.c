@@ -1217,6 +1217,7 @@ static int measure_ai_text_with_exec(ChatListView *lv, HDC hdc,
             total_h += measure_ai_segment(lv, hdc, s, width);
         else
             total_h += clv_plain_height(lv, hdc, s, width, clv_mono(lv));
+        secure_zero(s, strlen(s));      /* a copy of message text */
         free(s);
     }
     return total_h;
@@ -1595,6 +1596,7 @@ static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
             y += md_render_ex(hdc, s, rc->left, y, width, mono, mono, mono,
                               lv->theme, MD_MODE_PLAIN, 1, exec_clr, NULL,
                               &mrc);
+        secure_zero(s, strlen(s));      /* a copy of message text */
         free(s);
     }
     return y - rc->top;
@@ -3704,6 +3706,8 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
 /* CLV_MSG_QUERY_WORD (see chat_listview.h). */
 static LRESULT clv_query_word(ChatListView *lv, WPARAM wParam, LPARAM lParam)
 {
+    /* Answer from what is painted now, not a stale paint. */
+    UpdateWindow(lv->hwnd);
     char word[128];
     UINT n = GlobalGetAtomNameA((ATOM)lParam, word, (int)sizeof(word));
     if (n == 0 || !lv->msg_list) return 0;

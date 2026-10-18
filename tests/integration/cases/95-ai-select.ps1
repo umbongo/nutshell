@@ -47,8 +47,9 @@ function Invoke-AiSelectCase {
         Start-Sleep -Seconds 2
         $list = Get-NutshellChatList -Session $session
         if ($list -eq [IntPtr]::Zero) { throw "AI panel message list not found in --ui-demo=chat" }
-        # The demo opens scrolled to the bottom of whatever fits; a word above
-        # the visible area is not painted and so not found. Start from the top.
+        # The chat demo already opens at the top (ui_demo_scrolls_to_top); this
+        # scroll is a safeguard, because a word above the visible area is not
+        # answered.
         [NutshellNative]::SendMsg($list, $script:WM_VSCROLL_AI, [IntPtr]6, [IntPtr]::Zero) | Out-Null
         Start-Sleep -Milliseconds 500
         $out = @(& $Body $session $list)

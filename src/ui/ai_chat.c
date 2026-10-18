@@ -1171,7 +1171,8 @@ static void chat_rebuild_display(AiChatData *d)
         const AiMessage *msg = &d->conv.messages[i];
 
         if (msg->role == AI_ROLE_USER) {
-            chat_msg_append(&d->msg_list, CHAT_ITEM_USER, msg->content);
+            chat_msg_append(&d->msg_list, CHAT_ITEM_USER,
+                            ai_msg_content(msg));
         } else if (msg->role == AI_ROLE_ASSISTANT) {
             /* Tool-use blocks first, matching the live "using tool: <name>"
              * status row posted while the call is in flight. */
@@ -1669,6 +1670,10 @@ static void send_user_message(AiChatData *d)
 
     char *input = input_text_utf8(d->hInput);
     if (!input) return;
+    /* The text as read: the prefix strip below shortens the string, but the
+     * bytes past the new end still hold the original, so the wipes cover
+     * this length. */
+    const size_t input_len = strlen(input);
 
     /* Strip any "[Image attached] " prefixes inserted by clipboard paste */
     {
@@ -1682,6 +1687,7 @@ static void send_user_message(AiChatData *d)
     }
 
     if (input[0] == '\0') {
+        secure_zero(input, input_len);
         free(input);
         return;
     }
@@ -1789,7 +1795,7 @@ static void send_user_message(AiChatData *d)
     /* Clear pending attachment after thread is launched */
     ai_attachment_free(&d->pending_attachment);
 
-    secure_zero(input, strlen(input));
+    secure_zero(input, input_len);
     free(input);
 }
 

@@ -3193,6 +3193,7 @@ int test_chat_copy_fence_lines_copy_nothing(void);
 int test_chat_copy_heading_quote_and_rule(void);
 int test_chat_copy_table_escaped_pipe_and_column_cap(void);
 int test_chat_copy_table_columns_follow_the_alignment_row(void);
+int test_chat_copy_table_range_from_the_end_of_a_short_row(void);
 int test_chat_copy_exec_segment_and_state_reset(void);
 int test_chat_copy_ordered_list_restarts_after_exec(void);
 int test_chat_copy_leading_whitespace_is_not_copied(void);
@@ -6470,6 +6471,7 @@ int main(void) {
     failed += test_chat_copy_heading_quote_and_rule();
     failed += test_chat_copy_table_escaped_pipe_and_column_cap();
     failed += test_chat_copy_table_columns_follow_the_alignment_row();
+    failed += test_chat_copy_table_range_from_the_end_of_a_short_row();
     failed += test_chat_copy_exec_segment_and_state_reset();
     failed += test_chat_copy_ordered_list_restarts_after_exec();
     failed += test_chat_copy_leading_whitespace_is_not_copied();

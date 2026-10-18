@@ -163,6 +163,26 @@ int test_chat_copy_table_columns_follow_the_alignment_row(void)
     TEST_END();
 }
 
+int test_chat_copy_table_range_from_the_end_of_a_short_row(void)
+{
+    TEST_BEGIN();
+    /* A three-column table whose body row has one cell. A range that begins
+     * at the end of that row reaches its missing cells' position but covers
+     * none of them, so it must not open with a stray tab. */
+    const char *t = "| a | b | c |\n|---|---|---|\n| only |\n| x | y | z |";
+    int from = at(t, "| only |") + (int)strlen("| only |");
+    char *out = NULL;
+    int n = chat_copy_visible(t, (int)strlen(t), from, (int)strlen(t), MDX,
+                              &out);
+    ASSERT_NOT_NULL(out);
+    if (out) {
+        ASSERT_STR_EQ(out, "\nx\ty\tz");
+        ASSERT_EQ(n, (int)strlen("\nx\ty\tz"));
+    }
+    free(out);
+    TEST_END();
+}
+
 int test_chat_copy_exec_segment_and_state_reset(void)
 {
     TEST_BEGIN();

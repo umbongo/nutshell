@@ -489,8 +489,8 @@ if you need to move between versions.
 │   │   ├── html_util.c/.h             #   HTML tag stripping for web-fetch/search tool results
 │   │   ├── json_validate.c/.h         #   JSON string escaping for AI request bodies
 │   │   ├── log_format.c/.h            #   Log filename formatting (strftime)
-│   │   ├── markdown.h                 #   Header-only markdown line classifier and inline parser
 │   │   ├── logger.c/.h                #   File and stderr logging
+│   │   ├── markdown.h                 #   Header-only markdown line classifier and inline parser
 │   │   ├── md_table.c/.h              #   Markdown table parsing/column layout (pure; src/ui/md_render.c paints them)
 │   │   ├── ns_hover.c/.h              #   Hover/hot-state tracker for painted controls
 │   │   ├── ns_layout.c/.h             #   Pure layout geometry (buttons, cards, approval card + hit-test)

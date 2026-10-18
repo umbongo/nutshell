@@ -3,6 +3,7 @@
 #include "chat_exec.h"
 #include "markdown.h"
 #include "md_table.h"
+#include "secure_zero.h"
 #include "text_runs.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,8 +19,15 @@ static void cb_put(CopyBuf *b, const char *s, size_t n)
     if (b->n + n + 1 > b->cap) {
         size_t cap = b->cap ? b->cap : 256;
         while (cap < b->n + n + 1) cap *= 2;
-        char *q = (char *)realloc(b->p, cap);
+        /* Grow by copy, not realloc: realloc may leave the old block, with
+         * message text in it, behind on the heap unwiped. */
+        char *q = (char *)malloc(cap);
         if (!q) { b->oom = 1; return; }
+        if (b->p) {
+            memcpy(q, b->p, b->n);
+            secure_zero(b->p, b->cap);
+            free(b->p);
+        }
         b->p = q;
         b->cap = cap;
     }
@@ -48,8 +56,14 @@ static const char *lb_set(LineBuf *lb, const char *s, int n)
     if (n + 1 > lb->cap) {
         int cap = lb->cap ? lb->cap : 256;
         while (cap < n + 1) cap *= 2;
-        char *q = (char *)realloc(lb->p, (size_t)cap);
+        /* Copy and wipe rather than realloc: the old block held a line of
+         * message text. */
+        char *q = (char *)malloc((size_t)cap);
         if (!q) return NULL;
+        if (lb->p) {
+            secure_zero(lb->p, (size_t)lb->cap);
+            free(lb->p);
+        }
         lb->p = q;
         lb->cap = cap;
     }
@@ -134,7 +148,9 @@ static void emit_row(CopyBuf *b, const char *t, RowSpan row, int ncols,
         int in = (cs[j] < ce[j]) ? (cs[j] < hi && ce[j] > lo)
                                  : (cs[j] >= lo && cs[j] <= hi);
         if (in) {
-            if (first < 0) first = j;
+            /* A missing cell is not a start: a range that begins at the end
+             * of a short row would otherwise open with a stray tab. */
+            if (first < 0 && (j < count || count == 0)) first = j;
             last = j;
         }
     }
@@ -277,19 +293,26 @@ int chat_copy_visible(const char *text, int len, int start, int end,
                     cb_put(&b, piece.p, piece.n);
                     copied_any = 1;
                 }
+                if (piece.p) secure_zero(piece.p, piece.cap);
                 free(piece.p);
             }
             more = (flags & CHAT_COPY_EXEC)
                        ? chat_exec_split(text, len, &pos, &seg) : 0;
         }
     }
+    if (lb.p) secure_zero(lb.p, (size_t)lb.cap);
     free(lb.p);
+    if (lb2.p) secure_zero(lb2.p, (size_t)lb2.cap);
     free(lb2.p);
     if (!b.p) {                      /* nothing copied: an empty string */
         b.p = (char *)malloc(1);
         if (b.p) b.p[0] = '\0';
     }
-    if (b.oom || !b.p) { free(b.p); return -1; }
+    if (b.oom || !b.p) {
+        if (b.p) secure_zero(b.p, b.cap);
+        free(b.p);
+        return -1;
+    }
     *out = b.p;
     return (int)b.n;
 }
@@ -336,6 +359,7 @@ static void add_piece(CopyBuf *b, const char *text, int len, int s, int e,
         if (b->n > 0) cb_put(b, "\n\n", 2);
         cb_put(b, piece, (size_t)n);
     }
+    if (piece) secure_zero(piece, n > 0 ? (size_t)n + 1 : 0);
     free(piece);
 }
 
@@ -369,7 +393,11 @@ size_t chat_copy_selection(const ChatMsgList *list, ChatSelPos a,
             add_piece(&buf, tx, len, s, e, flags);
         }
     }
-    if (buf.oom || buf.n == 0) { free(buf.p); return 0; }
+    if (buf.oom || buf.n == 0) {
+        if (buf.p) secure_zero(buf.p, buf.cap);
+        free(buf.p);
+        return 0;
+    }
     *out = buf.p;
     return buf.n;
 }
