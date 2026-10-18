@@ -30,6 +30,7 @@
 #include "ai_prompt.h"
 #include "ns_font.h"
 #include "stick_scroll.h"
+#include "chat_exec.h"
 #include <windowsx.h>
 #include <commctrl.h>
 #include <stdio.h>
@@ -955,89 +956,51 @@ static int measure_ai_segment(ChatListView *lv, HDC hdc, const char *text,
     return h;
 }
 
+/* One chat_exec_split() segment as its own NUL-terminated string, for the
+ * painters and the measurer. Caller frees. NULL when the segment is empty or
+ * the allocation fails; both callers then skip it (an empty command paints
+ * nothing). */
+static char *chat_seg_dup(const char *text, const ChatSeg *seg)
+{
+    int n = seg->end - seg->start;
+    if (n <= 0) return NULL;
+    char *s = (char *)malloc((size_t)n + 1);
+    if (!s) return NULL;
+    memcpy(s, text + seg->start, (size_t)n);
+    s[n] = '\0';
+    return s;
+}
+
 /* Height-only twin of draw_ai_text_with_exec() (near paint_ai_item): walks
- * the exact same [EXEC]/[/EXEC] segment split -- plain segments through
- * measure_ai_segment() (markdown or plain, matching draw_ai_segment's own
- * font choice), [EXEC] segments through the mono font with DT_CALCRECT
- * (matching draw_ai_text_with_exec's purple mono-font paint) -- so the two
- * can never disagree about an EXEC-bearing message's height. Previously
- * measure_item() stripped the [EXEC] tags and measured the whole message
- * as one markdown-rendered string (ai_text_for_measure()), which is a
- * structurally different computation from what paint_ai_item() actually
- * draws (per-segment, with the command text in the mono font, never
- * markdown-parsed) -- a real mismatch for any message containing a
- * command, which is exactly the paint that overlaps with the item below
- * it (or the activity indicator) when the two diverge. */
+ * the same chat_exec_split() segments -- prose through measure_ai_segment()
+ * (markdown or plain, matching draw_ai_segment's own font choice), commands
+ * through the mono font with DT_CALCRECT (matching draw_ai_text_with_exec's
+ * mono-font paint) -- so the two can never disagree about an EXEC-bearing
+ * message's height. */
 static int measure_ai_text_with_exec(ChatListView *lv, HDC hdc,
                                      const char *text, int width)
 {
-    if (!strstr(text, "[EXEC]"))
-        return measure_ai_segment(lv, hdc, text, width);
-
     HFONT mono_font = lv->hMonoFont ? lv->hMonoFont
                                      : (HFONT)GetStockObject(ANSI_FIXED_FONT);
-    const char *pos = text;
-    int total_h = 0;
-
-    while (*pos) {
-        const char *exec_start = strstr(pos, "[EXEC]");
-
-        if (!exec_start) {
-            if (*pos)
-                total_h += measure_ai_segment(lv, hdc, pos, width);
-            break;
-        }
-
-        /* Segment before [EXEC], trailing newlines stripped -- mirrors
-         * draw_ai_text_with_exec's own trim exactly. */
-        if (exec_start > pos) {
-            size_t seg_len = (size_t)(exec_start - pos);
-            char *seg = malloc(seg_len + 1);
-            if (seg) {
-                memcpy(seg, pos, seg_len);
-                seg[seg_len] = '\0';
-                size_t trim = seg_len;
-                while (trim > 0 && (seg[trim - 1] == '\n' || seg[trim - 1] == '\r'))
-                    trim--;
-                seg[trim] = '\0';
-                if (trim > 0)
-                    total_h += measure_ai_segment(lv, hdc, seg, width);
-                free(seg);
-            }
-        }
-
-        const char *cmd_start = exec_start + 6;
-        const char *exec_end = strstr(cmd_start, "[/EXEC]");
-
-        if (!exec_end) {
-            RECT rc; SetRect(&rc, 0, 0, width, 0);
+    int len = (int)strlen(text);
+    int pos = 0, total_h = 0;
+    ChatSeg seg;
+    while (chat_exec_split(text, len, &pos, &seg)) {
+        char *s = chat_seg_dup(text, &seg);
+        if (!s) continue;
+        if (seg.kind == CHAT_SEG_PROSE) {
+            total_h += measure_ai_segment(lv, hdc, s, width);
+        } else {
+            RECT rc;
+            SetRect(&rc, 0, 0, width, 0);
             HGDIOBJ old = SelectObject(hdc, mono_font);
-            draw_text_utf8(hdc, exec_start, &rc,
+            draw_text_utf8(hdc, s, &rc,
                            DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
             SelectObject(hdc, old);
             total_h += rc.bottom - rc.top;
-            break;
         }
-
-        {
-            size_t cmd_len = (size_t)(exec_end - cmd_start);
-            char *cmd_text = malloc(cmd_len + 1);
-            if (cmd_text) {
-                memcpy(cmd_text, cmd_start, cmd_len);
-                cmd_text[cmd_len] = '\0';
-                RECT rc; SetRect(&rc, 0, 0, width, 0);
-                HGDIOBJ old = SelectObject(hdc, mono_font);
-                draw_text_utf8(hdc, cmd_text, &rc,
-                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-                SelectObject(hdc, old);
-                total_h += rc.bottom - rc.top;
-                free(cmd_text);
-            }
-        }
-
-        pos = exec_end + 7;
+        free(s);
     }
-
     return total_h;
 }
 
@@ -1370,12 +1333,12 @@ static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
     return seg_h;
 }
 
-/* Draw AI text with [EXEC]...[/EXEC] segments highlighted in purple.
- * Uses the same rect and flags as draw_text_utf8 but splits at markers.
- * Returns the total height painted (rc->bottom is only a starting bound
- * for the last EXEC segment's DrawText call, not a hard cap -- see
- * measure_ai_text_with_exec()'s comment), so callers can find out when
- * this grew taller than measure_item() predicted. */
+/* Draw AI text with its [EXEC] commands in the info hue and mono font: the
+ * chat_exec_split() segments one under the other. Returns the total height
+ * painted (each command is laid out with DT_CALCRECT first and painted
+ * into an exact-fit rect, so a stale item bottom never truncates it -- see
+ * measure_ai_text_with_exec()'s comment), so callers can find out when this
+ * grew taller than measure_item() predicted. */
 static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
                                    const char *text, RECT *rc, int item_id)
 {
@@ -1383,105 +1346,31 @@ static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
     COLORREF exec_clr = RGB_FROM_THEME(ns_tokens()->info.base);
     HFONT mono_font = lv->hMonoFont ? lv->hMonoFont
                                      : (HFONT)GetStockObject(ANSI_FIXED_FONT);
+    int len = (int)strlen(text);
+    int y = rc->top, pos = 0;
+    ChatSeg seg;
 
-    /* If no [EXEC] markers, fast path */
-    if (!strstr(text, "[EXEC]")) {
-        return draw_ai_segment(lv, hdc, text, rc->left, rc->top,
-                               rc->right - rc->left, item_id, &blk);
-    }
-
-    /* Multi-segment rendering: split at [EXEC]/[/EXEC] boundaries */
-    const char *pos = text;
-    int y = rc->top;
-
-    while (*pos) {
-        const char *exec_start = strstr(pos, "[EXEC]");
-
-        if (!exec_start) {
-            /* Remaining text is normal */
-            if (*pos) {
-                int h = draw_ai_segment(lv, hdc, pos, rc->left, y,
-                                        rc->right - rc->left, item_id, &blk);
-                y += h;
-            }
-            break;
-        }
-
-        /* Draw text before [EXEC] */
-        if (exec_start > pos) {
-            /* Copy segment to temp buffer */
-            size_t seg_len = (size_t)(exec_start - pos);
-            char *seg = malloc(seg_len + 1);
-            if (seg) {
-                memcpy(seg, pos, seg_len);
-                seg[seg_len] = '\0';
-                /* Strip trailing newlines to remove blank line before [EXEC] */
-                size_t trim = seg_len;
-                while (trim > 0 && (seg[trim - 1] == '\n' || seg[trim - 1] == '\r'))
-                    trim--;
-                seg[trim] = '\0';
-                if (trim > 0) {
-                    int h = draw_ai_segment(lv, hdc, seg, rc->left, y,
-                                            rc->right - rc->left, item_id,
-                                            &blk);
-                    y += h;
-                }
-                free(seg);
-            }
-        }
-
-        /* Find [/EXEC] */
-        const char *cmd_start = exec_start + 6;
-        const char *exec_end = strstr(cmd_start, "[/EXEC]");
-
-        if (!exec_end) {
-            /* No closing tag — render rest as exec. Two-pass (calc then
-             * paint into an exact-fit rect), same as draw_ai_segment's own
-             * non-markdown path, instead of clipping to rc->bottom -- a
-             * stale item bottom must never truncate what's actually
-             * painted (see measure_ai_text_with_exec()'s comment). */
+    while (chat_exec_split(text, len, &pos, &seg)) {
+        char *s = chat_seg_dup(text, &seg);
+        if (!s) continue;
+        if (seg.kind == CHAT_SEG_PROSE) {
+            y += draw_ai_segment(lv, hdc, s, rc->left, y,
+                                 rc->right - rc->left, item_id, &blk);
+        } else {
             RECT seg_rc;
             HGDIOBJ old_mf = SelectObject(hdc, mono_font);
             SetRect(&seg_rc, rc->left, y, rc->right, 0);
-            draw_text_utf8(hdc, exec_start, &seg_rc,
+            draw_text_utf8(hdc, s, &seg_rc,
                            DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
             int h = seg_rc.bottom - seg_rc.top;
             SetRect(&seg_rc, rc->left, y, rc->right, y + h);
             SetTextColor(hdc, exec_clr);
-            draw_text_utf8(hdc, exec_start, &seg_rc,
-                           DT_WORDBREAK | DT_NOPREFIX);
+            draw_text_utf8(hdc, s, &seg_rc, DT_WORDBREAK | DT_NOPREFIX);
             SelectObject(hdc, old_mf);
             y += h;
-            break;
         }
-
-        /* Draw the command (between [EXEC] and [/EXEC]) in purple with mono
-         * font -- same two-pass, unclipped approach as above. */
-        {
-            size_t cmd_len = (size_t)(exec_end - cmd_start);
-            char *cmd_text = malloc(cmd_len + 1);
-            if (cmd_text) {
-                memcpy(cmd_text, cmd_start, cmd_len);
-                cmd_text[cmd_len] = '\0';
-                RECT seg_rc;
-                HGDIOBJ old_mf = SelectObject(hdc, mono_font);
-                SetRect(&seg_rc, rc->left, y, rc->right, 0);
-                draw_text_utf8(hdc, cmd_text, &seg_rc,
-                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-                int h = seg_rc.bottom - seg_rc.top;
-                SetRect(&seg_rc, rc->left, y, rc->right, y + h);
-                SetTextColor(hdc, exec_clr);
-                draw_text_utf8(hdc, cmd_text, &seg_rc,
-                               DT_WORDBREAK | DT_NOPREFIX);
-                SelectObject(hdc, old_mf);
-                y += h;
-                free(cmd_text);
-            }
-        }
-
-        pos = exec_end + 7; /* skip [/EXEC] */
+        free(s);
     }
-
     return y - rc->top;
 }
 

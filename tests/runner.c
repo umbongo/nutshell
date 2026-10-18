@@ -3154,6 +3154,16 @@ int test_cmd_detail_layout_never_negative_at_tiny_sizes(void);
 int test_cmd_detail_layout_inside_client_for_all_adequate_sizes(void);
 int test_cmd_detail_layout_null_out_is_safe(void);
 
+/* test_chat_exec.c */
+int test_chat_exec_split_no_marker_is_one_prose_segment(void);
+int test_chat_exec_split_command_between_prose(void);
+int test_chat_exec_split_crlf_before_marker_is_trimmed(void);
+int test_chat_exec_split_only_newlines_before_marker_give_no_prose(void);
+int test_chat_exec_split_unterminated_keeps_the_marker(void);
+int test_chat_exec_split_empty_and_adjacent_commands(void);
+int test_chat_exec_split_stray_close_is_prose(void);
+int test_chat_exec_split_respects_len_and_null(void);
+
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
 int test_md_blocks_one(void);
@@ -6372,6 +6382,15 @@ int main(void) {
     failed += test_cmd_detail_layout_never_negative_at_tiny_sizes();
     failed += test_cmd_detail_layout_inside_client_for_all_adequate_sizes();
     failed += test_cmd_detail_layout_null_out_is_safe();
+
+    failed += test_chat_exec_split_no_marker_is_one_prose_segment();
+    failed += test_chat_exec_split_command_between_prose();
+    failed += test_chat_exec_split_crlf_before_marker_is_trimmed();
+    failed += test_chat_exec_split_only_newlines_before_marker_give_no_prose();
+    failed += test_chat_exec_split_unterminated_keeps_the_marker();
+    failed += test_chat_exec_split_empty_and_adjacent_commands();
+    failed += test_chat_exec_split_stray_close_is_prose();
+    failed += test_chat_exec_split_respects_len_and_null();
 
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();
