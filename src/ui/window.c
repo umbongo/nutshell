@@ -1867,14 +1867,14 @@ static void create_demo_session(HWND hwnd)
     }
     s->ai_state.valid = 1;
 
-    /* Give the demo a policy with both markers off their defaults, so the
-     * gallery actually covers the status-line control's three cell states
-     * (unattended / allowed-but-asks / blocked) and a partly-filled rail
-     * rather than four identical screenshots of {read, none}. The demo's
-     * approval cards are static data built by ui_demo_build() against their
-     * own queue policies, so this only changes what the control paints. */
-    cmd_policy_set_allowed(&s->ai_state.policy, CMD_WRITE);
-    cmd_policy_set_unattended(&s->ai_state.policy, CMD_READ);
+    /* The demo tab's policy: Write with Auto-approve off, so the gallery
+     * shows tinted, plain and blocked cells; Write with it on for
+     * --ui-demo=policy-auto, so the solid cells and the filled button
+     * show. ui_demo_policy() already clamps, like every policy from
+     * outside (spec 2026-10-18 section 2). The cards are static data with
+     * their own queue policies, so this changes only what the status line
+     * paints. */
+    s->ai_state.policy = ui_demo_policy(state);
     s->ai_state.policy_seeded = 1;
 
     term_process(s->term, term_buf, strlen(term_buf));
@@ -1947,6 +1947,10 @@ static void create_demo_session(HWND hwnd)
             GetClientRect(hwnd, &rc2);
             int target = ai_dock_pct_to_px(rc2.right, AI_DOCK_DEFAULT_PCT,
                                            AI_DOCK_MIN_PCT, AI_DOCK_MAX_PCT);
+            /* --ui-demo=policy-compact: dock the panel narrow enough for the
+             * status line's compact labels, before it is laid out. */
+            int demo_w = ui_demo_panel_width_px(state, g_dpi);
+            if (demo_w > 0) target = demo_w;
             int splitter = AI_DOCK_SPLITTER_W;
             SetWindowPos(g_hwndAiChat, NULL,
                 rc2.right - target + splitter, g_tab_height,
