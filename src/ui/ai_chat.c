@@ -4454,10 +4454,14 @@ next_coalesce:;
                                                       notes, 16, &rejected,
                                                       &rejected_long);
                 if (ncmds > 0) {
+                    /* Built while the tab is hidden: Auto-approve forced
+                     * off, so every row is PENDING or BLOCKED and nothing
+                     * runs before the user has looked (spec 2026-10-18
+                     * section 6). Before this, an all-approved batch built
+                     * here ran, stale, after an unrelated later prompt. */
                     ApprovalQueue bg_defaults;
                     chat_approval_init(&bg_defaults);
-                    bg_defaults.policy = src->policy;
-                    cmd_policy_clamp(&bg_defaults.policy);
+                    bg_defaults.policy = cmd_policy_attended(src->policy);
 
                     CmdBatch *batch = cmd_batch_add(&src->batches,
                                                     &bg_defaults, NULL);
@@ -5515,6 +5519,13 @@ static void do_session_switch(AiChatData *d,
      * along with it. */
     chat_rebuild_display(d);
     update_panel_state(d);
+
+    /* Pick up the newly displayed session's queue at once rather than
+     * after the user's next prompt. Hidden-tab batches are all pending, so
+     * they wait for a click; a batch the user had approved on this tab and
+     * that the switch away cancelled was removed by dispatch_cancel(), so
+     * only batches still holding approved, unrun rows start here. */
+    maybe_start_next_batch(d);
 
     /* If switching to a session that's still streaming,
      * re-append any accumulated content so the user sees progress.
