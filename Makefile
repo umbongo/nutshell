@@ -140,7 +140,7 @@ NON_TEST_SRCS = src/main.c $(wildcard src/ui/*.c)
 
 # Win32-only tests belong to the `wintest` harness, never to `test`
 WIN_ONLY_TESTS = tests/test_icons.c tests/test_local_pty.c tests/win_runner.c \
-                 tests/test_md_render_win.c
+                 tests/test_md_render_win.c tests/test_chat_select_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -185,8 +185,14 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/ui/md_render.c src/ui/ns_draw.c src/core/text_runs.c \
                    src/core/md_table.c src/core/theme.c src/core/ui_theme.c \
                    src/core/ns_scale.c src/core/ns_type.c src/core/cmd_policy.c \
+                   src/ui/chat_listview.c src/ui/clipboard.c src/ui/ns_font.c \
+                   src/core/chat_msg.c src/core/chat_copy.c src/core/chat_exec.c \
+                   src/core/md_blocks.c src/core/ns_layout.c src/core/ns_hover.c \
+                   src/core/stick_scroll.c src/core/ai_panel_layout.c \
+                   src/core/ai_panel_states.c src/core/chat_activity.c \
                    tests/test_icons.c tests/test_local_pty.c \
-                   tests/test_md_render_win.c tests/win_runner.c
+                   tests/test_md_render_win.c tests/test_chat_select_win.c \
+                   tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \
