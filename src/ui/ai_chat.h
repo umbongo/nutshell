@@ -134,6 +134,11 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
  * aborted; its thread frees its own state when it notices. */
 void ai_chat_close(HWND hwnd);
 
+/* Edit > Copy: when the panel's message list has keyboard focus and a
+ * selection, copy the selection's visible text and return 1; otherwise
+ * return 0 (copy the terminal's selection instead). */
+int ai_chat_copy_selection(HWND hwnd);
+
 /* On exit, after ai_chat_close(): give aborted stream threads up to
  * timeout_ms to notice and free their state. Returns early once none are
  * left; a thread still blocked in a network read after that owns nothing

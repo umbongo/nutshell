@@ -2846,6 +2846,7 @@ int test_text_lf_lone_cr_unchanged(void);
 int test_text_lf_size_query(void);
 int test_text_lf_truncation_never_splits_crlf(void);
 int test_text_lf_null_input(void);
+int test_text_crlf_to_lf_pairs_become_lf(void);
 
 /* test_cli_sink.c */
 int test_cli_sink_invalid_handle_is_console(void);
@@ -6107,6 +6108,7 @@ int main(void) {
     failed += test_text_lf_size_query();
     failed += test_text_lf_truncation_never_splits_crlf();
     failed += test_text_lf_null_input();
+    failed += test_text_crlf_to_lf_pairs_become_lf();
     failed += test_cli_sink_invalid_handle_is_console();
     failed += test_cli_sink_pipe_is_handle();
     failed += test_cli_sink_disk_is_handle();
