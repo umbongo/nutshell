@@ -2329,6 +2329,13 @@ int test_policy_no_sequence_of_set_allowed_and_set_auto_splits(void);
 int test_policy_needs_confirm_only_when_entering_critical_auto(void);
 int test_policy_status_word_packs_level_and_button(void);
 int test_policy_attended_keeps_the_ceiling(void);
+int test_policy_stop_short_labels(void);
+int test_policy_auto_label_full_and_compact(void);
+int test_policy_cell_tip_full_labels_button_off(void);
+int test_policy_cell_tip_compact_and_auto_on(void);
+int test_policy_auto_tip_off_and_on(void);
+int test_policy_tips_fit_the_tooltip_buffer(void);
+int test_policy_tips_reject_out_of_range_and_null(void);
 
 /* test_chat_approval.c */
 int test_approval_init(void);
@@ -5482,6 +5489,13 @@ int main(void) {
     failed += test_policy_needs_confirm_only_when_entering_critical_auto();
     failed += test_policy_status_word_packs_level_and_button();
     failed += test_policy_attended_keeps_the_ceiling();
+    failed += test_policy_stop_short_labels();
+    failed += test_policy_auto_label_full_and_compact();
+    failed += test_policy_cell_tip_full_labels_button_off();
+    failed += test_policy_cell_tip_compact_and_auto_on();
+    failed += test_policy_auto_tip_off_and_on();
+    failed += test_policy_tips_fit_the_tooltip_buffer();
+    failed += test_policy_tips_reject_out_of_range_and_null();
 
     printf("\n--- Command Approval ---\n");
     failed += test_approval_init();

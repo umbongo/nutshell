@@ -120,6 +120,34 @@ const char *cmd_policy_stop_name(int stop);
  * "Write", "Critical". Out of range returns "Nothing". */
 const char *cmd_policy_stop_label(int stop);
 
+/* One-letter label for a stop on the compact pill (a narrow AI panel):
+ * "R", "U", "W", "C". Out of range, POLICY_NONE included, returns "". */
+const char *cmd_policy_stop_short(int stop);
+
+/* The Auto-approve button's label: "Auto-approve", or "Auto" when
+ * `compact` is non-zero. */
+const char *cmd_policy_auto_label(int compact);
+
+/* Room for any tooltip below, including the NUL. ai_chat.c's tooltip
+ * buffer is this size. */
+#define CMD_POLICY_TIP_MAX 512
+
+/* The question asked before everything runs unattended (Critical with
+ * Auto-approve on), in the AI panel and on Save in Settings. */
+#define CMD_POLICY_CONFIRM_TEXT \
+    "Run every command the assistant proposes, including ones that can " \
+    "destroy data, without asking?"
+
+/* Tooltip for the cell of `level` (0..3): what the level covers and what
+ * a click does. `compact` prefixes the letter ("R = Read: ..."); `auto_on`
+ * appends " With Auto-approve on, commands up to this level run without
+ * asking." Returns the length in `buf`; out of range gives "" and 0. */
+int cmd_policy_cell_tip(int level, int compact, int auto_on, char *buf, size_t cap);
+
+/* Tooltip for the Auto-approve button in state `on`, naming the level
+ * `allowed` (clamped to 0..3). Returns the length in `buf`. */
+int cmd_policy_auto_tip(int on, int allowed, char *buf, size_t cap);
+
 /* Parse a stop token into *out. Returns 1 on success, 0 for NULL, empty or
  * an unrecognised token (leaving *out untouched). */
 int cmd_policy_stop_from_name(const char *name, int *out);
@@ -137,11 +165,5 @@ int cmd_policy_from_token(const char *token, CmdPolicy *out);
  * "allowed to Write, Read runs unattended" or
  * "allowed to Read, nothing runs unattended". Returns the length in `buf`. */
 int cmd_policy_caption(CmdPolicy p, char *buf, size_t cap);
-
-/* What clicking band `band` on cell `stop` would do, in one sentence.
- * Covers the no-op and toggle cases (clicking the stop a marker already
- * sits on) and the refusal case (asking for something unattended above the
- * ceiling). Returns the length in `buf`. */
-int cmd_policy_tip(CmdPolicy p, int band, int stop, char *buf, size_t cap);
 
 #endif /* NUTSHELL_CMD_POLICY_H */

@@ -11,6 +11,24 @@ static const char *const k_stop_labels[POLICY_STOP_COUNT + 1] = {
     "Nothing", "Read", "Unknown", "Write", "Critical"
 };
 
+static const char *const k_stop_short[POLICY_STOP_COUNT] = { "R", "U", "W", "C" };
+
+/* Tooltip text, spec 2026-10-18 section 4, word for word. */
+static const char *const k_cell_tips[POLICY_STOP_COUNT] = {
+    "Read: commands that only inspect, such as ls, cat or git status. "
+    "Click to make this the highest level the assistant may run; anything "
+    "above it is blocked.",
+    "Unknown: commands the classifier cannot place, including wrappers such "
+    "as sh -c or xargs that hide what they run. Click to allow up to this "
+    "level; Write and Critical stay blocked.",
+    "Write: commands that change files or state, such as rm, mv or apt "
+    "install. Click to allow up to this level; Critical stays blocked.",
+    "Critical: commands that can destroy data or the system, such as "
+    "rm -rf / or mkfs. Click to allow everything. Use with care."
+};
+static const char k_auto_suffix[] =
+    " With Auto-approve on, commands up to this level run without asking.";
+
 static int stop_in_range(int stop)
 {
     return stop >= POLICY_NONE && stop < POLICY_STOP_COUNT;
@@ -145,6 +163,52 @@ const char *cmd_policy_stop_label(int stop)
     return k_stop_labels[stop + 1];
 }
 
+const char *cmd_policy_stop_short(int stop)
+{
+    if (stop < CMD_READ || stop > POLICY_STOP_COUNT - 1) return "";
+    return k_stop_short[stop];
+}
+
+const char *cmd_policy_auto_label(int compact)
+{
+    return compact ? "Auto" : "Auto-approve";
+}
+
+int cmd_policy_cell_tip(int level, int compact, int auto_on, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    if (level < CMD_READ || level > POLICY_STOP_COUNT - 1) {
+        buf[0] = '\0';
+        return 0;
+    }
+    snprintf(buf, cap, "%s%s%s%s",
+             compact ? k_stop_short[level] : "",
+             compact ? " = " : "",
+             k_cell_tips[level],
+             auto_on ? k_auto_suffix : "");
+    return (int)strlen(buf);
+}
+
+int cmd_policy_auto_tip(int on, int allowed, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    if (allowed < CMD_READ) allowed = CMD_READ;
+    if (allowed > POLICY_STOP_COUNT - 1) allowed = POLICY_STOP_COUNT - 1;
+    const char *lvl = cmd_policy_stop_label(allowed);
+    if (on)
+        snprintf(buf, cap,
+                 "Auto-approve: on. Commands up to %s run without asking; "
+                 "anything above is blocked. Keep this tab shown: commands "
+                 "proposed while it is hidden wait for your approval. "
+                 "Click to turn off.", lvl);
+    else
+        snprintf(buf, cap,
+                 "Auto-approve: off. Click to run commands up to the %s "
+                 "level without asking. Anything above %s stays blocked.",
+                 lvl, lvl);
+    return (int)strlen(buf);
+}
+
 int cmd_policy_stop_from_name(const char *name, int *out)
 {
     if (!name || !*name) return 0;
@@ -206,35 +270,6 @@ int cmd_policy_caption(CmdPolicy p, char *buf, size_t cap)
         snprintf(buf, cap, "allowed to %s, %s runs unattended",
                  cmd_policy_stop_label(p.allowed),
                  cmd_policy_stop_label(p.unattended));
-    }
-    return (int)strlen(buf);
-}
-
-int cmd_policy_tip(CmdPolicy p, int band, int stop, char *buf, size_t cap)
-{
-    if (!buf || cap == 0) return 0;
-    cmd_policy_clamp(&p);
-    if (stop < CMD_READ || stop > POLICY_STOP_COUNT - 1) {
-        buf[0] = '\0';
-        return 0;
-    }
-
-    const char *label = cmd_policy_stop_label(stop);
-
-    if (band == POLICY_BAND_ALLOWED) {
-        if (stop > p.allowed)
-            snprintf(buf, cap, "Allow %s commands - they still ask first.", label);
-        else if (stop < p.allowed)
-            snprintf(buf, cap, "Block anything above %s.", label);
-        else
-            snprintf(buf, cap, "Commands above %s are blocked.", label);
-    } else {
-        if (stop > p.allowed)
-            snprintf(buf, cap, "Allow %s first to run it unattended.", label);
-        else if (stop == p.unattended)
-            snprintf(buf, cap, "Stop running anything unattended.");
-        else
-            snprintf(buf, cap, "Run %s and below without asking.", label);
     }
     return (int)strlen(buf);
 }

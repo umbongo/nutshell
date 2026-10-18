@@ -566,3 +566,127 @@ int test_policy_attended_keeps_the_ceiling(void) {
     ASSERT_EQ(a.unattended, POLICY_NONE);
     TEST_END();
 }
+
+/* ---- 2026-10-18: labels and tooltips ----------------------------------- */
+
+#define TIP_UNKNOWN_FULL "Unknown: commands the classifier cannot place, including wrappers such as sh -c or xargs that hide what they run. Click to allow up to this level; Write and Critical stay blocked."
+#define TIP_AUTO_SUFFIX  " With Auto-approve on, commands up to this level run without asking."
+
+int test_policy_stop_short_labels(void) {
+    TEST_BEGIN();
+    ASSERT_STR_EQ(cmd_policy_stop_short(CMD_READ), "R");
+    ASSERT_STR_EQ(cmd_policy_stop_short(CMD_UNKNOWN), "U");
+    ASSERT_STR_EQ(cmd_policy_stop_short(CMD_WRITE), "W");
+    ASSERT_STR_EQ(cmd_policy_stop_short(CMD_CRITICAL), "C");
+    ASSERT_STR_EQ(cmd_policy_stop_short(POLICY_NONE), "");
+    ASSERT_STR_EQ(cmd_policy_stop_short(4), "");
+    TEST_END();
+}
+
+int test_policy_auto_label_full_and_compact(void) {
+    TEST_BEGIN();
+    ASSERT_STR_EQ(cmd_policy_auto_label(0), "Auto-approve");
+    ASSERT_STR_EQ(cmd_policy_auto_label(1), "Auto");
+    ASSERT_STR_EQ(CMD_POLICY_CONFIRM_TEXT,
+        "Run every command the assistant proposes, including ones that can "
+        "destroy data, without asking?");
+    TEST_END();
+}
+
+int test_policy_cell_tip_full_labels_button_off(void) {
+    TEST_BEGIN();
+    char buf[CMD_POLICY_TIP_MAX];
+    cmd_policy_cell_tip(CMD_READ, 0, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Read: commands that only inspect, such as ls, cat or git status. Click to make this the highest level the assistant may run; anything above it is blocked.");
+    cmd_policy_cell_tip(CMD_UNKNOWN, 0, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, TIP_UNKNOWN_FULL);
+    cmd_policy_cell_tip(CMD_WRITE, 0, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Write: commands that change files or state, such as rm, mv or apt install. Click to allow up to this level; Critical stays blocked.");
+    cmd_policy_cell_tip(CMD_CRITICAL, 0, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Critical: commands that can destroy data or the system, such as rm -rf / or mkfs. Click to allow everything. Use with care.");
+    TEST_END();
+}
+
+int test_policy_cell_tip_compact_and_auto_on(void) {
+    TEST_BEGIN();
+    static const char *const letters[POLICY_STOP_COUNT] = { "R", "U", "W", "C" };
+    /* `want` is twice the tooltip size so the compiler can see that the
+     * concatenation of two tip-sized strings never truncates. */
+    char full[CMD_POLICY_TIP_MAX], tip[CMD_POLICY_TIP_MAX];
+    char want[2 * CMD_POLICY_TIP_MAX + 16];
+    for (int k = 0; k < POLICY_STOP_COUNT; k++) {
+        cmd_policy_cell_tip(k, 0, 0, full, sizeof(full));
+
+        cmd_policy_cell_tip(k, 1, 0, tip, sizeof(tip));
+        snprintf(want, sizeof(want), "%s = %s", letters[k], full);
+        ASSERT_STR_EQ(tip, want);
+
+        cmd_policy_cell_tip(k, 0, 1, tip, sizeof(tip));
+        snprintf(want, sizeof(want), "%s%s", full, TIP_AUTO_SUFFIX);
+        ASSERT_STR_EQ(tip, want);
+
+        cmd_policy_cell_tip(k, 1, 1, tip, sizeof(tip));
+        snprintf(want, sizeof(want), "%s = %s%s", letters[k], full, TIP_AUTO_SUFFIX);
+        ASSERT_STR_EQ(tip, want);
+    }
+    cmd_policy_cell_tip(CMD_UNKNOWN, 1, 1, tip, sizeof(tip));
+    ASSERT_STR_EQ(tip, "U = " TIP_UNKNOWN_FULL TIP_AUTO_SUFFIX);
+    TEST_END();
+}
+
+int test_policy_auto_tip_off_and_on(void) {
+    TEST_BEGIN();
+    char buf[CMD_POLICY_TIP_MAX];
+    cmd_policy_auto_tip(0, CMD_WRITE, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Auto-approve: off. Click to run commands up to the Write level without asking. Anything above Write stays blocked.");
+    cmd_policy_auto_tip(1, CMD_WRITE, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Auto-approve: on. Commands up to Write run without asking; anything above is blocked. Keep this tab shown: commands proposed while it is hidden wait for your approval. Click to turn off.");
+    cmd_policy_auto_tip(0, CMD_READ, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Auto-approve: off. Click to run commands up to the Read level without asking. Anything above Read stays blocked.");
+    TEST_END();
+}
+
+/* Review Focus 4: the longest tip (compact Unknown with the Auto-approve
+ * suffix) must fit ai_chat.c's tooltip buffer whole. */
+int test_policy_tips_fit_the_tooltip_buffer(void) {
+    TEST_BEGIN();
+    char buf[CMD_POLICY_TIP_MAX];
+    for (int k = 0; k < POLICY_STOP_COUNT; k++) {
+        for (int compact = 0; compact < 2; compact++) {
+            for (int on = 0; on < 2; on++) {
+                int n = cmd_policy_cell_tip(k, compact, on, buf, sizeof(buf));
+                if (n <= 0 || n >= CMD_POLICY_TIP_MAX - 1 || buf[n - 1] != '.') {
+                    printf("  cell tip k=%d compact=%d on=%d: n=%d\n", k, compact, on, n);
+                    _tf_local_fail = 1;
+                }
+            }
+        }
+        for (int on = 0; on < 2; on++) {
+            int n = cmd_policy_auto_tip(on, k, buf, sizeof(buf));
+            if (n <= 0 || n >= CMD_POLICY_TIP_MAX - 1 || buf[n - 1] != '.') {
+                printf("  auto tip on=%d level=%d: n=%d\n", on, k, n);
+                _tf_local_fail = 1;
+            }
+        }
+    }
+    TEST_END();
+}
+
+int test_policy_tips_reject_out_of_range_and_null(void) {
+    TEST_BEGIN();
+    char buf[CMD_POLICY_TIP_MAX];
+    buf[0] = 'x';
+    ASSERT_EQ(cmd_policy_cell_tip(POLICY_NONE, 0, 0, buf, sizeof(buf)), 0);
+    ASSERT_STR_EQ(buf, "");
+    ASSERT_EQ(cmd_policy_cell_tip(4, 0, 0, buf, sizeof(buf)), 0);
+    ASSERT_EQ(cmd_policy_cell_tip(CMD_READ, 0, 0, NULL, 16), 0);
+    ASSERT_EQ(cmd_policy_cell_tip(CMD_READ, 0, 0, buf, 0), 0);
+    ASSERT_EQ(cmd_policy_auto_tip(1, CMD_READ, NULL, 16), 0);
+    ASSERT_EQ(cmd_policy_auto_tip(1, CMD_READ, buf, 0), 0);
+    /* An out-of-range level is clamped, never printed as "Nothing". */
+    cmd_policy_auto_tip(0, 99, buf, sizeof(buf));
+    ASSERT_TRUE(strstr(buf, "Critical") != NULL);
+    cmd_policy_auto_tip(0, -5, buf, sizeof(buf));
+    ASSERT_TRUE(strstr(buf, "Read") != NULL);
+    TEST_END();
+}
