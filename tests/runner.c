@@ -2328,6 +2328,7 @@ int test_policy_auto_on_reads_a_split_as_off(void);
 int test_policy_no_sequence_of_set_allowed_and_set_auto_splits(void);
 int test_policy_needs_confirm_only_when_entering_critical_auto(void);
 int test_policy_status_word_packs_level_and_button(void);
+int test_policy_attended_keeps_the_ceiling(void);
 
 /* test_chat_approval.c */
 int test_approval_init(void);
@@ -2803,6 +2804,7 @@ int test_approval_card_hit_scrolled_out_rows_not_hit(void);
 int test_approval_card_layout_narrow_card_keeps_text_width(void);
 int test_approval_row_height_matches_layout(void);
 int test_approval_add_session_contradicted_takes_worse(void);
+int test_approval_attended_policy_approves_nothing_on_arrival(void);
 int test_settled_row_layout_chip_right_aligned(void);
 int test_settled_row_layout_text_never_overlaps_chip(void);
 int test_settled_row_layout_ellipsis_only_when_too_wide(void);
@@ -5479,6 +5481,7 @@ int main(void) {
     failed += test_policy_no_sequence_of_set_allowed_and_set_auto_splits();
     failed += test_policy_needs_confirm_only_when_entering_critical_auto();
     failed += test_policy_status_word_packs_level_and_button();
+    failed += test_policy_attended_keeps_the_ceiling();
 
     printf("\n--- Command Approval ---\n");
     failed += test_approval_init();
@@ -6014,6 +6017,7 @@ int main(void) {
     failed += test_approval_card_layout_narrow_card_keeps_text_width();
     failed += test_approval_row_height_matches_layout();
     failed += test_approval_add_session_contradicted_takes_worse();
+    failed += test_approval_attended_policy_approves_nothing_on_arrival();
     failed += test_settled_row_layout_chip_right_aligned();
     failed += test_settled_row_layout_text_never_overlaps_chip();
     failed += test_settled_row_layout_ellipsis_only_when_too_wide();

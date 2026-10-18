@@ -553,3 +553,16 @@ int test_policy_status_word_packs_level_and_button(void) {
     ASSERT_EQ((int)cmd_policy_status_word(p), 0x002);
     TEST_END();
 }
+
+int test_policy_attended_keeps_the_ceiling(void) {
+    TEST_BEGIN();
+    CmdPolicy p; p.allowed = CMD_READ; p.unattended = CMD_READ;
+    CmdPolicy a = cmd_policy_attended(p);
+    ASSERT_EQ(a.allowed, (int)CMD_READ);
+    ASSERT_EQ(a.unattended, POLICY_NONE);
+    p.allowed = 99; p.unattended = 99;
+    a = cmd_policy_attended(p);
+    ASSERT_EQ(a.allowed, (int)CMD_CRITICAL);
+    ASSERT_EQ(a.unattended, POLICY_NONE);
+    TEST_END();
+}

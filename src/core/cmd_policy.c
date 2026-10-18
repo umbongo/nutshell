@@ -89,6 +89,13 @@ unsigned cmd_policy_status_word(CmdPolicy p)
     return (unsigned)p.allowed | (p.unattended != POLICY_NONE ? 0x100u : 0u);
 }
 
+CmdPolicy cmd_policy_attended(CmdPolicy p)
+{
+    cmd_policy_clamp(&p);
+    p.unattended = POLICY_NONE;
+    return p;
+}
+
 void cmd_policy_cycle_allowed(CmdPolicy *p)
 {
     if (!p) return;

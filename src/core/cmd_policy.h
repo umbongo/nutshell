@@ -83,6 +83,12 @@ int cmd_policy_needs_confirm(CmdPolicy cur, CmdPolicy next);
  * when Auto-approve is on. */
 unsigned cmd_policy_status_word(CmdPolicy p);
 
+/* `p` with Auto-approve forced off: clamped, then unattended = POLICY_NONE.
+ * The ceiling is kept, so blocked rows stay blocked. A batch built for a
+ * tab that is not displayed is built under this, so nothing in it runs
+ * before the user has seen it (spec 2026-10-18 section 6). */
+CmdPolicy cmd_policy_attended(CmdPolicy p);
+
 /* Ceiling cycle: Read -> Unknown -> Write -> Critical -> Read. NULL-safe. */
 void cmd_policy_cycle_allowed(CmdPolicy *p);
 
