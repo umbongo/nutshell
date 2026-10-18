@@ -24,15 +24,13 @@ queues), `2026-09-07-design-system-foundation-design.md` (tokens, `ns_hover`, `n
 
 The unattended marker exists today but is hidden: a thin rail under each cell of the
 `Read · Unknown · Write · Critical` pill, set by clicking the rail, with no label and no
-keyboard path. It reads as missing, and three dispatcher behaviours stop it from doing its
-job for a session left alone (raising the marker does not release rows already pending,
-the dispatcher is cancelled on a session switch, and a mixed batch waits whole). This
-change gives the policy row an explicit **Auto-approve** button, drops the rail, adds
-hover tooltips to every cell and to the button, shrinks the labels to `R · U · W · C` and
-`Auto` when the row is too narrow for the full words, and makes turning the button on
-release the rows it would have approved on arrival. Running a background session's
-batches while another tab is displayed is a per-session dispatcher, a separate spec
-(section 9); in this change the session being processed must stay the displayed one.
+keyboard path. It reads as missing. This change gives the policy row an explicit
+**Auto-approve** button, drops the rail, adds hover tooltips to every cell and to the
+button, shrinks the labels to `R · U · W · C` and `Auto` when the row is too narrow for
+the full words, asks for confirmation before everything runs unattended, and stops a
+batch proposed while the tab was hidden from running without a look. Running a background
+session's batches while another tab is displayed is a per-session dispatcher, a separate
+spec (section 9); in this change the session being processed must stay the displayed one.
 
 ---
 
@@ -47,62 +45,74 @@ blocked / pending / approved outcomes in `chat_approval_add_session()`
 | off | `POLICY_NONE` |
 | on | `== allowed` |
 
-- The invariant *`unattended` is `POLICY_NONE` or equal to `allowed`* is enforced in one
-  place: `cmd_policy_set_allowed()` (`src/core/cmd_policy.c`) sets `unattended = k`
-  whenever it was not `POLICY_NONE`, and a new `cmd_policy_set_auto(p, on)` sets it to
-  `allowed` or `POLICY_NONE`. `cmd_policy_set_unattended()` is removed so no caller can
-  produce a split; the demo seed in `src/ui/window.c` (today `write/read`, with
-  `policy_seeded = 1`) and the Settings save path go through the two setters.
-- Clicking a cell calls `set_allowed(k)`; the button follows if it is on.
-- Clicking the button calls `set_auto(!on)`.
+- **The invariant** *`unattended` is `POLICY_NONE` or equal to `allowed`* is enforced at
+  the two places a policy can come from outside: `cmd_policy_clamp()` rounds a split
+  marker down to `POLICY_NONE` (so `cmd_policy_from_token()`, the Settings default, the
+  demo seed in `src/ui/window.c` and the copy of `src->policy` taken for a background
+  reply all pass through it), and the UI changes a policy only through
+  `cmd_policy_set_allowed()`, which moves `unattended` with it when it is not
+  `POLICY_NONE`, and a new `cmd_policy_set_auto(p, on)`. `cmd_policy_set_unattended()`
+  stays for the tests that exercise the set gate under split policies
+  (`test_chat_approval.c`, `test_cmd_batch.c`, `test_cmd_policy.c`); no UI code calls
+  it. A test asserts that no sequence of `set_allowed` and `set_auto` produces a split
+  and that `clamp` removes one.
+- Rounding down is the conservative direction: nothing runs without a click that did
+  not before. The decision to give up the split posture ("allow writes, auto-run only
+  reads") is the maintainer's (2026-10-18, "this is fine"); the 2026-09-11 spec kept it
+  on purpose, and the trade is recorded here. A config saved by an older exe with a split
+  token loads as "button off" and is rewritten that way on the next save; this is lossy
+  and one-way, and accepted.
+- Clicking a cell calls `set_allowed(k)`; the button follows if it is on. Clicking the
+  button calls `set_auto(!on)`.
 - **Critical needs a confirmation.** Turning the button on while `allowed` is Critical,
   or clicking Critical while the button is on, shows a Yes/No message box ("Run every
   command the assistant proposes, including ones that can destroy data, without
-  asking?"); No leaves the policy as it was. Under the old model that posture took two
-  gestures on the rail; one click should not reach it silently.
-- A policy whose `unattended` is strictly between `POLICY_NONE` and `allowed` (the old
-  split posture, "allow writes but auto-run only reads") can arrive from a saved
-  `ai_policy_default` token written by an earlier version. It is **rounded down to off**
-  on load (`cmd_policy_normalise()`, new, called by the loader and by
-  `ai_chat_seed_policy`). Rounding down is the conservative direction: nothing runs
-  without a click that did not before. The decision to give up the split posture is the
-  maintainer's (2026-10-18, "this is fine"); the 2026-09-11 spec kept it on purpose, and
-  the trade is recorded here so a future reader knows it was not an oversight.
-- The config token keeps its `"<allowed>/<unattended>"` form, so an old config loads and a
-  new config is readable by an old exe. Settings > AI Assistant > Behaviour replaces the
-  "Runs unattended" combo with an **Auto-approve by default** tickbox; the "Allowed"
-  combo stays. The tickbox writes `unattended = allowed` or `POLICY_NONE`.
-- Fresh-install default stays `read/none`: Read allowed, button off.
-- Command ids: `4030`..`4033` (set allowed) stay. `4040` (unattended none) becomes
-  `set_auto(0)`; `4041`..`4044` (unattended = k) become `set_allowed(k)` then
-  `set_auto(1)`, which is the nearest state the new model has and keeps the harness's
-  `Set-NutshellAiPolicy` meaningful rather than a silent no-op. `4005` (cycle allowed)
-  stays; `4015` (cycle unattended) toggles the button. A new id `4045` toggles the
-  button for the harness and the demo. The Critical confirmation of the previous bullet
-  applies to posted ids as well; the harness case that needs Critical unattended, if
-  one is ever written, answers the box through `Wait-NutshellDialog`.
+  asking?"); No leaves the policy as it was. The same box appears on Save in Settings
+  when Allowed is Critical and the tickbox is set. Re-entrancy: the handler records the
+  active session's id and hides the tooltip before the box, sets a guard that makes a
+  second toggle (click or posted id) a no-op while the box is up, and after Yes applies
+  the change only if the same session is still active; otherwise it does nothing.
+  Dispatch ticks and replies arriving during the box are unaffected by it.
+- The config token keeps its `"<allowed>/<unattended>"` form. Settings > AI Assistant >
+  Behaviour replaces the "Runs unattended" combo with an **Auto-approve by default**
+  tickbox; the "Allowed" combo stays. Fresh-install default stays `read/none`.
+- **Command ids**: `4030`..`4033` (set allowed) stay; `4005` (cycle allowed) stays;
+  `4015` toggles the button. `4040`..`4044` (unattended none / k) are **retired**: they
+  return without effect, and the harness helper `Set-NutshellAiPolicy`
+  (`tests/integration/NutshellIT.psm1`) is rewritten in the same pull request to
+  `-Allowed <level> [-Auto]`, posting `4030+k` then, if `-Auto`, `4015` when the button
+  is off (it reads the state first through the existing status query). A case that needs
+  Critical with the button on answers the confirmation with `Wait-NutshellDialog`. No
+  stale harness can exist because the helper and the ids change together.
 
 ## 3. The control
 
 The row is the AI panel's status line, laid out by `ai_status_layout()` in
 `src/core/ai_panel_layout.c` (core, natively tested in `tests/test_ai_panel.c`): the
-policy pill on the left, the context meter (bar and text) right-aligned, the meter dropped
-first when the row is tight. The button joins that layout; `ns_policy_layout()`,
-`ns_policy_width()` and `ns_policy_hit()` in `src/core/ns_layout.c` keep slicing the pill.
+policy pill on the left, the context meter (bar and text) right-aligned with the bar
+dropped before the text, and the busy label drawn right-aligned into the meter's space.
+The button joins that layout; `ns_policy_layout()`, `ns_policy_width()` and
+`ns_policy_hit()` in `src/core/ns_layout.c` keep slicing the pill.
 
-- **Order, left to right**: pill, free space, meter, **Auto-approve button at the right
-  edge**. The maintainer asked for the button on the right-hand side; the meter moves
-  inward by the button's width plus `SP_SM`.
-- **Drop and shrink order** as the row narrows, decided in `ai_status_layout()` from the
-  caller's measured label widths (full and compact sets) and the meter width:
-  1. full labels, meter shown;
-  2. full labels, meter dropped (as today);
-  3. compact labels `R · U · W · C` and `Auto`, meter dropped;
-  4. narrower still: the button keeps its rect at the right edge and the pill is clipped
-     at the button's left edge minus `SP_XS`; `ns_policy_hit()` is given the clipped
-     rect so a cell under the button is not hittable. Nothing overlaps.
-  The layout returns the button rect, the pill rect, the `compact` flag and which label
-  set to draw; `ai_chat.c` and `ns_draw.c` consume it and compute no rect of their own.
+- **Order, left to right**: pill, free space, meter (or the busy label), **Auto-approve
+  button at the right edge**. The meter and the busy label end at the button's left
+  edge minus `SP_SM`; the layout returns that label rect and `ai_chat.c`'s
+  `context_label` drawing uses it instead of `status_rc.right`, so the busy label can
+  never paint over the button.
+- **Shrink order** as the row narrows, decided in `ai_status_layout()` from the
+  caller's measured label widths (full and compact sets) and the meter widths:
+  1. full labels, meter bar and text;
+  2. full labels, meter text only;
+  3. full labels, no meter;
+  4. compact labels `R · U · W · C` and `Auto`, no meter;
+  5. narrower still: the button keeps its rect at the right edge and the pill is clipped
+     at the button's left edge minus `SP_XS`. `ns_policy_layout()` gains a `clip_right`
+     argument; cells that are not wholly inside it are marked unhittable, and
+     `ns_draw_policy` paints inside `IntersectClipRect` on the same bound so a partly
+     clipped cell neither paints under the button nor takes a click.
+  The layout returns the button rect, the pill rect and clip, the meter and label rects,
+  the `compact` flag and which label set to draw. `ai_chat.c` and `ns_draw.c` consume it
+  and compute no rect of their own.
 - **Pill**: four touching cells, one band each (the rail is gone). Colour follows
   `allowed` as now: `success` for Read, `info` for Unknown, `warning` for Write, `danger`
   for Critical. Cells at or below `allowed` are tinted with the intent colour, cells above
@@ -113,28 +123,28 @@ first when the row is tight. The button joins that layout; `ns_policy_layout()`,
 - **Auto-approve button**: a pill of the same height. Off: outlined in `border`, label in
   `text_dim`. On: filled with the current level's intent `.base`, label in the intent's
   `.label`. Hover uses the intent's `.hover` when on and the surface `.hover` when off,
-  through `ns_hover`; pressed uses `.pressed`. The hover ids in `ai_chat.c` are packed
-  as `STATUS_HIT_ID(band, stop)` with `STATUS_HIT_COUNT = 2 * NS_POLICY_STOPS`; the rail
-  band goes and the button takes one id, so the count becomes `NS_POLICY_STOPS + 1` and
-  every range check that reads it changes with it.
+  through `ns_hover`. No pressed state: the status line acts on button-down and has no
+  press tracking today. The hit enum keeps `HIT_POLICY_UNATTENDED` at its value (a test
+  pins it and `HIT_COPY` after it) and appends `HIT_POLICY_AUTO` at the end; the rail's
+  id is simply never produced. In `ai_chat.c` the packed `STATUS_HIT_ID(band, stop)`
+  loses the rail band and gains one id for the button (`STATUS_HIT_COUNT` becomes
+  `NS_POLICY_STOPS + 1`); the button is hit by a plain rect test on the layout's rect.
 - **Tests** for the layout, in `tests/test_ai_panel.c` and `tests/test_ns_layout.c`:
-  each of the four tiers at a width inside it; the two widths either side of each
-  threshold; no overlap between the button, the meter and the pill at any tested width;
-  the hit-test maps each cell and the button and refuses a clipped cell.
+  each of the five tiers at a width inside it; the two widths either side of each
+  threshold; the button, the label rect, the meter and the pill never overlap at any
+  tested width; the hit-test maps each cell and the button and refuses a clipped cell.
 
 ## 4. Tooltips
 
-- The status line already owns a native comctl32 `TOOLTIPS_CLASS` window with per-cell
-  text from `cmd_policy_tip` (`ai_chat.c`, around lines 3431-3456). It stays: system
-  tooltips are themed by Windows, so no token, radius or font claim is made for them.
-  What changes is the text and when it is refreshed: `cmd_policy_tip` becomes
-  `cmd_policy_cell_tip(level, compact)` and `cmd_policy_auto_tip(on, allowed)` in
-  `src/core/cmd_policy.c`, unit-tested, and the tooltip text is updated
-  (`TTM_UPDATETIPTEXT`, then `TTM_POP` if the hovered hit id changed) on every
-  `ns_hover_move()` transition, so moving from cell to cell never shows the previous
-  cell's text.
-- Cell text, one level per line of the tooltip, two short sentences: what the level
-  means, then how the click works. The strings:
+- The status line owns a native comctl32 `TOOLTIPS_CLASS` window today, registered as
+  one `TTF_IDISHWND` callback tool over the whole panel (`ai_chat.c`, around lines
+  3431-3456), so moving from cell to cell never re-triggers it. It is re-registered as
+  **one rect tool per element**: four cells and the button, with `TTM_NEWTOOLRECT` after
+  every relayout (resize, DPI change, tier change) and `TTM_GETTEXT` callbacks so the
+  text is fetched fresh each time. Windows then shows and hides the tip per element on
+  its own. The tooltip is a system control: no token, radius or font claim is made.
+- The text lives in `src/core/cmd_policy.c`, unit-tested: `cmd_policy_cell_tip(level,
+  compact, auto_on)` and `cmd_policy_auto_tip(on, allowed)`; `cmd_policy_tip` goes.
   - Read: *"Read: commands that only inspect, such as ls, cat or git status. Click to make
     this the highest level the assistant may run; anything above it is blocked."*
   - Unknown: *"Unknown: commands the classifier cannot place, including wrappers such
@@ -144,13 +154,15 @@ first when the row is tight. The button joins that layout; `ns_policy_layout()`,
     Click to allow up to this level; Critical stays blocked."*
   - Critical: *"Critical: commands that can destroy data or the system, such as rm -rf /
     or mkfs. Click to allow everything. Use with care."*
-  - Compact variants prefix the letter: *"R = Read: ..."*.
+  - With `auto_on`, each cell appends *" With Auto-approve on, commands up to this level
+    run without asking."* Compact variants prefix the letter: *"R = Read: ..."*.
   - Auto-approve, off: *"Auto-approve: off. Click to run commands up to the <Level> level
     without asking. Anything above <Level> stays blocked."*
   - Auto-approve, on: *"Auto-approve: on. Commands up to <Level> run without asking;
-    anything above is blocked. Keep this tab shown; switching tabs stops the batch. Click to turn off and approve each batch yourself."*
-- The tooltip hides on mouse leave, on click and on any policy change, and its text is
-  re-fetched on the next hover because the button's tip names the current level.
+    anything above is blocked. Keep this tab shown: commands proposed while it is hidden
+    wait for your approval. Click to turn off."*
+- The tooltip is hidden (`TTM_POP`) before the confirmation box and on any policy
+  change; the next hover fetches the new text.
 
 ## 5. Keyboard
 
@@ -160,36 +172,31 @@ view and the input subclass plus removal of the queued `WM_CHAR`, and a silent c
 enables unattended execution is the wrong first keyboard gesture for this control. The
 status-line keyboard path stays the Open item it already is in the notes.
 
-## 6. Dispatcher changes
+## 6. Dispatcher
 
-One change, scoped to the displayed session, with its decision logic in
-`src/core/chat_approval.c` so it is natively tested:
+Two small changes, both in the existing paths, nothing new in the dispatcher's
+structure:
 
-- **Release on policy change.** `apply_policy_change()` (`ai_chat.c`, around line 999)
-  already re-evaluates every pending batch: rows above the new ceiling become BLOCKED and
-  rows newly under it become PENDING. After that pass, when the button is on, a new core
-  helper `chat_approval_release(q, policy, ticked_only)` marks APPROVED every row that
-  (a) was PENDING **before** this policy change, not one the same change just unblocked,
-  (b) is still ticked by the user (`selected`), and (c) runs unattended under the new
-  policy by `cmd_policy_runs_unattended()`. It is applied to the batch at the head of
-  the displayed session's queue only; older held cards are not touched. If the head
-  batch then has no PENDING rows, the existing start path runs it. Rule (a) is what stops
-  the scenario "Auto-approve on at Read, an old card holds `rm -rf build/`, the user
-  clicks Write for something new and the old command runs": that row was BLOCKED, so it
-  becomes PENDING and waits for a tick. A row the user unticked stays unticked.
-- **Mixed batches keep waiting.** A batch with one PENDING row shows its card whole and
-  nothing in it runs until the user decides, exactly as today. The dispatcher picks
-  approved rows in any order (`chat_approval_next_approved()`) and ends the batch, with
-  the continue message to the model, when no APPROVED row is left, so running an
-  approved prefix would end the batch under the pending rows. The rule "the model wrote
-  them in order" argues for waiting, not for partial runs.
-- **Session switch cancels the running batch** (`do_session_switch`, `ai_chat.c` around
-  line 5338: `KillTimer` then `dispatch_cancel`). Unchanged here: `execute_command`,
-  the prompt checks and the continue message all read the panel's active terminal and
-  conversation, so a batch cannot run for a session that is not displayed. The user
-  leaves the tab being processed on screen; the Auto-approve tip says so when on
-  ("... in the tab shown; switching tabs stops the batch"). A per-session dispatcher is
-  section 9.
+- **No release on a policy change.** With the button on, `unattended == allowed`, so
+  every row that is not blocked is approved on arrival and nothing new can wait. The
+  only case a release would serve is a card that was already waiting when the button is
+  turned on, and that card takes one click on its own "Run N selected" button. The
+  alternative (approving waiting rows when the button turns on) needs a snapshot of
+  their status before `apply_policy_change()`'s unblock pass overwrites it, has no
+  meaningful "ticked by the user" test because new and unblocked rows are ticked
+  automatically (`chat_msg.c`, `ai_chat.c` ~1010), and could be made to run a formerly
+  blocked destructive command by toggling the button off and on. One click is cheaper
+  than that rule.
+- **A batch proposed while the tab was hidden waits.** The background reply path
+  (`ai_chat.c` around line 4356) builds its batch under a copy of the session's policy
+  with `unattended` forced to `POLICY_NONE`, so its rows are PENDING or BLOCKED, never
+  approved on arrival; and `do_session_switch` calls `maybe_start_next_batch` for the
+  newly displayed session so the card is shown at once rather than after the user's
+  next prompt. Today a background batch can be built all-approved and then runs,
+  stale, after an unrelated later prompt; that is closed here because the button makes
+  all-approved batches common. The displayed session keeps running batches only while
+  it stays displayed (`do_session_switch` cancels the dispatcher, unchanged); the
+  tooltip says so.
 
 No round or turn limit is added; the ceiling and the blocked rows are the safety limit,
 as the 2026-09-11 spec decided.
@@ -198,36 +205,39 @@ as the 2026-09-11 spec decided.
 
 Native (`make test`):
 - `tests/test_cmd_policy.c`: `set_auto` on/off; `set_allowed` with the button on moves
-  both markers and with it off moves one; no sequence of the two setters produces a
-  split; `cmd_policy_normalise` rounds a split down; tooltip strings for all four levels
-  in both label sets and for the button in both states, including the level name in the
-  button's text.
+  both markers and with it off moves one; no sequence of the two produces a split;
+  `clamp` rounds a split down and `from_token` therefore does too; tooltip strings for
+  all four levels in both label sets with the button on and off, and for the button in
+  both states with the level name.
 - `tests/test_ai_panel.c`, `tests/test_ns_layout.c`: section 3's tiers, thresholds,
-  no-overlap and clipped-hit cases.
-- `tests/test_chat_approval.c`: `chat_approval_release` approves a previously pending
-  ticked Read row when auto turns on at Read; leaves an unticked row; leaves a row that
-  this same change unblocked; leaves everything when the button is off; touches only the
-  head batch.
-- Loader: an old `write/read` token loads as `write/none`; `write/write` loads as on;
-  `read/none` unchanged.
+  no-overlap (button, label, meter, pill) and clipped-hit cases; the pinned hit enum
+  test extended with `HIT_POLICY_AUTO`.
+- `tests/test_chat_approval.c`: a batch added under a policy with `unattended` forced
+  to none has no approved row even when the session policy would approve all.
+- Loader (`tests/test_config*.c`, wherever the token round-trip tests live): an old
+  `write/read` token loads as `write/none`; `write/write` loads as on; `read/none`
+  unchanged; save after load writes the normalised token.
 
-What the native suite cannot reach, because `ai_chat.c` is `NON_TEST_SRCS`: the call
-into `chat_approval_release` from `apply_policy_change`, the Critical confirmation box,
-the tooltip refresh and the demo seed. These are covered on Windows: the
-`--ui-demo=approval` state (the names are in `src/core/ui_demo.c`) gains the button on
-and off and a compact-width variant; gallery screenshots in all four themes; the harness
-gate tier with `Set-NutshellAiPolicy` on the mapped ids; and `ai_write_command_held_then_
-runs_after_allow` (tests/integration/cases/20-ai.ps1) is kept as the guard it is by
-setting the policy with the button **off** before the raise, so its "Run selected" step
-still does the running. The two AI-tier cases that have never been run are run once with
-the key before the PR leaves draft. No new AI-tier case: a mixed batch cannot be made
-deterministic.
+What the native suite cannot reach, because `ai_chat.c` is `NON_TEST_SRCS`: the
+confirmation box and its guard, the tooltip tools, the busy-label rect, the background
+policy copy and the switch-back start. Covered on Windows: two new `--ui-demo` states,
+`policy-auto` (button on at Write, a running card) and `policy-compact` (the panel at a
+width below the compact threshold, set through the panel's persisted width before the
+window is laid out), added to `src/core/ui_demo.c`'s state list and its test; gallery
+screenshots of both in all four themes; the harness gate tier with the rewritten
+`Set-NutshellAiPolicy`; `ai_write_command_held_then_runs_after_allow`
+(`tests/integration/cases/20-ai.ps1`) unchanged in meaning, run with `-Allowed Write`
+and no `-Auto` so its "Run selected" step still does the running; a new gate-tier case
+that turns the button on at Critical and answers the box with No, then checks the policy
+did not change; and the two AI-tier cases that have never been run are run once with the
+key before the PR leaves draft.
 
 ## 8. Out of scope
 
 Saving a session's live policy back to config (the Settings default is the only
 persisted value, as now); a turn cap for unattended runs; any keyboard path; per-profile
-policy; partial runs of a mixed batch.
+policy; partial runs of a mixed batch; releasing already-waiting rows when the button
+turns on.
 
 ## 9. Follow-up spec: a per-session dispatcher
 
@@ -237,36 +247,60 @@ panel's active ones, and the session switch to stop cancelling. That is a restru
 of `ai_chat.c`'s dispatch path and gets its own spec; it goes on the notes' Open list
 with this one's merge.
 
-## Critique (2026-10-18, one round, Opus)
+## Critique (2026-10-18, two rounds, Opus)
 
-Ten findings; dispositions:
+**Round 1**, ten findings:
 
 1. Background dispatch is a per-panel dispatcher re-architecture and a session switch
-   cancels the running batch. **Accepted**: dropped from this change, section 9 opened,
-   the tip tells the user to keep the tab shown.
+   cancels the running batch. **Accepted**: dropped, section 9 opened.
 2. The approved-prefix rule conflicts with `next_approved` picking any row and the batch
    ending under pending rows. **Accepted**: partial runs removed; mixed batches wait.
-3. Release on policy change would run rows the same change unblocked, and unticked rows;
-   the harness guard case would pass without exercising its step. **Accepted**: rules
-   (a)-(c) and head-batch-only in section 6; the case sets the button off first.
-4. The context meter is already right-aligned on the row; the layout lives in
-   `ai_panel_layout.c` (core); nothing clips today. **Accepted**: section 3 rewritten
-   with the order, the four tiers and the clipped hit-test.
-5. The invariant was enforced nowhere central; the demo seed bypasses the normalise.
-   **Accepted**: two setters in `cmd_policy.c`, `set_unattended` removed, demo updated.
-6. Tooltips are native comctl32 and the "Details link" is a click popup. **Accepted**:
-   native tooltip kept, styling claims removed, text refreshed on hover transition.
+3. Release on policy change would run rows the same change unblocked. **Accepted** in
+   round 1 by narrowing; superseded by round 2, item 1.
+4. The context meter is already right-aligned; the layout is in `ai_panel_layout.c`;
+   nothing clips today. **Accepted**: section 3 rewritten.
+5. The invariant was enforced nowhere central; the demo seed bypasses it. **Accepted**:
+   see round 2, item 9 for the final form.
+6. Tooltips are native comctl32; the "Details link" is a click popup. **Accepted**.
 7. No context menu with level entries; Ctrl+Shift+A would hit Ctrl+A; focus ring
    contradicts no-traversal. **Accepted**: keyboard section dropped.
-8. Auto-approve at Unknown runs wrappers (`sh -c`, `xargs`); one click reaches
-   everything-unattended. **Accepted in part**: tooltip wording made honest, Critical
-   gets a confirmation. The one-level model itself is the maintainer's decision.
-9. Migration of a split token is lossy and one-way. **Rejected as a change**, recorded:
-   the maintainer chose one level, so a split posture has no representation to keep;
-   rounding down is the safe direction and the spec says so.
-10. Names that do not exist, `STATUS_HIT_COUNT`, retired ids as silent no-ops, AI-tier
-    mixed-batch case nondeterministic, `ai_chat.c` untestable. **Accepted**: names
-    corrected, ids mapped, the case dropped, the release logic moved to core.
+8. Auto-approve at Unknown runs wrappers; one click reaches everything-unattended.
+   **Accepted in part**: honest tooltip, Critical confirmation; the one-level model is
+   the maintainer's decision.
+9. Migration of a split token is lossy and one-way. **Rejected as a change**, recorded in
+   section 2.
+10. Wrong names, `STATUS_HIT_COUNT`, silent retired ids, nondeterministic AI-tier case.
+    **Accepted**.
 
-Not verified by the critic and settled here: themes share one UI face (`ns_font`'s
-single `g_ui_face`), so one compact threshold per DPI; no translated strings exist.
+**Round 2**, fourteen findings on the revised spec:
+
+1. The release helper cannot see ticks or the pre-change status, and "ticked" means
+   nothing because rows are auto-ticked; off-on-off could run a formerly blocked
+   command. **Accepted**: the release rule is dropped (section 6); one click instead.
+2. Switching tabs postpones unattended processing: a background reply builds an
+   all-approved batch that runs after an unrelated later prompt. **Accepted**: background
+   batches are built with `unattended` forced to none and shown on switch-back.
+3. "Head batch" undefined. **Accepted** by dropping the rule.
+4. Mapping `4041`..`4044` through `set_allowed` lowers the ceiling and the helper's
+   contract breaks silently. **Accepted**: ids retired, helper rewritten in the same PR.
+5. Settings can reach Critical plus auto with no prompt. **Accepted**: the box on Save.
+6. The message box has no re-entrancy handling. **Accepted**: session captured, guard,
+   tooltip hidden, re-check after Yes.
+7. The busy label paints over the button. **Accepted**: label rect from the layout.
+8. One callback tool over the panel never re-triggers; the cell tip cannot warn about
+   auto. **Accepted**: one rect tool per element; `auto_on` parameter.
+9. Removing `set_unattended` breaks about fifteen tests and leaves `clamp`/`from_token`
+   producing splits. **Accepted**: setter kept for tests, `clamp` normalises.
+10. The hit enum is pinned by a test; `ns_policy_hit` takes a layout. **Accepted**:
+    append `HIT_POLICY_AUTO`, `clip_right` on the layout.
+11. The tiers miss the text-only meter state; clipped cells paint under the button.
+    **Accepted**: five tiers, paint clip, clipped cells unhittable.
+12. The demo and gallery cannot produce the described states. **Accepted**: two named
+    states, width set through the persisted panel width.
+13. A simpler design: the release only matters on off-to-on; drop it or snapshot.
+    **Accepted**: dropped.
+14. No pressed state; `4045` duplicates `4015`. **Accepted**: both removed.
+
+Not verified by the critics and settled here: themes share one UI face (`ns_font`'s
+single `g_ui_face`), so one compact threshold per DPI; no translated strings exist;
+the loader tests' home is found by the implementer and named in the PR.
