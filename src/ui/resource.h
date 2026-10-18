@@ -96,7 +96,7 @@
 #define IDC_PASTE_CONFIRM      3071 /* Settings: confirm before pasting checkbox */
 #define IDC_SESSION_MGR_STARTUP 3072 /* Settings: open Session Manager at startup checkbox */
 #define IDC_AI_POLICY_ALLOWED    3073 /* Settings: policy ceiling for new sessions */
-#define IDC_AI_POLICY_UNATTENDED 3076 /* Settings: unattended marker for new sessions */
+#define IDC_AI_POLICY_AUTO       3076 /* Settings: "Auto-approve by default" tickbox */
 #define IDC_CHAT_THINKING_OPENED 3074 /* Thinking disclosure manually expanded (chat_listview -> chat panel) */
 #define IDC_CHAT_THINKING_CLOSED 3075 /* Thinking disclosure manually collapsed (chat_listview -> chat panel) */
 
