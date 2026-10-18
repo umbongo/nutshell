@@ -53,8 +53,6 @@ static COLORREF md_role_clr(const ThemeColors *theme, unsigned int role)
  * md_render_text/md_measure_text aren't passed a dpi) -- SP_SM/SP_XS/
  * STROKE_HAIRLINE are used here as their raw 96-DPI values for the same
  * reason, not scaled. */
-#define MD_TABLE_MAX_ROWS   64  /* header + separator + body rows, capped */
-#define MD_TABLE_MAX_COLS   16
 #define MD_TABLE_PAD_H      SP_SM
 #define MD_TABLE_PAD_V      SP_XS
 #define MD_TABLE_MIN_EM      6  /* column floor, in average-char widths */

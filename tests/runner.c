@@ -2634,6 +2634,8 @@ int test_md_table_fit_columns_two_wide_shrink_equal(void);
 int test_md_table_fit_columns_minimums_respected(void);
 int test_md_table_fit_columns_overflow(void);
 int test_md_table_fit_columns_null_safe(void);
+int test_md_table_drawn_cols_follows_separator_then_header(void);
+int test_md_table_drawn_cols_caps_and_floors(void);
 int test_md_next_word_tab_is_whitespace(void);
 
 /* test_json_validate.c */
@@ -3183,6 +3185,28 @@ int test_text_line_at_and_next_line(void);
 
 int test_chat_msg_find_by_id(void);
 int test_chat_msg_item_starts_without_runs_and_frees_them(void);
+
+/* test_chat_copy.c */
+int test_chat_copy_whole_fixture_matches_golden(void);
+int test_chat_copy_prose_inside_one_line_drops_markers(void);
+int test_chat_copy_across_line_break_and_empty_line(void);
+int test_chat_copy_bullet_marker_follows_its_bytes(void);
+int test_chat_copy_ordered_list_copies_the_displayed_number(void);
+int test_chat_copy_fence_lines_copy_nothing(void);
+int test_chat_copy_heading_quote_and_rule(void);
+int test_chat_copy_table_escaped_pipe_and_column_cap(void);
+int test_chat_copy_table_columns_follow_the_alignment_row(void);
+int test_chat_copy_exec_segment_and_state_reset(void);
+int test_chat_copy_ordered_list_restarts_after_exec(void);
+int test_chat_copy_leading_whitespace_is_not_copied(void);
+int test_chat_copy_plain_passes_bytes_through(void);
+int test_chat_copy_widens_a_cut_character(void);
+int test_chat_copy_empty_and_bad_arguments(void);
+int test_chat_sel_cmp_and_part_range(void);
+int test_chat_copy_selection_joins_items_and_skips_cards(void);
+int test_chat_copy_selection_takes_open_thinking_only(void);
+int test_chat_copy_selection_clamps_and_drops_vanished_ids(void);
+int test_chat_sel_all_spans_text_items(void);
 
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
@@ -5866,6 +5890,8 @@ int main(void) {
     failed += test_md_table_fit_columns_minimums_respected();
     failed += test_md_table_fit_columns_overflow();
     failed += test_md_table_fit_columns_null_safe();
+    failed += test_md_table_drawn_cols_follows_separator_then_header();
+    failed += test_md_table_drawn_cols_caps_and_floors();
 
     printf("\n--- JSON Escape ---\n");
     failed += test_escape_simple_string();
@@ -6429,6 +6455,27 @@ int main(void) {
     failed += test_text_line_at_and_next_line();
     failed += test_chat_msg_find_by_id();
     failed += test_chat_msg_item_starts_without_runs_and_frees_them();
+    failed += test_chat_copy_whole_fixture_matches_golden();
+    failed += test_chat_copy_prose_inside_one_line_drops_markers();
+    failed += test_chat_copy_across_line_break_and_empty_line();
+    failed += test_chat_copy_bullet_marker_follows_its_bytes();
+    failed += test_chat_copy_ordered_list_copies_the_displayed_number();
+    failed += test_chat_copy_fence_lines_copy_nothing();
+    failed += test_chat_copy_heading_quote_and_rule();
+    failed += test_chat_copy_table_escaped_pipe_and_column_cap();
+    failed += test_chat_copy_table_columns_follow_the_alignment_row();
+    failed += test_chat_copy_exec_segment_and_state_reset();
+    failed += test_chat_copy_ordered_list_restarts_after_exec();
+    failed += test_chat_copy_leading_whitespace_is_not_copied();
+    failed += test_chat_copy_plain_passes_bytes_through();
+    failed += test_chat_copy_widens_a_cut_character();
+    failed += test_chat_copy_empty_and_bad_arguments();
+    failed += test_chat_sel_cmp_and_part_range();
+    failed += test_chat_copy_selection_joins_items_and_skips_cards();
+    failed += test_chat_copy_selection_takes_open_thinking_only();
+    failed += test_chat_copy_selection_clamps_and_drops_vanished_ids();
+    failed += test_chat_sel_all_spans_text_items();
+
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();
     failed += test_md_blocks_multiline_body();

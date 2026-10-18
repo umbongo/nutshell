@@ -157,3 +157,20 @@ void md_table_fit_columns(const int *natural, const int *minimum, int ncols,
         }
     }
 }
+
+int md_table_drawn_cols(const char *header_row, const char *second_row,
+                        int *has_sep)
+{
+    int sep = (second_row && md_is_table_separator(second_row)) ? 1 : 0;
+    int align[MD_TABLE_MAX_COLS];
+    int ncols = sep ? md_table_alignments(second_row, align, MD_TABLE_MAX_COLS)
+                    : 0;
+    if (has_sep) *has_sep = sep;
+    if (ncols <= 0 && header_row) {
+        MdTableCell cells[MD_TABLE_MAX_COLS];
+        ncols = md_table_split_row(header_row, cells, MD_TABLE_MAX_COLS);
+    }
+    if (ncols > MD_TABLE_MAX_COLS) ncols = MD_TABLE_MAX_COLS;
+    if (ncols <= 0) ncols = 1;
+    return ncols;
+}
