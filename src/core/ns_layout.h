@@ -109,8 +109,8 @@ typedef struct {
 int ns_policy_width(const int stop_text_w[NS_POLICY_STOPS], int dpi);
 
 /* Lay out the policy pill inside `r` (cells span all of r.h). A cell k is
- * hittable when cell[k].x + cell[k].w <= clip_right. NULL-safe; a
- * non-positive r.h lays out zero-height cells without crashing. */
+ * hittable when cell[k].x + cell[k].w <= clip_right. NULL-safe; a zero
+ * r.h gives zero-height cells; callers pass a positive height. */
 void ns_policy_layout(NsRect r, const int stop_text_w[NS_POLICY_STOPS],
                       int clip_right, int hit_h, int dpi,
                       NsPolicyLayout *out);

@@ -179,7 +179,7 @@ Invoke-Case "ai_auto_approve_critical_asks_first" @{ ai_api_key = "" } {
     $boxes = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t#32770`tAuto-approve" })
     Assert-True ($boxes.Count -eq 1) "expected one confirmation box, found $($boxes.Count)"
     $during = Get-NutshellAiPolicy -Session $s
-    Assert-True (-not $during.Auto) "Auto-approve turned on while the box was still up"
+    Assert-True ($during.Allowed -eq "Critical" -and -not $during.Auto) "policy moved while the box was still up: $($during.Allowed)/$($during.Auto)"
     Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_auto_approve_confirm.png") | Out-Null
 
     Close-NutshellDialog -Dialog $dlg -Button No

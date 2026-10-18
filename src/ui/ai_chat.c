@@ -3080,7 +3080,7 @@ static void status_tools_update(AiChatData *d)
             r = sp.pl.hit[t];
         } else if (t == STATUS_HIT_AUTO) {
             r = sp.sl.auto_btn;
-        } else if (sp.has_meter &&
+        } else if (t == STATUS_TOOL_METER && sp.has_meter &&
                    (sp.sl.meter_bar.w > 0 || sp.sl.meter_text.w > 0)) {
             NsRect a = sp.sl.meter_bar.w > 0 ? sp.sl.meter_bar : sp.sl.meter_text;
             NsRect b = sp.sl.meter_text.w > 0 ? sp.sl.meter_text : sp.sl.meter_bar;
@@ -3632,7 +3632,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             } else if (t == STATUS_HIT_AUTO) {
                 cmd_policy_auto_tip(on, pol.allowed,
                                     d->tooltip_buf, sizeof(d->tooltip_buf));
-            } else if (sp.has_meter) {
+            } else if (t == STATUS_TOOL_METER && sp.has_meter) {
                 int actual = d->actual_input_tokens + d->actual_output_tokens;
                 int est = (actual > 0) ? 0 : ai_context_estimate_tokens(&d->conv);
                 ai_format_context_tooltip(d->actual_input_tokens,
@@ -5626,8 +5626,10 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
      * right after this call returns). */
     cmd_batch_set_free(&state->batches);
 
-    if (d->active_state == state)
+    if (d->active_state == state) {
         d->active_state = NULL;
+        d->session_gen++;   /* a confirmation box still up must not apply */
+    }
 }
 
 void ai_chat_apply_demo_extras(HWND hwnd, const char *state,

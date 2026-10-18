@@ -2030,9 +2030,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                                            == BST_CHECKED) ? 1 : 0;
 
             /* Command policy for new sessions: the level and Auto-approve.
-             * Critical with Auto-approve on asks first, on every Save (spec
-             * 2026-10-18 section 2); No keeps the stored policy as it was
-             * and the rest of the page still saves. The box is modal, so
+             * Critical with Auto-approve on asks first, but only when Save
+             * would enter that state from the stored policy -- the same
+             * rule as the panel's request_policy_change() (spec 2026-10-18
+             * section 2); No keeps the stored policy as it was and the
+             * rest of the page still saves. The box is modal, so
              * d->saving makes a second Save/Cancel/close during it a no-op,
              * and d is looked up again after it in case the window went. */
             {
@@ -2045,7 +2047,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     cmd_policy_set_allowed(&next, a);
                     cmd_policy_set_auto(&next, on);
                     int store = 1;
-                    if (cmd_policy_needs_confirm(cmd_policy_default(), next)) {
+                    if (cmd_policy_needs_confirm(s->ai_policy_default, next)) {
                         d->saving = 1;
                         int answer = MessageBoxA(hwnd, CMD_POLICY_CONFIRM_TEXT,
                                                  "Auto-approve by default",

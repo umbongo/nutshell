@@ -309,6 +309,9 @@ Open, in priority order:
       tab that takes a partial paint waits for the next full invalidate from elsewhere
       (as before); and `rcPaint` is the update region's bounding box, which the per-row
       shadow poisoning now makes harmless.
+- [ ] The AI panel never refreshes `d->dpi` after `WM_CREATE`: paint, hit and tooltip
+      rects stay consistent with each other, but the panel does not rescale on a monitor
+      move (found 2026-10-18 during the Auto-approve review).
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the

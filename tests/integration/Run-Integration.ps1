@@ -15,8 +15,8 @@
 #
 # Tiers (-Tier gate|ai|nightly|all, default all): gate is the merge gate --
 # every non-AI case plus
-# ui_gallery/approval_card_run_selected_settles/ai_panel_opens_without_key (no
-# AI key needed despite the ai_ prefix); ai is the five key-gated ai_* cases;
+# ui_gallery/approval_card_run_selected_settles/ai_panel_opens_without_key/
+# ai_auto_approve_critical_asks_first (no AI key needed despite the ai_ prefix); ai is the five key-gated ai_* cases;
 # nightly is currently empty (reserved for slow/flaky cases, e.g. idle-timeout
 # or host-unreachable scenarios, per
 # docs/superpowers/specs/2026-09-09-integration-coverage.md's
