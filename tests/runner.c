@@ -3164,6 +3164,23 @@ int test_chat_exec_split_empty_and_adjacent_commands(void);
 int test_chat_exec_split_stray_close_is_prose(void);
 int test_chat_exec_split_respects_len_and_null(void);
 
+/* test_text_runs.c */
+int test_text_runs_cum_ascii_multibyte_and_surrogates(void);
+int test_text_runs_cum_invalid_bytes_and_limits(void);
+int test_text_runs_utf8_prefix_never_splits_a_pair(void);
+int test_text_runs_append_assigns_lines_and_boundaries(void);
+int test_text_runs_hit_inside_a_run_takes_the_nearest_boundary(void);
+int test_text_runs_hit_left_right_and_between(void);
+int test_text_runs_hit_above_below_and_between_lines(void);
+int test_text_runs_hit_synthetic_maps_to_the_next_real_run(void);
+int test_text_runs_hit_reports_the_thinking_part(void);
+int test_text_runs_hit_table_cells_share_a_line_by_y(void);
+int test_text_runs_hit_empty_is_minus_one(void);
+int test_text_runs_span_px_partial_full_and_none(void);
+int test_text_runs_run_at_finds_the_rect(void);
+int test_text_runs_word_prose_code_and_synthetic(void);
+int test_text_line_at_and_next_line(void);
+
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
 int test_md_blocks_one(void);
@@ -6392,6 +6409,21 @@ int main(void) {
     failed += test_chat_exec_split_stray_close_is_prose();
     failed += test_chat_exec_split_respects_len_and_null();
 
+    failed += test_text_runs_cum_ascii_multibyte_and_surrogates();
+    failed += test_text_runs_cum_invalid_bytes_and_limits();
+    failed += test_text_runs_utf8_prefix_never_splits_a_pair();
+    failed += test_text_runs_append_assigns_lines_and_boundaries();
+    failed += test_text_runs_hit_inside_a_run_takes_the_nearest_boundary();
+    failed += test_text_runs_hit_left_right_and_between();
+    failed += test_text_runs_hit_above_below_and_between_lines();
+    failed += test_text_runs_hit_synthetic_maps_to_the_next_real_run();
+    failed += test_text_runs_hit_reports_the_thinking_part();
+    failed += test_text_runs_hit_table_cells_share_a_line_by_y();
+    failed += test_text_runs_hit_empty_is_minus_one();
+    failed += test_text_runs_span_px_partial_full_and_none();
+    failed += test_text_runs_run_at_finds_the_rect();
+    failed += test_text_runs_word_prose_code_and_synthetic();
+    failed += test_text_line_at_and_next_line();
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();
     failed += test_md_blocks_multiline_body();
