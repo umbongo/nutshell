@@ -30,18 +30,59 @@ void ai_panel_layout(NsRect panel, int dpi, int composer_h, AiPanelLayout *out);
  * value <= 0 is treated as ns_scale(16, dpi). */
 int ai_composer_clamp_h(int want_h, int panel_h, int line_h, int dpi);
 
-/* Status-line controls, left to right: the command-policy control (one
- * pill of four stops, sliced up by ns_policy_layout() -- this module only
- * places it), a spacer, then the context meter (bar + "used / limit" text)
- * right-aligned. `policy_w` is the control's pixel width, from
- * ns_policy_width() over the caller's measured stop labels; `meter_text_w`
- * is the measured width of the meter numbers. When the line is too narrow
- * to fit everything, meter_bar is dropped first (zero-size), then
- * meter_text, before the policy control is squeezed. */
-typedef struct { NsRect policy, meter_bar, meter_text; } AiStatusLayout;
+/* Status-line controls, left to right (docs/superpowers/specs/
+ * 2026-10-18-ai-auto-approve-button-design.md section 3): the policy pill
+ * (sliced by ns_policy_layout() -- this module only places it), free
+ * space, the context meter (bar + "used / limit" text) or the busy label,
+ * and the Auto-approve button at the right edge. The caller measures both
+ * label sets; this picks one of five tiers as the row narrows:
+ *   1 full labels, meter bar and text   2 full labels, meter text only
+ *   3 full labels, no meter             4 compact labels R U W C / "Auto"
+ *   5 compact, and the pill clipped at the button's left edge - SP_XS.
+ * With sm = SP_SM, md = SP_MD, bar = 60 px, bf/bc = button text + 2*sm
+ * (all through ns_scale): tier 1 needs full + md + bar + sm + text + sm +
+ * bf + sm; tier 2 full + md + text + sm + bf + sm; tier 3 full + md + bf +
+ * sm; tier 4 compact + md + bc + sm. No meter (text 0) skips 1 and 2. */
+typedef struct {
+    int policy_full_w;     /* ns_policy_width() over the full labels */
+    int policy_compact_w;  /* ns_policy_width() over "R" "U" "W" "C" */
+    int auto_full_w;       /* text width of "Auto-approve" */
+    int auto_compact_w;    /* text width of "Auto" */
+    int meter_text_w;      /* text width of "used / limit"; 0 = no meter */
+} AiStatusMeasure;
 
-void ai_status_layout(NsRect status, int dpi, int policy_w, int meter_text_w,
+enum {
+    AI_STATUS_TIER_FULL = 1, AI_STATUS_TIER_METER_TEXT = 2,
+    AI_STATUS_TIER_NO_METER = 3, AI_STATUS_TIER_COMPACT = 4,
+    AI_STATUS_TIER_CLIPPED = 5
+};
+
+/* `policy` is the pill: x = status.x, w = the chosen label set's width (it
+ * may run past `policy_clip` in tier 5; nothing paints or hits there).
+ * `auto_btn` ends SP_SM in from the row's right edge in every tier. The
+ * meter rects end at auto_btn.x - SP_SM. `label` is the busy label's
+ * rect: from the visible pill's right edge + SP_MD to auto_btn.x - SP_SM,
+ * zero-size when that is under 1 px. ai_chat.c and ns_draw.c compute no
+ * rect of their own. */
+typedef struct {
+    NsRect policy;
+    int    policy_clip;
+    NsRect auto_btn;
+    NsRect meter_bar, meter_text;
+    NsRect label;
+    int    compact;
+    int    tier;
+} AiStatusLayout;
+
+/* NULL `m` is all zero; negative widths count as 0. NULL `out` is a no-op. */
+void ai_status_layout(NsRect status, int dpi, const AiStatusMeasure *m,
                        AiStatusLayout *out);
+
+/* Hit-test the status line: HIT_POLICY_AUTO inside sl->auto_btn,
+ * otherwise ns_policy_hit() on `pl` (HIT_POLICY_ALLOWED with *stop_out, or
+ * HIT_NONE). `*stop_out` is -1 unless a cell was hit. NULL-safe. */
+int ai_status_hit(const AiStatusLayout *sl, const NsPolicyLayout *pl,
+                  int x, int y, int *stop_out);
 
 /* The "Thinking" disclosure above a reply that carried reasoning: a
  * clickable row (chevron, "Thinking" label, a dimmed summary) and, when

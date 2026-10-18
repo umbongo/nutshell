@@ -1,6 +1,8 @@
 #include "test_framework.h"
 #include "ai_panel_layout.h"
 #include "ai_panel_states.h"
+#include "ns_scale.h"
+#include "ns_type.h"
 #include <string.h>
 
 /* ===========================================================================
@@ -172,122 +174,275 @@ int test_ai_composer_clamp_h_bad_inputs(void)
     TEST_END();
 }
 
-/* ---- ai_status_layout -------------------------------------------------------- */
+/* ---- ai_status_layout (2026-10-18 auto-approve spec, section 3) ------------ */
 
-/* A policy control of the width the four real stop labels come to at 96 DPI
- * in the caption font, near enough: four cells of label + 2*SP_SM. */
-#define TEST_POLICY_W 220
+/* Measured widths at 96 DPI, near the real caption font. Thresholds for
+ * these (SP_SM 8, SP_MD 12, bar 60, button 72+16 / 28+16):
+ *   tier 1 >= 200 + 12 + 60 + 8 + 64 + 8 + 88 + 8 = 448
+ *   tier 2 >= 200 + 12 + 64 + 8 + 88 + 8           = 380
+ *   tier 3 >= 200 + 12 + 88 + 8                    = 308
+ *   tier 4 >=  80 + 12 + 44 + 8                    = 144 */
+static const AiStatusMeasure STATUS_M96 = {
+    .policy_full_w = 200, .policy_compact_w = 80,
+    .auto_full_w = 72, .auto_compact_w = 28, .meter_text_w = 64
+};
 
-static void collect_status_rects(const AiStatusLayout *l, NsRect out[3])
+static AiStatusLayout status_at(int w, int dpi, const AiStatusMeasure *m)
 {
-    out[0] = l->policy;
-    out[1] = l->meter_bar;
-    out[2] = l->meter_text;
+    NsRect status = { 10, 4, w, ns_scale(SZ_CTRL_H, dpi) };
+    AiStatusLayout out;
+    ai_status_layout(status, dpi, m, &out);
+    return out;
 }
 
-static int status_no_overlap_and_inside(const AiStatusLayout *l, NsRect line)
+/* The pill as it is seen: its rect cut at policy_clip. */
+static NsRect visible_pill(const AiStatusLayout *l)
 {
-    NsRect r[3];
-    collect_status_rects(l, r);
-    for (int i = 0; i < 3; i++) {
-        if (!rect_inside(r[i], line)) return 0;
-        for (int j = i + 1; j < 3; j++)
-            if (rects_overlap(r[i], r[j])) return 0;
+    NsRect v = l->policy;
+    if (v.x + v.w > l->policy_clip) v.w = l->policy_clip - v.x;
+    if (v.w < 0) v.w = 0;
+    return v;
+}
+
+static AiStatusMeasure scaled_measure(int dpi)
+{
+    AiStatusMeasure m;
+    m.policy_full_w    = ns_scale(STATUS_M96.policy_full_w, dpi);
+    m.policy_compact_w = ns_scale(STATUS_M96.policy_compact_w, dpi);
+    m.auto_full_w      = ns_scale(STATUS_M96.auto_full_w, dpi);
+    m.auto_compact_w   = ns_scale(STATUS_M96.auto_compact_w, dpi);
+    m.meter_text_w     = ns_scale(STATUS_M96.meter_text_w, dpi);
+    return m;
+}
+
+int test_ai_status_layout_tier_inside_each_band_96(void)
+{
+    TEST_BEGIN();
+    static const int widths[5] = { 600, 400, 330, 200, 100 };
+    for (int i = 0; i < 5; i++) {
+        AiStatusLayout l = status_at(widths[i], 96, &STATUS_M96);
+        ASSERT_EQ(l.tier, i + 1);
+        ASSERT_EQ(l.compact, i >= 3 ? 1 : 0);
+        ASSERT_EQ(l.meter_bar.w > 0, i == 0);
+        ASSERT_EQ(l.meter_text.w > 0, i <= 1);
+        ASSERT_EQ(l.policy.w, i >= 3 ? 80 : 200);
+        ASSERT_EQ(l.auto_btn.w, i >= 3 ? 44 : 88);
     }
-    return 1;
+    TEST_END();
 }
 
-int test_ai_status_layout_no_overlap_inside_line_96(void)
+int test_ai_status_layout_tier1_geometry_96(void)
+{
+    TEST_BEGIN();
+    AiStatusLayout l = status_at(600, 96, &STATUS_M96);
+    /* Row {10, 4, 600, 28}: button 88 wide ending 8 in from 610. */
+    ASSERT_EQ(l.auto_btn.x, 514);
+    ASSERT_EQ(l.policy_clip, 510);
+    ASSERT_EQ(l.meter_text.x, 442);    /* 514 - 8 - 64 */
+    ASSERT_EQ(l.meter_bar.x, 374);     /* 442 - 8 - 60 */
+    ASSERT_EQ(l.label.x, 222);         /* 10 + 200 + 12 */
+    ASSERT_EQ(l.label.w, 284);         /* to 514 - 8 */
+    ASSERT_EQ(l.policy.x, 10);
+    ASSERT_EQ(l.policy.h, 20);         /* SZ_CTRL_H - 2 * SP_XS */
+    ASSERT_EQ(l.policy.y, 8);
+    ASSERT_EQ(l.auto_btn.y, l.policy.y);
+    ASSERT_EQ(l.auto_btn.h, l.policy.h);
+    TEST_END();
+}
+
+int test_ai_status_layout_thresholds_96(void)
+{
+    TEST_BEGIN();
+    static const int t[4] = { 448, 380, 308, 144 };
+    for (int i = 0; i < 4; i++) {
+        AiStatusLayout at = status_at(t[i], 96, &STATUS_M96);
+        AiStatusLayout below = status_at(t[i] - 1, 96, &STATUS_M96);
+        ASSERT_EQ(at.tier, i + 1);
+        ASSERT_EQ(below.tier, i + 2);
+    }
+    TEST_END();
+}
+
+/* Review Focus 1: at 125 % and 150 % scaling every threshold still flips
+ * the tier exactly. The thresholds are hand-computed literals, not the
+ * production formula run again. ns_scale() = round(px * dpi / 96).
+ *
+ * 120 DPI (x1.25): sm 10, md 15, bar 75; fixture measures full 250,
+ * compact 100, auto 90 / 35, meter text 80; bf 90+20 = 110, bc 35+20 = 55.
+ *   tier 1 >= 250+15+75+10+80+10+110+10 = 560
+ *   tier 2 >= 250+15+80+10+110+10       = 475
+ *   tier 3 >= 250+15+110+10             = 385
+ *   tier 4 >= 100+15+55+10              = 180
+ * 144 DPI (x1.5): sm 12, md 18, bar 90; full 300, compact 120, auto
+ * 108 / 42, meter text 96; bf 108+24 = 132, bc 42+24 = 66.
+ *   tier 1 >= 300+18+90+12+96+12+132+12 = 672
+ *   tier 2 >= 300+18+96+12+132+12       = 570
+ *   tier 3 >= 300+18+132+12             = 462
+ *   tier 4 >= 120+18+66+12              = 216 */
+int test_ai_status_layout_thresholds_120_and_144(void)
+{
+    TEST_BEGIN();
+    static const int dpis[2] = { 120, 144 };
+    static const int want[2][4] = { { 560, 475, 385, 180 },
+                                    { 672, 570, 462, 216 } };
+    static const int meas[2][5] = { { 250, 100, 90, 35, 80 },
+                                    { 300, 120, 108, 42, 96 } };
+    for (int di = 0; di < 2; di++) {
+        int dpi = dpis[di];
+        AiStatusMeasure m = scaled_measure(dpi);
+        /* Anchor the hand arithmetic to what ns_scale() really gives. */
+        ASSERT_EQ(m.policy_full_w, meas[di][0]);
+        ASSERT_EQ(m.policy_compact_w, meas[di][1]);
+        ASSERT_EQ(m.auto_full_w, meas[di][2]);
+        ASSERT_EQ(m.auto_compact_w, meas[di][3]);
+        ASSERT_EQ(m.meter_text_w, meas[di][4]);
+        for (int i = 0; i < 4; i++) {
+            AiStatusLayout at = status_at(want[di][i], dpi, &m);
+            AiStatusLayout below = status_at(want[di][i] - 1, dpi, &m);
+            if (at.tier != i + 1 || below.tier != i + 2) {
+                printf("  dpi %d threshold %d (%d px): tier %d at, %d below\n",
+                       dpi, i, want[di][i], at.tier, below.tier);
+                _tf_local_fail = 1;
+            }
+        }
+    }
+    TEST_END();
+}
+
+/* Review Focus 2: no context meter (no key, unknown model) -- tiers 1 and 2
+ * cannot exist, and the busy label still ends before the button. */
+int test_ai_status_layout_no_meter_goes_straight_to_tier3(void)
+{
+    TEST_BEGIN();
+    AiStatusMeasure m = STATUS_M96;
+    m.meter_text_w = 0;
+    AiStatusLayout l = status_at(600, 96, &m);
+    ASSERT_EQ(l.tier, AI_STATUS_TIER_NO_METER);
+    ASSERT_EQ(l.compact, 0);
+    ASSERT_EQ(l.meter_bar.w, 0);
+    ASSERT_EQ(l.meter_text.w, 0);
+    ASSERT_TRUE(l.label.w > 0);
+    ASSERT_EQ(l.label.x + l.label.w, l.auto_btn.x - 8);
+    ASSERT_EQ(status_at(308, 96, &m).tier, AI_STATUS_TIER_NO_METER);
+    ASSERT_EQ(status_at(307, 96, &m).tier, AI_STATUS_TIER_COMPACT);
+    TEST_END();
+}
+
+/* Review Focus 3: every width from 0 to 1400 at 96 and 192 DPI -- the
+ * button keeps its rect at the right edge, the clip sits SP_XS left of
+ * it, the pill (as seen), the button, the meter and the label never
+ * overlap one another (label and meter are alternatives and may), and
+ * widening the row never moves to a narrower tier. */
+int test_ai_status_layout_width_sweep_invariants(void)
+{
+    TEST_BEGIN();
+    static const int dpis[2] = { 96, 192 };
+    for (int di = 0; di < 2; di++) {
+        int dpi = dpis[di];
+        AiStatusMeasure m = scaled_measure(dpi);
+        int sm = ns_scale(SP_SM, dpi), xs = ns_scale(SP_XS, dpi);
+        int prev_tier = AI_STATUS_TIER_CLIPPED;
+        for (int w = 0; w <= 1400; w++) {
+            NsRect status = { 10, 4, w, ns_scale(SZ_CTRL_H, dpi) };
+            AiStatusLayout l;
+            ai_status_layout(status, dpi, &m, &l);
+            NsRect pill = visible_pill(&l);
+            int bw = (l.compact ? m.auto_compact_w : m.auto_full_w) + 2 * sm;
+            int bad = 0;
+            if (l.tier < 1 || l.tier > 5 || l.tier > prev_tier) bad = 1;
+            if (l.compact != (l.tier >= AI_STATUS_TIER_COMPACT)) bad = 1;
+            if (l.auto_btn.w != bw) bad = 1;
+            if (l.auto_btn.x + l.auto_btn.w != status.x + w - sm) bad = 1;
+            if (l.policy_clip != l.auto_btn.x - xs) bad = 1;
+            if (l.label.w < 0) bad = 1;
+            if (l.label.w > 0 && l.label.x + l.label.w != l.auto_btn.x - sm) bad = 1;
+            if (rects_overlap(pill, l.auto_btn) || rects_overlap(pill, l.meter_bar) ||
+                rects_overlap(pill, l.meter_text) || rects_overlap(pill, l.label) ||
+                rects_overlap(l.auto_btn, l.meter_bar) ||
+                rects_overlap(l.auto_btn, l.meter_text) ||
+                rects_overlap(l.auto_btn, l.label) ||
+                rects_overlap(l.meter_bar, l.meter_text)) bad = 1;
+            if (!rect_inside(l.meter_bar, status) || !rect_inside(l.meter_text, status) ||
+                !rect_inside(l.label, status)) bad = 1;
+            if (bad) {
+                printf("  dpi %d w %d: tier %d compact %d btn {%d,%d} clip %d "
+                       "pill {%d,%d} label {%d,%d}\n", dpi, w, l.tier, l.compact,
+                       l.auto_btn.x, l.auto_btn.w, l.policy_clip, pill.x, pill.w,
+                       l.label.x, l.label.w);
+                _tf_local_fail = 1;
+                break;
+            }
+            prev_tier = l.tier;
+        }
+    }
+    TEST_END();
+}
+
+int test_ai_status_layout_negative_and_null_inputs(void)
 {
     TEST_BEGIN();
     NsRect status = { 0, 0, 600, 28 };
+    AiStatusMeasure bad = { -40, -10, -5, -5, -10 };
     AiStatusLayout out;
-    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
-    ASSERT_TRUE(status_no_overlap_and_inside(&out, status));
-    TEST_END();
-}
-
-int test_ai_status_layout_no_overlap_inside_line_192(void)
-{
-    TEST_BEGIN();
-    NsRect status = { 0, 0, 1200, 56 };
-    AiStatusLayout out;
-    ai_status_layout(status, 192, 2 * TEST_POLICY_W, 60, &out);
-    ASSERT_TRUE(status_no_overlap_and_inside(&out, status));
-    TEST_END();
-}
-
-/* The policy control is flush with the left edge of the line and vertically
- * centred in it, at the full width the caller measured -- it is never
- * squeezed, however narrow the line gets (the meter goes first). */
-int test_ai_status_layout_policy_is_left_aligned_and_full_width(void)
-{
-    TEST_BEGIN();
-    NsRect status = { 7, 11, 600, 28 };
-    AiStatusLayout out;
-    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
-    ASSERT_EQ(out.policy.x, status.x);
-    ASSERT_EQ(out.policy.w, TEST_POLICY_W);
-    ASSERT_TRUE(out.policy.h > 0 && out.policy.h < status.h);
-    ASSERT_EQ(out.policy.y - status.y, (status.h - out.policy.h) / 2);
-
-    NsRect tiny = { 7, 11, 90, 28 };
-    ai_status_layout(tiny, 96, TEST_POLICY_W, 60, &out);
-    ASSERT_EQ(out.policy.w, TEST_POLICY_W);
-    TEST_END();
-}
-
-int test_ai_status_layout_wide_line_shows_full_meter(void)
-{
-    TEST_BEGIN();
-    NsRect status = { 0, 0, 600, 28 };
-    AiStatusLayout out;
-    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
-    ASSERT_TRUE(out.meter_bar.w > 0 && out.meter_bar.h > 0);
-    ASSERT_TRUE(out.meter_text.w > 0 && out.meter_text.h > 0);
-    ASSERT_TRUE(out.meter_bar.x < out.meter_text.x);
-    TEST_END();
-}
-
-int test_ai_status_layout_meter_bar_dropped_when_narrow(void)
-{
-    TEST_BEGIN();
-    /* Narrow enough that the bar collides with the policy control, but wide
-     * enough that the meter text alone still fits. */
-    NsRect status = { 0, 0, 360, 28 };
-    AiStatusLayout out;
-    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
-    ASSERT_EQ(out.meter_bar.w, 0);
-    ASSERT_EQ(out.meter_bar.h, 0);
-    ASSERT_TRUE(out.meter_text.w > 0);
-    ASSERT_TRUE(status_no_overlap_and_inside(&out, status));
-    TEST_END();
-}
-
-int test_ai_status_layout_meter_text_dropped_when_very_narrow(void)
-{
-    TEST_BEGIN();
-    /* Narrow enough that even the meter text alone would collide with the
-     * policy control (which is never squeezed). */
-    NsRect status = { 0, 0, 290, 28 };
-    AiStatusLayout out;
-    ai_status_layout(status, 96, TEST_POLICY_W, 60, &out);
-    ASSERT_EQ(out.meter_bar.w, 0);
-    ASSERT_EQ(out.meter_text.w, 0);
-    ASSERT_TRUE(status_no_overlap_and_inside(&out, status));
-    TEST_END();
-}
-
-int test_ai_status_layout_negative_widths_are_clamped(void)
-{
-    TEST_BEGIN();
-    NsRect status = { 0, 0, 600, 28 };
-    AiStatusLayout out;
-    ai_status_layout(status, 96, -40, -10, &out);
+    ai_status_layout(status, 96, &bad, &out);
     ASSERT_EQ(out.policy.w, 0);
     ASSERT_EQ(out.meter_text.w, 0);
     ASSERT_EQ(out.meter_bar.w, 0);
-    ai_status_layout(status, 96, TEST_POLICY_W, 60, NULL);  /* must not crash */
+    ASSERT_EQ(out.auto_btn.w, 16);                 /* 0 + 2 * SP_SM */
+    ai_status_layout(status, 96, NULL, &out);      /* NULL measure = all zero */
+    ASSERT_EQ(out.tier, AI_STATUS_TIER_NO_METER);
+    ai_status_layout(status, 96, &STATUS_M96, NULL);   /* must not crash */
+    NsRect neg = { 0, 0, -50, 28 };
+    ai_status_layout(neg, 96, &STATUS_M96, &out);
+    ASSERT_EQ(out.tier, AI_STATUS_TIER_CLIPPED);
+    ASSERT_EQ(out.label.w, 0);
+    TEST_END();
+}
+
+int test_ai_status_hit_cells_button_and_clipped_cell(void)
+{
+    TEST_BEGIN();
+    int full_text[NS_POLICY_STOPS]  = { 40, 30, 50, 60 };  /* cells 56 46 66 76 */
+    int short_text[NS_POLICY_STOPS] = { 8, 8, 8, 8 };      /* cells 24 each */
+    AiStatusMeasure m = STATUS_M96;
+    m.policy_full_w = ns_policy_width(full_text, 96);      /* 244 */
+    m.policy_compact_w = ns_policy_width(short_text, 96);  /* 96 */
+
+    NsRect wide = { 10, 4, 600, 28 };
+    AiStatusLayout sl;
+    NsPolicyLayout pl;
+    ai_status_layout(wide, 96, &m, &sl);
+    ns_policy_layout(sl.policy, full_text, sl.policy_clip, wide.h, 96, &pl);
+    for (int k = 0; k < NS_POLICY_STOPS; k++) {
+        int stop = -99;
+        NsRect c = pl.cell[k];
+        ASSERT_EQ(ai_status_hit(&sl, &pl, c.x + c.w / 2, c.y + c.h / 2, &stop), HIT_POLICY_ALLOWED);
+        ASSERT_EQ(stop, k);
+    }
+    int stop = -99;
+    NsRect b = sl.auto_btn;
+    ASSERT_EQ(ai_status_hit(&sl, &pl, b.x + b.w / 2, b.y + b.h / 2, &stop), HIT_POLICY_AUTO);
+    ASSERT_EQ(stop, -1);
+    ASSERT_EQ(ai_status_hit(&sl, &pl, pl.cell[3].x + pl.cell[3].w + 2, 18, &stop), HIT_NONE);
+
+    /* Tier 5: row 100 wide, button at 58..102, clip 54. Compact cell 0 is
+     * 10..34 (whole), cell 1 is 34..58 (cut at 54: unhittable). */
+    NsRect narrow = { 10, 4, 100, 28 };
+    ai_status_layout(narrow, 96, &m, &sl);
+    ASSERT_EQ(sl.tier, AI_STATUS_TIER_CLIPPED);
+    ns_policy_layout(sl.policy, short_text, sl.policy_clip, narrow.h, 96, &pl);
+    stop = -99;
+    ASSERT_EQ(ai_status_hit(&sl, &pl, 20, 18, &stop), HIT_POLICY_ALLOWED);
+    ASSERT_EQ(stop, 0);
+    stop = -99;
+    ASSERT_EQ(ai_status_hit(&sl, &pl, 40, 18, &stop), HIT_NONE);
+    ASSERT_EQ(stop, -1);
+    b = sl.auto_btn;
+    ASSERT_EQ(ai_status_hit(&sl, &pl, b.x + b.w / 2, b.y + b.h / 2, NULL), HIT_POLICY_AUTO);
+
+    stop = -99;
+    ASSERT_EQ(ai_status_hit(NULL, NULL, 0, 0, &stop), HIT_NONE);
+    ASSERT_EQ(stop, -1);
     TEST_END();
 }
 
