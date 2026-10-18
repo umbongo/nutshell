@@ -329,10 +329,10 @@ typedef struct {
     int  actual_input_tokens;  /* last known input tokens from API (0 if unavailable) */
     int  actual_output_tokens; /* last known output tokens from API (0 if unavailable) */
 
-    /* Buffer for the status-line meter's hover tooltip text. Populated on
+    /* Buffer for the status-line tooltips' text (cells, button, meter). Filled on
      * each TTN_GETDISPINFO callback so the tip always reflects the
      * latest token state. */
-    char tooltip_buf[512];
+    char tooltip_buf[CMD_POLICY_TIP_MAX];
 
     /* Thinking history: per-assistant-message thinking text.
      * Indexed by conv.messages[] index (only meaningful for ASSISTANT roles).
@@ -417,6 +417,8 @@ typedef struct {
      * AI_STATE_NO_SESSION). */
     int forced_state;
 } AiChatData;
+
+static void status_tools_update(AiChatData *d);
 
 /* Session kind for the system prompt: SSH unless the active transport
  * says otherwise (a panel with no session keeps today's SSH wording). */
@@ -979,6 +981,7 @@ static void invalidate_status_line(AiChatData *d)
     RECT r = { l.status.x, l.status.y, l.status.x + l.status.w,
                l.status.y + l.status.h };
     InvalidateRect(d->hwnd, &r, FALSE);
+    status_tools_update(d);
 }
 
 /* Move the session to `next` and bring every pending card into line with it.
@@ -2887,6 +2890,8 @@ static void relayout(AiChatData *d)
             MoveWindow(d->hSendBtn, l.composer.x + l.composer.w - send_w - margin,
                        input_y, send_w, input_h, TRUE);
     }
+
+    status_tools_update(d);
 }
 
 /* ── Status line: geometry, hit-test, tooltip, paint ──────────────────
@@ -2903,6 +2908,12 @@ static void relayout(AiChatData *d)
 #define STATUS_HIT_CELL(stop) (stop)
 #define STATUS_HIT_AUTO       NS_POLICY_STOPS
 #define STATUS_HIT_COUNT      (NS_POLICY_STOPS + 1)
+
+/* Tooltip tool ids on the panel: STATUS_TOOL_BASE + hit id (cells 0..3,
+ * button 4), then the context meter. */
+#define STATUS_TOOL_BASE  100
+#define STATUS_TOOL_METER STATUS_HIT_COUNT
+#define STATUS_TOOL_COUNT (STATUS_HIT_COUNT + 1)
 
 typedef struct {
     NsRect status;
@@ -3052,6 +3063,40 @@ static int ai_chat_status_rect(AiChatData *d, int id, RECT *out_rc)
     if (r.w <= 0 || r.h <= 0) return 0;
     SetRect(out_rc, r.x, r.y, r.x + r.w, r.y + r.h);
     return 1;
+}
+
+/* Move each status-line tooltip tool onto its element. Called after every
+ * relayout and every status-line invalidation (resize, DPI change, tier
+ * change, policy or context change). A clipped cell gets an empty rect, so
+ * it shows no tip. */
+static void status_tools_update(AiChatData *d)
+{
+    if (!d || !d->hTooltip || !d->hwnd) return;
+    AiStatusPaint sp;
+    ai_chat_get_status_paint(d, NULL, &sp);
+    for (int t = 0; t < STATUS_TOOL_COUNT; t++) {
+        NsRect r = { 0, 0, 0, 0 };
+        if (t < NS_POLICY_STOPS) {
+            r = sp.pl.hit[t];
+        } else if (t == STATUS_HIT_AUTO) {
+            r = sp.sl.auto_btn;
+        } else if (sp.has_meter &&
+                   (sp.sl.meter_bar.w > 0 || sp.sl.meter_text.w > 0)) {
+            NsRect a = sp.sl.meter_bar.w > 0 ? sp.sl.meter_bar : sp.sl.meter_text;
+            NsRect b = sp.sl.meter_text.w > 0 ? sp.sl.meter_text : sp.sl.meter_bar;
+            r.x = a.x; r.y = a.y; r.w = (b.x + b.w) - a.x; r.h = a.h;
+        }
+        TOOLINFO ti;
+        memset(&ti, 0, sizeof(ti));
+        ti.cbSize = sizeof(ti);
+        ti.hwnd   = d->hwnd;
+        ti.uId    = (UINT_PTR)(STATUS_TOOL_BASE + t);
+        if (r.w > 0 && r.h > 0)
+            SetRect(&ti.rect, r.x, r.y, r.x + r.w, r.y + r.h);
+        else
+            SetRectEmpty(&ti.rect);
+        SendMessage(d->hTooltip, TTM_NEWTOOLRECT, 0, (LPARAM)&ti);
+    }
 }
 
 static RECT ai_chat_to_RECT(NsRect r)
@@ -3487,10 +3532,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         }
 
         /* Create tooltip control and add tips for all buttons, plus one
-         * whole-window callback-text tool for the painted status line
-         * (mode segments / auto-approve / context meter) -- its text is
-         * built on demand in WM_NOTIFY by hit-testing the cursor position
-         * via ai_chat_status_hit(), so it always reflects current state
+         * rect tool per status-line element (four cells, the Auto-approve
+         * button, the context meter) -- their text is built on demand in
+         * WM_NOTIFY (TTN_GETDISPINFO), so it always reflects current state
          * without us pushing updates. */
         nd->hTooltip = CreateWindowEx(WS_EX_TOPMOST, TOOLTIPS_CLASS, NULL,
             WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
@@ -3509,15 +3553,22 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 "Send\nSend your message to the AI.\n"
                 "Shortcut: press Enter in the input box.");
 
-            TOOLINFO ti;
-            memset(&ti, 0, sizeof(ti));
-            ti.cbSize   = sizeof(ti);
-            ti.uFlags   = TTF_SUBCLASS | TTF_IDISHWND;
-            ti.hwnd     = hwnd;
-            ti.uId      = (UINT_PTR)hwnd;
-            ti.lpszText = LPSTR_TEXTCALLBACK;
-            GetClientRect(hwnd, &ti.rect);
-            SendMessage(nd->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+            /* The status line: one rect tool per element -- four cells,
+             * the Auto-approve button and the context meter -- so Windows
+             * shows and hides the tip per element on its own (spec
+             * 2026-10-18 section 4). Rects are set by status_tools_update()
+             * after every relayout; text comes from TTN_GETDISPINFO. */
+            for (int t = 0; t < STATUS_TOOL_COUNT; t++) {
+                TOOLINFO ti;
+                memset(&ti, 0, sizeof(ti));
+                ti.cbSize   = sizeof(ti);
+                ti.uFlags   = TTF_SUBCLASS;
+                ti.hwnd     = hwnd;
+                ti.uId      = (UINT_PTR)(STATUS_TOOL_BASE + t);
+                ti.lpszText = LPSTR_TEXTCALLBACK;
+                SetRectEmpty(&ti.rect);
+                SendMessage(nd->hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+            }
         }
 
         /* Replays any loaded conversation, or leaves msg_list empty for
@@ -3564,40 +3615,32 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         NMHDR *hdr = (NMHDR *)lParam;
         if (d && hdr && hdr->hwndFrom == d->hTooltip &&
             (hdr->code == TTN_GETDISPINFOA || hdr->code == TTN_NEEDTEXTA) &&
-            hdr->idFrom == (UINT_PTR)hwnd) {
-            /* The one whole-window callback tool covers the painted status
-             * line -- hit-test the cursor to pick the right tip. */
+            hdr->idFrom >= (UINT_PTR)STATUS_TOOL_BASE &&
+            hdr->idFrom < (UINT_PTR)(STATUS_TOOL_BASE + STATUS_TOOL_COUNT)) {
+            /* Fetched fresh on every show, so the text always matches the
+             * current policy and label set. */
             NMTTDISPINFOA *nm = (NMTTDISPINFOA *)lParam;
-            POINT pt;
-            GetCursorPos(&pt);
-            ScreenToClient(hwnd, &pt);
-            int hit = ai_chat_status_hit(d, pt.x, pt.y);
-            if (hit >= 0 && hit < STATUS_HIT_COUNT) {
-                cmd_policy_tip(d->approval_q.policy, STATUS_HIT_BAND(hit),
-                               STATUS_HIT_STOP(hit),
-                               d->tooltip_buf, sizeof(d->tooltip_buf));
-                nm->lpszText = d->tooltip_buf;
-                return 0;
-            }
-            /* Otherwise: is the cursor over the context meter? */
+            int t = (int)(hdr->idFrom - (UINT_PTR)STATUS_TOOL_BASE);
             AiStatusPaint sp;
             ai_chat_get_status_paint(d, NULL, &sp);
-            NsRect meter = sp.sl.meter_bar.w > 0 ? sp.sl.meter_bar : sp.sl.meter_text;
-            if (sp.has_meter && ai_chat_pt_in_rect(meter, pt.x, pt.y)) {
+            CmdPolicy pol = d->approval_q.policy;
+            int on = cmd_policy_auto_on(pol);
+            d->tooltip_buf[0] = '\0';
+            if (t < NS_POLICY_STOPS) {
+                cmd_policy_cell_tip(t, sp.sl.compact, on,
+                                    d->tooltip_buf, sizeof(d->tooltip_buf));
+            } else if (t == STATUS_HIT_AUTO) {
+                cmd_policy_auto_tip(on, pol.allowed,
+                                    d->tooltip_buf, sizeof(d->tooltip_buf));
+            } else if (sp.has_meter) {
                 int actual = d->actual_input_tokens + d->actual_output_tokens;
-                int est = (actual > 0) ? 0
-                                       : ai_context_estimate_tokens(&d->conv);
-                ai_format_context_tooltip(
-                    d->actual_input_tokens,
-                    d->actual_output_tokens,
-                    est,
-                    d->context_limit,
-                    d->conv.model,
-                    d->tooltip_buf, sizeof(d->tooltip_buf));
-                nm->lpszText = d->tooltip_buf;
-                return 0;
+                int est = (actual > 0) ? 0 : ai_context_estimate_tokens(&d->conv);
+                ai_format_context_tooltip(d->actual_input_tokens,
+                                          d->actual_output_tokens, est,
+                                          d->context_limit, d->conv.model,
+                                          d->tooltip_buf, sizeof(d->tooltip_buf));
             }
-            nm->lpszText = (LPSTR)"";
+            nm->lpszText = d->tooltip_buf;
             return 0;
         }
         break;
