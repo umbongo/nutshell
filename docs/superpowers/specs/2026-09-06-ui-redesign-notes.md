@@ -276,8 +276,15 @@ Open, in priority order:
 - [ ] Policy control follow-ups from the PR #27 review: the AI-tier harness cases it
       rewrote (`ai_runs_read_command_unattended`, `ai_write_command_held_then_runs_after_allow`)
       have not been run yet — needs the Kimi key in `tests\integration\.ai_key`; and the
-      status line still has no keyboard path (a whole-line design-system job, the four
-      `WM_COMMAND` ids 4030–4044 are ready for a menu or accelerator).
+      status line still has no keyboard path (a whole-line design-system job; the
+      `WM_COMMAND` ids 4030–4033 and 4015 are ready for a menu or accelerator, and
+      4040–4044 were retired with the rail on 2026-10-18).
+- [ ] Per-session AI dispatcher (follow-up from `2026-10-18-ai-auto-approve-button-design.md`
+      section 9): with Auto-approve on, a session processes unattended only while it is the
+      displayed tab — a switch cancels the dispatcher, and a reply for a hidden tab builds its
+      batch with Auto-approve forced off. Running a background session's batches needs the
+      dispatcher to own its terminal, conversation and card list per session instead of the
+      panel's active ones, and the switch to stop cancelling. Own spec first.
 - [ ] AI command origin marker (external reviewer, 2026-09-25): a bar in the terminal's
       left margin on rows carrying an AI-dispatched command, stamped at write time —
       spec `2026-09-25-ai-command-origin-marker-design.md` (DRAFT, critique and seven

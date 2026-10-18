@@ -304,3 +304,15 @@ with this one's merge.
 Not verified by the critics and settled here: themes share one UI face (`ns_font`'s
 single `g_ui_face`), so one compact threshold per DPI; no translated strings exist;
 the loader tests' home is found by the implementer and named in the PR.
+
+## Implementation notes (2026-10-18)
+
+Where the implementation departs from, or settles, what is written above.
+
+- The harness reads the state through a new `WM_AI_GET_POLICY` (`WM_USER + 104`), answered with `cmd_policy_status_word()` (bits 0-7 the level, 0x100 the button); the "existing status query" this spec assumed did not exist.
+- `policy-compact` narrows the docked demo panel through `ui_demo_panel_width_px(state, dpi)`, applied after `create_ai_chat()`; the panel width is not persisted, and an undocked demo is not narrowed.
+- The busy label and the context meter are alternatives that share the meter's space; section 3's "never overlap" means elements shown at once.
+- `cmd_policy_clamp()` keeps a range clamp for internal callers (`clamp_range`) and normalises splits only at the entry points (`cmd_policy_clamp`, the setters, the token loader).
+- `cmd_policy_cycle_unattended` stays because a native test calls it; no `src/ui` caller remains.
+- Settings asks the Critical question on every Save while the combination is Critical + on; No keeps the stored policy and the rest of the page still saves.
+- A hand-edited `critical/critical` config starts with the button on and no confirmation; the box guards the UI gestures, not the file.
