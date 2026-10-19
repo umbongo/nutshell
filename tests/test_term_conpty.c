@@ -1,6 +1,9 @@
 #include "test_framework.h"
 #include "term.h"
 #include "term_extract.h"
+#include "term_colors.h"
+#include "ui_theme.h"
+#include "theme.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -180,5 +183,205 @@ int test_term_conpty_opening_sequence_is_consumed(void)
     }
 
     term_free(term);
+    TEST_END();
+}
+
+/* ===========================================================================
+ * Windows PowerShell 5.1 through ConPTY (spec
+ * docs/superpowers/specs/2026-10-19-light-theme-ansi-contrast-design.md,
+ * sections 1 and 5.0). Captured on the maintainer's Windows box on
+ * 2026-10-20 (Nutshell v1.2.41, a local PowerShell tab at 29 x 71, 192 DPI;
+ * PSReadLine 2.0.0, which has no inline prediction) from the debug log's
+ * term.rx lines, with the log's escaping undone:
+ *   conpty_ps51_tab_completion.bin  log lines 15-51: the spawn, the prompt,
+ *                                   "Cl" typed and Tab cycled to Clear-Host
+ *   conpty_ps51_commands.bin        log lines 90-112: a three-command line,
+ *                                   its error, recalled and run again, then
+ *                                   Get-Command pwsh -ErrorAction ...
+ * The hand-written `93m` string in tests/test_term.c stays: it tests prompt
+ * detection, which these captures do not need.
+ * ===========================================================================
+ */
+
+#define PS51_TAB_FIXTURE      "tests/fixtures/conpty_ps51_tab_completion.bin"
+#define PS51_COMMANDS_FIXTURE "tests/fixtures/conpty_ps51_commands.bin"
+
+/* A row's printable ASCII, '?' for anything else, trailing blanks cut. */
+static void row_text(const TermRow *row, int cols, char *out, size_t cap)
+{
+    size_t n = 0;
+    for (int c = 0; c < cols && n + 1u < cap; c++) {
+        uint32_t cp = row->cells[c].codepoint;
+        out[n++] = (cp >= 0x20u && cp < 0x7Fu) ? (char)cp : (cp == 0u ? ' ' : '?');
+    }
+    while (n > 0u && out[n - 1u] == ' ') n--;
+    out[n] = '\0';
+}
+
+/* The cell's painted foreground on theme `t` (0..NUM_UI_THEMES-1). */
+static uint32_t painted_fg(int t, const TermCell *cell)
+{
+    static ThemeTokens tok;
+    ui_theme_resolve(ui_theme_get(t), &tok);
+    uint32_t fg = 0u, bg = 0u;
+    term_colors_resolve(&tok.term, cell, 0u, &fg, &bg);
+    return fg;
+}
+
+/* What a palette cell must paint on every theme: the floored value on the
+ * light themes (and at least their ratio), the raw palette on the dark. */
+static void check_indexed(const TermCell *cell, uint8_t mode, uint8_t index,
+                          uint32_t on_onyx_light, uint32_t on_moss_mist, int *fail)
+{
+    if (cell->attr.fg_mode != mode || cell->attr.fg_index != index ||
+        cell->attr.bg_mode != COLOR_DEFAULT) {
+        printf("  cell U+%04X: fg_mode=%d fg_index=%d bg_mode=%d, expected %d/%d on the default bg\n",
+               (unsigned)cell->codepoint, (int)cell->attr.fg_mode, (int)cell->attr.fg_index,
+               (int)cell->attr.bg_mode, (int)mode, (int)index);
+        *fail = 1;
+        return;
+    }
+    for (int t = 0; t < NUM_UI_THEMES; t++) {
+        const ThemeColors *base = ui_theme_get(t);
+        uint32_t fg = painted_fg(t, cell);
+        uint32_t want = color256_to_rgb(index);
+        if (strcmp(base->name, "Onyx Light") == 0) want = on_onyx_light;
+        if (strcmp(base->name, "Moss & Mist") == 0) want = on_moss_mist;
+        if (fg != want) {
+            printf("  index %d on %s paints %06X, expected %06X\n", (int)index,
+                   base->name, (unsigned)fg, (unsigned)want);
+            *fail = 1;
+        }
+        if (base->terminal_min_contrast > 0.0 &&
+            theme_contrast(fg, base->terminal_bg) < base->terminal_min_contrast) {
+            printf("  index %d on %s is below its floor\n", (int)index, base->name);
+            *fail = 1;
+        }
+    }
+}
+
+/* PSReadLine 2.0's command token (SGR 93), redrawn on every Tab with
+ * cursor moves, ECH and Backspace, fed a byte at a time: it ends as
+ * "Clear-Host" in palette index 11, floored to 727223 on the light themes
+ * and the raw FFFF55 on the dark ones. */
+int test_term_conpty_ps51_tab_completion_token_is_floored(void)
+{
+    TEST_BEGIN();
+    size_t len = 0;
+    char *bytes = read_fixture(PS51_TAB_FIXTURE, &len);
+    if (!bytes) {
+        printf("  [ps51 fixture] %s not readable from cwd -- skipping\n", PS51_TAB_FIXTURE);
+        TEST_END();
+    }
+    ASSERT_EQ(len, 757u);
+    Terminal *term = term_init(29, 71, 500);
+    ASSERT_NOT_NULL(term);
+    if (!term) { free(bytes); TEST_END(); }
+    for (size_t i = 0; i < len; i++) term_process(term, bytes + i, 1u);
+
+    const TermRow *row = term->lines[term_screen_to_phys(term, 0)];
+    char text[128];
+    row_text(row, term->cols, text, sizeof(text));
+    ASSERT_STR_EQ(text, "PS C:\\Users\\thoma> Clear-Host");
+    ASSERT_EQ(term->cursor.row, 0);
+    ASSERT_EQ(term->cursor.col, 29);
+    int fail = 0;
+    for (int c = 19; c < 29; c++)
+        check_indexed(&row->cells[c], COLOR_ANSI16, 11, 0x727223u, 0x727223u, &fail);
+    ASSERT_EQ(fail, 0);
+    ASSERT_EQ(row->cells[0].attr.fg_mode, COLOR_DEFAULT);
+    ASSERT_EQ(painted_fg(1, &row->cells[0]), 0x1D1D1Fu);   /* Onyx Light terminal_fg */
+    term_free(term);
+    free(bytes);
+    TEST_END();
+}
+
+/* The rest of PSReadLine 2.0's palette as it arrives: command tokens 93,
+ * arguments 37, parameters 90, and the error record in 256-colour 9. All
+ * on the default background, so all floored on the light themes and raw on
+ * the dark ones. */
+int test_term_conpty_ps51_commands_are_floored(void)
+{
+    TEST_BEGIN();
+    size_t len = 0;
+    char *bytes = read_fixture(PS51_COMMANDS_FIXTURE, &len);
+    if (!bytes) {
+        printf("  [ps51 fixture] %s not readable from cwd -- skipping\n", PS51_COMMANDS_FIXTURE);
+        TEST_END();
+    }
+    ASSERT_EQ(len, 1042u);
+    Terminal *term = term_init(29, 71, 500);
+    ASSERT_NOT_NULL(term);
+    if (!term) { free(bytes); TEST_END(); }
+    size_t first = len / 3u;
+    term_process(term, bytes, first);
+    term_process(term, bytes + first, len - first);
+
+    const TermRow *cmd = NULL, *err = NULL;
+    for (int r = 0; r < term->rows; r++) {
+        const TermRow *row = term->lines[term_screen_to_phys(term, r)];
+        char text[128];
+        row_text(row, term->cols, text, sizeof(text));
+        if (strcmp(text, "PS C:\\Users\\thoma> Get-Command pwsh -ErrorAction SilentlyContinue") == 0)
+            cmd = row;
+        static const char err_head[] = "InvalidArgument: (:) [Select-Object]";
+        if (strncmp(text, err_head, sizeof(err_head) - 1u) == 0)
+            err = row;
+    }
+    ASSERT_NOT_NULL(cmd);
+    ASSERT_NOT_NULL(err);
+    int fail = 0;
+    if (cmd) {
+        check_indexed(&cmd->cells[19], COLOR_ANSI16, 11, 0x727223u, 0x727223u, &fail); /* G of Get-Command */
+        check_indexed(&cmd->cells[31], COLOR_ANSI16, 7,  0x707070u, 0x6B6B6Bu, &fail); /* p of pwsh */
+        check_indexed(&cmd->cells[36], COLOR_ANSI16, 8,  0x6C6C6Cu, 0x6C6C6Cu, &fail); /* - of -ErrorAction */
+    }
+    if (err)
+        check_indexed(&err->cells[0], COLOR_256, 9, 0xC24040u, 0xC24040u, &fail);    /* I of InvalidArgument */
+    ASSERT_EQ(fail, 0);
+    term_free(term);
+    free(bytes);
+    TEST_END();
+}
+
+/* SYNTHETIC, UNVERIFIED: PowerShell 7's inline prediction. No PowerShell 7
+ * capture exists (the maintainer's box has none; PSReadLine 2.0 has no
+ * predictions), so these bytes are written by hand from PSReadLine's
+ * documented defaults: 2.2 and later paint the prediction 97;2;3, 2.1
+ * 38;5;238. With dim it paints fainter than the typed token on both light
+ * themes; 238 (444444) is above 4.5:1 already, so it paints as sent --
+ * apart from the typed text but darker than it. Replace with a capture if
+ * one is ever made. */
+int test_term_conpty_pwsh7_prediction_synthetic(void)
+{
+    TEST_BEGIN();
+    static const struct { const char *bytes; uint32_t on_onyx_light, on_moss_mist; } v[2] = {
+        { "\x1b[2J\x1b[HPS C:\\> \x1b[93mG\x1b[97;2;3met-ChildItem\x1b[0m\x1b[12D",
+          0xA3A3A4u, 0xA1A2A1u },
+        { "\x1b[2J\x1b[HPS C:\\> \x1b[93mG\x1b[38;5;238met-ChildItem\x1b[0m\x1b[12D",
+          0x444444u, 0x444444u },
+    };
+    for (int k = 0; k < 2; k++) {
+        Terminal *term = term_init(29, 71, 500);
+        ASSERT_NOT_NULL(term);
+        if (!term) continue;
+        term_process(term, v[k].bytes, strlen(v[k].bytes));
+        const TermRow *row = term->lines[term_screen_to_phys(term, 0)];
+        ASSERT_EQ(term->cursor.col, 9);                    /* back after the typed G */
+        const TermCell *typed = &row->cells[8], *pred = &row->cells[9];
+        ASSERT_EQ(typed->codepoint, (uint32_t)'G');
+        ASSERT_EQ(pred->codepoint, (uint32_t)'e');
+        for (int t = 0; t < NUM_UI_THEMES; t++) {
+            const ThemeColors *base = ui_theme_get(t);
+            uint32_t pf = painted_fg(t, pred), tf = painted_fg(t, typed);
+            if (strcmp(base->name, "Onyx Light") == 0) { ASSERT_EQ(pf, v[k].on_onyx_light); }
+            if (strcmp(base->name, "Moss & Mist") == 0) { ASSERT_EQ(pf, v[k].on_moss_mist); }
+            if (base->terminal_min_contrast > 0.0) {
+                ASSERT_TRUE(pf != tf);
+                if (k == 0) { ASSERT_TRUE(theme_lstar(pf) > theme_lstar(tf) + 10.0); }
+            }
+        }
+        term_free(term);
+    }
     TEST_END();
 }
