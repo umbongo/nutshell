@@ -32,7 +32,9 @@
 #include "term.h"
 #include "term_extract.h"
 #include "dlog.h"
+#include "conpty_expect.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- where these cases report ------------------------------------------
@@ -819,6 +821,317 @@ int test_local_pty_open_ex_passes_pcon_flags(void)
         ASSERT_TRUE(seen);
         ASSERT_TRUE(in_tap);
     }
+    TEST_END();
+}
+
+
+/* ---- 9-10. the console probe (resize spec section 0) -------------------
+ *
+ * docs/superpowers/specs/2026-10-18-conpty-resize-anchor-design.md, section
+ * 0 and Tests, "Probe" and "Fixtures". `test_runner.exe --console-probe
+ * <scenario> <dumpfile>` (tests/win_runner.c) runs as the pseudo-console's
+ * own process: it writes a scenario from tests/conpty_expect.c to its
+ * console, puts the cursor where the scenario says, appends dump 0 to the
+ * dump file, and then on each 'D' appends the next dump -- every buffer
+ * row (GetConsoleScreenBufferInfo, ReadConsoleOutputCharacterW) and the
+ * cursor -- and on 'Q' exits. Nothing is typed as a command.
+ *
+ * Dump format, one block per dump, rows trimmed of trailing spaces:
+ *   DUMP <n>
+ *   size=<X>x<Y> window=<left>,<top>,<right>,<bottom> cursor=<row>,<col>
+ *   R<row, 4 digits>|<text>|        (one per buffer row)
+ *   END <n>
+ */
+
+static void probe_write(HANDLE out, const char *text)
+{
+    DWORD wrote = 0;
+    (void)WriteConsoleA(out, text, (DWORD)strlen(text), &wrote, NULL);
+}
+
+static void probe_dump(HANDLE out, const char *path, int n)
+{
+    CONSOLE_SCREEN_BUFFER_INFO bi;
+    if (!GetConsoleScreenBufferInfo(out, &bi)) return;
+    FILE *f = fopen(path, "ab");
+    if (!f) return;
+    fprintf(f, "DUMP %d\n", n);
+    fprintf(f, "size=%dx%d window=%d,%d,%d,%d cursor=%d,%d\n",
+            (int)bi.dwSize.X, (int)bi.dwSize.Y,
+            (int)bi.srWindow.Left, (int)bi.srWindow.Top,
+            (int)bi.srWindow.Right, (int)bi.srWindow.Bottom,
+            (int)bi.dwCursorPosition.Y, (int)bi.dwCursorPosition.X);
+    /* Every buffer row while the buffer is small (under ConPTY it is the
+     * viewport); only the window's rows if it is not. */
+    int first = 0;
+    int last = (int)bi.dwSize.Y - 1;
+    if (bi.dwSize.Y > 200) {
+        first = (int)bi.srWindow.Top;
+        last = (int)bi.srWindow.Bottom;
+    }
+    int width = (int)bi.dwSize.X;
+    if (width > 512) width = 512;
+    for (int y = first; y <= last; y++) {
+        WCHAR wrow[512];
+        char row[513];
+        DWORD got = 0;
+        COORD at;
+        at.X = 0;
+        at.Y = (SHORT)y;
+        if (!ReadConsoleOutputCharacterW(out, wrow, (DWORD)width, at, &got))
+            got = 0;
+        int k = 0;
+        for (DWORD i = 0; i < got && k < 512; i++) {
+            WCHAR w = wrow[i];
+            row[k++] = (w >= 0x20 && w < 0x7F) ? (char)w : (w == 0 ? ' ' : '?');
+        }
+        while (k > 0 && row[k - 1] == ' ') k--;
+        row[k] = '\0';
+        fprintf(f, "R%04d|%s|\n", y, row);
+    }
+    fprintf(f, "END %d\n", n);
+    fclose(f);
+}
+
+/* The probe child: `test_runner.exe --console-probe <scenario> <dumpfile>`
+ * lands here (tests/win_runner.c). Returns 0 on 'Q', 2 for an unknown
+ * scenario, 3 when no 'Q' came within a minute. */
+int nsprobe_console_main(const char *scenario, const char *dump_path)
+{
+    const CpxScenario *s = cpx_scenario_find(scenario);
+    if (!s || !dump_path) return 2;
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE in  = GetStdHandle(STD_INPUT_HANDLE);
+    /* No processed, line or echo input: 'D' and 'Q' are plain keys. */
+    (void)SetConsoleMode(in, ENABLE_EXTENDED_FLAGS);
+
+    for (int i = 0; i < s->line_count; i++) {
+        if (i > 0) probe_write(out, "\r\n");
+        probe_write(out, s->lines[i]);
+    }
+    /* The cursor where the scenario puts it -- for shrink_below, back up
+     * above the content written below it. */
+    CpxView v;
+    if (cpx_initial_view(s, &v) == 0) {
+        CONSOLE_SCREEN_BUFFER_INFO bi;
+        if (GetConsoleScreenBufferInfo(out, &bi)) {
+            COORD at;
+            at.X = (SHORT)v.cursor_col;
+            at.Y = (SHORT)(bi.srWindow.Top + v.cursor_row);
+            (void)SetConsoleCursorPosition(out, at);
+        }
+    }
+
+    int dumps = 0;
+    probe_dump(out, dump_path, dumps++);   /* dump 0: the ready signal */
+
+    ULONGLONG deadline = GetTickCount64() + 60000u;
+    while (GetTickCount64() < deadline) {
+        if (WaitForSingleObject(in, 200u) != WAIT_OBJECT_0) continue;
+        INPUT_RECORD rec[16];
+        DWORD n = 0;
+        if (!ReadConsoleInputW(in, rec, 16u, &n)) break;
+        for (DWORD i = 0; i < n; i++) {
+            if (rec[i].EventType != KEY_EVENT) continue;
+            if (!rec[i].Event.KeyEvent.bKeyDown) continue;
+            WCHAR ch = rec[i].Event.KeyEvent.uChar.UnicodeChar;
+            if (ch == L'D') probe_dump(out, dump_path, dumps++);
+            else if (ch == L'Q') return 0;
+        }
+    }
+    return 3;
+}
+
+/* Dump n from the probe's file: the window's rows into view, the cursor
+ * relative to the window's top. Returns 1 once that dump is complete. */
+static int probe_read_dump(const char *path, int n, CpxView *view)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    char head[32];
+    (void)snprintf(head, sizeof(head), "DUMP %d", n);
+    char line[600];
+    int in_dump = 0, done = 0;
+    int bx = 0, by = 0, wl = 0, wt = 0, wr = 0, wb = 0, cy = 0, cx = 0;
+    memset(view, 0, sizeof(*view));
+    while (fgets(line, (int)sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (!in_dump) {
+            if (strcmp(line, head) == 0) in_dump = 1;
+            continue;
+        }
+        if (strncmp(line, "size=", 5) == 0) {
+            if (sscanf(line, "size=%dx%d window=%d,%d,%d,%d cursor=%d,%d",
+                       &bx, &by, &wl, &wt, &wr, &wb, &cy, &cx) != 8) break;
+            view->rows = wb - wt + 1;
+            view->cols = wr - wl + 1;
+            view->cursor_row = cy - wt;
+            view->cursor_col = cx;
+            continue;
+        }
+        if (line[0] == 'R') {
+            char *bar = strchr(line, '|');
+            char *end = strrchr(line, '|');
+            if (!bar || end == bar) continue;
+            *end = '\0';
+            int vr = atoi(line + 1) - wt;
+            if (vr >= 0 && vr < view->rows && vr < CPX_MAX_ROWS)
+                (void)snprintf(view->text[vr], sizeof(view->text[vr]),
+                               "%.80s", bar + 1);
+            continue;
+        }
+        if (strncmp(line, "END ", 4) == 0) {
+            done = (atoi(line + 4) == n);
+            break;
+        }
+    }
+    fclose(f);
+    (void)bx;
+    (void)by;
+    return done;
+}
+
+static int probe_wait_dump(const char *path, int n, CpxView *view, int ms)
+{
+    for (int waited = 0; waited <= ms; waited += 50) {
+        if (probe_read_dump(path, n, view)) return 1;
+        Sleep(50);
+    }
+    return 0;
+}
+
+/* The probe child's command line, for spec_for(). */
+static void probe_command(char *out, size_t out_size, const char *scenario,
+                          const char *dump_path)
+{
+    char self[MAX_PATH];
+    (void)GetModuleFileNameA(NULL, self, (DWORD)sizeof(self));
+    (void)snprintf(out, out_size, "\"%s\" --console-probe %s \"%s\"", self,
+                   scenario, dump_path);
+}
+
+/* The model's screen in the same shape as a dump, so the two compare. */
+static void model_view(const Terminal *term, CpxView *v)
+{
+    memset(v, 0, sizeof(*v));
+    v->rows = term->rows < CPX_MAX_ROWS ? term->rows : CPX_MAX_ROWS;
+    v->cols = term->cols;
+    v->cursor_row = term->cursor.row;
+    v->cursor_col = term->cursor.col;
+    for (int r = 0; r < v->rows; r++) {
+        const TermRow *row = term->lines[term_screen_to_phys(term, r)];
+        int n = row->len < term->cols ? row->len : term->cols;
+        if (n > CPX_MAX_COLS) n = CPX_MAX_COLS;
+        int k = 0;
+        for (int c = 0; c < n; c++) {
+            uint32_t cp = row->cells[c].codepoint;
+            v->text[r][k++] = (cp >= 0x20u && cp < 0x7Fu) ? (char)cp
+                            : (cp == 0u ? ' ' : '?');
+        }
+        while (k > 0 && v->text[r][k - 1] == ' ') k--;
+        v->text[r][k] = '\0';
+    }
+}
+
+/* Print two views side by side; returns cpx_view_diff(). */
+static int report_views(const char *who, const char *label,
+                        const CpxView *want, const CpxView *got)
+{
+    int diff = cpx_view_diff(want, got);
+    RPT("  [%s] %s: %s (%d difference%s)\n", who, label,
+        diff ? "DISAGREES" : "AGREES", diff, diff == 1 ? "" : "s");
+    int rows = want->rows > got->rows ? want->rows : got->rows;
+    if (rows > CPX_MAX_ROWS) rows = CPX_MAX_ROWS;
+    for (int r = 0; r < rows; r++) {
+        const char *a = (r < want->rows) ? want->text[r] : "";
+        const char *b = (r < got->rows) ? got->text[r] : "";
+        RPT("    %c %2d want |%s| got |%s|\n", strcmp(a, b) ? '*' : ' ', r,
+            a, b);
+    }
+    RPT("    %c cursor want %d,%d got %d,%d; size want %dx%d got %dx%d\n",
+        (want->cursor_row != got->cursor_row ||
+         want->cursor_col != got->cursor_col) ? '*' : ' ',
+        want->cursor_row, want->cursor_col, got->cursor_row, got->cursor_col,
+        want->cols, want->rows, got->cols, got->rows);
+    return diff;
+}
+
+/* 9. The probe child runs under a pseudo-console, writes its scenario, and
+ * its dump 0 reads back at the size it was opened at, with the text the
+ * scenario wrote. */
+int test_local_pty_console_probe_dumps(void)
+{
+    TEST_BEGIN();
+    const CpxScenario *s = cpx_scenario_find("grow");
+    if (!s) RPT("  [probe] scenario \"grow\" not found\n");
+    ASSERT_NOT_NULL(s);
+    if (!s) TEST_END();
+
+    char tmp_dir[MAX_PATH];
+    DWORD tn = GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
+    int tmp_ok = (tn > 0u && tn < sizeof(tmp_dir));
+    if (!tmp_ok) RPT("  [probe] GetTempPathA failed\n");
+    ASSERT_TRUE(tmp_ok);
+    if (!tmp_ok) TEST_END();
+    char dump_path[MAX_PATH * 2];
+    (void)snprintf(dump_path, sizeof(dump_path), "%snsprobe_smoke.txt",
+                   tmp_dir);
+    (void)DeleteFileA(dump_path);
+
+    char cmd[MAX_PATH * 6];
+    probe_command(cmd, sizeof(cmd), s->name, dump_path);
+    LocalShellSpec spec;
+    spec_for(&spec, cmd);
+    char err[512];
+    err[0] = '\0';
+    LocalPty *pty = local_pty_open_ex(&spec, s->old_cols, s->old_rows, 0u,
+                                      0ul, err, sizeof(err));
+    if (!pty) {
+        RPT("  [skip] local_pty_open_ex failed: %s\n", err);
+        ASSERT_TRUE(err[0] != '\0');
+        TEST_END();
+    }
+    Terminal *term = term_init(s->old_rows, s->old_cols, 500);
+    if (!term) {
+        RPT("  [probe] term_init failed\n");
+        ASSERT_NOT_NULL(term);
+        (void)local_pty_write(pty, "Q", 1);
+        local_pty_close(pty);
+        (void)DeleteFileA(dump_path);
+        TEST_END();
+    }
+
+    CpxView got, want, model;
+    int ok = probe_wait_dump(dump_path, 0, &got, 10000);
+    if (!ok) RPT("  [probe] dump 0 never appeared in %s\n", dump_path);
+    ASSERT_TRUE(ok);
+    drain(pty, term, 800);
+    int have_want = cpx_initial_view(s, &want);
+    if (have_want != 0) RPT("  [probe] cpx_initial_view failed (%d)\n", have_want);
+    ASSERT_EQ(have_want, 0);
+    if (ok) {
+        if (got.rows != s->old_rows || got.cols != s->old_cols)
+            RPT("  [probe] dump 0 is %dx%d, opened at %dx%d\n", got.cols,
+                got.rows, s->old_cols, s->old_rows);
+        ASSERT_EQ(got.rows, s->old_rows);
+        ASSERT_EQ(got.cols, s->old_cols);
+        int found = 0;
+        for (int r = 0; r < got.rows; r++)
+            if (strcmp(got.text[r], "<20> alpha") == 0) found = 1;
+        if (!found) RPT("  [probe] dump 0 has no row \"<20> alpha\"\n");
+        ASSERT_TRUE(found);
+        if (have_want == 0)
+            (void)report_views("smoke", "dump 0: conhost vs scenario layout",
+                               &want, &got);
+        model_view(term, &model);
+        (void)report_views("smoke", "dump 0: conhost vs model", &model, &got);
+    }
+
+    (void)local_pty_write(pty, "Q", 1);
+    drain(pty, term, 300);
+    local_pty_close(pty);
+    term_free(term);
+    (void)DeleteFileA(dump_path);
     TEST_END();
 }
 
