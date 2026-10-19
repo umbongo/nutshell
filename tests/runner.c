@@ -1119,6 +1119,13 @@ int test_term_resize_keeps_screen_within_lines_count(void);
 int test_term_resize_then_scroll_does_not_wipe_midscreen(void);
 int test_term_double_resize_preserves_cursor_row(void);
 int test_term_resize_degenerate_round_trip_keeps_scroll_anchor(void);
+/* test_reflow_fixes.c */
+int test_reflow_exact_width_height_grow_adds_no_row(void);
+int test_reflow_exact_width_narrow_and_back_is_one_row(void);
+int test_reflow_line_one_past_width_still_wraps(void);
+int test_reflow_cursor_on_empty_continuation_keeps_row(void);
+int test_reflow_deferred_wrap_cursor_keeps_pending_wrap(void);
+int test_reflow_deferred_wrap_cursor_widened_is_inside_row(void);
 int test_term_utf8(void);
 int test_term_utf8_reject_overlong_2byte(void);
 int test_term_utf8_reject_overlong_3byte(void);
@@ -4313,6 +4320,12 @@ int main(void) {
     failed += test_term_resize_then_scroll_does_not_wipe_midscreen();
     failed += test_term_double_resize_preserves_cursor_row();
     failed += test_term_resize_degenerate_round_trip_keeps_scroll_anchor();
+    failed += test_reflow_exact_width_height_grow_adds_no_row();
+    failed += test_reflow_exact_width_narrow_and_back_is_one_row();
+    failed += test_reflow_line_one_past_width_still_wraps();
+    failed += test_reflow_cursor_on_empty_continuation_keeps_row();
+    failed += test_reflow_deferred_wrap_cursor_keeps_pending_wrap();
+    failed += test_reflow_deferred_wrap_cursor_widened_is_inside_row();
     failed += test_term_utf8();
     failed += test_term_utf8_reject_overlong_2byte();
     failed += test_term_utf8_reject_overlong_3byte();
