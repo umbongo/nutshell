@@ -220,6 +220,12 @@ Open, in priority order:
       `fix/light-theme-ansi-contrast`; Opus determines the fix (per-theme palette,
       a minimum-contrast floor at paint time, or both), critiqued before
       implementation -- spec `2026-10-19-light-theme-ansi-contrast-design.md`.
+- [ ] Designed light-theme ANSI palette (follow-up to the contrast floor, maintainer's
+      decision 3 of 2026-10-19): on Onyx Light and Moss & Mist the floor makes normal and
+      bright colours converge (90 and 97 both paint `6C6C6C`) and flattens the 232-255 grey
+      ramp; a hand-designed 16-colour palette per light theme would restore the distinctions.
+      Also from that spec's Out of scope: answer OSC 11 (background colour query) so programs
+      can detect a light background; default text on an explicit background stays raw.
 - [ ] Terminal copy and paste are broken in v1.2.36 (maintainer, 2026-10-18/19: "I can't
       properly copy and paste from the terminal"). The symptom pinned down so far: a
       selection taller than the window, or made while scrolled back, copies only the rows

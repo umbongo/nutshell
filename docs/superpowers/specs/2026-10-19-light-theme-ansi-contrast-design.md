@@ -1,9 +1,7 @@
 # Light-theme ANSI contrast: floored palette tables for terminal text
 
-DRAFT
-
 **Date**: 2026-10-19
-**Status**: DRAFT, revised after critique rounds 1 and 2 (sections "Critique").
+**Status**: approved for planning 2026-10-19 after two critique rounds (sections "Critique") and the maintainer's decisions (last section).
 **Branch**: `fix/light-theme-ansi-contrast` (cut from `main` at `c86dea1`, v1.2.37)
 **Prompted by**: the maintainer, 2026-10-19: *"Many of the PowerShell results return in yellow,
 this makes them hard to see when using a light theme in Nutshell."*
@@ -638,3 +636,19 @@ ceiling; what is still open goes to the maintainer below and in the PR body.
    `FFFFFF`, brighter than typed text (`E0E0E0`); a 0.40 blend would give `A0A0A0` (7.16:1) on
    Onyx Synapse and `AAABA7` (6.05:1) on Sage & Sand, but it also dims every `ESC[2m` user (git,
    npm, pytest, Claude Code) on the themes most people use.
+
+## Maintainer decisions (2026-10-19)
+
+The four questions above, answered by the maintainer ("accept all 4", the recommendations
+as put): 
+
+1. **Dark themes stay at a floor of 0.** Onyx Synapse and Sage & Sand paint byte-identical
+   to today; this change is invisible there.
+2. **Default foreground on an explicit background stays raw.** No second table in this
+   change; the `44;1` directory cells and PSReadLine's ListView row are a recorded
+   limitation.
+3. **The normal/bright convergence on light themes is accepted.** A designed light palette
+   (option 3) is a follow-up, recorded on the notes document's open list.
+4. **Dim stays off on the dark themes.** SGR 2 is honoured only where the floor is non-zero.
+
+With these the spec is approved for planning; the status line at the top records it.
