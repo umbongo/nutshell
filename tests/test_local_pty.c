@@ -788,8 +788,9 @@ int test_local_pty_open_ex_passes_pcon_flags(void)
             RPT("  flags 0x%lx: cannot create the tap file %s\n", FLAGS[f],
                 tap_path);
             local_pty_close(pty);
+            ASSERT_NOT_NULL(tap);       /* records the failure; does not return */
+            continue;
         }
-        ASSERT_NOT_NULL(tap);
         local_pty_set_raw_tap(pty, tap);
 
         Terminal *term = term_init(24, 80, 200);
@@ -798,8 +799,9 @@ int test_local_pty_open_ex_passes_pcon_flags(void)
             local_pty_close(pty);
             fclose(tap);
             (void)DeleteFileA(tap_path);
+            ASSERT_NOT_NULL(term);      /* records the failure; does not return */
+            continue;
         }
-        ASSERT_NOT_NULL(term);
         int seen = wait_for_screen(pty, term, "nutshell-flags", 5000);
         local_pty_close(pty);
 
