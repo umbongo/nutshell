@@ -23,13 +23,17 @@ static void cb_put(CopyBuf *b, const char *s, size_t n)
          * message text in it, behind on the heap unwiped. */
         char *q = (char *)malloc(cap);
         if (!q) { b->oom = 1; return; }
-        if (b->p) {
-            memcpy(q, b->p, b->n);
-            secure_zero(b->p, b->cap);
-            free(b->p);
-        }
+        /* The field holds the new block before the old one is freed, so no
+         * reader of b->p, here or in a caller, can see the freed pointer. */
+        char *old = b->p;
+        size_t old_cap = b->cap;
         b->p = q;
         b->cap = cap;
+        if (old) {
+            memcpy(q, old, b->n);
+            secure_zero(old, old_cap);
+            free(old);
+        }
     }
     memcpy(b->p + b->n, s, n);
     b->n += n;
@@ -60,12 +64,14 @@ static const char *lb_set(LineBuf *lb, const char *s, int n)
          * message text. */
         char *q = (char *)malloc((size_t)cap);
         if (!q) return NULL;
-        if (lb->p) {
-            secure_zero(lb->p, (size_t)lb->cap);
-            free(lb->p);
-        }
+        char *old = lb->p;
+        size_t old_cap = (size_t)lb->cap;
         lb->p = q;
         lb->cap = cap;
+        if (old) {
+            secure_zero(old, old_cap);
+            free(old);
+        }
     }
     memcpy(lb->p, s, (size_t)n);
     lb->p[n] = '\0';
