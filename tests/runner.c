@@ -3063,6 +3063,7 @@ int test_local_shell_spec_name_non_custom_and_null(void);
 int test_term_conpty_ls_screen_contents(void);
 int test_term_conpty_ls_byte_at_a_time_matches(void);
 int test_term_conpty_opening_sequence_is_consumed(void);
+int test_term_conpty_resize_marker_is_inert(void);
 /* test_conpty_expect.c */
 int test_cpx_place_inside_and_past_content(void);
 int test_cpx_scenarios_are_listed_and_writable(void);
@@ -6262,6 +6263,7 @@ int main(void) {
     failed += test_term_conpty_ls_screen_contents();
     failed += test_term_conpty_ls_byte_at_a_time_matches();
     failed += test_term_conpty_opening_sequence_is_consumed();
+    failed += test_term_conpty_resize_marker_is_inert();
     failed += test_cpx_place_inside_and_past_content();
     failed += test_cpx_scenarios_are_listed_and_writable();
     failed += test_cpx_grow_keeps_the_top_line();

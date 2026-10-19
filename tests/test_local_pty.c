@@ -1135,4 +1135,300 @@ int test_local_pty_console_probe_dumps(void)
     TEST_END();
 }
 
+/* ---- 10. resize parity: conhost's own buffer against the spec's rule ----
+ *
+ * For each scenario, opened once with flags 0 (what local_pty_open() passes
+ * today) and once with PSEUDOCONSOLE_RESIZE_QUIRK:
+ *   - drain the scenario into a Terminal at the old size;
+ *   - term_resize() and local_pty_resize() to the new size;
+ *   - snapshot the model BEFORE draining ConPTY's post-resize bytes, and
+ *     check the resize kept every scenario line in scrollback plus screen
+ *     as often as before (exactly once, on Windows);
+ *   - send 'D' and compare conhost's dump with the spec's section 1.3
+ *     prediction (tests/conpty_expect.c) and with the model snapshot;
+ *   - drain and print the raw post-resize bytes.
+ * Section 1 (top mode) is not built yet, so the model is today's
+ * bottom-anchored one: what it is compared against is the rule, computed
+ * from the scenario text. The comparisons are the report, printed and not
+ * asserted -- like cases 4-7, they are facts about this Windows build.
+ *
+ * NSPROBE_RECORD=1 in the environment (on Windows, never under Wine) also
+ * writes tests/fixtures/conpty_resize_<scenario>.bin from the flags-0 run:
+ * every byte poll() drained, with \e]9999;resize=COLSxROWS\a where the
+ * resize was made. */
+
+/* Wine's ntdll exports wine_get_version; Windows's does not. Under Wine
+ * the probe's conhost results are Wine's, so they are printed, never taken
+ * as the report, and no fixture is recorded from them. */
+static int running_under_wine(void)
+{
+    HMODULE nt = GetModuleHandleA("ntdll.dll");
+    if (!nt) return 0;
+    FARPROC fn = GetProcAddress(nt, "wine_get_version");
+    return fn ? 1 : 0;
+}
+
+static int count_in(const char *hay, const char *needle)
+{
+    int count = 0;
+    size_t nl = strlen(needle);
+    if (nl == 0u) return 0;
+    for (const char *p = strstr(hay, needle); p; p = strstr(p + nl, needle))
+        count++;
+    return count;
+}
+
+/* Every logical line the model holds, scrollback and screen, one per text
+ * line (wrapped rows joined). term_logical_rows(), not lines_count: right
+ * after a resize the screen's rows are real before they are committed. */
+static void model_history(const Terminal *term, char *out, size_t out_size)
+{
+    size_t n = 0u;
+    int total = term_logical_rows(term);
+    for (int i = 0; i < total; i++) {
+        const TermRow *row =
+            term->lines[(term->lines_start + i) % term->lines_capacity];
+        if (i > 0 && !row->wrapped && n + 1u < out_size) out[n++] = '\n';
+        int len = row->len < term->cols ? row->len : term->cols;
+        for (int c = 0; c < len && n + 1u < out_size; c++) {
+            uint32_t cp = row->cells[c].codepoint;
+            out[n++] = (cp >= 0x20u && cp < 0x7Fu) ? (char)cp : ' ';
+        }
+    }
+    out[n] = '\0';
+}
+
+static void count_tags(const CpxScenario *s, const Terminal *term,
+                       int counts[CPX_MAX_LINES])
+{
+    static char hist[65536];
+    model_history(term, hist, sizeof(hist));
+    for (int i = 0; i < s->line_count; i++) {
+        char tag[16];
+        counts[i] = (cpx_tag(s->lines[i], tag, sizeof(tag)) > 0u)
+                  ? count_in(hist, tag) : -1;
+    }
+}
+
+/* Copy the whole tap file to path (the fixture). Returns 1 on success, 0 on
+ * any short read or write. */
+static int copy_tap(FILE *tap, const char *path)
+{
+    char buf[8192];
+    if (fflush(tap) != 0 || fseek(tap, 0L, SEEK_SET) != 0) return 0;
+    FILE *out = fopen(path, "wb");
+    if (!out) return 0;
+    int ok = 1;
+    size_t got;
+    while ((got = fread(buf, 1u, sizeof(buf), tap)) > 0u) {
+        if (fwrite(buf, 1u, got, out) != got) { ok = 0; break; }
+    }
+    if (ferror(tap)) ok = 0;
+    if (fclose(out) != 0) ok = 0;
+    (void)fseek(tap, 0L, SEEK_END);
+    return ok;
+}
+
+/* One scenario under one flag set. Returns 0, or 1 when a check failed. */
+static int probe_scenario(const CpxScenario *s, unsigned long flags,
+                          int on_wine, int record)
+{
+    int _tf_local_fail = 0;
+    char who[64];
+    (void)snprintf(who, sizeof(who), "%s/%s", s->name,
+                   flags ? "quirk" : "flags0");
+
+    char tmp_dir[MAX_PATH];
+    DWORD tn = GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
+    if (tn == 0u || tn >= sizeof(tmp_dir)) {
+        RPT("  [%s] no temp directory\n", who);
+        return 1;
+    }
+    /* Names unique per run: a stale dump from an aborted earlier run (an
+     * orphaned child still writing) can never be mistaken for this run's. */
+    char dump_path[MAX_PATH * 2], tap_path[MAX_PATH * 2];
+    unsigned long pid = (unsigned long)GetCurrentProcessId();
+    (void)snprintf(dump_path, sizeof(dump_path), "%snsprobe_%s_%lu_%lu.txt",
+                   tmp_dir, s->name, flags, pid);
+    (void)snprintf(tap_path, sizeof(tap_path), "%snsprobe_%s_%lu_%lu.bin",
+                   tmp_dir, s->name, flags, pid);
+    (void)DeleteFileA(dump_path);
+
+    char cmd[MAX_PATH * 6];
+    probe_command(cmd, sizeof(cmd), s->name, dump_path);
+    LocalShellSpec spec;
+    spec_for(&spec, cmd);
+    char err[512];
+    err[0] = '\0';
+    LocalPty *pty = local_pty_open_ex(&spec, s->old_cols, s->old_rows, 0u,
+                                      flags, err, sizeof(err));
+    if (!pty) {
+        RPT("  [%s] [skip] local_pty_open_ex failed: %s\n", who, err);
+        ASSERT_TRUE(err[0] != '\0');
+        return _tf_local_fail;
+    }
+    FILE *tap = fopen(tap_path, "w+b");
+    if (tap) local_pty_set_raw_tap(pty, tap);
+    else RPT("  [%s] could not create the raw tap %s\n", who, tap_path);
+    if (!tap && record && flags == 0ul) {
+        /* The recording cannot be made: that is a failure, not a skip. */
+        local_pty_close(pty);
+        (void)DeleteFileA(dump_path);
+        return 1;
+    }
+    Terminal *term = term_init(s->old_rows, s->old_cols, 500);
+    if (!term) {
+        RPT("  [%s] term_init failed\n", who);
+        local_pty_close(pty);
+        if (tap) { fclose(tap); (void)DeleteFileA(tap_path); }
+        (void)DeleteFileA(dump_path);
+        return 1;
+    }
+
+    /* The scenario, drained at the old size. */
+    static CpxView want0, got0, want1, got1, model1, model2;
+    int ok0 = probe_wait_dump(dump_path, 0, &got0, 10000);
+    if (!ok0) RPT("  [%s] dump 0 never appeared in %s\n", who, dump_path);
+    ASSERT_TRUE(ok0);
+    drain(pty, term, 800);
+    if (ok0 && cpx_initial_view(s, &want0) == 0)
+        (void)report_views(who, "before the resize: conhost vs scenario layout",
+                           &want0, &got0);
+    int before[CPX_MAX_LINES], after[CPX_MAX_LINES];
+    count_tags(s, term, before);
+
+    /* The resize, with the in-band marker where it was made. */
+    long repaint_at = -1L;
+    if (tap) {
+        char mark[64];
+        int mn = snprintf(mark, sizeof(mark), "\x1b]9999;resize=%dx%d\x07",
+                          s->new_cols, s->new_rows);
+        if (mn > 0) (void)fwrite(mark, 1u, (size_t)mn, tap);
+        (void)fflush(tap);
+        repaint_at = ftell(tap);
+    }
+    term_resize(term, s->new_rows, s->new_cols);
+    int resized = local_pty_resize(pty, s->new_cols, s->new_rows);
+    if (resized != 0)
+        RPT("  [%s] local_pty_resize returned %d%s\n", who, resized,
+            on_wine ? " (Wine's ResizePseudoConsole fails)" : "");
+    if (!on_wine) ASSERT_EQ(resized, 0);
+
+    /* The model before ConPTY's post-resize bytes reach it. */
+    model_view(term, &model1);
+    count_tags(s, term, after);
+    for (int i = 0; i < s->line_count; i++) {
+        if (before[i] < 0) continue;
+        int bad = (after[i] != before[i]) || (!on_wine && after[i] != 1);
+        if (bad)
+            RPT("  [%s] line %d (%s): %d before the resize, %d after\n", who,
+                i, s->lines[i], before[i], after[i]);
+        ASSERT_EQ(after[i], before[i]);
+        if (!on_wine) ASSERT_EQ(after[i], 1);
+    }
+
+    /* conhost's buffer after the resize: retried until the dump shows the
+     * new size, since ResizePseudoConsole and the 'D' key travel different
+     * pipes. */
+    int ok1 = 0, n = 1;
+    for (int attempt = 0; attempt < 5 && !ok1; attempt++) {
+        Sleep(300);
+        (void)local_pty_write(pty, "D", 1);
+        if (!probe_wait_dump(dump_path, n, &got1, 3000)) break;
+        n++;
+        ok1 = (got1.rows == s->new_rows && got1.cols == s->new_cols);
+    }
+    if (!ok1) {
+        RPT("  [%s] conhost's dump never showed %dx%d (last read: %dx%d)%s\n",
+            who, s->new_cols, s->new_rows, got1.cols, got1.rows,
+            on_wine ? " -- Wine does not resize its conhost; nothing to "
+                      "compare" : "");
+        if (!on_wine) ASSERT_TRUE(ok1);
+    } else {
+        int rule = -1;
+        if (cpx_expected_after(s, &want1) == 0)
+            rule = report_views(who,
+                "after the resize: conhost vs spec section 1.3 (top-anchored)",
+                &want1, &got1);
+        int model = report_views(who,
+            "after the resize: conhost vs today's model before its repaint",
+            &model1, &got1);
+        RPT("  [%s] VERDICT rule=%s model=%s\n", who,
+            rule == 0 ? "AGREES" : (rule < 0 ? "N/A" : "DISAGREES"),
+            model == 0 ? "AGREES" : "DISAGREES");
+    }
+
+    /* ConPTY's post-resize bytes: is there a full repaint, and are
+     * soft-wrapped rows sent without \r\n? */
+    drain(pty, term, 1000);
+    if (tap && repaint_at >= 0L) {
+        static char raw[65536];
+        (void)fflush(tap);
+        long end = ftell(tap);
+        size_t want_len = (end > repaint_at) ? (size_t)(end - repaint_at) : 0u;
+        if (want_len > sizeof(raw)) want_len = sizeof(raw);
+        size_t got = 0u;
+        if (fseek(tap, repaint_at, SEEK_SET) == 0)
+            got = fread(raw, 1u, want_len, tap);
+        (void)fseek(tap, 0L, SEEK_END);
+        char label[96];
+        (void)snprintf(label, sizeof(label), "%s post-resize bytes", who);
+        print_escaped(label, raw, got);
+    }
+    if (ok1) {
+        model_view(term, &model2);
+        (void)report_views(who, "after the repaint: conhost vs the model",
+                           &model2, &got1);
+    }
+
+    (void)local_pty_write(pty, "Q", 1);
+    drain(pty, term, 300);
+    local_pty_close(pty);
+
+    if (tap) {
+        if (record && flags == 0ul) {
+            char fixture[128];
+            (void)snprintf(fixture, sizeof(fixture),
+                           "tests/fixtures/conpty_resize_%s.bin", s->name);
+            int wrote = copy_tap(tap, fixture);
+            RPT("  [%s] fixture %s: %s\n", who, fixture,
+                wrote ? "written" : "NOT written");
+            ASSERT_TRUE(wrote);
+        }
+        fclose(tap);
+        (void)DeleteFileA(tap_path);
+    }
+    (void)DeleteFileA(dump_path);
+    term_free(term);
+    return _tf_local_fail;
+}
+
+int test_local_pty_resize_parity(void)
+{
+    TEST_BEGIN();
+    int on_wine = running_under_wine();
+    char rec[8];
+    DWORD rn = GetEnvironmentVariableA("NSPROBE_RECORD", rec,
+                                       (DWORD)sizeof(rec));
+    int record = (rn > 0u && rn < sizeof(rec) && rec[0] == '1') ? 1 : 0;
+    if (on_wine) {
+        RPT("  [host] Wine: the conhost results below are Wine's, not "
+            "Windows's -- not the report; no fixture is recorded\n");
+        record = 0;
+    }
+    static const unsigned long FLAGS[2] = { 0ul, PSEUDOCONSOLE_RESIZE_QUIRK };
+    for (int i = 0; i < cpx_scenario_count(); i++) {
+        for (int f = 0; f < 2; f++) {
+            /* One call: ASSERT_EQ evaluates its operands again to print. */
+            int rc = probe_scenario(cpx_scenario_at(i), FLAGS[f], on_wine,
+                                    record);
+            if (rc != 0)
+                RPT("  [%s/%s] a check failed (see above)\n",
+                    cpx_scenario_at(i)->name, f ? "quirk" : "flags0");
+            ASSERT_EQ(rc, 0);
+        }
+    }
+    TEST_END();
+}
+
 #endif /* _WIN32 */

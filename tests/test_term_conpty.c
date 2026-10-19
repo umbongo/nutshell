@@ -182,3 +182,38 @@ int test_term_conpty_opening_sequence_is_consumed(void)
     term_free(term);
     TEST_END();
 }
+
+/* The resize fixtures (tests/fixtures/conpty_resize_*.bin, recorded by the
+ * wintest case test_local_pty_resize_parity) carry an in-band marker,
+ * ESC ] 9999 ; resize=COLSxROWS BEL, where each ResizePseudoConsole was
+ * made, so a replay knows the model's size at that point. The emulator must
+ * ignore it: no text, no cursor move, no title. */
+int test_term_conpty_resize_marker_is_inert(void)
+{
+    TEST_BEGIN();
+    static const char MARK[] = "\x1b]9999;resize=25x12\x07";
+    Terminal *plain  = term_init(10, 40, 100);
+    Terminal *marked = term_init(10, 40, 100);
+    ASSERT_NOT_NULL(plain);
+    ASSERT_NOT_NULL(marked);
+
+    term_process(plain, "abc\r\ndef", 8);
+    term_process(marked, "abc\r\ndef", 8);
+    term_process(marked, MARK, sizeof(MARK) - 1u);
+    term_process(plain, "ghi", 3);
+    term_process(marked, "ghi", 3);
+
+    char a[1024], b[1024];
+    (void)term_extract_last_n(plain, 10, a, sizeof(a));
+    (void)term_extract_last_n(marked, 10, b, sizeof(b));
+    ASSERT_STR_EQ(a, b);
+    ASSERT_TRUE(strstr(b, "9999") == NULL);
+    ASSERT_TRUE(strstr(b, "resize") == NULL);
+    ASSERT_EQ(marked->cursor.row, plain->cursor.row);
+    ASSERT_EQ(marked->cursor.col, plain->cursor.col);
+    ASSERT_STR_EQ(marked->title, plain->title);
+
+    term_free(plain);
+    term_free(marked);
+    TEST_END();
+}
