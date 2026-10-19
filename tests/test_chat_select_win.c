@@ -682,31 +682,60 @@ int test_chat_select_win_short_list(void)
             ASSERT_NOT_NULL(q);
             ASSERT_NOT_NULL(low);
             if (lv && q && low) {
+                if (lv->scroll_y != 0)
+                    printf("  precondition: scroll_y=%d, want 0 (dpi %d)\n",
+                           lv->scroll_y, dpis[d]);
                 ASSERT_EQ(lv->scroll_y, 0);
+                if (lv->total_height <= lv->viewport_height)
+                    printf("  precondition: total_height=%d <= viewport_height=%d"
+                           " (dpi %d)\n", lv->total_height,
+                           lv->viewport_height, dpis[d]);
                 ASSERT_TRUE(lv->total_height > lv->viewport_height);
                 /* preconditions: the target is below the fold, and the last
                  * item (the status line, ordinal 3) was never painted */
+                if (low->y < lv->viewport_height)
+                    printf("  precondition: low->y=%d < viewport_height=%d"
+                           " (dpi %d)\n", low->y, lv->viewport_height,
+                           dpis[d]);
                 ASSERT_TRUE(low->y >= lv->viewport_height);
+                if (status->runs.n != 0)
+                    printf("  precondition: status runs.n=%d, want 0 (dpi %d)\n",
+                           (int)status->runs.n, dpis[d]);
                 ASSERT_EQ(status->runs.n, 0);
 
                 /* (a) unpainted item: no answer. A painted item answers even
                  * for a word below the fold. */
-                ASSERT_EQ(query_word(tv.lv, 3, "Stream"), 0);
+                LRESULT r_unpainted = query_word(tv.lv, 3, "Stream");
+                ASSERT_EQ(r_unpainted, 0);
                 LRESULT rl = query_word(tv.lv, 1, "cd /var/log");
                 ASSERT_TRUE(rl != 0);
                 ASSERT_TRUE((int)((rl >> 16) & 0xFFFF) >= lv->viewport_height);
-                ASSERT_TRUE(query_word(tv.lv, 0, "Can") != 0);
+                LRESULT r_top = query_word(tv.lv, 0, "Can");
+                ASSERT_TRUE(r_top != 0);
 
-                /* (c) a drag that ends inside the viewport does not scroll */
+                /* (c) a drag whose last move is one pixel above the list's
+                 * bottom edge does not scroll: the auto-scroll starts at
+                 * my > viewport_height, so this fails on an off-by-one in
+                 * either direction. Several moves there, so a scroll that
+                 * only accumulates would show. The top item must still be
+                 * the first, painted where it was. */
                 int y = q->y + q->h / 2;
+                int ey = lv->viewport_height - 1;
                 SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(q->x + 1, y));
                 SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON,
                              pt(q->x + wq / 2, y));
-                SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON,
-                             pt(q->x + wq - 1, y));
-                SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(q->x + wq - 1, y));
+                for (int i = 0; i < 20; i++)
+                    SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON,
+                                 pt(q->x + wq - 1, ey));
+                SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(q->x + wq - 1, ey));
+                if (lv->scroll_y != 0)
+                    printf("  (c) scroll_y=%d after a drag ending at y=%d, "
+                           "viewport_height=%d (dpi %d)\n", lv->scroll_y, ey,
+                           lv->viewport_height, dpis[d]);
                 ASSERT_EQ(lv->scroll_y, 0);
-                ASSERT_TRUE(sel_is(tv.lv, &list, "Can"));
+                LRESULT r_top_after = query_word(tv.lv, 0, "Can");
+                ASSERT_EQ(r_top_after, r_top);
+                ASSERT_TRUE(lv->sel_valid);
 
                 /* (b) held below the bottom edge: scrolls, and the selection
                  * reaches text that began below the fold */
@@ -730,8 +759,9 @@ int test_chat_select_win_short_list(void)
                 if (got) {
                     ASSERT_TRUE(strncmp(got, "Can you check disk usage?", 25) == 0);
                     ASSERT_TRUE(strstr(got, "cd /var/log") != NULL);
-                    if (!strstr(got, "cd /var/log"))
-                        printf("  copied \"%s\"\n", got);
+                    if (strncmp(got, "Can you check disk usage?", 25) != 0 ||
+                        !strstr(got, "cd /var/log"))
+                        printf("  copied \"%s\" (dpi %d)\n", got, dpis[d]);
                 }
                 free(got);
             }

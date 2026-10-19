@@ -160,6 +160,9 @@ Invoke-AiSelectCase "ai_panel_select_scrolls" -Height 480 -Body {
     if ($null -ne $w) {
         Assert-True ($w.Y -ge $c.B) `
             "the reply's last line is already visible (y=$($w.Y) < $($c.B)); the window is too tall for this case"
+        $pre = "precondition: the reply's last line is painted below the list (y=$($w.Y) >= $($c.B))"
+    } else {
+        $pre = "precondition: the reply's last line is not painted yet, so it is below the list"
     }
     Set-Clipboard -Value "SENTINEL_SELECT_3"
     Send-NutshellChatDrag -Session $s -FromX ($a.X + 1) -FromY ($a.Y + [int]($a.H / 2)) `
@@ -175,7 +178,7 @@ Invoke-AiSelectCase "ai_panel_select_scrolls" -Height 480 -Body {
     $a2 = Get-NutshellChatWordRect -Session $s -Word "disk" -Item 0
     Assert-True ($null -eq $a2 -or $a2.Y -lt $a.Y) `
         "the list did not scroll ('disk' was at y=$($a.Y), is at y=$(if ($null -ne $a2) { $a2.Y } else { 'not painted' }))"
-    "dragging past the bottom edge auto-scrolled and the selection reached the reply's last line"
+    "dragging past the bottom edge auto-scrolled and the selection reached the reply's last line ($pre)"
 }
 
 Invoke-AiSelectCase "ai_panel_edit_copy_follows_focus" -Body {

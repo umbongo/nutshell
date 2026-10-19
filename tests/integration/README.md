@@ -235,19 +235,27 @@ cases do not assume 96 DPI. `Invoke-AiSelectCase` reads the window's DPI
 `1400 x height` times DPI / 96 (900 for most cases, 480 for the scrolling one),
 clamped to the work area by `Set-NutshellWindowSize`. The PASS/FAIL detail ends
 with what was achieved: `(dpi 192, window client WxH, list WxH)`. Before any
-drag, every point it is aimed at must lie inside the list; if one does not,
-the case fails with `inconclusive at this DPI/work area: list N px tall, 'word'
+drag, every point the copy and across-items cases aim at, and the scroll
+case's start point, must lie inside the list; if one does not, the case
+fails with `inconclusive at this DPI/work area: list N px tall, 'word'
 at y=Y` rather than dragging, because a drag target below the list's bottom
 edge auto-scrolls on every move and the copy would be a different text for
 reasons that say nothing about selection. That message means the work area is
 too small for this DPI, not that selection is broken. `ai_panel_select_scrolls`
-needs the opposite: the reply's last line must be out of sight. An unpainted
-last line (the query answers only for items a paint touched) is accepted; a
-painted one above the bottom edge fails with `the window is too tall for this
+aims its end point below the list on purpose and needs the opposite: the
+reply's last line must be out of sight. An unpainted last line (the query
+answers only for items a paint touched) is accepted; a painted one above the
+bottom edge fails with `the window is too tall for this
 case`. `Send-NutshellChatDrag` also parks the real cursor in the virtual
 screen's bottom-right corner first: when capture changes Windows synthesises a
 `WM_MOUSEMOVE` from the real cursor, and the list must not meet one over the
 window mid-drag (the list also ignores a move without the left button).
+
+Run the suite from a fresh PowerShell window after any change to
+`NutshellIT.psm1`'s `Add-Type` sources: a type already loaded in a console
+cannot be redefined, so `Import-Module -Force` keeps the old one, and the
+module now stops at load (`Assert-NutshellNativeFresh`) with a message to open
+a new window instead of failing a case with "does not contain a method named".
 
 ## AI Assist cases
 

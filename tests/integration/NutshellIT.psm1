@@ -51,7 +51,7 @@ try {
 } catch {
     Write-Warning "UIAutomationClient/Types not available ($($_.Exception.Message)); dialog helpers still work via Win32 control IDs."
 }
-Add-Type @"
+$nutshellNativeSource = @"
 using System;
 using System.Text;
 using System.Runtime.InteropServices;
@@ -256,6 +256,7 @@ public class NutshellNative {
     }
 }
 "@
+Add-Type -TypeDefinition $nutshellNativeSource
 
 [NutshellNative]::SetProcessDPIAware() | Out-Null
 
@@ -263,7 +264,7 @@ public class NutshellNative {
 # 2026-10-18-ai-panel-text-selection-design.md section 7): global atoms name
 # the word CLV_MSG_QUERY_WORD looks for, and SetFocus moves keyboard focus
 # once this thread's input is attached to the app's UI thread.
-Add-Type @"
+$nutshellSelNativeSource = @"
 using System;
 using System.Runtime.InteropServices;
 public static class NutshellSelNative {
@@ -273,6 +274,38 @@ public static class NutshellSelNative {
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
 }
 "@
+Add-Type -TypeDefinition $nutshellSelNativeSource
+
+# Stale-console guard. Add-Type cannot redefine a type that this PowerShell
+# session already loaded: Import-Module -Force re-runs this file, but the old
+# NutshellNative / NutshellSelNative win, and the first call to a member added
+# since fails with "[NutshellSelNative] does not contain a method named
+# 'GetSystemMetrics'" in the middle of a case. So after both Add-Type calls,
+# check that every public static member each source declares exists on the
+# loaded type, and stop at module load with a message that says what to do. A
+# console that loaded this module before a source change must be closed and
+# reopened; there is no way to unload a type from a session.
+function Assert-NutshellNativeFresh {
+    $sources = [ordered]@{
+        NutshellNative    = $nutshellNativeSource
+        NutshellSelNative = $nutshellSelNativeSource
+    }
+    # "public static extern <type> <Name>(" and "public static <type> <Name>(";
+    # the type may be generic or an array (List<string>, byte[]).
+    $declared = '(?m)public\s+static\s+(?:extern\s+)?[\w<>\[\],.]+\s+(\w+)\s*\('
+    foreach ($typeName in $sources.Keys) {
+        $type = $typeName -as [type]
+        foreach ($m in [regex]::Matches($sources[$typeName], $declared)) {
+            $member = $m.Groups[1].Value
+            if ($null -eq $type -or @($type.GetMember($member)).Count -eq 0) {
+                throw ("The loaded type [$typeName] has no member '$member': the harness module changed " +
+                       "since this console loaded it and a loaded type cannot be redefined -- " +
+                       "open a new PowerShell window and run again.")
+            }
+        }
+    }
+}
+Assert-NutshellNativeFresh
 
 $script:CLV_MSG_QUERY_WORD = 0x8051   # WM_APP + 0x51, src/ui/chat_listview.h
 $script:WM_MOUSEMOVE       = 0x0200
@@ -338,10 +371,11 @@ function ConvertTo-NutshellPointLParam {
 }
 
 function Send-NutshellChatDrag {
-    <# Drag in the chat list with sent mouse messages only -- no cursor, no
-       foreground: a button-down at (FromX, FromY), -Steps moves with the
-       button held to (ToX, ToY), -HoldMoves more moves at (ToX, ToY) (each
-       past an edge auto-scrolls the list once), then the button-up there.
+    <# Drag in the chat list with sent mouse messages: no foreground window,
+       but the real cursor is parked in a screen corner (see below). A
+       button-down at (FromX, FromY), -Steps moves with the button held to
+       (ToX, ToY), -HoldMoves more moves at (ToX, ToY) (each past an edge
+       auto-scrolls the list once), then the button-up there.
        Client pixels of the list (Get-NutshellChatWordRect gives them). Sent,
        not posted, so every message is handled -- repaint and hit-test
        included -- before the next one goes. The real cursor is parked in the
@@ -1592,4 +1626,4 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Get-NutshellTabCount, Close-NutshellTab, Get-NutshellWindowText, Get-NutshellChildWindows, `
     Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion, `
     Get-NutshellRegionHash, Get-NutshellWindowDpi, Get-NutshellChatList, Get-NutshellChatWordRect, Send-NutshellChatDrag, `
-    Set-NutshellFocus
+    Set-NutshellFocus, Assert-NutshellNativeFresh
