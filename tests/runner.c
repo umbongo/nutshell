@@ -3234,6 +3234,7 @@ int test_ui_demo_policy_auto_is_executing_with_auto_on(void);
 int test_ui_demo_policy_compact_matches_approval(void);
 int test_ui_demo_policy_for_other_states_is_write_off(void);
 int test_ui_demo_panel_width_only_for_policy_compact(void);
+int test_ui_demo_ansi_swatches(void);
 
 int test_dirty_flags_count_and_fill(void);
 int test_dirty_flags_null_buffer_and_small_max(void);
@@ -6496,6 +6497,7 @@ int main(void) {
     failed += test_ui_demo_policy_compact_matches_approval();
     failed += test_ui_demo_policy_for_other_states_is_write_off();
     failed += test_ui_demo_panel_width_only_for_policy_compact();
+    failed += test_ui_demo_ansi_swatches();
 
     failed += test_dirty_flags_count_and_fill();
     failed += test_dirty_flags_null_buffer_and_small_max();

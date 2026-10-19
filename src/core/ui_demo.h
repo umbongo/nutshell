@@ -37,7 +37,12 @@
  * "policy-auto" and "policy-compact" (2026-10-18, auto-approve button) reuse
  * "executing" and "approval"; the win32 side seeds the tab's policy from
  * ui_demo_policy() and, for "policy-compact", docks the panel at
- * ui_demo_panel_width_px(). Neither is part of "all". */
+ * ui_demo_panel_width_px(). Neither is part of "all".
+ *
+ * "ansi" (2026-10-19, light-theme ANSI contrast) swaps the terminal
+ * transcript for 17 palette swatch lines (indices 0-15, then dim bright
+ * white) and docks the panel at ui_demo_panel_width_px(); the conversation
+ * is the system message only. Not part of "all". */
 
 /* Build the canned conversation, approval queue(s) and terminal text for
  * one demo state.
@@ -80,8 +85,9 @@ const char *const *ui_demo_states(int *count);
 CmdPolicy ui_demo_policy(const char *state);
 
 /* Docked panel width in device pixels for `state` at `dpi`, or 0 for "use
- * the normal default". Only "policy-compact" has one: ns_scale(260, dpi),
- * narrow enough for the status line's compact labels. */
+ * the normal default". "policy-compact" and "ansi" have one:
+ * ns_scale(260, dpi), narrow enough for the status line's compact labels
+ * and wide enough a terminal for the swatch lines. */
 int ui_demo_panel_width_px(const char *state, int dpi);
 
 /* The canned "thinking" block for the chat state's assistant reply.

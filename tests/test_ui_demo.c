@@ -3,6 +3,8 @@
 #include "chat_msg.h"
 #include "ai_panel_layout.h"
 #include "ns_scale.h"
+#include "term.h"
+#include <stdio.h>
 #include <string.h>
 
 /* ===========================================================================
@@ -33,7 +35,7 @@ int test_ui_demo_states_list_ends_in_all(void)
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 16);
+    ASSERT_EQ(count, 17);
     ASSERT_STR_EQ(states[count - 1], "all");
     ASSERT_STR_EQ(states[count - 2], "policy-compact");
     ASSERT_STR_EQ(states[count - 3], "policy-auto");
@@ -41,6 +43,7 @@ int test_ui_demo_states_list_ends_in_all(void)
     ASSERT_STR_EQ(states[count - 5], "cmddetail");
     ASSERT_STR_EQ(states[count - 6], "thinking");
     ASSERT_STR_EQ(states[count - 7], "local");
+    ASSERT_STR_EQ(states[count - 8], "ansi");
     TEST_END();
 }
 
@@ -543,5 +546,65 @@ int test_ui_demo_panel_width_only_for_policy_compact(void)
     ai_status_layout(status, 96, &m, &l);
     ASSERT_EQ(l.compact, 1);
     ASSERT_EQ(l.tier, AI_STATUS_TIER_COMPACT);
+    TEST_END();
+}
+
+/* "ansi" (spec 2026-10-19-light-theme-ansi-contrast-design.md, section 6):
+ * an empty conversation, 17 swatch lines in index order (0-15, then dim
+ * bright white), none wider than 24 columns, no trailing newline so the
+ * cursor ends on line 16 and nothing scrolls, and the narrow dock. */
+int test_ui_demo_ansi_swatches(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    char text[8192];
+    text[0] = '\0';
+    ASSERT_TRUE(ui_demo_state_valid("ansi"));
+    int built = ui_demo_build("ansi", &conv, &approval, &approval2,
+                              text, sizeof(text));
+    ASSERT_EQ(built, 0);
+    if (built != 0) { TEST_END(); }
+    ASSERT_EQ(conv.msg_count, 1);
+    ASSERT_EQ(approval.count, 0);
+    ASSERT_EQ(approval2.count, 0);
+    ASSERT_TRUE(strstr(text, "web-01") == NULL);
+    size_t len = strlen(text);
+    ASSERT_TRUE(len > 2u);
+    ASSERT_TRUE(!(text[len - 2] == '\r' && text[len - 1] == '\n'));
+    int crlf = 0;
+    for (const char *p = strstr(text, "\r\n"); p; p = strstr(p + 2, "\r\n")) crlf++;
+    ASSERT_EQ(crlf, 16);
+
+    Terminal *t = term_init(30, 40, 100);
+    ASSERT_NOT_NULL(t);
+    if (!t) { TEST_END(); }
+    term_process(t, text, len);
+    ASSERT_EQ(t->cursor.row, 16);
+    ASSERT_EQ(t->cursor.col, 11);
+    for (int r = 0; r < 17; r++) {
+        const TermRow *row = t->lines[term_screen_to_phys(t, r)];
+        ASSERT_TRUE(row->len <= 24);
+        char label[4] = { (char)row->cells[0].codepoint, (char)row->cells[1].codepoint,
+                          (char)row->cells[2].codepoint, '\0' };
+        char want[8];
+        if (r < 16) (void)snprintf(want, sizeof(want), "%03d", r);
+        else        (void)snprintf(want, sizeof(want), "dim");
+        ASSERT_STR_EQ(label, want);
+        for (int c = 4; c < 8; c++) {
+            const TermAttr *a = &row->cells[c].attr;
+            ASSERT_EQ(row->cells[c].codepoint, 0x2588u);
+            ASSERT_EQ(a->fg_mode, COLOR_ANSI16);
+            ASSERT_EQ(a->fg_index, (r < 16) ? r : 15);
+            ASSERT_EQ((a->flags & TERM_ATTR_DIM) != 0, r == 16);
+            ASSERT_EQ(a->bg_mode, COLOR_DEFAULT);
+        }
+    }
+    ASSERT_EQ(t->lines[term_screen_to_phys(t, 17)]->len, 0);
+    term_free(t);
+
+    ASSERT_EQ(ui_demo_panel_width_px("ansi", 96), 260);
+    ASSERT_EQ(ui_demo_panel_width_px("ansi", 192), 520);
+    ASSERT_TRUE(!ui_demo_scrolls_to_top("ansi"));
     TEST_END();
 }
