@@ -746,4 +746,78 @@ int test_key_layout_records_ctrl_space(void)
     TEST_END();
 }
 
+/* ---- 8. CreatePseudoConsole flags and the raw tap ---------------------
+ *
+ * Proves two things only: local_pty_open_ex() accepts each of the two flag
+ * values (0 and PSEUDOCONSOLE_RESIZE_QUIRK) -- or the refusal is reported
+ * with a reason and passes, as a missing ConPTY does in case 1 -- and the
+ * raw tap sees the bytes poll() feeds the emulator. It does not prove that
+ * conhost honours the flag; the console probe measures that. */
+int test_local_pty_open_ex_passes_pcon_flags(void)
+{
+    TEST_BEGIN();
+
+    char tmp_dir[MAX_PATH];
+    DWORD tn = GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
+    int tmp_ok = (tn > 0u && tn < sizeof(tmp_dir));
+    if (!tmp_ok) RPT("  GetTempPathA failed or overflowed (%lu)\n", (unsigned long)tn);
+    ASSERT_TRUE(tmp_ok);
+    char tap_path[MAX_PATH * 2];
+    (void)snprintf(tap_path, sizeof(tap_path), "%snsprobe_tap_check.bin",
+                   tmp_dir);
+
+    static const unsigned long FLAGS[2] = { 0ul, PSEUDOCONSOLE_RESIZE_QUIRK };
+    for (int f = 0; f < 2; f++) {
+        LocalShellSpec spec;
+        spec_for(&spec, "cmd.exe /c echo nutshell-flags");
+        char err[512];
+        err[0] = '\0';
+        LocalPty *pty = local_pty_open_ex(&spec, 80, 24, 0u, FLAGS[f],
+                                          err, sizeof(err));
+        if (!pty) {
+            RPT("  [skip] flags 0x%lx: local_pty_open_ex failed: %s\n",
+                FLAGS[f], err);
+            int has_reason = (err[0] != '\0');
+            if (!has_reason)
+                RPT("  flags 0x%lx: the open failed with no reason\n", FLAGS[f]);
+            ASSERT_TRUE(has_reason);
+            continue;
+        }
+        FILE *tap = fopen(tap_path, "w+b");
+        if (!tap) {
+            RPT("  flags 0x%lx: cannot create the tap file %s\n", FLAGS[f],
+                tap_path);
+            local_pty_close(pty);
+        }
+        ASSERT_NOT_NULL(tap);
+        local_pty_set_raw_tap(pty, tap);
+
+        Terminal *term = term_init(24, 80, 200);
+        if (!term) {
+            RPT("  flags 0x%lx: term_init failed\n", FLAGS[f]);
+            local_pty_close(pty);
+            fclose(tap);
+            (void)DeleteFileA(tap_path);
+        }
+        ASSERT_NOT_NULL(term);
+        int seen = wait_for_screen(pty, term, "nutshell-flags", 5000);
+        local_pty_close(pty);
+
+        static char raw[65536];
+        (void)fseek(tap, 0L, SEEK_SET);
+        size_t got = fread(raw, 1u, sizeof(raw) - 1u, tap);
+        raw[got] = '\0';
+        fclose(tap);
+        (void)DeleteFileA(tap_path);
+        int in_tap = contains(raw, got, "nutshell-flags");
+        RPT("  [flags 0x%lx] echo %s; tap holds %u bytes%s\n", FLAGS[f],
+            seen ? "seen" : "NOT seen", (unsigned)got,
+            in_tap ? "" : " (marker NOT in the tap)");
+        term_free(term);
+        ASSERT_TRUE(seen);
+        ASSERT_TRUE(in_tap);
+    }
+    TEST_END();
+}
+
 #endif /* _WIN32 */

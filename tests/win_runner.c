@@ -26,6 +26,7 @@ int test_local_pty_records_key_mapping(void);
 int test_local_pty_records_fullscreen_modes(void);
 int test_local_pty_powershell_settles_after_command_error(void);
 int test_key_layout_records_ctrl_space(void);
+int test_local_pty_open_ex_passes_pcon_flags(void);
 int nspty_key_dump_main(void);
 
 /* ---- why the ConPTY cases run in a re-executed child --------------------
@@ -66,7 +67,7 @@ int nspty_key_dump_main(void);
 /* test_local_pty_records_key_mapping runs this executable again, under a
  * pseudo-console, as the program whose console input it records. */
 #define KEY_DUMP_FLAG  "--dump-keys"
-#define PTY_CASE_COUNT 7
+#define PTY_CASE_COUNT 8
 
 struct PtyCase { const char *name; int (*fn)(void); };
 
@@ -86,6 +87,8 @@ static int run_pty_cases(void)
           test_local_pty_powershell_settles_after_command_error },
         { "test_key_layout_records_ctrl_space",
           test_key_layout_records_ctrl_space },
+        { "test_local_pty_open_ex_passes_pcon_flags",
+          test_local_pty_open_ex_passes_pcon_flags },
     };
     int failed = 0;
     for (size_t i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {

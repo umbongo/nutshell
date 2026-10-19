@@ -1146,7 +1146,8 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
         } else {
             int cols = (s->term && s->term->cols > 0) ? s->term->cols : 80;
             int rows = (s->term && s->term->rows > 0) ? s->term->rows : 24;
-            pty = local_pty_open_ex(spec, cols, rows, s->log_id, err, sizeof(err));
+            pty = local_pty_open_ex(spec, cols, rows, s->log_id, 0ul,
+                                    err, sizeof(err));
         }
     } else {
         (void)snprintf(err, sizeof(err), "%s",
