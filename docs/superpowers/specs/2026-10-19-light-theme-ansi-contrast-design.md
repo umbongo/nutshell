@@ -36,6 +36,15 @@ font only, so this stays palette yellow `0xCCAA33`). `Write-Host -ForegroundColo
 as `93`. So the problem is not only yellow: on a light theme bright white, bright cyan, bright
 green and grey are all close to invisible too.
 
+**Verified 2026-10-20 (Windows PowerShell 5.1).** The maintainer's capture (section 5.0; Windows
+PowerShell 5.1, build 26100, PSReadLine 2.0.0, Nutshell v1.2.41 at 192 DPI) confirms the 16-colour
+claims for 5.1: command tokens arrive as `93`, arguments and operators `37`, parameters `90`,
+members `97`, a variable `92`, and the error record as 256-colour `38;5;9`, all on the default
+background, with no inline prediction and no SGR 2 anywhere. PowerShell 7 remains unverified:
+there is no `pwsh` on the maintainer's box (`Get-Command pwsh` printed nothing), so the
+prediction's `97;2;3`/`38;5;238`, `$PSStyle`'s `33;1` and `Write-Host`'s `93` are still PSReadLine's
+and PowerShell 7's documented defaults, tested only with synthetic bytes.
+
 **Measured** (WCAG 2.x ratio, `theme_contrast()` semantics, computed by compiling
 `src/core/theme.c` natively against the real `PALETTE` in `src/term/parser.c` and the real
 `terminal_bg` values in `src/core/ui_theme.c`):
@@ -282,6 +291,15 @@ Then:
   its `>> ` continuation-prompt test stay: they test prompt detection, which the capture does not
   contain.
 
+**Done (2026-10-20).** The maintainer captured a local Windows PowerShell 5.1 tab (PSReadLine
+2.0.0, no predictions; log `.superpowers/capture-ps51-20261020.log`, git-ignored). Two fixtures
+are decoded from it, `tests/fixtures/conpty_ps51_tab_completion.bin` (log lines 15-51) and
+`conpty_ps51_commands.bin` (lines 90-112); the licence output in lines 82-89 is excluded. No
+PowerShell 7 capture exists or will come (no `pwsh` on the maintainer's box), so 5.3's dim design
+is implemented as specified but not confirmed against real bytes: the PS7 prediction is covered by
+a synthetic test of both `97;2;3` and `38;5;238`, marked unverified. With `38;5;238` the prediction
+would paint `444444`, above 4.5:1 already and so as sent: apart from typed text but darker than it.
+
 ### 5.1 The walk, generalised (`src/core/theme.c`)
 
 ```c
@@ -467,13 +485,16 @@ come from `ui_theme_resolve()` of the named theme, so the tests use the shipped 
   `TERM_DRAW_SELECTED` swaps again; a selected dim cell is dimmed and then swapped.
 - Theme switch: one stored `ESC[93m` cell resolves to `FFFF55` with Onyx Synapse's table and
   `727223` with Onyx Light's, with no re-parse (the scrollback property).
-- End to end: the 5.0 capture is fed in, and the prediction's cells resolve to a colour distinct
-  from the typed-token cells on both light themes.
+- End to end (`tests/test_term_conpty.c`): the two 5.1 fixtures are fed in; the command token
+  (`93`), argument (`37`), parameter (`90`) and error (`38;5;9`) cells paint floored on both light
+  themes and raw on the dark ones. Synthetic and unverified: a PS7 prediction in `97;2;3` and in
+  `38;5;238` paints a colour distinct from the typed token on both light themes (the dim one at
+  least 10 L* lighter).
 
 **`tests/test_color.c` / `tests/test_term.c`**: asserts that `ESC[33m` stores `fg_index == 3`,
 `ESC[93m` 11, `ESC[43m` `bg_index == 3`, `ESC[103m` 11; existing RGB asserts unchanged. The
-existing `93m` fixture and `test_term_at_prompt_powershell_continuation` stay; the capture is a
-second fixture.
+existing `93m` fixture and `test_term_at_prompt_powershell_continuation` stay; the 5.1 capture's
+two fixtures are added beside it.
 
 **`tests/test_ui_theme.c`**: the per-theme values by name: Onyx Light 4.5, Moss & Mist 4.5, Onyx
 Synapse 0, Sage & Sand 0; each light theme's `terminal_fg` on `terminal_bg` clears its ratio,
