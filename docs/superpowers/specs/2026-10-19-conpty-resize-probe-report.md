@@ -27,9 +27,16 @@ Each scenario runs twice, `flags0` (what `local_pty_open()` passes today) and `q
   section 1 describes this conhost for that scenario.
 - `after the resize: conhost vs today's model before its repaint`: the same buffer against
   Nutshell's bottom-anchored model, snapshotted before any post-resize byte reached it.
-- `VERDICT rule=... model=...`: the two comparisons in one line.
+- `VERDICT rule=... model=...`: the two comparisons in one line. `rule=N/A` means the rule could
+  not be computed for the scenario. No `VERDICT` line at all means conhost's dump never showed
+  the new size (the case prints that instead, and fails on Windows).
+- `AGREES` includes the cursor: `cpx_view_diff` counts it. The `cursor want r,c got r,c` line
+  shows the cursor on its own.
 - `post-resize bytes`: everything ConPTY sent after the resize, with ESC, `\r` and `\n` shown.
 - `after the repaint: conhost vs the model`: whether the repaint brought the model into line.
+- `fixture tests/fixtures/conpty_resize_<scenario>.bin: written` or `NOT written (a check
+  failed)`: printed for the `flags0` runs when `NSPROBE_RECORD=1`; it is the evidence for
+  "Fixtures recorded" below.
 
 ## Results
 

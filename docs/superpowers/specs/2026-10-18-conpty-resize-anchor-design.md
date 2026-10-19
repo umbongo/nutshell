@@ -207,7 +207,15 @@ Both change SSH-visible behaviour, and are general bug fixes with their own regr
   logical line is copied, not after the last one.
 - **Cursor past the content.** In `:164-167`, a cursor at `cur_col >= cell_limit` keeps its
   distance past the content: `new_cursor_col = cur_new_col + (cur_col - cell_limit)`, clamped
-  to `new_cols - 1`.
+  to `new_cols - 1`. The clamp never lands on a content cell: a cursor at or past the content
+  whose row, after reflow, ends exactly at `new_cols` keeps `col == new_cols`, the model's
+  pending-wrap state as the parser leaves it after a full row (`cursor_after_full_row` in
+  `term_reflow_buffer`, `buffer.c`). Without it the next character overwrites the row's last
+  cell (`0123456789`, a height change, `X` gives `012345678X`), for SSH sessions too, and the
+  identity claim below fails. Any other column at or past `new_cols` is clamped to
+  `new_cols - 1`, where the content ends before the cell, so the cell is blank (`PS C:\>`
+  with the cursor at column 8, narrowed to 8 columns, gives column 7). Decided on 2026-10-19
+  during implementation (rulings P1, A and B).
 
 With these, a sequence of resizes that ends at its starting size, without an overflow in
 between, leaves a top-mode model unchanged.
@@ -503,6 +511,17 @@ Two critique rounds are the ceiling; these remain and go to the draft PR as they
     supported build sends it, or ever `\e[3J`, is unverified. 1.7 is harmless either way.
 11. **Section 2 changes SSH sessions** (no blank row at exact width, cursor kept past the
     content): bug fixes, but visible; confirm they belong in this change.
+12. **The cursor's distance past the content at an exact width** (decided 2026-10-19, section
+    2): for a cursor past the content by d > 0 whose row ends exactly at `new_cols`, the
+    distance is lost: the next character goes to the next row's column 0, not column d, so a
+    round trip through that width does not restore the column. The alternative is a new wrapped
+    row with the cursor at column d: it restores the round trip and costs a row.
+13. **Bottom mode's cursor-row clamp** (`buffer.c`, `new_cursor_row < 0` -> 0, about lines
+    226-234): when content below the cursor pushes the cursor's own row off the top, the cursor
+    is moved onto another row keeping its column, so the next character overwrites a cell or,
+    from a pending-wrap column on a row that is not full, wraps and sets the next row's
+    `wrapped` flag. Pre-existing in kind; it stays the SSH path, and top mode replaces it for
+    local sessions.
 
 ### Maintainer decisions (2026-10-19)
 
