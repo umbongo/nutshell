@@ -181,7 +181,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/core/term_extract.c \
                    src/core/dlog.c src/core/dlog_format.c src/core/dlog_files.c \
                    src/core/dlog_types.c src/core/dlog_snapshot.c src/core/dlog_sys.c \
-                   tests/test_icons.c tests/test_local_pty.c tests/win_runner.c
+                   tests/test_icons.c tests/test_local_pty.c tests/conpty_expect.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \
