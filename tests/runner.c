@@ -1205,6 +1205,10 @@ int test_theme_blend_t0_is_a(void);
 int test_theme_blend_t1_is_b(void);
 int test_theme_blend_midpoint(void);
 int test_theme_blend_clamps_t(void);
+int test_theme_min_contrast_unchanged_when_clear_or_off(void);
+int test_theme_min_contrast_walks_darker_on_light_bg(void);
+int test_theme_min_contrast_falls_back_to_better_extreme(void);
+int test_theme_role_color_outputs_unchanged(void);
 
 /* test_vt_sequences.c */
 int test_vt_osc_title_0(void);
@@ -4443,6 +4447,10 @@ int main(void) {
     failed += test_theme_blend_t1_is_b();
     failed += test_theme_blend_midpoint();
     failed += test_theme_blend_clamps_t();
+    failed += test_theme_min_contrast_unchanged_when_clear_or_off();
+    failed += test_theme_min_contrast_walks_darker_on_light_bg();
+    failed += test_theme_min_contrast_falls_back_to_better_extreme();
+    failed += test_theme_role_color_outputs_unchanged();
 
     printf("\n--- Scroll Region ---\n");
     failed += test_sr_init_defaults();
