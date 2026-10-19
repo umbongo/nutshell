@@ -7,6 +7,8 @@
  * Pure C, no Win32 dependency — fully testable on Linux.
  */
 
+#include "term_colors.h"
+
 #define NUM_UI_THEMES 4
 
 typedef struct {
@@ -45,6 +47,8 @@ typedef struct {
     unsigned int border;        /* Subtle borders and separators */
     unsigned int terminal_fg;   /* Terminal default foreground */
     unsigned int terminal_bg;   /* Terminal default background */
+    double terminal_min_contrast; /* Floor for indexed terminal text on terminal_bg
+                                   * (WCAG ratio; 0 = off: raw palette, SGR 2 ignored) */
     unsigned int success;       /* Intent: success / allow */
     unsigned int warning;       /* Intent: warning / write commands */
     unsigned int danger;        /* Intent: danger / deny / critical */
@@ -95,6 +99,11 @@ typedef struct {
      * (e.g. the "READ" safety tag) rather than only used as text (Task 10). */
     unsigned int text_dim_label;
     unsigned int terminal_fg, terminal_bg;
+    /* The terminal's colour tables for this theme (src/core/term_colors.h):
+     * built from terminal_fg/terminal_bg/terminal_min_contrast by every
+     * ui_theme_resolve(), for every theme. renderer.c paints every cell
+     * through term_colors_resolve(&ns_tokens()->term, ...). */
+    TermPalette term;
     ThemeChatColors chat;   /* copied through unchanged for the migration window */
     int is_dark;
 } ThemeTokens;

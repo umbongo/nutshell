@@ -33,6 +33,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .border       = 0x2A2A2A,
         .terminal_fg  = 0xE0E0E0,
         .terminal_bg  = 0x121212,
+        .terminal_min_contrast = 0.0, /* dark: today's palette, byte for byte */
         .success      = 0x21883B, /* darkened from indicator_green 0x34C759 */
         .warning      = 0x917308, /* darkened from indicator_yellow 0xFFCC00 */
         .danger       = 0xE03229, /* darkened from indicator_red 0xFF3B30 */
@@ -75,6 +76,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .border       = 0xDCDCE0,
         .terminal_fg  = 0x1D1D1F,
         .terminal_bg  = 0xF5F5F7,
+        .terminal_min_contrast = 4.5, /* indexed text floored to WCAG AA */
         .success      = 0x1C883B,
         .warning      = 0xB8860B, /* reads via text_main label (5.17:1), not white */
         .danger       = 0xD32F2F,
@@ -100,6 +102,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .border       = 0x3F4138,
         .terminal_fg  = 0xEAE7DC,
         .terminal_bg  = 0x2B2D24,
+        .terminal_min_contrast = 0.0, /* dark: today's palette, byte for byte */
         .success      = 0x607F46, /* darkened from indicator_green 0x8FBC6A */
         .warning      = 0x90722F, /* darkened from indicator_yellow 0xD4AA4A */
         .danger       = 0xC05738, /* darkened from indicator_red 0xC75A3A */
@@ -126,6 +129,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .border       = 0xD5D8D3,
         .terminal_fg  = 0x354F52,
         .terminal_bg  = 0xF1F3F0,
+        .terminal_min_contrast = 4.5, /* indexed text floored to WCAG AA */
         .success      = 0x2C8654, /* darkened from indicator_green 0x52B788 */
         .warning      = 0x9A6F08, /* darkened from indicator_yellow 0xE9C46A */
         .danger       = 0xC1440E, /* darkened from indicator_red 0xE76F51 */
@@ -230,6 +234,8 @@ void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out)
 
     out->terminal_fg = base->terminal_fg;
     out->terminal_bg = base->terminal_bg;
+    term_palette_build(&out->term, base->terminal_fg, base->terminal_bg,
+                       base->terminal_min_contrast);
 
     out->chat = base->chat;
 }

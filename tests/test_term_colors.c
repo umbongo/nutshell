@@ -9,6 +9,7 @@
 #include "term.h"
 #include "term_colors.h"
 #include "theme.h"
+#include "ui_theme.h"
 #include <math.h>
 #include <string.h>
 
@@ -323,3 +324,63 @@ int test_term_colors_null_args_are_noops(void)
     ASSERT_EQ(bg, 2u);
     TEST_END();
 }
+
+
+/* ---- The shipped tables (ui_theme_resolve(), section 5.5) ------------- */
+
+/* Every theme's resolved tokens carry a populated table: floored on the
+ * light themes, a raw copy on the dark ones. */
+int test_term_colors_every_theme_has_its_table(void)
+{
+    TEST_BEGIN();
+    static ThemeTokens tok;
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const ThemeColors *base = ui_theme_get(i);
+        memset(&tok, 0, sizeof(tok));
+        ui_theme_resolve(base, &tok);
+        ASSERT_EQ(tok.term.default_fg, base->terminal_fg);
+        ASSERT_EQ(tok.term.default_bg, base->terminal_bg);
+        ASSERT_TRUE(tok.term.min_contrast == base->terminal_min_contrast);
+        ASSERT_TRUE(tok.term.fg_on_default[11] != 0u);
+        for (int k = 0; k < 256; k++) {
+            uint32_t v = tok.term.fg_on_default[k];
+            if (base->terminal_min_contrast > 0.0) {
+                ASSERT_TRUE(theme_contrast(v, base->terminal_bg) >= base->terminal_min_contrast);
+            } else {
+                ASSERT_EQ(v, color256_to_rgb((uint8_t)k));
+            }
+        }
+    }
+    static const struct { const char *name; int index; uint32_t want; } named[] = {
+        { "Onyx Synapse", 11, 0xFFFF55u }, { "Onyx Light", 11, 0x727223u },
+        { "Onyx Light",    3, 0x846E1Bu }, { "Moss & Mist", 3, 0x7E6919u },
+        { "Moss & Mist",  11, 0x727223u }, { "Sage & Sand", 11, 0xFFFF55u },
+    };
+    for (size_t n = 0; n < sizeof(named) / sizeof(named[0]); n++) {
+        ui_theme_resolve(ui_theme_get(ui_theme_find(named[n].name)), &tok);
+        ASSERT_EQ(tok.term.fg_on_default[named[n].index], named[n].want);
+    }
+    TEST_END();
+}
+
+/* One stored cell, parsed once, painted with each theme's table: what
+ * makes scrollback re-colour on a theme switch with no re-parse. */
+int test_term_colors_theme_switch_recolours_stored_cell(void)
+{
+    TEST_BEGIN();
+    static ThemeTokens os, ol;
+    ui_theme_resolve(ui_theme_get(ui_theme_find("Onyx Synapse")), &os);
+    ui_theme_resolve(ui_theme_get(ui_theme_find("Onyx Light")), &ol);
+    TermCell c = cell_of("\x1b[93mX", 0);
+    uint32_t fg = 0u, bg = 0u;
+    term_colors_resolve(&os.term, &c, 0u, &fg, &bg);
+    ASSERT_EQ(fg, 0xFFFF55u);
+    ASSERT_EQ(bg, 0x121212u);
+    term_colors_resolve(&ol.term, &c, 0u, &fg, &bg);
+    ASSERT_EQ(fg, 0x727223u);
+    ASSERT_EQ(bg, 0xF5F5F7u);
+    term_colors_resolve(&os.term, &c, 0u, &fg, &bg);
+    ASSERT_EQ(fg, 0xFFFF55u);
+    TEST_END();
+}
+

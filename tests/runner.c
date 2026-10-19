@@ -1137,6 +1137,8 @@ int test_term_colors_dim_cursor_cell_is_undimmed(void);
 int test_term_colors_dim_blanks_are_undimmed(void);
 int test_term_colors_swaps(void);
 int test_term_colors_null_args_are_noops(void);
+int test_term_colors_every_theme_has_its_table(void);
+int test_term_colors_theme_switch_recolours_stored_cell(void);
 int test_term_utf8(void);
 int test_term_utf8_reject_overlong_2byte(void);
 int test_term_utf8_reject_overlong_3byte(void);
@@ -1911,6 +1913,7 @@ int test_ui_theme_switch_null_falls_back(void);
 int test_ui_theme_switch_colors_consistent(void);
 int test_ui_theme_switch_preserves_name(void);
 int test_ui_theme_dark_themes_have_light_text(void);
+int test_ui_theme_terminal_min_contrast_by_name(void);
 
 /* test_display_buffer.c */
 int test_dispbuf_init_zeroed(void);
@@ -4363,6 +4366,8 @@ int main(void) {
     failed += test_term_colors_dim_blanks_are_undimmed();
     failed += test_term_colors_swaps();
     failed += test_term_colors_null_args_are_noops();
+    failed += test_term_colors_every_theme_has_its_table();
+    failed += test_term_colors_theme_switch_recolours_stored_cell();
     failed += test_term_utf8();
     failed += test_term_utf8_reject_overlong_2byte();
     failed += test_term_utf8_reject_overlong_3byte();
@@ -4966,6 +4971,7 @@ int main(void) {
     failed += test_ui_theme_switch_colors_consistent();
     failed += test_ui_theme_switch_preserves_name();
     failed += test_ui_theme_dark_themes_have_light_text();
+    failed += test_ui_theme_terminal_min_contrast_by_name();
 
     printf("\n--- Display Buffer ---\n");
     failed += test_dispbuf_init_zeroed();

@@ -280,3 +280,25 @@ int test_ui_theme_dark_themes_have_light_text(void) {
     }
     TEST_END();
 }
+
+/* The terminal's contrast floor, by theme name (spec 2026-10-19-light-theme-
+ * ansi-contrast-design.md, section 5.5 and the maintainer's decision 1):
+ * the light themes floor indexed text at 4.5, the dark ones not at all.
+ * Each floored theme's own default text already clears its floor, which is
+ * what lets the resolver leave the default foreground alone. */
+int test_ui_theme_terminal_min_contrast_by_name(void) {
+    TEST_BEGIN();
+    static const struct { const char *name; double floor; } want[] = {
+        { "Onyx Synapse", 0.0 }, { "Onyx Light", 4.5 },
+        { "Sage & Sand", 0.0 },  { "Moss & Mist", 4.5 },
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        const ThemeColors *t = ui_theme_get(ui_theme_find(want[i].name));
+        ASSERT_STR_EQ(t->name, want[i].name);
+        ASSERT_TRUE(t->terminal_min_contrast == want[i].floor);
+        if (want[i].floor > 0.0) {
+            ASSERT_TRUE(theme_contrast(t->terminal_fg, t->terminal_bg) >= want[i].floor);
+        }
+    }
+    TEST_END();
+}
