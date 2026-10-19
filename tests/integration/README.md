@@ -37,7 +37,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 |---|---|
 | `cases\10-terminal.ps1` | connect, Ctrl+C, log filename, paste x2, PTY resize, Page Up, holds position, inactive-tab resize |
 | `cases\20-ai.ps1` | the five key-gated `ai_*` cases + `ai_panel_opens_without_key` + `ai_auto_approve_critical_asks_first` |
-| `cases\30-ui-demo.ps1` | `ui_gallery`, `approval_card_run_selected_settles`, `helpers_theme_pixel_matches_token` |
+| `cases\30-ui-demo.ps1` | `ui_gallery`, `approval_card_run_selected_settles`, `helpers_theme_pixel_matches_token`, `helpers_ansi_contrast_floor`, `helpers_theme_switch_repaints` |
 | `cases\40-helpers.ps1` | the other `helpers_*` cases |
 | `cases\50-window.ps1` | launch/window/shutdown/menu (`LAUNCH-*`, `RESIZE-1`, `WINDOW-*`, `CLOSE-1`, `MENU-1`) |
 | `cases\60-tabs-logging.ps1` | tabs (`TABS-*`) and logging (`LOG-*`) |
@@ -177,7 +177,7 @@ touches before marking its pull request ready.
 | `ai_commands_run_one_at_a_time` | two `[EXEC]` blocks (`sleep 6 && echo FIRST_DONE`, then `echo SECOND_DONE`) run in order: the second command's echoed text only reaches the log after `FIRST_DONE`'s output, proving commands are gated on the shell prompt rather than burst-sent |
 | `ai_write_command_held_then_runs_after_allow` | a prompted `touch` is held back while the level is Read (Auto-approve on), then runs via "Run N selected" once the level is raised to Write with Auto-approve off |
 | `ai_prompt_while_approval_pending` | a second prompt gets a normal reply while the first prompt's command batch sits pending (default policy, Auto-approve off); "Run N selected" with `lParam` 0 (the integration-harness "oldest pending batch" convention) then still runs the first batch's command — see docs/superpowers/specs/2026-09-09-pending-command-batches.md |
-| `ui_gallery` | contact sheet of every `--ui-demo` state x theme (15 states x 4 themes = 60 captures); no SSH host or AI key needed |
+| `ui_gallery` | contact sheet of every `--ui-demo` state x theme (16 states x 4 themes = 64 captures); no SSH host or AI key needed |
 | `approval_card_run_selected_settles` | "Run N selected" on a live approval card (`--ui-demo=approval`) settles without crashing; no SSH host or AI key needed |
 | `ai_panel_opens_without_key` | the panel opens straight into the no-key empty state with `ai_api_key` empty, no dialog; no AI key needed despite the `ai_` prefix |
 | `ai_auto_approve_critical_asks_first` | with no key: Auto-approve at Critical raises a Yes/No box; a second toggle during the box is ignored; No leaves Critical/off; Yes turns it on; retired id 4040 does nothing (spec 2026-10-18 section 2) |
@@ -185,6 +185,8 @@ touches before marking its pull request ready.
 | `helpers_session_manager_opens_and_lists_profile` | `Open-NutshellSessionManager` + `Wait-NutshellDialog` find the dialog, `Get-NutshellListItems` lists the generated profile, `Close-NutshellDialog -Button Cancel` closes it |
 | `helpers_settings_opens_every_page` | `Open-NutshellSettings`/`Select-NutshellSettingsPage` select and capture all nine Settings pages, `Close-NutshellDialog -Button Cancel` closes it |
 | `helpers_theme_pixel_matches_token` | `--ui-demo=chat --theme "Onyx Light"`; a sampled background pixel matches `Get-NutshellThemeColor`'s `bg_primary` within tolerance; no SSH host or AI key needed |
+| `helpers_ansi_contrast_floor` | `--ui-demo=ansi`, window at the work area's full height, debugging on with `render` at Trace: the cell size, grid and origin come from the last `render.draw` event (`char_w`, `char_h`, `rows`, `cols`, `x`, `y`); FAIL with the grid in the detail if it is under 17 x 24 or lines 0/1 are not `000000`/`CC3333`. On Onyx Light the 16 palette swatches each read at >= 4.4:1 against `terminal_bg`, line 11 (SGR 93) is `727223` and line 16 (dim 97) is at least 10 L* lighter than line 15; on Onyx Synapse line 11 is the raw `FFFF55` and line 16 `FFFFFF` (spec `2026-10-19-light-theme-ansi-contrast-design.md` section 6); no SSH host or AI key needed |
+| `helpers_theme_switch_repaints` | `--ui-demo=ansi --theme "Onyx Synapse"`, then Settings > Appearance > Onyx Light > Save: lines 11 and 15, far from the cursor, are `727223`/`6C6C6C`, not the old theme's `FFFF55`/`FFFFFF` (the forced repaint after a theme change); no SSH host or AI key needed |
 | `launch_main_window_no_dialog` | (`LAUNCH-1`) `-nc` launch: `Nutshell_Window` appears, no dialog within 3s, `IDM_FILE_EXIT` → exit code 0 within 5s |
 | `launch_without_config_writes_defaults` | (`LAUNCH-2`) no `nutshell.config`: `config_load()` returns `NULL`, so a "Configuration Warning" MessageBox appears (not mentioned in the original plan — documented in the case); dismissed, no config is written until Settings › Save, then it exists with default keys |
 | `launch_with_corrupt_config_survives` | (`LAUNCH-3`) same Configuration Warning path for a truncated-JSON config; app keeps running with defaults, no crash |

@@ -521,7 +521,9 @@ index order.
   `New-NutshellTestEnv -Settings`), sets the window to the work area's full height, reads `rows=`,
   `cols=`, `char_w=` and `char_h=` from the last `render.draw` event, and refuses to sample (FAIL
   with the grid in the detail) unless `rows >= 17` and `cols >= 24`. The terminal's top-left is
-  the tab strip's bottom-left (`Get-NutshellTabStripRegion`); line N's sample is the centre of
+  the tab strip's top-left (the client origin; the strip sits at client 0,0) plus the `x=` and
+  `y=` the same event logs (`renderer_draw()` starts at the left margin, not at 0; corrected by
+  the plan, which adds both fields); line N's sample is the centre of
   its second block cell: x = left + 5.5 * `char_w`, y = top + (N + 0.5) * `char_h`. The centre
   pixel of a full block has no anti-aliasing. If the plan finds the log fields or the origin
   unreliable, the case degrades to the gallery capture (visual check) plus the native tests, and
