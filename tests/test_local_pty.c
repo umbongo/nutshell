@@ -942,6 +942,16 @@ int nsprobe_console_main(const char *scenario, const char *dump_path)
     return 3;
 }
 
+/* The size= line of the last dump probe_read_dump() completed: the screen
+ * buffer's size and the window rectangle, which CpxView (the window only)
+ * does not carry. A buffer taller than its window means the buffer is not
+ * the viewport. */
+static struct {
+    int buf_cols, buf_rows;
+    int win_left, win_top, win_right, win_bottom;
+    int cursor_row, cursor_col;      /* buffer coordinates */
+} probe_geom;
+
 /* Dump n from the probe's file: the window's rows into view, the cursor
  * relative to the window's top. Returns 1 once that dump is complete. */
 static int probe_read_dump(const char *path, int n, CpxView *view)
@@ -982,12 +992,20 @@ static int probe_read_dump(const char *path, int n, CpxView *view)
         }
         if (strncmp(line, "END ", 4) == 0) {
             done = (atoi(line + 4) == n);
+            if (done) {
+                probe_geom.buf_cols = bx;
+                probe_geom.buf_rows = by;
+                probe_geom.win_left = wl;
+                probe_geom.win_top = wt;
+                probe_geom.win_right = wr;
+                probe_geom.win_bottom = wb;
+                probe_geom.cursor_row = cy;
+                probe_geom.cursor_col = cx;
+            }
             break;
         }
     }
     fclose(f);
-    (void)bx;
-    (void)by;
     return done;
 }
 
@@ -1031,6 +1049,20 @@ static void model_view(const Terminal *term, CpxView *v)
         while (k > 0 && v->text[r][k - 1] == ' ') k--;
         v->text[r][k] = '\0';
     }
+}
+
+/* The geometry of the dump probe_wait_dump() just read, labelled so the
+ * report can answer "is conhost's buffer the viewport?":
+ *   [who] dump N: conhost buffer=40x12 window=40x12 (rect 0,0,39,11) ... */
+static void report_geometry(const char *who, int n)
+{
+    RPT("  [%s] dump %d: conhost buffer=%dx%d window=%dx%d "
+        "(rect left=%d top=%d right=%d bottom=%d) cursor=%d,%d\n", who, n,
+        probe_geom.buf_cols, probe_geom.buf_rows,
+        probe_geom.win_right - probe_geom.win_left + 1,
+        probe_geom.win_bottom - probe_geom.win_top + 1,
+        probe_geom.win_left, probe_geom.win_top, probe_geom.win_right,
+        probe_geom.win_bottom, probe_geom.cursor_row, probe_geom.cursor_col);
 }
 
 /* Print two views side by side; returns cpx_view_diff(). */
@@ -1290,6 +1322,7 @@ static int probe_scenario(const CpxScenario *s, unsigned long flags,
     int ok0 = probe_wait_dump(dump_path, 0, &got0, 10000);
     if (!ok0) RPT("  [%s] dump 0 never appeared in %s\n", who, dump_path);
     ASSERT_TRUE(ok0);
+    if (ok0) report_geometry(who, 0);
     drain(pty, term, 800);
     if (ok0 && cpx_initial_view(s, &want0) == 0)
         (void)report_views(who, "before the resize: conhost vs scenario layout",
@@ -1335,6 +1368,7 @@ static int probe_scenario(const CpxScenario *s, unsigned long flags,
         Sleep(300);
         (void)local_pty_write(pty, "D", 1);
         if (!probe_wait_dump(dump_path, n, &got1, 3000)) break;
+        report_geometry(who, n);
         n++;
         ok1 = (got1.rows == s->new_rows && got1.cols == s->new_cols);
     }

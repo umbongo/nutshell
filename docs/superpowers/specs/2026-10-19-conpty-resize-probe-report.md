@@ -13,6 +13,11 @@ report.
 Each scenario runs twice, `flags0` (what `local_pty_open()` passes today) and `quirk`
 (`PSEUDOCONSOLE_RESIZE_QUIRK`, 0x2). Per run the case prints:
 
+- `dump N: conhost buffer=BWxBH window=WWxWH (rect ...) cursor=...`: printed once per dump
+  the case reads (dump 0 before the resize, dump 1 and up after it; a retry prints another).
+  `buffer=` is the screen buffer's size, `window=` the visible rectangle's, and the later
+  comparison lines use the window only. `buffer` equal to `window` means conhost's buffer is
+  the viewport.
 - `before the resize: conhost vs scenario layout`: conhost's buffer once the probe child has
   written the scenario. It should say AGREES. If it does not, the scenario itself did not
   render as `tests/conpty_expect.c` assumes, and the run's later lines cannot be read against
@@ -43,8 +48,8 @@ Each scenario runs twice, `flags0` (what `local_pty_open()` passes today) and `q
 
 1. **conhost's resize behaviour** (grow keeps the top line; a shrink drops from the top only as
    far as the cursor needs; a width change rewraps; the buffer is the viewport). Answered by the
-   rule verdicts for grow, shrink_bottom and width, and by the dump's `size=` line (a buffer
-   taller than the window would mean the buffer is not the viewport). Answer:
+   rule verdicts for grow, shrink_bottom and width, and by the `dump N: conhost buffer=... window=...`
+   output lines (a buffer taller than its window would mean the buffer is not the viewport). Answer:
 2. **Content below the cursor on a shrink.** Answered by shrink_below. AGREES means conhost
    scrolls out from the top and section 1.3 step 5 stands. If conhost instead shows rows
    `<01>` to `<06>`, `P>` and one blank row with the cursor on row 6, it dropped from the bottom
