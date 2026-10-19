@@ -222,3 +222,34 @@ int test_md_table_fit_columns_null_safe(void)
     ASSERT_EQ(out[0], -1);
     TEST_END();
 }
+
+int test_md_table_drawn_cols_follows_separator_then_header(void)
+{
+    TEST_BEGIN();
+    int has_sep = -1;
+    /* a separator row wins over the header's own cell count */
+    int n = md_table_drawn_cols("| a | b | c |", "|---|---|", &has_sep);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(has_sep, 1);
+    /* no separator: the header's count, second row is a body row */
+    n = md_table_drawn_cols("| a | b | c |", "| x | y |", &has_sep);
+    ASSERT_EQ(n, 3);
+    ASSERT_EQ(has_sep, 0);
+    n = md_table_drawn_cols("| a | b |", NULL, &has_sep);
+    ASSERT_EQ(n, 2);
+    ASSERT_EQ(has_sep, 0);
+    TEST_END();
+}
+
+int test_md_table_drawn_cols_caps_and_floors(void)
+{
+    TEST_BEGIN();
+    int n = md_table_drawn_cols(
+        "|1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|", NULL, NULL);
+    ASSERT_EQ(n, MD_TABLE_MAX_COLS);
+    n = md_table_drawn_cols("", NULL, NULL);    /* nothing to count: one */
+    ASSERT_EQ(n, 1);
+    n = md_table_drawn_cols(NULL, NULL, NULL);
+    ASSERT_EQ(n, 1);
+    TEST_END();
+}

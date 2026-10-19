@@ -213,6 +213,16 @@ Done, in order (details in the commit messages and the specs named):
   and connection-thread lifetimes refcounted (double free and use-after-free
   fixed); platform detection anchored and only ever tightens after resolution.
 
+- Character selection in the AI Assist panel, v1.2.38
+  (`2026-10-18-ai-panel-text-selection-design.md`, plan
+  `docs/superpowers/plans/2026-10-18-ai-panel-text-selection.md`): drag,
+  double- and triple-click select characters across messages; Ctrl+C, Edit >
+  Copy and the menu copy the visible text; every item is laid out by
+  md_render, which records runs and draws the highlight. Two spec rules
+  changed on the prototype's evidence: a list marker copies only when the
+  range covers its bytes, and the user bubble's highlight uses its text
+  colour (the focus tint is invisible on the accent bubble).
+
 Open, in priority order:
 - [ ] AI panel: commands of a **finished** batch have no details popup and no copy icon
       after a session switch. `cmd_batch_remove` drops the batch, so `chat_rebuild_display`
@@ -221,6 +231,13 @@ Open, in priority order:
       from `2026-10-13-command-detail-and-copy-design.md`, section 1. The same spec lists
       two smaller follow-ups: the classifier's reason string as a "why this level" line in
       the popup, and a Unicode input box.
+- [ ] AI panel selection follow-ups (spec `2026-10-18-ai-panel-text-selection-design.md`
+      section 8 and the plan's notes): an I-beam cursor over text; Shift+arrow keyboard
+      selection; grapheme-safe boundaries (a combining mark or an emoji sequence can
+      split); dragging past the Thinking box's edge does not scroll the box; the message
+      box is still an ANSI EDIT, so text outside the code page cannot be typed (the
+      "Unicode input box" item above); the highlight leaves 2-6 px gaps between lines
+      (line spacing), which the four-theme review may want closed.
 - [ ] Review and critique the whole repository, security first (maintainer's request,
       2026-09-24). A fresh audit, not a re-read of `2026-09-09-security-audit.md`: the
       local shell (ConPTY spawn, environment, PATH, the shell search order),
@@ -276,8 +293,15 @@ Open, in priority order:
 - [ ] Policy control follow-ups from the PR #27 review: the AI-tier harness cases it
       rewrote (`ai_runs_read_command_unattended`, `ai_write_command_held_then_runs_after_allow`)
       have not been run yet — needs the Kimi key in `tests\integration\.ai_key`; and the
-      status line still has no keyboard path (a whole-line design-system job, the four
-      `WM_COMMAND` ids 4030–4044 are ready for a menu or accelerator).
+      status line still has no keyboard path (a whole-line design-system job; the
+      `WM_COMMAND` ids 4030–4033 and 4015 are ready for a menu or accelerator, and
+      4040–4044 were retired with the rail on 2026-10-18).
+- [ ] Per-session AI dispatcher (follow-up from `2026-10-18-ai-auto-approve-button-design.md`
+      section 9): with Auto-approve on, a session processes unattended only while it is the
+      displayed tab — a switch cancels the dispatcher, and a reply for a hidden tab builds its
+      batch with Auto-approve forced off. Running a background session's batches needs the
+      dispatcher to own its terminal, conversation and card list per session instead of the
+      panel's active ones, and the switch to stop cancelling. Own spec first.
 - [ ] AI command origin marker (external reviewer, 2026-09-25): a bar in the terminal's
       left margin on rows carrying an AI-dispatched command, stamped at write time —
       spec `2026-09-25-ai-command-origin-marker-design.md` (DRAFT, critique and seven
@@ -302,6 +326,9 @@ Open, in priority order:
       tab that takes a partial paint waits for the next full invalidate from elsewhere
       (as before); and `rcPaint` is the update region's bounding box, which the per-row
       shadow poisoning now makes harmless.
+- [ ] The AI panel never refreshes `d->dpi` after `WM_CREATE`: paint, hit and tooltip
+      rects stay consistent with each other, but the panel does not rescale on a monitor
+      move (found 2026-10-18 during the Auto-approve review).
 - [ ] Scrolled-back repaint storm (2026-10-18 `issue3.log` lines 11761-12797, out of scope of
       `2026-10-18-conpty-resize-anchor-design.md`): with `scrollback_offset` 12..6, 186 paints
       in 4.4 s had `dirty_rows` equal to the offset, driven by `poll.invalidate poll_rc=0`

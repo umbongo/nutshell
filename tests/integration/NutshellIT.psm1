@@ -51,7 +51,7 @@ try {
 } catch {
     Write-Warning "UIAutomationClient/Types not available ($($_.Exception.Message)); dialog helpers still work via Win32 control IDs."
 }
-Add-Type @"
+$nutshellNativeSource = @"
 using System;
 using System.Text;
 using System.Runtime.InteropServices;
@@ -256,11 +256,181 @@ public class NutshellNative {
     }
 }
 "@
+# Stale-console guard (applies to both Add-Type calls). A type this PowerShell
+# session already loaded cannot be redefined: Import-Module -Force re-runs this
+# file, but the old NutshellNative / NutshellSelNative stay, and the first call
+# to a member added since fails mid-case with "[NutshellSelNative] does not
+# contain a method named 'GetSystemMetrics'". Add-Type caches by source text,
+# so an UNCHANGED source re-imports as a no-op and the error fires only when
+# the source really changed (a new member, or a changed body or signature).
+# Each Add-Type is therefore wrapped to say what to do; there is no way to
+# unload a type from a session.
+try { Add-Type -TypeDefinition $nutshellNativeSource -ErrorAction Stop }
+catch {
+    throw ("The type [NutshellNative] is already loaded in this console with different source: the harness " +
+           "module changed since this console loaded it, and a loaded type cannot be redefined. " +
+           "Open a new PowerShell window and run again. Original error: " + $_.Exception.Message)
+}
 
 [NutshellNative]::SetProcessDPIAware() | Out-Null
 
+# Character selection in the AI panel (spec docs/superpowers/specs/
+# 2026-10-18-ai-panel-text-selection-design.md section 7): global atoms name
+# the word CLV_MSG_QUERY_WORD looks for, and SetFocus moves keyboard focus
+# once this thread's input is attached to the app's UI thread.
+$nutshellSelNativeSource = @"
+using System;
+using System.Runtime.InteropServices;
+public static class NutshellSelNative {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] public static extern ushort GlobalAddAtom(string name);
+    [DllImport("kernel32.dll")] public static extern ushort GlobalDeleteAtom(ushort atom);
+    [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr h);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+}
+"@
+try { Add-Type -TypeDefinition $nutshellSelNativeSource -ErrorAction Stop }
+catch {
+    throw ("The type [NutshellSelNative] is already loaded in this console with different source: the harness " +
+           "module changed since this console loaded it, and a loaded type cannot be redefined. " +
+           "Open a new PowerShell window and run again. Original error: " + $_.Exception.Message)
+}
+
+$script:CLV_MSG_QUERY_WORD = 0x8051   # WM_APP + 0x51, src/ui/chat_listview.h
+$script:WM_MOUSEMOVE       = 0x0200
+
+function Get-NutshellWindowDpi {
+    <# The DPI the app's main window runs at (96 = 100%). Cases whose geometry
+       is in physical pixels scale a 96-DPI number by this / 96. Falls back to
+       96 when GetDpiForWindow is missing (Windows older than 10 1607) or
+       returns 0 (a window that is gone). #>
+    param([Parameter(Mandatory)] $Session)
+    try {
+        $d = [int][NutshellNative]::GetDpiForWindow($Session.Main)
+        if ($d -gt 0) { return $d }
+    } catch { }
+    return 96
+}
+
+function Get-NutshellChatList {
+    <# HWND of the AI panel's message list (class NutshellChatList), or Zero. #>
+    param([Parameter(Mandatory)] $Session)
+    $p = Get-NutshellAiPanel -Session $Session
+    if ($p -eq [IntPtr]::Zero) { return [IntPtr]::Zero }
+    return [NutshellNative]::FindWindowEx($p, [IntPtr]::Zero, "NutshellChatList", [IntPtr]::Zero)
+}
+
+function Get-NutshellChatWordRect {
+    <# Where the chat list painted a word -- --ui-demo only. Asks the list with
+       CLV_MSG_QUERY_WORD for the first painted run of item -Item (0 = the
+       first item in the list; -Thinking for its Thinking body) that begins
+       with -Word (ASCII). Returns @{X;Y;W;H} in the list's client pixels, W
+       ending at the word's last character (its trailing blank excluded), or
+       $null when no painted run begins with it. A word below the visible
+       area still answers, with Y at or past the list's client height: a
+       paint records the whole of every item it touches. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Word,
+          [Parameter(Mandatory)] [int] $Item, [switch] $Thinking)
+    $list = Get-NutshellChatList -Session $Session
+    if ($list -eq [IntPtr]::Zero) { throw "AI panel message list not found" }
+    $atom = [NutshellSelNative]::GlobalAddAtom($Word)
+    if ($atom -eq 0) { throw "GlobalAddAtom failed for '$Word'" }
+    try {
+        $hi = if ($Thinking) { 1 } else { 0 }
+        $wp = ($hi -shl 16) -bor ($Item -band 0xFFFF)
+        $r = [NutshellNative]::SendMsg($list, $script:CLV_MSG_QUERY_WORD, [IntPtr]$wp, [IntPtr][int]$atom)
+    } finally {
+        [NutshellSelNative]::GlobalDeleteAtom($atom) | Out-Null
+    }
+    $v = $r.ToInt64()
+    if ($v -eq 0) { return $null }
+    return @{
+        X = [int]($v -band 0xFFFF)
+        Y = [int](($v -shr 16) -band 0xFFFF)
+        W = [int](($v -shr 32) -band 0xFFFF)
+        H = [int](($v -shr 48) -band 0xFFFF)
+    }
+}
+
+function ConvertTo-NutshellPointLParam {
+    <# MAKELPARAM(x, y) for a mouse message: two 16-bit halves, so a point
+       above or left of the window (negative) survives GET_X/Y_LPARAM. #>
+    param([int] $X, [int] $Y)
+    return [IntPtr]((($Y -band 0xFFFF) -shl 16) -bor ($X -band 0xFFFF))
+}
+
+function Send-NutshellChatDrag {
+    <# Drag in the chat list with sent mouse messages: no foreground window,
+       but the real cursor is parked in a screen corner (see below). A
+       button-down at (FromX, FromY), -Steps moves with the button held to
+       (ToX, ToY), -HoldMoves more moves at (ToX, ToY) (each past an edge
+       auto-scrolls the list once), then the button-up there.
+       Client pixels of the list (Get-NutshellChatWordRect gives them). Sent,
+       not posted, so every message is handled -- repaint and hit-test
+       included -- before the next one goes. The real cursor is parked in the
+       screen's far corner first (see the comment in the body); the list also
+       ignores a move without the button, so a stray physical move is not a
+       drag point. Run it on a locked or idle desktop, like every
+       posted-input case. #>
+    param([Parameter(Mandatory)] $Session, [int] $FromX, [int] $FromY,
+          [int] $ToX, [int] $ToY, [int] $Steps = 4, [int] $HoldMoves = 0)
+    $list = Get-NutshellChatList -Session $Session
+    if ($list -eq [IntPtr]::Zero) { throw "AI panel message list not found" }
+    # Park the real cursor in the bottom-right corner of the virtual screen,
+    # one pixel inside it. Windows synthesises a WM_MOUSEMOVE from the real
+    # cursor (position and button state, wParam 0) when mouse capture changes,
+    # and the list takes capture on the sent button-down; wherever the cursor
+    # happened to rest over the window, that move would reach the drag. Parked
+    # off the window it lands outside every case's geometry. SetCursorPos
+    # fails harmlessly on a locked desktop, so a false return is ignored.
+    $vx = [NutshellSelNative]::GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+    $vy = [NutshellSelNative]::GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+    $vw = [NutshellSelNative]::GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
+    $vh = [NutshellSelNative]::GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+    if ($vw -gt 0 -and $vh -gt 0) {
+        [NutshellNative]::SetCursorPos($vx + $vw - 1, $vy + $vh - 1) | Out-Null
+    }
+    $mk = [IntPtr]$script:MK_LBUTTON
+    [NutshellNative]::SendMsg($list, $script:WM_LBUTTONDOWN, $mk,
+        (ConvertTo-NutshellPointLParam -X $FromX -Y $FromY)) | Out-Null
+    for ($i = 1; $i -le $Steps; $i++) {
+        $x = $FromX + [int](($ToX - $FromX) * $i / $Steps)
+        $y = $FromY + [int](($ToY - $FromY) * $i / $Steps)
+        [NutshellNative]::SendMsg($list, $script:WM_MOUSEMOVE, $mk,
+            (ConvertTo-NutshellPointLParam -X $x -Y $y)) | Out-Null
+    }
+    for ($i = 0; $i -lt $HoldMoves; $i++) {
+        [NutshellNative]::SendMsg($list, $script:WM_MOUSEMOVE, $mk,
+            (ConvertTo-NutshellPointLParam -X $ToX -Y $ToY)) | Out-Null
+    }
+    [NutshellNative]::SendMsg($list, $script:WM_LBUTTONUP, [IntPtr]::Zero,
+        (ConvertTo-NutshellPointLParam -X $ToX -Y $ToY)) | Out-Null
+    Start-Sleep -Milliseconds 200
+}
+
+function Set-NutshellFocus {
+    <# Give keyboard focus to one of the app's windows with no click and no
+       foreground: attach this thread's input to the app's UI thread (as
+       Send-NutshellChord does), so SetFocus may name a window of that
+       thread, then detach. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [IntPtr] $Hwnd)
+    $ownerPid = [uint32]0
+    $uiThread = [NutshellNative]::GetWindowThreadProcessId($Session.Main, [ref]$ownerPid)
+    if ($uiThread -eq 0) { throw "could not find the UI thread of window $($Session.Main)" }
+    $mine = [NutshellNative]::GetCurrentThreadId()
+    if (-not [NutshellNative]::AttachThreadInput($mine, $uiThread, $true)) {
+        throw "AttachThreadInput to Nutshell's UI thread ($uiThread) failed"
+    }
+    try {
+        [NutshellSelNative]::SetFocus($Hwnd) | Out-Null
+    } finally {
+        [NutshellNative]::AttachThreadInput($mine, $uiThread, $false) | Out-Null
+    }
+    Start-Sleep -Milliseconds 200
+}
+
 # WM_COMMAND ids from src/ui/resource.h
 $script:WM_COMMAND        = 0x0111
+$script:WM_AI_GET_POLICY  = 0x0400 + 104   # WM_USER + 104, src/ui/ai_chat.c: cmd_policy_status_word()
 $script:WM_CLOSE          = 0x0010
 $script:IDM_FILE_LOG_START = 2004
 $script:IDM_FILE_LOG_STOP  = 2005
@@ -623,7 +793,12 @@ function Send-NutshellChord {
        The saved table is restored and the input detached in a finally block,
        so an assertion failure mid-case cannot leave a phantom Ctrl/Alt down. #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Key,
-          [switch] $Ctrl, [switch] $Shift, [switch] $Alt, [int] $SettleMs = 500)
+          [switch] $Ctrl, [switch] $Shift, [switch] $Alt, [int] $SettleMs = 500,
+          [IntPtr] $Hwnd = ([IntPtr]::Zero))
+    # -Hwnd: post the key to that window of the app (the AI panel's message
+    # list, say) instead of the main window. Same UI thread, so the attached
+    # keyboard state below holds for it too.
+    $target = if ($Hwnd -ne [IntPtr]::Zero) { $Hwnd } else { $Session.Main }
     if (-not $script:VK_MAP.ContainsKey($Key)) {
         throw "Unknown key name '$Key' (known: $($script:VK_MAP.Keys -join ', '))"
     }
@@ -655,7 +830,7 @@ function Send-NutshellChord {
             $ctx = [bool]$Alt
             $down = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $false -Context $ctx
             $up   = New-NutshellKeyLParam -Vk $vk -Extended $ext -KeyUp $true  -Context $ctx
-            [NutshellNative]::PostMessage($Session.Main, $msgDown, [IntPtr]$vk, $down) | Out-Null
+            [NutshellNative]::PostMessage($target, $msgDown, [IntPtr]$vk, $down) | Out-Null
             # The modifier must still be down in the shared table when the app
             # pulls that WM_KEYDOWN/WM_SYSKEYDOWN off its queue, so wait for
             # the UI thread to come back to us before letting go: a WM_NULL
@@ -670,7 +845,7 @@ function Send-NutshellChord {
             [NutshellNative]::SendMessageTimeout($Session.Main, $script:WM_NULL,
                 [IntPtr]::Zero, [IntPtr]::Zero, 0, 2000, [ref]$res) | Out-Null
             Start-Sleep -Milliseconds 120
-            [NutshellNative]::PostMessage($Session.Main, $msgUp, [IntPtr]$vk, $up) | Out-Null
+            [NutshellNative]::PostMessage($target, $msgUp, [IntPtr]$vk, $up) | Out-Null
         } finally {
             [NutshellNative]::SetKeyboardState($saved) | Out-Null
         }
@@ -832,39 +1007,63 @@ function Set-NutshellTerminalFocus {
     Start-Sleep -Milliseconds 300
 }
 
+function Get-NutshellAiPolicy {
+    <# The displayed session's policy as the AI panel holds it:
+       @{ Allowed = "Read"|"Unknown"|"Write"|"Critical"; Auto = $true|$false }.
+       Sends WM_AI_GET_POLICY (WM_USER + 104), answered with
+       cmd_policy_status_word(): bits 0-7 the level, bit 8 Auto-approve. Sent
+       messages are answered inside a modal loop too, so this works while the
+       Critical confirmation box is up. #>
+    param([Parameter(Mandatory)] $Session)
+    $p = Get-NutshellAiPanel -Session $Session
+    if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel is not open" }
+    $res = [IntPtr]::Zero
+    $ok = [NutshellNative]::SendMessageTimeout($p, $script:WM_AI_GET_POLICY,
+        [IntPtr]::Zero, [IntPtr]::Zero, 0x0002, 2000, [ref]$res)   # SMTO_ABORTIFHUNG
+    if ($ok -eq [IntPtr]::Zero) { throw "the AI panel did not answer WM_AI_GET_POLICY within 2 s" }
+    $word = $res.ToInt64()
+    $names = @("Read", "Unknown", "Write", "Critical")
+    return @{ Allowed = $names[[int]($word -band 0xFF)]; Auto = (($word -band 0x100) -ne 0) }
+}
+
 function Set-NutshellAiPolicy {
-    <# Put the session's policy markers on named stops of the status line's
-       policy control (docs/superpowers/specs/2026-09-11-status-policy-control-design.md).
+    <# Put the displayed session's policy on a named level, with Auto-approve
+       on or off (docs/superpowers/specs/2026-10-18-ai-auto-approve-button-design.md).
 
-       -Allowed     the ceiling: Read | Unknown | Write | Critical. Commands
-                    above it are blocked and show as held.
-       -Unattended  how far the session runs without asking: Nothing | Read |
-                    Unknown | Write | Critical. Never above -Allowed.
+       -Allowed  the level: Read | Unknown | Write | Critical. Commands above it
+                 are blocked and show as held.
+       -Auto     Auto-approve on: commands up to -Allowed run without asking.
+                 Absent means off -- the call is absolute.
 
-       Both are posted as ABSOLUTE setters (IDC_CHAT_POLICY_ALLOW_BASE 4030 +
-       stop, IDC_CHAT_POLICY_AUTO_BASE 4040 + stop + 1), not as cycles of the
-       control, so a case never has to count clicks or read a painted label.
-       Posted, so no foreground window is needed. Omit either to leave that
-       marker where it is; -Allowed is applied first, since lowering the
-       ceiling drags the unattended marker down with it. #>
+       Posts IDC_CHAT_POLICY_ALLOW_BASE 4030 + level, and IDC_CHAT_AUTOAPPROVE
+       4015 (a toggle) only when the button's state, read first with
+       Get-NutshellAiPolicy, differs from the one asked for. The button is
+       turned off before the level moves and on after it, so only
+       -Allowed Critical -Auto raises the confirmation box. That call returns
+       with the box up: answer it with
+         $dlg = Wait-NutshellDialog -Session $s -Title "Auto-approve"
+         Close-NutshellDialog -Dialog $dlg -Button Yes
+       Posted, so no foreground window is needed. The old -Unattended
+       parameter and ids 4040-4044 were retired in the same change. #>
     param(
         [Parameter(Mandatory)] $Session,
-        [ValidateSet("Read", "Unknown", "Write", "Critical")] [string] $Allowed,
-        [ValidateSet("Nothing", "Read", "Unknown", "Write", "Critical")] [string] $Unattended
+        [Parameter(Mandatory)] [ValidateSet("Read", "Unknown", "Write", "Critical")] [string] $Allowed,
+        [switch] $Auto
     )
     $p = Get-NutshellAiPanel -Session $Session
     if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel is not open" }
-
     $stop = @{ Read = 0; Unknown = 1; Write = 2; Critical = 3 }
-    if ($PSBoundParameters.ContainsKey("Allowed")) {
-        [NutshellNative]::PostMessage($p, $script:WM_COMMAND,
-            [IntPtr](4030 + $stop[$Allowed]), [IntPtr]::Zero) | Out-Null
+
+    $now = Get-NutshellAiPolicy -Session $Session
+    if ($now.Auto -and -not $Auto) {
+        [NutshellNative]::PostMessage($p, $script:WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
         Start-Sleep -Milliseconds 300
     }
-    if ($PSBoundParameters.ContainsKey("Unattended")) {
-        $u = if ($Unattended -eq "Nothing") { -1 } else { $stop[$Unattended] }
-        [NutshellNative]::PostMessage($p, $script:WM_COMMAND,
-            [IntPtr](4040 + $u + 1), [IntPtr]::Zero) | Out-Null
+    [NutshellNative]::PostMessage($p, $script:WM_COMMAND,
+        [IntPtr](4030 + $stop[$Allowed]), [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 300
+    if ($Auto -and -not $now.Auto) {
+        [NutshellNative]::PostMessage($p, $script:WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
         Start-Sleep -Milliseconds 300
     }
 }
@@ -1406,7 +1605,7 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Get-NutshellWorkArea, `
     Get-NutshellTabStripRegion, Save-NutshellScreenshot, `
     Open-NutshellSecondTab, Select-NutshellTab, `
-    Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiPolicy, Set-NutshellTerminalFocus, `
+    Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Get-NutshellAiPolicy, Set-NutshellAiPolicy, Set-NutshellTerminalFocus, `
     Wait-NutshellAiSendIdle, `
     Wait-NutshellDialog, Get-NutshellControl, Set-NutshellControlText, Get-NutshellControlText, Invoke-NutshellButton, `
     Select-NutshellCombo, Get-NutshellComboSelection, Set-NutshellCheckbox, Get-NutshellCheckbox, `
@@ -1414,4 +1613,5 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Open-NutshellSessionManager, Open-NutshellSettings, Select-NutshellSettingsPage, `
     Get-NutshellTabCount, Close-NutshellTab, Get-NutshellWindowText, Get-NutshellChildWindows, `
     Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion, `
-    Get-NutshellRegionHash
+    Get-NutshellRegionHash, Get-NutshellWindowDpi, Get-NutshellChatList, Get-NutshellChatWordRect, Send-NutshellChatDrag, `
+    Set-NutshellFocus

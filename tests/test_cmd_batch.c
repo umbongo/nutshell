@@ -51,14 +51,22 @@ int test_cmd_batch_add_copies_defaults(void) {
     cmd_batch_set_init(&set);
     ApprovalQueue defaults;
     chat_approval_init(&defaults);
-    /* A non-default policy on both markers -- this is what must carry
-     * over from the session into a freshly added batch. */
+    /* A non-default policy -- Write with Auto-approve on -- must carry over
+     * from the session into a freshly added batch. */
     cmd_policy_set_allowed(&defaults.policy, CMD_WRITE);
-    cmd_policy_set_unattended(&defaults.policy, CMD_READ);
+    cmd_policy_set_auto(&defaults.policy, 1);
     CmdBatch *a = cmd_batch_add(&set, &defaults, NULL);
     ASSERT_NOT_NULL(a);
     ASSERT_EQ(a->q.policy.allowed, CMD_WRITE);
-    ASSERT_EQ(a->q.policy.unattended, CMD_READ);
+    ASSERT_EQ(a->q.policy.unattended, CMD_WRITE);
+
+    /* cmd_batch_add() clamps what it copies, so a split default (only a
+     * test can make one) arrives with the button off (spec 2026-10-18 s2). */
+    cmd_policy_set_unattended(&defaults.policy, CMD_READ);
+    CmdBatch *b = cmd_batch_add(&set, &defaults, NULL);
+    ASSERT_NOT_NULL(b);
+    ASSERT_EQ(b->q.policy.allowed, CMD_WRITE);
+    ASSERT_EQ(b->q.policy.unattended, POLICY_NONE);
     cmd_batch_set_free(&set);
     TEST_END();
 }

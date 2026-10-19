@@ -233,3 +233,9 @@ void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out)
 
     out->chat = base->chat;
 }
+
+unsigned int ui_theme_sel_hue(const ThemeTokens *t, int on_user_bubble)
+{
+    if (!t) return 0;
+    return on_user_bubble ? t->chat.user_text : t->focus;
+}

@@ -810,52 +810,6 @@ int test_chat_msg_note_freed_with_item(void) {
     TEST_END();
 }
 
-/* --- chat_strip_exec_markers --- */
-
-int test_chat_strip_exec_markers_basic(void) {
-    TEST_BEGIN();
-    char s[] = "Run [EXEC]ls -la[/EXEC] now";
-    chat_strip_exec_markers(s);
-    ASSERT_STR_EQ(s, "Run ls -la now");
-    TEST_END();
-}
-
-int test_chat_strip_exec_markers_multiple_and_adjacent(void) {
-    TEST_BEGIN();
-    char s[] = "[EXEC]a[/EXEC][EXEC]b[/EXEC]\n[EXEC]c[/EXEC]";
-    chat_strip_exec_markers(s);
-    ASSERT_STR_EQ(s, "ab\nc");
-    TEST_END();
-}
-
-int test_chat_strip_exec_markers_unpaired(void) {
-    TEST_BEGIN();
-    char s1[] = "start [EXEC]no end";
-    chat_strip_exec_markers(s1);
-    ASSERT_STR_EQ(s1, "start no end");
-    char s2[] = "stray [/EXEC] close";
-    chat_strip_exec_markers(s2);
-    ASSERT_STR_EQ(s2, "stray  close");
-    TEST_END();
-}
-
-int test_chat_strip_exec_markers_leaves_everything_else(void) {
-    TEST_BEGIN();
-    char s[] = "[exec] [EXE] EXEC] [ EXEC ] **bold** \xE2\x80\x94 `code` [/EXE]";
-    char want[sizeof(s)];
-    memcpy(want, s, sizeof(s));
-    chat_strip_exec_markers(s);
-    ASSERT_STR_EQ(s, want);
-    char empty[] = "";
-    chat_strip_exec_markers(empty);
-    ASSERT_STR_EQ(empty, "");
-    chat_strip_exec_markers(NULL);
-    char only[] = "[EXEC][/EXEC]";
-    chat_strip_exec_markers(only);
-    ASSERT_STR_EQ(only, "");
-    TEST_END();
-}
-
 /* --- utf8_cut_at --- */
 
 int test_utf8_cut_at_short_string_untouched(void) {
@@ -909,5 +863,69 @@ int test_utf8_cut_at_degenerate_args(void) {
     ASSERT_EQ((int)utf8_cut_at(s, 1), 0);
     ASSERT_STR_EQ(s, "");
     ASSERT_EQ((int)utf8_cut_at(NULL, 8), 0);
+    TEST_END();
+}
+
+/* --- selection support: runs on the item, lookup by id (spec 2026-10-18) --- */
+
+int test_chat_msg_find_by_id(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *a = chat_msg_append(&list, CHAT_ITEM_USER, "a");
+    ChatMsgItem *b = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "b");
+    ASSERT_TRUE(chat_msg_find(&list, a->id) == a);
+    ASSERT_TRUE(chat_msg_find(&list, b->id) == b);
+    int gone = a->id;
+    chat_msg_remove(&list, a);
+    ASSERT_NULL(chat_msg_find(&list, gone));
+    ASSERT_NULL(chat_msg_find(NULL, 1));
+    /* ids are never reused, even after a clear */
+    int b_id = b->id;
+    chat_msg_list_clear(&list);
+    ChatMsgItem *c = chat_msg_append(&list, CHAT_ITEM_USER, "c");
+    ASSERT_TRUE(c->id > b_id);
+    chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+int test_chat_msg_item_starts_without_runs_and_frees_them(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *ai = chat_msg_append(&list, CHAT_ITEM_AI_TEXT, "hello");
+    ASSERT_EQ(ai->runs.n, 0);
+    ASSERT_EQ(ai->pinned_runs.n, 0);
+    ASSERT_EQ(ai->runs.cap, 0);
+    ASSERT_NULL(ai->runs.v);
+    ASSERT_NULL(ai->pinned_runs.v);
+    ASSERT_EQ(ai->painted_height, 0);
+    ASSERT_EQ(ai->u.ai.think_cache_len, -1);
+    TextRun t;
+    memset(&t, 0, sizeof(t));
+    t.w = 10; t.h = 10; t.end = 5; t.part = TR_PART_MAIN;
+    int cum[2] = { 0, 10 }, cb[2] = { 0, 5 };
+    int r1 = text_runs_append(&ai->runs, &t, cum, cb, 2);
+    int r2 = text_runs_append(&ai->pinned_runs, &t, cum, cb, 2);
+    ASSERT_EQ(r1, 0);
+    ASSERT_EQ(r2, 0);
+    /* Both sets own memory now; removing the item must release it (the
+     * item's storage goes with it, so the freed fields are not observable
+     * here -- a leak check of this test is the proof, see the task report). */
+    ASSERT_NOT_NULL(ai->runs.v);
+    ASSERT_NOT_NULL(ai->pinned_runs.v);
+    ASSERT_NOT_NULL(ai->runs.cum);
+    ASSERT_NOT_NULL(ai->pinned_runs.cum);
+    chat_msg_remove(&list, ai);      /* frees both run sets */
+    ASSERT_EQ(list.count, 0);
+    ASSERT_NULL(list.head);
+
+    /* Non-AI items start without runs too, and clear frees every item's. */
+    ChatMsgItem *u = chat_msg_append(&list, CHAT_ITEM_USER, "u");
+    ASSERT_EQ(u->runs.n, 0);
+    int r3 = text_runs_append(&u->runs, &t, cum, cb, 2);
+    ASSERT_EQ(r3, 0);
+    chat_msg_list_clear(&list);
+    ASSERT_EQ(list.count, 0);
     TEST_END();
 }

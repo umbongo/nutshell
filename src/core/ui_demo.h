@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "ai_prompt.h"
 #include "chat_approval.h"
+#include "cmd_policy.h"
 
 /* Canned content for --ui-demo (Design-System Foundation, spec section 5,
  * "Verification harness"). Every state is built from the real
@@ -31,7 +32,12 @@
  * "all". "settings-debug" (2026-10-18) builds an empty conversation; the
  * win32 side opens Settings on the Debugging page over it, with debugging
  * ticked in memory only (nothing is saved). Also not part of "all": the
- * Settings window is modal and is not an AI panel state. */
+ * Settings window is modal and is not an AI panel state.
+ *
+ * "policy-auto" and "policy-compact" (2026-10-18, auto-approve button) reuse
+ * "executing" and "approval"; the win32 side seeds the tab's policy from
+ * ui_demo_policy() and, for "policy-compact", docks the panel at
+ * ui_demo_panel_width_px(). Neither is part of "all". */
 
 /* Build the canned conversation, approval queue(s) and terminal text for
  * one demo state.
@@ -68,6 +74,16 @@ int ui_demo_scrolls_to_top(const char *state);
  * *count receives the array length. Never returns NULL. */
 const char *const *ui_demo_states(int *count);
 
+/* The policy the demo tab starts with: Write with Auto-approve on for
+ * "policy-auto", Write with it off for every other state and for NULL --
+ * so the gallery shows tinted, solid and blocked cells. Always clamped. */
+CmdPolicy ui_demo_policy(const char *state);
+
+/* Docked panel width in device pixels for `state` at `dpi`, or 0 for "use
+ * the normal default". Only "policy-compact" has one: ns_scale(260, dpi),
+ * narrow enough for the status line's compact labels. */
+int ui_demo_panel_width_px(const char *state, int dpi);
+
 /* The canned "thinking" block for the chat state's assistant reply.
  * Not part of AiMessage -- ai_chat.c keeps thinking text in a side table
  * keyed by message index, outside AiConversation -- so callers that want
@@ -80,5 +96,13 @@ const char *ui_demo_thinking_text(void);
  * width, so the expanded Thinking box hits its 50-line cap and scrolls.
  * Same side-table caveat as ui_demo_thinking_text() above. */
 const char *ui_demo_thinking_text_long(void);
+
+/* The character selection the "chat" state shows (spec 2026-10-18 section
+ * 6), as byte offsets: *user_off into the user turn's text (the start of
+ * "disk"), *reply_off into the assistant reply's text (just after "Want
+ * me" in its last line). The win32 side resolves the two items and selects
+ * from the first to the second; the reply's Thinking body, which "chat"
+ * shows expanded, lies between them. */
+void ui_demo_chat_selection(int *user_off, int *reply_off);
 
 #endif /* NUTSHELL_UI_DEMO_H */

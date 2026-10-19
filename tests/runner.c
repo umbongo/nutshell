@@ -612,6 +612,10 @@ int test_config_load_migrates_pre_v1_1_16_numeric_auto_approve(void);
 int test_config_load_policy_key_wins_over_both_old_keys(void);
 int test_config_load_garbage_policy_token_is_the_default(void);
 int test_config_load_inverted_policy_token_clamps_down(void);
+int test_config_load_split_policy_token_turns_auto_off(void);
+int test_config_load_matched_policy_token_is_auto_on(void);
+int test_config_load_read_none_policy_token_unchanged(void);
+int test_config_save_after_load_writes_the_normalised_token(void);
 /* READ allow-list, UNKNOWN fallthroughs and the classification mask */
 int test_cmd_classify_linux_unrecognised_is_unknown(void);
 int test_cmd_classify_linux_unrecognised_with_redirect_is_write(void);
@@ -2334,7 +2338,23 @@ int test_policy_stop_names_and_labels(void);
 int test_policy_token_round_trips_every_legal_pair(void);
 int test_policy_token_rejects_and_clamps_bad_input(void);
 int test_policy_caption_reads_as_a_sentence(void);
-int test_policy_tip_covers_raise_lower_toggle_and_refusal(void);
+int test_policy_clamp_rounds_a_split_down(void);
+int test_policy_set_allowed_moves_both_markers_with_auto_on(void);
+int test_policy_set_allowed_leaves_auto_off(void);
+int test_policy_set_allowed_on_a_split_turns_auto_off(void);
+int test_policy_set_auto_on_and_off(void);
+int test_policy_auto_on_reads_a_split_as_off(void);
+int test_policy_no_sequence_of_set_allowed_and_set_auto_splits(void);
+int test_policy_needs_confirm_only_when_entering_critical_auto(void);
+int test_policy_status_word_packs_level_and_button(void);
+int test_policy_attended_keeps_the_ceiling(void);
+int test_policy_stop_short_labels(void);
+int test_policy_auto_label_full_and_compact(void);
+int test_policy_cell_tip_full_labels_button_off(void);
+int test_policy_cell_tip_compact_and_auto_on(void);
+int test_policy_auto_tip_off_and_on(void);
+int test_policy_tips_fit_the_tooltip_buffer(void);
+int test_policy_tips_reject_out_of_range_and_null(void);
 
 /* test_chat_approval.c */
 int test_approval_init(void);
@@ -2649,6 +2669,8 @@ int test_md_table_fit_columns_two_wide_shrink_equal(void);
 int test_md_table_fit_columns_minimums_respected(void);
 int test_md_table_fit_columns_overflow(void);
 int test_md_table_fit_columns_null_safe(void);
+int test_md_table_drawn_cols_follows_separator_then_header(void);
+int test_md_table_drawn_cols_caps_and_floors(void);
 int test_md_next_word_tab_is_whitespace(void);
 
 /* test_json_validate.c */
@@ -2810,6 +2832,7 @@ int test_approval_card_hit_scrolled_out_rows_not_hit(void);
 int test_approval_card_layout_narrow_card_keeps_text_width(void);
 int test_approval_row_height_matches_layout(void);
 int test_approval_add_session_contradicted_takes_worse(void);
+int test_approval_attended_policy_approves_nothing_on_arrival(void);
 int test_settled_row_layout_chip_right_aligned(void);
 int test_settled_row_layout_text_never_overlaps_chip(void);
 int test_settled_row_layout_ellipsis_only_when_too_wide(void);
@@ -2819,15 +2842,10 @@ int test_settled_row_layout_checkbox_and_held_zeroed(void);
 int test_settled_row_layout_text_starts_at_rect_left(void);
 int test_ns_policy_layout_cells_touch_and_sum_to_total_w_96(void);
 int test_ns_policy_layout_cells_touch_and_sum_to_total_w_192(void);
-int test_ns_policy_layout_bands_tile_cell_96(void);
-int test_ns_policy_layout_bands_tile_cell_192(void);
-int test_ns_policy_layout_hit_bands_tile_taller_box_96(void);
-int test_ns_policy_layout_hit_bands_tile_taller_box_192(void);
-int test_ns_policy_hit_all_eight_zones(void);
+int test_ns_policy_layout_hit_rect_spans_taller_box_96(void);
+int test_ns_policy_layout_hit_rect_spans_taller_box_192(void);
+int test_ns_policy_hit_all_four_cells(void);
 int test_ns_policy_hit_outside_returns_none(void);
-int test_ns_policy_layout_rail_fill_zero_at_none_and_out_of_range(void);
-int test_ns_policy_layout_rail_fill_reaches_cell0_at_unattended_0(void);
-int test_ns_policy_layout_rail_fill_reaches_full_width_at_unattended_3(void);
 int test_ns_policy_layout_null_out_is_noop(void);
 int test_ns_policy_width_null_stop_text_w_safe(void);
 int test_ns_policy_layout_null_stop_text_w_no_negative_widths(void);
@@ -2837,6 +2855,10 @@ int test_ns_policy_hit_null_layout_safe(void);
 int test_ns_policy_hit_null_stop_out_safe(void);
 int test_ns_policy_layout_hit_h_smaller_than_r_h_96(void);
 int test_ns_policy_layout_hit_h_smaller_than_r_h_192(void);
+int test_ns_policy_layout_clip_marks_partial_cells_unhittable(void);
+int test_ns_policy_layout_clip_on_a_cell_edge_keeps_that_cell(void);
+int test_ns_policy_hit_refuses_a_clipped_cell(void);
+int test_ns_policy_layout_clip_left_of_pill_hits_nothing(void);
 
 /* test_ai_panel.c */
 int test_ai_panel_layout_tiles_exact_sum_96(void);
@@ -2859,6 +2881,7 @@ int test_text_lf_lone_cr_unchanged(void);
 int test_text_lf_size_query(void);
 int test_text_lf_truncation_never_splits_crlf(void);
 int test_text_lf_null_input(void);
+int test_text_crlf_to_lf_pairs_become_lf(void);
 
 /* test_cli_sink.c */
 int test_cli_sink_invalid_handle_is_console(void);
@@ -2887,13 +2910,14 @@ int test_paint_cover_edge_touching_row_boundary(void);
 int test_paint_cover_row_above_or_below_paint_does_not_cover(void);
 int test_paint_cover_degenerate_rect_is_covered(void);
 
-int test_ai_status_layout_no_overlap_inside_line_96(void);
-int test_ai_status_layout_no_overlap_inside_line_192(void);
-int test_ai_status_layout_policy_is_left_aligned_and_full_width(void);
-int test_ai_status_layout_wide_line_shows_full_meter(void);
-int test_ai_status_layout_meter_bar_dropped_when_narrow(void);
-int test_ai_status_layout_meter_text_dropped_when_very_narrow(void);
-int test_ai_status_layout_negative_widths_are_clamped(void);
+int test_ai_status_layout_tier_inside_each_band_96(void);
+int test_ai_status_layout_tier1_geometry_96(void);
+int test_ai_status_layout_thresholds_96(void);
+int test_ai_status_layout_thresholds_120_and_144(void);
+int test_ai_status_layout_no_meter_goes_straight_to_tier3(void);
+int test_ai_status_layout_width_sweep_invariants(void);
+int test_ai_status_layout_negative_and_null_inputs(void);
+int test_ai_status_hit_cells_button_and_clipped_cell(void);
 int test_thinking_layout_collapsed_body_zero(void);
 int test_thinking_layout_expanded_body_uses_text_h_under_cap(void);
 int test_thinking_layout_expanded_body_capped(void);
@@ -3144,10 +3168,6 @@ int test_chat_msg_cmd_note_defaults_to_null(void);
 int test_chat_msg_set_note_copies_and_replaces(void);
 int test_chat_msg_set_note_rejects_non_command_and_null_item(void);
 int test_chat_msg_note_freed_with_item(void);
-int test_chat_strip_exec_markers_basic(void);
-int test_chat_strip_exec_markers_multiple_and_adjacent(void);
-int test_chat_strip_exec_markers_unpaired(void);
-int test_chat_strip_exec_markers_leaves_everything_else(void);
 int test_utf8_cut_at_short_string_untouched(void);
 int test_utf8_cut_at_ascii_truncates_to_max_minus_one(void);
 int test_utf8_cut_at_does_not_split_multibyte(void);
@@ -3179,6 +3199,69 @@ int test_cmd_detail_layout_never_negative_at_tiny_sizes(void);
 int test_cmd_detail_layout_inside_client_for_all_adequate_sizes(void);
 int test_cmd_detail_layout_null_out_is_safe(void);
 
+/* test_chat_exec.c */
+int test_chat_exec_split_no_marker_is_one_prose_segment(void);
+int test_chat_exec_split_command_between_prose(void);
+int test_chat_exec_split_crlf_before_marker_is_trimmed(void);
+int test_chat_exec_split_only_newlines_before_marker_give_no_prose(void);
+int test_chat_exec_split_unterminated_keeps_the_marker(void);
+int test_chat_exec_split_empty_and_adjacent_commands(void);
+int test_chat_exec_split_stray_close_is_prose(void);
+int test_chat_exec_split_respects_len_and_null(void);
+
+/* test_text_runs.c */
+int test_text_runs_cum_ascii_multibyte_and_surrogates(void);
+int test_text_runs_cum_invalid_bytes_and_limits(void);
+int test_text_runs_utf8_prefix_never_splits_a_pair(void);
+int test_text_runs_append_assigns_lines_and_boundaries(void);
+int test_text_runs_hit_inside_a_run_takes_the_nearest_boundary(void);
+int test_text_runs_hit_left_right_and_between(void);
+int test_text_runs_hit_above_below_and_between_lines(void);
+int test_text_runs_hit_synthetic_maps_to_the_next_real_run(void);
+int test_text_runs_hit_reports_the_thinking_part(void);
+int test_text_runs_hit_table_cells_share_a_line_by_y(void);
+int test_text_runs_hit_empty_is_minus_one(void);
+int test_text_runs_span_px_partial_full_and_none(void);
+int test_text_runs_run_at_finds_the_rect(void);
+int test_text_runs_word_prose_code_and_synthetic(void);
+int test_text_line_at_and_next_line(void);
+
+int test_chat_msg_find_by_id(void);
+int test_chat_msg_item_starts_without_runs_and_frees_them(void);
+
+/* test_chat_copy.c */
+int test_chat_copy_whole_fixture_matches_golden(void);
+int test_chat_copy_prose_inside_one_line_drops_markers(void);
+int test_chat_copy_across_line_break_and_empty_line(void);
+int test_chat_copy_bullet_marker_follows_its_bytes(void);
+int test_chat_copy_ordered_list_copies_the_displayed_number(void);
+int test_chat_copy_fence_lines_copy_nothing(void);
+int test_chat_copy_heading_quote_and_rule(void);
+int test_chat_copy_table_escaped_pipe_and_column_cap(void);
+int test_chat_copy_table_columns_follow_the_alignment_row(void);
+int test_chat_copy_table_range_from_the_end_of_a_short_row(void);
+int test_chat_copy_exec_segment_and_state_reset(void);
+int test_chat_copy_ordered_list_restarts_after_exec(void);
+int test_chat_copy_leading_whitespace_is_not_copied(void);
+int test_chat_copy_plain_passes_bytes_through(void);
+int test_chat_copy_widens_a_cut_character(void);
+int test_chat_copy_empty_and_bad_arguments(void);
+int test_chat_sel_cmp_and_part_range(void);
+int test_chat_copy_selection_joins_items_and_skips_cards(void);
+int test_chat_copy_selection_takes_open_thinking_only(void);
+int test_chat_copy_selection_clamps_and_drops_vanished_ids(void);
+int test_chat_sel_all_spans_text_items(void);
+
+/* test_chat_copy_paint.c */
+int test_paint_runs_carry_the_bytes_they_draw(void);
+int test_painted_words_equal_copied_text(void);
+int test_painted_words_equal_copied_text_markdown_off(void);
+int test_paint_synthetic_runs_cover_their_marker(void);
+
+/* test_sel_contrast.c */
+int test_sel_highlight_visible_on_every_surface(void);
+int test_sel_hue_is_focus_except_on_the_bubble(void);
+
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
 int test_md_blocks_one(void);
@@ -3195,6 +3278,8 @@ int test_md_blocks_respects_len_not_nul(void);
 /* test_ui_demo.c */
 int test_ui_demo_approval_rows_have_notes_and_a_long_command(void);
 int test_ui_demo_cmddetail_matches_approval(void);
+int test_ui_demo_chat_selection_spans_every_kind(void);
+int test_ui_demo_chat_drag_across_items_golden(void);
 
 int test_sdbg_level_labels(void);
 int test_sdbg_category_labels(void);
@@ -3213,6 +3298,10 @@ int test_sdbg_layout_row_pixels_96_and_192(void);
 int test_sdbg_layout_page_height_ticked_vs_unticked(void);
 
 int test_ui_demo_settings_debug_is_an_empty_state(void);
+int test_ui_demo_policy_auto_is_executing_with_auto_on(void);
+int test_ui_demo_policy_compact_matches_approval(void);
+int test_ui_demo_policy_for_other_states_is_write_off(void);
+int test_ui_demo_panel_width_only_for_policy_compact(void);
 
 int test_dirty_flags_count_and_fill(void);
 int test_dirty_flags_null_buffer_and_small_max(void);
@@ -3910,6 +3999,10 @@ int main(void) {
     failed += test_config_load_policy_key_wins_over_both_old_keys();
     failed += test_config_load_garbage_policy_token_is_the_default();
     failed += test_config_load_inverted_policy_token_clamps_down();
+    failed += test_config_load_split_policy_token_turns_auto_off();
+    failed += test_config_load_matched_policy_token_is_auto_on();
+    failed += test_config_load_read_none_policy_token_unchanged();
+    failed += test_config_save_after_load_writes_the_normalised_token();
     /* READ allow-list, UNKNOWN fallthroughs and the classification mask */
     failed += test_cmd_classify_linux_unrecognised_is_unknown();
     failed += test_cmd_classify_linux_unrecognised_with_redirect_is_write();
@@ -5501,7 +5594,23 @@ int main(void) {
     failed += test_policy_token_round_trips_every_legal_pair();
     failed += test_policy_token_rejects_and_clamps_bad_input();
     failed += test_policy_caption_reads_as_a_sentence();
-    failed += test_policy_tip_covers_raise_lower_toggle_and_refusal();
+    failed += test_policy_clamp_rounds_a_split_down();
+    failed += test_policy_set_allowed_moves_both_markers_with_auto_on();
+    failed += test_policy_set_allowed_leaves_auto_off();
+    failed += test_policy_set_allowed_on_a_split_turns_auto_off();
+    failed += test_policy_set_auto_on_and_off();
+    failed += test_policy_auto_on_reads_a_split_as_off();
+    failed += test_policy_no_sequence_of_set_allowed_and_set_auto_splits();
+    failed += test_policy_needs_confirm_only_when_entering_critical_auto();
+    failed += test_policy_status_word_packs_level_and_button();
+    failed += test_policy_attended_keeps_the_ceiling();
+    failed += test_policy_stop_short_labels();
+    failed += test_policy_auto_label_full_and_compact();
+    failed += test_policy_cell_tip_full_labels_button_off();
+    failed += test_policy_cell_tip_compact_and_auto_on();
+    failed += test_policy_auto_tip_off_and_on();
+    failed += test_policy_tips_fit_the_tooltip_buffer();
+    failed += test_policy_tips_reject_out_of_range_and_null();
 
     printf("\n--- Command Approval ---\n");
     failed += test_approval_init();
@@ -5875,6 +5984,8 @@ int main(void) {
     failed += test_md_table_fit_columns_minimums_respected();
     failed += test_md_table_fit_columns_overflow();
     failed += test_md_table_fit_columns_null_safe();
+    failed += test_md_table_drawn_cols_follows_separator_then_header();
+    failed += test_md_table_drawn_cols_caps_and_floors();
 
     printf("\n--- JSON Escape ---\n");
     failed += test_escape_simple_string();
@@ -6037,6 +6148,7 @@ int main(void) {
     failed += test_approval_card_layout_narrow_card_keeps_text_width();
     failed += test_approval_row_height_matches_layout();
     failed += test_approval_add_session_contradicted_takes_worse();
+    failed += test_approval_attended_policy_approves_nothing_on_arrival();
     failed += test_settled_row_layout_chip_right_aligned();
     failed += test_settled_row_layout_text_never_overlaps_chip();
     failed += test_settled_row_layout_ellipsis_only_when_too_wide();
@@ -6046,15 +6158,10 @@ int main(void) {
     failed += test_settled_row_layout_text_starts_at_rect_left();
     failed += test_ns_policy_layout_cells_touch_and_sum_to_total_w_96();
     failed += test_ns_policy_layout_cells_touch_and_sum_to_total_w_192();
-    failed += test_ns_policy_layout_bands_tile_cell_96();
-    failed += test_ns_policy_layout_bands_tile_cell_192();
-    failed += test_ns_policy_layout_hit_bands_tile_taller_box_96();
-    failed += test_ns_policy_layout_hit_bands_tile_taller_box_192();
-    failed += test_ns_policy_hit_all_eight_zones();
+    failed += test_ns_policy_layout_hit_rect_spans_taller_box_96();
+    failed += test_ns_policy_layout_hit_rect_spans_taller_box_192();
+    failed += test_ns_policy_hit_all_four_cells();
     failed += test_ns_policy_hit_outside_returns_none();
-    failed += test_ns_policy_layout_rail_fill_zero_at_none_and_out_of_range();
-    failed += test_ns_policy_layout_rail_fill_reaches_cell0_at_unattended_0();
-    failed += test_ns_policy_layout_rail_fill_reaches_full_width_at_unattended_3();
     failed += test_ns_policy_layout_null_out_is_noop();
     failed += test_ns_policy_width_null_stop_text_w_safe();
     failed += test_ns_policy_layout_null_stop_text_w_no_negative_widths();
@@ -6064,6 +6171,10 @@ int main(void) {
     failed += test_ns_policy_hit_null_stop_out_safe();
     failed += test_ns_policy_layout_hit_h_smaller_than_r_h_96();
     failed += test_ns_policy_layout_hit_h_smaller_than_r_h_192();
+    failed += test_ns_policy_layout_clip_marks_partial_cells_unhittable();
+    failed += test_ns_policy_layout_clip_on_a_cell_edge_keeps_that_cell();
+    failed += test_ns_policy_hit_refuses_a_clipped_cell();
+    failed += test_ns_policy_layout_clip_left_of_pill_hits_nothing();
 
     printf("\n--- AI Assist panel ---\n");
     failed += test_ai_panel_layout_tiles_exact_sum_96();
@@ -6084,6 +6195,7 @@ int main(void) {
     failed += test_text_lf_size_query();
     failed += test_text_lf_truncation_never_splits_crlf();
     failed += test_text_lf_null_input();
+    failed += test_text_crlf_to_lf_pairs_become_lf();
     failed += test_cli_sink_invalid_handle_is_console();
     failed += test_cli_sink_pipe_is_handle();
     failed += test_cli_sink_disk_is_handle();
@@ -6107,13 +6219,14 @@ int main(void) {
     failed += test_paint_cover_edge_touching_row_boundary();
     failed += test_paint_cover_row_above_or_below_paint_does_not_cover();
     failed += test_paint_cover_degenerate_rect_is_covered();
-    failed += test_ai_status_layout_no_overlap_inside_line_96();
-    failed += test_ai_status_layout_no_overlap_inside_line_192();
-    failed += test_ai_status_layout_policy_is_left_aligned_and_full_width();
-    failed += test_ai_status_layout_wide_line_shows_full_meter();
-    failed += test_ai_status_layout_meter_bar_dropped_when_narrow();
-    failed += test_ai_status_layout_meter_text_dropped_when_very_narrow();
-    failed += test_ai_status_layout_negative_widths_are_clamped();
+    failed += test_ai_status_layout_tier_inside_each_band_96();
+    failed += test_ai_status_layout_tier1_geometry_96();
+    failed += test_ai_status_layout_thresholds_96();
+    failed += test_ai_status_layout_thresholds_120_and_144();
+    failed += test_ai_status_layout_no_meter_goes_straight_to_tier3();
+    failed += test_ai_status_layout_width_sweep_invariants();
+    failed += test_ai_status_layout_negative_and_null_inputs();
+    failed += test_ai_status_hit_cells_button_and_clipped_cell();
     failed += test_thinking_layout_collapsed_body_zero();
     failed += test_thinking_layout_expanded_body_uses_text_h_under_cap();
     failed += test_thinking_layout_expanded_body_capped();
@@ -6388,10 +6501,6 @@ int main(void) {
     failed += test_chat_msg_set_note_copies_and_replaces();
     failed += test_chat_msg_set_note_rejects_non_command_and_null_item();
     failed += test_chat_msg_note_freed_with_item();
-    failed += test_chat_strip_exec_markers_basic();
-    failed += test_chat_strip_exec_markers_multiple_and_adjacent();
-    failed += test_chat_strip_exec_markers_unpaired();
-    failed += test_chat_strip_exec_markers_leaves_everything_else();
     failed += test_utf8_cut_at_short_string_untouched();
     failed += test_utf8_cut_at_ascii_truncates_to_max_minus_one();
     failed += test_utf8_cut_at_does_not_split_multibyte();
@@ -6421,6 +6530,62 @@ int main(void) {
     failed += test_cmd_detail_layout_inside_client_for_all_adequate_sizes();
     failed += test_cmd_detail_layout_null_out_is_safe();
 
+    failed += test_chat_exec_split_no_marker_is_one_prose_segment();
+    failed += test_chat_exec_split_command_between_prose();
+    failed += test_chat_exec_split_crlf_before_marker_is_trimmed();
+    failed += test_chat_exec_split_only_newlines_before_marker_give_no_prose();
+    failed += test_chat_exec_split_unterminated_keeps_the_marker();
+    failed += test_chat_exec_split_empty_and_adjacent_commands();
+    failed += test_chat_exec_split_stray_close_is_prose();
+    failed += test_chat_exec_split_respects_len_and_null();
+
+    failed += test_text_runs_cum_ascii_multibyte_and_surrogates();
+    failed += test_text_runs_cum_invalid_bytes_and_limits();
+    failed += test_text_runs_utf8_prefix_never_splits_a_pair();
+    failed += test_text_runs_append_assigns_lines_and_boundaries();
+    failed += test_text_runs_hit_inside_a_run_takes_the_nearest_boundary();
+    failed += test_text_runs_hit_left_right_and_between();
+    failed += test_text_runs_hit_above_below_and_between_lines();
+    failed += test_text_runs_hit_synthetic_maps_to_the_next_real_run();
+    failed += test_text_runs_hit_reports_the_thinking_part();
+    failed += test_text_runs_hit_table_cells_share_a_line_by_y();
+    failed += test_text_runs_hit_empty_is_minus_one();
+    failed += test_text_runs_span_px_partial_full_and_none();
+    failed += test_text_runs_run_at_finds_the_rect();
+    failed += test_text_runs_word_prose_code_and_synthetic();
+    failed += test_text_line_at_and_next_line();
+    failed += test_chat_msg_find_by_id();
+    failed += test_chat_msg_item_starts_without_runs_and_frees_them();
+    failed += test_chat_copy_whole_fixture_matches_golden();
+    failed += test_chat_copy_prose_inside_one_line_drops_markers();
+    failed += test_chat_copy_across_line_break_and_empty_line();
+    failed += test_chat_copy_bullet_marker_follows_its_bytes();
+    failed += test_chat_copy_ordered_list_copies_the_displayed_number();
+    failed += test_chat_copy_fence_lines_copy_nothing();
+    failed += test_chat_copy_heading_quote_and_rule();
+    failed += test_chat_copy_table_escaped_pipe_and_column_cap();
+    failed += test_chat_copy_table_columns_follow_the_alignment_row();
+    failed += test_chat_copy_table_range_from_the_end_of_a_short_row();
+    failed += test_chat_copy_exec_segment_and_state_reset();
+    failed += test_chat_copy_ordered_list_restarts_after_exec();
+    failed += test_chat_copy_leading_whitespace_is_not_copied();
+    failed += test_chat_copy_plain_passes_bytes_through();
+    failed += test_chat_copy_widens_a_cut_character();
+    failed += test_chat_copy_empty_and_bad_arguments();
+    failed += test_chat_sel_cmp_and_part_range();
+    failed += test_chat_copy_selection_joins_items_and_skips_cards();
+    failed += test_chat_copy_selection_takes_open_thinking_only();
+    failed += test_chat_copy_selection_clamps_and_drops_vanished_ids();
+    failed += test_chat_sel_all_spans_text_items();
+
+    failed += test_paint_runs_carry_the_bytes_they_draw();
+    failed += test_painted_words_equal_copied_text();
+    failed += test_painted_words_equal_copied_text_markdown_off();
+    failed += test_paint_synthetic_runs_cover_their_marker();
+
+    failed += test_sel_highlight_visible_on_every_surface();
+    failed += test_sel_hue_is_focus_except_on_the_bubble();
+
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();
     failed += test_md_blocks_multiline_body();
@@ -6435,6 +6600,8 @@ int main(void) {
 
     failed += test_ui_demo_approval_rows_have_notes_and_a_long_command();
     failed += test_ui_demo_cmddetail_matches_approval();
+    failed += test_ui_demo_chat_selection_spans_every_kind();
+    failed += test_ui_demo_chat_drag_across_items_golden();
 
     failed += test_sdbg_level_labels();
     failed += test_sdbg_category_labels();
@@ -6453,6 +6620,10 @@ int main(void) {
     failed += test_sdbg_layout_page_height_ticked_vs_unticked();
 
     failed += test_ui_demo_settings_debug_is_an_empty_state();
+    failed += test_ui_demo_policy_auto_is_executing_with_auto_on();
+    failed += test_ui_demo_policy_compact_matches_approval();
+    failed += test_ui_demo_policy_for_other_states_is_write_off();
+    failed += test_ui_demo_panel_width_only_for_policy_compact();
 
     failed += test_dirty_flags_count_and_fill();
     failed += test_dirty_flags_null_buffer_and_small_max();

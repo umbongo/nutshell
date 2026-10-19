@@ -300,7 +300,10 @@ int test_policy_stop_names_and_labels(void) {
 
 int test_policy_token_round_trips_every_legal_pair(void) {
     TEST_BEGIN();
-    int pairs = 0;
+    /* Since 2026-10-18 the legal pairs are (a, none) and (a, a): eight of
+     * them round-trip exactly. A split pair (none < u < a) still writes and
+     * parses, and comes back with the button off. */
+    int pairs = 0, kept = 0;
     for (int a = 0; a < POLICY_STOP_COUNT; a++) {
         for (int u = POLICY_NONE; u <= a; u++) {
             CmdPolicy p; p.allowed = a; p.unattended = u;
@@ -308,17 +311,20 @@ int test_policy_token_round_trips_every_legal_pair(void) {
             int n = cmd_policy_to_token(p, tok, sizeof(tok));
             if (n <= 0) { printf("  empty token for {%d,%d}\n", a, u); _tf_local_fail = 1; continue; }
 
+            int want_u = (u == POLICY_NONE || u == a) ? u : POLICY_NONE;
             CmdPolicy back;
             if (!cmd_policy_from_token(tok, &back) ||
-                back.allowed != a || back.unattended != u) {
+                back.allowed != a || back.unattended != want_u) {
                 printf("  \"%s\" -> {%d,%d}, expected {%d,%d}\n",
-                       tok, back.allowed, back.unattended, a, u);
+                       tok, back.allowed, back.unattended, a, want_u);
                 _tf_local_fail = 1;
             }
+            if (back.allowed == a && back.unattended == u) kept++;
             pairs++;
         }
     }
-    ASSERT_EQ(pairs, 14);   /* 2+3+4+5 legal (allowed, unattended) pairs */
+    ASSERT_EQ(pairs, 14);
+    ASSERT_EQ(kept, 8);
     TEST_END();
 }
 
@@ -386,32 +392,301 @@ int test_policy_caption_reads_as_a_sentence(void) {
     TEST_END();
 }
 
-int test_policy_tip_covers_raise_lower_toggle_and_refusal(void) {
+/* ---- 2026-10-18: one level plus an Auto-approve switch ----------------- */
+/* docs/superpowers/specs/2026-10-18-ai-auto-approve-button-design.md s2:
+ * `unattended` is POLICY_NONE or equal to `allowed`. */
+
+int test_policy_clamp_rounds_a_split_down(void) {
     TEST_BEGIN();
-    char buf[96];
+    for (int a = 0; a < POLICY_STOP_COUNT; a++) {
+        for (int u = POLICY_NONE; u <= a; u++) {
+            CmdPolicy p; p.allowed = a; p.unattended = u;
+            cmd_policy_clamp(&p);
+            int want = (u == POLICY_NONE || u == a) ? u : POLICY_NONE;
+            if (p.allowed != a || p.unattended != want) {
+                printf("  clamp {%d,%d} -> {%d,%d}, expected {%d,%d}\n",
+                       a, u, p.allowed, p.unattended, a, want);
+                _tf_local_fail = 1;
+            }
+        }
+    }
+    /* from_token goes through clamp, so a split token loads with the
+     * button off -- and still parses. */
+    CmdPolicy t;
+    ASSERT_EQ(cmd_policy_from_token("write/read", &t), 1);
+    ASSERT_EQ(t.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(t.unattended, POLICY_NONE);
+    TEST_END();
+}
+
+int test_policy_set_allowed_moves_both_markers_with_auto_on(void) {
+    TEST_BEGIN();
+    CmdPolicy p = cmd_policy_default();
+    cmd_policy_set_auto(&p, 1);                 /* {read, read} */
+    cmd_policy_set_allowed(&p, CMD_WRITE);
+    ASSERT_EQ(p.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(p.unattended, (int)CMD_WRITE);
+    cmd_policy_set_allowed(&p, CMD_UNKNOWN);
+    ASSERT_EQ(p.allowed, (int)CMD_UNKNOWN);
+    ASSERT_EQ(p.unattended, (int)CMD_UNKNOWN);
+    cmd_policy_set_allowed(&p, 17);             /* clamps, button follows */
+    ASSERT_EQ(p.allowed, (int)CMD_CRITICAL);
+    ASSERT_EQ(p.unattended, (int)CMD_CRITICAL);
+    cmd_policy_set_allowed(&p, -3);
+    ASSERT_EQ(p.allowed, (int)CMD_READ);
+    ASSERT_EQ(p.unattended, (int)CMD_READ);
+    TEST_END();
+}
+
+int test_policy_set_allowed_leaves_auto_off(void) {
+    TEST_BEGIN();
+    CmdPolicy p = cmd_policy_default();
+    cmd_policy_set_allowed(&p, CMD_CRITICAL);
+    ASSERT_EQ(p.allowed, (int)CMD_CRITICAL);
+    ASSERT_EQ(p.unattended, POLICY_NONE);
+    cmd_policy_set_allowed(&p, CMD_UNKNOWN);
+    ASSERT_EQ(p.unattended, POLICY_NONE);
+    TEST_END();
+}
+
+int test_policy_set_allowed_on_a_split_turns_auto_off(void) {
+    TEST_BEGIN();
+    /* A split that bypassed clamp (only tests can make one) is normalised
+     * first, so raising the level never raises the unattended marker. */
     CmdPolicy p; p.allowed = CMD_WRITE; p.unattended = CMD_READ;
+    cmd_policy_set_allowed(&p, CMD_CRITICAL);
+    ASSERT_EQ(p.allowed, (int)CMD_CRITICAL);
+    ASSERT_EQ(p.unattended, POLICY_NONE);
+    TEST_END();
+}
 
-    /* Ceiling band: above it raises, below it lowers, on it restates. */
-    cmd_policy_tip(p, POLICY_BAND_ALLOWED, CMD_CRITICAL, buf, sizeof(buf));
-    ASSERT_STR_EQ(buf, "Allow Critical commands - they still ask first.");
-    cmd_policy_tip(p, POLICY_BAND_ALLOWED, CMD_READ, buf, sizeof(buf));
-    ASSERT_STR_EQ(buf, "Block anything above Read.");
-    cmd_policy_tip(p, POLICY_BAND_ALLOWED, CMD_WRITE, buf, sizeof(buf));
-    ASSERT_STR_EQ(buf, "Commands above Write are blocked.");
+int test_policy_set_auto_on_and_off(void) {
+    TEST_BEGIN();
+    CmdPolicy p = cmd_policy_default();
+    cmd_policy_set_auto(&p, 1);
+    ASSERT_EQ(p.allowed, (int)CMD_READ);
+    ASSERT_EQ(p.unattended, (int)CMD_READ);
+    ASSERT_EQ(cmd_policy_auto_on(p), 1);
+    cmd_policy_set_allowed(&p, CMD_WRITE);
+    cmd_policy_set_auto(&p, 0);
+    ASSERT_EQ(p.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(p.unattended, POLICY_NONE);
+    ASSERT_EQ(cmd_policy_auto_on(p), 0);
+    /* Garbage is clamped before the switch is applied. */
+    p.allowed = 99; p.unattended = -7;
+    cmd_policy_set_auto(&p, 1);
+    ASSERT_EQ(p.allowed, (int)CMD_CRITICAL);
+    ASSERT_EQ(p.unattended, (int)CMD_CRITICAL);
+    cmd_policy_set_auto(NULL, 1);               /* must not crash */
+    TEST_END();
+}
 
-    /* Unattended band: the toggle, a move, and the refusal above the ceiling. */
-    cmd_policy_tip(p, POLICY_BAND_UNATTENDED, CMD_READ, buf, sizeof(buf));
-    ASSERT_STR_EQ(buf, "Stop running anything unattended.");
-    cmd_policy_tip(p, POLICY_BAND_UNATTENDED, CMD_WRITE, buf, sizeof(buf));
-    ASSERT_STR_EQ(buf, "Run Write and below without asking.");
-    cmd_policy_tip(p, POLICY_BAND_UNATTENDED, CMD_CRITICAL, buf, sizeof(buf));
-    ASSERT_STR_EQ(buf, "Allow Critical first to run it unattended.");
+int test_policy_auto_on_reads_a_split_as_off(void) {
+    TEST_BEGIN();
+    CmdPolicy p;
+    p.allowed = CMD_WRITE; p.unattended = CMD_READ;
+    ASSERT_EQ(cmd_policy_auto_on(p), 0);
+    p.allowed = CMD_WRITE; p.unattended = CMD_WRITE;
+    ASSERT_EQ(cmd_policy_auto_on(p), 1);
+    p.allowed = CMD_READ; p.unattended = POLICY_NONE;
+    ASSERT_EQ(cmd_policy_auto_on(p), 0);
+    TEST_END();
+}
 
-    /* Out-of-range stops produce nothing rather than a wrong sentence. */
-    ASSERT_EQ(cmd_policy_tip(p, POLICY_BAND_ALLOWED, POLICY_NONE, buf, sizeof(buf)), 0);
+int test_policy_no_sequence_of_set_allowed_and_set_auto_splits(void) {
+    TEST_BEGIN();
+    /* Six gestures -- set_allowed(0..3), set_auto(0), set_auto(1) -- in
+     * every sequence of four, from each of the eight legal states. */
+    int checked = 0;
+    for (int a0 = 0; a0 < POLICY_STOP_COUNT; a0++) {
+        for (int on0 = 0; on0 < 2; on0++) {
+            for (int seq = 0; seq < 6 * 6 * 6 * 6; seq++) {
+                CmdPolicy p;
+                p.allowed = a0;
+                p.unattended = on0 ? a0 : POLICY_NONE;
+                int s = seq;
+                for (int step = 0; step < 4; step++) {
+                    int g = s % 6;
+                    s /= 6;
+                    if (g < 4) cmd_policy_set_allowed(&p, g);
+                    else       cmd_policy_set_auto(&p, g - 4);
+                    if (p.unattended != POLICY_NONE && p.unattended != p.allowed) {
+                        printf("  start {%d,%d} seq %d step %d -> split {%d,%d}\n",
+                               a0, on0, seq, step, p.allowed, p.unattended);
+                        _tf_local_fail = 1;
+                    }
+                }
+                checked++;
+            }
+        }
+    }
+    ASSERT_EQ(checked, 4 * 2 * 1296);
+    TEST_END();
+}
+
+int test_policy_needs_confirm_only_when_entering_critical_auto(void) {
+    TEST_BEGIN();
+    CmdPolicy off_w;  off_w.allowed = CMD_WRITE;    off_w.unattended = POLICY_NONE;
+    CmdPolicy on_w;   on_w.allowed  = CMD_WRITE;    on_w.unattended  = CMD_WRITE;
+    CmdPolicy off_c;  off_c.allowed = CMD_CRITICAL; off_c.unattended = POLICY_NONE;
+    CmdPolicy on_c;   on_c.allowed  = CMD_CRITICAL; on_c.unattended  = CMD_CRITICAL;
+    ASSERT_EQ(cmd_policy_needs_confirm(off_c, on_c), 1);  /* button on at Critical */
+    ASSERT_EQ(cmd_policy_needs_confirm(on_w, on_c), 1);   /* Critical with button on */
+    ASSERT_EQ(cmd_policy_needs_confirm(on_c, on_c), 0);   /* already there */
+    ASSERT_EQ(cmd_policy_needs_confirm(off_w, off_c), 0); /* Critical, button off */
+    ASSERT_EQ(cmd_policy_needs_confirm(off_w, on_w), 0);  /* button on at Write */
+    ASSERT_EQ(cmd_policy_needs_confirm(on_c, off_c), 0);  /* turning it off */
+    ASSERT_EQ(cmd_policy_needs_confirm(cmd_policy_default(), on_c), 1);
+    TEST_END();
+}
+
+int test_policy_status_word_packs_level_and_button(void) {
+    TEST_BEGIN();
+    CmdPolicy p;
+    p.allowed = CMD_WRITE; p.unattended = POLICY_NONE;
+    ASSERT_EQ((int)cmd_policy_status_word(p), 0x002);
+    p.allowed = CMD_WRITE; p.unattended = CMD_WRITE;
+    ASSERT_EQ((int)cmd_policy_status_word(p), 0x102);
+    p.allowed = CMD_CRITICAL; p.unattended = CMD_CRITICAL;
+    ASSERT_EQ((int)cmd_policy_status_word(p), 0x103);
+    p.allowed = CMD_WRITE; p.unattended = CMD_READ;   /* a split reads as off */
+    ASSERT_EQ((int)cmd_policy_status_word(p), 0x002);
+    TEST_END();
+}
+
+int test_policy_attended_keeps_the_ceiling(void) {
+    TEST_BEGIN();
+    CmdPolicy p; p.allowed = CMD_READ; p.unattended = CMD_READ;
+    CmdPolicy a = cmd_policy_attended(p);
+    ASSERT_EQ(a.allowed, (int)CMD_READ);
+    ASSERT_EQ(a.unattended, POLICY_NONE);
+    p.allowed = 99; p.unattended = 99;
+    a = cmd_policy_attended(p);
+    ASSERT_EQ(a.allowed, (int)CMD_CRITICAL);
+    ASSERT_EQ(a.unattended, POLICY_NONE);
+    TEST_END();
+}
+
+/* ---- 2026-10-18: labels and tooltips ----------------------------------- */
+
+#define TIP_UNKNOWN_FULL "Unknown: commands the classifier cannot place, including wrappers such as sh -c or xargs that hide what they run. Click to allow up to this level; Write and Critical stay blocked."
+#define TIP_AUTO_SUFFIX  " With Auto-approve on, commands up to this level run without asking."
+
+int test_policy_stop_short_labels(void) {
+    TEST_BEGIN();
+    ASSERT_STR_EQ(cmd_policy_stop_short(CMD_READ), "R");
+    ASSERT_STR_EQ(cmd_policy_stop_short(CMD_UNKNOWN), "U");
+    ASSERT_STR_EQ(cmd_policy_stop_short(CMD_WRITE), "W");
+    ASSERT_STR_EQ(cmd_policy_stop_short(CMD_CRITICAL), "C");
+    ASSERT_STR_EQ(cmd_policy_stop_short(POLICY_NONE), "");
+    ASSERT_STR_EQ(cmd_policy_stop_short(4), "");
+    TEST_END();
+}
+
+int test_policy_auto_label_full_and_compact(void) {
+    TEST_BEGIN();
+    ASSERT_STR_EQ(cmd_policy_auto_label(0), "Auto-approve");
+    ASSERT_STR_EQ(cmd_policy_auto_label(1), "Auto");
+    ASSERT_STR_EQ(CMD_POLICY_CONFIRM_TEXT,
+        "Run every command the assistant proposes, including ones that can "
+        "destroy data, without asking?");
+    TEST_END();
+}
+
+int test_policy_cell_tip_full_labels_button_off(void) {
+    TEST_BEGIN();
+    char buf[CMD_POLICY_TIP_MAX];
+    cmd_policy_cell_tip(CMD_READ, 0, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Read: commands that only inspect, such as ls, cat or git status. Click to make this the highest level the assistant may run; anything above it is blocked.");
+    cmd_policy_cell_tip(CMD_UNKNOWN, 0, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, TIP_UNKNOWN_FULL);
+    cmd_policy_cell_tip(CMD_WRITE, 0, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Write: commands that change files or state, such as rm, mv or apt install. Click to allow up to this level; Critical stays blocked.");
+    cmd_policy_cell_tip(CMD_CRITICAL, 0, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Critical: commands that can destroy data or the system, such as rm -rf / or mkfs. Click to allow everything. Use with care.");
+    TEST_END();
+}
+
+int test_policy_cell_tip_compact_and_auto_on(void) {
+    TEST_BEGIN();
+    static const char *const letters[POLICY_STOP_COUNT] = { "R", "U", "W", "C" };
+    /* `want` is twice the tooltip size so the compiler can see that the
+     * concatenation of two tip-sized strings never truncates. */
+    char full[CMD_POLICY_TIP_MAX], tip[CMD_POLICY_TIP_MAX];
+    char want[2 * CMD_POLICY_TIP_MAX + 16];
+    for (int k = 0; k < POLICY_STOP_COUNT; k++) {
+        cmd_policy_cell_tip(k, 0, 0, full, sizeof(full));
+
+        cmd_policy_cell_tip(k, 1, 0, tip, sizeof(tip));
+        snprintf(want, sizeof(want), "%s = %s", letters[k], full);
+        ASSERT_STR_EQ(tip, want);
+
+        cmd_policy_cell_tip(k, 0, 1, tip, sizeof(tip));
+        snprintf(want, sizeof(want), "%s%s", full, TIP_AUTO_SUFFIX);
+        ASSERT_STR_EQ(tip, want);
+
+        cmd_policy_cell_tip(k, 1, 1, tip, sizeof(tip));
+        snprintf(want, sizeof(want), "%s = %s%s", letters[k], full, TIP_AUTO_SUFFIX);
+        ASSERT_STR_EQ(tip, want);
+    }
+    cmd_policy_cell_tip(CMD_UNKNOWN, 1, 1, tip, sizeof(tip));
+    ASSERT_STR_EQ(tip, "U = " TIP_UNKNOWN_FULL TIP_AUTO_SUFFIX);
+    TEST_END();
+}
+
+int test_policy_auto_tip_off_and_on(void) {
+    TEST_BEGIN();
+    char buf[CMD_POLICY_TIP_MAX];
+    cmd_policy_auto_tip(0, CMD_WRITE, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Auto-approve: off. Click to run commands up to the Write level without asking. Anything above Write stays blocked.");
+    cmd_policy_auto_tip(1, CMD_WRITE, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Auto-approve: on. Commands up to Write run without asking; anything above is blocked. Keep this tab shown: commands proposed while it is hidden wait for your approval. Click to turn off.");
+    cmd_policy_auto_tip(0, CMD_READ, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Auto-approve: off. Click to run commands up to the Read level without asking. Anything above Read stays blocked.");
+    TEST_END();
+}
+
+/* Review Focus 4: the longest tip (compact Unknown with the Auto-approve
+ * suffix) must fit ai_chat.c's tooltip buffer whole. */
+int test_policy_tips_fit_the_tooltip_buffer(void) {
+    TEST_BEGIN();
+    char buf[CMD_POLICY_TIP_MAX];
+    for (int k = 0; k < POLICY_STOP_COUNT; k++) {
+        for (int compact = 0; compact < 2; compact++) {
+            for (int on = 0; on < 2; on++) {
+                int n = cmd_policy_cell_tip(k, compact, on, buf, sizeof(buf));
+                if (n <= 0 || n >= CMD_POLICY_TIP_MAX - 1 || buf[n - 1] != '.') {
+                    printf("  cell tip k=%d compact=%d on=%d: n=%d\n", k, compact, on, n);
+                    _tf_local_fail = 1;
+                }
+            }
+        }
+        for (int on = 0; on < 2; on++) {
+            int n = cmd_policy_auto_tip(on, k, buf, sizeof(buf));
+            if (n <= 0 || n >= CMD_POLICY_TIP_MAX - 1 || buf[n - 1] != '.') {
+                printf("  auto tip on=%d level=%d: n=%d\n", on, k, n);
+                _tf_local_fail = 1;
+            }
+        }
+    }
+    TEST_END();
+}
+
+int test_policy_tips_reject_out_of_range_and_null(void) {
+    TEST_BEGIN();
+    char buf[CMD_POLICY_TIP_MAX];
+    buf[0] = 'x';
+    ASSERT_EQ(cmd_policy_cell_tip(POLICY_NONE, 0, 0, buf, sizeof(buf)), 0);
     ASSERT_STR_EQ(buf, "");
-    ASSERT_EQ(cmd_policy_tip(p, POLICY_BAND_ALLOWED, 4, buf, sizeof(buf)), 0);
-    ASSERT_EQ(cmd_policy_tip(p, POLICY_BAND_ALLOWED, CMD_READ, NULL, 16), 0);
-    ASSERT_EQ(cmd_policy_tip(p, POLICY_BAND_ALLOWED, CMD_READ, buf, 0), 0);
+    ASSERT_EQ(cmd_policy_cell_tip(4, 0, 0, buf, sizeof(buf)), 0);
+    ASSERT_EQ(cmd_policy_cell_tip(CMD_READ, 0, 0, NULL, 16), 0);
+    ASSERT_EQ(cmd_policy_cell_tip(CMD_READ, 0, 0, buf, 0), 0);
+    ASSERT_EQ(cmd_policy_auto_tip(1, CMD_READ, NULL, 16), 0);
+    ASSERT_EQ(cmd_policy_auto_tip(1, CMD_READ, buf, 0), 0);
+    /* An out-of-range level is clamped, never printed as "Nothing". */
+    cmd_policy_auto_tip(0, 99, buf, sizeof(buf));
+    ASSERT_TRUE(strstr(buf, "Critical") != NULL);
+    cmd_policy_auto_tip(0, -5, buf, sizeof(buf));
+    ASSERT_TRUE(strstr(buf, "Read") != NULL);
     TEST_END();
 }

@@ -15,8 +15,8 @@
 #
 # Tiers (-Tier gate|ai|nightly|all, default all): gate is the merge gate --
 # every non-AI case plus
-# ui_gallery/approval_card_run_selected_settles/ai_panel_opens_without_key (no
-# AI key needed despite the ai_ prefix); ai is the five key-gated ai_* cases;
+# ui_gallery/approval_card_run_selected_settles/ai_panel_opens_without_key/
+# ai_auto_approve_critical_asks_first (no AI key needed despite the ai_ prefix); ai is the five key-gated ai_* cases;
 # nightly is currently empty (reserved for slow/flaky cases, e.g. idle-timeout
 # or host-unreachable scenarios, per
 # docs/superpowers/specs/2026-09-09-integration-coverage.md's
@@ -35,7 +35,7 @@
 # visible to them without passing anything explicitly):
 #   10-terminal.ps1     connect, ctrl_c, log filename, paste x2, pty resize,
 #                        page up, holds position, inactive tab resize
-#   20-ai.ps1            the five key-gated ai_* cases + ai_panel_opens_without_key
+#   20-ai.ps1            the five key-gated ai_* cases + ai_panel_opens_without_key + ai_auto_approve_critical_asks_first
 #   30-ui-demo.ps1       ui_gallery, approval_card_run_selected_settles,
 #                        helpers_theme_pixel_matches_token
 #   40-helpers.ps1       the other helpers_* cases
@@ -43,6 +43,7 @@
 #                        WINDOW-*, CLOSE-1, MENU-1)
 #   60-tabs-logging.ps1  tabs (TABS-*) and logging (LOG-*)
 #   70-cli.ps1           CLI flags (CLI-1's several small cases)
+#   95-ai-select.ps1     character selection in the AI panel under --ui-demo=chat
 # Add a new case by editing the matching file (or adding a new cases\NN-*.ps1
 # -- any file matching cases\*.ps1 is picked up automatically) rather than
 # growing this file.

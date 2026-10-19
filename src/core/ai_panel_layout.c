@@ -52,51 +52,94 @@ int ai_composer_clamp_h(int want_h, int panel_h, int line_h, int dpi)
     return want_h;
 }
 
-void ai_status_layout(NsRect status, int dpi, int policy_w, int meter_text_w,
+static int nonneg(int v) { return v > 0 ? v : 0; }
+
+void ai_status_layout(NsRect status, int dpi, const AiStatusMeasure *m,
                        AiStatusLayout *out)
 {
     if (!out) return;
     memset(out, 0, sizeof(*out));
 
-    if (policy_w < 0) policy_w = 0;
-    if (meter_text_w < 0) meter_text_w = 0;
+    int full_w = m ? nonneg(m->policy_full_w) : 0;
+    int comp_w = m ? nonneg(m->policy_compact_w) : 0;
+    int afull  = m ? nonneg(m->auto_full_w) : 0;
+    int acomp  = m ? nonneg(m->auto_compact_w) : 0;
+    int text_w = m ? nonneg(m->meter_text_w) : 0;
 
+    int pad_xs = ns_scale(SP_XS, dpi);
     int pad_sm = ns_scale(SP_SM, dpi);
     int gap_md = ns_scale(SP_MD, dpi);
-    int seg_h  = ns_scale(SZ_CTRL_H, dpi) - 2 * ns_scale(SP_XS, dpi);
+    int bar_w  = ns_scale(60, dpi);
+    int seg_h  = ns_scale(SZ_CTRL_H, dpi) - 2 * pad_xs;
     if (seg_h < 0) seg_h = 0;
     int seg_y  = status.y + (status.h - seg_h) / 2;
+    int w      = nonneg(status.w);
+
+    int btn_full = afull + 2 * pad_sm;
+    int btn_comp = acomp + 2 * pad_sm;
+    int need_full    = full_w + gap_md + bar_w + pad_sm + text_w + pad_sm + btn_full + pad_sm;
+    int need_text    = full_w + gap_md + text_w + pad_sm + btn_full + pad_sm;
+    int need_nometer = full_w + gap_md + btn_full + pad_sm;
+    int need_comp    = comp_w + gap_md + btn_comp + pad_sm;
+
+    int tier;
+    if (text_w > 0 && w >= need_full)      tier = AI_STATUS_TIER_FULL;
+    else if (text_w > 0 && w >= need_text) tier = AI_STATUS_TIER_METER_TEXT;
+    else if (w >= need_nometer)            tier = AI_STATUS_TIER_NO_METER;
+    else if (w >= need_comp)               tier = AI_STATUS_TIER_COMPACT;
+    else                                   tier = AI_STATUS_TIER_CLIPPED;
+    out->tier = tier;
+    out->compact = (tier >= AI_STATUS_TIER_COMPACT) ? 1 : 0;
+
+    int btn_w = out->compact ? btn_comp : btn_full;
+    int right = status.x + w;
+    out->auto_btn.x = right - pad_sm - btn_w;
+    out->auto_btn.y = seg_y;
+    out->auto_btn.w = btn_w;
+    out->auto_btn.h = seg_h;
 
     out->policy.x = status.x;
     out->policy.y = seg_y;
-    out->policy.w = policy_w;
+    out->policy.w = out->compact ? comp_w : full_w;
     out->policy.h = seg_h;
+    out->policy_clip = out->auto_btn.x - pad_xs;
 
-    int content_right_limit = out->policy.x + out->policy.w + gap_md;
-    int right_edge = status.x + status.w;
-    int bar_w = ns_scale(60, dpi);
-
-    /* Meter text is right-aligned with an SP_SM inset; the bar sits to its
-     * left with an SP_SM gap. Drop the bar first when the line is tight,
-     * then the text too, before squeezing the segments/auto label. */
-    int meter_text_x = right_edge - pad_sm - meter_text_w;
-    int meter_bar_x  = meter_text_x - pad_sm - bar_w;
-
-    int have_text = meter_text_w > 0 && meter_text_x >= content_right_limit;
-    int have_bar  = have_text && bar_w > 0 && meter_bar_x >= content_right_limit;
-
-    if (have_text) {
-        out->meter_text.x = meter_text_x;
+    int meter_right = out->auto_btn.x - pad_sm;
+    if (tier <= AI_STATUS_TIER_METER_TEXT) {
+        out->meter_text.x = meter_right - text_w;
         out->meter_text.y = seg_y;
-        out->meter_text.w = meter_text_w;
+        out->meter_text.w = text_w;
         out->meter_text.h = seg_h;
+        if (tier == AI_STATUS_TIER_FULL) {
+            out->meter_bar.x = out->meter_text.x - pad_sm - bar_w;
+            out->meter_bar.y = seg_y;
+            out->meter_bar.w = bar_w;
+            out->meter_bar.h = seg_h;
+        }
     }
-    if (have_bar) {
-        out->meter_bar.x = meter_bar_x;
-        out->meter_bar.y = seg_y;
-        out->meter_bar.w = bar_w;
-        out->meter_bar.h = seg_h;
+
+    int pill_right = out->policy.x + out->policy.w;
+    if (pill_right > out->policy_clip) pill_right = out->policy_clip;
+    int label_x = pill_right + gap_md;
+    if (meter_right - label_x > 0) {
+        out->label.x = label_x;
+        out->label.y = seg_y;
+        out->label.w = meter_right - label_x;
+        out->label.h = seg_h;
     }
+}
+
+int ai_status_hit(const AiStatusLayout *sl, const NsPolicyLayout *pl,
+                  int x, int y, int *stop_out)
+{
+    if (stop_out) *stop_out = -1;
+    if (sl) {
+        NsRect b = sl->auto_btn;
+        if (b.w > 0 && b.h > 0 && x >= b.x && x < b.x + b.w &&
+            y >= b.y && y < b.y + b.h)
+            return HIT_POLICY_AUTO;
+    }
+    return ns_policy_hit(pl, x, y, stop_out);
 }
 
 void thinking_layout(NsRect avail, int expanded, int body_text_h, int max_body_h,

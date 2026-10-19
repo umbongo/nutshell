@@ -36,7 +36,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | File | Cases |
 |---|---|
 | `cases\10-terminal.ps1` | connect, Ctrl+C, log filename, paste x2, PTY resize, Page Up, holds position, inactive-tab resize |
-| `cases\20-ai.ps1` | the five key-gated `ai_*` cases + `ai_panel_opens_without_key` |
+| `cases\20-ai.ps1` | the five key-gated `ai_*` cases + `ai_panel_opens_without_key` + `ai_auto_approve_critical_asks_first` |
 | `cases\30-ui-demo.ps1` | `ui_gallery`, `approval_card_run_selected_settles`, `helpers_theme_pixel_matches_token` |
 | `cases\40-helpers.ps1` | the other `helpers_*` cases |
 | `cases\50-window.ps1` | launch/window/shutdown/menu (`LAUNCH-*`, `RESIZE-1`, `WINDOW-*`, `CLOSE-1`, `MENU-1`) |
@@ -44,6 +44,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | `cases\70-cli.ps1` | CLI flags (`CLI-1`'s several small cases) |
 | `cases\80-local-shell.ps1` | `local_shell` (`--local`: echo, exit, silent reconnect) and `local_shell_powershell` (a saved local profile running `powershell.exe -NoLogo`: prompt, two-line paste, Ctrl+C on `Start-Sleep`, exit) |
 | `cases\90-keys.ps1` | special keys: F-keys, Alt+letter, Shift+Tab/Ctrl+arrows, Ctrl+Space, PgUp/PgDn by screen, the Send Key menu (including "Send Next Key with Alt"), Backspace over SSH, Ctrl+W/T vs. Ctrl+Shift+W/T |
+| `cases\95-ai-select.ps1` | character selection in the AI panel under `--ui-demo=chat`: exact copy, across items, auto-scroll, Edit > Copy and focus |
 
 Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
 `cases\*.ps1` is picked up automatically) rather than growing one giant script.
@@ -84,6 +85,13 @@ Add a batch of cases by adding a new `cases\NN-name.ps1` file (any file matching
   itself, so it is the app's own `TranslateMessage` that synthesises the
   Alt+letter escape sequence, same as for real input. F10 always goes out as
   `WM_SYSKEYDOWN`/`WM_SYSKEYUP` through this helper too, `-Ctrl`/`-Alt` or not.
+  `-Hwnd <window>` posts the key to that window of the app instead of the main
+  one — the AI panel's message list (`Get-NutshellChatList`) for Ctrl+C on a
+  selection there. The target matters: a Ctrl+C posted to the main window
+  reaches the terminal and, with no terminal selection, becomes the `WM_CHAR`
+  `0x03` (SIGINT), whereas the same chord posted to the list copies the panel's
+  selection. All windows of the app share one UI thread, so the attached
+  keyboard state holds for any of them.
 
 That is the whole of it: `Send-NutshellKeys` (real `SendKeys`, and the
 `SetForegroundWindow`/`keybd_event` dance it needed) is gone, and no case is
@@ -173,13 +181,14 @@ touches before marking its pull request ready.
 | `terminal_holds_position_while_output_arrives` | a view scrolled back with Shift+Page Up stays on the same lines while background output arrives; Enter returns to the live view (smart scrolling) |
 | `resize_applies_to_inactive_tab` | a tab resized while in the background comes back with the same grid as the tab that was in front, and a bigger one than it had before the resize |
 | `ai_panel_docks_with_key` | View › AI Assist docks the panel without a dialog |
-| `ai_runs_read_command_unattended` | a prompted `echo` runs in the terminal via `[EXEC]` once the policy control's unattended marker is on Read |
+| `ai_runs_read_command_unattended` | a prompted `echo` runs in the terminal via `[EXEC]` once Auto-approve is on at Read |
 | `ai_commands_run_one_at_a_time` | two `[EXEC]` blocks (`sleep 6 && echo FIRST_DONE`, then `echo SECOND_DONE`) run in order: the second command's echoed text only reaches the log after `FIRST_DONE`'s output, proving commands are gated on the shell prompt rather than burst-sent |
-| `ai_write_command_held_then_runs_after_allow` | a prompted `touch` is held back while the policy ceiling is Read, then runs via "Run N selected" once the ceiling is raised to Write |
-| `ai_prompt_while_approval_pending` | a second prompt gets a normal reply while the first prompt's command batch sits pending (default policy, nothing unattended); "Run N selected" with `lParam` 0 (the integration-harness "oldest pending batch" convention) then still runs the first batch's command — see docs/superpowers/specs/2026-09-09-pending-command-batches.md |
-| `ui_gallery` | contact sheet of every `--ui-demo` state x theme (10 states x 4 themes = 40 captures); no SSH host or AI key needed |
+| `ai_write_command_held_then_runs_after_allow` | a prompted `touch` is held back while the level is Read (Auto-approve on), then runs via "Run N selected" once the level is raised to Write with Auto-approve off |
+| `ai_prompt_while_approval_pending` | a second prompt gets a normal reply while the first prompt's command batch sits pending (default policy, Auto-approve off); "Run N selected" with `lParam` 0 (the integration-harness "oldest pending batch" convention) then still runs the first batch's command — see docs/superpowers/specs/2026-09-09-pending-command-batches.md |
+| `ui_gallery` | contact sheet of every `--ui-demo` state x theme (15 states x 4 themes = 60 captures); no SSH host or AI key needed |
 | `approval_card_run_selected_settles` | "Run N selected" on a live approval card (`--ui-demo=approval`) settles without crashing; no SSH host or AI key needed |
 | `ai_panel_opens_without_key` | the panel opens straight into the no-key empty state with `ai_api_key` empty, no dialog; no AI key needed despite the `ai_` prefix |
+| `ai_auto_approve_critical_asks_first` | with no key: Auto-approve at Critical raises a Yes/No box; a second toggle during the box is ignored; No leaves Critical/off; Yes turns it on; retired id 4040 does nothing (spec 2026-10-18 section 2) |
 | `helpers_posted_text_reaches_shell` | posted `Send-NutshellLine`/`Wait-NutshellShell` reach the shell with no foreground/focus dependency (proves the posted-input helpers work end to end) |
 | `helpers_session_manager_opens_and_lists_profile` | `Open-NutshellSessionManager` + `Wait-NutshellDialog` find the dialog, `Get-NutshellListItems` lists the generated profile, `Close-NutshellDialog -Button Cancel` closes it |
 | `helpers_settings_opens_every_page` | `Open-NutshellSettings`/`Select-NutshellSettingsPage` select and capture all nine Settings pages, `Close-NutshellDialog -Button Cancel` closes it |
@@ -214,6 +223,41 @@ touches before marking its pull request ready.
 | `ctrl_w_reaches_shell_and_shift_closes_tab` | plain Ctrl+W/Ctrl+T now reach the shell as `^W`/`^T` (moved off tab close/new-session); Ctrl+Shift+W closes the active tab (tab strip back to the one-tab hash) without leaking a `^W` into the surviving tab's `cat -v` |
 | `send_key_alt_next_prefixes_escape` | Edit > Send Key > Send Next Key with Alt (`WM_COMMAND` 2059) arms the one-shot; a plain `f` key-down with no Alt held arrives as exactly one `^[f`, proving the one-shot -- not a real Alt chord -- supplied the ESC prefix |
 | `backspace_sends_bs_over_ssh` | Backspace sends BS (`^H`, 0x08) over SSH, read back from `cat -v` |
+| `ai_panel_select_copy` | `--ui-demo=chat`: drag over "mounts first:" in the reply (rects from `Get-NutshellChatWordRect`, no hardcoded coordinates), nothing copied on release, Ctrl+C posted to the list copies exactly `mounts first:`; no SSH host or AI key needed |
+| `ai_panel_select_across_items` | `--ui-demo=chat`: drag from "disk" in the user bubble to "found" in the reply, across the open Thinking body and an `[EXEC]` command; the clipboard equals the golden of `tests/test_ui_demo.c` exactly |
+| `ai_panel_select_scrolls` | `--ui-demo=chat` in a short window: the reply's last line starts below the list; a drag held past the bottom edge auto-scrolls and the copy runs from "disk" to the reply's last line |
+| `ai_panel_edit_copy_follows_focus` | `--ui-demo=chat`: Edit > Copy copies the panel selection while the list has focus, and leaves the clipboard alone once focus is on the terminal |
+
+**How the `ai_panel_select_*` and `ai_panel_edit_copy_follows_focus` cases are sized.**
+The geometry that decides what the list paints is in physical pixels, so the
+cases do not assume 96 DPI. `Invoke-AiSelectCase` reads the window's DPI
+(`Get-NutshellWindowDpi`, 96 when `GetDpiForWindow` is missing) and asks for
+`1400 x height` times DPI / 96 (900 for most cases, 480 for the scrolling one),
+clamped to the work area by `Set-NutshellWindowSize`. The PASS/FAIL detail ends
+with what was achieved: `(dpi 192, window client WxH, list WxH)`. Before any
+drag, every point the copy and across-items cases aim at, and the scroll
+case's start point, must lie inside the list; if one does not, the case
+fails with `inconclusive at this DPI/work area: list N px tall, 'word'
+at y=Y` rather than dragging, because a drag target below the list's bottom
+edge auto-scrolls on every move and the copy would be a different text for
+reasons that say nothing about selection. That message means the work area is
+too small for this DPI, not that selection is broken. `ai_panel_select_scrolls`
+aims its end point below the list on purpose and needs the opposite: the
+reply's last line must be out of sight. An unpainted last line (the query
+answers only for items a paint touched) is accepted; a painted one above the
+bottom edge fails with `the window is too tall for this
+case`. `Send-NutshellChatDrag` also parks the real cursor in the virtual
+screen's bottom-right corner first: when capture changes Windows synthesises a
+`WM_MOUSEMOVE` from the real cursor, and the list must not meet one over the
+window mid-drag (the list also ignores a move without the left button).
+
+Run the suite from a fresh PowerShell window after any change to
+`NutshellIT.psm1`'s `Add-Type` sources: a type already loaded in a console
+cannot be redefined, so `Import-Module -Force` keeps the old one. Any change to
+either source (a new member, or a changed body or signature) stops the module
+at load with a message to open a new window, instead of failing a case with
+"does not contain a method named" or silently running the old code; an
+unchanged source re-imports without complaint.
 
 ## AI Assist cases
 
@@ -221,7 +265,7 @@ The five `ai_*` cases above the `ui_gallery`/`approval_card_run_selected_settles
 block make real API calls and are **skipped** unless a key is present in the
 environment variable `NUTSHELL_IT_AI_KEY` or in the git-ignored file
 `tests\integration\.ai_key` (create it yourself; never commit it) —
-`ai_panel_opens_without_key` is not one of them; it needs no key. Provider and
+`ai_panel_opens_without_key` and `ai_auto_approve_critical_asks_first` are not among them; they need no key. Provider and
 model default to Moonshot / `kimi-k3` and can be changed with `-AiProvider` and
 `-AiModel`. 30 lines of terminal context, no web tools. A full run of the five
 key-gated cases makes about nine model calls: `ai_panel_docks_with_key` sends
@@ -253,6 +297,10 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Get-NutshellPixel -Path -X -Y` / `Test-NutshellPixelNear -Path -X -Y -Rgb -Tolerance` | read/compare a pixel in a saved capture |
 | `Get-NutshellThemeColor -Name -Token` | parses `src/core/ui_theme.c`'s per-theme initialisers for one of `bg_primary`, `bg_secondary`, `accent`, `text_main`, `text_dim`, `border`, `terminal_fg`, `terminal_bg`, `success`, `warning`, `danger`, `info`, `link` |
 | `Get-NutshellRegionHash -Path -Region` | MD5 of a proportional region `@{X;Y;W;H}` (each 0..1) of a saved capture — the general form of `cases-terminal.ps1`'s terminal-specific `Get-TerminalAreaHash`; used by `minimise_restore_repaints`, `tabs_open_switch_close` and `cli_no_connect_opens_idle` to compare a specific band (or the whole window) across two captures |
+| `Get-NutshellChatList -Session` / `Get-NutshellChatWordRect -Session -Word -Item [-Thinking]` | the AI panel's message list / where it painted a word (`CLV_MSG_QUERY_WORD`, `--ui-demo` only): `@{X;Y;W;H}` in the list's client pixels, W ending at the word's last character |
+| `Get-NutshellWindowDpi -Session` | the main window's DPI (96 = 100%); 96 when `GetDpiForWindow` is unavailable or returns 0 |
+| `Send-NutshellChatDrag -Session -FromX -FromY -ToX -ToY [-Steps] [-HoldMoves]` | a drag in the message list with sent `WM_LBUTTONDOWN`/`WM_MOUSEMOVE`/`WM_LBUTTONUP` (no foreground; the real cursor is parked in the screen's far corner first); `-HoldMoves` repeats the last point, each past an edge auto-scrolling once |
+| `Set-NutshellFocus -Session -Hwnd` | keyboard focus to one of the app's windows via `AttachThreadInput` + `SetFocus`; `Send-NutshellChord -Hwnd` posts a chord to a window other than the main one |
 
 **Window geometry is never assumed.** `Set-NutshellWindowSize` treats its
 `-Width`/`-Height` as a *request*: it clamps them to the primary work area

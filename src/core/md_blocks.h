@@ -4,7 +4,7 @@
 /*
  * md_blocks -- pure splitter that finds the fenced code blocks in a piece of
  * reply text, using the markdown renderer's own line classifier
- * (md_classify_line in src/ui/markdown.h) so it recognises exactly the fences
+ * (md_classify_line in src/core/markdown.h) so it recognises exactly the fences
  * the renderer draws: a line that starts, at column 0, with three backticks.
  * An indented fence is not a fence. Spec:
  * docs/superpowers/specs/2026-10-13-command-detail-and-copy-design.md
