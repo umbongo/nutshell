@@ -107,6 +107,9 @@ buffer and cursor row are top-anchored whether or not it repaints, and the model
 with them for the next output to land on the right row. What the flag removes is the repaint
 itself, and with it section 3's two residuals.
 
+The report is `2026-10-19-conpty-resize-probe-report.md`, filled from one Windows run of
+`test_local_pty_resize_parity`.
+
 ### 1. Top-anchored reflow for ConPTY sessions
 
 **1.1 The mode.** `term.h` gains
