@@ -1,6 +1,10 @@
 #include "test_framework.h"
 #include "ui_demo.h"
 #include "chat_msg.h"
+#include "chat_copy.h"
+#include "text_runs.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include "ai_panel_layout.h"
 #include "ns_scale.h"
 #include <string.h>
@@ -472,6 +476,92 @@ int test_ui_demo_settings_debug_is_an_empty_state(void)
     ASSERT_TRUE(!ui_demo_scrolls_to_top("settings-debug"));
     ASSERT_TRUE(!ui_demo_state_valid("settings"));
     ASSERT_TRUE(!ui_demo_state_valid("settings-debug "));
+    TEST_END();
+}
+
+/* The "chat" state's selection (spec 2026-10-18 section 6), copied the way
+ * the panel copies it: the user turn and the reply replayed as items like
+ * chat_rebuild_display() does, the Thinking body expanded as
+ * ai_chat_apply_demo_extras() leaves it. */
+static void build_chat_items(ChatMsgList *l, AiConversation *conv)
+{
+    chat_msg_list_init(l);
+    chat_msg_append(l, CHAT_ITEM_USER, ai_msg_content(&conv->messages[1]));
+    ChatMsgItem *ai = chat_msg_append(l, CHAT_ITEM_AI_TEXT,
+                                      ai_msg_content(&conv->messages[2]));
+    chat_msg_set_thinking(ai, ui_demo_thinking_text());
+    ai->u.ai.thinking_collapsed = 0;
+}
+
+int test_ui_demo_chat_selection_spans_every_kind(void)
+{
+    TEST_BEGIN();
+    AiConversation *conv = (AiConversation *)calloc(1, sizeof(*conv));
+    ASSERT_NOT_NULL(conv);
+    if (!conv) { TEST_END(); }
+    int built = ui_demo_build("chat", conv, NULL, NULL, NULL, 0);
+    ASSERT_EQ(built, 0);
+    ChatMsgList l;
+    build_chat_items(&l, conv);
+    int uo = -1, ro = -1;
+    ui_demo_chat_selection(&uo, &ro);
+    ChatSelPos a = { l.head->id, TR_PART_MAIN, uo };
+    ChatSelPos b = { l.tail->id, TR_PART_MAIN, ro };
+    char *out = NULL;
+    size_t n = chat_copy_selection(&l, a, b, 1, &out);
+    ASSERT_TRUE(n > 0);
+    ASSERT_NOT_NULL(out);
+    if (out) {
+        ASSERT_TRUE(strncmp(out, "disk usage on this box", 22) == 0);
+        ASSERT_TRUE(strstr(out, ui_demo_thinking_text()) != NULL);
+        ASSERT_TRUE(strstr(out, "I checked the mounts first:\ndf -h /\n") != NULL);
+        ASSERT_TRUE(strstr(out, "- Root partition: 42% used") != NULL);
+        ASSERT_TRUE(strstr(out, "Mount\tUsed\tAvail") != NULL);
+        ASSERT_TRUE(strstr(out, "$ du -sh /var/log/*") != NULL);
+        ASSERT_TRUE(strstr(out, "[EXEC]") == NULL);
+        ASSERT_TRUE(strstr(out, "**") == NULL);
+        ASSERT_TRUE(strstr(out, "```") == NULL);
+        ASSERT_TRUE(n >= 7 && strcmp(out + n - 7, "Want me") == 0);
+    }
+    free(out);
+    chat_msg_list_clear(&l);
+    ai_conv_reset(conv);
+    free(conv);
+    TEST_END();
+}
+
+/* What the integration case ai_panel_select_across_items
+ * (tests/integration/cases/95-ai-select.ps1) expects on the clipboard after
+ * dragging from "disk" in the user bubble to the end of "found" in the
+ * reply. Keep the two strings identical. */
+int test_ui_demo_chat_drag_across_items_golden(void)
+{
+    TEST_BEGIN();
+    AiConversation *conv = (AiConversation *)calloc(1, sizeof(*conv));
+    ASSERT_NOT_NULL(conv);
+    if (!conv) { TEST_END(); }
+    int built = ui_demo_build("chat", conv, NULL, NULL, NULL, 0);
+    ASSERT_EQ(built, 0);
+    ChatMsgList l;
+    build_chat_items(&l, conv);
+    const char *u = l.head->text, *r = l.tail->text;
+    ChatSelPos a = { l.head->id, TR_PART_MAIN, (int)(strstr(u, "disk") - u) };
+    ChatSelPos b = { l.tail->id, TR_PART_MAIN,
+                     (int)(strstr(r, "found") - r) + 5 };
+    char *out = NULL;
+    chat_copy_selection(&l, a, b, 1, &out);
+    char want[1024];
+    snprintf(want, sizeof(want),
+             "disk usage on this box and tell me what's eating space?\n\n"
+             "%s\n\n"
+             "Disk Usage Summary\n\nI checked the mounts first:\ndf -h /\n\n"
+             "Here's what I found", ui_demo_thinking_text());
+    ASSERT_NOT_NULL(out);
+    if (out) ASSERT_STR_EQ(out, want);
+    free(out);
+    chat_msg_list_clear(&l);
+    ai_conv_reset(conv);
+    free(conv);
     TEST_END();
 }
 

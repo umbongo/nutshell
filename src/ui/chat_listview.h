@@ -7,6 +7,7 @@
 #include "chat_activity.h"
 #include "ui_theme.h"
 #include "ns_hover.h"
+#include "chat_copy.h"
 
 /* One copy glyph on a fenced code block in a reply, as last painted:
  * recorded by on_paint() so hover and click hit-test exactly what is on
@@ -43,11 +44,28 @@ typedef struct {
     ActivityState *activity;
     int pulse_toggle;           /* Animation toggle for pulsing dot */
 
-    /* Text selection (content-space Y coordinates) */
-    int sel_start_y;            /* Content Y where mouse-drag started */
-    int sel_end_y;              /* Content Y where mouse-drag currently is */
-    int sel_active;             /* 1 = mouse is held down, dragging */
-    int sel_valid;              /* 1 = a selection exists to highlight/copy */
+    /* Character selection (spec 2026-10-18 section 5): anchor and focus as
+     * (message id, part, byte offset), resolved by id on every use; the
+     * selection is dropped when either id no longer names an item. */
+    ChatSelPos sel_anchor;
+    ChatSelPos sel_focus;
+    int sel_active;             /* 1 = the button is down, dragging */
+    int sel_valid;              /* 1 = a non-empty selection exists */
+    int sel_moved;              /* 1 = this drag passed the 4 px threshold */
+    int sel_down_x, sel_down_y; /* where the button went down */
+    int sel_last_x, sel_last_y; /* last drag point, re-hit after a wheel */
+    int sel_keep_on_up;         /* a triple-click: keep it on button-up */
+    int dbl_armed;              /* a handled double-click may become triple */
+    DWORD dbl_time;             /* GetTickCount() of that double-click */
+    int dbl_x, dbl_y;           /* where it was */
+
+    /* Id of the user item whose copy on_paint() pinned at the top of the
+     * list this frame (its runs are in pinned_runs), 0 when none. */
+    int pinned_id;
+
+    /* 1 under --ui-demo: answer CLV_MSG_QUERY_WORD (the integration
+     * harness asks where a word was painted). */
+    int query_enabled;
 
     /* Command list collapse state (0 = collapsed, 1 = expanded) */
     int cmd_list_expanded;
@@ -134,6 +152,33 @@ void chat_listview_set_fonts(HWND hwnd, HFONT font, HFONT mono,
 
 /* Set theme (triggers full repaint). */
 void chat_listview_set_theme(HWND hwnd, const ThemeColors *theme);
+
+/* --ui-demo only (see chat_listview_enable_query): where was a word
+ * painted? wParam: LOWORD = the item's position in the list (0 = first),
+ * HIWORD = 1 for its Thinking body, 0 for its text; lParam: a global atom
+ * (GlobalAddAtom) naming the word, ASCII. Returns the rect, in list-view
+ * client pixels, from the left edge of the first painted run that begins
+ * with the word to the end of the word itself, packed as
+ * x | y << 16 | w << 32 | h << 48 (16 bits each), or 0 when no painted run
+ * begins with it, the rect lies above or left of the client area, or the
+ * query is not enabled. Runs are recorded for the whole of every item a
+ * paint touched, so a word below the visible area still answers (with
+ * y >= the client height). */
+#define CLV_MSG_QUERY_WORD (WM_APP + 0x51)
+
+/* Answer CLV_MSG_QUERY_WORD from now on. Called by the --ui-demo setup only. */
+void chat_listview_enable_query(HWND hwnd);
+
+
+/* Select from `a` to `b` (either order) and repaint -- the --ui-demo=chat
+ * preset (spec 2026-10-18 section 6). */
+void chat_listview_set_selection(HWND hwnd, ChatSelPos a, ChatSelPos b);
+
+/* Edit > Copy: when this list view has keyboard focus and a selection,
+ * copy the selection's visible text to the clipboard and return 1;
+ * otherwise return 0 and touch nothing (the caller copies the terminal's
+ * selection instead). */
+int chat_listview_copy_selection(HWND hwnd);
 
 /* Notify that the message list has changed. Triggers remeasure + repaint. */
 void chat_listview_invalidate(HWND hwnd);

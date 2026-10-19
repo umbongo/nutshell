@@ -213,6 +213,16 @@ Done, in order (details in the commit messages and the specs named):
   and connection-thread lifetimes refcounted (double free and use-after-free
   fixed); platform detection anchored and only ever tightens after resolution.
 
+- Character selection in the AI Assist panel, v1.2.38
+  (`2026-10-18-ai-panel-text-selection-design.md`, plan
+  `docs/superpowers/plans/2026-10-18-ai-panel-text-selection.md`): drag,
+  double- and triple-click select characters across messages; Ctrl+C, Edit >
+  Copy and the menu copy the visible text; every item is laid out by
+  md_render, which records runs and draws the highlight. Two spec rules
+  changed on the prototype's evidence: a list marker copies only when the
+  range covers its bytes, and the user bubble's highlight uses its text
+  colour (the focus tint is invisible on the accent bubble).
+
 Open, in priority order:
 - [ ] AI panel: commands of a **finished** batch have no details popup and no copy icon
       after a session switch. `cmd_batch_remove` drops the batch, so `chat_rebuild_display`
@@ -221,6 +231,13 @@ Open, in priority order:
       from `2026-10-13-command-detail-and-copy-design.md`, section 1. The same spec lists
       two smaller follow-ups: the classifier's reason string as a "why this level" line in
       the popup, and a Unicode input box.
+- [ ] AI panel selection follow-ups (spec `2026-10-18-ai-panel-text-selection-design.md`
+      section 8 and the plan's notes): an I-beam cursor over text; Shift+arrow keyboard
+      selection; grapheme-safe boundaries (a combining mark or an emoji sequence can
+      split); dragging past the Thinking box's edge does not scroll the box; the message
+      box is still an ANSI EDIT, so text outside the code page cannot be typed (the
+      "Unicode input box" item above); the highlight leaves 2-6 px gaps between lines
+      (line spacing), which the four-theme review may want closed.
 - [ ] Review and critique the whole repository, security first (maintainer's request,
       2026-09-24). A fresh audit, not a re-read of `2026-09-09-security-audit.md`: the
       local shell (ConPTY spawn, environment, PATH, the shell search order),

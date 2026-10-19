@@ -31,6 +31,9 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
     if (!item->text) { free(item); return NULL; }
     memcpy(item->text, src, len + 1);
     item->text_len = len;
+    text_runs_init(&item->runs);
+    text_runs_init(&item->pinned_runs);
+    item->painted_height = 0;
 
     /* Type-specific defaults */
     if (type == CHAT_ITEM_AI_TEXT) {
@@ -40,6 +43,7 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
         item->u.ai.thinking_complete = 0;
         item->u.ai.thinking_scroll_y = 0;
         item->u.ai.thinking_autoscroll = 1;
+        item->u.ai.think_cache_len = -1;
     } else if (type == CHAT_ITEM_COMMAND) {
         item->u.cmd.command = NULL;
         item->u.cmd.note = NULL;
@@ -68,6 +72,8 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
 static void free_item(ChatMsgItem *item)
 {
     if (!item) return;
+    text_runs_free(&item->runs);
+    text_runs_free(&item->pinned_runs);
     /* Zero sensitive content before free (may contain API reasoning, passwords) */
     if (item->text) {
         secure_zero(item->text, item->text_len);
@@ -216,6 +222,13 @@ int chat_msg_count(const ChatMsgList *list)
     return list ? list->count : 0;
 }
 
+ChatMsgItem *chat_msg_find(const ChatMsgList *list, int id)
+{
+    for (ChatMsgItem *it = list ? list->head : NULL; it; it = it->next)
+        if (it->id == id) return it;
+    return NULL;
+}
+
 int chat_msg_batch_index(const ChatMsgList *list, const ChatMsgItem *item)
 {
     if (!list || !item) return -1;
@@ -332,29 +345,6 @@ int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,
         idx++;
     }
     return n;
-}
-
-void chat_strip_exec_markers(char *s)
-{
-    if (!s) return;
-    static const char open_m[] = "[EXEC]";
-    static const char close_m[] = "[/EXEC]";
-    char *w = s;
-    const char *r = s;
-    while (*r) {
-        if (*r == '[') {
-            if (strncmp(r, open_m, sizeof(open_m) - 1) == 0) {
-                r += sizeof(open_m) - 1;
-                continue;
-            }
-            if (strncmp(r, close_m, sizeof(close_m) - 1) == 0) {
-                r += sizeof(close_m) - 1;
-                continue;
-            }
-        }
-        *w++ = *r++;
-    }
-    *w = '\0';
 }
 
 size_t utf8_cut_at(char *buf, size_t max)

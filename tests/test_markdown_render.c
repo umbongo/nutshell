@@ -7,7 +7,7 @@
  */
 
 #include "test_framework.h"
-#include "../src/ui/markdown.h"
+#include "../src/core/markdown.h"
 #include <string.h>
 
 /* ---- md_classify_line: edge cases ---- */

@@ -23,6 +23,7 @@
 #include "ns_hover.h"
 #include "ai_panel_layout.h"
 #include "text_lines.h"
+#include "secure_zero.h"
 #include "ai_panel_states.h"
 #include "settings_layout.h"
 #include "ui_theme.h"
@@ -1221,7 +1222,8 @@ static void chat_rebuild_display(AiChatData *d)
         const AiMessage *msg = &d->conv.messages[i];
 
         if (msg->role == AI_ROLE_USER) {
-            chat_msg_append(&d->msg_list, CHAT_ITEM_USER, msg->content);
+            chat_msg_append(&d->msg_list, CHAT_ITEM_USER,
+                            ai_msg_content(msg));
         } else if (msg->role == AI_ROLE_ASSISTANT) {
             /* Tool-use blocks first, matching the live "using tool: <name>"
              * status row posted while the call is in flight. */
@@ -1681,6 +1683,33 @@ static int ctx_buffers_ensure(AiChatData *d)
     return (d->ctx_term && d->ctx_prompt) ? 1 : 0;
 }
 
+/* The message box's text as UTF-8 with every CR LF turned into LF (spec
+ * 2026-10-18 section 2). Read as UTF-16 rather than with the ANSI
+ * GetWindowText, so a user item never holds code-page bytes the selection's
+ * UTF-8 boundary rules would misread. Heap (the caller frees it); NULL when
+ * memory runs out. */
+static char *input_text_utf8(HWND hInput)
+{
+    int wlen = GetWindowTextLengthW(hInput);
+    if (wlen < 0) wlen = 0;
+    size_t wbytes = ((size_t)wlen + 1) * sizeof(wchar_t);
+    wchar_t *w = (wchar_t *)malloc(wbytes);
+    if (!w) return NULL;
+    int got = GetWindowTextW(hInput, w, wlen + 1);
+    if (got < 0) got = 0;
+    if (got > wlen) got = wlen;
+    w[got] = L'\0';
+    int need = WideCharToMultiByte(CP_UTF8, 0, w, got + 1, NULL, 0, NULL, NULL);
+    char *u = need > 0 ? (char *)malloc((size_t)need) : NULL;
+    if (u && WideCharToMultiByte(CP_UTF8, 0, w, got + 1, u, need,
+                                 NULL, NULL) <= 0)
+        u[0] = '\0';
+    secure_zero(w, wbytes);
+    free(w);
+    if (u) text_crlf_to_lf(u);
+    return u;
+}
+
 static void send_user_message(AiChatData *d)
 {
     /* Pending command batches: a card never blocks the input (rule 1) --
@@ -1690,8 +1719,12 @@ static void send_user_message(AiChatData *d)
     if (!d || !d->active_state || d->active_state->busy || d->dispatch_active)
         return;
 
-    char input[2048];
-    GetWindowText(d->hInput, input, (int)sizeof(input));
+    char *input = input_text_utf8(d->hInput);
+    if (!input) return;
+    /* The text as read: the prefix strip below shortens the string, but the
+     * bytes past the new end still hold the original, so the wipes cover
+     * this length. */
+    const size_t input_len = strlen(input);
 
     /* Strip any "[Image attached] " prefixes inserted by clipboard paste */
     {
@@ -1704,7 +1737,11 @@ static void send_user_message(AiChatData *d)
             memmove(input, text_start, strlen(text_start) + 1);
     }
 
-    if (input[0] == '\0') return;
+    if (input[0] == '\0') {
+        secure_zero(input, input_len);
+        free(input);
+        return;
+    }
 
     SetWindowText(d->hInput, "");
 
@@ -1808,6 +1845,9 @@ static void send_user_message(AiChatData *d)
 
     /* Clear pending attachment after thread is launched */
     ai_attachment_free(&d->pending_attachment);
+
+    secure_zero(input, input_len);
+    free(input);
 }
 
 /* line_clear_mode is the caller's (dispatch_tick's) already-decided
@@ -5728,12 +5768,14 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     }
     ai_chat_force_state(hwnd, forced);
 
-    /* Gallery: "chat" shows the Thinking disclosure collapsed (the normal
-     * post-reply state); "all" shows it expanded so the review set covers
-     * both forms per the design spec's "Thought process" section. Setting
-     * the item's own flag (rather than d->show_thinking) is the smallest
-     * change -- chat_rebuild_display() always creates it collapsed. */
-    if (state && strcmp(state, "all") == 0) {
+    /* Gallery: "chat" and "all" show the Thinking disclosure expanded --
+     * "chat" because its selection crosses the Thinking body (spec
+     * 2026-10-18 section 6) -- and "thinking" shows it collapsed, so the
+     * review set still covers both forms per the design spec's "Thought
+     * process" section. Setting the item's own flag (rather than
+     * d->show_thinking) is the smallest change -- chat_rebuild_display()
+     * always creates it collapsed. */
+    if (state && (strcmp(state, "all") == 0 || strcmp(state, "chat") == 0)) {
         ChatMsgItem *ti = d->msg_list.head;
         while (ti) {
             if (ti->type == CHAT_ITEM_AI_TEXT && ti->u.ai.thinking_text &&
@@ -5767,6 +5809,9 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
 
     relayout(d);
     if (d->hChatList) {
+        /* The integration harness asks the list where words were painted
+         * (CLV_MSG_QUERY_WORD) -- under --ui-demo only. */
+        chat_listview_enable_query(d->hChatList);
         chat_listview_invalidate(d->hChatList);
         /* chat_rebuild_display() above always leaves the list scrolled to
          * the bottom; ui_demo_scrolls_to_top() (src/core/ui_demo.c) names
@@ -5779,6 +5824,32 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
         if (ui_demo_scrolls_to_top(state))
             chat_listview_scroll_to_top(d->hChatList);
     }
+
+    /* "chat": a character selection from the user bubble, across the
+     * Thinking body, into the reply's last line -- the screenshot the
+     * maintainer reviews in the four themes (spec 2026-10-18 section 6). */
+    if (state && strcmp(state, "chat") == 0 && d->hChatList) {
+        ChatMsgItem *u = NULL, *ai = NULL;
+        for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+            if (!u && it->type == CHAT_ITEM_USER) u = it;
+            if (!ai && it->type == CHAT_ITEM_AI_TEXT) ai = it;
+        }
+        if (u && ai) {
+            int uo = 0, ro = 0;
+            ui_demo_chat_selection(&uo, &ro);
+            ChatSelPos a = { u->id, TR_PART_MAIN, uo };
+            ChatSelPos b = { ai->id, TR_PART_MAIN, ro };
+            chat_listview_set_selection(d->hChatList, a, b);
+        }
+    }
+}
+
+int ai_chat_copy_selection(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd)) return 0;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d || !d->hChatList) return 0;
+    return chat_listview_copy_selection(d->hChatList);
 }
 
 void ai_chat_close(HWND hwnd)

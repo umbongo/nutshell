@@ -17,6 +17,16 @@ int _tf_run    = 0;
 int test_icons_all_render_non_empty(void);
 int test_icons_render_at_multiple_sizes(void);
 
+/* test_md_render_win.c */
+int test_md_render_win_measure_equals_paint_and_runs(void);
+
+/* test_chat_select_win.c */
+int test_chat_select_win_runs_match_paint(void);
+int test_chat_select_win_mouse_and_keys(void);
+int test_chat_select_win_query_word(void);
+int test_chat_select_win_drag_ignores_buttonless_move(void);
+int test_chat_select_win_short_list(void);
+
 /* test_local_pty.c */
 extern FILE *nspty_report;
 int test_local_pty_echo_through_cmd(void);
@@ -180,6 +190,12 @@ int main(int argc, char **argv)
     int failed = 0;
     failed += test_icons_all_render_non_empty();
     failed += test_icons_render_at_multiple_sizes();
+    failed += test_md_render_win_measure_equals_paint_and_runs();
+    failed += test_chat_select_win_runs_match_paint();
+    failed += test_chat_select_win_mouse_and_keys();
+    failed += test_chat_select_win_query_word();
+    failed += test_chat_select_win_drag_ignores_buttonless_move();
+    failed += test_chat_select_win_short_list();
 
     printf("\n[pty] re-executing with a console of our own "
            "(see win_runner.c for why)\n");

@@ -18,4 +18,11 @@
  * is empty text. */
 size_t text_lf_to_crlf(const char *in, char *out, size_t out_sz);
 
+/* The other way, in place: every "\r\n" in the NUL-terminated `s` becomes
+ * "\n"; a lone '\r' is kept. Used on the AI message box's text, which a
+ * multiline EDIT holds with CR LF, before it becomes a chat item (whose
+ * renderer breaks lines on '\n' only). Returns the new length; NULL is
+ * empty text. */
+size_t text_crlf_to_lf(char *s);
+
 #endif /* NUTSHELL_TEXT_LINES_H */

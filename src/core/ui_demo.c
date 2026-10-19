@@ -39,8 +39,8 @@ int ui_demo_state_valid(const char *state)
  * lands its usual scroll-to-bottom (src/ui/ai_chat.c's
  * ai_chat_apply_demo_extras()) -- these need to be pulled back to the top
  * afterwards so the gallery capture actually shows the disclosure instead
- * of scrolling past it. "chat"/"thinking" show it collapsed, "all" shows
- * it expanded (ai_chat_apply_demo_extras() forces that). Every other state
+ * of scrolling past it. "thinking" shows it collapsed, "chat" and "all"
+ * show it expanded (ai_chat_apply_demo_extras() forces that). Every other state
  * keeps the bottom scroll, to show its most recent activity.
  *
  * "thinking" was missing from this set until 2026-09-24: left scrolled to
@@ -78,6 +78,8 @@ static const char CHAT_USER_MSG[] =
 static const char CHAT_ASSISTANT_MSG[] =
     "## Disk Usage Summary\n"
     "\n"
+    "I checked the mounts first:\n"
+    "[EXEC]df -h /[/EXEC]\n"
     "Here's what I found on **web-01**:\n"
     "\n"
     "- Root partition: 42% used\n"
@@ -109,6 +111,20 @@ static const char CHAT_THINKING[] =
 const char *ui_demo_thinking_text(void)
 {
     return CHAT_THINKING;
+}
+
+/* The selection "chat" shows (spec 2026-10-18 section 6): from "disk" in the
+ * user turn to just after "Want me" in the reply's last line -- across the
+ * bubble, the Thinking body, the heading, the [EXEC] command, the list, the
+ * table and the code block. */
+void ui_demo_chat_selection(int *user_off, int *reply_off)
+{
+    const char *u = strstr(CHAT_USER_MSG, "disk");
+    const char *r = strstr(CHAT_ASSISTANT_MSG, "Want me");
+    if (user_off) *user_off = u ? (int)(u - CHAT_USER_MSG) : 0;
+    if (reply_off)
+        *reply_off = r ? (int)(r - CHAT_ASSISTANT_MSG) + (int)strlen("Want me")
+                       : 0;
 }
 
 /* ---------------------------------------------------------------------
