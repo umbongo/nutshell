@@ -127,6 +127,7 @@ static void term_reflow_buffer(
     int cur_new_col = 0;
     int new_cursor_row = 0;
     int new_cursor_col = 0;
+    bool cursor_at_content_end = false;
 
     /* Convert screen-relative cursor to buffer-absolute logical index */
     int old_screen_top = (old_count >= old_rows) ? (old_count - old_rows) : 0;
@@ -178,6 +179,7 @@ static void term_reflow_buffer(
         if (i == cursor_logical && cur_col >= cell_limit) {
             new_cursor_row = cur_new_row;
             new_cursor_col = cur_new_col;
+            cursor_at_content_end = (cur_col == cell_limit);
         }
     }
 
@@ -226,13 +228,14 @@ static void term_reflow_buffer(
     if (new_cursor_row < 0)        new_cursor_row = 0;
     if (new_cursor_row >= new_rows) new_cursor_row = new_rows - 1;
     if (new_cursor_col < 0)        new_cursor_col = 0;
-    /* The pending wrap survives a resize: a cursor that was in the
-     * deferred-wrap column (col == old_cols) and whose row now ends exactly
-     * at new_cols keeps col == new_cols, so the next character still wraps
-     * instead of overwriting the last cell (spec section 2 identity). Any
-     * other column past the row is clamped. */
+    /* The pending wrap survives a resize: a cursor exactly at its row's
+     * content end (distance 0, whether or not it was in the old deferred-wrap
+     * column) whose row now ends exactly at new_cols keeps col == new_cols,
+     * so the next character still wraps instead of overwriting the last
+     * cell (spec section 2 identity). A cursor past the content, or any other
+     * column past the row, is clamped: that cell is blank. */
     if (new_cursor_col >= new_cols &&
-        !(cur_col == old_cols && new_cursor_col == new_cols))
+        !(cursor_at_content_end && new_cursor_col == new_cols))
         new_cursor_col = new_cols - 1;
 
     *out_lines      = new_lines;

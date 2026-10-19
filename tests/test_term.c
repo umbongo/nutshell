@@ -273,18 +273,17 @@ int test_term_resize_cursor_edge(void) {
     ASSERT_EQ(t->cursor.row, 0);
     ASSERT_EQ(t->cursor.col, 10);
     
-    // Resize to 5 cols: "01234" / "56789", and no blank third row. After the
-    // widening the cursor is no longer in the deferred-wrap column (col 10 of
-    // 20), so it is just one past the content and is clamped to the last
-    // column (resize spec section 2).
+    // Resize to 5 cols: "01234" / "56789", and no blank third row. The
+    // cursor was exactly at the content's end, so it keeps its pending wrap
+    // at col 5 == new cols (resize spec section 2).
     term_resize(t, 10, 5);
     ASSERT_EQ(t->cursor.row, 1);
-    ASSERT_EQ(t->cursor.col, 4);
+    ASSERT_EQ(t->cursor.col, 5);
     
     term_free(t);
 
-    // The same narrowing straight from the deferred-wrap column: the pending
-    // wrap is kept, cursor at col 5 == new cols, and still no blank third row.
+    // The same narrowing straight from the deferred-wrap column gives the same
+    // result: cursor at col 5 == new cols, and still no blank third row.
     t = term_init(10, 10, 100);
     term_process(t, "0123456789", 10);
     ASSERT_EQ(t->cursor.col, 10);

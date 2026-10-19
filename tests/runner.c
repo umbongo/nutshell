@@ -1125,6 +1125,7 @@ int test_reflow_exact_width_narrow_and_back_is_one_row(void);
 int test_reflow_line_one_past_width_still_wraps(void);
 int test_reflow_cursor_on_empty_continuation_keeps_row(void);
 int test_reflow_deferred_wrap_cursor_keeps_pending_wrap(void);
+int test_reflow_cursor_at_content_end_keeps_pending_wrap_when_narrowed(void);
 int test_reflow_deferred_wrap_cursor_widened_is_inside_row(void);
 int test_term_utf8(void);
 int test_term_utf8_reject_overlong_2byte(void);
@@ -4325,6 +4326,7 @@ int main(void) {
     failed += test_reflow_line_one_past_width_still_wraps();
     failed += test_reflow_cursor_on_empty_continuation_keeps_row();
     failed += test_reflow_deferred_wrap_cursor_keeps_pending_wrap();
+    failed += test_reflow_cursor_at_content_end_keeps_pending_wrap_when_narrowed();
     failed += test_reflow_deferred_wrap_cursor_widened_is_inside_row();
     failed += test_term_utf8();
     failed += test_term_utf8_reject_overlong_2byte();
