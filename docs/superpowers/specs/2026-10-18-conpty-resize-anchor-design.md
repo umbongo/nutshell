@@ -98,6 +98,15 @@ the maintainer's conhost actually does on a grow, a shrink with the cursor at th
 shrink with content below the cursor, and a width change. Section 1 is committed to code only
 after that report agrees with it, or is amended as 1.8 says.
 
+The probe runs every scenario twice: once with `CreatePseudoConsole` flags 0, as `local_pty.c`
+opens today, and once with `PSEUDOCONSOLE_RESIZE_QUIRK` (0x2). The report says what the flag
+changes in the post-resize bytes and in conhost's own buffer and cursor. If the flag stops the
+full repaint while conhost's cursor still tracks the model, `local_pty_open()` passes it for
+every local session (maintainer's decision, 2026-10-19). Section 1 stays either way: conhost's
+buffer and cursor row are top-anchored whether or not it repaints, and the model has to agree
+with them for the next output to land on the right row. What the flag removes is the repaint
+itself, and with it section 3's two residuals.
+
 ### 1. Top-anchored reflow for ConPTY sessions
 
 **1.1 The mode.** `term.h` gains
@@ -309,8 +318,8 @@ as `anchor=…` at the end of `issue.term` (`:73-84`), filled in `window.c:3183-
   the cursor's among them, when a narrowing reflow overflows a full ring).
 - **The scrolled-back repaint storm** (`issue3.log` 11761-12797) and **wide characters**: in
   the notes' Open list.
-- `PSEUDOCONSOLE_RESIZE_QUIRK` or any other `CreatePseudoConsole` flag (`local_pty.c:395`
-  passes 0), and paint-path changes.
+- Any `CreatePseudoConsole` flag other than `PSEUDOCONSOLE_RESIZE_QUIRK` (section 0), and
+  paint-path changes.
 
 ---
 
@@ -392,7 +401,11 @@ way `test_local_pty_records_key_mapping()` runs `--dump-keys` (`test_local_pty.c
 writes the scenario to its console (numbered lines, lines longer than the width so they wrap,
 content left below the cursor with a cursor-up), then reads keys: on `D` it writes every
 buffer row and the cursor from `GetConsoleScreenBufferInfo` and `ReadConsoleOutputCharacterW`
-to the dump file, on `Q` it exits. Nothing is typed as a command. The parity case: open, drain
+to the dump file, on `Q` it exits. Nothing is typed as a command. `local_pty_open_ex()`
+(`local_pty.h:39`) gains a `DWORD pcon_flags` argument that it passes to `CreatePseudoConsole`
+(`local_pty.c:395`, 0 today) so the case can open the second run with
+`PSEUDOCONSOLE_RESIZE_QUIRK`; `local_pty_open()` keeps its signature and passes 0 until the
+report says otherwise (section 0). The parity case: open, drain
 the scenario into a top-mode terminal, then for each step (grow; shrink with the cursor at the
 bottom; shrink with content below the cursor; a width change) call `term_resize()` and
 `local_pty_resize()`, snapshot the model **before** draining the post-resize bytes, assert that
@@ -487,6 +500,14 @@ Two critique rounds are the ceiling; these remain and go to the draft PR as they
     supported build sends it, or ever `\e[3J`, is unverified. 1.7 is harmless either way.
 11. **Section 2 changes SSH sessions** (no blank row at exact width, cursor kept past the
     content): bug fixes, but visible; confirm they belong in this change.
+
+### Maintainer decisions (2026-10-19)
+
+- Item 11: section 2 belongs in this change.
+- Item 7: the 100 ms interval and the two residuals of 3.2 are accepted.
+- Item 5: proceed with `PSEUDOCONSOLE_RESIZE_QUIRK`: the probe tries it (section 0) and the
+  product adopts it if the report says it stops the repaint without losing the cursor.
+- Items 1-4 and 8-10 are answered by the probe and by the implementation's own logging.
 
 ---
 
