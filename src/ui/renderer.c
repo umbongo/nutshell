@@ -3,6 +3,8 @@
 #include "paint_cover.h"
 #include "selection.h"
 #include "theme.h"
+#include "term_colors.h"
+#include "ns_tokens.h"
 #include "dlog.h"
 #include <stdio.h>
 #include <string.h>
@@ -127,24 +129,27 @@ static bool cell_in_selection(const Selection *sel, int row, int col)
     return true; /* middle row — fully selected */
 }
 
-/* Resolve a cell's fg, bg, and bold flag, accounting for reverse + selection. */
-static void resolve_cell(const Renderer *r, const TermCell *cell,
+/* Resolve a cell's fg, bg, and bold flag. Every colour decision -- the
+ * theme's floored table, explicit backgrounds, dim, reverse, the cursor
+ * and the selection -- is term_colors_resolve()'s (src/core/term_colors.c,
+ * tested natively); this only says which cell is the cursor and which are
+ * selected, and converts to COLORREF. */
+static void resolve_cell(const TermPalette *pal, const TermCell *cell,
                           const Terminal *term, int row_idx, int col_idx,
                           const Selection *sel,
                           COLORREF *out_fg, COLORREF *out_bg,
                           bool *out_bold)
 {
-    COLORREF fg = (cell->attr.fg_mode == COLOR_DEFAULT) ? r->defaultFg : to_colorref(cell->attr.fg);
-    COLORREF bg = (cell->attr.bg_mode == COLOR_DEFAULT) ? r->defaultBg : to_colorref(cell->attr.bg);
-    bool reverse = (cell->attr.flags & TERM_ATTR_REVERSE) ||
-                   (term->cursor.visible && term->scrollback_offset == 0 &&
-                    term->cursor.row == row_idx && term->cursor.col == col_idx);
-    if (reverse) { COLORREF tmp = fg; fg = bg; bg = tmp; }
-    if (cell_in_selection(sel, row_idx, col_idx)) {
-        COLORREF tmp = fg; fg = bg; bg = tmp;
-    }
-    *out_fg = fg;
-    *out_bg = bg;
+    unsigned draw_flags = 0u;
+    if (term->cursor.visible && term->scrollback_offset == 0 &&
+        term->cursor.row == row_idx && term->cursor.col == col_idx)
+        draw_flags |= TERM_DRAW_CURSOR;
+    if (cell_in_selection(sel, row_idx, col_idx))
+        draw_flags |= TERM_DRAW_SELECTED;
+    uint32_t fg = 0u, bg = 0u;
+    term_colors_resolve(pal, cell, draw_flags, &fg, &bg);
+    *out_fg = to_colorref(fg);
+    *out_bg = to_colorref(bg);
     *out_bold = (cell->attr.flags & TERM_ATTR_BOLD) != 0;
 }
 
@@ -170,6 +175,8 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
     int cursor_col = (term->cursor.visible && term->scrollback_offset == 0)
                      ? term->cursor.col : -1;
     bool has_sel = sel && sel->valid;
+    /* The current theme's colour tables, rebuilt by every ui_theme_resolve(). */
+    const TermPalette *pal = &ns_tokens()->term;
 
     /* If cursor moved, invalidate the old cursor cell in the display buffer
      * so the ghost cursor gets erased on repaint. */
@@ -271,7 +278,7 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             TermCell *cell = &row->cells[col_idx];
             COLORREF fg, bg;
             bool bold;
-            resolve_cell(r, cell, term, row_idx, col_idx, sel, &fg, &bg, &bold);
+            resolve_cell(pal, cell, term, row_idx, col_idx, sel, &fg, &bg, &bold);
             uint32_t cp = cell->codepoint;
             uint8_t aflags = cell->attr.flags;
 
@@ -312,7 +319,7 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
             /* Accumulate consecutive cells with matching fg/bg/bold */
             while (col_idx < term->cols && run_len < 1020) {
                 cell = &row->cells[col_idx];
-                resolve_cell(r, cell, term, row_idx, col_idx, sel, &fg, &bg, &bold);
+                resolve_cell(pal, cell, term, row_idx, col_idx, sel, &fg, &bg, &bold);
                 if (fg != run_fg || bg != run_bg || bold != run_bold) break;
                 cp = cell->codepoint;
                 aflags = cell->attr.flags;
@@ -437,9 +444,9 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
         ? (long long)((t_end.QuadPart - t_start.QuadPart) * 1000000LL / freq.QuadPart) : 0LL;
     DLOG(DLOG_RENDER, DLOG_TRACE, r->log_sid, "render.draw",
          "rows=%d rows_in_rect=%d rows_covered=%d rows_painted=%d rows_left_dirty=%d "
-         "char_h=%d us=%lld",
+         "char_h=%d char_w=%d cols=%d x=%d y=%d us=%lld",
          term->rows, rows_in_rect, rows_covered, rows_painted, rows_left_dirty,
-         r->charHeight, us);
+         r->charHeight, r->charWidth, term->cols, x, y, us);
 }
 
 void renderer_apply_theme(HWND hwnd, COLORREF bg_colorref)

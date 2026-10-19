@@ -1765,6 +1765,13 @@ static void on_settings_clicked_page(int initial_page) {
     GetClientRect(parent, &rc);
     SendMessage(parent, WM_SIZE, SIZE_RESTORED,
                 MAKELPARAM(rc.right, rc.bottom));
+    /* WM_SIZE marks rows dirty only when the grid size changed, and
+     * renderer_draw() skips clean rows before looking at a cell, so a theme
+     * change alone (new terminal_fg/bg, new colour tables) would leave every
+     * clean row in the old theme's colours. Repaint them all. Other tabs
+     * repaint fully when selected (on_tab_select). */
+    force_full_terminal_repaint(parent,
+        g_active_session ? g_active_session->term : NULL);
     InvalidateRect(parent, NULL, TRUE);
     /* Force tab strip to repaint with new theme */
     InvalidateRect(g_hwndTabs, NULL, TRUE);
