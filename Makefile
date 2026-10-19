@@ -184,6 +184,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/core/dlog_types.c src/core/dlog_snapshot.c src/core/dlog_sys.c \
                    src/ui/md_render.c src/ui/ns_draw.c src/core/text_runs.c \
                    src/core/md_table.c src/core/theme.c src/core/ui_theme.c \
+                   src/core/term_colors.c \
                    src/core/ns_scale.c src/core/ns_type.c src/core/cmd_policy.c \
                    src/ui/chat_listview.c src/ui/clipboard.c src/ui/ns_font.c \
                    src/core/chat_msg.c src/core/chat_copy.c src/core/chat_exec.c \
