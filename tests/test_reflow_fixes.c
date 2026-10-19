@@ -293,3 +293,235 @@ int test_reflow_deferred_wrap_cursor_widened_is_inside_row(void)
     term_free(t);
     TEST_END();
 }
+
+/* Every logical row the model holds -- scrollback and screen -- with its
+ * text, len and wrapped flag, plus the geometry and the cursor. */
+#define SNAP_MAX_ROWS 256
+#define SNAP_MAX_COLS 64
+
+typedef struct {
+    int rows, cols, lines_count;
+    int cursor_row, cursor_col, scrollback_offset;
+    int len[SNAP_MAX_ROWS];
+    bool wrapped[SNAP_MAX_ROWS];
+    char text[SNAP_MAX_ROWS][SNAP_MAX_COLS + 1];
+} ModelSnap;
+
+static void snap(const Terminal *t, ModelSnap *s)
+{
+    memset(s, 0, sizeof(*s));
+    s->rows = t->rows;
+    s->cols = t->cols;
+    s->lines_count = t->lines_count;
+    s->cursor_row = t->cursor.row;
+    s->cursor_col = t->cursor.col;
+    s->scrollback_offset = t->scrollback_offset;
+    for (int i = 0; i < t->lines_count && i < SNAP_MAX_ROWS; i++) {
+        const TermRow *row = t->lines[(t->lines_start + i) % t->lines_capacity];
+        s->len[i] = row->len;
+        s->wrapped[i] = row->wrapped;
+        row_text(row, t->cols < SNAP_MAX_COLS ? t->cols : SNAP_MAX_COLS,
+                 s->text[i], sizeof(s->text[i]));
+    }
+}
+
+/* 1 when equal; otherwise prints the first difference and returns 0. */
+static int snap_equal(const ModelSnap *a, const ModelSnap *b)
+{
+    if (a->rows != b->rows || a->cols != b->cols ||
+        a->lines_count != b->lines_count) {
+        printf("  geometry %dx%d lines=%d vs %dx%d lines=%d\n",
+               a->rows, a->cols, a->lines_count,
+               b->rows, b->cols, b->lines_count);
+        return 0;
+    }
+    if (a->cursor_row != b->cursor_row || a->cursor_col != b->cursor_col) {
+        printf("  cursor %d,%d vs %d,%d\n", a->cursor_row, a->cursor_col,
+               b->cursor_row, b->cursor_col);
+        return 0;
+    }
+    if (a->scrollback_offset != b->scrollback_offset) {
+        printf("  scrollback_offset %d vs %d\n", a->scrollback_offset,
+               b->scrollback_offset);
+        return 0;
+    }
+    for (int i = 0; i < a->lines_count && i < SNAP_MAX_ROWS; i++) {
+        if (a->len[i] != b->len[i] || a->wrapped[i] != b->wrapped[i] ||
+            strcmp(a->text[i], b->text[i]) != 0) {
+            printf("  line %d: len=%d wrapped=%d \"%s\" vs len=%d wrapped=%d \"%s\"\n",
+                   i, a->len[i], (int)a->wrapped[i], a->text[i],
+                   b->len[i], (int)b->wrapped[i], b->text[i]);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* 29 numbered lines, every third exactly 20 wide, then a PowerShell-style
+ * prompt with the cursor one cell past it on the last row of a 10x20
+ * screen: 20 rows of scrollback above. */
+static void fill_history_with_prompt(Terminal *t)
+{
+    char line[32];
+    for (int i = 1; i <= 29; i++) {
+        if (i % 3 == 0) {
+            (void)snprintf(line, sizeof(line), "L%02d=================\r\n", i);
+        } else {
+            (void)snprintf(line, sizeof(line), "L%02d\r\n", i);
+        }
+        feed(t, line);
+    }
+    feed(t, "PS C:\\>");
+    feed(t, "\x1b[10;9H");
+}
+
+/* ---- cursor past the content ---------------------------------------------- */
+
+/* PS C:\> is 7 cells; the cursor one cell further, at column 8, keeps
+ * column 8 across height changes either way. */
+int test_reflow_cursor_past_content_keeps_column(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 20, 100);
+    ASSERT_NOT_NULL(t);
+    feed(t, "PS C:\\>\x1b[1;9H");
+    ASSERT_EQ(t->cursor.row, 0);
+    ASSERT_EQ(t->cursor.col, 8);
+
+    term_resize(t, 8, 20);
+    ASSERT_EQ(t->cursor.row, 0);
+    ASSERT_EQ(t->cursor.col, 8);
+
+    term_resize(t, 12, 20);
+    ASSERT_EQ(t->cursor.col, 8);
+    char text[64];
+    screen_text_at(t, t->cursor.row, text, sizeof(text));
+    ASSERT_STR_EQ(text, "PS C:\\>");
+
+    term_free(t);
+    TEST_END();
+}
+
+/* Narrowed so the prompt wraps, the cursor keeps its distance on the
+ * continuation row; narrowed so it no longer fits, it is clamped to the
+ * last column. */
+int test_reflow_cursor_past_content_rewraps_and_clamps(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 20, 100);
+    ASSERT_NOT_NULL(t);
+    feed(t, "PS C:\\>\x1b[1;9H");
+
+    term_resize(t, 10, 6);               /* "PS C:\" + ">" wrapped     */
+    ASSERT_EQ(t->cursor.row, 1);
+    ASSERT_EQ(t->cursor.col, 2);
+
+    term_free(t);
+
+    t = term_init(10, 20, 100);
+    ASSERT_NOT_NULL(t);
+    feed(t, "PS C:\\>\x1b[1;9H");
+    term_resize(t, 10, 8);               /* column 8 does not exist    */
+    ASSERT_EQ(t->cursor.row, 0);
+    ASSERT_EQ(t->cursor.col, 7);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- identity --------------------------------------------------------------- */
+
+/* Narrow and widen back: exact-width, wrapping and short lines and a
+ * prompt with the cursor past it come back exactly as they were. */
+int test_reflow_width_round_trip_is_identity(void)
+{
+    TEST_BEGIN();
+    static ModelSnap before, after;
+    Terminal *t = term_init(10, 20, 100);
+    ASSERT_NOT_NULL(t);
+    feed(t, "ABCDEFGHIJKLMNOPQRST\r\nhello\r\n"
+            "123456789012345678901234567\r\nPS C:\\>\x1b[5;9H");
+    ASSERT_EQ(t->cursor.row, 4);
+    ASSERT_EQ(t->cursor.col, 8);
+    snap(t, &before);
+
+    term_resize(t, 10, 12);
+    term_resize(t, 10, 20);
+
+    snap(t, &after);
+    ASSERT_TRUE(snap_equal(&before, &after));
+
+    term_free(t);
+    TEST_END();
+}
+
+/* Taller and back with history above and the cursor on the last row. */
+int test_reflow_height_round_trip_with_history_is_identity(void)
+{
+    TEST_BEGIN();
+    static ModelSnap before, after;
+    Terminal *t = term_init(10, 20, 100);
+    ASSERT_NOT_NULL(t);
+    fill_history_with_prompt(t);
+    ASSERT_EQ(t->lines_count, 30);
+    ASSERT_EQ(t->cursor.row, 9);
+    ASSERT_EQ(t->cursor.col, 8);
+    snap(t, &before);
+
+    term_resize(t, 20, 20);
+    ASSERT_EQ(t->cursor.row, 19);
+    ASSERT_EQ(t->cursor.col, 8);
+    term_resize(t, 10, 20);
+
+    snap(t, &after);
+    ASSERT_TRUE(snap_equal(&before, &after));
+
+    term_free(t);
+    TEST_END();
+}
+
+/* A drag's worth of sizes, height and width both, ending where it began. */
+int test_reflow_mixed_sequence_round_trip_is_identity(void)
+{
+    TEST_BEGIN();
+    static ModelSnap before, after;
+    Terminal *t = term_init(10, 20, 100);
+    ASSERT_NOT_NULL(t);
+    fill_history_with_prompt(t);
+    snap(t, &before);
+
+    term_resize(t, 15, 20);
+    term_resize(t, 15, 12);
+    term_resize(t, 10, 12);
+    term_resize(t, 10, 20);
+
+    snap(t, &after);
+    ASSERT_TRUE(snap_equal(&before, &after));
+
+    term_free(t);
+    TEST_END();
+}
+
+/* A cursor past the content by d > 0, whose content ends well before the
+ * last column, is clamped to new_cols - 1 on a blank cell: typing there
+ * overwrites nothing. */
+int test_reflow_cursor_past_content_clamps_onto_blank_cell(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 20, 100);
+    ASSERT_NOT_NULL(t);
+    feed(t, "abc\x1b[1;16H");
+    ASSERT_EQ(t->cursor.col, 15);
+
+    term_resize(t, 10, 10);
+
+    ASSERT_EQ(t->cursor.row, 0);
+    ASSERT_EQ(t->cursor.col, 9);
+    feed(t, "X");
+    char text[64];
+    screen_text_at(t, 0, text, sizeof(text));
+    ASSERT_STR_EQ(text, "abc      X");
+
+    term_free(t);
+    TEST_END();
+}

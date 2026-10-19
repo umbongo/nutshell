@@ -176,10 +176,16 @@ static void term_reflow_buffer(
             new_lines[cur_new_row]->len = cur_new_col + 1;
             cur_new_col++;
         }
+        /* A cursor past the content keeps its distance from it (spec
+         * section 2); the clamp to new_cols - 1 below bounds it, except that
+         * a cursor whose row ends exactly at new_cols keeps the pending-wrap
+         * column instead of landing on content (the distance is lost there). */
         if (i == cursor_logical && cur_col >= cell_limit) {
             new_cursor_row = cur_new_row;
-            new_cursor_col = cur_new_col;
             cursor_after_full_row = (cur_new_col == new_cols);
+            new_cursor_col = cursor_after_full_row
+                           ? cur_new_col
+                           : cur_new_col + (cur_col - cell_limit);
         }
     }
 
