@@ -4,6 +4,71 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-10-19 — retrospective (11 merges)
+
+Session: https://claude.ai/code/session_01Cczi6ipaKBtKnozR7vkgFM, on `automaton`.
+Models: claude-fable-5-1 (brief); claude-opus-5-5 (orchestration, edits,
+retrospective, PR survey, two critique rounds); claude-sonnet-5-5 (open-list survey).
+
+- **`memory/MEMORY.md`.** Marker `7960bd2` (PR #71), count 0. New section
+  "The maintainer's two machines": how to tell `automaton` from a cloud
+  session (`hostname`), where its build commands live, the Wine DPI value
+  (reported), the test baseline (3,035) and the fresh-PowerShell-window rule
+  for the harness. GitHub quirks: `gh pr edit` fails (use `gh api -X PATCH`),
+  the auto-mode refusal of `gh pr ready` (reported), the CodeQL SARIF
+  command and the `cpp/use-after-free` form it accepts (6149f01), and a moved
+  file's alerts being renumbered (#12 became #27). `.gitattributes` fact
+  corrected; open items for v1.2.41.
+- **`skills/feature-workflow/SKILL.md`.** Step 6: the new version is stated
+  relative to `main` and the branch at build time, never as a literal (a
+  plan hard-coded a version `main` had passed); the build commands point to
+  CLAUDE.md. Step 5's stacked-PR retarget uses `gh api`. Step 9: the
+  auto-mode refusal, with no MCP detour; the stale "only `Version bump` is
+  required" removed. Failures: CodeQL alerts are fixed or dismissed with a
+  reason, iterated source-only on a draft and rebuilt once. Opus and Sonnet
+  ids updated.
+- **`skills/checkpoint/SKILL.md` step 1.** Measure the open CodeQL alerts and the
+  last release too; check briefed facts against git and mark the rest as
+  reported.
+- **`skills/repo-status/SKILL.md`.** The full clone on `automaton`
+  (`gh`, `fetch --prune`); the known state as of 2026-10-19.
+- **CLAUDE.md, Build Commands.** New "Building on Linux (`automaton`)" section,
+  with the cloud caveat, the deleted-exe recovery and a guarded
+  `wineserver -k`. "The current dev host" was dropped from the Windows
+  heading. No change to what the gate enforces.
+- **Workflows.** Reviewed and found accurate; no edit.
+
+Critique, round 1 (fresh Opus critic, 15 findings):
+1. Nothing says how to tell `automaton` from a cloud session. Accepted: the `hostname` test.
+2. The memory and skill text widened merge authority. Accepted: the memory ruling was removed.
+3. The auto-mode note sits next to the MCP route around it. Accepted: "do not use the MCP calls instead".
+4. The Linux build section has no cloud caveat, and `make clean` deletes the tracked exe. Accepted.
+5. The CHANGELOG entry is missing. Accepted (this entry).
+6. "Every fix costs a rebuild" is false. Accepted: iterate source-only, rebuild once; fix or dismiss each alert.
+7. The checkpoint commands need `gh`. Accepted: MCP or "not measured".
+8. `wineserver -k` is a blanket kill. Accepted: only on the "no driver" error, after `pgrep -a wine`.
+9. The harness DPI and client size contradict the README. Accepted: both removed.
+10. "+1 patch" ignores the rollover. Accepted.
+11. Facts are duplicated. Partly accepted: the build commands live in CLAUDE.md only. The `gh pr edit` fact stays in repo memory, which every session shares; the user's memory is personal.
+12. Stale lines are left behind. Accepted.
+13. feature-workflow is over 100 lines. Rejected for this PR: splitting is its own decision, and it is listed for the maintainer.
+14. repo-status gaps. Accepted: `fetch --prune`, the archive tags, #70's plan.
+15. Volatile trivia in memory. Accepted: removed.
+
+Critique, round 2 (fresh Opus critic, revised artefact, 12 findings; the ceiling):
+1. "Otherwise:" in step 9 opened merging to `automaton` sessions. Accepted: reverted to "On the Windows box"; whether `automaton` sessions may merge is left to the maintainer.
+2. The auto-mode rule belongs in CLAUDE.md, not memory or a skill. Partly accepted: memory now keeps only the fact. Moving it into CLAUDE.md is left open.
+3. The CHANGELOG entry is missing. Accepted (this entry).
+4. `gh pr edit --base` contradicts the new quirk. Accepted: `gh api -X PATCH ... -f base=main`.
+5. Wine changes act on the shared prefix. Partly accepted: the LogPixels value is marked reported and prefix-wide, and `pgrep` is checked before `wineserver -k`. A per-worktree `WINEPREFIX` is left open (untested).
+6. "main + 1" reuses a version on a second build. Accepted: one above both `main` and the branch's last build.
+7. Unmeasured facts are not marked. Accepted for LogPixels. Rejected for the "no driver" cause, which is in the PR #71 plan.
+8. More duplication (open items in memory and repo-status). Rejected: both are dated snapshots, so drift shows.
+9. feature-workflow is 184 lines. Rejected for this PR (as round 1, finding 13).
+10. The model table is stale. Partly accepted: Opus and Sonnet updated. Haiku is kept, because both Haiku ids appear on the same day in history. A Fable row would be a new allocation and is left open.
+11. The archive tag count cannot be reproduced locally. Accepted: `git ls-remote --tags`.
+12. `make clean` deletes the exe on every host. Accepted: `git restore` before committing.
+
 ## 2026-10-13 — feature-workflow: the Linux box can build too
 
 Session: https://claude.ai/code/session_017mWL2Y87nKcs9C3CcuQTND

@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-10-13 (retrospective).
+Last updated: 2026-10-19 (retrospective).
 
 ## Retrospective cadence (standing rule from the maintainer, 2026-09-21)
 
@@ -17,12 +17,11 @@ Last updated: 2026-10-13 (retrospective).
   set) after the last retrospective marker below. Count them with
   `list_pull_requests` (state closed, sort updated, desc) or
   `git log --merges --first-parent origin/main <marker>..`.
-- **Last retrospective:** 2026-10-13, marker commit `c593796` (merge of
-  PR #59, the head of `main` when the retrospective was written). Merges
+- **Last retrospective:** 2026-10-19, marker commit `7960bd2` (merge of
+  PR #71, the head of `main` when the retrospective was written). Merges
   since: 0 (the retrospective's own PR will be the first). Update this line
-  at every retrospective. The previous one (2026-09-24, PR #46) was merged
-  *after* its own marker `21e4d5d`, so it fell inside the next cycle's
-  count; the 2026-10-13 count of 13 includes #46's neighbours #47-#59.
+  at every retrospective. The 2026-10-19 count from `c593796` was 11
+  (#60-#69, #71), including the 2026-10-13 retrospective's own PR #62.
 - A daily Routine in the maintainer's Claude account performs the count
   and starts the retrospective in a fresh session when it reaches 10. Any
   session that notices the count is at or past 10 should run it too.
@@ -34,7 +33,7 @@ Last updated: 2026-10-13 (retrospective).
   `make release` does not. **Any change under `src/`, the `Makefile` or
   `nutshell.rc` cannot pass the `Version bump` gate from here** because the
   gate requires a rebuilt, committed `build/win/nutshell.exe`. Finish such
-  changes on the Windows dev box. Docs, CI, `tests/`, `docs/` and
+  changes on one of the maintainer's machines (below). Docs, CI, `tests/`, `docs/` and
   `.claude/` changes can be pushed from here, but **never merged from
   here**: the maintainer's standing rule (2026-09-24) is that a cloud
   session stops and warns that the pipeline requires a successful
@@ -46,8 +45,26 @@ Last updated: 2026-10-13 (retrospective).
   merge-base question, or the answer is wrong.
 - No `gh` CLI. Pull requests, check runs and branch listings go through the
   `mcp__github__*` tools. Network is proxied; do not disable TLS checks.
-- Native suite baseline on 2026-10-13 (Linux, stub-free libssh2 absent): 2,485 tests,
-  0 failed (1,960 on 2026-09-21; Windows host ran 2,157 on 2026-09-24); the Linux count may differ by the libssh2-gated files.
+
+## The maintainer's two machines
+
+- **`automaton`**: the Linux box whose `hostname` prints `automaton`; any
+  other Linux host is a cloud session (above). Full clone, `gh`
+  authenticated, worktrees under `~/nutshell-wt/`, other Claude sessions
+  often running at once. It builds the gate-passing exe; the commands are in
+  CLAUDE.md ("Building on Linux"). Wine's DPI for `wintest` is
+  `HKCU\Control Panel\Desktop\LogPixels` (REG_DWORD 192 for 200 %; delete
+  the value to restore 96) -- reported 2026-10-19, not measured here, and it
+  changes the shared `~/.wine` prefix for every session.
+- **The Windows box** (MSYS2, `mingw32-make`): runs the integration harness
+  and `mingw32-make wintest`, and can build too.
+- Native suite baseline on 2026-10-19 (`automaton`, libssh2 stub): 3,035
+  tests, 0 failed (2,485 on 2026-10-13, 1,960 on 2026-09-21). The hosted
+  `Native tests` job links the real libssh2, so its count may differ by the
+  libssh2-gated files.
+- After any change to `NutshellIT.psm1`'s `Add-Type` sources, run the
+  harness from a fresh PowerShell window; the module stops at load and says
+  so (`tests/integration/README.md`).
 
 ## Repository facts
 
@@ -64,8 +81,9 @@ Last updated: 2026-10-13 (retrospective).
 - `build/win/nutshell.exe` (about 5.2 MB, UPX-packed, version resource left
   uncompressed) is committed on every build; 104 commits touch it. Git LFS
   is an open question, untracking it is not (the gate reads its version).
-- 89 files are CRLF in the index and there is no `.gitattributes`. The
-  notes ask for a lone renormalising pull request.
+- 85 files are CRLF in the index; `.gitattributes` holds only
+  `tests/fixtures/*.bin binary`. The notes ask for eol rules and a lone
+  renormalising pull request.
 - `.claude/` is gitignored except `memory/`, `skills/` and `CHANGELOG.md`.
 
 ## The merge gate, precisely
@@ -86,7 +104,8 @@ Last updated: 2026-10-13 (retrospective).
   The rule is in CLAUDE.md: `gh pr checks N --watch` until every check is
   green, then merge.
 - **A stacked PR**: GitHub retargets it to `main` when its base branch is
-  deleted on merge (else `gh pr edit N --base main`); it then needs
+  deleted on merge (else `gh api -X PATCH repos/umbongo/nutshell/pulls/N
+  -f base=main`); it then needs
   `gh api -X PUT repos/umbongo/nutshell/pulls/N/update-branch` because the
   ruleset requires up-to-date, and the checks rerun on the new head.
 - `git add -u` skips new files: that is how PR #44 shipped without four of
@@ -111,19 +130,33 @@ Last updated: 2026-10-13 (retrospective).
 - Check runs on a pull request head come from `pull_request_read` with
   `get_check_runs`; the three checks on an actions-only change are
   `Version bump`, `analyze` (CodeQL build+scan) and `CodeQL` (upload).
+- `gh pr edit` fails with a projectCards GraphQL error. Update a body with
+  `gh api -X PATCH repos/umbongo/nutshell/pulls/N -F body=@file`.
+- In Claude Code's auto permission mode the classifier refuses
+  `gh pr ready N` as a merge without review (reported 2026-10-19). The
+  maintainer runs `ready` and `merge`.
+- A CodeQL finding on a pull request: read the SARIF before changing code
+  (`gh api -H "Accept: application/sarif+json"
+  repos/umbongo/nutshell/code-scanning/analyses/<id>`; ids from
+  `.../code-scanning/analyses?ref=refs/pull/N/merge`). CodeQL reads the
+  sources, not the exe. `cpp/use-after-free` fires on a growable buffer that frees its
+  field and later reads it; the form it accepts swaps the new block into
+  the field before freeing the old one through a local.
+- Moving a file closes its alerts as "fixed" and opens new numbers for the
+  same lines (#12 became #27 when `markdown.h` moved to `src/core`). Check
+  an alert's history before calling it new.
 
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-10-13 (`main` at v1.2.27, PR #59; PR #60 and Dependabot #61 open):
-the manual checks are done and the merge gate now compiles (`Native tests`
-is required). Remaining: the whole-repository security review (classifier
-holes: `env rm -rf /`, command substitution, no PowerShell ruleset); local
-shell follow-ups (dispatcher out of `src/ui`, timeout, WSL, OSC 7, mouse
-reporting); `.gitattributes` renormalise (about 90 files); harness batches
-B-D; security audit H7/H8 and supply chain; Session Manager phantom row;
-status-line keyboard path; `md_render.c` DPI; sub-project 3 needs a spec
-first. `src/ui/window.c` is 5,124 lines and `ai_chat.c` 5,455.
+As of 2026-10-19 (`main` at v1.2.41, PR #71; drafts #70 ConPTY resize
+anchor, spec and plan, and #72 light-theme ANSI contrast, spec): terminal
+copy and paste broken past the viewport; two failing tab-switch harness
+cases; old CodeQL alerts; no release since v1.1.21; the whole-repository
+security review; finished-batch command details; AI panel selection
+follow-ups; local shell follow-ups; paint-path polling; `.gitattributes`
+renormalise; sub-project 3 needs a spec first. `src/ui/window.c` is 5,440
+lines and `ai_chat.c` 5,908.
 
 ## Local shell and keys, facts that outlive the session
 

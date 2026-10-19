@@ -5,7 +5,7 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-09-24 (marker rule made concrete). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-10-19 (measure alerts, releases, briefed facts). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
@@ -38,7 +38,12 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
 1. **Measure before writing.** Unshallow `main`, run `make test`, list
    PRs with `merged_at`, count what the notes document claims (test
    totals, open items) and check each open item against the log with
-   `git log --grep`. Stale items are the most common finding.
+   `git log --grep`. Stale items are the most common finding. Also list
+   the open CodeQL alerts (`gh api repos/umbongo/nutshell/code-scanning/alerts?state=open`)
+   and the last release (`gh release list`); without `gh`, use the
+   `mcp__github__*` equivalents or report them as not measured. Facts handed in by a brief
+   or a previous session are checked against git before they are written
+   down; record the ones git cannot show as reported, not measured.
 2. **Compact the notes document.** Move finished items to "Done" with the
    PR number and commit, keep "Open" in priority order, fix any counts.
    Do not delete history; the done list is the project's memory of why.

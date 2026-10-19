@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-10-13. Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-10-19 (retrospective). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules themselves live in CLAUDE.md ("Software Development Rules",
 "Branches, pull requests and the merge gate"); this skill is the walk
 through them in order. Where they disagree, CLAUDE.md wins. It absorbed
@@ -26,8 +26,8 @@ the reports and the key learnings.
 
 | Job | Model |
 |---|---|
-| Judgement: reviews, critiques, orchestrating a multi-step package | Opus (`claude-opus-5`) |
-| Code and tests | Sonnet (`claude-sonnet-5`) |
+| Judgement: reviews, critiques, orchestrating a multi-step package | Opus (`claude-opus-5-5`) |
+| Code and tests | Sonnet (`claude-sonnet-5-5`) |
 | Mechanical, single-pattern work: renames, fixtures, doc tables | Haiku (`claude-haiku-4-5-20251001`) |
 | Surveys of the tree that should return conclusions, not files | Explore agent |
 
@@ -89,7 +89,8 @@ open as drafts and their body ends with the same `Models:` line and the
    files by path and read every `??` line first (CLAUDE.md, "Git commits";
    PR #44 shipped without four files). A pull request stacked on an
    unmerged branch is retargeted to `main` by GitHub when its base is
-   deleted on merge (else `gh pr edit N --base main`); it then needs
+   deleted on merge (else `gh api -X PATCH repos/umbongo/nutshell/pulls/N
+   -f base=main`; `gh pr edit` fails here); it then needs
    `gh api -X PUT repos/umbongo/nutshell/pulls/N/update-branch`, and about
    2.5 minutes for the checks to rerun on the new head.
 6. **The gate.** Any change under `src/`, the Makefile or `nutshell.rc`
@@ -98,8 +99,13 @@ open as drafts and their body ends with the same `Models:` line and the
    rebuilt `build/win/nutshell.exe` committed. The build happens on one
    of the maintainer's own machines: the Windows box (`mingw32-make clean
    && mingw32-make release`) or the Linux box `automaton`, whose
-   `x86_64-w64-mingw32-gcc` plus vcpkg cross-compile produced the gate-
-   passing v1.2.29 exe on 2026-10-13 (`make clean && make release`). From
+   `x86_64-w64-mingw32-gcc` plus vcpkg cross-compile builds the same exe
+   (CLAUDE.md, "Building on Linux"). A spec or plan names the new version
+   as "one above both `main`'s version and the branch's last build, at
+   build time" (CLAUDE.md's rule: patch +1, and after X.Y.99 comes
+   X.(Y+1).0), never a literal number:
+   a plan written against a stale base named a version `main` had already
+   passed. From
    a cloud session, which has neither, the deliverable is a pushed branch;
    the maintainer builds, commits the exe, and the `Version bump` check
    goes green. Say so and stop at the pushed branch with everything else
@@ -125,13 +131,15 @@ open as drafts and their body ends with the same `Models:` line and the
    here and warn the maintainer** that the pipeline requires a successful
    `make test` and compiled code before it can merge and that this cannot
    be done from a cloud instance (CLAUDE.md, the gate section); do not
-   mark ready, do not enable auto-merge. On the Windows box:
-   `gh pr ready N`, then `gh pr checks N --watch` until every
+   mark ready, do not enable auto-merge. On the Windows box: `gh pr ready N`, then `gh pr checks N --watch` until every
    check is green, then `gh pr merge N --merge --auto`, in that order. The
    reason is in CLAUDE.md ("Branches, pull requests and the merge gate"):
-   auto-merge merges at once when the PR is mergeable and only `Version
-   bump`, which compiles nothing, is required. It prints nothing on
-   success; read the PR state afterwards. Without `gh`,
+   auto-merge merges at once when the PR is mergeable, and CodeQL is not
+   required. It prints nothing on success; read the PR state afterwards.
+   In Claude Code's auto permission mode `gh pr ready` is refused as a
+   merge without review: report the green checks and leave `ready` and
+   `merge` to the maintainer, and do not use the MCP calls below instead.
+   Without `gh`, in a session allowed to merge,
    `mcp__github__update_pull_request` to leave draft, then
    `mcp__github__enable_pr_auto_merge` with merge method `merge`. Never
    merge a red check; never push to `main`; never rewrite someone else's
@@ -144,6 +152,13 @@ open as drafts and their body ends with the same `Models:` line and the
 
 - A `Version bump` failure is deterministic: read its log, it names the
   exact mismatch.
+- A CodeQL alert on the pull request is fixed or dismissed with a reason.
+  Read the SARIF path before changing code (the command is in MEMORY.md,
+  "GitHub API quirks"). CodeQL reads the sources, not the exe, so on a
+  draft iterate source-only fixes until `analyze` is clean, then bump and
+  rebuild once (`Version bump` only has to pass on the final head). A file
+  move renumbers its old alerts; check an alert's history before treating
+  it as new.
 - A CodeQL `analyze` failure in `apt-get` is the hosted image's stale
   third-party repositories; the workflow already strips them by host. If
   it recurs, extend that list, do not ignore the exit code.
@@ -166,4 +181,4 @@ open as drafts and their body ends with the same `Models:` line and the
   `upload-artifact` change the Node runtime the runner needs; check the
   release notes before merging.
 - **Branch survey.** "What are my branches" goes through `repo-status`;
-  the clone is shallow and two names are both a branch and a tag.
+  a cloud clone is shallow, and two names are both a branch and a tag.
