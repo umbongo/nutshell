@@ -223,13 +223,19 @@ Done, in order (details in the commit messages and the specs named):
   range covers its bytes, and the user bubble's highlight uses its text
   colour (the focus tint is invisible on the accent bubble).
 
+- Readable ANSI colours on the light themes (PR #72, spec
+  `2026-10-19-light-theme-ansi-contrast-design.md`): PowerShell's yellow, bright and
+  grey output was near unreadable on Onyx Light and Moss & Mist. Each theme now
+  carries a minimum-contrast floor applied at paint time (`terminal_min_contrast`,
+  `src/core/term_colors.c`), the 16-colour and 256-colour tables are built per theme,
+  and `--ui-demo=ansi` shows the palette; ConPTY captures of Windows PowerShell 5.1
+  pin the painted colours end to end.
+
 Open, in priority order:
-- [ ] Light themes: much of PowerShell's output (warnings, `Write-Host -ForegroundColor
-      Yellow`, PSReadLine's command token) arrives in ANSI yellow, which is near
-      unreadable on Onyx Light and Sage & Sand (maintainer, 2026-10-19). Own branch
-      `fix/light-theme-ansi-contrast`; Opus determines the fix (per-theme palette,
-      a minimum-contrast floor at paint time, or both), critiqued before
-      implementation -- spec `2026-10-19-light-theme-ansi-contrast-design.md`.
+- [ ] Parser: a truncated extended-colour SGR (`38;2;r;g`, `38;5` without its index, or
+      one cut by the 16-parameter cap) leaks its trailing parameters as attributes (`2` ->
+      dim on the light themes, `5` -> blink, `1;4` -> bold/underline); malformed input
+      only; consume the remaining parameters as xterm does.
 - [ ] Designed light-theme ANSI palette (follow-up to the contrast floor, maintainer's
       decision 3 of 2026-10-19): on Onyx Light and Moss & Mist the floor makes normal and
       bright colours converge (90 and 97 both paint `6C6C6C`) and flattens the 232-255 grey
