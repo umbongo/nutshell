@@ -230,16 +230,20 @@ Open, in priority order:
       `fix/light-theme-ansi-contrast`; Opus determines the fix (per-theme palette,
       a minimum-contrast floor at paint time, or both), critiqued before
       implementation -- spec `2026-10-19-light-theme-ansi-contrast-design.md`.
-- [ ] Terminal copy loses the scrollback (maintainer, 2026-10-18, seen on v1.2.36): a
-      selection taller than the window, or made while scrolled back, copies only the
-      rows in the viewport. `selection_extract_text` takes the visible window as
-      `lines_count - rows` and ignores `scrollback_offset`; the `Selection` struct is
-      viewport-relative so `selection_pixel_to_cell` clamps rows to the screen; and the
-      WM_LBUTTONUP clipboard buffer is 8 KB. Needs a spec (buffer-absolute selection,
-      auto-scroll while dragging past an edge, unbounded copy buffer).
-- [ ] Harness cases failing on `main` since at least v1.2.36:
-      `ctrl_w_reaches_shell_and_shift_closes_tab` (gate runs of 2026-10-18 and
-      2026-10-19) alongside the older `resize_applies_to_inactive_tab` -- both are
+- [ ] Terminal copy and paste are broken in v1.2.36 (maintainer, 2026-10-18/19: "I can't
+      properly copy and paste from the terminal"). The symptom pinned down so far: a
+      selection taller than the window, or made while scrolled back, copies only the rows
+      in the viewport. Diagnosis of that part: `selection_extract_text` takes the visible
+      window as `lines_count - rows` and ignores `scrollback_offset`; the `Selection`
+      struct is viewport-relative so `selection_pixel_to_cell` clamps rows to the screen;
+      and the WM_LBUTTONUP clipboard buffer is 8 KB. The rest of what is broken is not yet
+      characterised -- reproduce copy and paste end to end on v1.2.36+ (select, Ctrl+Shift+C,
+      Ctrl+Shift+V, Shift+Insert, right-click, the Edit menu) before writing the spec
+      (buffer-absolute selection, auto-scroll while dragging past an edge, unbounded copy
+      buffer, plus whatever the reproduction finds).
+- [ ] Harness cases on `main`: `resize_applies_to_inactive_tab` fails on every run
+      (since v1.2.13); `ctrl_w_reaches_shell_and_shift_closes_tab` failed the v1.2.36 and
+      v1.2.37 gate runs and passed the v1.2.41 one, so it is intermittent -- both are
       tab-switch cases; investigate together.
 - [ ] AI panel: commands of a **finished** batch have no details popup and no copy icon
       after a session switch. `cmd_batch_remove` drops the batch, so `chat_rebuild_display`
