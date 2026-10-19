@@ -224,6 +224,23 @@ Done, in order (details in the commit messages and the specs named):
   colour (the focus tint is invisible on the accent bubble).
 
 Open, in priority order:
+- [ ] Light themes: much of PowerShell's output (warnings, `Write-Host -ForegroundColor
+      Yellow`, PSReadLine's command token) arrives in ANSI yellow, which is near
+      unreadable on Onyx Light and Sage & Sand (maintainer, 2026-10-19). Own branch
+      `fix/light-theme-ansi-contrast`; Opus determines the fix (per-theme palette,
+      a minimum-contrast floor at paint time, or both), critiqued before
+      implementation -- spec `2026-10-19-light-theme-ansi-contrast-design.md`.
+- [ ] Terminal copy loses the scrollback (maintainer, 2026-10-18, seen on v1.2.36): a
+      selection taller than the window, or made while scrolled back, copies only the
+      rows in the viewport. `selection_extract_text` takes the visible window as
+      `lines_count - rows` and ignores `scrollback_offset`; the `Selection` struct is
+      viewport-relative so `selection_pixel_to_cell` clamps rows to the screen; and the
+      WM_LBUTTONUP clipboard buffer is 8 KB. Needs a spec (buffer-absolute selection,
+      auto-scroll while dragging past an edge, unbounded copy buffer).
+- [ ] Harness cases failing on `main` since at least v1.2.36:
+      `ctrl_w_reaches_shell_and_shift_closes_tab` (gate runs of 2026-10-18 and
+      2026-10-19) alongside the older `resize_applies_to_inactive_tab` -- both are
+      tab-switch cases; investigate together.
 - [ ] AI panel: commands of a **finished** batch have no details popup and no copy icon
       after a session switch. `cmd_batch_remove` drops the batch, so `chat_rebuild_display`
       shows them only as inline `[EXEC]` segments of the AI text. Either keep finished
