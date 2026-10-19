@@ -182,10 +182,11 @@ static int check_item(const ChatMsgItem *it, int markdown, int *checked)
 typedef struct {
     HWND host, lv;
     HFONT f, m, b, s;
+    int height;             /* the host's and the list's client height */
 } TestView;
 
-static int view_open(TestView *tv, ChatMsgList *list, int width, int dpi,
-                     int markdown)
+static int view_open_h(TestView *tv, ChatMsgList *list, int width, int height,
+                       int dpi, int markdown)
 {
     static int registered = 0;
     HINSTANCE inst = GetModuleHandleA(NULL);
@@ -201,14 +202,15 @@ static int view_open(TestView *tv, ChatMsgList *list, int width, int dpi,
         ui_theme_resolve(ui_theme_get(0), &g_win_tokens);
         registered = 1;
     }
+    tv->height = height;
     tv->host = CreateWindowA("NsSelTestHost", "", WS_POPUP, 0, 0, width,
-                             CLV_TEST_H, NULL, NULL, inst, NULL);
+                             height, NULL, NULL, inst, NULL);
     if (!tv->host) return 0;
-    tv->lv = chat_listview_create(tv->host, 0, 0, width, CLV_TEST_H, list,
+    tv->lv = chat_listview_create(tv->host, 0, 0, width, height, list,
                                   ui_theme_get(0));
     if (!tv->lv) return 0;
     if (dpi != 96) {
-        RECT r = { 0, 0, width, CLV_TEST_H };
+        RECT r = { 0, 0, width, height };
         SendMessageA(tv->lv, WM_DPICHANGED, MAKEWPARAM(dpi, dpi), (LPARAM)&r);
     }
     tv->f = make_font(10, dpi, FW_NORMAL, "Segoe UI");
@@ -221,13 +223,19 @@ static int view_open(TestView *tv, ChatMsgList *list, int width, int dpi,
     return 1;
 }
 
+static int view_open(TestView *tv, ChatMsgList *list, int width, int dpi,
+                     int markdown)
+{
+    return view_open_h(tv, list, width, CLV_TEST_H, dpi, markdown);
+}
+
 /* Paint the list view into a memory DC (no WM_PAINT reaches a hidden
  * window); the paint records every item's runs. */
 static void view_paint(TestView *tv, int width)
 {
     HDC screen = GetDC(NULL);
     HDC mem = CreateCompatibleDC(screen);
-    HBITMAP bmp = CreateCompatibleBitmap(screen, width, CLV_TEST_H);
+    HBITMAP bmp = CreateCompatibleBitmap(screen, width, tv->height);
     HGDIOBJ old = SelectObject(mem, bmp);
     SendMessageA(tv->lv, WM_PRINTCLIENT, (WPARAM)mem, PRF_CLIENT);
     SelectObject(mem, old);
@@ -572,6 +580,165 @@ int test_chat_select_win_query_word(void)
     }
     view_close(&tv);
     chat_msg_list_clear(&list);
+    TEST_END();
+}
+
+/* ---- a viewport shorter than the content ------------------------------
+ * Every case above paints into a 3000 px list, so none of them has an item
+ * below the fold, an edge auto-scroll or a move the list must not take as a
+ * drag point. These use a list about 300 px tall (at 96 DPI; scaled with the
+ * DPI) over the same fixture, whose reply alone is taller than that. */
+
+#define CLV_SHORT_H 300
+
+static ChatListView *lv_of(HWND lvh)
+{
+    return (ChatListView *)GetWindowLongPtrA(lvh, GWLP_USERDATA);
+}
+
+static LRESULT query_word(HWND lvh, int item, const char *word)
+{
+    ATOM atom = GlobalAddAtomA(word);
+    LRESULT r = SendMessageA(lvh, CLV_MSG_QUERY_WORD, (WPARAM)item,
+                             (LPARAM)atom);
+    GlobalDeleteAtom(atom);
+    return r;
+}
+
+/* Open the short list at `dpi`, scrolled to the top and painted. */
+static int short_view_open(TestView *tv, ChatMsgList *list, int dpi)
+{
+    fill_fixture(list);
+    if (!view_open_h(tv, list, 760, CLV_SHORT_H * dpi / 96, dpi, 1))
+        return 0;
+    chat_listview_enable_query(tv->lv);
+    chat_listview_scroll_to_top(tv->lv);
+    view_paint(tv, 760);
+    return 1;
+}
+
+/* Hold the button down on one word and move off it with the button up:
+ * Windows synthesises such a WM_MOUSEMOVE from the real cursor (wParam 0)
+ * when capture changes or the window moves under it. The list must not read
+ * it as a drag point: it would auto-scroll by the cursor's distance below the
+ * edge and move the selection's focus to wherever the cursor happens to be. */
+int test_chat_select_win_drag_ignores_buttonless_move(void)
+{
+    TEST_BEGIN();
+    static const int dpis[2] = { 96, 192 };
+    for (int d = 0; d < 2; d++) {
+        ChatMsgList list;
+        TestView tv;
+        int opened = short_view_open(&tv, &list, dpis[d]);
+        ASSERT_TRUE(opened);
+        if (opened) {
+            ChatListView *lv = lv_of(tv.lv);
+            ASSERT_NOT_NULL(lv);
+            int w = 0;
+            const TextRun *a = find_word(list.head, "Can", &w);
+            ASSERT_NOT_NULL(a);
+            if (lv && a) {
+                ASSERT_TRUE(lv->total_height > lv->viewport_height);
+                int y = a->y + a->h / 2;
+                int far_y = lv->viewport_height + 500;
+                int before = lv->scroll_y;
+                SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(a->x + 1, y));
+                SendMessageA(tv.lv, WM_MOUSEMOVE, 0, pt(a->x + w / 2, far_y));
+                ASSERT_EQ(lv->scroll_y, before);
+                SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON,
+                             pt(a->x + w - 1, y));
+                SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(a->x + w - 1, y));
+                ASSERT_TRUE(sel_is(tv.lv, &list, "Can"));
+                ASSERT_EQ(lv->scroll_y, before);
+            }
+        }
+        view_close(&tv);
+        chat_msg_list_clear(&list);
+    }
+    TEST_END();
+}
+
+/* The short list: an item that starts below the viewport is not painted and
+ * so is not answered; a drag held below the bottom edge auto-scrolls and
+ * reaches text that was below the fold; a drag that stays inside does not
+ * scroll. */
+int test_chat_select_win_short_list(void)
+{
+    TEST_BEGIN();
+    static const int dpis[2] = { 96, 192 };
+    for (int d = 0; d < 2; d++) {
+        ChatMsgList list;
+        TestView tv;
+        int opened = short_view_open(&tv, &list, dpis[d]);
+        ASSERT_TRUE(opened);
+        if (opened) {
+            ChatListView *lv = lv_of(tv.lv);
+            ASSERT_NOT_NULL(lv);
+            const ChatMsgItem *ai = list.head->next;
+            const ChatMsgItem *status = ai->next->next;
+            int wq = 0, wp = 0;
+            const TextRun *q = find_word(list.head, "Can", &wq);
+            const TextRun *low = find_word(ai, "cd /var/log && ls", &wp);
+            ASSERT_NOT_NULL(q);
+            ASSERT_NOT_NULL(low);
+            if (lv && q && low) {
+                ASSERT_EQ(lv->scroll_y, 0);
+                ASSERT_TRUE(lv->total_height > lv->viewport_height);
+                /* preconditions: the target is below the fold, and the last
+                 * item (the status line, ordinal 3) was never painted */
+                ASSERT_TRUE(low->y >= lv->viewport_height);
+                ASSERT_EQ(status->runs.n, 0);
+
+                /* (a) unpainted item: no answer. A painted item answers even
+                 * for a word below the fold. */
+                ASSERT_EQ(query_word(tv.lv, 3, "Stream"), 0);
+                LRESULT rl = query_word(tv.lv, 1, "cd /var/log");
+                ASSERT_TRUE(rl != 0);
+                ASSERT_TRUE((int)((rl >> 16) & 0xFFFF) >= lv->viewport_height);
+                ASSERT_TRUE(query_word(tv.lv, 0, "Can") != 0);
+
+                /* (c) a drag that ends inside the viewport does not scroll */
+                int y = q->y + q->h / 2;
+                SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(q->x + 1, y));
+                SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON,
+                             pt(q->x + wq / 2, y));
+                SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON,
+                             pt(q->x + wq - 1, y));
+                SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(q->x + wq - 1, y));
+                ASSERT_EQ(lv->scroll_y, 0);
+                ASSERT_TRUE(sel_is(tv.lv, &list, "Can"));
+
+                /* (b) held below the bottom edge: scrolls, and the selection
+                 * reaches text that began below the fold */
+                SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(q->x + 1, y));
+                int ty = lv->viewport_height + 40;
+                int tx = low->x + 2;
+                for (int i = 1; i <= 4; i++)
+                    SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON,
+                                 pt(q->x + (tx - q->x) * i / 4,
+                                    y + (ty - y) * i / 4));
+                for (int i = 0; i < 40; i++)
+                    SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON, pt(tx, ty));
+                SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(tx, ty));
+                ASSERT_TRUE(lv->scroll_y > 0);
+                ASSERT_TRUE(lv->sel_valid);
+                char *got = NULL;
+                if (lv->sel_valid)
+                    chat_copy_selection(&list, lv->sel_anchor, lv->sel_focus,
+                                        lv->render_markdown, &got);
+                ASSERT_NOT_NULL(got);
+                if (got) {
+                    ASSERT_TRUE(strncmp(got, "Can you check disk usage?", 25) == 0);
+                    ASSERT_TRUE(strstr(got, "cd /var/log") != NULL);
+                    if (!strstr(got, "cd /var/log"))
+                        printf("  copied \"%s\"\n", got);
+                }
+                free(got);
+            }
+        }
+        view_close(&tv);
+        chat_msg_list_clear(&list);
+    }
     TEST_END();
 }
 

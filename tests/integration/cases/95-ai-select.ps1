@@ -31,22 +31,47 @@ function Get-AiSelClipboard {
     return ([string]$t) -replace "`r`n", "`n"
 }
 
+# Every point a drag is aimed at must lie inside the list's client area, or the
+# drag auto-scrolls on each move past the edge and the focus can never land on
+# the word the query named. The geometry (the list's height in physical pixels
+# against the reply's line positions) depends on the DPI and the work area, so
+# a case that cannot place its points says so instead of dragging and
+# reporting a clipboard that was never a fair test.
+function Assert-AiSelRectVisible {
+    param($List, $Rect, [string] $Word)
+    $c = [NutshellNative]::ClientSize($List)
+    if ($Rect.Y + $Rect.H -gt $c.B) {
+        throw "inconclusive at this DPI/work area: list $($c.B) px tall, '$Word' at y=$($Rect.Y)"
+    }
+    if ($Rect.X + $Rect.W -gt $c.R) {
+        throw "inconclusive at this DPI/work area: list $($c.R) px wide, '$Word' at x=$($Rect.X)"
+    }
+}
+
 # One --ui-demo case: start, size the window, find the list, scroll it to the
 # top, run the body (param $s, $list; returns the detail string), record the
 # result. The exe is stopped and its scratch directory removed on every path.
+# The window is sized in physical pixels from the 96-DPI numbers (1400 wide,
+# $Height tall) times the window's DPI / 96, because the list's height decides
+# which words are painted and where; Set-NutshellWindowSize clamps to the work
+# area. The detail string carries the DPI and the achieved list size.
 function Invoke-AiSelectCase {
     param([string] $Name, [int] $Height = 900, [scriptblock] $Body)
     if (-not (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains $Name))) { return }
     Write-Host ("[RUN ] " + $Name)
     $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
     $session = $null
-    $ok = $false; $detail = ""
+    $ok = $false; $detail = ""; $geometry = ""
     try {
         $session = Start-Nutshell -Env $testEnv -ExtraArgs @("--ui-demo=chat")
-        Set-NutshellWindowSize -Session $session -Width 1400 -Height $Height | Out-Null
+        $dpi = Get-NutshellWindowDpi -Session $session
+        $sz = Set-NutshellWindowSize -Session $session `
+            -Width ([int](1400 * $dpi / 96)) -Height ([int]($Height * $dpi / 96))
         Start-Sleep -Seconds 2
         $list = Get-NutshellChatList -Session $session
         if ($list -eq [IntPtr]::Zero) { throw "AI panel message list not found in --ui-demo=chat" }
+        $lc = [NutshellNative]::ClientSize($list)
+        $geometry = "dpi $dpi, window client $($sz.ClientWidth)x$($sz.ClientHeight), list $($lc.R - $lc.L)x$($lc.B - $lc.T)"
         # The chat demo already opens at the top (ui_demo_scrolls_to_top); this
         # scroll is a safeguard, because a word above the visible area is not
         # answered.
@@ -54,9 +79,11 @@ function Invoke-AiSelectCase {
         Start-Sleep -Milliseconds 500
         $out = @(& $Body $session $list)
         $detail = [string]$out[-1]
+        if ($geometry) { $detail += " ($geometry)" }
         $ok = $true
     } catch {
         $detail = $_.Exception.Message
+        if ($geometry) { $detail += " ($geometry)" }
         if ($session) { try { Save-NutshellScreenshot -Session $session -Path (Join-Path $Artifacts "$Name-FAIL.png") | Out-Null } catch {} }
     } finally {
         if ($session) { Stop-Nutshell -Session $session }
@@ -76,6 +103,9 @@ function Select-DemoMountsFirst {
     $a = Get-NutshellChatWordRect -Session $s -Word "mounts" -Item 1
     $b = Get-NutshellChatWordRect -Session $s -Word "first:" -Item 1
     Assert-True ($null -ne $a -and $null -ne $b) "'mounts first:' is not painted in the reply"
+    $list = Get-NutshellChatList -Session $s
+    Assert-AiSelRectVisible $list $a "mounts"
+    Assert-AiSelRectVisible $list $b "first:"
     Send-NutshellChatDrag -Session $s -FromX ($a.X + 1) -FromY ($a.Y + [int]($a.H / 2)) `
         -ToX ($b.X + $b.W - 1) -ToY ($b.Y + [int]($b.H / 2))
 }
@@ -98,6 +128,8 @@ Invoke-AiSelectCase "ai_panel_select_across_items" -Body {
     $b = Get-NutshellChatWordRect -Session $s -Word "found" -Item 1
     Assert-True ($null -ne $a) "'disk' is not painted in the user bubble"
     Assert-True ($null -ne $b) "'found' is not painted in the reply"
+    Assert-AiSelRectVisible $list $a "disk"
+    Assert-AiSelRectVisible $list $b "found"
     Set-Clipboard -Value "SENTINEL_SELECT_2"
     Send-NutshellChatDrag -Session $s -FromX ($a.X + 1) -FromY ($a.Y + [int]($a.H / 2)) `
         -ToX ($b.X + $b.W - 1) -ToY ($b.Y + [int]($b.H / 2)) -Steps 8
@@ -119,8 +151,16 @@ Invoke-AiSelectCase "ai_panel_select_scrolls" -Height 480 -Body {
     $a = Get-NutshellChatWordRect -Session $s -Word "disk" -Item 0
     $w = Get-NutshellChatWordRect -Session $s -Word "Want" -Item 1
     Assert-True ($null -ne $a) "'disk' is not painted in the user bubble"
-    Assert-True ($null -ne $w -and $w.Y -ge $c.B) `
-        "precondition: the reply's last line must start below the visible list (list $($c.B) px tall)"
+    Assert-AiSelRectVisible $list $a "disk"
+    # The reply's last line must be out of sight when the drag starts. A $null
+    # answer is fine: the list answers only for items a paint touched, so a
+    # reply that starts below the painted range is "below" too, and the drag
+    # has to scroll to reach it. A line that is painted must start below the
+    # list's bottom edge.
+    if ($null -ne $w) {
+        Assert-True ($w.Y -ge $c.B) `
+            "the reply's last line is already visible (y=$($w.Y) < $($c.B)); the window is too tall for this case"
+    }
     Set-Clipboard -Value "SENTINEL_SELECT_3"
     Send-NutshellChatDrag -Session $s -FromX ($a.X + 1) -FromY ($a.Y + [int]($a.H / 2)) `
         -ToX ([int]($c.R / 2)) -ToY ($c.B + 40) -Steps 4 -HoldMoves 80
@@ -129,8 +169,12 @@ Invoke-AiSelectCase "ai_panel_select_scrolls" -Height 480 -Body {
     Assert-True ($got.StartsWith("disk usage on this box")) "clipboard does not start at the anchor: '$got'"
     Assert-True ($got.EndsWith("Want me to rotate and compress the old logs?")) `
         "the drag past the bottom edge did not reach the end of the reply: '$got'"
-    $w2 = Get-NutshellChatWordRect -Session $s -Word "Want" -Item 1
-    Assert-True ($null -eq $w2 -or $w2.Y -lt $w.Y) "the list did not scroll"
+    # Scrolled: "disk" (item 0, at $a.Y before the drag) is now higher up, or
+    # has left the painted range altogether. This does not depend on whether
+    # the reply's last line was painted before the drag.
+    $a2 = Get-NutshellChatWordRect -Session $s -Word "disk" -Item 0
+    Assert-True ($null -eq $a2 -or $a2.Y -lt $a.Y) `
+        "the list did not scroll ('disk' was at y=$($a.Y), is at y=$(if ($null -ne $a2) { $a2.Y } else { 'not painted' }))"
     "dragging past the bottom edge auto-scrolled and the selection reached the reply's last line"
 }
 

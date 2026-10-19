@@ -228,6 +228,27 @@ touches before marking its pull request ready.
 | `ai_panel_select_scrolls` | `--ui-demo=chat` in a short window: the reply's last line starts below the list; a drag held past the bottom edge auto-scrolls and the copy runs from "disk" to the reply's last line |
 | `ai_panel_edit_copy_follows_focus` | `--ui-demo=chat`: Edit > Copy copies the panel selection while the list has focus, and leaves the clipboard alone once focus is on the terminal |
 
+**How the `ai_panel_select_*` and `ai_panel_edit_copy_follows_focus` cases are sized.**
+The geometry that decides what the list paints is in physical pixels, so the
+cases do not assume 96 DPI. `Invoke-AiSelectCase` reads the window's DPI
+(`Get-NutshellWindowDpi`, 96 when `GetDpiForWindow` is missing) and asks for
+`1400 x height` times DPI / 96 (900 for most cases, 480 for the scrolling one),
+clamped to the work area by `Set-NutshellWindowSize`. The PASS/FAIL detail ends
+with what was achieved: `(dpi 192, window client WxH, list WxH)`. Before any
+drag, every point it is aimed at must lie inside the list; if one does not,
+the case fails with `inconclusive at this DPI/work area: list N px tall, 'word'
+at y=Y` rather than dragging, because a drag target below the list's bottom
+edge auto-scrolls on every move and the copy would be a different text for
+reasons that say nothing about selection. That message means the work area is
+too small for this DPI, not that selection is broken. `ai_panel_select_scrolls`
+needs the opposite: the reply's last line must be out of sight. An unpainted
+last line (the query answers only for items a paint touched) is accepted; a
+painted one above the bottom edge fails with `the window is too tall for this
+case`. `Send-NutshellChatDrag` also parks the real cursor in the virtual
+screen's bottom-right corner first: when capture changes Windows synthesises a
+`WM_MOUSEMOVE` from the real cursor, and the list must not meet one over the
+window mid-drag (the list also ignores a move without the left button).
+
 ## AI Assist cases
 
 The five `ai_*` cases above the `ui_gallery`/`approval_card_run_selected_settles`
@@ -267,7 +288,8 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Get-NutshellThemeColor -Name -Token` | parses `src/core/ui_theme.c`'s per-theme initialisers for one of `bg_primary`, `bg_secondary`, `accent`, `text_main`, `text_dim`, `border`, `terminal_fg`, `terminal_bg`, `success`, `warning`, `danger`, `info`, `link` |
 | `Get-NutshellRegionHash -Path -Region` | MD5 of a proportional region `@{X;Y;W;H}` (each 0..1) of a saved capture — the general form of `cases-terminal.ps1`'s terminal-specific `Get-TerminalAreaHash`; used by `minimise_restore_repaints`, `tabs_open_switch_close` and `cli_no_connect_opens_idle` to compare a specific band (or the whole window) across two captures |
 | `Get-NutshellChatList -Session` / `Get-NutshellChatWordRect -Session -Word -Item [-Thinking]` | the AI panel's message list / where it painted a word (`CLV_MSG_QUERY_WORD`, `--ui-demo` only): `@{X;Y;W;H}` in the list's client pixels, W ending at the word's last character |
-| `Send-NutshellChatDrag -Session -FromX -FromY -ToX -ToY [-Steps] [-HoldMoves]` | a drag in the message list with sent `WM_LBUTTONDOWN`/`WM_MOUSEMOVE`/`WM_LBUTTONUP` (no cursor, no foreground); `-HoldMoves` repeats the last point, each past an edge auto-scrolling once |
+| `Get-NutshellWindowDpi -Session` | the main window's DPI (96 = 100%); 96 when `GetDpiForWindow` is unavailable or returns 0 |
+| `Send-NutshellChatDrag -Session -FromX -FromY -ToX -ToY [-Steps] [-HoldMoves]` | a drag in the message list with sent `WM_LBUTTONDOWN`/`WM_MOUSEMOVE`/`WM_LBUTTONUP` (no foreground; the real cursor is parked in the screen's far corner first); `-HoldMoves` repeats the last point, each past an edge auto-scrolling once |
 | `Set-NutshellFocus -Session -Hwnd` | keyboard focus to one of the app's windows via `AttachThreadInput` + `SetFocus`; `Send-NutshellChord -Hwnd` posts a chord to a window other than the main one |
 
 **Window geometry is never assumed.** `Set-NutshellWindowSize` treats its

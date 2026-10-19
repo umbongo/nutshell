@@ -3893,6 +3893,14 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             }
         }
         if (!lv->sel_active) break;
+        /* A drag point carries the button. Windows also synthesises a
+         * WM_MOUSEMOVE from the real cursor, with the real (here: up) button
+         * state, when capture changes or the window moves under a parked
+         * cursor; taken as a drag point it would auto-scroll by the cursor's
+         * distance past the edge and move the focus to wherever the cursor
+         * is. Ignore it: WM_CAPTURECHANGED already ends an abandoned drag. */
+        if (!(wParam & MK_LBUTTON))
+            return 0;
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
         lv->sel_last_x = mx;

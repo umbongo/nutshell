@@ -270,11 +270,25 @@ public static class NutshellSelNative {
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] public static extern ushort GlobalAddAtom(string name);
     [DllImport("kernel32.dll")] public static extern ushort GlobalDeleteAtom(ushort atom);
     [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr h);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
 }
 "@
 
 $script:CLV_MSG_QUERY_WORD = 0x8051   # WM_APP + 0x51, src/ui/chat_listview.h
 $script:WM_MOUSEMOVE       = 0x0200
+
+function Get-NutshellWindowDpi {
+    <# The DPI the app's main window runs at (96 = 100%). Cases whose geometry
+       is in physical pixels scale a 96-DPI number by this / 96. Falls back to
+       96 when GetDpiForWindow is missing (Windows older than 10 1607) or
+       returns 0 (a window that is gone). #>
+    param([Parameter(Mandatory)] $Session)
+    try {
+        $d = [int][NutshellNative]::GetDpiForWindow($Session.Main)
+        if ($d -gt 0) { return $d }
+    } catch { }
+    return 96
+}
 
 function Get-NutshellChatList {
     <# HWND of the AI panel's message list (class NutshellChatList), or Zero. #>
@@ -330,13 +344,29 @@ function Send-NutshellChatDrag {
        past an edge auto-scrolls the list once), then the button-up there.
        Client pixels of the list (Get-NutshellChatWordRect gives them). Sent,
        not posted, so every message is handled -- repaint and hit-test
-       included -- before the next one goes. Physical mouse movement over
-       the window during the drag would be read as one more drag point, so
-       run it on a locked or idle desktop, like every posted-input case. #>
+       included -- before the next one goes. The real cursor is parked in the
+       screen's far corner first (see the comment in the body); the list also
+       ignores a move without the button, so a stray physical move is not a
+       drag point. Run it on a locked or idle desktop, like every
+       posted-input case. #>
     param([Parameter(Mandatory)] $Session, [int] $FromX, [int] $FromY,
           [int] $ToX, [int] $ToY, [int] $Steps = 4, [int] $HoldMoves = 0)
     $list = Get-NutshellChatList -Session $Session
     if ($list -eq [IntPtr]::Zero) { throw "AI panel message list not found" }
+    # Park the real cursor in the bottom-right corner of the virtual screen,
+    # one pixel inside it. Windows synthesises a WM_MOUSEMOVE from the real
+    # cursor (position and button state, wParam 0) when mouse capture changes,
+    # and the list takes capture on the sent button-down; wherever the cursor
+    # happened to rest over the window, that move would reach the drag. Parked
+    # off the window it lands outside every case's geometry. SetCursorPos
+    # fails harmlessly on a locked desktop, so a false return is ignored.
+    $vx = [NutshellSelNative]::GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+    $vy = [NutshellSelNative]::GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+    $vw = [NutshellSelNative]::GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
+    $vh = [NutshellSelNative]::GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+    if ($vw -gt 0 -and $vh -gt 0) {
+        [NutshellNative]::SetCursorPos($vx + $vw - 1, $vy + $vh - 1) | Out-Null
+    }
     $mk = [IntPtr]$script:MK_LBUTTON
     [NutshellNative]::SendMsg($list, $script:WM_LBUTTONDOWN, $mk,
         (ConvertTo-NutshellPointLParam -X $FromX -Y $FromY)) | Out-Null
@@ -1561,5 +1591,5 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Open-NutshellSessionManager, Open-NutshellSettings, Select-NutshellSettingsPage, `
     Get-NutshellTabCount, Close-NutshellTab, Get-NutshellWindowText, Get-NutshellChildWindows, `
     Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion, `
-    Get-NutshellRegionHash, Get-NutshellChatList, Get-NutshellChatWordRect, Send-NutshellChatDrag, `
+    Get-NutshellRegionHash, Get-NutshellWindowDpi, Get-NutshellChatList, Get-NutshellChatWordRect, Send-NutshellChatDrag, `
     Set-NutshellFocus
