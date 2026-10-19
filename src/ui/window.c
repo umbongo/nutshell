@@ -2727,6 +2727,10 @@ static HMENU create_app_menu(void)
 /* Copy current selection to clipboard */
 static void do_copy(HWND hwnd)
 {
+    /* The AI panel first, and before the no-session return so a panel with
+     * no session still copies: it copies, and answers 1, only when its
+     * message list has keyboard focus and a selection. */
+    if (g_hwndAiChat && ai_chat_copy_selection(g_hwndAiChat)) return;
     if (!g_active_session || !g_active_session->term) return;
     if (!g_selection.valid) return;
     char buf[8192];

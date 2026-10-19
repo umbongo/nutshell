@@ -115,3 +115,24 @@ int test_text_lf_null_input(void)
     ASSERT_EQ(text_lf_to_crlf(NULL, NULL, 0), 0);
     TEST_END();
 }
+
+/* text_crlf_to_lf: the AI message box's CR LF become LF before the text is
+ * a chat item (spec 2026-10-18 section 2). */
+int test_text_crlf_to_lf_pairs_become_lf(void)
+{
+    TEST_BEGIN();
+    char a[] = "one\r\ntwo\r\n";
+    size_t na = text_crlf_to_lf(a);
+    ASSERT_EQ(na, 8);
+    ASSERT_STR_EQ(a, "one\ntwo\n");
+    char b[] = "x\ry\r\r\nz";
+    size_t nb = text_crlf_to_lf(b);
+    ASSERT_EQ(nb, 6);
+    ASSERT_STR_EQ(b, "x\ry\r\nz");
+    char c[] = "";
+    size_t nc = text_crlf_to_lf(c);
+    ASSERT_EQ(nc, 0);
+    size_t nn = text_crlf_to_lf(NULL);
+    ASSERT_EQ(nn, 0);
+    TEST_END();
+}

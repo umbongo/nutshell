@@ -1,5 +1,5 @@
 #include "md_blocks.h"
-#include "../ui/markdown.h"   /* md_classify_line: header-only, Win32-free */
+#include "markdown.h"   /* md_classify_line: header-only, Win32-free */
 
 /* True if the line [p, p + n) is a fence according to the renderer's own
  * classifier. Only the first three bytes can decide that, so the classifier

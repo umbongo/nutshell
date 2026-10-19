@@ -2675,6 +2675,8 @@ int test_md_table_fit_columns_two_wide_shrink_equal(void);
 int test_md_table_fit_columns_minimums_respected(void);
 int test_md_table_fit_columns_overflow(void);
 int test_md_table_fit_columns_null_safe(void);
+int test_md_table_drawn_cols_follows_separator_then_header(void);
+int test_md_table_drawn_cols_caps_and_floors(void);
 int test_md_next_word_tab_is_whitespace(void);
 
 /* test_json_validate.c */
@@ -2885,6 +2887,7 @@ int test_text_lf_lone_cr_unchanged(void);
 int test_text_lf_size_query(void);
 int test_text_lf_truncation_never_splits_crlf(void);
 int test_text_lf_null_input(void);
+int test_text_crlf_to_lf_pairs_become_lf(void);
 
 /* test_cli_sink.c */
 int test_cli_sink_invalid_handle_is_console(void);
@@ -3164,10 +3167,6 @@ int test_chat_msg_cmd_note_defaults_to_null(void);
 int test_chat_msg_set_note_copies_and_replaces(void);
 int test_chat_msg_set_note_rejects_non_command_and_null_item(void);
 int test_chat_msg_note_freed_with_item(void);
-int test_chat_strip_exec_markers_basic(void);
-int test_chat_strip_exec_markers_multiple_and_adjacent(void);
-int test_chat_strip_exec_markers_unpaired(void);
-int test_chat_strip_exec_markers_leaves_everything_else(void);
 int test_utf8_cut_at_short_string_untouched(void);
 int test_utf8_cut_at_ascii_truncates_to_max_minus_one(void);
 int test_utf8_cut_at_does_not_split_multibyte(void);
@@ -3199,6 +3198,69 @@ int test_cmd_detail_layout_never_negative_at_tiny_sizes(void);
 int test_cmd_detail_layout_inside_client_for_all_adequate_sizes(void);
 int test_cmd_detail_layout_null_out_is_safe(void);
 
+/* test_chat_exec.c */
+int test_chat_exec_split_no_marker_is_one_prose_segment(void);
+int test_chat_exec_split_command_between_prose(void);
+int test_chat_exec_split_crlf_before_marker_is_trimmed(void);
+int test_chat_exec_split_only_newlines_before_marker_give_no_prose(void);
+int test_chat_exec_split_unterminated_keeps_the_marker(void);
+int test_chat_exec_split_empty_and_adjacent_commands(void);
+int test_chat_exec_split_stray_close_is_prose(void);
+int test_chat_exec_split_respects_len_and_null(void);
+
+/* test_text_runs.c */
+int test_text_runs_cum_ascii_multibyte_and_surrogates(void);
+int test_text_runs_cum_invalid_bytes_and_limits(void);
+int test_text_runs_utf8_prefix_never_splits_a_pair(void);
+int test_text_runs_append_assigns_lines_and_boundaries(void);
+int test_text_runs_hit_inside_a_run_takes_the_nearest_boundary(void);
+int test_text_runs_hit_left_right_and_between(void);
+int test_text_runs_hit_above_below_and_between_lines(void);
+int test_text_runs_hit_synthetic_maps_to_the_next_real_run(void);
+int test_text_runs_hit_reports_the_thinking_part(void);
+int test_text_runs_hit_table_cells_share_a_line_by_y(void);
+int test_text_runs_hit_empty_is_minus_one(void);
+int test_text_runs_span_px_partial_full_and_none(void);
+int test_text_runs_run_at_finds_the_rect(void);
+int test_text_runs_word_prose_code_and_synthetic(void);
+int test_text_line_at_and_next_line(void);
+
+int test_chat_msg_find_by_id(void);
+int test_chat_msg_item_starts_without_runs_and_frees_them(void);
+
+/* test_chat_copy.c */
+int test_chat_copy_whole_fixture_matches_golden(void);
+int test_chat_copy_prose_inside_one_line_drops_markers(void);
+int test_chat_copy_across_line_break_and_empty_line(void);
+int test_chat_copy_bullet_marker_follows_its_bytes(void);
+int test_chat_copy_ordered_list_copies_the_displayed_number(void);
+int test_chat_copy_fence_lines_copy_nothing(void);
+int test_chat_copy_heading_quote_and_rule(void);
+int test_chat_copy_table_escaped_pipe_and_column_cap(void);
+int test_chat_copy_table_columns_follow_the_alignment_row(void);
+int test_chat_copy_table_range_from_the_end_of_a_short_row(void);
+int test_chat_copy_exec_segment_and_state_reset(void);
+int test_chat_copy_ordered_list_restarts_after_exec(void);
+int test_chat_copy_leading_whitespace_is_not_copied(void);
+int test_chat_copy_plain_passes_bytes_through(void);
+int test_chat_copy_widens_a_cut_character(void);
+int test_chat_copy_empty_and_bad_arguments(void);
+int test_chat_sel_cmp_and_part_range(void);
+int test_chat_copy_selection_joins_items_and_skips_cards(void);
+int test_chat_copy_selection_takes_open_thinking_only(void);
+int test_chat_copy_selection_clamps_and_drops_vanished_ids(void);
+int test_chat_sel_all_spans_text_items(void);
+
+/* test_chat_copy_paint.c */
+int test_paint_runs_carry_the_bytes_they_draw(void);
+int test_painted_words_equal_copied_text(void);
+int test_painted_words_equal_copied_text_markdown_off(void);
+int test_paint_synthetic_runs_cover_their_marker(void);
+
+/* test_sel_contrast.c */
+int test_sel_highlight_visible_on_every_surface(void);
+int test_sel_hue_is_focus_except_on_the_bubble(void);
+
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
 int test_md_blocks_one(void);
@@ -3215,6 +3277,8 @@ int test_md_blocks_respects_len_not_nul(void);
 /* test_ui_demo.c */
 int test_ui_demo_approval_rows_have_notes_and_a_long_command(void);
 int test_ui_demo_cmddetail_matches_approval(void);
+int test_ui_demo_chat_selection_spans_every_kind(void);
+int test_ui_demo_chat_drag_across_items_golden(void);
 
 int test_sdbg_level_labels(void);
 int test_sdbg_category_labels(void);
@@ -5926,6 +5990,8 @@ int main(void) {
     failed += test_md_table_fit_columns_minimums_respected();
     failed += test_md_table_fit_columns_overflow();
     failed += test_md_table_fit_columns_null_safe();
+    failed += test_md_table_drawn_cols_follows_separator_then_header();
+    failed += test_md_table_drawn_cols_caps_and_floors();
 
     printf("\n--- JSON Escape ---\n");
     failed += test_escape_simple_string();
@@ -6135,6 +6201,7 @@ int main(void) {
     failed += test_text_lf_size_query();
     failed += test_text_lf_truncation_never_splits_crlf();
     failed += test_text_lf_null_input();
+    failed += test_text_crlf_to_lf_pairs_become_lf();
     failed += test_cli_sink_invalid_handle_is_console();
     failed += test_cli_sink_pipe_is_handle();
     failed += test_cli_sink_disk_is_handle();
@@ -6434,10 +6501,6 @@ int main(void) {
     failed += test_chat_msg_set_note_copies_and_replaces();
     failed += test_chat_msg_set_note_rejects_non_command_and_null_item();
     failed += test_chat_msg_note_freed_with_item();
-    failed += test_chat_strip_exec_markers_basic();
-    failed += test_chat_strip_exec_markers_multiple_and_adjacent();
-    failed += test_chat_strip_exec_markers_unpaired();
-    failed += test_chat_strip_exec_markers_leaves_everything_else();
     failed += test_utf8_cut_at_short_string_untouched();
     failed += test_utf8_cut_at_ascii_truncates_to_max_minus_one();
     failed += test_utf8_cut_at_does_not_split_multibyte();
@@ -6467,6 +6530,62 @@ int main(void) {
     failed += test_cmd_detail_layout_inside_client_for_all_adequate_sizes();
     failed += test_cmd_detail_layout_null_out_is_safe();
 
+    failed += test_chat_exec_split_no_marker_is_one_prose_segment();
+    failed += test_chat_exec_split_command_between_prose();
+    failed += test_chat_exec_split_crlf_before_marker_is_trimmed();
+    failed += test_chat_exec_split_only_newlines_before_marker_give_no_prose();
+    failed += test_chat_exec_split_unterminated_keeps_the_marker();
+    failed += test_chat_exec_split_empty_and_adjacent_commands();
+    failed += test_chat_exec_split_stray_close_is_prose();
+    failed += test_chat_exec_split_respects_len_and_null();
+
+    failed += test_text_runs_cum_ascii_multibyte_and_surrogates();
+    failed += test_text_runs_cum_invalid_bytes_and_limits();
+    failed += test_text_runs_utf8_prefix_never_splits_a_pair();
+    failed += test_text_runs_append_assigns_lines_and_boundaries();
+    failed += test_text_runs_hit_inside_a_run_takes_the_nearest_boundary();
+    failed += test_text_runs_hit_left_right_and_between();
+    failed += test_text_runs_hit_above_below_and_between_lines();
+    failed += test_text_runs_hit_synthetic_maps_to_the_next_real_run();
+    failed += test_text_runs_hit_reports_the_thinking_part();
+    failed += test_text_runs_hit_table_cells_share_a_line_by_y();
+    failed += test_text_runs_hit_empty_is_minus_one();
+    failed += test_text_runs_span_px_partial_full_and_none();
+    failed += test_text_runs_run_at_finds_the_rect();
+    failed += test_text_runs_word_prose_code_and_synthetic();
+    failed += test_text_line_at_and_next_line();
+    failed += test_chat_msg_find_by_id();
+    failed += test_chat_msg_item_starts_without_runs_and_frees_them();
+    failed += test_chat_copy_whole_fixture_matches_golden();
+    failed += test_chat_copy_prose_inside_one_line_drops_markers();
+    failed += test_chat_copy_across_line_break_and_empty_line();
+    failed += test_chat_copy_bullet_marker_follows_its_bytes();
+    failed += test_chat_copy_ordered_list_copies_the_displayed_number();
+    failed += test_chat_copy_fence_lines_copy_nothing();
+    failed += test_chat_copy_heading_quote_and_rule();
+    failed += test_chat_copy_table_escaped_pipe_and_column_cap();
+    failed += test_chat_copy_table_columns_follow_the_alignment_row();
+    failed += test_chat_copy_table_range_from_the_end_of_a_short_row();
+    failed += test_chat_copy_exec_segment_and_state_reset();
+    failed += test_chat_copy_ordered_list_restarts_after_exec();
+    failed += test_chat_copy_leading_whitespace_is_not_copied();
+    failed += test_chat_copy_plain_passes_bytes_through();
+    failed += test_chat_copy_widens_a_cut_character();
+    failed += test_chat_copy_empty_and_bad_arguments();
+    failed += test_chat_sel_cmp_and_part_range();
+    failed += test_chat_copy_selection_joins_items_and_skips_cards();
+    failed += test_chat_copy_selection_takes_open_thinking_only();
+    failed += test_chat_copy_selection_clamps_and_drops_vanished_ids();
+    failed += test_chat_sel_all_spans_text_items();
+
+    failed += test_paint_runs_carry_the_bytes_they_draw();
+    failed += test_painted_words_equal_copied_text();
+    failed += test_painted_words_equal_copied_text_markdown_off();
+    failed += test_paint_synthetic_runs_cover_their_marker();
+
+    failed += test_sel_highlight_visible_on_every_surface();
+    failed += test_sel_hue_is_focus_except_on_the_bubble();
+
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();
     failed += test_md_blocks_multiline_body();
@@ -6481,6 +6600,8 @@ int main(void) {
 
     failed += test_ui_demo_approval_rows_have_notes_and_a_long_command();
     failed += test_ui_demo_cmddetail_matches_approval();
+    failed += test_ui_demo_chat_selection_spans_every_kind();
+    failed += test_ui_demo_chat_drag_across_items_golden();
 
     failed += test_sdbg_level_labels();
     failed += test_sdbg_category_labels();

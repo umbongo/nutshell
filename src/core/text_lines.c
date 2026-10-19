@@ -47,3 +47,15 @@ size_t text_lf_to_crlf(const char *in, char *out, size_t out_sz)
     if (out && out_sz > 0) out[used] = '\0';
     return need;
 }
+
+size_t text_crlf_to_lf(char *s)
+{
+    if (!s) return 0;
+    size_t w = 0;
+    for (size_t r = 0; s[r]; r++) {
+        if (s[r] == '\r' && s[r + 1] == '\n') continue;
+        s[w++] = s[r];
+    }
+    s[w] = '\0';
+    return w;
+}

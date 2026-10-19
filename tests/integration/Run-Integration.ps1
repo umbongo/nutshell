@@ -43,6 +43,7 @@
 #                        WINDOW-*, CLOSE-1, MENU-1)
 #   60-tabs-logging.ps1  tabs (TABS-*) and logging (LOG-*)
 #   70-cli.ps1           CLI flags (CLI-1's several small cases)
+#   95-ai-select.ps1     character selection in the AI panel under --ui-demo=chat
 # Add a new case by editing the matching file (or adding a new cases\NN-*.ps1
 # -- any file matching cases\*.ps1 is picked up automatically) rather than
 # growing this file.

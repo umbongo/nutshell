@@ -112,4 +112,12 @@ typedef struct {
  * chosen or changed; `out` may then be read from freely by UI code. */
 void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out);
 
+/* The hue the chat selection highlight blends, at 30%, over the surface it
+ * sits on (spec docs/superpowers/specs/2026-10-18-ai-panel-text-selection-
+ * design.md section 6): the focus token -- except on the user bubble, which
+ * is filled with the accent the focus token is drawn from, so a focus tint
+ * would vanish there; the bubble's own text colour is the hue instead.
+ * Packed 0x00RRGGBB like every token. */
+unsigned int ui_theme_sel_hue(const ThemeTokens *t, int on_user_bubble);
+
 #endif /* NUTSHELL_UI_THEME_H */

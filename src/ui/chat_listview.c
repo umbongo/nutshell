@@ -30,8 +30,13 @@
 #include "ai_prompt.h"
 #include "ns_font.h"
 #include "stick_scroll.h"
+#include "chat_exec.h"
+#include "chat_copy.h"
+#include "text_runs.h"
+#include "secure_zero.h"
 #include <windowsx.h>
 #include <commctrl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -197,7 +202,7 @@ static void     update_scrollbar(ChatListView *lv);
 static int      measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                              int width);
 static int      paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                                RECT *rc);
+                                RECT *rc, int pinned);
 static int      paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                                RECT *rc);
 static int      paint_cmd_container(ChatListView *lv, HDC hdc,
@@ -222,6 +227,8 @@ static void     paint_empty_state(ChatListView *lv, HDC hdc,
 static int      chatlv_empty_state_hit(ChatListView *lv, int mx, int my,
                                        RECT *out_rc);
 static int      chatlv_list_empty(const ChatListView *lv);
+static int      clv_sel_ordered(const ChatListView *lv, ChatSelPos *a,
+                                ChatSelPos *b);
 
 /* command_index_of and is_last_command removed — no longer needed
  * with the container-based command rendering approach. is_first_command()
@@ -264,6 +271,54 @@ static int draw_text_utf8(HDC hdc, const char *text, RECT *rc, UINT flags)
     int h = DrawTextW(hdc, w, wlen, rc, flags);
     free(w);
     return h;
+}
+
+/* ── Fonts and text widths shared by measure and paint ─────────────── */
+
+static HFONT clv_font(const ChatListView *lv)
+{
+    return lv->hFont ? lv->hFont : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+}
+
+static HFONT clv_mono(const ChatListView *lv)
+{
+    return lv->hMonoFont ? lv->hMonoFont
+                         : (HFONT)GetStockObject(ANSI_FIXED_FONT);
+}
+
+static HFONT clv_small(const ChatListView *lv)
+{
+    return lv->hSmallFont ? lv->hSmallFont
+                          : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+}
+
+/* Text widths at list width `width` (the client width). One function per
+ * item kind, called by measure_item() and by the paint routine alike, so
+ * the layouter always measures at the width it paints at. */
+static int clv_user_text_w(const ChatListView *lv, int width)
+{
+    int text_w = (width * 3) / 4 - 2 * lv->user_pad_h;
+    return text_w < 40 ? 40 : text_w;
+}
+
+static int clv_status_text_w(const ChatListView *lv, int width)
+{
+    int text_w = width - 4 * ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    return text_w < 40 ? 40 : text_w;
+}
+
+static int clv_ai_text_w(const ChatListView *lv, int width)
+{
+    int text_w = width - lv->ai_indent - 3 * ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    return text_w < 40 ? 40 : text_w;
+}
+
+/* MD_MODE_PLAIN height of `text` at `width` in `font`. */
+static int clv_plain_height(const ChatListView *lv, HDC hdc, const char *text,
+                            int width, HFONT font)
+{
+    return md_render_ex(hdc, text ? text : "", 0, 0, width, font, font, font,
+                        lv->theme, MD_MODE_PLAIN, 0, 0, NULL, NULL);
 }
 
 /* ── Safety tag colour ──────────────────────────────────────────────── */
@@ -346,8 +401,7 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
     int line_h = ns_scale(20, dpi);  /* fallback if hdc is unavailable */
     if (hdc) {
-        HGDIOBJ old = SelectObject(hdc, lv->hFont ? lv->hFont
-                                        : GetStockObject(DEFAULT_GUI_FONT));
+        HGDIOBJ old = SelectObject(hdc, clv_font(lv));
         TEXTMETRICA tm;
         GetTextMetricsA(hdc, &tm);
         line_h = tm.tmHeight;
@@ -359,38 +413,66 @@ static void build_thinking_layout(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     thinking_layout(avail, expanded, 0, max_body_h, dpi, out);
 
     int full_h = 0;
-    if (expanded && hdc && out->body.w > 0) {
-        HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
-                                       : GetStockObject(DEFAULT_GUI_FONT));
-        RECT mr;
-        SetRect(&mr, 0, 0, out->body.w, 0);
-        draw_text_utf8(hdc, item->u.ai.thinking_text ? item->u.ai.thinking_text : "",
-                       &mr, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-        full_h = mr.bottom - mr.top;
-        SelectObject(hdc, tf);
+    if (expanded && out->body.w > 0) {
+        /* The wrapped height, laid out by the plain layouter at the width
+         * the body is painted at: the box less its SP_XS inset and, when
+         * the text overflows the box, less the scrollbar too. Cached per
+         * (text length, box width, line height) so hover and click
+         * hit-tests cost no layout (spec 2026-10-18 section 3). */
+        const char *tt = item->u.ai.thinking_text ? item->u.ai.thinking_text
+                                                  : "";
+        int tlen = (int)strlen(tt);
+        int have = 0;   /* full_h is known (cache hit or freshly laid out) */
+        if (item->u.ai.think_cache_len == tlen &&
+            item->u.ai.think_cache_w == out->body.w &&
+            item->u.ai.think_cache_line_h == line_h) {
+            full_h = item->u.ai.think_cache_full_h;
+            have = 1;
+        } else if (hdc) {
+            int tw = out->body.w - ns_scale(SP_XS, dpi);
+            if (tw < 1) tw = 1;
+            full_h = clv_plain_height(lv, hdc, tt, tw, clv_font(lv));
+            int sb_w = ns_scale(6, dpi);
+            if (full_h > max_body_h && tw - sb_w >= 1) {
+                tw -= sb_w;
+                full_h = clv_plain_height(lv, hdc, tt, tw, clv_font(lv));
+            }
+            item->u.ai.think_cache_len = tlen;
+            item->u.ai.think_cache_w = out->body.w;
+            item->u.ai.think_cache_line_h = line_h;
+            item->u.ai.think_cache_full_h = full_h;
+            item->u.ai.think_cache_text_w = tw;
+            have = 1;
+        }
 
-        thinking_layout(avail, expanded, full_h, max_body_h, dpi, out);
+        /* No hdc and a cold cache: the height is unknown, so leave the
+         * layout and the persisted scroll offset alone -- settling it
+         * against a zero height would reset the scroll position. */
+        if (have) {
+            thinking_layout(avail, expanded, full_h, max_body_h, dpi, out);
 
-        /* Smart scroll: settle this item's persisted scroll offset now that
-         * the real content height (full_h) and visible box height
-         * (out->body.h) are known -- reuses stick_scroll_on_layout()
-         * (src/core/stick_scroll.c), the same "stuck vs released" logic the
-         * outer chat list uses for its own stick-to-bottom behaviour. While
-         * thinking_autoscroll (this item's "stuck" bit, updated by the
-         * wheel handler below on every user scroll) is set, this snaps to
-         * the new bottom on every call -- i.e. it keeps following freshly
-         * streamed text; otherwise it just re-clamps the existing position
-         * into range, so scrolling up stops following and stays put, and
-         * collapsing/re-expanding (which resets scroll_y to 0 and
-         * thinking_autoscroll to 1 -- see the click handler) starts back at
-         * the bottom instead of an out-of-range offset. Idempotent, so
-         * running it from every geometry recompute (measure, paint, hover,
-         * hit-test) is harmless. */
-        int vis_h = out->body.h;
-        int max_scroll = (full_h > vis_h) ? full_h - vis_h : 0;
-        item->u.ai.thinking_scroll_y = stick_scroll_on_layout(
-            item->u.ai.thinking_autoscroll, item->u.ai.thinking_scroll_y,
-            max_scroll);
+            /* Smart scroll: settle this item's persisted scroll offset now
+             * that the real content height (full_h) and visible box height
+             * (out->body.h) are known -- reuses stick_scroll_on_layout()
+             * (src/core/stick_scroll.c), the same "stuck vs released" logic
+             * the outer chat list uses for its own stick-to-bottom
+             * behaviour. While thinking_autoscroll (this item's "stuck"
+             * bit, updated by the wheel handler below on every user scroll)
+             * is set, this snaps to the new bottom on every call -- i.e. it
+             * keeps following freshly streamed text; otherwise it just
+             * re-clamps the existing position into range, so scrolling up
+             * stops following and stays put, and collapsing/re-expanding
+             * (which resets scroll_y to 0 and thinking_autoscroll to 1 --
+             * see the click handler) starts back at the bottom instead of
+             * an out-of-range offset. Idempotent, so running it from every
+             * geometry recompute (measure, paint, hover, hit-test) is
+             * harmless. */
+            int vis_h = out->body.h;
+            int max_scroll = (full_h > vis_h) ? full_h - vis_h : 0;
+            item->u.ai.thinking_scroll_y = stick_scroll_on_layout(
+                item->u.ai.thinking_autoscroll, item->u.ai.thinking_scroll_y,
+                max_scroll);
+        }
     }
     if (out_full_body_h) *out_full_body_h = full_h;
 }
@@ -416,92 +498,214 @@ static void draw_chevron_down(HDC hdc, const RECT *rc, COLORREF colour)
     DeleteObject(pen);
 }
 
-/* ── Selection: check if an item overlaps the selection range ──────── */
+/* ── Selection: hit-test the list (spec 2026-10-18 sections 4 and 5) ── */
 
-static int item_in_selection(const ChatListView *lv, int item_top, int item_h)
+/* The text of part `part` of `it` and its length. */
+static const char *clv_part_text(const ChatMsgItem *it, int part, int *len)
 {
-    if (!lv->sel_valid) return 0;
-    int sy = lv->sel_start_y, ey = lv->sel_end_y;
-    if (sy > ey) { int tmp = sy; sy = ey; ey = tmp; }
-    int item_bot = item_top + item_h;
-    return (item_bot > sy && item_top < ey);
+    const char *t = it->text;
+    if (part == TR_PART_THINKING && it->type == CHAT_ITEM_AI_TEXT)
+        t = it->u.ai.thinking_text;
+    if (!t) t = "";
+    *len = (t == it->text) ? (int)it->text_len : (int)strlen(t);
+    return t;
 }
 
-/* ── Selection: extract text from all items in the selection range ─── */
-
-static size_t sel_extract_text(const ChatListView *lv, char *buf, size_t buf_sz)
+/* The first (end = 0) or last (end = 1) offset of an item that has runs. */
+static ChatSelPos clv_item_edge(const ChatMsgItem *it, int end)
 {
-    if (!lv->sel_valid || !lv->msg_list || buf_sz == 0) return 0;
+    ChatSelPos p = { it->id, TR_PART_MAIN, 0 };
+    int part = TR_PART_MAIN;
+    int off = end ? text_runs_hit(&it->runs, 0, INT_MAX / 2, &part)
+                  : text_runs_hit(&it->runs, INT_MIN / 2, INT_MIN / 2, &part);
+    p.part = part;
+    p.off = off < 0 ? 0 : off;
+    return p;
+}
 
-    int sy = lv->sel_start_y, ey = lv->sel_end_y;
-    if (sy > ey) { int tmp = sy; sy = ey; ey = tmp; }
+/* Map a client point to a selection end. The pinned copy of a user bubble
+ * answers for the band it covers; otherwise the item whose band (its rect
+ * and the gap below it, laid out as on_paint() lays them) holds the point
+ * answers through its runs. An item with no runs there -- a command card,
+ * or an item this frame did not paint -- resolves to the nearer edge of the
+ * nearest item that has runs; below every item, the end of the last one.
+ * Returns 0 when no painted item has text. */
+static int clv_hit(ChatListView *lv, int mx, int my, ChatSelPos *out)
+{
+    if (!lv->msg_list) return 0;
 
-    size_t pos = 0;
-    int y = lv->msg_gap;  /* content Y (not scroll-adjusted) */
-    ChatMsgItem *item = lv->msg_list->head;
-
-    while (item && pos < buf_sz - 1) {
-        int h = item->measured_height;
-        int item_bot = y + h;
-
-        if (item_bot > sy && y < ey) {
-            const char *txt = NULL;
-            switch (item->type) {
-            case CHAT_ITEM_USER:
-            case CHAT_ITEM_AI_TEXT:
-            case CHAT_ITEM_STATUS:
-            case CHAT_ITEM_TOOL_CALL:
-            case CHAT_ITEM_TOOL_RESULT:
-                txt = item->text;
-                break;
-            case CHAT_ITEM_COMMAND:
-                txt = item->u.cmd.command ? item->u.cmd.command : item->text;
-                break;
-            }
-            if (txt && *txt) {
-                if (pos > 0 && pos < buf_sz - 1)
-                    buf[pos++] = '\n';
-                size_t len = strlen(txt);
-                if (len > buf_sz - 1 - pos) len = buf_sz - 1 - pos;
-                memcpy(buf + pos, txt, len);
-                pos += len;
+    if (lv->pinned_id && my < lv->sticky_bottom) {
+        ChatMsgItem *pu = chat_msg_find(lv->msg_list, lv->pinned_id);
+        if (pu && pu->pinned_runs.n > 0) {
+            int part = TR_PART_MAIN;
+            int off = text_runs_hit(&pu->pinned_runs, mx, my, &part);
+            if (off >= 0) {
+                out->msg_id = pu->id;
+                out->part = part;
+                out->off = off;
+                return 1;
             }
         }
-
-        y += h + lv->msg_gap;
-        item = item->next;
     }
 
-    buf[pos] = '\0';
-    return pos;
+    ChatMsgItem *band = NULL, *last = NULL;
+    int band_top = 0, band_bot = 0;
+    int y = lv->msg_gap - lv->scroll_y;
+    for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next) {
+        int h = it->measured_height;
+        if (h == 0) continue;
+        if (!band && my < y + h + lv->msg_gap) {
+            band = it;
+            band_top = y;
+            band_bot = y + h + lv->msg_gap;
+        }
+        if (it->runs.n > 0) last = it;
+        y += h + lv->msg_gap;
+    }
+    if (!last) return 0;
+    if (!band) {
+        *out = clv_item_edge(last, 1);
+        return 1;
+    }
+    if (band->runs.n > 0) {
+        int part = TR_PART_MAIN;
+        int off = text_runs_hit(&band->runs, mx, my, &part);
+        out->msg_id = band->id;
+        out->part = part;
+        out->off = off < 0 ? 0 : off;
+        return 1;
+    }
+    ChatMsgItem *prev = band->prev, *next = band->next;
+    while (prev && prev->runs.n == 0) prev = prev->prev;
+    while (next && next->runs.n == 0) next = next->next;
+    if (prev && (!next || my - band_top < band_bot - my))
+        *out = clv_item_edge(prev, 1);
+    else if (next)
+        *out = clv_item_edge(next, 0);
+    else
+        *out = clv_item_edge(last, 1);
+    return 1;
 }
 
-/* ── Selection: copy selected text to clipboard ───────────────────── */
-
-static void sel_copy_to_clipboard(ChatListView *lv)
+/* The run under the point and the item it belongs to -- the pinned copy
+ * first, where it covers the list. NULL when the point is on no run. */
+static ChatMsgItem *clv_run_at(ChatListView *lv, int mx, int my,
+                               const TextRuns **runs, const TextRun **run)
 {
-    enum { COPY_CAP = 32768 };
-    /* A few spare bytes past the cap let utf8_cut_at() see whether the cap
-     * would split a multi-byte character. */
-    char buf[COPY_CAP + 4];
-    size_t n = sel_extract_text(lv, buf, sizeof(buf));
-    if (n == 0) return;
-    /* The extraction may have stopped mid-character at the end of the
-     * buffer: cut to valid UTF-8 first (stripping the [EXEC] markers, which
-     * are transport syntax rather than text the user wants, only shortens). */
-    n = utf8_cut_at(buf, COPY_CAP);
-    chat_strip_exec_markers(buf);
-    n = strlen(buf);
-    clip_copy_utf8(lv->hwnd, buf, n);
+    if (!lv->msg_list) return NULL;
+    if (lv->pinned_id && my < lv->sticky_bottom) {
+        ChatMsgItem *pu = chat_msg_find(lv->msg_list, lv->pinned_id);
+        int ri = pu ? text_runs_run_at(&pu->pinned_runs, mx, my) : -1;
+        if (ri < 0) return NULL;
+        *runs = &pu->pinned_runs;
+        *run = &pu->pinned_runs.v[ri];
+        return pu;
+    }
+    for (ChatMsgItem *it = lv->msg_list->head; it; it = it->next) {
+        int ri = text_runs_run_at(&it->runs, mx, my);
+        if (ri >= 0) {
+            *runs = &it->runs;
+            *run = &it->runs.v[ri];
+            return it;
+        }
+    }
+    return NULL;
+}
+
+static void clv_set_sel(ChatListView *lv, int id, int part, int s, int e)
+{
+    lv->sel_anchor.msg_id = id;
+    lv->sel_anchor.part = part;
+    lv->sel_anchor.off = s;
+    lv->sel_focus.msg_id = id;
+    lv->sel_focus.part = part;
+    lv->sel_focus.off = e;
+    lv->sel_valid = e > s;
+    lv->sel_active = 0;
+    InvalidateRect(lv->hwnd, NULL, FALSE);
+}
+
+/* Double-click: the word under the point (a prose run less its trailing
+ * blanks, or the whitespace-delimited token in a code line). Returns 1
+ * when it selected something. */
+static int clv_select_word(ChatListView *lv, int mx, int my)
+{
+    const TextRuns *runs = NULL;
+    const TextRun *run = NULL;
+    ChatMsgItem *it = clv_run_at(lv, mx, my, &runs, &run);
+    if (!it || !run || run->synthetic[0]) return 0;
+    int part = run->part;
+    int off = text_runs_hit(runs, mx, my, &part);
+    int len = 0;
+    const char *text = clv_part_text(it, run->part, &len);
+    int s = 0, e = 0;
+    text_runs_word(text, len, run, off, &s, &e);
+    if (e <= s) return 0;
+    clv_set_sel(lv, it->id, run->part, s, e);
+    return 1;
+}
+
+/* Triple-click: the source line under the point -- a paragraph, as every
+ * source newline is a hard break. Returns 1 when it selected something. */
+static int clv_select_line(ChatListView *lv, int mx, int my)
+{
+    ChatSelPos p;
+    if (!clv_hit(lv, mx, my, &p)) return 0;
+    ChatMsgItem *it = chat_msg_find(lv->msg_list, p.msg_id);
+    if (!it) return 0;
+    int len = 0;
+    const char *text = clv_part_text(it, p.part, &len);
+    int s = 0, e = 0;
+    text_line_at(text, len, p.off, &s, &e);
+    if (e <= s) return 0;
+    clv_set_sel(lv, it->id, p.part, s, e);
+    return 1;
+}
+
+/* Drag: the focus follows the point. The runs must be current, so any
+ * paint a scroll, wheel, resize or stream left pending happens first. */
+static void clv_drag_to(ChatListView *lv, int mx, int my)
+{
+    UpdateWindow(lv->hwnd);
+    /* The paint may have dropped the selection (an id vanished mid-drag). */
+    if (!lv->sel_active) return;
+    ChatSelPos p;
+    if (clv_hit(lv, mx, my, &p)) lv->sel_focus = p;
+    lv->sel_valid = chat_sel_cmp(lv->sel_anchor, lv->sel_focus) != 0;
+    InvalidateRect(lv->hwnd, NULL, FALSE);
+}
+
+/* ── Selection: copy the visible text to the clipboard ──────────────── */
+
+/* Ctrl+C, the context menu and Edit > Copy: the visible text of the
+ * selection (chat_copy_selection), heap-sized, no cap. Returns 1 when the
+ * clipboard now holds it. */
+static int sel_copy_to_clipboard(ChatListView *lv)
+{
+    ChatSelPos a, b;
+    if (!clv_sel_ordered(lv, &a, &b)) return 0;
+    char *buf = NULL;
+    size_t n = chat_copy_selection(lv->msg_list, a, b, lv->render_markdown,
+                                   &buf);
+    int ok = 0;
+    if (buf && n > 0) ok = clip_copy_utf8(lv->hwnd, buf, n);
+    if (buf) {
+        secure_zero(buf, n);
+        free(buf);
+    }
+    return ok;
 }
 
 /* ── Selection: select all items ──────────────────────────────────── */
 
 static void sel_select_all(ChatListView *lv)
 {
-    lv->sel_start_y = 0;
-    lv->sel_end_y = lv->total_height;
+    ChatSelPos a, b;
+    if (!chat_sel_all(lv->msg_list, &a, &b)) return;
+    lv->sel_anchor = a;
+    lv->sel_focus = b;
     lv->sel_valid = 1;
+    lv->sel_active = 0;
     InvalidateRect(lv->hwnd, NULL, FALSE);
 }
 
@@ -509,7 +713,7 @@ static void sel_select_all(ChatListView *lv)
 
 static void sel_clear(ChatListView *lv)
 {
-    if (lv->sel_valid) {
+    if (lv->sel_valid || lv->sel_active) {
         lv->sel_valid = 0;
         lv->sel_active = 0;
         InvalidateRect(lv->hwnd, NULL, FALSE);
@@ -587,10 +791,15 @@ void chat_listview_set_fonts(HWND hwnd, HFONT font, HFONT mono,
     lv->hMonoFont = mono;
     lv->hBoldFont = bold;
     lv->hSmallFont = small_font;
-    /* Fonts changed — mark all dirty for full remeasure */
+    /* Fonts changed — mark all dirty for full remeasure, and forget every
+     * cached Thinking layout (laid out in the old font). */
     {
         ChatMsgItem *fi = lv->msg_list ? lv->msg_list->head : NULL;
-        while (fi) { fi->dirty = 1; fi = fi->next; }
+        while (fi) {
+            fi->dirty = 1;
+            if (fi->type == CHAT_ITEM_AI_TEXT) fi->u.ai.think_cache_len = -1;
+            fi = fi->next;
+        }
     }
     recalc_layout(lv);
     InvalidateRect(hwnd, NULL, TRUE);
@@ -681,7 +890,11 @@ void chat_listview_set_render_markdown(HWND hwnd, int enabled)
     int v = enabled ? 1 : 0;
     if (lv->render_markdown == v) return;   /* no-op */
     lv->render_markdown = v;
-    /* Layout heights change with the new mode — recalc and redraw. */
+    /* Layout heights change with the new mode: every item must be measured
+     * again (recalc_layout() only remeasures dirty items), then redraw. */
+    for (ChatMsgItem *it = lv->msg_list ? lv->msg_list->head : NULL; it;
+         it = it->next)
+        it->dirty = 1;
     chat_listview_invalidate(hwnd);
 }
 
@@ -692,6 +905,31 @@ void chat_listview_set_state(HWND hwnd, int state_id, int context_lines)
     lv->state_id = state_id;
     lv->state_context_lines = context_lines;
     InvalidateRect(hwnd, NULL, FALSE);
+}
+
+void chat_listview_enable_query(HWND hwnd)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (lv) lv->query_enabled = 1;
+}
+
+void chat_listview_set_selection(HWND hwnd, ChatSelPos a, ChatSelPos b)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv) return;
+    lv->sel_anchor = a;
+    lv->sel_focus = b;
+    lv->sel_active = 0;
+    lv->sel_valid = chat_sel_cmp(a, b) != 0;
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+int chat_listview_copy_selection(HWND hwnd)
+{
+    ChatListView *lv = lv_from_hwnd(hwnd);
+    if (!lv || GetFocus() != hwnd || !lv->sel_valid) return 0;
+    sel_copy_to_clipboard(lv);
+    return 1;
 }
 
 void chat_listview_invalidate(HWND hwnd)
@@ -933,10 +1171,9 @@ static void recalc_layout(ChatListView *lv)
 }
 
 /* Height-only twin of draw_ai_segment() (defined below, near paint_ai_item):
- * same font selection and wrap flags, no painting. Kept as the single
- * source of truth for a plain (non-[EXEC]) segment's height so
- * measure_item() and paint_ai_item() can never drift apart -- draw_ai_segment
- * calls this too for its own non-markdown height calc. */
+ * same layouter, same fonts, paint = 0. Kept as the single source of truth
+ * for a prose segment's height so measure_item() and paint_ai_item() can
+ * never drift apart. */
 static int measure_ai_segment(ChatListView *lv, HDC hdc, const char *text,
                               int width)
 {
@@ -945,99 +1182,44 @@ static int measure_ai_segment(ChatListView *lv, HDC hdc, const char *text,
                                lv->hFont, lv->hMonoFont, lv->hBoldFont,
                                lv->theme);
     }
-    HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
-                              : GetStockObject(DEFAULT_GUI_FONT));
-    RECT mrc;
-    SetRect(&mrc, 0, 0, width, 0);
-    draw_text_utf8(hdc, text, &mrc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-    int h = mrc.bottom - mrc.top;
-    SelectObject(hdc, tf);
-    return h;
+    return clv_plain_height(lv, hdc, text, width, clv_font(lv));
+}
+
+/* One chat_exec_split() segment as its own NUL-terminated string, for the
+ * painters and the measurer. Caller frees. NULL when the segment is empty or
+ * the allocation fails; both callers then skip it (an empty command paints
+ * nothing). */
+static char *chat_seg_dup(const char *text, const ChatSeg *seg)
+{
+    int n = seg->end - seg->start;
+    if (n <= 0) return NULL;
+    char *s = (char *)malloc((size_t)n + 1);
+    if (!s) return NULL;
+    memcpy(s, text + seg->start, (size_t)n);
+    s[n] = '\0';
+    return s;
 }
 
 /* Height-only twin of draw_ai_text_with_exec() (near paint_ai_item): walks
- * the exact same [EXEC]/[/EXEC] segment split -- plain segments through
- * measure_ai_segment() (markdown or plain, matching draw_ai_segment's own
- * font choice), [EXEC] segments through the mono font with DT_CALCRECT
- * (matching draw_ai_text_with_exec's purple mono-font paint) -- so the two
- * can never disagree about an EXEC-bearing message's height. Previously
- * measure_item() stripped the [EXEC] tags and measured the whole message
- * as one markdown-rendered string (ai_text_for_measure()), which is a
- * structurally different computation from what paint_ai_item() actually
- * draws (per-segment, with the command text in the mono font, never
- * markdown-parsed) -- a real mismatch for any message containing a
- * command, which is exactly the paint that overlaps with the item below
- * it (or the activity indicator) when the two diverge. */
+ * the same chat_exec_split() segments -- prose through measure_ai_segment(),
+ * commands through the plain layouter in the mono font -- so the two can
+ * never disagree about an [EXEC]-bearing message's height. */
 static int measure_ai_text_with_exec(ChatListView *lv, HDC hdc,
                                      const char *text, int width)
 {
-    if (!strstr(text, "[EXEC]"))
-        return measure_ai_segment(lv, hdc, text, width);
-
-    HFONT mono_font = lv->hMonoFont ? lv->hMonoFont
-                                     : (HFONT)GetStockObject(ANSI_FIXED_FONT);
-    const char *pos = text;
-    int total_h = 0;
-
-    while (*pos) {
-        const char *exec_start = strstr(pos, "[EXEC]");
-
-        if (!exec_start) {
-            if (*pos)
-                total_h += measure_ai_segment(lv, hdc, pos, width);
-            break;
-        }
-
-        /* Segment before [EXEC], trailing newlines stripped -- mirrors
-         * draw_ai_text_with_exec's own trim exactly. */
-        if (exec_start > pos) {
-            size_t seg_len = (size_t)(exec_start - pos);
-            char *seg = malloc(seg_len + 1);
-            if (seg) {
-                memcpy(seg, pos, seg_len);
-                seg[seg_len] = '\0';
-                size_t trim = seg_len;
-                while (trim > 0 && (seg[trim - 1] == '\n' || seg[trim - 1] == '\r'))
-                    trim--;
-                seg[trim] = '\0';
-                if (trim > 0)
-                    total_h += measure_ai_segment(lv, hdc, seg, width);
-                free(seg);
-            }
-        }
-
-        const char *cmd_start = exec_start + 6;
-        const char *exec_end = strstr(cmd_start, "[/EXEC]");
-
-        if (!exec_end) {
-            RECT rc; SetRect(&rc, 0, 0, width, 0);
-            HGDIOBJ old = SelectObject(hdc, mono_font);
-            draw_text_utf8(hdc, exec_start, &rc,
-                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-            SelectObject(hdc, old);
-            total_h += rc.bottom - rc.top;
-            break;
-        }
-
-        {
-            size_t cmd_len = (size_t)(exec_end - cmd_start);
-            char *cmd_text = malloc(cmd_len + 1);
-            if (cmd_text) {
-                memcpy(cmd_text, cmd_start, cmd_len);
-                cmd_text[cmd_len] = '\0';
-                RECT rc; SetRect(&rc, 0, 0, width, 0);
-                HGDIOBJ old = SelectObject(hdc, mono_font);
-                draw_text_utf8(hdc, cmd_text, &rc,
-                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-                SelectObject(hdc, old);
-                total_h += rc.bottom - rc.top;
-                free(cmd_text);
-            }
-        }
-
-        pos = exec_end + 7;
+    int len = (int)strlen(text);
+    int pos = 0, total_h = 0;
+    ChatSeg seg;
+    while (chat_exec_split(text, len, &pos, &seg)) {
+        char *s = chat_seg_dup(text, &seg);
+        if (!s) continue;
+        if (seg.kind == CHAT_SEG_PROSE)
+            total_h += measure_ai_segment(lv, hdc, s, width);
+        else
+            total_h += clv_plain_height(lv, hdc, s, width, clv_mono(lv));
+        secure_zero(s, strlen(s));      /* a copy of message text */
+        free(s);
     }
-
     return total_h;
 }
 
@@ -1046,9 +1228,7 @@ static int measure_ai_text_with_exec(ChatListView *lv, HDC hdc,
 static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                         int width)
 {
-    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
     int text_w;
-    RECT rc;
     HGDIOBJ old_font;
 
     /* An item with no text measures as a bare gap -- except a command (its
@@ -1066,30 +1246,17 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         return lv->msg_gap;
 
     switch (item->type) {
-    case CHAT_ITEM_USER: {
-        /* User bubble: right-aligned with padding */
-        int max_bubble_w = (width * 3) / 4;  /* Max 75% of width */
-        text_w = max_bubble_w - 2 * lv->user_pad_h;
-        if (text_w < 40) text_w = 40;
-
-        old_font = SelectObject(hdc, lv->hFont ? lv->hFont
-                                                : GetStockObject(DEFAULT_GUI_FONT));
-        SetRect(&rc, 0, 0, text_w, 0);
-        draw_text_utf8(hdc, item->text, &rc,
-                       DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-        SelectObject(hdc, old_font);
-        {
-            int total = (rc.bottom - rc.top) + 2 * lv->user_pad_v;
-            return total;
-        }
-    }
+    case CHAT_ITEM_USER:
+        /* User bubble: the plain layouter at clv_user_text_w(), the width
+         * paint_user_item() lays the text out at. */
+        return clv_plain_height(lv, hdc, item->text,
+                                clv_user_text_w(lv, width), clv_font(lv))
+               + 2 * lv->user_pad_v;
 
     case CHAT_ITEM_AI_TEXT: {
-        /* AI text: left-indented.  on_paint applies side_pad to item_rc,
-         * and paint_ai_item subtracts another side_pad on the right, so
-         * the effective text width is width - 2*side_pad - indent - side_pad. */
-        text_w = width - lv->ai_indent - 3 * side_pad;
-        if (text_w < 40) text_w = 40;
+        /* AI text: left-indented, at clv_ai_text_w() -- the width
+         * paint_ai_item() lays it out at. */
+        text_w = clv_ai_text_w(lv, width);
 
         /* Mirrors paint_ai_item's draw_ai_text_with_exec() segment-by-
          * segment exactly (see measure_ai_text_with_exec()'s comment) so
@@ -1153,21 +1320,12 @@ static int measure_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
 
     case CHAT_ITEM_TOOL_CALL:
     case CHAT_ITEM_TOOL_RESULT:
-    case CHAT_ITEM_STATUS: {
-        /* on_paint applies side_pad to item_rc, paint_status_item adds
-         * another side_pad on each side, so effective width is
-         * width - 4*side_pad. */
-        text_w = width - 4 * side_pad;
-        if (text_w < 40) text_w = 40;
-
-        old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                                    : GetStockObject(DEFAULT_GUI_FONT));
-        SetRect(&rc, 0, 0, text_w, 0);
-        draw_text_utf8(hdc, item->text, &rc,
-                       DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_LEFT);
-        SelectObject(hdc, old_font);
-        return (rc.bottom - rc.top) + ns_scale(8, CLV_DPI(lv));
-    }
+    case CHAT_ITEM_STATUS:
+        /* The plain layouter in the small font at clv_status_text_w(), the
+         * width paint_status_item() uses, plus 8 px of slack. */
+        return clv_plain_height(lv, hdc, item->text,
+                                clv_status_text_w(lv, width), clv_small(lv))
+               + ns_scale(8, CLV_DPI(lv));
 
     default:
         return lv->msg_gap;
@@ -1220,19 +1378,62 @@ static void recalc_dpi_constants(ChatListView *lv)
     lv->code_pad   = ns_scale(BASE_CODE_PAD, CLV_DPI(lv));
 }
 
+/* ── Character selection: the selection in reading order ───────────── */
+
+/* The current selection as an ordered pair (a before b). Returns 0 when
+ * there is none or it is empty. */
+static int clv_sel_ordered(const ChatListView *lv, ChatSelPos *a, ChatSelPos *b)
+{
+    if (!lv->sel_valid) return 0;
+    *a = lv->sel_anchor;
+    *b = lv->sel_focus;
+    if (chat_sel_cmp(*a, *b) > 0) {
+        ChatSelPos t = *a;
+        *a = *b;
+        *b = t;
+    }
+    return chat_sel_cmp(*a, *b) < 0;
+}
+
+/* The run context for painting part `part` (part_len bytes) of `item`:
+ * runs go to `runs`, text[0] of what is painted is source offset `base`,
+ * and the selection range is the part of the current selection that lies
+ * in this part. `surface` is the colour the text sits on. */
+static void clv_run_ctx(const ChatListView *lv, MdRunCtx *rc,
+                        const ChatMsgItem *item, int part, int part_len,
+                        TextRuns *runs, int base, COLORREF surface)
+{
+    memset(rc, 0, sizeof(*rc));
+    rc->runs = runs;
+    rc->base = base;
+    rc->part = part;
+    rc->focus = RGB_FROM_THEME(ui_theme_sel_hue(ns_tokens(), 0));
+    rc->surface = surface;
+    ChatSelPos a, b;
+    int s = 0, e = 0;
+    if (clv_sel_ordered(lv, &a, &b) &&
+        chat_sel_part_range(a, b, item->id, part, part_len, &s, &e)) {
+        rc->sel_start = s;
+        rc->sel_end = e;
+    }
+}
+
 /* ══════════════════════════════════════════════════════════════════════
  *  Paint routines
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* Paint a user bubble. `pinned` paints the copy pinned at the top of the
+ * list: its runs go to item->pinned_runs, so a hit on the pin resolves to
+ * the text under the pointer (spec 2026-10-18 section 3). */
 static int paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
-                           RECT *rc)
+                           RECT *rc, int pinned)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
+    int cw = (rc->right - rc->left) + 2 * ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
 
     /* Right-align the bubble */
     int bubble_w = (rc->right - rc->left);
-    int max_w = ((rc->right - rc->left + 2 * ns_scale(BASE_SIDE_PAD, CLV_DPI(lv)))
-                 * 3) / 4;
+    int max_w = (cw * 3) / 4;
     if (bubble_w > max_w) bubble_w = max_w;
 
     RECT bubble;
@@ -1242,23 +1443,25 @@ static int paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     bubble.bottom = rc->bottom;
 
     /* Draw bubble background */
+    COLORREF bubble_clr = RGB_FROM_THEME(tc->user_bubble);
     ns_draw_round_fill(hdc, &bubble, ns_scale(R_CARD, CLV_DPI(lv)),
-                       RGB_FROM_THEME(tc->user_bubble), 255);
+                       bubble_clr, 255);
 
-    /* Draw text */
-    RECT text_rc = bubble;
-    text_rc.left   += lv->user_pad_h;
-    text_rc.right  -= lv->user_pad_h;
-    text_rc.top    += lv->user_pad_v;
-    text_rc.bottom -= lv->user_pad_v;
-
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB_FROM_THEME(tc->user_text));
-    HGDIOBJ old_font = SelectObject(hdc, lv->hFont ? lv->hFont
-                                        : GetStockObject(DEFAULT_GUI_FONT));
-    draw_text_utf8(hdc, item->text, &text_rc,
-                   DT_WORDBREAK | DT_NOPREFIX);
-    SelectObject(hdc, old_font);
+    /* Text: the plain layouter at the width measure_item() used. */
+    MdRunCtx urc;
+    clv_run_ctx(lv, &urc, item, TR_PART_MAIN, (int)item->text_len,
+                pinned ? &item->pinned_runs : &item->runs, 0, bubble_clr);
+    /* The bubble is filled with the accent the focus hue is drawn from, so
+     * the highlight takes the bubble's own text colour (ui_theme_sel_hue). */
+    urc.focus = RGB_FROM_THEME(ui_theme_sel_hue(ns_tokens(), 1));
+    HFONT f = clv_font(lv);
+    int text_h = md_render_ex(hdc, item->text ? item->text : "",
+                              bubble.left + lv->user_pad_h,
+                              bubble.top + lv->user_pad_v,
+                              clv_user_text_w(lv, cw), f, f, f, lv->theme,
+                              MD_MODE_PLAIN, 1, RGB_FROM_THEME(tc->user_text),
+                              NULL, &urc);
+    if (!pinned) item->painted_height = text_h + 2 * lv->user_pad_v;
 
     return rc->bottom - rc->top;
 }
@@ -1340,7 +1543,7 @@ static void paint_code_copy_glyphs(ChatListView *lv, HDC hdc,
 
 static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
                            int x, int y, int width, int item_id,
-                           int *blk_next)
+                           int *blk_next, MdRunCtx *rc)
 {
     if (lv->render_markdown) {
         int want = blk_next && item_id >= 0 && item_id < CLV_ITEM_ID_LIMIT;
@@ -1348,140 +1551,54 @@ static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
         MdBlockOut bo = { rects, CLV_CODE_BLOCKS_PER_ITEM,
                           ns_scale(SZ_ICON, CLV_DPI(lv))
                               + ns_scale(SP_XS, CLV_DPI(lv)), 0 };
-        int h = md_render_text_blocks(hdc, text, x, y, width,
-                                      lv->hFont, lv->hMonoFont, lv->hBoldFont,
-                                      lv->theme, want ? &bo : NULL);
+        int h = md_render_ex(hdc, text, x, y, width,
+                             lv->hFont, lv->hMonoFont, lv->hBoldFont,
+                             lv->theme, MD_MODE_MARKDOWN, 1, 0,
+                             want ? &bo : NULL, rc);
         if (want && bo.count > 0)
             paint_code_copy_glyphs(lv, hdc, text, item_id, &bo, blk_next);
         return h;
     }
-    /* Same calc measure_ai_segment() uses for this branch -- computed
-     * once here so paint and its own height report can never drift. */
-    int seg_h = measure_ai_segment(lv, hdc, text, width);
-    HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
-                              : GetStockObject(DEFAULT_GUI_FONT));
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB_FROM_THEME(lv->theme->text_main));
-    RECT mrc;
-    SetRect(&mrc, x, y, x + width, y + seg_h);
-    draw_text_utf8(hdc, text, &mrc,
-                   DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
-    SelectObject(hdc, tf);
-    return seg_h;
+    HFONT f = clv_font(lv);
+    return md_render_ex(hdc, text, x, y, width, f, f, f, lv->theme,
+                        MD_MODE_PLAIN, 1,
+                        RGB_FROM_THEME(lv->theme->text_main), NULL, rc);
 }
 
-/* Draw AI text with [EXEC]...[/EXEC] segments highlighted in purple.
- * Uses the same rect and flags as draw_text_utf8 but splits at markers.
- * Returns the total height painted (rc->bottom is only a starting bound
- * for the last EXEC segment's DrawText call, not a hard cap -- see
- * measure_ai_text_with_exec()'s comment), so callers can find out when
- * this grew taller than measure_item() predicted. */
+/* Draw an AI reply's text: the chat_exec_split() segments one under the
+ * other -- prose through draw_ai_segment(), each command in the mono font
+ * and the info hue through the plain layouter. Every segment records its
+ * runs into item->runs at its own source offset. Returns the height
+ * painted. */
 static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
-                                   const char *text, RECT *rc, int item_id)
+                                  ChatMsgItem *item, const RECT *rc)
 {
+    const char *text = item->text ? item->text : "";
+    int len = (int)item->text_len;
     int blk = 0;   /* code-block number within this item, across segments */
     COLORREF exec_clr = RGB_FROM_THEME(ns_tokens()->info.base);
-    HFONT mono_font = lv->hMonoFont ? lv->hMonoFont
-                                     : (HFONT)GetStockObject(ANSI_FIXED_FONT);
+    COLORREF surface = RGB_FROM_THEME(lv->theme->bg_primary);
+    HFONT mono = clv_mono(lv);
+    int width = rc->right - rc->left;
+    int y = rc->top, pos = 0;
+    ChatSeg seg;
 
-    /* If no [EXEC] markers, fast path */
-    if (!strstr(text, "[EXEC]")) {
-        return draw_ai_segment(lv, hdc, text, rc->left, rc->top,
-                               rc->right - rc->left, item_id, &blk);
+    while (chat_exec_split(text, len, &pos, &seg)) {
+        char *s = chat_seg_dup(text, &seg);
+        if (!s) continue;
+        MdRunCtx mrc;
+        clv_run_ctx(lv, &mrc, item, TR_PART_MAIN, len, &item->runs,
+                    seg.start, surface);
+        if (seg.kind == CHAT_SEG_PROSE)
+            y += draw_ai_segment(lv, hdc, s, rc->left, y, width, item->id,
+                                 &blk, &mrc);
+        else
+            y += md_render_ex(hdc, s, rc->left, y, width, mono, mono, mono,
+                              lv->theme, MD_MODE_PLAIN, 1, exec_clr, NULL,
+                              &mrc);
+        secure_zero(s, strlen(s));      /* a copy of message text */
+        free(s);
     }
-
-    /* Multi-segment rendering: split at [EXEC]/[/EXEC] boundaries */
-    const char *pos = text;
-    int y = rc->top;
-
-    while (*pos) {
-        const char *exec_start = strstr(pos, "[EXEC]");
-
-        if (!exec_start) {
-            /* Remaining text is normal */
-            if (*pos) {
-                int h = draw_ai_segment(lv, hdc, pos, rc->left, y,
-                                        rc->right - rc->left, item_id, &blk);
-                y += h;
-            }
-            break;
-        }
-
-        /* Draw text before [EXEC] */
-        if (exec_start > pos) {
-            /* Copy segment to temp buffer */
-            size_t seg_len = (size_t)(exec_start - pos);
-            char *seg = malloc(seg_len + 1);
-            if (seg) {
-                memcpy(seg, pos, seg_len);
-                seg[seg_len] = '\0';
-                /* Strip trailing newlines to remove blank line before [EXEC] */
-                size_t trim = seg_len;
-                while (trim > 0 && (seg[trim - 1] == '\n' || seg[trim - 1] == '\r'))
-                    trim--;
-                seg[trim] = '\0';
-                if (trim > 0) {
-                    int h = draw_ai_segment(lv, hdc, seg, rc->left, y,
-                                            rc->right - rc->left, item_id,
-                                            &blk);
-                    y += h;
-                }
-                free(seg);
-            }
-        }
-
-        /* Find [/EXEC] */
-        const char *cmd_start = exec_start + 6;
-        const char *exec_end = strstr(cmd_start, "[/EXEC]");
-
-        if (!exec_end) {
-            /* No closing tag — render rest as exec. Two-pass (calc then
-             * paint into an exact-fit rect), same as draw_ai_segment's own
-             * non-markdown path, instead of clipping to rc->bottom -- a
-             * stale item bottom must never truncate what's actually
-             * painted (see measure_ai_text_with_exec()'s comment). */
-            RECT seg_rc;
-            HGDIOBJ old_mf = SelectObject(hdc, mono_font);
-            SetRect(&seg_rc, rc->left, y, rc->right, 0);
-            draw_text_utf8(hdc, exec_start, &seg_rc,
-                           DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-            int h = seg_rc.bottom - seg_rc.top;
-            SetRect(&seg_rc, rc->left, y, rc->right, y + h);
-            SetTextColor(hdc, exec_clr);
-            draw_text_utf8(hdc, exec_start, &seg_rc,
-                           DT_WORDBREAK | DT_NOPREFIX);
-            SelectObject(hdc, old_mf);
-            y += h;
-            break;
-        }
-
-        /* Draw the command (between [EXEC] and [/EXEC]) in purple with mono
-         * font -- same two-pass, unclipped approach as above. */
-        {
-            size_t cmd_len = (size_t)(exec_end - cmd_start);
-            char *cmd_text = malloc(cmd_len + 1);
-            if (cmd_text) {
-                memcpy(cmd_text, cmd_start, cmd_len);
-                cmd_text[cmd_len] = '\0';
-                RECT seg_rc;
-                HGDIOBJ old_mf = SelectObject(hdc, mono_font);
-                SetRect(&seg_rc, rc->left, y, rc->right, 0);
-                draw_text_utf8(hdc, cmd_text, &seg_rc,
-                               DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
-                int h = seg_rc.bottom - seg_rc.top;
-                SetRect(&seg_rc, rc->left, y, rc->right, y + h);
-                SetTextColor(hdc, exec_clr);
-                draw_text_utf8(hdc, cmd_text, &seg_rc,
-                               DT_WORDBREAK | DT_NOPREFIX);
-                SelectObject(hdc, old_mf);
-                y += h;
-                free(cmd_text);
-            }
-        }
-
-        pos = exec_end + 7; /* skip [/EXEC] */
-    }
-
     return y - rc->top;
 }
 
@@ -1635,15 +1752,21 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
             HRGN clip_rgn = CreateRectRgnIndirect(&clip_rc);
             SelectClipRgn(hdc, clip_rgn);
 
-            SetTextColor(hdc, dim_clr);
-            HGDIOBJ tf = SelectObject(hdc, lv->hFont ? lv->hFont
-                                      : GetStockObject(DEFAULT_GUI_FONT));
-            RECT text_body_rc = { clip_rc.left, clip_rc.top - eff_scroll,
-                                  clip_rc.right,
-                                  clip_rc.top - eff_scroll + full_h };
-            draw_text_utf8(hdc, item->u.ai.thinking_text, &text_body_rc,
-                           DT_WORDBREAK | DT_NOPREFIX);
-            SelectObject(hdc, tf);
+            /* The body through the plain layouter at the width it was
+             * measured at (build_thinking_layout's think_cache_text_w,
+             * which is this clip's width); a run is recorded only where it
+             * shows inside the clip. */
+            const char *tt = item->u.ai.thinking_text;
+            MdRunCtx trc;
+            clv_run_ctx(lv, &trc, item, TR_PART_THINKING, (int)strlen(tt),
+                        &item->runs, 0,
+                        RGB_FROM_THEME(tok->bg_secondary.base));
+            trc.clip_top = clip_rc.top;
+            trc.clip_bottom = clip_rc.bottom;
+            HFONT tfont = clv_font(lv);
+            md_render_ex(hdc, tt, clip_rc.left, clip_rc.top - eff_scroll,
+                         item->u.ai.think_cache_text_w, tfont, tfont, tfont,
+                         lv->theme, MD_MODE_PLAIN, 1, dim_clr, NULL, &trc);
 
             SelectClipRgn(hdc, NULL);
             DeleteObject(clip_rgn);
@@ -1674,10 +1797,10 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     RECT text_rc;
     text_rc.left   = rc->left + lv->ai_indent;
     text_rc.top    = content_top;
-    text_rc.right  = rc->right - side_pad;
+    text_rc.right  = text_rc.left
+                     + clv_ai_text_w(lv, (rc->right - rc->left) + 2 * side_pad);
     text_rc.bottom = rc->bottom;
-    int text_h = draw_ai_text_with_exec(lv, hdc, item->text, &text_rc,
-                                       item->id);
+    int text_h = draw_ai_text_with_exec(lv, hdc, item, &text_rc);
     SelectObject(hdc, old_font);
 
     /* Actual painted extent, not just the measured one -- see the Activity
@@ -1686,6 +1809,7 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
      * taller than measure_item() predicted for it (very rare after the
      * measure_ai_text_with_exec() fix, but on_paint() must still cope). */
     int painted_h = (content_top - rc->top) + text_h;
+    item->painted_height = painted_h;
     return painted_h > (rc->bottom - rc->top) ? painted_h : (rc->bottom - rc->top);
 }
 
@@ -2166,22 +2290,21 @@ static int paint_status_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                              RECT *rc)
 {
     const ThemeChatColors *tc = &lv->theme->chat;
+    int side_pad = ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
+    int cw = (rc->right - rc->left) + 2 * side_pad;
 
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB_FROM_THEME(tc->status_text));
-    HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
-                                        : GetStockObject(DEFAULT_GUI_FONT));
-    RECT text_rc = *rc;
-    text_rc.left  += ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
-    text_rc.right -= ns_scale(BASE_SIDE_PAD, CLV_DPI(lv));
-    draw_text_utf8(hdc, item->text, &text_rc,
-                   DT_WORDBREAK | DT_NOPREFIX | DT_LEFT);
-    SelectObject(hdc, old_font);
-
-    /* measure_item()'s text_w (width - 4*side_pad) matches this text_rc's
-     * width exactly, and the item's box already carries an extra 8px of
-     * slack beyond the wrapped text height, so the text never needs more
-     * room than rc gives it. */
+    /* The plain layouter in the small font at the width measure_item()
+     * used (clv_status_text_w), one side_pad in from the item rect. */
+    MdRunCtx prc;
+    clv_run_ctx(lv, &prc, item, TR_PART_MAIN, (int)item->text_len,
+                &item->runs, 0, RGB_FROM_THEME(lv->theme->bg_primary));
+    HFONT f = clv_small(lv);
+    int text_h = md_render_ex(hdc, item->text ? item->text : "",
+                              rc->left + side_pad, rc->top,
+                              clv_status_text_w(lv, cw), f, f, f, lv->theme,
+                              MD_MODE_PLAIN, 1, RGB_FROM_THEME(tc->status_text),
+                              NULL, &prc);
+    item->painted_height = text_h + ns_scale(8, CLV_DPI(lv));
     return rc->bottom - rc->top;
 }
 
@@ -2601,14 +2724,33 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
  *  WM_PAINT: double-buffered, virtual-scroll painting
  * ══════════════════════════════════════════════════════════════════════ */
 
-static void on_paint(ChatListView *lv)
+/* Paint the whole list into `hdc` (WM_PAINT's, or the DC WM_PRINTCLIENT
+ * hands over). */
+static void paint_frame(ChatListView *lv, HDC hdc)
 {
-    PAINTSTRUCT ps;
-    HDC hdc = BeginPaint(lv->hwnd, &ps);
-
     /* Copy glyphs on code blocks are re-recorded by this paint. */
     clv_code_hits_clear(lv);
     lv->sticky_bottom = 0;
+
+    /* Character selection: every item's runs are re-recorded by this paint
+     * too. Reset all of them -- an item not painted this frame must have
+     * none, so no rect from an older width or scroll position survives
+     * (spec 2026-10-18 section 3). */
+    lv->pinned_id = 0;
+    for (ChatMsgItem *ri = lv->msg_list ? lv->msg_list->head : NULL; ri;
+         ri = ri->next) {
+        text_runs_reset(&ri->runs);
+        text_runs_reset(&ri->pinned_runs);
+        ri->painted_height = 0;
+    }
+    /* A selection whose message is gone (session switch, stream cancel)
+     * is dropped: ends are resolved by id on every use. */
+    if ((lv->sel_valid || lv->sel_active) && lv->msg_list &&
+        (!chat_msg_find(lv->msg_list, lv->sel_anchor.msg_id) ||
+         !chat_msg_find(lv->msg_list, lv->sel_focus.msg_id))) {
+        lv->sel_valid = 0;
+        lv->sel_active = 0;
+    }
 
     RECT client;
     GetClientRect(lv->hwnd, &client);
@@ -2626,6 +2768,10 @@ static void on_paint(ChatListView *lv)
     FillRect(mem_dc, &client, bg_br);
     DeleteObject(bg_br);
 
+    /* A fresh memory DC starts OPAQUE and md_render_ex() restores the mode
+     * it found, so every painter in the frame starts from TRANSPARENT. */
+    SetBkMode(mem_dc, TRANSPARENT);
+
     /* Empty/no-key/no-session state: replaces the normal item walk
      * entirely while the list has zero items and a state is set (AI
      * Assist Panel task 4). */
@@ -2636,7 +2782,6 @@ static void on_paint(ChatListView *lv)
         SelectObject(mem_dc, old_bmp);
         DeleteObject(bmp);
         DeleteDC(mem_dc);
-        EndPaint(lv->hwnd, &ps);
         return;
     }
 
@@ -2692,7 +2837,7 @@ static void on_paint(ChatListView *lv)
             int painted_h = h;
             switch (item->type) {
             case CHAT_ITEM_USER:
-                painted_h = paint_user_item(lv, mem_dc, item, &item_rc);
+                painted_h = paint_user_item(lv, mem_dc, item, &item_rc, 0);
                 break;
             case CHAT_ITEM_AI_TEXT:
                 painted_h = paint_ai_item(lv, mem_dc, item, &item_rc);
@@ -2725,23 +2870,6 @@ static void on_paint(ChatListView *lv)
 
             int this_bottom = y + painted_h;
             if (this_bottom > painted_bottom) painted_bottom = this_bottom;
-
-            /* Selection highlight: invert colours for items in selection */
-            if (lv->sel_valid) {
-                int content_y = y + lv->scroll_y;
-                if (item_in_selection(lv, content_y, h)) {
-                    RECT sel_rc;
-                    sel_rc.left   = 0;
-                    sel_rc.right  = cw;
-                    sel_rc.top    = y;
-                    sel_rc.bottom = y + h;
-                    /* Clamp to viewport */
-                    if (sel_rc.top < 0) sel_rc.top = 0;
-                    if (sel_rc.bottom > ch) sel_rc.bottom = ch;
-                    if (sel_rc.top < sel_rc.bottom)
-                        InvertRect(mem_dc, &sel_rc);
-                }
-            }
         }
 
         /* Stop if we've gone past the viewport */
@@ -2769,7 +2897,8 @@ static void on_paint(ChatListView *lv)
         sticky_rc.top    = 0;
         sticky_rc.right  = cw - side_pad;
         sticky_rc.bottom = last_user_h;
-        paint_user_item(lv, mem_dc, last_user, &sticky_rc);
+        paint_user_item(lv, mem_dc, last_user, &sticky_rc, 1);
+        lv->pinned_id = last_user->id;
 
         /* Subtle bottom shadow line to separate from scrolling content */
         HPEN shadow_pen = CreatePen(PS_SOLID, 1,
@@ -2804,7 +2933,13 @@ static void on_paint(ChatListView *lv)
     SelectObject(mem_dc, old_bmp);
     DeleteObject(bmp);
     DeleteDC(mem_dc);
+}
 
+static void on_paint(ChatListView *lv)
+{
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(lv->hwnd, &ps);
+    paint_frame(lv, hdc);
     EndPaint(lv->hwnd, &ps);
 }
 
@@ -3082,7 +3217,7 @@ static int chatlv_thinking_row_hit(ChatListView *lv, int mx, int my,
     RECT client_rc;
     GetClientRect(lv->hwnd, &client_rc);
     int box_left  = side_pad + lv->ai_indent;
-    int box_right = (client_rc.right - client_rc.left) - side_pad;
+    int box_right = (client_rc.right - client_rc.left) - 2 * side_pad;
 
     int y = lv->msg_gap - lv->scroll_y;
     ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
@@ -3279,7 +3414,7 @@ static int chatlv_hover_rect_for_id(ChatListView *lv, int id, RECT *out)
         RECT client_rc;
         GetClientRect(lv->hwnd, &client_rc);
         int box_left  = side_pad + lv->ai_indent;
-        int box_right = (client_rc.right - client_rc.left) - side_pad;
+        int box_right = (client_rc.right - client_rc.left) - 2 * side_pad;
 
         int y = lv->msg_gap - lv->scroll_y;
         ChatMsgItem *item = lv->msg_list ? lv->msg_list->head : NULL;
@@ -3428,7 +3563,7 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
             int box_left = side_pad + lv->ai_indent;
             RECT client_rc2;
             GetClientRect(lv->hwnd, &client_rc2);
-            int box_right = (client_rc2.right - client_rc2.left) - side_pad;
+            int box_right = (client_rc2.right - client_rc2.left) - 2 * side_pad;
             int content_top = y + ns_scale(BASE_ICON_SIZE, CLV_DPI(lv))
                                + ns_scale(4, CLV_DPI(lv));
 
@@ -3568,6 +3703,41 @@ static int on_lbuttondown(ChatListView *lv, int mx, int my)
     return 0;  /* No interactive element was clicked */
 }
 
+/* CLV_MSG_QUERY_WORD (see chat_listview.h). */
+static LRESULT clv_query_word(ChatListView *lv, WPARAM wParam, LPARAM lParam)
+{
+    /* Answer from what is painted now, not a stale paint. */
+    UpdateWindow(lv->hwnd);
+    char word[128];
+    UINT n = GlobalGetAtomNameA((ATOM)lParam, word, (int)sizeof(word));
+    if (n == 0 || !lv->msg_list) return 0;
+    int ordinal = (int)LOWORD(wParam);
+    int part = HIWORD(wParam) ? TR_PART_THINKING : TR_PART_MAIN;
+    ChatMsgItem *it = lv->msg_list->head;
+    for (int i = 0; it && i < ordinal; i++) it = it->next;
+    if (!it) return 0;
+    int tlen = 0;
+    const char *text = clv_part_text(it, part, &tlen);
+    for (int i = 0; i < it->runs.n; i++) {
+        const TextRun *r = &it->runs.v[i];
+        if (r->part != part || r->synthetic[0] || r->end > tlen ||
+            r->end - r->start < (int)n)
+            continue;
+        if (memcmp(text + r->start, word, (size_t)n) != 0) continue;
+        int w = r->w;
+        for (int k = 0; k < r->n_cum; k++)
+            if (it->runs.cum_byte[r->first_cum + k] == (int)n)
+                w = it->runs.cum[r->first_cum + k];
+        if (r->x < 0 || r->y < 0 || r->x > 0xFFFF || r->y > 0xFFFF) return 0;
+        ULONG_PTR packed = (ULONG_PTR)(unsigned)(r->x & 0xFFFF)
+                         | ((ULONG_PTR)(unsigned)(r->y & 0xFFFF) << 16)
+                         | ((ULONG_PTR)(unsigned)(w & 0xFFFF) << 32)
+                         | ((ULONG_PTR)(unsigned)(r->h & 0xFFFF) << 48);
+        return (LRESULT)packed;
+    }
+    return 0;
+}
+
 /* ══════════════════════════════════════════════════════════════════════
  *  WndProc
  * ══════════════════════════════════════════════════════════════════════ */
@@ -3606,6 +3776,15 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
         on_paint(lv);
         return 0;
 
+    case CLV_MSG_QUERY_WORD:
+        return lv->query_enabled ? clv_query_word(lv, wParam, lParam) : 0;
+
+    case WM_PRINTCLIENT:
+        /* Paint into the caller's DC: the make wintest harness renders a
+         * hidden list view this way (no WM_PAINT reaches a hidden window). */
+        paint_frame(lv, (HDC)wParam);
+        return 0;
+
     case WM_ERASEBKGND:
         return 1;  /* We handle background in WM_PAINT (double-buffered) */
 
@@ -3620,16 +3799,71 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     case WM_LBUTTONDOWN: {
         int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
+        UpdateWindow(hwnd);  /* hit-test against current runs */
+
+        /* Triple-click: a down soon after a handled double-click, at the
+         * same point, selects the source line -- taken before the normal
+         * path so nothing clears it, and no capture is taken. */
+        if (lv->dbl_armed) {
+            lv->dbl_armed = 0;
+            int dx = mx - lv->dbl_x, dy = my - lv->dbl_y;
+            if (dx < 0) dx = -dx;
+            if (dy < 0) dy = -dy;
+            if (GetTickCount() - lv->dbl_time <= GetDoubleClickTime() &&
+                dx <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+                dy <= GetSystemMetrics(SM_CYDOUBLECLK) / 2) {
+                SetFocus(hwnd);
+                if (clv_select_line(lv, mx, my)) {
+                    lv->sel_keep_on_up = 1;
+                    return 0;
+                }
+            }
+        }
+
+        /* An ordinary down: a triple-click whose button-up went to another
+         * window must not leave its keep-on-up flag to eat this one's up. */
+        lv->sel_keep_on_up = 0;
+
         if (on_lbuttondown(lv, mx, my)) {
             sel_clear(lv);
             return 0;  /* A button/link was clicked */
         }
-        /* Start text selection drag */
-        sel_clear(lv);
-        lv->sel_start_y = my + lv->scroll_y;
-        lv->sel_end_y   = lv->sel_start_y;
-        lv->sel_active  = 1;
+        /* Start a character selection: anchor = focus at the hit. */
+        ChatSelPos p;
+        if (!clv_hit(lv, mx, my, &p)) {
+            sel_clear(lv);
+            return 0;
+        }
+        lv->sel_anchor = p;
+        lv->sel_focus = p;
+        lv->sel_valid = 0;
+        lv->sel_active = 1;
+        lv->sel_moved = 0;
+        lv->sel_down_x = lv->sel_last_x = mx;
+        lv->sel_down_y = lv->sel_last_y = my;
         SetCapture(hwnd);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+    }
+
+    case WM_LBUTTONDBLCLK: {
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        UpdateWindow(hwnd);  /* hit-test against current runs */
+        /* Over a glyph, tickbox, button, link or the Thinking header it
+         * does nothing, as the unhandled message did: the first click of
+         * the pair already acted, and it is not forwarded, so nothing
+         * toggles twice. */
+        if ((chatlv_list_empty(lv) && lv->state_id >= 0) ||
+            chatlv_code_hit_at(lv, mx, my) ||
+            chatlv_hit_is_actionable(chatlv_hover_hit(lv, mx, my, NULL)))
+            return 0;
+        if (clv_select_word(lv, mx, my)) {
+            lv->dbl_armed = 1;
+            lv->dbl_time = GetTickCount();
+            lv->dbl_x = mx;
+            lv->dbl_y = my;
+        }
         return 0;
     }
 
@@ -3659,9 +3893,26 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             }
         }
         if (!lv->sel_active) break;
+        /* A drag point carries the button. Windows also synthesises a
+         * WM_MOUSEMOVE from the real cursor, with the real (here: up) button
+         * state, when capture changes or the window moves under a parked
+         * cursor; taken as a drag point it would auto-scroll by the cursor's
+         * distance past the edge and move the focus to wherever the cursor
+         * is. Ignore it: WM_CAPTURECHANGED already ends an abandoned drag. */
+        if (!(wParam & MK_LBUTTON))
+            return 0;
+        int mx = GET_X_LPARAM(lParam);
         int my = GET_Y_LPARAM(lParam);
-        lv->sel_end_y = my + lv->scroll_y;
-        /* Auto-scroll when dragging near edges */
+        lv->sel_last_x = mx;
+        lv->sel_last_y = my;
+        if (!lv->sel_moved) {
+            int dx = mx - lv->sel_down_x, dy = my - lv->sel_down_y;
+            if (dx >= -4 && dx <= 4 && dy >= -4 && dy <= 4)
+                return 0;  /* under the 4 px threshold: still a click */
+            lv->sel_moved = 1;
+        }
+        /* Auto-scroll when dragging past an edge; clv_drag_to() repaints
+         * before it hit-tests, so the runs follow the scroll. */
         if (my < 0) {
             lv->scroll_y += my;  /* my is negative, scrolls up */
             clamp_scroll(lv);
@@ -3671,10 +3922,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             clamp_scroll(lv);
             after_user_scroll(lv);
         }
-        int sy = lv->sel_start_y, ey = lv->sel_end_y;
-        if (sy > ey) { int tmp = sy; sy = ey; ey = tmp; }
-        lv->sel_valid = (ey - sy > 4);  /* small threshold to avoid accidental select */
-        InvalidateRect(hwnd, NULL, FALSE);
+        clv_drag_to(lv, mx, my);
         return 0;
     }
 
@@ -3705,21 +3953,34 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
     }
 
     case WM_LBUTTONUP: {
-        if (!lv->sel_active) break;
-        ReleaseCapture();
-        lv->sel_active = 0;
-        int my = GET_Y_LPARAM(lParam);
-        lv->sel_end_y = my + lv->scroll_y;
-        int sy = lv->sel_start_y, ey = lv->sel_end_y;
-        if (sy > ey) { int tmp = sy; sy = ey; ey = tmp; }
-        lv->sel_valid = (ey - sy > 4);
-        if (lv->sel_valid) {
-            /* Auto-copy to clipboard on mouse release (like the terminal) */
-            sel_copy_to_clipboard(lv);
+        /* A triple-click took no capture and keeps what it selected. */
+        if (lv->sel_keep_on_up && !lv->sel_active) {
+            lv->sel_keep_on_up = 0;
+            return 0;
         }
-        InvalidateRect(hwnd, NULL, FALSE);
+        if (!lv->sel_active) {
+            if (GetCapture() == hwnd) ReleaseCapture();
+            break;
+        }
+        int mx = GET_X_LPARAM(lParam);
+        int my = GET_Y_LPARAM(lParam);
+        if (lv->sel_moved) {
+            clv_drag_to(lv, mx, my);      /* re-hit at the release point */
+        } else {
+            lv->sel_valid = 0;            /* a click: clears the selection */
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        lv->sel_active = 0;               /* before WM_CAPTURECHANGED */
+        ReleaseCapture();
+        /* Nothing is copied on release: Ctrl+C, Edit > Copy or the menu. */
         return 0;
     }
+
+    case WM_CAPTURECHANGED:
+        /* Capture taken away mid-drag (a menu, another window): end the
+         * drag where it is. */
+        lv->sel_active = 0;
+        return 0;
 
     case WM_RBUTTONDOWN: {
         /* Right-click: a native context menu (system theme, like the
@@ -3743,7 +4004,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                        mpt.x, mpt.y, 0, hwnd, NULL);
         DestroyMenu(menu);
         if (pick == CM_COPY) {
-            if (lv->sel_valid) sel_copy_to_clipboard(lv);
+            sel_copy_to_clipboard(lv);
         } else if (pick == CM_SELECT_ALL) {
             sel_select_all(lv);
         } else if (pick == CM_PASTE) {
@@ -3831,7 +4092,7 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
                     int box_left = side_pad2 + lv->ai_indent;
                     RECT crc;
                     GetClientRect(hwnd, &crc);
-                    int box_right = (crc.right - crc.left) - side_pad2;
+                    int box_right = (crc.right - crc.left) - 2 * side_pad2;
                     int content_top = wy + ns_scale(BASE_ICON_SIZE, CLV_DPI(lv))
                                        + ns_scale(4, CLV_DPI(lv));
 
@@ -3953,6 +4214,12 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
 
         if (lv->scroll_y != old_pos) {
             after_user_scroll(lv);
+            /* Wheel while dragging: the text moved under a still pointer,
+             * so the focus follows to what is now under it. */
+            if (lv->sel_active) {
+                lv->sel_moved = 1;
+                clv_drag_to(lv, lv->sel_last_x, lv->sel_last_y);
+            }
         }
         return 0;
     }
@@ -3982,10 +4249,9 @@ static LRESULT CALLBACK ChatListWndProc(HWND hwnd, UINT msg,
             if (parent) SendMessage(parent, msg, wParam, lParam);
             return 0;
         }
-        /* Ctrl+C: copy selection to clipboard */
+        /* Ctrl+C: copy the visible text of the selection */
         if (wParam == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
-            if (lv->sel_valid)
-                sel_copy_to_clipboard(lv);
+            sel_copy_to_clipboard(lv);
             return 0;
         }
         /* Ctrl+A: select all */
