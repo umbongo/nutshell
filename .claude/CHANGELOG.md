@@ -6,6 +6,8 @@ has the why.
 
 ## 2026-10-19 — retrospective (11 merges)
 
+- `memory/MEMORY.md`: version-numbered branches are snapshots, never deleted (maintainer's rule, 2026-10-20, after a branch clean-up proposed deleting them).
+
 Session: https://claude.ai/code/session_01Cczi6ipaKBtKnozR7vkgFM, on `automaton`.
 Models: claude-fable-5-1 (brief); claude-opus-5-5 (orchestration, edits,
 retrospective, PR survey, two critique rounds); claude-sonnet-5-5 (open-list survey).

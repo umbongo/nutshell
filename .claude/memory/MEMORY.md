@@ -68,6 +68,10 @@ Last updated: 2026-10-19 (retrospective).
 
 ## Repository facts
 
+- **Branches named with a version number (`v1.0.76`, `v1.1.21`, `v1.2.13`)
+  are snapshots and are never deleted** (maintainer, 2026-10-20), even
+  though each is contained in `main`. "Clear out merged branches" means
+  feature branches only; GitHub deletes those on merge.
 - `main` was the redesign branch `ui-polish`, renamed on 2026-09-07. The
   pre-redesign main lives on as branch **and** tag `v1.0.76`. `v1.1.21` is
   also both a branch and a tag; the branch is fully contained in `main`.
