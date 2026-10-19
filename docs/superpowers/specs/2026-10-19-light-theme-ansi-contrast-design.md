@@ -1,9 +1,9 @@
-# Light-theme ANSI contrast: a minimum-contrast floor for terminal text
+# Light-theme ANSI contrast: floored palette tables for terminal text
 
 DRAFT
 
 **Date**: 2026-10-19
-**Status**: DRAFT, not yet critiqued.
+**Status**: DRAFT, revised after critique round 1 (section "Critique").
 **Branch**: `fix/light-theme-ansi-contrast` (cut from `main` at `c86dea1`, v1.2.37)
 **Prompted by**: the maintainer, 2026-10-19: *"Many of the PowerShell results return in yellow,
 this makes them hard to see when using a light theme in Nutshell."*
@@ -24,10 +24,11 @@ colours PowerShell uses most are the worst.
 on it (6.23:1 and 13.09:1). The report's "light theme" is one of the first two.
 
 **What PowerShell emits.** A local session reaches the parser through ConPTY as SGR 30-37/90-97
-(indexed), not RGB. The repository already holds a capture of PSReadLine painting the command
-token with `ESC[93m` (`tests/test_term.c`, `test_term_at_prompt_powershell_continuation`).
-That is the only captured byte sequence; the rest of this paragraph is PSReadLine 2.x's and
-PowerShell 7's documented defaults, to be confirmed by the manual check in section 6.
+(indexed), not RGB. The repository holds a *hand-written* fixture of PSReadLine painting the
+command token with `ESC[93m` (`tests/test_term.c`, `test_term_at_prompt_powershell_continuation`,
+added for prompt detection in v1.2.8), not a recording. The rest of this paragraph is PSReadLine
+2.x's and PowerShell 7's defaults from memory; none of it is verified, and the plan's first task
+captures the real bytes (section 5.0).
 PSReadLine's other defaults are also 16-colour: default tokens and types `37`, parameters and
 operators `90`, numbers and members `97`, strings `36`, variables and keywords `92`. PowerShell 7's
 `$PSStyle.Formatting.Warning`/`Verbose`/`Debug` are `33;1` (Nutshell renders bold as a heavier
@@ -68,7 +69,8 @@ The themes' own default text (`terminal_fg` on `terminal_bg`) is 15.46 (Onyx Lig
   `TermAttr.fg`/`.bg` hold the resolved `0xRRGGBB`, `fg_mode`/`bg_mode` say how it was given
   (`COLOR_DEFAULT`, `COLOR_ANSI16`, `COLOR_256`, `COLOR_RGB`; `src/term/term.h`). For
   `COLOR_ANSI16` the parser writes `fg_index = 0`, so the palette index is *lost*; only
-  `COLOR_256` keeps its index. `COLOR_DEFAULT` cells carry no colour and are resolved at paint.
+  `COLOR_256` keeps its index (`bg_index` likewise). `COLOR_DEFAULT` cells carry no colour and
+  are resolved at paint.
 - **Bold.** `TERM_ATTR_BOLD` selects `hBoldFont` in `renderer_draw()`; it never brightens the
   colour. SGR 2 (dim), 3 (italic) and 8 (conceal) are ignored. OSC 4/10/11 are not handled
   (`process_osc()` handles 0 and 2 only).
@@ -89,11 +91,11 @@ The themes' own default text (`terminal_fg` on `terminal_bg`) is 15.46 (Onyx Lig
   `md_render.c` (`md_role_clr()`, per paint), `ui_theme.c` (token derivation). Nothing in the
   terminal path uses them.
 - **Scrollback on theme switch.** `COLOR_DEFAULT` cells re-colour (resolved at paint). Indexed
-  cells keep the RGB they were parsed with, which is theme-independent today. Separately, on
-  reading `on_settings_clicked_page()` (`src/ui/window.c`), a theme change re-inits the renderer
-  and invalidates the window but marks no terminal row dirty unless the grid size changed, and
-  `renderer_draw()` skips clean rows; whether clean rows keep the old theme's colours until they
-  next change is unverified on Windows (section 5.6 covers it).
+  cells keep the RGB they were parsed with, which is theme-independent today. Separately,
+  `on_settings_clicked_page()` (`src/ui/window.c`) re-inits the renderer and invalidates the
+  window on a theme change but marks no terminal row dirty unless the grid size changed,
+  `WM_ERASEBKGND` returns 1, and `renderer_draw()` skips clean rows: clean rows keep the old
+  theme's pixels (certain from the code, not yet seen on Windows; section 5.6 fixes it).
 - **Settings.** No palette or contrast setting exists. `Settings.foreground_colour`/
   `background_colour` (`src/config/config.h`) are loaded but unused since the design-system
   migration; `colour_scheme` picks the theme.
@@ -157,9 +159,12 @@ threshold, move its lightness (hue kept) until it clears it, as VS Code's
 - **Does not fix / costs.** Normal and bright of one hue converge on the same 4.5:1 shade on a
   light background: on Onyx Light 90 and 97 both become `6C6C6C`, 37 becomes `707070`, 32/92
   `307C30`/`2B7F2B`, 36/96 `2E7B7B`/`297B7B`. Syntax colouring keeps its hues but loses the
-  normal/bright distinction within a hue. On dark themes (if enabled there) it would lift
-  PSReadLine's inline prediction (`38;5;238` = `444444`, 1.92:1 on Onyx Synapse) to roughly the
-  grey of real parameter tokens.
+  normal/bright distinction within a hue. It floors explicit/explicit pairs too (hidden
+  `37;47` text would show, low-contrast hierarchies in vim, tmux or starship flatten, and the
+  same output looks different per theme). And with SGR 2 ignored, PSReadLine 2.2+'s inline
+  prediction (`97;2;3`, unverified) would be floored to `6C6C6C`, the same grey as typed
+  parameters and numbers. Paint cost needs a cache, which thrashes beyond its slot count
+  (gradients, `lolcat`). Not chosen (critique findings 1, 2, 7).
 
 ### Option 3: both
 
@@ -179,22 +184,31 @@ bothers the maintainer in use (section 8).
 - **4b. Derive a light palette once, at theme-resolve time**, by running each of the 16 entries
   through `theme_role_color()` against `terminal_bg`, store indices in cells, and use the derived
   table only on a default background. Per-cell cost is a lookup, and for the reported case it
-  gives exactly option 2's colours. But it needs the same parser change as option 1, covers only
-  16 colours on the default background, and the code is not smaller than option 2's. Rejected in
-  favour of option 2.
+  gives exactly option 2's colours. The "parser change" is one assignment per SGR range
+  (`fg_index`/`bg_index` already exist and are written as 0). The draft rejected it on cost; that
+  estimate was wrong (critique finding 3). **Chosen**, extended to all 256 indexed colours and
+  with truecolour floored per call (section 4).
 - **4c. Map yellow to the theme's `warning` token** on light themes. Below AA (2.99, 4.05) and
   only one hue. Rejected.
 
 ## 4. Decision
 
-**Option 2: a WCAG minimum-contrast floor of 4.5:1, applied at paint time against the cell's
-actual background, to every foreground colour mode, on the light themes only.** The floor is a
-per-theme property: `Onyx Light` and `Moss & Mist` set it to 4.5, the two dark themes to 0 (off),
-so dark themes paint exactly as today. Whether to turn it on for the dark themes as well is an
-open question (section 8).
+**Option 4b, extended to the whole 256-colour range: the cell keeps its palette index, each
+theme derives at resolution time a 256-entry foreground table floored to 4.5:1 against its
+`terminal_bg`, and the table is used only on the theme-default background.** A truecolour
+foreground on the default background is floored on the fly. A cell with an explicit background
+keeps the raw palette colours for both sides. The floor is a per-theme value: 4.5 on Onyx Light
+and Moss & Mist, 0 (off, the raw palette) on Onyx Synapse and Sage & Sand, so the dark themes
+paint as today except for dim cells (below). Dim (SGR 2) comes into scope: after the floor, a dim
+cell's foreground is blended a fixed fraction toward its background, so PSReadLine's inline
+prediction stays visibly fainter than typed text. All colour resolution, swaps included, moves
+into one pure `src/core` function that the native tests cover; `renderer.c` only calls it.
 
-After the change, on both light themes every one of the 16 palette entries reads at 4.5:1 or
-better against `terminal_bg`:
+**The numbers stand.** On the default background the derived table is exactly option 2's floor
+(same function, same background, same threshold), so the section 1 "today" figures and the
+"after" figures below are unchanged; they were recomputed for this revision with the same
+program, and the critic's independent recomputation matched them. After the change, on both light
+themes every one of the 16 palette entries reads at 4.5:1 or better on the default background:
 
 | SGR | Onyx Light: today -> floor | Moss & Mist: today -> floor |
 |---|---|---|
@@ -208,21 +222,54 @@ better against `terminal_bg`:
 | 34 blue | 3.53 -> 4.72 (`4C6BB6`) | 3.45 -> 4.61 (`4C6BB6`) |
 
 (The rest: 32 -> 4.76/4.64, 36 -> 4.55/4.75, 35 -> 4.55/4.76, 91 -> 4.70/4.59, 94 -> 4.81/4.69,
-95 -> 4.84/4.72; 30 and 31 are already above 4.5 and unchanged.)
+95 -> 4.84/4.72; 30 and 31 are already above 4.5 and unchanged.) Of the full 256-entry range,
+202 entries are below 4.5 on Onyx Light and 204 on Moss & Mist; every one is reachable (no
+fallback). Building one table takes 0.74 ms (gcc -O2, Linux), once per theme resolution.
 
-Reasons, in order: it fixes the report and the thirteen other unreadable entries, plus 256-colour,
-truecolour and explicit-background text, where a palette fixes only 16 colours on the default
-background; it reuses the algorithm the design system already ships and tests
-(`theme_role_color()`), puts all the logic in `src/core` where native tests reach it, and needs no
-cell-format change, so scrollback re-colours on a theme switch for free; and because it is judged
-against the real cell background it cannot damage an application's deliberate pairs (`30;47`
-stays 11.54, `97;41` stays 5.14).
+Reasons, in order:
+1. It fixes the report and the thirteen other unreadable palette entries for everything
+   PowerShell emits (16-colour on the default background), plus 256-colour and truecolour text
+   on the default background.
+2. Paint cost for indexed colours is a table lookup: no cache, no hash, no per-cell walk.
+3. Scrollback re-colours on a theme switch because the cell stores the index and the table is
+   looked up at paint.
+4. Applications' own pairs are left alone. The floor touches only text drawn on the theme's
+   background, the one colour the application did not choose. Cells where the application set
+   the background keep the raw palette on both sides, including pairs that are unreadable on
+   purpose (`37;47`, fg == bg, 1.00:1) or by accident (`33;47`, 1.23:1), and they look the same
+   on every theme. That is a trade-off, not a guarantee of readability: an explicit-background
+   cell is exactly as readable as today, no more. The draft's claim that the floor "cannot damage
+   deliberate pairs" was wrong for the draft's own rule (it floored explicit/explicit pairs, and
+   would have revealed `37;47` hidden text and flattened low-contrast hierarchies in vim, tmux
+   and starship); this rule is what makes the statement true.
+5. The whole resolution is in `src/core`, so the merge gate's native tests check the order of
+   floor, dim and swaps, not only the colour maths.
+
+The one strongest reason against: within a hue, normal and bright converge on the same 4.5:1
+shade on a light background (90 and 97 are both `6C6C6C` on Onyx Light). Dim survives it (section
+5.3), syntax colours keep their hues, and a designed palette (option 3) remains the follow-up if
+it bothers the maintainer in use.
 
 ## 5. Design
 
-### 5.1 The walk, generalised (`src/core/theme.c`)
+### 5.0 First task of the plan: capture real bytes
 
-Add
+Nothing below the colour maths rests on recorded PowerShell output yet: the `ESC[93m` string in
+`tests/test_term.c` is a hand-written fixture, and PSReadLine 2.2+'s inline prediction
+(`ESC[97;2;3m` from memory) is unverified. The plan's first task, before any code: the maintainer
+opens a local PowerShell 7 tab (and a Windows PowerShell 5.1 tab) with debugging on, the `term`
+category at Trace and "Include terminal content" ticked, so the debug log records every byte
+received as `term.rx` lines (the path the `debug_terminal_log_written` harness case checks). The
+session types a partial command until PSReadLine shows a visible inline prediction, runs
+`Write-Warning`, `Write-Host x -ForegroundColor Yellow`, `Get-ChildItem` and a progress bar. Then:
+
+- the dim design (5.3) is confirmed against the captured bytes: whether ConPTY forwards SGR 2 (and
+  3) unchanged, and which foreground the prediction uses. If the prediction arrives without SGR 2,
+  5.3 is revisited before implementation, not after;
+- the captured stream replaces the hand-written `93m` fixture in `tests/test_term.c` and becomes
+  the input of the end-to-end native test in section 6.
+
+### 5.1 The walk, generalised (`src/core/theme.c`)
 
 ```c
 /* fg unchanged when min_ratio <= 1.0 or theme_contrast(fg, bg) >= min_ratio. Otherwise fg's
@@ -232,168 +279,278 @@ Add
 unsigned int theme_min_contrast_color(unsigned int fg, unsigned int bg, double min_ratio);
 ```
 
-`theme_role_color()` keeps its signature and its exact outputs (it keeps its own `fallback`
-argument); it and the new function share one static walk. The fallback differs on purpose:
-`theme_role_color()` falls back to a theme token, the terminal falls back to the best extreme,
-because on an explicit cell background the theme's text colour may itself be unreadable.
+`theme_role_color()` keeps its signature and exact outputs (it keeps its own `fallback`); both
+share one static walk. Its existing callers exercise only the lighter direction (they run on the
+dark themes' backgrounds), so the darker direction and the extreme fallback are covered by the
+new tests only.
 
-### 5.2 Terminal colour resolution and the cache (new `src/core/term_contrast.c`/`.h`)
+### 5.2 Parser: keep the index, record dim (`src/term/parser.c`, `src/term/term.h`)
 
-Pure C, no Win32, natively tested.
+- `handle_sgr()` stores the palette index for 16-colour SGRs instead of 0:
+  `fg_index = p - 30` (30-37), `p - 90 + 8` (90-97), `bg_index = p - 40` (40-47),
+  `p - 100 + 8` (100-107). `TermAttr.fg_index`/`bg_index` already exist (`term.h`), so no field
+  is added. `fg`/`bg` keep the raw RGB they hold today, so `test_term.c`'s `attr.fg == 0xCC3333`
+  assertions stand; no test asserts `fg_index == 0` for a 16-colour SGR (the `== 0` asserts in
+  `test_color.c` follow an SGR 0 or 39 reset). `COLOR_ANSI16` and `COLOR_256` now both mean
+  "indexed"; index 0-15 of `COLOR_256` is the same palette entry.
+- New `TERM_ATTR_DIM (1 << 4)`: set by SGR 2, cleared by SGR 22 (which already clears bold; per
+  ECMA-48 22 is "normal intensity", clearing both) and by SGR 0. `flags` is `uint8_t` with bits
+  0-3 used. Italic (SGR 3) is not recorded: nothing would render it.
+
+### 5.3 Dim
+
+`TERM_DIM_TOWARD_BG 0.40`: a dim cell's resolved foreground (after the floor) is
+`theme_blend(fg, bg, 0.40)`, on every theme. Blending after the floor is the only order that
+keeps dim visible: dimming first and flooring after would undo it on the light themes, and a
+separate lower ratio for dim cells would need a second table. Measured for PSReadLine's
+prediction if it is `97;2` (to be confirmed by 5.0):
+
+| theme | prediction today | prediction after | floored 90/97 (typed tokens) | dim default fg |
+|---|---|---|---|---|
+| Onyx Light | `FFFFFF` 1.09 | `A3A3A4` 2.31, L* 67.0 | `6C6C6C`, L* 45.6 | `737375` 4.35 |
+| Moss & Mist | `FFFFFF` 1.12 | `A1A2A1` 2.30, L* 66.5 | `6C6C6C`, L* 45.6 | `809191` 2.95 |
+| Onyx Synapse | `FFFFFF` 18.73 | `A0A0A0` 7.16, L* 65.9 | `808080`, L* 53.6 | `8E8E8E` 5.72 |
+| Sage & Sand | `FFFFFF` 13.97 | `AAABA7` 6.05, L* 69.8 | `808080`, L* 53.6 | `9E9D92` 5.12 |
+
+On the light themes the prediction moves 21 L* lighter than the typed tokens, and stays legible
+as a hint (2.3:1, deliberately below AA: dim means "less important"). On the dark themes today
+the prediction paints brighter than typed text (`FFFFFF` against default `E0E0E0`); after, it
+sits between parameters and body text. Fractions tried: at 0.33 the light-theme prediction is
+2.61:1, 17.6 L* from the typed tokens (a weaker cue); at 0.50 it drops to 1.97:1 and on Onyx
+Synapse lands within 3.5 L* of `808080`, the parameter grey. 0.40 is the middle.
+
+### 5.4 One pure resolver (new `src/core/term_colors.c`/`.h`)
 
 ```c
-#define TERM_CONTRAST_SLOTS 256
 typedef struct {
-    double   min_ratio;                 /* 0 = off */
-    uint32_t key_fg[TERM_CONTRAST_SLOTS], key_bg[TERM_CONTRAST_SLOTS], out[TERM_CONTRAST_SLOTS];
-    uint8_t  used[TERM_CONTRAST_SLOTS];
-} TermContrast;
+    uint32_t default_fg, default_bg;  /* the theme's terminal_fg / terminal_bg */
+    double   min_contrast;            /* 0 = off */
+    uint32_t fg_on_default[256];      /* color256_to_rgb(i) floored against default_bg,
+                                         or raw when min_contrast is 0 */
+} TermPalette;
 
-void     term_contrast_reset(TermContrast *c, double min_ratio); /* sets ratio, empties cache */
-uint32_t term_contrast_fg(TermContrast *c, uint32_t fg, uint32_t bg); /* cached floor */
-int      term_contrast_exempt(uint32_t codepoint);
-/* Resolve a cell's fg/bg as 0xRRGGBB (default colours from dfg/dbg) and apply the floor.
- * Swaps (SGR 7, cursor, selection) stay with the caller. */
-void     term_cell_colors(const TermCell *cell, uint32_t dfg, uint32_t dbg,
-                          TermContrast *c, uint32_t *out_fg, uint32_t *out_bg);
+void term_palette_build(TermPalette *p, uint32_t default_fg, uint32_t default_bg,
+                        double min_contrast);
+
+#define TERM_DRAW_CURSOR   1u
+#define TERM_DRAW_SELECTED 2u
+/* The colours a cell is painted with, as 0xRRGGBB. */
+void term_resolve_colors(const TermPalette *p, const TermAttr *a, unsigned draw_flags,
+                         uint32_t *out_fg, uint32_t *out_bg);
 ```
 
-- `term_cell_colors()` returns early, untouched, when `min_ratio <= 1.0`, when both modes are
-  `COLOR_DEFAULT`, or when the codepoint is exempt.
-- **Exempt glyphs**: block elements U+2580-U+259F and the Powerline range U+E0A0-U+E0D4. Their
-  foreground is an area colour meant to match a neighbouring background (half-block images,
-  Powerline separators), not text on a ground; moving it would tear the picture. Box-drawing
-  lines (U+2500-U+257F) are not exempt: a yellow frame should be visible.
-- **Cache**: direct-mapped, slot from a multiplicative hash of (fg, bg); a hit compares both keys.
-  The ratio is not in the key; `term_contrast_reset()` empties the cache whenever it changes.
-  3 KB, lives in the `Renderer` (a global), never on the stack.
+`term_resolve_colors()`, in this order:
+1. **Background.** Default -> `default_bg`. Indexed -> `color256_to_rgb(bg_index)`. RGB ->
+   `a->bg`.
+2. **Foreground on the default background.** Default -> `default_fg` (the theme guarantees it:
+   15.46 and 7.87 on the light themes). Indexed -> `fg_on_default[fg_index]`. RGB ->
+   `theme_min_contrast_color(a->fg, default_bg, min_contrast)`, computed per call.
+3. **Foreground on an explicit background.** Default -> `default_fg`; indexed ->
+   `color256_to_rgb(fg_index)`; RGB -> `a->fg`. Raw, unfloored.
+4. **Dim.** If `TERM_ATTR_DIM`, `fg = theme_blend(fg, bg, TERM_DIM_TOWARD_BG)`.
+5. **Swaps**, exactly as `resolve_cell()` does today: swap once if `TERM_ATTR_REVERSE` or
+   `TERM_DRAW_CURSOR`, once more if `TERM_DRAW_SELECTED`. Contrast is symmetric
+   (`test_theme_contrast_symmetric`), so a floored pair stays readable after either swap.
 
-### 5.3 Per-theme threshold (`src/core/ui_theme.c`/`.h`)
+No cache and no glyph exemptions. A yellow `█` progress bar on the default background becomes
+dark yellow like any other yellow text. Half-block images and Powerline segments that set an
+explicit background are untouched by rule 3.
+
+**Truecolour assumption.** Rule 2's RGB branch costs a `theme_contrast()` call per cell (0.09 us
+measured) and a walk when below the floor (up to 7.4 us, 4.2 us average against mid-greys; gcc
+-O2 on Linux, unmeasured under the release build's `-Os -flto` with MinGW libm). It assumes
+truecolour text on the default background is rare. The worst case, a full screen of below-floor
+truecolour text on a light theme (a dark `bat`/`delta` theme), is about 9,000 cells x 4-7 us =
+36-63 ms per full repaint. If that shows up in use, a cache is the follow-up; it is not built
+now.
+
+### 5.5 Theme tables (`src/core/ui_theme.c`/`.h`)
 
 `ThemeColors` gains `double terminal_min_contrast;` (4.5 for Onyx Light and Moss & Mist, 0 for
-Onyx Synapse and Sage & Sand) and `ThemeTokens` copies it in `ui_theme_resolve()`. A theme
-property rather than an `is_dark` test so a later theme, or the dark-theme decision, is a data
-change. `Get-NutshellThemeColor`'s regex reads only `0xRRGGBB` fields and is unaffected.
+Onyx Synapse and Sage & Sand). `ThemeTokens` gains `TermPalette term;` (about 1 KB) and
+`ui_theme_resolve()` calls `term_palette_build(&out->term, base->terminal_fg,
+base->terminal_bg, base->terminal_min_contrast)`. The value is per theme, not an `is_dark`
+rule, so the dark-theme question (section 8) is a data change. `Get-NutshellThemeColor`'s regex
+reads only `0xRRGGBB` fields and is unaffected. `ThemeTokens` is a global in `window.c`
+(`g_tokens`); a test that puts one on the stack grows by 1 KB, well inside the 16 MB the Windows
+test runner links with.
 
-### 5.4 Renderer (`src/ui/renderer.c`/`.h`, `src/ui/window.c`)
+### 5.6 Renderer and window (`src/ui/renderer.c`/`.h`, `src/ui/window.c`)
 
-- `Renderer` gains `TermContrast contrast` and packed `default_fg_rgb`/`default_bg_rgb`.
-  `renderer_init()` calls `term_contrast_reset(&r->contrast, 0)`.
-- `resolve_cell()` calls `term_cell_colors()` and converts with `to_colorref()`; the reverse,
-  cursor and selection swaps follow unchanged. No new literal `RGB(` (the gate's renderer.c count
-  stays 2).
-- `apply_config_colors()` sets the packed defaults and calls
-  `term_contrast_reset(&g_renderer.contrast, g_theme->terminal_min_contrast)`. Every path that
-  changes theme, font, zoom or DPI already calls it after `renderer_init()`.
+- `Renderer` holds `const TermPalette *palette`, set by `apply_config_colors()` to
+  `&g_tokens.term` after the existing `defaultFg`/`defaultBg` assignments. `renderer_init()` sets
+  it to NULL at its top, before the early return on a font failure; `resolve_cell()` falls back
+  to today's behaviour (raw colours, swaps) when it is NULL.
+- `resolve_cell()` becomes: compute `draw_flags` (cursor cell, selected cell, as today), call
+  `term_resolve_colors()`, convert both with `to_colorref()`. Bold is still read from
+  `attr.flags`. No new literal `RGB(`; the gate's `renderer.c` count stays 2.
+- **Theme switch.** `on_settings_clicked_page()` calls `force_full_terminal_repaint()`
+  unconditionally after re-applying the theme. From the code this is a bug today: the renderer is
+  re-initialised and the window invalidated, but `WM_SIZE` marks rows dirty only if the grid
+  size changed, `WM_ERASEBKGND` returns 1, and `renderer_draw()` skips every clean row before any
+  cell check, so clean rows keep the old theme's pixels while the cursor row repaints. The same
+  applies to default-coloured text without this change.
 
-### 5.5 Data flow
+### 5.7 Data flow
 
-`handle_sgr()` (unchanged) stores raw palette RGB -> `renderer_draw()` -> `resolve_cell()` ->
-`term_cell_colors()` (default substitution, floor via cache) -> swaps -> `dispbuf_cell_clean()`
-compares the floored colour -> `ExtTextOutW`. The parser, `TermAttr`, `PALETTE` and
-`color256_to_rgb()` do not change; `test_color.c`'s palette assertions stay as they are.
+`handle_sgr()` stores index (indexed) or RGB (truecolour) plus flags -> `renderer_draw()` ->
+`resolve_cell()` -> `term_resolve_colors(&g_tokens.term, ...)` -> `dispbuf_cell_clean()`
+compares the final colours -> `ExtTextOutW`. A theme switch rebuilds `g_tokens.term`, and the
+forced repaint re-resolves every visible cell; scrolling back re-resolves the rest.
 
-### 5.6 Theme switch
+### 5.8 Settings
 
-Switching from a dark theme to a light one re-colours everything on screen and in scrollback at
-the next paint, because the floor is computed per paint and the shadow buffer compares floored
-colours. The plan's first task verifies on Windows that a Settings theme change repaints clean
-rows (section 2's reading of `on_settings_clicked_page()` says it may not); if it does not, add a
-`force_full_terminal_repaint()` call at the end of `on_settings_clicked_page()`. That fixes the
-same staleness for default-coloured text, which exists today regardless of this change.
-
-### 5.7 Settings
-
-None. The floor fires only where the text is below AA on a light background, i.e. hard to read;
-no one needs a switch to get unreadable text back. If a need appears (exact colours for
-truecolour art), a hidden config key overriding the theme's ratio is a small later addition.
-
-### 5.8 Paint-path cost after the change
-
-Default/default cells (most of any screen): one branch. Coloured cells: a hash and two compares.
-Misses: bounded by the distinct (fg, bg) pairs on screen, each at most about 7.4 us (measured on
-Linux; expect the same order on Windows), paid once per theme.
+None. The floor changes only text on the theme's own background that reads below AA there. If a
+need appears (exact colours for truecolour art), a hidden config key overriding the theme's ratio
+is a small later addition.
 
 ## 6. Tests
 
 Native first (`make test`); declare each in `tests/runner.c`.
 
 **`tests/test_theme.c`**
-- `theme_min_contrast_color` returns fg unchanged when already above the ratio (`FFFF55` on
-  `121212` at 4.5), and for any pair when `min_ratio` is 0 or 1.0.
-- `FFFF55` on `F5F5F7` at 4.5: result >= 4.5, < 5.0 (moved just far enough), and still yellow
-  (R and G within 0x10 of each other, both above B).
-- Table-driven: all 16 `color256_to_rgb(i)` for i < 16, against both light `terminal_bg`s, clear
-  4.5; the first step that clears it is taken (the previous step's colour is below 4.5).
-- Unreachable target: fg `777777` on bg `767676` (L* 49.6) at 4.5: the walk goes lighter and
-  stops short (`F7F7F7` is 4.24), so it returns `080808` (4.41), the better extreme.
-- `theme_role_color()` regression: its outputs for each theme's `link` and `info` on `bg_primary`
-  are byte-identical to before the refactor (pin the current values).
+- `theme_min_contrast_color`: unchanged when already above the ratio (`FFFF55` on `121212` at
+  4.5) and for any pair at ratio 0 or 1.0; `FFFF55` on `F5F5F7` at 4.5 gives >= 4.5 and < 5.0,
+  still yellow (R and G within 0x10, both above B); the step before the result is below 4.5.
+- Darker direction and fallback (not reached by `theme_role_color()`'s current callers): fg
+  `777777` on bg `767676` (L* 49.6) at 4.5 walks lighter, stops short (`F7F7F7` is 4.24) and
+  returns `080808` (4.41), the better extreme.
+- `theme_role_color()` regression: each theme's `link` and `info` on `bg_primary` byte-identical
+  to before the refactor (current values pinned).
 
-**`tests/test_term_contrast.c`** (new)
-- `term_cell_colors`: default/default untouched at any ratio; `ESC[93m` on Onyx Light's bg
-  floored to >= 4.5; the same cell with ratio 0 returns `FFFF55`; default fg on `ESC[40m` lifted;
-  `ESC[30;47m` (11.54) and `ESC[97;41m` (5.14) untouched; `ESC[33;47m` (1.23) floored;
-  `38;5;226` and `38;2;255;255;0` floored (256 and truecolour).
-- Cells are produced by feeding the parser real sequences (`term_process`), not by hand-built
-  attrs, so the test also pins that the parser's stored RGB is what the floor sees.
-- Exempt boundaries: U+257F not exempt, U+2580 and U+259F exempt, U+25A0 not; U+E09F not,
-  U+E0A0 and U+E0D4 exempt, U+E0D5 not. An exempt `ESC[93m` cell keeps `FFFF55`.
-- Cache: a hit returns the uncached result; two pairs that hash to one slot each return their own
-  correct result; `term_contrast_reset()` with a new ratio changes the answer for a cached pair.
-- Symmetry: floored fg vs bg and the swapped pair have the same ratio (the cursor/selection
-  argument, pinned).
+**`tests/test_term_colors.c`** (new). Cells come from feeding real sequences to `term_process()`,
+not hand-built attributes, so the parser's index storage is tested with the resolver.
+- Palette build: with ratio 4.5 against each light `terminal_bg`, all 256 entries clear 4.5 (by
+  construction; kept as a guard, not as evidence); with ratio 0 the table equals
+  `color256_to_rgb()` entry for entry.
+- Default background: `ESC[93m` on Onyx Light resolves to `727223`; `ESC[33m` to `846E1B`;
+  `ESC[38;5;11m` equals `ESC[93m`; `ESC[38;5;226m` and `ESC[38;2;255;255;0m` are >= 4.5; with
+  Onyx Synapse's palette `ESC[93m` is `FFFF55`.
+- Explicit background: `ESC[93;46m` (2.17), `ESC[33;47m` (1.23), `ESC[30;47m` (11.54) and
+  `ESC[97;41m` (5.14) resolve to the raw palette on both sides, on every theme; default fg on
+  `ESC[44m` is `terminal_fg` on `5C7FD6`.
+- fg == bg: on the default background (`ESC[38;2;245;245;247m` on Onyx Light) the text is
+  floored (`6F6F70`, 4.61), so it shows; on an explicit background (`ESC[37;47m`) it is
+  untouched (1.00), so it stays hidden.
+- Dim: `ESC[2;97m` on Onyx Light is `theme_blend(6C6C6C, F5F5F7, 0.40)` (`A3A3A4`), distinct
+  from `ESC[97m` and `ESC[90m`; `ESC[2m` then `ESC[22m` clears it; `ESC[1;2m` then `ESC[22m`
+  clears both; `ESC[0m` clears it; dim on an explicit background blends toward that background.
+- Swaps: `ESC[7;93m` returns the floored pair swapped; `TERM_DRAW_CURSOR` alone swaps once;
+  cursor on an `ESC[7m` cell swaps once (today's `||`); `TERM_DRAW_SELECTED` swaps again; the
+  floor is applied before the swaps (the swapped bg is `727223`, not `FFFF55`); dim is applied
+  before the swaps.
+- Theme switch: one stored `ESC[93m` cell resolves to `FFFF55` with Onyx Synapse's palette and
+  `727223` with Onyx Light's, with no re-parse (the scrollback property).
+- End to end: the captured PowerShell stream from 5.0 is fed in, and the prediction's cells
+  resolve to a colour distinct from the typed-token cells on both light themes.
 
-**`tests/test_ui_theme.c`**
-- Each theme's `terminal_min_contrast` is 4.5 when `theme_is_dark(terminal_bg)` is 0 and 0
-  otherwise; `ui_theme_resolve()` copies it.
-- For every theme with the floor on: all 16 palette entries, floored, clear it against
-  `terminal_bg`, and `terminal_fg` on `terminal_bg` clears it unfloored (so the default/default
-  fast path is sound).
+**`tests/test_color.c` / `tests/test_term.c`**: add asserts that `ESC[33m` stores
+`fg_index == 3`, `ESC[93m` 11, `ESC[43m` `bg_index == 3`, `ESC[103m` 11; existing RGB asserts
+unchanged. The hand-written `93m` fixture is replaced by the capture (5.0).
 
-**`tests/test_ui_demo.c`**
-- A new demo state `ansi` is valid; insert it before `settings-debug` so the tail assertions in
-  `test_ui_demo_states_list_ends_in_all` hold, with the count raised to 17. Its terminal text
-  contains each of `ESC[30m`..`ESC[37m` and `ESC[90m`..`ESC[97m`.
+**`tests/test_ui_theme.c`**: the per-theme values by name: Onyx Light 4.5, Moss & Mist 4.5, Onyx
+Synapse 0, Sage & Sand 0; `ui_theme_resolve()` builds `term` from them (spot-check
+`term.fg_on_default[11]` per theme); each light theme's `terminal_fg` on `terminal_bg` clears its
+ratio, which is what lets rule 2 skip the default foreground.
+
+**`tests/test_ui_demo.c`**: a new demo state `ansi` is valid. It is inserted before `local` (after
+`batches`), so every tail anchor of `test_ui_demo_states_list_ends_in_all` (`[count-1]` "all"
+through `[count-7]` "local", including `[count-5] == "cmddetail"`) still holds; only the count
+changes, 16 -> 17. Its terminal text contains the 16 swatch rows in index order.
 
 **Harness** (`tests/integration/cases/30-ui-demo.ps1`, tier `gate`, no SSH host or AI key)
-- `ui_demo_build()` (`src/core/ui_demo.c`) gives state `ansi` a terminal text of 16 rows, one per
-  SGR 30-37/90-97: a swatch of 30 reverse-video spaces (`ESC[<n>;7m`), then the code and a sample
-  sentence in that colour, then two explicit-pair rows (`30;47`, `97;41`) for the eye. Reverse
-  video paints the floored foreground as a solid cell background, which a screenshot can sample
-  without anti-aliasing.
-- Add `ansi` to `$galleryStates` (and to the comment's hand-kept list): the contact sheet then
-  shows the palette on all four themes, the visual review of the floor.
-- New case `helpers_ansi_contrast_floor`: launch `--ui-demo=ansi --theme "Onyx Light"`, screenshot,
-  scan the column at 15% width downward from the tab strip's bottom, collect the runs of
-  non-`terminal_bg` colour, and assert there are at least 14 runs (adjacent near-equal swatches,
-  37/90, may merge) and each has WCAG contrast >= 4.4 against `terminal_bg` (0.1 of headroom for
-  capture rounding). Repeat on `Onyx Synapse` and assert the bright-yellow swatch is `FFFF55`
-  within 12 per channel (floor off on dark themes). Needs a small `Get-NutshellContrast` helper in
-  `NutshellIT.psm1`; list the case in `tests/integration/README.md`.
-- Recommended manual check (not automated: ConPTY output varies by PowerShell version): a local
-  PowerShell tab on Onyx Light running `Write-Host hello -ForegroundColor Yellow`,
-  `Write-Warning hi` and a typed command, before and after, with the debug log's raw bytes
-  confirming `93`/`33;1` reach the parser with a default background.
+- The `ansi` state's terminal text (`ui_demo_build()`, `src/core/ui_demo.c`) is deterministic:
+  row N (0-15) starts at column 0 with 30 reverse-video spaces in palette index N
+  (`ESC[3Nm`/`ESC[9Nm` plus `;7`), then the code and a sample sentence in that colour; a dim row
+  (`ESC[2;97m`) is row 16; the explicit-pair rows (`30;47`, `97;41`, `37;47`) come after row 16,
+  where no sample is taken. Reverse video paints the resolved foreground as a solid cell, so a
+  pixel inside a swatch has no anti-aliasing.
+- Add `ansi` to `$galleryStates` (and to its hand-kept comment), so the contact sheet shows the
+  palette on all four themes for the eye.
+- Cell geometry. The harness has no cell-size query today. The terminal starts at the tab strip's
+  bottom (`Get-NutshellTabStripRegion`), and the debug log's `render.draw` event already carries
+  `char_h`; the plan adds `char_w` to that event and the case reads both with the render
+  category at Trace. The sample point for row N is column 15 (the middle of the swatch, so the
+  left margin does not matter), y = strip bottom + (N + 0.5) * `char_h`. If the plan finds this
+  unreliable, the case degrades to the gallery capture (visual check) plus the native tests, and
+  the spec's harness coverage says so.
+- New case `helpers_ansi_contrast_floor`: `--ui-demo=ansi --theme "Onyx Light"`; each of rows
+  0-15 has contrast >= 4.4 against `terminal_bg` (0.1 headroom for capture rounding) and row 11
+  is `727223` within 12 per channel; row 16 (dim) is lighter than row 15 by at least 10 L*. A
+  control run on `Onyx Synapse` asserts row 11 is `FFFF55` within 12.
+- New case `helpers_theme_switch_repaints`: `--ui-demo=ansi --theme "Onyx Synapse"`, then
+  `Open-NutshellSettings`, select Onyx Light, close with OK, screenshot. Row 11's and row 15's
+  swatches (far from the cursor row) are the Onyx Light colours (`727223`, `6C6C6C`), not the
+  Onyx Synapse ones (`FFFF55`, `FFFFFF`). This is the path `--theme` never exercises (5.6).
+- List both cases in `tests/integration/README.md`.
 
 ## 7. Out of scope
 
-- A designed per-theme palette (option 3's baseline); the normal/bright convergence it would fix.
-- Dark themes (floor off there; section 8).
-- SGR 2 (dim), 3 (italic), 8 (conceal); bold-as-bright; OSC 4/10/11 palette set and query.
-- PSReadLine's inline prediction reading darker than typed text on light themes (`444444` is
-  8.95:1 there and untouched by the floor; it is PSReadLine's dark-background default).
+- Default foreground on an explicit background: PowerShell 7's `$PSStyle.FileInfo.Directory`
+  (`44;1`, unverified) paints `terminal_fg` on `5C7FD6` at 4.38 (Onyx Light), 2.28 (Moss & Mist)
+  and 2.91 (Onyx Synapse). Rule 3 leaves it raw; see section 8.
+- A designed per-theme palette (option 3); the normal/bright convergence it would fix.
+- The dark themes' floor (0 in this spec; section 8).
+- A cache for the truecolour path (5.4's assumption).
+- Italic (SGR 3), conceal (SGR 8), bold-as-bright.
+- OSC 4/10/11. Answering OSC 11 (background query), so that `bat`, `delta`, vim and `glow` can
+  choose a light palette themselves, is cheap and complementary; it goes on the notes document's
+  open list as its own item.
 - Windows PowerShell 5.1's black warning/error background, if ConPTY forwards it as `40`
   (readable already, 19.69:1).
 - Removing the unused `foreground_colour`/`background_colour` config fields.
 
 ## 8. Open questions for the maintainer
 
-1. **Dark themes.** Turn the floor on for Onyx Synapse and Sage & Sand too? Gain: SGR 30 black
-   becomes visible (1.12 -> 4.55 on Onyx Synapse, 1.50 -> 4.72 on Sage & Sand) and Sage & Sand's
-   red reads (2.72 -> 4.73, `D57E7E`, visibly pinker; plus blue, magenta, grey and bright red
-   lifted slightly). Cost: PSReadLine's inline prediction (1.92 on Onyx Synapse) would be lifted
-   to about the grey of parameter tokens and stop looking like a ghost. It is a one-value-per-theme
-   change either way.
-2. **Normal/bright convergence on light themes.** Acceptable as is, or worth a designed palette
-   later (option 3), so that for example 90 and 97 do not both paint `6C6C6C`?
+1. **Dark themes.** Set the floor to 4.5 on Onyx Synapse and Sage & Sand too? Gain: SGR 30 black
+   on the default background becomes visible (1.12 -> 4.55 on Onyx Synapse, 1.50 -> 4.72 on
+   Sage & Sand), and Sage & Sand's red reads (2.72 -> 4.73, `D57E7E`, visibly pinker; blue,
+   magenta, grey and bright red lift slightly). Cost: their look changes. With dim now handled,
+   the draft's objection (predictions lifted to the grey of typed tokens) no longer applies to
+   `97;2` predictions. One value per theme either way.
+2. **Default foreground on an explicit background.** Leave it raw (this spec), or floor
+   `terminal_fg` against palette backgrounds with a second 16-entry table (`44;1` directories
+   are 2.28:1 on Moss & Mist)? It is the theme's colour on the application's colour, so either
+   side of finding 2's line is defensible.
+3. **Normal/bright convergence on light themes.** Acceptable in use, or worth a designed palette
+   later (option 3)?
+
+## Critique (round 1, 2026-10-19)
+
+Critic: claude-opus-5-5, read-only, on `300f1cc` (`.superpowers/critique-ansi-contrast.md`).
+Dispositions by the main session (`.superpowers/critique-ansi-contrast-dispositions.md`), one
+line each:
+
+1. PSReadLine's prediction (`97;2;3`) would look like typed text under the floor. ACCEPT: dim
+   (SGR 2) in scope as a blend after the floor; italic out; bytes captured first (5.0, 5.3).
+2. "Cannot damage deliberate pairs" was false; explicit/explicit pairs were floored. ACCEPT: the
+   floor applies only on the theme-default background; explicit-background cells keep raw
+   colours; section 4 reworded.
+3. Option 4b was rejected on a wrong cost estimate. ACCEPT, decision changed to 4b: index kept,
+   256-entry floored table per theme, truecolour floored on the fly with no cache.
+4. Nothing in the merge gate checks the renderer uses the floor. ACCEPT: all resolution,
+   swaps included, in one pure `src/core` function (5.4); `renderer.c` only calls it.
+5. Inserting `ansi` before `settings-debug` breaks the tail anchors. ACCEPT: inserted before
+   `local` so every anchor holds and only the count changes (see the note below).
+6. The stale theme-switch repaint is certain from the code. ACCEPT:
+   `force_full_terminal_repaint()` unconditional; mid-session theme-switch harness case added.
+7. The cache thrashes beyond 256 distinct pairs. ACCEPT as moot: no cache; the walk's measured
+   cost is kept as the bound for the truecolour path (5.4).
+8. Harness geometry underspecified; the pair rows would fail the scan. ACCEPT: samples by cell
+   coordinates in deterministic swatch rows, pair rows below the sampled range; degrades to the
+   gallery plus native tests if no reliable cell size.
+9. The `93m` "capture" is a hand-written fixture. ACCEPT: replaced by a captured ConPTY stream
+   as the plan's first task (5.0).
+10. Block-element exemption leaves yellow progress bars invisible. ACCEPT as moot: no glyph
+    exemptions; such bars become dark yellow.
+11. The `terminal_min_contrast` test re-encoded the `is_dark` rule. ACCEPT: values pinned by
+    theme name.
+12. Tautological tests; fg == bg untested. ACCEPT: fg == bg pinned on the default background
+    (floored) and on an explicit one (untouched); the all-entries test kept as a guard only.
+13. Smaller items (`44;1` on dark themes, OSC 11, compliance). ACCEPT in part: dark themes stay
+    at 0 with the open question; OSC 11 goes on the notes open list, out of scope here.
+
+Note on 5: the dispositions file says "appended after `settings-debug` and before `all`", but
+anywhere between `local` (`[count-7]`) and `all` moves at least one anchored name, including
+`[count-5]`. The stated intent (keep the anchors, change only the count) is met only by inserting
+before `local`, which is what this revision does.
