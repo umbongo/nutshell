@@ -80,6 +80,9 @@ void cpx_place(int len, int offset, int cols, int *row_in_line, int *col)
     int end_row = (len == 0) ? 0 : (len - 1) / cols;
     int end_col = (len == 0) ? 0 : (len - 1) % cols + 1; /* may equal cols */
     int c = end_col + (offset - len);
+    /* This is conhost's cursor (a console reports X = cols - 1 with its own
+     * delayed-wrap flag), not the model's pending-wrap column; model_view
+     * copies the model's col == cols as is. */
     if (c > cols - 1) c = cols - 1;
     *row_in_line = end_row;
     *col = c;

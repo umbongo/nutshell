@@ -762,8 +762,11 @@ int test_local_pty_open_ex_passes_pcon_flags(void)
     char tmp_dir[MAX_PATH];
     DWORD tn = GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
     int tmp_ok = (tn > 0u && tn < sizeof(tmp_dir));
-    if (!tmp_ok) RPT("  GetTempPathA failed or overflowed (%lu)\n", (unsigned long)tn);
-    ASSERT_TRUE(tmp_ok);
+    if (!tmp_ok) {
+        RPT("  GetTempPathA failed or overflowed (%lu)\n", (unsigned long)tn);
+        ASSERT_TRUE(tmp_ok);
+        TEST_END();
+    }
     char tap_path[MAX_PATH * 2];
     (void)snprintf(tap_path, sizeof(tap_path), "%snsprobe_tap_check.bin",
                    tmp_dir);
@@ -1242,22 +1245,30 @@ static void count_tags(const CpxScenario *s, const Terminal *term,
     }
 }
 
-/* Copy the whole tap file to path (the fixture). Returns 1 on success, 0 on
- * any short read or write. */
-static int copy_tap(FILE *tap, const char *path)
+/* Copy the first `limit` bytes of the tap file to path (the fixture): the
+ * stream up to the end of the post-resize drain, nothing emitted after it.
+ * Returns 1 on success, 0 on a stream error, a short read or write, or a
+ * limit the tap does not reach; a partly written file is deleted. */
+static int copy_tap(FILE *tap, const char *path, long limit)
 {
     char buf[8192];
+    if (limit < 0L || ferror(tap)) return 0;
     if (fflush(tap) != 0 || fseek(tap, 0L, SEEK_SET) != 0) return 0;
     FILE *out = fopen(path, "wb");
     if (!out) return 0;
     int ok = 1;
-    size_t got;
-    while ((got = fread(buf, 1u, sizeof(buf), tap)) > 0u) {
+    size_t left = (size_t)limit;
+    while (left > 0u) {
+        size_t want = (left < sizeof(buf)) ? left : sizeof(buf);
+        size_t got = fread(buf, 1u, want, tap);
+        if (got == 0u) { ok = 0; break; }
         if (fwrite(buf, 1u, got, out) != got) { ok = 0; break; }
+        left -= got;
     }
     if (ferror(tap)) ok = 0;
     if (fclose(out) != 0) ok = 0;
     (void)fseek(tap, 0L, SEEK_END);
+    if (!ok) (void)DeleteFileA(path);
     return ok;
 }
 
@@ -1395,10 +1406,15 @@ static int probe_scenario(const CpxScenario *s, unsigned long flags,
     /* ConPTY's post-resize bytes: is there a full repaint, and are
      * soft-wrapped rows sent without \r\n? */
     drain(pty, term, 1000);
+    /* The fixture ends here, at the end of the post-resize drain. */
+    long fixture_end = -1L;
+    if (tap) {
+        (void)fflush(tap);
+        fixture_end = ftell(tap);
+    }
     if (tap && repaint_at >= 0L) {
         static char raw[65536];
-        (void)fflush(tap);
-        long end = ftell(tap);
+        long end = fixture_end;
         size_t want_len = (end > repaint_at) ? (size_t)(end - repaint_at) : 0u;
         if (want_len > sizeof(raw)) want_len = sizeof(raw);
         size_t got = 0u;
@@ -1424,9 +1440,15 @@ static int probe_scenario(const CpxScenario *s, unsigned long flags,
             char fixture[128];
             (void)snprintf(fixture, sizeof(fixture),
                            "tests/fixtures/conpty_resize_%s.bin", s->name);
-            int wrote = copy_tap(tap, fixture);
-            RPT("  [%s] fixture %s: %s\n", who, fixture,
-                wrote ? "written" : "NOT written");
+            /* Only a run that passed leaves a fixture: no failure so far,
+             * the dump showed the new size, the resize call returned 0. */
+            int passed = (_tf_local_fail == 0 && ok1 && resized == 0);
+            int wrote = passed && copy_tap(tap, fixture, fixture_end);
+            if (wrote)
+                RPT("  [%s] fixture %s: written\n", who, fixture);
+            else
+                RPT("  [%s] fixture %s: NOT written (a check failed)\n", who,
+                    fixture);
             ASSERT_TRUE(wrote);
         }
         fclose(tap);
