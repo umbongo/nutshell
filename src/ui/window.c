@@ -1954,8 +1954,10 @@ static void create_demo_session(HWND hwnd)
             GetClientRect(hwnd, &rc2);
             int target = ai_dock_pct_to_px(rc2.right, AI_DOCK_DEFAULT_PCT,
                                            AI_DOCK_MIN_PCT, AI_DOCK_MAX_PCT);
-            /* --ui-demo=policy-compact: dock the panel narrow enough for the
-             * status line's compact labels, before it is laid out. */
+            /* --ui-demo=policy-compact and --ui-demo=ansi: dock the panel
+             * narrow (policy-compact for the status line's compact labels,
+             * ansi so the terminal keeps every swatch line whole), before it
+             * is laid out. */
             int demo_w = ui_demo_panel_width_px(state, g_dpi);
             if (demo_w > 0) target = demo_w;
             int splitter = AI_DOCK_SPLITTER_W;

@@ -290,7 +290,9 @@ int test_term_conpty_ps51_tab_completion_token_is_floored(void)
         check_indexed(&row->cells[c], COLOR_ANSI16, 11, 0x727223u, 0x727223u, &fail);
     ASSERT_EQ(fail, 0);
     ASSERT_EQ(row->cells[0].attr.fg_mode, COLOR_DEFAULT);
-    ASSERT_EQ(painted_fg(1, &row->cells[0]), 0x1D1D1Fu);   /* Onyx Light terminal_fg */
+    int onyx_light = ui_theme_find("Onyx Light");
+    ASSERT_TRUE(onyx_light > 0);                           /* 0 is also "not found" */
+    ASSERT_EQ(painted_fg(onyx_light, &row->cells[0]), 0x1D1D1Fu);   /* Onyx Light terminal_fg */
     term_free(term);
     free(bytes);
     TEST_END();

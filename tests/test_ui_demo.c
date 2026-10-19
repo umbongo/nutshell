@@ -31,8 +31,8 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
 /* "all" stays last and still means the union of the panel states. "local"
  * (v1.2.1, spec 2026-09-22-local-shell-design.md section 5) only swaps the
  * terminal transcript; "thinking" is "chat" with a longer reasoning block;
- * "cmddetail", "settings-debug", "policy-auto" and "policy-compact" reuse
- * or swap content too. None of those is part of "all". */
+ * "cmddetail", "settings-debug", "policy-auto", "policy-compact" and "ansi"
+ * reuse or swap content too. None of those is part of "all". */
 int test_ui_demo_states_list_ends_in_all(void)
 {
     TEST_BEGIN();
@@ -619,11 +619,12 @@ int test_ui_demo_policy_for_other_states_is_write_off(void)
     TEST_END();
 }
 
-int test_ui_demo_panel_width_only_for_policy_compact(void)
+int test_ui_demo_panel_width_only_for_narrow_states(void)
 {
     TEST_BEGIN();
     ASSERT_EQ(ui_demo_panel_width_px("policy-compact", 96), 260);
     ASSERT_EQ(ui_demo_panel_width_px("policy-compact", 192), 520);
+    ASSERT_EQ(ui_demo_panel_width_px("ansi", 96), 260);
     ASSERT_EQ(ui_demo_panel_width_px("policy-auto", 96), 0);
     ASSERT_EQ(ui_demo_panel_width_px("all", 96), 0);
     ASSERT_EQ(ui_demo_panel_width_px(NULL, 96), 0);
