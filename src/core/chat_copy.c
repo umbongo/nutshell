@@ -280,21 +280,23 @@ int chat_copy_visible(const char *text, int len, int start, int end,
                           seg.start < end && seg.end > start;
             if (touched) {
                 /* Segments paint on lines of their own: one '\n' between
-                 * two that both copy something. */
-                CopyBuf piece = { NULL, 0, 0, 0 };
+                 * two that both copy something. The separator goes in
+                 * first and is taken back if the segment copies nothing,
+                 * so no segment needs a buffer of its own. */
+                size_t mark = b.n;
+                if (copied_any) cb_put(&b, "\n", 1);
+                size_t body = b.n;
                 if (seg.kind == CHAT_SEG_PROSE && (flags & CHAT_COPY_MD))
-                    emit_markdown(&piece, text, seg.start, seg.end, start, end,
+                    emit_markdown(&b, text, seg.start, seg.end, start, end,
                                   &lb, &lb2);
                 else
-                    cb_range(&piece, text, seg.start, seg.end, start, end);
-                if (piece.oom) b.oom = 1;
-                if (piece.n > 0) {
-                    if (copied_any) cb_put(&b, "\n", 1);
-                    cb_put(&b, piece.p, piece.n);
+                    cb_range(&b, text, seg.start, seg.end, start, end);
+                if (b.n > body) {
                     copied_any = 1;
+                } else if (b.p) {
+                    b.n = mark;
+                    b.p[b.n] = '\0';
                 }
-                if (piece.p) secure_zero(piece.p, piece.cap);
-                free(piece.p);
             }
             more = (flags & CHAT_COPY_EXEC)
                        ? chat_exec_split(text, len, &pos, &seg) : 0;
