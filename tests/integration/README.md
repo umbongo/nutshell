@@ -253,9 +253,11 @@ window mid-drag (the list also ignores a move without the left button).
 
 Run the suite from a fresh PowerShell window after any change to
 `NutshellIT.psm1`'s `Add-Type` sources: a type already loaded in a console
-cannot be redefined, so `Import-Module -Force` keeps the old one, and the
-module now stops at load (`Assert-NutshellNativeFresh`) with a message to open
-a new window instead of failing a case with "does not contain a method named".
+cannot be redefined, so `Import-Module -Force` keeps the old one. Any change to
+either source (a new member, or a changed body or signature) stops the module
+at load with a message to open a new window, instead of failing a case with
+"does not contain a method named" or silently running the old code; an
+unchanged source re-imports without complaint.
 
 ## AI Assist cases
 

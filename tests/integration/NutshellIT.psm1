@@ -256,7 +256,21 @@ public class NutshellNative {
     }
 }
 "@
-Add-Type -TypeDefinition $nutshellNativeSource
+# Stale-console guard (applies to both Add-Type calls). A type this PowerShell
+# session already loaded cannot be redefined: Import-Module -Force re-runs this
+# file, but the old NutshellNative / NutshellSelNative stay, and the first call
+# to a member added since fails mid-case with "[NutshellSelNative] does not
+# contain a method named 'GetSystemMetrics'". Add-Type caches by source text,
+# so an UNCHANGED source re-imports as a no-op and the error fires only when
+# the source really changed (a new member, or a changed body or signature).
+# Each Add-Type is therefore wrapped to say what to do; there is no way to
+# unload a type from a session.
+try { Add-Type -TypeDefinition $nutshellNativeSource -ErrorAction Stop }
+catch {
+    throw ("The type [NutshellNative] is already loaded in this console with different source: the harness " +
+           "module changed since this console loaded it, and a loaded type cannot be redefined. " +
+           "Open a new PowerShell window and run again. Original error: " + $_.Exception.Message)
+}
 
 [NutshellNative]::SetProcessDPIAware() | Out-Null
 
@@ -274,38 +288,12 @@ public static class NutshellSelNative {
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
 }
 "@
-Add-Type -TypeDefinition $nutshellSelNativeSource
-
-# Stale-console guard. Add-Type cannot redefine a type that this PowerShell
-# session already loaded: Import-Module -Force re-runs this file, but the old
-# NutshellNative / NutshellSelNative win, and the first call to a member added
-# since fails with "[NutshellSelNative] does not contain a method named
-# 'GetSystemMetrics'" in the middle of a case. So after both Add-Type calls,
-# check that every public static member each source declares exists on the
-# loaded type, and stop at module load with a message that says what to do. A
-# console that loaded this module before a source change must be closed and
-# reopened; there is no way to unload a type from a session.
-function Assert-NutshellNativeFresh {
-    $sources = [ordered]@{
-        NutshellNative    = $nutshellNativeSource
-        NutshellSelNative = $nutshellSelNativeSource
-    }
-    # "public static extern <type> <Name>(" and "public static <type> <Name>(";
-    # the type may be generic or an array (List<string>, byte[]).
-    $declared = '(?m)public\s+static\s+(?:extern\s+)?[\w<>\[\],.]+\s+(\w+)\s*\('
-    foreach ($typeName in $sources.Keys) {
-        $type = $typeName -as [type]
-        foreach ($m in [regex]::Matches($sources[$typeName], $declared)) {
-            $member = $m.Groups[1].Value
-            if ($null -eq $type -or @($type.GetMember($member)).Count -eq 0) {
-                throw ("The loaded type [$typeName] has no member '$member': the harness module changed " +
-                       "since this console loaded it and a loaded type cannot be redefined -- " +
-                       "open a new PowerShell window and run again.")
-            }
-        }
-    }
+try { Add-Type -TypeDefinition $nutshellSelNativeSource -ErrorAction Stop }
+catch {
+    throw ("The type [NutshellSelNative] is already loaded in this console with different source: the harness " +
+           "module changed since this console loaded it, and a loaded type cannot be redefined. " +
+           "Open a new PowerShell window and run again. Original error: " + $_.Exception.Message)
 }
-Assert-NutshellNativeFresh
 
 $script:CLV_MSG_QUERY_WORD = 0x8051   # WM_APP + 0x51, src/ui/chat_listview.h
 $script:WM_MOUSEMOVE       = 0x0200
@@ -1626,4 +1614,4 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Get-NutshellTabCount, Close-NutshellTab, Get-NutshellWindowText, Get-NutshellChildWindows, `
     Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion, `
     Get-NutshellRegionHash, Get-NutshellWindowDpi, Get-NutshellChatList, Get-NutshellChatWordRect, Send-NutshellChatDrag, `
-    Set-NutshellFocus, Assert-NutshellNativeFresh
+    Set-NutshellFocus

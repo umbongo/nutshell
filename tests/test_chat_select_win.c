@@ -713,14 +713,19 @@ int test_chat_select_win_short_list(void)
                 LRESULT r_top = query_word(tv.lv, 0, "Can");
                 ASSERT_TRUE(r_top != 0);
 
-                /* (c) a drag whose last move is one pixel above the list's
-                 * bottom edge does not scroll: the auto-scroll starts at
-                 * my > viewport_height, so this fails on an off-by-one in
-                 * either direction. Several moves there, so a scroll that
+                /* (c) a drag whose last move is exactly on the list's bottom
+                 * edge (y = viewport_height) does not scroll: the product
+                 * scrolls only when my > viewport_height, by
+                 * my - viewport_height. The edge itself is the last point
+                 * that must not scroll, so an edge moved in by a pixel or
+                 * more (my > viewport_height - 1) fails here; one pixel
+                 * short of it would pass that regression. (A `>=` in place
+                 * of `>` adds 0 at the edge, so it cannot be seen by
+                 * scroll_y at all.) Several moves there, so a scroll that
                  * only accumulates would show. The top item must still be
                  * the first, painted where it was. */
                 int y = q->y + q->h / 2;
-                int ey = lv->viewport_height - 1;
+                int ey = lv->viewport_height;
                 SendMessageA(tv.lv, WM_LBUTTONDOWN, MK_LBUTTON, pt(q->x + 1, y));
                 SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON,
                              pt(q->x + wq / 2, y));
@@ -749,6 +754,10 @@ int test_chat_select_win_short_list(void)
                 for (int i = 0; i < 40; i++)
                     SendMessageA(tv.lv, WM_MOUSEMOVE, MK_LBUTTON, pt(tx, ty));
                 SendMessageA(tv.lv, WM_LBUTTONUP, 0, pt(tx, ty));
+                if (lv->scroll_y <= 0)
+                    printf("  (b) scroll_y=%d after a hold below the bottom "
+                           "edge, want > 0 (dpi %d)\n", lv->scroll_y,
+                           dpis[d]);
                 ASSERT_TRUE(lv->scroll_y > 0);
                 ASSERT_TRUE(lv->sel_valid);
                 char *got = NULL;
