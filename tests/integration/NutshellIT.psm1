@@ -378,6 +378,7 @@ function Set-NutshellFocus {
 
 # WM_COMMAND ids from src/ui/resource.h
 $script:WM_COMMAND        = 0x0111
+$script:WM_AI_GET_POLICY  = 0x0400 + 104   # WM_USER + 104, src/ui/ai_chat.c: cmd_policy_status_word()
 $script:WM_CLOSE          = 0x0010
 $script:IDM_FILE_LOG_START = 2004
 $script:IDM_FILE_LOG_STOP  = 2005
@@ -954,39 +955,63 @@ function Set-NutshellTerminalFocus {
     Start-Sleep -Milliseconds 300
 }
 
+function Get-NutshellAiPolicy {
+    <# The displayed session's policy as the AI panel holds it:
+       @{ Allowed = "Read"|"Unknown"|"Write"|"Critical"; Auto = $true|$false }.
+       Sends WM_AI_GET_POLICY (WM_USER + 104), answered with
+       cmd_policy_status_word(): bits 0-7 the level, bit 8 Auto-approve. Sent
+       messages are answered inside a modal loop too, so this works while the
+       Critical confirmation box is up. #>
+    param([Parameter(Mandatory)] $Session)
+    $p = Get-NutshellAiPanel -Session $Session
+    if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel is not open" }
+    $res = [IntPtr]::Zero
+    $ok = [NutshellNative]::SendMessageTimeout($p, $script:WM_AI_GET_POLICY,
+        [IntPtr]::Zero, [IntPtr]::Zero, 0x0002, 2000, [ref]$res)   # SMTO_ABORTIFHUNG
+    if ($ok -eq [IntPtr]::Zero) { throw "the AI panel did not answer WM_AI_GET_POLICY within 2 s" }
+    $word = $res.ToInt64()
+    $names = @("Read", "Unknown", "Write", "Critical")
+    return @{ Allowed = $names[[int]($word -band 0xFF)]; Auto = (($word -band 0x100) -ne 0) }
+}
+
 function Set-NutshellAiPolicy {
-    <# Put the session's policy markers on named stops of the status line's
-       policy control (docs/superpowers/specs/2026-09-11-status-policy-control-design.md).
+    <# Put the displayed session's policy on a named level, with Auto-approve
+       on or off (docs/superpowers/specs/2026-10-18-ai-auto-approve-button-design.md).
 
-       -Allowed     the ceiling: Read | Unknown | Write | Critical. Commands
-                    above it are blocked and show as held.
-       -Unattended  how far the session runs without asking: Nothing | Read |
-                    Unknown | Write | Critical. Never above -Allowed.
+       -Allowed  the level: Read | Unknown | Write | Critical. Commands above it
+                 are blocked and show as held.
+       -Auto     Auto-approve on: commands up to -Allowed run without asking.
+                 Absent means off -- the call is absolute.
 
-       Both are posted as ABSOLUTE setters (IDC_CHAT_POLICY_ALLOW_BASE 4030 +
-       stop, IDC_CHAT_POLICY_AUTO_BASE 4040 + stop + 1), not as cycles of the
-       control, so a case never has to count clicks or read a painted label.
-       Posted, so no foreground window is needed. Omit either to leave that
-       marker where it is; -Allowed is applied first, since lowering the
-       ceiling drags the unattended marker down with it. #>
+       Posts IDC_CHAT_POLICY_ALLOW_BASE 4030 + level, and IDC_CHAT_AUTOAPPROVE
+       4015 (a toggle) only when the button's state, read first with
+       Get-NutshellAiPolicy, differs from the one asked for. The button is
+       turned off before the level moves and on after it, so only
+       -Allowed Critical -Auto raises the confirmation box. That call returns
+       with the box up: answer it with
+         $dlg = Wait-NutshellDialog -Session $s -Title "Auto-approve"
+         Close-NutshellDialog -Dialog $dlg -Button Yes
+       Posted, so no foreground window is needed. The old -Unattended
+       parameter and ids 4040-4044 were retired in the same change. #>
     param(
         [Parameter(Mandatory)] $Session,
-        [ValidateSet("Read", "Unknown", "Write", "Critical")] [string] $Allowed,
-        [ValidateSet("Nothing", "Read", "Unknown", "Write", "Critical")] [string] $Unattended
+        [Parameter(Mandatory)] [ValidateSet("Read", "Unknown", "Write", "Critical")] [string] $Allowed,
+        [switch] $Auto
     )
     $p = Get-NutshellAiPanel -Session $Session
     if ($p -eq [IntPtr]::Zero) { throw "AI Assist panel is not open" }
-
     $stop = @{ Read = 0; Unknown = 1; Write = 2; Critical = 3 }
-    if ($PSBoundParameters.ContainsKey("Allowed")) {
-        [NutshellNative]::PostMessage($p, $script:WM_COMMAND,
-            [IntPtr](4030 + $stop[$Allowed]), [IntPtr]::Zero) | Out-Null
+
+    $now = Get-NutshellAiPolicy -Session $Session
+    if ($now.Auto -and -not $Auto) {
+        [NutshellNative]::PostMessage($p, $script:WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
         Start-Sleep -Milliseconds 300
     }
-    if ($PSBoundParameters.ContainsKey("Unattended")) {
-        $u = if ($Unattended -eq "Nothing") { -1 } else { $stop[$Unattended] }
-        [NutshellNative]::PostMessage($p, $script:WM_COMMAND,
-            [IntPtr](4040 + $u + 1), [IntPtr]::Zero) | Out-Null
+    [NutshellNative]::PostMessage($p, $script:WM_COMMAND,
+        [IntPtr](4030 + $stop[$Allowed]), [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 300
+    if ($Auto -and -not $now.Auto) {
+        [NutshellNative]::PostMessage($p, $script:WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
         Start-Sleep -Milliseconds 300
     }
 }
@@ -1528,7 +1553,7 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Get-NutshellLogText, Wait-NutshellLog, Wait-NutshellShell, Set-NutshellWindowSize, Get-NutshellWorkArea, `
     Get-NutshellTabStripRegion, Save-NutshellScreenshot, `
     Open-NutshellSecondTab, Select-NutshellTab, `
-    Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Set-NutshellAiPolicy, Set-NutshellTerminalFocus, `
+    Get-NutshellAiConfig, Get-NutshellAiKey, Get-NutshellAiPanel, Open-NutshellAiPanel, Send-NutshellAiPrompt, Get-NutshellAiPolicy, Set-NutshellAiPolicy, Set-NutshellTerminalFocus, `
     Wait-NutshellAiSendIdle, `
     Wait-NutshellDialog, Get-NutshellControl, Set-NutshellControlText, Get-NutshellControlText, Invoke-NutshellButton, `
     Select-NutshellCombo, Get-NutshellComboSelection, Set-NutshellCheckbox, Get-NutshellCheckbox, `

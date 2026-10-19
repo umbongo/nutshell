@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "ai_prompt.h"
 #include "chat_approval.h"
+#include "cmd_policy.h"
 
 /* Canned content for --ui-demo (Design-System Foundation, spec section 5,
  * "Verification harness"). Every state is built from the real
@@ -31,7 +32,12 @@
  * "all". "settings-debug" (2026-10-18) builds an empty conversation; the
  * win32 side opens Settings on the Debugging page over it, with debugging
  * ticked in memory only (nothing is saved). Also not part of "all": the
- * Settings window is modal and is not an AI panel state. */
+ * Settings window is modal and is not an AI panel state.
+ *
+ * "policy-auto" and "policy-compact" (2026-10-18, auto-approve button) reuse
+ * "executing" and "approval"; the win32 side seeds the tab's policy from
+ * ui_demo_policy() and, for "policy-compact", docks the panel at
+ * ui_demo_panel_width_px(). Neither is part of "all". */
 
 /* Build the canned conversation, approval queue(s) and terminal text for
  * one demo state.
@@ -67,6 +73,16 @@ int ui_demo_scrolls_to_top(const char *state);
 /* Every recognised state name, in a stable order ending with "all".
  * *count receives the array length. Never returns NULL. */
 const char *const *ui_demo_states(int *count);
+
+/* The policy the demo tab starts with: Write with Auto-approve on for
+ * "policy-auto", Write with it off for every other state and for NULL --
+ * so the gallery shows tinted, solid and blocked cells. Always clamped. */
+CmdPolicy ui_demo_policy(const char *state);
+
+/* Docked panel width in device pixels for `state` at `dpi`, or 0 for "use
+ * the normal default". Only "policy-compact" has one: ns_scale(260, dpi),
+ * narrow enough for the status line's compact labels. */
+int ui_demo_panel_width_px(const char *state, int dpi);
 
 /* The canned "thinking" block for the chat state's assistant reply.
  * Not part of AiMessage -- ai_chat.c keeps thinking text in a side table

@@ -1054,12 +1054,19 @@ int test_config_validate_review_fix_settings_clamp(void)
     ASSERT_EQ(s.ai_policy_default.allowed, (int)CMD_UNKNOWN);
     ASSERT_EQ(s.ai_policy_default.unattended, (int)CMD_UNKNOWN);
 
-    /* In-range values pass through untouched. */
+    /* A split marker rounds down to "button off"; a matched pair passes
+     * through untouched (spec 2026-10-18 section 2). */
     s.ai_policy_default.allowed = CMD_WRITE;
     s.ai_policy_default.unattended = CMD_READ;
     settings_validate(&s);
     ASSERT_EQ(s.ai_policy_default.allowed, (int)CMD_WRITE);
-    ASSERT_EQ(s.ai_policy_default.unattended, (int)CMD_READ);
+    ASSERT_EQ(s.ai_policy_default.unattended, POLICY_NONE);
+
+    s.ai_policy_default.allowed = CMD_WRITE;
+    s.ai_policy_default.unattended = CMD_WRITE;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_policy_default.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(s.ai_policy_default.unattended, (int)CMD_WRITE);
     TEST_END();
 }
 
@@ -1071,7 +1078,7 @@ int test_config_roundtrip_review_fix_settings(void)
     orig->settings.paste_confirm = 0;
     orig->settings.open_session_manager_at_start = 1;
     orig->settings.ai_policy_default.allowed = CMD_WRITE;
-    orig->settings.ai_policy_default.unattended = CMD_READ;
+    orig->settings.ai_policy_default.unattended = CMD_WRITE;
 
     int rc = config_save(orig, TMP_CFG);
     ASSERT_EQ(rc, 0);
@@ -1081,7 +1088,7 @@ int test_config_roundtrip_review_fix_settings(void)
     ASSERT_EQ(loaded->settings.paste_confirm, 0);
     ASSERT_EQ(loaded->settings.open_session_manager_at_start, 1);
     ASSERT_EQ(loaded->settings.ai_policy_default.allowed, (int)CMD_WRITE);
-    ASSERT_EQ(loaded->settings.ai_policy_default.unattended, (int)CMD_READ);
+    ASSERT_EQ(loaded->settings.ai_policy_default.unattended, (int)CMD_WRITE);
 
     config_free(orig);
     config_free(loaded);
@@ -1139,7 +1146,9 @@ int test_config_load_ignores_old_auto_approve_all_key(void)
 int test_config_policy_token_round_trips_every_pair(void)
 {
     TEST_BEGIN();
-    /* All 14 legal (allowed, unattended) pairs survive save/load. */
+    /* All 14 (allowed, unattended) pairs save and load; the 8 legal ones
+     * come back unchanged and the 6 split ones come back with the button
+     * off (spec 2026-10-18 section 2). */
     int pairs = 0;
     for (int a = 0; a < POLICY_STOP_COUNT; a++) {
         for (int u = POLICY_NONE; u <= a; u++) {
@@ -1153,11 +1162,12 @@ int test_config_policy_token_round_trips_every_pair(void)
 
             Config *loaded = config_load(TMP_CFG);
             ASSERT_NOT_NULL(loaded);
+            int want_u = (u == POLICY_NONE || u == a) ? u : POLICY_NONE;
             if (loaded->settings.ai_policy_default.allowed != a ||
-                loaded->settings.ai_policy_default.unattended != u) {
-                printf("  {%d,%d} round-tripped as {%d,%d}\n", a, u,
+                loaded->settings.ai_policy_default.unattended != want_u) {
+                printf("  {%d,%d} round-tripped as {%d,%d}, expected {%d,%d}\n", a, u,
                        loaded->settings.ai_policy_default.allowed,
-                       loaded->settings.ai_policy_default.unattended);
+                       loaded->settings.ai_policy_default.unattended, a, want_u);
                 _tf_local_fail = 1;
             }
             config_free(orig);
@@ -1176,7 +1186,7 @@ int test_config_save_writes_policy_key_and_neither_old_key(void)
     Config *orig = config_new_default();
     ASSERT_NOT_NULL(orig);
     orig->settings.ai_policy_default.allowed = CMD_WRITE;
-    orig->settings.ai_policy_default.unattended = CMD_READ;
+    orig->settings.ai_policy_default.unattended = CMD_WRITE;
     int rc = config_save(orig, TMP_CFG);
     ASSERT_EQ(rc, 0);
 
@@ -1187,7 +1197,7 @@ int test_config_save_writes_policy_key_and_neither_old_key(void)
     buf[n] = '\0';
     fclose(f);
 
-    ASSERT_TRUE(strstr(buf, "\"ai_policy_default\": \"write/read\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"ai_policy_default\": \"write/write\"") != NULL);
     /* Neither superseded key is written back. */
     ASSERT_NULL(strstr(buf, "ai_auto_approve_mode"));
     ASSERT_NULL(strstr(buf, "ai_auto_approve_default"));
@@ -1283,13 +1293,13 @@ int test_config_load_policy_key_wins_over_both_old_keys(void)
     fputs("{\"settings\": {\"font\": \"Consolas\", "
           "\"ai_auto_approve_default\": 1, "
           "\"ai_auto_approve_mode\": \"all\", "
-          "\"ai_policy_default\": \"write/unknown\"}, \"profiles\": []}", f);
+          "\"ai_policy_default\": \"write/write\"}, \"profiles\": []}", f);
     fclose(f);
 
     Config *cfg = config_load(TMP_CFG);
     ASSERT_NOT_NULL(cfg);
     ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_WRITE);
-    ASSERT_EQ(cfg->settings.ai_policy_default.unattended, (int)CMD_UNKNOWN);
+    ASSERT_EQ(cfg->settings.ai_policy_default.unattended, (int)CMD_WRITE);
     config_free(cfg);
     remove(TMP_CFG);
     TEST_END();
@@ -1345,6 +1355,89 @@ int test_config_load_inverted_policy_token_clamps_down(void)
     ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_WRITE);
     ASSERT_EQ(cfg->settings.ai_policy_default.unattended, (int)CMD_WRITE);
     config_free(cfg);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ============================================================
+ * ai_policy_default after the Auto-approve button
+ * (2026-10-18-ai-auto-approve-button-design.md section 2)
+ * ============================================================ */
+
+static Config *load_policy_token(const char *token)
+{
+    char json[256];
+    snprintf(json, sizeof(json),
+             "{\"settings\": {\"font\": \"Consolas\", "
+             "\"ai_policy_default\": \"%s\"}, \"profiles\": []}", token);
+    FILE *f = test_fopen_private(TMP_CFG);
+    if (!f) return NULL;
+    fputs(json, f);
+    fclose(f);
+    return config_load(TMP_CFG);
+}
+
+int test_config_load_split_policy_token_turns_auto_off(void)
+{
+    TEST_BEGIN();
+    Config *cfg = load_policy_token("write/read");   /* an older exe's split */
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_WRITE);
+        ASSERT_EQ(cfg->settings.ai_policy_default.unattended, POLICY_NONE);
+        config_free(cfg);
+    }
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_matched_policy_token_is_auto_on(void)
+{
+    TEST_BEGIN();
+    Config *cfg = load_policy_token("write/write");
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_WRITE);
+        ASSERT_EQ(cfg->settings.ai_policy_default.unattended, (int)CMD_WRITE);
+        config_free(cfg);
+    }
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_load_read_none_policy_token_unchanged(void)
+{
+    TEST_BEGIN();
+    Config *cfg = load_policy_token("read/none");
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(cfg->settings.ai_policy_default.allowed, (int)CMD_READ);
+        ASSERT_EQ(cfg->settings.ai_policy_default.unattended, POLICY_NONE);
+        config_free(cfg);
+    }
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_save_after_load_writes_the_normalised_token(void)
+{
+    TEST_BEGIN();
+    Config *cfg = load_policy_token("critical/unknown");
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        ASSERT_EQ(config_save(cfg, TMP_CFG), 0);
+        config_free(cfg);
+        FILE *f = fopen(TMP_CFG, "r");
+        ASSERT_NOT_NULL(f);
+        if (f) {
+            char buf[8192];
+            size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+            buf[n] = '\0';
+            fclose(f);
+            ASSERT_TRUE(strstr(buf, "\"ai_policy_default\": \"critical/none\"") != NULL);
+            ASSERT_NULL(strstr(buf, "critical/unknown"));
+        }
+    }
     remove(TMP_CFG);
     TEST_END();
 }

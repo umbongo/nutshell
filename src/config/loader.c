@@ -772,7 +772,14 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
          * deliberately, in Settings or in the status line.
          *
          * Save writes "ai_policy_default" only; neither old key is written
-         * back. */
+         * back.
+         *
+         * Since 2026-10-18 (2026-10-18-ai-auto-approve-button-design.md
+         * section 2) cmd_policy_from_token() rounds a split marker down:
+         * an older exe's "write/read" loads as "write/none" (Auto-approve
+         * off) and is written back that way on the next save. Lossy and
+         * one-way, by the maintainer's decision. The legacy migrations
+         * above land on "read/none" or "read/read", both legal. */
         if ((sv = json_obj_str(jset, "ai_policy_default"))) {
             cmd_policy_from_token(sv, &s->ai_policy_default);
         } else {

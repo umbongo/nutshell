@@ -5,6 +5,8 @@
 #include "text_runs.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include "ai_panel_layout.h"
+#include "ns_scale.h"
 #include <string.h>
 
 /* ===========================================================================
@@ -24,26 +26,25 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
     return n;
 }
 
-/* Fourteen since 2026-10-18 added "settings-debug" (Settings opened on the
- * Debugging page), thirteen since 2026-10-13 added "cmddetail" (the command details popup
- * demo), twelve since 2026-09-24 added "thinking" (the 50-line scrollable
- * Thinking box demo). "all" stays last and still means the union of the
- * panel states, which neither "local" (v1.2.1, spec
- * 2026-09-22-local-shell-design.md section 5) nor "thinking" is part of:
- * "local" only swaps the terminal transcript, "thinking" is "chat" with a
- * longer reasoning block "all" doesn't need a second copy of. */
+/* "all" stays last and still means the union of the panel states. "local"
+ * (v1.2.1, spec 2026-09-22-local-shell-design.md section 5) only swaps the
+ * terminal transcript; "thinking" is "chat" with a longer reasoning block;
+ * "cmddetail", "settings-debug", "policy-auto" and "policy-compact" reuse
+ * or swap content too. None of those is part of "all". */
 int test_ui_demo_states_list_ends_in_all(void)
 {
     TEST_BEGIN();
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 14);
+    ASSERT_EQ(count, 16);
     ASSERT_STR_EQ(states[count - 1], "all");
-    ASSERT_STR_EQ(states[count - 2], "settings-debug");
-    ASSERT_STR_EQ(states[count - 3], "cmddetail");
-    ASSERT_STR_EQ(states[count - 4], "thinking");
-    ASSERT_STR_EQ(states[count - 5], "local");
+    ASSERT_STR_EQ(states[count - 2], "policy-compact");
+    ASSERT_STR_EQ(states[count - 3], "policy-auto");
+    ASSERT_STR_EQ(states[count - 4], "settings-debug");
+    ASSERT_STR_EQ(states[count - 5], "cmddetail");
+    ASSERT_STR_EQ(states[count - 6], "thinking");
+    ASSERT_STR_EQ(states[count - 7], "local");
     TEST_END();
 }
 
@@ -561,5 +562,76 @@ int test_ui_demo_chat_drag_across_items_golden(void)
     chat_msg_list_clear(&l);
     ai_conv_reset(conv);
     free(conv);
+    TEST_END();
+}
+
+/* 2026-10-18 auto-approve: "policy-auto" is "executing" (a running card)
+ * with the demo tab's policy at Write and Auto-approve on. */
+int test_ui_demo_policy_auto_is_executing_with_auto_on(void)
+{
+    TEST_BEGIN();
+    AiConversation conv, conv2;
+    ApprovalQueue approval, approval2, ea, ea2;
+    ASSERT_TRUE(ui_demo_state_valid("policy-auto"));
+    ASSERT_EQ(ui_demo_build("policy-auto", &conv, &approval, &approval2, NULL, 0), 0);
+    ASSERT_EQ(ui_demo_build("executing", &conv2, &ea, &ea2, NULL, 0), 0);
+    ASSERT_EQ(conv.msg_count, conv2.msg_count);
+    ASSERT_EQ(approval.count, ea.count);
+    ASSERT_EQ(count_status(&approval, APPROVE_EXECUTING), 1);
+    ASSERT_EQ(approval2.count, 0);
+    CmdPolicy p = ui_demo_policy("policy-auto");
+    ASSERT_EQ(p.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(p.unattended, (int)CMD_WRITE);
+    ASSERT_TRUE(!ui_demo_scrolls_to_top("policy-auto"));
+    TEST_END();
+}
+
+/* "policy-compact" is "approval" in a panel narrow enough for R U W C. */
+int test_ui_demo_policy_compact_matches_approval(void)
+{
+    TEST_BEGIN();
+    AiConversation conv, conv2;
+    ApprovalQueue approval, approval2, aa, aa2;
+    ASSERT_TRUE(ui_demo_state_valid("policy-compact"));
+    ASSERT_EQ(ui_demo_build("policy-compact", &conv, &approval, &approval2, NULL, 0), 0);
+    ASSERT_EQ(ui_demo_build("approval", &conv2, &aa, &aa2, NULL, 0), 0);
+    ASSERT_EQ(conv.msg_count, conv2.msg_count);
+    ASSERT_EQ(approval.count, aa.count);
+    ASSERT_TRUE(!ui_demo_scrolls_to_top("policy-compact"));
+    TEST_END();
+}
+
+int test_ui_demo_policy_for_other_states_is_write_off(void)
+{
+    TEST_BEGIN();
+    static const char *const others[4] = { "chat", "approval", "all", "policy-compact" };
+    for (int i = 0; i < 4; i++) {
+        CmdPolicy p = ui_demo_policy(others[i]);
+        ASSERT_EQ(p.allowed, (int)CMD_WRITE);
+        ASSERT_EQ(p.unattended, POLICY_NONE);
+    }
+    CmdPolicy n = ui_demo_policy(NULL);
+    ASSERT_EQ(n.allowed, (int)CMD_WRITE);
+    ASSERT_EQ(n.unattended, POLICY_NONE);
+    TEST_END();
+}
+
+int test_ui_demo_panel_width_only_for_policy_compact(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ui_demo_panel_width_px("policy-compact", 96), 260);
+    ASSERT_EQ(ui_demo_panel_width_px("policy-compact", 192), 520);
+    ASSERT_EQ(ui_demo_panel_width_px("policy-auto", 96), 0);
+    ASSERT_EQ(ui_demo_panel_width_px("all", 96), 0);
+    ASSERT_EQ(ui_demo_panel_width_px(NULL, 96), 0);
+    /* With caption-font widths measured near enough at 96 DPI (full pill
+     * 200, compact 96, "Auto-approve" 68, "Auto" 24, no meter), that width
+     * lands on the compact tier, not the clipped one. */
+    AiStatusMeasure m = { 200, 96, 68, 24, 0 };
+    NsRect status = { 0, 0, ui_demo_panel_width_px("policy-compact", 96), 28 };
+    AiStatusLayout l;
+    ai_status_layout(status, 96, &m, &l);
+    ASSERT_EQ(l.compact, 1);
+    ASSERT_EQ(l.tier, AI_STATUS_TIER_COMPACT);
     TEST_END();
 }
