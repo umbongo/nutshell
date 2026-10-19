@@ -127,7 +127,7 @@ static void term_reflow_buffer(
     int cur_new_col = 0;
     int new_cursor_row = 0;
     int new_cursor_col = 0;
-    bool cursor_at_content_end = false;
+    bool cursor_after_full_row = false;
 
     /* Convert screen-relative cursor to buffer-absolute logical index */
     int old_screen_top = (old_count >= old_rows) ? (old_count - old_rows) : 0;
@@ -179,7 +179,7 @@ static void term_reflow_buffer(
         if (i == cursor_logical && cur_col >= cell_limit) {
             new_cursor_row = cur_new_row;
             new_cursor_col = cur_new_col;
-            cursor_at_content_end = (cur_col == cell_limit);
+            cursor_after_full_row = (cur_new_col == new_cols);
         }
     }
 
@@ -228,14 +228,15 @@ static void term_reflow_buffer(
     if (new_cursor_row < 0)        new_cursor_row = 0;
     if (new_cursor_row >= new_rows) new_cursor_row = new_rows - 1;
     if (new_cursor_col < 0)        new_cursor_col = 0;
-    /* The pending wrap survives a resize: a cursor exactly at its row's
-     * content end (distance 0, whether or not it was in the old deferred-wrap
-     * column) whose row now ends exactly at new_cols keeps col == new_cols,
-     * so the next character still wraps instead of overwriting the last
-     * cell (spec section 2 identity). A cursor past the content, or any other
-     * column past the row, is clamped: that cell is blank. */
+    /* The clamp never lands on a content cell. A cursor at or past its row's
+     * content (any distance) whose row, after reflow, ends exactly at new_cols
+     * keeps col == new_cols: the pending wrap survives the resize, so the next
+     * character wraps instead of overwriting the last cell (spec section 2
+     * identity). For a cursor past the content the distance is lost there. Any
+     * other column past the row is clamped, and then the content ends before
+     * that cell, so it is blank. */
     if (new_cursor_col >= new_cols &&
-        !(cursor_at_content_end && new_cursor_col == new_cols))
+        !(cursor_after_full_row && new_cursor_col == new_cols))
         new_cursor_col = new_cols - 1;
 
     *out_lines      = new_lines;

@@ -285,6 +285,7 @@ int test_term_resize_cursor_edge(void) {
     // The same narrowing straight from the deferred-wrap column gives the same
     // result: cursor at col 5 == new cols, and still no blank third row.
     t = term_init(10, 10, 100);
+    ASSERT_NOT_NULL(t);
     term_process(t, "0123456789", 10);
     ASSERT_EQ(t->cursor.col, 10);
     term_resize(t, 10, 5);

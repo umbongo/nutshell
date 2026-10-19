@@ -225,12 +225,47 @@ int test_reflow_cursor_at_content_end_keeps_pending_wrap_when_narrowed(void)
 
     ASSERT_EQ(t->cursor.row, 0);
     ASSERT_EQ(t->cursor.col, 10);
+    ASSERT_EQ(screen_row(t, 1)->len, 0);
+    ASSERT_FALSE(screen_row(t, 1)->wrapped);
     feed(t, "X");
     char text[64];
     screen_text_at(t, 0, text, sizeof(text));
     ASSERT_STR_EQ(text, "0123456789");
     screen_text_at(t, 1, text, sizeof(text));
     ASSERT_STR_EQ(text, "X");
+    ASSERT_TRUE(screen_row(t, 1)->wrapped);
+    ASSERT_EQ(t->cursor.row, 1);
+    ASSERT_EQ(t->cursor.col, 1);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* A cursor past the content (here 5 columns past it, after `ESC [ 5 C`) on a
+ * row whose content ends exactly at the new width must not be clamped onto
+ * the last content cell: it keeps the pending wrap (col == new_cols), the
+ * distance is lost, and the next character wraps with nothing overwritten. */
+int test_reflow_cursor_past_content_at_exact_width_does_not_overwrite(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 20, 100);
+    ASSERT_NOT_NULL(t);
+    feed(t, "0123456789\x1b[5C");
+    ASSERT_EQ(t->cursor.row, 0);
+    ASSERT_EQ(t->cursor.col, 15);
+
+    term_resize(t, 10, 10);
+
+    ASSERT_EQ(t->cursor.row, 0);
+    ASSERT_EQ(t->cursor.col, 10);
+    ASSERT_EQ(screen_row(t, 1)->len, 0);
+    feed(t, "X");
+    char text[64];
+    screen_text_at(t, 0, text, sizeof(text));
+    ASSERT_STR_EQ(text, "0123456789");
+    screen_text_at(t, 1, text, sizeof(text));
+    ASSERT_STR_EQ(text, "X");
+    ASSERT_TRUE(screen_row(t, 1)->wrapped);
 
     term_free(t);
     TEST_END();
