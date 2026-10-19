@@ -11,9 +11,38 @@ static const char *const k_stop_labels[POLICY_STOP_COUNT + 1] = {
     "Nothing", "Read", "Unknown", "Write", "Critical"
 };
 
+static const char *const k_stop_short[POLICY_STOP_COUNT] = { "R", "U", "W", "C" };
+
+/* Tooltip text, spec 2026-10-18 section 4, word for word. */
+static const char *const k_cell_tips[POLICY_STOP_COUNT] = {
+    "Read: commands that only inspect, such as ls, cat or git status. "
+    "Click to make this the highest level the assistant may run; anything "
+    "above it is blocked.",
+    "Unknown: commands the classifier cannot place, including wrappers such "
+    "as sh -c or xargs that hide what they run. Click to allow up to this "
+    "level; Write and Critical stay blocked.",
+    "Write: commands that change files or state, such as rm, mv or apt "
+    "install. Click to allow up to this level; Critical stays blocked.",
+    "Critical: commands that can destroy data or the system, such as "
+    "rm -rf / or mkfs. Click to allow everything. Use with care."
+};
+static const char k_auto_suffix[] =
+    " With Auto-approve on, commands up to this level run without asking.";
+
 static int stop_in_range(int stop)
 {
     return stop >= POLICY_NONE && stop < POLICY_STOP_COUNT;
+}
+
+/* Range only: `allowed` into 0..3, `unattended` into POLICY_NONE..allowed.
+ * Keeps a split. The gate and the test-only setters use this so a split
+ * policy a test hands them is judged exactly as given. */
+static void clamp_range(CmdPolicy *p)
+{
+    if (p->allowed < CMD_READ) p->allowed = CMD_READ;
+    if (p->allowed > POLICY_STOP_COUNT - 1) p->allowed = POLICY_STOP_COUNT - 1;
+    if (p->unattended < POLICY_NONE) p->unattended = POLICY_NONE;
+    if (p->unattended > p->allowed) p->unattended = p->allowed;
 }
 
 CmdPolicy cmd_policy_default(void)
@@ -27,24 +56,62 @@ CmdPolicy cmd_policy_default(void)
 void cmd_policy_clamp(CmdPolicy *p)
 {
     if (!p) return;
-    if (p->allowed < CMD_READ) p->allowed = CMD_READ;
-    if (p->allowed > POLICY_STOP_COUNT - 1) p->allowed = POLICY_STOP_COUNT - 1;
-    if (p->unattended < POLICY_NONE) p->unattended = POLICY_NONE;
-    if (p->unattended > p->allowed) p->unattended = p->allowed;
+    clamp_range(p);
+    if (p->unattended != POLICY_NONE && p->unattended != p->allowed)
+        p->unattended = POLICY_NONE;     /* a split rounds down: button off */
 }
 
 void cmd_policy_set_allowed(CmdPolicy *p, int stop)
 {
     if (!p) return;
+    cmd_policy_clamp(p);
+    int on = (p->unattended != POLICY_NONE);
     p->allowed = stop;
-    cmd_policy_clamp(p);   /* clamps the ceiling, then drags unattended down */
+    p->unattended = POLICY_NONE;
+    clamp_range(p);                      /* clamps the level into 0..3 */
+    if (on) p->unattended = p->allowed;
 }
 
 void cmd_policy_set_unattended(CmdPolicy *p, int stop)
 {
     if (!p) return;
     p->unattended = stop;
+    clamp_range(p);
+}
+
+void cmd_policy_set_auto(CmdPolicy *p, int on)
+{
+    if (!p) return;
     cmd_policy_clamp(p);
+    p->unattended = on ? p->allowed : POLICY_NONE;
+}
+
+int cmd_policy_auto_on(CmdPolicy p)
+{
+    cmd_policy_clamp(&p);
+    return p.unattended != POLICY_NONE;
+}
+
+int cmd_policy_needs_confirm(CmdPolicy cur, CmdPolicy next)
+{
+    cmd_policy_clamp(&cur);
+    cmd_policy_clamp(&next);
+    int next_all = next.allowed == CMD_CRITICAL && next.unattended == CMD_CRITICAL;
+    int cur_all  = cur.allowed == CMD_CRITICAL && cur.unattended == CMD_CRITICAL;
+    return next_all && !cur_all;
+}
+
+unsigned cmd_policy_status_word(CmdPolicy p)
+{
+    cmd_policy_clamp(&p);
+    return (unsigned)p.allowed | (p.unattended != POLICY_NONE ? 0x100u : 0u);
+}
+
+CmdPolicy cmd_policy_attended(CmdPolicy p)
+{
+    cmd_policy_clamp(&p);
+    p.unattended = POLICY_NONE;
+    return p;
 }
 
 void cmd_policy_cycle_allowed(CmdPolicy *p)
@@ -59,7 +126,7 @@ void cmd_policy_cycle_allowed(CmdPolicy *p)
 void cmd_policy_cycle_unattended(CmdPolicy *p)
 {
     if (!p) return;
-    cmd_policy_clamp(p);
+    clamp_range(p);
     int next = p->unattended + 1;
     if (next > p->allowed) next = POLICY_NONE;
     cmd_policy_set_unattended(p, next);
@@ -67,14 +134,14 @@ void cmd_policy_cycle_unattended(CmdPolicy *p)
 
 unsigned cmd_policy_unattended_mask(CmdPolicy p)
 {
-    cmd_policy_clamp(&p);
+    clamp_range(&p);
     if (p.unattended < CMD_READ) return 0u;
     return (1u << (unsigned)(p.unattended + 1)) - 1u;
 }
 
 int cmd_policy_blocks(CmdPolicy p, CmdSafetyLevel worst)
 {
-    cmd_policy_clamp(&p);
+    clamp_range(&p);
     return (int)worst > p.allowed;
 }
 
@@ -94,6 +161,52 @@ const char *cmd_policy_stop_label(int stop)
 {
     if (!stop_in_range(stop)) stop = POLICY_NONE;
     return k_stop_labels[stop + 1];
+}
+
+const char *cmd_policy_stop_short(int stop)
+{
+    if (stop < CMD_READ || stop > POLICY_STOP_COUNT - 1) return "";
+    return k_stop_short[stop];
+}
+
+const char *cmd_policy_auto_label(int compact)
+{
+    return compact ? "Auto" : "Auto-approve";
+}
+
+int cmd_policy_cell_tip(int level, int compact, int auto_on, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    if (level < CMD_READ || level > POLICY_STOP_COUNT - 1) {
+        buf[0] = '\0';
+        return 0;
+    }
+    snprintf(buf, cap, "%s%s%s%s",
+             compact ? k_stop_short[level] : "",
+             compact ? " = " : "",
+             k_cell_tips[level],
+             auto_on ? k_auto_suffix : "");
+    return (int)strlen(buf);
+}
+
+int cmd_policy_auto_tip(int on, int allowed, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    if (allowed < CMD_READ) allowed = CMD_READ;
+    if (allowed > POLICY_STOP_COUNT - 1) allowed = POLICY_STOP_COUNT - 1;
+    const char *lvl = cmd_policy_stop_label(allowed);
+    if (on)
+        snprintf(buf, cap,
+                 "Auto-approve: on. Commands up to %s run without asking; "
+                 "anything above is blocked. Keep this tab shown: commands "
+                 "proposed while it is hidden wait for your approval. "
+                 "Click to turn off.", lvl);
+    else
+        snprintf(buf, cap,
+                 "Auto-approve: off. Click to run commands up to the %s "
+                 "level without asking. Anything above %s stays blocked.",
+                 lvl, lvl);
+    return (int)strlen(buf);
 }
 
 int cmd_policy_stop_from_name(const char *name, int *out)
@@ -149,7 +262,7 @@ int cmd_policy_from_token(const char *token, CmdPolicy *out)
 int cmd_policy_caption(CmdPolicy p, char *buf, size_t cap)
 {
     if (!buf || cap == 0) return 0;
-    cmd_policy_clamp(&p);
+    clamp_range(&p);
     if (p.unattended == POLICY_NONE) {
         snprintf(buf, cap, "allowed to %s, nothing runs unattended",
                  cmd_policy_stop_label(p.allowed));
@@ -157,35 +270,6 @@ int cmd_policy_caption(CmdPolicy p, char *buf, size_t cap)
         snprintf(buf, cap, "allowed to %s, %s runs unattended",
                  cmd_policy_stop_label(p.allowed),
                  cmd_policy_stop_label(p.unattended));
-    }
-    return (int)strlen(buf);
-}
-
-int cmd_policy_tip(CmdPolicy p, int band, int stop, char *buf, size_t cap)
-{
-    if (!buf || cap == 0) return 0;
-    cmd_policy_clamp(&p);
-    if (stop < CMD_READ || stop > POLICY_STOP_COUNT - 1) {
-        buf[0] = '\0';
-        return 0;
-    }
-
-    const char *label = cmd_policy_stop_label(stop);
-
-    if (band == POLICY_BAND_ALLOWED) {
-        if (stop > p.allowed)
-            snprintf(buf, cap, "Allow %s commands - they still ask first.", label);
-        else if (stop < p.allowed)
-            snprintf(buf, cap, "Block anything above %s.", label);
-        else
-            snprintf(buf, cap, "Commands above %s are blocked.", label);
-    } else {
-        if (stop > p.allowed)
-            snprintf(buf, cap, "Allow %s first to run it unattended.", label);
-        else if (stop == p.unattended)
-            snprintf(buf, cap, "Stop running anything unattended.");
-        else
-            snprintf(buf, cap, "Run %s and below without asking.", label);
     }
     return (int)strlen(buf);
 }

@@ -20,9 +20,9 @@ Invoke-AiCase "ai_runs_read_command_unattended" {
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     Open-NutshellAiPanel -Session $s | Out-Null
-    # Ceiling stays at Read (the default); move only the unattended marker,
-    # so a READ command runs with no card to click.
-    Set-NutshellAiPolicy -Session $s -Unattended Read
+    # Level stays at Read (the default); turn Auto-approve on, so a READ
+    # command runs with no card to click.
+    Set-NutshellAiPolicy -Session $s -Allowed Read -Auto
     $marker = "AI_PONG_" + (Get-Random -Minimum 100 -Maximum 999)
     Send-NutshellAiPrompt -Session $s -Text "Run exactly this shell command and nothing else, no explanation: echo $marker"
     $ok = Wait-NutshellLog -Session $s -Pattern ("(?m)^" + $marker + "\s*$") -TimeoutSec 90
@@ -42,7 +42,7 @@ Invoke-AiCase "ai_commands_run_one_at_a_time" {
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     Open-NutshellAiPanel -Session $s | Out-Null
-    Set-NutshellAiPolicy -Session $s -Unattended Read
+    Set-NutshellAiPolicy -Session $s -Allowed Read -Auto
     Send-NutshellAiPrompt -Session $s -Text ("Run these two commands as two separate EXEC blocks, in this order, " +
         "nothing else and no explanation: sleep 6 && echo FIRST_DONE ; then: echo SECOND_DONE")
     $ok = Wait-NutshellLog -Session $s -Pattern '(?m)^SECOND_DONE\s*$' -TimeoutSec 90
@@ -68,9 +68,8 @@ Invoke-AiCase "ai_write_command_held_then_runs_after_allow" {
     Start-NutshellLogging -Session $s | Out-Null
     Wait-NutshellShell -Session $s
     $p = Open-NutshellAiPanel -Session $s
-    # Read runs unattended, but the ceiling is still Read -- so a WRITE
-    # command must be held, not run.
-    Set-NutshellAiPolicy -Session $s -Unattended Read
+    # Auto-approve on at Read -- so a WRITE command must be held, not run.
+    Set-NutshellAiPolicy -Session $s -Allowed Read -Auto
     $file = "/tmp/nutshell_it_blocked_" + (Get-Random -Minimum 100 -Maximum 999)
     Send-NutshellAiPrompt -Session $s -Text "Run exactly this shell command and nothing else, no explanation: touch $file"
     Start-Sleep -Seconds 45
@@ -83,12 +82,14 @@ Invoke-AiCase "ai_write_command_held_then_runs_after_allow" {
     Assert-True (Wait-NutshellLog -Session $s -Pattern '(?m)^BLOCK_(OK|FAIL)\s*$' -TimeoutSec 8) "the existence check never reached the shell"
     Assert-True ((Get-NutshellLogText -Session $s) -notmatch '(?m)^BLOCK_FAIL\s*$') "the file exists: the write command was executed"
 
-    # Bug 2 regression: raise the ceiling to Write and run the held command
+    # Bug 2 regression: raise the level to Write and run the held command
     # via "Run N selected" (IDC_CMD_APPROVE_SEL) -- before the fix, the
     # write-only batch was never queued (only read commands were), so
     # queued_count stayed 0 and nothing ran even after unblocking.
-    # Note the ceiling goes to Write, not Critical: the new control can
-    # allow writes while still refusing outage-class commands outright.
+    # -Allowed Write without -Auto turns the button off, so the card's
+    # "Run selected" step still does the running (spec 2026-10-18 s7). The
+    # level goes to Write, not Critical: writes allowed, outage-class
+    # commands still refused outright.
     Set-NutshellAiPolicy -Session $s -Allowed Write
     Start-Sleep -Seconds 1
     [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]3045, [IntPtr]::Zero) | Out-Null   # IDC_CMD_APPROVE_SEL
@@ -107,8 +108,8 @@ Invoke-AiCase "ai_prompt_while_approval_pending" {
     param($s)
     # Pending command batches (docs/superpowers/specs/
     # 2026-09-09-pending-command-batches.md, rule 1): a card must never
-    # block the input. The policy stays at its default (read-only, nothing
-    # unattended) so the first
+    # block the input. The policy stays at its default (read-only, Auto-approve
+    # off) so the first
     # reply's command lands in a pending card; a second prompt must still
     # get a normal reply while that card sits there, and the card must
     # still be actionable afterwards.
@@ -147,4 +148,58 @@ Invoke-Case "ai_panel_opens_without_key" @{ ai_api_key = "" } {
     Save-NutshellScreenshot -Session $s -Path $path | Out-Null
     Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: ai_panel_no_key.png"
     "panel opened with no key (hwnd $p), no dialog"
+}
+
+# ---- Auto-approve at Critical asks first (gate tier, no key) ------------------
+# docs/superpowers/specs/2026-10-18-ai-auto-approve-button-design.md section 2:
+# turning the button on while the level is Critical shows a Yes/No box; No
+# leaves the policy as it was; a second toggle while the box is up is a no-op
+# (Review Focus 5); Yes applies it. Key-free like ai_panel_opens_without_key:
+# the policy ids and WM_AI_GET_POLICY are handled in every panel state.
+Invoke-Case "ai_auto_approve_critical_asks_first" @{ ai_api_key = "" } {
+    param($s)
+    Send-NutshellCommand -Session $s -Id 2020 -SettleMs 1500      # IDM_VIEW_AI_CHAT
+    $p = Get-NutshellAiPanel -Session $s
+    Assert-True ($p -ne [IntPtr]::Zero) "AI Assist panel did not open"
+
+    Set-NutshellAiPolicy -Session $s -Allowed Critical             # button off: no box
+    $before = Get-NutshellAiPolicy -Session $s
+    Assert-True ($before.Allowed -eq "Critical" -and -not $before.Auto) "setup: expected Critical with Auto-approve off, got $($before.Allowed)/$($before.Auto)"
+    Assert-True ((Wait-NutshellDialog -Session $s -Title "Auto-approve" -TimeoutSec 1) -eq [IntPtr]::Zero) "a confirmation appeared for Critical with the button off"
+
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null   # IDC_CHAT_AUTOAPPROVE
+    $dlg = Wait-NutshellDialog -Session $s -Title "Auto-approve" -TimeoutSec 5
+    Assert-True ($dlg -ne [IntPtr]::Zero) "no confirmation box for Auto-approve at Critical"
+
+    # A second toggle while the box is up must be a no-op: still one box, and
+    # the policy (read through a sent message, answered inside the modal loop)
+    # has not moved.
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 800
+    $boxes = @((Get-NutshellWindows -Session $s) | Where-Object { $_ -match "`t#32770`tAuto-approve" })
+    Assert-True ($boxes.Count -eq 1) "expected one confirmation box, found $($boxes.Count)"
+    $during = Get-NutshellAiPolicy -Session $s
+    Assert-True ($during.Allowed -eq "Critical" -and -not $during.Auto) "policy moved while the box was still up: $($during.Allowed)/$($during.Auto)"
+    Save-NutshellScreenshot -Session $s -Path (Join-Path $Artifacts "ai_auto_approve_confirm.png") | Out-Null
+
+    Close-NutshellDialog -Dialog $dlg -Button No
+    Start-Sleep -Milliseconds 500
+    $after = Get-NutshellAiPolicy -Session $s
+    Assert-True ($after.Allowed -eq "Critical" -and -not $after.Auto) "No changed the policy: now $($after.Allowed)/$($after.Auto)"
+    Assert-True ((Wait-NutshellDialog -Session $s -Title "Auto-approve" -TimeoutSec 1) -eq [IntPtr]::Zero) "a second box appeared after No"
+
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4015, [IntPtr]::Zero) | Out-Null
+    $dlg2 = Wait-NutshellDialog -Session $s -Title "Auto-approve" -TimeoutSec 5
+    Assert-True ($dlg2 -ne [IntPtr]::Zero) "no confirmation box the second time"
+    Close-NutshellDialog -Dialog $dlg2 -Button Yes
+    Start-Sleep -Milliseconds 500
+    $on = Get-NutshellAiPolicy -Session $s
+    Assert-True ($on.Allowed -eq "Critical" -and $on.Auto) "Yes did not turn Auto-approve on: $($on.Allowed)/$($on.Auto)"
+
+    # The retired unattended id does nothing.
+    [NutshellNative]::PostMessage($p, $WM_COMMAND, [IntPtr]4040, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 300
+    $still = Get-NutshellAiPolicy -Session $s
+    Assert-True ($still.Allowed -eq "Critical" -and $still.Auto) "retired id 4040 changed the policy: $($still.Allowed)/$($still.Auto)"
+    "Critical + Auto-approve asked first; No kept Critical/off, a second toggle during the box was ignored, Yes turned it on, 4040 is inert"
 }

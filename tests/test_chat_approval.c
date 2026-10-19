@@ -9,6 +9,7 @@
 #include "chat_approval.h"
 #include "cmd_policy.h"
 #include "ai_prompt.h"
+#include "cmd_batch.h"
 #include <string.h>
 
 int test_approval_init(void) {
@@ -839,5 +840,51 @@ int test_approval_add_zeroes_note(void) {
     /* Reset clears them. */
     chat_approval_reset(&q);
     ASSERT_STR_EQ(q.entries[0].note, "");
+    TEST_END();
+}
+
+/* 2026-10-18 auto-approve spec, section 6: a reply for a tab that is not
+ * displayed builds its batch under the session's policy with the button
+ * forced off, so nothing in it is approved on arrival -- even when the
+ * session itself would run everything. */
+int test_approval_attended_policy_approves_nothing_on_arrival(void) {
+    TEST_BEGIN();
+    static const char *const cmds[4] = {
+        "ls -la", "frobnicate", "mv a b", "rm -rf /tmp"   /* R, U, W, C */
+    };
+    CmdPolicy session = cmd_policy_default();
+    cmd_policy_set_allowed(&session, CMD_CRITICAL);
+    cmd_policy_set_auto(&session, 1);
+    ASSERT_EQ(session.unattended, (int)CMD_CRITICAL);
+
+    /* The session's own policy would approve all four. */
+    ApprovalQueue live;
+    chat_approval_init(&live);
+    live.policy = session;
+    for (int i = 0; i < 4; i++)
+        ASSERT_TRUE(chat_approval_add_session(&live, cmds[i], CMD_PLATFORM_LINUX, 0) >= 0);
+    for (int i = 0; i < live.count; i++)
+        ASSERT_EQ((int)live.entries[i].status, (int)APPROVE_APPROVED);
+
+    /* The background path: cmd_batch_add() under the attended copy. */
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    ApprovalQueue defaults;
+    chat_approval_init(&defaults);
+    defaults.policy = cmd_policy_attended(session);
+    ASSERT_EQ(defaults.policy.allowed, (int)CMD_CRITICAL);
+    ASSERT_EQ(defaults.policy.unattended, POLICY_NONE);
+    CmdBatch *b = cmd_batch_add(&set, &defaults, NULL);
+    ASSERT_NOT_NULL(b);
+    if (b) {
+        for (int i = 0; i < 4; i++)
+            ASSERT_TRUE(chat_approval_add_session(&b->q, cmds[i], CMD_PLATFORM_LINUX, 0) >= 0);
+        ASSERT_EQ(b->q.count, 4);
+        for (int i = 0; i < b->q.count; i++)
+            ASSERT_EQ((int)b->q.entries[i].status, (int)APPROVE_PENDING);
+        ASSERT_EQ(chat_approval_next_approved(&b->q), -1);
+        ASSERT_EQ(chat_approval_needs_user(&b->q), 1);
+    }
+    cmd_batch_set_free(&set);
     TEST_END();
 }

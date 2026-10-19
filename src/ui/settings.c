@@ -182,6 +182,7 @@ typedef struct {
     int      n_dbg_dim;
     SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
     int      demo;        /* --ui-demo=settings-debug: debugging ticked in memory, Save never writes */
+    int      saving;      /* the Auto-approve confirmation box is up: Save/Cancel/close are no-ops */
 
     SettingsCtrl *ctrl_ai_base_url;   /* toggled by provider combo */
     SettingsCtrl *ctrl_ai_search_url; /* toggled by search-provider combo */
@@ -464,14 +465,13 @@ static const TooltipEntry k_tooltips[] = {
     { IDC_AI_MD_RENDER,
       "Render AI replies as formatted markdown. Turn off to see raw text." },
     { IDC_AI_POLICY_ALLOWED,
-      "How far a new session may go. Commands above this are blocked "
-      "outright and show as held; commands at or below it are allowed, "
-      "and still ask first unless 'Runs unattended' covers them." },
-    { IDC_AI_POLICY_UNATTENDED,
-      "How far a new session runs without asking. Anything at or below "
-      "this runs the moment the AI suggests it; anything between here and "
-      "'Allowed' asks first. Never goes above 'Allowed'. The status line "
-      "in the AI panel changes both markers per session." },
+      "The highest level a new session may run: Read, Unknown, Write or "
+      "Critical. Commands above it are blocked outright and show as held; "
+      "commands at or below it ask first unless Auto-approve is on." },
+    { IDC_AI_POLICY_AUTO,
+      "Start new sessions with Auto-approve on: commands up to 'Allowed' "
+      "run without asking. With 'Allowed' at Critical, Save asks you to "
+      "confirm. The AI panel's status line changes both per session." },
     { IDC_SSH_IDLE_EDIT,
       "Disconnect SSH sessions after this many minutes of no user "
       "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
@@ -1434,8 +1434,9 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
         }
         {
-            /* The one policy setting, shown as its two markers -- the same
-             * pair the AI panel's status-line control carries. */
+            /* The one policy setting: the level, and whether a new session
+             * starts with Auto-approve on -- the pill and the button on the
+             * AI panel's status line (spec 2026-10-18 section 2). */
             CmdPolicy pol = nd->cfg->settings.ai_policy_default;
             cmd_policy_clamp(&pol);
             {
@@ -1449,14 +1450,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
             }
             {
-                HWND lbl = make_label2(nd->hPage, "Runs unattended:");
-                HWND cmb = make_combo2(nd->hPage, (HMENU)IDC_AI_POLICY_UNATTENDED,
-                                       CBS_DROPDOWNLIST);
-                for (int i = POLICY_NONE; i < POLICY_STOP_COUNT; i++)
-                    SendMessage(cmb, CB_ADDSTRING, 0,
-                                (LPARAM)cmd_policy_stop_label(i));
-                SendMessage(cmb, CB_SETCURSEL, (WPARAM)(pol.unattended + 1), 0);
-                add_ctrl(nd, lbl, cmb, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 0);
+                HWND chk = make_check2(nd->hPage, "Auto-approve by default",
+                                       (HMENU)IDC_AI_POLICY_AUTO);
+                SendMessage(chk, BM_SETCHECK,
+                            cmd_policy_auto_on(pol) ? BST_CHECKED : BST_UNCHECKED, 0);
+                add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
             }
         }
 
@@ -1902,6 +1900,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
 
         case IDOK: {
             if (!d) { DestroyWindow(hwnd); break; }
+            if (d->saving) break;
             /* --ui-demo=settings-debug: show the page, change nothing. */
             if (d->demo) { DestroyWindow(hwnd); break; }
             Settings *s = &d->cfg->settings;
@@ -2030,17 +2029,40 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             s->markdown_render_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_MD_RENDER)
                                            == BST_CHECKED) ? 1 : 0;
 
-            /* Command policy for new sessions. The setters clamp, so an
-             * unattended marker picked above the ceiling comes back down
-             * rather than being silently honoured. */
+            /* Command policy for new sessions: the level and Auto-approve.
+             * Critical with Auto-approve on asks first, but only when Save
+             * would enter that state from the stored policy -- the same
+             * rule as the panel's request_policy_change() (spec 2026-10-18
+             * section 2); No keeps the stored policy as it was and the
+             * rest of the page still saves. The box is modal, so
+             * d->saving makes a second Save/Cancel/close during it a no-op,
+             * and d is looked up again after it in case the window went. */
             {
                 int a = (int)SendDlgItemMessage(d->hPage, IDC_AI_POLICY_ALLOWED,
                                                 CB_GETCURSEL, 0, 0);
-                int u = (int)SendDlgItemMessage(d->hPage, IDC_AI_POLICY_UNATTENDED,
-                                                CB_GETCURSEL, 0, 0);
-                if (a >= 0 && u >= 0) {
-                    cmd_policy_set_allowed(&s->ai_policy_default, a);
-                    cmd_policy_set_unattended(&s->ai_policy_default, u - 1);
+                int on = (IsDlgButtonChecked(d->hPage, IDC_AI_POLICY_AUTO)
+                              == BST_CHECKED) ? 1 : 0;
+                if (a >= 0) {
+                    CmdPolicy next = s->ai_policy_default;
+                    cmd_policy_set_allowed(&next, a);
+                    cmd_policy_set_auto(&next, on);
+                    int store = 1;
+                    if (cmd_policy_needs_confirm(s->ai_policy_default, next)) {
+                        d->saving = 1;
+                        int answer = MessageBoxA(hwnd, CMD_POLICY_CONFIRM_TEXT,
+                                                 "Auto-approve by default",
+                                                 MB_YESNO | MB_ICONWARNING |
+                                                 MB_DEFBUTTON2);
+                        if (!IsWindow(hwnd)) return 0;
+                        d = (SettingsDlgData *)(LONG_PTR)GetWindowLongPtr(
+                            hwnd, GWLP_USERDATA);
+                        if (!d) return 0;
+                        d->saving = 0;
+                        s = &d->cfg->settings;
+                        store = (answer == IDYES);
+                    }
+                    if (store)
+                        s->ai_policy_default = next;
                 }
             }
 
@@ -2084,6 +2106,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         }
 
         case IDCANCEL:
+            if (d && d->saving) break;
             DestroyWindow(hwnd);
             break;
         }
@@ -2102,6 +2125,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
         return 0;
 
     case WM_CLOSE:
+        if (d && d->saving) return 0;
         DestroyWindow(hwnd);
         return 0;
     }
