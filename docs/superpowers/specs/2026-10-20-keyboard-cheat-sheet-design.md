@@ -63,8 +63,8 @@ A survey of `main` at fbfe5cd found:
 - **A row** is one chord in the body font in `text_main` on the left, the
   action in the body font on the right, and the condition, where one
   exists, on a second line under the action in the caption font and
-  `text_dim`. One chord per row: alternatives are separate rows (`Ctrl+V`
-  and `Ctrl+Shift+V` are two rows with the same action). A row that names a
+  `text_dim`. Alternatives that share an action sit in one row, comma separated
+  (`Ctrl+V, Ctrl+Shift+V`); a row that feeds a menu label is one chord. A row that names a
   menu item shows the menu path in the chord column. A chord that is a US
   layout name (`Ctrl+=`) carries "US layout" in its condition. No chip, no
   ellipsis: the columns are sized to the widest texts, and the table is
@@ -145,9 +145,14 @@ size_t shortcuts_readme_block(char *buf, size_t cap);
 
 The README markers are `<!-- shortcuts:begin -->` and `<!-- shortcuts:end -->`.
 A chord row's grammar: keys joined by `+`, written as the key is named on a
-US layout (`Ctrl+=`, `Ctrl+-`, `Shift+PgUp`); no alternatives, no
-placeholders other than `key`, `letter` and `Arrows`, which are literal
-words in the table.
+US layout (`Ctrl+=`, `Ctrl+-`, `Shift+PgUp`); alternatives that share an
+action are listed in one row separated by `, ` (`Ctrl+V, Ctrl+Shift+V`;
+`PgUp, PgDn, Home, End, Up, Down`), and a row with a non-zero `menu_id`
+holds exactly one chord; no placeholders other than `key`, `letter` and
+`Arrows`, which are literal words in the table. (Amended after planning on
+2026-10-20: one chord per row made the list 61 rows, which scrolls even at
+96 DPI; with alternatives joined it is about 46 rows and one page at 96 and
+120 DPI on a 1080p screen, as section 1 says.)
 
 ### 2.2 The layout, `src/core/cheatsheet_layout.c` / `.h` (pure, tested)
 
