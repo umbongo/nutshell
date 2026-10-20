@@ -1,12 +1,14 @@
 # Terminal selection and copy, PuTTY style
 
-**Date**: 2026-10-20 (revised the same day after critique round 1)
+**Date**: 2026-10-20 (revised twice the same day after critique rounds 1 and 2)
 **Status**: DRAFT, for the maintainer's review
 **Branch**: `feat/putty-selection`
 **Decided by the maintainer**: "Have it behave like PuTTY"; include double-click
-word and triple-click line selection; not Shift+click extend or Alt+drag blocks.
-**Proposed after critique, awaiting the maintainer's word** (section 6):
-Ctrl+C always interrupts; the scrollback-size setting is a separate change.
+word and triple-click line selection; not Shift+click extend or Alt+drag blocks;
+Confirm Paste proceeds on Enter.
+**Proposed after critique, the maintainer's defaults unless overruled**
+(section 6): Ctrl+C always interrupts; the scrollback-size setting is a
+separate change.
 
 ## 0. The problem
 
@@ -21,150 +23,150 @@ nothing regressed in v1.2.36.
 
 | # | Defect | Where |
 |---|---|---|
-| 1 | The selection is stored in screen rows ("0-based from top of visible area"), so a drag cannot reach past the window: the row is clamped to `rows - 1` and nothing scrolls the view to follow the pointer. | `src/core/selection.h:10`, `selection.c:12-13`; no auto-scroll anywhere in `window.c` |
-| 2 | The extractor maps screen row to buffer row as `lines_count - rows + row` and never reads `scrollback_offset`; the renderer does. Scrolled back, the highlight shows history and the clipboard gets the live rows at the same screen positions. | `selection.c:50-56`; `renderer.c:94-117` |
-| 3 | Wheel, scrollbar and PgUp/PgDn change the offset and leave the selection alone, so the highlight stays on screen cells whose content changed. | `window.c:5116-5139`, `:5284`, `:3437` |
-| 4 | Mouse-up sets `valid = true` even when start equals end, so a plain click on a character copies that character over the clipboard. | `window.c:5253` |
-| 5 | Mouse-up copies and then sets `valid = false`, so Ctrl+Shift+C and Edit > Copy find no selection after a drag and do nothing. | `window.c:5263`, `:3397-3402`, `:2731-2751` |
-| 6 | The mouse handlers read `LOWORD`/`HIWORD`; a negative coordinate while captured wraps to about 65535, so a drag above the window selects the bottom row and a drag left of it the last column. | `window.c:5187`, `:5223`, `:5247` |
+| 1 | The selection is stored in screen rows, so a drag cannot reach past the window: the row is clamped to `rows - 1` and nothing scrolls the view to follow the pointer. | `src/core/selection.h:10`, `selection.c:12-13`; no auto-scroll in `window.c` |
+| 2 | The extractor maps screen row to buffer row without `scrollback_offset`; the renderer applies it. Scrolled back, the highlight shows history and the clipboard gets the live rows at the same screen positions. | `selection.c:50-56`; `renderer.c:94-117` |
+| 3 | Wheel, scrollbar and PgUp/PgDn change the offset and leave the selection alone. | `window.c:5116-5139`, `:5284`, `:3437` |
+| 4 | Mouse-up sets `valid = true` even when start equals end, so a plain click on a character copies it over the clipboard. | `window.c:5253` |
+| 5 | Mouse-up copies and then sets `valid = false`, so Ctrl+Shift+C and Edit > Copy find nothing after a drag. | `window.c:5263`, `:3397-3402`, `:2731-2751` |
+| 6 | The mouse handlers read `LOWORD`/`HIWORD`; a negative coordinate while captured wraps to about 65535. | `window.c:5187`, `:5223`, `:5247` |
 | 7 | Both copy paths use an 8 KB stack buffer; longer text is cut silently. | `window.c:2739`, `:5255`; `selection.c:88,95` |
 | 8 | `TermRow.wrapped` is ignored: a soft-wrapped line copies as several lines. Line endings are LF. | `selection.c:94-96` |
 | 9 | One global `g_selection` is shared by every tab. | `window.c:602` |
-| 10 | No `WM_CAPTURECHANGED` handling: a modal dialog or Alt+Tab mid-drag loses the button-up. | `window.c:5218` is the only guard |
-| 11 | `term_resize` never clamps `scrollback_offset`; after a shrinking reflow it can exceed `lines_count - rows`. | `buffer.c:256-300` |
-| 12 | Settings offers "scrollback lines" (default 10,000, clamped 100..50,000, saved and loaded) but nothing reads it: every session is created with 3,000 lines of history. | `config/loader.c:452-487`, `settings.c:1262,1937`; `window.c:612`. Not fixed here, see section 6 |
+| 10 | No `WM_CAPTURECHANGED` handling; the up-handler can `break` before `ReleaseCapture` when the active session changed mid-drag. | `window.c:5218`, `:5241` |
+| 11 | `term_resize` never clamps `scrollback_offset`; `scroll_page_up` clamps only to `max_scrollback` (`edit_scroll.c:64-73`); the renderer hides both by clamping `top_logical` to 0. | `buffer.c:256-300`, `renderer.c:104-106` |
+| 12 | `wrapped` is reset only by `term_row_fill` and ED 2, so after a wrapped prompt is erased with Ctrl+U the next output row still says `wrapped`. | `parser.c:366-460` |
+| 13 | Settings offers "scrollback lines" (default 10,000, clamped 100..50,000) but nothing reads it: every session gets 3,000 lines. | `config/loader.c:452-487`, `settings.c:1262,1937`; `window.c:612`. Not fixed here, section 6 |
+| 14 | Confirm Paste creates Paste as the default push button but never focuses it, and its loop handles only Escape; Enter and Tab do nothing. | `paste_dlg.c:258`, `:521-529` |
 
-Paste (`do_paste`, `window.c:2332-2459`) is sound: one function behind all
-five paste paths, bracketed paste, control filtering, CR for local shells,
-unbounded read. It is not changed here.
+Paste itself (`do_paste`, `window.c:2332-2459`) is sound and not changed.
 
 Existing tests: 19 native tests in `tests/test_selection.c` on the extractor;
 none covers scrollback, wrapped rows, the size limit or out-of-window
-coordinates. The harness (`tests/integration/cases/10-terminal.ps1`) has paste
-cases and `ctrl_c_without_selection_interrupts`; no case drags in the
-terminal or reads the clipboard back.
+coordinates. The harness has paste cases and
+`ctrl_c_without_selection_interrupts`; no case drags in the terminal or
+reads the clipboard back.
 
 ## 1. Behaviour (PuTTY's, as far as this change goes)
 
 - **Drag selects and copies.** Left button down starts a selection at the
-  cell under the pointer; moving extends it; release copies it to the
-  clipboard if it is non-empty, and the highlight stays. A press and release
-  without movement, or with movement under the system drag threshold
-  (`SM_CXDRAG`/`SM_CYDRAG`, 4 px by default), clears any selection and
-  copies nothing: a click to focus the window never touches the clipboard.
+  cell under the pointer; moving extends it; release copies it if it is
+  non-empty, and the highlight stays. A press and release without movement,
+  or with movement under the system drag threshold (`SM_CXDRAG`/`SM_CYDRAG`),
+  clears any selection and copies nothing: a click to focus the window
+  never touches the clipboard.
 - **Dragging past an edge scrolls.** While the button is held and the last
   reported pointer position is above the top edge or below the bottom edge
   of the terminal area, every tick of the window's existing 10 ms timer
   scrolls the view towards the pointer by one line plus one per full
   character height of distance beyond the edge, and the selection end
-  follows. The stored last position is used, never the live cursor (the
-  harness parks the real cursor in a corner). In a maximized window the
-  pointer can get only a few rows past either edge, so a long history takes
-  minutes by this route; the wheel during a drag scrolls as usual, the end
-  follows the pointer on the next move, and that is the fast way back. The
-  view never scrolls past the oldest or the newest line.
+  follows. The stored last position is used, never the live cursor. In a
+  maximized window the pointer gets only a few rows past either edge, so a
+  long history takes minutes by this route; the wheel during a drag scrolls
+  as usual and the end follows on the next move. The view never scrolls past
+  the oldest or the newest line.
 - **Double-click selects a word, triple-click a line.** A word is a maximal
-  run of cells in one class: blank (space, empty cell, control codepoint);
-  "word" (letters, digits, `_`, `-`, `.`, `/`, `~`, `:`, `@`, so that paths,
-  hostnames and addresses select whole); and every other codepoint on its
-  own (a CJK character therefore selects alone; the emulator has no
-  wide-cell model, one codepoint per cell). A line is the whole logical
-  line: back to the first row that is not a continuation, forward over every
-  following row whose `wrapped` flag is set. Dragging after a double or
-  triple click extends by whole words or whole lines in either direction.
-  The clicks count by `WM_LBUTTONDBLCLK` (the window class gains
-  `CS_DBLCLKS`) and a third press within `GetDoubleClickTime()` and
-  `SM_CXDOUBLECLK`/`SM_CYDOUBLECLK` of the double-click is the triple.
+  run of cells in one class, following a soft wrap across rows (a URL wrapped
+  over two rows double-clicks whole, as in PuTTY). The classes: blank (space,
+  empty cell, control codepoint); "word" (letters, digits, `_`, `-`, `.`,
+  `/`, `~`, `:`, `@`); every other codepoint on its own (the emulator has one
+  codepoint per cell and no wide-cell model). A line is the whole logical
+  line: back to the first row that is not a continuation, bounded by the
+  oldest row held, forward over every following row whose `wrapped` flag is
+  set. Dragging after a double or triple click extends by whole words or
+  lines in either direction. The window class gains `CS_DBLCLKS`; a third
+  press within `GetDoubleClickTime()` and `SM_CXDOUBLECLK`/`SM_CYDOUBLECLK`
+  of the double-click is the triple.
 - **The selection persists** until: the next left press in the terminal
-  area; a write, erase or region scroll that touches a selected line; a
+  area; a write into a selected row after the release (section 2.3); a
   resize; a switch to or from the alternate screen; the session closing; or
-  every selected line being recycled out of history. New output that only
-  scrolls the selected text up, scrolling the view, and typing that writes
-  elsewhere do not clear it: it stays on the same text and scrolls with it,
-  off the screen if need be. It is per session, so switching tabs shows each
-  tab's own selection. (The AI panel's selection deliberately does not copy
-  on release, `chat_listview.c:3975`; the terminal follows PuTTY, the panel
-  follows an editor, and both are documented on the cheat sheet.)
+  every selected line being recycled. While the button is held, writes do
+  not clear it: dragging over streaming output selects what is there at
+  release. New output that only scrolls the selected text, scrolling the
+  view, and typing elsewhere do not clear it. It is per session. (The AI
+  panel's selection deliberately does not copy on release,
+  `chat_listview.c:3975`; both behaviours are on the cheat sheet.)
 - **Copy again from the keyboard and the menu.** Ctrl+Shift+C and Edit >
-  Copy copy the current selection. **Ctrl+C always sends the interrupt**, as
-  in PuTTY (section 6, proposed): with the selection persisting through
-  typing, a Ctrl+C that copied instead of interrupting would leave `ping`
-  running after the user had copied the hostname. Edit > Select All selects
-  from the oldest line held to the last non-empty line and copies it.
-- **The text.** Built on the heap at its real size (no limit). A soft-wrapped
-  line is one line in the clipboard; trailing blanks are trimmed per logical
-  line after joining, never per row (a wrap boundary keeps its space);
+  Copy copy the current selection. **Ctrl+C always sends the interrupt**
+  (section 6.1). Edit > Select All selects from the oldest line held to the
+  last non-empty line and copies it; on an empty terminal it selects nothing.
+- **The text.** Heap, real size, no limit. A soft-wrapped line is one line;
+  trailing blanks are trimmed per logical line after joining, never per row;
   trailing empty rows are dropped (CLAUDE.md, "Terminal Buffer"); lines end
-  in CRLF (PuTTY on Windows); the last line has no ending. Cells are emitted
-  as UTF-8 through the existing `cell_text_codepoint()` filter.
-- **Right-click pastes**, unchanged. Paste is otherwise untouched.
+  in CRLF; the last line has no ending. Cells go through
+  `cell_text_codepoint()`.
+- **Right-click pastes**, unchanged.
+- **Confirm Paste** (section 3.5): Paste has focus when the dialog opens,
+  Enter pastes, Tab moves between Paste and Cancel, Escape cancels.
 
 ## 2. Design
 
-### 2.1 One view mapping in the terminal module
+### 2.1 Two mappings in the terminal module, live and view
 
-`src/term/term.h` gains
+`term_screen_to_phys()` (`term.h:196-208`) stays the parser's live mapping:
+writes always land on the live screen, scrolled back or not. `term.h` gains
+the view mapping, which the renderer and the selection use:
 
 ```c
-/* Logical index of the row shown at screen_row in the current view,
- * scrollback_offset included; -1 when the view has no row there. The one
- * mapping, used by the renderer, the selection and the parser's screen
- * helpers. */
+/* Logical index of the row shown at screen_row in the view as scrolled
+ * (scrollback_offset applied, top clamped to 0 exactly as the renderer's
+ * get_visible_row does today). Never -1 for 0 <= screen_row < rows. */
 int term_view_to_logical(const Terminal *t, int screen_row);
 ```
 
-`renderer.c`'s `get_visible_row()` and the selection code both call it.
 `term_resize()` clamps `scrollback_offset` to `max(0, lines_count - rows)`
-after reflow (defect 11).
+after reflow, and `scroll_page_up` (`edit_scroll.c`) clamps to the history
+actually held, so the clamp inside the mapping is a guard, not the rule.
 
-### 2.2 Line numbers and epochs
+### 2.2 Line numbers, epochs and write stamps
 
-The history is a ring; once full, `term_scroll()` recycles the oldest row by
-moving `lines_start` (`buffer.c:309-313`). ED 3 is not implemented and no
-other path drops rows from the front; reflow rebuilds and renumbers
-everything, and the alternate screen is a separate ring (`buffer.c:505-513`)
-whose LF at the bottom also reaches the recycle branch. The terminal gains
+The history is a ring; once full, `term_scroll()` recycles the oldest row
+(`buffer.c:309-313`). No other path drops rows from the front (ED 3 is not
+implemented); reflow renumbers everything; the alternate screen is a
+separate ring (`buffer.c:505-513`) whose LF at the bottom also recycles.
+The terminal gains
 
 ```c
-uint64_t lines_recycled;   /* rows dropped from the front of this ring, ever */
+uint64_t lines_recycled;   /* rows dropped from the front of this ring, ever (per ring) */
 uint32_t epoch;            /* bumped by reflow and by alt-screen enter/leave */
+uint32_t write_gen;        /* bumped by every row write; TermRow gains uint32_t gen */
 ```
 
-both per ring (the `primary_*` save set gains `primary_lines_recycled`;
-`epoch` is one counter, bumped on every swap). The **absolute line number**
-of logical index `i` is `lines_recycled + i`, stable while the epoch is.
+The **absolute line number** of logical index `i` is `lines_recycled + i`,
+stable while the epoch is. Every parser write goes through
+`get_screen_row()` (`parser.c:37`), which stamps `row->gen = ++t->write_gen`
+beside `row->dirty = true`; `term_scroll_up`/`term_scroll_down` in
+`buffer.c` stamp the rows they move or clear; the recycle branch stamps the
+refilled row after `lines_recycled` is incremented, so its new number is
+what the stamp belongs to. That is the single choke point: cell writes,
+insert-mode shifts, ICH/DCH, EL/ED/ECH, IL/DL/SU/SD, DECSTBM scrolling and
+`term_scroll` are all covered without a list. Cost: an increment and a
+store per write, four bytes per row.
 
-### 2.3 Writes that touch the selection
+### 2.3 Staleness, checked lazily
 
-The selection must not survive its text changing (`apt`'s scroll region,
-a progress bar's `\r`, ED). The terminal keeps a watched range the window
-sets while a selection exists:
-
-```c
-uint64_t sel_watch_lo, sel_watch_hi;  /* absolute lines, inclusive; hi < lo = none */
-bool     sel_touched;                 /* set by any write into the range */
-```
-
-Every cell write, erase (EL, ED, ECH), region scroll (`term_scroll_region`
-and its callers: DECSTBM scrolling, IL/DL, SU/SD) and `term_scroll` into a
-watched line sets `sel_touched`; the check is one compare of the written
-row's absolute number against the range, on the write path only when a
-range is set. After each poll the window clears the selection if
-`sel_touched` is set or the epoch changed, and `term_resize`/alt-screen
-switches are covered by the epoch rather than by hooks at their call sites
-(`sync_session_grid` on tab switch, `WM_SIZE`, and the nine `term_process`
-call sites need no edit). A clear during an active drag also ends the drag:
-`active = false`, release capture, stop auto-scroll.
+The selection records `epoch` and `write_gen` at its last change. A
+selection is **stale** when the terminal's epoch differs, or when any
+selected row's `gen` is newer than the selection's, or when all its lines
+are recycled. `selection_contains` checks the row it is asked about (so the
+highlight disappears row by row as rows are written, and a stale selection
+paints nothing); `selection_copy_text` and `selection_sync` check every
+selected row and clear a stale selection. While `active`, the stamp is
+refreshed on every `extend`, and `finish` takes the current `write_gen`:
+what is on screen at release is what is copied. No watched range, no flag,
+no hook at any `term_process` call site; a session that is not polled (a
+reconnecting one writing its own banner) is covered because the check is at
+paint and copy time.
 
 ### 2.4 The `wrapped` flag
 
 Its meaning is right (set on the continuation row by auto-wrap,
-`parser.c:69-71`; reflow agrees) but it is only ever reset by
-`term_row_fill` and ED 2, so after a wrapped prompt line is erased with
-Ctrl+U the next command's first output row still says `wrapped`. The parser
-clears `wrapped` on the row that LF, IND, NEL, CUP, CUU/CUD, RI and
-`term_scroll` land the cursor on; only auto-wrap sets it. Native tests in
-`tests/test_term.c` pin both.
+`parser.c:69-71`; reflow agrees), but it is reset only when a row is
+refilled or by ED 2. Readline moves the cursor onto a continuation row with
+a bare LF (`cud1`) and back up with CUU, so cursor motion must not touch
+the flag. The parser clears `wrapped` where a row's content is erased: EL
+from column 0, EL 2, and the whole-row loops of ED 0 and ED 1 (today these
+reset only `len`). Native tests pin both the Ctrl+U case and the readline
+Home/End case.
 
 ### 2.5 The selection
 
@@ -176,18 +178,18 @@ typedef struct {
     SelPoint anchor, anchor_end; /* the unit under the press (a cell for STREAM) */
     SelPoint start, end;         /* normalised, both inclusive */
     SelMode  mode;
-    uint32_t epoch;              /* the terminal's epoch when begun */
+    uint32_t epoch, gen;         /* the terminal's at the last change */
     bool     active;             /* button held */
     bool     valid;              /* a non-empty selection exists */
-    int      press_x, press_y;   /* client pixels of the press, for the drag threshold */
-    int      last_x, last_y;     /* last reported pointer, for auto-scroll */
+    int      press_x, press_y;   /* client pixels of the press, drag threshold */
+    int      last_x, last_y;     /* last reported pointer, auto-scroll */
 } Selection;
 ```
 
 One `Selection` per `Session`, explicitly zeroed in `create_session`
-(`Session` comes from `xmalloc`, which does not zero), replacing the global.
-Columns are inclusive cell indexes; a point past a row's content is legal
-(the extractor trims).
+(`Session` comes from `xmalloc`). The window keeps one global
+`g_drag_session` (the session whose drag holds the capture), so a tab close
+or switch mid-drag still releases capture.
 
 ### 2.6 The portable API, `src/core/selection.c`
 
@@ -195,40 +197,25 @@ Pure, takes `const Terminal *`, tested natively; `window.c` keeps the
 message handlers, the capture and the timer tick.
 
 ```c
-/* Pixel to cell, signed, clamped to 0..rows-1 / 0..cols-1. */
 void selection_pixel_to_cell(int px, int py, int char_w, int char_h,
                              int y_offset, int rows, int cols,
-                             int *out_row, int *out_col);
-/* Lines to scroll this tick for a pointer at py: negative = up, 0 inside
- * [top_px, bottom_px), magnitude 1 + (distance beyond the edge) / char_h. */
+                             int *out_row, int *out_col);   /* signed, clamped */
 int  selection_autoscroll_step(int py, int top_px, int bottom_px, int char_h);
 
-/* Button down with click_count 1, 2 or 3 at (screen_row, col): STREAM at
- * the cell; WORD or LINE covering the unit under it (valid at once). */
 void selection_begin(Selection *s, const Terminal *t, int screen_row, int col,
                      int click_count, int px, int py);
-/* Pointer moved while active. STREAM: end = the cell, valid once the pointer
- * is past the drag threshold from the press. WORD/LINE: extend by units from
- * the anchor unit in the pointer's direction. */
 void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,
                       int px, int py, int drag_cx, int drag_cy);
-/* Button up: active = false. Returns valid. */
-bool selection_finish(Selection *s);
+bool selection_finish(Selection *s, const Terminal *t);   /* takes the stamps; returns valid */
 void selection_clear(Selection *s);
-/* Oldest line held, col 0 .. last non-empty line, its last cell. */
-void selection_select_all(Selection *s, const Terminal *t);
-/* After output: epoch mismatch or sel_touched clears; otherwise drop any of
- * the four points below lines_recycled (anchor included) and clear when
- * nothing is left. Returns true when something changed. */
+void selection_select_all(Selection *s, const Terminal *t); /* valid = false when empty */
+/* Trim the four points below lines_recycled, clear when stale (2.3) or
+ * empty; end an active drag on an epoch change. Returns true on change. */
 bool selection_sync(Selection *s, const Terminal *t);
-/* The watched range for the terminal (section 2.3); hi < lo when invalid. */
-void selection_watch_range(const Selection *s, uint64_t *lo, uint64_t *hi);
-
 bool selection_contains(const Selection *s, const Terminal *t, int screen_row, int col);
+/* True when a valid selection intersects the rows in view (renderer hint). */
+bool selection_in_view(const Selection *s, const Terminal *t);
 int  selection_char_class(uint32_t cp);  /* 0 blank, 1 word, 2+cp otherwise */
-/* The text: heap, NUL-terminated, *out_len bytes, caller frees; NULL only on
- * allocation failure. Joins wrapped rows, trims per logical line, drops
- * trailing empty rows, CRLF. */
 char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len);
 ```
 
@@ -237,39 +224,50 @@ char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len
 ### 2.7 The window, `src/ui/window.c`
 
 - Window class: add `CS_DBLCLKS`. `WM_LBUTTONDBLCLK` repeats the dock
-  splitter hit test (`:5167-5182`) before treating the press as a
-  double-click in the terminal.
+  splitter hit test (`:5167-5182`) first.
 - `WM_LBUTTONDOWN`, `WM_LBUTTONDBLCLK`, `WM_MOUSEMOVE`, `WM_LBUTTONUP`,
-  `WM_CAPTURECHANGED` read `GET_X_LPARAM`/`GET_Y_LPARAM`. Down clears the
-  session's selection, sets capture, calls `selection_begin` with the click
-  count (1; 2 on DBLCLK; 3 by the tick stamp and distance rule). Move while
-  active calls `selection_extend` and stores the pointer; a move without
-  `MK_LBUTTON` is ignored, not treated as the end of the drag (the AI panel's
-  rule, `chat_listview.c:3895-3903`). `WM_CAPTURECHANGED` ends the drag
-  without copying. Up ends it, and when `selection_finish` returns true
-  copies via `selection_copy_text` and `clip_copy_utf8` (`clipboard.c:31`,
-  which builds the data before emptying the clipboard).
-- Timer 1's tick (10 ms, `window.c:3898`), when a drag is active and
-  `selection_autoscroll_step` for the stored pointer is non-zero, scrolls
-  the view by the step, clamped like the wheel handler, re-extends to the
-  stored pointer's cell, marks the rows dirty, and logs `sel.scroll`.
-- After every poll that fed the emulator: `selection_sync`, then
-  `selection_watch_range` into the terminal, repaint on change.
-- `do_copy` copies the active session's selection when `valid`; it still
-  asks the AI panel first when that has focus. Ctrl+C no longer consults
-  the selection. Select All calls `selection_select_all` then copies.
+  `WM_CAPTURECHANGED` use `GET_X_LPARAM`/`GET_Y_LPARAM`. Down clears the
+  session's selection, sets `g_drag_session`, sets capture, calls
+  `selection_begin` with the click count. Move while active calls
+  `selection_extend` and stores the pointer; a move without `MK_LBUTTON` is
+  ignored (`chat_listview.c:3895-3903`). **Up: finish and copy first, then
+  release capture**, because `ReleaseCapture` sends `WM_CAPTURECHANGED`
+  synchronously. `WM_CAPTURECHANGED` with `g_drag_session` set ends that
+  drag without copying and clears the pointer; without it, it is ignored.
+  Wherever a drag is ended (up, capture change, a clear, tab close), capture
+  is released only if `GetCapture() == hwnd`.
+- Copy: `selection_copy_text` then `clip_copy_utf8` (`clipboard.c:31`, which
+  builds the data before emptying the clipboard and leaves it alone on an
+  empty length).
+- Timer 1's tick (10 ms, `window.c:3898`), **outside** the per-session
+  `io.ctx`/`CONN_IDLE` gate so it works on a closed session's history: when
+  `g_drag_session` is set and `selection_autoscroll_step` for the stored
+  pointer is non-zero, scroll the view by the step (clamped like the wheel
+  handler), re-extend to the stored pointer's cell, mark rows dirty, log
+  `sel.scroll`. Also each tick, for every session: `selection_sync`, repaint
+  on change (two compares when nothing changed).
+- `do_copy` copies the active session's selection when valid and not stale;
+  it still asks the AI panel first when that has focus. Ctrl+C no longer
+  consults the selection. Select All calls `selection_select_all` then
+  copies.
 - `force_full_terminal_repaint` after every selection change, as today.
 
 ### 2.8 The renderer, `src/ui/renderer.c`
 
 `get_visible_row` uses `term_view_to_logical`; `cell_in_selection` becomes
-`selection_contains(sel, term, screen_row, col)`. The "any selection
-disables the clean-row skip" rule stays.
+`selection_contains(sel, term, screen_row, col)`; the "any selection
+disables the clean-row skip" rule uses `selection_in_view`.
 
-### 2.9 Debug log
+### 2.9 Documentation of the Ctrl+C change
+
+`README.md:121` and `:355`, `src/ui/help_guide.c:100-101` and `:354` say
+Ctrl+C copies when a selection exists; they change in the same commit as
+the handler, and the cheat sheet's row says "interrupt".
+
+### 2.10 Debug log
 
 `sel.begin` (line, col, mode), `sel.scroll` (offset), `sel.copy` (lines,
-bytes), `sel.clear` (reason: click, touched, epoch, recycled, close) at
+bytes), `sel.clear` (reason: click, stale, epoch, recycled, close) at
 `DLOG_DEBUG` on the UI channel.
 
 ## 3. Tests
@@ -277,83 +275,90 @@ bytes), `sel.clear` (reason: click, touched, epoch, recycled, close) at
 ### 3.1 Native
 
 `tests/test_term.c`:
-- `term_view_to_logical` at offset 0 equals the parser's screen rows; at
-  offset k it is k lines earlier; -1 beyond the rows held; `term_resize`
-  clamps a stale offset.
+- `term_view_to_logical` at offset 0 equals `term_screen_to_phys` through
+  the ring; at offset k it is k lines earlier; a fresh tab with the offset
+  forced to `rows - 1` maps row 0 to logical 0, not -1; `term_resize` clamps
+  a stale offset; the parser writes to the live screen while scrolled back.
 - `lines_recycled` increments only when the ring recycles; stable across
   10,000 scrolls on a 100-line ring; the alt ring has its own count; the
   epoch bumps on reflow and on each alt switch and nowhere else.
-- `sel_touched`: set by a cell write, EL, ED, ECH, IL/DL, SU/SD and a
-  DECSTBM scroll into a watched line; not set by writes outside it or when
-  no range is set.
-- `wrapped` is cleared by LF, CUP and friends onto a row and set only by
-  auto-wrap: the Ctrl+U-at-a-wrapped-prompt sequence leaves the next output
-  row unwrapped.
+- `write_gen`: a cell write, insert-mode shift, ICH, DCH, EL, ED, ECH,
+  IL/DL, SU/SD, a DECSTBM scroll and `term_scroll` each stamp exactly the
+  rows they touch; the recycled row carries its new number.
+- `wrapped`: cleared by EL 2, EL from column 0, ED 0/1 whole rows; kept by
+  LF, CUU, CUP onto the row (the readline Home/End sequence on a wrapped
+  command keeps the continuation wrapped); the Ctrl+U sequence leaves the
+  next output row unwrapped.
 
 `tests/test_selection.c` (rewritten):
-- `pixel_to_cell` with negative x and y gives row 0, col 0; beyond the
-  bottom and right gives the last row and column.
+- `pixel_to_cell` negative x and y give row 0, col 0; beyond the bottom and
+  right give the last row and column.
 - `autoscroll_step`: 0 inside, -1 one pixel above, -3 two character heights
   above, +1 one pixel below.
-- `begin`/`extend`/`finish`: a press and release is not valid; a move of 3
-  px across a cell boundary is not valid, 5 px is; a backward drag
-  normalises; WORD on `/usr/local/bin` selects the whole path, on `foo,bar`
-  selects `foo`, on a run of spaces the run, on a CJK character that one
-  cell; LINE on a line wrapped over three rows selects all three from a
-  press on the middle row; WORD drag backwards across two words selects
-  both whole.
-- `sync`: epoch mismatch clears; `sel_touched` clears; a recycled start is
-  cut; a recycled anchor is cut so a later `extend` cannot resurrect it; a
-  wholly recycled selection clears; `sync` during an active drag ends it.
+- `begin`/`extend`/`finish`: press and release is not valid; a move under
+  the threshold across a cell boundary is not valid, over it is; a backward
+  drag normalises; WORD on `/usr/local/bin` selects the path, on `foo,bar`
+  selects `foo`, on a run of spaces the run, on a CJK character that cell,
+  on a URL wrapped over two rows the whole URL; LINE from a press on the
+  middle row of a three-row wrapped line selects all three, and from a
+  continuation row whose head is recycled stops at logical 0; WORD drag
+  backwards across two words selects both whole.
+- staleness: a write into a selected row after `finish` makes `contains`
+  false for that row and `copy_text` return nothing and clear; a write
+  during an active drag does not; an epoch change clears and ends an active
+  drag; a recycled start is cut; a recycled anchor is cut so `extend` cannot
+  resurrect it; wholly recycled clears; the row at the recycle point is
+  trimmed, not treated as touched.
 - `copy_text`: three wrapped rows come out as one line; `foo ` | `bar` at a
   wrap boundary keeps its space; CRLF between lines and none at the end;
-  trailing blanks trimmed; trailing empty rows dropped (a drag to the
-  bottom of a mostly empty screen copies no blank lines); a selection of
-  3,000 rows of 200 characters is returned whole; a copy while scrolled
-  back equals the cells the renderer would highlight (both through
-  `term_view_to_logical`); an empty selection gives "".
-- `select_all` covers from `lines_recycled` to the last non-empty line.
+  trailing blanks trimmed; trailing empty rows dropped; 3,000 rows of 200
+  characters returned whole; a copy while scrolled back equals the cells
+  the view mapping names; an empty selection gives "".
+- `select_all` covers from `lines_recycled` to the last non-empty line and
+  is not valid on an empty terminal; `selection_in_view` is false for a
+  selection scrolled out of view.
 
 ### 3.2 Harness, gate tier, `tests/integration/cases/10-terminal.ps1`
 
-A new helper `Send-NutshellDrag -Session -From @(x,y) -To @(x,y) [-Clicks n]`
-in `NutshellIT.psm1` **sends** (not posts, as `Send-NutshellChatDrag` does
-and for the same reason) `WM_LBUTTONDOWN`, a series of `WM_MOUSEMOVE` and
-`WM_LBUTTONUP` with client coordinates, and for `-Clicks 2` sends
-`WM_LBUTTONDBLCLK` itself, since sent input gets no double-click synthesis;
-`-Clicks 3` sends a further `WM_LBUTTONDOWN` at once. Clipboard is read
-with `Get-Clipboard -Raw` and compared with CRLF intact (not through
-`Get-AiSelClipboard`, which folds CRLF). Cell geometry comes from the
-`render.draw` debug event, as `helpers_ansi_contrast_floor` does; the
-`sel.scroll` event is what the auto-scroll case waits on.
+`NutshellIT.psm1` gains `Send-NutshellDrag -Session -From @(x,y) -To @(x,y)
+[-Clicks n] [-Hold]` and `Send-NutshellDragEnd -Session -At @(x,y)`: sent,
+not posted, as `Send-NutshellChatDrag` is; `-Clicks 2` sends
+`WM_LBUTTONDBLCLK` itself, `-Clicks 3` a further `WM_LBUTTONDOWN` at once;
+`-Hold` leaves the button down so a case can wait on `sel.scroll` and then
+end the drag. Distances are in cells from the `render.draw` geometry
+(`char_w cols x y`, as `helpers_ansi_contrast_floor` reads it), never pixel
+literals (the dev box runs at 288 DPI). The clipboard is read with
+`Get-Clipboard -Raw` and compared with CRLF intact. One case asserts the
+window class has `CS_DBLCLKS` (`GetClassLong`), since sent double-clicks do
+not need it.
 
-- `select_drag_past_bottom_copies_history`: run `seq 1 300`, wheel back
-  100 lines, press on the first visible row and drag to 40 px below the
-  terminal's bottom edge, wait on `sel.scroll` until the offset is 0,
-  release; the clipboard holds every line from the pressed one to `300`
-  and then the prompt line, more lines than the window has rows, CRLF
-  separated.
+- `select_drag_past_bottom_copies_history`: `seq 1 300`, wheel back 100
+  lines, press on the first visible row, drag to two cell heights below the
+  bottom edge with `-Hold`, wait on `sel.scroll` until the offset is 0, end
+  the drag; the clipboard holds every line from the pressed one to `300`
+  and the prompt, more lines than rows, CRLF separated.
+- `select_drag_above_top_selects_first_row`: press on row 3, drag to two
+  cell heights above the terminal area and release; the copy starts at the
+  first visible row's text.
 - `select_while_scrolled_back_copies_highlight`: `seq 1 300`, wheel back
   100 lines, drag three rows; the clipboard holds the three numbers that
-  were on those rows (computed from the offset), not the live rows.
-- `click_does_not_touch_clipboard`: set the clipboard to a marker, click
-  on a character and release 2 px away, the clipboard still holds the
-  marker.
-- `ctrl_shift_c_copies_after_drag`: clear the clipboard after the drag's
-  auto-copy, press Ctrl+Shift+C, the clipboard holds the text again; Edit >
-  Copy likewise.
-- `ctrl_c_with_selection_interrupts`: drag, then `sleep 30`, Ctrl+C: the
-  prompt returns within two seconds and the clipboard still holds the
-  dragged text (the existing `ctrl_c_without_selection_interrupts` stays).
+  were on those rows.
+- `click_does_not_touch_clipboard`: clipboard set to a marker, press and
+  release half a drag threshold away; the marker remains.
+- `ctrl_shift_c_copies_after_drag`: after the drag, set the clipboard to a
+  marker, Ctrl+Shift+C; the clipboard holds the text again; Edit > Copy
+  likewise.
+- `ctrl_c_with_selection_interrupts`: drag, `sleep 30`, Ctrl+C: the prompt
+  returns within two seconds and the clipboard still holds the dragged
+  text. The existing `ctrl_c_without_selection_interrupts` stays.
 - `double_click_selects_word`, `triple_click_selects_line`: on `echo
-  /usr/local/bin and more`, the clipboard holds `/usr/local/bin` and the
-  whole line respectively.
-- `output_into_selection_clears_it`: select the line a running
+  /usr/local/bin and more`, `/usr/local/bin` and the whole line.
+- `output_into_selection_clears_it`: select the line a
   `for i in 1 2 3; do printf '\r%d' $i; sleep 1; done` is writing; after
-  the next write the highlight is gone (`sel.clear reason=touched` in the
-  log) and Ctrl+Shift+C copies nothing new.
+  the next write the log has `sel.clear reason=stale`; set the clipboard
+  to a marker, Ctrl+Shift+C, the marker remains.
 
-## 3.5 Also in this change: Confirm Paste accepts Enter
+### 3.5 Also in this change: Confirm Paste accepts Enter
 
 Asked for by the maintainer (2026-10-20): "when I paste and the confirmation
 window pops up, default the selection to the permit button so that I only
@@ -361,70 +366,80 @@ need to press enter to proceed with the paste."
 
 Today `src/ui/paste_dlg.c` creates Paste with `BS_DEFPUSHBUTTON` (`:258`)
 but never focuses it, and its modal loop (`:521-529`) handles only
-`VK_ESCAPE`; `IsDialogMessage` is not used, so Enter and Tab do nothing.
-The preview is a read-only edit (`:243`), so Enter has no other meaning in
-the dialog.
+`VK_ESCAPE`. The preview is a read-only edit (`:243`), so Enter has no other
+meaning in the dialog.
 
 - On creation, `SetFocus(hBtnPaste)`.
-- In the modal loop, a `WM_KEYDOWN` of `VK_RETURN` sends `WM_COMMAND IDOK`
-  to the dialog (the same path as the button, `:377`); `VK_TAB` moves focus
-  between Paste and Cancel; Escape is unchanged. Space on a focused button
-  works already through the button class.
+- In the modal loop, `WM_KEYDOWN` of `VK_RETURN` sends `WM_COMMAND IDOK` to
+  the dialog (the button's path, `:377`); `VK_TAB` moves focus between Paste
+  and Cancel; Escape is unchanged.
 - Harness, gate tier, beside `paste_with_confirmation_shows_dialog`:
   `paste_with_confirmation_enter_pastes` sets the clipboard to `echo
-  PASTE_ENTER_8`, Ctrl+V, waits for the dialog, posts Enter to the
-  dialog's handle, asserts the dialog is gone and `PASTE_ENTER_8` reached
-  the shell. The existing Escape case stays.
+  PASTE_ENTER_8`, Ctrl+V, waits for the dialog, posts Enter to the dialog's
+  handle, asserts the dialog is gone and `PASTE_ENTER_8` reached the shell.
 
 ## 4. Out of scope, recorded on the notes open list
 
 Shift+click to extend; Alt+drag block selection; middle-button paste; mouse
-reporting to applications (modes 1000/1006); the per-byte paste writes over
-SSH (`ssh_channel_write` sets socket options per call), which make a large
-paste slow; the scrollback-size setting (section 6); a narrowing reflow of
-a full ring drops the newest rows rather than the oldest (`buffer.c:142,
-165`, pre-existing).
+reporting to applications; the per-byte paste writes over SSH; the
+scrollback-size setting (section 6); a narrowing reflow of a full ring
+drops the newest rows rather than the oldest (`buffer.c:142, 165`,
+pre-existing).
 
 ## 5. Risks
 
-- `window.c` is over 5,000 lines; the handlers get shorter, not longer, by
-  moving the logic to `selection.c`.
-- The auto-scroll rides on timer 1 rather than a new `WM_TIMER` loop
-  (CLAUDE.md's one-timer rule is about animation; this is a poll-tick
-  check).
-- The triple-click tick stamp is the one piece that cannot be tested
-  natively; the harness case covers it.
-- A persistent selection disables the renderer's clean-row skip while it
-  exists; the cell-level shadow still bounds the GDI work. Not measured.
+- `window.c` is over 5,000 lines; the handlers get shorter by moving the
+  logic to `selection.c`.
+- The auto-scroll rides on timer 1 rather than a new `WM_TIMER` loop.
+- The triple-click tick stamp cannot be tested natively; the harness case
+  covers it, with `GetMessageTime()` on sent messages not verified.
+- A persistent selection in view disables the renderer's clean-row skip;
+  the cell-level shadow bounds the GDI work. Not measured.
+- `Get-Clipboard -Raw` keeping CRLF under Windows PowerShell 5.1 is
+  inferred from `95-ai-select.ps1`, not verified; the case will tell.
 
 ## 6. Open for the maintainer
 
-1. **Ctrl+C always interrupts** (proposed). Today Ctrl+C copies when a
-   selection exists; with a persistent selection that would stop it
-   interrupting after any drag. PuTTY never copies on Ctrl+C.
-2. **The scrollback-size setting is a separate change** (proposed). Wiring
-   it here means `term_init` pre-allocates `capacity × cols × 20 B` and
+1. **Ctrl+C always interrupts** (proposed, taken as the default). Today
+   Ctrl+C copies when a selection exists; with a persistent selection that
+   would stop it interrupting after any drag. PuTTY never copies on Ctrl+C.
+2. **The scrollback-size setting is a separate change** (proposed, taken as
+   the default). `term_init` pre-allocates `capacity × cols × 20 B` and
    `term_reflow_buffer` allocates the whole capacity again on every
-   `WM_SIZE` during a live resize (there is no `WM_EXITSIZEMOVE`). At the
-   10,000 default that is about 40 MB per tab at 200 columns, 200 MB at the
-   50,000 cap. It needs lazy allocation in reflow first. Until then a
-   selection can reach 3,000 lines of history plus the screen.
+   `WM_SIZE` during a live resize. At the 10,000 default that is about
+   40 MB per tab at 200 columns, 200 MB at the 50,000 cap. It needs lazy
+   allocation in reflow first. Until then a selection can reach 3,000 lines
+   of history plus the screen.
 
 ## 7. Critique
 
-Round 1 (2026-10-20, Opus, 18 findings). Accepted and folded in above: 1
-(Ctrl+C, as a proposal in section 6), 2 (`CS_DBLCLKS`, splitter, harness
-sends DBLCLK, triple-click distance), 3 (`WM_CAPTURECHANGED`, ignore
-buttonless moves), 4 (writes touching the selection, section 2.3), 5
-(scrollback setting split out, section 6), 6 (epoch, and a clear ends an
-active drag), 7 (stale `wrapped`, triple-click walks back, trim per logical
-line), 8 (trailing empty rows, harness expectation), 9 (drag threshold),
-10 (one mapping in `src/term`, offset clamp on resize), 11 (anchor trimmed),
-12 (timer 1 tick, stored pointer, wheel as the fast path), 13 (helper sends,
-`sel.scroll` event, raw clipboard), 14 (explicit init), 15 (corrections:
-no `term_clear`, no ED 3, alt ring recycles, sparse state unreachable), 16
-(`clip_copy_utf8`), 18 (one line on the AI panel's choice). Rejected: none.
-No change: 17 (wide characters: nothing to handle). Not verified by the
-critic and still open: PuTTY's exact deselect rule (this spec clears on any
-touching write, which is at least as strict); the memory figures in
-section 6 are computed, not measured.
+**Round 1** (2026-10-20, Opus, 18 findings). Accepted: 1 (Ctrl+C, as 6.1),
+2 (`CS_DBLCLKS`, splitter, harness sends DBLCLK, triple-click distance), 3
+(`WM_CAPTURECHANGED`, ignore buttonless moves), 4 (writes touching the
+selection), 5 (scrollback setting split out, 6.2), 6 (epoch; a clear ends
+an active drag), 7 (stale `wrapped`, triple-click walks back, trim per
+logical line), 8 (trailing empty rows), 9 (drag threshold), 10 (one view
+mapping in `src/term`, offset clamp), 11 (anchor trimmed), 12 (timer 1,
+stored pointer, wheel as the fast path), 13 (helper sends, `sel.scroll`,
+raw clipboard), 14 (explicit init), 15 (corrections), 16
+(`clip_copy_utf8`), 18 (one line on the AI panel). No change: 17 (wide
+characters). Rejected: none.
+
+**Round 2** (2026-10-20, fresh Opus critic, 14 findings). Accepted: 1
+(clear `wrapped` on erase, not on cursor motion; readline Home/End test),
+2 (live and view mappings, parser keeps the live one), 3 (epoch checked at
+paint and copy, not only after a poll), 4 and 5 and 6 and 7 (replaced the
+watched range by per-row write stamps at the parser's one choke point,
+the critic's cheaper design; recycle ordering stated), 8 (clamp inside the
+view mapping, `scroll_page_up` clamp), 9 (`g_drag_session`, release when
+`GetCapture() == hwnd`), 10 (finish and copy before release;
+`WM_CAPTURECHANGED` ignored without a drag), 11 (no staleness while
+active; `finish` takes the stamps), 12 (README and guide text for Ctrl+C),
+13 (words follow a wrap), 14 (Select All on empty is invalid; walk-back
+bound; `selection_in_view`). Test gaps accepted: class-style assertion,
+drag-above case, `-Hold`, marker before Ctrl+Shift+C, cell-relative
+distances. Rejected: none. Still not verified, carried into section 5:
+`GetMessageTime()` on sent messages, `Get-Clipboard -Raw` and CRLF,
+`SM_CXDRAG` at 288 DPI, PuTTY's exact deselect rule. Two rounds is the
+ceiling; anything the plan's execution finds beyond this goes in the pull
+request body.
