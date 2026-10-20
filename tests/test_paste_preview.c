@@ -282,3 +282,45 @@ int test_paste_clamp_small_screen_overflow(void)
     ASSERT_EQ(h, 432);   /* (int)(480 * 0.9) */
     TEST_END();
 }
+
+/* ---- paste_dlg_key_action (spec 2026-10-20-putty-selection-design.md 3.5) ---- */
+
+int test_paste_key_enter_pastes_by_default(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(paste_dlg_key_action(0x0D, false), PASTE_KEY_PASTE);
+    TEST_END();
+}
+
+/* Review Focus 2: after Tab to Cancel, Enter presses Cancel. */
+int test_paste_key_enter_on_cancel_cancels(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(paste_dlg_key_action(0x0D, true), PASTE_KEY_CANCEL);
+    TEST_END();
+}
+
+int test_paste_key_escape_cancels_wherever_focus_is(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(paste_dlg_key_action(0x1B, false), PASTE_KEY_CANCEL);
+    ASSERT_EQ(paste_dlg_key_action(0x1B, true), PASTE_KEY_CANCEL);
+    TEST_END();
+}
+
+int test_paste_key_tab_moves_focus(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(paste_dlg_key_action(0x09, false), PASTE_KEY_NEXT_BUTTON);
+    ASSERT_EQ(paste_dlg_key_action(0x09, true), PASTE_KEY_NEXT_BUTTON);
+    TEST_END();
+}
+
+int test_paste_key_other_keys_are_not_the_dialogs(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(paste_dlg_key_action('A', false), PASTE_KEY_NONE);
+    ASSERT_EQ(paste_dlg_key_action(0x20, false), PASTE_KEY_NONE);   /* Space: the button's own */
+    ASSERT_EQ(paste_dlg_key_action(0x26, true), PASTE_KEY_NONE);    /* Up */
+    TEST_END();
+}

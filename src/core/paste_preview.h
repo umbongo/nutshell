@@ -2,6 +2,7 @@
 #define NUTSHELL_PASTE_PREVIEW_H
 
 #include <stddef.h>
+#include <stdbool.h>
 
 /* Split raw clipboard text into an array of lines.
  * Strips \r characters.  A trailing newline does NOT produce an empty
@@ -29,5 +30,21 @@ void paste_build_warning(size_t removed, char *buf, size_t buf_sz);
 void paste_clamp_size(int desired_w, int desired_h,
                       int screen_w, int screen_h,
                       int *out_w, int *out_h);
+
+/* What a key pressed in the Confirm Paste dialog does (spec
+ * docs/superpowers/specs/2026-10-20-putty-selection-design.md section 3.5).
+ * `vk` is the Win32 virtual-key code: Enter 0x0D, Escape 0x1B, Tab 0x09.
+ * Enter presses the focused button: Paste, which has the focus when the
+ * dialog opens, or Cancel after a Tab. Escape always cancels. Tab moves the
+ * focus between the two buttons. Every other key belongs to the control
+ * that has the focus. */
+typedef enum {
+    PASTE_KEY_NONE = 0,
+    PASTE_KEY_PASTE,
+    PASTE_KEY_CANCEL,
+    PASTE_KEY_NEXT_BUTTON
+} PasteKeyAction;
+
+PasteKeyAction paste_dlg_key_action(unsigned vk, bool cancel_has_focus);
 
 #endif

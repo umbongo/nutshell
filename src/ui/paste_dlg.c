@@ -190,6 +190,16 @@ static BOOL CALLBACK SetFontCb(HWND hChild, LPARAM lParam)
 
 /* ---- Window procedure --------------------------------------------------- */
 
+/* Move the focus, and the default-button border with it, so that the
+ * button Enter will press is the one that looks like it. */
+static void paste_dlg_focus_button(PasteDlgData *d, HWND btn)
+{
+    HWND other = (btn == d->hBtnPaste) ? d->hBtnCancel : d->hBtnPaste;
+    SendMessage(other, BM_SETSTYLE, (WPARAM)BS_PUSHBUTTON, TRUE);
+    SendMessage(btn, BM_SETSTYLE, (WPARAM)BS_DEFPUSHBUTTON, TRUE);
+    SetFocus(btn);
+}
+
 static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
                                       WPARAM wParam, LPARAM lParam)
 {
@@ -517,12 +527,30 @@ int paste_preview_show(HWND parent, const char *raw_text,
 
     if (hwnd) {
         EnableWindow(parent, FALSE);
+        /* Paste has the focus from the start, so Enter alone pastes. Done
+         * after CreateWindowEx: activating the new window gives the focus
+         * to the window itself, which would undo a SetFocus made during
+         * WM_CREATE. */
+        SetFocus(d.hBtnPaste);
         MSG msg;
         while (IsWindow(hwnd) && GetMessage(&msg, NULL, 0, 0)) {
-            if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE) {
-                d.result = 0;
-                DestroyWindow(hwnd);
-                continue;
+            if (msg.message == WM_KEYDOWN) {
+                PasteKeyAction act = paste_dlg_key_action((unsigned)msg.wParam,
+                                                          GetFocus() == d.hBtnCancel);
+                if (act == PASTE_KEY_CANCEL) {
+                    d.result = 0;
+                    DestroyWindow(hwnd);
+                    continue;
+                }
+                if (act == PASTE_KEY_PASTE) {
+                    SendMessage(hwnd, WM_COMMAND, IDOK, 0);   /* the button's path */
+                    continue;
+                }
+                if (act == PASTE_KEY_NEXT_BUTTON) {
+                    paste_dlg_focus_button(&d, GetFocus() == d.hBtnCancel
+                                                   ? d.hBtnPaste : d.hBtnCancel);
+                    continue;
+                }
             }
             TranslateMessage(&msg);
             DispatchMessage(&msg);
