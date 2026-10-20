@@ -39,7 +39,10 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | `cases\20-ai.ps1` | the five key-gated `ai_*` cases + `ai_panel_opens_without_key` + `ai_auto_approve_critical_asks_first` |
 | `cases\30-ui-demo.ps1` | `ui_gallery`, `approval_card_run_selected_settles`, `helpers_theme_pixel_matches_token`, `helpers_ansi_contrast_floor`, `helpers_theme_switch_repaints` |
 | `cases\40-helpers.ps1` | the other `helpers_*` cases |
-| `cases\50-window.ps1` | launch/window/shutdown/menu (`LAUNCH-*`, `RESIZE-1`, `WINDOW-*`, `CLOSE-1`, `MENU-1`) |
+| `cases\50-window.ps1` | launch/window/shutdown/menu (`LAUNCH-*`, `RESIZE-1`, `WINDOW-*`, `CLOSE-1`, `MENU-1`) and the keyboard shortcuts sheet (`HELP-1`: the three `help_shortcuts_sheet_*` cases below) |
+| `cases\50-window.ps1` | `help_shortcuts_sheet_opens_and_closes`: Help > Keyboard Shortcuts opens the modal sheet (captured by its own handle, main window disabled under it), a second open is ignored, Esc closes it and re-enables the main window |
+| `cases\50-window.ps1` | `help_shortcuts_sheet_fits_the_screen`: the sheet lies inside the work area at the current DPI; at 96 DPI on a 1920x1040 or larger work area it must be one page, with no scrollbar |
+| `cases\50-window.ps1` | `help_shortcuts_sheet_gallery`: `--ui-demo=shortcuts` on all four themes, the sheet captured by handle into `artifacts\gallery\<Theme>-shortcuts.png` |
 | `cases\60-tabs-logging.ps1` | tabs (`TABS-*`) and logging (`LOG-*`) |
 | `cases\70-cli.ps1` | CLI flags (`CLI-1`'s several small cases) |
 | `cases\80-local-shell.ps1` | `local_shell` (`--local`: echo, exit, silent reconnect) and `local_shell_powershell` (a saved local profile running `powershell.exe -NoLogo`: prompt, two-line paste, Ctrl+C on `Start-Sleep`, exit) |

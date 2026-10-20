@@ -1,5 +1,5 @@
 # 50-window.ps1 -- launch, window, shutdown, menu (integration-coverage.md section 1):
-# LAUNCH-1..3, RESIZE-1, WINDOW-1..2, CLOSE-1, MENU-1.
+# LAUNCH-1..3, RESIZE-1, WINDOW-1..2, CLOSE-1, MENU-1, and HELP-1 (the keyboard shortcuts sheet).
 # Dot-sourced by Run-Integration.ps1; depends on its Invoke-Case/Assert-True/
 # Test-NutshellCaptureNonBlank/$Artifacts/$HostName/$User/$KeyPath/$Exe/
 # $ActiveTiers/$Only/$results/$WM_COMMAND/$WM_CLOSE.
@@ -463,10 +463,10 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
         # resource.h. New Edit layout: Copy, Paste, Select All, "Send Key"
         # (popup), separator, Settings.
         $expected = @{
-            0 = @(2001, 0, 2002, 2003, 0, 2004, 2005, 0, 2007, 0, 2006)  # File
+            0 = @(2001, 2008, 0, 2002, 2003, 0, 2004, 2005, 0, 2007, 0, 2006)  # File: new session, close tab, ...
             1 = @(2010, 2011, 2012, -1, 0, 2013)                          # Edit
             2 = @(2020, 2022, 2021)                                       # View
-            3 = @(2029, 0, 2031, 2032, 0, 2030)                           # Help: guide, mark issue, log folder, about
+            3 = @(2033, 2029, 0, 2031, 2032, 0, 2030)                     # Help: shortcuts, guide, mark issue, log folder, about
         }
         $names = @("File", "Edit", "View", "Help")
         for ($i = 0; $i -lt $topCount; $i++) {
@@ -498,7 +498,7 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
 
         $path = Join-Path $Artifacts "$name.png"
         Save-NutshellScreenshot -Session $session -Path $path | Out-Null
-        $detail = "4 top-level menus; File 11 items, Edit 6 (incl. Send Key popup), View 3, Help 3; Send Key submenu 23 items (F1-F12, PgUp/PgDn, Ctrl+V/Shift+Insert/Ctrl+=/Ctrl+-, raw/Alt one-shots); every WM_COMMAND id matched resource.h/create_app_menu() in order (captions not API-observable -- owner-drawn, see case comment)"
+        $detail = "4 top-level menus; File 12 items, Edit 6 (incl. Send Key popup), View 3, Help 7; Send Key submenu 23 items (F1-F12, PgUp/PgDn, Ctrl+V/Shift+Insert/Ctrl+=/Ctrl+-, raw/Alt one-shots); every WM_COMMAND id matched resource.h/create_app_menu() in order (captions not API-observable -- owner-drawn, see case comment)"
         $ok = $true
     } catch {
         $detail = $_.Exception.Message
@@ -510,6 +510,114 @@ if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains 
             if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
         }
     }
+    if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
+    [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
+}
+
+# ---- HELP-1: Help > Keyboard Shortcuts (cheat-sheet spec section 3.2) ----------
+# The sheet is custom-painted (class Nutshell_Shortcuts, title "Keyboard
+# Shortcuts"), so it is captured by its own handle and keys are posted to that
+# handle. -nc: no SSH host needed. 2033 is IDM_HELP_SHORTCUTS (resource.h).
+$IDM_HELP_SHORTCUTS = 2033
+$WM_KEYDOWN_SHEET   = 0x0100
+$VK_ESCAPE_SHEET    = 0x1B
+
+function Open-NutshellShortcutsSheet {
+    <# Post Help > Keyboard Shortcuts to the main window and return the sheet's
+       HWND; throws if no sheet appears. #>
+    param([Parameter(Mandatory)] $Session)
+    [NutshellNative]::PostMessage($Session.Main, $WM_COMMAND, [IntPtr]$IDM_HELP_SHORTCUTS, [IntPtr]::Zero) | Out-Null
+    $dlg = Wait-NutshellDialog -Session $Session -Title "^Keyboard Shortcuts$" -TimeoutSec 10
+    Assert-True ($dlg -ne [IntPtr]::Zero) "Help > Keyboard Shortcuts opened no Nutshell_Shortcuts window"
+    Start-Sleep -Milliseconds 400   # let the first paint land before a capture
+    return $dlg
+}
+
+function Get-NutshellShortcutsSheets {
+    param([Parameter(Mandatory)] $Session)
+    return @(Get-NutshellWindows -Session $Session | Where-Object { ($_ -split "`t")[1] -eq "Nutshell_Shortcuts" })
+}
+
+Invoke-Case -Name "help_shortcuts_sheet_opens_and_closes" -Settings @{} -ExtraArgs @("-nc") -Body {
+    param($s)
+    $dlg = Open-NutshellShortcutsSheet -Session $s
+    $path = Join-Path $Artifacts "help_shortcuts_sheet.png"
+    Save-NutshellScreenshot -Session $s -Path $path -Hwnd ([long]$dlg) | Out-Null
+    Assert-True (Test-NutshellCaptureNonBlank -Path $path) "the sheet's capture looks blank: $path"
+    Assert-True (-not [NutshellNative]::IsWindowEnabled($s.Main)) "the main window stayed enabled under the modal sheet"
+
+    # A second Help > Keyboard Shortcuts while it is open opens nothing more.
+    [NutshellNative]::PostMessage($s.Main, $WM_COMMAND, [IntPtr]$IDM_HELP_SHORTCUTS, [IntPtr]::Zero) | Out-Null
+    Start-Sleep -Milliseconds 800
+    $n = (Get-NutshellShortcutsSheets -Session $s).Count
+    Assert-True ($n -eq 1) "a second Help > Keyboard Shortcuts left $n sheets open, expected 1"
+
+    # Esc posted to the sheet's own handle closes it.
+    [NutshellNative]::PostMessage($dlg, $WM_KEYDOWN_SHEET, [IntPtr]$VK_ESCAPE_SHEET, [IntPtr]::Zero) | Out-Null
+    $deadline = (Get-Date).AddSeconds(5)
+    while ((Get-Date) -lt $deadline -and [NutshellNative]::IsWindow($dlg)) { Start-Sleep -Milliseconds 100 }
+    Assert-True (-not [NutshellNative]::IsWindow($dlg)) "Esc posted to the sheet did not close it"
+    Assert-True ([NutshellNative]::IsWindowEnabled($s.Main)) "the main window is still disabled after the sheet closed"
+    "opened by WM_COMMAND 2033, captured by handle (non-blank), main window disabled while open; a second open ignored; Esc closed it; main window enabled again"
+}
+
+Invoke-Case -Name "help_shortcuts_sheet_fits_the_screen" -Settings @{} -ExtraArgs @("-nc") -Body {
+    param($s)
+    $dlg = Open-NutshellShortcutsSheet -Session $s
+    $r = New-Object NutshellNative+RECT
+    [NutshellNative]::GetWindowRect($dlg, [ref]$r) | Out-Null
+    $wa = Get-NutshellWorkArea
+    $dpi = [int][NutshellNative]::GetDpiForWindow($dlg)
+    $inside = ($r.L -ge $wa.X) -and ($r.T -ge $wa.Y) -and ($r.R -le ($wa.X + $wa.Width)) -and ($r.B -le ($wa.Y + $wa.Height))
+    Assert-True $inside ("sheet {0},{1}-{2},{3} leaves the work area {4},{5} {6}x{7} at {8} DPI" -f $r.L, $r.T, $r.R, $r.B, $wa.X, $wa.Y, $wa.Width, $wa.Height, $dpi)
+    # CSB_CLASS_NAME (custom_scrollbar.h); the sheet creates one only when its
+    # page is taller than its view.
+    $bars = @([NutshellNative]::ListChildren($dlg) | Where-Object { ($_ -split "`t")[2] -eq "Nutshell_CustomScrollbar" })
+    # Maintainer's ruling: at 96 DPI on a 1920x1040 (or larger) work area the
+    # whole sheet fits on one page. Other DPIs and work areas may scroll.
+    if ($dpi -eq 96 -and $wa.Width -ge 1920 -and $wa.Height -ge 1040) {
+        Assert-True ($bars.Count -eq 0) ("the sheet scrolls at 96 DPI on a {0}x{1} work area; it must fit on one page there" -f $wa.Width, $wa.Height)
+    }
+    $how = if ($bars.Count -gt 0) { "scrolls" } else { "one page" }
+    [NutshellNative]::PostMessage($dlg, $WM_KEYDOWN_SHEET, [IntPtr]$VK_ESCAPE_SHEET, [IntPtr]::Zero) | Out-Null
+    "sheet {0}x{1} inside the {2}x{3} work area at {4} DPI; {5}" -f ($r.R - $r.L), ($r.B - $r.T), $wa.Width, $wa.Height, $dpi, $how
+}
+
+# The sheet on all four themes, for the eye: --ui-demo=shortcuts opens it over
+# the demo window, so no host and no config theme edit is needed. Captured by
+# handle into artifacts\gallery\<Theme>-shortcuts.png beside ui_gallery's.
+if (($ActiveTiers -contains "gate") -and ($Only.Count -eq 0 -or $Only -contains "help_shortcuts_sheet_gallery")) {
+    $name = "help_shortcuts_sheet_gallery"
+    Write-Host ("[RUN ] " + $name)
+    $galleryDir = Join-Path $Artifacts "gallery"
+    New-Item -ItemType Directory -Force $galleryDir | Out-Null
+    $themes = @("Onyx Synapse", "Onyx Light", "Sage & Sand", "Moss & Mist")
+    $ok = $true
+    $notes = New-Object System.Collections.ArrayList
+    foreach ($theme in $themes) {
+        $testEnv = New-NutshellTestEnv -Exe $Exe -HostName $HostName -User $User -KeyPath $KeyPath
+        $session = $null
+        try {
+            $session = Start-Nutshell -Env $testEnv -ExtraArgs @("--ui-demo=shortcuts", "--theme", $theme)
+            $dlg = Wait-NutshellDialog -Session $session -Title "^Keyboard Shortcuts$" -TimeoutSec 10
+            Assert-True ($dlg -ne [IntPtr]::Zero) "--ui-demo=shortcuts opened no sheet"
+            Start-Sleep -Milliseconds 400
+            $path = Join-Path $galleryDir ("{0}-shortcuts.png" -f (ConvertTo-NutshellFileToken $theme))
+            Save-NutshellScreenshot -Session $session -Path $path -Hwnd ([long]$dlg) | Out-Null
+            Assert-True (Test-NutshellCaptureNonBlank -Path $path) "capture looks blank: $path"
+            [void]$notes.Add("${theme}: ok")
+        } catch {
+            $ok = $false
+            [void]$notes.Add("${theme}: " + $_.Exception.Message)
+        } finally {
+            if ($session) { Stop-Nutshell -Session $session }
+            for ($try = 0; $try -lt 5 -and (Test-Path $testEnv.Root); $try++) {
+                Remove-Item -Recurse -Force $testEnv.Root -ErrorAction SilentlyContinue
+                if (Test-Path $testEnv.Root) { Start-Sleep -Milliseconds 400 }
+            }
+        }
+    }
+    $detail = "sheet captured by handle on 4 themes into artifacts\gallery\<Theme>-shortcuts.png -- " + ($notes -join "; ")
     if ($ok) { Write-Host ("[PASS] " + $name) } else { Write-Host ("[FAIL] " + $name + " -- " + $detail) }
     [void]$results.Add([pscustomobject]@{ Name = $name; Passed = $ok; Detail = $detail })
 }

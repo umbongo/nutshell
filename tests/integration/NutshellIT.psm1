@@ -91,6 +91,8 @@ public class NutshellNative {
     [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint uCode, uint uMapType);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
     /* Menu structure (WINDOW-1/MENU-1): the app menu is built entirely in
      * code (src/ui/window.c's create_app_menu(), MF_OWNERDRAW throughout --
      * there is no MENU resource in resource.rc) and every item's text is
@@ -627,8 +629,9 @@ $script:VK_EXTENDED = @(0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x2D, 0x
 # Window classes Nutshell's own dialogs use (see src/ui/*.c for each
 # RegisterClass call). Session Manager and the host-key/error MessageBoxes are
 # real dialogs (class #32770); Settings, the paste preview, the passphrase
-# prompt and About are hand-built popup windows with their own classes.
-$script:DIALOG_CLASSES = @("#32770", "NutshellPassDlg", "Nutshell_Settings", "Nutshell_PastePreview", "Nutshell_About")
+# prompt, About and the keyboard shortcuts sheet are hand-built popup windows
+# with their own classes.
+$script:DIALOG_CLASSES = @("#32770", "NutshellPassDlg", "Nutshell_Settings", "Nutshell_PastePreview", "Nutshell_About", "Nutshell_Shortcuts")
 
 function New-NutshellTestEnv {
     <#

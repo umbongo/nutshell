@@ -15,7 +15,9 @@
 #
 # $galleryStates is a hand-kept copy of src/core/ui_demo.c's STATE_NAMES,
 # minus "local" (tab-chrome-only, covered by its own case,
-# 80-local-shell.ps1) -- there is no cheap way for a PowerShell script to
+# 80-local-shell.ps1) and "shortcuts" (the modal sheet; this case captures
+# only the main window, so 50-window.ps1's help_shortcuts_sheet_gallery
+# captures the sheet by its handle) -- there is no cheap way for a PowerShell script to
 # query the C array at build time, and --ui-demo=<unknown>'s error text
 # ("Unknown demo state: <name>") does not enumerate the valid ones. Native
 # coverage that this list can't silently drift from ui_demo_states() lives
