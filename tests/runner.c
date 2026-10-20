@@ -1214,6 +1214,16 @@ int test_term_view_to_logical_fresh_tab_clamps_top(void);
 int test_term_resize_clamps_scrollback_offset(void);
 int test_term_max_scroll_offset_is_history_held(void);
 int test_term_parser_writes_live_screen_while_scrolled_back(void);
+int test_term_lines_recycled_counts_only_recycles(void);
+int test_term_lines_recycled_keeps_line_numbers_stable(void);
+int test_term_alt_ring_has_its_own_recycle_count(void);
+int test_term_epoch_bumps_on_reflow_and_alt_switch_only(void);
+int test_term_stamp_cell_write_and_not_cursor_motion(void);
+int test_term_stamp_line_edits(void);
+int test_term_stamp_erase_display(void);
+int test_term_stamp_region_scrolls(void);
+int test_term_stamp_full_screen_scroll_touches_only_the_new_row(void);
+int test_term_stamp_recycled_row_carries_its_new_number(void);
 
 /* test_theme.c */
 int test_theme_dark_background(void);
@@ -4541,6 +4551,16 @@ int main(void) {
     failed += test_term_resize_clamps_scrollback_offset();
     failed += test_term_max_scroll_offset_is_history_held();
     failed += test_term_parser_writes_live_screen_while_scrolled_back();
+    failed += test_term_lines_recycled_counts_only_recycles();
+    failed += test_term_lines_recycled_keeps_line_numbers_stable();
+    failed += test_term_alt_ring_has_its_own_recycle_count();
+    failed += test_term_epoch_bumps_on_reflow_and_alt_switch_only();
+    failed += test_term_stamp_cell_write_and_not_cursor_motion();
+    failed += test_term_stamp_line_edits();
+    failed += test_term_stamp_erase_display();
+    failed += test_term_stamp_region_scrolls();
+    failed += test_term_stamp_full_screen_scroll_touches_only_the_new_row();
+    failed += test_term_stamp_recycled_row_carries_its_new_number();
 
     printf("\n--- VT Sequences ---\n");
     failed += test_vt_osc_title_0();

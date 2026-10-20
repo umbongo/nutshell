@@ -51,6 +51,7 @@ typedef struct {
     int len;
     bool dirty;
     bool wrapped;
+    uint32_t gen;      /* Terminal.write_gen at this row's last write (term_row_stamp) */
 } TermRow;
 
 typedef struct {
@@ -122,6 +123,20 @@ typedef struct {
      * dispatcher) that need to detect terminal quiescence without diffing
      * screen content. */
     unsigned long write_seq;
+
+    /* Selection support (spec docs/superpowers/specs/2026-10-20-putty-selection-design.md
+     * section 2.2). lines_recycled: rows dropped from the front of this ring,
+     * ever -- per ring: the alternate screen counts its own while the
+     * primary's waits in primary_lines_recycled. The absolute line number of
+     * logical index i is lines_recycled + i, stable while epoch is. epoch:
+     * bumped by reflow and by alt-screen enter/leave, the events that renumber
+     * or replace the rows. write_gen: bumped by every row write; the row
+     * written takes the new value (term_row_stamp()). It wraps after 2^32
+     * writes, so compare stamps wrap-safely. */
+    uint64_t lines_recycled;
+    uint64_t primary_lines_recycled;
+    uint32_t epoch;
+    uint32_t write_gen;
 
     /* The debug log's session id (the "s3" in a log line; 0 prints "-").
      * Set by whoever owns the session (window.c) right after term_init();
@@ -242,6 +257,13 @@ int term_max_scroll_offset(const Terminal *t);
  * term_screen_to_phys() above has no such bound because it needs none.) */
 static inline int term_logical_rows(const Terminal *term) {
     return term->lines_count > term->rows ? term->lines_count : term->rows;
+}
+
+/* Stamp a row as written now. The parser calls it only from get_screen_row(),
+ * the one place every parser write passes through; buffer.c calls it for the
+ * rows a scroll moves, clears or recycles. Cursor motion never stamps. */
+static inline void term_row_stamp(Terminal *term, TermRow *row) {
+    row->gen = ++term->write_gen;
 }
 
 #endif

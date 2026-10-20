@@ -1394,3 +1394,168 @@ int test_term_parser_writes_live_screen_while_scrolled_back(void)
     term_free(t);
     TEST_END();
 }
+
+/* ---- Line numbers, epoch and write stamps (spec 2026-10-20 2.2) ---- */
+
+static TermRow *logical_row(Terminal *t, int logical)
+{
+    return t->lines[(t->lines_start + logical) % t->lines_capacity];
+}
+
+/* Bit r set when screen row r's stamp changed while `seq` was processed. */
+static unsigned stamp_mask(Terminal *t, const char *seq)
+{
+    uint32_t before[16];
+    for (int r = 0; r < t->rows; r++) before[r] = t->lines[term_screen_to_phys(t, r)]->gen;
+    term_process(t, seq, strlen(seq));
+    unsigned mask = 0;
+    for (int r = 0; r < t->rows; r++)
+        if (t->lines[term_screen_to_phys(t, r)]->gen != before[r]) mask |= 1u << r;
+    return mask;
+}
+
+int test_term_lines_recycled_counts_only_recycles(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 76);         /* capacity 100, 24 lines held */
+    for (int i = 0; i < 76; i++) term_scroll(t); /* appends only */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)0);
+    term_scroll(t);                              /* the first recycle */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_lines_recycled_keeps_line_numbers_stable(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 20, 90);         /* capacity 100 */
+    term_process(t, "\x1b[10;1HM", 8);           /* a marker on the bottom row */
+    uint64_t marker = t->lines_recycled + (uint64_t)term_view_to_logical(t, 9);
+    for (int i = 0; i < 50; i++) term_scroll(t);
+    int logical = (int)(marker - t->lines_recycled);
+    ASSERT_EQ(logical_row(t, logical)->cells[0].codepoint, 'M');
+    for (int i = 0; i < 10000; i++) term_scroll(t);
+    /* 10,050 scrolls: 90 appends filled the ring, the rest recycled. */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)(10050 - 90));
+    ASSERT_TRUE(marker < t->lines_recycled);     /* the marked line is gone */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_alt_ring_has_its_own_recycle_count(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 2);           /* capacity 7 */
+    for (int i = 0; i < 10; i++) term_scroll(t); /* 2 appends, 8 recycles */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)8);
+    term_alt_screen_enter(t);
+    ASSERT_EQ(t->lines_recycled, (uint64_t)0);
+    for (int i = 0; i < 3; i++) term_scroll(t);  /* the alt ring is always full */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)3);
+    term_alt_screen_exit(t);
+    ASSERT_EQ(t->lines_recycled, (uint64_t)8);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_epoch_bumps_on_reflow_and_alt_switch_only(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    uint32_t e0 = t->epoch;
+    term_process(t, "hello\r\nworld\x1b[2J\x1b[1;1H", 22);
+    term_scroll(t);
+    t->scrollback_offset = 1;
+    term_resize(t, 5, 10);                       /* same size: no reflow */
+    ASSERT_EQ(t->epoch, e0);
+    term_resize(t, 6, 10);
+    ASSERT_EQ(t->epoch, e0 + 1);
+    term_alt_screen_enter(t);
+    ASSERT_EQ(t->epoch, e0 + 2);
+    term_resize(t, 6, 12);                       /* one resize on the alt screen: one bump */
+    ASSERT_EQ(t->epoch, e0 + 3);
+    term_alt_screen_exit(t);
+    ASSERT_EQ(t->epoch, e0 + 4);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_cell_write_and_not_cursor_motion(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;1HA"), 1u << 2);
+    ASSERT_EQ(stamp_mask(t, "\x1b[5;5H\n\x1b[A\r"), 0u);   /* CUP, LF, CUU, CR */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_line_edits(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    ASSERT_EQ(stamp_mask(t, "\x1b[4h\x1b[3;1HB\x1b[4l"), 1u << 2); /* insert-mode shift */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;1H\x1b[2@"), 1u << 2);          /* ICH */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;1H\x1b[P"), 1u << 2);           /* DCH */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;4H\x1b[K"), 1u << 2);           /* EL */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;1H\x1b[3X"), 1u << 2);          /* ECH */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_erase_display(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    ASSERT_EQ(stamp_mask(t, "\x1b[6;1H\x1b[J"), 0xE0u);   /* ED 0: rows 5-7 */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;2H\x1b[1J"), 0x07u);  /* ED 1: rows 0-2 */
+    ASSERT_EQ(stamp_mask(t, "\x1b[2J"), 0xFFu);           /* ED 2: every row */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_region_scrolls(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    ASSERT_EQ(stamp_mask(t, "\x1b[6;1H\x1b[L"), 0xE0u);   /* IL at row 5: rows 5-7 */
+    ASSERT_EQ(stamp_mask(t, "\x1b[6;1H\x1b[M"), 0xE0u);   /* DL at row 5 */
+    ASSERT_EQ(stamp_mask(t, "\x1b[T"), 0xFFu);            /* SD: whole region */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;6r\x1b[6;1H\n"), 0x3Cu); /* DECSTBM 2-5, LF at its bottom */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_full_screen_scroll_touches_only_the_new_row(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    term_process(t, "A\r\nB\r\nC", 7);
+    int n = t->lines_count;
+    uint32_t before[8];
+    for (int i = 0; i < n; i++) before[i] = logical_row(t, i)->gen;
+    term_process(t, "\x1b[S", 3);                /* SU on the primary: term_scroll() */
+    ASSERT_EQ(t->lines_count, n + 1);
+    for (int i = 0; i < n; i++) ASSERT_EQ(logical_row(t, i)->gen, before[i]);
+    ASSERT_EQ(logical_row(t, n)->gen, t->write_gen);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_recycled_row_carries_its_new_number(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 2);           /* capacity 6 */
+    term_scroll(t);
+    term_scroll(t);                              /* full */
+    TermRow *oldest = t->lines[t->lines_start];
+    term_scroll(t);                              /* recycles it */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)1);
+    int last = t->lines_count - 1;
+    ASSERT_TRUE(logical_row(t, last) == oldest);
+    ASSERT_EQ(oldest->gen, t->write_gen);
+    ASSERT_EQ(t->lines_recycled + (uint64_t)last, (uint64_t)6); /* its new number */
+    term_free(t);
+    TEST_END();
+}

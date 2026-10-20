@@ -33,20 +33,17 @@ uint32_t color256_to_rgb(uint8_t index) {
     return (v << 16) | (v << 8) | v;
 }
 
-/* Helper: Get pointer to a screen row (0-based index from top of visible screen) */
+/* Helper: the row at a screen row (0-based from the top of the live screen)
+ * for writing. term_screen_to_phys() is the live mapping (term.h). Every
+ * parser write reaches a row through here -- cell writes, insert-mode shifts,
+ * ICH/DCH, EL/ED/ECH, the auto-wrap flag -- so this is the one place the
+ * parser stamps a row (spec 2026-10-20 section 2.2). Cursor motion never
+ * calls it. */
 static TermRow *get_screen_row(Terminal *term, int screen_row) {
     if (screen_row < 0 || screen_row >= term->rows) return NULL;
-    
-    // The screen is always the last 'rows' lines of the buffer.
-    // logical_idx 0 is the oldest line in the buffer.
-    // logical_idx of top of screen = term->lines_count - term->rows.
-    // If lines_count < rows (startup), top is 0.
-    
-    int top_logical = (term->lines_count >= term->rows) ? (term->lines_count - term->rows) : 0;
-    int logical_idx = top_logical + screen_row;
-    int physical_idx = (term->lines_start + logical_idx) % term->lines_capacity;
-    
-    return term->lines[physical_idx];
+    TermRow *row = term->lines[term_screen_to_phys(term, screen_row)];
+    if (row) term_row_stamp(term, row);
+    return row;
 }
 
 static void clamp_cursor(Terminal *term) {
