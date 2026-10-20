@@ -387,6 +387,22 @@ Open, in priority order:
 - [ ] The AI panel never refreshes `d->dpi` after `WM_CREATE`: paint, hit and tooltip
       rects stay consistent with each other, but the panel does not rescale on a monitor
       move (found 2026-10-18 during the Auto-approve review).
+- [ ] Scrolled-back repaint storm (2026-10-18 `issue3.log` lines 11761-12797, out of scope of
+      `2026-10-18-conpty-resize-anchor-design.md`): with `scrollback_offset` 12..6, 186 paints
+      in 4.4 s had `dirty_rows` equal to the offset, driven by `poll.invalidate poll_rc=0`
+      every ~16 ms, `rows_left_dirty=0`, and `render.stuck_dirty` never fired. The live rows
+      below the scrolled view look never cleared; find why and teach the detector to see it.
+- [ ] SSH to a Windows host (Win32-OpenSSH runs the remote shell under a server-side ConPTY)
+      shows the same full-viewport repaints after a resize as the local shell. The top-anchored
+      reflow of `2026-10-18-conpty-resize-anchor-design.md` is per session: offer it as a
+      profile option, or switch to it when platform detection says Windows.
+- [ ] Wide characters: the parser gives every codepoint one cell, ConPTY and most terminals
+      give East Asian wide characters and most emoji two, so such rows drift from the shell's
+      idea of the cursor column. Pre-existing; needs a width table and two-cell rendering.
+- [ ] Parser quirk (pre-existing, left alone by the ConPTY resize spec because fixing it changes
+      SSH rendering): EL never updates `TermRow.len` or `wrapped`, ED 0/1 leave the cursor row's
+      `len` and the cleared rows' `wrapped`, and a line feed never clears `wrapped`
+      (`parser.c:368-458`, `:641-647`), so `len` can exceed the written width.
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the

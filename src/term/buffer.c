@@ -127,6 +127,7 @@ static void term_reflow_buffer(
     int cur_new_col = 0;
     int new_cursor_row = 0;
     int new_cursor_col = 0;
+    bool cursor_after_full_row = false;
 
     /* Convert screen-relative cursor to buffer-absolute logical index */
     int old_screen_top = (old_count >= old_rows) ? (old_count - old_rows) : 0;
@@ -146,7 +147,27 @@ static void term_reflow_buffer(
         /* Only reflow up to the written content width */
         int cell_limit = old_row->len < old_cols ? old_row->len : old_cols;
 
+        /* A continuation row that holds the cursor but no cells still gets
+         * its own output row when the row before it ended exactly at
+         * new_cols, so the cursor keeps its row (spec section 2). */
+        if (old_row->wrapped && i > 0 && i == cursor_logical &&
+            cell_limit == 0 && cur_new_col >= new_cols) {
+            cur_new_row++;
+            cur_new_col = 0;
+            if (cur_new_row >= new_capacity) break;
+            new_lines[cur_new_row]->wrapped = true;
+        }
+
         for (int c = 0; c < cell_limit; c++) {
+            /* Exact width (spec section 2): wrap when the next cell of the
+             * same logical line arrives, never after the last one, so a row
+             * that ends exactly at new_cols gains no blank wrapped row. */
+            if (cur_new_col >= new_cols) {
+                cur_new_row++;
+                cur_new_col = 0;
+                if (cur_new_row >= new_capacity) break;
+                new_lines[cur_new_row]->wrapped = true;
+            }
             if (i == cursor_logical && c == cur_col) {
                 new_cursor_row = cur_new_row;
                 new_cursor_col = cur_new_col;
@@ -154,16 +175,17 @@ static void term_reflow_buffer(
             new_lines[cur_new_row]->cells[cur_new_col] = old_row->cells[c];
             new_lines[cur_new_row]->len = cur_new_col + 1;
             cur_new_col++;
-            if (cur_new_col >= new_cols) {
-                cur_new_row++;
-                cur_new_col = 0;
-                if (cur_new_row >= new_capacity) break;
-                new_lines[cur_new_row]->wrapped = true;
-            }
         }
+        /* A cursor past the content keeps its distance from it (spec
+         * section 2); the clamp to new_cols - 1 below bounds it, except that
+         * a cursor whose row ends exactly at new_cols keeps the pending-wrap
+         * column instead of landing on content (the distance is lost there). */
         if (i == cursor_logical && cur_col >= cell_limit) {
             new_cursor_row = cur_new_row;
-            new_cursor_col = cur_new_col;
+            cursor_after_full_row = (cur_new_col == new_cols);
+            new_cursor_col = cursor_after_full_row
+                           ? cur_new_col
+                           : cur_new_col + (cur_col - cell_limit);
         }
     }
 
@@ -212,7 +234,16 @@ static void term_reflow_buffer(
     if (new_cursor_row < 0)        new_cursor_row = 0;
     if (new_cursor_row >= new_rows) new_cursor_row = new_rows - 1;
     if (new_cursor_col < 0)        new_cursor_col = 0;
-    if (new_cursor_col >= new_cols) new_cursor_col = new_cols - 1;
+    /* The clamp never lands on a content cell. A cursor at or past its row's
+     * content (any distance) whose row, after reflow, ends exactly at new_cols
+     * keeps col == new_cols: the pending wrap survives the resize, so the next
+     * character wraps instead of overwriting the last cell (spec section 2
+     * identity). For a cursor past the content the distance is lost there. Any
+     * other column past the row is clamped, and then the content ends before
+     * that cell, so it is blank. */
+    if (new_cursor_col >= new_cols &&
+        !(cursor_after_full_row && new_cursor_col == new_cols))
+        new_cursor_col = new_cols - 1;
 
     *out_lines      = new_lines;
     *out_capacity   = new_capacity;

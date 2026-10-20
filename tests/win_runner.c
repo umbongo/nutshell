@@ -36,7 +36,11 @@ int test_local_pty_records_key_mapping(void);
 int test_local_pty_records_fullscreen_modes(void);
 int test_local_pty_powershell_settles_after_command_error(void);
 int test_key_layout_records_ctrl_space(void);
+int test_local_pty_open_ex_passes_pcon_flags(void);
+int test_local_pty_console_probe_dumps(void);
+int test_local_pty_resize_parity(void);
 int nspty_key_dump_main(void);
+int nsprobe_console_main(const char *scenario, const char *dump_path);
 
 /* ---- why the ConPTY cases run in a re-executed child --------------------
  *
@@ -76,7 +80,10 @@ int nspty_key_dump_main(void);
 /* test_local_pty_records_key_mapping runs this executable again, under a
  * pseudo-console, as the program whose console input it records. */
 #define KEY_DUMP_FLAG  "--dump-keys"
-#define PTY_CASE_COUNT 7
+/* test_local_pty_console_probe_dumps (and the resize parity case) run this
+ * executable again as the console program whose buffer they read back. */
+#define CONSOLE_PROBE_FLAG "--console-probe"
+#define PTY_CASE_COUNT 10
 
 struct PtyCase { const char *name; int (*fn)(void); };
 
@@ -96,6 +103,11 @@ static int run_pty_cases(void)
           test_local_pty_powershell_settles_after_command_error },
         { "test_key_layout_records_ctrl_space",
           test_key_layout_records_ctrl_space },
+        { "test_local_pty_open_ex_passes_pcon_flags",
+          test_local_pty_open_ex_passes_pcon_flags },
+        { "test_local_pty_console_probe_dumps",
+          test_local_pty_console_probe_dumps },
+        { "test_local_pty_resize_parity", test_local_pty_resize_parity },
     };
     int failed = 0;
     for (size_t i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
@@ -141,7 +153,8 @@ static int spawn_pty_child(void)
         return -1;
     CloseHandle(pi.hThread);
 
-    DWORD wait_rc = WaitForSingleObject(pi.hProcess, 120000u);
+    /* 300 s: the resize parity case alone opens eight pseudo-consoles. */
+    DWORD wait_rc = WaitForSingleObject(pi.hProcess, 300000u);
     DWORD code = 1u;
     if (wait_rc == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &code);
     else TerminateProcess(pi.hProcess, 1);
@@ -168,6 +181,8 @@ int main(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], KEY_DUMP_FLAG) == 0)
         return nspty_key_dump_main();
+    if (argc >= 4 && strcmp(argv[1], CONSOLE_PROBE_FLAG) == 0)
+        return nsprobe_console_main(argv[2], argv[3]);
     if (argc >= 3 && strcmp(argv[1], PTY_CHILD_FLAG) == 0) {
         /* Re-executed half. Swap the inherited console for a fresh hidden
          * one, then open the report file -- in that order, and with fopen

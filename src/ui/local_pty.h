@@ -24,6 +24,15 @@ typedef struct LocalPty LocalPty;
  * the Windows test harness to print (does it open with a DSR/DA query?). */
 #define LOCAL_PTY_FIRST_MAX ((size_t)512)
 
+/* CreatePseudoConsole's flag for a terminal that reflows its own buffer on a
+ * resize (docs/superpowers/specs/2026-10-18-conpty-resize-anchor-design.md
+ * section 0). The MinGW headers this tree builds against do not define it;
+ * the value is the one Windows Terminal passes. local_pty_open() does not
+ * pass it: the console probe (tests/test_local_pty.c) decides. */
+#ifndef PSEUDOCONSOLE_RESIZE_QUIRK
+#define PSEUDOCONSOLE_RESIZE_QUIRK 0x2
+#endif
+
 /* Open a pseudo-console running spec->command at cols x rows and start the
  * reader thread.
  *
@@ -35,9 +44,12 @@ LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
                          char *err, size_t err_size);
 
 /* The same, with the session's debug-log id (the "s3" in a log line; 0 for
- * none) so the shell.* events and the reader thread's lines carry it. */
+ * none) so the shell.* events and the reader thread's lines carry it, and
+ * the flags CreatePseudoConsole gets (a DWORD: 0, or
+ * PSEUDOCONSOLE_RESIZE_QUIRK; local_pty_open() passes 0). */
 LocalPty *local_pty_open_ex(const LocalShellSpec *spec, int cols, int rows,
-                            unsigned log_id, char *err, size_t err_size);
+                            unsigned log_id, unsigned long pcon_flags,
+                            char *err, size_t err_size);
 
 /* The vtable. kind is SESSION_LOCAL and ctx is the LocalPty; the SessionIo
  * is dead once close() has run, exactly as for session_io_ssh(). Returns a
@@ -59,6 +71,11 @@ int local_pty_child_exited(const LocalPty *pty);
 /* The child's exit code once it has exited (-1 while it is still running or
  * when it cannot be read). For the shell.exit log event. */
 long local_pty_exit_code(const LocalPty *pty);
+
+/* Every byte poll() feeds the emulator is also written, unchanged, to tap
+ * (NULL stops it) and flushed: the Windows harness's fixture recorder.
+ * The caller owns the FILE and closes it after local_pty_close(). */
+void local_pty_set_raw_tap(LocalPty *pty, FILE *tap);
 
 /* Copy out the first bytes ConPTY emitted on open (up to
  * LOCAL_PTY_FIRST_MAX, captured before anything was written to the shell).
