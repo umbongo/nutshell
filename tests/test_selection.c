@@ -1078,3 +1078,21 @@ int test_sel_extend_from_keeps_anchor_for_further_drag(void)
     term_free(t);
     TEST_END();
 }
+
+/* ---- click cycling ------------------------------------------------------ */
+
+int test_sel_click_count_cycles_one_two_three(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(selection_click_count(0, true), 1);
+    ASSERT_EQ(selection_click_count(1, true), 2);
+    ASSERT_EQ(selection_click_count(2, true), 3);
+    ASSERT_EQ(selection_click_count(3, true), 1);             /* a fourth click starts over */
+    ASSERT_EQ(selection_click_count(2, false), 1);
+    ASSERT_EQ(selection_click_count(3, false), 1);
+    ASSERT_EQ(selection_click_count(1, false), 1);
+    int c = 0;
+    for (int i = 0; i < 7; i++) c = selection_click_count(c, true);
+    ASSERT_EQ(c, 1);                                          /* 1,2,3,1,2,3,1 */
+    TEST_END();
+}

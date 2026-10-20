@@ -615,11 +615,10 @@ static PasteState g_paste = {0};
  * it (spec section 2.5). */
 static Session *g_drag_session = NULL;
 
-/* The last WM_LBUTTONDBLCLK in the terminal, so that the press after it can
- * be the triple-click (spec section 1). */
-static DWORD g_dblclk_tick = 0;
-static int   g_dblclk_x = 0, g_dblclk_y = 0;
-static bool  g_dblclk_armed = false;
+/* The last press in the terminal, from either message, so the next press can
+ * continue the click cycle 1, 2, 3, 1, ... (spec section 1). A Shift or
+ * middle-click extend is not a press of the cycle and leaves it alone. */
+static struct { DWORD tick; int x, y, count; } g_last_press = { 0, 0, 0, 0 };
 
 /* Set in WM_KEYDOWN when Ctrl+Shift+C copies, so the WM_CHAR that
  * TranslateMessage still queues for 0x03 is swallowed instead of being sent
@@ -740,19 +739,25 @@ static void extend_terminal_drag(HWND hwnd, Session *s, int px, int py)
         force_full_terminal_repaint(hwnd, s->term);
 }
 
-/* 1 for a press; 3 for the press that follows a double-click within the
- * double-click time and rectangle. GetTickCount() rather than
- * GetMessageTime(): the harness sends its clicks, and a sent message has no
- * message time of its own (spec section 5). */
+/* The click count for a terminal press at client (x, y), and the record of
+ * it. A press within the double-click time and rectangle of the last one
+ * continues the cycle (1 cell, 2 word, 3 line, then a cell again) whichever
+ * message Windows delivered it as: CS_DBLCLKS turns every second press into
+ * WM_LBUTTONDBLCLK, and its own rule differs from ours after the third.
+ * GetTickCount() rather than GetMessageTime(): the harness sends its clicks,
+ * and a sent message has no message time of its own (spec section 5). */
 static int terminal_press_clicks(int x, int y)
 {
-    int clicks = 1;
-    if (g_dblclk_armed &&
-        GetTickCount() - g_dblclk_tick <= (DWORD)GetDoubleClickTime() &&
-        abs(x - g_dblclk_x) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
-        abs(y - g_dblclk_y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2)
-        clicks = 3;
-    g_dblclk_armed = false;
+    DWORD now = GetTickCount();
+    bool within = g_last_press.count > 0 &&
+        now - g_last_press.tick <= (DWORD)GetDoubleClickTime() &&
+        abs(x - g_last_press.x) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+        abs(y - g_last_press.y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
+    int clicks = selection_click_count(g_last_press.count, within);
+    g_last_press.tick = now;
+    g_last_press.x = x;
+    g_last_press.y = y;
+    g_last_press.count = clicks;
     return clicks;
 }
 
@@ -5400,16 +5405,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     return 0;
                 }
             }
-            int clicks;
-            if (msg == WM_LBUTTONDBLCLK) {
-                g_dblclk_tick = GetTickCount();
-                g_dblclk_x = mx;
-                g_dblclk_y = my;
-                g_dblclk_armed = true;
-                clicks = 2;
-            } else {
-                clicks = terminal_press_clicks(mx, my);
-            }
+            int clicks = terminal_press_clicks(mx, my);
             start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks);
             return 0;
         }

@@ -1971,6 +1971,7 @@ int test_sel_extend_from_line_mode_by_whole_lines(void);
 int test_sel_extend_from_without_selection_is_a_click(void);
 int test_sel_extend_from_after_epoch_change_starts_fresh(void);
 int test_sel_extend_from_keeps_anchor_for_further_drag(void);
+int test_sel_click_count_cycles_one_two_three(void);
 
 /* test_ui_theme.c */
 int test_ui_theme_count(void);
@@ -5472,6 +5473,7 @@ int main(void) {
     failed += test_sel_extend_from_without_selection_is_a_click();
     failed += test_sel_extend_from_after_epoch_change_starts_fresh();
     failed += test_sel_extend_from_keeps_anchor_for_further_drag();
+    failed += test_sel_click_count_cycles_one_two_three();
 
     /* test_cursor_scroll.c */
     failed += test_cursor_visible_at_bottom();

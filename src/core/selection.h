@@ -56,6 +56,10 @@ void selection_begin(Selection *s, const Terminal *t, int screen_row, int col,
  * click_count 1. */
 void selection_extend_from(Selection *s, const Terminal *t, int screen_row, int col,
                            int px, int py);
+/* The click count for a press: `within` is true when the press is inside the
+ * double-click time and rectangle of the previous press; the count cycles
+ * 1, 2, 3, 1, ... (PuTTY), so a fourth rapid click selects a cell again. */
+int selection_click_count(int prev_count, bool within);
 /* A move while the button is held. A STREAM press becomes a selection only
  * once the pointer has moved drag_cx/drag_cy pixels on either axis. */
 void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,

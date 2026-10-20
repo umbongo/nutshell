@@ -260,6 +260,11 @@ static bool sel_nearer_start(const Selection *s, SelPoint p)
     return cs < ce;                                /* ties go to the end */
 }
 
+int selection_click_count(int prev_count, bool within)
+{
+    return within ? (prev_count % 3) + 1 : 1;
+}
+
 void selection_extend_from(Selection *s, const Terminal *t, int screen_row, int col,
                            int px, int py)
 {
