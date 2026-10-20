@@ -1224,6 +1224,11 @@ int test_term_stamp_erase_display(void);
 int test_term_stamp_region_scrolls(void);
 int test_term_stamp_full_screen_scroll_touches_only_the_new_row(void);
 int test_term_stamp_recycled_row_carries_its_new_number(void);
+int test_term_wrapped_cleared_by_el2(void);
+int test_term_wrapped_cleared_by_el_from_column_0_only(void);
+int test_term_wrapped_cleared_by_ed_whole_rows(void);
+int test_term_wrapped_kept_by_readline_home_end(void);
+int test_term_wrapped_ctrl_u_leaves_next_output_unwrapped(void);
 
 /* test_theme.c */
 int test_theme_dark_background(void);
@@ -4561,6 +4566,11 @@ int main(void) {
     failed += test_term_stamp_region_scrolls();
     failed += test_term_stamp_full_screen_scroll_touches_only_the_new_row();
     failed += test_term_stamp_recycled_row_carries_its_new_number();
+    failed += test_term_wrapped_cleared_by_el2();
+    failed += test_term_wrapped_cleared_by_el_from_column_0_only();
+    failed += test_term_wrapped_cleared_by_ed_whole_rows();
+    failed += test_term_wrapped_kept_by_readline_home_end();
+    failed += test_term_wrapped_ctrl_u_leaves_next_output_unwrapped();
 
     printf("\n--- VT Sequences ---\n");
     failed += test_vt_osc_title_0();

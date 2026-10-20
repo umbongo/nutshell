@@ -152,7 +152,9 @@ int test_reflow_cursor_on_empty_continuation_keeps_row(void)
     ASSERT_NOT_NULL(t);
     feed(t, "AAAAAAAAAAAAAAAAAAAAB");     /* 20 A, then B auto-wraps   */
     ASSERT_TRUE(screen_row(t, 1)->wrapped);
-    feed(t, "\x1b[1;20H\x1b[J");          /* ED 0: row 1 keeps wrapped */
+    feed(t, "\x1b[1;20H\x1b[J");          /* ED 0 clears row 1 */
+    /* The parser no longer leaves a wrapped empty row after ED 0, so set the precondition here. */
+    t->lines[term_screen_to_phys(t, 1)]->wrapped = true;
     feed(t, "A");                          /* row 0 full again          */
     feed(t, "\x1b[2;1H");                  /* cursor to row 1, col 0    */
     ASSERT_TRUE(screen_row(t, 1)->wrapped);

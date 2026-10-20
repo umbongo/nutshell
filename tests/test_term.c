@@ -1559,3 +1559,87 @@ int test_term_stamp_recycled_row_carries_its_new_number(void)
     term_free(t);
     TEST_END();
 }
+
+/* ---- wrapped on erase (spec 2026-10-20 2.4) ---- */
+
+static TermRow *trow(Terminal *t, int screen_row)
+{
+    return t->lines[term_screen_to_phys(t, screen_row)];
+}
+
+static void tfeed(Terminal *t, const char *s)
+{
+    term_process(t, s, strlen(s));
+}
+
+int test_term_wrapped_cleared_by_el2(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");                    /* row 1 continues row 0 */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;1H\x1b[2K");
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_cleared_by_el_from_column_0_only(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[2;4H\x1b[K");                 /* EL 0 from column 3: partial */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;1H\x1b[K");                 /* EL 0 from column 0: whole row */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_cleared_by_ed_whole_rows(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[1;6H\x1b[J");                 /* ED 0 from row 0: row 1 is a whole row */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+
+    t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB\r\nx");
+    tfeed(t, "\x1b[3;1H\x1b[1J");                /* ED 1 from row 2: row 1 is a whole row */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_kept_by_readline_home_end(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "$ echo abcdefg");                  /* "$ echo abc" + "defg", cursor row 1 col 4 */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[A\r\x1b[2C");                 /* Home: CUU, CR, CUF */
+    tfeed(t, "\n\x1b[5G");                       /* End: cud1 (a bare LF), CHA */
+    tfeed(t, "\x1b[2;3H");                       /* CUP onto the row */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    ASSERT_EQ(trow(t, 1)->cells[0].codepoint, 'd');
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_ctrl_u_leaves_next_output_unwrapped(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "$ echo abcdefg");
+    /* Readline's Ctrl+U redisplay: back to the prompt, clear the rest of
+     * row 0, step down and clear the old continuation from column 0, back up. */
+    tfeed(t, "\r\x1b[A\x1b[2C\x1b[K\n\r\x1b[K\x1b[A\r\x1b[2C");
+    tfeed(t, "ls\r\na.txt\r\n");
+    ASSERT_EQ(trow(t, 1)->cells[0].codepoint, 'a');
+    ASSERT_FALSE(trow(t, 1)->wrapped);           /* "a.txt" is its own line */
+    term_free(t);
+    TEST_END();
+}
