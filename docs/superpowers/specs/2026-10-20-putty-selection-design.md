@@ -353,6 +353,29 @@ with `Get-Clipboard -Raw` and compared with CRLF intact (not through
   the next write the highlight is gone (`sel.clear reason=touched` in the
   log) and Ctrl+Shift+C copies nothing new.
 
+## 3.5 Also in this change: Confirm Paste accepts Enter
+
+Asked for by the maintainer (2026-10-20): "when I paste and the confirmation
+window pops up, default the selection to the permit button so that I only
+need to press enter to proceed with the paste."
+
+Today `src/ui/paste_dlg.c` creates Paste with `BS_DEFPUSHBUTTON` (`:258`)
+but never focuses it, and its modal loop (`:521-529`) handles only
+`VK_ESCAPE`; `IsDialogMessage` is not used, so Enter and Tab do nothing.
+The preview is a read-only edit (`:243`), so Enter has no other meaning in
+the dialog.
+
+- On creation, `SetFocus(hBtnPaste)`.
+- In the modal loop, a `WM_KEYDOWN` of `VK_RETURN` sends `WM_COMMAND IDOK`
+  to the dialog (the same path as the button, `:377`); `VK_TAB` moves focus
+  between Paste and Cancel; Escape is unchanged. Space on a focused button
+  works already through the button class.
+- Harness, gate tier, beside `paste_with_confirmation_shows_dialog`:
+  `paste_with_confirmation_enter_pastes` sets the clipboard to `echo
+  PASTE_ENTER_8`, Ctrl+V, waits for the dialog, posts Enter to the
+  dialog's handle, asserts the dialog is gone and `PASTE_ENTER_8` reached
+  the shell. The existing Escape case stays.
+
 ## 4. Out of scope, recorded on the notes open list
 
 Shift+click to extend; Alt+drag block selection; middle-button paste; mouse
