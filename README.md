@@ -122,35 +122,19 @@ The terminal emulates a VT100/ANSI-compatible display. It supports:
 - The highlight stays until the next left-click in the terminal, until the program writes over the selected text, or until a resize or a full-screen program (vim, less) replaces the screen. Each tab keeps its own selection
 - A soft-wrapped line copies as one line; lines end in CRLF and trailing blanks are trimmed. There is no size limit
 - **Releasing the mouse button** copies the selection to the clipboard, and the highlight stays; **Ctrl+Shift+C** or **Edit > Copy** copies it again (never sent to the shell). **Ctrl+C** always sends SIGINT to the shell, with or without a selection, as in PuTTY
-- **Ctrl+V**, **Shift+Insert** or a **right-click** pastes from the clipboard; **Ctrl+Shift+V** always pastes
 - **Edit > Select All** selects everything from the oldest line held to the last line with text, and copies it
 - **Confirm before pasting** (Settings > Terminal, on by default) shows a preview dialog before every paste, so you can review what's about to be sent. The **Paste** button has the focus, so **Enter** pastes; **Tab** moves to **Cancel** (Enter then cancels) and **Escape** cancels
 - **Paste delay**: an optional inter-line delay (0 to 5000 ms) can be set in Settings for servers that need time between lines
 
+Every copy, paste and selection chord is in [Keyboard Shortcuts](#keyboard-shortcuts).
+
 #### Keyboard
 
-Most keys reach the shell the way xterm sends them, so remote-side editing and program shortcuts work as expected:
-
-- **Alt+key** is sent as **Esc** then the key (xterm's `metaSendsEscape`) — Alt+F opens Microsoft Edit's File menu, Alt+B/Alt+F move by word in bash. A lone tap of Alt still opens Nutshell's menu bar; Alt+F4, Alt+Space, Alt+Esc, Alt+Enter and Alt+numpad codes are left to Windows
-- **Function keys F1-F12** reach the shell (xterm sequences), including F10 and Shift+F10 — F10 no longer opens Nutshell's menu bar. **F11** stays Nutshell's fullscreen toggle; Shift+F11 goes to the shell
-- **Modifiers on arrows, Home, End, Insert, Delete, Page Up/Down and the F-keys** are sent in xterm's form — Ctrl+Left/Right move by word in bash and vim. Shift+Tab sends back-tab. Home/End follow application cursor mode
-- **Page Up / Page Down** go to a full-screen program when one is running, otherwise they scroll the history; **Shift+Page Up / Shift+Page Down** always scroll the history — see [Scrolling](#scrolling)
-- **Backspace** sends DEL (0x7F) in a local shell and BS (0x08) over SSH
-- Plain **Ctrl+T**, **Ctrl+W** and **Ctrl+Space** now go to the shell (transpose, kill-word, and Emacs/tmux `0x00`) since **Ctrl+Shift+T**, **Ctrl+Shift+W** and **Ctrl+Shift+Space** took over the app shortcuts — see [Keyboard Shortcuts](#keyboard-shortcuts)
-- **Edit > Send Key** sends a key Nutshell or Windows would otherwise keep for itself — F1-F12, Page Up, Page Down, Ctrl+V, Shift+Insert, Ctrl+=, Ctrl+- — straight to the shell, plus two one-shot items: **Send Next Key Raw** (the next keystroke bypasses every Nutshell shortcut) and **Send Next Key with Alt** (the next key gets the Alt/Esc prefix). Handy for F11, the paste chords, Page Up at a prompt, or a laptop with no function row
-- With **AltGr** (Ctrl+Alt) held, none of the Ctrl shortcuts fire, so AltGr characters type normally
-- When the AI panel's input box has focus, none of this applies — keys go to the panel. Click the terminal to return focus
+Most keys reach the shell the way xterm sends them, so remote-side editing and program shortcuts work as expected: Alt+key arrives as Esc then the key (xterm's `metaSendsEscape`), and the arrows, Home, End, Insert, Delete, Page Up/Down and the F-keys carry their modifiers in xterm's form. Nutshell keeps a small set of chords for itself (listed below); plain Ctrl+T, Ctrl+W and Ctrl+Space reach the shell; with **AltGr** held none of the Ctrl shortcuts fire. **Edit > Send Key** sends a key Nutshell or Windows would otherwise keep, and has two one-shot items for the next keystroke: **Send Next Key Raw** and **Send Next Key with Alt**. When the AI panel's input box has focus, keys go to the panel; click the terminal to return focus. Every chord is listed in [Keyboard Shortcuts](#keyboard-shortcuts), and in the app under **Help > Keyboard Shortcuts**.
 
 ### Zoom
 
-Zoom the terminal font in discrete steps: 6, 8, 10, 12, 14, 16, 18, 20 pt.
-
-| Action | How |
-|--------|-----|
-| **Zoom in** | **Ctrl+=** or **Ctrl+Mouse Wheel Up** |
-| **Zoom out** | **Ctrl+-** or **Ctrl+Mouse Wheel Down** |
-
-Zoom changes trigger an automatic PTY resize so the remote shell adapts to the new column/row count.
+Zoom the terminal font in discrete steps (6, 8, 10, 12, 14, 16, 18, 20 pt) with the zoom chords or Ctrl+mouse wheel listed in [Keyboard Shortcuts](#keyboard-shortcuts). Zoom changes trigger an automatic PTY resize so the remote shell adapts to the new column/row count.
 
 ### Settings
 
@@ -249,11 +233,7 @@ A line above the input box, always visible once a session is connected:
 
 #### Selecting and Copying
 
-- **Click and drag** anywhere in the thread to select characters -- your messages, replies, the open Thinking text, commands, status lines -- across messages if you like; dragging past the top or bottom edge scrolls
-- **Double-click** selects a word (in a code block, the command token under the pointer); **triple-click** selects the whole line
-- **Ctrl+C**, **Edit > Copy** or right-click **Copy** puts the selection on the clipboard as it reads on screen: no markdown markers, list items with their bullet or number when the selection includes it, table cells separated by tabs, commands without their `[EXEC]` markers. Nothing is copied just by letting go of the mouse
-- **Ctrl+A** or right-click **Select all** selects the whole conversation; **Esc** clears the selection
-- The copy icons on code blocks and command rows still copy their raw text in one click
+Drag anywhere in the thread to select characters -- your messages, replies, the open Thinking text, commands, status lines -- across messages if you like; dragging past the top or bottom edge scrolls. Double-click selects a word (in a code block, the command token under the pointer) and triple-click the whole line. Nothing is copied just by letting go of the mouse: copying puts the selection on the clipboard as it reads on screen -- no markdown markers, list items with their bullet or number when the selection includes it, table cells separated by tabs, commands without their `[EXEC]` markers. The copy icons on code blocks and command rows still copy their raw text in one click. The panel's chords are in [Keyboard Shortcuts](#keyboard-shortcuts).
 
 #### Command Execution
 
@@ -352,29 +332,99 @@ Passwords, passphrases and keys are never logged, and neither are keystrokes or 
 
 ### Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| **Ctrl+Shift+T** | New session (open session manager) |
-| **Ctrl+Shift+W** | Close active tab |
-| **Ctrl+C** | Send SIGINT (interrupt), with or without a selection |
-| **Ctrl+Shift+C** | Copy selection to clipboard (no-op if none); never sent to the shell |
-| **Ctrl+V** | Paste from clipboard |
-| **Ctrl+Shift+V** | Paste from clipboard (always, same as Ctrl+V) |
-| **Shift+Insert** | Paste from clipboard (alternative) |
-| **Ctrl+=** | Zoom in |
-| **Ctrl+-** | Zoom out |
-| **Ctrl+Scroll** | Zoom in/out with mouse wheel |
-| **Ctrl+Shift+Space** | Toggle the AI Assist panel |
-| **Page Up** | Scroll up a full page through scrollback (or page a full-screen program, if one is running) |
-| **Page Down** | Scroll down a full page through scrollback (or page a full-screen program, if one is running) |
-| **Shift+Page Up** | Scroll up a full page through scrollback, always |
-| **Shift+Page Down** | Scroll down a full page through scrollback, always |
-| **F1-F12** | Sent to the shell (xterm sequences); F10 and Shift+F10 included |
-| **F11** | Toggle fullscreen; Shift+F11 is sent to the shell |
-| **Alt+key** | Sent to the shell as Esc + key; a lone Alt tap opens Nutshell's menu bar |
-| **Ctrl+T, Ctrl+W, Ctrl+Space** (no Shift) | Sent to the shell — transpose, kill-word, and NUL (0x00) |
+The same list is in the app under **Help > Keyboard Shortcuts**. The tables
+below are generated from `src/core/shortcuts.c`, and `make test` fails if the
+two disagree: change the table, then regenerate this block (the recipe is in
+`tests/test_shortcuts.c`).
 
-See [Keyboard](#keyboard) above for the full rundown, and **Edit > Send Key** for a menu that sends F1-F12, Page Up, Page Down, Ctrl+V, Shift+Insert, Ctrl+= and Ctrl+- straight to the shell.
+<!-- shortcuts:begin -->
+
+#### Sessions and tabs
+
+| Shortcut | Action | Note |
+| --- | --- | --- |
+| **Ctrl+Shift+T** | New session (opens the Session Manager) | from the terminal, not the AI panel |
+| **Ctrl+Shift+W** | Close the active tab | from the terminal |
+| **Alt+F4** | Exit | |
+| **Alt** | Open the menu bar | |
+| **Alt+Space** | Open the system menu | |
+
+#### Copy, paste and selection
+
+| Shortcut | Action | Note |
+| --- | --- | --- |
+| **Ctrl+Shift+C** | Copy the selection | |
+| **Ctrl+C** | Interrupt (^C); never copies | |
+| **Ctrl+V** | Paste | a confirmation first when Settings says so; Enter confirms |
+| **Ctrl+Shift+V, Shift+Insert** | Paste, as Ctrl+V | |
+| **Edit > Select All** | Select everything held and copy it | Ctrl+A goes to the shell |
+
+#### Scrolling and zoom
+
+| Shortcut | Action | Note |
+| --- | --- | --- |
+| **Shift+PgUp** | History up a page | |
+| **Shift+PgDn** | History down a page | |
+| **PgUp** | History up a page (sent to vim, less) | |
+| **PgDn** | History down a page (sent to vim, less) | |
+| **Ctrl+PgUp, Ctrl+PgDn** | Sent to the program, always | |
+| **Ctrl+=** | Zoom the terminal font in | US layout |
+| **Ctrl+-** | Zoom the terminal font out | US layout |
+
+#### Keys the terminal sends to the shell
+
+| Shortcut | Action | Note |
+| --- | --- | --- |
+| **Ctrl+Space** | NUL (0x00) | |
+| **Shift+Tab** | Back-tab | |
+| **Ctrl+Arrows, Ctrl+Home, Ctrl+End** | Sent with the modifier | |
+| **Alt+key** | ESC, then the key | with no live session: the menu |
+| **Ctrl+Alt+letter** | ESC, then the control byte | unless the layout makes it a character |
+| **F10, Shift+F10** | Sent to the shell, not the menu | with no live session: the menu |
+| **Backspace** | BS over SSH, DEL in a local shell | |
+| **Edit > Send Key** | Send the next key raw, or with Alt | |
+
+#### AI Assist panel
+
+| Shortcut | Action | Note |
+| --- | --- | --- |
+| **Ctrl+Shift+Space** | Show or hide the panel | from the terminal, not from inside the panel |
+| **Enter** | Send | while a reply streams or commands run: stop them |
+| **Shift+Enter** | New line | |
+| **Ctrl+V** | Paste text, or attach an image from the clipboard | |
+| **Ctrl+=** | Zoom the chat in | US layout |
+| **Ctrl+-** | Zoom the chat out | US layout |
+| **Ctrl+C** | Copy the selected messages | conversation list focused |
+| **Ctrl+A** | Select all messages | list focused |
+| **Esc** | Clear the selection | list focused |
+| **PgUp, PgDn, Home, End, Up, Down** | Scroll the conversation | list focused |
+
+#### Window and help
+
+| Shortcut | Action | Note |
+| --- | --- | --- |
+| **F11** | Fullscreen | from the terminal |
+| **Ctrl+Shift+M** | Mark an issue in the debug log | from the terminal |
+| **Esc, Enter** | Close a dialog | most dialogs |
+| **Help > Keyboard Shortcuts** | This sheet | |
+
+#### Mouse
+
+| Shortcut | Action | Note |
+| --- | --- | --- |
+| **Drag** | Select and copy | |
+| **Double-click** | Select a word | |
+| **Triple-click** | Select a line | |
+| **Drag past the edge** | Scroll while selecting | |
+| **Right-click** | Paste, as Ctrl+V | |
+| **Wheel** | Scroll three lines | |
+| **Ctrl+Wheel** | Zoom the terminal font | |
+| **Drag in the AI panel** | Select messages | nothing copied until Ctrl+C |
+| **Double-click in the AI panel** | Select a word | |
+| **Triple-click in the AI panel** | Select a line | |
+| **Right-click in the AI panel** | Copy, Select all, Paste into message | |
+
+<!-- shortcuts:end -->
 
 ---
 

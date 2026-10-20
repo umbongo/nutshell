@@ -2807,6 +2807,8 @@ int test_shortcuts_menu_accel_for_the_seven_menu_ids(void);
 int test_shortcuts_menu_accels_fit_the_menu_buffer(void);
 int test_shortcuts_readme_block_shape(void);
 int test_shortcuts_readme_block_truncates_safely(void);
+int test_shortcuts_readme_matches_table(void);
+int test_shortcuts_readme_check_handles_crlf_and_bad_markers(void);
 
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
@@ -6217,6 +6219,8 @@ int main(void) {
     failed += test_shortcuts_menu_accels_fit_the_menu_buffer();
     failed += test_shortcuts_readme_block_shape();
     failed += test_shortcuts_readme_block_truncates_safely();
+    failed += test_shortcuts_readme_matches_table();
+    failed += test_shortcuts_readme_check_handles_crlf_and_bad_markers();
 
     printf("\n--- Settings Layout ---\n");
     failed += test_sl_scale_identity_at_96();

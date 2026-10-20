@@ -226,3 +226,175 @@ int test_shortcuts_readme_block_truncates_safely(void)
     ASSERT_EQ(one[0], '\0');
     TEST_END();
 }
+
+/* ---- README.md's generated block (Task 2) -------------------------------- */
+
+/* Copy of `text` with every CRLF folded to LF (the repository has no
+ * .gitattributes, so a Windows checkout can hand README.md over as CRLF).
+ * Caller frees; NULL on allocation failure. */
+static char *fold_crlf(const char *text)
+{
+    size_t len = strlen(text);
+    char *out = (char *)malloc(len + 1u);
+    if (!out) return NULL;
+    size_t w = 0;
+    for (size_t r = 0; r < len; r++) {
+        if (text[r] == '\r' && text[r + 1u] == '\n') continue;
+        out[w++] = text[r];
+    }
+    out[w] = '\0';
+    return out;
+}
+
+static size_t count_occurrences(const char *hay, const char *needle)
+{
+    size_t n = 0;
+    size_t nl = strlen(needle);
+    for (const char *p = strstr(hay, needle); p; p = strstr(p + nl, needle)) n++;
+    return n;
+}
+
+/* 1 when `readme` (LF or CRLF) holds exactly one begin and one end marker,
+ * in that order, and the text between them is shortcuts_readme_block()
+ * byte for byte. Prints where it differs otherwise. */
+static int readme_block_matches(const char *readme)
+{
+    char *text = fold_crlf(readme);
+    if (!text) return 0;
+    int ok = 0;
+    const char *b = strstr(text, SHORTCUTS_README_BEGIN);
+    const char *e = strstr(text, SHORTCUTS_README_END);
+    if (count_occurrences(text, SHORTCUTS_README_BEGIN) != 1u ||
+        count_occurrences(text, SHORTCUTS_README_END) != 1u || !b || !e || e < b) {
+        printf("  README needs exactly one %s followed by one %s\n",
+               SHORTCUTS_README_BEGIN, SHORTCUTS_README_END);
+    } else {
+        b += strlen(SHORTCUTS_README_BEGIN);
+        size_t have = (size_t)(e - b);
+        size_t need = shortcuts_readme_block(NULL, 0u);
+        char *want = (char *)malloc(need + 1u);
+        if (want) {
+            shortcuts_readme_block(want, need + 1u);
+            ok = have == need && memcmp(b, want, need) == 0;
+            if (!ok) {
+                size_t i = 0;
+                while (i < have && i < need && b[i] == want[i]) i++;
+                printf("  README block differs from shortcuts_readme_block() at byte %u\n"
+                       "  README: \"%.60s\"\n  table:  \"%.60s\"\n"
+                       "  regenerate it: see the recipe above"
+                       " test_shortcuts_readme_matches_table\n",
+                       (unsigned)i, b + i, want + i);
+            }
+            free(want);
+        }
+    }
+    free(text);
+    return ok;
+}
+
+/* Whole file, as bytes; NULL when it cannot be read. */
+static char *read_whole(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long len = ftell(f);
+    if (len < 0 || fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = (char *)malloc((size_t)len + 1u);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1u, (size_t)len, f);
+    fclose(f);
+    buf[got] = '\0';
+    return buf;
+}
+
+/* README.md's "Keyboard Shortcuts" block is generated from the table and
+ * must match it byte for byte. make test runs from the repository root;
+ * run from anywhere else README.md is not there and the check skips --
+ * except under CI (checks.yml sets CI: true), where a missing README means
+ * the job is misconfigured, so it fails.
+ *
+ * To regenerate the block after changing src/core/shortcuts.c, from the
+ * repository root:
+ *
+ *   gen=$(mktemp -d)
+ *   printf '%s\n' '#include <stdio.h>' '#include <stdlib.h>' \
+ *     '#include "shortcuts.h"' 'int main(void) {' \
+ *     '  size_t n = shortcuts_readme_block(NULL, 0u);' \
+ *     '  char *b = malloc(n + 1u); if (!b) return 1;' \
+ *     '  shortcuts_readme_block(b, n + 1u); fputs(b, stdout); free(b); return 0; }' \
+ *     > "$gen/gen.c"
+ *   gcc -std=c11 -Isrc/core -Isrc/ui "$gen/gen.c" src/core/shortcuts.c -o "$gen/gen"
+ *   "$gen/gen" > "$gen/block.md"
+ *   python3 -c 'import sys; b, e = "<!-- shortcuts:begin -->", "<!-- shortcuts:end -->"
+ *   blk = open(sys.argv[1], newline="").read(); s = open("README.md", newline="").read()
+ *   nl = "\r\n" if "\r\n" in s else "\n"; i = s.index(b) + len(b); j = s.index(e)
+ *   open("README.md", "w", newline="").write(s[:i] + blk.replace("\n", nl) + s[j:])' "$gen/block.md"
+ */
+int test_shortcuts_readme_matches_table(void)
+{
+    TEST_BEGIN();
+    char *readme = read_whole("README.md");
+    if (!readme) {
+        const char *ci = getenv("CI");
+        if (ci && ci[0]) {
+            printf("  README.md not readable from the working directory under CI\n");
+            ASSERT_TRUE(0);
+        } else {
+            printf("  [shortcuts] README.md not readable from cwd -- skipping\n");
+        }
+        TEST_END();
+    }
+    ASSERT_TRUE(readme_block_matches(readme));
+    free(readme);
+    TEST_END();
+}
+
+/* The comparison itself, on synthetic READMEs: LF and CRLF both match; a
+ * one-byte change, a doubled or missing marker, or the markers swapped
+ * do not. */
+int test_shortcuts_readme_check_handles_crlf_and_bad_markers(void)
+{
+    TEST_BEGIN();
+    size_t need = shortcuts_readme_block(NULL, 0u);
+    size_t cap = 2u * (need + 256u);
+    char *block = (char *)malloc(need + 1u);
+    char *doc = (char *)malloc(cap);
+    char *crlf = (char *)malloc(cap);
+    ASSERT_TRUE(block && doc && crlf);
+    if (block && doc && crlf) {
+        shortcuts_readme_block(block, need + 1u);
+
+        snprintf(doc, cap, "intro\n%s%s%s\nafter\n",
+                 SHORTCUTS_README_BEGIN, block, SHORTCUTS_README_END);
+        ASSERT_TRUE(readme_block_matches(doc));
+
+        size_t w = 0;
+        for (size_t r = 0; doc[r] && w + 2u < cap; r++) {
+            if (doc[r] == '\n') crlf[w++] = '\r';
+            crlf[w++] = doc[r];
+        }
+        crlf[w] = '\0';
+        ASSERT_TRUE(readme_block_matches(crlf));
+
+        char *hit = strstr(doc, "Ctrl+Shift+T");          /* one byte off */
+        if (hit) { hit[0] = 'c'; ASSERT_FALSE(readme_block_matches(doc)); hit[0] = 'C'; }
+
+        snprintf(doc, cap, "%s\n%s%s%s\n", SHORTCUTS_README_BEGIN,
+                 SHORTCUTS_README_BEGIN, block, SHORTCUTS_README_END);
+        ASSERT_FALSE(readme_block_matches(doc));          /* begin twice */
+
+        snprintf(doc, cap, "%s%s\n", SHORTCUTS_README_BEGIN, block);
+        ASSERT_FALSE(readme_block_matches(doc));          /* no end */
+
+        snprintf(doc, cap, "%s%s%s\n", SHORTCUTS_README_END, block,
+                 SHORTCUTS_README_BEGIN);
+        ASSERT_FALSE(readme_block_matches(doc));          /* swapped */
+
+        ASSERT_FALSE(readme_block_matches(""));
+    }
+    free(block);
+    free(doc);
+    free(crlf);
+    TEST_END();
+}
