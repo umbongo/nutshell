@@ -1123,6 +1123,22 @@ int test_term_resize_keeps_screen_within_lines_count(void);
 int test_term_resize_then_scroll_does_not_wipe_midscreen(void);
 int test_term_double_resize_preserves_cursor_row(void);
 int test_term_resize_degenerate_round_trip_keeps_scroll_anchor(void);
+int test_term_sgr16_keeps_palette_index(void);
+int test_term_sgr_dim_set_and_cleared(void);
+int test_term_sgr_split_across_reads_keeps_index_and_dim(void);
+/* test_term_colors.c */
+int test_term_palette_build_floors_or_copies(void);
+int test_term_colors_default_bg_uses_floored_table(void);
+int test_term_colors_truecolour_is_raw(void);
+int test_term_colors_explicit_bg_keeps_raw_pairs(void);
+int test_term_colors_near_invisible_and_hidden(void);
+int test_term_colors_dim(void);
+int test_term_colors_dim_cursor_cell_is_undimmed(void);
+int test_term_colors_dim_blanks_are_undimmed(void);
+int test_term_colors_swaps(void);
+int test_term_colors_null_args_are_noops(void);
+int test_term_colors_every_theme_has_its_table(void);
+int test_term_colors_theme_switch_recolours_stored_cell(void);
 /* test_reflow_fixes.c */
 int test_reflow_exact_width_height_grow_adds_no_row(void);
 int test_reflow_exact_width_narrow_and_back_is_one_row(void);
@@ -1220,6 +1236,10 @@ int test_theme_blend_t0_is_a(void);
 int test_theme_blend_t1_is_b(void);
 int test_theme_blend_midpoint(void);
 int test_theme_blend_clamps_t(void);
+int test_theme_min_contrast_unchanged_when_clear_or_off(void);
+int test_theme_min_contrast_walks_darker_on_light_bg(void);
+int test_theme_min_contrast_falls_back_to_better_extreme(void);
+int test_theme_role_color_outputs_unchanged(void);
 
 /* test_vt_sequences.c */
 int test_vt_osc_title_0(void);
@@ -1908,6 +1928,7 @@ int test_ui_theme_switch_null_falls_back(void);
 int test_ui_theme_switch_colors_consistent(void);
 int test_ui_theme_switch_preserves_name(void);
 int test_ui_theme_dark_themes_have_light_text(void);
+int test_ui_theme_terminal_min_contrast_by_name(void);
 
 /* test_display_buffer.c */
 int test_dispbuf_init_zeroed(void);
@@ -3102,6 +3123,9 @@ int test_local_shell_spec_name_non_custom_and_null(void);
 int test_term_conpty_ls_screen_contents(void);
 int test_term_conpty_ls_byte_at_a_time_matches(void);
 int test_term_conpty_opening_sequence_is_consumed(void);
+int test_term_conpty_ps51_tab_completion_token_is_floored(void);
+int test_term_conpty_ps51_commands_are_floored(void);
+int test_term_conpty_pwsh7_prediction_synthetic(void);
 int test_term_conpty_resize_marker_is_inert(void);
 /* test_conpty_expect.c */
 int test_cpx_place_inside_and_past_content(void);
@@ -3301,7 +3325,8 @@ int test_ui_demo_settings_debug_is_an_empty_state(void);
 int test_ui_demo_policy_auto_is_executing_with_auto_on(void);
 int test_ui_demo_policy_compact_matches_approval(void);
 int test_ui_demo_policy_for_other_states_is_write_off(void);
-int test_ui_demo_panel_width_only_for_policy_compact(void);
+int test_ui_demo_panel_width_only_for_narrow_states(void);
+int test_ui_demo_ansi_swatches(void);
 
 int test_dirty_flags_count_and_fill(void);
 int test_dirty_flags_null_buffer_and_small_max(void);
@@ -4421,6 +4446,21 @@ int main(void) {
     failed += test_term_resize_then_scroll_does_not_wipe_midscreen();
     failed += test_term_double_resize_preserves_cursor_row();
     failed += test_term_resize_degenerate_round_trip_keeps_scroll_anchor();
+    failed += test_term_sgr16_keeps_palette_index();
+    failed += test_term_sgr_dim_set_and_cleared();
+    failed += test_term_sgr_split_across_reads_keeps_index_and_dim();
+    failed += test_term_palette_build_floors_or_copies();
+    failed += test_term_colors_default_bg_uses_floored_table();
+    failed += test_term_colors_truecolour_is_raw();
+    failed += test_term_colors_explicit_bg_keeps_raw_pairs();
+    failed += test_term_colors_near_invisible_and_hidden();
+    failed += test_term_colors_dim();
+    failed += test_term_colors_dim_cursor_cell_is_undimmed();
+    failed += test_term_colors_dim_blanks_are_undimmed();
+    failed += test_term_colors_swaps();
+    failed += test_term_colors_null_args_are_noops();
+    failed += test_term_colors_every_theme_has_its_table();
+    failed += test_term_colors_theme_switch_recolours_stored_cell();
     failed += test_reflow_exact_width_height_grow_adds_no_row();
     failed += test_reflow_exact_width_narrow_and_back_is_one_row();
     failed += test_reflow_line_one_past_width_still_wraps();
@@ -4546,6 +4586,10 @@ int main(void) {
     failed += test_theme_blend_t1_is_b();
     failed += test_theme_blend_midpoint();
     failed += test_theme_blend_clamps_t();
+    failed += test_theme_min_contrast_unchanged_when_clear_or_off();
+    failed += test_theme_min_contrast_walks_darker_on_light_bg();
+    failed += test_theme_min_contrast_falls_back_to_better_extreme();
+    failed += test_theme_role_color_outputs_unchanged();
 
     printf("\n--- Scroll Region ---\n");
     failed += test_sr_init_defaults();
@@ -5034,6 +5078,7 @@ int main(void) {
     failed += test_ui_theme_switch_colors_consistent();
     failed += test_ui_theme_switch_preserves_name();
     failed += test_ui_theme_dark_themes_have_light_text();
+    failed += test_ui_theme_terminal_min_contrast_by_name();
 
     printf("\n--- Display Buffer ---\n");
     failed += test_dispbuf_init_zeroed();
@@ -6405,6 +6450,9 @@ int main(void) {
     failed += test_term_conpty_ls_screen_contents();
     failed += test_term_conpty_ls_byte_at_a_time_matches();
     failed += test_term_conpty_opening_sequence_is_consumed();
+    failed += test_term_conpty_ps51_tab_completion_token_is_floored();
+    failed += test_term_conpty_ps51_commands_are_floored();
+    failed += test_term_conpty_pwsh7_prediction_synthetic();
     failed += test_term_conpty_resize_marker_is_inert();
     failed += test_cpx_place_inside_and_past_content();
     failed += test_cpx_scenarios_are_listed_and_writable();
@@ -6623,7 +6671,8 @@ int main(void) {
     failed += test_ui_demo_policy_auto_is_executing_with_auto_on();
     failed += test_ui_demo_policy_compact_matches_approval();
     failed += test_ui_demo_policy_for_other_states_is_write_off();
-    failed += test_ui_demo_panel_width_only_for_policy_compact();
+    failed += test_ui_demo_panel_width_only_for_narrow_states();
+    failed += test_ui_demo_ansi_swatches();
 
     failed += test_dirty_flags_count_and_fill();
     failed += test_dirty_flags_null_buffer_and_small_max();

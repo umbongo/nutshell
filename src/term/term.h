@@ -9,6 +9,8 @@
 #define TERM_ATTR_UNDERLINE (1 << 1)
 #define TERM_ATTR_REVERSE   (1 << 2)
 #define TERM_ATTR_BLINK     (1 << 3)
+#define TERM_ATTR_DIM       (1 << 4) /* SGR 2; cleared by 22 and 0. Painted only on a
+                                      * theme with a contrast floor (term_colors.h). */
 
 #define TERM_MAX_CSI_PARAMS 16
 
@@ -33,8 +35,8 @@ typedef struct {
     uint32_t bg;       /* resolved 0xRRGGBB */
     uint8_t  fg_mode;  /* ColorMode */
     uint8_t  bg_mode;  /* ColorMode */
-    uint8_t  fg_index; /* raw palette index (0-255) when fg_mode == COLOR_256 */
-    uint8_t  bg_index; /* raw palette index (0-255) when bg_mode == COLOR_256 */
+    uint8_t  fg_index; /* palette index (0-255) when fg_mode is COLOR_ANSI16 or COLOR_256 */
+    uint8_t  bg_index; /* palette index (0-255) when bg_mode is COLOR_ANSI16 or COLOR_256 */
     uint8_t  flags;    /* TERM_ATTR_* bitmask */
 } TermAttr;
 

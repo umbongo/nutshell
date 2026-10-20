@@ -1,0 +1,8 @@
+[?25l[93mG[?25h[m[93mGet-PSReadLineOption [37m| [93mSelect-Object [37mPredictionSourc[?25l[m
+[93m[28;20HGet-PSReadLineOption [37m| [93mSelect-Object [37mPredictionSource[90m, [37mPredictionVie[K[?25h[?25l[m[93m[28;20HGet-PSReadLineOption [37m| [93mSelect-Object [37mPredictionSource[90m, [37mPredictionViewStyle[?25h[m[?25l[93m[28;20HGet-PSReadLineOption [37m| [93mSelect-Object [37mPredictionSource[90m, [37mPredictionViewStyleGet-Command pwsh [90m-ErrorAction [37mSilentlyContinue[?25h[m
+[38;5;9mInvalidArgument: (:) [Select-Object], ParameterBindingException[m
+PS C:\Users\thoma>[1C[?25l[93mGet-PSReadLineOption [37m| [93mSelect-Object [37mPredictionSourc[m
+[37m[28;71Hce[90m, [37mPredictionViewStyleGet-Command pwsh [90m-ErrorAction [37mSilentlyContinue   [29;69H[?25h[m
+[38;5;9mInvalidArgument: (:) [Select-Object], ParameterBindingException[m
+PS C:\Users\thoma>[1C[?25l[93mGet-Command [37mpwsh [90m-ErrorAction [37mSilentlyContinue[?25h[m
+PS C:\Users\thoma> 

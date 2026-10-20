@@ -1204,3 +1204,99 @@ int test_term_resize_degenerate_round_trip_keeps_scroll_anchor(void) {
     term_free(t);
     TEST_END();
 }
+
+/* ---- SGR palette index and dim (spec 2026-10-19-light-theme-ansi-contrast-
+ * design.md, section 5.2) ------------------------------------------------ */
+
+static TermAttr attr_after(const char *seq)
+{
+    TermAttr a;
+    Terminal *t = term_init(4, 20, 10);
+    memset(&a, 0, sizeof(a));
+    if (!t) return a;
+    term_process(t, seq, strlen(seq));
+    a = t->current_attr;
+    term_free(t);
+    return a;
+}
+
+/* 16-colour SGRs keep their palette index beside the RGB they always
+ * stored, so the renderer can look the index up in the theme's table. */
+int test_term_sgr16_keeps_palette_index(void)
+{
+    TEST_BEGIN();
+    static const struct { const char *seq; int fg; int index; uint32_t rgb; } cases[] = {
+        { "\x1b[30m",  1, 0,  0x000000u }, { "\x1b[33m",  1, 3,  0xCCAA33u },
+        { "\x1b[37m",  1, 7,  0xC0C0C0u }, { "\x1b[90m",  1, 8,  0x808080u },
+        { "\x1b[93m",  1, 11, 0xFFFF55u }, { "\x1b[97m",  1, 15, 0xFFFFFFu },
+        { "\x1b[40m",  0, 0,  0x000000u }, { "\x1b[43m",  0, 3,  0xCCAA33u },
+        { "\x1b[47m",  0, 7,  0xC0C0C0u }, { "\x1b[100m", 0, 8,  0x808080u },
+        { "\x1b[103m", 0, 11, 0xFFFF55u }, { "\x1b[107m", 0, 15, 0xFFFFFFu },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        TermAttr a = attr_after(cases[i].seq);
+        if (cases[i].fg) {
+            ASSERT_EQ(a.fg_mode, COLOR_ANSI16);
+            ASSERT_EQ(a.fg_index, cases[i].index);
+            ASSERT_EQ(a.fg, cases[i].rgb);
+        } else {
+            ASSERT_EQ(a.bg_mode, COLOR_ANSI16);
+            ASSERT_EQ(a.bg_index, cases[i].index);
+            ASSERT_EQ(a.bg, cases[i].rgb);
+        }
+    }
+    /* A later truecolour SGR switches the mode and leaves the index stale;
+     * the mode is what says not to read it. 39/49 reset both. */
+    TermAttr a = attr_after("\x1b[93;38;2;1;2;3m");
+    ASSERT_EQ(a.fg_mode, COLOR_RGB);
+    ASSERT_EQ(a.fg, 0x010203u);
+    a = attr_after("\x1b[93;103m\x1b[39;49m");
+    ASSERT_EQ(a.fg_mode, COLOR_DEFAULT);
+    ASSERT_EQ(a.fg_index, 0);
+    ASSERT_EQ(a.bg_mode, COLOR_DEFAULT);
+    ASSERT_EQ(a.bg_index, 0);
+    TEST_END();
+}
+
+/* SGR 2 sets dim; 22 ("normal intensity") clears dim and bold; 0 clears
+ * everything. Italic (3) is not recorded. */
+int test_term_sgr_dim_set_and_cleared(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE((attr_after("\x1b[2m").flags & TERM_ATTR_DIM) != 0);
+    ASSERT_TRUE((attr_after("\x1b[97;2;3m").flags & TERM_ATTR_DIM) != 0);
+    ASSERT_EQ(attr_after("\x1b[2m\x1b[22m").flags & TERM_ATTR_DIM, 0);
+    ASSERT_EQ(attr_after("\x1b[1;2m\x1b[22m").flags & (TERM_ATTR_DIM | TERM_ATTR_BOLD), 0);
+    ASSERT_EQ(attr_after("\x1b[2m\x1b[0m").flags & TERM_ATTR_DIM, 0);
+    ASSERT_EQ(attr_after("\x1b[2m\x1b[m").flags & TERM_ATTR_DIM, 0);
+    ASSERT_EQ(attr_after("\x1b[3m").flags, 0);
+    /* Bold alone still sets and clears as before. */
+    ASSERT_EQ(attr_after("\x1b[1m").flags, TERM_ATTR_BOLD);
+    ASSERT_EQ(attr_after("\x1b[1m\x1b[22m").flags, 0);
+    TEST_END();
+}
+
+/* Review focus 4: ConPTY and SSH deliver bytes in whatever pieces a read
+ * returns, so an SGR split across two reads must still store its index
+ * and dim. */
+int test_term_sgr_split_across_reads_keeps_index_and_dim(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    ASSERT_NOT_NULL(t);
+    if (!t) { TEST_END(); }
+    term_process(t, "\x1b[9", 3);
+    term_process(t, "3;2mX", 5);
+    TermCell c = t->lines[term_screen_to_phys(t, 0)]->cells[0];
+    ASSERT_EQ(c.codepoint, (uint32_t)'X');
+    ASSERT_EQ(c.attr.fg_mode, COLOR_ANSI16);
+    ASSERT_EQ(c.attr.fg_index, 11);
+    ASSERT_TRUE((c.attr.flags & TERM_ATTR_DIM) != 0);
+    term_process(t, "\x1b[4", 3);
+    term_process(t, "3mY", 3);
+    c = t->lines[term_screen_to_phys(t, 0)]->cells[1];
+    ASSERT_EQ(c.attr.bg_mode, COLOR_ANSI16);
+    ASSERT_EQ(c.attr.bg_index, 3);
+    term_free(t);
+    TEST_END();
+}

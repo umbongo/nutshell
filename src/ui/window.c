@@ -1766,6 +1766,13 @@ static void on_settings_clicked_page(int initial_page) {
     GetClientRect(parent, &rc);
     SendMessage(parent, WM_SIZE, SIZE_RESTORED,
                 MAKELPARAM(rc.right, rc.bottom));
+    /* WM_SIZE marks rows dirty only when the grid size changed, and
+     * renderer_draw() skips clean rows before looking at a cell, so a theme
+     * change alone (new terminal_fg/bg, new colour tables) would leave every
+     * clean row in the old theme's colours. Repaint them all. Other tabs
+     * repaint fully when selected (on_tab_select). */
+    force_full_terminal_repaint(parent,
+        g_active_session ? g_active_session->term : NULL);
     InvalidateRect(parent, NULL, TRUE);
     /* Force tab strip to repaint with new theme */
     InvalidateRect(g_hwndTabs, NULL, TRUE);
@@ -1948,8 +1955,10 @@ static void create_demo_session(HWND hwnd)
             GetClientRect(hwnd, &rc2);
             int target = ai_dock_pct_to_px(rc2.right, AI_DOCK_DEFAULT_PCT,
                                            AI_DOCK_MIN_PCT, AI_DOCK_MAX_PCT);
-            /* --ui-demo=policy-compact: dock the panel narrow enough for the
-             * status line's compact labels, before it is laid out. */
+            /* --ui-demo=policy-compact and --ui-demo=ansi: dock the panel
+             * narrow (policy-compact for the status line's compact labels,
+             * ansi so the terminal keeps every swatch line whole), before it
+             * is laid out. */
             int demo_w = ui_demo_panel_width_px(state, g_dpi);
             if (demo_w > 0) target = demo_w;
             int splitter = AI_DOCK_SPLITTER_W;

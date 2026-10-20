@@ -135,23 +135,45 @@ unsigned int theme_blend(unsigned int a, unsigned int b, double t)
     return ((unsigned int)r << 16) | ((unsigned int)g << 8) | (unsigned int)bl;
 }
 
+/* Keep fg's own hue: walk its lightness away from bg (lighter on a dark
+ * ground, darker on a light one) in 2-L* steps until it reads at
+ * min_ratio. theme_shift_lightness scales the channels together, so the
+ * hue survives; only its lightness moves. Each step starts from the
+ * previous step's (rounded, clamped) result, as theme_role_color() always
+ * has, so its outputs are unchanged. Returns 1 with *out set on success,
+ * 0 if 50 steps never clear min_ratio. */
+static int walk_to_ratio(unsigned int fg, unsigned int bg, double min_ratio,
+                         unsigned int *out)
+{
+    double dir = (theme_lstar(bg) < 50.0) ? 2.0 : -2.0;
+    unsigned int c = fg;
+    for (int i = 0; i < 50; i++) {
+        c = theme_shift_lightness(c, dir);
+        if (theme_contrast(c, bg) >= min_ratio) { *out = c; return 1; }
+    }
+    return 0;
+}
+
 unsigned int theme_role_color(unsigned int role, unsigned int bg,
                               unsigned int fallback)
 {
     if (theme_contrast(role, bg) >= 4.5) return role;
+    /* The fallback is reached only if even the lightest/darkest reachable
+     * shade cannot clear 4.5:1 (never the case for a saturated hue against
+     * a mid-grey, but guaranteed legible regardless). */
+    unsigned int c = 0;
+    return walk_to_ratio(role, bg, 4.5, &c) ? c : fallback;
+}
 
-    /* Keep the theme's own hue: walk the role colour's lightness away from
-     * the background (lighter on a dark ground, darker on a light one) in
-     * small L* steps until it reads at AA. theme_shift_lightness scales
-     * the channels together, so the hue survives; only its lightness
-     * moves. The fallback is reached only if even the lightest/darkest
-     * reachable shade cannot clear 4.5:1 (never the case for a saturated
-     * hue against a mid-grey, but guaranteed legible regardless). */
-    double dir = (theme_lstar(bg) < 50.0) ? 2.0 : -2.0;
-    unsigned int c = role;
-    for (int i = 0; i < 50; i++) {
-        c = theme_shift_lightness(c, dir);
-        if (theme_contrast(c, bg) >= 4.5) return c;
-    }
-    return fallback;
+unsigned int theme_min_contrast_color(unsigned int fg, unsigned int bg,
+                                      double min_ratio)
+{
+    if (!(min_ratio > 1.0)) return fg;          /* off, and NaN */
+    if (theme_contrast(fg, bg) >= min_ratio) return fg;
+    unsigned int c = 0;
+    if (walk_to_ratio(fg, bg, min_ratio, &c)) return c;
+    /* No shade of the hue clears it: the better of the walk's two
+     * extremes (theme_shift_lightness never goes past them). */
+    return (theme_contrast(0x080808u, bg) >= theme_contrast(0xF7F7F7u, bg))
+        ? 0x080808u : 0xF7F7F7u;
 }

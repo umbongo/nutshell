@@ -8,13 +8,15 @@
 
 /* ---------------------------------------------------------------------
  * State names, in the order ui_demo_states() reports them.  "all" is
- * always last and always means "union of the panel states" (not "local",
- * "thinking", "cmddetail", "settings-debug", "policy-auto" or
- * "policy-compact", which reuse or swap content).
+ * always last and always means "union of the panel states" (not "ansi",
+ * "local", "thinking", "cmddetail", "settings-debug", "policy-auto" or
+ * "policy-compact", which reuse or swap content). "ansi" sits before
+ * "local" so the names tests/test_ui_demo.c anchors from the end of the
+ * list keep their positions.
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
-    "nokey", "nosession", "batches", "local", "thinking", "cmddetail",
+    "nokey", "nosession", "batches", "ansi", "local", "thinking", "cmddetail",
     "settings-debug", "policy-auto", "policy-compact", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
@@ -503,6 +505,37 @@ static const char LOCAL_TERM_TEXT[] =
     "PS C:\\Users\\thomas> ";
 
 /* ---------------------------------------------------------------------
+ * "ansi" (spec 2026-10-19-light-theme-ansi-contrast-design.md section 6):
+ * the 16-colour palette as it paints on the current theme, for the eye
+ * (the gallery) and for the harness's pixel samples
+ * (tests/integration/cases/30-ui-demo.ps1). Line N (0-15) is the index,
+ * a four-cell full block (U+2588) and "Ab", in palette index N; line 16
+ * is the same in SGR 2;97 (dim bright white, PSReadLine's inline
+ * prediction). 11 columns a line, so nothing wraps on any supported grid;
+ * no trailing newline, so 17 rows hold it all without scrolling. The
+ * harness samples the centre of each line's second block cell (column 5).
+ * --------------------------------------------------------------------- */
+#define ANSI_BLOCK4 "\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88\xe2\x96\x88"
+static const char ANSI_TERM_TEXT[] =
+    "000 \x1b[30m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "001 \x1b[31m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "002 \x1b[32m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "003 \x1b[33m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "004 \x1b[34m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "005 \x1b[35m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "006 \x1b[36m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "007 \x1b[37m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "008 \x1b[90m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "009 \x1b[91m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "010 \x1b[92m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "011 \x1b[93m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "012 \x1b[94m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "013 \x1b[95m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "014 \x1b[96m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "015 \x1b[97m" ANSI_BLOCK4 " Ab\x1b[0m\r\n"
+    "dim \x1b[2;97m" ANSI_BLOCK4 " Ab\x1b[0m";
+
+/* ---------------------------------------------------------------------
  * Entry point
  * --------------------------------------------------------------------- */
 int ui_demo_build(const char *state, AiConversation *conv,
@@ -521,13 +554,14 @@ int ui_demo_build(const char *state, AiConversation *conv,
     if (approval2) {
         chat_approval_init(approval2);
     }
-    /* "local" swaps the transcript for a local-shell one; "all" keeps the
-     * SSH transcript, since it is the union of the panel states and the
-     * local state adds nothing to the conversation. */
+    /* "local" swaps the transcript for a local-shell one and "ansi" for
+     * the palette swatches; "all" keeps the SSH transcript, since it is the
+     * union of the panel states and neither adds to the conversation. */
     if (term_text && term_cap > 0) {
-        (void)snprintf(term_text, term_cap, "%s",
-                       (strcmp(state, "local") == 0) ? LOCAL_TERM_TEXT
-                                                     : DEMO_TERM_TEXT);
+        const char *text = DEMO_TERM_TEXT;
+        if (strcmp(state, "local") == 0) text = LOCAL_TERM_TEXT;
+        else if (strcmp(state, "ansi") == 0) text = ANSI_TERM_TEXT;
+        (void)snprintf(term_text, term_cap, "%s", text);
     }
 
     int is_all = strcmp(state, "all") == 0;
@@ -590,7 +624,10 @@ CmdPolicy ui_demo_policy(const char *state)
 
 int ui_demo_panel_width_px(const char *state, int dpi)
 {
-    if (state && strcmp(state, "policy-compact") == 0)
+    /* "ansi" takes the same narrow dock, so the terminal keeps every
+     * swatch line whole (and at least 24 columns) at any supported DPI. */
+    if (state && (strcmp(state, "policy-compact") == 0 ||
+                  strcmp(state, "ansi") == 0))
         return ns_scale(260, dpi);
     return 0;
 }

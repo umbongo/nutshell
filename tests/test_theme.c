@@ -251,3 +251,83 @@ int test_theme_blend_clamps_t(void)
     ASSERT_EQ((int)theme_blend(0x102030, 0xF0E0D0, 2.0), (int)0xF0E0D0);
     TEST_END();
 }
+
+/* ---- theme_min_contrast_color (spec 2026-10-19-light-theme-ansi-contrast-
+ * design.md, section 5.1) ------------------------------------------------ */
+
+int test_theme_min_contrast_unchanged_when_clear_or_off(void)
+{
+    TEST_BEGIN();
+    /* Already above the ratio: bright yellow on a near-black ground. */
+    ASSERT_EQ((int)theme_min_contrast_color(0xFFFF55, 0x121212, 4.5), (int)0xFFFF55);
+    /* Off: a ratio of 0, 1.0, below 0 or NaN leaves any pair alone, even fg == bg. */
+    ASSERT_EQ((int)theme_min_contrast_color(0xFFFF55, 0xF5F5F7, 0.0), (int)0xFFFF55);
+    ASSERT_EQ((int)theme_min_contrast_color(0xFFFF55, 0xF5F5F7, 1.0), (int)0xFFFF55);
+    ASSERT_EQ((int)theme_min_contrast_color(0x767676, 0x767676, 1.0), (int)0x767676);
+    ASSERT_EQ((int)theme_min_contrast_color(0x767676, 0x767676, -3.0), (int)0x767676);
+    ASSERT_EQ((int)theme_min_contrast_color(0xFFFF55, 0xF5F5F7, NAN), (int)0xFFFF55);
+    TEST_END();
+}
+
+int test_theme_min_contrast_walks_darker_on_light_bg(void)
+{
+    TEST_BEGIN();
+    unsigned int bg = 0xF5F5F7; /* Onyx Light terminal_bg */
+    unsigned int got = theme_min_contrast_color(0xFFFF55, bg, 4.5);
+    double c = theme_contrast(got, bg);
+    ASSERT_TRUE(c >= 4.5);
+    ASSERT_TRUE(c < 5.0);
+    ASSERT_EQ((int)got, (int)0x727223);
+    /* Still yellow: R and G within 0x10 of each other, both above B. */
+    unsigned int r = (got >> 16) & 0xFFu, g = (got >> 8) & 0xFFu, b = got & 0xFFu;
+    ASSERT_TRUE((r > g ? r - g : g - r) <= 0x10u);
+    ASSERT_TRUE(r > b && g > b);
+    /* The walk stops at the first step that clears: redo it by hand. */
+    unsigned int prev = 0xFFFF55, step = 0xFFFF55;
+    for (int i = 0; i < 50 && theme_contrast(step, bg) < 4.5; i++) {
+        prev = step;
+        step = theme_shift_lightness(step, -2.0);
+    }
+    ASSERT_EQ((int)step, (int)got);
+    ASSERT_TRUE(theme_contrast(prev, bg) < 4.5);
+    TEST_END();
+}
+
+/* No shade clears the ratio: the better of the walk's two extremes. Not
+ * reachable through theme_role_color()'s current callers. */
+int test_theme_min_contrast_falls_back_to_better_extreme(void)
+{
+    TEST_BEGIN();
+    /* 767676 has L* 49.6, so the walk goes lighter, but even F7F7F7 is only
+     * 4.24 against it; 080808 (4.41) is the better extreme. */
+    ASSERT_TRUE(theme_lstar(0x767676) < 50.0);
+    ASSERT_TRUE(theme_contrast(0xF7F7F7, 0x767676) < 4.5);
+    ASSERT_EQ((int)theme_min_contrast_color(0x777777, 0x767676, 4.5), (int)0x080808);
+    /* 21:1 needs pure white on black, which the walk never reaches. */
+    ASSERT_EQ((int)theme_min_contrast_color(0x808080, 0x000000, 21.0), (int)0xF7F7F7);
+    TEST_END();
+}
+
+/* theme_role_color() now shares its walk with theme_min_contrast_color();
+ * its outputs are pinned to what they were before (each theme's link and
+ * info on bg_primary, src/core/ui_theme.c), and the fallback still wins
+ * when no shade clears 4.5. */
+int test_theme_role_color_outputs_unchanged(void)
+{
+    TEST_BEGIN();
+    static const struct { unsigned int role, bg, fallback, want; } cases[] = {
+        { 0x4A78B7, 0x121212, 0xE0E0E0, 0x5D82BB }, /* Onyx Synapse link */
+        { 0x8969A8, 0x121212, 0xE0E0E0, 0x9175AD }, /* Onyx Synapse info */
+        { 0x0847A6, 0xF5F5F7, 0x1D1D1F, 0x0847A6 }, /* Onyx Light link   */
+        { 0x7B4FA3, 0xF5F5F7, 0x1D1D1F, 0x7B4FA3 }, /* Onyx Light info   */
+        { 0x5D7B89, 0x2B2D24, 0xEAE7DC, 0x8799A1 }, /* Sage & Sand link  */
+        { 0x896B9D, 0x2B2D24, 0xEAE7DC, 0xA18FAF }, /* Sage & Sand info  */
+        { 0x3D6D7A, 0xF1F3F0, 0x354F52, 0x3D6D7A }, /* Moss & Mist link  */
+        { 0x7A5C99, 0xF1F3F0, 0x354F52, 0x7A5C99 }, /* Moss & Mist info  */
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)
+        ASSERT_EQ((int)theme_role_color(cases[i].role, cases[i].bg, cases[i].fallback),
+                  (int)cases[i].want);
+    ASSERT_EQ((int)theme_role_color(0x777777, 0x767676, 0x123456), (int)0x123456);
+    TEST_END();
+}

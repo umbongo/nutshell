@@ -50,4 +50,15 @@ unsigned int theme_blend(unsigned int a, unsigned int b, double t);
 unsigned int theme_role_color(unsigned int role, unsigned int bg,
                               unsigned int fallback);
 
+/* Minimum-contrast floor, the general form of theme_role_color(): `fg`
+ * unchanged when min_ratio <= 1.0 (or NaN) or theme_contrast(fg, bg) >=
+ * min_ratio. Otherwise fg's lightness is walked away from bg (lighter on a
+ * bg with L* < 50, darker otherwise) in 2-L* steps with
+ * theme_shift_lightness() until it clears min_ratio, at most 50 steps. If
+ * no step clears it, returns whichever of 0x080808 / 0xF7F7F7 has the
+ * higher contrast with bg (0x080808 on a tie). Used to build the terminal's
+ * per-theme 256-colour tables (src/core/term_colors.c), never per cell. */
+unsigned int theme_min_contrast_color(unsigned int fg, unsigned int bg,
+                                      double min_ratio);
+
 #endif

@@ -188,11 +188,13 @@ static void handle_sgr(Terminal *term) {
                 sgr_reset(term);
                 break;
             case 1: term->current_attr.flags |= TERM_ATTR_BOLD;      break;
+            case 2: term->current_attr.flags |= TERM_ATTR_DIM;       break;
             case 4: term->current_attr.flags |= TERM_ATTR_UNDERLINE;  break;
             case 5: term->current_attr.flags |= TERM_ATTR_BLINK;      break;
             case 7: term->current_attr.flags |= TERM_ATTR_REVERSE;    break;
 
-            case 22: term->current_attr.flags &= (uint8_t)~TERM_ATTR_BOLD;      break;
+            /* 22 is "normal intensity" (ECMA-48): neither bold nor dim. */
+            case 22: term->current_attr.flags &= (uint8_t)~(TERM_ATTR_BOLD | TERM_ATTR_DIM); break;
             case 24: term->current_attr.flags &= (uint8_t)~TERM_ATTR_UNDERLINE;  break;
             case 25: term->current_attr.flags &= (uint8_t)~TERM_ATTR_BLINK;      break;
             case 27: term->current_attr.flags &= (uint8_t)~TERM_ATTR_REVERSE;    break;
@@ -200,7 +202,7 @@ static void handle_sgr(Terminal *term) {
             /* Classic 16-colour foreground (30-37, 90-97) */
             case 30: case 31: case 32: case 33: case 34: case 35: case 36: case 37:
                 term->current_attr.fg_mode  = COLOR_ANSI16;
-                term->current_attr.fg_index = 0;
+                term->current_attr.fg_index = (uint8_t)(p - 30);
                 term->current_attr.fg       = PALETTE[p - 30];
                 break;
             case 39: /* default fg */
@@ -212,7 +214,7 @@ static void handle_sgr(Terminal *term) {
             /* Classic 16-colour background (40-47, 100-107) */
             case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47:
                 term->current_attr.bg_mode  = COLOR_ANSI16;
-                term->current_attr.bg_index = 0;
+                term->current_attr.bg_index = (uint8_t)(p - 40);
                 term->current_attr.bg       = PALETTE[p - 40];
                 break;
             case 49: /* default bg */
@@ -224,14 +226,14 @@ static void handle_sgr(Terminal *term) {
             /* Bright foreground (90-97) */
             case 90: case 91: case 92: case 93: case 94: case 95: case 96: case 97:
                 term->current_attr.fg_mode  = COLOR_ANSI16;
-                term->current_attr.fg_index = 0;
+                term->current_attr.fg_index = (uint8_t)(p - 90 + 8);
                 term->current_attr.fg       = PALETTE[p - 90 + 8];
                 break;
 
             /* Bright background (100-107) */
             case 100: case 101: case 102: case 103: case 104: case 105: case 106: case 107:
                 term->current_attr.bg_mode  = COLOR_ANSI16;
-                term->current_attr.bg_index = 0;
+                term->current_attr.bg_index = (uint8_t)(p - 100 + 8);
                 term->current_attr.bg       = PALETTE[p - 100 + 8];
                 break;
 
