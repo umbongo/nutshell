@@ -729,16 +729,20 @@ static void extend_terminal_drag_from(HWND hwnd, Session *s, int px, int py, int
                             g_tab_height, s->term->rows, s->term->cols, &row, &col);
     /* With no selection of this epoch to extend, the call is a fresh press. */
     bool fresh = !s->sel.valid || s->sel.epoch != s->term->epoch;
-    SelPoint old_start = s->sel.start;
+    SelPoint old_start = s->sel.start, old_end = s->sel.end;
     selection_extend_from(&s->sel, s->term, row, col, px, py);
     if (fresh) {
         DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.begin", "line=%llu col=%d mode=%d",
              (unsigned long long)s->sel.anchor.line, s->sel.anchor.col, (int)s->sel.mode);
     } else {
+        /* Which end the click moved; "none" when it landed inside the unit
+         * already at that end (a word-mode click in the first word, say). */
         bool start_moved = !sel_point_same(old_start, s->sel.start);
+        bool end_moved = !sel_point_same(old_end, s->sel.end);
         SelPoint moved = start_moved ? s->sel.start : s->sel.end;
         DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.extend",
-             "moved=%s line=%llu col=%d mode=%d", start_moved ? "start" : "end",
+             "moved=%s line=%llu col=%d mode=%d",
+             start_moved ? "start" : (end_moved ? "end" : "none"),
              (unsigned long long)moved.line, moved.col, (int)s->sel.mode);
     }
     force_full_terminal_repaint(hwnd, s->term);

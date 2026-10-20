@@ -102,9 +102,9 @@ reads the clipboard back.
 ### Amendment, 2026-10-20 (the selection follow-ups, branch `feat/selection-extend`)
 
 The maintainer then asked for more of PuTTY. This amendment supersedes the
-original decision above not to extend with Shift+click, and the "Shift+click
-to extend" and "middle-button paste" lines of section 4 where they say the
-middle button does not extend:
+decision above not to extend with Shift+click, and the "Shift+click to
+extend" and "middle-button paste" items of section 4: the middle button now
+extends (PuTTY's Windows default), and right-click still pastes.
 
 - **Shift+click and middle-click extend the selection** (PuTTY's which-end
   rule): a click before the start moves the start, after the end moves the
