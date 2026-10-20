@@ -1096,3 +1096,89 @@ int test_sel_click_count_cycles_one_two_three(void)
     ASSERT_EQ(c, 1);                                          /* 1,2,3,1,2,3,1 */
     TEST_END();
 }
+
+/* ---- combining marks join the word before them -------------------------- */
+
+int test_sel_is_combining_ranges(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(selection_is_combining(0x0300));
+    ASSERT_TRUE(selection_is_combining(0x0301));
+    ASSERT_TRUE(selection_is_combining(0x036F));
+    ASSERT_FALSE(selection_is_combining(0x02FF));
+    ASSERT_FALSE(selection_is_combining(0x0370));
+    ASSERT_TRUE(selection_is_combining(0x1AB0));
+    ASSERT_TRUE(selection_is_combining(0x1AFF));
+    ASSERT_TRUE(selection_is_combining(0x1DC0));
+    ASSERT_TRUE(selection_is_combining(0x1DFF));
+    ASSERT_TRUE(selection_is_combining(0x20D0));
+    ASSERT_TRUE(selection_is_combining(0x20FF));
+    ASSERT_TRUE(selection_is_combining(0xFE20));
+    ASSERT_TRUE(selection_is_combining(0xFE2F));
+    ASSERT_FALSE(selection_is_combining(0xFE30));
+    ASSERT_FALSE(selection_is_combining('e'));
+    ASSERT_FALSE(selection_is_combining(0));
+    ASSERT_EQ(selection_char_class(0x0301), 2 + 0x0301);      /* alone, its own class */
+    TEST_END();
+}
+
+int test_sel_word_combining_mark_joins_base(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    feed(t, "cafe\xCC\x81 noir");                            /* e + U+0301 in cells 3 and 4 */
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 3, 2));                     /* the e */
+    ASSERT_EQ(s.start.col, 0);
+    ASSERT_EQ(s.end.col, 4);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "cafe\xCC\x81");
+    free(txt);
+    ASSERT_TRUE(click_n(&s, t, 0, 4, 2));                     /* the mark itself */
+    txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "cafe\xCC\x81");
+    free(txt);
+    ASSERT_TRUE(click_n(&s, t, 0, 0, 2));                     /* the c */
+    txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "cafe\xCC\x81");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_word_combining_does_not_disturb_other_words(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    feed(t, "cafe\xCC\x81 noir");
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 7, 2));
+    ASSERT_EQ(s.start.col, 6);
+    ASSERT_EQ(s.end.col, 9);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "noir");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+/* A mark after a blank has nothing to combine with: it neither extends the
+ * blank's run nor pulls the next word back over it. */
+int test_sel_word_combining_after_space_does_not_join_space(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    feed(t, " \xCC\x81x");                                    /* space, mark, x */
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 0, 2));                     /* the space */
+    ASSERT_EQ(s.start.col, 0);
+    ASSERT_EQ(s.end.col, 0);
+    ASSERT_TRUE(click_n(&s, t, 0, 2, 2));                     /* the x */
+    ASSERT_EQ(s.start.col, 2);
+    ASSERT_EQ(s.end.col, 2);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "x");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}

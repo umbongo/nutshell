@@ -95,5 +95,10 @@ char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len
  * Greek and Cyrillic; CJK and the rest stand alone (one codepoint per cell,
  * no wide-cell model). */
 int  selection_char_class(uint32_t cp);
+/* Combining marks: U+0300-036F, U+1AB0-1AFF, U+1DC0-1DFF, U+20D0-20FF and
+ * U+FE20-FE2F. Each sits in a cell of its own, but a double-click treats it
+ * as part of the cell before it. selection_char_class() is unchanged: a mark
+ * alone keeps its own class. */
+bool selection_is_combining(uint32_t cp);
 
 #endif /* NUTSHELL_SELECTION_H */

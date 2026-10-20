@@ -64,19 +64,39 @@ static bool sel_next_cell(const Terminal *t, SelPoint *p)
     return true;
 }
 
-/* The maximal run of cells of p's class, following soft wraps. */
+/* The maximal run of cells of p's class, following soft wraps. A combining
+ * mark belongs to the cell before it: pressed on, it takes that cell's class;
+ * scanning forward it always continues a word; scanning back it is stepped
+ * over to the cell it belongs to. A blank has nothing to combine with, so a
+ * mark after a blank keeps a class of its own and joins no blank run. */
 static void sel_word_bounds(const Terminal *t, SelPoint p, SelPoint *first, SelPoint *last)
 {
-    int cls = selection_char_class(sel_cp(t, p));
+    uint32_t pcp = sel_cp(t, p);
+    int cls = selection_char_class(pcp);
     SelPoint a = p, b = p, q;
+    if (selection_is_combining(pcp)) {
+        q = p;
+        while (sel_prev_cell(t, &q)) {
+            uint32_t cp = sel_cp(t, q);
+            if (selection_is_combining(cp)) continue;
+            if (selection_char_class(cp) != 0) cls = selection_char_class(cp);
+            break;
+        }
+    }
     for (;;) {
+        bool found = false;
         q = a;
-        if (!sel_prev_cell(t, &q) || selection_char_class(sel_cp(t, q)) != cls) break;
+        while (sel_prev_cell(t, &q)) {
+            if (!selection_is_combining(sel_cp(t, q))) { found = true; break; }
+        }
+        if (!found || selection_char_class(sel_cp(t, q)) != cls) break;
         a = q;
     }
     for (;;) {
         q = b;
-        if (!sel_next_cell(t, &q) || selection_char_class(sel_cp(t, q)) != cls) break;
+        if (!sel_next_cell(t, &q)) break;
+        uint32_t cp = sel_cp(t, q);
+        if (!(cls != 0 && selection_is_combining(cp)) && selection_char_class(cp) != cls) break;
         b = q;
     }
     *first = a;
@@ -431,4 +451,11 @@ int selection_char_class(uint32_t cp)
         (cp >= 0x370u && cp <= 0x52Fu))
         return 1;
     return 2 + (int)cp;
+}
+
+bool selection_is_combining(uint32_t cp)
+{
+    return (cp >= 0x0300u && cp <= 0x036Fu) || (cp >= 0x1AB0u && cp <= 0x1AFFu) ||
+           (cp >= 0x1DC0u && cp <= 0x1DFFu) || (cp >= 0x20D0u && cp <= 0x20FFu) ||
+           (cp >= 0xFE20u && cp <= 0xFE2Fu);
 }
