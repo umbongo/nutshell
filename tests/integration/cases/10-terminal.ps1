@@ -472,6 +472,64 @@ Invoke-Case "triple_click_selects_line" $script:SelSettings {
     "triple-click copied the line"
 }
 
+Invoke-Case "shift_click_extends_selection" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line "echo /usr/local/bin and more"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^/usr/local/bin and more" -TimeoutSec 5) "echo output missing"
+    Send-NutshellDrag -Session $s -From (Get-NutshellCellPoint -Geo $g -Row 1 -Col 0) -To (Get-NutshellCellPoint -Geo $g -Row 1 -Col 3)
+    Assert-True ((Get-SelClipboard) -eq "/usr") "the setup drag copied '$(Get-SelClipboard)'"
+    Set-Clipboard -Value "EXTEND_MARKER_1"
+    $p = Get-NutshellCellPoint -Geo $g -Row 1 -Col 13
+    Send-NutshellDrag -Session $s -From $p -To $p -Shift -Steps 1
+    Assert-True ((Get-SelClipboard) -eq "/usr/local/bin") "Shift+click copied '$(Get-SelClipboard)'"
+    Assert-True (Wait-NutshellDebugLog -Session $s -Pattern 'sel\.extend ' -TimeoutSec 4) "no sel.extend event for the Shift+click"
+    "Shift+click extended /usr to /usr/local/bin"
+}
+
+Invoke-Case "middle_click_extends_selection" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line "echo /usr/local/bin and more"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^/usr/local/bin and more" -TimeoutSec 5) "echo output missing"
+    Send-NutshellDrag -Session $s -From (Get-NutshellCellPoint -Geo $g -Row 1 -Col 0) -To (Get-NutshellCellPoint -Geo $g -Row 1 -Col 3)
+    Assert-True ((Get-SelClipboard) -eq "/usr") "the setup drag copied '$(Get-SelClipboard)'"
+    Set-Clipboard -Value "EXTEND_MARKER_2"
+    $p = Get-NutshellCellPoint -Geo $g -Row 1 -Col 13
+    Send-NutshellDrag -Session $s -From $p -To $p -Button Middle -Steps 1
+    Assert-True ((Get-SelClipboard) -eq "/usr/local/bin") "middle-click copied '$(Get-SelClipboard)'"
+    Assert-True (Wait-NutshellDebugLog -Session $s -Pattern 'sel\.extend ' -TimeoutSec 4) "no sel.extend event for the middle-click"
+    "middle-click extended /usr to /usr/local/bin"
+}
+
+Invoke-Case "fourth_click_starts_over" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line "echo /usr/local/bin and more"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^/usr/local/bin and more" -TimeoutSec 5) "echo output missing"
+    Set-Clipboard -Value "CYCLE_MARKER"
+    # Four rapid clicks, the fourth held and dragged from col 4 to col 8: the
+    # cycle is back at a single cell, so exactly those cells are copied.
+    Send-NutshellDrag -Session $s -From (Get-NutshellCellPoint -Geo $g -Row 1 -Col 4) `
+        -To (Get-NutshellCellPoint -Geo $g -Row 1 -Col 8) -Clicks 4
+    Assert-True ((Get-SelClipboard) -eq "/loca") "the fourth click copied '$(Get-SelClipboard)', expected /loca (a cell drag, not the line)"
+    "a fourth rapid click started a cell selection again"
+}
+
+Invoke-Case "double_click_selects_accented_word" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line "printf '\x63\x61\x66\x65\xcc\x81 noir\n'"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^cafe\S* noir" -TimeoutSec 5) "printf output missing"
+    Set-Clipboard -Value "ACCENT_MARKER"
+    $p = Get-NutshellCellPoint -Geo $g -Row 1 -Col 3                  # the e; its mark is col 4
+    Send-NutshellDrag -Session $s -From $p -To $p -Clicks 2 -Steps 1
+    $got = [Text.Encoding]::UTF8.GetBytes((Get-SelClipboard))
+    $want = [byte[]](0x63, 0x61, 0x66, 0x65, 0xCC, 0x81)             # cafe + U+0301
+    Assert-True (($got -join ",") -eq ($want -join ",")) "double-click copied bytes $($got -join ' '), expected $($want -join ' ')"
+    "double-click on the e copied the whole decomposed word, mark included"
+}
+
 Invoke-Case "output_into_selection_clears_it" $script:SelSettings {
     param($s)
     $g = Start-SelCase $s

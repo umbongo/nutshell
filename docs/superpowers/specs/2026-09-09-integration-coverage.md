@@ -77,7 +77,7 @@ column names the file when core logic behind the journey is unit-tested.
 | 33 | PTY resize follows the window; background tab gets it | — | **E2E** `pty_resizes_with_window`, `resize_applies_to_inactive_tab` | — |
 | 34 | Zoom Ctrl+= / Ctrl+- / Ctrl+0, font size persists | zoom | — | TERM-4: zoom in twice, `tput cols` drops, zoom reset restores. Note (2026-10-20): Ctrl+0 does not exist; there is no zoom-reset chord (Help > Keyboard Shortcuts lists every chord) |
 | 35 | OSC title sets the tab title | vt_sequences | — | TERM-5: `printf '\e]0;OSCTEST\a'`, tab caption reads OSCTEST |
-| 36 | Selection, Ctrl+C copies, Ctrl+Shift+C/V, Shift+Insert, select-all | selection | — | CLIP-1: drag-select by client coordinates, Ctrl+C, clipboard text equals selection; Ctrl+Shift+V pastes |
+| 36 | Selection, Ctrl+C copies, Ctrl+Shift+C/V, Shift+Insert, select-all | selection | **E2E** (2026-10-20, PuTTY-style selection) `select_drag_past_bottom_copies_history`, `select_drag_above_top_selects_first_row`, `select_while_scrolled_back_copies_highlight`, `click_does_not_touch_clipboard`, `ctrl_shift_c_copies_after_drag`, `ctrl_c_with_selection_interrupts`, `double_click_selects_word`, `triple_click_selects_line`, `shift_click_extends_selection`, `middle_click_extends_selection`, `fourth_click_starts_over`, `double_click_selects_accented_word`, `output_into_selection_clears_it` | CLIP-1: Ctrl+Shift+V pastes what a drag copied (the copy half is covered above) |
 | 37 | Paste with and without confirmation, paste delay | paste_preview | **E2E** two cases | add CLIP-2: multi-line paste with a 200 ms delay arrives in order |
 
 ## 4. Tabs
