@@ -668,3 +668,164 @@ int test_sel_line_drag_extends_by_lines(void)
     term_free(t);
     TEST_END();
 }
+
+/* ---- staleness and recycling (spec section 2.3) ------------------------- */
+
+int test_sel_write_after_finish_makes_row_stale(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 10);
+    feed(t, "one\r\ntwo\r\nthree");
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 0, 1, 9));
+    feed(t, "\x1b[2;1HX");                        /* write into "two" */
+    ASSERT_TRUE(selection_contains(&s, t, 0, 0)); /* untouched row: still highlighted */
+    ASSERT_FALSE(selection_contains(&s, t, 1, 1));/* written row: not */
+    size_t n = 99;
+    char *txt = selection_copy_text(&s, t, &n);
+    ASSERT_EQ(n, (size_t)0);
+    ASSERT_STR_EQ(txt, "");
+    free(txt);
+    ASSERT_TRUE(selection_sync(&s, t));           /* the clear */
+    ASSERT_FALSE(s.valid);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_write_during_drag_does_not_clear(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 10);
+    feed(t, "one\r\ntwo\r\nthree");
+    Selection s;
+    selection_begin(&s, t, 0, 0, 1, 0, 0);
+    selection_extend(&s, t, 1, 9, 100, 100, 4, 4);
+    feed(t, "\x1b[2;1HX");                        /* streaming output under the drag */
+    ASSERT_FALSE(selection_sync(&s, t));
+    ASSERT_TRUE(s.valid);
+    ASSERT_TRUE(selection_contains(&s, t, 1, 0));
+    ASSERT_TRUE(selection_finish(&s, t));         /* takes the stamps */
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "one\r\nXwo");             /* what is on screen at release */
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_epoch_change_clears_and_ends_drag(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 10);
+    feed(t, "one\r\ntwo");
+    Selection s;
+    selection_begin(&s, t, 0, 0, 1, 0, 0);
+    selection_extend(&s, t, 1, 2, 100, 100, 4, 4);
+    term_resize(t, 6, 10);                        /* reflow: a new epoch */
+    ASSERT_TRUE(selection_sync(&s, t));
+    ASSERT_FALSE(s.active);
+    ASSERT_FALSE(s.valid);
+
+    ASSERT_TRUE(drag(&s, t, 0, 0, 0, 2));
+    term_alt_screen_enter(t);                     /* vim, less: a new epoch */
+    ASSERT_FALSE(selection_contains(&s, t, 0, 0));
+    ASSERT_TRUE(selection_sync(&s, t));
+    ASSERT_FALSE(s.valid);
+    term_free(t);
+    TEST_END();
+}
+
+/* The row at the recycle point is trimmed away, not treated as touched: the
+ * recycled TermRow is stamped, but under its new, newest line number. */
+int test_sel_recycle_trims_start_without_touching(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 2);            /* capacity 6 */
+    feed_lines(t, 0, 6);                          /* full: L00..L05 */
+    t->scrollback_offset = 2;                     /* view L00..L03 */
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 0, 2, 9));         /* L00..L02 */
+    feed(t, "\r\nL06");                           /* recycles L00 */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)1);
+    ASSERT_TRUE(selection_sync(&s, t));           /* trimmed */
+    ASSERT_TRUE(s.valid);
+    ASSERT_EQ(s.start.line, (uint64_t)1);
+    ASSERT_EQ(s.start.col, 0);
+    ASSERT_TRUE(s.anchor.line >= t->lines_recycled);
+    ASSERT_TRUE(selection_contains(&s, t, 0, 0)); /* view row 0 is L01 now */
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "L01\r\nL02");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_recycled_anchor_cannot_return(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 2);
+    feed_lines(t, 0, 6);
+    t->scrollback_offset = 2;
+    Selection s;
+    selection_begin(&s, t, 0, 0, 1, 0, 0);        /* anchor on L00 */
+    selection_extend(&s, t, 2, 9, 100, 100, 4, 4);
+    feed(t, "\r\nL06");                           /* L00 recycled mid-drag */
+    selection_extend(&s, t, 1, 0, 100, 120, 4, 4);/* no sync in between */
+    ASSERT_TRUE(s.anchor.line >= t->lines_recycled);
+    ASSERT_TRUE(s.start.line >= t->lines_recycled);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_wholly_recycled_clears(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 2);
+    feed_lines(t, 0, 6);
+    t->scrollback_offset = 2;
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 0, 1, 9));         /* L00..L01 */
+    feed(t, "\r\nL06\r\nL07");                    /* both recycled */
+    ASSERT_TRUE(selection_sync(&s, t));
+    ASSERT_FALSE(s.valid);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_sync_ignores_writes_elsewhere(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 10);
+    feed(t, "one\r\ntwo");
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 0, 1, 9));
+    ASSERT_FALSE(selection_sync(&s, t));          /* nothing written */
+    feed(t, "\x1b[4;1HZ");                        /* a row outside the selection */
+    ASSERT_FALSE(selection_sync(&s, t));
+    ASSERT_TRUE(s.valid);
+    ASSERT_EQ(s.gen, t->write_gen);               /* stamp moved up: next sync is cheap */
+    term_free(t);
+    TEST_END();
+}
+
+/* Review Focus 3: write_gen is 32 bits and wraps; the stamp compare must
+ * not mistake an old row for a new one across the wrap, or the reverse. */
+int test_sel_stamps_survive_counter_wrap(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 10);
+    t->write_gen = 0xFFFFFFF0u;
+    feed(t, "one\r\ntwo");
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 0, 1, 9));
+    for (int i = 0; i < 40; i++) feed(t, "\x1b[4;1HZ");  /* elsewhere; the counter wraps */
+    ASSERT_TRUE(t->write_gen < 0x100u);
+    ASSERT_FALSE(selection_sync(&s, t));
+    ASSERT_TRUE(s.valid);
+    ASSERT_TRUE(selection_contains(&s, t, 0, 0));
+    feed(t, "\x1b[1;1HX");                        /* into the selection */
+    ASSERT_FALSE(selection_contains(&s, t, 0, 0));
+    ASSERT_TRUE(selection_sync(&s, t));
+    ASSERT_FALSE(s.valid);
+    term_free(t);
+    TEST_END();
+}

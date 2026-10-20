@@ -57,6 +57,14 @@ void selection_clear(Selection *s);
 /* From the oldest line held to the last non-empty line; valid = false on an
  * empty terminal. */
 void selection_select_all(Selection *s, const Terminal *t);
+
+/* Bring a selection up to date with the terminal (spec section 2.3). Trims
+ * the four points below lines_recycled; clears the selection when the epoch
+ * changed (ending an active drag), when every selected line is recycled, or
+ * -- after the release only -- when a selected row was written since. The
+ * window calls it every timer tick and before every copy. Returns true on
+ * any change. */
+bool selection_sync(Selection *s, const Terminal *t);
 /* Is the cell at screen (row, col), in the view as scrolled, selected? */
 bool selection_contains(const Selection *s, const Terminal *t, int screen_row, int col);
 /* True when a valid selection intersects the rows in view (renderer hint). */

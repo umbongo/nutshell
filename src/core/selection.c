@@ -114,6 +114,42 @@ static void sel_unit(const Selection *s, const Terminal *t, SelPoint p,
     else { *first = p; *last = p; }
 }
 
+/* ---- write stamps (spec section 2.3) ------------------------------------ */
+
+/* Wrap-safe: write_gen is a 32-bit counter that wraps after 2^32 writes. */
+static bool sel_gen_newer(uint32_t row_gen, uint32_t sel_gen)
+{
+    return (int32_t)(row_gen - sel_gen) > 0;
+}
+
+/* Was any selected row written after the selection's stamp? */
+static bool sel_rows_newer(const Selection *s, const Terminal *t)
+{
+    if (t->write_gen == s->gen) return false;                 /* nothing written since */
+    uint64_t ln = (s->start.line < t->lines_recycled) ? t->lines_recycled : s->start.line;
+    for (; ln <= s->end.line; ln++) {
+        const TermRow *r = sel_row(t, ln);
+        if (!r) break;
+        if (sel_gen_newer(r->gen, s->gen)) return true;
+    }
+    return false;
+}
+
+/* Cut the four points to the oldest line held; true when any moved. */
+static bool sel_trim(Selection *s, const Terminal *t)
+{
+    SelPoint *pts[4] = { &s->anchor, &s->anchor_end, &s->start, &s->end };
+    bool moved = false;
+    for (int i = 0; i < 4; i++) {
+        if (pts[i]->line < t->lines_recycled) {
+            pts[i]->line = t->lines_recycled;
+            pts[i]->col = 0;
+            moved = true;
+        }
+    }
+    return moved;
+}
+
 static bool sel_row_blank(const Terminal *t, const TermRow *r)
 {
     for (int c = 0; c < t->cols; c++)
@@ -194,14 +230,13 @@ void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,
     if (!s || !t || !s->active) return;
     s->last_x = px;
     s->last_y = py;
-    if (s->epoch != t->epoch) return;              /* the window ends the drag */
+    if (s->epoch != t->epoch) return;              /* selection_sync() ends the drag */
+    (void)sel_trim(s, t);                          /* a recycled anchor cannot come back */
     if (s->mode == SEL_STREAM && !s->valid &&
         abs(px - s->press_x) < drag_cx && abs(py - s->press_y) < drag_cy)
         return;                                    /* still a click */
     SelPoint first, last;
     sel_unit(s, t, sel_point_at(t, screen_row, col), &first, &last);
-    /* Whole units in either direction: from the earlier of the two units'
-     * starts to the later of their ends. */
     s->start = (sel_cmp(first, s->anchor) < 0) ? first : s->anchor;
     s->end = (sel_cmp(last, s->anchor_end) > 0) ? last : s->anchor_end;
     s->valid = true;
@@ -257,6 +292,12 @@ bool selection_contains(const Selection *s, const Terminal *t, int screen_row, i
     if (line < s->start.line || line > s->end.line) return false;
     if (line == s->start.line && col < s->start.col) return false;
     if (line == s->end.line && col > s->end.col) return false;
+    if (!s->active) {
+        /* Written since the release: no longer what was selected, so the
+         * highlight goes row by row as the output overwrites it. */
+        const TermRow *r = sel_row(t, line);
+        if (!r || sel_gen_newer(r->gen, s->gen)) return false;
+    }
     return true;
 }
 
@@ -274,6 +315,9 @@ char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len
     sb_put(&b, "", 0);                             /* always a string */
     if (out_len) *out_len = 0;
     if (!s || !t || !s->valid || s->epoch != t->epoch) return b.p;
+    /* Stale: copy nothing. The const API cannot clear it; selection_sync(),
+     * which the window calls before every copy, does. */
+    if (!s->active && sel_rows_newer(s, t)) return b.p;
 
     uint64_t first = s->start.line;
     int first_col = s->start.col;
@@ -308,6 +352,27 @@ char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len
         sb_cut(&b, b.len - 2);
     if (out_len) *out_len = b.len;
     return b.p;
+}
+
+bool selection_sync(Selection *s, const Terminal *t)
+{
+    if (!s || !t || (!s->valid && !s->active)) return false;
+    if (s->epoch != t->epoch || s->end.line < t->lines_recycled) {
+        selection_clear(s);              /* renumbered or replaced, or all recycled */
+        return true;
+    }
+    bool changed = sel_trim(s, t);
+    if (!s->active) {
+        if (sel_rows_newer(s, t)) {
+            selection_clear(s);
+            return true;
+        }
+        /* No selected row is newer than the stamp, so none is newer than
+         * now: compare later writes against now, and the next call with
+         * nothing written is two compares. */
+        s->gen = t->write_gen;
+    }
+    return changed;
 }
 
 int selection_char_class(uint32_t cp)
