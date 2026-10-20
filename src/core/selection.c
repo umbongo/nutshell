@@ -33,6 +33,87 @@ static SelPoint sel_point_at(const Terminal *t, int screen_row, int col)
     return p;
 }
 
+/* ---- words and lines ---------------------------------------------------- */
+
+static uint32_t sel_cp(const Terminal *t, SelPoint p)
+{
+    const TermRow *r = sel_row(t, p.line);
+    if (!r || p.col < 0 || p.col >= t->cols) return 0;
+    return r->cells[p.col].codepoint;
+}
+
+/* Step to the previous cell of the same logical line, across a soft wrap. */
+static bool sel_prev_cell(const Terminal *t, SelPoint *p)
+{
+    if (p->col > 0) { p->col--; return true; }
+    const TermRow *r = sel_row(t, p->line);
+    if (!r || !r->wrapped || p->line == 0 || !sel_row(t, p->line - 1)) return false;
+    p->line--;
+    p->col = t->cols - 1;
+    return true;
+}
+
+/* Step to the next cell of the same logical line, across a soft wrap. */
+static bool sel_next_cell(const Terminal *t, SelPoint *p)
+{
+    if (p->col < t->cols - 1) { p->col++; return true; }
+    const TermRow *n = sel_row(t, p->line + 1);
+    if (!n || !n->wrapped) return false;
+    p->line++;
+    p->col = 0;
+    return true;
+}
+
+/* The maximal run of cells of p's class, following soft wraps. */
+static void sel_word_bounds(const Terminal *t, SelPoint p, SelPoint *first, SelPoint *last)
+{
+    int cls = selection_char_class(sel_cp(t, p));
+    SelPoint a = p, b = p, q;
+    for (;;) {
+        q = a;
+        if (!sel_prev_cell(t, &q) || selection_char_class(sel_cp(t, q)) != cls) break;
+        a = q;
+    }
+    for (;;) {
+        q = b;
+        if (!sel_next_cell(t, &q) || selection_char_class(sel_cp(t, q)) != cls) break;
+        b = q;
+    }
+    *first = a;
+    *last = b;
+}
+
+/* The whole logical line through `line`: back to the first row that is not a
+ * continuation (bounded by the oldest row held), forward over every row whose
+ * wrapped flag is set. */
+static void sel_line_bounds(const Terminal *t, uint64_t line, SelPoint *first, SelPoint *last)
+{
+    uint64_t a = line, b = line;
+    for (;;) {
+        const TermRow *r = sel_row(t, a);
+        if (!r || !r->wrapped || a <= t->lines_recycled) break;
+        a--;
+    }
+    for (;;) {
+        const TermRow *n = sel_row(t, b + 1);
+        if (!n || !n->wrapped) break;
+        b++;
+    }
+    first->line = a;
+    first->col = 0;
+    last->line = b;
+    last->col = t->cols - 1;
+}
+
+/* The unit under p for the selection's mode: a cell, a word or a line. */
+static void sel_unit(const Selection *s, const Terminal *t, SelPoint p,
+                     SelPoint *first, SelPoint *last)
+{
+    if (s->mode == SEL_WORD) sel_word_bounds(t, p, first, last);
+    else if (s->mode == SEL_LINE) sel_line_bounds(t, p.line, first, last);
+    else { *first = p; *last = p; }
+}
+
 static bool sel_row_blank(const Terminal *t, const TermRow *r)
 {
     for (int c = 0; c < t->cols; c++)
@@ -93,13 +174,13 @@ void selection_begin(Selection *s, const Terminal *t, int screen_row, int col,
     if (!s) return;
     memset(s, 0, sizeof(*s));
     if (!t) return;
-    (void)click_count;                     /* a cell for every click count, for now */
-    s->mode = SEL_STREAM;
-    s->anchor = sel_point_at(t, screen_row, col);
-    s->anchor_end = s->anchor;
+    s->mode = (click_count >= 3) ? SEL_LINE : (click_count == 2 ? SEL_WORD : SEL_STREAM);
+    sel_unit(s, t, sel_point_at(t, screen_row, col), &s->anchor, &s->anchor_end);
     s->start = s->anchor;
     s->end = s->anchor_end;
-    s->valid = false;                      /* a press alone selects nothing */
+    /* A press alone selects nothing; a double or triple click selects its
+     * word or line at once (PuTTY highlights it on the press). */
+    s->valid = (s->mode != SEL_STREAM);
     s->epoch = t->epoch;
     s->gen = t->write_gen;
     s->active = true;
@@ -117,9 +198,12 @@ void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,
     if (s->mode == SEL_STREAM && !s->valid &&
         abs(px - s->press_x) < drag_cx && abs(py - s->press_y) < drag_cy)
         return;                                    /* still a click */
-    SelPoint p = sel_point_at(t, screen_row, col);
-    s->start = (sel_cmp(p, s->anchor) < 0) ? p : s->anchor;
-    s->end = (sel_cmp(p, s->anchor_end) > 0) ? p : s->anchor_end;
+    SelPoint first, last;
+    sel_unit(s, t, sel_point_at(t, screen_row, col), &first, &last);
+    /* Whole units in either direction: from the earlier of the two units'
+     * starts to the later of their ends. */
+    s->start = (sel_cmp(first, s->anchor) < 0) ? first : s->anchor;
+    s->end = (sel_cmp(last, s->anchor_end) > 0) ? last : s->anchor_end;
     s->valid = true;
     s->gen = t->write_gen;
 }
@@ -224,4 +308,16 @@ char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len
         sb_cut(&b, b.len - 2);
     if (out_len) *out_len = b.len;
     return b.p;
+}
+
+int selection_char_class(uint32_t cp)
+{
+    if (cell_text_codepoint(cp) == (uint32_t)' ') return 0;
+    if ((cp >= '0' && cp <= '9') || (cp >= 'a' && cp <= 'z') || (cp >= 'A' && cp <= 'Z') ||
+        cp == '_' || cp == '-' || cp == '.' || cp == '/' || cp == '~' || cp == ':' || cp == '@')
+        return 1;
+    if ((cp >= 0xC0u && cp <= 0x2AFu && cp != 0xD7u && cp != 0xF7u) ||
+        (cp >= 0x370u && cp <= 0x52Fu))
+        return 1;
+    return 2 + (int)cp;
 }

@@ -480,3 +480,191 @@ int test_sel_contains_and_in_view_follow_the_view(void)
     term_free(t);
     TEST_END();
 }
+
+/* ---- words and lines (spec section 1) ----------------------------------- */
+
+/* A double- or triple-click at a screen cell, released where it was pressed. */
+static bool click_n(Selection *s, const Terminal *t, int row, int col, int clicks)
+{
+    selection_begin(s, t, row, col, clicks, 0, 0);
+    selection_extend(s, t, row, col, 0, 0, 4, 4);
+    return selection_finish(s, t);
+}
+
+int test_sel_char_class(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(selection_char_class(0), 0);
+    ASSERT_EQ(selection_char_class(' '), 0);
+    ASSERT_EQ(selection_char_class(0x07), 0);                 /* a control codepoint */
+    const char *word = "azAZ09_-./~:@";
+    for (const char *p = word; *p; p++)
+        ASSERT_EQ(selection_char_class((uint32_t)(unsigned char)*p), 1);
+    ASSERT_EQ(selection_char_class(0xE9), 1);                 /* é: Review Focus 1 */
+    ASSERT_EQ(selection_char_class(0x0436), 1);               /* ж */
+    ASSERT_EQ(selection_char_class(','), 2 + ',');
+    ASSERT_EQ(selection_char_class(0xD7), 2 + 0xD7);          /* × */
+    ASSERT_EQ(selection_char_class(0x65E5), 2 + 0x65E5);      /* 日 */
+    TEST_END();
+}
+
+int test_sel_word_path(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 40, 10);
+    feed(t, "ls /usr/local/bin now");
+    Selection s;
+    selection_begin(&s, t, 0, 7, 2, 0, 0);
+    ASSERT_TRUE(s.valid);                                     /* highlighted on the press */
+    ASSERT_TRUE(selection_finish(&s, t));
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "/usr/local/bin");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_word_stops_at_comma(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    feed(t, "foo,bar");
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 1, 2));
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "foo");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_word_run_of_spaces(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    feed(t, "a    b");
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 2, 2));
+    ASSERT_EQ(s.start.col, 1);
+    ASSERT_EQ(s.end.col, 4);
+    size_t n = 99;
+    char *txt = selection_copy_text(&s, t, &n);
+    ASSERT_EQ(n, (size_t)0);                                  /* Review Focus 4 */
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_word_cjk_cell(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    feed(t, "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E");            /* 日本語, one cell each */
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 1, 2));
+    ASSERT_EQ(s.start.col, 1);
+    ASSERT_EQ(s.end.col, 1);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "\xE6\x9C\xAC");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_word_follows_wrap(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 10);
+    feed(t, "go http://ex.com/a/b ok");                       /* the URL wraps onto row 1 */
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 1, 2, 2));
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "http://ex.com/a/b");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+/* Review Focus 1: an accented word is one word. */
+int test_sel_word_accented_latin(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    feed(t, "un caf\xC3\xA9 noir");
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 5, 2));
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "caf\xC3\xA9");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_line_middle_of_three_rows(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 10);
+    feed(t, "$ abcdefghijklmnopqrstuvwxyz\r\nnext");             /* 28 chars on rows 0-2 */
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 1, 4, 3));
+    ASSERT_EQ(s.start.line, (uint64_t)0);
+    ASSERT_EQ(s.start.col, 0);
+    ASSERT_EQ(s.end.line, (uint64_t)2);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "$ abcdefghijklmnopqrstuvwxyz");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_line_head_recycled_stops_at_oldest(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(3, 10, 1);                        /* capacity 4 */
+    /* One 45-character line over five rows: the fifth recycles the head. */
+    feed(t, "0123456789abcdefghijABCDEFGHIJklmnopqrstKLMNO");
+    ASSERT_EQ(t->lines_recycled, (uint64_t)1);
+    t->scrollback_offset = 1;                                 /* row 0 shows logical 0 */
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 3, 3));
+    ASSERT_EQ(s.start.line, t->lines_recycled);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "abcdefghijABCDEFGHIJklmnopqrstKLMNO");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_word_drag_backwards_whole_words(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    feed(t, "alpha beta gamma");
+    Selection s;
+    selection_begin(&s, t, 0, 13, 2, 0, 0);                   /* in "gamma" */
+    selection_extend(&s, t, 0, 7, 0, 0, 4, 4);                /* into "beta" */
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_EQ(s.start.col, 6);
+    ASSERT_EQ(s.end.col, 15);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "beta gamma");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_line_drag_extends_by_lines(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 10);
+    feed(t, "one\r\ntwo\r\nthree");
+    Selection s;
+    selection_begin(&s, t, 2, 1, 3, 0, 0);
+    selection_extend(&s, t, 0, 2, 0, 0, 4, 4);
+    ASSERT_TRUE(selection_finish(&s, t));
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "one\r\ntwo\r\nthree");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}

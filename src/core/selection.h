@@ -66,4 +66,12 @@ bool selection_in_view(const Selection *s, const Terminal *t);
  * after the last. Always a heap string the caller frees ("" at least). */
 char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len);
 
+/* Word classes for a double-click: 0 blank (space, empty cell, control
+ * codepoint); 1 word (letters, digits, _ - . / ~ : @); 2 + cp otherwise, so
+ * every other codepoint is a class of its own. "Letters" are ASCII plus
+ * Latin-1 Supplement and Latin Extended-A/B (not U+00D7 or U+00F7), IPA,
+ * Greek and Cyrillic; CJK and the rest stand alone (one codepoint per cell,
+ * no wide-cell model). */
+int  selection_char_class(uint32_t cp);
+
 #endif /* NUTSHELL_SELECTION_H */
