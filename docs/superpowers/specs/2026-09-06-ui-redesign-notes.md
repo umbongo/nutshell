@@ -247,9 +247,10 @@ Open, in priority order:
       a minimum-contrast floor at paint time, or both), critiqued before
       implementation -- spec `2026-10-19-light-theme-ansi-contrast-design.md`.
 - [ ] Terminal copy and paste are broken in v1.2.36 (maintainer, 2026-10-18/19: "I can't
-      properly copy and paste from the terminal"). The symptom pinned down so far: a
-      selection taller than the window, or made while scrolled back, copies only the rows
-      in the viewport. Diagnosis of that part: `selection_extract_text` takes the visible
+      properly copy and paste from the terminal"). Confirmed symptom (maintainer,
+      2026-10-20): select and drag down past the bottom of the terminal, and the copy
+      holds only what is on the window, not what was selected in the buffer. The same
+      applies to a selection made while scrolled back. Diagnosis of that part: `selection_extract_text` takes the visible
       window as `lines_count - rows` and ignores `scrollback_offset`; the `Selection`
       struct is viewport-relative so `selection_pixel_to_cell` clamps rows to the screen;
       and the WM_LBUTTONUP clipboard buffer is 8 KB. The rest of what is broken is not yet
