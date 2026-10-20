@@ -258,18 +258,15 @@ Open, in priority order:
       ramp; a hand-designed 16-colour palette per light theme would restore the distinctions.
       Also from that spec's Out of scope: answer OSC 11 (background colour query) so programs
       can detect a light background; default text on an explicit background stays raw.
-- [ ] Terminal copy and paste are broken in v1.2.36 (maintainer, 2026-10-18/19: "I can't
-      properly copy and paste from the terminal"). Confirmed symptom (maintainer,
-      2026-10-20): select and drag down past the bottom of the terminal, and the copy
-      holds only what is on the window, not what was selected in the buffer. The same
-      applies to a selection made while scrolled back. Diagnosis of that part:
-      `selection_extract_text` takes the visible window as `lines_count - rows` and ignores `scrollback_offset`; the `Selection`
-      struct is viewport-relative so `selection_pixel_to_cell` clamps rows to the screen;
-      and the WM_LBUTTONUP clipboard buffer is 8 KB. The rest of what is broken is not yet
-      characterised -- reproduce copy and paste end to end on v1.2.36+ (select, Ctrl+Shift+C,
-      Ctrl+Shift+V, Shift+Insert, right-click, the Edit menu) before writing the spec
-      (buffer-absolute selection, auto-scroll while dragging past an edge, unbounded copy
-      buffer, plus whatever the reproduction finds).
+- [ ] Terminal selection follow-ups (spec `2026-10-20-putty-selection-design.md` section 4;
+      the PuTTY-style selection itself is on `feat/putty-selection`): Shift+click to
+      extend; Alt+drag block selection; middle-button paste; mouse reporting to
+      applications; the per-byte paste writes over SSH; the scrollback-size setting
+      (Settings and the help guide offer 100-50,000 lines but every session gets 3,000;
+      `term_init` and `term_reflow_buffer` allocate the whole capacity, so lazy
+      allocation in reflow comes first, spec section 6.2); a narrowing reflow of a full
+      ring drops the newest rows rather than the oldest (`buffer.c:142, 165`,
+      pre-existing).
 - [ ] Harness cases on `main`: `resize_applies_to_inactive_tab` fails on every run
       (since v1.2.13); `ctrl_w_reaches_shell_and_shift_closes_tab` failed the v1.2.36 and
       v1.2.37 gate runs and passed the v1.2.41 one, so it is intermittent -- both are

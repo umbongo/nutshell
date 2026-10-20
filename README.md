@@ -117,10 +117,14 @@ The terminal emulates a VT100/ANSI-compatible display. It supports:
 
 #### Text Selection and Clipboard
 
-- **Click and drag** on the terminal to select text
+- **Click and drag** on the terminal to select text. Dragging above or below the terminal scrolls the history and the selection follows, so a selection can be longer than the window; the wheel still scrolls while you drag. The selection is held in the history, not the window: scrolling with the wheel, the scrollbar or Page Up/Down keeps it
+- **Double-click** selects a word (a path or a simple URL is one word, even when it wraps onto the next row); **triple-click** selects the whole line. Dragging after either extends by whole words or lines
+- The highlight stays until the next click in the terminal, until the program writes over the selected text, or until a resize or a full-screen program (vim, less) replaces the screen. Each tab keeps its own selection
+- A soft-wrapped line copies as one line; lines end in CRLF and trailing blanks are trimmed. There is no size limit
 - **Releasing the mouse button** copies the selection to the clipboard, and the highlight stays; **Ctrl+Shift+C** or **Edit > Copy** copies it again (never sent to the shell). **Ctrl+C** always sends SIGINT to the shell, with or without a selection, as in PuTTY
-- **Ctrl+V** or **Shift+Insert** pastes from the clipboard; **Ctrl+Shift+V** always pastes
-- **Confirm before pasting** (Settings > Terminal, on by default) shows a preview dialog before every paste, so you can review what's about to be sent
+- **Ctrl+V**, **Shift+Insert** or a **right-click** pastes from the clipboard; **Ctrl+Shift+V** always pastes
+- **Edit > Select All** selects everything from the oldest line held to the last line with text, and copies it
+- **Confirm before pasting** (Settings > Terminal, on by default) shows a preview dialog before every paste, so you can review what's about to be sent. The **Paste** button has the focus, so **Enter** pastes; **Tab** moves to **Cancel** (Enter then cancels) and **Escape** cancels
 - **Paste delay**: an optional inter-line delay (0 to 5000 ms) can be set in Settings for servers that need time between lines
 
 #### Keyboard
