@@ -42,7 +42,11 @@
  * "ansi" (2026-10-19, light-theme ANSI contrast) swaps the terminal
  * transcript for 17 palette swatch lines (indices 0-15, then dim bright
  * white) and docks the panel at ui_demo_panel_width_px(); the conversation
- * is the system message only. Not part of "all". */
+ * is the system message only. Not part of "all".
+ *
+ * "shortcuts" (2026-10-20, keyboard cheat sheet) builds an empty
+ * conversation; the win32 side opens Help > Keyboard Shortcuts over it.
+ * Not part of "all": the sheet is modal, like Settings in "settings-debug". */
 
 /* Build the canned conversation, approval queue(s) and terminal text for
  * one demo state.

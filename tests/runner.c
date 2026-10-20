@@ -3412,6 +3412,7 @@ int test_sdbg_layout_row_pixels_96_and_192(void);
 int test_sdbg_layout_page_height_ticked_vs_unticked(void);
 
 int test_ui_demo_settings_debug_is_an_empty_state(void);
+int test_ui_demo_shortcuts_is_an_empty_state(void);
 int test_ui_demo_policy_auto_is_executing_with_auto_on(void);
 int test_ui_demo_policy_compact_matches_approval(void);
 int test_ui_demo_policy_for_other_states_is_write_off(void);
@@ -6846,6 +6847,7 @@ int main(void) {
     failed += test_sdbg_layout_page_height_ticked_vs_unticked();
 
     failed += test_ui_demo_settings_debug_is_an_empty_state();
+    failed += test_ui_demo_shortcuts_is_an_empty_state();
     failed += test_ui_demo_policy_auto_is_executing_with_auto_on();
     failed += test_ui_demo_policy_compact_matches_approval();
     failed += test_ui_demo_policy_for_other_states_is_write_off();

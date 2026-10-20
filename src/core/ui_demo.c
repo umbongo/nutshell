@@ -9,15 +9,16 @@
 /* ---------------------------------------------------------------------
  * State names, in the order ui_demo_states() reports them.  "all" is
  * always last and always means "union of the panel states" (not "ansi",
- * "local", "thinking", "cmddetail", "settings-debug", "policy-auto" or
- * "policy-compact", which reuse or swap content). "ansi" sits before
- * "local" so the names tests/test_ui_demo.c anchors from the end of the
- * list keep their positions.
+ * "local", "thinking", "cmddetail", "settings-debug", "policy-auto",
+ * "policy-compact" or "shortcuts", which reuse or swap content or open a
+ * modal window). "ansi" sits before "local" so the names
+ * tests/test_ui_demo.c anchors from the end of the list keep their
+ * positions; "shortcuts" sits immediately before "all".
  * --------------------------------------------------------------------- */
 static const char *const STATE_NAMES[] = {
     "chat", "approval", "executing", "tool", "error", "empty",
     "nokey", "nosession", "batches", "ansi", "local", "thinking", "cmddetail",
-    "settings-debug", "policy-auto", "policy-compact", "all"
+    "settings-debug", "policy-auto", "policy-compact", "shortcuts", "all"
 };
 #define N_STATES ((int)(sizeof(STATE_NAMES) / sizeof(STATE_NAMES[0])))
 
@@ -603,6 +604,9 @@ int ui_demo_build(const char *state, AiConversation *conv,
      * window on its Debugging page (debugging ticked in memory only, never
      * saved) over the otherwise empty demo session. Not part of "all": the
      * Settings window is modal and is not an AI panel state. */
+    /* "shortcuts" (2026-10-20) adds nothing either: the win32 side opens the
+     * keyboard shortcuts sheet (Help > Keyboard Shortcuts) over the empty
+     * demo session. Not part of "all": the sheet is modal. */
 
     /* "empty", "nokey" and "nosession" add nothing beyond the system
      * message -- their distinct look comes entirely from the forced

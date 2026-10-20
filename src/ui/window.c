@@ -20,6 +20,8 @@
 #include "session_manager.h"
 #include "settings_dlg.h"
 #include "help_guide.h"
+#include "cheatsheet_dlg.h"
+#include "shortcuts.h"
 #include "ssh_session.h"
 #include "ssh_pty.h"
 #include "ssh_io.h"
@@ -91,6 +93,9 @@ static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT
 /* --ui-demo=settings-debug: posted once the demo session exists, to open
  * Settings on the Debugging page (debugging ticked in memory only). */
 #define WM_OPEN_DEMO_SETTINGS   (WM_USER + 5)
+/* --ui-demo=shortcuts: posted once the demo session exists, to open the
+ * keyboard shortcuts sheet over it. */
+#define WM_OPEN_DEMO_SHORTCUTS  (WM_USER + 6)
 /* One-shot timer that puts the window title back after Mark Issue's flash. */
 #define IDT_ISSUE_TITLE         5
 
@@ -2153,6 +2158,10 @@ static void create_demo_session(HWND hwnd)
      * its own modal loop and must not start inside the startup message. */
     if (strcmp(state, "settings-debug") == 0)
         PostMessage(hwnd, WM_OPEN_DEMO_SETTINGS, 0, 0);
+    /* --ui-demo=shortcuts: the keyboard shortcuts sheet over the demo
+     * session, posted for the same reason. */
+    if (strcmp(state, "shortcuts") == 0)
+        PostMessage(hwnd, WM_OPEN_DEMO_SHORTCUTS, 0, 0);
 }
 
 static void hide_ai_panel(HWND parent) {
@@ -2749,7 +2758,9 @@ static MenuItemData *alloc_menu_item(void)
     return &g_menu_items[g_menu_item_count++];
 }
 
-/* Helper: add an owner-draw item to a menu */
+/* Helper: add an owner-draw item to a menu. The accelerator text is the
+ * shortcuts table's (src/core/shortcuts.c), never part of the label, so a
+ * menu cannot name a chord the cheat sheet and README do not. */
 static void menu_add_item(HMENU menu, UINT id, const char *label)
 {
     MenuItemData *mi = alloc_menu_item();
@@ -2757,18 +2768,9 @@ static void menu_add_item(HMENU menu, UINT id, const char *label)
     mi->hSub = NULL;
     mi->is_separator = 0;
     mi->nested = 0;
-    /* Split "Text\tAccel" */
-    const char *tab = strchr(label, '\t');
-    if (tab) {
-        size_t n = (size_t)(tab - label);
-        if (n >= sizeof(mi->text)) n = sizeof(mi->text) - 1;
-        memcpy(mi->text, label, n);
-        mi->text[n] = '\0';
-        (void)snprintf(mi->accel, sizeof(mi->accel), "%s", tab + 1);
-    } else {
-        (void)snprintf(mi->text, sizeof(mi->text), "%s", label);
-        mi->accel[0] = '\0';
-    }
+    (void)snprintf(mi->text, sizeof(mi->text), "%s", label);
+    (void)snprintf(mi->accel, sizeof(mi->accel), "%s",
+                   shortcuts_menu_accel((int)id));
     AppendMenu(menu, MF_OWNERDRAW, id, (LPCSTR)mi);
 }
 
@@ -2828,7 +2830,8 @@ static HMENU create_app_menu(void)
 
     HMENU hMenu = CreateMenu();
     HMENU hFile = CreatePopupMenu();
-    menu_add_item(hFile, IDM_FILE_NEW_SESSION, "New Session\tCtrl+Shift+T");
+    menu_add_item(hFile, IDM_FILE_NEW_SESSION, "New Session");
+    menu_add_item(hFile, IDM_FILE_CLOSE_TAB, "Close Tab");
     menu_add_separator(hFile);
     menu_add_item(hFile, IDM_FILE_CONNECT, "Session Manager...");
     menu_add_item(hFile, IDM_FILE_DISCONNECT, "Disconnect");
@@ -2842,8 +2845,8 @@ static HMENU create_app_menu(void)
     menu_add_popup(hMenu, hFile, "File");
 
     HMENU hEdit = CreatePopupMenu();
-    menu_add_item(hEdit, IDM_EDIT_COPY, "Copy\tCtrl+C");
-    menu_add_item(hEdit, IDM_EDIT_PASTE, "Paste\tCtrl+V");
+    menu_add_item(hEdit, IDM_EDIT_COPY, "Copy");
+    menu_add_item(hEdit, IDM_EDIT_PASTE, "Paste");
     menu_add_item(hEdit, IDM_EDIT_SELECT_ALL, "Select All");
     /* Send Key: the keys Nutshell or Windows keep for themselves, and
      * the function row a compact keyboard lacks (special-keys spec,
@@ -2871,15 +2874,16 @@ static HMENU create_app_menu(void)
     menu_add_popup(hMenu, hEdit, "Edit");
 
     HMENU hView = CreatePopupMenu();
-    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist\tCtrl+Shift+Space");
+    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist");
     menu_add_item(hView, IDM_VIEW_AI_UNDOCK, "Undock AI Assist");
-    menu_add_item(hView, IDM_VIEW_FULLSCREEN, "Fullscreen\tF11");
+    menu_add_item(hView, IDM_VIEW_FULLSCREEN, "Fullscreen");
     menu_add_popup(hMenu, hView, "View");
 
     HMENU hHelp = CreatePopupMenu();
+    menu_add_item(hHelp, IDM_HELP_SHORTCUTS, "Keyboard Shortcuts...");
     menu_add_item(hHelp, IDM_HELP_GUIDE, "User Guide");
     menu_add_separator(hHelp);
-    menu_add_item(hHelp, IDM_HELP_MARK_ISSUE, "Mark Issue\tCtrl+Shift+M");
+    menu_add_item(hHelp, IDM_HELP_MARK_ISSUE, "Mark Issue");
     menu_add_item(hHelp, IDM_HELP_LOG_FOLDER, "Open Debug Log Folder");
     menu_add_separator(hHelp);
     menu_add_item(hHelp, IDM_ABOUT, "About");
@@ -3114,6 +3118,15 @@ static void show_about_dialog(HWND parent) {
             DispatchMessage(&m);
         }
     }
+}
+
+/* Help > Keyboard Shortcuts (and --ui-demo=shortcuts): the modal sheet,
+ * owned by the main window, with the floating AI panel disabled too. */
+static void show_shortcuts(HWND hwnd)
+{
+    HWND floating = (!g_ai_docked && g_hwndAiChat && IsWindow(g_hwndAiChat))
+                        ? g_hwndAiChat : NULL;
+    cheatsheet_show(hwnd, floating, g_theme);
 }
 
 /* ---- Keyboard: what each key sends (special-keys spec, 2026-09-23) -------
@@ -4101,6 +4114,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 case IDM_FILE_NEW_SESSION:
                     on_tab_new();
                     return 0;
+                case IDM_FILE_CLOSE_TAB:
+                    close_active_tab();
+                    return 0;
                 case IDM_FILE_CONNECT:
                     PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
                     return 0;
@@ -4199,6 +4215,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                     return 0;
                 }
+                case IDM_HELP_SHORTCUTS:
+                    show_shortcuts(hwnd);
+                    return 0;
                 case IDM_HELP_GUIDE:
                     help_guide_show(hwnd, g_config->settings.colour_scheme);
                     return 0;
@@ -4600,6 +4619,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_OPEN_DEMO_SETTINGS:
             settings_dlg_show_demo_debug(hwnd, g_config);
+            return 0;
+
+        case WM_OPEN_DEMO_SHORTCUTS:
+            show_shortcuts(hwnd);
             return 0;
 
         case WM_STARTUP_CONNECT: {
