@@ -5,12 +5,15 @@ description: Survey the state of umbongo/nutshell — branches, tags, open pull 
 
 # Repo status — branches, PRs and checks
 
-Last updated: 2026-09-21. Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-10-19. Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## Why the naive commands mislead here
 
-- The session clone is shallow and fetches only `main` and the session
-  branch. `git branch -a` shows two branches; the remote has more.
+- A cloud session's clone is shallow and fetches only `main` and the
+  session branch; `git branch -a` shows two branches, the remote has more.
+  The clone on `automaton` is full and has `gh`, so `gh pr list` and
+  `gh pr checks N` replace the `mcp__github__*` calls below; run
+  `git fetch --prune origin` first, or deleted branches still show.
 - `v1.0.76` and `v1.1.21` are both a branch and a tag. A plain
   `git fetch origin v1.1.21` resolves to the tag.
 - Ahead/behind counts without a merge base are wrong. Unshallow first
@@ -43,10 +46,12 @@ A short table: branch, tip subject, relation to `main` (ahead/behind or
 which have an open PR, which are stale. Say explicitly when a number could
 not be measured (shallow history) rather than reporting a wrong one.
 
-## Known state on 2026-09-24
+## Known state on 2026-10-19
 
-Remote branches: `main` (v1.2.5, PR #45), `todo-local-shell-followups`
-(PR #42, open draft, superseded by the 2026-09-24 checkpoint), `v1.0.76`
-(pre-redesign main, also a tag), `v1.1.21` (contained in main, also a
-tag). Merged feature branches are deleted by GitHub on merge. Tags:
-`v1.0.76`, `v1.1.21`; no tag has been cut since v1.1.21.
+`main` at v1.2.41 (PR #71). Open drafts: #70 `fix/conpty-resize-anchor`
+(spec and plan), #72 `fix/light-theme-ansi-contrast` (spec). `v1.0.76`
+and `v1.1.21` are still both a branch and a tag, and `git ls-remote --tags
+origin` lists eight `archive/*` tags (a local `git tag` may show fewer); `v1.2.13` is a branch
+only, the backup kept before the v1.2.14 security fixes. Merged feature
+branches are deleted on merge. The only release is v1.1.21 (2026-09-14); no
+v1.2.x tag has been cut.
