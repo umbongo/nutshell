@@ -11,6 +11,7 @@ static TermRow *term_row_alloc(int cols) {
     row->len = 0;
     row->dirty = true;
     row->wrapped = false;
+    row->gen = 0;
     return row;
 }
 
@@ -74,6 +75,10 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
     term->bracketed_paste_mode = false;
     term->write_seq            = 0;
     term->log_id               = 0;
+    term->lines_recycled         = 0;
+    term->primary_lines_recycled = 0;
+    term->epoch                  = 0;
+    term->write_gen              = 0;
 
     term->lines = xcalloc((size_t)term->lines_capacity, sizeof(TermRow *));
     
@@ -288,10 +293,21 @@ void term_resize(Terminal *term, int rows, int cols) {
             &term->primary_cursor.row, &term->primary_cursor.col);
     }
 
+    /* Reflow renumbered every row: a selection's line numbers no longer apply. */
+    term->epoch++;
+
     term->rows = rows;
     term->cols = cols;
     term->scroll_top = 0;
     term->scroll_bot = rows - 1;
+
+    /* A view scrolled back further than the reflowed history holds would
+     * show rows that do not exist (spec 2026-10-20 section 2.1). */
+    {
+        int max_off = term_max_scroll_offset(term);
+        if (term->scrollback_offset > max_off) term->scrollback_offset = max_off;
+        if (term->scrollback_offset < 0) term->scrollback_offset = 0;
+    }
 
     DLOG(DLOG_TERM, DLOG_DEBUG, term->log_id, "term.resize",
          "rows_before=%d rows=%d cols_before=%d cols=%d lines_before=%d lines=%d alt=%d",
@@ -305,11 +321,15 @@ void term_scroll(Terminal *term) {
         int new_idx = (term->lines_start + term->lines_count) % term->lines_capacity;
         term_row_fill(term->lines[new_idx], term->cols, term->current_attr);
         term->lines_count++;
+        term_row_stamp(term, term->lines[new_idx]);
     } else {
-        /* Buffer full: recycle oldest line */
+        /* Buffer full: recycle oldest line. Count it first, so the stamp
+         * belongs to the row's new number, not the one it held. */
         int recycle_idx = term->lines_start;
         term_row_fill(term->lines[recycle_idx], term->cols, term->current_attr);
         term->lines_start = (term->lines_start + 1) % term->lines_capacity;
+        term->lines_recycled++;
+        term_row_stamp(term, term->lines[recycle_idx]);
     }
 
     /* Smart scrolling: a view that is scrolled back stays anchored on the
@@ -318,9 +338,7 @@ void term_scroll(Terminal *term) {
      * clamped to the history the buffer still holds. A view at the bottom
      * (offset 0) keeps following; a keypress resets the offset (window.c). */
     if (term->scrollback_offset > 0) {
-        int max_off = term->lines_count - term->rows;
-        if (max_off > term->max_scrollback) max_off = term->max_scrollback;
-        if (max_off < 0) max_off = 0;
+        int max_off = term_max_scroll_offset(term);
         term->scrollback_offset++;
         if (term->scrollback_offset > max_off) term->scrollback_offset = max_off;
     }
@@ -351,6 +369,23 @@ int term_screen_to_phys(const Terminal *term, int screen_row) {
     int top = (term->lines_count >= term->rows)
             ? (term->lines_count - term->rows) : 0;
     return (term->lines_start + top + screen_row) % term->lines_capacity;
+}
+
+int term_view_to_logical(const Terminal *t, int screen_row)
+{
+    if (!t || screen_row < 0 || screen_row >= t->rows) return -1;
+    int off = t->scrollback_offset > 0 ? t->scrollback_offset : 0;
+    int top = (t->lines_count >= t->rows) ? (t->lines_count - t->rows - off) : -off;
+    if (top < 0) top = 0;
+    return top + screen_row;
+}
+
+int term_max_scroll_offset(const Terminal *t)
+{
+    if (!t) return 0;
+    int max_off = t->lines_count - t->rows;
+    if (max_off > t->max_scrollback) max_off = t->max_scrollback;
+    return max_off > 0 ? max_off : 0;
 }
 
 void term_scroll_up(Terminal *term, int top, int bot, int n) {
@@ -400,9 +435,12 @@ void term_scroll_up(Terminal *term, int top, int bot, int n) {
         remaining -= chunk;
     }
 
-    /* Mark all rows in the region dirty */
-    for (int i = top; i <= bot; i++)
-        term->lines[term_screen_to_phys(term, i)]->dirty = true;
+    /* Every row in the region moved or was cleared: dirty and stamped. */
+    for (int i = top; i <= bot; i++) {
+        TermRow *moved = term->lines[term_screen_to_phys(term, i)];
+        moved->dirty = true;
+        term_row_stamp(term, moved);
+    }
 }
 
 void term_scroll_down(Terminal *term, int top, int bot, int n) {
@@ -439,9 +477,12 @@ void term_scroll_down(Terminal *term, int top, int bot, int n) {
         remaining -= chunk;
     }
 
-    /* Mark all rows in the region dirty */
-    for (int i = top; i <= bot; i++)
-        term->lines[term_screen_to_phys(term, i)]->dirty = true;
+    /* Every row in the region moved or was cleared: dirty and stamped. */
+    for (int i = top; i <= bot; i++) {
+        TermRow *moved = term->lines[term_screen_to_phys(term, i)];
+        moved->dirty = true;
+        term_row_stamp(term, moved);
+    }
 }
 
 void term_clear_dirty(Terminal *term)
@@ -500,6 +541,9 @@ void term_alt_screen_enter(Terminal *term)
     term->primary_lines_count     = term->lines_count;
     term->primary_lines_start     = term->lines_start;
     term->primary_cursor          = term->cursor;
+    term->primary_lines_recycled  = term->lines_recycled;
+    term->lines_recycled          = 0;
+    term->epoch++;
 
     /* Allocate a fresh alt-screen buffer (rows only, no scrollback) */
     int cap = term->rows;
@@ -547,6 +591,8 @@ void term_alt_screen_exit(Terminal *term)
     term->lines_count     = term->primary_lines_count;
     term->lines_start     = term->primary_lines_start;
     term->cursor          = term->primary_cursor;
+    term->lines_recycled  = term->primary_lines_recycled;
+    term->epoch++;
     term->primary_lines   = NULL;
     term->alt_screen_active = false;
     term->scrollback_offset = 0;

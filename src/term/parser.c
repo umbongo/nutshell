@@ -33,20 +33,17 @@ uint32_t color256_to_rgb(uint8_t index) {
     return (v << 16) | (v << 8) | v;
 }
 
-/* Helper: Get pointer to a screen row (0-based index from top of visible screen) */
+/* Helper: the row at a screen row (0-based from the top of the live screen)
+ * for writing. term_screen_to_phys() is the live mapping (term.h). Every
+ * parser write reaches a row through here -- cell writes, insert-mode shifts,
+ * ICH/DCH, EL/ED/ECH, the auto-wrap flag -- so this is the one place the
+ * parser stamps a row (spec 2026-10-20 section 2.2). Cursor motion never
+ * calls it. */
 static TermRow *get_screen_row(Terminal *term, int screen_row) {
     if (screen_row < 0 || screen_row >= term->rows) return NULL;
-    
-    // The screen is always the last 'rows' lines of the buffer.
-    // logical_idx 0 is the oldest line in the buffer.
-    // logical_idx of top of screen = term->lines_count - term->rows.
-    // If lines_count < rows (startup), top is 0.
-    
-    int top_logical = (term->lines_count >= term->rows) ? (term->lines_count - term->rows) : 0;
-    int logical_idx = top_logical + screen_row;
-    int physical_idx = (term->lines_start + logical_idx) % term->lines_capacity;
-    
-    return term->lines[physical_idx];
+    TermRow *row = term->lines[term_screen_to_phys(term, screen_row)];
+    if (row) term_row_stamp(term, row);
+    return row;
 }
 
 static void clamp_cursor(Terminal *term) {
@@ -373,6 +370,7 @@ static void handle_csi(Terminal *term, char final) {
                         cr0->cells[c].codepoint = 0;
                         cr0->cells[c].attr = term->current_attr;
                     }
+                    if (term->cursor.col == 0) cr0->wrapped = false;   /* whole row erased */
                     cr0->dirty = true;
                 }
                 for (int r = term->cursor.row + 1; r < term->rows; r++) {
@@ -383,6 +381,7 @@ static void handle_csi(Terminal *term, char final) {
                             rr->cells[c].attr = term->current_attr;
                         }
                         rr->len = 0;
+                        rr->wrapped = false;
                         rr->dirty = true;
                     }
                 }
@@ -396,6 +395,7 @@ static void handle_csi(Terminal *term, char final) {
                             rr->cells[c].attr = term->current_attr;
                         }
                         rr->len = 0;
+                        rr->wrapped = false;
                         rr->dirty = true;
                     }
                 }
@@ -412,6 +412,7 @@ static void handle_csi(Terminal *term, char final) {
                         cr1->cells[c].codepoint = 0;
                         cr1->cells[c].attr = term->current_attr;
                     }
+                    if (cc >= term->cols - 1) cr1->wrapped = false;    /* whole row erased */
                     cr1->dirty = true;
                 }
             } else if (n == 2) {
@@ -456,6 +457,12 @@ static void handle_csi(Terminal *term, char final) {
                     row->cells[c].codepoint = 0;
                     row->cells[c].attr = term->current_attr;
                 }
+                /* A whole-row erase ends the soft wrap onto this row (spec
+                 * 2026-10-20 section 2.4): EL 2, EL 0 from column 0, or EL 1
+                 * to the last column. Cursor motion never touches the flag -- readline moves
+                 * onto a continuation row with a bare LF and back with CUU. */
+                if (n == 2 || (n == 0 && cc == 0)
+                    || (n == 1 && cc >= term->cols - 1)) row->wrapped = false;
                 row->dirty = true;
             }
             break;

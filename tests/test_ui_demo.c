@@ -32,22 +32,24 @@ static int count_status(const ApprovalQueue *q, ApprovalStatus status)
  * (v1.2.1, spec 2026-09-22-local-shell-design.md section 5) only swaps the
  * terminal transcript; "thinking" is "chat" with a longer reasoning block;
  * "cmddetail", "settings-debug", "policy-auto", "policy-compact" and "ansi"
- * reuse or swap content too. None of those is part of "all". */
+ * reuse or swap content too, and "shortcuts" (2026-10-20) opens the modal
+ * keyboard shortcuts sheet. None of those is part of "all". */
 int test_ui_demo_states_list_ends_in_all(void)
 {
     TEST_BEGIN();
     int count = 0;
     const char *const *states = ui_demo_states(&count);
     ASSERT_NOT_NULL(states);
-    ASSERT_EQ(count, 17);
+    ASSERT_EQ(count, 18);
     ASSERT_STR_EQ(states[count - 1], "all");
-    ASSERT_STR_EQ(states[count - 2], "policy-compact");
-    ASSERT_STR_EQ(states[count - 3], "policy-auto");
-    ASSERT_STR_EQ(states[count - 4], "settings-debug");
-    ASSERT_STR_EQ(states[count - 5], "cmddetail");
-    ASSERT_STR_EQ(states[count - 6], "thinking");
-    ASSERT_STR_EQ(states[count - 7], "local");
-    ASSERT_STR_EQ(states[count - 8], "ansi");
+    ASSERT_STR_EQ(states[count - 2], "shortcuts");
+    ASSERT_STR_EQ(states[count - 3], "policy-compact");
+    ASSERT_STR_EQ(states[count - 4], "policy-auto");
+    ASSERT_STR_EQ(states[count - 5], "settings-debug");
+    ASSERT_STR_EQ(states[count - 6], "cmddetail");
+    ASSERT_STR_EQ(states[count - 7], "thinking");
+    ASSERT_STR_EQ(states[count - 8], "local");
+    ASSERT_STR_EQ(states[count - 9], "ansi");
     TEST_END();
 }
 
@@ -479,6 +481,26 @@ int test_ui_demo_settings_debug_is_an_empty_state(void)
     ASSERT_TRUE(!ui_demo_scrolls_to_top("settings-debug"));
     ASSERT_TRUE(!ui_demo_state_valid("settings"));
     ASSERT_TRUE(!ui_demo_state_valid("settings-debug "));
+    TEST_END();
+}
+
+/* "shortcuts" is a real state that builds an empty conversation (the win32
+ * side opens Help > Keyboard Shortcuts over it) and is not part of "all". */
+int test_ui_demo_shortcuts_is_an_empty_state(void)
+{
+    TEST_BEGIN();
+    AiConversation conv;
+    ApprovalQueue approval, approval2;
+    char term_buf[8192];
+    ASSERT_TRUE(ui_demo_state_valid("shortcuts"));
+    ASSERT_EQ(ui_demo_build("shortcuts", &conv, &approval, &approval2,
+                            term_buf, sizeof(term_buf)), 0);
+    ASSERT_EQ(conv.msg_count, 1);
+    ASSERT_EQ(approval.count, 0);
+    ASSERT_EQ(approval2.count, 0);
+    ASSERT_TRUE(!ui_demo_scrolls_to_top("shortcuts"));
+    ASSERT_TRUE(!ui_demo_state_valid("shortcut"));
+    ASSERT_TRUE(!ui_demo_state_valid("Shortcuts"));
     TEST_END();
 }
 

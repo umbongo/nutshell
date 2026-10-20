@@ -51,6 +51,7 @@ typedef struct {
     int len;
     bool dirty;
     bool wrapped;
+    uint64_t gen;      /* Terminal.write_gen at this row's last write (term_row_stamp) */
 } TermRow;
 
 typedef struct {
@@ -122,6 +123,20 @@ typedef struct {
      * dispatcher) that need to detect terminal quiescence without diffing
      * screen content. */
     unsigned long write_seq;
+
+    /* Selection support (spec docs/superpowers/specs/2026-10-20-putty-selection-design.md
+     * section 2.2). lines_recycled: rows dropped from the front of this ring,
+     * ever -- per ring: the alternate screen counts its own while the
+     * primary's waits in primary_lines_recycled. The absolute line number of
+     * logical index i is lines_recycled + i, stable while epoch is. epoch:
+     * bumped by reflow and by alt-screen enter/leave, the events that renumber
+     * or replace the rows. write_gen: bumped by every row write; the row
+     * written takes the new value (term_row_stamp()). 64 bits: it does not
+     * wrap in practice, so stamps compare with a plain `>`. */
+    uint64_t lines_recycled;
+    uint64_t primary_lines_recycled;
+    uint32_t epoch;
+    uint64_t write_gen;
 
     /* The debug log's session id (the "s3" in a log line; 0 prints "-").
      * Set by whoever owns the session (window.c) right after term_init();
@@ -197,15 +212,29 @@ int term_cursor_row_is_windows_prompt(const Terminal *term);
  * row `screen_row` -- 0-based, 0 is the top of the currently visible
  * screen. The one mapping every screen-row consumer in this codebase
  * shares (src/term/buffer.c's internal callers, term_cursor_row_text()
- * behind term_at_prompt() and friends, src/ui/renderer.c's
- * get_visible_row(), src/term/parser.c's get_screen_row()) -- or, for
- * ai_chat.c's dispatch-stall diagnostic, should: a second, hand-written
+ * behind term_at_prompt() and friends, src/term/parser.c's
+ * get_screen_row()) -- or, for ai_chat.c's dispatch-stall diagnostic,
+ * should. (The renderer and the selection show the view as scrolled and
+ * use term_view_to_logical() below instead.) A second, hand-written
  * copy of this mapping is exactly how term_cursor_row_text() used to
  * disagree with it (see the "sparse state" note on
  * term_logical_rows() below). Does not itself bound-check the result
  * against anything but lines_capacity (the modulo); screen_row must
  * already be known valid (0 <= screen_row < term->rows). */
 int term_screen_to_phys(const Terminal *term, int screen_row);
+
+/* Logical index of the row shown at screen_row in the view as scrolled
+ * (scrollback_offset applied, top clamped to 0 exactly as the renderer's
+ * get_visible_row did). Never -1 for 0 <= screen_row < rows; -1 outside.
+ * The view mapping: the renderer and the selection use it. The parser keeps
+ * term_screen_to_phys(), the live mapping -- writes always land on the live
+ * screen, scrolled back or not (spec 2026-10-20-putty-selection-design.md 2.1). */
+int term_view_to_logical(const Terminal *t, int screen_row);
+
+/* The furthest the view can scroll back: the history actually held,
+ * min(lines_count - rows, max_scrollback), never below 0. The wheel, the
+ * scrollbar, Page Up, smart scrolling and term_resize() all clamp to it. */
+int term_max_scroll_offset(const Terminal *t);
 
 /* The number of logical rows [0, this) the terminal currently holds real,
  * readable content for: every row of scrolled history (lines_count), or,
@@ -229,6 +258,13 @@ int term_screen_to_phys(const Terminal *term, int screen_row);
  * term_screen_to_phys() above has no such bound because it needs none.) */
 static inline int term_logical_rows(const Terminal *term) {
     return term->lines_count > term->rows ? term->lines_count : term->rows;
+}
+
+/* Stamp a row as written now. The parser calls it only from get_screen_row(),
+ * the one place every parser write passes through; buffer.c calls it for the
+ * rows a scroll moves, clears or recycles. Cursor motion never stamps. */
+static inline void term_row_stamp(Terminal *term, TermRow *row) {
+    row->gen = ++term->write_gen;
 }
 
 #endif

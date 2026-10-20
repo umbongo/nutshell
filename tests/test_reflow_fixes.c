@@ -142,9 +142,9 @@ int test_reflow_line_one_past_width_still_wraps(void)
 }
 
 /* A cursor on a continuation row that has no cells of its own (a stale
- * wrapped flag left by ED 0), after a row that ends exactly at the width,
- * keeps its row: the exact-width fix must not pull it up onto the end of
- * the row above. */
+ * wrapped flag, set by hand below because the parser no longer leaves one
+ * after ED 0), after a row that ends exactly at the width, keeps its row:
+ * the exact-width fix must not pull it up onto the end of the row above. */
 int test_reflow_cursor_on_empty_continuation_keeps_row(void)
 {
     TEST_BEGIN();
@@ -152,7 +152,10 @@ int test_reflow_cursor_on_empty_continuation_keeps_row(void)
     ASSERT_NOT_NULL(t);
     feed(t, "AAAAAAAAAAAAAAAAAAAAB");     /* 20 A, then B auto-wraps   */
     ASSERT_TRUE(screen_row(t, 1)->wrapped);
-    feed(t, "\x1b[1;20H\x1b[J");          /* ED 0: row 1 keeps wrapped */
+    feed(t, "\x1b[1;20H\x1b[J");          /* ED 0 clears row 1 */
+    /* The parser no longer leaves a wrapped empty row after ED 0, so set
+     * the precondition here. */
+    t->lines[term_screen_to_phys(t, 1)]->wrapped = true;
     feed(t, "A");                          /* row 0 full again          */
     feed(t, "\x1b[2;1H");                  /* cursor to row 1, col 0    */
     ASSERT_TRUE(screen_row(t, 1)->wrapped);

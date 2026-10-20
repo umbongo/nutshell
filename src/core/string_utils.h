@@ -44,7 +44,7 @@ size_t utf8_codepoint_count(const char *s, size_t len);
  * terminal buffer as text (selection copy, clipboard, AI context). A
  * well-behaved emulator never stores a control character in a cell, but
  * nothing should rely on that holding under a hostile or buggy remote --
- * this is the one place selection_extract_text() and term_extract_*() both
+ * this is the one place selection_copy_text() and term_extract_*() both
  * call before emitting a cell. Maps the empty-cell sentinel (0), any C0
  * control (U+0000-U+001F), DEL (U+007F) and any C1 control
  * (U+0080-U+009F) to a plain space; every other codepoint passes through

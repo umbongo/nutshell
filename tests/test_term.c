@@ -2,6 +2,8 @@
 #include "term.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include "edit_scroll.h"
 
 // Helper to get a cell from the screen (0-based row/col)
 static TermCell get_cell(Terminal *term, int row, int col) {
@@ -1297,6 +1299,396 @@ int test_term_sgr_split_across_reads_keeps_index_and_dim(void)
     c = t->lines[term_screen_to_phys(t, 0)]->cells[1];
     ASSERT_EQ(c.attr.bg_mode, COLOR_ANSI16);
     ASSERT_EQ(c.attr.bg_index, 3);
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- View mapping and scroll clamps (spec 2026-10-20-putty-selection-design.md 2.1) ---- */
+
+static int phys_of_logical(const Terminal *t, int logical)
+{
+    return (t->lines_start + logical) % t->lines_capacity;
+}
+
+static void feed_x_lines(Terminal *t, int n)
+{
+    for (int i = 0; i < n; i++) term_process(t, "x\r\n", 3);
+}
+
+int test_term_view_to_logical_offset_zero_matches_live(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);          /* capacity 25 */
+    feed_x_lines(t, 30);                         /* 4 cursor moves, 20 appends, 6 recycles */
+    ASSERT_TRUE(t->lines_start != 0);            /* the ring has wrapped */
+    for (int r = 0; r < t->rows; r++)
+        ASSERT_EQ(phys_of_logical(t, term_view_to_logical(t, r)), term_screen_to_phys(t, r));
+    ASSERT_EQ(term_view_to_logical(t, -1), -1);
+    ASSERT_EQ(term_view_to_logical(t, t->rows), -1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_view_to_logical_scrolled_back(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    feed_x_lines(t, 30);
+    int live0 = term_view_to_logical(t, 0);
+    t->scrollback_offset = 7;
+    ASSERT_EQ(term_view_to_logical(t, 0), live0 - 7);
+    ASSERT_EQ(term_view_to_logical(t, 4), live0 - 7 + 4);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_view_to_logical_fresh_tab_clamps_top(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    t->scrollback_offset = t->rows - 1;          /* stale: no history exists */
+    ASSERT_EQ(term_view_to_logical(t, 0), 0);    /* not -1 */
+    ASSERT_EQ(term_view_to_logical(t, 4), 4);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_resize_clamps_scrollback_offset(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    feed_x_lines(t, 8);                          /* lines_count 9: 4 lines of history */
+    t->scrollback_offset = 50;                   /* more than the history held */
+    term_resize(t, 6, 10);
+    ASSERT_EQ(t->scrollback_offset, term_max_scroll_offset(t));
+    ASSERT_EQ(t->scrollback_offset, 3);          /* 9 lines - 6 rows */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_max_scroll_offset_is_history_held(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    ASSERT_EQ(term_max_scroll_offset(t), 0);
+    feed_x_lines(t, 6);                          /* 2 lines of history */
+    ASSERT_EQ(term_max_scroll_offset(t), 2);
+    /* Page Up clamps to the history held, not to max_scrollback (20). */
+    ASSERT_EQ(scroll_page_up(0, t->rows, term_max_scroll_offset(t)), 2);
+    feed_x_lines(t, 100);
+    ASSERT_EQ(term_max_scroll_offset(t), 20);    /* capped by max_scrollback */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_parser_writes_live_screen_while_scrolled_back(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    feed_x_lines(t, 12);
+    t->scrollback_offset = 3;
+    term_process(t, "\x1b[1;1HZ", 7);
+    ASSERT_EQ(t->lines[term_screen_to_phys(t, 0)]->cells[0].codepoint, 'Z');
+    int view0 = term_view_to_logical(t, 0);
+    ASSERT_EQ(t->lines[phys_of_logical(t, view0)]->cells[0].codepoint, 'x');
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- Line numbers, epoch and write stamps (spec 2026-10-20 2.2) ---- */
+
+static TermRow *logical_row(Terminal *t, int logical)
+{
+    return t->lines[(t->lines_start + logical) % t->lines_capacity];
+}
+
+/* Bit r set when screen row r's stamp changed while `seq` was processed. */
+static unsigned stamp_mask(Terminal *t, const char *seq)
+{
+    uint64_t before[16];
+    for (int r = 0; r < t->rows; r++) before[r] = t->lines[term_screen_to_phys(t, r)]->gen;
+    term_process(t, seq, strlen(seq));
+    unsigned mask = 0;
+    for (int r = 0; r < t->rows; r++)
+        if (t->lines[term_screen_to_phys(t, r)]->gen != before[r]) mask |= 1u << r;
+    return mask;
+}
+
+int test_term_lines_recycled_counts_only_recycles(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 76);         /* capacity 100, 24 lines held */
+    for (int i = 0; i < 76; i++) term_scroll(t); /* appends only */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)0);
+    term_scroll(t);                              /* the first recycle */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_lines_recycled_keeps_line_numbers_stable(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(10, 20, 90);         /* capacity 100 */
+    term_process(t, "\x1b[10;1HM", 8);           /* a marker on the bottom row */
+    uint64_t marker = t->lines_recycled + (uint64_t)term_view_to_logical(t, 9);
+    for (int i = 0; i < 50; i++) term_scroll(t);
+    int logical = (int)(marker - t->lines_recycled);
+    ASSERT_EQ(logical_row(t, logical)->cells[0].codepoint, 'M');
+    for (int i = 0; i < 10000; i++) term_scroll(t);
+    /* 10,050 scrolls: 90 appends filled the ring, the rest recycled. */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)(10050 - 90));
+    ASSERT_TRUE(marker < t->lines_recycled);     /* the marked line is gone */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_alt_ring_has_its_own_recycle_count(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 2);           /* capacity 7 */
+    for (int i = 0; i < 10; i++) term_scroll(t); /* 2 appends, 8 recycles */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)8);
+    term_alt_screen_enter(t);
+    ASSERT_EQ(t->lines_recycled, (uint64_t)0);
+    for (int i = 0; i < 3; i++) term_scroll(t);  /* the alt ring is always full */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)3);
+    term_alt_screen_exit(t);
+    ASSERT_EQ(t->lines_recycled, (uint64_t)8);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_epoch_bumps_on_reflow_and_alt_switch_only(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    uint32_t e0 = t->epoch;
+    term_process(t, "hello\r\nworld\x1b[2J\x1b[1;1H", 22);
+    term_scroll(t);
+    t->scrollback_offset = 1;
+    term_resize(t, 5, 10);                       /* same size: no reflow */
+    ASSERT_EQ(t->epoch, e0);
+    term_resize(t, 6, 10);
+    ASSERT_EQ(t->epoch, e0 + 1);
+    term_alt_screen_enter(t);
+    ASSERT_EQ(t->epoch, e0 + 2);
+    term_resize(t, 6, 12);                       /* one resize on the alt screen: one bump */
+    ASSERT_EQ(t->epoch, e0 + 3);
+    term_alt_screen_exit(t);
+    ASSERT_EQ(t->epoch, e0 + 4);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_cell_write_and_not_cursor_motion(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;1HA"), 1u << 2);
+    ASSERT_EQ(stamp_mask(t, "\x1b[5;5H\n\x1b[A\r"), 0u);   /* CUP, LF, CUU, CR */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_line_edits(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    ASSERT_EQ(stamp_mask(t, "\x1b[4h\x1b[3;1HB\x1b[4l"), 1u << 2); /* insert-mode shift */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;1H\x1b[2@"), 1u << 2);          /* ICH */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;1H\x1b[P"), 1u << 2);           /* DCH */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;4H\x1b[K"), 1u << 2);           /* EL */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;1H\x1b[3X"), 1u << 2);          /* ECH */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_erase_display(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    ASSERT_EQ(stamp_mask(t, "\x1b[6;1H\x1b[J"), 0xE0u);   /* ED 0: rows 5-7 */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;2H\x1b[1J"), 0x07u);  /* ED 1: rows 0-2 */
+    ASSERT_EQ(stamp_mask(t, "\x1b[2J"), 0xFFu);           /* ED 2: every row */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_region_scrolls(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    ASSERT_EQ(stamp_mask(t, "\x1b[6;1H\x1b[L"), 0xE0u);   /* IL at row 5: rows 5-7 */
+    ASSERT_EQ(stamp_mask(t, "\x1b[6;1H\x1b[M"), 0xE0u);   /* DL at row 5 */
+    ASSERT_EQ(stamp_mask(t, "\x1b[T"), 0xFFu);            /* SD: whole region */
+    ASSERT_EQ(stamp_mask(t, "\x1b[3;6r\x1b[6;1H\n"), 0x3Cu); /* DECSTBM 2-5, LF at its bottom */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_full_screen_scroll_touches_only_the_new_row(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(8, 10, 20);
+    term_process(t, "A\r\nB\r\nC", 7);
+    int n = t->lines_count;
+    uint64_t before[8];
+    for (int i = 0; i < n; i++) before[i] = logical_row(t, i)->gen;
+    term_process(t, "\x1b[S", 3);                /* SU on the primary: term_scroll() */
+    ASSERT_EQ(t->lines_count, n + 1);
+    for (int i = 0; i < n; i++) ASSERT_EQ(logical_row(t, i)->gen, before[i]);
+    ASSERT_EQ(logical_row(t, n)->gen, t->write_gen);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_stamp_recycled_row_carries_its_new_number(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 2);           /* capacity 6 */
+    term_scroll(t);
+    term_scroll(t);                              /* full */
+    TermRow *oldest = t->lines[t->lines_start];
+    term_scroll(t);                              /* recycles it */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)1);
+    int last = t->lines_count - 1;
+    ASSERT_TRUE(logical_row(t, last) == oldest);
+    ASSERT_EQ(oldest->gen, t->write_gen);
+    ASSERT_EQ(t->lines_recycled + (uint64_t)last, (uint64_t)6); /* its new number */
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- wrapped on erase (spec 2026-10-20 2.4) ---- */
+
+static TermRow *trow(Terminal *t, int screen_row)
+{
+    return t->lines[term_screen_to_phys(t, screen_row)];
+}
+
+static void tfeed(Terminal *t, const char *s)
+{
+    term_process(t, s, strlen(s));
+}
+
+int test_term_wrapped_cleared_by_el2(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");                    /* row 1 continues row 0 */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;1H\x1b[2K");
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_cleared_by_el_from_column_0_only(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[2;4H\x1b[K");                 /* EL 0 from column 3: partial */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;1H\x1b[K");                 /* EL 0 from column 0: whole row */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_cleared_by_ed_whole_rows(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[1;6H\x1b[J");                 /* ED 0 from row 0: row 1 is a whole row */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+
+    t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB\r\nx");
+    tfeed(t, "\x1b[3;1H\x1b[1J");                /* ED 1 from row 2: row 1 is a whole row */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_cleared_by_ed0_from_column_0(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;1H\x1b[J");                /* ED 0 from the cursor row's column 0 */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_kept_by_ed0_from_nonzero_column(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[2;2H\x1b[J");                /* ED 0 from column 1: partial row */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_cleared_by_el1_to_last_column(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[2;4H\x1b[1K");               /* EL 1 to column 3: partial row */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;10H\x1b[1K");              /* EL 1 with the cursor in the last column */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_cleared_by_ed1_to_last_column(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[2;4H\x1b[1J");               /* ED 1 to column 3: partial cursor row */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;10H\x1b[1J");              /* ED 1 with the cursor in the last column */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_kept_by_readline_home_end(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "$ echo abcdefg");                  /* "$ echo abc" + "defg", cursor row 1 col 4 */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[A\r\x1b[2C");                 /* Home: CUU, CR, CUF */
+    tfeed(t, "\n\x1b[5G");                       /* End: cud1 (a bare LF), CHA */
+    tfeed(t, "\x1b[2;3H");                       /* CUP onto the row */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    ASSERT_EQ(trow(t, 1)->cells[0].codepoint, 'd');
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_ctrl_u_leaves_next_output_unwrapped(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "$ echo abcdefg");
+    /* Readline's Ctrl+U redisplay: back to the prompt, clear the rest of
+     * row 0, step down and clear the old continuation from column 0, back up. */
+    tfeed(t, "\r\x1b[A\x1b[2C\x1b[K\n\r\x1b[K\x1b[A\r\x1b[2C");
+    tfeed(t, "ls\r\na.txt\r\n");
+    ASSERT_EQ(trow(t, 1)->cells[0].codepoint, 'a');
+    ASSERT_FALSE(trow(t, 1)->wrapped);           /* "a.txt" is its own line */
     term_free(t);
     TEST_END();
 }

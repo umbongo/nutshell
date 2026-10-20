@@ -11,6 +11,7 @@
 #include "xmalloc.h"
 #include "config.h"
 #include <string.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include <stdint.h>
@@ -19,6 +20,8 @@
 #include "session_manager.h"
 #include "settings_dlg.h"
 #include "help_guide.h"
+#include "cheatsheet_dlg.h"
+#include "shortcuts.h"
 #include "ssh_session.h"
 #include "ssh_pty.h"
 #include "ssh_io.h"
@@ -90,6 +93,9 @@ static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT
 /* --ui-demo=settings-debug: posted once the demo session exists, to open
  * Settings on the Debugging page (debugging ticked in memory only). */
 #define WM_OPEN_DEMO_SETTINGS   (WM_USER + 5)
+/* --ui-demo=shortcuts: posted once the demo session exists, to open the
+ * keyboard shortcuts sheet over it. */
+#define WM_OPEN_DEMO_SHORTCUTS  (WM_USER + 6)
 /* One-shot timer that puts the window title back after Mark Issue's flash. */
 #define IDT_ISSUE_TITLE         5
 
@@ -145,6 +151,10 @@ typedef struct Session {
      * the terminal to look at earlier output. */
     DWORD     last_term_input_tick;
     uint64_t  prev_bytes_read;        /* SshSession.bytes_read_total snapshot */
+    /* The terminal selection, PuTTY style (spec
+     * docs/superpowers/specs/2026-10-20-putty-selection-design.md): per
+     * session, buffer-absolute, zeroed in create_session(). */
+    Selection sel;
     struct Session *next;
 } Session;
 
@@ -599,13 +609,165 @@ static void paste_chunk_write(void *ctx,
 }
 
 static PasteState g_paste = {0};
-static Selection g_selection = {0};
 
-/* Set in WM_KEYDOWN when Ctrl+C (or Ctrl+Shift+C) copies a selection, so the
- * WM_CHAR that TranslateMessage still queues for 0x03 can be swallowed
- * instead of being sent to the shell as SIGINT. Same pattern as Ctrl+V's
- * 0x16, which WM_CHAR always swallows because WM_KEYDOWN always consumes it. */
+/* The session whose terminal drag holds the mouse capture, or NULL. A tab
+ * switch or close mid-drag ends that drag and releases the capture through
+ * it (spec section 2.5). */
+static Session *g_drag_session = NULL;
+
+/* The last WM_LBUTTONDBLCLK in the terminal, so that the press after it can
+ * be the triple-click (spec section 1). */
+static DWORD g_dblclk_tick = 0;
+static int   g_dblclk_x = 0, g_dblclk_y = 0;
+static bool  g_dblclk_armed = false;
+
+/* Set in WM_KEYDOWN when Ctrl+Shift+C copies, so the WM_CHAR that
+ * TranslateMessage still queues for 0x03 is swallowed instead of being sent
+ * to the shell as SIGINT. Plain Ctrl+C never sets it: it always interrupts
+ * (spec section 6.1). Same pattern as Ctrl+V's 0x16. */
 static bool g_ctrlc_swallow_char = false;
+
+/* ---- Terminal selection (spec 2026-10-20-putty-selection-design.md 2.7) ---- */
+
+/* End the drag that holds the capture. Forget it first, so the
+ * WM_CAPTURECHANGED that ReleaseCapture() sends synchronously finds no drag;
+ * then release only if this window still holds the capture. */
+static void end_terminal_drag(HWND hwnd)
+{
+    g_drag_session = NULL;
+    if (hwnd && GetCapture() == hwnd) ReleaseCapture();
+}
+
+/* selection_sync() for one session, plus the window's side of it: say why a
+ * selection was cleared, end a drag the terminal ended (an epoch change),
+ * and repaint when a highlight went away. Returns true when it cleared. */
+static bool sync_selection(HWND hwnd, Session *s)
+{
+    if (!s || !s->term || (!s->sel.valid && !s->sel.active)) return false;
+    const Terminal *t = s->term;
+    bool epoch_changed = s->sel.epoch != t->epoch;
+    bool recycled = !epoch_changed && s->sel.end.line < t->lines_recycled;
+    bool was_active = s->sel.active;
+    if (!selection_sync(&s->sel, t)) return false;
+    if (s->sel.valid || s->sel.active) return false;      /* only trimmed */
+    DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.clear", "reason=%s",
+         epoch_changed ? "epoch" : (recycled ? "recycled" : "stale"));
+    if (was_active && g_drag_session == s) end_terminal_drag(hwnd);
+    if (s == g_active_session) force_full_terminal_repaint(hwnd, s->term);
+    return true;
+}
+
+/* Copy a session's terminal selection to the clipboard. It never touches
+ * the clipboard for an empty copy (a click, or a selection of blanks), and
+ * never copies a selection the output has since written over. */
+static bool copy_terminal_selection(HWND hwnd, Session *s)
+{
+    if (!s || !s->term) return false;
+    (void)sync_selection(hwnd, s);
+    if (!s->sel.valid) return false;
+    size_t n = 0;
+    char *text = selection_copy_text(&s->sel, s->term, &n);
+    bool ok = n > 0 && clip_copy_utf8(hwnd, text, n) != 0;
+    if (ok) {
+        int lines = 1;
+        for (size_t i = 0; i + 1 < n; i++)
+            if (text[i] == '\r' && text[i + 1] == '\n') lines++;
+        DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.copy", "lines=%d bytes=%zu",
+             lines, n);
+    }
+    free(text);
+    return ok;
+}
+
+static bool sel_point_same(SelPoint a, SelPoint b)
+{
+    return a.line == b.line && a.col == b.col;
+}
+
+/* The press in the terminal: clear what was selected, take the capture and
+ * start a selection of `clicks` (1 cell, 2 word, 3 line) at client pixel
+ * (px, py). px has the left margin already taken off. */
+static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int clicks)
+{
+    if (s->sel.valid || s->sel.active)
+        DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.clear", "reason=%s", "click");
+    if (g_drag_session && g_drag_session != s && g_drag_session->term)
+        (void)selection_finish(&g_drag_session->sel, g_drag_session->term);
+    g_drag_session = NULL;          /* a WM_CAPTURECHANGED from SetCapture finds no drag */
+    SetCapture(hwnd);
+    g_drag_session = s;
+    int row = 0, col = 0;
+    selection_pixel_to_cell(px, py, g_renderer.charWidth, g_renderer.charHeight,
+                            g_tab_height, s->term->rows, s->term->cols, &row, &col);
+    selection_begin(&s->sel, s->term, row, col, clicks, px, py);
+    DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.begin", "line=%llu col=%d mode=%d",
+         (unsigned long long)s->sel.anchor.line, s->sel.anchor.col, (int)s->sel.mode);
+    force_full_terminal_repaint(hwnd, s->term);
+}
+
+/* Extend the drag to client pixel (px, py), px less the left margin, and
+ * repaint when the selection changed. */
+static void extend_terminal_drag(HWND hwnd, Session *s, int px, int py)
+{
+    int row = 0, col = 0;
+    selection_pixel_to_cell(px, py, g_renderer.charWidth, g_renderer.charHeight,
+                            g_tab_height, s->term->rows, s->term->cols, &row, &col);
+    bool was_valid = s->sel.valid;
+    SelPoint old_start = s->sel.start, old_end = s->sel.end;
+    selection_extend(&s->sel, s->term, row, col, px, py,
+                     GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG));
+    if (s->sel.valid != was_valid || !sel_point_same(old_start, s->sel.start) ||
+        !sel_point_same(old_end, s->sel.end))
+        force_full_terminal_repaint(hwnd, s->term);
+}
+
+/* 1 for a press; 3 for the press that follows a double-click within the
+ * double-click time and rectangle. GetTickCount() rather than
+ * GetMessageTime(): the harness sends its clicks, and a sent message has no
+ * message time of its own (spec section 5). */
+static int terminal_press_clicks(int x, int y)
+{
+    int clicks = 1;
+    if (g_dblclk_armed &&
+        GetTickCount() - g_dblclk_tick <= (DWORD)GetDoubleClickTime() &&
+        abs(x - g_dblclk_x) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
+        abs(y - g_dblclk_y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2)
+        clicks = 3;
+    g_dblclk_armed = false;
+    return clicks;
+}
+
+/* Timer 1's selection work: every tick, for every session, outside the poll
+ * loop's io.ctx/CONN_IDLE gate, so a closed session's history still selects.
+ * It scrolls the view towards a drag whose stored pointer is past an edge
+ * and follows with the selection end. It also clears any selection the
+ * terminal has made stale. */
+static void selection_tick(HWND hwnd)
+{
+    Session *d = g_drag_session;
+    if (d && d->term && d->sel.active && d == g_active_session) {
+        Terminal *t = d->term;
+        int top = g_tab_height;
+        int bottom = g_tab_height + t->rows * g_renderer.charHeight;
+        int step = selection_autoscroll_step(d->sel.last_y, top, bottom,
+                                             g_renderer.charHeight);
+        if (step != 0) {
+            int off = t->scrollback_offset - step;   /* above the top: back into history */
+            int max_off = term_max_scroll_offset(t);
+            if (off > max_off) off = max_off;
+            if (off < 0) off = 0;
+            if (off != t->scrollback_offset) {
+                t->scrollback_offset = off;
+                DLOG(DLOG_GENERAL, DLOG_DEBUG, d->log_id, "sel.scroll", "offset=%d", off);
+                update_scrollbar(hwnd);
+                force_full_terminal_repaint(hwnd, t);
+            }
+            extend_terminal_drag(hwnd, d, d->sel.last_x, d->sel.last_y);
+        }
+    }
+    for (Session *s = g_session_list; s; s = s->next)
+        (void)sync_selection(hwnd, s);
+}
 
 static Session *create_session(int rows, int cols) {
     Session *s = xmalloc(sizeof(Session));
@@ -617,6 +779,7 @@ static Session *create_session(int rows, int cols) {
     s->ssh = NULL;
     s->channel = NULL;
     memset(&s->io, 0, sizeof(s->io));
+    memset(&s->sel, 0, sizeof(s->sel));   /* xmalloc() does not zero */
     s->session_log = NULL;
     s->conn_state = CONN_IDLE;
     s->conn_job = NULL;
@@ -697,6 +860,13 @@ static void ai_panel_detach(Session *s)
 static void free_session(Session *s) {
     if (s) {
         key_oneshot_clear();
+        /* A drag in this session ends with it, and gives the capture back.
+         * end_terminal_drag() forgets the drag even with no window to hand
+         * the capture back through. */
+        if (g_drag_session == s)
+            end_terminal_drag(g_hwndTabs ? GetParent(g_hwndTabs) : NULL);
+        if (s->sel.valid || s->sel.active)
+            DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.clear", "reason=%s", "close");
         /* Never free a session under its connection thread: cancel the
          * attempt and let go of it. The thread frees the job (and any SSH
          * session it opened) when it finishes. worker_life_cancel() must
@@ -730,6 +900,13 @@ static void free_session(Session *s) {
 static void on_tab_select(int index, void *user_data) {
     (void)index;
     key_oneshot_clear();
+    /* A drag belongs to the tab it started in: switching away ends it where
+     * it stands, uncopied, and releases the capture. */
+    if (g_drag_session && g_drag_session != (Session *)user_data) {
+        if (g_drag_session->term)
+            (void)selection_finish(&g_drag_session->sel, g_drag_session->term);
+        end_terminal_drag(GetParent(g_hwndTabs));
+    }
     g_active_session = (Session *)user_data;
     if (g_active_session)
         g_active_session->last_user_input_tick = GetTickCount();
@@ -1981,6 +2158,10 @@ static void create_demo_session(HWND hwnd)
      * its own modal loop and must not start inside the startup message. */
     if (strcmp(state, "settings-debug") == 0)
         PostMessage(hwnd, WM_OPEN_DEMO_SETTINGS, 0, 0);
+    /* --ui-demo=shortcuts: the keyboard shortcuts sheet over the demo
+     * session, posted for the same reason. */
+    if (strcmp(state, "shortcuts") == 0)
+        PostMessage(hwnd, WM_OPEN_DEMO_SHORTCUTS, 0, 0);
 }
 
 static void hide_ai_panel(HWND parent) {
@@ -2577,7 +2758,9 @@ static MenuItemData *alloc_menu_item(void)
     return &g_menu_items[g_menu_item_count++];
 }
 
-/* Helper: add an owner-draw item to a menu */
+/* Helper: add an owner-draw item to a menu. The accelerator text is the
+ * shortcuts table's (src/core/shortcuts.c), never part of the label, so a
+ * menu cannot name a chord the cheat sheet and README do not. */
 static void menu_add_item(HMENU menu, UINT id, const char *label)
 {
     MenuItemData *mi = alloc_menu_item();
@@ -2585,18 +2768,9 @@ static void menu_add_item(HMENU menu, UINT id, const char *label)
     mi->hSub = NULL;
     mi->is_separator = 0;
     mi->nested = 0;
-    /* Split "Text\tAccel" */
-    const char *tab = strchr(label, '\t');
-    if (tab) {
-        size_t n = (size_t)(tab - label);
-        if (n >= sizeof(mi->text)) n = sizeof(mi->text) - 1;
-        memcpy(mi->text, label, n);
-        mi->text[n] = '\0';
-        (void)snprintf(mi->accel, sizeof(mi->accel), "%s", tab + 1);
-    } else {
-        (void)snprintf(mi->text, sizeof(mi->text), "%s", label);
-        mi->accel[0] = '\0';
-    }
+    (void)snprintf(mi->text, sizeof(mi->text), "%s", label);
+    (void)snprintf(mi->accel, sizeof(mi->accel), "%s",
+                   shortcuts_menu_accel((int)id));
     AppendMenu(menu, MF_OWNERDRAW, id, (LPCSTR)mi);
 }
 
@@ -2656,7 +2830,8 @@ static HMENU create_app_menu(void)
 
     HMENU hMenu = CreateMenu();
     HMENU hFile = CreatePopupMenu();
-    menu_add_item(hFile, IDM_FILE_NEW_SESSION, "New Session\tCtrl+Shift+T");
+    menu_add_item(hFile, IDM_FILE_NEW_SESSION, "New Session");
+    menu_add_item(hFile, IDM_FILE_CLOSE_TAB, "Close Tab");
     menu_add_separator(hFile);
     menu_add_item(hFile, IDM_FILE_CONNECT, "Session Manager...");
     menu_add_item(hFile, IDM_FILE_DISCONNECT, "Disconnect");
@@ -2670,8 +2845,8 @@ static HMENU create_app_menu(void)
     menu_add_popup(hMenu, hFile, "File");
 
     HMENU hEdit = CreatePopupMenu();
-    menu_add_item(hEdit, IDM_EDIT_COPY, "Copy\tCtrl+C");
-    menu_add_item(hEdit, IDM_EDIT_PASTE, "Paste\tCtrl+V");
+    menu_add_item(hEdit, IDM_EDIT_COPY, "Copy");
+    menu_add_item(hEdit, IDM_EDIT_PASTE, "Paste");
     menu_add_item(hEdit, IDM_EDIT_SELECT_ALL, "Select All");
     /* Send Key: the keys Nutshell or Windows keep for themselves, and
      * the function row a compact keyboard lacks (special-keys spec,
@@ -2699,15 +2874,16 @@ static HMENU create_app_menu(void)
     menu_add_popup(hMenu, hEdit, "Edit");
 
     HMENU hView = CreatePopupMenu();
-    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist\tCtrl+Shift+Space");
+    menu_add_item(hView, IDM_VIEW_AI_CHAT, "AI Assist");
     menu_add_item(hView, IDM_VIEW_AI_UNDOCK, "Undock AI Assist");
-    menu_add_item(hView, IDM_VIEW_FULLSCREEN, "Fullscreen\tF11");
+    menu_add_item(hView, IDM_VIEW_FULLSCREEN, "Fullscreen");
     menu_add_popup(hMenu, hView, "View");
 
     HMENU hHelp = CreatePopupMenu();
+    menu_add_item(hHelp, IDM_HELP_SHORTCUTS, "Keyboard Shortcuts...");
     menu_add_item(hHelp, IDM_HELP_GUIDE, "User Guide");
     menu_add_separator(hHelp);
-    menu_add_item(hHelp, IDM_HELP_MARK_ISSUE, "Mark Issue\tCtrl+Shift+M");
+    menu_add_item(hHelp, IDM_HELP_MARK_ISSUE, "Mark Issue");
     menu_add_item(hHelp, IDM_HELP_LOG_FOLDER, "Open Debug Log Folder");
     menu_add_separator(hHelp);
     menu_add_item(hHelp, IDM_ABOUT, "About");
@@ -2727,37 +2903,14 @@ static HMENU create_app_menu(void)
     return hMenu;
 }
 
-/* Copy current selection to clipboard */
+/* Copy the current selection to the clipboard: the AI panel's when its
+ * message list has focus and a selection, else the active terminal's
+ * (Edit > Copy, Ctrl+Shift+C). The terminal highlight stays. */
 static void do_copy(HWND hwnd)
 {
-    /* The AI panel first, and before the no-session return so a panel with
-     * no session still copies: it copies, and answers 1, only when its
-     * message list has keyboard focus and a selection. */
     if (g_hwndAiChat && ai_chat_copy_selection(g_hwndAiChat)) return;
-    if (!g_active_session || !g_active_session->term) return;
-    if (!g_selection.valid) return;
-    char buf[8192];
-    size_t n = selection_extract_text(&g_selection,
-        g_active_session->term, buf, sizeof(buf));
-    if (n > 0 && OpenClipboard(hwnd)) {
-        EmptyClipboard();
-        clip_set_utf8(buf, n);
-        CloseClipboard();
-    }
-}
-
-/* Copy current selection to clipboard, then clear the highlight and force a
- * repaint (Ctrl+C / Ctrl+Shift+C). No-op if there is no selection. */
-static void copy_selection_and_clear(HWND hwnd)
-{
-    if (!g_selection.valid) return;
-    do_copy(hwnd);
-    g_selection.valid = false;
-    /* Force a full repaint so the highlighted cells are redrawn without the
-     * highlight — the dirty-row optimisation would otherwise skip them. */
-    if (g_active_session && g_active_session->term)
-        term_mark_all_dirty(g_active_session->term);
-    invalidate_terminal(hwnd);
+    if (!g_active_session) return;
+    (void)copy_terminal_selection(hwnd, g_active_session);
 }
 
 /* ---- Custom About dialog with acorn icon ---- */
@@ -2766,22 +2919,13 @@ static void copy_selection_and_clear(HWND hwnd)
 #define ABOUT_TAGLINE   "Windows SSH terminal with built-in AI assistance."
 #define ABOUT_COPYRIGHT "Copyright \xA9 2026 Thomas Sulkiewicz"
 
-/* Pixel height of one row of `role` text: the ramp's pixel size times its
- * line height, both from ns_type.h. */
-static int about_line_h(NsFontRole role, int dpi)
-{
-    const NsFontSpec *spec = ns_type_font(role);
-    double px = (double)ns_type_font_px(role, dpi, 0) * spec->line_height;
-    return (int)(px + 0.5);
-}
-
 /* The About window's content stack, measured from the type ramp. */
 static void about_compute_layout(AboutLayout *out, int dpi)
 {
     about_layout_compute(out, dpi, ns_scale(ABOUT_ICON_96, dpi),
-                         about_line_h(FONT_HEADING, dpi),
-                         about_line_h(FONT_BODY, dpi),
-                         about_line_h(FONT_CAPTION, dpi));
+                         ns_type_line_px(FONT_HEADING, dpi),
+                         ns_type_line_px(FONT_BODY, dpi),
+                         ns_type_line_px(FONT_CAPTION, dpi));
 }
 
 /* Draw one centred text row of the About stack. The row spans the real
@@ -2974,6 +3118,15 @@ static void show_about_dialog(HWND parent) {
             DispatchMessage(&m);
         }
     }
+}
+
+/* Help > Keyboard Shortcuts (and --ui-demo=shortcuts): the modal sheet,
+ * owned by the main window, with the floating AI panel disabled too. */
+static void show_shortcuts(HWND hwnd)
+{
+    HWND floating = (!g_ai_docked && g_hwndAiChat && IsWindow(g_hwndAiChat))
+                        ? g_hwndAiChat : NULL;
+    cheatsheet_show(hwnd, floating, g_theme);
 }
 
 /* ---- Keyboard: what each key sends (special-keys spec, 2026-09-23) -------
@@ -3391,15 +3544,13 @@ static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
             return true;
         }
     }
-    /* Ctrl+C -- copy selection if one exists, otherwise fall through so
-     * WM_CHAR sends 0x03 (SIGINT) as before. Ctrl+Shift+C always copies
-     * (no-op if nothing selected) and never reaches the shell. */
-    if (ctrl_only && vk == (WPARAM)'C') {
-        if (shift || g_selection.valid) {
-            copy_selection_and_clear(hwnd);
-            g_ctrlc_swallow_char = true;
-            return true;
-        }
+    /* Ctrl+Shift+C copies the selection (nothing if none) and never reaches
+     * the shell. Plain Ctrl+C always falls through, so WM_CHAR sends 0x03
+     * (SIGINT), selection or not, as in PuTTY (spec section 6.1). */
+    if (ctrl_only && shift && vk == (WPARAM)'C') {
+        do_copy(hwnd);
+        g_ctrlc_swallow_char = true;
+        return true;
     }
     /* Ctrl+V / Ctrl+Shift+V -- paste with confirmation (WM_CHAR swallows
      * the 0x16). */
@@ -3436,7 +3587,7 @@ static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
             if (vk == VK_PRIOR)
                 t->scrollback_offset = scroll_page_up(t->scrollback_offset,
                                                       t->rows,
-                                                      t->max_scrollback);
+                                                      term_max_scroll_offset(t));
             else
                 t->scrollback_offset = scroll_page_down(t->scrollback_offset,
                                                         t->rows);
@@ -3591,7 +3742,7 @@ static void key_on_char(HWND hwnd, WPARAM wParam)
     if (shot == KEY_ONESHOT_NONE) {
         if (c == 0x16) return;  /* Ctrl+V -- handled via do_paste in WM_KEYDOWN */
         if (c == 0x03 && g_ctrlc_swallow_char) {
-            /* Ctrl+C copied a selection in WM_KEYDOWN -- don't send SIGINT */
+            /* Ctrl+Shift+C copied in WM_KEYDOWN -- don't send SIGINT */
             g_ctrlc_swallow_char = false;
             return;
         }
@@ -3963,6 +4114,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 case IDM_FILE_NEW_SESSION:
                     on_tab_new();
                     return 0;
+                case IDM_FILE_CLOSE_TAB:
+                    close_active_tab();
+                    return 0;
                 case IDM_FILE_CONNECT:
                     PostMessage(hwnd, WM_SHOW_SESSION_MANAGER, 0, 0);
                     return 0;
@@ -3999,12 +4153,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     return 0;
                 case IDM_EDIT_SELECT_ALL:
                     if (g_active_session && g_active_session->term) {
-                        g_selection.start_row = 0;
-                        g_selection.start_col = 0;
-                        g_selection.end_row = g_active_session->term->rows - 1;
-                        g_selection.end_col = g_active_session->term->cols - 1;
-                        g_selection.valid = true;
-                        invalidate_terminal(hwnd);
+                        Session *as = g_active_session;
+                        if (g_drag_session == as) end_terminal_drag(hwnd);
+                        if (as->sel.valid || as->sel.active)
+                            DLOG(DLOG_GENERAL, DLOG_DEBUG, as->log_id, "sel.clear",
+                                 "reason=%s", "click");
+                        selection_select_all(&as->sel, as->term);
+                        force_full_terminal_repaint(hwnd, as->term);
+                        (void)copy_terminal_selection(hwnd, as);
                     }
                     return 0;
                 case IDM_EDIT_SETTINGS:
@@ -4059,6 +4215,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                     return 0;
                 }
+                case IDM_HELP_SHORTCUTS:
+                    show_shortcuts(hwnd);
+                    return 0;
                 case IDM_HELP_GUIDE:
                     help_guide_show(hwnd, g_config->settings.colour_scheme);
                     return 0;
@@ -4401,6 +4560,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     }
                     s = s->next;
                 }
+                /* Outside the per-session io.ctx/CONN_IDLE gate above. */
+                selection_tick(hwnd);
             } else if (wParam == 2) {
                 /* 500ms animation: append dots to each connecting session */
                 BOOL needs_repaint = FALSE;
@@ -4458,6 +4619,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         case WM_OPEN_DEMO_SETTINGS:
             settings_dlg_show_demo_debug(hwnd, g_config);
+            return 0;
+
+        case WM_OPEN_DEMO_SHORTCUTS:
+            show_shortcuts(hwnd);
             return 0;
 
         case WM_STARTUP_CONNECT: {
@@ -4886,7 +5051,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                          pt->alt_screen_active ? 1 : 0, pt->scrollback_offset);
                 }
                 g_renderer.log_sid = g_active_session->log_id;
-                renderer_draw(&g_renderer, hdc, g_active_session->term, g_left_margin, g_tab_height, &ps.rcPaint, &g_selection);
+                renderer_draw(&g_renderer, hdc, g_active_session->term, g_left_margin, g_tab_height, &ps.rcPaint, &g_active_session->sel);
                 DLOG(DLOG_RENDER, DLOG_DEBUG, g_active_session->log_id, "render.stats",
                      "rows_painted=%d rows_skipped=%d cooldown_skips=%u",
                      g_renderer.stat_rows_painted, g_renderer.stat_rows_skipped,
@@ -5102,7 +5267,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * release, and the release after a chord passed through above,
              * both reach DefWindowProc -- there is no swallow flag for Alt
              * any more. */
-            if (wParam == VK_F10 && g_active_session && g_active_session->term)
+            if (wParam == VK_F10 && g_active_session && g_active_session->term &&
+                g_active_session->io.ctx)
                 return 0;
             break;
 
@@ -5126,9 +5292,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 Terminal *t = g_active_session->term;
                 int delta = GET_WHEEL_DELTA_WPARAM(wParam);
                 int lines = 3 * delta / WHEEL_DELTA;
-                int max_off = (t->lines_count > t->rows)
-                                  ? (t->lines_count - t->rows) : 0;
-                if (max_off > t->max_scrollback) max_off = t->max_scrollback;
+                int max_off = term_max_scroll_offset(t);
                 int off = t->scrollback_offset + lines;
                 if (off < 0) off = 0;
                 if (off > max_off) off = max_off;
@@ -5164,11 +5328,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             break;
         }
 
-        case WM_LBUTTONDOWN: {
-            /* Check splitter drag first */
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDBLCLK: {
+            int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+            /* Splitter drag first. CS_DBLCLKS turns a quick second press
+             * into WM_LBUTTONDBLCLK, so the double-click repeats the test. */
             if (g_ai_docked && g_ai_panel_width > 0 && g_hwndAiChat) {
-                int mx = GET_X_LPARAM(lParam);
-                int my = GET_Y_LPARAM(lParam);
                 RECT crc;
                 GetClientRect(hwnd, &crc);
                 int splitter_x = crc.right - g_ai_panel_width;
@@ -5183,18 +5348,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (!g_active_session || !g_active_session->term) break;
             SetFocus(hwnd);  /* reclaim keyboard focus from AI panel */
-            SetCapture(hwnd);
-            int mx = LOWORD(lParam) - g_left_margin, my = HIWORD(lParam);
-            selection_pixel_to_cell(mx, my,
-                g_renderer.charWidth, g_renderer.charHeight,
-                g_tab_height, g_active_session->term->rows,
-                g_active_session->term->cols,
-                &g_selection.start_row, &g_selection.start_col);
-            g_selection.end_row = g_selection.start_row;
-            g_selection.end_col = g_selection.start_col;
-            g_selection.active = true;
-            g_selection.valid = false;
-            invalidate_terminal(hwnd);
+            int clicks;
+            if (msg == WM_LBUTTONDBLCLK) {
+                g_dblclk_tick = GetTickCount();
+                g_dblclk_x = mx;
+                g_dblclk_y = my;
+                g_dblclk_armed = true;
+                clicks = 2;
+            } else {
+                clicks = terminal_press_clicks(mx, my);
+            }
+            start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks);
             return 0;
         }
 
@@ -5214,21 +5378,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                              RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
                 return 0;
             }
-            if (!g_selection.active) break;
-            if (!(wParam & MK_LBUTTON)) {
-                g_selection.active = false;
-                break;
-            }
-            if (!g_active_session || !g_active_session->term) break;
-            int mx = LOWORD(lParam) - g_left_margin, my = HIWORD(lParam);
-            selection_pixel_to_cell(mx, my,
-                g_renderer.charWidth, g_renderer.charHeight,
-                g_tab_height, g_active_session->term->rows,
-                g_active_session->term->cols,
-                &g_selection.end_row, &g_selection.end_col);
-            g_selection.valid = (g_selection.start_row != g_selection.end_row ||
-                                 g_selection.start_col != g_selection.end_col);
-            invalidate_terminal(hwnd);
+            Session *ds = g_drag_session;
+            if (!ds || !ds->term || !ds->sel.active) break;
+            /* A move without the button (the one Windows synthesises when
+             * capture changes, or a stray) is not a drag point. */
+            if (!(wParam & MK_LBUTTON)) break;
+            extend_terminal_drag(hwnd, ds, GET_X_LPARAM(lParam) - g_left_margin,
+                                 GET_Y_LPARAM(lParam));
             return 0;
         }
 
@@ -5238,53 +5394,43 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 ReleaseCapture();
                 return 0;
             }
-            if (!g_selection.active) break;
-            ReleaseCapture();
-            g_selection.active = false;
-            if (!g_active_session || !g_active_session->term) break;
-            /* Update end position from final mouse coordinates —
-             * WM_MOUSEMOVE may not fire at the exact release point. */
-            int mx = LOWORD(lParam) - g_left_margin, my = HIWORD(lParam);
-            selection_pixel_to_cell(mx, my,
-                g_renderer.charWidth, g_renderer.charHeight,
-                g_tab_height, g_active_session->term->rows,
-                g_active_session->term->cols,
-                &g_selection.end_row, &g_selection.end_col);
-            g_selection.valid = true;
-            /* Extract selected text and copy to clipboard */
-            char buf[8192];
-            size_t n = selection_extract_text(&g_selection,
-                g_active_session->term, buf, sizeof(buf));
-            if (n > 0 && OpenClipboard(hwnd)) {
-                EmptyClipboard();
-                clip_set_utf8(buf, n);
-                CloseClipboard();
+            Session *ds = g_drag_session;
+            if (!ds) break;
+            if (ds->term && ds->sel.active) {
+                /* The release point is the end: WM_MOUSEMOVE may not have
+                 * reported it. */
+                extend_terminal_drag(hwnd, ds, GET_X_LPARAM(lParam) - g_left_margin,
+                                     GET_Y_LPARAM(lParam));
+                if (selection_finish(&ds->sel, ds->term))
+                    (void)copy_terminal_selection(hwnd, ds);
+                force_full_terminal_repaint(hwnd, ds->term);
             }
-            g_selection.valid = false;
-            /* Force full repaint so highlighted cells are redrawn without highlight.
-             * The dirty-row optimisation in the renderer would skip clean rows,
-             * leaving stale highlighted pixels on screen. term_logical_rows(),
-             * not lines_count: a selection that reached into the sparse gap
-             * right after a resize (lines_count < rows) needs its highlight
-             * cleared there too, same as any other row. */
-            {
-                Terminal *_t = g_active_session->term;
-                int _bound = term_logical_rows(_t);
-                for (int i = 0; i < _bound; i++) {
-                    int idx = (_t->lines_start + i) % _t->lines_capacity;
-                    if (_t->lines[idx])
-                        _t->lines[idx]->dirty = true;
+            /* Copy first, then release: ReleaseCapture() sends
+             * WM_CAPTURECHANGED synchronously (spec section 2.7). */
+            end_terminal_drag(hwnd);
+            return 0;
+        }
+
+        case WM_CAPTURECHANGED: {
+            /* Capture taken away mid-drag (a dialog, Alt+Tab, another
+             * SetCapture): end the drag where it stands, without copying.
+             * With no drag (our own end_terminal_drag(), the splitter) it is
+             * ignored. */
+            Session *ds = g_drag_session;
+            if (ds) {
+                g_drag_session = NULL;
+                if (ds->term) {
+                    (void)selection_finish(&ds->sel, ds->term);
+                    force_full_terminal_repaint(hwnd, ds->term);
                 }
             }
-            invalidate_terminal(hwnd);
-            return 0;
+            break;
         }
 
         case WM_VSCROLL: {
             if (!g_active_session || !g_active_session->term) return 0;
             Terminal *t = g_active_session->term;
-            int max_off = (t->lines_count > t->rows) ? (t->lines_count - t->rows) : 0;
-            if (max_off > t->max_scrollback) max_off = t->max_scrollback;
+            int max_off = term_max_scroll_offset(t);
             int off = t->scrollback_offset;
             switch (LOWORD(wParam)) {
             case SB_LINEUP:       off++; break;
@@ -5376,7 +5522,7 @@ void ui_set_startup_action(CliAction action, const char *arg,
 void ui_init(HINSTANCE instance) {
     WNDCLASSEX wc = {0};
     wc.cbSize = sizeof(WNDCLASSEX);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);

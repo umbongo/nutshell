@@ -31,6 +31,13 @@ int ns_type_font_px(NsFontRole role, int dpi, int mono_size_pt)
     return (int)px;
 }
 
+int ns_type_line_px(NsFontRole role, int dpi)
+{
+    const NsFontSpec *spec = ns_type_font(role);
+    double px = (double)ns_type_font_px(role, dpi, 0) * spec->line_height;
+    return (int)(px + 0.5);
+}
+
 /* ---- Font cache slot key ---------------------------------------------------- */
 
 static const int NS_DPI_TABLE[NS_DPI_TABLE_COUNT] = { 96, 120, 144, 168, 192, 216, 240, 288 };

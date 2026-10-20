@@ -11,9 +11,11 @@ name: Checks
 #                      an exe built locally proves a build happened, not that
 #                      it came from the committed sources. Since 2026-10-13 a
 #                      pull request that changes no code (docs/, .claude/,
-#                      README, ...) skips the compile and the suite but still
+#                      ...) skips the compile and the suite but still
 #                      reports green -- see the "scope" step for why the
-#                      trigger has no paths filter.
+#                      trigger has no paths filter. README.md counts as code
+#                      since 2026-10-20: the suite compares its generated
+#                      shortcuts block with src/core/shortcuts.c.
 
 on:
   pull_request:
@@ -54,10 +56,13 @@ jobs:
         run: |
           # A docs-only pull request has nothing to compile, so the three
           # steps below are skipped when nothing under src/, tests/,
-          # build-support/, the Makefile, nutshell.rc or this workflow
-          # changed. tests/ counts as code (a test-only change still has to
-          # compile the runner) and so does this file (the gate must test
-          # itself). The skip lives here, inside the job, and NOT as a
+          # build-support/, the Makefile, nutshell.rc, README.md or this
+          # workflow changed. tests/ counts as code (a test-only change still
+          # has to compile the runner), so does README.md (since 2026-10-20
+          # tests/test_shortcuts.c compares its "Keyboard Shortcuts" block
+          # with src/core/shortcuts.c byte for byte) and so does this file
+          # (the gate must test itself). The skip lives here, inside the job,
+          # and NOT as a
           # paths-ignore on the trigger: this job is a required status
           # check, and a required check that never reports leaves the pull
           # request stuck on "Expected -- waiting for status to be reported".
@@ -68,7 +73,7 @@ jobs:
           changed=$(git diff --name-only "$base" HEAD)
           printf 'changed against %s:\n' "$base"
           printf '%s\n' "$changed" | sed 's/^/  /'
-          if printf '%s\n' "$changed" | grep -qE '^(src/|tests/|build-support/|Makefile$|nutshell\.rc$|\.github/workflows/checks\.yml$)'; then
+          if printf '%s\n' "$changed" | grep -qE '^(src/|tests/|build-support/|Makefile$|nutshell\.rc$|README\.md$|\.github/workflows/checks\.yml$)'; then
             echo "code=true" >> "$GITHUB_OUTPUT"
             echo "code changed: running the native suite"
           else

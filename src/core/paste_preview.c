@@ -98,3 +98,13 @@ void paste_clamp_size(int desired_w, int desired_h,
     *out_w = desired_w > max_w ? max_w : desired_w;
     *out_h = desired_h > max_h ? max_h : desired_h;
 }
+
+PasteKeyAction paste_dlg_key_action(unsigned vk, bool cancel_has_focus)
+{
+    switch (vk) {
+    case 0x0Du: return cancel_has_focus ? PASTE_KEY_CANCEL : PASTE_KEY_PASTE; /* VK_RETURN */
+    case 0x1Bu: return PASTE_KEY_CANCEL;                                      /* VK_ESCAPE */
+    case 0x09u: return PASTE_KEY_NEXT_BUTTON;                                 /* VK_TAB */
+    default:    return PASTE_KEY_NONE;
+    }
+}
