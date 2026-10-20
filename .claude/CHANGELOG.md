@@ -4,6 +4,16 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-10-20 — checkpoint after PR #74
+
+- **`memory/MEMORY.md`, "Open items worth knowing".** Rewritten for `main`
+  at v1.2.44: #70, #72 and #74 merged, no drafts open; the copy-and-paste
+  item is closed and the selection follow-ups and the #70 probe run take
+  its place. The retrospective marker and count are untouched (four merges
+  since `7960bd2`: #73, #70, #72, #74).
+
+Models: claude-fable-5-1 (checkpoint)
+
 ## 2026-10-20 — README.md joins the native suite's path filter
 
 - **`memory/MEMORY.md`, "The merge gate, precisely".** `Native tests` now
