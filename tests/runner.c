@@ -1974,6 +1974,8 @@ int test_sel_extend_from_line_mode_by_whole_lines(void);
 int test_sel_extend_from_without_selection_is_a_click(void);
 int test_sel_extend_from_after_epoch_change_starts_fresh(void);
 int test_sel_extend_from_keeps_anchor_for_further_drag(void);
+int test_sel_extend_from_after_start_recycled(void);
+int test_sel_word_blank_run_takes_no_mark_either_side(void);
 int test_sel_click_count_cycles_one_two_three(void);
 int test_sel_is_combining_ranges(void);
 int test_sel_word_combining_mark_joins_base(void);
@@ -5483,6 +5485,8 @@ int main(void) {
     failed += test_sel_extend_from_without_selection_is_a_click();
     failed += test_sel_extend_from_after_epoch_change_starts_fresh();
     failed += test_sel_extend_from_keeps_anchor_for_further_drag();
+    failed += test_sel_extend_from_after_start_recycled();
+    failed += test_sel_word_blank_run_takes_no_mark_either_side();
     failed += test_sel_click_count_cycles_one_two_three();
     failed += test_sel_is_combining_ranges();
     failed += test_sel_word_combining_mark_joins_base();

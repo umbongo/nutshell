@@ -615,6 +615,11 @@ static PasteState g_paste = {0};
  * it (spec section 2.5). */
 static Session *g_drag_session = NULL;
 
+/* The button that owns that drag, MK_LBUTTON or MK_MBUTTON (0 with no drag).
+ * The other button's press is ignored and its release does not end the drag,
+ * so a left drag is not hijacked by a stray middle click. */
+static int g_drag_button = 0;
+
 /* The last press in the terminal, from either message, so the next press can
  * continue the click cycle 1, 2, 3, 1, ... (spec section 1). A Shift or
  * middle-click extend is not a press of the cycle and leaves it alone. */
@@ -634,6 +639,7 @@ static bool g_ctrlc_swallow_char = false;
 static void end_terminal_drag(HWND hwnd)
 {
     g_drag_session = NULL;
+    g_drag_button = 0;
     if (hwnd && GetCapture() == hwnd) ReleaseCapture();
 }
 
@@ -695,6 +701,7 @@ static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int click
     g_drag_session = NULL;          /* a WM_CAPTURECHANGED from SetCapture finds no drag */
     SetCapture(hwnd);
     g_drag_session = s;
+    g_drag_button = MK_LBUTTON;
     int row = 0, col = 0;
     selection_pixel_to_cell(px, py, g_renderer.charWidth, g_renderer.charHeight,
                             g_tab_height, s->term->rows, s->term->cols, &row, &col);
@@ -706,20 +713,34 @@ static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int click
 
 /* Shift+click and middle-click: keep the selection, move its nearer end to
  * client pixel (px, py) and make it a live drag again, holding the capture
- * like start_terminal_drag(). px has the left margin already taken off. */
-static void extend_terminal_drag_from(HWND hwnd, Session *s, int px, int py)
+ * like start_terminal_drag(). `button` is the MK_ flag of the button held
+ * (MK_LBUTTON for Shift+click, MK_MBUTTON for the middle one). px has the
+ * left margin already taken off. */
+static void extend_terminal_drag_from(HWND hwnd, Session *s, int px, int py, int button)
 {
     if (g_drag_session && g_drag_session != s && g_drag_session->term)
         (void)selection_finish(&g_drag_session->sel, g_drag_session->term);
     g_drag_session = NULL;          /* a WM_CAPTURECHANGED from SetCapture finds no drag */
     SetCapture(hwnd);
     g_drag_session = s;
+    g_drag_button = button;
     int row = 0, col = 0;
     selection_pixel_to_cell(px, py, g_renderer.charWidth, g_renderer.charHeight,
                             g_tab_height, s->term->rows, s->term->cols, &row, &col);
+    /* With no selection of this epoch to extend, the call is a fresh press. */
+    bool fresh = !s->sel.valid || s->sel.epoch != s->term->epoch;
+    SelPoint old_start = s->sel.start;
     selection_extend_from(&s->sel, s->term, row, col, px, py);
-    DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.extend", "line=%llu col=%d mode=%d",
-         (unsigned long long)s->sel.end.line, s->sel.end.col, (int)s->sel.mode);
+    if (fresh) {
+        DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.begin", "line=%llu col=%d mode=%d",
+             (unsigned long long)s->sel.anchor.line, s->sel.anchor.col, (int)s->sel.mode);
+    } else {
+        bool start_moved = !sel_point_same(old_start, s->sel.start);
+        SelPoint moved = start_moved ? s->sel.start : s->sel.end;
+        DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.extend",
+             "moved=%s line=%llu col=%d mode=%d", start_moved ? "start" : "end",
+             (unsigned long long)moved.line, moved.col, (int)s->sel.mode);
+    }
     force_full_terminal_repaint(hwnd, s->term);
 }
 
@@ -744,11 +765,13 @@ static void extend_terminal_drag(HWND hwnd, Session *s, int px, int py)
  * continues the cycle (1 cell, 2 word, 3 line, then a cell again) whichever
  * message Windows delivered it as: CS_DBLCLKS turns every second press into
  * WM_LBUTTONDBLCLK, and its own rule differs from ours after the third.
- * GetTickCount() rather than GetMessageTime(): the harness sends its clicks,
- * and a sent message has no message time of its own (spec section 5). */
+ * The press is timed by when it was queued (GetMessageTime), so a real
+ * double-click that sat behind a long paint still counts as one; a sent
+ * message (the harness sends its clicks) has no message time of its own, so
+ * it is timed by the clock when it arrives (spec section 5). */
 static int terminal_press_clicks(int x, int y)
 {
-    DWORD now = GetTickCount();
+    DWORD now = InSendMessage() ? GetTickCount() : (DWORD)GetMessageTime();
     bool within = g_last_press.count > 0 &&
         now - g_last_press.tick <= (DWORD)GetDoubleClickTime() &&
         abs(x - g_last_press.x) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2 &&
@@ -761,13 +784,13 @@ static int terminal_press_clicks(int x, int y)
     return clicks;
 }
 
-/* The release of a terminal drag, by either button: the release point is
- * the end, finish and copy, then let go of the capture. Returns false when no
- * drag was in progress. */
-static bool release_terminal_drag(HWND hwnd, LPARAM lParam)
+/* The release of `button` (MK_LBUTTON or MK_MBUTTON) ending a terminal drag:
+ * the release point is the end, finish and copy, then let go of the capture.
+ * Returns false when no drag was in progress or the other button owns it. */
+static bool release_terminal_drag(HWND hwnd, LPARAM lParam, int button)
 {
     Session *ds = g_drag_session;
-    if (!ds) return false;
+    if (!ds || g_drag_button != button) return false;
     if (ds->term && ds->sel.active) {
         /* The release point is the end: WM_MOUSEMOVE may not have
          * reported it. */
@@ -5394,6 +5417,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (!g_active_session || !g_active_session->term) break;
             SetFocus(hwnd);  /* reclaim keyboard focus from AI panel */
+            if (g_drag_session && g_drag_button != MK_LBUTTON) return 0;  /* the middle button's drag */
             /* Shift+click extends the selection (PuTTY); with none it is a
              * plain press. Shift comes from the message, not GetKeyState:
              * the harness posts its clicks from another thread. */
@@ -5401,7 +5425,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 (void)sync_selection(hwnd, g_active_session);
                 if (g_active_session->sel.valid) {
                     extend_terminal_drag_from(hwnd, g_active_session,
-                                              mx - g_left_margin, my);
+                                              mx - g_left_margin, my, MK_LBUTTON);
                     return 0;
                 }
             }
@@ -5410,7 +5434,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
 
-        case WM_MBUTTONDOWN: {
+        case WM_MBUTTONDOWN:
+        case WM_MBUTTONDBLCLK: {   /* CS_DBLCLKS: a quick second press arrives as this */
             /* Middle-click extends the selection like Shift+click; with none
              * it starts a cell press. */
             int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
@@ -5426,8 +5451,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (!g_active_session || !g_active_session->term) break;
             SetFocus(hwnd);
+            if (g_drag_session && g_drag_button != MK_MBUTTON) return 0;  /* the left button's drag */
             (void)sync_selection(hwnd, g_active_session);
-            extend_terminal_drag_from(hwnd, g_active_session, mx - g_left_margin, my);
+            extend_terminal_drag_from(hwnd, g_active_session, mx - g_left_margin, my, MK_MBUTTON);
             return 0;
         }
 
@@ -5451,7 +5477,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!ds || !ds->term || !ds->sel.active) break;
             /* A move without the button (the one Windows synthesises when
              * capture changes, or a stray) is not a drag point. */
-            if (!(wParam & (MK_LBUTTON | MK_MBUTTON))) break;
+            if (!(wParam & (unsigned)g_drag_button)) break;
             extend_terminal_drag(hwnd, ds, GET_X_LPARAM(lParam) - g_left_margin,
                                  GET_Y_LPARAM(lParam));
             return 0;
@@ -5463,12 +5489,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 ReleaseCapture();
                 return 0;
             }
-            if (!release_terminal_drag(hwnd, lParam)) break;
+            if (!release_terminal_drag(hwnd, lParam, MK_LBUTTON)) break;
             return 0;
         }
 
         case WM_MBUTTONUP: {
-            if (!release_terminal_drag(hwnd, lParam)) break;
+            if (!release_terminal_drag(hwnd, lParam, MK_MBUTTON)) break;
             return 0;
         }
 
@@ -5480,6 +5506,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             Session *ds = g_drag_session;
             if (ds) {
                 g_drag_session = NULL;
+                g_drag_button = 0;
                 if (ds->term) {
                     (void)selection_finish(&ds->sel, ds->term);
                     force_full_terminal_repaint(hwnd, ds->term);

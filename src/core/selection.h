@@ -53,7 +53,9 @@ void selection_begin(Selection *s, const Terminal *t, int screen_row, int col,
  * before start moves start; after end moves end; inside moves the nearer end
  * (nearer by line, then by column). The other end becomes the anchor unit.
  * With no valid selection (or a different epoch) it is selection_begin() with
- * click_count 1. */
+ * click_count 1. The caller runs selection_sync() first: this re-stamps gen, so
+ * a selection the output has since written over would otherwise come back
+ * as fresh (window.c syncs before every extend). */
 void selection_extend_from(Selection *s, const Terminal *t, int screen_row, int col,
                            int px, int py);
 /* The click count for a press: `within` is true when the press is inside the

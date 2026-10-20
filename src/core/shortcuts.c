@@ -80,7 +80,7 @@ static const Shortcut TABLE[] = {
     { S6, "Help > Keyboard Shortcuts", "This sheet", "", SC_MENU_PATH, 0 },
 
     /* 7. Mouse */
-    { S7, "Drag",               "Select and copy; Shift+click, middle-click extends", "",
+    { S7, "Drag",               "Select and copy; Shift/middle-click extends", "",
       SC_SELECTION_SPEC, 0 },
     { S7, "Double-click",       "Select a word", "", SC_SELECTION_SPEC, 0 },
     { S7, "Triple-click",       "Select a line", "a fourth click starts over", SC_SELECTION_SPEC, 0 },

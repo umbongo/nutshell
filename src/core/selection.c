@@ -87,7 +87,9 @@ static void sel_word_bounds(const Terminal *t, SelPoint p, SelPoint *first, SelP
         bool found = false;
         q = a;
         while (sel_prev_cell(t, &q)) {
-            if (!selection_is_combining(sel_cp(t, q))) { found = true; break; }
+            if (cls != 0 && selection_is_combining(sel_cp(t, q))) continue;
+            found = true;
+            break;
         }
         if (!found || selection_char_class(sel_cp(t, q)) != cls) break;
         a = q;

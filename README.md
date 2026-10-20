@@ -413,7 +413,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 
 | Shortcut | Action | Note |
 | --- | --- | --- |
-| **Drag** | Select and copy; Shift+click, middle-click extends | |
+| **Drag** | Select and copy; Shift/middle-click extends | |
 | **Double-click** | Select a word | |
 | **Triple-click** | Select a line | a fourth click starts over |
 | **Drag past the edge** | Scroll while selecting | |

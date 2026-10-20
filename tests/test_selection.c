@@ -958,8 +958,8 @@ int test_sel_extend_from_inside_moves_nearer_end(void)
     TEST_END();
 }
 
-/* Nearer is judged by line first: a click on the end's line is nearer the end
- * whatever the columns say. */
+/* Nearer is judged by line first: a click nearer the end by line moves the end
+ * even when it is nearer the start by column. */
 int test_sel_extend_from_inside_nearer_by_line(void)
 {
     TEST_BEGIN();
@@ -967,11 +967,12 @@ int test_sel_extend_from_inside_nearer_by_line(void)
     feed(t, "aaaaaaaaaa\r\nbbbbbbbbbb\r\ncccccccccc\r\ndddddddddd");
     Selection s;
     ASSERT_TRUE(drag(&s, t, 0, 8, 3, 1));
-    ASSERT_TRUE(extend_click(&s, t, 2, 0));             /* line 2: one from the end, two from the start */
+    ASSERT_TRUE(extend_click(&s, t, 2, 8));             /* line 2: one from the end, two from the start;
+                                                         * col 8 is the start's column, 7 from the end's */
     ASSERT_EQ(s.start.line, (uint64_t)0);
     ASSERT_EQ(s.start.col, 8);
     ASSERT_EQ(s.end.line, (uint64_t)2);
-    ASSERT_EQ(s.end.col, 0);
+    ASSERT_EQ(s.end.col, 8);
     term_free(t);
     TEST_END();
 }
@@ -1079,6 +1080,36 @@ int test_sel_extend_from_keeps_anchor_for_further_drag(void)
     TEST_END();
 }
 
+/* A selection whose start line was recycled after the drag: selection_sync
+ * trims it to the oldest held line, and an extend from there moves only the
+ * end. */
+int test_sel_extend_from_after_start_recycled(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 10, 2);                  /* capacity 6 */
+    feed_lines(t, 0, 6);                                /* full: L00..L05 */
+    t->scrollback_offset = 2;                           /* view L00..L03 */
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 1, 0, 2, 9));               /* L01..L02 */
+    feed(t, "\r\nL06\r\nL07");                          /* recycles L00 and L01 */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)2);
+    t->scrollback_offset = 0;                           /* view L04..L07 */
+    ASSERT_TRUE(selection_sync(&s, t));                 /* start trimmed to line 2 */
+    ASSERT_TRUE(s.valid);
+    ASSERT_EQ(s.start.line, (uint64_t)2);
+    ASSERT_TRUE(extend_click(&s, t, 3, 2));             /* L07, col 2: after the end */
+    ASSERT_TRUE(s.valid);
+    ASSERT_EQ(s.start.line, (uint64_t)2);
+    ASSERT_EQ(s.start.col, 0);
+    ASSERT_EQ(s.end.line, (uint64_t)7);
+    ASSERT_EQ(s.end.col, 2);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "L02\r\nL03\r\nL04\r\nL05\r\nL06\r\nL07");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
 /* ---- click cycling ------------------------------------------------------ */
 
 int test_sel_click_count_cycles_one_two_three(void)
@@ -1179,6 +1210,24 @@ int test_sel_word_combining_after_space_does_not_join_space(void)
     char *txt = copy_str(&s, t);
     ASSERT_STR_EQ(txt, "x");
     free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+/* A blank run takes in no mark from either side: the mark is a class of its
+ * own, so a space on each side of it is a run of one. */
+int test_sel_word_blank_run_takes_no_mark_either_side(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 20, 10);
+    feed(t, " \xCC\x81 x");                                 /* space, mark, space, x */
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 0, 2));
+    ASSERT_EQ(s.start.col, 0);
+    ASSERT_EQ(s.end.col, 0);
+    ASSERT_TRUE(click_n(&s, t, 0, 2, 2));
+    ASSERT_EQ(s.start.col, 2);
+    ASSERT_EQ(s.end.col, 2);
     term_free(t);
     TEST_END();
 }

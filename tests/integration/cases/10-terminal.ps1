@@ -519,7 +519,8 @@ Invoke-Case "fourth_click_starts_over" $script:SelSettings {
 Invoke-Case "double_click_selects_accented_word" $script:SelSettings {
     param($s)
     $g = Start-SelCase $s
-    Send-NutshellLine -Session $s -Line "printf '\x63\x61\x66\x65\xcc\x81 noir\n'"
+    # Only the mark is escaped, so the command stays short enough not to wrap on a long prompt.
+    Send-NutshellLine -Session $s -Line "printf 'cafe\xcc\x81 noir\n'"
     Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^cafe\S* noir" -TimeoutSec 5) "printf output missing"
     Set-Clipboard -Value "ACCENT_MARKER"
     $p = Get-NutshellCellPoint -Geo $g -Row 1 -Col 3                  # the e; its mark is col 4
