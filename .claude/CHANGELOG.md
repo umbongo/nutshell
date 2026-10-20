@@ -4,6 +4,21 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-10-20 — README.md joins the native suite's path filter
+
+- **`memory/MEMORY.md`, "The merge gate, precisely".** `Native tests` now
+  compiles and runs the suite when a pull request changes `README.md`, as
+  well as `src/`, `tests/`, `build-support/`, the Makefile, `nutshell.rc`
+  and `checks.yml`: `tests/test_shortcuts.c` compares README's generated
+  "Keyboard Shortcuts" block with `src/core/shortcuts.c` byte for byte, so
+  a README-only edit can now fail the suite. The same change is in
+  `.github/workflows/checks.yml` (the `scope` step and its comments) and in
+  CLAUDE.md's gate section. Spec:
+  `docs/superpowers/specs/2026-10-20-keyboard-cheat-sheet-design.md`
+  section 2.4. "Last updated" moved to 2026-10-20.
+
+Models: claude-sonnet-5-5 (implementation); claude-opus-5-5 (orchestration)
+
 ## 2026-10-19 — retrospective (11 merges)
 
 - `memory/MEMORY.md`: version-numbered branches are snapshots, never deleted (maintainer's rule, 2026-10-20, after a branch clean-up proposed deleting them).

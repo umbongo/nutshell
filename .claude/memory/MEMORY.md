@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-10-19 (retrospective).
+Last updated: 2026-10-20 (README joins the native-suite path filter).
 
 ## Retrospective cadence (standing rule from the maintainer, 2026-09-21)
 
@@ -101,6 +101,14 @@ Last updated: 2026-10-19 (retrospective).
   line and the exe's FileVersion agree. If `src/`, `Makefile` or
   `nutshell.rc` changed against the base, it also requires the version to
   be strictly greater than the base's and the exe to be in the diff.
+- `Native tests` skips its compile and suite (still reporting green) when
+  a pull request changes nothing under `src/`, `tests/`, `build-support/`,
+  the Makefile, `nutshell.rc`, `README.md` or `checks.yml`. `README.md`
+  joined the list on 2026-10-20: `tests/test_shortcuts.c` compares its
+  generated block between `<!-- shortcuts:begin -->` and
+  `<!-- shortcuts:end -->` with `src/core/shortcuts.c` byte for byte, and
+  fails rather than skips under `CI` when README.md cannot be read. The
+  regeneration recipe is in that test file.
 - **`gh pr merge --auto` merges at once when the PR is already mergeable**
   and prints nothing on success. CodeQL's `analyze` is not required, so a
   red one does not block. PR #44 was merged with `analyze` red (four new

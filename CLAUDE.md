@@ -194,11 +194,14 @@ date with `main`. `Native tests` compiles the committed sources on a clean
 Ubuntu machine with the real libssh2 and runs `make test`; it exists because
 an exe built locally proves a build happened, not that it came from the
 committed files. On a pull request that changes nothing under `src/`,
-`tests/`, `build-support/`, the Makefile, `nutshell.rc` or the workflow
-itself (docs, `.claude/`, README) it skips the compile and the suite but
+`tests/`, `build-support/`, the Makefile, `nutshell.rc`, `README.md` or the
+workflow itself (docs, `.claude/`) it skips the compile and the suite but
 still reports green, so the ruleset is satisfied; the skip is a step
 condition inside the job, never a `paths` filter on the trigger, because a
 required check that never reports blocks the pull request forever.
+`README.md` counts as code because `tests/test_shortcuts.c` compares its
+generated "Keyboard Shortcuts" block with `src/core/shortcuts.c` byte for
+byte (since 2026-10-20).
 `Version bump` (script `.github/scripts/check-version.sh`)
 verifies three things:
 
