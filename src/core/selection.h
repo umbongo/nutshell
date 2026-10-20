@@ -47,6 +47,15 @@ int  selection_autoscroll_step(int py, int top_px, int bottom_px, int char_h);
  * (click_count 1 a cell, 2 a word, 3 a line) and records the press pixel. */
 void selection_begin(Selection *s, const Terminal *t, int screen_row, int col,
                      int click_count, int px, int py);
+/* Shift+click / middle-click: keep the selection and its mode, move one end to
+ * the screen cell and make it a live drag again (active = true, press and last
+ * pixels reset, no drag threshold). Which end moves is PuTTY's rule: the click
+ * before start moves start; after end moves end; inside moves the nearer end
+ * (nearer by line, then by column). The other end becomes the anchor unit.
+ * With no valid selection (or a different epoch) it is selection_begin() with
+ * click_count 1. */
+void selection_extend_from(Selection *s, const Terminal *t, int screen_row, int col,
+                           int px, int py);
 /* A move while the button is held. A STREAM press becomes a selection only
  * once the pointer has moved drag_cx/drag_cy pixels on either axis. */
 void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,

@@ -181,6 +181,17 @@ static void sb_cut(SelBuf *b, size_t len)
     b->p[len] = '\0';
 }
 
+/* The extend body: the unit under p joined with the anchor unit. */
+static void sel_apply_point(Selection *s, const Terminal *t, SelPoint p)
+{
+    SelPoint first, last;
+    sel_unit(s, t, p, &first, &last);
+    s->start = (sel_cmp(first, s->anchor) < 0) ? first : s->anchor;
+    s->end = (sel_cmp(last, s->anchor_end) > 0) ? last : s->anchor_end;
+    s->valid = true;
+    s->gen = t->write_gen;
+}
+
 /* ---- the API ------------------------------------------------------------ */
 
 void selection_pixel_to_cell(int px, int py, int char_w, int char_h,
@@ -236,12 +247,41 @@ void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,
     if (s->mode == SEL_STREAM && !s->valid &&
         abs(px - s->press_x) < drag_cx && abs(py - s->press_y) < drag_cy)
         return;                                    /* still a click */
-    SelPoint first, last;
-    sel_unit(s, t, sel_point_at(t, screen_row, col), &first, &last);
-    s->start = (sel_cmp(first, s->anchor) < 0) ? first : s->anchor;
-    s->end = (sel_cmp(last, s->anchor_end) > 0) ? last : s->anchor_end;
-    s->valid = true;
-    s->gen = t->write_gen;
+    sel_apply_point(s, t, sel_point_at(t, screen_row, col));
+}
+
+/* Is p nearer the start than the end: by line, then by column. */
+static bool sel_nearer_start(const Selection *s, SelPoint p)
+{
+    uint64_t ds = (p.line > s->start.line) ? p.line - s->start.line : s->start.line - p.line;
+    uint64_t de = (p.line > s->end.line) ? p.line - s->end.line : s->end.line - p.line;
+    if (ds != de) return ds < de;
+    int cs = abs(p.col - s->start.col), ce = abs(p.col - s->end.col);
+    return cs < ce;                                /* ties go to the end */
+}
+
+void selection_extend_from(Selection *s, const Terminal *t, int screen_row, int col,
+                           int px, int py)
+{
+    if (!s || !t) return;
+    if (!s->valid || s->epoch != t->epoch) {
+        selection_begin(s, t, screen_row, col, 1, px, py);
+        return;
+    }
+    (void)sel_trim(s, t);
+    SelPoint p = sel_point_at(t, screen_row, col);
+    bool move_start;
+    if (sel_cmp(p, s->start) < 0) move_start = true;
+    else if (sel_cmp(p, s->end) > 0) move_start = false;
+    else move_start = sel_nearer_start(s, p);
+    /* The end that stays becomes the anchor unit, so a later drag extends by
+     * whole units from it. */
+    SelPoint keep = move_start ? s->end : s->start;
+    sel_unit(s, t, keep, &s->anchor, &s->anchor_end);
+    s->press_x = s->last_x = px;
+    s->press_y = s->last_y = py;
+    s->active = true;
+    sel_apply_point(s, t, p);
 }
 
 bool selection_finish(Selection *s, const Terminal *t)

@@ -1962,6 +1962,15 @@ int test_sel_wholly_recycled_clears(void);
 int test_sel_sync_ignores_writes_elsewhere(void);
 int test_sel_stamps_survive_counter_wrap(void);
 int test_sel_reflowed_rows_not_stale_at_high_counter(void);
+int test_sel_extend_from_after_end_moves_end(void);
+int test_sel_extend_from_before_start_moves_start(void);
+int test_sel_extend_from_inside_moves_nearer_end(void);
+int test_sel_extend_from_inside_nearer_by_line(void);
+int test_sel_extend_from_word_mode_by_whole_words(void);
+int test_sel_extend_from_line_mode_by_whole_lines(void);
+int test_sel_extend_from_without_selection_is_a_click(void);
+int test_sel_extend_from_after_epoch_change_starts_fresh(void);
+int test_sel_extend_from_keeps_anchor_for_further_drag(void);
 
 /* test_ui_theme.c */
 int test_ui_theme_count(void);
@@ -5454,6 +5463,15 @@ int main(void) {
     failed += test_sel_sync_ignores_writes_elsewhere();
     failed += test_sel_stamps_survive_counter_wrap();
     failed += test_sel_reflowed_rows_not_stale_at_high_counter();
+    failed += test_sel_extend_from_after_end_moves_end();
+    failed += test_sel_extend_from_before_start_moves_start();
+    failed += test_sel_extend_from_inside_moves_nearer_end();
+    failed += test_sel_extend_from_inside_nearer_by_line();
+    failed += test_sel_extend_from_word_mode_by_whole_words();
+    failed += test_sel_extend_from_line_mode_by_whole_lines();
+    failed += test_sel_extend_from_without_selection_is_a_click();
+    failed += test_sel_extend_from_after_epoch_change_starts_fresh();
+    failed += test_sel_extend_from_keeps_anchor_for_further_drag();
 
     /* test_cursor_scroll.c */
     failed += test_cursor_visible_at_bottom();

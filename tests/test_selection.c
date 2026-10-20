@@ -887,3 +887,194 @@ int test_sel_reflowed_rows_not_stale_at_high_counter(void)
     term_free(t);
     TEST_END();
 }
+
+/* ---- extending a selection: Shift+click, middle-click ------------------- */
+
+/* The extend press and its release, at screen cell (row, col). */
+static bool extend_click(Selection *s, const Terminal *t, int row, int col)
+{
+    selection_extend_from(s, t, row, col, 50, 50);
+    return selection_finish(s, t);
+}
+
+int test_sel_extend_from_after_end_moves_end(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 30, 10);
+    feed(t, "0123456789abcdefghij");
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 2, 0, 5));
+    selection_extend_from(&s, t, 0, 12, 50, 50);
+    ASSERT_TRUE(s.active);
+    ASSERT_EQ(s.press_x, 50);
+    ASSERT_EQ(s.last_y, 50);
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_EQ(s.start.col, 2);
+    ASSERT_EQ(s.end.col, 12);
+    ASSERT_TRUE(s.mode == SEL_STREAM);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "23456789abc");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_extend_from_before_start_moves_start(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 30, 10);
+    feed(t, "0123456789abcdefghij");
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 8, 0, 12));
+    ASSERT_TRUE(extend_click(&s, t, 0, 3));
+    ASSERT_EQ(s.start.col, 3);
+    ASSERT_EQ(s.end.col, 12);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "3456789abc");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_extend_from_inside_moves_nearer_end(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 30, 10);
+    feed(t, "0123456789abcdefghij");
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 2, 0, 12));              /* middle is 7 */
+    ASSERT_TRUE(extend_click(&s, t, 0, 5));             /* nearer the start */
+    ASSERT_EQ(s.start.col, 5);
+    ASSERT_EQ(s.end.col, 12);
+    ASSERT_TRUE(drag(&s, t, 0, 2, 0, 12));
+    ASSERT_TRUE(extend_click(&s, t, 0, 9));             /* nearer the end */
+    ASSERT_EQ(s.start.col, 2);
+    ASSERT_EQ(s.end.col, 9);
+    ASSERT_TRUE(drag(&s, t, 0, 2, 0, 12));
+    ASSERT_TRUE(extend_click(&s, t, 0, 7));             /* a tie goes to the end */
+    ASSERT_EQ(s.start.col, 2);
+    ASSERT_EQ(s.end.col, 7);
+    term_free(t);
+    TEST_END();
+}
+
+/* Nearer is judged by line first: a click on the end's line is nearer the end
+ * whatever the columns say. */
+int test_sel_extend_from_inside_nearer_by_line(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(6, 30, 10);
+    feed(t, "aaaaaaaaaa\r\nbbbbbbbbbb\r\ncccccccccc\r\ndddddddddd");
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 8, 3, 1));
+    ASSERT_TRUE(extend_click(&s, t, 2, 0));             /* line 2: one from the end, two from the start */
+    ASSERT_EQ(s.start.line, (uint64_t)0);
+    ASSERT_EQ(s.start.col, 8);
+    ASSERT_EQ(s.end.line, (uint64_t)2);
+    ASSERT_EQ(s.end.col, 0);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_extend_from_word_mode_by_whole_words(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 30, 10);
+    feed(t, "alpha beta gamma delta");
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 0, 7, 2));               /* "beta" */
+    ASSERT_TRUE(extend_click(&s, t, 0, 13));            /* into "gamma" */
+    ASSERT_TRUE(s.mode == SEL_WORD);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "beta gamma");
+    free(txt);
+    ASSERT_TRUE(extend_click(&s, t, 0, 1));             /* before: into "alpha" */
+    txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "alpha beta gamma");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_extend_from_line_mode_by_whole_lines(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 20, 10);
+    feed(t, "one\r\ntwo\r\nthree\r\nfour");
+    Selection s;
+    ASSERT_TRUE(click_n(&s, t, 1, 1, 3));               /* "two" */
+    ASSERT_TRUE(extend_click(&s, t, 2, 2));
+    ASSERT_TRUE(s.mode == SEL_LINE);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "two\r\nthree");
+    free(txt);
+    ASSERT_TRUE(extend_click(&s, t, 0, 1));
+    txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "one\r\ntwo\r\nthree");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_extend_from_without_selection_is_a_click(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 30, 10);
+    feed(t, "0123456789abcdefghij");
+    Selection s;
+    selection_clear(&s);
+    selection_extend_from(&s, t, 0, 4, 10, 10);
+    ASSERT_FALSE(s.valid);
+    ASSERT_TRUE(s.active);
+    ASSERT_TRUE(s.mode == SEL_STREAM);
+    selection_extend(&s, t, 0, 9, 100, 100, 4, 4);     /* a drag selects from it */
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_EQ(s.start.col, 4);
+    ASSERT_EQ(s.end.col, 9);
+    term_free(t);
+    TEST_END();
+}
+
+int test_sel_extend_from_after_epoch_change_starts_fresh(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 30, 10);
+    feed(t, "0123456789abcdefghij");
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 2, 0, 5));
+    term_resize(t, 4, 20);
+    ASSERT_TRUE(s.epoch != t->epoch);
+    selection_extend_from(&s, t, 0, 9, 10, 10);
+    ASSERT_FALSE(s.valid);                              /* a single click, not an extension */
+    ASSERT_TRUE(s.active);
+    ASSERT_EQ(s.epoch, t->epoch);
+    ASSERT_EQ(s.anchor.col, 9);
+    term_free(t);
+    TEST_END();
+}
+
+/* After the extend press the drag is live: the end that stayed is still the
+ * anchor, so dragging back across it flips the selection. */
+int test_sel_extend_from_keeps_anchor_for_further_drag(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(4, 30, 10);
+    feed(t, "0123456789abcdefghij");
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 0, 5, 0, 8));
+    selection_extend_from(&s, t, 0, 12, 50, 50);        /* moves the end; start 5 stays */
+    ASSERT_EQ(s.anchor.col, 5);
+    ASSERT_EQ(s.anchor_end.col, 5);
+    selection_extend(&s, t, 0, 2, 60, 50, 4, 4);        /* drag left past the anchor */
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_EQ(s.start.col, 2);
+    ASSERT_EQ(s.end.col, 5);
+    selection_extend_from(&s, t, 0, 1, 50, 50);         /* start moves, end 5 stays */
+    ASSERT_EQ(s.anchor.col, 5);
+    selection_extend(&s, t, 0, 9, 60, 50, 4, 4);
+    ASSERT_TRUE(selection_finish(&s, t));
+    ASSERT_EQ(s.start.col, 5);
+    ASSERT_EQ(s.end.col, 9);
+    term_free(t);
+    TEST_END();
+}

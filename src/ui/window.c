@@ -705,6 +705,25 @@ static void start_terminal_drag(HWND hwnd, Session *s, int px, int py, int click
     force_full_terminal_repaint(hwnd, s->term);
 }
 
+/* Shift+click and middle-click: keep the selection, move its nearer end to
+ * client pixel (px, py) and make it a live drag again, holding the capture
+ * like start_terminal_drag(). px has the left margin already taken off. */
+static void extend_terminal_drag_from(HWND hwnd, Session *s, int px, int py)
+{
+    if (g_drag_session && g_drag_session != s && g_drag_session->term)
+        (void)selection_finish(&g_drag_session->sel, g_drag_session->term);
+    g_drag_session = NULL;          /* a WM_CAPTURECHANGED from SetCapture finds no drag */
+    SetCapture(hwnd);
+    g_drag_session = s;
+    int row = 0, col = 0;
+    selection_pixel_to_cell(px, py, g_renderer.charWidth, g_renderer.charHeight,
+                            g_tab_height, s->term->rows, s->term->cols, &row, &col);
+    selection_extend_from(&s->sel, s->term, row, col, px, py);
+    DLOG(DLOG_GENERAL, DLOG_DEBUG, s->log_id, "sel.extend", "line=%llu col=%d mode=%d",
+         (unsigned long long)s->sel.end.line, s->sel.end.col, (int)s->sel.mode);
+    force_full_terminal_repaint(hwnd, s->term);
+}
+
 /* Extend the drag to client pixel (px, py), px less the left margin, and
  * repaint when the selection changed. */
 static void extend_terminal_drag(HWND hwnd, Session *s, int px, int py)
@@ -735,6 +754,28 @@ static int terminal_press_clicks(int x, int y)
         clicks = 3;
     g_dblclk_armed = false;
     return clicks;
+}
+
+/* The release of a terminal drag, by either button: the release point is
+ * the end, finish and copy, then let go of the capture. Returns false when no
+ * drag was in progress. */
+static bool release_terminal_drag(HWND hwnd, LPARAM lParam)
+{
+    Session *ds = g_drag_session;
+    if (!ds) return false;
+    if (ds->term && ds->sel.active) {
+        /* The release point is the end: WM_MOUSEMOVE may not have
+         * reported it. */
+        extend_terminal_drag(hwnd, ds, GET_X_LPARAM(lParam) - g_left_margin,
+                             GET_Y_LPARAM(lParam));
+        if (selection_finish(&ds->sel, ds->term))
+            (void)copy_terminal_selection(hwnd, ds);
+        force_full_terminal_repaint(hwnd, ds->term);
+    }
+    /* Copy first, then release: ReleaseCapture() sends
+     * WM_CAPTURECHANGED synchronously (spec section 2.7). */
+    end_terminal_drag(hwnd);
+    return true;
 }
 
 /* Timer 1's selection work: every tick, for every session, outside the poll
@@ -5348,6 +5389,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             if (!g_active_session || !g_active_session->term) break;
             SetFocus(hwnd);  /* reclaim keyboard focus from AI panel */
+            /* Shift+click extends the selection (PuTTY); with none it is a
+             * plain press. Shift comes from the message, not GetKeyState:
+             * the harness posts its clicks from another thread. */
+            if ((wParam & MK_SHIFT)) {
+                (void)sync_selection(hwnd, g_active_session);
+                if (g_active_session->sel.valid) {
+                    extend_terminal_drag_from(hwnd, g_active_session,
+                                              mx - g_left_margin, my);
+                    return 0;
+                }
+            }
             int clicks;
             if (msg == WM_LBUTTONDBLCLK) {
                 g_dblclk_tick = GetTickCount();
@@ -5359,6 +5411,27 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 clicks = terminal_press_clicks(mx, my);
             }
             start_terminal_drag(hwnd, g_active_session, mx - g_left_margin, my, clicks);
+            return 0;
+        }
+
+        case WM_MBUTTONDOWN: {
+            /* Middle-click extends the selection like Shift+click; with none
+             * it starts a cell press. */
+            int mx = GET_X_LPARAM(lParam), my = GET_Y_LPARAM(lParam);
+            if (g_ai_docked && g_ai_panel_width > 0 && g_hwndAiChat) {
+                RECT crc;
+                GetClientRect(hwnd, &crc);
+                int splitter_x = crc.right - g_ai_panel_width;
+                if (ai_dock_splitter_hit(mx, splitter_x,
+                                          AI_DOCK_SPLITTER_W,
+                                          AI_DOCK_SPLITTER_PAD,
+                                          my, g_tab_height))
+                    return 0;
+            }
+            if (!g_active_session || !g_active_session->term) break;
+            SetFocus(hwnd);
+            (void)sync_selection(hwnd, g_active_session);
+            extend_terminal_drag_from(hwnd, g_active_session, mx - g_left_margin, my);
             return 0;
         }
 
@@ -5382,7 +5455,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (!ds || !ds->term || !ds->sel.active) break;
             /* A move without the button (the one Windows synthesises when
              * capture changes, or a stray) is not a drag point. */
-            if (!(wParam & MK_LBUTTON)) break;
+            if (!(wParam & (MK_LBUTTON | MK_MBUTTON))) break;
             extend_terminal_drag(hwnd, ds, GET_X_LPARAM(lParam) - g_left_margin,
                                  GET_Y_LPARAM(lParam));
             return 0;
@@ -5394,20 +5467,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 ReleaseCapture();
                 return 0;
             }
-            Session *ds = g_drag_session;
-            if (!ds) break;
-            if (ds->term && ds->sel.active) {
-                /* The release point is the end: WM_MOUSEMOVE may not have
-                 * reported it. */
-                extend_terminal_drag(hwnd, ds, GET_X_LPARAM(lParam) - g_left_margin,
-                                     GET_Y_LPARAM(lParam));
-                if (selection_finish(&ds->sel, ds->term))
-                    (void)copy_terminal_selection(hwnd, ds);
-                force_full_terminal_repaint(hwnd, ds->term);
-            }
-            /* Copy first, then release: ReleaseCapture() sends
-             * WM_CAPTURECHANGED synchronously (spec section 2.7). */
-            end_terminal_drag(hwnd);
+            if (!release_terminal_drag(hwnd, lParam)) break;
+            return 0;
+        }
+
+        case WM_MBUTTONUP: {
+            if (!release_terminal_drag(hwnd, lParam)) break;
             return 0;
         }
 
