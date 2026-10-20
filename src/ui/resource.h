@@ -17,6 +17,7 @@
 #define IDM_FILE_LOG_START    2004
 #define IDM_FILE_LOG_STOP     2005
 #define IDM_FILE_SAVE_AI      2007
+#define IDM_FILE_CLOSE_TAB    2008  /* File > Close Tab (Ctrl+Shift+W) */
 #define IDM_FILE_EXIT         2006
 #define IDM_EDIT_COPY         2010
 #define IDM_EDIT_PASTE        2011
@@ -29,6 +30,7 @@
 #define IDM_ABOUT             2030
 #define IDM_HELP_MARK_ISSUE   2031  /* Help > Mark Issue (Ctrl+Shift+M): snapshot + recorder dump */
 #define IDM_HELP_LOG_FOLDER   2032  /* Help > Open Debug Log Folder */
+#define IDM_HELP_SHORTCUTS    2033  /* Help > Keyboard Shortcuts... (the cheat sheet) */
 
 /* Edit > Send Key: write a key the app or Windows keeps for itself straight
  * to the active session (special-keys spec, section 4A). F1..F12 are

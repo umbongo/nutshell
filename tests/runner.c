@@ -2796,6 +2796,17 @@ int test_about_layout_total_height_is_button_bottom_plus_margin(void);
 int test_about_layout_zero_line_heights_still_sane(void);
 int test_about_layout_negative_sizes_clamp_to_zero(void);
 int test_about_layout_null_out_is_safe(void);
+/* test_shortcuts.c */
+int test_shortcuts_every_row_has_section_chord_action(void);
+int test_shortcuts_sections_contiguous_and_in_fixed_order(void);
+int test_shortcuts_no_chord_and_condition_repeat_within_a_section(void);
+int test_shortcuts_chord_grammar(void);
+int test_shortcuts_fields_are_markdown_safe(void);
+int test_shortcuts_menu_ids_unique_and_flagged(void);
+int test_shortcuts_menu_accel_for_the_seven_menu_ids(void);
+int test_shortcuts_menu_accels_fit_the_menu_buffer(void);
+int test_shortcuts_readme_block_shape(void);
+int test_shortcuts_readme_block_truncates_safely(void);
 
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
@@ -6196,6 +6207,16 @@ int main(void) {
     failed += test_about_layout_zero_line_heights_still_sane();
     failed += test_about_layout_negative_sizes_clamp_to_zero();
     failed += test_about_layout_null_out_is_safe();
+    failed += test_shortcuts_every_row_has_section_chord_action();
+    failed += test_shortcuts_sections_contiguous_and_in_fixed_order();
+    failed += test_shortcuts_no_chord_and_condition_repeat_within_a_section();
+    failed += test_shortcuts_chord_grammar();
+    failed += test_shortcuts_fields_are_markdown_safe();
+    failed += test_shortcuts_menu_ids_unique_and_flagged();
+    failed += test_shortcuts_menu_accel_for_the_seven_menu_ids();
+    failed += test_shortcuts_menu_accels_fit_the_menu_buffer();
+    failed += test_shortcuts_readme_block_shape();
+    failed += test_shortcuts_readme_block_truncates_safely();
 
     printf("\n--- Settings Layout ---\n");
     failed += test_sl_scale_identity_at_96();
