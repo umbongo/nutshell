@@ -2809,6 +2809,22 @@ int test_shortcuts_readme_block_shape(void);
 int test_shortcuts_readme_block_truncates_safely(void);
 int test_shortcuts_readme_matches_table(void);
 int test_shortcuts_readme_check_handles_crlf_and_bad_markers(void);
+/* test_cheatsheet_layout.c */
+int test_cheatsheet_layout_capacity_holds_the_table(void);
+int test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96(void);
+int test_cheatsheet_layout_no_scrollbar_when_the_page_fits(void);
+int test_cheatsheet_layout_scrolls_on_1366x768_at_120(void);
+int test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p(void);
+int test_cheatsheet_layout_192_is_twice_96(void);
+int test_cheatsheet_layout_every_action_fits_360(void);
+int test_cheatsheet_layout_reports_where_two_columns_stop_fitting_1080p(void);
+int test_cheatsheet_layout_tiny_work_area_stays_sane(void);
+int test_cheatsheet_layout_degenerate_inputs(void);
+int test_cheatsheet_scroll_clamp_both_ends(void);
+int test_cheatsheet_place_centres_then_keeps_to_the_work_area(void);
+int test_cheatsheet_input_from_table_fills_the_table_fields(void);
+int test_cheatsheet_input_from_table_stops_at_the_section_capacity(void);
+int test_cheatsheet_input_from_table_stops_at_the_row_capacity(void);
 
 /* test_settings_layout.c */
 int test_sl_scale_identity_at_96(void);
@@ -6221,6 +6237,21 @@ int main(void) {
     failed += test_shortcuts_readme_block_truncates_safely();
     failed += test_shortcuts_readme_matches_table();
     failed += test_shortcuts_readme_check_handles_crlf_and_bad_markers();
+    failed += test_cheatsheet_layout_capacity_holds_the_table();
+    failed += test_cheatsheet_layout_two_columns_split_1_4_and_5_7_on_1080p_at_96();
+    failed += test_cheatsheet_layout_no_scrollbar_when_the_page_fits();
+    failed += test_cheatsheet_layout_scrolls_on_1366x768_at_120();
+    failed += test_cheatsheet_layout_one_column_and_scrolls_at_192_on_1080p();
+    failed += test_cheatsheet_layout_192_is_twice_96();
+    failed += test_cheatsheet_layout_every_action_fits_360();
+    failed += test_cheatsheet_layout_reports_where_two_columns_stop_fitting_1080p();
+    failed += test_cheatsheet_layout_tiny_work_area_stays_sane();
+    failed += test_cheatsheet_layout_degenerate_inputs();
+    failed += test_cheatsheet_scroll_clamp_both_ends();
+    failed += test_cheatsheet_place_centres_then_keeps_to_the_work_area();
+    failed += test_cheatsheet_input_from_table_fills_the_table_fields();
+    failed += test_cheatsheet_input_from_table_stops_at_the_section_capacity();
+    failed += test_cheatsheet_input_from_table_stops_at_the_row_capacity();
 
     printf("\n--- Settings Layout ---\n");
     failed += test_sl_scale_identity_at_96();
