@@ -152,6 +152,9 @@ exact-allow-list gate, not a ratchet — any violation fails `make test`:
   needing an SSH session or an AI key — use it to eyeball a change before
   running the integration suite's `ui_gallery` case, which screenshots the
   same states across all four themes into `tests\integration\artifacts\gallery\`.
+  `--ui-demo=shortcuts` (not part of `all`: the sheet is modal) opens
+  Help > Keyboard Shortcuts over the demo window; the harness case
+  `help_shortcuts_sheet_gallery` captures it on all four themes.
 
 ## Integration Harness
 

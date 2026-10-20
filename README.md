@@ -533,6 +533,7 @@ if you need to move between versions.
 │   │   ├── chat_exec.c/.h             #   [EXEC] segment split of an AI reply, shared by painter and copier
 │   │   ├── chat_msg.c/.h              #   Chat message list with secure wipe
 │   │   ├── chat_thinking.c/.h         #   Thinking/reasoning display state
+│   │   ├── cheatsheet_layout.c/.h     #   Keyboard shortcuts sheet layout (columns, scroll, placement; pure)
 │   │   ├── cli_args.c/.h              #   Command-line flag parsing (--ui-demo, --theme, -sn/-h/-nc/-l/-v/-?)
 │   │   ├── cmd_batch.c/.h             #   Set of pending command-approval batches per AI session (up to 8)
 │   │   ├── cmd_classify.c/.h          #   Command safety classification (Linux, Cisco, HP, Aruba, PAN-OS, Junos, FortiOS, VyOS, RouterOS)
@@ -556,6 +557,7 @@ if you need to move between versions.
 │   │   ├── selection.c/.h             #   Text selection (buffer-absolute: drag, word/line, staleness, copy)
 │   │   ├── settings_layout.c/.h    #   Settings window layout (pages, panes, rows)
 │   │   ├── shell_prompt.c/.h          #   Detects a shell waiting at a prompt (gates one-at-a-time dispatch)
+│   │   ├── shortcuts.c/.h             #   Every shortcut, once: the sheet, the menu accelerators and README's block
 │   │   ├── snap.c/.h                  #   Window grid snapping
 │   │   ├── ssh_timeout.c/.h           #   Network-failure rail (link declared dead after a socket-silence threshold)
 │   │   ├── stick_scroll.c/.h          #   Stick-to-bottom / smart-scroll decision logic for the chat list and terminal
@@ -593,6 +595,7 @@ if you need to move between versions.
 │       ├── tabs.c/.h                  #   Double-buffered tab strip widget
 │       ├── renderer.c/.h             #   Terminal cell renderer
 │       ├── help_guide.c/.h           #   Help guide dialog
+│       ├── cheatsheet_dlg.c/.h       #   Help > Keyboard Shortcuts sheet
 │       ├── paste_dlg.c/.h            #   Paste confirmation dialog
 │       ├── icons.c/.h                #   Built-in vector icon set (GDI+ paths; no icon-font dependency)
 │       ├── resource.h                 #   Version macros and resource IDs

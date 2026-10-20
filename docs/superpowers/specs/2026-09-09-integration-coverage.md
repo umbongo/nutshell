@@ -75,7 +75,7 @@ column names the file when core logic behind the journey is unit-tested.
 | 31 | Page Up / Page Down / wheel / scrollbar drag | edit_scroll, scrollbar | Part (`page_up_scrolls_history`, captures only) | TERM-3: assert the captured top line changes; add wheel and scrollbar-drag variants |
 | 32 | Smart scrolling holds position under output; keypress returns | term (smart scroll) | **E2E** `terminal_holds_position_while_output_arrives` | — |
 | 33 | PTY resize follows the window; background tab gets it | — | **E2E** `pty_resizes_with_window`, `resize_applies_to_inactive_tab` | — |
-| 34 | Zoom Ctrl+= / Ctrl+- / Ctrl+0, font size persists | zoom | — | TERM-4: zoom in twice, `tput cols` drops, zoom reset restores |
+| 34 | Zoom Ctrl+= / Ctrl+- / Ctrl+0, font size persists | zoom | — | TERM-4: zoom in twice, `tput cols` drops, zoom reset restores. Note (2026-10-20): Ctrl+0 does not exist; there is no zoom-reset chord (Help > Keyboard Shortcuts lists every chord) |
 | 35 | OSC title sets the tab title | vt_sequences | — | TERM-5: `printf '\e]0;OSCTEST\a'`, tab caption reads OSCTEST |
 | 36 | Selection, Ctrl+C copies, Ctrl+Shift+C/V, Shift+Insert, select-all | selection | — | CLIP-1: drag-select by client coordinates, Ctrl+C, clipboard text equals selection; Ctrl+Shift+V pastes |
 | 37 | Paste with and without confirmation, paste delay | paste_preview | **E2E** two cases | add CLIP-2: multi-line paste with a 200 ms delay arrives in order |
@@ -84,7 +84,7 @@ column names the file when core logic behind the journey is unit-tested.
 
 | # | Journey | Unit | E2E | Case to add |
 |---|---|---|---|---|
-| 38 | Open second tab, switch by click, Ctrl+Tab, close with × and Ctrl+W | tabs | Part (helpers only) | TABS-1: open two, switch both ways, close the active one, the other becomes active, close-last behaviour |
+| 38 | Open second tab, switch by click, Ctrl+Tab, close with × and Ctrl+W | tabs | Part (helpers only) | TABS-1: open two, switch both ways, close the active one, the other becomes active, close-last behaviour. Note (2026-10-20): Ctrl+Tab does not exist and plain Ctrl+W goes to the shell; tabs switch by click and close with × or Ctrl+Shift+W (File > Close Tab) |
 | 39 | Status dots grey/yellow/green/red and log indicator | tabs | — | TABS-2: capture the tab strip at each state and assert the dot colour pixel |
 
 ## 5. Logging

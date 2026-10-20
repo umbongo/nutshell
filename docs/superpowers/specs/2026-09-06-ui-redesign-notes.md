@@ -46,6 +46,9 @@ Weaknesses, in impact order:
    Session Manager.
 6. **Plain chrome** — classic text menu bar above the tab strip; shortcuts (Ctrl+W,
    Ctrl+=/-, PgUp/PgDn, Shift+Insert) never shown in the UI; no accelerator table.
+   (Corrected 2026-10-20: Help > Keyboard Shortcuts now shows every chord, from the
+   one table in `src/core/shortcuts.c` that also labels the menus; there is still no
+   Win32 accelerator table, and plain Ctrl+W goes to the shell.)
 7. **Debt that fights a refresh:**
    - Hardcoded colours outside the token system: `chat_listview.c` (27), `tabs.c` (16),
      `ai_chat.c` (12), `window.c` (14).
@@ -400,6 +403,12 @@ Open, in priority order:
       SSH rendering): EL never updates `TermRow.len` or `wrapped`, ED 0/1 leave the cursor row's
       `len` and the cleared rows' `wrapped`, and a line feed never clears `wrapped`
       (`parser.c:368-458`, `:641-647`), so `len` can exceed the written width.
+- [ ] Chords asked about that do not exist: Ctrl+Tab (switch tabs), Ctrl+0 (zoom reset),
+      approve/deny keys in the AI panel. The cheat-sheet spec (2026-10-20, "Not changed")
+      left them out; decide whether any is wanted, then add it to `src/core/shortcuts.c`.
+- [ ] Main-window chords (Ctrl+Shift+T/W/M, F11, Ctrl+Shift+Space) fire only while the main
+      window has focus; from the AI panel's input they are dead. The cheat sheet states the
+      condition per row ("from the terminal"); forwarding them is a separate change.
 
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the
