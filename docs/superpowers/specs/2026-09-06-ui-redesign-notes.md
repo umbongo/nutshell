@@ -11,7 +11,7 @@ PR #71; `ui_gallery` captures 10 `--ui-demo` states x 4 themes = 40 images. Next
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.41 (2026-10-19).
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.44 (2026-10-20).
 
 ## Decisions so far
 
@@ -249,6 +249,24 @@ Done, in order (details in the commit messages and the specs named):
   `src/core/term_colors.c`), the 16-colour and 256-colour tables are built per theme,
   and `--ui-demo=ansi` shows the palette; ConPTY captures of Windows PowerShell 5.1
   pin the painted colours end to end.
+- ConPTY resize anchor, v1.2.42 (PR #70, 52b46f3; spec
+  `2026-10-18-conpty-resize-anchor-design.md`): a local ConPTY session reflows
+  top-anchored on resize, as conhost does, instead of bottom-anchored; `local_pty`
+  gains `pcon_flags` and a raw tap, and `term_resize` clamps the scroll offset. The
+  Windows probe run that fills `2026-10-19-conpty-resize-probe-report.md` is still
+  open (below).
+- PuTTY-style terminal selection, keyboard cheat sheet and Enter-confirms-paste,
+  v1.2.44 (PR #74, 6e8d69d; specs `2026-10-20-putty-selection-design.md` and
+  `2026-10-20-keyboard-cheat-sheet-design.md`): selection is buffer-absolute per
+  session (`SelPoint{line, col}`, `lines_recycled`/`epoch`/64-bit write stamps in
+  `Terminal`), survives scrolling and new output, auto-scrolls past the edges, joins
+  soft-wrapped rows, copies CRLF on release; double-click word, triple-click line;
+  Ctrl+C always interrupts, Ctrl+Shift+C and Edit > Copy copy, Select All copies.
+  Confirm Paste opens with Paste focused. Help > Keyboard Shortcuts is a themed sheet
+  built from `src/core/shortcuts.c`, which also feeds the menu accelerator text and
+  README's generated block (a native test keeps README in step, so README.md now
+  counts as code in `checks.yml`). The sixteen harness cases passed on Windows.
+  Closes the "copy and paste broken past the viewport" item.
 
 Open, in priority order:
 - [ ] Parser: a truncated extended-colour SGR (`38;2;r;g`, `38;5` without its index, or
@@ -262,14 +280,19 @@ Open, in priority order:
       Also from that spec's Out of scope: answer OSC 11 (background colour query) so programs
       can detect a light background; default text on an explicit background stays raw.
 - [ ] Terminal selection follow-ups (spec `2026-10-20-putty-selection-design.md` section 4;
-      the PuTTY-style selection itself is on `feat/putty-selection`): Shift+click to
+      the selection itself shipped in PR #74): Shift+click to
       extend; Alt+drag block selection; middle-button paste; mouse reporting to
       applications; the per-byte paste writes over SSH; the scrollback-size setting
       (Settings and the help guide offer 100-50,000 lines but every session gets 3,000;
       `term_init` and `term_reflow_buffer` allocate the whole capacity, so lazy
       allocation in reflow comes first, spec section 6.2); a narrowing reflow of a full
       ring drops the newest rows rather than the oldest (`buffer.c:142, 165`,
-      pre-existing).
+      pre-existing). Minor residuals from #74's reviews: a fourth rapid click selects a
+      word again where PuTTY cycles; decomposed accents split a word; the help guide's
+      Send Key paragraph still lists F1-F12 beside the new "F1-F12 go to the shell" line.
+- [ ] ConPTY resize probe run (PR #70 follow-up): on Windows, `NSPROBE_RECORD=1
+      mingw32-make wintest`, fill `2026-10-19-conpty-resize-probe-report.md` from the run,
+      and commit the four `tests/fixtures/conpty_resize_*.bin` if parity passes.
 - [ ] Harness cases on `main`: `resize_applies_to_inactive_tab` fails on every run
       (since v1.2.13); `ctrl_w_reaches_shell_and_shift_closes_tab` failed the v1.2.36 and
       v1.2.37 gate runs and passed the v1.2.41 one, so it is intermittent -- both are
@@ -280,7 +303,7 @@ Open, in priority order:
       reads before the bound; swapping the operands closes it. The other five are
       `cpp/world-writable-file-creation` (`loader.c:935`, four in `test_settings.c`).
       Fix or dismiss each with a reason, in the next `src/` pull request.
-- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.41. Tagging is the
+- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.44. Tagging is the
       maintainer's call (`feature-workflow` step 10).
 - [ ] AI panel: commands of a **finished** batch have no details popup and no copy icon
       after a session switch. `cmd_batch_remove` drops the batch, so `chat_rebuild_display`
@@ -400,9 +423,10 @@ Open, in priority order:
       give East Asian wide characters and most emoji two, so such rows drift from the shell's
       idea of the cursor column. Pre-existing; needs a width table and two-cell rendering.
 - [ ] Parser quirk (pre-existing, left alone by the ConPTY resize spec because fixing it changes
-      SSH rendering): EL never updates `TermRow.len` or `wrapped`, ED 0/1 leave the cursor row's
-      `len` and the cleared rows' `wrapped`, and a line feed never clears `wrapped`
-      (`parser.c:368-458`, `:641-647`), so `len` can exceed the written width.
+      SSH rendering): EL and ED never update `TermRow.len`, so `len` can exceed the written
+      width. The `wrapped` half was settled by PR #74: a whole-row erase (EL 2, EL 0 from
+      column 0, EL 1 to the last column, ED over a whole row) clears it, and a line feed
+      never does, by design (readline moves onto a continuation row with a bare LF).
 - [ ] Chords asked about that do not exist: Ctrl+Tab (switch tabs), Ctrl+0 (zoom reset),
       approve/deny keys in the AI panel. The cheat-sheet spec (2026-10-20, "Not changed")
       left them out; decide whether any is wanted, then add it to `src/core/shortcuts.c`.

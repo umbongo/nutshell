@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-10-20 (README joins the native-suite path filter).
+Last updated: 2026-10-20 (checkpoint after PR #74).
 
 ## Retrospective cadence (standing rule from the maintainer, 2026-09-21)
 
@@ -161,10 +161,11 @@ Last updated: 2026-10-20 (README joins the native-suite path filter).
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-10-19 (`main` at v1.2.41, PR #71; drafts #70 ConPTY resize
-anchor, spec and plan, and #72 light-theme ANSI contrast, spec): terminal
-copy and paste broken past the viewport; two failing tab-switch harness
-cases; old CodeQL alerts; no release since v1.1.21; the whole-repository
+As of 2026-10-20 (`main` at v1.2.44, PR #74; no open drafts): truncated
+extended-colour SGR leak; designed light-theme ANSI palette; selection
+follow-ups (Shift+click, Alt+drag, middle paste, the scrollback-size
+setting); the #70 ConPTY probe run on Windows; two failing tab-switch
+harness cases; old CodeQL alerts; no release since v1.1.21; the whole-repository
 security review; finished-batch command details; AI panel selection
 follow-ups; local shell follow-ups; paint-path polling; `.gitattributes`
 renormalise; sub-project 3 needs a spec first. `src/ui/window.c` is 5,440
