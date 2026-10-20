@@ -35,7 +35,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 
 | File | Cases |
 |---|---|
-| `cases\10-terminal.ps1` | connect, Ctrl+C, log filename, paste x2, PTY resize, Page Up, holds position, inactive-tab resize |
+| `cases\10-terminal.ps1` | connect, Ctrl+C, log filename, paste x4 (Enter and Tab in Confirm Paste), PTY resize, Page Up, holds position, inactive-tab resize, terminal selection x9 |
 | `cases\20-ai.ps1` | the five key-gated `ai_*` cases + `ai_panel_opens_without_key` + `ai_auto_approve_critical_asks_first` |
 | `cases\30-ui-demo.ps1` | `ui_gallery`, `approval_card_run_selected_settles`, `helpers_theme_pixel_matches_token`, `helpers_ansi_contrast_floor`, `helpers_theme_switch_repaints` |
 | `cases\40-helpers.ps1` | the other `helpers_*` cases |
@@ -176,10 +176,21 @@ touches before marking its pull request ready.
 | `log_filename_follows_log_format` | File-menu logging names the file `<Log Name Format>_<name>.log` |
 | `paste_without_confirmation` | `paste_confirm=false` pastes straight through |
 | `paste_with_confirmation_shows_dialog` | `paste_confirm=true` shows the preview window |
+| `paste_with_confirmation_enter_pastes` | Enter in Confirm Paste pastes (Paste has the focus when it opens) |
+| `paste_with_confirmation_tab_enter_cancels` | Tab moves to Cancel, and Enter then cancels |
 | `pty_resizes_with_window` | shrinking the window shrinks `tput lines`/`tput cols` |
 | `page_up_scrolls_history` | evidence screenshots before/after Shift+Page Up (plain PgUp no longer reaches the shell on the primary screen — see `pgup_pages_on_alt_screen_and_scrolls_on_primary` below — so scrolling is driven with the always-scrolls Shift+PgUp chord) |
 | `terminal_holds_position_while_output_arrives` | a view scrolled back with Shift+Page Up stays on the same lines while background output arrives; Enter returns to the live view (smart scrolling) |
 | `resize_applies_to_inactive_tab` | a tab resized while in the background comes back with the same grid as the tab that was in front, and a bigger one than it had before the resize |
+| `select_drag_past_bottom_copies_history` | scrolled back 100 lines, a held drag past the bottom auto-scrolls to the end; the copy holds every line from the press to `300` and the prompt, CRLF separated |
+| `select_drag_above_top_selects_first_row` | a drag to above the terminal area selects from the top row (signed coordinates, no wrap to the last row) |
+| `select_while_scrolled_back_copies_highlight` | a drag while scrolled back copies the rows the view shows, not the live ones |
+| `click_does_not_touch_clipboard` | a press and release under the drag threshold keeps the clipboard and clears the selection |
+| `ctrl_shift_c_copies_after_drag` | the selection survives the copy on release; Ctrl+Shift+C and Edit > Copy copy it again |
+| `ctrl_c_with_selection_interrupts` | Ctrl+C with a selection on screen still interrupts `sleep 30`; the clipboard is kept |
+| `double_click_selects_word` | the class has `CS_DBLCLKS`; a double-click copies `/usr/local/bin` |
+| `triple_click_selects_line` | a triple-click copies the whole line |
+| `output_into_selection_clears_it` | output written into a selected row logs `sel.clear reason=stale`; Ctrl+Shift+C then copies nothing |
 | `ai_panel_docks_with_key` | View › AI Assist docks the panel without a dialog |
 | `ai_runs_read_command_unattended` | a prompted `echo` runs in the terminal via `[EXEC]` once Auto-approve is on at Read |
 | `ai_commands_run_one_at_a_time` | two `[EXEC]` blocks (`sleep 6 && echo FIRST_DONE`, then `echo SECOND_DONE`) run in order: the second command's echoed text only reaches the log after `FIRST_DONE`'s output, proving commands are gated on the shell prompt rather than burst-sent |
@@ -302,6 +313,12 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Get-NutshellChatList -Session` / `Get-NutshellChatWordRect -Session -Word -Item [-Thinking]` | the AI panel's message list / where it painted a word (`CLV_MSG_QUERY_WORD`, `--ui-demo` only): `@{X;Y;W;H}` in the list's client pixels, W ending at the word's last character |
 | `Get-NutshellWindowDpi -Session` | the main window's DPI (96 = 100%); 96 when `GetDpiForWindow` is unavailable or returns 0 |
 | `Send-NutshellChatDrag -Session -FromX -FromY -ToX -ToY [-Steps] [-HoldMoves]` | a drag in the message list with sent `WM_LBUTTONDOWN`/`WM_MOUSEMOVE`/`WM_LBUTTONUP` (no foreground; the real cursor is parked in the screen's far corner first); `-HoldMoves` repeats the last point, each past an edge auto-scrolling once |
+| `Send-NutshellDrag -Session -From @(x,y) -To @(x,y) [-Clicks 1-3] [-Steps n] [-Hold]` | a terminal drag with sent mouse messages (no foreground; the cursor is parked first); `-Clicks 2` sends `WM_LBUTTONDBLCLK`, `-Clicks 3` a further press; `-Hold` leaves the button down |
+| `Send-NutshellDragEnd -Session -At @(x,y)` | the button-up that ends a `-Hold` drag |
+| `Send-NutshellWheel -Session -Lines n` | one sent `WM_MOUSEWHEEL` scrolling n lines (positive: back into history) |
+| `Get-NutshellTermGeometry -Session` | rows, cols, cell size and grid origin in client pixels, from the last `render.draw` (render at trace) |
+| `Get-NutshellCellPoint -Geo -Row -Col` | the client pixel at a cell's centre; fractional and out-of-grid rows allowed |
+| `Get-NutshellDebugLogText -Session` / `Wait-NutshellDebugLog -Session -Pattern [-TimeoutSec]` | the case's debug log (`debug_log_dir = "debuglogs"`), and waiting on a regex in it |
 | `Set-NutshellFocus -Session -Hwnd` | keyboard focus to one of the app's windows via `AttachThreadInput` + `SetFocus`; `Send-NutshellChord -Hwnd` posts a chord to a window other than the main one |
 
 **Window geometry is never assumed.** `Set-NutshellWindowSize` treats its

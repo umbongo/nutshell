@@ -81,6 +81,42 @@ Invoke-Case "paste_with_confirmation_shows_dialog" @{ paste_confirm = $true } {
     "dialog shown: " + ($dlg -split "`t")[2]
 }
 
+# Confirm Paste takes Enter (spec 2026-10-20 section 3.5): Paste has the focus
+# when the dialog opens. The pasted command computes its marker, so the
+# marker reaches the log only if the command ran, not from the echo of the
+# paste itself.
+Invoke-Case "paste_with_confirmation_enter_pastes" @{ paste_confirm = $true } {
+    param($s)
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    Set-Clipboard -Value 'echo PASTE_ENTER_$((4*2))'
+    Send-NutshellChord -Session $s -Key V -Ctrl -SettleMs 300
+    $dlg = Wait-NutshellDialog -Session $s -Title "Confirm Paste" -TimeoutSec 5
+    Assert-True ($dlg -ne [IntPtr]::Zero) "no Confirm Paste dialog appeared"
+    Send-NutshellKey -Session $s -Key Enter -Hwnd $dlg -SettleMs 600
+    Assert-True (-not (Get-NutshellWindows -Session $s | Where-Object { $_ -match "Nutshell_PastePreview" })) "the dialog is still open after Enter"
+    Send-NutshellKey -Session $s -Key Enter
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "PASTE_ENTER_8" -TimeoutSec 5) "Enter in the dialog did not paste: the command never ran"
+    "Enter pasted"
+}
+
+# Review Focus 2: Tab moves the focus to Cancel, and Enter then presses Cancel.
+Invoke-Case "paste_with_confirmation_tab_enter_cancels" @{ paste_confirm = $true } {
+    param($s)
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    Set-Clipboard -Value 'echo PASTE_TAB_$((5*2))'
+    Send-NutshellChord -Session $s -Key V -Ctrl -SettleMs 300
+    $dlg = Wait-NutshellDialog -Session $s -Title "Confirm Paste" -TimeoutSec 5
+    Assert-True ($dlg -ne [IntPtr]::Zero) "no Confirm Paste dialog appeared"
+    Send-NutshellKey -Session $s -Key Tab -Hwnd $dlg -SettleMs 300
+    Send-NutshellKey -Session $s -Key Enter -Hwnd $dlg -SettleMs 600
+    Assert-True (-not (Get-NutshellWindows -Session $s | Where-Object { $_ -match "Nutshell_PastePreview" })) "the dialog is still open after Tab, Enter"
+    Send-NutshellKey -Session $s -Key Enter -SettleMs 1000
+    Assert-True ((Get-NutshellLogText -Session $s) -notmatch "PASTE_TAB_10") "Enter on the focused Cancel button pasted anyway"
+    "Tab, Enter cancelled"
+}
+
 Invoke-Case "pty_resizes_with_window" @{} {
     param($s)
     Start-NutshellLogging -Session $s | Out-Null
@@ -250,4 +286,203 @@ Invoke-Case "resize_applies_to_inactive_tab" @{} {
     Assert-True (($aLines -eq $bLines) -and ($aCols -eq $bCols)) `
         "the background tab did not get the active tab's grid: tab A ${aLines}x${aCols}, tab B ${bLines}x${bCols}"
     "tab A ${preLines}x${preCols} -> ${aLines}x${aCols} after a resize made on tab B, matching tab B's ${bLines}x${bCols}"
+}
+
+# ---- Terminal selection, PuTTY style (spec docs/superpowers/specs/2026-10-20-putty-selection-design.md 3.2) ----
+# Gate tier. Debug logging is on: render at trace for the render.draw
+# geometry, general at debug for the sel.* events. Every point is a cell of
+# that geometry, never a pixel literal (the dev box runs at 288 DPI). The
+# clipboard is read raw and compared with CRLF intact. Start-SelCase clears
+# the screen, so a typed command sits on row 0 and its output starts on row 1.
+
+$script:SelSettings = @{ debug_enabled = $true; debug_level_render = "trace"; debug_level_general = "debug"; debug_log_dir = "debuglogs" }
+
+function Get-SelClipboard {
+    $t = Get-Clipboard -Raw
+    if ($null -eq $t) { return "" }
+    return [string]$t
+}
+
+function Start-SelCase {
+    <# Session log on, shell ready, screen cleared; returns the grid geometry. #>
+    param($s)
+    Start-NutshellLogging -Session $s | Out-Null
+    Wait-NutshellShell -Session $s
+    Send-NutshellLine -Session $s -Line "clear" -SettleMs 800
+    $g = Get-NutshellTermGeometry -Session $s
+    Assert-True ($g.Cols -ge 60) "the terminal is too narrow for the selection cases: $($g.Cols) columns"
+    return $g
+}
+
+function Assert-SelConsecutive {
+    <# Every line is an integer one more than the line before; returns the first. #>
+    param([string[]] $Lines)
+    $first = 0
+    Assert-True ([int]::TryParse($Lines[0], [ref]$first)) "the copy does not start with a number: '$($Lines[0])'"
+    for ($i = 1; $i -lt $Lines.Count; $i++) {
+        Assert-True ($Lines[$i] -eq [string]($first + $i)) "line $i is '$($Lines[$i])', expected $($first + $i)"
+    }
+    return $first
+}
+
+Invoke-Case "select_drag_past_bottom_copies_history" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line "seq 1 300"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^300\s*$" -TimeoutSec 5) "seq output incomplete"
+    Start-Sleep -Milliseconds 500
+    Send-NutshellWheel -Session $s -Lines 100
+    $from  = Get-NutshellCellPoint -Geo $g -Row 0 -Col 0
+    $below = Get-NutshellCellPoint -Geo $g -Row ($g.Rows + 1.5) -Col 0   # two cell heights past the bottom edge
+    Send-NutshellDrag -Session $s -From $from -To $below -Hold
+    $atBottom = Wait-NutshellDebugLog -Session $s -Pattern 'sel\.scroll .*offset=0\b' -TimeoutSec 10
+    Send-NutshellDragEnd -Session $s -At $below
+    Assert-True $atBottom "the drag never auto-scrolled back to the bottom (no sel.scroll offset=0)"
+    $clip = Get-SelClipboard
+    Assert-True ($clip -notmatch "(?<!`r)`n") "a line ending in the copy is not CRLF"
+    $lines = @($clip -split "`r`n")
+    Assert-True ($lines.Count -gt $g.Rows) "copied $($lines.Count) lines, no more than the $($g.Rows) rows on screen"
+    $n = $lines.Count - 1
+    $first = Assert-SelConsecutive -Lines $lines[0..($n - 1)]
+    Assert-True ($first + $n - 1 -eq 300) "the numbers end at $($first + $n - 1), not 300"
+    Assert-True ($lines[$n].Trim().Length -gt 0) "the last copied line is not the prompt"
+    "copied $($lines.Count) lines ($first..300 and the prompt) with $($g.Rows) rows on screen"
+}
+
+Invoke-Case "select_drag_above_top_selects_first_row" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line "seq 1 300"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^300\s*$" -TimeoutSec 5) "seq output incomplete"
+    Start-Sleep -Milliseconds 500
+    $from  = Get-NutshellCellPoint -Geo $g -Row 3 -Col 6
+    $above = Get-NutshellCellPoint -Geo $g -Row -2.5 -Col 0               # two cell heights above the terminal area
+    Send-NutshellDrag -Session $s -From $from -To $above
+    # The log writer flushes debug lines every 250 ms; once sel.copy is on disk
+    # every sel.scroll line before it is too.
+    Assert-True (Wait-NutshellDebugLog -Session $s -Pattern 'sel\.copy ' -TimeoutSec 5) "the release logged no sel.copy"
+    # Timer ticks between the sent messages may auto-scroll a few lines
+    # before the release; the last sel.scroll says how many.
+    $scrolls = [regex]::Matches((Get-NutshellDebugLogText -Session $s), 'sel\.scroll .*offset=(\d+)')
+    $off = if ($scrolls.Count -gt 0) { [int]$scrolls[$scrolls.Count - 1].Groups[1].Value } else { 0 }
+    $lines = @((Get-SelClipboard) -split "`r`n")
+    Assert-True ($lines.Count -eq 4 + $off) "copied $($lines.Count) lines; expected rows 0-3 plus $off auto-scrolled"
+    $first = Assert-SelConsecutive -Lines $lines
+    "copied $first..$($first + $lines.Count - 1), auto-scrolled $off"
+}
+
+Invoke-Case "select_while_scrolled_back_copies_highlight" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line "seq 1 300"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^300\s*$" -TimeoutSec 5) "seq output incomplete"
+    Start-Sleep -Milliseconds 500
+    $a = Get-NutshellCellPoint -Geo $g -Row 0 -Col 0
+    $b = Get-NutshellCellPoint -Geo $g -Row 2 -Col 6
+    Send-NutshellDrag -Session $s -From $a -To $b
+    $live = @((Get-SelClipboard) -split "`r`n")
+    Assert-True ($live.Count -eq 3) "the live drag copied $($live.Count) lines"
+    $liveFirst = Assert-SelConsecutive -Lines $live
+    Send-NutshellWheel -Session $s -Lines 100
+    Send-NutshellDrag -Session $s -From $a -To $b
+    $back = @((Get-SelClipboard) -split "`r`n")
+    Assert-True ($back.Count -eq 3) "the scrolled-back drag copied $($back.Count) lines"
+    $backFirst = Assert-SelConsecutive -Lines $back
+    Assert-True ($backFirst -eq $liveFirst - 100) "scrolled back 100 lines, the drag copied from $backFirst, not $($liveFirst - 100)"
+    "rows 0-2 hold $liveFirst.. live and $backFirst.. scrolled back"
+}
+
+Invoke-Case "click_does_not_touch_clipboard" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line 'echo CLICK$((3+4))TEXT'
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "CLICK7TEXT" -TimeoutSec 5) "echo output missing"
+    # A real selection first, so the click has one to clear.
+    Send-NutshellDrag -Session $s -From (Get-NutshellCellPoint -Geo $g -Row 1 -Col 0) -To (Get-NutshellCellPoint -Geo $g -Row 1 -Col 12)
+    Assert-True ((Get-SelClipboard) -eq "CLICK7TEXT") "the setup drag did not copy: '$(Get-SelClipboard)'"
+    Set-Clipboard -Value "CLICK_MARKER_5"
+    # Press on the last pixel of cell (1,2) and release half a drag threshold
+    # to the right: across a cell boundary, under the threshold.
+    $cx = [NutshellSelNative]::GetSystemMetrics(68)                  # SM_CXDRAG
+    $half = [Math]::Max(1, [int][Math]::Floor(($cx - 1) / 2))
+    $px = $g.X + 3 * $g.CharW - 1
+    $py = [int]($g.Y + 1.5 * $g.CharH)
+    Send-NutshellDrag -Session $s -From @($px, $py) -To @(($px + $half), $py) -Steps 1
+    Assert-True ((Get-SelClipboard) -eq "CLICK_MARKER_5") "a click under the drag threshold changed the clipboard"
+    Send-NutshellChord -Session $s -Key C -Ctrl -Shift -SettleMs 400
+    Assert-True ((Get-SelClipboard) -eq "CLICK_MARKER_5") "the click did not clear the selection: Ctrl+Shift+C copied it"
+    "SM_CXDRAG $cx, moved $half px: clipboard untouched, selection cleared"
+}
+
+Invoke-Case "ctrl_shift_c_copies_after_drag" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line 'echo SEL$((2+3))TEXT'
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "SEL5TEXT" -TimeoutSec 5) "echo output missing"
+    Send-NutshellDrag -Session $s -From (Get-NutshellCellPoint -Geo $g -Row 1 -Col 0) -To (Get-NutshellCellPoint -Geo $g -Row 1 -Col 12)
+    Assert-True ((Get-SelClipboard) -eq "SEL5TEXT") "the release did not copy: '$(Get-SelClipboard)'"
+    Set-Clipboard -Value "COPY_MARKER_1"
+    Send-NutshellChord -Session $s -Key C -Ctrl -Shift -SettleMs 400
+    Assert-True ((Get-SelClipboard) -eq "SEL5TEXT") "Ctrl+Shift+C did not copy the selection again"
+    Set-Clipboard -Value "COPY_MARKER_2"
+    Send-NutshellCommand -Session $s -Id 2010 -SettleMs 400           # IDM_EDIT_COPY
+    Assert-True ((Get-SelClipboard) -eq "SEL5TEXT") "Edit > Copy did not copy the selection"
+    "release, Ctrl+Shift+C and Edit > Copy all copied the selection"
+}
+
+Invoke-Case "ctrl_c_with_selection_interrupts" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line 'echo SEL$((3+3))TEXT'
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "SEL6TEXT" -TimeoutSec 5) "echo output missing"
+    Send-NutshellDrag -Session $s -From (Get-NutshellCellPoint -Geo $g -Row 1 -Col 0) -To (Get-NutshellCellPoint -Geo $g -Row 1 -Col 12)
+    Assert-True ((Get-SelClipboard) -eq "SEL6TEXT") "the release did not copy"
+    Send-NutshellLine -Session $s -Line "sleep 30"
+    Start-Sleep -Milliseconds 800
+    Send-NutshellChord -Session $s -Key C -Ctrl -SettleMs 300
+    Send-NutshellLine -Session $s -Line 'echo AFTER_$((4+4))'
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "AFTER_8" -TimeoutSec 2) "the prompt did not return within 2 s: Ctrl+C with a selection was not sent as SIGINT"
+    Assert-True ((Get-SelClipboard) -eq "SEL6TEXT") "Ctrl+C changed the clipboard"
+    "sleep 30 interrupted with a selection on screen; clipboard kept"
+}
+
+Invoke-Case "double_click_selects_word" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    $style = [int64][NutshellSelNative]::GetClassLongPtr($s.Main, -26)   # GCL_STYLE
+    Assert-True (($style -band 0x0008) -ne 0) ("the main window class lacks CS_DBLCLKS (style 0x{0:X})" -f $style)
+    Send-NutshellLine -Session $s -Line "echo /usr/local/bin and more"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^/usr/local/bin and more" -TimeoutSec 5) "echo output missing"
+    Set-Clipboard -Value "WORD_MARKER"
+    $p = Get-NutshellCellPoint -Geo $g -Row 1 -Col 6
+    Send-NutshellDrag -Session $s -From $p -To $p -Clicks 2 -Steps 1
+    Assert-True ((Get-SelClipboard) -eq "/usr/local/bin") "double-click copied '$(Get-SelClipboard)'"
+    "double-click copied /usr/local/bin; CS_DBLCLKS set"
+}
+
+Invoke-Case "triple_click_selects_line" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    Send-NutshellLine -Session $s -Line "echo /usr/local/bin and more"
+    Assert-True (Wait-NutshellLog -Session $s -Pattern "(?m)^/usr/local/bin and more" -TimeoutSec 5) "echo output missing"
+    Set-Clipboard -Value "LINE_MARKER"
+    $p = Get-NutshellCellPoint -Geo $g -Row 1 -Col 6
+    Send-NutshellDrag -Session $s -From $p -To $p -Clicks 3 -Steps 1
+    Assert-True ((Get-SelClipboard) -eq "/usr/local/bin and more") "triple-click copied '$(Get-SelClipboard)'"
+    "triple-click copied the line"
+}
+
+Invoke-Case "output_into_selection_clears_it" $script:SelSettings {
+    param($s)
+    $g = Start-SelCase $s
+    # A short command name keeps the command on row 0 and its output on row 1.
+    Send-NutshellLine -Session $s -Line 'f(){ for i in 1 2 3 4 5 6; do printf "\r$i"; sleep 1; done; echo; }'
+    Send-NutshellLine -Session $s -Line "clear" -SettleMs 800
+    Send-NutshellLine -Session $s -Line "f" -SettleMs 1200
+    Send-NutshellDrag -Session $s -From (Get-NutshellCellPoint -Geo $g -Row 1 -Col 0) -To (Get-NutshellCellPoint -Geo $g -Row 1 -Col 4)
+    Assert-True (Wait-NutshellDebugLog -Session $s -Pattern 'sel\.clear .*reason="?stale' -TimeoutSec 4) "no sel.clear reason=stale after the loop wrote into the selected row"
+    Set-Clipboard -Value "STALE_MARKER_9"
+    Send-NutshellChord -Session $s -Key C -Ctrl -Shift -SettleMs 400
+    Assert-True ((Get-SelClipboard) -eq "STALE_MARKER_9") "Ctrl+Shift+C copied a selection the output had overwritten"
+    "the next write cleared the selection; Ctrl+Shift+C copied nothing"
 }

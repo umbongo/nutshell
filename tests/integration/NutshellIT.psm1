@@ -286,6 +286,7 @@ public static class NutshellSelNative {
     [DllImport("kernel32.dll")] public static extern ushort GlobalDeleteAtom(ushort atom);
     [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr h);
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll", EntryPoint="GetClassLongPtrW")] public static extern IntPtr GetClassLongPtr(IntPtr h, int index);
 }
 "@
 try { Add-Type -TypeDefinition $nutshellSelNativeSource -ErrorAction Stop }
@@ -358,6 +359,22 @@ function ConvertTo-NutshellPointLParam {
     return [IntPtr]((($Y -band 0xFFFF) -shl 16) -bor ($X -band 0xFFFF))
 }
 
+function Set-NutshellCursorParked {
+    <# Park the real cursor one pixel inside the bottom-right corner of the
+       virtual screen. Windows synthesises a WM_MOUSEMOVE from the real cursor
+       (position and button state, wParam 0) when mouse capture changes, and a
+       sent button-down takes capture; parked off the window, that move lands
+       outside every case's geometry. SetCursorPos fails harmlessly on a locked
+       desktop, so a false return is ignored. Not exported. #>
+    $vx = [NutshellSelNative]::GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+    $vy = [NutshellSelNative]::GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+    $vw = [NutshellSelNative]::GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
+    $vh = [NutshellSelNative]::GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+    if ($vw -gt 0 -and $vh -gt 0) {
+        [NutshellNative]::SetCursorPos($vx + $vw - 1, $vy + $vh - 1) | Out-Null
+    }
+}
+
 function Send-NutshellChatDrag {
     <# Drag in the chat list with sent mouse messages: no foreground window,
        but the real cursor is parked in a screen corner (see below). A
@@ -375,20 +392,7 @@ function Send-NutshellChatDrag {
           [int] $ToX, [int] $ToY, [int] $Steps = 4, [int] $HoldMoves = 0)
     $list = Get-NutshellChatList -Session $Session
     if ($list -eq [IntPtr]::Zero) { throw "AI panel message list not found" }
-    # Park the real cursor in the bottom-right corner of the virtual screen,
-    # one pixel inside it. Windows synthesises a WM_MOUSEMOVE from the real
-    # cursor (position and button state, wParam 0) when mouse capture changes,
-    # and the list takes capture on the sent button-down; wherever the cursor
-    # happened to rest over the window, that move would reach the drag. Parked
-    # off the window it lands outside every case's geometry. SetCursorPos
-    # fails harmlessly on a locked desktop, so a false return is ignored.
-    $vx = [NutshellSelNative]::GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
-    $vy = [NutshellSelNative]::GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
-    $vw = [NutshellSelNative]::GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
-    $vh = [NutshellSelNative]::GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
-    if ($vw -gt 0 -and $vh -gt 0) {
-        [NutshellNative]::SetCursorPos($vx + $vw - 1, $vy + $vh - 1) | Out-Null
-    }
+    Set-NutshellCursorParked
     $mk = [IntPtr]$script:MK_LBUTTON
     [NutshellNative]::SendMsg($list, $script:WM_LBUTTONDOWN, $mk,
         (ConvertTo-NutshellPointLParam -X $FromX -Y $FromY)) | Out-Null
@@ -404,6 +408,126 @@ function Send-NutshellChatDrag {
     }
     [NutshellNative]::SendMsg($list, $script:WM_LBUTTONUP, [IntPtr]::Zero,
         (ConvertTo-NutshellPointLParam -X $ToX -Y $ToY)) | Out-Null
+    Start-Sleep -Milliseconds 200
+}
+
+# ---- Terminal selection (spec docs/superpowers/specs/2026-10-20-putty-selection-design.md 3.2) ----
+
+function Get-NutshellDebugLogText {
+    <# The newest debug log of this case (settings: debug_enabled, debug_log_dir
+       = "debuglogs"), read with sharing while the app writes it; "" if none. #>
+    param([Parameter(Mandatory)] $Session)
+    $dir = Join-Path $Session.Env.Root "debuglogs"
+    $log = Get-ChildItem -Path (Join-Path $dir "nutshell-*-p*.log") -ErrorAction SilentlyContinue |
+           Where-Object { $_.Name -notmatch "\.issue\d+\.log$" } |
+           Sort-Object LastWriteTime | Select-Object -Last 1
+    if (-not $log) { return "" }
+    $fs = [IO.File]::Open($log.FullName, 'Open', 'Read', 'ReadWrite')
+    try { $sr = New-Object IO.StreamReader($fs); return $sr.ReadToEnd() } finally { $fs.Dispose() }
+}
+
+function Wait-NutshellDebugLog {
+    <# Wait until the debug log matches -Pattern (regex). Returns $true/$false. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [string] $Pattern, [int] $TimeoutSec = 10)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if ((Get-NutshellDebugLogText -Session $Session) -match $Pattern) { return $true }
+        Start-Sleep -Milliseconds 200
+    }
+    return $false
+}
+
+function Get-NutshellTermGeometry {
+    <# The terminal grid from the last render.draw event (needs
+       debug_level_render = "trace"): Rows, Cols, CharW, CharH, and X, Y, the
+       top-left of cell (0,0) in main-window client pixels -- renderer_draw()
+       is called with the left margin and the tab height, and mouse messages
+       sent to the main window are in the same client coordinates. #>
+    param([Parameter(Mandatory)] $Session, [int] $TimeoutSec = 8)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        $draws = @((Get-NutshellDebugLogText -Session $Session) -split "`n" | Where-Object { $_ -match ' render\.draw ' })
+        if ($draws.Count -gt 0) {
+            $m = [regex]::Match($draws[$draws.Count - 1],
+                '\brows=(\d+) .*\bchar_h=(\d+) char_w=(\d+) cols=(\d+) x=(-?\d+) y=(-?\d+)')
+            if ($m.Success) {
+                return [pscustomobject]@{
+                    Rows  = [int]$m.Groups[1].Value
+                    CharH = [int]$m.Groups[2].Value
+                    CharW = [int]$m.Groups[3].Value
+                    Cols  = [int]$m.Groups[4].Value
+                    X     = [int]$m.Groups[5].Value
+                    Y     = [int]$m.Groups[6].Value
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 300
+    }
+    throw "no render.draw event with char_w/cols/x/y in the debug log (debug_level_render must be trace)"
+}
+
+function Get-NutshellCellPoint {
+    <# Client pixel at the centre of cell (Row, Col) of a Get-NutshellTermGeometry
+       grid. Fractional and out-of-grid rows are allowed: -Row -2.5 is two cell
+       heights above the terminal area, -Row ($g.Rows + 1.5) two below it. #>
+    param([Parameter(Mandatory)] $Geo, [double] $Row, [double] $Col)
+    return @([int]($Geo.X + ($Col + 0.5) * $Geo.CharW), [int]($Geo.Y + ($Row + 0.5) * $Geo.CharH))
+}
+
+function Send-NutshellDrag {
+    <# A left-button drag in the terminal with sent mouse messages (no
+       foreground; the real cursor is parked first), from -From to -To, client
+       pixels of the main window (Get-NutshellCellPoint). -Clicks 2 sends
+       down, up, WM_LBUTTONDBLCLK; -Clicks 3 then up and a further down at
+       once (the triple-click). Then -Steps moves with the button held to -To
+       and the button-up there -- unless -Hold leaves the button down, so a
+       case can wait on sel.scroll and end it with Send-NutshellDragEnd. Sent,
+       not posted, so each message is handled before the next goes. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int[]] $From,
+          [Parameter(Mandatory)] [int[]] $To, [ValidateRange(1, 3)] [int] $Clicks = 1,
+          [int] $Steps = 4, [switch] $Hold)
+    Set-NutshellCursorParked
+    $h = $Session.Main
+    $mk = [IntPtr]$script:MK_LBUTTON
+    $p0 = ConvertTo-NutshellPointLParam -X $From[0] -Y $From[1]
+    [NutshellNative]::SendMsg($h, $script:WM_LBUTTONDOWN, $mk, $p0) | Out-Null
+    if ($Clicks -ge 2) {
+        [NutshellNative]::SendMsg($h, $script:WM_LBUTTONUP, [IntPtr]::Zero, $p0) | Out-Null
+        [NutshellNative]::SendMsg($h, $script:WM_LBUTTONDBLCLK, $mk, $p0) | Out-Null
+    }
+    if ($Clicks -ge 3) {
+        [NutshellNative]::SendMsg($h, $script:WM_LBUTTONUP, [IntPtr]::Zero, $p0) | Out-Null
+        [NutshellNative]::SendMsg($h, $script:WM_LBUTTONDOWN, $mk, $p0) | Out-Null
+    }
+    for ($i = 1; $i -le $Steps; $i++) {
+        $x = $From[0] + [int](($To[0] - $From[0]) * $i / $Steps)
+        $y = $From[1] + [int](($To[1] - $From[1]) * $i / $Steps)
+        [NutshellNative]::SendMsg($h, $script:WM_MOUSEMOVE, $mk,
+            (ConvertTo-NutshellPointLParam -X $x -Y $y)) | Out-Null
+    }
+    if (-not $Hold) {
+        [NutshellNative]::SendMsg($h, $script:WM_LBUTTONUP, [IntPtr]::Zero,
+            (ConvertTo-NutshellPointLParam -X $To[0] -Y $To[1])) | Out-Null
+    }
+    Start-Sleep -Milliseconds 200
+}
+
+function Send-NutshellDragEnd {
+    <# Release a Send-NutshellDrag -Hold at -At (client pixels). #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int[]] $At)
+    [NutshellNative]::SendMsg($Session.Main, $script:WM_LBUTTONUP, [IntPtr]::Zero,
+        (ConvertTo-NutshellPointLParam -X $At[0] -Y $At[1])) | Out-Null
+    Start-Sleep -Milliseconds 200
+}
+
+function Send-NutshellWheel {
+    <# Scroll the terminal -Lines lines (positive: back into history) with one
+       sent WM_MOUSEWHEEL. window.c scrolls 3 lines per WHEEL_DELTA (120), so
+       the delta is Lines * 40; |Lines| <= 800 keeps it in the signed 16 bits. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int] $Lines)
+    $delta = $Lines * 40
+    $w = [IntPtr]([int64](($delta -band 0xFFFF) -shl 16))
+    [NutshellNative]::SendMsg($Session.Main, $script:WM_MOUSEWHEEL, $w, [IntPtr]::Zero) | Out-Null
     Start-Sleep -Milliseconds 200
 }
 
@@ -452,6 +576,8 @@ $script:WM_SYSKEYUP        = 0x0105
 $script:WM_LBUTTONDOWN     = 0x0201
 $script:WM_LBUTTONUP       = 0x0202
 $script:MK_LBUTTON         = 0x0001
+$script:WM_LBUTTONDBLCLK   = 0x0203
+$script:WM_MOUSEWHEEL      = 0x020A
 $script:WM_SETTEXT         = 0x000C
 $script:WM_GETTEXTLENGTH   = 0x000E
 $script:BM_CLICK           = 0x00F5
@@ -1614,4 +1740,5 @@ Export-ModuleMember -Function New-NutshellTestEnv, Start-Nutshell, Stop-Nutshell
     Get-NutshellTabCount, Close-NutshellTab, Get-NutshellWindowText, Get-NutshellChildWindows, `
     Get-NutshellPixel, Test-NutshellPixelNear, Get-NutshellThemeColor, Get-NutshellExeVersion, `
     Get-NutshellRegionHash, Get-NutshellWindowDpi, Get-NutshellChatList, Get-NutshellChatWordRect, Send-NutshellChatDrag, `
-    Set-NutshellFocus
+    Set-NutshellFocus, Send-NutshellDrag, Send-NutshellDragEnd, Send-NutshellWheel, `
+    Get-NutshellTermGeometry, Get-NutshellCellPoint, Get-NutshellDebugLogText, Wait-NutshellDebugLog
