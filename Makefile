@@ -190,7 +190,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/core/md_blocks.c src/core/ns_layout.c src/core/ns_hover.c \
                    src/core/stick_scroll.c src/core/ai_panel_layout.c \
                    src/core/ai_panel_states.c src/core/chat_activity.c \
-                   tests/test_icons.c tests/test_local_pty.c \
+                   tests/test_icons.c tests/test_local_pty.c tests/conpty_expect.c \
                    tests/test_md_render_win.c tests/test_chat_select_win.c \
                    tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \

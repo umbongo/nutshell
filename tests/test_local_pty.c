@@ -32,7 +32,9 @@
 #include "term.h"
 #include "term_extract.h"
 #include "dlog.h"
+#include "conpty_expect.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- where these cases report ------------------------------------------
@@ -742,6 +744,745 @@ int test_key_layout_records_ctrl_space(void)
                 RPT("  %s -> none (rc %d)", PROBES[p].label, rc);
         }
         RPT("\n");
+    }
+    TEST_END();
+}
+
+/* ---- 8. CreatePseudoConsole flags and the raw tap ---------------------
+ *
+ * Proves two things only: local_pty_open_ex() accepts each of the two flag
+ * values (0 and PSEUDOCONSOLE_RESIZE_QUIRK) -- or the refusal is reported
+ * with a reason and passes, as a missing ConPTY does in case 1 -- and the
+ * raw tap sees the bytes poll() feeds the emulator. It does not prove that
+ * conhost honours the flag; the console probe measures that. */
+int test_local_pty_open_ex_passes_pcon_flags(void)
+{
+    TEST_BEGIN();
+
+    char tmp_dir[MAX_PATH];
+    DWORD tn = GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
+    int tmp_ok = (tn > 0u && tn < sizeof(tmp_dir));
+    if (!tmp_ok) {
+        RPT("  GetTempPathA failed or overflowed (%lu)\n", (unsigned long)tn);
+        ASSERT_TRUE(tmp_ok);
+        TEST_END();
+    }
+    char tap_path[MAX_PATH * 2];
+    (void)snprintf(tap_path, sizeof(tap_path), "%snsprobe_tap_check.bin",
+                   tmp_dir);
+
+    static const unsigned long FLAGS[2] = { 0ul, PSEUDOCONSOLE_RESIZE_QUIRK };
+    for (int f = 0; f < 2; f++) {
+        LocalShellSpec spec;
+        spec_for(&spec, "cmd.exe /c echo nutshell-flags");
+        char err[512];
+        err[0] = '\0';
+        LocalPty *pty = local_pty_open_ex(&spec, 80, 24, 0u, FLAGS[f],
+                                          err, sizeof(err));
+        if (!pty) {
+            RPT("  [skip] flags 0x%lx: local_pty_open_ex failed: %s\n",
+                FLAGS[f], err);
+            int has_reason = (err[0] != '\0');
+            if (!has_reason)
+                RPT("  flags 0x%lx: the open failed with no reason\n", FLAGS[f]);
+            ASSERT_TRUE(has_reason);
+            continue;
+        }
+        FILE *tap = fopen(tap_path, "w+b");
+        if (!tap) {
+            RPT("  flags 0x%lx: cannot create the tap file %s\n", FLAGS[f],
+                tap_path);
+            local_pty_close(pty);
+            ASSERT_NOT_NULL(tap);       /* records the failure; does not return */
+            continue;
+        }
+        local_pty_set_raw_tap(pty, tap);
+
+        Terminal *term = term_init(24, 80, 200);
+        if (!term) {
+            RPT("  flags 0x%lx: term_init failed\n", FLAGS[f]);
+            local_pty_close(pty);
+            fclose(tap);
+            (void)DeleteFileA(tap_path);
+            ASSERT_NOT_NULL(term);      /* records the failure; does not return */
+            continue;
+        }
+        int seen = wait_for_screen(pty, term, "nutshell-flags", 5000);
+        local_pty_close(pty);
+
+        static char raw[65536];
+        (void)fseek(tap, 0L, SEEK_SET);
+        size_t got = fread(raw, 1u, sizeof(raw) - 1u, tap);
+        raw[got] = '\0';
+        fclose(tap);
+        (void)DeleteFileA(tap_path);
+        int in_tap = contains(raw, got, "nutshell-flags");
+        RPT("  [flags 0x%lx] echo %s; tap holds %u bytes%s\n", FLAGS[f],
+            seen ? "seen" : "NOT seen", (unsigned)got,
+            in_tap ? "" : " (marker NOT in the tap)");
+        term_free(term);
+        ASSERT_TRUE(seen);
+        ASSERT_TRUE(in_tap);
+    }
+    TEST_END();
+}
+
+
+/* ---- 9-10. the console probe (resize spec section 0) -------------------
+ *
+ * docs/superpowers/specs/2026-10-18-conpty-resize-anchor-design.md, section
+ * 0 and Tests, "Probe" and "Fixtures". `test_runner.exe --console-probe
+ * <scenario> <dumpfile>` (tests/win_runner.c) runs as the pseudo-console's
+ * own process: it writes a scenario from tests/conpty_expect.c to its
+ * console, puts the cursor where the scenario says, appends dump 0 to the
+ * dump file, and then on each 'D' appends the next dump -- every buffer
+ * row (GetConsoleScreenBufferInfo, ReadConsoleOutputCharacterW) and the
+ * cursor -- and on 'Q' exits. Nothing is typed as a command.
+ *
+ * Dump format, one block per dump, rows trimmed of trailing spaces:
+ *   DUMP <n>
+ *   size=<X>x<Y> window=<left>,<top>,<right>,<bottom> cursor=<row>,<col>
+ *   R<row, 4 digits>|<text>|        (one per buffer row)
+ *   END <n>
+ */
+
+static void probe_write(HANDLE out, const char *text)
+{
+    DWORD wrote = 0;
+    (void)WriteConsoleA(out, text, (DWORD)strlen(text), &wrote, NULL);
+}
+
+static void probe_dump(HANDLE out, const char *path, int n)
+{
+    CONSOLE_SCREEN_BUFFER_INFO bi;
+    if (!GetConsoleScreenBufferInfo(out, &bi)) return;
+    FILE *f = fopen(path, "ab");
+    if (!f) return;
+    fprintf(f, "DUMP %d\n", n);
+    fprintf(f, "size=%dx%d window=%d,%d,%d,%d cursor=%d,%d\n",
+            (int)bi.dwSize.X, (int)bi.dwSize.Y,
+            (int)bi.srWindow.Left, (int)bi.srWindow.Top,
+            (int)bi.srWindow.Right, (int)bi.srWindow.Bottom,
+            (int)bi.dwCursorPosition.Y, (int)bi.dwCursorPosition.X);
+    /* Every buffer row while the buffer is small (under ConPTY it is the
+     * viewport); only the window's rows if it is not. */
+    int first = 0;
+    int last = (int)bi.dwSize.Y - 1;
+    if (bi.dwSize.Y > 200) {
+        first = (int)bi.srWindow.Top;
+        last = (int)bi.srWindow.Bottom;
+    }
+    int width = (int)bi.dwSize.X;
+    if (width > 512) width = 512;
+    for (int y = first; y <= last; y++) {
+        WCHAR wrow[512];
+        char row[513];
+        DWORD got = 0;
+        COORD at;
+        at.X = 0;
+        at.Y = (SHORT)y;
+        if (!ReadConsoleOutputCharacterW(out, wrow, (DWORD)width, at, &got))
+            got = 0;
+        int k = 0;
+        for (DWORD i = 0; i < got && k < 512; i++) {
+            WCHAR w = wrow[i];
+            row[k++] = (w >= 0x20 && w < 0x7F) ? (char)w : (w == 0 ? ' ' : '?');
+        }
+        while (k > 0 && row[k - 1] == ' ') k--;
+        row[k] = '\0';
+        fprintf(f, "R%04d|%s|\n", y, row);
+    }
+    fprintf(f, "END %d\n", n);
+    fclose(f);
+}
+
+/* The probe child: `test_runner.exe --console-probe <scenario> <dumpfile>`
+ * lands here (tests/win_runner.c). Returns 0 on 'Q', 2 for an unknown
+ * scenario, 3 when no 'Q' came within a minute. */
+int nsprobe_console_main(const char *scenario, const char *dump_path)
+{
+    const CpxScenario *s = cpx_scenario_find(scenario);
+    if (!s || !dump_path) return 2;
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    HANDLE in  = GetStdHandle(STD_INPUT_HANDLE);
+    /* No processed, line or echo input: 'D' and 'Q' are plain keys. */
+    (void)SetConsoleMode(in, ENABLE_EXTENDED_FLAGS);
+
+    for (int i = 0; i < s->line_count; i++) {
+        if (i > 0) probe_write(out, "\r\n");
+        probe_write(out, s->lines[i]);
+    }
+    /* The cursor where the scenario puts it -- for shrink_below, back up
+     * above the content written below it. */
+    CpxView v;
+    if (cpx_initial_view(s, &v) == 0) {
+        CONSOLE_SCREEN_BUFFER_INFO bi;
+        if (GetConsoleScreenBufferInfo(out, &bi)) {
+            COORD at;
+            at.X = (SHORT)v.cursor_col;
+            at.Y = (SHORT)(bi.srWindow.Top + v.cursor_row);
+            (void)SetConsoleCursorPosition(out, at);
+        }
+    }
+
+    int dumps = 0;
+    probe_dump(out, dump_path, dumps++);   /* dump 0: the ready signal */
+
+    ULONGLONG deadline = GetTickCount64() + 60000u;
+    while (GetTickCount64() < deadline) {
+        if (WaitForSingleObject(in, 200u) != WAIT_OBJECT_0) continue;
+        INPUT_RECORD rec[16];
+        DWORD n = 0;
+        if (!ReadConsoleInputW(in, rec, 16u, &n)) break;
+        for (DWORD i = 0; i < n; i++) {
+            if (rec[i].EventType != KEY_EVENT) continue;
+            if (!rec[i].Event.KeyEvent.bKeyDown) continue;
+            WCHAR ch = rec[i].Event.KeyEvent.uChar.UnicodeChar;
+            if (ch == L'D') probe_dump(out, dump_path, dumps++);
+            else if (ch == L'Q') return 0;
+        }
+    }
+    return 3;
+}
+
+/* The size= line of the last dump probe_read_dump() completed: the screen
+ * buffer's size and the window rectangle, which CpxView (the window only)
+ * does not carry. A buffer taller than its window means the buffer is not
+ * the viewport. */
+static struct {
+    int buf_cols, buf_rows;
+    int win_left, win_top, win_right, win_bottom;
+    int cursor_row, cursor_col;      /* buffer coordinates */
+} probe_geom;
+
+/* Dump n from the probe's file: the window's rows into view, the cursor
+ * relative to the window's top. Returns 1 once that dump is complete. */
+static int probe_read_dump(const char *path, int n, CpxView *view)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    char head[32];
+    (void)snprintf(head, sizeof(head), "DUMP %d", n);
+    char line[600];
+    int in_dump = 0, done = 0;
+    int bx = 0, by = 0, wl = 0, wt = 0, wr = 0, wb = 0, cy = 0, cx = 0;
+    memset(view, 0, sizeof(*view));
+    while (fgets(line, (int)sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (!in_dump) {
+            if (strcmp(line, head) == 0) in_dump = 1;
+            continue;
+        }
+        if (strncmp(line, "size=", 5) == 0) {
+            if (sscanf(line, "size=%dx%d window=%d,%d,%d,%d cursor=%d,%d",
+                       &bx, &by, &wl, &wt, &wr, &wb, &cy, &cx) != 8) break;
+            view->rows = wb - wt + 1;
+            view->cols = wr - wl + 1;
+            view->cursor_row = cy - wt;
+            view->cursor_col = cx;
+            continue;
+        }
+        if (line[0] == 'R') {
+            char *bar = strchr(line, '|');
+            char *end = strrchr(line, '|');
+            if (!bar || end == bar) continue;
+            *end = '\0';
+            int vr = atoi(line + 1) - wt;
+            if (vr >= 0 && vr < view->rows && vr < CPX_MAX_ROWS)
+                (void)snprintf(view->text[vr], sizeof(view->text[vr]),
+                               "%.80s", bar + 1);
+            continue;
+        }
+        if (strncmp(line, "END ", 4) == 0) {
+            done = (atoi(line + 4) == n);
+            if (done) {
+                probe_geom.buf_cols = bx;
+                probe_geom.buf_rows = by;
+                probe_geom.win_left = wl;
+                probe_geom.win_top = wt;
+                probe_geom.win_right = wr;
+                probe_geom.win_bottom = wb;
+                probe_geom.cursor_row = cy;
+                probe_geom.cursor_col = cx;
+            }
+            break;
+        }
+    }
+    fclose(f);
+    return done;
+}
+
+static int probe_wait_dump(const char *path, int n, CpxView *view, int ms)
+{
+    for (int waited = 0; waited <= ms; waited += 50) {
+        if (probe_read_dump(path, n, view)) return 1;
+        Sleep(50);
+    }
+    return 0;
+}
+
+/* The probe child's command line, for spec_for(). */
+static void probe_command(char *out, size_t out_size, const char *scenario,
+                          const char *dump_path)
+{
+    char self[MAX_PATH];
+    (void)GetModuleFileNameA(NULL, self, (DWORD)sizeof(self));
+    (void)snprintf(out, out_size, "\"%s\" --console-probe %s \"%s\"", self,
+                   scenario, dump_path);
+}
+
+/* The model's screen in the same shape as a dump, so the two compare. */
+static void model_view(const Terminal *term, CpxView *v)
+{
+    memset(v, 0, sizeof(*v));
+    v->rows = term->rows < CPX_MAX_ROWS ? term->rows : CPX_MAX_ROWS;
+    v->cols = term->cols;
+    v->cursor_row = term->cursor.row;
+    v->cursor_col = term->cursor.col;
+    for (int r = 0; r < v->rows; r++) {
+        const TermRow *row = term->lines[term_screen_to_phys(term, r)];
+        int n = row->len < term->cols ? row->len : term->cols;
+        if (n > CPX_MAX_COLS) n = CPX_MAX_COLS;
+        int k = 0;
+        for (int c = 0; c < n; c++) {
+            uint32_t cp = row->cells[c].codepoint;
+            v->text[r][k++] = (cp >= 0x20u && cp < 0x7Fu) ? (char)cp
+                            : (cp == 0u ? ' ' : '?');
+        }
+        while (k > 0 && v->text[r][k - 1] == ' ') k--;
+        v->text[r][k] = '\0';
+    }
+}
+
+/* The geometry of the dump probe_wait_dump() just read, labelled so the
+ * report can answer "is conhost's buffer the viewport?":
+ *   [who] dump N: conhost buffer=40x12 window=40x12 (rect 0,0,39,11) ... */
+static void report_geometry(const char *who, int n)
+{
+    RPT("  [%s] dump %d: conhost buffer=%dx%d window=%dx%d "
+        "(rect left=%d top=%d right=%d bottom=%d) cursor=%d,%d\n", who, n,
+        probe_geom.buf_cols, probe_geom.buf_rows,
+        probe_geom.win_right - probe_geom.win_left + 1,
+        probe_geom.win_bottom - probe_geom.win_top + 1,
+        probe_geom.win_left, probe_geom.win_top, probe_geom.win_right,
+        probe_geom.win_bottom, probe_geom.cursor_row, probe_geom.cursor_col);
+}
+
+/* Print two views side by side; returns cpx_view_diff(). */
+static int report_views(const char *who, const char *label,
+                        const CpxView *want, const CpxView *got)
+{
+    int diff = cpx_view_diff(want, got);
+    RPT("  [%s] %s: %s (%d difference%s)\n", who, label,
+        diff ? "DISAGREES" : "AGREES", diff, diff == 1 ? "" : "s");
+    int rows = want->rows > got->rows ? want->rows : got->rows;
+    if (rows > CPX_MAX_ROWS) rows = CPX_MAX_ROWS;
+    for (int r = 0; r < rows; r++) {
+        const char *a = (r < want->rows) ? want->text[r] : "";
+        const char *b = (r < got->rows) ? got->text[r] : "";
+        RPT("    %c %2d want |%s| got |%s|\n", strcmp(a, b) ? '*' : ' ', r,
+            a, b);
+    }
+    RPT("    %c cursor want %d,%d got %d,%d; size want %dx%d got %dx%d\n",
+        (want->cursor_row != got->cursor_row ||
+         want->cursor_col != got->cursor_col) ? '*' : ' ',
+        want->cursor_row, want->cursor_col, got->cursor_row, got->cursor_col,
+        want->cols, want->rows, got->cols, got->rows);
+    return diff;
+}
+
+/* 9. The probe child runs under a pseudo-console, writes its scenario, and
+ * its dump 0 reads back at the size it was opened at, with the text the
+ * scenario wrote. */
+int test_local_pty_console_probe_dumps(void)
+{
+    TEST_BEGIN();
+    const CpxScenario *s = cpx_scenario_find("grow");
+    if (!s) RPT("  [probe] scenario \"grow\" not found\n");
+    ASSERT_NOT_NULL(s);
+    if (!s) TEST_END();
+
+    char tmp_dir[MAX_PATH];
+    DWORD tn = GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
+    int tmp_ok = (tn > 0u && tn < sizeof(tmp_dir));
+    if (!tmp_ok) RPT("  [probe] GetTempPathA failed\n");
+    ASSERT_TRUE(tmp_ok);
+    if (!tmp_ok) TEST_END();
+    char dump_path[MAX_PATH * 2];
+    (void)snprintf(dump_path, sizeof(dump_path), "%snsprobe_smoke.txt",
+                   tmp_dir);
+    (void)DeleteFileA(dump_path);
+
+    char cmd[MAX_PATH * 6];
+    probe_command(cmd, sizeof(cmd), s->name, dump_path);
+    LocalShellSpec spec;
+    spec_for(&spec, cmd);
+    char err[512];
+    err[0] = '\0';
+    LocalPty *pty = local_pty_open_ex(&spec, s->old_cols, s->old_rows, 0u,
+                                      0ul, err, sizeof(err));
+    if (!pty) {
+        RPT("  [skip] local_pty_open_ex failed: %s\n", err);
+        ASSERT_TRUE(err[0] != '\0');
+        TEST_END();
+    }
+    Terminal *term = term_init(s->old_rows, s->old_cols, 500);
+    if (!term) {
+        RPT("  [probe] term_init failed\n");
+        ASSERT_NOT_NULL(term);
+        (void)local_pty_write(pty, "Q", 1);
+        local_pty_close(pty);
+        (void)DeleteFileA(dump_path);
+        TEST_END();
+    }
+
+    CpxView got, want, model;
+    int ok = probe_wait_dump(dump_path, 0, &got, 10000);
+    if (!ok) RPT("  [probe] dump 0 never appeared in %s\n", dump_path);
+    ASSERT_TRUE(ok);
+    drain(pty, term, 800);
+    int have_want = cpx_initial_view(s, &want);
+    if (have_want != 0) RPT("  [probe] cpx_initial_view failed (%d)\n", have_want);
+    ASSERT_EQ(have_want, 0);
+    if (ok) {
+        if (got.rows != s->old_rows || got.cols != s->old_cols)
+            RPT("  [probe] dump 0 is %dx%d, opened at %dx%d\n", got.cols,
+                got.rows, s->old_cols, s->old_rows);
+        ASSERT_EQ(got.rows, s->old_rows);
+        ASSERT_EQ(got.cols, s->old_cols);
+        int found = 0;
+        for (int r = 0; r < got.rows; r++)
+            if (strcmp(got.text[r], "<20> alpha") == 0) found = 1;
+        if (!found) RPT("  [probe] dump 0 has no row \"<20> alpha\"\n");
+        ASSERT_TRUE(found);
+        if (have_want == 0)
+            (void)report_views("smoke", "dump 0: conhost vs scenario layout",
+                               &want, &got);
+        model_view(term, &model);
+        (void)report_views("smoke", "dump 0: conhost vs model", &model, &got);
+    }
+
+    (void)local_pty_write(pty, "Q", 1);
+    drain(pty, term, 300);
+    local_pty_close(pty);
+    term_free(term);
+    (void)DeleteFileA(dump_path);
+    TEST_END();
+}
+
+/* ---- 10. resize parity: conhost's own buffer against the spec's rule ----
+ *
+ * For each scenario, opened once with flags 0 (what local_pty_open() passes
+ * today) and once with PSEUDOCONSOLE_RESIZE_QUIRK:
+ *   - drain the scenario into a Terminal at the old size;
+ *   - term_resize() and local_pty_resize() to the new size;
+ *   - snapshot the model BEFORE draining ConPTY's post-resize bytes, and
+ *     check the resize kept every scenario line in scrollback plus screen
+ *     as often as before (exactly once, on Windows);
+ *   - send 'D' and compare conhost's dump with the spec's section 1.3
+ *     prediction (tests/conpty_expect.c) and with the model snapshot;
+ *   - drain and print the raw post-resize bytes.
+ * Section 1 (top mode) is not built yet, so the model is today's
+ * bottom-anchored one: what it is compared against is the rule, computed
+ * from the scenario text. The comparisons are the report, printed and not
+ * asserted -- like cases 4-7, they are facts about this Windows build.
+ *
+ * NSPROBE_RECORD=1 in the environment (on Windows, never under Wine) also
+ * writes tests/fixtures/conpty_resize_<scenario>.bin from the flags-0 run:
+ * every byte poll() drained, with \e]9999;resize=COLSxROWS\a where the
+ * resize was made. */
+
+/* Wine's ntdll exports wine_get_version; Windows's does not. Under Wine
+ * the probe's conhost results are Wine's, so they are printed, never taken
+ * as the report, and no fixture is recorded from them. */
+static int running_under_wine(void)
+{
+    HMODULE nt = GetModuleHandleA("ntdll.dll");
+    if (!nt) return 0;
+    FARPROC fn = GetProcAddress(nt, "wine_get_version");
+    return fn ? 1 : 0;
+}
+
+static int count_in(const char *hay, const char *needle)
+{
+    int count = 0;
+    size_t nl = strlen(needle);
+    if (nl == 0u) return 0;
+    for (const char *p = strstr(hay, needle); p; p = strstr(p + nl, needle))
+        count++;
+    return count;
+}
+
+/* Every logical line the model holds, scrollback and screen, one per text
+ * line (wrapped rows joined). term_logical_rows(), not lines_count: right
+ * after a resize the screen's rows are real before they are committed. */
+static void model_history(const Terminal *term, char *out, size_t out_size)
+{
+    size_t n = 0u;
+    int total = term_logical_rows(term);
+    for (int i = 0; i < total; i++) {
+        const TermRow *row =
+            term->lines[(term->lines_start + i) % term->lines_capacity];
+        if (i > 0 && !row->wrapped && n + 1u < out_size) out[n++] = '\n';
+        int len = row->len < term->cols ? row->len : term->cols;
+        for (int c = 0; c < len && n + 1u < out_size; c++) {
+            uint32_t cp = row->cells[c].codepoint;
+            out[n++] = (cp >= 0x20u && cp < 0x7Fu) ? (char)cp : ' ';
+        }
+    }
+    out[n] = '\0';
+}
+
+static void count_tags(const CpxScenario *s, const Terminal *term,
+                       int counts[CPX_MAX_LINES])
+{
+    static char hist[65536];
+    model_history(term, hist, sizeof(hist));
+    for (int i = 0; i < s->line_count; i++) {
+        char tag[16];
+        counts[i] = (cpx_tag(s->lines[i], tag, sizeof(tag)) > 0u)
+                  ? count_in(hist, tag) : -1;
+    }
+}
+
+/* Copy the first `limit` bytes of the tap file to path (the fixture): the
+ * stream up to the end of the post-resize drain, nothing emitted after it.
+ * Returns 1 on success, 0 on a stream error, a short read or write, or a
+ * limit the tap does not reach; a partly written file is deleted. */
+static int copy_tap(FILE *tap, const char *path, long limit)
+{
+    char buf[8192];
+    if (limit < 0L || ferror(tap)) return 0;
+    if (fflush(tap) != 0 || fseek(tap, 0L, SEEK_SET) != 0) return 0;
+    FILE *out = fopen(path, "wb");
+    if (!out) return 0;
+    int ok = 1;
+    size_t left = (size_t)limit;
+    while (left > 0u) {
+        size_t want = (left < sizeof(buf)) ? left : sizeof(buf);
+        size_t got = fread(buf, 1u, want, tap);
+        if (got == 0u) { ok = 0; break; }
+        if (fwrite(buf, 1u, got, out) != got) { ok = 0; break; }
+        left -= got;
+    }
+    if (ferror(tap)) ok = 0;
+    if (fclose(out) != 0) ok = 0;
+    (void)fseek(tap, 0L, SEEK_END);
+    if (!ok) (void)DeleteFileA(path);
+    return ok;
+}
+
+/* One scenario under one flag set. Returns 0, or 1 when a check failed. */
+static int probe_scenario(const CpxScenario *s, unsigned long flags,
+                          int on_wine, int record)
+{
+    int _tf_local_fail = 0;
+    char who[64];
+    (void)snprintf(who, sizeof(who), "%s/%s", s->name,
+                   flags ? "quirk" : "flags0");
+
+    char tmp_dir[MAX_PATH];
+    DWORD tn = GetTempPathA((DWORD)sizeof(tmp_dir), tmp_dir);
+    if (tn == 0u || tn >= sizeof(tmp_dir)) {
+        RPT("  [%s] no temp directory\n", who);
+        return 1;
+    }
+    /* Names unique per run: a stale dump from an aborted earlier run (an
+     * orphaned child still writing) can never be mistaken for this run's. */
+    char dump_path[MAX_PATH * 2], tap_path[MAX_PATH * 2];
+    unsigned long pid = (unsigned long)GetCurrentProcessId();
+    (void)snprintf(dump_path, sizeof(dump_path), "%snsprobe_%s_%lu_%lu.txt",
+                   tmp_dir, s->name, flags, pid);
+    (void)snprintf(tap_path, sizeof(tap_path), "%snsprobe_%s_%lu_%lu.bin",
+                   tmp_dir, s->name, flags, pid);
+    (void)DeleteFileA(dump_path);
+
+    char cmd[MAX_PATH * 6];
+    probe_command(cmd, sizeof(cmd), s->name, dump_path);
+    LocalShellSpec spec;
+    spec_for(&spec, cmd);
+    char err[512];
+    err[0] = '\0';
+    LocalPty *pty = local_pty_open_ex(&spec, s->old_cols, s->old_rows, 0u,
+                                      flags, err, sizeof(err));
+    if (!pty) {
+        RPT("  [%s] [skip] local_pty_open_ex failed: %s\n", who, err);
+        ASSERT_TRUE(err[0] != '\0');
+        return _tf_local_fail;
+    }
+    FILE *tap = fopen(tap_path, "w+b");
+    if (tap) local_pty_set_raw_tap(pty, tap);
+    else RPT("  [%s] could not create the raw tap %s\n", who, tap_path);
+    if (!tap && record && flags == 0ul) {
+        /* The recording cannot be made: that is a failure, not a skip. */
+        local_pty_close(pty);
+        (void)DeleteFileA(dump_path);
+        return 1;
+    }
+    Terminal *term = term_init(s->old_rows, s->old_cols, 500);
+    if (!term) {
+        RPT("  [%s] term_init failed\n", who);
+        local_pty_close(pty);
+        if (tap) { fclose(tap); (void)DeleteFileA(tap_path); }
+        (void)DeleteFileA(dump_path);
+        return 1;
+    }
+
+    /* The scenario, drained at the old size. */
+    static CpxView want0, got0, want1, got1, model1, model2;
+    int ok0 = probe_wait_dump(dump_path, 0, &got0, 10000);
+    if (!ok0) RPT("  [%s] dump 0 never appeared in %s\n", who, dump_path);
+    ASSERT_TRUE(ok0);
+    if (ok0) report_geometry(who, 0);
+    drain(pty, term, 800);
+    if (ok0 && cpx_initial_view(s, &want0) == 0)
+        (void)report_views(who, "before the resize: conhost vs scenario layout",
+                           &want0, &got0);
+    int before[CPX_MAX_LINES], after[CPX_MAX_LINES];
+    count_tags(s, term, before);
+
+    /* The resize, with the in-band marker where it was made. */
+    long repaint_at = -1L;
+    if (tap) {
+        char mark[64];
+        int mn = snprintf(mark, sizeof(mark), "\x1b]9999;resize=%dx%d\x07",
+                          s->new_cols, s->new_rows);
+        if (mn > 0) (void)fwrite(mark, 1u, (size_t)mn, tap);
+        (void)fflush(tap);
+        repaint_at = ftell(tap);
+    }
+    term_resize(term, s->new_rows, s->new_cols);
+    int resized = local_pty_resize(pty, s->new_cols, s->new_rows);
+    if (resized != 0)
+        RPT("  [%s] local_pty_resize returned %d%s\n", who, resized,
+            on_wine ? " (Wine's ResizePseudoConsole fails)" : "");
+    if (!on_wine) ASSERT_EQ(resized, 0);
+
+    /* The model before ConPTY's post-resize bytes reach it. */
+    model_view(term, &model1);
+    count_tags(s, term, after);
+    for (int i = 0; i < s->line_count; i++) {
+        if (before[i] < 0) continue;
+        int bad = (after[i] != before[i]) || (!on_wine && after[i] != 1);
+        if (bad)
+            RPT("  [%s] line %d (%s): %d before the resize, %d after\n", who,
+                i, s->lines[i], before[i], after[i]);
+        ASSERT_EQ(after[i], before[i]);
+        if (!on_wine) ASSERT_EQ(after[i], 1);
+    }
+
+    /* conhost's buffer after the resize: retried until the dump shows the
+     * new size, since ResizePseudoConsole and the 'D' key travel different
+     * pipes. */
+    int ok1 = 0, n = 1;
+    for (int attempt = 0; attempt < 5 && !ok1; attempt++) {
+        Sleep(300);
+        (void)local_pty_write(pty, "D", 1);
+        if (!probe_wait_dump(dump_path, n, &got1, 3000)) break;
+        report_geometry(who, n);
+        n++;
+        ok1 = (got1.rows == s->new_rows && got1.cols == s->new_cols);
+    }
+    if (!ok1) {
+        RPT("  [%s] conhost's dump never showed %dx%d (last read: %dx%d)%s\n",
+            who, s->new_cols, s->new_rows, got1.cols, got1.rows,
+            on_wine ? " -- Wine does not resize its conhost; nothing to "
+                      "compare" : "");
+        if (!on_wine) ASSERT_TRUE(ok1);
+    } else {
+        int rule = -1;
+        if (cpx_expected_after(s, &want1) == 0)
+            rule = report_views(who,
+                "after the resize: conhost vs spec section 1.3 (top-anchored)",
+                &want1, &got1);
+        int model = report_views(who,
+            "after the resize: conhost vs today's model before its repaint",
+            &model1, &got1);
+        RPT("  [%s] VERDICT rule=%s model=%s\n", who,
+            rule == 0 ? "AGREES" : (rule < 0 ? "N/A" : "DISAGREES"),
+            model == 0 ? "AGREES" : "DISAGREES");
+    }
+
+    /* ConPTY's post-resize bytes: is there a full repaint, and are
+     * soft-wrapped rows sent without \r\n? */
+    drain(pty, term, 1000);
+    /* The fixture ends here, at the end of the post-resize drain. */
+    long fixture_end = -1L;
+    if (tap) {
+        (void)fflush(tap);
+        fixture_end = ftell(tap);
+    }
+    if (tap && repaint_at >= 0L) {
+        static char raw[65536];
+        long end = fixture_end;
+        size_t want_len = (end > repaint_at) ? (size_t)(end - repaint_at) : 0u;
+        if (want_len > sizeof(raw)) want_len = sizeof(raw);
+        size_t got = 0u;
+        if (fseek(tap, repaint_at, SEEK_SET) == 0)
+            got = fread(raw, 1u, want_len, tap);
+        (void)fseek(tap, 0L, SEEK_END);
+        char label[96];
+        (void)snprintf(label, sizeof(label), "%s post-resize bytes", who);
+        print_escaped(label, raw, got);
+    }
+    if (ok1) {
+        model_view(term, &model2);
+        (void)report_views(who, "after the repaint: conhost vs the model",
+                           &model2, &got1);
+    }
+
+    (void)local_pty_write(pty, "Q", 1);
+    drain(pty, term, 300);
+    local_pty_close(pty);
+
+    if (tap) {
+        if (record && flags == 0ul) {
+            char fixture[128];
+            (void)snprintf(fixture, sizeof(fixture),
+                           "tests/fixtures/conpty_resize_%s.bin", s->name);
+            /* Only a run that passed leaves a fixture: no failure so far,
+             * the dump showed the new size, the resize call returned 0. */
+            int passed = (_tf_local_fail == 0 && ok1 && resized == 0);
+            int wrote = passed && copy_tap(tap, fixture, fixture_end);
+            if (wrote)
+                RPT("  [%s] fixture %s: written\n", who, fixture);
+            else
+                RPT("  [%s] fixture %s: NOT written (a check failed)\n", who,
+                    fixture);
+            ASSERT_TRUE(wrote);
+        }
+        fclose(tap);
+        (void)DeleteFileA(tap_path);
+    }
+    (void)DeleteFileA(dump_path);
+    term_free(term);
+    return _tf_local_fail;
+}
+
+int test_local_pty_resize_parity(void)
+{
+    TEST_BEGIN();
+    int on_wine = running_under_wine();
+    char rec[8];
+    DWORD rn = GetEnvironmentVariableA("NSPROBE_RECORD", rec,
+                                       (DWORD)sizeof(rec));
+    int record = (rn > 0u && rn < sizeof(rec) && rec[0] == '1') ? 1 : 0;
+    if (on_wine) {
+        RPT("  [host] Wine: the conhost results below are Wine's, not "
+            "Windows's -- not the report; no fixture is recorded\n");
+        record = 0;
+    }
+    static const unsigned long FLAGS[2] = { 0ul, PSEUDOCONSOLE_RESIZE_QUIRK };
+    for (int i = 0; i < cpx_scenario_count(); i++) {
+        for (int f = 0; f < 2; f++) {
+            /* One call: ASSERT_EQ evaluates its operands again to print. */
+            int rc = probe_scenario(cpx_scenario_at(i), FLAGS[f], on_wine,
+                                    record);
+            if (rc != 0)
+                RPT("  [%s/%s] a check failed (see above)\n",
+                    cpx_scenario_at(i)->name, f ? "quirk" : "flags0");
+            ASSERT_EQ(rc, 0);
+        }
     }
     TEST_END();
 }

@@ -117,6 +117,7 @@ struct LocalPty {
                              * local_pty_poll() once it has logged this once
                              * (diagnostics only).                            */
     unsigned log_id;       /* the session's debug-log id; 0 = none            */
+    FILE   *raw_tap;       /* local_pty_set_raw_tap(); NULL = none            */
 };
 
 /* ---- log helpers -------------------------------------------------------- */
@@ -321,11 +322,12 @@ static void set_err_code(char *err, size_t err_size, const char *text,
 LocalPty *local_pty_open(const LocalShellSpec *spec, int cols, int rows,
                          char *err, size_t err_size)
 {
-    return local_pty_open_ex(spec, cols, rows, 0u, err, err_size);
+    return local_pty_open_ex(spec, cols, rows, 0u, 0ul, err, err_size);
 }
 
 LocalPty *local_pty_open_ex(const LocalShellSpec *spec, int cols, int rows,
-                            unsigned log_id, char *err, size_t err_size)
+                            unsigned log_id, unsigned long pcon_flags,
+                            char *err, size_t err_size)
 {
     if (err && err_size > 0u) err[0] = '\0';
 
@@ -392,7 +394,8 @@ LocalPty *local_pty_open_ex(const LocalShellSpec *spec, int cols, int rows,
         COORD size;
         size.X = (SHORT)p->want_cols;
         size.Y = (SHORT)p->want_rows;
-        HRESULT hr = g_create_pcon(size, in_read, out_write, 0, &p->hpc);
+        HRESULT hr = g_create_pcon(size, in_read, out_write,
+                                   (DWORD)pcon_flags, &p->hpc);
         if (FAILED(hr) || !p->hpc) {
             set_err_code(err, err_size, "Could not open a pseudo-console",
                          (DWORD)hr);
@@ -569,6 +572,10 @@ int local_pty_poll(void *ctx, Terminal *term, FILE *log_file)
         LeaveCriticalSection(&p->cs);
 
         if (got > 0u) {
+            if (p->raw_tap) {
+                (void)fwrite(buf, 1u, got, p->raw_tap);
+                (void)fflush(p->raw_tap);
+            }
             term_process(term, buf, got);
             log_chunk(log_file, buf, got);
             DLOG_CONTENT(DLOG_TERM, DLOG_TRACE, term->log_id, "term.rx", "data",
@@ -762,6 +769,11 @@ long local_pty_exit_code(const LocalPty *pty)
     DWORD code = 0;
     if (!GetExitCodeProcess(pty->proc, &code) || code == STILL_ACTIVE) return -1;
     return (long)code;
+}
+
+void local_pty_set_raw_tap(LocalPty *pty, FILE *tap)
+{
+    if (pty) pty->raw_tap = tap;
 }
 
 size_t local_pty_first_bytes(const LocalPty *pty, char *out, size_t out_size)
