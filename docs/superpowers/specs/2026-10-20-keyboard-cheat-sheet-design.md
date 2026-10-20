@@ -1,7 +1,7 @@
 # Keyboard shortcuts cheat sheet
 
 **Date**: 2026-10-20 (revised twice the same day after critique rounds 1 and 2)
-**Status**: DRAFT, for the maintainer's review
+**Status**: APPROVED by the maintainer on 2026-10-20 ("Decisions look good. Proceed"): the full list, scrolling when it must; no chord for the sheet; the Mouse section stays.
 **Branch**: `feat/putty-selection` (ships with the selection change, same
 pull request; only the † rows depend on it)
 **Asked for by the maintainer**: "a 1 page keyboard cheat sheet in the help

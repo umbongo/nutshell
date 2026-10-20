@@ -1,7 +1,7 @@
 # Terminal selection and copy, PuTTY style
 
 **Date**: 2026-10-20 (revised twice the same day after critique rounds 1 and 2)
-**Status**: DRAFT, for the maintainer's review
+**Status**: APPROVED by the maintainer on 2026-10-20 ("Decisions look good. Proceed"): Ctrl+C always interrupts; the scrollback-size setting is a separate change.
 **Branch**: `feat/putty-selection`
 **Decided by the maintainer**: "Have it behave like PuTTY"; include double-click
 word and triple-click line selection; not Shift+click extend or Alt+drag blocks;
