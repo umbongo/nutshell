@@ -4,7 +4,8 @@
 **Status**: APPROVED by the maintainer on 2026-10-20 ("Decisions look good. Proceed"): Ctrl+C always interrupts; the scrollback-size setting is a separate change.
 **Branch**: `feat/putty-selection`
 **Decided by the maintainer**: "Have it behave like PuTTY"; include double-click
-word and triple-click line selection; not Shift+click extend or Alt+drag blocks;
+word and triple-click line selection; not Shift+click extend or Alt+drag blocks
+(Shift+click extend is superseded by the amendment of 2026-10-20 after section 1);
 Confirm Paste proceeds on Enter.
 **Proposed after critique, the maintainer's defaults unless overruled**
 (section 6): Ctrl+C always interrupts; the scrollback-size setting is a
@@ -97,6 +98,25 @@ reads the clipboard back.
 - **Right-click pastes**, unchanged.
 - **Confirm Paste** (section 3.5): Paste has focus when the dialog opens,
   Enter pastes, Tab moves between Paste and Cancel, Escape cancels.
+
+### Amendment, 2026-10-20 (the selection follow-ups, branch `feat/selection-extend`)
+
+The maintainer then asked for more of PuTTY. This amendment supersedes the
+original decision above not to extend with Shift+click, and the "Shift+click
+to extend" and "middle-button paste" lines of section 4 where they say the
+middle button does not extend:
+
+- **Shift+click and middle-click extend the selection** (PuTTY's which-end
+  rule): a click before the start moves the start, after the end moves the
+  end, inside moves the nearer end (nearer by line, then by column; a tie
+  moves the end). The selection keeps its mode, so a word or line selection
+  extends by whole words or lines, and the drag is live again. With no
+  selection it is an ordinary press.
+- **The click cycle is 1, 2, 3, 1, ...** by time and rectangle, whichever
+  message Windows delivers the press as: a fourth rapid click selects a cell
+  again.
+- **A combining mark joins the cell before it** for word selection, so a
+  decomposed accented word is one word.
 
 ## 2. Design
 
@@ -380,7 +400,9 @@ meaning in the dialog.
 
 ## 4. Out of scope, recorded on the notes open list
 
-Shift+click to extend; Alt+drag block selection; middle-button paste; mouse
+Shift+click to extend (superseded, see the amendment after section 1);
+Alt+drag block selection; middle-button paste (the middle button extends
+instead, same amendment); mouse
 reporting to applications; the per-byte paste writes over SSH; the
 scrollback-size setting (section 6); a narrowing reflow of a full ring
 drops the newest rows rather than the oldest (`buffer.c:142, 165`,
