@@ -116,10 +116,11 @@ static void sel_unit(const Selection *s, const Terminal *t, SelPoint p,
 
 /* ---- write stamps (spec section 2.3) ------------------------------------ */
 
-/* Wrap-safe: write_gen is a 32-bit counter that wraps after 2^32 writes. */
-static bool sel_gen_newer(uint32_t row_gen, uint32_t sel_gen)
+/* write_gen is a 64-bit counter: it does not wrap in practice, so a plain
+ * compare is correct (a 32-bit one misjudged rows stamped 0 by reflow). */
+static bool sel_gen_newer(uint64_t row_gen, uint64_t sel_gen)
 {
-    return (int32_t)(row_gen - sel_gen) > 0;
+    return row_gen > sel_gen;
 }
 
 /* Was any selected row written after the selection's stamp? */

@@ -22,7 +22,8 @@ typedef struct {
     SelPoint anchor, anchor_end; /* the unit under the press (a cell for STREAM) */
     SelPoint start, end;         /* normalised, both inclusive */
     SelMode  mode;
-    uint32_t epoch, gen;         /* the terminal's at the last change */
+    uint32_t epoch;              /* the terminal's at the last change */
+    uint64_t gen;                /* the terminal's write_gen at the last change */
     bool     active;             /* button held */
     bool     valid;              /* a non-empty selection exists */
     int      press_x, press_y;   /* client pixels of the press, drag threshold */

@@ -807,8 +807,8 @@ int test_sel_sync_ignores_writes_elsewhere(void)
     TEST_END();
 }
 
-/* Review Focus 3: write_gen is 32 bits and wraps; the stamp compare must
- * not mistake an old row for a new one across the wrap, or the reverse. */
+/* write_gen is 64 bits. Crossing 2^32, the old 32-bit wrap point, must not
+ * make an old row look new, nor hide a write into the selection. */
 int test_sel_stamps_survive_counter_wrap(void)
 {
     TEST_BEGIN();
@@ -817,8 +817,8 @@ int test_sel_stamps_survive_counter_wrap(void)
     feed(t, "one\r\ntwo");
     Selection s;
     ASSERT_TRUE(drag(&s, t, 0, 0, 1, 9));
-    for (int i = 0; i < 40; i++) feed(t, "\x1b[4;1HZ");  /* elsewhere; the counter wraps */
-    ASSERT_TRUE(t->write_gen < 0x100u);
+    for (int i = 0; i < 40; i++) feed(t, "\x1b[4;1HZ");  /* elsewhere; crosses 2^32 */
+    ASSERT_TRUE(t->write_gen > 0xFFFFFFFFull);
     ASSERT_FALSE(selection_sync(&s, t));
     ASSERT_TRUE(s.valid);
     ASSERT_TRUE(selection_contains(&s, t, 0, 0));
@@ -826,6 +826,30 @@ int test_sel_stamps_survive_counter_wrap(void)
     ASSERT_FALSE(selection_contains(&s, t, 0, 0));
     ASSERT_TRUE(selection_sync(&s, t));
     ASSERT_FALSE(s.valid);
+    term_free(t);
+    TEST_END();
+}
+
+/* Regression: rows made by reflow carry stamp 0. With a 32-bit counter past
+ * 2^31 every such row compared as newer than any selection, so a fresh
+ * selection was stale at once. */
+int test_sel_reflowed_rows_not_stale_at_high_counter(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 10);
+    feed(t, "one\r\ntwo\r\nthree");
+    t->write_gen = 0x80000010u;
+    term_resize(t, 6, 10);                        /* reflow: rows with gen 0, text now at rows 3-5 */
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 3, 0, 4, 9));
+    ASSERT_TRUE(selection_contains(&s, t, 3, 0));
+    ASSERT_TRUE(selection_contains(&s, t, 4, 0));
+    feed(t, "\x1b[1;1HZ");                        /* a write elsewhere */
+    ASSERT_FALSE(selection_sync(&s, t));
+    ASSERT_TRUE(s.valid);
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "one\r\ntwo");
+    free(txt);
     term_free(t);
     TEST_END();
 }

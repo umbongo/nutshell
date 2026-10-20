@@ -1405,7 +1405,7 @@ static TermRow *logical_row(Terminal *t, int logical)
 /* Bit r set when screen row r's stamp changed while `seq` was processed. */
 static unsigned stamp_mask(Terminal *t, const char *seq)
 {
-    uint32_t before[16];
+    uint64_t before[16];
     for (int r = 0; r < t->rows; r++) before[r] = t->lines[term_screen_to_phys(t, r)]->gen;
     term_process(t, seq, strlen(seq));
     unsigned mask = 0;
@@ -1533,7 +1533,7 @@ int test_term_stamp_full_screen_scroll_touches_only_the_new_row(void)
     Terminal *t = term_init(8, 10, 20);
     term_process(t, "A\r\nB\r\nC", 7);
     int n = t->lines_count;
-    uint32_t before[8];
+    uint64_t before[8];
     for (int i = 0; i < n; i++) before[i] = logical_row(t, i)->gen;
     term_process(t, "\x1b[S", 3);                /* SU on the primary: term_scroll() */
     ASSERT_EQ(t->lines_count, n + 1);

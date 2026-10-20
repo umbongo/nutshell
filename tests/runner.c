@@ -1951,6 +1951,7 @@ int test_sel_recycled_anchor_cannot_return(void);
 int test_sel_wholly_recycled_clears(void);
 int test_sel_sync_ignores_writes_elsewhere(void);
 int test_sel_stamps_survive_counter_wrap(void);
+int test_sel_reflowed_rows_not_stale_at_high_counter(void);
 
 /* test_ui_theme.c */
 int test_ui_theme_count(void);
@@ -5401,6 +5402,7 @@ int main(void) {
     failed += test_sel_wholly_recycled_clears();
     failed += test_sel_sync_ignores_writes_elsewhere();
     failed += test_sel_stamps_survive_counter_wrap();
+    failed += test_sel_reflowed_rows_not_stale_at_high_counter();
 
     /* test_cursor_scroll.c */
     failed += test_cursor_visible_at_bottom();

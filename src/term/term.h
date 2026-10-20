@@ -51,7 +51,7 @@ typedef struct {
     int len;
     bool dirty;
     bool wrapped;
-    uint32_t gen;      /* Terminal.write_gen at this row's last write (term_row_stamp) */
+    uint64_t gen;      /* Terminal.write_gen at this row's last write (term_row_stamp) */
 } TermRow;
 
 typedef struct {
@@ -131,12 +131,12 @@ typedef struct {
      * logical index i is lines_recycled + i, stable while epoch is. epoch:
      * bumped by reflow and by alt-screen enter/leave, the events that renumber
      * or replace the rows. write_gen: bumped by every row write; the row
-     * written takes the new value (term_row_stamp()). It wraps after 2^32
-     * writes, so compare stamps wrap-safely. */
+     * written takes the new value (term_row_stamp()). 64 bits: it does not
+     * wrap in practice, so stamps compare with a plain `>`. */
     uint64_t lines_recycled;
     uint64_t primary_lines_recycled;
     uint32_t epoch;
-    uint32_t write_gen;
+    uint64_t write_gen;
 
     /* The debug log's session id (the "s3" in a log line; 0 prints "-").
      * Set by whoever owns the session (window.c) right after term_init();
