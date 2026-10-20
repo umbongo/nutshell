@@ -118,7 +118,7 @@ The terminal emulates a VT100/ANSI-compatible display. It supports:
 #### Text Selection and Clipboard
 
 - **Click and drag** on the terminal to select text
-- **Ctrl+C** copies the current selection to the clipboard and clears it; with no selection, Ctrl+C sends SIGINT to the remote shell as usual. **Ctrl+Shift+C** always copies (never sent to the shell)
+- **Releasing the mouse button** copies the selection to the clipboard, and the highlight stays; **Ctrl+Shift+C** or **Edit > Copy** copies it again (never sent to the shell). **Ctrl+C** always sends SIGINT to the shell, with or without a selection, as in PuTTY
 - **Ctrl+V** or **Shift+Insert** pastes from the clipboard; **Ctrl+Shift+V** always pastes
 - **Confirm before pasting** (Settings > Terminal, on by default) shows a preview dialog before every paste, so you can review what's about to be sent
 - **Paste delay**: an optional inter-line delay (0 to 5000 ms) can be set in Settings for servers that need time between lines
@@ -352,7 +352,7 @@ Passwords, passphrases and keys are never logged, and neither are keystrokes or 
 |----------|--------|
 | **Ctrl+Shift+T** | New session (open session manager) |
 | **Ctrl+Shift+W** | Close active tab |
-| **Ctrl+C** | Copy selection to clipboard and clear it; sends SIGINT if there is no selection |
+| **Ctrl+C** | Send SIGINT (interrupt), with or without a selection |
 | **Ctrl+Shift+C** | Copy selection to clipboard (no-op if none); never sent to the shell |
 | **Ctrl+V** | Paste from clipboard |
 | **Ctrl+Shift+V** | Paste from clipboard (always, same as Ctrl+V) |

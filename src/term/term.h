@@ -212,9 +212,10 @@ int term_cursor_row_is_windows_prompt(const Terminal *term);
  * row `screen_row` -- 0-based, 0 is the top of the currently visible
  * screen. The one mapping every screen-row consumer in this codebase
  * shares (src/term/buffer.c's internal callers, term_cursor_row_text()
- * behind term_at_prompt() and friends, src/ui/renderer.c's
- * get_visible_row(), src/term/parser.c's get_screen_row()) -- or, for
- * ai_chat.c's dispatch-stall diagnostic, should: a second, hand-written
+ * behind term_at_prompt() and friends, src/term/parser.c's
+ * get_screen_row()) -- or, for ai_chat.c's dispatch-stall diagnostic,
+ * should. (The renderer and the selection show the view as scrolled and
+ * use term_view_to_logical() below instead.) A second, hand-written
  * copy of this mapping is exactly how term_cursor_row_text() used to
  * disagree with it (see the "sparse state" note on
  * term_logical_rows() below). Does not itself bound-check the result

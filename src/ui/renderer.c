@@ -86,47 +86,14 @@ void renderer_free(Renderer *r) {
     dispbuf_free(&r->dispbuf);
 }
 
-/* Helper to find the TermRow for a given screen row index.
- * Must match parser.c get_screen_row() logic so the renderer sees the
- * same rows the parser writes to.  After resize with sparse content
- * lines_count can be < rows; the rows beyond lines_count are still
- * pre-allocated and the parser writes to them, so we must access them. */
+/* The TermRow shown at screen_row in the view as scrolled. It uses
+ * term_view_to_logical() (term.h), the mapping the selection uses too, so
+ * the highlight and the copy name the same rows (spec 2026-10-20 section
+ * 2.8). */
 static TermRow *get_visible_row(Terminal *term, int screen_row) {
-    if (screen_row < 0 || screen_row >= term->rows) return NULL;
-
-    int offset = term->scrollback_offset;
-    int top_logical;
-    if (offset == 0) {
-        /* Normal view — same as parser's get_screen_row */
-        top_logical = (term->lines_count >= term->rows)
-                    ? (term->lines_count - term->rows) : 0;
-    } else {
-        /* Scrolled back — shift view up */
-        top_logical = (term->lines_count >= term->rows)
-                    ? (term->lines_count - term->rows - offset) : -offset;
-        if (top_logical < 0) top_logical = 0;
-    }
-
-    int logical_idx = top_logical + screen_row;
-    /* When lines_count < rows the logical index can exceed lines_count.
-     * The row is still allocated (pre-allocated by init/resize) so return it. */
-    if (logical_idx >= term->lines_capacity) return NULL;
-
-    int physical_idx = (term->lines_start + logical_idx) % term->lines_capacity;
-    return term->lines[physical_idx];
-}
-
-/* Check if cell (row, col) falls within the selection range. */
-static bool cell_in_selection(const Selection *sel, int row, int col)
-{
-    if (!sel || !sel->valid) return false;
-    int r0, c0, r1, c1;
-    selection_normalise(sel, &r0, &c0, &r1, &c1);
-    if (row < r0 || row > r1) return false;
-    if (row == r0 && row == r1) return col >= c0 && col <= c1;
-    if (row == r0) return col >= c0;
-    if (row == r1) return col <= c1;
-    return true; /* middle row — fully selected */
+    int logical_idx = term_view_to_logical(term, screen_row);
+    if (logical_idx < 0 || logical_idx >= term->lines_capacity) return NULL;
+    return term->lines[(term->lines_start + logical_idx) % term->lines_capacity];
 }
 
 /* Resolve a cell's fg, bg, and bold flag. Every colour decision -- the
@@ -144,7 +111,7 @@ static void resolve_cell(const TermPalette *pal, const TermCell *cell,
     if (term->cursor.visible && term->scrollback_offset == 0 &&
         term->cursor.row == row_idx && term->cursor.col == col_idx)
         draw_flags |= TERM_DRAW_CURSOR;
-    if (cell_in_selection(sel, row_idx, col_idx))
+    if (sel && selection_contains(sel, term, row_idx, col_idx))
         draw_flags |= TERM_DRAW_SELECTED;
     uint32_t fg = 0u, bg = 0u;
     term_colors_resolve(pal, cell, draw_flags, &fg, &bg);
@@ -174,7 +141,9 @@ void renderer_draw(Renderer *r, HDC hdc, Terminal *term, int x, int y, const REC
                      ? term->cursor.row : -1;
     int cursor_col = (term->cursor.visible && term->scrollback_offset == 0)
                      ? term->cursor.col : -1;
-    bool has_sel = sel && sel->valid;
+    /* A selection in view disables the clean-row skip below, so its
+     * highlight is painted on rows nothing else dirtied. */
+    bool has_sel = sel && selection_in_view(sel, term);
     /* The current theme's colour tables, rebuilt by every ui_theme_resolve(). */
     const TermPalette *pal = &ns_tokens()->term;
 
