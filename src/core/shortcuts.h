@@ -31,7 +31,7 @@ typedef struct {
     const char *section;    /* "Sessions and tabs", ... */
     const char *chord;      /* "Ctrl+Shift+T", "Esc, Enter", or a menu path "Edit > Select All" */
     const char *action;     /* "New session (opens the Session Manager)" */
-    const char *condition;  /* "" or "on the alternate screen (vim, less): sent to the program" */
+    const char *condition;  /* "" or "with no live session: the menu" */
     unsigned    flags;      /* SC_* */
     int         menu_id;    /* IDM_* whose menu label carries this chord, or 0 */
 } Shortcut;

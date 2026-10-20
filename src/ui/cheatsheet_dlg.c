@@ -290,12 +290,16 @@ static LRESULT CALLBACK CheatWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     case WM_COMMAND:
         if (d && (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)) {
             d->closing = 1;
+            PostMessage(hwnd, WM_NULL, 0, 0);   /* wake the modal GetMessage loop */
             return 0;
         }
         break;
 
     case WM_CLOSE:                       /* the caption's X: the loop tears down */
-        if (d) d->closing = 1;
+        if (d) {
+            d->closing = 1;
+            PostMessage(hwnd, WM_NULL, 0, 0);   /* wake the modal GetMessage loop */
+        }
         return 0;
 
     case WM_KEYDOWN:

@@ -130,7 +130,7 @@ Every copy, paste and selection chord is in [Keyboard Shortcuts](#keyboard-short
 
 #### Keyboard
 
-Most keys reach the shell the way xterm sends them, so remote-side editing and program shortcuts work as expected: Alt+key arrives as Esc then the key (xterm's `metaSendsEscape`), and the arrows, Home, End, Insert, Delete, Page Up/Down and the F-keys carry their modifiers in xterm's form. Nutshell keeps a small set of chords for itself (listed below); plain Ctrl+T, Ctrl+W and Ctrl+Space reach the shell; with **AltGr** held none of the Ctrl shortcuts fire. **Edit > Send Key** sends a key Nutshell or Windows would otherwise keep, and has two one-shot items for the next keystroke: **Send Next Key Raw** and **Send Next Key with Alt**. When the AI panel's input box has focus, keys go to the panel; click the terminal to return focus. Every chord is listed in [Keyboard Shortcuts](#keyboard-shortcuts), and in the app under **Help > Keyboard Shortcuts**.
+Most keys reach the shell the way xterm sends them, so remote-side editing and program shortcuts work as expected: Alt+key arrives as Esc then the key (xterm's `metaSendsEscape`), and the arrows, Home, End, Insert, Delete, Page Up/Down and the F-keys carry their modifiers in xterm's form. Nutshell keeps a small set of chords for itself; plain Ctrl+T, Ctrl+W and Ctrl+Space reach the shell; with **AltGr** held none of the Ctrl shortcuts fire. **Edit > Send Key** sends a key Nutshell or Windows would otherwise keep, and has two one-shot items for the next keystroke: **Send Next Key Raw** and **Send Next Key with Alt**. When the AI panel's input box has focus, keys go to the panel; click the terminal to return focus. Every shortcut Nutshell handles itself is listed in [Keyboard Shortcuts](#keyboard-shortcuts) and in the app under **Help > Keyboard Shortcuts**; every other key goes to the shell, including F1-F12 (F11 alone is fullscreen), Shift+F11, and plain Ctrl+T and Ctrl+W.
 
 ### Zoom
 
@@ -365,8 +365,8 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | --- | --- | --- |
 | **Shift+PgUp** | History up a page | |
 | **Shift+PgDn** | History down a page | |
-| **PgUp** | History up a page (sent to vim, less) | |
-| **PgDn** | History down a page (sent to vim, less) | |
+| **PgUp** | History up a page; vim and less get it | |
+| **PgDn** | History down a page; vim and less get it | |
 | **Ctrl+PgUp, Ctrl+PgDn** | Sent to the program, always | |
 | **Ctrl+=** | Zoom the terminal font in | US layout |
 | **Ctrl+-** | Zoom the terminal font out | US layout |
@@ -380,7 +380,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **Ctrl+Arrows, Ctrl+Home, Ctrl+End** | Sent with the modifier | |
 | **Alt+key** | ESC, then the key | with no live session: the menu |
 | **Ctrl+Alt+letter** | ESC, then the control byte | unless the layout makes it a character |
-| **F10, Shift+F10** | Sent to the shell, not the menu | with no live session: the menu |
+| **F10, Shift+F10** | Sent to the shell, not the menu | F10 with no live session: the menu |
 | **Backspace** | BS over SSH, DEL in a local shell | |
 | **Edit > Send Key** | Send the next key raw, or with Alt | |
 
@@ -394,7 +394,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **Ctrl+V** | Paste text, or attach an image from the clipboard | |
 | **Ctrl+=** | Zoom the chat in | US layout |
 | **Ctrl+-** | Zoom the chat out | US layout |
-| **Ctrl+C** | Copy the selected messages | conversation list focused |
+| **Ctrl+C** | Copy the selected text | conversation list focused |
 | **Ctrl+A** | Select all messages | list focused |
 | **Esc** | Clear the selection | list focused |
 | **PgUp, PgDn, Home, End, Up, Down** | Scroll the conversation | list focused |
@@ -419,7 +419,7 @@ two disagree: change the table, then regenerate this block (the recipe is in
 | **Right-click** | Paste, as Ctrl+V | |
 | **Wheel** | Scroll three lines | |
 | **Ctrl+Wheel** | Zoom the terminal font | |
-| **Drag in the AI panel** | Select messages | nothing copied until Ctrl+C |
+| **Drag in the AI panel** | Select text | nothing copied until Ctrl+C |
 | **Double-click in the AI panel** | Select a word | |
 | **Triple-click in the AI panel** | Select a line | |
 | **Right-click in the AI panel** | Copy, Select all, Paste into message | |

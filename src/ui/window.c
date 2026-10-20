@@ -5267,7 +5267,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * release, and the release after a chord passed through above,
              * both reach DefWindowProc -- there is no swallow flag for Alt
              * any more. */
-            if (wParam == VK_F10 && g_active_session && g_active_session->term)
+            if (wParam == VK_F10 && g_active_session && g_active_session->term &&
+                g_active_session->io.ctx)
                 return 0;
             break;
 
