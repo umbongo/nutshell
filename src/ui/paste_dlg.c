@@ -547,7 +547,11 @@ int paste_preview_show(HWND parent, const char *raw_text,
         SetFocus(d.hBtnPaste);
         MSG msg;
         while (IsWindow(hwnd) && GetMessage(&msg, NULL, 0, 0)) {
-            if (msg.message == WM_KEYDOWN) {
+            /* Only keys aimed at this dialog or its buttons: the floating
+             * AI Assist window is not disabled with the parent, and its
+             * Enter and Tab must not paste or switch buttons here. */
+            if (msg.message == WM_KEYDOWN
+                && (msg.hwnd == hwnd || IsChild(hwnd, msg.hwnd))) {
                 PasteKeyAction act = paste_dlg_key_action((unsigned)msg.wParam,
                                                           d.cancel_selected);
                 if (act == PASTE_KEY_CANCEL) {
