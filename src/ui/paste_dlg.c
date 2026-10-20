@@ -42,6 +42,9 @@ typedef struct {
     HWND      hBtnPaste;
     HWND      hBtnCancel;
     HWND      hScrollbar;   /* custom themed scrollbar */
+    bool      cancel_selected; /* Cancel is the default button (false at open: Paste).
+                                * Enter follows this, not GetFocus(), which a click on
+                                * the preview or a window switch can move. */
     int       line_h;       /* cached line height for scroll math */
     int       dpi;
     const ThemeColors *theme;
@@ -197,6 +200,7 @@ static void paste_dlg_focus_button(PasteDlgData *d, HWND btn)
     HWND other = (btn == d->hBtnPaste) ? d->hBtnCancel : d->hBtnPaste;
     SendMessage(other, BM_SETSTYLE, (WPARAM)BS_PUSHBUTTON, TRUE);
     SendMessage(btn, BM_SETSTYLE, (WPARAM)BS_DEFPUSHBUTTON, TRUE);
+    d->cancel_selected = (btn == d->hBtnCancel);
     SetFocus(btn);
 }
 
@@ -382,6 +386,15 @@ static LRESULT CALLBACK PasteDlgProc(HWND hwnd, UINT msg,
         }
         break;
 
+    case WM_ACTIVATE:
+        /* DefWindowProc would focus the dialog window itself; put the focus
+         * back on the button that carries the default border. */
+        if (LOWORD(wParam) != WA_INACTIVE && d && d->hBtnPaste && d->hBtnCancel) {
+            SetFocus(d->cancel_selected ? d->hBtnCancel : d->hBtnPaste);
+            return 0;
+        }
+        break;
+
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDOK:
@@ -536,7 +549,7 @@ int paste_preview_show(HWND parent, const char *raw_text,
         while (IsWindow(hwnd) && GetMessage(&msg, NULL, 0, 0)) {
             if (msg.message == WM_KEYDOWN) {
                 PasteKeyAction act = paste_dlg_key_action((unsigned)msg.wParam,
-                                                          GetFocus() == d.hBtnCancel);
+                                                          d.cancel_selected);
                 if (act == PASTE_KEY_CANCEL) {
                     d.result = 0;
                     DestroyWindow(hwnd);
@@ -547,7 +560,7 @@ int paste_preview_show(HWND parent, const char *raw_text,
                     continue;
                 }
                 if (act == PASTE_KEY_NEXT_BUTTON) {
-                    paste_dlg_focus_button(&d, GetFocus() == d.hBtnCancel
+                    paste_dlg_focus_button(&d, d.cancel_selected
                                                    ? d.hBtnPaste : d.hBtnCancel);
                     continue;
                 }
