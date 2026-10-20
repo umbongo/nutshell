@@ -4,14 +4,14 @@
 landed at v1.0.92/v1.0.96 (see "Landed since v1.0.96" below for what's
 shipped since — approval-card fixes, prompt-gated dispatch, four-level auto
 approve, markdown tables, role colour, smart scrolling, and pending command
-batches). Native suite: **1,960 tests**, 0 failures (2026-09-21). Integration suite
-(`tests/integration/Run-Integration.ps1`): 30 cases in seven case files
-(`cases\10-terminal` … `70-cli`), manual only since 2026-09-15; `ui_gallery`
-captures 10 `--ui-demo` states x 4 themes = 40 images. Next action is sub-project 3 (main window
+batches). Native suite: **3,035 tests**, 0 failures (Linux, 2026-10-19). Integration suite
+(`tests/integration/Run-Integration.ps1`): 49 case definitions in ten case files
+(`cases\10-terminal` … `95-ai-select`), manual only since 2026-09-15, DPI-aware since
+PR #71; `ui_gallery` captures 10 `--ui-demo` states x 4 themes = 40 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.1.23.
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.41 (2026-10-19).
 
 ## Decisions so far
 
@@ -213,8 +213,24 @@ Done, in order (details in the commit messages and the specs named):
   and connection-thread lifetimes refcounted (double free and use-after-free
   fixed); platform detection anchored and only ever tightens after resolution.
 
-- Character selection in the AI Assist panel, v1.2.38
-  (`2026-10-18-ai-panel-text-selection-design.md`, plan
+- 2026-10-13 retrospective (PR #62, 298fd28;
+  `docs/retrospectives/2026-10-13-thirteen-merges-retrospective.md`).
+- v1.2.29 no line-clear prefix at a PowerShell or cmd prompt over SSH (PR #60, e5180ab);
+  its exe was the first gate-passing build cross-compiled on the Linux box `automaton`.
+- CI: the native suite is skipped, still reporting green, on a pull request that changes
+  no code (PR #63, cd1322a; first exercised by #67). Dependabot #61 (41b264c) and #67
+  (c04945d): codeql-action 4.38.3, upload-artifact 7.0.2.
+- v1.2.30 command details popup, copy icons and transcript clipboard (PR #64, 573b60c;
+  `2026-10-13-command-detail-and-copy-design.md`).
+- v1.2.32 `--help`/`--version`/`--list` write to a redirected stdout (PR #65, c581a8d).
+- v1.2.34 a row stays dirty when a paint did not contain it, the stale-band seed (PR #66,
+  4f8275e); the two weaknesses it exposed are in Open.
+- v1.2.36 in-app debug logging with a Settings section and an AI log tool (PR #68,
+  2208cba; `2026-10-17-debug-logging-design.md`).
+- v1.2.37 Auto-approve button on the policy row; the rail's ids 4040-4044 retired
+  (PR #69, c86dea1; `2026-10-18-ai-auto-approve-button-design.md`).
+- Character selection in the AI Assist panel, v1.2.38-v1.2.41 (PR #71, 7960bd2;
+  `2026-10-18-ai-panel-text-selection-design.md`, plan
   `docs/superpowers/plans/2026-10-18-ai-panel-text-selection.md`): drag,
   double- and triple-click select characters across messages; Ctrl+C, Edit >
   Copy and the menu copy the visible text; every item is laid out by
@@ -224,6 +240,36 @@ Done, in order (details in the commit messages and the specs named):
   colour (the focus tint is invisible on the accent bubble).
 
 Open, in priority order:
+- [ ] Light themes: much of PowerShell's output (warnings, `Write-Host -ForegroundColor
+      Yellow`, PSReadLine's command token) arrives in ANSI yellow, which is near
+      unreadable on Onyx Light and Sage & Sand (maintainer, 2026-10-19). Own branch
+      `fix/light-theme-ansi-contrast`; Opus determines the fix (per-theme palette,
+      a minimum-contrast floor at paint time, or both), critiqued before
+      implementation -- spec `2026-10-19-light-theme-ansi-contrast-design.md`.
+- [ ] Terminal copy and paste are broken in v1.2.36 (maintainer, 2026-10-18/19: "I can't
+      properly copy and paste from the terminal"). Confirmed symptom (maintainer,
+      2026-10-20): select and drag down past the bottom of the terminal, and the copy
+      holds only what is on the window, not what was selected in the buffer. The same
+      applies to a selection made while scrolled back. Diagnosis of that part: `selection_extract_text` takes the visible
+      window as `lines_count - rows` and ignores `scrollback_offset`; the `Selection`
+      struct is viewport-relative so `selection_pixel_to_cell` clamps rows to the screen;
+      and the WM_LBUTTONUP clipboard buffer is 8 KB. The rest of what is broken is not yet
+      characterised -- reproduce copy and paste end to end on v1.2.36+ (select, Ctrl+Shift+C,
+      Ctrl+Shift+V, Shift+Insert, right-click, the Edit menu) before writing the spec
+      (buffer-absolute selection, auto-scroll while dragging past an edge, unbounded copy
+      buffer, plus whatever the reproduction finds).
+- [ ] Harness cases on `main`: `resize_applies_to_inactive_tab` fails on every run
+      (since v1.2.13); `ctrl_w_reaches_shell_and_shift_closes_tab` failed the v1.2.36 and
+      v1.2.37 gate runs and passed the v1.2.41 one, so it is intermittent -- both are
+      tab-switch cases; investigate together (tab B never reports its grid).
+- [ ] Six CodeQL alerts open on `main`, none new code: #27 `cpp/offset-use-before-range-check`
+      at `src/core/markdown.h:62` is alert #12 (open since 2026-04-07 at `src/ui/markdown.h`)
+      renumbered when PR #71 moved the parser (56f0805) -- `line[level] == '#' && level < 6`
+      reads before the bound; swapping the operands closes it. The other five are
+      `cpp/world-writable-file-creation` (`loader.c:935`, four in `test_settings.c`).
+      Fix or dismiss each with a reason, in the next `src/` pull request.
+- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.41. Tagging is the
+      maintainer's call (`feature-workflow` step 10).
 - [ ] AI panel: commands of a **finished** batch have no details popup and no copy icon
       after a session switch. `cmd_batch_remove` drops the batch, so `chat_rebuild_display`
       shows them only as inline `[EXEC]` segments of the AI text. Either keep finished
@@ -253,24 +299,23 @@ Open, in priority order:
       command substitution are not looked through); no PowerShell ruleset, so
       destructive cmdlets are UNKNOWN rather than CRITICAL; the `>>` prompt test uses
       synthetic bytes rather than a captured PSReadLine/ConPTY stream.
-- [ ] Local shell follow-ups: test PowerShell as the local shell (a profile whose shell
-      command is `powershell.exe` or `pwsh.exe`; custom kind, platform auto -- prompt
-      detection on `PS C:\...>`, paste line ends, Ctrl+C, the AI ruleset); busybox
+- [ ] Local shell follow-ups: PowerShell as the local shell now has a harness case
+      (`local_shell_powershell`, `cases/80-local-shell.ps1`) and a native resolver test;
+      check which of prompt detection on `PS C:\...>`, paste line ends, Ctrl+C and the AI
+      ruleset it covers before striking that part; busybox
       is gone as a shell (maintainer, 2026-09-24; v1.2.14), so no embedding decision is
       needed; move the dispatcher out of `src/ui` so it can
       be tested natively; a timeout for commands that never return; WSL; tab title from
       the shell's directory (OSC 7); mouse reporting (special-keys spec section 5, own
       spec); Backspace on SSH and a per-profile terminal type (special-keys spec 7).
-- [ ] CI review follow-ups (2026-09-10 review, minus the items the desktop gate's
-      retirement made moot): CodeQL installs no libssh2, so the SSH/known-hosts files
-      and all of `src/ui` go unscanned — install `libssh2-1-dev`, fail if the Makefile
-      probe still says no (done 2026-09-24 in both workflows), and consider a Windows
-      CodeQL run for `src/ui`;
-      `.gitattributes` and renormalise (90 CRLF-indexed files) in a lone PR when nothing
-      else is in flight. (Untracking `build/win/nutshell.exe` is off the list: the gate
+- [ ] CI review follow-ups (2026-09-10 review; the libssh2 part was done 2026-09-24):
+      `src/ui` is never scanned -- consider a Windows CodeQL run; `.gitattributes` exists
+      but holds only `tests/fixtures/*.bin binary`, so add eol rules and renormalise the
+      85 CRLF-indexed files in a lone PR when nothing else is in flight. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)
 - [ ] Harness batches B (sessions, auth, host key, connection), C (terminal, clipboard,
-      settings), D (AI extras) — 31 cases; `bvtuser` exists on tompi for auth cases.
+      settings), D (AI extras) — 31 cases planned; the suite has since grown to 49 case
+      definitions, so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
       Manual runs only now; still worth having for release checks.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
       landed in PR #24, H3/H4 in PR #54, H5/H6 in v1.2.14 -- DPAPI with the config
@@ -280,7 +325,8 @@ Open, in priority order:
       say-so); web_fetch destination filter; then Medium and Low.
 - [ ] Older review findings: Session Manager phantom row; a stopped AI reply leaves
       two user turns in a row in the conversation; a stream posting during the AI
-      panel's destruction leaks its payload (tiny).
+      panel's destruction leaks its payload (tiny; probably closed by the v1.2.14
+      stream-lifetime rework, f2cb01d -- confirm, then strike).
 - [ ] v1.2.15 review follow-ups: a local custom command that is an SSH client to a
       device (`ssh.exe`, plink) is locked to the unresolved ruleset, which is looser
       than device rulesets -- keep detecting on strict-locked sessions and add a
@@ -288,8 +334,8 @@ Open, in priority order:
       platform; a session contradicted after a weak prompt match counts only the
       first platform plus unresolved, not every platform seen; no tests yet for save
       write/flush failure, failed backup rename, locked config, forward-slash/UNC
-      custom paths. Harness: `resize_applies_to_inactive_tab` fails on v1.2.13 too
-      (tab B never reports its grid) -- investigate.
+      custom paths. (The `resize_applies_to_inactive_tab` failure is the harness item
+      above.)
 - [ ] Policy control follow-ups from the PR #27 review: the AI-tier harness cases it
       rewrote (`ai_runs_read_command_unattended`, `ai_write_command_held_then_runs_after_allow`)
       have not been run yet — needs the Kimi key in `tests\integration\.ai_key`; and the
@@ -333,8 +379,7 @@ Open, in priority order:
 Process (CLAUDE.md): hand off wherever possible; Opus orchestrates a multi-step
 package and reviews diffs, Sonnet writes code and tests, the main session keeps the
 decisions and reads the diff in full; `gh pr merge N --merge --auto` merges at once
-when the PR is mergeable and only `Version bump` is required (version, README,
-committed exe -- nothing is compiled), so `gh pr checks N --watch` until every check
-is green first. Run the harness tier a change touches by hand first. "Create a checkpoint" = compact this
+when the PR is mergeable and only `Version bump` and `Native tests` are required
+(CodeQL is not), so `gh pr checks N --watch` until every check is green first. Run the harness tier a change touches by hand first. "Create a checkpoint" = compact this
 list, compact memory, delete temp files and worktrees, leave the tree ready for a new
 session.

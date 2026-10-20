@@ -39,7 +39,13 @@ counter and last-retrospective marker are in `MEMORY.md`.
 - **`NON_TEST_SRCS`**: Files in `src/ui/` are excluded from test builds. If you add portable logic that needs testing, put it in `src/core/`, not `src/ui/`.
 - **libssh2 test stub** lives in `tests/stubs/libssh2.h` and is only added to the include path (`-Itests/stubs`) when the test build finds no real libssh2. Never put a stub header in `src/` — it would shadow the real one in the Windows build.
 
-### Building on Windows (MSYS2 MINGW64) — the current dev host
+### Building on Linux (`automaton`)
+
+The Makefile's default path: `x86_64-w64-mingw32-gcc` with the vcpkg libs at `~/vcpkg/`. Only on `automaton` (`hostname`): a cloud Linux session has no MinGW, and its `make clean` would delete the tracked `build/win/nutshell.exe`, so it runs `make test` only. On any host, a `make release` that fails after `make clean` leaves the exe deleted: `git restore build/win/nutshell.exe` before committing anything.
+
+- Commands: `make clean && make release`, `make test` (native gcc; it uses the libssh2 stub when no real libssh2 is installed), and `xvfb-run -a make wintest` to run the GDI+ harness under Wine. If Wine reports that no driver could be loaded, a stale wineserver is the usual cause: `wineserver -k` clears it, but it kills every Wine process in the prefix, so first check `pgrep -a wine` shows no run another session started.
+
+### Building on Windows (MSYS2 MINGW64)
 
 The Makefile detects a Windows host (`OS=Windows_NT`) and switches to the pacman-installed libs, `-lz`, static linking, and `windres`.
 
