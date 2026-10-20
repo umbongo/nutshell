@@ -1208,6 +1208,12 @@ int test_term_cursor_row_is_windows_prompt_bash_negative(void);
 int test_term_cursor_row_is_windows_prompt_alt_screen_active(void);
 int test_term_write_seq_increments_on_data(void);
 int test_term_write_seq_unchanged_on_zero_len(void);
+int test_term_view_to_logical_offset_zero_matches_live(void);
+int test_term_view_to_logical_scrolled_back(void);
+int test_term_view_to_logical_fresh_tab_clamps_top(void);
+int test_term_resize_clamps_scrollback_offset(void);
+int test_term_max_scroll_offset_is_history_held(void);
+int test_term_parser_writes_live_screen_while_scrolled_back(void);
 
 /* test_theme.c */
 int test_theme_dark_background(void);
@@ -4529,6 +4535,12 @@ int main(void) {
     failed += test_term_cursor_row_is_windows_prompt_alt_screen_active();
     failed += test_term_write_seq_increments_on_data();
     failed += test_term_write_seq_unchanged_on_zero_len();
+    failed += test_term_view_to_logical_offset_zero_matches_live();
+    failed += test_term_view_to_logical_scrolled_back();
+    failed += test_term_view_to_logical_fresh_tab_clamps_top();
+    failed += test_term_resize_clamps_scrollback_offset();
+    failed += test_term_max_scroll_offset_is_history_held();
+    failed += test_term_parser_writes_live_screen_while_scrolled_back();
 
     printf("\n--- VT Sequences ---\n");
     failed += test_vt_osc_title_0();

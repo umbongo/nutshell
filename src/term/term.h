@@ -207,6 +207,19 @@ int term_cursor_row_is_windows_prompt(const Terminal *term);
  * already be known valid (0 <= screen_row < term->rows). */
 int term_screen_to_phys(const Terminal *term, int screen_row);
 
+/* Logical index of the row shown at screen_row in the view as scrolled
+ * (scrollback_offset applied, top clamped to 0 exactly as the renderer's
+ * get_visible_row did). Never -1 for 0 <= screen_row < rows; -1 outside.
+ * The view mapping: the renderer and the selection use it. The parser keeps
+ * term_screen_to_phys(), the live mapping -- writes always land on the live
+ * screen, scrolled back or not (spec 2026-10-20-putty-selection-design.md 2.1). */
+int term_view_to_logical(const Terminal *t, int screen_row);
+
+/* The furthest the view can scroll back: the history actually held,
+ * min(lines_count - rows, max_scrollback), never below 0. The wheel, the
+ * scrollbar, Page Up, smart scrolling and term_resize() all clamp to it. */
+int term_max_scroll_offset(const Terminal *t);
+
 /* The number of logical rows [0, this) the terminal currently holds real,
  * readable content for: every row of scrolled history (lines_count), or,
  * in the sparse state right after a resize (lines_count < rows --

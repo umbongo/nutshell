@@ -293,6 +293,14 @@ void term_resize(Terminal *term, int rows, int cols) {
     term->scroll_top = 0;
     term->scroll_bot = rows - 1;
 
+    /* A view scrolled back further than the reflowed history holds would
+     * show rows that do not exist (spec 2026-10-20 section 2.1). */
+    {
+        int max_off = term_max_scroll_offset(term);
+        if (term->scrollback_offset > max_off) term->scrollback_offset = max_off;
+        if (term->scrollback_offset < 0) term->scrollback_offset = 0;
+    }
+
     DLOG(DLOG_TERM, DLOG_DEBUG, term->log_id, "term.resize",
          "rows_before=%d rows=%d cols_before=%d cols=%d lines_before=%d lines=%d alt=%d",
          old_rows, rows, old_cols, cols, old_lines, term->lines_count,
@@ -318,9 +326,7 @@ void term_scroll(Terminal *term) {
      * clamped to the history the buffer still holds. A view at the bottom
      * (offset 0) keeps following; a keypress resets the offset (window.c). */
     if (term->scrollback_offset > 0) {
-        int max_off = term->lines_count - term->rows;
-        if (max_off > term->max_scrollback) max_off = term->max_scrollback;
-        if (max_off < 0) max_off = 0;
+        int max_off = term_max_scroll_offset(term);
         term->scrollback_offset++;
         if (term->scrollback_offset > max_off) term->scrollback_offset = max_off;
     }
@@ -351,6 +357,23 @@ int term_screen_to_phys(const Terminal *term, int screen_row) {
     int top = (term->lines_count >= term->rows)
             ? (term->lines_count - term->rows) : 0;
     return (term->lines_start + top + screen_row) % term->lines_capacity;
+}
+
+int term_view_to_logical(const Terminal *t, int screen_row)
+{
+    if (!t || screen_row < 0 || screen_row >= t->rows) return -1;
+    int off = t->scrollback_offset > 0 ? t->scrollback_offset : 0;
+    int top = (t->lines_count >= t->rows) ? (t->lines_count - t->rows - off) : -off;
+    if (top < 0) top = 0;
+    return top + screen_row;
+}
+
+int term_max_scroll_offset(const Terminal *t)
+{
+    if (!t) return 0;
+    int max_off = t->lines_count - t->rows;
+    if (max_off > t->max_scrollback) max_off = t->max_scrollback;
+    return max_off > 0 ? max_off : 0;
 }
 
 void term_scroll_up(Terminal *term, int top, int bot, int n) {

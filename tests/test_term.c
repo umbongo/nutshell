@@ -2,6 +2,8 @@
 #include "term.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include "edit_scroll.h"
 
 // Helper to get a cell from the screen (0-based row/col)
 static TermCell get_cell(Terminal *term, int row, int col) {
@@ -1297,6 +1299,98 @@ int test_term_sgr_split_across_reads_keeps_index_and_dim(void)
     c = t->lines[term_screen_to_phys(t, 0)]->cells[1];
     ASSERT_EQ(c.attr.bg_mode, COLOR_ANSI16);
     ASSERT_EQ(c.attr.bg_index, 3);
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- View mapping and scroll clamps (spec 2026-10-20-putty-selection-design.md 2.1) ---- */
+
+static int phys_of_logical(const Terminal *t, int logical)
+{
+    return (t->lines_start + logical) % t->lines_capacity;
+}
+
+static void feed_x_lines(Terminal *t, int n)
+{
+    for (int i = 0; i < n; i++) term_process(t, "x\r\n", 3);
+}
+
+int test_term_view_to_logical_offset_zero_matches_live(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);          /* capacity 25 */
+    feed_x_lines(t, 30);                         /* 4 cursor moves, 20 appends, 6 recycles */
+    ASSERT_TRUE(t->lines_start != 0);            /* the ring has wrapped */
+    for (int r = 0; r < t->rows; r++)
+        ASSERT_EQ(phys_of_logical(t, term_view_to_logical(t, r)), term_screen_to_phys(t, r));
+    ASSERT_EQ(term_view_to_logical(t, -1), -1);
+    ASSERT_EQ(term_view_to_logical(t, t->rows), -1);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_view_to_logical_scrolled_back(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    feed_x_lines(t, 30);
+    int live0 = term_view_to_logical(t, 0);
+    t->scrollback_offset = 7;
+    ASSERT_EQ(term_view_to_logical(t, 0), live0 - 7);
+    ASSERT_EQ(term_view_to_logical(t, 4), live0 - 7 + 4);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_view_to_logical_fresh_tab_clamps_top(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    t->scrollback_offset = t->rows - 1;          /* stale: no history exists */
+    ASSERT_EQ(term_view_to_logical(t, 0), 0);    /* not -1 */
+    ASSERT_EQ(term_view_to_logical(t, 4), 4);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_resize_clamps_scrollback_offset(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    feed_x_lines(t, 8);                          /* lines_count 9: 4 lines of history */
+    t->scrollback_offset = 50;                   /* more than the history held */
+    term_resize(t, 6, 10);
+    ASSERT_EQ(t->scrollback_offset, term_max_scroll_offset(t));
+    ASSERT_EQ(t->scrollback_offset, 3);          /* 9 lines - 6 rows */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_max_scroll_offset_is_history_held(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    ASSERT_EQ(term_max_scroll_offset(t), 0);
+    feed_x_lines(t, 6);                          /* 2 lines of history */
+    ASSERT_EQ(term_max_scroll_offset(t), 2);
+    /* Page Up clamps to the history held, not to max_scrollback (20). */
+    ASSERT_EQ(scroll_page_up(0, t->rows, term_max_scroll_offset(t)), 2);
+    feed_x_lines(t, 100);
+    ASSERT_EQ(term_max_scroll_offset(t), 20);    /* capped by max_scrollback */
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_parser_writes_live_screen_while_scrolled_back(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    feed_x_lines(t, 12);
+    t->scrollback_offset = 3;
+    term_process(t, "\x1b[1;1HZ", 7);
+    ASSERT_EQ(t->lines[term_screen_to_phys(t, 0)]->cells[0].codepoint, 'Z');
+    int view0 = term_view_to_logical(t, 0);
+    ASSERT_EQ(t->lines[phys_of_logical(t, view0)]->cells[0].codepoint, 'x');
     term_free(t);
     TEST_END();
 }
