@@ -330,6 +330,40 @@ int test_sel_copy_drops_trailing_empty_rows(void)
 }
 
 /* No size limit (defect 7): 3,000 lines of 200 characters, whole. */
+/* The sparse-buffer state right after a resize (lines_count < rows, see
+ * term_logical_rows() in src/term/term.h): rows are on screen and
+ * selectable yet sit past lines_count. A selection over the visible text
+ * must still copy exactly that text, not blank lines. The resize no
+ * longer leaves the state by itself (term_reflow_buffer() keeps
+ * lines_count >= rows), so it is forced here to pin the consumer's
+ * tolerance (the old test_sel_extract_sparse_after_resize_shrink). */
+int test_sel_copy_sparse_buffer_after_resize_shrink(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(50, 76, 3000);
+    term_resize(t, 29, 76);
+    t->lines_count = 1;                           /* forced: sparse, lines_count < rows */
+    ASSERT_TRUE(t->lines_count < t->rows);
+
+    feed(t, "line one\r\nline two");
+    ASSERT_TRUE(t->cursor.row >= t->lines_count);
+    ASSERT_TRUE(term_view_to_logical(t, 1) >= t->lines_count);
+
+    Selection s;
+    ASSERT_TRUE(drag(&s, t, 1, 0, 1, 9));         /* the sparse row alone */
+    char *txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "line two");
+    free(txt);
+
+    ASSERT_TRUE(drag(&s, t, 0, 0, 1, 9));         /* both rows */
+    txt = copy_str(&s, t);
+    ASSERT_STR_EQ(txt, "line one\r\nline two");
+    free(txt);
+
+    term_free(t);
+    TEST_END();
+}
+
 int test_sel_copy_3000_rows_whole(void)
 {
     TEST_BEGIN();

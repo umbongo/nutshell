@@ -1232,6 +1232,10 @@ int test_term_stamp_recycled_row_carries_its_new_number(void);
 int test_term_wrapped_cleared_by_el2(void);
 int test_term_wrapped_cleared_by_el_from_column_0_only(void);
 int test_term_wrapped_cleared_by_ed_whole_rows(void);
+int test_term_wrapped_cleared_by_ed0_from_column_0(void);
+int test_term_wrapped_kept_by_ed0_from_nonzero_column(void);
+int test_term_wrapped_cleared_by_el1_to_last_column(void);
+int test_term_wrapped_cleared_by_ed1_to_last_column(void);
 int test_term_wrapped_kept_by_readline_home_end(void);
 int test_term_wrapped_ctrl_u_leaves_next_output_unwrapped(void);
 
@@ -1930,6 +1934,7 @@ int test_sel_copy_keeps_space_at_wrap_boundary(void);
 int test_sel_copy_crlf_between_lines_none_at_end(void);
 int test_sel_copy_trims_trailing_blanks_per_line(void);
 int test_sel_copy_drops_trailing_empty_rows(void);
+int test_sel_copy_sparse_buffer_after_resize_shrink(void);
 int test_sel_copy_3000_rows_whole(void);
 int test_sel_copy_empty_selection_is_empty_string(void);
 int test_sel_copy_blank_only_is_empty(void);
@@ -4608,6 +4613,10 @@ int main(void) {
     failed += test_term_wrapped_cleared_by_el2();
     failed += test_term_wrapped_cleared_by_el_from_column_0_only();
     failed += test_term_wrapped_cleared_by_ed_whole_rows();
+    failed += test_term_wrapped_cleared_by_ed0_from_column_0();
+    failed += test_term_wrapped_kept_by_ed0_from_nonzero_column();
+    failed += test_term_wrapped_cleared_by_el1_to_last_column();
+    failed += test_term_wrapped_cleared_by_ed1_to_last_column();
     failed += test_term_wrapped_kept_by_readline_home_end();
     failed += test_term_wrapped_ctrl_u_leaves_next_output_unwrapped();
 
@@ -5386,6 +5395,7 @@ int main(void) {
     failed += test_sel_copy_crlf_between_lines_none_at_end();
     failed += test_sel_copy_trims_trailing_blanks_per_line();
     failed += test_sel_copy_drops_trailing_empty_rows();
+    failed += test_sel_copy_sparse_buffer_after_resize_shrink();
     failed += test_sel_copy_3000_rows_whole();
     failed += test_sel_copy_empty_selection_is_empty_string();
     failed += test_sel_copy_blank_only_is_empty();

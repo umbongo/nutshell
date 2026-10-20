@@ -1614,6 +1614,55 @@ int test_term_wrapped_cleared_by_ed_whole_rows(void)
     TEST_END();
 }
 
+int test_term_wrapped_cleared_by_ed0_from_column_0(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;1H\x1b[J");                /* ED 0 from the cursor row's column 0 */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_kept_by_ed0_from_nonzero_column(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[2;2H\x1b[J");                /* ED 0 from column 1: partial row */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_cleared_by_el1_to_last_column(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[2;4H\x1b[1K");               /* EL 1 to column 3: partial row */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;10H\x1b[1K");              /* EL 1 with the cursor in the last column */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_wrapped_cleared_by_ed1_to_last_column(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(5, 10, 20);
+    tfeed(t, "0123456789AB");
+    tfeed(t, "\x1b[2;4H\x1b[1J");               /* ED 1 to column 3: partial cursor row */
+    ASSERT_TRUE(trow(t, 1)->wrapped);
+    tfeed(t, "\x1b[2;10H\x1b[1J");              /* ED 1 with the cursor in the last column */
+    ASSERT_FALSE(trow(t, 1)->wrapped);
+    term_free(t);
+    TEST_END();
+}
+
 int test_term_wrapped_kept_by_readline_home_end(void)
 {
     TEST_BEGIN();

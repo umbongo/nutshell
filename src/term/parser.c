@@ -370,6 +370,7 @@ static void handle_csi(Terminal *term, char final) {
                         cr0->cells[c].codepoint = 0;
                         cr0->cells[c].attr = term->current_attr;
                     }
+                    if (term->cursor.col == 0) cr0->wrapped = false;   /* whole row erased */
                     cr0->dirty = true;
                 }
                 for (int r = term->cursor.row + 1; r < term->rows; r++) {
@@ -411,6 +412,7 @@ static void handle_csi(Terminal *term, char final) {
                         cr1->cells[c].codepoint = 0;
                         cr1->cells[c].attr = term->current_attr;
                     }
+                    if (cc >= term->cols - 1) cr1->wrapped = false;    /* whole row erased */
                     cr1->dirty = true;
                 }
             } else if (n == 2) {
@@ -456,10 +458,11 @@ static void handle_csi(Terminal *term, char final) {
                     row->cells[c].attr = term->current_attr;
                 }
                 /* A whole-row erase ends the soft wrap onto this row (spec
-                 * 2026-10-20 section 2.4): EL 2, or EL 0 from column 0.
-                 * Cursor motion never touches the flag -- readline moves
+                 * 2026-10-20 section 2.4): EL 2, EL 0 from column 0, or EL 1
+                 * to the last column. Cursor motion never touches the flag -- readline moves
                  * onto a continuation row with a bare LF and back with CUU. */
-                if (n == 2 || (n == 0 && cc == 0)) row->wrapped = false;
+                if (n == 2 || (n == 0 && cc == 0)
+                    || (n == 1 && cc >= term->cols - 1)) row->wrapped = false;
                 row->dirty = true;
             }
             break;
