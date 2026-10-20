@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "edit_scroll.h"
+#include "selection.h"
 
 // Helper to get a cell from the screen (0-based row/col)
 static TermCell get_cell(Terminal *term, int row, int col) {
@@ -1689,6 +1690,80 @@ int test_term_wrapped_ctrl_u_leaves_next_output_unwrapped(void)
     tfeed(t, "ls\r\na.txt\r\n");
     ASSERT_EQ(trow(t, 1)->cells[0].codepoint, 'a');
     ASSERT_FALSE(trow(t, 1)->wrapped);           /* "a.txt" is its own line */
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- narrowing reflow drops the oldest rows ----------------------------- */
+
+/* The whole terminal as selection_select_all() + selection_copy_text() give it. */
+static char *all_text(const Terminal *t)
+{
+    Selection s;
+    selection_select_all(&s, t);
+    size_t n = 0;
+    return selection_copy_text(&s, t, &n);
+}
+
+/* A full ring that narrowing needs more rows for than it has: the newest text
+ * stays, the oldest rows go, and the recycled counter accounts for them. */
+int test_term_reflow_narrow_overflow_drops_oldest(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(3, 10, 1);                       /* capacity 4 */
+    tfeed(t, "AAAAAAAAAA\r\nBBBBBBBBBB\r\nCCCCCCCCCC\r\nDDDDDDDDDD\r\n$ ");
+    ASSERT_EQ(t->lines_capacity, 4);
+    ASSERT_EQ(t->lines_count, 4);
+    ASSERT_EQ(t->lines_recycled, (uint64_t)1);
+    term_resize(t, 3, 5);       /* B, C, D take 2 rows each and "$ " one: 7, room for 4 */
+    ASSERT_EQ(t->lines_count, t->lines_capacity);
+    ASSERT_EQ(t->lines_recycled, (uint64_t)4);               /* 1 + 3 dropped */
+    ASSERT_EQ(t->cursor.row, 2);                             /* on the prompt row */
+    ASSERT_EQ(t->cursor.col, 2);
+    ASSERT_EQ(get_cell(t, 2, 0).codepoint, (uint32_t)'$');
+    ASSERT_EQ(get_cell(t, 1, 0).codepoint, (uint32_t)'D');
+    ASSERT_EQ(get_cell(t, 0, 0).codepoint, (uint32_t)'D');
+    char *txt = all_text(t);
+    ASSERT_STR_EQ(txt, "CCCCC\r\nDDDDDDDDDD\r\n$");          /* the newest text, not the oldest */
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+/* Nothing to drop: the counter is untouched and every row survives. */
+int test_term_reflow_narrow_no_overflow_keeps_recycled(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(3, 10, 1);
+    tfeed(t, "abcdefgh\r\nxy\r\n$ ");
+    ASSERT_EQ(t->lines_recycled, (uint64_t)0);
+    term_resize(t, 3, 5);                                    /* abcde/fgh, xy, "$ ": 4 rows */
+    ASSERT_EQ(t->lines_recycled, (uint64_t)0);
+    ASSERT_EQ(t->lines_count, 4);
+    char *txt = all_text(t);
+    ASSERT_STR_EQ(txt, "abcdefgh\r\nxy\r\n$");
+    free(txt);
+    term_free(t);
+    TEST_END();
+}
+
+/* The saved primary buffer reflows too: its recycled count grows by what it
+ * dropped, so absolute line numbers stay monotonic across alt-screen exit. */
+int test_term_reflow_narrow_overflow_primary_recycled_follows(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(3, 10, 1);
+    tfeed(t, "AAAAAAAAAA\r\nBBBBBBBBBB\r\nCCCCCCCCCC\r\nDDDDDDDDDD\r\n$ ");
+    ASSERT_EQ(t->lines_recycled, (uint64_t)1);
+    tfeed(t, "\x1b[?1049h");
+    ASSERT_TRUE(t->alt_screen_active);
+    term_resize(t, 3, 5);
+    tfeed(t, "\x1b[?1049l");
+    ASSERT_FALSE(t->alt_screen_active);
+    ASSERT_EQ(t->lines_recycled, (uint64_t)4);
+    char *txt = all_text(t);
+    ASSERT_STR_EQ(txt, "CCCCC\r\nDDDDDDDDDD\r\n$");
+    free(txt);
     term_free(t);
     TEST_END();
 }

@@ -2,6 +2,7 @@
 #include "xmalloc.h"
 #include "shell_prompt.h"
 #include "dlog.h"
+#include <limits.h>
 #include <string.h>
 #include <stdlib.h>
 
@@ -111,7 +112,13 @@ void term_free(Terminal *term) {
 /* Reflow old_lines (circular buffer, old_cols wide) into a newly-allocated
  * linear buffer at new_rows × new_cols.  Frees old_lines.
  * Cursor position is passed as screen-relative (row from top of visible area)
- * and returned as screen-relative in the new geometry. */
+ * and returned as screen-relative in the new geometry.
+ *
+ * When the reflowed text needs more rows than the new buffer holds (narrowing
+ * wraps lines into more rows), the OLDEST rows are dropped, as scrolling does,
+ * never the newest: a first pass counts the output rows, the second writes
+ * only those that fit. *out_dropped is how many were dropped; the caller adds
+ * it to the ring's recycled counter so absolute line numbers stay monotonic. */
 static void term_reflow_buffer(
     TermRow **old_lines, int old_capacity, int old_start, int old_count,
     int old_cols, int old_rows,
@@ -119,80 +126,123 @@ static void term_reflow_buffer(
     int new_rows, int new_cols, int max_scrollback,
     TermAttr fill_attr,
     TermRow ***out_lines, int *out_capacity, int *out_count, int *out_start,
-    int *out_cursor_row, int *out_cursor_col)
+    int *out_cursor_row, int *out_cursor_col, uint64_t *out_dropped)
 {
     int new_capacity = new_rows + max_scrollback;
-    TermRow **new_lines = xcalloc((size_t)new_capacity, sizeof(TermRow *));
-    for (int i = 0; i < new_capacity; i++) {
-        new_lines[i] = term_row_alloc(new_cols);
-        term_row_fill(new_lines[i], new_cols, fill_attr);
-    }
+    TermRow **new_lines = NULL;
 
     int cur_new_row = 0;
     int cur_new_col = 0;
     int new_cursor_row = 0;
     int new_cursor_col = 0;
     bool cursor_after_full_row = false;
+    int dropped = 0;
 
     /* Convert screen-relative cursor to buffer-absolute logical index */
     int old_screen_top = (old_count >= old_rows) ? (old_count - old_rows) : 0;
     int cursor_logical = old_screen_top + cur_row;
 
-    for (int i = 0; i < old_count; i++) {
-        int pi = (old_start + i) % old_capacity;
-        TermRow *old_row = old_lines[pi];
-        if (!old_row) continue;
+    /* Pass 0 counts (nothing written, no capacity limit); pass 1 writes the
+     * rows from output row `dropped` on. Output rows are numbered from 0 in
+     * both; row r lives at new_lines[r - dropped]. */
+    for (int pass = 0; pass < 2; pass++) {
+        bool write = (pass == 1);
+        int limit = write ? new_capacity : INT_MAX;
+        int last_content_row = -1;
+        cur_new_row = 0;
+        cur_new_col = 0;
+        new_cursor_row = 0;
+        new_cursor_col = 0;
+        cursor_after_full_row = false;
 
-        if (!old_row->wrapped && i > 0) {
-            cur_new_row++;
-            cur_new_col = 0;
-        }
-        if (cur_new_row >= new_capacity) break;
-
-        /* Only reflow up to the written content width */
-        int cell_limit = old_row->len < old_cols ? old_row->len : old_cols;
-
-        /* A continuation row that holds the cursor but no cells still gets
-         * its own output row when the row before it ended exactly at
-         * new_cols, so the cursor keeps its row (spec section 2). */
-        if (old_row->wrapped && i > 0 && i == cursor_logical &&
-            cell_limit == 0 && cur_new_col >= new_cols) {
-            cur_new_row++;
-            cur_new_col = 0;
-            if (cur_new_row >= new_capacity) break;
-            new_lines[cur_new_row]->wrapped = true;
+        if (write) {
+            new_lines = xcalloc((size_t)new_capacity, sizeof(TermRow *));
+            for (int i = 0; i < new_capacity; i++) {
+                new_lines[i] = term_row_alloc(new_cols);
+                term_row_fill(new_lines[i], new_cols, fill_attr);
+            }
         }
 
-        for (int c = 0; c < cell_limit; c++) {
-            /* Exact width (spec section 2): wrap when the next cell of the
-             * same logical line arrives, never after the last one, so a row
-             * that ends exactly at new_cols gains no blank wrapped row. */
-            if (cur_new_col >= new_cols) {
+#define OUT_ROW(r) (new_lines[(r) - dropped])
+#define OUT_IDX(r) ((r) - dropped)
+
+        for (int i = 0; i < old_count; i++) {
+            int pi = (old_start + i) % old_capacity;
+            TermRow *old_row = old_lines[pi];
+            if (!old_row) continue;
+
+            if (!old_row->wrapped && i > 0) {
                 cur_new_row++;
                 cur_new_col = 0;
-                if (cur_new_row >= new_capacity) break;
-                new_lines[cur_new_row]->wrapped = true;
             }
-            if (i == cursor_logical && c == cur_col) {
+            if (OUT_IDX(cur_new_row) >= limit) break;
+
+            /* Only reflow up to the written content width */
+            int cell_limit = old_row->len < old_cols ? old_row->len : old_cols;
+
+            /* A continuation row that holds the cursor but no cells still gets
+             * its own output row when the row before it ended exactly at
+             * new_cols, so the cursor keeps its row (spec section 2). */
+            if (old_row->wrapped && i > 0 && i == cursor_logical &&
+                cell_limit == 0 && cur_new_col >= new_cols) {
+                cur_new_row++;
+                cur_new_col = 0;
+                if (OUT_IDX(cur_new_row) >= limit) break;
+                if (write && OUT_IDX(cur_new_row) >= 0) OUT_ROW(cur_new_row)->wrapped = true;
+            }
+
+            for (int c = 0; c < cell_limit; c++) {
+                /* Exact width (spec section 2): wrap when the next cell of the
+                 * same logical line arrives, never after the last one, so a row
+                 * that ends exactly at new_cols gains no blank wrapped row. */
+                if (cur_new_col >= new_cols) {
+                    cur_new_row++;
+                    cur_new_col = 0;
+                    if (OUT_IDX(cur_new_row) >= limit) break;
+                    if (write && OUT_IDX(cur_new_row) >= 0) OUT_ROW(cur_new_row)->wrapped = true;
+                }
+                if (i == cursor_logical && c == cur_col) {
+                    new_cursor_row = cur_new_row;
+                    new_cursor_col = cur_new_col;
+                }
+                if (write && OUT_IDX(cur_new_row) >= 0) {
+                    OUT_ROW(cur_new_row)->cells[cur_new_col] = old_row->cells[c];
+                    OUT_ROW(cur_new_row)->len = cur_new_col + 1;
+                }
+                last_content_row = cur_new_row;
+                cur_new_col++;
+            }
+            /* A cursor past the content keeps its distance from it (spec
+             * section 2); the clamp to new_cols - 1 below bounds it, except that
+             * a cursor whose row ends exactly at new_cols keeps the pending-wrap
+             * column instead of landing on content (the distance is lost there). */
+            if (i == cursor_logical && cur_col >= cell_limit) {
                 new_cursor_row = cur_new_row;
-                new_cursor_col = cur_new_col;
+                cursor_after_full_row = (cur_new_col == new_cols);
+                new_cursor_col = cursor_after_full_row
+                               ? cur_new_col
+                               : cur_new_col + (cur_col - cell_limit);
             }
-            new_lines[cur_new_row]->cells[cur_new_col] = old_row->cells[c];
-            new_lines[cur_new_row]->len = cur_new_col + 1;
-            cur_new_col++;
         }
-        /* A cursor past the content keeps its distance from it (spec
-         * section 2); the clamp to new_cols - 1 below bounds it, except that
-         * a cursor whose row ends exactly at new_cols keeps the pending-wrap
-         * column instead of landing on content (the distance is lost there). */
-        if (i == cursor_logical && cur_col >= cell_limit) {
-            new_cursor_row = cur_new_row;
-            cursor_after_full_row = (cur_new_col == new_cols);
-            new_cursor_col = cursor_after_full_row
-                           ? cur_new_col
-                           : cur_new_col + (cur_col - cell_limit);
+
+#undef OUT_ROW
+#undef OUT_IDX
+
+        if (!write) {
+            /* Rows the text needs: up to the last cell written or the cursor's
+             * row. Trailing empty rows are stripped below, so they must not
+             * push content out. */
+            int total = last_content_row + 1;
+            if (new_cursor_row + 1 > total) total = new_cursor_row + 1;
+            if (total < 1) total = 1;
+            dropped = total > new_capacity ? total - new_capacity : 0;
         }
     }
+
+    /* Output rows are numbered from `dropped`: shift to buffer coordinates. */
+    cur_new_row -= dropped;
+    new_cursor_row -= dropped;
+    if (new_cursor_row < 0) new_cursor_row = 0;
 
     int new_count = cur_new_row + 1;
     if (new_count > new_capacity) new_count = new_capacity;
@@ -256,6 +306,7 @@ static void term_reflow_buffer(
     *out_start      = new_start;
     *out_cursor_row = new_cursor_row;
     *out_cursor_col = new_cursor_col;
+    *out_dropped    = (uint64_t)dropped;
 }
 
 void term_resize(Terminal *term, int rows, int cols) {
@@ -265,6 +316,7 @@ void term_resize(Terminal *term, int rows, int cols) {
     int old_rows = term->rows;
     int old_cols = term->cols;
     int old_lines = term->lines_count;
+    uint64_t dropped = 0;
 
     /* Reflow the active buffer (alt-screen or primary).
      * Alt-screen has no scrollback — allocate rows only. */
@@ -276,7 +328,8 @@ void term_resize(Terminal *term, int rows, int cols) {
         term->alt_screen_active ? 0 : term->max_scrollback,
         term->current_attr,
         &term->lines, &term->lines_capacity, &term->lines_count, &term->lines_start,
-        &term->cursor.row, &term->cursor.col);
+        &term->cursor.row, &term->cursor.col, &dropped);
+    term->lines_recycled += dropped;
 
     /* When on the alt screen, also reflow the saved primary buffer so that
      * term_alt_screen_exit() restores it at the correct dimensions. */
@@ -290,7 +343,8 @@ void term_resize(Terminal *term, int rows, int cols) {
             term->current_attr,
             &term->primary_lines, &term->primary_lines_capacity,
             &term->primary_lines_count, &term->primary_lines_start,
-            &term->primary_cursor.row, &term->primary_cursor.col);
+            &term->primary_cursor.row, &term->primary_cursor.col, &dropped);
+        term->primary_lines_recycled += dropped;
     }
 
     /* Reflow renumbered every row: a selection's line numbers no longer apply. */
@@ -703,4 +757,4 @@ int term_cursor_row_is_windows_prompt(const Terminal *term)
     char buf[1024];
     if (!term_cursor_row_text(term, buf, sizeof(buf))) return 0;
     return shell_prompt_is_windows(buf);
-}
+}
