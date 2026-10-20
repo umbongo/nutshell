@@ -63,6 +63,11 @@ const NsFontSpec *ns_type_font(NsFontRole role);
  * is treated as 96; the result is always >= 1. */
 int ns_type_font_px(NsFontRole role, int dpi, int mono_size_pt);
 
+/* Pixel height of one line of `role` text at `dpi`: the ramp's pixel size
+ * (ns_type_font_px, so FONT_MONO uses 0 pt and clamps to 1 px; give mono a
+ * size yourself) times its line_height, rounded to nearest. */
+int ns_type_line_px(NsFontRole role, int dpi);
+
 /* ---- Font cache slot key ----------------------------------------------------
  * A stable, collision-free index into src/ui/ns_font.c's cache array, over
  * role x a fixed DPI table x face_id.

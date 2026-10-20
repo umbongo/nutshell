@@ -200,6 +200,19 @@ int test_ns_type_font_face_id_mono_is_two(void) {
 
 /* ---- ns_type: pill ---- */
 
+int test_ns_type_line_px_matches_the_ramp(void) {
+    TEST_BEGIN();
+    /* round(font_px * line_height): body 13 * 1.4, caption 12 * 1.3,
+     * heading 19 * 1.25 at 96 DPI; 27 * 1.4, 24 * 1.3, 37 * 1.25 at 192. */
+    ASSERT_EQ(ns_type_line_px(FONT_BODY, 96), 18);
+    ASSERT_EQ(ns_type_line_px(FONT_CAPTION, 96), 16);
+    ASSERT_EQ(ns_type_line_px(FONT_HEADING, 96), 24);
+    ASSERT_EQ(ns_type_line_px(FONT_BODY, 192), 38);
+    ASSERT_EQ(ns_type_line_px(FONT_CAPTION, 192), 31);
+    ASSERT_EQ(ns_type_line_px(FONT_HEADING, 192), 46);
+    TEST_END();
+}
+
 int test_ns_type_pill(void) {
     TEST_BEGIN();
     ASSERT_EQ(ns_type_pill(28), 14);

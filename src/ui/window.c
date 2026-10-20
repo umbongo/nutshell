@@ -2915,22 +2915,13 @@ static void do_copy(HWND hwnd)
 #define ABOUT_TAGLINE   "Windows SSH terminal with built-in AI assistance."
 #define ABOUT_COPYRIGHT "Copyright \xA9 2026 Thomas Sulkiewicz"
 
-/* Pixel height of one row of `role` text: the ramp's pixel size times its
- * line height, both from ns_type.h. */
-static int about_line_h(NsFontRole role, int dpi)
-{
-    const NsFontSpec *spec = ns_type_font(role);
-    double px = (double)ns_type_font_px(role, dpi, 0) * spec->line_height;
-    return (int)(px + 0.5);
-}
-
 /* The About window's content stack, measured from the type ramp. */
 static void about_compute_layout(AboutLayout *out, int dpi)
 {
     about_layout_compute(out, dpi, ns_scale(ABOUT_ICON_96, dpi),
-                         about_line_h(FONT_HEADING, dpi),
-                         about_line_h(FONT_BODY, dpi),
-                         about_line_h(FONT_CAPTION, dpi));
+                         ns_type_line_px(FONT_HEADING, dpi),
+                         ns_type_line_px(FONT_BODY, dpi),
+                         ns_type_line_px(FONT_CAPTION, dpi));
 }
 
 /* Draw one centred text row of the About stack. The row spans the real

@@ -2891,6 +2891,7 @@ int test_ns_type_font_slot_nearest_dpi_mapping(void);
 int test_ns_type_font_face_id_proportional_is_zero(void);
 int test_ns_type_font_face_id_mono_is_two(void);
 int test_ns_type_pill(void);
+int test_ns_type_line_px_matches_the_ramp(void);
 
 /* test_ui_tokens.c */
 int test_ui_tokens_text_contrast_on_backgrounds(void);
@@ -6318,6 +6319,7 @@ int main(void) {
     failed += test_ns_type_font_face_id_proportional_is_zero();
     failed += test_ns_type_font_face_id_mono_is_two();
     failed += test_ns_type_pill();
+    failed += test_ns_type_line_px_matches_the_ramp();
 
     printf("\n--- Design System: tokens ---\n");
     failed += test_ui_tokens_text_contrast_on_backgrounds();
