@@ -256,7 +256,7 @@ Done, in order (details in the commit messages and the specs named):
   and a raw tap; two reflow fixes for every session (a row that fills the width
   exactly gains no blank row; a cursor past the content keeps its distance). The
   top-anchored reflow itself (slice 3) is not built yet.
-- ConPTY resize probe run, 2026-10-21 (branch `conpty/probe-report`, fixtures 89c68d4):
+- ConPTY resize probe run, 2026-10-21 (PR #77; fixtures 89c68d4, report 8dc46fe):
   Windows 11 26H2 build 26300.9711 confirmed spec section 1 as written in all four
   scenarios; `PSEUDOCONSOLE_RESIZE_QUIRK` changed nothing and is not adopted; a
   soft-wrapped row is repainted as one run without `\r\n`. Report filled, the four
