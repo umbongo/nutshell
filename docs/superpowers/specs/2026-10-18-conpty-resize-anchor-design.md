@@ -531,6 +531,25 @@ Two critique rounds are the ceiling; these remain and go to the draft PR as they
   product adopts it if the report says it stops the repaint without losing the cursor.
 - Items 1-4 and 8-10 are answered by the probe and by the implementation's own logging.
 
+### Probe outcome (2026-10-21)
+
+One Windows run of `test_local_pty_resize_parity` (Windows 11 26H2, build 26300.9711), recorded
+in `2026-10-19-conpty-resize-probe-report.md`:
+
+- **Section 1 stands as written.** Every scenario's rule verdict was AGREES: grow keeps the top
+  line, a shrink drops from the top only as far as the cursor needs, content below the cursor
+  survives a shrink, a width change rewraps by logical line, and conhost's buffer equals its
+  window in every dump. Neither 1.8 trigger occurred.
+- **`PSEUDOCONSOLE_RESIZE_QUIRK` is not adopted.** The flag changed nothing: the same buffer,
+  cursor and post-resize bytes as flags 0, still a full repaint from `ESC[H`. `local_pty_open()`
+  keeps passing 0 and section 3's two residuals stay as accepted above.
+- **Item 3**: ConPTY's repaint sends a soft-wrapped row as one run with no `\r\n` at the wrap.
+- **Item 10**: this build opens with `ESC[2J` then `ESC[2;1H`, never `ESC[3J`.
+- Today's bottom-anchored model disagrees with conhost only on a grow, and only between the
+  resize and conhost's repaint; that window is the stranded-prompt bug. Slices 3 to 6 of the
+  implementation order (top mode, throttle, DPI reorder, logging, integration case) remain to
+  be built.
+
 ---
 
 ## Critique (round 1, 2026-10-18)

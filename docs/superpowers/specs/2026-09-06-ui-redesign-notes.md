@@ -250,11 +250,17 @@ Done, in order (details in the commit messages and the specs named):
   and `--ui-demo=ansi` shows the palette; ConPTY captures of Windows PowerShell 5.1
   pin the painted colours end to end.
 - ConPTY resize anchor, v1.2.42 (PR #70, 52b46f3; spec
-  `2026-10-18-conpty-resize-anchor-design.md`): a local ConPTY session reflows
-  top-anchored on resize, as conhost does, instead of bottom-anchored; `local_pty`
-  gains `pcon_flags` and a raw tap, and `term_resize` clamps the scroll offset. The
-  Windows probe run that fills `2026-10-19-conpty-resize-probe-report.md` is still
-  open (below).
+  `2026-10-18-conpty-resize-anchor-design.md`): slices 1 and 2 of the plan only. The
+  console probe (`test_local_pty_resize_parity`, wintest) dumps conhost's own buffer
+  around a `ResizePseudoConsole` and records fixtures; `local_pty` gains `pcon_flags`
+  and a raw tap; two reflow fixes for every session (a row that fills the width
+  exactly gains no blank row; a cursor past the content keeps its distance). The
+  top-anchored reflow itself (slice 3) is not built yet.
+- ConPTY resize probe run, 2026-10-21 (branch `conpty/probe-report`, fixtures 89c68d4):
+  Windows 11 26H2 build 26300.9711 confirmed spec section 1 as written in all four
+  scenarios; `PSEUDOCONSOLE_RESIZE_QUIRK` changed nothing and is not adopted; a
+  soft-wrapped row is repainted as one run without `\r\n`. Report filled, the four
+  `tests/fixtures/conpty_resize_*.bin` committed.
 - PuTTY-style terminal selection, keyboard cheat sheet and Enter-confirms-paste,
   v1.2.44 (PR #74, 6e8d69d; specs `2026-10-20-putty-selection-design.md` and
   `2026-10-20-keyboard-cheat-sheet-design.md`): selection is buffer-absolute per
@@ -290,9 +296,12 @@ Open, in priority order:
       pre-existing). Minor residuals from #74's reviews: a fourth rapid click selects a
       word again where PuTTY cycles; decomposed accents split a word; the help guide's
       Send Key paragraph still lists F1-F12 beside the new "F1-F12 go to the shell" line.
-- [ ] ConPTY resize probe run (PR #70 follow-up): on Windows, `NSPROBE_RECORD=1
-      mingw32-make wintest`, fill `2026-10-19-conpty-resize-probe-report.md` from the run,
-      and commit the four `tests/fixtures/conpty_resize_*.bin` if parity passes.
+- [ ] Top-anchored reflow for ConPTY sessions, slices 3-6 of
+      `2026-10-19-conpty-resize-probe-and-reflow.md` (top mode and the reconnect push,
+      the 100 ms throttle with its starved-timer check, DPI reorder, logging, the
+      integration case). The 2026-10-21 probe confirmed spec section 1 as written and
+      ruled out the quirk flag, so this is unblocked; until it ships a grow still
+      strands the prompt mid-screen between the resize and conhost's repaint.
 - [ ] Harness cases on `main`: `resize_applies_to_inactive_tab` fails on every run
       (since v1.2.13); `ctrl_w_reaches_shell_and_shift_closes_tab` failed the v1.2.36 and
       v1.2.37 gate runs and passed the v1.2.41 one, so it is intermittent -- both are
