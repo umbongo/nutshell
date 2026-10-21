@@ -930,6 +930,7 @@ int test_settings_markdown_render_default(void);
 int test_settings_markdown_render_roundtrip_off(void);
 int test_settings_markdown_render_roundtrip_on(void);
 int test_settings_markdown_render_missing_field(void);
+int test_config_save_creates_an_owner_only_file(void);
 
 /* test_crypto.c */
 int test_crypto_roundtrip_basic(void);
@@ -4471,6 +4472,7 @@ int main(void) {
     failed += test_settings_markdown_render_roundtrip_off();
     failed += test_settings_markdown_render_roundtrip_on();
     failed += test_settings_markdown_render_missing_field();
+    failed += test_config_save_creates_an_owner_only_file();
 
     printf("\n--- Crypto ---\n");
     failed += test_crypto_roundtrip_basic();

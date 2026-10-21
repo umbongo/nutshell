@@ -195,7 +195,7 @@ int test_settings_validate_null(void)
 int test_settings_validate_via_load(void)
 {
     TEST_BEGIN();
-    FILE *f = fopen(TMP_VAL, "w");
+    FILE *f = test_fopen_private(TMP_VAL);
     ASSERT_NOT_NULL(f);
     fputs("{ \"settings\": {"
           " \"font_size\": 1,"
@@ -230,7 +230,7 @@ int test_settings_markdown_render_roundtrip_off(void) {
     TEST_BEGIN();
     /* Write a config with the flag explicitly false; verify it loads as 0. */
     const char *path = TEST_TMP_DIR "/nutshell_test_md_off.config";
-    FILE *f = fopen(path, "w");
+    FILE *f = test_fopen_private(path);
     ASSERT_NOT_NULL(f);
     fputs("{ \"settings\": { \"markdown_render_enabled\": false } }", f);
     fclose(f);
@@ -246,7 +246,7 @@ int test_settings_markdown_render_roundtrip_on(void) {
     TEST_BEGIN();
     /* Explicitly true → loads as 1. */
     const char *path = TEST_TMP_DIR "/nutshell_test_md_on.config";
-    FILE *f = fopen(path, "w");
+    FILE *f = test_fopen_private(path);
     ASSERT_NOT_NULL(f);
     fputs("{ \"settings\": { \"markdown_render_enabled\": true } }", f);
     fclose(f);
@@ -262,7 +262,7 @@ int test_settings_markdown_render_missing_field(void) {
     TEST_BEGIN();
     /* Missing field → falls back to default (1). */
     const char *path = TEST_TMP_DIR "/nutshell_test_md_missing.config";
-    FILE *f = fopen(path, "w");
+    FILE *f = test_fopen_private(path);
     ASSERT_NOT_NULL(f);
     fputs("{ \"settings\": {} }", f);
     fclose(f);
@@ -271,5 +271,38 @@ int test_settings_markdown_render_missing_field(void) {
     ASSERT_EQ(cfg->settings.markdown_render_enabled, 1);
     config_free(cfg);
     remove(path);
+    TEST_END();
+}
+
+/* ---- config_save creates its file owner-only ------------------------------ */
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
+int test_config_save_creates_an_owner_only_file(void)
+{
+    TEST_BEGIN();
+#ifndef _WIN32
+    const char *path = TEST_TMP_DIR "/nutshell_test_save_mode.config";
+    remove(path);
+    remove(TEST_TMP_DIR "/nutshell_test_save_mode.config.tmp");
+
+    /* A permissive umask must not widen the file: the mode is requested at
+     * creation, not left to the umask. */
+    mode_t old_mask = umask(0);
+    Config *cfg = config_new_default();
+    ASSERT_NOT_NULL(cfg);
+    int rc = config_save(cfg, path);
+    umask(old_mask);
+    ASSERT_EQ(rc, 0);
+
+    struct stat st;
+    ASSERT_EQ(stat(path, &st), 0);
+    ASSERT_EQ((int)(st.st_mode & 0077), 0);
+
+    config_free(cfg);
+    remove(path);
+#endif
     TEST_END();
 }

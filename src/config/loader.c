@@ -13,9 +13,33 @@
 #include <time.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <io.h>
+#else
+#include <unistd.h>
 #endif
+
+/* Opens path for writing (create or truncate) so that only its owner can
+ * read it: the config holds encrypted secrets, and a plain fopen() leaves
+ * the mode to the umask. Returns NULL on failure, like fopen(). */
+static FILE *open_private_for_write(const char *path)
+{
+#ifdef _WIN32
+    int fd = _open(path, _O_WRONLY | _O_CREAT | _O_TRUNC, _S_IREAD | _S_IWRITE);
+    if (fd < 0) return NULL;
+    FILE *f = _fdopen(fd, "w");
+    if (!f) _close(fd);
+#else
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (fd < 0) return NULL;
+    FILE *f = fdopen(fd, "w");
+    if (!f) close(fd);
+#endif
+    return f;
+}
 
 /* ---- File I/O helper ------------------------------------------------------ */
 
@@ -932,7 +956,7 @@ int config_save(const Config *cfg, const char *path)
     memcpy(tmp_path, path, plen);
     memcpy(tmp_path + plen, ".tmp", 5u);
 
-    FILE *f = fopen(tmp_path, "w");
+    FILE *f = open_private_for_write(tmp_path);
     if (!f) {
         free(tmp_path);
         if (pw_blobs) {
