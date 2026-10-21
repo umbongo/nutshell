@@ -193,6 +193,10 @@ touches before marking its pull request ready.
 | `ctrl_c_with_selection_interrupts` | Ctrl+C with a selection on screen still interrupts `sleep 30`; the clipboard is kept |
 | `double_click_selects_word` | the class has `CS_DBLCLKS`; a double-click copies `/usr/local/bin` |
 | `triple_click_selects_line` | a triple-click copies the whole line |
+| `shift_click_extends_selection` | after a drag over `/usr`, a Shift+click (MK_SHIFT in the message) at the end of the word copies `/usr/local/bin`; logs `sel.extend` |
+| `middle_click_extends_selection` | the same with a middle-click (`WM_MBUTTONDOWN`/`UP`) |
+| `fourth_click_starts_over` | four rapid clicks, the fourth dragged from col 4 to col 8, copy exactly `/loca` (the click cycle is back at a single cell), not the line |
+| `double_click_selects_accented_word` | a double-click on the `e` of `cafe` + U+0301 (`printf` of the NFD bytes) copies the whole word with its mark, compared as UTF-8 bytes |
 | `output_into_selection_clears_it` | output written into a selected row logs `sel.clear reason=stale`; Ctrl+Shift+C then copies nothing |
 | `ai_panel_docks_with_key` | View › AI Assist docks the panel without a dialog |
 | `ai_runs_read_command_unattended` | a prompted `echo` runs in the terminal via `[EXEC]` once Auto-approve is on at Read |
@@ -316,8 +320,8 @@ desktop needed. One line each (see `NutshellIT.psm1` for full doc comments):
 | `Get-NutshellChatList -Session` / `Get-NutshellChatWordRect -Session -Word -Item [-Thinking]` | the AI panel's message list / where it painted a word (`CLV_MSG_QUERY_WORD`, `--ui-demo` only): `@{X;Y;W;H}` in the list's client pixels, W ending at the word's last character |
 | `Get-NutshellWindowDpi -Session` | the main window's DPI (96 = 100%); 96 when `GetDpiForWindow` is unavailable or returns 0 |
 | `Send-NutshellChatDrag -Session -FromX -FromY -ToX -ToY [-Steps] [-HoldMoves]` | a drag in the message list with sent `WM_LBUTTONDOWN`/`WM_MOUSEMOVE`/`WM_LBUTTONUP` (no foreground; the real cursor is parked in the screen's far corner first); `-HoldMoves` repeats the last point, each past an edge auto-scrolling once |
-| `Send-NutshellDrag -Session -From @(x,y) -To @(x,y) [-Clicks 1-3] [-Steps n] [-Hold]` | a terminal drag with sent mouse messages (no foreground; the cursor is parked first); `-Clicks 2` sends `WM_LBUTTONDBLCLK`, `-Clicks 3` a further press; `-Hold` leaves the button down |
-| `Send-NutshellDragEnd -Session -At @(x,y)` | the button-up that ends a `-Hold` drag |
+| `Send-NutshellDrag -Session -From @(x,y) -To @(x,y) [-Clicks 1-5] [-Steps n] [-Hold] [-Shift] [-Button Left\|Middle]` | a terminal drag with sent mouse messages (no foreground; the cursor is parked first); `-Clicks 2` sends `WM_LBUTTONDBLCLK`, `-Clicks 3` a further press, `-Clicks 4` another `WM_LBUTTONDBLCLK`, `-Clicks 5` another press; `-Hold` leaves the button down; `-Shift` ORs `MK_SHIFT` into the down and moves; `-Button Middle` sends `WM_MBUTTONDOWN`/`UP` with `MK_MBUTTON` (one click); the constants and parameters are plain PowerShell, no `Add-Type` change, so no fresh window is needed |
+| `Send-NutshellDragEnd -Session -At @(x,y) [-Button Left\|Middle]` | the button-up that ends a `-Hold` drag |
 | `Send-NutshellWheel -Session -Lines n` | one sent `WM_MOUSEWHEEL` scrolling n lines (positive: back into history) |
 | `Get-NutshellTermGeometry -Session` | rows, cols, cell size and grid origin in client pixels, from the last `render.draw` (render at trace) |
 | `Get-NutshellCellPoint -Geo -Row -Col` | the client pixel at a cell's centre; fractional and out-of-grid rows allowed |

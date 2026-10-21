@@ -1238,6 +1238,9 @@ int test_term_wrapped_cleared_by_el1_to_last_column(void);
 int test_term_wrapped_cleared_by_ed1_to_last_column(void);
 int test_term_wrapped_kept_by_readline_home_end(void);
 int test_term_wrapped_ctrl_u_leaves_next_output_unwrapped(void);
+int test_term_reflow_narrow_overflow_drops_oldest(void);
+int test_term_reflow_narrow_no_overflow_keeps_recycled(void);
+int test_term_reflow_narrow_overflow_primary_recycled_follows(void);
 
 /* test_theme.c */
 int test_theme_dark_background(void);
@@ -1962,6 +1965,22 @@ int test_sel_wholly_recycled_clears(void);
 int test_sel_sync_ignores_writes_elsewhere(void);
 int test_sel_stamps_survive_counter_wrap(void);
 int test_sel_reflowed_rows_not_stale_at_high_counter(void);
+int test_sel_extend_from_after_end_moves_end(void);
+int test_sel_extend_from_before_start_moves_start(void);
+int test_sel_extend_from_inside_moves_nearer_end(void);
+int test_sel_extend_from_inside_nearer_by_line(void);
+int test_sel_extend_from_word_mode_by_whole_words(void);
+int test_sel_extend_from_line_mode_by_whole_lines(void);
+int test_sel_extend_from_without_selection_is_a_click(void);
+int test_sel_extend_from_after_epoch_change_starts_fresh(void);
+int test_sel_extend_from_keeps_anchor_for_further_drag(void);
+int test_sel_extend_from_after_start_recycled(void);
+int test_sel_word_blank_run_takes_no_mark_either_side(void);
+int test_sel_click_count_cycles_one_two_three(void);
+int test_sel_is_combining_ranges(void);
+int test_sel_word_combining_mark_joins_base(void);
+int test_sel_word_combining_does_not_disturb_other_words(void);
+int test_sel_word_combining_after_space_does_not_join_space(void);
 
 /* test_ui_theme.c */
 int test_ui_theme_count(void);
@@ -4650,6 +4669,9 @@ int main(void) {
     failed += test_term_wrapped_cleared_by_ed1_to_last_column();
     failed += test_term_wrapped_kept_by_readline_home_end();
     failed += test_term_wrapped_ctrl_u_leaves_next_output_unwrapped();
+    failed += test_term_reflow_narrow_overflow_drops_oldest();
+    failed += test_term_reflow_narrow_no_overflow_keeps_recycled();
+    failed += test_term_reflow_narrow_overflow_primary_recycled_follows();
 
     printf("\n--- VT Sequences ---\n");
     failed += test_vt_osc_title_0();
@@ -5454,6 +5476,22 @@ int main(void) {
     failed += test_sel_sync_ignores_writes_elsewhere();
     failed += test_sel_stamps_survive_counter_wrap();
     failed += test_sel_reflowed_rows_not_stale_at_high_counter();
+    failed += test_sel_extend_from_after_end_moves_end();
+    failed += test_sel_extend_from_before_start_moves_start();
+    failed += test_sel_extend_from_inside_moves_nearer_end();
+    failed += test_sel_extend_from_inside_nearer_by_line();
+    failed += test_sel_extend_from_word_mode_by_whole_words();
+    failed += test_sel_extend_from_line_mode_by_whole_lines();
+    failed += test_sel_extend_from_without_selection_is_a_click();
+    failed += test_sel_extend_from_after_epoch_change_starts_fresh();
+    failed += test_sel_extend_from_keeps_anchor_for_further_drag();
+    failed += test_sel_extend_from_after_start_recycled();
+    failed += test_sel_word_blank_run_takes_no_mark_either_side();
+    failed += test_sel_click_count_cycles_one_two_three();
+    failed += test_sel_is_combining_ranges();
+    failed += test_sel_word_combining_mark_joins_base();
+    failed += test_sel_word_combining_does_not_disturb_other_words();
+    failed += test_sel_word_combining_after_space_does_not_join_space();
 
     /* test_cursor_scroll.c */
     failed += test_cursor_visible_at_bottom();

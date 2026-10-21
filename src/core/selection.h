@@ -47,6 +47,21 @@ int  selection_autoscroll_step(int py, int top_px, int bottom_px, int char_h);
  * (click_count 1 a cell, 2 a word, 3 a line) and records the press pixel. */
 void selection_begin(Selection *s, const Terminal *t, int screen_row, int col,
                      int click_count, int px, int py);
+/* Shift+click / middle-click: keep the selection and its mode, move one end to
+ * the screen cell and make it a live drag again (active = true, press and last
+ * pixels reset, no drag threshold). Which end moves is PuTTY's rule: the click
+ * before start moves start; after end moves end; inside moves the nearer end
+ * (nearer by line, then by column). The other end becomes the anchor unit.
+ * With no valid selection (or a different epoch) it is selection_begin() with
+ * click_count 1. The caller runs selection_sync() first: this re-stamps gen, so
+ * a selection the output has since written over would otherwise come back
+ * as fresh (window.c syncs before every extend). */
+void selection_extend_from(Selection *s, const Terminal *t, int screen_row, int col,
+                           int px, int py);
+/* The click count for a press: `within` is true when the press is inside the
+ * double-click time and rectangle of the previous press; the count cycles
+ * 1, 2, 3, 1, ... (PuTTY), so a fourth rapid click selects a cell again. */
+int selection_click_count(int prev_count, bool within);
 /* A move while the button is held. A STREAM press becomes a selection only
  * once the pointer has moved drag_cx/drag_cy pixels on either axis. */
 void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,
@@ -82,5 +97,10 @@ char *selection_copy_text(const Selection *s, const Terminal *t, size_t *out_len
  * Greek and Cyrillic; CJK and the rest stand alone (one codepoint per cell,
  * no wide-cell model). */
 int  selection_char_class(uint32_t cp);
+/* Combining marks: U+0300-036F, U+1AB0-1AFF, U+1DC0-1DFF, U+20D0-20FF and
+ * U+FE20-FE2F. Each sits in a cell of its own, but a double-click treats it
+ * as part of the cell before it. selection_char_class() is unchanged: a mark
+ * alone keeps its own class. */
+bool selection_is_combining(uint32_t cp);
 
 #endif /* NUTSHELL_SELECTION_H */

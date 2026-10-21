@@ -64,19 +64,41 @@ static bool sel_next_cell(const Terminal *t, SelPoint *p)
     return true;
 }
 
-/* The maximal run of cells of p's class, following soft wraps. */
+/* The maximal run of cells of p's class, following soft wraps. A combining
+ * mark belongs to the cell before it: pressed on, it takes that cell's class;
+ * scanning forward it always continues a word; scanning back it is stepped
+ * over to the cell it belongs to. A blank has nothing to combine with, so a
+ * mark after a blank keeps a class of its own and joins no blank run. */
 static void sel_word_bounds(const Terminal *t, SelPoint p, SelPoint *first, SelPoint *last)
 {
-    int cls = selection_char_class(sel_cp(t, p));
+    uint32_t pcp = sel_cp(t, p);
+    int cls = selection_char_class(pcp);
     SelPoint a = p, b = p, q;
+    if (selection_is_combining(pcp)) {
+        q = p;
+        while (sel_prev_cell(t, &q)) {
+            uint32_t cp = sel_cp(t, q);
+            if (selection_is_combining(cp)) continue;
+            if (selection_char_class(cp) != 0) cls = selection_char_class(cp);
+            break;
+        }
+    }
     for (;;) {
+        bool found = false;
         q = a;
-        if (!sel_prev_cell(t, &q) || selection_char_class(sel_cp(t, q)) != cls) break;
+        while (sel_prev_cell(t, &q)) {
+            if (cls != 0 && selection_is_combining(sel_cp(t, q))) continue;
+            found = true;
+            break;
+        }
+        if (!found || selection_char_class(sel_cp(t, q)) != cls) break;
         a = q;
     }
     for (;;) {
         q = b;
-        if (!sel_next_cell(t, &q) || selection_char_class(sel_cp(t, q)) != cls) break;
+        if (!sel_next_cell(t, &q)) break;
+        uint32_t cp = sel_cp(t, q);
+        if (!(cls != 0 && selection_is_combining(cp)) && selection_char_class(cp) != cls) break;
         b = q;
     }
     *first = a;
@@ -181,6 +203,17 @@ static void sb_cut(SelBuf *b, size_t len)
     b->p[len] = '\0';
 }
 
+/* The extend body: the unit under p joined with the anchor unit. */
+static void sel_apply_point(Selection *s, const Terminal *t, SelPoint p)
+{
+    SelPoint first, last;
+    sel_unit(s, t, p, &first, &last);
+    s->start = (sel_cmp(first, s->anchor) < 0) ? first : s->anchor;
+    s->end = (sel_cmp(last, s->anchor_end) > 0) ? last : s->anchor_end;
+    s->valid = true;
+    s->gen = t->write_gen;
+}
+
 /* ---- the API ------------------------------------------------------------ */
 
 void selection_pixel_to_cell(int px, int py, int char_w, int char_h,
@@ -236,12 +269,46 @@ void selection_extend(Selection *s, const Terminal *t, int screen_row, int col,
     if (s->mode == SEL_STREAM && !s->valid &&
         abs(px - s->press_x) < drag_cx && abs(py - s->press_y) < drag_cy)
         return;                                    /* still a click */
-    SelPoint first, last;
-    sel_unit(s, t, sel_point_at(t, screen_row, col), &first, &last);
-    s->start = (sel_cmp(first, s->anchor) < 0) ? first : s->anchor;
-    s->end = (sel_cmp(last, s->anchor_end) > 0) ? last : s->anchor_end;
-    s->valid = true;
-    s->gen = t->write_gen;
+    sel_apply_point(s, t, sel_point_at(t, screen_row, col));
+}
+
+/* Is p nearer the start than the end: by line, then by column. */
+static bool sel_nearer_start(const Selection *s, SelPoint p)
+{
+    uint64_t ds = (p.line > s->start.line) ? p.line - s->start.line : s->start.line - p.line;
+    uint64_t de = (p.line > s->end.line) ? p.line - s->end.line : s->end.line - p.line;
+    if (ds != de) return ds < de;
+    int cs = abs(p.col - s->start.col), ce = abs(p.col - s->end.col);
+    return cs < ce;                                /* ties go to the end */
+}
+
+int selection_click_count(int prev_count, bool within)
+{
+    return within ? (prev_count % 3) + 1 : 1;
+}
+
+void selection_extend_from(Selection *s, const Terminal *t, int screen_row, int col,
+                           int px, int py)
+{
+    if (!s || !t) return;
+    if (!s->valid || s->epoch != t->epoch) {
+        selection_begin(s, t, screen_row, col, 1, px, py);
+        return;
+    }
+    (void)sel_trim(s, t);
+    SelPoint p = sel_point_at(t, screen_row, col);
+    bool move_start;
+    if (sel_cmp(p, s->start) < 0) move_start = true;
+    else if (sel_cmp(p, s->end) > 0) move_start = false;
+    else move_start = sel_nearer_start(s, p);
+    /* The end that stays becomes the anchor unit, so a later drag extends by
+     * whole units from it. */
+    SelPoint keep = move_start ? s->end : s->start;
+    sel_unit(s, t, keep, &s->anchor, &s->anchor_end);
+    s->press_x = s->last_x = px;
+    s->press_y = s->last_y = py;
+    s->active = true;
+    sel_apply_point(s, t, p);
 }
 
 bool selection_finish(Selection *s, const Terminal *t)
@@ -386,4 +453,11 @@ int selection_char_class(uint32_t cp)
         (cp >= 0x370u && cp <= 0x52Fu))
         return 1;
     return 2 + (int)cp;
+}
+
+bool selection_is_combining(uint32_t cp)
+{
+    return (cp >= 0x0300u && cp <= 0x036Fu) || (cp >= 0x1AB0u && cp <= 0x1AFFu) ||
+           (cp >= 0x1DC0u && cp <= 0x1DFFu) || (cp >= 0x20D0u && cp <= 0x20FFu) ||
+           (cp >= 0xFE20u && cp <= 0xFE2Fu);
 }

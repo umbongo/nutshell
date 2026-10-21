@@ -477,29 +477,36 @@ function Get-NutshellCellPoint {
 }
 
 function Send-NutshellDrag {
-    <# A left-button drag in the terminal with sent mouse messages (no
-       foreground; the real cursor is parked first), from -From to -To, client
-       pixels of the main window (Get-NutshellCellPoint). -Clicks 2 sends
-       down, up, WM_LBUTTONDBLCLK; -Clicks 3 then up and a further down at
-       once (the triple-click). Then -Steps moves with the button held to -To
-       and the button-up there -- unless -Hold leaves the button down, so a
-       case can wait on sel.scroll and end it with Send-NutshellDragEnd. Sent,
-       not posted, so each message is handled before the next goes. #>
+    <# A drag in the terminal with sent mouse messages (no foreground; the real
+       cursor is parked first), from -From to -To, client pixels of the main
+       window (Get-NutshellCellPoint). -Clicks n is the click cycle as Windows
+       delivers it: 2 sends down, up, WM_LBUTTONDBLCLK; 3 then up and a further
+       down at once (the triple-click); 4 up and another WM_LBUTTONDBLCLK; 5 up
+       and another down. Then -Steps moves with the button held to -To and the
+       button-up there -- unless -Hold leaves the button down, so a case can
+       wait on sel.scroll and end it with Send-NutshellDragEnd. -Shift ORs
+       MK_SHIFT into the wParam of the down and the moves (a Shift+click, read
+       from the message, never GetKeyState). -Button Middle sends
+       WM_MBUTTONDOWN/UP with MK_MBUTTON instead (one click only). Sent, not
+       posted, so each message is handled before the next goes. #>
     param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int[]] $From,
-          [Parameter(Mandatory)] [int[]] $To, [ValidateRange(1, 3)] [int] $Clicks = 1,
-          [int] $Steps = 4, [switch] $Hold)
+          [Parameter(Mandatory)] [int[]] $To, [ValidateRange(1, 5)] [int] $Clicks = 1,
+          [int] $Steps = 4, [switch] $Hold, [switch] $Shift,
+          [ValidateSet('Left', 'Middle')] [string] $Button = 'Left')
+    if ($Button -eq 'Middle' -and $Clicks -gt 1) { throw "-Button Middle sends one click" }
     Set-NutshellCursorParked
     $h = $Session.Main
-    $mk = [IntPtr]$script:MK_LBUTTON
+    $mkBase = if ($Button -eq 'Middle') { $script:MK_MBUTTON } else { $script:MK_LBUTTON }
+    if ($Shift) { $mkBase = $mkBase -bor $script:MK_SHIFT }
+    $mk = [IntPtr]$mkBase
+    $downMsg = if ($Button -eq 'Middle') { $script:WM_MBUTTONDOWN } else { $script:WM_LBUTTONDOWN }
+    $upMsg = if ($Button -eq 'Middle') { $script:WM_MBUTTONUP } else { $script:WM_LBUTTONUP }
     $p0 = ConvertTo-NutshellPointLParam -X $From[0] -Y $From[1]
-    [NutshellNative]::SendMsg($h, $script:WM_LBUTTONDOWN, $mk, $p0) | Out-Null
-    if ($Clicks -ge 2) {
+    [NutshellNative]::SendMsg($h, $downMsg, $mk, $p0) | Out-Null
+    for ($n = 2; $n -le $Clicks; $n++) {
         [NutshellNative]::SendMsg($h, $script:WM_LBUTTONUP, [IntPtr]::Zero, $p0) | Out-Null
-        [NutshellNative]::SendMsg($h, $script:WM_LBUTTONDBLCLK, $mk, $p0) | Out-Null
-    }
-    if ($Clicks -ge 3) {
-        [NutshellNative]::SendMsg($h, $script:WM_LBUTTONUP, [IntPtr]::Zero, $p0) | Out-Null
-        [NutshellNative]::SendMsg($h, $script:WM_LBUTTONDOWN, $mk, $p0) | Out-Null
+        $next = if ($n % 2 -eq 0) { $script:WM_LBUTTONDBLCLK } else { $script:WM_LBUTTONDOWN }
+        [NutshellNative]::SendMsg($h, $next, $mk, $p0) | Out-Null
     }
     for ($i = 1; $i -le $Steps; $i++) {
         $x = $From[0] + [int](($To[0] - $From[0]) * $i / $Steps)
@@ -508,16 +515,19 @@ function Send-NutshellDrag {
             (ConvertTo-NutshellPointLParam -X $x -Y $y)) | Out-Null
     }
     if (-not $Hold) {
-        [NutshellNative]::SendMsg($h, $script:WM_LBUTTONUP, [IntPtr]::Zero,
+        [NutshellNative]::SendMsg($h, $upMsg, [IntPtr]::Zero,
             (ConvertTo-NutshellPointLParam -X $To[0] -Y $To[1])) | Out-Null
     }
     Start-Sleep -Milliseconds 200
 }
 
 function Send-NutshellDragEnd {
-    <# Release a Send-NutshellDrag -Hold at -At (client pixels). #>
-    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int[]] $At)
-    [NutshellNative]::SendMsg($Session.Main, $script:WM_LBUTTONUP, [IntPtr]::Zero,
+    <# Release a Send-NutshellDrag -Hold at -At (client pixels); -Button Middle
+       for a middle-button drag. #>
+    param([Parameter(Mandatory)] $Session, [Parameter(Mandatory)] [int[]] $At,
+          [ValidateSet('Left', 'Middle')] [string] $Button = 'Left')
+    $upMsg = if ($Button -eq 'Middle') { $script:WM_MBUTTONUP } else { $script:WM_LBUTTONUP }
+    [NutshellNative]::SendMsg($Session.Main, $upMsg, [IntPtr]::Zero,
         (ConvertTo-NutshellPointLParam -X $At[0] -Y $At[1])) | Out-Null
     Start-Sleep -Milliseconds 200
 }
@@ -579,6 +589,10 @@ $script:WM_LBUTTONDOWN     = 0x0201
 $script:WM_LBUTTONUP       = 0x0202
 $script:MK_LBUTTON         = 0x0001
 $script:WM_LBUTTONDBLCLK   = 0x0203
+$script:WM_MBUTTONDOWN     = 0x0207
+$script:WM_MBUTTONUP       = 0x0208
+$script:MK_MBUTTON         = 0x0010
+$script:MK_SHIFT           = 0x0004
 $script:WM_MOUSEWHEEL      = 0x020A
 $script:WM_SETTEXT         = 0x000C
 $script:WM_GETTEXTLENGTH   = 0x000E
