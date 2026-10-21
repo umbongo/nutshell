@@ -2124,6 +2124,20 @@ int test_color_rgb_black(void);
 int test_color_rgb_white(void);
 int test_color_sgr_default_fg(void);
 int test_color_sgr_default_bg(void);
+int test_color_truncated_rgb_sets_nothing(void);
+int test_color_truncated_256_sets_nothing(void);
+int test_color_unknown_selector_consumes_rest(void);
+int test_color_truncated_keeps_earlier_attribute(void);
+int test_color_valid_colour_does_not_overeat(void);
+int test_color_cap_truncated_rgb_at_end(void);
+int test_color_cap_overflow_digits_do_not_merge(void);
+int test_color_cap_first_sixteen_still_apply(void);
+int test_color_colon_rgb_with_colourspace(void);
+int test_color_colon_rgb_without_colourspace(void);
+int test_color_colon_256(void);
+int test_color_colon_underline_style_is_underline_only(void);
+int test_color_colon_underline_colour_is_noop(void);
+int test_color_colon_short_run_is_noop_and_ends_at_semicolon(void);
 
 /* test_cursor_scroll.c */
 int test_cursor_visible_at_bottom(void);
@@ -5424,6 +5438,20 @@ int main(void) {
     failed += test_color_rgb_white();
     failed += test_color_sgr_default_fg();
     failed += test_color_sgr_default_bg();
+    failed += test_color_truncated_rgb_sets_nothing();
+    failed += test_color_truncated_256_sets_nothing();
+    failed += test_color_unknown_selector_consumes_rest();
+    failed += test_color_truncated_keeps_earlier_attribute();
+    failed += test_color_valid_colour_does_not_overeat();
+    failed += test_color_cap_truncated_rgb_at_end();
+    failed += test_color_cap_overflow_digits_do_not_merge();
+    failed += test_color_cap_first_sixteen_still_apply();
+    failed += test_color_colon_rgb_with_colourspace();
+    failed += test_color_colon_rgb_without_colourspace();
+    failed += test_color_colon_256();
+    failed += test_color_colon_underline_style_is_underline_only();
+    failed += test_color_colon_underline_colour_is_noop();
+    failed += test_color_colon_short_run_is_noop_and_ends_at_semicolon();
 
     printf("\n--- Connect Animation ---\n");
     failed += test_anim_dots_zero_elapsed();

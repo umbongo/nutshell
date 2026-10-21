@@ -211,6 +211,7 @@ int test_color_256_missing_param(void) {
     feed(t, "\033[38;5m");
     ASSERT_EQ(t->current_attr.fg,      saved_fg);
     ASSERT_EQ(t->current_attr.fg_mode, saved_mode);
+    ASSERT_EQ(t->current_attr.flags,   0);   /* the 5 is not a BLINK */
 
     term_free(t);
     TEST_END();
@@ -229,6 +230,7 @@ int test_color_rgb_short_param(void) {
     feed(t, "\033[38;2;255;128m");
     ASSERT_EQ(t->current_attr.fg,      saved_fg);
     ASSERT_EQ(t->current_attr.fg_mode, saved_mode);
+    ASSERT_EQ(t->current_attr.flags,   0);   /* the 2 is not a DIM */
 
     term_free(t);
     TEST_END();
@@ -274,6 +276,235 @@ int test_color_rgb_white(void) {
     feed(t, "\033[38;2;255;255;255m");
     ASSERT_EQ(t->current_attr.fg_mode, COLOR_RGB);
     ASSERT_EQ(t->current_attr.fg, 0xFFFFFFu);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- Truncated / malformed extended colours leak nothing ----------------- */
+
+/* Asserts the terminal's current attribute is the untouched default. */
+#define ASSERT_ATTR_DEFAULT(t) do { \
+    ASSERT_EQ((t)->current_attr.flags,    0); \
+    ASSERT_EQ((t)->current_attr.fg_mode,  COLOR_DEFAULT); \
+    ASSERT_EQ((t)->current_attr.bg_mode,  COLOR_DEFAULT); \
+} while (0)
+
+int test_color_truncated_rgb_sets_nothing(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[38;2;255;128m");
+    ASSERT_ATTR_DEFAULT(t);          /* no DIM from the 2, no colour */
+    feed(t, "\033[48;2;1;2m");
+    ASSERT_ATTR_DEFAULT(t);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_truncated_256_sets_nothing(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[38;5m");
+    ASSERT_ATTR_DEFAULT(t);          /* no BLINK from the 5 */
+    feed(t, "\033[48;5m");
+    ASSERT_ATTR_DEFAULT(t);
+    feed(t, "\033[38m");             /* a bare trailing 38 is a no-op */
+    ASSERT_ATTR_DEFAULT(t);
+    feed(t, "\033[48m");
+    ASSERT_ATTR_DEFAULT(t);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_unknown_selector_consumes_rest(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[38;1m");           /* selector 1 is no bold */
+    ASSERT_ATTR_DEFAULT(t);
+    feed(t, "\033[38;3;1;2;3;1m");   /* the whole tail is consumed */
+    ASSERT_ATTR_DEFAULT(t);
+    feed(t, "\033[48;0;1;4;5;7m");
+    ASSERT_ATTR_DEFAULT(t);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_truncated_keeps_earlier_attribute(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[1;38;5m");         /* bold, then a truncated colour */
+    ASSERT_EQ(t->current_attr.flags,   TERM_ATTR_BOLD);
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_DEFAULT);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_valid_colour_does_not_overeat(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[38;5;196;1m");
+    ASSERT_EQ(t->current_attr.fg_mode,  COLOR_256);
+    ASSERT_EQ(t->current_attr.fg_index, 196);
+    ASSERT_EQ(t->current_attr.flags,    TERM_ATTR_BOLD);
+
+    feed(t, "\033[0m\033[48;2;1;2;3;4m");
+    ASSERT_EQ(t->current_attr.bg_mode, COLOR_RGB);
+    ASSERT_EQ(t->current_attr.bg,      0x010203u);
+    ASSERT_EQ(t->current_attr.flags,   TERM_ATTR_UNDERLINE);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- More than 16 parameters: the overflow is dropped, not merged -------- */
+
+int test_color_cap_truncated_rgb_at_end(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    /* 38 sits at index 14: only 2 and 255 fit in the 16 kept parameters. */
+    feed(t, "\033[1;1;1;1;1;1;1;1;1;1;1;1;1;1;38;2;255;0;0m");
+    ASSERT_EQ(t->current_attr.flags,   TERM_ATTR_BOLD);
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_DEFAULT);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_cap_overflow_digits_do_not_merge(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    /* 17 parameters: the 17th (31) must not merge into the 16th (0). */
+    feed(t, "\033[0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;31m");
+    ASSERT_ATTR_DEFAULT(t);
+
+    /* The flag is reset for the next sequence. */
+    feed(t, "\033[31m");
+    ASSERT_EQ(t->current_attr.fg_mode,  COLOR_ANSI16);
+    ASSERT_EQ(t->current_attr.fg_index, 1);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_cap_first_sixteen_still_apply(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;1;4;7m");
+    ASSERT_EQ(t->current_attr.flags, TERM_ATTR_BOLD);
+
+    term_free(t);
+    TEST_END();
+}
+
+/* ---- Colon sub-parameters ------------------------------------------------ */
+
+int test_color_colon_rgb_with_colourspace(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[38:2::255:0:0m");
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_RGB);
+    ASSERT_EQ(t->current_attr.fg,      0xFF0000u);
+    ASSERT_EQ(t->current_attr.flags,   0);
+
+    feed(t, "\033[48:2::0:0:255m");
+    ASSERT_EQ(t->current_attr.bg_mode, COLOR_RGB);
+    ASSERT_EQ(t->current_attr.bg,      0x0000FFu);
+    ASSERT_EQ(t->current_attr.flags,   0);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_colon_rgb_without_colourspace(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[38:2:255:0:0m");
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_RGB);
+    ASSERT_EQ(t->current_attr.fg,      0xFF0000u);
+    ASSERT_EQ(t->current_attr.flags,   0);
+
+    /* Mixed form is read as the colon form. */
+    feed(t, "\033[48;2:1:2:3m");
+    ASSERT_EQ(t->current_attr.bg_mode, COLOR_RGB);
+    ASSERT_EQ(t->current_attr.bg,      0x010203u);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_colon_256(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[38:5:196m");
+    ASSERT_EQ(t->current_attr.fg_mode,  COLOR_256);
+    ASSERT_EQ(t->current_attr.fg_index, 196);
+    ASSERT_EQ(t->current_attr.flags,    0);
+
+    feed(t, "\033[48:5:21;1m");      /* a colon run ends at its own ';' */
+    ASSERT_EQ(t->current_attr.bg_mode,  COLOR_256);
+    ASSERT_EQ(t->current_attr.bg_index, 21);
+    ASSERT_EQ(t->current_attr.flags,    TERM_ATTR_BOLD);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_colon_underline_style_is_underline_only(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[4:3m");
+    ASSERT_EQ(t->current_attr.flags,   TERM_ATTR_UNDERLINE);
+    ASSERT_EQ(t->current_attr.bg_mode, COLOR_DEFAULT);   /* not "43" */
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_DEFAULT);
+
+    feed(t, "\033[0m\033[4:3;31m");  /* what follows the run still applies */
+    ASSERT_EQ(t->current_attr.flags,    TERM_ATTR_UNDERLINE);
+    ASSERT_EQ(t->current_attr.fg_mode,  COLOR_ANSI16);
+    ASSERT_EQ(t->current_attr.fg_index, 1);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_colon_underline_colour_is_noop(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[58:2::1:2:3m");
+    ASSERT_ATTR_DEFAULT(t);
+    feed(t, "\033[58;5;196m");
+    ASSERT_ATTR_DEFAULT(t);
+
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_colon_short_run_is_noop_and_ends_at_semicolon(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+
+    feed(t, "\033[38:2:1m");
+    ASSERT_ATTR_DEFAULT(t);
+
+    feed(t, "\033[38:2:1;1m");       /* only the colon run is consumed */
+    ASSERT_EQ(t->current_attr.flags,   TERM_ATTR_BOLD);
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_DEFAULT);
 
     term_free(t);
     TEST_END();

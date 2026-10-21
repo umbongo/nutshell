@@ -53,6 +53,8 @@ Terminal *term_init(int rows, int cols, int max_scrollback) {
 
     term->state = TERM_STATE_NORMAL;
     term->csi_param_count = 0;
+    term->csi_sub_mask = 0;
+    term->csi_overflow = false;
     term->csi_private = false;
     term->osc_len = 0;
 

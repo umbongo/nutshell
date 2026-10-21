@@ -172,6 +172,83 @@ static void sgr_reset(Terminal *term) {
     term->current_attr.flags    = 0;
 }
 
+/* Applies a 256-colour or truecolour value to the foreground (38) or
+ * background (48). 58 (underline colour) is not supported and is a no-op. */
+static void sgr_apply_colour(Terminal *term, int which, bool is_256,
+                             int a, int g, int b)
+{
+    if (which == 58) return;
+    uint32_t *rgb      = (which == 38) ? &term->current_attr.fg : &term->current_attr.bg;
+    uint8_t *mode      = (which == 38) ? &term->current_attr.fg_mode : &term->current_attr.bg_mode;
+    uint8_t *index     = (which == 38) ? &term->current_attr.fg_index : &term->current_attr.bg_index;
+
+    if (is_256) {
+        if (a < 0 || a > 255) return;
+        *mode  = (uint8_t)COLOR_256;
+        *index = (uint8_t)a;
+        *rgb   = color256_to_rgb((uint8_t)a);
+    } else {
+        if (a < 0 || a > 255 || g < 0 || g > 255 || b < 0 || b > 255) return;
+        *mode = (uint8_t)COLOR_RGB;
+        *rgb  = ((uint32_t)a << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    }
+}
+
+/* True when csi_params[idx] was introduced by ':'. */
+static bool sgr_is_sub(const Terminal *term, int idx)
+{
+    return idx > 0 && idx < TERM_MAX_CSI_PARAMS &&
+           (term->csi_sub_mask & (uint16_t)(1u << idx)) != 0;
+}
+
+/* Parses an extended colour (38/48/58) whose code is at index i and returns
+ * the index of the last parameter it consumed. Semicolon form 38;5;n and
+ * 38;2;r;g;b: a valid one consumes its values; a truncated one, or one with
+ * any other selector, consumes the rest of the sequence and changes nothing
+ * (xterm), so its selector and values are never applied as SGR codes. Colon
+ * form 38:5:n, 38:2:r:g:b and 38:2:cs:r:g:b (the colour-space id may be
+ * empty): colon groups are self-delimiting, so an invalid one consumes only
+ * its own run. A mixed 38;2:r:g:b is read as the colon form. */
+static int sgr_extended_colour(Terminal *term, int i)
+{
+    const int count = term->csi_param_count;
+    const int *pv   = term->csi_params;
+    const int which = pv[i];
+
+    /* The colon run: from the selector at i+1 to the last sub-parameter. */
+    int run_end = i + 1;                 /* one past the last parameter used */
+    if (i + 1 < count) {
+        run_end = i + 2;
+        while (run_end < count && sgr_is_sub(term, run_end)) run_end++;
+    }
+    const bool colon = i + 1 < count &&
+                       (sgr_is_sub(term, i + 1) || run_end > i + 2);
+
+    if (colon) {
+        int n = run_end - (i + 1);       /* selector plus its values */
+        if (pv[i + 1] == 5 && n >= 2) {
+            sgr_apply_colour(term, which, true, pv[i + 2], 0, 0);
+        } else if (pv[i + 1] == 2 && n >= 5) {
+            sgr_apply_colour(term, which, false, pv[i + 3], pv[i + 4], pv[i + 5]);
+        } else if (pv[i + 1] == 2 && n == 4) {
+            sgr_apply_colour(term, which, false, pv[i + 2], pv[i + 3], pv[i + 4]);
+        }
+        return run_end - 1;
+    }
+
+    if (i + 1 < count) {
+        if (pv[i + 1] == 5 && i + 2 < count) {
+            sgr_apply_colour(term, which, true, pv[i + 2], 0, 0);
+            return i + 2;
+        }
+        if (pv[i + 1] == 2 && i + 4 < count) {
+            sgr_apply_colour(term, which, false, pv[i + 2], pv[i + 3], pv[i + 4]);
+            return i + 4;
+        }
+    }
+    return count - 1;                    /* truncated or unknown: eat the rest */
+}
+
 static void handle_sgr(Terminal *term) {
     if (term->csi_param_count == 0) {
         sgr_reset(term);
@@ -179,6 +256,9 @@ static void handle_sgr(Terminal *term) {
     }
 
     for (int i = 0; i < term->csi_param_count; i++) {
+        /* A sub-parameter ("4:3") belongs to the code before it, which has
+         * already applied itself; it is never a code of its own. */
+        if (sgr_is_sub(term, i)) continue;
         int p = term->csi_params[i];
         switch (p) {
             case 0: /* Full reset */
@@ -234,52 +314,10 @@ static void handle_sgr(Terminal *term) {
                 term->current_attr.bg       = PALETTE[p - 100 + 8];
                 break;
 
-            /* Extended foreground: 38;5;n (256-colour) or 38;2;r;g;b (truecolor) */
-            case 38:
-                if (i + 2 < term->csi_param_count && term->csi_params[i + 1] == 5) {
-                    int idx = term->csi_params[i + 2];
-                    if (idx >= 0 && idx <= 255) {
-                        term->current_attr.fg_mode  = COLOR_256;
-                        term->current_attr.fg_index = (uint8_t)idx;
-                        term->current_attr.fg       = color256_to_rgb((uint8_t)idx);
-                    }
-                    i += 2;
-                } else if (i + 4 < term->csi_param_count && term->csi_params[i + 1] == 2) {
-                    int r = term->csi_params[i + 2];
-                    int g = term->csi_params[i + 3];
-                    int b = term->csi_params[i + 4];
-                    if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
-                        term->current_attr.fg_mode = COLOR_RGB;
-                        term->current_attr.fg      = ((uint32_t)r << 16) |
-                                                     ((uint32_t)g <<  8) |
-                                                      (uint32_t)b;
-                    }
-                    i += 4;
-                }
-                break;
-
-            /* Extended background: 48;5;n (256-colour) or 48;2;r;g;b (truecolor) */
-            case 48:
-                if (i + 2 < term->csi_param_count && term->csi_params[i + 1] == 5) {
-                    int idx = term->csi_params[i + 2];
-                    if (idx >= 0 && idx <= 255) {
-                        term->current_attr.bg_mode  = COLOR_256;
-                        term->current_attr.bg_index = (uint8_t)idx;
-                        term->current_attr.bg       = color256_to_rgb((uint8_t)idx);
-                    }
-                    i += 2;
-                } else if (i + 4 < term->csi_param_count && term->csi_params[i + 1] == 2) {
-                    int r = term->csi_params[i + 2];
-                    int g = term->csi_params[i + 3];
-                    int b = term->csi_params[i + 4];
-                    if (r >= 0 && r <= 255 && g >= 0 && g <= 255 && b >= 0 && b <= 255) {
-                        term->current_attr.bg_mode = COLOR_RGB;
-                        term->current_attr.bg      = ((uint32_t)r << 16) |
-                                                     ((uint32_t)g <<  8) |
-                                                      (uint32_t)b;
-                    }
-                    i += 4;
-                }
+            /* Extended colour: 38 foreground, 48 background, 58 underline
+             * colour (parsed so its parameters are consumed, not applied). */
+            case 38: case 48: case 58:
+                i = sgr_extended_colour(term, i);
                 break;
 
             default:
@@ -670,6 +708,8 @@ void term_process(Terminal *term, const char *data, size_t len) {
                     term->state = TERM_STATE_CSI;
                     term->csi_param_count = 0;
                     term->csi_params[0] = 0;
+                    term->csi_sub_mask = 0;
+                    term->csi_overflow = false;
                     term->csi_private = false;
                 } else if (c == ']') {
                     term->state = TERM_STATE_OSC;
@@ -736,6 +776,7 @@ void term_process(Terminal *term, const char *data, size_t len) {
                 if (c == '?') {
                     term->csi_private = true;
                 } else if (isdigit(c)) {
+                    if (term->csi_overflow) break; /* past the cap: dropped */
                     if (term->csi_param_count == 0) term->csi_param_count = 1;
                     /* L-4: explicit bounds check before array access */
                     if (term->csi_param_count > 0 &&
@@ -751,10 +792,23 @@ void term_process(Terminal *term, const char *data, size_t len) {
                         if (v > 65535L) v = 65535L;
                         *p = (int)v;
                     }
-                } else if (c == ';') {
+                } else if (c == ';' || c == ':') {
+                    /* ':' starts a sub-parameter of the preceding parameter
+                     * (ISO 8613-6, as in SGR 4:3 and 38:2::r:g:b). An empty
+                     * first parameter before it counts as one. */
+                    if (c == ':' && term->csi_param_count == 0)
+                        term->csi_param_count = 1;
                     if (term->csi_param_count < TERM_MAX_CSI_PARAMS) {
                         term->csi_param_count++;
                         term->csi_params[term->csi_param_count - 1] = 0;
+                        if (c == ':')
+                            term->csi_sub_mask |= (uint16_t)(1u << (term->csi_param_count - 1));
+                        else
+                            term->csi_sub_mask &= (uint16_t)~(1u << (term->csi_param_count - 1));
+                    } else {
+                        /* No slot left: later digits must not merge into
+                         * the last one (";10;20;30" became "102030"). */
+                        term->csi_overflow = true;
                     }
                 } else if (c >= 0x40 && c <= 0x7E) {
                     if (term->csi_private && (c == 'h' || c == 'l')) {
