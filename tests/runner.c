@@ -7118,6 +7118,11 @@ int main(void) {
         int test_dlog_review_key_scanner_names_buffer_is_bounded_at_its_capacity(void);
         int test_dlog_review_no_real_call_site_key_is_redacted_by_name(void);
         int test_dlog_gate_scans_the_event_key_and_data_of_content_calls_but_not_the_length(void);
+        int test_tn_status_lines_exact(void);
+        int test_tn_status_ipv6_bracketed(void);
+        int test_tn_status_truncates_safely(void);
+        int test_tn_conn_merge_precedence(void);
+        int test_tn_line_for_outcome_maps_all(void);
         failed += test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read();
         failed += test_dlog_review_osc52_introducer_after_the_output_filled_up_withholds_the_next_read();
         failed += test_dlog_review_escape_bytes_keeps_tracking_after_the_output_is_full();
@@ -7156,6 +7161,11 @@ int main(void) {
         failed += test_dlog_review_key_scanner_names_buffer_is_bounded_at_its_capacity();
         failed += test_dlog_review_no_real_call_site_key_is_redacted_by_name();
         failed += test_dlog_gate_scans_the_event_key_and_data_of_content_calls_but_not_the_length();
+        failed += test_tn_status_lines_exact();
+        failed += test_tn_status_ipv6_bracketed();
+        failed += test_tn_status_truncates_safely();
+        failed += test_tn_conn_merge_precedence();
+        failed += test_tn_line_for_outcome_maps_all();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
