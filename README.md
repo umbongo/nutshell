@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.47 \
+**Version**: v1.2.48 \
 **Build Date**: 2026-09-10 \
 **Author**: Thomas Sulkiewicz
 
@@ -34,7 +34,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Multi-tab SSH sessions with owner-drawn tab strip (status dots, log indicator, close button)
 - **Local shell** sessions over ConPTY — the same window, terminal and assistant with no remote host at all ([see below](#local-shell))
 - VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
-- Password and SSH key authentication with passphrase prompt and retry and a hold-to-reveal eye on every password field
+- Password and SSH key authentication, with a passphrase prompt, retry, and a hold-to-reveal eye on every password field
 - Windows DPAPI password encryption at rest, per-user (legacy AES-256-GCM configs migrate automatically)
 - TOFU host key verification (first-connect dialog, mismatch warning)
 - Dynamic PTY resize on window resize and zoom
