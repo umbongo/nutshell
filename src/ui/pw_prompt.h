@@ -1,0 +1,20 @@
+/* src/ui/pw_prompt.h -- modal themed prompt for one secret (the SSH key
+ * passphrase today). Extended by the telnet password prompt. */
+#ifndef NUTSHELL_PW_PROMPT_H
+#define NUTSHELL_PW_PROMPT_H
+
+#include <windows.h>
+#include "ui_theme.h"
+
+typedef struct {
+    const char        *title;  /* window caption, e.g. "SSH Key Passphrase" */
+    const char        *label;  /* text above the field, e.g. "Enter key passphrase:" */
+    const ThemeColors *theme;  /* for the title bar; NULL leaves it default */
+} PwPromptOpts;
+
+/* Modal prompt owned by `parent`. Returns 1 on OK with the text in `out`
+ * (NUL-terminated, at most out_size - 1 bytes), 0 on Cancel, close or
+ * WM_QUIT (re-posted). Every internal copy is wiped with secure_zero(). */
+int pw_prompt_show(HWND parent, const PwPromptOpts *opts, char *out, int out_size);
+
+#endif /* NUTSHELL_PW_PROMPT_H */
