@@ -9,6 +9,7 @@
 #include <string.h>
 #include "test_framework.h"
 #include "pw_reveal.h"
+#include "pw_prompt.h"
 
 typedef struct {
     HWND  top;
@@ -247,10 +248,10 @@ int test_pw_reveal_win_emptied_by_replacesel(void)
     TEST_END();
 }
 
-/* A Delete key-down on a full selection empties the field through a message
- * no narrow "editing messages" whitelist would name, so this proves the
- * emptied check runs after every message. */
-int test_pw_reveal_win_emptied_by_alt_backspace_undo(void)
+/* Delete on a full selection empties the field and the mask is restored.
+ * This covers one keyboard-driven emptying path only; it does not by itself
+ * show the check runs after every message rather than for a fixed set. */
+int test_pw_reveal_win_emptied_by_delete_key(void)
 {
     TEST_BEGIN();
     PwFix f;
@@ -430,6 +431,36 @@ int test_pw_reveal_win_destroy_while_revealed_is_clean(void)
         ASSERT_NOT_NULL(pw_reveal_attach(e2));
     }
     fix_free(&f);
+    TEST_END();
+}
+
+/* pw_prompt: activating the prompt (Alt+Tab back) must leave focus on the
+ * passphrase field, not hand it to the window via DefWindowProc. The prompt
+ * is modal, so a timer callback running inside its message loop drives it. */
+static int g_focus_on_edit = -1;
+
+static VOID CALLBACK pw_activate_timer(HWND h, UINT m, UINT_PTR id, DWORD t)
+{
+    (void)h; (void)m; (void)t;
+    KillTimer(NULL, id);
+    HWND dlg = FindWindowA("NutshellPassDlg", NULL);
+    if (!dlg) return;
+    HWND edit = FindWindowExA(dlg, NULL, "EDIT", NULL);
+    SetFocus(dlg);
+    SendMessageW(dlg, WM_ACTIVATE, WA_ACTIVE, 0);
+    g_focus_on_edit = (edit && GetFocus() == edit) ? 1 : 0;
+    SendMessageW(dlg, WM_COMMAND, IDCANCEL, 0);
+}
+
+int test_pw_prompt_win_activate_keeps_focus_on_field(void)
+{
+    TEST_BEGIN();
+    char out[64];
+    PwPromptOpts o = { "t", "label", NULL };
+    g_focus_on_edit = -1;
+    SetTimer(NULL, 0, 100, pw_activate_timer);
+    (void)pw_prompt_show(NULL, &o, out, (int)sizeof(out));
+    ASSERT_EQ(g_focus_on_edit, 1);
     TEST_END();
 }
 

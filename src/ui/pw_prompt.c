@@ -122,10 +122,16 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         return TRUE;
     }
     case WM_ACTIVATE:
-        if (LOWORD(wp) == WA_INACTIVE)
+        if (LOWORD(wp) == WA_INACTIVE) {
             pw_reveal_mask_all(hwnd);
-        else
-            SetFocus(GetDlgItem(hwnd, PW_ID_EDIT));   /* the only field */
+            break;
+        }
+        if (!HIWORD(wp)) {   /* not minimised */
+            /* The only field. Return here: DefWindowProc would move focus
+             * back to the window itself and typing would be dropped. */
+            SetFocus(GetDlgItem(hwnd, PW_ID_EDIT));
+            return 0;
+        }
         break;
     case WM_COMMAND:
         if (LOWORD(wp) == IDOK && ctx) {

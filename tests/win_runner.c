@@ -39,7 +39,7 @@ int test_pw_reveal_win_emptied_while_revealed_masks(void);
 int test_pw_reveal_win_emptied_by_backspace(void);
 int test_pw_reveal_win_emptied_by_clear(void);
 int test_pw_reveal_win_emptied_by_replacesel(void);
-int test_pw_reveal_win_emptied_by_alt_backspace_undo(void);
+int test_pw_reveal_win_emptied_by_delete_key(void);
 int test_pw_reveal_win_replaced_text_masks(void);
 int test_pw_reveal_win_eye_click_activates_and_no_context_menu(void);
 int test_pw_reveal_win_setfont_keeps_margin(void);
@@ -47,6 +47,7 @@ int test_pw_reveal_win_empty_field_never_reveals(void);
 int test_pw_reveal_win_copy_blocked_while_revealed(void);
 int test_pw_reveal_win_eye_tracks_resize_and_margin(void);
 int test_pw_reveal_win_destroy_while_revealed_is_clean(void);
+int test_pw_prompt_win_activate_keeps_focus_on_field(void);
 
 /* test_local_pty.c */
 extern FILE *nspty_report;
@@ -243,7 +244,7 @@ int main(int argc, char **argv)
     failed += test_pw_reveal_win_emptied_by_backspace();
     failed += test_pw_reveal_win_emptied_by_clear();
     failed += test_pw_reveal_win_emptied_by_replacesel();
-    failed += test_pw_reveal_win_emptied_by_alt_backspace_undo();
+    failed += test_pw_reveal_win_emptied_by_delete_key();
     failed += test_pw_reveal_win_replaced_text_masks();
     failed += test_pw_reveal_win_eye_click_activates_and_no_context_menu();
     failed += test_pw_reveal_win_setfont_keeps_margin();
@@ -251,6 +252,7 @@ int main(int argc, char **argv)
     failed += test_pw_reveal_win_copy_blocked_while_revealed();
     failed += test_pw_reveal_win_eye_tracks_resize_and_margin();
     failed += test_pw_reveal_win_destroy_while_revealed_is_clean();
+    failed += test_pw_prompt_win_activate_keeps_focus_on_field();
 
     printf("\n[pty] re-executing with a console of our own "
            "(see win_runner.c for why)\n");
