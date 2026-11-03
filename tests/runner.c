@@ -2342,6 +2342,16 @@ int test_worker_life_last_release_frees(void);
 int test_worker_life_cancel_is_sticky(void);
 int test_worker_life_ids_unique_nonzero(void);
 
+/* test_pw_reveal_state.c */
+int test_pw_reveal_press_reveals_only_with_text(void);
+int test_pw_reveal_release_masks(void);
+int test_pw_reveal_capture_lost_and_deactivate_mask(void);
+int test_pw_reveal_leave_masks_enter_while_held_reveals(void);
+int test_pw_reveal_enter_without_press_stays_masked(void);
+int test_pw_reveal_emptied_masks_until_next_press(void);
+int test_pw_reveal_destroy_masks_and_clears_press(void);
+int test_pw_reveal_null_safe(void);
+
 /* test_conn_prompt.c */
 int test_conn_prompt_slot_starts_empty_and_not_cancelled(void);
 int test_conn_prompt_publish_then_claim_by_identity(void);
@@ -6750,6 +6760,14 @@ int main(void) {
     failed += test_conn_prompt_stale_seq_is_refused_by_a_newer_request();
     failed += test_conn_prompt_seq_is_never_zero();
     failed += test_conn_prompt_null_is_safe();
+    failed += test_pw_reveal_press_reveals_only_with_text();
+    failed += test_pw_reveal_release_masks();
+    failed += test_pw_reveal_capture_lost_and_deactivate_mask();
+    failed += test_pw_reveal_leave_masks_enter_while_held_reveals();
+    failed += test_pw_reveal_enter_without_press_stays_masked();
+    failed += test_pw_reveal_emptied_masks_until_next_press();
+    failed += test_pw_reveal_destroy_masks_and_clears_press();
+    failed += test_pw_reveal_null_safe();
 
     failed += test_ai_stream_finish_before_close();
     failed += test_ai_stream_close_before_finish();
