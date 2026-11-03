@@ -123,6 +123,10 @@ void config_profile_free(Profile *p);
 Profile *config_find_profile_by_name(const Config *cfg, const char *name);
 Profile *config_find_profile_by_host(const Config *cfg, const char *host);
 
+/* First saved profile whose kind, host, username and port equal key's
+ * (exact, case-sensitive). NULL when none, or on NULL input. */
+Profile *config_find_profile_match(const Config *cfg, const Profile *key);
+
 /* Insert a saved "Local shell" profile at index 0 when the config has no
  * profile of kind "local" yet (spec section 5). Returns 1 when it
  * inserted one (the caller should then config_save()), 0 when a local

@@ -1091,6 +1091,14 @@ int test_shell_prompt_is_windows_psx_negative(void);
 int test_shell_prompt_is_windows_ps_bare_no_terminator_negative(void);
 int test_shell_prompt_is_windows_bracket_prefix_then_non_ps_negative(void);
 
+/* test_profile_kind.c */
+int test_profile_kind_of_maps_strings(void);
+int test_profile_kind_names_and_ports(void);
+int test_profile_kind_swap_port(void);
+int test_session_kind_name_covers_telnet(void);
+int test_config_profile_kind_telnet_roundtrip_with_password(void);
+int test_config_find_profile_match(void);
+
 /* test_dispatch_line_clear.c */
 int test_dispatch_line_clear_local_gitbash_is_readline(void);
 int test_dispatch_line_clear_local_msys2_is_readline(void);
@@ -4549,6 +4557,12 @@ int main(void) {
     failed += test_shell_prompt_is_windows_ps_bare_no_terminator_negative();
     failed += test_shell_prompt_is_windows_bracket_prefix_then_non_ps_negative();
 
+    failed += test_profile_kind_of_maps_strings();
+    failed += test_profile_kind_names_and_ports();
+    failed += test_profile_kind_swap_port();
+    failed += test_session_kind_name_covers_telnet();
+    failed += test_config_profile_kind_telnet_roundtrip_with_password();
+    failed += test_config_find_profile_match();
     failed += test_dispatch_line_clear_local_gitbash_is_readline();
     failed += test_dispatch_line_clear_local_msys2_is_readline();
     failed += test_dispatch_line_clear_local_powershell_is_none();

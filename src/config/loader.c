@@ -1180,6 +1180,24 @@ Profile *config_find_profile_by_host(const Config *cfg, const char *host)
     return NULL;
 }
 
+Profile *config_find_profile_match(const Config *cfg, const Profile *key)
+{
+    if (!cfg || !key) {
+        return NULL;
+    }
+    size_t n = vec_size(&cfg->profiles);
+    for (size_t i = 0u; i < n; i++) {
+        Profile *p = (Profile *)vec_get(&cfg->profiles, i);
+        if (p && p->port == key->port &&
+            strcmp(p->kind, key->kind) == 0 &&
+            strcmp(p->host, key->host) == 0 &&
+            strcmp(p->username, key->username) == 0) {
+            return p;
+        }
+    }
+    return NULL;
+}
+
 int config_ensure_local_profile(Config *cfg)
 {
     if (!cfg) {

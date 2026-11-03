@@ -19,7 +19,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
-typedef enum { SESSION_SSH = 0, SESSION_LOCAL = 1 } SessionKind;
+typedef enum { SESSION_SSH = 0, SESSION_LOCAL = 1, SESSION_TELNET = 2 } SessionKind;
 
 typedef struct SessionIo {
     /* Same contract as ssh_io_poll: >0 read, 0 nothing, -1 error, -2 EOF. */
