@@ -2428,6 +2428,7 @@ int test_conn_prompt_claim_after_claim_by_identity_finds_nothing(void);
 int test_conn_prompt_stale_seq_is_refused_by_a_newer_request(void);
 int test_conn_prompt_seq_is_never_zero(void);
 int test_conn_prompt_null_is_safe(void);
+int test_conn_prompt_wants_password(void);
 
 int test_ai_stream_finish_before_close(void);
 int test_ai_stream_close_before_finish(void);
@@ -6879,6 +6880,7 @@ int main(void) {
     failed += test_conn_prompt_stale_seq_is_refused_by_a_newer_request();
     failed += test_conn_prompt_seq_is_never_zero();
     failed += test_conn_prompt_null_is_safe();
+    failed += test_conn_prompt_wants_password();
     failed += test_pw_reveal_press_reveals_only_with_text();
     failed += test_pw_reveal_release_masks();
     failed += test_pw_reveal_capture_lost_and_deactivate_mask();

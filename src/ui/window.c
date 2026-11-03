@@ -214,6 +214,12 @@ typedef struct ConnJob {
      * Never hold a ConnJob* across a call that can pump messages -- always
      * re-resolve it from the live session list by job id first. */
     ConnPromptSlot pending_req;
+    /* A password the user typed into the SSH password box with "Save password
+     * to this profile" ticked. Set by the worker only after authentication
+     * succeeded; WM_CONN_DONE saves it and wipes it (conn_job_free wipes it
+     * on every other path). Never kept for a reconnect. */
+    char        save_password[256];
+    int         save_requested;
 } ConnJob;
 
 /* Connection jobs allocated and not yet freed, process-wide. Exit waits a
@@ -227,6 +233,7 @@ static void conn_job_free(ConnJob *j)
     if (j->ssh) ssh_session_free(j->ssh);
     if (j->tn_sock != INVALID_SOCKET) closesocket(j->tn_sock);
     secure_zero(&j->profile, sizeof(j->profile));
+    secure_zero(j->save_password, sizeof(j->save_password));
     free(j);
     InterlockedDecrement(&g_live_conn_jobs);
 }
@@ -289,7 +296,7 @@ static void conn_job_release(ConnJob *j)
  * that is already correct, just not the prettiest possible UI -- not
  * worth it here.
  */
-typedef enum { CONN_UI_HOSTKEY, CONN_UI_PASSPHRASE } ConnUiKind;
+typedef enum { CONN_UI_HOSTKEY, CONN_UI_PASSPHRASE, CONN_UI_PASSWORD } ConnUiKind;
 
 typedef struct ConnUiRequest {
     ConnUiKind kind;
@@ -299,10 +306,12 @@ typedef struct ConnUiRequest {
     const char *title;
     const char *message;
     UINT        mb_flags;
-    /* CONN_UI_PASSPHRASE: filled by the UI thread iff it resolves the
-     * request with answer=1 (OK pressed); wiped by whichever side last
-     * touches it. */
+    /* CONN_UI_PASSPHRASE / CONN_UI_PASSWORD (the latter's `message` is the
+     * detail line): filled by the UI thread iff it resolves the request with
+     * answer=1 (OK pressed); wiped by whichever side last touches it. The
+     * password box's "Save password to this profile" tick lands in `save`. */
     char        passphrase[256];
+    int         save;
     HANDLE      done_event;
     /* Written by whichever side wins the slot claim, always *before*
      * SetEvent(done_event) -- that ordering (a plain write, then the
@@ -334,7 +343,7 @@ static void conn_ui_request_cancel(ConnJob *j)
     ConnUiRequest *owned =
         (ConnUiRequest *)conn_prompt_slot_cancel_and_claim(&j->pending_req);
     if (!owned) return;
-    if (owned->kind == CONN_UI_PASSPHRASE)
+    if (owned->kind == CONN_UI_PASSPHRASE || owned->kind == CONN_UI_PASSWORD)
         secure_zero(owned->passphrase, sizeof(owned->passphrase));
     owned->answer = 0;
     SetEvent(owned->done_event);
@@ -352,7 +361,7 @@ static void conn_ui_request_cancel(ConnJob *j)
  * used. */
 static int conn_ui_ask(ConnJob *j, ConnUiKind kind, const char *title,
                         const char *message, UINT mb_flags,
-                        char *passphrase_out)
+                        char *passphrase_out, int *save_out)
 {
     ConnUiRequest req;
     memset(&req, 0, sizeof(req));
@@ -393,9 +402,11 @@ static int conn_ui_ask(ConnJob *j, ConnUiKind kind, const char *title,
     CloseHandle(req.done_event);
 
     int answer = req.answer;
-    if (kind == CONN_UI_PASSPHRASE && passphrase_out && answer) {
+    if ((kind == CONN_UI_PASSPHRASE || kind == CONN_UI_PASSWORD) &&
+        passphrase_out && answer) {
         strncpy(passphrase_out, req.passphrase, 255);
         passphrase_out[255] = '\0';
+        if (save_out) *save_out = req.save;
     }
     secure_zero(req.passphrase, sizeof(req.passphrase));
     return answer;
@@ -1693,7 +1704,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
                 flags = (UINT)MB_YESNO | MB_ICONSTOP | MB_DEFBUTTON2;
             }
 
-            int ans = conn_ui_ask(j, CONN_UI_HOSTKEY, title, dlg_msg, flags, NULL);
+            int ans = conn_ui_ask(j, CONN_UI_HOSTKEY, title, dlg_msg, flags, NULL, NULL);
             DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.hostkey.answer", "accepted=%d",
                  ans == IDYES ? 1 : 0);
             if (ans == IDYES) {
@@ -1728,7 +1739,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
             auth_asked = 1;
             char passphrase[256];
             memset(passphrase, 0, sizeof(passphrase));
-            if (conn_ui_ask(j, CONN_UI_PASSPHRASE, NULL, NULL, 0, passphrase)) {
+            if (conn_ui_ask(j, CONN_UI_PASSPHRASE, NULL, NULL, 0, passphrase, NULL)) {
                 const int pp_registered = dlog_secret_add(passphrase);
                 auth_rc = ssh_auth_key(j->ssh, info->username, info->key_path, passphrase);
                 if (pp_registered) dlog_secret_remove(passphrase);
@@ -1740,6 +1751,29 @@ static DWORD WINAPI connection_thread(LPVOID param)
             }
             secure_zero(passphrase, sizeof(passphrase));
         }
+    } else if (conn_prompt_wants_password(0, info->password)) {
+        /* Password auth with nothing saved: ask through the UI thread. */
+        auth_asked = 1;
+        char detail[512];
+        char pw[256];
+        int  want_save = 0;
+        memset(pw, 0, sizeof(pw));
+        snprintf(detail, sizeof(detail), "%s \xE2\x80\x94 %s@%s",
+                 info->name, info->username, info->host);
+        if (!conn_ui_ask(j, CONN_UI_PASSWORD, NULL, detail, 0, pw, &want_save)) {
+            secure_zero(pw, sizeof(pw));
+            snprintf(j->error, sizeof(j->error), "Password entry cancelled.");
+            CONN_FAIL(4);
+        }
+        const int pw_registered = dlog_secret_add(pw);
+        auth_rc = ssh_auth_password(j->ssh, info->username, pw);
+        if (pw_registered) dlog_secret_remove(pw);
+        if (auth_rc == 0 && want_save) {
+            strncpy(j->save_password, pw, sizeof(j->save_password) - 1u);
+            j->save_password[sizeof(j->save_password) - 1u] = '\0';
+            j->save_requested = 1;
+        }
+        secure_zero(pw, sizeof(pw));
     } else {
         auth_rc = ssh_auth_password(j->ssh, info->username, info->password);
     }
@@ -4907,8 +4941,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * and an extra one here could only prematurely re-enable hwnd
              * out from under some other modal still on screen (Settings,
              * WM_CONN_DONE's error box, another tab's prompt). */
+            int save = 0;
             if (req->kind == CONN_UI_HOSTKEY) {
                 ans = MessageBoxA(hwnd, req->message, req->title, req->mb_flags);
+            } else if (req->kind == CONN_UI_PASSWORD) {
+                ans = pw_prompt_show(hwnd,
+                    &(PwPromptOpts){ .title = "SSH Password",
+                                     .label = "Enter password:",
+                                     .theme = g_theme,
+                                     .detail = req->message, .offer_save = 1 },
+                    passbuf, (int)sizeof(passbuf), &save);
             } else {
                 ans = pw_prompt_show(hwnd,
                     &(PwPromptOpts){ .title = "SSH Key Passphrase",
@@ -4924,8 +4966,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             while (s2 && !(s2->conn_job && s2->conn_job->id == job_id))
                 s2 = s2->next;
             if (s2 && conn_prompt_slot_claim(&s2->conn_job->pending_req, req, seq)) {
-                if (req->kind == CONN_UI_PASSPHRASE && ans)
+                if ((req->kind == CONN_UI_PASSPHRASE || req->kind == CONN_UI_PASSWORD) && ans)
                     strncpy(req->passphrase, passbuf, sizeof(req->passphrase) - 1);
+                if (req->kind == CONN_UI_PASSWORD && ans)
+                    req->save = save;
                 req->answer = ans;
                 SetEvent(req->done_event);
             }
@@ -4971,6 +5015,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                  * until a reconnect, which re-reads it from the config. */
                 SecureZeroMemory(s->conn_profile.password,
                                  sizeof(s->conn_profile.password));
+            }
+            if (conn_result == 0 && job->save_requested) {
+                save_prompted_password(&s->conn_profile, job->save_password);
+                secure_zero(job->save_password, sizeof(job->save_password));
+                job->save_requested = 0;
             }
             conn_job_release(job);   /* a failed attempt's SSH session goes with it */
 
@@ -5020,8 +5069,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 char errmsg[600];
                 snprintf(errmsg, sizeof(errmsg), "\r\n%s\r\n", conn_error);
                 term_process(s->term, errmsg, strlen(errmsg));
-                MessageBoxA(hwnd, conn_error, "Connection Error",
-                            MB_OK | MB_ICONERROR);
+                if (conn_result != 4)   /* 4 = the user cancelled the password box */
+                    MessageBoxA(hwnd, conn_error, "Connection Error",
+                                MB_OK | MB_ICONERROR);
                 if (tidx >= 0)
                     tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
             } else {

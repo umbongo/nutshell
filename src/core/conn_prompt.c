@@ -65,3 +65,9 @@ int conn_prompt_slot_claim(ConnPromptSlot *s, void *req, unsigned seq)
                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
            ? 1 : 0;
 }
+
+int conn_prompt_wants_password(int auth_is_key, const char *saved_password)
+{
+    if (auth_is_key) return 0;
+    return (!saved_password || saved_password[0] == '\0') ? 1 : 0;
+}
