@@ -24,7 +24,7 @@ BEGIN
     /* ---- Right column: connection form ---- */
 
     LTEXT           "Type:",            -1,           198,   4,  35,   8
-    COMBOBOX        IDC_COMBO_KIND,                   237,   2, 281,  40, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    COMBOBOX        IDC_COMBO_KIND,                   237,   2, 281,  60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
     LTEXT           "Name:",            -1,           198,  22,  35,   8
     EDITTEXT        IDC_EDIT_NAME,                    237,  20, 281,  14, ES_AUTOHSCROLL

@@ -13,6 +13,7 @@
 #include "icons.h"
 #include "../config/profile.h"
 #include "../config/config.h"
+#include "../core/profile_kind.h"
 #include "../core/vector.h"
 #include "../core/cmd_classify.h"
 #include "local_shell.h"
@@ -39,6 +40,7 @@ typedef struct {
     HWND        hAiScrollbar; /* custom scrollbar for AI notes edit */
     int         ai_line_h;    /* cached line height in px for AI notes */
     HWND        hListScrollbar; /* custom scrollbar for session listbox */
+    int         last_kind;    /* ProfileKind the Type combo showed before the current change */
 
     /* Shell combo (IDC_EDIT_SHELL): row 0 is always "Automatic (...)",
      * stored command "" (index 0 of shell_cmd is unused/empty); rows 1..n
@@ -269,6 +271,25 @@ static void shell_combo_show(HWND hwnd, const SessMgrState *st, const char *shel
     SetDlgItemTextA(hwnd, IDC_EDIT_SHELL, shell);
 }
 
+/* Type combo rows: SSH (0), Local shell (1), Telnet (2). */
+static ProfileKind kind_from_combo(int idx)
+{
+    switch (idx) {
+    case 1:  return PROFILE_KIND_LOCAL;
+    case 2:  return PROFILE_KIND_TELNET;
+    default: return PROFILE_KIND_SSH;
+    }
+}
+
+static int combo_from_kind(ProfileKind k)
+{
+    switch (k) {
+    case PROFILE_KIND_LOCAL:  return 1;
+    case PROFILE_KIND_TELNET: return 2;
+    default:                  return 0;
+    }
+}
+
 /* Clear all form fields and reset auth combo to Password. */
 static void form_clear(HWND hwnd, SessMgrState *st)
 {
@@ -282,7 +303,9 @@ static void form_clear(HWND hwnd, SessMgrState *st)
     SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, "");
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL, 0, 0);
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_PLATFORM), CB_SETCURSEL, 0, 0);
-    SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND), CB_SETCURSEL, 0, 0);
+    SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND), CB_SETCURSEL,
+                (WPARAM)combo_from_kind(PROFILE_KIND_SSH), 0);
+    st->last_kind = PROFILE_KIND_SSH;
 }
 
 /* Populate form fields from an existing profile. */
@@ -302,8 +325,10 @@ static void form_load(HWND hwnd, SessMgrState *st, const Profile *pr)
     SetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, pr->ai_notes);
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH), CB_SETCURSEL,
                 pr->auth_type == AUTH_KEY ? 1 : 0, 0);
+    ProfileKind loaded_kind = profile_kind_of(pr->kind);
     SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND), CB_SETCURSEL,
-                strcmp(pr->kind, "local") == 0 ? 1 : 0, 0);
+                (WPARAM)combo_from_kind(loaded_kind), 0);
+    st->last_kind = loaded_kind;
 
     /* Select the dropdown row whose config token matches the profile's
      * platform string; fall back to row 0 (Auto-detect) for "auto", an
@@ -344,8 +369,14 @@ static void toggle_kind_fields(HWND hwnd)
 {
     int  idx      = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND),
                                      CB_GETCURSEL, 0, 0);
-    BOOL is_local = (idx == 1);
+    ProfileKind kind = kind_from_combo(idx);
+    BOOL is_local  = (kind == PROFILE_KIND_LOCAL);
+    BOOL is_telnet = (kind == PROFILE_KIND_TELNET);
 
+    static const int telnet_hide_ids[] = {
+        IDC_STATIC_AUTH, IDC_COMBO_AUTH, IDC_STATIC_KEY, IDC_EDIT_KEYPATH,
+        IDC_BTN_BROWSE_KEY, IDC_STATIC_SHELL, IDC_EDIT_SHELL
+    };
     static const int ssh_ids[] = {
         IDC_STATIC_HOST, IDC_EDIT_HOST, IDC_STATIC_PORT, IDC_EDIT_PORT,
         IDC_STATIC_USER, IDC_EDIT_USER, IDC_STATIC_AUTH, IDC_COMBO_AUTH,
@@ -354,8 +385,10 @@ static void toggle_kind_fields(HWND hwnd)
     };
     static const int shell_ids[] = { IDC_STATIC_SHELL, IDC_EDIT_SHELL };
 
-    const int *hide_ids = is_local ? ssh_ids   : shell_ids;
-    int        hide_n   = is_local ? (int)(sizeof(ssh_ids)/sizeof(ssh_ids[0]))
+    const int *hide_ids = is_local  ? ssh_ids
+                        : is_telnet ? telnet_hide_ids : shell_ids;
+    int        hide_n   = is_local  ? (int)(sizeof(ssh_ids)/sizeof(ssh_ids[0]))
+                        : is_telnet ? (int)(sizeof(telnet_hide_ids)/sizeof(telnet_hide_ids[0]))
                                     : (int)(sizeof(shell_ids)/sizeof(shell_ids[0]));
 
     HWND hFocus = GetFocus();
@@ -373,20 +406,26 @@ static void toggle_kind_fields(HWND hwnd)
         ShowWindow(GetDlgItem(hwnd, IDC_STATIC_SHELL), SW_SHOW);
         ShowWindow(GetDlgItem(hwnd, IDC_EDIT_SHELL),   SW_SHOW);
     } else {
-        ShowWindow(GetDlgItem(hwnd, IDC_STATIC_SHELL), SW_HIDE);
-        ShowWindow(GetDlgItem(hwnd, IDC_EDIT_SHELL),   SW_HIDE);
+        for (int i = 0; i < hide_n; i++)
+            ShowWindow(GetDlgItem(hwnd, hide_ids[i]), SW_HIDE);
         ShowWindow(GetDlgItem(hwnd, IDC_STATIC_HOST),  SW_SHOW);
         ShowWindow(GetDlgItem(hwnd, IDC_EDIT_HOST),    SW_SHOW);
         ShowWindow(GetDlgItem(hwnd, IDC_STATIC_PORT),  SW_SHOW);
         ShowWindow(GetDlgItem(hwnd, IDC_EDIT_PORT),    SW_SHOW);
         ShowWindow(GetDlgItem(hwnd, IDC_STATIC_USER),  SW_SHOW);
         ShowWindow(GetDlgItem(hwnd, IDC_EDIT_USER),    SW_SHOW);
-        ShowWindow(GetDlgItem(hwnd, IDC_STATIC_AUTH),  SW_SHOW);
-        ShowWindow(GetDlgItem(hwnd, IDC_COMBO_AUTH),   SW_SHOW);
         ShowWindow(GetDlgItem(hwnd, IDC_STATIC_PASS),  SW_SHOW);
         ShowWindow(GetDlgItem(hwnd, IDC_EDIT_PASS),    SW_SHOW);
-        /* Key row's own visibility rule (key auth only) wins. */
-        toggle_auth_fields(hwnd);
+        if (is_telnet) {
+            SendMessage(GetDlgItem(hwnd, IDC_EDIT_PASS), EM_SETCUEBANNER, 0,
+                        (LPARAM)L"Password (blank: asked at the prompt)");
+        } else {
+            ShowWindow(GetDlgItem(hwnd, IDC_STATIC_AUTH), SW_SHOW);
+            ShowWindow(GetDlgItem(hwnd, IDC_COMBO_AUTH),  SW_SHOW);
+            /* Key row's own visibility rule (key auth only) wins; also
+             * restores the SSH password cue banner. */
+            toggle_auth_fields(hwnd);
+        }
     }
 }
 
@@ -432,7 +471,8 @@ static int form_read(HWND hwnd, const SessMgrState *st, Profile *pr)
 {
     int kind_idx  = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_KIND),
                                      CB_GETCURSEL, 0, 0);
-    BOOL is_local = (kind_idx == 1);
+    ProfileKind kind = kind_from_combo(kind_idx);
+    BOOL is_local = (kind == PROFILE_KIND_LOCAL);
 
     GetDlgItemTextA(hwnd, IDC_EDIT_NAME, pr->name, sizeof(pr->name));
 
@@ -451,7 +491,7 @@ static int form_read(HWND hwnd, const SessMgrState *st, Profile *pr)
         return 1;
     }
 
-    snprintf(pr->kind, sizeof(pr->kind), "%s", "ssh");
+    snprintf(pr->kind, sizeof(pr->kind), "%s", profile_kind_name(kind));
     pr->shell[0] = '\0';
 
     GetDlgItemTextA(hwnd, IDC_EDIT_HOST, pr->host, sizeof(pr->host));
@@ -463,9 +503,14 @@ static int form_read(HWND hwnd, const SessMgrState *st, Profile *pr)
     GetDlgItemTextA(hwnd, IDC_EDIT_KEYPATH, pr->key_path, sizeof(pr->key_path));
     GetDlgItemTextA(hwnd, IDC_EDIT_AI_NOTES, pr->ai_notes, sizeof(pr->ai_notes));
 
-    int auth_idx  = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH),
-                                     CB_GETCURSEL, 0, 0);
-    pr->auth_type = (auth_idx == 1) ? AUTH_KEY : AUTH_PASSWORD;
+    if (kind == PROFILE_KIND_TELNET) {
+        pr->auth_type   = AUTH_PASSWORD;
+        pr->key_path[0] = '\0';
+    } else {
+        int auth_idx  = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_AUTH),
+                                         CB_GETCURSEL, 0, 0);
+        pr->auth_type = (auth_idx == 1) ? AUTH_KEY : AUTH_PASSWORD;
+    }
 
     int plat_idx = (int)SendMessage(GetDlgItem(hwnd, IDC_COMBO_PLATFORM),
                                     CB_GETCURSEL, 0, 0);
@@ -474,7 +519,8 @@ static int form_read(HWND hwnd, const SessMgrState *st, Profile *pr)
 
     BOOL ok;
     UINT port = GetDlgItemInt(hwnd, IDC_EDIT_PORT, &ok, FALSE);
-    pr->port  = (ok && port >= 1u && port <= 65535u) ? (int)port : 22;
+    pr->port  = (ok && port >= 1u && port <= 65535u)
+                    ? (int)port : profile_kind_default_port(kind);
 
     return 1;
 }
@@ -501,6 +547,7 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         HWND hKind = GetDlgItem(hwnd, IDC_COMBO_KIND);
         SendMessageA(hKind, CB_ADDSTRING, 0, (LPARAM)"SSH");
         SendMessageA(hKind, CB_ADDSTRING, 0, (LPARAM)"Local shell");
+        SendMessageA(hKind, CB_ADDSTRING, 0, (LPARAM)"Telnet");
         SendMessage (hKind, CB_SETCURSEL, 0, 0);
 
         shell_combo_populate(hwnd, st);
@@ -644,6 +691,17 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
 
         /* Session type combo changed */
         if (id == IDC_COMBO_KIND && ntf == CBN_SELCHANGE) {
+            ProfileKind new_kind = kind_from_combo((int)SendMessage(
+                GetDlgItem(hwnd, IDC_COMBO_KIND), CB_GETCURSEL, 0, 0));
+            BOOL port_ok;
+            UINT cur_port = GetDlgItemInt(hwnd, IDC_EDIT_PORT, &port_ok, FALSE);
+            if (port_ok) {
+                int swapped = profile_kind_swap_port(
+                    (int)cur_port, (ProfileKind)st->last_kind, new_kind);
+                if (swapped != (int)cur_port)
+                    SetDlgItemInt(hwnd, IDC_EDIT_PORT, (UINT)swapped, FALSE);
+            }
+            st->last_kind = new_kind;
             toggle_kind_fields(hwnd);
             return TRUE;
         }
