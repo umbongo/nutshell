@@ -17,7 +17,8 @@ struct TnSession {
     TnEchoState echo;
     char user[TN_CRED_MAX];
     char pass[TN_CRED_MAX];
-    int pass_registered;              /* dlog_secret_add succeeded for pass */
+    char reg[2][TN_CRED_MAX];         /* what dlog_secret_add took (profile pw, box pw), removed at free */
+    int nreg;
     unsigned char *q;
     size_t qlen, qcap;
     unsigned char pend[TN_ECHO_PEND]; /* local echo awaiting the next tick */
@@ -99,10 +100,20 @@ static void q_encode(TnSession *s, const unsigned char *d, size_t n)
 
 /* ---- credentials ---- */
 
+/* Scrub the password from the debug log for the rest of the session, even
+ * after it is sent (a device may echo it back). Shorter than dlog's minimum or
+ * a full table: simply not registered. Removed exactly as added, at free. */
+static void register_secret(TnSession *s, const char *secret)
+{
+    if (!secret || s->nreg >= 2) return;
+    char *slot = s->reg[s->nreg];
+    snprintf(slot, TN_CRED_MAX, "%s", secret);
+    if (dlog_secret_add(slot)) s->nreg++;
+    else secure_zero(slot, TN_CRED_MAX);
+}
+
 static void release_password(TnSession *s)
 {
-    if (s->pass_registered) dlog_secret_remove(s->pass);
-    s->pass_registered = 0;
     secure_zero(s->pass, sizeof(s->pass));
 }
 
@@ -147,7 +158,7 @@ TnSession *tn_session_new(const TnSessionOpts *o)
     s->log_id = o->log_id;
     tn_proto_init(&s->proto, o->cols, o->rows);
     tn_login_init(&s->login, s->user[0] != '\0', s->pass[0] != '\0', o->now_ms);
-    if (s->pass[0] != '\0') s->pass_registered = dlog_secret_add(s->pass) ? 1 : 0;
+    if (s->pass[0] != '\0') register_secret(s, s->pass);
     return s;
 }
 
@@ -155,6 +166,10 @@ void tn_session_free(TnSession *s)
 {
     if (!s) return;
     release_password(s);
+    for (int i = 0; i < s->nreg; i++) {
+        dlog_secret_remove(s->reg[i]);
+        secure_zero(s->reg[i], sizeof(s->reg[i]));
+    }
     secure_zero(s->user, sizeof(s->user));
     secure_zero(s->pend, sizeof(s->pend));
     if (s->q) { secure_zero(s->q, s->qcap); free(s->q); }
@@ -189,9 +204,9 @@ size_t tn_session_rx(TnSession *s, Terminal *term, FILE *log,
 
 /* ---- tick ---- */
 
-static void flush_echo(TnSession *s, Terminal *term, FILE *log)
+void tn_session_flush_echo(TnSession *s, Terminal *term, FILE *log)
 {
-    if (s->pend_len == 0u) return;
+    if (!s || s->pend_len == 0u) return;
     char row[TN_ROW_MAX];
     int have = term && term_cursor_row_prompt_text(term, row, sizeof(row));
     if (!have || !tn_line_is_password_prompt(row)) {
@@ -207,7 +222,7 @@ static void write_plain(TnSession *s, const char *data, size_t len);
 void tn_session_tick(TnSession *s, Terminal *term, FILE *log, unsigned long now_ms)
 {
     if (!s) return;
-    flush_echo(s, term, log);
+    tn_session_flush_echo(s, term, log);
 
     char row[TN_ROW_MAX];
     const char *line = (term && term_cursor_row_prompt_text(term, row, sizeof(row))) ? row : NULL;
@@ -268,12 +283,28 @@ int tn_session_take_password_request(TnSession *s)
     return 1;
 }
 
-void tn_session_answer_password(TnSession *s, const char *password)
+int tn_session_answer_password(TnSession *s, Terminal *term, const char *password)
 {
-    if (!s) return;
+    if (!s) return 0;
     s->ask_pending = 0;
     tn_login_ask_done(&s->login);
-    if (password) q_secret_line(s, password);
+    if (!password) return 0;
+    /* The box was open while output kept arriving: send only if the cursor
+     * line is still a password prompt, never into a login or device prompt. */
+    char row[TN_ROW_MAX];
+    int have = term && term_cursor_row_prompt_text(term, row, sizeof(row));
+    if (!have || !tn_line_is_password_prompt(row)) {
+        secure_zero(row, sizeof(row));
+        if (term) {
+            static const char msg[] =
+                "\r\nPassword not sent: the device is no longer asking for it\r\n";
+            term_process(term, msg, sizeof(msg) - 1u);
+        }
+        return 0;
+    }
+    register_secret(s, password);
+    q_secret_line(s, password);
+    return 1;
 }
 
 const unsigned char *tn_session_outq(const TnSession *s, size_t *len)

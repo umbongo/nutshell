@@ -117,7 +117,7 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         SendMessageA(lbl, WM_SETFONT, (WPARAM)font, TRUE);
         if (ctx->detail) {
             ctx->detail_wnd = CreateWindowExA(0, "STATIC", ctx->detail,
-                        WS_CHILD | WS_VISIBLE | SS_NOPREFIX,
+                        WS_CHILD | WS_VISIBLE | SS_NOPREFIX | SS_ENDELLIPSIS,
                         L.pad, L.y_detail, L.fw, L.ctlh, hwnd, NULL, NULL, NULL);
             SendMessageA(ctx->detail_wnd, WM_SETFONT, (WPARAM)font, TRUE);
         }

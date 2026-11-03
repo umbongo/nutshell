@@ -64,7 +64,7 @@ Open the **Session Manager** with **Ctrl+Shift+T** or by clicking the **+** area
 | **Type** | **SSH** (the default), **Telnet** or **Local shell**. Telnet shows Host, Port (23), User, Password and Platform — see [Telnet](#telnet). Local hides Host, Port, User and Auth and shows **Shell command** instead — see [Local shell](#local-shell) |
 | **Name** | Optional friendly label (shown in the tab and tooltips) |
 | **Host** | Hostname or IP address |
-| **Port** | SSH port (default: 22) |
+| **Port** | SSH port (default: 22); telnet's default is 23 |
 | **Username** | Login username |
 | **Auth Type** | Password or SSH Key |
 | **Platform** | Which CLI this host speaks, used to classify command safety. **Auto-detect** (the default) reads the login banner and prompt; pin it explicitly to Linux/Unix, Cisco IOS/IOS-XE, Cisco NX-OS, Cisco ASA, HP ProCurve, HPE Comware, Aruba OS-CX, ArubaOS, PAN-OS, Junos, FortiOS, VyOS or RouterOS when you'd rather not rely on detection |
@@ -548,8 +548,8 @@ device shows its password prompt, in a box naming the profile and host. It has
 one password field (with the reveal button), a **Save password to this
 profile** tick, OK and Cancel. Leave the tick off and the password is used for
 this connection only: it is not written to `nutshell.config` and it is not kept
-for a reconnect, so the box appears again next time. Cancel sends nothing. The password is never written to
-the session log, the debug log or the AI context.
+for a reconnect, so the box appears again next time. Cancel sends nothing. The
+password is never written to the session log, the debug log or the AI context.
 
 An SSH profile that uses password authentication but has no saved password asks
 with the same box.
@@ -560,11 +560,10 @@ A failed connect is reported in the tab and no message box opens. A host that
 answers but has nothing listening reads `Connection refused by host:port`; one
 that does not answer within 4 seconds per address reads `Connection to
 host:port timed out`. A name that does not resolve reads `Could not resolve
-host`, and a device that hangs up reads `Connection closed by host:port`.
+host <host>`, any other failure to connect reads `Could not connect
+to host:port`, and a device that hangs up reads `Connection closed by host:port`.
 SSH's network-silence timeout, idle disconnect and keepalive do not apply to
 telnet tabs.
-
----
 
 ---
 

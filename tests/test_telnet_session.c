@@ -146,7 +146,7 @@ int test_tn_session_ask_and_answer(void)
     tn_session_tick(s, t, NULL, 1000);
     ASSERT_EQ(tn_session_take_password_request(s), 1);
     ASSERT_EQ(tn_session_take_password_request(s), 0);
-    tn_session_answer_password(s, "s3");
+    ASSERT_EQ(tn_session_answer_password(s, t, "s3"), 1);
     ASSERT_TRUE(OUTQ_IS(s, "s3\r\n"));
     tn_session_tick(s, t, NULL, 1500);
     ASSERT_TRUE(strstr(screen(t), "s3") == NULL);
@@ -166,7 +166,7 @@ int test_tn_session_ask_cancelled_sends_nothing(void)
     RXT(s, t, "admin\r\nPassword: ", 600);
     tn_session_tick(s, t, NULL, 1000);
     ASSERT_EQ(tn_session_take_password_request(s), 1);
-    tn_session_answer_password(s, NULL);
+    ASSERT_EQ(tn_session_answer_password(s, t, NULL), 0);
     ASSERT_TRUE(OUTQ_IS(s, ""));
     ASSERT_EQ(tn_session_login_armed(s), 0);
     tn_session_free(s);
@@ -343,6 +343,103 @@ int test_tn_session_iac_split_across_rx(void)
     ASSERT_TRUE(strstr(screen(t), "ok") != NULL);
     ASSERT_TRUE(strstr(screen(t), "\xFF") == NULL);
     ASSERT_TRUE(OUTQ_IS(s, "\xFF\xFD\x01"));
+    tn_session_free(s);
+    term_free(t);
+    TEST_END();
+}
+
+int test_tn_session_stale_box_answer_is_dropped(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    TnSession *s = mk("admin", "");
+    RXT(s, t, "login: ", 0);
+    tn_session_tick(s, t, NULL, 500);
+    (void)outq_str(s);
+    RXT(s, t, "admin\r\nPassword: ", 600);
+    tn_session_tick(s, t, NULL, 1000);
+    ASSERT_EQ(tn_session_take_password_request(s), 1);
+    /* The device timed out while the box was open and asked for a login again. */
+    RXT(s, t, "\r\nlogin: ", 1100);
+    ASSERT_EQ(tn_session_answer_password(s, t, "hunter2"), 0);
+    ASSERT_TRUE(OUTQ_IS(s, ""));
+    ASSERT_TRUE(strstr(screen(t), "hunter2") == NULL);
+    ASSERT_TRUE(strstr(screen(t), "Password not sent: the device is no longer asking for it") != NULL);
+    ASSERT_EQ(tn_session_login_armed(s), 0);
+    tn_session_free(s);
+    term_free(t);
+    TEST_END();
+}
+
+int test_tn_session_stale_box_answer_at_device_prompt_is_dropped(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    TnSession *s = mk("admin", "");
+    RXT(s, t, "login: ", 0);
+    tn_session_tick(s, t, NULL, 500);
+    (void)outq_str(s);
+    RXT(s, t, "admin\r\nPassword: ", 600);
+    tn_session_tick(s, t, NULL, 1000);
+    ASSERT_EQ(tn_session_take_password_request(s), 1);
+    RXT(s, t, "\r\nrouter> ", 1100);
+    ASSERT_EQ(tn_session_answer_password(s, t, "hunter2"), 0);
+    ASSERT_TRUE(OUTQ_IS(s, ""));
+    ASSERT_TRUE(strstr(screen(t), "hunter2") == NULL);
+    tn_session_free(s);
+    term_free(t);
+    TEST_END();
+}
+
+int test_tn_session_password_prompt_still_shown_after_other_text(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    TnSession *s = mk("admin", "");
+    RXT(s, t, "login: ", 0);
+    tn_session_tick(s, t, NULL, 500);
+    (void)outq_str(s);
+    RXT(s, t, "admin\r\nPassword: ", 600);
+    tn_session_tick(s, t, NULL, 1000);
+    ASSERT_EQ(tn_session_take_password_request(s), 1);
+    RXT(s, t, "\r\nPassword: ", 1100);   /* re-asked: still a password prompt */
+    ASSERT_EQ(tn_session_answer_password(s, t, "s3"), 1);
+    ASSERT_TRUE(OUTQ_IS(s, "s3\r\n"));
+    tn_session_free(s);
+    term_free(t);
+    TEST_END();
+}
+
+int test_tn_session_echo_flushed_before_rx_hides_password(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    TnSession *s = mk("", "");
+    RXT(s, t, "Password: ", 0);
+    tn_session_user_write(s, "pw\r", 3);
+    /* The transport's order: flush echo, receive, tick. */
+    tn_session_flush_echo(s, t, NULL);
+    RXT(s, t, "\r\nlogin: ", 10);
+    tn_session_tick(s, t, NULL, 20);
+    ASSERT_TRUE(strstr(screen(t), "pw") == NULL);
+    ASSERT_TRUE(OUTQ_IS(s, "pw\r\n"));
+    tn_session_free(s);
+    term_free(t);
+    TEST_END();
+}
+
+int test_tn_session_echo_precedes_server_reply(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    TnSession *s = mk("", "");
+    tn_session_user_write(s, "ls", 2);
+    tn_session_flush_echo(s, t, NULL);
+    RXT(s, t, "\r\nREPLY", 10);
+    const char *scr = screen(t);
+    const char *e = strstr(scr, "ls");
+    const char *r = strstr(scr, "REPLY");
+    ASSERT_TRUE(e != NULL && r != NULL && e < r);
     tn_session_free(s);
     term_free(t);
     TEST_END();

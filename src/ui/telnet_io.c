@@ -131,6 +131,7 @@ static int telnet_io_poll(void *ctx, Terminal *term, FILE *log_file)
     int got_bytes = 0;
 
     if (!t->closed) flush_out(t);
+    tn_session_flush_echo(t->sess, term, log_file);
 
     for (int i = 0; i < TN_RECV_MAX_PER_POLL && !t->closed; i++) {
         unsigned char buf[TN_RECV_CHUNK];
@@ -198,7 +199,12 @@ SessionIo session_io_telnet(SOCKET sock, const TnSessionOpts *opts)
     }
 
     u_long nb = 1;
-    ioctlsocket(sock, (long)FIONBIO, &nb);
+    if (ioctlsocket(sock, (long)FIONBIO, &nb) != 0) {
+        tn_session_free(s);
+        free(t);
+        closesocket(sock);
+        return io;
+    }
     int one = 1;
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, (int)sizeof(one));
 
@@ -222,12 +228,13 @@ int telnet_io_take_password_request(void *ctx)
     return t ? tn_session_take_password_request(t->sess) : 0;
 }
 
-void telnet_io_answer_password(void *ctx, const char *password)
+int telnet_io_answer_password(void *ctx, Terminal *term, const char *password)
 {
     TelnetIo *t = (TelnetIo *)ctx;
-    if (!t) return;
-    tn_session_answer_password(t->sess, password);
+    if (!t) return 0;
+    int sent = tn_session_answer_password(t->sess, term, password);
     if (!t->closed) flush_out(t);
+    return sent;
 }
 
 unsigned telnet_io_serial(const void *ctx)

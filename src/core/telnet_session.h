@@ -45,7 +45,15 @@ int  tn_session_user_write(TnSession *s, const char *data, size_t len);
 
 void tn_session_resize(TnSession *s, int cols, int rows);     /* queues NAWS when agreed */
 int  tn_session_take_password_request(TnSession *s);          /* 1 once after ASK_PASSWORD */
-void tn_session_answer_password(TnSession *s, const char *password); /* NULL = cancelled; never echoed or logged */
+/* NULL = cancelled. Returns 1 when sent. If the cursor line is no longer a
+ * password prompt the answer is dropped (wiped, 0) and a status line is
+ * written to term. Never echoed or logged. */
+int  tn_session_answer_password(TnSession *s, Terminal *term, const char *password);
+
+/* Flush pending local echo (dropped when the cursor row is a password prompt).
+ * The transport calls this before it receives, so the decision is made with
+ * the screen the user typed against. */
+void tn_session_flush_echo(TnSession *s, Terminal *term, FILE *log);
 
 const unsigned char *tn_session_outq(const TnSession *s, size_t *len);
 void tn_session_outq_consume(TnSession *s, size_t n);          /* the consumed bytes are secure_zero'd */

@@ -1149,6 +1149,11 @@ int test_tn_session_outq_cap(void);
 int test_tn_session_resize_sends_naws_when_agreed(void);
 int test_tn_echo_filter_rules(void);
 int test_tn_session_iac_split_across_rx(void);
+int test_tn_session_stale_box_answer_is_dropped(void);
+int test_tn_session_stale_box_answer_at_device_prompt_is_dropped(void);
+int test_tn_session_password_prompt_still_shown_after_other_text(void);
+int test_tn_session_echo_flushed_before_rx_hides_password(void);
+int test_tn_session_echo_precedes_server_reply(void);
 
 int test_config_find_profile_match(void);
 
@@ -4666,6 +4671,11 @@ int main(void) {
     failed += test_tn_session_resize_sends_naws_when_agreed();
     failed += test_tn_echo_filter_rules();
     failed += test_tn_session_iac_split_across_rx();
+    failed += test_tn_session_stale_box_answer_is_dropped();
+    failed += test_tn_session_stale_box_answer_at_device_prompt_is_dropped();
+    failed += test_tn_session_password_prompt_still_shown_after_other_text();
+    failed += test_tn_session_echo_flushed_before_rx_hides_password();
+    failed += test_tn_session_echo_precedes_server_reply();
     failed += test_config_find_profile_match();
     failed += test_dispatch_line_clear_local_gitbash_is_readline();
     failed += test_dispatch_line_clear_local_msys2_is_readline();

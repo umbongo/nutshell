@@ -22,7 +22,9 @@ TnConnOutcome telnet_io_connect(const char *host, int port, unsigned timeout_ms,
 SessionIo session_io_telnet(SOCKET sock, const TnSessionOpts *opts);
 
 int      telnet_io_take_password_request(void *ctx);
-void     telnet_io_answer_password(void *ctx, const char *password); /* NULL = cancelled */
+/* NULL = cancelled. 1 when sent; 0 when cancelled or dropped because the device
+ * no longer shows a password prompt (a status line is written to term). */
+int      telnet_io_answer_password(void *ctx, Terminal *term, const char *password);
 unsigned telnet_io_serial(const void *ctx);   /* process-unique, nonzero, per transport */
 
 #endif

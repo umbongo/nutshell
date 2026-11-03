@@ -278,6 +278,10 @@ Invoke-TelnetCase -Name "telnet_autologin_never_logs_password" -Settings $script
 
     Assert-True (Wait-NutshellDebugLog -Session $s -Pattern 'telnet\.connect\.done' -TimeoutSec 5) `
         "the debug log has no telnet.connect.done event (debug logging did not run, so the next check would be vacuous)"
+    # telnet.connect.target is logged only when content logging is on, so its
+    # presence proves the content-gated events ran and the absence check means something.
+    Assert-True (Wait-NutshellDebugLog -Session $s -Pattern 'telnet\.connect\.target' -TimeoutSec 5) `
+        "the debug log has no telnet.connect.target event (content logging did not run, so the next check would be vacuous)"
     Assert-True ((Get-NutshellDebugLogText -Session $s) -notmatch 'itpass9') "the debug log contains the telnet password"
     "negotiated NAWS and TTYPE, logged in at Username:/Password:, reached Router>; the password is in neither the session log nor the debug log"
 }
@@ -354,8 +358,12 @@ Invoke-TelnetCase -Name "telnet_password_box_asks_and_sends" -Steps $tnSteps4 -C
     Start-Sleep -Milliseconds 1000
     Assert-True ((Get-NutshellLogText -Session $s) -notmatch 'boxpass1') "the session log contains the typed password"
     $cfgPath = Join-Path $s.Env.Root "nutshell.config"
-    $cfg = [IO.File]::ReadAllText($cfgPath)
-    Assert-True ($cfg -notmatch 'boxpass1') "nutshell.config contains the password although 'Save password to this profile' was not ticked"
+    # config_save writes secrets DPAPI-encrypted, so plaintext never appears; assert
+    # on the tn profile's stored password field instead: it must still be empty.
+    $cfgJson = [IO.File]::ReadAllText($cfgPath) | ConvertFrom-Json
+    $tnProf = @($cfgJson.profiles | Where-Object { $_.name -eq "tn" })
+    Assert-True ($tnProf.Count -eq 1) "nutshell.config has no single 'tn' profile to check"
+    Assert-True ([string]$tnProf[0].password -eq "") "the tn profile gained a stored password although 'Save password to this profile' was not ticked"
     "the Password box opened at the prompt, its text reached the device, and the password is in neither the session log nor nutshell.config"
 }
 

@@ -1758,8 +1758,11 @@ static DWORD WINAPI connection_thread(LPVOID param)
         char pw[256];
         int  want_save = 0;
         memset(pw, 0, sizeof(pw));
-        snprintf(detail, sizeof(detail), "%s \xE2\x80\x94 %s@%s",
-                 info->name, info->username, info->host);
+        if (info->name[0])
+            snprintf(detail, sizeof(detail), "%s \xE2\x80\x94 %s@%s",
+                     info->name, info->username, info->host);
+        else
+            snprintf(detail, sizeof(detail), "%s@%s", info->username, info->host);
         if (!conn_ui_ask(j, CONN_UI_PASSWORD, NULL, detail, 0, pw, &want_save)) {
             secure_zero(pw, sizeof(pw));
             snprintf(j->error, sizeof(j->error), "Password entry cancelled.");
@@ -4808,7 +4811,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                          s->conn_profile.name, s->conn_profile.host);
             else
                 snprintf(detail, sizeof(detail), "%s", s->conn_profile.host);
-            PwPromptOpts po = { "Password", "Enter password:", g_theme, detail, 1 };
+            /* Offer "save" only when a saved profile still matches at this moment. */
+            const int can_save = g_config &&
+                config_find_profile_match(g_config, &s->conn_profile) != NULL;
+            PwPromptOpts po = { "Password", "Enter password:", g_theme, detail, can_save };
             char buf[256];
             int save = 0;
             buf[0] = '\0';
@@ -4818,8 +4824,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             while (s && s != (Session *)wParam) s = s->next;
             if (s && s->io.kind == SESSION_TELNET && s->io.ctx &&
                 telnet_io_serial(s->io.ctx) == (unsigned)lParam) {
-                telnet_io_answer_password(s->io.ctx, ok ? buf : NULL);
-                if (ok && save)
+                const int sent = telnet_io_answer_password(s->io.ctx, s->term,
+                                                           ok ? buf : NULL);
+                if (sent && save)
                     save_prompted_password(&s->conn_profile, buf);
             }
             secure_zero(buf, sizeof(buf));
@@ -4949,7 +4956,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     &(PwPromptOpts){ .title = "SSH Password",
                                      .label = "Enter password:",
                                      .theme = g_theme,
-                                     .detail = req->message, .offer_save = 1 },
+                                     .detail = req->message,
+                                     .offer_save = (g_config &&
+                                         config_find_profile_match(g_config, &s->conn_profile)) ? 1 : 0 },
                     passbuf, (int)sizeof(passbuf), &save);
             } else {
                 ans = pw_prompt_show(hwnd,
