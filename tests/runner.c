@@ -1132,6 +1132,24 @@ int test_tn_login_failure_reprompt_after_password_does_nothing(void);
 int test_tn_login_second_login_before_password_switches_off(void);
 int test_tn_login_timeout(void);
 int test_tn_login_null_cursor_line_is_ignored(void);
+/* test_telnet_session.c */
+int test_term_cursor_row_prompt_text_public(void);
+int test_tn_session_autologin_user_and_password(void);
+int test_tn_session_password_only_router(void);
+int test_tn_session_no_login_device_never_gets_password_at_enable(void);
+int test_tn_session_user_typing_switches_off(void);
+int test_tn_session_ask_and_answer(void);
+int test_tn_session_ask_cancelled_sends_nothing(void);
+int test_tn_session_port_check_never_logs_in(void);
+int test_tn_session_local_echo_until_server_echoes(void);
+int test_tn_session_local_echo_suppressed_at_password_prompt(void);
+int test_tn_session_secret_write_escapes_iac(void);
+int test_tn_session_outq_consume_wipes(void);
+int test_tn_session_outq_cap(void);
+int test_tn_session_resize_sends_naws_when_agreed(void);
+int test_tn_echo_filter_rules(void);
+int test_tn_session_iac_split_across_rx(void);
+
 int test_config_find_profile_match(void);
 
 /* test_dispatch_line_clear.c */
@@ -4629,6 +4647,22 @@ int main(void) {
     failed += test_tn_login_second_login_before_password_switches_off();
     failed += test_tn_login_timeout();
     failed += test_tn_login_null_cursor_line_is_ignored();
+    failed += test_term_cursor_row_prompt_text_public();
+    failed += test_tn_session_autologin_user_and_password();
+    failed += test_tn_session_password_only_router();
+    failed += test_tn_session_no_login_device_never_gets_password_at_enable();
+    failed += test_tn_session_user_typing_switches_off();
+    failed += test_tn_session_ask_and_answer();
+    failed += test_tn_session_ask_cancelled_sends_nothing();
+    failed += test_tn_session_port_check_never_logs_in();
+    failed += test_tn_session_local_echo_until_server_echoes();
+    failed += test_tn_session_local_echo_suppressed_at_password_prompt();
+    failed += test_tn_session_secret_write_escapes_iac();
+    failed += test_tn_session_outq_consume_wipes();
+    failed += test_tn_session_outq_cap();
+    failed += test_tn_session_resize_sends_naws_when_agreed();
+    failed += test_tn_echo_filter_rules();
+    failed += test_tn_session_iac_split_across_rx();
     failed += test_config_find_profile_match();
     failed += test_dispatch_line_clear_local_gitbash_is_readline();
     failed += test_dispatch_line_clear_local_msys2_is_readline();
