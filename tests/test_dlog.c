@@ -741,6 +741,45 @@ int test_dlog_shutdown_flushes_a_pending_repeat(void)
     TEST_END();
 }
 
+int test_dlog_flush_repeats_emits_pending_runs_at_once(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(begin(0, 0));
+    DLOG(DLOG_GENERAL, DLOG_ERROR, 0, "same", "x=%d", 1);
+    DLOG(DLOG_GENERAL, DLOG_ERROR, 0, "same", "x=%d", 1);
+    DLOG(DLOG_GENERAL, DLOG_ERROR, 0, "same", "x=%d", 1);
+    ASSERT_EQ(count_lines(logtext(), " repeat "), 0);          /* still inside the 5 s */
+    dlog_flush_repeats();
+    const char *t = logtext();
+    ASSERT_EQ(count_lines(t, " repeat n=2 "), 1);
+    dlog_flush_repeats();                                       /* nothing pending: no second line */
+    ASSERT_EQ(count_lines(logtext(), " repeat "), 1);
+    end();
+    dlog_flush_repeats();                                       /* not started: harmless */
+    TEST_END();
+}
+
+int test_dlog_issue_mark_flushes_pending_repeats_first(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(begin(0, 0));
+    DLOG(DLOG_GENERAL, DLOG_ERROR, 0, "same", "x=%d", 1);
+    DLOG(DLOG_GENERAL, DLOG_ERROR, 0, "same", "x=%d", 1);
+    DLOG(DLOG_GENERAL, DLOG_ERROR, 0, "same", "x=%d", 1);
+    DlogSnapshot s;
+    memset(&s, 0, sizeof(s));
+    DlogIssue iss;
+    ASSERT_TRUE(dlog_issue_mark(&s, 0, &iss));
+    const char *t = logtext();
+    ASSERT_NOT_NULL(t);
+    if (t) {
+        ASSERT_EQ(count_lines(t, " repeat n=2 "), 1);
+        ASSERT_TRUE(strstr(t, " repeat n=2 ") < strstr(t, "issue.mark"));
+    }
+    end();
+    TEST_END();
+}
+
 /* ---- redaction -------------------------------------------------------------------------- */
 
 int test_dlog_sensitive_key_names(void)

@@ -651,8 +651,10 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
     const ULONGLONG t_stream = GetTickCount64();
     const unsigned stream_id = s->id;
     int stream_failed = 0;
-    DLOG(DLOG_AI, DLOG_INFO, 0, "stream.start", "stream=%u provider=%s model=%s tools=%d",
-         stream_id, s->provider, s->conv.model, s->has_tools ? s->tools.count : 0);
+    DLOG(DLOG_AI, DLOG_INFO, 0, "stream.start",
+         "stream=%u provider=%s model=%s tools=%d src=%s panel_visible=%d",
+         stream_id, s->provider, s->conv.model, s->has_tools ? s->tools.count : 0,
+         s->src[0] ? s->src : "user", s->panel_visible);
 
     const char *url = ai_provider_url(s->provider);
     if (!url && strcmp(s->provider, "custom") == 0 && s->custom_url[0])
@@ -1367,7 +1369,7 @@ static void launch_failed(AiChatData *d, const char *why)
 /* Build an AiStream from the current AiChatData state -- its own copies of
  * the key, provider, request body, tool registry and conversation -- and
  * launch the background thread on it. Sets active_state->busy = 1. */
-static void launch_stream_thread(AiChatData *d)
+static void launch_stream_thread(AiChatData *d, const char *src)
 {
     if (!d || !d->active_state) return;
 
@@ -1377,6 +1379,8 @@ static void launch_stream_thread(AiChatData *d)
         return;
     }
     s->post_target = (uintptr_t)d->hwnd;
+    snprintf(s->src, sizeof(s->src), "%s", src ? src : "user");
+    s->panel_visible = (d->hwnd && IsWindowVisible(d->hwnd)) ? 1 : 0;
 
     strncpy(s->api_key, d->api_key, sizeof(s->api_key) - 1);
     strncpy(s->provider, d->provider, sizeof(s->provider) - 1);
@@ -1841,7 +1845,7 @@ static void send_user_message(AiChatData *d)
     d->stream_display_start = -1;
     start_indicator(d, "thinking");
 
-    launch_stream_thread(d);
+    launch_stream_thread(d, "user");
 
     /* Clear pending attachment after thread is launched */
     ai_attachment_free(&d->pending_attachment);
@@ -1937,7 +1941,7 @@ static void send_continue_message(AiChatData *d, const char *msg_text)
 
     start_indicator(d, "continuing");
 
-    launch_stream_thread(d);
+    launch_stream_thread(d, "continue");
 }
 
 /* Start the command dispatcher on one specific batch: sends every command
@@ -3816,7 +3820,10 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             } else {
                 send_user_message(d);
             }
-            SetFocus(d->hInput);
+            /* Only while the panel is on screen: a send finishing after the
+             * panel was hidden must not pull keyboard focus back into it. */
+            if (d && d->hInput && IsWindowVisible(hwnd))
+                SetFocus(d->hInput);
             return 0;
         case IDC_CHAT_SUGGESTION_BASE:
         case IDC_CHAT_SUGGESTION_BASE + 1:
@@ -4181,7 +4188,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
                 /* Re-launch stream */
                 start_indicator(d, "retrying");
-                launch_stream_thread(d);
+                launch_stream_thread(d, "retry");
                 return 0;
             }
 
@@ -5903,6 +5910,16 @@ int ai_chat_has_content(HWND hwnd)
     if (!d) return 0;
     /* At least one user or assistant message beyond the system prompt */
     return d->conv.msg_count > 1;
+}
+
+const char *ai_chat_focus_role(HWND panel, HWND focus)
+{
+    if (!panel || !focus || !IsWindow(panel)) return NULL;
+    if (focus != panel && !IsChild(panel, focus)) return NULL;
+    AiChatData *d = (AiChatData *)GetWindowLongPtr(panel, GWLP_USERDATA);
+    if (d && focus == d->hInput) return "ai_input";
+    if (d && focus == d->hChatList) return "ai_list";
+    return "ai_panel";
 }
 
 #endif /* _WIN32 */

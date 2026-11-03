@@ -38,6 +38,8 @@ typedef struct AiStream {
     volatile int delivered;    /* set by the thread once its final (done or
                                 * error) message has been posted */
     uintptr_t  post_target;    /* where the thread posts (an HWND on Win32) */
+    char       src[12];        /* what started it, for the debug log: "user", "continue", "retry" */
+    int        panel_visible;  /* the AI panel was visible at launch (a stream from a hidden panel is a clue) */
 
     /* Inputs, copied at launch */
     char   api_key[256];

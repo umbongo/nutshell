@@ -970,6 +970,16 @@ void dlog_tick(void)
     ul(h);
 }
 
+void dlog_flush_repeats(void)
+{
+    if (!__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return;
+    unsigned mono = G.p->mono_ms();
+    int wake = 0;
+    int h = lk();
+    for (int c = 0; c < (int)DLOG_CAT_COUNT; c++) flush_repeat_locked(c, mono, &wake);
+    ul(h);
+}
+
 int dlog_flush_wait(unsigned ms)
 {
     if (!__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return 1;
@@ -1394,6 +1404,9 @@ int dlog_issue_mark(const DlogSnapshot *snap, int want_screenshot, DlogIssue *ou
 {
     if (out) memset(out, 0, sizeof(*out));
     if (!__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return 0;
+
+    /* Collapsed runs still waiting out their 5 s would be missing from the dump. */
+    dlog_flush_repeats();
 
     int mem_only = __atomic_load_n(&G.mem_only, __ATOMIC_ACQUIRE);
     int h = lk();
