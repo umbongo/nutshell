@@ -4787,7 +4787,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 ans = MessageBoxA(hwnd, req->message, req->title, req->mb_flags);
             } else {
                 ans = pw_prompt_show(hwnd,
-                    &(PwPromptOpts){ "SSH Key Passphrase", "Enter key passphrase:", g_theme },
+                    &(PwPromptOpts){ .title = "SSH Key Passphrase",
+                                     .label = "Enter key passphrase:",
+                                     .theme = g_theme },
                     passbuf, (int)sizeof(passbuf));
             }
 

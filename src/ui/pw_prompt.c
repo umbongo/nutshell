@@ -3,7 +3,6 @@
  * Moved out of window.c; colours come from ns_tokens(), geometry from the
  * ns_type.h grid, and the field carries the hold-to-reveal eye. */
 
-#include <winsock2.h>   /* before windows.h, as window.c does */
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
@@ -73,6 +72,7 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         SendMessageA(ok,     WM_SETFONT, (WPARAM)font, TRUE);
         SendMessageA(cancel, WM_SETFONT, (WPARAM)font, TRUE);
         pw_reveal_attach(edit);   /* NULL on failure: the field still works */
+        themed_apply_borders(hwnd, ctx->theme);
         SetFocus(edit);
         return 0;
     }
@@ -124,6 +124,8 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     case WM_ACTIVATE:
         if (LOWORD(wp) == WA_INACTIVE)
             pw_reveal_mask_all(hwnd);
+        else
+            SetFocus(GetDlgItem(hwnd, PW_ID_EDIT));   /* the only field */
         break;
     case WM_COMMAND:
         if (LOWORD(wp) == IDOK && ctx) {
