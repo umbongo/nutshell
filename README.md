@@ -32,6 +32,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 
 - AI chat assistant with terminal context, pending approval cards for command execution (never block the input, up to eight per session), streaming, and a Thinking disclosure for reasoning
 - Multi-tab SSH sessions with owner-drawn tab strip (status dots, log indicator, close button)
+- **Telnet** sessions for devices that only speak telnet, with auto-login at the login and password prompts, and port checks ([see below](#telnet))
 - **Local shell** sessions over ConPTY — the same window, terminal and assistant with no remote host at all ([see below](#local-shell))
 - VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
 - Password and SSH key authentication, with a passphrase prompt, retry, and a hold-to-reveal eye on every password field
@@ -60,7 +61,7 @@ Open the **Session Manager** with **Ctrl+Shift+T** or by clicking the **+** area
 
 | Field | Description |
 |-------|-------------|
-| **Type** | **SSH** (the default) or **Local shell**. Local hides Host, Port, User and Auth and shows **Shell command** instead — see [Local shell](#local-shell) |
+| **Type** | **SSH** (the default), **Telnet** or **Local shell**. Telnet shows Host, Port (23), User, Password and Platform — see [Telnet](#telnet). Local hides Host, Port, User and Auth and shows **Shell command** instead — see [Local shell](#local-shell) |
 | **Name** | Optional friendly label (shown in the tab and tooltips) |
 | **Host** | Hostname or IP address |
 | **Port** | SSH port (default: 22) |
@@ -502,6 +503,68 @@ The profile's `kind` and `shell` keys are new in v1.2.1. Opening the same
 `nutshell.config` with v1.1.x or earlier and saving will **drop them**, which
 turns a local profile back into an empty SSH one. Keep a copy of the config
 if you need to move between versions.
+
+## Telnet
+
+Some devices — old switches, console servers, lab gear — only speak telnet.
+Pick **Telnet** in the Session Manager's **Type** dropdown, fill in Host, Port
+(default 23), User, Password and Platform, and press Connect. The terminal, the
+tab strip, logging and the AI assistant work as they do for SSH.
+
+**Telnet is not encrypted.** Everything you type, including the password, and
+everything the device sends crosses the network in clear text. The tab says so
+when it connects: `Connected to host:port (telnet — not encrypted)`. Use it on
+networks you trust, and prefer SSH wherever the device offers it.
+
+### Auto-login
+
+Whether Nutshell logs in for you depends on what the profile holds:
+
+- **A username or a saved password** arms auto-login. Nutshell watches the
+  device's output for a login prompt (`login:`, `username:`, `user name:` or
+  `user:`) and sends the username, then for a password prompt (`password:` or
+  `passcode:`) and sends the password. The password is sent only into a prompt
+  it recognises, never blind and never on a timer.
+- **Neither** makes the tab a plain **port check**: Nutshell connects, shows
+  what the device sends and types what you type, and sends nothing of its own.
+  Until the device says it will echo, Nutshell echoes your typing locally;
+  the only options it negotiates are the ones a terminal needs (window size,
+  terminal type).
+
+Auto-login switches itself off, for the rest of the connection, when any of
+these happens:
+
+- you type anything yourself;
+- a device prompt (`>`, `#` or `$`) appears;
+- the password has been sent;
+- a second login prompt appears (the first attempt failed — Nutshell does not
+  retry and so cannot lock the account);
+- 20 seconds pass with no prompt.
+
+### The password box
+
+A telnet profile with a username but no saved password asks for it when the
+device shows its password prompt, in a box naming the profile and host. It has
+one password field (with the reveal button), a **Save password to this
+profile** tick, OK and Cancel. Leave the tick off and the password is used for
+this connection only: it is not written to `nutshell.config` and it is not kept
+for a reconnect, so the box appears again next time. Cancel sends nothing. The password is never written to
+the session log, the debug log or the AI context.
+
+An SSH profile that uses password authentication but has no saved password asks
+with the same box.
+
+### When the connection fails
+
+A failed connect is reported in the tab and no message box opens. A host that
+answers but has nothing listening reads `Connection refused by host:port`; one
+that does not answer within 4 seconds per address reads `Connection to
+host:port timed out`. A name that does not resolve reads `Could not resolve
+host`, and a device that hangs up reads `Connection closed by host:port`.
+SSH's network-silence timeout, idle disconnect and keepalive do not apply to
+telnet tabs.
+
+---
 
 ---
 
