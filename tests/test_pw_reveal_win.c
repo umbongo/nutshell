@@ -456,11 +456,82 @@ int test_pw_prompt_win_activate_keeps_focus_on_field(void)
 {
     TEST_BEGIN();
     char out[64];
-    PwPromptOpts o = { "t", "label", NULL };
+    PwPromptOpts o = { .title = "t", .label = "label" };
     g_focus_on_edit = -1;
     SetTimer(NULL, 0, 100, pw_activate_timer);
-    (void)pw_prompt_show(NULL, &o, out, (int)sizeof(out));
+    (void)pw_prompt_show(NULL, &o, out, (int)sizeof(out), NULL);
     ASSERT_EQ(g_focus_on_edit, 1);
+    TEST_END();
+}
+
+/* pw_prompt with detail + offer_save: a timer inside the modal loop types a
+ * secret, ticks the checkbox (or not) and presses OK / Cancel. */
+static int  g_save_found = -1;
+static int  g_detail_found = -1;
+static int  g_tick = 0;
+static UINT g_press = IDOK;
+
+static VOID CALLBACK pw_save_timer(HWND h, UINT m, UINT_PTR id, DWORD t)
+{
+    (void)h; (void)m; (void)t;
+    KillTimer(NULL, id);
+    HWND dlg = FindWindowA("NutshellPassDlg", NULL);
+    if (!dlg) return;
+    HWND edit = FindWindowExA(dlg, NULL, "EDIT", NULL);
+    HWND chk = FindWindowExA(dlg, NULL, "BUTTON", "Save password to this profile");
+    HWND det = FindWindowExA(dlg, NULL, "STATIC", "lab host");
+    g_save_found = chk ? 1 : 0;
+    g_detail_found = det ? 1 : 0;
+    if (edit) SetWindowTextA(edit, "hunter2");
+    if (chk && g_tick) SendMessageA(chk, BM_SETCHECK, BST_CHECKED, 0);
+    SendMessageW(dlg, WM_COMMAND, g_press, 0);
+}
+
+static int run_save_prompt(UINT press, int tick, char *out, int outsz, int *save)
+{
+    PwPromptOpts o = { .title = "t", .label = "Password:",
+                       .detail = "lab host", .offer_save = 1 };
+    g_save_found = g_detail_found = -1;
+    g_press = press;
+    g_tick = tick;
+    SetTimer(NULL, 0, 100, pw_save_timer);
+    return pw_prompt_show(NULL, &o, out, outsz, save);
+}
+
+int test_pw_prompt_win_save_ticked_ok_returns_one(void)
+{
+    TEST_BEGIN();
+    char out[64] = "";
+    int save = -1;
+    int r = run_save_prompt(IDOK, 1, out, (int)sizeof(out), &save);
+    ASSERT_EQ(g_save_found, 1);
+    ASSERT_EQ(g_detail_found, 1);
+    ASSERT_EQ(r, 1);
+    ASSERT_EQ(save, 1);
+    ASSERT_STR_EQ(out, "hunter2");
+    TEST_END();
+}
+
+int test_pw_prompt_win_save_unticked_ok_returns_zero(void)
+{
+    TEST_BEGIN();
+    char out[64] = "";
+    int save = -1;
+    int r = run_save_prompt(IDOK, 0, out, (int)sizeof(out), &save);
+    ASSERT_EQ(r, 1);
+    ASSERT_EQ(save, 0);
+    ASSERT_STR_EQ(out, "hunter2");
+    TEST_END();
+}
+
+int test_pw_prompt_win_save_ticked_cancel_returns_zero(void)
+{
+    TEST_BEGIN();
+    char out[64] = "x";
+    int save = -1;
+    int r = run_save_prompt(IDCANCEL, 1, out, (int)sizeof(out), &save);
+    ASSERT_EQ(r, 0);
+    ASSERT_EQ(save, 0);
     TEST_END();
 }
 

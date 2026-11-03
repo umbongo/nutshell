@@ -4789,8 +4789,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 ans = pw_prompt_show(hwnd,
                     &(PwPromptOpts){ .title = "SSH Key Passphrase",
                                      .label = "Enter key passphrase:",
-                                     .theme = g_theme },
-                    passbuf, (int)sizeof(passbuf));
+                                     .theme = g_theme,
+                                     .detail = NULL, .offer_save = 0 },
+                    passbuf, (int)sizeof(passbuf), NULL);
             }
 
             /* Re-resolve from scratch -- do not reuse `s`/its conn_job from
