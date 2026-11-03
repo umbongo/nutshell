@@ -33,6 +33,7 @@ typedef struct {
     HWND          eye;
     HWND          tip;
     int           applying; /* inside apply_reveal: ignore our own messages */
+    int           checking; /* inside the emptied check: no recursion */
 } PwReveal;
 
 static PwReveal *state_of_eye(HWND eye)
@@ -76,21 +77,6 @@ static void layout(PwReveal *pr)
                  MAKELPARAM(0, (WORD)w));
 }
 
-/* Messages that can change the field's text. The emptied check runs only
- * after these: querying the length after every message would re-enter this
- * proc through WM_GETTEXTLENGTH. */
-static int changes_text(UINT m)
-{
-    switch (m) {
-    case WM_SETTEXT: case WM_CHAR: case WM_KEYDOWN: case WM_CUT:
-    case WM_CLEAR: case WM_PASTE: case WM_UNDO: case EM_REPLACESEL:
-    case WM_IME_CHAR: case WM_IME_COMPOSITION:
-        return 1;
-    default:
-        return 0;
-    }
-}
-
 static LRESULT CALLBACK edit_proc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp,
                                   UINT_PTR id, DWORD_PTR ref)
 {
@@ -102,7 +88,7 @@ static LRESULT CALLBACK edit_proc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp,
     LRESULT r = DefSubclassProc(hwnd, m, wp, lp);
 
     if (m == WM_NCDESTROY) {
-        feed(pr, PWR_DESTROY);
+        pw_reveal_feed(&pr->st, PWR_DESTROY, 0);
         RemoveWindowSubclass(hwnd, edit_proc, id);
         if (pr->tip && IsWindow(pr->tip)) DestroyWindow(pr->tip);
         free(pr);
@@ -110,9 +96,14 @@ static LRESULT CALLBACK edit_proc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp,
     }
     if (m == WM_SIZE || m == WM_DPICHANGED_AFTERPARENT)
         layout(pr);
-    if (!pr->applying && pr->st.revealed && changes_text(m) &&
-        GetWindowTextLengthW(hwnd) == 0)
-        feed(pr, PWR_EMPTIED);
+    /* Any message may have emptied the field (Alt+Backspace undo, IME,
+     * drops, ...): check after all of them. `checking` stops the length
+     * query re-entering this check through WM_GETTEXTLENGTH. */
+    if (pr->st.revealed && !pr->applying && !pr->checking) {
+        pr->checking = 1;
+        if (GetWindowTextLengthW(hwnd) == 0) feed(pr, PWR_EMPTIED);
+        pr->checking = 0;
+    }
     return r;
 }
 

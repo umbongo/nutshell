@@ -191,6 +191,87 @@ int test_pw_reveal_win_emptied_while_revealed_masks(void)
     TEST_END();
 }
 
+int test_pw_reveal_win_emptied_by_backspace(void)
+{
+    TEST_BEGIN();
+    PwFix f;
+    ASSERT_TRUE(fix_make(&f, "s3cret"));
+    ASSERT_NOT_NULL(f.eye);
+    if (f.eye) {
+        press(f.eye);
+        ASSERT_EQ(pwchar(f.edit), 0);
+        SendMessageW(f.edit, EM_SETSEL, 0, (LPARAM)-1);
+        SendMessageW(f.edit, WM_CHAR, VK_BACK, 0);
+        ASSERT_EQ(pw_reveal_is_revealed(f.edit), 0);
+        ASSERT_EQ(pwchar(f.edit), f.orig);
+    }
+    fix_free(&f);
+    TEST_END();
+}
+
+int test_pw_reveal_win_emptied_by_clear(void)
+{
+    TEST_BEGIN();
+    PwFix f;
+    ASSERT_TRUE(fix_make(&f, "s3cret"));
+    ASSERT_NOT_NULL(f.eye);
+    if (f.eye) {
+        press(f.eye);
+        ASSERT_EQ(pwchar(f.edit), 0);
+        SendMessageW(f.edit, EM_SETSEL, 0, (LPARAM)-1);
+        SendMessageW(f.edit, WM_CLEAR, 0, 0);
+        ASSERT_EQ(pw_reveal_is_revealed(f.edit), 0);
+        ASSERT_EQ(pwchar(f.edit), f.orig);
+    }
+    fix_free(&f);
+    TEST_END();
+}
+
+int test_pw_reveal_win_emptied_by_replacesel(void)
+{
+    TEST_BEGIN();
+    PwFix f;
+    ASSERT_TRUE(fix_make(&f, "s3cret"));
+    ASSERT_NOT_NULL(f.eye);
+    if (f.eye) {
+        press(f.eye);
+        ASSERT_EQ(pwchar(f.edit), 0);
+        SendMessageW(f.edit, EM_SETSEL, 0, (LPARAM)-1);
+        SendMessageW(f.edit, EM_REPLACESEL, FALSE, (LPARAM)L"");
+        ASSERT_EQ(pw_reveal_is_revealed(f.edit), 0);
+        ASSERT_EQ(pwchar(f.edit), f.orig);
+    }
+    fix_free(&f);
+    TEST_END();
+}
+
+/* Alt+Backspace is Undo in the EDIT control. Start from an empty field,
+ * type one character, hold the eye, then undo: the field is empty again. */
+int test_pw_reveal_win_emptied_by_alt_backspace_undo(void)
+{
+    TEST_BEGIN();
+    PwFix f;
+    ASSERT_TRUE(fix_make(&f, "s3cret"));
+    ASSERT_NOT_NULL(f.eye);
+    if (f.eye) {
+        SetWindowTextA(f.edit, "");
+        SendMessageW(f.edit, EM_EMPTYUNDOBUFFER, 0, 0);
+        SendMessageW(f.edit, WM_CHAR, 'x', 0);
+        ASSERT_EQ(GetWindowTextLengthW(f.edit), 1);
+        press(f.eye);
+        ASSERT_EQ(pwchar(f.edit), 0);
+        SendMessageW(f.edit, WM_SYSKEYDOWN, VK_BACK, (LPARAM)(1 << 29));
+        if (GetWindowTextLengthW(f.edit) == 0) {
+            ASSERT_EQ(pw_reveal_is_revealed(f.edit), 0);
+            ASSERT_EQ(pwchar(f.edit), f.orig);
+        } else {
+            printf("  [note] this Wine edit ignored Alt+Backspace undo\n");
+        }
+    }
+    fix_free(&f);
+    TEST_END();
+}
+
 int test_pw_reveal_win_empty_field_never_reveals(void)
 {
     TEST_BEGIN();
@@ -266,7 +347,7 @@ int test_pw_reveal_win_eye_tracks_resize_and_margin(void)
         ASSERT_EQ(er.top, 0);
         ASSERT_EQ(er.bottom, cr.bottom);
         LRESULT m = SendMessageW(f.edit, EM_GETMARGINS, 0, 0);
-        ASSERT_TRUE((int)HIWORD(m) >= (int)(er.right - er.left));
+        ASSERT_EQ((int)HIWORD(m), (int)(er.right - er.left));
     }
     fix_free(&f);
     TEST_END();
