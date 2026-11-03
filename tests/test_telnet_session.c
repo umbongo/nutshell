@@ -217,7 +217,7 @@ int test_tn_session_local_echo_suppressed_at_password_prompt(void)
     TEST_BEGIN();
     char path[256];
     snprintf(path, sizeof(path), "%s/tn_session_log.txt", TEST_TMP_DIR);
-    FILE *log = fopen(path, "w+");
+    FILE *log = test_fopen_private(path);
     ASSERT_NOT_NULL(log);
     Terminal *t = term_init(24, 80, 100);
     TnSession *s = mk("", "");
@@ -226,15 +226,16 @@ int test_tn_session_local_echo_suppressed_at_password_prompt(void)
     tn_session_tick(s, t, log, 10);
     ASSERT_TRUE(strstr(screen(t), "hunter2") == NULL);
     ASSERT_TRUE(OUTQ_IS(s, "hunter2\r\n"));
-    if (log) {
+    if (log) fclose(log);
+    FILE *rd = fopen(path, "r");
+    ASSERT_NOT_NULL(rd);
+    if (rd) {
         char buf[512];
-        fflush(log);
-        rewind(log);
-        size_t n = fread(buf, 1, sizeof(buf) - 1u, log);
+        size_t n = fread(buf, 1, sizeof(buf) - 1u, rd);
         buf[n] = '\0';
         ASSERT_TRUE(strstr(buf, "hunter2") == NULL);
         ASSERT_TRUE(strstr(buf, "Password:") != NULL);
-        fclose(log);
+        fclose(rd);
     }
     remove(path);
     tn_session_free(s);
