@@ -20,6 +20,7 @@
 #include "resource.h"
 #include "dpi_util.h"
 #include "secure_zero.h"
+#include "pw_reveal.h"
 
 #define IDT_AINOTES_SCROLL 50  /* timer ID for AI notes scroll sync */
 #define IDT_LIST_SCROLL    51  /* timer ID for session list scroll sync */
@@ -564,6 +565,10 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             }
         }
 
+        /* Hold-to-reveal eye on the password field. After the font loop so
+         * the edit already has its font when the eye is laid out. */
+        pw_reveal_attach(GetDlgItem(hwnd, IDC_EDIT_PASS));
+
         /* Custom scrollbar for AI notes multiline edit */
         {
             HWND hEdit = GetDlgItem(hwnd, IDC_EDIT_AI_NOTES);
@@ -619,6 +624,13 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
         toggle_auth_fields(hwnd);
         return TRUE;
     }
+
+    case WM_ACTIVATE:
+        /* Mask a held-open password when the dialog loses focus. Return
+         * FALSE so default dialog handling continues. */
+        if (LOWORD(wParam) == WA_INACTIVE)
+            pw_reveal_mask_all(hwnd);
+        break;
 
     case WM_COMMAND: {
         WORD id  = LOWORD(wParam);

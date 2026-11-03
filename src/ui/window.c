@@ -47,6 +47,7 @@
 #include "ui_theme.h"
 #include "ns_tokens.h"
 #include "themed_button.h"
+#include "pw_prompt.h"
 #include "about_layout.h"
 #include "ns_motion.h"
 #include "ns_reduced_motion.h"
@@ -266,7 +267,7 @@ static void conn_job_release(ConnJob *j)
  * (GetMessage pumps the whole thread, so WM_CONN_PROMPT for job B can be
  * dispatched from inside job A's own modal loop). Nesting isn't prevented
  * -- each prompt's loop now watches only its own window (see
- * prompt_passphrase()), so one closing can no longer be confused for the
+ * pw_prompt_show()), so one closing can no longer be confused for the
  * other closing, and each job's slot/claim protocol is independent of
  * every other job's. Deferring the second prompt until the first closes
  * would avoid the double dialog on screen, but needs its own queue and
@@ -1145,179 +1146,15 @@ static void on_tab_close(int index, void *user_data) {
 
 /* The ordinary "not handled specially" step of a message loop --
  * ui_run()'s main loop and every nested modal loop in this file
- * (prompt_passphrase() below; show_about_dialog() has its own, smaller
- * variant since it has no fallback-dispatch branch to share) call this
+ * (show_about_dialog() has its own, smaller variant since it has no
+ * fallback-dispatch branch to share; pw_prompt_show() in pw_prompt.c
+ * keeps a local TranslateMessage/DispatchMessage pair, as this is static) call this
  * for a message they don't intercept themselves, so they can never drift
  * apart on what "just pump it" means. */
 static void pump_dispatch(MSG *m)
 {
     TranslateMessage(m);
     DispatchMessage(m);
-}
-
-/* ---- Passphrase prompt --------------------------------------------------- */
-
-typedef struct { char buf[256]; int ok; } PassCtx;
-
-static LRESULT CALLBACK pass_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
-{
-    PassCtx *ctx = (PassCtx *)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
-    switch (msg) {
-    case WM_CREATE: {
-        CREATESTRUCTA *cs = (CREATESTRUCTA *)lp;
-        ctx = (PassCtx *)cs->lpCreateParams;
-        SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR)ctx);
-        CreateWindowExA(0, "STATIC", "Enter key passphrase:",
-                        WS_CHILD | WS_VISIBLE,
-                        8, 8, 264, 18, hwnd, NULL, NULL, NULL);
-        CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
-                        WS_CHILD | WS_VISIBLE | ES_PASSWORD | ES_AUTOHSCROLL,
-                        8, 30, 264, 22, hwnd, (HMENU)(UINT_PTR)101, NULL, NULL);
-        CreateWindowExA(0, "BUTTON", "OK",
-                        WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                        100, 62, 80, 26, hwnd, (HMENU)(UINT_PTR)IDOK, NULL, NULL);
-        CreateWindowExA(0, "BUTTON", "Cancel",
-                        WS_CHILD | WS_VISIBLE,
-                        190, 62, 80, 26, hwnd, (HMENU)(UINT_PTR)IDCANCEL, NULL, NULL);
-        SetFocus(GetDlgItem(hwnd, 101));
-        return 0;
-    }
-    case WM_COMMAND:
-        if (LOWORD(wp) == IDOK && ctx) {
-            GetWindowTextA(GetDlgItem(hwnd, 101), ctx->buf, (int)sizeof(ctx->buf));
-            ctx->ok = 1;
-            DestroyWindow(hwnd);
-        } else if (LOWORD(wp) == IDCANCEL && ctx) {
-            ctx->buf[0] = '\0';
-            ctx->ok = 0;
-            DestroyWindow(hwnd);
-        }
-        return 0;
-    case WM_DESTROY:
-        /* Clear the EDIT control's own text (control id 101, created in
-         * WM_CREATE above) before it -- and this window -- go away. The
-         * IDOK handler already copied it into ctx->buf; the control's own
-         * internal text buffer is a second copy of the passphrase this
-         * process would otherwise leave sitting in memory. WM_DESTROY is
-         * the one place that runs on every path this dialog can end on --
-         * OK, Cancel, the WM_QUIT path in prompt_passphrase(), and (Win32
-         * destroys owned windows when their owner is destroyed) the main
-         * window going away while this one is still up -- so it covers
-         * all of them without needing the same call at every DestroyWindow
-         * site. The child windows are still valid here; they aren't torn
-         * down until after this handler returns. */
-        SetDlgItemTextA(hwnd, 101, "");
-        /* No PostQuitMessage() here: prompt_passphrase()'s loop watches
-         * this window's own handle (IsWindow(hwnd)) to know when to stop,
-         * not WM_QUIT. Posting WM_QUIT on every ordinary close (which is
-         * what happens whenever the user answers this dialog -- the
-         * common case, not just shutdown) used to be swallowed by that
-         * same loop and worked only by coincidence when nothing else was
-         * pumping messages concurrently; nested inside another modal loop
-         * (a host-key MessageBox, another tab's own passphrase prompt) it
-         * could instead terminate the *wrong* loop, or eat the real
-         * app-exit WM_QUIT so ui_run() never sees it and the process
-         * hangs after its window is gone. See prompt_passphrase(). */
-        return 0;
-    }
-    return DefWindowProcA(hwnd, msg, wp, lp);
-}
-
-/* Returns 1 if user pressed OK, 0 if cancelled. Writes passphrase into out. */
-static int prompt_passphrase(HWND parent, char *out, int out_size)
-{
-    static int class_done = 0;
-    if (!class_done) {
-        WNDCLASSA wc;
-        memset(&wc, 0, sizeof(wc));
-        wc.lpfnWndProc   = pass_wnd_proc;
-        wc.hInstance     = g_hInst;
-        wc.lpszClassName = "NutshellPassDlg";
-        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-        wc.hCursor       = LoadCursorA(NULL, IDC_ARROW);
-        RegisterClassA(&wc);
-        class_done = 1;
-    }
-
-    PassCtx ctx;
-    memset(&ctx, 0, sizeof(ctx));
-
-    HWND hwnd = CreateWindowExA(
-        WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-        "NutshellPassDlg", "SSH Key Passphrase",
-        WS_POPUP | WS_CAPTION | WS_SYSMENU,
-        0, 0, 296, 128,
-        parent, NULL, g_hInst, &ctx);
-    if (!hwnd) return 0;
-
-    if (parent) {
-        RECT pr, wr;
-        GetWindowRect(parent, &pr);
-        GetWindowRect(hwnd, &wr);
-        int w = wr.right  - wr.left;
-        int h = wr.bottom - wr.top;
-        int x = pr.left + (pr.right  - pr.left - w) / 2;
-        int y = pr.top  + (pr.bottom - pr.top  - h) / 2;
-        SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-    }
-
-    /* was_disabled: re-enable `parent` only if we're the one who disabled
-     * it. Skipping that check used to always re-enable it, which is wrong
-     * whenever this prompt is showing nested inside some other modal that
-     * had already disabled `parent` itself (another tab's own prompt, a
-     * host-key MessageBox, the Settings window) -- this prompt closing
-     * would then prematurely re-enable the main window out from under
-     * whichever outer modal is still on screen. */
-    BOOL was_disabled = FALSE;
-    if (parent) was_disabled = EnableWindow(parent, FALSE);
-    ShowWindow(hwnd, SW_SHOW);
-    UpdateWindow(hwnd);
-
-    /* IsWindow(hwnd), not WM_QUIT, ends this loop -- see pass_wnd_proc's
-     * WM_DESTROY comment. GetMessageA still pumps the whole thread's
-     * queue (so other windows -- Settings, another tab's own prompt --
-     * keep receiving and, via the fallback pump_dispatch() below, keep
-     * handling their own messages exactly as ui_run()'s main loop would),
-     * but if it ever does return 0 -- a genuine WM_QUIT, meaning the
-     * process is actually exiting -- that message must not be swallowed
-     * here: repost it for ui_run()'s own loop to see, and treat the
-     * prompt itself as cancelled. */
-    MSG m;
-    int gm = 0;
-    while (IsWindow(hwnd) && (gm = GetMessageA(&m, NULL, 0, 0)) > 0) {
-        if (!IsDialogMessageA(hwnd, &m))
-            pump_dispatch(&m);
-    }
-    if (IsWindow(hwnd)) {
-        /* The loop exited without the dialog destroying itself (OK/Cancel
-         * already would have via pass_wnd_proc's WM_COMMAND, which also
-         * clears the edit control's own text -- see its WM_DESTROY). Two
-         * ways that happens: gm == 0 is a real WM_QUIT (the process is
-         * actually exiting) and must be forwarded so ui_run()'s own loop
-         * still sees it; gm == -1 is a GetMessageA error (e.g. some
-         * unrelated invalid window handle on this thread) with no real
-         * quit involved and `m` not meaningfully populated -- reposting
-         * m.wParam in that case would forward garbage as an exit code.
-         * Either way the prompt itself is cancelled (ctx.ok stays at its
-         * default, 0) and the window must go -- DestroyWindow() also
-         * clears its own edit text via WM_DESTROY, so no zombie dialog is
-         * left with a GWLP_USERDATA pointing at this returning frame. */
-        DestroyWindow(hwnd);
-        if (gm == 0)
-            PostQuitMessage((int)m.wParam);
-    }
-
-    if (parent && !was_disabled) EnableWindow(parent, TRUE);
-
-    if (ctx.ok && out && out_size > 0) {
-        strncpy(out, ctx.buf, (size_t)(out_size - 1));
-        out[out_size - 1] = '\0';
-        secure_zero(ctx.buf, sizeof(ctx.buf));
-        return 1;
-    }
-    /* M-5: zero passphrase buffer on cancellation too */
-    secure_zero(ctx.buf, sizeof(ctx.buf));
-    return 0;
 }
 
 /* Return the directory that contains the running executable. */
@@ -4918,7 +4755,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
              * dispatched nested inside job A's still-open passphrase
              * dialog (see the section comment above), B's dialog closing
              * re-enables the main window (was_disabled inside
-             * prompt_passphrase() only tracks *that* call's own disable,
+             * pw_prompt_show() only tracks *that* call's own disable,
              * not any outer one) while A's is still on screen. This
              * handler holds no pointers across that gap either way, and
              * on_tab_close() refuses to close a tab that is still
@@ -4940,7 +4777,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             passbuf[0] = '\0';
 
             /* MessageBoxA manages its owner's enabled state itself;
-             * prompt_passphrase() does the same for its own parent
+             * pw_prompt_show() does the same for its own parent
              * (restoring only the state it found, not unconditionally --
              * see its own comment) -- neither needs an extra wrap here,
              * and an extra one here could only prematurely re-enable hwnd
@@ -4949,7 +4786,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             if (req->kind == CONN_UI_HOSTKEY) {
                 ans = MessageBoxA(hwnd, req->message, req->title, req->mb_flags);
             } else {
-                ans = prompt_passphrase(hwnd, passbuf, (int)sizeof(passbuf));
+                ans = pw_prompt_show(hwnd,
+                    &(PwPromptOpts){ .title = "SSH Key Passphrase",
+                                     .label = "Enter key passphrase:",
+                                     .theme = g_theme },
+                    passbuf, (int)sizeof(passbuf));
             }
 
             /* Re-resolve from scratch -- do not reuse `s`/its conn_job from

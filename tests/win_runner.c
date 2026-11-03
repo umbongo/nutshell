@@ -6,6 +6,7 @@
 #ifdef _WIN32
 
 #include <windows.h>
+#include <commctrl.h>
 #include <stdio.h>
 #include <string.h>
 #include "test_framework.h"
@@ -26,6 +27,27 @@ int test_chat_select_win_mouse_and_keys(void);
 int test_chat_select_win_query_word(void);
 int test_chat_select_win_drag_ignores_buttonless_move(void);
 int test_chat_select_win_short_list(void);
+
+/* test_pw_reveal_win.c */
+int test_pw_reveal_win_press_shows_release_restores_mask(void);
+int test_pw_reveal_win_text_caret_selection_unchanged(void);
+int test_pw_reveal_win_capture_lost_masks(void);
+int test_pw_reveal_win_release_outside_masks(void);
+int test_pw_reveal_win_drag_off_masks_drag_back_reveals(void);
+int test_pw_reveal_win_mask_all_masks_descendants(void);
+int test_pw_reveal_win_emptied_while_revealed_masks(void);
+int test_pw_reveal_win_emptied_by_backspace(void);
+int test_pw_reveal_win_emptied_by_clear(void);
+int test_pw_reveal_win_emptied_by_replacesel(void);
+int test_pw_reveal_win_emptied_by_delete_key(void);
+int test_pw_reveal_win_replaced_text_masks(void);
+int test_pw_reveal_win_eye_click_activates_and_no_context_menu(void);
+int test_pw_reveal_win_setfont_keeps_margin(void);
+int test_pw_reveal_win_empty_field_never_reveals(void);
+int test_pw_reveal_win_copy_blocked_while_revealed(void);
+int test_pw_reveal_win_eye_tracks_resize_and_margin(void);
+int test_pw_reveal_win_destroy_while_revealed_is_clean(void);
+int test_pw_prompt_win_activate_keeps_focus_on_field(void);
 
 /* test_local_pty.c */
 extern FILE *nspty_report;
@@ -211,6 +233,26 @@ int main(int argc, char **argv)
     failed += test_chat_select_win_query_word();
     failed += test_chat_select_win_drag_ignores_buttonless_move();
     failed += test_chat_select_win_short_list();
+    InitCommonControls();
+    failed += test_pw_reveal_win_press_shows_release_restores_mask();
+    failed += test_pw_reveal_win_text_caret_selection_unchanged();
+    failed += test_pw_reveal_win_capture_lost_masks();
+    failed += test_pw_reveal_win_release_outside_masks();
+    failed += test_pw_reveal_win_drag_off_masks_drag_back_reveals();
+    failed += test_pw_reveal_win_mask_all_masks_descendants();
+    failed += test_pw_reveal_win_emptied_while_revealed_masks();
+    failed += test_pw_reveal_win_emptied_by_backspace();
+    failed += test_pw_reveal_win_emptied_by_clear();
+    failed += test_pw_reveal_win_emptied_by_replacesel();
+    failed += test_pw_reveal_win_emptied_by_delete_key();
+    failed += test_pw_reveal_win_replaced_text_masks();
+    failed += test_pw_reveal_win_eye_click_activates_and_no_context_menu();
+    failed += test_pw_reveal_win_setfont_keeps_margin();
+    failed += test_pw_reveal_win_empty_field_never_reveals();
+    failed += test_pw_reveal_win_copy_blocked_while_revealed();
+    failed += test_pw_reveal_win_eye_tracks_resize_and_margin();
+    failed += test_pw_reveal_win_destroy_while_revealed_is_clean();
+    failed += test_pw_prompt_win_activate_keeps_focus_on_field();
 
     printf("\n[pty] re-executing with a console of our own "
            "(see win_runner.c for why)\n");

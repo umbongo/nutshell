@@ -212,6 +212,11 @@ static const uint8_t g_glyphs[NS_ICON_COUNT][192] = {
     { OP_MOVE, 64, 16, OP_LINE, 72, 56, OP_LINE, 112, 64,
       OP_LINE, 72, 72, OP_LINE, 64, 112, OP_LINE, 56, 72,
       OP_LINE, 16, 64, OP_LINE, 56, 56, OP_CLOSE, OP_FILLSTROKE, OP_END },
+
+    /* NS_ICON_EYE — almond outline with a filled pupil */
+    { OP_MOVE, 12, 64, OP_CURVE, 36, 28, 92, 28, 116, 64,
+      OP_CURVE, 92, 100, 36, 100, 12, 64, OP_CLOSE, OP_STROKE,
+      OP_DOT, 64, 64, 14, OP_END },
 };
 
 static ULONG_PTR g_gdip_token = 0;
@@ -405,6 +410,7 @@ void ns_icon_draw(HDC hdc, NsIconId id, const RECT *rc,
         [NS_ICON_SPARKLE]  = 255,
         [NS_ICON_PASSWORD] = 255,
         [NS_ICON_INFO]     = 255,
+        [NS_ICON_EYE]      = 255,
     };
     ns_icon_draw_ex(hdc, id, rc, fg, k_fill[id], dpi);
 }
