@@ -26,8 +26,12 @@
 #include <string.h>
 
 /* "relative/path.c:line" entries that are allowed to break the rule, with a
- * reason. Empty: nothing needs to. */
-static const char *const k_allow[] = { NULL };
+ * reason. */
+static const char *const k_allow[] = {
+    /* save_prompted_password(): the event name profile.password_saved logs
+     * only ok=0|1, never the password. */
+    "src/ui/window.c:1223",
+    NULL };
 
 /* ---- the scanner --------------------------------------------------------------- */
 

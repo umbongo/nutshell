@@ -63,6 +63,9 @@
 #include "ai_stream.h"
 #include "secure_zero.h"
 #include "conn_prompt.h"
+#include "telnet_io.h"
+#include "telnet_status.h"
+#include "profile_kind.h"
 #include <shellapi.h>   /* ShellExecuteA: Help > Open Debug Log Folder */
 #include <windowsx.h>  /* GET_X_LPARAM, GET_Y_LPARAM */
 #include <gdiplus.h>       /* GDI+ flat API (includes gdiplusflat.h) */
@@ -98,6 +101,10 @@ static DWORD    g_last_wm_paint_tick = 0; /* GetTickCount() at the last WM_PAINT
 /* --ui-demo=shortcuts: posted once the demo session exists, to open the
  * keyboard shortcuts sheet over it. */
 #define WM_OPEN_DEMO_SHORTCUTS  (WM_USER + 6)
+/* Posted by the WM_TIMER poll when a telnet session's auto-login has no saved
+ * password and the device asked for one: wParam is the Session*, lParam the
+ * transport's serial. The handler re-resolves both before it answers. */
+#define WM_TELNET_PASSWORD      (WM_USER + 7)
 /* One-shot timer that puts the window title back after Mark Issue's flash. */
 #define IDT_ISSUE_TITLE         5
 
@@ -193,6 +200,10 @@ typedef struct ConnJob {
     SSHChannel *channel;
     int         result;         /* 0=ok, 1=tcp/ssh, 2=auth, 3=channel */
     char        error[512];
+    int         is_telnet;      /* the profile is a telnet one: no libssh2 */
+    SOCKET      tn_sock;        /* telnet: the connected socket until WM_CONN_DONE
+                                 * takes it (INVALID_SOCKET otherwise) */
+    TnConnOutcome tn_outcome;
     /* The ConnUiRequest the worker is currently blocked on (conn_ui_ask()),
      * if any -- see src/core/conn_prompt.h for the ownership protocol this
      * slot implements and conn_ui_request_cancel()/the WM_CONN_PROMPT
@@ -214,6 +225,7 @@ static void conn_job_free(ConnJob *j)
     if (!j) return;
     if (j->channel) ssh_channel_free(j->channel);
     if (j->ssh) ssh_session_free(j->ssh);
+    if (j->tn_sock != INVALID_SOCKET) closesocket(j->tn_sock);
     secure_zero(&j->profile, sizeof(j->profile));
     free(j);
     InterlockedDecrement(&g_live_conn_jobs);
@@ -1191,6 +1203,26 @@ static const char *active_config_path(void)
     return g_config_save_disabled ? "" : g_config_path;
 }
 
+/* Save a password the user typed into a prompt box onto the saved profile
+ * that matches `session_profile` (kind, host, username, port). Logs only the
+ * outcome, never the password. The local copy is wiped on every path. */
+static void save_prompted_password(const Profile *session_profile, const char *password)
+{
+    int ok = 0;
+    Profile *pr = (g_config && session_profile && password)
+                      ? config_find_profile_match(g_config, session_profile) : NULL;
+    if (pr) {
+        char pw[sizeof(pr->password)];
+        snprintf(pw, sizeof(pw), "%s", password);
+        memcpy(pr->password, pw, sizeof(pr->password));
+        secure_zero(pw, sizeof(pw));
+        config_secret_drop_stale_preserved(pr->password, pr->password_enc_preserved,
+                                           sizeof(pr->password_enc_preserved));
+        ok = (config_save(g_config, active_config_path()) == 0);
+    }
+    DLOG(DLOG_GENERAL, DLOG_INFO, 0, "profile.password_saved", "ok=%d", ok);
+}
+
 /* Open a timestamped session log file under log_dir.
  * name falls back to hostname (then "session") when empty.
  * Returns NULL if logging_enabled is false or on any error.
@@ -1424,6 +1456,7 @@ static int start_local_shell(HWND hwnd, Session *s, int tidx)
 /* ---- Background connection thread --------------------------------------- */
 
 static DWORD WINAPI connection_thread(LPVOID param);
+static void telnet_connect_job(ConnJob *j);
 
 /* Start the connection thread for `s` on a ConnJob of its own. Returns 1 if
  * it is running (s->conn_job holds the UI's reference), 0 if it could not
@@ -1448,6 +1481,8 @@ static int start_connection(Session *s, HWND hwnd)
     j->hwnd    = hwnd;
     j->log_id  = s->log_id;
     j->profile = s->conn_profile;
+    j->is_telnet = (profile_kind_of(s->conn_profile.kind) == PROFILE_KIND_TELNET);
+    j->tn_sock   = INVALID_SOCKET;   /* calloc's 0 is a valid socket */
     /* Snapshot on the UI thread -- the worker thread never reads g_config. */
     j->hostkey_strict = (g_config &&
         _stricmp(g_config->settings.host_key_verification, "strict") == 0) ? 1 : 0;
@@ -1464,6 +1499,36 @@ static int start_connection(Session *s, HWND hwnd)
     return 1;
 }
 
+/* A telnet job: resolve and connect only. No libssh2, no known hosts, no
+ * prompts. The socket goes to the Session in WM_CONN_DONE. */
+static void telnet_connect_job(ConnJob *j)
+{
+    const ULONGLONG t_start = GetTickCount64();
+    dlog_set_thread_tag("telnet");
+    DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "telnet.connect.start", "profile=%s",
+         j->profile.name[0] ? j->profile.name : "-");
+    if (dlog_content_enabled())
+        DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "telnet.connect.target",
+             "host=%s port=%d", j->profile.host, j->profile.port);
+    j->tn_outcome = telnet_io_connect(j->profile.host, j->profile.port, 4000,
+                                      &j->tn_sock);
+    j->result = (j->tn_outcome == TN_CONN_OK) ? 0 : 1;
+    if (j->result == 0) {
+        DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "telnet.connect.done", "ms=%llu",
+             (unsigned long long)(GetTickCount64() - t_start));
+    } else {
+        const char *oc = j->tn_outcome == TN_CONN_REFUSED ? "refused"
+                       : j->tn_outcome == TN_CONN_TIMEOUT ? "timeout"
+                       : j->tn_outcome == TN_CONN_RESOLVE ? "resolve" : "other";
+        DLOG(DLOG_SSH, DLOG_WARN, j->log_id, "telnet.connect.fail",
+             "outcome=%s ms=%llu", oc,
+             (unsigned long long)(GetTickCount64() - t_start));
+    }
+    if (!worker_life_cancelled(&j->life))
+        PostMessage(j->hwnd, WM_CONN_DONE, (WPARAM)j->id, 0);
+    conn_job_release(j);
+}
+
 /* The connection thread. It reads and writes only its ConnJob -- the
  * profile copy, the PTY size and the results -- and drops its reference on
  * the way out, after posting WM_CONN_DONE (with the job id) unless the
@@ -1471,6 +1536,10 @@ static int start_connection(Session *s, HWND hwnd)
 static DWORD WINAPI connection_thread(LPVOID param)
 {
     ConnJob *j = (ConnJob *)param;
+    if (j->is_telnet) {
+        telnet_connect_job(j);
+        return 0;
+    }
     const Profile *info = &j->profile;
     HWND hwnd = j->hwnd;
 
@@ -1778,8 +1847,16 @@ static void on_session_connect(const Profile *info) {
     /* A local shell has nothing to connect to, so it never shows the
      * "Connecting..." animation -- start_local_shell() below either has a
      * running shell a moment later or an error line in the terminal. */
-    if (!is_local)
-        term_process(s->term, "Connecting", 10); /* dots appended by 500ms timer */
+    if (!is_local) {
+        if (profile_kind_of(info->kind) == PROFILE_KIND_TELNET) {
+            char line[300];
+            size_t n = tn_status_line(TN_LINE_CONNECTING, info->host, info->port,
+                                      line, sizeof(line));
+            term_process(s->term, line, n);   /* dots appended by 500ms timer */
+        } else {
+            term_process(s->term, "Connecting", 10); /* dots appended by 500ms timer */
+        }
+    }
 
     char title[32];
     snprintf(title, sizeof(title), "%s",
@@ -2285,17 +2362,10 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
 
         if (!is_local) {
             /* Re-populate password from config — it was zeroed after first auth */
-            for (size_t i = 0; i < vec_size(&g_config->profiles); i++) {
-                const Profile *pr = (const Profile *)vec_get(&g_config->profiles, i);
-                if (strcmp(pr->kind, s->conn_profile.kind) == 0 &&
-                    strcmp(pr->host, s->conn_profile.host) == 0 &&
-                    strcmp(pr->username, s->conn_profile.username) == 0 &&
-                    pr->port == s->conn_profile.port) {
-                    memcpy(s->conn_profile.password, pr->password,
-                           sizeof(s->conn_profile.password));
-                    break;
-                }
-            }
+            const Profile *pr = config_find_profile_match(g_config, &s->conn_profile);
+            if (pr)
+                memcpy(s->conn_profile.password, pr->password,
+                       sizeof(s->conn_profile.password));
         }
 
         int tidx = tabs_find(g_hwndTabs, s);
@@ -2313,7 +2383,16 @@ static void on_status_click(int index, void *user_data, TabStatus status) {
             return;
         }
 
-        term_process(s->term, "\r\nReconnecting", 14);
+        if (profile_kind_of(s->conn_profile.kind) == PROFILE_KIND_TELNET) {
+            char line[304];
+            line[0] = '\r'; line[1] = '\n';
+            size_t n = tn_status_line(TN_LINE_CONNECTING, s->conn_profile.host,
+                                      s->conn_profile.port, line + 2,
+                                      sizeof(line) - 2);
+            term_process(s->term, line, n + 2);
+        } else {
+            term_process(s->term, "\r\nReconnecting", 14);
+        }
 
         if (tidx >= 0)
             tabs_set_status(g_hwndTabs, tidx, TAB_CONNECTING);
@@ -3385,8 +3464,8 @@ static void fill_issue_snapshot(HWND hwnd, DlogSnapshot *snap, unsigned char *di
         DlogSnapTerm *st = &snap->term;
         snap->has_term = 1;
         st->sid       = act->log_id;
-        st->kind      = (act->io.ctx ? act->io.kind == SESSION_LOCAL
-                                     : profile_is_local(&act->conn_profile)) ? "local" : "ssh";
+        st->kind      = session_kind_name(act->io.ctx ? act->io.kind
+            : profile_kind_session(profile_kind_of(act->conn_profile.kind)));
         st->connected = act->io.ctx ? 1 : 0;
         st->rows = t->rows;
         st->cols = t->cols;
@@ -3427,8 +3506,8 @@ static void fill_issue_snapshot(HWND hwnd, DlogSnapshot *snap, unsigned char *di
         if (o == act || !o->term) continue;
         DlogSnapSession *ss = &snap->sessions[snap->nsessions++];
         ss->sid        = o->log_id;
-        ss->kind       = (o->io.ctx ? o->io.kind == SESSION_LOCAL
-                                    : profile_is_local(&o->conn_profile)) ? "local" : "ssh";
+        ss->kind       = session_kind_name(o->io.ctx ? o->io.kind
+            : profile_kind_session(profile_kind_of(o->conn_profile.kind)));
         ss->connected  = o->io.ctx ? 1 : 0;
         ss->dirty_rows = term_dirty_row_flags(o->term, NULL, 0);
         ss->alt_screen = o->term->alt_screen_active ? 1 : 0;
@@ -4395,6 +4474,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                             poll_rc = -2;
                         }
 
+                        if (s->io.kind == SESSION_TELNET && s->io.ctx &&
+                            telnet_io_take_password_request(s->io.ctx))
+                            PostMessage(hwnd, WM_TELNET_PASSWORD, (WPARAM)s,
+                                        (LPARAM)telnet_io_serial(s->io.ctx));
+
                         if (poll_rc > 0) {
                             s->last_recv_tick = GetTickCount();
                             update_scrollbar(hwnd);
@@ -4542,8 +4626,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 paste_cancel();
                             DLOG(s->io.kind == SESSION_LOCAL ? DLOG_SHELL : DLOG_SSH, DLOG_INFO,
                                  s->log_id, "session.eof", "kind=%s",
-                                 s->io.kind == SESSION_LOCAL ? "local" : "ssh");
-                            term_process(s->term, "\r\n[Connection Closed]\r\n", 23);
+                                 session_kind_name(s->io.kind));
+                            if (s->io.kind == SESSION_TELNET) {
+                                char line[304];
+                                line[0] = '\r'; line[1] = '\n';
+                                size_t n = tn_status_line(TN_LINE_CLOSED,
+                                    s->conn_profile.host, s->conn_profile.port,
+                                    line + 2, sizeof(line) - 4);
+                                line[n + 2] = '\r'; line[n + 3] = '\n';
+                                term_process(s->term, line, n + 4);
+                            } else {
+                                term_process(s->term, "\r\n[Connection Closed]\r\n", 23);
+                            }
                             ai_panel_detach(s);
                             session_close_io(s);
                             int tidx = tabs_find(g_hwndTabs, s);
@@ -4667,6 +4761,36 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_OPEN_DEMO_SHORTCUTS:
             show_shortcuts(hwnd);
             return 0;
+
+        case WM_TELNET_PASSWORD: {
+            Session *s = g_session_list;
+            while (s && s != (Session *)wParam) s = s->next;
+            if (!s || s->io.kind != SESSION_TELNET || !s->io.ctx ||
+                telnet_io_serial(s->io.ctx) != (unsigned)lParam)
+                return 0;
+            char detail[300];
+            if (s->conn_profile.name[0])
+                snprintf(detail, sizeof(detail), "%s \xE2\x80\x94 %s",
+                         s->conn_profile.name, s->conn_profile.host);
+            else
+                snprintf(detail, sizeof(detail), "%s", s->conn_profile.host);
+            PwPromptOpts po = { "Password", "Enter password:", g_theme, detail, 1 };
+            char buf[256];
+            int save = 0;
+            buf[0] = '\0';
+            int ok = pw_prompt_show(hwnd, &po, buf, (int)sizeof(buf), &save);
+            /* The box pumped messages: the tab may have closed or reconnected. */
+            s = g_session_list;
+            while (s && s != (Session *)wParam) s = s->next;
+            if (s && s->io.kind == SESSION_TELNET && s->io.ctx &&
+                telnet_io_serial(s->io.ctx) == (unsigned)lParam) {
+                telnet_io_answer_password(s->io.ctx, ok ? buf : NULL);
+                if (ok && save)
+                    save_prompted_password(&s->conn_profile, buf);
+            }
+            secure_zero(buf, sizeof(buf));
+            return 0;
+        }
 
         case WM_STARTUP_CONNECT: {
             if (g_startup_action == CLI_UI_DEMO) {
@@ -4831,7 +4955,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             char conn_error[512];
             memcpy(conn_error, job->error, sizeof(conn_error));
             memcpy(s->conn_error, job->error, sizeof(s->conn_error));
-            if (conn_result == 0) {
+            const int is_tn = job->is_telnet;
+            TnConnOutcome tn_outcome = job->tn_outcome;
+            SOCKET tn_sock = INVALID_SOCKET;
+            if (is_tn && conn_result == 0) {
+                tn_sock = job->tn_sock;           /* ours now; the job must not close it */
+                job->tn_sock = INVALID_SOCKET;
+            }
+            if (!is_tn && conn_result == 0) {
                 s->ssh     = job->ssh;
                 s->channel = job->channel;
                 job->ssh     = NULL;
@@ -4850,8 +4981,42 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             s->last_user_input_tick  = tick_now;
             s->prev_bytes_read       = (s->ssh ? s->ssh->bytes_read_total : 0);
 
+            if (is_tn && conn_result == 0) {
+                /* The engine copies the credentials; the session's own copy
+                 * of the password goes right after (a reconnect re-reads it
+                 * from the config, never from the password box). */
+                TnSessionOpts opts;
+                opts.username = s->conn_profile.username;
+                opts.password = s->conn_profile.password;
+                opts.cols     = (s->term && s->term->cols > 0) ? s->term->cols : 80;
+                opts.rows     = (s->term && s->term->rows > 0) ? s->term->rows : 24;
+                opts.log_id   = s->log_id;
+                opts.now_ms   = GetTickCount();
+                SessionIo tio = session_io_telnet(tn_sock, &opts);   /* owns tn_sock now */
+                SecureZeroMemory(s->conn_profile.password,
+                                 sizeof(s->conn_profile.password));
+                if (!tio.ctx) {
+                    conn_result = 1;
+                    tn_outcome  = TN_CONN_OTHER;
+                } else {
+                    tio.last_input_tick = &s->last_term_input_tick;
+                    s->io = tio;
+                }
+            }
+
             int tidx = tabs_find(g_hwndTabs, s);
-            if (conn_result != 0) {
+            if (conn_result != 0 && is_tn) {
+                /* Reported in the tab only: no message box. */
+                char line[304];
+                line[0] = '\r'; line[1] = '\n';
+                size_t n = tn_status_line(tn_line_for_outcome(tn_outcome),
+                                          s->conn_profile.host, s->conn_profile.port,
+                                          line + 2, sizeof(line) - 4);
+                line[n + 2] = '\r'; line[n + 3] = '\n';
+                term_process(s->term, line, n + 4);
+                if (tidx >= 0)
+                    tabs_set_status(g_hwndTabs, tidx, TAB_DISCONNECTED);
+            } else if (conn_result != 0) {
                 char errmsg[600];
                 snprintf(errmsg, sizeof(errmsg), "\r\n%s\r\n", conn_error);
                 term_process(s->term, errmsg, strlen(errmsg));
@@ -4872,10 +5037,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                  * assignment. Points at last_term_input_tick, not
                  * last_user_input_tick: only a keystroke/paste actually
                  * written to this terminal may hold the dispatcher back. */
-                SessionIo io = session_io_ssh(s->ssh, s->channel);
-                io.last_input_tick = &s->last_term_input_tick;
-                s->io = io;
-                term_process(s->term, "\r\nConnected.\r\n", 14);
+                if (is_tn) {
+                    char line[304];
+                    line[0] = '\r'; line[1] = '\n';
+                    size_t n = tn_status_line(TN_LINE_CONNECTED, s->conn_profile.host,
+                                              s->conn_profile.port, line + 2,
+                                              sizeof(line) - 4);
+                    line[n + 2] = '\r'; line[n + 3] = '\n';
+                    term_process(s->term, line, n + 4);
+                } else {
+                    SessionIo io = session_io_ssh(s->ssh, s->channel);
+                    io.last_input_tick = &s->last_term_input_tick;
+                    s->io = io;
+                    term_process(s->term, "\r\nConnected.\r\n", 14);
+                }
                 /* Keep a log the user already started from the File menu
                  * while the tab was still connecting; only auto-open one
                  * (per the logging_enabled setting) if none is open. */
