@@ -1116,6 +1116,22 @@ int test_tn_proto_random_bytes_are_bounded(void);
 int test_tn_proto_reply_cap_is_enforced(void);
 int test_tn_proto_encode_escapes_and_expands(void);
 int test_tn_proto_encode_cr_lf_not_doubled_across_writes(void);
+
+/* test_telnet_login.c */
+int test_tn_line_prompt_forms(void);
+int test_tn_login_user_then_password(void);
+int test_tn_login_password_only_device(void);
+int test_tn_login_login_prompt_without_username_switches_off(void);
+int test_tn_login_username_without_password_asks(void);
+int test_tn_login_neither_is_a_port_check(void);
+int test_tn_login_waits_for_settle(void);
+int test_tn_login_needs_fresh_output(void);
+int test_tn_login_user_input_switches_off(void);
+int test_tn_login_device_prompt_switches_off(void);
+int test_tn_login_failure_reprompt_after_password_does_nothing(void);
+int test_tn_login_second_login_before_password_switches_off(void);
+int test_tn_login_timeout(void);
+int test_tn_login_null_cursor_line_is_ignored(void);
 int test_config_find_profile_match(void);
 
 /* test_dispatch_line_clear.c */
@@ -4599,6 +4615,20 @@ int main(void) {
     failed += test_tn_proto_reply_cap_is_enforced();
     failed += test_tn_proto_encode_escapes_and_expands();
     failed += test_tn_proto_encode_cr_lf_not_doubled_across_writes();
+    failed += test_tn_line_prompt_forms();
+    failed += test_tn_login_user_then_password();
+    failed += test_tn_login_password_only_device();
+    failed += test_tn_login_login_prompt_without_username_switches_off();
+    failed += test_tn_login_username_without_password_asks();
+    failed += test_tn_login_neither_is_a_port_check();
+    failed += test_tn_login_waits_for_settle();
+    failed += test_tn_login_needs_fresh_output();
+    failed += test_tn_login_user_input_switches_off();
+    failed += test_tn_login_device_prompt_switches_off();
+    failed += test_tn_login_failure_reprompt_after_password_does_nothing();
+    failed += test_tn_login_second_login_before_password_switches_off();
+    failed += test_tn_login_timeout();
+    failed += test_tn_login_null_cursor_line_is_ignored();
     failed += test_config_find_profile_match();
     failed += test_dispatch_line_clear_local_gitbash_is_readline();
     failed += test_dispatch_line_clear_local_msys2_is_readline();
