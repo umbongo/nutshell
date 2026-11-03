@@ -172,6 +172,58 @@ int test_dlog_snapshot_format_fields(void)
     TEST_END();
 }
 
+int test_dlog_snapshot_format_focus_and_write_diagnostics(void)
+{
+    TEST_BEGIN();
+    DlogSnapshot s = sample();
+    s.window.focus_role = "ai_input"; s.window.focus_visible = 0;
+    s.window.main_hwnd = 0x1F0ULL; s.window.foreground = 1; s.window.capture = "main";
+    s.window.key_ctrl = 1; s.window.key_alt = 1;
+    s.term.ms_since_recv = 1200; s.term.ms_since_key_write = 45000;
+    s.term.last_write_rc = -37; s.term.write_fail_count = 4;
+    DlogSnapLine lines[16];
+    (void)dlog_snapshot_format(&s, lines, 16);
+    ASSERT_TRUE(strstr(lines[0].fields, "focus_role=ai_input") != NULL);
+    ASSERT_TRUE(strstr(lines[0].fields, "focus_visible=0") != NULL);
+    ASSERT_TRUE(strstr(lines[0].fields, "main=0x1f0") != NULL);
+    ASSERT_TRUE(strstr(lines[0].fields, "foreground=1") != NULL);
+    ASSERT_TRUE(strstr(lines[0].fields, "capture=main") != NULL);
+    ASSERT_TRUE(strstr(lines[0].fields, "keys=CA") != NULL);
+    ASSERT_TRUE(strstr(lines[1].fields, "since_recv_ms=1200") != NULL);
+    ASSERT_TRUE(strstr(lines[1].fields, "since_key_write_ms=45000") != NULL);
+    ASSERT_TRUE(strstr(lines[1].fields, "last_write_rc=-37") != NULL);
+    ASSERT_TRUE(strstr(lines[1].fields, "write_fails=4") != NULL);
+    TEST_END();
+}
+
+int test_dlog_snapshot_format_via_field(void)
+{
+    TEST_BEGIN();
+    DlogSnapshot s = sample();
+    DlogSnapLine lines[16];
+    (void)dlog_snapshot_format(&s, lines, 16);
+    ASSERT_TRUE(strstr(lines[0].fields, "via=-") != NULL);
+    s.window.via = "key";
+    (void)dlog_snapshot_format(&s, lines, 16);
+    ASSERT_TRUE(strstr(lines[0].fields, "via=key") != NULL);
+    s.window.via = "menu";
+    (void)dlog_snapshot_format(&s, lines, 16);
+    ASSERT_TRUE(strstr(lines[0].fields, "via=menu") != NULL);
+    TEST_END();
+}
+
+int test_dlog_snapshot_format_focus_defaults_when_unset(void)
+{
+    TEST_BEGIN();
+    DlogSnapshot s = sample();
+    DlogSnapLine lines[16];
+    (void)dlog_snapshot_format(&s, lines, 16);
+    ASSERT_TRUE(strstr(lines[0].fields, "focus_role=- ") != NULL);
+    ASSERT_TRUE(strstr(lines[0].fields, "capture=- ") != NULL);
+    ASSERT_TRUE(strstr(lines[0].fields, "keys=-") != NULL);
+    TEST_END();
+}
+
 int test_dlog_snapshot_format_no_active_term_and_no_dirty_array(void)
 {
     TEST_BEGIN();

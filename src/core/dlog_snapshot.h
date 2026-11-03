@@ -28,6 +28,13 @@ typedef struct {
     long ms_since_last_paint;     /* -1 when no paint yet */
     int cooldown_ms;              /* the invalidate cooldown in force */
     unsigned long long focus_hwnd;
+    const char *focus_role;       /* "main", "ai_input", "ai_list", "ai_panel", "other", "none"; NULL = "-" */
+    int focus_visible;            /* the focused window is visible */
+    unsigned long long main_hwnd;
+    int foreground;               /* Nutshell owns the foreground window */
+    const char *capture;          /* mouse capture holder: "none", "main", "other"; NULL = "-" */
+    int key_ctrl, key_shift, key_alt;   /* modifier down (always C+S when marked by Ctrl+Shift+M: see via) */
+    const char *via;              /* how the issue was marked: "key" or "menu"; NULL = "-" */
 } DlogSnapWindow;
 
 /* issue.term, for the active session */
@@ -43,6 +50,10 @@ typedef struct {
     int scroll_top, scroll_bottom;
     int full_redraw_needed;
     unsigned long long write_seq;
+    long ms_since_recv;           /* ms since the session last received bytes; -1 never */
+    long ms_since_key_write;      /* ms since the last keystroke/paste write; -1 never */
+    long last_write_rc;           /* return code of that write (bytes, or negative error) */
+    unsigned write_fail_count;    /* failed or short writes so far */
     const unsigned char *dirty;   /* one flag per row (non-zero = dirty), may be NULL */
     int dirty_n;
 } DlogSnapTerm;

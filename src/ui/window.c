@@ -31,6 +31,7 @@
 #include "knownhosts.h"
 #include "log_format.h"
 #include "edit_scroll.h"
+#include "write_stats.h"
 #include "paste_dlg.h"
 #include "clipboard.h"
 #include "paste_filter.h"
@@ -150,6 +151,17 @@ typedef struct Session {
      * cannot be triggered by typing the AI's next question or scrolling
      * the terminal to look at earlier output. */
     DWORD     last_term_input_tick;
+    /* Diagnostics for Mark Issue (issue.term): GetTickCount() of the last
+     * poll that delivered bytes (0 = never), and the outcome of the user's
+     * keystroke/paste writes (src/core/write_stats.h: last rc, failed or
+     * short calls, tick of the last write itself -- not of the key press,
+     * which last_term_input_tick records). Zeroed in create_session(). */
+    DWORD      last_recv_tick;
+    WriteStats wstats;
+    /* Mouse-wheel remainder in WHEEL_DELTA units: precision touchpads and
+     * smooth-scroll mice send deltas below one notch, which would truncate to
+     * zero lines each time (term_wheel_lines()). */
+    int       wheel_accum;
     uint64_t  prev_bytes_read;        /* SshSession.bytes_read_total snapshot */
     /* The terminal selection, PuTTY style (spec
      * docs/superpowers/specs/2026-10-20-putty-selection-design.md): per
@@ -496,6 +508,60 @@ static void session_mark_terminal_input(void) {
     }
 }
 
+/* Record the outcome of a user keystroke/paste write for Mark Issue
+ * (issue.term: last_write_rc, write_fails) and say so when it failed or was
+ * short. `want` is the byte count asked for, `fails` how many of the writes in
+ * this call failed (a paste is many one-byte writes: one WARN per call, never
+ * one per byte), `rc` the last failing return code, or the last one if none
+ * failed. The repeat collapser folds identical WARNs from a stuck session. */
+static void session_log_write_fail(Session *s, int rc, size_t want, const char *src)
+{
+    /* No running total here: it would change every line and stop the repeat
+     * collapser folding a stuck session's WARNs. issue.term carries it. */
+    DLOG(DLOG_TERM, DLOG_WARN, s->log_id, "term.write_fail",
+         "src=%s rc=%d want=%zu", src, rc, want);
+}
+
+/* One write call: the bookkeeping is src/core/write_stats.h. */
+static void session_note_write(Session *s, int rc, size_t want, const char *src)
+{
+    if (!s) return;
+    if (write_stats_note(&s->wstats, rc, want, (unsigned long)GetTickCount()))
+        session_log_write_fail(s, rc, want, src);
+}
+
+/* A paste's aggregate of one-byte writes counts as one call. */
+static void session_note_write_agg(Session *s, const WriteAgg *a, const char *src)
+{
+    if (!s) return;
+    if (write_stats_note_agg(&s->wstats, a, (unsigned long)GetTickCount()))
+        session_log_write_fail(s, a->rc, 1u, src);
+}
+
+/* io.write plus session_note_write() for a single call. */
+static int session_write_noted(Session *s, const char *data, size_t len,
+                               const char *src)
+{
+    int rc = s->io.write(s->io.ctx, data, len);
+    session_note_write(s, rc, len, src);
+    return rc;
+}
+
+/* The window that takes terminal keystrokes is the main window: the terminal
+ * click handler (WM_LBUTTONDOWN) reclaims focus with SetFocus(hwnd). If focus
+ * sits in the AI panel (or any child of it) move it there. Called as the
+ * panel hides: Win32 leaves focus on a hidden child, so without this every
+ * key and Enter went to the invisible AI input box. `why` goes to the log. */
+static void ai_panel_release_focus(HWND hwnd, const char *why)
+{
+    if (!g_hwndAiChat || !IsWindow(g_hwndAiChat) || !hwnd) return;
+    const char *role = ai_chat_focus_role(g_hwndAiChat, GetFocus());
+    if (!role) return;
+    SetFocus(hwnd);
+    DLOG(DLOG_GENERAL, DLOG_DEBUG, g_active_session ? g_active_session->log_id : 0u,
+         "ui.focus", "from=%s to=main why=%s", role, why);
+}
+
 /* Invalidate only the terminal area (below the tab strip), not the tabs.
  * `why` names the caller in the render "invalidate" log event. */
 static void invalidate_terminal_why(HWND hwnd, const char *why)
@@ -586,6 +652,8 @@ typedef struct {
     int       (*io_write)(void *ctx, const char *data, size_t len);
     bool        bracketed; /* send \033[201~ when paste completes */
     bool        local;     /* send \r for a line end: a console child reads Enter, not LF */
+    struct Session *session; /* the target, for write diagnostics only; valid while io_ctx is
+                              * (a closing tab cancels its paste before the session is freed) */
 } PasteState;
 
 /* Send one clipboard line to a transport, mapping line ends the way that
@@ -595,16 +663,19 @@ typedef struct {
  * 3, "Writing"). */
 static void paste_chunk_write(void *ctx,
                               int (*write_fn)(void *, const char *, size_t),
-                              const char *p, size_t chunk, bool local)
+                              const char *p, size_t chunk, bool local,
+                              WriteAgg *agg)
 {
     for (size_t i = 0; i < chunk; i++) {
         if (p[i] == '\r') continue;
+        int rc;
         if (p[i] == '\n' && local) {
             static const char CR = '\r';
-            write_fn(ctx, &CR, 1);
+            rc = write_fn(ctx, &CR, 1);
         } else {
-            write_fn(ctx, &p[i], 1);
+            rc = write_fn(ctx, &p[i], 1);
         }
+        write_agg_add(agg, rc, 1u);
     }
 }
 
@@ -887,6 +958,9 @@ static Session *create_session(int rows, int cols) {
     s->last_keepalive_tick   = 0;
     s->last_user_input_tick  = 0;
     s->last_term_input_tick  = 0;
+    s->last_recv_tick        = 0;
+    write_stats_init(&s->wstats);
+    s->wheel_accum           = 0;
     s->prev_bytes_read       = 0;
     s->next = g_session_list;
     g_session_list = s;
@@ -2241,9 +2315,16 @@ static void hide_ai_panel(HWND parent) {
     if (!g_hwndAiChat || !IsWindow(g_hwndAiChat)) return;
     if (g_ai_docked) {
         g_ai_last_width = g_ai_panel_width;
+        /* Focus goes back to the terminal as the close STARTS, not when the
+         * animation ends: keys typed during the slide belong to the terminal
+         * the user is returning to, and the panel is already on its way out.
+         * The end-of-animation hide checks again, in case a click put focus
+         * back in the panel mid-slide. */
+        ai_panel_release_focus(parent, "hide_start");
         /* Animate closed — ShowWindow(SW_HIDE) happens when anim finishes */
         start_ai_panel_anim(parent, 0);
     } else {
+        ai_panel_release_focus(parent, "hide_floating");
         ShowWindow(g_hwndAiChat, SW_HIDE);
     }
 }
@@ -2272,9 +2353,10 @@ static void on_ai_clicked(void) {
             }
         } else {
             /* Floating toggle */
-            if (IsWindowVisible(g_hwndAiChat))
+            if (IsWindowVisible(g_hwndAiChat)) {
+                ai_panel_release_focus(parent, "toggle_floating");
                 ShowWindow(g_hwndAiChat, SW_HIDE);
-            else {
+            } else {
                 ShowWindow(g_hwndAiChat, SW_SHOW);
                 SetForegroundWindow(g_hwndAiChat);
             }
@@ -2470,7 +2552,11 @@ static bool paste_send_next_line(void)
     const char *nl = strchr(p, '\n');
     size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
 
-    paste_chunk_write(g_paste.io_ctx, g_paste.io_write, p, chunk, g_paste.local);
+    WriteAgg wagg;
+    write_agg_init(&wagg);
+    paste_chunk_write(g_paste.io_ctx, g_paste.io_write, p, chunk, g_paste.local,
+                      &wagg);
+    session_note_write_agg(g_paste.session, &wagg, "paste");
 
     g_paste.pos += chunk;
     return *g_paste.pos != '\0';
@@ -2486,6 +2572,7 @@ static void paste_cancel(void)
         g_paste.pos      = NULL;
         g_paste.io_ctx   = NULL;
         g_paste.io_write = NULL;
+        g_paste.session  = NULL;
         g_paste.bracketed = false;
         g_paste.local     = false;
     }
@@ -2496,7 +2583,10 @@ static void paste_finish(void)
 {
     static const char BRACKET_CLOSE[] = "\033[201~";
     if (g_paste.bracketed && g_paste.io_ctx)
-        g_paste.io_write(g_paste.io_ctx, BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
+    {
+        int rc = g_paste.io_write(g_paste.io_ctx, BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
+        session_note_write(g_paste.session, rc, sizeof(BRACKET_CLOSE) - 1, "paste");
+    }
     paste_cancel();
 }
 
@@ -2666,20 +2756,23 @@ static void do_paste(HWND hwnd)
      * would only add pointless latency. */
     if (line_count == 0 || delay_ms <= 0 || bpm) {
         if (bpm)
-            target->io.write(target->io.ctx,
-                              BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
+            (void)session_write_noted(target, BRACKET_OPEN,
+                                      sizeof(BRACKET_OPEN) - 1, "paste");
         const char *p = local;
+        WriteAgg wagg;
+        write_agg_init(&wagg);
         while (*p) {
             const char *nl = strchr(p, '\n');
             size_t chunk = nl ? (size_t)(nl - p) + 1u : strlen(p);
             paste_chunk_write(target->io.ctx,
                               target->io.write,
-                              p, chunk, local_line_ends);
+                              p, chunk, local_line_ends, &wagg);
             p += chunk;
         }
+        session_note_write_agg(target, &wagg, "paste");  /* one WARN per paste */
         if (bpm)
-            target->io.write(target->io.ctx,
-                              BRACKET_CLOSE, sizeof(BRACKET_CLOSE) - 1);
+            (void)session_write_noted(target, BRACKET_CLOSE,
+                                      sizeof(BRACKET_CLOSE) - 1, "paste");
         target->term->scrollback_offset = 0;
         invalidate_terminal(hwnd);
         free(local);
@@ -2693,10 +2786,11 @@ static void do_paste(HWND hwnd)
         g_paste.io_write  = target->io.write;
         g_paste.bracketed = bpm;
         g_paste.local     = local_line_ends;
+        g_paste.session   = target;
 
         if (bpm)
-            target->io.write(target->io.ctx,
-                              BRACKET_OPEN, sizeof(BRACKET_OPEN) - 1);
+            (void)session_write_noted(target, BRACKET_OPEN,
+                                      sizeof(BRACKET_OPEN) - 1, "paste");
 
         /* Send the first line immediately */
         paste_send_next_line();
@@ -3313,8 +3407,9 @@ static void session_send_bytes(HWND hwnd, const char *bytes, size_t n)
     Session *s = g_active_session;
     if (!s || !s->term || n == 0) return;
     if (s->io.ctx) {
-        s->io.poll(s->io.ctx, s->term, s->session_log);
-        s->io.write(s->io.ctx, bytes, n);
+        if (s->io.poll(s->io.ctx, s->term, s->session_log) > 0)
+            s->last_recv_tick = GetTickCount();
+        (void)session_write_noted(s, bytes, n, "key");
     }
     if (s->term->scrollback_offset != 0) {
         s->term->scrollback_offset = 0;
@@ -3402,7 +3497,8 @@ static void close_active_tab(void)
 /* Fill the plain-struct snapshot the logger formats. `dirty` backs the
  * per-row flags of the active terminal; `policy` the AI policy token. */
 static void fill_issue_snapshot(HWND hwnd, DlogSnapshot *snap, unsigned char *dirty,
-                                int dirty_cap, char *policy, size_t policy_cap)
+                                int dirty_cap, char *policy, size_t policy_cap,
+                                const char *via)
 {
     memset(snap, 0, sizeof(*snap));
 
@@ -3422,7 +3518,29 @@ static void fill_issue_snapshot(HWND hwnd, DlogSnapshot *snap, unsigned char *di
     w->ms_since_last_paint = g_last_wm_paint_tick
         ? (long)(GetTickCount() - g_last_wm_paint_tick) : -1L;
     w->cooldown_ms = PAINT_COOLDOWN_MS;
-    w->focus_hwnd  = (unsigned long long)(ULONG_PTR)GetFocus();
+    {
+        HWND f = GetFocus();
+        w->focus_hwnd = (unsigned long long)(ULONG_PTR)f;
+        if (!f)
+            w->focus_role = "none";
+        else if (f == hwnd)
+            w->focus_role = "main";
+        else {
+            const char *ar = g_hwndAiChat ? ai_chat_focus_role(g_hwndAiChat, f) : NULL;
+            w->focus_role = ar ? ar : "other";
+        }
+        w->focus_visible = (f && IsWindowVisible(f)) ? 1 : 0;
+        w->main_hwnd     = (unsigned long long)(ULONG_PTR)hwnd;
+        HWND fg = GetForegroundWindow();
+        w->foreground    = (fg && (fg == hwnd || GetWindowThreadProcessId(fg, NULL)
+                                              == GetCurrentThreadId())) ? 1 : 0;
+        HWND cap = GetCapture();
+        w->capture       = !cap ? "none" : (cap == hwnd ? "main" : "other");
+        w->key_ctrl      = (GetKeyState(VK_CONTROL) & 0x8000) ? 1 : 0;
+        w->key_shift     = (GetKeyState(VK_SHIFT) & 0x8000) ? 1 : 0;
+        w->key_alt       = (GetKeyState(VK_MENU) & 0x8000) ? 1 : 0;
+        w->via           = via;
+    }
 
     Session *act = g_active_session;
     if (act && act->term) {
@@ -3447,6 +3565,15 @@ static void fill_issue_snapshot(HWND hwnd, DlogSnapshot *snap, unsigned char *di
         st->scroll_bottom  = t->scroll_bot;
         st->full_redraw_needed = t->full_redraw_needed ? 1 : 0;
         st->write_seq      = (unsigned long long)t->write_seq;
+        {
+            const DWORD now = GetTickCount();
+            st->ms_since_recv      = write_ms_since((unsigned long)now,
+                                                    (unsigned long)act->last_recv_tick);
+            st->ms_since_key_write = write_ms_since((unsigned long)now,
+                                                    act->wstats.last_write_tick);
+            st->last_write_rc      = act->wstats.last_rc;
+            st->write_fail_count   = act->wstats.fail_count;
+        }
         (void)term_dirty_row_flags(t, dirty, dirty_cap);
         st->dirty   = dirty;
         st->dirty_n = t->rows < dirty_cap ? t->rows : dirty_cap;
@@ -3481,12 +3608,12 @@ static void fill_issue_snapshot(HWND hwnd, DlogSnapshot *snap, unsigned char *di
     }
 }
 
-static void mark_issue(HWND hwnd)
+static void mark_issue(HWND hwnd, const char *via)
 {
     static DlogSnapshot snap;                /* UI thread only; large, so not on the stack */
     unsigned char dirty[1024];
     char policy[32];
-    fill_issue_snapshot(hwnd, &snap, dirty, (int)sizeof(dirty), policy, sizeof(policy));
+    fill_issue_snapshot(hwnd, &snap, dirty, (int)sizeof(dirty), policy, sizeof(policy), via);
 
     DlogIssue iss;
     memset(&iss, 0, sizeof(iss));
@@ -3613,7 +3740,7 @@ static bool key_on_keydown(HWND hwnd, WPARAM vk, LPARAM lParam)
          * full-screen program loses anything. */
         if (vk == (WPARAM)'M') {
             drop_queued_char(hwnd, lParam);
-            if (!is_repeat) mark_issue(hwnd);
+            if (!is_repeat) mark_issue(hwnd, "key");
             return true;
         }
     }
@@ -4298,7 +4425,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     show_about_dialog(hwnd);
                     return 0;
                 case IDM_HELP_MARK_ISSUE:
-                    mark_issue(hwnd);
+                    mark_issue(hwnd, "menu");
                     return 0;
                 case IDM_HELP_LOG_FOLDER:
                     open_debug_log_folder(hwnd);
@@ -4432,6 +4559,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                         }
 
                         if (poll_rc > 0) {
+                            s->last_recv_tick = GetTickCount();
                             update_scrollbar(hwnd);
 
                             /* Platform auto-detect: only while the profile
@@ -4676,9 +4804,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                      * never running) -- snap to the exact target. */
                     g_ai_panel_width = g_ai_target_width;
                     /* Hide the window after close animation finishes */
-                    if (g_ai_target_width == 0
-                        && g_hwndAiChat && IsWindow(g_hwndAiChat))
+                    /* g_ai_docked: a docked close followed by an undock
+                     * mid-slide leaves this tick pending, and it must not
+                     * release focus from or hide the new floating panel. */
+                    if (g_ai_docked && g_ai_target_width == 0
+                        && g_hwndAiChat && IsWindow(g_hwndAiChat)) {
+                        ai_panel_release_focus(hwnd, "hide_end");
                         ShowWindow(g_hwndAiChat, SW_HIDE);
+                    }
                 }
                 if (active == 0)
                     KillTimer(hwnd, ANIM_TIMER_ID);
@@ -5356,7 +5489,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Ctrl+Scroll zooms the font */
             if (GetKeyState(VK_CONTROL) & 0x8000) {
                 int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-                apply_zoom(hwnd, delta > 0 ? 1 : -1);
+                /* One step per notch; a precision touchpad's pinch sends many
+                 * tiny deltas, which collect here (own remainder, not the
+                 * scroll one) instead of zooming a full step each. */
+                static int zoom_accum = 0;
+                int steps = term_wheel_lines(delta, WHEEL_DELTA, 1, &zoom_accum);
+                for (; steps > 0; steps--) apply_zoom(hwnd, 1);
+                for (; steps < 0; steps++) apply_zoom(hwnd, -1);
                 return 0;
             }
             /* Plain scroll: scroll 3 lines per notch */
@@ -5364,11 +5503,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 g_active_session->last_user_input_tick = GetTickCount();
                 Terminal *t = g_active_session->term;
                 int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-                int lines = 3 * delta / WHEEL_DELTA;
+                /* 3 lines per notch, with sub-notch deltas (precision
+                 * touchpads, smooth-scroll mice) accumulated per session
+                 * rather than truncated to zero. */
+                int lines = term_wheel_lines(delta, WHEEL_DELTA, 3,
+                                             &g_active_session->wheel_accum);
                 int max_off = term_max_scroll_offset(t);
                 int off = t->scrollback_offset + lines;
                 if (off < 0) off = 0;
                 if (off > max_off) off = max_off;
+                DLOG(DLOG_GENERAL, DLOG_DEBUG, g_active_session->log_id, "ui.wheel",
+                     "delta=%d lines=%d rem=%d offset=%d max=%d", delta, lines,
+                     g_active_session->wheel_accum, off, max_off);
                 t->scrollback_offset = off;
                 update_scrollbar(hwnd);
                 invalidate_terminal(hwnd);

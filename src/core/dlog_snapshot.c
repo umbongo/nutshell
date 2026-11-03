@@ -54,14 +54,25 @@ size_t dlog_snapshot_format(const DlogSnapshot *s, DlogSnapLine *out, size_t max
 
     if (n < max) {
         const DlogSnapWindow *w = &s->window;
+        char frole[40], cap[40], via[24], keys[8];
+        (void)snprintf(keys, sizeof(keys), "%s%s%s", w->key_ctrl ? "C" : "",
+                       w->key_shift ? "S" : "", w->key_alt ? "A" : "");
+        if (!keys[0]) { keys[0] = '-'; keys[1] = '\0'; }
+        val(frole, sizeof(frole), w->focus_role);
+        val(cap, sizeof(cap), w->capture);
+        val(via, sizeof(via), w->via);
         out[n].event = "issue.window";
         out[n].sid = 0;
         (void)snprintf(out[n].fields, sizeof(out[n].fields),
                        "client=%dx%d dpi=%d tab_height=%d left_margin=%d ai_docked=%d ai_width=%d "
-                       "scrollbar=%d iconic=%d fullscreen=%d since_paint_ms=%ld cooldown_ms=%d focus=0x%llx",
+                       "scrollbar=%d iconic=%d fullscreen=%d since_paint_ms=%ld cooldown_ms=%d focus=0x%llx "
+                       "focus_role=%s focus_visible=%d main=0x%llx foreground=%d capture=%s "
+                       "keys=%s via=%s",
                        w->client_w, w->client_h, w->dpi, w->tab_height, w->left_margin,
                        w->ai_docked, w->ai_width, w->scrollbar_visible, w->iconic, w->fullscreen,
-                       w->ms_since_last_paint, w->cooldown_ms, w->focus_hwnd);
+                       w->ms_since_last_paint, w->cooldown_ms, w->focus_hwnd,
+                       frole, w->focus_visible, w->main_hwnd, w->foreground, cap,
+                       keys, via);
         n++;
     }
 
@@ -75,11 +86,13 @@ size_t dlog_snapshot_format(const DlogSnapshot *s, DlogSnapLine *out, size_t max
         (void)snprintf(out[n].fields, sizeof(out[n].fields),
                        "kind=%s connected=%d grid=%dx%d lines_count=%d lines_start=%d lines_capacity=%d "
                        "scrollback_offset=%d cursor=%d,%d cursor_visible=%d alt=%d region=%d-%d "
-                       "full_redraw=%d write_seq=%llu dirty=%s",
+                       "full_redraw=%d write_seq=%llu since_recv_ms=%ld since_key_write_ms=%ld "
+                       "last_write_rc=%ld write_fails=%u dirty=%s",
                        kind, t->connected, t->rows, t->cols, t->lines_count, t->lines_start,
                        t->lines_capacity, t->scrollback_offset, t->cursor_row, t->cursor_col,
                        t->cursor_visible, t->alt_screen, t->scroll_top, t->scroll_bottom,
-                       t->full_redraw_needed, t->write_seq, dirty);
+                       t->full_redraw_needed, t->write_seq, t->ms_since_recv, t->ms_since_key_write,
+                       t->last_write_rc, t->write_fail_count, dirty);
         n++;
     }
 

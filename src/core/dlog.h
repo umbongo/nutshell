@@ -286,6 +286,10 @@ int  dlog_flush_wait(unsigned ms);
 /* Flush repeat runs older than DLOG_REPEAT_MS (the writer calls this every
  * 250 ms; dlog_pump() does too). */
 void dlog_tick(void);
+/* Flush every pending repeat run now, whatever its age, so a reader of the log
+ * (an issue mark's dump) is not missing up to DLOG_REPEAT_MS of collapsed
+ * events. dlog_issue_mark() calls it first. */
+void dlog_flush_repeats(void);
 /* Crash handler: note the fatal error, then drain without blocking on a lock. */
 void dlog_crash_note(unsigned long code, const void *addr);
 

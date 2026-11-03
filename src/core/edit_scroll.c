@@ -61,6 +61,13 @@ int edit_scroll_wheel_accum(int wheel_delta, int notch_size,
     return -(notches * lines_per_notch);
 }
 
+int term_wheel_lines(int wheel_delta, int notch_size, int lines_per_notch,
+                     int *accumulator)
+{
+    return -edit_scroll_wheel_accum(wheel_delta, notch_size, lines_per_notch,
+                                    accumulator);
+}
+
 int scroll_page_up(int offset, int rows, int max_scrollback)
 {
     int step = rows - 1;

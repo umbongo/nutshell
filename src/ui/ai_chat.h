@@ -148,6 +148,13 @@ void ai_chat_wait_for_streams(DWORD timeout_ms);
 /* Returns non-zero if the AI chat has saveable conversation content. */
 int ai_chat_has_content(HWND hwnd);
 
+/* Where keyboard focus sits relative to the AI panel `panel`: "ai_input" (the
+ * message box), "ai_list" (the chat list), "ai_panel" (the panel itself or any
+ * other child), or NULL when `focus` is not the panel or one of its
+ * descendants. Used to hand focus back to the terminal when the panel hides,
+ * and to name the focus owner in the debug log. */
+const char *ai_chat_focus_role(HWND panel, HWND focus);
+
 /* Bump the active session's user-idle tick.  Called from any UI
  * surface (chat input, etc.) that should count as user activity. */
 void session_mark_user_active(void);

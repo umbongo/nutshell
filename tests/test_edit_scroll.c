@@ -263,6 +263,49 @@ int test_wheel_accum_zero_notch_size(void) {
     TEST_END();
 }
 
+int test_term_wheel_full_notch_scrolls_back_three_lines(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    ASSERT_EQ(term_wheel_lines(120, 120, 3, &accum), 3);
+    ASSERT_EQ(term_wheel_lines(-120, 120, 3, &accum), -3);
+    ASSERT_EQ(accum, 0);
+    TEST_END();
+}
+
+int test_term_wheel_sub_notch_deltas_accumulate(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    /* 40-unit steps (smooth-scroll mouse): nothing for two, 3 lines on the third. */
+    ASSERT_EQ(term_wheel_lines(40, 120, 3, &accum), 0);
+    ASSERT_EQ(term_wheel_lines(40, 120, 3, &accum), 0);
+    ASSERT_EQ(term_wheel_lines(40, 120, 3, &accum), 3);
+    ASSERT_EQ(accum, 0);
+    /* 15-unit touchpad steps: 8 events make one notch. */
+    int total = 0;
+    for (int i = 0; i < 16; i++) total += term_wheel_lines(15, 120, 3, &accum);
+    ASSERT_EQ(total, 6);
+    TEST_END();
+}
+
+int test_term_wheel_direction_change_drops_remainder(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    ASSERT_EQ(term_wheel_lines(100, 120, 3, &accum), 0);
+    ASSERT_EQ(term_wheel_lines(-100, 120, 3, &accum), 0);
+    ASSERT_EQ(accum, -100);
+    ASSERT_EQ(term_wheel_lines(-20, 120, 3, &accum), -3);
+    TEST_END();
+}
+
+int test_term_wheel_degenerate_inputs(void) {
+    TEST_BEGIN();
+    int accum = 0;
+    ASSERT_EQ(term_wheel_lines(120, 0, 3, &accum), 0);
+    ASSERT_EQ(term_wheel_lines(120, 120, 3, NULL), 0);
+    ASSERT_EQ(term_wheel_lines(0, 120, 3, &accum), 0);
+    TEST_END();
+}
+
 int test_wheel_accum_null_accumulator(void) {
     TEST_BEGIN();
     /* Should not crash with NULL accumulator */

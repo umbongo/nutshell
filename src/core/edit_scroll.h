@@ -45,6 +45,15 @@ int edit_scroll_needed(int total_lines, int edit_height, int line_height);
 int edit_scroll_wheel_accum(int wheel_delta, int notch_size,
                             int lines_per_notch, int *accumulator);
 
+/* Terminal-scrollback flavour of the accumulator: positive result = scroll
+ * back into history (wheel up), negative = toward the live view, which is the
+ * sign the scrollback offset uses (the opposite of edit_scroll_wheel_accum).
+ * Sub-notch deltas from precision touchpads / smooth-scroll mice collect in
+ * *accumulator until a full notch is reached; the remainder is kept, and
+ * dropped when the direction reverses. Returns 0 until then. */
+int term_wheel_lines(int wheel_delta, int notch_size, int lines_per_notch,
+                     int *accumulator);
+
 /* ---- Terminal scrollback page-scroll helpers -------------------------------
  * Pure arithmetic for Page Up / Page Down against the terminal scrollback
  * buffer. Both move by max(rows - 1, 1) lines (rows <= 1 treated as 1). */
