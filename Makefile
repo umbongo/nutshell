@@ -141,7 +141,7 @@ NON_TEST_SRCS = src/main.c $(wildcard src/ui/*.c)
 # Win32-only tests belong to the `wintest` harness, never to `test`
 WIN_ONLY_TESTS = tests/test_icons.c tests/test_local_pty.c tests/win_runner.c \
                  tests/test_md_render_win.c tests/test_chat_select_win.c \
-                 tests/test_pw_reveal_win.c
+                 tests/test_pw_reveal_win.c tests/test_telnet_io_win.c
 
 # Exclude SSH/knownhosts networking files when libssh2 is unavailable
 # (tests then compile against the stub header in tests/stubs/)
@@ -195,12 +195,15 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    tests/test_icons.c tests/test_local_pty.c tests/conpty_expect.c \
                    tests/test_md_render_win.c tests/test_chat_select_win.c \
                    src/ui/pw_reveal.c src/core/pw_reveal_state.c src/ui/pw_prompt.c src/ui/dwm_util.c \
-                   tests/test_pw_reveal_win.c tests/win_runner.c
+                   tests/test_pw_reveal_win.c \
+                   src/ui/telnet_io.c src/core/telnet_proto.c src/core/telnet_login.c \
+                   src/core/telnet_session.c src/core/telnet_status.c \
+                   tests/test_telnet_io_win.c tests/win_runner.c
 WIN_TEST_CFLAGS  = -std=c11 -Wall -Wextra -Werror -Wpedantic -Wshadow \
                    -Wformat=2 -Wconversion \
                    -Isrc -Isrc/core -Isrc/config -Isrc/crypto \
                    $(DEP_INC) -Isrc/term -Isrc/ssh -Isrc/ui -Itests
-WIN_TEST_LDFLAGS = -lgdiplus -lgdi32 -luser32 -lcomctl32
+WIN_TEST_LDFLAGS = -lgdiplus -lgdi32 -luser32 -lcomctl32 -lws2_32
 
 all: $(TARGET)
 
