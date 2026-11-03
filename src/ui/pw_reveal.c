@@ -46,7 +46,13 @@ static void apply_reveal(PwReveal *pr)
     pr->applying = 1;
     SendMessageW(pr->edit, EM_SETPASSWORDCHAR,
                  pr->st.revealed ? 0 : (WPARAM)pr->mask, 0);
-    InvalidateRect(pr->edit, NULL, TRUE);
+    /* Masking repaints at once so a revealed frame cannot linger into an
+     * Alt+Tab thumbnail or screenshot; revealing can wait for idle. */
+    if (pr->st.revealed)
+        InvalidateRect(pr->edit, NULL, TRUE);
+    else
+        RedrawWindow(pr->edit, NULL, NULL,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     pr->applying = 0;
     if (pr->eye) InvalidateRect(pr->eye, NULL, FALSE);
 }
@@ -57,7 +63,7 @@ static int feed(PwReveal *pr, PwRevealEvent ev)
 {
     int has_text = GetWindowTextLengthW(pr->edit) > 0;
     int changed = pw_reveal_feed(&pr->st, ev, has_text);
-    if (changed && ev != PWR_DESTROY) apply_reveal(pr);
+    if (changed) apply_reveal(pr);
     return changed;
 }
 
@@ -94,8 +100,14 @@ static LRESULT CALLBACK edit_proc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp,
         free(pr);
         return r;
     }
-    if (m == WM_SIZE || m == WM_DPICHANGED_AFTERPARENT)
+    if (m == WM_SIZE || m == WM_DPICHANGED_AFTERPARENT || m == WM_SETFONT)
         layout(pr);
+    /* New text while revealed (a programmatic replace): mask again. */
+    if (m == WM_SETTEXT && pr->st.revealed && !pr->applying && !pr->checking) {
+        pr->checking = 1;
+        feed(pr, PWR_EMPTIED);
+        pr->checking = 0;
+    }
     /* Any message may have emptied the field (Alt+Backspace undo, IME,
      * drops, ...): check after all of them. `checking` stops the length
      * query re-entering this check through WM_GETTEXTLENGTH. */
@@ -134,6 +146,8 @@ static void paint_eye(HWND eye, PwReveal *pr)
     DeleteObject(br);
 
     int isz = ns_scale(SZ_ICON, dpi);
+    int maxsz = (rc.bottom - rc.top) - ns_scale(SP_XS, dpi);
+    if (isz > maxsz) isz = maxsz > 0 ? maxsz : 0;
     RECT ir;
     ir.left   = rc.left + ((rc.right - rc.left) - isz) / 2;
     ir.top    = rc.top + ((rc.bottom - rc.top) - isz) / 2;
@@ -155,7 +169,10 @@ static LRESULT CALLBACK eye_proc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp)
 
     switch (m) {
     case WM_MOUSEACTIVATE:
-        return MA_NOACTIVATE;
+        /* Let the top-level window activate; the eye never takes focus. */
+        return MA_ACTIVATE;
+    case WM_CONTEXTMENU:
+        return 0;   /* no Cut/Copy/Paste menu from the eye */
     case WM_ERASEBKGND:
         return 1;
     case WM_PAINT:
@@ -166,7 +183,6 @@ static LRESULT CALLBACK eye_proc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp)
         SetCapture(hwnd);
         invalidate_if(hwnd, ns_hover_press(&pr->hover, PW_EYE_HIT));
         feed(pr, PWR_PRESS);
-        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     case WM_MOUSEMOVE: {
         if (!pr) return 0;
@@ -193,7 +209,6 @@ static LRESULT CALLBACK eye_proc(HWND hwnd, UINT m, WPARAM wp, LPARAM lp)
         feed(pr, PWR_RELEASE);
         invalidate_if(hwnd, ns_hover_release(&pr->hover));
         if (GetCapture() == hwnd) ReleaseCapture();
-        InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     case WM_CAPTURECHANGED:
         if (pr) {

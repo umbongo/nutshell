@@ -30,6 +30,8 @@ static int fix_make(PwFix *f, const char *text)
                               GetModuleHandle(NULL), NULL);
     if (!f->edit) return 0;
     SetWindowTextA(f->edit, text);
+    /* A distinctive mask, so a restore to the default '*' cannot pass. */
+    SendMessageW(f->edit, EM_SETPASSWORDCHAR, 0x25CF, 0);
     f->orig = (WCHAR)SendMessageW(f->edit, EM_GETPASSWORDCHAR, 0, 0);
     pw_reveal_attach(f->edit);
     f->eye = FindWindowExA(f->edit, NULL, "NutshellPwEye", NULL);
@@ -245,8 +247,9 @@ int test_pw_reveal_win_emptied_by_replacesel(void)
     TEST_END();
 }
 
-/* Alt+Backspace is Undo in the EDIT control. Start from an empty field,
- * type one character, hold the eye, then undo: the field is empty again. */
+/* A Delete key-down on a full selection empties the field through a message
+ * no narrow "editing messages" whitelist would name, so this proves the
+ * emptied check runs after every message. */
 int test_pw_reveal_win_emptied_by_alt_backspace_undo(void)
 {
     TEST_BEGIN();
@@ -254,19 +257,69 @@ int test_pw_reveal_win_emptied_by_alt_backspace_undo(void)
     ASSERT_TRUE(fix_make(&f, "s3cret"));
     ASSERT_NOT_NULL(f.eye);
     if (f.eye) {
-        SetWindowTextA(f.edit, "");
-        SendMessageW(f.edit, EM_EMPTYUNDOBUFFER, 0, 0);
-        SendMessageW(f.edit, WM_CHAR, 'x', 0);
-        ASSERT_EQ(GetWindowTextLengthW(f.edit), 1);
         press(f.eye);
         ASSERT_EQ(pwchar(f.edit), 0);
-        SendMessageW(f.edit, WM_SYSKEYDOWN, VK_BACK, (LPARAM)(1 << 29));
-        if (GetWindowTextLengthW(f.edit) == 0) {
-            ASSERT_EQ(pw_reveal_is_revealed(f.edit), 0);
-            ASSERT_EQ(pwchar(f.edit), f.orig);
-        } else {
-            printf("  [note] this Wine edit ignored Alt+Backspace undo\n");
-        }
+        SendMessageW(f.edit, EM_SETSEL, 0, (LPARAM)-1);
+        SendMessageW(f.edit, WM_KEYDOWN, VK_DELETE, 0);
+        ASSERT_EQ(GetWindowTextLengthW(f.edit), 0);
+        ASSERT_EQ(pw_reveal_is_revealed(f.edit), 0);
+        ASSERT_EQ(pwchar(f.edit), 0x25CF);
+    }
+    fix_free(&f);
+    TEST_END();
+}
+
+int test_pw_reveal_win_replaced_text_masks(void)
+{
+    TEST_BEGIN();
+    PwFix f;
+    ASSERT_TRUE(fix_make(&f, "s3cret"));
+    ASSERT_NOT_NULL(f.eye);
+    if (f.eye) {
+        press(f.eye);
+        ASSERT_EQ(pwchar(f.edit), 0);
+        SetWindowTextA(f.edit, "other");
+        ASSERT_EQ(pw_reveal_is_revealed(f.edit), 0);
+        ASSERT_EQ(pwchar(f.edit), 0x25CF);
+    }
+    fix_free(&f);
+    TEST_END();
+}
+
+int test_pw_reveal_win_eye_click_activates_and_no_context_menu(void)
+{
+    TEST_BEGIN();
+    PwFix f;
+    ASSERT_TRUE(fix_make(&f, "s3cret"));
+    ASSERT_NOT_NULL(f.eye);
+    if (f.eye) {
+        LRESULT r = SendMessageW(f.eye, WM_MOUSEACTIVATE, (WPARAM)f.top,
+                                 MAKELPARAM(HTCLIENT, WM_LBUTTONDOWN));
+        ASSERT_TRUE(r != MA_NOACTIVATE && r != MA_NOACTIVATEANDEAT);
+        /* The eye swallows WM_CONTEXTMENU: it never reaches the edit. */
+        ASSERT_EQ(SendMessageW(f.eye, WM_CONTEXTMENU, (WPARAM)f.eye,
+                               MAKELPARAM(5, 5)), 0);
+    }
+    fix_free(&f);
+    TEST_END();
+}
+
+int test_pw_reveal_win_setfont_keeps_margin(void)
+{
+    TEST_BEGIN();
+    PwFix f;
+    ASSERT_TRUE(fix_make(&f, "s3cret"));
+    ASSERT_NOT_NULL(f.eye);
+    if (f.eye) {
+        RECT er;
+        HFONT big = CreateFontA(-30, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                0, 0, 0, 0, "Arial");
+        SendMessageW(f.edit, WM_SETFONT, (WPARAM)big, TRUE);
+        GetWindowRect(f.eye, &er);
+        LRESULT m = SendMessageW(f.edit, EM_GETMARGINS, 0, 0);
+        ASSERT_EQ((int)HIWORD(m), (int)(er.right - er.left));
+        SendMessageW(f.edit, WM_SETFONT, 0, TRUE);
+        DeleteObject(big);
     }
     fix_free(&f);
     TEST_END();
@@ -281,7 +334,7 @@ int test_pw_reveal_win_empty_field_never_reveals(void)
     if (f.eye) {
         SetWindowTextA(f.edit, "");
         press(f.eye);
-        ASSERT_EQ(pwchar(f.edit), f.orig);
+        ASSERT_EQ(pwchar(f.edit), 0x25CF);
         release_at(f.eye, 2, 2);
     }
     fix_free(&f);
@@ -324,6 +377,12 @@ int test_pw_reveal_win_copy_blocked_while_revealed(void)
         SendMessageW(f.edit, EM_SETSEL, 0, (LPARAM)-1);
         press(f.eye);
         SendMessageW(f.edit, WM_COPY, 0, 0);
+        SendMessageW(f.edit, WM_CUT, 0, 0);
+        {
+            char tb[32];
+            GetWindowTextA(f.edit, tb, sizeof tb);
+            ASSERT_STR_EQ(tb, "s3cret");
+        }
         release_at(f.eye, 2, 2);
         ASSERT_TRUE(clip_text_is(f.top, sentinel));
     }
