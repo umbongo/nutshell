@@ -731,6 +731,11 @@ static int term_cursor_row_text(const Terminal *term, char *buf, size_t buf_size
     return 1;
 }
 
+int term_cursor_row_prompt_text(const Terminal *term, char *buf, size_t buf_size)
+{
+    return term_cursor_row_text(term, buf, buf_size);
+}
+
 int term_at_prompt(const Terminal *term)
 {
     char buf[1024];

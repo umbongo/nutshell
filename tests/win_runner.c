@@ -48,6 +48,16 @@ int test_pw_reveal_win_copy_blocked_while_revealed(void);
 int test_pw_reveal_win_eye_tracks_resize_and_margin(void);
 int test_pw_reveal_win_destroy_while_revealed_is_clean(void);
 int test_pw_prompt_win_activate_keeps_focus_on_field(void);
+int test_pw_prompt_win_save_ticked_ok_returns_one(void);
+int test_pw_prompt_win_save_unticked_ok_returns_zero(void);
+int test_pw_prompt_win_save_ticked_cancel_returns_zero(void);
+
+/* test_telnet_io_win.c */
+int test_telnet_io_win_connect_ok_and_refused(void);
+int test_telnet_io_win_resolve_fails(void);
+int test_telnet_io_win_negotiates_and_logs_in(void);
+int test_telnet_io_win_eof_reports_closed(void);
+int test_telnet_io_win_serial_unique(void);
 
 /* test_local_pty.c */
 extern FILE *nspty_report;
@@ -253,6 +263,14 @@ int main(int argc, char **argv)
     failed += test_pw_reveal_win_eye_tracks_resize_and_margin();
     failed += test_pw_reveal_win_destroy_while_revealed_is_clean();
     failed += test_pw_prompt_win_activate_keeps_focus_on_field();
+    failed += test_pw_prompt_win_save_ticked_ok_returns_one();
+    failed += test_pw_prompt_win_save_unticked_ok_returns_zero();
+    failed += test_pw_prompt_win_save_ticked_cancel_returns_zero();
+    failed += test_telnet_io_win_connect_ok_and_refused();
+    failed += test_telnet_io_win_resolve_fails();
+    failed += test_telnet_io_win_negotiates_and_logs_in();
+    failed += test_telnet_io_win_eof_reports_closed();
+    failed += test_telnet_io_win_serial_unique();
 
     printf("\n[pty] re-executing with a console of our own "
            "(see win_runner.c for why)\n");

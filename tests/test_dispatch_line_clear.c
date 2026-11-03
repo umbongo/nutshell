@@ -201,3 +201,12 @@ int test_dispatch_ambiguous_prompt_timed_out_well_past_bound(void) {
     ASSERT_EQ(dispatch_ambiguous_prompt_timed_out(600000), 1);
     TEST_END();
 }
+
+int test_dispatch_line_clear_telnet_is_readline(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_TELNET, NULL, 0),
+              DISPATCH_LINE_CLEAR_READLINE);
+    ASSERT_EQ(dispatch_line_clear_mode(SESSION_TELNET, NULL, 1),
+              DISPATCH_LINE_CLEAR_NONE);
+    TEST_END();
+}

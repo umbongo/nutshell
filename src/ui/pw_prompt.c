@@ -18,16 +18,80 @@
 #include "dpi_util.h"
 
 #define PW_ID_EDIT 101
+#define PW_ID_SAVE 102
+
+#define PW_SAVE_TEXT "Save password to this profile"
 
 typedef struct {
     char        buf[256];
     int         ok;
     int         dpi;
     const char *label;
+    const char *detail;    /* NULL = no detail row */
+    int         offer_save;
+    int         save;      /* checkbox state captured on OK */
+    int         edit_max;  /* EM_LIMITTEXT: out_size - 1, capped to buf */
+    HWND        detail_wnd;
     const ThemeColors *theme;
     HBRUSH      br_bg;     /* bg_primary.base, window and static text */
     HBRUSH      br_edit;   /* bg_secondary.base, the field */
 } PwCtx;
+
+/* One layout for WM_CREATE and the frame size: rows top to bottom are label,
+ * [detail], field, [save checkbox], buttons, each ctlh high, gap or pad apart. */
+typedef struct {
+    int pad, gap, ctlh, fw, bw;
+    int y_label, y_detail, y_edit, y_save, y_btn;
+    int client_h;
+} PwLayout;
+
+static void pw_layout(int dpi, int has_detail, int has_save, PwLayout *L)
+{
+    L->pad  = ns_scale(SP_MD, dpi);
+    L->gap  = ns_scale(SP_SM, dpi);
+    L->ctlh = ns_scale(SZ_CTRL_H, dpi);
+    L->fw   = ns_scale(264, dpi);
+    L->bw   = ns_scale(SZ_BTN_MIN_W, dpi);
+    int y = L->pad;
+    L->y_label = y;
+    y += L->ctlh + L->gap;
+    L->y_detail = y;
+    if (has_detail) y += L->ctlh + L->gap;
+    L->y_edit = y;
+    y += L->ctlh;
+    L->y_save = y + L->gap;
+    y += has_save ? L->gap + L->ctlh + L->pad : L->pad;
+    L->y_btn = y;
+    L->client_h = y + L->ctlh + L->pad;
+}
+
+/* An owner-drawn OK / Cancel button at column x of the layout's button row. */
+static HWND pw_make_button(HWND parent, const char *text, int id, int x,
+                           const PwLayout *L, HFONT font)
+{
+    HWND b = CreateWindowExA(0, "BUTTON", text,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                    x, L->y_btn, L->bw, L->ctlh,
+                    parent, (HMENU)(UINT_PTR)id, NULL, NULL);
+    SendMessageA(b, WM_SETFONT, (WPARAM)font, TRUE);
+    return b;
+}
+
+/* AdjustWindowRectExForDpi is Windows 10 1607+; resolve it at run time (as
+ * dpi_util.h does GetDpiForWindow) and fall back to the system-DPI call. */
+static void pw_adjust_rect(RECT *rc, DWORD style, DWORD exstyle, int dpi)
+{
+    typedef BOOL (WINAPI *AdjustForDpi_fn)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    static AdjustForDpi_fn pfn = NULL;
+    static int resolved = 0;
+    if (!resolved) {
+        HMODULE h = GetModuleHandleA("user32.dll");
+        if (h) pfn = (AdjustForDpi_fn)(void (*)(void))GetProcAddress(h, "AdjustWindowRectExForDpi");
+        resolved = 1;
+    }
+    if (pfn && pfn(rc, style, FALSE, exstyle, (UINT)dpi)) return;
+    AdjustWindowRectEx(rc, style, FALSE, exstyle);
+}
 
 static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -43,34 +107,35 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         ctx->br_edit = CreateSolidBrush(theme_cr(tk->bg_secondary.base));
         themed_apply_title_bar(hwnd, ctx->theme);
 
-        int pad  = ns_scale(SP_MD, dpi);
-        int gap  = ns_scale(SP_SM, dpi);
-        int ctlh = ns_scale(SZ_CTRL_H, dpi);
-        int fw   = ns_scale(264, dpi);
-        int bw   = ns_scale(SZ_BTN_MIN_W, dpi);
-        int y    = pad;
+        PwLayout L;
+        pw_layout(dpi, ctx->detail != NULL, ctx->offer_save, &L);
         HFONT font = ns_font(FONT_BODY, dpi);
 
         HWND lbl = CreateWindowExA(0, "STATIC", ctx->label ? ctx->label : "",
                         WS_CHILD | WS_VISIBLE,
-                        pad, y, fw, ctlh, hwnd, NULL, NULL, NULL);
-        y += ctlh + gap;
+                        L.pad, L.y_label, L.fw, L.ctlh, hwnd, NULL, NULL, NULL);
+        SendMessageA(lbl, WM_SETFONT, (WPARAM)font, TRUE);
+        if (ctx->detail) {
+            ctx->detail_wnd = CreateWindowExA(0, "STATIC", ctx->detail,
+                        WS_CHILD | WS_VISIBLE | SS_NOPREFIX | SS_ENDELLIPSIS,
+                        L.pad, L.y_detail, L.fw, L.ctlh, hwnd, NULL, NULL, NULL);
+            SendMessageA(ctx->detail_wnd, WM_SETFONT, (WPARAM)font, TRUE);
+        }
         HWND edit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
                         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_PASSWORD | ES_AUTOHSCROLL,
-                        pad, y, fw, ctlh, hwnd, (HMENU)(UINT_PTR)PW_ID_EDIT, NULL, NULL);
-        y += ctlh + pad;
-        HWND ok = CreateWindowExA(0, "BUTTON", "OK",
-                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                        pad + fw - 2 * bw - gap, y, bw, ctlh,
-                        hwnd, (HMENU)(UINT_PTR)IDOK, NULL, NULL);
-        HWND cancel = CreateWindowExA(0, "BUTTON", "Cancel",
-                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-                        pad + fw - bw, y, bw, ctlh,
-                        hwnd, (HMENU)(UINT_PTR)IDCANCEL, NULL, NULL);
-        SendMessageA(lbl,    WM_SETFONT, (WPARAM)font, TRUE);
-        SendMessageA(edit,   WM_SETFONT, (WPARAM)font, TRUE);
-        SendMessageA(ok,     WM_SETFONT, (WPARAM)font, TRUE);
-        SendMessageA(cancel, WM_SETFONT, (WPARAM)font, TRUE);
+                        L.pad, L.y_edit, L.fw, L.ctlh, hwnd,
+                        (HMENU)(UINT_PTR)PW_ID_EDIT, NULL, NULL);
+        SendMessageA(edit, WM_SETFONT, (WPARAM)font, TRUE);
+        SendMessageA(edit, EM_LIMITTEXT, (WPARAM)ctx->edit_max, 0);
+        if (ctx->offer_save) {
+            HWND chk = CreateWindowExA(0, "BUTTON", PW_SAVE_TEXT,
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX,
+                        L.pad, L.y_save, L.fw, L.ctlh, hwnd,
+                        (HMENU)(UINT_PTR)PW_ID_SAVE, NULL, NULL);
+            SendMessageA(chk, WM_SETFONT, (WPARAM)font, TRUE);
+        }
+        pw_make_button(hwnd, "OK", IDOK, L.pad + L.fw - 2 * L.bw - L.gap, &L, font);
+        pw_make_button(hwnd, "Cancel", IDCANCEL, L.pad + L.fw - L.bw, &L, font);
         pw_reveal_attach(edit);   /* NULL on failure: the field still works */
         themed_apply_borders(hwnd, ctx->theme);
         SetFocus(edit);
@@ -88,7 +153,8 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         if (ctx) {
             const ThemeTokens *tk = ns_tokens();
             HDC hdc = (HDC)wp;
-            SetTextColor(hdc, theme_cr(tk->text_main));
+            SetTextColor(hdc, theme_cr((ctx->detail_wnd && (HWND)lp == ctx->detail_wnd)
+                                       ? tk->text_dim : tk->text_main));
             SetBkColor(hdc, theme_cr(tk->bg_primary.base));
             return (LRESULT)ctx->br_bg;
         }
@@ -136,6 +202,8 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     case WM_COMMAND:
         if (LOWORD(wp) == IDOK && ctx) {
             GetWindowTextA(GetDlgItem(hwnd, PW_ID_EDIT), ctx->buf, (int)sizeof(ctx->buf));
+            ctx->save = ctx->offer_save &&
+                        SendDlgItemMessageA(hwnd, PW_ID_SAVE, BM_GETCHECK, 0, 0) == BST_CHECKED;
             ctx->ok = 1;
             DestroyWindow(hwnd);
         } else if (LOWORD(wp) == IDCANCEL && ctx) {
@@ -178,8 +246,10 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
     return DefWindowProcA(hwnd, msg, wp, lp);
 }
 
-int pw_prompt_show(HWND parent, const PwPromptOpts *opts, char *out, int out_size)
+int pw_prompt_show(HWND parent, const PwPromptOpts *opts, char *out, int out_size,
+                   int *save_out)
 {
+    if (save_out) *save_out = 0;
     static int class_done = 0;
     HINSTANCE inst = GetModuleHandleA(NULL);
     if (!class_done) {
@@ -198,16 +268,18 @@ int pw_prompt_show(HWND parent, const PwPromptOpts *opts, char *out, int out_siz
     ctx.dpi   = get_window_dpi(parent);
     ctx.label = opts ? opts->label : NULL;
     ctx.theme = opts ? opts->theme : NULL;
+    ctx.detail = opts ? opts->detail : NULL;
+    ctx.offer_save = opts ? opts->offer_save : 0;
+    ctx.edit_max = (out_size > 0 && out_size - 1 < (int)sizeof(ctx.buf) - 1)
+                       ? out_size - 1 : (int)sizeof(ctx.buf) - 1;
 
-    /* Client size from the grid: pad, label, gap, field, pad, buttons, pad. */
-    int pad  = ns_scale(SP_MD, ctx.dpi);
-    int gap  = ns_scale(SP_SM, ctx.dpi);
-    int ctlh = ns_scale(SZ_CTRL_H, ctx.dpi);
-    RECT crc = { 0, 0, 2 * pad + ns_scale(264, ctx.dpi),
-                 pad + ctlh + gap + ctlh + pad + ctlh + pad };
+    /* Client size from the grid (see pw_layout). */
+    PwLayout L;
+    pw_layout(ctx.dpi, ctx.detail != NULL, ctx.offer_save, &L);
+    RECT crc = { 0, 0, 2 * L.pad + L.fw, L.client_h };
     DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
     DWORD exstyle = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST;
-    AdjustWindowRectEx(&crc, style, FALSE, exstyle);
+    pw_adjust_rect(&crc, style, exstyle, ctx.dpi);
 
     HWND hwnd = CreateWindowExA(
         exstyle,
@@ -284,6 +356,7 @@ int pw_prompt_show(HWND parent, const PwPromptOpts *opts, char *out, int out_siz
     if (ctx.ok && out && out_size > 0) {
         strncpy(out, ctx.buf, (size_t)(out_size - 1));
         out[out_size - 1] = '\0';
+        if (save_out) *save_out = ctx.save;
         secure_zero(ctx.buf, sizeof(ctx.buf));
         return 1;
     }

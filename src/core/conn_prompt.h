@@ -122,4 +122,7 @@ int conn_prompt_slot_holds(const ConnPromptSlot *s, const void *req, unsigned se
  * be the one it expected). */
 int conn_prompt_slot_claim(ConnPromptSlot *s, void *req, unsigned seq);
 
+/* 1 when an SSH attempt must ask for a password: password auth and nothing saved. */
+int conn_prompt_wants_password(int auth_is_key, const char *saved_password);
+
 #endif /* NUTSHELL_CONN_PROMPT_H */

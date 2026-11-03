@@ -825,6 +825,30 @@ int test_ai_system_prompt_no_terminal(void) {
     TEST_END();
 }
 
+/* A telnet tab is a remote host: the SSH opening with only the transport
+ * word changed, and none of the local-shell wording. */
+int test_ai_prompt_telnet_uses_remote_host_opening(void) {
+    TEST_BEGIN();
+    char tn[4096], ssh[4096];
+    ai_build_system_prompt(tn, sizeof(tn), NULL, NULL, NULL, SESSION_TELNET, NULL);
+    ASSERT_TRUE(strstr(tn, "a telnet terminal session") != NULL);
+    ASSERT_TRUE(strstr(tn, "on the remote server") != NULL);
+    ASSERT_TRUE(strstr(tn, "[EXEC]ls -la[/EXEC]") != NULL);
+    ASSERT_TRUE(strstr(tn, "Windows PC") == NULL);
+    ASSERT_TRUE(strstr(tn, "an SSH terminal session") == NULL);
+
+    ai_build_system_prompt(ssh, sizeof(ssh), NULL, NULL, NULL, SESSION_SSH, NULL);
+    ASSERT_TRUE(strstr(ssh, "an SSH terminal session") != NULL);
+    /* Same text apart from the one phrase */
+    const char *p = strstr(ssh, "an SSH terminal session");
+    ASSERT_NOT_NULL(p);
+    size_t head = (size_t)(p - ssh);
+    ASSERT_TRUE(strncmp(tn, ssh, head) == 0);
+    ASSERT_STR_EQ(tn + head + strlen("a telnet terminal session"),
+                  p + strlen("an SSH terminal session"));
+    TEST_END();
+}
+
 /* A local session's prompt opens by naming the local shell instead of an SSH
  * session, so the model does not suggest apt or systemctl on a Windows shell
  * (spec 2026-09-22-local-shell-design.md section 6). */

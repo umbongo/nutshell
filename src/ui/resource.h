@@ -1,8 +1,8 @@
 #ifndef NUTSHELL_RESOURCE_H
 #define NUTSHELL_RESOURCE_H
 
-#define APP_VERSION        "1.2.48"
-#define APP_VERSION_BINARY  1,2,48,0
+#define APP_VERSION        "1.2.49"
+#define APP_VERSION_BINARY  1,2,49,0
 
 #define IDI_APPICON         100
 #define IDD_SESSION_MANAGER 101
@@ -65,7 +65,7 @@
 #define IDC_BTN_BROWSE_KEY  1019
 #define IDC_EDIT_AI_NOTES   1020
 #define IDC_COMBO_PLATFORM  1021
-#define IDC_COMBO_KIND      1022  /* Session type: SSH / Local shell */
+#define IDC_COMBO_KIND      1022  /* Session type: SSH / Telnet / Local shell */
 #define IDC_STATIC_SHELL    1023
 #define IDC_EDIT_SHELL      1024
 #define IDC_STATIC_HOST     1025

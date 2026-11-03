@@ -177,6 +177,11 @@ int term_dirty_row_flags(const Terminal *term, unsigned char *flags, int max);
  * Call after font/zoom/resize changes that affect pixel layout. */
 void term_mark_all_dirty(Terminal *term);
 
+/* The cursor row's text up to the cursor (what term_at_prompt() tests). 1 with
+ * buf filled, 0 when there is no such line (alt screen, cursor off-screen, text
+ * after the cursor). */
+int term_cursor_row_prompt_text(const Terminal *term, char *buf, size_t buf_size);
+
 /* Is the terminal sitting at a shell prompt, ready for a new command?
  * True when: the primary screen is active (not the alt screen), the
  * cursor is inside the screen, nothing follows the cursor on its row,

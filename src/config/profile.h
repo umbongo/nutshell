@@ -27,7 +27,7 @@ typedef enum {
 
 typedef struct {
     char name[256];
-    char kind[16];        /* "ssh" (default) or "local" */
+    char kind[16];        /* "ssh" (default), "local" or "telnet" */
     char host[256];
     int port;
     char username[256];

@@ -230,3 +230,14 @@ int test_conn_prompt_null_is_safe(void)
     ASSERT_EQ(conn_prompt_slot_claim(&s, NULL, 1), 0);
     TEST_END();
 }
+
+int test_conn_prompt_wants_password(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(conn_prompt_wants_password(0, ""), 1);
+    ASSERT_EQ(conn_prompt_wants_password(0, NULL), 1);
+    ASSERT_EQ(conn_prompt_wants_password(0, "x"), 0);
+    ASSERT_EQ(conn_prompt_wants_password(1, ""), 0);
+    ASSERT_EQ(conn_prompt_wants_password(1, NULL), 0);
+    TEST_END();
+}

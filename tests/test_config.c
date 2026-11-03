@@ -2708,3 +2708,81 @@ int test_config_fallback_path_rejects_relative(void)
     TEST_END();
 }
 
+
+int test_config_profile_kind_telnet_roundtrip_with_password(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+    Profile *p = config_profile_new();
+    (void)snprintf(p->name, sizeof(p->name), "%s", "Switch");
+    (void)snprintf(p->kind, sizeof(p->kind), "%s", "telnet");
+    (void)snprintf(p->host, sizeof(p->host), "%s", "192.168.1.1");
+    p->port = 23;
+    (void)snprintf(p->username, sizeof(p->username), "%s", "admin");
+    (void)snprintf(p->password, sizeof(p->password), "%s", "pw");
+    vec_push(&orig->profiles, p);
+    ASSERT_EQ(config_save(orig, TMP_CFG), 0);
+
+    FILE *f = fopen(TMP_CFG, "r");
+    ASSERT_NOT_NULL(f);
+    char raw[8192];
+    size_t n = fread(raw, 1, sizeof(raw) - 1, f);
+    raw[n] = '\0';
+    fclose(f);
+    ASSERT_TRUE(strstr(raw, "$dpapi$v1$") != NULL);
+    ASSERT_TRUE(strstr(raw, "\"pw\"") == NULL);
+
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    Profile *lp = NULL;
+    for (size_t i = 0u; i < vec_size(&loaded->profiles); i++) {
+        Profile *c = (Profile *)vec_get(&loaded->profiles, i);
+        if (c && strcmp(c->name, "Switch") == 0) lp = c;
+    }
+    ASSERT_NOT_NULL(lp);
+    ASSERT_STR_EQ(lp->kind, "telnet");
+    ASSERT_EQ(lp->port, 23);
+    ASSERT_STR_EQ(lp->username, "admin");
+    ASSERT_STR_EQ(lp->password, "pw");
+    config_free(orig);
+    config_free(loaded);
+    remove(TMP_CFG);
+    TEST_END();
+}
+
+int test_config_find_profile_match(void)
+{
+    TEST_BEGIN();
+    Config *cfg = config_new_default();
+    ASSERT_NOT_NULL(cfg);
+    Profile *a = config_profile_new();
+    (void)snprintf(a->name, sizeof(a->name), "%s", "A");
+    (void)snprintf(a->kind, sizeof(a->kind), "%s", "telnet");
+    (void)snprintf(a->host, sizeof(a->host), "%s", "10.0.0.1");
+    (void)snprintf(a->username, sizeof(a->username), "%s", "admin");
+    a->port = 22;
+    vec_push(&cfg->profiles, a);
+    Profile *b = config_profile_new();
+    (void)snprintf(b->name, sizeof(b->name), "%s", "B");
+    (void)snprintf(b->kind, sizeof(b->kind), "%s", "telnet");
+    (void)snprintf(b->host, sizeof(b->host), "%s", "10.0.0.1");
+    (void)snprintf(b->username, sizeof(b->username), "%s", "admin");
+    b->port = 23;
+    vec_push(&cfg->profiles, b);
+
+    Profile key = *b;
+    ASSERT_TRUE(config_find_profile_match(cfg, &key) == b);
+    key.port = 22;
+    ASSERT_TRUE(config_find_profile_match(cfg, &key) == a);
+    key.port = 23;
+    (void)snprintf(key.username, sizeof(key.username), "%s", "other");
+    ASSERT_NULL(config_find_profile_match(cfg, &key));
+    (void)snprintf(key.username, sizeof(key.username), "%s", "admin");
+    (void)snprintf(key.kind, sizeof(key.kind), "%s", "ssh");
+    ASSERT_NULL(config_find_profile_match(cfg, &key));
+    ASSERT_NULL(config_find_profile_match(NULL, &key));
+    ASSERT_NULL(config_find_profile_match(cfg, NULL));
+    config_free(cfg);
+    TEST_END();
+}

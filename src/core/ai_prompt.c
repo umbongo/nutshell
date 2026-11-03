@@ -239,12 +239,22 @@ void ai_build_system_prompt_ex(char *buf, size_t buf_size,
      * systemctl on a Windows shell (spec section 6). Everything after them
      * is identical, and the SSH text is byte-for-byte what it was before the
      * kind parameter existed. */
-    const char *opening =
-        "You are an AI assistant for an SSH terminal session. "
-        "You can see the terminal output and help the user with tasks.\n"
-        "When you want to execute a command on the remote server, "
-        "wrap it in [EXEC] and [/EXEC] markers like this:\n"
-        "[EXEC]ls -la[/EXEC]\n\n";
+    char remote_opening[320];
+    const char *opening = remote_opening;
+    {
+        /* SSH and telnet are both a remote host; only the transport word
+         * differs. */
+        const char *transport = (kind == SESSION_TELNET)
+                                    ? "a telnet" : "an SSH";
+        int rn = snprintf(remote_opening, sizeof(remote_opening),
+            "You are an AI assistant for %s terminal session. "
+            "You can see the terminal output and help the user with tasks.\n"
+            "When you want to execute a command on the remote server, "
+            "wrap it in [EXEC] and [/EXEC] markers like this:\n"
+            "[EXEC]ls -la[/EXEC]\n\n", transport);
+        if (rn < 0 || (size_t)rn >= sizeof(remote_opening))
+            remote_opening[0] = '\0';
+    }
 
     /* A PowerShell local session gets PowerShell-flavoured [EXEC] examples
      * below instead of the bash ones -- otherwise the model is shown a

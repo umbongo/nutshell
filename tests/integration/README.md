@@ -46,6 +46,7 @@ driver in name order (so they share its scope — `Invoke-Case`, `$Artifacts`,
 | `cases\60-tabs-logging.ps1` | tabs (`TABS-*`) and logging (`LOG-*`) |
 | `cases\70-cli.ps1` | CLI flags (`CLI-1`'s several small cases) |
 | `cases\80-local-shell.ps1` | `local_shell` (`--local`: echo, exit, silent reconnect) and `local_shell_powershell` (a saved local profile running `powershell.exe -NoLogo`: prompt, two-line paste, Ctrl+C on `Start-Sleep`, exit) |
+| `cases\85-telnet.ps1` | telnet against a scripted loopback responder (`Start-TelnetResponder`/`Stop-TelnetResponder`, a `TcpListener` in its own runspace; no real device): `telnet_autologin_never_logs_password`, `telnet_port_refused_reports_in_tab`, `telnet_port_check_is_passive_and_echoes_locally`, `telnet_password_box_asks_and_sends`, plus `ssh_password_box_cancel_reports_in_tab` (needs the SSH host). Status lines are written to the terminal only, so they are read back with Edit > Select All and the clipboard, not from the session log |
 | `cases\90-keys.ps1` | special keys: F-keys, Alt+letter, Shift+Tab/Ctrl+arrows, Ctrl+Space, PgUp/PgDn by screen, the Send Key menu (including "Send Next Key with Alt"), Backspace over SSH, Ctrl+W/T vs. Ctrl+Shift+W/T |
 | `cases\95-ai-select.ps1` | character selection in the AI panel under `--ui-demo=chat`: exact copy, across items, auto-scroll, Edit > Copy and focus |
 

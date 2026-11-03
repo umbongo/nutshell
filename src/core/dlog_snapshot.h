@@ -40,7 +40,7 @@ typedef struct {
 /* issue.term, for the active session */
 typedef struct {
     unsigned sid;
-    const char *kind;             /* "ssh", "local" */
+    const char *kind;             /* "ssh", "local", "telnet" */
     int connected;
     int rows, cols;
     int lines_count, lines_start, lines_capacity;
