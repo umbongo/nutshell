@@ -40,7 +40,7 @@ typedef struct {
     HWND        hAiScrollbar; /* custom scrollbar for AI notes edit */
     int         ai_line_h;    /* cached line height in px for AI notes */
     HWND        hListScrollbar; /* custom scrollbar for session listbox */
-    int         last_kind;    /* ProfileKind the Type combo showed before the current change */
+    ProfileKind last_kind;    /* ProfileKind the Type combo showed before the current change */
 
     /* Shell combo (IDC_EDIT_SHELL): row 0 is always "Automatic (...)",
      * stored command "" (index 0 of shell_cmd is unused/empty); rows 1..n
@@ -696,8 +696,12 @@ static INT_PTR CALLBACK SessMgrDlgProc(HWND hwnd, UINT msg,
             BOOL port_ok;
             UINT cur_port = GetDlgItemInt(hwnd, IDC_EDIT_PORT, &port_ok, FALSE);
             if (port_ok) {
+                /* Local profiles are saved with port 22, so for the swap a
+                 * Local previous kind counts as SSH. */
+                ProfileKind from_kind = (st->last_kind == PROFILE_KIND_LOCAL)
+                                            ? PROFILE_KIND_SSH : st->last_kind;
                 int swapped = profile_kind_swap_port(
-                    (int)cur_port, (ProfileKind)st->last_kind, new_kind);
+                    (int)cur_port, from_kind, new_kind);
                 if (swapped != (int)cur_port)
                     SetDlgItemInt(hwnd, IDC_EDIT_PORT, (UINT)swapped, FALSE);
             }
