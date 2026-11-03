@@ -16,6 +16,7 @@
 #include "dlog.h"
 #include "open_dir.h"
 #include "settings_debug.h"
+#include "pw_reveal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1374,6 +1375,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
              * ever actually be kept. */
             SendMessage(ed, EM_SETLIMITTEXT,
                         (WPARAM)(sizeof(nd->cfg->settings.ai_api_key) - 1u), 0);
+            pw_reveal_attach(ed);
             add_ctrl(nd, lbl, ed, NULL, SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, 1, 0);
         }
         {
@@ -2123,6 +2125,14 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)NULL);
         }
         return 0;
+
+    case WM_ACTIVATE:
+        /* Mask a held-open API key when the window loses focus; the edit
+         * is a descendant of the page window. Falls through to
+         * DefWindowProc below. */
+        if (LOWORD(wParam) == WA_INACTIVE)
+            pw_reveal_mask_all(hwnd);
+        break;
 
     case WM_CLOSE:
         if (d && d->saving) return 0;
