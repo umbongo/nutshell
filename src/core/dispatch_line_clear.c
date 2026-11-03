@@ -26,8 +26,8 @@ DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
         return DISPATCH_LINE_CLEAR_NONE;
     }
 
-    /* SESSION_SSH (and any future SessionKind this switch does not know
-     * about yet) always gets READLINE -- see the header for why this is
+    /* SESSION_SSH and SESSION_TELNET (and any future SessionKind this
+     * switch does not know about yet) always get READLINE -- see the header for why this is
      * not keyed off CmdPlatform. */
     return DISPATCH_LINE_CLEAR_READLINE;
 }

@@ -31,6 +31,7 @@
 #include "custom_scrollbar.h"
 #include "edit_scroll.h"
 #include "term_extract.h"
+#include "profile_kind.h"
 #include "session_io.h"
 #include "resource.h"
 #include "ai_dock.h"
@@ -1985,7 +1986,7 @@ static void dispatch_start(AiChatData *d, int batch_id)
         snprintf(line, sizeof(line),
             "dispatch_start: batch=%d kind=%s shell=%s mode=%s",
             batch->id,
-            active_session_kind(d) == SESSION_LOCAL ? "local" : "ssh",
+            session_kind_name(active_session_kind(d)),
             active_shell_name(d) ? active_shell_name(d) : "(none)",
             dispatch_line_clear_mode(active_session_kind(d), active_shell_name(d),
                                       windows_prompt)

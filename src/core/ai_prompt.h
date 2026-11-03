@@ -95,10 +95,11 @@ int ai_conv_set_system(AiConversation *conv, const char *content);
 /* Build the system prompt with terminal context embedded.
  * terminal_text, session_notes, system_notes may be NULL.
  * kind selects the opening sentences: SESSION_SSH produces exactly the text
- * it always has; SESSION_LOCAL says the shell is a local one on a Windows PC
+ * it always has, and SESSION_TELNET the same text naming a telnet session;
+ * SESSION_LOCAL says the shell is a local one on a Windows PC
  * (spec 2026-09-22-local-shell-design.md section 6). shell_name names that
  * shell ("PowerShell", "Git bash", ...) and may be NULL, in which case the
- * prompt lists the possibilities. Ignored for SESSION_SSH. */
+ * prompt lists the possibilities. Ignored for SESSION_SSH and SESSION_TELNET. */
 void ai_build_system_prompt(char *buf, size_t buf_size,
                             const char *terminal_text,
                             const char *session_notes,

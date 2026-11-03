@@ -27,7 +27,7 @@ typedef enum {
 
 /* Decide the mode for the currently active session.
  *
- * kind: SESSION_LOCAL or SESSION_SSH (session_io.h).
+ * kind: SESSION_LOCAL, SESSION_SSH or SESSION_TELNET (session_io.h).
  *
  * local_shell_name: for SESSION_LOCAL, the string local_shell_spec_name()
  * (src/core/local_shell.h) returns for the resolved local shell --
@@ -49,7 +49,7 @@ typedef enum {
  *   - "custom" (a user-supplied executable) and an unresolved shell
  *     (NULL or "") are unknown quantities that must not be guessed at ->
  *     NONE, the same safe default as PowerShell/cmd.
- *   - SESSION_SSH always gets READLINE, regardless of the session's
+ *   - SESSION_SSH and SESSION_TELNET always get READLINE, regardless of the session's
  *     CmdPlatform (src/core/cmd_classify.h) -- kept rather than keyed off
  *     platform:
  *       - CMD_PLATFORM_UNKNOWN covers plenty of ordinary, undetected
