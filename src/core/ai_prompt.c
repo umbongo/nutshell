@@ -2089,3 +2089,32 @@ void ai_build_auth_headers(const char *provider, const char *api_key,
         out[2] = NULL;
     }
 }
+
+/* ---- Unattended-round counter (guard-rails spec 2026-11-04 section 1) ---- */
+
+void ai_rounds_user_message(AiSessionState *s)
+{
+    if (s) s->auto_rounds = 0;
+}
+
+void ai_rounds_continue(AiSessionState *s, int unattended)
+{
+    if (!s) return;
+    if (unattended) {
+        s->auto_rounds++;
+    } else {
+        s->auto_rounds = 0;
+    }
+}
+
+CmdPolicy ai_rounds_batch_policy(const AiSessionState *s, CmdPolicy p)
+{
+    if (s && s->auto_rounds >= AI_AUTO_ROUNDS_MAX)
+        return cmd_policy_attended(p);
+    return p;
+}
+
+int ai_rounds_paused(const AiSessionState *s, CmdPolicy p)
+{
+    return s && s->auto_rounds >= AI_AUTO_ROUNDS_MAX && cmd_policy_auto_on(p);
+}

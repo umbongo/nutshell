@@ -240,3 +240,18 @@ int test_cmd_batch_next_runnable_none(void) {
     cmd_batch_set_free(&set);
     TEST_END();
 }
+
+/* user_acted defaults to 0 (from cmd_batch_add's calloc) and is a plain
+ * settable field the Run/Approve click paths set. */
+int test_cmd_batch_add_user_acted_zero(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(a);
+    ASSERT_EQ(a->user_acted, 0);
+    a->user_acted = 1;
+    ASSERT_EQ(a->user_acted, 1);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}

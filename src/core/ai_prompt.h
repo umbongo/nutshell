@@ -506,6 +506,32 @@ typedef struct {
     int show_thinking;           /* 1 = user opened a Thinking disclosure this
                                    * session -- suppresses auto-collapse when a
                                    * reply's text starts (see chat_listview.c) */
+    int auto_rounds;             /* consecutive unattended continue rounds
+                                   * since the user last spoke or acted
+                                   * (ai_rounds_*() below); 0 at creation */
 } AiSessionState;
+
+/* Cap on unattended rounds with Auto-approve on: the batch built after
+ * AI_AUTO_ROUNDS_MAX consecutive unattended rounds is built attended
+ * (guard-rails spec 2026-11-04 section 1, "The counter"). */
+#define AI_AUTO_ROUNDS_MAX 3
+
+/* The user typed a message: auto_rounds = 0. NULL-safe. */
+void ai_rounds_user_message(AiSessionState *s);
+
+/* A continue message is being sent after a finished batch: auto_rounds += 1
+ * when that batch ran `unattended` (non-zero), else auto_rounds = 0.
+ * NULL-safe. */
+void ai_rounds_continue(AiSessionState *s, int unattended);
+
+/* The policy to build the next batch under: `p`, or cmd_policy_attended(p)
+ * once auto_rounds >= AI_AUTO_ROUNDS_MAX. The session's own policy is not
+ * changed. NULL `s` returns `p`. */
+CmdPolicy ai_rounds_batch_policy(const AiSessionState *s, CmdPolicy p);
+
+/* 1 when the cap is reached and Auto-approve is on in `p` (the batch built
+ * under ai_rounds_batch_policy() is paused for the user); else 0.
+ * NULL `s` returns 0. */
+int ai_rounds_paused(const AiSessionState *s, CmdPolicy p);
 
 #endif /* NUTSHELL_AI_PROMPT_H */

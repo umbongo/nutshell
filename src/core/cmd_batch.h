@@ -26,6 +26,13 @@ typedef struct {
                       * whether "newer exchanges" have happened since (see
                       * ai_build_continue_text() in ai_prompt.h). Defaults
                       * to 0 from cmd_batch_add()'s calloc. */
+    int user_acted; /* 1 once the user acted on this batch by hand (a
+                      * Run/Approve click, or a user-initiated cancel).
+                      * Read when the batch finishes: a batch the user
+                      * acted on is an attended round and resets the
+                      * session's auto-round counter instead of counting
+                      * towards AI_AUTO_ROUNDS_MAX (ai_rounds_continue()
+                      * in ai_prompt.h). 0 from cmd_batch_add()'s calloc. */
 } CmdBatch;
 
 typedef struct {

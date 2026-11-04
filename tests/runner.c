@@ -2498,6 +2498,16 @@ int test_cmd_batch_first_pending_none(void);
 int test_cmd_batch_next_runnable_oldest_with_approved(void);
 int test_cmd_batch_conv_mark_defaults_zero_and_settable(void);
 int test_cmd_batch_next_runnable_none(void);
+int test_cmd_batch_add_user_acted_zero(void);
+
+/* test_ai_rounds.c */
+int test_ai_rounds_user_message_resets(void);
+int test_ai_rounds_continue_unattended_counts(void);
+int test_ai_rounds_continue_attended_resets(void);
+int test_ai_rounds_three_rounds_then_paused(void);
+int test_ai_rounds_auto_off_never_paused(void);
+int test_ai_rounds_session_policy_untouched(void);
+int test_ai_rounds_null_safe(void);
 
 /* test_chat_thinking.c */
 int test_thinking_init(void);
@@ -6076,6 +6086,16 @@ int main(void) {
     failed += test_cmd_batch_next_runnable_oldest_with_approved();
     failed += test_cmd_batch_conv_mark_defaults_zero_and_settable();
     failed += test_cmd_batch_next_runnable_none();
+    failed += test_cmd_batch_add_user_acted_zero();
+
+    printf("\n--- AI auto rounds ---\n");
+    failed += test_ai_rounds_user_message_resets();
+    failed += test_ai_rounds_continue_unattended_counts();
+    failed += test_ai_rounds_continue_attended_resets();
+    failed += test_ai_rounds_three_rounds_then_paused();
+    failed += test_ai_rounds_auto_off_never_paused();
+    failed += test_ai_rounds_session_policy_untouched();
+    failed += test_ai_rounds_null_safe();
 
     printf("\n--- Thinking Controller ---\n");
     failed += test_thinking_init();
