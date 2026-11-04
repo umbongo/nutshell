@@ -59,7 +59,7 @@ static inline MdLineInfo md_classify_line(const char *line, int in_code_block)
     /* Heading: # at start */
     if (line[0] == '#') {
         int level = 0;
-        while (line[level] == '#' && level < 6) level++;
+        while (level < 6 && line[level] == '#') level++;
         if (level <= 3 && (line[level] == ' ' || line[level] == '\0')) {
             info.type = MD_LINE_HEADING;
             info.heading_level = level;
