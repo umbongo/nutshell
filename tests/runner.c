@@ -7237,6 +7237,12 @@ int main(void) {
         int test_net_url_parse_ipv6_literal(void);
         int test_net_url_parse_refuses(void);
         int test_net_url_cleartext_remote(void);
+        int test_net_url_resolve_absolute(void);
+        int test_net_url_resolve_scheme_relative(void);
+        int test_net_url_resolve_absolute_path(void);
+        int test_net_url_resolve_relative(void);
+        int test_net_url_resolve_refuses(void);
+        int test_net_url_display(void);
         failed += test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read();
         failed += test_dlog_review_osc52_introducer_after_the_output_filled_up_withholds_the_next_read();
         failed += test_dlog_review_escape_bytes_keeps_tracking_after_the_output_is_full();
@@ -7290,6 +7296,12 @@ int main(void) {
         failed += test_net_url_parse_ipv6_literal();
         failed += test_net_url_parse_refuses();
         failed += test_net_url_cleartext_remote();
+        failed += test_net_url_resolve_absolute();
+        failed += test_net_url_resolve_scheme_relative();
+        failed += test_net_url_resolve_absolute_path();
+        failed += test_net_url_resolve_relative();
+        failed += test_net_url_resolve_refuses();
+        failed += test_net_url_display();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);

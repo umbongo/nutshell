@@ -5,6 +5,8 @@
  * http(s) URL parser, and the clear-text test used by the Settings warning.
  * Text and bytes only: no sockets, no DNS, no Windows headers. */
 
+#include <stddef.h>
+
 #define NET_URL_MAX  2048
 #define NET_HOST_MAX 256
 
@@ -44,5 +46,25 @@ int net_url_parse(const char *url, NetUrlParts *out);
  * URL that does not parse returns 1. 0 for https, an empty string, NULL and
  * anything that is not http(s). Text only, never a DNS lookup. */
 int net_url_cleartext_remote(const char *url);
+
+/* Resolve a redirect Location against the URL it came from. location may be
+ * absolute (http or https only, any case), scheme-relative ("//host/p"),
+ * an absolute path, a query ("?q"), a fragment or a relative path (replacing
+ * everything after the base's last '/'). Dot segments are kept as written.
+ * Refuses (-1) a base that is not http(s), a NULL or empty location, a
+ * location byte below 0x21, 0x7F or a backslash, any other scheme, and a
+ * result that does not pass net_url_parse or does not fit out_sz. On 0, out
+ * holds the NUL-terminated URL; on -1 it is unspecified. */
+int net_url_resolve(const char *base, const char *location, char *out, size_t out_sz);
+
+#define NET_URL_DISPLAY_MAX 80
+
+/* A form of url that is safe to print in a chat row, whether or not it
+ * parses: userinfo (up to the last '@' in the authority), the query and the
+ * fragment are dropped textually, control and bidi characters (and TAB, LF,
+ * CR) are removed, and text over NET_URL_DISPLAY_MAX bytes is cut on a UTF-8
+ * boundary with "..." appended. Always NUL-terminates within cap (cap 0
+ * writes nothing). NULL url gives "". Returns the length written. */
+size_t net_url_display(const char *url, char *out, size_t cap);
 
 #endif

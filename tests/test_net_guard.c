@@ -310,3 +310,183 @@ int test_net_url_cleartext_remote(void)
     ASSERT_EQ(net_url_cleartext_remote("ftp://example.com"), 0);
     TEST_END();
 }
+
+static int resolve_eq(const char *base, const char *loc, const char *want)
+{
+    char out[NET_URL_MAX];
+    if (net_url_resolve(base, loc, out, sizeof out) != 0) return 0;
+    return strcmp(out, want) == 0;
+}
+
+int test_net_url_resolve_absolute(void)
+{
+    char out[NET_URL_MAX];
+    TEST_BEGIN();
+    ASSERT_TRUE(resolve_eq("http://a.test/x", "https://b.test/y", "https://b.test/y"));
+    ASSERT_EQ(net_url_resolve("http://a.test/x", "HTTPS://b.test/", out, sizeof out), 0);
+    ASSERT_TRUE(resolve_eq("https://a.test/", "http://b.test:81/q?z=1", "http://b.test:81/q?z=1"));
+    TEST_END();
+}
+
+int test_net_url_resolve_scheme_relative(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(resolve_eq("https://a.test/x", "//b.test/p", "https://b.test/p"));
+    ASSERT_TRUE(resolve_eq("http://a.test/x", "//b.test", "http://b.test"));
+    TEST_END();
+}
+
+int test_net_url_resolve_absolute_path(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(resolve_eq("http://a.test:8080/x/y?q", "/z", "http://a.test:8080/z"));
+    ASSERT_TRUE(resolve_eq("https://u:p@a.test/x#f", "/z", "https://u:p@a.test/z"));
+    ASSERT_TRUE(resolve_eq("http://a.test", "/z?k=v", "http://a.test/z?k=v"));
+    TEST_END();
+}
+
+int test_net_url_resolve_relative(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(resolve_eq("http://a.test/x/y", "z?k=1", "http://a.test/x/z?k=1"));
+    ASSERT_TRUE(resolve_eq("http://a.test", "z", "http://a.test/z"));
+    ASSERT_TRUE(resolve_eq("http://a.test/x/y", "../z", "http://a.test/x/../z"));
+    ASSERT_TRUE(resolve_eq("http://a.test/x?old", "?new", "http://a.test/x?new"));
+    /* a '/' inside the base query is not a path separator */
+    ASSERT_TRUE(resolve_eq("http://a.test/x/y?r=/a/b", "z", "http://a.test/x/z"));
+    ASSERT_TRUE(resolve_eq("http://a.test/x/y#f/g", "z", "http://a.test/x/z"));
+    ASSERT_TRUE(resolve_eq("http://a.test/x?old#f", "?new", "http://a.test/x?new"));
+    /* a ':' after the first '/' is not a scheme */
+    ASSERT_TRUE(resolve_eq("http://a.test/x/y", "z/a:b", "http://a.test/x/z/a:b"));
+    TEST_END();
+}
+
+int test_net_url_resolve_refuses(void)
+{
+    char out[NET_URL_MAX];
+    char small[16];
+    TEST_BEGIN();
+    ASSERT_EQ(net_url_resolve("http://a.test/", "ftp://x/", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "file:///etc/passwd", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "javascript:alert(1)", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "data:text/html,x", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "mailto:a@b", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", NULL, out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "/a b", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "/a\r\nSet-Cookie: x", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "/a\\b", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "/a\x7f", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "http://", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "http:z", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "//", out, sizeof out), -1);
+
+    ASSERT_EQ(net_url_resolve("ftp://a/", "/x", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("a.test/x", "/x", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("", "/x", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve(NULL, "/x", out, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "/x", NULL, sizeof out), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/", "/x", out, 0), -1);
+
+    /* "http://a.test/0123456789012" is 27 bytes; it does not fit 16 */
+    ASSERT_EQ(net_url_resolve("http://a.test/x", "/0123456789012", small, sizeof small), -1);
+    /* exactly fitting: "http://a.test/0" is 15 bytes + NUL */
+    ASSERT_EQ(net_url_resolve("http://a.test/x", "/01", small, sizeof small), -1);
+    ASSERT_EQ(net_url_resolve("http://a.test/x", "/0", small, sizeof small), 0);
+    ASSERT_STR_EQ(small, "http://a.test/0");
+    TEST_END();
+}
+
+int test_net_url_display(void)
+{
+    char out[256];
+    char big[400];
+    size_t n;
+    TEST_BEGIN();
+    n = net_url_display("https://example.com/p?key=secret#frag", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://example.com/p");
+    ASSERT_EQ(n, strlen(out));
+    net_url_display("http://user:pw@example.com/p", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://example.com/p");
+    net_url_display("http://a@b@example.com/p", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://example.com/p");
+    /* an '@' after the authority belongs to the path */
+    net_url_display("http://example.com/p@q", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://example.com/p@q");
+    net_url_display("http://ex\xE2\x80\xAE" "ample.com/", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://example.com/");
+    net_url_display("http://ex\x01" "ample.com/", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://example.com/");
+    net_url_display("http://example.com/a\r\nb\tc", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://example.com/abc");
+
+    /* not parseable: userinfo, query and fragment are still dropped */
+    net_url_display("ftp://user:pw@host/p?x=1#y", out, sizeof out);
+    ASSERT_STR_EQ(out, "ftp://host/p");
+    net_url_display("user:pw@host/p?x=1", out, sizeof out);
+    ASSERT_STR_EQ(out, "host/p");
+    net_url_display("http://host?secret", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://host");
+    net_url_display("http://us\xE2\x80\xAE" "er:pw@host/", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://host/");
+
+    /* long URL: cut and marked */
+    memcpy(big, "http://example.com/", 19);
+    memset(big + 19, 'a', 181);
+    big[200] = '\0';
+    n = net_url_display(big, out, sizeof out);
+    ASSERT_EQ(n, strlen(out));
+    ASSERT_TRUE(n <= (size_t)NET_URL_DISPLAY_MAX + 3);
+    ASSERT_STR_EQ(out + n - 3, "...");
+    ASSERT_EQ(n, (size_t)NET_URL_DISPLAY_MAX + 3);
+
+    /* exactly NET_URL_DISPLAY_MAX bytes is not cut */
+    memcpy(big, "http://example.com/", 19);
+    memset(big + 19, 'a', (size_t)NET_URL_DISPLAY_MAX - 19);
+    big[NET_URL_DISPLAY_MAX] = '\0';
+    n = net_url_display(big, out, sizeof out);
+    ASSERT_EQ(n, (size_t)NET_URL_DISPLAY_MAX);
+    ASSERT_STR_EQ(out, big);
+
+    /* the cut (byte 80) falls inside a 3-byte character starting at 79 */
+    memcpy(big, "http://example.com/", 19);
+    memset(big + 19, 'a', 60);
+    memcpy(big + 79, "\xE2\x82\xAC", 3);
+    memset(big + 82, 'b', 50);
+    big[132] = '\0';
+    n = net_url_display(big, out, sizeof out);
+    ASSERT_EQ(n, (size_t)82);
+    ASSERT_EQ(out[78], 'a');
+    ASSERT_STR_EQ(out + 79, "...");
+
+    /* a cut right after a whole 3-byte character keeps it */
+    memcpy(big + 77, "\xE2\x82\xAC", 3);
+    memset(big + 80, 'b', 52);
+    big[132] = '\0';
+    n = net_url_display(big, out, sizeof out);
+    ASSERT_EQ(n, (size_t)83);
+    ASSERT_EQ((unsigned char)out[79], 0xAC);
+    ASSERT_STR_EQ(out + 80, "...");
+
+    /* small buffers: always NUL-terminated and within cap */
+    memset(out, 'x', sizeof out);
+    n = net_url_display("http://example.com/path", out, 8);
+    ASSERT_TRUE(strlen(out) < 8);
+    ASSERT_EQ(n, strlen(out));
+    ASSERT_STR_EQ(out, "http...");
+    memset(out, 'x', sizeof out);
+    n = net_url_display("http://example.com/path", out, 1);
+    ASSERT_EQ(n, (size_t)0);
+    ASSERT_EQ(out[0], '\0');
+    memset(out, 'x', sizeof out);
+    n = net_url_display("http://example.com/path", out, 3);
+    ASSERT_EQ(n, (size_t)2);
+    ASSERT_STR_EQ(out, "..");
+
+    n = net_url_display(NULL, out, sizeof out);
+    ASSERT_EQ(n, (size_t)0);
+    ASSERT_STR_EQ(out, "");
+    ASSERT_EQ(net_url_display("x", NULL, 10), (size_t)0);
+    ASSERT_EQ(net_url_display("x", out, 0), (size_t)0);
+    TEST_END();
+}

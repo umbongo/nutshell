@@ -1,5 +1,8 @@
 #include "net_guard.h"
 
+#include "paste_filter.h"
+
+#include <stdlib.h>
 #include <string.h>
 
 int net_ipv4_is_internal(const unsigned char a[4])
@@ -205,4 +208,172 @@ int net_url_cleartext_remote(const char *url)
     if (scheme_len(url, &https) == 0 || https) return 0;
     if (net_url_parse(url, &p) != 0) return 1;   /* unparseable http: warn */
     return is_loopback_host(p.host) ? 0 : 1;
+}
+
+/* Offset of the end of the authority in a URL that starts with a scheme
+ * prefix of scheme_n bytes. */
+static size_t authority_end(const char *url, size_t scheme_n)
+{
+    size_t i = scheme_n;
+    while (url[i] && url[i] != '/' && url[i] != '?' && url[i] != '#') i++;
+    return i;
+}
+
+int net_url_resolve(const char *base, const char *location, char *out, size_t out_sz)
+{
+    char tmp[NET_URL_MAX];
+    NetUrlParts parts;
+    const char *tail;
+    size_t i, head_n, tail_n, loc_n, scheme_n, auth_n, path_end;
+    int https = 0, loc_https = 0;
+
+    if (!base || !location || !out || out_sz == 0) return -1;
+
+    scheme_n = scheme_len(base, &https);
+    if (scheme_n == 0) return -1;
+
+    for (loc_n = 0; location[loc_n]; loc_n++) {
+        unsigned char c = (unsigned char)location[loc_n];
+        if (c < 0x21 || c == 0x7F || c == '\\') return -1;
+        if (loc_n >= NET_URL_MAX) return -1;
+    }
+    if (loc_n == 0) return -1;
+
+    auth_n = authority_end(base, scheme_n);     /* base[0..auth_n) is scheme + authority */
+
+    /* A ':' before the first '/', '?' or '#' makes the location a scheme. */
+    for (i = 0; i < loc_n; i++) {
+        char c = location[i];
+        if (c == '/' || c == '?' || c == '#') break;
+        if (c == ':') {
+            if (scheme_len(location, &loc_https) == 0) return -1;
+            head_n = 0;
+            tail = location;
+            tail_n = loc_n;
+            goto build;
+        }
+    }
+
+    if (location[0] == '/' && location[1] == '/') {
+        head_n = https ? 6 : 5;                  /* "https:" / "http:" */
+        tail = location;
+        tail_n = loc_n;
+        if (head_n + tail_n >= sizeof tmp) return -1;
+        memcpy(tmp, base, head_n);
+    } else if (location[0] == '/') {
+        head_n = auth_n;
+        tail = location;
+        tail_n = loc_n;
+        if (head_n + tail_n >= sizeof tmp) return -1;
+        memcpy(tmp, base, head_n);
+    } else if (location[0] == '?' || location[0] == '#') {
+        /* base without its fragment (and, for '?', without its query) */
+        head_n = auth_n;
+        while (base[head_n] && base[head_n] != '#' &&
+               !(location[0] == '?' && base[head_n] == '?'))
+            head_n++;
+        tail = location;
+        tail_n = loc_n;
+        if (head_n + tail_n >= sizeof tmp) return -1;
+        memcpy(tmp, base, head_n);
+    } else {
+        /* replace the base path after its last '/' */
+        path_end = auth_n;
+        while (base[path_end] && base[path_end] != '?' && base[path_end] != '#')
+            path_end++;
+        head_n = path_end;
+        while (head_n > auth_n && base[head_n - 1] != '/') head_n--;
+        if (head_n == auth_n) {                  /* no path: "http://host" */
+            if (auth_n + 1 + loc_n >= sizeof tmp) return -1;
+            memcpy(tmp, base, auth_n);
+            tmp[auth_n] = '/';
+            head_n = auth_n + 1;
+            tail = location;
+            tail_n = loc_n;
+            memcpy(tmp + head_n, tail, tail_n);
+            tmp[head_n + tail_n] = '\0';
+            goto check;
+        }
+        tail = location;
+        tail_n = loc_n;
+        if (head_n + tail_n >= sizeof tmp) return -1;
+        memcpy(tmp, base, head_n);
+    }
+    memcpy(tmp + head_n, tail, tail_n);
+    tmp[head_n + tail_n] = '\0';
+    goto check;
+
+build:
+    if (tail_n >= sizeof tmp) return -1;
+    memcpy(tmp, tail, tail_n);
+    tmp[tail_n] = '\0';
+
+check:
+    if (net_url_parse(tmp, &parts) != 0) return -1;
+    i = strlen(tmp);
+    if (i >= out_sz) return -1;
+    memcpy(out, tmp, i + 1);
+    return 0;
+}
+
+size_t net_url_display(const char *url, char *out, size_t cap)
+{
+    const char *p, *auth, *at;
+    char *buf;
+    size_t span, auth_n, n, flen, w, keep, dots, avail;
+
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    if (!url) return 0;
+
+    /* Where the authority starts: after "://" when there is one. */
+    auth = strstr(url, "://");
+    auth = auth ? auth + 3 : url;
+
+    /* The text is cut at the first '?' or '#'. */
+    span = 0;
+    while (url[span] && url[span] != '?' && url[span] != '#') span++;
+    if ((size_t)(auth - url) > span) auth = url + span;  /* "://" sat in a query */
+
+    /* Userinfo: up to the last '@' in the authority. */
+    auth_n = 0;
+    while (auth + auth_n < url + span && auth[auth_n] != '/') auth_n++;
+    at = NULL;
+    for (n = 0; n < auth_n; n++)
+        if (auth[n] == '@') at = auth + n;
+
+    buf = (char *)malloc(span + 1);
+    if (!buf) return 0;
+    w = 0;
+    for (p = url; p < url + span; p++) {
+        if (p >= auth && at && p <= at) continue;      /* userinfo and its '@' */
+        buf[w++] = *p;
+    }
+    flen = paste_filter_controls(buf, w, buf, NULL);
+
+    /* TAB, LF and CR survive the paste filter; a chat row must not have them. */
+    for (n = 0, w = 0; n < flen; n++) {
+        if (buf[n] == '\t' || buf[n] == '\n' || buf[n] == '\r') continue;
+        buf[w++] = buf[n];
+    }
+    flen = w;
+
+    avail = cap - 1;
+    if (flen <= NET_URL_DISPLAY_MAX && flen <= avail) {
+        memcpy(out, buf, flen);
+        out[flen] = '\0';
+        free(buf);
+        return flen;
+    }
+
+    dots = avail < 3 ? avail : 3;
+    keep = avail - dots;
+    if (keep > NET_URL_DISPLAY_MAX) keep = NET_URL_DISPLAY_MAX;
+    if (keep > flen) keep = flen;
+    while (keep > 0 && ((unsigned char)buf[keep] & 0xC0) == 0x80) keep--;
+    memcpy(out, buf, keep);
+    memset(out + keep, '.', dots);
+    out[keep + dots] = '\0';
+    free(buf);
+    return keep + dots;
 }
