@@ -71,7 +71,16 @@ void fk_put_file(const char *path, const char *text, unsigned long long pad_to, 
     f->data = NULL;
     f->len = 0;
     if (text) fk_append(f, text, strlen(text));
-    while (f->len < pad_to) fk_append(f, "x", 1);
+    if (f->len < pad_to) {                      /* one allocation, not one per byte */
+        size_t want = (size_t)pad_to;
+        char *nd = (char *)realloc(f->data, want + 1);
+        if (nd) {
+            memset(nd + f->len, 'x', want - f->len);
+            nd[want] = '\0';
+            f->data = nd;
+            f->len = want;
+        }
+    }
     f->mtime = mtime;
 }
 

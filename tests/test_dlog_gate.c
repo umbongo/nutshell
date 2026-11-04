@@ -25,13 +25,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* "relative/path.c:line" entries that are allowed to break the rule, with a
- * reason. */
-static const char *const k_allow[] = {
+/* Entries that are allowed to break the rule: a path and a substring of the
+ * offending source line, with a reason. Keyed on content, not a line number, so
+ * code added above does not break it; each entry excuses exactly one violation. */
+typedef struct { const char *path; const char *needle; } GateAllow;
+static const GateAllow k_allow[] = {
     /* save_prompted_password(): the event name profile.password_saved logs
      * only ok=0|1, never the password. */
-    "src/ui/window.c:1244",
-    NULL };
+    { "src/ui/window.c", "profile.password_saved" },
+    { NULL, NULL } };
 
 /* ---- the scanner --------------------------------------------------------------- */
 
@@ -110,9 +112,21 @@ static char *strip_comments(const char *src)
     return out;
 }
 
-/* The scan of one text. Returns the number of violations; `first` (optional)
- * gets "line N: word" for the first one. */
-static int gate_scan(const char *src, int *first_line, char *first_word, size_t word_cap)
+typedef struct { int line; char word[64]; } GateHit;
+#define GATE_MAX_HITS 64
+
+static void gate_record(GateHit *hits, int max_hits, int index, int line, const char *w, size_t n)
+{
+    if (!hits || index >= max_hits) return;
+    hits[index].line = line;
+    size_t wl = n < sizeof(hits[index].word) - 1 ? n : sizeof(hits[index].word) - 1;
+    memcpy(hits[index].word, w, wl);
+    hits[index].word[wl] = '\0';
+}
+
+/* The scan of one text. Returns the total number of violations; every one's
+ * line and word is recorded in `hits`, up to `max_hits` (NULL/0 records none). */
+static int gate_scan(const char *src, GateHit *hits, int max_hits)
 {
     char *t = strip_comments(src);
     if (!t) return 0;
@@ -148,15 +162,8 @@ static int gate_scan(const char *src, int *first_line, char *first_word, size_t 
                     size_t k = j;
                     while (k < n && ident_char(t[k])) k++;
                     if (!skip_arg && word_is_secret(t + j, k - j)) {
+                        gate_record(hits, max_hits, violations, cur_line, t + j, k - j);
                         violations++;
-                        if (violations == 1) {
-                            if (first_line) *first_line = cur_line;
-                            if (first_word && word_cap) {
-                                size_t wl = k - j < word_cap - 1 ? k - j : word_cap - 1;
-                                memcpy(first_word, t + j, wl);
-                                first_word[wl] = '\0';
-                            }
-                        }
                     }
                     j = k;
                     continue;
@@ -170,15 +177,8 @@ static int gate_scan(const char *src, int *first_line, char *first_word, size_t 
                             size_t k = j;
                             while (k < n && ident_char(t[k])) k++;
                             if (!skip_arg && word_is_secret(t + j, k - j)) {
+                                gate_record(hits, max_hits, violations, cur_line, t + j, k - j);
                                 violations++;
-                                if (violations == 1) {
-                                    if (first_line) *first_line = cur_line;
-                                    if (first_word && word_cap) {
-                                        size_t wl = k - j < word_cap - 1 ? k - j : word_cap - 1;
-                                        memcpy(first_word, t + j, wl);
-                                        first_word[wl] = '\0';
-                                    }
-                                }
                             }
                             j = k;
                         } else {
@@ -200,9 +200,52 @@ static int gate_scan(const char *src, int *first_line, char *first_word, size_t 
     return violations;
 }
 
+/* "the source line `line` (1-based) of `text` contains `needle`" */
+static int line_contains(const char *text, int line, const char *needle)
+{
+    const char *p = text;
+    for (int l = 1; l < line && p; l++) {
+        p = strchr(p, '\n');
+        if (p) p++;
+    }
+    if (!p) return 0;
+    const char *e = strchr(p, '\n');
+    size_t len = e ? (size_t)(e - p) : strlen(p);
+    size_t nl = strlen(needle);
+    for (size_t i = 0; i + nl <= len; i++)
+        if (strncmp(p + i, needle, nl) == 0) return 1;
+    return 0;
+}
+
+/* The violations in `text` (the content of `path`) that no k_allow entry
+ * excuses: an entry for this path excuses at most one recorded hit whose source
+ * line contains its needle. Hits beyond GATE_MAX_HITS are never excused. */
+static int gate_unexcused(const char *path, const char *text, int report)
+{
+    GateHit hits[GATE_MAX_HITS];
+    int total = gate_scan(text, hits, GATE_MAX_HITS);
+    int recorded = total < GATE_MAX_HITS ? total : GATE_MAX_HITS;
+    int excused[GATE_MAX_HITS] = { 0 };
+    for (size_t a = 0; k_allow[a].path; a++) {
+        if (strcmp(k_allow[a].path, path) != 0) continue;
+        for (int h = 0; h < recorded; h++) {
+            if (excused[h] || !line_contains(text, hits[h].line, k_allow[a].needle)) continue;
+            excused[h] = 1;
+            break;
+        }
+    }
+    int bad = total - recorded;                  /* unrecorded: fail closed */
+    for (int h = 0; h < recorded; h++) {
+        if (excused[h]) continue;
+        bad++;
+        if (report) printf("  %s:%d: a log call mentions \"%s\"\n", path, hits[h].line, hits[h].word);
+    }
+    return bad;
+}
+
 /* ---- planted violations ------------------------------------------------------------ */
 
-#define SCAN(text) gate_scan((text), NULL, NULL, 0)
+#define SCAN(text) gate_scan((text), NULL, 0)
 
 int test_dlog_gate_flags_a_secret_field_name_in_the_format(void)
 {
@@ -238,11 +281,10 @@ int test_dlog_gate_flags_across_lines_and_nested_parens(void)
         "         compute(a, (b + c)),\n"
         "         strlen(pw_secret_copy));\n"
         "}\n";
-    int line = 0;
-    char word[64];
-    ASSERT_EQ(gate_scan(src, &line, word, sizeof(word)), 1);
-    ASSERT_EQ(line, 6);
-    ASSERT_STR_EQ(word, "pw_secret_copy");
+    GateHit hits[4];
+    ASSERT_EQ(gate_scan(src, hits, 4), 1);
+    ASSERT_EQ(hits[0].line, 6);
+    ASSERT_STR_EQ(hits[0].word, "pw_secret_copy");
     TEST_END();
 }
 
@@ -303,16 +345,52 @@ int test_dlog_gate_counts_every_violation(void)
     TEST_END();
 }
 
-/* ---- the real tree ---------------------------------------------------------------- */
-
-static int allowed(const char *path, int line)
+int test_dlog_gate_reports_every_violating_line(void)
 {
-    char key[300];
-    (void)snprintf(key, sizeof(key), "%s:%d", path, line);
-    for (size_t i = 0; k_allow[i]; i++)
-        if (strcmp(k_allow[i], key) == 0) return 1;
-    return 0;
+    TEST_BEGIN();
+    const char *src =
+        "DLOG(A, B, 0, \"e\", \"password=%s\", p);\n"
+        "int x;\n"
+        "DLOG(A, B, 0, \"e\", \"x=%s\", api_key);\n";
+    GateHit h[4];
+    ASSERT_EQ(gate_scan(src, h, 4), 2);
+    ASSERT_EQ(h[0].line, 1);
+    ASSERT_EQ(h[1].line, 3);
+    ASSERT_STR_EQ(h[1].word, "api_key");
+    ASSERT_EQ(gate_scan(src, h, 1), 2);          /* counts beyond max_hits */
+    TEST_END();
 }
+
+int test_dlog_gate_allow_entry_excuses_exactly_one_violation(void)
+{
+    TEST_BEGIN();
+    const char *two =
+        "void f(void) {\n"
+        "  DLOG(A, B, 0, \"profile.password_saved\", \"ok=%d\", ok);\n"
+        "  DLOG(A, B, 0, \"e\", \"password=%s\", pw);\n}\n";
+    ASSERT_EQ(gate_unexcused("src/ui/window.c", two, 0), 1);
+    ASSERT_EQ(gate_unexcused("src/ui/other.c", two, 0), 2);
+    const char *one = "  DLOG(A, B, 0, \"profile.password_saved\", \"ok=%d\", ok);\n";
+    ASSERT_EQ(gate_unexcused("src/ui/window.c", one, 0), 0);
+    const char *twice =
+        "  DLOG(A, B, 0, \"profile.password_saved\", \"ok=%d\", ok);\n"
+        "  DLOG(A, B, 0, \"profile.password_saved\", \"ok=%d\", ok);\n";
+    ASSERT_EQ(gate_unexcused("src/ui/window.c", twice, 0), 1);
+    TEST_END();
+}
+
+int test_dlog_gate_allow_survives_lines_added_above(void)
+{
+    TEST_BEGIN();
+    char t[512];
+    size_t n = 0;
+    for (int i = 0; i < 50; i++) t[n++] = '\n';
+    (void)snprintf(t + n, sizeof(t) - n, "  DLOG(A, B, 0, \"profile.password_saved\", \"ok=%%d\", ok);\n");
+    ASSERT_EQ(gate_unexcused("src/ui/window.c", t, 0), 0);
+    TEST_END();
+}
+
+/* ---- the real tree ---------------------------------------------------------------- */
 
 static int scan_dir(const char *dir, int *scanned)
 {
@@ -334,14 +412,8 @@ static int scan_dir(const char *dir, int *scanned)
         if (buf) {
             size_t got = fread(buf, 1, (size_t)sz, f);
             buf[got] = '\0';
-            int line = 0;
-            char word[64] = "";
-            int v = gate_scan(buf, &line, word, sizeof(word));
             (*scanned)++;
-            if (v > 0 && !allowed(path, line)) {
-                printf("  %s:%d: a log call mentions \"%s\" (%d in file)\n", path, line, word, v);
-                bad += v;
-            }
+            bad += gate_unexcused(path, buf, 1);
             free(buf);
         }
         fclose(f);
@@ -365,11 +437,8 @@ int test_dlog_gate_allow_list_has_no_stale_entries(void)
 {
     TEST_BEGIN();
     /* every k_allow entry must still point at a violation, else it is dead weight */
-    for (size_t i = 0; k_allow[i]; i++) {
-        char path[300];
-        int line = 0;
-        if (sscanf(k_allow[i], "%299[^:]:%d", path, &line) != 2) { ASSERT_TRUE(0); continue; }
-        FILE *f = fopen(path, "rb");
+    for (size_t i = 0; k_allow[i].path; i++) {
+        FILE *f = fopen(k_allow[i].path, "rb");
         ASSERT_NOT_NULL(f);
         if (!f) continue;
         fseek(f, 0, SEEK_END);
@@ -379,8 +448,12 @@ int test_dlog_gate_allow_list_has_no_stale_entries(void)
         if (buf) {
             size_t got = fread(buf, 1, (size_t)sz, f);
             buf[got] = '\0';
-            int l2 = 0;
-            ASSERT_TRUE(gate_scan(buf, &l2, NULL, 0) > 0);
+            GateHit hits[GATE_MAX_HITS];
+            int n = gate_scan(buf, hits, GATE_MAX_HITS);
+            int found = 0;
+            for (int h = 0; h < n && h < GATE_MAX_HITS; h++)
+                if (line_contains(buf, hits[h].line, k_allow[i].needle)) found = 1;
+            ASSERT_TRUE(found);
             free(buf);
         }
         fclose(f);

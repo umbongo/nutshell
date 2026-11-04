@@ -224,6 +224,7 @@ int test_dlog_apply_sets_the_flags_and_status(void);
 int test_dlog_configure_registers_the_api_key_as_a_secret(void);
 int test_dlog_shutdown_wipes_secrets(void);
 int test_dlog_fmt_value_standalone(void);
+int test_dlog_fake_put_file_pads_once(void);
 
 /* test_dlog_redact.c */
 int test_dlog_redact_line_key_values(void);
@@ -278,6 +279,9 @@ int test_dlog_gate_flags_across_lines_and_nested_parens(void);
 int test_dlog_gate_allows_safe_calls(void);
 int test_dlog_gate_ignores_the_content_macro_comments_and_other_code(void);
 int test_dlog_gate_counts_every_violation(void);
+int test_dlog_gate_reports_every_violating_line(void);
+int test_dlog_gate_allow_entry_excuses_exactly_one_violation(void);
+int test_dlog_gate_allow_survives_lines_added_above(void);
 int test_dlog_gate_source_tree_has_no_secret_names_in_log_calls(void);
 int test_dlog_gate_allow_list_has_no_stale_entries(void);
 
@@ -3905,6 +3909,7 @@ int main(void) {
     failed += test_dlog_configure_registers_the_api_key_as_a_secret();
     failed += test_dlog_shutdown_wipes_secrets();
     failed += test_dlog_fmt_value_standalone();
+    failed += test_dlog_fake_put_file_pads_once();
 
     failed += test_dlog_redact_line_key_values();
     failed += test_dlog_redact_line_key_is_case_insensitive_and_whole_word();
@@ -3955,6 +3960,9 @@ int main(void) {
     failed += test_dlog_gate_allows_safe_calls();
     failed += test_dlog_gate_ignores_the_content_macro_comments_and_other_code();
     failed += test_dlog_gate_counts_every_violation();
+    failed += test_dlog_gate_reports_every_violating_line();
+    failed += test_dlog_gate_allow_entry_excuses_exactly_one_violation();
+    failed += test_dlog_gate_allow_survives_lines_added_above();
     failed += test_dlog_gate_source_tree_has_no_secret_names_in_log_calls();
     failed += test_dlog_gate_allow_list_has_no_stale_entries();
 
