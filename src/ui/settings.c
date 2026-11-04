@@ -17,6 +17,8 @@
 #include "open_dir.h"
 #include "settings_debug.h"
 #include "pw_reveal.h"
+#include "net_guard.h"
+#include "ns_tokens.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -179,6 +181,7 @@ typedef struct {
     HWND     hSshHint;    /* dim wrapped SSH idle-timeout hint */
     HWND     hAboutBlurb; /* dim About tagline */
     HWND     hCtxHint;    /* dim wrapped AI max-context-lines hint */
+    HWND     hUrlWarn;    /* warning-coloured "not encrypted" line under Base URL */
     HWND     hDbgDim[6];  /* dim statics on the Debugging page */
     int      n_dbg_dim;
     SettingsCtrl *dbg[SDBG_COUNT]; /* the Debugging page's rows, by SettingsDebugSlot */
@@ -186,6 +189,7 @@ typedef struct {
     int      saving;      /* the Auto-approve confirmation box is up: Save/Cancel/close are no-ops */
 
     SettingsCtrl *ctrl_ai_base_url;   /* toggled by provider combo */
+    SettingsCtrl *ctrl_ai_url_warn;   /* shown for a clear-text custom endpoint */
     SettingsCtrl *ctrl_ai_search_url; /* toggled by search-provider combo */
 
     int      cur_page; /* SETTINGS_PAGE_* currently shown */
@@ -197,6 +201,8 @@ typedef struct {
 } SettingsDlgData;
 
 static void relayout(HWND hwnd, SettingsDlgData *d);
+static void ai_url_warn_sync(SettingsDlgData *d);
+static void ai_url_warn_update(SettingsDlgData *d);
 static void sys_notes_sync_scroll(SettingsDlgData *d);
 
 /* ---- Layout helpers ----------------------------------------------------- */
@@ -418,7 +424,8 @@ static const TooltipEntry k_tooltips[] = {
       "Example: session-%Y%m%d_%H%M%S" },
     { IDC_DBG_ENABLE,
       "Record what Nutshell does in a log folder an AI can read. Errors and "
-      "warnings are written even when this is off." },
+      "warnings are written even when this is off. When AI Assist reads the "
+      "log, the text it reads is sent to your AI provider." },
     { IDC_DBG_RECORDER,
       "Keep the last few minutes of detail in memory (4 MB) so Mark Issue "
       "can write them out even when the log itself is set to a lower level." },
@@ -462,7 +469,8 @@ static const TooltipEntry k_tooltips[] = {
       "Maximum number of search results returned to the AI per query "
       "(1 - 20)." },
     { IDC_AI_WEB_FETCH,
-      "Allow the AI to fetch arbitrary URLs as a tool call." },
+      "Allow the AI to fetch web pages as a tool call. The assistant can then "
+      "send text from this session to any web address." },
     { IDC_AI_MD_RENDER,
       "Render AI replies as formatted markdown. Turn off to see raw text." },
     { IDC_AI_POLICY_ALLOWED,
@@ -762,6 +770,41 @@ static void relayout(HWND hwnd, SettingsDlgData *d)
     relayout_page(d, &m, page_w, content.h);
 }
 
+/* The clear-text warning under Base URL: shown while the provider is
+ * "custom" and the typed URL is plain http to a host that is not loopback.
+ * sync() only sets the flag (returns 1 if it changed); update() also relays
+ * the page out. The URL is read as typed; nothing here changes what is saved. */
+static int ai_url_warn_apply(SettingsDlgData *d)
+{
+    if (!d || !d->ctrl_ai_url_warn) return 0;
+    int sel = (int)SendDlgItemMessage(d->hPage, IDC_AI_PROVIDER_COMBO,
+                                      CB_GETCURSEL, 0, 0);
+    int show = 0;
+    if (sel >= 0 && sel < NUM_AI_PROVIDERS &&
+        _stricmp(k_ai_providers[sel], "custom") == 0) {
+        char url[512];
+        url[0] = '\0';
+        GetDlgItemText(d->hPage, IDC_AI_CUSTOM_URL, url, (int)sizeof(url));
+        show = net_url_cleartext_remote(url);
+    }
+    int changed = (d->ctrl_ai_url_warn->visible != show);
+    d->ctrl_ai_url_warn->visible = show;
+    return changed;
+}
+
+static void ai_url_warn_sync(SettingsDlgData *d)
+{
+    (void)ai_url_warn_apply(d);
+}
+
+static void ai_url_warn_update(SettingsDlgData *d)
+{
+    if (!ai_url_warn_apply(d)) return;
+    HWND main_wnd = GetParent(d->hPage);
+    relayout(main_wnd, d);
+    InvalidateRect(d->hPage, NULL, TRUE);
+}
+
 /* ---- Page host window procedure ------------------------------------------
  * Every page control is a child of this window. It handles theme colours,
  * owner-draw for the refresh button, forwards WM_COMMAND to the main
@@ -793,6 +836,11 @@ static LRESULT CALLBACK SettingsPageProc(HWND hwnd, UINT umsg,
     case WM_CTLCOLORSTATIC:
         if (d && d->theme) {
             HWND hCtl = (HWND)lParam;
+            if (d->hUrlWarn && hCtl == d->hUrlWarn) {
+                SetTextColor((HDC)wParam, theme_cr(ns_tokens()->warning.base));
+                SetBkColor((HDC)wParam, theme_cr(d->theme->bg_primary));
+                return (LRESULT)d->hBrBgPrimary;
+            }
             int dim = (hCtl == d->hSshHint || hCtl == d->hAboutBlurb ||
                        hCtl == d->hCtxHint);
             for (int di = 0; di < d->n_dbg_dim && !dim; di++)
@@ -1395,6 +1443,16 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             nd->ctrl_ai_base_url = add_ctrl(nd, lbl, ed, NULL,
                 SETTINGS_PAGE_AI_PROVIDER, 0, 0, 1, 0, is_custom, 0);
         }
+        {
+            /* Shown only for a custom provider with a clear-text, non-loopback
+             * URL (ai_url_warn_sync); a hidden row takes no space. Two rows
+             * so the sentence wraps rather than clips on a narrow pane. */
+            nd->hUrlWarn = make_static2(nd->hPage,
+                "Not encrypted: your API key and terminal text cross the "
+                "network in plain text.");
+            nd->ctrl_ai_url_warn = add_ctrl(nd, NULL, nd->hUrlWarn, NULL,
+                SETTINGS_PAGE_AI_PROVIDER, 0, 0, 2, 0, 0, 1);
+        }
         }
 
         /* ==== AI_BEHAVIOUR ==== */
@@ -1601,6 +1659,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             nd->cur_page = e ? e->page_id : SETTINGS_PAGE_APPEARANCE;
             SetWindowText(nd->hPageTitle, settings_page_title(nd->cur_page));
         }
+        ai_url_warn_sync(nd);
         relayout(hwnd, nd);
 
         return 0;
@@ -1780,6 +1839,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 if (sel >= 0 && sel < NUM_AI_PROVIDERS && d->ctrl_ai_base_url) {
                     d->ctrl_ai_base_url->visible =
                         (_stricmp(k_ai_providers[sel], "custom") == 0);
+                    ai_url_warn_sync(d);
                     /* Clear model — user must press refresh to populate */
                     HWND hMdl = GetDlgItem(d->hPage, IDC_AI_CUSTOM_MODEL);
                     SendMessage(hMdl, CB_RESETCONTENT, 0, 0);
@@ -1788,6 +1848,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                     InvalidateRect(d->hPage, NULL, TRUE);
                 }
             }
+            break;
+
+        case IDC_AI_CUSTOM_URL:
+            if (HIWORD(wParam) == EN_CHANGE && d)
+                ai_url_warn_update(d);
             break;
 
         case IDC_AI_REFRESH:
