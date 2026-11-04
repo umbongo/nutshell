@@ -3548,6 +3548,24 @@ int test_paint_synthetic_runs_cover_their_marker(void);
 int test_sel_highlight_visible_on_every_surface(void);
 int test_sel_hue_is_focus_except_on_the_bubble(void);
 
+/* test_ai_exec_quoted.c */
+int test_exec_quoted_fence_skipped_by_notes(void);
+int test_exec_quoted_full_reports_both_in_order(void);
+int test_exec_quoted_unterminated_fence_runs_to_end(void);
+int test_exec_quoted_indented_fence_is_not_a_fence(void);
+int test_exec_quoted_marker_on_fence_line(void);
+int test_exec_quoted_crlf_fences(void);
+int test_exec_quoted_inline_span(void);
+int test_exec_quoted_unpaired_backtick_opens_nothing(void);
+int test_exec_quoted_span_does_not_cross_lines(void);
+int test_exec_live_command_with_backticks(void);
+int test_exec_quoted_same_checks_apply(void);
+int test_exec_quoted_notes_align(void);
+int test_exec_quoted_takes_slots(void);
+int test_extract_command_skips_quoted(void);
+int test_response_split_ignores_quoted(void);
+int test_system_prompt_quoted_marker_sentence(void);
+
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
 int test_md_blocks_one(void);
@@ -7146,6 +7164,23 @@ int main(void) {
 
     failed += test_sel_highlight_visible_on_every_surface();
     failed += test_sel_hue_is_focus_except_on_the_bubble();
+
+    failed += test_exec_quoted_fence_skipped_by_notes();
+    failed += test_exec_quoted_full_reports_both_in_order();
+    failed += test_exec_quoted_unterminated_fence_runs_to_end();
+    failed += test_exec_quoted_indented_fence_is_not_a_fence();
+    failed += test_exec_quoted_marker_on_fence_line();
+    failed += test_exec_quoted_crlf_fences();
+    failed += test_exec_quoted_inline_span();
+    failed += test_exec_quoted_unpaired_backtick_opens_nothing();
+    failed += test_exec_quoted_span_does_not_cross_lines();
+    failed += test_exec_live_command_with_backticks();
+    failed += test_exec_quoted_same_checks_apply();
+    failed += test_exec_quoted_notes_align();
+    failed += test_exec_quoted_takes_slots();
+    failed += test_extract_command_skips_quoted();
+    failed += test_response_split_ignores_quoted();
+    failed += test_system_prompt_quoted_marker_sentence();
 
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();

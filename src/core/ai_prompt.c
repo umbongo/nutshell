@@ -4,6 +4,7 @@
 #include "json_validate.h"
 #include "string_utils.h"
 #include "paste_filter.h"
+#include "md_blocks.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -290,7 +291,9 @@ void ai_build_system_prompt_ex(char *buf, size_t buf_size,
         "Put the explanation on the line directly before its marker and "
         "write nothing between a marker and the next explanation. "
         "Never say 'let's start with' or do only the first step. "
-        "Include every command the user needs in one response.";
+        "Include every command the user needs in one response. "
+        "Put each [EXEC]...[/EXEC] marker on its own line, never inside a "
+        "code block or inline code: a marker inside code is shown but not run.";
 
     const char *rest_powershell =
         "IMPORTANT: Always include ALL commands needed in a SINGLE response. "
@@ -305,7 +308,9 @@ void ai_build_system_prompt_ex(char *buf, size_t buf_size,
         "Put the explanation on the line directly before its marker and "
         "write nothing between a marker and the next explanation. "
         "Never say 'let's start with' or do only the first step. "
-        "Include every command the user needs in one response.";
+        "Include every command the user needs in one response. "
+        "Put each [EXEC]...[/EXEC] marker on its own line, never inside a "
+        "code block or inline code: a marker inside code is shown but not run.";
 
     if (is_powershell) rest = rest_powershell;
 
@@ -1232,24 +1237,150 @@ int ai_parse_stream_chunk_ex(const char *json,
     }
 }
 
+/* ---- [EXEC] marker scanner ----
+ *
+ * One scanner walks the [EXEC]...[/EXEC] markers of a reply for
+ * ai_extract_command(), ai_extract_commands_full() and ai_response_split().
+ * A marker is "quoted" when its opening [EXEC] lies inside a fenced code
+ * block (the renderer's own fences, from md_code_blocks(), widened to take in
+ * the opening and closing fence lines) or inside an inline code span (a
+ * backtick pairs with the next backtick on the same line; an unpaired one
+ * opens nothing). What the user sees drawn as code is never a command. */
+
+typedef struct { size_t start, end; } ExecFence;   /* fence lines included */
+
+typedef struct {
+    const char *text;
+    const char *pos;      /* where the next marker search starts */
+    ExecFence  *fences;
+    int         n_fences;
+    int         failed;   /* fence list could not be built: all is quoted */
+} ExecScan;
+
+typedef struct {
+    const char *prev;     /* scan position before this marker: the end of the
+                           * previous marker, or the start of the reply */
+    const char *marker;   /* the opening "[EXEC]" */
+    const char *start;    /* first byte of the payload */
+    const char *end;      /* the closing "[/EXEC]" */
+    int         quoted;
+} ExecMark;
+
+static void exec_scan_init(ExecScan *s, const char *text)
+{
+    s->text = text;
+    s->pos = text;
+    s->fences = NULL;
+    s->n_fences = 0;
+    s->failed = 0;
+
+    size_t len = strlen(text);
+    int n = md_code_blocks(text, len, NULL, 0);
+    if (n <= 0) return;
+
+    MdCodeSpan *bodies = (MdCodeSpan *)malloc((size_t)n * sizeof(*bodies));
+    s->fences = (ExecFence *)malloc((size_t)n * sizeof(*s->fences));
+    if (!bodies || !s->fences) {
+        free(bodies);
+        free(s->fences);
+        s->fences = NULL;
+        s->failed = 1;   /* fail safe: nothing runs */
+        return;
+    }
+    md_code_blocks(text, len, bodies, n);
+    for (int i = 0; i < n; i++) {
+        /* Back to the start of the opening fence line... */
+        size_t ws = bodies[i].start;
+        if (ws > 0 && text[ws - 1] == '\n') ws--;
+        while (ws > 0 && text[ws - 1] != '\n') ws--;
+        /* ...and on to the end of the closing fence line (an unterminated
+         * fence runs to the end of the text). The body's end was trimmed
+         * back over CR and LF, so only line breaks lie between it and the
+         * closing fence line. */
+        size_t we = bodies[i].end;
+        while (we < len && (text[we] == '\r' || text[we] == '\n')) we++;
+        while (we < len && text[we] != '\n') we++;
+        s->fences[i].start = ws;
+        s->fences[i].end = we;
+    }
+    s->n_fences = n;
+    free(bodies);
+}
+
+static void exec_scan_free(ExecScan *s)
+{
+    free(s->fences);
+    s->fences = NULL;
+}
+
+/* True if offset `off` of the text is inside a backtick pair on its line. */
+static int exec_in_inline_span(const char *text, size_t off)
+{
+    size_t i = off;
+    while (i > 0 && text[i - 1] != '\n') i--;      /* start of the line */
+    while (i < off) {
+        if (text[i] != '`') { i++; continue; }
+        size_t j = i + 1;
+        while (text[j] && text[j] != '\n' && text[j] != '`') j++;
+        if (text[j] != '`') return 0;              /* unpaired: no span */
+        if (off > i && off < j) return 1;
+        i = j + 1;
+    }
+    return 0;
+}
+
+static int exec_is_quoted(const ExecScan *s, const char *marker)
+{
+    if (s->failed) return 1;
+    size_t off = (size_t)(marker - s->text);
+    for (int i = 0; i < s->n_fences; i++) {
+        if (off >= s->fences[i].start && off < s->fences[i].end) return 1;
+    }
+    return exec_in_inline_span(s->text, off);
+}
+
+/* Next marker, live or quoted, in reply order; 0 when none is left. An
+ * opening marker with no closing one ends the scan. */
+static int exec_scan_next(ExecScan *s, ExecMark *m)
+{
+    const char *marker = strstr(s->pos, "[EXEC]");
+    if (!marker) return 0;
+    const char *start = marker + 6; /* skip "[EXEC]" */
+    const char *end = strstr(start, "[/EXEC]");
+    if (!end) return 0;
+
+    m->prev = s->pos;
+    m->marker = marker;
+    m->start = start;
+    m->end = end;
+    m->quoted = exec_is_quoted(s, marker);
+    s->pos = end + 7; /* skip "[/EXEC]" */
+    return 1;
+}
+
 int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size)
 {
     if (!response || !cmd_out || cmd_size == 0) return 0;
 
     cmd_out[0] = '\0';
 
-    const char *start = strstr(response, "[EXEC]");
-    if (!start) return 0;
-    start += 6; /* skip "[EXEC]" */
+    ExecScan scan;
+    ExecMark m;
+    exec_scan_init(&scan, response);
+    int found = 0;
+    while (exec_scan_next(&scan, &m)) {
+        if (m.quoted) continue;   /* shown as code: never a command */
+        found = 1;
+        break;
+    }
+    exec_scan_free(&scan);
+    if (!found) return 0;
 
-    const char *end = strstr(start, "[/EXEC]");
-    if (!end) return 0;
-
-    size_t len = (size_t)(end - start);
+    size_t len = (size_t)(m.end - m.start);
     if (len == 0) return 0;
     if (len >= cmd_size) len = cmd_size - 1;
 
-    memcpy(cmd_out, start, len);
+    memcpy(cmd_out, m.start, len);
     cmd_out[len] = '\0';
     return 1;
 }
@@ -1378,24 +1509,26 @@ static void note_build(const char *a, const char *b, char *out)
     if (!has_letter) out[0] = '\0';
 }
 
-int ai_extract_commands_notes(const char *response, char cmds[][1024],
-                              char notes[][CMD_NOTE_MAX], int max_cmds,
-                              int *rejected, int *rejected_long)
+int ai_extract_commands_full(const char *response, char cmds[][1024],
+                             char notes[][CMD_NOTE_MAX], int quoted[],
+                             int max_cmds, int *rejected, int *rejected_long)
 {
     if (rejected) *rejected = 0;
     if (rejected_long) *rejected_long = 0;
     if (!response || !cmds || max_cmds <= 0) return 0;
 
     int count = 0;
-    const char *pos = response;
+    ExecScan scan;
+    ExecMark m;
+    exec_scan_init(&scan, response);
 
-    while (count < max_cmds) {
-        const char *marker = strstr(pos, "[EXEC]");
-        if (!marker) break;
-        const char *start = marker + 6; /* skip "[EXEC]" */
+    while (count < max_cmds && exec_scan_next(&scan, &m)) {
+        /* Quoted and not asked for: skipped before any check, so it takes no
+         * slot and is counted nowhere. */
+        if (m.quoted && !quoted) continue;
 
-        const char *end = strstr(start, "[/EXEC]");
-        if (!end) break;
+        const char *start = m.start;
+        const char *end = m.end;
 
         /* Find the trimmed span within the raw [EXEC]/[/EXEC] block
          * directly (same whitespace/CR/LF trim as str_trim()), without
@@ -1411,7 +1544,6 @@ int ai_extract_commands_notes(const char *response, char cmds[][1024],
         if (trimmed_len == 0) {
             /* Whitespace-only (or empty) block -- treat the same as an
              * empty one. */
-            pos = end + 7;
             continue;
         }
 
@@ -1421,7 +1553,6 @@ int ai_extract_commands_notes(const char *response, char cmds[][1024],
              * cmds[] slot, no count, so the card-to-queue-entry mapping
              * downstream is never asked to account for it. */
             if (rejected_long) (*rejected_long)++;
-            pos = end + 7;
             continue;
         }
 
@@ -1439,28 +1570,36 @@ int ai_extract_commands_notes(const char *response, char cmds[][1024],
              * paste_filter_controls() -- see text_has_unsafe_command_char()
              * in src/core/paste_filter.h. */
             if (rejected) (*rejected)++;
-            pos = end + 7;
             continue;
         }
 
         memcpy(cmds[count], tmp, trimmed_len + 1);
+        if (quoted) quoted[count] = m.quoted;
         if (notes) {
             /* After a previous command, the note is the prose from the next
              * line on: whatever trails that command's closing marker on its
              * own line belongs to that command, not to this one. */
-            const char *np = pos;
-            if (pos != response) {
-                const char *nl = memchr(pos, '\n', (size_t)(marker - pos));
-                np = nl ? nl + 1 : marker;
+            const char *np = m.prev;
+            if (m.prev != response) {
+                const char *nl = memchr(m.prev, '\n',
+                                        (size_t)(m.marker - m.prev));
+                np = nl ? nl + 1 : m.marker;
             }
-            note_build(np, marker, notes[count]);
+            note_build(np, m.marker, notes[count]);
         }
         count++;
-
-        pos = end + 7; /* skip "[/EXEC]" */
     }
 
+    exec_scan_free(&scan);
     return count;
+}
+
+int ai_extract_commands_notes(const char *response, char cmds[][1024],
+                              char notes[][CMD_NOTE_MAX], int max_cmds,
+                              int *rejected, int *rejected_long)
+{
+    return ai_extract_commands_full(response, cmds, notes, NULL, max_cmds,
+                                    rejected, rejected_long);
 }
 
 int ai_extract_commands_ex(const char *response, char cmds[][1024],
@@ -1486,21 +1625,21 @@ int ai_response_split(const char *response,
     if (post_cmd && post_size > 0) post_cmd[0] = '\0';
     if (!response || !*response) return 0;
 
-    /* Find first [EXEC] and count command pairs */
+    /* Find the first live [EXEC] and count live command pairs. A quoted
+     * marker is shown text, never a cut point. */
     const char *first_exec = NULL;
     const char *last_end = NULL;
     int count = 0;
-    const char *pos = response;
-
-    while ((pos = strstr(pos, "[EXEC]")) != NULL) {
-        if (!first_exec) first_exec = pos;
-        pos += 6;
-        const char *end = strstr(pos, "[/EXEC]");
-        if (!end) break; /* unclosed — don't count */
+    ExecScan scan;
+    ExecMark m;
+    exec_scan_init(&scan, response);
+    while (exec_scan_next(&scan, &m)) {
+        if (m.quoted) continue;
+        if (!first_exec) first_exec = m.marker;
         count++;
-        last_end = end + 7; /* past "[/EXEC]" */
-        pos = last_end;
+        last_end = m.end + 7; /* past "[/EXEC]" */
     }
+    exec_scan_free(&scan);
 
     if (count == 0) {
         /* No valid command pairs — full text goes to pre_cmd */

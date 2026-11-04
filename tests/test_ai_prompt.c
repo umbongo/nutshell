@@ -925,7 +925,9 @@ int test_ai_system_prompt_powershell_examples(void) {
         "Put the explanation on the line directly before its marker and "
         "write nothing between a marker and the next explanation. "
         "Never say 'let's start with' or do only the first step. "
-        "Include every command the user needs in one response.";
+        "Include every command the user needs in one response. "
+        "Put each [EXEC]...[/EXEC] marker on its own line, never inside a "
+        "code block or inline code: a marker inside code is shown but not run.";
     ASSERT_STR_EQ(ssh_buf, expected_ssh);
     TEST_END();
 }
@@ -3558,8 +3560,9 @@ int test_ai_notes_fence_lines_removed(void) {
                                       NULL, NULL);
     ASSERT_EQ(n, 1);
     ASSERT_STR_EQ(notes[0], "List files");
-    /* A note that is nothing but a fence is empty. */
-    resp = "```\n[EXEC]ls[/EXEC]";
+    /* A note that is nothing but fence lines is empty. (The fence is closed:
+     * an unterminated one would quote the marker that follows it.) */
+    resp = "```\n```\n[EXEC]ls[/EXEC]";
     n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
                                   NULL, NULL);
     ASSERT_EQ(n, 1);
