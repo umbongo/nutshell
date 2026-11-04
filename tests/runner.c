@@ -2813,6 +2813,9 @@ int test_web_fetch_passes_port(void);
 int test_web_fetch_on_hop_hides_query_and_userinfo(void);
 int test_web_fetch_url_too_long_refused(void);
 int test_web_fetch_describe(void);
+int test_web_fetch_deadline_passed_inside_on_hop(void);
+int test_web_fetch_get_failure(void);
+int test_web_fetch_cancel_after_resolve(void);
 #ifndef _WIN32
 int test_web_fetch_no_backend_not_available(void);
 #endif
@@ -6386,6 +6389,9 @@ int main(void) {
     failed += test_web_fetch_on_hop_hides_query_and_userinfo();
     failed += test_web_fetch_url_too_long_refused();
     failed += test_web_fetch_describe();
+    failed += test_web_fetch_deadline_passed_inside_on_hop();
+    failed += test_web_fetch_get_failure();
+    failed += test_web_fetch_cancel_after_resolve();
 #ifndef _WIN32
     failed += test_web_fetch_no_backend_not_available();
 #endif

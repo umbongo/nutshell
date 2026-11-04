@@ -36,6 +36,11 @@ typedef struct {
     int    force_resolve;   /* resolve returns force_ret whatever the host */
     int    force_ret;
 
+    volatile int *cancel_target;   /* flag the hooks below raise */
+    int    cancel_in_resolve;      /* resolve raises *cancel_target */
+    int    cancel_in_hop;          /* on_hop raises *cancel_target */
+    unsigned long long hop_jump;   /* on_hop adds this to the clock */
+
     unsigned long long now;
     unsigned long long step; /* added to the clock by every get */
 
@@ -75,6 +80,7 @@ static int fk_resolve(void *ctx, const char *host, NetAddr *out, int max)
     if (f->resolves < FK_MAX_CALLS)
         snprintf(f->resolved[f->resolves], NET_HOST_MAX, "%s", host);
     f->resolves++;
+    if (f->cancel_in_resolve && f->cancel_target) *f->cancel_target = 1;
     if (f->force_resolve) return f->force_ret;
 
     int total = 0;
@@ -121,6 +127,8 @@ static unsigned long long fk_now(void *ctx)
 static void fk_on_hop(void *user, const char *display_url, int refused)
 {
     Fake *f = (Fake *)user;
+    f->now += f->hop_jump;
+    if (f->cancel_in_hop && f->cancel_target) *f->cancel_target = 1;
     if (f->hops < FK_MAX_CALLS) {
         snprintf(f->hop_url[f->hops], sizeof(f->hop_url[0]), "%s", display_url);
         f->hop_refused[f->hops] = refused;
@@ -249,6 +257,8 @@ int test_web_fetch_refuses_too_many_addresses(void)
     char *buf;
     int rc = fk_run(&ctx, "http://many.test/", NULL, &buf);
     ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "too many addresses") != NULL);
     ASSERT_EQ(f.gets, 0);
     free(buf);
 
@@ -583,5 +593,103 @@ int test_web_fetch_describe(void)
     ASSERT_STR_EQ(out, "");
     ASSERT_EQ(web_fetch_describe(NULL, out, sizeof(out)), 0);
     ASSERT_STR_EQ(out, "");
+    TEST_END();
+}
+
+int test_web_fetch_deadline_passed_inside_on_hop(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>late</p>");
+    /* A slow row callback carries the clock past the deadline: the hop must
+     * not start, and must not be handed a wrapped or zero timeout. */
+    f.hop_jump = WEB_FETCH_TOTAL_MS + 1000;
+    char *buf;
+    int rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "timed out") != NULL);
+    if (buf) ASSERT_TRUE(strstr(buf, "late") == NULL);
+    ASSERT_EQ(f.gets, 0);
+    free(buf);
+
+    /* Landing exactly on the deadline is out of time too (a zero timeout
+     * would mean "wait forever" to WinHTTP). */
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>late</p>");
+    f.hop_jump = WEB_FETCH_TOTAL_MS;
+    rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    if (buf) ASSERT_TRUE(strstr(buf, "timed out") != NULL);
+    ASSERT_EQ(f.gets, 0);
+    free(buf);
+
+    /* One millisecond left still fetches, with a 1 ms timeout. */
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>just in time</p>");
+    f.hop_jump = WEB_FETCH_TOTAL_MS - 1;
+    rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(f.gets, 1);
+    ASSERT_EQ(f.got_timeout[0], 1);
+    free(buf);
+    TEST_END();
+}
+
+int test_web_fetch_get_failure(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    f.get_fail = 1;
+    char *buf;
+    int rc = fk_run(&ctx, "http://pub.test/", NULL, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "HTTP request failed") != NULL);
+    ASSERT_EQ(f.gets, 1);
+    free(buf);
+    TEST_END();
+}
+
+int test_web_fetch_cancel_after_resolve(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    volatile int cancel = 0;
+    char *buf;
+
+    /* Raised inside resolve. */
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>secret</p>");
+    f.cancel_target     = &cancel;
+    f.cancel_in_resolve = 1;
+    int rc = fk_run(&ctx, "http://pub.test/", &cancel, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "cancelled") != NULL);
+    ASSERT_EQ(f.resolves, 1);
+    ASSERT_EQ(f.gets, 0);
+    free(buf);
+
+    /* Raised inside the row callback, the last step before the request. */
+    cancel = 0;
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>secret</p>");
+    f.cancel_target = &cancel;
+    f.cancel_in_hop = 1;
+    rc = fk_run(&ctx, "http://pub.test/", &cancel, &buf);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "cancelled") != NULL);
+    ASSERT_EQ(f.gets, 0);
+    free(buf);
     TEST_END();
 }

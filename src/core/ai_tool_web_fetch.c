@@ -165,11 +165,16 @@ static int is_redirect_status(int status)
 
 enum { STOP_NONE = 0, STOP_CANCELLED, STOP_TIMEOUT };
 
+/* One clock read per decision: *now_out (when given) is the time the verdict
+ * was reached at, so a caller computing a timeout from it cannot see a later
+ * clock than the one it was cleared on. */
 static int stop_reason(const WebFetchBackend *be, volatile int *cancel,
-                       unsigned long long deadline)
+                       unsigned long long deadline, unsigned long long *now_out)
 {
+    unsigned long long now = be->now_ms(be->ctx);
+    if (now_out) *now_out = now;
     if (cancel && *cancel) return STOP_CANCELLED;
-    if (be->now_ms(be->ctx) >= deadline) return STOP_TIMEOUT;
+    if (now >= deadline) return STOP_TIMEOUT;
     return STOP_NONE;
 }
 
@@ -207,7 +212,7 @@ static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
     snprintf(url, sizeof(url), "%s", first_url);
 
     for (int hop = 0; hop <= WEB_FETCH_MAX_REDIRECTS; hop++) {
-        int stop = stop_reason(be, cancel, deadline);
+        int stop = stop_reason(be, cancel, deadline, NULL);
         if (stop != STOP_NONE) return fail_stopped(stop, result_buf, result_len);
 
         if (net_url_parse(url, &parts) != 0)
@@ -222,8 +227,13 @@ static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
          * on its own. Pinning the checked address would break the TLS name
          * check, so the check is on the name's addresses, before each hop. */
         int n = be->resolve(be->ctx, parts.host, addrs, WEB_FETCH_MAX_ADDRS);
-        if (n <= 0 || n > WEB_FETCH_MAX_ADDRS) {
+        if (n <= 0) {
             snprintf(msg, sizeof(msg), "Refused: could not resolve %s", host);
+            return fetch_fail(result_buf, result_len, msg);
+        }
+        if (n > WEB_FETCH_MAX_ADDRS) {
+            snprintf(msg, sizeof(msg),
+                     "Refused: %s resolved to too many addresses", host);
             return fetch_fail(result_buf, result_len, msg);
         }
         for (int i = 0; i < n; i++) {
@@ -236,14 +246,21 @@ static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
         }
 
         /* The lookup counts against the deadline and may have been cancelled. */
-        stop = stop_reason(be, cancel, deadline);
+        stop = stop_reason(be, cancel, deadline, NULL);
         if (stop != STOP_NONE) return fail_stopped(stop, result_buf, result_len);
 
         if (ctx && ctx->on_hop) ctx->on_hop(ctx->user, display, 0);
 
-        unsigned long long left = deadline - be->now_ms(be->ctx);
+        /* The row callback can take time too. Decide once, on this reading,
+         * whether the hop may start and how long it may run: time left is
+         * at least 1 ms here, and a timeout of 0 would mean "forever". */
+        unsigned long long now;
+        stop = stop_reason(be, cancel, deadline, &now);
+        if (stop != STOP_NONE) return fail_stopped(stop, result_buf, result_len);
+        unsigned long long left = deadline - now;
         int timeout = per_hop;
         if (left < (unsigned long long)timeout) timeout = (int)left;
+        if (timeout < 1) timeout = 1;
 
         int    status = 0;
         char  *body = NULL;
@@ -252,7 +269,7 @@ static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
         int got = be->get(be->ctx, &parts, timeout, cancel, &status,
                           location, sizeof(location), &body, &body_len);
 
-        stop = stop_reason(be, cancel, deadline);
+        stop = stop_reason(be, cancel, deadline, NULL);
         if (stop != STOP_NONE) {
             free(body);
             return fail_stopped(stop, result_buf, result_len);
