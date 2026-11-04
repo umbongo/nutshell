@@ -175,7 +175,7 @@ typedef struct {
                                  * ai_chat_set_policy_default()). */
     unsigned session_gen;      /* bumped by do_session_switch(): a policy
                                  * confirmation answered after a switch
-                                 * applies nothing (request_policy_change()) */
+                                 * applies nothing (ai_chat_request_policy_change()) */
     int policy_confirm_open;   /* 1 while the Critical confirmation is up:
                                  * every policy gesture is then a no-op */
     HWND hThinkingBtn;
@@ -435,6 +435,26 @@ typedef struct {
     char *delta;
 } AiStreamChunk;
 
+/* Status-line hover/hit ids for ns_hover: 0..3 the four cells, 4 the
+ * Auto-approve button; -1 stays "nothing" (spec 2026-10-18 section 3). */
+#define STATUS_HIT_CELL(stop) (stop)
+#define STATUS_HIT_AUTO       NS_POLICY_STOPS
+#define STATUS_HIT_COUNT      (NS_POLICY_STOPS + 1)
+
+/* Tooltip tool ids on the panel: STATUS_TOOL_BASE + hit id (cells 0..3,
+ * button 4), then the context meter. */
+#define STATUS_TOOL_BASE  100
+#define STATUS_TOOL_METER STATUS_HIT_COUNT
+#define STATUS_TOOL_COUNT (STATUS_HIT_COUNT + 1)
+
+typedef struct {
+    NsRect status;
+    AiStatusLayout sl;
+    NsPolicyLayout pl;
+    char meter_text[32];
+    int has_meter;   /* context_limit > 0 -- meter numbers are meaningful */
+} AiStatusPaint;
+
 /* Prototypes */
 
 /* ai_chat_stream.c */
@@ -470,10 +490,21 @@ void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
                                    int unattended);
 
 /* ai_chat_status.c */
+void ai_chat_invalidate_status_line(AiChatData *d);
+void ai_chat_request_policy_change(HWND hwnd, AiChatData *d, CmdPolicy next);
 void ai_chat_update_context_bar(AiChatData *d);
+int ai_chat_sash_hit(AiChatData *d, int x, int y);
+void ai_chat_paint_sash(AiChatData *d, HDC hdc);
+void ai_chat_get_status_paint(AiChatData *d, HDC hdc, AiStatusPaint *out);
+int ai_chat_status_hit(AiChatData *d, int x, int y);
+int ai_chat_status_rect(AiChatData *d, int id, RECT *out_rc);
+void ai_chat_status_tools_update(AiChatData *d);
+void ai_chat_paint_status_line(AiChatData *d, HDC hdc);
 
 /* ai_chat_view.c */
 void ai_chat_start_indicator(AiChatData *d, const char *base);
+void ai_chat_compute_layout(AiChatData *d, AiPanelLayout *out);
+RECT ai_chat_to_RECT(NsRect r);
 
 #endif /* _WIN32 */
 
