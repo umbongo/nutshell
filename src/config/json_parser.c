@@ -10,6 +10,7 @@ typedef struct {
     Tokenizer tok;
     Token     cur;
     int       error;  /* 1 once a parse error is encountered */
+    int       depth;  /* current array/object nesting, capped at JSON_MAX_DEPTH */
 } Parser;
 
 static void advance(Parser *p)
@@ -60,6 +61,11 @@ void json_free(JsonNode *node)
 static JsonNode *parse_array(Parser *p)
 {
     /* Current token is TOK_LBRACKET — consume it. */
+    if (p->depth >= JSON_MAX_DEPTH) {
+        p->error = 1;
+        return NULL;
+    }
+    p->depth++;
     advance(p);
 
     JsonNode *node = xcalloc(1u, sizeof(JsonNode));
@@ -68,6 +74,7 @@ static JsonNode *parse_array(Parser *p)
 
     if (p->cur.type == TOK_RBRACKET) {
         advance(p);
+        p->depth--;
         return node;
     }
 
@@ -93,6 +100,7 @@ static JsonNode *parse_array(Parser *p)
         }
     }
 
+    p->depth--;
     if (p->error) {
         json_free(node);
         return NULL;
@@ -105,6 +113,11 @@ static JsonNode *parse_array(Parser *p)
 static JsonNode *parse_object(Parser *p)
 {
     /* Current token is TOK_LBRACE — consume it. */
+    if (p->depth >= JSON_MAX_DEPTH) {
+        p->error = 1;
+        return NULL;
+    }
+    p->depth++;
     advance(p);
 
     JsonNode *node = xcalloc(1u, sizeof(JsonNode));
@@ -114,6 +127,7 @@ static JsonNode *parse_object(Parser *p)
 
     if (p->cur.type == TOK_RBRACE) {
         advance(p);
+        p->depth--;
         return node;
     }
 
@@ -160,6 +174,7 @@ static JsonNode *parse_object(Parser *p)
         }
     }
 
+    p->depth--;
     if (p->error) {
         json_free(node);
         return NULL;
@@ -231,6 +246,7 @@ JsonNode *json_parse(const char *src)
     Parser p;
     tok_init(&p.tok, src ? src : "");
     p.error = 0;
+    p.depth = 0;
     advance(&p);   /* load first token */
 
     JsonNode *root = parse_value(&p);

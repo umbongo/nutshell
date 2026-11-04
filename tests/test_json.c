@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "json_tokenizer.h"
 #include "json_parser.h"
+#include <stdlib.h>
 #include <string.h>
 
 /* ============================================================
@@ -492,5 +493,139 @@ int test_parse_string_with_unicode(void)
     ASSERT_NOT_NULL(s);
     ASSERT_STR_EQ(s, "use <tag> here");
     json_free(n);
+    TEST_END();
+}
+
+/* ============================================================
+ * Nesting depth cap (JSON_MAX_DEPTH)
+ * ============================================================ */
+
+/* Builds a heap string nested `depth` levels deep, innermost level empty.
+ * mode 0: arrays, 1: objects ({"k": ...}), 2: alternating array/object. */
+static char *build_nested(int depth, int mode)
+{
+    size_t cap = (size_t)depth * 8u + 8u;
+    char *buf = malloc(cap);
+    if (!buf) {
+        return NULL;
+    }
+    size_t pos = 0;
+    for (int i = 0; i < depth; i++) {
+        int is_arr = (mode == 0) || (mode == 2 && (i % 2) == 0);
+        if (i == depth - 1) {
+            memcpy(buf + pos, is_arr ? "[]" : "{}", 2);
+            pos += 2;
+        } else if (is_arr) {
+            buf[pos++] = '[';
+        } else {
+            memcpy(buf + pos, "{\"k\":", 5);
+            pos += 5;
+        }
+    }
+    for (int i = depth - 2; i >= 0; i--) {
+        int is_arr = (mode == 0) || (mode == 2 && (i % 2) == 0);
+        buf[pos++] = is_arr ? ']' : '}';
+    }
+    buf[pos] = '\0';
+    return buf;
+}
+
+int test_json_depth_256_arrays_parse(void)
+{
+    TEST_BEGIN();
+    char *s = build_nested(256, 0);
+    ASSERT_NOT_NULL(s);
+    JsonNode *n = json_parse(s);
+    ASSERT_NOT_NULL(n);
+    ASSERT_EQ(n->type, JSON_ARRAY);
+    json_free(n);
+    free(s);
+    TEST_END();
+}
+
+int test_json_depth_256_objects_parse(void)
+{
+    TEST_BEGIN();
+    char *s = build_nested(256, 1);
+    ASSERT_NOT_NULL(s);
+    JsonNode *n = json_parse(s);
+    ASSERT_NOT_NULL(n);
+    ASSERT_EQ(n->type, JSON_OBJECT);
+    json_free(n);
+    free(s);
+    TEST_END();
+}
+
+int test_json_depth_256_mixed_parse(void)
+{
+    TEST_BEGIN();
+    char *s = build_nested(256, 2);
+    ASSERT_NOT_NULL(s);
+    JsonNode *n = json_parse(s);
+    ASSERT_NOT_NULL(n);
+    ASSERT_EQ(n->type, JSON_ARRAY);
+    json_free(n);
+    free(s);
+    TEST_END();
+}
+
+int test_json_depth_257_fails(void)
+{
+    TEST_BEGIN();
+    char *arrays = build_nested(257, 0);
+    char *objects = build_nested(257, 1);
+    char *mixed = build_nested(257, 2);
+    ASSERT_NOT_NULL(arrays);
+    ASSERT_NOT_NULL(objects);
+    ASSERT_NOT_NULL(mixed);
+    ASSERT_NULL(json_parse(arrays));
+    ASSERT_NULL(json_parse(objects));
+    ASSERT_NULL(json_parse(mixed));
+    free(arrays);
+    free(objects);
+    free(mixed);
+    TEST_END();
+}
+
+int test_json_depth_100000_fails(void)
+{
+    TEST_BEGIN();
+    size_t n = 100000u;
+    char *s = malloc(n + 1u);
+    ASSERT_NOT_NULL(s);
+    memset(s, '[', n);
+    s[n] = '\0';
+    /* No closers: the cap must stop the recursion at depth 257. */
+    ASSERT_NULL(json_parse(s));
+    free(s);
+    TEST_END();
+}
+
+int test_json_depth_resets_between_siblings(void)
+{
+    TEST_BEGIN();
+    char *deep = build_nested(200, 0);
+    ASSERT_NOT_NULL(deep);
+    size_t len = strlen(deep);
+    char *s = malloc(2u * len + 4u);
+    ASSERT_NOT_NULL(s);
+    size_t pos = 0;
+    s[pos++] = '[';
+    memcpy(s + pos, deep, len);
+    pos += len;
+    s[pos++] = ',';
+    memcpy(s + pos, deep, len);
+    pos += len;
+    s[pos++] = ']';
+    s[pos] = '\0';
+    /* Each sibling is 200 deep under a 1-deep root; summed depth would exceed
+     * the cap if a returning parse_array() did not decrement. */
+    JsonNode *n = json_parse(s);
+    ASSERT_NOT_NULL(n);
+    ASSERT_EQ(n->type, JSON_ARRAY);
+    ASSERT_EQ(n->as.arr.size, 2u);
+    json_free(n);
+    free(s);
+    free(deep);
     TEST_END();
 }
