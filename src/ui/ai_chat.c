@@ -1026,6 +1026,7 @@ static void apply_policy_change(AiChatData *d, CmdPolicy next)
         ChatMsgItem *it = d->msg_list.head;
         while (it) {
             if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.blocked &&
+                !it->u.cmd.quoted &&
                 (int)it->u.cmd.safety <= next.allowed) {
                 it->u.cmd.blocked = 0;
                 it->u.cmd.approved = -1;
@@ -1178,6 +1179,7 @@ static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
         if (!item) continue;
         chat_msg_set_command(item, e->command, e->safety,
                              e->status == APPROVE_BLOCKED);
+        chat_msg_set_quoted(item, e->quoted);
         chat_msg_set_batch(item, batch->id);
         chat_msg_set_note(item, e->note);
         switch (e->status) {
@@ -4525,10 +4527,15 @@ next_coalesce:;
             if (wParam == 2 && src && rmsg->content) {
                 char cmds[16][1024];
                 char notes[16][CMD_NOTE_MAX];
+                int quoted[16] = { 0 };
                 int rejected = 0, rejected_long = 0;
-                int ncmds = ai_extract_commands_notes(rmsg->content, cmds,
-                                                      notes, 16, &rejected,
-                                                      &rejected_long);
+                int ncmds = ai_extract_commands_full(rmsg->content, cmds,
+                                                     notes, quoted, 16,
+                                                     &rejected,
+                                                     &rejected_long);
+                int nquoted = 0;
+                for (int qi = 0; qi < ncmds; qi++)
+                    if (quoted[qi]) nquoted++;
                 if (ncmds > 0) {
                     /* Built while the tab is hidden: Auto-approve forced
                      * off, so every row is PENDING or BLOCKED and nothing
@@ -4547,9 +4554,13 @@ next_coalesce:;
                             /* -1 means the queue refused it (full, blank,
                              * control characters, or too long) -- not
                              * added, and no card is ever built for it. */
-                            int bidx = chat_approval_add_session(&batch->q,
-                                cmds[ci], (CmdPlatform)src->platform,
-                                src->platform_contradicted);
+                            int bidx = quoted[ci]
+                                ? chat_approval_add_quoted(&batch->q,
+                                    cmds[ci], (CmdPlatform)src->platform,
+                                    src->platform_contradicted)
+                                : chat_approval_add_session(&batch->q,
+                                    cmds[ci], (CmdPlatform)src->platform,
+                                    src->platform_contradicted);
                             /* The note goes on the index the queue returned,
                              * never the loop index: a refused command shifts
                              * every later one down. */
@@ -4578,6 +4589,14 @@ next_coalesce:;
                         "characters. Put exactly one single-line command "
                         "in each EXEC block.", rejected);
                     ai_conv_add(&src->conv, AI_ROLE_USER, note);
+                }
+                if (nquoted > 0) {
+                    char qnote[256];
+                    snprintf(qnote, sizeof(qnote),
+                        "NOTE: %d [EXEC] marker(s) were inside a code block "
+                        "or inline code and were NOT run. Put each marker on "
+                        "its own line, outside any code fence.", nquoted);
+                    ai_conv_add(&src->conv, AI_ROLE_USER, qnote);
                 }
             }
             if (src) {
@@ -4629,10 +4648,15 @@ next_coalesce:;
             /* Extract commands from the full accumulated content */
             char cmds[16][1024];
             char notes[16][CMD_NOTE_MAX];
+            int quoted[16] = { 0 };
             int rejected = 0, rejected_long = 0;
-            int ncmds = text ? ai_extract_commands_notes(text, cmds, notes, 16,
-                                                         &rejected,
-                                                         &rejected_long) : 0;
+            int ncmds = text ? ai_extract_commands_full(text, cmds, notes,
+                                                        quoted, 16,
+                                                        &rejected,
+                                                        &rejected_long) : 0;
+            int nquoted = 0;
+            for (int qi = 0; qi < ncmds; qi++)
+                if (quoted[qi]) nquoted++;
 
             /* Finalize the AI item text.  When commands were found, show
              * only the pre-command portion — the summary/analysis after
@@ -4702,6 +4726,19 @@ next_coalesce:;
                 ai_conv_add(&d->conv, AI_ROLE_USER, rej_note);
             }
 
+            /* A marker the model wrote inside a code block or inline code
+             * is shown on the card as "quoted, not run" and never runs.
+             * The model is told too, so it does not claim the command ran
+             * and puts its next marker outside the fence. */
+            if (nquoted > 0) {
+                char quote_note[256];
+                snprintf(quote_note, sizeof(quote_note),
+                    "NOTE: %d [EXEC] marker(s) were inside a code block or "
+                    "inline code and were NOT run. Put each marker on its "
+                    "own line, outside any code fence.", nquoted);
+                ai_conv_add(&d->conv, AI_ROLE_USER, quote_note);
+            }
+
             /* Pending command batches: earlier cards are never touched by
              * a new reply -- each reply that yields commands gets its own
              * batch and its own card (see docs/superpowers/specs/
@@ -4759,9 +4796,13 @@ next_coalesce:;
                      * user can run after raising the ceiling (see
                      * chat_approval_needs_user below). */
                     for (int ci = 0; ci < ncmds; ci++) {
-                        int idx = chat_approval_add_session(&batch->q, cmds[ci],
-                            (CmdPlatform)d->active_state->platform,
-                            d->active_state->platform_contradicted);
+                        int idx = quoted[ci]
+                            ? chat_approval_add_quoted(&batch->q, cmds[ci],
+                                (CmdPlatform)d->active_state->platform,
+                                d->active_state->platform_contradicted)
+                            : chat_approval_add_session(&batch->q, cmds[ci],
+                                (CmdPlatform)d->active_state->platform,
+                                d->active_state->platform_contradicted);
                         if (idx < 0) continue;  /* queue full or blank -- drop it */
                         chat_approval_set_note(&batch->q, idx, notes[ci]);
 
@@ -4771,6 +4812,8 @@ next_coalesce:;
                             chat_msg_set_command(cmd_item, cmds[ci],
                                 batch->q.entries[idx].safety,
                                 batch->q.entries[idx].status == APPROVE_BLOCKED);
+                            chat_msg_set_quoted(cmd_item,
+                                                batch->q.entries[idx].quoted);
                             chat_msg_set_batch(cmd_item, batch->id);
                             chat_msg_set_note(cmd_item,
                                               batch->q.entries[idx].note);
@@ -4785,14 +4828,16 @@ next_coalesce:;
                     {
                         int nblocked = 0;
                         for (int qi = 0; qi < batch->q.count; qi++)
-                            if (batch->q.entries[qi].status == APPROVE_BLOCKED)
+                            if (batch->q.entries[qi].status == APPROVE_BLOCKED &&
+                                !batch->q.entries[qi].quoted)
                                 nblocked++;
                         if (nblocked > 0) {
                             char list[1536];
                             size_t lp = 0;
                             list[0] = '\0';
                             for (int qi = 0; qi < batch->q.count; qi++) {
-                                if (batch->q.entries[qi].status == APPROVE_BLOCKED) {
+                                if (batch->q.entries[qi].status == APPROVE_BLOCKED &&
+                                    !batch->q.entries[qi].quoted) {
                                     if (!str_append_fmt(list, sizeof(list), &lp,
                                             "  - %s\n", batch->q.entries[qi].command))
                                         break;

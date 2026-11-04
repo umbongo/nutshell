@@ -2054,7 +2054,8 @@ typedef struct {
     ChatMsgItem *cmd_items[APPROVAL_MAX_CMDS];
     ChatMsgItem *first;    /* this container's first item (owns container_scroll) */
     int n;
-    int held_count;
+    int held_count;      /* blocked by the policy ceiling; excludes quoted rows */
+    int quoted_count;    /* markers quoted in code: never run, not "held" */
     int checked_count;   /* checked && !held, over ALL n commands */
     int run_enabled;      /* checked_count > 0 */
     int first_row;
@@ -2100,7 +2101,8 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
         g->cmd_items[i] = cinfo.items[i];
         checked_arr[i] = cinfo.items[i]->u.cmd.selected ? 1 : 0;
         held_arr[i] = cinfo.items[i]->u.cmd.blocked ? 1 : 0;
-        if (held_arr[i]) g->held_count++;
+        if (cinfo.items[i]->u.cmd.quoted) g->quoted_count++;
+        else if (held_arr[i]) g->held_count++;
         if (checked_arr[i] && !held_arr[i]) g->checked_count++;
     }
     g->n = n;
@@ -2173,18 +2175,15 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, ChatMsgItem *first,
 
     SetBkMode(hdc, TRANSPARENT);
 
-    /* ── Header: "N commands · M held" [— above the allowed ceiling] ── */
+    /* ── Header: "N commands · M held · Q quoted" [— above the allowed
+     *    ceiling, only when something is held] ── */
     {
         RECT hdr_rc = { g.layout.header.x, g.layout.header.y,
                         g.layout.header.x + g.layout.header.w,
                         g.layout.header.y + g.layout.header.h };
-        char hdr_buf[48];
-        if (g.held_count > 0)
-            snprintf(hdr_buf, sizeof(hdr_buf), "%d command%s \xC2\xB7 %d held",
-                     g.n, g.n == 1 ? "" : "s", g.held_count);
-        else
-            snprintf(hdr_buf, sizeof(hdr_buf), "%d command%s",
-                     g.n, g.n == 1 ? "" : "s");
+        char hdr_buf[64];
+        chat_card_header_text(g.n, g.held_count, g.quoted_count,
+                              hdr_buf, sizeof(hdr_buf));
 
         SetTextColor(hdc, RGB_FROM_THEME(tok->text_main));
         HGDIOBJ hf = SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont
