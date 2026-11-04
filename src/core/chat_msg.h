@@ -220,7 +220,7 @@ int chat_card_header_text(int n, int held, int quoted, char *buf, size_t cap);
  * already matches is left alone. Returns the number of items synced (paired
  * with an entry), or 0 if `list` or `q` is NULL. Called from every point
  * the queue changes during dispatch (chat_approval_set_executing/
- * _set_completed, batch end, dispatch_cancel before cmd_batch_remove with
+ * _set_completed, batch end, ai_chat_dispatch_cancel before cmd_batch_remove with
  * batch_ending = 1) and from append_batch_command_items() when a display is
  * rebuilt from the queue, so a rebuilt view shows the same labels as the
  * live panel. */

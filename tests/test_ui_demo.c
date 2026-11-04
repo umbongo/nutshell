@@ -528,7 +528,7 @@ int test_ui_demo_shortcuts_is_an_empty_state(void)
 
 /* The "chat" state's selection (spec 2026-10-18 section 6), copied the way
  * the panel copies it: the user turn and the reply replayed as items like
- * chat_rebuild_display() does, the Thinking body expanded as
+ * ai_chat_rebuild_display() does, the Thinking body expanded as
  * ai_chat_apply_demo_extras() leaves it. */
 static void build_chat_items(ChatMsgList *l, AiConversation *conv)
 {

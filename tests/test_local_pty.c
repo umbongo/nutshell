@@ -588,7 +588,7 @@ int test_local_pty_records_fullscreen_modes(void)
  * `Get-Item C:\this-path-does-not-exist-12345`. PowerShell prints the
  * ItemNotFoundException and returns to its prompt, but the AI panel never
  * settles -- "running" forever, no continue message. Mirrors
- * dispatch_tick()'s own readiness gate (write_seq quiet for
+ * ai_chat_dispatch_tick()'s own readiness gate (write_seq quiet for
  * PROMPT_QUIET_MS, then term_at_prompt()) against a real pseudo-console,
  * the same way execute_command() writes for a no-prefix shell: the
  * command text, then a bare "\r", with no "\x05\x15" ahead of it. */
@@ -614,7 +614,7 @@ int test_local_pty_powershell_settles_after_command_error(void)
 
     /* Drain the banner and let the first prompt settle, using the same
      * "quiet since the last write_seq change, then term_at_prompt()"
-     * shape dispatch_tick() itself uses (PROMPT_QUIET_MS is 400 ms in
+     * shape ai_chat_dispatch_tick() itself uses (PROMPT_QUIET_MS is 400 ms in
      * ai_chat.c) -- bounded generously since a first PowerShell launch on
      * a cold profile can be slow. */
     unsigned long last_seq = term->write_seq;
@@ -649,7 +649,7 @@ int test_local_pty_powershell_settles_after_command_error(void)
     ASSERT_TRUE(local_pty_write(pty, CMD, sizeof(CMD) - 1) >= 0);
     ASSERT_TRUE(local_pty_write(pty, "\r", 1) >= 0);
 
-    /* dispatch_tick()'s own readiness gate: quiet for 400 ms since the
+    /* ai_chat_dispatch_tick()'s own readiness gate: quiet for 400 ms since the
      * last write_seq change, and term_at_prompt() true. Bounded at 10 s --
      * production's own ambiguous-prompt cancel is 5 s, so anything not
      * settled by 10 s here is the "never settles" bug, not a slow host. */

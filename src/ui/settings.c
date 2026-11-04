@@ -2099,7 +2099,7 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             /* Command policy for new sessions: the level and Auto-approve.
              * Critical with Auto-approve on asks first, but only when Save
              * would enter that state from the stored policy -- the same
-             * rule as the panel's request_policy_change() (spec 2026-10-18
+             * rule as the panel's ai_chat_request_policy_change() (spec 2026-10-18
              * section 2); No keeps the stored policy as it was and the
              * rest of the page still saves. The box is modal, so
              * d->saving makes a second Save/Cancel/close during it a no-op,
