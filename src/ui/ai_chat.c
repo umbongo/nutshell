@@ -636,6 +636,23 @@ static void post_tool_msg(AiStream *s, ChatItemType type, const char *text)
     stream_post_text(s, WM_AI_TOOL_MSG, (WPARAM)type, text);
 }
 
+/* web_fetch progress (WebFetchContext.on_hop): runs on the stream thread, so it
+ * only posts a row (stream_post_text copies the text; display_url is the fetch
+ * loop's stack buffer). user is the stream, which outlives the tool call. */
+static void fetch_on_hop(void *user, const char *display_url, int refused)
+{
+    AiStream *s = (AiStream *)user;
+    char row[256];
+    if (!s) return;
+    if (refused)
+        snprintf(row, sizeof(row), "fetch refused: %s (local or private address)",
+                 display_url ? display_url : "");
+    else
+        snprintf(row, sizeof(row), "fetching: %s",
+                 display_url ? display_url : "");
+    post_tool_msg(s, CHAT_ITEM_TOOL_CALL, row);
+}
+
 /* Background thread: streaming AI API call.
  *
  * Owns one reference to its AiStream and reads and writes nothing else: no
@@ -810,6 +827,13 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     (void)ai_debug_tool_describe(call->input_json, debug_desc,
                                                  sizeof(debug_desc));
                     if (debug_desc[0]) provider_suffix = debug_desc;
+                }
+                /* web_fetch: the requested URL (display form). */
+                char fetch_desc[160];
+                if (!provider_suffix && strcmp(call->name, "web_fetch") == 0) {
+                    (void)web_fetch_describe(call->input_json, fetch_desc,
+                                             sizeof(fetch_desc));
+                    if (fetch_desc[0]) provider_suffix = fetch_desc;
                 }
                 if (provider_suffix)
                     snprintf(tool_call_text, sizeof(tool_call_text),
@@ -1026,6 +1050,7 @@ static void apply_policy_change(AiChatData *d, CmdPolicy next)
         ChatMsgItem *it = d->msg_list.head;
         while (it) {
             if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.blocked &&
+                !it->u.cmd.quoted &&
                 (int)it->u.cmd.safety <= next.allowed) {
                 it->u.cmd.blocked = 0;
                 it->u.cmd.approved = -1;
@@ -1178,6 +1203,7 @@ static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
         if (!item) continue;
         chat_msg_set_command(item, e->command, e->safety,
                              e->status == APPROVE_BLOCKED);
+        chat_msg_set_quoted(item, e->quoted);
         chat_msg_set_batch(item, batch->id);
         chat_msg_set_note(item, e->note);
         switch (e->status) {
@@ -1232,9 +1258,18 @@ static void chat_rebuild_display(AiChatData *d)
              * status row posted while the call is in flight. */
             if (msg->n_tool_calls > 0 && msg->tool_calls) {
                 for (int ti = 0; ti < msg->n_tool_calls; ti++) {
-                    char tool_call_text[128];
-                    snprintf(tool_call_text, sizeof(tool_call_text),
-                             "using tool: %s", msg->tool_calls[ti].name);
+                    char tool_call_text[256];
+                    char fetch_desc[160] = "";
+                    if (strcmp(msg->tool_calls[ti].name, "web_fetch") == 0)
+                        (void)web_fetch_describe(msg->tool_calls[ti].input_json,
+                                                 fetch_desc, sizeof(fetch_desc));
+                    if (fetch_desc[0])
+                        snprintf(tool_call_text, sizeof(tool_call_text),
+                                 "using tool: %s - %s",
+                                 msg->tool_calls[ti].name, fetch_desc);
+                    else
+                        snprintf(tool_call_text, sizeof(tool_call_text),
+                                 "using tool: %s", msg->tool_calls[ti].name);
                     chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_CALL,
                                     tool_call_text);
                 }
@@ -1418,6 +1453,9 @@ static void launch_stream_thread(AiChatData *d, const char *src)
                                  &d->search_ctx, &d->fetch_ctx,
                                  with_debug ? &debug_ctx : NULL);
             free(launch_reg);
+            /* The stream's own fetch copy reports each hop as a chat row. */
+            s->fetch.on_hop = fetch_on_hop;
+            s->fetch.user = s;
             s->has_tools = 1;
             /* Serialize tool definitions for this provider */
             s->tools_json[0] = '\0';
@@ -1724,6 +1762,10 @@ static void send_user_message(AiChatData *d)
     if (!d || !d->active_state || d->active_state->busy || d->dispatch_active)
         return;
 
+    /* The user is talking again: the unattended-round count starts over
+     * (guard-rails spec 2026-11-04 section 1). */
+    ai_rounds_user_message(d->active_state);
+
     char *input = input_text_utf8(d->hInput);
     if (!input) return;
     /* The text as read: the prefix strip below shortens the string, but the
@@ -1907,11 +1949,17 @@ static void execute_command(AiChatData *d, const char *cmd,
 
 /* Send a follow-up user turn after a batch finishes running and launch a
  * fresh stream for it. msg_text is the continue message body (built by
- * the caller via ai_build_continue_text() -- rule 4). */
-static void send_continue_message(AiChatData *d, const char *msg_text)
+ * the caller via ai_build_continue_text() -- rule 4). `unattended` is 1 when
+ * the batch that just finished ran without the user acting on it by hand
+ * (CmdBatch.user_acted == 0): it counts towards the Auto-approve round cap,
+ * while an attended batch resets the count (ai_rounds_continue()). */
+static void send_continue_message(AiChatData *d, const char *msg_text,
+                                  int unattended)
 {
     if (!d || !d->active_state || d->active_state->busy) return;
     if (!msg_text || !msg_text[0]) return;
+
+    ai_rounds_continue(d->active_state, unattended);
 
     /* Extract fresh terminal context after command execution */
     const char *term_text = "";
@@ -2050,11 +2098,14 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
 
     char continue_text[4096] = "";
     int have_continue = 0;
+    int unattended = 1;
 
     CmdBatch *batch = d->active_state
         ? cmd_batch_find(&d->active_state->batches, d->dispatch_batch_id)
         : NULL;
     if (batch) {
+        /* Read before cmd_batch_remove() below frees the batch. */
+        unattended = !batch->user_acted;
         chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 1);
 
         if (notify) {
@@ -2102,7 +2153,7 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
         InvalidateRect(d->hSendBtn, NULL, TRUE);
     }
 
-    if (have_continue) send_continue_message(d, continue_text);
+    if (have_continue) send_continue_message(d, continue_text, unattended);
 }
 
 /* Diagnostic only, for dispatch_log_stall_if_due() below -- never used by
@@ -2520,6 +2571,8 @@ static void dispatch_tick(AiChatData *d)
         }
 
         int batch_id = batch->id;
+        /* Read before cmd_batch_remove() below frees the batch. */
+        int unattended = !batch->user_acted;
         int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;
         char first_cmd[1024] = "";
         if (batch->q.count > 0)
@@ -2563,7 +2616,7 @@ static void dispatch_tick(AiChatData *d)
             InvalidateRect(d->hSendBtn, NULL, TRUE);
         }
 
-        if (have_continue) send_continue_message(d, continue_text);
+        if (have_continue) send_continue_message(d, continue_text, unattended);
     }
 }
 
@@ -3807,7 +3860,17 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         switch (LOWORD(wParam)) {
         case IDC_CHAT_SEND:
             if (d && d->dispatch_active) {
+                /* Stopping a batch by hand is an attended round. Marked
+                 * before the cancel so its continue message resets the
+                 * unattended-round count; reset directly as well, since a
+                 * cancel that sends no continue message would not. */
+                if (d->active_state) {
+                    CmdBatch *running = cmd_batch_find(
+                        &d->active_state->batches, d->dispatch_batch_id);
+                    if (running) running->user_acted = 1;
+                }
                 dispatch_cancel(d, "[command queue stopped]", 1);
+                ai_rounds_user_message(d->active_state);
                 if (d->hChatList)
                     chat_listview_scroll_to_bottom(d->hChatList);
             } else if (d && ACTIVE_BUSY(d)) {
@@ -4020,6 +4083,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
                     /* Let the dispatcher pick this command up once the
                      * terminal is at a prompt (no-op if already running). */
+                    batch->user_acted = 1;
                     dispatch_start(d, batch->id);
 
                     /* Check if all decided — if so, the card can settle now */
@@ -4080,6 +4144,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
                     /* Let the dispatcher send the approved commands one at a
                      * time, only once the terminal is at a prompt. */
+                    batch->user_acted = 1;
                     dispatch_start(d, batch->id);
                 }
                 SetFocus(d->hInput);
@@ -4122,6 +4187,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     if (any_approved) {
                         /* Let the dispatcher send the approved commands one
                          * at a time, only once the terminal is at a prompt. */
+                        batch->user_acted = 1;
                         dispatch_start(d, batch->id);
                     } else {
                         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
@@ -4497,10 +4563,15 @@ next_coalesce:;
             if (wParam == 2 && src && rmsg->content) {
                 char cmds[16][1024];
                 char notes[16][CMD_NOTE_MAX];
+                int quoted[16] = { 0 };
                 int rejected = 0, rejected_long = 0;
-                int ncmds = ai_extract_commands_notes(rmsg->content, cmds,
-                                                      notes, 16, &rejected,
-                                                      &rejected_long);
+                int ncmds = ai_extract_commands_full(rmsg->content, cmds,
+                                                     notes, quoted, 16,
+                                                     &rejected,
+                                                     &rejected_long);
+                int nquoted = 0;
+                for (int qi = 0; qi < ncmds; qi++)
+                    if (quoted[qi]) nquoted++;
                 if (ncmds > 0) {
                     /* Built while the tab is hidden: Auto-approve forced
                      * off, so every row is PENDING or BLOCKED and nothing
@@ -4519,9 +4590,13 @@ next_coalesce:;
                             /* -1 means the queue refused it (full, blank,
                              * control characters, or too long) -- not
                              * added, and no card is ever built for it. */
-                            int bidx = chat_approval_add_session(&batch->q,
-                                cmds[ci], (CmdPlatform)src->platform,
-                                src->platform_contradicted);
+                            int bidx = quoted[ci]
+                                ? chat_approval_add_quoted(&batch->q,
+                                    cmds[ci], (CmdPlatform)src->platform,
+                                    src->platform_contradicted)
+                                : chat_approval_add_session(&batch->q,
+                                    cmds[ci], (CmdPlatform)src->platform,
+                                    src->platform_contradicted);
                             /* The note goes on the index the queue returned,
                              * never the loop index: a refused command shifts
                              * every later one down. */
@@ -4550,6 +4625,14 @@ next_coalesce:;
                         "characters. Put exactly one single-line command "
                         "in each EXEC block.", rejected);
                     ai_conv_add(&src->conv, AI_ROLE_USER, note);
+                }
+                if (nquoted > 0) {
+                    char qnote[256];
+                    snprintf(qnote, sizeof(qnote),
+                        "NOTE: %d [EXEC] marker(s) were inside a code block "
+                        "or inline code and were NOT run. Put each marker on "
+                        "its own line, outside any code fence.", nquoted);
+                    ai_conv_add(&src->conv, AI_ROLE_USER, qnote);
                 }
             }
             if (src) {
@@ -4601,10 +4684,15 @@ next_coalesce:;
             /* Extract commands from the full accumulated content */
             char cmds[16][1024];
             char notes[16][CMD_NOTE_MAX];
+            int quoted[16] = { 0 };
             int rejected = 0, rejected_long = 0;
-            int ncmds = text ? ai_extract_commands_notes(text, cmds, notes, 16,
-                                                         &rejected,
-                                                         &rejected_long) : 0;
+            int ncmds = text ? ai_extract_commands_full(text, cmds, notes,
+                                                        quoted, 16,
+                                                        &rejected,
+                                                        &rejected_long) : 0;
+            int nquoted = 0;
+            for (int qi = 0; qi < ncmds; qi++)
+                if (quoted[qi]) nquoted++;
 
             /* Finalize the AI item text.  When commands were found, show
              * only the pre-command portion — the summary/analysis after
@@ -4674,6 +4762,19 @@ next_coalesce:;
                 ai_conv_add(&d->conv, AI_ROLE_USER, rej_note);
             }
 
+            /* A marker the model wrote inside a code block or inline code
+             * is shown on the card as "quoted, not run" and never runs.
+             * The model is told too, so it does not claim the command ran
+             * and puts its next marker outside the fence. */
+            if (nquoted > 0) {
+                char quote_note[256];
+                snprintf(quote_note, sizeof(quote_note),
+                    "NOTE: %d [EXEC] marker(s) were inside a code block or "
+                    "inline code and were NOT run. Put each marker on its "
+                    "own line, outside any code fence.", nquoted);
+                ai_conv_add(&d->conv, AI_ROLE_USER, quote_note);
+            }
+
             /* Pending command batches: earlier cards are never touched by
              * a new reply -- each reply that yields commands gets its own
              * batch and its own card (see docs/superpowers/specs/
@@ -4684,8 +4785,18 @@ next_coalesce:;
                  * only field cmd_batch_add() reads from `defaults` -- it
                  * seeds the new batch's queue. */
                 int evicted_id = 0;
+                /* After AI_AUTO_ROUNDS_MAX unattended rounds this one batch
+                 * is built attended, so its rows arrive PENDING on an
+                 * ordinary card. The session's policy and the Auto-approve
+                 * button are untouched (guard-rails spec section 1). */
+                ApprovalQueue batch_defaults;
+                chat_approval_init(&batch_defaults);
+                batch_defaults.policy = ai_rounds_batch_policy(
+                    d->active_state, d->approval_q.policy);
+                int rounds_paused = ai_rounds_paused(d->active_state,
+                                                     d->approval_q.policy);
                 CmdBatch *batch = cmd_batch_add(&d->active_state->batches,
-                                                &d->approval_q, &evicted_id);
+                                                &batch_defaults, &evicted_id);
 
                 if (batch) {
                     /* Record how many conversation messages exist right
@@ -4701,6 +4812,16 @@ next_coalesce:;
                             "[earlier command batch skipped]");
                     }
 
+                    if (rounds_paused) {
+                        char pause_text[160];
+                        snprintf(pause_text, sizeof(pause_text),
+                            "[Auto-approve paused after %d automatic rounds "
+                            "\xE2\x80\x94 Run the card to go on]",
+                            AI_AUTO_ROUNDS_MAX);
+                        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                        pause_text);
+                    }
+
                     /* Classify and queue every extracted command in order
                      * -- including ones above the policy ceiling, which
                      * chat_approval_add marks APPROVE_BLOCKED rather than
@@ -4711,9 +4832,13 @@ next_coalesce:;
                      * user can run after raising the ceiling (see
                      * chat_approval_needs_user below). */
                     for (int ci = 0; ci < ncmds; ci++) {
-                        int idx = chat_approval_add_session(&batch->q, cmds[ci],
-                            (CmdPlatform)d->active_state->platform,
-                            d->active_state->platform_contradicted);
+                        int idx = quoted[ci]
+                            ? chat_approval_add_quoted(&batch->q, cmds[ci],
+                                (CmdPlatform)d->active_state->platform,
+                                d->active_state->platform_contradicted)
+                            : chat_approval_add_session(&batch->q, cmds[ci],
+                                (CmdPlatform)d->active_state->platform,
+                                d->active_state->platform_contradicted);
                         if (idx < 0) continue;  /* queue full or blank -- drop it */
                         chat_approval_set_note(&batch->q, idx, notes[ci]);
 
@@ -4723,6 +4848,8 @@ next_coalesce:;
                             chat_msg_set_command(cmd_item, cmds[ci],
                                 batch->q.entries[idx].safety,
                                 batch->q.entries[idx].status == APPROVE_BLOCKED);
+                            chat_msg_set_quoted(cmd_item,
+                                                batch->q.entries[idx].quoted);
                             chat_msg_set_batch(cmd_item, batch->id);
                             chat_msg_set_note(cmd_item,
                                               batch->q.entries[idx].note);
@@ -4737,14 +4864,16 @@ next_coalesce:;
                     {
                         int nblocked = 0;
                         for (int qi = 0; qi < batch->q.count; qi++)
-                            if (batch->q.entries[qi].status == APPROVE_BLOCKED)
+                            if (batch->q.entries[qi].status == APPROVE_BLOCKED &&
+                                !batch->q.entries[qi].quoted)
                                 nblocked++;
                         if (nblocked > 0) {
                             char list[1536];
                             size_t lp = 0;
                             list[0] = '\0';
                             for (int qi = 0; qi < batch->q.count; qi++) {
-                                if (batch->q.entries[qi].status == APPROVE_BLOCKED) {
+                                if (batch->q.entries[qi].status == APPROVE_BLOCKED &&
+                                    !batch->q.entries[qi].quoted) {
                                     if (!str_append_fmt(list, sizeof(list), &lp,
                                             "  - %s\n", batch->q.entries[qi].command))
                                         break;

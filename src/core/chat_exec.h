@@ -17,8 +17,11 @@
  *   - the prose after the last "[/EXEC]", untrimmed (it usually starts with
  *     the '\n' that followed the marker, which paints as a blank line).
  *
- * A stray "[/EXEC]" with no "[EXEC]" before it is prose. Portable, no
- * windows.h. Spec: docs/superpowers/specs/
+ * A stray "[/EXEC]" with no "[EXEC]" before it is prose. So is a quoted
+ * marker (one inside a fenced code block or an inline code span, as the
+ * shared scanner src/core/exec_scan.h decides): it stays in the prose, which
+ * the renderer draws as code, so what is drawn as a command is exactly what
+ * ai_extract_commands_full() can run. Portable, no windows.h. Spec: docs/superpowers/specs/
  * 2026-10-18-ai-panel-text-selection-design.md section 2.
  */
 

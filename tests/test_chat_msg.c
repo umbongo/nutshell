@@ -452,9 +452,9 @@ int test_chat_cmd_label_blocked_is_held(void) {
     TEST_BEGIN();
     ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
     /* blocked wins regardless of approved/run */
-    ASSERT_STR_EQ(chat_cmd_label(1, 1, CHAT_RUN_DONE, &intent), "held");
+    ASSERT_STR_EQ(chat_cmd_label(1, 1, 0, CHAT_RUN_DONE, &intent), "held");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_WARNING);
-    ASSERT_STR_EQ(chat_cmd_label(-1, 1, CHAT_RUN_NONE, &intent), "held");
+    ASSERT_STR_EQ(chat_cmd_label(-1, 1, 0, CHAT_RUN_NONE, &intent), "held");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_WARNING);
     TEST_END();
 }
@@ -463,7 +463,7 @@ int test_chat_cmd_label_denied(void) {
     TEST_BEGIN();
     ChatCmdIntent intent = CHAT_CMD_INTENT_WARNING;
     /* approved == 0 wins over any run value */
-    ASSERT_STR_EQ(chat_cmd_label(0, 0, CHAT_RUN_RUNNING, &intent), "denied");
+    ASSERT_STR_EQ(chat_cmd_label(0, 0, 0, CHAT_RUN_RUNNING, &intent), "denied");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
     TEST_END();
 }
@@ -471,7 +471,7 @@ int test_chat_cmd_label_denied(void) {
 int test_chat_cmd_label_skipped(void) {
     TEST_BEGIN();
     ChatCmdIntent intent = CHAT_CMD_INTENT_WARNING;
-    ASSERT_STR_EQ(chat_cmd_label(-1, 0, CHAT_RUN_NONE, &intent), "skipped");
+    ASSERT_STR_EQ(chat_cmd_label(-1, 0, 0, CHAT_RUN_NONE, &intent), "skipped");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
     TEST_END();
 }
@@ -479,7 +479,7 @@ int test_chat_cmd_label_skipped(void) {
 int test_chat_cmd_label_queued(void) {
     TEST_BEGIN();
     ChatCmdIntent intent = CHAT_CMD_INTENT_WARNING;
-    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_NONE, &intent), "queued");
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, CHAT_RUN_NONE, &intent), "queued");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
     TEST_END();
 }
@@ -487,7 +487,7 @@ int test_chat_cmd_label_queued(void) {
 int test_chat_cmd_label_running(void) {
     TEST_BEGIN();
     ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
-    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_RUNNING, &intent), "running");
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, CHAT_RUN_RUNNING, &intent), "running");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_INFO);
     TEST_END();
 }
@@ -495,7 +495,7 @@ int test_chat_cmd_label_running(void) {
 int test_chat_cmd_label_done(void) {
     TEST_BEGIN();
     ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
-    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_DONE, &intent), "ran");
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, CHAT_RUN_DONE, &intent), "ran");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_SUCCESS);
     TEST_END();
 }
@@ -503,7 +503,7 @@ int test_chat_cmd_label_done(void) {
 int test_chat_cmd_label_aborted(void) {
     TEST_BEGIN();
     ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
-    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_ABORTED, &intent), "not run");
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, CHAT_RUN_ABORTED, &intent), "not run");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_WARNING);
     TEST_END();
 }
@@ -511,7 +511,7 @@ int test_chat_cmd_label_aborted(void) {
 int test_chat_cmd_label_unexpected_run_falls_back_to_queued(void) {
     TEST_BEGIN();
     ChatCmdIntent intent = CHAT_CMD_INTENT_WARNING;
-    ASSERT_STR_EQ(chat_cmd_label(1, 0, 999, &intent), "queued");
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, 999, &intent), "queued");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
     TEST_END();
 }
@@ -519,8 +519,8 @@ int test_chat_cmd_label_unexpected_run_falls_back_to_queued(void) {
 int test_chat_cmd_label_null_intent_ok(void) {
     TEST_BEGIN();
     /* Must not crash, and must still return the right label. */
-    ASSERT_STR_EQ(chat_cmd_label(1, 0, CHAT_RUN_RUNNING, NULL), "running");
-    ASSERT_STR_EQ(chat_cmd_label(1, 1, CHAT_RUN_NONE, NULL), "held");
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 0, CHAT_RUN_RUNNING, NULL), "running");
+    ASSERT_STR_EQ(chat_cmd_label(1, 1, 0, CHAT_RUN_NONE, NULL), "held");
     TEST_END();
 }
 
@@ -927,5 +927,57 @@ int test_chat_msg_item_starts_without_runs_and_frees_them(void) {
     ASSERT_EQ(r3, 0);
     chat_msg_list_clear(&list);
     ASSERT_EQ(list.count, 0);
+    TEST_END();
+}
+
+int test_chat_cmd_label_quoted(void) {
+    TEST_BEGIN();
+    ChatCmdIntent intent = CHAT_CMD_INTENT_INFO;
+    ASSERT_STR_EQ(chat_cmd_label(-1, 1, 1, CHAT_RUN_NONE, &intent), "quoted, not run");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
+    intent = CHAT_CMD_INTENT_INFO;
+    ASSERT_STR_EQ(chat_cmd_label(1, 1, 1, CHAT_RUN_DONE, &intent), "quoted, not run");
+    ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_DIM);
+    ASSERT_STR_EQ(chat_cmd_label(1, 0, 1, CHAT_RUN_RUNNING, NULL), "quoted, not run");
+    TEST_END();
+}
+
+int test_chat_card_header_text(void) {
+    TEST_BEGIN();
+    char buf[96];
+    ASSERT_EQ((int)chat_card_header_text(3, 0, 0, buf, sizeof(buf)), 10);
+    ASSERT_STR_EQ(buf, "3 commands");
+    ASSERT_EQ((int)chat_card_header_text(1, 0, 0, buf, sizeof(buf)), 9);
+    ASSERT_STR_EQ(buf, "1 command");
+    chat_card_header_text(3, 1, 0, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "3 commands \xC2\xB7 1 held");
+    chat_card_header_text(3, 0, 2, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "3 commands \xC2\xB7 2 quoted");
+    int n = (int)chat_card_header_text(4, 1, 2, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "4 commands \xC2\xB7 1 held \xC2\xB7 2 quoted");
+    ASSERT_EQ(n, (int)strlen(buf));
+    /* does not fit: 0, and buf still a valid string */
+    memset(buf, 'x', sizeof(buf));
+    ASSERT_EQ((int)chat_card_header_text(3, 0, 0, buf, 8), 0);
+    ASSERT_EQ((int)buf[7], 0);
+    ASSERT_EQ((int)strlen(buf) < 8, 1);
+    ASSERT_EQ((int)chat_card_header_text(3, 0, 0, NULL, 8), 0);
+    ASSERT_EQ((int)chat_card_header_text(3, 0, 0, buf, 0), 0);
+    TEST_END();
+}
+
+int test_chat_msg_set_quoted(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *it = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    ASSERT_NOT_NULL(it);
+    ASSERT_EQ(it->u.cmd.quoted, 0);
+    chat_msg_set_quoted(it, 1);
+    ASSERT_EQ(it->u.cmd.quoted, 1);
+    chat_msg_set_quoted(it, 0);
+    ASSERT_EQ(it->u.cmd.quoted, 0);
+    chat_msg_set_quoted(NULL, 1);   /* safe */
+    chat_msg_list_clear(&list);
     TEST_END();
 }

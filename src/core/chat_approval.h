@@ -33,6 +33,10 @@ typedef struct {
                                   * safety == CMD_WRITE, so a gate that only looked at
                                   * `safety` could not tell it from a plain write. */
     ApprovalStatus status;
+    int quoted;                 /* 1 = the [EXEC] marker sat inside a code span or
+                                  * block: the row is shown but can never run, so
+                                  * it is always APPROVE_BLOCKED and no policy
+                                  * change releases it. Zeroed on every add. */
     char note[CMD_NOTE_MAX];    /* the assistant's explanation for this command
                                   * (may be empty); set with
                                   * chat_approval_set_note(), zeroed on add */
@@ -75,13 +79,23 @@ int chat_approval_add(ApprovalQueue *q, const char *command,
 int chat_approval_add_session(ApprovalQueue *q, const char *command,
                               CmdPlatform platform, int contradicted);
 
+/* Add an [EXEC] marker that was found quoted inside code. Classifies exactly
+ * like chat_approval_add_session() (so the chip shows its real category) but
+ * the entry is always APPROVE_BLOCKED with quoted = 1, whatever the policy:
+ * auto-run never takes it, raising the ceiling never releases it
+ * (chat_approval_unblock_all() skips it), chat_approval_approve() on it
+ * fails. Same -1 cases as chat_approval_add_session(). */
+int chat_approval_add_quoted(ApprovalQueue *q, const char *command,
+                             CmdPlatform platform, int contradicted);
+
 /* Attach the assistant's explanation to entry `idx` (the index returned by
  * chat_approval_add_session()). Copies with truncation to CMD_NOTE_MAX-1
  * bytes and always NUL-terminates. An out-of-range idx or a NULL queue or
  * note is ignored. The status of the entry is not touched. */
 void chat_approval_set_note(ApprovalQueue *q, int idx, const char *note);
 
-/* Approve a specific command by index. Returns 0 on success. */
+/* Approve a specific command by index. Returns 0 on success; -1 when the
+ * entry is not PENDING, which includes every quoted entry (always BLOCKED). */
 int chat_approval_approve(ApprovalQueue *q, int index);
 
 /* Deny a specific command by index. Returns 0 on success. */
@@ -106,16 +120,18 @@ int chat_approval_needs_user(const ApprovalQueue *q);
  * Returns entry index, or -1 if none. */
 int chat_approval_next_approved(const ApprovalQueue *q);
 
-/* Mark a command as executing. */
+/* Mark a command as executing. A quoted entry is left untouched. */
 void chat_approval_set_executing(ApprovalQueue *q, int index);
 
-/* Mark a command as completed. */
+/* Mark a command as completed. A quoted entry is left untouched. */
 void chat_approval_set_completed(ApprovalQueue *q, int index);
 
 /* Unblock every blocked command the policy now allows (the ceiling was
  * raised). Changes BLOCKED -> PENDING for entries whose worst category is
  * at or below policy.allowed, and LEAVES the rest blocked -- raising the
- * ceiling from Read to Write must not release a CRITICAL row. Returns the
+ * ceiling from Read to Write must not release a CRITICAL row. A quoted entry
+ * (see chat_approval_add_quoted()) is never released, whatever the ceiling.
+ * Returns the
  * number unblocked. The exact inverse of chat_approval_block_disallowed(). */
 int chat_approval_unblock_all(ApprovalQueue *q);
 

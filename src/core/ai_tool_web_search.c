@@ -9,6 +9,7 @@
 #include <winsock2.h>
 #include <windows.h>
 #include <winhttp.h>
+#include "winhttp_open.h"
 #endif
 
 /* ---- Internal helpers ---------------------------------------------------- */
@@ -405,10 +406,8 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
         return -1;
     }
 
-    HINTERNET session = WinHttpOpen(
-        L"Nutshell/1.0 (Windows NT 10.0; Win64; x64)",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-        WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET session =
+        ns_winhttp_open(L"Nutshell/1.0 (Windows NT 10.0; Win64; x64)");
     if (!session) {
         const char *err = "WinHttpOpen failed";
         *result_buf = malloc(strlen(err) + 1);
@@ -531,10 +530,8 @@ int tool_web_search_execute(const char *input_json, void *tool_data,
                 return 0;
             }
 
-            HINTERNET session2 = WinHttpOpen(
-                L"Nutshell/1.0 (Windows NT 10.0; Win64; x64)",
-                WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+            HINTERNET session2 =
+                ns_winhttp_open(L"Nutshell/1.0 (Windows NT 10.0; Win64; x64)");
             if (!session2) {
                 out = malloc(64);
                 if (!out) return -1;

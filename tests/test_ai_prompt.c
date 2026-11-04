@@ -925,7 +925,9 @@ int test_ai_system_prompt_powershell_examples(void) {
         "Put the explanation on the line directly before its marker and "
         "write nothing between a marker and the next explanation. "
         "Never say 'let's start with' or do only the first step. "
-        "Include every command the user needs in one response.";
+        "Include every command the user needs in one response. "
+        "Put each [EXEC]...[/EXEC] marker on its own line, never inside a "
+        "code block or inline code: a marker inside code is shown but not run.";
     ASSERT_STR_EQ(ssh_buf, expected_ssh);
     TEST_END();
 }
@@ -3558,8 +3560,9 @@ int test_ai_notes_fence_lines_removed(void) {
                                       NULL, NULL);
     ASSERT_EQ(n, 1);
     ASSERT_STR_EQ(notes[0], "List files");
-    /* A note that is nothing but a fence is empty. */
-    resp = "```\n[EXEC]ls[/EXEC]";
+    /* A note that is nothing but fence lines is empty. (The fence is closed:
+     * an unterminated one would quote the marker that follows it.) */
+    resp = "```\n```\n[EXEC]ls[/EXEC]";
     n = ai_extract_commands_notes(resp, cmds, notes, NOTE_TEST_MAX,
                                   NULL, NULL);
     ASSERT_EQ(n, 1);
@@ -3666,5 +3669,18 @@ int test_ai_system_prompt_asks_for_explanation_before_marker(void) {
     ASSERT_TRUE(strstr(buf, "Put the explanation on the line directly before "
                             "its marker and write nothing between a marker "
                             "and the next explanation.") != NULL);
+    TEST_END();
+}
+
+int test_continue_text_quoted_entry(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0), 0);
+    char buf[4096];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "1. quoted in a code block, not run: ls") != NULL);
+    ASSERT_NULL(strstr(buf, "above the command policy ceiling"));
     TEST_END();
 }

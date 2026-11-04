@@ -888,3 +888,99 @@ int test_approval_attended_policy_approves_nothing_on_arrival(void) {
     cmd_batch_set_free(&set);
     TEST_END();
 }
+
+/* ---- quoted rows: an [EXEC] marker found inside code never runs ---- */
+
+int test_chat_approval_add_quoted_blocked_even_with_auto(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.policy.allowed = CMD_CRITICAL;
+    q.policy.unattended = CMD_CRITICAL;   /* everything auto-runs */
+    int idx = chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ(idx, 0);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_BLOCKED);
+    ASSERT_EQ(q.entries[0].quoted, 1);
+    ASSERT_EQ((int)q.entries[0].safety, (int)CMD_READ);
+    ASSERT_STR_EQ(q.entries[0].command, "ls");
+    ASSERT_EQ(chat_approval_next_approved(&q), -1);
+    TEST_END();
+}
+
+int test_chat_approval_add_quoted_rejects_like_add(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "", CMD_PLATFORM_LINUX, 0), -1);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "   ", CMD_PLATFORM_LINUX, 0), -1);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "a\nb", CMD_PLATFORM_LINUX, 0), -1);
+    ASSERT_EQ(chat_approval_add_quoted(&q, NULL, CMD_PLATFORM_LINUX, 0), -1);
+    char big[1025];
+    memset(big, 'a', sizeof(big) - 1);
+    big[sizeof(big) - 1] = '\0';
+    ASSERT_EQ(chat_approval_add_quoted(&q, big, CMD_PLATFORM_LINUX, 0), -1);
+    ASSERT_EQ(q.count, 0);
+    for (int i = 0; i < APPROVAL_MAX_CMDS; i++)
+        ASSERT_EQ(chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0), i);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0), -1);
+    ASSERT_EQ(q.count, APPROVAL_MAX_CMDS);
+    TEST_END();
+}
+
+int test_chat_approval_add_session_quoted_zero(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0), 0);
+    ASSERT_EQ(q.entries[0].quoted, 1);
+    chat_approval_reset(&q);
+    ASSERT_EQ(chat_approval_add_session(&q, "ls", CMD_PLATFORM_LINUX, 0), 0);
+    ASSERT_EQ(q.entries[0].quoted, 0);
+    TEST_END();
+}
+
+int test_chat_approval_unblock_all_skips_quoted(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.policy.allowed = CMD_READ;
+    ASSERT_EQ(chat_approval_add_session(&q, "rm x", CMD_PLATFORM_LINUX, 0), 0);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0), 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_BLOCKED);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_BLOCKED);
+    q.policy.allowed = CMD_CRITICAL;
+    ASSERT_EQ(chat_approval_unblock_all(&q), 1);
+    ASSERT_EQ((int)q.entries[0].status, (int)APPROVE_PENDING);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_BLOCKED);
+    ASSERT_EQ(chat_approval_approve_all(&q), 1);
+    ASSERT_EQ((int)q.entries[1].status, (int)APPROVE_BLOCKED);
+    TEST_END();
+}
+
+int test_chat_approval_approve_quoted_fails(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.policy.allowed = CMD_CRITICAL;
+    int idx = chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ(idx, 0);
+    ASSERT_EQ(chat_approval_approve(&q, idx), -1);
+    ASSERT_EQ(chat_approval_deny(&q, idx), -1);
+    ASSERT_EQ((int)q.entries[idx].status, (int)APPROVE_BLOCKED);
+    /* Nothing may start or finish a quoted row either. */
+    chat_approval_set_executing(&q, idx);
+    ASSERT_EQ((int)q.entries[idx].status, (int)APPROVE_BLOCKED);
+    chat_approval_set_completed(&q, idx);
+    ASSERT_EQ((int)q.entries[idx].status, (int)APPROVE_BLOCKED);
+    TEST_END();
+}
+
+int test_chat_approval_needs_user_all_quoted(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0), 0);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "pwd", CMD_PLATFORM_LINUX, 0), 1);
+    ASSERT_EQ(chat_approval_needs_user(&q), 1);
+    TEST_END();
+}

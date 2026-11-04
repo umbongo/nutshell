@@ -185,8 +185,9 @@ int ai_provider_supports_tools(const char *provider);
 int ai_parse_response_ex(const char *json, char *content_out, size_t content_size,
                           char *thinking_out, size_t thinking_size);
 
-/* Extract a command from [EXEC]...[/EXEC] markers in AI response.
- * Returns 1 if found, 0 otherwise. */
+/* Extract the first live command from [EXEC]...[/EXEC] markers in an AI
+ * response (a marker quoted in code is skipped; see
+ * ai_extract_commands_full()). Returns 1 if found, 0 otherwise. */
 int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size);
 
 /* Extract up to max_cmds commands from [EXEC]...[/EXEC] markers.
@@ -240,6 +241,30 @@ int ai_extract_commands_ex(const char *response, char cmds[][1024],
 int ai_extract_commands_notes(const char *response, char cmds[][1024],
                               char notes[][CMD_NOTE_MAX], int max_cmds,
                               int *rejected, int *rejected_long);
+
+/* The general form of ai_extract_commands_notes(): it can also report the
+ * [EXEC] markers the reply quoted in code.
+ *
+ * A marker is quoted when its opening [EXEC] lies inside a fenced code block
+ * (the renderer's fences: three backticks at column 0; an unterminated fence
+ * runs to the end of the reply) or inside an inline code span, found with
+ * md_parse_inline() exactly as the renderer parses the line (so bold or
+ * italic spans take backticks first, and an unpaired backtick opens
+ * nothing). The one scanner, src/core/exec_scan.h, also decides what the
+ * chat panel draws as a command. A marker outside any span is live even if
+ * its command contains backticks.
+ *
+ * quoted[] (max_cmds entries) non-NULL: live and quoted markers are returned
+ * together in reply order, quoted[i] is 1 for a quoted one. A quoted marker
+ * takes a slot and goes through the same trim, length and control-character
+ * checks as a live one, counting in *rejected / *rejected_long the same way.
+ * quoted == NULL: quoted markers are skipped before any check -- no slot, no
+ * count -- which is what ai_extract_commands_notes() and everything built on
+ * it do, so a caller that does not ask for quoted markers never sees one as
+ * a command. notes may be NULL. */
+int ai_extract_commands_full(const char *response, char cmds[][1024],
+                             char notes[][CMD_NOTE_MAX], int quoted[],
+                             int max_cmds, int *rejected, int *rejected_long);
 
 /* Get the API endpoint URL for a provider name.
  * Returns NULL for unknown providers. */
@@ -308,7 +333,9 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
  * "ran", APPROVE_EXECUTING "started, stopped before it finished",
  * APPROVE_APPROVED "not run (batch stopped)", APPROVE_DENIED "not run
  * (denied)", APPROVE_BLOCKED "not run (above the command policy
- * ceiling)", APPROVE_PENDING "not run (never decided)".
+ * ceiling)", APPROVE_PENDING "not run (never decided)". A quoted entry
+ * (ApprovalEntry.quoted, an [EXEC] marker found inside code) is listed as
+ * "quoted in a code block, not run" whatever its status.
  *
  * Callers should pass a 4096-byte buffer and check the return value:
  * every snprintf inside is checked, and the function returns 0 (writing
@@ -336,7 +363,9 @@ size_t ai_build_policy_blocked_note(const char *list, char *buf, size_t buf_size
  * pre_cmd receives text before the first [EXEC] marker.
  * post_cmd receives text after the last [/EXEC] marker.
  * Either output buffer may be NULL (with size 0) to skip.
- * Returns the number of [EXEC]...[/EXEC] command pairs found. */
+ * Returns the number of live [EXEC]...[/EXEC] command pairs found; a marker
+ * quoted in code (ai_extract_commands_full()) is neither counted nor a cut
+ * point. */
 int ai_response_split(const char *response,
                       char *pre_cmd, size_t pre_size,
                       char *post_cmd, size_t post_size);
@@ -479,6 +508,32 @@ typedef struct {
     int show_thinking;           /* 1 = user opened a Thinking disclosure this
                                    * session -- suppresses auto-collapse when a
                                    * reply's text starts (see chat_listview.c) */
+    int auto_rounds;             /* consecutive unattended continue rounds
+                                   * since the user last spoke or acted
+                                   * (ai_rounds_*() below); 0 at creation */
 } AiSessionState;
+
+/* Cap on unattended rounds with Auto-approve on: the batch built after
+ * AI_AUTO_ROUNDS_MAX consecutive unattended rounds is built attended
+ * (guard-rails spec 2026-11-04 section 1, "The counter"). */
+#define AI_AUTO_ROUNDS_MAX 3
+
+/* The user typed a message: auto_rounds = 0. NULL-safe. */
+void ai_rounds_user_message(AiSessionState *s);
+
+/* A continue message is being sent after a finished batch: auto_rounds += 1
+ * when that batch ran `unattended` (non-zero), else auto_rounds = 0.
+ * NULL-safe. */
+void ai_rounds_continue(AiSessionState *s, int unattended);
+
+/* The policy to build the next batch under: `p`, or cmd_policy_attended(p)
+ * once auto_rounds >= AI_AUTO_ROUNDS_MAX. The session's own policy is not
+ * changed. NULL `s` returns `p`. */
+CmdPolicy ai_rounds_batch_policy(const AiSessionState *s, CmdPolicy p);
+
+/* 1 when the cap is reached and Auto-approve is on in `p` (the batch built
+ * under ai_rounds_batch_policy() is paused for the user); else 0.
+ * NULL `s` returns 0. */
+int ai_rounds_paused(const AiSessionState *s, CmdPolicy p);
 
 #endif /* NUTSHELL_AI_PROMPT_H */

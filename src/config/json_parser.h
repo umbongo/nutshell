@@ -3,6 +3,9 @@
 
 #include "../core/vector.h"
 
+/* Deepest array/object nesting json_parse() accepts; deeper input fails. */
+#define JSON_MAX_DEPTH 256
+
 typedef enum {
     JSON_NULL,
     JSON_BOOL,

@@ -229,7 +229,17 @@ static volatile LONG g_live_conn_jobs = 0;
 static void conn_job_free(ConnJob *j)
 {
     if (!j) return;
-    if (j->channel) ssh_channel_free(j->channel);
+    if (j->channel) {
+        /* A channel still here was never handed to a Session (a failed or
+         * abandoned attempt). ssh_channel_free() waits for the server's close
+         * on a blocking session; on a hung server that would stall this
+         * thread (often the UI thread) for the whole 15 s setup limit, so
+         * shorten it. libssh2 checks in whole seconds and the free makes two
+         * calls: expect about 2-4 s at worst. Never 0, which waits without end.
+         * A handed-off job has channel == NULL and is not touched. */
+        ssh_session_set_timeout(j->ssh, 1);
+        ssh_channel_free(j->channel);
+    }
     if (j->ssh) ssh_session_free(j->ssh);
     if (j->tn_sock != INVALID_SOCKET) closesocket(j->tn_sock);
     secure_zero(&j->profile, sizeof(j->profile));
@@ -1540,6 +1550,19 @@ static void telnet_connect_job(ConnJob *j)
     conn_job_release(j);
 }
 
+/* After a failed setup step: when libssh2 gave up on the 15 s setup limit,
+ * puts "Timed out after 15 s waiting for host:port <stage>." into j->error
+ * and returns 1. Returns 0 (j->error untouched) when the failure was
+ * something else, or the text did not fit, so the caller's own message
+ * stands. */
+static int conn_setup_timeout_error(ConnJob *j, SshSetupStage stage)
+{
+    if (!ssh_session_timed_out(j->ssh)) return 0;
+    return ssh_setup_timeout_text(stage, j->profile.host, j->profile.port,
+                                  SSH_SETUP_TIMEOUT_MS, j->error,
+                                  sizeof(j->error)) != 0;
+}
+
 /* The connection thread. It reads and writes only its ConnJob -- the
  * profile copy, the PTY size and the results -- and drops its reference on
  * the way out, after posting WM_CONN_DONE (with the job id) unless the
@@ -1787,8 +1810,9 @@ static DWORD WINAPI connection_thread(LPVOID param)
          auth_rc == 0 ? "ok" : "fail", auth_asked);
 
     if (auth_rc != 0) {
-        snprintf(j->error, sizeof(j->error),
-                 "Authentication failed for %s@%s.", info->username, info->host);
+        if (!conn_setup_timeout_error(j, SSH_STAGE_AUTH))
+            snprintf(j->error, sizeof(j->error),
+                     "Authentication failed for %s@%s.", info->username, info->host);
         CONN_FAIL(2);
     }
 
@@ -1798,12 +1822,23 @@ static DWORD WINAPI connection_thread(LPVOID param)
     stage = "channel";
     j->channel = ssh_channel_open(j->ssh);
     if (!j->channel) {
-        snprintf(j->error, sizeof(j->error),
-                 "Could not open SSH channel to %s.", info->host);
+        if (!conn_setup_timeout_error(j, SSH_STAGE_SESSION))
+            snprintf(j->error, sizeof(j->error),
+                     "Could not open SSH channel to %s.", info->host);
         CONN_FAIL(3);
     }
-    ssh_pty_request(j->channel, "xterm", j->cols, j->rows);
-    ssh_pty_shell(j->channel);
+    /* A PTY or shell request that fails for any reason but the setup timeout
+     * is ignored, as before; a timeout fails the connection (the shell
+     * request is skipped after a PTY timeout). */
+    if (ssh_pty_request(j->channel, "xterm", j->cols, j->rows) != 0 &&
+        conn_setup_timeout_error(j, SSH_STAGE_SESSION))
+        CONN_FAIL(3);
+    if (ssh_pty_shell(j->channel) != 0 &&
+        conn_setup_timeout_error(j, SSH_STAGE_SESSION))
+        CONN_FAIL(3);
+    /* Setup is over: the 15 s limit must never reach the interactive
+     * session. This is the only path that goes interactive. */
+    ssh_session_set_timeout(j->ssh, 0);
     ssh_session_set_blocking(j->ssh, false); /* non-blocking for I/O loop */
 
     /* H-3: zero plaintext password from memory once auth is complete (the
@@ -2740,10 +2775,6 @@ static void do_paste(HWND hwnd)
         g_paste.bracketed = bpm;
         g_paste.local     = local_line_ends;
         g_paste.session   = target;
-
-        if (bpm)
-            (void)session_write_noted(target, BRACKET_OPEN,
-                                      sizeof(BRACKET_OPEN) - 1, "paste");
 
         /* Send the first line immediately */
         paste_send_next_line();

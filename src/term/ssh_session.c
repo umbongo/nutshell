@@ -1,6 +1,7 @@
 #include "ssh_session.h"
 #include "../core/xmalloc.h"
 #include "../core/secure_zero.h"
+#include "../core/ssh_timeout.h"
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -127,6 +128,25 @@ void ssh_session_free(SshSession *s) {
     free(s);
 }
 
+/* Test hook behind ssh_setup_timeout_override(); 0 means the default. */
+static long g_setup_timeout_override_ms = 0;
+
+void ssh_setup_timeout_override(long ms)
+{
+    g_setup_timeout_override_ms = ms > 0 ? ms : 0;
+}
+
+void ssh_session_set_timeout(SshSession *s, long ms)
+{
+    if (s && s->session) libssh2_session_set_timeout(s->session, ms);
+}
+
+int ssh_session_timed_out(const SshSession *s)
+{
+    if (!s || !s->session) return 0;
+    return libssh2_session_last_errno(s->session) == LIBSSH2_ERROR_TIMEOUT ? 1 : 0;
+}
+
 int ssh_connect(SshSession *s, const char *host, int port) {
     if (!s) return -1;
 
@@ -248,8 +268,23 @@ int ssh_connect(SshSession *s, const char *host, int port) {
     libssh2_session_callback_set(s->session, LIBSSH2_CALLBACK_RECV, cb.obj);
 #endif
 
+    /* A server that accepts TCP and then never speaks must not hang the
+     * tab: bound the handshake.  The limit stays in force for the stages
+     * that follow; window.c clears it before the session goes interactive. */
+    long limit = g_setup_timeout_override_ms > 0 ? g_setup_timeout_override_ms
+                                                 : SSH_SETUP_TIMEOUT_MS;
+    ssh_session_set_timeout(s, limit);
+
     if (libssh2_session_handshake(s->session, (libssh2_socket_t)s->socket)) {
-        snprintf(s->last_error, sizeof(s->last_error), "SSH handshake failed");
+        if (ssh_session_timed_out(s)) {
+            if (ssh_setup_timeout_text(SSH_STAGE_HANDSHAKE, host, port, limit,
+                                       s->last_error,
+                                       sizeof(s->last_error)) == 0)
+                snprintf(s->last_error, sizeof(s->last_error),
+                         "SSH handshake timed out");
+        } else {
+            snprintf(s->last_error, sizeof(s->last_error), "SSH handshake failed");
+        }
         closesocket(s->socket);
         s->socket = INVALID_SOCKET;
         return -1;

@@ -129,3 +129,76 @@ int test_ssh_idle_huge_timeout_clamps(void)
      * "effectively never times out within one tick window". */
     TEST_END();
 }
+
+/* ---- Connection-setup timeout wording ---- */
+
+int test_ssh_setup_timeout_text_stages(void)
+{
+    TEST_BEGIN();
+    char buf[256];
+    size_t n = ssh_setup_timeout_text(SSH_STAGE_HANDSHAKE, "example.com", 22,
+                                      15000, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Timed out after 15 s waiting for example.com:22 "
+                       "during the SSH handshake.");
+    ASSERT_EQ((int)n, (int)strlen(buf));
+
+    n = ssh_setup_timeout_text(SSH_STAGE_AUTH, "example.com", 22,
+                               15000, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Timed out after 15 s waiting for example.com:22 "
+                       "during authentication.");
+    ASSERT_EQ((int)n, (int)strlen(buf));
+
+    n = ssh_setup_timeout_text(SSH_STAGE_SESSION, "example.com", 22,
+                               15000, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Timed out after 15 s waiting for example.com:22 "
+                       "while opening the session.");
+    ASSERT_EQ((int)n, (int)strlen(buf));
+    TEST_END();
+}
+
+int test_ssh_setup_timeout_text_rounds_up(void)
+{
+    TEST_BEGIN();
+    char buf[256];
+    ASSERT_TRUE(ssh_setup_timeout_text(SSH_STAGE_HANDSHAKE, "h", 22, 300,
+                                       buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "after 1 s") != NULL);
+    ASSERT_TRUE(ssh_setup_timeout_text(SSH_STAGE_HANDSHAKE, "h", 22, 1000,
+                                       buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "after 1 s") != NULL);
+    ASSERT_TRUE(ssh_setup_timeout_text(SSH_STAGE_HANDSHAKE, "h", 22, 1001,
+                                       buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "after 2 s") != NULL);
+    TEST_END();
+}
+
+int test_ssh_setup_timeout_text_ipv6_host(void)
+{
+    TEST_BEGIN();
+    char buf[256];
+    ASSERT_TRUE(ssh_setup_timeout_text(SSH_STAGE_AUTH, "::1", 2222, 15000,
+                                       buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "waiting for [::1]:2222 ") != NULL);
+    /* A host that is already bracketed is not wrapped twice. */
+    ASSERT_TRUE(ssh_setup_timeout_text(SSH_STAGE_AUTH, "[::1]", 2222, 15000,
+                                       buf, sizeof(buf)) > 0);
+    ASSERT_TRUE(strstr(buf, "waiting for [::1]:2222 ") != NULL);
+    TEST_END();
+}
+
+int test_ssh_setup_timeout_text_small_buf(void)
+{
+    TEST_BEGIN();
+    char buf[10];
+    memset(buf, 'x', sizeof(buf));
+    ASSERT_EQ((int)ssh_setup_timeout_text(SSH_STAGE_HANDSHAKE, "example.com",
+                                          22, 15000, buf, sizeof(buf)), 0);
+    ASSERT_EQ((int)buf[sizeof(buf) - 1], 0);
+    ASSERT_TRUE(strlen(buf) < sizeof(buf));
+    /* cap 0 and a NULL buffer are refused without writing. */
+    ASSERT_EQ((int)ssh_setup_timeout_text(SSH_STAGE_AUTH, "h", 22, 1000,
+                                          buf, 0), 0);
+    ASSERT_EQ((int)ssh_setup_timeout_text(SSH_STAGE_AUTH, "h", 22, 1000,
+                                          NULL, 64), 0);
+    TEST_END();
+}

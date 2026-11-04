@@ -1836,10 +1836,46 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
                     chatlv_safety_tag_text(item->u.cmd.safety));
     }
 
+    /* A quoted marker (shown as code in the reply, never run): the row says
+     * so itself, in a dim chip just left of the copy glyph -- the label
+     * chat_cmd_label() gives the settled row too -- and the command text
+     * gives up that room. The risk tag keeps its place; it still tells how
+     * risky the command would be. */
+    int text_right = row->text.x + row->text.w;
+    int text_shortened = 0;
+    if (item->u.cmd.quoted && row->text.w > 0 && row->text.h > 0) {
+        ChatCmdIntent qintent = CHAT_CMD_INTENT_DIM;
+        const char *qlabel = chat_cmd_label(item->u.cmd.approved,
+                                            item->u.cmd.blocked, 1,
+                                            item->u.cmd.run, &qintent);
+        HGDIOBJ old_sf = SelectObject(hdc, lv->hSmallFont ? lv->hSmallFont
+                                           : GetStockObject(DEFAULT_GUI_FONT));
+        SIZE qsz = { 0, 0 };
+        GetTextExtentPoint32A(hdc, qlabel, (int)strlen(qlabel), &qsz);
+        SelectObject(hdc, old_sf);
+
+        int gap = ns_scale(SP_XS, dpi);
+        int q_right = row->copy.w > 0 ? row->copy.x - gap
+                    : row->tag.w > 0  ? row->tag.x - gap
+                                      : text_right;
+        int q_left = q_right - (qsz.cx + 2 * ns_scale(SP_SM, dpi));
+        if (q_left < row->text.x) q_left = row->text.x;
+        int q_top = row->tag.h > 0 ? row->tag.y : row->text.y;
+        int q_bot = q_top + (row->tag.h > 0 ? row->tag.h : row->text.h);
+        RECT q_rc = { q_left, q_top, q_right, q_bot };
+        COLORREF dim = RGB_FROM_THEME(tok->text_dim);
+        if (q_right > q_left)
+            ns_draw_chip(hdc, &q_rc,
+                         rgb_alpha(dim, RGB_FROM_THEME(tc->cmd_bg), 0.18f),
+                         dim, lv->hSmallFont, qlabel);
+        text_right = q_left - gap;
+        text_shortened = 1;
+    }
+
     /* Command text (single line, ellipsised when it doesn't fit) */
-    if (row->text.w > 0 && row->text.h > 0) {
+    if (row->text.w > 0 && row->text.h > 0 && text_right > row->text.x) {
         RECT text_rc = { row->text.x, row->text.y,
-                         row->text.x + row->text.w, row->text.y + row->text.h };
+                         text_right, row->text.y + row->text.h };
         const char *cmd_text = item->u.cmd.command ? item->u.cmd.command
                                                    : item->text;
         /* Hovering the text brightens it to text_main; the click opens the
@@ -1852,7 +1888,7 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
                                           : GetStockObject(ANSI_FIXED_FONT));
         UINT flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT;
-        if (row->ellipsis) flags |= DT_END_ELLIPSIS;
+        if (row->ellipsis || text_shortened) flags |= DT_END_ELLIPSIS;
         draw_text_utf8(hdc, cmd_text, &text_rc, flags);
         SelectObject(hdc, old_f);
     }
@@ -1935,7 +1971,7 @@ static void settled_row_geometry(ChatListView *lv, HDC hdc, ChatMsgItem *item,
      * ApprovalQueue. */
     g->intent = CHAT_CMD_INTENT_DIM;
     g->label = chat_cmd_label(item->u.cmd.approved, item->u.cmd.blocked,
-                              item->u.cmd.run, &g->intent);
+                              item->u.cmd.quoted, item->u.cmd.run, &g->intent);
 
     /* Chip label width, measured with the small font: label width plus
      * SP_SM padding on both sides. */
@@ -2054,7 +2090,8 @@ typedef struct {
     ChatMsgItem *cmd_items[APPROVAL_MAX_CMDS];
     ChatMsgItem *first;    /* this container's first item (owns container_scroll) */
     int n;
-    int held_count;
+    int held_count;      /* blocked by the policy ceiling; excludes quoted rows */
+    int quoted_count;    /* markers quoted in code: never run, not "held" */
     int checked_count;   /* checked && !held, over ALL n commands */
     int run_enabled;      /* checked_count > 0 */
     int first_row;
@@ -2100,7 +2137,8 @@ static void build_cmd_card_geometry(ChatListView *lv, HDC hdc_for_measure,
         g->cmd_items[i] = cinfo.items[i];
         checked_arr[i] = cinfo.items[i]->u.cmd.selected ? 1 : 0;
         held_arr[i] = cinfo.items[i]->u.cmd.blocked ? 1 : 0;
-        if (held_arr[i]) g->held_count++;
+        if (cinfo.items[i]->u.cmd.quoted) g->quoted_count++;
+        else if (held_arr[i]) g->held_count++;
         if (checked_arr[i] && !held_arr[i]) g->checked_count++;
     }
     g->n = n;
@@ -2173,18 +2211,15 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, ChatMsgItem *first,
 
     SetBkMode(hdc, TRANSPARENT);
 
-    /* ── Header: "N commands · M held" [— above the allowed ceiling] ── */
+    /* ── Header: "N commands · M held · Q quoted" [— above the allowed
+     *    ceiling, only when something is held] ── */
     {
         RECT hdr_rc = { g.layout.header.x, g.layout.header.y,
                         g.layout.header.x + g.layout.header.w,
                         g.layout.header.y + g.layout.header.h };
-        char hdr_buf[48];
-        if (g.held_count > 0)
-            snprintf(hdr_buf, sizeof(hdr_buf), "%d command%s \xC2\xB7 %d held",
-                     g.n, g.n == 1 ? "" : "s", g.held_count);
-        else
-            snprintf(hdr_buf, sizeof(hdr_buf), "%d command%s",
-                     g.n, g.n == 1 ? "" : "s");
+        char hdr_buf[64];
+        chat_card_header_text(g.n, g.held_count, g.quoted_count,
+                              hdr_buf, sizeof(hdr_buf));
 
         SetTextColor(hdc, RGB_FROM_THEME(tok->text_main));
         HGDIOBJ hf = SelectObject(hdc, lv->hBoldFont ? lv->hBoldFont

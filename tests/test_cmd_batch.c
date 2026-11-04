@@ -90,9 +90,10 @@ int test_cmd_batch_remove_middle(void) {
     CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
     CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
     CmdBatch *c = cmd_batch_add(&set, NULL, NULL);
-    cmd_batch_remove(&set, b->id);
+    int b_id = b->id;
+    cmd_batch_remove(&set, b_id);
     ASSERT_EQ(set.count, 2);
-    ASSERT_NULL(cmd_batch_find(&set, b->id));
+    ASSERT_NULL(cmd_batch_find(&set, b_id));
     ASSERT_TRUE(cmd_batch_find(&set, a->id) == a);
     ASSERT_TRUE(cmd_batch_find(&set, c->id) == c);
     cmd_batch_set_free(&set);
@@ -237,6 +238,21 @@ int test_cmd_batch_next_runnable_none(void) {
     CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
     chat_approval_add(&a->q, "echo a", CMD_PLATFORM_LINUX);
     ASSERT_NULL(cmd_batch_next_runnable(&set));
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+/* user_acted defaults to 0 (from cmd_batch_add's calloc) and is a plain
+ * settable field the Run/Approve click paths set. */
+int test_cmd_batch_add_user_acted_zero(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(a);
+    ASSERT_EQ(a->user_acted, 0);
+    a->user_acted = 1;
+    ASSERT_EQ(a->user_acted, 1);
     cmd_batch_set_free(&set);
     TEST_END();
 }

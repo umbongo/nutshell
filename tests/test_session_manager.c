@@ -64,7 +64,8 @@ int test_profile_field_truncation(void)
     char long_name[301];
     memset(long_name, 'A', 300);
     long_name[300] = '\0';
-    snprintf(p.name, sizeof(p.name), "%s", long_name);
+    int n = snprintf(p.name, sizeof(p.name), "%s", long_name);
+    ASSERT_TRUE(n >= (int)sizeof(p.name));
     ASSERT_EQ(strlen(p.name), 255u);
     ASSERT_EQ(p.name[255], '\0');
     TEST_END();

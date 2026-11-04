@@ -313,6 +313,14 @@ Done, in order (details in the commit messages and the specs named):
 - 2026-11-03 retrospective (`docs/retrospectives/2026-11-03-ten-merges-retrospective.md`).
 
 Open, in priority order:
+- [ ] web_fetch: a watchdog that closes the request handle at hop end or on cancel; one
+      hop can still exceed its timeout against a trickling server (the final review of
+      the guard rails branch; the header wait is bounded, the body loop checks the hop's
+      clock only between reads).
+- [ ] winhttp_open: fail closed when TLS 1.2 cannot be enforced (today the session keeps
+      the OS defaults if the TLS 1.2-only retry is refused).
+- [ ] `tests/fake_dlog.c` pads files one byte per realloc, so the full-suite ASan run
+      (`make test TEST_CC=... -fsanitize=address`) never finishes.
 - [ ] Unpushed branch `fix/sgr-codeql-tidy` (worktree `~/nutshell-wt/tidy` on `automaton`,
       2026-10-21, commits e5a1229 and 359dbe0, from session 01Cczi6ipaKBtKnozR7vkgFM):
       fixes the SGR leak and the six CodeQL alerts below, with tests; not version-bumped,

@@ -99,11 +99,13 @@ int test_dlog_redact_line_keeps_the_newline_and_is_idempotent(void)
 {
     TEST_BEGIN();
     char o[512];
-    char line[] = "e password=abc\n";
-    size_t m = dlog_redact_line(line, strlen(line), sizeof(line) + 40);
+    /* The capacity passed is the buffer's real size: the redaction grows the
+     * line, and a longer claimed capacity writes past the array. */
+    char line[64] = "e password=abc\n";
+    size_t m = dlog_redact_line(line, strlen(line), sizeof(line));
     ASSERT_EQ(m, strlen("e password=[REDACTED]\n"));
     ASSERT_STR_EQ(line, "e password=[REDACTED]\n");
-    size_t m2 = dlog_redact_line(line, m, sizeof(line) + 40);
+    size_t m2 = dlog_redact_line(line, m, sizeof(line));
     ASSERT_EQ(m2, m);
     red("nothing to hide here", o, sizeof(o));
     ASSERT_STR_EQ(o, "nothing to hide here");

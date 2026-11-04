@@ -4,6 +4,10 @@
 #include "json_validate.h"
 #include "string_utils.h"
 #include "paste_filter.h"
+#include "md_blocks.h"
+#include "markdown.h"
+#include "md_table.h"
+#include "exec_scan.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -290,7 +294,9 @@ void ai_build_system_prompt_ex(char *buf, size_t buf_size,
         "Put the explanation on the line directly before its marker and "
         "write nothing between a marker and the next explanation. "
         "Never say 'let's start with' or do only the first step. "
-        "Include every command the user needs in one response.";
+        "Include every command the user needs in one response. "
+        "Put each [EXEC]...[/EXEC] marker on its own line, never inside a "
+        "code block or inline code: a marker inside code is shown but not run.";
 
     const char *rest_powershell =
         "IMPORTANT: Always include ALL commands needed in a SINGLE response. "
@@ -305,7 +311,9 @@ void ai_build_system_prompt_ex(char *buf, size_t buf_size,
         "Put the explanation on the line directly before its marker and "
         "write nothing between a marker and the next explanation. "
         "Never say 'let's start with' or do only the first step. "
-        "Include every command the user needs in one response.";
+        "Include every command the user needs in one response. "
+        "Put each [EXEC]...[/EXEC] marker on its own line, never inside a "
+        "code block or inline code: a marker inside code is shown but not run.";
 
     if (is_powershell) rest = rest_powershell;
 
@@ -1232,24 +1240,32 @@ int ai_parse_stream_chunk_ex(const char *json,
     }
 }
 
+/* The [EXEC] marker scanner (exec_scan_*) is shared with the chat panel:
+ * src/core/exec_scan.c. */
+
 int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size)
 {
     if (!response || !cmd_out || cmd_size == 0) return 0;
 
     cmd_out[0] = '\0';
 
-    const char *start = strstr(response, "[EXEC]");
-    if (!start) return 0;
-    start += 6; /* skip "[EXEC]" */
+    ExecScan scan;
+    ExecMark m;
+    exec_scan_init(&scan, response, strlen(response));
+    int found = 0;
+    while (exec_scan_next(&scan, &m)) {
+        if (m.quoted) continue;   /* shown as code: never a command */
+        found = 1;
+        break;
+    }
+    exec_scan_free(&scan);
+    if (!found) return 0;
 
-    const char *end = strstr(start, "[/EXEC]");
-    if (!end) return 0;
-
-    size_t len = (size_t)(end - start);
+    size_t len = (size_t)(m.end - m.start);
     if (len == 0) return 0;
     if (len >= cmd_size) len = cmd_size - 1;
 
-    memcpy(cmd_out, start, len);
+    memcpy(cmd_out, m.start, len);
     cmd_out[len] = '\0';
     return 1;
 }
@@ -1378,24 +1394,26 @@ static void note_build(const char *a, const char *b, char *out)
     if (!has_letter) out[0] = '\0';
 }
 
-int ai_extract_commands_notes(const char *response, char cmds[][1024],
-                              char notes[][CMD_NOTE_MAX], int max_cmds,
-                              int *rejected, int *rejected_long)
+int ai_extract_commands_full(const char *response, char cmds[][1024],
+                             char notes[][CMD_NOTE_MAX], int quoted[],
+                             int max_cmds, int *rejected, int *rejected_long)
 {
     if (rejected) *rejected = 0;
     if (rejected_long) *rejected_long = 0;
     if (!response || !cmds || max_cmds <= 0) return 0;
 
     int count = 0;
-    const char *pos = response;
+    ExecScan scan;
+    ExecMark m;
+    exec_scan_init(&scan, response, strlen(response));
 
-    while (count < max_cmds) {
-        const char *marker = strstr(pos, "[EXEC]");
-        if (!marker) break;
-        const char *start = marker + 6; /* skip "[EXEC]" */
+    while (count < max_cmds && exec_scan_next(&scan, &m)) {
+        /* Quoted and not asked for: skipped before any check, so it takes no
+         * slot and is counted nowhere. */
+        if (m.quoted && !quoted) continue;
 
-        const char *end = strstr(start, "[/EXEC]");
-        if (!end) break;
+        const char *start = m.start;
+        const char *end = m.end;
 
         /* Find the trimmed span within the raw [EXEC]/[/EXEC] block
          * directly (same whitespace/CR/LF trim as str_trim()), without
@@ -1411,7 +1429,6 @@ int ai_extract_commands_notes(const char *response, char cmds[][1024],
         if (trimmed_len == 0) {
             /* Whitespace-only (or empty) block -- treat the same as an
              * empty one. */
-            pos = end + 7;
             continue;
         }
 
@@ -1421,7 +1438,6 @@ int ai_extract_commands_notes(const char *response, char cmds[][1024],
              * cmds[] slot, no count, so the card-to-queue-entry mapping
              * downstream is never asked to account for it. */
             if (rejected_long) (*rejected_long)++;
-            pos = end + 7;
             continue;
         }
 
@@ -1439,28 +1455,36 @@ int ai_extract_commands_notes(const char *response, char cmds[][1024],
              * paste_filter_controls() -- see text_has_unsafe_command_char()
              * in src/core/paste_filter.h. */
             if (rejected) (*rejected)++;
-            pos = end + 7;
             continue;
         }
 
         memcpy(cmds[count], tmp, trimmed_len + 1);
+        if (quoted) quoted[count] = m.quoted;
         if (notes) {
             /* After a previous command, the note is the prose from the next
              * line on: whatever trails that command's closing marker on its
              * own line belongs to that command, not to this one. */
-            const char *np = pos;
-            if (pos != response) {
-                const char *nl = memchr(pos, '\n', (size_t)(marker - pos));
-                np = nl ? nl + 1 : marker;
+            const char *np = m.prev;
+            if (m.prev != response) {
+                const char *nl = memchr(m.prev, '\n',
+                                        (size_t)(m.marker - m.prev));
+                np = nl ? nl + 1 : m.marker;
             }
-            note_build(np, marker, notes[count]);
+            note_build(np, m.marker, notes[count]);
         }
         count++;
-
-        pos = end + 7; /* skip "[/EXEC]" */
     }
 
+    exec_scan_free(&scan);
     return count;
+}
+
+int ai_extract_commands_notes(const char *response, char cmds[][1024],
+                              char notes[][CMD_NOTE_MAX], int max_cmds,
+                              int *rejected, int *rejected_long)
+{
+    return ai_extract_commands_full(response, cmds, notes, NULL, max_cmds,
+                                    rejected, rejected_long);
 }
 
 int ai_extract_commands_ex(const char *response, char cmds[][1024],
@@ -1486,21 +1510,21 @@ int ai_response_split(const char *response,
     if (post_cmd && post_size > 0) post_cmd[0] = '\0';
     if (!response || !*response) return 0;
 
-    /* Find first [EXEC] and count command pairs */
+    /* Find the first live [EXEC] and count live command pairs. A quoted
+     * marker is shown text, never a cut point. */
     const char *first_exec = NULL;
     const char *last_end = NULL;
     int count = 0;
-    const char *pos = response;
-
-    while ((pos = strstr(pos, "[EXEC]")) != NULL) {
-        if (!first_exec) first_exec = pos;
-        pos += 6;
-        const char *end = strstr(pos, "[/EXEC]");
-        if (!end) break; /* unclosed — don't count */
+    ExecScan scan;
+    ExecMark m;
+    exec_scan_init(&scan, response, strlen(response));
+    while (exec_scan_next(&scan, &m)) {
+        if (m.quoted) continue;
+        if (!first_exec) first_exec = m.marker;
         count++;
-        last_end = end + 7; /* past "[/EXEC]" */
-        pos = last_end;
+        last_end = m.end + 7; /* past "[/EXEC]" */
     }
+    exec_scan_free(&scan);
 
     if (count == 0) {
         /* No valid command pairs — full text goes to pre_cmd */
@@ -1644,13 +1668,16 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
 }
 
 /* Map a queue entry's status to the outcome word ai_build_continue_text()
- * lists it under. Every ApprovalStatus is covered explicitly (see the
+ * lists it under. A quoted entry (an [EXEC] marker found inside code, always
+ * APPROVE_BLOCKED) gets its own word: it was never a command to run, and the
+ * model must not read it as blocked by policy. Every ApprovalStatus is covered explicitly (see the
  * table in docs/superpowers/specs/2026-09-23-command-dispatch-states-
  * design.md section 3); the trailing return is unreachable but keeps the
  * function total if the enum ever grows a member this switch forgets. */
-static const char *ai_continue_outcome_word(ApprovalStatus status)
+static const char *ai_continue_outcome_word(const ApprovalEntry *e)
 {
-    switch (status) {
+    if (e->quoted) return "quoted in a code block, not run";
+    switch (e->status) {
         case APPROVE_COMPLETED: return "ran";
         case APPROVE_EXECUTING: return "started, stopped before it finished";
         case APPROVE_APPROVED:  return "not run (batch stopped)";
@@ -1745,7 +1772,7 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
         pos += (size_t)w;
 
         for (int i = 0; i < q->count; i++) {
-            const char *outcome = ai_continue_outcome_word(q->entries[i].status);
+            const char *outcome = ai_continue_outcome_word(&q->entries[i]);
             char elided[64];
             ai_elide_command_60(q->entries[i].command, elided, sizeof(elided));
 
@@ -1861,4 +1888,33 @@ void ai_build_auth_headers(const char *provider, const char *api_key,
         out[1] = NULL;
         out[2] = NULL;
     }
+}
+
+/* ---- Unattended-round counter (guard-rails spec 2026-11-04 section 1) ---- */
+
+void ai_rounds_user_message(AiSessionState *s)
+{
+    if (s) s->auto_rounds = 0;
+}
+
+void ai_rounds_continue(AiSessionState *s, int unattended)
+{
+    if (!s) return;
+    if (unattended) {
+        s->auto_rounds++;
+    } else {
+        s->auto_rounds = 0;
+    }
+}
+
+CmdPolicy ai_rounds_batch_policy(const AiSessionState *s, CmdPolicy p)
+{
+    if (s && s->auto_rounds >= AI_AUTO_ROUNDS_MAX)
+        return cmd_policy_attended(p);
+    return p;
+}
+
+int ai_rounds_paused(const AiSessionState *s, CmdPolicy p)
+{
+    return s && s->auto_rounds >= AI_AUTO_ROUNDS_MAX && cmd_policy_auto_on(p);
 }

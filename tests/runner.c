@@ -366,6 +366,12 @@ int test_parse_obj_get_missing_key(void);
 int test_parse_obj_str_type_mismatch(void);
 int test_parse_obj_num_fallback(void);
 int test_json_free_null(void);
+int test_json_depth_256_arrays_parse(void);
+int test_json_depth_256_objects_parse(void);
+int test_json_depth_256_mixed_parse(void);
+int test_json_depth_257_fails(void);
+int test_json_depth_100000_fails(void);
+int test_json_depth_resets_between_siblings(void);
 int test_tok_unicode_escape_ascii(void);
 int test_tok_unicode_escape_apostrophe(void);
 int test_tok_unicode_escape_multibyte(void);
@@ -388,6 +394,10 @@ int test_ssh_idle_one_minute_over(void);
 int test_ssh_network_at_threshold_exact(void);
 int test_ssh_idle_wraparound_over(void);
 int test_ssh_idle_huge_timeout_clamps(void);
+int test_ssh_setup_timeout_text_stages(void);
+int test_ssh_setup_timeout_text_rounds_up(void);
+int test_ssh_setup_timeout_text_ipv6_host(void);
+int test_ssh_setup_timeout_text_small_buf(void);
 
 /* test_config.c */
 int test_config_default_settings(void);
@@ -974,6 +984,8 @@ int test_pty_resize_dedup(void);
 int test_pty_resize_initial_state(void);
 int test_ssh_connect_fail(void);
 int test_ssh_session_blocking(void);
+int test_ssh_timeout_helpers_null_safe(void);
+int test_ssh_handshake_timeout_silent_server(void);
 
 /* test_knownhosts.c */
 int test_kh_new_host_returns_new(void);
@@ -2492,6 +2504,16 @@ int test_cmd_batch_first_pending_none(void);
 int test_cmd_batch_next_runnable_oldest_with_approved(void);
 int test_cmd_batch_conv_mark_defaults_zero_and_settable(void);
 int test_cmd_batch_next_runnable_none(void);
+int test_cmd_batch_add_user_acted_zero(void);
+
+/* test_ai_rounds.c */
+int test_ai_rounds_user_message_resets(void);
+int test_ai_rounds_continue_unattended_counts(void);
+int test_ai_rounds_continue_attended_resets(void);
+int test_ai_rounds_three_rounds_then_paused(void);
+int test_ai_rounds_auto_off_never_paused(void);
+int test_ai_rounds_session_policy_untouched(void);
+int test_ai_rounds_null_safe(void);
 
 /* test_chat_thinking.c */
 int test_thinking_init(void);
@@ -2792,6 +2814,34 @@ int test_web_fetch_html_to_text_whitespace(void);
 int test_web_fetch_html_to_text_truncation(void);
 int test_web_fetch_html_to_text_empty(void);
 int test_web_fetch_url_validation(void);
+/* test_web_fetch_guard.c */
+int test_web_fetch_success_converts_html(void);
+int test_web_fetch_refuses_loopback_first_hop(void);
+int test_web_fetch_refuses_if_any_address_internal(void);
+int test_web_fetch_refuses_when_resolve_fails(void);
+int test_web_fetch_refuses_too_many_addresses(void);
+int test_web_fetch_refuses_internal_at_later_hop(void);
+int test_web_fetch_follows_five_redirects(void);
+int test_web_fetch_sixth_redirect_fails(void);
+int test_web_fetch_redirect_statuses(void);
+int test_web_fetch_deadline(void);
+int test_web_fetch_per_hop_timeout_from_context(void);
+int test_web_fetch_cancel_before_first_hop(void);
+int test_web_fetch_cancel_during_get(void);
+int test_web_fetch_https_to_http_refused(void);
+int test_web_fetch_relative_locations(void);
+int test_web_fetch_bad_location_refused(void);
+int test_web_fetch_passes_port(void);
+int test_web_fetch_on_hop_hides_query_and_userinfo(void);
+int test_web_fetch_url_too_long_refused(void);
+int test_web_fetch_describe(void);
+int test_web_fetch_deadline_passed_inside_on_hop(void);
+int test_web_fetch_get_failure(void);
+int test_web_fetch_cancel_after_resolve(void);
+int test_web_fetch_end_hook_runs_once_on_every_exit(void);
+#ifndef _WIN32
+int test_web_fetch_no_backend_not_available(void);
+#endif
 
 /* test_agentic_loop.c */
 int test_agentic_can_continue_initial(void);
@@ -2826,6 +2876,16 @@ int test_needs_user_blocked_and_approved_auto_approve(void);
 int test_needs_user_approved_only(void);
 int test_needs_user_denied_only(void);
 int test_needs_user_after_unblock_all(void);
+int test_chat_approval_add_quoted_blocked_even_with_auto(void);
+int test_chat_approval_add_quoted_rejects_like_add(void);
+int test_chat_approval_add_session_quoted_zero(void);
+int test_chat_approval_unblock_all_skips_quoted(void);
+int test_chat_approval_approve_quoted_fails(void);
+int test_chat_approval_needs_user_all_quoted(void);
+int test_chat_cmd_label_quoted(void);
+int test_chat_card_header_text(void);
+int test_chat_msg_set_quoted(void);
+int test_continue_text_quoted_entry(void);
 
 /* test_chat_approval.c — permit-write toggle */
 int test_policy_blocked_note_names_the_commands_and_the_ceiling(void);
@@ -3461,6 +3521,13 @@ int test_chat_exec_split_unterminated_keeps_the_marker(void);
 int test_chat_exec_split_empty_and_adjacent_commands(void);
 int test_chat_exec_split_stray_close_is_prose(void);
 int test_chat_exec_split_respects_len_and_null(void);
+int test_chat_exec_split_fenced_marker_is_prose(void);
+int test_chat_exec_split_inline_code_marker_is_prose(void);
+int test_chat_exec_split_marker_on_the_fence_line_is_prose(void);
+int test_chat_exec_split_crlf_fenced_marker_is_prose(void);
+int test_chat_exec_split_unterminated_marker_in_a_fence_is_prose(void);
+int test_chat_exec_split_live_marker_after_quoted_ones_still_splits(void);
+int test_chat_exec_split_agrees_with_the_extractor(void);
 
 /* test_text_runs.c */
 int test_text_runs_cum_ascii_multibyte_and_surrogates(void);
@@ -3514,6 +3581,28 @@ int test_paint_synthetic_runs_cover_their_marker(void);
 /* test_sel_contrast.c */
 int test_sel_highlight_visible_on_every_surface(void);
 int test_sel_hue_is_focus_except_on_the_bubble(void);
+
+/* test_ai_exec_quoted.c */
+int test_exec_quoted_fence_skipped_by_notes(void);
+int test_exec_quoted_full_reports_both_in_order(void);
+int test_exec_quoted_unterminated_fence_runs_to_end(void);
+int test_exec_quoted_indented_fence_is_not_a_fence(void);
+int test_exec_quoted_marker_on_fence_line(void);
+int test_exec_quoted_crlf_fences(void);
+int test_exec_quoted_inline_span(void);
+int test_exec_quoted_unpaired_backtick_opens_nothing(void);
+int test_exec_quoted_span_does_not_cross_lines(void);
+int test_exec_live_command_with_backticks(void);
+int test_exec_quoted_same_checks_apply(void);
+int test_exec_quoted_notes_align(void);
+int test_exec_quoted_takes_slots(void);
+int test_extract_command_skips_quoted(void);
+int test_response_split_ignores_quoted(void);
+int test_system_prompt_quoted_marker_sentence(void);
+int test_exec_quoted_inline_span_after_italic_swallows_backtick(void);
+int test_exec_quoted_list_item_lines(void);
+int test_exec_quoted_table_cell_spans(void);
+int test_exec_quoted_opener_without_own_closer_is_not_a_marker(void);
 
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
@@ -4008,6 +4097,12 @@ int main(void) {
     failed += test_parse_obj_str_type_mismatch();
     failed += test_parse_obj_num_fallback();
     failed += test_json_free_null();
+    failed += test_json_depth_256_arrays_parse();
+    failed += test_json_depth_256_objects_parse();
+    failed += test_json_depth_256_mixed_parse();
+    failed += test_json_depth_257_fails();
+    failed += test_json_depth_100000_fails();
+    failed += test_json_depth_resets_between_siblings();
     failed += test_tok_unicode_escape_ascii();
     failed += test_tok_unicode_escape_apostrophe();
     failed += test_tok_unicode_escape_multibyte();
@@ -4030,6 +4125,10 @@ int main(void) {
     failed += test_ssh_network_at_threshold_exact();
     failed += test_ssh_idle_wraparound_over();
     failed += test_ssh_idle_huge_timeout_clamps();
+    failed += test_ssh_setup_timeout_text_stages();
+    failed += test_ssh_setup_timeout_text_rounds_up();
+    failed += test_ssh_setup_timeout_text_ipv6_host();
+    failed += test_ssh_setup_timeout_text_small_buf();
 
     /* Config */
     failed += test_config_default_settings();
@@ -4528,6 +4627,8 @@ int main(void) {
     failed += test_pty_resize_initial_state();
     failed += test_ssh_connect_fail();
     failed += test_ssh_session_blocking();
+    failed += test_ssh_timeout_helpers_null_safe();
+    failed += test_ssh_handshake_timeout_silent_server();
 
     printf("\n--- Known Hosts ---\n");
     failed += test_kh_new_host_returns_new();
@@ -6005,6 +6106,16 @@ int main(void) {
     failed += test_cmd_batch_next_runnable_oldest_with_approved();
     failed += test_cmd_batch_conv_mark_defaults_zero_and_settable();
     failed += test_cmd_batch_next_runnable_none();
+    failed += test_cmd_batch_add_user_acted_zero();
+
+    printf("\n--- AI auto rounds ---\n");
+    failed += test_ai_rounds_user_message_resets();
+    failed += test_ai_rounds_continue_unattended_counts();
+    failed += test_ai_rounds_continue_attended_resets();
+    failed += test_ai_rounds_three_rounds_then_paused();
+    failed += test_ai_rounds_auto_off_never_paused();
+    failed += test_ai_rounds_session_policy_untouched();
+    failed += test_ai_rounds_null_safe();
 
     printf("\n--- Thinking Controller ---\n");
     failed += test_thinking_init();
@@ -6342,6 +6453,33 @@ int main(void) {
     failed += test_web_fetch_html_to_text_truncation();
     failed += test_web_fetch_html_to_text_empty();
     failed += test_web_fetch_url_validation();
+    failed += test_web_fetch_success_converts_html();
+    failed += test_web_fetch_refuses_loopback_first_hop();
+    failed += test_web_fetch_refuses_if_any_address_internal();
+    failed += test_web_fetch_refuses_when_resolve_fails();
+    failed += test_web_fetch_refuses_too_many_addresses();
+    failed += test_web_fetch_refuses_internal_at_later_hop();
+    failed += test_web_fetch_follows_five_redirects();
+    failed += test_web_fetch_sixth_redirect_fails();
+    failed += test_web_fetch_redirect_statuses();
+    failed += test_web_fetch_deadline();
+    failed += test_web_fetch_per_hop_timeout_from_context();
+    failed += test_web_fetch_cancel_before_first_hop();
+    failed += test_web_fetch_cancel_during_get();
+    failed += test_web_fetch_https_to_http_refused();
+    failed += test_web_fetch_relative_locations();
+    failed += test_web_fetch_bad_location_refused();
+    failed += test_web_fetch_passes_port();
+    failed += test_web_fetch_on_hop_hides_query_and_userinfo();
+    failed += test_web_fetch_url_too_long_refused();
+    failed += test_web_fetch_describe();
+    failed += test_web_fetch_deadline_passed_inside_on_hop();
+    failed += test_web_fetch_get_failure();
+    failed += test_web_fetch_cancel_after_resolve();
+    failed += test_web_fetch_end_hook_runs_once_on_every_exit();
+#ifndef _WIN32
+    failed += test_web_fetch_no_backend_not_available();
+#endif
 
     printf("\n--- Agentic Loop ---\n");
     failed += test_agentic_can_continue_initial();
@@ -6376,6 +6514,16 @@ int main(void) {
     failed += test_needs_user_approved_only();
     failed += test_needs_user_denied_only();
     failed += test_needs_user_after_unblock_all();
+    failed += test_chat_approval_add_quoted_blocked_even_with_auto();
+    failed += test_chat_approval_add_quoted_rejects_like_add();
+    failed += test_chat_approval_add_session_quoted_zero();
+    failed += test_chat_approval_unblock_all_skips_quoted();
+    failed += test_chat_approval_approve_quoted_fails();
+    failed += test_chat_approval_needs_user_all_quoted();
+    failed += test_chat_cmd_label_quoted();
+    failed += test_chat_card_header_text();
+    failed += test_chat_msg_set_quoted();
+    failed += test_continue_text_quoted_entry();
 
     printf("\n--- Permit-Write Toggle ---\n");
     failed += test_policy_blocked_note_names_the_commands_and_the_ceiling();
@@ -7034,6 +7182,13 @@ int main(void) {
     failed += test_chat_exec_split_empty_and_adjacent_commands();
     failed += test_chat_exec_split_stray_close_is_prose();
     failed += test_chat_exec_split_respects_len_and_null();
+    failed += test_chat_exec_split_fenced_marker_is_prose();
+    failed += test_chat_exec_split_inline_code_marker_is_prose();
+    failed += test_chat_exec_split_marker_on_the_fence_line_is_prose();
+    failed += test_chat_exec_split_crlf_fenced_marker_is_prose();
+    failed += test_chat_exec_split_unterminated_marker_in_a_fence_is_prose();
+    failed += test_chat_exec_split_live_marker_after_quoted_ones_still_splits();
+    failed += test_chat_exec_split_agrees_with_the_extractor();
 
     failed += test_text_runs_cum_ascii_multibyte_and_surrogates();
     failed += test_text_runs_cum_invalid_bytes_and_limits();
@@ -7081,6 +7236,27 @@ int main(void) {
 
     failed += test_sel_highlight_visible_on_every_surface();
     failed += test_sel_hue_is_focus_except_on_the_bubble();
+
+    failed += test_exec_quoted_fence_skipped_by_notes();
+    failed += test_exec_quoted_full_reports_both_in_order();
+    failed += test_exec_quoted_unterminated_fence_runs_to_end();
+    failed += test_exec_quoted_indented_fence_is_not_a_fence();
+    failed += test_exec_quoted_marker_on_fence_line();
+    failed += test_exec_quoted_crlf_fences();
+    failed += test_exec_quoted_inline_span();
+    failed += test_exec_quoted_unpaired_backtick_opens_nothing();
+    failed += test_exec_quoted_span_does_not_cross_lines();
+    failed += test_exec_live_command_with_backticks();
+    failed += test_exec_quoted_same_checks_apply();
+    failed += test_exec_quoted_notes_align();
+    failed += test_exec_quoted_takes_slots();
+    failed += test_extract_command_skips_quoted();
+    failed += test_response_split_ignores_quoted();
+    failed += test_system_prompt_quoted_marker_sentence();
+    failed += test_exec_quoted_inline_span_after_italic_swallows_backtick();
+    failed += test_exec_quoted_list_item_lines();
+    failed += test_exec_quoted_table_cell_spans();
+    failed += test_exec_quoted_opener_without_own_closer_is_not_a_marker();
 
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();
@@ -7227,6 +7403,23 @@ int main(void) {
         int test_tn_status_truncates_safely(void);
         int test_tn_conn_merge_precedence(void);
         int test_tn_line_for_outcome_maps_all(void);
+        int test_net_ipv4_internal_ranges(void);
+        int test_net_ipv4_public_edges(void);
+        int test_net_ipv6_internal(void);
+        int test_net_ipv6_public(void);
+        int test_net_addr_is_internal_dispatch(void);
+        int test_net_url_parse_basic(void);
+        int test_net_url_parse_userinfo_and_delims(void);
+        int test_net_url_parse_ipv6_literal(void);
+        int test_net_url_parse_refuses(void);
+        int test_net_url_parse_refuses_non_ascii_hosts(void);
+        int test_net_url_cleartext_remote(void);
+        int test_net_url_resolve_absolute(void);
+        int test_net_url_resolve_scheme_relative(void);
+        int test_net_url_resolve_absolute_path(void);
+        int test_net_url_resolve_relative(void);
+        int test_net_url_resolve_refuses(void);
+        int test_net_url_display(void);
         failed += test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read();
         failed += test_dlog_review_osc52_introducer_after_the_output_filled_up_withholds_the_next_read();
         failed += test_dlog_review_escape_bytes_keeps_tracking_after_the_output_is_full();
@@ -7270,6 +7463,23 @@ int main(void) {
         failed += test_tn_status_truncates_safely();
         failed += test_tn_conn_merge_precedence();
         failed += test_tn_line_for_outcome_maps_all();
+        failed += test_net_ipv4_internal_ranges();
+        failed += test_net_ipv4_public_edges();
+        failed += test_net_ipv6_internal();
+        failed += test_net_ipv6_public();
+        failed += test_net_addr_is_internal_dispatch();
+        failed += test_net_url_parse_basic();
+        failed += test_net_url_parse_userinfo_and_delims();
+        failed += test_net_url_parse_ipv6_literal();
+        failed += test_net_url_parse_refuses();
+        failed += test_net_url_parse_refuses_non_ascii_hosts();
+        failed += test_net_url_cleartext_remote();
+        failed += test_net_url_resolve_absolute();
+        failed += test_net_url_resolve_scheme_relative();
+        failed += test_net_url_resolve_absolute_path();
+        failed += test_net_url_resolve_relative();
+        failed += test_net_url_resolve_refuses();
+        failed += test_net_url_display();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);

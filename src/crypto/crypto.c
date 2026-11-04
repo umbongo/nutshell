@@ -1,4 +1,4 @@
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 200112L
 #endif
 #include "crypto.h"
@@ -24,7 +24,6 @@
 #define SALT_LEN       16   /* C-1: per-blob random PBKDF2 salt */
 
 /* PBKDF2 parameters */
-static const char PBKDF2_SALT[] = "CongaSSH-v1";  /* used by crypto_derive_key only */
 #define PBKDF2_ITER 100000
 
 /* ---- Base64 helpers ------------------------------------------------------- */
@@ -103,25 +102,6 @@ static int get_key_material(char *buf, size_t buf_size)
 #endif
 
     return (buf[0] != '\0') ? 0 : -1;
-}
-
-/* ---- Key derivation ------------------------------------------------------- */
-
-int crypto_derive_key(unsigned char key[32])
-{
-    if (!key) return CRYPTO_ERR_ARGS;
-
-    char material[512];
-    if (get_key_material(material, sizeof(material)) != 0)
-        return CRYPTO_ERR_KEY;
-
-    int rc = PKCS5_PBKDF2_HMAC(material, (int)strlen(material),
-                                 (const unsigned char *)PBKDF2_SALT,
-                                 (int)(sizeof(PBKDF2_SALT) - 1u),
-                                 PBKDF2_ITER, EVP_sha256(),
-                                 KEY_LEN, key);
-    secure_zero(material, sizeof(material));
-    return (rc == 1) ? CRYPTO_OK : CRYPTO_ERR_KEY;
 }
 
 /* ---- Encrypt with external key ------------------------------------------- */

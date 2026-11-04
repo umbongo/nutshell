@@ -286,6 +286,7 @@ static const char *thread_tag(void) { return t_tag[0] ? t_tag : "?"; }
 void dlog_set_thread_tag(const char *tag)
 {
     size_t i = 0;
+    /* cppcheck-suppress arrayIndexOutOfBoundsCond ; false positive: the loop stops at tag's NUL, so a short literal is never read past its end */
     if (tag) for (; i < 7 && tag[i]; i++) t_tag[i] = tag[i];
     t_tag[i] = '\0';
 }
@@ -354,7 +355,7 @@ static void flush_repeat_locked(int cat, unsigned mono, int *wake)
 }
 
 static void emit_v(int cat, int lvl, unsigned sid, const char *event, const char *fmt,
-                   va_list ap, const char *raw, int force)
+                   va_list *ap, const char *raw, int force)
 {
     if (!__atomic_load_n(&G.started, __ATOMIC_ACQUIRE)) return;
     const DlogPlatform *pf = G.p;          /* read once: shutdown keeps it set, but never re-read it */
@@ -378,7 +379,7 @@ static void emit_v(int cat, int lvl, unsigned sid, const char *event, const char
     dlog_out_init(&o, line, DLOG_LINE_MAX, pl, DLOG_OUT_RESERVE);
     dlog_out_event(&o, event);
     if (raw) dlog_out_raw_fields(&o, raw);
-    else if (fmt) dlog_out_fmt(&o, fmt, ap);
+    else if (fmt && ap) dlog_out_fmt(&o, fmt, *ap);
     size_t len = dlog_out_finish(&o, 1);
     /* the last line of defence, on the body only */
     size_t body = dlog_redact_line(line + pl, len - pl, DLOG_LINE_MAX - pl + 1);
@@ -426,15 +427,13 @@ void dlog_emit(DlogCat cat, DlogEvLevel lvl, unsigned sid, const char *event, co
 {
     va_list ap;
     va_start(ap, fmt);
-    emit_v((int)cat, (int)lvl, sid, event, fmt, ap, NULL, 0);
+    emit_v((int)cat, (int)lvl, sid, event, fmt, &ap, NULL, 0);
     va_end(ap);
 }
 
 void dlog_emit_fields(DlogCat cat, DlogEvLevel lvl, unsigned sid, const char *event, const char *fields)
 {
-    va_list ap;
-    memset(&ap, 0, sizeof(ap));
-    emit_v((int)cat, (int)lvl, sid, event, NULL, ap, fields ? fields : "", 0);
+    emit_v((int)cat, (int)lvl, sid, event, NULL, NULL, fields ? fields : "", 0);
 }
 
 /* A line the logger itself writes, regardless of levels. */
@@ -442,7 +441,7 @@ static void emit_forced(int cat, int lvl, unsigned sid, const char *event, const
 {
     va_list ap;
     va_start(ap, fmt);
-    emit_v(cat, lvl, sid, event, fmt, ap, NULL, 1);
+    emit_v(cat, lvl, sid, event, fmt, &ap, NULL, 1);
     va_end(ap);
 }
 
@@ -511,9 +510,7 @@ void dlog_emit_content(DlogCat cat, DlogEvLevel lvl, unsigned sid, const char *e
         if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '_')) *c = '_';
     char fields[4200];
     (void)snprintf(fields, sizeof(fields), "%s=\"%s\" len=%zu%s", k, esc, len, truncated ? " truncated=1" : "");
-    va_list ap;
-    memset(&ap, 0, sizeof(ap));
-    emit_v((int)cat, (int)lvl, sid, event, NULL, ap, fields, 0);
+    emit_v((int)cat, (int)lvl, sid, event, NULL, NULL, fields, 0);
 }
 
 /* ---- the writer's side: files ------------------------------------------------------------------ */
@@ -1426,9 +1423,7 @@ int dlog_issue_mark(const DlogSnapshot *snap, int want_screenshot, DlogIssue *ou
         DlogSnapLine lines[8 + DLOG_SNAP_MAX_SESSIONS];
         size_t cnt = dlog_snapshot_format(snap, lines, sizeof(lines) / sizeof(lines[0]));
         for (size_t i = 0; i < cnt; i++) {
-            va_list ap;
-            memset(&ap, 0, sizeof(ap));
-            emit_v((int)DLOG_GENERAL, (int)DLOG_ISSUE, lines[i].sid, lines[i].event, NULL, ap, lines[i].fields, 1);
+            emit_v((int)DLOG_GENERAL, (int)DLOG_ISSUE, lines[i].sid, lines[i].event, NULL, NULL, lines[i].fields, 1);
         }
     }
 

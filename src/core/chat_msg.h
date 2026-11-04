@@ -70,6 +70,9 @@ typedef struct ChatMsgItem {
             CmdSafetyLevel safety;
             int approved;       /* -1=pending, 0=denied, 1=approved */
             int blocked;
+            int quoted;         /* 1 = the marker sat inside code: never runs,
+                                  * the chip says "quoted, not run" (see
+                                  * chat_approval_add_quoted()) */
             int selected;       /* 1=tickbox checked for batch approve */
             int settled;        /* 1=finalized, rendered inline, not in active container */
             int batch;          /* CmdBatch id this command belongs to; 0 for
@@ -125,6 +128,10 @@ int chat_msg_set_note(ChatMsgItem *item, const char *note);
  * a non-command item. */
 void chat_msg_set_batch(ChatMsgItem *item, int batch);
 
+/* Mark a CHAT_ITEM_COMMAND item as quoted (u.cmd.quoted). NULL-safe; no-op
+ * on a non-command item. */
+void chat_msg_set_quoted(ChatMsgItem *item, int quoted);
+
 /* Set thinking text on a CHAT_ITEM_AI_TEXT item. Copied to heap. */
 int chat_msg_set_thinking(ChatMsgItem *item, const char *thinking_text);
 
@@ -161,11 +168,12 @@ typedef enum {
 } ChatCmdIntent;
 
 /* Pure label for a command card's status chip, from the item's own
- * approval/blocked/run state -- no queue lookup, no item pointer. `approved`
- * is the item's u.cmd.approved (-1 pending, 0 denied, 1 approved), `blocked`
- * its u.cmd.blocked, `run` a CHAT_RUN_* value. Tested in this priority
- * order:
+ * approval/blocked/quoted/run state -- no queue lookup, no item pointer.
+ * `approved` is the item's u.cmd.approved (-1 pending, 0 denied, 1
+ * approved), `blocked` its u.cmd.blocked, `quoted` its u.cmd.quoted, `run`
+ * a CHAT_RUN_* value. Tested in this priority order:
  *
+ *   quoted (any other state)          -> "quoted, not run", DIM
  *   blocked (any run)                 -> "held",     WARNING
  *   approved == 0 (any run)           -> "denied",   DIM
  *   approved == -1, not blocked       -> "skipped",  DIM
@@ -182,8 +190,15 @@ typedef enum {
  * An `approved == 1` row with any other `run` value falls back to the
  * "queued"/DIM row. Returns a static string, never NULL. Writes *intent
  * when `intent` is non-NULL; leaves it untouched otherwise. */
-const char *chat_cmd_label(int approved, int blocked, int run,
+const char *chat_cmd_label(int approved, int blocked, int quoted, int run,
                            ChatCmdIntent *intent);
+
+/* The approval card's header, e.g. "4 commands \xC2\xB7 1 held \xC2\xB7 2 quoted":
+ * `n` commands (singular for 1), then " \xC2\xB7 H held" when held > 0, then
+ * " \xC2\xB7 Q quoted" when quoted > 0. Writes a NUL-terminated string into
+ * buf and returns its length, or 0 (with buf[0] = NUL, when cap > 0) when it
+ * does not fit in cap bytes or buf is NULL. */
+int chat_card_header_text(int n, int held, int quoted, char *buf, size_t cap);
 
 /* Sync u.cmd.run on every CHAT_ITEM_COMMAND item in `list` with
  * u.cmd.batch == batch_id, in list order, whether settled or not (a batch

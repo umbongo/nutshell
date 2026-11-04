@@ -189,6 +189,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/core/ns_scale.c src/core/ns_type.c src/core/cmd_policy.c \
                    src/ui/chat_listview.c src/ui/clipboard.c src/ui/ns_font.c \
                    src/core/chat_msg.c src/core/chat_copy.c src/core/chat_exec.c \
+                   src/core/exec_scan.c \
                    src/core/md_blocks.c src/core/ns_layout.c src/core/ns_hover.c \
                    src/core/stick_scroll.c src/core/ai_panel_layout.c \
                    src/core/ai_panel_states.c src/core/chat_activity.c \
@@ -243,4 +244,4 @@ clean:
 	rm -rf $(DELAY_LIB_DIR)
 
 lint:
-	cppcheck --enable=warning,style,performance,portability --std=c11 src/
+	cppcheck --enable=warning,style,performance,portability --inline-suppr --std=c11 src/
