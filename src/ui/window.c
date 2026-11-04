@@ -229,7 +229,17 @@ static volatile LONG g_live_conn_jobs = 0;
 static void conn_job_free(ConnJob *j)
 {
     if (!j) return;
-    if (j->channel) ssh_channel_free(j->channel);
+    if (j->channel) {
+        /* A channel still here was never handed to a Session (a failed or
+         * abandoned attempt). ssh_channel_free() waits for the server's close
+         * on a blocking session; on a hung server that would stall this
+         * thread (often the UI thread) for the whole 15 s setup limit, so
+         * shorten it. libssh2 checks the limit in whole seconds: expect 1-2 s
+         * at worst. Never 0, which waits without end. A handed-off job has
+         * channel == NULL and is not touched. */
+        ssh_session_set_timeout(j->ssh, 1);
+        ssh_channel_free(j->channel);
+    }
     if (j->ssh) ssh_session_free(j->ssh);
     if (j->tn_sock != INVALID_SOCKET) closesocket(j->tn_sock);
     secure_zero(&j->profile, sizeof(j->profile));
