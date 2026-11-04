@@ -2792,6 +2792,30 @@ int test_web_fetch_html_to_text_whitespace(void);
 int test_web_fetch_html_to_text_truncation(void);
 int test_web_fetch_html_to_text_empty(void);
 int test_web_fetch_url_validation(void);
+/* test_web_fetch_guard.c */
+int test_web_fetch_success_converts_html(void);
+int test_web_fetch_refuses_loopback_first_hop(void);
+int test_web_fetch_refuses_if_any_address_internal(void);
+int test_web_fetch_refuses_when_resolve_fails(void);
+int test_web_fetch_refuses_too_many_addresses(void);
+int test_web_fetch_refuses_internal_at_later_hop(void);
+int test_web_fetch_follows_five_redirects(void);
+int test_web_fetch_sixth_redirect_fails(void);
+int test_web_fetch_redirect_statuses(void);
+int test_web_fetch_deadline(void);
+int test_web_fetch_per_hop_timeout_from_context(void);
+int test_web_fetch_cancel_before_first_hop(void);
+int test_web_fetch_cancel_during_get(void);
+int test_web_fetch_https_to_http_refused(void);
+int test_web_fetch_relative_locations(void);
+int test_web_fetch_bad_location_refused(void);
+int test_web_fetch_passes_port(void);
+int test_web_fetch_on_hop_hides_query_and_userinfo(void);
+int test_web_fetch_url_too_long_refused(void);
+int test_web_fetch_describe(void);
+#ifndef _WIN32
+int test_web_fetch_no_backend_not_available(void);
+#endif
 
 /* test_agentic_loop.c */
 int test_agentic_can_continue_initial(void);
@@ -6342,6 +6366,29 @@ int main(void) {
     failed += test_web_fetch_html_to_text_truncation();
     failed += test_web_fetch_html_to_text_empty();
     failed += test_web_fetch_url_validation();
+    failed += test_web_fetch_success_converts_html();
+    failed += test_web_fetch_refuses_loopback_first_hop();
+    failed += test_web_fetch_refuses_if_any_address_internal();
+    failed += test_web_fetch_refuses_when_resolve_fails();
+    failed += test_web_fetch_refuses_too_many_addresses();
+    failed += test_web_fetch_refuses_internal_at_later_hop();
+    failed += test_web_fetch_follows_five_redirects();
+    failed += test_web_fetch_sixth_redirect_fails();
+    failed += test_web_fetch_redirect_statuses();
+    failed += test_web_fetch_deadline();
+    failed += test_web_fetch_per_hop_timeout_from_context();
+    failed += test_web_fetch_cancel_before_first_hop();
+    failed += test_web_fetch_cancel_during_get();
+    failed += test_web_fetch_https_to_http_refused();
+    failed += test_web_fetch_relative_locations();
+    failed += test_web_fetch_bad_location_refused();
+    failed += test_web_fetch_passes_port();
+    failed += test_web_fetch_on_hop_hides_query_and_userinfo();
+    failed += test_web_fetch_url_too_long_refused();
+    failed += test_web_fetch_describe();
+#ifndef _WIN32
+    failed += test_web_fetch_no_backend_not_available();
+#endif
 
     printf("\n--- Agentic Loop ---\n");
     failed += test_agentic_can_continue_initial();

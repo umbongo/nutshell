@@ -5,12 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <windows.h>
-#include <winhttp.h>
-#endif
-
 /* ---- web_fetch_html_to_text ---------------------------------------------- */
 
 int web_fetch_html_to_text(const char *html, size_t html_len,
@@ -135,6 +129,190 @@ int web_fetch_html_to_text(const char *html, size_t html_len,
     return 0;
 }
 
+/* ---- helpers --------------------------------------------------------------- */
+
+/* Default per-hop cap when the context sets none. */
+#define WEB_FETCH_DEFAULT_HOP_MS 10000
+
+static int fetch_fail(char **result_buf, size_t *result_len, const char *msg)
+{
+    size_t n = strlen(msg);
+    char  *b = malloc(n + 1);
+    if (!b) return -1;
+    memcpy(b, msg, n + 1);
+    *result_buf = b;
+    *result_len = n;
+    return -1;
+}
+
+/* A host as printable ASCII for an error message: the tool result reaches the
+ * model and may be shown, so any other byte becomes '?'. */
+static void safe_host(const char *host, char *out, size_t cap)
+{
+    size_t i = 0;
+    for (; host[i] != '\0' && i + 1 < cap; i++) {
+        unsigned char c = (unsigned char)host[i];
+        out[i] = (c >= 0x21 && c < 0x7F) ? (char)c : '?';
+    }
+    out[i] = '\0';
+}
+
+static int is_redirect_status(int status)
+{
+    return status == 301 || status == 302 || status == 303 ||
+           status == 307 || status == 308;
+}
+
+enum { STOP_NONE = 0, STOP_CANCELLED, STOP_TIMEOUT };
+
+static int stop_reason(const WebFetchBackend *be, volatile int *cancel,
+                       unsigned long long deadline)
+{
+    if (cancel && *cancel) return STOP_CANCELLED;
+    if (be->now_ms(be->ctx) >= deadline) return STOP_TIMEOUT;
+    return STOP_NONE;
+}
+
+static int fail_stopped(int reason, char **result_buf, size_t *result_len)
+{
+    return fetch_fail(result_buf, result_len,
+                      reason == STOP_CANCELLED ? "Fetch cancelled"
+                                               : "Fetch timed out after 30 s");
+}
+
+/* ---- the hop loop --------------------------------------------------------- */
+
+/* Every request is preceded, in this function, by the address check for the
+ * host it goes to: the order below is the guard, so nothing here may fetch
+ * first and check afterwards. Every failure refuses; none falls through to a
+ * fetch. On cancel or deadline no fetched text is returned. */
+static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
+                      const char *first_url, volatile int *cancel,
+                      char **result_buf, size_t *result_len, int *was_truncated)
+{
+    char        url[NET_URL_MAX];
+    char        next[NET_URL_MAX];
+    char        location[NET_URL_MAX];
+    char        display[NET_URL_DISPLAY_MAX + 8];
+    char        msg[NET_HOST_MAX + 96];
+    char        host[NET_HOST_MAX];
+    NetUrlParts parts;
+    NetUrlParts next_parts;
+    NetAddr     addrs[WEB_FETCH_MAX_ADDRS];
+
+    int per_hop = (ctx && ctx->timeout_ms > 0) ? ctx->timeout_ms
+                                               : WEB_FETCH_DEFAULT_HOP_MS;
+    unsigned long long deadline = be->now_ms(be->ctx) + WEB_FETCH_TOTAL_MS;
+
+    snprintf(url, sizeof(url), "%s", first_url);
+
+    for (int hop = 0; hop <= WEB_FETCH_MAX_REDIRECTS; hop++) {
+        int stop = stop_reason(be, cancel, deadline);
+        if (stop != STOP_NONE) return fail_stopped(stop, result_buf, result_len);
+
+        if (net_url_parse(url, &parts) != 0)
+            return fetch_fail(result_buf, result_len,
+                              "Refused: not a valid http or https address");
+        net_url_display(url, display, sizeof(display));
+        safe_host(parts.host, host, sizeof(host));
+
+        /* Residual risk, accepted: the backend resolves the name again when it
+         * connects, so a DNS answer that changes between this lookup and that
+         * one (rebinding) is not caught here. A configured proxy also resolves
+         * on its own. Pinning the checked address would break the TLS name
+         * check, so the check is on the name's addresses, before each hop. */
+        int n = be->resolve(be->ctx, parts.host, addrs, WEB_FETCH_MAX_ADDRS);
+        if (n <= 0 || n > WEB_FETCH_MAX_ADDRS) {
+            snprintf(msg, sizeof(msg), "Refused: could not resolve %s", host);
+            return fetch_fail(result_buf, result_len, msg);
+        }
+        for (int i = 0; i < n; i++) {
+            if (net_addr_is_internal(&addrs[i])) {
+                if (ctx && ctx->on_hop) ctx->on_hop(ctx->user, display, 1);
+                snprintf(msg, sizeof(msg),
+                         "Refused: %s is a local or private network address", host);
+                return fetch_fail(result_buf, result_len, msg);
+            }
+        }
+
+        /* The lookup counts against the deadline and may have been cancelled. */
+        stop = stop_reason(be, cancel, deadline);
+        if (stop != STOP_NONE) return fail_stopped(stop, result_buf, result_len);
+
+        if (ctx && ctx->on_hop) ctx->on_hop(ctx->user, display, 0);
+
+        unsigned long long left = deadline - be->now_ms(be->ctx);
+        int timeout = per_hop;
+        if (left < (unsigned long long)timeout) timeout = (int)left;
+
+        int    status = 0;
+        char  *body = NULL;
+        size_t body_len = 0;
+        location[0] = '\0';
+        int got = be->get(be->ctx, &parts, timeout, cancel, &status,
+                          location, sizeof(location), &body, &body_len);
+
+        stop = stop_reason(be, cancel, deadline);
+        if (stop != STOP_NONE) {
+            free(body);
+            return fail_stopped(stop, result_buf, result_len);
+        }
+        if (got != 0) {
+            free(body);
+            return fetch_fail(result_buf, result_len, "HTTP request failed");
+        }
+
+        if (is_redirect_status(status)) {
+            free(body);
+            if (hop == WEB_FETCH_MAX_REDIRECTS)
+                return fetch_fail(result_buf, result_len,
+                                  "Refused: too many redirects (more than 5)");
+            if (net_url_resolve(url, location, next, sizeof(next)) != 0 ||
+                net_url_parse(next, &next_parts) != 0)
+                return fetch_fail(result_buf, result_len,
+                                  "Refused: redirect to an unsupported or invalid location");
+            if (parts.https && !next_parts.https)
+                return fetch_fail(result_buf, result_len,
+                                  "Refused: redirect from https to http");
+            snprintf(url, sizeof(url), "%s", next);
+            continue;
+        }
+
+        int rc = web_fetch_html_to_text(body, body_len, result_buf, result_len,
+                                        was_truncated);
+        free(body);
+        return rc;
+    }
+
+    /* Unreachable: the last hop either returns or refuses a redirect. */
+    return fetch_fail(result_buf, result_len, "HTTP request failed");
+}
+
+/* ---- backend selection and description ------------------------------------ */
+
+const WebFetchBackend *web_fetch_default_backend(void)
+{
+    return NULL;
+}
+
+int web_fetch_describe(const char *input_json, char *out, size_t cap)
+{
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    if (!input_json) return 0;
+
+    JsonNode *input = json_parse(input_json);
+    if (!input) return 0;
+    const char *url = json_obj_str(input, "url");
+    int ok = 0;
+    if (url && url[0] != '\0') {
+        net_url_display(url, out, cap);
+        ok = out[0] != '\0';
+    }
+    json_free(input);
+    return ok;
+}
+
 /* ---- tool_web_fetch_execute ---------------------------------------------- */
 
 int tool_web_fetch_execute(const char *input_json, void *tool_data,
@@ -142,8 +320,6 @@ int tool_web_fetch_execute(const char *input_json, void *tool_data,
                            char **result_buf, size_t *result_len,
                            int *was_truncated)
 {
-    (void)cancel_flag;
-
     if (!input_json || !result_buf || !result_len || !was_truncated)
         return -1;
 
@@ -185,169 +361,26 @@ int tool_web_fetch_execute(const char *input_json, void *tool_data,
         return -1;
     }
 
-    /* Copy URL before freeing the JSON tree */
-    char url_copy[2048];
+    /* Copy URL before freeing the JSON tree. A URL that does not fit is
+     * refused, never cut: a truncated address is a different address. */
+    char url_copy[NET_URL_MAX];
     size_t ulen = strlen(url);
-    if (ulen >= sizeof(url_copy)) ulen = sizeof(url_copy) - 1;
-    memcpy(url_copy, url, ulen);
-    url_copy[ulen] = '\0';
+    if (ulen >= sizeof(url_copy)) {
+        json_free(input);
+        return fetch_fail(result_buf, result_len,
+                          "Refused: URL is too long (limit is 2047 bytes)");
+    }
+    memcpy(url_copy, url, ulen + 1);
 
     json_free(input);
 
-#ifdef _WIN32
-    /* ---- Windows WinHTTP implementation ---------------------------------- */
+    const WebFetchContext *ctx = (const WebFetchContext *)tool_data;
+    const WebFetchBackend *be  = (ctx && ctx->backend) ? ctx->backend
+                                                       : web_fetch_default_backend();
+    if (!be || !be->resolve || !be->get || !be->now_ms)
+        return fetch_fail(result_buf, result_len,
+                          "Web fetch not available (non-Windows build)");
 
-    WebFetchContext *ctx    = (WebFetchContext *)tool_data;
-    int              timeout = (ctx && ctx->timeout_ms > 0) ? ctx->timeout_ms : 10000;
-
-    /* Convert URL to wide string */
-    wchar_t w_url[2048];
-    MultiByteToWideChar(CP_UTF8, 0, url_copy, -1, w_url, 2048);
-
-    /* Parse URL components */
-    URL_COMPONENTS uc;
-    memset(&uc, 0, sizeof(uc));
-    uc.dwStructSize = sizeof(uc);
-    wchar_t w_host[512] = {0};
-    wchar_t w_path[1536] = {0};
-    uc.lpszHostName     = w_host;
-    uc.dwHostNameLength = 512;
-    uc.lpszUrlPath      = w_path;
-    uc.dwUrlPathLength  = 1536;
-
-    if (!WinHttpCrackUrl(w_url, 0, 0, &uc)) {
-        const char *err = "Failed to parse URL";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    HINTERNET session = WinHttpOpen(
-        L"Nutshell/1.0",
-        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-        WINHTTP_NO_PROXY_NAME,
-        WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session) {
-        const char *err = "WinHTTP session open failed";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    INTERNET_PORT port = (uc.nScheme == INTERNET_SCHEME_HTTPS)
-                         ? INTERNET_DEFAULT_HTTPS_PORT
-                         : INTERNET_DEFAULT_HTTP_PORT;
-
-    HINTERNET connect = WinHttpConnect(session, w_host, port, 0);
-    if (!connect) {
-        WinHttpCloseHandle(session);
-        const char *err = "WinHTTP connect failed";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    DWORD flags = (uc.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
-    HINTERNET request = WinHttpOpenRequest(
-        connect, L"GET", w_path,
-        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
-    if (!request) {
-        WinHttpCloseHandle(connect);
-        WinHttpCloseHandle(session);
-        const char *err = "WinHTTP request open failed";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    /* Set timeout */
-    WinHttpSetTimeouts(request, timeout, timeout, timeout, timeout);
-
-    /* Set User-Agent header */
-    wchar_t w_ua[128];
-    MultiByteToWideChar(CP_UTF8, 0, AI_TOOL_USER_AGENT, -1, w_ua, 128);
-    WinHttpAddRequestHeaders(request, L"User-Agent: ", (DWORD)-1,
-                             WINHTTP_ADDREQ_FLAG_ADD);
-
-    if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
-                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
-        !WinHttpReceiveResponse(request, NULL)) {
-        WinHttpCloseHandle(request);
-        WinHttpCloseHandle(connect);
-        WinHttpCloseHandle(session);
-        const char *err = "HTTP request failed";
-        *result_buf = malloc(strlen(err) + 1);
-        if (!*result_buf) return -1;
-        strcpy(*result_buf, err);
-        *result_len = strlen(err);
-        return -1;
-    }
-
-    /* Read response body into a dynamically grown buffer */
-    size_t body_cap  = 65536;
-    size_t body_len  = 0;
-    char  *body      = malloc(body_cap);
-    if (!body) {
-        WinHttpCloseHandle(request);
-        WinHttpCloseHandle(connect);
-        WinHttpCloseHandle(session);
-        return -1;
-    }
-
-    DWORD bytes_read = 0;
-    DWORD bytes_avail = 0;
-    while (WinHttpQueryDataAvailable(request, &bytes_avail) && bytes_avail > 0) {
-        /* Cap at AI_TOOL_RESULT_MAX to avoid reading huge pages */
-        if (body_len + bytes_avail > AI_TOOL_RESULT_MAX * 4)
-            bytes_avail = (DWORD)(AI_TOOL_RESULT_MAX * 4 - body_len);
-
-        if (body_len + bytes_avail + 1 > body_cap) {
-            body_cap = (body_len + bytes_avail + 1) * 2;
-            char *tmp = realloc(body, body_cap);
-            if (!tmp) {
-                free(body);
-                WinHttpCloseHandle(request);
-                WinHttpCloseHandle(connect);
-                WinHttpCloseHandle(session);
-                return -1;
-            }
-            body = tmp;
-        }
-
-        if (!WinHttpReadData(request, body + body_len, bytes_avail, &bytes_read))
-            break;
-        body_len += bytes_read;
-
-        if (body_len >= AI_TOOL_RESULT_MAX * 4) break;
-    }
-    body[body_len] = '\0';
-
-    WinHttpCloseHandle(request);
-    WinHttpCloseHandle(connect);
-    WinHttpCloseHandle(session);
-
-    /* Convert HTML to plain text */
-    int rc = web_fetch_html_to_text(body, body_len,
-                                     result_buf, result_len, was_truncated);
-    free(body);
-    return rc;
-
-#else
-    /* Non-Windows: not implemented */
-    (void)tool_data;
-    const char *err = "Web fetch not available (non-Windows build)";
-    *result_buf = malloc(strlen(err) + 1);
-    if (!*result_buf) return -1;
-    strcpy(*result_buf, err);
-    *result_len = strlen(err);
-    return -1;
-#endif
+    return fetch_loop(be, ctx, url_copy, cancel_flag,
+                      result_buf, result_len, was_truncated);
 }

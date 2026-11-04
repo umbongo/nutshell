@@ -157,3 +157,22 @@ int test_web_fetch_url_validation(void)
     free(buf);
     TEST_END();
 }
+
+#ifndef _WIN32
+/* No backend injected and none built in: the tool says so and never fetches. */
+int test_web_fetch_no_backend_not_available(void)
+{
+    TEST_BEGIN();
+    char   *buf = NULL;
+    size_t  len = 0;
+    int     trunc = 0;
+
+    int rc = tool_web_fetch_execute("{\"url\":\"http://a.test/\"}", NULL, NULL,
+                                    &buf, &len, &trunc);
+    ASSERT_EQ(rc, -1);
+    ASSERT_NOT_NULL(buf);
+    if (buf) ASSERT_TRUE(strstr(buf, "not available") != NULL);
+    free(buf);
+    TEST_END();
+}
+#endif
