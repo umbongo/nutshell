@@ -3565,6 +3565,10 @@ int test_exec_quoted_takes_slots(void);
 int test_extract_command_skips_quoted(void);
 int test_response_split_ignores_quoted(void);
 int test_system_prompt_quoted_marker_sentence(void);
+int test_exec_quoted_inline_span_after_italic_swallows_backtick(void);
+int test_exec_quoted_list_item_lines(void);
+int test_exec_quoted_table_cell_spans(void);
+int test_exec_quoted_opener_without_own_closer_is_not_a_marker(void);
 
 /* test_md_blocks.c */
 int test_md_blocks_none(void);
@@ -7181,6 +7185,10 @@ int main(void) {
     failed += test_extract_command_skips_quoted();
     failed += test_response_split_ignores_quoted();
     failed += test_system_prompt_quoted_marker_sentence();
+    failed += test_exec_quoted_inline_span_after_italic_swallows_backtick();
+    failed += test_exec_quoted_list_item_lines();
+    failed += test_exec_quoted_table_cell_spans();
+    failed += test_exec_quoted_opener_without_own_closer_is_not_a_marker();
 
     failed += test_md_blocks_none();
     failed += test_md_blocks_one();

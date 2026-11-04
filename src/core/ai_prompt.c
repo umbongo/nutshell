@@ -5,6 +5,8 @@
 #include "string_utils.h"
 #include "paste_filter.h"
 #include "md_blocks.h"
+#include "markdown.h"
+#include "md_table.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1243,9 +1245,11 @@ int ai_parse_stream_chunk_ex(const char *json,
  * ai_extract_command(), ai_extract_commands_full() and ai_response_split().
  * A marker is "quoted" when its opening [EXEC] lies inside a fenced code
  * block (the renderer's own fences, from md_code_blocks(), widened to take in
- * the opening and closing fence lines) or inside an inline code span (a
- * backtick pairs with the next backtick on the same line; an unpaired one
- * opens nothing). What the user sees drawn as code is never a command. */
+ * the opening and closing fence lines) or inside an inline code span, found
+ * with md_parse_inline() exactly as the renderer calls it (a list item or
+ * heading from after its marker, a table row cell by cell), so bold, italic
+ * and strikethrough spans take backticks first, as they do on screen. What
+ * the user sees drawn as code is never a command. */
 
 typedef struct { size_t start, end; } ExecFence;   /* fence lines included */
 
@@ -1255,6 +1259,14 @@ typedef struct {
     ExecFence  *fences;
     int         n_fences;
     int         failed;   /* fence list could not be built: all is quoted */
+    /* Inline code spans of the line last asked about, as [start, end) byte
+     * offsets into the text (the content between the backticks). Computed
+     * once per line, however many markers it holds. */
+    size_t      line_off; /* start of that line; SIZE_MAX before the first */
+    size_t     *code;     /* pairs: code[2*i], code[2*i+1] */
+    int         n_code;
+    int         cap_code;
+    int         line_failed;
 } ExecScan;
 
 typedef struct {
@@ -1273,6 +1285,11 @@ static void exec_scan_init(ExecScan *s, const char *text)
     s->fences = NULL;
     s->n_fences = 0;
     s->failed = 0;
+    s->line_off = (size_t)-1;
+    s->code = NULL;
+    s->n_code = 0;
+    s->cap_code = 0;
+    s->line_failed = 0;
 
     size_t len = strlen(text);
     int n = md_code_blocks(text, len, NULL, 0);
@@ -1311,51 +1328,119 @@ static void exec_scan_free(ExecScan *s)
 {
     free(s->fences);
     s->fences = NULL;
+    free(s->code);
+    s->code = NULL;
 }
 
-/* True if offset `off` of the text is inside a backtick pair on its line. */
-static int exec_in_inline_span(const char *text, size_t off)
+/* Record the code spans of one md_parse_inline() run; `base` is the offset
+ * of the parsed text within the whole reply. */
+static void exec_add_code_spans(ExecScan *s, const MdSpan *spans, int n,
+                                size_t base)
 {
-    size_t i = off;
-    while (i > 0 && text[i - 1] != '\n') i--;      /* start of the line */
-    while (i < off) {
-        if (text[i] != '`') { i++; continue; }
-        size_t j = i + 1;
-        while (text[j] && text[j] != '\n' && text[j] != '`') j++;
-        if (text[j] != '`') return 0;              /* unpaired: no span */
-        if (off > i && off < j) return 1;
-        i = j + 1;
+    for (int i = 0; i < n; i++) {
+        if (spans[i].type != MD_SPAN_CODE) continue;
+        if (s->n_code == s->cap_code) {
+            int cap = s->cap_code ? s->cap_code * 2 : 8;
+            size_t *grown = (size_t *)realloc(s->code,
+                                              (size_t)cap * 2 * sizeof(size_t));
+            if (!grown) { s->line_failed = 1; return; }
+            s->code = grown;
+            s->cap_code = cap;
+        }
+        s->code[2 * s->n_code] = base + (size_t)spans[i].start;
+        s->code[2 * s->n_code + 1] = base + (size_t)spans[i].end;
+        s->n_code++;
     }
-    return 0;
 }
 
-static int exec_is_quoted(const ExecScan *s, const char *marker)
+/* Find the inline code spans of the line starting at `ls`, the way the
+ * renderer (src/ui/md_render.c) does: classify the line, then parse its
+ * content -- from content_offset for a heading, list item or blockquote,
+ * each cell on its own for a table row, the whole line otherwise. Fenced
+ * lines never get here (the fence check quotes them first), so the line is
+ * classified outside a code block, as the renderer sees it. */
+static void exec_load_line(ExecScan *s, size_t ls)
+{
+    s->line_off = ls;
+    s->n_code = 0;
+    s->line_failed = 0;
+
+    const char *line = s->text + ls;
+    size_t len = 0;
+    while (line[len] && line[len] != '\n') len++;
+    if (len > 0x7FFFFFFF) { s->line_failed = 1; return; }
+
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) { s->line_failed = 1; return; }
+    memcpy(copy, line, len);
+    copy[len] = '\0';
+
+    MdSpan spans[MD_MAX_SPANS];
+    MdLineInfo info = md_classify_line(copy, 0);
+    if (info.type == MD_LINE_TABLE) {
+        MdTableCell cells[MD_TABLE_MAX_COLS];
+        int nc = md_table_split_row(copy, cells, MD_TABLE_MAX_COLS);
+        for (int i = 0; i < nc; i++) {
+            size_t co = (size_t)(cells[i].start - copy);
+            int n = md_parse_inline(cells[i].start, cells[i].len, spans);
+            exec_add_code_spans(s, spans, n, ls + co);
+        }
+    } else {
+        size_t off = (size_t)info.content_offset;
+        if (off > len) off = len;
+        int n = md_parse_inline(copy + off, (int)(len - off), spans);
+        exec_add_code_spans(s, spans, n, ls + off);
+    }
+    free(copy);
+}
+
+static int exec_is_quoted(ExecScan *s, const char *marker)
 {
     if (s->failed) return 1;
     size_t off = (size_t)(marker - s->text);
     for (int i = 0; i < s->n_fences; i++) {
         if (off >= s->fences[i].start && off < s->fences[i].end) return 1;
     }
-    return exec_in_inline_span(s->text, off);
+
+    size_t ls = off;
+    while (ls > 0 && s->text[ls - 1] != '\n') ls--;
+    if (s->line_off != ls) exec_load_line(s, ls);
+    if (s->line_failed) return 1;   /* fail safe: nothing runs */
+    for (int i = 0; i < s->n_code; i++) {
+        if (off >= s->code[2 * i] && off < s->code[2 * i + 1]) return 1;
+    }
+    return 0;
 }
 
 /* Next marker, live or quoted, in reply order; 0 when none is left. An
- * opening marker with no closing one ends the scan. */
+ * opening marker with no closing one ends the scan. An opener whose closer
+ * lies past another opener is not a marker (the text "`[EXEC]` markers" and
+ * then a real marker on a later line must not merge into one): it is
+ * skipped and the scan resumes at the next opener. */
 static int exec_scan_next(ExecScan *s, ExecMark *m)
 {
-    const char *marker = strstr(s->pos, "[EXEC]");
-    if (!marker) return 0;
-    const char *start = marker + 6; /* skip "[EXEC]" */
-    const char *end = strstr(start, "[/EXEC]");
-    if (!end) return 0;
+    const char *search = s->pos;
+    for (;;) {
+        const char *marker = strstr(search, "[EXEC]");
+        if (!marker) return 0;
+        const char *start = marker + 6; /* skip "[EXEC]" */
+        const char *end = strstr(start, "[/EXEC]");
+        if (!end) return 0;
 
-    m->prev = s->pos;
-    m->marker = marker;
-    m->start = start;
-    m->end = end;
-    m->quoted = exec_is_quoted(s, marker);
-    s->pos = end + 7; /* skip "[/EXEC]" */
-    return 1;
+        const char *inner = strstr(start, "[EXEC]");
+        if (inner && inner < end) {
+            search = inner;
+            continue;
+        }
+
+        m->prev = s->pos;
+        m->marker = marker;
+        m->start = start;
+        m->end = end;
+        m->quoted = exec_is_quoted(s, marker);
+        s->pos = end + 7; /* skip "[/EXEC]" */
+        return 1;
+    }
 }
 
 int ai_extract_command(const char *response, char *cmd_out, size_t cmd_size)

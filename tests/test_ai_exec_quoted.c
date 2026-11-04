@@ -225,3 +225,69 @@ int test_system_prompt_quoted_marker_sentence(void)
     ASSERT_TRUE(strstr(buf, QS) != NULL);
     TEST_END();
 }
+
+int test_exec_quoted_inline_span_after_italic_swallows_backtick(void)
+{
+    TEST_BEGIN();
+    /* The renderer lets the italic span "*a `b*" take the first backtick, so
+     * the two backticks around the marker are the code span it draws. */
+    const char *r = "*a `b* x `[EXEC]ls[/EXEC]`";
+    char cmds[4][1024];
+    int quoted[4] = { 0, 0, 0, 0 };
+    ASSERT_EQ(ai_extract_commands_notes(r, cmds, NULL, 4, NULL, NULL), 0);
+    ASSERT_EQ(ai_extract_commands_full(r, cmds, NULL, quoted, 4, NULL, NULL), 1);
+    ASSERT_EQ(quoted[0], 1);
+    TEST_END();
+}
+
+int test_exec_quoted_list_item_lines(void)
+{
+    TEST_BEGIN();
+    char cmds[4][1024];
+    int quoted[4] = { 0, 0, 0, 0 };
+
+    /* The renderer parses a list item from after "* ", so the marker is not
+     * read as italic. */
+    ASSERT_EQ(ai_extract_commands_notes("* `[EXEC]ls[/EXEC]`", cmds, NULL, 4,
+                                        NULL, NULL), 0);
+    ASSERT_EQ(ai_extract_commands_full("* `[EXEC]ls[/EXEC]`", cmds, NULL,
+                                       quoted, 4, NULL, NULL), 1);
+    ASSERT_EQ(quoted[0], 1);
+
+    ASSERT_EQ(ai_extract_commands_notes("* a [EXEC]ls[/EXEC]", cmds, NULL, 4,
+                                        NULL, NULL), 1);
+    ASSERT_STR_EQ(cmds[0], "ls");
+    ASSERT_EQ(ai_extract_commands_notes("1. `[EXEC]ls[/EXEC]`", cmds, NULL, 4,
+                                        NULL, NULL), 0);
+    ASSERT_EQ(ai_extract_commands_notes("## `[EXEC]ls[/EXEC]`", cmds, NULL, 4,
+                                        NULL, NULL), 0);
+    TEST_END();
+}
+
+int test_exec_quoted_table_cell_spans(void)
+{
+    TEST_BEGIN();
+    char cmds[4][1024];
+    /* Each cell is parsed on its own: a backtick in one cell does not pair
+     * with one in the next, and a span inside a cell is code. */
+    ASSERT_EQ(ai_extract_commands_notes("| `[EXEC]ls[/EXEC]` | b |", cmds, NULL,
+                                        4, NULL, NULL), 0);
+    ASSERT_EQ(ai_extract_commands_notes("| a ` | [EXEC]ls[/EXEC] ` |", cmds, NULL,
+                                        4, NULL, NULL), 1);
+    TEST_END();
+}
+
+int test_exec_quoted_opener_without_own_closer_is_not_a_marker(void)
+{
+    TEST_BEGIN();
+    /* The first opener's closer lies past another opener: it is prose, and
+     * the real marker after it still runs. */
+    const char *r = "`[EXEC]` markers:\n[EXEC]ls[/EXEC]";
+    char cmds[4][1024];
+    ASSERT_EQ(ai_extract_commands_notes(r, cmds, NULL, 4, NULL, NULL), 1);
+    ASSERT_STR_EQ(cmds[0], "ls");
+    char cmd[1024];
+    ASSERT_EQ(ai_extract_command(r, cmd, sizeof(cmd)), 1);
+    ASSERT_STR_EQ(cmd, "ls");
+    TEST_END();
+}
