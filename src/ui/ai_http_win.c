@@ -1,4 +1,5 @@
 #include "ai_http.h"
+#include "winhttp_open.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -74,22 +75,11 @@ int ai_http_post(const char *url, const char * const *headers,
         return -1;
     }
 
-    HINTERNET hSession = WinHttpOpen(L"Nutshell/1.0",
-                                     WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                     WINHTTP_NO_PROXY_NAME,
-                                     WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = ns_winhttp_open(NULL);
     if (!hSession) {
         snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed: %lu",
                  GetLastError());
         return -1;
-    }
-
-    /* Require TLS 1.2+ for modern AI APIs */
-    if (use_ssl) {
-        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
-                        | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
-        WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS,
-                         &protocols, sizeof(protocols));
     }
 
     /* AI responses can take 60+ seconds; raise receive timeout to 120s */
@@ -228,21 +218,11 @@ int ai_http_post_stream(const char *url, const char * const *headers,
         return -1;
     }
 
-    HINTERNET hSession = WinHttpOpen(L"Nutshell/1.0",
-                                     WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                     WINHTTP_NO_PROXY_NAME,
-                                     WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = ns_winhttp_open(NULL);
     if (!hSession) {
         if (error) snprintf(error, error_size, "WinHttpOpen failed: %lu",
                             GetLastError());
         return -1;
-    }
-
-    if (use_ssl) {
-        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
-                        | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
-        WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS,
-                         &protocols, sizeof(protocols));
     }
 
     /* Streaming can take a long time — 5 min receive timeout */
@@ -389,22 +369,11 @@ int ai_http_get(const char *url, const char * const *headers,
         return -1;
     }
 
-    HINTERNET hSession = WinHttpOpen(L"Nutshell/1.0",
-                                     WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                                     WINHTTP_NO_PROXY_NAME,
-                                     WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = ns_winhttp_open(NULL);
     if (!hSession) {
         snprintf(resp->error, sizeof(resp->error), "WinHttpOpen failed: %lu",
                  GetLastError());
         return -1;
-    }
-
-    /* Require TLS 1.2+ for modern AI APIs */
-    if (use_ssl) {
-        DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
-                        | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
-        WinHttpSetOption(hSession, WINHTTP_OPTION_SECURE_PROTOCOLS,
-                         &protocols, sizeof(protocols));
     }
 
     /* AI responses can take 60+ seconds; raise receive timeout to 120s */
