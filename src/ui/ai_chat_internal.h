@@ -145,7 +145,7 @@ typedef struct {
 #define PROMPT_QUIET_MS   400   /* Terminal must be quiet this long at a prompt */
 
 /* Every AiChatData field is read and written on the UI thread only. The AI
- * stream thread (ai_stream_thread_proc) owns nothing here -- it reads and
+ * stream thread (ai_chat_stream_thread_proc) owns nothing here -- it reads and
  * writes only its own AiStream (src/core/ai_stream.h), including its own
  * copy of the tool registry and search/fetch contexts snapshotted before
  * the thread starts (ai_stream_copy_tools(), called under launch_stream_thread
@@ -414,7 +414,32 @@ static inline const char *active_shell_name(const AiChatData *d)
 /* Helper: check if the currently active session has a busy AI stream */
 #define ACTIVE_BUSY(d) ((d)->active_state && (d)->active_state->busy)
 
+/* Messages from a stream thread carry its stream id, never a pointer into
+ * the panel or a session: the UI resolves the id in d->streams
+ * (src/core/ai_stream.h) and drops the message if the stream is gone --
+ * stopped, retried, its tab closed, or the panel rebuilt since. */
+
+/* WM_AI_RESPONSE payload: the finished reply (wParam 2) or an error (0). */
+typedef struct {
+    unsigned stream_id;
+    char *content;
+    char *thinking;
+    int input_tokens;          /* actual input token count from API (0 if unavailable) */
+    int output_tokens;         /* actual output token count from API (0 if unavailable) */
+} AiResponseMsg;
+
+/* WM_AI_STREAM payload (one delta) and WM_AI_TOOL_MSG payload (one status
+ * line; wParam is the ChatItemType). */
+typedef struct {
+    unsigned stream_id;
+    char *delta;
+} AiStreamChunk;
+
 /* Prototypes */
+
+/* ai_chat_stream.c */
+unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg);
+void ai_chat_fetch_on_hop(void *user, const char *display_url, int refused);
 
 #endif /* _WIN32 */
 
