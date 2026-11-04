@@ -3,7 +3,6 @@
 # Nutshell SSH
 
 **Version**: v1.2.50 \
-**Build Date**: 2026-09-10 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -43,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 2,062 unit tests, zero lint warnings
+- 3,394 unit tests, and cppcheck reports no errors or warnings
 
 ---
 
@@ -241,13 +240,13 @@ Drag anywhere in the thread to select characters -- your messages, replies, the 
 
 When the AI suggests commands, they land in an approval card in the chat thread:
 
-- **Header** — "N commands · M held", plus the reason (e.g. "Above the allowed ceiling") when any are held back
+- **Header** — "N commands · M held · K quoted", plus the reason (e.g. "Above the allowed ceiling") when any are held back. A row is **quoted, not run** when the assistant only showed a command marker inside code (a code block or quoted text): it is listed for reference and never runs
 - **Rows** — a checkbox, the command text, and a risk tag (**READ** / **UNKNOWN** / **WRITE** / **CRITICAL**). Held rows show a disabled checkbox and dimmed text. Pending allowed commands start checked
 - **Actions** — **Deny all** rejects every row; **Run N selected** executes the checked rows (disabled when nothing is checked)
 
 A card never blocks the input — keep chatting, ask something else, or just scroll past it, and it stays right there, pending, for as long as the session lasts. Every reply that suggests commands gets its own card, so more than one can be pending at once; acting on one (or letting its approved commands finish running) never touches any other. Sending is only held up while a reply is actually streaming in or the dispatcher is mid-run sending an already-approved batch.
 
-With **Auto-approve** on, rows at or below the level are approved and start running the moment they arrive — the card just shows them as executing instead of waiting for a click. Approved commands are sent one at a time: each one waits for the terminal to return to a shell prompt before the next is typed, so a command that stops at a password or confirmation prompt simply holds the queue instead of racing ahead. Once the last command's prompt has returned, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed; if another card's commands are waiting to run, they start the moment that continuation finishes.
+With **Auto-approve** on, rows at or below the level are approved and start running the moment they arrive — the card just shows them as executing instead of waiting for a click. Approved commands are sent one at a time: each one waits for the terminal to return to a shell prompt before the next is typed, so a command that stops at a password or confirmation prompt simply holds the queue instead of racing ahead. The dispatcher treats a line ending in `$`, `#`, `%` or `>` as a shell prompt, so a REPL or a running program whose line ends that way can receive the next approved command. Once the last command's prompt has returned, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed; if another card's commands are waiting to run, they start the moment that continuation finishes.
 
 #### How Commands Are Classified
 
@@ -331,6 +330,12 @@ Passwords, passphrases and keys are never logged, and neither are keystrokes or 
 - **Passwords and API keys** are encrypted at rest in `nutshell.config` with Windows DPAPI (`CryptProtectData`), tied to the current Windows user and machine — not a portable key. The rest of the config (settings, hostnames, etc.) still travels freely with the file; only the secret fields are locked down. A config moved to another PC or user account loses just its stored passwords/API key (you are prompted to re-enter them, as if none were saved) — the original encrypted value is kept untouched in the file in case it comes back to its original PC/user, and is only replaced once you enter a new one. Configs from before this change (AES-256-GCM with a PBKDF2-SHA256 derived key) are decrypted and migrated to DPAPI automatically the first time they load.
 - **Host key verification** follows a Trust-On-First-Use (TOFU) model. Known hosts are stored at `%APPDATA%\sshclient\known_hosts`. A mismatch triggers a warning dialog (possible man-in-the-middle)
 - **SSH key passphrases** are cached in memory only for the duration of the session and securely zeroed on close
+- **Threat model** — what Nutshell assumes and what it does not protect against:
+  - The remote host and everything it prints are untrusted. Terminal output can carry text meant to steer the AI, which is why every command is classified and, unless you turn on Auto-approve, waits for your click.
+  - The AI provider receives the last N terminal lines (the **Max terminal lines** setting) and anything the assistant reads: the debug log and fetched pages. Keep secrets off the screen while AI Assist is in use.
+  - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. Addresses that are local or private (loopback, link-local, 10/8, 172.16/12, 192.168/16) are refused.
+  - A local shell runs with your Windows privileges, and so does anything the assistant runs in it.
+  - `nutshell.config` kept in a shared folder exposes its non-secret fields (hosts, usernames, settings) to everyone who can read it. The secrets stay DPAPI-locked.
 
 ### Keyboard Shortcuts
 
@@ -672,7 +677,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 2,062 unit tests across 83 test files
+├── tests/                              # 3,394 unit tests across 130 test files
 │   └── stubs/libssh2.h                 #   libssh2 stub for test builds without the real library
 ├── build/win/                          # Build output (nutshell.exe)
 ├── images/                             # Application icon and assets
@@ -707,6 +712,7 @@ Use `mingw32-make`, not the MSYS `make` — the latter breaks gcc's temp-file ha
 -   GCC (MinGW-w64) — `x86_64-w64-mingw32-gcc` for Windows cross-compile, native `gcc` for tests
 -   `g++-mingw-w64-x86-64` — required by vcpkg even for C-only builds
 -   Make, `upx` (`sudo apt install upx`)
+-   `libssl-dev` (OpenSSL headers for the native `make test`)
 -   cppcheck (static analysis)
 -   vcpkg with the custom `x64-mingw-gcc-static` triplet for MinGW-targeted OpenSSL and libssh2 (see `~/vcpkg/custom-triplets/`)
 
@@ -745,7 +751,7 @@ To run Dr. Memory on the Windows release build:
 1.  **No External UI Libs**: Raw Win32 API only.
 2.  **Memory Management**: Strict `malloc`/`free` discipline. Use `xmalloc` from `src/core/` — it aborts on OOM so callers treat the return as unconditionally valid.
 3.  **TDD**: Create a test file in `tests/` before writing code in `src/`.
-4.  **Static Analysis**: Run `make lint` before committing. Zero warnings required. cppcheck enforces `constVariablePointer` — declare pointers as `const T *` whenever the pointee is not mutated.
+4.  **Static Analysis**: Run `make lint` before committing; it must report no errors or warnings. cppcheck enforces `constVariablePointer` — declare pointers as `const T *` whenever the pointee is not mutated.
 5.  **No format-string vulnerabilities**: `log_write()` takes a pre-formatted `const char *`. Use `snprintf` at the call site.
 6.  **String copying**: Always use `snprintf(dst, sizeof(dst), "%s", src)`. Never use `strcpy` or `strncpy`.
 7.  **Secrets**: Use `secure_zero()` from `src/core/secure_zero.h` to wipe passwords and keys. Never use plain `memset` for sensitive data.
