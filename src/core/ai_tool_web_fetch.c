@@ -325,26 +325,38 @@ static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
 #define WIDEN2(s) L##s
 #define WIDEN(s)  WIDEN2(s)
 
+static int wf_to_wide(const char *s, wchar_t *out, int cap)
+{
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, out, cap) > 0
+               ? 0 : -1;
+}
+
 /* Name resolution needs WSAStartup, which src/main.c runs once for the
  * process before the UI starts; the backend relies on that. */
 static int wf_resolve(void *ctx, const char *host, NetAddr *out, int max)
 {
     (void)ctx;
-    struct addrinfo hints;
-    struct addrinfo *res = NULL;
+    ADDRINFOW hints;
+    ADDRINFOW *res = NULL;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
 
-    /* The host is passed to getaddrinfo exactly as the URL parser kept it
-     * (narrow UTF-8; bytes >= 0x80 are not converted to punycode). The
-     * request below converts the same bytes to UTF-16 for WinHTTP, so both
-     * lookups see the same name. */
-    if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res)
+    /* The host is decoded from UTF-8 to UTF-16 exactly as wf_get() decodes it
+     * for WinHttpConnect (same function, flags and buffer size), and the wide
+     * string is what GetAddrInfoW resolves, so the checked name and the name
+     * WinHTTP connects to are the same string. Both APIs then apply the
+     * system's own IDN handling to it; a narrow getaddrinfo would read the
+     * bytes through the ANSI code page instead and could check a different
+     * name. Invalid UTF-8 is refused. */
+    wchar_t w_host[NET_HOST_MAX];
+    if (wf_to_wide(host, w_host, NET_HOST_MAX) != 0)
+        return -1;
+    if (GetAddrInfoW(w_host, NULL, &hints, &res) != 0 || !res)
         return -1;
 
     int total = 0;
-    for (const struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+    for (const ADDRINFOW *ai = res; ai; ai = ai->ai_next) {
         NetAddr a;
         memset(&a, 0, sizeof(a));
         if (ai->ai_family == AF_INET && ai->ai_addr) {
@@ -361,7 +373,7 @@ static int wf_resolve(void *ctx, const char *host, NetAddr *out, int max)
         if (out && total < max) out[total] = a;
         total++;
     }
-    freeaddrinfo(res);
+    FreeAddrInfoW(res);
     return total > 0 ? total : -1;
 }
 
@@ -369,12 +381,6 @@ static unsigned long long wf_now_ms(void *ctx)
 {
     (void)ctx;
     return (unsigned long long)GetTickCount64();
-}
-
-static int wf_to_wide(const char *s, wchar_t *out, int cap)
-{
-    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, out, cap) > 0
-               ? 0 : -1;
 }
 
 static int wf_stopped(volatile int *cancel)
@@ -445,22 +451,32 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
     DWORD loc_sz = (DWORD)sizeof(w_loc);
     if (WinHttpQueryHeaders(req, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
                             w_loc, &loc_sz, WINHTTP_NO_HEADER_INDEX)) {
-        /* A Location that does not fit is refused, never cut. */
+        /* A Location that does not fit or is not valid UTF-8 is reported as
+         * "", never cut: the loop refuses a redirect with no usable
+         * Location, and a non-redirect page keeps its body. */
         if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w_loc, -1,
                                 location, (int)(location_cap > 0x7FFFFFFF ? 0x7FFFFFFF : location_cap),
-                                NULL, NULL) <= 0) {
+                                NULL, NULL) <= 0)
             location[0] = '\0';
-            goto fail;
-        }
-    } else if (GetLastError() != ERROR_WINHTTP_HEADER_NOT_FOUND) {
-        goto fail;  /* includes ERROR_INSUFFICIENT_BUFFER */
+    } else {
+        /* Absent, too long for the buffer (ERROR_INSUFFICIENT_BUFFER) or
+         * unreadable: all mean no usable Location. */
+        location[0] = '\0';
     }
 
     /* Body, capped; cancel between reads, and the hop's own time limit so a
      * server that trickles bytes cannot outlast it. */
     for (;;) {
         if (wf_stopped(cancel)) goto fail;
-        if ((unsigned long long)GetTickCount64() >= hop_end) goto fail;
+        unsigned long long now = (unsigned long long)GetTickCount64();
+        if (now >= hop_end) goto fail;
+
+        /* A read can block for a full timeout, so shrink the timeouts to the
+         * time the hop has left before each one. */
+        unsigned long long left = hop_end - now;
+        int r = left > 0x7FFFFFFFULL ? 0x7FFFFFFF : (int)left;
+        if (r < 1) r = 1;
+        if (!WinHttpSetTimeouts(req, r, r, r, r)) goto fail;
 
         DWORD avail = 0;
         if (!WinHttpQueryDataAvailable(req, &avail)) goto fail;
