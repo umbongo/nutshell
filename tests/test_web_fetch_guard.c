@@ -50,6 +50,8 @@ typedef struct {
     NetUrlParts got[FK_MAX_CALLS];
     int         got_timeout[FK_MAX_CALLS];
 
+    int  ends;               /* times the backend's end hook ran */
+
     int  hops;
     char hop_url[FK_MAX_CALLS][NET_URL_DISPLAY_MAX + 8];
     int  hop_refused[FK_MAX_CALLS];
@@ -124,6 +126,11 @@ static unsigned long long fk_now(void *ctx)
     return ((Fake *)ctx)->now;
 }
 
+static void fk_end(void *ctx)
+{
+    ((Fake *)ctx)->ends++;
+}
+
 static void fk_on_hop(void *user, const char *display_url, int refused)
 {
     Fake *f = (Fake *)user;
@@ -145,6 +152,7 @@ static void fk_init(Fake *f, WebFetchBackend *be, WebFetchContext *ctx)
     be->resolve = fk_resolve;
     be->get     = fk_get;
     be->now_ms  = fk_now;
+    be->end     = fk_end;
     ctx->timeout_ms = 10000;
     ctx->on_hop     = fk_on_hop;
     ctx->user       = f;
@@ -690,6 +698,85 @@ int test_web_fetch_cancel_after_resolve(void)
     ASSERT_NOT_NULL(buf);
     if (buf) ASSERT_TRUE(strstr(buf, "cancelled") != NULL);
     ASSERT_EQ(f.gets, 0);
+    free(buf);
+    TEST_END();
+}
+
+int test_web_fetch_end_hook_runs_once_on_every_exit(void)
+{
+    TEST_BEGIN();
+    Fake f; WebFetchBackend be; WebFetchContext ctx;
+    char *buf;
+    volatile int cancel = 0;
+
+    /* success, after redirects: one end for the whole fetch, not one per hop */
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 302, "http://pub.test/b", "");
+    fk_resp(&f, 302, "http://pub.test/c", "");
+    fk_resp(&f, 200, NULL, "<p>x</p>");
+    ASSERT_EQ(fk_run(&ctx, "http://pub.test/a", NULL, &buf), 0);
+    ASSERT_EQ(f.gets, 3);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+
+    /* refusal: a local address */
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "local.test", 127, 0, 0, 1);
+    ASSERT_EQ(fk_run(&ctx, "http://local.test/", NULL, &buf), -1);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+
+    /* refusal: an invalid redirect target */
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 302, "ftp://pub.test/x", "");
+    ASSERT_EQ(fk_run(&ctx, "http://pub.test/", NULL, &buf), -1);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+
+    /* timeout */
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 302, "http://pub.test/again", "");
+    f.step = 11000;
+    ASSERT_EQ(fk_run(&ctx, "http://pub.test/", NULL, &buf), -1);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+
+    /* cancel before the first hop, and during a get */
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>x</p>");
+    cancel = 1;
+    ASSERT_EQ(fk_run(&ctx, "http://pub.test/", &cancel, &buf), -1);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+
+    cancel = 0;
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>x</p>");
+    f.cancel_in_get = 1;
+    ASSERT_EQ(fk_run(&ctx, "http://pub.test/", &cancel, &buf), -1);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+
+    /* a failed request */
+    fk_init(&f, &be, &ctx);
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    f.get_fail = 1;
+    ASSERT_EQ(fk_run(&ctx, "http://pub.test/", NULL, &buf), -1);
+    ASSERT_EQ(f.ends, 1);
+    free(buf);
+
+    /* a backend with no end hook is fine */
+    fk_init(&f, &be, &ctx);
+    be.end = NULL;
+    fk_host(&f, "pub.test", 93, 184, 216, 34);
+    fk_resp(&f, 200, NULL, "<p>x</p>");
+    ASSERT_EQ(fk_run(&ctx, "http://pub.test/", NULL, &buf), 0);
+    ASSERT_EQ(f.ends, 0);
     free(buf);
     TEST_END();
 }

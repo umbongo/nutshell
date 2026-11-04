@@ -199,7 +199,7 @@ static int fail_stopped(int reason, char **result_buf, size_t *result_len)
  * host it goes to: the order below is the guard, so nothing here may fetch
  * first and check afterwards. Every failure refuses; none falls through to a
  * fetch. On cancel or deadline no fetched text is returned. */
-static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
+static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
                       const char *first_url, volatile int *cancel,
                       char **result_buf, size_t *result_len, int *was_truncated)
 {
@@ -313,6 +313,18 @@ static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
     return fetch_fail(result_buf, result_len, "HTTP request failed");
 }
 
+/* One fetch: the hops, then the backend's end hook exactly once whatever way
+ * the hops ended. */
+static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
+                      const char *first_url, volatile int *cancel,
+                      char **result_buf, size_t *result_len, int *was_truncated)
+{
+    int rc = fetch_hops(be, ctx, first_url, cancel,
+                        result_buf, result_len, was_truncated);
+    if (be->end) be->end(be->ctx);
+    return rc;
+}
+
 /* ---- backend selection and description ------------------------------------ */
 
 #ifdef _WIN32
@@ -321,6 +333,21 @@ static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
  * and nothing else; the address check, redirect policy, deadline and cancel
  * decisions are all in fetch_loop() above. It never parses a URL string, it
  * uses the parts fetch_loop() has already checked. */
+
+/* Older MinGW headers may lack this; the value is the documented one. */
+#ifndef WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT
+#define WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT 7
+#endif
+
+/* Per-fetch state: one WinHTTP session (a proxy-detecting one costs a WPAD
+ * lookup to open) shared by every hop of one fetch, opened by the first hop
+ * and closed by wf_end(). It lives on the stack of one tool_web_fetch_execute
+ * call, so two fetches running at once never share it. With a NULL ctx
+ * (web_fetch_default_backend() used directly) each hop opens and closes its
+ * own session instead. */
+typedef struct {
+    HINTERNET session;
+} WfFetch;
 
 #define WIDEN2(s) L##s
 #define WIDEN(s)  WIDEN2(s)
@@ -388,12 +415,21 @@ static int wf_stopped(volatile int *cancel)
     return cancel && *cancel;
 }
 
+static void wf_end(void *ctx)
+{
+    WfFetch *fetch = (WfFetch *)ctx;
+    if (fetch && fetch->session) {
+        WinHttpCloseHandle(fetch->session);
+        fetch->session = NULL;
+    }
+}
+
 static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
                   volatile int *cancel, int *status,
                   char *location, size_t location_cap,
                   char **body, size_t *body_len)
 {
-    (void)ctx;
+    WfFetch *fetch = (WfFetch *)ctx;
     if (!url || !status || !location || location_cap == 0 || !body || !body_len)
         return -1;
     *status = 0;
@@ -411,12 +447,19 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
         return -1;
 
     HINTERNET session = NULL, connect = NULL, req = NULL;
+    int own_session = 0;   /* opened here, so closed here */
     char *buf = NULL;
     size_t len = 0, cap = 0;
     const size_t max_body = (size_t)AI_TOOL_RESULT_MAX * 4;
 
-    session = ns_winhttp_open(WIDEN(AI_TOOL_USER_AGENT));
-    if (!session) goto fail;
+    if (fetch && fetch->session) {
+        session = fetch->session;
+    } else {
+        session = ns_winhttp_open(WIDEN(AI_TOOL_USER_AGENT));
+        if (!session) goto fail;
+        if (fetch) fetch->session = session;   /* kept for the next hop */
+        else own_session = 1;
+    }
 
     /* url->host has no brackets, also for an IPv6 literal: WinHttpConnect
      * takes a bare literal as the server name. */
@@ -433,6 +476,13 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
                           &no_redirects, sizeof(no_redirects)))
         goto fail;
     if (!WinHttpSetTimeouts(req, t, t, t, t)) goto fail;
+    /* WinHttpSetTimeouts leaves the wait for the response headers at the
+     * system default (90 s): bound it by the hop's time too, or a server that
+     * accepts the request and then trickles holds WinHttpReceiveResponse. */
+    DWORD resp_ms = (DWORD)t;
+    if (!WinHttpSetOption(req, WINHTTP_OPTION_RECEIVE_RESPONSE_TIMEOUT,
+                          &resp_ms, sizeof(resp_ms)))
+        goto fail;
 
     if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
                             WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
@@ -511,7 +561,7 @@ static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
 
     WinHttpCloseHandle(req);
     WinHttpCloseHandle(connect);
-    WinHttpCloseHandle(session);
+    if (own_session) WinHttpCloseHandle(session);
     *status   = (int)code;
     *body     = buf;
     *body_len = len;
@@ -521,22 +571,47 @@ fail:
     free(buf);
     if (req)     WinHttpCloseHandle(req);
     if (connect) WinHttpCloseHandle(connect);
-    if (session) WinHttpCloseHandle(session);
+    if (own_session) WinHttpCloseHandle(session);   /* a shared one stays for wf_end() */
     *status = 0;
     return -1;
 }
 
-static const WebFetchBackend g_wf_backend = { NULL, wf_resolve, wf_get, wf_now_ms };
+/* Stateless: every hop opens and closes its own session. */
+static const WebFetchBackend g_wf_backend = { NULL, wf_resolve, wf_get, wf_now_ms, NULL };
 
 const WebFetchBackend *web_fetch_default_backend(void)
 {
     return &g_wf_backend;
 }
 
+/* The default backend for one fetch: `own` is filled in, with `fetch` as its
+ * ctx, so the hops share one session that wf_end() closes. */
+static const WebFetchBackend *default_backend_for_fetch(WebFetchBackend *own,
+                                                        WfFetch *fetch)
+{
+    fetch->session = NULL;
+    own->ctx     = fetch;
+    own->resolve = wf_resolve;
+    own->get     = wf_get;
+    own->now_ms  = wf_now_ms;
+    own->end     = wf_end;
+    return own;
+}
+
 #else /* !_WIN32 */
+
+typedef struct { int unused; } WfFetch;
 
 const WebFetchBackend *web_fetch_default_backend(void)
 {
+    return NULL;
+}
+
+static const WebFetchBackend *default_backend_for_fetch(WebFetchBackend *own,
+                                                        WfFetch *fetch)
+{
+    (void)own;
+    (void)fetch;
     return NULL;
 }
 
@@ -622,8 +697,12 @@ int tool_web_fetch_execute(const char *input_json, void *tool_data,
     json_free(input);
 
     const WebFetchContext *ctx = (const WebFetchContext *)tool_data;
-    const WebFetchBackend *be  = (ctx && ctx->backend) ? ctx->backend
-                                                       : web_fetch_default_backend();
+    WebFetchBackend own;
+    WfFetch         fetch;
+    memset(&own, 0, sizeof(own));
+    const WebFetchBackend *be = (ctx && ctx->backend)
+                                    ? ctx->backend
+                                    : default_backend_for_fetch(&own, &fetch);
     if (!be || !be->resolve || !be->get || !be->now_ms)
         return fetch_fail(result_buf, result_len,
                           "Web fetch not available (non-Windows build)");

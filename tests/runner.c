@@ -2838,6 +2838,7 @@ int test_web_fetch_describe(void);
 int test_web_fetch_deadline_passed_inside_on_hop(void);
 int test_web_fetch_get_failure(void);
 int test_web_fetch_cancel_after_resolve(void);
+int test_web_fetch_end_hook_runs_once_on_every_exit(void);
 #ifndef _WIN32
 int test_web_fetch_no_backend_not_available(void);
 #endif
@@ -6475,6 +6476,7 @@ int main(void) {
     failed += test_web_fetch_deadline_passed_inside_on_hop();
     failed += test_web_fetch_get_failure();
     failed += test_web_fetch_cancel_after_resolve();
+    failed += test_web_fetch_end_hook_runs_once_on_every_exit();
 #ifndef _WIN32
     failed += test_web_fetch_no_backend_not_available();
 #endif

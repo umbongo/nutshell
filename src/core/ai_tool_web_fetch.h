@@ -24,6 +24,11 @@ typedef struct WebFetchBackend {
                char *location, size_t location_cap,
                char **body, size_t *body_len);
     unsigned long long (*now_ms)(void *ctx);
+    /* Optional (may be NULL). Called exactly once, with ctx, when one fetch
+     * ends, on every exit: success, refusal, failure, timeout and cancel.
+     * A backend that keeps a connection session for the fetch (all its
+     * redirect hops share one) closes it here. */
+    void (*end)(void *ctx);
 } WebFetchBackend;
 
 /* Web fetch context -- passed as tool_data */
