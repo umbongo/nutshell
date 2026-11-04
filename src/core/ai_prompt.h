@@ -247,10 +247,12 @@ int ai_extract_commands_notes(const char *response, char cmds[][1024],
  *
  * A marker is quoted when its opening [EXEC] lies inside a fenced code block
  * (the renderer's fences: three backticks at column 0; an unterminated fence
- * runs to the end of the reply) or inside an inline code span (a backtick
- * pairs with the next backtick on the same line; an unpaired one opens
- * nothing). A marker outside any span is live even if its command contains
- * backticks.
+ * runs to the end of the reply) or inside an inline code span, found with
+ * md_parse_inline() exactly as the renderer parses the line (so bold or
+ * italic spans take backticks first, and an unpaired backtick opens
+ * nothing). The one scanner, src/core/exec_scan.h, also decides what the
+ * chat panel draws as a command. A marker outside any span is live even if
+ * its command contains backticks.
  *
  * quoted[] (max_cmds entries) non-NULL: live and quoted markers are returned
  * together in reply order, quoted[i] is 1 for a quoted one. A quoted marker

@@ -3520,6 +3520,13 @@ int test_chat_exec_split_unterminated_keeps_the_marker(void);
 int test_chat_exec_split_empty_and_adjacent_commands(void);
 int test_chat_exec_split_stray_close_is_prose(void);
 int test_chat_exec_split_respects_len_and_null(void);
+int test_chat_exec_split_fenced_marker_is_prose(void);
+int test_chat_exec_split_inline_code_marker_is_prose(void);
+int test_chat_exec_split_marker_on_the_fence_line_is_prose(void);
+int test_chat_exec_split_crlf_fenced_marker_is_prose(void);
+int test_chat_exec_split_unterminated_marker_in_a_fence_is_prose(void);
+int test_chat_exec_split_live_marker_after_quoted_ones_still_splits(void);
+int test_chat_exec_split_agrees_with_the_extractor(void);
 
 /* test_text_runs.c */
 int test_text_runs_cum_ascii_multibyte_and_surrogates(void);
@@ -7173,6 +7180,13 @@ int main(void) {
     failed += test_chat_exec_split_empty_and_adjacent_commands();
     failed += test_chat_exec_split_stray_close_is_prose();
     failed += test_chat_exec_split_respects_len_and_null();
+    failed += test_chat_exec_split_fenced_marker_is_prose();
+    failed += test_chat_exec_split_inline_code_marker_is_prose();
+    failed += test_chat_exec_split_marker_on_the_fence_line_is_prose();
+    failed += test_chat_exec_split_crlf_fenced_marker_is_prose();
+    failed += test_chat_exec_split_unterminated_marker_in_a_fence_is_prose();
+    failed += test_chat_exec_split_live_marker_after_quoted_ones_still_splits();
+    failed += test_chat_exec_split_agrees_with_the_extractor();
 
     failed += test_text_runs_cum_ascii_multibyte_and_surrogates();
     failed += test_text_runs_cum_invalid_bytes_and_limits();

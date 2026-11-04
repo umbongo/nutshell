@@ -188,10 +188,10 @@ int test_chat_copy_exec_segment_and_state_reset(void)
     TEST_BEGIN();
     const char *t = "Run this:\n\n[EXEC]ls -la[/EXEC]\nDone.";
     ASSERT_TRUE(copy_is(t, 0, (int)strlen(t), MDX, "Run this:\nls -la\n\nDone."));
-    /* the fence opened before the command does not survive it: after the
-     * segment the parser starts afresh, so the second ``` opens a new block */
+    /* a marker inside a fence is quoted: it is code, not a command segment,
+     * so the fence closes where it closes and "Done." stays prose */
     const char *r = "```bash\n[EXEC]ls[/EXEC]\n```\nDone.";
-    ASSERT_TRUE(copy_is(r, 0, (int)strlen(r), MDX, "ls\n\nDone."));
+    ASSERT_TRUE(copy_is(r, 0, (int)strlen(r), MDX, "[EXEC]ls[/EXEC]\nDone."));
     /* a range inside the command */
     ASSERT_TRUE(copy_is(t, at(t, "-la"), at(t, "[/EXEC]"), MDX, "-la"));
     TEST_END();
