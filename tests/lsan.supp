@@ -1,0 +1,6 @@
+# LeakSanitizer suppressions for `make test SAN=1` (see the Sanitizers job in
+# .github/workflows).  LSan refuses a missing file, so this one always exists.
+#
+# One `leak:<function>` line per product leak that cannot be fixed, each with a
+# comment naming the function and its entry on the notes' Open list.
+# Nothing broader than one named function belongs here.

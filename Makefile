@@ -163,11 +163,19 @@ TEST_SRCS = $(APP_SRCS) $(TEST_IMPL_SRCS)
 TEST_TARGET = build/test_runner$(EXE)
 TEST_OBJ_DIR = build/test
 
-# Sanitizer switch.  SAN=1 and its flags are filled in by a later change;
-# the definitions sit here so that anything which overrides TEST_OBJ_DIR,
-# TEST_TARGET or SAN_FLAGS does so BEFORE the stamps below are written.
+# Sanitizer switch.  `make test SAN=1` builds the suite with ASan, UBSan and
+# LeakSanitizer into its own object directory and runner.  The overrides sit
+# here so that they take effect BEFORE the stamps below are written.
 SAN ?=
 SAN_FLAGS =
+ifeq ($(SAN),1)
+ifeq ($(HOST_WINDOWS),yes)
+$(error SAN=1 needs libasan, which MinGW gcc does not ship; run it on Linux)
+endif
+SAN_FLAGS = -fsanitize=address,undefined -fno-omit-frame-pointer -fsanitize-recover=all
+TEST_OBJ_DIR = build/test-san
+TEST_TARGET = build/test_runner_san$(EXE)
+endif
 
 # Objects go to $(TEST_OBJ_DIR)/<source path>.o (the path is kept, so
 # src/core/x.c and tests/x.c never collide).  Recursive `=`, so an override
