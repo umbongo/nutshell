@@ -161,6 +161,40 @@ APP_SRCS = $(filter-out $(NON_TEST_SRCS),$(SRCS))
 
 TEST_SRCS = $(APP_SRCS) $(TEST_IMPL_SRCS)
 TEST_TARGET = build/test_runner$(EXE)
+TEST_OBJ_DIR = build/test
+
+# Sanitizer switch.  SAN=1 and its flags are filled in by a later change;
+# the definitions sit here so that anything which overrides TEST_OBJ_DIR,
+# TEST_TARGET or SAN_FLAGS does so BEFORE the stamps below are written.
+SAN ?=
+SAN_FLAGS =
+
+# Objects go to $(TEST_OBJ_DIR)/<source path>.o (the path is kept, so
+# src/core/x.c and tests/x.c never collide).  Recursive `=`, so an override
+# of TEST_OBJ_DIR above takes effect.
+TEST_OBJS = $(TEST_SRCS:%.c=$(TEST_OBJ_DIR)/%.o)
+
+# Two stamps.  The .d files track headers, not flags, and TEST_CFLAGS changes
+# with the host (-DNO_SSH_LIBS -Itests/stubs only without libssh2).
+#   flags.stamp: compiler, flags and SAN; every object depends on it, so a
+#                flag change rebuilds everything.
+#   srcs.stamp:  the sorted source list; only the runner link depends on it,
+#                so an added or dropped source compiles only what is new and
+#                relinks.
+TEST_FLAGS_STAMP = $(TEST_OBJ_DIR)/flags.stamp
+TEST_SRCS_STAMP  = $(TEST_OBJ_DIR)/srcs.stamp
+TEST_FLAGS_TEXT  = $(TEST_CC) | $(TEST_CFLAGS) | $(TEST_LDFLAGS) | SAN=$(SAN)
+TEST_SRCS_TEXT   = $(sort $(TEST_SRCS))
+
+# $(call write-stamp,path,text): at parse time, create the directory and
+# rewrite the file only when its text differs, so its mtime moves only on a
+# real change.  Written only when a goal in STAMP_GOALS was asked for.
+STAMP_GOALS = test
+define write-stamp
+$(if $(filter $(STAMP_GOALS),$(MAKECMDGOALS)),$(shell mkdir -p $(dir $(1)))$(if $(subst $(2),,$(file <$(1)))$(subst $(file <$(1)),,$(2)),$(file >$(1),$(2))))
+endef
+$(call write-stamp,$(TEST_FLAGS_STAMP),$(TEST_FLAGS_TEXT))
+$(call write-stamp,$(TEST_SRCS_STAMP),$(TEST_SRCS_TEXT))
 
 
 .PHONY: all clean test lint debug release wintest
@@ -221,10 +255,24 @@ $(TARGET): $(OBJS) $(DELAY_LIBS)
 %.o: %.rc
 	$(WINDRES) -Isrc/ui $< $@
 
-test:
-	@mkdir -p build
-	$(TEST_CC) $(TEST_CFLAGS) $(TEST_SRCS) -o $(TEST_TARGET) $(TEST_LDFLAGS)
+# The stamps exist from parse time; the empty rule only keeps make from
+# failing obscurely if one is ever missing (a missing stamp rebuilds).
+$(TEST_FLAGS_STAMP) $(TEST_SRCS_STAMP): ;
+
+$(TEST_OBJ_DIR)/%.o: %.c $(TEST_FLAGS_STAMP)
+	@mkdir -p $(dir $@)
+	$(TEST_CC) $(TEST_CFLAGS) $(SAN_FLAGS) -MMD -MP -c $< -o $@
+
+$(TEST_TARGET): $(TEST_OBJS) $(TEST_SRCS_STAMP)
+	@mkdir -p $(dir $@)
+	$(TEST_CC) $(TEST_OBJS) -o $@ $(TEST_LDFLAGS) $(SAN_FLAGS)
+
+test: $(TEST_TARGET)
 	./$(TEST_TARGET)
+
+# -MMD leaves system headers out of the .d files: a changed system header
+# (an OpenSSL upgrade, say) needs `make clean`.
+-include $(TEST_OBJS:.o=.d)
 
 wintest:
 	@mkdir -p $(BUILD_DIR)
@@ -241,6 +289,8 @@ endif
 
 clean:
 	rm -f $(OBJS) $(TARGET) $(TEST_TARGET) $(WIN_TEST_TARGET) $(DETECT_OUT) *.o tests/*.o
+	rm -f build/test_runner$(EXE) build/test_runner_san$(EXE)
+	rm -rf build/test build/test-san build/fuzz
 	rm -rf $(DELAY_LIB_DIR)
 
 lint:
