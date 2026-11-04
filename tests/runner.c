@@ -394,6 +394,10 @@ int test_ssh_idle_one_minute_over(void);
 int test_ssh_network_at_threshold_exact(void);
 int test_ssh_idle_wraparound_over(void);
 int test_ssh_idle_huge_timeout_clamps(void);
+int test_ssh_setup_timeout_text_stages(void);
+int test_ssh_setup_timeout_text_rounds_up(void);
+int test_ssh_setup_timeout_text_ipv6_host(void);
+int test_ssh_setup_timeout_text_small_buf(void);
 
 /* test_config.c */
 int test_config_default_settings(void);
@@ -980,6 +984,8 @@ int test_pty_resize_dedup(void);
 int test_pty_resize_initial_state(void);
 int test_ssh_connect_fail(void);
 int test_ssh_session_blocking(void);
+int test_ssh_timeout_helpers_null_safe(void);
+int test_ssh_handshake_timeout_silent_server(void);
 
 /* test_knownhosts.c */
 int test_kh_new_host_returns_new(void);
@@ -4111,6 +4117,10 @@ int main(void) {
     failed += test_ssh_network_at_threshold_exact();
     failed += test_ssh_idle_wraparound_over();
     failed += test_ssh_idle_huge_timeout_clamps();
+    failed += test_ssh_setup_timeout_text_stages();
+    failed += test_ssh_setup_timeout_text_rounds_up();
+    failed += test_ssh_setup_timeout_text_ipv6_host();
+    failed += test_ssh_setup_timeout_text_small_buf();
 
     /* Config */
     failed += test_config_default_settings();
@@ -4609,6 +4619,8 @@ int main(void) {
     failed += test_pty_resize_initial_state();
     failed += test_ssh_connect_fail();
     failed += test_ssh_session_blocking();
+    failed += test_ssh_timeout_helpers_null_safe();
+    failed += test_ssh_handshake_timeout_silent_server();
 
     printf("\n--- Known Hosts ---\n");
     failed += test_kh_new_host_returns_new();
