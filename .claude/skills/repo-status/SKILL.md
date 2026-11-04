@@ -5,7 +5,7 @@ description: Survey the state of umbongo/nutshell — branches, tags, open pull 
 
 # Repo status — branches, PRs and checks
 
-Last updated: 2026-10-19. Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-03. Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## Why the naive commands mislead here
 
@@ -38,6 +38,14 @@ Last updated: 2026-10-19. Changes are recorded in `.claude/CHANGELOG.md`.
 6. **Session branch**: `claude/*` branches created by the harness exist
    locally with a remote-tracking ref but are not on the remote until
    pushed. Check `ls-remote` before claiming a branch is published.
+7. **Never-pushed branches** (on `automaton`, worktrees in `~/nutshell-wt/`):
+   `r=$(git ls-remote --heads origin) && comm -23 <(git for-each-ref --format='%(refname:lstrip=2)' refs/heads | sort) <(printf '%s\n' "$r" | sed 's|.*refs/heads/||' | sort)`
+   (the `&&` keeps a failed `ls-remote` from listing every branch;
+   `lstrip=2` because `short` prints `heads/v1.1.21` beside a tag), then
+   `git log --oneline origin/main..<b>` for each and `git status --short`
+   in each worktree. An upstream setting proves nothing
+   (`git switch -c x origin/main` tracks `main`). Report them as local;
+   never delete or push one unasked.
 
 ## Report shape
 
@@ -46,10 +54,11 @@ A short table: branch, tip subject, relation to `main` (ahead/behind or
 which have an open PR, which are stale. Say explicitly when a number could
 not be measured (shallow history) rather than reporting a wrong one.
 
-## Known state on 2026-10-19
+## Known state on 2026-11-03
 
-`main` at v1.2.41 (PR #71). Open drafts: #70 `fix/conpty-resize-anchor`
-(spec and plan), #72 `fix/light-theme-ansi-contrast` (spec). `v1.0.76`
+`main` at v1.2.49 (PR #81). Open: Dependabot #78 (codeql-action 4.39.0,
+green since 2026-10-21), and the 2026-11-03 retrospective's draft. `v1.2.41` is a snapshot branch (no
+tag) at `7960bd2`. `v1.0.76`
 and `v1.1.21` are still both a branch and a tag, and `git ls-remote --tags
 origin` lists eight `archive/*` tags (a local `git tag` may show fewer); `v1.2.13` is a branch
 only, the backup kept before the v1.2.14 security fixes. Merged feature

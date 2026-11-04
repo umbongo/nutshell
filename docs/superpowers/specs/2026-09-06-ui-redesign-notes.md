@@ -4,14 +4,16 @@
 landed at v1.0.92/v1.0.96 (see "Landed since v1.0.96" below for what's
 shipped since — approval-card fixes, prompt-gated dispatch, four-level auto
 approve, markdown tables, role colour, smart scrolling, and pending command
-batches). Native suite: **3,035 tests**, 0 failures (Linux, 2026-10-19). Integration suite
-(`tests/integration/Run-Integration.ps1`): 49 case definitions in ten case files
-(`cases\10-terminal` … `95-ai-select`), manual only since 2026-09-15, DPI-aware since
+batches). Native suite: **3,314 tests**, 0 failures (hosted `Native tests`, real
+libssh2, PR #81's head, 2026-11-03; 3,279 with the libssh2 stub on `automaton`, as PR #81
+reports). Integration suite (`tests/integration/Run-Integration.ps1`): eleven case files
+(`cases\10-terminal` … `95-ai-select`, `85-telnet` new in PR #81), 73 cases in the
+README's case tables plus the five telnet cases, manual only since 2026-09-15, DPI-aware since
 PR #71; `ui_gallery` captures 10 `--ui-demo` states x 4 themes = 40 images. Next action is sub-project 3 (main window
 chrome: single toolbar replacing the menu bar, tab strip, status). Resume
 from "Todo" below.
 
-Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.44 (2026-10-20).
+Branch: `main` — the redesign branch `ui-polish` was renamed to `main` on 2026-09-07 (the pre-redesign main was kept as branch `v1.0.76`). Now at v1.2.49 (2026-11-03).
 
 ## Decisions so far
 
@@ -273,12 +275,69 @@ Done, in order (details in the commit messages and the specs named):
   README's generated block (a native test keeps README in step, so README.md now
   counts as code in `checks.yml`). The sixteen harness cases passed on Windows.
   Closes the "copy and paste broken past the viewport" item.
+- 2026-10-19 retrospective (PR #73, baac96d;
+  `docs/retrospectives/2026-10-19-eleven-merges-retrospective.md`) and the 2026-10-20
+  checkpoint (PR #75, f6180ab).
+- Selection follow-ups, v1.2.45 (PR #76, 8faf4bf; spec
+  `2026-10-20-putty-selection-design.md` amended in section 1): Shift+click and
+  middle-click extend the selection by PuTTY's rule, keeping the word or line mode;
+  the click count cycles 1, 2, 3, 1; a combining mark joins the cell before it, so a
+  decomposed accent no longer splits a word; a narrowing reflow drops the oldest rows,
+  not the newest (on the alternate screen the top rows, by decision); the help guide's
+  Send Key paragraph no longer lists F1-F12. Four new gate cases; whether they have
+  been run on Windows is not recorded.
+- Keys and wheel reach the terminal after the AI panel hides, v1.2.46 (PR #79,
+  2890e01; from the 2026-10-29 issue mark): focus now leaves the panel on every hide
+  path (`ai_panel_release_focus`), sub-notch wheel deltas accumulate per session
+  (`term_wheel_lines`, `src/core/edit_scroll.c`), and the issue mark records focus,
+  write and receive timing (`src/core/write_stats`). The blocking SSH write it found
+  is in Open.
+- Hold-to-reveal eye on password fields, v1.2.48 (PR #80, 9552d61; spec
+  `2026-11-03-telnet-and-password-reveal-design.md`, plan
+  `docs/superpowers/plans/2026-11-03-password-reveal.md`): Session Manager password,
+  Settings > AI API Key and the SSH key passphrase prompt; a pure state machine
+  (`src/core/pw_reveal_state.c`) under a Win32 skin (`src/ui/pw_reveal.c`); the
+  passphrase prompt moved out of `window.c` into a themed `src/ui/pw_prompt.c`;
+  copy and cut refused while revealed. Tested on Windows by the maintainer before merge
+  (*reported*).
+- Telnet sessions, v1.2.49 (PR #81, 94d7ae3; same spec, plan
+  `docs/superpowers/plans/2026-11-03-telnet.md`): profile kind `telnet`, passive
+  negotiation (`src/core/telnet_proto.c`), auto-login that never sends the password to
+  a non-password prompt and never logs it (`telnet_login.c`, `telnet_session.c`), port
+  checks with local echo, status lines in the tab, a non-blocking socket backend on
+  `SessionIo` (`src/ui/telnet_io.c`), the AI panel's remote-host path, and an SSH
+  password box when no password is saved. The final Opus review's Critical and
+  Important findings were fixed in e710a16; CodeQL's `cpp/world-writable-file-creation`
+  on a test was fixed with `test_fopen_private()` (0499c11). Tested on Windows by the
+  maintainer before merge (*reported*); the new harness cases have not been run.
+- 2026-11-03 retrospective (`docs/retrospectives/2026-11-03-ten-merges-retrospective.md`).
 
 Open, in priority order:
+- [ ] Unpushed branch `fix/sgr-codeql-tidy` (worktree `~/nutshell-wt/tidy` on `automaton`,
+      2026-10-21, commits e5a1229 and 359dbe0, from session 01Cczi6ipaKBtKnozR7vkgFM):
+      fixes the SGR leak and the six CodeQL alerts below, with tests; not version-bumped,
+      no exe, never pushed; merges cleanly with `main` at 94d7ae3. The maintainer decides
+      whether it becomes the next `src/` pull request. On Windows its `config_save` change
+      passes `_S_IREAD | _S_IWRITE` to `_open`, which sets only the read-only attribute:
+      it silences alert #22 but does not narrow the file's ACL there.
 - [ ] Parser: a truncated extended-colour SGR (`38;2;r;g`, `38;5` without its index, or
       one cut by the 16-parameter cap) leaks its trailing parameters as attributes (`2` ->
       dim on the light themes, `5` -> blink, `1;4` -> bold/underline); malformed input
-      only; consume the remaining parameters as xterm does.
+      only; consume the remaining parameters as xterm does. Fixed on the unpushed branch
+      above (e5a1229).
+- [ ] `ssh_channel_write` blocks the UI thread for up to its 5 s send timeout per write
+      when the remote window is full (found by PR #79, left alone). The same class of
+      symptom as #79's lost input: keys stop while the UI thread waits. Move SSH writes off
+      the UI thread or make them non-blocking with a queue. Also from #79 (*reported*): a
+      "Mark Issue Ctrl+Shift+M" tooltip drawn over terminal row 2 in the maintainer's
+      screenshot, not investigated.
+- [ ] Telnet follow-ups (PR #81): `tests/integration/cases/85-telnet.ps1` (five cases) has
+      never been parsed or run -- no `pwsh` on `automaton`, so the Windows box is the
+      first place it can run (`-Only telnet_autologin_never_logs_password,...`); a stray
+      `IAC SB` with no `IAC SE` swallows later output (PuTTY does the same); the 20 s
+      auto-login timer misjudges once per 49.7 days of uptime (fails safe); the minor test
+      gaps in #81's final review. From PR #80: no Wine test separates "mask after every
+      edit message" from a message whitelist.
 - [ ] Designed light-theme ANSI palette (follow-up to the contrast floor, maintainer's
       decision 3 of 2026-10-19): on Onyx Light and Moss & Mist the floor makes normal and
       bright colours converge (90 and 97 both paint `6C6C6C`) and flattens the 232-255 grey
@@ -286,16 +345,13 @@ Open, in priority order:
       Also from that spec's Out of scope: answer OSC 11 (background colour query) so programs
       can detect a light background; default text on an explicit background stays raw.
 - [ ] Terminal selection follow-ups (spec `2026-10-20-putty-selection-design.md` section 4;
-      the selection itself shipped in PR #74): Shift+click to
-      extend; Alt+drag block selection; middle-button paste; mouse reporting to
+      the selection shipped in PR #74, Shift+click and middle-click extend, the click cycle,
+      combining marks and the reflow drop order in PR #76; middle-click now extends, so
+      middle-button paste is off the list): Alt+drag block selection; mouse reporting to
       applications; the per-byte paste writes over SSH; the scrollback-size setting
       (Settings and the help guide offer 100-50,000 lines but every session gets 3,000;
       `term_init` and `term_reflow_buffer` allocate the whole capacity, so lazy
-      allocation in reflow comes first, spec section 6.2); a narrowing reflow of a full
-      ring drops the newest rows rather than the oldest (`buffer.c:142, 165`,
-      pre-existing). Minor residuals from #74's reviews: a fourth rapid click selects a
-      word again where PuTTY cycles; decomposed accents split a word; the help guide's
-      Send Key paragraph still lists F1-F12 beside the new "F1-F12 go to the shell" line.
+      allocation in reflow comes first, spec section 6.2).
 - [ ] Top-anchored reflow for ConPTY sessions, slices 3-6 of
       `2026-10-19-conpty-resize-probe-and-reflow.md` (top mode and the reconnect push,
       the 100 ms throttle with its starved-timer check, DPI reorder, logging, the
@@ -305,15 +361,21 @@ Open, in priority order:
 - [ ] Harness cases on `main`: `resize_applies_to_inactive_tab` fails on every run
       (since v1.2.13); `ctrl_w_reaches_shell_and_shift_closes_tab` failed the v1.2.36 and
       v1.2.37 gate runs and passed the v1.2.41 one, so it is intermittent -- both are
-      tab-switch cases; investigate together (tab B never reports its grid).
+      tab-switch cases; investigate together (tab B never reports its grid). Not run
+      since, as far as the log shows: PR #76's four gate cases and PR #81's telnet cases.
 - [ ] Six CodeQL alerts open on `main`, none new code: #27 `cpp/offset-use-before-range-check`
       at `src/core/markdown.h:62` is alert #12 (open since 2026-04-07 at `src/ui/markdown.h`)
       renumbered when PR #71 moved the parser (56f0805) -- `line[level] == '#' && level < 6`
       reads before the bound; swapping the operands closes it. The other five are
       `cpp/world-writable-file-creation` (`loader.c:935`, four in `test_settings.c`).
-      Fix or dismiss each with a reason, in the next `src/` pull request.
-- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.44. Tagging is the
-      maintainer's call (`feature-workflow` step 10).
+      Fix or dismiss each with a reason, in the next `src/` pull request. All six are fixed
+      on the unpushed branch `fix/sgr-codeql-tidy` (359dbe0; see the first item).
+- [ ] No release since v1.1.21 (2026-09-14); `main` is at v1.2.49, which adds telnet and
+      the password eye since the last count. Tagging is the maintainer's call
+      (`feature-workflow` step 10).
+- [ ] Dependabot #78 (codeql-action 4.38.3 -> 4.39.0) has been open and green since
+      2026-10-21, behind `main`; with one open at a time no other bump can arrive. Update
+      the branch and merge it.
 - [ ] AI panel: commands of a **finished** batch have no details popup and no copy icon
       after a session switch. `cmd_batch_remove` drops the batch, so `chat_rebuild_display`
       shows them only as inline `[EXEC]` segments of the AI text. Either keep finished
@@ -353,13 +415,14 @@ Open, in priority order:
       the shell's directory (OSC 7); mouse reporting (special-keys spec section 5, own
       spec); Backspace on SSH and a per-profile terminal type (special-keys spec 7).
 - [ ] CI review follow-ups (2026-09-10 review; the libssh2 part was done 2026-09-24):
-      `src/ui` is never scanned -- consider a Windows CodeQL run; `.gitattributes` exists
+      `src/ui` is never scanned (since PR #81 that includes the telnet socket backend
+      `src/ui/telnet_io.c`) -- consider a Windows CodeQL run; `.gitattributes` exists
       but holds only `tests/fixtures/*.bin binary`, so add eol rules and renormalise the
-      85 CRLF-indexed files in a lone PR when nothing else is in flight. (Untracking `build/win/nutshell.exe` is off the list: the gate
+      86 CRLF-indexed files (2026-11-03) in a lone PR when nothing else is in flight. (Untracking `build/win/nutshell.exe` is off the list: the gate
       now relies on the committed exe being built from `APP_VERSION`.)
 - [ ] Harness batches B (sessions, auth, host key, connection), C (terminal, clipboard,
-      settings), D (AI extras) — 31 cases planned; the suite has since grown to 49 case
-      definitions, so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
+      settings), D (AI extras) — 31 cases planned; the suite has since grown to 78 cases
+      (73 in the README tables plus five telnet), so reconcile the plan with what exists first; `bvtuser` exists on tompi for auth cases.
       Manual runs only now; still worth having for release checks.
 - [ ] Security audit follow-ups (`2026-09-09-security-audit.md`, kept local; C2 and H2
       landed in PR #24, H3/H4 in PR #54, H5/H6 in v1.2.14 -- DPAPI with the config

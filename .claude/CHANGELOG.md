@@ -4,6 +4,67 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-03 — retrospective (10 merges)
+
+Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.
+Retrospective: `docs/retrospectives/2026-11-03-ten-merges-retrospective.md`.
+Models: claude-opus-5-5 (brief, measurement, edits, retrospective); claude-opus-5-5
+(two fresh critics, one per round).
+
+- **`memory/MEMORY.md`.** Marker `94d7ae3` (PR #81), count 0 (10 merges from
+  `7960bd2`: #73, #70, #72, #74-#77, #79-#81). Test baseline 3,314 (hosted, real
+  libssh2) with the stub count reported beside it; `wintest` 45 (reported). No `pwsh`
+  on `automaton`. Never-pushed branches and where they live (pointer to `repo-status`
+  step 7). Snapshot branch `v1.2.41` and `delete_branch_on_merge`. Exe 5.5 MB, 163
+  commits; 86 CRLF files. CodeQL: `cpp/world-writable-file-creation` and the
+  `test_fopen_private()` rule for test files (0499c11); the telnet backend in `src/ui`
+  is unscanned. Open items and line counts for v1.2.49.
+- **`skills/feature-workflow/SKILL.md`.** Allocation, "Quality checks": final review
+  findings reach the maintainer before any fix, and how a subagent-driven run does it
+  (the brief overrides the run's stop rules; findings and rulings return; the same
+  orchestrator is resumed, or a fresh one starts at the fix wave from the ledger; finish
+  is a pushed branch and a draft PR, never a merge). Step 2 names the superpowers route.
+  Step 4 mentions the mid-run return. Trigger: PR #81's fix wave (e710a16) went in
+  before the maintainer saw the findings (reported).
+- **`skills/checkpoint/SKILL.md` step 1.** List never-pushed branches on `automaton`;
+  take the suite count from a code-changing PR's `Native tests` job log when `make test`
+  is skipped. Trigger: `fix/sgr-codeql-tidy` held fixes for two Open items unseen.
+- **`skills/repo-status/SKILL.md`.** Step 7, never-pushed branches; known state for
+  2026-11-03.
+- **CLAUDE.md, "Software Development Rules".** One sentence: the maintainer sees a final
+  review's findings before any is fixed; an orchestrator returns them instead of fixing.
+  Two questions about it are left to the maintainer (round 2, findings 1 and 2 below).
+- **Workflows.** Reviewed, found accurate; no edit. No change to what the gate enforces.
+
+Critique, round 1 (fresh Opus critic, 11 findings):
+1. The hold conflicts with `subagent-driven-development`, which has no stop at the final review, and leaves no defined resume. Accepted: resume the same orchestrator; it returns its rulings with the findings.
+2. Unclear whether fixes wait for approval or only for the findings to be shown. Accepted as "show, then proceed unless told otherwise"; round 2 reopened it (its finding 1).
+3. Exempting per-task reviews narrows the preference (a per-task reviewer can be Opus). Accepted as a listing of per-task Criticals and Importants; round 2 reopened it (its finding 2) and the exemption was removed.
+4. Re-reviews, nested orchestrators and trivial findings not covered. Accepted: only the top-level final review holds; re-review findings come back with the result. "Minors listed, not held" rejected: showing a Minor costs no extra round trip.
+5. The skill's own copy of the "Quality checks" bullet lacked the rule. Accepted: the rule lives in that paragraph, not in step 4.
+6. "No upstream" misses this very branch (it tracks `origin/main`). Accepted and verified: compare with `git ls-remote --heads origin`.
+7. `gh run view --log` printed nothing for two runs. Accepted and verified: `gh api .../actions/jobs/<id>/logs` (3,314); use a code-changing PR; without `gh`, not measured.
+8. The local-branch rule was in three places, one with session detail. Accepted: one home (`repo-status` step 7); memory keeps a pointer; known state names no local branch.
+9. Line limits: checkpoint 101, feature-workflow +11. Partly accepted: checkpoint stays near 100; feature-workflow's split is still the 2026-10-19 open question 10.
+10. Step 2's "approval does not settle step 3" leaves no record; the route is new decision. Partly accepted: that sentence was dropped and the route kept as description. A one-line "Critique: run / not run because" in every spec is proposed in the retrospective, not applied (it changes the spec format).
+11. Cheaper: a fixed brief clause, or separate fix commits with a findings map. Partly accepted: the brief clause is the core of the paragraph. Separate commits rejected: weaker than the preference ("before any fix").
+
+Critique, round 2 (fresh Opus critic, revised artefact only, 11 findings):
+1. Whether the main session waits after showing the findings is unsaid: show-and-resume in one turn changes nothing, waiting stalls an unattended run. **Open for the maintainer.** The "go ahead unless I say otherwise" clause was removed from CLAUDE.md, since it was not the maintainer's wording.
+2. The rule covers only the final review, narrowing the preference as written (any Opus review), in the maintainer's voice. **Open for the maintainer**: ratify "final review" or widen it. CLAUDE.md states only the part both readings share.
+3. "Finish" invokes `finishing-a-development-branch`, whose option 1 merges locally. Accepted: finish is a push and a draft PR, never a merge.
+4. No fallback when the orchestrator cannot be resumed. Accepted: a fresh one gets the ledger path and findings and starts at the fix wave.
+5. "A sub-agent cannot see the maintainer's memory" is partly false; the run's own stop rules are the cause. Accepted: the reason now names the stop rules.
+6. `%(refname:short)` prints `heads/<b>` beside a same-named tag; a failed `ls-remote` lists every branch. Accepted and verified: `lstrip=2`, an `&&` guard, and `git status --short` per worktree. Unpushed commits on a branch the remote also has: rejected here, that is step 3's ahead/behind check.
+7. Memory said "nowhere else". Accepted: the main clone and the Windows box are named.
+8. Length, new decisions, and step 4's "what returns" contradicting the mid-run return. Step 4 accepted; length as round 1's 9; the open decisions are findings 1 and 2.
+9. How to find the job id; docs PRs skip the suite; logs expire. Accepted, verified on PR #81.
+10. Known state's "no drafts" is wrong once this PR opens. Accepted.
+11. No CHANGELOG entry yet. Accepted: this entry.
+
+Two rounds is the ceiling (`critique` skill); findings 1 and 2 of round 2 stay in the
+draft PR body for the maintainer.
+
 ## 2026-10-20 — checkpoint after PR #74
 
 - **`memory/MEMORY.md`, "Open items worth knowing".** Rewritten for `main`

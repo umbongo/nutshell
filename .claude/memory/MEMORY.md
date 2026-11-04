@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-10-20 (checkpoint after PR #74).
+Last updated: 2026-11-03 (retrospective after PR #81).
 
 ## Retrospective cadence (standing rule from the maintainer, 2026-09-21)
 
@@ -17,11 +17,12 @@ Last updated: 2026-10-20 (checkpoint after PR #74).
   set) after the last retrospective marker below. Count them with
   `list_pull_requests` (state closed, sort updated, desc) or
   `git log --merges --first-parent origin/main <marker>..`.
-- **Last retrospective:** 2026-10-19, marker commit `7960bd2` (merge of
-  PR #71, the head of `main` when the retrospective was written). Merges
+- **Last retrospective:** 2026-11-03, marker commit `94d7ae3` (merge of
+  PR #81, the head of `main` when the retrospective was written). Merges
   since: 0 (the retrospective's own PR will be the first). Update this line
-  at every retrospective. The 2026-10-19 count from `c593796` was 11
-  (#60-#69, #71), including the 2026-10-13 retrospective's own PR #62.
+  at every retrospective. The 2026-11-03 count from `7960bd2` was 10
+  (#73, #70, #72, #74-#77, #79-#81), including the 2026-10-19
+  retrospective's own PR #73.
 - A daily Routine in the maintainer's Claude account performs the count
   and starts the retrospective in a fresh session when it reaches 10. Any
   session that notices the count is at or past 10 should run it too.
@@ -55,23 +56,32 @@ Last updated: 2026-10-20 (checkpoint after PR #74).
   CLAUDE.md ("Building on Linux"). Wine's DPI for `wintest` is
   `HKCU\Control Panel\Desktop\LogPixels` (REG_DWORD 192 for 200 %; delete
   the value to restore 96) -- reported 2026-10-19, not measured here, and it
-  changes the shared `~/.wine` prefix for every session.
+  changes the shared `~/.wine` prefix for every session. No `pwsh` is
+  installed, so a harness case file cannot be parsed or run here; only the
+  Windows box can check one.
+- **Never-pushed branches** can live in `~/nutshell-wt/*` worktrees, the
+  main clone `~/nutshell` or the Windows box; check `automaton`'s
+  (`repo-status` step 7) before calling an Open item untouched.
 - **The Windows box** (MSYS2, `mingw32-make`): runs the integration harness
   and `mingw32-make wintest`, and can build too.
-- Native suite baseline on 2026-10-19 (`automaton`, libssh2 stub): 3,035
-  tests, 0 failed (2,485 on 2026-10-13, 1,960 on 2026-09-21). The hosted
-  `Native tests` job links the real libssh2, so its count may differ by the
-  libssh2-gated files.
+- Native suite baseline: 3,314 tests, 0 failed, in the hosted `Native
+  tests` run on PR #81's head (real libssh2, 2026-11-03); PR #81's body
+  reports 3,279 on `automaton` with the libssh2 stub. Earlier stub counts:
+  3,035 (2026-10-19), 2,485 (2026-10-13), 1,960 (2026-09-21). The two
+  counts differ by the libssh2-gated files, so compare like with like.
+  `wintest` reported 45 tests on 2026-11-03.
 - After any change to `NutshellIT.psm1`'s `Add-Type` sources, run the
   harness from a fresh PowerShell window; the module stops at load and says
   so (`tests/integration/README.md`).
 
 ## Repository facts
 
-- **Branches named with a version number (`v1.0.76`, `v1.1.21`, `v1.2.13`)
-  are snapshots and are never deleted** (maintainer, 2026-10-20), even
-  though each is contained in `main`. "Clear out merged branches" means
-  feature branches only; GitHub deletes those on merge.
+- **Branches named with a version number (`v1.0.76`, `v1.1.21`, `v1.2.13`,
+  `v1.2.41`) are snapshots and are never deleted** (maintainer, 2026-10-20),
+  even though each is contained in `main`. "Clear out merged branches" means
+  feature branches only; GitHub deletes those on merge
+  (`delete_branch_on_merge` is on; a merged branch that still shows locally
+  needs `git fetch --prune`). `v1.2.41` is a branch only, at `7960bd2`.
 - `main` was the redesign branch `ui-polish`, renamed on 2026-09-07. The
   pre-redesign main lives on as branch **and** tag `v1.0.76`. `v1.1.21` is
   also both a branch and a tag; the branch is fully contained in `main`.
@@ -82,10 +92,11 @@ Last updated: 2026-10-20 (checkpoint after PR #74).
   `docs/superpowers/specs/2026-09-06-ui-redesign-notes.md`. Checkpoints are
   committed as `docs: checkpoint YYYY-MM-DD — ...`. Retrospectives go in
   `docs/retrospectives/`.
-- `build/win/nutshell.exe` (about 5.2 MB, UPX-packed, version resource left
-  uncompressed) is committed on every build; 104 commits touch it. Git LFS
+- `build/win/nutshell.exe` (about 5.5 MB, UPX-packed, version resource left
+  uncompressed) is committed on every build; 163 commits on `main` touch it
+  (2026-11-03). Git LFS
   is an open question, untracking it is not (the gate reads its version).
-- 85 files are CRLF in the index; `.gitattributes` holds only
+- 86 files are CRLF in the index (2026-11-03); `.gitattributes` holds only
   `tests/fixtures/*.bin binary`. The notes ask for eol rules and a lone
   renormalising pull request.
 - `.claude/` is gitignored except `memory/`, `skills/` and `CHANGELOG.md`.
@@ -128,7 +139,8 @@ Last updated: 2026-10-20 (checkpoint after PR #74).
 - CodeQL (`codeql.yml`) runs on pull requests and on pushes to `main`,
   builds `make test` on ubuntu; since 2026-09-24 it installs `libssh2-1-dev`
   too, so the SSH files are scanned for real. `src/ui` is still never
-  scanned (Win32 only).
+  scanned (Win32 only), so neither is the Win32 half of a feature, such as
+  the telnet socket backend `src/ui/telnet_io.c`.
 - Dependabot (`.github/dependabot.yml`): github-actions only, weekly, all
   actions grouped into one pull request, open-pull-requests-limit 1. A
   merged actions-only bump triggers just the CodeQL push run; no release.
@@ -157,19 +169,28 @@ Last updated: 2026-10-20 (checkpoint after PR #74).
 - Moving a file closes its alerts as "fixed" and opens new numbers for the
   same lines (#12 became #27 when `markdown.h` moved to `src/core`). Check
   an alert's history before calling it new.
+- `cpp/world-writable-file-creation` fires on a plain `fopen(path, "w")` or
+  `"w+"`, test files included. A test that creates a file opens it with
+  `test_fopen_private()` (`tests/test_framework.h`, 0600 on POSIX, write-only)
+  and reopens it with `fopen(path, "r")` to read it back (0499c11, PR #81).
+  A test-only fix changes nothing the `Version bump` check looks at, so it
+  needs no bump or rebuild.
 
 ## Open items worth knowing before starting work
 
 See the "Open" list in the notes document for the authoritative version.
-As of 2026-10-20 (`main` at v1.2.44, PR #74; no open drafts): truncated
-extended-colour SGR leak; designed light-theme ANSI palette; selection
-follow-ups (Shift+click, Alt+drag, middle paste, the scrollback-size
-setting); the #70 ConPTY probe run on Windows; two failing tab-switch
-harness cases; old CodeQL alerts; no release since v1.1.21; the whole-repository
-security review; finished-batch command details; AI panel selection
-follow-ups; local shell follow-ups; paint-path polling; `.gitattributes`
-renormalise; sub-project 3 needs a spec first. `src/ui/window.c` is 5,440
-lines and `ai_chat.c` 5,908.
+As of 2026-11-03 (`main` at v1.2.49, PR #81; Dependabot #78 open since
+2026-10-21, and this retrospective's draft): the unpushed branch `fix/sgr-codeql-tidy` (SGR leak
+and all six CodeQL alerts fixed, not bumped or built; the maintainer
+decides); `ssh_channel_write` can block the UI thread for up to 5 s per
+write; telnet harness cases never parsed or run; two failing tab-switch
+harness cases; no release since v1.1.21; designed light-theme ANSI palette;
+top-anchored ConPTY reflow (unblocked); selection follow-ups (Alt+drag, the
+scrollback-size setting); the whole-repository security review;
+finished-batch command details; AI panel selection follow-ups; local shell
+follow-ups; paint-path polling; `.gitattributes` renormalise; sub-project 3
+needs a spec first. `src/ui/window.c` is 5,910 lines, `ai_chat.c` 5,926,
+`chat_listview.c` 4,316.
 
 ## Local shell and keys, facts that outlive the session
 

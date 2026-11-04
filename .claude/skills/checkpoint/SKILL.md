@@ -5,7 +5,7 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-10-19 (measure alerts, releases, briefed facts). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-03 (local branches, test count without `make test`). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
@@ -44,6 +44,13 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
    `mcp__github__*` equivalents or report them as not measured. Facts handed in by a brief
    or a previous session are checked against git before they are written
    down; record the ones git cannot show as reported, not measured.
+   On `automaton`, list never-pushed branches (`repo-status` step 7) and
+   report them; one may already fix an Open item. With `make test`
+   skipped, take the count from the `Native tests` job of the last PR that
+   changed code (a docs PR's job skips the suite): the job id ends
+   `gh pr view N --json statusCheckRollup --jq '.statusCheckRollup[]|select(.name=="Native tests").detailsUrl'`,
+   then `gh api repos/umbongo/nutshell/actions/jobs/<id>/logs | grep 'Tests
+   Run'` (real libssh2, not the stub; logs expire). Without `gh`: not measured.
 2. **Compact the notes document.** Move finished items to "Done" with the
    PR number and commit, keep "Open" in priority order, fix any counts.
    Do not delete history; the done list is the project's memory of why.
