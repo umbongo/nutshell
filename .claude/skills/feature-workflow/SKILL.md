@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-10-19 (retrospective). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-03 (retrospective). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules themselves live in CLAUDE.md ("Software Development Rules",
 "Branches, pull requests and the merge gate"); this skill is the walk
 through them in order. Where they disagree, CLAUDE.md wins. It absorbed
@@ -41,7 +41,17 @@ be longer than the change. Say so in one line.
 the `critique` skill, used when a wrong decision would be expensive to
 migrate. A diff review is an Opus agent given the diff, never a summary
 of it. Never poll a running agent; its completion notification is the
-signal.
+signal. **Every Opus review's findings reach the maintainer before any
+fix** (CLAUDE.md). `subagent-driven-development` does not stop there by
+itself, so the orchestrator's brief overrides its stop rules in so many
+words: after any review run on Opus (the final whole-branch review, an Opus
+re-review, a per-task review dispatched on Opus), return the ranked
+findings and your rulings, and stop. The main session shows them to the
+maintainer and, unless told otherwise in that reply, resumes that
+orchestrator (SendMessage) for the fixes; if it cannot be resumed, a fresh
+one gets the ledger path and the findings and starts at the fix. Sonnet
+per-task reviews keep looping inside the run. Finish means push and open
+or update the draft PR (step 5), never merge.
 
 **Attribution:** every commit and pull request carries a `Models:` line
 naming each model that touched the change and what it did, then the
@@ -61,7 +71,10 @@ open as drafts and their body ends with the same `Models:` line and the
    survey of the relevant code goes to an Explore agent; the spec is
    written into `docs/superpowers/specs/YYYY-MM-DD-<name>-design.md`
    from its conclusions. The notes document's convention: spec first,
-   mockups before choosing a direction for UI work.
+   mockups before choosing a direction for UI work. The usual route since
+   PR #80: `superpowers:brainstorming` (spec), `superpowers:writing-plans`
+   (plan in `docs/superpowers/plans/`), `superpowers:subagent-driven-development`
+   (step 4).
 3. **Second opinion, if warranted.** For a decision that would be costly
    to migrate, run the `critique` skill: an Opus critic gets the spec and
    the files, never the author's reasoning. Each finding is accepted or
@@ -70,7 +83,8 @@ open as drafts and their body ends with the same `Models:` line and the
    when the package is multi-step, otherwise Sonnet directly, Haiku for
    the mechanical parts. Tests first (CLAUDE.md, "Test-Driven
    Development"). `make test` before every push. What returns to the main
-   session is the diff and the test summary line.
+   session is the diff and the test summary line, and mid-run the final
+   review's findings (Allocation, "Quality checks").
 5. **Draft pull request.** The first push opens it. Before touching it,
    classify the diff:
 

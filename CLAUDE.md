@@ -86,7 +86,10 @@ Write tests before implementation code. Include corner cases, positive and negat
 - **Quality checks are sub-agents too.** A second opinion on a decision is
   the `critique` skill; a review of a diff is an Opus agent given the diff,
   not a summary of it. Never poll a running agent; its completion
-  notification is the signal.
+  notification is the signal. I see the findings of every Opus review
+  before any is fixed: an orchestrator returns them to the main session
+  instead of fixing them itself, the main session shows them to me, and
+  the fixes then go ahead unless I say otherwise.
 - **Attribution**: every commit and pull request lists each model that
   touched the change and what it did (see "Git commits" below).
 
