@@ -234,9 +234,9 @@ static void conn_job_free(ConnJob *j)
          * abandoned attempt). ssh_channel_free() waits for the server's close
          * on a blocking session; on a hung server that would stall this
          * thread (often the UI thread) for the whole 15 s setup limit, so
-         * shorten it. libssh2 checks the limit in whole seconds: expect 1-2 s
-         * at worst. Never 0, which waits without end. A handed-off job has
-         * channel == NULL and is not touched. */
+         * shorten it. libssh2 checks in whole seconds and the free makes two
+         * calls: expect about 2-4 s at worst. Never 0, which waits without end.
+         * A handed-off job has channel == NULL and is not touched. */
         ssh_session_set_timeout(j->ssh, 1);
         ssh_channel_free(j->channel);
     }

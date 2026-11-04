@@ -28,7 +28,10 @@ HINTERNET ns_winhttp_open(const wchar_t *agent)
     if (!session) return NULL;
 
     /* TLS 1.2 or newer. Windows 10 before 1903 refuses the 1.3 flag, so
-     * retry with 1.2 alone. The option only affects https connections. */
+     * retry with 1.2 alone. The option only affects https connections. If the
+     * 1.2-only retry is refused too, the session keeps the OS defaults
+     * (possibly TLS 1.0 on an unpatched Windows 7); failing closed there is a
+     * tracked follow-up. */
     DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2
                     | WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
     if (!WinHttpSetOption(session, WINHTTP_OPTION_SECURE_PROTOCOLS,
