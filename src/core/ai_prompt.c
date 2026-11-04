@@ -1868,13 +1868,16 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
 }
 
 /* Map a queue entry's status to the outcome word ai_build_continue_text()
- * lists it under. Every ApprovalStatus is covered explicitly (see the
+ * lists it under. A quoted entry (an [EXEC] marker found inside code, always
+ * APPROVE_BLOCKED) gets its own word: it was never a command to run, and the
+ * model must not read it as blocked by policy. Every ApprovalStatus is covered explicitly (see the
  * table in docs/superpowers/specs/2026-09-23-command-dispatch-states-
  * design.md section 3); the trailing return is unreachable but keeps the
  * function total if the enum ever grows a member this switch forgets. */
-static const char *ai_continue_outcome_word(ApprovalStatus status)
+static const char *ai_continue_outcome_word(const ApprovalEntry *e)
 {
-    switch (status) {
+    if (e->quoted) return "quoted in a code block, not run";
+    switch (e->status) {
         case APPROVE_COMPLETED: return "ran";
         case APPROVE_EXECUTING: return "started, stopped before it finished";
         case APPROVE_APPROVED:  return "not run (batch stopped)";
@@ -1969,7 +1972,7 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
         pos += (size_t)w;
 
         for (int i = 0; i < q->count; i++) {
-            const char *outcome = ai_continue_outcome_word(q->entries[i].status);
+            const char *outcome = ai_continue_outcome_word(&q->entries[i]);
             char elided[64];
             ai_elide_command_60(q->entries[i].command, elided, sizeof(elided));
 

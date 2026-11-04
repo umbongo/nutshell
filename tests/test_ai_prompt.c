@@ -3671,3 +3671,16 @@ int test_ai_system_prompt_asks_for_explanation_before_marker(void) {
                             "and the next explanation.") != NULL);
     TEST_END();
 }
+
+int test_continue_text_quoted_entry(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_EQ(chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0), 0);
+    char buf[4096];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_TRUE(strstr(buf, "1. quoted in a code block, not run: ls") != NULL);
+    ASSERT_NULL(strstr(buf, "above the command policy ceiling"));
+    TEST_END();
+}

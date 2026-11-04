@@ -202,10 +202,10 @@ int test_ui_demo_executing_rebuild_carries_run_states(void)
     ASSERT_EQ(second->u.cmd.run, CHAT_RUN_RUNNING);
 
     ChatCmdIntent intent = CHAT_CMD_INTENT_DIM;
-    ASSERT_STR_EQ(chat_cmd_label(first->u.cmd.approved, first->u.cmd.blocked,
+    ASSERT_STR_EQ(chat_cmd_label(first->u.cmd.approved, first->u.cmd.blocked, 0,
                                  first->u.cmd.run, &intent), "ran");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_SUCCESS);
-    ASSERT_STR_EQ(chat_cmd_label(second->u.cmd.approved, second->u.cmd.blocked,
+    ASSERT_STR_EQ(chat_cmd_label(second->u.cmd.approved, second->u.cmd.blocked, 0,
                                  second->u.cmd.run, &intent), "running");
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_INFO);
 

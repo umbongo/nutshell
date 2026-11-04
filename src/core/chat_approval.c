@@ -26,8 +26,11 @@ int chat_approval_add(ApprovalQueue *q, const char *command,
     return chat_approval_add_session(q, command, platform, 0);
 }
 
-int chat_approval_add_session(ApprovalQueue *q, const char *command,
-                              CmdPlatform platform, int contradicted)
+/* The one place an entry is built. `quoted` marks an [EXEC] marker that sat
+ * inside code: it is classified (for the chip) but forced to APPROVE_BLOCKED
+ * and never consults the policy. */
+static int approval_add(ApprovalQueue *q, const char *command,
+                        CmdPlatform platform, int contradicted, int quoted)
 {
     if (!command || is_whitespace_only(command)) return -1;
     /* Defense in depth: a command containing a raw control byte, a
@@ -51,10 +54,11 @@ int chat_approval_add_session(ApprovalQueue *q, const char *command,
     memcpy(e->command, command, len);
     e->command[len] = '\0';
     memset(e->note, 0, sizeof(e->note));
+    e->quoted = quoted ? 1 : 0;
     e->safety = cmd_classify_session(command, platform, contradicted);
     e->safety_mask = cmd_classify_mask_session(command, platform, contradicted);
 
-    if (cmd_policy_blocks(q->policy, e->safety)) {
+    if (quoted || cmd_policy_blocks(q->policy, e->safety)) {
         e->status = APPROVE_BLOCKED;
     } else if (cmd_policy_runs_unattended(q->policy, e->safety_mask)) {
         e->status = APPROVE_APPROVED;
@@ -64,6 +68,18 @@ int chat_approval_add_session(ApprovalQueue *q, const char *command,
 
     q->count++;
     return idx;
+}
+
+int chat_approval_add_session(ApprovalQueue *q, const char *command,
+                              CmdPlatform platform, int contradicted)
+{
+    return approval_add(q, command, platform, contradicted, 0);
+}
+
+int chat_approval_add_quoted(ApprovalQueue *q, const char *command,
+                             CmdPlatform platform, int contradicted)
+{
+    return approval_add(q, command, platform, contradicted, 1);
 }
 
 void chat_approval_set_note(ApprovalQueue *q, int idx, const char *note)
@@ -139,13 +155,14 @@ int chat_approval_next_approved(const ApprovalQueue *q)
 
 void chat_approval_set_executing(ApprovalQueue *q, int index)
 {
-    if (index >= 0 && index < q->count)
+    /* A quoted row never runs, whatever state a caller thinks it is in. */
+    if (index >= 0 && index < q->count && !q->entries[index].quoted)
         q->entries[index].status = APPROVE_EXECUTING;
 }
 
 void chat_approval_set_completed(ApprovalQueue *q, int index)
 {
-    if (index >= 0 && index < q->count)
+    if (index >= 0 && index < q->count && !q->entries[index].quoted)
         q->entries[index].status = APPROVE_COMPLETED;
 }
 
@@ -154,6 +171,7 @@ int chat_approval_unblock_all(ApprovalQueue *q)
     int n = 0;
     for (int i = 0; i < q->count; i++) {
         if (q->entries[i].status == APPROVE_BLOCKED &&
+            !q->entries[i].quoted &&
             !cmd_policy_blocks(q->policy, q->entries[i].safety)) {
             q->entries[i].status = APPROVE_PENDING;
             n++;

@@ -1935,7 +1935,7 @@ static void settled_row_geometry(ChatListView *lv, HDC hdc, ChatMsgItem *item,
      * ApprovalQueue. */
     g->intent = CHAT_CMD_INTENT_DIM;
     g->label = chat_cmd_label(item->u.cmd.approved, item->u.cmd.blocked,
-                              item->u.cmd.run, &g->intent);
+                              item->u.cmd.quoted, item->u.cmd.run, &g->intent);
 
     /* Chip label width, measured with the small font: label width plus
      * SP_SM padding on both sides. */

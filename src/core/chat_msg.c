@@ -1,6 +1,7 @@
 /* src/core/chat_msg.c */
 #include "chat_msg.h"
 #include "secure_zero.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -198,6 +199,12 @@ void chat_msg_set_batch(ChatMsgItem *item, int batch)
     item->u.cmd.batch = batch;
 }
 
+void chat_msg_set_quoted(ChatMsgItem *item, int quoted)
+{
+    if (!item || item->type != CHAT_ITEM_COMMAND) return;
+    item->u.cmd.quoted = quoted ? 1 : 0;
+}
+
 int chat_msg_set_thinking(ChatMsgItem *item, const char *thinking_text)
 {
     if (!item || item->type != CHAT_ITEM_AI_TEXT) return -1;
@@ -270,13 +277,16 @@ int chat_msg_batch_settle(ChatMsgList *list, int batch)
     return n;
 }
 
-const char *chat_cmd_label(int approved, int blocked, int run,
+const char *chat_cmd_label(int approved, int blocked, int quoted, int run,
                            ChatCmdIntent *intent)
 {
     ChatCmdIntent i;
     const char *label;
 
-    if (blocked) {
+    if (quoted) {
+        label = "quoted, not run";
+        i = CHAT_CMD_INTENT_DIM;
+    } else if (blocked) {
         label = "held";
         i = CHAT_CMD_INTENT_WARNING;
     } else if (approved == 0) {
@@ -302,6 +312,27 @@ const char *chat_cmd_label(int approved, int blocked, int run,
 
     if (intent) *intent = i;
     return label;
+}
+
+int chat_card_header_text(int n, int held, int quoted, char *buf, size_t cap)
+{
+    if (!buf || cap == 0) return 0;
+    buf[0] = '\0';
+    size_t pos = 0;
+    int w = snprintf(buf, cap, "%d command%s", n, n == 1 ? "" : "s");
+    if (w < 0 || (size_t)w >= cap) { buf[0] = '\0'; return 0; }
+    pos = (size_t)w;
+    if (held > 0) {
+        w = snprintf(buf + pos, cap - pos, " \xC2\xB7 %d held", held);
+        if (w < 0 || (size_t)w >= cap - pos) { buf[0] = '\0'; return 0; }
+        pos += (size_t)w;
+    }
+    if (quoted > 0) {
+        w = snprintf(buf + pos, cap - pos, " \xC2\xB7 %d quoted", quoted);
+        if (w < 0 || (size_t)w >= cap - pos) { buf[0] = '\0'; return 0; }
+        pos += (size_t)w;
+    }
+    return (int)pos;
 }
 
 int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,

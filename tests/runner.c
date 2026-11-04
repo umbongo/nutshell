@@ -2859,6 +2859,16 @@ int test_needs_user_blocked_and_approved_auto_approve(void);
 int test_needs_user_approved_only(void);
 int test_needs_user_denied_only(void);
 int test_needs_user_after_unblock_all(void);
+int test_chat_approval_add_quoted_blocked_even_with_auto(void);
+int test_chat_approval_add_quoted_rejects_like_add(void);
+int test_chat_approval_add_session_quoted_zero(void);
+int test_chat_approval_unblock_all_skips_quoted(void);
+int test_chat_approval_approve_quoted_fails(void);
+int test_chat_approval_needs_user_all_quoted(void);
+int test_chat_cmd_label_quoted(void);
+int test_chat_card_header_text(void);
+int test_chat_msg_set_quoted(void);
+int test_continue_text_quoted_entry(void);
 
 /* test_chat_approval.c — permit-write toggle */
 int test_policy_blocked_note_names_the_commands_and_the_ceiling(void);
@@ -6463,6 +6473,16 @@ int main(void) {
     failed += test_needs_user_approved_only();
     failed += test_needs_user_denied_only();
     failed += test_needs_user_after_unblock_all();
+    failed += test_chat_approval_add_quoted_blocked_even_with_auto();
+    failed += test_chat_approval_add_quoted_rejects_like_add();
+    failed += test_chat_approval_add_session_quoted_zero();
+    failed += test_chat_approval_unblock_all_skips_quoted();
+    failed += test_chat_approval_approve_quoted_fails();
+    failed += test_chat_approval_needs_user_all_quoted();
+    failed += test_chat_cmd_label_quoted();
+    failed += test_chat_card_header_text();
+    failed += test_chat_msg_set_quoted();
+    failed += test_continue_text_quoted_entry();
 
     printf("\n--- Permit-Write Toggle ---\n");
     failed += test_policy_blocked_note_names_the_commands_and_the_ceiling();

@@ -331,7 +331,9 @@ size_t ai_build_confirm_text(char cmds[][1024], int ncmds,
  * "ran", APPROVE_EXECUTING "started, stopped before it finished",
  * APPROVE_APPROVED "not run (batch stopped)", APPROVE_DENIED "not run
  * (denied)", APPROVE_BLOCKED "not run (above the command policy
- * ceiling)", APPROVE_PENDING "not run (never decided)".
+ * ceiling)", APPROVE_PENDING "not run (never decided)". A quoted entry
+ * (ApprovalEntry.quoted, an [EXEC] marker found inside code) is listed as
+ * "quoted in a code block, not run" whatever its status.
  *
  * Callers should pass a 4096-byte buffer and check the return value:
  * every snprintf inside is checked, and the function returns 0 (writing
