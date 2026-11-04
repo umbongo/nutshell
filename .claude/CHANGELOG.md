@@ -50,8 +50,8 @@ Critique, round 1 (fresh Opus critic, 11 findings):
 11. Cheaper: a fixed brief clause, or separate fix commits with a findings map. Partly accepted: the brief clause is the core of the paragraph. Separate commits rejected: weaker than the preference ("before any fix").
 
 Critique, round 2 (fresh Opus critic, revised artefact only, 11 findings):
-1. Whether the main session waits after showing the findings is unsaid: show-and-resume in one turn changes nothing, waiting stalls an unattended run. **Open for the maintainer.** The "go ahead unless I say otherwise" clause was removed from CLAUDE.md, since it was not the maintainer's wording.
-2. The rule covers only the final review, narrowing the preference as written (any Opus review), in the maintainer's voice. **Open for the maintainer**: ratify "final review" or widen it. CLAUDE.md states only the part both readings share.
+1. Whether the main session waits after showing the findings is unsaid: show-and-resume in one turn changes nothing, waiting stalls an unattended run. **Open for the maintainer.** The "go ahead unless I say otherwise" clause was removed from CLAUDE.md, since it was not the maintainer's wording. *Decided 2026-11-04 by the maintainer: show, then proceed; the clause is restored in their words.*
+2. The rule covers only the final review, narrowing the preference as written (any Opus review), in the maintainer's voice. **Open for the maintainer**: ratify "final review" or widen it. CLAUDE.md states only the part both readings share. *Decided 2026-11-04 by the maintainer: widened to every Opus review (CLAUDE.md, `feature-workflow` Allocation).*
 3. "Finish" invokes `finishing-a-development-branch`, whose option 1 merges locally. Accepted: finish is a push and a draft PR, never a merge.
 4. No fallback when the orchestrator cannot be resumed. Accepted: a fresh one gets the ledger path and findings and starts at the fix wave.
 5. "A sub-agent cannot see the maintainer's memory" is partly false; the run's own stop rules are the cause. Accepted: the reason now names the stop rules.

@@ -150,7 +150,7 @@ time, no other bump can arrive. All the record fixes are made here; #78 is in Op
   backend unscanned; open items and line counts.
 - `.claude/skills/feature-workflow/SKILL.md` step 2 and Allocation; `.claude/skills/checkpoint/SKILL.md`
   step 1; `.claude/skills/repo-status/SKILL.md` step 7 and known state.
-- `CLAUDE.md`, "Software Development Rules": the maintainer sees a final review's
+- `CLAUDE.md`, "Software Development Rules": the maintainer sees every Opus review's
   findings before any is fixed, then the fixes go ahead unless the maintainer says
   otherwise; an orchestrator returns them instead of fixing them itself.
 - `feature-workflow`'s Allocation paragraph: how a subagent-driven run does that (the
@@ -185,6 +185,10 @@ materially between rounds:
 2. Your preference as written covers any Opus review. The CLAUDE.md sentence covers the
    final review only, so a per-task Opus reviewer's fix still goes in first. Ratify
    "final review", or widen it.
+
+**Decided by the maintainer on 2026-11-04:** (1) show, then proceed: the main session
+shows the findings and the fixes go ahead unless the maintainer says otherwise in reply;
+(2) widened to every Opus review. CLAUDE.md and `feature-workflow` now say both.
 
 ## 7. Recommendations, not applied
 

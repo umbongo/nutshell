@@ -41,16 +41,17 @@ be longer than the change. Say so in one line.
 the `critique` skill, used when a wrong decision would be expensive to
 migrate. A diff review is an Opus agent given the diff, never a summary
 of it. Never poll a running agent; its completion notification is the
-signal. **Final review findings reach the maintainer before any fix**
-(CLAUDE.md). `subagent-driven-development` does not stop there by itself,
-so the orchestrator's brief overrides its stop rules in so many words:
-after the final whole-branch review, return the ranked findings and your
-rulings, and stop. The main session shows them to the maintainer, then
-resumes that orchestrator (SendMessage) for the fix wave and re-review; if
-it cannot be resumed, a fresh one gets the ledger path and the findings and
-starts at the fix wave. Finish means push and open or update the draft
-PR (step 5), never merge. Only the top-level final review holds;
-re-review findings come back with the result.
+signal. **Every Opus review's findings reach the maintainer before any
+fix** (CLAUDE.md). `subagent-driven-development` does not stop there by
+itself, so the orchestrator's brief overrides its stop rules in so many
+words: after any review run on Opus (the final whole-branch review, an Opus
+re-review, a per-task review dispatched on Opus), return the ranked
+findings and your rulings, and stop. The main session shows them to the
+maintainer and, unless told otherwise in that reply, resumes that
+orchestrator (SendMessage) for the fixes; if it cannot be resumed, a fresh
+one gets the ledger path and the findings and starts at the fix. Sonnet
+per-task reviews keep looping inside the run. Finish means push and open
+or update the draft PR (step 5), never merge.
 
 **Attribution:** every commit and pull request carries a `Models:` line
 naming each model that touched the change and what it did, then the
