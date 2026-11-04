@@ -97,6 +97,18 @@ int net_url_parse(const char *url, NetUrlParts *out)
         if (close >= hlen) return -1;            /* no closing bracket */
         if (close == 1) return -1;               /* empty "[]" */
         if (close - 1 >= NET_HOST_MAX) return -1;
+        {   /* an IPv6 literal only: hex digits, ':' and '.', and a ':' */
+            size_t k;
+            int colons = 0;
+            for (k = 1; k < close; k++) {
+                char c = host[k];
+                if (c == ':') colons++;
+                else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                           (c >= 'A' && c <= 'F') || c == '.'))
+                    return -1;
+            }
+            if (colons == 0) return -1;
+        }
         memcpy(out->host, host + 1, close - 1);
         out->host[close - 1] = '\0';
         rest = host + close + 1;

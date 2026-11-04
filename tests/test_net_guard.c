@@ -251,6 +251,18 @@ int test_net_url_parse_refuses(void)
     ASSERT_EQ(net_url_parse("http://a/\x01", &p), -1);
     ASSERT_EQ(net_url_parse("http://a/\n", &p), -1);
     ASSERT_EQ(net_url_parse("http://example.com", NULL), -1);
+    /* brackets hold an IPv6 literal only: hex digits, ':' and '.', with a ':' */
+    ASSERT_EQ(net_url_parse("http://[localhost]/", &p), -1);
+    ASSERT_EQ(net_url_parse("http://[127.0.0.1]/", &p), -1);
+    ASSERT_EQ(net_url_parse("http://[fe80::1%25eth0]/", &p), -1);
+    ASSERT_EQ(net_url_parse("http://[]/", &p), -1);
+    ASSERT_EQ(net_url_parse("http://[::1]x/", &p), -1);
+    /* regression pins */
+    ASSERT_EQ(net_url_parse("http://127.0.0.1\\@evil.test/", &p), -1);
+    ASSERT_EQ(net_url_parse("http://host:00/", &p), -1);
+    ASSERT_EQ(net_url_parse("http://a@/", &p), -1);
+    ASSERT_EQ(net_url_parse("http://host:65535/", &p), 0);
+    ASSERT_EQ(p.port, 65535);
 
     /* exactly NET_URL_MAX bytes is refused, one fewer is fine */
     memset(longurl, 'a', sizeof longurl);
@@ -283,6 +295,8 @@ int test_net_url_cleartext_remote(void)
     ASSERT_EQ(net_url_cleartext_remote("http://localhost.evil.test/"), 1);
     ASSERT_EQ(net_url_cleartext_remote("http://localhost@evil.test/"), 1);
     ASSERT_EQ(net_url_cleartext_remote("http://"), 1);
+    ASSERT_EQ(net_url_cleartext_remote("http://[localhost]/"), 1);
+    ASSERT_EQ(net_url_cleartext_remote("http://[127.0.0.1]/"), 1);
 
     ASSERT_EQ(net_url_cleartext_remote("http://localhost:11434/v1"), 0);
     ASSERT_EQ(net_url_cleartext_remote("http://LOCALHOST./v1"), 0);
