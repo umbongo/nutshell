@@ -7227,6 +7227,16 @@ int main(void) {
         int test_tn_status_truncates_safely(void);
         int test_tn_conn_merge_precedence(void);
         int test_tn_line_for_outcome_maps_all(void);
+        int test_net_ipv4_internal_ranges(void);
+        int test_net_ipv4_public_edges(void);
+        int test_net_ipv6_internal(void);
+        int test_net_ipv6_public(void);
+        int test_net_addr_is_internal_dispatch(void);
+        int test_net_url_parse_basic(void);
+        int test_net_url_parse_userinfo_and_delims(void);
+        int test_net_url_parse_ipv6_literal(void);
+        int test_net_url_parse_refuses(void);
+        int test_net_url_cleartext_remote(void);
         failed += test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read();
         failed += test_dlog_review_osc52_introducer_after_the_output_filled_up_withholds_the_next_read();
         failed += test_dlog_review_escape_bytes_keeps_tracking_after_the_output_is_full();
@@ -7270,6 +7280,16 @@ int main(void) {
         failed += test_tn_status_truncates_safely();
         failed += test_tn_conn_merge_precedence();
         failed += test_tn_line_for_outcome_maps_all();
+        failed += test_net_ipv4_internal_ranges();
+        failed += test_net_ipv4_public_edges();
+        failed += test_net_ipv6_internal();
+        failed += test_net_ipv6_public();
+        failed += test_net_addr_is_internal_dispatch();
+        failed += test_net_url_parse_basic();
+        failed += test_net_url_parse_userinfo_and_delims();
+        failed += test_net_url_parse_ipv6_literal();
+        failed += test_net_url_parse_refuses();
+        failed += test_net_url_cleartext_remote();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
