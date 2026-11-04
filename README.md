@@ -654,7 +654,14 @@ telnet tabs.
 │   │   └── knownhosts.c/.h           #   TOFU host key verification
 │   └── ui/                             # Win32 UI (excluded from test builds)
 │       ├── window.c                   #   Main window, menu, layout (108 KB)
-│       ├── ai_chat.c/.h              #   AI chat panel, streaming, image paste (140 KB)
+│       ├── ai_chat.c/.h              #   AI chat panel: window class, WndProc, public API (117 KB)
+│       ├── ai_chat_internal.h        #   Types, constants and prototypes shared by the ai_chat files
+│       ├── ai_chat_stream.c          #   SSE stream parser and background stream thread
+│       ├── ai_chat_input.c           #   Message box subclass, image paste, GDI+ PNG encode
+│       ├── ai_chat_dispatch.c        #   Command batch resolution and prompt-gated dispatch tick
+│       ├── ai_chat_send.c            #   Tool registry, stream launch, abort and cancel
+│       ├── ai_chat_status.c          #   Status line, policy control, context meter
+│       ├── ai_chat_view.c            #   Layout, panel state, busy indicator, display rebuild, zoom
 │       ├── ai_http_win.c             #   WinHTTP streaming implementation
 │       ├── chat_listview.c/.h        #   Chat message rendering, sticky scroll
 │       ├── md_render.c/.h             #   Markdown and plain-text layout for the AI panel (records runs, draws the selection)
