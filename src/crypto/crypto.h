@@ -22,15 +22,6 @@
 #define CRYPTO_ERR_KEY    -7
 
 /*
- * crypto_derive_key — derive a 32-byte machine-specific key.
- *   Windows: reads HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography\MachineGuid
- *            and runs PBKDF2-SHA256 with a fixed application salt.
- *   Other:   uses gethostname() as the key material.
- * Returns CRYPTO_OK or a negative error code.
- */
-int crypto_derive_key(unsigned char key[32]);
-
-/*
  * crypto_encrypt_with_key — encrypt plaintext with a caller-supplied 32-byte key.
  * Output format (written to *out): CRYPTO_ENC_PREFIX + base64(nonce||ciphertext||tag)
  *   nonce = 12 bytes, tag = 16 bytes.

@@ -2776,10 +2776,6 @@ static void do_paste(HWND hwnd)
         g_paste.local     = local_line_ends;
         g_paste.session   = target;
 
-        if (bpm)
-            (void)session_write_noted(target, BRACKET_OPEN,
-                                      sizeof(BRACKET_OPEN) - 1, "paste");
-
         /* Send the first line immediately */
         paste_send_next_line();
         target->term->scrollback_offset = 0;

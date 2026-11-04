@@ -243,4 +243,4 @@ clean:
 	rm -rf $(DELAY_LIB_DIR)
 
 lint:
-	cppcheck --enable=warning,style,performance,portability --std=c11 src/
+	cppcheck --enable=warning,style,performance,portability --inline-suppr --std=c11 src/
