@@ -509,3 +509,100 @@ int test_color_colon_short_run_is_noop_and_ends_at_semicolon(void) {
     term_free(t);
     TEST_END();
 }
+
+int test_color_underline_style_zero_clears(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    feed(t, "\033[4:0m");
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_UNDERLINE, 0);
+    feed(t, "\033[4m");
+    ASSERT_TRUE((t->current_attr.flags & TERM_ATTR_UNDERLINE) != 0);
+    feed(t, "\033[4:0m");
+    ASSERT_EQ(t->current_attr.flags & TERM_ATTR_UNDERLINE, 0);
+    feed(t, "\033[4:1m");
+    ASSERT_TRUE((t->current_attr.flags & TERM_ATTR_UNDERLINE) != 0);
+    feed(t, "\033[4:0m");
+    feed(t, "\033[4:3m");
+    ASSERT_TRUE((t->current_attr.flags & TERM_ATTR_UNDERLINE) != 0);
+    feed(t, "\033[0m");
+    feed(t, "\033[4:0;1m");
+    ASSERT_EQ(t->current_attr.flags, TERM_ATTR_BOLD);
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_empty_first_param_before_semicolon_is_reset(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    feed(t, "\033[31m");
+    feed(t, "\033[;1m");
+    ASSERT_EQ(t->current_attr.flags, TERM_ATTR_BOLD);
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_DEFAULT);
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_colon_rgb_split_across_calls(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    feed(t, "\033[38:2::25");
+    feed(t, "5:0:0m");
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_RGB);
+    ASSERT_EQ(t->current_attr.fg, 0xFF0000u);
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_colon_rgb_byte_at_a_time(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    const char *s = "\033[1;38:2::1:2:3;4m";
+    for (size_t i = 0; s[i]; i++) term_process(t, s + i, 1);
+    ASSERT_EQ(t->current_attr.flags, TERM_ATTR_BOLD | TERM_ATTR_UNDERLINE);
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_RGB);
+    ASSERT_EQ(t->current_attr.fg, 0x010203u);
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_colon_256_out_of_range_is_ignored(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    feed(t, "\033[38:5:300;1m");
+    ASSERT_EQ(t->current_attr.flags, TERM_ATTR_BOLD);
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_DEFAULT);
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_mixed_semicolon_colon_256(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    feed(t, "\033[38;5:196m");
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_256);
+    ASSERT_EQ(t->current_attr.fg_index, 196);
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_colon_rgb_trailing_extra_params(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    feed(t, "\033[38:2:1:2:3:4:5;1m");
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_RGB);
+    ASSERT_EQ(t->current_attr.fg, 0x020304u);
+    ASSERT_EQ(t->current_attr.flags, TERM_ATTR_BOLD);
+    term_free(t);
+    TEST_END();
+}
+
+int test_color_bold_colon_rgb_underline_one_feed(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    feed(t, "\033[1;38:2::1:2:3;4m");
+    ASSERT_EQ(t->current_attr.flags, TERM_ATTR_BOLD | TERM_ATTR_UNDERLINE);
+    ASSERT_EQ(t->current_attr.fg_mode, COLOR_RGB);
+    ASSERT_EQ(t->current_attr.fg, 0x010203u);
+    term_free(t);
+    TEST_END();
+}

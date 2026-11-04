@@ -278,6 +278,8 @@ int test_settings_markdown_render_missing_field(void) {
 
 #ifndef _WIN32
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 #endif
 
 int test_config_save_creates_an_owner_only_file(void)
@@ -293,16 +295,80 @@ int test_config_save_creates_an_owner_only_file(void)
     mode_t old_mask = umask(0);
     Config *cfg = config_new_default();
     ASSERT_NOT_NULL(cfg);
-    int rc = config_save(cfg, path);
-    umask(old_mask);
-    ASSERT_EQ(rc, 0);
-
-    struct stat st;
-    ASSERT_EQ(stat(path, &st), 0);
-    ASSERT_EQ((int)(st.st_mode & 0077), 0);
-
-    config_free(cfg);
+    if (cfg) {
+        int rc = config_save(cfg, path);
+        umask(old_mask);
+        ASSERT_EQ(rc, 0);
+        if (rc == 0) {
+            struct stat st;
+            ASSERT_EQ(stat(path, &st), 0);
+            ASSERT_EQ((int)(st.st_mode & 0077), 0);
+        }
+        config_free(cfg);
+    } else {
+        umask(old_mask);
+    }
     remove(path);
 #endif
+    TEST_END();
+}
+
+/* A stale, world-readable <path>.tmp must not leak its mode to the config. */
+int test_config_save_ignores_stale_wide_tmp(void)
+{
+    TEST_BEGIN();
+#ifndef _WIN32
+    const char *path = TEST_TMP_DIR "/nutshell_test_stale_tmp.config";
+    const char *tmp  = TEST_TMP_DIR "/nutshell_test_stale_tmp.config.tmp";
+    remove(path);
+    remove(tmp);
+    int fd = open(tmp, O_WRONLY | O_CREAT, 0644);
+    ASSERT_TRUE(fd >= 0);
+    if (fd >= 0) {
+        fchmod(fd, 0644);
+        close(fd);
+    }
+    Config *cfg = config_new_default();
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        int rc = config_save(cfg, path);
+        ASSERT_EQ(rc, 0);
+        if (rc == 0) {
+            struct stat st;
+            ASSERT_EQ(stat(path, &st), 0);
+            ASSERT_EQ((int)(st.st_mode & 0077), 0);
+        }
+        config_free(cfg);
+    }
+    remove(path);
+    remove(tmp);
+#endif
+    TEST_END();
+}
+
+/* Portable: saving twice to the same path works and the file reloads. */
+int test_config_save_twice_then_reload(void)
+{
+    TEST_BEGIN();
+    const char *path = TEST_TMP_DIR "/nutshell_test_save_twice.config";
+    const char *tmp  = TEST_TMP_DIR "/nutshell_test_save_twice.config.tmp";
+    remove(path);
+    remove(tmp);
+    Config *cfg = config_new_default();
+    ASSERT_NOT_NULL(cfg);
+    if (cfg) {
+        cfg->settings.scrollback_lines = 4321;
+        ASSERT_EQ(config_save(cfg, path), 0);
+        ASSERT_EQ(config_save(cfg, path), 0);
+        Config *back = config_load(path);
+        ASSERT_NOT_NULL(back);
+        if (back) {
+            ASSERT_EQ(back->settings.scrollback_lines, 4321);
+            config_free(back);
+        }
+        config_free(cfg);
+    }
+    remove(path);
+    remove(tmp);
     TEST_END();
 }

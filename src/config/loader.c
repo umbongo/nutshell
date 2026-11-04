@@ -22,11 +22,15 @@
 #include <unistd.h>
 #endif
 
-/* Opens path for writing (create or truncate) so that only its owner can
- * read it: the config holds encrypted secrets, and a plain fopen() leaves
- * the mode to the umask. Returns NULL on failure, like fopen(). */
+/* Opens path for writing, first removing any stale file there so an old
+ * file's wider mode is not inherited. On POSIX the new file is created
+ * 0600 whatever the umask. On Windows _open with
+ * _S_IREAD | _S_IWRITE is equivalent to fopen (an ordinary writable file
+ * inheriting the folder's ACL); the secrets inside are protected by DPAPI.
+ * Returns NULL on failure, like fopen(). */
 static FILE *open_private_for_write(const char *path)
 {
+    (void)remove(path);
 #ifdef _WIN32
     int fd = _open(path, _O_WRONLY | _O_CREAT | _O_TRUNC, _S_IREAD | _S_IWRITE);
     if (fd < 0) return NULL;

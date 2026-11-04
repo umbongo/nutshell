@@ -266,7 +266,15 @@ static void handle_sgr(Terminal *term) {
                 break;
             case 1: term->current_attr.flags |= TERM_ATTR_BOLD;      break;
             case 2: term->current_attr.flags |= TERM_ATTR_DIM;       break;
-            case 4: term->current_attr.flags |= TERM_ATTR_UNDERLINE;  break;
+            case 4:
+                /* "4:0" is "no underline"; plain 4 and 4:1..4:5 (the styles)
+                 * all underline. */
+                if (i + 1 < term->csi_param_count && sgr_is_sub(term, i + 1) &&
+                        term->csi_params[i + 1] == 0)
+                    term->current_attr.flags &= (uint8_t)~TERM_ATTR_UNDERLINE;
+                else
+                    term->current_attr.flags |= TERM_ATTR_UNDERLINE;
+                break;
             case 5: term->current_attr.flags |= TERM_ATTR_BLINK;      break;
             case 7: term->current_attr.flags |= TERM_ATTR_REVERSE;    break;
 
@@ -795,8 +803,8 @@ void term_process(Terminal *term, const char *data, size_t len) {
                 } else if (c == ';' || c == ':') {
                     /* ':' starts a sub-parameter of the preceding parameter
                      * (ISO 8613-6, as in SGR 4:3 and 38:2::r:g:b). An empty
-                     * first parameter before it counts as one. */
-                    if (c == ':' && term->csi_param_count == 0)
+                     * first parameter before ';' or ':' counts as one. */
+                    if (term->csi_param_count == 0)
                         term->csi_param_count = 1;
                     if (term->csi_param_count < TERM_MAX_CSI_PARAMS) {
                         term->csi_param_count++;
@@ -811,7 +819,11 @@ void term_process(Terminal *term, const char *data, size_t len) {
                         term->csi_overflow = true;
                     }
                 } else if (c >= 0x40 && c <= 0x7E) {
-                    if (term->csi_private && (c == 'h' || c == 'l')) {
+                    if (term->csi_sub_mask != 0 &&
+                            !(c == 'm' && !term->csi_private)) {
+                        /* Only SGR defines sub-parameters; any other CSI
+                         * carrying one is ignored whole (xterm, VTE). */
+                    } else if (term->csi_private && (c == 'h' || c == 'l')) {
                         handle_private_mode(term, c == 'h');
                     } else {
                         handle_csi(term, (char)c);

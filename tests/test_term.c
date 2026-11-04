@@ -1767,3 +1767,29 @@ int test_term_reflow_narrow_overflow_primary_recycled_follows(void)
     term_free(t);
     TEST_END();
 }
+
+int test_term_csi_empty_first_param_counts(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "\x1B[;5H", 5);
+    ASSERT_EQ(t->cursor.row, 0);
+    ASSERT_EQ(t->cursor.col, 4);
+    term_free(t);
+    TEST_END();
+}
+
+int test_term_non_sgr_csi_with_colon_is_ignored(void) {
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "\x1B[5;7H", 6);
+    ASSERT_EQ(t->cursor.row, 4);
+    ASSERT_EQ(t->cursor.col, 6);
+    term_process(t, "\x1B[2:3H", 6);
+    ASSERT_EQ(t->cursor.row, 4);
+    ASSERT_EQ(t->cursor.col, 6);
+    term_process(t, "\x1B[2;3H", 6);
+    ASSERT_EQ(t->cursor.row, 1);
+    ASSERT_EQ(t->cursor.col, 2);
+    term_free(t);
+    TEST_END();
+}
