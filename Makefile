@@ -205,7 +205,7 @@ $(call write-stamp,$(TEST_FLAGS_STAMP),$(TEST_FLAGS_TEXT))
 $(call write-stamp,$(TEST_SRCS_STAMP),$(TEST_SRCS_TEXT))
 
 
-.PHONY: all clean test lint debug release wintest
+.PHONY: all clean test lint lint-gate debug release wintest
 
 # ── Win32-only test harness: the icon renderer (GDI+) and the ConPTY
 # backend (real pseudo-consoles, real child processes).  Runs directly on a
@@ -303,3 +303,9 @@ clean:
 
 lint:
 	cppcheck --enable=warning,style,performance,portability --inline-suppr --std=c11 src/
+
+LINT_GATE_SRC ?= src/
+LINT_JOBS := $(shell nproc 2>/dev/null || echo 1)
+
+lint-gate:
+	cppcheck --enable=warning,performance,portability --error-exitcode=1 --inline-suppr --std=c11 -q -j$(LINT_JOBS) $(LINT_GATE_SRC)
