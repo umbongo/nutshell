@@ -441,6 +441,14 @@ typedef struct {
 unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg);
 void ai_chat_fetch_on_hop(void *user, const char *display_url, int refused);
 
+/* ai_chat_input.c */
+LRESULT CALLBACK ai_chat_input_subclass_proc(HWND hwnd, UINT msg,
+                                             WPARAM wParam, LPARAM lParam,
+                                             UINT_PTR uIdSubclass,
+                                             DWORD_PTR dwRefData);
+int ai_chat_input_paste_text(HWND hInput, HWND clip_owner);
+void ai_chat_input_sync_scroll(AiChatData *d);
+
 #endif /* _WIN32 */
 
 #endif /* NUTSHELL_AI_CHAT_INTERNAL_H */
