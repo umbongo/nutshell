@@ -7410,6 +7410,7 @@ int main(void) {
         int test_net_url_parse_userinfo_and_delims(void);
         int test_net_url_parse_ipv6_literal(void);
         int test_net_url_parse_refuses(void);
+        int test_net_url_parse_refuses_non_ascii_hosts(void);
         int test_net_url_cleartext_remote(void);
         int test_net_url_resolve_absolute(void);
         int test_net_url_resolve_scheme_relative(void);
@@ -7469,6 +7470,7 @@ int main(void) {
         failed += test_net_url_parse_userinfo_and_delims();
         failed += test_net_url_parse_ipv6_literal();
         failed += test_net_url_parse_refuses();
+        failed += test_net_url_parse_refuses_non_ascii_hosts();
         failed += test_net_url_cleartext_remote();
         failed += test_net_url_resolve_absolute();
         failed += test_net_url_resolve_scheme_relative();

@@ -283,6 +283,31 @@ int test_net_url_parse_refuses(void)
     TEST_END();
 }
 
+int test_net_url_parse_refuses_non_ascii_hosts(void)
+{
+    TEST_BEGIN();
+    NetUrlParts p;
+    /* full-width digits: U+FF11 U+FF12 U+FF17 then ".0.0.1" -- IDN mapping
+     * would turn it into 127.0.0.1 behind the guard's back */
+    ASSERT_EQ(net_url_parse("http://\xef\xbc\x91\xef\xbc\x92\xef\xbc\x97.0.0.1/", &p), -1);
+    /* a UTF-8 IDN host: WinHttpConnect needs punycode, so it is refused */
+    ASSERT_EQ(net_url_parse("http://caf\xc3\xa9.test/", &p), -1);
+    ASSERT_EQ(net_url_parse("https://caf\xc3\xa9.test:8443/x", &p), -1);
+    ASSERT_EQ(net_url_parse("https://user@caf\xc3\xa9.test/", &p), -1);
+    /* an ASCII host with a non-ASCII path or query still parses */
+    ASSERT_EQ(net_url_parse("http://example.com/caf\xc3\xa9?q=\xc3\xa9", &p), 0);
+    ASSERT_STR_EQ(p.host, "example.com");
+    ASSERT_STR_EQ(p.path, "/caf\xc3\xa9?q=\xc3\xa9");
+    /* an unparseable http URL still warns about cleartext, and the display
+     * form is untouched */
+    ASSERT_EQ(net_url_cleartext_remote("http://caf\xc3\xa9.test/"), 1);
+    ASSERT_EQ(net_url_cleartext_remote("http://\xef\xbc\x91\xef\xbc\x92\xef\xbc\x97.0.0.1/"), 1);
+    char shown[NET_URL_MAX];
+    net_url_display("http://example.com/caf\xc3\xa9", shown, sizeof shown);
+    ASSERT_STR_EQ(shown, "http://example.com/caf\xc3\xa9");
+    TEST_END();
+}
+
 int test_net_url_cleartext_remote(void)
 {
     TEST_BEGIN();

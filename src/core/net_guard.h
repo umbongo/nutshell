@@ -37,8 +37,9 @@ typedef struct {
 
 /* Strict http:// or https:// parse (scheme case-insensitive). Refuses any
  * byte below 0x21, 0x7F or a backslash anywhere, a URL of NET_URL_MAX bytes or
- * more, an empty host, a host of NET_HOST_MAX bytes or more and a port that is
- * not empty or 1-65535. Returns 0, or -1 (out is then unspecified). */
+ * more, an empty host, a host of NET_HOST_MAX bytes or more, a host with a
+ * byte >= 0x80 (write an IDN host as punycode; the path and query may keep
+ * such bytes) and a port that is not empty or 1-65535. Returns 0, or -1 (out is then unspecified). */
 int net_url_parse(const char *url, NetUrlParts *out);
 
 /* 1 when url is an http:// URL whose host is not loopback (localhost,

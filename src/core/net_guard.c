@@ -128,6 +128,14 @@ int net_url_parse(const char *url, NetUrlParts *out)
         hlen -= n;
     }
 
+    {   /* ASCII only: a byte >= 0x80 would reach GetAddrInfoW (IDN mapping,
+         * so full-width digits can name 127.0.0.1) and WinHttpConnect (which
+         * wants punycode) behind the guard's back. The path may keep them. */
+        const char *h;
+        for (h = out->host; *h; h++)
+            if ((unsigned char)*h >= 0x80) return -1;
+    }
+
     if (hlen > 0) {                              /* rest is ':' digits* */
         size_t i;
         for (i = 1; i < hlen; i++) {
