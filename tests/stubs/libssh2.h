@@ -4,6 +4,12 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+/* The stub has no real version; build_info_deps() only needs the numbers to
+ * exist so the native test build compiles. */
+#define LIBSSH2_VERSION_MAJOR 0
+#define LIBSSH2_VERSION_MINOR 0
+#define LIBSSH2_VERSION_PATCH 0
+
 #define LIBSSH2_ERROR_EAGAIN -37
 
 #define LIBSSH2_CALLBACK_RECV 1

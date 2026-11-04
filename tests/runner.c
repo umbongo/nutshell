@@ -2999,6 +2999,11 @@ int test_about_layout_total_height_is_button_bottom_plus_margin(void);
 int test_about_layout_zero_line_heights_still_sane(void);
 int test_about_layout_negative_sizes_clamp_to_zero(void);
 int test_about_layout_null_out_is_safe(void);
+
+/* test_build_info.c */
+int test_build_info_deps_whole_format(void);
+int test_build_info_deps_openssl_part_matches_header(void);
+int test_build_info_deps_truncates(void);
 /* test_shortcuts.c */
 int test_shortcuts_every_row_has_section_chord_action(void);
 int test_shortcuts_sections_contiguous_and_in_fixed_order(void);
@@ -6643,6 +6648,9 @@ int main(void) {
     failed += test_about_layout_zero_line_heights_still_sane();
     failed += test_about_layout_negative_sizes_clamp_to_zero();
     failed += test_about_layout_null_out_is_safe();
+    failed += test_build_info_deps_whole_format();
+    failed += test_build_info_deps_openssl_part_matches_header();
+    failed += test_build_info_deps_truncates();
     failed += test_shortcuts_every_row_has_section_chord_action();
     failed += test_shortcuts_sections_contiguous_and_in_fixed_order();
     failed += test_shortcuts_no_chord_and_condition_repeat_within_a_section();

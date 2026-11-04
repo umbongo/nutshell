@@ -49,6 +49,7 @@
 #include "themed_button.h"
 #include "pw_prompt.h"
 #include "about_layout.h"
+#include "build_info.h"
 #include "ns_motion.h"
 #include "ns_reduced_motion.h"
 #include "custom_scrollbar.h"
@@ -3076,6 +3077,7 @@ static void about_compute_layout(AboutLayout *out, int dpi)
     about_layout_compute(out, dpi, ns_scale(ABOUT_ICON_96, dpi),
                          ns_type_line_px(FONT_HEADING, dpi),
                          ns_type_line_px(FONT_BODY, dpi),
+                         ns_type_line_px(FONT_CAPTION, dpi),
                          ns_type_line_px(FONT_CAPTION, dpi));
 }
 
@@ -3090,7 +3092,8 @@ static void about_draw_row(HDC hdc, const AboutRect *row, int client_w,
     HGDIOBJ old = font ? SelectObject(hdc, (HGDIOBJ)font) : NULL;
     SetTextColor(hdc, theme_cr(colour));
     DrawTextA(hdc, text, -1, &rc,
-              DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+              DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX |
+                  DT_END_ELLIPSIS);
     if (old) SelectObject(hdc, old);
 }
 
@@ -3153,7 +3156,9 @@ static LRESULT CALLBACK AboutDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                 DestroyIcon(hIcon);
             }
 
-            /* Title, tagline, copyright */
+            /* Title, tagline, copyright, dependency versions */
+            char deps_text[BUILD_INFO_DEPS_MAX];
+            (void)build_info_deps(deps_text, sizeof(deps_text));
             SetBkMode(hdc, TRANSPARENT);
             about_draw_row(hdc, &lay.title, rc.right, FONT_HEADING,
                            tk->text_main, dpi, "Nutshell v" APP_VERSION);
@@ -3161,6 +3166,8 @@ static LRESULT CALLBACK AboutDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
                            tk->text_main, dpi, ABOUT_TAGLINE);
             about_draw_row(hdc, &lay.copyright, rc.right, FONT_CAPTION,
                            tk->text_dim, dpi, ABOUT_COPYRIGHT);
+            about_draw_row(hdc, &lay.deps, rc.right, FONT_CAPTION,
+                           tk->text_dim, dpi, deps_text);
 
             EndPaint(hwnd, &ps);
             return 0;

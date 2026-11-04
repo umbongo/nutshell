@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "core/build_info.h"
 #include "core/cli_args.h"
 #include "core/cli_sink.h"
 #include "core/dlog.h"
@@ -326,9 +327,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         case CLI_HELP:
             cli_output(cli_usage_text(), "Nutshell — Usage", 0);
             return 0;
-        case CLI_VERSION:
-            cli_output("Nutshell " APP_VERSION "\n", "Nutshell", 0);
+        case CLI_VERSION: {
+            char deps[BUILD_INFO_DEPS_MAX];
+            char ver_text[BUILD_INFO_DEPS_MAX + 64];
+            (void)build_info_deps(deps, sizeof(deps));
+            (void)snprintf(ver_text, sizeof(ver_text),
+                           "Nutshell " APP_VERSION "\n%s\n", deps);
+            cli_output(ver_text, "Nutshell", 0);
             return 0;
+        }
         case CLI_LIST:
             return run_list();
         default:
