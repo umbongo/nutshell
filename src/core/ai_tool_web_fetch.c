@@ -5,6 +5,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <winhttp.h>
+#include "winhttp_open.h"
+#endif
+
 /* ---- web_fetch_html_to_text ---------------------------------------------- */
 
 int web_fetch_html_to_text(const char *html, size_t html_len,
@@ -307,10 +315,216 @@ static int fetch_loop(const WebFetchBackend *be, const WebFetchContext *ctx,
 
 /* ---- backend selection and description ------------------------------------ */
 
+#ifdef _WIN32
+
+/* The WinHTTP backend: thin on purpose. It does the network work for one hop
+ * and nothing else; the address check, redirect policy, deadline and cancel
+ * decisions are all in fetch_loop() above. It never parses a URL string, it
+ * uses the parts fetch_loop() has already checked. */
+
+#define WIDEN2(s) L##s
+#define WIDEN(s)  WIDEN2(s)
+
+/* Name resolution needs WSAStartup, which src/main.c runs once for the
+ * process before the UI starts; the backend relies on that. */
+static int wf_resolve(void *ctx, const char *host, NetAddr *out, int max)
+{
+    (void)ctx;
+    struct addrinfo hints;
+    struct addrinfo *res = NULL;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    /* The host is passed to getaddrinfo exactly as the URL parser kept it
+     * (narrow UTF-8; bytes >= 0x80 are not converted to punycode). The
+     * request below converts the same bytes to UTF-16 for WinHTTP, so both
+     * lookups see the same name. */
+    if (getaddrinfo(host, NULL, &hints, &res) != 0 || !res)
+        return -1;
+
+    int total = 0;
+    for (const struct addrinfo *ai = res; ai; ai = ai->ai_next) {
+        NetAddr a;
+        memset(&a, 0, sizeof(a));
+        if (ai->ai_family == AF_INET && ai->ai_addr) {
+            const struct sockaddr_in *sa = (const struct sockaddr_in *)ai->ai_addr;
+            a.v6 = 0;
+            memcpy(a.b, &sa->sin_addr, 4);
+        } else if (ai->ai_family == AF_INET6 && ai->ai_addr) {
+            const struct sockaddr_in6 *sa = (const struct sockaddr_in6 *)ai->ai_addr;
+            a.v6 = 1;
+            memcpy(a.b, &sa->sin6_addr, 16);
+        } else {
+            continue;
+        }
+        if (out && total < max) out[total] = a;
+        total++;
+    }
+    freeaddrinfo(res);
+    return total > 0 ? total : -1;
+}
+
+static unsigned long long wf_now_ms(void *ctx)
+{
+    (void)ctx;
+    return (unsigned long long)GetTickCount64();
+}
+
+static int wf_to_wide(const char *s, wchar_t *out, int cap)
+{
+    return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, out, cap) > 0
+               ? 0 : -1;
+}
+
+static int wf_stopped(volatile int *cancel)
+{
+    return cancel && *cancel;
+}
+
+static int wf_get(void *ctx, const NetUrlParts *url, int timeout_ms,
+                  volatile int *cancel, int *status,
+                  char *location, size_t location_cap,
+                  char **body, size_t *body_len)
+{
+    (void)ctx;
+    if (!url || !status || !location || location_cap == 0 || !body || !body_len)
+        return -1;
+    *status = 0;
+    location[0] = '\0';
+    *body = NULL;
+    *body_len = 0;
+
+    int t = timeout_ms >= 1 ? timeout_ms : 1;
+    unsigned long long hop_end = (unsigned long long)GetTickCount64() + (unsigned long long)t;
+
+    wchar_t w_host[NET_HOST_MAX];
+    wchar_t w_path[NET_URL_MAX];
+    if (wf_to_wide(url->host, w_host, NET_HOST_MAX) != 0 ||
+        wf_to_wide(url->path, w_path, NET_URL_MAX) != 0)
+        return -1;
+
+    HINTERNET session = NULL, connect = NULL, req = NULL;
+    char *buf = NULL;
+    size_t len = 0, cap = 0;
+    const size_t max_body = (size_t)AI_TOOL_RESULT_MAX * 4;
+
+    session = ns_winhttp_open(WIDEN(AI_TOOL_USER_AGENT));
+    if (!session) goto fail;
+
+    /* url->host has no brackets, also for an IPv6 literal: WinHttpConnect
+     * takes a bare literal as the server name. */
+    connect = WinHttpConnect(session, w_host, (INTERNET_PORT)url->port, 0);
+    if (!connect) goto fail;
+
+    req = WinHttpOpenRequest(connect, L"GET", w_path, NULL, WINHTTP_NO_REFERER,
+                             WINHTTP_DEFAULT_ACCEPT_TYPES,
+                             url->https ? WINHTTP_FLAG_SECURE : 0);
+    if (!req) goto fail;
+
+    DWORD no_redirects = WINHTTP_DISABLE_REDIRECTS;
+    if (!WinHttpSetOption(req, WINHTTP_OPTION_DISABLE_FEATURE,
+                          &no_redirects, sizeof(no_redirects)))
+        goto fail;
+    if (!WinHttpSetTimeouts(req, t, t, t, t)) goto fail;
+
+    if (!WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+        goto fail;
+    if (wf_stopped(cancel)) goto fail;
+    if (!WinHttpReceiveResponse(req, NULL)) goto fail;
+    if (wf_stopped(cancel)) goto fail;
+
+    DWORD code = 0, code_sz = sizeof(code);
+    if (!WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX, &code, &code_sz,
+                             WINHTTP_NO_HEADER_INDEX))
+        goto fail;
+
+    wchar_t w_loc[NET_URL_MAX];
+    DWORD loc_sz = (DWORD)sizeof(w_loc);
+    if (WinHttpQueryHeaders(req, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
+                            w_loc, &loc_sz, WINHTTP_NO_HEADER_INDEX)) {
+        /* A Location that does not fit is refused, never cut. */
+        if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w_loc, -1,
+                                location, (int)(location_cap > 0x7FFFFFFF ? 0x7FFFFFFF : location_cap),
+                                NULL, NULL) <= 0) {
+            location[0] = '\0';
+            goto fail;
+        }
+    } else if (GetLastError() != ERROR_WINHTTP_HEADER_NOT_FOUND) {
+        goto fail;  /* includes ERROR_INSUFFICIENT_BUFFER */
+    }
+
+    /* Body, capped; cancel between reads, and the hop's own time limit so a
+     * server that trickles bytes cannot outlast it. */
+    for (;;) {
+        if (wf_stopped(cancel)) goto fail;
+        if ((unsigned long long)GetTickCount64() >= hop_end) goto fail;
+
+        DWORD avail = 0;
+        if (!WinHttpQueryDataAvailable(req, &avail)) goto fail;
+        if (avail == 0) break;
+
+        size_t room = max_body - len;
+        if ((size_t)avail > room) avail = (DWORD)room;
+        if (avail == 0) break;
+
+        if (len + (size_t)avail + 1 > cap) {
+            size_t ncap = (len + (size_t)avail + 1) * 2;
+            if (ncap < 65536) ncap = 65536;
+            char *tmp = realloc(buf, ncap);
+            if (!tmp) goto fail;
+            buf = tmp;
+            cap = ncap;
+        }
+
+        DWORD got = 0;
+        if (!WinHttpReadData(req, buf + len, avail, &got)) goto fail;
+        if (got == 0) break;
+        len += got;
+        if (len >= max_body) break;
+    }
+    if (wf_stopped(cancel)) goto fail;
+
+    if (!buf) {
+        buf = malloc(1);
+        if (!buf) goto fail;
+    }
+    buf[len] = '\0';
+
+    WinHttpCloseHandle(req);
+    WinHttpCloseHandle(connect);
+    WinHttpCloseHandle(session);
+    *status   = (int)code;
+    *body     = buf;
+    *body_len = len;
+    return 0;
+
+fail:
+    free(buf);
+    if (req)     WinHttpCloseHandle(req);
+    if (connect) WinHttpCloseHandle(connect);
+    if (session) WinHttpCloseHandle(session);
+    *status = 0;
+    return -1;
+}
+
+static const WebFetchBackend g_wf_backend = { NULL, wf_resolve, wf_get, wf_now_ms };
+
+const WebFetchBackend *web_fetch_default_backend(void)
+{
+    return &g_wf_backend;
+}
+
+#else /* !_WIN32 */
+
 const WebFetchBackend *web_fetch_default_backend(void)
 {
     return NULL;
 }
+
+#endif
 
 int web_fetch_describe(const char *input_json, char *out, size_t cap)
 {
