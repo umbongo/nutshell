@@ -393,8 +393,9 @@ int test_model_label_truncation(void)
     TEST_BEGIN();
     /* A very long model name should be truncated but still have valid UTF-8 prefix */
     char label[20];  /* small buffer */
-    snprintf(label, sizeof(label), " \xC2\xB7 %s",
-             "very-long-model-name-that-exceeds-buffer");
+    char long_model[] = "very-long-model-name-that-exceeds-buffer";
+    int n = snprintf(label, sizeof(label), " \xC2\xB7 %s", long_model);
+    ASSERT_TRUE(n >= (int)sizeof(label));
     /* Middle dot must still be intact */
     ASSERT_EQ((unsigned char)label[1], 0xC2);
     ASSERT_EQ((unsigned char)label[2], 0xB7);

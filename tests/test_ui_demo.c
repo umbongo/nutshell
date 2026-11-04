@@ -73,13 +73,16 @@ int test_ui_demo_build_local_swaps_terminal_text_only(void)
     ASSERT_TRUE(strstr(term_buf, "web-01") == NULL);
 
     /* Every other state keeps the SSH transcript. */
+    ai_conv_reset(&conv);
     char ssh_buf[8192];
     ASSERT_EQ(ui_demo_build("chat", &conv, &approval, &approval2,
                             ssh_buf, sizeof(ssh_buf)), 0);
     ASSERT_TRUE(strstr(ssh_buf, "web-01") != NULL);
+    ai_conv_reset(&conv);
     ASSERT_EQ(ui_demo_build("all", &conv, &approval, &approval2,
                             ssh_buf, sizeof(ssh_buf)), 0);
     ASSERT_TRUE(strstr(ssh_buf, "web-01") != NULL);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -131,6 +134,7 @@ int test_ui_demo_build_chat_counts(void)
     ASSERT_EQ((int)conv.messages[2].role, (int)AI_ROLE_ASSISTANT);
     ASSERT_EQ(approval.count, 0);
     ASSERT_EQ(approval2.count, 0);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -148,6 +152,7 @@ int test_ui_demo_build_approval_counts_and_statuses(void)
     ASSERT_EQ(count_status(&approval, APPROVE_DENIED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_BLOCKED), 1);
     ASSERT_EQ(approval2.count, 0);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -162,6 +167,7 @@ int test_ui_demo_build_executing_counts_and_statuses(void)
     ASSERT_EQ(count_status(&approval, APPROVE_COMPLETED), 1);
     ASSERT_EQ(count_status(&approval, APPROVE_EXECUTING), 1);
     ASSERT_EQ(approval2.count, 0);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -210,6 +216,7 @@ int test_ui_demo_executing_rebuild_carries_run_states(void)
     ASSERT_EQ((int)intent, (int)CHAT_CMD_INTENT_INFO);
 
     chat_msg_list_clear(&list);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -227,6 +234,7 @@ int test_ui_demo_build_tool_counts(void)
     ASSERT_STR_EQ(conv.messages[2].tool_calls[0].name, "web_search");
     ASSERT_EQ((int)conv.messages[3].role, (int)AI_ROLE_TOOL);
     ASSERT_STR_EQ(conv.messages[3].tool_name, "web_search");
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -238,6 +246,7 @@ int test_ui_demo_build_error_counts(void)
     ASSERT_EQ(ui_demo_build("error", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 3); /* system, two user turns, no reply */
     ASSERT_EQ(approval.count, 0);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -249,6 +258,7 @@ int test_ui_demo_build_empty_counts(void)
     ASSERT_EQ(ui_demo_build("empty", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 1); /* system prompt only -- always skipped */
     ASSERT_EQ(approval.count, 0);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -260,6 +270,7 @@ int test_ui_demo_build_nokey_counts(void)
     ASSERT_EQ(ui_demo_build("nokey", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 1); /* system prompt only -- always skipped */
     ASSERT_EQ(approval.count, 0);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -271,6 +282,7 @@ int test_ui_demo_build_nosession_counts(void)
     ASSERT_EQ(ui_demo_build("nosession", &conv, &approval, &approval2, NULL, 0), 0);
     ASSERT_EQ(conv.msg_count, 1); /* system prompt only -- always skipped */
     ASSERT_EQ(approval.count, 0);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -297,6 +309,7 @@ int test_ui_demo_build_batches_counts_and_statuses(void)
     ASSERT_EQ(approval2.count, 2);
     ASSERT_EQ(count_status(&approval2, APPROVE_PENDING), 1);
     ASSERT_EQ(count_status(&approval2, APPROVE_BLOCKED), 1);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -314,6 +327,7 @@ int test_ui_demo_build_all_is_union(void)
     ASSERT_EQ(approval.count, 9);
     /* batches' second batch. */
     ASSERT_EQ(approval2.count, 2);
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -340,6 +354,7 @@ int test_ui_demo_approval_rows_have_notes_and_a_long_command(void)
         if (strcmp(approval.entries[i].command, "rm -rf /var/log/old") == 0)
             ASSERT_NOT_NULL(strstr(approval.entries[i].note, "old rotated logs"));
     }
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -362,6 +377,8 @@ int test_ui_demo_cmddetail_matches_approval(void)
         ASSERT_EQ((int)a.entries[i].status, (int)b.entries[i].status);
     }
     ASSERT_TRUE(!ui_demo_scrolls_to_top("cmddetail"));
+    ai_conv_reset(&ca);
+    ai_conv_reset(&cb);
     TEST_END();
 }
 
@@ -375,6 +392,7 @@ int test_ui_demo_term_text_ends_with_prompt(void)
     size_t len = strlen(term);
     ASSERT_TRUE(len > 2);
     ASSERT_STR_EQ(term + len - 2, "$ ");
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -419,6 +437,8 @@ int test_ui_demo_build_thinking_matches_chat_conversation(void)
         ASSERT_EQ((int)thinking_conv.messages[i].role, (int)chat_conv.messages[i].role);
         ASSERT_STR_EQ(thinking_conv.messages[i].content, chat_conv.messages[i].content);
     }
+    ai_conv_reset(&chat_conv);
+    ai_conv_reset(&thinking_conv);
     TEST_END();
 }
 
@@ -481,6 +501,7 @@ int test_ui_demo_settings_debug_is_an_empty_state(void)
     ASSERT_TRUE(!ui_demo_scrolls_to_top("settings-debug"));
     ASSERT_TRUE(!ui_demo_state_valid("settings"));
     ASSERT_TRUE(!ui_demo_state_valid("settings-debug "));
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -501,6 +522,7 @@ int test_ui_demo_shortcuts_is_an_empty_state(void)
     ASSERT_TRUE(!ui_demo_scrolls_to_top("shortcuts"));
     ASSERT_TRUE(!ui_demo_state_valid("shortcut"));
     ASSERT_TRUE(!ui_demo_state_valid("Shortcuts"));
+    ai_conv_reset(&conv);
     TEST_END();
 }
 
@@ -608,6 +630,8 @@ int test_ui_demo_policy_auto_is_executing_with_auto_on(void)
     ASSERT_EQ(p.allowed, (int)CMD_WRITE);
     ASSERT_EQ(p.unattended, (int)CMD_WRITE);
     ASSERT_TRUE(!ui_demo_scrolls_to_top("policy-auto"));
+    ai_conv_reset(&conv);
+    ai_conv_reset(&conv2);
     TEST_END();
 }
 
@@ -623,6 +647,8 @@ int test_ui_demo_policy_compact_matches_approval(void)
     ASSERT_EQ(conv.msg_count, conv2.msg_count);
     ASSERT_EQ(approval.count, aa.count);
     ASSERT_TRUE(!ui_demo_scrolls_to_top("policy-compact"));
+    ai_conv_reset(&conv);
+    ai_conv_reset(&conv2);
     TEST_END();
 }
 
@@ -691,7 +717,7 @@ int test_ui_demo_ansi_swatches(void)
 
     Terminal *t = term_init(30, 40, 100);
     ASSERT_NOT_NULL(t);
-    if (!t) { TEST_END(); }
+    if (!t) { ai_conv_reset(&conv); TEST_END(); }
     term_process(t, text, len);
     ASSERT_EQ(t->cursor.row, 16);
     ASSERT_EQ(t->cursor.col, 11);
@@ -719,5 +745,6 @@ int test_ui_demo_ansi_swatches(void)
     ASSERT_EQ(ui_demo_panel_width_px("ansi", 96), 260);
     ASSERT_EQ(ui_demo_panel_width_px("ansi", 192), 520);
     ASSERT_TRUE(!ui_demo_scrolls_to_top("ansi"));
+    ai_conv_reset(&conv);
     TEST_END();
 }

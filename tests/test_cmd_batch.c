@@ -90,9 +90,10 @@ int test_cmd_batch_remove_middle(void) {
     CmdBatch *a = cmd_batch_add(&set, NULL, NULL);
     CmdBatch *b = cmd_batch_add(&set, NULL, NULL);
     CmdBatch *c = cmd_batch_add(&set, NULL, NULL);
-    cmd_batch_remove(&set, b->id);
+    int b_id = b->id;
+    cmd_batch_remove(&set, b_id);
     ASSERT_EQ(set.count, 2);
-    ASSERT_NULL(cmd_batch_find(&set, b->id));
+    ASSERT_NULL(cmd_batch_find(&set, b_id));
     ASSERT_TRUE(cmd_batch_find(&set, a->id) == a);
     ASSERT_TRUE(cmd_batch_find(&set, c->id) == c);
     cmd_batch_set_free(&set);

@@ -41,6 +41,7 @@ static int is_first_command(const ChatMsgList *list, const ChatMsgItem *target)
 
 static int is_last_command(const ChatMsgList *list, const ChatMsgItem *target)
 {
+    (void)list;
     const ChatMsgItem *item = target->next;
     while (item) {
         if (item->type == CHAT_ITEM_COMMAND) return 0;

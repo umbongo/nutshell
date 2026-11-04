@@ -448,7 +448,7 @@ int test_ui_tokens_resolve_null_safe(void)
 /* ===========================================================================
  * Colour gate + scale gate -- see docs/superpowers/plans/
  * 2026-09-07-design-system-foundation.md, Task 10, and section 6 of the
- * design spec.  Both scan src/ui/*.c relative to the repo root, which is
+ * design spec.  Both scan src/ui/<file>.c relative to the repo root, which is
  * where `make test` runs from.
  *
  * Both gates started as "ratchet" tests (task 2): a baseline count that
@@ -464,7 +464,7 @@ int test_ui_tokens_resolve_null_safe(void)
  * ns_draw.c (renamed from ui_draw.c in Task 4) is the shared drawing module
  * and is excluded entirely: it is allowed to call RGB() directly.
  *
- * Every other src/ui/*.c file is scanned for calls to "RGB(" and each call's
+ * Every other src/ui/<file>.c file is scanned for calls to "RGB(" and each call's
  * three arguments are classified:
  *
  *   - LITERAL: every argument is (optionally cast, optionally negated) a
@@ -673,7 +673,7 @@ static int allowlisted_count_for(const char *filename)
     return 0;
 }
 
-/* Scans src/ui/*.c: per-file literal-RGB() counts (printed and checked
+/* Scans src/ui/<file>.c: per-file literal-RGB() counts (printed and checked
  * against the allow-list table) and the total scale-macro line count.
  * Returns 0 on success (directory found and scanned), -1 if src/ui could
  * not be opened (e.g. wrong working directory) so callers can skip rather
