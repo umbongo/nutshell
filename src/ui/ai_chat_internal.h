@@ -235,7 +235,7 @@ typedef struct {
      * of batches may be pending at once (see src/core/cmd_batch.h and
      * docs/superpowers/specs/2026-09-09-pending-command-batches.md); the
      * dispatcher only ever runs one at a time -- dispatch_batch_id says
-     * which. See dispatch_start()/dispatch_tick(). */
+     * which. See ai_chat_dispatch_start()/ai_chat_dispatch_tick(). */
     int dispatch_active;             /* 1 while the dispatcher is running */
     int dispatch_batch_id;           /* CmdBatch id currently being dispatched, or 0 */
     unsigned long dispatch_seq;      /* last-seen active_term->write_seq */
@@ -258,9 +258,9 @@ typedef struct {
     int   dispatch_ambiguous_reported; /* 1 once this stall's status line
                                          * has been posted */
     /* Diagnostic-only (dispatch_log_stall_if_due(), %TEMP%\nutshell.log):
-     * dispatch_start_tick is set once per dispatch_start() and never
+     * dispatch_start_tick is set once per ai_chat_dispatch_start() and never
      * touched again, for "settled after X ms". dispatch_last_progress_tick
-     * is set at dispatch_start() and every actual send (execute_command())
+     * is set at ai_chat_dispatch_start() and every actual send (execute_command())
      * -- a batch that hasn't moved either in >3 s is "stalled".
      * dispatch_last_diag_log_tick rate-limits the stall log itself to
      * once per 2 s so a long-stuck batch does not flood the file. */
@@ -302,7 +302,7 @@ typedef struct {
     int  context_limit;       /* token limit for model, 0=unknown */
     /* Busy-indicator override text ("Waiting for output", "Continuing"...):
      * when non-empty, painted in place of the meter's used/limit numbers.
-     * Set by start_indicator(), cleared by update_context_bar(). */
+     * Set by ai_chat_start_indicator(), cleared by update_context_bar(). */
     char context_label[64];
     int  actual_input_tokens;  /* last known input tokens from API (0 if unavailable) */
     int  actual_output_tokens; /* last known output tokens from API (0 if unavailable) */
@@ -448,6 +448,21 @@ LRESULT CALLBACK ai_chat_input_subclass_proc(HWND hwnd, UINT msg,
                                              DWORD_PTR dwRefData);
 int ai_chat_input_paste_text(HWND hInput, HWND clip_owner);
 void ai_chat_input_sync_scroll(AiChatData *d);
+
+/* ai_chat_dispatch.c */
+CmdBatch *ai_chat_resolve_batch(AiChatData *d, LPARAM lParam);
+void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch);
+void ai_chat_dispatch_start(AiChatData *d, int batch_id);
+void ai_chat_maybe_start_next_batch(AiChatData *d);
+void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify);
+void ai_chat_dispatch_tick(AiChatData *d);
+
+/* ai_chat_send.c */
+void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
+                                   int unattended);
+
+/* ai_chat_view.c */
+void ai_chat_start_indicator(AiChatData *d, const char *base);
 
 #endif /* _WIN32 */
 
