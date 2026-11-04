@@ -600,7 +600,7 @@ static const WebFetchBackend *default_backend_for_fetch(WebFetchBackend *own,
 
 #else /* !_WIN32 */
 
-typedef struct { int unused; } WfFetch;
+typedef int WfFetch;   /* no per-fetch state without WinHTTP */
 
 const WebFetchBackend *web_fetch_default_backend(void)
 {
