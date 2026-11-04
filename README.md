@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,394 unit tests, and cppcheck reports no errors or warnings
+- 3,394 unit tests across 130 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -240,7 +240,7 @@ Drag anywhere in the thread to select characters -- your messages, replies, the 
 
 When the AI suggests commands, they land in an approval card in the chat thread:
 
-- **Header** — "N commands · M held · K quoted", plus the reason (e.g. "Above the allowed ceiling") when any are held back. A row is **quoted, not run** when the assistant only showed a command marker inside code (a code block or quoted text): it is listed for reference and never runs
+- **Header** — "N commands · M held · K quoted", plus the reason (e.g. "Above the allowed ceiling") when any are held back. A row is **quoted, not run** when the assistant only showed a command marker inside a code block or inline code: it is listed for reference and never runs
 - **Rows** — a checkbox, the command text, and a risk tag (**READ** / **UNKNOWN** / **WRITE** / **CRITICAL**). Held rows show a disabled checkbox and dimmed text. Pending allowed commands start checked
 - **Actions** — **Deny all** rejects every row; **Run N selected** executes the checked rows (disabled when nothing is checked)
 
@@ -333,7 +333,7 @@ Passwords, passphrases and keys are never logged, and neither are keystrokes or 
 - **Threat model** — what Nutshell assumes and what it does not protect against:
   - The remote host and everything it prints are untrusted. Terminal output can carry text meant to steer the AI, which is why every command is classified and, unless you turn on Auto-approve, waits for your click.
   - The AI provider receives the last N terminal lines (the **Max terminal lines** setting) and anything the assistant reads: the debug log and fetched pages. Keep secrets off the screen while AI Assist is in use.
-  - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. Addresses that are local or private (loopback, link-local, 10/8, 172.16/12, 192.168/16) are refused.
+  - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. Addresses that are local or private (loopback, link-local and private ranges, IPv4 and IPv6) are refused.
   - A local shell runs with your Windows privileges, and so does anything the assistant runs in it.
   - `nutshell.config` kept in a shared folder exposes its non-secret fields (hosts, usernames, settings) to everyone who can read it. The secrets stay DPAPI-locked.
 
