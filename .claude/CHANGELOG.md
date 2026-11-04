@@ -4,6 +4,21 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-04 — retrospectives on request, no cadence
+
+Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.
+Models: claude-fable-5-1 (edits).
+
+- **`memory/MEMORY.md`**, **`skills/checkpoint/SKILL.md`**,
+  **`skills/feature-workflow/SKILL.md`**, CLAUDE.md. The maintainer's
+  instruction of 2026-11-04: after a branch is merged and deleted, or its pull
+  request closed unmerged, ask whether to run a retrospective and run it only
+  on a yes; no merge counter, no scheduled Routine (the "Nutshell:
+  retrospective every 10 merges" Routine was disabled the same day; deleting
+  it is the maintainer's click). Replaces the every-10-merges rule of
+  2026-09-21. The "Last retrospective" marker stays as the scope of the next
+  one. No critique run: the rule is the maintainer's own words.
+
 ## 2026-11-03 — retrospective (10 merges)
 
 Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.

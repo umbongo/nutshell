@@ -26,9 +26,12 @@ ritual, `critique` for a sub-agent second opinion on a decision). All are
 tracked in git. Every change to memory or a
 skill gets a dated entry in `.claude/CHANGELOG.md` in the same commit; that
 file is the record of change. Retrospectives go in `docs/retrospectives/`,
-headed DRAFT until reviewed. **Every 10 merges into `main`** the `checkpoint`
-skill runs a retrospective that refreshes memory, skills and workflows; the
-counter and last-retrospective marker are in `MEMORY.md`.
+headed DRAFT until reviewed. **Whenever a branch has been merged and deleted,
+or its pull request closed unmerged, ask me whether to run a retrospective**
+(the `checkpoint` skill) and run it only on a yes. There is no merge counter
+and no scheduled Routine (my rule of 2026-11-04, replacing "every 10
+merges"); the last-retrospective marker in `MEMORY.md` says where the next
+one starts.
 
 ## Build Commands
 

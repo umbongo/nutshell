@@ -5,7 +5,7 @@ description: The end-to-end workflow for a Nutshell feature or fix, how work is 
 
 # Feature workflow and bot allocation
 
-Last updated: 2026-11-03 (retrospective). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-04 (retrospective on request after each merge). Changes are recorded in `.claude/CHANGELOG.md`.
 The rules themselves live in CLAUDE.md ("Software Development Rules",
 "Branches, pull requests and the merge gate"); this skill is the walk
 through them in order. Where they disagree, CLAUDE.md wins. It absorbed
@@ -157,7 +157,8 @@ open as drafts and their body ends with the same `Models:` line and the
    `mcp__github__update_pull_request` to leave draft, then
    `mcp__github__enable_pr_auto_merge` with merge method `merge`. Never
    merge a red check; never push to `main`; never rewrite someone else's
-   branch.
+   branch. Once the merge is confirmed and the branch gone (GitHub deletes
+   it on merge), ask the maintainer whether to run a retrospective now.
 10. **Release**, separately: tag `vX.Y.Z` matching `APP_VERSION` and push
     the tag; the release workflow re-verifies and publishes the committed
     exe. Nothing is built at release time.
@@ -179,10 +180,13 @@ open as drafts and their body ends with the same `Models:` line and the
 
 ## Standing rules around it
 
-- **Every 10 merges** into `main`, the `checkpoint` skill runs a
-  retrospective that refreshes memory, skills and workflows. A daily
-  Routine counts merges from the marker in `MEMORY.md` and starts a fresh
-  session at ten. It never merges.
+- **After every merge-and-delete, or a pull request closed unmerged, ask
+  the maintainer whether to run a retrospective** (the `checkpoint`
+  skill), in the same session, right after confirming the branch is gone;
+  run it only on a yes. There is no merge counter and no scheduled
+  Routine (maintainer, 2026-11-04, replacing "every 10 merges"); the
+  last-retrospective marker in `MEMORY.md` is only the scope of the next
+  one.
 - **Record of change.** Every edit to memory or a skill gets a dated
   entry in `.claude/CHANGELOG.md` in the same commit.
 - **Dependabot.** Weekly, grouped, one open at a time. For an

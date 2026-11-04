@@ -5,27 +5,26 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-11-03 (retrospective after PR #81).
+Last updated: 2026-11-04 (retrospectives on request after each merge; no cadence).
 
-## Retrospective cadence (standing rule from the maintainer, 2026-09-21)
+## Retrospectives: ask after each merge (maintainer's rule, 2026-11-04)
 
-- **Every 10 merges into `main`, run a retrospective** with the `checkpoint`
-  skill: refresh this memory file, the skills under `.claude/skills/`, and
-  the workflows (`.github/workflows/*.yml` and the process sections of
-  CLAUDE.md), record it in `.claude/CHANGELOG.md`, and open a draft PR.
-- **Counter.** Merges are pull requests merged into `main` (`merged_at`
-  set) after the last retrospective marker below. Count them with
-  `list_pull_requests` (state closed, sort updated, desc) or
-  `git log --merges --first-parent origin/main <marker>..`.
+- **After a branch is merged and deleted, or its pull request closed
+  unmerged, ask the maintainer whether to run a retrospective** with the
+  `checkpoint` skill: refresh this memory file, the skills under
+  `.claude/skills/`, and the workflows (`.github/workflows/*.yml` and the
+  process sections of CLAUDE.md), record it in `.claude/CHANGELOG.md`, and
+  open a draft PR. Run it only on a yes.
+- This replaced the every-10-merges cadence of 2026-09-21. There is no
+  merge counter any more. The daily Routine "Nutshell: retrospective every
+  10 merges" in the maintainer's Claude account was disabled on 2026-11-04
+  (deleting it is the maintainer's click at claude.ai/code/routines). The
+  maintainer declined a retrospective on 2026-11-04, the day after the
+  last one.
 - **Last retrospective:** 2026-11-03, marker commit `94d7ae3` (merge of
-  PR #81, the head of `main` when the retrospective was written). Merges
-  since: 0 (the retrospective's own PR will be the first). Update this line
-  at every retrospective. The 2026-11-03 count from `7960bd2` was 10
-  (#73, #70, #72, #74-#77, #79-#81), including the 2026-10-19
-  retrospective's own PR #73.
-- A daily Routine in the maintainer's Claude account performs the count
-  and starts the retrospective in a fresh session when it reaches 10. Any
-  session that notices the count is at or past 10 should run it too.
+  PR #81). The next one covers the merges since it
+  (`git log --merges --first-parent origin/main 94d7ae3..`); move this
+  marker at every retrospective.
 
 ## Working from a cloud (Linux) session
 
