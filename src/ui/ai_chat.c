@@ -636,6 +636,23 @@ static void post_tool_msg(AiStream *s, ChatItemType type, const char *text)
     stream_post_text(s, WM_AI_TOOL_MSG, (WPARAM)type, text);
 }
 
+/* web_fetch progress (WebFetchContext.on_hop): runs on the stream thread, so it
+ * only posts a row (stream_post_text copies the text; display_url is the fetch
+ * loop's stack buffer). user is the stream, which outlives the tool call. */
+static void fetch_on_hop(void *user, const char *display_url, int refused)
+{
+    AiStream *s = (AiStream *)user;
+    char row[256];
+    if (!s) return;
+    if (refused)
+        snprintf(row, sizeof(row), "fetch refused: %s (local or private address)",
+                 display_url ? display_url : "");
+    else
+        snprintf(row, sizeof(row), "fetching: %s",
+                 display_url ? display_url : "");
+    post_tool_msg(s, CHAT_ITEM_TOOL_CALL, row);
+}
+
 /* Background thread: streaming AI API call.
  *
  * Owns one reference to its AiStream and reads and writes nothing else: no
@@ -810,6 +827,13 @@ static unsigned __stdcall ai_stream_thread_proc(void *raw_arg)
                     (void)ai_debug_tool_describe(call->input_json, debug_desc,
                                                  sizeof(debug_desc));
                     if (debug_desc[0]) provider_suffix = debug_desc;
+                }
+                /* web_fetch: the requested URL (display form). */
+                char fetch_desc[160];
+                if (!provider_suffix && strcmp(call->name, "web_fetch") == 0) {
+                    (void)web_fetch_describe(call->input_json, fetch_desc,
+                                             sizeof(fetch_desc));
+                    if (fetch_desc[0]) provider_suffix = fetch_desc;
                 }
                 if (provider_suffix)
                     snprintf(tool_call_text, sizeof(tool_call_text),
@@ -1234,9 +1258,18 @@ static void chat_rebuild_display(AiChatData *d)
              * status row posted while the call is in flight. */
             if (msg->n_tool_calls > 0 && msg->tool_calls) {
                 for (int ti = 0; ti < msg->n_tool_calls; ti++) {
-                    char tool_call_text[128];
-                    snprintf(tool_call_text, sizeof(tool_call_text),
-                             "using tool: %s", msg->tool_calls[ti].name);
+                    char tool_call_text[256];
+                    char fetch_desc[160] = "";
+                    if (strcmp(msg->tool_calls[ti].name, "web_fetch") == 0)
+                        (void)web_fetch_describe(msg->tool_calls[ti].input_json,
+                                                 fetch_desc, sizeof(fetch_desc));
+                    if (fetch_desc[0])
+                        snprintf(tool_call_text, sizeof(tool_call_text),
+                                 "using tool: %s - %s",
+                                 msg->tool_calls[ti].name, fetch_desc);
+                    else
+                        snprintf(tool_call_text, sizeof(tool_call_text),
+                                 "using tool: %s", msg->tool_calls[ti].name);
                     chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_CALL,
                                     tool_call_text);
                 }
@@ -1420,6 +1453,9 @@ static void launch_stream_thread(AiChatData *d, const char *src)
                                  &d->search_ctx, &d->fetch_ctx,
                                  with_debug ? &debug_ctx : NULL);
             free(launch_reg);
+            /* The stream's own fetch copy reports each hop as a chat row. */
+            s->fetch.on_hop = fetch_on_hop;
+            s->fetch.user = s;
             s->has_tools = 1;
             /* Serialize tool definitions for this provider */
             s->tools_json[0] = '\0';
