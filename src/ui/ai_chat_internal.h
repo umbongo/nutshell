@@ -148,7 +148,7 @@ typedef struct {
  * stream thread (ai_chat_stream_thread_proc) owns nothing here -- it reads and
  * writes only its own AiStream (src/core/ai_stream.h), including its own
  * copy of the tool registry and search/fetch contexts snapshotted before
- * the thread starts (ai_stream_copy_tools(), called under launch_stream_thread
+ * the thread starts (ai_stream_copy_tools(), called under ai_chat_launch_stream_thread
  * before _beginthreadex) -- so no lock guards this struct. */
 typedef struct {
     HWND hwnd;
@@ -302,7 +302,7 @@ typedef struct {
     int  context_limit;       /* token limit for model, 0=unknown */
     /* Busy-indicator override text ("Waiting for output", "Continuing"...):
      * when non-empty, painted in place of the meter's used/limit numbers.
-     * Set by ai_chat_start_indicator(), cleared by update_context_bar(). */
+     * Set by ai_chat_start_indicator(), cleared by ai_chat_update_context_bar(). */
     char context_label[64];
     int  actual_input_tokens;  /* last known input tokens from API (0 if unavailable) */
     int  actual_output_tokens; /* last known output tokens from API (0 if unavailable) */
@@ -458,8 +458,19 @@ void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify);
 void ai_chat_dispatch_tick(AiChatData *d);
 
 /* ai_chat_send.c */
+void ai_chat_register_tools(AiChatData *d, const char *search_provider,
+                            const char *search_url, int max_search_results,
+                            int web_fetch_enabled);
+void ai_chat_launch_stream_thread(AiChatData *d, const char *src);
+void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state);
+void ai_chat_drain_stream_messages(HWND hwnd);
+void ai_chat_cancel_active_stream(AiChatData *d);
+void ai_chat_send_user_message(AiChatData *d);
 void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
                                    int unattended);
+
+/* ai_chat_status.c */
+void ai_chat_update_context_bar(AiChatData *d);
 
 /* ai_chat_view.c */
 void ai_chat_start_indicator(AiChatData *d, const char *base);
