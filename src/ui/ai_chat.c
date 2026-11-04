@@ -8,21 +8,6 @@
 
 static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 
-/* Subclass for owner-drawn buttons: suppress WM_ERASEBKGND to prevent
- * white flicker during parent resize.  WM_DRAWITEM already fills the
- * entire button rect, so erasing is redundant. */
-#define BTN_NOERASE_SUBCLASS_ID 43
-static LRESULT CALLBACK btn_noerase_subclass(
-    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
-    UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
-{
-    (void)dwRefData;
-    if (msg == WM_ERASEBKGND) return 1;
-    if (msg == WM_NCDESTROY)
-        RemoveWindowSubclass(hwnd, btn_noerase_subclass, uIdSubclass);
-    return DefSubclassProc(hwnd, msg, wParam, lParam);
-}
-
 /* Forward declarations */
 static void do_session_switch(AiChatData *d,
                               AiSessionState *new_state,
@@ -32,569 +17,6 @@ static void do_session_switch(AiChatData *d,
                               const char *session_name);
 
 #include "markdown.h"
-
-/* Default message-box height at 96 DPI (about two lines) before the user
- * drags the sash. */
-#define AI_INPUT_BASE_H 46
-
-/* Convert device pixels back to a 96-DPI base value (inverse of ns_scale,
- * round-half-up). dpi <= 0 is treated as 96. */
-static int ai_chat_unscale(int px, int dpi)
-{
-    if (dpi <= 0) dpi = 96;
-    return (px * 96 + dpi / 2) / dpi;
-}
-
-/* The message box's height in device pixels: the stored 96-DPI base, scaled
- * and clamped to what the panel can hold (never under two input lines, never
- * over half the panel). The one place it is decided -- used by the layout,
- * relayout() and the placeholder at creation so they cannot drift. */
-static int ai_chat_input_h(const AiChatData *d)
-{
-    RECT rc = {0, 0, 1, 1};
-    if (d->hwnd) GetClientRect(d->hwnd, &rc);
-    int base = d->input_base_h > 0 ? d->input_base_h : AI_INPUT_BASE_H;
-    return ai_composer_clamp_h(ns_scale(base, d->dpi), rc.bottom,
-                               d->input_line_h, d->dpi);
-}
-
-/* Compute the panel's top-level tiling (header/thread/status/sash/composer)
- * for the current client size -- the one place composer_h is decided, shared
- * by relayout(), WM_PAINT and every status-line hit-test helper below so
- * they never disagree with each other. */
-void ai_chat_compute_layout(AiChatData *d, AiPanelLayout *out)
-{
-    RECT rc = {0, 0, 1, 1};
-    if (d->hwnd) GetClientRect(d->hwnd, &rc);
-    NsRect panel = { 0, 0, rc.right, rc.bottom };
-
-    int margin = ns_scale(5, d->dpi);
-    int input_h = ai_chat_input_h(d);
-    int composer_h = input_h + margin;
-    ai_panel_layout(panel, d->dpi, composer_h, out);
-}
-
-/* Decide and push the empty/no-key/no-session state (ai_panel_states.h)
- * to the chat list view. chat_listview only paints/hit-tests it while
- * the message list actually has zero items, so it is harmless (and
- * cheap) to call this any time the inputs to the decision might have
- * changed: the panel is shown, the session changes, the API key changes,
- * or the conversation is reset. See the spec's "Empty and blocked
- * states (frame C)" section. */
-static void update_panel_state(AiChatData *d)
-{
-    if (!d || !d->hChatList) return;
-
-    int state;
-    if (d->forced_state >= 0)
-        state = d->forced_state;
-    else if (!d->active_io)
-        state = AI_STATE_NO_SESSION;
-    else if (d->api_key[0] == '\0')
-        state = AI_STATE_NO_KEY;
-    else
-        state = AI_STATE_EMPTY;
-
-    chat_listview_set_state(d->hChatList, state, d->context_lines);
-}
-
-/* Start (or replace) the busy-indicator text shown in place of the status
- * line's context meter numbers while a command/response is in flight (the
- * per-message activity dot + word in the header covers most of the same
- * ground, but callers here have more specific text, e.g. "waiting for
- * output"). */
-void ai_chat_start_indicator(AiChatData *d, const char *base)
-{
-    if (!d) return;
-    if (strcmp(base, "thinking") == 0)
-        d->context_label[0] = '\0';   /* inline indicator shows timing */
-    else
-        snprintf(d->context_label, sizeof(d->context_label), "%c%s",
-            base[0] >= 'a' && base[0] <= 'z' ? (char)(base[0]-32) : base[0],
-            base + 1);
-    ai_chat_invalidate_status_line(d);
-}
-
-/* Free all thinking history entries. */
-static void thinking_history_clear(AiChatData *d)
-{
-    for (int i = 0; i < AI_MAX_MESSAGES; i++) {
-        free(d->thinking_history[i]);
-        d->thinking_history[i] = NULL;
-    }
-    d->stream_thinking[0] = '\0';
-    d->stream_thinking_len = 0;
-}
-
-/* Append one CHAT_ITEM_COMMAND per entry in a batch's queue, in order,
- * tagged with the batch's id (chat_msg_set_batch) -- the inverse of what
- * WM_AI_RESPONSE builds live, used to rebuild a pending card wherever the
- * command items themselves aren't carried across a rebuild: a session
- * switch (chat_rebuild_display, below) and --ui-demo's "batches"/etc.
- * states (ai_chat_apply_demo_extras, which builds real CmdBatch entries
- * from the canned ApprovalQueue and lets this same replay draw them).
- * Status maps straight onto the fields the list view reads: PENDING/
- * BLOCKED stay unsettled (part of the active card, approved=-1, which
- * chat_msg_set_command already defaults to); DENIED/APPROVED/EXECUTING/
- * COMPLETED all render inline (settled=1) -- APPROVED is included because
- * a card settles the moment every entry is decided, well before the
- * dispatcher actually gets around to sending it (see
- * ai_chat_settle_batch_if_done()). */
-static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
-{
-    if (!list || !batch) return;
-    for (int i = 0; i < batch->q.count; i++) {
-        const ApprovalEntry *e = &batch->q.entries[i];
-        ChatMsgItem *item = chat_msg_append(list, CHAT_ITEM_COMMAND, "");
-        if (!item) continue;
-        chat_msg_set_command(item, e->command, e->safety,
-                             e->status == APPROVE_BLOCKED);
-        chat_msg_set_quoted(item, e->quoted);
-        chat_msg_set_batch(item, batch->id);
-        chat_msg_set_note(item, e->note);
-        switch (e->status) {
-        case APPROVE_APPROVED:
-        case APPROVE_EXECUTING:
-        case APPROVE_COMPLETED:
-            item->u.cmd.approved = 1;
-            item->u.cmd.settled = 1;
-            break;
-        case APPROVE_DENIED:
-            item->u.cmd.approved = 0;
-            item->u.cmd.settled = 1;
-            break;
-        case APPROVE_PENDING:
-        case APPROVE_BLOCKED:
-        default:
-            break;  /* stays unsettled -- part of the active card */
-        }
-    }
-
-    /* Run state comes from the same queue, so a rebuilt display (session
-     * switch, --ui-demo=executing) shows "running"/"ran" exactly where the
-     * live panel does instead of falling back to "queued". The batch is
-     * alive here by definition -- a rebuild only ever replays batches still
-     * in the set -- hence batch_ending = 0. */
-    chat_msg_batch_sync_run(list, batch->id, &batch->q, 0);
-}
-
-/* Rebuild the chat display from the conversation history.
- * Used when switching sessions to replay the loaded conversation.
- * Populates the ChatMsgList and invalidates the ChatListView. */
-static void chat_rebuild_display(AiChatData *d)
-{
-    if (!d) return;
-
-    chat_msg_list_clear(&d->msg_list);
-    d->stream_ai_item = NULL;
-
-    /* No welcome placeholder any more -- an empty msg_list here (no real
-     * messages replayed below) is painted by chat_listview as the empty/
-     * no-key/no-session state instead (see update_panel_state()). */
-
-    /* Replay messages, skipping the system prompt at index 0 */
-    for (int i = 1; i < d->conv.msg_count; i++) {
-        const AiMessage *msg = &d->conv.messages[i];
-
-        if (msg->role == AI_ROLE_USER) {
-            chat_msg_append(&d->msg_list, CHAT_ITEM_USER,
-                            ai_msg_content(msg));
-        } else if (msg->role == AI_ROLE_ASSISTANT) {
-            /* Tool-use blocks first, matching the live "using tool: <name>"
-             * status row posted while the call is in flight. */
-            if (msg->n_tool_calls > 0 && msg->tool_calls) {
-                for (int ti = 0; ti < msg->n_tool_calls; ti++) {
-                    char tool_call_text[256];
-                    char fetch_desc[160] = "";
-                    if (strcmp(msg->tool_calls[ti].name, "web_fetch") == 0)
-                        (void)web_fetch_describe(msg->tool_calls[ti].input_json,
-                                                 fetch_desc, sizeof(fetch_desc));
-                    if (fetch_desc[0])
-                        snprintf(tool_call_text, sizeof(tool_call_text),
-                                 "using tool: %s - %s",
-                                 msg->tool_calls[ti].name, fetch_desc);
-                    else
-                        snprintf(tool_call_text, sizeof(tool_call_text),
-                                 "using tool: %s", msg->tool_calls[ti].name);
-                    chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_CALL,
-                                    tool_call_text);
-                }
-            }
-            const char *content = ai_msg_content(msg);
-            if (content && content[0] != '\0') {
-                ChatMsgItem *item = chat_msg_append(&d->msg_list,
-                                                     CHAT_ITEM_AI_TEXT,
-                                                     content);
-                if (item && d->thinking_history[i] &&
-                    d->thinking_history[i][0]) {
-                    chat_msg_set_thinking(item, d->thinking_history[i]);
-                    item->u.ai.thinking_complete = 1;
-                }
-            }
-        } else if (msg->role == AI_ROLE_TOOL) {
-            const char *content = ai_msg_content(msg);
-            size_t clen = content ? strlen(content) : 0;
-            char preview[256];
-            size_t plen = clen < 200 ? clen : 200;
-            memcpy(preview, content ? content : "", plen);
-            preview[plen] = '\0';
-            chat_msg_append(&d->msg_list, CHAT_ITEM_TOOL_RESULT, preview);
-            if (clen > 200) {
-                char warn[256];
-                agentic_truncation_warning(msg->tool_name, warn, sizeof(warn));
-                chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, warn);
-            }
-        }
-        /* Skip system messages injected mid-conversation */
-    }
-
-    /* Pending command batches: rebuild one card per batch still in the
-     * active session's set, oldest first -- the interleaving with earlier
-     * conversation turns isn't reconstructed (every batch's cards land
-     * after the full replay above), only which cards exist and their
-     * state (see docs/superpowers/specs/
-     * 2026-09-09-pending-command-batches.md, "Session switch"). */
-    if (d->active_state) {
-        for (int bi = 0; bi < d->active_state->batches.count; bi++)
-            append_batch_command_items(&d->msg_list, d->active_state->batches.b[bi]);
-    }
-
-    if (d->hChatList) {
-        chat_listview_invalidate(d->hChatList);
-        chat_listview_scroll_to_bottom(d->hChatList);
-    }
-    ai_chat_update_context_bar(d);
-}
-
-/* Add a tooltip to a child control */
-static void add_tooltip(HWND hTooltip, HWND hCtrl, const char *text)
-{
-    if (!hTooltip || !hCtrl) return;
-    TOOLINFO ti;
-    memset(&ti, 0, sizeof(ti));
-    ti.cbSize   = sizeof(ti);
-    ti.uFlags   = TTF_SUBCLASS | TTF_IDISHWND;
-    ti.hwnd     = GetParent(hCtrl);
-    ti.uId      = (UINT_PTR)hCtrl;
-    ti.lpszText = (LPSTR)text;
-    SendMessage(hTooltip, TTM_ADDTOOL, 0, (LPARAM)&ti);
-}
-
-/* Draw one of the header's square icon buttons (New chat / Save / Undock
- * or Dock): bg_secondary fill, border stroke, R_CTRL radius, a built-in
- * vector icon centred -- no label, per the frame-B header design. These
- * are real child windows, so hover comes from the themed_button subclass
- * rather than ns_hover. */
-static void draw_header_icon_button(LPDRAWITEMSTRUCT dis,
-                                     const ThemeColors *theme, int dpi,
-                                     NsIconId icon)
-{
-    if (!dis || !theme) return;
-    HDC hdc = dis->hDC;
-    RECT rc = dis->rcItem;
-    int pressed = (dis->itemState & ODS_SELECTED) != 0;
-    themed_button_track_hover(dis->hwndItem);
-    int hot = !pressed && themed_button_is_hot(dis->hwndItem);
-    COLORREF bg = theme_cr(pressed ? theme->bg_primary
-                           : hot ? ns_tokens()->bg_secondary.hover
-                                 : theme->bg_secondary);
-    COLORREF fg = theme_cr(theme->text_main);
-    COLORREF bdr = theme_cr(theme->border);
-
-    HBRUSH hBgBr = CreateSolidBrush(theme_cr(theme->bg_primary));
-    FillRect(hdc, &rc, hBgBr);
-    DeleteObject(hBgBr);
-
-    int radius = ns_scale(R_CTRL, dpi);
-    ns_draw_round_fill(hdc, &rc, radius, bg, 255);
-    ns_draw_round_stroke(hdc, &rc, radius, bdr, STROKE_HAIRLINE);
-
-    ns_icon_draw(hdc, icon, &rc, fg, (UINT)dpi);
-}
-
-/* Model-chip geometry, shared by relayout() (to size the session label)
- * and the header paint (to draw the chip itself): sized to the current
- * model name's measured text width (FONT_CAPTION + 2*SP_SM padding) and
- * placed directly left of the header's icon buttons; the session label
- * takes the remaining space to its left. `hdc` may be NULL (a fixed
- * fallback width is used); pass a real one for an accurate size. */
-static void ai_chat_header_chip(AiChatData *d, NsRect header, int buttons_left,
-                                 HDC hdc, NsRect *out_chip, RECT *out_label)
-{
-    int pad_sm = ns_scale(SP_SM, d->dpi);
-    int chip_h = ns_scale(SZ_TAG_H, d->dpi);
-    int chip_w = chip_h * 2;
-
-    if (hdc) {
-        HFONT font = ns_font(FONT_CAPTION, d->dpi);
-        HGDIOBJ old = font ? SelectObject(hdc, font) : NULL;
-        const char *model = d->conv.model;
-        int mlen = (int)strlen(model);
-        SIZE sz = {0, 0};
-        if (mlen > 0) GetTextExtentPoint32A(hdc, model, mlen, &sz);
-        if (old) SelectObject(hdc, old);
-        chip_w = sz.cx + 2 * pad_sm;
-    }
-
-    int chip_x = buttons_left - chip_w;
-    int chip_y = header.y + (header.h - chip_h) / 2;
-    if (out_chip) {
-        out_chip->x = chip_x; out_chip->y = chip_y;
-        out_chip->w = chip_w; out_chip->h = chip_h;
-    }
-    if (out_label) {
-        int label_left = header.x + pad_sm;
-        int label_right = chip_x - pad_sm;
-        if (label_right < label_left) label_right = label_left;
-        SetRect(out_label, label_left, header.y, label_right,
-                header.y + header.h);
-    }
-}
-
-/* Reposition all child controls from ai_panel_layout()'s header/thread/
- * status/sash/composer tiling (ai_chat_compute_layout()). Called once at the
- * end of WM_CREATE and again on every WM_SIZE. */
-static void relayout(AiChatData *d)
-{
-    if (!d || !d->hwnd) return;
-
-    int margin = ns_scale(5, d->dpi);
-    int input_h = ai_chat_input_h(d);
-    int send_w = ns_scale(40, d->dpi);
-
-    AiPanelLayout l;
-    ai_chat_compute_layout(d, &l);
-
-    /* ---- Header: session name (left), model chip (painted -- see
-     * WM_PAINT), three icon buttons right-aligned. ---- */
-    int btn_h = ns_scale(SZ_CTRL_H, d->dpi);
-    int pad_sm = ns_scale(SP_SM, d->dpi);
-    int by = l.header.y + (l.header.h - btn_h) / 2;
-    int bx = l.header.x + l.header.w - pad_sm - btn_h;
-    if (d->hUndockBtn)
-        MoveWindow(d->hUndockBtn, bx, by, btn_h, btn_h, TRUE);
-    bx -= pad_sm + btn_h;
-    if (d->hSaveBtn)
-        MoveWindow(d->hSaveBtn, bx, by, btn_h, btn_h, TRUE);
-    bx -= pad_sm + btn_h;
-    if (d->hNewChatBtn)
-        MoveWindow(d->hNewChatBtn, bx, by, btn_h, btn_h, TRUE);
-    int buttons_left = bx - pad_sm;
-
-    {
-        NsRect chip;
-        RECT label_rc;
-        HDC hdc = GetDC(d->hwnd);
-        ai_chat_header_chip(d, l.header, buttons_left, hdc, &chip, &label_rc);
-        if (hdc) ReleaseDC(d->hwnd, hdc);
-        if (d->hSessionLabel)
-            MoveWindow(d->hSessionLabel, label_rc.left, label_rc.top,
-                       label_rc.right - label_rc.left,
-                       label_rc.bottom - label_rc.top, TRUE);
-    }
-
-    /* ---- Thread: the chat list fills l.thread. ---- */
-    {
-        int disp_w = l.thread.w - CSB_WIDTH;
-        if (disp_w < 1) disp_w = 1;
-        int disp_h = l.thread.h < 1 ? 1 : l.thread.h;
-        if (d->hDisplay)
-            MoveWindow(d->hDisplay, l.thread.x, l.thread.y, disp_w, disp_h, TRUE);
-        if (d->hDisplayScrollbar)
-            MoveWindow(d->hDisplayScrollbar, l.thread.x + disp_w, l.thread.y,
-                       CSB_WIDTH, disp_h, TRUE);
-        if (d->hChatList)
-            chat_listview_relayout(d->hChatList);
-    }
-
-    /* ---- Composer: unchanged position and behaviour; keeps its own
-     * height (composer_h in ai_chat_compute_layout() is exactly
-     * input_h + margin, so l.composer.y lands where input_y always did). */
-    {
-        int input_y = l.composer.y;
-        int input_w = l.composer.w - send_w - margin * 3 - CSB_WIDTH;
-        if (input_w < 1) input_w = 1;
-        if (d->hInput)
-            MoveWindow(d->hInput, l.composer.x + margin, input_y,
-                       input_w, input_h, TRUE);
-        if (d->hInputScrollbar)
-            MoveWindow(d->hInputScrollbar, l.composer.x + margin + input_w,
-                       input_y, CSB_WIDTH, input_h, TRUE);
-        if (d->hSendBtn)
-            MoveWindow(d->hSendBtn, l.composer.x + l.composer.w - send_w - margin,
-                       input_y, send_w, input_h, TRUE);
-    }
-
-    ai_chat_status_tools_update(d);
-}
-
-RECT ai_chat_to_RECT(NsRect r)
-{
-    RECT rc = { r.x, r.y, r.x + r.w, r.y + r.h };
-    return rc;
-}
-
-/* Paint the header's model chip and (while a session is active) the
- * activity dot + one-word status, next to the session label. */
-static void paint_header(AiChatData *d, HDC hdc)
-{
-    const ThemeTokens *tok = ns_tokens();
-    AiPanelLayout l;
-    ai_chat_compute_layout(d, &l);
-
-    int btn_h = ns_scale(SZ_CTRL_H, d->dpi);
-    int pad_sm = ns_scale(SP_SM, d->dpi);
-    int buttons_left = l.header.x + l.header.w - pad_sm
-                      - 3 * btn_h - 2 * pad_sm - pad_sm;
-
-    NsRect chip;
-    ai_chat_header_chip(d, l.header, buttons_left, hdc, &chip, NULL);
-    if (chip.w > 0 && chip.h > 0) {
-        RECT chip_rc = ai_chat_to_RECT(chip);
-        HFONT font = ns_font(FONT_CAPTION, d->dpi);
-        ns_draw_chip(hdc, &chip_rc, theme_cr(tok->raised.base),
-                    theme_cr(tok->text_dim), font, d->conv.model);
-    }
-
-    if (d->activity.phase == ACTIVITY_IDLE) return;
-
-    RECT rc_lbl = {0, 0, 0, 0};
-    if (d->hSessionLabel) {
-        GetWindowRect(d->hSessionLabel, &rc_lbl);
-        MapWindowPoints(NULL, d->hwnd, (POINT *)&rc_lbl, 2);
-    }
-    SIZE sz_lbl = {0, 0};
-    /* Measure with the session label's own font (FONT_TITLE) so the dot
-     * lands right after its actually-rendered text, not an approximation. */
-    HGDIOBJ old_f = SelectObject(hdc, ns_font(FONT_TITLE, d->dpi));
-    char lbl_text[256] = "";
-    if (d->hSessionLabel)
-        GetWindowTextA(d->hSessionLabel, lbl_text, (int)sizeof(lbl_text));
-    GetTextExtentPoint32A(hdc, lbl_text, (int)strlen(lbl_text), &sz_lbl);
-    SelectObject(hdc, d->hSmallFont ? d->hSmallFont : GetStockObject(DEFAULT_GUI_FONT));
-
-    int dot_sz = ns_scale(6, d->dpi);
-    int dot_x = rc_lbl.left + sz_lbl.cx + ns_scale(6, d->dpi);
-    int dot_y = rc_lbl.top + ((rc_lbl.bottom - rc_lbl.top) - dot_sz) / 2;
-
-    COLORREF dot_clr;
-    switch (d->activity.health) {
-    case HEALTH_YELLOW:
-        dot_clr = RGB(((d->theme->chat.indicator_yellow) >> 16) & 0xFF,
-                      ((d->theme->chat.indicator_yellow) >> 8) & 0xFF,
-                      (d->theme->chat.indicator_yellow) & 0xFF);
-        break;
-    case HEALTH_RED:
-        dot_clr = RGB(((d->theme->chat.indicator_red) >> 16) & 0xFF,
-                      ((d->theme->chat.indicator_red) >> 8) & 0xFF,
-                      (d->theme->chat.indicator_red) & 0xFF);
-        break;
-    default:
-        dot_clr = RGB(((d->theme->chat.indicator_green) >> 16) & 0xFF,
-                      ((d->theme->chat.indicator_green) >> 8) & 0xFF,
-                      (d->theme->chat.indicator_green) & 0xFF);
-        break;
-    }
-
-    if (d->pulse_toggle && !ns_reduced_motion()) {
-        COLORREF bg_c = RGB(((d->theme->bg_primary) >> 16) & 0xFF,
-                            ((d->theme->bg_primary) >> 8) & 0xFF,
-                            (d->theme->bg_primary) & 0xFF);
-        dot_clr = RGB((GetRValue(dot_clr) + GetRValue(bg_c)) / 2,
-                      (GetGValue(dot_clr) + GetGValue(bg_c)) / 2,
-                      (GetBValue(dot_clr) + GetBValue(bg_c)) / 2);
-    }
-
-    HBRUSH hDotBr = CreateSolidBrush(dot_clr);
-    HPEN hDotPn = CreatePen(PS_SOLID, 1, dot_clr);
-    HGDIOBJ ob = SelectObject(hdc, hDotBr);
-    HGDIOBJ op = SelectObject(hdc, hDotPn);
-    Ellipse(hdc, dot_x, dot_y, dot_x + dot_sz, dot_y + dot_sz);
-    SelectObject(hdc, op);
-    SelectObject(hdc, ob);
-    DeleteObject(hDotPn);
-    DeleteObject(hDotBr);
-
-    const char *word;
-    switch (d->activity.phase) {
-    case ACTIVITY_PROCESSING: word = "Processing"; break;
-    case ACTIVITY_THINKING:   word = "Thinking";   break;
-    case ACTIVITY_RESPONDING: word = "Responding"; break;
-    case ACTIVITY_EXECUTING:  word = "Executing";  break;
-    case ACTIVITY_WAITING:    word = "Waiting";    break;
-    default:                  word = "";           break;
-    }
-    if (word[0]) {
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, dot_clr);
-        RECT wrc;
-        wrc.left   = dot_x + dot_sz + ns_scale(4, d->dpi);
-        wrc.top    = rc_lbl.top;
-        wrc.right  = l.header.x + l.header.w;
-        wrc.bottom = rc_lbl.bottom;
-        DrawTextA(hdc, word, -1, &wrc, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-    }
-    SelectObject(hdc, old_f);
-}
-
-/* Zoom the AI chat content fonts. Resizes the chat ListView fonts
- * (user messages + AI responses) and the user input textbox font.
- * Buttons keep the UI font; context bar and session label keep the
- * small font. */
-static void chat_apply_zoom(AiChatData *d, int delta)
-{
-    if (!d) return;
-    int new_size = app_font_zoom(d->ui_font_size, delta);
-    if (new_size == d->ui_font_size)
-        return;
-    d->ui_font_size = new_size;
-
-    if (!d->hChatList)
-        return;
-
-    int h = -MulDiv(new_size, d->dpi, 72);
-
-    if (d->hChatFont) DeleteObject(d->hChatFont);
-    if (d->hBoldFont) DeleteObject(d->hBoldFont);
-    if (d->hMonoFont) DeleteObject(d->hMonoFont);
-
-    d->hChatFont = CreateFont(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                              DEFAULT_CHARSET, OUT_TT_PRECIS,
-                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                              DEFAULT_PITCH | FF_SWISS, APP_FONT_UI_FACE);
-    d->hBoldFont = CreateFont(h, 0, 0, 0, FW_BOLD,
-        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS,
-        APP_FONT_UI_FACE);
-    d->hMonoFont = CreateFont(h, 0, 0, 0, FW_NORMAL,
-        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
-        d->ai_font_name[0] ? d->ai_font_name : "Consolas");
-
-    chat_listview_set_fonts(d->hChatList, d->hChatFont,
-                            d->hMonoFont, d->hBoldFont,
-                            d->hSmallFont);
-    chat_listview_relayout(d->hChatList);
-
-    /* Apply the same zoomable font to the user input textbox so its text
-     * scales with the chat. Buttons, labels and the context bar continue
-     * to use the fixed UI font (d->hFont). */
-    if (d->hInput && d->hChatFont) {
-        SendMessage(d->hInput, WM_SETFONT, (WPARAM)d->hChatFont, TRUE);
-        HDC hdc_m = GetDC(d->hInput);
-        if (hdc_m) {
-            HGDIOBJ old_m = SelectObject(hdc_m, (HGDIOBJ)d->hChatFont);
-            TEXTMETRIC tm_m;
-            GetTextMetrics(hdc_m, &tm_m);
-            d->input_line_h = tm_m.tmHeight + tm_m.tmExternalLeading;
-            SelectObject(hdc_m, old_m);
-            ReleaseDC(d->hInput, hdc_m);
-        }
-        ai_chat_input_sync_scroll(d);
-    }
-}
 
 static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                        WPARAM wParam, LPARAM lParam)
@@ -617,14 +39,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         /* Get per-monitor DPI for layout scaling */
         nd->dpi = get_window_dpi(hwnd);
 
-        /* All child-control geometry is decided by relayout() (called once
+        /* All child-control geometry is decided by ai_chat_relayout() (called once
          * at the end of this handler, then again on every WM_SIZE) from
          * ai_panel_layout()'s header/thread/status/composer tiling -- the
          * positions/sizes given to CreateWindow here are placeholders. */
         int btn_h = ns_scale(SZ_CTRL_H, nd->dpi);
 
         /* New chat / Save / Undock: three square icon buttons in the
-         * header, owner-drawn via draw_header_icon_button(). */
+         * header, owner-drawn via ai_chat_draw_header_icon_button(). */
         nd->hNewChatBtn = CreateWindow("BUTTON", "",
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             0, 0, btn_h, btn_h,
@@ -645,9 +67,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Suppress WM_ERASEBKGND on owner-drawn buttons to prevent
          * white flicker during splitter drag / parent resize. */
-        SetWindowSubclass(nd->hNewChatBtn,  btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
-        SetWindowSubclass(nd->hSaveBtn,     btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
-        SetWindowSubclass(nd->hUndockBtn,   btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hNewChatBtn,  ai_chat_btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hSaveBtn,     ai_chat_btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hUndockBtn,   ai_chat_btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
         /* Old floating Allow/Deny buttons removed — approval is now
          * handled inline via chat_listview command block buttons.
@@ -666,8 +88,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
         /* Chat display: owner-drawn ChatListView replaces RichEdit.
          * In docked mode the initial window may be 1x1, so clamp
-         * all dimensions to >=1 — relayout() fixes them on first WM_SIZE. */
-        int input_h = ai_chat_input_h(nd); /* placeholder; relayout() sets it */
+         * all dimensions to >=1 — ai_chat_relayout() fixes them on first WM_SIZE. */
+        int input_h = ai_chat_input_h(nd); /* placeholder; ai_chat_relayout() sets it */
         int margin = ns_scale(5, nd->dpi);
         int disp_w = 1, disp_h = 1;
 
@@ -718,7 +140,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
             0, 0, send_w, input_h,
             hwnd, (HMENU)IDC_CHAT_SEND, NULL, NULL);
-        SetWindowSubclass(nd->hSendBtn, btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
+        SetWindowSubclass(nd->hSendBtn, ai_chat_btn_noerase_subclass, BTN_NOERASE_SUBCLASS_ID, 0);
 
         /* Font — buttons/labels use the cached FONT_BODY role (Inter UI
          * font); the chat content font below is independently zoomable
@@ -793,15 +215,15 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             0, 0, 0, 0, hwnd, NULL, NULL, NULL);
         if (nd->hTooltip) {
             SendMessage(nd->hTooltip, TTM_SETMAXTIPWIDTH, 0, 400);
-            add_tooltip(nd->hTooltip, nd->hNewChatBtn,
+            ai_chat_add_tooltip(nd->hTooltip, nd->hNewChatBtn,
                 "New chat\nClear the conversation and start fresh.");
-            add_tooltip(nd->hTooltip, nd->hSaveBtn,
+            ai_chat_add_tooltip(nd->hTooltip, nd->hSaveBtn,
                 "Save chat\nSave the conversation as a text file.");
             if (nd->hUndockBtn)
-                add_tooltip(nd->hTooltip, nd->hUndockBtn,
+                ai_chat_add_tooltip(nd->hTooltip, nd->hUndockBtn,
                     nd->docked ? "Undock\nOpen AI Assist in a separate window."
                                : "Dock\nDock AI Assist inside the main window.");
-            add_tooltip(nd->hTooltip, nd->hSendBtn,
+            ai_chat_add_tooltip(nd->hTooltip, nd->hSendBtn,
                 "Send\nSend your message to the AI.\n"
                 "Shortcut: press Enter in the input box.");
 
@@ -809,7 +231,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
              * the Auto-approve button and the context meter -- so Windows
              * shows and hides the tip per element on its own (spec
              * 2026-10-18 section 4). Rects are set by ai_chat_status_tools_update()
-             * after every relayout; text comes from TTN_GETDISPINFO. */
+             * after every ai_chat_relayout; text comes from TTN_GETDISPINFO. */
             for (int t = 0; t < STATUS_TOOL_COUNT; t++) {
                 TOOLINFO ti;
                 memset(&ti, 0, sizeof(ti));
@@ -827,18 +249,18 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
          * chat_listview to paint the empty/no-key/no-session state
          * (set just below -- active_io isn't known yet at this
          * point, ai_chat_set_session() corrects it right after). */
-        chat_rebuild_display(nd);
-        update_panel_state(nd);
+        ai_chat_rebuild_display(nd);
+        ai_chat_update_panel_state(nd);
 
         ai_chat_update_context_bar(nd);
-        relayout(nd);
+        ai_chat_relayout(nd);
         SetFocus(nd->hInput);
         return 0;
     }
 
     case WM_SIZE: {
         if (!d) break;
-        relayout(d);
+        ai_chat_relayout(d);
         /* Force repaint of all owner-drawn buttons after layout change.
          * Erase background (TRUE) so newly exposed areas during the
          * slide-out animation get filled with the theme colour. */
@@ -911,7 +333,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             int new_base = ai_chat_unscale(new_h, d->dpi);
             if (new_base != d->input_base_h) {
                 d->input_base_h = new_base;
-                relayout(d);
+                ai_chat_relayout(d);
                 InvalidateRect(hwnd, NULL, TRUE);
                 UpdateWindow(hwnd);
             }
@@ -1067,7 +489,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             if (!d) return 0;
             HWND main_hwnd = GetParent(hwnd);
             if (!main_hwnd) return 0;
-            /* Same precedence as update_panel_state(): no transport means
+            /* Same precedence as ai_chat_update_panel_state(): no transport means
              * NO_SESSION is showing (even if the key is also empty), so
              * check active_io first rather than api_key. */
             if (!d->active_io) {
@@ -1112,14 +534,14 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 if (d->active_state) d->active_state->show_thinking = 0;
                 KillTimer(hwnd, TIMER_HEARTBEAT);
                 chat_activity_reset(&d->activity);
-                thinking_history_clear(d);
+                ai_chat_thinking_history_clear(d);
                 /* Clear display -- an empty msg_list is painted as the
-                 * empty/no-key/no-session state (update_panel_state()). */
+                 * empty/no-key/no-session state (ai_chat_update_panel_state()). */
                 chat_msg_list_clear(&d->msg_list);
                 d->stream_ai_item = NULL;
                 if (d->hChatList)
                     chat_listview_invalidate(d->hChatList);
-                update_panel_state(d);
+                ai_chat_update_panel_state(d);
                 /* Clear input field */
                 SetWindowText(d->hInput, "");
                 SetFocus(d->hInput);
@@ -1711,7 +1133,7 @@ next_coalesce:;
          * the thread already committed its result to src->conv. Build a real
          * batch in that (background) session's own set -- there's no live
          * msg_list to post cards into while it isn't displayed, but
-         * chat_rebuild_display() replays every batch in the set the moment
+         * ai_chat_rebuild_display() replays every batch in the set the moment
          * the user switches to it, same as an active-session reply. */
         if (src != d->active_state) {
             if (wParam == 2 && src && rmsg->content) {
@@ -2070,7 +1492,7 @@ next_coalesce:;
                         if (d->hChatList)
                             chat_listview_reset_cmd_expand(d->hChatList);
                     }
-                    relayout(d);
+                    ai_chat_relayout(d);
                     /* A reply finishing is not a user action: only move
                      * the caret to the input if the focus is already
                      * somewhere in this panel. Never take it from the
@@ -2215,11 +1637,11 @@ next_coalesce:;
     case WM_KEYDOWN:
         if (d && (GetKeyState(VK_CONTROL) & 0x8000)) {
             if (wParam == VK_OEM_PLUS || wParam == (WPARAM)'=') {
-                chat_apply_zoom(d, 1);
+                ai_chat_apply_zoom(d, 1);
                 return 0;
             }
             if (wParam == VK_OEM_MINUS || wParam == (WPARAM)'-') {
-                chat_apply_zoom(d, -1);
+                ai_chat_apply_zoom(d, -1);
                 return 0;
             }
         }
@@ -2230,7 +1652,7 @@ next_coalesce:;
             int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
             /* Ctrl+Scroll zooms the font */
             if (GetKeyState(VK_CONTROL) & 0x8000) {
-                chat_apply_zoom(d, zdelta > 0 ? 1 : -1);
+                ai_chat_apply_zoom(d, zdelta > 0 ? 1 : -1);
                 return 0;
             }
             /* Forward wheel to ChatListView if it exists */
@@ -2245,11 +1667,11 @@ next_coalesce:;
             /* The header's model chip and the status line are painted
              * elements (not child windows), so they need repainting on
              * every WM_PAINT regardless of activity; the activity dot +
-             * one-word status inside paint_header() is the only piece
+             * one-word status inside ai_chat_paint_header() is the only piece
              * that's conditional on d->activity.phase. */
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
-            paint_header(d, hdc);
+            ai_chat_paint_header(d, hdc);
             ai_chat_paint_status_line(d, hdc);
             ai_chat_paint_sash(d, hdc);
             EndPaint(hwnd, &ps);
@@ -2345,12 +1767,12 @@ next_coalesce:;
                                  &rc, theme_cr(0xFFFFFF), (UINT)d->dpi);
                 }
             } else if ((int)dis->CtlID == IDC_CHAT_SAVE) {
-                draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_SAVE);
+                ai_chat_draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_SAVE);
             } else if ((int)dis->CtlID == IDC_CHAT_UNDOCK) {
-                draw_header_icon_button(dis, d->theme, d->dpi,
+                ai_chat_draw_header_icon_button(dis, d->theme, d->dpi,
                     d->docked ? NS_ICON_UNDOCK : NS_ICON_DOCK);
             } else if ((int)dis->CtlID == IDC_CHAT_NEWCHAT) {
-                draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_NEW_CHAT);
+                ai_chat_draw_header_icon_button(dis, d->theme, d->dpi, NS_ICON_NEW_CHAT);
             }
             /* Old IDC_CHAT_ALLOW / IDC_CHAT_DENY draw code removed —
              * approval buttons are now inline in chat_listview. The
@@ -2417,7 +1839,7 @@ next_coalesce:;
                 d->active_state->valid = 1;
             }
             ai_conv_reset(&d->conv);   /* no session: nothing may leak */
-            thinking_history_clear(d);
+            ai_chat_thinking_history_clear(d);
             ai_attachment_free(&d->pending_attachment);
             chat_msg_list_clear(&d->msg_list);
             d->stream_ai_item = NULL;
@@ -2578,7 +2000,7 @@ void ai_chat_set_session(HWND hwnd, Terminal *term, SessionIo *io)
     if (!d) return;
     d->active_term = term;
     d->active_io = io;
-    update_panel_state(d);
+    ai_chat_update_panel_state(d);
 }
 
 void ai_chat_set_shell_name(HWND hwnd, const char *shell_name)
@@ -2596,7 +2018,7 @@ void ai_chat_force_state(HWND hwnd, int state_id)
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
     d->forced_state = state_id;
-    update_panel_state(d);
+    ai_chat_update_panel_state(d);
 }
 
 void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
@@ -2624,7 +2046,7 @@ void ai_chat_update_key(HWND hwnd, const char *api_key, const char *provider,
     if (d->hChatList)
         chat_listview_set_model(d->hChatList, d->conv.model);
 
-    update_panel_state(d);
+    ai_chat_update_panel_state(d);
 }
 
 void ai_chat_update_tools(HWND hwnd,
@@ -2775,7 +2197,7 @@ static void do_session_switch(AiChatData *d,
      * old session's running batch "not run" on its card, settles and
      * removes just that one batch (so a later ai_chat_dispatch_start() can't
      * resurrect it), and restores the Send button. Every other pending batch in the old session stays
-     * in its CmdBatchSet untouched -- chat_rebuild_display() re-creates
+     * in its CmdBatchSet untouched -- ai_chat_rebuild_display() re-creates
      * their cards when the user switches back (rule 6). */
     KillTimer(d->hwnd, TIMER_CMD_QUEUE);
     ai_chat_dispatch_cancel(d, NULL, 0);
@@ -2789,7 +2211,7 @@ static void do_session_switch(AiChatData *d,
     }
 
     /* Clear thinking history — it belongs to the old session */
-    thinking_history_clear(d);
+    ai_chat_thinking_history_clear(d);
 
     /* Load new session's conversation */
     if (new_state && new_state != d->active_state) {
@@ -2842,14 +2264,14 @@ static void do_session_switch(AiChatData *d,
         chat_activity_reset(&d->activity);
     }
 
-    relayout(d);
+    ai_chat_relayout(d);
 
-    /* chat_rebuild_display() replays the conversation and re-creates a
+    /* ai_chat_rebuild_display() replays the conversation and re-creates a
      * card for every batch still in new_state->batches (rule 6) --
      * ai_build_confirm_text()'s old single-snapshot summary line is gone
      * along with it. */
-    chat_rebuild_display(d);
-    update_panel_state(d);
+    ai_chat_rebuild_display(d);
+    ai_chat_update_panel_state(d);
 
     /* Pick up the newly displayed session's queue at once rather than
      * after the user's next prompt. Hidden-tab batches are all pending, so
@@ -2998,7 +2420,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     /* Pending command batches: build real CmdBatch entries (real, unique
      * ids) in the demo session's own batch set from the canned queues --
      * approval for the state's own batch, approval2 for "batches"'s
-     * second one -- instead of touching d->approval_q. chat_rebuild_display()
+     * second one -- instead of touching d->approval_q. ai_chat_rebuild_display()
      * below replays every batch still in the set exactly the way a live
      * session switch does (append_batch_command_items()), so this reuses
      * the same code path a real reply's cards come from. */
@@ -3023,7 +2445,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     /* Rebuilds msg_list from d->conv (now including the thinking block
      * just attached, plus any tool_call/tool_result items) and appends a
      * card for every batch just built above. */
-    chat_rebuild_display(d);
+    ai_chat_rebuild_display(d);
 
     /* "cmddetail": the "approval" state with the details popup already open
      * on its longest command (the demo's long, truncated row), so the
@@ -3044,7 +2466,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
     }
 
     /* The demo session has no channel (window.c's create_demo_session
-     * passes NULL), so update_panel_state() would otherwise read every
+     * passes NULL), so ai_chat_update_panel_state() would otherwise read every
      * demo state as AI_STATE_NO_SESSION. "empty", "nokey" and "nosession"
      * are the only states that actually leave msg_list empty (every other
      * state's replayed turns make the forced state moot -- chat_listview
@@ -3064,7 +2486,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * 2026-10-18 section 6) -- and "thinking" shows it collapsed, so the
      * review set still covers both forms per the design spec's "Thought
      * process" section. Setting the item's own flag (rather than
-     * d->show_thinking) is the smallest change -- chat_rebuild_display()
+     * d->show_thinking) is the smallest change -- ai_chat_rebuild_display()
      * always creates it collapsed. */
     if (state && (strcmp(state, "all") == 0 || strcmp(state, "chat") == 0)) {
         ChatMsgItem *ti = d->msg_list.head;
@@ -3098,13 +2520,13 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
                         "Stream cancelled by user.");
     }
 
-    relayout(d);
+    ai_chat_relayout(d);
     if (d->hChatList) {
         /* The integration harness asks the list where words were painted
          * (CLV_MSG_QUERY_WORD) -- under --ui-demo only. */
         chat_listview_enable_query(d->hChatList);
         chat_listview_invalidate(d->hChatList);
-        /* chat_rebuild_display() above always leaves the list scrolled to
+        /* ai_chat_rebuild_display() above always leaves the list scrolled to
          * the bottom; ui_demo_scrolls_to_top() (src/core/ui_demo.c) names
          * the states whose canned reply is long enough that this would
          * push the Thinking disclosure off the top of the thread, and

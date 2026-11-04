@@ -167,7 +167,7 @@ LRESULT CALLBACK ai_chat_input_subclass_proc(HWND hwnd, UINT msg,
     }
     if (msg == WM_MOUSEWHEEL) {
         int zdelta = GET_WHEEL_DELTA_WPARAM(wParam);
-        /* Ctrl+Wheel: forward to parent so chat_apply_zoom runs */
+        /* Ctrl+Wheel: forward to parent so ai_chat_apply_zoom runs */
         if (GetKeyState(VK_CONTROL) & 0x8000) {
             HWND parent = GetParent(hwnd);
             if (parent) SendMessage(parent, msg, wParam, lParam);

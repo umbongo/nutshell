@@ -290,7 +290,7 @@ int ai_chat_status_rect(AiChatData *d, int id, RECT *out_rc)
 }
 
 /* Move each status-line tooltip tool onto its element. Called after every
- * relayout and every status-line invalidation (resize, DPI change, tier
+ * ai_chat_relayout and every status-line invalidation (resize, DPI change, tier
  * change, policy or context change). A clipped cell gets an empty rect, so
  * it shows no tip. */
 void ai_chat_status_tools_update(AiChatData *d)

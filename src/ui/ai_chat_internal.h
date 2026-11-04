@@ -387,7 +387,7 @@ typedef struct {
     int tool_support_notified;  /* 1 after showing "tools unavailable" message */
 
     /* Empty/no-key/no-session state (ai_panel_states.h), pushed to
-     * hChatList whenever it might change -- see update_panel_state()
+     * hChatList whenever it might change -- see ai_chat_update_panel_state()
      * below (AI Assist Panel task 4). -1 = no forced override: the state
      * is decided from active_io/api_key. --ui-demo's "empty" state
      * forces AI_STATE_EMPTY via ai_chat_force_state() even though the
@@ -455,6 +455,12 @@ typedef struct {
     int has_meter;   /* context_limit > 0 -- meter numbers are meaningful */
 } AiStatusPaint;
 
+#define BTN_NOERASE_SUBCLASS_ID 43
+
+/* Default message-box height at 96 DPI (about two lines) before the user
+ * drags the sash. */
+#define AI_INPUT_BASE_H 46
+
 /* Prototypes */
 
 /* ai_chat_stream.c */
@@ -505,6 +511,21 @@ void ai_chat_paint_status_line(AiChatData *d, HDC hdc);
 void ai_chat_start_indicator(AiChatData *d, const char *base);
 void ai_chat_compute_layout(AiChatData *d, AiPanelLayout *out);
 RECT ai_chat_to_RECT(NsRect r);
+LRESULT CALLBACK ai_chat_btn_noerase_subclass(
+    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+int ai_chat_unscale(int px, int dpi);
+int ai_chat_input_h(const AiChatData *d);
+void ai_chat_update_panel_state(AiChatData *d);
+void ai_chat_thinking_history_clear(AiChatData *d);
+void ai_chat_rebuild_display(AiChatData *d);
+void ai_chat_add_tooltip(HWND hTooltip, HWND hCtrl, const char *text);
+void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,
+                                     const ThemeColors *theme, int dpi,
+                                     NsIconId icon);
+void ai_chat_relayout(AiChatData *d);
+void ai_chat_paint_header(AiChatData *d, HDC hdc);
+void ai_chat_apply_zoom(AiChatData *d, int delta);
 
 #endif /* _WIN32 */
 
