@@ -5,18 +5,19 @@ description: Run the Nutshell checkpoint or retrospective ritual — compact the
 
 # Checkpoint and retrospective
 
-Last updated: 2026-11-03 (local branches, test count without `make test`). Changes are recorded in `.claude/CHANGELOG.md`.
+Last updated: 2026-11-04 (retrospective on request after each merge; no cadence, no Routine). Changes are recorded in `.claude/CHANGELOG.md`.
 
 ## When it runs
 
-- **Every 10 merges into `main`** (maintainer's standing rule). The
-  counter and the last-retrospective marker live in
-  `.claude/memory/MEMORY.md` under "Retrospective cadence". Count with
-  `git log --merges --first-parent origin/main <marker>..` on an
-  unshallowed clone, or `list_pull_requests` filtered on `merged_at`.
+- **After a branch is merged and deleted, or its pull request closed
+  unmerged** (maintainer's standing rule of 2026-11-04, replacing the
+  every-10-merges cadence of 2026-09-21): the session that confirmed the
+  merge asks the maintainer whether to run a retrospective now, and runs
+  this skill only on a yes. There is no merge counter and no scheduled
+  Routine. The "Last retrospective" marker in `.claude/memory/MEMORY.md`
+  is the scope of the next one:
+  `git log --merges --first-parent origin/main <marker>..`.
 - On request: "create a checkpoint", "do a retrospective".
-- A daily Routine performs the count and starts a fresh session with this
-  skill when the count reaches 10.
 
 The notes document defines a checkpoint as: compact the todo list, compact
 memory, delete temp files and worktrees, leave the tree ready for a new
@@ -63,7 +64,7 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
    and `.github/scripts/`, and the "Branches, pull requests and the merge
    gate" and "Software Development Rules" sections of CLAUDE.md. For each,
    ask: does it still describe what actually happens (compare against the
-   last ten merges), are its pins current (Dependabot may have a PR open),
+   merges since the marker), are its pins current (Dependabot may have a PR open),
    and did any finding in this retrospective change it? Fix what is
    stale; propose, do not apply, anything that changes what the gate
    enforces.
@@ -77,10 +78,9 @@ session. This skill is that, plus the record-keeping added on 2026-09-21.
    naming each memory, skill or workflow file touched and why, and the
    critique dispositions, in the same commit. Move the "Last retrospective"
    marker in `MEMORY.md` to the head of `origin/main` at the time of
-   writing (the last merge the retrospective covers) and reset the count
-   to 0; the retrospective's own pull request is then the first merge of
-   the next cycle.
-8. **Retrospective (when the cadence fires or when asked).** Write it under
+   writing (the last merge the retrospective covers); the next
+   retrospective starts from there.
+8. **Retrospective (when the maintainer says yes, or asks for one).** Write it under
    `docs/retrospectives/`, headed DRAFT, with a scope-and-method section,
    measured numbers in a table, findings ranked by cost of inaction, and
    recommendations clearly separated from changes made.
