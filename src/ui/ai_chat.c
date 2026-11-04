@@ -1724,6 +1724,10 @@ static void send_user_message(AiChatData *d)
     if (!d || !d->active_state || d->active_state->busy || d->dispatch_active)
         return;
 
+    /* The user is talking again: the unattended-round count starts over
+     * (guard-rails spec 2026-11-04 section 1). */
+    ai_rounds_user_message(d->active_state);
+
     char *input = input_text_utf8(d->hInput);
     if (!input) return;
     /* The text as read: the prefix strip below shortens the string, but the
@@ -1907,11 +1911,17 @@ static void execute_command(AiChatData *d, const char *cmd,
 
 /* Send a follow-up user turn after a batch finishes running and launch a
  * fresh stream for it. msg_text is the continue message body (built by
- * the caller via ai_build_continue_text() -- rule 4). */
-static void send_continue_message(AiChatData *d, const char *msg_text)
+ * the caller via ai_build_continue_text() -- rule 4). `unattended` is 1 when
+ * the batch that just finished ran without the user acting on it by hand
+ * (CmdBatch.user_acted == 0): it counts towards the Auto-approve round cap,
+ * while an attended batch resets the count (ai_rounds_continue()). */
+static void send_continue_message(AiChatData *d, const char *msg_text,
+                                  int unattended)
 {
     if (!d || !d->active_state || d->active_state->busy) return;
     if (!msg_text || !msg_text[0]) return;
+
+    ai_rounds_continue(d->active_state, unattended);
 
     /* Extract fresh terminal context after command execution */
     const char *term_text = "";
@@ -2050,11 +2060,14 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
 
     char continue_text[4096] = "";
     int have_continue = 0;
+    int unattended = 1;
 
     CmdBatch *batch = d->active_state
         ? cmd_batch_find(&d->active_state->batches, d->dispatch_batch_id)
         : NULL;
     if (batch) {
+        /* Read before cmd_batch_remove() below frees the batch. */
+        unattended = !batch->user_acted;
         chat_msg_batch_sync_run(&d->msg_list, batch->id, &batch->q, 1);
 
         if (notify) {
@@ -2102,7 +2115,7 @@ static void dispatch_cancel(AiChatData *d, const char *status_msg, int notify)
         InvalidateRect(d->hSendBtn, NULL, TRUE);
     }
 
-    if (have_continue) send_continue_message(d, continue_text);
+    if (have_continue) send_continue_message(d, continue_text, unattended);
 }
 
 /* Diagnostic only, for dispatch_log_stall_if_due() below -- never used by
@@ -2520,6 +2533,8 @@ static void dispatch_tick(AiChatData *d)
         }
 
         int batch_id = batch->id;
+        /* Read before cmd_batch_remove() below frees the batch. */
+        int unattended = !batch->user_acted;
         int newer_exchanges = (d->conv.msg_count > batch->conv_mark) ? 1 : 0;
         char first_cmd[1024] = "";
         if (batch->q.count > 0)
@@ -2563,7 +2578,7 @@ static void dispatch_tick(AiChatData *d)
             InvalidateRect(d->hSendBtn, NULL, TRUE);
         }
 
-        if (have_continue) send_continue_message(d, continue_text);
+        if (have_continue) send_continue_message(d, continue_text, unattended);
     }
 }
 
@@ -3807,7 +3822,17 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
         switch (LOWORD(wParam)) {
         case IDC_CHAT_SEND:
             if (d && d->dispatch_active) {
+                /* Stopping a batch by hand is an attended round. Marked
+                 * before the cancel so its continue message resets the
+                 * unattended-round count; reset directly as well, since a
+                 * cancel that sends no continue message would not. */
+                if (d->active_state) {
+                    CmdBatch *running = cmd_batch_find(
+                        &d->active_state->batches, d->dispatch_batch_id);
+                    if (running) running->user_acted = 1;
+                }
                 dispatch_cancel(d, "[command queue stopped]", 1);
+                ai_rounds_user_message(d->active_state);
                 if (d->hChatList)
                     chat_listview_scroll_to_bottom(d->hChatList);
             } else if (d && ACTIVE_BUSY(d)) {
@@ -4020,6 +4045,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
                     /* Let the dispatcher pick this command up once the
                      * terminal is at a prompt (no-op if already running). */
+                    batch->user_acted = 1;
                     dispatch_start(d, batch->id);
 
                     /* Check if all decided — if so, the card can settle now */
@@ -4080,6 +4106,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
 
                     /* Let the dispatcher send the approved commands one at a
                      * time, only once the terminal is at a prompt. */
+                    batch->user_acted = 1;
                     dispatch_start(d, batch->id);
                 }
                 SetFocus(d->hInput);
@@ -4122,6 +4149,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     if (any_approved) {
                         /* Let the dispatcher send the approved commands one
                          * at a time, only once the terminal is at a prompt. */
+                        batch->user_acted = 1;
                         dispatch_start(d, batch->id);
                     } else {
                         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
@@ -4684,8 +4712,18 @@ next_coalesce:;
                  * only field cmd_batch_add() reads from `defaults` -- it
                  * seeds the new batch's queue. */
                 int evicted_id = 0;
+                /* After AI_AUTO_ROUNDS_MAX unattended rounds this one batch
+                 * is built attended, so its rows arrive PENDING on an
+                 * ordinary card. The session's policy and the Auto-approve
+                 * button are untouched (guard-rails spec section 1). */
+                ApprovalQueue batch_defaults;
+                chat_approval_init(&batch_defaults);
+                batch_defaults.policy = ai_rounds_batch_policy(
+                    d->active_state, d->approval_q.policy);
+                int rounds_paused = ai_rounds_paused(d->active_state,
+                                                     d->approval_q.policy);
                 CmdBatch *batch = cmd_batch_add(&d->active_state->batches,
-                                                &d->approval_q, &evicted_id);
+                                                &batch_defaults, &evicted_id);
 
                 if (batch) {
                     /* Record how many conversation messages exist right
@@ -4699,6 +4737,16 @@ next_coalesce:;
                         chat_msg_batch_settle(&d->msg_list, evicted_id);
                         chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
                             "[earlier command batch skipped]");
+                    }
+
+                    if (rounds_paused) {
+                        char pause_text[160];
+                        snprintf(pause_text, sizeof(pause_text),
+                            "[Auto-approve paused after %d automatic rounds "
+                            "\xE2\x80\x94 Run the card to go on]",
+                            AI_AUTO_ROUNDS_MAX);
+                        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS,
+                                        pause_text);
                     }
 
                     /* Classify and queue every extracted command in order
