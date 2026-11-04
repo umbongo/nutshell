@@ -78,6 +78,13 @@ typedef struct {
     TermState state;
     int csi_params[TERM_MAX_CSI_PARAMS];
     int csi_param_count;
+    /* Bit i set: csi_params[i] was introduced by ':' (a sub-parameter of
+     * csi_params[i-1]) rather than ';'. */
+    uint16_t csi_sub_mask;
+    /* A ';' or ':' arrived with all TERM_MAX_CSI_PARAMS slots in use: the
+     * rest of the sequence's digits are dropped instead of merging into
+     * the last slot. */
+    bool csi_overflow;
     bool csi_private;     /* true when CSI sequence has '?' prefix */
     char osc_buffer[256];
     int osc_len;

@@ -930,6 +930,9 @@ int test_settings_markdown_render_default(void);
 int test_settings_markdown_render_roundtrip_off(void);
 int test_settings_markdown_render_roundtrip_on(void);
 int test_settings_markdown_render_missing_field(void);
+int test_config_save_creates_an_owner_only_file(void);
+int test_config_save_ignores_stale_wide_tmp(void);
+int test_config_save_twice_then_reload(void);
 
 /* test_crypto.c */
 int test_crypto_roundtrip_basic(void);
@@ -1186,6 +1189,8 @@ int test_dispatch_ambiguous_prompt_timed_out_well_past_bound(void);
 int test_term_buffer(void);
 int test_term_parser(void);
 int test_term_cursor_moves(void);
+int test_term_csi_empty_first_param_counts(void);
+int test_term_non_sgr_csi_with_colon_is_ignored(void);
 int test_term_extended_moves(void);
 int test_term_sgr_flags(void);
 int test_term_resize_basic(void);
@@ -2124,6 +2129,28 @@ int test_color_rgb_black(void);
 int test_color_rgb_white(void);
 int test_color_sgr_default_fg(void);
 int test_color_sgr_default_bg(void);
+int test_color_truncated_rgb_sets_nothing(void);
+int test_color_truncated_256_sets_nothing(void);
+int test_color_unknown_selector_consumes_rest(void);
+int test_color_truncated_keeps_earlier_attribute(void);
+int test_color_valid_colour_does_not_overeat(void);
+int test_color_cap_truncated_rgb_at_end(void);
+int test_color_cap_overflow_digits_do_not_merge(void);
+int test_color_cap_first_sixteen_still_apply(void);
+int test_color_colon_rgb_with_colourspace(void);
+int test_color_colon_rgb_without_colourspace(void);
+int test_color_colon_256(void);
+int test_color_colon_underline_style_is_underline_only(void);
+int test_color_colon_underline_colour_is_noop(void);
+int test_color_colon_short_run_is_noop_and_ends_at_semicolon(void);
+int test_color_underline_style_zero_clears(void);
+int test_color_empty_first_param_before_semicolon_is_reset(void);
+int test_color_colon_rgb_split_across_calls(void);
+int test_color_colon_rgb_byte_at_a_time(void);
+int test_color_colon_256_out_of_range_is_ignored(void);
+int test_color_mixed_semicolon_colon_256(void);
+int test_color_colon_rgb_trailing_extra_params(void);
+int test_color_bold_colon_rgb_underline_one_feed(void);
 
 /* test_cursor_scroll.c */
 int test_cursor_visible_at_bottom(void);
@@ -4457,6 +4484,9 @@ int main(void) {
     failed += test_settings_markdown_render_roundtrip_off();
     failed += test_settings_markdown_render_roundtrip_on();
     failed += test_settings_markdown_render_missing_field();
+    failed += test_config_save_creates_an_owner_only_file();
+    failed += test_config_save_ignores_stale_wide_tmp();
+    failed += test_config_save_twice_then_reload();
 
     printf("\n--- Crypto ---\n");
     failed += test_crypto_roundtrip_basic();
@@ -4705,6 +4735,8 @@ int main(void) {
     failed += test_term_buffer();
     failed += test_term_parser();
     failed += test_term_cursor_moves();
+    failed += test_term_csi_empty_first_param_counts();
+    failed += test_term_non_sgr_csi_with_colon_is_ignored();
     failed += test_term_extended_moves();
     failed += test_term_sgr_flags();
     failed += test_term_resize_basic();
@@ -5424,6 +5456,28 @@ int main(void) {
     failed += test_color_rgb_white();
     failed += test_color_sgr_default_fg();
     failed += test_color_sgr_default_bg();
+    failed += test_color_truncated_rgb_sets_nothing();
+    failed += test_color_truncated_256_sets_nothing();
+    failed += test_color_unknown_selector_consumes_rest();
+    failed += test_color_truncated_keeps_earlier_attribute();
+    failed += test_color_valid_colour_does_not_overeat();
+    failed += test_color_cap_truncated_rgb_at_end();
+    failed += test_color_cap_overflow_digits_do_not_merge();
+    failed += test_color_cap_first_sixteen_still_apply();
+    failed += test_color_colon_rgb_with_colourspace();
+    failed += test_color_colon_rgb_without_colourspace();
+    failed += test_color_colon_256();
+    failed += test_color_colon_underline_style_is_underline_only();
+    failed += test_color_colon_underline_colour_is_noop();
+    failed += test_color_colon_short_run_is_noop_and_ends_at_semicolon();
+    failed += test_color_underline_style_zero_clears();
+    failed += test_color_empty_first_param_before_semicolon_is_reset();
+    failed += test_color_colon_rgb_split_across_calls();
+    failed += test_color_colon_rgb_byte_at_a_time();
+    failed += test_color_colon_256_out_of_range_is_ignored();
+    failed += test_color_mixed_semicolon_colon_256();
+    failed += test_color_colon_rgb_trailing_extra_params();
+    failed += test_color_bold_colon_rgb_underline_one_feed();
 
     printf("\n--- Connect Animation ---\n");
     failed += test_anim_dots_zero_elapsed();

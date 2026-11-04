@@ -13,9 +13,37 @@
 #include <time.h>
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include <windows.h>
+#include <io.h>
+#else
+#include <unistd.h>
 #endif
+
+/* Opens path for writing, first removing any stale file there so an old
+ * file's wider mode is not inherited. On POSIX the new file is created
+ * 0600 whatever the umask. On Windows _open with
+ * _S_IREAD | _S_IWRITE is equivalent to fopen (an ordinary writable file
+ * inheriting the folder's ACL); the secrets inside are protected by DPAPI.
+ * Returns NULL on failure, like fopen(). */
+static FILE *open_private_for_write(const char *path)
+{
+    (void)remove(path);
+#ifdef _WIN32
+    int fd = _open(path, _O_WRONLY | _O_CREAT | _O_TRUNC, _S_IREAD | _S_IWRITE);
+    if (fd < 0) return NULL;
+    FILE *f = _fdopen(fd, "w");
+    if (!f) _close(fd);
+#else
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (fd < 0) return NULL;
+    FILE *f = fdopen(fd, "w");
+    if (!f) close(fd);
+#endif
+    return f;
+}
 
 /* ---- File I/O helper ------------------------------------------------------ */
 
@@ -932,7 +960,7 @@ int config_save(const Config *cfg, const char *path)
     memcpy(tmp_path, path, plen);
     memcpy(tmp_path + plen, ".tmp", 5u);
 
-    FILE *f = fopen(tmp_path, "w");
+    FILE *f = open_private_for_write(tmp_path);
     if (!f) {
         free(tmp_path);
         if (pw_blobs) {
