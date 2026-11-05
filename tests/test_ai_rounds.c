@@ -106,3 +106,102 @@ int test_ai_rounds_null_safe(void) {
     ASSERT_EQ(ai_rounds_paused(NULL, p), 0);
     TEST_END();
 }
+
+int test_tool_rounds_three_then_attended(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    for (int i = 0; i < AI_AUTO_TOOL_ROUNDS_MAX; i++) {
+        ASSERT_EQ(ai_tool_rounds_attended(&s, 1, i), 0);
+        ai_tool_rounds_ran_unattended(&s, 1, i);
+        ASSERT_EQ(s.auto_tool_rounds, i + 1);
+    }
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 1, 3), 1);
+    ASSERT_EQ(s.auto_tool_rounds, AI_AUTO_TOOL_ROUNDS_MAX);
+    TEST_END();
+}
+
+int test_tool_rounds_counts_once_per_round(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 1, 0), 0);
+    ai_tool_rounds_ran_unattended(&s, 1, 0);
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 1, 0), 0);
+    ai_tool_rounds_ran_unattended(&s, 1, 0);
+    ASSERT_EQ(s.auto_tool_rounds, 1);
+    TEST_END();
+}
+
+int test_tool_rounds_key_includes_stream(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 7, 0), 0);
+    ai_tool_rounds_ran_unattended(&s, 7, 0);
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 8, 0), 0);   /* same iter, new stream */
+    ai_tool_rounds_ran_unattended(&s, 8, 0);
+    ASSERT_EQ(s.auto_tool_rounds, 2);
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 8, 1), 0);
+    ai_tool_rounds_ran_unattended(&s, 8, 1);
+    ai_tool_rounds_ran_unattended(&s, 8, 1);
+    ASSERT_EQ(s.auto_tool_rounds, 3);
+    /* a call that never asked first is not counted */
+    ai_tool_rounds_ran_unattended(&s, 9, 0);
+    ASSERT_EQ(s.auto_tool_rounds, 3);
+    TEST_END();
+}
+
+int test_tool_rounds_reset_mid_round_still_asks(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    s.auto_tool_rounds = AI_AUTO_TOOL_ROUNDS_MAX;
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 1, 3), 1);
+    ai_tool_rounds_reset(&s);                          /* Run click on the first call */
+    ASSERT_EQ(s.auto_tool_rounds, 0);
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 1, 3), 1);   /* 2nd call: pre-round count */
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 1, 4), 0);   /* next round starts fresh */
+    TEST_END();
+}
+
+int test_tool_rounds_command_counter_separate(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    ai_rounds_continue(&s, 1);
+    ai_rounds_continue(&s, 1);
+    ai_rounds_continue(&s, 1);
+    ASSERT_EQ(s.auto_rounds, AI_AUTO_ROUNDS_MAX);
+    ASSERT_EQ(s.auto_tool_rounds, 0);
+    ASSERT_EQ(ai_tool_rounds_attended(&s, 1, 0), 0);
+    ai_tool_rounds_ran_unattended(&s, 1, 0);
+    ASSERT_EQ(s.auto_tool_rounds, 1);
+    ASSERT_EQ(s.auto_rounds, AI_AUTO_ROUNDS_MAX);
+    ai_tool_rounds_reset(&s);
+    ASSERT_EQ(s.auto_rounds, AI_AUTO_ROUNDS_MAX);      /* reset leaves commands alone */
+    TEST_END();
+}
+
+int test_tool_rounds_pause_row_once(void) {
+    TEST_BEGIN();
+    AiSessionState s;
+    memset(&s, 0, sizeof(s));
+    ASSERT_EQ(ai_tool_rounds_take_pause_row(&s), 1);
+    ASSERT_EQ(ai_tool_rounds_take_pause_row(&s), 0);
+    ai_tool_rounds_reset(&s);
+    ASSERT_EQ(ai_tool_rounds_take_pause_row(&s), 1);
+    ASSERT_EQ(ai_tool_rounds_take_pause_row(&s), 0);
+    ASSERT_STR_EQ(AI_TOOL_PAUSE_ROW,
+                  "[Auto-approve paused after 3 automatic tool rounds]");
+    TEST_END();
+}
+
+int test_tool_rounds_null_safe(void) {
+    TEST_BEGIN();
+    ASSERT_EQ(ai_tool_rounds_attended(NULL, 1, 0), 0);
+    ai_tool_rounds_ran_unattended(NULL, 1, 0);
+    ai_tool_rounds_reset(NULL);
+    ASSERT_EQ(ai_tool_rounds_take_pause_row(NULL), 0);
+    TEST_END();
+}

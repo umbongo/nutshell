@@ -2628,6 +2628,13 @@ int test_ai_rounds_three_rounds_then_paused(void);
 int test_ai_rounds_auto_off_never_paused(void);
 int test_ai_rounds_session_policy_untouched(void);
 int test_ai_rounds_null_safe(void);
+int test_tool_rounds_three_then_attended(void);
+int test_tool_rounds_counts_once_per_round(void);
+int test_tool_rounds_key_includes_stream(void);
+int test_tool_rounds_reset_mid_round_still_asks(void);
+int test_tool_rounds_command_counter_separate(void);
+int test_tool_rounds_pause_row_once(void);
+int test_tool_rounds_null_safe(void);
 
 /* test_chat_thinking.c */
 int test_thinking_init(void);
@@ -6363,6 +6370,13 @@ int main(void) {
     failed += test_ai_rounds_auto_off_never_paused();
     failed += test_ai_rounds_session_policy_untouched();
     failed += test_ai_rounds_null_safe();
+    failed += test_tool_rounds_three_then_attended();
+    failed += test_tool_rounds_counts_once_per_round();
+    failed += test_tool_rounds_key_includes_stream();
+    failed += test_tool_rounds_reset_mid_round_still_asks();
+    failed += test_tool_rounds_command_counter_separate();
+    failed += test_tool_rounds_pause_row_once();
+    failed += test_tool_rounds_null_safe();
 
     printf("\n--- Thinking Controller ---\n");
     failed += test_thinking_init();

@@ -552,6 +552,18 @@ typedef struct {
     int auto_rounds;             /* consecutive unattended continue rounds
                                    * since the user last spoke or acted
                                    * (ai_rounds_*() below); 0 at creation */
+    /* Unattended tool rounds (trust-boundary spec decision 22), separate from
+     * auto_rounds; see ai_tool_rounds_*() below. Zero at creation. */
+    int auto_tool_rounds;        /* rounds in which a non-SAFE tool ran
+                                  * unattended since the user last spoke or
+                                  * clicked Run on a tool row */
+    unsigned tool_round_stream;  /* round key: stream id of the last round
+                                  * seen (never 0 in the product) ... */
+    int tool_round_iter;         /* ... and its loop_iter */
+    int tool_round_base;         /* auto_tool_rounds before that round began */
+    int tool_round_counted;      /* 1 once that round has added its 1 */
+    int tool_pause_shown;        /* 1 once the pause row was posted since the
+                                  * last reset */
 } AiSessionState;
 
 /* Cap on unattended rounds with Auto-approve on: the batch built after
@@ -576,5 +588,35 @@ CmdPolicy ai_rounds_batch_policy(const AiSessionState *s, CmdPolicy p);
  * under ai_rounds_batch_policy() is paused for the user); else 0.
  * NULL `s` returns 0. */
 int ai_rounds_paused(const AiSessionState *s, CmdPolicy p);
+
+/* ---- Unattended tool rounds (trust-boundary spec decision 22) ---- */
+
+/* Cap on unattended tool rounds: a non-SAFE tool call in the round after
+ * AI_AUTO_TOOL_ROUNDS_MAX counted rounds asks on a card. */
+#define AI_AUTO_TOOL_ROUNDS_MAX 3
+
+/* Text of the one row posted when the cap first forces an ask. */
+#define AI_TOOL_PAUSE_ROW "[Auto-approve paused after 3 automatic tool rounds]"
+
+/* A non-SAFE tool call in round (stream_id, loop_iter) is about to be judged.
+ * The first call with a new key records it with tool_round_base =
+ * auto_tool_rounds and tool_round_counted = 0; every call in the round is then
+ * judged on that pre-round count. Returns 1 (ask on a card) when
+ * tool_round_base >= AI_AUTO_TOOL_ROUNDS_MAX, else 0. NULL-safe (0). */
+int ai_tool_rounds_attended(AiSessionState *s, unsigned stream_id, int loop_iter);
+
+/* A non-SAFE tool call in that round ran on RUN: auto_tool_rounds += 1, once
+ * per key (ignored when the key does not match the stored one or the round
+ * was already counted). NULL-safe. */
+void ai_tool_rounds_ran_unattended(AiSessionState *s, unsigned stream_id, int loop_iter);
+
+/* A typed message, or a Run click on a tool row: auto_tool_rounds = 0 and
+ * tool_pause_shown = 0. The stored key and base are kept, so a call later in
+ * the same round is still judged on the pre-round count. NULL-safe. */
+void ai_tool_rounds_reset(AiSessionState *s);
+
+/* 1 the first time after a reset (post AI_TOOL_PAUSE_ROW), then 0.
+ * NULL-safe (0). */
+int ai_tool_rounds_take_pause_row(AiSessionState *s);
 
 #endif /* NUTSHELL_AI_PROMPT_H */

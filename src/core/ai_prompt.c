@@ -2078,3 +2078,49 @@ int ai_rounds_paused(const AiSessionState *s, CmdPolicy p)
 {
     return s && s->auto_rounds >= AI_AUTO_ROUNDS_MAX && cmd_policy_auto_on(p);
 }
+
+/* ---- Unattended tool rounds (trust-boundary spec decision 22) ---- */
+
+/* The stored key starts at (0, 0) in a zeroed session. Stream ids are never 0
+ * in the product, so (0, 0) is only ever matched by a caller passing stream 0,
+ * for which base 0 / counted 0 is the right state anyway. */
+static int tool_round_key_matches(const AiSessionState *s, unsigned stream_id,
+                                  int loop_iter)
+{
+    return s->tool_round_stream == stream_id && s->tool_round_iter == loop_iter;
+}
+
+int ai_tool_rounds_attended(AiSessionState *s, unsigned stream_id, int loop_iter)
+{
+    if (!s) return 0;
+    if (!tool_round_key_matches(s, stream_id, loop_iter)) {
+        s->tool_round_stream = stream_id;
+        s->tool_round_iter = loop_iter;
+        s->tool_round_base = s->auto_tool_rounds;
+        s->tool_round_counted = 0;
+    }
+    return s->tool_round_base >= AI_AUTO_TOOL_ROUNDS_MAX;
+}
+
+void ai_tool_rounds_ran_unattended(AiSessionState *s, unsigned stream_id,
+                                   int loop_iter)
+{
+    if (!s || !tool_round_key_matches(s, stream_id, loop_iter)) return;
+    if (s->tool_round_counted) return;
+    s->tool_round_counted = 1;
+    s->auto_tool_rounds++;
+}
+
+void ai_tool_rounds_reset(AiSessionState *s)
+{
+    if (!s) return;
+    s->auto_tool_rounds = 0;
+    s->tool_pause_shown = 0;
+}
+
+int ai_tool_rounds_take_pause_row(AiSessionState *s)
+{
+    if (!s || s->tool_pause_shown) return 0;
+    s->tool_pause_shown = 1;
+    return 1;
+}
