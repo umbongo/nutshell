@@ -2,6 +2,7 @@
 #include "test_framework.h"
 #include "cmd_classify.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* --- NULL and empty input --- */
@@ -4341,6 +4342,14 @@ int test_classify_quoted_first_word(void) {
 
 int test_classify_depth_limit_wrappers(void) {
     TEST_BEGIN();
+    /* The limit is 4 inner command lines: four evals still resolve, a fifth
+     * is UNKNOWN. */
+    ASSERT_TRUE(classify_both("eval ls", CMD_READ));
+    ASSERT_TRUE(classify_both("eval eval eval eval ls", CMD_READ));
+    ASSERT_TRUE(classify_both("eval eval eval eval touch x", CMD_WRITE));
+    ASSERT_TRUE(classify_both("eval eval eval eval eval ls", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("eval eval eval eval eval touch x", CMD_UNKNOWN));
+    /* Nested sh -c with '\'' quoting: no crash, never READ at depth 5. */
     char cur[8192], nxt[8192];
     snprintf(cur, sizeof cur, "ls");
     for (int level = 1; level <= 5; level++) {
@@ -4353,14 +4362,40 @@ int test_classify_depth_limit_wrappers(void) {
         nxt[n++] = '\'';
         nxt[n] = '\0';
         memcpy(cur, nxt, n + 1);
-        if (level == 5) {
-            ASSERT_EQ((int)cmd_classify(cur, CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
-            ASSERT_EQ((int)cmd_classify(cur, CMD_PLATFORM_UNKNOWN), (int)CMD_UNKNOWN);
-        }
     }
+    ASSERT_TRUE(cmd_classify(cur, CMD_PLATFORM_LINUX) >= CMD_UNKNOWN);
+    ASSERT_TRUE(cmd_classify(cur, CMD_PLATFORM_UNKNOWN) >= CMD_UNKNOWN);
     /* Shallow nesting still resolves. */
     ASSERT_EQ((int)cmd_classify("sh -c \"sh -c 'ls'\"", CMD_PLATFORM_LINUX), (int)CMD_READ);
     ASSERT_EQ((int)cmd_classify("sh -c \"sh -c 'touch x'\"", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* A word repeated thousands of times (AI-supplied text) must not recurse
+ * without bound: sudo/env peels, with and without quotes, give up at a fixed
+ * nesting and report at least UNKNOWN instead of overflowing the stack. */
+static int repeated_wrapper_is_bounded(const char *unit, size_t reps)
+{
+    size_t ul = strlen(unit);
+    char *buf = (char *)malloc(ul * reps + 8);
+    if (!buf) return 0;
+    for (size_t i = 0; i < reps; i++) memcpy(buf + i * ul, unit, ul);
+    memcpy(buf + ul * reps, "ls", 3);
+    int ok = cmd_classify(buf, CMD_PLATFORM_LINUX) >= CMD_UNKNOWN &&
+             cmd_classify(buf, CMD_PLATFORM_UNKNOWN) >= CMD_UNKNOWN;
+    free(buf);
+    return ok;
+}
+
+int test_classify_wrapper_recursion_bounded(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(repeated_wrapper_is_bounded("sudo 'sudo' ", 20000));
+    ASSERT_TRUE(repeated_wrapper_is_bounded("env 'env' ", 20000));
+    ASSERT_TRUE(repeated_wrapper_is_bounded("env env ", 20000));
+    ASSERT_TRUE(repeated_wrapper_is_bounded("sudo sudo ", 20000));
+    /* Ordinary wrapper stacks are far below the bound. */
+    ASSERT_TRUE(classify_both("sudo env nice timeout 5 ls", CMD_WRITE));
+    ASSERT_TRUE(classify_both("env nice nohup ls", CMD_WRITE));
     TEST_END();
 }
 

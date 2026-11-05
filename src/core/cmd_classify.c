@@ -2624,51 +2624,80 @@ static int word_is_plain(const char *w)
 static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len,
                                                   char *reason_buf, size_t reason_buf_size);
 
+/* Nesting of classify_linux_segment() through the wrappers that hand it the
+ * rest of the line (env, nice, timeout, sudo, ... and a quoted word after
+ * sudo). The text is AI-supplied, so "sudo sudo sudo ..." must not recurse
+ * until the stack runs out: past this many levels the segment is UNKNOWN
+ * (and sudo's WRITE floor still applies). Real stacks are two or three deep. */
+#define SEG_NEST_LIMIT 16
+static _Thread_local int seg_nest = 0;
+
 /* The first word read the way the shell does: 'rm', "rm" and r\m are rm.
  * Under the POSIX reading the quotes and escapes come off before the path is
  * stripped (today a backslash was taken for a path separator: "unrecognised
  * command: m"); the PowerShell reading keeps a backslash as a separator, so a
- * word with a backslash is classified both ways and the worse reading wins. */
+ * word with a backslash is classified both ways and the worse reading wins.
+ * Kept out of line so the common unquoted path does not carry its buffers.
+ * Returns 0 when the word cannot be rewritten (the caller classifies the
+ * segment as it stands). */
+static __attribute__((noinline)) int classify_quoted_first_word(
+    const char *seg, size_t seg_len, const char *ts, size_t tl,
+    char *reason_buf, size_t reason_buf_size, CmdSafetyLevel *out)
+{
+    char word[256];
+    int trunc = 0;
+    const char *wp = ts;
+    const char *rs, *re;
+    if (!next_shell_word(&wp, ts + tl, word, sizeof word, &trunc, &rs, &re) ||
+        trunc || !word_is_plain(word))
+        return 0;
+    size_t head = (size_t)(ts - seg);
+    size_t tail = (size_t)((seg + seg_len) - (ts + tl));
+    size_t wl = strlen(word);
+    char *alt = (char *)malloc(head + wl + tail + 1);
+    if (!alt) return 0;
+    memcpy(alt, seg, head);
+    memcpy(alt + head, word, wl);
+    memcpy(alt + head + wl, ts + tl, tail);
+    alt[head + wl + tail] = '\0';
+    char r_alt[256], r_raw[256];
+    r_alt[0] = r_raw[0] = '\0';
+    CmdSafetyLevel res = classify_linux_segment_raw(alt, head + wl + tail,
+                                                     r_alt, sizeof r_alt);
+    const char *why = r_alt;
+    if (tok_mode == QMODE_POSIX && memchr(ts, '\\', tl)) {
+        CmdSafetyLevel other = classify_linux_segment_raw(seg, seg_len,
+                                                           r_raw, sizeof r_raw);
+        if (other > res) { res = other; why = r_raw; }
+    }
+    if (reason_buf && reason_buf_size > 0 && why[0])
+        snprintf(reason_buf, reason_buf_size, "%s", why);
+    free(alt);
+    *out = res;
+    return 1;
+}
+
 static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
                                               char *reason_buf, size_t reason_buf_size)
 {
+    if (seg_nest >= SEG_NEST_LIMIT) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "wrappers nested too deeply to classify");
+        return CMD_UNKNOWN;
+    }
+    CmdSafetyLevel res;
     const char *p = seg;
     const char *ts;
     size_t tl;
-    if (next_token(&p, &ts, &tl) && word_has_quoting(ts, tl)) {
-        char word[256];
-        int trunc = 0;
-        const char *wp = ts;
-        const char *rs, *re;
-        if (next_shell_word(&wp, ts + tl, word, sizeof word, &trunc, &rs, &re) &&
-            !trunc && word_is_plain(word)) {
-            size_t head = (size_t)(ts - seg);
-            size_t tail = (size_t)((seg + seg_len) - (ts + tl));
-            size_t wl = strlen(word);
-            char *alt = (char *)malloc(head + wl + tail + 1);
-            if (alt) {
-                memcpy(alt, seg, head);
-                memcpy(alt + head, word, wl);
-                memcpy(alt + head + wl, ts + tl, tail);
-                alt[head + wl + tail] = '\0';
-                char r_alt[256], r_raw[256];
-                r_alt[0] = r_raw[0] = '\0';
-                CmdSafetyLevel res = classify_linux_segment_raw(alt, head + wl + tail,
-                                                                 r_alt, sizeof r_alt);
-                const char *why = r_alt;
-                if (tok_mode == QMODE_POSIX && memchr(ts, '\\', tl)) {
-                    CmdSafetyLevel other = classify_linux_segment_raw(seg, seg_len,
-                                                                       r_raw, sizeof r_raw);
-                    if (other > res) { res = other; why = r_raw; }
-                }
-                if (reason_buf && reason_buf_size > 0 && why[0])
-                    snprintf(reason_buf, reason_buf_size, "%s", why);
-                free(alt);
-                return res;
-            }
-        }
+    seg_nest++;
+    if (next_token(&p, &ts, &tl) && word_has_quoting(ts, tl) &&
+        classify_quoted_first_word(seg, seg_len, ts, tl, reason_buf, reason_buf_size, &res)) {
+        seg_nest--;
+        return res;
     }
-    return classify_linux_segment_raw(seg, seg_len, reason_buf, reason_buf_size);
+    res = classify_linux_segment_raw(seg, seg_len, reason_buf, reason_buf_size);
+    seg_nest--;
+    return res;
 }
 
 static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len,
