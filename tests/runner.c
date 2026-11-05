@@ -400,6 +400,7 @@ int test_ssh_idle_wraparound_over(void);
 int test_ssh_idle_huge_timeout_clamps(void);
 int test_ssh_setup_timeout_text_stages(void);
 int test_ssh_setup_timeout_text_rounds_up(void);
+int test_ssh_kbd_rearm_ms(void);
 int test_ssh_setup_timeout_text_ipv6_host(void);
 int test_ssh_setup_timeout_text_small_buf(void);
 
@@ -2497,6 +2498,23 @@ int test_ssh_kbd_sanitize_escapes(void);
 int test_ssh_kbd_sanitize_lines(void);
 int test_ssh_kbd_sanitize_utf8_and_cap(void);
 
+/* test_ssh_kbd.c */
+int test_ssh_kbd_copies_by_length(void);
+int test_ssh_kbd_prompt_boundaries(void);
+int test_ssh_kbd_saved_answers_one_prompt(void);
+int test_ssh_kbd_saved_once_across_rounds(void);
+int test_ssh_kbd_never_auto(void);
+int test_ssh_kbd_offer_save(void);
+int test_ssh_kbd_zero_prompt_round(void);
+int test_ssh_kbd_too_many_prompts(void);
+int test_ssh_kbd_round_cap(void);
+int test_ssh_kbd_cancel(void);
+int test_ssh_kbd_rearm_limits(void);
+int test_ssh_kbd_attempt_restores_override(void);
+int test_ssh_kbd_wipes_answers(void);
+int test_ssh_kbd_adapter_signature(void);
+int test_ssh_kbd_secret_registration(void);
+
 int test_ai_stream_finish_before_close(void);
 int test_ai_stream_close_before_finish(void);
 int test_ai_stream_double_close(void);
@@ -4161,6 +4179,7 @@ int main(void) {
     failed += test_ssh_setup_timeout_text_rounds_up();
     failed += test_ssh_setup_timeout_text_ipv6_host();
     failed += test_ssh_setup_timeout_text_small_buf();
+    failed += test_ssh_kbd_rearm_ms();
 
     /* Config */
     failed += test_config_default_settings();
@@ -7145,6 +7164,21 @@ int main(void) {
     failed += test_ssh_kbd_sanitize_escapes();
     failed += test_ssh_kbd_sanitize_lines();
     failed += test_ssh_kbd_sanitize_utf8_and_cap();
+    failed += test_ssh_kbd_copies_by_length();
+    failed += test_ssh_kbd_prompt_boundaries();
+    failed += test_ssh_kbd_saved_answers_one_prompt();
+    failed += test_ssh_kbd_saved_once_across_rounds();
+    failed += test_ssh_kbd_never_auto();
+    failed += test_ssh_kbd_offer_save();
+    failed += test_ssh_kbd_zero_prompt_round();
+    failed += test_ssh_kbd_too_many_prompts();
+    failed += test_ssh_kbd_round_cap();
+    failed += test_ssh_kbd_cancel();
+    failed += test_ssh_kbd_rearm_limits();
+    failed += test_ssh_kbd_attempt_restores_override();
+    failed += test_ssh_kbd_wipes_answers();
+    failed += test_ssh_kbd_adapter_signature();
+    failed += test_ssh_kbd_secret_registration();
     failed += test_pw_reveal_press_reveals_only_with_text();
     failed += test_pw_reveal_release_masks();
     failed += test_pw_reveal_capture_lost_and_deactivate_mask();

@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "ssh_timeout.h"
+#include <limits.h>
 
 /* ---- Network-failure rail ---- */
 
@@ -200,5 +201,27 @@ int test_ssh_setup_timeout_text_small_buf(void)
                                           buf, 0), 0);
     ASSERT_EQ((int)ssh_setup_timeout_text(SSH_STAGE_AUTH, "h", 22, 1000,
                                           NULL, 64), 0);
+    TEST_END();
+}
+
+/* ---- keyboard-interactive re-arm (spec section 6) ---- */
+
+int test_ssh_kbd_rearm_ms(void)
+{
+    TEST_BEGIN();
+    ASSERT_TRUE(ssh_kbd_rearm_ms(100, 100, 60000) == 61000L);
+    ASSERT_TRUE(ssh_kbd_rearm_ms(100, 130, 60000) == 91000L);
+    /* the clock went backwards: elapsed counts as 0 */
+    ASSERT_TRUE(ssh_kbd_rearm_ms(100, 90, 15000) == 16000L);
+    /* saturates at LONG_MAX, whatever width long has */
+    ASSERT_TRUE(ssh_kbd_rearm_ms(0, LLONG_MAX, 60000) == LONG_MAX);
+    ASSERT_TRUE(ssh_kbd_rearm_ms(0, (long long)(LONG_MAX / 1000), 60000) == LONG_MAX);
+    ASSERT_TRUE(ssh_kbd_rearm_ms(LLONG_MIN, LLONG_MAX, 60000) == LONG_MAX);
+    ASSERT_TRUE(ssh_kbd_rearm_ms(-5, LLONG_MAX, 60000) == LONG_MAX);
+    ASSERT_TRUE(ssh_kbd_rearm_ms(0, 0, LONG_MAX) == LONG_MAX);
+    ASSERT_TRUE(ssh_kbd_rearm_ms(0, 0, LONG_MAX - 1000) == LONG_MAX);
+    ASSERT_TRUE(ssh_kbd_rearm_ms(0, 0, LONG_MAX - 1001) == LONG_MAX - 1);
+    /* a negative limit counts as 0 */
+    ASSERT_TRUE(ssh_kbd_rearm_ms(5, 6, -1) == 2000L);
     TEST_END();
 }

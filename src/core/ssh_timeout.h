@@ -35,6 +35,19 @@ typedef enum {
 size_t ssh_setup_timeout_text(SshSetupStage stage, const char *host, int port,
                               long timeout_ms, char *buf, size_t cap);
 
+/* Keyboard-interactive re-arm (spec section 6). libssh2 measures a call's
+ * elapsed time from its entry with time(), so the limit it enforces after the
+ * user has been typing has to grow by the time spent in the prompt.
+ * SSH_KBD_ANSWER_WAIT_MS is how long the server gets after an answered round
+ * (a Duo-style push approved within a minute of the answer succeeds). */
+#define SSH_KBD_ANSWER_WAIT_MS 60000L
+
+/* (now_s - entry_s) * 1000 + limit_ms + 1000, the extra second absorbing
+ * time()'s granularity. Both times are seconds from time(). Elapsed counts as
+ * 0 when the clock went backwards, a negative limit as 0, and the sum
+ * saturates at LONG_MAX (long is 32 bits on Windows). */
+long ssh_kbd_rearm_ms(long long entry_s, long long now_s, long limit_ms);
+
 #define NETWORK_FAILURE_TIMEOUT_MS ((uint32_t)90000u)
 
 #endif
