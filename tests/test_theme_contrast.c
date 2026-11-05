@@ -76,7 +76,6 @@ static const Exemption k_exempt[] = {
     { "Onyx Synapse", "text_dim", "tint18(text_dim on chat.cmd_bg)", 4.17 },
     { "Onyx Synapse", "text_dim", "sel30(bg_secondary)", 3.50 },
     { "Onyx Synapse", "text_dim", "sel30(bg_primary)", 3.94 },
-    { "Onyx Synapse", "white", "chat.stop_btn", 2.78 },
     { "Onyx Synapse", "border", "chat.cmd_bg", 1.19 },
     /* Onyx Light */
     { "Onyx Light", "chat.user_text", "chat.user_bubble", 4.02 },
@@ -88,9 +87,6 @@ static const Exemption k_exempt[] = {
     { "Onyx Light", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.66 },
     { "Onyx Light", "text_dim", "sel30(bg_secondary)", 3.32 },
     { "Onyx Light", "text_dim", "sel30(bg_primary)", 3.10 },
-    { "Onyx Light", "white", "chat.send_btn", 1.81 },
-    { "Onyx Light", "white", "chat.send_btn (pressed)", 2.84 },
-    { "Onyx Light", "white", "chat.stop_btn", 2.02 },
     { "Onyx Light", "border", "chat.cmd_bg", 1.18 },
     /* Sage & Sand */
     { "Sage & Sand", "chat.user_text", "sel30(chat.user_bubble)", 4.37 },
@@ -100,7 +96,6 @@ static const Exemption k_exempt[] = {
     { "Sage & Sand", "md structure(link role)", "table header fill(text_dim 12% on bg_primary)", 3.78 },
     { "Sage & Sand", "text_dim", "sel30(bg_secondary)", 3.26 },
     { "Sage & Sand", "text_dim", "sel30(bg_primary)", 3.64 },
-    { "Sage & Sand", "white", "chat.send_btn", 2.76 },
     { "Sage & Sand", "border", "chat.cmd_bg", 1.49 },
     /* Moss & Mist */
     { "Moss & Mist", "bg_primary.base", "accent.base", 1.72 },
@@ -117,13 +112,11 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "text_dim", "sel30(bg_secondary)", 4.40 },
     { "Moss & Mist", "text_dim", "sel30(bg_primary)", 4.07 },
     { "Moss & Mist", "accelerator(accent.label at 75%)", "accent.base", 2.99 },
-    { "Moss & Mist", "white", "chat.send_btn", 2.45 },
-    { "Moss & Mist", "white", "chat.stop_btn", 2.57 },
     { "Moss & Mist", "accent.base", "bg_primary.base", 1.72 },
     { "Moss & Mist", "accent.base", "chat.cmd_bg", 1.59 },
     { "Moss & Mist", "border", "chat.cmd_bg", 1.20 },
 };
-#define EXPECTED_EXEMPTIONS 52
+#define EXPECTED_EXEMPTIONS 45
 
 /* ---- Blends --------------------------------------------------------------
  *

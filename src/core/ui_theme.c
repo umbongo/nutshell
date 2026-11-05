@@ -62,7 +62,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
                         * for white: 4.65:1 here, where the old periwinkle
                         * 0x6BAAFF (L* 68.8) managed only 2.38:1 and was the
                         * brightest blue in the window. */
-            0xFF6B6B, /* stop_btn — soft coral red */
+            0xEA6262, /* stop_btn — soft coral red */
         },
     },
     {
@@ -87,8 +87,8 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
             0xEEEEF2, 0xDCDCE0, 0x333333,
             0x007AFF, 0x86868B, 0xAAAAAA,
             0x1D7E35, 0x866A08, 0xCD2D24,
-            0x94C4FF, /* send_btn — light sky blue */
-            0xF4A0A0, /* stop_btn — rose pink */
+            0x6C90BD, /* send_btn — light sky blue */
+            0xBF7D7D, /* stop_btn — rose pink */
         },
     },
     {
@@ -113,7 +113,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
             0x232520, 0x3F4138, 0xD4D1C4,
             0xA3B18A, 0xA09E93, 0x7A7868,
             0x8FBC6A, 0xD4AA4A, 0xD08375,
-            0x8A9EB1, /* send_btn — dusty steel blue */
+            0x7E91A2, /* send_btn — dusty steel blue */
             0xC4756B, /* stop_btn — earthy terracotta */
         },
     },
@@ -140,8 +140,8 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
             0xE8EBE6, 0xD5D8D3, 0x354F52,
             0x84A98C, 0x6B8A8D, 0x9AAFB1,
             0x347858, 0x7C6735, 0xA94F39,
-            0x8CAAB8, /* send_btn — misty blue */
-            0xD4908A, /* stop_btn — dusty rose */
+            0x78929E, /* send_btn — misty blue */
+            0xBC7F7A, /* stop_btn — dusty rose */
         },
     },
 };
