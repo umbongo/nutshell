@@ -977,6 +977,17 @@ int test_crypto_dpapi_truncated_blob_does_not_crash(void);
 int test_crypto_dpapi_null_inputs(void);
 int test_crypto_dpapi_output_too_small(void);
 int test_crypto_dpapi_backend_get_set(void);
+int test_crypto_random_bytes_fills(void);
+
+/* test_ai_data_block.c */
+int test_ai_delim_make_from_bytes(void);
+int test_ai_delim_make_differs_with_bytes(void);
+int test_ai_delim_make_counter_fallback(void);
+int test_ai_data_escape_prefix_line(void);
+int test_ai_data_escape_line_breaks_normalised(void);
+int test_ai_data_escape_exec_markers(void);
+int test_ai_data_escape_backticks_kept(void);
+int test_ai_data_escape_null_and_empty(void);
 
 #ifndef NO_SSH_LIBS
 /* test_ssh.c */
@@ -4630,6 +4641,17 @@ int main(void) {
     failed += test_crypto_dpapi_null_inputs();
     failed += test_crypto_dpapi_output_too_small();
     failed += test_crypto_dpapi_backend_get_set();
+    failed += test_crypto_random_bytes_fills();
+
+    printf("\n--- AI data block ---\n");
+    failed += test_ai_delim_make_from_bytes();
+    failed += test_ai_delim_make_differs_with_bytes();
+    failed += test_ai_delim_make_counter_fallback();
+    failed += test_ai_data_escape_prefix_line();
+    failed += test_ai_data_escape_line_breaks_normalised();
+    failed += test_ai_data_escape_exec_markers();
+    failed += test_ai_data_escape_backticks_kept();
+    failed += test_ai_data_escape_null_and_empty();
 
 #ifndef NO_SSH_LIBS
     printf("\n--- SSH ---\n");
