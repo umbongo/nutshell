@@ -24,6 +24,7 @@ typedef int SOCKET;
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /* libssh2 RECV callback signature:
  *   ssize_t recv_cb(libssh2_socket_t sock, void *buffer, size_t length,
@@ -134,6 +135,12 @@ static long g_setup_timeout_override_ms = 0;
 void ssh_setup_timeout_override(long ms)
 {
     g_setup_timeout_override_ms = ms > 0 ? ms : 0;
+}
+
+long ssh_setup_timeout_ms(void)
+{
+    return g_setup_timeout_override_ms > 0 ? g_setup_timeout_override_ms
+                                           : SSH_SETUP_TIMEOUT_MS;
 }
 
 void ssh_session_set_timeout(SshSession *s, long ms)
@@ -271,8 +278,7 @@ int ssh_connect(SshSession *s, const char *host, int port) {
     /* A server that accepts TCP and then never speaks must not hang the
      * tab: bound the handshake.  The limit stays in force for the stages
      * that follow; window.c clears it before the session goes interactive. */
-    long limit = g_setup_timeout_override_ms > 0 ? g_setup_timeout_override_ms
-                                                 : SSH_SETUP_TIMEOUT_MS;
+    long limit = ssh_setup_timeout_ms();
     ssh_session_set_timeout(s, limit);
 
     if (libssh2_session_handshake(s->session, (libssh2_socket_t)s->socket)) {
@@ -290,12 +296,18 @@ int ssh_connect(SshSession *s, const char *host, int port) {
         return -1;
     }
 
-    /* Configure SSH-level keepalive: 30s interval, want_reply=1 so the
-     * server must respond.  The reply travels through our RECV callback
-     * and bumps bytes_read_total, which keeps the network-failure rail
-     * happy on idle but healthy connections.  libssh2_keepalive_send is
-     * driven once per second by the WM_TIMER poll loop. */
-    libssh2_keepalive_config(s->session, 1, 30);
+    /* SSH-level keepalive stays OFF during setup.  libssh2's wait loop
+     * shortens each poll to the time left before the next keepalive is due,
+     * and a poll that runs out returns LIBSSH2_ERROR_TIMEOUT, so with a
+     * 30 s interval a wait inside a re-armed keyboard-interactive call could
+     * stop at the keepalive deadline and fail the attempt.
+     * ssh_session_set_keepalive() switches it on (30 s, want_reply 1) once
+     * the session is interactive; the reply travels through our RECV
+     * callback and bumps bytes_read_total, which keeps the network-failure
+     * rail happy on idle but healthy connections.  libssh2_keepalive_send is
+     * driven once per second by the WM_TIMER poll loop, which runs only
+     * after that point. */
+    libssh2_keepalive_config(s->session, 1, 0);
 
     s->connected = true;
     return 0;
@@ -309,6 +321,86 @@ int ssh_auth_password(SshSession *s, const char *username, const char *password)
 int ssh_auth_key(SshSession *s, const char *username, const char *key_path, const char *passphrase) {
     if (!s || !s->connected) return -1;
     return libssh2_userauth_publickey_fromfile(s->session, username, NULL, key_path, passphrase);
+}
+
+const char *ssh_auth_list(SshSession *s, const char *user) {
+    if (!s || !s->connected || !user) return NULL;
+    return libssh2_userauth_list(s->session, user, (unsigned int)strlen(user));
+}
+
+int ssh_session_authenticated(const SshSession *s) {
+    if (!s || !s->session) return 0;
+    return libssh2_userauth_authenticated(s->session) ? 1 : 0;
+}
+
+int ssh_session_last_errno(const SshSession *s) {
+    if (!s || !s->session) return 0;
+    return libssh2_session_last_errno(s->session);
+}
+
+void ssh_session_set_keepalive(SshSession *s, int interval_s) {
+    if (!s || !s->session) return;
+    libssh2_keepalive_config(s->session, 1,
+                             interval_s > 0 ? (unsigned int)interval_s : 0u);
+}
+
+/* ---- keyboard-interactive adapter ----------------------------------------
+ * Nothing here decides anything: the hooks below wrap one libssh2 or socket
+ * call each, and kbd_cb passes every argument to ssh_kbd_round() (src/core). */
+
+/* libssh2 response callback.  *abstract is the SshSession * that
+ * ssh_connect() stored with libssh2_session_abstract().  A NULL kbd_ctx
+ * (no attempt running) answers nothing. */
+static LIBSSH2_USERAUTH_KBDINT_RESPONSE_FUNC(kbd_cb)
+{
+    SshSession *ss = (abstract && *abstract) ? (SshSession *)*abstract : NULL;
+    if (!ss || !ss->kbd_ctx) return;
+    ssh_kbd_round((SshKbdCtx *)ss->kbd_ctx, name, name_len, instruction,
+                  instruction_len, num_prompts, prompts, responses);
+}
+
+static void kbd_set_timeout(void *io_user, long ms)
+{
+    ssh_session_set_timeout((SshSession *)io_user, ms);
+}
+
+static void kbd_abort_io(void *io_user)
+{
+    SshSession *ss = (SshSession *)io_user;
+    if (!ss || ss->socket == INVALID_SOCKET) return;
+#ifdef _WIN32
+    shutdown(ss->socket, SD_BOTH);
+#else
+    shutdown(ss->socket, SHUT_RDWR);
+#endif
+}
+
+static long long kbd_now(void *io_user)
+{
+    (void)io_user;
+    return (long long)time(NULL);
+}
+
+typedef struct {
+    SshSession *s;
+    const char *user;
+} KbdCallArgs;
+
+static int kbd_call(void *arg)
+{
+    KbdCallArgs *a = (KbdCallArgs *)arg;
+    return libssh2_userauth_keyboard_interactive_ex(
+        a->s->session, a->user, (unsigned int)strlen(a->user), kbd_cb);
+}
+
+int ssh_auth_kbdint(SshSession *s, const char *user, SshKbdCtx *ctx) {
+    if (!s || !s->connected || !ctx || !user) return -1;
+    ctx->set_timeout = kbd_set_timeout;
+    ctx->abort_io    = kbd_abort_io;
+    ctx->now         = kbd_now;
+    ctx->io_user     = s;
+    KbdCallArgs args = { s, user };
+    return ssh_kbd_attempt(&s->kbd_ctx, ctx, kbd_call, &args);
 }
 
 void ssh_session_set_blocking(SshSession *s, bool blocking) {

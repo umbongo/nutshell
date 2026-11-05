@@ -1022,6 +1022,9 @@ int test_key_auth_null_session(void);
 int test_key_auth_not_connected(void);
 int test_session_passphrase_initially_empty(void);
 int test_session_passphrase_write_and_free(void);
+int test_auth_list_null_and_not_connected(void);
+int test_auth_kbdint_null_and_not_connected(void);
+int test_session_helpers_null_safe(void);
 #endif
 
 /* test_shell_prompt.c */
@@ -4716,6 +4719,9 @@ int main(void) {
     failed += test_key_auth_not_connected();
     failed += test_session_passphrase_initially_empty();
     failed += test_session_passphrase_write_and_free();
+    failed += test_auth_list_null_and_not_connected();
+    failed += test_auth_kbdint_null_and_not_connected();
+    failed += test_session_helpers_null_safe();
 #endif
 
     printf("\n--- Shell Prompt Detection ---\n");

@@ -67,4 +67,59 @@ int test_session_passphrase_write_and_free(void)
     TEST_END();
 }
 
+/* ---- Keyboard-interactive adapter and session helpers ------------------- */
+
+int test_auth_list_null_and_not_connected(void)
+{
+    TEST_BEGIN();
+    ASSERT_NULL(ssh_auth_list(NULL, "user"));
+
+    SshSession *s = ssh_session_new();
+    ASSERT_NOT_NULL(s);
+    /* Never connected: no list, and no libssh2 call is made. */
+    ASSERT_NULL(ssh_auth_list(s, "user"));
+    ssh_session_free(s);
+    TEST_END();
+}
+
+int test_auth_kbdint_null_and_not_connected(void)
+{
+    TEST_BEGIN();
+    SshKbdCtx ctx;
+    memset(&ctx, 0, sizeof(ctx));
+
+    ASSERT_EQ(ssh_auth_kbdint(NULL, "user", &ctx), -1);
+
+    SshSession *s = ssh_session_new();
+    ASSERT_NOT_NULL(s);
+    ASSERT_EQ(ssh_auth_kbdint(s, "user", NULL), -1);
+    ASSERT_EQ(ssh_auth_kbdint(s, "user", &ctx), -1);   /* not connected */
+    ASSERT_NULL(s->kbd_ctx);                           /* never set */
+    ssh_session_free(s);
+    TEST_END();
+}
+
+int test_session_helpers_null_safe(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ssh_session_authenticated(NULL), 0);
+    ASSERT_EQ(ssh_session_last_errno(NULL), 0);
+    ssh_session_set_keepalive(NULL, 30);               /* must not crash */
+
+    /* A fresh session has not authenticated. */
+    SshSession *s = ssh_session_new();
+    ASSERT_NOT_NULL(s);
+    ASSERT_EQ(ssh_session_authenticated(s), 0);
+    ssh_session_set_keepalive(s, 30);
+    ssh_session_set_keepalive(s, 0);
+    ssh_session_free(s);
+
+    ASSERT_EQ(ssh_setup_timeout_ms(), 15000L);
+    ssh_setup_timeout_override(300);
+    ASSERT_EQ(ssh_setup_timeout_ms(), 300L);
+    ssh_setup_timeout_override(0);
+    ASSERT_EQ(ssh_setup_timeout_ms(), 15000L);
+    TEST_END();
+}
+
 #endif /* NO_SSH_LIBS */
