@@ -212,6 +212,10 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
         }
     }
 
+    /* A retry's old stream may be parked on a tool card: answer it and
+     * remove the card before ai_stream_table_add() aborts that stream. */
+    ai_chat_cancel_tool_batches(d, d->active_state);
+
     /* Register it for this session. Any stream the session still had (a
      * retry) is aborted and orphaned here, so its late messages are stale. */
     if (ai_stream_table_add(&d->streams, s, d->active_state) != 0) {
@@ -294,6 +298,10 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
 void ai_chat_abort_session_stream(AiChatData *d, AiSessionState *state)
 {
     if (!d || !state) return;
+    /* Answer and remove the session's tool cards first, so no stream thread
+     * is left waiting on a card that is gone (spec decision 20). Covers
+     * Stop, Retry, tab close, the reaper and the WM_DESTROY loop. */
+    ai_chat_cancel_tool_batches(d, state);
     ai_stream_table_abort_owner(&d->streams, state);
     state->busy = 0;
     free(state->stream_content);
@@ -374,6 +382,11 @@ void ai_chat_cancel_active_stream(AiChatData *d)
         SetWindowText(d->hSendBtn, ">");
         InvalidateRect(d->hSendBtn, NULL, TRUE);
     }
+
+    /* The stream is over: a batch whose Run was clicked while it was busy
+     * stays APPROVED until now (ai_chat_dispatch_start() refuses while
+     * busy; spec decision 21), so start it. No-op while a dispatch runs. */
+    ai_chat_maybe_start_next_batch(d);
 }
 
 /* Grow the context scratch buffers to fit the configured line budget.

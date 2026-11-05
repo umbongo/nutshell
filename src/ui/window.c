@@ -1127,6 +1127,9 @@ static void free_session(Session *s) {
         session_close_io(s);
         if (s->session_log) fclose(s->session_log);
         DLOG_EV(DLOG_GENERAL, DLOG_INFO, s->log_id, "session.free");
+        /* A tool card's call is answered before its batch goes (spec
+         * decision 20). */
+        ai_chat_cancel_tool_batches_for(g_hwndAiChat, &s->ai_state);
         cmd_batch_set_free(&s->ai_state.batches);
         free(s->ai_state.stream_content);
         free(s->ai_state.stream_thinking);

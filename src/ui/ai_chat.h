@@ -41,6 +41,12 @@ void ai_chat_switch_session(HWND hwnd,
  * Clears any internal pointers to the dying session's state. */
 void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state);
 
+/* Answer every tool card of `state` CANCELLED (the stream waiting on it
+ * stops waiting) and remove those batches. window.c calls it before it frees
+ * a session's batch set. A no-op when the panel is gone: its streams went
+ * with it. */
+void ai_chat_cancel_tool_batches_for(HWND hwnd, AiSessionState *state);
+
 /* Update the active session's terminal/transport pointers (without switching
  * conversation). Pass io = NULL when the session has no live transport --
  * window.c does this BEFORE closing a transport, so the panel never holds a

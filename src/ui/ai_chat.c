@@ -518,7 +518,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     ai_conv_reset(&d->active_state->conv);
                     d->active_state->valid = 1;
                     /* Drop every pending batch -- New Chat starts clean,
-                     * same as it clears msg_list below. */
+                     * same as it clears msg_list below. A tool card's call
+                     * is answered first (cancelled). */
+                    ai_chat_cancel_tool_batches(d, d->active_state);
                     cmd_batch_set_free(&d->active_state->batches);
                     cmd_batch_set_init(&d->active_state->batches);
                 }
@@ -2418,9 +2420,12 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
      * TIMER_CMD_QUEUE tick would dereference a batch that's about to be
      * freed below. */
     if (d->active_state == state) {
+        /* Stream first: ai_chat_cancel_active_stream() ends by starting the
+         * next approved batch, which the dispatch cancel below must then
+         * stop before the set is freed. */
+        if (state->busy) ai_chat_cancel_active_stream(d);
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
         ai_chat_dispatch_cancel(d, NULL, 0);
-        if (state->busy) ai_chat_cancel_active_stream(d);
     }
 
     /* Abort and orphan its reply in flight, if any: the thread frees its
@@ -2437,6 +2442,14 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
         d->last_snapshot_len = 0;
         d->session_gen++;   /* a confirmation box still up must not apply */
     }
+}
+
+void ai_chat_cancel_tool_batches_for(HWND hwnd, AiSessionState *state)
+{
+    if (!hwnd || !IsWindow(hwnd) || !state) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    ai_chat_cancel_tool_batches(d, state);
 }
 
 void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
@@ -2480,6 +2493,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * the same code path a real reply's cards come from. */
     int any_executing = 0;
     if (d->active_state) {
+        ai_chat_cancel_tool_batches(d, d->active_state);
         cmd_batch_set_free(&d->active_state->batches);
         cmd_batch_set_init(&d->active_state->batches);
 

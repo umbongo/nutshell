@@ -263,6 +263,48 @@ void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
     free(m);
 }
 
+/* The sweep (spec decision 20: every batch removal answers). Answer every tool
+ * card of `state` CANCELLED, oldest first, then remove it: the slot FIRST, so
+ * the stream thread's wait ends before the card it was waiting on is gone.
+ * The displayed session's rows are labelled from the CAS result (a card the
+ * thread had already expired or taken says so; a stream that is already gone
+ * reads "cancelled") and settled; a background session has no rows. A command
+ * batch is never touched. The batch array shifts down on every remove, so the
+ * index only advances past a batch that stays. */
+void ai_chat_cancel_tool_batches(AiChatData *d, AiSessionState *state)
+{
+    if (!d || !state) return;
+    const int displayed = (state == d->active_state);
+    int swept = 0;
+
+    int i = 0;
+    while (i < state->batches.count) {
+        CmdBatch *b = state->batches.b[i];
+        if (!cmd_batch_is_tool(b)) { i++; continue; }
+
+        const int batch_id = b->id;
+        ToolDecision res = ai_chat_tool_slot_answer(d, b, TOOL_DECISION_CANCELLED);
+        if (res == TOOL_DECISION_NONE) res = TOOL_DECISION_CANCELLED;
+        if (displayed) {
+            tool_rows_set_outcome(d, batch_id, res);
+            (void)chat_msg_batch_settle(&d->msg_list, batch_id);
+        }
+        cmd_batch_remove(&state->batches, batch_id);   /* frees b */
+        swept++;
+    }
+    if (swept == 0) return;
+
+    /* No card is left to wait on. A caller that goes on to stop or restart
+     * the stream sets the phase itself (idle or processing); this keeps the
+     * line from reading "Waiting for your decision" for one that does not. */
+    if (displayed) {
+        tool_wait_over(d);
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    } else if (state->activity_phase == (int)ACTIVITY_WAITING) {
+        state->activity_phase = (int)ACTIVITY_PROCESSING;
+    }
+}
+
 /* line_clear_mode is the caller's (ai_chat_dispatch_tick's) already-decided
  * DispatchLineClearMode -- computed once per tick from the same
  * term_cursor_row_is_windows_prompt() reading ai_chat_dispatch_tick used for its
@@ -327,7 +369,11 @@ static void execute_command(AiChatData *d, const char *cmd,
  * ai_chat_maybe_start_next_batch()). */
 void ai_chat_dispatch_start(AiChatData *d, int batch_id)
 {
-    if (!d || !d->active_state || d->dispatch_active) return;
+    /* Never while the session's stream is busy (spec decision 21): no batch
+     * finishes during a stream, so no continue message is ever produced
+     * while busy. An approved row stays APPROVED, and
+     * ai_chat_maybe_start_next_batch() picks it up when the stream ends. */
+    if (!d || !d->active_state || d->dispatch_active || ACTIVE_BUSY(d)) return;
 
     CmdBatch *batch = cmd_batch_find(&d->active_state->batches, batch_id);
     if (!batch || chat_approval_next_approved(&batch->q) < 0) return;

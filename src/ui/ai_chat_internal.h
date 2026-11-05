@@ -515,6 +515,10 @@ ToolDecision ai_chat_tool_slot_answer(AiChatData *d, const CmdBatch *batch,
                                       ToolDecision answer);
 void ai_chat_tool_card_answer(AiChatData *d, CmdBatch *batch, ToolDecision answer);
 void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m);
+/* The sweep: answer every tool card of `state` CANCELLED (slot first), settle
+ * the displayed rows and remove the batches. Command batches are untouched.
+ * Called before anything that frees or abandons the stream or the set. */
+void ai_chat_cancel_tool_batches(AiChatData *d, AiSessionState *state);
 
 /* ai_chat_send.c */
 void ai_chat_register_tools(AiChatData *d, const char *search_provider,
