@@ -446,9 +446,16 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 int last_msg = s->conv.msg_count - 1;
                 const AiAttachment *att2 = (last_msg >= 0)
                     ? s->conv.messages[last_msg].attachment : NULL;
-                s->body_len = ai_build_request_body_tools(
+                /* A fresh delimiter for this request, the launch's snapshot. */
+                char delim2[AI_DELIM_MAX];
+                ai_delim_make(crypto_random_bytes, NULL, delim2);
+                AiBodyFrame frame2;
+                frame2.snapshot = s->snapshot;
+                frame2.delim = delim2;
+                s->body_len = ai_build_request_body_frame(
                     &s->conv, att2,
                     s->tools_json[0] ? s->tools_json : NULL,
+                    &frame2,
                     s->body, AI_BODY_MAX,
                     1, s->provider);
                 {

@@ -424,6 +424,11 @@ int ai_context_estimate_tokens(const AiConversation *conv)
     return total_chars / 4;
 }
 
+int ai_context_estimate_tokens_ex(const AiConversation *conv, size_t snapshot_len)
+{
+    return ai_context_estimate_tokens(conv) + (int)(snapshot_len / 4);
+}
+
 int ai_format_context_label(int tokens, int limit, char *buf, size_t buf_size)
 {
     if (!buf || buf_size == 0) return 0;

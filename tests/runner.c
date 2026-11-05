@@ -1740,6 +1740,8 @@ int test_ai_model_context_limit_null(void);
 int test_ai_context_estimate_tokens(void);
 int test_ai_context_estimate_tokens_empty(void);
 int test_ai_context_estimate_tokens_null(void);
+int test_ai_context_estimate_with_snapshot(void);
+int test_ai_stream_snapshot_freed(void);
 int test_ai_conv_compact_basic(void);
 int test_ai_conv_compact_too_few(void);
 int test_ai_conv_compact_null(void);
@@ -5405,6 +5407,8 @@ int main(void) {
     failed += test_ai_context_estimate_tokens();
     failed += test_ai_context_estimate_tokens_empty();
     failed += test_ai_context_estimate_tokens_null();
+    failed += test_ai_context_estimate_with_snapshot();
+    failed += test_ai_stream_snapshot_freed();
     failed += test_ai_conv_compact_basic();
     failed += test_ai_conv_compact_too_few();
     failed += test_ai_conv_compact_null();

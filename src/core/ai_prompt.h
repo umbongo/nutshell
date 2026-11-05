@@ -465,6 +465,12 @@ int ai_model_context_limit(const char *model);
 /* Estimate total tokens in a conversation (chars/4 heuristic). */
 int ai_context_estimate_tokens(const AiConversation *conv);
 
+/* The same estimate plus the terminal snapshot the next request carries in
+ * its last user turn: ai_context_estimate_tokens(conv) + snapshot_len / 4.
+ * The snapshot is not in conv (it is added when the body is built), so the
+ * meter has to add it. */
+int ai_context_estimate_tokens_ex(const AiConversation *conv, size_t snapshot_len);
+
 /* Compact a conversation: keep system prompt (msg[0]) and last
  * keep_recent*2 messages (user+assistant pairs). Removes older messages.
  * Returns number of messages removed, or 0 if nothing to compact. */

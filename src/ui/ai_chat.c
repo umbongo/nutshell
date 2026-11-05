@@ -309,7 +309,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                     d->tooltip_buf, sizeof(d->tooltip_buf));
             } else if (t == STATUS_TOOL_METER && sp.has_meter) {
                 int actual = d->actual_input_tokens + d->actual_output_tokens;
-                int est = (actual > 0) ? 0 : ai_context_estimate_tokens(&d->conv);
+                int est = (actual > 0) ? 0 : ai_context_estimate_tokens_ex(&d->conv, d->last_snapshot_len);
                 ai_format_context_tooltip(d->actual_input_tokens,
                                           d->actual_output_tokens, est,
                                           d->context_limit, d->conv.model,

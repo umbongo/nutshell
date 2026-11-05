@@ -103,6 +103,19 @@ int test_ai_context_estimate_tokens_null(void) {
     TEST_END();
 }
 
+int test_ai_context_estimate_with_snapshot(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    ai_conv_add(&conv, AI_ROLE_USER, "12345678901234567890");
+    int base = ai_context_estimate_tokens(&conv);
+    ASSERT_EQ(ai_context_estimate_tokens_ex(&conv, 0), base);
+    ASSERT_EQ(ai_context_estimate_tokens_ex(&conv, 4000), base + 1000);
+    ASSERT_EQ(ai_context_estimate_tokens_ex(&conv, 3), base);
+    ASSERT_EQ(ai_context_estimate_tokens_ex(NULL, 8), 2);
+    TEST_END();
+}
+
 /* --- ai_conv_compact tests --- */
 
 int test_ai_conv_compact_basic(void) {

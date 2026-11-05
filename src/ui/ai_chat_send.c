@@ -91,6 +91,8 @@ static void launch_failed(AiChatData *d, const char *why)
     ai_chat_update_context_bar(d);
 }
 
+static int ctx_buffers_ensure(AiChatData *d);
+
 /* Build an AiStream from the current AiChatData state -- its own copies of
  * the key, provider, request body, tool registry and conversation -- and
  * launch the background thread on it. Sets active_state->busy = 1. */
@@ -111,7 +113,31 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     strncpy(s->provider, d->provider, sizeof(s->provider) - 1);
     strncpy(s->custom_url, d->custom_url, sizeof(s->custom_url) - 1);
     int conv_ok = ai_conv_copy(&s->conv, &d->conv) == 0;
+
+    /* One terminal snapshot per launch (spec 2026-11-05 decision 2), taken
+     * here on the UI thread and handed to the stream, which only reads it.
+     * Every tool-loop rebuild reuses it. A failed allocation sends the
+     * request without the block rather than aborting it. */
+    d->last_snapshot_len = 0;
+    if (d->active_term && ctx_buffers_ensure(d)) {
+        size_t n = term_extract_last_n(d->active_term, d->context_lines,
+                                       d->ctx_term, d->ctx_term_cap);
+        if (n > 0) {
+            s->snapshot = (char *)malloc(n + 1);
+            if (s->snapshot) {
+                memcpy(s->snapshot, d->ctx_term, n);
+                s->snapshot[n] = '\0';
+                d->last_snapshot_len = n;
+            }
+        }
+    }
     {
+        /* A fresh delimiter for every request body. */
+        char delim[AI_DELIM_MAX];
+        ai_delim_make(crypto_random_bytes, NULL, delim);
+        AiBodyFrame frame;
+        frame.snapshot = s->snapshot;
+        frame.delim = delim;
         int last_msg = d->conv.msg_count - 1;
         const AiAttachment *att = (last_msg >= 0)
             ? d->conv.messages[last_msg].attachment : NULL;
@@ -155,15 +181,17 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
                 ai_tools_serialize_openai(&s->tools, s->tools_json,
                                           sizeof(s->tools_json));
 
-            s->body_len = ai_build_request_body_tools(&d->conv, att,
+            s->body_len = ai_build_request_body_frame(&d->conv, att,
                                                       s->tools_json[0] ? s->tools_json : NULL,
+                                                      &frame,
                                                       s->body, AI_BODY_MAX,
                                                       1, s->provider);
         } else {
             s->has_tools = 0;
-            s->body_len = ai_build_request_body_ex(&d->conv, att, s->body,
-                                                   AI_BODY_MAX, 1,
-                                                   s->provider);
+            s->body_len = ai_build_request_body_frame(&d->conv, att, NULL,
+                                                      &frame, s->body,
+                                                      AI_BODY_MAX, 1,
+                                                      s->provider);
         }
     }
 
