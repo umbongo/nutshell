@@ -4,6 +4,29 @@ Every change to `.claude/memory/` or `.claude/skills/` gets a dated entry
 here in the same commit. Newest first. Git history has the diffs; this file
 has the why.
 
+## 2026-11-05 — the quality checks in the process texts
+
+Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.
+Models: claude-sonnet-5-5 (edits).
+
+- **CLAUDE.md** (merge-gate section). One paragraph: `Sanitizers`, `Lint` and
+  `Fuzz` (`quality.yml`) are deterministic, expected green before a merge and
+  not in the ruleset; the weekly `Fuzz (scheduled)` run (`fuzz-weekly.yml`) is
+  not a pull-request check, and a red one gets an issue naming target and fault
+  class, never the crashing input. Why: the PR adding the three checks and the
+  weekly run (spec `docs/superpowers/specs/2026-11-05-ci-tooling-design.md`, §5).
+- **`skills/feature-workflow/SKILL.md`**. Step 7 expects seven checks (`Version
+  bump`, `Native tests`, `analyze`, `CodeQL`, `Sanitizers`, `Lint`, `Fuzz`), all
+  `success`, the first two required, a docs-only pull request still showing all
+  seven; the Dependabot line says "all seven". Why: the old list of four would
+  have read the new checks as missing.
+- **`memory/MEMORY.md`**. The "three checks on an actions-only change" line
+  names the seven and says `Native tests` and the quality jobs skip their work
+  unless the bump touches `checks.yml` or `quality.yml`. "Last updated" moved to
+  2026-11-05. Why: same set, same PR.
+- **`.claude/CHANGELOG.md`** (this entry). README.md ships in the same commit
+  (build targets and dependency versions) but is not a process text.
+
 ## 2026-11-04 — retrospectives on request, no cadence
 
 Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg, on `automaton`.

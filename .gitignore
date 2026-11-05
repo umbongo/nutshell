@@ -31,6 +31,10 @@ settings.ini
 backups/
 # Native-host test artefacts
 build/test_runner.exe
+build/test_runner_san
+build/test/
+build/test-san/
+build/fuzz/
 build/.detect*
 
 # Integration test output

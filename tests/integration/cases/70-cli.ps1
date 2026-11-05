@@ -203,11 +203,14 @@ function Invoke-NutshellCliRedirectCase {
 Invoke-NutshellCliRedirectCase "cli_version_redirect_file" @("-v") {
     param($exitCode, $out, $err)
     Assert-True ($exitCode -eq 0) "exit code was $exitCode, expected 0"
-    # Exactly one CRLF-terminated line, nothing on stderr: what "> out.txt"
-    # should leave behind.
-    Assert-True ($out -match "^Nutshell \d+\.\d+\.\d+\r\n$") "stdout file was not one CRLF version line: [$out]"
+    # Exactly two CRLF-terminated lines (cli_write_all turns every LF into
+    # CRLF): the version, then the build_info_deps() line, e.g.
+    # "OpenSSL 3.6.1, libssh2 1.11.1, zlib 1.3.1". Nothing on stderr: what
+    # "> out.txt" should leave behind.
+    $depsLine = "OpenSSL \d[^,\s]*, libssh2 \d[^,\s]*, zlib \d[^,\s]*"
+    Assert-True ($out -match "^Nutshell \d+\.\d+\.\d+\r\n$depsLine\r\n$") "stdout file was not a CRLF version line then the dependency line: [$out]"
     Assert-True ([string]::IsNullOrEmpty($err)) "stderr file was not empty: [$err]"
-    "stdout file holds '$($out.TrimEnd())' with CRLF, stderr empty"
+    "stdout file holds '$(($out -split "`r`n")[0])' and '$(($out -split "`r`n")[1])' with CRLF, stderr empty"
 }
 
 Invoke-NutshellCliRedirectCase "cli_help_redirect_file" @("-?") {

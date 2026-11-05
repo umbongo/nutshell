@@ -224,6 +224,7 @@ int test_dlog_apply_sets_the_flags_and_status(void);
 int test_dlog_configure_registers_the_api_key_as_a_secret(void);
 int test_dlog_shutdown_wipes_secrets(void);
 int test_dlog_fmt_value_standalone(void);
+int test_dlog_fake_put_file_pads_once(void);
 
 /* test_dlog_redact.c */
 int test_dlog_redact_line_key_values(void);
@@ -278,6 +279,9 @@ int test_dlog_gate_flags_across_lines_and_nested_parens(void);
 int test_dlog_gate_allows_safe_calls(void);
 int test_dlog_gate_ignores_the_content_macro_comments_and_other_code(void);
 int test_dlog_gate_counts_every_violation(void);
+int test_dlog_gate_reports_every_violating_line(void);
+int test_dlog_gate_allow_entry_excuses_exactly_one_violation(void);
+int test_dlog_gate_allow_survives_lines_added_above(void);
 int test_dlog_gate_source_tree_has_no_secret_names_in_log_calls(void);
 int test_dlog_gate_allow_list_has_no_stale_entries(void);
 
@@ -1373,6 +1377,7 @@ int test_vt_insert_mode_disable(void);
 int test_vt_osc_no_terminator(void);
 int test_vt_unknown_private_mode(void);
 int test_vt_osc_special_chars(void);
+int test_vt_osc_code_overflow_ignored(void);
 int test_vt_alt_screen_isolation(void);
 int test_vt_alt_screen_resets_attr(void);
 int test_vt_alt_screen_resets_scrollback_enter(void);
@@ -2995,6 +3000,11 @@ int test_about_layout_total_height_is_button_bottom_plus_margin(void);
 int test_about_layout_zero_line_heights_still_sane(void);
 int test_about_layout_negative_sizes_clamp_to_zero(void);
 int test_about_layout_null_out_is_safe(void);
+
+/* test_build_info.c */
+int test_build_info_deps_whole_format(void);
+int test_build_info_deps_openssl_part_matches_header(void);
+int test_build_info_deps_truncates(void);
 /* test_shortcuts.c */
 int test_shortcuts_every_row_has_section_chord_action(void);
 int test_shortcuts_sections_contiguous_and_in_fixed_order(void);
@@ -3905,6 +3915,7 @@ int main(void) {
     failed += test_dlog_configure_registers_the_api_key_as_a_secret();
     failed += test_dlog_shutdown_wipes_secrets();
     failed += test_dlog_fmt_value_standalone();
+    failed += test_dlog_fake_put_file_pads_once();
 
     failed += test_dlog_redact_line_key_values();
     failed += test_dlog_redact_line_key_is_case_insensitive_and_whole_word();
@@ -3955,6 +3966,9 @@ int main(void) {
     failed += test_dlog_gate_allows_safe_calls();
     failed += test_dlog_gate_ignores_the_content_macro_comments_and_other_code();
     failed += test_dlog_gate_counts_every_violation();
+    failed += test_dlog_gate_reports_every_violating_line();
+    failed += test_dlog_gate_allow_entry_excuses_exactly_one_violation();
+    failed += test_dlog_gate_allow_survives_lines_added_above();
     failed += test_dlog_gate_source_tree_has_no_secret_names_in_log_calls();
     failed += test_dlog_gate_allow_list_has_no_stale_entries();
 
@@ -4974,6 +4988,7 @@ int main(void) {
     failed += test_vt_osc_no_terminator();
     failed += test_vt_unknown_private_mode();
     failed += test_vt_osc_special_chars();
+    failed += test_vt_osc_code_overflow_ignored();
     failed += test_vt_alt_screen_isolation();
     failed += test_vt_alt_screen_resets_attr();
     failed += test_vt_alt_screen_resets_scrollback_enter();
@@ -6635,6 +6650,9 @@ int main(void) {
     failed += test_about_layout_zero_line_heights_still_sane();
     failed += test_about_layout_negative_sizes_clamp_to_zero();
     failed += test_about_layout_null_out_is_safe();
+    failed += test_build_info_deps_whole_format();
+    failed += test_build_info_deps_openssl_part_matches_header();
+    failed += test_build_info_deps_truncates();
     failed += test_shortcuts_every_row_has_section_chord_action();
     failed += test_shortcuts_sections_contiguous_and_in_fixed_order();
     failed += test_shortcuts_no_chord_and_condition_repeat_within_a_section();

@@ -230,7 +230,7 @@ touches before marking its pull request ready.
 | `cli_list_profiles` | (`CLI-1`) `-l` lists the generated profile's name and host |
 | `cli_help` | (`CLI-1`) `-?` prints usage text |
 | `cli_unknown_flag_errors` | (`CLI-1`) an unrecognised flag: non-zero exit code, "Unknown option" text |
-| `cli_version_redirect_file` | (`CLI-1`, v1.2.32) `nutshell.exe -v` with stdout and stderr redirected to files (`Invoke-NutshellCliRedirectCase`): the stdout file holds exactly one CRLF version line, stderr is empty — the redirect route of `cli_output()` (`src/core/cli_sink.c`), which needs no console on the host |
+| `cli_version_redirect_file` | (`CLI-1`, v1.2.32) `nutshell.exe -v` with stdout and stderr redirected to files (`Invoke-NutshellCliRedirectCase`): the stdout file holds exactly two CRLF lines, the version then the dependency-versions line (`OpenSSL <v>, libssh2 <v>, zlib <v>`, `build_info_deps()`), stderr is empty — the redirect route of `cli_output()` (`src/core/cli_sink.c`), which needs no console on the host |
 | `cli_help_redirect_file` | (`CLI-1`, v1.2.32) `-?` redirected: usage text in the stdout file, CRLF throughout, stderr empty |
 | `cli_unknown_flag_redirect_stderr` | (`CLI-1`, v1.2.32) an unrecognised flag redirected: "Unknown option" lands in the stderr file, the stdout file stays empty, non-zero exit code |
 | `cli_no_connect_opens_idle` | (`CLI-1`) `-nc`: main window, no dialog, and no repaint over 5s (nothing animates a connecting-state tab, since nothing tried to connect) |

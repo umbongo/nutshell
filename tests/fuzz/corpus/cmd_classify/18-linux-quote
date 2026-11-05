@@ -1,0 +1,1 @@
+bgrep 'a;b' f | wc -l

@@ -12,7 +12,8 @@ name: Release
 # the tag, src/ui/resource.h and the exe's own version resource all say the
 # same version, then publishes that exe. workflow_dispatch does the same
 # verification and uploads the exe as a workflow artifact instead of
-# publishing a release.
+# publishing a release. Each release also carries nutshell.exe.sha256 beside
+# GitHub's own digest, so `sha256sum -c` works offline.
 
 on:
   push:
@@ -52,17 +53,27 @@ jobs:
             fi
           fi
 
+      - name: Checksum the exe
+        id: sum
+        run: |
+          cd build/win && sha256sum nutshell.exe > nutshell.exe.sha256
+          echo "hash=$(cut -d' ' -f1 nutshell.exe.sha256)" >> "$GITHUB_OUTPUT"
+
       - name: Publish release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" build/win/nutshell.exe --title "${{ github.ref_name }}" --generate-notes
+          HASH: ${{ steps.sum.outputs.hash }}
+        run: |
+          gh release create "${{ github.ref_name }}" build/win/nutshell.exe build/win/nutshell.exe.sha256 --title "${{ github.ref_name }}" --generate-notes --notes "SHA-256: $HASH"
 
       - name: Upload exe (manual run)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: nutshell-exe
-          path: build/win/nutshell.exe
+          path: |
+            build/win/nutshell.exe
+            build/win/nutshell.exe.sha256
           if-no-files-found: error
           retention-days: 14

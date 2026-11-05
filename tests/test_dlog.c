@@ -1933,3 +1933,43 @@ int test_dlog_fmt_value_standalone(void)
     ASSERT_EQ(dlog_fmt_value(b, 0, "x"), (size_t)0);
     TEST_END();
 }
+
+int test_dlog_fake_put_file_pads_once(void)
+{
+    TEST_BEGIN();
+    fk_reset();
+    fk_put_file(FK_LOG_DIR "\\pad.log", "ab", 10, 5);
+    FkFile *f = fk_find(FK_LOG_DIR "\\pad.log");
+    ASSERT_NOT_NULL(f);
+    if (f) {
+        ASSERT_EQ(f->len, (size_t)10);
+        ASSERT_STR_EQ(fk_text(FK_LOG_DIR "\\pad.log"), "abxxxxxxxx");
+        ASSERT_EQ(f->mtime, 5);
+    }
+    /* already long enough: no padding */
+    fk_put_file(FK_LOG_DIR "\\long.log", "abc", 1, 7);
+    f = fk_find(FK_LOG_DIR "\\long.log");
+    ASSERT_NOT_NULL(f);
+    if (f) {
+        ASSERT_EQ(f->len, (size_t)3);
+        ASSERT_STR_EQ(fk_text(FK_LOG_DIR "\\long.log"), "abc");
+    }
+    /* no text: pad only */
+    fk_put_file(FK_LOG_DIR "\\nul.log", NULL, 3, 7);
+    ASSERT_STR_EQ(fk_text(FK_LOG_DIR "\\nul.log"), "xxx");
+    /* replacing an existing file with a large padded one */
+    fk_put_file(FK_LOG_DIR "\\big.log", "old\n", 1, 1);
+    fk_put_file(FK_LOG_DIR "\\big.log", "old\n", 2u * 1024u * 1024u, 9);
+    f = fk_find(FK_LOG_DIR "\\big.log");
+    ASSERT_NOT_NULL(f);
+    if (f) {
+        ASSERT_EQ(f->len, (size_t)2097152);
+        ASSERT_TRUE(f->data != NULL);
+        if (f->data) {
+            ASSERT_EQ(f->data[f->len], '\0');
+            ASSERT_EQ(f->data[f->len - 1], 'x');
+        }
+    }
+    fk_free();
+    TEST_END();
+}

@@ -17,7 +17,7 @@ static int rect_bottom(AboutRect r) { return r.y + r.h; }
 int test_about_layout_96_exact_positions(void) {
     TEST_BEGIN();
     AboutLayout l;
-    about_layout_compute(&l, 96, ABOUT_ICON_96, T_H, T_B, T_C);
+    about_layout_compute(&l, 96, ABOUT_ICON_96, T_H, T_B, T_C, T_C);
 
     ASSERT_EQ(l.client_w, ABOUT_CLIENT_W_96);
 
@@ -39,8 +39,12 @@ int test_about_layout_96_exact_positions(void) {
     ASSERT_EQ(l.copyright.y, l.tagline.y + T_B + SP_XS);
     ASSERT_EQ(l.copyright.h, T_C);
 
+    /* SP_XS between copyright and the dependency-versions row */
+    ASSERT_EQ(l.deps.y, l.copyright.y + T_C + SP_XS);
+    ASSERT_EQ(l.deps.h, T_C);
+
     /* SP_XL between the text block and the button */
-    ASSERT_EQ(l.button.y, l.copyright.y + T_C + SP_XL);
+    ASSERT_EQ(l.button.y, l.deps.y + T_C + SP_XL);
     ASSERT_EQ(l.button.w, SZ_BTN_MIN_W);
     ASSERT_EQ(l.button.h, SZ_CTRL_H);
 
@@ -54,8 +58,8 @@ int test_about_layout_96_exact_positions(void) {
 int test_about_layout_192_is_exactly_double_96(void) {
     TEST_BEGIN();
     AboutLayout a, b;
-    about_layout_compute(&a, 96, ABOUT_ICON_96, T_H, T_B, T_C);
-    about_layout_compute(&b, 192, ABOUT_ICON_96 * 2, T_H * 2, T_B * 2, T_C * 2);
+    about_layout_compute(&a, 96, ABOUT_ICON_96, T_H, T_B, T_C, T_C);
+    about_layout_compute(&b, 192, ABOUT_ICON_96 * 2, T_H * 2, T_B * 2, T_C * 2, T_C * 2);
 
     ASSERT_EQ(b.client_w, a.client_w * 2);
     ASSERT_EQ(b.client_h, a.client_h * 2);
@@ -71,6 +75,8 @@ int test_about_layout_192_is_exactly_double_96(void) {
     ASSERT_EQ(b.tagline.h, a.tagline.h * 2);
     ASSERT_EQ(b.copyright.y, a.copyright.y * 2);
     ASSERT_EQ(b.copyright.h, a.copyright.h * 2);
+    ASSERT_EQ(b.deps.y, a.deps.y * 2);
+    ASSERT_EQ(b.deps.h, a.deps.h * 2);
 
     ASSERT_EQ(b.button.x, a.button.x * 2);
     ASSERT_EQ(b.button.y, a.button.y * 2);
@@ -82,9 +88,9 @@ int test_about_layout_192_is_exactly_double_96(void) {
 int test_about_layout_dpi_le_zero_treated_as_96(void) {
     TEST_BEGIN();
     AboutLayout base, zero, neg;
-    about_layout_compute(&base, 96, ABOUT_ICON_96, T_H, T_B, T_C);
-    about_layout_compute(&zero, 0, ABOUT_ICON_96, T_H, T_B, T_C);
-    about_layout_compute(&neg, -144, ABOUT_ICON_96, T_H, T_B, T_C);
+    about_layout_compute(&base, 96, ABOUT_ICON_96, T_H, T_B, T_C, T_C);
+    about_layout_compute(&zero, 0, ABOUT_ICON_96, T_H, T_B, T_C, T_C);
+    about_layout_compute(&neg, -144, ABOUT_ICON_96, T_H, T_B, T_C, T_C);
     ASSERT_EQ(memcmp(&zero, &base, sizeof(base)), 0);
     ASSERT_EQ(memcmp(&neg, &base, sizeof(base)), 0);
     TEST_END();
@@ -98,6 +104,7 @@ int test_about_layout_grows_with_dpi(void) {
         AboutLayout l;
         about_layout_compute(&l, dpis[i], ns_scale(ABOUT_ICON_96, dpis[i]),
                              ns_scale(T_H, dpis[i]), ns_scale(T_B, dpis[i]),
+                             ns_scale(T_C, dpis[i]),
                              ns_scale(T_C, dpis[i]));
         ASSERT_TRUE(l.client_h >= prev_h);
         ASSERT_TRUE(l.client_w >= prev_w);
@@ -118,12 +125,14 @@ int test_about_layout_elements_ordered_and_do_not_overlap(void) {
         AboutLayout l;
         about_layout_compute(&l, dpi, ns_scale(ABOUT_ICON_96, dpi),
                              ns_scale(T_H, dpi), ns_scale(T_B, dpi),
+                             ns_scale(T_C, dpi),
                              ns_scale(T_C, dpi));
         ASSERT_TRUE(l.icon.y > 0);
         ASSERT_TRUE(rect_bottom(l.icon) <= l.title.y);
         ASSERT_TRUE(rect_bottom(l.title) <= l.tagline.y);
         ASSERT_TRUE(rect_bottom(l.tagline) <= l.copyright.y);
-        ASSERT_TRUE(rect_bottom(l.copyright) <= l.button.y);
+        ASSERT_TRUE(rect_bottom(l.copyright) <= l.deps.y);
+        ASSERT_TRUE(rect_bottom(l.deps) <= l.button.y);
         ASSERT_TRUE(rect_bottom(l.button) < l.client_h);
         /* Nothing sticks out sideways. */
         ASSERT_TRUE(l.icon.x >= 0 && l.icon.x + l.icon.w <= l.client_w);
@@ -135,13 +144,19 @@ int test_about_layout_elements_ordered_and_do_not_overlap(void) {
 int test_about_layout_text_rows_span_full_width(void) {
     TEST_BEGIN();
     AboutLayout l;
-    about_layout_compute(&l, 144, ns_scale(ABOUT_ICON_96, 144), 27, 21, 18);
+    about_layout_compute(&l, 144, ns_scale(ABOUT_ICON_96, 144), 27, 21, 18, 18);
     ASSERT_EQ(l.title.x, 0);
     ASSERT_EQ(l.title.w, l.client_w);
     ASSERT_EQ(l.tagline.x, 0);
     ASSERT_EQ(l.tagline.w, l.client_w);
     ASSERT_EQ(l.copyright.x, 0);
     ASSERT_EQ(l.copyright.w, l.client_w);
+    ASSERT_EQ(l.deps.x, 0);
+    ASSERT_EQ(l.deps.w, l.client_w);
+
+    about_layout_compute(&l, 120, ns_scale(ABOUT_ICON_96, 120), 22, 17, 15, 15);
+    ASSERT_EQ(l.deps.x, 0);
+    ASSERT_EQ(l.deps.w, l.client_w);
     TEST_END();
 }
 
@@ -155,6 +170,7 @@ int test_about_layout_button_centred_and_on_grid(void) {
         AboutLayout l;
         about_layout_compute(&l, dpi, ns_scale(ABOUT_ICON_96, dpi),
                              ns_scale(T_H, dpi), ns_scale(T_B, dpi),
+                             ns_scale(T_C, dpi),
                              ns_scale(T_C, dpi));
         ASSERT_EQ(l.button.w, ns_scale(SZ_BTN_MIN_W, dpi));
         ASSERT_EQ(l.button.h, ns_scale(SZ_CTRL_H, dpi));
@@ -175,6 +191,7 @@ int test_about_layout_total_height_is_button_bottom_plus_margin(void) {
         AboutLayout l;
         about_layout_compute(&l, dpi, ns_scale(ABOUT_ICON_96, dpi),
                              ns_scale(T_H, dpi), ns_scale(T_B, dpi),
+                             ns_scale(T_C, dpi),
                              ns_scale(T_C, dpi));
         ASSERT_EQ(l.client_h,
                   l.button.y + l.button.h + ns_scale(SP_LG, dpi));
@@ -187,7 +204,7 @@ int test_about_layout_total_height_is_button_bottom_plus_margin(void) {
 int test_about_layout_zero_line_heights_still_sane(void) {
     TEST_BEGIN();
     AboutLayout l;
-    about_layout_compute(&l, 96, 0, 0, 0, 0);
+    about_layout_compute(&l, 96, 0, 0, 0, 0, 0);
 
     ASSERT_TRUE(l.client_w > 0);
     ASSERT_TRUE(l.client_h > 0);
@@ -197,11 +214,13 @@ int test_about_layout_zero_line_heights_still_sane(void) {
     ASSERT_EQ(l.title.h, 0);
     ASSERT_EQ(l.tagline.h, 0);
     ASSERT_EQ(l.copyright.h, 0);
+    ASSERT_EQ(l.deps.h, 0);
     /* Still ordered, still inside the client area. */
     ASSERT_TRUE(rect_bottom(l.icon) <= l.title.y);
     ASSERT_TRUE(rect_bottom(l.title) <= l.tagline.y);
     ASSERT_TRUE(rect_bottom(l.tagline) <= l.copyright.y);
-    ASSERT_TRUE(rect_bottom(l.copyright) <= l.button.y);
+    ASSERT_TRUE(rect_bottom(l.copyright) <= l.deps.y);
+    ASSERT_TRUE(rect_bottom(l.deps) <= l.button.y);
     ASSERT_TRUE(rect_bottom(l.button) < l.client_h);
     /* The button keeps its grid size even with no text. */
     ASSERT_EQ(l.button.w, SZ_BTN_MIN_W);
@@ -212,15 +231,15 @@ int test_about_layout_zero_line_heights_still_sane(void) {
 int test_about_layout_negative_sizes_clamp_to_zero(void) {
     TEST_BEGIN();
     AboutLayout neg, zero;
-    about_layout_compute(&neg, 96, -80, -18, -14, -12);
-    about_layout_compute(&zero, 96, 0, 0, 0, 0);
+    about_layout_compute(&neg, 96, -80, -18, -14, -12, -12);
+    about_layout_compute(&zero, 96, 0, 0, 0, 0, 0);
     ASSERT_EQ(memcmp(&neg, &zero, sizeof(zero)), 0);
     TEST_END();
 }
 
 int test_about_layout_null_out_is_safe(void) {
     TEST_BEGIN();
-    about_layout_compute(NULL, 96, ABOUT_ICON_96, T_H, T_B, T_C);
+    about_layout_compute(NULL, 96, ABOUT_ICON_96, T_H, T_B, T_C, T_C);
     ASSERT_TRUE(1);
     TEST_END();
 }

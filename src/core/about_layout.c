@@ -5,7 +5,8 @@
 static int clamp0(int v) { return v < 0 ? 0 : v; }
 
 void about_layout_compute(AboutLayout *out, int dpi, int icon_px,
-                          int title_h, int tagline_h, int copyright_h)
+                          int title_h, int tagline_h, int copyright_h,
+                          int deps_h)
 {
     if (!out) return;
 
@@ -13,11 +14,13 @@ void about_layout_compute(AboutLayout *out, int dpi, int icon_px,
     title_h     = clamp0(title_h);
     tagline_h   = clamp0(tagline_h);
     copyright_h = clamp0(copyright_h);
+    deps_h      = clamp0(deps_h);
 
     const int margin_top    = ns_scale(SP_XL, dpi); /* above the icon */
     const int gap_icon      = ns_scale(SP_LG, dpi); /* icon -> title */
     const int gap_title     = ns_scale(SP_SM, dpi); /* title -> tagline */
     const int gap_tagline   = ns_scale(SP_XS, dpi); /* tagline -> copyright */
+    const int gap_copyright = ns_scale(SP_XS, dpi); /* copyright -> deps */
     const int gap_button    = ns_scale(SP_XL, dpi); /* text block -> button */
     const int margin_bottom = ns_scale(SP_LG, dpi); /* below the button */
 
@@ -48,7 +51,13 @@ void about_layout_compute(AboutLayout *out, int dpi, int icon_px,
     out->copyright.y = y;
     out->copyright.w = cw;
     out->copyright.h = copyright_h;
-    y += copyright_h + gap_button;
+    y += copyright_h + gap_copyright;
+
+    out->deps.x = 0;
+    out->deps.y = y;
+    out->deps.w = cw;
+    out->deps.h = deps_h;
+    y += deps_h + gap_button;
 
     out->button.w = ns_scale(SZ_BTN_MIN_W, dpi);
     out->button.h = ns_scale(SZ_CTRL_H, dpi);

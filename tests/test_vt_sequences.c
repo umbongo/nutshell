@@ -201,6 +201,25 @@ int test_vt_osc_special_chars(void)
     TEST_END();
 }
 
+/* An OSC code too long for an int must not overflow while it is parsed (UB),
+ * nor wrap into 0 or 2 and set the title: 4294967298 is 2^32 + 2. */
+int test_vt_osc_code_overflow_ignored(void)
+{
+    TEST_BEGIN();
+    Terminal *t = term_init(24, 80, 100);
+    term_process(t, "\033]0;Keep\007", 9);
+    ASSERT_STR_EQ(t->title, "Keep");
+    term_process(t, "\033]4294967298;Evil\007", 18);
+    ASSERT_STR_EQ(t->title, "Keep");
+    term_process(t, "\033]99999999999999999999;Evil\007", 28);
+    ASSERT_STR_EQ(t->title, "Keep");
+    /* the parser is still in step: a normal title is accepted afterwards */
+    term_process(t, "\033]2;After\007", 10);
+    ASSERT_STR_EQ(t->title, "After");
+    term_free(t);
+    TEST_END();
+}
+
 int test_vt_alt_screen_isolation(void)
 {
     TEST_BEGIN();
@@ -281,7 +300,7 @@ int test_vt_alt_screen_resets_scrollback_exit(void)
     TEST_END();
 }
 
-/* ---- Security audit regressions (2026-09-09) ----------------------------- */
+/* ---- Security audit regressions (2026-09-09, docs/audit-tags.md) ---- */
 
 /* Screen-row helper matching the pattern used throughout this file --
  * row 0 is the top of the visible screen. */

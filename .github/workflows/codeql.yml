@@ -42,8 +42,10 @@ jobs:
           # filename (the image has moved these between .list and deb822
           # .sources files), and before updating rather than ignoring apt's
           # exit code, which would also hide a real failure to fetch libssl-dev.
-          # No pipeline here: the job shell is bash -eo pipefail, so a grep
-          # that matches nothing would exit 1 and fail the step.
+          # The "|| true" is deliberate: the default run shell is bash -e {0}
+          # (pipefail only with an explicit "shell: bash"), so a grep that
+          # matches nothing inside $(...) would exit 1 and still fail the
+          # step without it. No pipeline here either.
           stale=$(grep -rlE 'dl[.]google[.]com|packages[.]microsoft[.]com' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true)
           if [ -n "$stale" ]; then sudo rm -vf $stale; fi
           sudo apt-get update

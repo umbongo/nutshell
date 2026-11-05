@@ -7,7 +7,7 @@
  * cross-build and the native Linux test build (tests/test_about_layout.c).
  *
  * The About window is one centred column: acorn icon, title, tagline,
- * copyright, OK button. Every gap comes from the SP_ / SZ_ grid in
+ * copyright, dependency versions, OK button. Every gap comes from the SP_ / SZ_ grid in
  * ns_type.h and is scaled with ns_scale(), so the window sizes itself to
  * its content at any DPI instead of using a fixed pixel height.
  *
@@ -28,6 +28,7 @@ typedef struct {
     AboutRect title;     /* full-width rows; draw the text DT_CENTER */
     AboutRect tagline;
     AboutRect copyright;
+    AboutRect deps;      /* OpenSSL/libssh2/zlib versions, full width */
     AboutRect button;    /* SZ_BTN_MIN_W x SZ_CTRL_H, centred */
     int client_w;
     int client_h;
@@ -41,8 +42,10 @@ typedef struct {
  *   tagline_h,
  *   copyright_h — already-scaled line heights of the three text rows.
  * Negative sizes are clamped to 0; `out` may be NULL (no-op).
+ *   deps_h      — already-scaled line height of the dependency-versions row.
  */
 void about_layout_compute(AboutLayout *out, int dpi, int icon_px,
-                          int title_h, int tagline_h, int copyright_h);
+                          int title_h, int tagline_h, int copyright_h,
+                          int deps_h);
 
 #endif /* NUTSHELL_ABOUT_LAYOUT_H */

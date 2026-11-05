@@ -128,11 +128,14 @@ open as drafts and their body ends with the same `Models:` line and the
    gated too.
 7. **Checking the pull request.** Checks: `gh pr checks N`, or
    `mcp__github__pull_request_read` with `get_check_runs` when `gh` is
-   absent. Expect `Version bump`, `Native tests`, `analyze` and `CodeQL`;
-   all four must be `success`. The first two are required (`Native tests`
-   compiles the committed sources with the real libssh2 and runs the
-   suite; `Version bump` compiles nothing); `analyze` and `CodeQL` are
-   not, so a red one does not block auto-merge. Mergeability:
+   absent. Expect `Version bump`, `Native tests`, `analyze`, `CodeQL`,
+   `Sanitizers`, `Lint` and `Fuzz`; all seven must be `success`. The first
+   two are required (`Native tests` compiles the committed sources with the
+   real libssh2 and runs the suite; `Version bump` compiles nothing); the
+   other five are not, so a red one does not block auto-merge, but none is
+   merged red. A docs-only pull request still shows all seven: the quality
+   jobs report green with their work skipped. The weekly `Fuzz (scheduled)`
+   run (`fuzz-weekly.yml`) is not a pull-request check. Mergeability:
    `pull_request_read` with `get`; `mergeable_state` should be `clean`,
    and the ruleset also requires the branch be up to date with `main`.
    The checks run on `pull_request` only, so there is no base-branch run
@@ -192,7 +195,7 @@ open as drafts and their body ends with the same `Models:` line and the
 - **Dependabot.** Weekly, grouped, one open at a time. For an
   actions-only bump: confirm the diff is only `.github/workflows/*.yml`
   pins with updated `# vX.Y.Z` comments; read the upstream changelog for
-  the new version (the PR body quotes it); confirm all three checks are
+  the new version (the PR body quotes it); confirm all seven checks are
   green on the head commit; merge with a merge commit. Dependabot deletes
   its branch. Only the CodeQL push run fires afterwards; no release, no
   version bump. Semver-major bumps of `actions/checkout` or
