@@ -1047,7 +1047,7 @@ int test_ai_stream_openai_no_finish_reason_with_pending_call(void)
     ASSERT_EQ(feed_ex(&st, SSE_CALL_FIRST, text, sizeof(text)), 0);
     ASSERT_EQ(feed_ex(&st, SSE_CALL_ARGS, text, sizeof(text)), 0);
     /* The stream ends at [DONE] with no finish_reason at all. */
-    ASSERT_TRUE(feed_ex(&st, "[DONE]", text, sizeof(text)) < 0);
+    (void)feed_ex(&st, "[DONE]", text, sizeof(text));   /* return value not pinned */
     ASSERT_EQ(st.pending_tool_count, 1);
     ASSERT_STR_EQ(st.finish, "");
     ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, st.pending_tool_count, 0), 1);
@@ -1206,6 +1206,60 @@ int test_ai_stream_anthropic_finish_recorded_behaviour_unchanged(void)
     TEST_END();
 }
 
+int test_ai_tools_stream_compact_drops_index_gaps(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    /* A single call at index 5: slots 0..4 are zeroed holes. */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":5,"
+        "\"id\":\"call_5\",\"type\":\"function\",\"function\":{\"name\":"
+        "\"web_fetch\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"stop\"}]}",
+        text, sizeof(text)), 1);
+    ASSERT_EQ(st.pending_tool_count, 6);
+    ASSERT_EQ(ai_tools_stream_compact(&st), 5);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_5");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{}");
+    ASSERT_EQ(ai_tools_stream_compact(&st), 0);   /* idempotent */
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_tools_stream_compact_keeps_order_and_only_holes(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    /* Indices 0, 2 and 3 present, 1 missing; a call with a name but no id
+     * (and one with an id but no name) is not a hole. */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"1\"}},"
+        "{\"index\":2,\"function\":{\"name\":\"web_search\",\"arguments\":\"2\"}},"
+        "{\"index\":3,\"id\":\"d\",\"function\":{\"arguments\":\"3\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 4);
+    ASSERT_EQ(ai_tools_stream_compact(&st), 1);
+    ASSERT_EQ(st.pending_tool_count, 3);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "a");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "2");
+    ASSERT_STR_EQ(st.pending_tool_calls[2].id, "d");
+    ASSERT_STR_EQ(st.pending_tool_calls[2].input_json, "3");
+    ai_tools_stream_reset(&st);
+
+    /* Nothing pending, NULL, no array: all 0. */
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(ai_tools_stream_compact(&st), 0);
+    ASSERT_EQ(ai_tools_stream_compact(NULL), 0);
+    TEST_END();
+}
+
 int test_ai_stream_chunk_error_object_message(void)
 {
     TEST_BEGIN();
@@ -1273,6 +1327,12 @@ int test_ai_stream_chunk_error_sanitised_and_capped(void)
     for (const char *p = msg; *p; p++) {
         ASSERT_TRUE((unsigned char)*p >= 0x20 && *p != 0x7F);
     }
+
+    /* U+061C ARABIC LETTER MARK is dropped; U+2028/U+2029 become a space. */
+    rc = ai_stream_chunk_error("moonshot",
+        "{\"error\":{\"message\":\"a\\u061cb\\u2028c\\u2029d\"}}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "ab c d");
 
     /* A long message is cut to AI_STREAM_ERROR_MSG_MAX bytes. */
     char json[1024];

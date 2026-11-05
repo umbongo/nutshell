@@ -2904,6 +2904,8 @@ int test_ai_stream_openai_finish_tool_calls_path_unchanged(void);
 int test_ai_stream_openai_plain_reply_stop_ends_normally(void);
 int test_ai_tool_round_should_run_rules(void);
 int test_ai_stream_anthropic_finish_recorded_behaviour_unchanged(void);
+int test_ai_tools_stream_compact_drops_index_gaps(void);
+int test_ai_tools_stream_compact_keeps_order_and_only_holes(void);
 int test_ai_stream_chunk_error_object_message(void);
 int test_ai_stream_chunk_error_string_form(void);
 int test_ai_stream_chunk_error_not_an_error(void);
@@ -6731,6 +6733,8 @@ int main(void) {
     failed += test_ai_stream_openai_plain_reply_stop_ends_normally();
     failed += test_ai_tool_round_should_run_rules();
     failed += test_ai_stream_anthropic_finish_recorded_behaviour_unchanged();
+    failed += test_ai_tools_stream_compact_drops_index_gaps();
+    failed += test_ai_tools_stream_compact_keeps_order_and_only_holes();
     failed += test_ai_stream_chunk_error_object_message();
     failed += test_ai_stream_chunk_error_string_form();
     failed += test_ai_stream_chunk_error_not_an_error();

@@ -26,6 +26,7 @@ typedef struct {
     char provider[64];
     int tool_stop;          /* set to 1 when tool_use stop detected */
     int cut_off;            /* 1 when the provider ended the reply at its output limit */
+    int saw_end;            /* 1 once the reply's end arrived ([DONE] or a finish_reason) */
     int stream_error;       /* 1 when an in-stream {"error":...} event arrived */
     char error_msg[AI_STREAM_ERROR_MSG_MAX + 1];   /* its sanitised message */
     char finish[32];        /* finish_reason seen by a stream without tool state */
@@ -143,6 +144,7 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     if (ctx->stream_error) return;
 
     const char *json = line + 6;
+    if (strncmp(json, "[DONE]", 6) == 0) ctx->saw_end = 1;
     /* An in-stream error event ({"error":{"message":...}}): the stream ends
      * and the reply says why, instead of finishing silently. */
     if (strstr(json, "\"error\"") &&
@@ -194,6 +196,11 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
         ctx->input_tokens += chunk_input_tokens;
     if (chunk_output_tokens > 0)
         ctx->output_tokens += chunk_output_tokens;
+
+    /* The reply's end has arrived: a read failure after this is harmless. */
+    if (rc == 1 || rc == 2 || ctx->finish[0] ||
+        (ctx->tool_stream && ctx->tool_stream->finish[0]))
+        ctx->saw_end = 1;
 
     /* rc == 1 is [DONE] (no text) or a "stop" finish, whose own text is in
      * content_delta and is posted below with every other delta. */
@@ -247,6 +254,8 @@ static int stream_callback(const char *data, size_t len, void *userdata)
             ctx->line_buf[ctx->line_len] = '\0';
             stream_process_line(ctx, ctx->line_buf, ctx->line_len);
             ctx->line_len = 0;
+            if (ctx->stream_error)
+                return 1;   /* stop at once: nothing after the error counts */
         } else {
             if (ctx->line_len < sizeof(ctx->line_buf) - 1)
                 ctx->line_buf[ctx->line_len++] = c;
@@ -397,7 +406,16 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             goto out;
         }
 
-        if (rc != 0 || status < 200 || status >= 300) {
+        /* A read failure after the reply's end ([DONE] or a finish_reason)
+         * lost nothing: the round arrived whole, so it ends cleanly. */
+        int lost_after_end = rc != 0 && status >= 200 && status < 300 &&
+                             ctx.saw_end;
+        if (lost_after_end)
+            DLOG(DLOG_AI, DLOG_INFO, 0, "stream.read_failed_after_end",
+                 "stream=%u iter=%d status=%d", stream_id, agentic.loop_iter,
+                 status);
+
+        if ((rc != 0 && !lost_after_end) || status < 200 || status >= 300) {
             char msg[1024];
             if (rc != 0 && status >= 200 && status < 300 && errbuf[0])
                 /* The body broke after a 200: the text says so itself. */
@@ -432,13 +450,26 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             final_thinking[copy_n] = '\0';
         }
 
+        /* Slots a provider's indices skipped (no name, no id) are no calls:
+         * drop them so they are not run as "Unknown tool". */
+        int dropped_slots = tool_stream_ptr
+            ? ai_tools_stream_compact(tool_stream_ptr) : 0;
+        if (dropped_slots > 0)
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.tool_slots_dropped",
+                 "stream=%u iter=%d empty_slots=%d", stream_id,
+                 agentic.loop_iter, dropped_slots);
+        int pending_n = tool_stream_ptr ? tool_stream_ptr->pending_tool_count : 0;
+
         /* finish_reason "length": the reply stops mid-sentence (or mid
-         * [EXEC], so no command card): say so instead of leaving it a mystery. */
+         * [EXEC], so no command card): say so instead of leaving it a mystery.
+         * A call cut off with it is not run: say that too. */
         if (ctx.cut_off) {
             DLOG(DLOG_AI, DLOG_WARN, 0, "stream.cut_off",
                  "stream=%u finish_reason=length", stream_id);
             post_tool_msg(s, CHAT_ITEM_STATUS,
-                          "reply cut off at the provider's output limit");
+                          pending_n > 0
+                          ? "reply cut off at the provider's output limit; a tool call in it was not run"
+                          : "reply cut off at the provider's output limit");
         }
 
         /* Accumulate token counts (last non-zero value wins) */
@@ -451,7 +482,6 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
          * finished with, and whether the tool loop runs. tool_stop is the
          * raw "finish says tool_calls/tool_use" flag; run is the decision.
          * Counts and names only: no URL, no arguments, no text. */
-        int pending_n = tool_stream_ptr ? tool_stream_ptr->pending_tool_count : 0;
         const char *finish_seen = tool_stream_ptr ? tool_stream_ptr->finish
                                                   : ctx.finish;
         int run_tools = tool_stream_ptr &&

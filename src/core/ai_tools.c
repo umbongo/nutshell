@@ -797,6 +797,25 @@ int ai_parse_tool_stream_openai(const char *chunk_json, AiToolStreamState *state
     return ret;
 }
 
+int ai_tools_stream_compact(AiToolStreamState *state)
+{
+    if (!state || !state->pending_tool_calls) return 0;
+    int kept = 0;
+    for (int i = 0; i < state->pending_tool_count; i++) {
+        AiToolCall *c = &state->pending_tool_calls[i];
+        if (c->name[0] == '\0' && c->id[0] == '\0') continue;
+        if (kept != i) {
+            memcpy(&state->pending_tool_calls[kept], c, sizeof(*c));
+        }
+        kept++;
+    }
+    int dropped = state->pending_tool_count - kept;
+    for (int i = kept; i < state->pending_tool_count; i++)
+        memset(&state->pending_tool_calls[i], 0, sizeof(AiToolCall));
+    state->pending_tool_count = kept;
+    return dropped;
+}
+
 int ai_tool_round_should_run(const char *provider, int tool_stop,
                              int pending, int cut_off)
 {
@@ -818,6 +837,7 @@ static void stream_error_sanitise(const char *src, char *out, size_t cap,
     while (*p) {
         size_t clen = 1;
         int drop = 0;
+        int space = 0;          /* a multi-byte separator written as one ' ' */
         unsigned char c = *p;
         if (c == '\n' || c == '\r' || c == '\t') {
             c = ' ';
@@ -836,7 +856,13 @@ static void stream_error_sanitise(const char *src, char *out, size_t cap,
             }
             if (!drop && clen == 2 && c == 0xC2 && p[1] >= 0x80 && p[1] <= 0x9F)
                 drop = 1;                                   /* C1 controls */
+            if (!drop && clen == 2 && c == 0xD8 && p[1] == 0x9C)
+                drop = 1;                                   /* U+061C ALM */
             if (!drop && clen == 3 && c == 0xE2) {
+                if (p[1] == 0x80 && (p[2] == 0xA8 || p[2] == 0xA9)) {
+                    c = ' ';                   /* U+2028/2029 line/paragraph */
+                    space = 1;
+                }
                 if (p[1] == 0x80 && (p[2] == 0x8E || p[2] == 0x8F ||
                                      (p[2] >= 0xAA && p[2] <= 0xAE)))
                     drop = 1;                  /* LRM/RLM, LRE..RLO */
@@ -845,8 +871,8 @@ static void stream_error_sanitise(const char *src, char *out, size_t cap,
             }
         }
         if (!drop) {
-            if (o + clen > limit) break;       /* never split a character */
-            if (clen == 1) out[o++] = (char)c;
+            if (o + (space ? 1 : clen) > limit) break;   /* never split */
+            if (space || clen == 1) out[o++] = (char)c;
             else { memcpy(out + o, p, clen); o += clen; }
         }
         p += clen;

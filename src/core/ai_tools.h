@@ -211,6 +211,11 @@ int ai_tool_round_should_run(const char *provider, int tool_stop,
 int ai_stream_chunk_error(const char *provider, const char *json,
                           char *msg_out, size_t msg_size);
 
+/* Drop the empty slots (no name and no id) a provider's index gaps leave in
+ * pending_tool_calls, keeping the others in order; pending_tool_count shrinks
+ * to match. Returns how many were dropped. NULL gives 0. */
+int ai_tools_stream_compact(AiToolStreamState *state);
+
 /* Reset/discard all partial streaming state (on error or cancellation) */
 void ai_tools_stream_reset(AiToolStreamState *state);
 
