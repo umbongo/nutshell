@@ -217,11 +217,11 @@ int test_system_prompt_quoted_marker_sentence(void)
 {
     TEST_BEGIN();
     char buf[4096];
-    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL, SESSION_SSH, NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, SESSION_SSH, NULL);
     ASSERT_TRUE(strstr(buf, QS) != NULL);
-    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL, SESSION_LOCAL, "bash");
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, SESSION_LOCAL, "bash");
     ASSERT_TRUE(strstr(buf, QS) != NULL);
-    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, NULL, SESSION_LOCAL, "PowerShell");
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, SESSION_LOCAL, "PowerShell");
     ASSERT_TRUE(strstr(buf, QS) != NULL);
     TEST_END();
 }

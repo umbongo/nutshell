@@ -470,26 +470,25 @@ int test_ai_debug_tool_system_prompt_carries_the_note_only_when_asked(void)
 {
     TEST_BEGIN();
     char base[8192], with[8192], off[8192];
-    ai_build_system_prompt(base, sizeof(base), "$ ls", NULL, NULL, SESSION_SSH, NULL);
-    ai_build_system_prompt_ex(off, sizeof(off), "$ ls", NULL, NULL, SESSION_SSH, NULL, 0);
-    ai_build_system_prompt_ex(with, sizeof(with), "$ ls", NULL, NULL, SESSION_SSH, NULL, 1);
+    ai_build_system_prompt(base, sizeof(base), NULL, NULL, SESSION_SSH, NULL);
+    ai_build_system_prompt_ex(off, sizeof(off), NULL, NULL, SESSION_SSH, NULL, 0, NULL);
+    ai_build_system_prompt_ex(with, sizeof(with), NULL, NULL, SESSION_SSH, NULL, 1, NULL);
     ASSERT_STR_EQ(base, off);                                /* byte for byte */
     ASSERT_FALSE(has(off, "read_debug_log"));
     ASSERT_TRUE(has(with, ai_debug_tool_prompt_note()));
     ASSERT_TRUE(strlen(with) > strlen(off));
-    /* The terminal block is still last, the note sits before it. */
-    const char *note = strstr(with, "read_debug_log");
-    const char *term = strstr(with, "Current terminal output:");
-    ASSERT_TRUE(note && term && note < term);
+    /* The system prompt holds no terminal block any more. */
+    ASSERT_NOT_NULL(strstr(with, "read_debug_log"));
+    ASSERT_NULL(strstr(with, "Current terminal output"));
 
     char local[8192];
-    ai_build_system_prompt_ex(local, sizeof(local), NULL, NULL, NULL, SESSION_LOCAL, "PowerShell", 1);
+    ai_build_system_prompt_ex(local, sizeof(local), NULL, NULL, SESSION_LOCAL, "PowerShell", 1, NULL);
     ASSERT_TRUE(has(local, ai_debug_tool_prompt_note()));
     ASSERT_TRUE(has(local, "Write PowerShell syntax"));
 
     /* A tiny buffer is cut, never overrun. */
     char tiny[64];
-    ai_build_system_prompt_ex(tiny, sizeof(tiny), "$ ls", NULL, NULL, SESSION_SSH, NULL, 1);
+    ai_build_system_prompt_ex(tiny, sizeof(tiny), NULL, NULL, SESSION_SSH, NULL, 1, NULL);
     ASSERT_TRUE(strlen(tiny) < sizeof(tiny));
     TEST_END();
 }

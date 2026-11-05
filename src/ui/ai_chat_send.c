@@ -450,76 +450,23 @@ void ai_chat_send_user_message(AiChatData *d)
         chat_listview_scroll_to_bottom(d->hChatList);
     }
 
-    /* Extract terminal context into the panel's persistent scratch buffer */
-    const char *term_text = "";
+    /* The system prompt holds settings only (spec 2026-11-05 decision 1): the
+     * terminal text is no longer part of it. It is built even with no active
+     * terminal, and carries the tools paragraph on every path. */
     int ctx_ok = ctx_buffers_ensure(d);
     if (ctx_ok) {
-        d->ctx_term[0] = '\0';
-        if (d->active_term) {
-            term_extract_last_n(d->active_term, d->context_lines,
-                                d->ctx_term, d->ctx_term_cap);
-        }
-        term_text = d->ctx_term;
-    }
-
-
-    /* On first message, add system prompt */
-    if (ctx_ok && d->conv.msg_count == 0) {
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
+        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap,
                                   d->session_notes, d->system_notes,
                                   active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d));
-        /* Append tool descriptions if tools are registered and provider supports them */
-        if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
-            size_t len = strlen(sys_prompt);
-            if (str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                "\n\nYou have access to the following tools that will be called "
-                "automatically via the API tool-use mechanism:\n\n")) {
-                for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                    if (!str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                            "- %s: %s\n",
-                            d->tool_registry.tools[ti].name,
-                            d->tool_registry.tools[ti].description))
-                        break;
-                }
-                str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                    "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
-                    "request them via the tool-use API and the results will be provided.\n\n"
-                    "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
-            }
-        }
-        ai_conv_add(&d->conv, AI_ROLE_SYSTEM, sys_prompt);
-    } else if (ctx_ok && d->active_term) {
-        /* Update system prompt with fresh terminal context */
-        char  *sys_prompt     = d->ctx_prompt;
-        size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
-                                  d->session_notes, d->system_notes,
-                                  active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d));
-        /* Append tool descriptions */
-        if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
-            size_t len = strlen(sys_prompt);
-            if (str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                "\n\nYou have access to the following tools that will be called "
-                "automatically via the API tool-use mechanism:\n\n")) {
-                for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                    if (!str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                            "- %s: %s\n",
-                            d->tool_registry.tools[ti].name,
-                            d->tool_registry.tools[ti].description))
-                        break;
-                }
-                str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                    "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
-                    "request them via the tool-use API and the results will be provided.\n\n"
-                    "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
-            }
-        }
-        /* Replace the first (system) message */
-        ai_conv_set_system(&d->conv, sys_prompt);
+                                  debug_tool_active(d),
+                                  ai_provider_supports_tools(d->provider)
+                                      ? &d->tool_registry : NULL);
+        if (d->conv.msg_count == 0)
+            ai_conv_add(&d->conv, AI_ROLE_SYSTEM, sys_prompt);
+        else
+            ai_conv_set_system(&d->conv, sys_prompt);
     }
 
     ai_conv_add(&d->conv, AI_ROLE_USER, input);
@@ -562,27 +509,17 @@ void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
 
     ai_rounds_continue(d->active_state, unattended);
 
-    /* Extract fresh terminal context after command execution */
-    const char *term_text = "";
-    int ctx_ok = ctx_buffers_ensure(d);
-    if (ctx_ok) {
-        d->ctx_term[0] = '\0';
-        if (d->active_term) {
-            term_extract_last_n(d->active_term, d->context_lines,
-                                d->ctx_term, d->ctx_term_cap);
-        }
-        term_text = d->ctx_term;
-    }
-
-
-    /* Update system prompt with fresh terminal context */
-    if (ctx_ok && d->conv.msg_count > 0 && d->active_term) {
+    /* Refresh the system prompt (settings and tools only; the terminal text
+     * is added to the last user turn when the request body is built). */
+    if (ctx_buffers_ensure(d) && d->conv.msg_count > 0) {
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
+        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap,
                                   d->session_notes, d->system_notes,
                                   active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d));
+                                  debug_tool_active(d),
+                                  ai_provider_supports_tools(d->provider)
+                                      ? &d->tool_registry : NULL);
         ai_conv_set_system(&d->conv, sys_prompt);
     }
 

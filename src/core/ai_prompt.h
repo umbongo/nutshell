@@ -102,7 +102,6 @@ int ai_conv_set_system(AiConversation *conv, const char *content);
  * shell ("PowerShell", "Git bash", ...) and may be NULL, in which case the
  * prompt lists the possibilities. Ignored for SESSION_SSH and SESSION_TELNET. */
 void ai_build_system_prompt(char *buf, size_t buf_size,
-                            const char *terminal_text,
                             const char *session_notes,
                             const char *system_notes,
                             SessionKind kind,
@@ -110,15 +109,21 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
 
 /* The same, plus (debug_log_tool != 0) the note that the read_debug_log tool
  * exists (ai_debug_tool_prompt_note(), ai_tools.h). Pass it only while the
- * tool is registered for the reply. debug_log_tool == 0 is byte for byte the
- * function above. */
+ * tool is registered for the reply. `tools` is the registry whose tools the
+ * reply carries, or NULL (provider without tool support, or none registered):
+ * NULL or a registry with count 0 adds no tools paragraph. With
+ * debug_log_tool == 0 and tools == NULL it is byte for byte the function
+ * above.
+ *
+ * The system prompt holds settings only: no terminal text, no command results
+ * (those travel in a delimited data block in the last user turn). */
 void ai_build_system_prompt_ex(char *buf, size_t buf_size,
-                               const char *terminal_text,
                                const char *session_notes,
                                const char *system_notes,
                                SessionKind kind,
                                const char *shell_name,
-                               int debug_log_tool);
+                               int debug_log_tool,
+                               const AiToolRegistry *tools);
 
 /* Build the JSON request body from the conversation.
  * Returns bytes written (excluding NUL), or 0 on error. */

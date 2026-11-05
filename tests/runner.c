@@ -1594,6 +1594,8 @@ int test_ai_system_prompt_no_terminal(void);
 int test_ai_system_prompt_local_shell(void);
 int test_ai_prompt_telnet_uses_remote_host_opening(void);
 int test_ai_system_prompt_powershell_examples(void);
+int test_ai_system_prompt_tools_paragraph(void);
+int test_ai_system_prompt_stable(void);
 int test_ai_extract_commands_multiple(void);
 int test_ai_extract_commands_single(void);
 int test_ai_extract_commands_none(void);
@@ -5209,6 +5211,8 @@ int main(void) {
     failed += test_ai_system_prompt_local_shell();
     failed += test_ai_prompt_telnet_uses_remote_host_opening();
     failed += test_ai_system_prompt_powershell_examples();
+    failed += test_ai_system_prompt_tools_paragraph();
+    failed += test_ai_system_prompt_stable();
     failed += test_ai_extract_commands_multiple();
     failed += test_ai_extract_commands_single();
     failed += test_ai_extract_commands_none();
