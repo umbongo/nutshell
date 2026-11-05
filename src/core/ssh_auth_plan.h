@@ -48,6 +48,7 @@ typedef struct {
     int saved_used;            /* the saved password has been sent */
     int kbd_sent_saved;        /* the KBDINT attempt sent it */
     int attempts, requeried;
+    SshAuthStep last;          /* the step most recently recorded; SSH_STEP_DONE before any */
 } SshAuthPlan;
 
 /* `saved` is the profile's saved password (or passphrase, for a key
@@ -72,11 +73,20 @@ const char *ssh_auth_saved_for(const SshAuthPlan *p, SshAuthStep step, const cha
 int ssh_auth_transport_dead(int last_errno);
 
 /* 1 when an attempt's result lets the plan go on: rc -18 or -19, no timeout,
- * transport alive. */
+ * transport alive.
+ *
+ * `last_errno` must say whether the transport is dead, and libssh2 1.11
+ * cannot be trusted for that: inside the keyboard-interactive and publickey
+ * calls it overwrites socket errors with -18 / -19 (userauth.c), so
+ * libssh2_session_last_errno() never shows -7, -13 or -43 there. The caller
+ * detects a closed peer itself (ssh_session_peer_closed()) and passes -13
+ * when it is closed. */
 int ssh_auth_may_continue(int rc, int timed_out, int last_errno);
 
-/* 1 when the method list should be asked for again: may_continue, no step
- * left, not yet re-queried, attempts to spare. */
+/* 1 when the method list should be asked for again: may_continue, not yet
+ * re-queried, attempts to spare, and either no step left or the step just
+ * recorded was PASSWORD_SAVED (a refused saved password re-queries at once,
+ * before the box or any other step; one re-query per connection in all). */
 int ssh_auth_should_requery(const SshAuthPlan *p, int rc, int timed_out, int last_errno);
 
 /* Installs the re-queried method set and marks the one re-query used. */
@@ -96,8 +106,17 @@ size_t ssh_auth_fail_text(const char *user, const char *host, int is_key, unsign
  * dropped; a leading "<user>@<host>'s " and a trailing " for <word>" are
  * stripped; what is left must end with the word "password" and must not
  * contain, as a whole word, passcode, one-time, otp, new, retype,
- * verification, token, pin or code. NULL gives 0. See spec section 4. */
+ * verification, token, pin or code, or any of the later additions kept
+ * with the list in ssh_auth_plan.c (see ssh_kbd_text_has_negative()).
+ * NULL gives 0. See spec section 4. */
 int ssh_kbd_prompt_is_password(const char *text);
+
+/* 1 when `text` contains, as a whole word (ASCII case-folded; the text's
+ * edges and any non-alphanumeric byte are boundaries), one of the matcher's
+ * banned words (the same list and word boundaries). The caller uses it on a round's instruction so that a
+ * "Password:" prompt under "Enter your token code" is never answered or
+ * offered for saving silently. NULL and "" give 0. */
+int ssh_kbd_text_has_negative(const char *text);
 
 /* Makes server-supplied text safe to show: strips ESC sequences (CSI, OSC
  * to BEL or ST, two-byte ESC), other C0 controls and DEL; CRLF and a lone

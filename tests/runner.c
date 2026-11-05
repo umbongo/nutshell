@@ -1025,6 +1025,7 @@ int test_session_passphrase_write_and_free(void);
 int test_auth_list_null_and_not_connected(void);
 int test_auth_kbdint_null_and_not_connected(void);
 int test_session_helpers_null_safe(void);
+int test_session_peer_closed(void);
 #endif
 
 /* test_shell_prompt.c */
@@ -2488,6 +2489,7 @@ int test_conn_save_note_latest_wins(void);
 /* test_ssh_auth_plan.c */
 int test_ssh_auth_parse(void);
 int test_ssh_auth_sequence_table(void);
+int test_ssh_auth_saved_not_after_used(void);
 int test_ssh_auth_attempt_cap(void);
 int test_ssh_auth_saved_for(void);
 int test_ssh_auth_transport_dead(void);
@@ -2497,6 +2499,7 @@ int test_ssh_auth_fail_text(void);
 int test_ssh_kbd_matcher_positive(void);
 int test_ssh_kbd_matcher_negative(void);
 int test_ssh_kbd_matcher_lookalikes(void);
+int test_ssh_kbd_text_has_negative(void);
 int test_ssh_kbd_sanitize_escapes(void);
 int test_ssh_kbd_sanitize_lines(void);
 int test_ssh_kbd_sanitize_utf8_and_cap(void);
@@ -2512,6 +2515,8 @@ int test_ssh_kbd_zero_prompt_round(void);
 int test_ssh_kbd_too_many_prompts(void);
 int test_ssh_kbd_round_cap(void);
 int test_ssh_kbd_cancel(void);
+int test_ssh_kbd_instruction_blocks_auto(void);
+int test_ssh_kbd_long_label(void);
 int test_ssh_kbd_rearm_limits(void);
 int test_ssh_kbd_attempt_restores_override(void);
 int test_ssh_kbd_wipes_answers(void);
@@ -4722,6 +4727,7 @@ int main(void) {
     failed += test_auth_list_null_and_not_connected();
     failed += test_auth_kbdint_null_and_not_connected();
     failed += test_session_helpers_null_safe();
+    failed += test_session_peer_closed();
 #endif
 
     printf("\n--- Shell Prompt Detection ---\n");
@@ -7163,6 +7169,7 @@ int main(void) {
     failed += test_conn_save_note_latest_wins();
     failed += test_ssh_auth_parse();
     failed += test_ssh_auth_sequence_table();
+    failed += test_ssh_auth_saved_not_after_used();
     failed += test_ssh_auth_attempt_cap();
     failed += test_ssh_auth_saved_for();
     failed += test_ssh_auth_transport_dead();
@@ -7172,6 +7179,7 @@ int main(void) {
     failed += test_ssh_kbd_matcher_positive();
     failed += test_ssh_kbd_matcher_negative();
     failed += test_ssh_kbd_matcher_lookalikes();
+    failed += test_ssh_kbd_text_has_negative();
     failed += test_ssh_kbd_sanitize_escapes();
     failed += test_ssh_kbd_sanitize_lines();
     failed += test_ssh_kbd_sanitize_utf8_and_cap();
@@ -7185,6 +7193,8 @@ int main(void) {
     failed += test_ssh_kbd_too_many_prompts();
     failed += test_ssh_kbd_round_cap();
     failed += test_ssh_kbd_cancel();
+    failed += test_ssh_kbd_instruction_blocks_auto();
+    failed += test_ssh_kbd_long_label();
     failed += test_ssh_kbd_rearm_limits();
     failed += test_ssh_kbd_attempt_restores_override();
     failed += test_ssh_kbd_wipes_answers();

@@ -24,12 +24,14 @@ typedef LIBSSH2_USERAUTH_KBDINT_RESPONSE SshKbdResponseOut;
 #define SSH_KBD_TEXT_MAX    2048   /* instruction and text area */
 #define SSH_KBD_PROMPT_MAX  2048   /* one prompt; the tail is kept on overflow */
 #define SSH_KBD_ANSWER_MAX  256    /* ConnUiRequest.passphrase */
+#define SSH_KBD_LABEL_FIT   40     /* a longer last line is repeated in the text area */
 
 /* One prompt as shown to the user. The strings are sanitised and live only
  * until ask() returns. */
 typedef struct {
     const char *name;    /* sanitised, single line, "" when none */
-    const char *text;    /* zero-prompt instruction + instruction + prompt lines but the last; "" when none */
+    const char *text;    /* zero-prompt instruction + instruction + prompt lines but the last, and the
+                            last line too when it is longer than SSH_KBD_LABEL_FIT; "" when none */
     const char *label;   /* the prompt's last line, single line */
     int echo, offer_save;
 } SshKbdAsk;
@@ -53,7 +55,8 @@ typedef struct SshKbdCtx {
     void *io_user;
     /* per attempt; reset by ssh_kbd_attempt() */
     long long entry;
-    long limit_in_force_ms;   /* SSH_KBD_ANSWER_WAIT_MS after an answered round, else setup_limit_ms */
+    long limit_in_force_ms;   /* SSH_KBD_ANSWER_WAIT_MS after a round that answered a prompt (typed or
+                                 sent from the saved password), else setup_limit_ms */
     int  rounds;              /* rounds seen */
     int  prompts;             /* prompts received, handled or not */
     int  auto_answered;       /* answered with the saved password */

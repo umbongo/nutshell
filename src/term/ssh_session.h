@@ -59,6 +59,17 @@ int ssh_session_authenticated(const SshSession *s);
  * handle. */
 int ssh_session_last_errno(const SshSession *s);
 
+/* 1 when the peer has closed (or reset) the TCP connection, 0 when it is
+ * still up.  libssh2 1.11 overwrites socket errors with
+ * LIBSSH2_ERROR_AUTHENTICATION_FAILED / PUBLICKEY_UNVERIFIED inside the
+ * keyboard-interactive and publickey calls, so ssh_session_last_errno() never
+ * shows a dead transport there; the caller asks this instead.  A one-byte
+ * non-blocking recv(MSG_PEEK): 0 bytes is a close, data or "would block" or
+ * "interrupted" is alive, any other error is closed.  NULL s gives 0; a
+ * session whose socket is invalid (never connected, or already closed) gives
+ * 1.  Never consumes data. */
+int ssh_session_peer_closed(const SshSession *s);
+
 /* Keyboard-interactive authentication.  A thin adapter: it fills the io hooks
  * of ctx (set_timeout, abort_io, now, io_user) and runs
  * libssh2_userauth_keyboard_interactive_ex() through ssh_kbd_attempt(), whose

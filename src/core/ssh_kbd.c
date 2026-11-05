@@ -8,9 +8,11 @@
 #include "ssh_auth_plan.h"
 #include "ssh_timeout.h"
 
-/* Room for the three parts of an ask's text area (the pending zero-prompt
- * instruction, the round's instruction, the prompt's earlier lines), each at
- * most SSH_KBD_TEXT_MAX - 1 bytes, and two LF separators. */
+/* Room for an ask's text area: the pending zero-prompt instruction, the
+ * round's instruction, and the sanitised prompt (its earlier lines, then its
+ * label again when the label is long), each part at most SSH_KBD_TEXT_MAX - 1
+ * bytes, the prompt's lines and label together at most that, and the LF
+ * separators between them. */
 #define JOIN_MAX (3 * SSH_KBD_TEXT_MAX)
 
 /* Appends `part` to buf, after an LF when buf already holds something. */
@@ -102,7 +104,7 @@ void ssh_kbd_round(SshKbdCtx *ctx, const char *name, int name_len, const char *i
         memcpy(ctx->zero_instruction, instr, instr_len + 1);
     }
 
-    int answered_now = 0;                       /* an ask() returned OK this round */
+    int answered_now = 0;                       /* a prompt was answered this round: by ask() or the saved password */
     for (int i = 0; i < n_prompts; i++) {
         SshKbdResponseOut *resp = &responses[i];
 
@@ -129,12 +131,20 @@ void ssh_kbd_round(SshKbdCtx *ctx, const char *name, int name_len, const char *i
         if (!echo && !truncated) {
             ssh_kbd_sanitize((const char *)raw, rawlen, flat, sizeof flat, 1);
             is_pw = ssh_kbd_prompt_is_password(flat);
+            /* An instruction (this round's, or a zero-prompt round's not yet
+             * shown) that names a token, a code or the like turns a plain
+             * "Password:" into something the saved password must not answer. */
+            if (is_pw && (ssh_kbd_text_has_negative(instr) ||
+                          ssh_kbd_text_has_negative(ctx->zero_instruction)))
+                is_pw = 0;
         }
 
-        if (ctx->saved && ctx->saved[0] && !ctx->saved_sent && !echo && !truncated && is_pw) {
+        if (ctx->saved && ctx->saved[0] && !ctx->saved_sent && !ctx->is_key &&
+            !echo && !truncated && is_pw) {
             set_response(resp, ctx->saved, strlen(ctx->saved));
             ctx->saved_sent = 1;
             ctx->auto_answered++;
+            answered_now = 1;
             continue;
         }
 
@@ -148,6 +158,9 @@ void ssh_kbd_round(SshKbdCtx *ctx, const char *name, int name_len, const char *i
         join_part(joined, &jn, ctx->zero_instruction);
         join_part(joined, &jn, instr);
         if (nl) join_part(joined, &jn, full);
+        /* A label longer than the dialog's row is clipped there: repeat it, whole,
+         * at the end of the text area. */
+        if (strlen(label) > SSH_KBD_LABEL_FIT) join_part(joined, &jn, label);
         ssh_kbd_sanitize(joined, jn, text, sizeof text, 0);
 
         SshKbdAsk q;

@@ -109,7 +109,7 @@ SshAuthStep ssh_auth_next(const SshAuthPlan *p)
         return SSH_STEP_DONE;
     }
 
-    if (p->has_saved && (p->offered & SSH_AM_PASSWORD) &&
+    if (p->has_saved && !p->saved_used && (p->offered & SSH_AM_PASSWORD) &&
         !was_tried(p, SSH_STEP_PASSWORD_SAVED))
         return SSH_STEP_PASSWORD_SAVED;
     if ((p->offered & SSH_AM_KBDINT) && !was_tried(p, SSH_STEP_KBDINT))
@@ -126,6 +126,7 @@ void ssh_auth_plan_record(SshAuthPlan *p, SshAuthStep step, int saved_sent)
 {
     p->tried |= 1u << (unsigned)step;
     p->attempts++;
+    p->last = step;
     if (saved_sent) {
         p->saved_used = 1;
         if (step == SSH_STEP_KBDINT) p->kbd_sent_saved = 1;
@@ -160,8 +161,8 @@ int ssh_auth_may_continue(int rc, int timed_out, int last_errno)
 int ssh_auth_should_requery(const SshAuthPlan *p, int rc, int timed_out, int last_errno)
 {
     return ssh_auth_may_continue(rc, timed_out, last_errno) &&
-           ssh_auth_next(p) == SSH_STEP_DONE &&
-           !p->requeried && p->attempts < SSH_AUTH_MAX_ATTEMPTS;
+           !p->requeried && p->attempts < SSH_AUTH_MAX_ATTEMPTS &&
+           (ssh_auth_next(p) == SSH_STEP_DONE || p->last == SSH_STEP_PASSWORD_SAVED);
 }
 
 void ssh_auth_plan_requeried(SshAuthPlan *p, unsigned offered)
@@ -228,6 +229,29 @@ static int word_at(const char *b, const char *e, const char *p, const char *word
     return 1;
 }
 
+/* Spec section 4's list, extended by controller ruling (2026-11-05) with
+ * further one-time, second-factor and confirmation spellings, and by the
+ * maintainer's ruling of the same day with re-entry (again, re-enter,
+ * reenter), ordinals (second, 2nd), factor and challenge words and the
+ * SecurID and Yubikey token names. Each is matched as a whole word. */
+static const char *const banned[] = {
+    "passcode", "one-time", "otp", "new", "retype",
+    "verification", "token", "pin", "code",
+    "time", "onetime", "sms", "temporary", "confirm",
+    "repeat", "verify", "duo", "mfa", "2fa",
+    "again", "re-enter", "reenter", "second", "2nd",
+    "factor", "securid", "yubikey", "challenge"
+};
+
+/* 1 when any banned word occurs as a whole word inside [b, e). */
+static int has_banned_word(const char *b, const char *e)
+{
+    for (const char *p = b; p < e; p++)
+        for (size_t i = 0; i < sizeof banned / sizeof banned[0]; i++)
+            if (word_at(b, e, p, banned[i])) return 1;
+    return 0;
+}
+
 int ssh_kbd_prompt_is_password(const char *text)
 {
     if (!text) return 0;
@@ -264,18 +288,13 @@ int ssh_kbd_prompt_is_password(const char *text)
     /* What is left must end with the word "password". */
     if (e - b < 8 || !word_at(b, e, e - 8, "password")) return 0;
 
-    /* Spec section 4's list, extended by controller ruling (2026-11-05) with
-     * further one-time, second-factor and confirmation spellings. */
-    static const char *const banned[] = {
-        "passcode", "one-time", "otp", "new", "retype",
-        "verification", "token", "pin", "code",
-        "time", "onetime", "sms", "temporary", "confirm",
-        "repeat", "verify", "duo", "mfa", "2fa"
-    };
-    for (const char *p = b; p < e; p++)
-        for (size_t i = 0; i < sizeof banned / sizeof banned[0]; i++)
-            if (word_at(b, e, p, banned[i])) return 0;
-    return 1;
+    return !has_banned_word(b, e);
+}
+
+int ssh_kbd_text_has_negative(const char *text)
+{
+    if (!text) return 0;
+    return has_banned_word(text, text + strlen(text));
 }
 
 /* ---- the sanitiser (spec section 5) ------------------------------------- */

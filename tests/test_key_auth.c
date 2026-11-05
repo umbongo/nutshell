@@ -3,6 +3,10 @@
 #include "test_framework.h"
 #include "ssh_session.h"
 #include <string.h>
+#ifndef _WIN32
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 /* ---- Safety checks ------------------------------------------------------- */
 
@@ -119,6 +123,39 @@ int test_session_helpers_null_safe(void)
     ASSERT_EQ(ssh_setup_timeout_ms(), 300L);
     ssh_setup_timeout_override(0);
     ASSERT_EQ(ssh_setup_timeout_ms(), 15000L);
+    TEST_END();
+}
+
+int test_session_peer_closed(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ssh_session_peer_closed(NULL), 0);
+
+    /* A session that never connected has no socket: closed. */
+    SshSession *s = ssh_session_new();
+    ASSERT_NOT_NULL(s);
+    ASSERT_EQ(ssh_session_peer_closed(s), 1);
+    ssh_session_free(s);
+
+#ifndef _WIN32
+    /* A socketpair: open while the peer is, closed once the peer is. */
+    int sv[2];
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+    s = ssh_session_new();
+    ASSERT_NOT_NULL(s);
+    s->socket = sv[0];
+    ASSERT_EQ(ssh_session_peer_closed(s), 0);          /* idle, peer open */
+    ASSERT_EQ((int)write(sv[1], "x", 1), 1);
+    ASSERT_EQ(ssh_session_peer_closed(s), 0);          /* data pending: alive */
+    {
+        char c = 0;
+        ASSERT_EQ((int)recv(sv[0], &c, 1, 0), 1);      /* the peek did not consume it */
+        ASSERT_EQ((int)c, (int)'x');
+    }
+    close(sv[1]);
+    ASSERT_EQ(ssh_session_peer_closed(s), 1);          /* peer closed */
+    ssh_session_free(s);                               /* closes sv[0] */
+#endif
     TEST_END();
 }
 

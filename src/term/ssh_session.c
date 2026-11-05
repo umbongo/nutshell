@@ -154,6 +154,39 @@ int ssh_session_timed_out(const SshSession *s)
     return libssh2_session_last_errno(s->session) == LIBSSH2_ERROR_TIMEOUT ? 1 : 0;
 }
 
+int ssh_session_peer_closed(const SshSession *s)
+{
+    if (!s) return 0;
+    if (s->socket == INVALID_SOCKET) return 1;
+    char b;
+#ifdef _WIN32
+    /* Windows has no per-call non-blocking flag: ask select() whether a read
+     * would return at once, and only then peek. */
+    fd_set rfds;
+    struct timeval tv = {0, 0};
+    FD_ZERO(&rfds);
+    FD_SET(s->socket, &rfds);
+    int sel = select(0, &rfds, NULL, NULL, &tv);
+    if (sel == SOCKET_ERROR) return 1;
+    if (sel == 0) return 0;                     /* nothing to read: alive */
+    int n = recv(s->socket, &b, 1, MSG_PEEK);
+    if (n > 0) return 0;
+    if (n == 0) return 1;
+    switch (WSAGetLastError()) {
+    case WSAEWOULDBLOCK:
+    case WSAEINTR:
+        return 0;
+    default:
+        return 1;
+    }
+#else
+    ssize_t n = recv(s->socket, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+    if (n > 0) return 0;
+    if (n == 0) return 1;
+    return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) ? 0 : 1;
+#endif
+}
+
 int ssh_connect(SshSession *s, const char *host, int port) {
     if (!s) return -1;
 

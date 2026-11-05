@@ -552,6 +552,119 @@ int test_ssh_kbd_cancel(void)
     TEST_END();
 }
 
+int test_ssh_kbd_instruction_blocks_auto(void)
+{
+    TEST_BEGIN();
+    SshKbdCtx c;
+    SshKbdPromptIn p;
+    SshKbdResponseOut r;
+    unsigned char st[32];
+    mk_prompt(&p, st, sizeof st, "Password:", 9, 0);
+
+    /* an instruction that asks for a token: asked, not offered to save */
+    fk_reset(&c);
+    c.saved = "s3cret";
+    fill_garbage(&r, 1);
+    ssh_kbd_round(&c, NULL, 0, "Enter your token code", 21, 1, &p, &r);
+    ASSERT_EQ(F.asks, 1);
+    ASSERT_EQ(c.saved_sent, 0);
+    ASSERT_EQ(c.auto_answered, 0);
+    ASSERT_EQ(F.offer[0], 0);
+    ASSERT_STR_EQ(F.text[0], "Enter your token code");
+    ASSERT_STR_EQ(F.label[0], "Password:");
+    free_responses(&r, 1);
+
+    /* the same for a pending zero-prompt instruction */
+    fk_reset(&c);
+    c.saved = "s3cret";
+    ssh_kbd_round(&c, NULL, 0, "Complete verification first", 27, 0, NULL, NULL);
+    fill_garbage(&r, 1);
+    ssh_kbd_round(&c, NULL, 0, NULL, 0, 1, &p, &r);
+    ASSERT_EQ(F.asks, 1);
+    ASSERT_EQ(c.saved_sent, 0);
+    ASSERT_EQ(F.offer[0], 0);
+    ASSERT_STR_EQ(F.text[0], "Complete verification first");
+    free_responses(&r, 1);
+
+    /* a neutral instruction does not get in the way */
+    fk_reset(&c);
+    c.saved = "s3cret";
+    fill_garbage(&r, 1);
+    ssh_kbd_round(&c, NULL, 0, "Welcome", 7, 1, &p, &r);
+    ASSERT_EQ(F.asks, 0);
+    ASSERT_EQ(c.saved_sent, 1);
+    ASSERT_EQ(c.auto_answered, 1);
+    free_responses(&r, 1);
+
+    /* a neutral instruction still offers the save */
+    fk_reset(&c);
+    fill_garbage(&r, 1);
+    ssh_kbd_round(&c, NULL, 0, "Welcome", 7, 1, &p, &r);
+    ASSERT_EQ(F.asks, 1);
+    ASSERT_EQ(F.offer[0], 1);
+    free_responses(&r, 1);
+
+    /* a key profile is never auto-answered, even with a saved value in the
+     * context (defence in depth) and never offered a save */
+    fk_reset(&c);
+    c.saved = "s3cret";
+    c.is_key = 1;
+    fill_garbage(&r, 1);
+    ssh_kbd_round(&c, NULL, 0, NULL, 0, 1, &p, &r);
+    ASSERT_EQ(F.asks, 1);
+    ASSERT_EQ(c.saved_sent, 0);
+    ASSERT_EQ(c.auto_answered, 0);
+    ASSERT_EQ(F.offer[0], 0);
+    free_responses(&r, 1);
+    TEST_END();
+}
+
+int test_ssh_kbd_long_label(void)
+{
+    TEST_BEGIN();
+    SshKbdCtx c;
+    SshKbdPromptIn p;
+    SshKbdResponseOut r;
+    unsigned char st[128];
+    char lab[96];
+
+    /* 39 and 40 bytes fit the label row; 41 and more are repeated in the text */
+    for (size_t n = 39; n <= 42; n++) {
+        memset(lab, 'q', n);
+        lab[n] = '\0';
+        fk_reset(&c);
+        mk_prompt(&p, st, sizeof st, lab, n, 0);
+        fill_garbage(&r, 1);
+        ssh_kbd_round(&c, NULL, 0, NULL, 0, 1, &p, &r);
+        ASSERT_EQ(F.asks, 1);
+        ASSERT_STR_EQ(F.label[0], lab);
+        if (n <= SSH_KBD_LABEL_FIT) {
+            ASSERT_STR_EQ(F.text[0], "");           /* empty text, nothing appended */
+        } else {
+            ASSERT_STR_EQ(F.text[0], lab);          /* empty text + long label: the label */
+        }
+        free_responses(&r, 1);
+    }
+
+    /* earlier lines and an instruction come first, the label last */
+    {
+        char pr[160];
+        memset(lab, 'z', 50);
+        lab[50] = '\0';
+        int len = snprintf(pr, sizeof pr, "Line one\n%s", lab);
+        fk_reset(&c);
+        mk_prompt(&p, st, sizeof st, pr, (size_t)len, 0);
+        fill_garbage(&r, 1);
+        ssh_kbd_round(&c, NULL, 0, "Hello", 5, 1, &p, &r);
+        ASSERT_STR_EQ(F.label[0], lab);
+        char want[160];
+        snprintf(want, sizeof want, "Hello\nLine one\n%s", lab);
+        ASSERT_STR_EQ(F.text[0], want);
+        free_responses(&r, 1);
+    }
+    TEST_END();
+}
+
 int test_ssh_kbd_rearm_limits(void)
 {
     TEST_BEGIN();
@@ -586,14 +699,30 @@ int test_ssh_kbd_rearm_limits(void)
     ASSERT_TRUE(F.timeouts[0] == 30000L + 15000L + 1000L);
     ASSERT_TRUE(c.limit_in_force_ms == 15000L);
 
-    /* every prompt auto-answered: the setup limit */
+    /* a round answered only by the saved password: 60 s too */
     fk_reset(&c);
     c.saved = "s3cret";
     mk_prompt(&p, st, sizeof st, "Password:", 9, 0);
     fill_garbage(&r, 1);
     ssh_kbd_round(&c, NULL, 0, NULL, 0, 1, &p, &r);
     ASSERT_EQ(F.asks, 0);
-    ASSERT_TRUE(F.timeouts[0] == 46000L);
+    ASSERT_EQ(c.auto_answered, 1);
+    ASSERT_TRUE(F.timeouts[0] == (130L - 100L) * 1000L + 61000L);
+    ASSERT_TRUE(c.limit_in_force_ms == 60000L);
+    free_responses(&r, 1);
+
+    /* a round whose prompts were all emptied (after a cancel): the setup limit */
+    fk_reset(&c);
+    F.cancel_at = 0;
+    mk_prompt(&p, st, sizeof st, "Passcode:", 9, 0);
+    fill_garbage(&r, 1);
+    ssh_kbd_round(&c, NULL, 0, NULL, 0, 1, &p, &r);
+    free_responses(&r, 1);
+    fill_garbage(&r, 1);
+    ssh_kbd_round(&c, NULL, 0, NULL, 0, 1, &p, &r);
+    ASSERT_EQ(c.user_answered, 0);
+    ASSERT_EQ(F.ntimeouts, 2);
+    ASSERT_TRUE(F.timeouts[1] == 46000L);
     ASSERT_TRUE(c.limit_in_force_ms == 15000L);
     free_responses(&r, 1);
 

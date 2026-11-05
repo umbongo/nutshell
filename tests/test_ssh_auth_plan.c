@@ -134,6 +134,32 @@ int test_ssh_auth_sequence_table(void)
     TEST_END();
 }
 
+int test_ssh_auth_saved_not_after_used(void)
+{
+    TEST_BEGIN();
+    /* The saved password went out in KBDINT; after a re-query offering only
+     * password, the step is the box, never PASSWORD_SAVED. */
+    SshAuthPlan p;
+    ssh_auth_plan_init(&p, 0, "pw", KBD);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_KBDINT);
+    ssh_auth_plan_record(&p, SSH_STEP_KBDINT, 1);
+    ssh_auth_plan_requeried(&p, PW);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_PASSWORD_ASK);
+
+    /* Same with password and keyboard-interactive both offered again. */
+    ssh_auth_plan_init(&p, 0, "pw", KBD);
+    ssh_auth_plan_record(&p, SSH_STEP_KBDINT, 1);
+    ssh_auth_plan_requeried(&p, PW | KBD);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_PASSWORD_ASK);
+
+    /* A KBDINT that did not send it leaves PASSWORD_SAVED available. */
+    ssh_auth_plan_init(&p, 0, "pw", KBD);
+    ssh_auth_plan_record(&p, SSH_STEP_KBDINT, 0);
+    ssh_auth_plan_requeried(&p, PW);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_PASSWORD_SAVED);
+    TEST_END();
+}
+
 int test_ssh_auth_attempt_cap(void)
 {
     TEST_BEGIN();
@@ -271,6 +297,50 @@ int test_ssh_auth_requery_rule(void)
     ASSERT_EQ(ssh_auth_should_requery(&p, -48, 0, -48), 0);
     p.attempts = SSH_AUTH_MAX_ATTEMPTS;
     ASSERT_EQ(ssh_auth_should_requery(&p, -19, 0, -19), 0);
+
+    /* A refused saved password re-queries at once, before any other step. */
+    ssh_auth_plan_init(&p, 0, "pw", PW);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_PASSWORD_SAVED);
+    ssh_auth_plan_record(&p, SSH_STEP_PASSWORD_SAVED, 1);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 1);
+    ssh_auth_plan_requeried(&p, PW);                 /* the password is stale */
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_PASSWORD_ASK);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 0);
+
+    ssh_auth_plan_init(&p, 0, "pw", PW);             /* partial success: kbd is next */
+    ssh_auth_plan_record(&p, SSH_STEP_PASSWORD_SAVED, 1);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 1);
+    ssh_auth_plan_requeried(&p, KBD);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_KBDINT);
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_KBDINT, "pw"));
+
+    ssh_auth_plan_init(&p, 0, "pw", PW | KBD);       /* steps are left, still re-queries */
+    ssh_auth_plan_record(&p, SSH_STEP_PASSWORD_SAVED, 1);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_KBDINT);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 1);
+    ssh_auth_plan_requeried(&p, PW | KBD);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_KBDINT);
+    ssh_auth_plan_record(&p, SSH_STEP_KBDINT, 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 0);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_PASSWORD_ASK);
+    ssh_auth_plan_record(&p, SSH_STEP_PASSWORD_ASK, 0);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_DONE);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 0);   /* once per connection */
+
+    /* Timeout, dead transport, another rc or the cap: no early re-query. */
+    ssh_auth_plan_init(&p, 0, "pw", PW);
+    ssh_auth_plan_record(&p, SSH_STEP_PASSWORD_SAVED, 1);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 1, -9), 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -13), 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -1, 0, -1), 0);
+    p.attempts = SSH_AUTH_MAX_ATTEMPTS;
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 0);
+
+    /* Only the saved password's step triggers it early. */
+    ssh_auth_plan_init(&p, 0, NULL, PW | KBD);
+    ssh_auth_plan_record(&p, SSH_STEP_KBDINT, 0);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_PASSWORD_ASK);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 0);
     TEST_END();
 }
 
@@ -385,6 +455,16 @@ int test_ssh_kbd_matcher_negative(void)
     ASSERT_EQ(PWQ("Verify password:"), 0);
     ASSERT_EQ(PWQ("MFA password:"), 0);
     ASSERT_EQ(PWQ("2FA password:"), 0);
+    /* Re-entry, ordinals, factors and challenges. */
+    ASSERT_EQ(PWQ("Re-enter password:"), 0);
+    ASSERT_EQ(PWQ("Reenter password:"), 0);
+    ASSERT_EQ(PWQ("Password again:"), 0);
+    ASSERT_EQ(PWQ("Second password:"), 0);
+    ASSERT_EQ(PWQ("Enter second factor password:"), 0);
+    ASSERT_EQ(PWQ("2nd password:"), 0);
+    ASSERT_EQ(PWQ("RSA SecurID password:"), 0);
+    ASSERT_EQ(PWQ("Yubikey password:"), 0);
+    ASSERT_EQ(PWQ("Challenge password:"), 0);
     TEST_END();
 }
 
@@ -402,6 +482,29 @@ int test_ssh_kbd_matcher_lookalikes(void)
     /* A forbidden word inside a longer word does not. */
     ASSERT_EQ(PWQ("Newton password:"), 1);
     ASSERT_EQ(PWQ("Opinion password:"), 1);
+    TEST_END();
+}
+
+int test_ssh_kbd_text_has_negative(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ssh_kbd_text_has_negative(NULL), 0);
+    ASSERT_EQ(ssh_kbd_text_has_negative(""), 0);
+    ASSERT_EQ(ssh_kbd_text_has_negative("Welcome"), 0);
+    ASSERT_EQ(ssh_kbd_text_has_negative("Acme login for alice"), 0);
+    ASSERT_EQ(ssh_kbd_text_has_negative("Enter your token code"), 1);
+    ASSERT_EQ(ssh_kbd_text_has_negative("Use Duo"), 1);
+    ASSERT_EQ(ssh_kbd_text_has_negative("TOKEN"), 1);
+    ASSERT_EQ(ssh_kbd_text_has_negative("verification required"), 1);
+    ASSERT_EQ(ssh_kbd_text_has_negative("Enter the one-time passcode"), 1);
+    ASSERT_EQ(ssh_kbd_text_has_negative("Re-enter it"), 1);
+    ASSERT_EQ(ssh_kbd_text_has_negative("line one\nSecond line"), 1);
+    /* Whole words only: the same boundary rule as the matcher. */
+    ASSERT_EQ(ssh_kbd_text_has_negative("Newton and Opinion"), 0);
+    ASSERT_EQ(ssh_kbd_text_has_negative("pin-code"), 1);
+    /* The text's own edges are boundaries. */
+    ASSERT_EQ(ssh_kbd_text_has_negative("new"), 1);
+    ASSERT_EQ(ssh_kbd_text_has_negative("(otp)"), 1);
     TEST_END();
 }
 

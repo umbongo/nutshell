@@ -1695,6 +1695,16 @@ static void conn_auth_timeout(ConnJob *j, long limit_ms)
         snprintf(j->error, sizeof(j->error), "Timed out during authentication.");
 }
 
+/* The last-errno value the plan's transport-dead test should see. libssh2
+ * 1.11 overwrites socket errors with -18 / -19 inside the keyboard-interactive
+ * and publickey calls, so a dead transport never shows there: ask the socket
+ * itself and report -13 (LIBSSH2_ERROR_SOCKET_DISCONNECT) when the peer has
+ * closed. */
+static int conn_auth_errno(const ConnJob *j)
+{
+    return ssh_session_peer_closed(j->ssh) ? -13 : ssh_session_last_errno(j->ssh);
+}
+
 /* Authenticates the connected, host-key-checked session: asks the server
  * which methods it offers, then runs the plan (src/core/ssh_auth_plan.h)
  * until one succeeds or nothing is left. Returns 0 on success, else a
@@ -1762,14 +1772,16 @@ static int conn_authenticate(ConnJob *j)
     kctx.log_id         = j->log_id;
 
     for (;;) {
-        const SshAuthStep step = ssh_auth_next(&p);
+        SshAuthStep step;
         int last_kbd = 0;
         int timed_out;
 
-        if (step == SSH_STEP_DONE) {
-            if (!ssh_auth_should_requery(&p, rc, ssh_session_timed_out(j->ssh),
-                                         ssh_session_last_errno(j->ssh)))
-                break;
+        /* Ask the server for its methods again once: when nothing is left to
+         * try, or right after a refused saved password (the set may have
+         * shrunk or moved on to the next method of an AuthenticationMethods
+         * chain). */
+        if (ssh_auth_should_requery(&p, rc, ssh_session_timed_out(j->ssh),
+                                    conn_auth_errno(j))) {
             list = ssh_auth_list(j->ssh, info->username);
             if (!list) {
                 if (ssh_session_timed_out(j->ssh)) {
@@ -1784,6 +1796,11 @@ static int conn_authenticate(ConnJob *j)
             ssh_auth_plan_requeried(&p, offered);
             continue;
         }
+
+        step = ssh_auth_next(&p);
+        if (step == SSH_STEP_DONE) break;
+
+        extra[0] = '\0';                        /* only the last attempt's text is kept */
 
         if (worker_life_cancelled(&j->life)) {
             snprintf(j->error, sizeof(j->error), "Cancelled.");
@@ -1888,7 +1905,7 @@ static int conn_authenticate(ConnJob *j)
             goto out;
         }
         if (rc == 0) goto success;
-        if (!ssh_auth_may_continue(rc, timed_out, ssh_session_last_errno(j->ssh)))
+        if (!ssh_auth_may_continue(rc, timed_out, conn_auth_errno(j)))
             break;
     }
 

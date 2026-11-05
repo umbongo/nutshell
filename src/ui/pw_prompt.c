@@ -93,12 +93,13 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         HFONT font = ns_font(FONT_BODY, dpi);
 
         if (ctx->text) {
-            /* Read-only, scrolling, wraps (no ES_AUTOHSCROLL). Not a
-             * keyboard-only dead end: it is a tab stop so the arrow keys and
-             * Page Up/Down scroll it. The multi-line EDIT shows a bare LF as
-             * nothing, hence CRLF. */
+            /* Read-only, scrolling, wraps (no ES_AUTOHSCROLL). Not a tab
+             * stop (maintainer's ruling, 2026-11-05): focus starts in the
+             * field and Tab goes field, checkbox, buttons; the mouse wheel
+             * and scroll bar scroll the text. The multi-line EDIT shows a
+             * bare LF as nothing, hence CRLF. */
             ctx->text_wnd = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
-                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                        WS_CHILD | WS_VISIBLE | WS_VSCROLL |
                         ES_MULTILINE | ES_READONLY,
                         L.pad, L.y_text, L.fw, L.texth, hwnd,
                         (HMENU)(UINT_PTR)PW_ID_TEXT, NULL, NULL);
@@ -112,7 +113,7 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             }
         }
         HWND lbl = CreateWindowExA(0, "STATIC", ctx->label ? ctx->label : "",
-                        WS_CHILD | WS_VISIBLE | SS_NOPREFIX,
+                        WS_CHILD | WS_VISIBLE | SS_NOPREFIX | SS_ENDELLIPSIS,
                         L.pad, L.y_label, L.fw, L.ctlh, hwnd, NULL, NULL, NULL);
         SendMessageA(lbl, WM_SETFONT, (WPARAM)font, TRUE);
         if (ctx->detail) {
