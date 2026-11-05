@@ -23,6 +23,7 @@
 #include "cheatsheet_dlg.h"
 #include "shortcuts.h"
 #include "ssh_session.h"
+#include "ssh_auth_plan.h"
 #include "ssh_pty.h"
 #include "ssh_io.h"
 #include "local_shell.h"
@@ -307,7 +308,6 @@ static void conn_job_release(ConnJob *j)
  * that is already correct, just not the prettiest possible UI -- not
  * worth it here.
  */
-typedef enum { CONN_UI_HOSTKEY, CONN_UI_PASSPHRASE, CONN_UI_PASSWORD } ConnUiKind;
 
 typedef struct ConnUiRequest {
     ConnUiKind kind;
@@ -317,10 +317,22 @@ typedef struct ConnUiRequest {
     const char *title;
     const char *message;
     UINT        mb_flags;
-    /* CONN_UI_PASSPHRASE / CONN_UI_PASSWORD (the latter's `message` is the
-     * detail line): filled by the UI thread iff it resolves the request with
-     * answer=1 (OK pressed); wiped by whichever side last touches it. The
-     * password box's "Save password to this profile" tick lands in `save`. */
+    /* CONN_UI_KBDINT: the server's prompt (spec section 5). `message` is the
+     * detail line, as for the password box; kb_name is the caption suffix,
+     * kb_text the text area and kb_prompt the label, all sanitised. These
+     * are pointers into the worker's SshKbdAsk, safe for the same reason
+     * `title`/`message` are: the worker's frame outlives the request until
+     * done_event is signalled. kb_offer_save is the matcher's verdict; the
+     * UI thread adds the profile-match condition before showing the tick. */
+    const char *kb_name;
+    const char *kb_text;
+    const char *kb_prompt;
+    int         kb_echo;
+    int         kb_offer_save;
+    /* CONN_UI_PASSPHRASE / CONN_UI_PASSWORD / CONN_UI_KBDINT (the latter two's
+     * `message` is the detail line): filled by the UI thread iff it resolves
+     * the request with answer=1 (OK pressed); wiped by whichever side last
+     * touches it. The "Save password to this profile" tick lands in `save`. */
     char        passphrase[256];
     int         save;
     HANDLE      done_event;
@@ -354,22 +366,74 @@ static void conn_ui_request_cancel(ConnJob *j)
     ConnUiRequest *owned =
         (ConnUiRequest *)conn_prompt_slot_cancel_and_claim(&j->pending_req);
     if (!owned) return;
-    if (owned->kind == CONN_UI_PASSPHRASE || owned->kind == CONN_UI_PASSWORD)
+    if (conn_ui_kind_has_secret(owned->kind))
         secure_zero(owned->passphrase, sizeof(owned->passphrase));
     owned->answer = 0;
     SetEvent(owned->done_event);
 }
 
-/* Worker-thread side: ask the UI thread to show the host-key or passphrase
- * dialog and block until it is answered or the job is cancelled. Returns
- * the dialog's answer (e.g. IDYES/IDNO for the host-key box, 1/0 for
- * "passphrase entered") or 0 (reject) if the request was cancelled instead
- * of answered, including a PostMessage failure -- treated the same as a
- * cancel, fail closed. On CONN_UI_PASSPHRASE, `passphrase_out` (a
- * caller-owned buffer of at least 256 bytes) receives the entered
- * passphrase iff the return value is nonzero; the request's own copy is
- * always wiped with secure_zero() before returning, whether or not it was
- * used. */
+/* Worker-thread side: publish the filled request, post WM_CONN_PROMPT and
+ * block until the UI thread answers it or the job is cancelled. Returns the
+ * dialog's answer (e.g. IDYES/IDNO for the host-key box, 1/0 for "text
+ * entered") or 0 (reject) if the request was cancelled instead of answered,
+ * including a PostMessage failure -- treated the same as a cancel, fail
+ * closed. For a kind that carries a typed secret, `secret_out` (a
+ * caller-owned buffer of `cap` bytes, at most 256 are used) receives the
+ * entered text iff the return value is nonzero, and the tick goes to
+ * *save_out; the request's own copy is always wiped with secure_zero()
+ * before returning, whether or not it was used. `req` is the caller's stack
+ * object. */
+static int conn_ui_run(ConnJob *j, ConnUiRequest *req, char *secret_out, size_t cap,
+                       int *save_out)
+{
+    req->answer = 0;
+
+    req->done_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (!req->done_event) return 0; /* fail closed: can't wait, so reject */
+
+    /* Publish before checking whether we've been cancelled -- see
+     * conn_prompt_slot_publish()'s doc for why that order is required.
+     * Checked two ways, belt and suspenders: the slot's own sticky flag
+     * (self-contained -- correct regardless of call-site ordering, since
+     * conn_ui_request_cancel() always cancels its slot before claiming)
+     * and WorkerLife's (which free_session()/start_connection() set
+     * *before* calling conn_ui_request_cancel(), specifically so this
+     * check sees it too). */
+    unsigned seq = conn_prompt_slot_publish(&j->pending_req, req);
+
+    if (worker_life_cancelled(&j->life) ||
+        conn_prompt_slot_cancelled(&j->pending_req) ||
+        !PostMessage(j->hwnd, WM_CONN_PROMPT,
+                      CONN_PROMPT_WPARAM(j->id, seq), (LPARAM)req)) {
+        /* Either already cancelled, or the post failed (window gone) --
+         * reclaim it ourselves; a no-op if a concurrent UI-thread cancel
+         * already claimed it first (conn_prompt_slot_claim() is safe to
+         * call either way). */
+        if (conn_prompt_slot_claim(&j->pending_req, req, seq)) {
+            req->answer = 0;
+            SetEvent(req->done_event);
+        }
+    }
+
+    WaitForSingleObject(req->done_event, INFINITE);
+    CloseHandle(req->done_event);
+
+    int answer = req->answer;
+    if (conn_ui_kind_has_secret(req->kind) && secret_out && cap > 0 && answer) {
+        size_t n = cap < sizeof(req->passphrase) ? cap : sizeof(req->passphrase);
+        strncpy(secret_out, req->passphrase, n - 1u);
+        secret_out[n - 1u] = '\0';
+        if (save_out) *save_out = req->save;
+    }
+    secure_zero(req->passphrase, sizeof(req->passphrase));
+    return answer;
+}
+
+/* Worker-thread side: ask the UI thread to show the host-key, passphrase or
+ * password dialog and block until it is answered or the job is cancelled
+ * (conn_ui_run() has the contract). On CONN_UI_PASSPHRASE / _PASSWORD,
+ * `passphrase_out` (a caller-owned buffer of at least 256 bytes) receives
+ * the entered text iff the return value is nonzero. */
 static int conn_ui_ask(ConnJob *j, ConnUiKind kind, const char *title,
                         const char *message, UINT mb_flags,
                         char *passphrase_out, int *save_out)
@@ -380,47 +444,40 @@ static int conn_ui_ask(ConnJob *j, ConnUiKind kind, const char *title,
     req.title    = title;
     req.message  = message;
     req.mb_flags = mb_flags;
-    req.answer   = 0;
+    return conn_ui_run(j, &req, passphrase_out, 256, save_out);
+}
 
-    req.done_event = CreateEventA(NULL, TRUE, FALSE, NULL);
-    if (!req.done_event) return 0; /* fail closed: can't wait, so reject */
+/* What conn_kbd_ask() needs besides the job: the "profile -- user@host"
+ * detail line, built once per connection (the password box shows the same
+ * line). It lives in conn_authenticate()'s frame, which outlives every
+ * prompt that function asks. */
+typedef struct {
+    ConnJob *j;
+    char     detail[512];
+} ConnKbdUi;
 
-    /* Publish before checking whether we've been cancelled -- see
-     * conn_prompt_slot_publish()'s doc for why that order is required.
-     * Checked two ways, belt and suspenders: the slot's own sticky flag
-     * (self-contained -- correct regardless of call-site ordering, since
-     * conn_ui_request_cancel() always cancels its slot before claiming)
-     * and WorkerLife's (which free_session()/start_connection() set
-     * *before* calling conn_ui_request_cancel(), specifically so this
-     * check sees it too). */
-    unsigned seq = conn_prompt_slot_publish(&j->pending_req, &req);
-
-    if (worker_life_cancelled(&j->life) ||
-        conn_prompt_slot_cancelled(&j->pending_req) ||
-        !PostMessage(j->hwnd, WM_CONN_PROMPT,
-                      CONN_PROMPT_WPARAM(j->id, seq), (LPARAM)&req)) {
-        /* Either already cancelled, or the post failed (window gone) --
-         * reclaim it ourselves; a no-op if a concurrent UI-thread cancel
-         * already claimed it first (conn_prompt_slot_claim() is safe to
-         * call either way). */
-        if (conn_prompt_slot_claim(&j->pending_req, &req, seq)) {
-            req.answer = 0;
-            SetEvent(req.done_event);
-        }
-    }
-
-    WaitForSingleObject(req.done_event, INFINITE);
-    CloseHandle(req.done_event);
-
-    int answer = req.answer;
-    if ((kind == CONN_UI_PASSPHRASE || kind == CONN_UI_PASSWORD) &&
-        passphrase_out && answer) {
-        strncpy(passphrase_out, req.passphrase, 255);
-        passphrase_out[255] = '\0';
-        if (save_out) *save_out = req.save;
-    }
-    secure_zero(req.passphrase, sizeof(req.passphrase));
-    return answer;
+/* SshKbdCtx.ask: shows one keyboard-interactive prompt. `ui_user` is the
+ * ConnKbdUi. Returns 1 for OK (answer and *save filled), 0 for Cancel or a
+ * cancelled request. The kb_* pointers go straight into the request, which
+ * is safe because the round's SshKbdAsk, like this frame, outlives the
+ * request until done_event is signalled. */
+static int conn_kbd_ask(void *ui_user, const SshKbdAsk *q, char *answer, size_t cap, int *save)
+{
+    ConnKbdUi *ui = (ConnKbdUi *)ui_user;
+    ConnUiRequest req;
+    int tick = 0;
+    memset(&req, 0, sizeof(req));
+    req.kind          = CONN_UI_KBDINT;
+    req.message       = ui->detail;
+    req.kb_name       = q->name;
+    req.kb_text       = q->text;
+    req.kb_prompt     = q->label;
+    req.kb_echo       = q->echo;
+    req.kb_offer_save = q->offer_save;
+    if (save) *save = 0;
+    int ok = conn_ui_run(ui->j, &req, answer, cap, &tick);
+    if (ok && save) *save = tick;
+    return ok;
 }
 
 /* Build the known_hosts file path: %APPDATA%\sshclient\known_hosts.
@@ -1551,17 +1608,332 @@ static void telnet_connect_job(ConnJob *j)
     conn_job_release(j);
 }
 
-/* After a failed setup step: when libssh2 gave up on the 15 s setup limit,
- * puts "Timed out after 15 s waiting for host:port <stage>." into j->error
- * and returns 1. Returns 0 (j->error untouched) when the failure was
- * something else, or the text did not fit, so the caller's own message
- * stands. */
-static int conn_setup_timeout_error(ConnJob *j, SshSetupStage stage)
+/* After a failed setup step: when libssh2 gave up on the limit in force
+ * (`limit_ms`: the 15 s setup limit, or the 60 s a keyboard-interactive
+ * answer earns, spec section 6), puts "Timed out after N s waiting for
+ * host:port <stage>." into j->error and returns 1. Returns 0 (j->error
+ * untouched) when the failure was something else, or the text did not fit,
+ * so the caller's own message stands. */
+static int conn_setup_timeout_error(ConnJob *j, SshSetupStage stage, long limit_ms)
 {
     if (!ssh_session_timed_out(j->ssh)) return 0;
     return ssh_setup_timeout_text(stage, j->profile.host, j->profile.port,
-                                  SSH_SETUP_TIMEOUT_MS, j->error,
+                                  limit_ms, j->error,
                                   sizeof(j->error)) != 0;
+}
+
+/* ---- Authentication (spec sections 1-3, 6) ---------------------------- */
+
+/* A short name for the log: which plan step an attempt ran. */
+static const char *conn_auth_step_name(SshAuthStep step)
+{
+    switch (step) {
+    case SSH_STEP_PUBLICKEY:      return "publickey";
+    case SSH_STEP_KBDINT:         return "keyboard-interactive";
+    case SSH_STEP_PASSWORD_SAVED: return "password-saved";
+    case SSH_STEP_KBDINT_RETRY:   return "keyboard-interactive-retry";
+    case SSH_STEP_PASSWORD_ASK:   return "password-typed";
+    default:                      return "none";
+    }
+}
+
+/* The parsed method set as bit names ("publickey,password"), for the log:
+ * the raw server reply is never logged. */
+static void conn_auth_method_names(unsigned offered, char *buf, size_t cap)
+{
+    static const struct { unsigned bit; const char *name; } k_names[] = {
+        { SSH_AM_PUBLICKEY, "publickey" },
+        { SSH_AM_PASSWORD,  "password" },
+        { SSH_AM_KBDINT,    "keyboard-interactive" },
+        { SSH_AM_OTHER,     "other" },
+    };
+    size_t n = 0;
+    if (!buf || cap == 0) return;
+    buf[0] = '\0';
+    for (size_t i = 0; i < sizeof(k_names) / sizeof(k_names[0]); i++) {
+        if (!(offered & k_names[i].bit)) continue;
+        int w = snprintf(buf + n, cap - n, "%s%s", n ? "," : "", k_names[i].name);
+        if (w < 0 || (size_t)w >= cap - n) { buf[n] = '\0'; return; }
+        n += (size_t)w;
+    }
+    if (n == 0) snprintf(buf, cap, "none");
+}
+
+static void conn_log_auth_methods(ConnJob *j, unsigned offered)
+{
+    char names[64];
+    conn_auth_method_names(offered, names, sizeof(names));
+    DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.auth.methods", "offered=%s", names);
+}
+
+/* One INFO line per libssh2 authentication call. `k` is the keyboard-
+ * interactive context of that call, NULL for every other method. */
+static void conn_log_auth_attempt(ConnJob *j, const char *method, int rc, int timed_out,
+                                  const SshKbdCtx *k)
+{
+    DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.auth.attempt",
+         "method=%s result=%s rc=%d rounds=%d prompts=%d auto_answered=%d cancelled=%d aborted=%d",
+         method, rc == 0 ? "ok" : (timed_out ? "timeout" : "fail"), rc,
+         k ? k->rounds : 0, k ? k->prompts : 0, k ? k->auto_answered : 0,
+         k ? k->cancelled : 0, k ? k->aborted : 0);
+}
+
+/* 1 when a publickey result means "the key file could not be used, so ask
+ * for its passphrase": LIBSSH2_ERROR_FILE (-16) or, harmlessly,
+ * LIBSSH2_ERROR_KEYFILE_AUTH_FAILED (-48). -18/-19 are the server refusing
+ * a usable key and never open the box (spec section 3). */
+static int conn_key_needs_passphrase(int rc)
+{
+    return rc == LIBSSH2_ERROR_FILE || rc == LIBSSH2_ERROR_KEYFILE_AUTH_FAILED;
+}
+
+/* Sets the auth timeout text for `limit_ms`; the fallback keeps j->error
+ * non-empty if the host name made the proper text too long. */
+static void conn_auth_timeout(ConnJob *j, long limit_ms)
+{
+    if (!conn_setup_timeout_error(j, SSH_STAGE_AUTH, limit_ms))
+        snprintf(j->error, sizeof(j->error), "Timed out during authentication.");
+}
+
+/* The last-errno value the plan's transport-dead test should see. libssh2
+ * 1.11 overwrites socket errors with -18 / -19 inside the keyboard-interactive
+ * and publickey calls, so a dead transport never shows there: ask the socket
+ * itself and report -13 (LIBSSH2_ERROR_SOCKET_DISCONNECT) when the peer has
+ * closed. */
+static int conn_auth_errno(const ConnJob *j)
+{
+    return ssh_session_peer_closed(j->ssh) ? -13 : ssh_session_last_errno(j->ssh);
+}
+
+/* Authenticates the connected, host-key-checked session: asks the server
+ * which methods it offers, then runs the plan (src/core/ssh_auth_plan.h)
+ * until one succeeds or nothing is left. Returns 0 on success, else a
+ * CONN_FAIL code (2 = failed, 4 = the user cancelled) with j->error set.
+ * Every exit wipes the typed answers and the save candidate. A password the
+ * user asked to save lands in j->save_password only on success. The saved
+ * password (j->profile.password) was registered with dlog_secret_add by the
+ * caller; typed answers are registered here for the length of the call that
+ * uses them (keyboard-interactive answers by the round itself). */
+static int conn_authenticate(ConnJob *j)
+{
+    const Profile *info = &j->profile;
+    const int is_key = (info->auth_type == AUTH_KEY);
+    int code = 2;
+    int rc = -1;
+    SshAuthPlan p;
+    SshKbdCtx kctx;
+    ConnKbdUi ui;
+    ConnSaveCandidate cand;
+    char pw[256];
+    char pp[256];
+    char display[SSH_AUTH_DISPLAY_MAX];
+    char extra[256];
+    unsigned offered;
+    const char *list;
+
+    memset(&p, 0, sizeof(p));
+    memset(&kctx, 0, sizeof(kctx));
+    memset(&cand, 0, sizeof(cand));
+    memset(pw, 0, sizeof(pw));
+    memset(pp, 0, sizeof(pp));
+    display[0] = '\0';
+    extra[0] = '\0';
+
+    /* The "profile -- user@host" line, once per connection: the password box
+     * and every keyboard-interactive prompt show it. */
+    ui.j = j;
+    if (info->name[0])
+        snprintf(ui.detail, sizeof(ui.detail), "%s \xE2\x80\x94 %s@%s",
+                 info->name, info->username, info->host);
+    else
+        snprintf(ui.detail, sizeof(ui.detail), "%s@%s", info->username, info->host);
+
+    list = ssh_auth_list(j->ssh, info->username);
+    if (!list) {
+        if (ssh_session_timed_out(j->ssh)) {
+            conn_auth_timeout(j, ssh_setup_timeout_ms());
+        } else if (ssh_session_authenticated(j->ssh)) {
+            code = 0;                          /* the server accepted "none" */
+        } else {
+            snprintf(j->error, sizeof(j->error),
+                     "Could not get the authentication methods from host.");
+        }
+        goto out;
+    }
+    offered = ssh_auth_methods_parse(list, display, sizeof(display));
+    conn_log_auth_methods(j, offered);
+
+    ssh_auth_plan_init(&p, is_key, info->password, offered);
+    kctx.ask            = conn_kbd_ask;
+    kctx.ui_user        = &ui;
+    kctx.is_key         = is_key;
+    kctx.setup_limit_ms = ssh_setup_timeout_ms();
+    kctx.save           = &cand;
+    kctx.log_id         = j->log_id;
+
+    for (;;) {
+        SshAuthStep step;
+        int last_kbd = 0;
+        int timed_out;
+
+        /* Ask the server for its methods again once: when nothing is left to
+         * try, or right after a refused saved password (the set may have
+         * shrunk or moved on to the next method of an AuthenticationMethods
+         * chain). */
+        if (ssh_auth_should_requery(&p, rc, ssh_session_timed_out(j->ssh),
+                                    conn_auth_errno(j))) {
+            list = ssh_auth_list(j->ssh, info->username);
+            if (!list) {
+                if (ssh_session_timed_out(j->ssh)) {
+                    conn_auth_timeout(j, ssh_setup_timeout_ms());
+                    goto out;
+                }
+                if (ssh_session_authenticated(j->ssh)) goto success;
+                break;                          /* the previous attempt's error stands */
+            }
+            offered = ssh_auth_methods_parse(list, display, sizeof(display));
+            conn_log_auth_methods(j, offered);
+            ssh_auth_plan_requeried(&p, offered);
+            continue;
+        }
+
+        step = ssh_auth_next(&p);
+        if (step == SSH_STEP_DONE) break;
+
+        extra[0] = '\0';                        /* only the last attempt's text is kept */
+
+        if (worker_life_cancelled(&j->life)) {
+            snprintf(j->error, sizeof(j->error), "Cancelled.");
+            goto out;
+        }
+
+        switch (step) {
+        case SSH_STEP_PUBLICKEY:
+            rc = ssh_auth_key(j->ssh, info->username, info->key_path, info->password);
+            ssh_auth_plan_record(&p, step, 0);
+            conn_log_auth_attempt(j, conn_auth_step_name(step), rc,
+                                  ssh_session_timed_out(j->ssh), NULL);
+            if (conn_key_needs_passphrase(rc)) {
+                /* The key file needs (another) passphrase: ask once. */
+                if (!conn_ui_ask(j, CONN_UI_PASSPHRASE, NULL, NULL, 0, pp, NULL)) {
+                    snprintf(j->error, sizeof(j->error), "Passphrase entry cancelled.");
+                    code = 4;
+                    goto out;
+                }
+                const int pp_registered = dlog_secret_add(pp);
+                rc = ssh_auth_key(j->ssh, info->username, info->key_path, pp);
+                if (pp_registered) dlog_secret_remove(pp);
+                ssh_auth_plan_count_retry(&p);     /* counted, not recorded */
+                conn_log_auth_attempt(j, "publickey-passphrase", rc,
+                                      ssh_session_timed_out(j->ssh), NULL);
+                if (rc == 0) {
+                    strncpy(j->ssh->cached_passphrase, pp,
+                            sizeof(j->ssh->cached_passphrase) - 1u);
+                    j->ssh->cached_passphrase[sizeof(j->ssh->cached_passphrase) - 1u] = '\0';
+                } else if (conn_key_needs_passphrase(rc)) {
+                    snprintf(j->error, sizeof(j->error), "Wrong passphrase for %s.",
+                             info->key_path);
+                    goto out;
+                }
+            }
+            break;
+
+        case SSH_STEP_PASSWORD_SAVED: {
+            const char *saved = ssh_auth_saved_for(&p, step, info->password);
+            rc = saved ? ssh_auth_password(j->ssh, info->username, saved) : -1;
+            ssh_auth_plan_record(&p, step, 1);
+            conn_log_auth_attempt(j, conn_auth_step_name(step), rc,
+                                  ssh_session_timed_out(j->ssh), NULL);
+            break;
+        }
+
+        case SSH_STEP_PASSWORD_ASK: {
+            int want_save = 0;
+            if (!conn_ui_ask(j, CONN_UI_PASSWORD, NULL, ui.detail, 0, pw, &want_save)) {
+                snprintf(j->error, sizeof(j->error), "Password entry cancelled.");
+                code = 4;
+                goto out;
+            }
+            const int pw_registered = dlog_secret_add(pw);
+            rc = ssh_auth_password(j->ssh, info->username, pw);
+            if (pw_registered) dlog_secret_remove(pw);
+            conn_save_note(&cand, pw, want_save);
+            secure_zero(pw, sizeof(pw));
+            ssh_auth_plan_record(&p, step, 0);
+            conn_log_auth_attempt(j, conn_auth_step_name(step), rc,
+                                  ssh_session_timed_out(j->ssh), NULL);
+            break;
+        }
+
+        case SSH_STEP_KBDINT:
+        case SSH_STEP_KBDINT_RETRY:
+            last_kbd = 1;
+            kctx.saved = ssh_auth_saved_for(&p, step, info->password);
+            rc = ssh_auth_kbdint(j->ssh, info->username, &kctx);
+            ssh_auth_plan_record(&p, step, kctx.saved_sent);
+            conn_log_auth_attempt(j, conn_auth_step_name(step), rc,
+                                  ssh_session_timed_out(j->ssh), &kctx);
+            /* What the server said that the user may need for the final
+             * message (already sanitised): too many prompts in one round, or
+             * the last zero-prompt round's text. */
+            if (kctx.too_many)
+                snprintf(extra, sizeof(extra), "Too many authentication prompts.");
+            else if (kctx.zero_instruction[0])
+                (void)ssh_kbd_sanitize(kctx.zero_instruction, strlen(kctx.zero_instruction),
+                                       extra, sizeof(extra), 1);
+            if (kctx.cancelled) {
+                snprintf(j->error, sizeof(j->error), "Authentication cancelled.");
+                code = 4;
+                goto out;
+            }
+            if (kctx.aborted) {
+                snprintf(j->error, sizeof(j->error), "Too many authentication prompts.");
+                goto out;
+            }
+            break;
+
+        default:
+            goto out;                           /* not reachable: next() never returns it */
+        }
+
+        /* After every attempt: a timeout first, then success, then whether
+         * the transport and the result let the plan go on. Never a box after
+         * a timeout or on a dead transport. */
+        timed_out = ssh_session_timed_out(j->ssh);
+        if (timed_out) {
+            conn_auth_timeout(j, last_kbd ? kctx.limit_in_force_ms : ssh_setup_timeout_ms());
+            goto out;
+        }
+        if (rc == 0) goto success;
+        if (!ssh_auth_may_continue(rc, timed_out, conn_auth_errno(j)))
+            break;
+    }
+
+    /* Nothing left to try, or the transport is gone. */
+    if (ssh_auth_fail_text(info->username, info->host, is_key, p.offered, display, extra,
+                           j->error, sizeof(j->error)) == 0 &&
+        ssh_auth_fail_text(info->username, info->host, is_key, p.offered, display, NULL,
+                           j->error, sizeof(j->error)) == 0)
+        snprintf(j->error, sizeof(j->error), "Authentication failed for %s@%s.",
+                 info->username, info->host);
+    goto out;
+
+success:
+    /* The latest typed password-like answer, if its own tick said save. */
+    if (cand.ticked && cand.pw[0]) {
+        strncpy(j->save_password, cand.pw, sizeof(j->save_password) - 1u);
+        j->save_password[sizeof(j->save_password) - 1u] = '\0';
+        j->save_requested = 1;
+    }
+    code = 0;
+
+out:
+    conn_save_clear(&cand);
+    secure_zero(&cand, sizeof(cand));
+    secure_zero(pw, sizeof(pw));
+    secure_zero(pp, sizeof(pp));
+    secure_zero(kctx.answer, sizeof(kctx.answer));
+    return code;
 }
 
 /* The connection thread. It reads and writes only its ConnJob -- the
@@ -1753,68 +2125,13 @@ static DWORD WINAPI connection_thread(LPVOID param)
 
     if (CONN_CANCELLED()) { snprintf(j->error, sizeof(j->error), "Cancelled."); CONN_FAIL(1); }
 
-    /* Authentication */
+    /* Authentication: ask the server which methods it offers and try them in
+     * the plan's order (conn_authenticate()). Its result is 0 or a CONN_FAIL
+     * code with j->error set; failing here runs the same done: cleanup. */
     stage = "auth";
-    int auth_rc = -1;
-    int auth_asked = 0;
-    if (info->auth_type == AUTH_KEY) {
-        auth_rc = ssh_auth_key(j->ssh, info->username, info->key_path, info->password);
-        if (auth_rc != 0) {
-            auth_asked = 1;
-            char passphrase[256];
-            memset(passphrase, 0, sizeof(passphrase));
-            if (conn_ui_ask(j, CONN_UI_PASSPHRASE, NULL, NULL, 0, passphrase, NULL)) {
-                const int pp_registered = dlog_secret_add(passphrase);
-                auth_rc = ssh_auth_key(j->ssh, info->username, info->key_path, passphrase);
-                if (pp_registered) dlog_secret_remove(passphrase);
-                if (auth_rc == 0) {
-                    strncpy(j->ssh->cached_passphrase, passphrase,
-                            sizeof(j->ssh->cached_passphrase) - 1u);
-                    j->ssh->cached_passphrase[sizeof(j->ssh->cached_passphrase) - 1u] = '\0';
-                }
-            }
-            secure_zero(passphrase, sizeof(passphrase));
-        }
-    } else if (conn_prompt_wants_password(0, info->password)) {
-        /* Password auth with nothing saved: ask through the UI thread. */
-        auth_asked = 1;
-        char detail[512];
-        char pw[256];
-        int  want_save = 0;
-        memset(pw, 0, sizeof(pw));
-        if (info->name[0])
-            snprintf(detail, sizeof(detail), "%s \xE2\x80\x94 %s@%s",
-                     info->name, info->username, info->host);
-        else
-            snprintf(detail, sizeof(detail), "%s@%s", info->username, info->host);
-        if (!conn_ui_ask(j, CONN_UI_PASSWORD, NULL, detail, 0, pw, &want_save)) {
-            secure_zero(pw, sizeof(pw));
-            snprintf(j->error, sizeof(j->error), "Password entry cancelled.");
-            CONN_FAIL(4);
-        }
-        const int pw_registered = dlog_secret_add(pw);
-        auth_rc = ssh_auth_password(j->ssh, info->username, pw);
-        if (pw_registered) dlog_secret_remove(pw);
-        if (auth_rc == 0 && want_save) {
-            strncpy(j->save_password, pw, sizeof(j->save_password) - 1u);
-            j->save_password[sizeof(j->save_password) - 1u] = '\0';
-            j->save_requested = 1;
-        }
-        secure_zero(pw, sizeof(pw));
-    } else {
-        auth_rc = ssh_auth_password(j->ssh, info->username, info->password);
-    }
-
-    DLOG(DLOG_SSH, DLOG_INFO, j->log_id, "connect.auth",
-         "auth_method=%s result=%s prompted=%d",
-         info->auth_type == AUTH_KEY ? "key" : "login",
-         auth_rc == 0 ? "ok" : "fail", auth_asked);
-
-    if (auth_rc != 0) {
-        if (!conn_setup_timeout_error(j, SSH_STAGE_AUTH))
-            snprintf(j->error, sizeof(j->error),
-                     "Authentication failed for %s@%s.", info->username, info->host);
-        CONN_FAIL(2);
+    {
+        const int auth_code = conn_authenticate(j);
+        if (auth_code != 0) CONN_FAIL(auth_code);
     }
 
     if (CONN_CANCELLED()) { snprintf(j->error, sizeof(j->error), "Cancelled."); CONN_FAIL(2); }
@@ -1823,7 +2140,7 @@ static DWORD WINAPI connection_thread(LPVOID param)
     stage = "channel";
     j->channel = ssh_channel_open(j->ssh);
     if (!j->channel) {
-        if (!conn_setup_timeout_error(j, SSH_STAGE_SESSION))
+        if (!conn_setup_timeout_error(j, SSH_STAGE_SESSION, ssh_setup_timeout_ms()))
             snprintf(j->error, sizeof(j->error),
                      "Could not open SSH channel to %s.", info->host);
         CONN_FAIL(3);
@@ -1832,14 +2149,18 @@ static DWORD WINAPI connection_thread(LPVOID param)
      * is ignored, as before; a timeout fails the connection (the shell
      * request is skipped after a PTY timeout). */
     if (ssh_pty_request(j->channel, "xterm", j->cols, j->rows) != 0 &&
-        conn_setup_timeout_error(j, SSH_STAGE_SESSION))
+        conn_setup_timeout_error(j, SSH_STAGE_SESSION, ssh_setup_timeout_ms()))
         CONN_FAIL(3);
     if (ssh_pty_shell(j->channel) != 0 &&
-        conn_setup_timeout_error(j, SSH_STAGE_SESSION))
+        conn_setup_timeout_error(j, SSH_STAGE_SESSION, ssh_setup_timeout_ms()))
         CONN_FAIL(3);
     /* Setup is over: the 15 s limit must never reach the interactive
      * session. This is the only path that goes interactive. */
     ssh_session_set_timeout(j->ssh, 0);
+    /* SSH keepalive was off during setup so that it could not cut a re-armed
+     * authentication wait short (spec section 6); the session is interactive
+     * now, so switch it on, 30 s as ssh_connect() used to. */
+    ssh_session_set_keepalive(j->ssh, 30);
     ssh_session_set_blocking(j->ssh, false); /* non-blocking for I/O loop */
 
     /* H-3: zero plaintext password from memory once auth is complete (the
@@ -4852,7 +5173,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Offer "save" only when a saved profile still matches at this moment. */
             const int can_save = g_config &&
                 config_find_profile_match(g_config, &s->conn_profile) != NULL;
-            PwPromptOpts po = { "Password", "Enter password:", g_theme, detail, can_save };
+            PwPromptOpts po = { "Password", "Enter password:", g_theme, detail, can_save, NULL, 0 };
             char buf[256];
             int save = 0;
             buf[0] = '\0';
@@ -4998,6 +5319,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                      .offer_save = (g_config &&
                                          config_find_profile_match(g_config, &s->conn_profile)) ? 1 : 0 },
                     passbuf, (int)sizeof(passbuf), &save);
+            } else if (req->kind == CONN_UI_KBDINT) {
+                /* kb_*, message and the caption buffer are read here, while
+                 * the dialog is built; pw_prompt_show() keeps none of them
+                 * once its modal loop runs (a nested free_session() may end
+                 * the worker frame they point into). */
+                char caption[160];
+                if (req->kb_name && req->kb_name[0])
+                    snprintf(caption, sizeof(caption), "SSH Authentication - %s", req->kb_name);
+                else
+                    snprintf(caption, sizeof(caption), "SSH Authentication");
+                ans = pw_prompt_show(hwnd,
+                    &(PwPromptOpts){ .title = caption,
+                                     .label = req->kb_prompt,
+                                     .theme = g_theme,
+                                     .detail = req->message,
+                                     .text = (req->kb_text && req->kb_text[0]) ? req->kb_text : NULL,
+                                     .echo = req->kb_echo,
+                                     .offer_save = (req->kb_offer_save && g_config &&
+                                         config_find_profile_match(g_config, &s->conn_profile)) ? 1 : 0 },
+                    passbuf, (int)sizeof(passbuf), &save);
             } else {
                 ans = pw_prompt_show(hwnd,
                     &(PwPromptOpts){ .title = "SSH Key Passphrase",
@@ -5013,9 +5354,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             while (s2 && !(s2->conn_job && s2->conn_job->id == job_id))
                 s2 = s2->next;
             if (s2 && conn_prompt_slot_claim(&s2->conn_job->pending_req, req, seq)) {
-                if ((req->kind == CONN_UI_PASSPHRASE || req->kind == CONN_UI_PASSWORD) && ans)
+                if (conn_ui_kind_has_secret(req->kind) && ans)
                     strncpy(req->passphrase, passbuf, sizeof(req->passphrase) - 1);
-                if (req->kind == CONN_UI_PASSWORD && ans)
+                if ((req->kind == CONN_UI_PASSWORD || req->kind == CONN_UI_KBDINT) && ans)
                     req->save = save;
                 req->answer = ans;
                 SetEvent(req->done_event);

@@ -400,6 +400,7 @@ int test_ssh_idle_wraparound_over(void);
 int test_ssh_idle_huge_timeout_clamps(void);
 int test_ssh_setup_timeout_text_stages(void);
 int test_ssh_setup_timeout_text_rounds_up(void);
+int test_ssh_kbd_rearm_ms(void);
 int test_ssh_setup_timeout_text_ipv6_host(void);
 int test_ssh_setup_timeout_text_small_buf(void);
 
@@ -1081,6 +1082,10 @@ int test_key_auth_null_session(void);
 int test_key_auth_not_connected(void);
 int test_session_passphrase_initially_empty(void);
 int test_session_passphrase_write_and_free(void);
+int test_auth_list_null_and_not_connected(void);
+int test_auth_kbdint_null_and_not_connected(void);
+int test_session_helpers_null_safe(void);
+int test_session_peer_closed(void);
 #endif
 
 /* test_shell_prompt.c */
@@ -2542,6 +2547,45 @@ int test_conn_prompt_stale_seq_is_refused_by_a_newer_request(void);
 int test_conn_prompt_seq_is_never_zero(void);
 int test_conn_prompt_null_is_safe(void);
 int test_conn_prompt_wants_password(void);
+int test_conn_ui_kind_has_secret(void);
+int test_conn_save_note_latest_wins(void);
+
+/* test_ssh_auth_plan.c */
+int test_ssh_auth_parse(void);
+int test_ssh_auth_sequence_table(void);
+int test_ssh_auth_saved_not_after_used(void);
+int test_ssh_auth_attempt_cap(void);
+int test_ssh_auth_saved_for(void);
+int test_ssh_auth_transport_dead(void);
+int test_ssh_auth_may_continue(void);
+int test_ssh_auth_requery_rule(void);
+int test_ssh_auth_fail_text(void);
+int test_ssh_kbd_matcher_positive(void);
+int test_ssh_kbd_matcher_negative(void);
+int test_ssh_kbd_matcher_lookalikes(void);
+int test_ssh_kbd_text_has_negative(void);
+int test_ssh_kbd_sanitize_escapes(void);
+int test_ssh_kbd_sanitize_lines(void);
+int test_ssh_kbd_sanitize_utf8_and_cap(void);
+
+/* test_ssh_kbd.c */
+int test_ssh_kbd_copies_by_length(void);
+int test_ssh_kbd_prompt_boundaries(void);
+int test_ssh_kbd_saved_answers_one_prompt(void);
+int test_ssh_kbd_saved_once_across_rounds(void);
+int test_ssh_kbd_never_auto(void);
+int test_ssh_kbd_offer_save(void);
+int test_ssh_kbd_zero_prompt_round(void);
+int test_ssh_kbd_too_many_prompts(void);
+int test_ssh_kbd_round_cap(void);
+int test_ssh_kbd_cancel(void);
+int test_ssh_kbd_instruction_blocks_auto(void);
+int test_ssh_kbd_long_label(void);
+int test_ssh_kbd_rearm_limits(void);
+int test_ssh_kbd_attempt_restores_override(void);
+int test_ssh_kbd_wipes_answers(void);
+int test_ssh_kbd_adapter_signature(void);
+int test_ssh_kbd_secret_registration(void);
 
 int test_ai_stream_finish_before_close(void);
 int test_ai_stream_close_before_finish(void);
@@ -3208,6 +3252,11 @@ int test_ui_tokens_is_dark_matches_theme_is_dark(void);
 int test_ui_tokens_resolve_null_safe(void);
 int test_ui_tokens_colour_gate(void);
 int test_ui_tokens_scale_gate(void);
+
+/* test_pw_prompt_layout.c */
+int test_pw_layout_today_unchanged(void);
+int test_pw_layout_text_row(void);
+int test_pw_text_crlf(void);
 
 /* test_ns_layout.c */
 int test_ns_button_layout_with_icon_no_overlap_96(void);
@@ -4228,6 +4277,7 @@ int main(void) {
     failed += test_ssh_setup_timeout_text_rounds_up();
     failed += test_ssh_setup_timeout_text_ipv6_host();
     failed += test_ssh_setup_timeout_text_small_buf();
+    failed += test_ssh_kbd_rearm_ms();
 
     /* Config */
     failed += test_config_default_settings();
@@ -4817,6 +4867,10 @@ int main(void) {
     failed += test_key_auth_not_connected();
     failed += test_session_passphrase_initially_empty();
     failed += test_session_passphrase_write_and_free();
+    failed += test_auth_list_null_and_not_connected();
+    failed += test_auth_kbdint_null_and_not_connected();
+    failed += test_session_helpers_null_safe();
+    failed += test_session_peer_closed();
 #endif
 
     printf("\n--- Shell Prompt Detection ---\n");
@@ -7278,6 +7332,41 @@ int main(void) {
     failed += test_conn_prompt_seq_is_never_zero();
     failed += test_conn_prompt_null_is_safe();
     failed += test_conn_prompt_wants_password();
+    failed += test_conn_ui_kind_has_secret();
+    failed += test_conn_save_note_latest_wins();
+    failed += test_ssh_auth_parse();
+    failed += test_ssh_auth_sequence_table();
+    failed += test_ssh_auth_saved_not_after_used();
+    failed += test_ssh_auth_attempt_cap();
+    failed += test_ssh_auth_saved_for();
+    failed += test_ssh_auth_transport_dead();
+    failed += test_ssh_auth_may_continue();
+    failed += test_ssh_auth_requery_rule();
+    failed += test_ssh_auth_fail_text();
+    failed += test_ssh_kbd_matcher_positive();
+    failed += test_ssh_kbd_matcher_negative();
+    failed += test_ssh_kbd_matcher_lookalikes();
+    failed += test_ssh_kbd_text_has_negative();
+    failed += test_ssh_kbd_sanitize_escapes();
+    failed += test_ssh_kbd_sanitize_lines();
+    failed += test_ssh_kbd_sanitize_utf8_and_cap();
+    failed += test_ssh_kbd_copies_by_length();
+    failed += test_ssh_kbd_prompt_boundaries();
+    failed += test_ssh_kbd_saved_answers_one_prompt();
+    failed += test_ssh_kbd_saved_once_across_rounds();
+    failed += test_ssh_kbd_never_auto();
+    failed += test_ssh_kbd_offer_save();
+    failed += test_ssh_kbd_zero_prompt_round();
+    failed += test_ssh_kbd_too_many_prompts();
+    failed += test_ssh_kbd_round_cap();
+    failed += test_ssh_kbd_cancel();
+    failed += test_ssh_kbd_instruction_blocks_auto();
+    failed += test_ssh_kbd_long_label();
+    failed += test_ssh_kbd_rearm_limits();
+    failed += test_ssh_kbd_attempt_restores_override();
+    failed += test_ssh_kbd_wipes_answers();
+    failed += test_ssh_kbd_adapter_signature();
+    failed += test_ssh_kbd_secret_registration();
     failed += test_pw_reveal_press_reveals_only_with_text();
     failed += test_pw_reveal_release_masks();
     failed += test_pw_reveal_capture_lost_and_deactivate_mask();
@@ -7665,6 +7754,9 @@ int main(void) {
         failed += test_net_url_resolve_relative();
         failed += test_net_url_resolve_refuses();
         failed += test_net_url_display();
+        failed += test_pw_layout_today_unchanged();
+        failed += test_pw_layout_text_row();
+        failed += test_pw_text_crlf();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);

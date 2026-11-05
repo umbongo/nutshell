@@ -284,6 +284,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    tests/test_icons.c tests/test_local_pty.c tests/conpty_expect.c \
                    tests/test_md_render_win.c tests/test_chat_select_win.c \
                    src/ui/pw_reveal.c src/core/pw_reveal_state.c src/ui/pw_prompt.c src/ui/dwm_util.c \
+                   src/core/pw_prompt_layout.c \
                    tests/test_pw_reveal_win.c \
                    src/ui/telnet_io.c src/core/telnet_proto.c src/core/telnet_login.c \
                    src/core/telnet_session.c src/core/telnet_status.c \

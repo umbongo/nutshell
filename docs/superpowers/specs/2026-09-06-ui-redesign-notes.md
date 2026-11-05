@@ -311,6 +311,19 @@ Done, in order (details in the commit messages and the specs named):
   on a test was fixed with `test_fopen_private()` (0499c11). Tested on Windows by the
   maintainer before merge (*reported*); the new harness cases have not been run.
 - 2026-11-03 retrospective (`docs/retrospectives/2026-11-03-ten-merges-retrospective.md`).
+- SSH keyboard-interactive authentication, v1.2.56 (branch `feat/keyboard-interactive-auth`;
+  spec `2026-11-05-keyboard-interactive-design.md`): the server is asked what it offers and
+  the methods are tried in a fixed plan (`src/core/ssh_auth_plan.c`; a saved password goes
+  first when password is on offer, else keyboard-interactive does); each server prompt is
+  shown one at a time with its text in a scrolling box (`src/core/ssh_kbd.c`,
+  `src/core/pw_prompt_layout.c`, `src/ui/pw_prompt.c`); a saved password answers only a
+  plain password prompt, once (and not under an instruction that names a token or code);
+  the save tick appears on such a prompt; a refused saved password re-queries the method
+  list at once and is then followed by one more question (the final review's ruling of
+  2026-11-05, which removed the partial-success Open item); the setup timeout is re-armed
+  after each answered round, typed or sent from the saved password, so a push approval
+  gets a minute; a failed login names the offered methods.
+  `tests/manual/kbdint_server.py` is a paramiko server for hand checks (not in any gate).
 
 Open, in priority order:
 - [ ] web_fetch: a watchdog that closes the request handle at hop end or on cancel; one
@@ -346,6 +359,9 @@ Open, in priority order:
       auto-login timer misjudges once per 49.7 days of uptime (fails safe); the minor test
       gaps in #81's final review. From PR #80: no Wine test separates "mask after every
       edit message" from a message whitelist.
+- [ ] SSH agent / Pageant authentication: not supported (keyboard-interactive spec,
+      non-goal). Low priority; a profile that needs the agent has to use a key file or a
+      password today.
 - [ ] Designed light-theme ANSI palette (follow-up to the contrast floor, maintainer's
       decision 3 of 2026-10-19): on Onyx Light and Moss & Mist the floor makes normal and
       bright colours converge (90 and 97 both paint `6C6C6C`) and flattens the 232-255 grey
