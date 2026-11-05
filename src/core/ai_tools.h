@@ -87,6 +87,20 @@ int  ai_tool_execute(const AiToolRegistry *reg, const AiToolCall *call,
 int  ai_tool_result_anthropic(const AiToolResult *result, char *buf, size_t max);
 int  ai_tool_result_openai(const AiToolResult *result, char *buf, size_t max);
 
+/* The text of a tool-approval card for call: row is the one-line summary and
+ * detail the full text behind the Details toggle.
+ *   web_fetch    row "web_fetch: " + net_url_display_marked(url) (no query,
+ *                no userinfo); detail net_url_detail(url).
+ *   any other    row the tool name (controls and bidi removed); detail the
+ *                call's input_json with controls and bidi escaped
+ *                (net_text_escape).
+ * Both are NUL-terminated within their capacity (a NULL buffer or capacity 0
+ * is skipped); a detail that does not fit ends in U+2026. Returns 0, or -1
+ * when call is NULL or a web_fetch call has no usable "url" string (row is
+ * then "web_fetch: (no url)", detail ""; for a NULL call both are ""). */
+int  ai_tool_card_text(const AiToolCall *call, char *row, size_t row_cap,
+                       char *detail, size_t detail_cap);
+
 /* Schema validation */
 int  ai_tools_validate_schemas(const AiToolRegistry *reg);
 

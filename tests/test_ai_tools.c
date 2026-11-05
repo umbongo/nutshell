@@ -1126,3 +1126,122 @@ int test_tool_execute_web_search_error_stays_content(void)
     free(r.content);
     TEST_END();
 }
+
+/* ---- ai_tool_card_text ------------------------------------------------- */
+
+int test_ai_tool_card_text_web_fetch(void)
+{
+    TEST_BEGIN();
+    AiToolCall call;
+    char row[256], detail[1024];
+
+    memset(&call, 0, sizeof call);
+    snprintf(call.id, sizeof call.id, "toolu_1");
+    snprintf(call.name, sizeof call.name, "web_fetch");
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://u@a.test/x?q=1\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/x?\xE2\x80\xA6");
+    ASSERT_STR_EQ(detail, "https://a.test/x?q=1");
+
+    /* no query: no mark */
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"https://a.test/x\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/x");
+    ASSERT_STR_EQ(detail, "https://a.test/x");
+
+    /* a control (JSON \u001b) in the URL: removed from the row, escaped in the detail */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://a.test/a\\u001bb\\u202ec\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/abc");
+    ASSERT_STR_EQ(detail, "https://a.test/a\\x1Bb\\u202Ec");
+
+    /* the query never reaches the row, even a long one */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://a.test/?token=hunter2&x=1\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_TRUE(strstr(row, "hunter2") == NULL);
+    ASSERT_TRUE(strstr(detail, "hunter2") != NULL);
+
+    /* missing, empty or non-string url, malformed JSON */
+    snprintf(call.input_json, sizeof call.input_json, "{}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "web_fetch: (no url)");
+    ASSERT_STR_EQ(detail, "");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "web_fetch: (no url)");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":42}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "web_fetch: (no url)");
+    snprintf(call.input_json, sizeof call.input_json, "not json");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "web_fetch: (no url)");
+
+    /* NULL call; NULL or zero-size buffers */
+    ASSERT_EQ(ai_tool_card_text(NULL, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "");
+    ASSERT_STR_EQ(detail, "");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"https://a.test/x\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, NULL, 0, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(detail, "https://a.test/x");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, NULL, 0), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/x");
+
+    /* a small row buffer: NUL-terminated */
+    memset(row, 'x', sizeof row);
+    ai_tool_card_text(&call, row, 8, detail, sizeof detail);
+    ASSERT_TRUE(strlen(row) < 8);
+    TEST_END();
+}
+
+int test_ai_tool_card_text_other_tool(void)
+{
+    TEST_BEGIN();
+    AiToolCall call;
+    char row[128], detail[1024];
+
+    memset(&call, 0, sizeof call);
+    snprintf(call.name, sizeof call.name, "custom");
+    snprintf(call.input_json, sizeof call.input_json, "{\"a\":\"\\u0001\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "custom");
+    ASSERT_STR_EQ(detail, "{\"a\":\"\\u0001\"}");
+
+    /* a raw control byte in the input is escaped */
+    snprintf(call.input_json, sizeof call.input_json, "{\"a\":\"x\x1B[2Jy\xE2\x80\xAE\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(detail, "{\"a\":\"x\\x1B[2Jy\\u202E\"}");
+
+    /* a hostile tool name never puts a control or bidi byte in the row */
+    snprintf(call.name, sizeof call.name, "ev\x1B[2Jil\xE2\x80\xAE" "x\n");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "ev[2Jilx");
+
+    /* a tool named like web_fetch but longer is another tool */
+    snprintf(call.name, sizeof call.name, "web_fetch2");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"https://a.test/?q=1\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch2");
+
+    /* a long input is cut with the ellipsis at the detail's capacity */
+    snprintf(call.name, sizeof call.name, "custom");
+    {
+        char *p = call.input_json;
+        size_t i;
+        p[0] = '{';
+        for (i = 1; i < 3000; i++) p[i] = 'z';
+        p[3000] = '\0';
+        char d[100];
+        ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, d, sizeof d), 0);
+        ASSERT_EQ(strlen(d), (size_t)99);
+        ASSERT_STR_EQ(d + 96, "\xE2\x80\xA6");
+    }
+
+    /* an empty input */
+    call.input_json[0] = '\0';
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(detail, "");
+    TEST_END();
+}

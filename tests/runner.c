@@ -2867,6 +2867,8 @@ int test_ai_tool_result_openai_error(void);
 int test_ai_tools_validate_schemas_valid(void);
 int test_ai_tools_validate_schemas_invalid(void);
 int test_ai_tool_input_max_boundary(void);
+int test_ai_tool_card_text_web_fetch(void);
+int test_ai_tool_card_text_other_tool(void);
 /* test_ai_tools.c — streaming */
 int test_ai_stream_anthropic_tool_use_block(void);
 int test_ai_stream_anthropic_text_block(void);
@@ -6634,6 +6636,8 @@ int main(void) {
     failed += test_ai_tools_validate_schemas_valid();
     failed += test_ai_tools_validate_schemas_invalid();
     failed += test_ai_tool_input_max_boundary();
+    failed += test_ai_tool_card_text_web_fetch();
+    failed += test_ai_tool_card_text_other_tool();
 
     printf("\n--- AI Tool Streaming ---\n");
     failed += test_ai_stream_anthropic_tool_use_block();
@@ -7751,6 +7755,9 @@ int main(void) {
         int test_net_url_resolve_relative(void);
         int test_net_url_resolve_refuses(void);
         int test_net_url_display(void);
+        int test_net_url_display_marked(void);
+        int test_net_url_detail(void);
+        int test_net_text_escape(void);
         failed += test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read();
         failed += test_dlog_review_osc52_introducer_after_the_output_filled_up_withholds_the_next_read();
         failed += test_dlog_review_escape_bytes_keeps_tracking_after_the_output_is_full();
@@ -7811,6 +7818,9 @@ int main(void) {
         failed += test_net_url_resolve_relative();
         failed += test_net_url_resolve_refuses();
         failed += test_net_url_display();
+        failed += test_net_url_display_marked();
+        failed += test_net_url_detail();
+        failed += test_net_text_escape();
         failed += test_pw_layout_today_unchanged();
         failed += test_pw_layout_text_row();
         failed += test_pw_text_crlf();

@@ -3,6 +3,8 @@
 #include "json_validate.h"
 #include "dlog.h"
 #include "dlog_query.h"
+#include "net_guard.h"
+#include "paste_filter.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -913,4 +915,67 @@ const char *ai_debug_tool_prompt_note(void)
            "Nutshell's own debug log. Use it when the user reports a glitch or a hang, "
            "or says they just marked an issue (start with summary=true, then narrow with "
            "around_issue or category), and call it at most a few times per turn.";
+}
+
+/* ---- ai_tool_card_text ----------------------------------------------------- */
+
+/* Copy src into out (cap bytes) as a one-line label: controls, bidi, TAB, LF
+ * and CR removed, cut on a UTF-8 boundary, NUL-terminated. */
+static void card_label(const char *src, char *out, size_t cap)
+{
+    char tmp[AI_TOOL_NAME_MAX];
+    size_t n, w, k;
+
+    if (!out || cap == 0) return;
+    n = strnlen(src, sizeof tmp - 1);
+    memcpy(tmp, src, n);
+    n = paste_filter_controls(tmp, n, tmp, NULL);
+    for (k = 0, w = 0; k < n; k++)
+        if (tmp[k] != '\t' && tmp[k] != '\n' && tmp[k] != '\r') tmp[w++] = tmp[k];
+    tmp[w] = '\0';
+    if (w > cap - 1) {
+        w = cap - 1;
+        while (w > 0 && ((unsigned char)tmp[w] & 0xC0) == 0x80) w--;
+        tmp[w] = '\0';
+    }
+    memcpy(out, tmp, w + 1);
+}
+
+int ai_tool_card_text(const AiToolCall *call, char *row, size_t row_cap,
+                      char *detail, size_t detail_cap)
+{
+    static const char prefix[] = "web_fetch: ";
+    const size_t plen = sizeof prefix - 1;
+
+    if (row && row_cap > 0) row[0] = '\0';
+    if (detail && detail_cap > 0) detail[0] = '\0';
+    if (!call) return -1;
+
+    if (strncmp(call->name, "web_fetch", AI_TOOL_NAME_MAX) == 0) {
+        JsonNode *input = json_parse(call->input_json);
+        const char *url = input ? json_obj_str(input, "url") : NULL;
+        int rc = 0;
+
+        if (!url || url[0] == '\0') {
+            if (row && row_cap > 0) snprintf(row, row_cap, "%s(no url)", prefix);
+            rc = -1;
+        } else {
+            if (row && row_cap > 0) {
+                size_t head = plen < row_cap - 1 ? plen : row_cap - 1;
+                memcpy(row, prefix, head);
+                row[head] = '\0';
+                if (head == plen)
+                    net_url_display_marked(url, row + plen, row_cap - plen);
+            }
+            if (detail && detail_cap > 0) net_url_detail(url, detail, detail_cap);
+        }
+        if (input) json_free(input);
+        return rc;
+    }
+
+    if (row && row_cap > 0) card_label(call->name, row, row_cap);
+    if (detail && detail_cap > 0)
+        net_text_escape(call->input_json, strnlen(call->input_json, AI_TOOL_INPUT_MAX),
+                        detail, detail_cap);
+    return 0;
 }
