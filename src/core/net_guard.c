@@ -405,14 +405,48 @@ static const char *ng_authority_start(const char *url)
     return sep + 3;
 }
 
+/* The length of the valid UTF-8 sequence at s[0] (n >= 1, s[0] >= 0x80), with
+ * its code point in *cp, or 0 when the bytes are invalid: a stray
+ * continuation byte, a lead without its continuations, an overlong form, a
+ * surrogate, a value above U+10FFFF, 0xC0, 0xC1 or 0xF5-0xFF. */
+static size_t ng_utf8_decode(const unsigned char *s, size_t n, unsigned *cp)
+{
+    if (s[0] >= 0xC2 && s[0] <= 0xDF) {
+        if (n < 2 || (s[1] & 0xC0) != 0x80) return 0;
+        *cp = ((unsigned)(s[0] & 0x1F) << 6) | (s[1] & 0x3Fu);
+        return 2;
+    }
+    if (s[0] >= 0xE0 && s[0] <= 0xEF) {
+        unsigned lo = s[0] == 0xE0 ? 0xA0u : 0x80u;
+        unsigned hi = s[0] == 0xED ? 0x9Fu : 0xBFu;
+        if (n < 3 || s[1] < lo || s[1] > hi || (s[2] & 0xC0) != 0x80) return 0;
+        *cp = ((unsigned)(s[0] & 0x0F) << 12) | ((unsigned)(s[1] & 0x3F) << 6) |
+              (s[2] & 0x3Fu);
+        return 3;
+    }
+    if (s[0] >= 0xF0 && s[0] <= 0xF4) {
+        unsigned lo = s[0] == 0xF0 ? 0x90u : 0x80u;
+        unsigned hi = s[0] == 0xF4 ? 0x8Fu : 0xBFu;
+        if (n < 4 || s[1] < lo || s[1] > hi || (s[2] & 0xC0) != 0x80 ||
+            (s[3] & 0xC0) != 0x80)
+            return 0;
+        *cp = ((unsigned)(s[0] & 0x07) << 18) | ((unsigned)(s[1] & 0x3F) << 12) |
+              ((unsigned)(s[2] & 0x3F) << 6) | (s[3] & 0x3Fu);
+        return 4;
+    }
+    return 0;
+}
+
 /* The URL text a row shows before any cut: userinfo, query and fragment
- * dropped, controls, bidi and TAB/LF/CR removed. Returns a malloc'd buffer of
- * *len bytes (not NUL-terminated beyond *len) or NULL; *query is set to 1
- * when a '?' ended the text. */
+ * dropped, ASCII controls and TAB/LF/CR removed, and every non-ASCII code
+ * point (an invalid byte counts as one) replaced by U+FFFD, so nothing
+ * invisible or look-alike reaches the row. Returns a malloc'd buffer of *len
+ * bytes (not NUL-terminated beyond *len) or NULL; *query is set to 1 when a
+ * '?' ended the text. */
 static char *ng_row_text(const char *url, size_t *len, int *query)
 {
     const char *p, *auth, *at;
-    char *buf;
+    char *buf, *out;
     size_t span, auth_n, n, w, flen;
 
     auth = ng_authority_start(url);
@@ -433,13 +467,30 @@ static char *ng_row_text(const char *url, size_t *len, int *query)
         if (p >= auth && at && p <= at) continue;
         buf[w++] = *p;
     }
-    flen = paste_filter_controls(buf, w, buf, NULL);
+
+    /* Each non-ASCII code point becomes the three bytes of U+FFFD. */
+    out = (char *)malloc(w * 3 + 1);
+    if (!out) { free(buf); return NULL; }
+    for (n = 0, flen = 0; n < w; ) {
+        unsigned char c = (unsigned char)buf[n];
+        unsigned cp;
+        size_t k;
+
+        if (c < 0x80) { out[flen++] = (char)c; n++; continue; }
+        k = ng_utf8_decode((const unsigned char *)buf + n, w - n, &cp);
+        memcpy(out + flen, "\xEF\xBF\xBD", 3);
+        flen += 3;
+        n += k ? k : 1;
+    }
+    free(buf);
+
+    flen = paste_filter_controls(out, flen, out, NULL);
     for (n = 0, w = 0; n < flen; n++) {
-        if (buf[n] == '\t' || buf[n] == '\n' || buf[n] == '\r') continue;
-        buf[w++] = buf[n];
+        if (out[n] == '\t' || out[n] == '\n' || out[n] == '\r') continue;
+        out[w++] = out[n];
     }
     *len = w;
-    return buf;
+    return out;
 }
 
 size_t net_url_display_marked(const char *url, char *out, size_t cap)
@@ -495,52 +546,47 @@ size_t net_url_display_marked(const char *url, char *out, size_t cap)
 }
 
 /* How many input bytes form the next unit of text and what it is written as:
- * an escape sequence for a control, else the character's own bytes. Returns
- * the input bytes consumed (>= 1) and sets *unit / *unit_len. s[0..n) is the
- * remaining input, n >= 1. */
-static size_t ng_unit(const unsigned char *s, size_t n, char unit[8], size_t *unit_len)
+ * printable ASCII as itself; a C0 control, DEL or an invalid UTF-8 byte as
+ * \xNN; every other code point as \uXXXX (BMP) or \UXXXXXXXX (beyond it),
+ * hex in upper case, so no invisible or look-alike character is written
+ * raw. Returns the input bytes consumed (>= 1) and sets *unit / *unit_len.
+ * s[0..n) is the remaining input, n >= 1. */
+static size_t ng_unit(const unsigned char *s, size_t n, char unit[12], size_t *unit_len)
 {
     static const char hex[] = "0123456789ABCDEF";
-    size_t k = 1, i;
+    size_t k, i;
     unsigned cp = 0;
-    int esc = 0;
 
-    if (s[0] < 0x20 || s[0] == 0x7F) {
+    if (s[0] < 0x20 || s[0] == 0x7F) k = 0;
+    else if (s[0] < 0x80) {
+        unit[0] = (char)s[0];
+        *unit_len = 1;
+        return 1;
+    } else k = ng_utf8_decode(s, n, &cp);
+
+    if (k == 0) {
         unit[0] = '\\'; unit[1] = 'x';
         unit[2] = hex[s[0] >> 4]; unit[3] = hex[s[0] & 0xF];
         *unit_len = 4;
         return 1;
     }
-    if (s[0] >= 0xC2 && s[0] <= 0xDF && n >= 2 && (s[1] & 0xC0) == 0x80) {
-        k = 2;
-        cp = ((unsigned)(s[0] & 0x1F) << 6) | (s[1] & 0x3Fu);
-        esc = cp >= 0x80 && cp <= 0x9F;
-    } else if (s[0] >= 0xE0 && s[0] <= 0xEF && n >= 3 &&
-               (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) {
-        k = 3;
-        cp = ((unsigned)(s[0] & 0x0F) << 12) | ((unsigned)(s[1] & 0x3F) << 6) | (s[2] & 0x3Fu);
-        esc = cp == 0x200E || cp == 0x200F || (cp >= 0x202A && cp <= 0x202E) ||
-              (cp >= 0x2066 && cp <= 0x2069);
-    } else if (s[0] >= 0xF0 && s[0] <= 0xF4 && n >= 4 &&
-               (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80 && (s[3] & 0xC0) == 0x80) {
-        k = 4;
-    }
-    if (esc) {
-        unit[0] = '\\'; unit[1] = 'u';
-        unit[2] = hex[(cp >> 12) & 0xF]; unit[3] = hex[(cp >> 8) & 0xF];
-        unit[4] = hex[(cp >> 4) & 0xF];  unit[5] = hex[cp & 0xF];
+    unit[0] = '\\';
+    if (cp <= 0xFFFF) {
+        unit[1] = 'u';
+        for (i = 0; i < 4; i++) unit[2 + i] = hex[(cp >> (12 - 4 * i)) & 0xF];
         *unit_len = 6;
-        return k;
+    } else {
+        unit[1] = 'U';
+        for (i = 0; i < 8; i++) unit[2 + i] = hex[(cp >> (28 - 4 * i)) & 0xF];
+        *unit_len = 10;
     }
-    for (i = 0; i < k; i++) unit[i] = (char)s[i];
-    *unit_len = k;
     return k;
 }
 
 size_t net_text_escape(const char *text, size_t len, char *out, size_t cap)
 {
     const unsigned char *s = (const unsigned char *)text;
-    char unit[8];
+    char unit[12];
     size_t ulen, used, total, w, limit, avail;
 
     if (!out || cap == 0) return 0;

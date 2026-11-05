@@ -71,28 +71,30 @@ size_t net_url_display(const char *url, char *out, size_t cap);
 /* As net_url_display, for a tool-approval card's row: a dropped query adds
  * "?" and U+2026 ("\xE2\x80\xA6") after the path, and a path cut at
  * NET_URL_DISPLAY_MAX ends in U+2026 instead of "...". The row never shows
- * the userinfo or the query text. A control or bidi character in url is
- * removed, as net_url_display removes it. Within cap the output is cut on a
- * UTF-8 boundary (ending in U+2026 when cap leaves room for it) and always
- * NUL-terminated (cap 0 writes nothing). NULL url gives "". Returns the
- * length written. */
+ * the userinfo or the query text. An ASCII control (and TAB, LF, CR) in url
+ * is removed; every non-ASCII code point (an invalid UTF-8 byte counts as
+ * one) is replaced by U+FFFD, so nothing invisible or look-alike reaches
+ * the row; only the row's own U+2026 marks are non-ASCII otherwise. Within
+ * cap the output is cut on a UTF-8 boundary (ending in U+2026 when cap
+ * leaves room for it) and always NUL-terminated (cap 0 writes nothing).
+ * NULL url gives "". Returns the length written. */
 size_t net_url_display_marked(const char *url, char *out, size_t cap);
 
 /* The text a tool-approval card's Details shows for a URL: url with only the
  * userinfo (up to the last '@' of the authority) removed. The query and the
- * fragment stay. Each C0 byte (0x00-0x1F) and DEL is written as \xNN, each
- * C1 control (UTF-8 C2 80..9F) as \u00XX and each bidi control (U+200E,
- * U+200F, U+202A-U+202E, U+2066-U+2069) as \uXXXX, hex in upper case. See
- * net_text_escape for the cut when the result does not fit cap. NULL url
- * gives "". Returns the length written. */
+ * fragment stay. Every non-ASCII code point is escaped: a BMP one as
+ * \uXXXX, one beyond it as \UXXXXXXXX (8 digits), hex in upper case; each C0
+ * byte (0x00-0x1F), DEL and each invalid or truncated UTF-8 byte is written
+ * as \xNN. See net_text_escape for the cut when the result does not fit
+ * cap. NULL url gives "". Returns the length written. */
 size_t net_url_detail(const char *url, char *out, size_t cap);
 
 /* The escaping of net_url_detail applied to len bytes of text (an embedded
- * NUL is escaped as \x00). When the result does not fit cap, it is cut on a
- * UTF-8 boundary and an escape boundary (never inside \xNN or \uXXXX) and
- * ends in U+2026; a cap too small for that gets as much as fits, with no
- * mark. Always NUL-terminated within cap (cap 0 or NULL out writes nothing).
- * Returns the length written. */
+ * NUL is escaped as \x00). When the result does not fit cap, it is cut on an
+ * escape boundary (never inside \xNN, \uXXXX or \UXXXXXXXX) and ends in
+ * U+2026, the one non-ASCII mark that is ours; a cap too small for that gets
+ * as much as fits, with no mark. Always NUL-terminated within cap (cap 0 or
+ * NULL out writes nothing). Returns the length written. */
 size_t net_text_escape(const char *text, size_t len, char *out, size_t cap);
 
 #endif

@@ -1154,8 +1154,31 @@ int test_ai_tool_card_text_web_fetch(void)
     snprintf(call.input_json, sizeof call.input_json,
              "{\"url\":\"https://a.test/a\\u001bb\\u202ec\"}");
     ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
-    ASSERT_STR_EQ(row, "web_fetch: https://a.test/abc");
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/ab\xEF\xBF\xBD" "c");
     ASSERT_STR_EQ(detail, "https://a.test/a\\x1Bb\\u202Ec");
+
+    /* invisible characters (JSON \u escapes and raw bytes): never raw on the
+     * card, U+FFFD in the row, an escape in Details */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://a.test/p\\u200ba\\ufeffb\\u00adc\\ud800\\udc00d\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_TRUE(strstr(row, "\xE2\x80\x8B") == NULL);
+    ASSERT_TRUE(strstr(detail, "\xE2\x80\x8B") == NULL);
+    ASSERT_TRUE(strstr(row, "\xEF\xBB\xBF") == NULL);
+    ASSERT_TRUE(strstr(detail, "\xEF\xBB\xBF") == NULL);
+    ASSERT_TRUE(strstr(row, "\xC2\xAD") == NULL);
+    ASSERT_TRUE(strstr(detail, "\xC2\xAD") == NULL);
+    ASSERT_TRUE(strstr(row, "\xEF\xBF\xBD") != NULL);
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://a.test/p\xE2\x80\x8B" "a\xEF\xBB\xBF" "b\xC2\xAD" "c\xF3\xA0\x81\x81" "d\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/p\xEF\xBF\xBD" "a\xEF\xBF\xBD" "b\xEF\xBF\xBD" "c\xEF\xBF\xBD" "d");
+    ASSERT_STR_EQ(detail, "https://a.test/p\\u200Ba\\uFEFFb\\u00ADc\\U000E0041d");
+    /* an invalid UTF-8 byte: U+FFFD in the row, \xNN in Details */
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"https://a.test/a\xFF" "b\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/a\xEF\xBF\xBD" "b");
+    ASSERT_STR_EQ(detail, "https://a.test/a\\xFFb");
 
     /* a schemeless URL quoting "://" in its path still loses its userinfo */
     snprintf(call.input_json, sizeof call.input_json,
@@ -1220,6 +1243,12 @@ int test_ai_tool_card_text_other_tool(void)
     snprintf(call.input_json, sizeof call.input_json, "{\"a\":\"x\x1B[2Jy\xE2\x80\xAE\"}");
     ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
     ASSERT_STR_EQ(detail, "{\"a\":\"x\\x1B[2Jy\\u202E\"}");
+
+    /* the same rule as a URL: invisible, tag and invalid bytes are escaped */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"a\":\"p\xE2\x80\x8B\xEF\xBB\xBF\xC2\xAD\xF3\xA0\x81\x81\xFF\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(detail, "{\"a\":\"p\\u200B\\uFEFF\\u00AD\\U000E0041\\xFF\"}");
 
     /* a hostile tool name never puts a control or bidi byte in the row */
     snprintf(call.name, sizeof call.name, "ev\x1B[2Jil\xE2\x80\xAE" "x\n");
