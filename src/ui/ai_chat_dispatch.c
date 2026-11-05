@@ -130,7 +130,6 @@ void ai_chat_tool_card_answer(AiChatData *d, CmdBatch *batch, ToolDecision answe
         ai_tool_rounds_reset(d->active_state);
 
     ai_chat_settle_batch_if_done(d, batch);   /* frees batch */
-    batch = NULL;
 
     tool_wait_over(d);
     ai_chat_maybe_start_next_batch(d);        /* no-op while the stream is busy */
