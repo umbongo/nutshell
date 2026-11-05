@@ -321,7 +321,7 @@ static inline int md_is_table_separator(const char *line)
  *
  * Returns 1 and writes [start, end) of the token; returns 0 if no more
  * tokens. Whitespace = ' ' or '\t' (not newline — caller has already
- * split on \n; \r is stripped upstream in ai_chat.c).
+ * split on \n; \r is stripped upstream in ai_chat_stream.c).
  */
 static inline int md_next_word(const char *line, int len, int offset,
                                int *out_start, int *out_end)

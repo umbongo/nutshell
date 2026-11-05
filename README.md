@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.53 \
+**Version**: v1.2.54 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -657,10 +657,10 @@ telnet tabs.
 │       ├── ai_chat.c/.h              #   AI chat panel: window class, WndProc, public API (117 KB)
 │       ├── ai_chat_internal.h        #   Types, constants and prototypes shared by the ai_chat files
 │       ├── ai_chat_stream.c          #   SSE stream parser and background stream thread
-│       ├── ai_chat_input.c           #   Message box subclass, image paste, GDI+ PNG encode
+│       ├── ai_chat_input.c           #   Message box subclass, text and image paste, scroll sync
 │       ├── ai_chat_dispatch.c        #   Command batch resolution and prompt-gated dispatch tick
-│       ├── ai_chat_send.c            #   Tool registry, stream launch, abort and cancel
-│       ├── ai_chat_status.c          #   Status line, policy control, context meter
+│       ├── ai_chat_send.c            #   Tool registry, stream lifecycle, user and continue turns
+│       ├── ai_chat_status.c          #   Status line, policy control, context meter, sash
 │       ├── ai_chat_view.c            #   Layout, panel state, busy indicator, display rebuild, zoom
 │       ├── ai_http_win.c             #   WinHTTP streaming implementation
 │       ├── chat_listview.c/.h        #   Chat message rendering, sticky scroll

@@ -5,6 +5,7 @@
 #include "ai_chat_internal.h"
 
 #ifdef _WIN32
+#include <stdio.h>
 
 static const char *AI_CHAT_CLASS = "Nutshell_AIChat";
 

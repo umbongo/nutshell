@@ -121,7 +121,7 @@ DispatchLineClearMode dispatch_line_clear_mode(SessionKind kind,
  * character the user just typed but that has not reached the terminal
  * buffer yet is invisible to term_at_unambiguous_prompt() -- the
  * terminal's write_seq has not changed yet either, so the dispatcher's own
- * "quiet" tracking (PROMPT_QUIET_MS in ai_chat.c) does not catch it -- and
+ * "quiet" tracking (PROMPT_QUIET_MS in ai_chat_internal.h) does not catch it -- and
  * the AI's command gets glued onto the front of whatever the user typed
  * (e.g. "xGet-ChildItem"). Set to the same 400 ms as PROMPT_QUIET_MS: the
  * rest of the dispatcher already treats that as long enough for the

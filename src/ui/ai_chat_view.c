@@ -1,5 +1,5 @@
 /* The panel's view: layout helpers, panel state, busy indicator, display
- * rebuild, header, ai_chat_relayout and zoom. */
+ * rebuild, header, relayout and zoom. */
 #ifdef _WIN32
 #include <winsock2.h>   /* Must come before windows.h */
 #endif

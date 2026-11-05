@@ -183,7 +183,7 @@ typedef enum {
  *   approved == 1, CHAT_RUN_ABORTED   -> "not run",  WARNING
  *
  * "held" only outranks the run states because raising the policy ceiling
- * clears u.cmd.blocked on unblock (src/ui/ai_chat.c, the unblock walk) --
+ * clears u.cmd.blocked on unblock (src/ui/ai_chat_status.c, the unblock walk) --
  * an approved-and-run command is therefore never still blocked, so this
  * priority order never hides a "ran"/"running" row behind "held".
  *

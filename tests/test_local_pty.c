@@ -615,7 +615,7 @@ int test_local_pty_powershell_settles_after_command_error(void)
     /* Drain the banner and let the first prompt settle, using the same
      * "quiet since the last write_seq change, then term_at_prompt()"
      * shape ai_chat_dispatch_tick() itself uses (PROMPT_QUIET_MS is 400 ms in
-     * ai_chat.c) -- bounded generously since a first PowerShell launch on
+     * ai_chat_internal.h) -- bounded generously since a first PowerShell launch on
      * a cold profile can be slow. */
     unsigned long last_seq = term->write_seq;
     ULONGLONG last_change = GetTickCount64();

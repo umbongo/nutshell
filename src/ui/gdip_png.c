@@ -4,7 +4,7 @@
 #include "gdip_png.h"
 #include <stdlib.h>
 
-/* GDI+ flat API, declared the way ai_chat.c does (C-compatible, no C++
+/* GDI+ flat API, declared the way ai_chat_internal.h does (C-compatible, no C++
  * headers). Only what the capture needs. */
 typedef int GpStatus;
 typedef void GpBitmap;

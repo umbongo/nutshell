@@ -349,7 +349,7 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
  * the policy ceiling to `allowed_stop` (a CmdSafetyLevel). Without it the
  * AI still has the earlier "these were BLOCKED" message in its history and
  * keeps telling the user to change a setting they have just changed.
- * Lives here, rather than at the one call site in src/ui/ai_chat.c, so the
+ * Lives here, rather than at the one call site in src/ui/ai_chat_status.c, so the
  * wording the model actually receives is natively testable.
  * Returns bytes written (excluding NUL), or 0 on error. */
 size_t ai_build_policy_raised_note(int allowed_stop, char *buf, size_t buf_size);
