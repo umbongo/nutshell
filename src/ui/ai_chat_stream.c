@@ -135,7 +135,9 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     if (len < 6 || strncmp(line, "data: ", 6) != 0) return;
 
     const char *json = line + 6;
-    if (ai_stream_chunk_cut_off(json))
+    /* Only a chunk that carries the word can be a "length" finish: skip the
+     * extra JSON parse for every other chunk of the stream. */
+    if (strstr(json, "\"length\"") && ai_stream_chunk_cut_off(json))
         ctx->cut_off = 1;
     char content_delta[1024] = "";
     char thinking_delta[1024] = "";
@@ -388,8 +390,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
          * [EXEC], so no command card): say so instead of leaving it a mystery. */
         if (ctx.cut_off) {
             DLOG(DLOG_AI, DLOG_WARN, 0, "stream.cut_off",
-                 "stream=%u finish_reason=length tokens_out=%d", stream_id,
-                 ctx.output_tokens);
+                 "stream=%u finish_reason=length", stream_id);
             post_tool_msg(s, CHAT_ITEM_STATUS,
                           "reply cut off at the provider's output limit");
         }
@@ -407,11 +408,19 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             /* Add assistant message with tool_use blocks */
             /* ctx.full_thinking is this turn's reasoning; the builder sends it
              * back with the tool calls for provider "moonshot" only. */
-            agentic_add_assistant_tool_msg_ex(&s->conv,
-                                              ctx.full_content,
-                                              ctx.full_thinking,
-                                              tool_stream_ptr->pending_tool_calls,
-                                              tool_stream_ptr->pending_tool_count);
+            if (agentic_add_assistant_tool_msg_ex(&s->conv,
+                                                  ctx.full_content,
+                                                  ctx.full_thinking,
+                                                  tool_stream_ptr->pending_tool_calls,
+                                                  tool_stream_ptr->pending_tool_count) != 0) {
+                /* Results must never go out without their tool-call turn. */
+                stream_failed = 1;
+                DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error", "stream=%u class=oom ms=%llu",
+                     stream_id, (unsigned long long)(GetTickCount64() - t_stream));
+                post_tool_msg(s, CHAT_ITEM_STATUS, "[tool loop stopped: out of memory]");
+                post_error_response(s, "Error: out of memory for the tool call");
+                goto out;
+            }
 
             /* Execute each tool call */
             AiToolResult *results = (AiToolResult *)calloc(

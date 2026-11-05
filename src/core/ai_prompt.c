@@ -764,7 +764,7 @@ static size_t build_body_core(const AiConversation *conv,
     }
 
     int is_anthropic = provider && strcmp(provider, "anthropic") == 0;
-    int send_reasoning = provider && strcmp(provider, "moonshot") == 0;
+    int is_moonshot = provider && strcmp(provider, "moonshot") == 0;
     size_t pos = 0;
     int n;
 
@@ -784,7 +784,7 @@ static size_t build_body_core(const AiConversation *conv,
     }
 
     /* Moonshot: an explicit output limit (see AI_MOONSHOT_MAX_COMPLETION_TOKENS) */
-    if (provider && strcmp(provider, "moonshot") == 0) {
+    if (is_moonshot) {
         n = snprintf(buf + pos, buf_size - pos, ",\"max_completion_tokens\":%d",
                      AI_MOONSHOT_MAX_COMPLETION_TOKENS);
         if (n < 0 || pos + (size_t)n >= buf_size) return 0;
@@ -1029,7 +1029,7 @@ static size_t build_body_core(const AiConversation *conv,
             /* Moonshot's thinking models want the turn's reasoning back and
              * answer 400 without it; no other provider gets the field (a
              * DeepSeek reasoner rejects it, OpenAI has no such field). */
-            if (send_reasoning && msg->reasoning && msg->reasoning[0]) {
+            if (is_moonshot && msg->reasoning && msg->reasoning[0]) {
                 const char *rc_key = ",\"reasoning_content\":";
                 size_t rck_len = strlen(rc_key);
                 if (pos + rck_len >= buf_size) return 0;
