@@ -3,6 +3,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 /* ----- Linux command tables ----- */
 
@@ -571,8 +572,15 @@ typedef enum { QMODE_POSIX = 0, QMODE_PWSH = 1 } QuoteMode;
  * thread. */
 static _Thread_local QuoteMode tok_mode = QMODE_POSIX;
 
-/* Recursion depth of classify_core() through command substitutions. */
+/* Recursion depth of classify_core() through command substitutions and the
+ * command-line wrappers (sh -c, eval, watch, xargs). */
 static _Thread_local int subst_depth = 0;
+
+/* The classes of the inner command lines a wrapper ran for the segment being
+ * classified (sh -c BODY, eval, watch, xargs). classify_pass() clears it
+ * before each segment and ORs it into the segment's mask afterwards, so an
+ * inner command's whole mask survives the recursion, not only its level. */
+static _Thread_local unsigned seg_inner_mask = 0;
 
 typedef struct {
     QuoteMode mode;
@@ -890,7 +898,8 @@ static CmdSafetyLevel classify_core(const char *command, CmdPlatform platform,
  * (or to end), so the caller's scan does not revisit the inner text. */
 static CmdSafetyLevel inner_level(const char *open, const char *end, QuoteMode mode,
                                   int backtick, CmdPlatform platform,
-                                  const char **resume)
+                                  const char **resume,
+                                  unsigned *mask_out, char *reason, size_t reason_cap)
 {
     char buf[1024];
     const char *p = open;
@@ -915,28 +924,61 @@ static CmdSafetyLevel inner_level(const char *open, const char *end, QuoteMode m
     }
     if (close < end) *resume = close + 1;
     size_t n = (size_t)(close - open);
-    if (n == 0) return CMD_UNKNOWN;
-    if (n >= sizeof buf || subst_depth >= 4) return CMD_UNKNOWN;
+    if (reason && reason_cap > 0) reason[0] = '\0';
+    *mask_out = 0;
+    if (n == 0 || n >= sizeof buf || subst_depth >= 4) {
+        *mask_out = CMD_MASK_OF(CMD_UNKNOWN);
+        return CMD_UNKNOWN;
+    }
     memcpy(buf, open, n);
     buf[n] = '\0';
     QuoteMode saved = tok_mode;
+    unsigned saved_inner = seg_inner_mask;
+    unsigned inner_mask = 0;
     subst_depth++;
-    CmdSafetyLevel lvl = classify_core(buf, platform, NULL, 0, NULL);
+    CmdSafetyLevel lvl = classify_core(buf, platform, reason, reason_cap, &inner_mask);
     subst_depth--;
     tok_mode = saved;
+    seg_inner_mask = saved_inner;
+    *mask_out = inner_mask;
     return lvl < CMD_UNKNOWN ? CMD_UNKNOWN : lvl;
 }
 
+/* One substitution found by seg_substitution_level_mode(): classifies its
+ * inner command (advancing *resume past it) and folds the level, the mask
+ * and, when it is the worst so far, the reason into the caller's totals. */
+static void subst_fold(const char *open, const char *end, QuoteMode mode, int backtick,
+                       CmdPlatform platform, const char **resume,
+                       CmdSafetyLevel *worst, unsigned *mask_out,
+                       char *reason, size_t reason_cap)
+{
+    char inner_reason[256];
+    unsigned inner_mask = 0;
+    CmdSafetyLevel l = inner_level(open, end, mode, backtick, platform, resume,
+                                   &inner_mask, inner_reason, sizeof inner_reason);
+    *mask_out |= inner_mask;
+    if (l > *worst) {
+        *worst = l;
+        if (reason && reason_cap > 0) snprintf(reason, reason_cap, "%s", inner_reason);
+    }
+}
+
 /* CMD_READ when the segment has no substitution under mode, else at least
- * CMD_UNKNOWN (the inner command's level when that is worse). */
+ * CMD_UNKNOWN (the inner command's level when that is worse). *mask_out
+ * collects the mask of every inner command; reason receives the reason of
+ * the worst one (empty when the inner command gave none). */
 static CmdSafetyLevel seg_substitution_level_mode(const char *seg, size_t seg_len,
-                                                  QuoteMode mode, CmdPlatform platform)
+                                                  QuoteMode mode, CmdPlatform platform,
+                                                  unsigned *mask_out,
+                                                  char *reason, size_t reason_cap)
 {
     const char *end = seg + seg_len;
     const char *p = seg;
     int in_sq = 0, in_dq = 0;
     char esc = (mode == QMODE_POSIX) ? '\\' : '`';
     CmdSafetyLevel worst = CMD_READ;
+    *mask_out = 0;
+    if (reason && reason_cap > 0) reason[0] = '\0';
     while (p < end) {
         char c = *p;
         if (mode == QMODE_PWSH) {
@@ -959,19 +1001,19 @@ static CmdSafetyLevel seg_substitution_level_mode(const char *seg, size_t seg_le
         if (c == '\'' && !in_dq) { in_sq = 1; p++; continue; }
         if (c == '"') { in_dq = !in_dq; p++; continue; }
         if (c == '`') { /* POSIX command substitution */
-            CmdSafetyLevel l = inner_level(p + 1, end, mode, 1, platform, &p);
-            if (l > worst) worst = l;
+            subst_fold(p + 1, end, mode, 1, platform, &p, &worst, mask_out,
+                       reason, reason_cap);
             continue;
         }
         if ((c == '$' || c == '<' || c == '>') && p + 1 < end && p[1] == '(') {
-            CmdSafetyLevel l = inner_level(p + 2, end, mode, 0, platform, &p);
-            if (l > worst) worst = l;
+            subst_fold(p + 2, end, mode, 0, platform, &p, &worst, mask_out,
+                       reason, reason_cap);
             continue;
         }
         if (c == '(' && !in_dq && mode == QMODE_PWSH &&
             platform == CMD_PLATFORM_UNKNOWN) {
-            CmdSafetyLevel l = inner_level(p + 1, end, mode, 0, platform, &p);
-            if (l > worst) worst = l;
+            subst_fold(p + 1, end, mode, 0, platform, &p, &worst, mask_out,
+                       reason, reason_cap);
             continue;
         }
         p++;
@@ -980,10 +1022,18 @@ static CmdSafetyLevel seg_substitution_level_mode(const char *seg, size_t seg_le
 }
 
 static CmdSafetyLevel seg_substitution_level(const char *seg, size_t seg_len,
-                                             CmdPlatform platform)
+                                             CmdPlatform platform,
+                                             unsigned *mask_out,
+                                             char *reason, size_t reason_cap)
 {
-    CmdSafetyLevel a = seg_substitution_level_mode(seg, seg_len, QMODE_POSIX, platform);
-    CmdSafetyLevel b = seg_substitution_level_mode(seg, seg_len, QMODE_PWSH, platform);
+    char reason_b[256];
+    unsigned mask_a = 0, mask_b = 0;
+    CmdSafetyLevel a = seg_substitution_level_mode(seg, seg_len, QMODE_POSIX, platform,
+                                                   &mask_a, reason, reason_cap);
+    CmdSafetyLevel b = seg_substitution_level_mode(seg, seg_len, QMODE_PWSH, platform,
+                                                   &mask_b, reason_b, sizeof reason_b);
+    *mask_out = mask_a | mask_b;
+    if (b > a && reason && reason_cap > 0) snprintf(reason, reason_cap, "%s", reason_b);
     return a > b ? a : b;
 }
 
@@ -1107,6 +1157,23 @@ static int tok_is_flag_or_assignment(const char *tok, size_t len)
     return 0;
 }
 
+/* The rule for "xargs" (a pipe target, or the first word): WRITE, or
+ * CRITICAL when the command it runs is in linux_critical_cmds. p is just
+ * past the "xargs" token. */
+static CmdSafetyLevel xargs_pipe_level(const char *p)
+{
+    const char *next_start;
+    size_t next_len;
+    if (next_token(&p, &next_start, &next_len)) {
+        const char *nb;
+        size_t nbl;
+        nb = strip_path(next_start, next_len, &nbl);
+        if (tok_in_list(nb, nbl, linux_critical_cmds))
+            return CMD_CRITICAL;
+    }
+    return CMD_WRITE;
+}
+
 static CmdSafetyLevel scan_pipe_target(const char *seg)
 {
     const char *p = seg;
@@ -1122,18 +1189,8 @@ static CmdSafetyLevel scan_pipe_target(const char *seg)
     if (is_critical_pipe_interpreter(base, base_len))
         return CMD_CRITICAL;
 
-    if (tok_eq(base, base_len, "xargs")) {
-        const char *next_start;
-        size_t next_len;
-        if (next_token(&p, &next_start, &next_len)) {
-            const char *nb;
-            size_t nbl;
-            nb = strip_path(next_start, next_len, &nbl);
-            if (tok_in_list(nb, nbl, linux_critical_cmds))
-                return CMD_CRITICAL;
-        }
-        return CMD_WRITE;
-    }
+    if (tok_eq(base, base_len, "xargs"))
+        return xargs_pipe_level(p);
 
     /* "sudo tee ..." writes as root through what looks like an ordinary
      * pipe target; checked before the generic wrapper peel below because
@@ -2266,16 +2323,362 @@ static int wrapper_flag(const char *w, size_t wl, const char *ts, size_t tl,
 
 /* ----- Per-segment Linux classification ----- */
 
+/* ----- Command-line wrappers: sh -c, eval, watch, xargs, parallel -----
+ * Each runs a command line the per-word rules cannot see. The inner line is
+ * classified in full by classify_core() under the substitution depth limit,
+ * as a POSIX shell reads it (so the platform is Linux whatever the host), and
+ * its whole mask is kept in seg_inner_mask for classify_pass() to OR into the
+ * segment's mask. */
+
+/* Classifies an inner command line. An empty line or one nested past the
+ * depth limit is UNKNOWN. */
+static CmdSafetyLevel classify_inner_line(const char *line, char *reason, size_t cap)
+{
+    if (reason && cap > 0) reason[0] = '\0';
+    if (!line[0] || subst_depth >= 4) {
+        seg_inner_mask |= CMD_MASK_OF(CMD_UNKNOWN);
+        if (reason && cap > 0)
+            snprintf(reason, cap, line[0] ? "nested too deeply to classify"
+                                          : "empty command line");
+        return CMD_UNKNOWN;
+    }
+    QuoteMode saved = tok_mode;
+    unsigned saved_mask = seg_inner_mask;
+    unsigned inner_mask = 0;
+    subst_depth++;
+    CmdSafetyLevel lvl = classify_core(line, CMD_PLATFORM_LINUX, reason, cap, &inner_mask);
+    subst_depth--;
+    tok_mode = saved;
+    seg_inner_mask = saved_mask | inner_mask;
+    return lvl;
+}
+
+/* The words from scan to seg_end, unquoted and joined by single spaces (what
+ * eval and watch hand to a shell). Returns the word count; *trunc is set when
+ * out was too small. Stops at word ":::" / "::::" when stop_at_colons is set
+ * (GNU parallel's argument separator). */
+static int join_words(const char *scan, const char *seg_end, char *out, size_t out_size,
+                      int stop_at_colons, int *trunc)
+{
+    char w[1024];
+    size_t n = 0;
+    int words = 0;
+    *trunc = 0;
+    out[0] = '\0';
+    for (;;) {
+        const char *rs, *re;
+        int wt = 0;
+        if (!next_shell_word(&scan, seg_end, w, sizeof w, &wt, &rs, &re)) break;
+        if (stop_at_colons && w[0] == ':' && w[1] == ':' && w[2] == ':') break;
+        if (wt) *trunc = 1;
+        size_t wl = strlen(w);
+        if (words > 0) {
+            if (n + 1 < out_size) out[n++] = ' ';
+            else *trunc = 1;
+        }
+        if (n + wl < out_size) {
+            memcpy(out + n, w, wl);
+            n += wl;
+        } else {
+            *trunc = 1;
+        }
+        words++;
+    }
+    out[n] = '\0';
+    return words;
+}
+
+static int is_posix_shell_name(const char *tok, size_t len)
+{
+    static const char *shells[] = { "sh", "bash", "zsh", "dash", "ksh", NULL };
+    return tok_in_list(tok, len, shells);
+}
+
+/* "sh -c BODY": the options before -c may only be the single-letter flags
+ * that change nothing about what BODY does (-l -e -x -u -v, alone or in a
+ * cluster with c, as in -lc). Returns 0 for any other form (a script file,
+ * -s, a long option). Otherwise *have_body says whether a body word followed,
+ * and *positional whether words came after the body ($0 and arguments). */
+static int shell_c_form(const char *p, const char *seg_end, char *body, size_t body_size,
+                        int *trunc, int *have_body, int *positional)
+{
+    const char *scan = p;
+    const char *ts;
+    size_t tl;
+    *trunc = 0;
+    *have_body = 0;
+    *positional = 0;
+    body[0] = '\0';
+    for (;;) {
+        if (!next_token(&scan, &ts, &tl)) return 0;
+        if (tl < 2 || ts[0] != '-' || ts[1] == '-') return 0;
+        int has_c = 0;
+        for (size_t i = 1; i < tl; i++) {
+            if (ts[i] == 'c') has_c = 1;
+            else if (!strchr("lexuv", ts[i])) return 0;
+        }
+        if (has_c) break;
+    }
+    const char *rs, *re;
+    if (next_shell_word(&scan, seg_end, body, body_size, trunc, &rs, &re)) {
+        char extra[4];
+        int et = 0;
+        *have_body = 1;
+        *positional = next_shell_word(&scan, seg_end, extra, sizeof extra, &et, &rs, &re);
+    }
+    return 1;
+}
+
+/* watch's own options: 0 unknown, 1 known, 2 known and taking a value in the
+ * next word. */
+static int watch_flag(const char *ts, size_t tl)
+{
+    static const char *shorts = "dtbegcCpxwr";
+    static const char *longs_novalue[] = {
+        "--differences", "--no-title", "--beep", "--errexit", "--chgexit", "--color",
+        "--no-color", "--precise", "--exec", "--no-wrap", "--no-rerun", NULL
+    };
+    if (tl >= 2 && ts[1] != '-') {
+        if (ts[1] == 'n' || ts[1] == 'q') return tl == 2 ? 2 : 1;
+        if (tl == 2 && strchr(shorts, ts[1])) return 1;
+        return 0;
+    }
+    size_t nlen = 0;
+    while (nlen < tl && ts[nlen] != '=') nlen++;
+    if (tok_eq(ts, nlen, "--interval") || tok_eq(ts, nlen, "--equexit"))
+        return nlen == tl ? 2 : 1;
+    if (tok_in_list(ts, nlen, longs_novalue)) return 1;
+    return 0;
+}
+
+/* Options of xargs and parallel that take a value in the next word. Only used
+ * to find where the wrapped command starts; a wrong guess can only move the
+ * start, and the xargs rule still floors the level. */
+static int runner_flag_takes_value(const char *ts, size_t tl)
+{
+    static const char *takes[] = {
+        "-a", "-d", "-E", "-I", "-L", "-n", "-N", "-P", "-s", "-j", "-S",
+        "--arg-file", "--delimiter", "--eof", "--max-args", "--max-chars",
+        "--max-lines", "--max-procs", "--jobs", "--sshlogin", NULL
+    };
+    return tok_in_list(ts, tl, takes);
+}
+
+/* Classifies the inner line of a command-line wrapper. base is the first
+ * word (path-stripped) and p is just past it. Returns 0 when base is not one,
+ * or is one in a form that is not read here (a script file, -s). Otherwise
+ * *lvl and reason receive the level and why. */
+static int classify_line_wrapper(const char *base, size_t bl, const char *p,
+                                 const char *seg_end, CmdSafetyLevel *lvl,
+                                 char *reason, size_t cap)
+{
+    char line[1024];
+    char inner_reason[256];
+    int trunc = 0;
+    inner_reason[0] = '\0';
+    reason[0] = '\0';
+
+    if (is_posix_shell_name(base, bl)) {
+        int have_body = 0, positional = 0;
+        if (!shell_c_form(p, seg_end, line, sizeof line, &trunc, &have_body, &positional))
+            return 0;
+        if (!have_body) {
+            *lvl = CMD_UNKNOWN;
+            snprintf(reason, cap, "%.*s -c without a command line", (int)bl, base);
+            return 1;
+        }
+        *lvl = classify_inner_line(line, inner_reason, sizeof inner_reason);
+        if ((trunc || positional) && *lvl < CMD_UNKNOWN) *lvl = CMD_UNKNOWN;
+        if (trunc) snprintf(reason, cap, "%.*s -c: command line too long to classify", (int)bl, base);
+        else if (positional && !inner_reason[0])
+            snprintf(reason, cap, "%.*s -c: positional arguments follow the command line",
+                     (int)bl, base);
+        else snprintf(reason, cap, "%.*s -c: %s", (int)bl, base, inner_reason);
+        return 1;
+    }
+
+    if (tok_eq(base, bl, "eval")) {
+        int words = join_words(p, seg_end, line, sizeof line, 0, &trunc);
+        if (words == 0) {
+            *lvl = CMD_UNKNOWN;
+            snprintf(reason, cap, "eval without a command line");
+            return 1;
+        }
+        *lvl = classify_inner_line(line, inner_reason, sizeof inner_reason);
+        if (trunc && *lvl < CMD_UNKNOWN) *lvl = CMD_UNKNOWN;
+        snprintf(reason, cap, "eval: %s",
+                 trunc ? "command line too long to classify" : inner_reason);
+        return 1;
+    }
+
+    if (tok_eq(base, bl, "watch")) {
+        const char *scan = p;
+        const char *ts;
+        size_t tl;
+        int unknown_flag = 0;
+        for (;;) {
+            const char *look = scan;
+            if (!next_token(&look, &ts, &tl)) break;
+            if (tl < 2 || ts[0] != '-') break;
+            scan = look;
+            if (tok_eq(ts, tl, "--")) break;
+            int f = watch_flag(ts, tl);
+            if (f == 0) unknown_flag = 1;
+            if (f == 2) {
+                const char *v;
+                size_t vl;
+                (void)next_token(&scan, &v, &vl);
+            }
+        }
+        int words = join_words(scan, seg_end, line, sizeof line, 0, &trunc);
+        *lvl = words ? classify_inner_line(line, inner_reason, sizeof inner_reason)
+                     : CMD_UNKNOWN;
+        if (!words) snprintf(reason, cap, "watch without a command");
+        else snprintf(reason, cap, "watch: %s",
+                      trunc ? "command line too long to classify" : inner_reason);
+        if ((unknown_flag || trunc) && *lvl < CMD_UNKNOWN) *lvl = CMD_UNKNOWN;
+        if (unknown_flag && *lvl == CMD_UNKNOWN && (!words || !inner_reason[0]))
+            snprintf(reason, cap, "watch: option outside the known-safe set");
+        return 1;
+    }
+
+    if (tok_eq(base, bl, "xargs") || tok_eq(base, bl, "parallel")) {
+        int is_parallel = tok_eq(base, bl, "parallel");
+        /* The pipe-target rule, so "xargs cat < list" agrees with
+         * "cat list | xargs cat". */
+        *lvl = xargs_pipe_level(p);
+        snprintf(reason, cap, "%.*s runs a command for each input item", (int)bl, base);
+        const char *scan = p;
+        const char *ts;
+        size_t tl;
+        for (;;) {
+            const char *look = scan;
+            if (!next_token(&look, &ts, &tl)) break;
+            if (tl < 2 || ts[0] != '-') break;
+            scan = look;
+            if (tok_eq(ts, tl, "--")) break;
+            if (runner_flag_takes_value(ts, tl)) {
+                const char *v;
+                size_t vl;
+                (void)next_token(&scan, &v, &vl);
+            }
+        }
+        int words;
+        if (is_parallel) {
+            /* parallel runs the command through a shell: the words, joined. */
+            words = join_words(scan, seg_end, line, sizeof line, 1, &trunc);
+        } else {
+            /* xargs execs it: the raw text, quotes kept. */
+            const char *cs = NULL, *ce = NULL;
+            const char *w = scan;
+            while (next_token(&w, &ts, &tl)) {
+                if (!cs) cs = ts;
+                ce = ts + tl;
+            }
+            words = cs ? 1 : 0;
+            if (cs) {
+                size_t n = (size_t)(ce - cs);
+                if (n >= sizeof line) { n = sizeof line - 1; trunc = 1; }
+                memcpy(line, cs, n);
+                line[n] = '\0';
+            }
+        }
+        if (words) {
+            CmdSafetyLevel wl = classify_inner_line(line, inner_reason, sizeof inner_reason);
+            if (trunc && wl < CMD_UNKNOWN) wl = CMD_UNKNOWN;
+            if (wl > *lvl) {
+                *lvl = wl;
+                snprintf(reason, cap, "%.*s runs: %s", (int)bl, base,
+                         inner_reason[0] ? inner_reason : "a command the rules rate higher");
+            }
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* 1 when a word's raw text has a quote or an escape in it. */
+static int word_has_quoting(const char *ts, size_t tl)
+{
+    for (size_t i = 0; i < tl; i++) {
+        char c = ts[i];
+        if (c == '\'' || c == '"' || c == '\\' || c == '`' ||
+            (unsigned char)c == 0xE2)
+            return 1;
+    }
+    return 0;
+}
+
+/* 1 when an unquoted word can be written back into a command line without
+ * changing how it splits or what it means. */
+static int word_is_plain(const char *w)
+{
+    if (!w[0]) return 0;
+    for (const char *c = w; *c; c++) {
+        if (strchr(" \t\r\n|;&<>()$`'\"=", *c)) return 0;
+        if (*c == '\\' && tok_mode == QMODE_POSIX) return 0;
+    }
+    return 1;
+}
+
+static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len,
+                                                  char *reason_buf, size_t reason_buf_size);
+
+/* The first word read the way the shell does: 'rm', "rm" and r\m are rm.
+ * Under the POSIX reading the quotes and escapes come off before the path is
+ * stripped (today a backslash was taken for a path separator: "unrecognised
+ * command: m"); the PowerShell reading keeps a backslash as a separator, so a
+ * word with a backslash is classified both ways and the worse reading wins. */
 static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
                                               char *reason_buf, size_t reason_buf_size)
+{
+    const char *p = seg;
+    const char *ts;
+    size_t tl;
+    if (next_token(&p, &ts, &tl) && word_has_quoting(ts, tl)) {
+        char word[256];
+        int trunc = 0;
+        const char *wp = ts;
+        const char *rs, *re;
+        if (next_shell_word(&wp, ts + tl, word, sizeof word, &trunc, &rs, &re) &&
+            !trunc && word_is_plain(word)) {
+            size_t head = (size_t)(ts - seg);
+            size_t tail = (size_t)((seg + seg_len) - (ts + tl));
+            size_t wl = strlen(word);
+            char *alt = (char *)malloc(head + wl + tail + 1);
+            if (alt) {
+                memcpy(alt, seg, head);
+                memcpy(alt + head, word, wl);
+                memcpy(alt + head + wl, ts + tl, tail);
+                alt[head + wl + tail] = '\0';
+                char r_alt[256], r_raw[256];
+                r_alt[0] = r_raw[0] = '\0';
+                CmdSafetyLevel res = classify_linux_segment_raw(alt, head + wl + tail,
+                                                                 r_alt, sizeof r_alt);
+                const char *why = r_alt;
+                if (tok_mode == QMODE_POSIX && memchr(ts, '\\', tl)) {
+                    CmdSafetyLevel other = classify_linux_segment_raw(seg, seg_len,
+                                                                       r_raw, sizeof r_raw);
+                    if (other > res) { res = other; why = r_raw; }
+                }
+                if (reason_buf && reason_buf_size > 0 && why[0])
+                    snprintf(reason_buf, reason_buf_size, "%s", why);
+                free(alt);
+                return res;
+            }
+        }
+    }
+    return classify_linux_segment_raw(seg, seg_len, reason_buf, reason_buf_size);
+}
+
+static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len,
+                                                  char *reason_buf, size_t reason_buf_size)
 {
     const char *p = seg;
     const char *seg_end = seg + seg_len;
     const char *tok1_start, *tok2_start, *tok3_start;
     size_t tok1_len, tok2_len, tok3_len;
     int has_sudo = 0;
-
-    (void)seg_end;
 
     CmdSafetyLevel redir = scan_redirects(seg, seg_len);
 
@@ -2301,6 +2704,14 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
                 snprintf(reason_buf, reason_buf_size, "sudo/su escalation");
             return level > redir ? level : redir;
         }
+        if (word_has_quoting(tok1_start, tok1_len)) {
+            /* "sudo 'rm' ..." : the command after sudo is read the same way
+             * a first word is. */
+            CmdSafetyLevel level = classify_linux_segment(
+                tok1_start, (size_t)(seg_end - tok1_start), reason_buf, reason_buf_size);
+            if (level < CMD_WRITE) level = CMD_WRITE;
+            return level > redir ? level : redir;
+        }
         base1 = strip_path(tok1_start, tok1_len, &base1_len);
     }
 
@@ -2313,6 +2724,20 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
                     snprintf(reason_buf, reason_buf_size, "init 0/6: system halt/reboot");
                 return CMD_CRITICAL;
             }
+        }
+    }
+
+    /* sh -c BODY, eval, watch, xargs and parallel run a command line: it is
+     * classified in full, never lower than the wrapper's own floor. */
+    {
+        CmdSafetyLevel wl;
+        char wr[256];
+        if (classify_line_wrapper(base1, base1_len, p, seg_end, &wl, wr, sizeof wr)) {
+            if (redir > wl) wl = redir;
+            if (has_sudo && wl < CMD_WRITE) wl = CMD_WRITE;
+            if (wl > CMD_READ && wr[0] && reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "%s", wr);
+            return wl;
         }
     }
 
@@ -6966,6 +7391,7 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
 
         CmdSafetyLevel seg_level;
 
+        seg_inner_mask = 0;
         switch (platform) {
         case CMD_PLATFORM_CISCO_IOS:
             seg_level = classify_cisco_ios_segment(seg_start, seg_len,
@@ -7067,19 +7493,35 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
             if (pipe_level > seg_level) seg_level = pipe_level;
         }
 
+        /* What an inner command line (sh -c, eval, watch, xargs) ran adds its
+         * whole mask to the segment's. */
+        unsigned wrapper_mask = seg_inner_mask;
+
         {
-            CmdSafetyLevel sub = seg_substitution_level(seg_start, seg_len, platform);
+            char sub_reason[256];
+            unsigned sub_mask = 0;
+            sub_reason[0] = '\0';
+            CmdSafetyLevel sub = seg_substitution_level(seg_start, seg_len, platform,
+                                                         &sub_mask, sub_reason,
+                                                         sizeof sub_reason);
             tok_mode = mode; /* the inner classification ran its own passes */
+            wrapper_mask |= sub_mask;
             if (sub > seg_level) {
-                if (worst == CMD_READ && reason_buf && reason_buf_size > 0)
-                    snprintf(reason_buf, reason_buf_size,
-                             "command substitution: runs a command the rules cannot see");
+                if (worst == CMD_READ && reason_buf && reason_buf_size > 0) {
+                    if (sub_reason[0])
+                        snprintf(reason_buf, reason_buf_size,
+                                 "command substitution: runs a command the rules cannot see (%s)",
+                                 sub_reason);
+                    else
+                        snprintf(reason_buf, reason_buf_size,
+                                 "command substitution: runs a command the rules cannot see");
+                }
                 seg_level = sub;
             }
         }
 
         if (seg_level > worst) worst = seg_level;
-        mask |= CMD_MASK_OF(seg_level);
+        mask |= CMD_MASK_OF(seg_level) | wrapper_mask;
         /* No early-out on CRITICAL: every remaining segment still has
          * to contribute its bit to the mask. */
 

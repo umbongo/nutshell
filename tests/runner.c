@@ -648,6 +648,13 @@ int test_cmd_classify_mask_all_safe_pipeline(void);
 int test_cmd_classify_mask_unknown_and_safe_pipeline(void);
 int test_cmd_classify_mask_unknown_and_write_pipeline(void);
 int test_cmd_classify_mask_null_and_empty(void);
+int test_classify_sh_c_body(void);
+int test_classify_eval_args(void);
+int test_classify_watch(void);
+int test_classify_xargs_parallel_first_word(void);
+int test_classify_quoted_first_word(void);
+int test_classify_depth_limit_wrappers(void);
+int test_classify_inner_mask_ored(void);
 
 /* inherited from the removed ai_command_is_readonly() suite */
 int test_cmd_classify_linux_editors_and_chown_write(void);
@@ -4436,6 +4443,13 @@ int main(void) {
     failed += test_cmd_classify_mask_unknown_and_safe_pipeline();
     failed += test_cmd_classify_mask_unknown_and_write_pipeline();
     failed += test_cmd_classify_mask_null_and_empty();
+    failed += test_classify_sh_c_body();
+    failed += test_classify_eval_args();
+    failed += test_classify_watch();
+    failed += test_classify_xargs_parallel_first_word();
+    failed += test_classify_quoted_first_word();
+    failed += test_classify_depth_limit_wrappers();
+    failed += test_classify_inner_mask_ored();
     failed += test_cmd_classify_linux_editors_and_chown_write();
     failed += test_cmd_classify_redirect_devnull_spacing_and_ampersand();
     failed += test_cmd_classify_redirect_stderr_to_real_file_write();

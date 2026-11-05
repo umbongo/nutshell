@@ -1,6 +1,7 @@
 /* tests/test_cmd_classify.c */
 #include "test_framework.h"
 #include "cmd_classify.h"
+#include <stdio.h>
 #include <string.h>
 
 /* --- NULL and empty input --- */
@@ -4233,5 +4234,151 @@ int test_cmd_classify_session_worse_of_two_property(void) {
             ASSERT_EQ(cmd_classify_mask_session(cmd, plat, 1), own_m | unk_m);
         }
     }
+    TEST_END();
+}
+
+/* ===== Wrappers that carry a command line (plan A, Task 6) =====
+ * sh -c BODY, eval, watch, and xargs/parallel as the first word run another
+ * command the per-word rules cannot see; the classifier reads the inner
+ * command line itself and keeps both its level and its mask. */
+
+static int classify_both(const char *cmd, CmdSafetyLevel want)
+{
+    return cmd_classify(cmd, CMD_PLATFORM_LINUX) == want &&
+           cmd_classify(cmd, CMD_PLATFORM_UNKNOWN) == want;
+}
+
+int test_classify_sh_c_body(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(classify_both("bash -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("sh -c \"rm -rf /\"", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("ksh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("bash -lc 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("dash -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("zsh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("/bin/sh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("sh -c 'ls'", CMD_READ));
+    ASSERT_TRUE(classify_both("sh -c 'ls -l /etc | wc -l'", CMD_READ));
+    ASSERT_TRUE(classify_both("sh -c 'ls; touch x'", CMD_WRITE));
+    ASSERT_TRUE(classify_both("sh -c 'ls' a b", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh script.sh", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh -s", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh -c", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh -c ''", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh -c 'echo \"unbalanced'", CMD_UNKNOWN));
+    /* The wrapper peels reach it too, and sudo keeps its floor. */
+    ASSERT_TRUE(classify_both("env sh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("timeout 5 sh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(cmd_classify("sudo sh -c 'ls'", CMD_PLATFORM_LINUX) >= CMD_WRITE);
+    /* A redirect on the wrapper itself still counts. */
+    ASSERT_TRUE(classify_both("sh -c 'ls' > /etc/out", CMD_WRITE));
+    TEST_END();
+}
+
+int test_classify_eval_args(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(classify_both("eval 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("eval ls -l", CMD_READ));
+    const char *escaped_semi = "eval ls \\; touch x";
+    ASSERT_TRUE(classify_both(escaped_semi, CMD_WRITE));
+    ASSERT_TRUE(classify_both("eval rm -rf /", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("eval", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("eval 'echo \"unbalanced'", CMD_UNKNOWN));
+    TEST_END();
+}
+
+int test_classify_watch(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(classify_both("watch rm -rf /", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("watch -n 5 df -h", CMD_READ));
+    ASSERT_TRUE(classify_both("watch -n5 df -h", CMD_READ));
+    ASSERT_TRUE(classify_both("watch -d free -m", CMD_READ));
+    ASSERT_TRUE(classify_both("watch --bogus df", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("watch", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("watch -n 5", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("watch touch x", CMD_WRITE));
+    TEST_END();
+}
+
+int test_classify_xargs_parallel_first_word(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(classify_both("xargs rm < list", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("parallel rm ::: a b", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("xargs cat < list", CMD_WRITE));
+    ASSERT_TRUE(classify_both("cat list | xargs cat", CMD_WRITE));
+    ASSERT_TRUE(classify_both("xargs -n1 rm < list", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("xargs sh -c 'rm -rf /' < list", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("parallel echo ::: a b", CMD_WRITE));
+    ASSERT_TRUE(classify_both("xargs", CMD_WRITE));
+    /* The wrapped command's mask is ORed in. */
+    unsigned m = cmd_classify_mask("xargs cat < list", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_WRITE)) != 0);
+    TEST_END();
+}
+
+int test_classify_quoted_first_word(void) {
+    TEST_BEGIN();
+    const char *cmds[] = { "'rm' -rf /", "\"rm\" -rf /", "r\\m -rf /",
+                           "\\rm -rf /", "r'm' -rf /", "/bin/'rm' x",
+                           "sudo 'rm' -rf /", "env \"rm\" -rf /" };
+    for (size_t i = 0; i < sizeof cmds / sizeof cmds[0]; i++) {
+        char reason[256];
+        ASSERT_EQ((int)cmd_classify_ex(cmds[i], CMD_PLATFORM_LINUX, reason, sizeof reason),
+                  (int)CMD_CRITICAL);
+        ASSERT_TRUE(strstr(reason, "unrecognised command") == NULL);
+        ASSERT_EQ((int)cmd_classify(cmds[i], CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    }
+    /* A quoted read command is the read command; a quoted unknown is unknown. */
+    ASSERT_TRUE(classify_both("'ls' -l", CMD_READ));
+    ASSERT_TRUE(classify_both("\"cat\" /etc/hosts", CMD_READ));
+    ASSERT_TRUE(classify_both("'frobnicate' x", CMD_UNKNOWN));
+    /* A path with backslashes and no quotes keeps its old reading. */
+    ASSERT_TRUE(cmd_classify("C:\\Windows\\System32\\cmd.exe /c dir", CMD_PLATFORM_LINUX)
+                >= CMD_UNKNOWN);
+    TEST_END();
+}
+
+int test_classify_depth_limit_wrappers(void) {
+    TEST_BEGIN();
+    char cur[8192], nxt[8192];
+    snprintf(cur, sizeof cur, "ls");
+    for (int level = 1; level <= 5; level++) {
+        size_t n = 0;
+        n += (size_t)snprintf(nxt + n, sizeof nxt - n, "sh -c '");
+        for (const char *q = cur; *q && n + 8 < sizeof nxt; q++) {
+            if (*q == '\'') n += (size_t)snprintf(nxt + n, sizeof nxt - n, "'\\''");
+            else nxt[n++] = *q;
+        }
+        nxt[n++] = '\'';
+        nxt[n] = '\0';
+        memcpy(cur, nxt, n + 1);
+        if (level == 5) {
+            ASSERT_EQ((int)cmd_classify(cur, CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+            ASSERT_EQ((int)cmd_classify(cur, CMD_PLATFORM_UNKNOWN), (int)CMD_UNKNOWN);
+        }
+    }
+    /* Shallow nesting still resolves. */
+    ASSERT_EQ((int)cmd_classify("sh -c \"sh -c 'ls'\"", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sh -c \"sh -c 'touch x'\"", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+int test_classify_inner_mask_ored(void) {
+    TEST_BEGIN();
+    unsigned m = cmd_classify_mask("echo $(rm x)", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & (CMD_MASK_OF(CMD_WRITE) | CMD_MASK_OF(CMD_CRITICAL))) != 0);
+    m = cmd_classify_mask("sh -c 'rm x' ", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & (CMD_MASK_OF(CMD_WRITE) | CMD_MASK_OF(CMD_CRITICAL))) != 0);
+    /* The whole inner mask is kept, not only the worst bit. */
+    m = cmd_classify_mask("sh -c 'ls; touch x'", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_WRITE)) != 0);
+    m = cmd_classify_mask("echo $(ls; frobnicate)", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_UNKNOWN)) != 0);
+    m = cmd_classify_mask("eval 'ls; touch x'", CMD_PLATFORM_UNKNOWN);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_WRITE)) != 0);
     TEST_END();
 }
