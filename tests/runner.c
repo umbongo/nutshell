@@ -673,6 +673,7 @@ int test_ios_configure_terminal_prefixes(void);
 int test_ios_debug(void);
 int test_ios_do(void);
 int test_crontab(void);
+int test_cmd_classify_probes(void);
 int test_nxos_asa_debug_aligned(void);
 
 /* inherited from the removed ai_command_is_readonly() suite */
@@ -4493,6 +4494,7 @@ int main(void) {
     failed += test_ios_debug();
     failed += test_ios_do();
     failed += test_crontab();
+    failed += test_cmd_classify_probes();
     failed += test_nxos_asa_debug_aligned();
     failed += test_cmd_classify_linux_editors_and_chown_write();
     failed += test_cmd_classify_redirect_devnull_spacing_and_ampersand();
