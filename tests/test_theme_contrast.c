@@ -69,9 +69,6 @@ static const Exemption k_exempt[] = {
     /* Onyx Synapse */
     { "Onyx Synapse", "chat.user_text", "sel30(chat.user_bubble)", 3.09 },
     { "Onyx Synapse", "chat.status_text", "bg_primary.base", 3.26 },
-    { "Onyx Synapse", "warning.base", "bg_primary.base", 4.16 },
-    { "Onyx Synapse", "warning.base", "chat.cmd_bg", 3.78 },
-    { "Onyx Synapse", "link.base", "bg_primary.base", 4.16 },
     { "Onyx Synapse", "md code(info role)", "chat.cmd_bg", 4.35 },
     { "Onyx Synapse", "md code(info role)", "sel30(chat.cmd_bg)", 2.83 },
     { "Onyx Synapse", "md structure(link role)", "sel30(bg_primary)", 3.18 },
@@ -86,8 +83,6 @@ static const Exemption k_exempt[] = {
     { "Onyx Light", "chat.user_text", "sel30(chat.user_bubble)", 2.68 },
     { "Onyx Light", "chat.ai_accent", "bg_primary.base", 3.69 },
     { "Onyx Light", "chat.status_text", "bg_primary.base", 2.13 },
-    { "Onyx Light", "warning.base", "bg_primary.base", 2.99 },
-    { "Onyx Light", "warning.base", "chat.cmd_bg", 2.81 },
     { "Onyx Light", "md code(info role)", "sel30(chat.cmd_bg)", 3.34 },
     { "Onyx Light", "text_dim", "tint18(text_dim on bg_primary)", 3.87 },
     { "Onyx Light", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.66 },
@@ -100,9 +95,6 @@ static const Exemption k_exempt[] = {
     /* Sage & Sand */
     { "Sage & Sand", "chat.user_text", "sel30(chat.user_bubble)", 4.37 },
     { "Sage & Sand", "chat.status_text", "bg_primary.base", 3.14 },
-    { "Sage & Sand", "warning.base", "bg_primary.base", 3.08 },
-    { "Sage & Sand", "warning.base", "chat.cmd_bg", 3.41 },
-    { "Sage & Sand", "link.base", "bg_primary.base", 3.10 },
     { "Sage & Sand", "md code(info role)", "sel30(chat.cmd_bg)", 2.86 },
     { "Sage & Sand", "md structure(link role)", "sel30(bg_primary)", 2.65 },
     { "Sage & Sand", "md structure(link role)", "table header fill(text_dim 12% on bg_primary)", 3.78 },
@@ -116,8 +108,6 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "chat.user_text", "sel30(chat.user_bubble)", 1.91 },
     { "Moss & Mist", "chat.ai_accent", "bg_primary.base", 2.34 },
     { "Moss & Mist", "chat.status_text", "bg_primary.base", 2.06 },
-    { "Moss & Mist", "warning.base", "bg_primary.base", 4.05 },
-    { "Moss & Mist", "warning.base", "chat.cmd_bg", 3.75 },
     { "Moss & Mist", "md code(info role)", "sel30(chat.cmd_bg)", 3.99 },
     { "Moss & Mist", "md structure(link role)", "sel30(bg_primary)", 4.40 },
     { "Moss & Mist", "md structure(link role)", "table header fill(text_dim 12% on bg_primary)", 4.41 },
@@ -133,7 +123,7 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "accent.base", "chat.cmd_bg", 1.59 },
     { "Moss & Mist", "border", "chat.cmd_bg", 1.20 },
 };
-#define EXPECTED_EXEMPTIONS 62
+#define EXPECTED_EXEMPTIONS 52
 
 /* ---- Blends --------------------------------------------------------------
  *

@@ -35,10 +35,10 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .terminal_bg  = 0x121212,
         .terminal_min_contrast = 0.0, /* dark: today's palette, byte for byte */
         .success      = 0x21883B, /* darkened from indicator_green 0x34C759 */
-        .warning      = 0x917308, /* darkened from indicator_yellow 0xFFCC00 */
+        .warning      = 0xA58308, /* indicator_yellow 0xFFCC00 darkened 28 L*: 5.22 on bg_primary */
         .danger       = 0xE03229, /* darkened from indicator_red 0xFF3B30 */
         .info         = 0x8969A8, /* darkened from the old [EXEC] purple 0xB48CDC */
-        .link         = 0x4A78B7,
+        .link         = 0x5D82BB, /* +4 L* so it reads as text: 4.80 on bg_primary */
         .chat = {
             0x5C88C4, /* user_bubble — accent blue */
             0x121212, /* user_text — the accent surface's resolved label
@@ -78,7 +78,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .terminal_bg  = 0xF5F5F7,
         .terminal_min_contrast = 4.5, /* indexed text floored to WCAG AA */
         .success      = 0x1C883B,
-        .warning      = 0xB8860B, /* reads via text_main label (5.17:1), not white */
+        .warning      = 0x886208, /* darkened 15 L* to read as text; white label 5.53:1 */
         .danger       = 0xD32F2F,
         .info         = 0x7B4FA3,
         .link         = 0x0847A6, /* darker than accent, per spec */
@@ -104,10 +104,10 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .terminal_bg  = 0x2B2D24,
         .terminal_min_contrast = 0.0, /* dark: today's palette, byte for byte */
         .success      = 0x607F46, /* darkened from indicator_green 0x8FBC6A */
-        .warning      = 0x90722F, /* darkened from indicator_yellow 0xD4AA4A */
+        .warning      = 0xB7933F, /* indicator_yellow 0xD4AA4A darkened 9 L*: 4.83 on bg_primary */
         .danger       = 0xC05738, /* darkened from indicator_red 0xC75A3A */
         .info         = 0x896B9D,
-        .link         = 0x5D7B89,
+        .link         = 0x8A9BA4, /* +13 L* so it reads as text: 4.86 on bg_primary */
         .chat = {
             0xA3B18A, 0x1A1A14, 0xA3B18A,
             0x232520, 0x3F4138, 0xD4D1C4,
@@ -131,7 +131,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .terminal_bg  = 0xF1F3F0,
         .terminal_min_contrast = 4.5, /* indexed text floored to WCAG AA */
         .success      = 0x2C8654, /* darkened from indicator_green 0x52B788 */
-        .warning      = 0x9A6F08, /* darkened from indicator_yellow 0xE9C46A */
+        .warning      = 0x845F08, /* indicator_yellow 0xE9C46A darkened 7 L* more; white label 5.80:1 */
         .danger       = 0xC1440E, /* darkened from indicator_red 0xE76F51 */
         .info         = 0x7A5C99,
         .link         = 0x3D6D7A, /* darker than accent, per spec */
