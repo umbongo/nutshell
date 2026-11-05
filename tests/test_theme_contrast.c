@@ -14,10 +14,11 @@
  * floors (tests/test_term_colors.c, tests/test_ui_theme.c) and the selection
  * highlight's visibility (tests/test_sel_contrast.c) are not repeated either.
  *
- * Every pair meets its floor on every theme, with one exception, listed in
- * k_exempt with its measured ratio: the unselected checkbox stroke (`border`
- * on `chat.cmd_bg`), which is faint by design (see k_exempt).  The list is a
- * ratchet: the measured ratio may not drop more than RATIO_SLACK below the
+ * Every pair meets its floor on every theme, with two exceptions, listed in
+ * k_exempt with their measured ratios: the unselected checkbox stroke
+ * (`border` on `chat.cmd_bg`), which is faint by design, and the markdown
+ * structure colour on a selected table-header cell, a known finding kept
+ * counted on three themes (see k_exempt).  The list is a ratchet: the measured ratio may not drop more than RATIO_SLACK below the
  * recorded one, and an exemption whose pair now meets its floor fails the
  * suite, so a fix has to delete its line.  The list is also counted
  * (EXPECTED_EXEMPTIONS), so it cannot grow unnoticed.  Never lower a floor or
@@ -27,6 +28,7 @@
 #include "test_framework.h"
 #include "ui_theme.h"
 #include "theme.h"
+#include "test_blend.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -58,9 +60,9 @@
  * ratchet fails (recorded ratios are rounded to two decimals). */
 #define RATIO_SLACK 0.01
 
-/* ---- The one exemption ---------------------------------------------------
+/* ---- The exemptions ------------------------------------------------------
  *
- * The unselected checkbox stroke of an approval-card row (`border` on
+ * 1. The unselected checkbox stroke of an approval-card row (`border` on
  * `chat.cmd_bg`, chat_listview.c) reads 1.18-1.49:1 on the four themes, under
  * the 3.0 non-text floor, and stays so on purpose: the checkbox is identified
  * by its label (the command text beside it) and its states carry the
@@ -69,10 +71,25 @@
  * strong enough to reach 3.0 would make every unticked row look like a
  * control in use.
  *
- * The entry is kept, and counted, so the exception cannot silently spread to
- * another pair: EXPECTED_EXEMPTIONS must equal the number of entries below,
- * and each entry matches a row on one theme by name.  Each entry is
- * { theme name, text token, surface token, measured ratio }. */
+ * 2. Markdown structure text on a selected table-header cell (`md
+ *    structure(link role)` on `sel30(table header fill)`), measured 4.40 on
+ *    Moss & Mist, 4.11 on Onyx Synapse and 3.93 on Sage & Sand (Onyx Light
+ *    passes at 5.24).  This is a FINDING, not a design choice like the
+ *    checkbox stroke: three surfaces (the selection hue at 30% over the 12%
+ *    header fill) cannot all be cleared by one shade, and the alternatives
+ *    were worse -- a weaker selection (UI_SEL_SHIFT 26) drops the highlight
+ *    below the visibility floor of tests/test_sel_contrast.c and still fails,
+ *    a 6% header fill makes the header band nearly invisible (24 channel
+ *    steps) and Sage & Sand still reads 4.32, and walking the structure
+ *    colour against this surface would pale every heading.  It is kept
+ *    counted so it shows up and cannot spread; a design that clears it
+ *    deletes these three lines.
+ *
+ * The entries are kept, and counted, so an exception cannot silently spread
+ * to another pair: EXPECTED_EXEMPTIONS must equal the number of entries
+ * below, and each entry matches a row on one theme by name.  Each entry is
+ * { theme name, text token, surface token, measured ratio, rounded down to
+ * two decimals }. */
 typedef struct {
     const char *theme, *fg, *bg;
     double      ratio;
@@ -81,32 +98,24 @@ typedef struct {
 static const Exemption k_exempt[] = {
     /* Onyx Synapse */
     { "Onyx Synapse", "border", "chat.cmd_bg", 1.19 },
+    { "Onyx Synapse", "md structure(link role)", "sel30(table header fill)", 4.11 },
     /* Onyx Light */
     { "Onyx Light", "border", "chat.cmd_bg", 1.18 },
     /* Sage & Sand */
     { "Sage & Sand", "border", "chat.cmd_bg", 1.49 },
+    { "Sage & Sand", "md structure(link role)", "sel30(table header fill)", 3.93 },
     /* Moss & Mist */
     { "Moss & Mist", "border", "chat.cmd_bg", 1.20 },
+    { "Moss & Mist", "md structure(link role)", "sel30(table header fill)", 4.40 },
 };
-#define EXPECTED_EXEMPTIONS 4
+#define EXPECTED_EXEMPTIONS 7
 
 /* ---- Blends --------------------------------------------------------------
  *
  * Packed 0x00RRGGBB, per channel, truncating, exactly as src/ui computes
- * them.  ablend() is rgb_alpha() (src/ui/ns_draw.c) -- fg * a + bg * (1 - a)
- * in float -- copied from tests/test_sel_contrast.c, whose own copy is
- * static; the integer blend is the pressed send/stop button's, written inline
- * in ai_chat.c. */
-static unsigned int ablend(unsigned int fg, unsigned int bg, float a)
-{
-    unsigned int out = 0;
-    for (int sh = 16; sh >= 0; sh -= 8) {
-        float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
-        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
-    }
-    return out;
-}
-
+ * them.  The float blend is rgb_alpha() (src/ui/ns_draw.c), the one helper of
+ * tests/test_blend.h; the integer blend below is the pressed send/stop
+ * button's, written inline in ai_chat.c. */
 /* c * 4 / 5 per channel: the pressed send/stop button. */
 static unsigned int darken_pressed(unsigned int c)
 {
@@ -181,44 +190,48 @@ SEL(s_c_stop_down,    "chat.stop_btn (pressed)", darken_pressed(t->chat.stop_btn
 /* derived: the policy control (ns_draw_policy) fills a lit stop with the
  * intent over bg_secondary at 18% (30% hot) when AUTO is off. */
 SEL(s_tint_ok,        "tint18(success on bg_secondary)",
-    ablend(t->success.base, t->bg_secondary.base, 0.18f));
+    test_blend(t->success.base, t->bg_secondary.base, 0.18f));
 SEL(s_tint_warn,      "tint18(warning on bg_secondary)",
-    ablend(t->warning.base, t->bg_secondary.base, 0.18f));
+    test_blend(t->warning.base, t->bg_secondary.base, 0.18f));
 SEL(s_tint_err,       "tint18(danger on bg_secondary)",
-    ablend(t->danger.base, t->bg_secondary.base, 0.18f));
+    test_blend(t->danger.base, t->bg_secondary.base, 0.18f));
 SEL(s_tint_info,      "tint18(info on bg_secondary)",
-    ablend(t->info.base, t->bg_secondary.base, 0.18f));
+    test_blend(t->info.base, t->bg_secondary.base, 0.18f));
 SEL(s_hot_ok,         "tint30(success on bg_secondary)",
-    ablend(t->success.base, t->bg_secondary.base, 0.30f));
+    test_blend(t->success.base, t->bg_secondary.base, 0.30f));
 SEL(s_hot_warn,       "tint30(warning on bg_secondary)",
-    ablend(t->warning.base, t->bg_secondary.base, 0.30f));
+    test_blend(t->warning.base, t->bg_secondary.base, 0.30f));
 SEL(s_hot_err,        "tint30(danger on bg_secondary)",
-    ablend(t->danger.base, t->bg_secondary.base, 0.30f));
+    test_blend(t->danger.base, t->bg_secondary.base, 0.30f));
 SEL(s_hot_info,       "tint30(info on bg_secondary)",
-    ablend(t->info.base, t->bg_secondary.base, 0.30f));
+    test_blend(t->info.base, t->bg_secondary.base, 0.30f));
 /* derived: the dim chip is text_dim at UI_DIM_TINT_ALPHA (12%, the table
  * header's alpha) over its panel (chat_listview.c). */
 SEL(s_chip_on_bgp,    "tint12(text_dim on bg_primary)",
-    ablend(t->text_dim, t->bg_primary.base, UI_DIM_TINT_ALPHA));
+    test_blend(t->text_dim, t->bg_primary.base, UI_DIM_TINT_ALPHA));
 SEL(s_chip_on_cmd,    "tint12(text_dim on chat.cmd_bg)",
-    ablend(t->text_dim, t->chat.cmd_bg, UI_DIM_TINT_ALPHA));
+    test_blend(t->text_dim, t->chat.cmd_bg, UI_DIM_TINT_ALPHA));
 /* derived: a markdown table's header fill (md_render.c). */
 SEL(s_hdr_fill,       "table header fill(text_dim 12% on bg_primary)",
-    ablend(t->text_dim, t->bg_primary.base, 0.12f));
+    test_blend(t->text_dim, t->bg_primary.base, UI_DIM_TINT_ALPHA));
 /* derived: selected text -- the selection hue (ui_theme_sel_hue) at 30% over
  * the surface (md_render.c MD_SEL_ALPHA). */
 SEL(s_sel_on_bgp,     "sel30(bg_primary)",
-    ablend(ui_theme_sel_hue(t, 0), t->bg_primary.base, 0.30f));
+    test_blend(ui_theme_sel_hue(t, 0), t->bg_primary.base, UI_SEL_ALPHA));
 SEL(s_sel_on_bgs,     "sel30(bg_secondary)",
-    ablend(ui_theme_sel_hue(t, 0), t->bg_secondary.base, 0.30f));
+    test_blend(ui_theme_sel_hue(t, 0), t->bg_secondary.base, UI_SEL_ALPHA));
 SEL(s_sel_on_cmd,     "sel30(chat.cmd_bg)",
-    ablend(ui_theme_sel_hue(t, 0), t->chat.cmd_bg, 0.30f));
+    test_blend(ui_theme_sel_hue(t, 0), t->chat.cmd_bg, UI_SEL_ALPHA));
 SEL(s_sel_on_user,    "sel30(chat.user_bubble)",
-    ablend(ui_theme_sel_hue(t, 1), t->chat.user_bubble, 0.30f));
+    test_blend(ui_theme_sel_hue(t, 1), t->chat.user_bubble, UI_SEL_ALPHA));
 /* derived: the menu's accelerator on the selected row: label at 75% over
  * the accent (window.c WM_DRAWITEM). */
 SEL(s_accel_sel,      "accelerator(accent.label at 75%)",
-    ablend(t->accent.label, t->accent.base, 0.75f));
+    test_blend(t->accent.label, t->accent.base, 0.75f));
+/* derived: the selected table header -- the selection hue at 30% over the
+ * header fill (a selected header cell is painted by md_render.c). */
+SEL(s_sel_on_hdr,     "sel30(table header fill)",
+    test_blend(ui_theme_sel_hue(t, 0), s_hdr_fill_f(t), UI_SEL_ALPHA));
 /* derived: markdown roles (md_render.c md_role_clr): the resolved tokens,
  * ui_theme_md_role() -- the link/info hue walked to 4.7:1 on every surface of
  * its role, or text_main when no shade reaches it. */
@@ -276,15 +289,19 @@ static const Pair k_pairs[] = {
     { &s_c_cmd_text,   &s_c_cmd_bg,      FLOOR_TEXT },  /* command rows, detail dialog edit */
     { &s_c_ai_accent,  &s_bgp_base,      FLOOR_TEXT },  /* "AI" name next to the avatar */
     { &s_c_status,     &s_bgp_base,      FLOOR_TEXT },  /* status messages in the chat */
+    { &s_c_status,     &s_sel_on_bgp,    FLOOR_TEXT },  /* selected status message */
 
     /* -- intents painted as text (4.5) -- */
     { &s_warn_base,    &s_bgp_base,      FLOOR_TEXT },  /* detail dialog reason, settings URL warning */
     { &s_warn_base,    &s_c_cmd_bg,      FLOOR_TEXT },  /* approval row reason */
     { &s_link_base,    &s_bgp_base,      FLOOR_TEXT },  /* [Retry] */
+    { &s_md_code,      &s_bgp_base,      FLOOR_TEXT },  /* [EXEC] command text (inline code is on cmd_bg) */
+    { &s_md_code,      &s_sel_on_bgp,    FLOOR_TEXT },  /* selected [EXEC] command text */
     { &s_md_code,      &s_c_cmd_bg,      FLOOR_TEXT },  /* markdown inline code */
     { &s_md_code,      &s_sel_on_cmd,    FLOOR_TEXT },  /* selected inline code */
     { &s_md_structure, &s_sel_on_bgp,    FLOOR_TEXT },  /* selected heading / list marker */
     { &s_md_structure, &s_hdr_fill,      FLOOR_TEXT },  /* table header text */
+    { &s_md_structure, &s_sel_on_hdr,    FLOOR_TEXT },  /* selected table header text (see k_exempt) */
 
     /* -- activity indicators painted as text (4.5): the AI header's activity
      *    word and the chat activity line (steady colour; only the dot pulses) -- */

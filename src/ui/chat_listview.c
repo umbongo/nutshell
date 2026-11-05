@@ -1473,7 +1473,8 @@ static int paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     clv_run_ctx(lv, &urc, item, TR_PART_MAIN, (int)item->text_len,
                 pinned ? &item->pinned_runs : &item->runs, 0, bubble_clr);
     /* The bubble is filled with the accent the focus hue is drawn from, so
-     * the highlight takes the bubble's own text colour (ui_theme_sel_hue). */
+     * the highlight is black or white, whichever pushes away from the
+     * bubble's own text colour (ui_theme_sel_hue). */
     urc.focus = RGB_FROM_THEME(ui_theme_sel_hue(ns_tokens(), 1));
     HFONT f = clv_font(lv);
     int text_h = md_render_ex(hdc, item->text ? item->text : "",
@@ -1588,16 +1589,18 @@ static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
 
 /* Draw an AI reply's text: the chat_exec_split() segments one under the
  * other -- prose through draw_ai_segment(), each command in the mono font
- * and the info hue through the plain layouter. Every segment records its
- * runs into item->runs at its own source offset. Returns the height
- * painted. */
+ * and the md code colour (ns_tokens()->md_code) through the plain layouter.
+ * Every segment records its runs into item->runs at its own source offset.
+ * Returns the height painted. */
 static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
                                   ChatMsgItem *item, const RECT *rc)
 {
     const char *text = item->text ? item->text : "";
     int len = (int)item->text_len;
     int blk = 0;   /* code-block number within this item, across segments */
-    COLORREF exec_clr = RGB_FROM_THEME(ns_tokens()->info.base);
+    /* The command text is selectable, so it takes the md code colour, walked
+     * until it reads on bg_primary and under the selection tint over it. */
+    COLORREF exec_clr = RGB_FROM_THEME(ns_tokens()->md_code);
     COLORREF surface = RGB_FROM_THEME(lv->theme->bg_primary);
     HFONT mono = clv_mono(lv);
     int width = rc->right - rc->left;

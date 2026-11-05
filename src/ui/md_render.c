@@ -13,6 +13,7 @@
 #include "ns_draw.h"
 #include "theme.h"
 #include "ui_theme.h"
+#include "ns_tokens.h"
 #include "text_runs.h"
 #include <limits.h>
 #include <stdio.h>
@@ -29,10 +30,15 @@
  * code = theme->info for inline code text/fenced-code left bar), as
  * ui_theme_md_role() resolves it: walked until it reads >= UI_TEXT_MIN_RATIO
  * on every surface it is painted on (bg_primary, the table header fill,
- * chat.cmd_bg and the selection tint), else theme->text_main. */
-static COLORREF md_role_clr(const ThemeColors *theme, UiMdRole role)
+ * chat.cmd_bg and the selection tint), else theme->text_main.  The walk runs
+ * once, in ui_theme_resolve(); this reads the result from the active token
+ * set (ns_tokens()->md_structure / md_code), so a render does no colour
+ * arithmetic.  The tokens are always the active theme's, which is the theme
+ * every caller passes. */
+static COLORREF md_role_clr(UiMdRole role)
 {
-    return RGB_FROM_THEME(ui_theme_md_role(theme, role));
+    const ThemeTokens *tk = ns_tokens();
+    return RGB_FROM_THEME(role == UI_MD_CODE ? tk->md_code : tk->md_structure);
 }
 
 /* ── Layout constants ────────────────────────────────────────────────── */
@@ -108,7 +114,8 @@ static void mdbuf_free(MdWBuf *b)
 
 /* ── Character selection: runs and highlight (spec 2026-10-18 s.3, s.6) ── */
 
-/* The highlight: the focus hue at 30% over the colour the run sits on. */
+/* The highlight: the selection hue (ui_theme_sel_hue(): the focus moved
+ * toward the background) at 30% over the colour the run sits on. */
 #define MD_SEL_ALPHA UI_SEL_ALPHA
 
 /* Boundaries of one run, from one GetTextExtentExPointW call (stack
@@ -1025,8 +1032,8 @@ static int md_render_core(HDC hdc, const char *text, int x, int y,
      * headings/list markers/blockquote bar/table header text, "code" for
      * inline code text/fenced-code left bar. Resolved once per render so
      * every line reuses the same (contrast-guarded) colour. */
-    COLORREF structure_clr = md_role_clr(theme, UI_MD_STRUCTURE);
-    COLORREF code_clr = md_role_clr(theme, UI_MD_CODE);
+    COLORREF structure_clr = md_role_clr(UI_MD_STRUCTURE);
+    COLORREF code_clr = md_role_clr(UI_MD_CODE);
     COLORREF body_clr = RGB_FROM_THEME(theme->text_main);
     COLORREF dim_text_clr = RGB_FROM_THEME(theme->text_dim);
     COLORREF code_bg = RGB_FROM_THEME(theme->chat.cmd_bg);

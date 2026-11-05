@@ -6,21 +6,10 @@
 #include "test_framework.h"
 #include "ui_theme.h"
 #include "theme.h"
+#include "test_blend.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* rgb_alpha() (src/ui/ns_draw.c) on packed 0x00RRGGBB: per channel
- * fg * a + bg * (1 - a), truncated. */
-static unsigned int blend(unsigned int fg, unsigned int bg, float a)
-{
-    unsigned int out = 0;
-    for (int sh = 16; sh >= 0; sh -= 8) {
-        float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
-        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
-    }
-    return out;
-}
 
 /* Sum of the per-channel differences. */
 static int dist(unsigned int x, unsigned int y)
@@ -31,7 +20,6 @@ static int dist(unsigned int x, unsigned int y)
     return d;
 }
 
-#define SEL_ALPHA 0.30f
 #define MIN_STEP  40
 
 int test_sel_highlight_visible_on_every_surface(void)
@@ -41,7 +29,7 @@ int test_sel_highlight_visible_on_every_surface(void)
         const ThemeColors *c = ui_theme_get(t);
         ThemeTokens k;
         ui_theme_resolve(c, &k);
-        unsigned int header = blend(c->text_dim, c->bg_primary, 0.12f);
+        unsigned int header = test_blend(c->text_dim, c->bg_primary, UI_DIM_TINT_ALPHA);
         unsigned int surf[5] = { c->bg_primary, c->chat.cmd_bg,
                                  k.bg_secondary.base, header,
                                  c->chat.user_bubble };
@@ -51,7 +39,7 @@ int test_sel_highlight_visible_on_every_surface(void)
         static const char *const name[5] = { "panel", "code", "thinking",
                                              "table header", "user bubble" };
         for (int i = 0; i < 5; i++) {
-            int d = dist(blend(hue[i], surf[i], SEL_ALPHA), surf[i]);
+            int d = dist(test_blend(hue[i], surf[i], UI_SEL_ALPHA), surf[i]);
             if (d < MIN_STEP)
                 printf("  %s: highlight on the %s is only %d from it\n",
                        c->name, name[i], d);

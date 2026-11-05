@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "ui_theme.h"
 #include "theme.h"
+#include "test_blend.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -190,18 +191,6 @@ int test_ui_tokens_link_darker_than_accent_on_light_themes(void)
     TEST_END();
 }
 
-/* rgb_alpha() (src/ui/ns_draw.c): fg * a + bg * (1 - a) per channel in
- * float, truncated. */
-static unsigned int blend_f(unsigned int fg, unsigned int bg, float a)
-{
-    unsigned int out = 0;
-    for (int sh = 16; sh >= 0; sh -= 8) {
-        float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
-        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
-    }
-    return out;
-}
-
 /* ---- Colour-by-role render-time contrast (AI reply markdown colour) ------ */
 
 /* md_render.c paints two intent hues as flat text: base->link (the
@@ -211,7 +200,8 @@ static unsigned int blend_f(unsigned int fg, unsigned int bg, float a)
  * it (2 L* at a time, away from the background) until it reads at least
  * UI_TEXT_MIN_RATIO (4.7) on every surface of its role: structure on
  * bg_primary, the table header fill and the selection tint over bg_primary;
- * code on bg_primary, chat.cmd_bg and the selection tint over chat.cmd_bg.
+ * code on bg_primary (the [EXEC] command text), chat.cmd_bg (inline code) and
+ * the selection tint over both.
  * Falling back to text_main is only for a hue no shade of which can do it.
  *
  * The raw tokens alone fall short on bg_primary in two of the four themes
@@ -246,13 +236,14 @@ int test_ui_tokens_md_role_color_contrast(void)
         ThemeTokens tok;
         ui_theme_resolve(base, &tok);
         unsigned int sel = ui_theme_sel_hue(&tok, 0);
-        unsigned int dim_fill = blend_f(base->text_dim, base->bg_primary, UI_DIM_TINT_ALPHA);
-        unsigned int sel_bgp = blend_f(sel, base->bg_primary, UI_SEL_ALPHA);
-        unsigned int sel_cmd = blend_f(sel, base->chat.cmd_bg, UI_SEL_ALPHA);
+        unsigned int dim_fill = test_blend(base->text_dim, base->bg_primary, UI_DIM_TINT_ALPHA);
+        unsigned int sel_bgp = test_blend(sel, base->bg_primary, UI_SEL_ALPHA);
+        unsigned int sel_cmd = test_blend(sel, base->chat.cmd_bg, UI_SEL_ALPHA);
         ASSERT_TRUE(theme_contrast(resolved_link, dim_fill) >= UI_TEXT_MIN_RATIO);
         ASSERT_TRUE(theme_contrast(resolved_link, sel_bgp) >= UI_TEXT_MIN_RATIO);
         ASSERT_TRUE(theme_contrast(resolved_info, base->chat.cmd_bg) >= UI_TEXT_MIN_RATIO);
         ASSERT_TRUE(theme_contrast(resolved_info, sel_cmd) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_info, sel_bgp) >= UI_TEXT_MIN_RATIO);
         ASSERT_TRUE(theme_contrast(resolved_link, base->bg_primary) >= UI_TEXT_MIN_RATIO);
         ASSERT_TRUE(theme_contrast(resolved_info, base->bg_primary) >= UI_TEXT_MIN_RATIO);
 
@@ -271,6 +262,47 @@ int test_ui_tokens_md_role_color_contrast(void)
             ASSERT_EQ(gmax, omax);
         }
     }
+    TEST_END();
+}
+
+/* The three chat health colours (activity dot and word, one token per state)
+ * must be told apart by lightness as well as hue, so the traffic-light
+ * reading survives colour-vision deficiency: on every light theme they sit
+ * at least 8 L* from each other and each still reads 4.5:1 on bg_primary.
+ * Dark themes are not held to the spacing: their yellow, green and red
+ * already differ widely in lightness (the lightness walk only ever squeezed
+ * the light themes, which had to be darkened to reach 4.5:1). */
+#define INDICATOR_MIN_LSTAR_GAP 8.0
+
+int test_ui_tokens_light_indicators_distinct_lightness(void)
+{
+    TEST_BEGIN();
+    int light_seen = 0;
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const ThemeColors *base = ui_theme_get(i);
+        ThemeTokens tok;
+        ui_theme_resolve(base, &tok);
+        if (tok.is_dark) continue;
+        light_seen++;
+        unsigned int c[3] = { base->chat.indicator_green,
+                              base->chat.indicator_yellow,
+                              base->chat.indicator_red };
+        static const char *const nm[3] = { "green", "yellow", "red" };
+        for (int a = 0; a < 3; a++) {
+            double cr = theme_contrast(c[a], base->bg_primary);
+            printf("  [indicators] %-12s %-6s L*=%.1f on bg_primary %.2f\n",
+                   base->name, nm[a], theme_lstar(c[a]), cr);
+            ASSERT_TRUE(cr >= MIN_CONTRAST);
+            for (int b = a + 1; b < 3; b++) {
+                double gap = fabs(theme_lstar(c[a]) - theme_lstar(c[b]));
+                if (gap < INDICATOR_MIN_LSTAR_GAP)
+                    printf("  %s: %s and %s are only %.1f L* apart\n",
+                           base->name, nm[a], nm[b], gap);
+                ASSERT_TRUE(gap >= INDICATOR_MIN_LSTAR_GAP);
+            }
+        }
+    }
+    ASSERT_EQ(light_seen, 2);
     TEST_END();
 }
 
@@ -315,9 +347,9 @@ static int surface_derivation_ok(ThemeSurface s, unsigned int bg_primary, int st
     return 1;
 }
 
-/* The expected step direction of a filled surface (accent and the five
- * intents): away from its label, so the label never loses contrast on hover
- * or pressed. +1 lightens (label is darker than the base), -1 darkens. */
+/* The expected step direction of a filled surface (accent and the four
+ * filled intents): away from its label, so the label does not lose contrast on
+ * hover or pressed. +1 lightens (label is darker than the base), -1 darkens. */
 static int filled_step_dir(ThemeSurface s)
 {
     return theme_lstar(s.label) < theme_lstar(s.base) ? 1 : -1;

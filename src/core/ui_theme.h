@@ -85,7 +85,10 @@ const char *ui_theme_name(int index);
  * has the highest contrast against it.  `hover` and `pressed` are one and
  * two UI_THEME_STEPs from `base`: with the theme polarity for bg_primary,
  * bg_secondary, raised and link, and away from `label` for accent, success,
- * warning, danger and info, so the label never loses contrast on them. */
+ * warning, danger and info, so the label does not lose contrast on them.
+ * That holds for the shipped themes; theme_shift_lightness() clamps channels
+ * to [0x08, 0xF7], which can break it for a near-black or near-white fill
+ * (test_ui_tokens_filled_label_contrast_on_states pins the shipped four). */
 typedef struct {
     unsigned int base, hover, pressed, disabled, label;
 } ThemeSurface;
@@ -146,8 +149,9 @@ typedef enum { UI_MD_STRUCTURE, UI_MD_CODE } UiMdRole;
  *   structure: bg_primary; the table header fill (text_dim at
  *     UI_DIM_TINT_ALPHA over bg_primary); the selection hue at UI_SEL_ALPHA
  *     over bg_primary.
- *   code: bg_primary; chat.cmd_bg; the selection hue at UI_SEL_ALPHA over
- *     chat.cmd_bg.
+ *   code: bg_primary (the [EXEC] command text); chat.cmd_bg (inline code);
+ *     the selection hue at UI_SEL_ALPHA over chat.cmd_bg and over
+ *     bg_primary (selected text on either).
  * The blends are rgb_alpha()'s truncating float blend (src/ui/ns_draw.c). */
 unsigned int ui_theme_md_role(const ThemeColors *c, UiMdRole role);
 

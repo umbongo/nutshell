@@ -38,7 +38,8 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .terminal_bg  = 0x121212,
         .terminal_min_contrast = 0.0, /* dark: today's palette, byte for byte */
         .success      = 0x21883B, /* darkened from indicator_green 0x34C759 */
-        .warning      = 0xA58308, /* indicator_yellow 0xFFCC00 darkened 28 L*: 5.22 on bg_primary */
+        .warning      = 0xA58308, /* indicator_yellow 0xFFCC00 darkened 28 L*; the label resolves to
+                                    * bg_primary at 5.22:1 */
         .danger       = 0xE03229, /* darkened from indicator_red 0xFF3B30 */
         .info         = 0x8969A8, /* darkened from the old [EXEC] purple 0xB48CDC */
         .link         = 0x5D82BB, /* +4 L* so it reads as text: 4.80 on bg_primary */
@@ -55,7 +56,8 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
             0xC0C0C0, /* cmd_text — monospace light */
             0x5C88C4, /* thinking_border — accent */
             0x888888, /* thinking_text — dim */
-            0x828282, /* status_text — dimmer; 4.87:1 on bg_primary (was 0x666666) */
+            0x8F8F8F, /* status_text — dimmer; 5.79:1 on bg_primary (was 0x666666, then
+                        * 0x828282), 4.72 under the selection tint */
             0x34C759, /* indicator_green */
             0xFFCC00, /* indicator_yellow */
             0xFF3B30, /* indicator_red */
@@ -91,9 +93,14 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .chat = {
             0x0869DD, 0xFFFFFF, 0x0869DD,
             0xEEEEF2, 0xDCDCE0, 0x333333,
-            0x007AFF, 0x86868B, 0x6C6C6C,
-            0x1D7E35, 0x866A08, 0xCD2D24,
-            0x6C90BD, /* send_btn — light sky blue */
+            0x007AFF, 0x86868B, 0x5C5C5C, /* status_text: 6.14:1 on bg_primary, 4.71 under the selection tint */
+            0x0E4D1E, 0x866A08, 0xA6221B, /* indicators: yellow stays at L* 46.2,
+                                           * green is taken down 18 L* (28.1) and
+                                           * red 9 L* (36.6), so the three differ by
+                                           * >= 8 L* and survive colour-vision
+                                           * deficiency; each still reads >= 4.5 on
+                                           * bg_primary (9.19, 6.73, 4.73) */
+            0x6C90BD, /* send_btn — a muted steel blue (L* 59), near the accent's hue */
             0xBF7D7D, /* stop_btn — rose pink */
         },
     },
@@ -113,14 +120,15 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .terminal_bg  = 0x2B2D24,
         .terminal_min_contrast = 0.0, /* dark: today's palette, byte for byte */
         .success      = 0x607F46, /* darkened from indicator_green 0x8FBC6A */
-        .warning      = 0xB7933F, /* indicator_yellow 0xD4AA4A darkened 9 L*: 4.83 on bg_primary */
+        .warning      = 0xB7933F, /* indicator_yellow 0xD4AA4A darkened 9 L*; the label resolves to
+                                    * bg_primary at 4.83:1 */
         .danger       = 0xC05738, /* darkened from indicator_red 0xC75A3A */
         .info         = 0x896B9D,
         .link         = 0x8A9BA4, /* +13 L* so it reads as text: 4.86 on bg_primary */
         .chat = {
             0xA3B18A, 0x1A1A14, 0xA3B18A,
             0x232520, 0x3F4138, 0xD4D1C4,
-            0xA3B18A, 0xA09E93, 0x98978D,
+            0xA3B18A, 0xA09E93, 0xB4B3AD, /* status_text: 6.65:1 on bg_primary, 4.77 under the selection tint */
             0x8FBC6A, 0xD4AA4A, 0xD08375,
             0x7E91A2, /* send_btn — dusty steel blue */
             0xC4756B, /* stop_btn — earthy terracotta */
@@ -148,15 +156,18 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .terminal_bg  = 0xF1F3F0,
         .terminal_min_contrast = 4.5, /* indexed text floored to WCAG AA */
         .success      = 0x2C8654, /* darkened from indicator_green 0x52B788 */
-        .warning      = 0x845F08, /* indicator_yellow 0xE9C46A darkened 7 L* more; white label 5.80:1 */
+        .warning      = 0x845F08, /* indicator_yellow 0xE9C46A darkened 7 L* from 0x9A6F08; white label 5.80:1 */
         .danger       = 0xC1440E, /* darkened from indicator_red 0xE76F51 */
         .info         = 0x7A5C99,
         .link         = 0x3D6D7A, /* darker than accent, per spec */
         .chat = {
             0x57705C, 0xFFFFFF, 0x57705C,
             0xE8EBE6, 0xD5D8D3, 0x354F52,
-            0x84A98C, 0x6B8A8D, 0x5F6D6E,
-            0x347858, 0x7C6735, 0xA94F39,
+            0x84A98C, 0x6B8A8D, 0x525E5F, /* status_text: 6.02:1 on bg_primary, 4.74 under the selection tint */
+            0x1D4934, 0x7C6735, 0x883E2C, /* indicators: yellow stays at L* 44.6,
+                                           * green down 18 L* (27.5), red down 9 L*
+                                           * (35.7); 9.16, 4.89 and 6.79 on
+                                           * bg_primary */
             0x78929E, /* send_btn — misty blue */
             0xBC7F7A, /* stop_btn — dusty rose */
         },
@@ -207,12 +218,17 @@ static unsigned int resolve_label(unsigned int base, unsigned int bg_primary,
  * three `label` candidates; `text_main` is the other.
  *
  * The direction hover/pressed step is `step_dir`: +1 lightens, -1 darkens.
- * With `away_from_label` set (the filled surfaces: accent and the five
- * intents) `step_dir` is ignored: the label is resolved first and the states
- * step AWAY from it -- lighten when the label is darker than the base,
- * darken otherwise. The label is the best of three candidates on `base` and
- * every step moves away from it, so its contrast on hover and pressed is
- * never below its contrast on base. Neutral surfaces keep the theme polarity
+ * With `away_from_label` set (the filled surfaces: accent and the four
+ * filled intents, success/warning/danger/info; link is not filled)
+ * `step_dir` is ignored: the label is resolved first and the states step
+ * AWAY from it -- lighten when the label is darker than the base, darken
+ * otherwise. The label is the best of three candidates on `base` and every
+ * step moves away from it, so on the shipped themes its contrast on hover and
+ * pressed is never below its contrast on base. That is not unconditional:
+ * theme_shift_lightness() clamps each channel to [0x08, 0xF7], so a near-
+ * black or near-white fill can be pulled back toward its label by the clamp.
+ * test_ui_tokens_filled_label_contrast_on_states pins the shipped themes.
+ * Neutral surfaces keep the theme polarity
  * (+1 on dark themes, -1 on light). */
 static void resolve_surface(unsigned int base, int step_dir, int away_from_label,
                              unsigned int bg_primary, unsigned int text_main,
@@ -257,11 +273,14 @@ unsigned int ui_theme_md_role(const ThemeColors *c, UiMdRole role)
     int is_dark = theme_is_dark(c->bg_primary);
     unsigned int sel = sel_hue_off_bubble(focus, is_dark);
 
-    unsigned int surf[3];
+    unsigned int surf[4];
+    int n = 3;
     surf[0] = c->bg_primary;
     if (role == UI_MD_CODE) {
         surf[1] = c->chat.cmd_bg;
         surf[2] = tint(sel, c->chat.cmd_bg, UI_SEL_ALPHA);
+        surf[3] = tint(sel, c->bg_primary, UI_SEL_ALPHA);
+        n = 4;
     } else {
         surf[1] = tint(c->text_dim, c->bg_primary, UI_DIM_TINT_ALPHA);
         surf[2] = tint(sel, c->bg_primary, UI_SEL_ALPHA);
@@ -271,10 +290,10 @@ unsigned int ui_theme_md_role(const ThemeColors *c, UiMdRole role)
     unsigned int cur = hue;
     for (int step = 0; step <= 50; step++) {
         if (step > 0) cur = theme_shift_lightness(cur, dir);
-        if (theme_contrast(cur, surf[0]) >= UI_TEXT_MIN_RATIO &&
-            theme_contrast(cur, surf[1]) >= UI_TEXT_MIN_RATIO &&
-            theme_contrast(cur, surf[2]) >= UI_TEXT_MIN_RATIO)
-            return cur;
+        int ok = 1;
+        for (int i = 0; i < n && ok; i++)
+            if (theme_contrast(cur, surf[i]) < UI_TEXT_MIN_RATIO) ok = 0;
+        if (ok) return cur;
     }
     return c->text_main;
 }

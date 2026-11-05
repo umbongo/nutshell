@@ -2186,6 +2186,7 @@ int test_ui_theme_md_role_walks_away_from_the_background(void);
 int test_ui_theme_md_role_falls_back_to_text_main(void);
 int test_ui_theme_md_role_walks_first_clearing_step(void);
 int test_ui_theme_md_tokens_match_md_role(void);
+int test_ui_theme_md_code_shipped_values(void);
 
 /* test_display_buffer.c */
 int test_dispbuf_init_zeroed(void);
@@ -3250,6 +3251,7 @@ int test_ui_tokens_onyx_light_accent_contrast(void);
 int test_ui_tokens_onyx_synapse_accent_calm(void);
 int test_ui_tokens_link_darker_than_accent_on_light_themes(void);
 int test_ui_tokens_md_role_color_contrast(void);
+int test_ui_tokens_light_indicators_distinct_lightness(void);
 int test_ui_tokens_derivation_all_surfaces(void);
 int test_ui_tokens_filled_label_contrast_on_states(void);
 int test_ui_tokens_raised_derived_from_bg_secondary(void);
@@ -5756,6 +5758,7 @@ int main(void) {
     failed += test_ui_theme_md_role_walks_first_clearing_step();
     failed += test_ui_theme_md_role_falls_back_to_text_main();
     failed += test_ui_theme_md_tokens_match_md_role();
+    failed += test_ui_theme_md_code_shipped_values();
 
     printf("\n--- Display Buffer ---\n");
     failed += test_dispbuf_init_zeroed();
@@ -7000,6 +7003,7 @@ int main(void) {
     failed += test_ui_tokens_onyx_synapse_accent_calm();
     failed += test_ui_tokens_link_darker_than_accent_on_light_themes();
     failed += test_ui_tokens_md_role_color_contrast();
+    failed += test_ui_tokens_light_indicators_distinct_lightness();
     failed += test_ui_tokens_derivation_all_surfaces();
     failed += test_ui_tokens_filled_label_contrast_on_states();
     failed += test_ui_tokens_raised_derived_from_bg_secondary();

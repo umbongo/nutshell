@@ -2,6 +2,7 @@
 #include "ui_theme.h"
 #include "theme.h"
 #include "config.h"
+#include "test_blend.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -305,17 +306,6 @@ int test_ui_theme_terminal_min_contrast_by_name(void) {
 
 /* ---- ui_theme_md_role -------------------------------------------------- */
 
-/* rgb_alpha()'s truncating float blend, written out independently of
- * ui_theme.c so the test checks the arithmetic, not a shared helper. */
-static unsigned int md_test_blend(unsigned int fg, unsigned int bg, float a) {
-    unsigned int out = 0;
-    for (int sh = 16; sh >= 0; sh -= 8) {
-        float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
-        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
-    }
-    return out;
-}
-
 /* A theme with only the fields ui_theme_md_role reads set.  link and info
  * are separate arguments: a role must start from its own hue. */
 static ThemeColors md_test_theme(unsigned int bg, unsigned int cmd_bg,
@@ -341,16 +331,21 @@ static int md_test_clears(const ThemeColors *c, UiMdRole role, unsigned int col)
      * background, written out here rather than read from ui_theme.c. */
     focus = theme_shift_lightness(focus, theme_is_dark(c->bg_primary)
                                              ? -UI_SEL_SHIFT : UI_SEL_SHIFT);
-    unsigned int surf[3];
+    unsigned int surf[4];
+    int n = 3;
     surf[0] = c->bg_primary;
     if (role == UI_MD_CODE) {
+        /* bg_primary ([EXEC] command text), chat.cmd_bg (inline code) and
+         * the selection tint over each of the two. */
         surf[1] = c->chat.cmd_bg;
-        surf[2] = md_test_blend(focus, c->chat.cmd_bg, UI_SEL_ALPHA);
+        surf[2] = test_blend(focus, c->chat.cmd_bg, UI_SEL_ALPHA);
+        surf[3] = test_blend(focus, c->bg_primary, UI_SEL_ALPHA);
+        n = 4;
     } else {
-        surf[1] = md_test_blend(c->text_dim, c->bg_primary, UI_DIM_TINT_ALPHA);
-        surf[2] = md_test_blend(focus, c->bg_primary, UI_SEL_ALPHA);
+        surf[1] = test_blend(c->text_dim, c->bg_primary, UI_DIM_TINT_ALPHA);
+        surf[2] = test_blend(focus, c->bg_primary, UI_SEL_ALPHA);
     }
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < n; i++)
         if (theme_contrast(col, surf[i]) < UI_TEXT_MIN_RATIO) return 0;
     return 1;
 }
@@ -459,6 +454,25 @@ int test_ui_theme_md_role_falls_back_to_text_main(void) {
     ASSERT_EQ((int)ui_theme_md_role(&c, UI_MD_STRUCTURE), 0xABCDEF);
     ASSERT_EQ((int)ui_theme_md_role(&c, UI_MD_CODE), 0xABCDEF);
     ASSERT_EQ((int)ui_theme_md_role(NULL, UI_MD_CODE), 0);
+    TEST_END();
+}
+
+/* The shipped themes' code colour, now that the [EXEC] command text (painted
+ * on bg_primary, selectable) is held to the same walk: Sage & Sand moved from
+ * 0xB4A7BF, the others already cleared the extra two surfaces. */
+int test_ui_theme_md_code_shipped_values(void) {
+    TEST_BEGIN();
+    static const unsigned int want[NUM_UI_THEMES] = {
+        0xA593BC, 0x6F4793, 0xBEB3C7, 0x644C7D
+    };
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        ThemeTokens t;
+        ui_theme_resolve(ui_theme_get(i), &t);
+        if (t.md_code != want[i])
+            printf("  %s: md_code 0x%06X, expected 0x%06X\n",
+                   ui_theme_get(i)->name, t.md_code, want[i]);
+        ASSERT_EQ((int)t.md_code, (int)want[i]);
+    }
     TEST_END();
 }
 
