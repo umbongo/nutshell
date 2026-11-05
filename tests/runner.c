@@ -988,6 +988,12 @@ int test_ai_data_escape_line_breaks_normalised(void);
 int test_ai_data_escape_exec_markers(void);
 int test_ai_data_escape_backticks_kept(void);
 int test_ai_data_escape_null_and_empty(void);
+int test_ai_data_block_shape(void);
+int test_ai_data_block_note_after_close(void);
+int test_ai_data_block_note_alone(void);
+int test_ai_data_block_escapes_inside(void);
+int test_ai_data_lead_texts(void);
+int test_ai_data_lead_truncates_safely(void);
 
 #ifndef NO_SSH_LIBS
 /* test_ssh.c */
@@ -4652,6 +4658,12 @@ int main(void) {
     failed += test_ai_data_escape_exec_markers();
     failed += test_ai_data_escape_backticks_kept();
     failed += test_ai_data_escape_null_and_empty();
+    failed += test_ai_data_block_shape();
+    failed += test_ai_data_block_note_after_close();
+    failed += test_ai_data_block_note_alone();
+    failed += test_ai_data_block_escapes_inside();
+    failed += test_ai_data_lead_texts();
+    failed += test_ai_data_lead_truncates_safely();
 
 #ifndef NO_SSH_LIBS
     printf("\n--- SSH ---\n");
