@@ -1,0 +1,253 @@
+name: Quality
+
+# Three hosted-runner checks that go beyond the merge gate in checks.yml:
+#   "Sanitizers" -- the native suite under ASan, UBSan and LeakSanitizer
+#                   (make test SAN=1).
+#   "Lint"       -- the cppcheck gate (make lint-gate) on src/.
+#   "Fuzz"       -- the six libFuzzer targets built, then the committed seed
+#                   corpus replayed once with no mutation (make fuzz &&
+#                   make fuzz-run), so the job is deterministic.
+# None of them is a required check (they are not in the main ruleset), but
+# all three are deterministic and expected green before a merge: "never merge
+# a red check" holds for them as for the two required ones. The weekly
+# mutating fuzz run is a separate workflow, fuzz-weekly.yml, never a pull
+# request check.
+#
+# Each job starts with a "scope" step, as checks.yml's Native tests does: a
+# pull request that changes nothing under src/, tests/, build-support/, the
+# Makefile, nutshell.rc, README.md or this workflow skips its work steps but
+# still reports green. The skip lives in a step condition, never in a paths
+# filter on the trigger, so every pull request shows the same set of checks
+# and none of them can sit at "waiting for status to be reported".
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Drop superseded runs: pushing again to a branch should not leave the
+  # previous hosted run burning to completion. Safe to cancel: these jobs
+  # hold no machine state.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sanitizers:
+    name: Sanitizers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Decide whether the job has work to do
+        id: scope
+        shell: bash
+        run: |
+          # Same decision as checks.yml's "Native tests": nothing to run
+          # unless the pull request touches src/, tests/, build-support/,
+          # the Makefile, nutshell.rc, README.md or this workflow. The
+          # checkout is shallow (depth 1, the merge commit), so fetch the
+          # base commit explicitly; comparing two trees needs no history.
+          base='${{ github.event.pull_request.base.sha }}'
+          git fetch --no-tags --depth=1 origin "$base"
+          changed=$(git diff --name-only "$base" HEAD)
+          printf 'changed against %s:\n' "$base"
+          sed 's/^/  /' <<<"$changed"
+          if grep -qE '^(src/|tests/|build-support/|Makefile$|nutshell\.rc$|README\.md$|\.github/workflows/quality\.yml$)' <<<"$changed"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "code changed: running the sanitizer suite"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "no code changed: skipping the sanitizer suite"
+          fi
+
+      - name: Install build dependencies
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          # Drop the image's stale third-party apt sources by host before
+          # updating, as checks.yml and codeql.yml do (no pipeline here: the
+          # default shell is bash -e without pipefail, and a grep that
+          # matches nothing must not fail the step).
+          stale=$(grep -rlE 'dl[.]google[.]com|packages[.]microsoft[.]com' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true)
+          if [ -n "$stale" ]; then sudo rm -vf $stale; fi
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libssh2-1-dev zlib1g-dev
+
+      - name: Confirm the Makefile will find libssh2
+        if: steps.scope.outputs.code == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          # The same probe the Makefile runs (HAS_LIBSSH2). If it fails, the
+          # test build silently falls back to tests/stubs/libssh2.h and the
+          # SSH files are compiled against a fake; fail here instead.
+          echo 'int main(void){return 0;}' | gcc -xc - -lssh2 -lssl -lcrypto -o /tmp/libssh2-probe
+          echo "libssh2 linkable"
+
+      - name: Build and run the native suite under the sanitizers
+        if: steps.scope.outputs.code == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          # -fsanitize-recover=all with halt_on_error=0 lets one run report
+          # every finding, but it also means a finding does NOT fail make:
+          # the next step reads the log and fails the job instead.
+          mkdir -p build
+          make -j"$(nproc)" test SAN=1 2>&1 | tee build/san.log
+        env:
+          CI: true
+          ASAN_OPTIONS: halt_on_error=0:detect_leaks=1
+          LSAN_OPTIONS: suppressions=tests/lsan.supp
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=0
+
+      - name: Fail on any sanitizer report
+        # !cancelled() rather than the default success(): when make itself
+        # failed (a test failed under ASan, say) this step still runs and
+        # prints the matching report lines, which is the diagnosis. The job
+        # is red either way. When make passed, a report in the log is the
+        # only thing that turns the job red.
+        if: ${{ !cancelled() && steps.scope.outputs.code == 'true' }}
+        run: |
+          if [ ! -f build/san.log ]; then
+            echo "::error::build/san.log is missing: the sanitizer run did not start"
+            exit 1
+          fi
+          if grep -nE 'AddressSanitizer|LeakSanitizer|runtime error:' build/san.log; then
+            echo "::error::sanitizer reports found in build/san.log (matches above)"
+            exit 1
+          fi
+          echo "no sanitizer reports in build/san.log"
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Decide whether the job has work to do
+        id: scope
+        shell: bash
+        run: |
+          # Same decision as checks.yml's "Native tests"; see the Sanitizers
+          # job's scope step.
+          base='${{ github.event.pull_request.base.sha }}'
+          git fetch --no-tags --depth=1 origin "$base"
+          changed=$(git diff --name-only "$base" HEAD)
+          printf 'changed against %s:\n' "$base"
+          sed 's/^/  /' <<<"$changed"
+          if grep -qE '^(src/|tests/|build-support/|Makefile$|nutshell\.rc$|README\.md$|\.github/workflows/quality\.yml$)' <<<"$changed"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "code changed: running the cppcheck gate"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "no code changed: skipping the cppcheck gate"
+          fi
+
+      - name: Install build dependencies
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          # Drop the image's stale third-party apt sources by host before
+          # updating, as checks.yml does (no pipeline here).
+          stale=$(grep -rlE 'dl[.]google[.]com|packages[.]microsoft[.]com' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true)
+          if [ -n "$stale" ]; then sudo rm -vf $stale; fi
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libssh2-1-dev zlib1g-dev cppcheck
+
+      - name: Confirm the cppcheck release the gate was measured with
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          # ubuntu-24.04 ships 2.13; a different release can flag different
+          # things, so a change of release is a decision, not a surprise.
+          v=$(cppcheck --version)
+          echo "$v"
+          case "$v" in
+            "Cppcheck 2.13"*) ;;
+            *)
+              echo "::error::expected Cppcheck 2.13, got: $v"
+              exit 1
+              ;;
+          esac
+
+      - name: cppcheck gate
+        if: steps.scope.outputs.code == 'true'
+        run: make lint-gate
+
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Decide whether the job has work to do
+        id: scope
+        shell: bash
+        run: |
+          # Same decision as checks.yml's "Native tests"; see the Sanitizers
+          # job's scope step.
+          base='${{ github.event.pull_request.base.sha }}'
+          git fetch --no-tags --depth=1 origin "$base"
+          changed=$(git diff --name-only "$base" HEAD)
+          printf 'changed against %s:\n' "$base"
+          sed 's/^/  /' <<<"$changed"
+          if grep -qE '^(src/|tests/|build-support/|Makefile$|nutshell\.rc$|README\.md$|\.github/workflows/quality\.yml$)' <<<"$changed"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "code changed: running the fuzz targets"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+            echo "no code changed: skipping the fuzz targets"
+          fi
+
+      - name: Install build dependencies
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          # Drop the image's stale third-party apt sources by host before
+          # updating, as checks.yml does (no pipeline here).
+          stale=$(grep -rlE 'dl[.]google[.]com|packages[.]microsoft[.]com' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true)
+          if [ -n "$stale" ]; then sudo rm -vf $stale; fi
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libssh2-1-dev zlib1g-dev
+
+      - name: Make sure clang can link libFuzzer
+        if: steps.scope.outputs.code == 'true'
+        run: |
+          # Find clang the way the Makefile's FUZZ_CC does. Link a one-line
+          # target with the same sanitizer set the fuzz binaries use; if that
+          # fails the libFuzzer/sanitizer runtime package is missing, so
+          # install the one that matches the compiler and try once more.
+          cc=
+          for c in clang clang-18 clang-17 clang-16; do
+            if command -v "$c" >/dev/null 2>&1; then cc=$c; break; fi
+          done
+          if [ -z "$cc" ]; then
+            echo "::error::no clang on PATH (looked for clang, clang-18, clang-17, clang-16)"
+            exit 1
+          fi
+          v=$("$cc" -dumpversion)
+          n=${v%%.*}
+          echo "using $cc, version $v"
+          probe="$RUNNER_TEMP/fuzz-probe"
+          printf 'int LLVMFuzzerTestOneInput(const unsigned char *d, unsigned long n) { (void)d; (void)n; return 0; }\n' > "$probe.c"
+          if ! "$cc" -fsanitize=fuzzer,address,undefined "$probe.c" -o "$probe"; then
+            echo "libFuzzer does not link; installing libclang-rt-$n-dev"
+            sudo apt-get install -y "libclang-rt-$n-dev"
+            "$cc" -fsanitize=fuzzer,address,undefined "$probe.c" -o "$probe"
+          fi
+          echo "libFuzzer links"
+          # Stack traces in a fuzz report need the symbolizer; export it
+          # when one is installed (an unsymbolized report still fails).
+          for s in llvm-symbolizer "llvm-symbolizer-$n"; do
+            if p=$(command -v "$s"); then
+              echo "ASAN_SYMBOLIZER_PATH=$p" >> "$GITHUB_ENV"
+              echo "symbolizer: $p"
+              break
+            fi
+          done
+
+      - name: Build the fuzz targets and replay the seed corpus
+        if: steps.scope.outputs.code == 'true'
+        run: make fuzz && make fuzz-run

@@ -1,0 +1,80 @@
+name: Fuzz (weekly)
+
+# Mutating fuzz run of the six libFuzzer targets, Mondays 03:00 UTC (or by
+# hand: workflow_dispatch). NOT a pull request check: quality.yml's "Fuzz"
+# job replays the committed seeds deterministically on every pull request;
+# this one mutates for FUZZ_TIME seconds per target (make fuzz-long) and so
+# can find something new on an unchanged tree. Nothing is uploaded.
+#
+# A red run: whoever sees it opens an issue by hand naming the target and
+# the fault class (read from the run log, which prints the error header, the
+# stack frames and the summary line, never the input). The crashing input is
+# never put in the issue, a commit, a pull request or a log; it stays under
+# build/fuzz/ on a machine that reproduces it.
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz-scheduled:
+    name: Fuzz (scheduled)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install build dependencies
+        run: |
+          # Drop the image's stale third-party apt sources by host before
+          # updating, as checks.yml does (no pipeline here).
+          stale=$(grep -rlE 'dl[.]google[.]com|packages[.]microsoft[.]com' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true)
+          if [ -n "$stale" ]; then sudo rm -vf $stale; fi
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev libssh2-1-dev zlib1g-dev
+
+      - name: Make sure clang can link libFuzzer
+        run: |
+          # Find clang the way the Makefile's FUZZ_CC does. Link a one-line
+          # target with the same sanitizer set the fuzz binaries use; if that
+          # fails the libFuzzer/sanitizer runtime package is missing, so
+          # install the one that matches the compiler and try once more.
+          cc=
+          for c in clang clang-18 clang-17 clang-16; do
+            if command -v "$c" >/dev/null 2>&1; then cc=$c; break; fi
+          done
+          if [ -z "$cc" ]; then
+            echo "::error::no clang on PATH (looked for clang, clang-18, clang-17, clang-16)"
+            exit 1
+          fi
+          v=$("$cc" -dumpversion)
+          n=${v%%.*}
+          echo "using $cc, version $v"
+          probe="$RUNNER_TEMP/fuzz-probe"
+          printf 'int LLVMFuzzerTestOneInput(const unsigned char *d, unsigned long n) { (void)d; (void)n; return 0; }\n' > "$probe.c"
+          if ! "$cc" -fsanitize=fuzzer,address,undefined "$probe.c" -o "$probe"; then
+            echo "libFuzzer does not link; installing libclang-rt-$n-dev"
+            sudo apt-get install -y "libclang-rt-$n-dev"
+            "$cc" -fsanitize=fuzzer,address,undefined "$probe.c" -o "$probe"
+          fi
+          echo "libFuzzer links"
+          # Stack traces in a fuzz report need the symbolizer; export it
+          # when one is installed (an unsymbolized report still fails).
+          for s in llvm-symbolizer "llvm-symbolizer-$n"; do
+            if p=$(command -v "$s"); then
+              echo "ASAN_SYMBOLIZER_PATH=$p" >> "$GITHUB_ENV"
+              echo "symbolizer: $p"
+              break
+            fi
+          done
+
+      - name: Build the fuzz targets and run them for FUZZ_TIME seconds each
+        run: make fuzz && make fuzz-long
