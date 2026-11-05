@@ -3231,6 +3231,11 @@ int test_ns_type_font_face_id_mono_is_two(void);
 int test_ns_type_pill(void);
 int test_ns_type_line_px_matches_the_ramp(void);
 
+/* test_theme_contrast.c */
+int test_theme_contrast_every_pair_meets_its_floor(void);
+int test_theme_contrast_exemptions_are_exact(void);
+int test_theme_contrast_table_is_well_formed(void);
+
 /* test_ui_tokens.c */
 int test_ui_tokens_text_contrast_on_backgrounds(void);
 int test_ui_tokens_intent_label_contrast(void);
@@ -6968,6 +6973,11 @@ int main(void) {
     failed += test_ns_type_font_face_id_mono_is_two();
     failed += test_ns_type_pill();
     failed += test_ns_type_line_px_matches_the_ramp();
+
+    printf("\n--- Design System: theme text contrast ---\n");
+    failed += test_theme_contrast_table_is_well_formed();
+    failed += test_theme_contrast_every_pair_meets_its_floor();
+    failed += test_theme_contrast_exemptions_are_exact();
 
     printf("\n--- Design System: tokens ---\n");
     failed += test_ui_tokens_text_contrast_on_backgrounds();
