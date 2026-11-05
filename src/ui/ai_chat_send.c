@@ -69,7 +69,7 @@ void ai_chat_register_tools(AiChatData *d,
                  "\"properties\":{\"url\":{\"type\":\"string\","
                  "\"description\":\"The URL to fetch\"}},"
                  "\"required\":[\"url\"]}");
-        fetch_tool.safety = TOOL_SAFE;
+        fetch_tool.safety = TOOL_UNKNOWN;   /* reaches out to a URL: asks unless Auto-approve is on at Unknown+ */
         fetch_tool.execute = tool_web_fetch_execute;
         fetch_tool.tool_data = &d->fetch_ctx;
         ai_tools_register(&d->tool_registry, &fetch_tool);

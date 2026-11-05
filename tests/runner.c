@@ -3805,6 +3805,11 @@ int test_render_stuck_a_clean_paint_before_the_threshold_resets_the_count(void);
 int test_render_stuck_switching_session_starts_a_new_episode(void);
 int test_render_stuck_the_number_of_dirty_rows_does_not_matter_only_that_one_is(void);
 int test_render_stuck_null_state_is_safe(void);
+/* test_tool_decision.c */
+int test_tool_gate_matrix(void);
+int test_tool_gate_levels_follow_cmd_safety_order(void);
+int test_tool_registrations(void);
+
 /* test_ai_debug_tool.c */
 int test_ai_debug_tool_register_fills_the_definition(void);
 int test_ai_debug_tool_registered_only_while_debugging(void);
@@ -7587,6 +7592,10 @@ int main(void) {
     failed += test_render_stuck_switching_session_starts_a_new_episode();
     failed += test_render_stuck_the_number_of_dirty_rows_does_not_matter_only_that_one_is();
     failed += test_render_stuck_null_state_is_safe();
+    /* test_tool_decision.c */
+    failed += test_tool_gate_matrix();
+    failed += test_tool_gate_levels_follow_cmd_safety_order();
+    failed += test_tool_registrations();
     /* test_ai_debug_tool.c */
     failed += test_ai_debug_tool_register_fills_the_definition();
     failed += test_ai_debug_tool_registered_only_while_debugging();

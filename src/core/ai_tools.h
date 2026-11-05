@@ -19,6 +19,7 @@
 
 typedef enum {
     TOOL_SAFE,
+    TOOL_UNKNOWN,
     TOOL_WRITE,
     TOOL_CRITICAL
 } ToolSafety;
