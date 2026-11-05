@@ -317,9 +317,12 @@ Done, in order (details in the commit messages and the specs named):
   first when password is on offer, else keyboard-interactive does); each server prompt is
   shown one at a time with its text in a scrolling box (`src/core/ssh_kbd.c`,
   `src/core/pw_prompt_layout.c`, `src/ui/pw_prompt.c`); a saved password answers only a
-  plain password prompt, once; the save tick appears on such a prompt; a refused saved
-  password is followed by one more question; the setup timeout is re-armed after each
-  answer so a push approval gets a minute; a failed login names the offered methods.
+  plain password prompt, once (and not under an instruction that names a token or code);
+  the save tick appears on such a prompt; a refused saved password re-queries the method
+  list at once and is then followed by one more question (the final review's ruling of
+  2026-11-05, which removed the partial-success Open item); the setup timeout is re-armed
+  after each answered round, typed or sent from the saved password, so a push approval
+  gets a minute; a failed login names the offered methods.
   `tests/manual/kbdint_server.py` is a paramiko server for hand checks (not in any gate).
 
 Open, in priority order:
@@ -359,11 +362,6 @@ Open, in priority order:
 - [ ] SSH agent / Pageant authentication: not supported (keyboard-interactive spec,
       non-goal). Low priority; a profile that needs the agent has to use a key file or a
       password today.
-- [ ] Keyboard-interactive: a saved password that the server partially accepts under
-      `AuthenticationMethods password,keyboard-interactive` (or `password,publickey`) is
-      followed by one needless password box before the re-query, because libssh2 1.11 does
-      not report partial success; candidate fix: re-query after a refused saved password
-      when keyboard-interactive is not on offer.
 - [ ] Designed light-theme ANSI palette (follow-up to the contrast floor, maintainer's
       decision 3 of 2026-10-19): on Onyx Light and Moss & Mist the floor makes normal and
       bright colours converge (90 and 97 both paint `6C6C6C`) and flattens the 232-255 grey

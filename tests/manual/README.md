@@ -18,7 +18,8 @@ or, in a virtual environment, `pip install paramiko`. Debian and Ubuntu refuse
 `pip install --user` against the system Python (PEP 668), so do not use it.
 The system `/usr/bin/python3` may already have paramiko; a plain `python3` that
 is a virtual environment without it will not, so run the script with the
-interpreter that does, as in the examples below. Python 3 and paramiko are all
+interpreter that does (`/usr/bin/python3` in the examples below; use yours if
+its paramiko is in a virtual environment). Python 3 and paramiko are all
 it needs.
 
 The host key is generated in memory at every start and never written to disk,
@@ -28,14 +29,14 @@ changed-key dialog each time.
 ## Run
 
 ```
-python3 tests/manual/kbdint_server.py --scenario password
+/usr/bin/python3 tests/manual/kbdint_server.py --scenario password
 ```
 
 It listens on `127.0.0.1:2222` as user `alice`; `--port` changes the port.
 To reach it from the Windows box, bind to the LAN address of the Linux box:
 
 ```
-python3 tests/manual/kbdint_server.py --scenario duo-menu --bind 192.168.1.20
+/usr/bin/python3 tests/manual/kbdint_server.py --scenario duo-menu --bind 192.168.1.20
 ```
 
 `--bind` with any non-loopback address prints a warning: anyone who can reach

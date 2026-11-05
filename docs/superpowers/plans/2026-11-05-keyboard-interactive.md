@@ -34,7 +34,7 @@ Claude-Session: https://claude.ai/code/session_01AHuBtBVZJxrKdjJtkyPnxg
 1. **The saved password reaching a prompt that only looks like a password prompt.** "Password (new):", "Passcode or password:", "Enter PIN password:", a Duo menu whose last line is "Passcode or option (1-3):". Each must go to the user. Pinned by Task 2's `test_ssh_kbd_matcher_lookalikes`.
 2. **The saved password sent twice in one connection**: after `PASSWORD_SAVED` was refused, then in `KBDINT`; or in `KBDINT_RETRY`. Pinned by Task 1's `test_ssh_auth_saved_for` and Task 4's `test_ssh_kbd_saved_once_across_rounds`.
 3. **The password box, or a re-query, on a dead session**: a -18 whose last errno is a socket error, a -7/-43 return, a failed re-query. Pinned by Task 1's `test_ssh_auth_may_continue` and `test_ssh_auth_requery_rule`.
-4. **The timeout left re-armed, or 60 s granted with no human in the loop**: a server that loops on zero-prompt rounds, an all-auto-answered round, the test override. Pinned by Task 4's `test_ssh_kbd_rearm_limits` and `test_ssh_kbd_attempt_restores_override`.
+4. **The timeout left re-armed, or 60 s granted with no human in the loop**: a server that loops on zero-prompt rounds, a round whose prompts were all emptied, the test override (an auto-answered round re-arms to 60 s since the maintainer's ruling of 2026-11-05: the saved password answers at most once per connection). Pinned by Task 4's `test_ssh_kbd_rearm_limits` and `test_ssh_kbd_attempt_restores_override`.
 5. **Hostile or oversized server text**: ESC and OSC sequences, TABs, `&`, bare LF in the EDIT, a 5,000-byte instruction, a 2,049-byte prompt whose label is its last line. Pinned by Task 2's sanitiser tests, Task 4's `test_ssh_kbd_prompt_boundaries` and Task 5's `test_pw_text_crlf`.
 
 ---
@@ -121,7 +121,17 @@ int test_ssh_auth_requery_rule(void);
 /* key {pk}: record PUBLICKEY; should_requery(p,-19,0,-19) 1; requeried(p, KBD) -> next KBDINT;
    record; should_requery(p,-18,0,-18) 0 (once only);
    key {pk,kbd} after PUBLICKEY: should_requery 0 (KBDINT still left);
-   timed out, dead transport, rc -16, attempts 4 -> 0 */
+   timed out, dead transport, rc -16, attempts 4 -> 0.
+   Amended (maintainer, 2026-11-05), a refused saved password re-queries at once:
+   pw+saved {pw}: PASSWORD_SAVED -18 -> should_requery 1; requeried({pw}) -> PASSWORD_ASK;
+   requeried({kbd}) -> KBDINT with saved_for NULL (partial success);
+   pw+saved {pw,kbd}: PASSWORD_SAVED -18 -> should_requery 1; requeried({pw,kbd}) -> KBDINT,
+   then PASSWORD_ASK, and a later DONE does not re-query again;
+   timed out, dead transport, attempts 4 after PASSWORD_SAVED -> 0 */
+int test_ssh_auth_saved_not_after_used(void);
+/* Amended (maintainer, 2026-11-05): KBDINT sent the saved password, requeried({pw}) or
+   ({pw,kbd}) -> next is PASSWORD_ASK, never PASSWORD_SAVED; KBDINT that sent nothing,
+   requeried({pw}) -> PASSWORD_SAVED */
 int test_ssh_auth_fail_text(void);
 /* ("alice","host",0,PK|KBD,"publickey, keyboard-interactive",NULL) ->
    "Authentication failed for alice@host. The server offers: publickey, keyboard-interactive."
@@ -131,7 +141,7 @@ int test_ssh_auth_fail_text(void);
 ```
 
 - [ ] **Step 2: Run `make test`.** Expected: link failure, `ssh_auth_methods_parse` undefined.
-- [ ] **Step 3: Implement** in `src/core/ssh_auth_plan.c`. Parse: split on `,`, trim spaces, skip empty and duplicate items; known names `publickey`, `password`, `keyboard-interactive`; anything else sets `SSH_AM_OTHER`; display names are printable ASCII only (other bytes dropped), joined with ", ", cut on an item boundary at `cap - 1`. `ssh_auth_next` evaluates spec §2's table top to bottom for the profile type, skipping steps in `tried`, and returns `DONE` once `attempts >= SSH_AUTH_MAX_ATTEMPTS`. `record` sets the step's bit, `attempts++`, and `saved_used`/`kbd_sent_saved` from `saved_sent`. `may_continue` is 1 only for rc -18/-19 with `!timed_out && !transport_dead(last_errno)`. `should_requery` is `may_continue && next == DONE && !requeried && attempts < MAX`. `requeried` replaces `offered` and sets `requeried = 1`.
+- [ ] **Step 3: Implement** in `src/core/ssh_auth_plan.c`. Parse: split on `,`, trim spaces, skip empty and duplicate items; known names `publickey`, `password`, `keyboard-interactive`; anything else sets `SSH_AM_OTHER`; display names are printable ASCII only (other bytes dropped), joined with ", ", cut on an item boundary at `cap - 1`. `ssh_auth_next` evaluates spec §2's table top to bottom for the profile type, skipping steps in `tried`, and returns `DONE` once `attempts >= SSH_AUTH_MAX_ATTEMPTS`. `record` sets the step's bit, `attempts++`, and `saved_used`/`kbd_sent_saved` from `saved_sent`. `may_continue` is 1 only for rc -18/-19 with `!timed_out && !transport_dead(last_errno)`. `should_requery` is `may_continue && !requeried && attempts < MAX && (next == DONE || last == PASSWORD_SAVED)` (amended, maintainer 2026-11-05: `record` also stores `last`, and the PASSWORD_SAVED condition gains `&& !saved_used`). `requeried` replaces `offered` and sets `requeried = 1`.
 - [ ] **Step 4: Run `make test`.** Expected: all pass, `Failed: 0`, no new warning.
 - [ ] **Step 5: Commit** (`feat(core): SSH auth method parser and step plan`).
 
@@ -312,7 +322,10 @@ int test_ssh_kbd_cancel(void);
 int test_ssh_kbd_rearm_limits(void);
 /* entry 100, now 130: answered round -> set_timeout(91000), limit_in_force 60000;
    zero-prompt round -> set_timeout(30000 + 15000 + 1000), limit_in_force 15000;
-   all-auto-answered round -> same as zero-prompt; setup_limit_ms 300 -> 31300 */
+   all-auto-answered round -> (now-entry)*1000 + 61000, limit_in_force 60000 (amended,
+   maintainer 2026-11-05: any answered round, typed or from the saved password, re-arms to
+   60 s); a round after a cancel (nothing answered) -> the setup limit;
+   setup_limit_ms 300 -> 31300 */
 int test_ssh_kbd_attempt_restores_override(void);
 /* slot NULL before; call fake checks *slot == ctx; after: *slot NULL, last set_timeout ==
    setup_limit_ms (15000, then 300 for an override), entry == now at entry, counters reset,
@@ -427,11 +440,12 @@ offered = parse(list, display); DLOG connect.auth.methods (bit names only)
 plan_init(&p, is_key, info->password, offered); kctx = {ask=conn_kbd_ask, ui_user=j, is_key,
   setup_limit_ms=ssh_setup_timeout_ms(), save=&cand, log_id}; rc = -1; extra = ""
 loop:
-  step = next(&p)
-  if step == DONE:
-      if !should_requery(&p, rc, timed_out, last_errno) break
-      list = ssh_auth_list(...); if !list: timed_out -> timeout text, 2; else break
+  (amended, maintainer 2026-11-05) last_errno = peer_closed(j->ssh) ? -13 : last_errno(j->ssh)
+  if should_requery(&p, rc, timed_out, last_errno):     (nothing left, or PASSWORD_SAVED just ran)
+      list = ssh_auth_list(...); if !list: timed_out -> timeout text, 2; authenticated -> success; else break
       plan_requeried(&p, parse(list, display)); continue
+  step = next(&p); if step == DONE break
+  extra = ""                                            (only the last attempt's text is kept)
   if CONN_CANCELLED(): "Cancelled.", 2
   PUBLICKEY:      rc = ssh_auth_key(info->password); record(step, 0)
                   rc in {-16,-48}: CONN_UI_PASSPHRASE box; cancel -> "Passphrase entry cancelled.", 4
@@ -505,4 +519,4 @@ fail: j->error = ssh_auth_fail_text(user, host, is_key, p.offered, display, extr
 - [ ] **Step 3: Tests.** `make test 2>&1 | tee "$T/t.log"`: `Failed: 0`, `grep -c 'warning:'` 0, count noted. `xvfb-run -a make wintest`: 45 run, 0 failed (Wine driver error: `pgrep -a wine`, then `wineserver -k` only if no other session's run shows). `make lint`: 0 errors, 0 warnings.
 - [ ] **Step 4: Gate script.** `bash .github/scripts/check-version.sh origin/main`: PASS.
 - [ ] **Step 5: Checklist.** `git diff origin/main --stat` equals `--stat --ignore-cr-at-eol`; `git ls-files --eol tests/test_key_auth.c` still `i/crlf`; `grep -rn 'RGB(' src/ui --include=*.c | grep -v ns_draw.c` unchanged from `main`; read every `??` line.
-- [ ] **Step 6: Commit** `build: vX.Y.Z` staging the exe (and `resource.h`/`README.md` if re-bumped) by path. Do not push, mark ready or merge. The PR body lists, as **not run before this merge (maintainer's instruction of 2026-11-04)**, the Windows hand-tests in spec "Verification before the gate" and `Run-Integration.ps1 -Tier gate`; the manual-check items (keepalive off in setup and on at the interactive point, the save line accepting `CONN_UI_KBDINT`, the `WM_CONN_PROMPT` KBDINT branch and its save condition); Task 9's self-test result; and the known limit that a password profile under `AuthenticationMethods password,publickey` is asked for its password a second time after the partial success, because libssh2 1.11 does not report partial success.
+- [ ] **Step 6: Commit** `build: vX.Y.Z` staging the exe (and `resource.h`/`README.md` if re-bumped) by path. Do not push, mark ready or merge. The PR body lists, as **not run before this merge (maintainer's instruction of 2026-11-04)**, the Windows hand-tests in spec "Verification before the gate" and `Run-Integration.ps1 -Tier gate`; the manual-check items (keepalive off in setup and on at the interactive point, the save line accepting `CONN_UI_KBDINT`, the `WM_CONN_PROMPT` KBDINT branch and its save condition); Task 9's self-test result; and the known limit that a password profile under `AuthenticationMethods password,publickey` has no publickey step to continue with (a password profile never tries a key), so it ends with the failure text. The old limit, a second password box after a partially accepted saved password, no longer applies: a refused saved password now re-queries at once (maintainer's ruling of 2026-11-05).

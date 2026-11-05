@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,403 unit tests across 130 test files, and cppcheck reports no errors or warnings
+- 3,450 unit tests across 134 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -569,13 +569,14 @@ shown one at a time, each in a box that carries the server's text (scrolling if
 it is long) and a field that shows what you type only when the server says it
 may be echoed. A saved password answers only a prompt that is plainly a
 password prompt (`Password:`, `user@host's password:`), never a passcode,
-one-time, verification, token, PIN, code, new-password or confirmation prompt,
-and only once per connection; every other prompt goes to you. On such a
+one-time, verification, token, PIN, code, new-password or confirmation prompt
+(nor a plain one under server text that names a token or a code), and only once
+per connection; every other prompt goes to you. On such a
 password prompt a password profile also shows the **Save password to this
 profile** tick, as the box above does; a key profile never does. If the server
 refuses a saved password you are asked once more. A push approval (a phone
-prompt, say) has to come within a minute of your answer, and the time you spend
-typing never counts against that. A failed login names the methods the server
+prompt, say) has to come within a minute of your answer (typed, or sent from the
+saved password), and the time you spend typing never counts against that. A failed login names the methods the server
 offers. Authentication through an SSH agent or Pageant is not supported.
 
 ### When the connection fails
@@ -647,8 +648,8 @@ telnet tabs.
 │   │   ├── shell_prompt.c/.h          #   Detects a shell waiting at a prompt (gates one-at-a-time dispatch)
 │   │   ├── shortcuts.c/.h             #   Every shortcut, once: the sheet, the menu accelerators and README's block
 │   │   ├── snap.c/.h                  #   Window grid snapping
-│   │   ├── ssh_auth_plan.c/.h         #   Authentication plan: which method next, from what the server offers (pure)
-│   │   ├── ssh_kbd.c/.h               #   Keyboard-interactive round, prompt matcher and sanitiser, saved-password rule
+│   │   ├── ssh_auth_plan.c/.h         #   Authentication plan: which method next, from what the server offers; password-prompt matcher and server-text sanitiser (pure)
+│   │   ├── ssh_kbd.c/.h               #   Keyboard-interactive round: prompts, saved-password rule, answer wipe, timeout re-arm
 │   │   ├── ssh_timeout.c/.h           #   Network-failure rail (link declared dead after a socket-silence threshold)
 │   │   ├── stick_scroll.c/.h          #   Stick-to-bottom / smart-scroll decision logic for the chat list and terminal
 │   │   ├── string_utils.c/.h          #   String helpers, ANSI stripping, UTF-8
@@ -706,7 +707,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,403 unit tests across 130 test files
+├── tests/                              # 3,450 unit tests across 134 test files
 │   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
 │   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
 │   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion

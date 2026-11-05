@@ -2,7 +2,8 @@
 
 Date: 2026-11-05. Status: draft for the maintainer, revised after critique rounds 1 and 2. The
 decisions come from the orchestrator's brief of 2026-11-04. A decision the code forced to
-change is marked *Amended*. One the author added is marked *Author's addition*. Written
+change is marked *Amended*. One the author added is marked *Author's addition*. The final
+review's rulings of 2026-11-05 are marked *Amended (maintainer, 2026-11-05)*. Written
 against `main` at 1f85a3a (v1.2.52) and libssh2 1.11.1 (`~/vcpkg/buildtrees/libssh2`).
 
 ## Why
@@ -110,7 +111,7 @@ step runs at most once.
 |---|---|---|
 | `PUBLICKEY` | key | publickey offered |
 | `KBDINT` | key | keyboard-interactive offered; every prompt goes to the user |
-| `PASSWORD_SAVED` | password | a saved password exists and password is offered |
+| `PASSWORD_SAVED` | password | a saved password exists, has not been sent yet (not by `KBDINT` either), and password is offered |
 | `KBDINT` | password | keyboard-interactive offered; the saved password, if not yet sent, answers one password-like prompt (section 4) |
 | `KBDINT_RETRY` | password | `KBDINT` failed after the saved password answered one of its prompts, and password is not offered; every prompt goes to the user |
 | `PASSWORD_ASK` | password | password offered; today's `CONN_UI_PASSWORD` box with its save tick |
@@ -119,7 +120,8 @@ step runs at most once.
   keyboard-interactive are offered, the password method is tried first, so silent login
   holds exactly as today. Otherwise keyboard-interactive comes first (OpenSSH and PuTTY
   order); the saved password still answers a "Password:" prompt silently.
-- **After a refused saved password** the user is asked once more: on a password-only server
+- **After a refused saved password** *(amended (maintainer, 2026-11-05): the re-query runs
+  first, see the re-query bullets below)* the user is asked once more: on a password-only server
   through the password box (`PASSWORD_ASK`, so README's sentence holds), on
   `{password, keyboard-interactive}` through the keyboard-interactive prompts, on a
   kbd-only server through `KBDINT_RETRY` (*author's addition, narrowed*: without it a stale
@@ -144,23 +146,41 @@ keyboard-interactive ~2219), so "rc 0 but not authenticated" cannot occur in 1.1
 partial success arrives as `USERAUTH_FAILURE`: publickey reports -19 (-18 at the probe),
 keyboard-interactive -18.
 
-- The method list is re-queried at most once, and only when an attempt ended in -18 or -19
-  **and `ssh_auth_next()` has nothing left**; the plan then continues with the new set.
-  Under `AuthenticationMethods publickey,keyboard-interactive` the initial list is only
+- The method list is re-queried at most once per connection, and only when an attempt ended
+  in -18 or -19 **and either `ssh_auth_next()` has nothing left, or the step just run was
+  `PASSWORD_SAVED`**; the plan then continues with the new set. Under
+  `AuthenticationMethods publickey,keyboard-interactive` the initial list is only
   `publickey`; after the key is accepted the re-query returns `keyboard-interactive`, so
   goal 2's "after a key" case holds.
+- *Amended (maintainer, 2026-11-05).* **After a refused saved password the re-query runs at
+  once**, before the box or any other step, and the plan continues with the new set. It
+  replaces nothing else: the "nothing left" re-query still applies when no re-query has
+  happened yet, and there is one re-query per connection in all. The cases: a stale saved
+  password on a password-only server re-queries `{password}` and the box follows
+  (`PASSWORD_ASK`); a partially accepted saved password under `AuthenticationMethods
+  password,keyboard-interactive` re-queries `{keyboard-interactive}`, so the keyboard-
+  interactive prompts follow with no needless password box (the saved password was already
+  sent, so it answers nothing again); on `{password, keyboard-interactive}` the re-query
+  returns the same set and `KBDINT` then `PASSWORD_ASK` follow. The known limit the plan's
+  Task 11 named for a partially accepted saved password no longer applies.
 - Never after a timeout (authentication stops, section 6), never after -16, -48, a cancel or
   an abort, and never once the 4 attempts are used.
-- **A dead transport stops the plan.** After any -18/-19, and after a re-query, the thread
-  asks whether the transport is still alive (`libssh2_session_last_errno()` is not a socket
-  error: -7, -13 or -43). A failed re-query, or a dead transport, ends authentication with
-  the previous attempt's error (the timeout check runs first, section 6). The password box
-  is never shown for a dead session.
+- **A dead transport stops the plan.** After any -18/-19, and before a re-query, the thread
+  asks whether the transport is still alive: `ssh_session_peer_closed()` (a one-byte
+  non-blocking `recv(MSG_PEEK)`: 0 bytes is a close, any other error but "would block" or
+  "interrupted" is closed) and otherwise `libssh2_session_last_errno()` not being a socket
+  error (-7, -13 or -43). *Amended (maintainer, 2026-11-05):* the peek is needed because
+  libssh2 1.11 overwrites socket errors with -18/-19 inside the keyboard-interactive and
+  publickey calls (`userauth.c` ~2203, ~1679, ~1876), so the last errno never shows a dead
+  transport there; a closed peer is reported to the plan as -13. A failed re-query, or a
+  dead transport, ends authentication with the previous attempt's error (the timeout check
+  runs first, section 6). The password box is never shown for a dead session.
 - The re-query is the one extra "none" request the OpenSSH note in section 1 refers to.
 
 The final error comes from the pure `ssh_auth_fail_text(user, host, type, offered display,
 tried, extra)`. `extra` carries a zero-prompt round's instruction (section 4) or "Too many
-authentication prompts." Examples: "Authentication failed for alice@host. The server offers:
+authentication prompts."; it is cleared at the start of every attempt, so only the last
+attempt's text reaches the message (*amended (maintainer, 2026-11-05)*). Examples: "Authentication failed for alice@host. The server offers:
 publickey, keyboard-interactive."; for a key profile without publickey on offer, "… The
 server does not offer key authentication; it offers: password."
 
@@ -248,13 +268,22 @@ trimmed, case-folded text, with trailing `:` and spaces dropped:
    byte): "Password:", "user@host's password:", "SPINNAKER password:" match;
 3. none of these may appear in what is left **as a whole word** (bounded by the text's edges
    or a non-alphanumeric byte): `passcode`, `one-time`, `otp`, `new`, `retype`,
-   `verification`, `token`, `pin`, `code`. So "alice@NEWCASTLE.AC.UK's Password:" and
-   "SPINNAKER password:" match, and "New password:" and "PIN password:" do not.
+   `verification`, `token`, `pin`, `code`, and the controller's and maintainer's later
+   additions (`time`, `onetime`, `sms`, `temporary`, `confirm`, `repeat`, `verify`, `duo`,
+   `mfa`, `2fa`, and, *amended (maintainer, 2026-11-05)*, `again`, `re-enter`, `reenter`,
+   `second`, `2nd`, `factor`, `securid`, `yubikey`, `challenge`). So
+   "alice@NEWCASTLE.AC.UK's Password:" and "SPINNAKER password:" match, and "New password:",
+   "PIN password:" and "Re-enter password:" do not.
 
 The saved password answers a prompt silently only when all of these hold: the profile is a
 password profile (`saved` is NULL for a key profile); the saved password is non-empty;
 `saved_used` is 0; the prompt has `echo == 0`; the prompt was not truncated; and
-`ssh_kbd_prompt_is_password()` accepts the sanitised text.
+`ssh_kbd_prompt_is_password()` accepts the sanitised text. *Amended (maintainer,
+2026-11-05):* and neither the round's sanitised instruction nor a pending zero-prompt
+instruction contains one of the matcher's banned words as a whole word
+(`ssh_kbd_text_has_negative()`, the same list and boundary rule), so "Enter your token code"
+over a bare "Password:" is asked, not answered; the same condition decides `offer_save`.
+`!is_key` is also checked in the round itself, as defence in depth.
 
 The saved password counts as used once the password method or any keyboard-interactive answer
 has sent it. Every other prompt goes to `ask`: one-time codes, verification codes, PIN plus
@@ -306,7 +335,11 @@ bare LF as nothing.
 - The text area is a fixed-height read-only EDIT (`ES_MULTILINE | ES_READONLY |
   WS_VSCROLL`) that scrolls, so any amount of server text fits without changing the layout.
 - The label (the prompt's last line) is a STATIC with `SS_NOPREFIX`, so a `&` in server text
-  is shown, not taken as a mnemonic. *Amended:* the text area does not get `SS_NOPREFIX`. On
+  is shown, not taken as a mnemonic. *Amended (maintainer, 2026-11-05):* it also has
+  `SS_ENDELLIPSIS`, and a label longer than `SSH_KBD_LABEL_FIT` (40 bytes) is repeated, whole,
+  as the last line of the text area, so the full question stays readable. The text area is
+  not a tab stop: focus starts in the field, and the wheel and the scroll bar scroll it.
+  *Amended:* the text area does not get `SS_NOPREFIX`. On
   an EDIT that bit (0x80) is `ES_AUTOHSCROLL`, which would turn word wrap off; an EDIT never
   reads `&` as a prefix, so nothing is lost.
 - The caption is "SSH Authentication", plus " - name" (ASCII) when the server sent a name.
@@ -346,8 +379,10 @@ never inside a wait.
 - `SSH_KBD_ANSWER_WAIT_MS` is 60 000. A Duo-style push approved within a minute of the
   answer therefore succeeds; one approved later fails with the timeout text. That is the
   stated limit. The 15 s `SSH_SETUP_TIMEOUT_MS` applies before the first prompt.
-- **Only a round in which the user answered a prompt re-arms to 60 s.** A zero-prompt round,
-  or a round whose prompts were all auto-answered or answered empty by the cap or a cancel,
+- **Only a round in which a prompt was answered re-arms to 60 s** (*amended (maintainer,
+  2026-11-05)*: by the user, or by the saved password, which answers at most once per
+  connection, so this cannot loop). A zero-prompt round, or a round whose prompts were all
+  emptied by the cap or a cancel,
   re-arms with the setup limit in force instead (`SSH_SETUP_TIMEOUT_MS`, or the test
   override), so a server that loops on empty rounds still fails in about 15 s per round.
 - After the call, `ssh_kbd_attempt()` restores the setup limit in force (the override
@@ -427,14 +462,20 @@ New `tests/test_ssh_auth_plan.c`:
   {pk}, {pw}, {kbd}, {pk,kbd}, {pw,kbd}, {pk,pw,kbd}, {other}); the order rule (saved
   password and both offered: password first; otherwise keyboard-interactive first); the
   password box after a refused saved password on a password-only server; the kbd-only retry;
-  the re-query rule (at most once, after -18 or -19 only, only when nothing is left, never
-  after a timeout, a dead transport or the last attempt); the passphrase retry counted; the
+  the re-query rule (at most once, after -18 or -19 only, when nothing is left or right
+  after a refused `PASSWORD_SAVED` *(amended (maintainer, 2026-11-05))*, never after a
+  timeout, a dead transport or the last attempt, and the stale-password, partial-success and
+  `{password, keyboard-interactive}` walks after it); `PASSWORD_SAVED` never after the saved
+  password was used (by `KBDINT` either); the passphrase retry counted; the
   four-attempt bound; `ssh_auth_transport_dead()` for -7, -13, -43 and not for -18.
 - **`ssh_kbd_prompt_is_password()`:** positive rows "Password:", "password", "user@host's
   password:", "alice@NEWCASTLE.AC.UK's Password:", "SPINNAKER password:", "Password for
   alice:", padded and mixed case; one negative row each for "PASSCODE:", "One-time
   password:", "New password:", "Retype new password:", "Verification code:", plus `otp`,
-  `token` and `pin` rows ("PIN password:") and an empty string.
+  `token` and `pin` rows ("PIN password:") and an empty string; *(amended (maintainer,
+  2026-11-05))* the re-entry, ordinal, factor and challenge rows ("Re-enter password:",
+  "Password again:", "Second password:", "2nd password:", "RSA SecurID password:",
+  "Yubikey password:", "Challenge password:", ...) and `ssh_kbd_text_has_negative()`.
 - **`ssh_kbd_sanitize()`:** CSI, OSC, a lone ESC; CRLF, CR, LF; TAB to a space; C0 and DEL;
   invalid UTF-8; the 2 KiB cap with ASCII `...` at a UTF-8 boundary.
 - **`ssh_auth_fail_text()`:** each wording, both kinds of `extra`, and truncation.
@@ -456,9 +497,16 @@ that record their calls:
 - a 100-prompt round has 8 answered and 92 empty, with `too_many` set; round 17 answers empty
   and calls `abort_io` once; a cancel sends empty answers, asks nothing further and calls
   `abort_io` once;
-- the re-arm call carries `(now − entry) * 1000 + 61 000` for the injected clock after an
-  answered round, and `(now − entry) * 1000 + setup limit + 1000` after a zero-prompt or
-  all-auto-answered round; the limit in force is recorded for the error text;
+- the re-arm call carries `(now − entry) * 1000 + 61 000` for the injected clock after a
+  round in which a prompt was answered, by the user or by the saved password (*amended
+  (maintainer, 2026-11-05)*), and `(now − entry) * 1000 + setup limit + 1000` after a
+  zero-prompt round or one whose prompts were all emptied by a cancel; the limit in force is
+  recorded for the error text;
+- a "Password:" prompt under an instruction naming a token or code (this round's, or a
+  pending zero-prompt round's) is asked and not offered for saving, a neutral instruction
+  still lets the saved password answer, and a key profile is never auto-answered even with a
+  saved value in the context; a prompt label over 40 bytes is repeated as the last line of
+  the text area, one of 39 or 40 bytes is not;
 - `ssh_kbd_attempt()` leaves `*slot` NULL and the timeout at the setup limit in force (an
   override value included);
 - a function declared with the stub's `LIBSSH2_USERAUTH_KBDINT_RESPONSE_FUNC` macro calls
@@ -468,7 +516,9 @@ that record their calls:
 Other test files: `tests/test_ssh_timeout.c` gains `ssh_kbd_rearm_ms()` (zero, large and
 saturating elapsed time, a clock that goes backwards); `tests/test_pw_prompt_layout.c` is new
 (section 5); `tests/test_key_auth.c` (real libssh2 only) gains NULL and not-connected tests
-for `ssh_auth_list()` and `ssh_auth_kbdint()`. `tests/test_conn_prompt.c` gains
+for `ssh_auth_list()` and `ssh_auth_kbdint()`, and for `ssh_session_peer_closed()`
+(NULL, a never-connected session, and on POSIX a socketpair that is open and then
+closed). `tests/test_conn_prompt.c` gains
 `conn_ui_kind_has_secret()` for every kind.
 
 **Manual-check items** (no native test can reach them; listed in the PR body): keepalive off
@@ -497,8 +547,10 @@ libssh2.
   - a saved password answers only a prompt that is plainly a password prompt ("Password:",
     "user@host's password:"), never a passcode, code or new-password prompt, and only once;
     the save tick also appears on such a prompt;
-  - after a refused saved password, the user is asked once more;
-  - a push approval must come within a minute; agent and Pageant are not supported.
+  - after a refused saved password, the method list is asked for again and the user is asked
+    once more;
+  - a push approval must come within a minute of the answer, whether typed or sent from the
+    saved password; agent and Pageant are not supported.
 - *Amended (notes):* `main`'s Open list has no S-5 entry and no agent entry. The notes gain a
   Done line for this change and an Open item, "SSH agent / Pageant authentication".
 
