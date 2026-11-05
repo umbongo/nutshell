@@ -489,7 +489,8 @@ static const TooltipEntry k_tooltips[] = {
       "confirm. The AI panel's status line changes both per session." },
     { IDC_AI_TOOL_TIMEOUT,
       "How long a tool approval card waits for your answer before it "
-      "expires and the tool call is not run (15 - 3600 seconds, default 60). "
+      "expires and the tool call is not run (15 - 3600 seconds, default 60; "
+      "0 = never expire, the card waits until you answer or stop). "
       "A change applies to cards shown after you save; a card already "
       "waiting keeps its timeout." },
     { IDC_SSH_IDLE_EDIT,
@@ -1534,10 +1535,11 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
              * (the tickbox-with-a-control-beside-it form). */
             char buf[16];
             int sec = nd->cfg->settings.ai_tool_timeout_sec;
-            if (sec < AI_TOOL_TIMEOUT_SEC_MIN || sec > AI_TOOL_TIMEOUT_SEC_MAX)
+            if (sec != AI_TOOL_TIMEOUT_SEC_NEVER &&
+                (sec < AI_TOOL_TIMEOUT_SEC_MIN || sec > AI_TOOL_TIMEOUT_SEC_MAX))
                 sec = AI_TOOL_TIMEOUT_SEC_DEFAULT;
             (void)snprintf(buf, sizeof(buf), "%d", sec);
-            HWND lbl = make_static2(nd->hPage, "Tool approval timeout (seconds):");
+            HWND lbl = make_static2(nd->hPage, "Tool approval timeout (seconds, 0 = never):");
             HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_TIMEOUT, ES_NUMBER);
             add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
         }
@@ -2112,11 +2114,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             if (ok && v >= 1 && v <= 20)
                 s->ai_max_search_results = (int)v;
 
-            /* Tool approval timeout: 15..3600 s; keep the stored value on a
-             * parse failure or an out-of-range entry, as the idle timeout does */
+            /* Tool approval timeout: 0 (never) or 15..3600 s; keep the stored
+             * value on a parse failure or any other entry, as the idle
+             * timeout does */
             v = GetDlgItemInt(d->hPage, IDC_AI_TOOL_TIMEOUT, &ok, FALSE);
-            if (ok && v >= (UINT)AI_TOOL_TIMEOUT_SEC_MIN &&
-                v <= (UINT)AI_TOOL_TIMEOUT_SEC_MAX)
+            if (ok && (v == (UINT)AI_TOOL_TIMEOUT_SEC_NEVER ||
+                       (v >= (UINT)AI_TOOL_TIMEOUT_SEC_MIN &&
+                        v <= (UINT)AI_TOOL_TIMEOUT_SEC_MAX)))
                 s->ai_tool_timeout_sec = (int)v;
 
             /* Permit web fetch */

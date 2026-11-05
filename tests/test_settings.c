@@ -161,6 +161,19 @@ int test_settings_validate_ai_tool_timeout_low(void)
     s.ai_tool_timeout_sec = 15;
     settings_validate(&s);
     ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+
+    /* 0 is "never expire" and stays; 1..14 take the floor */
+    s.ai_tool_timeout_sec = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 0);
+
+    s.ai_tool_timeout_sec = 1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+
+    s.ai_tool_timeout_sec = 14;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
     TEST_END();
 }
 

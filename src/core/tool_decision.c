@@ -89,6 +89,7 @@ ToolDecision tool_decision_answer(ToolDecisionSlot *s, unsigned gen, ToolDecisio
 
 unsigned long long tool_decision_timeout_ms(int sec)
 {
+    if (sec == AI_TOOL_TIMEOUT_SEC_NEVER) return 0ULL;
     if (sec < AI_TOOL_TIMEOUT_SEC_MIN) sec = AI_TOOL_TIMEOUT_SEC_MIN;
     if (sec > AI_TOOL_TIMEOUT_SEC_MAX) sec = AI_TOOL_TIMEOUT_SEC_MAX;
     return (unsigned long long)sec * 1000ULL;
@@ -102,6 +103,7 @@ ToolDecision tool_decision_poll(ToolDecisionSlot *s, unsigned gen, int aborted,
     ToolDecision st = td_state_for(__atomic_load_n(&s->word, __ATOMIC_SEQ_CST), gen);
     if (st != TOOL_DECISION_PENDING) return st;
     if (aborted) return td_settle(s, gen, TOOL_DECISION_CANCELLED);
+    if (timeout_ms == 0ULL) return TOOL_DECISION_PENDING;   /* never expires */
     const unsigned long long lo = (unsigned long long)AI_TOOL_TIMEOUT_SEC_MIN * 1000ULL;
     const unsigned long long hi = (unsigned long long)AI_TOOL_TIMEOUT_SEC_MAX * 1000ULL;
     if (timeout_ms < lo) timeout_ms = lo;

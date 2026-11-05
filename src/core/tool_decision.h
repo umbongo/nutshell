@@ -63,14 +63,17 @@ typedef enum {
 ToolGate tool_gate_decide(ToolSafety safety, CmdPolicy p, int attended);
 
 /* How long the thread waits for a card is a setting, in seconds: 60 by
- * default, 15 to 3600 (maintainer's decision 2026-11-05, replacing the
- * compiled 10 minutes). How often it polls the slot is fixed. */
+ * default, 15 to 3600, or 0 for never (maintainer's decisions 2026-11-05,
+ * replacing the compiled 10 minutes). How often it polls the slot is fixed. */
+#define AI_TOOL_TIMEOUT_SEC_NEVER   0
 #define AI_TOOL_TIMEOUT_SEC_MIN     15
 #define AI_TOOL_TIMEOUT_SEC_MAX     3600
 #define AI_TOOL_TIMEOUT_SEC_DEFAULT 60
 #define AI_TOOL_DECIDE_POLL_MS      250u
 
-/* `sec` clamped to AI_TOOL_TIMEOUT_SEC_MIN..MAX, in milliseconds. */
+/* `sec` in milliseconds: 0 (AI_TOOL_TIMEOUT_SEC_NEVER) stays 0, meaning
+ * never expire; anything else is clamped to AI_TOOL_TIMEOUT_SEC_MIN..MAX
+ * (so a negative value is the 15 s floor, not "never"). */
 unsigned long long tool_decision_timeout_ms(int sec);
 
 typedef enum {
@@ -102,8 +105,10 @@ ToolDecision tool_decision_answer(ToolDecisionSlot *s, unsigned gen, ToolDecisio
 
 /* Thread: `aborted` -> CAS CANCELLED; else waited_ms >= timeout_ms -> CAS
  * EXPIRED. `timeout_ms` is the value the stream captured at launch
- * (tool_decision_timeout_ms()); it is clamped here to the 15 s..3600 s
- * range, so 0 never means "expire at once" nor a huge value "never".
+ * (tool_decision_timeout_ms()). 0 means never expire: the slot stays
+ * PENDING however long `waited_ms` is (an abort or an answer still settles
+ * it). Any other value is clamped here to the 15 s..3600 s range, so a
+ * small one never means "expire at once".
  * Returns the current state for `gen` (PENDING while undecided, NONE for a
  * stale `gen`). */
 ToolDecision tool_decision_poll(ToolDecisionSlot *s, unsigned gen, int aborted,

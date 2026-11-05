@@ -645,15 +645,18 @@ int test_config_load_out_of_range(void)
     TEST_END();
 }
 
-/* ai_tool_timeout_sec: absent keeps the 60 s default, out-of-range loads clamp
- * to 15..3600. */
+/* ai_tool_timeout_sec: absent keeps the 60 s default, 0 stays 0 (never),
+ * 1..14 and negatives clamp to 15, above 3600 clamps to 3600. */
 int test_config_load_tool_timeout(void)
 {
     TEST_BEGIN();
     const char *cases[] = { "", "\"ai_tool_timeout_sec\": 5", "\"ai_tool_timeout_sec\": 99999",
-                            "\"ai_tool_timeout_sec\": 240", "\"ai_tool_timeout_sec\": -1" };
-    const int want[] = { 60, 15, 3600, 240, 15 };
-    for (int i = 0; i < 5; i++) {
+                            "\"ai_tool_timeout_sec\": 240", "\"ai_tool_timeout_sec\": -1",
+                            "\"ai_tool_timeout_sec\": 0", "\"ai_tool_timeout_sec\": 1",
+                            "\"ai_tool_timeout_sec\": 14", "\"ai_tool_timeout_sec\": 15",
+                            "\"ai_tool_timeout_sec\": 3600", "\"ai_tool_timeout_sec\": 3601" };
+    const int want[] = { 60, 15, 3600, 240, 15, 0, 15, 15, 15, 3600, 3600 };
+    for (int i = 0; i < 11; i++) {
         FILE *f = test_fopen_private(TMP_CFG);
         ASSERT_NOT_NULL(f);
         fprintf(f, "{\n  \"settings\": {\n    \"font_size\": 10%s%s\n  }\n}\n",
@@ -667,6 +670,23 @@ int test_config_load_tool_timeout(void)
         }
         remove(TMP_CFG);
     }
+    TEST_END();
+}
+
+/* 0 (never expire) survives save and load: it is not mistaken for unset. */
+int test_config_roundtrip_tool_timeout_never(void)
+{
+    TEST_BEGIN();
+    Config *orig = config_new_default();
+    ASSERT_NOT_NULL(orig);
+    orig->settings.ai_tool_timeout_sec = 0;
+    ASSERT_EQ(config_save(orig, TMP_CFG), 0);
+    Config *loaded = config_load(TMP_CFG);
+    ASSERT_NOT_NULL(loaded);
+    if (loaded) ASSERT_EQ(loaded->settings.ai_tool_timeout_sec, 0);
+    config_free(orig);
+    config_free(loaded);
+    remove(TMP_CFG);
     TEST_END();
 }
 

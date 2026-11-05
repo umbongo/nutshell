@@ -74,7 +74,7 @@ typedef struct AiStream {
      * See tool_decision.h. */
     ToolDecisionSlot decision;
 
-    /* How long a tool card waits before it expires, in ms. The panel's
+    /* How long a tool card waits before it expires, in ms; 0 = never. The panel's
      * Settings value at launch (tool_decision_timeout_ms()), copied here
      * like the other inputs: the thread never reads the panel, and a change
      * saved while a card waits applies to later streams only. ai_stream_new()

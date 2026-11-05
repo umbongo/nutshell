@@ -233,12 +233,13 @@ int test_tool_decision_expiry_follows_timeout(void)
     unsigned g2 = tool_decision_publish(&s);
     ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, 20000, 15000), (int)TOOL_DECISION_EXPIRED);
 
-    /* A timeout of 0 or past the ceiling is clamped, never "wait forever"
-     * or "expire at once". */
+    /* A nonzero timeout below the floor is clamped to 15 s, never "expire
+     * at once"; one past the ceiling is clamped to 3600 s. (0 is "never":
+     * test_tool_decision_never_expires.) */
     unsigned g3 = tool_decision_publish(&s);
-    ASSERT_EQ((int)tool_decision_poll(&s, g3, 0, 0, 0), (int)TOOL_DECISION_PENDING);
-    ASSERT_EQ((int)tool_decision_poll(&s, g3, 0, 14999, 0), (int)TOOL_DECISION_PENDING);
-    ASSERT_EQ((int)tool_decision_poll(&s, g3, 0, 15000, 0), (int)TOOL_DECISION_EXPIRED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g3, 0, 0, 1), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g3, 0, 14999, 1), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g3, 0, 15000, 1), (int)TOOL_DECISION_EXPIRED);
     unsigned g4 = tool_decision_publish(&s);
     ASSERT_EQ((int)tool_decision_poll(&s, g4, 0, 3599999, 99999999ULL), (int)TOOL_DECISION_PENDING);
     ASSERT_EQ((int)tool_decision_poll(&s, g4, 0, 3600000, 99999999ULL), (int)TOOL_DECISION_EXPIRED);
@@ -255,10 +256,39 @@ int test_tool_decision_timeout_ms(void)
     ASSERT_EQ((int)tool_decision_timeout_ms(15), 15000);
     ASSERT_EQ((int)tool_decision_timeout_ms(3600), 3600000);
     ASSERT_EQ((int)tool_decision_timeout_ms(14), 15000);
-    ASSERT_EQ((int)tool_decision_timeout_ms(0), 15000);
-    ASSERT_EQ((int)tool_decision_timeout_ms(-7), 15000);
+    ASSERT_EQ((int)tool_decision_timeout_ms(0), 0);        /* 0 = never */
+    ASSERT_EQ((int)tool_decision_timeout_ms(1), 15000);
+    ASSERT_EQ((int)tool_decision_timeout_ms(-7), 15000);   /* negative: the floor, not "never" */
     ASSERT_EQ((int)tool_decision_timeout_ms(3601), 3600000);
     ASSERT_EQ((int)tool_decision_timeout_ms(2000000000), 3600000);
+    TEST_END();
+}
+
+/* Timeout 0 = never (maintainer's decision 2026-11-05): no waited time
+ * expires the card, an abort still cancels it, an answer still settles it. */
+int test_tool_decision_never_expires(void)
+{
+    TEST_BEGIN();
+    const unsigned long long ten_hours_ms = 10ULL * 3600ULL * 1000ULL;
+    const unsigned long long never = tool_decision_timeout_ms(0);
+    ASSERT_EQ((int)never, 0);
+
+    ToolDecisionSlot s;
+    tool_decision_init(&s);
+    unsigned g = tool_decision_publish(&s);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0, never), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 3600000ULL, never), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, ten_hours_ms, never), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, ~0ULL, never), (int)TOOL_DECISION_PENDING);
+    /* abort still cancels, long after any fixed deadline */
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 1, ten_hours_ms, never), (int)TOOL_DECISION_CANCELLED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, ten_hours_ms, never), (int)TOOL_DECISION_CANCELLED);
+
+    /* an answer still settles it */
+    unsigned g2 = tool_decision_publish(&s);
+    ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, ten_hours_ms, never), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_answer(&s, g2, TOOL_DECISION_APPROVED), (int)TOOL_DECISION_APPROVED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, ten_hours_ms, never), (int)TOOL_DECISION_APPROVED);
     TEST_END();
 }
 

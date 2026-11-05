@@ -486,7 +486,9 @@ void settings_validate(Settings *s)
     if (s->ai_max_search_results > 20) s->ai_max_search_results = 20;
     if (s->ai_max_context_lines < 1)     s->ai_max_context_lines = 1;
     if (s->ai_max_context_lines > 50000) s->ai_max_context_lines = 50000;
-    if (s->ai_tool_timeout_sec < AI_TOOL_TIMEOUT_SEC_MIN) s->ai_tool_timeout_sec = AI_TOOL_TIMEOUT_SEC_MIN;
+    /* 0 = never expire; 1..14 and negatives take the 15 s floor */
+    if (s->ai_tool_timeout_sec != AI_TOOL_TIMEOUT_SEC_NEVER &&
+        s->ai_tool_timeout_sec < AI_TOOL_TIMEOUT_SEC_MIN) s->ai_tool_timeout_sec = AI_TOOL_TIMEOUT_SEC_MIN;
     if (s->ai_tool_timeout_sec > AI_TOOL_TIMEOUT_SEC_MAX) s->ai_tool_timeout_sec = AI_TOOL_TIMEOUT_SEC_MAX;
     if (s->ssh_user_idle_timeout_mins < 0)     s->ssh_user_idle_timeout_mins = 0;
     if (s->ssh_user_idle_timeout_mins > 10080) s->ssh_user_idle_timeout_mins = 10080;

@@ -284,7 +284,7 @@ typedef struct {
     int context_lines;
 
     /* Seconds a tool approval card waits before it expires, from
-     * settings.ai_tool_timeout_sec (15-3600); each launched stream copies it
+     * settings.ai_tool_timeout_sec (15-3600, 0 = never); each launched stream copies it
      * into AiStream.tool_timeout_ms, so a change reaches later streams only. */
     int tool_timeout_sec;
 

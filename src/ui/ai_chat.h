@@ -117,7 +117,7 @@ void ai_chat_set_policy_default(HWND hwnd, CmdPolicy policy);
 void ai_chat_set_context_lines(HWND hwnd, int lines);
 
 /* Set how long a tool approval card waits before it expires, in seconds
- * (settings.ai_tool_timeout_sec, 15-3600). Applies to streams launched
+ * (settings.ai_tool_timeout_sec, 15-3600, or 0 for never). Applies to streams launched
  * after the call: a waiting card keeps the value its stream started with. */
 void ai_chat_set_tool_timeout(HWND hwnd, int seconds);
 

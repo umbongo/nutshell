@@ -2233,7 +2233,9 @@ void ai_chat_set_tool_timeout(HWND hwnd, int seconds)
     if (!hwnd || !IsWindow(hwnd)) return;
     AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!d) return;
-    if (seconds < AI_TOOL_TIMEOUT_SEC_MIN) seconds = AI_TOOL_TIMEOUT_SEC_MIN;
+    /* 0 = never expire; tool_decision_timeout_ms() clamps the rest */
+    if (seconds != AI_TOOL_TIMEOUT_SEC_NEVER && seconds < AI_TOOL_TIMEOUT_SEC_MIN)
+        seconds = AI_TOOL_TIMEOUT_SEC_MIN;
     if (seconds > AI_TOOL_TIMEOUT_SEC_MAX) seconds = AI_TOOL_TIMEOUT_SEC_MAX;
     d->tool_timeout_sec = seconds;
 }
