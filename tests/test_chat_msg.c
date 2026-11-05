@@ -981,3 +981,58 @@ int test_chat_msg_set_quoted(void) {
     chat_msg_list_clear(&list);
     TEST_END();
 }
+
+int test_chat_msg_set_reason(void) {
+    TEST_BEGIN();
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    ChatMsgItem *it = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    ASSERT_NOT_NULL(it);
+    /* a fresh command item has no reason */
+    ASSERT_STR_EQ(it->u.cmd.reason, "");
+
+    chat_msg_set_reason(it, "reads credentials");
+    ASSERT_STR_EQ(it->u.cmd.reason, "reads credentials");
+
+    /* a new reason replaces the old; the empty string and NULL clear it */
+    chat_msg_set_reason(it, "ab");
+    ASSERT_STR_EQ(it->u.cmd.reason, "ab");
+    chat_msg_set_reason(it, "");
+    ASSERT_STR_EQ(it->u.cmd.reason, "");
+    chat_msg_set_reason(it, "reads credentials");
+    chat_msg_set_reason(it, NULL);
+    ASSERT_STR_EQ(it->u.cmd.reason, "");
+
+    /* re-setting the command (a reused item) drops a stale reason */
+    chat_msg_set_reason(it, "reads credentials");
+    ASSERT_EQ(chat_msg_set_command(it, "ls", CMD_READ, 0), 0);
+    ASSERT_STR_EQ(it->u.cmd.reason, "");
+
+    /* 100 ASCII bytes: cut to CMD_REASON_MAX - 1, NUL-terminated */
+    char longr[101];
+    memset(longr, 'x', 100);
+    longr[100] = '\0';
+    chat_msg_set_reason(it, longr);
+    ASSERT_EQ((int)strlen(it->u.cmd.reason), CMD_REASON_MAX - 1);
+    ASSERT_EQ((int)it->u.cmd.reason[CMD_REASON_MAX - 1], 0);
+
+    /* a 2-byte character straddling the limit is dropped whole */
+    char mb[101];
+    memset(mb, 'x', CMD_REASON_MAX - 2);       /* 62 bytes */
+    mb[CMD_REASON_MAX - 2] = '\xC3';           /* bytes 62 and 63 */
+    mb[CMD_REASON_MAX - 1] = '\xA9';
+    memset(mb + CMD_REASON_MAX, 'y', 10);
+    mb[CMD_REASON_MAX + 10] = '\0';
+    chat_msg_set_reason(it, mb);
+    ASSERT_EQ((int)strlen(it->u.cmd.reason), CMD_REASON_MAX - 2);
+    ASSERT_EQ((int)(unsigned char)it->u.cmd.reason[CMD_REASON_MAX - 3], 'x');
+
+    /* NULL item and non-command items are no-ops */
+    chat_msg_set_reason(NULL, "reads credentials");
+    ChatMsgItem *user = chat_msg_append(&list, CHAT_ITEM_USER, "hi");
+    ASSERT_NOT_NULL(user);
+    chat_msg_set_reason(user, "reads credentials");
+    ASSERT_STR_EQ(user->text, "hi");
+    chat_msg_list_clear(&list);
+    TEST_END();
+}

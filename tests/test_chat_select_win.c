@@ -335,6 +335,137 @@ int test_chat_select_win_runs_match_paint(void)
     TEST_END();
 }
 
+/* Paint `tv` into a 32-bit DIB and copy its pixels to a fresh buffer
+ * (width x tv->height DWORDs, caller frees); NULL on failure. */
+static DWORD *view_pixels(TestView *tv, int width)
+{
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = width;
+    bi.bmiHeader.biHeight = -tv->height;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void *bits = NULL;
+    HBITMAP bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    DWORD *copy = NULL;
+    if (bmp && bits) {
+        HGDIOBJ old = SelectObject(mem, bmp);
+        SendMessageA(tv->lv, WM_PRINTCLIENT, (WPARAM)mem, PRF_CLIENT);
+        GdiFlush();
+        size_t n = (size_t)width * (size_t)tv->height;
+        copy = (DWORD *)malloc(n * sizeof(DWORD));
+        if (copy) memcpy(copy, bits, n * sizeof(DWORD));
+        SelectObject(mem, old);
+    }
+    if (bmp) DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    return copy;
+}
+
+/* Pixels that differ between two paints, over the rows [y0, y1). */
+static long diff_rows(const DWORD *a, const DWORD *b, int width, int y0, int y1)
+{
+    long n = 0;
+    for (int y = y0; y < y1; y++)
+        for (int x = 0; x < width; x++)
+            if (a[(size_t)y * (size_t)width + (size_t)x] !=
+                b[(size_t)y * (size_t)width + (size_t)x])
+                n++;
+    return n;
+}
+
+/* One width/DPI: a command card paints more with a reason than without it,
+ * the added ink lies inside the card's own rows (the card does not grow:
+ * measured height and every later item's position are unchanged), a
+ * settled row shows it too, and an empty reason paints exactly as an item
+ * that never had one. A command row records no text runs (selection does
+ * not reach it), so the painted pixels are the evidence here. */
+static int reason_config(int width, int dpi)
+{
+    int bad = 0;
+    ChatMsgList list;
+    chat_msg_list_init(&list);
+    chat_msg_append(&list, CHAT_ITEM_USER, "ask");
+    ChatMsgItem *card = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(card, "cat /etc/shadow", CMD_READ, 0);
+    chat_msg_set_batch(card, 1);
+    ChatMsgItem *done = chat_msg_append(&list, CHAT_ITEM_COMMAND, "");
+    chat_msg_set_command(done, "cat ~/.ssh/id_rsa", CMD_READ, 0);
+    chat_msg_set_batch(done, 2);
+    done->u.cmd.approved = 1;
+    done->u.cmd.settled = 1;
+    chat_msg_append(&list, CHAT_ITEM_STATUS, "end");
+
+    TestView tv;
+    if (!view_open(&tv, &list, width, dpi, 1)) {
+        printf("  could not create the windows\n");
+        chat_msg_list_clear(&list);
+        return 1;
+    }
+    view_paint(&tv, width);
+    DWORD *plain = view_pixels(&tv, width);
+    DWORD *plain2 = view_pixels(&tv, width);
+    int h_card = card->measured_height, h_done = done->measured_height;
+
+    chat_msg_set_reason(card, "reads credentials");
+    chat_listview_invalidate(tv.lv);
+    view_paint(&tv, width);
+    DWORD *with_card = view_pixels(&tv, width);
+
+    chat_msg_set_reason(done, "reads credentials");
+    chat_listview_invalidate(tv.lv);
+    view_paint(&tv, width);
+    DWORD *with_both = view_pixels(&tv, width);
+
+    chat_msg_set_reason(card, "");
+    chat_msg_set_reason(done, "");
+    chat_listview_invalidate(tv.lv);
+    view_paint(&tv, width);
+    DWORD *cleared = view_pixels(&tv, width);
+
+    if (!plain || !plain2 || !with_card || !with_both || !cleared) {
+        printf("  no pixels\n");
+        bad++;
+    } else {
+        long dup = diff_rows(plain, plain2, width, 0, tv.height);
+        long d1 = diff_rows(plain, with_card, width, 0, tv.height);
+        long d2 = diff_rows(with_card, with_both, width, 0, tv.height);
+        long d3 = diff_rows(plain, cleared, width, 0, tv.height);
+        if (dup != 0) { printf("  two plain paints differ (%ld)\n", dup); bad++; }
+        if (d1 <= 0) { printf("  the card row shows no reason\n"); bad++; }
+        if (d2 <= 0) { printf("  the settled row shows no reason\n"); bad++; }
+        if (d3 != 0) { printf("  clearing the reason left %ld pixels\n", d3); bad++; }
+    }
+    if (card->measured_height != h_card || done->measured_height != h_done) {
+        printf("  a reason changed a height (%d->%d, %d->%d)\n", h_card,
+               card->measured_height, h_done, done->measured_height);
+        bad++;
+    }
+    free(plain); free(plain2); free(with_card); free(with_both); free(cleared);
+    view_close(&tv);
+    chat_msg_list_clear(&list);
+    if (bad) printf("  (width %d, dpi %d)\n", width, dpi);
+    return bad;
+}
+
+int test_chat_select_win_reason_in_row(void)
+{
+    TEST_BEGIN();
+    static const int widths[2] = { 420, 760 };
+    static const int dpis[2] = { 96, 144 };
+    for (int w = 0; w < 2; w++)
+        for (int d = 0; d < 2; d++) {
+            int bad = reason_config(widths[w], dpis[d]);
+            ASSERT_EQ(bad, 0);
+        }
+    TEST_END();
+}
+
 /* The run of `it` (main part) whose text starts with `word`; *wx gets the
  * pixel width of the word itself (trailing blanks excluded). */
 static const TextRun *find_word(const ChatMsgItem *it, const char *word,

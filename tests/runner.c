@@ -2968,6 +2968,7 @@ int test_chat_approval_quoted_records_sensitive_reason(void);
 int test_chat_cmd_label_quoted(void);
 int test_chat_card_header_text(void);
 int test_chat_msg_set_quoted(void);
+int test_chat_msg_set_reason(void);
 int test_continue_text_quoted_entry(void);
 
 /* test_chat_approval.c — permit-write toggle */
@@ -6691,6 +6692,7 @@ int main(void) {
     failed += test_chat_cmd_label_quoted();
     failed += test_chat_card_header_text();
     failed += test_chat_msg_set_quoted();
+    failed += test_chat_msg_set_reason();
     failed += test_continue_text_quoted_entry();
 
     printf("\n--- Permit-Write Toggle ---\n");

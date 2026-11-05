@@ -48,6 +48,7 @@ ChatMsgItem *chat_msg_append(ChatMsgList *list, ChatItemType type, const char *t
     } else if (type == CHAT_ITEM_COMMAND) {
         item->u.cmd.command = NULL;
         item->u.cmd.note = NULL;
+        item->u.cmd.reason[0] = '\0';
         item->u.cmd.safety = CMD_READ;
         item->u.cmd.approved = -1;
         item->u.cmd.blocked = 0;
@@ -162,6 +163,7 @@ int chat_msg_set_command(ChatMsgItem *item, const char *command,
         free(item->u.cmd.command);
     }
     item->u.cmd.command = new_cmd;
+    item->u.cmd.reason[0] = '\0';    /* a reused item keeps no stale reason */
     item->u.cmd.safety = safety;
     item->u.cmd.approved = -1;
     item->u.cmd.blocked = blocked;
@@ -191,6 +193,22 @@ int chat_msg_set_note(ChatMsgItem *item, const char *note)
     }
     item->u.cmd.note = copy;
     return 0;
+}
+
+void chat_msg_set_reason(ChatMsgItem *item, const char *reason)
+{
+    if (!item || item->type != CHAT_ITEM_COMMAND) return;
+    if (!reason) reason = "";
+    size_t len = strlen(reason);
+    size_t max = sizeof(item->u.cmd.reason) - 1;
+    if (len > max) {
+        /* reason[max] is the first byte that does not fit: back up while it
+         * is a UTF-8 continuation byte so no character is split. */
+        len = max;
+        while (len > 0 && ((unsigned char)reason[len] & 0xC0) == 0x80) len--;
+    }
+    memcpy(item->u.cmd.reason, reason, len);
+    item->u.cmd.reason[len] = '\0';
 }
 
 void chat_msg_set_batch(ChatMsgItem *item, int batch)

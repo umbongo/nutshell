@@ -866,7 +866,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_CMD_DETAIL → open the details popup for one command row.
              * lParam is the ChatMsgItem id (the list view posts it rather
              * than opening the popup itself, like every other card action).
-             * The popup copies command, note and safety before it runs its
+             * The popup copies command, note, reason and safety before it runs its
              * own modal loop, so nothing it shows points into msg_list --
              * a stream chunk or rebuild that fires while it is open can
              * free the items freely. */
@@ -880,6 +880,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     HWND top = GetAncestor(hwnd, GA_ROOT);
                     cmd_detail_show(top ? top : hwnd, dcmd ? dcmd : "",
                                     it->u.cmd.note ? it->u.cmd.note : "",
+                                    it->u.cmd.reason,
                                     it->u.cmd.safety, get_window_dpi(hwnd));
                     break;
                 }
@@ -1427,6 +1428,8 @@ next_coalesce:;
                                 batch->q.entries[idx].status == APPROVE_BLOCKED);
                             chat_msg_set_quoted(cmd_item,
                                                 batch->q.entries[idx].quoted);
+                            chat_msg_set_reason(cmd_item,
+                                                batch->q.entries[idx].reason);
                             chat_msg_set_batch(cmd_item, batch->id);
                             chat_msg_set_note(cmd_item,
                                               batch->q.entries[idx].note);
