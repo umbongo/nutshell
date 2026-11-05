@@ -68,16 +68,12 @@ typedef struct {
 static const Exemption k_exempt[] = {
     /* Onyx Synapse */
     { "Onyx Synapse", "chat.user_text", "sel30(chat.user_bubble)", 3.09 },
-    { "Onyx Synapse", "chat.status_text", "bg_primary.base", 3.26 },
     { "Onyx Synapse", "text_dim", "tint18(text_dim on chat.cmd_bg)", 4.17 },
     { "Onyx Synapse", "text_dim", "sel30(bg_secondary)", 3.50 },
     { "Onyx Synapse", "text_dim", "sel30(bg_primary)", 3.94 },
     { "Onyx Synapse", "border", "chat.cmd_bg", 1.19 },
     /* Onyx Light */
-    { "Onyx Light", "chat.user_text", "chat.user_bubble", 4.02 },
     { "Onyx Light", "chat.user_text", "sel30(chat.user_bubble)", 2.68 },
-    { "Onyx Light", "chat.ai_accent", "bg_primary.base", 3.69 },
-    { "Onyx Light", "chat.status_text", "bg_primary.base", 2.13 },
     { "Onyx Light", "text_dim", "tint18(text_dim on bg_primary)", 3.87 },
     { "Onyx Light", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.66 },
     { "Onyx Light", "text_dim", "sel30(bg_secondary)", 3.32 },
@@ -85,7 +81,6 @@ static const Exemption k_exempt[] = {
     { "Onyx Light", "border", "chat.cmd_bg", 1.18 },
     /* Sage & Sand */
     { "Sage & Sand", "chat.user_text", "sel30(chat.user_bubble)", 4.37 },
-    { "Sage & Sand", "chat.status_text", "bg_primary.base", 3.14 },
     { "Sage & Sand", "text_dim", "sel30(bg_secondary)", 3.26 },
     { "Sage & Sand", "text_dim", "sel30(bg_primary)", 3.64 },
     { "Sage & Sand", "border", "chat.cmd_bg", 1.49 },
@@ -94,7 +89,6 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "chat.user_text", "chat.user_bubble", 2.61 },
     { "Moss & Mist", "chat.user_text", "sel30(chat.user_bubble)", 1.91 },
     { "Moss & Mist", "chat.ai_accent", "bg_primary.base", 2.34 },
-    { "Moss & Mist", "chat.status_text", "bg_primary.base", 2.06 },
     { "Moss & Mist", "text_dim", "chat.cmd_bg", 4.40 },
     { "Moss & Mist", "text_dim", "tint18(text_dim on bg_primary)", 3.77 },
     { "Moss & Mist", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.51 },
@@ -105,7 +99,7 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "accent.base", "chat.cmd_bg", 1.59 },
     { "Moss & Mist", "border", "chat.cmd_bg", 1.20 },
 };
-#define EXPECTED_EXEMPTIONS 34
+#define EXPECTED_EXEMPTIONS 28
 
 /* ---- Blends --------------------------------------------------------------
  *

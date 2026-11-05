@@ -52,7 +52,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
             0xC0C0C0, /* cmd_text — monospace light */
             0x5C88C4, /* thinking_border — accent */
             0x888888, /* thinking_text — dim */
-            0x666666, /* status_text — dimmer */
+            0x828282, /* status_text — dimmer; 4.87:1 on bg_primary (was 0x666666) */
             0x34C759, /* indicator_green */
             0xFFCC00, /* indicator_yellow */
             0xFF3B30, /* indicator_red */
@@ -83,9 +83,9 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .info         = 0x7B4FA3,
         .link         = 0x0847A6, /* darker than accent, per spec */
         .chat = {
-            0x007AFF, 0xFFFFFF, 0x007AFF,
+            0x0869DD, 0xFFFFFF, 0x0869DD,
             0xEEEEF2, 0xDCDCE0, 0x333333,
-            0x007AFF, 0x86868B, 0xAAAAAA,
+            0x007AFF, 0x86868B, 0x6C6C6C,
             0x1D7E35, 0x866A08, 0xCD2D24,
             0x6C90BD, /* send_btn — light sky blue */
             0xBF7D7D, /* stop_btn — rose pink */
@@ -111,7 +111,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .chat = {
             0xA3B18A, 0x1A1A14, 0xA3B18A,
             0x232520, 0x3F4138, 0xD4D1C4,
-            0xA3B18A, 0xA09E93, 0x7A7868,
+            0xA3B18A, 0xA09E93, 0x98978D,
             0x8FBC6A, 0xD4AA4A, 0xD08375,
             0x7E91A2, /* send_btn — dusty steel blue */
             0xC4756B, /* stop_btn — earthy terracotta */
@@ -138,7 +138,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .chat = {
             0x84A98C, 0xFFFFFF, 0x84A98C,
             0xE8EBE6, 0xD5D8D3, 0x354F52,
-            0x84A98C, 0x6B8A8D, 0x9AAFB1,
+            0x84A98C, 0x6B8A8D, 0x5F6D6E,
             0x347858, 0x7C6735, 0xA94F39,
             0x78929E, /* send_btn — misty blue */
             0xBC7F7A, /* stop_btn — dusty rose */
