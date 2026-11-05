@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "ai_tools.h"
+#include "chat_approval.h"
 #include "json_parser.h"
 #include <string.h>
 #include <stdlib.h>
@@ -1279,5 +1280,47 @@ int test_ai_tool_card_text_other_tool(void)
     call.input_json[0] = '\0';
     ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
     ASSERT_STR_EQ(detail, "");
+    TEST_END();
+}
+
+/* The UI sizes a card's Details at CMD_NOTE_MAX (stream_post_tool_decide), so
+ * the escape-aware cut in ai_tool_card_text fires and chat_approval_add_tool
+ * copies the result whole: its own cut (UTF-8 continuation bytes only) must
+ * never see an over-long detail and split a \UXXXXXXXX escape. */
+int test_ai_tool_card_text_detail_fits_approval_note(void)
+{
+    TEST_BEGIN();
+    AiToolCall call;
+    char row[256], detail[CMD_NOTE_MAX];
+    char url[600] = "https://a.test/";
+    size_t i, n = strlen(url);
+
+    for (i = 0; i < 40; i++) {                 /* 40 x U+E0041 (F3 A0 81 81) */
+        memcpy(url + n, "\xF3\xA0\x81\x81", 4);
+        n += 4;
+    }
+    url[n] = '\0';
+    memset(&call, 0, sizeof call);
+    snprintf(call.id, sizeof call.id, "toolu_1");
+    snprintf(call.name, sizeof call.name, "web_fetch");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"%s\"}", url);
+
+    /* at the real cap: whole escapes, then the ellipsis */
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    {
+        size_t len = strlen(detail);
+        ASSERT_TRUE(len < (size_t)CMD_NOTE_MAX);
+        ASSERT_TRUE(len > 13);
+        ASSERT_STR_EQ(detail + len - 3, "\xE2\x80\xA6");
+        ASSERT_TRUE(memcmp(detail + len - 13, "\\U000E0041", 10) == 0);
+    }
+
+    /* chat_approval_add_tool keeps it byte for byte: no second cut */
+    {
+        ApprovalQueue q;
+        chat_approval_init(&q);
+        ASSERT_EQ(chat_approval_add_tool(&q, row, detail, CMD_UNKNOWN), 0);
+        ASSERT_STR_EQ(q.entries[0].note, detail);
+    }
     TEST_END();
 }

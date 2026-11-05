@@ -59,8 +59,14 @@ static int stream_post_tool_decide(AiStream *s, unsigned gen, int loop_iter,
     m->kind = kind;
     m->safety = safety;
     /* -1 (a web_fetch without a url) still fills a row the user can read. */
+    /* The Details cap is CMD_NOTE_MAX, the size of the approval entry's note
+     * it is copied into: ai_tool_card_text cuts on an escape boundary, and
+     * chat_approval_add_tool then copies it whole (its own cut knows only
+     * UTF-8 and would split a \UXXXXXXXX escape). */
+    _Static_assert(CMD_NOTE_MAX <= sizeof(((AiToolDecideMsg *)0)->detail),
+                   "the note cap must fit the message's detail buffer");
     (void)ai_tool_card_text(call, m->row, sizeof(m->row),
-                            m->detail, sizeof(m->detail));
+                            m->detail, CMD_NOTE_MAX);
     if (!PostMessage((HWND)s->post_target, WM_AI_TOOL_DECIDE, 0, (LPARAM)m)) {
         free(m);
         return 0;

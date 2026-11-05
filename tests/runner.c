@@ -2877,6 +2877,7 @@ int test_ai_tools_validate_schemas_invalid(void);
 int test_ai_tool_input_max_boundary(void);
 int test_ai_tool_card_text_web_fetch(void);
 int test_ai_tool_card_text_other_tool(void);
+int test_ai_tool_card_text_detail_fits_approval_note(void);
 /* test_ai_tools.c — streaming */
 int test_ai_stream_anthropic_tool_use_block(void);
 int test_ai_stream_anthropic_text_block(void);
@@ -6658,6 +6659,7 @@ int main(void) {
     failed += test_ai_tool_input_max_boundary();
     failed += test_ai_tool_card_text_web_fetch();
     failed += test_ai_tool_card_text_other_tool();
+    failed += test_ai_tool_card_text_detail_fits_approval_note();
 
     printf("\n--- AI Tool Streaming ---\n");
     failed += test_ai_stream_anthropic_tool_use_block();

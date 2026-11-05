@@ -560,6 +560,8 @@ void cmd_detail_show(HWND owner, const char *command, const char *note,
      * monitor's work area allows (the note is clipped beyond that). Command
      * rows keep the fixed size and their eight-line cap. */
     if (d.tool) {
+        /* Latent: growing by exactly the shortfall could leave the command
+         * box 0 px high if the note cap were raised; safe at 255 bytes. */
         int extra = d.note_need_h - d.lay.note.h;
         if (extra > 0) {
             RECT outer;
