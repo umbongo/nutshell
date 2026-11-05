@@ -1881,8 +1881,11 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
      * back) was cut short, not finished -- the opening must say so instead
      * of claiming the commands ran or asking for more of them. */
     int aborted = 0;
+    int cmd_rows = 0;   /* tool entries are no commands: never listed */
     if (q) {
         for (int i = 0; i < q->count; i++) {
+            if (q->entries[i].tool) continue;
+            cmd_rows++;
             if (q->entries[i].status == APPROVE_APPROVED ||
                 q->entries[i].status == APPROVE_EXECUTING) {
                 aborted = 1;
@@ -1918,7 +1921,7 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
     if (n < 0 || (size_t)n >= buf_size) return 0;
     size_t pos = (size_t)n;
 
-    if (q && q->count > 0) {
+    if (q && cmd_rows > 0) {
         int w = snprintf(buf + pos, buf_size - pos,
             "\n\nHere is what actually happened to each command in that "
             "batch -- do not claim a command ran if its line below says it "
@@ -1926,13 +1929,15 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
         if (w < 0 || (size_t)w >= buf_size - pos) return 0;
         pos += (size_t)w;
 
+        int shown = 0;
         for (int i = 0; i < q->count; i++) {
+            if (q->entries[i].tool) continue;
             const char *outcome = ai_continue_outcome_word(&q->entries[i]);
             char elided[64];
             ai_elide_command_60(q->entries[i].command, elided, sizeof(elided));
 
             w = snprintf(buf + pos, buf_size - pos,
-                "  %d. %s: %s\n", i + 1, outcome, elided);
+                "  %d. %s: %s\n", ++shown, outcome, elided);
             if (w < 0 || (size_t)w >= buf_size - pos) return 0;
             pos += (size_t)w;
         }

@@ -3019,6 +3019,16 @@ int test_chat_approval_quoted_records_sensitive_reason(void);
 int test_chat_cmd_label_quoted(void);
 int test_chat_card_header_text(void);
 int test_chat_msg_set_quoted(void);
+int test_chat_approval_add_tool_pending_even_with_auto(void);
+int test_chat_approval_add_tool_refuses(void);
+int test_chat_approval_add_tool_detail_ellipsis(void);
+int test_chat_approval_policy_walks_skip_tool(void);
+int test_cmd_batch_skips_tool_batches(void);
+int test_cmd_batch_full(void);
+int test_continue_text_skips_tool(void);
+int test_chat_card_header_noun(void);
+int test_chat_msg_set_tool_and_outcome(void);
+int test_chat_msg_apply_ceiling_skips_tool(void);
 int test_chat_msg_set_reason(void);
 int test_continue_text_quoted_entry(void);
 
@@ -6777,6 +6787,16 @@ int main(void) {
     failed += test_chat_cmd_label_quoted();
     failed += test_chat_card_header_text();
     failed += test_chat_msg_set_quoted();
+    failed += test_chat_approval_add_tool_pending_even_with_auto();
+    failed += test_chat_approval_add_tool_refuses();
+    failed += test_chat_approval_add_tool_detail_ellipsis();
+    failed += test_chat_approval_policy_walks_skip_tool();
+    failed += test_cmd_batch_skips_tool_batches();
+    failed += test_cmd_batch_full();
+    failed += test_continue_text_skips_tool();
+    failed += test_chat_card_header_noun();
+    failed += test_chat_msg_set_tool_and_outcome();
+    failed += test_chat_msg_apply_ceiling_skips_tool();
     failed += test_chat_msg_set_reason();
     failed += test_continue_text_quoted_entry();
 

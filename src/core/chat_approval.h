@@ -44,6 +44,10 @@ typedef struct {
     char note[CMD_NOTE_MAX];    /* the assistant's explanation for this command
                                   * (may be empty); set with
                                   * chat_approval_set_note(), zeroed on add */
+    int tool;                   /* 1 = a tool call's card row (chat_approval_add_tool()):
+                                  * only a click decides it, and no command walker
+                                  * (next_approved, block_disallowed, unblock_all, the
+                                  * continue text) touches it. Zeroed on every add. */
 } ApprovalEntry;
 
 typedef struct {
@@ -96,6 +100,18 @@ int chat_approval_add_session(ApprovalQueue *q, const char *command,
 int chat_approval_add_quoted(ApprovalQueue *q, const char *command,
                              CmdPlatform platform, int contradicted);
 
+/* Add the row of a tool call that needs the user's decision. `row_text` is
+ * copied into `command` (what the card row shows), `detail` into `note` (the
+ * card's Details; NULL is ""), `safety = level`, `safety_mask =
+ * CMD_MASK_OF(level)`, `tool = 1`. The status is APPROVE_PENDING whatever the
+ * policy: no ceiling holds it and no Auto-approve takes it. Refuses (-1,
+ * queue unchanged) exactly what chat_approval_add() refuses for `row_text`:
+ * blank, 1024 bytes or more, a control or bidi character, a full queue.
+ * A `detail` that does not fit CMD_NOTE_MAX is cut on a UTF-8 boundary so
+ * that it ends in U+2026 (E2 80 A6), never cut silently. */
+int chat_approval_add_tool(ApprovalQueue *q, const char *row_text,
+                           const char *detail, CmdSafetyLevel level);
+
 /* Attach the assistant's explanation to entry `idx` (the index returned by
  * chat_approval_add_session()). Copies with truncation to CMD_NOTE_MAX-1
  * bytes and always NUL-terminates. An out-of-range idx or a NULL queue or
@@ -124,8 +140,8 @@ int chat_approval_all_decided(const ApprovalQueue *q);
  * any BLOCKED entries -- the auto-approve case, where something runs). */
 int chat_approval_needs_user(const ApprovalQueue *q);
 
-/* Get next approved command that hasn't started executing.
- * Returns entry index, or -1 if none. */
+/* Get next approved command that hasn't started executing. A tool entry
+ * is never returned. Returns entry index, or -1 if none. */
 int chat_approval_next_approved(const ApprovalQueue *q);
 
 /* Mark a command as executing. A quoted entry is left untouched. */
@@ -138,14 +154,15 @@ void chat_approval_set_completed(ApprovalQueue *q, int index);
  * raised). Changes BLOCKED -> PENDING for entries whose worst category is
  * at or below policy.allowed, and LEAVES the rest blocked -- raising the
  * ceiling from Read to Write must not release a CRITICAL row. A quoted entry
- * (see chat_approval_add_quoted()) is never released, whatever the ceiling.
+ * (see chat_approval_add_quoted()) is never released, whatever the ceiling,
+ * and neither is a tool entry (the ceiling never holds a tool).
  * Returns the
  * number unblocked. The exact inverse of chat_approval_block_disallowed(). */
 int chat_approval_unblock_all(ApprovalQueue *q);
 
 /* Block every pending command the policy no longer allows (the ceiling was
  * lowered). Changes PENDING -> BLOCKED for entries whose worst category is
- * above policy.allowed. Returns number blocked. */
+ * above policy.allowed. A tool entry is never blocked. Returns number blocked. */
 int chat_approval_block_disallowed(ApprovalQueue *q);
 
 /* Reset the queue (e.g., for new AI response). Preserves the policy. */

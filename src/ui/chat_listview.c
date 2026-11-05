@@ -2287,7 +2287,7 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, ChatMsgItem *first,
                         g.layout.header.x + g.layout.header.w,
                         g.layout.header.y + g.layout.header.h };
         char hdr_buf[64];
-        chat_card_header_text(g.n, g.held_count, g.quoted_count,
+        chat_card_header_text(NULL, g.n, g.held_count, g.quoted_count,
                               hdr_buf, sizeof(hdr_buf));
 
         SetTextColor(hdc, RGB_FROM_THEME(tok->text_main));

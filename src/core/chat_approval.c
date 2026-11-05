@@ -56,6 +56,7 @@ static int approval_add(ApprovalQueue *q, const char *command,
     memset(e->note, 0, sizeof(e->note));
     memset(e->reason, 0, sizeof(e->reason));
     e->quoted = quoted ? 1 : 0;
+    e->tool = 0;
     e->safety = cmd_classify_session(command, platform, contradicted);
     {
         char why[CMD_REASON_MAX];
@@ -91,6 +92,43 @@ int chat_approval_add_quoted(ApprovalQueue *q, const char *command,
                              CmdPlatform platform, int contradicted)
 {
     return approval_add(q, command, platform, contradicted, 1);
+}
+
+int chat_approval_add_tool(ApprovalQueue *q, const char *row_text,
+                           const char *detail, CmdSafetyLevel level)
+{
+    if (!q || !row_text || is_whitespace_only(row_text)) return -1;
+    if (text_has_unsafe_command_char(row_text)) return -1;
+    if (q->count >= APPROVAL_MAX_CMDS) return -1;
+
+    ApprovalEntry *e = &q->entries[q->count];
+    size_t len = strlen(row_text);
+    if (len >= sizeof(e->command)) return -1;
+
+    memset(e, 0, sizeof(*e));
+    memcpy(e->command, row_text, len);
+    e->command[len] = '\0';
+
+    if (detail) {
+        size_t dlen = strlen(detail);
+        if (dlen < sizeof(e->note)) {
+            memcpy(e->note, detail, dlen);
+        } else {
+            /* Keep room for the 3-byte ellipsis and the NUL, and back off
+             * the cut while it sits inside a UTF-8 sequence. */
+            size_t cut = sizeof(e->note) - 1 - 3;
+            while (cut > 0 && ((unsigned char)detail[cut] & 0xC0) == 0x80) cut--;
+            memcpy(e->note, detail, cut);
+            memcpy(e->note + cut, "\xE2\x80\xA6", 3);
+        }
+    }
+
+    e->safety = level;
+    e->safety_mask = CMD_MASK_OF(level);
+    e->status = APPROVE_PENDING;
+    e->tool = 1;
+
+    return q->count++;
 }
 
 void chat_approval_set_note(ApprovalQueue *q, int idx, const char *note)
@@ -158,7 +196,7 @@ int chat_approval_needs_user(const ApprovalQueue *q)
 int chat_approval_next_approved(const ApprovalQueue *q)
 {
     for (int i = 0; i < q->count; i++) {
-        if (q->entries[i].status == APPROVE_APPROVED)
+        if (q->entries[i].status == APPROVE_APPROVED && !q->entries[i].tool)
             return i;
     }
     return -1;
@@ -182,7 +220,7 @@ int chat_approval_unblock_all(ApprovalQueue *q)
     int n = 0;
     for (int i = 0; i < q->count; i++) {
         if (q->entries[i].status == APPROVE_BLOCKED &&
-            !q->entries[i].quoted &&
+            !q->entries[i].quoted && !q->entries[i].tool &&
             !cmd_policy_blocks(q->policy, q->entries[i].safety)) {
             q->entries[i].status = APPROVE_PENDING;
             n++;
@@ -196,6 +234,7 @@ int chat_approval_block_disallowed(ApprovalQueue *q)
     int n = 0;
     for (int i = 0; i < q->count; i++) {
         if (q->entries[i].status == APPROVE_PENDING &&
+            !q->entries[i].tool &&
             cmd_policy_blocks(q->policy, q->entries[i].safety)) {
             q->entries[i].status = APPROVE_BLOCKED;
             n++;

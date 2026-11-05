@@ -87,6 +87,12 @@ typedef struct ChatMsgItem {
             int container_scroll; /* per-container scroll offset, px -- only
                                     * meaningful on a container's first item
                                     * (see chat_listview.c's cmd_container_measure) */
+            int tool;           /* 1 = a tool call's card row, not a command
+                                  * (chat_msg_set_tool()): no ceiling change
+                                  * touches it (chat_msg_apply_ceiling()) */
+            int tool_outcome;   /* a ToolDecision (tool_decision.h) as int:
+                                  * PENDING once chat_msg_set_tool(item, 1)
+                                  * ran, NONE (0) on a command row */
         } cmd;
     } u;
 
@@ -134,6 +140,27 @@ void chat_msg_set_reason(ChatMsgItem *item, const char *reason);
  * on success, -1 for a NULL or non-command item or allocation failure. Does
  * not mark the item dirty: a note is shown only in the details popup. */
 int chat_msg_set_note(ChatMsgItem *item, const char *note);
+
+/* Mark a CHAT_ITEM_COMMAND item as a tool call's row (u.cmd.tool). Setting
+ * it (non-zero) also sets u.cmd.tool_outcome to TOOL_DECISION_PENDING;
+ * clearing it leaves the outcome alone. NULL-safe; no-op on a non-command
+ * item. */
+void chat_msg_set_tool(ChatMsgItem *item, int tool);
+
+/* Set u.cmd.tool_outcome (a ToolDecision as int). NULL-safe; no-op on a
+ * non-command item. Does not mark the item dirty: the caller does when the
+ * chip's text changed. */
+void chat_msg_set_tool_outcome(ChatMsgItem *item, int outcome);
+
+/* Bring one chat item into line with a changed policy ceiling, the per-item
+ * body of the walks in apply_policy_change (src/ui/ai_chat_status.c).
+ * Raised (next_allowed > prev_allowed): a CHAT_ITEM_COMMAND that is blocked,
+ * not quoted and whose safety is within next_allowed becomes unblocked,
+ * approved = -1, selected = 1. Lowered: an unsettled command with
+ * approved == -1 whose safety is above next_allowed becomes blocked. A tool
+ * row (u.cmd.tool), a non-command item and NULL are never touched, either
+ * way, and an unchanged ceiling changes nothing. */
+void chat_msg_apply_ceiling(ChatMsgItem *it, int prev_allowed, int next_allowed);
 
 /* Set the batch id on a CHAT_ITEM_COMMAND item (see cmd_batch.h). No-op on
  * a non-command item. */
@@ -205,11 +232,11 @@ const char *chat_cmd_label(int approved, int blocked, int quoted, int run,
                            ChatCmdIntent *intent);
 
 /* The approval card's header, e.g. "4 commands \xC2\xB7 1 held \xC2\xB7 2 quoted":
- * `n` commands (singular for 1), then " \xC2\xB7 H held" when held > 0, then
+ * `n` of `noun` (NULL means "command"; singular for 1, else an "s" added), then " \xC2\xB7 H held" when held > 0, then
  * " \xC2\xB7 Q quoted" when quoted > 0. Writes a NUL-terminated string into
  * buf and returns its length, or 0 (with buf[0] = NUL, when cap > 0) when it
  * does not fit in cap bytes or buf is NULL. */
-int chat_card_header_text(int n, int held, int quoted, char *buf, size_t cap);
+int chat_card_header_text(const char *noun, int n, int held, int quoted, char *buf, size_t cap);
 
 /* Sync u.cmd.run on every CHAT_ITEM_COMMAND item in `list` with
  * u.cmd.batch == batch_id, in list order, whether settled or not (a batch
