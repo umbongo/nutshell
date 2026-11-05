@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,530 unit tests across 138 test files, and cppcheck reports no errors or warnings
+- 3,574 unit tests across 139 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -199,7 +199,7 @@ Logging itself is started and stopped from **File > Start/Stop Logging**, not he
 - **Search engine** — None, DuckDuckGo (API), DuckDuckGo (HTML), or Custom
 - **Search URL** — shown only for the Custom search engine
 - **Max results** — search results returned to the AI per query (1 to 20)
-- **Permit web fetch** — allow the AI to fetch arbitrary URLs as a tool call
+- **Permit web fetch** — allow the AI to fetch arbitrary URLs as a tool call. Whether a fetch asks first depends on Auto-approve (see [Tool Calls](#tool-calls))
 
 ### AI Chat Assistant
 
@@ -247,6 +247,15 @@ When the AI suggests commands, they land in an approval card in the chat thread:
 A card never blocks the input — keep chatting, ask something else, or just scroll past it, and it stays right there, pending, for as long as the session lasts. Every reply that suggests commands gets its own card, so more than one can be pending at once; acting on one (or letting its approved commands finish running) never touches any other. Sending is only held up while a reply is actually streaming in or the dispatcher is mid-run sending an already-approved batch.
 
 With **Auto-approve** on, rows at or below the level are approved and start running the moment they arrive — the card just shows them as executing instead of waiting for a click. After 3 unattended rounds in a row the next batch pauses and waits for a click on its card; the button stays on. Approved commands are sent one at a time: each one waits for the terminal to return to a shell prompt before the next is typed, so a command that stops at a password or confirmation prompt simply holds the queue instead of racing ahead. The dispatcher treats a line ending in `$`, `#`, `%` or `>` as a shell prompt, so a REPL or a running program whose line ends that way can receive the next approved command. Once the last command's prompt has returned, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed; if another card's commands are waiting to run, they start the moment that continuation finishes.
+
+#### Tool Calls
+
+`web_search` and `read_debug_log` run as they always have. `web_fetch` asks first: the call lands in a one-row approval card (`web_fetch: <address>`, tagged **UNKNOWN**) with **Run** and **Deny**, and the AI waits for your answer.
+
+- **Auto-approve** — with Auto-approve on at **Unknown** or above, a fetch runs without asking. At **Read** (the default) it asks. After 3 automatic tool rounds in a row the next fetch asks again, under the row "[Auto-approve paused after 3 automatic tool rounds]"; a typed message or a Run click resets the count
+- **The row** — shows the address without its query string (a trailing `?…` marks one that was dropped); **Details** shows the full URL minus any `user:password@` part, with control characters escaped
+- **Redirects** — a fetch you approved on a card does not follow a redirect to another host: it returns "redirect to another host refused; ask again with the new URL"
+- **Waiting** — Stop, Retry and closing the tab release a waiting call. A card waits at most 10 minutes, then reads "expired, not run"
 
 #### How Commands Are Classified
 
@@ -333,7 +342,7 @@ Passwords, passphrases and keys are never logged, and neither are keystrokes or 
 - **Threat model** — what Nutshell assumes and what it does not protect against:
   - The remote host and everything it prints are untrusted. Terminal output can carry text meant to steer the AI, which is why every command is classified and, unless you turn on Auto-approve, waits for your click.
   - The AI provider receives the last N terminal lines (the **Max terminal lines** setting) and anything the assistant reads: the debug log and fetched pages. Keep secrets off the screen while AI Assist is in use.
-  - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. Addresses that are local or private (loopback, link-local and private ranges, IPv4 and IPv6) are refused. The address check resolves the name itself, so a DNS answer that changes between that check and WinHTTP's own lookup (rebinding), or a configured proxy that resolves on its own, is not caught.
+  - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. Unless Auto-approve is on at Unknown or above, each fetch waits for your click on a card. The query string is one channel for that text, and the card row hides it, but the path and a subdomain carry data too: reading the card, and **Details** for the full address, is the check, not the row's shape. Addresses that are local or private (loopback, link-local and private ranges, IPv4 and IPv6) are refused. The address check resolves the name itself, so a DNS answer that changes between that check and WinHTTP's own lookup (rebinding), or a configured proxy that resolves on its own, is not caught.
   - A local shell runs with your Windows privileges, and so does anything the assistant runs in it.
   - `nutshell.config` kept in a shared folder exposes its non-secret fields (hosts, usernames, settings) to everyone who can read it. The secrets stay DPAPI-locked.
 
@@ -707,7 +716,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,530 unit tests across 138 test files
+├── tests/                              # 3,574 unit tests across 139 test files
 │   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
 │   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
 │   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion
