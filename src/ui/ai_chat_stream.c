@@ -454,11 +454,14 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 else
                     snprintf(tool_call_text, sizeof(tool_call_text),
                              "using tool: %s", call->name);
-                post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
+                /* A SAFE call is announced at once; any other waits for the
+                 * user's say and is announced only when it actually runs. */
+                const int asks = tdef && tdef->safety != TOOL_SAFE;
+                if (!asks)
+                    post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
 
-                /* A tool that is not SAFE needs the user's say first. */
                 int pinned = 0;
-                if (tdef && tdef->safety != TOOL_SAFE) {
+                if (asks) {
                     const ToolDecision dec = stream_ask_tool(
                         s, call, tdef->safety, agentic.loop_iter);
                     if (dec != TOOL_DECISION_RUN &&
@@ -476,6 +479,7 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                         results[ti].is_error = 0;
                         continue;
                     }
+                    post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
                     if (dec == TOOL_DECISION_APPROVED &&
                         strcmp(call->name, "web_fetch") == 0) {
                         stream_pin_fetch_host(s, call);

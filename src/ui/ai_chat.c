@@ -1165,6 +1165,12 @@ next_coalesce:;
         /* The done/error message is the thread's last: drop our reference. */
         ai_stream_table_finish(&d->streams, rmsg->stream_id);
         resp_stream = NULL;
+        /* The session's current stream has ended, so any tool card it left
+         * (the thread's EXPIRED post can fail) is stale: answer and drop it
+         * now, so no tool batch outlives its stream or is evicted unanswered
+         * by cmd_batch_add below. The slot is gone with the stream, so the
+         * rows read "cancelled, not run". */
+        if (src) ai_chat_cancel_tool_batches(d, src);
 
         /* Free per-session stream accumulators */
         if (src) {

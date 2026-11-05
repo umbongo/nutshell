@@ -202,14 +202,20 @@ void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
     /* The displayed session's live policy, read now, as WM_AI_RESPONSE does
      * for a new batch; a background session is always attended. */
     const CmdPolicy p = displayed ? d->approval_q.policy : owner->policy;
-    const int attended = !displayed ||
-        ai_tool_rounds_attended(owner, m->stream_id, m->loop_iter);
+    /* The round key is recorded for every owner, a background one included
+     * (it is attended whatever the count says): a later Run click on that
+     * card resets the count, and a second call of the same round must still
+     * be judged on the count this round started with (decision 22). */
+    const int capped = ai_tool_rounds_attended(owner, m->stream_id,
+                                               m->loop_iter);
+    const int attended = !displayed || capped;
 
     if (tool_gate_decide(m->safety, p, attended) == TOOL_GATE_RUN) {
         (void)tool_decision_answer(&stream->decision, m->gen,
                                    TOOL_DECISION_RUN);
-        /* SAFE tools never count; ran_unattended needs attended() to have
-         * recorded this round, which only the displayed path does. */
+        /* SAFE tools never count. Only a displayed call can run here (a
+         * background owner is always attended); the round was recorded by
+         * ai_tool_rounds_attended() above. */
         if (displayed && m->safety != TOOL_SAFE)
             ai_tool_rounds_ran_unattended(owner, m->stream_id, m->loop_iter);
         free(m);
@@ -241,9 +247,10 @@ void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
     b->tool_gen = m->gen;
     if (chat_approval_add_tool(&b->q, m->row, m->detail,
                                (CmdSafetyLevel)m->safety) < 0) {
-        cmd_batch_remove(&owner->batches, b->id);
+        /* Answer the slot first, then drop the batch (decision 20). */
         (void)tool_decision_answer(&stream->decision, m->gen,
                                    TOOL_DECISION_NOT_APPROVED);
+        cmd_batch_remove(&owner->batches, b->id);
         free(m);
         return;
     }
