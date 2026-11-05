@@ -23,6 +23,7 @@ static void stream_free(AiStream *s)
     ai_conv_reset(&s->conv);
     secure_zero(s->api_key, sizeof(s->api_key));
     free(s->body);
+    free(s->snapshot);
     free(s);
     __atomic_sub_fetch(&g_live_streams, 1, __ATOMIC_SEQ_CST);
 }

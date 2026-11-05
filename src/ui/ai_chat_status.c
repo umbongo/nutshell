@@ -245,7 +245,7 @@ void ai_chat_get_status_paint(AiChatData *d, HDC hdc, AiStatusPaint *out)
     out->has_meter = d->context_limit > 0;
     if (out->has_meter) {
         int actual = d->actual_input_tokens + d->actual_output_tokens;
-        int tokens = actual > 0 ? actual : ai_context_estimate_tokens(&d->conv);
+        int tokens = actual > 0 ? actual : ai_context_estimate_tokens_ex(&d->conv, d->last_snapshot_len);
         ai_chat_format_meter_text(tokens, d->context_limit,
                                   out->meter_text, sizeof(out->meter_text));
         GetTextExtentPoint32A(use_hdc, out->meter_text,
@@ -375,7 +375,7 @@ void ai_chat_paint_status_line(AiChatData *d, HDC hdc)
     } else if (sp.has_meter) {
         if (sp.sl.meter_bar.w > 0) {
             int actual = d->actual_input_tokens + d->actual_output_tokens;
-            int tokens = actual > 0 ? actual : ai_context_estimate_tokens(&d->conv);
+            int tokens = actual > 0 ? actual : ai_context_estimate_tokens_ex(&d->conv, d->last_snapshot_len);
             double frac = d->context_limit > 0
                         ? (double)tokens / (double)d->context_limit : 0.0;
             ns_draw_meter(hdc, &sp.sl.meter_bar, frac, tok);

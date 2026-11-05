@@ -73,4 +73,11 @@ bool crypto_is_any_encrypted(const char *s);
 int crypto_encrypt_dpapi(const char *plaintext, char *out, size_t out_size);
 int crypto_decrypt_dpapi(const char *blob, char *out, size_t out_size);
 
+/*
+ * crypto_random_bytes -- fill out[0..n) from OpenSSL RAND_bytes. Returns 1 on
+ * success, 0 on failure. ctx is unused; the signature matches AiRandBytesFn
+ * (src/core/ai_data_block.h).
+ */
+int crypto_random_bytes(void *ctx, unsigned char *out, size_t n);
+
 #endif /* NUTSHELL_CRYPTO_H */

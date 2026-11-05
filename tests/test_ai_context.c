@@ -103,6 +103,19 @@ int test_ai_context_estimate_tokens_null(void) {
     TEST_END();
 }
 
+int test_ai_context_estimate_with_snapshot(void) {
+    TEST_BEGIN();
+    AiConversation conv;
+    ai_conv_init(&conv, "test");
+    ai_conv_add(&conv, AI_ROLE_USER, "12345678901234567890");
+    int base = ai_context_estimate_tokens(&conv);
+    ASSERT_EQ(ai_context_estimate_tokens_ex(&conv, 0), base);
+    ASSERT_EQ(ai_context_estimate_tokens_ex(&conv, 4000), base + 1000);
+    ASSERT_EQ(ai_context_estimate_tokens_ex(&conv, 3), base);
+    ASSERT_EQ(ai_context_estimate_tokens_ex(NULL, 8), 2);
+    TEST_END();
+}
+
 /* --- ai_conv_compact tests --- */
 
 int test_ai_conv_compact_basic(void) {
@@ -278,7 +291,7 @@ int test_ai_conv_compact_frees_removed(void) {
 int test_ai_system_prompt_with_notes(void) {
     TEST_BEGIN();
     char buf[4096];
-    ai_build_system_prompt(buf, sizeof(buf), "$ ls\nfile.txt",
+    ai_build_system_prompt(buf, sizeof(buf),
                            "Ubuntu 22.04 production DB server",
                            "Be concise. Use sudo sparingly.", SESSION_SSH, NULL);
     /* Base prompt present */
@@ -289,8 +302,9 @@ int test_ai_system_prompt_with_notes(void) {
     /* Session notes present */
     ASSERT_TRUE(strstr(buf, "Ubuntu 22.04 production DB server") != NULL);
     ASSERT_TRUE(strstr(buf, "About this server") != NULL);
-    /* Terminal text present */
-    ASSERT_TRUE(strstr(buf, "$ ls\nfile.txt") != NULL);
+    /* The system prompt carries settings only, never terminal text */
+    ASSERT_TRUE(strstr(buf, "Current terminal output") == NULL);
+    ASSERT_TRUE(strstr(buf, "file.txt") == NULL);
     TEST_END();
 }
 
@@ -298,15 +312,16 @@ int test_ai_system_prompt_notes_null(void) {
     TEST_BEGIN();
     char buf[4096];
     /* NULL notes should work fine */
-    ai_build_system_prompt(buf, sizeof(buf), "$ whoami", NULL, NULL, SESSION_SSH, NULL);
+    ai_build_system_prompt(buf, sizeof(buf), NULL, NULL, SESSION_SSH, NULL);
     ASSERT_TRUE(strstr(buf, "AI assistant") != NULL);
-    ASSERT_TRUE(strstr(buf, "$ whoami") != NULL);
+    ASSERT_TRUE(strstr(buf, "Current terminal output") == NULL);
+    ASSERT_TRUE(strstr(buf, "$ whoami") == NULL);
     /* No notes sections */
     ASSERT_TRUE(strstr(buf, "system-wide") == NULL);
     ASSERT_TRUE(strstr(buf, "About this server") == NULL);
 
     /* Empty string notes should also be skipped */
-    ai_build_system_prompt(buf, sizeof(buf), NULL, "", "", SESSION_SSH, NULL);
+    ai_build_system_prompt(buf, sizeof(buf), "", "", SESSION_SSH, NULL);
     ASSERT_TRUE(strstr(buf, "AI assistant") != NULL);
     ASSERT_TRUE(strstr(buf, "system-wide") == NULL);
     TEST_END();

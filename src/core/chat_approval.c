@@ -54,9 +54,20 @@ static int approval_add(ApprovalQueue *q, const char *command,
     memcpy(e->command, command, len);
     e->command[len] = '\0';
     memset(e->note, 0, sizeof(e->note));
+    memset(e->reason, 0, sizeof(e->reason));
     e->quoted = quoted ? 1 : 0;
     e->safety = cmd_classify_session(command, platform, contradicted);
-    e->safety_mask = cmd_classify_mask_session(command, platform, contradicted);
+    {
+        char why[CMD_REASON_MAX];
+        why[0] = '\0';
+        e->safety_mask = cmd_classify_mask_session_ex(command, platform,
+                                                      contradicted, why, sizeof(why));
+        /* Only the sensitive phrase is kept; the class reason is not. */
+        if (e->safety_mask & CMD_MASK_SENSITIVE) {
+            memcpy(e->reason, why, sizeof(e->reason));
+            e->reason[sizeof(e->reason) - 1] = '\0';
+        }
+    }
 
     if (quoted || cmd_policy_blocks(q->policy, e->safety)) {
         e->status = APPROVE_BLOCKED;

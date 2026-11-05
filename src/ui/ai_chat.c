@@ -309,7 +309,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                                     d->tooltip_buf, sizeof(d->tooltip_buf));
             } else if (t == STATUS_TOOL_METER && sp.has_meter) {
                 int actual = d->actual_input_tokens + d->actual_output_tokens;
-                int est = (actual > 0) ? 0 : ai_context_estimate_tokens(&d->conv);
+                int est = (actual > 0) ? 0 : ai_context_estimate_tokens_ex(&d->conv, d->last_snapshot_len);
                 ai_format_context_tooltip(d->actual_input_tokens,
                                           d->actual_output_tokens, est,
                                           d->context_limit, d->conv.model,
@@ -531,6 +531,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->stream_phase = 0;
                 d->actual_input_tokens = 0;
                 d->actual_output_tokens = 0;
+                d->last_snapshot_len = 0;   /* an empty conversation carries no snapshot */
                 d->show_thinking = 0;
                 if (d->active_state) d->active_state->show_thinking = 0;
                 KillTimer(hwnd, TIMER_HEARTBEAT);
@@ -866,7 +867,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_CMD_DETAIL → open the details popup for one command row.
              * lParam is the ChatMsgItem id (the list view posts it rather
              * than opening the popup itself, like every other card action).
-             * The popup copies command, note and safety before it runs its
+             * The popup copies command, note, reason and safety before it runs its
              * own modal loop, so nothing it shows points into msg_list --
              * a stream chunk or rebuild that fires while it is open can
              * free the items freely. */
@@ -880,6 +881,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     HWND top = GetAncestor(hwnd, GA_ROOT);
                     cmd_detail_show(top ? top : hwnd, dcmd ? dcmd : "",
                                     it->u.cmd.note ? it->u.cmd.note : "",
+                                    it->u.cmd.reason,
                                     it->u.cmd.safety, get_window_dpi(hwnd));
                     break;
                 }
@@ -1427,6 +1429,8 @@ next_coalesce:;
                                 batch->q.entries[idx].status == APPROVE_BLOCKED);
                             chat_msg_set_quoted(cmd_item,
                                                 batch->q.entries[idx].quoted);
+                            chat_msg_set_reason(cmd_item,
+                                                batch->q.entries[idx].reason);
                             chat_msg_set_batch(cmd_item, batch->id);
                             chat_msg_set_note(cmd_item,
                                               batch->q.entries[idx].note);
@@ -2001,6 +2005,7 @@ void ai_chat_set_session(HWND hwnd, Terminal *term, SessionIo *io)
     if (!d) return;
     d->active_term = term;
     d->active_io = io;
+    d->last_snapshot_len = 0;   /* the old terminal's snapshot is not this one's */
     ai_chat_update_panel_state(d);
 }
 
@@ -2223,6 +2228,11 @@ static void do_session_switch(AiChatData *d,
         }
     }
 
+    /* The snapshot length belongs to the session whose request carried it;
+     * zero it when the displayed session changes (the meter then falls back
+     * to the conversation alone until the next launch). */
+    if (new_state != d->active_state)
+        d->last_snapshot_len = 0;
     d->active_state = new_state;
     d->active_term = term;
     d->active_io = io;
@@ -2382,6 +2392,7 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
 
     if (d->active_state == state) {
         d->active_state = NULL;
+        d->last_snapshot_len = 0;
         d->session_gen++;   /* a confirmation box still up must not apply */
     }
 }

@@ -18,6 +18,8 @@
 #include "ai_agentic.h"
 #include "ai_http.h"
 #include "ai_stream.h"
+#include "ai_data_block.h"
+#include "crypto.h"
 #include "app_font.h"
 #include "ns_font.h"
 #include "ns_draw.h"
@@ -285,6 +287,11 @@ typedef struct {
     size_t ctx_term_cap;
     char  *ctx_prompt;
     size_t ctx_prompt_cap;
+
+    /* Bytes of terminal text the last launched request carried in its last
+     * user turn (0: none). The context meter adds it to the conversation,
+     * because the snapshot is not part of d->conv. */
+    size_t last_snapshot_len;
 
     /* Per-session conversation tracking */
     AiSessionState *active_state;     /* points to current session's ai_state */

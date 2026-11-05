@@ -153,6 +153,17 @@ static int fetch_fail(char **result_buf, size_t *result_len, const char *msg)
     return -1;
 }
 
+/* A refusal that names the host being checked. On the first hop that host is
+ * the model's own URL, so the text is Nutshell's and can go in the note (-1).
+ * On a later hop it comes from a server's Location header: the text quotes
+ * remote data, so AI_TOOL_FAIL_CONTENT keeps it inside the data block. */
+static int fetch_fail_host(int hop, char **result_buf, size_t *result_len,
+                           const char *msg)
+{
+    int rc = fetch_fail(result_buf, result_len, msg);
+    return (hop == 0 || !*result_buf) ? rc : AI_TOOL_FAIL_CONTENT;
+}
+
 /* A host as printable ASCII for an error message: the tool result reaches the
  * model and may be shown, so any other byte becomes '?'. */
 static void safe_host(const char *host, char *out, size_t cap)
@@ -237,19 +248,19 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
         int n = be->resolve(be->ctx, parts.host, addrs, WEB_FETCH_MAX_ADDRS);
         if (n <= 0) {
             snprintf(msg, sizeof(msg), "Refused: could not resolve %s", host);
-            return fetch_fail(result_buf, result_len, msg);
+            return fetch_fail_host(hop, result_buf, result_len, msg);
         }
         if (n > WEB_FETCH_MAX_ADDRS) {
             snprintf(msg, sizeof(msg),
                      "Refused: %s resolved to too many addresses", host);
-            return fetch_fail(result_buf, result_len, msg);
+            return fetch_fail_host(hop, result_buf, result_len, msg);
         }
         for (int i = 0; i < n; i++) {
             if (net_addr_is_internal(&addrs[i])) {
                 if (ctx && ctx->on_hop) ctx->on_hop(ctx->user, display, 1);
                 snprintf(msg, sizeof(msg),
                          "Refused: %s is a local or private network address", host);
-                return fetch_fail(result_buf, result_len, msg);
+                return fetch_fail_host(hop, result_buf, result_len, msg);
             }
         }
 

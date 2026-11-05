@@ -10,6 +10,11 @@
 size_t json_escape_string(const char *s, size_t s_len, char *buf,
                           size_t buf_size, size_t pos, int add_quotes);
 
+/* The number of output bytes json_escape_string produces for the raw byte c
+ * (1, 2 for a named escape, 6 for \u00XX). One table for the escaper and for
+ * anything that must predict its output size. */
+size_t json_escaped_byte_len(unsigned char c);
+
 /* Validate a JSON buffer for syntax correctness and proper string escaping.
  * Returns 1 if valid, 0 if invalid.
  * On failure, writes a human-readable error to error (includes byte offset). */

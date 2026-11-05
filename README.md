@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.55 \
+**Version**: v1.2.57 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,403 unit tests across 130 test files, and cppcheck reports no errors or warnings
+- 3,491 unit tests across 135 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -242,11 +242,12 @@ When the AI suggests commands, they land in an approval card in the chat thread:
 
 - **Header** — "N commands · M held · K quoted", plus the reason (e.g. "Above the allowed ceiling") when any are held back. A row is **quoted, not run** when the assistant only showed a command marker inside a code block or inline code: it is listed for reference and never runs
 - **Rows** — a checkbox, the command text, and a risk tag (**READ** / **UNKNOWN** / **WRITE** / **CRITICAL**). Held rows show a disabled checkbox and dimmed text. Pending allowed commands start checked
+- **Why** — a row that reads credentials, secrets, the environment or shell history always waits for your click, at every policy and with Auto-approve on, and says why on the row (for example "reads credentials")
 - **Actions** — **Deny all** rejects every row; **Run N selected** executes the checked rows (disabled when nothing is checked)
 
 A card never blocks the input — keep chatting, ask something else, or just scroll past it, and it stays right there, pending, for as long as the session lasts. Every reply that suggests commands gets its own card, so more than one can be pending at once; acting on one (or letting its approved commands finish running) never touches any other. Sending is only held up while a reply is actually streaming in or the dispatcher is mid-run sending an already-approved batch.
 
-With **Auto-approve** on, rows at or below the level are approved and start running the moment they arrive — the card just shows them as executing instead of waiting for a click. After 3 unattended rounds in a row the next batch pauses and waits for a click on its card; the button stays on. Approved commands are sent one at a time: each one waits for the terminal to return to a shell prompt before the next is typed, so a command that stops at a password or confirmation prompt simply holds the queue instead of racing ahead. The dispatcher treats a line ending in `$`, `#`, `%` or `>` as a shell prompt, so a REPL or a running program whose line ends that way can receive the next approved command. Once the last command's prompt has returned, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed; if another card's commands are waiting to run, they start the moment that continuation finishes.
+With **Auto-approve** on, rows at or below the level are approved and start running the moment they arrive (a row that reads credentials, secrets, the environment or shell history is the exception: see the **Why** bullet above) — the card just shows them as executing instead of waiting for a click. After 3 unattended rounds in a row the next batch pauses and waits for a click on its card; the button stays on. Approved commands are sent one at a time: each one waits for the terminal to return to a shell prompt before the next is typed, so a command that stops at a password or confirmation prompt simply holds the queue instead of racing ahead. The dispatcher treats a line ending in `$`, `#`, `%` or `>` as a shell prompt, so a REPL or a running program whose line ends that way can receive the next approved command. Once the last command's prompt has returned, the AI automatically reads the updated terminal output and continues the conversation, reporting results or running additional commands as needed; if another card's commands are waiting to run, they start the moment that continuation finishes.
 
 #### How Commands Are Classified
 
@@ -333,6 +334,8 @@ Passwords, passphrases and keys are never logged, and neither are keystrokes or 
 - **Threat model** — what Nutshell assumes and what it does not protect against:
   - The remote host and everything it prints are untrusted. Terminal output can carry text meant to steer the AI, which is why every command is classified and, unless you turn on Auto-approve, waits for your click.
   - The AI provider receives the last N terminal lines (the **Max terminal lines** setting) and anything the assistant reads: the debug log and fetched pages. Keep secrets off the screen while AI Assist is in use.
+  - Terminal output, web pages, search results and the debug log reach the AI provider inside delimited data blocks that the prompt tells the model are data, never instructions; none of it goes in the system prompt. A model can still be misled by text in a block: the blocks lower the odds, they do not remove them.
+  - A command the classifier recognises as reading credentials, secrets, the environment or shell history always asks first, at every policy and with Auto-approve on, and its row says why. This is best effort: a read the classifier does not recognise is not covered.
   - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. Addresses that are local or private (loopback, link-local and private ranges, IPv4 and IPv6) are refused. The address check resolves the name itself, so a DNS answer that changes between that check and WinHTTP's own lookup (rebinding), or a configured proxy that resolves on its own, is not caught.
   - A local shell runs with your Windows privileges, and so does anything the assistant runs in it.
   - `nutshell.config` kept in a shared folder exposes its non-secret fields (hosts, usernames, settings) to everyone who can read it. The secrets stay DPAPI-locked.
@@ -684,7 +687,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,403 unit tests across 130 test files
+├── tests/                              # 3,491 unit tests across 135 test files
 │   └── stubs/libssh2.h                 #   libssh2 stub for test builds without the real library
 ├── build/win/                          # Build output (nutshell.exe)
 ├── images/                             # Application icon and assets

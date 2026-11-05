@@ -17,6 +17,7 @@
 #include "ns_tokens.h"
 #include "ns_type.h"
 #include "themed_button.h"      /* theme_cr, hover tracking for owner-draw buttons */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -46,6 +47,8 @@ typedef struct {
     char    *command;       /* UTF-8, for the clipboard */
     wchar_t *command_w;     /* UTF-16 with CRLF line ends, for the EDIT */
     wchar_t *note_w;        /* UTF-16, "" when there is no note */
+    wchar_t *why_w;         /* UTF-16 "Why: <reason>", "" when not sensitive */
+    int why_h;              /* height reserved under the note for it, or 0 */
     CmdSafetyLevel safety;
 
     int dpi;
@@ -151,7 +154,24 @@ static void detail_relayout(DetailData *d)
         ReleaseDC(d->hwnd, hdc);
     }
 
-    cmd_detail_layout(cw, ch, d->dpi, note_h, d->tag_w, &d->lay);
+    /* A "Why:" line under the note, in the caption font. It is the
+     * classifier's reason, not the assistant's, so it is a line of its
+     * own. The layout reserves its height inside the note rectangle. */
+    d->why_h = 0;
+    if (d->why_w && d->why_w[0]) {
+        HDC whdc = GetDC(d->hwnd);
+        if (whdc) {
+            HGDIOBJ wold = SelectObject(whdc, d->f_caption ? d->f_caption
+                                        : GetStockObject(DEFAULT_GUI_FONT));
+            TEXTMETRICW wtm;
+            GetTextMetricsW(whdc, &wtm);
+            d->why_h = wtm.tmHeight + ns_scale(SP_XS, d->dpi);
+            SelectObject(whdc, wold);
+            ReleaseDC(d->hwnd, whdc);
+        }
+    }
+
+    cmd_detail_layout(cw, ch, d->dpi, note_h + d->why_h, d->tag_w, &d->lay);
 
     MoveWindow(d->hEdit, d->lay.command.x, d->lay.command.y,
                d->lay.command.w, d->lay.command.h, TRUE);
@@ -196,8 +216,21 @@ static void detail_paint(DetailData *d, HDC hdc)
     SelectObject(hdc, d->f_body ? d->f_body : GetStockObject(DEFAULT_GUI_FONT));
     SetTextColor(hdc, theme_cr(has_note ? tk->text_main : tk->text_dim));
     RECT note_rc = nrect_to_rect(&d->lay.note);
+    int why_h = (d->why_h > 0 && note_rc.bottom - note_rc.top > d->why_h)
+                    ? d->why_h : 0;
+    RECT why_rc = note_rc;
+    why_rc.top = note_rc.bottom - why_h;
+    note_rc.bottom -= why_h;
     DrawTextW(hdc, note_text(d), -1, &note_rc,
               DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (why_h > 0) {
+        SelectObject(hdc, d->f_caption ? d->f_caption
+                                       : GetStockObject(DEFAULT_GUI_FONT));
+        SetTextColor(hdc, theme_cr(tk->warning.base));
+        DrawTextW(hdc, d->why_w, -1, &why_rc,
+                  DT_LEFT | DT_BOTTOM | DT_SINGLELINE | DT_END_ELLIPSIS |
+                  DT_NOPREFIX);
+    }
     SelectObject(hdc, old);
 
     /* The risk tag, drawn exactly as the card draws it. */
@@ -418,7 +451,7 @@ static LRESULT CALLBACK DetailProc(HWND hwnd, UINT msg, WPARAM wParam,
 /* ---- public API --------------------------------------------------------- */
 
 void cmd_detail_show(HWND owner, const char *command, const char *note,
-                     CmdSafetyLevel safety, int dpi)
+                     const char *reason, CmdSafetyLevel safety, int dpi)
 {
     if (!owner || !IsWindow(owner)) return;
     if (dpi <= 0) dpi = 96;
@@ -429,7 +462,14 @@ void cmd_detail_show(HWND owner, const char *command, const char *note,
     d.command = _strdup(command ? command : "");
     d.command_w = to_wide(command, 1);
     d.note_w = to_wide(note, 0);
-    if (!d.command || !d.command_w || !d.note_w) goto cleanup;
+    if (reason && reason[0]) {
+        char why[CMD_REASON_MAX + 8];
+        snprintf(why, sizeof(why), "Why: %s", reason);
+        d.why_w = to_wide(why, 0);
+    } else {
+        d.why_w = to_wide("", 0);
+    }
+    if (!d.command || !d.command_w || !d.note_w || !d.why_w) goto cleanup;
 
     static int registered = 0;
     if (!registered) {
@@ -539,6 +579,7 @@ cleanup:
     free(d.command);
     free(d.command_w);
     free(d.note_w);
+    free(d.why_w);
 }
 
 #endif /* _WIN32 */
