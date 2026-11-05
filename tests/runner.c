@@ -2181,6 +2181,11 @@ int test_ui_theme_switch_colors_consistent(void);
 int test_ui_theme_switch_preserves_name(void);
 int test_ui_theme_dark_themes_have_light_text(void);
 int test_ui_theme_terminal_min_contrast_by_name(void);
+int test_ui_theme_md_role_unchanged_when_it_clears(void);
+int test_ui_theme_md_role_walks_away_from_the_background(void);
+int test_ui_theme_md_role_falls_back_to_text_main(void);
+int test_ui_theme_md_role_walks_first_clearing_step(void);
+int test_ui_theme_md_tokens_match_md_role(void);
 
 /* test_display_buffer.c */
 int test_dispbuf_init_zeroed(void);
@@ -3730,11 +3735,8 @@ int test_paint_synthetic_runs_cover_their_marker(void);
 
 /* test_sel_contrast.c */
 int test_sel_highlight_visible_on_every_surface(void);
-int test_ui_theme_md_role_unchanged_when_it_clears(void);
-int test_ui_theme_md_role_walks_away_from_the_background(void);
-int test_ui_theme_md_role_falls_back_to_text_main(void);
-int test_ui_theme_md_tokens_match_md_role(void);
 int test_sel_hue_is_shifted_focus_except_on_the_bubble(void);
+int test_sel_hue_on_the_bubble_picks_black_or_white(void);
 
 /* test_ai_exec_quoted.c */
 int test_exec_quoted_fence_skipped_by_notes(void);
@@ -5751,6 +5753,7 @@ int main(void) {
     failed += test_ui_theme_terminal_min_contrast_by_name();
     failed += test_ui_theme_md_role_unchanged_when_it_clears();
     failed += test_ui_theme_md_role_walks_away_from_the_background();
+    failed += test_ui_theme_md_role_walks_first_clearing_step();
     failed += test_ui_theme_md_role_falls_back_to_text_main();
     failed += test_ui_theme_md_tokens_match_md_role();
 
@@ -7530,6 +7533,7 @@ int main(void) {
 
     failed += test_sel_highlight_visible_on_every_surface();
     failed += test_sel_hue_is_shifted_focus_except_on_the_bubble();
+    failed += test_sel_hue_on_the_bubble_picks_black_or_white();
 
     failed += test_exec_quoted_fence_skipped_by_notes();
     failed += test_exec_quoted_full_reports_both_in_order();

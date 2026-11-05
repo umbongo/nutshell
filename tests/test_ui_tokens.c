@@ -190,6 +190,18 @@ int test_ui_tokens_link_darker_than_accent_on_light_themes(void)
     TEST_END();
 }
 
+/* rgb_alpha() (src/ui/ns_draw.c): fg * a + bg * (1 - a) per channel in
+ * float, truncated. */
+static unsigned int blend_f(unsigned int fg, unsigned int bg, float a)
+{
+    unsigned int out = 0;
+    for (int sh = 16; sh >= 0; sh -= 8) {
+        float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
+        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
+    }
+    return out;
+}
+
 /* ---- Colour-by-role render-time contrast (AI reply markdown colour) ------ */
 
 /* md_render.c paints two intent hues as flat text: base->link (the
@@ -207,18 +219,6 @@ int test_ui_tokens_link_darker_than_accent_on_light_themes(void)
  * 3.095), and more on the other surfaces.  This test holds the resolved,
  * actually-painted colour to >= 4.5:1 on bg_primary, never the plain text
  * colour (the hue is kept), and >= 4.7:1 on every surface of its role. */
-/* rgb_alpha() (src/ui/ns_draw.c): fg * a + bg * (1 - a) per channel in
- * float, truncated. */
-static unsigned int blend_f(unsigned int fg, unsigned int bg, float a)
-{
-    unsigned int out = 0;
-    for (int sh = 16; sh >= 0; sh -= 8) {
-        float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
-        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
-    }
-    return out;
-}
-
 int test_ui_tokens_md_role_color_contrast(void)
 {
     TEST_BEGIN();

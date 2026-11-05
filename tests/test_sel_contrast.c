@@ -8,6 +8,7 @@
 #include "theme.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* rgb_alpha() (src/ui/ns_draw.c) on packed 0x00RRGGBB: per channel
  * fg * a + bg * (1 - a), truncated. */
@@ -86,5 +87,33 @@ int test_sel_hue_is_shifted_focus_except_on_the_bubble(void)
     }
     ASSERT_EQ(ui_theme_sel_hue(NULL, 0), 0);
     ASSERT_EQ(ui_theme_sel_hue(NULL, 1), 0);
+    TEST_END();
+}
+
+/* The bubble rule on hand-picked inputs, so the test does not restate the
+ * production expression: white text gets a black selection, black text a
+ * white one, and the grey where the two contrasts cross decides the rest.
+ * No 8-bit grey ties exactly: 0x757575 reads 4.61 against white and 4.56
+ * against black (white wins), 0x767676 reads 4.54 and 4.62 (black wins), so
+ * the pair pins the crossover to one grey step. */
+int test_sel_hue_on_the_bubble_picks_black_or_white(void)
+{
+    TEST_BEGIN();
+    ThemeTokens k;
+    memset(&k, 0, sizeof k);
+
+    k.chat.user_text = 0xFFFFFFu;
+    ASSERT_EQ(ui_theme_sel_hue(&k, 1), 0x000000u);
+    k.chat.user_text = 0x000000u;
+    ASSERT_EQ(ui_theme_sel_hue(&k, 1), 0xFFFFFFu);
+
+    k.chat.user_text = 0x757575u;
+    ASSERT_TRUE(theme_contrast(0xFFFFFFu, 0x757575u) >
+                theme_contrast(0x000000u, 0x757575u));
+    ASSERT_EQ(ui_theme_sel_hue(&k, 1), 0xFFFFFFu);
+    k.chat.user_text = 0x767676u;
+    ASSERT_TRUE(theme_contrast(0x000000u, 0x767676u) >
+                theme_contrast(0xFFFFFFu, 0x767676u));
+    ASSERT_EQ(ui_theme_sel_hue(&k, 1), 0x000000u);
     TEST_END();
 }

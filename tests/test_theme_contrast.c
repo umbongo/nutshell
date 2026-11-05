@@ -14,13 +14,15 @@
  * floors (tests/test_term_colors.c, tests/test_ui_theme.c) and the selection
  * highlight's visibility (tests/test_sel_contrast.c) are not repeated either.
  *
- * A pair that fails on a shipped theme is a finding, not something to fix
- * here: it is listed in k_exempt with its measured ratio.  The list is a
+ * Every pair meets its floor on every theme, with one exception, listed in
+ * k_exempt with its measured ratio: the unselected checkbox stroke (`border`
+ * on `chat.cmd_bg`), which is faint by design (see k_exempt).  The list is a
  * ratchet: the measured ratio may not drop more than RATIO_SLACK below the
  * recorded one, and an exemption whose pair now meets its floor fails the
  * suite, so a fix has to delete its line.  The list is also counted
- * (EXPECTED_EXEMPTIONS).  Never lower a floor or add an exemption to get a
- * new change through.
+ * (EXPECTED_EXEMPTIONS), so it cannot grow unnoticed.  Never lower a floor or
+ * add an exemption to get a new change through: a pair that fails on a
+ * shipped theme is a finding to fix in the tokens, not a row to list.
  */
 #include "test_framework.h"
 #include "ui_theme.h"
@@ -42,7 +44,7 @@
  *   accelerator column of the selected menu row.
  * FLOOR_NONTEXT 3.0 (WCAG 1.4.11): a glyph or stroke that identifies a
  *   control or state against the surface it sits on (the send/stop icon, the
- *   empty-state glyph, the checkbox outline).  Controls that carry a text
+ *   empty-state glyph, the hot checkbox outline).  Controls that carry a text
  *   label are judged by their text, not by their outline, and decorative
  *   separators are not tested.
  * Not tested: a disabled button's label.  WCAG 1.4.3 exempts inactive
@@ -56,10 +58,21 @@
  * ratchet fails (recorded ratios are rounded to two decimals). */
 #define RATIO_SLACK 0.01
 
-/* ---- Known failures (findings) ------------------------------------------
+/* ---- The one exemption ---------------------------------------------------
  *
- * Counted: EXPECTED_EXEMPTIONS must equal the number of entries below.  Each
- * entry is { theme name, text token, surface token, measured ratio }. */
+ * The unselected checkbox stroke of an approval-card row (`border` on
+ * `chat.cmd_bg`, chat_listview.c) reads 1.18-1.49:1 on the four themes, under
+ * the 3.0 non-text floor, and stays so on purpose: the checkbox is identified
+ * by its label (the command text beside it) and its states carry the
+ * meaning: the hot stroke is accent.base (a row in the table below, at 3.0)
+ * and the checked state is a success fill with a tick.  A resting stroke
+ * strong enough to reach 3.0 would make every unticked row look like a
+ * control in use.
+ *
+ * The entry is kept, and counted, so the exception cannot silently spread to
+ * another pair: EXPECTED_EXEMPTIONS must equal the number of entries below,
+ * and each entry matches a row on one theme by name.  Each entry is
+ * { theme name, text token, surface token, measured ratio }. */
 typedef struct {
     const char *theme, *fg, *bg;
     double      ratio;
@@ -82,9 +95,8 @@ static const Exemption k_exempt[] = {
  * Packed 0x00RRGGBB, per channel, truncating, exactly as src/ui computes
  * them.  ablend() is rgb_alpha() (src/ui/ns_draw.c) -- fg * a + bg * (1 - a)
  * in float -- copied from tests/test_sel_contrast.c, whose own copy is
- * static; the integer blends are the activity indicator's, written inline in
- * chat_listview.c and ai_chat_view.c, and the pressed send/stop button's,
- * written inline in ai_chat.c. */
+ * static; the integer blend is the pressed send/stop button's, written inline
+ * in ai_chat.c. */
 static unsigned int ablend(unsigned int fg, unsigned int bg, float a)
 {
     unsigned int out = 0;
