@@ -218,7 +218,12 @@ int ai_parse_stream_chunk(const char *json,
  *   0  — normal chunk processed (text delta, thinking delta, etc.)
  *   1  — stream done (end_turn/stop)
  *   2  — tool_use stop_reason detected (time to execute tools)
- *  -1  — error */
+ *  -1  — error
+ * An OpenAI-format chunk that carries a finish_reason ("stop" -> 1,
+ * "tool_calls" -> 2) still fills content_out/thinking_out, and its
+ * delta.tool_calls are accumulated: the caller reads the text, then acts on
+ * the code. Whether the tool loop runs is ai_tool_round_should_run()'s
+ * decision at the end of the round, not this code's. */
 int ai_parse_stream_chunk_ex(const char *json,
                              char *content_out, size_t content_size,
                              char *thinking_out, size_t thinking_size,

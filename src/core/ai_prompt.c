@@ -1473,14 +1473,18 @@ int ai_parse_stream_chunk_ex(const char *json,
                                      thinking_out, thinking_size,
                                      NULL, NULL);
     } else {
-        /* OpenAI-compatible */
+        /* OpenAI-compatible. The tool parser has already accumulated this
+         * chunk's tool_calls; the text of a chunk that also carries a
+         * finish_reason is read before the finish is reported, so neither
+         * is lost. */
         int trc = ai_parse_tool_stream_openai(json, tool_stream);
-        if (trc == 1) return 2;   /* tool_use stop */
-        if (trc == 2) return 1;   /* done */
         if (trc == -1) return -1; /* error */
-        return ai_parse_stream_chunk(json, content_out, content_size,
-                                     thinking_out, thinking_size,
-                                     NULL, NULL);
+        int src = ai_parse_stream_chunk(json, content_out, content_size,
+                                        thinking_out, thinking_size,
+                                        NULL, NULL);
+        if (trc == 1) return 2;   /* finish_reason tool_calls */
+        if (trc == 2) return 1;   /* finish_reason stop */
+        return src;
     }
 }
 

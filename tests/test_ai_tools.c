@@ -1,5 +1,6 @@
 #include "test_framework.h"
 #include "ai_tools.h"
+#include "ai_prompt.h"
 #include "chat_approval.h"
 #include "json_parser.h"
 #include <string.h>
@@ -989,6 +990,313 @@ int test_ai_stream_openai_no_tools(void)
     ASSERT_EQ(state.pending_tool_count, 0);
 
     ai_tools_stream_reset(&state);
+    TEST_END();
+}
+
+/* ======================================================================== */
+/* OpenAI-format stream: finish reasons, missing index, in-stream errors      */
+/* (Kimi trace, Task 17). Chunks are the providers' real SSE shapes.          */
+/* ======================================================================== */
+
+#define SSE_CALL_FIRST \
+    "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0," \
+    "\"id\":\"call_9\",\"type\":\"function\"," \
+    "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}"
+#define SSE_CALL_ARGS \
+    "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0," \
+    "\"function\":{\"arguments\":\"{\\\"url\\\":\\\"https://example.org/\\\"}\"}}]}," \
+    "\"finish_reason\":null}]}"
+
+/* One chunk through the extended parser. */
+static int feed_ex(AiToolStreamState *st, const char *json,
+                   char *text, size_t tsz)
+{
+    char think[64] = "";
+    text[0] = '\0';
+    return ai_parse_stream_chunk_ex(json, text, tsz, think, sizeof(think),
+                                    st, "moonshot");
+}
+
+int test_ai_stream_openai_finish_stop_with_pending_call(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_FIRST, text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_ARGS, text, sizeof(text)), 0);
+    int rc = feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}",
+        text, sizeof(text));
+    ASSERT_EQ(rc, 1);                       /* a stop, as before */
+    ASSERT_EQ(st.pending_tool_count, 1);    /* the call is still pending */
+    ASSERT_STR_EQ(st.finish, "stop");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    /* The loop runs although tool_stop (rc == 2) never came. */
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, st.pending_tool_count, 0), 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_no_finish_reason_with_pending_call(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_FIRST, text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_ARGS, text, sizeof(text)), 0);
+    /* The stream ends at [DONE] with no finish_reason at all. */
+    ASSERT_TRUE(feed_ex(&st, "[DONE]", text, sizeof(text)) < 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.finish, "");
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, st.pending_tool_count, 0), 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_whole_call_in_finish_chunk(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    int rc = feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"id\":\"call_7\",\"type\":\"function\",\"function\":{\"name\":"
+        "\"web_fetch\",\"arguments\":\"{\\\"url\\\":\\\"https://example.org/\\\"}\"}}]},"
+        "\"finish_reason\":\"tool_calls\"}]}", text, sizeof(text));
+    ASSERT_EQ(rc, 2);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_7");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_NOT_NULL(strstr(st.pending_tool_calls[0].input_json, "example.org"));
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_tool_delta_without_index(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"id\":\"call_3\",\"type\":\"function\",\"function\":{\"name\":"
+        "\"web_fetch\",\"arguments\":\"{\\\"url\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);           /* index 0, one call */
+    ASSERT_EQ(st.index_defaulted, 1);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"https://example.org/\\\"}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);           /* still one call */
+    ASSERT_EQ(st.index_defaulted, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json,
+                  "{\"url\":\"https://example.org/\"}");
+    ai_tools_stream_reset(&st);
+
+    /* An explicit index never counts as defaulted. */
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_FIRST, text, sizeof(text)), 0);
+    ASSERT_EQ(st.index_defaulted, 0);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_text_kept_with_finish_reason(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    int rc = feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\" Following it now.\"},"
+        "\"finish_reason\":\"stop\"}]}", text, sizeof(text));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(text, " Following it now.");
+    ASSERT_STR_EQ(st.finish, "stop");
+
+    ai_tools_stream_reset(&st);
+    ai_tools_stream_init(&st);
+    rc = feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Fetching.\","
+        "\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]},"
+        "\"finish_reason\":\"tool_calls\"}]}", text, sizeof(text));
+    ASSERT_EQ(rc, 2);
+    ASSERT_STR_EQ(text, "Fetching.");
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_finish_tool_calls_path_unchanged(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_FIRST, text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_ARGS, text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}",
+        text, sizeof(text)), 2);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 1, 1, 0), 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_plain_reply_stop_ends_normally(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_STR_EQ(text, "Hi");
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}",
+        text, sizeof(text)), 1);
+    ASSERT_EQ(st.pending_tool_count, 0);
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, st.pending_tool_count, 0), 0);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_tool_round_should_run_rules(void)
+{
+    TEST_BEGIN();
+    /* OpenAI-format providers: pending calls decide, not the finish reason. */
+    ASSERT_EQ(ai_tool_round_should_run("openai", 0, 2, 0), 1);
+    ASSERT_EQ(ai_tool_round_should_run("deepseek", 1, 1, 0), 1);
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, 0, 0), 0);
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 1, 0, 0), 0);
+    ASSERT_EQ(ai_tool_round_should_run(NULL, 0, 1, 0), 1);
+    /* finish_reason "length": the arguments are cut off, never run them. */
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, 1, 1), 0);
+    /* Anthropic keeps its tool_use stop requirement. */
+    ASSERT_EQ(ai_tool_round_should_run("anthropic", 0, 1, 0), 0);
+    ASSERT_EQ(ai_tool_round_should_run("anthropic", 1, 1, 0), 1);
+    ASSERT_EQ(ai_tool_round_should_run("anthropic", 1, 0, 0), 0);
+    TEST_END();
+}
+
+int test_ai_stream_anthropic_finish_recorded_behaviour_unchanged(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}",
+        &st), 1);
+    ASSERT_STR_EQ(st.finish, "tool_use");
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}",
+        &st), 2);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_chunk_error_object_message(void)
+{
+    TEST_BEGIN();
+    char msg[AI_STREAM_ERROR_MSG_MAX + 1];
+    int rc = ai_stream_chunk_error("moonshot",
+        "{\"error\":{\"message\":\"Your account is suspended\",\"type\":"
+        "\"insufficient_quota\"}}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "Your account is suspended");
+    /* Without a message, the type names it. */
+    rc = ai_stream_chunk_error("openai",
+        "{\"error\":{\"type\":\"server_error\"}}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "server_error");
+    /* No message, no type. */
+    rc = ai_stream_chunk_error("openai", "{\"error\":{}}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "unknown error");
+    TEST_END();
+}
+
+int test_ai_stream_chunk_error_string_form(void)
+{
+    TEST_BEGIN();
+    char msg[AI_STREAM_ERROR_MSG_MAX + 1];
+    int rc = ai_stream_chunk_error("deepseek",
+        "{\"error\":\"rate limit exceeded\"}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "rate limit exceeded");
+    TEST_END();
+}
+
+int test_ai_stream_chunk_error_not_an_error(void)
+{
+    TEST_BEGIN();
+    char msg[AI_STREAM_ERROR_MSG_MAX + 1] = "keep";
+    ASSERT_EQ(ai_stream_chunk_error("moonshot",
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"error\"}}]}",
+        msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", "{\"error\":null}",
+                                    msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", "[DONE]", msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", "", msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", NULL, msg, sizeof(msg)), 0);
+    /* Anthropic's own error events are not this path's business. */
+    ASSERT_EQ(ai_stream_chunk_error("anthropic",
+        "{\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}",
+        msg, sizeof(msg)), 0);
+    /* NULL out buffer is allowed. */
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", "{\"error\":{\"message\":\"x\"}}",
+                                    NULL, 0), 1);
+    TEST_END();
+}
+
+int test_ai_stream_chunk_error_sanitised_and_capped(void)
+{
+    TEST_BEGIN();
+    char msg[AI_STREAM_ERROR_MSG_MAX + 1];
+    /* ESC, BEL, newline, a bidi override (U+202E), a C1 control (U+0085). */
+    int rc = ai_stream_chunk_error("moonshot",
+        "{\"error\":{\"message\":\"bad\\u001b[31m key\\u0007\\nnow\\u202eevil\\u0085!\"}}",
+        msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "bad[31m key nowevil!");
+    for (const char *p = msg; *p; p++) {
+        ASSERT_TRUE((unsigned char)*p >= 0x20 && *p != 0x7F);
+    }
+
+    /* A long message is cut to AI_STREAM_ERROR_MSG_MAX bytes. */
+    char json[1024];
+    size_t n = (size_t)snprintf(json, sizeof(json), "{\"error\":{\"message\":\"");
+    for (int i = 0; i < 600; i++) json[n++] = 'a';
+    n += (size_t)snprintf(json + n, sizeof(json) - n, "\"}}");
+    rc = ai_stream_chunk_error("moonshot", json, msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(strlen(msg), (size_t)AI_STREAM_ERROR_MSG_MAX);
+
+    /* The cut never splits a multi-byte character. */
+    n = (size_t)snprintf(json, sizeof(json), "{\"error\":{\"message\":\"");
+    for (int i = 0; i < 199; i++) json[n++] = 'a';
+    n += (size_t)snprintf(json + n, sizeof(json) - n, "\xc3\xa9\xc3\xa9\"}}");
+    rc = ai_stream_chunk_error("moonshot", json, msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(strlen(msg), (size_t)199);          /* e-acute needs 2 bytes */
+
+    /* A small buffer is honoured. */
+    char small[8];
+    rc = ai_stream_chunk_error("moonshot",
+        "{\"error\":{\"message\":\"abcdefghijklmnop\"}}", small, sizeof(small));
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(strlen(small), (size_t)7);
     TEST_END();
 }
 

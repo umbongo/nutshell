@@ -169,13 +169,47 @@ typedef struct {
     AiToolCall *pending_tool_calls;  /* heap array, grown as tool_use blocks complete */
     int         pending_tool_count;
     int         pending_tool_cap;
+
+    /* The last finish_reason / stop_reason seen this round ("" when none),
+     * and how many tool_calls deltas arrived without an "index" (treated
+     * as index 0). Both feed the per-round log line, nothing else. */
+    char        finish[32];
+    int         index_defaulted;
 } AiToolStreamState;
 
 /* Streaming tool detection — Anthropic format */
 int ai_parse_tool_stream_anthropic(const char *chunk_json, AiToolStreamState *state);
 
-/* Streaming tool detection — OpenAI format */
+/* Streaming tool detection — OpenAI format.
+ * Returns 0 (normal chunk), 1 (finish_reason "tool_calls"), 2 (finish_reason
+ * "stop") or -1 (error). A chunk's delta.tool_calls is accumulated BEFORE its
+ * finish_reason is acted on, so a call carried by the finish chunk itself is
+ * kept; a delta without "index" is taken as index 0 (state->index_defaulted
+ * counts them). state->finish records the finish_reason. */
 int ai_parse_tool_stream_openai(const char *chunk_json, AiToolStreamState *state);
+
+/* 1 when the tool loop runs at the end of a round, else 0. OpenAI-format
+ * providers (anything but "anthropic", NULL included): whenever tool calls
+ * are pending, whatever the finish_reason said (tool_calls, stop, none),
+ * except a reply cut off at the output limit (cut_off), whose last call's
+ * arguments are incomplete. Anthropic: tool_stop (stop_reason tool_use) is
+ * still required. */
+int ai_tool_round_should_run(const char *provider, int tool_stop,
+                             int pending, int cut_off);
+
+/* The longest provider error message kept (bytes, terminator excluded). */
+#define AI_STREAM_ERROR_MSG_MAX 200
+
+/* 1 when an OpenAI-format stream chunk (the JSON after "data: ") is an error
+ * event: a top-level "error" that is an object ({"error":{"message":...,
+ * "type":...}}) or a string. msg_out (may be NULL) gets the message, or the
+ * error type, or "unknown error"; control and bidirectional-format
+ * characters are stripped, newlines and tabs become spaces, and it is cut
+ * to AI_STREAM_ERROR_MSG_MAX bytes (and to msg_size - 1) on a UTF-8
+ * boundary. Always 0 for provider "anthropic" (its error events are not
+ * handled here), for "error": null and for every other chunk. */
+int ai_stream_chunk_error(const char *provider, const char *json,
+                          char *msg_out, size_t msg_size);
 
 /* Reset/discard all partial streaming state (on error or cancellation) */
 void ai_tools_stream_reset(AiToolStreamState *state);

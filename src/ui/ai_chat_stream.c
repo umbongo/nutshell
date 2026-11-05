@@ -26,6 +26,9 @@ typedef struct {
     char provider[64];
     int tool_stop;          /* set to 1 when tool_use stop detected */
     int cut_off;            /* 1 when the provider ended the reply at its output limit */
+    int stream_error;       /* 1 when an in-stream {"error":...} event arrived */
+    char error_msg[AI_STREAM_ERROR_MSG_MAX + 1];   /* its sanitised message */
+    char finish[32];        /* finish_reason seen by a stream without tool state */
     int input_tokens;        /* actual input token count from API (0 until received) */
     int output_tokens;       /* actual output token count from API (0 until received) */
 } StreamContext;
@@ -136,7 +139,18 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     /* SSE lines start with "data: " */
     if (len < 6 || strncmp(line, "data: ", 6) != 0) return;
 
+    /* An error event already ended the stream; nothing after it counts. */
+    if (ctx->stream_error) return;
+
     const char *json = line + 6;
+    /* An in-stream error event ({"error":{"message":...}}): the stream ends
+     * and the reply says why, instead of finishing silently. */
+    if (strstr(json, "\"error\"") &&
+        ai_stream_chunk_error(ctx->stream->provider, json,
+                              ctx->error_msg, sizeof(ctx->error_msg))) {
+        ctx->stream_error = 1;
+        return;
+    }
     /* Only a chunk that carries the word can be a "length" finish: skip the
      * extra JSON parse for every other chunk of the stream. */
     if (strstr(json, "\"length\"") && ai_stream_chunk_cut_off(json))
@@ -151,15 +165,28 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
                                      content_delta, sizeof(content_delta),
                                      thinking_delta, sizeof(thinking_delta),
                                      ctx->tool_stream, ctx->provider);
-        if (rc == 2) {
-            /* Tool-use stop: signal to outer loop */
-            ctx->tool_stop = 1;
-            return;
-        }
+        /* Tool-use stop: noted for the round's log line. The chunk's text
+         * is still read below: it can ride with the finish_reason. */
+        if (rc == 2) ctx->tool_stop = 1;
     } else {
         rc = ai_parse_stream_chunk(json, content_delta, sizeof(content_delta),
                                    thinking_delta, sizeof(thinking_delta),
                                    &chunk_input_tokens, &chunk_output_tokens);
+        /* Remember the finish_reason for the round's log line. */
+        if (strstr(json, "\"finish_reason\":\"") ||
+            strstr(json, "\"finish_reason\": \"")) {
+            JsonNode *fr_root = json_parse(json);
+            if (fr_root) {
+                JsonNode *chs = json_obj_get(fr_root, "choices");
+                if (chs && chs->type == JSON_ARRAY && vec_size(&chs->as.arr) > 0) {
+                    JsonNode *c0 = (JsonNode *)vec_get(&chs->as.arr, 0);
+                    const char *fr = (c0 && c0->type == JSON_OBJECT)
+                                   ? json_obj_str(c0, "finish_reason") : NULL;
+                    if (fr) snprintf(ctx->finish, sizeof(ctx->finish), "%s", fr);
+                }
+                json_free(fr_root);
+            }
+        }
     }
 
     /* Accumulate actual token counts when provided by the API */
@@ -168,10 +195,8 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     if (chunk_output_tokens > 0)
         ctx->output_tokens += chunk_output_tokens;
 
-    if (rc == 1) {
-        /* [DONE] — stream finished */
-        return;
-    }
+    /* rc == 1 is [DONE] (no text) or a "stop" finish, whose own text is in
+     * content_delta and is posted below with every other delta. */
     if (rc < 0) return;
 
     /* Post thinking delta to UI */
@@ -210,6 +235,8 @@ static int stream_callback(const char *data, size_t len, void *userdata)
      * panel closed or undocked, app exit). */
     if (ai_stream_aborted(ctx->stream))
         return 1; /* abort stream */
+    if (ctx->stream_error)
+        return 1; /* an error event ended the stream */
 
     for (size_t i = 0; i < len; i++) {
         char c = data[i];
@@ -357,16 +384,33 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         if (ai_stream_aborted(s))
             goto out;
 
+        /* An error event inside the stream (HTTP 200, then {"error":...}). */
+        if (ctx.stream_error) {
+            char msg[1024];
+            snprintf(msg, sizeof(msg), "Provider error: %s", ctx.error_msg);
+            stream_failed = 1;
+            /* The class only: the message stays out of the log. */
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error",
+                 "stream=%u class=provider status=%d ms=%llu", stream_id,
+                 status, (unsigned long long)(GetTickCount64() - t_stream));
+            post_error_response(s, msg);
+            goto out;
+        }
+
         if (rc != 0 || status < 200 || status >= 300) {
             char msg[1024];
-            if (errbuf[0])
+            if (rc != 0 && status >= 200 && status < 300 && errbuf[0])
+                /* The body broke after a 200: the text says so itself. */
+                snprintf(msg, sizeof(msg), "%s", errbuf);
+            else if (errbuf[0])
                 snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
             else
                 snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
             stream_failed = 1;
             DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error",
                  "stream=%u class=%s status=%d ms=%llu", stream_id,
-                 rc != 0 ? "transport" : "http", status,
+                 (rc != 0 && status >= 200 && status < 300) ? "connection_lost"
+                     : rc != 0 ? "transport" : "http", status,
                  (unsigned long long)(GetTickCount64() - t_stream));
             post_error_response(s, msg);
             goto out;
@@ -403,9 +447,29 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         if (ctx.output_tokens > 0)
             total_output_tokens = ctx.output_tokens;
 
-        /* ---- Tool-use branch ---- */
-        if (ctx.tool_stop && tool_stream_ptr &&
-            tool_stream_ptr->pending_tool_count > 0) {
+        /* The round's outcome in one line: what the provider said it
+         * finished with, and whether the tool loop runs. tool_stop is the
+         * raw "finish says tool_calls/tool_use" flag; run is the decision.
+         * Counts and names only: no URL, no arguments, no text. */
+        int pending_n = tool_stream_ptr ? tool_stream_ptr->pending_tool_count : 0;
+        const char *finish_seen = tool_stream_ptr ? tool_stream_ptr->finish
+                                                  : ctx.finish;
+        int run_tools = tool_stream_ptr &&
+            ai_tool_round_should_run(s->provider, ctx.tool_stop, pending_n,
+                                     ctx.cut_off);
+        DLOG(DLOG_AI, DLOG_INFO, 0, "stream.round",
+             "stream=%u iter=%d finish=%s tool_stop=%d pending=%d run=%d",
+             stream_id, agentic.loop_iter,
+             finish_seen[0] ? finish_seen : "none", ctx.tool_stop, pending_n,
+             run_tools);
+        if (tool_stream_ptr && tool_stream_ptr->index_defaulted > 0)
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.tool_index_missing",
+                 "stream=%u iter=%d deltas=%d (read as index 0)", stream_id,
+                 agentic.loop_iter, tool_stream_ptr->index_defaulted);
+
+        /* ---- Tool-use branch: whenever calls are pending, whatever the
+         * finish_reason said (spec: Kimi trace, Task 17) ---- */
+        if (run_tools) {
 
             /* Add assistant message with tool_use blocks */
             /* ctx.full_thinking is this turn's reasoning; the builder sends it
