@@ -283,6 +283,11 @@ typedef struct {
      * Always clamped via ai_context_clamp_lines(); never 0. */
     int context_lines;
 
+    /* Seconds a tool approval card waits before it expires, from
+     * settings.ai_tool_timeout_sec (15-3600); each launched stream copies it
+     * into AiStream.tool_timeout_ms, so a change reaches later streams only. */
+    int tool_timeout_sec;
+
     /* Scratch buffers for the terminal context and the system prompt built
      * from it.  They live as long as the panel and grow with context_lines,
      * so the send paths never allocate and cannot leak on an early return.

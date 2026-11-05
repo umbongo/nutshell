@@ -62,6 +62,7 @@ typedef struct Settings {
     int  ssh_user_idle_timeout_mins; /* 0 = never; default 0 */
     int  markdown_render_enabled;    /* render AI replies as markdown */
     int  ai_max_context_lines;       /* terminal lines sent to the AI; 1-50000, default 1000 */
+    int  ai_tool_timeout_sec;        /* seconds a tool approval card waits before it expires; 15-3600, default 60 */
     int  auto_connect;                       /* connect at startup: 0 = off (default) */
     char auto_connect_session[CFG_STR_MAX];  /* session name (or host) to auto-connect */
     int  paste_confirm;                  /* confirm before pasting: 1 = on (default) */

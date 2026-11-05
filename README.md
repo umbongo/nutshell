@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,597 unit tests across 140 test files, and cppcheck reports no errors or warnings
+- 3,603 unit tests across 140 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -257,7 +257,7 @@ Tools work with Anthropic, OpenAI, DeepSeek and Moonshot (Kimi); the gate below 
 - **Auto-approve** — with Auto-approve on at **Unknown** or above, a fetch in the tab you are looking at runs without asking, until the 3-round cap below; a fetch from a background tab always asks. With Auto-approve off, or on at **Read**, it asks. The **Allowed** ceiling never holds or blocks a tool call. After 3 automatic tool rounds in a row the next fetch asks again, under the row "[Auto-approve paused after 3 automatic tool rounds]"; a typed message or a click on **Run 1 selected** resets the count
 - **The row** — shows the address without its query string (a trailing `?…` marks one that was dropped); the row replaces every non-ASCII character with �, so nothing invisible reaches it; **Details** shows the full address minus any `user:password@` part, with every non-ASCII character escaped (`\u200B`, `\U000E0041`) and control characters shown as `\x1B`, and a very long address cut with `…`
 - **Redirects** — a fetch you approved on a card does not follow a redirect to another host: it returns "redirect to another host refused; ask again with the new URL"
-- **Waiting** — Stop, Retry and closing the tab release a waiting call. A card waits at most 10 minutes, then reads "expired, not run"
+- **Waiting** — Stop, Retry and closing the tab release a waiting call. A card expires after the **Tool approval timeout** (default 60 s, **Settings > AI Assistant > Behaviour**, 15 to 3600 s), then reads "expired, not run". A change applies to cards shown after you Save; a card already waiting keeps its timeout
 
 #### How Commands Are Classified
 
@@ -718,7 +718,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,597 unit tests across 140 test files
+├── tests/                              # 3,603 unit tests across 140 test files
 │   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
 │   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
 │   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion

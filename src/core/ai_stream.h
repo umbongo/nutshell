@@ -73,6 +73,13 @@ typedef struct AiStream {
      * approval and polls it; the UI thread answers it once, by (id, gen).
      * See tool_decision.h. */
     ToolDecisionSlot decision;
+
+    /* How long a tool card waits before it expires, in ms. The panel's
+     * Settings value at launch (tool_decision_timeout_ms()), copied here
+     * like the other inputs: the thread never reads the panel, and a change
+     * saved while a card waits applies to later streams only. ai_stream_new()
+     * starts it at the 60 s default. */
+    unsigned long long tool_timeout_ms;
 } AiStream;
 
 /* Allocate a stream with both references held, a fresh id and an empty

@@ -14,6 +14,7 @@ AiStream *ai_stream_new(void)
     if (!s->body) { free(s); return NULL; }
     worker_life_init(&s->life);
     tool_decision_init(&s->decision);
+    s->tool_timeout_ms = tool_decision_timeout_ms(AI_TOOL_TIMEOUT_SEC_DEFAULT);
     s->id = worker_life_next_id();
     __atomic_add_fetch(&g_live_streams, 1, __ATOMIC_SEQ_CST);
     return s;

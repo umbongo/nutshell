@@ -116,6 +116,11 @@ void ai_chat_set_policy_default(HWND hwnd, CmdPolicy policy);
 /* Set how many terminal lines are sent to the AI as context (1-50000). */
 void ai_chat_set_context_lines(HWND hwnd, int lines);
 
+/* Set how long a tool approval card waits before it expires, in seconds
+ * (settings.ai_tool_timeout_sec, 15-3600). Applies to streams launched
+ * after the call: a waiting card keeps the value its stream started with. */
+void ai_chat_set_tool_timeout(HWND hwnd, int seconds);
+
 /* --ui-demo only: layer the canned approval queue(s) and small activity
  * flourishes onto a conversation already loaded via ai_chat_show()'s
  * initial_state or ai_chat_switch_session() (see ui_demo_build() in

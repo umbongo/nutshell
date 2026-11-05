@@ -72,6 +72,7 @@ int test_config_default_settings(void)
     ASSERT_STR_EQ(s.colour_scheme, "Onyx Synapse");
     ASSERT_STR_EQ(s.host_key_verification, "tofu");
     ASSERT_EQ(s.ai_max_context_lines, 1000);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 60);
     TEST_END();
 }
 
@@ -187,6 +188,7 @@ int test_config_roundtrip_settings(void)
     (void)snprintf(orig->settings.foreground_colour,
                    sizeof(orig->settings.foreground_colour), "%s", "#FFFFFF");
     orig->settings.ai_max_context_lines = 2500;
+    orig->settings.ai_tool_timeout_sec = 300;
 
     int rc = config_save(orig, TMP_CFG);
     ASSERT_EQ(rc, 0);
@@ -200,6 +202,7 @@ int test_config_roundtrip_settings(void)
     ASSERT_EQ(loaded->settings.logging_enabled, 1);
     ASSERT_STR_EQ(loaded->settings.foreground_colour, "#FFFFFF");
     ASSERT_EQ(loaded->settings.ai_max_context_lines, 2500);
+    ASSERT_EQ(loaded->settings.ai_tool_timeout_sec, 300);
 
     config_free(orig);
     config_free(loaded);
@@ -639,6 +642,31 @@ int test_config_load_out_of_range(void)
 
     config_free(cfg);
     remove(TMP_CFG);
+    TEST_END();
+}
+
+/* ai_tool_timeout_sec: absent keeps the 60 s default, out-of-range loads clamp
+ * to 15..3600. */
+int test_config_load_tool_timeout(void)
+{
+    TEST_BEGIN();
+    const char *cases[] = { "", "\"ai_tool_timeout_sec\": 5", "\"ai_tool_timeout_sec\": 99999",
+                            "\"ai_tool_timeout_sec\": 240", "\"ai_tool_timeout_sec\": -1" };
+    const int want[] = { 60, 15, 3600, 240, 15 };
+    for (int i = 0; i < 5; i++) {
+        FILE *f = test_fopen_private(TMP_CFG);
+        ASSERT_NOT_NULL(f);
+        fprintf(f, "{\n  \"settings\": {\n    \"font_size\": 10%s%s\n  }\n}\n",
+                cases[i][0] ? ",\n    " : "", cases[i]);
+        fclose(f);
+        Config *cfg = config_load(TMP_CFG);
+        ASSERT_NOT_NULL(cfg);
+        if (cfg) {
+            ASSERT_EQ(cfg->settings.ai_tool_timeout_sec, want[i]);
+            config_free(cfg);
+        }
+        remove(TMP_CFG);
+    }
     TEST_END();
 }
 

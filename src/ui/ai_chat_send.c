@@ -113,6 +113,9 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     strncpy(s->api_key, d->api_key, sizeof(s->api_key) - 1);
     strncpy(s->provider, d->provider, sizeof(s->provider) - 1);
     strncpy(s->custom_url, d->custom_url, sizeof(s->custom_url) - 1);
+    /* The card timeout is fixed for this stream here; the thread never
+     * reads the panel's setting. */
+    s->tool_timeout_ms = tool_decision_timeout_ms(d->tool_timeout_sec);
     int conv_ok = ai_conv_copy(&s->conv, &d->conv) == 0;
 
     /* One terminal snapshot per launch (spec 2026-11-05 decision 2), taken

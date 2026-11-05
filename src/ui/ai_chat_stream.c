@@ -79,7 +79,7 @@ static int stream_post_tool_decide(AiStream *s, unsigned gen, int loop_iter,
  * (spec decisions 15, 16, 20). Publishes before any abort check so the first
  * poll sees an abort that was already set; polls the slot every
  * AI_TOOL_DECIDE_POLL_MS (no Win32 event) until the UI answers, the stream is
- * aborted or AI_TOOL_DECIDE_TIMEOUT_MS passes. Returns the settled outcome,
+ * aborted or the stream's tool_timeout_ms (copied at launch) passes. Returns the settled outcome,
  * never PENDING. */
 static ToolDecision stream_ask_tool(AiStream *s, const AiToolCall *call,
                                     ToolSafety safety, int loop_iter)
@@ -96,7 +96,8 @@ static ToolDecision stream_ask_tool(AiStream *s, const AiToolCall *call,
     ToolDecision d;
     for (;;) {
         d = tool_decision_poll(&s->decision, gen, ai_stream_aborted(s),
-                               (unsigned long long)(GetTickCount64() - t0));
+                               (unsigned long long)(GetTickCount64() - t0),
+                               s->tool_timeout_ms);
         if (d != TOOL_DECISION_PENDING) break;
         Sleep(AI_TOOL_DECIDE_POLL_MS);
     }

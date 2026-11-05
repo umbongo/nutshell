@@ -595,16 +595,29 @@ int test_ai_stream_lost_final_message_is_found(void)
     TEST_END();
 }
 
+int test_ai_stream_new_tool_timeout_default(void)
+{
+    TEST_BEGIN();
+    /* A stream that was never given a timeout waits the 60 s default, never 0. */
+    AiStream *s = ai_stream_new();
+    ASSERT_NOT_NULL(s);
+    if (s) {
+        ASSERT_EQ((int)s->tool_timeout_ms, 60000);
+        ai_stream_discard(s);
+    }
+    TEST_END();
+}
+
 int test_ai_stream_new_slot_idle(void)
 {
     TEST_BEGIN();
     AiStream *s = ai_stream_new();
     ASSERT_NOT_NULL(s);
     if (s) {
-        ASSERT_EQ((int)tool_decision_poll(&s->decision, 0, 0, 0), (int)TOOL_DECISION_NONE);
+        ASSERT_EQ((int)tool_decision_poll(&s->decision, 0, 0, 0, 60000), (int)TOOL_DECISION_NONE);
         unsigned g = tool_decision_publish(&s->decision);
         ASSERT_TRUE(g != 0);
-        ASSERT_EQ((int)tool_decision_poll(&s->decision, g, 0, 0), (int)TOOL_DECISION_PENDING);
+        ASSERT_EQ((int)tool_decision_poll(&s->decision, g, 0, 0, 60000), (int)TOOL_DECISION_PENDING);
         ai_stream_discard(s);
     }
     TEST_END();

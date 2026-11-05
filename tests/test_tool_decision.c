@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <string.h>
 
+/* The 60 s default, in ms: what a card waits when Settings is untouched. */
+#define TD_TO 60000ULL
+
 typedef struct {
     const char *name;
     CmdPolicy policy;
@@ -98,11 +101,11 @@ int test_tool_decision_publish_gen_nonzero_and_fresh(void)
     tool_decision_init(&s);
     unsigned g1 = tool_decision_publish(&s);
     ASSERT_TRUE(g1 != 0);
-    ASSERT_EQ((int)tool_decision_poll(&s, g1, 0, 0), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g1, 0, 0, TD_TO), (int)TOOL_DECISION_PENDING);
     unsigned g2 = tool_decision_publish(&s);
     ASSERT_TRUE(g2 != 0);
     ASSERT_TRUE(g1 != g2);
-    ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, 0), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, 0, TD_TO), (int)TOOL_DECISION_PENDING);
     TEST_END();
 }
 
@@ -114,8 +117,8 @@ int test_tool_decision_publish_skips_zero_on_wrap(void)
     s.word = (0x1FFFFFFFu << 3) | (unsigned)TOOL_DECISION_APPROVED;   /* the last generation */
     unsigned g = tool_decision_publish(&s);
     ASSERT_EQ((int)g, 1);                                            /* 0 is skipped */
-    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0), (int)TOOL_DECISION_PENDING);
-    ASSERT_EQ((int)tool_decision_poll(&s, 0, 0, 0), (int)TOOL_DECISION_NONE);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0, TD_TO), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, 0, 0, 0, TD_TO), (int)TOOL_DECISION_NONE);
     ASSERT_EQ((int)tool_decision_publish(NULL), 0);
     TEST_END();
 }
@@ -132,7 +135,7 @@ int test_tool_decision_each_outcome(void)
         tool_decision_init(&s);
         unsigned g = tool_decision_publish(&s);
         ASSERT_EQ((int)tool_decision_answer(&s, g, outcomes[i]), (int)outcomes[i]);
-        ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0), (int)outcomes[i]);
+        ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0, TD_TO), (int)outcomes[i]);
     }
     TEST_END();
 }
@@ -145,7 +148,7 @@ int test_tool_decision_second_answer_loses(void)
     unsigned g = tool_decision_publish(&s);
     ASSERT_EQ((int)tool_decision_answer(&s, g, TOOL_DECISION_APPROVED), (int)TOOL_DECISION_APPROVED);
     ASSERT_EQ((int)tool_decision_answer(&s, g, TOOL_DECISION_NOT_APPROVED), (int)TOOL_DECISION_APPROVED);
-    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0), (int)TOOL_DECISION_APPROVED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0, TD_TO), (int)TOOL_DECISION_APPROVED);
     TEST_END();
 }
 
@@ -157,9 +160,9 @@ int test_tool_decision_stale_gen(void)
     unsigned g1 = tool_decision_publish(&s);
     unsigned g2 = tool_decision_publish(&s);
     ASSERT_EQ((int)tool_decision_answer(&s, g1, TOOL_DECISION_APPROVED), (int)TOOL_DECISION_NONE);
-    ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, 0), (int)TOOL_DECISION_PENDING);
-    ASSERT_EQ((int)tool_decision_poll(&s, g1, 1, 600000), (int)TOOL_DECISION_NONE);   /* a stale poll settles nothing */
-    ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, 0), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, 0, TD_TO), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g1, 1, 600000, TD_TO), (int)TOOL_DECISION_NONE);   /* a stale poll settles nothing */
+    ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, 0, TD_TO), (int)TOOL_DECISION_PENDING);
     TEST_END();
 }
 
@@ -173,7 +176,7 @@ int test_tool_decision_invalid_answer(void)
     ASSERT_EQ((int)tool_decision_answer(&s, g, TOOL_DECISION_EXPIRED), (int)TOOL_DECISION_NONE);
     ASSERT_EQ((int)tool_decision_answer(&s, g, TOOL_DECISION_NONE), (int)TOOL_DECISION_NONE);
     ASSERT_EQ((int)tool_decision_answer(&s, g, (ToolDecision)99), (int)TOOL_DECISION_NONE);
-    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0, TD_TO), (int)TOOL_DECISION_PENDING);
     ASSERT_EQ((int)tool_decision_answer(NULL, g, TOOL_DECISION_RUN), (int)TOOL_DECISION_NONE);
     TEST_END();
 }
@@ -184,9 +187,9 @@ int test_tool_decision_aborted_poll(void)
     ToolDecisionSlot s;
     tool_decision_init(&s);
     unsigned g = tool_decision_publish(&s);
-    ASSERT_EQ((int)tool_decision_poll(&s, g, 1, 0), (int)TOOL_DECISION_CANCELLED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 1, 0, TD_TO), (int)TOOL_DECISION_CANCELLED);
     ASSERT_EQ((int)tool_decision_answer(&s, g, TOOL_DECISION_APPROVED), (int)TOOL_DECISION_CANCELLED);
-    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0), (int)TOOL_DECISION_CANCELLED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0, TD_TO), (int)TOOL_DECISION_CANCELLED);
     TEST_END();
 }
 
@@ -198,7 +201,7 @@ int test_tool_decision_abort_before_publish(void)
     ToolDecisionSlot s;
     tool_decision_init(&s);
     unsigned g = tool_decision_publish(&s);
-    ASSERT_EQ((int)tool_decision_poll(&s, g, 1, 0), (int)TOOL_DECISION_CANCELLED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 1, 0, TD_TO), (int)TOOL_DECISION_CANCELLED);
     TEST_END();
 }
 
@@ -208,11 +211,54 @@ int test_tool_decision_expiry(void)
     ToolDecisionSlot s;
     tool_decision_init(&s);
     unsigned g = tool_decision_publish(&s);
-    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 599999), (int)TOOL_DECISION_PENDING);
-    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 600000), (int)TOOL_DECISION_EXPIRED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 59999, 60000), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 60000, 60000), (int)TOOL_DECISION_EXPIRED);
     ASSERT_EQ((int)tool_decision_answer(&s, g, TOOL_DECISION_APPROVED), (int)TOOL_DECISION_EXPIRED);
-    ASSERT_EQ((int)AI_TOOL_DECIDE_TIMEOUT_MS, 600000);
     ASSERT_EQ((int)AI_TOOL_DECIDE_POLL_MS, 250);
+    TEST_END();
+}
+
+int test_tool_decision_expiry_follows_timeout(void)
+{
+    TEST_BEGIN();
+    /* The same wait is pending under a longer timeout and expired under a
+     * shorter one: the slot's expiry is the value passed, not a constant. */
+    ToolDecisionSlot s;
+    tool_decision_init(&s);
+    unsigned g = tool_decision_publish(&s);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 20000, 120000), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 119999, 120000), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 120000, 120000), (int)TOOL_DECISION_EXPIRED);
+
+    unsigned g2 = tool_decision_publish(&s);
+    ASSERT_EQ((int)tool_decision_poll(&s, g2, 0, 20000, 15000), (int)TOOL_DECISION_EXPIRED);
+
+    /* A timeout of 0 or past the ceiling is clamped, never "wait forever"
+     * or "expire at once". */
+    unsigned g3 = tool_decision_publish(&s);
+    ASSERT_EQ((int)tool_decision_poll(&s, g3, 0, 0, 0), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g3, 0, 14999, 0), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g3, 0, 15000, 0), (int)TOOL_DECISION_EXPIRED);
+    unsigned g4 = tool_decision_publish(&s);
+    ASSERT_EQ((int)tool_decision_poll(&s, g4, 0, 3599999, 99999999ULL), (int)TOOL_DECISION_PENDING);
+    ASSERT_EQ((int)tool_decision_poll(&s, g4, 0, 3600000, 99999999ULL), (int)TOOL_DECISION_EXPIRED);
+    TEST_END();
+}
+
+int test_tool_decision_timeout_ms(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(AI_TOOL_TIMEOUT_SEC_MIN, 15);
+    ASSERT_EQ(AI_TOOL_TIMEOUT_SEC_MAX, 3600);
+    ASSERT_EQ(AI_TOOL_TIMEOUT_SEC_DEFAULT, 60);
+    ASSERT_EQ((int)tool_decision_timeout_ms(AI_TOOL_TIMEOUT_SEC_DEFAULT), 60000);
+    ASSERT_EQ((int)tool_decision_timeout_ms(15), 15000);
+    ASSERT_EQ((int)tool_decision_timeout_ms(3600), 3600000);
+    ASSERT_EQ((int)tool_decision_timeout_ms(14), 15000);
+    ASSERT_EQ((int)tool_decision_timeout_ms(0), 15000);
+    ASSERT_EQ((int)tool_decision_timeout_ms(-7), 15000);
+    ASSERT_EQ((int)tool_decision_timeout_ms(3601), 3600000);
+    ASSERT_EQ((int)tool_decision_timeout_ms(2000000000), 3600000);
     TEST_END();
 }
 
@@ -222,13 +268,13 @@ int test_tool_decision_late_answer_reports_winner(void)
     ToolDecisionSlot s;
     tool_decision_init(&s);
     unsigned g1 = tool_decision_publish(&s);
-    ASSERT_EQ((int)tool_decision_poll(&s, g1, 0, 600000), (int)TOOL_DECISION_EXPIRED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g1, 0, 600000, TD_TO), (int)TOOL_DECISION_EXPIRED);
     ToolDecision r = tool_decision_answer(&s, g1, TOOL_DECISION_APPROVED);
     ASSERT_EQ((int)r, (int)TOOL_DECISION_EXPIRED);
     ASSERT_TRUE(strcmp(tool_decision_row_label(r), "approved") != 0);
 
     unsigned g2 = tool_decision_publish(&s);
-    ASSERT_EQ((int)tool_decision_poll(&s, g2, 1, 0), (int)TOOL_DECISION_CANCELLED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g2, 1, 0, TD_TO), (int)TOOL_DECISION_CANCELLED);
     r = tool_decision_answer(&s, g2, TOOL_DECISION_APPROVED);
     ASSERT_EQ((int)r, (int)TOOL_DECISION_CANCELLED);
     ASSERT_TRUE(strcmp(tool_decision_row_label(r), "approved") != 0);
@@ -245,7 +291,7 @@ int test_tool_decision_answer_before_remove_order(void)
     unsigned g = tool_decision_publish(&s);
     ASSERT_EQ((int)tool_decision_answer(&s, g, TOOL_DECISION_CANCELLED), (int)TOOL_DECISION_CANCELLED);
     ASSERT_EQ((int)tool_decision_answer(&s, g, TOOL_DECISION_NOT_APPROVED), (int)TOOL_DECISION_CANCELLED);
-    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0), (int)TOOL_DECISION_CANCELLED);
+    ASSERT_EQ((int)tool_decision_poll(&s, g, 0, 0, TD_TO), (int)TOOL_DECISION_CANCELLED);
     TEST_END();
 }
 

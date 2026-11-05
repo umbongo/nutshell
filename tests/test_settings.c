@@ -143,6 +143,46 @@ int test_settings_validate_ai_max_context_lines_high(void)
     TEST_END();
 }
 
+/* ---- ai_tool_timeout_sec clamping ---------------------------------------- */
+
+int test_settings_validate_ai_tool_timeout_low(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.ai_tool_timeout_sec = 5;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+
+    s.ai_tool_timeout_sec = -100;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+
+    s.ai_tool_timeout_sec = 15;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 15);
+    TEST_END();
+}
+
+int test_settings_validate_ai_tool_timeout_high(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    config_default_settings(&s);
+    s.ai_tool_timeout_sec = 99999;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 3600);
+
+    s.ai_tool_timeout_sec = 3600;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 3600);
+
+    s.ai_tool_timeout_sec = 120;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_timeout_sec, 120);
+    TEST_END();
+}
+
 /* ---- paste_delay_ms clamping -------------------------------------------- */
 
 int test_settings_validate_paste_delay_neg(void)

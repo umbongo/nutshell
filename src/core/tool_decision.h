@@ -16,8 +16,9 @@
  * the slot every AI_TOOL_DECIDE_POLL_MS. The UI thread answers once, by
  * (stream_id, gen), with tool_decision_answer(): a single compare-and-swap
  * from PENDING to the outcome. The thread's own poll can also settle the
- * slot: an aborted stream CASes CANCELLED, a wait past
- * AI_TOOL_DECIDE_TIMEOUT_MS CASes EXPIRED. Whoever wins the CAS decides;
+ * slot: an aborted stream CASes CANCELLED, a wait past the stream's
+ * timeout (Settings > AI Assistant > Behaviour, 60 s by default, copied
+ * into the AiStream at launch) CASes EXPIRED. Whoever wins the CAS decides;
  * every later answer for that generation just reads the winner back (so a
  * late "Run" on a card that expired cannot turn into a run, and the caller
  * labels the row from what answer() returns, not from what it asked for).
@@ -61,9 +62,16 @@ typedef enum {
  *   TOOL_WRITE, TOOL_CRITICAL and any out-of-range value: ASK, always. */
 ToolGate tool_gate_decide(ToolSafety safety, CmdPolicy p, int attended);
 
-/* How long the thread waits for a card, and how often it polls the slot. */
-#define AI_TOOL_DECIDE_TIMEOUT_MS 600000u
-#define AI_TOOL_DECIDE_POLL_MS    250u
+/* How long the thread waits for a card is a setting, in seconds: 60 by
+ * default, 15 to 3600 (maintainer's decision 2026-11-05, replacing the
+ * compiled 10 minutes). How often it polls the slot is fixed. */
+#define AI_TOOL_TIMEOUT_SEC_MIN     15
+#define AI_TOOL_TIMEOUT_SEC_MAX     3600
+#define AI_TOOL_TIMEOUT_SEC_DEFAULT 60
+#define AI_TOOL_DECIDE_POLL_MS      250u
+
+/* `sec` clamped to AI_TOOL_TIMEOUT_SEC_MIN..MAX, in milliseconds. */
+unsigned long long tool_decision_timeout_ms(int sec);
 
 typedef enum {
     TOOL_DECISION_NONE = 0,      /* nothing published, or a stale generation */
@@ -92,11 +100,15 @@ unsigned tool_decision_publish(ToolDecisionSlot *s);
  * call was already settled, NONE for a stale `gen` or an invalid `a`. */
 ToolDecision tool_decision_answer(ToolDecisionSlot *s, unsigned gen, ToolDecision a);
 
-/* Thread: `aborted` -> CAS CANCELLED; else waited_ms >= AI_TOOL_DECIDE_TIMEOUT_MS
- * -> CAS EXPIRED. Returns the current state for `gen` (PENDING while
- * undecided, NONE for a stale `gen`). */
+/* Thread: `aborted` -> CAS CANCELLED; else waited_ms >= timeout_ms -> CAS
+ * EXPIRED. `timeout_ms` is the value the stream captured at launch
+ * (tool_decision_timeout_ms()); it is clamped here to the 15 s..3600 s
+ * range, so 0 never means "expire at once" nor a huge value "never".
+ * Returns the current state for `gen` (PENDING while undecided, NONE for a
+ * stale `gen`). */
 ToolDecision tool_decision_poll(ToolDecisionSlot *s, unsigned gen, int aborted,
-                                unsigned long long waited_ms);
+                                unsigned long long waited_ms,
+                                unsigned long long timeout_ms);
 
 /* The note for the tool_result of an outcome (spec decision 16): NULL for
  * RUN and APPROVED, else "The user did not approve this tool call." (TOO_MANY

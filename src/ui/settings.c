@@ -12,6 +12,7 @@
 #include "ai_prompt.h"
 #include "ai_http.h"
 #include "cmd_policy.h"
+#include "tool_decision.h"
 #include "json_parser.h"
 #include "dlog.h"
 #include "open_dir.h"
@@ -486,6 +487,11 @@ static const TooltipEntry k_tooltips[] = {
       "Start new sessions with Auto-approve on: commands up to 'Allowed' "
       "run without asking. With 'Allowed' at Critical, Save asks you to "
       "confirm. The AI panel's status line changes both per session." },
+    { IDC_AI_TOOL_TIMEOUT,
+      "How long a tool approval card waits for your answer before it "
+      "expires and the tool call is not run (15 - 3600 seconds, default 60). "
+      "A change applies to cards shown after you save; a card already "
+      "waiting keeps its timeout." },
     { IDC_SSH_IDLE_EDIT,
       "Disconnect SSH sessions after this many minutes of no user "
       "activity. 0 = never disconnect on idle. Keystrokes, mouse-wheel "
@@ -1522,6 +1528,19 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                 add_ctrl(nd, NULL, chk, NULL, SETTINGS_PAGE_AI_BEHAVIOUR, 0, 0, 1, 0, 1, 1);
             }
         }
+        {
+            /* The label is wider than the 150 px label column, so the row is
+             * full-width: the text left-aligned, the number box beside it
+             * (the tickbox-with-a-control-beside-it form). */
+            char buf[16];
+            int sec = nd->cfg->settings.ai_tool_timeout_sec;
+            if (sec < AI_TOOL_TIMEOUT_SEC_MIN || sec > AI_TOOL_TIMEOUT_SEC_MAX)
+                sec = AI_TOOL_TIMEOUT_SEC_DEFAULT;
+            (void)snprintf(buf, sizeof(buf), "%d", sec);
+            HWND lbl = make_static2(nd->hPage, "Tool approval timeout (seconds):");
+            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_TIMEOUT, ES_NUMBER);
+            add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
+        }
 
         /* ==== AI_WEB ==== */
         {
@@ -2092,6 +2111,13 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             v = GetDlgItemInt(d->hPage, IDC_AI_MAX_RESULTS, &ok, FALSE);
             if (ok && v >= 1 && v <= 20)
                 s->ai_max_search_results = (int)v;
+
+            /* Tool approval timeout: 15..3600 s; keep the stored value on a
+             * parse failure or an out-of-range entry, as the idle timeout does */
+            v = GetDlgItemInt(d->hPage, IDC_AI_TOOL_TIMEOUT, &ok, FALSE);
+            if (ok && v >= (UINT)AI_TOOL_TIMEOUT_SEC_MIN &&
+                v <= (UINT)AI_TOOL_TIMEOUT_SEC_MAX)
+                s->ai_tool_timeout_sec = (int)v;
 
             /* Permit web fetch */
             s->ai_web_fetch_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_WEB_FETCH)
