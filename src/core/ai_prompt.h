@@ -93,8 +93,8 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
  * Returns 0 on success, -1 on invalid arguments or allocation failure. */
 int ai_conv_set_system(AiConversation *conv, const char *content);
 
-/* Build the system prompt with terminal context embedded.
- * terminal_text, session_notes, system_notes may be NULL.
+/* Build the system prompt: the session's settings and rules, no terminal text.
+ * session_notes, system_notes may be NULL.
  * kind selects the opening sentences: SESSION_SSH produces exactly the text
  * it always has, and SESSION_TELNET the same text naming a telnet session;
  * SESSION_LOCAL says the shell is a local one on a Windows PC
@@ -142,12 +142,41 @@ AiAttachment *ai_attachment_dup(const AiAttachment *att);
  * last user message.
  * provider: e.g. "anthropic", "openai", NULL for generic OpenAI-compat format.
  *   For "anthropic": emits system message as top-level "system" key (required
- *   by Anthropic Messages API) and adds required "max_tokens":8096.
+ *   by Anthropic Messages API, array form with a cache_control marker) and
+ *   adds required "max_tokens":8096.
  * Returns bytes written (excluding NUL), or 0 on error. */
 size_t ai_build_request_body_ex(const AiConversation *conv,
                                 const AiAttachment *last_user_attachment,
                                 char *buf, size_t buf_size, int stream,
                                 const char *provider);
+
+/* What a request body adds around the conversation (spec 2026-11-05
+ * trust-boundary decisions 2 and 5). */
+typedef struct {
+    const char *snapshot;  /* terminal text for the last user turn; NULL or "": no block */
+    const char *delim;     /* this request's delimiter; NULL: no block, tool output unframed */
+} AiBodyFrame;
+
+/* The full builder behind ai_build_request_body_ex and _tools.
+ * tools_json: serialized tool definitions, or NULL/"" for none.
+ * frame NULL, or frame->delim NULL: no terminal block and tool results are
+ * sent unframed (content, then "\n" + tool_note when a note exists).
+ * With a delimiter: the snapshot (if non-empty) goes in a data block
+ * ("<lead>\n<delim>\n<escaped>\n<delim>") before the content of the LAST
+ * AI_ROLE_USER message, in its text part when it has an attachment, and every
+ * AI_ROLE_TOOL message is sent as a data block labelled with its tool name,
+ * its tool_note after the closing delimiter (an empty result with a note sends
+ * the note alone). conv is never modified. Anthropic's "system" is sent as an
+ * array whose block carries cache_control ephemeral whenever a system message
+ * is present, frame or not.
+ * Returns bytes written (excluding NUL), or 0 on error (including a buffer
+ * too small and an allocation failure). */
+size_t ai_build_request_body_frame(const AiConversation *conv,
+                                   const AiAttachment *last_user_attachment,
+                                   const char *tools_json,
+                                   const AiBodyFrame *frame,
+                                   char *buf, size_t buf_size, int stream,
+                                   const char *provider);
 
 /* Parse a chat completion JSON response, extract assistant message content.
  * Returns 0 on success, -1 on error. */

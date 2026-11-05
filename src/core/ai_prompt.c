@@ -1,5 +1,6 @@
 #include "ai_prompt.h"
 #include "ai_tools.h"
+#include "ai_data_block.h"
 #include "json_parser.h"
 #include "json_validate.h"
 #include "string_utils.h"
@@ -614,12 +615,110 @@ static const char *role_str(AiRole role)
     return "user";
 }
 
-size_t ai_build_request_body_ex(const AiConversation *conv,
-                                const AiAttachment *last_user_attachment,
-                                char *buf, size_t buf_size, int stream,
-                                const char *provider)
+/* The content a message is sent with. Returns msg's own text when nothing is
+ * added (*owned stays NULL), else a malloc'd string the caller frees through
+ * *owned. NULL on allocation failure. *out_len is the length. */
+static const char *frame_content(const AiMessage *msg, const AiBodyFrame *frame,
+                                 int block_here, char **owned, size_t *out_len)
+{
+    const char *content = ai_msg_content(msg);
+    size_t clen = strlen(content);
+    const char *delim = frame ? frame->delim : NULL;
+    *owned = NULL;
+    *out_len = clen;
+
+    if (msg->role == AI_ROLE_TOOL) {
+        size_t nlen = strlen(msg->tool_note);
+        if (nlen == 0) {
+            if (!delim || clen == 0) return content;
+        } else if (clen == 0) {
+            /* the note alone: no lead, no block */
+            if (delim) {
+                *owned = ai_data_block_dup(NULL, delim, NULL, 0,
+                                           msg->tool_note, out_len);
+            } else {
+                *owned = (char *)malloc(nlen + 1);
+                if (*owned) {
+                    memcpy(*owned, msg->tool_note, nlen + 1);
+                    *out_len = nlen;
+                }
+            }
+            return *owned;
+        }
+        if (!delim) {
+            /* content, then "\n" + note */
+            char *out = (char *)malloc(clen + 1 + nlen + 1);
+            if (!out) return NULL;
+            memcpy(out, content, clen);
+            out[clen] = '\n';
+            memcpy(out + clen + 1, msg->tool_note, nlen + 1);
+            *owned = out;
+            *out_len = clen + 1 + nlen;
+            return out;
+        }
+        size_t need = ai_data_lead_tool(msg->tool_name, NULL, 0);
+        char *lead = (char *)malloc(need + 1);
+        if (!lead) return NULL;
+        (void)ai_data_lead_tool(msg->tool_name, lead, need + 1);
+        *owned = ai_data_block_dup(lead, delim, content, clen, msg->tool_note,
+                                   out_len);
+        free(lead);
+        return *owned;
+    }
+
+    if (block_here) {
+        const char *snap = frame->snapshot;
+        size_t need = ai_data_lead_terminal(delim, NULL, 0);
+        char *lead = (char *)malloc(need + 1);
+        if (!lead) return NULL;
+        (void)ai_data_lead_terminal(delim, lead, need + 1);
+        size_t blen = 0;
+        char *block = ai_data_block_dup(lead, delim, snap, strlen(snap), NULL,
+                                        &blen);
+        free(lead);
+        if (!block) return NULL;
+        char *out = (char *)malloc(blen + 1 + clen + 1);
+        if (!out) { free(block); return NULL; }
+        memcpy(out, block, blen);
+        out[blen] = '\n';
+        memcpy(out + blen + 1, content, clen + 1);
+        free(block);
+        *owned = out;
+        *out_len = blen + 1 + clen;
+        return out;
+    }
+    return content;
+}
+
+/* Escape the content msg is sent with into buf at pos. Returns the new pos,
+ * or 0 on overflow or allocation failure. */
+static size_t emit_msg_content(const AiMessage *msg, const AiBodyFrame *frame,
+                               int block_here, char *buf, size_t buf_size,
+                               size_t pos)
+{
+    char *owned = NULL;
+    size_t len = 0;
+    const char *text = frame_content(msg, frame, block_here, &owned, &len);
+    if (!text) return 0;
+    pos = json_escape_string(text, len, buf, buf_size, pos, 1);
+    free(owned);
+    return pos;
+}
+
+static size_t build_body_core(const AiConversation *conv,
+                              const AiAttachment *last_user_attachment,
+                              const AiBodyFrame *frame,
+                              char *buf, size_t buf_size, int stream,
+                              const char *provider)
 {
     if (!conv || !buf || buf_size == 0 || conv->msg_count == 0) return 0;
+
+    /* The data block goes in the last user message (never a tool result). */
+    int block_idx = -1;
+    if (frame && frame->delim && frame->snapshot && frame->snapshot[0]) {
+        for (int k = conv->msg_count - 1; k >= 0; k--)
+            if (conv->messages[k].role == AI_ROLE_USER) { block_idx = k; break; }
+    }
 
     int is_anthropic = provider && strcmp(provider, "anthropic") == 0;
     size_t pos = 0;
@@ -651,13 +750,19 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
     int msg_start = 0;
     if (is_anthropic && conv->msg_count > 0
             && conv->messages[0].role == AI_ROLE_SYSTEM) {
-        const char *sys_key = ",\"system\":";
+        /* Array form so the prompt carries a cache marker (spec decision 6) */
+        const char *sys_key = ",\"system\":[{\"type\":\"text\",\"text\":";
         size_t sys_key_len = strlen(sys_key);
         if (pos + sys_key_len >= buf_size) return 0;
         memcpy(buf + pos, sys_key, sys_key_len);
         pos += sys_key_len;
         pos = json_escape_string(ai_msg_content(&conv->messages[0]), strlen(ai_msg_content(&conv->messages[0])), buf, buf_size, pos, 1);
         if (pos == 0) return 0;
+        const char *sys_close = ",\"cache_control\":{\"type\":\"ephemeral\"}}]";
+        size_t sys_close_len = strlen(sys_close);
+        if (pos + sys_close_len >= buf_size) return 0;
+        memcpy(buf + pos, sys_close, sys_close_len);
+        pos += sys_close_len;
         msg_start = 1;
     }
 
@@ -716,7 +821,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
                 memcpy(buf + pos, content_key, ck_len);
                 pos += ck_len;
 
-                pos = json_escape_string(ai_msg_content(tm), strlen(ai_msg_content(tm)), buf, buf_size, pos, 1);
+                pos = emit_msg_content(tm, frame, 0, buf, buf_size, pos);
                 if (pos == 0) return 0;
 
                 if (tm->is_tool_error) {
@@ -765,7 +870,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
             memcpy(buf + pos, tc_content, tcc_len);
             pos += tcc_len;
 
-            pos = json_escape_string(ai_msg_content(msg), strlen(ai_msg_content(msg)), buf, buf_size, pos, 1);
+            pos = emit_msg_content(msg, frame, 0, buf, buf_size, pos);
             if (pos == 0) return 0;
 
             if (pos + 1 >= buf_size) return 0;
@@ -948,7 +1053,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
             if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
             pos += (size_t)rn;
 
-            pos = json_escape_string(ai_msg_content(msg), strlen(ai_msg_content(msg)), buf, buf_size, pos, 1);
+            pos = emit_msg_content(msg, frame, i == block_idx, buf, buf_size, pos);
             if (pos == 0) return 0;
 
             /* image_url part — base64_url is already a complete data URI */
@@ -971,7 +1076,7 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
             if (rn < 0 || pos + (size_t)rn >= buf_size) return 0;
             pos += (size_t)rn;
 
-            pos = json_escape_string(ai_msg_content(msg), strlen(ai_msg_content(msg)), buf, buf_size, pos, 1);
+            pos = emit_msg_content(msg, frame, i == block_idx, buf, buf_size, pos);
             if (pos == 0) return 0;
 
             if (pos + 1 >= buf_size) return 0;
@@ -988,28 +1093,23 @@ size_t ai_build_request_body_ex(const AiConversation *conv,
     return pos;
 }
 
-size_t ai_build_request_body(const AiConversation *conv,
-                             char *buf, size_t buf_size)
-{
-    return ai_build_request_body_ex(conv, NULL, buf, buf_size, 0, NULL);
-}
-
-size_t ai_build_request_body_tools(const AiConversation *conv,
-                                    const AiAttachment *last_user_attachment,
-                                    const char *tools_json,
-                                    char *buf, size_t buf_size,
-                                    int stream, const char *provider)
+size_t ai_build_request_body_frame(const AiConversation *conv,
+                                   const AiAttachment *last_user_attachment,
+                                   const char *tools_json,
+                                   const AiBodyFrame *frame,
+                                   char *buf, size_t buf_size, int stream,
+                                   const char *provider)
 {
     if (!tools_json || tools_json[0] == '\0')
-        return ai_build_request_body_ex(conv, last_user_attachment,
-                                        buf, buf_size, stream, provider);
+        return build_body_core(conv, last_user_attachment, frame,
+                               buf, buf_size, stream, provider);
 
     /* Build without tools first to get the base body, then inject tools
      * before the closing '}' of the top-level object. */
     if (!conv || !buf || buf_size == 0) return 0;
 
-    size_t base = ai_build_request_body_ex(conv, last_user_attachment,
-                                           buf, buf_size, stream, provider);
+    size_t base = build_body_core(conv, last_user_attachment, frame,
+                                  buf, buf_size, stream, provider);
     if (base == 0) return 0;
 
     /* base points past the final '}' — remove it and append tools */
@@ -1033,6 +1133,31 @@ size_t ai_build_request_body_tools(const AiConversation *conv,
     buf[pos] = '\0';
 
     return pos;
+}
+
+size_t ai_build_request_body(const AiConversation *conv,
+                             char *buf, size_t buf_size)
+{
+    return ai_build_request_body_ex(conv, NULL, buf, buf_size, 0, NULL);
+}
+
+size_t ai_build_request_body_ex(const AiConversation *conv,
+                                const AiAttachment *last_user_attachment,
+                                char *buf, size_t buf_size, int stream,
+                                const char *provider)
+{
+    return ai_build_request_body_frame(conv, last_user_attachment, NULL, NULL,
+                                       buf, buf_size, stream, provider);
+}
+
+size_t ai_build_request_body_tools(const AiConversation *conv,
+                                    const AiAttachment *last_user_attachment,
+                                    const char *tools_json,
+                                    char *buf, size_t buf_size,
+                                    int stream, const char *provider)
+{
+    return ai_build_request_body_frame(conv, last_user_attachment, tools_json,
+                                       NULL, buf, buf_size, stream, provider);
 }
 
 int ai_parse_response_ex(const char *json, char *content_out, size_t content_size,

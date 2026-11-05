@@ -1522,7 +1522,8 @@ int test_ai_build_body_anthropic_system(void) {
     size_t n = ai_build_request_body_ex(&conv, NULL, buf, sizeof(buf), 1, "anthropic");
     ASSERT_TRUE(n > 0);
     /* System must be top-level, not in messages array */
-    ASSERT_TRUE(strstr(buf, "\"system\":\"You are helpful.\"") != NULL);
+    ASSERT_TRUE(strstr(buf, "\"system\":[{\"type\":\"text\",\"text\":\"You are helpful.\","
+                            "\"cache_control\":{\"type\":\"ephemeral\"}}]") != NULL);
     ASSERT_TRUE(strstr(buf, "\"role\":\"system\"") == NULL);
     /* User message still present */
     ASSERT_TRUE(strstr(buf, "\"role\":\"user\"") != NULL);

@@ -995,6 +995,21 @@ int test_ai_data_block_escapes_inside(void);
 int test_ai_data_lead_texts(void);
 int test_ai_data_lead_truncates_safely(void);
 
+/* test_ai_body_frame.c */
+int test_ai_body_frame_no_terminal_in_system(void);
+int test_ai_body_frame_block_in_last_user_turn_only(void);
+int test_ai_body_frame_block_with_attachment(void);
+int test_ai_body_frame_escapes_snapshot(void);
+int test_ai_body_frame_conv_untouched(void);
+int test_ai_body_frame_tool_result_framed(void);
+int test_ai_body_frame_tool_note_alone(void);
+int test_ai_body_frame_cache_control_anthropic_only(void);
+int test_ai_body_frame_null_frame_matches_ex(void);
+int test_ai_body_frame_no_snapshot(void);
+int test_ai_body_frame_no_delim_note_appended(void);
+int test_ai_body_frame_empty_tool_content_no_note(void);
+int test_ai_body_frame_overflow_returns_zero(void);
+
 #ifndef NO_SSH_LIBS
 /* test_ssh.c */
 int test_ssh_safety_checks(void);
@@ -4679,6 +4694,19 @@ int main(void) {
     failed += test_ai_data_block_escapes_inside();
     failed += test_ai_data_lead_texts();
     failed += test_ai_data_lead_truncates_safely();
+    failed += test_ai_body_frame_no_terminal_in_system();
+    failed += test_ai_body_frame_block_in_last_user_turn_only();
+    failed += test_ai_body_frame_block_with_attachment();
+    failed += test_ai_body_frame_escapes_snapshot();
+    failed += test_ai_body_frame_conv_untouched();
+    failed += test_ai_body_frame_tool_result_framed();
+    failed += test_ai_body_frame_tool_note_alone();
+    failed += test_ai_body_frame_cache_control_anthropic_only();
+    failed += test_ai_body_frame_null_frame_matches_ex();
+    failed += test_ai_body_frame_no_snapshot();
+    failed += test_ai_body_frame_no_delim_note_appended();
+    failed += test_ai_body_frame_empty_tool_content_no_note();
+    failed += test_ai_body_frame_overflow_returns_zero();
 
 #ifndef NO_SSH_LIBS
     printf("\n--- SSH ---\n");
