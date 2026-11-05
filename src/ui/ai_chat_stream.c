@@ -5,6 +5,7 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "json_parser.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -42,6 +43,79 @@ static void stream_post_text(AiStream *s, UINT msg, WPARAM wp, const char *text)
         free(chunk->delta);
         free(chunk);
     }
+}
+
+/* Post one AiToolDecideMsg to the panel. Returns 1 when the UI owns it, 0
+ * when the allocation or the post failed (nothing leaks). */
+static int stream_post_tool_decide(AiStream *s, unsigned gen, int loop_iter,
+                                   int kind, ToolSafety safety,
+                                   const AiToolCall *call)
+{
+    AiToolDecideMsg *m = (AiToolDecideMsg *)calloc(1, sizeof(*m));
+    if (!m) return 0;
+    m->stream_id = s->id;
+    m->gen = gen;
+    m->loop_iter = loop_iter;
+    m->kind = kind;
+    m->safety = safety;
+    /* -1 (a web_fetch without a url) still fills a row the user can read. */
+    (void)ai_tool_card_text(call, m->row, sizeof(m->row),
+                            m->detail, sizeof(m->detail));
+    if (!PostMessage((HWND)s->post_target, WM_AI_TOOL_DECIDE, 0, (LPARAM)m)) {
+        free(m);
+        return 0;
+    }
+    return 1;
+}
+
+/* Ask the user about one non-SAFE tool call and wait for the answer
+ * (spec decisions 15, 16, 20). Publishes before any abort check so the first
+ * poll sees an abort that was already set; polls the slot every
+ * AI_TOOL_DECIDE_POLL_MS (no Win32 event) until the UI answers, the stream is
+ * aborted or AI_TOOL_DECIDE_TIMEOUT_MS passes. Returns the settled outcome,
+ * never PENDING. */
+static ToolDecision stream_ask_tool(AiStream *s, const AiToolCall *call,
+                                    ToolSafety safety, int loop_iter)
+{
+    const unsigned gen = tool_decision_publish(&s->decision);
+    if (gen == 0) return TOOL_DECISION_NOT_APPROVED;
+
+    if (!stream_post_tool_decide(s, gen, loop_iter, AI_TOOL_DECIDE_ASK,
+                                 safety, call))
+        (void)tool_decision_answer(&s->decision, gen,
+                                   TOOL_DECISION_NOT_APPROVED);
+
+    const ULONGLONG t0 = GetTickCount64();
+    ToolDecision d;
+    for (;;) {
+        d = tool_decision_poll(&s->decision, gen, ai_stream_aborted(s),
+                               (unsigned long long)(GetTickCount64() - t0));
+        if (d != TOOL_DECISION_PENDING) break;
+        Sleep(AI_TOOL_DECIDE_POLL_MS);
+    }
+
+    if (d == TOOL_DECISION_EXPIRED)   /* a failed post here just frees it */
+        (void)stream_post_tool_decide(s, gen, loop_iter,
+                                      AI_TOOL_DECIDE_EXPIRED, safety, call);
+    /* Tool name, stream and outcome only: never the URL. */
+    DLOG(DLOG_AI, DLOG_INFO, 0, "tool.decide", "stream=%u gen=%u tool=%s outcome=%d",
+         s->id, gen, call->name, (int)d);
+    return d;
+}
+
+/* Pin an approved web_fetch to the host the user saw (spec decision 23).
+ * An unparseable url stays unpinned: the fetch refuses it itself. */
+static void stream_pin_fetch_host(AiStream *s, const AiToolCall *call)
+{
+    s->fetch.pinned_host[0] = '\0';
+    JsonNode *input = json_parse(call->input_json);
+    if (!input) return;
+    const char *url = json_obj_str(input, "url");
+    NetUrlParts parts;
+    if (url && net_url_parse(url, &parts) == 0)
+        snprintf(s->fetch.pinned_host, sizeof(s->fetch.pinned_host),
+                 "%s", parts.host);
+    json_free(input);
 }
 
 /* Process a single SSE line from the stream */
@@ -382,10 +456,38 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                              "using tool: %s", call->name);
                 post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
 
+                /* A tool that is not SAFE needs the user's say first. */
+                int pinned = 0;
+                if (tdef && tdef->safety != TOOL_SAFE) {
+                    const ToolDecision dec = stream_ask_tool(
+                        s, call, tdef->safety, agentic.loop_iter);
+                    if (dec != TOOL_DECISION_RUN &&
+                        dec != TOOL_DECISION_APPROVED) {
+                        /* Not approved: Nutshell's note, no tool run, and
+                         * not an error (spec decision 16). */
+                        const char *note = tool_decision_note(dec);
+                        results[ti].tool_use_id[0] = '\0';
+                        strncpy(results[ti].tool_use_id, call->id,
+                                sizeof(results[ti].tool_use_id) - 1);
+                        snprintf(results[ti].tool_note,
+                                 sizeof(results[ti].tool_note), "%s",
+                                 note ? note : "");
+                        results[ti].content = NULL;
+                        results[ti].is_error = 0;
+                        continue;
+                    }
+                    if (dec == TOOL_DECISION_APPROVED &&
+                        strcmp(call->name, "web_fetch") == 0) {
+                        stream_pin_fetch_host(s, call);
+                        pinned = 1;
+                    }
+                }
+
                 /* Execute (the stream's own registry snapshot and abort flag) */
                 const ULONGLONG t_tool = GetTickCount64();
                 ai_tool_execute(&s->tools, call, ai_stream_abort_flag(s),
                                 &results[ti]);
+                if (pinned) s->fetch.pinned_host[0] = '\0';
                 agentic_record_tool_call(&agentic, call->name);
                 /* The tool's name and outcome only: never its arguments or result. */
                 DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=%d ms=%llu",

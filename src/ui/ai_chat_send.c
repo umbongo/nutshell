@@ -321,6 +321,10 @@ void ai_chat_drain_stream_messages(HWND hwnd)
             if (c) { free(c->delta); free(c); }
         }
     }
+    /* 105 is posted by the stream thread for a tool card request; 104 is
+     * sent, never posted. */
+    while (PeekMessage(&m, hwnd, WM_AI_TOOL_DECIDE, WM_AI_TOOL_DECIDE, PM_REMOVE))
+        free((AiToolDecideMsg *)m.lParam);
 }
 
 /* Cancel the active AI stream: signal abort, clear busy, reset UI state.

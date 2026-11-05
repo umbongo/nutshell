@@ -134,6 +134,10 @@ typedef struct {
 /* Sent by the integration harness: returns cmd_policy_status_word() of
  * the displayed session's policy -- bits 0-7 the level, bit 8 Auto-approve. */
 #define WM_AI_GET_POLICY (WM_USER + 104)
+/* Posted by a stream's thread for a tool call that needs the user's say
+ * (spec 2026-11-05-trust-boundary-design.md decision 15). lParam: a heap
+ * AiToolDecideMsg the UI handler (or the drain) frees. */
+#define WM_AI_TOOL_DECIDE (WM_USER + 105)
 
 #define TIMER_CMD_QUEUE   2     /* Command dispatcher poll (prompt-gated) */
 #define TIMER_SCROLL_SYNC 4     /* Sync custom scrollbar with RichEdit */
@@ -441,6 +445,18 @@ typedef struct {
     unsigned stream_id;
     char *delta;
 } AiStreamChunk;
+
+/* WM_AI_TOOL_DECIDE payload. ASK: put a card up for the call published in
+ * the stream's decision slot under `gen`. EXPIRED: the thread gave up waiting
+ * on that card (same stream id and gen), so the row reads "not run" and its
+ * batch goes. `row` and `detail` come from ai_tool_card_text(). */
+enum { AI_TOOL_DECIDE_ASK = 0, AI_TOOL_DECIDE_EXPIRED = 1 };
+typedef struct {
+    unsigned   stream_id, gen;
+    int        loop_iter, kind;
+    ToolSafety safety;
+    char       row[256], detail[1024];
+} AiToolDecideMsg;
 
 /* Status-line hover/hit ids for ns_hover: 0..3 the four cells, 4 the
  * Auto-approve button; -1 stays "nothing" (spec 2026-10-18 section 3). */
