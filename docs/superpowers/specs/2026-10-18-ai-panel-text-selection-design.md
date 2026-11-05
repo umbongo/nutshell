@@ -238,6 +238,18 @@ list, a code block and a table, an `[EXEC]` segment, and an expanded Thinking bo
 maintainer reviews that screenshot in the four themes (the notes' "mockups before
 choosing" rule for UI work) before the PR leaves draft, and the gallery captures it.
 
+**Amendment (2026-11-05): the tint hue.** Text drawn on the selection tint must read at
+4.5 (the contrast gate, `tests/test_theme_contrast.c`), which the rule above could not
+give. `tokens->focus` blended at 30% pulled every surface toward a colour close to the
+text on it, and on the user bubble the bubble's own text colour tinted the bubble toward
+that text. `ui_theme_sel_hue()` now returns, off the bubble, the focus colour moved
+`UI_SEL_SHIFT` (20 L*) toward the background (darker on a dark theme, lighter on a light
+one): the same hue, so selected text keeps its contrast, while the tint stays visible
+(`tests/test_sel_contrast.c`, minimum channel step 40). On the user bubble it returns
+black or white, whichever contrasts more with `chat.user_text` (black on a tie), so the
+tint moves the bubble away from its text instead of toward it. The paint pass is
+otherwise unchanged; `ui_theme_md_role()` follows the same hue.
+
 ## 7. Tests
 
 Native (`make test`), new `tests/test_chat_copy.c` and `tests/test_text_runs.c`:

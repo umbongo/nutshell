@@ -2,6 +2,7 @@
 #include "ui_theme.h"
 #include "theme.h"
 #include "config.h"
+#include "test_blend.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -299,6 +300,190 @@ int test_ui_theme_terminal_min_contrast_by_name(void) {
         if (want[i].floor > 0.0) {
             ASSERT_TRUE(theme_contrast(t->terminal_fg, t->terminal_bg) >= want[i].floor);
         }
+    }
+    TEST_END();
+}
+
+/* ---- ui_theme_md_role -------------------------------------------------- */
+
+/* A theme with only the fields ui_theme_md_role reads set.  link and info
+ * are separate arguments: a role must start from its own hue. */
+static ThemeColors md_test_theme(unsigned int bg, unsigned int cmd_bg,
+                                 unsigned int dim, unsigned int accent,
+                                 unsigned int link, unsigned int info,
+                                 unsigned int text_main) {
+    ThemeColors c;
+    memset(&c, 0, sizeof c);
+    c.bg_primary = bg;
+    c.chat.cmd_bg = cmd_bg;
+    c.text_dim = dim;
+    c.accent = accent;
+    c.link = link;
+    c.info = info;
+    c.text_main = text_main;
+    return c;
+}
+
+/* Every surface the role is painted on clears UI_TEXT_MIN_RATIO. */
+static int md_test_clears(const ThemeColors *c, UiMdRole role, unsigned int col) {
+    unsigned int focus = c->overrides.focus ? c->overrides.focus : c->accent;
+    /* The selection tint is the focus moved UI_SEL_SHIFT L* toward the
+     * background, written out here rather than read from ui_theme.c. */
+    focus = theme_shift_lightness(focus, theme_is_dark(c->bg_primary)
+                                             ? -UI_SEL_SHIFT : UI_SEL_SHIFT);
+    unsigned int surf[4];
+    int n = 3;
+    surf[0] = c->bg_primary;
+    if (role == UI_MD_CODE) {
+        /* bg_primary ([EXEC] command text), chat.cmd_bg (inline code) and
+         * the selection tint over each of the two. */
+        surf[1] = c->chat.cmd_bg;
+        surf[2] = test_blend(focus, c->chat.cmd_bg, UI_SEL_ALPHA);
+        surf[3] = test_blend(focus, c->bg_primary, UI_SEL_ALPHA);
+        n = 4;
+    } else {
+        surf[1] = test_blend(c->text_dim, c->bg_primary, UI_DIM_TINT_ALPHA);
+        surf[2] = test_blend(focus, c->bg_primary, UI_SEL_ALPHA);
+    }
+    for (int i = 0; i < n; i++)
+        if (theme_contrast(col, surf[i]) < UI_TEXT_MIN_RATIO) return 0;
+    return 1;
+}
+
+int test_ui_theme_md_role_unchanged_when_it_clears(void) {
+    TEST_BEGIN();
+    /* White link and a bluish-white info on black: far above 4.7 on every
+     * surface of either role, and different, so a role that started from the
+     * other's hue would come back wrong. */
+    ThemeColors d = md_test_theme(0x000000, 0x101010, 0x202020, 0xFFFFFF,
+                                  0xFFFFFF, 0xE0E0FF, 0xCCCCCC);
+    ASSERT_TRUE(d.link != d.info);
+    ASSERT_TRUE(md_test_clears(&d, UI_MD_STRUCTURE, d.link));
+    ASSERT_TRUE(md_test_clears(&d, UI_MD_CODE, d.info));
+    ASSERT_EQ((int)ui_theme_md_role(&d, UI_MD_STRUCTURE), 0xFFFFFF);
+    ASSERT_EQ((int)ui_theme_md_role(&d, UI_MD_CODE), 0xE0E0FF);
+    /* Black link and a dark grey info on white, the light polarity. */
+    ThemeColors l = md_test_theme(0xFFFFFF, 0xF0F0F0, 0xE0E0E0, 0x000000,
+                                  0x000000, 0x101018, 0x333333);
+    ASSERT_TRUE(l.link != l.info);
+    ASSERT_TRUE(md_test_clears(&l, UI_MD_STRUCTURE, l.link));
+    ASSERT_TRUE(md_test_clears(&l, UI_MD_CODE, l.info));
+    ASSERT_EQ((int)ui_theme_md_role(&l, UI_MD_STRUCTURE), 0x000000);
+    ASSERT_EQ((int)ui_theme_md_role(&l, UI_MD_CODE), 0x101018);
+    TEST_END();
+}
+
+int test_ui_theme_md_role_walks_away_from_the_background(void) {
+    TEST_BEGIN();
+    /* Dark: a dim blue-grey that fails moves lighter and then clears. */
+    ThemeColors d = md_test_theme(0x101018, 0x202028, 0x404050, 0x6080C0,
+                                  0x3A3A5A, 0x3A5A3A, 0xEEEEEE);
+    UiMdRole roles[2] = { UI_MD_STRUCTURE, UI_MD_CODE };
+    for (int k = 0; k < 2; k++) {
+        unsigned int hue = roles[k] == UI_MD_CODE ? d.info : d.link;
+        ASSERT_TRUE(!md_test_clears(&d, roles[k], hue));
+        unsigned int got = ui_theme_md_role(&d, roles[k]);
+        ASSERT_TRUE(got != d.text_main);
+        ASSERT_TRUE(theme_lstar(got) > theme_lstar(hue));
+        ASSERT_TRUE(md_test_clears(&d, roles[k], got));
+    }
+    /* Light: a pale hue that fails moves darker and then clears. */
+    ThemeColors l = md_test_theme(0xF8F8F0, 0xE8E8E0, 0xB0B0A0, 0x406080,
+                                  0xB0C8A0, 0xC8B0A0, 0x111111);
+    for (int k = 0; k < 2; k++) {
+        unsigned int hue = roles[k] == UI_MD_CODE ? l.info : l.link;
+        ASSERT_TRUE(!md_test_clears(&l, roles[k], hue));
+        unsigned int got = ui_theme_md_role(&l, roles[k]);
+        ASSERT_TRUE(got != l.text_main);
+        ASSERT_TRUE(theme_lstar(got) < theme_lstar(hue));
+        ASSERT_TRUE(md_test_clears(&l, roles[k], got));
+    }
+    TEST_END();
+}
+
+/* The walk the production code takes, restated: from the role's own hue, 2 L*
+ * at a time away from the background (lighter on a dark ground, darker on a
+ * light one), the first shade that clears every surface of the role, at most
+ * 50 steps, else text_main. */
+static unsigned int md_test_expected(const ThemeColors *c, UiMdRole role) {
+    unsigned int cur = role == UI_MD_CODE ? c->info : c->link;
+    double dir = theme_is_dark(c->bg_primary) ? 2.0 : -2.0;
+    for (int step = 0; step <= 50; step++) {
+        if (step > 0) cur = theme_shift_lightness(cur, dir);
+        if (md_test_clears(c, role, cur)) return cur;
+    }
+    return c->text_main;
+}
+
+/* The walk stops at the first clearing shade: a coarser step (4 L*) would
+ * skip past it and land on a different colour.  Checked on both polarities
+ * of the synthetic themes, where the walk takes several steps, and on the
+ * four shipped themes. */
+int test_ui_theme_md_role_walks_first_clearing_step(void) {
+    TEST_BEGIN();
+    ThemeColors t[2 + NUM_UI_THEMES];
+    t[0] = md_test_theme(0x101018, 0x202028, 0x404050, 0x6080C0,
+                         0x3A3A5A, 0x3A5A3A, 0xEEEEEE);
+    t[1] = md_test_theme(0xF8F8F0, 0xE8E8E0, 0xB0B0A0, 0x406080,
+                         0xB0C8A0, 0xC8B0A0, 0x111111);
+    for (int i = 0; i < NUM_UI_THEMES; i++) t[2 + i] = *ui_theme_get(i);
+    for (int i = 0; i < 2 + NUM_UI_THEMES; i++) {
+        ASSERT_EQ((int)ui_theme_md_role(&t[i], UI_MD_STRUCTURE),
+                  (int)md_test_expected(&t[i], UI_MD_STRUCTURE));
+        ASSERT_EQ((int)ui_theme_md_role(&t[i], UI_MD_CODE),
+                  (int)md_test_expected(&t[i], UI_MD_CODE));
+    }
+    /* The synthetic themes really do walk (so the check can tell 2 L* from
+     * 4 L*), and each role starts from its own hue. */
+    ASSERT_TRUE(md_test_expected(&t[0], UI_MD_STRUCTURE) != t[0].link);
+    ASSERT_TRUE(md_test_expected(&t[0], UI_MD_CODE) != t[0].info);
+    ASSERT_TRUE(md_test_expected(&t[0], UI_MD_STRUCTURE) !=
+                md_test_expected(&t[0], UI_MD_CODE));
+    ASSERT_TRUE(md_test_expected(&t[1], UI_MD_STRUCTURE) !=
+                md_test_expected(&t[1], UI_MD_CODE));
+    TEST_END();
+}
+
+int test_ui_theme_md_role_falls_back_to_text_main(void) {
+    TEST_BEGIN();
+    /* A mid-grey ground with a black accent: the selection surface is a
+     * darker grey, and no shade of the hue reads 4.7 on it and on the ground
+     * in 50 steps either way. */
+    ThemeColors c = md_test_theme(0x808080, 0x808080, 0x808080, 0x000000,
+                                  0x909090, 0x888888, 0xABCDEF);
+    ASSERT_EQ((int)ui_theme_md_role(&c, UI_MD_STRUCTURE), 0xABCDEF);
+    ASSERT_EQ((int)ui_theme_md_role(&c, UI_MD_CODE), 0xABCDEF);
+    ASSERT_EQ((int)ui_theme_md_role(NULL, UI_MD_CODE), 0);
+    TEST_END();
+}
+
+/* The shipped themes' code colour, now that the [EXEC] command text (painted
+ * on bg_primary, selectable) is held to the same walk: Sage & Sand moved from
+ * 0xB4A7BF, the others already cleared the extra two surfaces. */
+int test_ui_theme_md_code_shipped_values(void) {
+    TEST_BEGIN();
+    static const unsigned int want[NUM_UI_THEMES] = {
+        0xA593BC, 0x6F4793, 0xBEB3C7, 0x644C7D
+    };
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        ThemeTokens t;
+        ui_theme_resolve(ui_theme_get(i), &t);
+        if (t.md_code != want[i])
+            printf("  %s: md_code 0x%06X, expected 0x%06X\n",
+                   ui_theme_get(i)->name, t.md_code, want[i]);
+        ASSERT_EQ((int)t.md_code, (int)want[i]);
+    }
+    TEST_END();
+}
+
+int test_ui_theme_md_tokens_match_md_role(void) {
+    TEST_BEGIN();
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const ThemeColors *c = ui_theme_get(i);
+        ThemeTokens t;
+        ui_theme_resolve(c, &t);
+        ASSERT_EQ((int)t.md_structure, (int)ui_theme_md_role(c, UI_MD_STRUCTURE));
+        ASSERT_EQ((int)t.md_code, (int)ui_theme_md_role(c, UI_MD_CODE));
     }
     TEST_END();
 }

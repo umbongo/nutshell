@@ -82,7 +82,13 @@ const char *ui_theme_name(int index);
 /* A colour plus its computed interaction states.  `base` is always the
  * source colour a ThemeSurface was derived from.  `label` is the text
  * colour to draw on `base`: whichever of white, bg_primary or text_main
- * has the highest contrast against it. */
+ * has the highest contrast against it.  `hover` and `pressed` are one and
+ * two UI_THEME_STEPs from `base`: with the theme polarity for bg_primary,
+ * bg_secondary, raised and link, and away from `label` for accent, success,
+ * warning, danger and info, so the label does not lose contrast on them.
+ * That holds for the shipped themes; theme_shift_lightness() clamps channels
+ * to [0x08, 0xF7], which can break it for a near-black or near-white fill
+ * (test_ui_tokens_filled_label_contrast_on_states pins the shipped four). */
 typedef struct {
     unsigned int base, hover, pressed, disabled, label;
 } ThemeSurface;
@@ -98,6 +104,10 @@ typedef struct {
      * text_dim itself is occasionally painted as a chip/badge background
      * (e.g. the "READ" safety tag) rather than only used as text (Task 10). */
     unsigned int text_dim_label;
+    /* The two markdown role colours (headings/list markers/table header text,
+     * and inline code), already walked until they read >= UI_TEXT_MIN_RATIO
+     * on every surface md_render.c paints them on: ui_theme_md_role(). */
+    unsigned int md_structure, md_code;
     unsigned int terminal_fg, terminal_bg;
     /* The terminal's colour tables for this theme (src/core/term_colors.h):
      * built from terminal_fg/terminal_bg/terminal_min_contrast by every
@@ -108,16 +118,56 @@ typedef struct {
     int is_dark;
 } ThemeTokens;
 
+/* The chat selection tint's alpha: the selection hue blended over the surface
+ * it sits on (md_render.c, the chat list view). */
+#define UI_SEL_ALPHA 0.30f
+
+/* How far the selection hue moves from the focus colour toward the
+ * background, in L* units (darker on a dark theme, lighter on a light one).
+ * Same hue, so text on the tint keeps its contrast while the tint stays
+ * visible against the surface. */
+#define UI_SEL_SHIFT 20.0
+
+/* text_dim tinted over a surface: the markdown table header fill and the dim
+ * chips of the chat list view. */
+#define UI_DIM_TINT_ALPHA 0.12f
+
+/* What the markdown role colours must reach as text on every surface they
+ * are painted on: the 4.5 WCAG floor plus a 0.2 margin. */
+#define UI_TEXT_MIN_RATIO 4.7
+
+/* The two markdown role hues: structure is the link hue (headings, list and
+ * blockquote markers, table header text), code is the info hue (inline code
+ * text, the fenced-code bar). */
+typedef enum { UI_MD_STRUCTURE, UI_MD_CODE } UiMdRole;
+
+/* The colour md_render.c paints `role` with.  It starts at the role hue
+ * (c->link / c->info) and returns the first colour that reads at least
+ * UI_TEXT_MIN_RATIO on every surface of that role, walking the hue 2 L* at a
+ * time away from the background (lighter on a dark bg_primary, darker on a
+ * light one), at most 50 steps, else c->text_main.  Surfaces:
+ *   structure: bg_primary; the table header fill (text_dim at
+ *     UI_DIM_TINT_ALPHA over bg_primary); the selection hue at UI_SEL_ALPHA
+ *     over bg_primary.
+ *   code: bg_primary (the [EXEC] command text); chat.cmd_bg (inline code);
+ *     the selection hue at UI_SEL_ALPHA over chat.cmd_bg and over
+ *     bg_primary (selected text on either).
+ * The blends are rgb_alpha()'s truncating float blend (src/ui/ns_draw.c). */
+unsigned int ui_theme_md_role(const ThemeColors *c, UiMdRole role);
+
 /* Resolve `base` into a complete token set.  Call once, when the theme is
  * chosen or changed; `out` may then be read from freely by UI code. */
 void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out);
 
 /* The hue the chat selection highlight blends, at 30%, over the surface it
  * sits on (spec docs/superpowers/specs/2026-10-18-ai-panel-text-selection-
- * design.md section 6): the focus token -- except on the user bubble, which
- * is filled with the accent the focus token is drawn from, so a focus tint
- * would vanish there; the bubble's own text colour is the hue instead.
- * Packed 0x00RRGGBB like every token. */
+ * design.md section 6, amended 2026-11-05).  Anywhere but the user bubble it
+ * is the focus token moved UI_SEL_SHIFT L* toward the background: the same
+ * hue, so selected text keeps its contrast, and still visible on the surface.
+ * On the user bubble, which is filled with the accent the focus token is
+ * drawn from, it is black or white, whichever contrasts more with
+ * chat.user_text (black on a tie): the tint pushes the bubble away from its
+ * own text instead of toward it.  Packed 0x00RRGGBB like every token. */
 unsigned int ui_theme_sel_hue(const ThemeTokens *t, int on_user_bubble);
 
 #endif /* NUTSHELL_UI_THEME_H */

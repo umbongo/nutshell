@@ -5,20 +5,11 @@
  * must land at least MIN_STEP channel-steps away from that surface. */
 #include "test_framework.h"
 #include "ui_theme.h"
+#include "theme.h"
+#include "test_blend.h"
 #include <stdio.h>
 #include <stdlib.h>
-
-/* rgb_alpha() (src/ui/ns_draw.c) on packed 0x00RRGGBB: per channel
- * fg * a + bg * (1 - a), truncated. */
-static unsigned int blend(unsigned int fg, unsigned int bg, float a)
-{
-    unsigned int out = 0;
-    for (int sh = 16; sh >= 0; sh -= 8) {
-        float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
-        out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
-    }
-    return out;
-}
+#include <string.h>
 
 /* Sum of the per-channel differences. */
 static int dist(unsigned int x, unsigned int y)
@@ -29,7 +20,6 @@ static int dist(unsigned int x, unsigned int y)
     return d;
 }
 
-#define SEL_ALPHA 0.30f
 #define MIN_STEP  40
 
 int test_sel_highlight_visible_on_every_surface(void)
@@ -39,7 +29,7 @@ int test_sel_highlight_visible_on_every_surface(void)
         const ThemeColors *c = ui_theme_get(t);
         ThemeTokens k;
         ui_theme_resolve(c, &k);
-        unsigned int header = blend(c->text_dim, c->bg_primary, 0.12f);
+        unsigned int header = test_blend(c->text_dim, c->bg_primary, UI_DIM_TINT_ALPHA);
         unsigned int surf[5] = { c->bg_primary, c->chat.cmd_bg,
                                  k.bg_secondary.base, header,
                                  c->chat.user_bubble };
@@ -49,7 +39,7 @@ int test_sel_highlight_visible_on_every_surface(void)
         static const char *const name[5] = { "panel", "code", "thinking",
                                              "table header", "user bubble" };
         for (int i = 0; i < 5; i++) {
-            int d = dist(blend(hue[i], surf[i], SEL_ALPHA), surf[i]);
+            int d = dist(test_blend(hue[i], surf[i], UI_SEL_ALPHA), surf[i]);
             if (d < MIN_STEP)
                 printf("  %s: highlight on the %s is only %d from it\n",
                        c->name, name[i], d);
@@ -59,13 +49,59 @@ int test_sel_highlight_visible_on_every_surface(void)
     TEST_END();
 }
 
-int test_sel_hue_is_focus_except_on_the_bubble(void)
+int test_sel_hue_is_shifted_focus_except_on_the_bubble(void)
+{
+    TEST_BEGIN();
+    for (int t = 0; t < NUM_UI_THEMES; t++) {
+        const ThemeColors *c = ui_theme_get(t);
+        ThemeTokens k;
+        ui_theme_resolve(c, &k);
+
+        /* Off the bubble: the focus colour moved UI_SEL_SHIFT L* toward the
+         * background (darker on a dark theme, lighter on a light one). */
+        unsigned int want = theme_shift_lightness(
+            k.focus, k.is_dark ? -UI_SEL_SHIFT : UI_SEL_SHIFT);
+        unsigned int got = ui_theme_sel_hue(&k, 0);
+        ASSERT_EQ(got, want);
+        ASSERT_TRUE(got != k.focus);
+        if (k.is_dark) { ASSERT_TRUE(theme_lstar(got) < theme_lstar(k.focus)); }
+        else           { ASSERT_TRUE(theme_lstar(got) > theme_lstar(k.focus)); }
+
+        /* On the bubble: black or white, whichever reads better against the
+         * bubble's text, black on a tie. */
+        double cb = theme_contrast(0x000000, k.chat.user_text);
+        double cw = theme_contrast(0xFFFFFF, k.chat.user_text);
+        ASSERT_EQ(ui_theme_sel_hue(&k, 1), cw > cb ? 0xFFFFFFu : 0x000000u);
+    }
+    ASSERT_EQ(ui_theme_sel_hue(NULL, 0), 0);
+    ASSERT_EQ(ui_theme_sel_hue(NULL, 1), 0);
+    TEST_END();
+}
+
+/* The bubble rule on hand-picked inputs, so the test does not restate the
+ * production expression: white text gets a black selection, black text a
+ * white one, and the grey where the two contrasts cross decides the rest.
+ * No 8-bit grey ties exactly: 0x757575 reads 4.61 against white and 4.56
+ * against black (white wins), 0x767676 reads 4.54 and 4.62 (black wins), so
+ * the pair pins the crossover to one grey step. */
+int test_sel_hue_on_the_bubble_picks_black_or_white(void)
 {
     TEST_BEGIN();
     ThemeTokens k;
-    ui_theme_resolve(ui_theme_get(0), &k);
-    ASSERT_EQ(ui_theme_sel_hue(&k, 0), k.focus);
-    ASSERT_EQ(ui_theme_sel_hue(&k, 1), k.chat.user_text);
-    ASSERT_EQ(ui_theme_sel_hue(NULL, 0), 0);
+    memset(&k, 0, sizeof k);
+
+    k.chat.user_text = 0xFFFFFFu;
+    ASSERT_EQ(ui_theme_sel_hue(&k, 1), 0x000000u);
+    k.chat.user_text = 0x000000u;
+    ASSERT_EQ(ui_theme_sel_hue(&k, 1), 0xFFFFFFu);
+
+    k.chat.user_text = 0x757575u;
+    ASSERT_TRUE(theme_contrast(0xFFFFFFu, 0x757575u) >
+                theme_contrast(0x000000u, 0x757575u));
+    ASSERT_EQ(ui_theme_sel_hue(&k, 1), 0xFFFFFFu);
+    k.chat.user_text = 0x767676u;
+    ASSERT_TRUE(theme_contrast(0x000000u, 0x767676u) >
+                theme_contrast(0xFFFFFFu, 0x767676u));
+    ASSERT_EQ(ui_theme_sel_hue(&k, 1), 0x000000u);
     TEST_END();
 }
