@@ -3160,6 +3160,11 @@ int test_ui_tokens_resolve_null_safe(void);
 int test_ui_tokens_colour_gate(void);
 int test_ui_tokens_scale_gate(void);
 
+/* test_pw_prompt_layout.c */
+int test_pw_layout_today_unchanged(void);
+int test_pw_layout_text_row(void);
+int test_pw_text_crlf(void);
+
 /* test_ns_layout.c */
 int test_ns_button_layout_with_icon_no_overlap_96(void);
 int test_ns_button_layout_with_icon_no_overlap_192(void);
@@ -7566,6 +7571,9 @@ int main(void) {
         failed += test_net_url_resolve_relative();
         failed += test_net_url_resolve_refuses();
         failed += test_net_url_display();
+        failed += test_pw_layout_today_unchanged();
+        failed += test_pw_layout_text_row();
+        failed += test_pw_text_crlf();
     }
 
     printf("\nTests Run: %d, Failed: %d\n", _tf_run, _tf_failed);
