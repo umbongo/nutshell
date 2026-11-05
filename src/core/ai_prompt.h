@@ -51,6 +51,7 @@ typedef struct {
     char tool_call_id[64];    /* set on ROLE_TOOL: the id this result is for */
     char tool_name[64];       /* set on ROLE_TOOL: tool name (for display) */
     int  is_tool_error;       /* set on ROLE_TOOL: 1 if this is an error result */
+    char tool_note[AI_TOOL_NOTE_MAX]; /* ROLE_TOOL: Nutshell's own text, outside the data block */
 
     /* For ROLE_ASSISTANT messages that contain tool_use blocks */
     AiToolCall *tool_calls;   /* heap-allocated array, NULL when unused */

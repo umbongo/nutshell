@@ -338,9 +338,9 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                     results[ti].tool_use_id[0] = '\0';
                     strncpy(results[ti].tool_use_id, call->id,
                             sizeof(results[ti].tool_use_id) - 1);
-                    results[ti].content = _strdup(rate_err);
-                    results[ti].content_len = results[ti].content
-                                           ? strlen(results[ti].content) : 0;
+                    /* Nutshell's own text: a note, no data block. */
+                    snprintf(results[ti].tool_note,
+                             sizeof(results[ti].tool_note), "%s", rate_err);
                     results[ti].is_error = 1;
                     DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=0 rate_limited=1",
                          stream_id, call->name);

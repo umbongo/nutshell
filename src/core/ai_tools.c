@@ -415,13 +415,9 @@ int ai_tool_execute(const AiToolRegistry *reg, const AiToolCall *call,
     const AiToolDef *tool = ai_tools_find(reg, call->name);
     if (!tool) {
         /* Unknown tool — produce an error result */
-        char msg[AI_TOOL_NAME_MAX + 32];
-        snprintf(msg, sizeof(msg), "Unknown tool: %s", call->name);
-        size_t msg_len = strlen(msg);
-        result->content = (char *)malloc(msg_len + 1);
-        if (!result->content) return -1;
-        memcpy(result->content, msg, msg_len + 1);
-        result->content_len = msg_len;
+        /* Nutshell's own text: it goes in tool_note, not content. */
+        snprintf(result->tool_note, sizeof(result->tool_note),
+                 "Unknown tool: %s", call->name);
         result->is_error = 1;
         result->was_truncated = 0;
         return -1;
@@ -431,6 +427,23 @@ int ai_tool_execute(const AiToolRegistry *reg, const AiToolCall *call,
                            &result->content, &result->content_len,
                            &result->was_truncated);
     result->is_error = (rc != 0) ? 1 : 0;
+
+    /* A failure's text is Nutshell's own (a refusal, a limit, "no such host")
+     * for every tool but web_search, whose errors may quote the provider's
+     * response and so stay with the data. */
+    if (result->is_error && strcmp(call->name, "web_search") != 0) {
+        size_t n = result->content ? result->content_len : 0;
+        if (n > AI_TOOL_NOTE_MAX - 1) {
+            n = AI_TOOL_NOTE_MAX - 1;
+            while (n > 0 && ((unsigned char)result->content[n] & 0xC0) == 0x80)
+                n--;
+        }
+        if (n > 0) memcpy(result->tool_note, result->content, n);
+        result->tool_note[n] = '\0';
+        free(result->content);
+        result->content = NULL;
+        result->content_len = 0;
+    }
     return rc;
 }
 

@@ -2878,6 +2878,19 @@ int test_agentic_add_tool_results(void);
 int test_agentic_conversation_full(void);
 int test_agentic_cancel_before_tool(void);
 int test_agentic_truncation_warning(void);
+/* test_ai_agentic_cap.c */
+int test_cap_all_quotes(void);
+int test_cap_control_bytes_stripped(void);
+int test_cap_utf8_boundary(void);
+int test_cap_under_limit_untouched(void);
+int test_cap_null_content_is_noop(void);
+int test_cap_appends_to_existing_note(void);
+int test_cap_exact_limit_not_cut(void);
+int test_cap_full_note_drops_marker_safely(void);
+int test_json_escaped_len_matches_escape_string(void);
+int test_add_tool_results_stores_note_and_caps(void);
+int test_tool_execute_error_goes_to_note(void);
+int test_tool_execute_web_search_error_stays_content(void);
 
 /* test_token_usage.c */
 int test_token_anthropic_message_start_input_tokens(void);
@@ -6543,6 +6556,18 @@ int main(void) {
     failed += test_agentic_conversation_full();
     failed += test_agentic_cancel_before_tool();
     failed += test_agentic_truncation_warning();
+    failed += test_cap_all_quotes();
+    failed += test_cap_control_bytes_stripped();
+    failed += test_cap_utf8_boundary();
+    failed += test_cap_under_limit_untouched();
+    failed += test_cap_null_content_is_noop();
+    failed += test_cap_appends_to_existing_note();
+    failed += test_cap_exact_limit_not_cut();
+    failed += test_cap_full_note_drops_marker_safely();
+    failed += test_json_escaped_len_matches_escape_string();
+    failed += test_add_tool_results_stores_note_and_caps();
+    failed += test_tool_execute_error_goes_to_note();
+    failed += test_tool_execute_web_search_error_stays_content();
 
     printf("\n--- Token Usage ---\n");
     failed += test_token_anthropic_message_start_input_tokens();

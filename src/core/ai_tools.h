@@ -10,6 +10,7 @@
 #define AI_TOOL_RESULT_MAX     (1024 * 1024)  /* 1MB dynamic buffer cap */
 #define AI_TOOL_DESC_MAX       512
 #define AI_TOOL_SCHEMA_MAX     2048
+#define AI_TOOL_NOTE_MAX       256   /* Nutshell's own text about a result */
 
 #define AI_TOOL_LOOP_MAX       5
 #define AI_TOOL_SEARCH_MAX     3
@@ -45,6 +46,10 @@ typedef struct {
     size_t content_len;
     int is_error;
     int was_truncated;
+    /* Nutshell's own words about this result (a refusal, a rate limit, the
+     * truncation line), never tool output: sent after the data block, not
+     * inside it. Inline, so there is nothing to free or copy. */
+    char tool_note[AI_TOOL_NOTE_MAX];
 } AiToolResult;
 
 typedef struct {

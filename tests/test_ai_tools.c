@@ -532,11 +532,12 @@ int test_ai_tool_execute_not_found(void)
 
     ASSERT_EQ(rc, -1);
     ASSERT_EQ(result.is_error, 1);
-    ASSERT_NOT_NULL(result.content);
-    ASSERT_NOT_NULL(strstr(result.content, "Unknown tool"));
-    ASSERT_NOT_NULL(strstr(result.content, "no_such_tool"));
+    /* Nutshell's own text: in tool_note, not content */
+    ASSERT_NULL(result.content);
+    ASSERT_EQ(result.content_len, 0);
+    ASSERT_NOT_NULL(strstr(result.tool_note, "Unknown tool"));
+    ASSERT_NOT_NULL(strstr(result.tool_note, "no_such_tool"));
 
-    free(result.content);
     TEST_END();
 }
 
@@ -1038,5 +1039,90 @@ int test_ai_stream_anthropic_invalid_json(void)
     ASSERT_EQ(rc, -1);
 
     ai_tools_stream_reset(&state);
+    TEST_END();
+}
+
+/* ---- Error text goes to tool_note, except web_search's -------------------- */
+
+/* tool_data is the text to return; the call fails (-1) with it. */
+static int mock_execute_fail_with_data(const char *input_json, void *tool_data,
+                                       volatile int *cancel_flag,
+                                       char **result_buf, size_t *result_len,
+                                       int *was_truncated)
+{
+    (void)cancel_flag;
+    (void)input_json;
+    const char *text = (const char *)tool_data;
+    *result_buf = malloc(strlen(text) + 1);
+    if (!*result_buf) return -1;
+    strcpy(*result_buf, text);
+    *result_len = strlen(text);
+    *was_truncated = 0;
+    return -1;
+}
+
+static int run_failing_tool(const char *name, const char *text, AiToolResult *out)
+{
+    AiToolRegistry reg;
+    ai_tools_init(&reg);
+    AiToolDef t = make_tool(name, "d", SIMPLE_SCHEMA);
+    t.execute = mock_execute_fail_with_data;
+    t.tool_data = (void *)text;
+    ai_tools_register(&reg, &t);
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    snprintf(call.id, sizeof(call.id), "toolu_e");
+    snprintf(call.name, sizeof(call.name), "%s", name);
+    return ai_tool_execute(&reg, &call, NULL, out);
+}
+
+int test_tool_execute_error_goes_to_note(void)
+{
+    TEST_BEGIN();
+    AiToolResult r;
+    ASSERT_EQ(run_failing_tool("web_fetch", "Refused: x", &r), -1);
+    ASSERT_NULL(r.content);
+    ASSERT_EQ(r.content_len, 0);
+    ASSERT_STR_EQ(r.tool_note, "Refused: x");
+    ASSERT_EQ(r.is_error, 1);
+
+    ASSERT_EQ(run_failing_tool("read_debug_log", "call limit reached", &r), -1);
+    ASSERT_NULL(r.content);
+    ASSERT_STR_EQ(r.tool_note, "call limit reached");
+
+    /* unknown tool name */
+    AiToolRegistry reg;
+    ai_tools_init(&reg);
+    AiToolCall call;
+    memset(&call, 0, sizeof(call));
+    snprintf(call.id, sizeof(call.id), "toolu_u");
+    snprintf(call.name, sizeof(call.name), "nope");
+    ASSERT_EQ(ai_tool_execute(&reg, &call, NULL, &r), -1);
+    ASSERT_NULL(r.content);
+    ASSERT_TRUE(r.tool_note[0] != '\0');
+    ASSERT_EQ(r.is_error, 1);
+
+    /* a long error is cut to 255 bytes on a UTF-8 boundary */
+    char longtxt[400];
+    memset(longtxt, 'x', sizeof(longtxt));
+    longtxt[sizeof(longtxt) - 1] = '\0';
+    /* a 3-byte euro sign straddling byte 255: bytes 253..255 */
+    memcpy(longtxt + 253, "\xE2\x82\xAC", 3);
+    ASSERT_EQ(run_failing_tool("web_fetch", longtxt, &r), -1);
+    ASSERT_EQ(strlen(r.tool_note), 253);
+    TEST_END();
+}
+
+int test_tool_execute_web_search_error_stays_content(void)
+{
+    TEST_BEGIN();
+    AiToolResult r;
+    ASSERT_EQ(run_failing_tool("web_search", "HTTP 500: body", &r), -1);
+    ASSERT_NOT_NULL(r.content);
+    if (r.content) ASSERT_STR_EQ(r.content, "HTTP 500: body");
+    ASSERT_EQ(r.content_len, 14);
+    ASSERT_STR_EQ(r.tool_note, "");
+    ASSERT_EQ(r.is_error, 1);
+    free(r.content);
     TEST_END();
 }

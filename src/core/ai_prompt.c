@@ -203,6 +203,7 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->tool_call_id[0] = '\0';
     m->tool_name[0] = '\0';
     m->is_tool_error = 0;
+    m->tool_note[0] = '\0';
     m->tool_calls = NULL;
     m->n_tool_calls = 0;
     conv->msg_count++;
