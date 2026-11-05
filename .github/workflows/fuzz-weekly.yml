@@ -21,8 +21,10 @@ permissions:
   contents: read
 
 concurrency:
+  # Never cancel a run in progress: a manual dispatch must not kill the
+  # scheduled run (the group is per workflow and ref, so it queues behind it).
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   fuzz-scheduled:

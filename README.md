@@ -738,7 +738,7 @@ Always clean before building to ensure a full rebuild. Use plain `make` only if 
 | `make` | Uncompressed build (~9.7 MB), useful for debugging |
 | `make test` | Run unit tests natively on the build host |
 | `make -j test` | The same, incremental and parallel (one object per source under `build/test`) |
-| `make test SAN=1` | The suite under AddressSanitizer, UBSan and LeakSanitizer (`build/test-san`, Linux only); any report fails it |
+| `make test SAN=1` | The suite under AddressSanitizer, UBSan and LeakSanitizer (`build/test-san`, Linux only); ASan and LeakSanitizer fail the run, UBSan reports (`runtime error:`) print but do not, so grep the output; the `Sanitizers` check fails on any report |
 | `make wintest` | Win32 icon-renderer tests (runs directly on Windows, under Wine on Linux) |
 | `make lint` | Static analysis with cppcheck |
 | `make lint-gate` | The cppcheck gate the `Lint` check runs |

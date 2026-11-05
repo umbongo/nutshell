@@ -196,12 +196,15 @@ TEST_SRCS_TEXT   = $(sort $(TEST_SRCS))
 
 # $(call write-stamp,path,text): at parse time, create the directory and
 # rewrite the file only when its text differs, so its mtime moves only on a
-# real change.  Written only when a goal in STAMP_GOALS was asked for.
+# real change.  Written only when a goal in STAMP_GOALS was asked for: the
+# test and fuzz goals and the runner itself, $(TEST_TARGET) (read where it has
+# its final value, after the SAN override).  Any other explicit file goal, say
+# build/test/src/core/x.o, leaves the stamps alone: use `make test`.
 # The current text is read with `cat`, not `$(file <...)`: GNU make 4.3's
 # `$(file <)` sometimes keeps the trailing newline (it depends on the text's
 # length), which made the stamp look changed on every run and rebuilt
 # everything.
-STAMP_GOALS = test fuzz fuzz-run fuzz-long
+STAMP_GOALS = test fuzz fuzz-run fuzz-long $(TEST_TARGET)
 define write-stamp
 $(if $(filter $(STAMP_GOALS),$(MAKECMDGOALS)),$(shell mkdir -p $(dir $(1)))$(if $(subst $(2),,$(shell cat $(1) 2>/dev/null))$(subst $(shell cat $(1) 2>/dev/null),,$(2)),$(file >$(1),$(2))))
 endef
@@ -232,9 +235,10 @@ FUZZ_OBJ_SAN = -fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover
 FUZZ_BIN_SAN = -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined
 FUZZ_OBJS    = $(APP_SRCS:%.c=$(FUZZ_DIR)/obj/%.o)
 # What a failing run prints from its log: the seed line, the first line of an
-# ==PID==ERROR header, the stack frames and the summary.  Never the Base64 or
+# ==PID==ERROR header (libFuzzer's own headers have a space: ==PID== ERROR),
+# the stack frames and the summary.  Never the Base64 or
 # hex dump of the input, nor the MS: mutation lines.
-FUZZ_LOG_FILTER = ^INFO: Seed:|^==[0-9]+==(ERROR|WARNING)|^ *\#[0-9]+ 0x[0-9a-f]+ |^SUMMARY:
+FUZZ_LOG_FILTER = ^INFO: Seed:|^==[0-9]+== ?(ERROR|WARNING)|^ *\#[0-9]+ 0x[0-9a-f]+ |^SUMMARY:
 
 # The same two stamps as the test build: flags.stamp (compiler and flags) is a
 # prerequisite of every object, srcs.stamp (the source list) only of the
