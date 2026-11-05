@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.62 \
+**Version**: v1.2.63 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,574 unit tests across 139 test files, and cppcheck reports no errors or warnings
+- 3,575 unit tests across 139 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -716,7 +716,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,574 unit tests across 139 test files
+├── tests/                              # 3,575 unit tests across 139 test files
 │   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
 │   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
 │   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion
