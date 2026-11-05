@@ -4763,9 +4763,14 @@ int test_classify_open_quote_first_word_overrun(void) {
         "$&<&declare -p\"", "x;\"cat", "a&'b", "$&<&\"declare -p", NULL
     };
     for (int i = 0; cmds[i]; i++) {
-        ASSERT_TRUE((int)cmd_classify(cmds[i], CMD_PLATFORM_LINUX) >= (int)CMD_READ);
-        ASSERT_TRUE((int)cmd_classify(cmds[i], CMD_PLATFORM_UNKNOWN) >= (int)CMD_READ);
-        ASSERT_TRUE(cmd_classify_mask(cmds[i], CMD_PLATFORM_LINUX) != 0u);
+        /* An open-quote junk line is never READ: it classifies UNKNOWN (the
+         * values were read off the actual output, not assumed). */
+        ASSERT_EQ((int)cmd_classify(cmds[i], CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+        ASSERT_EQ((int)cmd_classify(cmds[i], CMD_PLATFORM_UNKNOWN), (int)CMD_UNKNOWN);
+        ASSERT_TRUE((cmd_classify_mask(cmds[i], CMD_PLATFORM_LINUX) &
+                     CMD_MASK_OF(CMD_UNKNOWN)) != 0u);
+        ASSERT_TRUE((cmd_classify_mask(cmds[i], CMD_PLATFORM_UNKNOWN) &
+                     CMD_MASK_OF(CMD_UNKNOWN)) != 0u);
     }
     TEST_END();
 }
