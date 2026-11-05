@@ -125,4 +125,32 @@ int conn_prompt_slot_claim(ConnPromptSlot *s, void *req, unsigned seq);
 /* 1 when an SSH attempt must ask for a password: password auth and nothing saved. */
 int conn_prompt_wants_password(int auth_is_key, const char *saved_password);
 
+/* What a connect-thread UI prompt asks for. HOSTKEY is a yes/no decision;
+ * the other three carry a typed secret. */
+typedef enum {
+    CONN_UI_HOSTKEY,
+    CONN_UI_PASSPHRASE,
+    CONN_UI_PASSWORD,
+    CONN_UI_KBDINT
+} ConnUiKind;
+
+/* 1 for PASSPHRASE, PASSWORD and KBDINT, else 0. */
+int conn_ui_kind_has_secret(ConnUiKind kind);
+
+/* The typed answer that may be saved to the profile if authentication
+ * succeeds (spec 2, "Save tick"). */
+#define CONN_SAVE_MAX 256
+typedef struct {
+    char pw[CONN_SAVE_MAX];
+    int  ticked;
+} ConnSaveCandidate;
+
+/* The latest typed password-like answer wins: wipes what was kept, then
+ * keeps `typed` (cut to CONN_SAVE_MAX-1 bytes) only when `ticked` and
+ * `typed` is non-NULL. NULL-safe. */
+void conn_save_note(ConnSaveCandidate *c, const char *typed, int ticked);
+
+/* Wipes the candidate and clears the tick. NULL-safe. */
+void conn_save_clear(ConnSaveCandidate *c);
+
 #endif /* NUTSHELL_CONN_PROMPT_H */

@@ -307,7 +307,6 @@ static void conn_job_release(ConnJob *j)
  * that is already correct, just not the prettiest possible UI -- not
  * worth it here.
  */
-typedef enum { CONN_UI_HOSTKEY, CONN_UI_PASSPHRASE, CONN_UI_PASSWORD } ConnUiKind;
 
 typedef struct ConnUiRequest {
     ConnUiKind kind;

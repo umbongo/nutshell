@@ -2478,6 +2478,8 @@ int test_conn_prompt_stale_seq_is_refused_by_a_newer_request(void);
 int test_conn_prompt_seq_is_never_zero(void);
 int test_conn_prompt_null_is_safe(void);
 int test_conn_prompt_wants_password(void);
+int test_conn_ui_kind_has_secret(void);
+int test_conn_save_note_latest_wins(void);
 
 /* test_ssh_auth_plan.c */
 int test_ssh_auth_parse(void);
@@ -7127,6 +7129,8 @@ int main(void) {
     failed += test_conn_prompt_seq_is_never_zero();
     failed += test_conn_prompt_null_is_safe();
     failed += test_conn_prompt_wants_password();
+    failed += test_conn_ui_kind_has_secret();
+    failed += test_conn_save_note_latest_wins();
     failed += test_ssh_auth_parse();
     failed += test_ssh_auth_sequence_table();
     failed += test_ssh_auth_attempt_cap();
