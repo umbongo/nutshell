@@ -42,10 +42,276 @@ void ai_chat_settle_batch_if_done(AiChatData *d, CmdBatch *batch)
     int batch_id = batch->id;
     int has_runnable = chat_approval_next_approved(&batch->q) >= 0;
 
+    /* A tool batch is never removed with its call unanswered (spec decision
+     * 20: every removal answers the slot). Run and Deny have already
+     * answered by now, so this is a read-back that changes nothing; it only
+     * acts for a caller that forgot. chat_approval_next_approved() skips a
+     * tool entry, so has_runnable is 0 and no dispatch or continue follows. */
+    if (cmd_batch_is_tool(batch))
+        (void)ai_chat_tool_slot_answer(d, batch, TOOL_DECISION_NOT_APPROVED);
+
     chat_msg_batch_settle(&d->msg_list, batch_id);
     if (!has_runnable && d->active_state)
         cmd_batch_remove(&d->active_state->batches, batch_id);
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
+}
+
+/* ---- Tool cards (trust boundary spec decisions 14, 15, 20, 22) ---- */
+
+/* Answer the decision slot of tool call (stream_id, gen). NONE when the
+ * stream is gone. */
+static ToolDecision tool_slot_answer_ids(AiChatData *d, unsigned stream_id,
+                                         unsigned gen, ToolDecision answer)
+{
+    if (!d || stream_id == 0) return TOOL_DECISION_NONE;
+    AiStream *s = ai_stream_table_find(&d->streams, stream_id, NULL);
+    if (!s) return TOOL_DECISION_NONE;
+    return tool_decision_answer(&s->decision, gen, answer);
+}
+
+ToolDecision ai_chat_tool_slot_answer(AiChatData *d, const CmdBatch *batch,
+                                      ToolDecision answer)
+{
+    if (!batch || !cmd_batch_is_tool(batch)) return TOOL_DECISION_NONE;
+    return tool_slot_answer_ids(d, batch->tool_stream_id, batch->tool_gen,
+                                answer);
+}
+
+/* Label every row of displayed batch `batch_id` from the slot's outcome. */
+static void tool_rows_set_outcome(AiChatData *d, int batch_id, ToolDecision res)
+{
+    for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+        if (it->type != CHAT_ITEM_COMMAND || !it->u.cmd.tool ||
+            it->u.cmd.batch != batch_id)
+            continue;
+        chat_msg_set_tool_outcome(it, (int)res);
+        it->dirty = 1;
+    }
+}
+
+/* The displayed session has stopped waiting on a card: the activity line goes
+ * back to Processing, but only from Waiting, so a Stop or error that already
+ * moved it on is left alone. */
+static void tool_wait_over(AiChatData *d)
+{
+    if (d->activity.phase != ACTIVITY_WAITING) return;
+    chat_activity_set_phase(&d->activity, ACTIVITY_PROCESSING,
+                            (float)GetTickCount() / 1000.0f);
+}
+
+/* Run (APPROVED) or Deny (NOT_APPROVED) on a tool card. Spec decision 20,
+ * "Order of operations": answer the slot FIRST and read the CAS result; the
+ * rows are labelled from that result (a click after the thread expired or
+ * cancelled the call says so, never "approved"); only then is the entry
+ * marked and the batch settled and removed. No dispatch and no continue
+ * message: chat_approval_next_approved() skips a tool entry. */
+void ai_chat_tool_card_answer(AiChatData *d, CmdBatch *batch, ToolDecision answer)
+{
+    if (!d || !batch || !d->active_state) return;
+    const int run = (answer == TOOL_DECISION_APPROVED);
+    const int batch_id = batch->id;
+
+    const ToolDecision res = ai_chat_tool_slot_answer(d, batch, answer);
+    tool_rows_set_outcome(d, batch_id, res);
+
+    for (int i = 0; i < batch->q.count; i++) {
+        if (!batch->q.entries[i].tool) continue;
+        if (run) chat_approval_approve(&batch->q, i);
+        else     chat_approval_deny(&batch->q, i);
+    }
+    for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
+        if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.tool &&
+            !it->u.cmd.settled && it->u.cmd.batch == batch_id)
+            it->u.cmd.approved = run ? 1 : 0;
+    }
+
+    /* A Run the thread actually took is an attended round. */
+    if (run && res == TOOL_DECISION_APPROVED)
+        ai_tool_rounds_reset(d->active_state);
+
+    ai_chat_settle_batch_if_done(d, batch);   /* frees batch */
+
+    tool_wait_over(d);
+    ai_chat_maybe_start_next_batch(d);        /* no-op while the stream is busy */
+}
+
+/* WM_AI_TOOL_DECIDE (spec decision 15). Never waits; frees `m` on every
+ * path. */
+void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
+{
+    if (!m) return;
+    m->row[sizeof(m->row) - 1] = '\0';
+    m->detail[sizeof(m->detail) - 1] = '\0';
+
+    void *owner_ptr = NULL;
+    AiStream *stream = d ? ai_stream_table_find(&d->streams, m->stream_id,
+                                                &owner_ptr) : NULL;
+    if (!stream) {
+        /* Stale: stopped, retried, tab closed or panel rebuilt. The thread
+         * sees its own abort flag. */
+        free(m);
+        return;
+    }
+    AiSessionState *owner = (AiSessionState *)owner_ptr;
+    if (!owner) {
+        (void)tool_decision_answer(&stream->decision, m->gen,
+                                   TOOL_DECISION_NOT_APPROVED);
+        free(m);
+        return;
+    }
+    const int displayed = (owner == d->active_state);
+
+    if (m->kind == AI_TOOL_DECIDE_EXPIRED) {
+        /* The thread gave up on the card: its row reads "not run" and the
+         * batch goes. */
+        CmdBatch *b = NULL;
+        for (int bi = 0; bi < owner->batches.count; bi++) {
+            CmdBatch *c = owner->batches.b[bi];
+            if (c->tool_stream_id == m->stream_id && c->tool_gen == m->gen) {
+                b = c;
+                break;
+            }
+        }
+        if (b) {
+            if (displayed) tool_rows_set_outcome(d, b->id, TOOL_DECISION_EXPIRED);
+            for (int i = 0; i < b->q.count; i++)
+                if (b->q.entries[i].tool) chat_approval_deny(&b->q, i);
+            if (displayed) {
+                ai_chat_settle_batch_if_done(d, b);   /* frees b */
+            } else {
+                cmd_batch_remove(&owner->batches, b->id);
+            }
+        }
+        if (displayed) {
+            tool_wait_over(d);
+            ai_chat_maybe_start_next_batch(d);
+        } else if (owner->activity_phase == (int)ACTIVITY_WAITING) {
+            owner->activity_phase = (int)ACTIVITY_PROCESSING;
+        }
+        free(m);
+        return;
+    }
+
+    if (m->kind != AI_TOOL_DECIDE_ASK) {
+        (void)tool_decision_answer(&stream->decision, m->gen,
+                                   TOOL_DECISION_NOT_APPROVED);
+        free(m);
+        return;
+    }
+
+    /* The displayed session's live policy, read now, as WM_AI_RESPONSE does
+     * for a new batch; a background session is always attended. */
+    const CmdPolicy p = displayed ? d->approval_q.policy : owner->policy;
+    /* The round key is recorded for every owner, a background one included
+     * (it is attended whatever the count says): a later Run click on that
+     * card resets the count, and a second call of the same round must still
+     * be judged on the count this round started with (decision 22). */
+    const int capped = ai_tool_rounds_attended(owner, m->stream_id,
+                                               m->loop_iter,
+                                               stream->tool_auto_rounds);
+    const int attended = !displayed || capped;
+
+    if (tool_gate_decide(m->safety, p, attended) == TOOL_GATE_RUN) {
+        (void)tool_decision_answer(&stream->decision, m->gen,
+                                   TOOL_DECISION_RUN);
+        /* SAFE tools never count. Only a displayed call can run here (a
+         * background owner is always attended); the round was recorded by
+         * ai_tool_rounds_attended() above. */
+        if (displayed && m->safety != TOOL_SAFE)
+            ai_tool_rounds_ran_unattended(owner, m->stream_id, m->loop_iter);
+        free(m);
+        return;
+    }
+
+    /* ASK. When only the round cap forced it, say so once. */
+    if (displayed && tool_gate_decide(m->safety, p, 0) == TOOL_GATE_RUN &&
+        ai_tool_rounds_take_pause_row(owner)) {
+        char pause_row[96];
+        ai_tool_pause_row(pause_row, sizeof(pause_row), stream->tool_auto_rounds);
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, pause_row);
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    }
+
+    /* A tool batch never evicts another card. */
+    if (cmd_batch_full(&owner->batches)) {
+        (void)tool_decision_answer(&stream->decision, m->gen,
+                                   TOOL_DECISION_TOO_MANY);
+        free(m);
+        return;
+    }
+    CmdBatch *b = cmd_batch_add(&owner->batches, NULL, NULL);
+    if (!b) {
+        (void)tool_decision_answer(&stream->decision, m->gen,
+                                   TOOL_DECISION_NOT_APPROVED);
+        free(m);
+        return;
+    }
+    b->tool_stream_id = m->stream_id;
+    b->tool_gen = m->gen;
+    if (chat_approval_add_tool(&b->q, m->row, m->detail,
+                               (CmdSafetyLevel)m->safety) < 0) {
+        /* Answer the slot first, then drop the batch (decision 20). */
+        (void)tool_decision_answer(&stream->decision, m->gen,
+                                   TOOL_DECISION_NOT_APPROVED);
+        cmd_batch_remove(&owner->batches, b->id);
+        free(m);
+        return;
+    }
+
+    if (displayed) {
+        ai_chat_append_batch_command_items(&d->msg_list, b);
+        chat_activity_set_phase(&d->activity, ACTIVITY_WAITING,
+                                (float)GetTickCount() / 1000.0f);
+        if (d->hChatList) chat_listview_reset_cmd_expand(d->hChatList);
+        ai_chat_relayout(d);
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    } else {
+        /* Restored by the session switch (activity_phase). */
+        owner->activity_phase = (int)ACTIVITY_WAITING;
+    }
+    free(m);
+}
+
+/* The sweep (spec decision 20: every batch removal answers). Answer every tool
+ * card of `state` CANCELLED, oldest first, then remove it: the slot FIRST, so
+ * the stream thread's wait ends before the card it was waiting on is gone.
+ * The displayed session's rows are labelled from the CAS result (a card the
+ * thread had already expired or taken says so; a stream that is already gone
+ * reads "cancelled") and settled; a background session has no rows. A command
+ * batch is never touched. The batch array shifts down on every remove, so the
+ * index only advances past a batch that stays. */
+void ai_chat_cancel_tool_batches(AiChatData *d, AiSessionState *state)
+{
+    if (!d || !state) return;
+    const int displayed = (state == d->active_state);
+    int swept = 0;
+
+    int i = 0;
+    while (i < state->batches.count) {
+        CmdBatch *b = state->batches.b[i];
+        if (!cmd_batch_is_tool(b)) { i++; continue; }
+
+        const int batch_id = b->id;
+        ToolDecision res = ai_chat_tool_slot_answer(d, b, TOOL_DECISION_CANCELLED);
+        if (res == TOOL_DECISION_NONE) res = TOOL_DECISION_CANCELLED;
+        if (displayed) {
+            tool_rows_set_outcome(d, batch_id, res);
+            (void)chat_msg_batch_settle(&d->msg_list, batch_id);
+        }
+        cmd_batch_remove(&state->batches, batch_id);   /* frees b */
+        swept++;
+    }
+    if (swept == 0) return;
+
+    /* No card is left to wait on. A caller that goes on to stop or restart
+     * the stream sets the phase itself (idle or processing); this keeps the
+     * line from reading "Waiting for your decision" for one that does not. */
+    if (displayed) {
+        tool_wait_over(d);
+        if (d->hChatList) chat_listview_invalidate(d->hChatList);
+    } else if (state->activity_phase == (int)ACTIVITY_WAITING) {
+        state->activity_phase = (int)ACTIVITY_PROCESSING;
+    }
 }
 
 /* line_clear_mode is the caller's (ai_chat_dispatch_tick's) already-decided
@@ -112,7 +378,11 @@ static void execute_command(AiChatData *d, const char *cmd,
  * ai_chat_maybe_start_next_batch()). */
 void ai_chat_dispatch_start(AiChatData *d, int batch_id)
 {
-    if (!d || !d->active_state || d->dispatch_active) return;
+    /* Never while the session's stream is busy (spec decision 21): no batch
+     * finishes during a stream, so no continue message is ever produced
+     * while busy. An approved row stays APPROVED, and
+     * ai_chat_maybe_start_next_batch() picks it up when the stream ends. */
+    if (!d || !d->active_state || d->dispatch_active || ACTIVE_BUSY(d)) return;
 
     CmdBatch *batch = cmd_batch_find(&d->active_state->batches, batch_id);
     if (!batch || chat_approval_next_approved(&batch->q) < 0) return;

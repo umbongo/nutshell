@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "net_guard.h"
 #include <string.h>
+#include <ctype.h>
 #include <stdlib.h>
 
 static const unsigned char *v4(unsigned a, unsigned b, unsigned c, unsigned d)
@@ -513,5 +514,386 @@ int test_net_url_display(void)
     ASSERT_STR_EQ(out, "");
     ASSERT_EQ(net_url_display("x", NULL, 10), (size_t)0);
     ASSERT_EQ(net_url_display("x", out, 0), (size_t)0);
+    TEST_END();
+}
+
+/* True when s is well-formed UTF-8 (no overlongs checked; enough for the
+ * cut-boundary assertions below). */
+static int nt_valid_utf8(const char *s)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        int extra = *p < 0x80 ? 0 : (*p >> 5) == 6 ? 1 : (*p >> 4) == 14 ? 2
+                  : (*p >> 3) == 30 ? 3 : -1;
+        int i;
+        if (extra < 0) return 0;
+        p++;
+        for (i = 0; i < extra; i++, p++)
+            if ((*p & 0xC0) != 0x80) return 0;
+    }
+    return 1;
+}
+
+int test_net_url_display_marked(void)
+{
+    TEST_BEGIN();
+    char out[256];
+    char big[400];
+    size_t n;
+
+    /* a dropped query is marked */
+    n = net_url_display_marked("https://a.test/p?key=secret", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p?\xE2\x80\xA6");
+    ASSERT_EQ(n, strlen(out));
+    ASSERT_TRUE(strstr(out, "secret") == NULL);
+
+    /* an empty query is still a dropped query */
+    net_url_display_marked("https://a.test/p?", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p?\xE2\x80\xA6");
+
+    /* no query: unchanged */
+    n = net_url_display_marked("https://a.test/p", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p");
+    ASSERT_EQ(n, (size_t)16);
+
+    /* a fragment alone is dropped without a mark */
+    net_url_display_marked("https://a.test/p#frag", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p");
+
+    /* a '?' after the fragment starts nothing */
+    net_url_display_marked("https://a.test/p#f?x=1", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p");
+
+    /* userinfo is dropped, query too */
+    net_url_display_marked("https://user:pw@a.test/p?q=1", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p?\xE2\x80\xA6");
+    ASSERT_TRUE(strstr(out, "pw") == NULL);
+
+    /* "://" inside the query is no scheme: the userinfo is still dropped */
+    net_url_display_marked("user:pw@host/p?x=http://y", out, sizeof out);
+    ASSERT_STR_EQ(out, "host/p?\xE2\x80\xA6");
+
+    /* nor is "://" inside the path, or after a fragment */
+    net_url_display_marked("user:pw@host/p://x", out, sizeof out);
+    ASSERT_STR_EQ(out, "host/p://x");
+    ASSERT_TRUE(strstr(out, "user:pw") == NULL);
+    net_url_display_marked("user:pw@host#http://y", out, sizeof out);
+    ASSERT_STR_EQ(out, "host");
+    net_url_display_marked("https://u:pw@a.test/p://x?q=1", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p://x?\xE2\x80\xA6");
+
+    /* a long path is cut and marked with U+2026, never "..." */
+    memcpy(big, "https://a.test/", 15);
+    memset(big + 15, 'p', 185);
+    big[200] = '\0';
+    n = net_url_display_marked(big, out, sizeof out);
+    ASSERT_EQ(n, strlen(out));
+    ASSERT_TRUE(n >= 3);
+    ASSERT_STR_EQ(out + n - 3, "\xE2\x80\xA6");
+    ASSERT_TRUE(strstr(out, "...") == NULL);
+    ASSERT_TRUE(nt_valid_utf8(out));
+    ASSERT_EQ(n, (size_t)(NET_URL_DISPLAY_MAX + 3));
+
+    /* a cut that would split a multi-byte character backs up */
+    memset(big, 'a', 77);
+    memcpy(big + 77, "\xE2\x82\xAC", 3);     /* euro sign spans bytes 77..79 */
+    memcpy(big + 80, "\xE2\x82\xAC", 3);     /* and another, 80..82 */
+    memset(big + 83, 'b', 50);
+    big[133] = '\0';
+    n = net_url_display_marked(big, out, sizeof out);
+    ASSERT_TRUE(nt_valid_utf8(out));
+    ASSERT_STR_EQ(out + n - 3, "\xE2\x80\xA6");
+
+    /* long path and a query: both marks, query last */
+    memcpy(big, "https://a.test/", 15);
+    memset(big + 15, 'p', 185);
+    big[200] = '?';
+    memcpy(big + 201, "k=v", 4);
+    n = net_url_display_marked(big, out, sizeof out);
+    ASSERT_STR_EQ(out + n - 7, "\xE2\x80\xA6?\xE2\x80\xA6");
+    ASSERT_TRUE(strstr(out, "k=v") == NULL);
+
+    /* a control is removed; every non-ASCII character (bidi included) shows as U+FFFD */
+    net_url_display_marked("https://a.test/a\x01" "b\xE2\x80\xAE" "c", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/ab\xEF\xBF\xBD" "c");
+
+    /* invisible characters never reach the row: one U+FFFD per code point */
+    net_url_display_marked("https://a.test/p\xE2\x80\x8B" "a\xEF\xBB\xBF" "b\xC2\xAD" "c\xF3\xA0\x81\x81" "d", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p\xEF\xBF\xBD" "a\xEF\xBF\xBD" "b\xEF\xBF\xBD" "c\xEF\xBF\xBD" "d");
+    ASSERT_TRUE(strstr(out, "\xE2\x80\x8B") == NULL);
+    ASSERT_TRUE(strstr(out, "\xEF\xBB\xBF") == NULL);
+    ASSERT_TRUE(strstr(out, "\xC2\xAD") == NULL);
+    ASSERT_TRUE(strstr(out, "\xF3\xA0\x81\x81") == NULL);
+    ASSERT_TRUE(nt_valid_utf8(out));
+    /* an ordinary accented letter is replaced too; the row's own marks stay */
+    net_url_display_marked("https://a.test/caf\xC3\xA9?q=\xE2\x80\x8B", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/caf\xEF\xBF\xBD?\xE2\x80\xA6");
+    /* invalid UTF-8: one U+FFFD per bad byte, overlong and surrogate forms included */
+    net_url_display_marked("https://a.test/a\xFF" "b\x80" "c\xE2\x80", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/a\xEF\xBF\xBD" "b\xEF\xBF\xBD" "c\xEF\xBF\xBD\xEF\xBF\xBD");
+    net_url_display_marked("https://a.test/\xC0\x80\xED\xA0\x80", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD\xEF\xBF\xBD");
+    /* userinfo with non-ASCII is dropped, not replaced */
+    net_url_display_marked("https://u\xE2\x80\x8B:pw@a.test/p", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p");
+    /* a long path of replaced characters is cut on a character boundary */
+    {
+        char u[400];
+        memcpy(u, "https://a.test/", 15);
+        for (n = 0; n < 100; n++) memcpy(u + 15 + n * 3, "\xE2\x80\x8B", 3);
+        u[15 + 300] = '\0';
+        n = net_url_display_marked(u, out, sizeof out);
+        ASSERT_TRUE(nt_valid_utf8(out));
+        ASSERT_STR_EQ(out + n - 3, "\xE2\x80\xA6");
+        ASSERT_TRUE(strstr(out, "\xE2\x80\x8B") == NULL);
+    }
+    net_url_display_marked("https://a.test/a\r\nb\tc?x", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/abc?\xE2\x80\xA6");
+
+    /* small caps: NUL-terminated, within cap, valid UTF-8 */
+    for (n = 1; n < 24; n++) {
+        char small[32];
+        size_t w;
+        memset(small, 'x', sizeof small);
+        w = net_url_display_marked("https://a.test/path?q=secret", small, n);
+        ASSERT_TRUE(strlen(small) < n);
+        ASSERT_EQ(w, strlen(small));
+        ASSERT_TRUE(nt_valid_utf8(small));
+    }
+    ASSERT_EQ(net_url_display_marked("x", out, 0), (size_t)0);
+    ASSERT_EQ(net_url_display_marked("x", NULL, 10), (size_t)0);
+    n = net_url_display_marked(NULL, out, sizeof out);
+    ASSERT_EQ(n, (size_t)0);
+    ASSERT_STR_EQ(out, "");
+
+    /* net_url_display itself still ends in ASCII dots */
+    n = net_url_display("https://a.test/p?key=secret", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p");
+    TEST_END();
+}
+
+int test_net_url_detail(void)
+{
+    TEST_BEGIN();
+    char out[1100];
+    char big[1600];
+    size_t n;
+
+    /* userinfo removed, query and fragment kept */
+    n = net_url_detail("https://u:pw@a.test/p?k=v#f", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p?k=v#f");
+    ASSERT_EQ(n, strlen(out));
+    net_url_detail("https://u:pw@a.test/p?k=v", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p?k=v");
+
+    /* the last '@' of the authority ends the userinfo; one past the path does not */
+    net_url_detail("http://a@b@example.com/p", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://example.com/p");
+    net_url_detail("http://example.com/p@q?x=a@b", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://example.com/p@q?x=a@b");
+    net_url_detail("http://host?u@x", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://host?u@x");
+
+    /* no scheme */
+    net_url_detail("user:pw@host/p", out, sizeof out);
+    ASSERT_STR_EQ(out, "host/p");
+
+    net_url_detail("user:pw@host/p?x=http://y", out, sizeof out);
+    ASSERT_STR_EQ(out, "host/p?x=http://y");
+    net_url_detail("user:pw@host/p://x", out, sizeof out);
+    ASSERT_STR_EQ(out, "host/p://x");
+    ASSERT_TRUE(strstr(out, "user:pw") == NULL);
+    net_url_detail("user:pw@host#http://y", out, sizeof out);
+    ASSERT_STR_EQ(out, "host#http://y");
+    net_url_detail("https://u:pw@a.test/p://x?q=1", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p://x?q=1");
+
+    /* a bidi override inside the userinfo goes with the userinfo */
+    net_url_detail("http://us\xE2\x80\xAE" "er:pw@host/", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://host/");
+
+    /* C0 and DEL as \xNN, uppercase hex */
+    net_url_detail("https://a.test/\x01", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/\\x01");
+    net_url_detail("https://a.test/\x1B[2J\x7F\x0A\x09", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/\\x1B[2J\\x7F\\x0A\\x09");
+    net_url_detail("https://a.test/\x1F", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/\\x1F");
+
+    /* bidi controls as \uXXXX, uppercase hex */
+    net_url_detail("https://a.test/\xE2\x80\xAE", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/\\u202E");
+    net_url_detail("a\xE2\x80\xAA" "b\xE2\x80\xAB" "c\xE2\x80\xAC" "d\xE2\x80\xAD", out, sizeof out);
+    ASSERT_STR_EQ(out, "a\\u202Ab\\u202Bc\\u202Cd\\u202D");
+    net_url_detail("\xE2\x81\xA6\xE2\x81\xA7\xE2\x81\xA8\xE2\x81\xA9", out, sizeof out);
+    ASSERT_STR_EQ(out, "\\u2066\\u2067\\u2068\\u2069");
+    net_url_detail("\xE2\x80\x8E\xE2\x80\x8F", out, sizeof out);
+    ASSERT_STR_EQ(out, "\\u200E\\u200F");
+
+    /* C1 controls (UTF-8 C2 80..9F) are escaped too */
+    net_url_detail("a\xC2\x85" "b\xC2\x9F", out, sizeof out);
+    ASSERT_STR_EQ(out, "a\\u0085b\\u009F");
+
+    /* every non-ASCII code point is escaped: neighbours of the bidi ranges,
+     * ordinary letters, invisible characters (BMP as \uXXXX, others as \UXXXXXXXX) */
+    net_url_detail("\xE2\x80\xA9\xE2\x80\xAF\xE2\x81\xA5\xE2\x81\xAA\xE2\x80\x8D", out, sizeof out);
+    ASSERT_STR_EQ(out, "\\u2029\\u202F\\u2065\\u206A\\u200D");
+    net_url_detail("http://a.test/caf\xC3\xA9\xE2\x82\xAC", out, sizeof out);
+    ASSERT_STR_EQ(out, "http://a.test/caf\\u00E9\\u20AC");
+    net_url_detail("https://a.test/p\xE2\x80\x8B" "a\xEF\xBB\xBF" "b\xC2\xAD" "c\xF3\xA0\x81\x81" "d?q=\xF3\xA0\x81\x82", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p\\u200Ba\\uFEFFb\\u00ADc\\U000E0041d?q=\\U000E0042");
+    ASSERT_TRUE(strstr(out, "\xE2\x80\x8B") == NULL);
+    ASSERT_TRUE(strstr(out, "\xF3\xA0") == NULL);
+    net_url_detail("\xF0\x9F\x98\x80\xF4\x8F\xBF\xBF", out, sizeof out);
+    ASSERT_STR_EQ(out, "\\U0001F600\\U0010FFFF");
+    /* the userinfo is still removed whatever it holds */
+    net_url_detail("https://u\xE2\x80\x8B:pw@a.test/\xE2\x80\x8B", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/\\u200B");
+
+    /* an invalid or truncated UTF-8 byte is \xNN: stray continuation, lead
+     * without continuation, overlong, surrogate, above U+10FFFF, 0xFF */
+    net_url_detail("a\xFF" "b\x80" "c", out, sizeof out);
+    ASSERT_STR_EQ(out, "a\\xFFb\\x80c");
+    net_url_detail("a\xE2\x80", out, sizeof out);
+    ASSERT_STR_EQ(out, "a\\xE2\\x80");
+    net_url_detail("\xC0\x80", out, sizeof out);
+    ASSERT_STR_EQ(out, "\\xC0\\x80");
+    net_url_detail("\xED\xA0\x80", out, sizeof out);
+    ASSERT_STR_EQ(out, "\\xED\\xA0\\x80");
+    net_url_detail("\xF4\x90\x80\x80", out, sizeof out);
+    ASSERT_STR_EQ(out, "\\xF4\\x90\\x80\\x80");
+    net_url_detail("\xE0\x80\x80", out, sizeof out);
+    ASSERT_STR_EQ(out, "\\xE0\\x80\\x80");
+
+    /* a fitting URL is never marked */
+    memcpy(big, "https://a.test/", 15);
+    memset(big + 15, 'p', 1000);
+    big[1015] = '\0';
+    n = net_url_detail(big, out, sizeof out);
+    ASSERT_EQ(n, (size_t)1015);
+    ASSERT_STR_EQ(out, big);
+
+    /* cap 8: NUL-terminated within cap */
+    memset(out, 'x', sizeof out);
+    n = net_url_detail("https://a.test/path", out, 8);
+    ASSERT_TRUE(strlen(out) < 8);
+    ASSERT_EQ(n, strlen(out));
+    ASSERT_TRUE(nt_valid_utf8(out));
+
+    /* a long URL into a small cap ends with U+2026, valid UTF-8, no partial escape */
+    {
+        const char *u = "https://a.test/\x01\x01\x01\x01\x01\x01\x01\x01";
+        char small[24];
+        size_t cap;
+        for (cap = 1; cap <= sizeof small; cap++) {
+            memset(small, 'x', sizeof small);
+            n = net_url_detail(u, small, cap);
+            ASSERT_TRUE(strlen(small) < cap);
+            ASSERT_EQ(n, strlen(small));
+            ASSERT_TRUE(nt_valid_utf8(small));
+            if (cap >= 4) {
+                const char *tail = small + n - 3;
+                ASSERT_TRUE(n >= 3);
+                ASSERT_STR_EQ(tail, "\xE2\x80\xA6");
+                /* every backslash in the kept text starts a whole \xNN */
+                {
+                    const char *p;
+                    for (p = small; *p && p < small + n - 3; p++) {
+                        if (*p == '\\') {
+                            ASSERT_EQ(p[1], 'x');
+                            ASSERT_EQ(p[2], '0');
+                            ASSERT_EQ(p[3], '1');
+                            p += 3;
+                        }
+                    }
+                }
+            }
+        }
+        /* cap 21 leaves 17 bytes of text before the 3-byte mark: 15 + one whole \x01 would be 19, so one escape is dropped */
+        memset(small, 'x', sizeof small);
+        n = net_url_detail(u, small, 21);
+        ASSERT_STR_EQ(small, "https://a.test/\xE2\x80\xA6");
+    }
+
+    /* a long URL into the 1024-byte detail buffer */
+    {
+        char d[1024];
+        memcpy(big, "https://a.test/", 15);
+        memset(big + 15, 'p', 1500);
+        big[1515] = '\0';
+        n = net_url_detail(big, d, sizeof d);
+        ASSERT_EQ(n, strlen(d));
+        ASSERT_EQ(n, (size_t)1023);
+        ASSERT_STR_EQ(d + n - 3, "\xE2\x80\xA6");
+        ASSERT_TRUE(nt_valid_utf8(d));
+    }
+
+    /* a character's escape is never split by the cut */
+    {
+        char small[48];
+        net_url_detail("https://a.test/\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC", small, 28);
+        ASSERT_TRUE(nt_valid_utf8(small));
+        ASSERT_STR_EQ(small, "https://a.test/\\u20AC\xE2\x80\xA6");
+        net_url_detail("https://a.test/\xF3\xA0\x81\x81\xF3\xA0\x81\x81", small, 30);
+        ASSERT_STR_EQ(small, "https://a.test/\\U000E0041\xE2\x80\xA6");
+        net_url_detail("https://a.test/\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC", small, 16);
+        ASSERT_TRUE(nt_valid_utf8(small));
+        /* every cap: valid UTF-8, no partial escape (a backslash is followed by a whole escape) */
+        {
+            size_t cap;
+            const char *u = "https://a.test/\xE2\x82\xAC\xF3\xA0\x81\x81\xFF\xE2\x82\xAC";
+            for (cap = 1; cap <= sizeof small; cap++) {
+                const char *p;
+                memset(small, 'x', sizeof small);
+                n = net_url_detail(u, small, cap);
+                ASSERT_TRUE(strlen(small) < cap);
+                ASSERT_TRUE(nt_valid_utf8(small));
+                for (p = small; *p; p++) {
+                    if (*p == '\\') {
+                        int ok = (p[1] == 'x' && isxdigit((unsigned char)p[2]) && isxdigit((unsigned char)p[3])) ||
+                                 (p[1] == 'u' && isxdigit((unsigned char)p[2]) && isxdigit((unsigned char)p[5])) ||
+                                 (p[1] == 'U' && isxdigit((unsigned char)p[2]) && isxdigit((unsigned char)p[9]));
+                        ASSERT_TRUE(ok);
+                    }
+                }
+            }
+        }
+    }
+
+    n = net_url_detail(NULL, out, sizeof out);
+    ASSERT_EQ(n, (size_t)0);
+    ASSERT_STR_EQ(out, "");
+    ASSERT_EQ(net_url_detail("x", NULL, 10), (size_t)0);
+    ASSERT_EQ(net_url_detail("x", out, 0), (size_t)0);
+    TEST_END();
+}
+
+int test_net_text_escape(void)
+{
+    TEST_BEGIN();
+    char out[64];
+    size_t n;
+
+    n = net_text_escape("{\"a\":\"\x01\"}", 8, out, sizeof out);
+    ASSERT_STR_EQ(out, "{\"a\":\"\\x01\"");
+    ASSERT_EQ(n, strlen(out));
+
+    /* an embedded NUL is escaped, since the length is explicit */
+    n = net_text_escape("a\0b", 3, out, sizeof out);
+    ASSERT_STR_EQ(out, "a\\x00b");
+
+    /* a length shorter than the text stops there */
+    net_text_escape("abcdef", 3, out, sizeof out);
+    ASSERT_STR_EQ(out, "abc");
+
+    net_text_escape("", 0, out, sizeof out);
+    ASSERT_STR_EQ(out, "");
+    ASSERT_EQ(net_text_escape("x", 1, out, 0), (size_t)0);
+    ASSERT_EQ(net_text_escape("x", 1, NULL, 5), (size_t)0);
+
+    /* the cut ends in U+2026 */
+    n = net_text_escape("abcdefghij", 10, out, 8);
+    ASSERT_STR_EQ(out, "abcd\xE2\x80\xA6");
+    ASSERT_EQ(n, (size_t)7);
     TEST_END();
 }

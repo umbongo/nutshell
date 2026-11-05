@@ -57,17 +57,10 @@ static void apply_policy_change(AiChatData *d, CmdPolicy next)
         if (d->active_state)
             for (int bi = 0; bi < d->active_state->batches.count; bi++)
                 chat_approval_unblock_all(&d->active_state->batches.b[bi]->q);
-        ChatMsgItem *it = d->msg_list.head;
-        while (it) {
-            if (it->type == CHAT_ITEM_COMMAND && it->u.cmd.blocked &&
-                !it->u.cmd.quoted &&
-                (int)it->u.cmd.safety <= next.allowed) {
-                it->u.cmd.blocked = 0;
-                it->u.cmd.approved = -1;
-                it->u.cmd.selected = 1;  /* no longer held -- starts checked */
-            }
-            it = it->next;
-        }
+        /* chat_msg_apply_ceiling() leaves a tool card row alone: a tool call
+         * is neither held nor released by the ceiling (spec decision 14). */
+        for (ChatMsgItem *it = d->msg_list.head; it; it = it->next)
+            chat_msg_apply_ceiling(it, prev.allowed, next.allowed);
         if (d->conv.msg_count > 0) {
             char note[256];
             if (ai_build_policy_raised_note(next.allowed, note, sizeof(note)) > 0) {
@@ -78,15 +71,10 @@ static void apply_policy_change(AiChatData *d, CmdPolicy next)
         if (d->active_state)
             for (int bi = 0; bi < d->active_state->batches.count; bi++)
                 chat_approval_block_disallowed(&d->active_state->batches.b[bi]->q);
-        ChatMsgItem *it = d->msg_list.head;
-        while (it) {
-            if (it->type == CHAT_ITEM_COMMAND && !it->u.cmd.settled &&
-                it->u.cmd.approved == -1 &&
-                (int)it->u.cmd.safety > next.allowed) {
-                it->u.cmd.blocked = 1;
-            }
-            it = it->next;
-        }
+        /* chat_msg_apply_ceiling() leaves a tool card row alone: a tool call
+         * is neither held nor released by the ceiling (spec decision 14). */
+        for (ChatMsgItem *it = d->msg_list.head; it; it = it->next)
+            chat_msg_apply_ceiling(it, prev.allowed, next.allowed);
     }
 
     if (d->hChatList)

@@ -176,6 +176,19 @@ static void safe_host(const char *host, char *out, size_t cap)
     out[i] = '\0';
 }
 
+/* ASCII case-insensitive equality, nothing else: a trailing dot or a
+ * subdomain is a different host. */
+static int host_equal_nocase(const char *a, const char *b)
+{
+    for (; *a != '\0' && *b != '\0'; a++, b++) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if (ca != cb) return 0;
+    }
+    return *a == *b;
+}
+
 static int is_redirect_status(int status)
 {
     return status == 301 || status == 302 || status == 303 ||
@@ -239,6 +252,16 @@ static int fetch_hops(const WebFetchBackend *be, const WebFetchContext *ctx,
                               "Refused: not a valid http or https address");
         net_url_display(url, display, sizeof(display));
         safe_host(parts.host, host, sizeof(host));
+
+        /* A fetch the user approved on a card was approved for one host. A
+         * redirect elsewhere is refused before any lookup, with Nutshell's
+         * own text (no host name: it came from a server), so it goes to
+         * tool_note. The model can ask again with the new URL. */
+        if (hop > 0 && ctx && ctx->pinned_host[0] != '\0' &&
+            !host_equal_nocase(parts.host, ctx->pinned_host))
+            return fetch_fail(result_buf, result_len,
+                              "redirect to another host refused; "
+                              "ask again with the new URL");
 
         /* Residual risk, accepted: the backend resolves the name again when it
          * connects, so a DNS answer that changes between this lookup and that

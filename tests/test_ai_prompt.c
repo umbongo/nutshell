@@ -215,7 +215,7 @@ int test_ai_provider_model_moonshot(void) {
     TEST_BEGIN();
     const char *model = ai_provider_model("moonshot");
     ASSERT_NOT_NULL(model);
-    ASSERT_STR_EQ(model, "kimi-k2");
+    ASSERT_STR_EQ(model, "kimi-k3");
     TEST_END();
 }
 
@@ -235,10 +235,20 @@ int test_ai_provider_models_moonshot(void) {
     TEST_BEGIN();
     const char * const *models = ai_provider_models("moonshot");
     ASSERT_NOT_NULL(models);
-    ASSERT_STR_EQ(models[0], "kimi-k2");
+    /* The current chat models platform.kimi.ai/docs/models lists, in its
+     * order. */
+    static const char *const expect[] = {
+        "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3",
+    };
     int count = 0;
-    while (models[count]) count++;
-    ASSERT_EQ(count, 4);
+    while (models[count]) {
+        ASSERT_TRUE(count < 3);
+        ASSERT_STR_EQ(models[count], expect[count]);
+        count++;
+    }
+    ASSERT_EQ(count, 3);
+    /* the default is still a listed model */
+    ASSERT_STR_EQ(ai_provider_model("moonshot"), "kimi-k3");
     TEST_END();
 }
 
@@ -3734,5 +3744,34 @@ int test_continue_text_quoted_entry(void) {
     ASSERT_TRUE(n > 0);
     ASSERT_TRUE(strstr(buf, "1. quoted in a code block, not run: ls") != NULL);
     ASSERT_NULL(strstr(buf, "above the command policy ceiling"));
+    TEST_END();
+}
+
+int test_continue_text_skips_tool(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_EQ(chat_approval_add_tool(&q, "web_fetch: https://a.test/", "u",
+                                     CMD_UNKNOWN), 0);
+    ASSERT_EQ(chat_approval_add_session(&q, "ls", CMD_PLATFORM_LINUX, 0), 1);
+    ASSERT_EQ(chat_approval_approve(&q, 0), 0);   /* approved, never sent */
+    chat_approval_set_completed(&q, 1);
+    char buf[4096];
+    size_t n = ai_build_continue_text(0, NULL, &q, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_NULL(strstr(buf, "web_fetch"));
+    ASSERT_NULL(strstr(buf, "stopped before it finished"));
+    ASSERT_TRUE(strstr(buf, "1. ran: ls") != NULL);
+    ASSERT_NULL(strstr(buf, "2. "));
+
+    /* only tool entries: no per-command list at all */
+    ApprovalQueue t;
+    chat_approval_init(&t);
+    ASSERT_EQ(chat_approval_add_tool(&t, "web_fetch: https://a.test/", "u",
+                                     CMD_UNKNOWN), 0);
+    n = ai_build_continue_text(0, NULL, &t, buf, sizeof(buf));
+    ASSERT_TRUE(n > 0);
+    ASSERT_NULL(strstr(buf, "web_fetch"));
+    ASSERT_NULL(strstr(buf, "Here is what actually happened"));
     TEST_END();
 }

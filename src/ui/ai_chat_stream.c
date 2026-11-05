@@ -5,6 +5,7 @@
 #endif
 
 #include "ai_chat_internal.h"
+#include "json_parser.h"
 
 #ifdef _WIN32
 #include <stdio.h>
@@ -24,6 +25,11 @@ typedef struct {
     AiToolStreamState *tool_stream;
     char provider[64];
     int tool_stop;          /* set to 1 when tool_use stop detected */
+    int cut_off;            /* 1 when the provider ended the reply at its output limit */
+    int saw_end;            /* 1 once the reply's end arrived ([DONE] or a finish_reason) */
+    int stream_error;       /* 1 when an in-stream {"error":...} event arrived */
+    char error_msg[AI_STREAM_ERROR_MSG_MAX + 1];   /* its sanitised message */
+    char finish[32];        /* finish_reason seen by a stream without tool state */
     int input_tokens;        /* actual input token count from API (0 until received) */
     int output_tokens;       /* actual output token count from API (0 until received) */
 } StreamContext;
@@ -44,6 +50,87 @@ static void stream_post_text(AiStream *s, UINT msg, WPARAM wp, const char *text)
     }
 }
 
+/* Post one AiToolDecideMsg to the panel. Returns 1 when the UI owns it, 0
+ * when the allocation or the post failed (nothing leaks). */
+static int stream_post_tool_decide(AiStream *s, unsigned gen, int loop_iter,
+                                   int kind, ToolSafety safety,
+                                   const AiToolCall *call)
+{
+    AiToolDecideMsg *m = (AiToolDecideMsg *)calloc(1, sizeof(*m));
+    if (!m) return 0;
+    m->stream_id = s->id;
+    m->gen = gen;
+    m->loop_iter = loop_iter;
+    m->kind = kind;
+    m->safety = safety;
+    /* -1 (a web_fetch without a url) still fills a row the user can read. */
+    /* The Details cap is CMD_NOTE_MAX, the size of the approval entry's note
+     * it is copied into: ai_tool_card_text cuts on an escape boundary, and
+     * chat_approval_add_tool then copies it whole (its own cut knows only
+     * UTF-8 and would split a \UXXXXXXXX escape). */
+    _Static_assert(CMD_NOTE_MAX <= sizeof(((AiToolDecideMsg *)0)->detail),
+                   "the note cap must fit the message's detail buffer");
+    (void)ai_tool_card_text(call, m->row, sizeof(m->row),
+                            m->detail, CMD_NOTE_MAX);
+    if (!PostMessage((HWND)s->post_target, WM_AI_TOOL_DECIDE, 0, (LPARAM)m)) {
+        free(m);
+        return 0;
+    }
+    return 1;
+}
+
+/* Ask the user about one non-SAFE tool call and wait for the answer
+ * (spec decisions 15, 16, 20). Publishes before any abort check so the first
+ * poll sees an abort that was already set; polls the slot every
+ * AI_TOOL_DECIDE_POLL_MS (no Win32 event) until the UI answers, the stream is
+ * aborted or the stream's tool_timeout_ms (copied at launch) passes; a
+ * tool_timeout_ms of 0 means never, so only an answer or an abort ends the
+ * wait. Returns the settled outcome, never PENDING. */
+static ToolDecision stream_ask_tool(AiStream *s, const AiToolCall *call,
+                                    ToolSafety safety, int loop_iter)
+{
+    const unsigned gen = tool_decision_publish(&s->decision);
+    if (gen == 0) return TOOL_DECISION_NOT_APPROVED;
+
+    if (!stream_post_tool_decide(s, gen, loop_iter, AI_TOOL_DECIDE_ASK,
+                                 safety, call))
+        (void)tool_decision_answer(&s->decision, gen,
+                                   TOOL_DECISION_NOT_APPROVED);
+
+    const ULONGLONG t0 = GetTickCount64();
+    ToolDecision d;
+    for (;;) {
+        d = tool_decision_poll(&s->decision, gen, ai_stream_aborted(s),
+                               (unsigned long long)(GetTickCount64() - t0),
+                               s->tool_timeout_ms);
+        if (d != TOOL_DECISION_PENDING) break;
+        Sleep(AI_TOOL_DECIDE_POLL_MS);
+    }
+
+    if (d == TOOL_DECISION_EXPIRED)   /* a failed post here just frees it */
+        (void)stream_post_tool_decide(s, gen, loop_iter,
+                                      AI_TOOL_DECIDE_EXPIRED, safety, call);
+    /* Tool name, stream and outcome only: never the URL. */
+    DLOG(DLOG_AI, DLOG_INFO, 0, "tool.decide", "stream=%u gen=%u tool=%s outcome=%d",
+         s->id, gen, call->name, (int)d);
+    return d;
+}
+
+/* Pin an approved web_fetch to the host the user saw (spec decision 23).
+ * An unparseable url stays unpinned: the fetch refuses it itself. */
+static void stream_pin_fetch_host(AiStream *s, const AiToolCall *call)
+{
+    s->fetch.pinned_host[0] = '\0';
+    JsonNode *input = json_parse(call->input_json);
+    if (!input) return;
+    const char *url = json_obj_str(input, "url");
+    NetUrlParts parts;
+    if (url && net_url_parse(url, &parts) == 0)
+        snprintf(s->fetch.pinned_host, sizeof(s->fetch.pinned_host),
+                 "%s", parts.host);
+    json_free(input);
+}
+
 /* Process a single SSE line from the stream */
 static void stream_process_line(StreamContext *ctx, const char *line, size_t len)
 {
@@ -53,7 +140,23 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     /* SSE lines start with "data: " */
     if (len < 6 || strncmp(line, "data: ", 6) != 0) return;
 
+    /* An error event already ended the stream; nothing after it counts. */
+    if (ctx->stream_error) return;
+
     const char *json = line + 6;
+    if (strncmp(json, "[DONE]", 6) == 0) ctx->saw_end = 1;
+    /* An in-stream error event ({"error":{"message":...}}): the stream ends
+     * and the reply says why, instead of finishing silently. */
+    if (strstr(json, "\"error\"") &&
+        ai_stream_chunk_error(ctx->stream->provider, json,
+                              ctx->error_msg, sizeof(ctx->error_msg))) {
+        ctx->stream_error = 1;
+        return;
+    }
+    /* Only a chunk that carries the word can be a "length" finish: skip the
+     * extra JSON parse for every other chunk of the stream. */
+    if (strstr(json, "\"length\"") && ai_stream_chunk_cut_off(json))
+        ctx->cut_off = 1;
     char content_delta[1024] = "";
     char thinking_delta[1024] = "";
     int chunk_input_tokens = 0, chunk_output_tokens = 0;
@@ -64,15 +167,28 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
                                      content_delta, sizeof(content_delta),
                                      thinking_delta, sizeof(thinking_delta),
                                      ctx->tool_stream, ctx->provider);
-        if (rc == 2) {
-            /* Tool-use stop: signal to outer loop */
-            ctx->tool_stop = 1;
-            return;
-        }
+        /* Tool-use stop: noted for the round's log line. The chunk's text
+         * is still read below: it can ride with the finish_reason. */
+        if (rc == 2) ctx->tool_stop = 1;
     } else {
         rc = ai_parse_stream_chunk(json, content_delta, sizeof(content_delta),
                                    thinking_delta, sizeof(thinking_delta),
                                    &chunk_input_tokens, &chunk_output_tokens);
+        /* Remember the finish_reason for the round's log line. */
+        if (strstr(json, "\"finish_reason\":\"") ||
+            strstr(json, "\"finish_reason\": \"")) {
+            JsonNode *fr_root = json_parse(json);
+            if (fr_root) {
+                JsonNode *chs = json_obj_get(fr_root, "choices");
+                if (chs && chs->type == JSON_ARRAY && vec_size(&chs->as.arr) > 0) {
+                    JsonNode *c0 = (JsonNode *)vec_get(&chs->as.arr, 0);
+                    const char *fr = (c0 && c0->type == JSON_OBJECT)
+                                   ? json_obj_str(c0, "finish_reason") : NULL;
+                    if (fr) snprintf(ctx->finish, sizeof(ctx->finish), "%s", fr);
+                }
+                json_free(fr_root);
+            }
+        }
     }
 
     /* Accumulate actual token counts when provided by the API */
@@ -81,10 +197,13 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     if (chunk_output_tokens > 0)
         ctx->output_tokens += chunk_output_tokens;
 
-    if (rc == 1) {
-        /* [DONE] — stream finished */
-        return;
-    }
+    /* The reply's end has arrived: a read failure after this is harmless. */
+    if (rc == 1 || rc == 2 || ctx->finish[0] ||
+        (ctx->tool_stream && ctx->tool_stream->finish[0]))
+        ctx->saw_end = 1;
+
+    /* rc == 1 is [DONE] (no text) or a "stop" finish, whose own text is in
+     * content_delta and is posted below with every other delta. */
     if (rc < 0) return;
 
     /* Post thinking delta to UI */
@@ -123,6 +242,8 @@ static int stream_callback(const char *data, size_t len, void *userdata)
      * panel closed or undocked, app exit). */
     if (ai_stream_aborted(ctx->stream))
         return 1; /* abort stream */
+    if (ctx->stream_error)
+        return 1; /* an error event ended the stream */
 
     for (size_t i = 0; i < len; i++) {
         char c = data[i];
@@ -133,6 +254,8 @@ static int stream_callback(const char *data, size_t len, void *userdata)
             ctx->line_buf[ctx->line_len] = '\0';
             stream_process_line(ctx, ctx->line_buf, ctx->line_len);
             ctx->line_len = 0;
+            if (ctx->stream_error)
+                return 1;   /* stop at once: nothing after the error counts */
         } else {
             if (ctx->line_len < sizeof(ctx->line_buf) - 1)
                 ctx->line_buf[ctx->line_len++] = c;
@@ -270,16 +393,42 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
         if (ai_stream_aborted(s))
             goto out;
 
-        if (rc != 0 || status < 200 || status >= 300) {
+        /* An error event inside the stream (HTTP 200, then {"error":...}). */
+        if (ctx.stream_error) {
             char msg[1024];
-            if (errbuf[0])
+            snprintf(msg, sizeof(msg), "Provider error: %s", ctx.error_msg);
+            stream_failed = 1;
+            /* The class only: the message stays out of the log. */
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error",
+                 "stream=%u class=provider status=%d ms=%llu", stream_id,
+                 status, (unsigned long long)(GetTickCount64() - t_stream));
+            post_error_response(s, msg);
+            goto out;
+        }
+
+        /* A read failure after the reply's end ([DONE] or a finish_reason)
+         * lost nothing: the round arrived whole, so it ends cleanly. */
+        int lost_after_end = rc != 0 && status >= 200 && status < 300 &&
+                             ctx.saw_end;
+        if (lost_after_end)
+            DLOG(DLOG_AI, DLOG_INFO, 0, "stream.read_failed_after_end",
+                 "stream=%u iter=%d status=%d", stream_id, agentic.loop_iter,
+                 status);
+
+        if ((rc != 0 && !lost_after_end) || status < 200 || status >= 300) {
+            char msg[1024];
+            if (rc != 0 && status >= 200 && status < 300 && errbuf[0])
+                /* The body broke after a 200: the text says so itself. */
+                snprintf(msg, sizeof(msg), "%s", errbuf);
+            else if (errbuf[0])
                 snprintf(msg, sizeof(msg), "HTTP %d: %s", status, errbuf);
             else
                 snprintf(msg, sizeof(msg), "HTTP %d: streaming request failed", status);
             stream_failed = 1;
             DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error",
                  "stream=%u class=%s status=%d ms=%llu", stream_id,
-                 rc != 0 ? "transport" : "http", status,
+                 (rc != 0 && status >= 200 && status < 300) ? "connection_lost"
+                     : rc != 0 ? "transport" : "http", status,
                  (unsigned long long)(GetTickCount64() - t_stream));
             post_error_response(s, msg);
             goto out;
@@ -301,21 +450,73 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             final_thinking[copy_n] = '\0';
         }
 
+        /* Slots a provider's indices skipped (no name, no id) are no calls:
+         * drop them so they are not run as "Unknown tool". */
+        int dropped_slots = tool_stream_ptr
+            ? ai_tools_stream_compact(tool_stream_ptr) : 0;
+        if (dropped_slots > 0)
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.tool_slots_dropped",
+                 "stream=%u iter=%d empty_slots=%d", stream_id,
+                 agentic.loop_iter, dropped_slots);
+        int pending_n = tool_stream_ptr ? tool_stream_ptr->pending_tool_count : 0;
+
+        /* finish_reason "length": the reply stops mid-sentence (or mid
+         * [EXEC], so no command card): say so instead of leaving it a mystery.
+         * A call cut off with it is not run: say that too. */
+        if (ctx.cut_off) {
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.cut_off",
+                 "stream=%u finish_reason=length", stream_id);
+            post_tool_msg(s, CHAT_ITEM_STATUS,
+                          pending_n > 0
+                          ? "reply cut off at the provider's output limit; a tool call in it was not run"
+                          : "reply cut off at the provider's output limit");
+        }
+
         /* Accumulate token counts (last non-zero value wins) */
         if (ctx.input_tokens > 0)
             total_input_tokens = ctx.input_tokens;
         if (ctx.output_tokens > 0)
             total_output_tokens = ctx.output_tokens;
 
-        /* ---- Tool-use branch ---- */
-        if (ctx.tool_stop && tool_stream_ptr &&
-            tool_stream_ptr->pending_tool_count > 0) {
+        /* The round's outcome in one line: what the provider said it
+         * finished with, and whether the tool loop runs. tool_stop is the
+         * raw "finish says tool_calls/tool_use" flag; run is the decision.
+         * Counts and names only: no URL, no arguments, no text. */
+        const char *finish_seen = tool_stream_ptr ? tool_stream_ptr->finish
+                                                  : ctx.finish;
+        int run_tools = tool_stream_ptr &&
+            ai_tool_round_should_run(s->provider, ctx.tool_stop, pending_n,
+                                     ctx.cut_off);
+        DLOG(DLOG_AI, DLOG_INFO, 0, "stream.round",
+             "stream=%u iter=%d finish=%s tool_stop=%d pending=%d run=%d",
+             stream_id, agentic.loop_iter,
+             finish_seen[0] ? finish_seen : "none", ctx.tool_stop, pending_n,
+             run_tools);
+        if (tool_stream_ptr && tool_stream_ptr->index_defaulted > 0)
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.tool_index_missing",
+                 "stream=%u iter=%d deltas=%d (read as index 0)", stream_id,
+                 agentic.loop_iter, tool_stream_ptr->index_defaulted);
+
+        /* ---- Tool-use branch: whenever calls are pending, whatever the
+         * finish_reason said (spec: Kimi trace, Task 17) ---- */
+        if (run_tools) {
 
             /* Add assistant message with tool_use blocks */
-            agentic_add_assistant_tool_msg(&s->conv,
-                                          ctx.full_content,
-                                          tool_stream_ptr->pending_tool_calls,
-                                          tool_stream_ptr->pending_tool_count);
+            /* ctx.full_thinking is this turn's reasoning; the builder sends it
+             * back with the tool calls for provider "moonshot" only. */
+            if (agentic_add_assistant_tool_msg_ex(&s->conv,
+                                                  ctx.full_content,
+                                                  ctx.full_thinking,
+                                                  tool_stream_ptr->pending_tool_calls,
+                                                  tool_stream_ptr->pending_tool_count) != 0) {
+                /* Results must never go out without their tool-call turn. */
+                stream_failed = 1;
+                DLOG(DLOG_AI, DLOG_WARN, 0, "stream.error", "stream=%u class=oom ms=%llu",
+                     stream_id, (unsigned long long)(GetTickCount64() - t_stream));
+                post_tool_msg(s, CHAT_ITEM_STATUS, "[tool loop stopped: out of memory]");
+                post_error_response(s, "Error: out of memory for the tool call");
+                goto out;
+            }
 
             /* Execute each tool call */
             AiToolResult *results = (AiToolResult *)calloc(
@@ -380,12 +581,44 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 else
                     snprintf(tool_call_text, sizeof(tool_call_text),
                              "using tool: %s", call->name);
-                post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
+                /* A SAFE call is announced at once; any other waits for the
+                 * user's say and is announced only when it actually runs. */
+                const int asks = tdef && tdef->safety != TOOL_SAFE;
+                if (!asks)
+                    post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
+
+                int pinned = 0;
+                if (asks) {
+                    const ToolDecision dec = stream_ask_tool(
+                        s, call, tdef->safety, agentic.loop_iter);
+                    if (dec != TOOL_DECISION_RUN &&
+                        dec != TOOL_DECISION_APPROVED) {
+                        /* Not approved: Nutshell's note, no tool run, and
+                         * not an error (spec decision 16). */
+                        const char *note = tool_decision_note(dec);
+                        results[ti].tool_use_id[0] = '\0';
+                        strncpy(results[ti].tool_use_id, call->id,
+                                sizeof(results[ti].tool_use_id) - 1);
+                        snprintf(results[ti].tool_note,
+                                 sizeof(results[ti].tool_note), "%s",
+                                 note ? note : "");
+                        results[ti].content = NULL;
+                        results[ti].is_error = 0;
+                        continue;
+                    }
+                    post_tool_msg(s, CHAT_ITEM_TOOL_CALL, tool_call_text);
+                    if (dec == TOOL_DECISION_APPROVED &&
+                        strcmp(call->name, "web_fetch") == 0) {
+                        stream_pin_fetch_host(s, call);
+                        pinned = 1;
+                    }
+                }
 
                 /* Execute (the stream's own registry snapshot and abort flag) */
                 const ULONGLONG t_tool = GetTickCount64();
                 ai_tool_execute(&s->tools, call, ai_stream_abort_flag(s),
                                 &results[ti]);
+                if (pinned) s->fetch.pinned_host[0] = '\0';
                 agentic_record_tool_call(&agentic, call->name);
                 /* The tool's name and outcome only: never its arguments or result. */
                 DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=%d ms=%llu",

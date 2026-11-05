@@ -56,7 +56,21 @@ typedef struct {
     /* For ROLE_ASSISTANT messages that contain tool_use blocks */
     AiToolCall *tool_calls;   /* heap-allocated array, NULL when unused */
     int n_tool_calls;         /* 0 means normal text message */
+
+    /* The reasoning the model streamed alongside this assistant turn's tool
+     * calls, kept so a provider that demands it back (Moonshot's thinking
+     * models: a 400 without it) gets it in the follow-up request. Heap, at
+     * most AI_REASONING_MAX - 1 bytes, NULL when the turn had none. Only the
+     * OpenAI-format builder reads it, and only for provider "moonshot"; the
+     * Anthropic path and every other provider ignore it. Owned by the
+     * message: ai_msg_free() frees it, ai_conv_copy() duplicates it, and
+     * ai_conv_take() moves it with the rest. */
+    char *reasoning;
 } AiMessage;
+
+/* Cap on a stored reasoning text, terminating NUL included: the same 16 KiB
+ * the stream keeps for the panel's Thinking disclosure (AI_MSG_MAX). */
+#define AI_REASONING_MAX AI_MSG_MAX
 
 typedef struct {
     char model[64];
@@ -204,7 +218,12 @@ int ai_parse_stream_chunk(const char *json,
  *   0  — normal chunk processed (text delta, thinking delta, etc.)
  *   1  — stream done (end_turn/stop)
  *   2  — tool_use stop_reason detected (time to execute tools)
- *  -1  — error */
+ *  -1  — error
+ * An OpenAI-format chunk that carries a finish_reason ("stop" -> 1,
+ * "tool_calls" -> 2) still fills content_out/thinking_out, and its
+ * delta.tool_calls are accumulated: the caller reads the text, then acts on
+ * the code. Whether the tool loop runs is ai_tool_round_should_run()'s
+ * decision at the end of the round, not this code's. */
 int ai_parse_stream_chunk_ex(const char *json,
                              char *content_out, size_t content_size,
                              char *thinking_out, size_t thinking_size,
@@ -213,6 +232,22 @@ int ai_parse_stream_chunk_ex(const char *json,
 
 /* Returns 1 if the provider supports native tool use, 0 otherwise. */
 int ai_provider_supports_tools(const char *provider);
+
+/* Output limit sent as "max_completion_tokens" to provider "moonshot" (and
+ * only to it). Without one the server's default is far lower, and a thinking
+ * model's reasoning counts against it, so a long [EXEC] reply was cut off
+ * before its closing marker. A model whose context window is known to be
+ * under AI_MOONSHOT_OUTPUT_BIG_CTX gets half of it (moonshot-v1-8k: 4000,
+ * moonshot-v1-32k: 16000); every other model, one that is not in
+ * ai_model_context_limit()'s table included, gets AI_MOONSHOT_OUTPUT_MAX. */
+#define AI_MOONSHOT_OUTPUT_MAX     16384
+#define AI_MOONSHOT_OUTPUT_BIG_CTX 65536
+int ai_moonshot_output_limit(const char *model);
+
+/* 1 when an OpenAI-format stream chunk (the JSON after "data: ") ends the
+ * reply because it hit the provider's output limit: choices[0].finish_reason
+ * is "length". 0 for any other chunk, malformed JSON or NULL. */
+int ai_stream_chunk_cut_off(const char *json);
 
 /* Extended parse: also extract reasoning/thinking content (e.g. DeepSeek
  * reasoner's "reasoning_content" field).  thinking_out may be NULL.
@@ -412,7 +447,13 @@ const char *ai_msg_content(const AiMessage *msg);
  * Returns 0 on success, -1 on allocation failure. */
 int ai_msg_set_content(AiMessage *msg, const char *data, size_t len);
 
-/* Frees dynamic resources (content_overflow + tool_calls). */
+/* Store `text` as msg's reasoning (see AiMessage), replacing any earlier one.
+ * Kept to AI_REASONING_MAX - 1 bytes, cut on a UTF-8 boundary. NULL or ""
+ * clears it. Returns 0, or -1 on allocation failure (reasoning cleared). */
+int ai_msg_set_reasoning(AiMessage *msg, const char *text);
+
+/* Frees dynamic resources (content_overflow, tool_calls, reasoning,
+ * attachment). */
 void ai_msg_free(AiMessage *msg);
 
 /* Build the JSON request body with tool definitions.
@@ -552,6 +593,18 @@ typedef struct {
     int auto_rounds;             /* consecutive unattended continue rounds
                                    * since the user last spoke or acted
                                    * (ai_rounds_*() below); 0 at creation */
+    /* Unattended tool rounds (trust-boundary spec decision 22), separate from
+     * auto_rounds; see ai_tool_rounds_*() below. Zero at creation. */
+    int auto_tool_rounds;        /* rounds in which a non-SAFE tool ran
+                                  * unattended since the user last spoke or
+                                  * clicked Run on a tool row */
+    unsigned tool_round_stream;  /* round key: stream id of the last round
+                                  * seen (never 0 in the product) ... */
+    int tool_round_iter;         /* ... and its loop_iter */
+    int tool_round_base;         /* auto_tool_rounds before that round began */
+    int tool_round_counted;      /* 1 once that round has added its 1 */
+    int tool_pause_shown;        /* 1 once the pause row was posted since the
+                                  * last reset */
 } AiSessionState;
 
 /* Cap on unattended rounds with Auto-approve on: the batch built after
@@ -576,5 +629,47 @@ CmdPolicy ai_rounds_batch_policy(const AiSessionState *s, CmdPolicy p);
  * under ai_rounds_batch_policy() is paused for the user); else 0.
  * NULL `s` returns 0. */
 int ai_rounds_paused(const AiSessionState *s, CmdPolicy p);
+
+/* ---- Unattended tool rounds (trust-boundary spec decision 22) ---- */
+
+/* Cap on unattended tool rounds (Settings > AI Assistant > Behaviour,
+ * "Automatic tool rounds"): a non-SAFE tool call in the round after `cap`
+ * counted rounds asks on a card. The setting is 1..20, default 3. */
+#define AI_TOOL_ROUNDS_DEFAULT 3
+#define AI_TOOL_ROUNDS_MIN     1
+#define AI_TOOL_ROUNDS_MAX     20
+
+/* `cap` limited to AI_TOOL_ROUNDS_MIN..AI_TOOL_ROUNDS_MAX: 0 and negatives
+ * give 1, anything above 20 gives 20. */
+int ai_tool_rounds_clamp(int cap);
+
+/* Write the one row posted when the cap first forces an ask,
+ * "[Auto-approve paused after N automatic tool rounds]", N = the clamped
+ * `cap` ("rounds" stays plural for 1). Always NUL-terminated and truncated
+ * to `n`; nothing is written when `buf` is NULL or `n` is 0. */
+void ai_tool_pause_row(char *buf, size_t n, int cap);
+
+/* A non-SAFE tool call in round (stream_id, loop_iter) is about to be judged.
+ * The first call with a new key records it with tool_round_base =
+ * auto_tool_rounds and tool_round_counted = 0; every call in the round is then
+ * judged on that pre-round count. Returns 1 (ask on a card) when
+ * tool_round_base >= ai_tool_rounds_clamp(cap), else 0. `cap` is the cap in
+ * force for that stream (AiStream.tool_auto_rounds). NULL-safe (0). */
+int ai_tool_rounds_attended(AiSessionState *s, unsigned stream_id, int loop_iter,
+                            int cap);
+
+/* A non-SAFE tool call in that round ran on RUN: auto_tool_rounds += 1, once
+ * per key (ignored when the key does not match the stored one or the round
+ * was already counted). NULL-safe. */
+void ai_tool_rounds_ran_unattended(AiSessionState *s, unsigned stream_id, int loop_iter);
+
+/* A typed message, or a Run click on a tool row: auto_tool_rounds = 0 and
+ * tool_pause_shown = 0. The stored key and base are kept, so a call later in
+ * the same round is still judged on the pre-round count. NULL-safe. */
+void ai_tool_rounds_reset(AiSessionState *s);
+
+/* 1 the first time after a reset (post the ai_tool_pause_row() text), then 0.
+ * NULL-safe (0). */
+int ai_tool_rounds_take_pause_row(AiSessionState *s);
 
 #endif /* NUTSHELL_AI_PROMPT_H */

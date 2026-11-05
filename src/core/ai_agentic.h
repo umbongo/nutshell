@@ -35,6 +35,14 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
                                    const char *assistant_text,
                                    const AiToolCall *calls, int n_calls);
 
+/* The same, keeping `reasoning` (the thinking the model streamed with the
+ * tool calls; NULL or "" for none) on the message, capped at
+ * AI_REASONING_MAX - 1 bytes. Only provider "moonshot" sends it back. */
+int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
+                                      const char *assistant_text,
+                                      const char *reasoning,
+                                      const AiToolCall *calls, int n_calls);
+
 /* A stored tool result is at most this many bytes once JSON-escaped (the size
  * json_escape_string would write for it). */
 #define AI_TOOL_RESULT_ESCAPED_MAX 65536

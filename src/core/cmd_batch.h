@@ -33,6 +33,11 @@ typedef struct {
                       * session's auto-round counter instead of counting
                       * towards AI_AUTO_ROUNDS_MAX (ai_rounds_continue()
                       * in ai_prompt.h). 0 from cmd_batch_add()'s calloc. */
+    unsigned tool_stream_id; /* non-zero: a tool call's one-row card, waiting on
+                      * the AiStream with this id (spec 2026-11-05 decision
+                      * 14). 0 = a command batch. */
+    unsigned tool_gen;       /* the decision slot's generation for that call
+                      * (decision 20); 0 for a command batch. */
 } CmdBatch;
 
 typedef struct {
@@ -65,12 +70,21 @@ CmdBatch *cmd_batch_find(CmdBatchSet *set, int id);
 /* Remove and free a batch by id. No-op if not present. */
 void cmd_batch_remove(CmdBatchSet *set, int id);
 
-/* Oldest batch (list order) whose queue still needs the user, per
- * chat_approval_needs_user(). NULL if none. */
+/* 1 when `b` is a tool call's card (tool_stream_id != 0), else 0 (also for
+ * NULL). */
+int cmd_batch_is_tool(const CmdBatch *b);
+
+/* 1 when the set holds CMD_BATCH_MAX batches (a tool batch is then refused,
+ * never allowed to evict) or `set` is NULL, else 0. */
+int cmd_batch_full(const CmdBatchSet *set);
+
+/* Oldest command batch (list order) whose queue still needs the user, per
+ * chat_approval_needs_user(). Tool batches are skipped. NULL if none. */
 CmdBatch *cmd_batch_first_pending(CmdBatchSet *set);
 
-/* Oldest batch (list order) with an APPROVE_APPROVED entry not yet sent,
- * per chat_approval_next_approved(). NULL if none. */
+/* Oldest command batch (list order) with an APPROVE_APPROVED entry not yet
+ * sent, per chat_approval_next_approved(). Tool batches are skipped. NULL if
+ * none. */
 CmdBatch *cmd_batch_next_runnable(CmdBatchSet *set);
 
 #endif /* NUTSHELL_CMD_BATCH_H */

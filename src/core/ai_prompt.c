@@ -109,9 +109,38 @@ void ai_msg_free(AiMessage *msg)
         msg->tool_calls = NULL;
     }
     msg->n_tool_calls = 0;
+    if (msg->reasoning) {
+        free(msg->reasoning);
+        msg->reasoning = NULL;
+    }
     if (msg->attachment) {
         ai_attachment_free(&msg->attachment);
     }
+}
+
+int ai_msg_set_reasoning(AiMessage *msg, const char *text)
+{
+    if (!msg) return -1;
+    if (msg->reasoning) {
+        free(msg->reasoning);
+        msg->reasoning = NULL;
+    }
+    if (!text || !text[0]) return 0;
+
+    size_t len = strlen(text);
+    if (len > AI_REASONING_MAX - 1) {
+        len = AI_REASONING_MAX - 1;
+        /* never leave half of a multi-byte character at the cut */
+        while (len > 0 && ((unsigned char)text[len] & 0xC0) == 0x80)
+            len--;
+        if (len == 0) return 0;
+    }
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) return -1;
+    memcpy(copy, text, len);
+    copy[len] = '\0';
+    msg->reasoning = copy;
+    return 0;
 }
 
 void ai_conv_init(AiConversation *conv, const char *model)
@@ -164,6 +193,7 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src)
         m->attachment = NULL;
         m->tool_calls = NULL;
         m->n_tool_calls = 0;
+        m->reasoning = NULL;
         dst->msg_count = i + 1;   /* a failure below frees what we have */
 
         if (sm->content_overflow) {
@@ -182,6 +212,12 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src)
             if (!m->tool_calls) goto fail;
             memcpy(m->tool_calls, sm->tool_calls, sz);
             m->n_tool_calls = sm->n_tool_calls;
+        }
+        if (sm->reasoning) {
+            size_t rl = strlen(sm->reasoning);
+            m->reasoning = (char *)malloc(rl + 1);
+            if (!m->reasoning) goto fail;
+            memcpy(m->reasoning, sm->reasoning, rl + 1);
         }
     }
     return 0;
@@ -207,6 +243,7 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->tool_note[0] = '\0';
     m->tool_calls = NULL;
     m->n_tool_calls = 0;
+    m->reasoning = NULL;
     conv->msg_count++;
     return 0;
 }
@@ -402,7 +439,8 @@ int ai_model_context_limit(const char *model)
         {"claude-sonnet-4-6",         200000},
         {"claude-haiku-4-5-20251001", 200000},
         {"claude-opus-4-6",           200000},
-        {"kimi-k2",                   128000},
+        {"kimi-k3.1-pro",            1000000},
+        {"kimi-k3",                  1000000},
         {"moonshot-v1-8k",              8000},
         {"moonshot-v1-32k",            32000},
         {"moonshot-v1-128k",          128000},
@@ -413,6 +451,14 @@ int ai_model_context_limit(const char *model)
             return limits[i].tokens;
     }
     return 0;
+}
+
+int ai_moonshot_output_limit(const char *model)
+{
+    int ctx = ai_model_context_limit(model);   /* 0: not in the table */
+    if (ctx <= 0 || ctx >= AI_MOONSHOT_OUTPUT_BIG_CTX)
+        return AI_MOONSHOT_OUTPUT_MAX;
+    return ctx / 2;
 }
 
 int ai_context_estimate_tokens(const AiConversation *conv)
@@ -726,6 +772,7 @@ static size_t build_body_core(const AiConversation *conv,
     }
 
     int is_anthropic = provider && strcmp(provider, "anthropic") == 0;
+    int is_moonshot = provider && strcmp(provider, "moonshot") == 0;
     size_t pos = 0;
     int n;
 
@@ -740,6 +787,14 @@ static size_t build_body_core(const AiConversation *conv,
     /* Anthropic requires max_tokens */
     if (is_anthropic) {
         n = snprintf(buf + pos, buf_size - pos, ",\"max_tokens\":8096");
+        if (n < 0 || pos + (size_t)n >= buf_size) return 0;
+        pos += (size_t)n;
+    }
+
+    /* Moonshot: an explicit output limit sized to the model (ai_moonshot_output_limit) */
+    if (is_moonshot) {
+        n = snprintf(buf + pos, buf_size - pos, ",\"max_completion_tokens\":%d",
+                     ai_moonshot_output_limit(conv->model));
         if (n < 0 || pos + (size_t)n >= buf_size) return 0;
         pos += (size_t)n;
     }
@@ -978,6 +1033,21 @@ static size_t build_body_core(const AiConversation *conv,
 
             pos = json_escape_string(ai_msg_content(msg), strlen(ai_msg_content(msg)), buf, buf_size, pos, 1);
             if (pos == 0) return 0;
+
+            /* Moonshot's thinking models want the turn's reasoning back and
+             * answer 400 without it: the field is always there, an empty
+             * string when nothing was streamed. No other provider gets it (a
+             * DeepSeek reasoner rejects it, OpenAI has no such field). */
+            if (is_moonshot) {
+                const char *rc_key = ",\"reasoning_content\":";
+                size_t rck_len = strlen(rc_key);
+                if (pos + rck_len >= buf_size) return 0;
+                memcpy(buf + pos, rc_key, rck_len);
+                pos += rck_len;
+                const char *rtext = msg->reasoning ? msg->reasoning : "";
+                pos = json_escape_string(rtext, strlen(rtext), buf, buf_size, pos, 1);
+                if (pos == 0) return 0;
+            }
 
             const char *tc_open = ",\"tool_calls\":[";
             size_t tco_len = strlen(tc_open);
@@ -1354,13 +1424,32 @@ int ai_parse_stream_chunk(const char *json,
     return 0;
 }
 
+int ai_stream_chunk_cut_off(const char *json)
+{
+    if (!json || !json[0]) return 0;
+    JsonNode *root = json_parse(json);
+    if (!root) return 0;
+    int cut = 0;
+    JsonNode *choices = json_obj_get(root, "choices");
+    if (choices && choices->type == JSON_ARRAY && vec_size(&choices->as.arr) > 0) {
+        JsonNode *first = (JsonNode *)vec_get(&choices->as.arr, 0);
+        if (first && first->type == JSON_OBJECT) {
+            const char *fr = json_obj_str(first, "finish_reason");
+            if (fr && strcmp(fr, "length") == 0) cut = 1;
+        }
+    }
+    json_free(root);
+    return cut;
+}
+
 int ai_provider_supports_tools(const char *provider)
 {
     if (!provider) return 0;
     if (strcmp(provider, "anthropic") == 0) return 1;
     if (strcmp(provider, "openai") == 0) return 1;
     if (strcmp(provider, "deepseek") == 0) return 1;
-    return 0;  /* unknown providers: safe default */
+    if (strcmp(provider, "moonshot") == 0) return 1;
+    return 0;  /* gemini and unknown providers: safe default */
 }
 
 int ai_parse_stream_chunk_ex(const char *json,
@@ -1384,14 +1473,18 @@ int ai_parse_stream_chunk_ex(const char *json,
                                      thinking_out, thinking_size,
                                      NULL, NULL);
     } else {
-        /* OpenAI-compatible */
+        /* OpenAI-compatible. The tool parser has already accumulated this
+         * chunk's tool_calls; the text of a chunk that also carries a
+         * finish_reason is read before the finish is reported, so neither
+         * is lost. */
         int trc = ai_parse_tool_stream_openai(json, tool_stream);
-        if (trc == 1) return 2;   /* tool_use stop */
-        if (trc == 2) return 1;   /* done */
         if (trc == -1) return -1; /* error */
-        return ai_parse_stream_chunk(json, content_out, content_size,
-                                     thinking_out, thinking_size,
-                                     NULL, NULL);
+        int src = ai_parse_stream_chunk(json, content_out, content_size,
+                                        thinking_out, thinking_size,
+                                        NULL, NULL);
+        if (trc == 1) return 2;   /* finish_reason tool_calls */
+        if (trc == 2) return 1;   /* finish_reason stop */
+        return src;
     }
 }
 
@@ -1736,7 +1829,7 @@ const char *ai_provider_model(const char *provider)
     if (strcmp(provider, "deepseek") == 0) return "deepseek-chat";
     if (strcmp(provider, "openai") == 0)   return "gpt-4o";
     if (strcmp(provider, "anthropic") == 0) return "claude-sonnet-4-6";
-    if (strcmp(provider, "moonshot") == 0)  return "kimi-k2";
+    if (strcmp(provider, "moonshot") == 0)  return "kimi-k3";
     if (strcmp(provider, "gemini") == 0)   return "gemini-2.5-flash";
 
     return NULL;
@@ -1757,7 +1850,9 @@ const char * const *ai_provider_models(const char *provider)
         "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6", NULL
     };
     static const char * const moonshot_models[] = {
-        "kimi-k2", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", NULL
+        /* The current chat models on platform.kimi.ai/docs/models, in the
+         * page's order (not the deprecated or closed-to-new-users ones). */
+        "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3", NULL
     };
     static const char * const gemini_models[] = {
         "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", NULL
@@ -1881,8 +1976,11 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
      * back) was cut short, not finished -- the opening must say so instead
      * of claiming the commands ran or asking for more of them. */
     int aborted = 0;
+    int cmd_rows = 0;   /* tool entries are no commands: never listed */
     if (q) {
         for (int i = 0; i < q->count; i++) {
+            if (q->entries[i].tool) continue;
+            cmd_rows++;
             if (q->entries[i].status == APPROVE_APPROVED ||
                 q->entries[i].status == APPROVE_EXECUTING) {
                 aborted = 1;
@@ -1918,7 +2016,7 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
     if (n < 0 || (size_t)n >= buf_size) return 0;
     size_t pos = (size_t)n;
 
-    if (q && q->count > 0) {
+    if (q && cmd_rows > 0) {
         int w = snprintf(buf + pos, buf_size - pos,
             "\n\nHere is what actually happened to each command in that "
             "batch -- do not claim a command ran if its line below says it "
@@ -1926,13 +2024,15 @@ size_t ai_build_continue_text(int newer_exchanges, const char *first_cmd,
         if (w < 0 || (size_t)w >= buf_size - pos) return 0;
         pos += (size_t)w;
 
+        int shown = 0;
         for (int i = 0; i < q->count; i++) {
+            if (q->entries[i].tool) continue;
             const char *outcome = ai_continue_outcome_word(&q->entries[i]);
             char elided[64];
             ai_elide_command_60(q->entries[i].command, elided, sizeof(elided));
 
             w = snprintf(buf + pos, buf_size - pos,
-                "  %d. %s: %s\n", i + 1, outcome, elided);
+                "  %d. %s: %s\n", ++shown, outcome, elided);
             if (w < 0 || (size_t)w >= buf_size - pos) return 0;
             pos += (size_t)w;
         }
@@ -2072,4 +2172,65 @@ CmdPolicy ai_rounds_batch_policy(const AiSessionState *s, CmdPolicy p)
 int ai_rounds_paused(const AiSessionState *s, CmdPolicy p)
 {
     return s && s->auto_rounds >= AI_AUTO_ROUNDS_MAX && cmd_policy_auto_on(p);
+}
+
+/* ---- Unattended tool rounds (trust-boundary spec decision 22) ---- */
+
+/* The stored key starts at (0, 0) in a zeroed session. Stream ids are never 0
+ * in the product, so (0, 0) is only ever matched by a caller passing stream 0,
+ * for which base 0 / counted 0 is the right state anyway. */
+static int tool_round_key_matches(const AiSessionState *s, unsigned stream_id,
+                                  int loop_iter)
+{
+    return s->tool_round_stream == stream_id && s->tool_round_iter == loop_iter;
+}
+
+int ai_tool_rounds_clamp(int cap)
+{
+    if (cap < AI_TOOL_ROUNDS_MIN) return AI_TOOL_ROUNDS_MIN;
+    if (cap > AI_TOOL_ROUNDS_MAX) return AI_TOOL_ROUNDS_MAX;
+    return cap;
+}
+
+void ai_tool_pause_row(char *buf, size_t n, int cap)
+{
+    if (!buf || n == 0) return;
+    (void)snprintf(buf, n, "[Auto-approve paused after %d automatic tool rounds]",
+                   ai_tool_rounds_clamp(cap));
+}
+
+int ai_tool_rounds_attended(AiSessionState *s, unsigned stream_id, int loop_iter,
+                            int cap)
+{
+    if (!s) return 0;
+    if (!tool_round_key_matches(s, stream_id, loop_iter)) {
+        s->tool_round_stream = stream_id;
+        s->tool_round_iter = loop_iter;
+        s->tool_round_base = s->auto_tool_rounds;
+        s->tool_round_counted = 0;
+    }
+    return s->tool_round_base >= ai_tool_rounds_clamp(cap);
+}
+
+void ai_tool_rounds_ran_unattended(AiSessionState *s, unsigned stream_id,
+                                   int loop_iter)
+{
+    if (!s || !tool_round_key_matches(s, stream_id, loop_iter)) return;
+    if (s->tool_round_counted) return;
+    s->tool_round_counted = 1;
+    s->auto_tool_rounds++;
+}
+
+void ai_tool_rounds_reset(AiSessionState *s)
+{
+    if (!s) return;
+    s->auto_tool_rounds = 0;
+    s->tool_pause_shown = 0;
+}
+
+int ai_tool_rounds_take_pause_row(AiSessionState *s)
+{
+    if (!s || s->tool_pause_shown) return 0;
+    s->tool_pause_shown = 1;
+    return 1;
 }

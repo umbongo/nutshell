@@ -433,6 +433,10 @@ int test_config_load_realistic(void);
 int test_config_load_missing_ai_fields(void);
 int test_config_load_unknown_fields(void);
 int test_config_load_out_of_range(void);
+int test_config_load_tool_timeout(void);
+int test_config_roundtrip_tool_timeout_never(void);
+int test_config_load_tool_rounds(void);
+int test_config_roundtrip_tool_rounds(void);
 int test_config_roundtrip_all_fields(void);
 int test_config_default_ai_font(void);
 int test_config_roundtrip_ai_font(void);
@@ -963,6 +967,9 @@ int test_settings_validate_scrollback_low(void);
 int test_settings_validate_scrollback_high(void);
 int test_settings_validate_ai_max_context_lines_low(void);
 int test_settings_validate_ai_max_context_lines_high(void);
+int test_settings_validate_ai_tool_timeout_low(void);
+int test_settings_validate_ai_tool_timeout_high(void);
+int test_settings_validate_ai_tool_rounds(void);
 int test_settings_validate_paste_delay_neg(void);
 int test_settings_validate_paste_delay_high(void);
 int test_settings_validate_empty_font(void);
@@ -2601,6 +2608,9 @@ int test_ai_stream_stale_generation(void);
 int test_ai_stream_abort_is_per_owner(void);
 int test_ai_stream_abort_all_on_panel_close(void);
 int test_ai_stream_table_null_owner_entry_drains(void);
+int test_ai_stream_new_slot_idle(void);
+int test_ai_stream_new_tool_timeout_default(void);
+int test_ai_stream_new_tool_rounds_default(void);
 int test_ai_stream_table_full_and_bad_args(void);
 int test_ai_stream_copy_tools_rebinds_context(void);
 int test_ai_stream_release_frees_conversation(void);
@@ -2633,6 +2643,16 @@ int test_ai_rounds_three_rounds_then_paused(void);
 int test_ai_rounds_auto_off_never_paused(void);
 int test_ai_rounds_session_policy_untouched(void);
 int test_ai_rounds_null_safe(void);
+int test_tool_rounds_three_then_attended(void);
+int test_tool_rounds_counts_once_per_round(void);
+int test_tool_rounds_key_includes_stream(void);
+int test_tool_rounds_reset_mid_round_still_asks(void);
+int test_tool_rounds_command_counter_separate(void);
+int test_tool_rounds_pause_row_once(void);
+int test_tool_rounds_null_safe(void);
+int test_tool_rounds_cap_follows_setting(void);
+int test_tool_rounds_cap_clamped(void);
+int test_tool_rounds_pause_row_text(void);
 
 /* test_chat_thinking.c */
 int test_thinking_init(void);
@@ -2661,6 +2681,7 @@ int test_activity_format_processing(void);
 int test_activity_format_executing(void);
 int test_activity_format_stalled(void);
 int test_activity_reset(void);
+int test_chat_activity_waiting_does_not_age(void);
 
 /* test_cmd_collapse.c */
 int test_cmd_index_single(void);
@@ -2872,12 +2893,34 @@ int test_ai_tool_result_openai_error(void);
 int test_ai_tools_validate_schemas_valid(void);
 int test_ai_tools_validate_schemas_invalid(void);
 int test_ai_tool_input_max_boundary(void);
+int test_ai_tool_card_text_web_fetch(void);
+int test_ai_tool_card_text_other_tool(void);
+int test_ai_tool_card_text_detail_fits_approval_note(void);
 /* test_ai_tools.c — streaming */
 int test_ai_stream_anthropic_tool_use_block(void);
 int test_ai_stream_anthropic_text_block(void);
 int test_ai_stream_anthropic_mixed_blocks(void);
 int test_ai_stream_openai_tool_call(void);
 int test_ai_stream_openai_no_tools(void);
+int test_ai_stream_openai_finish_stop_with_pending_call(void);
+int test_ai_stream_openai_no_finish_reason_with_pending_call(void);
+int test_ai_stream_openai_whole_call_in_finish_chunk(void);
+int test_ai_stream_openai_tool_delta_without_index(void);
+int test_ai_stream_openai_index_less_calls_split_on_id(void);
+int test_ai_stream_openai_index_less_two_calls_in_one_delta(void);
+int test_ai_stream_openai_index_less_id_only_on_first_chunk_stays_one_call(void);
+int test_ai_stream_openai_indexed_parallel_calls_unchanged(void);
+int test_ai_stream_openai_text_kept_with_finish_reason(void);
+int test_ai_stream_openai_finish_tool_calls_path_unchanged(void);
+int test_ai_stream_openai_plain_reply_stop_ends_normally(void);
+int test_ai_tool_round_should_run_rules(void);
+int test_ai_stream_anthropic_finish_recorded_behaviour_unchanged(void);
+int test_ai_tools_stream_compact_drops_index_gaps(void);
+int test_ai_tools_stream_compact_keeps_order_and_only_holes(void);
+int test_ai_stream_chunk_error_object_message(void);
+int test_ai_stream_chunk_error_string_form(void);
+int test_ai_stream_chunk_error_not_an_error(void);
+int test_ai_stream_chunk_error_sanitised_and_capped(void);
 int test_ai_stream_error_reset(void);
 int test_ai_stream_anthropic_invalid_json(void);
 
@@ -2961,6 +3004,10 @@ int test_web_fetch_deadline_passed_inside_on_hop(void);
 int test_web_fetch_get_failure(void);
 int test_web_fetch_cancel_after_resolve(void);
 int test_web_fetch_end_hook_runs_once_on_every_exit(void);
+int test_web_fetch_pinned_same_host_followed(void);
+int test_web_fetch_pinned_cross_host_refused(void);
+int test_web_fetch_unpinned_cross_host_followed(void);
+int test_web_fetch_pinned_host_spellings(void);
 #ifndef _WIN32
 int test_web_fetch_no_backend_not_available(void);
 #endif
@@ -2978,6 +3025,16 @@ int test_agentic_add_tool_results(void);
 int test_agentic_conversation_full(void);
 int test_agentic_cancel_before_tool(void);
 int test_agentic_truncation_warning(void);
+int test_ai_supports_tools_moonshot(void);
+int test_ai_reasoning_moonshot_body(void);
+int test_ai_reasoning_other_providers_none(void);
+int test_ai_reasoning_absent_emits_nothing(void);
+int test_ai_reasoning_escaped_in_body(void);
+int test_ai_reasoning_capped(void);
+int test_ai_reasoning_copy_take_compact(void);
+int test_ai_moonshot_max_completion_tokens(void);
+int test_ai_stream_chunk_cut_off(void);
+int test_ai_moonshot_output_limit_per_model(void);
 /* test_ai_agentic_cap.c */
 int test_cap_all_quotes(void);
 int test_cap_control_bytes_stripped(void);
@@ -3024,6 +3081,16 @@ int test_chat_approval_quoted_records_sensitive_reason(void);
 int test_chat_cmd_label_quoted(void);
 int test_chat_card_header_text(void);
 int test_chat_msg_set_quoted(void);
+int test_chat_approval_add_tool_pending_even_with_auto(void);
+int test_chat_approval_add_tool_refuses(void);
+int test_chat_approval_add_tool_detail_ellipsis(void);
+int test_chat_approval_policy_walks_skip_tool(void);
+int test_cmd_batch_skips_tool_batches(void);
+int test_cmd_batch_full(void);
+int test_continue_text_skips_tool(void);
+int test_chat_card_header_noun(void);
+int test_chat_msg_set_tool_and_outcome(void);
+int test_chat_msg_apply_ceiling_skips_tool(void);
 int test_chat_msg_set_reason(void);
 int test_continue_text_quoted_entry(void);
 
@@ -3819,6 +3886,27 @@ int test_render_stuck_a_clean_paint_before_the_threshold_resets_the_count(void);
 int test_render_stuck_switching_session_starts_a_new_episode(void);
 int test_render_stuck_the_number_of_dirty_rows_does_not_matter_only_that_one_is(void);
 int test_render_stuck_null_state_is_safe(void);
+/* test_tool_decision.c */
+int test_tool_gate_matrix(void);
+int test_tool_gate_levels_follow_cmd_safety_order(void);
+int test_tool_registrations(void);
+int test_tool_decision_publish_gen_nonzero_and_fresh(void);
+int test_tool_decision_publish_skips_zero_on_wrap(void);
+int test_tool_decision_each_outcome(void);
+int test_tool_decision_second_answer_loses(void);
+int test_tool_decision_stale_gen(void);
+int test_tool_decision_invalid_answer(void);
+int test_tool_decision_aborted_poll(void);
+int test_tool_decision_abort_before_publish(void);
+int test_tool_decision_expiry(void);
+int test_tool_decision_expiry_follows_timeout(void);
+int test_tool_decision_timeout_ms(void);
+int test_tool_decision_never_expires(void);
+int test_tool_decision_late_answer_reports_winner(void);
+int test_tool_decision_answer_before_remove_order(void);
+int test_tool_decision_notes(void);
+int test_tool_decision_row_labels(void);
+
 /* test_ai_debug_tool.c */
 int test_ai_debug_tool_register_fills_the_definition(void);
 int test_ai_debug_tool_registered_only_while_debugging(void);
@@ -4322,6 +4410,10 @@ int main(void) {
     failed += test_config_load_missing_ai_fields();
     failed += test_config_load_unknown_fields();
     failed += test_config_load_out_of_range();
+    failed += test_config_load_tool_timeout();
+    failed += test_config_roundtrip_tool_timeout_never();
+    failed += test_config_load_tool_rounds();
+    failed += test_config_roundtrip_tool_rounds();
     failed += test_config_roundtrip_all_fields();
     failed += test_config_default_ai_font();
     failed += test_config_roundtrip_ai_font();
@@ -4764,6 +4856,9 @@ int main(void) {
     failed += test_settings_validate_scrollback_high();
     failed += test_settings_validate_ai_max_context_lines_low();
     failed += test_settings_validate_ai_max_context_lines_high();
+    failed += test_settings_validate_ai_tool_timeout_low();
+    failed += test_settings_validate_ai_tool_timeout_high();
+    failed += test_settings_validate_ai_tool_rounds();
     failed += test_settings_validate_paste_delay_neg();
     failed += test_settings_validate_paste_delay_high();
     failed += test_settings_validate_empty_font();
@@ -6352,6 +6447,16 @@ int main(void) {
     failed += test_ai_rounds_auto_off_never_paused();
     failed += test_ai_rounds_session_policy_untouched();
     failed += test_ai_rounds_null_safe();
+    failed += test_tool_rounds_three_then_attended();
+    failed += test_tool_rounds_counts_once_per_round();
+    failed += test_tool_rounds_key_includes_stream();
+    failed += test_tool_rounds_reset_mid_round_still_asks();
+    failed += test_tool_rounds_command_counter_separate();
+    failed += test_tool_rounds_pause_row_once();
+    failed += test_tool_rounds_null_safe();
+    failed += test_tool_rounds_cap_follows_setting();
+    failed += test_tool_rounds_cap_clamped();
+    failed += test_tool_rounds_pause_row_text();
 
     printf("\n--- Thinking Controller ---\n");
     failed += test_thinking_init();
@@ -6380,6 +6485,7 @@ int main(void) {
     failed += test_activity_format_executing();
     failed += test_activity_format_stalled();
     failed += test_activity_reset();
+    failed += test_chat_activity_waiting_does_not_age();
 
     printf("\n--- Command Policy ---\n");
     failed += test_policy_default_is_read_only_nothing_unattended();
@@ -6625,6 +6731,9 @@ int main(void) {
     failed += test_ai_tools_validate_schemas_valid();
     failed += test_ai_tools_validate_schemas_invalid();
     failed += test_ai_tool_input_max_boundary();
+    failed += test_ai_tool_card_text_web_fetch();
+    failed += test_ai_tool_card_text_other_tool();
+    failed += test_ai_tool_card_text_detail_fits_approval_note();
 
     printf("\n--- AI Tool Streaming ---\n");
     failed += test_ai_stream_anthropic_tool_use_block();
@@ -6632,6 +6741,25 @@ int main(void) {
     failed += test_ai_stream_anthropic_mixed_blocks();
     failed += test_ai_stream_openai_tool_call();
     failed += test_ai_stream_openai_no_tools();
+    failed += test_ai_stream_openai_finish_stop_with_pending_call();
+    failed += test_ai_stream_openai_no_finish_reason_with_pending_call();
+    failed += test_ai_stream_openai_whole_call_in_finish_chunk();
+    failed += test_ai_stream_openai_tool_delta_without_index();
+    failed += test_ai_stream_openai_index_less_calls_split_on_id();
+    failed += test_ai_stream_openai_index_less_two_calls_in_one_delta();
+    failed += test_ai_stream_openai_index_less_id_only_on_first_chunk_stays_one_call();
+    failed += test_ai_stream_openai_indexed_parallel_calls_unchanged();
+    failed += test_ai_stream_openai_text_kept_with_finish_reason();
+    failed += test_ai_stream_openai_finish_tool_calls_path_unchanged();
+    failed += test_ai_stream_openai_plain_reply_stop_ends_normally();
+    failed += test_ai_tool_round_should_run_rules();
+    failed += test_ai_stream_anthropic_finish_recorded_behaviour_unchanged();
+    failed += test_ai_tools_stream_compact_drops_index_gaps();
+    failed += test_ai_tools_stream_compact_keeps_order_and_only_holes();
+    failed += test_ai_stream_chunk_error_object_message();
+    failed += test_ai_stream_chunk_error_string_form();
+    failed += test_ai_stream_chunk_error_not_an_error();
+    failed += test_ai_stream_chunk_error_sanitised_and_capped();
     failed += test_ai_stream_error_reset();
     failed += test_ai_stream_anthropic_invalid_json();
 
@@ -6716,6 +6844,10 @@ int main(void) {
     failed += test_web_fetch_get_failure();
     failed += test_web_fetch_cancel_after_resolve();
     failed += test_web_fetch_end_hook_runs_once_on_every_exit();
+    failed += test_web_fetch_pinned_same_host_followed();
+    failed += test_web_fetch_pinned_cross_host_refused();
+    failed += test_web_fetch_unpinned_cross_host_followed();
+    failed += test_web_fetch_pinned_host_spellings();
 #ifndef _WIN32
     failed += test_web_fetch_no_backend_not_available();
 #endif
@@ -6733,6 +6865,16 @@ int main(void) {
     failed += test_agentic_conversation_full();
     failed += test_agentic_cancel_before_tool();
     failed += test_agentic_truncation_warning();
+    failed += test_ai_supports_tools_moonshot();
+    failed += test_ai_reasoning_moonshot_body();
+    failed += test_ai_reasoning_other_providers_none();
+    failed += test_ai_reasoning_absent_emits_nothing();
+    failed += test_ai_reasoning_escaped_in_body();
+    failed += test_ai_reasoning_capped();
+    failed += test_ai_reasoning_copy_take_compact();
+    failed += test_ai_moonshot_max_completion_tokens();
+    failed += test_ai_stream_chunk_cut_off();
+    failed += test_ai_moonshot_output_limit_per_model();
     failed += test_cap_all_quotes();
     failed += test_cap_control_bytes_stripped();
     failed += test_cap_utf8_boundary();
@@ -6778,6 +6920,16 @@ int main(void) {
     failed += test_chat_cmd_label_quoted();
     failed += test_chat_card_header_text();
     failed += test_chat_msg_set_quoted();
+    failed += test_chat_approval_add_tool_pending_even_with_auto();
+    failed += test_chat_approval_add_tool_refuses();
+    failed += test_chat_approval_add_tool_detail_ellipsis();
+    failed += test_chat_approval_policy_walks_skip_tool();
+    failed += test_cmd_batch_skips_tool_batches();
+    failed += test_cmd_batch_full();
+    failed += test_continue_text_skips_tool();
+    failed += test_chat_card_header_noun();
+    failed += test_chat_msg_set_tool_and_outcome();
+    failed += test_chat_msg_apply_ceiling_skips_tool();
     failed += test_chat_msg_set_reason();
     failed += test_continue_text_quoted_entry();
 
@@ -7411,6 +7563,9 @@ int main(void) {
     failed += test_ai_stream_abort_is_per_owner();
     failed += test_ai_stream_abort_all_on_panel_close();
     failed += test_ai_stream_table_null_owner_entry_drains();
+    failed += test_ai_stream_new_slot_idle();
+    failed += test_ai_stream_new_tool_timeout_default();
+    failed += test_ai_stream_new_tool_rounds_default();
     failed += test_ai_stream_table_full_and_bad_args();
     failed += test_ai_stream_copy_tools_rebinds_context();
     failed += test_ai_stream_release_frees_conversation();
@@ -7615,6 +7770,26 @@ int main(void) {
     failed += test_render_stuck_switching_session_starts_a_new_episode();
     failed += test_render_stuck_the_number_of_dirty_rows_does_not_matter_only_that_one_is();
     failed += test_render_stuck_null_state_is_safe();
+    /* test_tool_decision.c */
+    failed += test_tool_gate_matrix();
+    failed += test_tool_gate_levels_follow_cmd_safety_order();
+    failed += test_tool_registrations();
+    failed += test_tool_decision_publish_gen_nonzero_and_fresh();
+    failed += test_tool_decision_publish_skips_zero_on_wrap();
+    failed += test_tool_decision_each_outcome();
+    failed += test_tool_decision_second_answer_loses();
+    failed += test_tool_decision_stale_gen();
+    failed += test_tool_decision_invalid_answer();
+    failed += test_tool_decision_aborted_poll();
+    failed += test_tool_decision_abort_before_publish();
+    failed += test_tool_decision_expiry();
+    failed += test_tool_decision_expiry_follows_timeout();
+    failed += test_tool_decision_timeout_ms();
+    failed += test_tool_decision_never_expires();
+    failed += test_tool_decision_late_answer_reports_winner();
+    failed += test_tool_decision_answer_before_remove_order();
+    failed += test_tool_decision_notes();
+    failed += test_tool_decision_row_labels();
     /* test_ai_debug_tool.c */
     failed += test_ai_debug_tool_register_fills_the_definition();
     failed += test_ai_debug_tool_registered_only_while_debugging();
@@ -7722,6 +7897,9 @@ int main(void) {
         int test_net_url_resolve_relative(void);
         int test_net_url_resolve_refuses(void);
         int test_net_url_display(void);
+        int test_net_url_display_marked(void);
+        int test_net_url_detail(void);
+        int test_net_text_escape(void);
         failed += test_dlog_review_osc52_introducer_in_the_unwritten_tail_withholds_the_next_read();
         failed += test_dlog_review_osc52_introducer_after_the_output_filled_up_withholds_the_next_read();
         failed += test_dlog_review_escape_bytes_keeps_tracking_after_the_output_is_full();
@@ -7782,6 +7960,9 @@ int main(void) {
         failed += test_net_url_resolve_relative();
         failed += test_net_url_resolve_refuses();
         failed += test_net_url_display();
+        failed += test_net_url_display_marked();
+        failed += test_net_url_detail();
+        failed += test_net_text_escape();
         failed += test_pw_layout_today_unchanged();
         failed += test_pw_layout_text_row();
         failed += test_pw_text_crlf();

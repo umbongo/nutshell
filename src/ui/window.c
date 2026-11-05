@@ -1127,6 +1127,9 @@ static void free_session(Session *s) {
         session_close_io(s);
         if (s->session_log) fclose(s->session_log);
         DLOG_EV(DLOG_GENERAL, DLOG_INFO, s->log_id, "session.free");
+        /* A tool card's call is answered before its batch goes (spec
+         * decision 20). */
+        ai_chat_cancel_tool_batches_for(g_hwndAiChat, &s->ai_state);
         cmd_batch_set_free(&s->ai_state.batches);
         free(s->ai_state.stream_content);
         free(s->ai_state.stream_thinking);
@@ -2391,6 +2394,10 @@ static void on_settings_clicked_page(int initial_page) {
                              g_config->settings.ai_web_fetch_enabled);
         ai_chat_set_context_lines(g_hwndAiChat,
                                   g_config->settings.ai_max_context_lines);
+        ai_chat_set_tool_timeout(g_hwndAiChat,
+                                 g_config->settings.ai_tool_timeout_sec);
+        ai_chat_set_tool_rounds(g_hwndAiChat,
+                                g_config->settings.ai_tool_auto_rounds);
     }
 
     /* Resize all terminals to the new character grid */
@@ -2458,6 +2465,8 @@ static HWND create_ai_chat(HWND parent)
                              g_config->settings.ai_web_fetch_enabled);
         ai_chat_set_markdown(hwnd, g_config->settings.markdown_render_enabled);
         ai_chat_set_context_lines(hwnd, g_config->settings.ai_max_context_lines);
+        ai_chat_set_tool_timeout(hwnd, g_config->settings.ai_tool_timeout_sec);
+        ai_chat_set_tool_rounds(hwnd, g_config->settings.ai_tool_auto_rounds);
         ai_chat_set_policy_default(hwnd, g_config->settings.ai_policy_default);
     }
     return hwnd;

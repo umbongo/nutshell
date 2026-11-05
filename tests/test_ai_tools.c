@@ -1,5 +1,7 @@
 #include "test_framework.h"
 #include "ai_tools.h"
+#include "ai_prompt.h"
+#include "chat_approval.h"
 #include "json_parser.h"
 #include <string.h>
 #include <stdlib.h>
@@ -992,6 +994,499 @@ int test_ai_stream_openai_no_tools(void)
 }
 
 /* ======================================================================== */
+/* OpenAI-format stream: finish reasons, missing index, in-stream errors      */
+/* (Kimi trace, Task 17). Chunks are the providers' real SSE shapes.          */
+/* ======================================================================== */
+
+#define SSE_CALL_FIRST \
+    "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0," \
+    "\"id\":\"call_9\",\"type\":\"function\"," \
+    "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}"
+#define SSE_CALL_ARGS \
+    "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0," \
+    "\"function\":{\"arguments\":\"{\\\"url\\\":\\\"https://example.org/\\\"}\"}}]}," \
+    "\"finish_reason\":null}]}"
+
+/* One chunk through the extended parser. */
+static int feed_ex(AiToolStreamState *st, const char *json,
+                   char *text, size_t tsz)
+{
+    char think[64] = "";
+    text[0] = '\0';
+    return ai_parse_stream_chunk_ex(json, text, tsz, think, sizeof(think),
+                                    st, "moonshot");
+}
+
+int test_ai_stream_openai_finish_stop_with_pending_call(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_FIRST, text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_ARGS, text, sizeof(text)), 0);
+    int rc = feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}",
+        text, sizeof(text));
+    ASSERT_EQ(rc, 1);                       /* a stop, as before */
+    ASSERT_EQ(st.pending_tool_count, 1);    /* the call is still pending */
+    ASSERT_STR_EQ(st.finish, "stop");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    /* The loop runs although tool_stop (rc == 2) never came. */
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, st.pending_tool_count, 0), 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_no_finish_reason_with_pending_call(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_FIRST, text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_ARGS, text, sizeof(text)), 0);
+    /* The stream ends at [DONE] with no finish_reason at all. */
+    (void)feed_ex(&st, "[DONE]", text, sizeof(text));   /* return value not pinned */
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.finish, "");
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, st.pending_tool_count, 0), 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_whole_call_in_finish_chunk(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    int rc = feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,"
+        "\"id\":\"call_7\",\"type\":\"function\",\"function\":{\"name\":"
+        "\"web_fetch\",\"arguments\":\"{\\\"url\\\":\\\"https://example.org/\\\"}\"}}]},"
+        "\"finish_reason\":\"tool_calls\"}]}", text, sizeof(text));
+    ASSERT_EQ(rc, 2);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_7");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_NOT_NULL(strstr(st.pending_tool_calls[0].input_json, "example.org"));
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_tool_delta_without_index(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"id\":\"call_3\",\"type\":\"function\",\"function\":{\"name\":"
+        "\"web_fetch\",\"arguments\":\"{\\\"url\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);           /* index 0, one call */
+    ASSERT_EQ(st.index_defaulted, 1);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"https://example.org/\\\"}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);           /* still one call */
+    ASSERT_EQ(st.index_defaulted, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json,
+                  "{\"url\":\"https://example.org/\"}");
+    ai_tools_stream_reset(&st);
+
+    /* An explicit index never counts as defaulted. */
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_FIRST, text, sizeof(text)), 0);
+    ASSERT_EQ(st.index_defaulted, 0);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_index_less_calls_split_on_id(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    /* Call a: id and name first, arguments over two chunks (no index, no id). */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"a\","
+        "\"type\":\"function\",\"function\":{\"name\":\"web_fetch\","
+        "\"arguments\":\"{\\\"url\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"https://a.example/\\\"}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    /* Call b: a different id starts a new call, arguments over two chunks. */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"b\","
+        "\"type\":\"function\",\"function\":{\"name\":\"web_search\","
+        "\"arguments\":\"{\\\"query\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"cats\\\"}\"}}]}," 
+        "\"finish_reason\":\"stop\"}]}", text, sizeof(text)), 1);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "a");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json,
+                  "{\"url\":\"https://a.example/\"}");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].id, "b");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"cats\"}");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_index_less_two_calls_in_one_delta(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{\\\"url\\\":\\\"https://a.example/\\\"}\"}},"
+        "{\"id\":\"b\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\\\"x\\\"}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json,
+                  "{\"url\":\"https://a.example/\"}");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"x\"}");
+    ASSERT_EQ(st.index_defaulted, 2);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_index_less_id_only_on_first_chunk_stays_one_call(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"k1\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{\\\"u\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"rl\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    /* The same id repeated on a later chunk is the same call. */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"k1\","
+        "\"function\":{\"arguments\":\"\\\"x\\\"}\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{\"url\":\"x\"}");
+    ai_tools_stream_reset(&st);
+
+    /* A call that has a name but never got an id is closed by a delta that
+     * brings one: that is a second call. */
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"n\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_indexed_parallel_calls_unchanged(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{\\\"url\\\":\"}},"
+        "{\"index\":1,\"id\":\"b\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":1,\"function\":{\"arguments\":\"\\\"q\\\"}\"}},"
+        "{\"index\":0,\"function\":{\"arguments\":\"\\\"https://a.example/\\\"}\"}}]},"
+        "\"finish_reason\":\"tool_calls\"}]}", text, sizeof(text)), 2);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(st.index_defaulted, 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{\"url\":\"https://a.example/\"}");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"q\"}");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_text_kept_with_finish_reason(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    int rc = feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\" Following it now.\"},"
+        "\"finish_reason\":\"stop\"}]}", text, sizeof(text));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(text, " Following it now.");
+    ASSERT_STR_EQ(st.finish, "stop");
+
+    ai_tools_stream_reset(&st);
+    ai_tools_stream_init(&st);
+    rc = feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Fetching.\","
+        "\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"type\":\"function\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]},"
+        "\"finish_reason\":\"tool_calls\"}]}", text, sizeof(text));
+    ASSERT_EQ(rc, 2);
+    ASSERT_STR_EQ(text, "Fetching.");
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_finish_tool_calls_path_unchanged(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_FIRST, text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st, SSE_CALL_ARGS, text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}",
+        text, sizeof(text)), 2);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.finish, "tool_calls");
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 1, 1, 0), 1);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_plain_reply_stop_ends_normally(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_STR_EQ(text, "Hi");
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}",
+        text, sizeof(text)), 1);
+    ASSERT_EQ(st.pending_tool_count, 0);
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, st.pending_tool_count, 0), 0);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_tool_round_should_run_rules(void)
+{
+    TEST_BEGIN();
+    /* OpenAI-format providers: pending calls decide, not the finish reason. */
+    ASSERT_EQ(ai_tool_round_should_run("openai", 0, 2, 0), 1);
+    ASSERT_EQ(ai_tool_round_should_run("deepseek", 1, 1, 0), 1);
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, 0, 0), 0);
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 1, 0, 0), 0);
+    ASSERT_EQ(ai_tool_round_should_run(NULL, 0, 1, 0), 1);
+    /* finish_reason "length": the arguments are cut off, never run them. */
+    ASSERT_EQ(ai_tool_round_should_run("moonshot", 0, 1, 1), 0);
+    /* Anthropic keeps its tool_use stop requirement. */
+    ASSERT_EQ(ai_tool_round_should_run("anthropic", 0, 1, 0), 0);
+    ASSERT_EQ(ai_tool_round_should_run("anthropic", 1, 1, 0), 1);
+    ASSERT_EQ(ai_tool_round_should_run("anthropic", 1, 0, 0), 0);
+    TEST_END();
+}
+
+int test_ai_stream_anthropic_finish_recorded_behaviour_unchanged(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}",
+        &st), 1);
+    ASSERT_STR_EQ(st.finish, "tool_use");
+    ASSERT_EQ(ai_parse_tool_stream_anthropic(
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"}}",
+        &st), 2);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_tools_stream_compact_drops_index_gaps(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    /* A single call at index 5: slots 0..4 are zeroed holes. */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":5,"
+        "\"id\":\"call_5\",\"type\":\"function\",\"function\":{\"name\":"
+        "\"web_fetch\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"stop\"}]}",
+        text, sizeof(text)), 1);
+    ASSERT_EQ(st.pending_tool_count, 6);
+    ASSERT_EQ(ai_tools_stream_compact(&st), 5);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "call_5");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{}");
+    ASSERT_EQ(ai_tools_stream_compact(&st), 0);   /* idempotent */
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_tools_stream_compact_keeps_order_and_only_holes(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    /* Indices 0, 2 and 3 present, 1 missing; a call with a name but no id
+     * (and one with an id but no name) is not a hole. */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"1\"}},"
+        "{\"index\":2,\"function\":{\"name\":\"web_search\",\"arguments\":\"2\"}},"
+        "{\"index\":3,\"id\":\"d\",\"function\":{\"arguments\":\"3\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 4);
+    ASSERT_EQ(ai_tools_stream_compact(&st), 1);
+    ASSERT_EQ(st.pending_tool_count, 3);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "a");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "2");
+    ASSERT_STR_EQ(st.pending_tool_calls[2].id, "d");
+    ASSERT_STR_EQ(st.pending_tool_calls[2].input_json, "3");
+    ai_tools_stream_reset(&st);
+
+    /* Nothing pending, NULL, no array: all 0. */
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(ai_tools_stream_compact(&st), 0);
+    ASSERT_EQ(ai_tools_stream_compact(NULL), 0);
+    TEST_END();
+}
+
+int test_ai_stream_chunk_error_object_message(void)
+{
+    TEST_BEGIN();
+    char msg[AI_STREAM_ERROR_MSG_MAX + 1];
+    int rc = ai_stream_chunk_error("moonshot",
+        "{\"error\":{\"message\":\"Your account is suspended\",\"type\":"
+        "\"insufficient_quota\"}}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "Your account is suspended");
+    /* Without a message, the type names it. */
+    rc = ai_stream_chunk_error("openai",
+        "{\"error\":{\"type\":\"server_error\"}}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "server_error");
+    /* No message, no type. */
+    rc = ai_stream_chunk_error("openai", "{\"error\":{}}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "unknown error");
+    TEST_END();
+}
+
+int test_ai_stream_chunk_error_string_form(void)
+{
+    TEST_BEGIN();
+    char msg[AI_STREAM_ERROR_MSG_MAX + 1];
+    int rc = ai_stream_chunk_error("deepseek",
+        "{\"error\":\"rate limit exceeded\"}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "rate limit exceeded");
+    TEST_END();
+}
+
+int test_ai_stream_chunk_error_not_an_error(void)
+{
+    TEST_BEGIN();
+    char msg[AI_STREAM_ERROR_MSG_MAX + 1] = "keep";
+    ASSERT_EQ(ai_stream_chunk_error("moonshot",
+        "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"error\"}}]}",
+        msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", "{\"error\":null}",
+                                    msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", "[DONE]", msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", "", msg, sizeof(msg)), 0);
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", NULL, msg, sizeof(msg)), 0);
+    /* Anthropic's own error events are not this path's business. */
+    ASSERT_EQ(ai_stream_chunk_error("anthropic",
+        "{\"type\":\"error\",\"error\":{\"message\":\"overloaded\"}}",
+        msg, sizeof(msg)), 0);
+    /* NULL out buffer is allowed. */
+    ASSERT_EQ(ai_stream_chunk_error("moonshot", "{\"error\":{\"message\":\"x\"}}",
+                                    NULL, 0), 1);
+    TEST_END();
+}
+
+int test_ai_stream_chunk_error_sanitised_and_capped(void)
+{
+    TEST_BEGIN();
+    char msg[AI_STREAM_ERROR_MSG_MAX + 1];
+    /* ESC, BEL, newline, a bidi override (U+202E), a C1 control (U+0085). */
+    int rc = ai_stream_chunk_error("moonshot",
+        "{\"error\":{\"message\":\"bad\\u001b[31m key\\u0007\\nnow\\u202eevil\\u0085!\"}}",
+        msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "bad[31m key nowevil!");
+    for (const char *p = msg; *p; p++) {
+        ASSERT_TRUE((unsigned char)*p >= 0x20 && *p != 0x7F);
+    }
+
+    /* U+061C ARABIC LETTER MARK is dropped; U+2028/U+2029 become a space. */
+    rc = ai_stream_chunk_error("moonshot",
+        "{\"error\":{\"message\":\"a\\u061cb\\u2028c\\u2029d\"}}", msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_STR_EQ(msg, "ab c d");
+
+    /* A long message is cut to AI_STREAM_ERROR_MSG_MAX bytes. */
+    char json[1024];
+    size_t n = (size_t)snprintf(json, sizeof(json), "{\"error\":{\"message\":\"");
+    for (int i = 0; i < 600; i++) json[n++] = 'a';
+    n += (size_t)snprintf(json + n, sizeof(json) - n, "\"}}");
+    rc = ai_stream_chunk_error("moonshot", json, msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(strlen(msg), (size_t)AI_STREAM_ERROR_MSG_MAX);
+
+    /* The cut never splits a multi-byte character. */
+    n = (size_t)snprintf(json, sizeof(json), "{\"error\":{\"message\":\"");
+    for (int i = 0; i < 199; i++) json[n++] = 'a';
+    n += (size_t)snprintf(json + n, sizeof(json) - n, "\xc3\xa9\xc3\xa9\"}}");
+    rc = ai_stream_chunk_error("moonshot", json, msg, sizeof(msg));
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(strlen(msg), (size_t)199);          /* e-acute needs 2 bytes */
+
+    /* A small buffer is honoured. */
+    char small[8];
+    rc = ai_stream_chunk_error("moonshot",
+        "{\"error\":{\"message\":\"abcdefghijklmnop\"}}", small, sizeof(small));
+    ASSERT_EQ(rc, 1);
+    ASSERT_EQ(strlen(small), (size_t)7);
+    TEST_END();
+}
+
+/* ======================================================================== */
 /* Streaming error handling tests                                             */
 /* ======================================================================== */
 
@@ -1124,5 +1619,202 @@ int test_tool_execute_web_search_error_stays_content(void)
     ASSERT_STR_EQ(r.tool_note, "");
     ASSERT_EQ(r.is_error, 1);
     free(r.content);
+    TEST_END();
+}
+
+/* ---- ai_tool_card_text ------------------------------------------------- */
+
+int test_ai_tool_card_text_web_fetch(void)
+{
+    TEST_BEGIN();
+    AiToolCall call;
+    char row[256], detail[1024];
+
+    memset(&call, 0, sizeof call);
+    snprintf(call.id, sizeof call.id, "toolu_1");
+    snprintf(call.name, sizeof call.name, "web_fetch");
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://u@a.test/x?q=1\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/x?\xE2\x80\xA6");
+    ASSERT_STR_EQ(detail, "https://a.test/x?q=1");
+
+    /* no query: no mark */
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"https://a.test/x\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/x");
+    ASSERT_STR_EQ(detail, "https://a.test/x");
+
+    /* a control (JSON \u001b) in the URL: removed from the row, escaped in the detail */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://a.test/a\\u001bb\\u202ec\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/ab\xEF\xBF\xBD" "c");
+    ASSERT_STR_EQ(detail, "https://a.test/a\\x1Bb\\u202Ec");
+
+    /* invisible characters (JSON \u escapes and raw bytes): never raw on the
+     * card, U+FFFD in the row, an escape in Details */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://a.test/p\\u200ba\\ufeffb\\u00adc\\ud800\\udc00d\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_TRUE(strstr(row, "\xE2\x80\x8B") == NULL);
+    ASSERT_TRUE(strstr(detail, "\xE2\x80\x8B") == NULL);
+    ASSERT_TRUE(strstr(row, "\xEF\xBB\xBF") == NULL);
+    ASSERT_TRUE(strstr(detail, "\xEF\xBB\xBF") == NULL);
+    ASSERT_TRUE(strstr(row, "\xC2\xAD") == NULL);
+    ASSERT_TRUE(strstr(detail, "\xC2\xAD") == NULL);
+    ASSERT_TRUE(strstr(row, "\xEF\xBF\xBD") != NULL);
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://a.test/p\xE2\x80\x8B" "a\xEF\xBB\xBF" "b\xC2\xAD" "c\xF3\xA0\x81\x81" "d\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/p\xEF\xBF\xBD" "a\xEF\xBF\xBD" "b\xEF\xBF\xBD" "c\xEF\xBF\xBD" "d");
+    ASSERT_STR_EQ(detail, "https://a.test/p\\u200Ba\\uFEFFb\\u00ADc\\U000E0041d");
+    /* an invalid UTF-8 byte: U+FFFD in the row, \xNN in Details */
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"https://a.test/a\xFF" "b\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/a\xEF\xBF\xBD" "b");
+    ASSERT_STR_EQ(detail, "https://a.test/a\\xFFb");
+
+    /* a schemeless URL quoting "://" in its path still loses its userinfo */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"user:pw@host/p://x\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: host/p://x");
+    ASSERT_STR_EQ(detail, "host/p://x");
+
+    /* the query never reaches the row, even a long one */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"https://a.test/?token=hunter2&x=1\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_TRUE(strstr(row, "hunter2") == NULL);
+    ASSERT_TRUE(strstr(detail, "hunter2") != NULL);
+
+    /* missing, empty or non-string url, malformed JSON */
+    snprintf(call.input_json, sizeof call.input_json, "{}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "web_fetch: (no url)");
+    ASSERT_STR_EQ(detail, "");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "web_fetch: (no url)");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":42}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "web_fetch: (no url)");
+    snprintf(call.input_json, sizeof call.input_json, "not json");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "web_fetch: (no url)");
+
+    /* NULL call; NULL or zero-size buffers */
+    ASSERT_EQ(ai_tool_card_text(NULL, row, sizeof row, detail, sizeof detail), -1);
+    ASSERT_STR_EQ(row, "");
+    ASSERT_STR_EQ(detail, "");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"https://a.test/x\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, NULL, 0, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(detail, "https://a.test/x");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, NULL, 0), 0);
+    ASSERT_STR_EQ(row, "web_fetch: https://a.test/x");
+
+    /* a small row buffer: NUL-terminated */
+    memset(row, 'x', sizeof row);
+    ai_tool_card_text(&call, row, 8, detail, sizeof detail);
+    ASSERT_TRUE(strlen(row) < 8);
+    TEST_END();
+}
+
+int test_ai_tool_card_text_other_tool(void)
+{
+    TEST_BEGIN();
+    AiToolCall call;
+    char row[128], detail[1024];
+
+    memset(&call, 0, sizeof call);
+    snprintf(call.name, sizeof call.name, "custom");
+    snprintf(call.input_json, sizeof call.input_json, "{\"a\":\"\\u0001\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "custom");
+    ASSERT_STR_EQ(detail, "{\"a\":\"\\u0001\"}");
+
+    /* a raw control byte in the input is escaped */
+    snprintf(call.input_json, sizeof call.input_json, "{\"a\":\"x\x1B[2Jy\xE2\x80\xAE\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(detail, "{\"a\":\"x\\x1B[2Jy\\u202E\"}");
+
+    /* the same rule as a URL: invisible, tag and invalid bytes are escaped */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"a\":\"p\xE2\x80\x8B\xEF\xBB\xBF\xC2\xAD\xF3\xA0\x81\x81\xFF\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(detail, "{\"a\":\"p\\u200B\\uFEFF\\u00AD\\U000E0041\\xFF\"}");
+
+    /* a hostile tool name never puts a control or bidi byte in the row */
+    snprintf(call.name, sizeof call.name, "ev\x1B[2Jil\xE2\x80\xAE" "x\n");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "ev[2Jilx");
+
+    /* a tool named like web_fetch but longer is another tool */
+    snprintf(call.name, sizeof call.name, "web_fetch2");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"https://a.test/?q=1\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch2");
+
+    /* a long input is cut with the ellipsis at the detail's capacity */
+    snprintf(call.name, sizeof call.name, "custom");
+    {
+        char *p = call.input_json;
+        size_t i;
+        p[0] = '{';
+        for (i = 1; i < 3000; i++) p[i] = 'z';
+        p[3000] = '\0';
+        char d[100];
+        ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, d, sizeof d), 0);
+        ASSERT_EQ(strlen(d), (size_t)99);
+        ASSERT_STR_EQ(d + 96, "\xE2\x80\xA6");
+    }
+
+    /* an empty input */
+    call.input_json[0] = '\0';
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(detail, "");
+    TEST_END();
+}
+
+/* The UI sizes a card's Details at CMD_NOTE_MAX (stream_post_tool_decide), so
+ * the escape-aware cut in ai_tool_card_text fires and chat_approval_add_tool
+ * copies the result whole: its own cut (UTF-8 continuation bytes only) must
+ * never see an over-long detail and split a \UXXXXXXXX escape. */
+int test_ai_tool_card_text_detail_fits_approval_note(void)
+{
+    TEST_BEGIN();
+    AiToolCall call;
+    char row[256], detail[CMD_NOTE_MAX];
+    char url[600] = "https://a.test/";
+    size_t i, n = strlen(url);
+
+    for (i = 0; i < 40; i++) {                 /* 40 x U+E0041 (F3 A0 81 81) */
+        memcpy(url + n, "\xF3\xA0\x81\x81", 4);
+        n += 4;
+    }
+    url[n] = '\0';
+    memset(&call, 0, sizeof call);
+    snprintf(call.id, sizeof call.id, "toolu_1");
+    snprintf(call.name, sizeof call.name, "web_fetch");
+    snprintf(call.input_json, sizeof call.input_json, "{\"url\":\"%s\"}", url);
+
+    /* at the real cap: whole escapes, then the ellipsis */
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    {
+        size_t len = strlen(detail);
+        ASSERT_TRUE(len < (size_t)CMD_NOTE_MAX);
+        ASSERT_TRUE(len > 13);
+        ASSERT_STR_EQ(detail + len - 3, "\xE2\x80\xA6");
+        ASSERT_TRUE(memcmp(detail + len - 13, "\\U000E0041", 10) == 0);
+    }
+
+    /* chat_approval_add_tool keeps it byte for byte: no second cut */
+    {
+        ApprovalQueue q;
+        chat_approval_init(&q);
+        ASSERT_EQ(chat_approval_add_tool(&q, row, detail, CMD_UNKNOWN), 0);
+        ASSERT_STR_EQ(q.entries[0].note, detail);
+    }
     TEST_END();
 }

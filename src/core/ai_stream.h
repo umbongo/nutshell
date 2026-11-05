@@ -9,6 +9,7 @@
 #include "ai_tool_web_search.h"
 #include "ai_tool_web_fetch.h"
 #include "worker_life.h"
+#include "tool_decision.h"
 
 /*
  * ai_stream -- one AI reply in flight, and the panel's table of them.
@@ -67,6 +68,24 @@ typedef struct AiStream {
      * runs; once the panel has the stream's done message it may take it
      * with ai_conv_take(). */
     AiConversation conv;
+
+    /* The tool gate's decision slot: the thread publishes a call that needs
+     * approval and polls it; the UI thread answers it once, by (id, gen).
+     * See tool_decision.h. */
+    ToolDecisionSlot decision;
+
+    /* How long a tool card waits before it expires, in ms; 0 = never. The panel's
+     * Settings value at launch (tool_decision_timeout_ms()), copied here
+     * like the other inputs: the thread never reads the panel, and a change
+     * saved while a card waits applies to later streams only. ai_stream_new()
+     * starts it at the 60 s default. */
+    unsigned long long tool_timeout_ms;
+
+    /* Automatic tool rounds before a call asks on a card, 1..20. The panel's
+     * Settings value at launch, copied here like tool_timeout_ms; the UI-side
+     * dispatch reads it from the stream, so a change applies to streams
+     * started after Save. ai_stream_new() starts it at the default of 3. */
+    int tool_auto_rounds;
 } AiStream;
 
 /* Allocate a stream with both references held, a fresh id and an empty

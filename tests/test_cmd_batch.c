@@ -256,3 +256,56 @@ int test_cmd_batch_add_user_acted_zero(void) {
     cmd_batch_set_free(&set);
     TEST_END();
 }
+
+int test_cmd_batch_skips_tool_batches(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    CmdBatch *t = cmd_batch_add(&set, NULL, NULL);
+    CmdBatch *c = cmd_batch_add(&set, NULL, NULL);
+    ASSERT_NOT_NULL(t);
+    ASSERT_NOT_NULL(c);
+    ASSERT_EQ(cmd_batch_is_tool(t), 0);
+    t->tool_stream_id = 5;
+    t->tool_gen = 2;
+    ASSERT_EQ(cmd_batch_is_tool(t), 1);
+    ASSERT_EQ(cmd_batch_is_tool(c), 0);
+    ASSERT_EQ(cmd_batch_is_tool(NULL), 0);
+    ASSERT_EQ(chat_approval_add_tool(&t->q, "web_fetch: https://a.test/", "u",
+                                     CMD_UNKNOWN), 0);
+    ASSERT_EQ(chat_approval_add_session(&c->q, "ls -la", CMD_PLATFORM_LINUX, 0), 0);
+    c->q.entries[0].status = APPROVE_PENDING;
+
+    /* the tool batch needs the user, but is not the one the harness acts on */
+    ASSERT_EQ(chat_approval_needs_user(&t->q), 1);
+    ASSERT_TRUE(cmd_batch_first_pending(&set) == c);
+
+    /* an approved tool row is not runnable */
+    ASSERT_EQ(chat_approval_approve(&t->q, 0), 0);
+    ASSERT_NULL(cmd_batch_next_runnable(&set));
+    ASSERT_EQ(chat_approval_approve(&c->q, 0), 0);
+    ASSERT_TRUE(cmd_batch_next_runnable(&set) == c);
+
+    /* with only the tool batch left, nothing is pending or runnable */
+    cmd_batch_remove(&set, c->id);
+    ASSERT_NULL(cmd_batch_first_pending(&set));
+    ASSERT_NULL(cmd_batch_next_runnable(&set));
+    cmd_batch_set_free(&set);
+    TEST_END();
+}
+
+int test_cmd_batch_full(void) {
+    TEST_BEGIN();
+    CmdBatchSet set;
+    cmd_batch_set_init(&set);
+    ASSERT_EQ(cmd_batch_full(&set), 0);
+    for (int i = 0; i < CMD_BATCH_MAX - 1; i++)
+        ASSERT_NOT_NULL(cmd_batch_add(&set, NULL, NULL));
+    ASSERT_EQ(set.count, CMD_BATCH_MAX - 1);
+    ASSERT_EQ(cmd_batch_full(&set), 0);
+    ASSERT_NOT_NULL(cmd_batch_add(&set, NULL, NULL));
+    ASSERT_EQ(cmd_batch_full(&set), 1);
+    ASSERT_EQ(cmd_batch_full(NULL), 1);
+    cmd_batch_set_free(&set);
+    TEST_END();
+}

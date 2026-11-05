@@ -518,7 +518,9 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     ai_conv_reset(&d->active_state->conv);
                     d->active_state->valid = 1;
                     /* Drop every pending batch -- New Chat starts clean,
-                     * same as it clears msg_list below. */
+                     * same as it clears msg_list below. A tool card's call
+                     * is answered first (cancelled). */
+                    ai_chat_cancel_tool_batches(d, d->active_state);
                     cmd_batch_set_free(&d->active_state->batches);
                     cmd_batch_set_init(&d->active_state->batches);
                 }
@@ -645,6 +647,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 ctl_id < IDC_CMD_APPROVE_BASE + APPROVAL_MAX_CMDS) {
                 int idx = ctl_id - IDC_CMD_APPROVE_BASE;
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     chat_approval_approve(&batch->q, idx);
 
@@ -676,6 +685,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 ctl_id < IDC_CMD_DENY_BASE + APPROVAL_MAX_CMDS) {
                 int idx = ctl_id - IDC_CMD_DENY_BASE;
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_NOT_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     chat_approval_deny(&batch->q, idx);
 
@@ -706,6 +722,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_CMD_APPROVE_ALL → approve all pending commands in one batch */
             if (d && ctl_id == IDC_CMD_APPROVE_ALL) {
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     chat_approval_approve_all(&batch->q);
 
@@ -733,6 +756,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
              * in one batch */
             if (d && ctl_id == IDC_CMD_APPROVE_SEL) {
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     int ci = 0;
                     int any_approved = 0;
@@ -782,6 +812,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_CMD_CANCEL_ALL → deny all pending commands in one batch */
             if (d && ctl_id == IDC_CMD_CANCEL_ALL) {
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_NOT_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     int ci = 0;
                     for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
@@ -882,7 +919,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     cmd_detail_show(top ? top : hwnd, dcmd ? dcmd : "",
                                     it->u.cmd.note ? it->u.cmd.note : "",
                                     it->u.cmd.reason,
-                                    it->u.cmd.safety, get_window_dpi(hwnd));
+                                    it->u.cmd.safety, it->u.cmd.tool,
+                                    get_window_dpi(hwnd));
                     break;
                 }
                 return 0;
@@ -1087,6 +1125,13 @@ next_coalesce:;
         return 0;
     }
 
+    case WM_AI_TOOL_DECIDE:
+        /* A stream thread needs the user's say on a tool call. The handler
+         * never waits and frees the message on every path, a stale stream
+         * included. */
+        ai_chat_on_tool_decide(d, (AiToolDecideMsg *)lParam);
+        return 0;
+
     case WM_AI_GET_POLICY:
         return d ? (LRESULT)cmd_policy_status_word(d->approval_q.policy) : 0;
 
@@ -1120,6 +1165,12 @@ next_coalesce:;
         /* The done/error message is the thread's last: drop our reference. */
         ai_stream_table_finish(&d->streams, rmsg->stream_id);
         resp_stream = NULL;
+        /* The session's current stream has ended, so any tool card it left
+         * (the thread's EXPIRED post can fail) is stale: answer and drop it
+         * now, so no tool batch outlives its stream or is evicted unanswered
+         * by cmd_batch_add below. The slot is gone with the stream, so the
+         * rows read "cancelled, not run". */
+        if (src) ai_chat_cancel_tool_batches(d, src);
 
         /* Free per-session stream accumulators */
         if (src) {
@@ -1921,6 +1972,8 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     d->forced_state = -1;
     d->paste_delay_ms = paste_delay_ms;
     d->context_lines = AI_CONTEXT_LINES_DEFAULT;
+    d->tool_timeout_sec = AI_TOOL_TIMEOUT_SEC_DEFAULT;
+    d->tool_auto_rounds = AI_TOOL_ROUNDS_DEFAULT;
     if (font_name && font_name[0])
         strncpy(d->font_name, font_name, sizeof(d->font_name) - 1);
     else
@@ -2176,6 +2229,26 @@ void ai_chat_set_context_lines(HWND hwnd, int lines)
     d->context_lines = ai_context_clamp_lines(lines);
 }
 
+void ai_chat_set_tool_timeout(HWND hwnd, int seconds)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    /* 0 = never expire; tool_decision_timeout_ms() clamps the rest */
+    if (seconds != AI_TOOL_TIMEOUT_SEC_NEVER && seconds < AI_TOOL_TIMEOUT_SEC_MIN)
+        seconds = AI_TOOL_TIMEOUT_SEC_MIN;
+    if (seconds > AI_TOOL_TIMEOUT_SEC_MAX) seconds = AI_TOOL_TIMEOUT_SEC_MAX;
+    d->tool_timeout_sec = seconds;
+}
+
+void ai_chat_set_tool_rounds(HWND hwnd, int rounds)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    d->tool_auto_rounds = ai_tool_rounds_clamp(rounds);
+}
+
 /* Internal helper: perform the actual session switch (save/load/rebuild).
  * Safe to call even while busy — each thread targets its own session. */
 static void do_session_switch(AiChatData *d,
@@ -2376,9 +2449,12 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
      * TIMER_CMD_QUEUE tick would dereference a batch that's about to be
      * freed below. */
     if (d->active_state == state) {
+        /* Stream first: ai_chat_cancel_active_stream() ends by starting the
+         * next approved batch, which the dispatch cancel below must then
+         * stop before the set is freed. */
+        if (state->busy) ai_chat_cancel_active_stream(d);
         KillTimer(d->hwnd, TIMER_CMD_QUEUE);
         ai_chat_dispatch_cancel(d, NULL, 0);
-        if (state->busy) ai_chat_cancel_active_stream(d);
     }
 
     /* Abort and orphan its reply in flight, if any: the thread frees its
@@ -2395,6 +2471,14 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
         d->last_snapshot_len = 0;
         d->session_gen++;   /* a confirmation box still up must not apply */
     }
+}
+
+void ai_chat_cancel_tool_batches_for(HWND hwnd, AiSessionState *state)
+{
+    if (!hwnd || !IsWindow(hwnd) || !state) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    ai_chat_cancel_tool_batches(d, state);
 }
 
 void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
@@ -2434,10 +2518,11 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * approval for the state's own batch, approval2 for "batches"'s
      * second one -- instead of touching d->approval_q. ai_chat_rebuild_display()
      * below replays every batch still in the set exactly the way a live
-     * session switch does (append_batch_command_items()), so this reuses
+     * session switch does (ai_chat_append_batch_command_items()), so this reuses
      * the same code path a real reply's cards come from. */
     int any_executing = 0;
     if (d->active_state) {
+        ai_chat_cancel_tool_batches(d, d->active_state);
         cmd_batch_set_free(&d->active_state->batches);
         cmd_batch_set_init(&d->active_state->batches);
 

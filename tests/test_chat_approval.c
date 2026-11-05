@@ -1065,3 +1065,160 @@ int test_chat_approval_quoted_records_sensitive_reason(void) {
     ASSERT_STR_EQ(q.entries[j].reason, "");
     TEST_END();
 }
+
+int test_chat_approval_add_tool_pending_even_with_auto(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.policy.allowed = CMD_CRITICAL;
+    q.policy.unattended = CMD_CRITICAL;
+    int i = chat_approval_add_tool(&q, "web_fetch: https://a.test/",
+                                   "https://a.test/?q=1", CMD_UNKNOWN);
+    ASSERT_EQ(i, 0);
+    ASSERT_EQ((int)q.entries[i].status, (int)APPROVE_PENDING);
+    ASSERT_EQ(q.entries[i].tool, 1);
+    ASSERT_EQ((int)q.entries[i].safety, (int)CMD_UNKNOWN);
+    ASSERT_EQ((int)q.entries[i].safety_mask, (int)CMD_MASK_OF(CMD_UNKNOWN));
+    ASSERT_EQ(q.entries[i].quoted, 0);
+    ASSERT_STR_EQ(q.entries[i].command, "web_fetch: https://a.test/");
+    ASSERT_STR_EQ(q.entries[i].note, "https://a.test/?q=1");
+    ASSERT_STR_EQ(q.entries[i].reason, "");
+    ASSERT_EQ(q.count, 1);
+
+    /* a command entry is not a tool */
+    int j = chat_approval_add(&q, "ls", CMD_PLATFORM_LINUX);
+    ASSERT_EQ(q.entries[j].tool, 0);
+    /* a NULL detail is an empty note */
+    int k = chat_approval_add_tool(&q, "web_fetch: https://b.test/", NULL, CMD_UNKNOWN);
+    ASSERT_TRUE(k > 0);
+    ASSERT_STR_EQ(q.entries[k].note, "");
+    TEST_END();
+}
+
+int test_chat_approval_add_tool_refuses(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    ASSERT_EQ(chat_approval_add_tool(&q, "", "d", CMD_UNKNOWN), -1);
+    ASSERT_EQ(chat_approval_add_tool(&q, "   ", "d", CMD_UNKNOWN), -1);
+    ASSERT_EQ(chat_approval_add_tool(&q, NULL, "d", CMD_UNKNOWN), -1);
+    char big[1100];
+    memset(big, 'a', sizeof(big));
+    big[1024] = '\0';                       /* 1024 bytes: refused */
+    ASSERT_EQ(chat_approval_add_tool(&q, big, "d", CMD_UNKNOWN), -1);
+    ASSERT_EQ(chat_approval_add_tool(&q, "web_fetch: a\x1b", "d", CMD_UNKNOWN), -1);
+    ASSERT_EQ(chat_approval_add_tool(&q, "web_fetch: \xE2\x80\xAE", "d", CMD_UNKNOWN), -1);
+    ASSERT_EQ(q.count, 0);
+    big[1023] = '\0';                       /* 1023 bytes: accepted */
+    ASSERT_EQ(chat_approval_add_tool(&q, big, "d", CMD_UNKNOWN), 0);
+    ASSERT_EQ(q.count, 1);
+    for (int n = 1; n < APPROVAL_MAX_CMDS; n++)
+        ASSERT_EQ(chat_approval_add_tool(&q, "web_fetch: a", "d", CMD_UNKNOWN), n);
+    ASSERT_EQ(q.count, APPROVAL_MAX_CMDS);
+    ASSERT_EQ(chat_approval_add_tool(&q, "web_fetch: a", "d", CMD_UNKNOWN), -1);
+    ASSERT_EQ(q.count, APPROVAL_MAX_CMDS);
+    TEST_END();
+}
+
+/* A detail that does not fit ApprovalEntry.note is cut on a UTF-8 boundary
+ * and ends in U+2026, never a silent cut. */
+int test_chat_approval_add_tool_detail_ellipsis(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    char d[600];
+
+    /* ASCII, far too long */
+    memset(d, 'x', sizeof(d));
+    d[599] = '\0';
+    int i = chat_approval_add_tool(&q, "web_fetch: a", d, CMD_UNKNOWN);
+    ASSERT_EQ(i, 0);
+    size_t n = strlen(q.entries[i].note);
+    ASSERT_TRUE(n < CMD_NOTE_MAX);
+    ASSERT_TRUE(n >= 3);
+    ASSERT_EQ(memcmp(q.entries[i].note + n - 3, "\xE2\x80\xA6", 3), 0);
+    ASSERT_EQ(q.entries[i].note[n - 4], 'x');
+
+    /* exactly CMD_NOTE_MAX bytes of detail (one too many): cut too */
+    memset(d, 'y', sizeof(d));
+    d[CMD_NOTE_MAX] = '\0';
+    i = chat_approval_add_tool(&q, "web_fetch: a", d, CMD_UNKNOWN);
+    n = strlen(q.entries[i].note);
+    ASSERT_TRUE(n < CMD_NOTE_MAX);
+    ASSERT_EQ(memcmp(q.entries[i].note + n - 3, "\xE2\x80\xA6", 3), 0);
+
+    /* CMD_NOTE_MAX - 1 bytes fits whole, no ellipsis added */
+    memset(d, 'z', sizeof(d));
+    d[CMD_NOTE_MAX - 1] = '\0';
+    i = chat_approval_add_tool(&q, "web_fetch: a", d, CMD_UNKNOWN);
+    ASSERT_EQ((int)strlen(q.entries[i].note), CMD_NOTE_MAX - 1);
+    ASSERT_STR_EQ(q.entries[i].note, d);
+
+    /* multi-byte text: the cut never leaves a partial sequence, for every
+     * alignment of the boundary against the limit */
+    for (int pad = 0; pad < 4; pad++) {
+        size_t pos = 0;
+        for (int p = 0; p < pad; p++) d[pos++] = 'a';
+        while (pos + 3 < sizeof(d) - 1) {
+            d[pos++] = (char)0xE2; d[pos++] = (char)0x82; d[pos++] = (char)0xAC;
+        }
+        d[pos] = '\0';
+        i = chat_approval_add_tool(&q, "web_fetch: a", d, CMD_UNKNOWN);
+        ASSERT_TRUE(i >= 0);
+        const unsigned char *s = (const unsigned char *)q.entries[i].note;
+        n = strlen((const char *)s);
+        ASSERT_TRUE(n < CMD_NOTE_MAX);
+        ASSERT_EQ(memcmp(s + n - 3, "\xE2\x80\xA6", 3), 0);
+        /* walk the string: every lead byte is followed by its continuations */
+        size_t k = 0;
+        int ok = 1;
+        while (k < n) {
+            int len = s[k] < 0x80 ? 1 : (s[k] & 0xE0) == 0xC0 ? 2
+                    : (s[k] & 0xF0) == 0xE0 ? 3 : 4;
+            if (k + (size_t)len > n) { ok = 0; break; }
+            for (int c = 1; c < len; c++)
+                if ((s[k + (size_t)c] & 0xC0) != 0x80) ok = 0;
+            k += (size_t)len;
+        }
+        ASSERT_EQ(ok, 1);
+    }
+    TEST_END();
+}
+
+int test_chat_approval_policy_walks_skip_tool(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.policy.allowed = CMD_READ;
+    q.policy.unattended = POLICY_NONE;
+    int t = chat_approval_add_tool(&q, "web_fetch: https://a.test/", "u", CMD_UNKNOWN);
+    int c = chat_approval_add_session(&q, "sudo cat /etc/shadow", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ((int)q.entries[t].status, (int)APPROVE_PENDING);
+    ASSERT_EQ((int)q.entries[c].status, (int)APPROVE_BLOCKED);
+
+    /* raise: only the command is released */
+    q.policy.allowed = CMD_CRITICAL;
+    ASSERT_EQ(chat_approval_unblock_all(&q), 1);
+    ASSERT_EQ((int)q.entries[c].status, (int)APPROVE_PENDING);
+    ASSERT_EQ((int)q.entries[t].status, (int)APPROVE_PENDING);
+
+    /* lower: the tool row stays PENDING although its safety is above READ */
+    q.policy.allowed = CMD_READ;
+    ASSERT_EQ(chat_approval_block_disallowed(&q), 1);
+    ASSERT_EQ((int)q.entries[c].status, (int)APPROVE_BLOCKED);
+    ASSERT_EQ((int)q.entries[t].status, (int)APPROVE_PENDING);
+
+    /* a blocked tool row (cannot happen through add_tool) is not released */
+    q.entries[t].status = APPROVE_BLOCKED;
+    q.policy.allowed = CMD_CRITICAL;
+    chat_approval_unblock_all(&q);
+    ASSERT_EQ((int)q.entries[t].status, (int)APPROVE_BLOCKED);
+    q.entries[t].status = APPROVE_PENDING;
+
+    /* an approved tool row is never the next row to run */
+    ASSERT_EQ(chat_approval_approve(&q, t), 0);
+    ASSERT_EQ(chat_approval_next_approved(&q), -1);
+    ASSERT_EQ(chat_approval_approve(&q, c), 0);
+    ASSERT_EQ(chat_approval_next_approved(&q), c);
+    TEST_END();
+}
