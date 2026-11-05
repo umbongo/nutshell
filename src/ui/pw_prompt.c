@@ -5,6 +5,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "pw_prompt.h"
 #include "pw_prompt_layout.h"
@@ -20,6 +21,7 @@
 
 #define PW_ID_EDIT 101
 #define PW_ID_SAVE 102
+#define PW_ID_TEXT 103
 
 #define PW_SAVE_TEXT "Save password to this profile"
 
@@ -27,12 +29,18 @@ typedef struct {
     char        buf[256];
     int         ok;
     int         dpi;
+    /* label, detail and text are read in WM_CREATE only (inside
+     * CreateWindowExA, before the modal loop) and cleared afterwards: the
+     * caller's strings may not outlive that. Nothing later reads them. */
     const char *label;
     const char *detail;    /* NULL = no detail row */
+    const char *text;      /* NULL = no text area */
+    int         echo;      /* 1 = no ES_PASSWORD, no reveal eye */
     int         offer_save;
     int         save;      /* checkbox state captured on OK */
     int         edit_max;  /* EM_LIMITTEXT: out_size - 1, capped to buf */
     HWND        detail_wnd;
+    HWND        text_wnd;
     const ThemeColors *theme;
     HBRUSH      br_bg;     /* bg_primary.base, window and static text */
     HBRUSH      br_edit;   /* bg_secondary.base, the field */
@@ -81,11 +89,30 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         themed_apply_title_bar(hwnd, ctx->theme);
 
         PwLayout L;
-        pw_layout(dpi, ctx->detail != NULL, 0, ctx->offer_save, &L);
+        pw_layout(dpi, ctx->detail != NULL, ctx->text != NULL, ctx->offer_save, &L);
         HFONT font = ns_font(FONT_BODY, dpi);
 
+        if (ctx->text) {
+            /* Read-only, scrolling, wraps (no ES_AUTOHSCROLL). Not a
+             * keyboard-only dead end: it is a tab stop so the arrow keys and
+             * Page Up/Down scroll it. The multi-line EDIT shows a bare LF as
+             * nothing, hence CRLF. */
+            ctx->text_wnd = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL |
+                        ES_MULTILINE | ES_READONLY,
+                        L.pad, L.y_text, L.fw, L.texth, hwnd,
+                        (HMENU)(UINT_PTR)PW_ID_TEXT, NULL, NULL);
+            SendMessageA(ctx->text_wnd, WM_SETFONT, (WPARAM)font, TRUE);
+            size_t cap = 2 * strlen(ctx->text) + 1;
+            char *crlf = (char *)malloc(cap);
+            if (crlf) {
+                pw_text_crlf(ctx->text, crlf, cap);
+                SetWindowTextA(ctx->text_wnd, crlf);
+                free(crlf);
+            }
+        }
         HWND lbl = CreateWindowExA(0, "STATIC", ctx->label ? ctx->label : "",
-                        WS_CHILD | WS_VISIBLE,
+                        WS_CHILD | WS_VISIBLE | SS_NOPREFIX,
                         L.pad, L.y_label, L.fw, L.ctlh, hwnd, NULL, NULL, NULL);
         SendMessageA(lbl, WM_SETFONT, (WPARAM)font, TRUE);
         if (ctx->detail) {
@@ -95,7 +122,8 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
             SendMessageA(ctx->detail_wnd, WM_SETFONT, (WPARAM)font, TRUE);
         }
         HWND edit = CreateWindowExA(WS_EX_CLIENTEDGE, "EDIT", "",
-                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_PASSWORD | ES_AUTOHSCROLL,
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL |
+                        (ctx->echo ? 0 : ES_PASSWORD),
                         L.pad, L.y_edit, L.fw, L.ctlh, hwnd,
                         (HMENU)(UINT_PTR)PW_ID_EDIT, NULL, NULL);
         SendMessageA(edit, WM_SETFONT, (WPARAM)font, TRUE);
@@ -109,9 +137,13 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         }
         pw_make_button(hwnd, "OK", IDOK, L.pad + L.fw - 2 * L.bw - L.gap, &L, font);
         pw_make_button(hwnd, "Cancel", IDCANCEL, L.pad + L.fw - L.bw, &L, font);
-        pw_reveal_attach(edit);   /* NULL on failure: the field still works */
+        if (!ctx->echo)
+            pw_reveal_attach(edit);   /* NULL on failure: the field still works */
         themed_apply_borders(hwnd, ctx->theme);
         SetFocus(edit);
+        ctx->label = NULL;
+        ctx->detail = NULL;
+        ctx->text = NULL;
         return 0;
     }
     case WM_ERASEBKGND:
@@ -126,8 +158,9 @@ static LRESULT CALLBACK pw_prompt_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp
         if (ctx) {
             const ThemeTokens *tk = ns_tokens();
             HDC hdc = (HDC)wp;
-            SetTextColor(hdc, theme_cr((ctx->detail_wnd && (HWND)lp == ctx->detail_wnd)
-                                       ? tk->text_dim : tk->text_main));
+            int dim = (ctx->detail_wnd && (HWND)lp == ctx->detail_wnd) ||
+                      (ctx->text_wnd && (HWND)lp == ctx->text_wnd);
+            SetTextColor(hdc, theme_cr(dim ? tk->text_dim : tk->text_main));
             SetBkColor(hdc, theme_cr(tk->bg_primary.base));
             return (LRESULT)ctx->br_bg;
         }
@@ -242,13 +275,15 @@ int pw_prompt_show(HWND parent, const PwPromptOpts *opts, char *out, int out_siz
     ctx.label = opts ? opts->label : NULL;
     ctx.theme = opts ? opts->theme : NULL;
     ctx.detail = opts ? opts->detail : NULL;
+    ctx.text = opts ? opts->text : NULL;
+    ctx.echo = opts ? opts->echo : 0;
     ctx.offer_save = opts ? opts->offer_save : 0;
     ctx.edit_max = (out_size > 0 && out_size - 1 < (int)sizeof(ctx.buf) - 1)
                        ? out_size - 1 : (int)sizeof(ctx.buf) - 1;
 
     /* Client size from the grid (see pw_layout). */
     PwLayout L;
-    pw_layout(ctx.dpi, ctx.detail != NULL, 0, ctx.offer_save, &L);
+    pw_layout(ctx.dpi, ctx.detail != NULL, ctx.text != NULL, ctx.offer_save, &L);
     RECT crc = { 0, 0, 2 * L.pad + L.fw, L.client_h };
     DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
     DWORD exstyle = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST;

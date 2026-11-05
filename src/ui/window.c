@@ -5156,7 +5156,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Offer "save" only when a saved profile still matches at this moment. */
             const int can_save = g_config &&
                 config_find_profile_match(g_config, &s->conn_profile) != NULL;
-            PwPromptOpts po = { "Password", "Enter password:", g_theme, detail, can_save };
+            PwPromptOpts po = { "Password", "Enter password:", g_theme, detail, can_save, NULL, 0 };
             char buf[256];
             int save = 0;
             buf[0] = '\0';
@@ -5300,6 +5300,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                      .theme = g_theme,
                                      .detail = req->message,
                                      .offer_save = (g_config &&
+                                         config_find_profile_match(g_config, &s->conn_profile)) ? 1 : 0 },
+                    passbuf, (int)sizeof(passbuf), &save);
+            } else if (req->kind == CONN_UI_KBDINT) {
+                /* kb_*, message and the caption buffer are read here, while
+                 * the dialog is built; pw_prompt_show() keeps none of them
+                 * once its modal loop runs (a nested free_session() may end
+                 * the worker frame they point into). */
+                char caption[160];
+                if (req->kb_name && req->kb_name[0])
+                    snprintf(caption, sizeof(caption), "SSH Authentication - %s", req->kb_name);
+                else
+                    snprintf(caption, sizeof(caption), "SSH Authentication");
+                ans = pw_prompt_show(hwnd,
+                    &(PwPromptOpts){ .title = caption,
+                                     .label = req->kb_prompt,
+                                     .theme = g_theme,
+                                     .detail = req->message,
+                                     .text = (req->kb_text && req->kb_text[0]) ? req->kb_text : NULL,
+                                     .echo = req->kb_echo,
+                                     .offer_save = (req->kb_offer_save && g_config &&
                                          config_find_profile_match(g_config, &s->conn_profile)) ? 1 : 0 },
                     passbuf, (int)sizeof(passbuf), &save);
             } else {
