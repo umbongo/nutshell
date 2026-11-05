@@ -2479,6 +2479,16 @@ int test_conn_prompt_seq_is_never_zero(void);
 int test_conn_prompt_null_is_safe(void);
 int test_conn_prompt_wants_password(void);
 
+/* test_ssh_auth_plan.c */
+int test_ssh_auth_parse(void);
+int test_ssh_auth_sequence_table(void);
+int test_ssh_auth_attempt_cap(void);
+int test_ssh_auth_saved_for(void);
+int test_ssh_auth_transport_dead(void);
+int test_ssh_auth_may_continue(void);
+int test_ssh_auth_requery_rule(void);
+int test_ssh_auth_fail_text(void);
+
 int test_ai_stream_finish_before_close(void);
 int test_ai_stream_close_before_finish(void);
 int test_ai_stream_double_close(void);
@@ -7111,6 +7121,14 @@ int main(void) {
     failed += test_conn_prompt_seq_is_never_zero();
     failed += test_conn_prompt_null_is_safe();
     failed += test_conn_prompt_wants_password();
+    failed += test_ssh_auth_parse();
+    failed += test_ssh_auth_sequence_table();
+    failed += test_ssh_auth_attempt_cap();
+    failed += test_ssh_auth_saved_for();
+    failed += test_ssh_auth_transport_dead();
+    failed += test_ssh_auth_may_continue();
+    failed += test_ssh_auth_requery_rule();
+    failed += test_ssh_auth_fail_text();
     failed += test_pw_reveal_press_reveals_only_with_text();
     failed += test_pw_reveal_release_masks();
     failed += test_pw_reveal_capture_lost_and_deactivate_mask();

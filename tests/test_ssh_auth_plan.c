@@ -1,0 +1,322 @@
+/* tests/test_ssh_auth_plan.c -- src/core/ssh_auth_plan.h: the server's
+ * auth-method list parser, the pure step plan and the failure text. */
+#include "test_framework.h"
+#include "ssh_auth_plan.h"
+
+#include <string.h>
+
+#define PK  SSH_AM_PUBLICKEY
+#define PW  SSH_AM_PASSWORD
+#define KBD SSH_AM_KBDINT
+
+/* Walks the plan to DONE as if every attempt returned -18. A KBDINT step
+ * sends the saved password when `kbd_sends` is set. Returns the step count. */
+static int walk(SshAuthPlan *p, SshAuthStep *out, int max, int kbd_sends)
+{
+    int n = 0;
+    for (;;) {
+        SshAuthStep s = ssh_auth_next(p);
+        if (s == SSH_STEP_DONE) break;
+        if (n >= max) return -1;
+        out[n++] = s;
+        ssh_auth_plan_record(p, s,
+            s == SSH_STEP_PASSWORD_SAVED || (s == SSH_STEP_KBDINT && kbd_sends));
+    }
+    return n;
+}
+
+static int expect_walk(int is_key, const char *saved, unsigned offered,
+                       int kbd_sends, const SshAuthStep *want, int nwant)
+{
+    SshAuthPlan p;
+    SshAuthStep got[16];
+    ssh_auth_plan_init(&p, is_key, saved, offered);
+    int n = walk(&p, got, 16, kbd_sends);
+    if (n != nwant) return 0;
+    for (int i = 0; i < n; i++)
+        if (got[i] != want[i]) return 0;
+    return 1;
+}
+
+int test_ssh_auth_parse(void)
+{
+    TEST_BEGIN();
+    char d[SSH_AUTH_DISPLAY_MAX];
+
+    memset(d, 'x', sizeof d);
+    ASSERT_EQ(ssh_auth_methods_parse(NULL, d, sizeof d), 0u);
+    ASSERT_STR_EQ(d, "");
+    ASSERT_EQ(ssh_auth_methods_parse("", d, sizeof d), 0u);
+    ASSERT_STR_EQ(d, "");
+    ASSERT_EQ(ssh_auth_methods_parse("publickey", d, sizeof d), PK);
+    ASSERT_STR_EQ(d, "publickey");
+    ASSERT_EQ(ssh_auth_methods_parse("publickey,password,keyboard-interactive",
+                                     d, sizeof d), PK | PW | KBD);
+    ASSERT_STR_EQ(d, "publickey, password, keyboard-interactive");
+    ASSERT_EQ(ssh_auth_methods_parse(" password , ,password,,", d, sizeof d), PW);
+    ASSERT_STR_EQ(d, "password");
+    ASSERT_EQ(ssh_auth_methods_parse("hostbased,gssapi-with-mic", d, sizeof d),
+              SSH_AM_OTHER);
+    ASSERT_STR_EQ(d, "hostbased, gssapi-with-mic");
+
+    /* A control byte inside a name: unknown, and never echoed. */
+    ASSERT_EQ(ssh_auth_methods_parse("pass\x1bword", d, sizeof d), SSH_AM_OTHER);
+    ASSERT_TRUE(strchr(d, '\x1b') == NULL);
+    ASSERT_STR_EQ(d, "password");
+
+    /* A NULL display is allowed; only the bit set comes back. */
+    ASSERT_EQ(ssh_auth_methods_parse("password,keyboard-interactive", NULL, 0),
+              PW | KBD);
+
+    /* A 300-byte list is cut on an item boundary under the cap. */
+    char longlist[400];
+    size_t off = 0;
+    for (int i = 0; off < 300; i++)
+        off += (size_t)snprintf(longlist + off, sizeof longlist - off,
+                                "%smethod%03d", i ? "," : "", i);
+    ASSERT_TRUE(strlen(longlist) >= 300);
+    memset(d, 'x', sizeof d);
+    unsigned bits = ssh_auth_methods_parse(longlist, d, SSH_AUTH_DISPLAY_MAX);
+    ASSERT_EQ(bits, SSH_AM_OTHER);
+    ASSERT_TRUE(strlen(d) <= 127);
+    ASSERT_TRUE(strlen(d) > 100);
+    ASSERT_TRUE(d[strlen(d) - 1] != ',' && d[strlen(d) - 1] != ' ');
+    ASSERT_TRUE(strncmp(d + strlen(d) - 9, "method", 6) == 0);
+
+    /* A tiny buffer is still NUL-terminated. */
+    char small[8];
+    memset(small, 'x', sizeof small);
+    ssh_auth_methods_parse("publickey,password", small, sizeof small);
+    ASSERT_TRUE(memchr(small, '\0', sizeof small) != NULL);
+    ASSERT_STR_EQ(small, "");
+    TEST_END();
+}
+
+int test_ssh_auth_sequence_table(void)
+{
+    TEST_BEGIN();
+    /* key profile */
+    { SshAuthStep w[] = { SSH_STEP_PUBLICKEY };
+      ASSERT_TRUE(expect_walk(1, "pp", PK, 0, w, 1)); }
+    { SshAuthStep w[] = { SSH_STEP_PUBLICKEY, SSH_STEP_KBDINT };
+      ASSERT_TRUE(expect_walk(1, "pp", PK | KBD, 0, w, 2)); }
+    { SshAuthStep w[] = { SSH_STEP_PUBLICKEY, SSH_STEP_KBDINT };
+      ASSERT_TRUE(expect_walk(1, "pp", PK | PW | KBD, 0, w, 2)); }
+    { SshAuthStep w[] = { SSH_STEP_KBDINT };
+      ASSERT_TRUE(expect_walk(1, "pp", KBD, 0, w, 1)); }
+    ASSERT_TRUE(expect_walk(1, "pp", PW, 0, NULL, 0));
+
+    /* password profile, saved password: password method first */
+    { SshAuthStep w[] = { SSH_STEP_PASSWORD_SAVED, SSH_STEP_KBDINT, SSH_STEP_PASSWORD_ASK };
+      ASSERT_TRUE(expect_walk(0, "pw", PW | KBD, 0, w, 3));
+      ASSERT_TRUE(expect_walk(0, "pw", PK | PW | KBD, 0, w, 3)); }
+    { SshAuthStep w[] = { SSH_STEP_PASSWORD_SAVED, SSH_STEP_PASSWORD_ASK };
+      ASSERT_TRUE(expect_walk(0, "pw", PW, 0, w, 2)); }
+    { SshAuthStep w[] = { SSH_STEP_KBDINT, SSH_STEP_KBDINT_RETRY };
+      ASSERT_TRUE(expect_walk(0, "pw", KBD, 1, w, 2)); }
+    { SshAuthStep w[] = { SSH_STEP_KBDINT };
+      ASSERT_TRUE(expect_walk(0, "pw", KBD, 0, w, 1)); }
+
+    /* password profile, no saved password: keyboard-interactive first */
+    { SshAuthStep w[] = { SSH_STEP_KBDINT, SSH_STEP_PASSWORD_ASK };
+      ASSERT_TRUE(expect_walk(0, NULL, PW | KBD, 0, w, 2)); }
+    { SshAuthStep w[] = { SSH_STEP_PASSWORD_ASK };
+      ASSERT_TRUE(expect_walk(0, NULL, PW, 0, w, 1));
+      ASSERT_TRUE(expect_walk(0, "", PW, 0, w, 1)); }
+    { SshAuthStep w[] = { SSH_STEP_KBDINT };
+      ASSERT_TRUE(expect_walk(0, NULL, KBD, 0, w, 1)); }
+
+    /* nothing usable on offer */
+    ASSERT_TRUE(expect_walk(0, "pw", 0, 0, NULL, 0));
+    ASSERT_TRUE(expect_walk(1, "pp", 0, 0, NULL, 0));
+    ASSERT_TRUE(expect_walk(0, "pw", SSH_AM_OTHER, 0, NULL, 0));
+    ASSERT_TRUE(expect_walk(0, "pw", PK, 0, NULL, 0));
+    TEST_END();
+}
+
+int test_ssh_auth_attempt_cap(void)
+{
+    TEST_BEGIN();
+    SshAuthPlan p;
+    ssh_auth_plan_init(&p, 1, "pp", PK | KBD);
+    p.attempts = SSH_AUTH_MAX_ATTEMPTS;
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_DONE);
+    ssh_auth_plan_init(&p, 0, "pw", PW | KBD);
+    p.attempts = SSH_AUTH_MAX_ATTEMPTS;
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_DONE);
+    ssh_auth_plan_init(&p, 0, NULL, PW | KBD);
+    p.attempts = SSH_AUTH_MAX_ATTEMPTS;
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_DONE);
+
+    ssh_auth_plan_init(&p, 1, "pp", PK | KBD);
+    ASSERT_EQ(p.attempts, 0);
+    ssh_auth_plan_record(&p, SSH_STEP_PUBLICKEY, 0);
+    ASSERT_EQ(p.attempts, 1);
+    ssh_auth_plan_count_retry(&p);
+    ASSERT_EQ(p.attempts, 2);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_KBDINT);
+    ssh_auth_plan_record(&p, SSH_STEP_KBDINT, 0);
+    ASSERT_EQ(p.attempts, 3);
+
+    /* The passphrase retries can use up the cap before the next step. */
+    ssh_auth_plan_init(&p, 1, "pp", PK | KBD);
+    ssh_auth_plan_record(&p, SSH_STEP_PUBLICKEY, 0);
+    ssh_auth_plan_count_retry(&p);
+    ssh_auth_plan_count_retry(&p);
+    ssh_auth_plan_count_retry(&p);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_DONE);
+    TEST_END();
+}
+
+int test_ssh_auth_saved_for(void)
+{
+    TEST_BEGIN();
+    SshAuthPlan p;
+
+    ssh_auth_plan_init(&p, 0, "secret", PW | KBD);
+    ASSERT_STR_EQ(ssh_auth_saved_for(&p, SSH_STEP_PASSWORD_SAVED, "secret"), "secret");
+    ssh_auth_plan_record(&p, SSH_STEP_PASSWORD_SAVED, 1);
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_KBDINT, "secret"));
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_PASSWORD_ASK, "secret"));
+
+    ssh_auth_plan_init(&p, 0, "secret", KBD);
+    ASSERT_STR_EQ(ssh_auth_saved_for(&p, SSH_STEP_KBDINT, "secret"), "secret");
+    ssh_auth_plan_record(&p, SSH_STEP_KBDINT, 1);
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_KBDINT_RETRY, "secret"));
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_PASSWORD_ASK, "secret"));
+
+    /* A KBDINT that did not send it leaves it available. */
+    ssh_auth_plan_init(&p, 0, "secret", PW | KBD);
+    ssh_auth_plan_record(&p, SSH_STEP_KBDINT, 0);
+    ASSERT_STR_EQ(ssh_auth_saved_for(&p, SSH_STEP_PASSWORD_SAVED, "secret"), "secret");
+
+    /* A key profile's password field is a passphrase: never an answer. */
+    ssh_auth_plan_init(&p, 1, "passphrase", PK | PW | KBD);
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_PUBLICKEY, "passphrase"));
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_KBDINT, "passphrase"));
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_PASSWORD_SAVED, "passphrase"));
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_PASSWORD_ASK, "passphrase"));
+
+    /* An empty saved password is none. */
+    ssh_auth_plan_init(&p, 0, "", PW | KBD);
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_KBDINT, ""));
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_PASSWORD_SAVED, ""));
+    ssh_auth_plan_init(&p, 0, NULL, PW | KBD);
+    ASSERT_NULL(ssh_auth_saved_for(&p, SSH_STEP_KBDINT, NULL));
+    TEST_END();
+}
+
+int test_ssh_auth_transport_dead(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ssh_auth_transport_dead(-7), 1);
+    ASSERT_EQ(ssh_auth_transport_dead(-13), 1);
+    ASSERT_EQ(ssh_auth_transport_dead(-43), 1);
+    ASSERT_EQ(ssh_auth_transport_dead(0), 0);
+    ASSERT_EQ(ssh_auth_transport_dead(-9), 0);
+    ASSERT_EQ(ssh_auth_transport_dead(-16), 0);
+    ASSERT_EQ(ssh_auth_transport_dead(-18), 0);
+    ASSERT_EQ(ssh_auth_transport_dead(-19), 0);
+    ASSERT_EQ(ssh_auth_transport_dead(-48), 0);
+    TEST_END();
+}
+
+int test_ssh_auth_may_continue(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(ssh_auth_may_continue(-18, 0, -18), 1);
+    ASSERT_EQ(ssh_auth_may_continue(-19, 0, -19), 1);
+    ASSERT_EQ(ssh_auth_may_continue(-18, 1, -9), 0);
+    ASSERT_EQ(ssh_auth_may_continue(-18, 0, -43), 0);
+    ASSERT_EQ(ssh_auth_may_continue(-18, 0, -7), 0);
+    ASSERT_EQ(ssh_auth_may_continue(-18, 0, -13), 0);
+    ASSERT_EQ(ssh_auth_may_continue(-16, 0, -16), 0);
+    ASSERT_EQ(ssh_auth_may_continue(-48, 0, -48), 0);
+    ASSERT_EQ(ssh_auth_may_continue(-48, 0, -18), 0);
+    ASSERT_EQ(ssh_auth_may_continue(-7, 0, -7), 0);
+    ASSERT_EQ(ssh_auth_may_continue(-7, 0, -18), 0);
+    ASSERT_EQ(ssh_auth_may_continue(-1, 0, -1), 0);
+    ASSERT_EQ(ssh_auth_may_continue(0, 0, 0), 0);
+    ASSERT_EQ(ssh_auth_may_continue(0, 0, -18), 0);
+    TEST_END();
+}
+
+int test_ssh_auth_requery_rule(void)
+{
+    TEST_BEGIN();
+    SshAuthPlan p;
+
+    ssh_auth_plan_init(&p, 1, "pp", PK);
+    ssh_auth_plan_record(&p, SSH_STEP_PUBLICKEY, 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -19, 0, -19), 1);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 1);
+    ssh_auth_plan_requeried(&p, KBD);
+    ASSERT_EQ(p.requeried, 1);
+    ASSERT_EQ(p.offered, KBD);
+    ASSERT_EQ(ssh_auth_next(&p), SSH_STEP_KBDINT);
+    ssh_auth_plan_record(&p, SSH_STEP_KBDINT, 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -18, 0, -18), 0);   /* once only */
+
+    /* Steps are left: no re-query yet. */
+    ssh_auth_plan_init(&p, 1, "pp", PK | KBD);
+    ssh_auth_plan_record(&p, SSH_STEP_PUBLICKEY, 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -19, 0, -19), 0);
+
+    /* Timeout, dead transport, a file error or the cap: never. */
+    ssh_auth_plan_init(&p, 1, "pp", PK);
+    ssh_auth_plan_record(&p, SSH_STEP_PUBLICKEY, 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -19, 1, -9), 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -19, 0, -43), 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -16, 0, -16), 0);
+    ASSERT_EQ(ssh_auth_should_requery(&p, -48, 0, -48), 0);
+    p.attempts = SSH_AUTH_MAX_ATTEMPTS;
+    ASSERT_EQ(ssh_auth_should_requery(&p, -19, 0, -19), 0);
+    TEST_END();
+}
+
+int test_ssh_auth_fail_text(void)
+{
+    TEST_BEGIN();
+    char buf[512];
+    size_t n;
+
+    n = ssh_auth_fail_text("alice", "host", 0, PK | KBD,
+                           "publickey, keyboard-interactive", NULL, buf, sizeof buf);
+    ASSERT_STR_EQ(buf, "Authentication failed for alice@host. "
+                       "The server offers: publickey, keyboard-interactive.");
+    ASSERT_EQ(n, strlen(buf));
+
+    n = ssh_auth_fail_text("alice", "host", 1, PW, "password", NULL, buf, sizeof buf);
+    ASSERT_STR_EQ(buf, "Authentication failed for alice@host. "
+                       "The server does not offer key authentication; it offers: password.");
+    ASSERT_EQ(n, strlen(buf));
+
+    /* A key profile whose server does offer publickey gets the plain clause. */
+    ssh_auth_fail_text("alice", "host", 1, PK, "publickey", NULL, buf, sizeof buf);
+    ASSERT_STR_EQ(buf, "Authentication failed for alice@host. The server offers: publickey.");
+
+    ssh_auth_fail_text("alice", "host", 0, PK | KBD, "publickey, keyboard-interactive",
+                       "Too many authentication prompts.", buf, sizeof buf);
+    ASSERT_STR_EQ(buf, "Authentication failed for alice@host. "
+                       "The server offers: publickey, keyboard-interactive. "
+                       "Too many authentication prompts.");
+
+    ssh_auth_fail_text("alice", "host", 0, 0, "", NULL, buf, sizeof buf);
+    ASSERT_STR_EQ(buf, "Authentication failed for alice@host.");
+
+    ssh_auth_fail_text("alice", "host", 0, 0, "", "Please enter your token.", buf, sizeof buf);
+    ASSERT_STR_EQ(buf, "Authentication failed for alice@host. Please enter your token.");
+
+    ssh_auth_fail_text("alice", "host", 0, 0, NULL, "", buf, sizeof buf);
+    ASSERT_STR_EQ(buf, "Authentication failed for alice@host.");
+
+    /* Too small a buffer: nothing, and a terminated empty string. */
+    char tiny[16];
+    memset(tiny, 'x', sizeof tiny);
+    n = ssh_auth_fail_text("alice", "host", 0, PK | KBD,
+                           "publickey, keyboard-interactive", NULL, tiny, sizeof tiny);
+    ASSERT_EQ(n, 0u);
+    ASSERT_STR_EQ(tiny, "");
+    ASSERT_EQ(ssh_auth_fail_text("a", "b", 0, 0, "", NULL, buf, 0), 0u);
+    TEST_END();
+}
