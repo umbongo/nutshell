@@ -82,7 +82,10 @@ const char *ui_theme_name(int index);
 /* A colour plus its computed interaction states.  `base` is always the
  * source colour a ThemeSurface was derived from.  `label` is the text
  * colour to draw on `base`: whichever of white, bg_primary or text_main
- * has the highest contrast against it. */
+ * has the highest contrast against it.  `hover` and `pressed` are one and
+ * two UI_THEME_STEPs from `base`: with the theme polarity for bg_primary,
+ * bg_secondary, raised and link, and away from `label` for accent, success,
+ * warning, danger and info, so the label never loses contrast on them. */
 typedef struct {
     unsigned int base, hover, pressed, disabled, label;
 } ThemeSurface;

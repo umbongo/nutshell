@@ -270,9 +270,10 @@ static int surface_derivation_ok(ThemeSurface s, unsigned int bg_primary, int st
     double dl_hover = lstar_hover - lstar_base;
     double dl_pressed = lstar_pressed - lstar_base;
 
-    /* Direction: hover/pressed move the same way as the theme's polarity
-     * (lighten on dark, darken on light) -- i.e. step_dir times the delta
-     * must be >= 0. */
+    /* Direction: hover/pressed move the way `step_dir` says -- the theme's
+     * polarity (lighten on dark, darken on light) for a neutral surface, or
+     * "away from the label" for a filled one (see filled_step_dir) -- i.e.
+     * step_dir times the delta must be >= 0. */
     if (dl_hover * step_dir < -1e-9) return 0;
     if (dl_pressed * step_dir < -1e-9) return 0;
 
@@ -296,6 +297,14 @@ static int surface_derivation_ok(ThemeSurface s, unsigned int bg_primary, int st
     return 1;
 }
 
+/* The expected step direction of a filled surface (accent and the five
+ * intents): away from its label, so the label never loses contrast on hover
+ * or pressed. +1 lightens (label is darker than the base), -1 darkens. */
+static int filled_step_dir(ThemeSurface s)
+{
+    return theme_lstar(s.label) < theme_lstar(s.base) ? 1 : -1;
+}
+
 int test_ui_tokens_derivation_all_surfaces(void)
 {
     TEST_BEGIN();
@@ -308,12 +317,36 @@ int test_ui_tokens_derivation_all_surfaces(void)
         ASSERT_TRUE(surface_derivation_ok(tok.bg_primary, tok.bg_primary.base, step_dir));
         ASSERT_TRUE(surface_derivation_ok(tok.bg_secondary, tok.bg_primary.base, step_dir));
         ASSERT_TRUE(surface_derivation_ok(tok.raised, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.accent, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.success, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.warning, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.danger, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.info, tok.bg_primary.base, step_dir));
+        ASSERT_TRUE(surface_derivation_ok(tok.accent, tok.bg_primary.base, filled_step_dir(tok.accent)));
+        ASSERT_TRUE(surface_derivation_ok(tok.success, tok.bg_primary.base, filled_step_dir(tok.success)));
+        ASSERT_TRUE(surface_derivation_ok(tok.warning, tok.bg_primary.base, filled_step_dir(tok.warning)));
+        ASSERT_TRUE(surface_derivation_ok(tok.danger, tok.bg_primary.base, filled_step_dir(tok.danger)));
+        ASSERT_TRUE(surface_derivation_ok(tok.info, tok.bg_primary.base, filled_step_dir(tok.info)));
         ASSERT_TRUE(surface_derivation_ok(tok.link, tok.bg_primary.base, step_dir));
+    }
+    TEST_END();
+}
+
+/* A filled surface's label must keep (or gain) contrast on hover and
+ * pressed, and clear 4.5:1 there, on every theme. */
+int test_ui_tokens_filled_label_contrast_on_states(void)
+{
+    TEST_BEGIN();
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        ThemeTokens tok;
+        ui_theme_resolve(ui_theme_get(i), &tok);
+        const ThemeSurface *filled[5] = { &tok.accent, &tok.success, &tok.warning,
+                                          &tok.danger, &tok.info };
+        for (int k = 0; k < 5; k++) {
+            const ThemeSurface *s = filled[k];
+            double c_base    = theme_contrast(s->label, s->base);
+            double c_hover   = theme_contrast(s->label, s->hover);
+            double c_pressed = theme_contrast(s->label, s->pressed);
+            ASSERT_TRUE(c_hover >= c_base);
+            ASSERT_TRUE(c_pressed >= c_base);
+            ASSERT_TRUE(c_hover >= 4.5);
+            ASSERT_TRUE(c_pressed >= 4.5);
+        }
     }
     TEST_END();
 }

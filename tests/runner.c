@@ -3246,6 +3246,7 @@ int test_ui_tokens_onyx_synapse_accent_calm(void);
 int test_ui_tokens_link_darker_than_accent_on_light_themes(void);
 int test_ui_tokens_md_role_color_contrast(void);
 int test_ui_tokens_derivation_all_surfaces(void);
+int test_ui_tokens_filled_label_contrast_on_states(void);
 int test_ui_tokens_raised_derived_from_bg_secondary(void);
 int test_ui_tokens_focus_is_accent_by_default(void);
 int test_ui_tokens_text_disabled_blend(void);
@@ -6989,6 +6990,7 @@ int main(void) {
     failed += test_ui_tokens_link_darker_than_accent_on_light_themes();
     failed += test_ui_tokens_md_role_color_contrast();
     failed += test_ui_tokens_derivation_all_surfaces();
+    failed += test_ui_tokens_filled_label_contrast_on_states();
     failed += test_ui_tokens_raised_derived_from_bg_secondary();
     failed += test_ui_tokens_focus_is_accent_by_default();
     failed += test_ui_tokens_text_disabled_blend();

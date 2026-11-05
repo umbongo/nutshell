@@ -67,12 +67,6 @@ typedef struct {
 
 static const Exemption k_exempt[] = {
     /* Onyx Synapse */
-    { "Onyx Synapse", "text_main", "success.base", 3.42 },
-    { "Onyx Synapse", "success.label", "success.hover", 3.66 },
-    { "Onyx Synapse", "success.label", "success.pressed", 2.98 },
-    { "Onyx Synapse", "warning.label", "warning.hover", 3.65 },
-    { "Onyx Synapse", "danger.label", "danger.hover", 3.65 },
-    { "Onyx Synapse", "info.label", "info.hover", 3.66 },
     { "Onyx Synapse", "chat.user_text", "sel30(chat.user_bubble)", 3.09 },
     { "Onyx Synapse", "chat.status_text", "bg_primary.base", 3.26 },
     { "Onyx Synapse", "warning.base", "bg_primary.base", 4.16 },
@@ -95,8 +89,6 @@ static const Exemption k_exempt[] = {
     { "Onyx Synapse", "white", "chat.stop_btn", 2.78 },
     { "Onyx Synapse", "border", "chat.cmd_bg", 1.19 },
     /* Onyx Light */
-    { "Onyx Light", "text_main", "success.base", 3.71 },
-    { "Onyx Light", "warning.label", "warning.hover", 4.18 },
     { "Onyx Light", "chat.user_text", "chat.user_bubble", 4.02 },
     { "Onyx Light", "chat.user_text", "sel30(chat.user_bubble)", 2.68 },
     { "Onyx Light", "chat.ai_accent", "bg_primary.base", 3.69 },
@@ -125,12 +117,6 @@ static const Exemption k_exempt[] = {
     { "Onyx Light", "white", "chat.stop_btn", 2.02 },
     { "Onyx Light", "border", "chat.cmd_bg", 1.18 },
     /* Sage & Sand */
-    { "Sage & Sand", "text_main", "success.base", 3.67 },
-    { "Sage & Sand", "success.label", "success.hover", 3.66 },
-    { "Sage & Sand", "success.label", "success.pressed", 2.99 },
-    { "Sage & Sand", "warning.label", "warning.hover", 3.67 },
-    { "Sage & Sand", "danger.label", "danger.hover", 3.65 },
-    { "Sage & Sand", "info.label", "info.hover", 3.64 },
     { "Sage & Sand", "chat.user_text", "sel30(chat.user_bubble)", 4.37 },
     { "Sage & Sand", "chat.status_text", "bg_primary.base", 3.14 },
     { "Sage & Sand", "warning.base", "bg_primary.base", 3.08 },
@@ -154,9 +140,6 @@ static const Exemption k_exempt[] = {
     { "Sage & Sand", "white", "chat.send_btn", 2.76 },
     { "Sage & Sand", "border", "chat.cmd_bg", 1.49 },
     /* Moss & Mist */
-    { "Moss & Mist", "text_main", "success.base", 1.94 },
-    { "Moss & Mist", "accent.label", "accent.hover", 3.81 },
-    { "Moss & Mist", "accent.label", "accent.pressed", 3.16 },
     { "Moss & Mist", "bg_primary.base", "accent.base", 1.72 },
     { "Moss & Mist", "chat.user_text", "chat.user_bubble", 2.61 },
     { "Moss & Mist", "chat.user_text", "sel30(chat.user_bubble)", 1.91 },
@@ -191,7 +174,7 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "accent.base", "chat.cmd_bg", 1.59 },
     { "Moss & Mist", "border", "chat.cmd_bg", 1.20 },
 };
-#define EXPECTED_EXEMPTIONS 120
+#define EXPECTED_EXEMPTIONS 103
 
 /* ---- Blends --------------------------------------------------------------
  *
@@ -274,7 +257,6 @@ SEL(s_acc_base,       "accent.base",         t->accent.base);
 SEL(s_acc_hover,      "accent.hover",        t->accent.hover);
 SEL(s_acc_pressed,    "accent.pressed",      t->accent.pressed);
 SEL(s_acc_label,      "accent.label",        t->accent.label);
-SEL(s_ok_base,        "success.base",        t->success.base);
 SEL(s_ok_hover,       "success.hover",       t->success.hover);
 SEL(s_ok_pressed,     "success.pressed",     t->success.pressed);
 SEL(s_ok_label,       "success.label",       t->success.label);
@@ -387,7 +369,8 @@ static const Pair k_pairs[] = {
     { &s_text_main, &s_bgs_hover,    FLOOR_TEXT },  /* hovered tab */
     { &s_text_main, &s_raised_hover, FLOOR_TEXT },  /* hot suggestion chip */
     { &s_text_main, &s_c_cmd_bg,     FLOOR_TEXT },  /* approval card header, Deny all, hot cmd text */
-    { &s_text_main, &s_ok_base,      FLOOR_TEXT },  /* tab "L" glyph, logging on */
+    /* tab "L" glyph, logging on, is success.label on success.base: held at 4.5
+     * by tests/test_ui_tokens.c, so it is not a row here. */
     { &s_text_main, &s_border,       FLOOR_TEXT },  /* tab "L" glyph, logging off */
     { &s_term_fg,   &s_term_bg,      FLOOR_TEXT },  /* terminal default text */
     { &s_text_main, &s_tint_ok,      FLOOR_TEXT },  /* policy stop, AUTO off, lit */

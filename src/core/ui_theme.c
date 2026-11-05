@@ -186,19 +186,28 @@ static unsigned int resolve_label(unsigned int base, unsigned int bg_primary,
 }
 
 /* Fill a ThemeSurface: base plus its hover/pressed/disabled/label states.
- * `step_dir` is +1 on dark themes (hover/pressed lighten), -1 on light
- * themes (hover/pressed darken); `bg_primary` is the surface `disabled`
- * blends 50% toward and one of the three `label` candidates; `text_main`
- * is the other. */
-static void resolve_surface(unsigned int base, int step_dir,
+ * `bg_primary` is the surface `disabled` blends 50% toward and one of the
+ * three `label` candidates; `text_main` is the other.
+ *
+ * The direction hover/pressed step is `step_dir`: +1 lightens, -1 darkens.
+ * With `away_from_label` set (the filled surfaces: accent and the five
+ * intents) `step_dir` is ignored: the label is resolved first and the states
+ * step AWAY from it -- lighten when the label is darker than the base,
+ * darken otherwise. The label is the best of three candidates on `base` and
+ * every step moves away from it, so its contrast on hover and pressed is
+ * never below its contrast on base. Neutral surfaces keep the theme polarity
+ * (+1 on dark themes, -1 on light). */
+static void resolve_surface(unsigned int base, int step_dir, int away_from_label,
                              unsigned int bg_primary, unsigned int text_main,
                              ThemeSurface *out)
 {
+    out->label = resolve_label(base, bg_primary, text_main);
+    if (away_from_label)
+        step_dir = theme_lstar(out->label) < theme_lstar(base) ? 1 : -1;
     out->base     = base;
     out->hover    = theme_shift_lightness(base, step_dir * UI_THEME_STEP);
     out->pressed  = theme_shift_lightness(base, step_dir * 2.0 * UI_THEME_STEP);
     out->disabled = theme_blend(base, bg_primary, 0.5);
-    out->label    = resolve_label(base, bg_primary, text_main);
 }
 
 void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out)
@@ -210,20 +219,20 @@ void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out)
 
     out->is_dark = is_dark;
 
-    resolve_surface(base->bg_primary, step_dir, base->bg_primary, base->text_main, &out->bg_primary);
-    resolve_surface(base->bg_secondary, step_dir, base->bg_primary, base->text_main, &out->bg_secondary);
-    resolve_surface(base->accent, step_dir, base->bg_primary, base->text_main, &out->accent);
-    resolve_surface(base->success, step_dir, base->bg_primary, base->text_main, &out->success);
-    resolve_surface(base->warning, step_dir, base->bg_primary, base->text_main, &out->warning);
-    resolve_surface(base->danger, step_dir, base->bg_primary, base->text_main, &out->danger);
-    resolve_surface(base->info, step_dir, base->bg_primary, base->text_main, &out->info);
-    resolve_surface(base->link, step_dir, base->bg_primary, base->text_main, &out->link);
+    resolve_surface(base->bg_primary, step_dir, 0, base->bg_primary, base->text_main, &out->bg_primary);
+    resolve_surface(base->bg_secondary, step_dir, 0, base->bg_primary, base->text_main, &out->bg_secondary);
+    resolve_surface(base->accent, step_dir, 1, base->bg_primary, base->text_main, &out->accent);
+    resolve_surface(base->success, step_dir, 1, base->bg_primary, base->text_main, &out->success);
+    resolve_surface(base->warning, step_dir, 1, base->bg_primary, base->text_main, &out->warning);
+    resolve_surface(base->danger, step_dir, 1, base->bg_primary, base->text_main, &out->danger);
+    resolve_surface(base->info, step_dir, 1, base->bg_primary, base->text_main, &out->info);
+    resolve_surface(base->link, step_dir, 0, base->bg_primary, base->text_main, &out->link);
 
     /* raised: bg_secondary shifted one step, unless overridden */
     unsigned int raised_base = base->overrides.raised
         ? base->overrides.raised
         : theme_shift_lightness(base->bg_secondary, step_dir * UI_THEME_STEP);
-    resolve_surface(raised_base, step_dir, base->bg_primary, base->text_main, &out->raised);
+    resolve_surface(raised_base, step_dir, 0, base->bg_primary, base->text_main, &out->raised);
 
     out->text_main = base->text_main;
     out->text_dim  = base->text_dim;
