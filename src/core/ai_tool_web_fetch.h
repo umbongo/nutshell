@@ -40,6 +40,11 @@ typedef struct {
     void (*on_hop)(void *user, const char *display_url, int refused);
     void *user;
     const WebFetchBackend *backend;    /* NULL: web_fetch_default_backend() */
+    /* The host a user-approved fetch was approved for, as net_url_parse gives
+     * it, or "" for an unattended fetch. When set, a redirect hop to any other
+     * host (ASCII case-insensitive; "example.com." and "a.example.com" are
+     * other hosts) is refused before it is resolved. */
+    char pinned_host[NET_HOST_MAX];
 } WebFetchContext;
 
 /* The platform's own backend, or NULL where there is none (the tool then
