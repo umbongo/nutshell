@@ -264,9 +264,13 @@ int ssh_kbd_prompt_is_password(const char *text)
     /* What is left must end with the word "password". */
     if (e - b < 8 || !word_at(b, e, e - 8, "password")) return 0;
 
+    /* Spec section 4's list, extended by controller ruling (2026-11-05) with
+     * further one-time, second-factor and confirmation spellings. */
     static const char *const banned[] = {
         "passcode", "one-time", "otp", "new", "retype",
-        "verification", "token", "pin", "code"
+        "verification", "token", "pin", "code",
+        "time", "onetime", "sms", "temporary", "confirm",
+        "repeat", "verify", "duo", "mfa", "2fa"
     };
     for (const char *p = b; p < e; p++)
         for (size_t i = 0; i < sizeof banned / sizeof banned[0]; i++)

@@ -341,8 +341,11 @@ int test_ssh_kbd_matcher_positive(void)
     /* Several colons and spaces after the word are all dropped. */
     ASSERT_EQ(PWQ("Password: :  "), 1);
     /* The whole prompt joined to one line: earlier text, then the label. */
-    ASSERT_EQ(PWQ("Duo login for alice Password:"), 1);
+    ASSERT_EQ(PWQ("Acme login for alice Password:"), 1);
     ASSERT_EQ(PWQ("Welcome to host Password:"), 1);
+    /* The current or old password is still the saved one. */
+    ASSERT_EQ(PWQ("Current password:"), 1);
+    ASSERT_EQ(PWQ("Old password:"), 1);
     TEST_END();
 }
 
@@ -371,6 +374,17 @@ int test_ssh_kbd_matcher_negative(void)
     /* The whole prompt joined to one line: a "new" earlier in it still counts. */
     ASSERT_EQ(PWQ("Enter new account password:"), 0);
     ASSERT_EQ(PWQ("Your password has expired. New password:"), 0);
+    /* Other one-time, second-factor and confirmation spellings. */
+    ASSERT_EQ(PWQ("One time password:"), 0);
+    ASSERT_EQ(PWQ("Onetime password:"), 0);
+    ASSERT_EQ(PWQ("SMS password:"), 0);
+    ASSERT_EQ(PWQ("Duo password:"), 0);
+    ASSERT_EQ(PWQ("Temporary password:"), 0);
+    ASSERT_EQ(PWQ("Confirm password:"), 0);
+    ASSERT_EQ(PWQ("Repeat password:"), 0);
+    ASSERT_EQ(PWQ("Verify password:"), 0);
+    ASSERT_EQ(PWQ("MFA password:"), 0);
+    ASSERT_EQ(PWQ("2FA password:"), 0);
     TEST_END();
 }
 
