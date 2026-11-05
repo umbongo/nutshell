@@ -4774,3 +4774,147 @@ int test_classify_open_quote_first_word_overrun(void) {
     }
     TEST_END();
 }
+
+/* ----- IOS configure terminal, debug and do; crontab (spec decision 11) ----- */
+
+static int cls_is(const char *cmd, CmdPlatform plat, CmdSafetyLevel want)
+{
+    CmdSafetyLevel got = cmd_classify(cmd, plat);
+    if (got != want)
+        printf("  [%s] platform %d: got %d, want %d\n", cmd, (int)plat, (int)got, (int)want);
+    return got == want;
+}
+
+static int cls_not(const char *cmd, CmdPlatform plat, CmdSafetyLevel bad)
+{
+    CmdSafetyLevel got = cmd_classify(cmd, plat);
+    if (got == bad)
+        printf("  [%s] platform %d: unexpectedly %d\n", cmd, (int)plat, (int)got);
+    return got != bad;
+}
+
+int test_ios_configure_terminal_prefixes(void) {
+    TEST_BEGIN();
+    static const char *const wr[] = {
+        "conf t", "config t", "configure terminal", "conf term", "confi te",
+        "configu termi", "CONF T", "configure t", NULL
+    };
+    for (int i = 0; wr[i]; i++) {
+        ASSERT_TRUE(cls_is(wr[i], CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+        ASSERT_TRUE(cls_is(wr[i], CMD_PLATFORM_UNKNOWN, CMD_WRITE));
+    }
+    /* Three characters is not the configure prefix; "t" must be a prefix of
+     * "terminal". */
+    ASSERT_TRUE(cls_not("con t", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_not("conf tx", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_not("conf terminals", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_not("con t", CMD_PLATFORM_UNKNOWN, CMD_WRITE));
+    ASSERT_TRUE(cls_not("conf tx", CMD_PLATFORM_UNKNOWN, CMD_WRITE));
+    /* The existing configure replace rule is untouched. */
+    ASSERT_TRUE(cls_is("conf replace flash:x", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    /* A Linux session is not an IOS session. */
+    ASSERT_TRUE(cls_not("conf t", CMD_PLATFORM_LINUX, CMD_WRITE));
+    TEST_END();
+}
+
+int test_ios_debug(void) {
+    TEST_BEGIN();
+    static const char *const crit[] = {
+        "debug ip packet", "debug all", "deb all", "debu all", "DEBUG ALL",
+        "debug", NULL
+    };
+    for (int i = 0; crit[i]; i++)
+        ASSERT_TRUE(cls_is(crit[i], CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_not("de all", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("undebug all", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("undebug", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("no debug all", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("show debugging", CMD_PLATFORM_CISCO_IOS, CMD_READ));
+    /* The unresolved (auto) ruleset does not gain the debug rule. */
+    ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_UNKNOWN, CMD_UNKNOWN));
+    TEST_END();
+}
+
+int test_ios_do(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(cls_is("do debug all", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("do show run", CMD_PLATFORM_CISCO_IOS, CMD_READ));
+    ASSERT_TRUE(cls_is("do reload", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("do write erase", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("do conf t", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("do do reload", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("do", CMD_PLATFORM_CISCO_IOS, CMD_UNKNOWN));
+    ASSERT_TRUE(cls_is("do do", CMD_PLATFORM_CISCO_IOS, CMD_UNKNOWN));
+    /* Only the IOS family reads "do"; a Linux or auto session does not. */
+    ASSERT_TRUE(cls_is("do show run", CMD_PLATFORM_LINUX, CMD_UNKNOWN));
+    ASSERT_TRUE(cls_is("do show run", CMD_PLATFORM_UNKNOWN, CMD_UNKNOWN));
+    /* A very long chain of "do" stays bounded and keeps the worst class. */
+    {
+        char *chain = (char *)malloc(60000);
+        ASSERT_NOT_NULL(chain);
+        if (chain) {
+            size_t n = 0;
+            while (n < 59000) { memcpy(chain + n, "do ", 3); n += 3; }
+            strcpy(chain + n, "reload");
+            ASSERT_TRUE(cls_is(chain, CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+            free(chain);
+        }
+    }
+    TEST_END();
+}
+
+int test_nxos_asa_debug_aligned(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_CISCO_NXOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_CISCO_ASA, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("debug ip packet", CMD_PLATFORM_CISCO_NXOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("debug icmp trace", CMD_PLATFORM_CISCO_ASA, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("undebug all", CMD_PLATFORM_CISCO_NXOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("undebug all", CMD_PLATFORM_CISCO_ASA, CMD_WRITE));
+    TEST_END();
+}
+
+int test_crontab(void) {
+    TEST_BEGIN();
+    static const CmdPlatform plats[] = { CMD_PLATFORM_LINUX, CMD_PLATFORM_UNKNOWN };
+    for (int k = 0; k < 2; k++) {
+        CmdPlatform pl = plats[k];
+        static const char *const crit[] = {
+            "crontab -r", "crontab -ri", "crontab -ir", "crontab --remove",
+            "crontab -u root -r", "crontab -ru root", "crontab -r -u root",
+            "crontab -l -r", "crontab '-r'", "crontab \"-ri\"", "sudo crontab -r", NULL
+        };
+        for (int i = 0; crit[i]; i++)
+            ASSERT_TRUE(cls_is(crit[i], pl, CMD_CRITICAL));
+        static const char *const wr[] = {
+            "crontab -e", "crontab jobs.txt", "crontab -", "crontab",
+            "crontab -u root jobs.txt", "crontab -u root -e", "crontab -l jobs.txt",
+            "crontab -e -l", "crontab -l -x", "crontab -- -r",
+            "crontab -ur root", "crontab -l | crontab -", NULL
+        };
+        for (int i = 0; wr[i]; i++)
+            ASSERT_TRUE(cls_is(wr[i], pl, CMD_WRITE));
+        static const char *const rd[] = {
+            "crontab -l", "crontab --list", "crontab -u root -l", "crontab -lu root",
+            "crontab -i -l", NULL
+        };
+        for (int i = 0; rd[i]; i++)
+            ASSERT_TRUE(cls_is(rd[i], pl, CMD_READ));
+    }
+    /* -l stays READ with the sensitive bit and its phrase. */
+    {
+        char r[CMD_REASON_MAX];
+        r[0] = '\0';
+        unsigned m = cmd_classify_mask_session_ex("crontab -l", CMD_PLATFORM_LINUX, 0, r, sizeof r);
+        ASSERT_TRUE((m & CMD_MASK_SENSITIVE) != 0);
+        ASSERT_STR_EQ(r, "reads the crontab");
+        ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0u);
+        ASSERT_TRUE((m & CMD_MASK_OF(CMD_WRITE)) == 0u);
+    }
+    /* Redirecting the listing is a write, and sudo never lowers it below WRITE. */
+    ASSERT_TRUE(cls_is("crontab -l > mine.txt", CMD_PLATFORM_LINUX, CMD_WRITE));
+    ASSERT_TRUE(cls_is("sudo crontab -l", CMD_PLATFORM_LINUX, CMD_WRITE));
+    /* Other platforms are not Linux crontab. */
+    ASSERT_TRUE(cls_not("crontab -r", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    TEST_END();
+}

@@ -145,9 +145,7 @@ static const SubcmdRule linux_subcmd_rules[] = {
     { "git", "diff",   CMD_READ },
     { "git", "show",   CMD_READ },
     { "git", "branch", CMD_READ },
-    /* crontab */
-    { "crontab", "-l", CMD_READ },
-    { "crontab", "--list", CMD_READ },
+    /* crontab: classified by crontab_class() ahead of this table */
     /* sed */
     { "sed", "-i", CMD_WRITE },
     /* curl/wget with output */
@@ -266,8 +264,6 @@ static const SubcmdRule linux_subcmd_rules[] = {
     { "wg", "set", CMD_WRITE },
     /* dmesg -C: clears the kernel ring buffer */
     { "dmesg", "-C", CMD_WRITE },
-    /* crontab -e: edit the crontab */
-    { "crontab", "-e", CMD_WRITE },
     /* hostnamectl / date: single named-subcommand forms */
     { "hostnamectl", "set-hostname", CMD_WRITE },
     { "date", "-s", CMD_WRITE },
@@ -3190,6 +3186,59 @@ static CmdSafetyLevel classify_linux_segment(const char *seg, size_t seg_len,
     return res;
 }
 
+/* crontab, by its options (spec decision 11). Returns CMD_CRITICAL when the
+ * crontab is removed (-r in any short-flag cluster, or --remove), CMD_READ
+ * for a bare listing (-l or --list, optionally with -u USER, -i, -s), and -1
+ * for everything else so the usual WRITE rules apply: -e, a FILE, "-", no
+ * arguments, or any option not understood. getopt semantics: "-u" and "-x"
+ * take a value, the rest of its own cluster if there is one, else the next
+ * word; so "-ur root" is user "r" and a FILE "root", not -r. Quote and
+ * backslash characters are skipped, as the shell would drop them. */
+static int cron_is_quote(char ch) { return ch == '\'' || ch == '"' || ch == '\\'; }
+
+static int crontab_class(const char *args)
+{
+    int seen_l = 0, seen_r = 0, other = 0, want_value = 0, opts_done = 0;
+    const char *ts;
+    size_t tl;
+
+    while (next_token(&args, &ts, &tl)) {
+        const char *c = ts, *end = ts + tl;
+        if (want_value) { want_value = 0; continue; }
+        while (c < end && cron_is_quote(*c)) c++;
+        if (opts_done || c >= end || *c != '-' || c + 1 >= end) {
+            other = 1; /* FILE, "-" (stdin), or after "--" */
+            continue;
+        }
+        c++;
+        if (*c == '-') {
+            const char *w = c + 1;
+            size_t wl = (size_t)(end - w);
+            if (wl == 0) opts_done = 1;
+            else if (tok_eq(w, wl, "list")) seen_l = 1;
+            else if (tok_eq(w, wl, "remove")) seen_r = 1;
+            else other = 1;
+            continue;
+        }
+        for (; c < end; c++) {
+            if (cron_is_quote(*c)) continue;
+            if (*c == 'l') seen_l = 1;
+            else if (*c == 'r') seen_r = 1;
+            else if (*c == 'i' || *c == 's') { /* harmless flags */ }
+            else if (*c == 'u' || *c == 'x') {
+                const char *rest = c + 1;
+                if (*c == 'x') other = 1; /* debug switch: not a plain listing */
+                while (rest < end && cron_is_quote(*rest)) rest++;
+                if (rest >= end) want_value = 1;
+                break; /* the rest of the cluster is the value */
+            } else other = 1;
+        }
+    }
+    if (seen_r) return (int)CMD_CRITICAL;
+    if (seen_l && !other) return (int)CMD_READ;
+    return -1;
+}
+
 static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len,
                                                   char *reason_buf, size_t reason_buf_size)
 {
@@ -3248,6 +3297,22 @@ static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len
                     snprintf(reason_buf, reason_buf_size, "init 0/6: system halt/reboot");
                 return CMD_CRITICAL;
             }
+        }
+    }
+
+    if (tok_eq(base1, base1_len, "crontab")) {
+        int cl = crontab_class(p);
+        if (cl >= 0) {
+            CmdSafetyLevel level = (CmdSafetyLevel)cl;
+            if (level == CMD_CRITICAL) {
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "crontab -r: deletes the crontab");
+            } else {
+                if (has_sudo && level < CMD_WRITE) level = CMD_WRITE;
+                if (reason_buf && reason_buf_size > 0)
+                    snprintf(reason_buf, reason_buf_size, "crontab -l: lists the crontab");
+            }
+            return level > redir ? level : redir;
         }
     }
 
@@ -4471,6 +4536,28 @@ static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len
     }
 }
 
+/* ----- IOS command abbreviations -----
+ * IOS accepts any unambiguous prefix of a keyword. These rules name the
+ * shortest prefix a family of lookalikes cannot share: "conf" (not "con",
+ * which is "connect") and "deb". tok_abbrev_ci() is true when the token is
+ * a prefix of `word` at least `minlen` characters long. */
+
+static int tok_abbrev_ci(const char *tok, size_t tlen, const char *word, size_t minlen)
+{
+    return tlen >= minlen && tlen <= strlen(word) && ci_memcmp(tok, word, tlen) == 0;
+}
+
+/* "configure terminal" by any abbreviation: a prefix of "configure" of 4+
+ * characters, then a prefix of "terminal". `rest` points just past the first
+ * token. Enters configuration mode, so it is a WRITE. */
+static int is_conf_terminal(const char *tok1, size_t len1, const char *rest)
+{
+    const char *t2;
+    size_t l2;
+    return tok_abbrev_ci(tok1, len1, "configure", 4) &&
+           next_token(&rest, &t2, &l2) && tok_abbrev_ci(t2, l2, "terminal", 1);
+}
+
 /* ----- Per-segment Cisco IOS classification ----- */
 
 static CmdSafetyLevel classify_cisco_ios_segment(const char *seg, size_t seg_len,
@@ -4484,6 +4571,40 @@ static CmdSafetyLevel classify_cisco_ios_segment(const char *seg, size_t seg_len
 
     if (!next_token(&p, &tok1_start, &tok1_len))
         return CMD_READ;
+
+    /* "do CMD" runs an exec-mode command from configuration mode: classify
+     * CMD. A loop, not a recursion, so a long "do do do ..." line cannot
+     * deepen the stack. A "do" with nothing after it falls through and is
+     * honestly unrecognised. */
+    while (tok_eq_ci(tok1_start, tok1_len, "do")) {
+        const char *q = p;
+        const char *nx;
+        size_t nl;
+        if (!next_token(&q, &nx, &nl)) break;
+        tok1_start = nx;
+        tok1_len = nl;
+        p = q;
+    }
+
+    /* configure terminal, by any abbreviation: enters config mode. */
+    if (is_conf_terminal(tok1_start, tok1_len, p)) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "configure terminal: enters config mode");
+        return CMD_WRITE;
+    }
+
+    /* debug (3+ characters) can saturate the CPU and the console; undebug
+     * is the remedy and only changes what is being traced. */
+    if (tok_abbrev_ci(tok1_start, tok1_len, "debug", 3)) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "debug: can saturate the device CPU and console");
+        return CMD_CRITICAL;
+    }
+    if (tok_abbrev_ci(tok1_start, tok1_len, "undebug", 3)) {
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size, "undebug: changes what is traced");
+        return CMD_WRITE;
+    }
 
     /* enable secret / enable password: sets the privileged-mode secret --
      * a config change, not the mode change a bare "enable" is. Checked
@@ -7415,6 +7536,25 @@ static CmdSafetyLevel classify_unknown_segment(const char *seg, size_t seg_len,
             return CMD_CRITICAL;
         }
         return classify_linux_segment(seg, seg_len, reason_buf, reason_buf_size);
+    }
+
+    /* "conf t" by any abbreviation (IOS family): enters config mode. "conf"
+     * is not a Linux command, so claiming it costs a Linux session nothing.
+     * Like the write verbs below, the overlay only raises. */
+    if (is_conf_terminal(tok1_start, tok1_len, p)) {
+        char linux_reason[128];
+        CmdSafetyLevel linux_level;
+        linux_reason[0] = 0;
+        linux_level = classify_linux_segment(seg, seg_len, linux_reason, sizeof linux_reason);
+        if (linux_level > CMD_WRITE) {
+            if (reason_buf && reason_buf_size > 0)
+                snprintf(reason_buf, reason_buf_size, "%s", linux_reason);
+            return linux_level;
+        }
+        if (reason_buf && reason_buf_size > 0)
+            snprintf(reason_buf, reason_buf_size,
+                     "configure terminal: enters config mode on a network CLI");
+        return CMD_WRITE;
     }
 
     /* RouterOS puts its verb last behind a "/path" head ("/system

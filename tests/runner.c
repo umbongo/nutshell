@@ -669,6 +669,11 @@ int test_sensitive_class_unchanged(void);
 int test_negatives_not_sensitive(void);
 int test_sensitive_reason_buffer(void);
 int test_classify_open_quote_first_word_overrun(void);
+int test_ios_configure_terminal_prefixes(void);
+int test_ios_debug(void);
+int test_ios_do(void);
+int test_crontab(void);
+int test_nxos_asa_debug_aligned(void);
 
 /* inherited from the removed ai_command_is_readonly() suite */
 int test_cmd_classify_linux_editors_and_chown_write(void);
@@ -4478,6 +4483,11 @@ int main(void) {
     failed += test_negatives_not_sensitive();
     failed += test_sensitive_reason_buffer();
     failed += test_classify_open_quote_first_word_overrun();
+    failed += test_ios_configure_terminal_prefixes();
+    failed += test_ios_debug();
+    failed += test_ios_do();
+    failed += test_crontab();
+    failed += test_nxos_asa_debug_aligned();
     failed += test_cmd_classify_linux_editors_and_chown_write();
     failed += test_cmd_classify_redirect_devnull_spacing_and_ampersand();
     failed += test_cmd_classify_redirect_stderr_to_real_file_write();
