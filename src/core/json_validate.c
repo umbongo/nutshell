@@ -4,6 +4,14 @@
 
 /* ---- Consolidated JSON escape function ----------------------------------- */
 
+size_t json_escaped_byte_len(unsigned char c)
+{
+    switch (c) {
+        case '"': case '\\': case '\n': case '\r': case '\t': return 2;
+        default: return c < 0x20 ? 6 : 1;
+    }
+}
+
 size_t json_escape_string(const char *s, size_t s_len, char *buf,
                           size_t buf_size, size_t pos, int add_quotes)
 {

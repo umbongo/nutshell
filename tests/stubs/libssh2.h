@@ -18,6 +18,27 @@ typedef int libssh2_socket_t;
 typedef struct _LIBSSH2_SESSION LIBSSH2_SESSION;
 typedef struct _LIBSSH2_CHANNEL LIBSSH2_CHANNEL;
 
+/* keyboard-interactive: copied from libssh2 1.11.1 include/libssh2.h */
+typedef struct _LIBSSH2_USERAUTH_KBDINT_PROMPT
+{
+    unsigned char *text;
+    size_t length;
+    unsigned char echo;
+} LIBSSH2_USERAUTH_KBDINT_PROMPT;
+
+typedef struct _LIBSSH2_USERAUTH_KBDINT_RESPONSE
+{
+    char *text;
+    unsigned int length;  /* FIXME: change type to size_t */
+} LIBSSH2_USERAUTH_KBDINT_RESPONSE;
+
+/* 'keyboard-interactive' authentication callback */
+#define LIBSSH2_USERAUTH_KBDINT_RESPONSE_FUNC(name_) \
+    void name_(const char *name, int name_len, const char *instruction, \
+               int instruction_len, int num_prompts, \
+               const LIBSSH2_USERAUTH_KBDINT_PROMPT *prompts, \
+               LIBSSH2_USERAUTH_KBDINT_RESPONSE *responses, void **abstract)
+
 LIBSSH2_SESSION *libssh2_session_init(void);
 int libssh2_session_free(LIBSSH2_SESSION *session);
 int libssh2_session_disconnect(LIBSSH2_SESSION *session, const char *description);

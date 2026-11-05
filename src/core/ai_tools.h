@@ -10,6 +10,7 @@
 #define AI_TOOL_RESULT_MAX     (1024 * 1024)  /* 1MB dynamic buffer cap */
 #define AI_TOOL_DESC_MAX       512
 #define AI_TOOL_SCHEMA_MAX     2048
+#define AI_TOOL_NOTE_MAX       256   /* Nutshell's own text about a result */
 
 #define AI_TOOL_LOOP_MAX       5
 #define AI_TOOL_SEARCH_MAX     3
@@ -45,6 +46,10 @@ typedef struct {
     size_t content_len;
     int is_error;
     int was_truncated;
+    /* Nutshell's own words about this result (a refusal, a rate limit, the
+     * truncation line), never tool output: sent after the data block, not
+     * inside it. Inline, so there is nothing to free or copy. */
+    char tool_note[AI_TOOL_NOTE_MAX];
 } AiToolResult;
 
 typedef struct {
@@ -64,6 +69,14 @@ int  ai_tools_serialize_openai(const AiToolRegistry *reg, char *buf, size_t max)
 /* Parse tool calls from non-streaming response */
 int  ai_parse_tool_calls_anthropic(const char *response_json, AiToolCall *calls, int max_calls);
 int  ai_parse_tool_calls_openai(const char *response_json, AiToolCall *calls, int max_calls);
+
+/* An execute callback returns 0 on success and -1 on failure; the failure's
+ * text is Nutshell's own and goes to tool_note. A tool whose failure text
+ * quotes remote data (a host taken from a server's Location header, say)
+ * returns AI_TOOL_FAIL_CONTENT instead: still a failure (is_error is set), but
+ * the text stays in content, inside the data block, where it is framed and
+ * escaped like any other tool output. */
+#define AI_TOOL_FAIL_CONTENT 1
 
 /* Execute a tool call */
 int  ai_tool_execute(const AiToolRegistry *reg, const AiToolCall *call,

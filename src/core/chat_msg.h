@@ -67,6 +67,10 @@ typedef struct ChatMsgItem {
             char *note;         /* the assistant's explanation of the command
                                   * (heap, may be NULL); secure_zero'd and freed
                                   * with the item like `command` */
+            char reason[CMD_REASON_MAX]; /* why a sensitive command always
+                                  * asks ("reads credentials"), "" when it
+                                  * is not sensitive; copied from the
+                                  * ApprovalEntry by chat_msg_set_reason() */
             CmdSafetyLevel safety;
             int approved;       /* -1=pending, 0=denied, 1=approved */
             int blocked;
@@ -118,6 +122,13 @@ int chat_msg_set_text(ChatMsgItem *item, const char *text);
  * with chat_msg_set_batch(), typically right after creating it. */
 int chat_msg_set_command(ChatMsgItem *item, const char *command,
                          CmdSafetyLevel safety, int blocked);
+
+/* Set the reason a sensitive command row asks (u.cmd.reason), copied and cut
+ * to CMD_REASON_MAX - 1 bytes on a UTF-8 boundary. NULL or "" clears it.
+ * NULL-safe; no-op on a NULL or non-command item. Does not mark the item
+ * dirty: the row's height does not depend on it. chat_msg_set_command()
+ * clears it, so call this after that. */
+void chat_msg_set_reason(ChatMsgItem *item, const char *reason);
 
 /* Set (copy) or clear (NULL) the note on a CHAT_ITEM_COMMAND item. Returns 0
  * on success, -1 for a NULL or non-command item or allocation failure. Does

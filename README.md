@@ -2,7 +2,7 @@
 
 # Nutshell SSH
 
-**Version**: v1.2.55 \
+**Version**: v1.2.60 \
 **Author**: Thomas Sulkiewicz
 
 ## Overview
@@ -34,7 +34,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - **Telnet** sessions for devices that only speak telnet, with auto-login at the login and password prompts, and port checks ([see below](#telnet))
 - **Local shell** sessions over ConPTY — the same window, terminal and assistant with no remote host at all ([see below](#local-shell))
 - VT100/ANSI terminal emulator — 256-colour, truecolor, alt screen, scroll regions, app cursor keys, OSC title
-- Password and SSH key authentication, with a passphrase prompt, retry, and a hold-to-reveal eye on every password field
+- Password, SSH key and keyboard-interactive authentication (one-time-password, PAM and TACACS-style prompts, shown one at a time), with a passphrase prompt, retry, and a hold-to-reveal eye on every password field
 - Windows DPAPI password encryption at rest, per-user (legacy AES-256-GCM configs migrate automatically)
 - TOFU host key verification (first-connect dialog, mismatch warning)
 - Dynamic PTY resize on window resize and zoom
@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,403 unit tests across 130 test files, and cppcheck reports no errors or warnings
+- 3,530 unit tests across 138 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -559,6 +559,26 @@ password is never written to the session log, the debug log or the AI context.
 An SSH profile that uses password authentication but has no saved password asks
 with the same box.
 
+An SSH server that offers keyboard-interactive authentication (the method behind
+one-time passwords, PAM and TACACS-style logins, and push approval) is asked
+what it offers before Nutshell tries anything, and the methods are tried in
+this order. With a saved password and both password and keyboard-interactive on
+offer, the password method goes first and the login is silent, as it always
+was; otherwise keyboard-interactive goes first. The server's own prompts are
+shown one at a time, each in a box that carries the server's text (scrolling if
+it is long) and a field that shows what you type only when the server says it
+may be echoed. A saved password answers only a prompt that is plainly a
+password prompt (`Password:`, `user@host's password:`), never a passcode,
+one-time, verification, token, PIN, code, new-password or confirmation prompt
+(nor a plain one under server text that names a token or a code), and only once
+per connection; every other prompt goes to you. On such a
+password prompt a password profile also shows the **Save password to this
+profile** tick, as the box above does; a key profile never does. If the server
+refuses a saved password you are asked once more. A push approval (a phone
+prompt, say) has to come within a minute of your answer (typed, or sent from the
+saved password), and the time you spend typing never counts against that. A failed login names the methods the server
+offers. Authentication through an SSH agent or Pageant is not supported.
+
 ### When the connection fails
 
 A failed connect is reported in the tab and no message box opens. A host that
@@ -621,12 +641,15 @@ telnet tabs.
 │   │   ├── ns_scale.c/.h              #   The one DPI-scaling helper (round-half-up, base 96)
 │   │   ├── ns_type.c/.h               #   Spacing grid, radii, strokes, type ramp, font-slot key
 │   │   ├── paste_preview.c/.h         #   Paste preview with size constraints
+│   │   ├── pw_prompt_layout.c/.h      #   Geometry of the modal secret prompt (optional server-text box, label, field, save tick, buttons)
 │   │   ├── secure_zero.h              #   Volatile memset for secrets
 │   │   ├── selection.c/.h             #   Text selection (buffer-absolute: drag, word/line, staleness, copy)
 │   │   ├── settings_layout.c/.h    #   Settings window layout (pages, panes, rows)
 │   │   ├── shell_prompt.c/.h          #   Detects a shell waiting at a prompt (gates one-at-a-time dispatch)
 │   │   ├── shortcuts.c/.h             #   Every shortcut, once: the sheet, the menu accelerators and README's block
 │   │   ├── snap.c/.h                  #   Window grid snapping
+│   │   ├── ssh_auth_plan.c/.h         #   Authentication plan: which method next, from what the server offers; password-prompt matcher and server-text sanitiser (pure)
+│   │   ├── ssh_kbd.c/.h               #   Keyboard-interactive round: prompts, saved-password rule, answer wipe, timeout re-arm
 │   │   ├── ssh_timeout.c/.h           #   Network-failure rail (link declared dead after a socket-silence threshold)
 │   │   ├── stick_scroll.c/.h          #   Stick-to-bottom / smart-scroll decision logic for the chat list and terminal
 │   │   ├── string_utils.c/.h          #   String helpers, ANSI stripping, UTF-8
@@ -684,7 +707,11 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,403 unit tests across 130 test files
+├── tests/                              # 3,530 unit tests across 138 test files
+│   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
+│   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
+│   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion
+│   ├── manual/                         #   Hand tools, never run by make test (paramiko keyboard-interactive server)
 │   └── stubs/libssh2.h                 #   libssh2 stub for test builds without the real library
 ├── build/win/                          # Build output (nutshell.exe)
 ├── images/                             # Application icon and assets

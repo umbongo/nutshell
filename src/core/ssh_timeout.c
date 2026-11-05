@@ -1,5 +1,6 @@
 #include "ssh_timeout.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -51,4 +52,26 @@ size_t ssh_setup_timeout_text(SshSetupStage stage, const char *host, int port,
         return 0;
     }
     return (size_t)n;
+}
+
+long ssh_kbd_rearm_ms(long long entry_s, long long now_s, long limit_ms)
+{
+    const long long max_ms = (long long)LONG_MAX;
+    long long elapsed;
+
+    if (now_s <= entry_s)
+        elapsed = 0;                                   /* clock went backwards */
+    else if (entry_s < 0 && now_s > LLONG_MAX + entry_s)
+        return LONG_MAX;                               /* the subtraction would overflow */
+    else
+        elapsed = now_s - entry_s;
+
+    if (elapsed > max_ms / 1000) return LONG_MAX;
+    long long ms = elapsed * 1000;                     /* <= LONG_MAX */
+    long long lim = limit_ms < 0 ? 0 : (long long)limit_ms;
+    long long room = max_ms - ms;                      /* >= 0 */
+    /* ms + lim + 1000 <= LONG_MAX, written so that nothing can overflow even
+     * where long is 64 bits wide. */
+    if (lim > room || room - lim < 1000) return LONG_MAX;
+    return (long)(ms + lim + 1000);
 }

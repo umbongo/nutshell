@@ -47,6 +47,10 @@ typedef struct AiStream {
     char   custom_url[256];
     char  *body;               /* AI_BODY_MAX bytes, rebuilt by the tool loop */
     size_t body_len;
+    char  *snapshot;           /* malloc'd copy of the terminal text taken at launch
+                                * (one per launch, reused by every tool-loop rebuild);
+                                * NULL when there is no terminal or it is empty.
+                                * Read-only for the thread, freed with the stream. */
 
     /* Tool snapshot: tools[].tool_data points at search/fetch/debug_log below, never
      * at the panel's own copies, so a settings change or a closed panel

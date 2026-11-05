@@ -6,7 +6,8 @@ IDI_APPICON  ICON "nutshell.ico"
 IDR_FONT_INTER      RCDATA "fonts/Inter-Regular.ttf"
 IDR_FONT_INTER_BOLD RCDATA "fonts/Inter-Bold.ttf"
 
-// DPI awareness manifest — prevents bitmap scaling on high-DPI displays
+// Manifest: Common-Controls 6 (comctl32 v6, which exports the subclassing
+// functions by name) and DPI awareness (no bitmap scaling on high-DPI displays)
 1 24 "nutshell.manifest"
 
 VS_VERSION_INFO VERSIONINFO

@@ -393,3 +393,15 @@ int test_crypto_dpapi_backend_get_set(void)
     ASSERT_TRUE(crypto_dpapi_backend() == &k_fake_dpapi_backend);
     TEST_END();
 }
+
+int test_crypto_random_bytes_fills(void)
+{
+    TEST_BEGIN();
+    unsigned char a[16], b[16];
+    memset(a, 0, sizeof(a));
+    memset(b, 0, sizeof(b));
+    ASSERT_EQ(crypto_random_bytes(NULL, a, sizeof(a)), 1);
+    ASSERT_EQ(crypto_random_bytes(NULL, b, sizeof(b)), 1);
+    ASSERT_TRUE(memcmp(a, b, sizeof(a)) != 0);
+    TEST_END();
+}

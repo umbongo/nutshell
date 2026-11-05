@@ -241,3 +241,75 @@ int test_conn_prompt_wants_password(void)
     ASSERT_EQ(conn_prompt_wants_password(1, NULL), 0);
     TEST_END();
 }
+
+int test_conn_ui_kind_has_secret(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(conn_ui_kind_has_secret(CONN_UI_HOSTKEY), 0);
+    ASSERT_EQ(conn_ui_kind_has_secret(CONN_UI_PASSPHRASE), 1);
+    ASSERT_EQ(conn_ui_kind_has_secret(CONN_UI_PASSWORD), 1);
+    ASSERT_EQ(conn_ui_kind_has_secret(CONN_UI_KBDINT), 1);
+    TEST_END();
+}
+
+static int conn_save_all_zero(const ConnSaveCandidate *c)
+{
+    for (size_t i = 0; i < sizeof c->pw; i++)
+        if (c->pw[i] != 0) return 0;
+    return 1;
+}
+
+int test_conn_save_note_latest_wins(void)
+{
+    TEST_BEGIN();
+    ConnSaveCandidate c;
+    conn_save_clear(&c);
+    ASSERT_TRUE(conn_save_all_zero(&c));
+    ASSERT_EQ(c.ticked, 0);
+
+    conn_save_note(&c, "one", 1);
+    ASSERT_STR_EQ(c.pw, "one");
+    ASSERT_EQ(c.ticked, 1);
+
+    /* a later unticked answer replaces the earlier one and saves nothing */
+    conn_save_note(&c, "two", 0);
+    ASSERT_TRUE(conn_save_all_zero(&c));
+    ASSERT_EQ(c.ticked, 0);
+
+    conn_save_note(&c, "three", 1);
+    ASSERT_STR_EQ(c.pw, "three");
+    ASSERT_EQ(c.ticked, 1);
+
+    /* a shorter answer leaves no tail of the longer one behind */
+    conn_save_note(&c, "x", 1);
+    ASSERT_STR_EQ(c.pw, "x");
+    ASSERT_EQ(c.pw[2], 0);
+    ASSERT_EQ(c.pw[4], 0);
+
+    /* ticked with a NULL answer keeps nothing */
+    conn_save_note(&c, NULL, 1);
+    ASSERT_TRUE(conn_save_all_zero(&c));
+    ASSERT_EQ(c.ticked, 0);
+
+    /* overlong: CONN_SAVE_MAX-1 bytes kept, NUL-terminated */
+    char big[300];
+    memset(big, 'a', sizeof big - 1);
+    big[sizeof big - 1] = '\0';
+    conn_save_note(&c, big, 1);
+    ASSERT_EQ(strlen(c.pw), (size_t)(CONN_SAVE_MAX - 1));
+    ASSERT_EQ(c.pw[CONN_SAVE_MAX - 1], 0);
+    ASSERT_EQ(c.pw[CONN_SAVE_MAX - 2], 'a');
+    ASSERT_EQ(c.ticked, 1);
+
+    conn_save_clear(&c);
+    ASSERT_TRUE(conn_save_all_zero(&c));
+    ASSERT_EQ(c.ticked, 0);
+
+    /* NULL-safe */
+    conn_save_note(NULL, "x", 1);
+    conn_save_note(NULL, NULL, 0);
+    conn_save_clear(NULL);
+    conn_save_note(&c, NULL, 0);
+    ASSERT_TRUE(conn_save_all_zero(&c));
+    TEST_END();
+}

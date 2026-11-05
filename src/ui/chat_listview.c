@@ -991,6 +991,27 @@ void chat_listview_relayout(HWND hwnd)
  *  Layout: measure all items, compute total_height
  * ══════════════════════════════════════════════════════════════════════ */
 
+/* The reason a sensitive command asks ("reads credentials"), shown after
+ * the command text in the caption font. Its width, in pixels, plus the
+ * SP_SM gap that separates it from the command; 0 when the row has no
+ * reason. Selects the caption font into `hdc` and puts the old one back.
+ * If `text_w` is non-NULL it gets the width of the reason alone. */
+static int clv_reason_width(ChatListView *lv, HDC hdc, const ChatMsgItem *item,
+                            int *text_w)
+{
+    if (text_w) *text_w = 0;
+    if (!hdc || item->type != CHAT_ITEM_COMMAND || !item->u.cmd.reason[0])
+        return 0;
+    int dpi = CLV_DPI(lv);
+    HGDIOBJ old = SelectObject(hdc, ns_font(FONT_CAPTION, dpi));
+    SIZE sz = { 0, 0 };
+    GetTextExtentPoint32A(hdc, item->u.cmd.reason,
+                          (int)strlen(item->u.cmd.reason), &sz);
+    SelectObject(hdc, old);
+    if (text_w) *text_w = sz.cx;
+    return sz.cx + ns_scale(SP_SM, dpi);
+}
+
 /* Approval-card row height at the current DPI. v2 rows are always
  * single-line regardless of card width (approval_row_height no longer
  * takes one) -- see ns_layout.h. */
@@ -1052,7 +1073,7 @@ static void cmd_container_measure(ChatListView *lv, HDC hdc_for_measure,
             SIZE sz = { 0, 0 };
             if (cmd_text && *cmd_text)
                 GetTextExtentPoint32A(hdc_for_measure, cmd_text, (int)strlen(cmd_text), &sz);
-            out->text_w[n] = sz.cx;
+            out->text_w[n] = sz.cx + clv_reason_width(lv, hdc_for_measure, it, NULL);
         }
         n++;
         it = it->next;
@@ -1813,6 +1834,60 @@ static int paint_ai_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     return painted_h > (rc->bottom - rc->top) ? painted_h : (rc->bottom - rc->top);
 }
 
+/* Draw a command row's text in `text_rc` (one line, vertically centred):
+ * the command in the mono font, ellipsised when it does not fit, and --
+ * only when the row has a reason -- the reason after it in FONT_CAPTION and
+ * the warning colour. When both fit the reason follows the command at an
+ * SP_SM gap; when they do not, the reason keeps up to half the width at the
+ * right edge and the command gives way. `flags` are the command's DrawText
+ * flags (the caller decides about the ellipsis). Painted only, never
+ * measured: the row stays one line of the same height either way. */
+static void paint_cmd_text(ChatListView *lv, HDC hdc, const ChatMsgItem *item,
+                           const char *cmd_text, const RECT *text_rc,
+                           COLORREF text_clr, UINT flags)
+{
+    RECT cmd_rc = *text_rc;
+    int reason_w = 0;
+    int reason_total = clv_reason_width(lv, hdc, item, &reason_w);
+    RECT reason_rc = { 0, 0, 0, 0 };
+    if (reason_total > 0) {
+        int avail = text_rc->right - text_rc->left;
+        int gap = reason_total - reason_w;
+        SIZE csz = { 0, 0 };
+        HGDIOBJ old_m = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
+                                          : GetStockObject(ANSI_FIXED_FONT));
+        if (cmd_text && *cmd_text)
+            GetTextExtentPoint32A(hdc, cmd_text, (int)strlen(cmd_text), &csz);
+        SelectObject(hdc, old_m);
+        reason_rc = *text_rc;
+        if (csz.cx + reason_total <= avail) {
+            cmd_rc.right = cmd_rc.left + csz.cx + 1;
+            flags &= ~(UINT)DT_END_ELLIPSIS;
+            reason_rc.left = cmd_rc.left + csz.cx + gap;
+            reason_rc.right = reason_rc.left + reason_w;
+        } else {
+            int keep = reason_w < avail / 2 ? reason_w : avail / 2;
+            reason_rc.left = text_rc->right - keep;
+            cmd_rc.right = reason_rc.left - gap;
+            if (cmd_rc.right < cmd_rc.left) cmd_rc.right = cmd_rc.left;
+            flags |= DT_END_ELLIPSIS;
+        }
+    }
+
+    SetTextColor(hdc, text_clr);
+    HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
+                                      : GetStockObject(ANSI_FIXED_FONT));
+    draw_text_utf8(hdc, cmd_text, &cmd_rc, flags);
+    if (reason_total > 0) {
+        SelectObject(hdc, ns_font(FONT_CAPTION, CLV_DPI(lv)));
+        SetTextColor(hdc, RGB_FROM_THEME(ns_tokens()->warning.base));
+        draw_text_utf8(hdc, item->u.cmd.reason, &reason_rc,
+                       DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT |
+                       DT_END_ELLIPSIS);
+    }
+    SelectObject(hdc, old_f);
+}
+
 /* ── Paint one approval-card v2 row: checkbox, command text (FONT_MONO,
  *    ellipsised per row->ellipsis), risk chip. No per-row Allow/Deny --
  *    decisions are card-wide now (Deny all / Run N selected). A held
@@ -1882,15 +1957,12 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
          * details popup. */
         int text_hot = ns_hover_state_for(&lv->hover,
                            CLV_CMD_ROW_HIT_ID(container_idx, row_idx, HIT_TEXT));
-        SetTextColor(hdc, text_hot ? RGB_FROM_THEME(tok->text_main)
-                           : row->held ? RGB_FROM_THEME(tok->text_dim)
-                                       : RGB_FROM_THEME(tc->cmd_text));
-        HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
-                                          : GetStockObject(ANSI_FIXED_FONT));
+        COLORREF text_clr = text_hot ? RGB_FROM_THEME(tok->text_main)
+                          : row->held ? RGB_FROM_THEME(tok->text_dim)
+                                      : RGB_FROM_THEME(tc->cmd_text);
         UINT flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT;
         if (row->ellipsis || text_shortened) flags |= DT_END_ELLIPSIS;
-        draw_text_utf8(hdc, cmd_text, &text_rc, flags);
-        SelectObject(hdc, old_f);
+        paint_cmd_text(lv, hdc, item, cmd_text, &text_rc, text_clr, flags);
     }
 
     /* Copy glyph between the text and the chip */
@@ -1995,6 +2067,7 @@ static void settled_row_geometry(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     GetTextMetricsA(hdc, &tm);
     SelectObject(hdc, old_mf);
     g->text_h = tm.tmHeight;
+    csz.cx += clv_reason_width(lv, hdc, item, NULL);
 
     NsRect row_r = { box_left, top, box_right - box_left,
                      approval_row_height(tm.tmHeight, dpi) };
@@ -2055,13 +2128,9 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         RECT text_rc = { layout.text.x, layout.text.y,
                          layout.text.x + layout.text.w,
                          layout.text.y + layout.text.h };
-        SetTextColor(hdc, text_clr);
-        HGDIOBJ old_f = SelectObject(hdc, lv->hMonoFont ? lv->hMonoFont
-                                          : GetStockObject(ANSI_FIXED_FONT));
         UINT flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_LEFT;
         if (layout.ellipsis) flags |= DT_END_ELLIPSIS;
-        draw_text_utf8(hdc, cmd_text, &text_rc, flags);
-        SelectObject(hdc, old_f);
+        paint_cmd_text(lv, hdc, item, cmd_text, &text_rc, text_clr, flags);
     }
 
     /* Outcome chip */

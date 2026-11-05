@@ -1,6 +1,8 @@
 /* src/core/conn_prompt.c -- see conn_prompt.h */
 #include "conn_prompt.h"
+#include "secure_zero.h"
 #include <stddef.h>
+#include <string.h>
 
 void conn_prompt_slot_init(ConnPromptSlot *s)
 {
@@ -70,4 +72,30 @@ int conn_prompt_wants_password(int auth_is_key, const char *saved_password)
 {
     if (auth_is_key) return 0;
     return (!saved_password || saved_password[0] == '\0') ? 1 : 0;
+}
+
+int conn_ui_kind_has_secret(ConnUiKind kind)
+{
+    return (kind == CONN_UI_PASSPHRASE || kind == CONN_UI_PASSWORD ||
+            kind == CONN_UI_KBDINT) ? 1 : 0;
+}
+
+void conn_save_clear(ConnSaveCandidate *c)
+{
+    if (!c) return;
+    secure_zero(c->pw, sizeof c->pw);
+    c->ticked = 0;
+}
+
+void conn_save_note(ConnSaveCandidate *c, const char *typed, int ticked)
+{
+    if (!c) return;
+    conn_save_clear(c);
+    if (ticked && typed) {
+        size_t n = strlen(typed);
+        if (n > CONN_SAVE_MAX - 1) n = CONN_SAVE_MAX - 1;
+        memcpy(c->pw, typed, n);
+        c->pw[n] = '\0';
+        c->ticked = 1;
+    }
 }

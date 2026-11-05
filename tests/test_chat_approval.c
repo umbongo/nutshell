@@ -984,3 +984,84 @@ int test_chat_approval_needs_user_all_quoted(void) {
     ASSERT_EQ(chat_approval_needs_user(&q), 1);
     TEST_END();
 }
+
+int test_chat_approval_sensitive_never_auto(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.policy.allowed = CMD_CRITICAL;
+    q.policy.unattended = CMD_CRITICAL;   /* the loosest policy there is */
+
+    int a = chat_approval_add_session(&q, "cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ(a, 0);
+    ASSERT_EQ((int)q.entries[a].status, (int)APPROVE_PENDING);
+    ASSERT_STR_EQ(q.entries[a].reason, "reads credentials");
+    ASSERT_TRUE((q.entries[a].safety_mask & CMD_MASK_SENSITIVE) != 0u);
+
+    /* Under a contradicted session too. */
+    int b = chat_approval_add_session(&q, "cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX, 1);
+    ASSERT_EQ((int)q.entries[b].status, (int)APPROVE_PENDING);
+    ASSERT_STR_EQ(q.entries[b].reason, "reads credentials");
+
+    /* The path rule applies under a Cisco ruleset as well. */
+    int c = chat_approval_add_session(&q, "cat ~/.ssh/id_rsa", CMD_PLATFORM_CISCO_IOS, 0);
+    ASSERT_TRUE(c >= 0);
+    ASSERT_EQ((int)q.entries[c].status, (int)APPROVE_PENDING);
+    ASSERT_STR_EQ(q.entries[c].reason, "reads credentials");
+
+    /* An ordinary read still runs unattended and carries no reason. */
+    int d = chat_approval_add_session(&q, "ls", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ((int)q.entries[d].status, (int)APPROVE_APPROVED);
+    ASSERT_STR_EQ(q.entries[d].reason, "");
+
+    /* Only the plain read is runnable; nothing sensitive is. */
+    ASSERT_EQ(chat_approval_next_approved(&q), d);
+    TEST_END();
+}
+
+int test_chat_approval_sensitive_blocked_by_ceiling(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.policy.allowed = CMD_READ;
+    q.policy.unattended = CMD_READ;
+    int i = chat_approval_add_session(&q, "sudo cat /etc/shadow", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ(i, 0);
+    ASSERT_EQ((int)q.entries[i].status, (int)APPROVE_BLOCKED);
+    ASSERT_STR_EQ(q.entries[i].reason, "reads credentials");
+    TEST_END();
+}
+
+int test_chat_approval_unblock_keeps_sensitive_pending(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.policy.allowed = CMD_READ;
+    q.policy.unattended = POLICY_NONE;
+    int i = chat_approval_add_session(&q, "sudo cat /etc/shadow", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ((int)q.entries[i].status, (int)APPROVE_BLOCKED);
+
+    q.policy.allowed = CMD_CRITICAL;
+    q.policy.unattended = CMD_CRITICAL;
+    ASSERT_EQ(chat_approval_unblock_all(&q), 1);
+    ASSERT_EQ((int)q.entries[i].status, (int)APPROVE_PENDING);
+    ASSERT_STR_EQ(q.entries[i].reason, "reads credentials");
+    ASSERT_EQ(chat_approval_next_approved(&q), -1);
+    TEST_END();
+}
+
+int test_chat_approval_quoted_records_sensitive_reason(void) {
+    TEST_BEGIN();
+    ApprovalQueue q;
+    chat_approval_init(&q);
+    q.policy.allowed = CMD_CRITICAL;
+    q.policy.unattended = CMD_CRITICAL;
+    int i = chat_approval_add_quoted(&q, "cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX, 0);
+    ASSERT_EQ(i, 0);
+    ASSERT_EQ((int)q.entries[i].status, (int)APPROVE_BLOCKED);
+    ASSERT_EQ(q.entries[i].quoted, 1);
+    ASSERT_STR_EQ(q.entries[i].reason, "reads credentials");
+    int j = chat_approval_add_quoted(&q, "ls", CMD_PLATFORM_LINUX, 0);
+    ASSERT_STR_EQ(q.entries[j].reason, "");
+    TEST_END();
+}

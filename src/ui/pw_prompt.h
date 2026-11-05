@@ -12,9 +12,16 @@ typedef struct {
     const ThemeColors *theme;  /* for the title bar; NULL leaves it default */
     const char        *detail;      /* line under the label: profile name and host; NULL = none */
     int                offer_save;  /* show the "Save password to this profile" checkbox */
+    const char        *text;        /* read-only scrolling area above the label (LF line
+                                     * breaks; converted to CRLF here); NULL = none */
+    int                echo;        /* 1 = the answer is shown as typed (no mask, no eye) */
 } PwPromptOpts;
 
-/* Modal prompt owned by `parent`. Returns 1 on OK with the text in `out`
+/* The strings in `opts` (title, label, detail, text) are read only while the
+ * window is created, before the modal loop starts, and are not kept: the
+ * caller's copies may go away while the dialog is up.
+ *
+ * Modal prompt owned by `parent`. Returns 1 on OK with the text in `out`
  * (NUL-terminated, at most out_size - 1 bytes), 0 on Cancel, close or
  * WM_QUIT (re-posted). Every internal copy is wiped with secure_zero().
  * *save_out (may be NULL) is 1 when OK was pressed with the save box
