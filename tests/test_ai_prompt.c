@@ -215,7 +215,7 @@ int test_ai_provider_model_moonshot(void) {
     TEST_BEGIN();
     const char *model = ai_provider_model("moonshot");
     ASSERT_NOT_NULL(model);
-    ASSERT_STR_EQ(model, "kimi-k2");
+    ASSERT_STR_EQ(model, "kimi-k3");
     TEST_END();
 }
 
@@ -235,10 +235,12 @@ int test_ai_provider_models_moonshot(void) {
     TEST_BEGIN();
     const char * const *models = ai_provider_models("moonshot");
     ASSERT_NOT_NULL(models);
-    ASSERT_STR_EQ(models[0], "kimi-k2");
+    ASSERT_STR_EQ(models[0], "kimi-k3");
+    ASSERT_STR_EQ(models[1], "kimi-k2.5");
+    ASSERT_STR_EQ(models[2], "kimi-k2");
     int count = 0;
     while (models[count]) count++;
-    ASSERT_EQ(count, 4);
+    ASSERT_EQ(count, 6);
     TEST_END();
 }
 

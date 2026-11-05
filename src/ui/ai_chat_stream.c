@@ -25,6 +25,7 @@ typedef struct {
     AiToolStreamState *tool_stream;
     char provider[64];
     int tool_stop;          /* set to 1 when tool_use stop detected */
+    int cut_off;            /* 1 when the provider ended the reply at its output limit */
     int input_tokens;        /* actual input token count from API (0 until received) */
     int output_tokens;       /* actual output token count from API (0 until received) */
 } StreamContext;
@@ -134,6 +135,8 @@ static void stream_process_line(StreamContext *ctx, const char *line, size_t len
     if (len < 6 || strncmp(line, "data: ", 6) != 0) return;
 
     const char *json = line + 6;
+    if (ai_stream_chunk_cut_off(json))
+        ctx->cut_off = 1;
     char content_delta[1024] = "";
     char thinking_delta[1024] = "";
     int chunk_input_tokens = 0, chunk_output_tokens = 0;
@@ -381,6 +384,16 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             final_thinking[copy_n] = '\0';
         }
 
+        /* finish_reason "length": the reply stops mid-sentence (or mid
+         * [EXEC], so no command card): say so instead of leaving it a mystery. */
+        if (ctx.cut_off) {
+            DLOG(DLOG_AI, DLOG_WARN, 0, "stream.cut_off",
+                 "stream=%u finish_reason=length tokens_out=%d", stream_id,
+                 ctx.output_tokens);
+            post_tool_msg(s, CHAT_ITEM_STATUS,
+                          "reply cut off at the provider's output limit");
+        }
+
         /* Accumulate token counts (last non-zero value wins) */
         if (ctx.input_tokens > 0)
             total_input_tokens = ctx.input_tokens;
@@ -392,10 +405,13 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
             tool_stream_ptr->pending_tool_count > 0) {
 
             /* Add assistant message with tool_use blocks */
-            agentic_add_assistant_tool_msg(&s->conv,
-                                          ctx.full_content,
-                                          tool_stream_ptr->pending_tool_calls,
-                                          tool_stream_ptr->pending_tool_count);
+            /* ctx.full_thinking is this turn's reasoning; the builder sends it
+             * back with the tool calls for provider "moonshot" only. */
+            agentic_add_assistant_tool_msg_ex(&s->conv,
+                                              ctx.full_content,
+                                              ctx.full_thinking,
+                                              tool_stream_ptr->pending_tool_calls,
+                                              tool_stream_ptr->pending_tool_count);
 
             /* Execute each tool call */
             AiToolResult *results = (AiToolResult *)calloc(

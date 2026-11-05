@@ -109,9 +109,38 @@ void ai_msg_free(AiMessage *msg)
         msg->tool_calls = NULL;
     }
     msg->n_tool_calls = 0;
+    if (msg->reasoning) {
+        free(msg->reasoning);
+        msg->reasoning = NULL;
+    }
     if (msg->attachment) {
         ai_attachment_free(&msg->attachment);
     }
+}
+
+int ai_msg_set_reasoning(AiMessage *msg, const char *text)
+{
+    if (!msg) return -1;
+    if (msg->reasoning) {
+        free(msg->reasoning);
+        msg->reasoning = NULL;
+    }
+    if (!text || !text[0]) return 0;
+
+    size_t len = strlen(text);
+    if (len > AI_REASONING_MAX - 1) {
+        len = AI_REASONING_MAX - 1;
+        /* never leave half of a multi-byte character at the cut */
+        while (len > 0 && ((unsigned char)text[len] & 0xC0) == 0x80)
+            len--;
+        if (len == 0) return 0;
+    }
+    char *copy = (char *)malloc(len + 1);
+    if (!copy) return -1;
+    memcpy(copy, text, len);
+    copy[len] = '\0';
+    msg->reasoning = copy;
+    return 0;
 }
 
 void ai_conv_init(AiConversation *conv, const char *model)
@@ -164,6 +193,7 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src)
         m->attachment = NULL;
         m->tool_calls = NULL;
         m->n_tool_calls = 0;
+        m->reasoning = NULL;
         dst->msg_count = i + 1;   /* a failure below frees what we have */
 
         if (sm->content_overflow) {
@@ -182,6 +212,12 @@ int ai_conv_copy(AiConversation *dst, const AiConversation *src)
             if (!m->tool_calls) goto fail;
             memcpy(m->tool_calls, sm->tool_calls, sz);
             m->n_tool_calls = sm->n_tool_calls;
+        }
+        if (sm->reasoning) {
+            size_t rl = strlen(sm->reasoning);
+            m->reasoning = (char *)malloc(rl + 1);
+            if (!m->reasoning) goto fail;
+            memcpy(m->reasoning, sm->reasoning, rl + 1);
         }
     }
     return 0;
@@ -207,6 +243,7 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content)
     m->tool_note[0] = '\0';
     m->tool_calls = NULL;
     m->n_tool_calls = 0;
+    m->reasoning = NULL;
     conv->msg_count++;
     return 0;
 }
@@ -402,6 +439,7 @@ int ai_model_context_limit(const char *model)
         {"claude-sonnet-4-6",         200000},
         {"claude-haiku-4-5-20251001", 200000},
         {"claude-opus-4-6",           200000},
+        {"kimi-k3",                  1000000},
         {"kimi-k2",                   128000},
         {"moonshot-v1-8k",              8000},
         {"moonshot-v1-32k",            32000},
@@ -726,6 +764,7 @@ static size_t build_body_core(const AiConversation *conv,
     }
 
     int is_anthropic = provider && strcmp(provider, "anthropic") == 0;
+    int send_reasoning = provider && strcmp(provider, "moonshot") == 0;
     size_t pos = 0;
     int n;
 
@@ -740,6 +779,14 @@ static size_t build_body_core(const AiConversation *conv,
     /* Anthropic requires max_tokens */
     if (is_anthropic) {
         n = snprintf(buf + pos, buf_size - pos, ",\"max_tokens\":8096");
+        if (n < 0 || pos + (size_t)n >= buf_size) return 0;
+        pos += (size_t)n;
+    }
+
+    /* Moonshot: an explicit output limit (see AI_MOONSHOT_MAX_COMPLETION_TOKENS) */
+    if (provider && strcmp(provider, "moonshot") == 0) {
+        n = snprintf(buf + pos, buf_size - pos, ",\"max_completion_tokens\":%d",
+                     AI_MOONSHOT_MAX_COMPLETION_TOKENS);
         if (n < 0 || pos + (size_t)n >= buf_size) return 0;
         pos += (size_t)n;
     }
@@ -978,6 +1025,19 @@ static size_t build_body_core(const AiConversation *conv,
 
             pos = json_escape_string(ai_msg_content(msg), strlen(ai_msg_content(msg)), buf, buf_size, pos, 1);
             if (pos == 0) return 0;
+
+            /* Moonshot's thinking models want the turn's reasoning back and
+             * answer 400 without it; no other provider gets the field (a
+             * DeepSeek reasoner rejects it, OpenAI has no such field). */
+            if (send_reasoning && msg->reasoning && msg->reasoning[0]) {
+                const char *rc_key = ",\"reasoning_content\":";
+                size_t rck_len = strlen(rc_key);
+                if (pos + rck_len >= buf_size) return 0;
+                memcpy(buf + pos, rc_key, rck_len);
+                pos += rck_len;
+                pos = json_escape_string(msg->reasoning, strlen(msg->reasoning), buf, buf_size, pos, 1);
+                if (pos == 0) return 0;
+            }
 
             const char *tc_open = ",\"tool_calls\":[";
             size_t tco_len = strlen(tc_open);
@@ -1354,13 +1414,32 @@ int ai_parse_stream_chunk(const char *json,
     return 0;
 }
 
+int ai_stream_chunk_cut_off(const char *json)
+{
+    if (!json || !json[0]) return 0;
+    JsonNode *root = json_parse(json);
+    if (!root) return 0;
+    int cut = 0;
+    JsonNode *choices = json_obj_get(root, "choices");
+    if (choices && choices->type == JSON_ARRAY && vec_size(&choices->as.arr) > 0) {
+        JsonNode *first = (JsonNode *)vec_get(&choices->as.arr, 0);
+        if (first && first->type == JSON_OBJECT) {
+            const char *fr = json_obj_str(first, "finish_reason");
+            if (fr && strcmp(fr, "length") == 0) cut = 1;
+        }
+    }
+    json_free(root);
+    return cut;
+}
+
 int ai_provider_supports_tools(const char *provider)
 {
     if (!provider) return 0;
     if (strcmp(provider, "anthropic") == 0) return 1;
     if (strcmp(provider, "openai") == 0) return 1;
     if (strcmp(provider, "deepseek") == 0) return 1;
-    return 0;  /* unknown providers: safe default */
+    if (strcmp(provider, "moonshot") == 0) return 1;
+    return 0;  /* gemini and unknown providers: safe default */
 }
 
 int ai_parse_stream_chunk_ex(const char *json,
@@ -1736,7 +1815,7 @@ const char *ai_provider_model(const char *provider)
     if (strcmp(provider, "deepseek") == 0) return "deepseek-chat";
     if (strcmp(provider, "openai") == 0)   return "gpt-4o";
     if (strcmp(provider, "anthropic") == 0) return "claude-sonnet-4-6";
-    if (strcmp(provider, "moonshot") == 0)  return "kimi-k2";
+    if (strcmp(provider, "moonshot") == 0)  return "kimi-k3";
     if (strcmp(provider, "gemini") == 0)   return "gemini-2.5-flash";
 
     return NULL;
@@ -1757,7 +1836,8 @@ const char * const *ai_provider_models(const char *provider)
         "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6", NULL
     };
     static const char * const moonshot_models[] = {
-        "kimi-k2", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", NULL
+        "kimi-k3", "kimi-k2.5", "kimi-k2", "moonshot-v1-8k", "moonshot-v1-32k",
+        "moonshot-v1-128k", NULL
     };
     static const char * const gemini_models[] = {
         "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", NULL

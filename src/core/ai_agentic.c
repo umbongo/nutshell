@@ -46,6 +46,15 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
                                     const char *assistant_text,
                                     const AiToolCall *calls, int n_calls)
 {
+    return agentic_add_assistant_tool_msg_ex(conv, assistant_text, NULL,
+                                             calls, n_calls);
+}
+
+int agentic_add_assistant_tool_msg_ex(AiConversation *conv,
+                                       const char *assistant_text,
+                                       const char *reasoning,
+                                       const AiToolCall *calls, int n_calls)
+{
     if (!conv) return -1;
     if (conv->msg_count >= AI_MAX_MESSAGES) return -1;
 
@@ -60,9 +69,14 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
 
     if (n_calls > 0 && calls) {
         msg->tool_calls = malloc((size_t)n_calls * sizeof(AiToolCall));
-        if (!msg->tool_calls) return -1;
+        if (!msg->tool_calls) { ai_msg_free(msg); return -1; }
         memcpy(msg->tool_calls, calls, (size_t)n_calls * sizeof(AiToolCall));
         msg->n_tool_calls = n_calls;
+    }
+
+    if (ai_msg_set_reasoning(msg, reasoning) != 0) {
+        ai_msg_free(msg);
+        return -1;
     }
 
     conv->msg_count++;

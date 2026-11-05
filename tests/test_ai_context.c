@@ -55,6 +55,7 @@ int test_ai_model_context_limit_known(void) {
     ASSERT_EQ(ai_model_context_limit("claude-sonnet-4-6"), 200000);
     ASSERT_EQ(ai_model_context_limit("claude-opus-4-6"), 200000);
     ASSERT_EQ(ai_model_context_limit("kimi-k2"), 128000);
+    ASSERT_EQ(ai_model_context_limit("kimi-k3"), 1000000);
     ASSERT_EQ(ai_model_context_limit("moonshot-v1-8k"), 8000);
     ASSERT_EQ(ai_model_context_limit("moonshot-v1-128k"), 128000);
     TEST_END();

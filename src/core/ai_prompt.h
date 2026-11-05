@@ -56,7 +56,21 @@ typedef struct {
     /* For ROLE_ASSISTANT messages that contain tool_use blocks */
     AiToolCall *tool_calls;   /* heap-allocated array, NULL when unused */
     int n_tool_calls;         /* 0 means normal text message */
+
+    /* The reasoning the model streamed alongside this assistant turn's tool
+     * calls, kept so a provider that demands it back (Moonshot's thinking
+     * models: a 400 without it) gets it in the follow-up request. Heap, at
+     * most AI_REASONING_MAX - 1 bytes, NULL when the turn had none. Only the
+     * OpenAI-format builder reads it, and only for provider "moonshot"; the
+     * Anthropic path and every other provider ignore it. Owned by the
+     * message: ai_msg_free() frees it, ai_conv_copy() duplicates it, and
+     * ai_conv_take() moves it with the rest. */
+    char *reasoning;
 } AiMessage;
+
+/* Cap on a stored reasoning text, terminating NUL included: the same 16 KiB
+ * the stream keeps for the panel's Thinking disclosure (AI_MSG_MAX). */
+#define AI_REASONING_MAX AI_MSG_MAX
 
 typedef struct {
     char model[64];
@@ -213,6 +227,17 @@ int ai_parse_stream_chunk_ex(const char *json,
 
 /* Returns 1 if the provider supports native tool use, 0 otherwise. */
 int ai_provider_supports_tools(const char *provider);
+
+/* Output limit sent as "max_completion_tokens" to provider "moonshot" (and
+ * only to it). Without one the server's default is far lower, and a thinking
+ * model's reasoning counts against it, so a long [EXEC] reply was cut off
+ * before its closing marker. Equal to the max_tokens Anthropic gets. */
+#define AI_MOONSHOT_MAX_COMPLETION_TOKENS 8096
+
+/* 1 when an OpenAI-format stream chunk (the JSON after "data: ") ends the
+ * reply because it hit the provider's output limit: choices[0].finish_reason
+ * is "length". 0 for any other chunk, malformed JSON or NULL. */
+int ai_stream_chunk_cut_off(const char *json);
 
 /* Extended parse: also extract reasoning/thinking content (e.g. DeepSeek
  * reasoner's "reasoning_content" field).  thinking_out may be NULL.
@@ -412,7 +437,13 @@ const char *ai_msg_content(const AiMessage *msg);
  * Returns 0 on success, -1 on allocation failure. */
 int ai_msg_set_content(AiMessage *msg, const char *data, size_t len);
 
-/* Frees dynamic resources (content_overflow + tool_calls). */
+/* Store `text` as msg's reasoning (see AiMessage), replacing any earlier one.
+ * Kept to AI_REASONING_MAX - 1 bytes, cut on a UTF-8 boundary. NULL or ""
+ * clears it. Returns 0, or -1 on allocation failure (reasoning cleared). */
+int ai_msg_set_reasoning(AiMessage *msg, const char *text);
+
+/* Frees dynamic resources (content_overflow, tool_calls, reasoning,
+ * attachment). */
 void ai_msg_free(AiMessage *msg);
 
 /* Build the JSON request body with tool definitions.
