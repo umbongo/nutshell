@@ -40,6 +40,8 @@
 
 static const wchar_t NO_NOTE_TEXT[] =
     L"The assistant gave no explanation for this command.";
+static const wchar_t NO_ADDRESS_TEXT[] =
+    L"No address was given.";
 
 typedef struct {
     HWND hwnd, hEdit, hCopy, hClose;
@@ -49,6 +51,9 @@ typedef struct {
     wchar_t *note_w;        /* UTF-16, "" when there is no note */
     wchar_t *why_w;         /* UTF-16 "Why: <reason>", "" when not sensitive */
     int why_h;              /* height reserved under the note for it, or 0 */
+    int tool;               /* 1 = a tool call's card: the note is the address */
+    int note_need_h;        /* height the note and "Why:" line want, uncapped
+                               by the layout (tool rows grow the window to it) */
     CmdSafetyLevel safety;
 
     int dpi;
@@ -122,7 +127,17 @@ static void measure_tag(DetailData *d)
 
 static const wchar_t *note_text(const DetailData *d)
 {
-    return (d->note_w && d->note_w[0]) ? d->note_w : NO_NOTE_TEXT;
+    if (d->note_w && d->note_w[0]) return d->note_w;
+    return d->tool ? NO_ADDRESS_TEXT : NO_NOTE_TEXT;
+}
+
+/* DrawText flags for the note. An address has no spaces, so a tool row wraps
+ * the way a multiline EDIT does (inside a long word) and is never cut with an
+ * ellipsis; a command's note keeps its word wrap and ellipsis. */
+static UINT note_flags(const DetailData *d)
+{
+    UINT f = DT_WORDBREAK | DT_NOPREFIX;
+    return d->tool ? (f | DT_EDITCONTROL) : (f | DT_END_ELLIPSIS);
 }
 
 /* Measure the note, lay the window out and place the child controls. */
@@ -146,9 +161,9 @@ static void detail_relayout(DetailData *d)
         GetTextMetricsW(hdc, &tm);
         RECT mr = { 0, 0, note_w, 0 };
         DrawTextW(hdc, note_text(d), -1, &mr,
-                  DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+                  DT_CALCRECT | (note_flags(d) & ~(UINT)DT_END_ELLIPSIS));
         note_h = mr.bottom - mr.top;
-        if (note_h > NOTE_MAX_LINES * tm.tmHeight)
+        if (!d->tool && note_h > NOTE_MAX_LINES * tm.tmHeight)
             note_h = NOTE_MAX_LINES * tm.tmHeight;
         SelectObject(hdc, old);
         ReleaseDC(d->hwnd, hdc);
@@ -171,6 +186,7 @@ static void detail_relayout(DetailData *d)
         }
     }
 
+    d->note_need_h = note_h + d->why_h;
     cmd_detail_layout(cw, ch, d->dpi, note_h + d->why_h, d->tag_w, &d->lay);
 
     MoveWindow(d->hEdit, d->lay.command.x, d->lay.command.y,
@@ -203,12 +219,15 @@ static void detail_paint(DetailData *d, HDC hdc)
     SetBkMode(hdc, TRANSPARENT);
 
     /* "The assistant says:" -- the note is model prose, so it is labelled
-     * as such and kept visually secondary to the risk tag. */
+     * as such and kept visually secondary to the risk tag. A tool row's
+     * note is Nutshell's own rendering of the address, not the model's
+     * words, and says so. */
     HGDIOBJ old = SelectObject(hdc, d->f_caption ? d->f_caption
                                    : GetStockObject(DEFAULT_GUI_FONT));
     SetTextColor(hdc, theme_cr(tk->text_dim));
     RECT label_rc = nrect_to_rect(&d->lay.label);
-    DrawTextW(hdc, L"The assistant says:", -1, &label_rc,
+    DrawTextW(hdc, d->tool ? L"Address to fetch:" : L"The assistant says:", -1,
+              &label_rc,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     /* The note, or the fixed no-explanation line in text_dim. */
@@ -222,7 +241,7 @@ static void detail_paint(DetailData *d, HDC hdc)
     why_rc.top = note_rc.bottom - why_h;
     note_rc.bottom -= why_h;
     DrawTextW(hdc, note_text(d), -1, &note_rc,
-              DT_LEFT | DT_TOP | DT_WORDBREAK | DT_END_ELLIPSIS | DT_NOPREFIX);
+              DT_LEFT | DT_TOP | note_flags(d));
     if (why_h > 0) {
         SelectObject(hdc, d->f_caption ? d->f_caption
                                        : GetStockObject(DEFAULT_GUI_FONT));
@@ -451,7 +470,8 @@ static LRESULT CALLBACK DetailProc(HWND hwnd, UINT msg, WPARAM wParam,
 /* ---- public API --------------------------------------------------------- */
 
 void cmd_detail_show(HWND owner, const char *command, const char *note,
-                     const char *reason, CmdSafetyLevel safety, int dpi)
+                     const char *reason, CmdSafetyLevel safety, int tool,
+                     int dpi)
 {
     if (!owner || !IsWindow(owner)) return;
     if (dpi <= 0) dpi = 96;
@@ -459,6 +479,7 @@ void cmd_detail_show(HWND owner, const char *command, const char *note,
     DetailData d;
     memset(&d, 0, sizeof(d));
     d.safety = safety;
+    d.tool = tool ? 1 : 0;
     d.command = _strdup(command ? command : "");
     d.command_w = to_wide(command, 1);
     d.note_w = to_wide(note, 0);
@@ -511,7 +532,9 @@ void cmd_detail_show(HWND owner, const char *command, const char *note,
         if (y < mi.rcWork.top) y = mi.rcWork.top;
     }
 
-    HWND hwnd = CreateWindowExW(0, CMD_DETAIL_CLASS, L"Command details", style,
+    HWND hwnd = CreateWindowExW(0, CMD_DETAIL_CLASS,
+                                d.tool ? L"Tool call details" : L"Command details",
+                                style,
                                 x, y, win_w, win_h, owner, NULL,
                                 GetModuleHandle(NULL), &d);
     if (!hwnd) goto cleanup;
@@ -530,6 +553,28 @@ void cmd_detail_show(HWND owner, const char *command, const char *note,
                          (outer.right - outer.left) + dw,
                          (outer.bottom - outer.top) + dh,
                          SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    /* A tool row's address can need more lines than the default window
+     * leaves for the note: grow the window by the shortfall, as far as the
+     * monitor's work area allows (the note is clipped beyond that). Command
+     * rows keep the fixed size and their eight-line cap. */
+    if (d.tool) {
+        int extra = d.note_need_h - d.lay.note.h;
+        if (extra > 0) {
+            RECT outer;
+            GetWindowRect(hwnd, &outer);
+            int h = (outer.bottom - outer.top) + extra;
+            int ny = outer.top;
+            if (GetMonitorInfo(MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST), &mi)) {
+                int max_h = mi.rcWork.bottom - mi.rcWork.top;
+                if (h > max_h) h = max_h;
+                if (ny + h > mi.rcWork.bottom) ny = mi.rcWork.bottom - h;
+                if (ny < mi.rcWork.top) ny = mi.rcWork.top;
+            }
+            SetWindowPos(hwnd, NULL, outer.left, ny, outer.right - outer.left, h,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        }
     }
 
     EnableWindow(owner, FALSE);

@@ -919,7 +919,8 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                     cmd_detail_show(top ? top : hwnd, dcmd ? dcmd : "",
                                     it->u.cmd.note ? it->u.cmd.note : "",
                                     it->u.cmd.reason,
-                                    it->u.cmd.safety, get_window_dpi(hwnd));
+                                    it->u.cmd.safety, it->u.cmd.tool,
+                                    get_window_dpi(hwnd));
                     break;
                 }
                 return 0;
