@@ -1157,6 +1157,13 @@ int test_ai_tool_card_text_web_fetch(void)
     ASSERT_STR_EQ(row, "web_fetch: https://a.test/abc");
     ASSERT_STR_EQ(detail, "https://a.test/a\\x1Bb\\u202Ec");
 
+    /* a schemeless URL quoting "://" in its path still loses its userinfo */
+    snprintf(call.input_json, sizeof call.input_json,
+             "{\"url\":\"user:pw@host/p://x\"}");
+    ASSERT_EQ(ai_tool_card_text(&call, row, sizeof row, detail, sizeof detail), 0);
+    ASSERT_STR_EQ(row, "web_fetch: host/p://x");
+    ASSERT_STR_EQ(detail, "host/p://x");
+
     /* the query never reaches the row, even a long one */
     snprintf(call.input_json, sizeof call.input_json,
              "{\"url\":\"https://a.test/?token=hunter2&x=1\"}");

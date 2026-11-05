@@ -390,6 +390,21 @@ size_t net_url_display(const char *url, char *out, size_t cap)
 
 #define NG_ELLIPSIS "\xE2\x80\xA6"
 
+/* Where the authority starts: after "://" when that separator belongs to a
+ * scheme, else at url. A scheme cannot hold '/', '?' or '#', so a "://" that
+ * follows one of them (a path or query that quotes a URL) is not a
+ * separator: the text before it is still the authority. */
+static const char *ng_authority_start(const char *url)
+{
+    const char *sep = strstr(url, "://");
+    const char *p;
+
+    if (!sep) return url;
+    for (p = url; p < sep; p++)
+        if (*p == '/' || *p == '?' || *p == '#') return url;
+    return sep + 3;
+}
+
 /* The URL text a row shows before any cut: userinfo, query and fragment
  * dropped, controls, bidi and TAB/LF/CR removed. Returns a malloc'd buffer of
  * *len bytes (not NUL-terminated beyond *len) or NULL; *query is set to 1
@@ -400,14 +415,10 @@ static char *ng_row_text(const char *url, size_t *len, int *query)
     char *buf;
     size_t span, auth_n, n, w, flen;
 
-    auth = strstr(url, "://");
-    auth = auth ? auth + 3 : url;
+    auth = ng_authority_start(url);
     span = 0;
     while (url[span] && url[span] != '?' && url[span] != '#') span++;
     *query = url[span] == '?';
-    /* A "://" inside the query is no scheme separator: the authority then
-     * starts at the beginning (net_url_display lets the userinfo through). */
-    if ((size_t)(auth - url) > span) auth = url;
 
     auth_n = 0;
     while (auth + auth_n < url + span && auth[auth_n] != '/') auth_n++;
@@ -571,12 +582,9 @@ size_t net_url_detail(const char *url, char *out, size_t cap)
     out[0] = '\0';
     if (!url) return 0;
 
-    auth = strstr(url, "://");
-    auth = auth ? auth + 3 : url;
-    /* "://" inside a query or fragment is not a scheme separator. */
+    auth = ng_authority_start(url);
     end = url;
     while (*end && *end != '?' && *end != '#') end++;
-    if (auth > end) auth = url;
     p = auth;
     at = NULL;
     for (; p < end && *p != '/'; p++)

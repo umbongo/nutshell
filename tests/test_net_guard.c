@@ -572,6 +572,15 @@ int test_net_url_display_marked(void)
     net_url_display_marked("user:pw@host/p?x=http://y", out, sizeof out);
     ASSERT_STR_EQ(out, "host/p?\xE2\x80\xA6");
 
+    /* nor is "://" inside the path, or after a fragment */
+    net_url_display_marked("user:pw@host/p://x", out, sizeof out);
+    ASSERT_STR_EQ(out, "host/p://x");
+    ASSERT_TRUE(strstr(out, "user:pw") == NULL);
+    net_url_display_marked("user:pw@host#http://y", out, sizeof out);
+    ASSERT_STR_EQ(out, "host");
+    net_url_display_marked("https://u:pw@a.test/p://x?q=1", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p://x?\xE2\x80\xA6");
+
     /* a long path is cut and marked with U+2026, never "..." */
     memcpy(big, "https://a.test/", 15);
     memset(big + 15, 'p', 185);
@@ -659,6 +668,13 @@ int test_net_url_detail(void)
 
     net_url_detail("user:pw@host/p?x=http://y", out, sizeof out);
     ASSERT_STR_EQ(out, "host/p?x=http://y");
+    net_url_detail("user:pw@host/p://x", out, sizeof out);
+    ASSERT_STR_EQ(out, "host/p://x");
+    ASSERT_TRUE(strstr(out, "user:pw") == NULL);
+    net_url_detail("user:pw@host#http://y", out, sizeof out);
+    ASSERT_STR_EQ(out, "host#http://y");
+    net_url_detail("https://u:pw@a.test/p://x?q=1", out, sizeof out);
+    ASSERT_STR_EQ(out, "https://a.test/p://x?q=1");
 
     /* a bidi override inside the userinfo goes with the userinfo */
     net_url_detail("http://us\xE2\x80\xAE" "er:pw@host/", out, sizeof out);
