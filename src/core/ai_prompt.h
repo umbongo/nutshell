@@ -51,6 +51,7 @@ typedef struct {
     char tool_call_id[64];    /* set on ROLE_TOOL: the id this result is for */
     char tool_name[64];       /* set on ROLE_TOOL: tool name (for display) */
     int  is_tool_error;       /* set on ROLE_TOOL: 1 if this is an error result */
+    char tool_note[AI_TOOL_NOTE_MAX]; /* ROLE_TOOL: Nutshell's own text, outside the data block */
 
     /* For ROLE_ASSISTANT messages that contain tool_use blocks */
     AiToolCall *tool_calls;   /* heap-allocated array, NULL when unused */
@@ -92,8 +93,8 @@ int ai_conv_add(AiConversation *conv, AiRole role, const char *content);
  * Returns 0 on success, -1 on invalid arguments or allocation failure. */
 int ai_conv_set_system(AiConversation *conv, const char *content);
 
-/* Build the system prompt with terminal context embedded.
- * terminal_text, session_notes, system_notes may be NULL.
+/* Build the system prompt: the session's settings and rules, no terminal text.
+ * session_notes, system_notes may be NULL.
  * kind selects the opening sentences: SESSION_SSH produces exactly the text
  * it always has, and SESSION_TELNET the same text naming a telnet session;
  * SESSION_LOCAL says the shell is a local one on a Windows PC
@@ -101,7 +102,6 @@ int ai_conv_set_system(AiConversation *conv, const char *content);
  * shell ("PowerShell", "Git bash", ...) and may be NULL, in which case the
  * prompt lists the possibilities. Ignored for SESSION_SSH and SESSION_TELNET. */
 void ai_build_system_prompt(char *buf, size_t buf_size,
-                            const char *terminal_text,
                             const char *session_notes,
                             const char *system_notes,
                             SessionKind kind,
@@ -109,15 +109,21 @@ void ai_build_system_prompt(char *buf, size_t buf_size,
 
 /* The same, plus (debug_log_tool != 0) the note that the read_debug_log tool
  * exists (ai_debug_tool_prompt_note(), ai_tools.h). Pass it only while the
- * tool is registered for the reply. debug_log_tool == 0 is byte for byte the
- * function above. */
+ * tool is registered for the reply. `tools` is the registry whose tools the
+ * reply carries, or NULL (provider without tool support, or none registered):
+ * NULL or a registry with count 0 adds no tools paragraph. With
+ * debug_log_tool == 0 and tools == NULL it is byte for byte the function
+ * above.
+ *
+ * The system prompt holds settings only: no terminal text, no command results
+ * (those travel in a delimited data block in the last user turn). */
 void ai_build_system_prompt_ex(char *buf, size_t buf_size,
-                               const char *terminal_text,
                                const char *session_notes,
                                const char *system_notes,
                                SessionKind kind,
                                const char *shell_name,
-                               int debug_log_tool);
+                               int debug_log_tool,
+                               const AiToolRegistry *tools);
 
 /* Build the JSON request body from the conversation.
  * Returns bytes written (excluding NUL), or 0 on error. */
@@ -136,12 +142,41 @@ AiAttachment *ai_attachment_dup(const AiAttachment *att);
  * last user message.
  * provider: e.g. "anthropic", "openai", NULL for generic OpenAI-compat format.
  *   For "anthropic": emits system message as top-level "system" key (required
- *   by Anthropic Messages API) and adds required "max_tokens":8096.
+ *   by Anthropic Messages API, array form with a cache_control marker) and
+ *   adds required "max_tokens":8096.
  * Returns bytes written (excluding NUL), or 0 on error. */
 size_t ai_build_request_body_ex(const AiConversation *conv,
                                 const AiAttachment *last_user_attachment,
                                 char *buf, size_t buf_size, int stream,
                                 const char *provider);
+
+/* What a request body adds around the conversation (spec 2026-11-05
+ * trust-boundary decisions 2 and 5). */
+typedef struct {
+    const char *snapshot;  /* terminal text for the last user turn; NULL or "": no block */
+    const char *delim;     /* this request's delimiter; NULL: no block, tool output unframed */
+} AiBodyFrame;
+
+/* The full builder behind ai_build_request_body_ex and _tools.
+ * tools_json: serialized tool definitions, or NULL/"" for none.
+ * frame NULL, or frame->delim NULL: no terminal block and tool results are
+ * sent unframed (content, then "\n" + tool_note when a note exists).
+ * With a delimiter: the snapshot (if non-empty) goes in a data block
+ * ("<lead>\n<delim>\n<escaped>\n<delim>") before the content of the LAST
+ * AI_ROLE_USER message, in its text part when it has an attachment, and every
+ * AI_ROLE_TOOL message is sent as a data block labelled with its tool name,
+ * its tool_note after the closing delimiter (an empty result with a note sends
+ * the note alone). conv is never modified. Anthropic's "system" is sent as an
+ * array whose block carries cache_control ephemeral whenever a system message
+ * is present, frame or not.
+ * Returns bytes written (excluding NUL), or 0 on error (including a buffer
+ * too small and an allocation failure). */
+size_t ai_build_request_body_frame(const AiConversation *conv,
+                                   const AiAttachment *last_user_attachment,
+                                   const char *tools_json,
+                                   const AiBodyFrame *frame,
+                                   char *buf, size_t buf_size, int stream,
+                                   const char *provider);
 
 /* Parse a chat completion JSON response, extract assistant message content.
  * Returns 0 on success, -1 on error. */
@@ -429,6 +464,12 @@ int ai_model_context_limit(const char *model);
 
 /* Estimate total tokens in a conversation (chars/4 heuristic). */
 int ai_context_estimate_tokens(const AiConversation *conv);
+
+/* The same estimate plus the terminal snapshot the next request carries in
+ * its last user turn: ai_context_estimate_tokens(conv) + snapshot_len / 4.
+ * The snapshot is not in conv (it is added when the body is built), so the
+ * meter has to add it. */
+int ai_context_estimate_tokens_ex(const AiConversation *conv, size_t snapshot_len);
 
 /* Compact a conversation: keep system prompt (msg[0]) and last
  * keep_recent*2 messages (user+assistant pairs). Removes older messages.

@@ -1,6 +1,8 @@
 /* tests/test_cmd_classify.c */
 #include "test_framework.h"
 #include "cmd_classify.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* --- NULL and empty input --- */
@@ -4233,5 +4235,688 @@ int test_cmd_classify_session_worse_of_two_property(void) {
             ASSERT_EQ(cmd_classify_mask_session(cmd, plat, 1), own_m | unk_m);
         }
     }
+    TEST_END();
+}
+
+/* ===== Wrappers that carry a command line (plan A, Task 6) =====
+ * sh -c BODY, eval, watch, and xargs/parallel as the first word run another
+ * command the per-word rules cannot see; the classifier reads the inner
+ * command line itself and keeps both its level and its mask. */
+
+static int classify_both(const char *cmd, CmdSafetyLevel want)
+{
+    return cmd_classify(cmd, CMD_PLATFORM_LINUX) == want &&
+           cmd_classify(cmd, CMD_PLATFORM_UNKNOWN) == want;
+}
+
+int test_classify_sh_c_body(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(classify_both("bash -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("sh -c \"rm -rf /\"", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("ksh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("bash -lc 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("dash -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("zsh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("/bin/sh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("sh -c 'ls'", CMD_READ));
+    ASSERT_TRUE(classify_both("sh -c 'ls -l /etc | wc -l'", CMD_READ));
+    ASSERT_TRUE(classify_both("sh -c 'ls; touch x'", CMD_WRITE));
+    ASSERT_TRUE(classify_both("sh -c 'ls' a b", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh script.sh", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh -s", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh -c", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh -c ''", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("sh -c 'echo \"unbalanced'", CMD_UNKNOWN));
+    /* The wrapper peels reach it too, and sudo keeps its floor. */
+    ASSERT_TRUE(classify_both("env sh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("timeout 5 sh -c 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(cmd_classify("sudo sh -c 'ls'", CMD_PLATFORM_LINUX) >= CMD_WRITE);
+    /* A redirect on the wrapper itself still counts. */
+    ASSERT_TRUE(classify_both("sh -c 'ls' > /etc/out", CMD_WRITE));
+    TEST_END();
+}
+
+int test_classify_eval_args(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(classify_both("eval 'rm -rf /'", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("eval ls -l", CMD_READ));
+    const char *escaped_semi = "eval ls \\; touch x";
+    ASSERT_TRUE(classify_both(escaped_semi, CMD_WRITE));
+    ASSERT_TRUE(classify_both("eval rm -rf /", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("eval", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("eval 'echo \"unbalanced'", CMD_UNKNOWN));
+    TEST_END();
+}
+
+int test_classify_watch(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(classify_both("watch rm -rf /", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("watch -n 5 df -h", CMD_READ));
+    ASSERT_TRUE(classify_both("watch -n5 df -h", CMD_READ));
+    ASSERT_TRUE(classify_both("watch -d free -m", CMD_READ));
+    ASSERT_TRUE(classify_both("watch --bogus df", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("watch", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("watch -n 5", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("watch touch x", CMD_WRITE));
+    TEST_END();
+}
+
+int test_classify_xargs_parallel_first_word(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(classify_both("xargs rm < list", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("parallel rm ::: a b", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("xargs cat < list", CMD_WRITE));
+    ASSERT_TRUE(classify_both("cat list | xargs cat", CMD_WRITE));
+    ASSERT_TRUE(classify_both("xargs -n1 rm < list", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("xargs sh -c 'rm -rf /' < list", CMD_CRITICAL));
+    ASSERT_TRUE(classify_both("parallel echo ::: a b", CMD_WRITE));
+    ASSERT_TRUE(classify_both("xargs", CMD_WRITE));
+    /* The wrapped command's mask is ORed in. */
+    unsigned m = cmd_classify_mask("xargs cat < list", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_WRITE)) != 0);
+    TEST_END();
+}
+
+int test_classify_quoted_first_word(void) {
+    TEST_BEGIN();
+    const char *cmds[] = { "'rm' -rf /", "\"rm\" -rf /", "r\\m -rf /",
+                           "\\rm -rf /", "r'm' -rf /", "/bin/'rm' x",
+                           "sudo 'rm' -rf /", "env \"rm\" -rf /" };
+    for (size_t i = 0; i < sizeof cmds / sizeof cmds[0]; i++) {
+        char reason[256];
+        ASSERT_EQ((int)cmd_classify_ex(cmds[i], CMD_PLATFORM_LINUX, reason, sizeof reason),
+                  (int)CMD_CRITICAL);
+        ASSERT_TRUE(strstr(reason, "unrecognised command") == NULL);
+        ASSERT_EQ((int)cmd_classify(cmds[i], CMD_PLATFORM_UNKNOWN), (int)CMD_CRITICAL);
+    }
+    /* A quoted read command is the read command; a quoted unknown is unknown. */
+    ASSERT_TRUE(classify_both("'ls' -l", CMD_READ));
+    ASSERT_TRUE(classify_both("\"cat\" /etc/hosts", CMD_READ));
+    ASSERT_TRUE(classify_both("'frobnicate' x", CMD_UNKNOWN));
+    /* A path with backslashes and no quotes keeps its old reading. */
+    ASSERT_TRUE(cmd_classify("C:\\Windows\\System32\\cmd.exe /c dir", CMD_PLATFORM_LINUX)
+                >= CMD_UNKNOWN);
+    TEST_END();
+}
+
+int test_classify_depth_limit_wrappers(void) {
+    TEST_BEGIN();
+    /* The limit is 4 inner command lines: four evals still resolve, a fifth
+     * is UNKNOWN. */
+    ASSERT_TRUE(classify_both("eval ls", CMD_READ));
+    ASSERT_TRUE(classify_both("eval eval eval eval ls", CMD_READ));
+    ASSERT_TRUE(classify_both("eval eval eval eval touch x", CMD_WRITE));
+    ASSERT_TRUE(classify_both("eval eval eval eval eval ls", CMD_UNKNOWN));
+    ASSERT_TRUE(classify_both("eval eval eval eval eval touch x", CMD_UNKNOWN));
+    /* Nested sh -c with '\'' quoting: no crash, never READ at depth 5. */
+    char cur[8192], nxt[8192];
+    snprintf(cur, sizeof cur, "ls");
+    for (int level = 1; level <= 5; level++) {
+        size_t n = 0;
+        n += (size_t)snprintf(nxt + n, sizeof nxt - n, "sh -c '");
+        for (const char *q = cur; *q && n + 8 < sizeof nxt; q++) {
+            if (*q == '\'') n += (size_t)snprintf(nxt + n, sizeof nxt - n, "'\\''");
+            else nxt[n++] = *q;
+        }
+        nxt[n++] = '\'';
+        nxt[n] = '\0';
+        memcpy(cur, nxt, n + 1);
+    }
+    ASSERT_TRUE(cmd_classify(cur, CMD_PLATFORM_LINUX) >= CMD_UNKNOWN);
+    ASSERT_TRUE(cmd_classify(cur, CMD_PLATFORM_UNKNOWN) >= CMD_UNKNOWN);
+    /* Shallow nesting still resolves. */
+    ASSERT_EQ((int)cmd_classify("sh -c \"sh -c 'ls'\"", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("sh -c \"sh -c 'touch x'\"", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    TEST_END();
+}
+
+/* A word repeated thousands of times (AI-supplied text) must not recurse
+ * without bound: sudo/env peels, with and without quotes, give up at a fixed
+ * nesting and report at least UNKNOWN instead of overflowing the stack. */
+static int repeated_wrapper_is_bounded(const char *unit, size_t reps)
+{
+    size_t ul = strlen(unit);
+    char *buf = (char *)malloc(ul * reps + 8);
+    if (!buf) return 0;
+    for (size_t i = 0; i < reps; i++) memcpy(buf + i * ul, unit, ul);
+    memcpy(buf + ul * reps, "ls", 3);
+    int ok = cmd_classify(buf, CMD_PLATFORM_LINUX) >= CMD_UNKNOWN &&
+             cmd_classify(buf, CMD_PLATFORM_UNKNOWN) >= CMD_UNKNOWN;
+    free(buf);
+    return ok;
+}
+
+int test_classify_wrapper_recursion_bounded(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(repeated_wrapper_is_bounded("sudo 'sudo' ", 20000));
+    ASSERT_TRUE(repeated_wrapper_is_bounded("env 'env' ", 20000));
+    ASSERT_TRUE(repeated_wrapper_is_bounded("env env ", 20000));
+    ASSERT_TRUE(repeated_wrapper_is_bounded("sudo sudo ", 20000));
+    /* Ordinary wrapper stacks are far below the bound. */
+    ASSERT_TRUE(classify_both("sudo env nice timeout 5 ls", CMD_WRITE));
+    ASSERT_TRUE(classify_both("env nice nohup ls", CMD_WRITE));
+    TEST_END();
+}
+
+int test_classify_inner_mask_ored(void) {
+    TEST_BEGIN();
+    unsigned m = cmd_classify_mask("echo $(rm x)", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & (CMD_MASK_OF(CMD_WRITE) | CMD_MASK_OF(CMD_CRITICAL))) != 0);
+    m = cmd_classify_mask("sh -c 'rm x' ", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & (CMD_MASK_OF(CMD_WRITE) | CMD_MASK_OF(CMD_CRITICAL))) != 0);
+    /* The whole inner mask is kept, not only the worst bit. */
+    m = cmd_classify_mask("sh -c 'ls; touch x'", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_WRITE)) != 0);
+    m = cmd_classify_mask("echo $(ls; frobnicate)", CMD_PLATFORM_LINUX);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_UNKNOWN)) != 0);
+    m = cmd_classify_mask("eval 'ls; touch x'", CMD_PLATFORM_UNKNOWN);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0);
+    ASSERT_TRUE((m & CMD_MASK_OF(CMD_WRITE)) != 0);
+    TEST_END();
+}
+
+/* ===== Sensitive reads: the CMD_MASK_SENSITIVE bit and its phrase ===== */
+
+/* 1 when `cmd` under `plat` is sensitive with exactly `phrase` (or, when
+ * phrase is NULL, merely sensitive). Prints the command on a mismatch so a
+ * table failure names its row. */
+static int sens_is(const char *cmd, CmdPlatform plat, const char *phrase)
+{
+    char r[CMD_REASON_MAX];
+    r[0] = '\0';
+    unsigned m = cmd_classify_mask_session_ex(cmd, plat, 0, r, sizeof r);
+    int ok = (m & CMD_MASK_SENSITIVE) != 0 && (!phrase || strcmp(r, phrase) == 0);
+    if (!ok)
+        printf("  sensitive mismatch: [%s] platform %d: mask %u reason \"%s\", want %s\n",
+               cmd, (int)plat, m, r, phrase ? phrase : "(any phrase)");
+    return ok;
+}
+
+/* 1 when `cmd` under `plat` does not carry the sensitive bit. */
+static int sens_not(const char *cmd, CmdPlatform plat)
+{
+    char r[CMD_REASON_MAX];
+    r[0] = '\0';
+    unsigned m = cmd_classify_mask_session_ex(cmd, plat, 0, r, sizeof r);
+    int ok = (m & CMD_MASK_SENSITIVE) == 0;
+    if (!ok)
+        printf("  unexpectedly sensitive: [%s] platform %d (\"%s\")\n", cmd, (int)plat, r);
+    return ok;
+}
+
+int test_sensitive_paths(void) {
+    TEST_BEGIN();
+    static const char *const cmds[] = {
+        "cat ~/.ssh/id_rsa", "ls ~/.ssh", "cat .ssh/config", "cat id_ed25519",
+        "cat server.pem", "cat tls.key", "cat ~/.netrc", "cat ~/.pgpass",
+        "cat ~/.git-credentials", "cat ~/.aws/credentials", "cat ~/.kube/config",
+        "cat /etc/shadow", "cat /etc/sudoers", "cat .env", "cat .env.production",
+        "cat ~/.ssh/id_ed25519.pub", "cp ~/.ssh/id_rsa /tmp",
+        "ssh -i ~/.ssh/id_ed25519 host", "cat < ~/.netrc",
+        "type %USERPROFILE%\\.ssh\\id_rsa",
+        "cat $HOME/.ssh/id_rsa", "cat ${HOME}/.ssh/id_rsa", "ls -la ~/.ssh/",
+        "tar czf x.tgz ~/.ssh", "dd if=~/.ssh/id_rsa", "scp host:~/.ssh/id_rsa .",
+        "cat --file=~/.netrc", "cat C:\\Users\\x\\.ssh\\id_rsa",
+        NULL
+    };
+    for (int i = 0; cmds[i]; i++) {
+        ASSERT_TRUE(sens_is(cmds[i], CMD_PLATFORM_LINUX, "reads credentials"));
+        ASSERT_TRUE(sens_is(cmds[i], CMD_PLATFORM_UNKNOWN, "reads credentials"));
+    }
+    TEST_END();
+}
+
+int test_sensitive_history(void) {
+    TEST_BEGIN();
+    static const char *const cmds[] = {
+        "cat ~/.bash_history", "cat ~/.zsh_history", "cat ~/.history",
+        "cat ~/.python_history", "cat ~/.mysql_history", "cat ~/.psql_history",
+        "history", "grep ssh ~/.bash_history", "tail -n 50 ~/.bash_history",
+        NULL
+    };
+    for (int i = 0; cmds[i]; i++) {
+        ASSERT_TRUE(sens_is(cmds[i], CMD_PLATFORM_LINUX, "reads shell history"));
+        ASSERT_TRUE(sens_is(cmds[i], CMD_PLATFORM_UNKNOWN, "reads shell history"));
+    }
+    TEST_END();
+}
+
+int test_sensitive_globs(void) {
+    TEST_BEGIN();
+    static const char *const yes[] = {
+        "cat ~/.ss*/id*", "cat /home/*/.ssh/*", "cat /root/.a?s/x", "ls ~/.[a-z]*",
+        "cat /home/bob/.a*/credentials", "cat $HOME/.s*", "cat ~/.{ssh,aws}/x",
+        NULL
+    };
+    static const char *const no[] = {
+        "cat /etc/*-release", "ls /home/*", "cat /etc/sh?dow", "ls /var/log/*.log",
+        "ls ~/*", "ls ~/.config", NULL
+    };
+    for (int i = 0; yes[i]; i++) {
+        ASSERT_TRUE(sens_is(yes[i], CMD_PLATFORM_LINUX, "reads credentials"));
+        ASSERT_TRUE(sens_is(yes[i], CMD_PLATFORM_UNKNOWN, "reads credentials"));
+    }
+    for (int i = 0; no[i]; i++) {
+        ASSERT_TRUE(sens_not(no[i], CMD_PLATFORM_LINUX));
+        ASSERT_TRUE(sens_not(no[i], CMD_PLATFORM_UNKNOWN));
+    }
+    TEST_END();
+}
+
+int test_sensitive_commands(void) {
+    TEST_BEGIN();
+    static const char *const env_cmds[] = {
+        "printenv", "env", "set", "export", "export -p", "declare -x", "declare -p",
+        "compgen -v", "cat /proc/1/environ", "cat /proc/self/environ",
+        "Get-ChildItem env:", "gci Env:", "docker inspect x", "env -0",
+        "env FOO=1", "/usr/bin/printenv", "timeout 5 printenv", "sh -c printenv",
+        "sudo printenv", "SET", NULL
+    };
+    for (int i = 0; env_cmds[i]; i++) {
+        ASSERT_TRUE(sens_is(env_cmds[i], CMD_PLATFORM_LINUX, "reads the environment"));
+        ASSERT_TRUE(sens_is(env_cmds[i], CMD_PLATFORM_UNKNOWN, "reads the environment"));
+    }
+    static const char *const other[][2] = {
+        { "printenv AWS_SECRET_ACCESS_KEY", "reads a secret variable" },
+        { "crontab -l", "reads the crontab" },
+        { "crontab --list", "reads the crontab" },
+        { "crontab -u root -l", "reads the crontab" },
+        { "kubectl get secret -o yaml", "reads stored secrets" },
+        { "kubectl get secrets -n x", "reads stored secrets" },
+        { "kubectl -n x get secret db", "reads stored secrets" },
+        { "vault read secret/x", "reads stored secrets" },
+        { "vault kv get x", "reads stored secrets" },
+        { "aws configure list", "reads credentials" },
+        { "aws sts get-session-token", "reads credentials" },
+        { "gpg --export-secret-keys", "reads stored secrets" },
+        { "git config --list", "reads stored secrets" },
+        { "git config --get-all user.email", "reads stored secrets" },
+        { "git credential fill", "reads credentials" },
+        { "Get-Content ~/.ssh/id_rsa", "reads credentials" },
+        { "history | grep ssh", "reads shell history" },
+        { NULL, NULL }
+    };
+    for (int i = 0; other[i][0]; i++) {
+        ASSERT_TRUE(sens_is(other[i][0], CMD_PLATFORM_LINUX, other[i][1]));
+        ASSERT_TRUE(sens_is(other[i][0], CMD_PLATFORM_UNKNOWN, other[i][1]));
+    }
+    ASSERT_TRUE(sens_is("gc .env", CMD_PLATFORM_UNKNOWN, "reads credentials"));
+    static const char *const no[] = {
+        "printenv PATH", "env ls", "export FOO=1", "git config user.name",
+        "docker logs x", "set -e", "env FOO=1 ls", "kubectl get pods",
+        "kubectl get pod secret-reader", "vault status", "aws s3 ls",
+        "aws configure get region", "docker ps", "git config --get user.name",
+        "crontab -e", "declare -p PATH", "export PATH=/x", "gpg --list-keys",
+        "git status", NULL
+    };
+    for (int i = 0; no[i]; i++) {
+        ASSERT_TRUE(sens_not(no[i], CMD_PLATFORM_LINUX));
+        ASSERT_TRUE(sens_not(no[i], CMD_PLATFORM_UNKNOWN));
+    }
+    TEST_END();
+}
+
+int test_sensitive_variables(void) {
+    TEST_BEGIN();
+    static const char *const yes[] = {
+        "echo $GITHUB_TOKEN", "echo ${DB_PASSWORD}", "echo %API_KEY%",
+        "echo $AWS_REGION", "echo $env:GITHUB_TOKEN", "echo ${env:DB_PASSWD}",
+        "echo ${TOKEN:-x}", "echo ${#SECRET}", "echo ${!AWS*}", "echo ${!HOME@}",
+        "echo \"$github_token\"", "curl -H \"Authorization: $API_KEY\" x",
+        "echo $MY_PRIVATE_THING", "echo $AWS_ACCESS_KEY_ID", "echo $env:aws_x",
+        "echo ${db_secret}", "echo $SOME_ACCESS_KEY",
+        "echo ${X:-$GITHUB_TOKEN}", "echo ${HOME:-${DB_PASSWORD}}", NULL
+    };
+    static const char *const no[] = {
+        "echo $PATH", "echo ${HOME:-x}", "echo %USERPROFILE%", "echo $HOME",
+        "echo $PWD", "echo ${#PATH}", "echo ${!x}", "date +%Y%m%d", "echo $1",
+        "echo $env:Path", "echo $TERM", "echo ${X:-$PATH}", NULL
+    };
+    for (int i = 0; yes[i]; i++) {
+        ASSERT_TRUE(sens_is(yes[i], CMD_PLATFORM_LINUX, "reads a secret variable"));
+        ASSERT_TRUE(sens_is(yes[i], CMD_PLATFORM_UNKNOWN, "reads a secret variable"));
+    }
+    for (int i = 0; no[i]; i++) {
+        ASSERT_TRUE(sens_not(no[i], CMD_PLATFORM_LINUX));
+        ASSERT_TRUE(sens_not(no[i], CMD_PLATFORM_UNKNOWN));
+    }
+    TEST_END();
+}
+
+int test_sensitive_survives_quoting(void) {
+    TEST_BEGIN();
+    static const char *const cmds[] = {
+        "\"cat\" ~/.ssh/id_rsa", "c\\at ~/.ssh/id_rsa", "cat ~/'.ssh'/id_rsa",
+        "cat \"$HOME/.ssh/id_rsa\"", "cat ~/.s\\sh/id_rsa", "cat ~/\".s\"'sh'/id_rsa",
+        "cat ~/.ssh\\id_rsa", "'cat' '~/.ssh/id_rsa'", "cat \"~/.ssh\"/id_rsa",
+        NULL
+    };
+    for (int i = 0; cmds[i]; i++) {
+        ASSERT_TRUE(sens_is(cmds[i], CMD_PLATFORM_LINUX, "reads credentials"));
+        ASSERT_TRUE(sens_is(cmds[i], CMD_PLATFORM_UNKNOWN, "reads credentials"));
+    }
+    /* A PowerShell backtick escape hides nothing either. */
+    ASSERT_TRUE(sens_is("cat ~/.s`sh/id_rsa", CMD_PLATFORM_UNKNOWN, "reads credentials"));
+    TEST_END();
+}
+
+int test_sensitive_through_recursion(void) {
+    TEST_BEGIN();
+    static const char *const cmds[] = {
+        "echo $(cat ~/.ssh/id_rsa)", "sh -c 'cat ~/.ssh/id_rsa'",
+        "timeout 5 cat ~/.ssh/id_rsa", "echo `cat ~/.ssh/id_rsa`",
+        "eval 'cat ~/.ssh/id_rsa'", "bash -c \"cat ~/.ssh/id_rsa\"",
+        "watch cat ~/.ssh/id_rsa", "xargs cat < ~/.ssh/id_rsa",
+        "echo hi && cat ~/.ssh/id_rsa", "ls | xargs cat ~/.ssh/id_rsa",
+        "sudo cat ~/.ssh/id_rsa", "echo \"$(cat ~/.ssh/id_rsa)\"",
+        "sh -c 'echo $(cat ~/.ssh/id_rsa)'", NULL
+    };
+    for (int i = 0; cmds[i]; i++) {
+        ASSERT_TRUE(sens_is(cmds[i], CMD_PLATFORM_LINUX, "reads credentials"));
+        ASSERT_TRUE(sens_is(cmds[i], CMD_PLATFORM_UNKNOWN, "reads credentials"));
+    }
+    /* A command rule inside a wrapped body keeps the bit too. */
+    ASSERT_TRUE(sens_is("sh -c 'history'", CMD_PLATFORM_LINUX, "reads shell history"));
+    ASSERT_TRUE(sens_is("echo $(printenv)", CMD_PLATFORM_LINUX, "reads the environment"));
+    TEST_END();
+}
+
+int test_sensitive_first_match_wins(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(sens_is("cat ~/.bash_history ~/.ssh/id_rsa", CMD_PLATFORM_LINUX,
+                        "reads shell history"));
+    ASSERT_TRUE(sens_is("cat ~/.ssh/id_rsa ~/.bash_history", CMD_PLATFORM_LINUX,
+                        "reads credentials"));
+    ASSERT_TRUE(sens_is("echo $GITHUB_TOKEN ~/.ssh/id_rsa", CMD_PLATFORM_LINUX,
+                        "reads a secret variable"));
+    ASSERT_TRUE(sens_is("cat ~/.ssh/id_rsa; printenv", CMD_PLATFORM_LINUX,
+                        "reads credentials"));
+    ASSERT_TRUE(sens_is("printenv; cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX,
+                        "reads the environment"));
+    TEST_END();
+}
+
+int test_sensitive_under_every_ruleset(void) {
+    TEST_BEGIN();
+    static const CmdPlatform all[] = {
+        CMD_PLATFORM_LINUX, CMD_PLATFORM_CISCO_IOS, CMD_PLATFORM_CISCO_NXOS,
+        CMD_PLATFORM_CISCO_ASA, CMD_PLATFORM_ARUBA_CX, CMD_PLATFORM_ARUBA_OS,
+        CMD_PLATFORM_PANOS, CMD_PLATFORM_HP_PROCURVE, CMD_PLATFORM_HP_COMWARE,
+        CMD_PLATFORM_JUNOS, CMD_PLATFORM_FORTIOS, CMD_PLATFORM_VYOS,
+        CMD_PLATFORM_MIKROTIK, CMD_PLATFORM_UNKNOWN
+    };
+    for (size_t i = 0; i < sizeof all / sizeof all[0]; i++) {
+        ASSERT_TRUE(sens_is("cat ~/.ssh/id_rsa", all[i], "reads credentials"));
+        ASSERT_TRUE(sens_is("echo $GITHUB_TOKEN", all[i], "reads a secret variable"));
+        ASSERT_TRUE(sens_is("show \"~/.ssh/id_rsa\" x", all[i], "reads credentials"));
+    }
+    /* A contradicted session is judged under both rulesets. */
+    char r[CMD_REASON_MAX];
+    unsigned m = cmd_classify_mask_session_ex("cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX, 1,
+                                              r, sizeof r);
+    ASSERT_TRUE((m & CMD_MASK_SENSITIVE) != 0);
+    ASSERT_STR_EQ(r, "reads credentials");
+    m = cmd_classify_mask_session_ex("echo $GITHUB_TOKEN", CMD_PLATFORM_JUNOS, 1, r, sizeof r);
+    ASSERT_TRUE((m & CMD_MASK_SENSITIVE) != 0);
+    ASSERT_STR_EQ(r, "reads a secret variable");
+    /* Command rules are LINUX and UNKNOWN only: a device ruleset does not
+     * see "printenv" as the environment dump... */
+    ASSERT_TRUE(sens_not("printenv", CMD_PLATFORM_CISCO_IOS));
+    ASSERT_TRUE(sens_not("history", CMD_PLATFORM_JUNOS));
+    ASSERT_TRUE(sens_not("crontab -l", CMD_PLATFORM_CISCO_NXOS));
+    /* ...until the session is contradicted, which adds the UNKNOWN ruleset. */
+    m = cmd_classify_mask_session_ex("printenv", CMD_PLATFORM_CISCO_IOS, 1, r, sizeof r);
+    ASSERT_TRUE((m & CMD_MASK_SENSITIVE) != 0);
+    ASSERT_STR_EQ(r, "reads the environment");
+    /* cmd_classify_mask_session() returns the same mask as _ex. */
+    ASSERT_EQ(cmd_classify_mask_session("cat ~/.ssh/id_rsa", CMD_PLATFORM_JUNOS, 1),
+              cmd_classify_mask_session_ex("cat ~/.ssh/id_rsa", CMD_PLATFORM_JUNOS, 1,
+                                           NULL, 0));
+    TEST_END();
+}
+
+int test_sensitive_class_unchanged(void) {
+    TEST_BEGIN();
+    ASSERT_EQ((int)cmd_classify("cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("printenv", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("cp ~/.ssh/id_rsa /tmp", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("git config --list", CMD_PLATFORM_LINUX), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("set", CMD_PLATFORM_UNKNOWN), (int)CMD_WRITE);
+    ASSERT_EQ((int)cmd_classify("echo $GITHUB_TOKEN", CMD_PLATFORM_LINUX), (int)CMD_READ);
+    ASSERT_EQ((int)cmd_classify("cat ~/.ssh/id_rsa", CMD_PLATFORM_CISCO_IOS),
+              (int)cmd_classify("cat ~/.ssh/id_rsb", CMD_PLATFORM_CISCO_IOS));
+    /* The class mask keeps its own bits; bit 4 rides on top of them. */
+    unsigned m = cmd_classify_mask_session_ex("cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX, 0,
+                                              NULL, 0);
+    ASSERT_EQ(m, CMD_MASK_OF(CMD_READ) | CMD_MASK_SENSITIVE);
+    ASSERT_EQ(m & ~CMD_MASK_SENSITIVE, cmd_classify_mask("cat notes.txt", CMD_PLATFORM_LINUX));
+    ASSERT_TRUE(CMD_MASK_SENSITIVE > CMD_MASK_OF(CMD_CRITICAL));
+    ASSERT_EQ(CMD_MASK_SENSITIVE, 16u);
+    /* cmd_classify_mask() reports the bit as well. */
+    ASSERT_TRUE((cmd_classify_mask("cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX) &
+                 CMD_MASK_SENSITIVE) != 0);
+    TEST_END();
+}
+
+int test_negatives_not_sensitive(void) {
+    TEST_BEGIN();
+    static const char *const cmds[] = {
+        "cat notes.txt", "ls ~/", "grep -r password /etc", "tail -f /var/log/auth.log",
+        "ls -la", "cat /etc/hostname", "echo hello", "docker logs x", "less README.md",
+        "man ls", "cat /etc/os-release", "ls ~/.config", "cat ~/.bashrc", NULL
+    };
+    for (int i = 0; cmds[i]; i++) {
+        ASSERT_TRUE(sens_not(cmds[i], CMD_PLATFORM_LINUX));
+        ASSERT_TRUE(sens_not(cmds[i], CMD_PLATFORM_UNKNOWN));
+    }
+    /* The reason of a non-sensitive row is the class reason, as before. */
+    char r[CMD_REASON_MAX];
+    r[0] = '\0';
+    unsigned m = cmd_classify_mask_session_ex("rm -rf /tmp/x", CMD_PLATFORM_LINUX, 0, r, sizeof r);
+    ASSERT_TRUE((m & CMD_MASK_SENSITIVE) == 0);
+    ASSERT_TRUE(r[0] != '\0');
+    /* NULL command, NULL reason and a zero capacity are all safe. */
+    ASSERT_EQ(cmd_classify_mask_session_ex(NULL, CMD_PLATFORM_LINUX, 0, r, sizeof r),
+              CMD_MASK_OF(CMD_READ));
+    ASSERT_EQ(r[0], '\0');
+    ASSERT_TRUE((cmd_classify_mask_session_ex("cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX, 0, NULL, 0) &
+                 CMD_MASK_SENSITIVE) != 0);
+    TEST_END();
+}
+
+/* A phrase that fits the caller's buffer, and one that must be truncated
+ * rather than overrun. */
+int test_sensitive_reason_buffer(void) {
+    TEST_BEGIN();
+    char small[8];
+    unsigned m = cmd_classify_mask_session_ex("cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX, 0,
+                                              small, sizeof small);
+    ASSERT_TRUE((m & CMD_MASK_SENSITIVE) != 0);
+    ASSERT_STR_EQ(small, "reads c");
+    /* A capacity of 1 leaves just the terminator. */
+    char one[1] = { 'x' };
+    cmd_classify_mask_session_ex("cat ~/.ssh/id_rsa", CMD_PLATFORM_LINUX, 0, one, 1);
+    ASSERT_EQ(one[0], '\0');
+    /* Long input stays bounded and still flags. */
+    char *big = (char *)malloc(200000);
+    ASSERT_NOT_NULL(big);
+    if (big) {
+        memset(big, 'a', 199990);
+        big[199990] = '\0';
+        char r[CMD_REASON_MAX];
+        ASSERT_TRUE(sens_not(big, CMD_PLATFORM_LINUX));
+        strcpy(big + 100000, " ~/.ssh/id_rsa");
+        m = cmd_classify_mask_session_ex(big, CMD_PLATFORM_LINUX, 0, r, sizeof r);
+        ASSERT_TRUE((m & CMD_MASK_SENSITIVE) != 0);
+        free(big);
+    }
+    TEST_END();
+}
+
+/* A quote left open can run the first word past its segment's end; the
+ * quoted-first-word rewrite once spliced with an underflowed tail length
+ * (heap overflow found by fuzzing during the sensitive-read work). */
+int test_classify_open_quote_first_word_overrun(void) {
+    TEST_BEGIN();
+    static const char *const cmds[] = {
+        "$&<&declare -p\"", "x;\"cat", "a&'b", "$&<&\"declare -p", NULL
+    };
+    for (int i = 0; cmds[i]; i++) {
+        /* An open-quote junk line is never READ: it classifies UNKNOWN (the
+         * values were read off the actual output, not assumed). */
+        ASSERT_EQ((int)cmd_classify(cmds[i], CMD_PLATFORM_LINUX), (int)CMD_UNKNOWN);
+        ASSERT_EQ((int)cmd_classify(cmds[i], CMD_PLATFORM_UNKNOWN), (int)CMD_UNKNOWN);
+        ASSERT_TRUE((cmd_classify_mask(cmds[i], CMD_PLATFORM_LINUX) &
+                     CMD_MASK_OF(CMD_UNKNOWN)) != 0u);
+        ASSERT_TRUE((cmd_classify_mask(cmds[i], CMD_PLATFORM_UNKNOWN) &
+                     CMD_MASK_OF(CMD_UNKNOWN)) != 0u);
+    }
+    TEST_END();
+}
+
+/* ----- IOS configure terminal, debug and do; crontab (spec decision 11) ----- */
+
+static int cls_is(const char *cmd, CmdPlatform plat, CmdSafetyLevel want)
+{
+    CmdSafetyLevel got = cmd_classify(cmd, plat);
+    if (got != want)
+        printf("  [%s] platform %d: got %d, want %d\n", cmd, (int)plat, (int)got, (int)want);
+    return got == want;
+}
+
+static int cls_not(const char *cmd, CmdPlatform plat, CmdSafetyLevel bad)
+{
+    CmdSafetyLevel got = cmd_classify(cmd, plat);
+    if (got == bad)
+        printf("  [%s] platform %d: unexpectedly %d\n", cmd, (int)plat, (int)got);
+    return got != bad;
+}
+
+int test_ios_configure_terminal_prefixes(void) {
+    TEST_BEGIN();
+    static const char *const wr[] = {
+        "conf t", "config t", "configure terminal", "conf term", "confi te",
+        "configu termi", "CONF T", "configure t", NULL
+    };
+    for (int i = 0; wr[i]; i++) {
+        ASSERT_TRUE(cls_is(wr[i], CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+        ASSERT_TRUE(cls_is(wr[i], CMD_PLATFORM_UNKNOWN, CMD_WRITE));
+    }
+    /* Three characters is not the configure prefix; "t" must be a prefix of
+     * "terminal". */
+    ASSERT_TRUE(cls_not("con t", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_not("conf tx", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_not("conf terminals", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_not("con t", CMD_PLATFORM_UNKNOWN, CMD_WRITE));
+    ASSERT_TRUE(cls_not("conf tx", CMD_PLATFORM_UNKNOWN, CMD_WRITE));
+    /* The existing configure replace rule is untouched. */
+    ASSERT_TRUE(cls_is("conf replace flash:x", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    /* A Linux session is not an IOS session. */
+    ASSERT_TRUE(cls_not("conf t", CMD_PLATFORM_LINUX, CMD_WRITE));
+    TEST_END();
+}
+
+int test_ios_debug(void) {
+    TEST_BEGIN();
+    static const char *const crit[] = {
+        "debug ip packet", "debug all", "deb all", "debu all", "DEBUG ALL",
+        "debug", NULL
+    };
+    for (int i = 0; crit[i]; i++)
+        ASSERT_TRUE(cls_is(crit[i], CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_not("de all", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("undebug all", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("undebug", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("no debug all", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("show debugging", CMD_PLATFORM_CISCO_IOS, CMD_READ));
+    /* The unresolved (auto) ruleset does not gain the debug rule. */
+    ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_UNKNOWN, CMD_UNKNOWN));
+    TEST_END();
+}
+
+int test_ios_do(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(cls_is("do debug all", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("do show run", CMD_PLATFORM_CISCO_IOS, CMD_READ));
+    ASSERT_TRUE(cls_is("do reload", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("do write erase", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("do conf t", CMD_PLATFORM_CISCO_IOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("do do reload", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("do", CMD_PLATFORM_CISCO_IOS, CMD_UNKNOWN));
+    ASSERT_TRUE(cls_is("do do", CMD_PLATFORM_CISCO_IOS, CMD_UNKNOWN));
+    /* Only the IOS family reads "do"; a Linux or auto session does not. */
+    ASSERT_TRUE(cls_is("do show run", CMD_PLATFORM_LINUX, CMD_UNKNOWN));
+    ASSERT_TRUE(cls_is("do show run", CMD_PLATFORM_UNKNOWN, CMD_UNKNOWN));
+    /* A very long chain of "do" stays bounded and keeps the worst class. */
+    {
+        char *chain = (char *)malloc(60000);
+        ASSERT_NOT_NULL(chain);
+        if (chain) {
+            size_t n = 0;
+            while (n < 59000) { memcpy(chain + n, "do ", 3); n += 3; }
+            strcpy(chain + n, "reload");
+            ASSERT_TRUE(cls_is(chain, CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
+            free(chain);
+        }
+    }
+    TEST_END();
+}
+
+int test_nxos_asa_debug_aligned(void) {
+    TEST_BEGIN();
+    ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_CISCO_NXOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("debug all", CMD_PLATFORM_CISCO_ASA, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("debug ip packet", CMD_PLATFORM_CISCO_NXOS, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("debug icmp trace", CMD_PLATFORM_CISCO_ASA, CMD_CRITICAL));
+    ASSERT_TRUE(cls_is("undebug all", CMD_PLATFORM_CISCO_NXOS, CMD_WRITE));
+    ASSERT_TRUE(cls_is("undebug all", CMD_PLATFORM_CISCO_ASA, CMD_WRITE));
+    TEST_END();
+}
+
+int test_crontab(void) {
+    TEST_BEGIN();
+    static const CmdPlatform plats[] = { CMD_PLATFORM_LINUX, CMD_PLATFORM_UNKNOWN };
+    for (int k = 0; k < 2; k++) {
+        CmdPlatform pl = plats[k];
+        static const char *const crit[] = {
+            "crontab -r", "crontab -ri", "crontab -ir", "crontab --remove",
+            "crontab -u root -r", "crontab -ru root", "crontab -r -u root",
+            "crontab -l -r", "crontab '-r'", "crontab \"-ri\"", "sudo crontab -r", NULL
+        };
+        for (int i = 0; crit[i]; i++)
+            ASSERT_TRUE(cls_is(crit[i], pl, CMD_CRITICAL));
+        static const char *const wr[] = {
+            "crontab -e", "crontab jobs.txt", "crontab -", "crontab",
+            "crontab -u root jobs.txt", "crontab -u root -e", "crontab -l jobs.txt",
+            "crontab -e -l", "crontab -l -x", "crontab -- -r",
+            "crontab -ur root", "crontab -l | crontab -", NULL
+        };
+        for (int i = 0; wr[i]; i++)
+            ASSERT_TRUE(cls_is(wr[i], pl, CMD_WRITE));
+        static const char *const rd[] = {
+            "crontab -l", "crontab --list", "crontab -u root -l", "crontab -lu root",
+            "crontab -i -l", NULL
+        };
+        for (int i = 0; rd[i]; i++)
+            ASSERT_TRUE(cls_is(rd[i], pl, CMD_READ));
+    }
+    /* -l stays READ with the sensitive bit and its phrase. */
+    {
+        char r[CMD_REASON_MAX];
+        r[0] = '\0';
+        unsigned m = cmd_classify_mask_session_ex("crontab -l", CMD_PLATFORM_LINUX, 0, r, sizeof r);
+        ASSERT_TRUE((m & CMD_MASK_SENSITIVE) != 0);
+        ASSERT_STR_EQ(r, "reads the crontab");
+        ASSERT_TRUE((m & CMD_MASK_OF(CMD_READ)) != 0u);
+        ASSERT_TRUE((m & CMD_MASK_OF(CMD_WRITE)) == 0u);
+    }
+    /* Redirecting the listing is a write, and sudo never lowers it below WRITE. */
+    ASSERT_TRUE(cls_is("crontab -l > mine.txt", CMD_PLATFORM_LINUX, CMD_WRITE));
+    ASSERT_TRUE(cls_is("sudo crontab -l", CMD_PLATFORM_LINUX, CMD_WRITE));
+    /* Other platforms are not Linux crontab. */
+    ASSERT_TRUE(cls_not("crontab -r", CMD_PLATFORM_CISCO_IOS, CMD_CRITICAL));
     TEST_END();
 }

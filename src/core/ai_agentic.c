@@ -1,4 +1,5 @@
 #include "ai_agentic.h"
+#include "json_validate.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,6 +69,51 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
     return 0;
 }
 
+int agentic_cap_tool_result(AiToolResult *r)
+{
+    if (!r || !r->content) return 0;
+
+    /* Strip control bytes other than \n and \t (0x7F included). */
+    size_t w = 0;
+    for (size_t i = 0; i < r->content_len; i++) {
+        unsigned char c = (unsigned char)r->content[i];
+        if ((c < 0x20 && c != '\n' && c != '\t') || c == 0x7F) continue;
+        r->content[w++] = (char)c;
+    }
+    r->content_len = w;
+    r->content[w] = '\0';
+
+    /* Longest prefix whose escaped size fits. */
+    size_t esc = 0, cut = w;
+    for (size_t i = 0; i < w; i++) {
+        esc += json_escaped_byte_len((unsigned char)r->content[i]);
+        if (esc > AI_TOOL_RESULT_ESCAPED_MAX) { cut = i; break; }
+    }
+    if (cut == w) return 0;
+
+    while (cut > 0 && ((unsigned char)r->content[cut] & 0xC0) == 0x80)
+        cut--;
+    r->content_len = cut;
+    r->content[cut] = '\0';
+
+    size_t note_len = strlen(r->tool_note);
+    size_t marker = strlen(AI_TOOL_TRUNC_NOTE);
+    if (note_len == 0) {
+        memcpy(r->tool_note, AI_TOOL_TRUNC_NOTE, marker + 1);
+    } else {
+        size_t room = sizeof(r->tool_note) - 1 - 1 - marker;  /* "\n" + marker */
+        if (note_len > room) {
+            note_len = room;
+            while (note_len > 0 &&
+                   ((unsigned char)r->tool_note[note_len] & 0xC0) == 0x80)
+                note_len--;
+        }
+        r->tool_note[note_len] = '\n';
+        memcpy(r->tool_note + note_len + 1, AI_TOOL_TRUNC_NOTE, marker + 1);
+    }
+    return 1;
+}
+
 int agentic_add_tool_results(AiConversation *conv,
                               const AiToolCall *calls,
                               const AiToolResult *results, int n_results)
@@ -80,10 +126,25 @@ int agentic_add_tool_results(AiConversation *conv,
         memset(msg, 0, sizeof(*msg));
         msg->role = AI_ROLE_TOOL;
 
-        const char *content = results[i].content ? results[i].content : "";
-        size_t content_len = results[i].content ? results[i].content_len : 0;
-        if (ai_msg_set_content(msg, content, content_len) != 0)
-            return -1;
+        /* Cap a private copy: the caller keeps ownership of results[i]. */
+        AiToolResult capped = results[i];
+        capped.content = NULL;
+        if (results[i].content) {
+            capped.content = (char *)malloc(results[i].content_len + 1);
+            if (!capped.content) return -1;
+            memcpy(capped.content, results[i].content, results[i].content_len);
+            capped.content[results[i].content_len] = '\0';
+        }
+        (void)agentic_cap_tool_result(&capped);
+
+        const char *content = capped.content ? capped.content : "";
+        size_t content_len = capped.content ? capped.content_len : 0;
+        int set_rc = ai_msg_set_content(msg, content, content_len);
+        free(capped.content);
+        if (set_rc != 0) return -1;
+
+        memcpy(msg->tool_note, capped.tool_note, sizeof(msg->tool_note));
+        msg->tool_note[sizeof(msg->tool_note) - 1] = '\0';
 
         strncpy(msg->tool_call_id, results[i].tool_use_id,
                 sizeof(msg->tool_call_id) - 1);

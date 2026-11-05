@@ -86,10 +86,13 @@ static void launch_failed(AiChatData *d, const char *why)
 {
     KillTimer(d->hwnd, TIMER_THINKING);
     d->indicator_pos = -1;
+    d->last_snapshot_len = 0;   /* nothing was sent: the meter adds no snapshot */
     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, why);
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
     ai_chat_update_context_bar(d);
 }
+
+static int ctx_buffers_ensure(AiChatData *d);
 
 /* Build an AiStream from the current AiChatData state -- its own copies of
  * the key, provider, request body, tool registry and conversation -- and
@@ -111,7 +114,31 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     strncpy(s->provider, d->provider, sizeof(s->provider) - 1);
     strncpy(s->custom_url, d->custom_url, sizeof(s->custom_url) - 1);
     int conv_ok = ai_conv_copy(&s->conv, &d->conv) == 0;
+
+    /* One terminal snapshot per launch (spec 2026-11-05 decision 2), taken
+     * here on the UI thread and handed to the stream, which only reads it.
+     * Every tool-loop rebuild reuses it. A failed allocation sends the
+     * request without the block rather than aborting it. */
+    d->last_snapshot_len = 0;
+    if (d->active_term && ctx_buffers_ensure(d)) {
+        size_t n = term_extract_last_n(d->active_term, d->context_lines,
+                                       d->ctx_term, d->ctx_term_cap);
+        if (n > 0) {
+            s->snapshot = (char *)malloc(n + 1);
+            if (s->snapshot) {
+                memcpy(s->snapshot, d->ctx_term, n);
+                s->snapshot[n] = '\0';
+                d->last_snapshot_len = n;
+            }
+        }
+    }
     {
+        /* A fresh delimiter for every request body. */
+        char delim[AI_DELIM_MAX];
+        ai_delim_make(crypto_random_bytes, NULL, delim);
+        AiBodyFrame frame;
+        frame.snapshot = s->snapshot;
+        frame.delim = delim;
         int last_msg = d->conv.msg_count - 1;
         const AiAttachment *att = (last_msg >= 0)
             ? d->conv.messages[last_msg].attachment : NULL;
@@ -155,15 +182,17 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
                 ai_tools_serialize_openai(&s->tools, s->tools_json,
                                           sizeof(s->tools_json));
 
-            s->body_len = ai_build_request_body_tools(&d->conv, att,
+            s->body_len = ai_build_request_body_frame(&d->conv, att,
                                                       s->tools_json[0] ? s->tools_json : NULL,
+                                                      &frame,
                                                       s->body, AI_BODY_MAX,
                                                       1, s->provider);
         } else {
             s->has_tools = 0;
-            s->body_len = ai_build_request_body_ex(&d->conv, att, s->body,
-                                                   AI_BODY_MAX, 1,
-                                                   s->provider);
+            s->body_len = ai_build_request_body_frame(&d->conv, att, NULL,
+                                                      &frame, s->body,
+                                                      AI_BODY_MAX, 1,
+                                                      s->provider);
         }
     }
 
@@ -450,76 +479,23 @@ void ai_chat_send_user_message(AiChatData *d)
         chat_listview_scroll_to_bottom(d->hChatList);
     }
 
-    /* Extract terminal context into the panel's persistent scratch buffer */
-    const char *term_text = "";
+    /* The system prompt holds settings only (spec 2026-11-05 decision 1): the
+     * terminal text is no longer part of it. It is built even with no active
+     * terminal, and carries the tools paragraph on every path. */
     int ctx_ok = ctx_buffers_ensure(d);
     if (ctx_ok) {
-        d->ctx_term[0] = '\0';
-        if (d->active_term) {
-            term_extract_last_n(d->active_term, d->context_lines,
-                                d->ctx_term, d->ctx_term_cap);
-        }
-        term_text = d->ctx_term;
-    }
-
-
-    /* On first message, add system prompt */
-    if (ctx_ok && d->conv.msg_count == 0) {
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
+        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap,
                                   d->session_notes, d->system_notes,
                                   active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d));
-        /* Append tool descriptions if tools are registered and provider supports them */
-        if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
-            size_t len = strlen(sys_prompt);
-            if (str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                "\n\nYou have access to the following tools that will be called "
-                "automatically via the API tool-use mechanism:\n\n")) {
-                for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                    if (!str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                            "- %s: %s\n",
-                            d->tool_registry.tools[ti].name,
-                            d->tool_registry.tools[ti].description))
-                        break;
-                }
-                str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                    "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
-                    "request them via the tool-use API and the results will be provided.\n\n"
-                    "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
-            }
-        }
-        ai_conv_add(&d->conv, AI_ROLE_SYSTEM, sys_prompt);
-    } else if (ctx_ok && d->active_term) {
-        /* Update system prompt with fresh terminal context */
-        char  *sys_prompt     = d->ctx_prompt;
-        size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
-                                  d->session_notes, d->system_notes,
-                                  active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d));
-        /* Append tool descriptions */
-        if (d->tool_registry.count > 0 && ai_provider_supports_tools(d->provider)) {
-            size_t len = strlen(sys_prompt);
-            if (str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                "\n\nYou have access to the following tools that will be called "
-                "automatically via the API tool-use mechanism:\n\n")) {
-                for (int ti = 0; ti < d->tool_registry.count; ti++) {
-                    if (!str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                            "- %s: %s\n",
-                            d->tool_registry.tools[ti].name,
-                            d->tool_registry.tools[ti].description))
-                        break;
-                }
-                str_append_fmt(sys_prompt, sys_prompt_cap, &len,
-                    "\nYou do NOT need to use [EXEC] markers for these tools. Simply "
-                    "request them via the tool-use API and the results will be provided.\n\n"
-                    "Continue to use [EXEC]...[/EXEC] markers for SSH terminal commands as before.\n");
-            }
-        }
-        /* Replace the first (system) message */
-        ai_conv_set_system(&d->conv, sys_prompt);
+                                  debug_tool_active(d),
+                                  ai_provider_supports_tools(d->provider)
+                                      ? &d->tool_registry : NULL);
+        if (d->conv.msg_count == 0)
+            ai_conv_add(&d->conv, AI_ROLE_SYSTEM, sys_prompt);
+        else
+            ai_conv_set_system(&d->conv, sys_prompt);
     }
 
     ai_conv_add(&d->conv, AI_ROLE_USER, input);
@@ -562,27 +538,17 @@ void ai_chat_send_continue_message(AiChatData *d, const char *msg_text,
 
     ai_rounds_continue(d->active_state, unattended);
 
-    /* Extract fresh terminal context after command execution */
-    const char *term_text = "";
-    int ctx_ok = ctx_buffers_ensure(d);
-    if (ctx_ok) {
-        d->ctx_term[0] = '\0';
-        if (d->active_term) {
-            term_extract_last_n(d->active_term, d->context_lines,
-                                d->ctx_term, d->ctx_term_cap);
-        }
-        term_text = d->ctx_term;
-    }
-
-
-    /* Update system prompt with fresh terminal context */
-    if (ctx_ok && d->conv.msg_count > 0 && d->active_term) {
+    /* Refresh the system prompt (settings and tools only; the terminal text
+     * is added to the last user turn when the request body is built). */
+    if (ctx_buffers_ensure(d) && d->conv.msg_count > 0) {
         char  *sys_prompt     = d->ctx_prompt;
         size_t sys_prompt_cap = d->ctx_prompt_cap;
-        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap, term_text,
+        ai_build_system_prompt_ex(sys_prompt, sys_prompt_cap,
                                   d->session_notes, d->system_notes,
                                   active_session_kind(d), active_shell_name(d),
-                                  debug_tool_active(d));
+                                  debug_tool_active(d),
+                                  ai_provider_supports_tools(d->provider)
+                                      ? &d->tool_registry : NULL);
         ai_conv_set_system(&d->conv, sys_prompt);
     }
 

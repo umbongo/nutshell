@@ -338,9 +338,9 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                     results[ti].tool_use_id[0] = '\0';
                     strncpy(results[ti].tool_use_id, call->id,
                             sizeof(results[ti].tool_use_id) - 1);
-                    results[ti].content = _strdup(rate_err);
-                    results[ti].content_len = results[ti].content
-                                           ? strlen(results[ti].content) : 0;
+                    /* Nutshell's own text: a note, no data block. */
+                    snprintf(results[ti].tool_note,
+                             sizeof(results[ti].tool_note), "%s", rate_err);
                     results[ti].is_error = 1;
                     DLOG(DLOG_AI, DLOG_INFO, 0, "tool.call", "stream=%u tool=%s ok=0 rate_limited=1",
                          stream_id, call->name);
@@ -446,9 +446,16 @@ unsigned __stdcall ai_chat_stream_thread_proc(void *raw_arg)
                 int last_msg = s->conv.msg_count - 1;
                 const AiAttachment *att2 = (last_msg >= 0)
                     ? s->conv.messages[last_msg].attachment : NULL;
-                s->body_len = ai_build_request_body_tools(
+                /* A fresh delimiter for this request, the launch's snapshot. */
+                char delim2[AI_DELIM_MAX];
+                ai_delim_make(crypto_random_bytes, NULL, delim2);
+                AiBodyFrame frame2;
+                frame2.snapshot = s->snapshot;
+                frame2.delim = delim2;
+                s->body_len = ai_build_request_body_frame(
                     &s->conv, att2,
                     s->tools_json[0] ? s->tools_json : NULL,
+                    &frame2,
                     s->body, AI_BODY_MAX,
                     1, s->provider);
                 {

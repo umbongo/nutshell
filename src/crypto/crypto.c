@@ -4,6 +4,7 @@
 #include "crypto.h"
 #include "crypto_dpapi.h"
 #include "secure_zero.h"
+#include <limits.h>
 #include <string.h>
 #include <stdlib.h>
 #include <openssl/evp.h>
@@ -478,4 +479,11 @@ int crypto_decrypt_dpapi(const char *blob, char *out, size_t out_size)
     }
     out[out_len] = '\0';
     return CRYPTO_OK;
+}
+
+int crypto_random_bytes(void *ctx, unsigned char *out, size_t n)
+{
+    (void)ctx;
+    if (!out || n > (size_t)INT_MAX) return 0;
+    return RAND_bytes(out, (int)n) == 1 ? 1 : 0;
 }

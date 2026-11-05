@@ -106,7 +106,11 @@ int cmd_policy_blocks(CmdPolicy p, CmdSafetyLevel worst);
  * segments, from cmd_classify_mask()) is permitted to run unattended.
  * A set test, not a threshold -- see the spec's section 3 corollary for
  * why it is equivalent to a threshold for today's stops, and why it is
- * still written this way. An empty mask never runs unattended. */
+ * still written this way. An empty mask never runs unattended, and neither
+ * does any mask carrying CMD_MASK_SENSITIVE (a read of credentials, history,
+ * the environment or stored secrets): it asks at every policy, even Critical
+ * with Auto-approve on. The ceiling still blocks it when its category is
+ * above `allowed`. */
 int cmd_policy_runs_unattended(CmdPolicy p, unsigned safety_mask);
 
 /* Stable config token for a stop: "none" (POLICY_NONE), "read", "unknown",

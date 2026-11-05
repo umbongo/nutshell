@@ -35,7 +35,24 @@ int agentic_add_assistant_tool_msg(AiConversation *conv,
                                    const char *assistant_text,
                                    const AiToolCall *calls, int n_calls);
 
+/* A stored tool result is at most this many bytes once JSON-escaped (the size
+ * json_escape_string would write for it). */
+#define AI_TOOL_RESULT_ESCAPED_MAX 65536
+#define AI_TOOL_TRUNC_NOTE "[truncated by nutshell at 65536 bytes]"
+
+/* Cap one tool result in place: strip every control byte other than \n and
+ * \t (so a raw byte escapes to at most 2 bytes), then cut content on a UTF-8
+ * boundary at the longest prefix whose JSON-escaped size is at most
+ * AI_TOOL_RESULT_ESCAPED_MAX. A cut sets tool_note to AI_TOOL_TRUNC_NOTE, or
+ * appends "\n" AI_TOOL_TRUNC_NOTE to a note already there (the old note
+ * shortens if both do not fit in AI_TOOL_NOTE_MAX). Returns 1 when it cut,
+ * 0 otherwise (also for a NULL result or NULL content). */
+int agentic_cap_tool_result(AiToolResult *r);
+
 /* Add tool result messages to the conversation.
+ * Each result is capped (agentic_cap_tool_result) on a private copy before it
+ * is stored, so the caller's results are never modified and still own their
+ * content; tool_note is copied into the stored message.
  * calls: array of tool calls (used to copy tool names).
  * results: array of tool results.
  * n_results: number of results.

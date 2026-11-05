@@ -148,6 +148,10 @@ int cmd_policy_blocks(CmdPolicy p, CmdSafetyLevel worst)
 int cmd_policy_runs_unattended(CmdPolicy p, unsigned safety_mask)
 {
     if (safety_mask == 0u) return 0;
+    /* A sensitive read always asks, at every policy. Checked here, ahead of
+     * the subset test, so the rule does not rest on bit 4 happening to lie
+     * outside cmd_policy_unattended_mask(). */
+    if (safety_mask & CMD_MASK_SENSITIVE) return 0;
     return (safety_mask & ~cmd_policy_unattended_mask(p)) == 0u;
 }
 

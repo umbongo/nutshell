@@ -690,3 +690,25 @@ int test_policy_tips_reject_out_of_range_and_null(void) {
     ASSERT_TRUE(strstr(buf, "Read") != NULL);
     TEST_END();
 }
+
+int test_policy_sensitive_never_unattended(void) {
+    TEST_BEGIN();
+    for (int stop = CMD_READ; stop <= CMD_CRITICAL; stop++) {
+        CmdPolicy p = cmd_policy_default();
+        p.allowed = CMD_CRITICAL;
+        p.unattended = stop;
+        for (int lvl = CMD_READ; lvl <= CMD_CRITICAL; lvl++) {
+            unsigned plain = CMD_MASK_OF(lvl);
+            ASSERT_EQ(cmd_policy_runs_unattended(p, plain | CMD_MASK_SENSITIVE), 0);
+        }
+        /* The same mask without the bit still runs where it is covered. */
+        ASSERT_EQ(cmd_policy_runs_unattended(p, CMD_MASK_OF(CMD_READ)), 1);
+    }
+    /* The bit alone, and with the whole scale set, never runs either. */
+    CmdPolicy all = cmd_policy_default();
+    all.allowed = CMD_CRITICAL;
+    all.unattended = CMD_CRITICAL;
+    ASSERT_EQ(cmd_policy_runs_unattended(all, CMD_MASK_SENSITIVE), 0);
+    ASSERT_EQ(cmd_policy_runs_unattended(all, 0x1Fu), 0);
+    TEST_END();
+}

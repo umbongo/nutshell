@@ -136,6 +136,7 @@ static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
         chat_msg_set_command(item, e->command, e->safety,
                              e->status == APPROVE_BLOCKED);
         chat_msg_set_quoted(item, e->quoted);
+        chat_msg_set_reason(item, e->reason);
         chat_msg_set_batch(item, batch->id);
         chat_msg_set_note(item, e->note);
         switch (e->status) {
