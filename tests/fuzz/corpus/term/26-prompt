@@ -1,0 +1,3 @@
+user@host:~$ ls --color
+[0m[01;34mdir[0m  file
+user@host:~$ 

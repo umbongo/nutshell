@@ -1,0 +1,1 @@
+{"id":"x","content":[{"type":"text","text":"Run [EXEC]ls -la[/EXEC]\n"}],"usage":{"input_tokens":12,"output_tokens":3.5e1}}

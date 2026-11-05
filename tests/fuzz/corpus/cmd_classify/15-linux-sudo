@@ -1,0 +1,1 @@
+bsudo systemctl stop sshd

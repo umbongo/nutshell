@@ -1,0 +1,1 @@
+<p>a</p><script>var x = '<b>no</b>'; alert(1)</script><style>p{color:red}</style><p>b</p>

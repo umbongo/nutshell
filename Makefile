@@ -197,15 +197,57 @@ TEST_SRCS_TEXT   = $(sort $(TEST_SRCS))
 # $(call write-stamp,path,text): at parse time, create the directory and
 # rewrite the file only when its text differs, so its mtime moves only on a
 # real change.  Written only when a goal in STAMP_GOALS was asked for.
-STAMP_GOALS = test
+# The current text is read with `cat`, not `$(file <...)`: GNU make 4.3's
+# `$(file <)` sometimes keeps the trailing newline (it depends on the text's
+# length), which made the stamp look changed on every run and rebuilt
+# everything.
+STAMP_GOALS = test fuzz fuzz-run fuzz-long
 define write-stamp
-$(if $(filter $(STAMP_GOALS),$(MAKECMDGOALS)),$(shell mkdir -p $(dir $(1)))$(if $(subst $(2),,$(file <$(1)))$(subst $(file <$(1)),,$(2)),$(file >$(1),$(2))))
+$(if $(filter $(STAMP_GOALS),$(MAKECMDGOALS)),$(shell mkdir -p $(dir $(1)))$(if $(subst $(2),,$(shell cat $(1) 2>/dev/null))$(subst $(shell cat $(1) 2>/dev/null),,$(2)),$(file >$(1),$(2))))
 endef
 $(call write-stamp,$(TEST_FLAGS_STAMP),$(TEST_FLAGS_TEXT))
 $(call write-stamp,$(TEST_SRCS_STAMP),$(TEST_SRCS_TEXT))
 
+# ── Fuzzing (libFuzzer, clang).  `make fuzz` builds one binary per target in
+# tests/fuzz/; `make fuzz-run` replays the committed seed corpus once (no
+# mutation, so it is deterministic: the pull-request job); `make fuzz-long`
+# mutates for FUZZ_TIME seconds per target (the weekly job).  Corpus growth,
+# logs and crash artifacts all stay under build/fuzz/; nothing is written
+# into the tree.  The fuzz sources are not part of TEST_IMPL_SRCS.
+#
+# FUZZ_CC: the caller's, else the first of clang, clang-18, clang-17, clang-16
+# on PATH (empty when none is installed).
+ifeq ($(origin FUZZ_CC),undefined)
+FUZZ_CC := $(firstword $(foreach c,clang clang-18 clang-17 clang-16,$(shell command -v $(c))))
+endif
+FUZZ_TIME    ?= 60
+FUZZ_TARGETS = json term exec_markers cmd_classify html url
+FUZZ_DIR     = build/fuzz
+FUZZ_BINS    = $(FUZZ_TARGETS:%=$(FUZZ_DIR)/%)
+FUZZ_CFLAGS  = $(TEST_CFLAGS) -Wno-ignored-attributes -Wno-unknown-warning-option
+# The application objects are instrumented for coverage without the fuzzer
+# main (fuzzer-no-link); each binary adds it at link time.  Undefined
+# behaviour is a crash here, not a diagnostic.
+FUZZ_OBJ_SAN = -fsanitize=fuzzer-no-link,address,undefined -fno-sanitize-recover=undefined
+FUZZ_BIN_SAN = -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined
+FUZZ_OBJS    = $(APP_SRCS:%.c=$(FUZZ_DIR)/obj/%.o)
+# What a failing run prints from its log: the seed line, the first line of an
+# ==PID==ERROR header, the stack frames and the summary.  Never the Base64 or
+# hex dump of the input, nor the MS: mutation lines.
+FUZZ_LOG_FILTER = ^INFO: Seed:|^==[0-9]+==(ERROR|WARNING)|^ *\#[0-9]+ 0x[0-9a-f]+ |^SUMMARY:
 
-.PHONY: all clean test lint lint-gate debug release wintest
+# The same two stamps as the test build: flags.stamp (compiler and flags) is a
+# prerequisite of every object, srcs.stamp (the source list) only of the
+# archive, which is rebuilt from scratch so a dropped source leaves no member.
+FUZZ_FLAGS_STAMP = $(FUZZ_DIR)/obj/flags.stamp
+FUZZ_SRCS_STAMP  = $(FUZZ_DIR)/obj/srcs.stamp
+FUZZ_FLAGS_TEXT  = $(FUZZ_CC) | $(FUZZ_CFLAGS) | $(FUZZ_OBJ_SAN) | $(FUZZ_BIN_SAN) | $(TEST_LDFLAGS)
+FUZZ_SRCS_TEXT   = $(sort $(APP_SRCS))
+$(call write-stamp,$(FUZZ_FLAGS_STAMP),$(FUZZ_FLAGS_TEXT))
+$(call write-stamp,$(FUZZ_SRCS_STAMP),$(FUZZ_SRCS_TEXT))
+
+
+.PHONY: all clean test lint lint-gate debug release wintest fuzz fuzz-run fuzz-long
 
 # ── Win32-only test harness: the icon renderer (GDI+) and the ConPTY
 # backend (real pseudo-consoles, real child processes).  Runs directly on a
@@ -281,6 +323,63 @@ test: $(TEST_TARGET)
 # -MMD leaves system headers out of the .d files: a changed system header
 # (an OpenSSL upgrade, say) needs `make clean`.
 -include $(TEST_OBJS:.o=.d)
+
+# ── Fuzz targets (see the variables above) ─────────────────────────────────
+ifeq ($(HOST_WINDOWS),yes)
+fuzz fuzz-run fuzz-long:
+	@echo "[skip] fuzzing needs clang's libFuzzer; not available under MSYS2"
+else ifeq ($(FUZZ_CC),)
+fuzz fuzz-run fuzz-long:
+	@echo "no clang found (tried clang clang-18 clang-17 clang-16); install one or set FUZZ_CC=" >&2; exit 1
+else
+$(FUZZ_FLAGS_STAMP) $(FUZZ_SRCS_STAMP): ;
+
+$(FUZZ_DIR)/obj/%.o: %.c $(FUZZ_FLAGS_STAMP)
+	@mkdir -p $(dir $@)
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(FUZZ_OBJ_SAN) -MMD -MP -c $< -o $@
+
+$(FUZZ_DIR)/libnutshell.a: $(FUZZ_OBJS) $(FUZZ_SRCS_STAMP)
+	@mkdir -p $(dir $@)
+	rm -f $@
+	ar rcs $@ $(FUZZ_OBJS)
+
+$(FUZZ_BINS): $(FUZZ_DIR)/%: tests/fuzz/fuzz_%.c $(FUZZ_DIR)/libnutshell.a $(FUZZ_FLAGS_STAMP)
+	@mkdir -p $(dir $@)
+	$(FUZZ_CC) $(FUZZ_CFLAGS) $(FUZZ_BIN_SAN) $< $(FUZZ_DIR)/libnutshell.a -o $@ $(TEST_LDFLAGS)
+
+-include $(FUZZ_OBJS:.o=.d)
+
+fuzz: $(FUZZ_BINS)
+
+# $(call fuzz-loop,extra libFuzzer flags,corpus directories): run every
+# target, the log going to a file (a crash prints its input, and the logs of
+# a public repository must not).  Each run's status is captured, the log is
+# filtered, and the first failure stops the loop.  $$n is the shell loop
+# variable, so a directory list may mention it.  POSIX sh only.
+define fuzz-loop
+@mkdir -p $(FUZZ_DIR)/log $(FUZZ_DIR)/crashes
+@for n in $(FUZZ_TARGETS); do \
+	t0=$$(date +%s); \
+	$(FUZZ_DIR)/$$n -timeout=10 -artifact_prefix=$(FUZZ_DIR)/crashes/$$n- $(1) $(2) >$(FUZZ_DIR)/log/$$n.log 2>&1; \
+	rc=$$?; \
+	grep -E '$(FUZZ_LOG_FILTER)' $(FUZZ_DIR)/log/$$n.log || true; \
+	if [ $$rc -ne 0 ]; then \
+		echo "fuzz $$n: FAILED (exit $$rc); details in $(FUZZ_DIR)/log/$$n.log"; \
+		exit 1; \
+	fi; \
+	echo "fuzz $$n: ok in $$(( $$(date +%s) - t0 )) s"; \
+done
+endef
+
+# Deterministic: every committed seed once, no mutation, nothing written.
+fuzz-run: fuzz
+	$(call fuzz-loop,-runs=0,tests/fuzz/corpus/$$n/)
+
+# Mutating: new inputs land in the first directory, under build/.
+fuzz-long: fuzz
+	@for n in $(FUZZ_TARGETS); do mkdir -p $(FUZZ_DIR)/corpus/$$n; done
+	$(call fuzz-loop,-max_total_time=$(FUZZ_TIME),$(FUZZ_DIR)/corpus/$$n/ tests/fuzz/corpus/$$n/)
+endif
 
 wintest:
 	@mkdir -p $(BUILD_DIR)

@@ -1,0 +1,1 @@
+{"profiles":[{"name":"lab","host":"10.0.0.1","port":22,"user":"admin"}],"settings":{"font_size":11,"theme":"dark","ai":{"provider":"anthropic","model":"m"}}}

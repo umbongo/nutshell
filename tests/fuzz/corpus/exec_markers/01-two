@@ -1,0 +1,1 @@
+[EXEC]show run[/EXEC] then [EXEC]show version[/EXEC]

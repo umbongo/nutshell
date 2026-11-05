@@ -349,7 +349,10 @@ static void process_osc(Terminal *term)
     int code = 0;
     for (int i = 0; i < semi; i++) {
         if (term->osc_buffer[i] < '0' || term->osc_buffer[i] > '9') goto osc_done;
-        code = code * 10 + (term->osc_buffer[i] - '0');
+        /* A host controls the digits: stop accumulating once the code is far
+         * past any OSC number we handle, so it can neither overflow nor wrap
+         * into 0 or 2. */
+        if (code < 100000) code = code * 10 + (term->osc_buffer[i] - '0');
     }
 
     if (code == 0 || code == 2) {

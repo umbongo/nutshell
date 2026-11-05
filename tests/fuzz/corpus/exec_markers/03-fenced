@@ -1,0 +1,5 @@
+Example:
+```
+[EXEC]rm -rf /tmp/x[/EXEC]
+```
+not live.
