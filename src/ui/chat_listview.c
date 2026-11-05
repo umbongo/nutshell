@@ -2751,7 +2751,10 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
     int indent = ns_scale(BASE_AI_INDENT, CLV_DPI(lv));
 
     COLORREF bg_clr = RGB_FROM_THEME(lv->theme->bg_primary);
-    COLORREF dot_clr = activity_health_color(lv, lv->activity->health);
+    /* Only the dot pulses; the status text keeps the steady health colour,
+     * the same one the AI header's activity word uses. */
+    const COLORREF text_clr = activity_health_color(lv, lv->activity->health);
+    COLORREF dot_clr = text_clr;
     if (lv->pulse_toggle && !ns_reduced_motion())
         dot_clr = blend_with_bg(dot_clr, bg_clr);
 
@@ -2773,11 +2776,6 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
     float now = (float)GetTickCount() / 1000.0f;
     chat_activity_format(lv->activity, now, status_buf, sizeof(status_buf));
 
-    /* Use a muted version of the dot colour for text readability */
-    COLORREF text_clr = RGB(
-        (GetRValue(dot_clr) * 3 + GetRValue(bg_clr)) / 4,
-        (GetGValue(dot_clr) * 3 + GetGValue(bg_clr)) / 4,
-        (GetBValue(dot_clr) * 3 + GetBValue(bg_clr)) / 4);
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, text_clr);
     HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont

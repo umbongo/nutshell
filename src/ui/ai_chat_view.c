@@ -483,6 +483,9 @@ void ai_chat_paint_header(AiChatData *d, HDC hdc)
         break;
     }
 
+    /* Only the dot pulses; the activity word keeps the steady colour so its
+     * contrast on bg_primary does not dip with the phase. */
+    const COLORREF word_clr = dot_clr;
     if (d->pulse_toggle && !ns_reduced_motion()) {
         COLORREF bg_c = RGB(((d->theme->bg_primary) >> 16) & 0xFF,
                             ((d->theme->bg_primary) >> 8) & 0xFF,
@@ -513,7 +516,7 @@ void ai_chat_paint_header(AiChatData *d, HDC hdc)
     }
     if (word[0]) {
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, dot_clr);
+        SetTextColor(hdc, word_clr);
         RECT wrc;
         wrc.left   = dot_x + dot_sz + ns_scale(4, d->dpi);
         wrc.top    = rc_lbl.top;

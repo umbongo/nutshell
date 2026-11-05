@@ -76,13 +76,6 @@ static const Exemption k_exempt[] = {
     { "Onyx Synapse", "md code(info role)", "sel30(chat.cmd_bg)", 2.83 },
     { "Onyx Synapse", "md structure(link role)", "sel30(bg_primary)", 3.18 },
     { "Onyx Synapse", "md structure(link role)", "table header fill(text_dim 12% on bg_primary)", 4.12 },
-    { "Onyx Synapse", "pulsed(chat.indicator_green)", "bg_primary.base", 2.92 },
-    { "Onyx Synapse", "pulsed(chat.indicator_yellow)", "bg_primary.base", 3.86 },
-    { "Onyx Synapse", "pulsed(chat.indicator_red)", "bg_primary.base", 2.09 },
-    { "Onyx Synapse", "activity text(indicator_red)", "bg_primary.base", 3.37 },
-    { "Onyx Synapse", "activity text(pulsed indicator_green)", "bg_primary.base", 2.13 },
-    { "Onyx Synapse", "activity text(pulsed indicator_yellow)", "bg_primary.base", 2.66 },
-    { "Onyx Synapse", "activity text(pulsed indicator_red)", "bg_primary.base", 1.65 },
     { "Onyx Synapse", "text_dim", "tint18(text_dim on chat.cmd_bg)", 4.17 },
     { "Onyx Synapse", "text_dim", "sel30(bg_secondary)", 3.50 },
     { "Onyx Synapse", "text_dim", "sel30(bg_primary)", 3.94 },
@@ -96,18 +89,6 @@ static const Exemption k_exempt[] = {
     { "Onyx Light", "warning.base", "bg_primary.base", 2.99 },
     { "Onyx Light", "warning.base", "chat.cmd_bg", 2.81 },
     { "Onyx Light", "md code(info role)", "sel30(chat.cmd_bg)", 3.34 },
-    { "Onyx Light", "chat.indicator_green", "bg_primary.base", 2.04 },
-    { "Onyx Light", "chat.indicator_yellow", "bg_primary.base", 1.39 },
-    { "Onyx Light", "chat.indicator_red", "bg_primary.base", 3.26 },
-    { "Onyx Light", "pulsed(chat.indicator_green)", "bg_primary.base", 1.45 },
-    { "Onyx Light", "pulsed(chat.indicator_yellow)", "bg_primary.base", 1.20 },
-    { "Onyx Light", "pulsed(chat.indicator_red)", "bg_primary.base", 1.93 },
-    { "Onyx Light", "activity text(indicator_green)", "bg_primary.base", 1.74 },
-    { "Onyx Light", "activity text(indicator_yellow)", "bg_primary.base", 1.30 },
-    { "Onyx Light", "activity text(indicator_red)", "bg_primary.base", 2.63 },
-    { "Onyx Light", "activity text(pulsed indicator_green)", "bg_primary.base", 1.33 },
-    { "Onyx Light", "activity text(pulsed indicator_yellow)", "bg_primary.base", 1.16 },
-    { "Onyx Light", "activity text(pulsed indicator_red)", "bg_primary.base", 1.65 },
     { "Onyx Light", "text_dim", "tint18(text_dim on bg_primary)", 3.87 },
     { "Onyx Light", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.66 },
     { "Onyx Light", "text_dim", "sel30(bg_secondary)", 3.32 },
@@ -125,16 +106,6 @@ static const Exemption k_exempt[] = {
     { "Sage & Sand", "md code(info role)", "sel30(chat.cmd_bg)", 2.86 },
     { "Sage & Sand", "md structure(link role)", "sel30(bg_primary)", 2.65 },
     { "Sage & Sand", "md structure(link role)", "table header fill(text_dim 12% on bg_primary)", 3.78 },
-    { "Sage & Sand", "chat.indicator_red", "bg_primary.base", 3.29 },
-    { "Sage & Sand", "pulsed(chat.indicator_green)", "bg_primary.base", 2.70 },
-    { "Sage & Sand", "pulsed(chat.indicator_yellow)", "bg_primary.base", 2.70 },
-    { "Sage & Sand", "pulsed(chat.indicator_red)", "bg_primary.base", 1.77 },
-    { "Sage & Sand", "activity text(indicator_green)", "bg_primary.base", 4.26 },
-    { "Sage & Sand", "activity text(indicator_yellow)", "bg_primary.base", 4.25 },
-    { "Sage & Sand", "activity text(indicator_red)", "bg_primary.base", 2.42 },
-    { "Sage & Sand", "activity text(pulsed indicator_green)", "bg_primary.base", 2.10 },
-    { "Sage & Sand", "activity text(pulsed indicator_yellow)", "bg_primary.base", 2.10 },
-    { "Sage & Sand", "activity text(pulsed indicator_red)", "bg_primary.base", 1.50 },
     { "Sage & Sand", "text_dim", "sel30(bg_secondary)", 3.26 },
     { "Sage & Sand", "text_dim", "sel30(bg_primary)", 3.64 },
     { "Sage & Sand", "white", "chat.send_btn", 2.76 },
@@ -150,18 +121,6 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "md code(info role)", "sel30(chat.cmd_bg)", 3.99 },
     { "Moss & Mist", "md structure(link role)", "sel30(bg_primary)", 4.40 },
     { "Moss & Mist", "md structure(link role)", "table header fill(text_dim 12% on bg_primary)", 4.41 },
-    { "Moss & Mist", "chat.indicator_green", "bg_primary.base", 2.22 },
-    { "Moss & Mist", "chat.indicator_yellow", "bg_primary.base", 1.50 },
-    { "Moss & Mist", "chat.indicator_red", "bg_primary.base", 2.77 },
-    { "Moss & Mist", "pulsed(chat.indicator_green)", "bg_primary.base", 1.47 },
-    { "Moss & Mist", "pulsed(chat.indicator_yellow)", "bg_primary.base", 1.23 },
-    { "Moss & Mist", "pulsed(chat.indicator_red)", "bg_primary.base", 1.66 },
-    { "Moss & Mist", "activity text(indicator_green)", "bg_primary.base", 1.81 },
-    { "Moss & Mist", "activity text(indicator_yellow)", "bg_primary.base", 1.36 },
-    { "Moss & Mist", "activity text(indicator_red)", "bg_primary.base", 2.16 },
-    { "Moss & Mist", "activity text(pulsed indicator_green)", "bg_primary.base", 1.34 },
-    { "Moss & Mist", "activity text(pulsed indicator_yellow)", "bg_primary.base", 1.17 },
-    { "Moss & Mist", "activity text(pulsed indicator_red)", "bg_primary.base", 1.46 },
     { "Moss & Mist", "text_dim", "chat.cmd_bg", 4.40 },
     { "Moss & Mist", "text_dim", "tint18(text_dim on bg_primary)", 3.77 },
     { "Moss & Mist", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.51 },
@@ -174,7 +133,7 @@ static const Exemption k_exempt[] = {
     { "Moss & Mist", "accent.base", "chat.cmd_bg", 1.59 },
     { "Moss & Mist", "border", "chat.cmd_bg", 1.20 },
 };
-#define EXPECTED_EXEMPTIONS 103
+#define EXPECTED_EXEMPTIONS 62
 
 /* ---- Blends --------------------------------------------------------------
  *
@@ -191,24 +150,6 @@ static unsigned int ablend(unsigned int fg, unsigned int bg, float a)
         float f = (float)((fg >> sh) & 0xFF), b = (float)((bg >> sh) & 0xFF);
         out |= ((unsigned int)(f * a + b * (1.0f - a)) & 0xFF) << sh;
     }
-    return out;
-}
-
-/* (fg + bg) / 2: the pulsed half-phase of an indicator. */
-static unsigned int mix_half(unsigned int fg, unsigned int bg)
-{
-    unsigned int out = 0;
-    for (int sh = 16; sh >= 0; sh -= 8)
-        out |= ((((fg >> sh) & 0xFF) + ((bg >> sh) & 0xFF)) / 2) << sh;
-    return out;
-}
-
-/* (3 * fg + bg) / 4: the activity line's "muted" text. */
-static unsigned int mix_three_quarters(unsigned int fg, unsigned int bg)
-{
-    unsigned int out = 0;
-    for (int sh = 16; sh >= 0; sh -= 8)
-        out |= ((((fg >> sh) & 0xFF) * 3 + ((bg >> sh) & 0xFF)) / 4) << sh;
     return out;
 }
 
@@ -329,31 +270,6 @@ SEL(s_md_structure,   "md structure(link role)",
     theme_role_color(t->link.base, t->bg_primary.base, t->text_main));
 SEL(s_md_code,        "md code(info role)",
     theme_role_color(t->info.base, t->bg_primary.base, t->text_main));
-/* derived: the AI header's activity word, pulsed phase (ai_chat_view.c). */
-SEL(s_pulse_green,    "pulsed(chat.indicator_green)",
-    mix_half(t->chat.indicator_green, t->bg_primary.base));
-SEL(s_pulse_yellow,   "pulsed(chat.indicator_yellow)",
-    mix_half(t->chat.indicator_yellow, t->bg_primary.base));
-SEL(s_pulse_red,      "pulsed(chat.indicator_red)",
-    mix_half(t->chat.indicator_red, t->bg_primary.base));
-/* derived: the chat activity line is 3/4 dot + 1/4 bg_primary, where the dot
- * is itself blended 50% into bg_primary in the pulsed phase
- * (chat_listview.c paint_activity_indicator). */
-SEL(s_act_green,      "activity text(indicator_green)",
-    mix_three_quarters(t->chat.indicator_green, t->bg_primary.base));
-SEL(s_act_yellow,     "activity text(indicator_yellow)",
-    mix_three_quarters(t->chat.indicator_yellow, t->bg_primary.base));
-SEL(s_act_red,        "activity text(indicator_red)",
-    mix_three_quarters(t->chat.indicator_red, t->bg_primary.base));
-SEL(s_actp_green,     "activity text(pulsed indicator_green)",
-    mix_three_quarters(mix_half(t->chat.indicator_green, t->bg_primary.base),
-                       t->bg_primary.base));
-SEL(s_actp_yellow,    "activity text(pulsed indicator_yellow)",
-    mix_three_quarters(mix_half(t->chat.indicator_yellow, t->bg_primary.base),
-                       t->bg_primary.base));
-SEL(s_actp_red,       "activity text(pulsed indicator_red)",
-    mix_three_quarters(mix_half(t->chat.indicator_red, t->bg_primary.base),
-                       t->bg_primary.base));
 
 /* ---- The table -----------------------------------------------------------
  *
@@ -416,19 +332,11 @@ static const Pair k_pairs[] = {
     { &s_md_structure, &s_sel_on_bgp,    FLOOR_TEXT },  /* selected heading / list marker */
     { &s_md_structure, &s_hdr_fill,      FLOOR_TEXT },  /* table header text */
 
-    /* -- activity indicators painted as text (4.5), both pulse phases -- */
-    { &s_c_ind_green,  &s_bgp_base,      FLOOR_TEXT },  /* AI header activity word */
+    /* -- activity indicators painted as text (4.5): the AI header's activity
+     *    word and the chat activity line (steady colour; only the dot pulses) -- */
+    { &s_c_ind_green,  &s_bgp_base,      FLOOR_TEXT },  /* activity word and line */
     { &s_c_ind_yellow, &s_bgp_base,      FLOOR_TEXT },
     { &s_c_ind_red,    &s_bgp_base,      FLOOR_TEXT },
-    { &s_pulse_green,  &s_bgp_base,      FLOOR_TEXT },  /* the same, pulsed */
-    { &s_pulse_yellow, &s_bgp_base,      FLOOR_TEXT },
-    { &s_pulse_red,    &s_bgp_base,      FLOOR_TEXT },
-    { &s_act_green,    &s_bgp_base,      FLOOR_TEXT },  /* activity line in the chat */
-    { &s_act_yellow,   &s_bgp_base,      FLOOR_TEXT },
-    { &s_act_red,      &s_bgp_base,      FLOOR_TEXT },
-    { &s_actp_green,   &s_bgp_base,      FLOOR_TEXT },  /* the same, pulsed */
-    { &s_actp_yellow,  &s_bgp_base,      FLOOR_TEXT },
-    { &s_actp_red,     &s_bgp_base,      FLOOR_TEXT },
 
     /* -- text_dim painted as readable text (4.5; its plain surfaces are
      *    test_ui_tokens.c's) -- */
