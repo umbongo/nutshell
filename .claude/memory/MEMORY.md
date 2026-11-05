@@ -5,7 +5,7 @@ session through the `@.claude/memory/MEMORY.md` import in CLAUDE.md. Keep
 entries short and factual; the reasoning lives in the docs they cite.
 Every edit here gets a dated entry in `.claude/CHANGELOG.md`.
 
-Last updated: 2026-11-04 (retrospectives on request after each merge; no cadence).
+Last updated: 2026-11-05 (the seven pull-request checks; retrospectives on request after each merge, no cadence).
 
 ## Retrospectives: ask after each merge (maintainer's rule, 2026-11-04)
 
@@ -151,8 +151,12 @@ Last updated: 2026-11-04 (retrospectives on request after each merge; no cadence
 - `list_pull_requests` returns `merged: false` even for merged pull
   requests when a `fields` subset is requested; use `merged_at` instead.
 - Check runs on a pull request head come from `pull_request_read` with
-  `get_check_runs`; the three checks on an actions-only change are
-  `Version bump`, `analyze` (CodeQL build+scan) and `CodeQL` (upload).
+  `get_check_runs`; the seven checks on any change, an actions-only one
+  included, are `Version bump`, `Native tests`, `analyze` (CodeQL build+scan),
+  `CodeQL` (upload), `Sanitizers`, `Lint` and `Fuzz`. On an actions-only bump
+  `Native tests` and the three quality jobs skip their work (still green)
+  unless the bump touches their own workflow file (`checks.yml`,
+  `quality.yml`). Only the first two are required.
 - `gh pr edit` fails with a projectCards GraphQL error. Update a body with
   `gh api -X PATCH repos/umbongo/nutshell/pulls/N -F body=@file`.
 - In Claude Code's auto permission mode the classifier refuses

@@ -238,6 +238,12 @@ merging (on 2026-09-23 PR #44 was merged with `analyze` red and `main` did not
 build; `Native tests` now catches that, CodeQL findings it does not). Never
 push to `main` directly; never merge a red check.
 
+`Sanitizers`, `Lint` and `Fuzz` (`.github/workflows/quality.yml`) are
+deterministic, expected green before a merge and not in the ruleset; the
+weekly `Fuzz (scheduled)` run (`fuzz-weekly.yml`) is not a pull-request check,
+and whoever sees it red opens an issue naming the target and fault class,
+never the crashing input.
+
 **From a cloud (Linux) session, do not merge: stop and warn the maintainer.**
 The gate needs `make test` to pass on the hosted runner and the Windows exe to
 have been compiled from the committed sources on the maintainer's box; a cloud

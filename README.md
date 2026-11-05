@@ -719,9 +719,10 @@ Use `mingw32-make`, not the MSYS `make` — the latter breaks gcc's temp-file ha
 -   GCC (MinGW-w64) — `x86_64-w64-mingw32-gcc` for Windows cross-compile, native `gcc` for tests
 -   `g++-mingw-w64-x86-64` — required by vcpkg even for C-only builds
 -   Make, `upx` (`sudo apt install upx`)
--   `libssl-dev` (OpenSSL headers for the native `make test`)
--   cppcheck (static analysis)
--   vcpkg with the custom `x64-mingw-gcc-static` triplet for MinGW-targeted OpenSSL and libssh2 (see `~/vcpkg/custom-triplets/`)
+-   `libssl-dev` (OpenSSL headers for the native `make test`); optionally `libssh2-1-dev` and `zlib1g-dev`, so the native build uses the real libssh2 instead of the test stub
+-   cppcheck (static analysis; the `Lint` check pins 2.13)
+-   `clang` (libFuzzer, for `make fuzz`; set `FUZZ_CC` if it is not on PATH as `clang`, `clang-18`, `clang-17` or `clang-16`)
+-   vcpkg with the custom `x64-mingw-gcc-static` triplet for MinGW-targeted OpenSSL and libssh2 (see `~/vcpkg/custom-triplets/`). It ships libssh2 1.11.1, OpenSSL 3.6.1 and zlib 1.3.1 at this release; About and `nutshell.exe -v` print the versions built in (`OpenSSL <v>, libssh2 <v>, zlib <v>`)
 
 ```bash
 make clean && make release
@@ -736,8 +737,12 @@ Always clean before building to ensure a full rebuild. Use plain `make` only if 
 | `make clean && make release` | **Recommended** — optimised + UPX compressed (~5.3 MB) |
 | `make` | Uncompressed build (~9.7 MB), useful for debugging |
 | `make test` | Run unit tests natively on the build host |
+| `make -j test` | The same, incremental and parallel (one object per source under `build/test`) |
+| `make test SAN=1` | The suite under AddressSanitizer, UBSan and LeakSanitizer (`build/test-san`, Linux only); any report fails it |
 | `make wintest` | Win32 icon-renderer tests (runs directly on Windows, under Wine on Linux) |
 | `make lint` | Static analysis with cppcheck |
+| `make lint-gate` | The cppcheck gate the `Lint` check runs |
+| `make fuzz` / `make fuzz-run` / `make fuzz-long` | Build the libFuzzer targets; replay their seed corpora (what the `Fuzz` check runs); fuzz each target for `FUZZ_TIME` seconds (default 60; the weekly run) |
 | `make clean` | Remove all build artefacts |
 
 (On Windows substitute `mingw32-make` for `make`.)
