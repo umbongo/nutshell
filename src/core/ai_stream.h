@@ -9,6 +9,7 @@
 #include "ai_tool_web_search.h"
 #include "ai_tool_web_fetch.h"
 #include "worker_life.h"
+#include "tool_decision.h"
 
 /*
  * ai_stream -- one AI reply in flight, and the panel's table of them.
@@ -67,6 +68,11 @@ typedef struct AiStream {
      * runs; once the panel has the stream's done message it may take it
      * with ai_conv_take(). */
     AiConversation conv;
+
+    /* The tool gate's decision slot: the thread publishes a call that needs
+     * approval and polls it; the UI thread answers it once, by (id, gen).
+     * See tool_decision.h. */
+    ToolDecisionSlot decision;
 } AiStream;
 
 /* Allocate a stream with both references held, a fresh id and an empty

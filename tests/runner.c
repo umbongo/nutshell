@@ -2595,6 +2595,7 @@ int test_ai_stream_stale_generation(void);
 int test_ai_stream_abort_is_per_owner(void);
 int test_ai_stream_abort_all_on_panel_close(void);
 int test_ai_stream_table_null_owner_entry_drains(void);
+int test_ai_stream_new_slot_idle(void);
 int test_ai_stream_table_full_and_bad_args(void);
 int test_ai_stream_copy_tools_rebinds_context(void);
 int test_ai_stream_release_frees_conversation(void);
@@ -3809,6 +3810,19 @@ int test_render_stuck_null_state_is_safe(void);
 int test_tool_gate_matrix(void);
 int test_tool_gate_levels_follow_cmd_safety_order(void);
 int test_tool_registrations(void);
+int test_tool_decision_publish_gen_nonzero_and_fresh(void);
+int test_tool_decision_publish_skips_zero_on_wrap(void);
+int test_tool_decision_each_outcome(void);
+int test_tool_decision_second_answer_loses(void);
+int test_tool_decision_stale_gen(void);
+int test_tool_decision_invalid_answer(void);
+int test_tool_decision_aborted_poll(void);
+int test_tool_decision_abort_before_publish(void);
+int test_tool_decision_expiry(void);
+int test_tool_decision_late_answer_reports_winner(void);
+int test_tool_decision_answer_before_remove_order(void);
+int test_tool_decision_notes(void);
+int test_tool_decision_row_labels(void);
 
 /* test_ai_debug_tool.c */
 int test_ai_debug_tool_register_fills_the_definition(void);
@@ -7389,6 +7403,7 @@ int main(void) {
     failed += test_ai_stream_abort_is_per_owner();
     failed += test_ai_stream_abort_all_on_panel_close();
     failed += test_ai_stream_table_null_owner_entry_drains();
+    failed += test_ai_stream_new_slot_idle();
     failed += test_ai_stream_table_full_and_bad_args();
     failed += test_ai_stream_copy_tools_rebinds_context();
     failed += test_ai_stream_release_frees_conversation();
@@ -7596,6 +7611,19 @@ int main(void) {
     failed += test_tool_gate_matrix();
     failed += test_tool_gate_levels_follow_cmd_safety_order();
     failed += test_tool_registrations();
+    failed += test_tool_decision_publish_gen_nonzero_and_fresh();
+    failed += test_tool_decision_publish_skips_zero_on_wrap();
+    failed += test_tool_decision_each_outcome();
+    failed += test_tool_decision_second_answer_loses();
+    failed += test_tool_decision_stale_gen();
+    failed += test_tool_decision_invalid_answer();
+    failed += test_tool_decision_aborted_poll();
+    failed += test_tool_decision_abort_before_publish();
+    failed += test_tool_decision_expiry();
+    failed += test_tool_decision_late_answer_reports_winner();
+    failed += test_tool_decision_answer_before_remove_order();
+    failed += test_tool_decision_notes();
+    failed += test_tool_decision_row_labels();
     /* test_ai_debug_tool.c */
     failed += test_ai_debug_tool_register_fills_the_definition();
     failed += test_ai_debug_tool_registered_only_while_debugging();

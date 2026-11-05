@@ -9,6 +9,7 @@
 #include "ai_prompt.h"
 #include "ai_stream.h"
 #include "worker_life.h"
+#include "tool_decision.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -591,5 +592,20 @@ int test_ai_stream_lost_final_message_is_found(void)
     ai_stream_mark_finished(NULL);
     ai_stream_note_delivered(NULL);
     ASSERT_NULL(ai_stream_table_lost_owner(NULL));
+    TEST_END();
+}
+
+int test_ai_stream_new_slot_idle(void)
+{
+    TEST_BEGIN();
+    AiStream *s = ai_stream_new();
+    ASSERT_NOT_NULL(s);
+    if (s) {
+        ASSERT_EQ((int)tool_decision_poll(&s->decision, 0, 0, 0), (int)TOOL_DECISION_NONE);
+        unsigned g = tool_decision_publish(&s->decision);
+        ASSERT_TRUE(g != 0);
+        ASSERT_EQ((int)tool_decision_poll(&s->decision, g, 0, 0), (int)TOOL_DECISION_PENDING);
+        ai_stream_discard(s);
+    }
     TEST_END();
 }

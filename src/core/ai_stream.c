@@ -13,6 +13,7 @@ AiStream *ai_stream_new(void)
     s->body = (char *)calloc(1, AI_BODY_MAX);
     if (!s->body) { free(s); return NULL; }
     worker_life_init(&s->life);
+    tool_decision_init(&s->decision);
     s->id = worker_life_next_id();
     __atomic_add_fetch(&g_live_streams, 1, __ATOMIC_SEQ_CST);
     return s;
