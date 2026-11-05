@@ -1973,6 +1973,7 @@ HWND ai_chat_show(HWND parent, const char *api_key, const char *provider,
     d->paste_delay_ms = paste_delay_ms;
     d->context_lines = AI_CONTEXT_LINES_DEFAULT;
     d->tool_timeout_sec = AI_TOOL_TIMEOUT_SEC_DEFAULT;
+    d->tool_auto_rounds = AI_TOOL_ROUNDS_DEFAULT;
     if (font_name && font_name[0])
         strncpy(d->font_name, font_name, sizeof(d->font_name) - 1);
     else
@@ -2238,6 +2239,14 @@ void ai_chat_set_tool_timeout(HWND hwnd, int seconds)
         seconds = AI_TOOL_TIMEOUT_SEC_MIN;
     if (seconds > AI_TOOL_TIMEOUT_SEC_MAX) seconds = AI_TOOL_TIMEOUT_SEC_MAX;
     d->tool_timeout_sec = seconds;
+}
+
+void ai_chat_set_tool_rounds(HWND hwnd, int rounds)
+{
+    if (!hwnd || !IsWindow(hwnd)) return;
+    AiChatData *d = (AiChatData *)(LONG_PTR)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!d) return;
+    d->tool_auto_rounds = ai_tool_rounds_clamp(rounds);
 }
 
 /* Internal helper: perform the actual session switch (save/load/rebuild).

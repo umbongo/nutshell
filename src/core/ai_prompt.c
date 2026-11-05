@@ -2185,7 +2185,22 @@ static int tool_round_key_matches(const AiSessionState *s, unsigned stream_id,
     return s->tool_round_stream == stream_id && s->tool_round_iter == loop_iter;
 }
 
-int ai_tool_rounds_attended(AiSessionState *s, unsigned stream_id, int loop_iter)
+int ai_tool_rounds_clamp(int cap)
+{
+    if (cap < AI_TOOL_ROUNDS_MIN) return AI_TOOL_ROUNDS_MIN;
+    if (cap > AI_TOOL_ROUNDS_MAX) return AI_TOOL_ROUNDS_MAX;
+    return cap;
+}
+
+void ai_tool_pause_row(char *buf, size_t n, int cap)
+{
+    if (!buf || n == 0) return;
+    (void)snprintf(buf, n, "[Auto-approve paused after %d automatic tool rounds]",
+                   ai_tool_rounds_clamp(cap));
+}
+
+int ai_tool_rounds_attended(AiSessionState *s, unsigned stream_id, int loop_iter,
+                            int cap)
 {
     if (!s) return 0;
     if (!tool_round_key_matches(s, stream_id, loop_iter)) {
@@ -2194,7 +2209,7 @@ int ai_tool_rounds_attended(AiSessionState *s, unsigned stream_id, int loop_iter
         s->tool_round_base = s->auto_tool_rounds;
         s->tool_round_counted = 0;
     }
-    return s->tool_round_base >= AI_AUTO_TOOL_ROUNDS_MAX;
+    return s->tool_round_base >= ai_tool_rounds_clamp(cap);
 }
 
 void ai_tool_rounds_ran_unattended(AiSessionState *s, unsigned stream_id,

@@ -116,6 +116,7 @@ void ai_chat_launch_stream_thread(AiChatData *d, const char *src)
     /* The card timeout is fixed for this stream here; the thread never
      * reads the panel's setting. */
     s->tool_timeout_ms = tool_decision_timeout_ms(d->tool_timeout_sec);
+    s->tool_auto_rounds = ai_tool_rounds_clamp(d->tool_auto_rounds);
     int conv_ok = ai_conv_copy(&s->conv, &d->conv) == 0;
 
     /* One terminal snapshot per launch (spec 2026-11-05 decision 2), taken

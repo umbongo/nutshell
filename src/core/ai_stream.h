@@ -80,6 +80,12 @@ typedef struct AiStream {
      * saved while a card waits applies to later streams only. ai_stream_new()
      * starts it at the 60 s default. */
     unsigned long long tool_timeout_ms;
+
+    /* Automatic tool rounds before a call asks on a card, 1..20. The panel's
+     * Settings value at launch, copied here like tool_timeout_ms; the UI-side
+     * dispatch reads it from the stream, so a change applies to streams
+     * started after Save. ai_stream_new() starts it at the default of 3. */
+    int tool_auto_rounds;
 } AiStream;
 
 /* Allocate a stream with both references held, a fresh id and an empty

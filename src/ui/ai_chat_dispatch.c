@@ -207,7 +207,8 @@ void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
      * card resets the count, and a second call of the same round must still
      * be judged on the count this round started with (decision 22). */
     const int capped = ai_tool_rounds_attended(owner, m->stream_id,
-                                               m->loop_iter);
+                                               m->loop_iter,
+                                               stream->tool_auto_rounds);
     const int attended = !displayed || capped;
 
     if (tool_gate_decide(m->safety, p, attended) == TOOL_GATE_RUN) {
@@ -225,7 +226,9 @@ void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m)
     /* ASK. When only the round cap forced it, say so once. */
     if (displayed && tool_gate_decide(m->safety, p, 0) == TOOL_GATE_RUN &&
         ai_tool_rounds_take_pause_row(owner)) {
-        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, AI_TOOL_PAUSE_ROW);
+        char pause_row[96];
+        ai_tool_pause_row(pause_row, sizeof(pause_row), stream->tool_auto_rounds);
+        chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, pause_row);
         if (d->hChatList) chat_listview_invalidate(d->hChatList);
     }
 

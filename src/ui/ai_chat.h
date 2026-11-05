@@ -121,6 +121,11 @@ void ai_chat_set_context_lines(HWND hwnd, int lines);
  * after the call: a waiting card keeps the value its stream started with. */
 void ai_chat_set_tool_timeout(HWND hwnd, int seconds);
 
+/* Set the automatic tool rounds before a tool call asks on a card again
+ * (settings.ai_tool_auto_rounds, 1-20). Applies to streams launched after the
+ * call: a stream keeps the value it started with. */
+void ai_chat_set_tool_rounds(HWND hwnd, int rounds);
+
 /* --ui-demo only: layer the canned approval queue(s) and small activity
  * flourishes onto a conversation already loaded via ai_chat_show()'s
  * initial_state or ai_chat_switch_session() (see ui_demo_build() in

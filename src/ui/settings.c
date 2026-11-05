@@ -1543,6 +1543,17 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
             HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_TIMEOUT, ES_NUMBER);
             add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
         }
+        {
+            /* Same form as the timeout row above, directly under it. */
+            char buf[16];
+            int rounds = nd->cfg->settings.ai_tool_auto_rounds;
+            if (rounds < AI_TOOL_ROUNDS_MIN || rounds > AI_TOOL_ROUNDS_MAX)
+                rounds = AI_TOOL_ROUNDS_DEFAULT;
+            (void)snprintf(buf, sizeof(buf), "%d", rounds);
+            HWND lbl = make_static2(nd->hPage, "Automatic tool rounds:");
+            HWND ed = make_edit2(nd->hPage, buf, (HMENU)IDC_AI_TOOL_ROUNDS, ES_NUMBER);
+            add_ctrl(nd, NULL, lbl, ed, SETTINGS_PAGE_AI_BEHAVIOUR, 320, 70, 1, 0, 1, 1);
+        }
 
         /* ==== AI_WEB ==== */
         {
@@ -2122,6 +2133,12 @@ static LRESULT CALLBACK SettingsWndProc(HWND hwnd, UINT umsg,
                        (v >= (UINT)AI_TOOL_TIMEOUT_SEC_MIN &&
                         v <= (UINT)AI_TOOL_TIMEOUT_SEC_MAX)))
                 s->ai_tool_timeout_sec = (int)v;
+
+            /* Automatic tool rounds: 1..20; keep the stored value on a parse
+             * failure or any other entry (0 is not allowed) */
+            v = GetDlgItemInt(d->hPage, IDC_AI_TOOL_ROUNDS, &ok, FALSE);
+            if (ok && v >= (UINT)AI_TOOL_ROUNDS_MIN && v <= (UINT)AI_TOOL_ROUNDS_MAX)
+                s->ai_tool_auto_rounds = (int)v;
 
             /* Permit web fetch */
             s->ai_web_fetch_enabled = (IsDlgButtonChecked(d->hPage, IDC_AI_WEB_FETCH)

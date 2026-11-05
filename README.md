@@ -42,7 +42,7 @@ A ready-to-run Windows executable is available at `build/win/nutshell.exe` — n
 - Session file logging with ANSI stripping and configurable strftime filenames
 - 4 themed colour schemes with consistently themed tabs, dialogs, and buttons
 - DPI-aware layout across all windows and dialogs
-- 3,620 unit tests across 140 test files, and cppcheck reports no errors or warnings
+- 3,627 unit tests across 140 test files, and cppcheck reports no errors or warnings
 
 ---
 
@@ -254,7 +254,7 @@ Tools work with Anthropic, OpenAI, DeepSeek and Moonshot (Kimi); the gate below 
 
 `web_search` and `read_debug_log` run as they always have. `web_fetch` asks first: the call lands in a one-row approval card (`web_fetch: <address>`, tagged **UNKNOWN**) headed "1 tool call", with **Deny all** and **Run 1 selected**, and the AI waits for your answer.
 
-- **Auto-approve** — with Auto-approve on at **Unknown** or above, a fetch in the tab you are looking at runs without asking, until the 3-round cap below; a fetch from a background tab always asks. With Auto-approve off, or on at **Read**, it asks. The **Allowed** ceiling never holds or blocks a tool call. After 3 automatic tool rounds in a row the next fetch asks again, under the row "[Auto-approve paused after 3 automatic tool rounds]"; a typed message or a click on **Run 1 selected** resets the count
+- **Auto-approve** — with Auto-approve on at **Unknown** or above, a fetch in the tab you are looking at runs without asking, until the automatic-tool-round cap below; a fetch from a background tab always asks. With Auto-approve off, or on at **Read**, it asks. The **Allowed** ceiling never holds or blocks a tool call. After N automatic tool rounds in a row (Settings > AI Assistant > Behaviour, **Automatic tool rounds**, default 3, 1–20) the next fetch asks again, under the row "[Auto-approve paused after N automatic tool rounds]"; a typed message or a click on **Run 1 selected** resets the count
 - **The row** — shows the address without its query string (a trailing `?…` marks one that was dropped); the row replaces every non-ASCII character with �, so nothing invisible reaches it; **Details** shows the full address minus any `user:password@` part, with every non-ASCII character escaped (`\u200B`, `\U000E0041`) and control characters shown as `\x1B`, and a very long address cut with `…`
 - **Redirects** — a fetch you approved on a card does not follow a redirect to another host: it returns "redirect to another host refused; ask again with the new URL"
 - **Waiting** — Stop, Retry and closing the tab release a waiting call. A card expires after the **Tool approval timeout** (default 60 s, 0 = never, **Settings > AI Assistant > Behaviour**, 15 to 3600 s), then reads "expired, not run". A change applies to cards shown after you Save; a card already waiting keeps its timeout
@@ -344,7 +344,7 @@ Passwords, passphrases and keys are never logged, and neither are keystrokes or 
 - **Threat model** — what Nutshell assumes and what it does not protect against:
   - The remote host and everything it prints are untrusted. Terminal output can carry text meant to steer the AI, which is why every command is classified and, unless you turn on Auto-approve, waits for your click.
   - The AI provider receives the last N terminal lines (the **Max terminal lines** setting) and anything the assistant reads: the debug log and fetched pages. Keep secrets off the screen while AI Assist is in use.
-  - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. A fetch runs unasked only with Auto-approve on at Unknown or above, in the tab you are looking at and within the 3-round cap; otherwise (Auto-approve off or at Read, a background tab, or past the cap) it waits for your click on a card. The query string is one channel for that text, and the card row hides it, but the path and a subdomain carry data too: reading the card, and **Details** for the address (non-ASCII and control characters escaped, a very long one cut with `…`), is the check, not the row's shape. Addresses that are local or private (loopback, link-local and private ranges, IPv4 and IPv6) are refused. The address check resolves the name itself, so a DNS answer that changes between that check and WinHTTP's own lookup (rebinding), or a configured proxy that resolves on its own, is not caught.
+  - With **Permit web fetch** on, the model can contact any public web address and send it text from the session. A fetch runs unasked only with Auto-approve on at Unknown or above, in the tab you are looking at and within the automatic-tool-round cap (Settings > AI Assistant > Behaviour, default 3); otherwise (Auto-approve off or at Read, a background tab, or past the cap) it waits for your click on a card. The query string is one channel for that text, and the card row hides it, but the path and a subdomain carry data too: reading the card, and **Details** for the address (non-ASCII and control characters escaped, a very long one cut with `…`), is the check, not the row's shape. Addresses that are local or private (loopback, link-local and private ranges, IPv4 and IPv6) are refused. The address check resolves the name itself, so a DNS answer that changes between that check and WinHTTP's own lookup (rebinding), or a configured proxy that resolves on its own, is not caught.
   - A local shell runs with your Windows privileges, and so does anything the assistant runs in it.
   - `nutshell.config` kept in a shared folder exposes its non-secret fields (hosts, usernames, settings) to everyone who can read it. The secrets stay DPAPI-locked.
 
@@ -718,7 +718,7 @@ telnet tabs.
 │       ├── ai_dock.h, ai_chat_testable.h, menubar_line.h, ui.h
 │       ├── nutshell.rc, resource.rc   #   Windows resource scripts
 │       └── fonts/                     #   Embedded Inter Regular + Bold TTF
-├── tests/                              # 3,620 unit tests across 140 test files
+├── tests/                              # 3,627 unit tests across 140 test files
 │   ├── test_ssh_auth_plan.c            #   Authentication plan: method order, retries, attempt cap, failure text
 │   ├── test_ssh_kbd.c                  #   Keyboard-interactive rounds, prompt matcher, sanitiser, cancel path
 │   ├── test_pw_prompt_layout.c         #   Prompt dialog geometry and LF/CRLF text conversion

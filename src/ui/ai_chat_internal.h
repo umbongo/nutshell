@@ -288,6 +288,11 @@ typedef struct {
      * into AiStream.tool_timeout_ms, so a change reaches later streams only. */
     int tool_timeout_sec;
 
+    /* Automatic tool rounds before a call asks again, from
+     * settings.ai_tool_auto_rounds (1-20); each launched stream copies it into
+     * AiStream.tool_auto_rounds, so a change reaches later streams only. */
+    int tool_auto_rounds;
+
     /* Scratch buffers for the terminal context and the system prompt built
      * from it.  They live as long as the panel and grow with context_lines,
      * so the send paths never allocate and cannot leak on an early return.

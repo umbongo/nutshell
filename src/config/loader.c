@@ -490,6 +490,8 @@ void settings_validate(Settings *s)
     if (s->ai_tool_timeout_sec != AI_TOOL_TIMEOUT_SEC_NEVER &&
         s->ai_tool_timeout_sec < AI_TOOL_TIMEOUT_SEC_MIN) s->ai_tool_timeout_sec = AI_TOOL_TIMEOUT_SEC_MIN;
     if (s->ai_tool_timeout_sec > AI_TOOL_TIMEOUT_SEC_MAX) s->ai_tool_timeout_sec = AI_TOOL_TIMEOUT_SEC_MAX;
+    /* 0 and negatives take the floor of 1, above 20 the ceiling */
+    s->ai_tool_auto_rounds = ai_tool_rounds_clamp(s->ai_tool_auto_rounds);
     if (s->ssh_user_idle_timeout_mins < 0)     s->ssh_user_idle_timeout_mins = 0;
     if (s->ssh_user_idle_timeout_mins > 10080) s->ssh_user_idle_timeout_mins = 10080;
     if (s->auto_connect != 0) s->auto_connect = 1;
@@ -545,6 +547,7 @@ void config_default_settings(Settings *s)
     s->markdown_render_enabled = 1;
     s->ai_max_context_lines = 1000;
     s->ai_tool_timeout_sec = AI_TOOL_TIMEOUT_SEC_DEFAULT;
+    s->ai_tool_auto_rounds = AI_TOOL_ROUNDS_DEFAULT;
     s->auto_connect = 0;
     /* auto_connect_session defaults to empty (already zeroed by memset) */
     s->paste_confirm = 1;
@@ -729,6 +732,8 @@ Config *config_load_ex(const char *path, ConfigLoadStatus *status_out)
                                                      (double)s->ai_max_context_lines);
         s->ai_tool_timeout_sec = (int)json_obj_num(jset, "ai_tool_timeout_sec",
                                                    (double)s->ai_tool_timeout_sec);
+        s->ai_tool_auto_rounds = (int)json_obj_num(jset, "ai_tool_auto_rounds",
+                                                   (double)s->ai_tool_auto_rounds);
         s->auto_connect = json_obj_bool(jset, "auto_connect", s->auto_connect);
         if ((sv = json_obj_str(jset, "auto_connect_session"))) {
             field_copy(s->auto_connect_session,
@@ -1058,6 +1063,7 @@ int config_save(const Config *cfg, const char *path)
             s->markdown_render_enabled ? "true" : "false");
     fprintf(f, "    \"ai_max_context_lines\": %d,\n", s->ai_max_context_lines);
     fprintf(f, "    \"ai_tool_timeout_sec\": %d,\n", s->ai_tool_timeout_sec);
+    fprintf(f, "    \"ai_tool_auto_rounds\": %d,\n", s->ai_tool_auto_rounds);
     fprintf(f, "    \"auto_connect\": %s,\n",
             s->auto_connect ? "true" : "false");
     fputs("    \"auto_connect_session\": ", f);

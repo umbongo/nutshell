@@ -435,6 +435,8 @@ int test_config_load_unknown_fields(void);
 int test_config_load_out_of_range(void);
 int test_config_load_tool_timeout(void);
 int test_config_roundtrip_tool_timeout_never(void);
+int test_config_load_tool_rounds(void);
+int test_config_roundtrip_tool_rounds(void);
 int test_config_roundtrip_all_fields(void);
 int test_config_default_ai_font(void);
 int test_config_roundtrip_ai_font(void);
@@ -967,6 +969,7 @@ int test_settings_validate_ai_max_context_lines_low(void);
 int test_settings_validate_ai_max_context_lines_high(void);
 int test_settings_validate_ai_tool_timeout_low(void);
 int test_settings_validate_ai_tool_timeout_high(void);
+int test_settings_validate_ai_tool_rounds(void);
 int test_settings_validate_paste_delay_neg(void);
 int test_settings_validate_paste_delay_high(void);
 int test_settings_validate_empty_font(void);
@@ -2607,6 +2610,7 @@ int test_ai_stream_abort_all_on_panel_close(void);
 int test_ai_stream_table_null_owner_entry_drains(void);
 int test_ai_stream_new_slot_idle(void);
 int test_ai_stream_new_tool_timeout_default(void);
+int test_ai_stream_new_tool_rounds_default(void);
 int test_ai_stream_table_full_and_bad_args(void);
 int test_ai_stream_copy_tools_rebinds_context(void);
 int test_ai_stream_release_frees_conversation(void);
@@ -2646,6 +2650,9 @@ int test_tool_rounds_reset_mid_round_still_asks(void);
 int test_tool_rounds_command_counter_separate(void);
 int test_tool_rounds_pause_row_once(void);
 int test_tool_rounds_null_safe(void);
+int test_tool_rounds_cap_follows_setting(void);
+int test_tool_rounds_cap_clamped(void);
+int test_tool_rounds_pause_row_text(void);
 
 /* test_chat_thinking.c */
 int test_thinking_init(void);
@@ -4401,6 +4408,8 @@ int main(void) {
     failed += test_config_load_out_of_range();
     failed += test_config_load_tool_timeout();
     failed += test_config_roundtrip_tool_timeout_never();
+    failed += test_config_load_tool_rounds();
+    failed += test_config_roundtrip_tool_rounds();
     failed += test_config_roundtrip_all_fields();
     failed += test_config_default_ai_font();
     failed += test_config_roundtrip_ai_font();
@@ -4845,6 +4854,7 @@ int main(void) {
     failed += test_settings_validate_ai_max_context_lines_high();
     failed += test_settings_validate_ai_tool_timeout_low();
     failed += test_settings_validate_ai_tool_timeout_high();
+    failed += test_settings_validate_ai_tool_rounds();
     failed += test_settings_validate_paste_delay_neg();
     failed += test_settings_validate_paste_delay_high();
     failed += test_settings_validate_empty_font();
@@ -6440,6 +6450,9 @@ int main(void) {
     failed += test_tool_rounds_command_counter_separate();
     failed += test_tool_rounds_pause_row_once();
     failed += test_tool_rounds_null_safe();
+    failed += test_tool_rounds_cap_follows_setting();
+    failed += test_tool_rounds_cap_clamped();
+    failed += test_tool_rounds_pause_row_text();
 
     printf("\n--- Thinking Controller ---\n");
     failed += test_thinking_init();
@@ -7544,6 +7557,7 @@ int main(void) {
     failed += test_ai_stream_table_null_owner_entry_drains();
     failed += test_ai_stream_new_slot_idle();
     failed += test_ai_stream_new_tool_timeout_default();
+    failed += test_ai_stream_new_tool_rounds_default();
     failed += test_ai_stream_table_full_and_bad_args();
     failed += test_ai_stream_copy_tools_rebinds_context();
     failed += test_ai_stream_release_frees_conversation();

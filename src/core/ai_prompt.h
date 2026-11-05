@@ -632,19 +632,31 @@ int ai_rounds_paused(const AiSessionState *s, CmdPolicy p);
 
 /* ---- Unattended tool rounds (trust-boundary spec decision 22) ---- */
 
-/* Cap on unattended tool rounds: a non-SAFE tool call in the round after
- * AI_AUTO_TOOL_ROUNDS_MAX counted rounds asks on a card. */
-#define AI_AUTO_TOOL_ROUNDS_MAX 3
+/* Cap on unattended tool rounds (Settings > AI Assistant > Behaviour,
+ * "Automatic tool rounds"): a non-SAFE tool call in the round after `cap`
+ * counted rounds asks on a card. The setting is 1..20, default 3. */
+#define AI_TOOL_ROUNDS_DEFAULT 3
+#define AI_TOOL_ROUNDS_MIN     1
+#define AI_TOOL_ROUNDS_MAX     20
 
-/* Text of the one row posted when the cap first forces an ask. */
-#define AI_TOOL_PAUSE_ROW "[Auto-approve paused after 3 automatic tool rounds]"
+/* `cap` limited to AI_TOOL_ROUNDS_MIN..AI_TOOL_ROUNDS_MAX: 0 and negatives
+ * give 1, anything above 20 gives 20. */
+int ai_tool_rounds_clamp(int cap);
+
+/* Write the one row posted when the cap first forces an ask,
+ * "[Auto-approve paused after N automatic tool rounds]", N = the clamped
+ * `cap` ("rounds" stays plural for 1). Always NUL-terminated and truncated
+ * to `n`; nothing is written when `buf` is NULL or `n` is 0. */
+void ai_tool_pause_row(char *buf, size_t n, int cap);
 
 /* A non-SAFE tool call in round (stream_id, loop_iter) is about to be judged.
  * The first call with a new key records it with tool_round_base =
  * auto_tool_rounds and tool_round_counted = 0; every call in the round is then
  * judged on that pre-round count. Returns 1 (ask on a card) when
- * tool_round_base >= AI_AUTO_TOOL_ROUNDS_MAX, else 0. NULL-safe (0). */
-int ai_tool_rounds_attended(AiSessionState *s, unsigned stream_id, int loop_iter);
+ * tool_round_base >= ai_tool_rounds_clamp(cap), else 0. `cap` is the cap in
+ * force for that stream (AiStream.tool_auto_rounds). NULL-safe (0). */
+int ai_tool_rounds_attended(AiSessionState *s, unsigned stream_id, int loop_iter,
+                            int cap);
 
 /* A non-SAFE tool call in that round ran on RUN: auto_tool_rounds += 1, once
  * per key (ignored when the key does not match the stored one or the round
@@ -656,7 +668,7 @@ void ai_tool_rounds_ran_unattended(AiSessionState *s, unsigned stream_id, int lo
  * the same round is still judged on the pre-round count. NULL-safe. */
 void ai_tool_rounds_reset(AiSessionState *s);
 
-/* 1 the first time after a reset (post AI_TOOL_PAUSE_ROW), then 0.
+/* 1 the first time after a reset (post the ai_tool_pause_row() text), then 0.
  * NULL-safe (0). */
 int ai_tool_rounds_take_pause_row(AiSessionState *s);
 

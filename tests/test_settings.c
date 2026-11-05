@@ -196,6 +196,37 @@ int test_settings_validate_ai_tool_timeout_high(void)
     TEST_END();
 }
 
+int test_settings_validate_ai_tool_rounds(void)
+{
+    TEST_BEGIN();
+    Settings s;
+    memset(&s, 0, sizeof(s));
+    s.ai_tool_auto_rounds = 0;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 1);
+
+    s.ai_tool_auto_rounds = -7;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 1);
+
+    s.ai_tool_auto_rounds = 1;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 1);
+
+    s.ai_tool_auto_rounds = 20;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 20);
+
+    s.ai_tool_auto_rounds = 21;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 20);
+
+    s.ai_tool_auto_rounds = 4;
+    settings_validate(&s);
+    ASSERT_EQ(s.ai_tool_auto_rounds, 4);
+    TEST_END();
+}
+
 /* ---- paste_delay_ms clamping -------------------------------------------- */
 
 int test_settings_validate_paste_delay_neg(void)

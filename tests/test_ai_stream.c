@@ -595,6 +595,19 @@ int test_ai_stream_lost_final_message_is_found(void)
     TEST_END();
 }
 
+int test_ai_stream_new_tool_rounds_default(void)
+{
+    TEST_BEGIN();
+    /* A stream that was never given a cap uses the default of 3 rounds. */
+    AiStream *s = ai_stream_new();
+    ASSERT_NOT_NULL(s);
+    if (s) {
+        ASSERT_EQ(s->tool_auto_rounds, 3);
+        ai_stream_discard(s);
+    }
+    TEST_END();
+}
+
 int test_ai_stream_new_tool_timeout_default(void)
 {
     TEST_BEGIN();
