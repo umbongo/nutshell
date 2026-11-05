@@ -4522,6 +4522,7 @@ int test_sensitive_commands(void) {
     static const char *const other[][2] = {
         { "printenv AWS_SECRET_ACCESS_KEY", "reads a secret variable" },
         { "crontab -l", "reads the crontab" },
+        { "crontab --list", "reads the crontab" },
         { "crontab -u root -l", "reads the crontab" },
         { "kubectl get secret -o yaml", "reads stored secrets" },
         { "kubectl get secrets -n x", "reads stored secrets" },
@@ -4566,12 +4567,13 @@ int test_sensitive_variables(void) {
         "echo ${TOKEN:-x}", "echo ${#SECRET}", "echo ${!AWS*}", "echo ${!HOME@}",
         "echo \"$github_token\"", "curl -H \"Authorization: $API_KEY\" x",
         "echo $MY_PRIVATE_THING", "echo $AWS_ACCESS_KEY_ID", "echo $env:aws_x",
-        "echo ${db_secret}", "echo $SOME_ACCESS_KEY", NULL
+        "echo ${db_secret}", "echo $SOME_ACCESS_KEY",
+        "echo ${X:-$GITHUB_TOKEN}", "echo ${HOME:-${DB_PASSWORD}}", NULL
     };
     static const char *const no[] = {
         "echo $PATH", "echo ${HOME:-x}", "echo %USERPROFILE%", "echo $HOME",
         "echo $PWD", "echo ${#PATH}", "echo ${!x}", "date +%Y%m%d", "echo $1",
-        "echo $env:Path", "echo $TERM", NULL
+        "echo $env:Path", "echo $TERM", "echo ${X:-$PATH}", NULL
     };
     for (int i = 0; yes[i]; i++) {
         ASSERT_TRUE(sens_is(yes[i], CMD_PLATFORM_LINUX, "reads a secret variable"));

@@ -241,6 +241,19 @@ int test_ai_data_lead_texts(void)
     TEST_END();
 }
 
+/* "out NULL: nothing is written", whatever cap says: the length is still
+ * returned (snprintf(NULL, n > 0) would be undefined behaviour). */
+int test_ai_data_lead_null_out_with_cap(void)
+{
+    TEST_BEGIN();
+    char out[256];
+    size_t want_t = ai_data_lead_terminal(BLK_DELIM, out, sizeof(out));
+    size_t want_l = ai_data_lead_tool("web_fetch", out, sizeof(out));
+    ASSERT_EQ(ai_data_lead_terminal(BLK_DELIM, NULL, 10), want_t);
+    ASSERT_EQ(ai_data_lead_tool("web_fetch", NULL, 10), want_l);
+    TEST_END();
+}
+
 int test_ai_data_lead_truncates_safely(void)
 {
     TEST_BEGIN();

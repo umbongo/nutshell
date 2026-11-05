@@ -2713,16 +2713,21 @@ static int sens_var_in_word(const char *t, size_t n)
                 size_t k = j + 1;
                 size_t close = k;
                 while (close < n && t[close] != '}') close++;
+                size_t after = j;   /* where the scan resumes */
                 if (k < close && t[k] == '!') {
                     char last = t[close - 1];
                     if (close - 1 > k && (last == '*' || last == '@')) return 1;
+                    after = close;
                 } else {
                     if (k < close && t[k] == '#') k++;
                     if (close - k >= 4 && ci_memcmp(t + k, "env:", 4) == 0) k += 4;
                     size_t nl = var_name_len(t + k, t + close);
                     if (nl > 0 && sens_name_is_secret(t + k, nl)) return 1;
+                    /* The operator and operand ("${X:-$TOKEN}") are scanned
+                     * for references too, one pass over the same word. */
+                    if (nl > 0) after = k + nl - 1;
                 }
-                i = close;
+                i = after;
                 continue;
             }
             if (n - j >= 4 && ci_memcmp(t + j, "env:", 4) == 0) j += 4;
@@ -3038,7 +3043,7 @@ static __attribute__((noinline)) void sens_command_rules(const char *base, size_
     } else if (sens_ci_eq(base, bl, "history") || sens_ci_eq(base, bl, "get-history")) {
         sens_note(SENS_HIST);
     } else if (sens_ci_eq(base, bl, "crontab")) {
-        if (sens_short_flag_has(&g, 'l')) sens_note(SENS_CRON);
+        if (sens_short_flag_has(&g, 'l') || sens_any_arg(&g, "--list")) sens_note(SENS_CRON);
     } else if (sens_ci_eq(base, bl, "kubectl") || sens_ci_eq(base, bl, "oc")) {
         int gi = -1;
         for (int i = 0; i < g.n && gi < 0; i++)

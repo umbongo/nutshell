@@ -430,8 +430,10 @@ int ai_tool_execute(const AiToolRegistry *reg, const AiToolCall *call,
 
     /* A failure's text is Nutshell's own (a refusal, a limit, "no such host")
      * for every tool but web_search, whose errors may quote the provider's
-     * response and so stay with the data. */
-    if (result->is_error && strcmp(call->name, "web_search") != 0) {
+     * response and so stay with the data, and a tool that says its text
+     * quotes remote data (AI_TOOL_FAIL_CONTENT). */
+    if (result->is_error && rc != AI_TOOL_FAIL_CONTENT &&
+        strcmp(call->name, "web_search") != 0) {
         size_t n = result->content ? result->content_len : 0;
         if (n > AI_TOOL_NOTE_MAX - 1) {
             n = AI_TOOL_NOTE_MAX - 1;

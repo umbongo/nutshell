@@ -70,6 +70,14 @@ int  ai_tools_serialize_openai(const AiToolRegistry *reg, char *buf, size_t max)
 int  ai_parse_tool_calls_anthropic(const char *response_json, AiToolCall *calls, int max_calls);
 int  ai_parse_tool_calls_openai(const char *response_json, AiToolCall *calls, int max_calls);
 
+/* An execute callback returns 0 on success and -1 on failure; the failure's
+ * text is Nutshell's own and goes to tool_note. A tool whose failure text
+ * quotes remote data (a host taken from a server's Location header, say)
+ * returns AI_TOOL_FAIL_CONTENT instead: still a failure (is_error is set), but
+ * the text stays in content, inside the data block, where it is framed and
+ * escaped like any other tool output. */
+#define AI_TOOL_FAIL_CONTENT 1
+
 /* Execute a tool call */
 int  ai_tool_execute(const AiToolRegistry *reg, const AiToolCall *call,
                      volatile int *cancel_flag, AiToolResult *result);

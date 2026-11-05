@@ -1021,6 +1021,7 @@ int test_ai_data_block_note_alone(void);
 int test_ai_data_block_escapes_inside(void);
 int test_ai_data_lead_texts(void);
 int test_ai_data_lead_truncates_safely(void);
+int test_ai_data_lead_null_out_with_cap(void);
 
 /* test_ai_body_frame.c */
 int test_ai_body_frame_no_terminal_in_system(void);
@@ -2890,6 +2891,8 @@ int test_web_fetch_refuses_if_any_address_internal(void);
 int test_web_fetch_refuses_when_resolve_fails(void);
 int test_web_fetch_refuses_too_many_addresses(void);
 int test_web_fetch_refuses_internal_at_later_hop(void);
+int test_web_fetch_later_hop_refusal_stays_content(void);
+int test_web_fetch_first_hop_refusal_stays_note(void);
 int test_web_fetch_follows_five_redirects(void);
 int test_web_fetch_sixth_redirect_fails(void);
 int test_web_fetch_redirect_statuses(void);
@@ -4756,6 +4759,7 @@ int main(void) {
     failed += test_ai_data_block_escapes_inside();
     failed += test_ai_data_lead_texts();
     failed += test_ai_data_lead_truncates_safely();
+    failed += test_ai_data_lead_null_out_with_cap();
     failed += test_ai_body_frame_no_terminal_in_system();
     failed += test_ai_body_frame_block_in_last_user_turn_only();
     failed += test_ai_body_frame_block_with_attachment();
@@ -6618,6 +6622,8 @@ int main(void) {
     failed += test_web_fetch_refuses_when_resolve_fails();
     failed += test_web_fetch_refuses_too_many_addresses();
     failed += test_web_fetch_refuses_internal_at_later_hop();
+    failed += test_web_fetch_later_hop_refusal_stays_content();
+    failed += test_web_fetch_first_hop_refusal_stays_note();
     failed += test_web_fetch_follows_five_redirects();
     failed += test_web_fetch_sixth_redirect_fails();
     failed += test_web_fetch_redirect_statuses();

@@ -51,6 +51,8 @@ static const Probe probes[] = {
     { "crontab -l", CMD_PLATFORM_LINUX, CMD_READ, 1 },
     { "crontab -l", CMD_PLATFORM_UNKNOWN, CMD_READ, 1 },
     { "crontab -l", CMD_PLATFORM_CISCO_IOS, CMD_UNKNOWN, 0 },
+    { "crontab --list", CMD_PLATFORM_LINUX, CMD_READ, 1 },
+    { "crontab --list", CMD_PLATFORM_UNKNOWN, CMD_READ, 1 },
 
     /* Appendix: plain reads that are not sensitive */
     { "docker logs x", CMD_PLATFORM_LINUX, CMD_READ, 0 },
