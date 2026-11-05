@@ -19,6 +19,7 @@
 #include "pw_reveal.h"
 #include "net_guard.h"
 #include "ns_tokens.h"
+#include "ns_draw.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -242,9 +243,13 @@ static HWND make_combo2(HWND parent, HMENU id, DWORD type_style)
 
 static HWND make_check2(HWND parent, const char *text, HMENU id)
 {
-    return CreateWindow("BUTTON", text,
+    HWND chk = CreateWindow("BUTTON", text,
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
         0, 0, 10, 10, parent, id, NULL, NULL);
+    /* Classic rendering, or comctl32 v6 ignores the WM_CTLCOLORSTATIC text
+     * colour and the label draws black on the dark themes. */
+    ns_control_classic(chk);
+    return chk;
 }
 
 static SettingsCtrl *add_ctrl(SettingsDlgData *d, HWND lbl, HWND ctrl, HWND extra,

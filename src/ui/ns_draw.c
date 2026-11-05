@@ -504,4 +504,36 @@ void ns_draw_pulse(HDC hdc, const RECT *rc, COLORREF colour, float phase)
     DeleteObject(pen);
 }
 
+/* SetWindowTheme, resolved once from uxtheme.dll at run time (no -luxtheme
+ * import; the DLL is loaded from the system directory only). GetProcAddress
+ * returns a FARPROC, and casting that straight to another function type
+ * trips -Wcast-function-type, so the address goes through a union (the same
+ * pattern as src/crypto/crypto_dpapi.c). */
+typedef HRESULT (WINAPI *PFN_SetWindowTheme)(HWND, LPCWSTR, LPCWSTR);
+
+typedef union {
+    FARPROC            raw;
+    PFN_SetWindowTheme fn;
+} NsThemeProcAddr;
+
+void ns_control_classic(HWND h)
+{
+    static PFN_SetWindowTheme set_theme = NULL;
+    static int resolved = 0;
+
+    if (!h) return;
+    if (!resolved) {
+        resolved = 1;
+        HMODULE mod = LoadLibraryExW(L"uxtheme.dll", NULL,
+                                     LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (mod) {
+            NsThemeProcAddr a;
+            a.raw = GetProcAddress(mod, "SetWindowTheme");
+            set_theme = a.fn;
+            if (!set_theme) FreeLibrary(mod);
+        }
+    }
+    if (set_theme) (void)set_theme(h, L"", L"");
+}
+
 #endif /* _WIN32 */
