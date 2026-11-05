@@ -197,3 +197,196 @@ size_t ssh_auth_fail_text(const char *user, const char *host, int is_key, unsign
     }
     return len;
 }
+
+/* ---- the password-like matcher (spec section 4) ------------------------- */
+
+static int ascii_lower(int c)
+{
+    return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c;
+}
+
+static int is_blank(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+static int is_alnum_byte(char c)
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+/* 1 when the lower-case ASCII `word` occurs at p inside [b, e) as a whole
+ * word: the text's edges or a non-alphanumeric byte on both sides. */
+static int word_at(const char *b, const char *e, const char *p, const char *word)
+{
+    size_t n = strlen(word);
+    if ((size_t)(e - p) < n) return 0;
+    for (size_t i = 0; i < n; i++)
+        if (ascii_lower((unsigned char)p[i]) != (unsigned char)word[i]) return 0;
+    if (p > b && is_alnum_byte(p[-1])) return 0;
+    if (p + n < e && is_alnum_byte(p[n])) return 0;
+    return 1;
+}
+
+int ssh_kbd_prompt_is_password(const char *text)
+{
+    if (!text) return 0;
+    const char *b = text;
+    const char *e = text + strlen(text);
+
+    while (b < e && is_blank(*b)) b++;
+    while (e > b && (is_blank(e[-1]) || e[-1] == ':')) e--;
+
+    /* A leading "<token>@<token>'s " (the token is a run of non-blanks). */
+    const char *t = b;
+    while (t < e && !is_blank(*t)) t++;
+    if (t < e && t - b >= 5 && t[-2] == '\'' && t[-1] == 's') {
+        const char *at = b;
+        while (at < t && *at != '@') at++;
+        if (at > b && at + 1 < t - 2) {          /* a host between '@' and "'s" */
+            b = t;
+            while (b < e && is_blank(*b)) b++;
+        }
+    }
+
+    /* A trailing " for <token>". */
+    const char *ts = e;
+    while (ts > b && !is_blank(ts[-1])) ts--;
+    if (ts > b) {
+        const char *fe = ts;
+        while (fe > b && is_blank(fe[-1])) fe--;
+        if (fe - b > 3 && is_blank(fe[-4]) && word_at(b, fe, fe - 3, "for")) {
+            e = fe - 3;
+            while (e > b && is_blank(e[-1])) e--;
+        }
+    }
+
+    /* What is left must end with the word "password". */
+    if (e - b < 8 || !word_at(b, e, e - 8, "password")) return 0;
+
+    static const char *const banned[] = {
+        "passcode", "one-time", "otp", "new", "retype",
+        "verification", "token", "pin", "code"
+    };
+    for (const char *p = b; p < e; p++)
+        for (size_t i = 0; i < sizeof banned / sizeof banned[0]; i++)
+            if (word_at(b, e, p, banned[i])) return 0;
+    return 1;
+}
+
+/* ---- the sanitiser (spec section 5) ------------------------------------- */
+
+/* Output state. Blanks and line breaks are held back (`sp`, `nl`) until a
+ * visible byte follows, which trims each line's trailing blanks and drops
+ * the empty edge lines without a second pass. `trunc` is set when a byte
+ * that belongs in the result did not fit under `lim`. */
+typedef struct {
+    char *out;
+    size_t lim, o, sp, nl;
+    int has, trunc, single;
+} SanOut;
+
+static void san_put(SanOut *s, char c)
+{
+    if (s->o < s->lim) s->out[s->o++] = c;
+    else s->trunc = 1;
+}
+
+/* Writes one visible UTF-8 sequence (or '?'), after any held-back layout. */
+static void san_content(SanOut *s, const unsigned char *p, size_t n)
+{
+    if (s->has) {
+        for (size_t i = 0; i < s->nl; i++) san_put(s, s->single ? ' ' : '\n');
+    }
+    for (size_t i = 0; i < s->sp; i++) san_put(s, ' ');
+    s->nl = s->sp = 0;
+    s->has = 1;
+    for (size_t i = 0; i < n; i++) san_put(s, (char)p[i]);
+}
+
+/* Length of the valid UTF-8 sequence at p (n bytes left), or 0. */
+static size_t utf8_len(const unsigned char *p, size_t n)
+{
+    unsigned char c = p[0];
+    if (c < 0x80) return 1;
+    size_t need;
+    unsigned char lo = 0x80, hi = 0xBF;
+    if (c >= 0xC2 && c <= 0xDF) need = 2;
+    else if (c >= 0xE0 && c <= 0xEF) {
+        need = 3;
+        if (c == 0xE0) lo = 0xA0;
+        if (c == 0xED) hi = 0x9F;
+    } else if (c >= 0xF0 && c <= 0xF4) {
+        need = 4;
+        if (c == 0xF0) lo = 0x90;
+        if (c == 0xF4) hi = 0x8F;
+    } else return 0;
+    if (n < need || p[1] < lo || p[1] > hi) return 0;
+    for (size_t i = 2; i < need; i++)
+        if (p[i] < 0x80 || p[i] > 0xBF) return 0;
+    return need;
+}
+
+size_t ssh_kbd_sanitize(const char *in, size_t len, char *out, size_t cap, int single_line)
+{
+    if (!out || cap == 0) return 0;
+    out[0] = '\0';
+    if (!in) len = 0;
+
+    const unsigned char *s = (const unsigned char *)in;
+    SanOut so = { out, cap - 1, 0, 0, 0, 0, 0, single_line != 0 };
+    size_t i = 0;
+
+    while (i < len && !so.trunc) {
+        unsigned char c = s[i];
+        if (c == 0x1B) {
+            if (i + 1 >= len) break;                    /* lone trailing ESC */
+            unsigned char k = s[i + 1];
+            if (k == '[') {                             /* CSI: params, then a final byte */
+                size_t j = i + 2;
+                while (j < len && s[j] >= 0x20 && s[j] <= 0x3F) j++;
+                if (j < len && s[j] >= 0x40 && s[j] <= 0x7E) j++;
+                i = j;
+            } else if (k == ']') {                      /* OSC: to BEL or ST */
+                size_t j = i + 2;
+                while (j < len && s[j] != 0x07 && s[j] != 0x1B) j++;
+                if (j < len && s[j] == 0x07) j++;
+                else if (j + 1 < len && s[j] == 0x1B && s[j + 1] == '\\') j += 2;
+                i = j;
+            } else if (k == 0x1B) {
+                i += 1;                                 /* the next ESC starts afresh */
+            } else {
+                i += 2;                                 /* two-byte ESC */
+            }
+        } else if (c == '\r' || c == '\n') {
+            i += (c == '\r' && i + 1 < len && s[i + 1] == '\n') ? 2 : 1;
+            so.nl++;
+            so.sp = 0;
+        } else if (c == ' ' || c == '\t') {
+            so.sp++;
+            i++;
+        } else if (c < 0x20 || c == 0x7F) {
+            i++;
+        } else {
+            size_t n = utf8_len(s + i, len - i);
+            if (n == 0) {
+                san_content(&so, (const unsigned char *)"?", 1);
+                i++;
+            } else {
+                san_content(&so, s + i, n);
+                i += n;
+            }
+        }
+    }
+
+    if (so.trunc) {
+        /* Replace the tail with "...", starting on a UTF-8 boundary. */
+        size_t cut = so.lim >= 3 ? so.lim - 3 : 0;
+        while (cut > 0 && ((unsigned char)out[cut] & 0xC0) == 0x80) cut--;
+        size_t dots = so.lim - cut < 3 ? so.lim - cut : 3;
+        for (size_t d = 0; d < dots; d++) out[cut + d] = '.';
+        so.o = cut + dots;
+    }
+    out[so.o] = '\0';
+    return so.o;
+}

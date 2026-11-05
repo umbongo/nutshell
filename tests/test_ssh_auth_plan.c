@@ -320,3 +320,203 @@ int test_ssh_auth_fail_text(void)
     ASSERT_EQ(ssh_auth_fail_text("a", "b", 0, 0, "", NULL, buf, 0), 0u);
     TEST_END();
 }
+
+/* ---- the password-like matcher ---------------------------------------- */
+
+#define PWQ(t) ssh_kbd_prompt_is_password(t)
+
+int test_ssh_kbd_matcher_positive(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(PWQ("Password:"), 1);
+    ASSERT_EQ(PWQ("password"), 1);
+    ASSERT_EQ(PWQ("  PASSWORD:  "), 1);
+    ASSERT_EQ(PWQ("user@host's password:"), 1);
+    ASSERT_EQ(PWQ("alice@NEWCASTLE.AC.UK's Password:"), 1);
+    ASSERT_EQ(PWQ("new@h's password:"), 1);     /* a one-letter host still strips */
+    ASSERT_EQ(PWQ("SPINNAKER password:"), 1);
+    ASSERT_EQ(PWQ("Password for alice:"), 1);
+    ASSERT_EQ(PWQ("LDAP Password:"), 1);
+    ASSERT_EQ(PWQ("Password for pin:"), 1);
+    /* Several colons and spaces after the word are all dropped. */
+    ASSERT_EQ(PWQ("Password: :  "), 1);
+    /* The whole prompt joined to one line: earlier text, then the label. */
+    ASSERT_EQ(PWQ("Duo login for alice Password:"), 1);
+    ASSERT_EQ(PWQ("Welcome to host Password:"), 1);
+    TEST_END();
+}
+
+int test_ssh_kbd_matcher_negative(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(PWQ("PASSCODE:"), 0);
+    ASSERT_EQ(PWQ("One-time password:"), 0);
+    ASSERT_EQ(PWQ("New password:"), 0);
+    ASSERT_EQ(PWQ("Retype new password:"), 0);
+    ASSERT_EQ(PWQ("Verification code:"), 0);
+    ASSERT_EQ(PWQ("OTP password:"), 0);
+    ASSERT_EQ(PWQ("Token password:"), 0);
+    ASSERT_EQ(PWQ("PIN password:"), 0);
+    ASSERT_EQ(PWQ("Password expired, enter code:"), 0);
+    ASSERT_EQ(PWQ("Username:"), 0);
+    ASSERT_EQ(PWQ(""), 0);
+    ASSERT_EQ(PWQ(NULL), 0);
+    ASSERT_EQ(PWQ("passwords:"), 0);
+    ASSERT_EQ(PWQ("xpassword:"), 0);
+    /* Only separators, or a prefix and nothing else. */
+    ASSERT_EQ(PWQ(":"), 0);
+    ASSERT_EQ(PWQ("   "), 0);
+    ASSERT_EQ(PWQ("alice@host's :"), 0);
+    ASSERT_EQ(PWQ("for alice:"), 0);
+    /* The whole prompt joined to one line: a "new" earlier in it still counts. */
+    ASSERT_EQ(PWQ("Enter new account password:"), 0);
+    ASSERT_EQ(PWQ("Your password has expired. New password:"), 0);
+    TEST_END();
+}
+
+int test_ssh_kbd_matcher_lookalikes(void)
+{
+    TEST_BEGIN();
+    ASSERT_EQ(PWQ("Password (new):"), 0);
+    ASSERT_EQ(PWQ("Passcode or password:"), 0);
+    ASSERT_EQ(PWQ("Enter PIN password:"), 0);
+    ASSERT_EQ(PWQ("Passcode or option (1-3):"), 0);
+    ASSERT_EQ(PWQ("Password for new account:"), 0);
+    /* "-" is a word boundary, so a hyphenated forbidden word still counts. */
+    ASSERT_EQ(PWQ("pin-code password:"), 0);
+    ASSERT_EQ(PWQ("One-time-password:"), 0);
+    /* A forbidden word inside a longer word does not. */
+    ASSERT_EQ(PWQ("Newton password:"), 1);
+    ASSERT_EQ(PWQ("Opinion password:"), 1);
+    TEST_END();
+}
+
+/* ---- the sanitiser ------------------------------------------------------ */
+
+/* Sanitises a NUL-terminated literal with a roomy buffer; the result lives
+ * in a static buffer until the next call. */
+static const char *san_n(const char *in, size_t len, int single)
+{
+    static char out[4096];
+    size_t n = ssh_kbd_sanitize(in, len, out, sizeof out, single);
+    if (n != strlen(out)) return "<length mismatch>";
+    return out;
+}
+static const char *san(const char *in) { return san_n(in, strlen(in), 0); }
+
+int test_ssh_kbd_sanitize_escapes(void)
+{
+    TEST_BEGIN();
+    ASSERT_STR_EQ(san("a\x1b[31mb\x1b[0m"), "ab");
+    ASSERT_STR_EQ(san("a\x1b]0;title\x07" "b"), "ab");
+    ASSERT_STR_EQ(san("a\x1b]0;t\x1b\\" "b"), "ab");
+    ASSERT_STR_EQ(san("a\x1b" "Zb"), "ab");
+    ASSERT_STR_EQ(san("ab\x1b"), "ab");           /* lone trailing ESC */
+    ASSERT_STR_EQ(san("\x01" "a\x7f"), "a");
+    /* A CSI with parameters and intermediates, an unterminated one, and an
+     * unterminated OSC swallow only their own bytes / the rest. */
+    ASSERT_STR_EQ(san("a\x1b[1;2;3Hb"), "ab");
+    ASSERT_STR_EQ(san("a\x1b[1;2"), "a");
+    ASSERT_STR_EQ(san("a\x1b]0;never ends"), "a");
+    /* ESC ESC [ m: the first ESC is lone, the second starts the CSI. */
+    ASSERT_STR_EQ(san("a\x1b\x1b[0mb"), "ab");
+    /* An embedded NUL is a control byte; the input is read for `len` bytes. */
+    ASSERT_STR_EQ(san_n("a\0b", 3, 0), "ab");
+    /* A string that is only escapes is empty. */
+    ASSERT_STR_EQ(san("\x1b[2J\x1b[H"), "");
+    TEST_END();
+}
+
+int test_ssh_kbd_sanitize_lines(void)
+{
+    TEST_BEGIN();
+    ASSERT_STR_EQ(san("a\r\nb\rc\n"), "a\nb\nc");
+    ASSERT_STR_EQ(san("\n\n a  \n"), " a");
+    ASSERT_STR_EQ(san("a\tb"), "a b");
+    ASSERT_STR_EQ(san_n("a\nb", 3, 1), "a b");
+    /* Inner empty lines stay; trailing blanks go on every line. */
+    ASSERT_STR_EQ(san("a  \n\nb \t\n"), "a\n\nb");
+    ASSERT_STR_EQ(san("a  b"), "a  b");
+    ASSERT_STR_EQ(san("\r\n\r\n"), "");
+    ASSERT_STR_EQ(san("   \n  "), "");
+    /* Single line: an inner blank line becomes two spaces, the edges none. */
+    ASSERT_STR_EQ(san_n("\na\n\nb\n", 6, 1), "a  b");
+    /* NULL with len 0, and an empty string, give "". */
+    ASSERT_STR_EQ(san_n(NULL, 0, 0), "");
+    ASSERT_STR_EQ(san(""), "");
+    /* `in` is not NUL-terminated: only `len` bytes are read. */
+    ASSERT_STR_EQ(san_n("abcdef", 3, 0), "abc");
+    /* cap 0 writes nothing and returns 0; cap 1 gives "". */
+    char b[4] = {'x', 'x', 'x', 'x'};
+    ASSERT_EQ(ssh_kbd_sanitize("abc", 3, b, 0, 0), 0u);
+    ASSERT_EQ(b[0], 'x');
+    ASSERT_EQ(ssh_kbd_sanitize("abc", 3, b, 1, 0), 0u);
+    ASSERT_EQ(b[0], '\0');
+    TEST_END();
+}
+
+int test_ssh_kbd_sanitize_utf8_and_cap(void)
+{
+    TEST_BEGIN();
+    ASSERT_STR_EQ(san("\xC3\xA9"), "\xC3\xA9");
+    ASSERT_STR_EQ(san("\xC3("), "?(");
+    ASSERT_STR_EQ(san("\xFF"), "?");
+    ASSERT_STR_EQ(san("\xE2\x82\xAC"), "\xE2\x82\xAC");            /* euro sign */
+    ASSERT_STR_EQ(san("\xF0\x9F\x98\x80"), "\xF0\x9F\x98\x80");     /* 4 bytes */
+    ASSERT_STR_EQ(san("\xC0\x80"), "??");                           /* overlong */
+    ASSERT_STR_EQ(san("\xED\xA0\x80"), "???");                      /* surrogate */
+    ASSERT_STR_EQ(san("a\xE2\x82"), "a??");                         /* cut short */
+    ASSERT_STR_EQ(san("\x80"), "?");                                /* stray tail */
+
+    char out[2048];
+    char big[5000];
+    memset(big, 'a', sizeof big);
+    size_t n = ssh_kbd_sanitize(big, sizeof big, out, sizeof out, 0);
+    ASSERT_EQ(n, 2047u);
+    ASSERT_EQ(strlen(out), 2047u);
+    ASSERT_STR_EQ(out + 2044, "...");
+    ASSERT_EQ(out[2043], 'a');
+
+    /* Exactly cap - 1 bytes of content is not truncated. */
+    n = ssh_kbd_sanitize(big, 2047, out, sizeof out, 0);
+    ASSERT_EQ(n, 2047u);
+    ASSERT_EQ(out[2046], 'a');
+    ASSERT_EQ(out[2044], 'a');
+    /* One byte more is. */
+    n = ssh_kbd_sanitize(big, 2048, out, sizeof out, 0);
+    ASSERT_EQ(n, 2047u);
+    ASSERT_STR_EQ(out + 2044, "...");
+    /* Trailing blanks past the cap are trimmed, not truncation. */
+    char padded[3000];
+    memset(padded, 'a', 2047);
+    memset(padded + 2047, ' ', 500);
+    n = ssh_kbd_sanitize(padded, 2547, out, sizeof out, 0);
+    ASSERT_EQ(n, 2047u);
+    ASSERT_EQ(out[2044], 'a');
+
+    /* A cut that would land inside the euro sign leaves no partial sequence. */
+    char eur[64];
+    char in[64];
+    memcpy(in, "aaaaaaaaaa" "\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC", 22);
+    n = ssh_kbd_sanitize(in, 22, eur, 15, 0);      /* cut at byte 11: 2nd byte */
+    ASSERT_STR_EQ(eur, "aaaaaaaaaa...");
+    ASSERT_EQ(n, 13u);
+    n = ssh_kbd_sanitize(in, 22, eur, 16, 0);      /* cut at byte 12: 3rd byte */
+    ASSERT_STR_EQ(eur, "aaaaaaaaaa...");
+    ASSERT_EQ(n, 13u);
+    n = ssh_kbd_sanitize(in, 22, eur, 17, 0);      /* cut at byte 13: a boundary */
+    ASSERT_STR_EQ(eur, "aaaaaaaaaa\xE2\x82\xAC...");
+    ASSERT_EQ(n, 16u);
+
+    /* A tiny cap still terminates; the marker shrinks to fit. */
+    n = ssh_kbd_sanitize("abcdef", 6, eur, 3, 0);
+    ASSERT_STR_EQ(eur, "..");
+    ASSERT_EQ(n, 2u);
+    n = ssh_kbd_sanitize("abcdef", 6, eur, 4, 0);
+    ASSERT_STR_EQ(eur, "...");
+    ASSERT_EQ(n, 3u);
+    n = ssh_kbd_sanitize("abcdef", 6, eur, 5, 0);
+    ASSERT_STR_EQ(eur, "a...");
+    ASSERT_EQ(n, 4u);
+    TEST_END();
+}

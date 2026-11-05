@@ -90,4 +90,24 @@ void ssh_auth_plan_requeried(SshAuthPlan *p, unsigned offered);
 size_t ssh_auth_fail_text(const char *user, const char *host, int is_key, unsigned offered,
                           const char *display, const char *extra, char *buf, size_t cap);
 
+/* 1 when a keyboard-interactive prompt is a plain "password" prompt that
+ * the saved password may answer silently. `text` is the whole sanitised
+ * prompt on one line. ASCII case-folded, trimmed, trailing ':' and spaces
+ * dropped; a leading "<user>@<host>'s " and a trailing " for <word>" are
+ * stripped; what is left must end with the word "password" and must not
+ * contain, as a whole word, passcode, one-time, otp, new, retype,
+ * verification, token, pin or code. NULL gives 0. See spec section 4. */
+int ssh_kbd_prompt_is_password(const char *text);
+
+/* Makes server-supplied text safe to show: strips ESC sequences (CSI, OSC
+ * to BEL or ST, two-byte ESC), other C0 controls and DEL; CRLF and a lone
+ * CR become LF; TAB becomes a space; each line's trailing blanks and the
+ * empty edge lines go; invalid UTF-8 becomes '?'. The result is cut to fit
+ * `cap` bytes including the terminator, on a UTF-8 boundary, ending with
+ * ASCII "..." when anything was lost. With `single_line`, every LF becomes
+ * a space. `in` need not be NUL-terminated (exactly `len` bytes are read;
+ * NULL with len 0 is ""). Returns strlen(out); `out` is always terminated
+ * when cap > 0, and untouched when cap is 0. See spec section 5. */
+size_t ssh_kbd_sanitize(const char *in, size_t len, char *out, size_t cap, int single_line);
+
 #endif /* NUTSHELL_SSH_AUTH_PLAN_H */

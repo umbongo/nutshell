@@ -2488,6 +2488,12 @@ int test_ssh_auth_transport_dead(void);
 int test_ssh_auth_may_continue(void);
 int test_ssh_auth_requery_rule(void);
 int test_ssh_auth_fail_text(void);
+int test_ssh_kbd_matcher_positive(void);
+int test_ssh_kbd_matcher_negative(void);
+int test_ssh_kbd_matcher_lookalikes(void);
+int test_ssh_kbd_sanitize_escapes(void);
+int test_ssh_kbd_sanitize_lines(void);
+int test_ssh_kbd_sanitize_utf8_and_cap(void);
 
 int test_ai_stream_finish_before_close(void);
 int test_ai_stream_close_before_finish(void);
@@ -7129,6 +7135,12 @@ int main(void) {
     failed += test_ssh_auth_may_continue();
     failed += test_ssh_auth_requery_rule();
     failed += test_ssh_auth_fail_text();
+    failed += test_ssh_kbd_matcher_positive();
+    failed += test_ssh_kbd_matcher_negative();
+    failed += test_ssh_kbd_matcher_lookalikes();
+    failed += test_ssh_kbd_sanitize_escapes();
+    failed += test_ssh_kbd_sanitize_lines();
+    failed += test_ssh_kbd_sanitize_utf8_and_cap();
     failed += test_pw_reveal_press_reveals_only_with_text();
     failed += test_pw_reveal_release_masks();
     failed += test_pw_reveal_capture_lost_and_deactivate_mask();
