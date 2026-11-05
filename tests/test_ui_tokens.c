@@ -1,6 +1,7 @@
 #include "test_framework.h"
 #include "ui_theme.h"
 #include "theme.h"
+#include "test_blend.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -192,25 +193,22 @@ int test_ui_tokens_link_darker_than_accent_on_light_themes(void)
 
 /* ---- Colour-by-role render-time contrast (AI reply markdown colour) ------ */
 
-/* md_render.c paints two intent hues directly as flat text on bg_primary:
- * base->link (the "structure" hue -- headings, list/blockquote markers,
- * table header text) and base->info (the "code" hue -- inline code text,
- * fenced-code left bar). That's flat text on bg_primary, not a derived
- * ThemeSurface, so the bar is theme_contrast(link/info, bg_primary) >= 4.5,
- * same as text_main/text_dim above -- not ThemeSurface.label, which only
- * applies to a surface's own base fill.
+/* md_render.c paints two intent hues as flat text: base->link (the
+ * "structure" hue -- headings, list/blockquote markers, table header text)
+ * and base->info (the "code" hue -- inline code text, fenced-code left bar).
+ * It paints them through ui_theme_md_role(), which starts at the hue and walks
+ * it (2 L* at a time, away from the background) until it reads at least
+ * UI_TEXT_MIN_RATIO (4.7) on every surface of its role: structure on
+ * bg_primary, the table header fill and the selection tint over bg_primary;
+ * code on bg_primary (the [EXEC] command text), chat.cmd_bg (inline code) and
+ * the selection tint over both.
+ * Falling back to text_main is only for a hue no shade of which can do it.
  *
- * Two of today's four themes fall short of 4.5:1 on the raw token:
- *   Onyx Synapse: link 4.158, info 4.148
- *   Sage & Sand:  link 3.099, info 3.095
- * (Onyx Light: link 7.833, info 5.527; Moss & Mist: link 5.132, info
- * 4.928 -- both comfortably clear it.) Per the design-system rules this
- * test does not retune those colours -- md_render.c instead resolves each
- * role through theme_role_color(), which falls back to text_main when the
- * hue itself would fail. This test holds that resolved, actually-painted
- * colour to >= 4.5:1 in every theme, and pins down (via the exact expected
- * colour) which themes currently show the hue vs. fall back, so a future
- * palette change shows up here as a deliberate diff. */
+ * The raw tokens alone fall short on bg_primary in two of the four themes
+ * (Onyx Synapse: link 4.158, info 4.148; Sage & Sand: link 3.099, info
+ * 3.095), and more on the other surfaces.  This test holds the resolved,
+ * actually-painted colour to >= 4.5:1 on bg_primary, never the plain text
+ * colour (the hue is kept), and >= 4.7:1 on every surface of its role. */
 int test_ui_tokens_md_role_color_contrast(void)
 {
     TEST_BEGIN();
@@ -222,21 +220,32 @@ int test_ui_tokens_md_role_color_contrast(void)
         printf("  [md role colour] %-14s link=%.3f info=%.3f\n",
                base->name, link_c, info_c);
 
-        unsigned int resolved_link =
-            theme_role_color(base->link, base->bg_primary, base->text_main);
-        unsigned int resolved_info =
-            theme_role_color(base->info, base->bg_primary, base->text_main);
+        unsigned int resolved_link = ui_theme_md_role(base, UI_MD_STRUCTURE);
+        unsigned int resolved_info = ui_theme_md_role(base, UI_MD_CODE);
 
-        /* Whatever theme_role_color hands the renderer must always clear
-         * 4.5:1, and it must stay the theme's own hue: a legible shade of
-         * link/info, never the plain text colour ("keep to the selected
-         * theme"). A hue that already clears AA comes back untouched. */
+        /* What the renderer paints must clear 4.5:1 on bg_primary and stay
+         * the theme's own hue: a legible shade of link/info, never the plain
+         * text colour ("keep to the selected theme"). */
         ASSERT_TRUE(theme_contrast(resolved_link, base->bg_primary) >= MIN_CONTRAST);
         ASSERT_TRUE(theme_contrast(resolved_info, base->bg_primary) >= MIN_CONTRAST);
         ASSERT_TRUE(resolved_link != base->text_main);
         ASSERT_TRUE(resolved_info != base->text_main);
-        if (link_c >= MIN_CONTRAST) ASSERT_EQ((int)resolved_link, (int)base->link);
-        if (info_c >= MIN_CONTRAST) ASSERT_EQ((int)resolved_info, (int)base->info);
+
+        /* The hue is held on every surface it is painted on, not only on
+         * bg_primary: >= UI_TEXT_MIN_RATIO on each surface of its role. */
+        ThemeTokens tok;
+        ui_theme_resolve(base, &tok);
+        unsigned int sel = ui_theme_sel_hue(&tok, 0);
+        unsigned int dim_fill = test_blend(base->text_dim, base->bg_primary, UI_DIM_TINT_ALPHA);
+        unsigned int sel_bgp = test_blend(sel, base->bg_primary, UI_SEL_ALPHA);
+        unsigned int sel_cmd = test_blend(sel, base->chat.cmd_bg, UI_SEL_ALPHA);
+        ASSERT_TRUE(theme_contrast(resolved_link, dim_fill) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_link, sel_bgp) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_info, base->chat.cmd_bg) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_info, sel_cmd) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_info, sel_bgp) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_link, base->bg_primary) >= UI_TEXT_MIN_RATIO);
+        ASSERT_TRUE(theme_contrast(resolved_info, base->bg_primary) >= UI_TEXT_MIN_RATIO);
 
         /* Hue preserved: the dominant channel of the shade is the dominant
          * channel of the original (a blue link stays blue, not grey). */
@@ -256,6 +265,47 @@ int test_ui_tokens_md_role_color_contrast(void)
     TEST_END();
 }
 
+/* The three chat health colours (activity dot and word, one token per state)
+ * must be told apart by lightness as well as hue, so the traffic-light
+ * reading survives colour-vision deficiency: on every light theme they sit
+ * at least 8 L* from each other and each still reads 4.5:1 on bg_primary.
+ * Dark themes are not held to the spacing: their yellow, green and red
+ * already differ widely in lightness (the lightness walk only ever squeezed
+ * the light themes, which had to be darkened to reach 4.5:1). */
+#define INDICATOR_MIN_LSTAR_GAP 8.0
+
+int test_ui_tokens_light_indicators_distinct_lightness(void)
+{
+    TEST_BEGIN();
+    int light_seen = 0;
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        const ThemeColors *base = ui_theme_get(i);
+        ThemeTokens tok;
+        ui_theme_resolve(base, &tok);
+        if (tok.is_dark) continue;
+        light_seen++;
+        unsigned int c[3] = { base->chat.indicator_green,
+                              base->chat.indicator_yellow,
+                              base->chat.indicator_red };
+        static const char *const nm[3] = { "green", "yellow", "red" };
+        for (int a = 0; a < 3; a++) {
+            double cr = theme_contrast(c[a], base->bg_primary);
+            printf("  [indicators] %-12s %-6s L*=%.1f on bg_primary %.2f\n",
+                   base->name, nm[a], theme_lstar(c[a]), cr);
+            ASSERT_TRUE(cr >= MIN_CONTRAST);
+            for (int b = a + 1; b < 3; b++) {
+                double gap = fabs(theme_lstar(c[a]) - theme_lstar(c[b]));
+                if (gap < INDICATOR_MIN_LSTAR_GAP)
+                    printf("  %s: %s and %s are only %.1f L* apart\n",
+                           base->name, nm[a], nm[b], gap);
+                ASSERT_TRUE(gap >= INDICATOR_MIN_LSTAR_GAP);
+            }
+        }
+    }
+    ASSERT_EQ(light_seen, 2);
+    TEST_END();
+}
+
 /* ---- Derivation ------------------------------------------------------------ */
 
 static int surface_derivation_ok(ThemeSurface s, unsigned int bg_primary, int step_dir)
@@ -270,9 +320,10 @@ static int surface_derivation_ok(ThemeSurface s, unsigned int bg_primary, int st
     double dl_hover = lstar_hover - lstar_base;
     double dl_pressed = lstar_pressed - lstar_base;
 
-    /* Direction: hover/pressed move the same way as the theme's polarity
-     * (lighten on dark, darken on light) -- i.e. step_dir times the delta
-     * must be >= 0. */
+    /* Direction: hover/pressed move the way `step_dir` says -- the theme's
+     * polarity (lighten on dark, darken on light) for a neutral surface, or
+     * "away from the label" for a filled one (see filled_step_dir) -- i.e.
+     * step_dir times the delta must be >= 0. */
     if (dl_hover * step_dir < -1e-9) return 0;
     if (dl_pressed * step_dir < -1e-9) return 0;
 
@@ -296,6 +347,14 @@ static int surface_derivation_ok(ThemeSurface s, unsigned int bg_primary, int st
     return 1;
 }
 
+/* The expected step direction of a filled surface (accent and the four
+ * filled intents): away from its label, so the label does not lose contrast on
+ * hover or pressed. +1 lightens (label is darker than the base), -1 darkens. */
+static int filled_step_dir(ThemeSurface s)
+{
+    return theme_lstar(s.label) < theme_lstar(s.base) ? 1 : -1;
+}
+
 int test_ui_tokens_derivation_all_surfaces(void)
 {
     TEST_BEGIN();
@@ -308,12 +367,36 @@ int test_ui_tokens_derivation_all_surfaces(void)
         ASSERT_TRUE(surface_derivation_ok(tok.bg_primary, tok.bg_primary.base, step_dir));
         ASSERT_TRUE(surface_derivation_ok(tok.bg_secondary, tok.bg_primary.base, step_dir));
         ASSERT_TRUE(surface_derivation_ok(tok.raised, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.accent, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.success, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.warning, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.danger, tok.bg_primary.base, step_dir));
-        ASSERT_TRUE(surface_derivation_ok(tok.info, tok.bg_primary.base, step_dir));
+        ASSERT_TRUE(surface_derivation_ok(tok.accent, tok.bg_primary.base, filled_step_dir(tok.accent)));
+        ASSERT_TRUE(surface_derivation_ok(tok.success, tok.bg_primary.base, filled_step_dir(tok.success)));
+        ASSERT_TRUE(surface_derivation_ok(tok.warning, tok.bg_primary.base, filled_step_dir(tok.warning)));
+        ASSERT_TRUE(surface_derivation_ok(tok.danger, tok.bg_primary.base, filled_step_dir(tok.danger)));
+        ASSERT_TRUE(surface_derivation_ok(tok.info, tok.bg_primary.base, filled_step_dir(tok.info)));
         ASSERT_TRUE(surface_derivation_ok(tok.link, tok.bg_primary.base, step_dir));
+    }
+    TEST_END();
+}
+
+/* A filled surface's label must keep (or gain) contrast on hover and
+ * pressed, and clear 4.5:1 there, on every theme. */
+int test_ui_tokens_filled_label_contrast_on_states(void)
+{
+    TEST_BEGIN();
+    for (int i = 0; i < NUM_UI_THEMES; i++) {
+        ThemeTokens tok;
+        ui_theme_resolve(ui_theme_get(i), &tok);
+        const ThemeSurface *filled[5] = { &tok.accent, &tok.success, &tok.warning,
+                                          &tok.danger, &tok.info };
+        for (int k = 0; k < 5; k++) {
+            const ThemeSurface *s = filled[k];
+            double c_base    = theme_contrast(s->label, s->base);
+            double c_hover   = theme_contrast(s->label, s->hover);
+            double c_pressed = theme_contrast(s->label, s->pressed);
+            ASSERT_TRUE(c_hover >= c_base);
+            ASSERT_TRUE(c_pressed >= c_base);
+            ASSERT_TRUE(c_hover >= 4.5);
+            ASSERT_TRUE(c_pressed >= 4.5);
+        }
     }
     TEST_END();
 }

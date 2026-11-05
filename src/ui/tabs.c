@@ -606,9 +606,13 @@ static LRESULT CALLBACK TabsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
                     DeleteObject(lBrush);
                     DeleteObject(lPen);
 
-                    /* "L" label — use cached small font */
+                    /* "L" label — use cached small font. Logging on paints the
+                     * success surface, so its label is success.label; off it
+                     * sits on border and stays text_main. */
                     HFONT hPrevFont = (HFONT)SelectObject(hdc, data->hSmallFont);
-                    SetTextColor(hdc, cText);
+                    SetTextColor(hdc, data->m.tabs[i].logging
+                                      ? tc(ns_tokens()->success.label)
+                                      : cText);
                     RECT rcL = {logX, logY, logX + indW, logY + indicH};
                     DrawText(hdc, "L", 1, &rcL, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                     SelectObject(hdc, hPrevFont);

@@ -2181,6 +2181,12 @@ int test_ui_theme_switch_colors_consistent(void);
 int test_ui_theme_switch_preserves_name(void);
 int test_ui_theme_dark_themes_have_light_text(void);
 int test_ui_theme_terminal_min_contrast_by_name(void);
+int test_ui_theme_md_role_unchanged_when_it_clears(void);
+int test_ui_theme_md_role_walks_away_from_the_background(void);
+int test_ui_theme_md_role_falls_back_to_text_main(void);
+int test_ui_theme_md_role_walks_first_clearing_step(void);
+int test_ui_theme_md_tokens_match_md_role(void);
+int test_ui_theme_md_code_shipped_values(void);
 
 /* test_display_buffer.c */
 int test_dispbuf_init_zeroed(void);
@@ -3267,6 +3273,11 @@ int test_ns_type_font_face_id_mono_is_two(void);
 int test_ns_type_pill(void);
 int test_ns_type_line_px_matches_the_ramp(void);
 
+/* test_theme_contrast.c */
+int test_theme_contrast_every_pair_meets_its_floor(void);
+int test_theme_contrast_exemptions_are_exact(void);
+int test_theme_contrast_table_is_well_formed(void);
+
 /* test_ui_tokens.c */
 int test_ui_tokens_text_contrast_on_backgrounds(void);
 int test_ui_tokens_intent_label_contrast(void);
@@ -3276,7 +3287,9 @@ int test_ui_tokens_onyx_light_accent_contrast(void);
 int test_ui_tokens_onyx_synapse_accent_calm(void);
 int test_ui_tokens_link_darker_than_accent_on_light_themes(void);
 int test_ui_tokens_md_role_color_contrast(void);
+int test_ui_tokens_light_indicators_distinct_lightness(void);
 int test_ui_tokens_derivation_all_surfaces(void);
+int test_ui_tokens_filled_label_contrast_on_states(void);
 int test_ui_tokens_raised_derived_from_bg_secondary(void);
 int test_ui_tokens_focus_is_accent_by_default(void);
 int test_ui_tokens_text_disabled_blend(void);
@@ -3760,7 +3773,8 @@ int test_paint_synthetic_runs_cover_their_marker(void);
 
 /* test_sel_contrast.c */
 int test_sel_highlight_visible_on_every_surface(void);
-int test_sel_hue_is_focus_except_on_the_bubble(void);
+int test_sel_hue_is_shifted_focus_except_on_the_bubble(void);
+int test_sel_hue_on_the_bubble_picks_black_or_white(void);
 
 /* test_ai_exec_quoted.c */
 int test_exec_quoted_fence_skipped_by_notes(void);
@@ -5793,6 +5807,12 @@ int main(void) {
     failed += test_ui_theme_switch_preserves_name();
     failed += test_ui_theme_dark_themes_have_light_text();
     failed += test_ui_theme_terminal_min_contrast_by_name();
+    failed += test_ui_theme_md_role_unchanged_when_it_clears();
+    failed += test_ui_theme_md_role_walks_away_from_the_background();
+    failed += test_ui_theme_md_role_walks_first_clearing_step();
+    failed += test_ui_theme_md_role_falls_back_to_text_main();
+    failed += test_ui_theme_md_tokens_match_md_role();
+    failed += test_ui_theme_md_code_shipped_values();
 
     printf("\n--- Display Buffer ---\n");
     failed += test_dispbuf_init_zeroed();
@@ -7058,6 +7078,11 @@ int main(void) {
     failed += test_ns_type_pill();
     failed += test_ns_type_line_px_matches_the_ramp();
 
+    printf("\n--- Design System: theme text contrast ---\n");
+    failed += test_theme_contrast_table_is_well_formed();
+    failed += test_theme_contrast_every_pair_meets_its_floor();
+    failed += test_theme_contrast_exemptions_are_exact();
+
     printf("\n--- Design System: tokens ---\n");
     failed += test_ui_tokens_text_contrast_on_backgrounds();
     failed += test_ui_tokens_intent_label_contrast();
@@ -7067,7 +7092,9 @@ int main(void) {
     failed += test_ui_tokens_onyx_synapse_accent_calm();
     failed += test_ui_tokens_link_darker_than_accent_on_light_themes();
     failed += test_ui_tokens_md_role_color_contrast();
+    failed += test_ui_tokens_light_indicators_distinct_lightness();
     failed += test_ui_tokens_derivation_all_surfaces();
+    failed += test_ui_tokens_filled_label_contrast_on_states();
     failed += test_ui_tokens_raised_derived_from_bg_secondary();
     failed += test_ui_tokens_focus_is_accent_by_default();
     failed += test_ui_tokens_text_disabled_blend();
@@ -7599,7 +7626,8 @@ int main(void) {
     failed += test_paint_synthetic_runs_cover_their_marker();
 
     failed += test_sel_highlight_visible_on_every_surface();
-    failed += test_sel_hue_is_focus_except_on_the_bubble();
+    failed += test_sel_hue_is_shifted_focus_except_on_the_bubble();
+    failed += test_sel_hue_on_the_bubble_picks_black_or_white();
 
     failed += test_exec_quoted_fence_skipped_by_notes();
     failed += test_exec_quoted_full_reports_both_in_order();

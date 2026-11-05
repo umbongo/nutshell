@@ -1474,7 +1474,8 @@ static int paint_user_item(ChatListView *lv, HDC hdc, ChatMsgItem *item,
     clv_run_ctx(lv, &urc, item, TR_PART_MAIN, (int)item->text_len,
                 pinned ? &item->pinned_runs : &item->runs, 0, bubble_clr);
     /* The bubble is filled with the accent the focus hue is drawn from, so
-     * the highlight takes the bubble's own text colour (ui_theme_sel_hue). */
+     * the highlight is black or white, whichever pushes away from the
+     * bubble's own text colour (ui_theme_sel_hue). */
     urc.focus = RGB_FROM_THEME(ui_theme_sel_hue(ns_tokens(), 1));
     HFONT f = clv_font(lv);
     int text_h = md_render_ex(hdc, item->text ? item->text : "",
@@ -1589,16 +1590,18 @@ static int draw_ai_segment(ChatListView *lv, HDC hdc, const char *text,
 
 /* Draw an AI reply's text: the chat_exec_split() segments one under the
  * other -- prose through draw_ai_segment(), each command in the mono font
- * and the info hue through the plain layouter. Every segment records its
- * runs into item->runs at its own source offset. Returns the height
- * painted. */
+ * and the md code colour (ns_tokens()->md_code) through the plain layouter.
+ * Every segment records its runs into item->runs at its own source offset.
+ * Returns the height painted. */
 static int draw_ai_text_with_exec(ChatListView *lv, HDC hdc,
                                   ChatMsgItem *item, const RECT *rc)
 {
     const char *text = item->text ? item->text : "";
     int len = (int)item->text_len;
     int blk = 0;   /* code-block number within this item, across segments */
-    COLORREF exec_clr = RGB_FROM_THEME(ns_tokens()->info.base);
+    /* The command text is selectable, so it takes the md code colour, walked
+     * until it reads on bg_primary and under the selection tint over it. */
+    COLORREF exec_clr = RGB_FROM_THEME(ns_tokens()->md_code);
     COLORREF surface = RGB_FROM_THEME(lv->theme->bg_primary);
     HFONT mono = clv_mono(lv);
     int width = rc->right - rc->left;
@@ -1942,7 +1945,7 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         COLORREF dim = RGB_FROM_THEME(tok->text_dim);
         if (q_right > q_left)
             ns_draw_chip(hdc, &q_rc,
-                         rgb_alpha(dim, RGB_FROM_THEME(tc->cmd_bg), 0.18f),
+                         rgb_alpha(dim, RGB_FROM_THEME(tc->cmd_bg), UI_DIM_TINT_ALPHA),
                          dim, lv->hSmallFont, qlabel);
         text_right = q_left - gap;
         text_shortened = 1;
@@ -2122,7 +2125,7 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         break;
     case CHAT_CMD_INTENT_DIM:
     default:
-        chip_bg = rgb_alpha(dim, panel_bg, 0.18f);
+        chip_bg = rgb_alpha(dim, panel_bg, UI_DIM_TINT_ALPHA);
         chip_fg = dim;
         text_clr = dim;
         break;
@@ -2766,7 +2769,10 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
     int indent = ns_scale(BASE_AI_INDENT, CLV_DPI(lv));
 
     COLORREF bg_clr = RGB_FROM_THEME(lv->theme->bg_primary);
-    COLORREF dot_clr = activity_health_color(lv, lv->activity->health);
+    /* Only the dot pulses; the status text keeps the steady health colour,
+     * the same one the AI header's activity word uses. */
+    const COLORREF text_clr = activity_health_color(lv, lv->activity->health);
+    COLORREF dot_clr = text_clr;
     if (lv->pulse_toggle && !ns_reduced_motion())
         dot_clr = blend_with_bg(dot_clr, bg_clr);
 
@@ -2788,11 +2794,6 @@ static int paint_activity_indicator(ChatListView *lv, HDC hdc,
     float now = (float)GetTickCount() / 1000.0f;
     chat_activity_format(lv->activity, now, status_buf, sizeof(status_buf));
 
-    /* Use a muted version of the dot colour for text readability */
-    COLORREF text_clr = RGB(
-        (GetRValue(dot_clr) * 3 + GetRValue(bg_clr)) / 4,
-        (GetGValue(dot_clr) * 3 + GetGValue(bg_clr)) / 4,
-        (GetBValue(dot_clr) * 3 + GetBValue(bg_clr)) / 4);
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, text_clr);
     HGDIOBJ old_font = SelectObject(hdc, lv->hSmallFont
