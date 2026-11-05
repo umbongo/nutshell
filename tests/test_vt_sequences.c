@@ -300,7 +300,7 @@ int test_vt_alt_screen_resets_scrollback_exit(void)
     TEST_END();
 }
 
-/* ---- Security audit regressions (2026-09-09) ----------------------------- */
+/* ---- Security audit regressions (2026-09-09, docs/audit-tags.md) ---- */
 
 /* Screen-row helper matching the pattern used throughout this file --
  * row 0 is the top of the visible screen. */

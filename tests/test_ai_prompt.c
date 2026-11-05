@@ -493,7 +493,7 @@ int test_ai_extract_commands_newlines_in_command(void) {
 }
 
 /* ---- C1: control characters inside [EXEC] blocks are dropped, not
- * sanitised (see docs/superpowers/specs/2026-09-09-security-audit.md) ---- */
+ * sanitised (see docs/audit-tags.md) ---- */
 
 int test_ai_extract_commands_ex_embedded_newline_rejected(void) {
     TEST_BEGIN();
