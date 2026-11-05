@@ -1846,15 +1846,9 @@ const char * const *ai_provider_models(const char *provider)
         "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-6", NULL
     };
     static const char * const moonshot_models[] = {
-        /* platform.kimi.ai/docs/models, in the page's order */
-        "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3",
-        "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6",
-        "kimi-k2.5", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
-        "moonshot-v1-auto", "moonshot-v1-8k-vision-preview",
-        "moonshot-v1-32k-vision-preview", "moonshot-v1-128k-vision-preview",
-        "kimi-k2-0905-preview", "kimi-k2-0711-preview", "kimi-k2-turbo-preview",
-        "kimi-k2-thinking", "kimi-k2-thinking-turbo", "kimi-latest",
-        "kimi-thinking-preview", NULL
+        /* The current chat models on platform.kimi.ai/docs/models, in the
+         * page's order (not the deprecated or closed-to-new-users ones). */
+        "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3", NULL
     };
     static const char * const gemini_models[] = {
         "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", NULL
