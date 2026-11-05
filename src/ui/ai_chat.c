@@ -531,6 +531,7 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 d->stream_phase = 0;
                 d->actual_input_tokens = 0;
                 d->actual_output_tokens = 0;
+                d->last_snapshot_len = 0;   /* an empty conversation carries no snapshot */
                 d->show_thinking = 0;
                 if (d->active_state) d->active_state->show_thinking = 0;
                 KillTimer(hwnd, TIMER_HEARTBEAT);
@@ -2004,6 +2005,7 @@ void ai_chat_set_session(HWND hwnd, Terminal *term, SessionIo *io)
     if (!d) return;
     d->active_term = term;
     d->active_io = io;
+    d->last_snapshot_len = 0;   /* the old terminal's snapshot is not this one's */
     ai_chat_update_panel_state(d);
 }
 
@@ -2226,6 +2228,11 @@ static void do_session_switch(AiChatData *d,
         }
     }
 
+    /* The snapshot length belongs to the session whose request carried it;
+     * zero it when the displayed session changes (the meter then falls back
+     * to the conversation alone until the next launch). */
+    if (new_state != d->active_state)
+        d->last_snapshot_len = 0;
     d->active_state = new_state;
     d->active_term = term;
     d->active_io = io;
@@ -2385,6 +2392,7 @@ void ai_chat_notify_session_closed(HWND hwnd, AiSessionState *state)
 
     if (d->active_state == state) {
         d->active_state = NULL;
+        d->last_snapshot_len = 0;
         d->session_gen++;   /* a confirmation box still up must not apply */
     }
 }

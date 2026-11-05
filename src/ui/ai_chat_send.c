@@ -86,6 +86,7 @@ static void launch_failed(AiChatData *d, const char *why)
 {
     KillTimer(d->hwnd, TIMER_THINKING);
     d->indicator_pos = -1;
+    d->last_snapshot_len = 0;   /* nothing was sent: the meter adds no snapshot */
     chat_msg_append(&d->msg_list, CHAT_ITEM_STATUS, why);
     if (d->hChatList) chat_listview_invalidate(d->hChatList);
     ai_chat_update_context_bar(d);
