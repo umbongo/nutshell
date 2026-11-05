@@ -281,6 +281,7 @@ WIN_TEST_SRCS    = src/ui/icons.c src/ui/local_pty.c \
                    src/core/md_blocks.c src/core/ns_layout.c src/core/ns_hover.c \
                    src/core/stick_scroll.c src/core/ai_panel_layout.c \
                    src/core/ai_panel_states.c src/core/chat_activity.c \
+                   src/core/tool_decision.c \
                    tests/test_icons.c tests/test_local_pty.c tests/conpty_expect.c \
                    tests/test_md_render_win.c tests/test_chat_select_win.c \
                    src/ui/pw_reveal.c src/core/pw_reveal_state.c src/ui/pw_prompt.c src/ui/dwm_util.c \
