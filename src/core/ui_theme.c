@@ -28,8 +28,11 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
                                     * against the panels they sit on. The
                                     * label resolves to bg_primary at 5.15:1. */
         .text_main    = 0xE0E0E0,
-        .text_dim     = 0x919191, /* lightened from 0x888888: text_dim on raised
-                                    * (bg_secondary + 1 L* step) was 4.05:1 */
+        .text_dim     = 0x989898, /* lightened from 0x888888 (then 0x919191):
+                                    * text_dim on raised (bg_secondary + 1 L*
+                                    * step) was 4.05:1; +2.5 L* more so it
+                                    * reads 4.7 on the dim chips and the
+                                    * selection tint */
         .border       = 0x2A2A2A,
         .terminal_fg  = 0xE0E0E0,
         .terminal_bg  = 0x121212,
@@ -71,8 +74,11 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .bg_secondary = 0xFFFFFF,
         .accent       = 0x0A5FD6, /* own accent, deep enough for 4.5:1 with white */
         .text_main    = 0x1D1D1F,
-        .text_dim     = 0x6B6B70, /* darkened from 0x707075: text_dim on raised
-                                    * (bg_secondary + 1 L* step) was 4.25:1 */
+        .text_dim     = 0x5B5B60, /* darkened from 0x707075 (then 0x6B6B70):
+                                    * text_dim on raised (bg_secondary + 1 L*
+                                    * step) was 4.25:1; -6.5 L* more so it
+                                    * reads 4.7 on the dim chips and the
+                                    * selection tint */
         .border       = 0xDCDCE0,
         .terminal_fg  = 0x1D1D1F,
         .terminal_bg  = 0xF5F5F7,
@@ -97,8 +103,11 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .bg_secondary = 0x353730,
         .accent       = 0xA3B18A,
         .text_main    = 0xEAE7DC,
-        .text_dim     = 0xB2B1A8, /* lightened from 0xA19F94: text_dim on raised
-                                    * (bg_secondary + 1 L* step) was 3.70:1 */
+        .text_dim     = 0xBEBDB6, /* lightened from 0xA19F94 (then 0xB2B1A8):
+                                    * text_dim on raised (bg_secondary + 1 L*
+                                    * step) was 3.70:1; +4.5 L* more so it
+                                    * reads 4.7 on the dim chips and the
+                                    * selection tint */
         .border       = 0x3F4138,
         .terminal_fg  = 0xEAE7DC,
         .terminal_bg  = 0x2B2D24,
@@ -121,11 +130,19 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .name         = "Moss & Mist",
         .bg_primary   = 0xF1F3F0,
         .bg_secondary = 0xFFFFFF,
-        .accent       = 0xAAC1AE, /* lightened from 0x84A98C: best-label contrast
-                                    * (text_main) was 3.36:1, below 4.5 */
+        .accent       = 0x57705C, /* the theme's sage 0x84A98C darkened 21 L*
+                                    * (it was once lightened to 0xAAC1AE, whose
+                                    * best label was text_main): the label
+                                    * resolves to white at 5.42:1, bg_primary
+                                    * on it 4.85:1, 4.85:1 on bg_primary, 4.50:1
+                                    * on chat.cmd_bg. It is the focus colour the
+                                    * selection tint derives from. */
         .text_main    = 0x354F52,
-        .text_dim     = 0x577073, /* darkened from 0x597376: text_dim on raised
-                                    * (bg_secondary + 1 L* step) was 4.37:1 */
+        .text_dim     = 0x4A6062, /* darkened from 0x597376 (then 0x577073):
+                                    * text_dim on raised (bg_secondary + 1 L*
+                                    * step) was 4.37:1; -6.5 L* more so it
+                                    * reads 4.7 on the dim chips and the
+                                    * selection tint */
         .border       = 0xD5D8D3,
         .terminal_fg  = 0x354F52,
         .terminal_bg  = 0xF1F3F0,
@@ -136,7 +153,7 @@ static const ThemeColors k_themes[NUM_UI_THEMES] = {
         .info         = 0x7A5C99,
         .link         = 0x3D6D7A, /* darker than accent, per spec */
         .chat = {
-            0x84A98C, 0xFFFFFF, 0x84A98C,
+            0x57705C, 0xFFFFFF, 0x57705C,
             0xE8EBE6, 0xD5D8D3, 0x354F52,
             0x84A98C, 0x6B8A8D, 0x5F6D6E,
             0x347858, 0x7C6735, 0xA94F39,
@@ -211,12 +228,12 @@ static void resolve_surface(unsigned int base, int step_dir, int away_from_label
 }
 
 /* The selection hue anywhere but the user bubble, from the focus token and
- * the theme polarity.  The one place that decides it: ui_theme_sel_hue() and
- * ui_theme_md_role() both read it, so the markdown walk follows any change. */
+ * the theme polarity: the focus moved UI_SEL_SHIFT L* toward the background.
+ * The one place that decides it: ui_theme_sel_hue() and ui_theme_md_role()
+ * both read it, so the markdown walk follows any change. */
 static unsigned int sel_hue_off_bubble(unsigned int focus, int is_dark)
 {
-    (void)is_dark;
-    return focus;
+    return theme_shift_lightness(focus, is_dark ? -UI_SEL_SHIFT : UI_SEL_SHIFT);
 }
 
 /* rgb_alpha() of src/ui/ns_draw.c, byte for byte: fg * a + bg * (1 - a) per
@@ -306,5 +323,10 @@ void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out)
 unsigned int ui_theme_sel_hue(const ThemeTokens *t, int on_user_bubble)
 {
     if (!t) return 0;
-    return on_user_bubble ? t->chat.user_text : sel_hue_off_bubble(t->focus, t->is_dark);
+    if (on_user_bubble) {
+        /* Away from the bubble's own text: black unless white reads better. */
+        return theme_contrast(0xFFFFFFu, t->chat.user_text) >
+               theme_contrast(0x000000u, t->chat.user_text) ? 0xFFFFFFu : 0x000000u;
+    }
+    return sel_hue_off_bubble(t->focus, t->is_dark);
 }

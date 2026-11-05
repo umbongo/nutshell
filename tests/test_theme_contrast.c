@@ -67,39 +67,15 @@ typedef struct {
 
 static const Exemption k_exempt[] = {
     /* Onyx Synapse */
-    { "Onyx Synapse", "chat.user_text", "sel30(chat.user_bubble)", 3.09 },
-    { "Onyx Synapse", "text_dim", "tint18(text_dim on chat.cmd_bg)", 4.17 },
-    { "Onyx Synapse", "text_dim", "sel30(bg_secondary)", 3.50 },
-    { "Onyx Synapse", "text_dim", "sel30(bg_primary)", 3.94 },
     { "Onyx Synapse", "border", "chat.cmd_bg", 1.19 },
     /* Onyx Light */
-    { "Onyx Light", "chat.user_text", "sel30(chat.user_bubble)", 2.68 },
-    { "Onyx Light", "text_dim", "tint18(text_dim on bg_primary)", 3.87 },
-    { "Onyx Light", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.66 },
-    { "Onyx Light", "text_dim", "sel30(bg_secondary)", 3.32 },
-    { "Onyx Light", "text_dim", "sel30(bg_primary)", 3.10 },
     { "Onyx Light", "border", "chat.cmd_bg", 1.18 },
     /* Sage & Sand */
-    { "Sage & Sand", "chat.user_text", "sel30(chat.user_bubble)", 4.37 },
-    { "Sage & Sand", "text_dim", "sel30(bg_secondary)", 3.26 },
-    { "Sage & Sand", "text_dim", "sel30(bg_primary)", 3.64 },
     { "Sage & Sand", "border", "chat.cmd_bg", 1.49 },
     /* Moss & Mist */
-    { "Moss & Mist", "bg_primary.base", "accent.base", 1.72 },
-    { "Moss & Mist", "chat.user_text", "chat.user_bubble", 2.61 },
-    { "Moss & Mist", "chat.user_text", "sel30(chat.user_bubble)", 1.91 },
-    { "Moss & Mist", "chat.ai_accent", "bg_primary.base", 2.34 },
-    { "Moss & Mist", "text_dim", "chat.cmd_bg", 4.40 },
-    { "Moss & Mist", "text_dim", "tint18(text_dim on bg_primary)", 3.77 },
-    { "Moss & Mist", "text_dim", "tint18(text_dim on chat.cmd_bg)", 3.51 },
-    { "Moss & Mist", "text_dim", "sel30(bg_secondary)", 4.40 },
-    { "Moss & Mist", "text_dim", "sel30(bg_primary)", 4.07 },
-    { "Moss & Mist", "accelerator(accent.label at 75%)", "accent.base", 2.99 },
-    { "Moss & Mist", "accent.base", "bg_primary.base", 1.72 },
-    { "Moss & Mist", "accent.base", "chat.cmd_bg", 1.59 },
     { "Moss & Mist", "border", "chat.cmd_bg", 1.20 },
 };
-#define EXPECTED_EXEMPTIONS 28
+#define EXPECTED_EXEMPTIONS 4
 
 /* ---- Blends --------------------------------------------------------------
  *
@@ -208,11 +184,12 @@ SEL(s_hot_err,        "tint30(danger on bg_secondary)",
     ablend(t->danger.base, t->bg_secondary.base, 0.30f));
 SEL(s_hot_info,       "tint30(info on bg_secondary)",
     ablend(t->info.base, t->bg_secondary.base, 0.30f));
-/* derived: the dim chip is text_dim at 18% over its panel. */
-SEL(s_chip_on_bgp,    "tint18(text_dim on bg_primary)",
-    ablend(t->text_dim, t->bg_primary.base, 0.18f));
-SEL(s_chip_on_cmd,    "tint18(text_dim on chat.cmd_bg)",
-    ablend(t->text_dim, t->chat.cmd_bg, 0.18f));
+/* derived: the dim chip is text_dim at UI_DIM_TINT_ALPHA (12%, the table
+ * header's alpha) over its panel (chat_listview.c). */
+SEL(s_chip_on_bgp,    "tint12(text_dim on bg_primary)",
+    ablend(t->text_dim, t->bg_primary.base, UI_DIM_TINT_ALPHA));
+SEL(s_chip_on_cmd,    "tint12(text_dim on chat.cmd_bg)",
+    ablend(t->text_dim, t->chat.cmd_bg, UI_DIM_TINT_ALPHA));
 /* derived: a markdown table's header fill (md_render.c). */
 SEL(s_hdr_fill,       "table header fill(text_dim 12% on bg_primary)",
     ablend(t->text_dim, t->bg_primary.base, 0.12f));

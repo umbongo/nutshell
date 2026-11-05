@@ -335,6 +335,10 @@ static ThemeColors md_test_theme(unsigned int bg, unsigned int cmd_bg,
 /* Every surface the role is painted on clears UI_TEXT_MIN_RATIO. */
 static int md_test_clears(const ThemeColors *c, UiMdRole role, unsigned int col) {
     unsigned int focus = c->overrides.focus ? c->overrides.focus : c->accent;
+    /* The selection tint is the focus moved UI_SEL_SHIFT L* toward the
+     * background, written out here rather than read from ui_theme.c. */
+    focus = theme_shift_lightness(focus, theme_is_dark(c->bg_primary)
+                                             ? -UI_SEL_SHIFT : UI_SEL_SHIFT);
     unsigned int surf[3];
     surf[0] = c->bg_primary;
     if (role == UI_MD_CODE) {

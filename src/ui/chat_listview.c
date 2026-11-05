@@ -1941,7 +1941,7 @@ static void paint_cmd_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         COLORREF dim = RGB_FROM_THEME(tok->text_dim);
         if (q_right > q_left)
             ns_draw_chip(hdc, &q_rc,
-                         rgb_alpha(dim, RGB_FROM_THEME(tc->cmd_bg), 0.18f),
+                         rgb_alpha(dim, RGB_FROM_THEME(tc->cmd_bg), UI_DIM_TINT_ALPHA),
                          dim, lv->hSmallFont, qlabel);
         text_right = q_left - gap;
         text_shortened = 1;
@@ -2108,7 +2108,7 @@ static int paint_cmd_settled_row(ChatListView *lv, HDC hdc, ChatMsgItem *item,
         break;
     case CHAT_CMD_INTENT_DIM:
     default:
-        chip_bg = rgb_alpha(dim, panel_bg, 0.18f);
+        chip_bg = rgb_alpha(dim, panel_bg, UI_DIM_TINT_ALPHA);
         chip_fg = dim;
         text_clr = dim;
         break;

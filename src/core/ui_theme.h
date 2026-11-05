@@ -119,7 +119,14 @@ typedef struct {
  * it sits on (md_render.c, the chat list view). */
 #define UI_SEL_ALPHA 0.30f
 
-/* text_dim tinted over a surface: the markdown table header fill. */
+/* How far the selection hue moves from the focus colour toward the
+ * background, in L* units (darker on a dark theme, lighter on a light one).
+ * Same hue, so text on the tint keeps its contrast while the tint stays
+ * visible against the surface. */
+#define UI_SEL_SHIFT 20.0
+
+/* text_dim tinted over a surface: the markdown table header fill and the dim
+ * chips of the chat list view. */
 #define UI_DIM_TINT_ALPHA 0.12f
 
 /* What the markdown role colours must reach as text on every surface they
@@ -150,10 +157,13 @@ void ui_theme_resolve(const ThemeColors *base, ThemeTokens *out);
 
 /* The hue the chat selection highlight blends, at 30%, over the surface it
  * sits on (spec docs/superpowers/specs/2026-10-18-ai-panel-text-selection-
- * design.md section 6): the focus token -- except on the user bubble, which
- * is filled with the accent the focus token is drawn from, so a focus tint
- * would vanish there; the bubble's own text colour is the hue instead.
- * Packed 0x00RRGGBB like every token. */
+ * design.md section 6, amended 2026-11-05).  Anywhere but the user bubble it
+ * is the focus token moved UI_SEL_SHIFT L* toward the background: the same
+ * hue, so selected text keeps its contrast, and still visible on the surface.
+ * On the user bubble, which is filled with the accent the focus token is
+ * drawn from, it is black or white, whichever contrasts more with
+ * chat.user_text (black on a tie): the tint pushes the bubble away from its
+ * own text instead of toward it.  Packed 0x00RRGGBB like every token. */
 unsigned int ui_theme_sel_hue(const ThemeTokens *t, int on_user_bubble);
 
 #endif /* NUTSHELL_UI_THEME_H */

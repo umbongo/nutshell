@@ -5,6 +5,7 @@
  * must land at least MIN_STEP channel-steps away from that surface. */
 #include "test_framework.h"
 #include "ui_theme.h"
+#include "theme.h"
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -59,13 +60,31 @@ int test_sel_highlight_visible_on_every_surface(void)
     TEST_END();
 }
 
-int test_sel_hue_is_focus_except_on_the_bubble(void)
+int test_sel_hue_is_shifted_focus_except_on_the_bubble(void)
 {
     TEST_BEGIN();
-    ThemeTokens k;
-    ui_theme_resolve(ui_theme_get(0), &k);
-    ASSERT_EQ(ui_theme_sel_hue(&k, 0), k.focus);
-    ASSERT_EQ(ui_theme_sel_hue(&k, 1), k.chat.user_text);
+    for (int t = 0; t < NUM_UI_THEMES; t++) {
+        const ThemeColors *c = ui_theme_get(t);
+        ThemeTokens k;
+        ui_theme_resolve(c, &k);
+
+        /* Off the bubble: the focus colour moved UI_SEL_SHIFT L* toward the
+         * background (darker on a dark theme, lighter on a light one). */
+        unsigned int want = theme_shift_lightness(
+            k.focus, k.is_dark ? -UI_SEL_SHIFT : UI_SEL_SHIFT);
+        unsigned int got = ui_theme_sel_hue(&k, 0);
+        ASSERT_EQ(got, want);
+        ASSERT_TRUE(got != k.focus);
+        if (k.is_dark) { ASSERT_TRUE(theme_lstar(got) < theme_lstar(k.focus)); }
+        else           { ASSERT_TRUE(theme_lstar(got) > theme_lstar(k.focus)); }
+
+        /* On the bubble: black or white, whichever reads better against the
+         * bubble's text, black on a tie. */
+        double cb = theme_contrast(0x000000, k.chat.user_text);
+        double cw = theme_contrast(0xFFFFFF, k.chat.user_text);
+        ASSERT_EQ(ui_theme_sel_hue(&k, 1), cw > cb ? 0xFFFFFFu : 0x000000u);
+    }
     ASSERT_EQ(ui_theme_sel_hue(NULL, 0), 0);
+    ASSERT_EQ(ui_theme_sel_hue(NULL, 1), 0);
     TEST_END();
 }

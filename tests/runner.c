@@ -3734,7 +3734,7 @@ int test_ui_theme_md_role_unchanged_when_it_clears(void);
 int test_ui_theme_md_role_walks_away_from_the_background(void);
 int test_ui_theme_md_role_falls_back_to_text_main(void);
 int test_ui_theme_md_tokens_match_md_role(void);
-int test_sel_hue_is_focus_except_on_the_bubble(void);
+int test_sel_hue_is_shifted_focus_except_on_the_bubble(void);
 
 /* test_ai_exec_quoted.c */
 int test_exec_quoted_fence_skipped_by_notes(void);
@@ -7529,7 +7529,7 @@ int main(void) {
     failed += test_paint_synthetic_runs_cover_their_marker();
 
     failed += test_sel_highlight_visible_on_every_surface();
-    failed += test_sel_hue_is_focus_except_on_the_bubble();
+    failed += test_sel_hue_is_shifted_focus_except_on_the_bubble();
 
     failed += test_exec_quoted_fence_skipped_by_notes();
     failed += test_exec_quoted_full_reports_both_in_order();
