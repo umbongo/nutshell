@@ -177,3 +177,26 @@ int test_activity_reset(void) {
     ASSERT_EQ(s.connection_lost, 0);
     TEST_END();
 }
+
+/* A card waits as long as the person takes: never slow, never stalled
+ * (trust boundary spec decision 15). */
+int test_chat_activity_waiting_does_not_age(void) {
+    TEST_BEGIN();
+    ActivityState s;
+    chat_activity_init(&s);
+    chat_activity_set_phase(&s, ACTIVITY_PROCESSING, 0.0f);
+    chat_activity_set_phase(&s, ACTIVITY_WAITING, 0.0f);
+    chat_activity_tick(&s, 45.0f);
+    ASSERT_EQ((int)s.health, (int)HEALTH_GREEN);
+    chat_activity_tick(&s, 590.0f);
+    ASSERT_EQ((int)s.health, (int)HEALTH_GREEN);
+    char buf[128];
+    chat_activity_format(&s, 45.0f, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Waiting for your decision");
+
+    /* A lost connection still wins. */
+    chat_activity_connection_lost(&s);
+    chat_activity_format(&s, 45.0f, buf, sizeof(buf));
+    ASSERT_STR_EQ(buf, "Connection lost");
+    TEST_END();
+}

@@ -449,6 +449,7 @@ void ai_chat_send_user_message(AiChatData *d)
     /* The user is talking again: the unattended-round count starts over
      * (guard-rails spec 2026-11-04 section 1). */
     ai_rounds_user_message(d->active_state);
+    ai_tool_rounds_reset(d->active_state);   /* ... and so are the tool rounds */
 
     char *input = input_text_utf8(d->hInput);
     if (!input) return;

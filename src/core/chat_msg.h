@@ -259,7 +259,7 @@ int chat_card_header_text(const char *noun, int n, int held, int quoted, char *b
  * with an entry), or 0 if `list` or `q` is NULL. Called from every point
  * the queue changes during dispatch (chat_approval_set_executing/
  * _set_completed, batch end, ai_chat_dispatch_cancel before cmd_batch_remove with
- * batch_ending = 1) and from append_batch_command_items() when a display is
+ * batch_ending = 1) and from ai_chat_append_batch_command_items() when a display is
  * rebuilt from the queue, so a rebuilt view shows the same labels as the
  * live panel. */
 int chat_msg_batch_sync_run(ChatMsgList *list, int batch_id,

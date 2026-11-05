@@ -645,6 +645,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 ctl_id < IDC_CMD_APPROVE_BASE + APPROVAL_MAX_CMDS) {
                 int idx = ctl_id - IDC_CMD_APPROVE_BASE;
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     chat_approval_approve(&batch->q, idx);
 
@@ -676,6 +683,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
                 ctl_id < IDC_CMD_DENY_BASE + APPROVAL_MAX_CMDS) {
                 int idx = ctl_id - IDC_CMD_DENY_BASE;
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_NOT_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     chat_approval_deny(&batch->q, idx);
 
@@ -706,6 +720,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_CMD_APPROVE_ALL → approve all pending commands in one batch */
             if (d && ctl_id == IDC_CMD_APPROVE_ALL) {
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     chat_approval_approve_all(&batch->q);
 
@@ -733,6 +754,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
              * in one batch */
             if (d && ctl_id == IDC_CMD_APPROVE_SEL) {
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     int ci = 0;
                     int any_approved = 0;
@@ -782,6 +810,13 @@ static LRESULT CALLBACK AiChatWndProc(HWND hwnd, UINT msg,
             /* IDC_CMD_CANCEL_ALL → deny all pending commands in one batch */
             if (d && ctl_id == IDC_CMD_CANCEL_ALL) {
                 CmdBatch *batch = ai_chat_resolve_batch(d, lParam);
+                if (batch && cmd_batch_is_tool(batch)) {
+                    /* A tool call's card: answer its slot (before anything
+                     * is settled), never touch the command queue logic. */
+                    ai_chat_tool_card_answer(d, batch, TOOL_DECISION_NOT_APPROVED);
+                    SetFocus(d->hInput);
+                    return 0;
+                }
                 if (batch) {
                     int ci = 0;
                     for (ChatMsgItem *it = d->msg_list.head; it; it = it->next) {
@@ -1086,6 +1121,13 @@ next_coalesce:;
 
         return 0;
     }
+
+    case WM_AI_TOOL_DECIDE:
+        /* A stream thread needs the user's say on a tool call. The handler
+         * never waits and frees the message on every path, a stale stream
+         * included. */
+        ai_chat_on_tool_decide(d, (AiToolDecideMsg *)lParam);
+        return 0;
 
     case WM_AI_GET_POLICY:
         return d ? (LRESULT)cmd_policy_status_word(d->approval_q.policy) : 0;
@@ -2434,7 +2476,7 @@ void ai_chat_apply_demo_extras(HWND hwnd, const char *state,
      * approval for the state's own batch, approval2 for "batches"'s
      * second one -- instead of touching d->approval_q. ai_chat_rebuild_display()
      * below replays every batch still in the set exactly the way a live
-     * session switch does (append_batch_command_items()), so this reuses
+     * session switch does (ai_chat_append_batch_command_items()), so this reuses
      * the same code path a real reply's cards come from. */
     int any_executing = 0;
     if (d->active_state) {

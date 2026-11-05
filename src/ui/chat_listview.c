@@ -23,6 +23,7 @@
 #include "ns_reduced_motion.h"
 #include "chat_approval.h"
 #include "chat_msg.h"
+#include "tool_decision.h"
 #include "clipboard.h"
 #include "md_blocks.h"
 #include "ai_panel_layout.h"
@@ -2042,8 +2043,21 @@ static void settled_row_geometry(ChatListView *lv, HDC hdc, ChatMsgItem *item,
      * chat_msg_batch_sync_run() keeps in step with the batch's
      * ApprovalQueue. */
     g->intent = CHAT_CMD_INTENT_DIM;
-    g->label = chat_cmd_label(item->u.cmd.approved, item->u.cmd.blocked,
-                              item->u.cmd.quoted, item->u.cmd.run, &g->intent);
+    if (item->u.cmd.tool) {
+        /* A tool call's row: the outcome of the decision slot, not a run
+         * state (nothing is ever sent to the terminal for it). */
+        const ToolDecision outcome = (ToolDecision)item->u.cmd.tool_outcome;
+        g->label = tool_decision_row_label(outcome);
+        if (outcome == TOOL_DECISION_APPROVED)
+            g->intent = CHAT_CMD_INTENT_INFO;
+        else if (outcome == TOOL_DECISION_EXPIRED ||
+                 outcome == TOOL_DECISION_CANCELLED)
+            g->intent = CHAT_CMD_INTENT_WARNING;
+    } else {
+        g->label = chat_cmd_label(item->u.cmd.approved, item->u.cmd.blocked,
+                                  item->u.cmd.quoted, item->u.cmd.run,
+                                  &g->intent);
+    }
 
     /* Chip label width, measured with the small font: label width plus
      * SP_SM padding on both sides. */
@@ -2287,7 +2301,8 @@ static int paint_cmd_container(ChatListView *lv, HDC hdc, ChatMsgItem *first,
                         g.layout.header.x + g.layout.header.w,
                         g.layout.header.y + g.layout.header.h };
         char hdr_buf[64];
-        chat_card_header_text(NULL, g.n, g.held_count, g.quoted_count,
+        chat_card_header_text(g.first && g.first->u.cmd.tool ? "tool call" : NULL,
+                              g.n, g.held_count, g.quoted_count,
                               hdr_buf, sizeof(hdr_buf));
 
         SetTextColor(hdc, RGB_FROM_THEME(tok->text_main));

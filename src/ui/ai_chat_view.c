@@ -126,7 +126,7 @@ void ai_chat_thinking_history_clear(AiChatData *d)
  * a card settles the moment every entry is decided, well before the
  * dispatcher actually gets around to sending it (see
  * ai_chat_settle_batch_if_done()). */
-static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
+void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
 {
     if (!list || !batch) return;
     for (int i = 0; i < batch->q.count; i++) {
@@ -139,6 +139,8 @@ static void append_batch_command_items(ChatMsgList *list, const CmdBatch *batch)
         chat_msg_set_reason(item, e->reason);
         chat_msg_set_batch(item, batch->id);
         chat_msg_set_note(item, e->note);
+        /* A tool call's row (outcome PENDING until its slot is answered). */
+        if (e->tool) chat_msg_set_tool(item, 1);
         switch (e->status) {
         case APPROVE_APPROVED:
         case APPROVE_EXECUTING:
@@ -243,7 +245,8 @@ void ai_chat_rebuild_display(AiChatData *d)
      * 2026-09-09-pending-command-batches.md, "Session switch"). */
     if (d->active_state) {
         for (int bi = 0; bi < d->active_state->batches.count; bi++)
-            append_batch_command_items(&d->msg_list, d->active_state->batches.b[bi]);
+            ai_chat_append_batch_command_items(&d->msg_list,
+                                               d->active_state->batches.b[bi]);
     }
 
     if (d->hChatList) {

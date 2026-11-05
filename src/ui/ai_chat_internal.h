@@ -505,6 +505,16 @@ void ai_chat_dispatch_start(AiChatData *d, int batch_id);
 void ai_chat_maybe_start_next_batch(AiChatData *d);
 void ai_chat_dispatch_cancel(AiChatData *d, const char *status_msg, int notify);
 void ai_chat_dispatch_tick(AiChatData *d);
+/* Tool cards (trust boundary spec decisions 14, 15, 20). The slot answer is
+ * found by the batch's stream id and generation; no stream: NONE. Returns the
+ * state that holds afterwards (the CAS winner). The card answer is the Run
+ * (APPROVED) / Deny (NOT_APPROVED) path: answer the slot first, then label
+ * the rows from the result, then settle. The handler never waits and frees
+ * `m` on every path. */
+ToolDecision ai_chat_tool_slot_answer(AiChatData *d, const CmdBatch *batch,
+                                      ToolDecision answer);
+void ai_chat_tool_card_answer(AiChatData *d, CmdBatch *batch, ToolDecision answer);
+void ai_chat_on_tool_decide(AiChatData *d, AiToolDecideMsg *m);
 
 /* ai_chat_send.c */
 void ai_chat_register_tools(AiChatData *d, const char *search_provider,
@@ -541,6 +551,7 @@ int ai_chat_unscale(int px, int dpi);
 int ai_chat_input_h(const AiChatData *d);
 void ai_chat_update_panel_state(AiChatData *d);
 void ai_chat_thinking_history_clear(AiChatData *d);
+void ai_chat_append_batch_command_items(ChatMsgList *list, const CmdBatch *batch);
 void ai_chat_rebuild_display(AiChatData *d);
 void ai_chat_add_tooltip(HWND hTooltip, HWND hCtrl, const char *text);
 void ai_chat_draw_header_icon_button(LPDRAWITEMSTRUCT dis,

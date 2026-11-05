@@ -2663,6 +2663,7 @@ int test_activity_format_processing(void);
 int test_activity_format_executing(void);
 int test_activity_format_stalled(void);
 int test_activity_reset(void);
+int test_chat_activity_waiting_does_not_age(void);
 
 /* test_cmd_collapse.c */
 int test_cmd_index_single(void);
@@ -6409,6 +6410,7 @@ int main(void) {
     failed += test_activity_format_executing();
     failed += test_activity_format_stalled();
     failed += test_activity_reset();
+    failed += test_chat_activity_waiting_does_not_age();
 
     printf("\n--- Command Policy ---\n");
     failed += test_policy_default_is_read_only_nothing_unattended();
