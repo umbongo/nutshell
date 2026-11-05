@@ -11,11 +11,19 @@ If paramiko is missing the script says so and does nothing else.
 ## Install
 
 ```
-python3 -m pip install --user paramiko
+sudo apt install python3-paramiko       # Debian / Ubuntu
 ```
 
-Python 3 and paramiko are all it needs. The host key is generated in memory at
-every start and never written to disk, so the fingerprint changes on each run.
+or, in a virtual environment, `pip install paramiko`. Debian and Ubuntu refuse
+`pip install --user` against the system Python (PEP 668), so do not use it.
+The system `/usr/bin/python3` may already have paramiko; a plain `python3` that
+is a virtual environment without it will not, so run the script with the
+interpreter that does, as in the examples below. Python 3 and paramiko are all
+it needs.
+
+The host key is generated in memory at every start and never written to disk,
+so it changes on every start: Nutshell shows the first-connect or the
+changed-key dialog each time.
 
 ## Run
 
@@ -37,7 +45,9 @@ switch.
 
 `--self-test` runs every scenario against itself with a paramiko client (the
 right answers, then a wrong one) and prints `PASS <scenario>` or
-`FAIL <scenario>` per line; the exit code is 0 only when all pass.
+`FAIL <scenario>` per line; the exit code is 0 only when all pass. On
+2026-11-05 `/usr/bin/python3 tests/manual/kbdint_server.py --self-test` passed
+all six scenarios with paramiko 2.12.0.
 
 ## Point Nutshell at it
 
