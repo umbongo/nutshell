@@ -2167,6 +2167,8 @@ typedef struct {
  * flags are checked against the spec. date, hostname and route have their
  * own operand rules below. */
 static const ReadCmdSpec read_cmd_specs[] = {
+    /* man: review row f -- its pager can spawn a shell (see "less" below);
+     * left READ, with its flags checked against man_spec. */
     { "man",           &man_spec,           0 },
     { "rg",            &rg_spec,            0 },
     { "tree",          &tree_spec,          0 },
@@ -2621,6 +2623,490 @@ static int word_is_plain(const char *w)
     return 1;
 }
 
+/* ----- Sensitive reads -----
+ * A command recognised as reading credentials, secrets, the environment or
+ * shell history carries CMD_MASK_SENSITIVE beside its class (spec decisions 9
+ * and 10). Best effort: a read these rules do not name is not flagged.
+ *
+ * Two kinds of rule, kept apart on purpose:
+ *  - Path and variable rules (sens_scan_text) read the raw text of every
+ *    segment under EVERY platform ruleset, so a wrongly detected platform, a
+ *    device ruleset that rates the line UNKNOWN early, or a contradicted
+ *    session cannot hide them. The text is scanned lexically, quote- and
+ *    escape-insensitive, so what sits inside quotes, $(...) and `...`, a
+ *    `sh -c` body or an xargs line is seen without relying on the
+ *    recursion.
+ *  - Command rules (sens_command_rules) need to know the command word, so
+ *    they run where classify_linux_segment_raw() has peeled sudo, and only
+ *    under LINUX and UNKNOWN (sens_cmd_rules, set per pass). Wrappers
+ *    (timeout, nohup, sh -c, ...) reach them through the existing recursion.
+ *
+ * The first phrase found, in the order the classifier meets the text, is
+ * kept in sens_phrase for the whole top-level call; the entry points reset
+ * it. It is separate from the class reason so no wrapper prefix touches it. */
+
+#define SENS_CRED "reads credentials"
+#define SENS_HIST "reads shell history"
+#define SENS_ENV  "reads the environment"
+#define SENS_VAR  "reads a secret variable"
+#define SENS_STORE "reads stored secrets"
+#define SENS_CRON "reads the crontab"
+
+static _Thread_local char sens_phrase[CMD_REASON_MAX];
+static _Thread_local int sens_cmd_rules = 0;
+
+static void sens_note(const char *phrase)
+{
+    if (!sens_phrase[0]) snprintf(sens_phrase, sizeof sens_phrase, "%s", phrase);
+}
+
+static int sens_ci_eq(const char *a, size_t al, const char *lit)
+{
+    return tok_eq_ci(a, al, lit);
+}
+
+static int sens_ci_prefix(const char *a, size_t al, const char *lit)
+{
+    return tok_prefix_ci(a, al, lit);
+}
+
+static int sens_ci_suffix(const char *a, size_t al, const char *lit)
+{
+    size_t ll = strlen(lit);
+    return al >= ll && ci_memcmp(a + al - ll, lit, ll) == 0;
+}
+
+/* 1 when a variable NAME holds a secret by its spelling: contains SECRET,
+ * TOKEN, PASSWORD, PASSWD, PRIVATE, API_KEY or ACCESS_KEY, or starts with
+ * AWS_ (case-insensitive). */
+static int sens_name_is_secret(const char *n, size_t len)
+{
+    static const char *const needles[] = {
+        "SECRET", "TOKEN", "PASSWORD", "PASSWD", "PRIVATE", "API_KEY", "ACCESS_KEY", NULL
+    };
+    if (len >= 4 && ci_memcmp(n, "AWS_", 4) == 0) return 1;
+    for (int i = 0; needles[i]; i++) {
+        size_t nl = strlen(needles[i]);
+        for (size_t j = 0; j + nl <= len; j++)
+            if (ci_memcmp(n + j, needles[i], nl) == 0) return 1;
+    }
+    return 0;
+}
+
+/* A word with the quotes and escapes of every reading taken off, copied to
+ * out (NUL-terminated, truncated to cap). */
+static void sens_plain(const char *tok, size_t len, char *out, size_t cap)
+{
+    size_t o = 0;
+    for (size_t i = 0; i < len && o + 1 < cap; i++) {
+        char c = tok[i];
+        if (c == '\'' || c == '"' || c == '\\') continue;
+        out[o++] = c;
+    }
+    out[o] = '\0';
+}
+
+/* The $VAR, ${VAR...}, %VAR%, $env:VAR and ${env:VAR} forms in one word
+ * (spaces and shell operators already split it). */
+static int sens_var_in_word(const char *t, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (t[i] == '$' && i + 1 < n) {
+            size_t j = i + 1;
+            if (t[j] == '{') {
+                size_t k = j + 1;
+                size_t close = k;
+                while (close < n && t[close] != '}') close++;
+                if (k < close && t[k] == '!') {
+                    char last = t[close - 1];
+                    if (close - 1 > k && (last == '*' || last == '@')) return 1;
+                } else {
+                    if (k < close && t[k] == '#') k++;
+                    if (close - k >= 4 && ci_memcmp(t + k, "env:", 4) == 0) k += 4;
+                    size_t nl = var_name_len(t + k, t + close);
+                    if (nl > 0 && sens_name_is_secret(t + k, nl)) return 1;
+                }
+                i = close;
+                continue;
+            }
+            if (n - j >= 4 && ci_memcmp(t + j, "env:", 4) == 0) j += 4;
+            size_t nl = var_name_len(t + j, t + n);
+            if (nl > 0) {
+                if (sens_name_is_secret(t + j, nl)) return 1;
+                i = j + nl - 1;
+            }
+        } else if (t[i] == '%') {
+            size_t nl = var_name_len(t + i + 1, t + n);
+            if (nl > 0 && i + 1 + nl < n && t[i + 1 + nl] == '%') {
+                if (sens_name_is_secret(t + i + 1, nl)) return 1;
+                i += nl + 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* The next non-empty '/'-separated component of [*p, end). */
+static int sens_comp_next(const char **p, const char *end, const char **s, size_t *l)
+{
+    while (*p < end && **p == '/') (*p)++;
+    if (*p >= end) return 0;
+    *s = *p;
+    while (*p < end && **p != '/') (*p)++;
+    *l = (size_t)(*p - *s);
+    return 1;
+}
+
+/* A glob-bearing path token ('*', '?', '[' or '{' and a '/') is sensitive
+ * when it lies under a home directory's dot-entries (~/. $HOME/. /root/.
+ * /home/<x>/.) or names .ssh, .aws, .kube, .gnupg or .config/gcloud: so
+ * the glob in a dot-entry of the home directory is sensitive, while a
+ * release-file glob under /etc and a bare listing of /home are not. */
+static int sens_glob_path_sensitive(const char *t, size_t n)
+{
+    static const char *const homes[] = {
+        "~/.", "$HOME/.", "${HOME}/.", "%USERPROFILE%/.", "/root/.", NULL
+    };
+    static const char *const names[] = {
+        ".ssh", ".aws", ".kube", ".gnupg", ".config/gcloud", NULL
+    };
+    int glob = 0, slash = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (strchr("*?[{", t[i])) glob = 1;
+        if (t[i] == '/') slash = 1;
+    }
+    if (!glob || !slash) return 0;
+    for (int i = 0; homes[i]; i++)
+        if (sens_ci_prefix(t, n, homes[i])) return 1;
+    if (sens_ci_prefix(t, n, "/home/")) {
+        size_t j = 6;
+        while (j < n && t[j] != '/') j++;
+        if (j > 6 && j + 1 < n && t[j] == '/' && t[j + 1] == '.') return 1;
+    }
+    for (int i = 0; names[i]; i++) {
+        size_t nl = strlen(names[i]);
+        for (size_t j = 0; j + nl <= n; j++)
+            if (ci_memcmp(t + j, names[i], nl) == 0) return 1;
+    }
+    return 0;
+}
+
+/* The phrase for one path-like token, NULL when it names nothing sensitive.
+ * Components are separated by '/', and by '\' once the caller has turned it
+ * into '/'. */
+static const char *sens_path_phrase(const char *t, size_t n)
+{
+    const char *p = t;
+    const char *end = t + n;
+    const char *cs = NULL, *ns = NULL;
+    size_t cl = 0, nl = 0;
+    const char *prev = NULL;
+    size_t prev_len = 0;
+    int saw_proc = 0;
+    int have_next = sens_comp_next(&p, end, &ns, &nl);
+    while (have_next) {
+        cs = ns; cl = nl;
+        have_next = sens_comp_next(&p, end, &ns, &nl);
+        int last = !have_next;
+        if (sens_ci_eq(cs, cl, ".ssh") ||
+            sens_ci_prefix(cs, cl, "id_rsa") || sens_ci_prefix(cs, cl, "id_ed25519") ||
+            sens_ci_prefix(cs, cl, "id_ecdsa") || sens_ci_prefix(cs, cl, "id_dsa") ||
+            sens_ci_suffix(cs, cl, ".pem") || sens_ci_suffix(cs, cl, ".key") ||
+            sens_ci_eq(cs, cl, ".netrc") || sens_ci_eq(cs, cl, ".pgpass") ||
+            sens_ci_eq(cs, cl, ".git-credentials") ||
+            (last && (sens_ci_eq(cs, cl, ".env") || sens_ci_prefix(cs, cl, ".env."))) ||
+            (prev && sens_ci_eq(prev, prev_len, ".aws") && sens_ci_eq(cs, cl, "credentials")) ||
+            (prev && sens_ci_eq(prev, prev_len, ".kube") && sens_ci_eq(cs, cl, "config")) ||
+            (prev && sens_ci_eq(prev, prev_len, "etc") &&
+             (sens_ci_eq(cs, cl, "shadow") || sens_ci_eq(cs, cl, "gshadow") ||
+              sens_ci_eq(cs, cl, "sudoers") || sens_ci_eq(cs, cl, "sudoers.d"))))
+            return SENS_CRED;
+        if (sens_ci_eq(cs, cl, ".history") || sens_ci_suffix(cs, cl, "_history") ||
+            sens_ci_eq(cs, cl, "ConsoleHost_history.txt"))
+            return SENS_HIST;
+        if (saw_proc && sens_ci_eq(cs, cl, "environ")) return SENS_ENV;
+        if (sens_ci_eq(cs, cl, "proc")) saw_proc = 1;
+        prev = cs; prev_len = cl;
+    }
+    return sens_glob_path_sensitive(t, n) ? SENS_CRED : NULL;
+}
+
+/* One normalised reading of a segment's text: quotes (and the typographic
+ * quotes PowerShell accepts) removed; a backslash removed (POSIX escape) or
+ * turned into '/' (Windows separator); a backtick turned into a space (POSIX
+ * substitution) or removed (PowerShell escape). The scan reads all the
+ * readings, so none of them hides a name. */
+static size_t sens_normalise(const char *seg, size_t n, char *out, int bs_sep, int bt_remove)
+{
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)seg[i];
+        if (c == '\'' || c == '"') continue;
+        if (c == 0xE2 && i + 2 < n && (unsigned char)seg[i + 1] == 0x80 &&
+            (unsigned char)seg[i + 2] >= 0x98 && (unsigned char)seg[i + 2] <= 0x9E) {
+            i += 2;
+            continue;
+        }
+        if (c == '\\') { if (bs_sep) out[o++] = '/'; continue; }
+        if (c == '`') { if (!bt_remove) out[o++] = ' '; continue; }
+        out[o++] = (char)c;
+    }
+    out[o] = '\0';
+    return o;
+}
+
+static int sens_is_word_break(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ';' || c == '|' ||
+           c == '&' || c == '<' || c == '>' || c == '(' || c == ')';
+}
+
+/* The first sensitive phrase in one normalised reading, word by word. */
+static const char *sens_scan_reading(const char *s, size_t n)
+{
+    size_t i = 0;
+    while (i < n) {
+        while (i < n && sens_is_word_break(s[i])) i++;
+        size_t st = i;
+        while (i < n && !sens_is_word_break(s[i])) i++;
+        if (i == st) continue;
+        if (sens_var_in_word(s + st, i - st)) return SENS_VAR;
+        /* "--file=~/.netrc", "host:~/.ssh/id_rsa", "if=.env": the path is
+         * the part after an '=' or ':'. */
+        size_t a = st;
+        for (size_t k = st; k <= i; k++) {
+            if (k == i || s[k] == '=' || s[k] == ':') {
+                const char *ph = sens_path_phrase(s + a, k - a);
+                if (ph) return ph;
+                a = k + 1;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Scans one segment's text for sensitive paths and variables. Leaf function:
+ * it never recurses, so its buffer does not count against the classifier's
+ * recursion depth. Allocation failure fails closed. */
+static __attribute__((noinline)) void sens_scan_text(const char *seg, size_t n)
+{
+    char stack_buf[512];
+    char *buf = stack_buf;
+    if (n + 1 > sizeof stack_buf) {
+        buf = (char *)malloc(n + 1);
+        if (!buf) { sens_note(SENS_CRED); return; }
+    }
+    int has_bs = memchr(seg, '\\', n) != NULL;
+    int has_bt = memchr(seg, '`', n) != NULL;
+    const char *ph = NULL;
+    size_t m = sens_normalise(seg, n, buf, 0, 0);
+    ph = sens_scan_reading(buf, m);
+    if (!ph && has_bs) {
+        m = sens_normalise(seg, n, buf, 1, 0);
+        ph = sens_scan_reading(buf, m);
+    }
+    if (!ph && has_bt) {
+        m = sens_normalise(seg, n, buf, 0, 1);
+        ph = sens_scan_reading(buf, m);
+    }
+    if (ph) sens_note(ph);
+    if (buf != stack_buf) free(buf);
+}
+
+/* ----- Command rules ----- */
+
+#define SENS_ARGS_MAX 12
+#define SENS_ARG_LEN 48
+
+typedef struct {
+    char a[SENS_ARGS_MAX][SENS_ARG_LEN];
+    int n;        /* stored */
+    int total;    /* seen, stored or not */
+} SensArgs;
+
+/* Reads the arguments of the segment at p, at most SENS_ARGS_MAX + 1 of them:
+ * next_token() measures the rest of the text on every call, so an unbounded
+ * loop would be quadratic on a very long line. `total` above SENS_ARGS_MAX
+ * means "more than we keep". */
+static void sens_args_read(SensArgs *g, const char *p)
+{
+    const char *ts;
+    size_t tl;
+    g->n = g->total = 0;
+    while (g->total <= SENS_ARGS_MAX && next_token(&p, &ts, &tl)) {
+        g->total++;
+        if (g->n < SENS_ARGS_MAX) {
+            sens_plain(ts, tl, g->a[g->n], SENS_ARG_LEN);
+            g->n++;
+        }
+    }
+}
+
+static int sens_streqi(const char *a, const char *b)
+{
+    size_t la = strlen(a);
+    return la == strlen(b) && ci_memcmp(a, b, la) == 0;
+}
+
+static int sens_arg_is_flag(const char *s) { return s[0] == '-' && s[1] != '\0'; }
+
+/* Index of the nth (0-based) argument that is not a flag, or -1. */
+static int sens_nonflag(const SensArgs *g, int nth)
+{
+    for (int i = 0; i < g->n; i++)
+        if (!sens_arg_is_flag(g->a[i]) && nth-- == 0) return i;
+    return -1;
+}
+
+static int sens_arg_eq(const SensArgs *g, int i, const char *lit)
+{
+    return i >= 0 && i < g->n && sens_streqi(g->a[i], lit);
+}
+
+static int sens_any_arg(const SensArgs *g, const char *lit)
+{
+    for (int i = 0; i < g->n; i++)
+        if (sens_streqi(g->a[i], lit)) return 1;
+    return 0;
+}
+
+/* 1 when a single-dash flag cluster among the arguments contains `letter`. */
+static int sens_short_flag_has(const SensArgs *g, char letter)
+{
+    for (int i = 0; i < g->n; i++)
+        if (g->a[i][0] == '-' && g->a[i][1] != '-' && strchr(g->a[i] + 1, letter)) return 1;
+    return 0;
+}
+
+/* The rules for a command word and its arguments; base is the word with its
+ * path stripped. Called only where a command is about to be classified (not
+ * for device rulesets), before any class rule, and returns nothing: it notes
+ * the phrase. Out of line so the recursing caller carries none of its
+ * buffers. */
+static __attribute__((noinline)) void sens_command_rules(const char *base, size_t bl,
+                                                          const char *args)
+{
+    static const char *const words[] = {
+        "printenv", "env", "set", "export", "declare", "typeset", "compgen", "history",
+        "get-history", "crontab", "kubectl", "oc", "vault", "aws", "gpg", "gpg2", "docker",
+        "podman", "git", "get-childitem", "gci", "get-item", "gi", "ls", "dir", NULL
+    };
+    int known = 0;
+    for (int i = 0; words[i] && !known; i++)
+        known = sens_ci_eq(base, bl, words[i]);
+    if (!known) return;
+
+    SensArgs g;
+    sens_args_read(&g, args);
+
+    if (sens_ci_eq(base, bl, "printenv")) {
+        int any = 0;
+        for (int i = 0; i < g.n; i++) {
+            if (sens_arg_is_flag(g.a[i])) continue;
+            any = 1;
+            if (sens_name_is_secret(g.a[i], strlen(g.a[i]))) { sens_note(SENS_VAR); return; }
+        }
+        if (!any) sens_note(SENS_ENV);
+    } else if (sens_ci_eq(base, bl, "env")) {
+        for (int i = 0; i < g.n; i++) {
+            const char *w = g.a[i];
+            if (strcmp(w, "-u") == 0 || strcmp(w, "-C") == 0 || strcmp(w, "-S") == 0 ||
+                strcmp(w, "--unset") == 0 || strcmp(w, "--chdir") == 0) { i++; continue; }
+            if (sens_arg_is_flag(w) || strchr(w, '=')) continue;
+            return;                       /* env runs a command */
+        }
+        if (g.total <= SENS_ARGS_MAX) sens_note(SENS_ENV);
+    } else if (sens_ci_eq(base, bl, "set")) {
+        if (g.total == 0) sens_note(SENS_ENV);
+    } else if (sens_ci_eq(base, bl, "export")) {
+        int only_p = 1;
+        for (int i = 0; i < g.n; i++)
+            if (!(sens_arg_is_flag(g.a[i]) && strchr(g.a[i], 'p'))) only_p = 0;
+        if (g.total <= SENS_ARGS_MAX && only_p) sens_note(SENS_ENV);
+    } else if (sens_ci_eq(base, bl, "declare") || sens_ci_eq(base, bl, "typeset")) {
+        int names = 0;
+        for (int i = 0; i < g.n; i++) {
+            if (sens_arg_is_flag(g.a[i])) continue;
+            names = 1;
+            if (sens_short_flag_has(&g, 'p') &&
+                sens_name_is_secret(g.a[i], strcspn(g.a[i], "=")))
+            { sens_note(SENS_VAR); return; }
+        }
+        if (!names) sens_note(SENS_ENV);
+    } else if (sens_ci_eq(base, bl, "compgen")) {
+        if (sens_short_flag_has(&g, 'v') || sens_short_flag_has(&g, 'e')) sens_note(SENS_ENV);
+        else for (int i = 0; i + 1 < g.n; i++)
+            if (strcmp(g.a[i], "-A") == 0 &&
+                (sens_streqi(g.a[i + 1], "variable") || sens_streqi(g.a[i + 1], "export")))
+                sens_note(SENS_ENV);
+    } else if (sens_ci_eq(base, bl, "history") || sens_ci_eq(base, bl, "get-history")) {
+        sens_note(SENS_HIST);
+    } else if (sens_ci_eq(base, bl, "crontab")) {
+        if (sens_short_flag_has(&g, 'l')) sens_note(SENS_CRON);
+    } else if (sens_ci_eq(base, bl, "kubectl") || sens_ci_eq(base, bl, "oc")) {
+        int gi = -1;
+        for (int i = 0; i < g.n && gi < 0; i++)
+            if (!sens_arg_is_flag(g.a[i]) && strcmp(g.a[i], "get") == 0) gi = i;
+        for (int i = gi + 1; gi >= 0 && i < g.n; i++) {
+            if (sens_arg_is_flag(g.a[i])) continue;
+            const char *w = g.a[i];
+            while (*w) {
+                size_t pl = strcspn(w, ",/");
+                if (tok_eq_ci(w, pl, "secret") || tok_eq_ci(w, pl, "secrets")) {
+                    sens_note(SENS_STORE);
+                    return;
+                }
+                const char *c = strchr(w, ',');
+                if (!c) break;
+                w = c + 1;
+            }
+        }
+    } else if (sens_ci_eq(base, bl, "vault")) {
+        int a = sens_nonflag(&g, 0), b = sens_nonflag(&g, 1);
+        if (sens_arg_eq(&g, a, "read") || (sens_arg_eq(&g, a, "kv") && sens_arg_eq(&g, b, "get")))
+            sens_note(SENS_STORE);
+    } else if (sens_ci_eq(base, bl, "aws")) {
+        for (int k = 0; sens_nonflag(&g, k) >= 0; k++) {
+            int a = sens_nonflag(&g, k), b = sens_nonflag(&g, k + 1);
+            if ((sens_arg_eq(&g, a, "configure") && sens_arg_eq(&g, b, "list")) ||
+                (sens_arg_eq(&g, a, "sts") && sens_arg_eq(&g, b, "get-session-token")))
+            { sens_note(SENS_CRED); return; }
+        }
+    } else if (sens_ci_eq(base, bl, "gpg") || sens_ci_eq(base, bl, "gpg2")) {
+        if (sens_any_arg(&g, "--export-secret-keys") || sens_any_arg(&g, "--export-secret-subkeys"))
+            sens_note(SENS_STORE);
+    } else if (sens_ci_eq(base, bl, "docker") || sens_ci_eq(base, bl, "podman")) {
+        if (sens_arg_eq(&g, sens_nonflag(&g, 0), "inspect") ||
+            sens_arg_eq(&g, sens_nonflag(&g, 1), "inspect"))
+            sens_note(SENS_ENV);
+    } else if (sens_ci_eq(base, bl, "git")) {
+        int sub = -1;
+        for (int i = 0; i < g.n; i++) {
+            if (strcmp(g.a[i], "-C") == 0 || strcmp(g.a[i], "-c") == 0) { i++; continue; }
+            if (sens_arg_is_flag(g.a[i])) continue;
+            sub = i;
+            break;
+        }
+        if (sub >= 0 && sens_ci_prefix(g.a[sub], strlen(g.a[sub]), "credential")) {
+            sens_note(SENS_CRED);
+        } else if (sub >= 0 && strcmp(g.a[sub], "config") == 0) {
+            for (int i = sub + 1; i < g.n; i++)
+                if (strcmp(g.a[i], "--list") == 0 || strcmp(g.a[i], "-l") == 0 ||
+                    strcmp(g.a[i], "--get-all") == 0) { sens_note(SENS_STORE); return; }
+        }
+    } else if (sens_ci_eq(base, bl, "get-childitem") || sens_ci_eq(base, bl, "gci") ||
+               sens_ci_eq(base, bl, "get-item") || sens_ci_eq(base, bl, "gi") ||
+               sens_ci_eq(base, bl, "ls") || sens_ci_eq(base, bl, "dir")) {
+        for (int i = 0; i < g.n; i++) {
+            const char *w = g.a[i];
+            if (!tok_prefix_ci(w, strlen(w), "env:")) continue;
+            w += 4;
+            if (!*w || strpbrk(w, "*?")) { sens_note(SENS_ENV); return; }
+            if (sens_name_is_secret(w, strlen(w))) { sens_note(SENS_VAR); return; }
+        }
+    }
+}
+
 static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len,
                                                   char *reason_buf, size_t reason_buf_size);
 
@@ -2651,6 +3137,10 @@ static __attribute__((noinline)) int classify_quoted_first_word(
     if (!next_shell_word(&wp, ts + tl, word, sizeof word, &trunc, &rs, &re) ||
         trunc || !word_is_plain(word))
         return 0;
+    /* The word was measured against the whole text, not the segment: when a
+     * quote left open runs it past the segment's end there is nothing sound
+     * to splice, so the caller classifies the segment as it stands. */
+    if (ts + tl > seg + seg_len) return 0;
     size_t head = (size_t)(ts - seg);
     size_t tail = (size_t)((seg + seg_len) - (ts + tl));
     size_t wl = strlen(word);
@@ -2743,6 +3233,11 @@ static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len
         }
         base1 = strip_path(tok1_start, tok1_len, &base1_len);
     }
+
+    /* Sensitive-read command rules: the command word is final here (sudo
+     * peeled, wrappers still to recurse into). LINUX and UNKNOWN only. */
+    if (sens_cmd_rules && !sens_phrase[0])
+        sens_command_rules(base1, base1_len, p);
 
     if (tok_eq(base1, base1_len, "init")) {
         const char *arg_start;
@@ -3846,6 +4341,11 @@ static CmdSafetyLevel classify_linux_segment_raw(const char *seg, size_t seg_len
         return level > redir ? level : redir;
     }
 
+    /* Review row f: less (and man, whose pager is less) can spawn a shell
+     * from inside the pager ("!cmd" typed in it), so READ is not a promise
+     * that the process stays read-only. Left READ on purpose; the rules here
+     * only check what the command line itself asks for (spec decision 11
+     * records the row). */
     /* less: flags from less_spec (-o/-O/--log-file write a log file); a
      * "+cmd" operand is a command run on start, READ only for a line
      * number, G, g, F, or a /pattern or ?pattern search -- anything else
@@ -7372,8 +7872,12 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
     const char *cmd_end = command + strlen(command);
     int is_pipe_target = 0;
     QuoteScan qs;
+    int saved_cmd_rules = sens_cmd_rules;
     quote_scan_init(&qs, mode);
     tok_mode = mode;
+    /* The command rules of the sensitive-read check belong to the Linux
+     * reading of a line: LINUX, and UNKNOWN (auto, local PowerShell, cmd). */
+    sens_cmd_rules = (platform == CMD_PLATFORM_LINUX || platform == CMD_PLATFORM_UNKNOWN);
 
     while (*p) {
         while (*p == ' ' || *p == '\t') p++;
@@ -7517,6 +8021,11 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
             }
         }
 
+        /* Sensitive paths and variables, under every platform ruleset: this
+         * runs for whichever classifier rated the segment, so a device
+         * ruleset that returned early cannot hide a credentials read. */
+        if (!sens_phrase[0]) sens_scan_text(seg_start, seg_len);
+
         if (is_pipe_target) {
             CmdSafetyLevel pipe_level = scan_pipe_target(seg_start);
             if (pipe_level > seg_level) seg_level = pipe_level;
@@ -7561,6 +8070,7 @@ static CmdSafetyLevel classify_pass(const char *command, CmdPlatform platform,
         else if (*p) p++;
     }
 
+    sens_cmd_rules = saved_cmd_rules;
     if (mask_out) *mask_out = mask ? mask : CMD_MASK_OF(CMD_READ);
     return worst;
 }
@@ -7636,11 +8146,28 @@ CmdSafetyLevel cmd_classify(const char *command, CmdPlatform platform)
     return classify_core(command, platform, NULL, 0, NULL);
 }
 
-unsigned cmd_classify_mask(const char *command, CmdPlatform platform)
+/* The mask entry points all come through here: it resets the sensitive-read
+ * phrase, classifies, and rides CMD_MASK_SENSITIVE on top of the class bits
+ * when any pass, at any depth, found a sensitive read. `why`, when non-NULL,
+ * receives that phrase if it is still empty; `level_out` the worst class. */
+static unsigned classify_mask_top(const char *command, CmdPlatform platform,
+                                  char *why, char *class_reason, size_t class_cap,
+                                  CmdSafetyLevel *level_out)
 {
     unsigned mask = CMD_MASK_OF(CMD_READ);
-    classify_core(command, platform, NULL, 0, &mask);
+    sens_phrase[0] = '\0';
+    CmdSafetyLevel level = classify_core(command, platform, class_reason, class_cap, &mask);
+    if (sens_phrase[0]) {
+        mask |= CMD_MASK_SENSITIVE;
+        if (why && !why[0]) snprintf(why, CMD_REASON_MAX, "%s", sens_phrase);
+    }
+    if (level_out) *level_out = level;
     return mask;
+}
+
+unsigned cmd_classify_mask(const char *command, CmdPlatform platform)
+{
+    return classify_mask_top(command, platform, NULL, NULL, 0, NULL);
 }
 
 /* ----- A session whose resolved platform host output has contradicted -----
@@ -7667,11 +8194,28 @@ CmdSafetyLevel cmd_classify_session(const char *command, CmdPlatform platform,
     return level;
 }
 
+unsigned cmd_classify_mask_session_ex(const char *command, CmdPlatform platform,
+                                      int contradicted, char *reason, size_t reason_cap)
+{
+    char why[CMD_REASON_MAX];
+    char cls[256];
+    char cls2[256];
+    CmdSafetyLevel lvl, lvl2;
+    why[0] = '\0';
+    cls[0] = '\0';
+    cls2[0] = '\0';
+    unsigned mask = classify_mask_top(command, platform, why, cls, sizeof cls, &lvl);
+    if (session_needs_second_ruleset(platform, contradicted)) {
+        mask |= classify_mask_top(command, CMD_PLATFORM_UNKNOWN, why, cls2, sizeof cls2, &lvl2);
+        if (lvl2 > lvl) snprintf(cls, sizeof cls, "%s", cls2);
+    }
+    if (reason && reason_cap > 0)
+        snprintf(reason, reason_cap, "%s", (mask & CMD_MASK_SENSITIVE) ? why : cls);
+    return mask;
+}
+
 unsigned cmd_classify_mask_session(const char *command, CmdPlatform platform,
                                    int contradicted)
 {
-    unsigned mask = cmd_classify_mask(command, platform);
-    if (session_needs_second_ruleset(platform, contradicted))
-        mask |= cmd_classify_mask(command, CMD_PLATFORM_UNKNOWN);
-    return mask;
+    return cmd_classify_mask_session_ex(command, platform, contradicted, NULL, 0);
 }

@@ -71,6 +71,25 @@ CmdSafetyLevel cmd_classify_session(const char *command, CmdPlatform platform,
 unsigned cmd_classify_mask_session(const char *command, CmdPlatform platform,
                                    int contradicted);
 
+/* A command recognised as reading credentials, secrets, the environment or
+ * shell history carries this bit beside its class bits. It is not a class:
+ * cmd_policy_unattended_mask() never includes it, so a policy that would run
+ * the command unattended still asks, and nothing derives a level from it.
+ * Best effort: a read the rules do not recognise is not flagged. */
+#define CMD_MASK_SENSITIVE (1u << 4)
+#define CMD_REASON_MAX 64
+
+/* cmd_classify_mask_session() plus the "why". When CMD_MASK_SENSITIVE is set,
+ * `reason` gets the first sensitive phrase in token order, bare ("reads
+ * credentials", "reads shell history", "reads the environment", "reads a
+ * secret variable", "reads stored secrets", "reads the crontab"), never a
+ * wrapper's prefix; otherwise it gets the class reason. `reason` may be NULL.
+ * The path and variable rules apply under every platform ruleset; the command
+ * rules (printenv, history, kubectl get secret, ...) only under LINUX and
+ * UNKNOWN. The returned mask is exactly cmd_classify_mask_session()'s. */
+unsigned cmd_classify_mask_session_ex(const char *command, CmdPlatform platform,
+                                      int contradicted, char *reason, size_t reason_cap);
+
 /* Config-token and UI-label mappings for the platform setting.
  * cmd_platform_from_name() maps an unrecognised or NULL name -- and the
  * "auto" token, which means "no override, detect it" -- to
