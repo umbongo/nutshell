@@ -698,14 +698,29 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
         JsonNode *tc_node = (JsonNode *)vec_get(&tool_calls->as.arr, i);
         if (!tc_node || tc_node->type != JSON_OBJECT) continue;
 
-        /* Get slot index. Some servers leave it out: that is index 0 (one
-         * call), counted so the caller can log it once. */
+        const char *id = json_obj_str(tc_node, "id");
+
+        /* Get slot index. Some servers leave it out (counted so the caller
+         * can log it once). Such a delta continues the current (last) slot,
+         * or index 0 when there is none, unless it carries an id that is not
+         * the current call's: a different id, or any id once the current call
+         * already has its name but no id, starts a new call. */
         double idx_d = json_obj_num(tc_node, "index", -1.0);
+        int slot;
         if (idx_d < 0.0) {
-            idx_d = 0.0;
             state->index_defaulted++;
+            int cur = state->pending_tool_count > 0
+                    ? state->pending_tool_count - 1 : 0;
+            slot = cur;
+            if (id && id[0] && state->pending_tool_count > 0) {
+                const AiToolCall *c = &state->pending_tool_calls[cur];
+                int differs = c->id[0] ? strcmp(c->id, id) != 0
+                                       : c->name[0] != '\0';
+                if (differs) slot = state->pending_tool_count;
+            }
+        } else {
+            slot = (int)idx_d;
         }
-        int slot = (int)idx_d;
 
         /* Grow pending_tool_calls array if needed to accommodate this slot */
         while (slot >= state->pending_tool_cap) {
@@ -726,7 +741,6 @@ static int openai_accumulate_tool_calls(AiToolStreamState *state,
         }
 
         /* First chunk: id and function.name */
-        const char *id = json_obj_str(tc_node, "id");
         if (id) {
             snprintf(state->pending_tool_calls[slot].id,
                      sizeof(state->pending_tool_calls[slot].id), "%s", id);

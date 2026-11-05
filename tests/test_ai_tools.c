@@ -1108,6 +1108,132 @@ int test_ai_stream_openai_tool_delta_without_index(void)
     TEST_END();
 }
 
+int test_ai_stream_openai_index_less_calls_split_on_id(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    /* Call a: id and name first, arguments over two chunks (no index, no id). */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"a\","
+        "\"type\":\"function\",\"function\":{\"name\":\"web_fetch\","
+        "\"arguments\":\"{\\\"url\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"https://a.example/\\\"}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    /* Call b: a different id starts a new call, arguments over two chunks. */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"b\","
+        "\"type\":\"function\",\"function\":{\"name\":\"web_search\","
+        "\"arguments\":\"{\\\"query\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"\\\"cats\\\"}\"}}]}," 
+        "\"finish_reason\":\"stop\"}]}", text, sizeof(text)), 1);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].id, "a");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json,
+                  "{\"url\":\"https://a.example/\"}");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].id, "b");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"cats\"}");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_index_less_two_calls_in_one_delta(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"id\":\"a\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{\\\"url\\\":\\\"https://a.example/\\\"}\"}},"
+        "{\"id\":\"b\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\\\"x\\\"}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].name, "web_fetch");
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json,
+                  "{\"url\":\"https://a.example/\"}");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"x\"}");
+    ASSERT_EQ(st.index_defaulted, 2);
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_index_less_id_only_on_first_chunk_stays_one_call(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"k1\","
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{\\\"u\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"arguments\":\"rl\\\":\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    /* The same id repeated on a later chunk is the same call. */
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"k1\","
+        "\"function\":{\"arguments\":\"\\\"x\\\"}\"}}]},\"finish_reason\":null}]}",
+        text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 1);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{\"url\":\"x\"}");
+    ai_tools_stream_reset(&st);
+
+    /* A call that has a name but never got an id is closed by a delta that
+     * brings one: that is a second call. */
+    ai_tools_stream_init(&st);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{"
+        "\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"id\":\"n\","
+        "\"function\":{\"name\":\"web_search\",\"arguments\":\"{}\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_STR_EQ(st.pending_tool_calls[1].name, "web_search");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
+int test_ai_stream_openai_indexed_parallel_calls_unchanged(void)
+{
+    TEST_BEGIN();
+    AiToolStreamState st;
+    ai_tools_stream_init(&st);
+    char text[256];
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":0,\"id\":\"a\",\"function\":{\"name\":\"web_fetch\",\"arguments\":\"{\\\"url\\\":\"}},"
+        "{\"index\":1,\"id\":\"b\",\"function\":{\"name\":\"web_search\",\"arguments\":\"{\\\"query\\\":\"}}]},"
+        "\"finish_reason\":null}]}", text, sizeof(text)), 0);
+    ASSERT_EQ(feed_ex(&st,
+        "{\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":["
+        "{\"index\":1,\"function\":{\"arguments\":\"\\\"q\\\"}\"}},"
+        "{\"index\":0,\"function\":{\"arguments\":\"\\\"https://a.example/\\\"}\"}}]},"
+        "\"finish_reason\":\"tool_calls\"}]}", text, sizeof(text)), 2);
+    ASSERT_EQ(st.pending_tool_count, 2);
+    ASSERT_EQ(st.index_defaulted, 0);
+    ASSERT_STR_EQ(st.pending_tool_calls[0].input_json, "{\"url\":\"https://a.example/\"}");
+    ASSERT_STR_EQ(st.pending_tool_calls[1].input_json, "{\"query\":\"q\"}");
+    ai_tools_stream_reset(&st);
+    TEST_END();
+}
+
 int test_ai_stream_openai_text_kept_with_finish_reason(void)
 {
     TEST_BEGIN();
